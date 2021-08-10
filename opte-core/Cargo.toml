@@ -1,0 +1,27 @@
+[package]
+name = "opte-core"
+version = "0.1.0"
+authors = ["Ryan Zezeski <ryan@oxide.computer>"]
+edition = "2018"
+
+[features]
+default = ["std"]
+# This feature indicates that OPTE is being built with std so that it
+# may be used by a userland binary/library for the purpose of userland
+# emulation/testing.
+std = ["libc"]
+
+[dependencies]
+cstr_core = "0.2.3"
+illumos-ddi-dki = { path = "../illumos-ddi-dki", default-features = false }
+libc = { version = "0.2", optional = true }
+postcard = { version = "0.7.0", features = ["alloc"] }
+zerocopy = "0.5.0"
+
+[dependencies.serde]
+version = "1.0"
+default-features = false
+features = ["alloc", "derive"]
+
+[dev-dependencies]
+pcap-parser = "0.11.1"

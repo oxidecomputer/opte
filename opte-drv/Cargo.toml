@@ -1,0 +1,37 @@
+[package]
+name = "opte-drv"
+version = "0.1.0"
+authors = ["Ryan Zezeski <ryan@oxide.computer>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+illumos-ddi-dki = { path = "../illumos-ddi-dki" }
+opte-core = { path = "../opte-core", default-features = false }
+postcard = { version = "0.7.0", features = ["alloc"] }
+zerocopy = "0.5.0"
+
+[dependencies.serde]
+version = "1.0"
+default-features = false
+features = ["alloc", "derive"]
+
+[lib]
+crate-type = ["staticlib"]
+name = "opte"
+
+# Some of these values are the same as the defaults, but it helps to
+# be explicit sometimes.
+[profile.dev]
+codegen-units = 1
+debug = 2
+incremental = false
+opt-level = 0
+panic = 'abort'
+
+[profile.release]
+codegen-units = 1
+debug = 2
+incremental = false
+panic = 'abort'

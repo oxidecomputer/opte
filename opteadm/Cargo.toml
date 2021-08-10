@@ -1,0 +1,15 @@
+[package]
+name = "opteadm"
+version = "0.1.0"
+authors = ["Ryan Zezeski <ryan@oxide.computer>"]
+edition = "2018"
+
+[dependencies]
+libc = "0.2"
+opte-core = { path = "../opte-core", default-features = true }
+postcard = { version = "0.7.0", features = ["alloc"] }
+
+[dependencies.serde]
+version = "1.0"
+default-features = false
+features = ["alloc", "derive"]

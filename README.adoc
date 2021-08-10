@@ -1,0 +1,16 @@
+= Oxide Packet Transformation Engine
+
+More docs imminent.
+
+* https://rfd.shared.oxide.computer/rfd/0009[RFD 9: Networking Considerations]
+* https://rfd.shared.oxide.computer/rfd/0021[RFD 21: User Networking API]
+* https://rfd.shared.oxide.computer/rfd/0063[RFD 63: Network Architecture]
+* https://www.microsoft.com/en-us/research/wp-content/uploads/2017/03/vfp-nsdi-2017-final.pdf[Microsoft's VFP]
+
+* opteadm: The command line utility used to configure and inspect the
+  opte kernel module.
+* opte-core: The implementation of the *engine* in OPTE.
+* opte-drv: A kernel module which hooks into the network path between
+  bhyve and mac, feeding all packets into opte-core for processing.
+* illumos-ddi-dki: A basic and raw interface onto the illumos DDI/DKI
+  APIs.

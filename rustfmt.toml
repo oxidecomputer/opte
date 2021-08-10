@@ -1,0 +1,4 @@
+# It's nice to have some right hand margin on comments.
+comment_width = 74
+max_width = 80
+use_small_heuristics = "max"

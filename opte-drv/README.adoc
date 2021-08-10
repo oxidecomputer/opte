@@ -1,0 +1,24 @@
+== Building
+
+1. Build the kernel module.
++
+----
+$ cargo -v rustc -Z build-std=core,alloc --target x86_64-unknown-unknown.json
+$ ld -r -dy -N"drv/mac" -z allextract target/x86_64-unknown-unknown/debug/opte.a -o opte
+$ pfexec cp opte /kernel/drv/amd64/
+$ pfexec cp opte.conf /kernel/drv/
+----
++
+2. Edit `/etc/devlink.tab`:
++
+----
+type=ddi_pseudo;name=opte	\D
+----
++
+3. Install the driver.
++
+----
+$ pfexec rem_drv opte
+$ pfexec add_drv opte
+$ pfexec devfsadm -i opte
+----
