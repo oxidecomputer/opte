@@ -41,7 +41,6 @@ use core::mem;
 use core::ops::Range;
 use core::panic::PanicInfo;
 use core::ptr;
-use core::slice;
 
 use crate::ioctl::IoctlEnvelope;
 
@@ -55,26 +54,30 @@ use opte_core::ether::{
 use opte_core::firewallng::{
     Firewall, FwAddRuleReq, FwAddRuleResp, FwRemRuleReq, FwRemRuleResp,
 };
-use opte_core::headers::{csum_incremental, IpMeta, UlpMeta};
-use opte_core::input::{self, Packet, PacketMetaOld, PacketReader, ReadErr};
+use opte_core::input::{
+    MblkPacket, MblkPacketReader, PacketMetaOld, PacketReader,
+};
 use opte_core::ioctl::{IoctlCmd, SetIpConfigReq, SetIpConfigResp};
-use opte_core::ip4::{Ipv4Addr, Ipv4HdrRaw, Protocol};
+use opte_core::ip4::{Ipv4Addr, Protocol};
 use opte_core::layer::{Layer, LayerDumpReq};
 use opte_core::nat::{DynNat4, NatPool};
-use opte_core::parse::PacketMeta;
+use opte_core::parse;
 use opte_core::port::{Port, Pos, TcpFlowsDumpReq, UftDumpReq};
 use opte_core::rule::{
     Action, IpProtoMatch, Ipv4AddrMatch, Predicate, Rule, RuleAction,
 };
 use opte_core::sync::{KMutex, KMutexType};
-use opte_core::tcp::TcpHdrRaw;
-use opte_core::udp::UdpHdrRaw;
 use opte_core::vpc::{SetVpcSubnet4Req, SetVpcSubnet4Resp, VpcSubnet4};
 use opte_core::{dbg, CStr, CString, Direction};
 
 // For now I glob import all of DDI/DKI until I have a better idea of
 // how I would want to organize it. Also, for the time being, if it's
 // in defined in the DDI/DKI crate, then opte-drv probably needs it.
+//
+// TODO: Now that I'm a bit more familiar with Rust I'm not wild about
+// glob imports. I think I'd rather just import the DDI types I need
+// and then also bind the module to `ddi` so I can call functions like
+// `ddi::msgsize()`, making it apparent where they come from.
 extern crate illumos_ddi_dki;
 use ddi_attach_cmd_t::*;
 use ddi_detach_cmd_t::*;
@@ -778,290 +781,6 @@ fn panic_hdlr(info: &PanicInfo) -> ! {
 }
 
 // ================================================================
-// mblk + header parsing below
-//
-// This is a big disorganized heap for now. This is basically a copy
-// pasta of my opte-src-and-parsing experiment.
-// ================================================================
-#[derive(Clone, Copy)]
-struct MblkPacket {
-    // TODO The more I think about it the more I think I should just
-    // convert into a slice via slice::from_raw_parts(). Let's go over
-    // the safety requirements of this interface and see how the
-    // illumos mblk meets them (I'm going to reference the points in
-    // turn and not repeat them verbatim here):
-    //
-    // I realized as I'm typing this I'm really talking about turning
-    // the b_rptr into a slice (`&[u8]`). I should update this struct
-    // to instead have `cur_buf: &mut [u8]` along with a raw pointer
-    // (or perhaps also a reference for that) to the raw mblk.
-    //
-    // https://doc.rust-lang.org/std/slice/fn.from_raw_parts.html
-    //
-    //    o The mblk itself is a single object (allocation) and its
-    //      data buffer consist of a single object. Of course, the
-    //      real packet may span multiple mblks, but that's when we
-    //      walk to the next mblk and update the slice reference (e.g.
-    //      when using MblkPacketReader).
-    //
-    //    o The mblk is non-null, we could also just add a check of
-    //      the raw pointer before the call to be extra sure.
-    //
-    //    o The allocation for the mblk is aligned, as is the data
-    //      buffer (which is easy since it's just `char *`).
-    //
-    //    o The `b_rptr` points to exactly `cur_len` bytes, "properly
-    //      initialized", which isn't defined here. I guess it just
-    //      means that the mblk's data buffer didn't just come filled
-    //      with whatever bytes were left from a previous allocation?
-    //      I think we do zero them explicitly before use, but not
-    //      really sure how it matters given any string of bits will
-    //      make a valid u8. And in fact, the entire reason we are
-    //      parsing this buffer stream is to a) check that the stream
-    //      of bytes actually makes valid headers, and b) to
-    //      initialize header structs from these bytes.
-    //
-    //    o OPTE is basically an extension of mac, and as with mac it
-    //      can and should assume that no other entity is
-    //      reading/writing to the buffer as its working with it.
-    //      Could a nefarious actor try to break this contract, sure,
-    //      and that's why viona's first action in the Tx path is to
-    //      copy all header bytes into a fresh, host-owned mblk to
-    //      pass to the rest of the system, to prevent TOCTOU attack.
-    //      If other part of illumos are violating this contract, then
-    //      they would not just be breaking OPTE, but all of mac and
-    //      probably other parts of the system. Basically, when an
-    //      mblk pointer is passed to a module, that module "owns" it
-    //      (really the kmem allocator owns the memory, which
-    //      effecitvely makes everyone else a `&mut [u8]` like
-    //      consumer). That's all a long way of saying that Rust's
-    //      aliasing rules for a unique reference (`&mut`) are upheld
-    //      by illumos re mblks.
-    //
-    //    o The largest mblk buffer is 64K. Perhaps one day that will
-    //      increase but it should never touch the realm of
-    //      `isize::MAX`, otherwise we have many other harder problems
-    //      than this one.
-    source_mp: *mut mblk_t,
-    cur_len: usize,
-}
-
-impl MblkPacket {
-    fn alloc(size: usize) -> Self {
-        // TODO Could replace `usize` with a type like MblkSize.
-        assert!(size <= u16::MAX as usize);
-
-        // Safety: We know this is safe because allocb should be safe
-        // for any size. Furthermore, we restrict size to the typical
-        // max IP packet, which is definitely safe.
-        let mp = unsafe { allocb(size, 0) };
-        MblkPacket::wrap(mp)
-    }
-
-    fn copy_bytes(&mut self, src: &[u8]) {
-        // TODO check len against avail and return error.
-
-        // Safety: This is actually unsafe right now until I check
-        // that src.len() fits inside the space available between
-        // b_wptr and the limit of the dblk.
-        unsafe {
-            bcopy(
-                src.as_ptr() as *const c_void,
-                (*self.source_mp).b_wptr as *mut c_void,
-                src.len(),
-            );
-
-            // TODO Add "safety" annotation here.
-            (*self.source_mp).b_wptr = (*self.source_mp).b_wptr.add(src.len());
-        }
-    }
-
-    /// Get the length of the entire packet.
-    ///
-    /// TODO In the future we might want to perform memoization, but
-    /// we'd have to be careful if we're modifying the underlying
-    /// bytes. For now the caller can choose to cache the result if
-    /// they want.
-    ///
-    /// TODO We might want a mblk_lengths() that gives the length of
-    /// each fragment (mblk) that makes up the packet.
-    ///
-    /// ```
-    /// fn mblk_lengths(&self) -> Vec<usize>
-    /// ```
-    #[allow(dead_code)]
-    fn len(&self) -> usize {
-        // Safety: If we have an instance of MblkPacket, which can
-        // only be created via `new`, then we know there is a valid
-        // `mblk_t` pointer in `source_mp`.
-        unsafe { msgsize(self.source_mp) }
-    }
-
-    fn unwrap(self) -> *mut mblk_t {
-        self.source_mp
-    }
-
-    fn wrap(mp: *mut mblk_t) -> Self {
-        let cur_len;
-        unsafe {
-            cur_len = (*mp).b_wptr.offset_from((*mp).b_rptr) as usize;
-        }
-        MblkPacket { source_mp: mp, cur_len }
-    }
-}
-
-impl Packet for MblkPacket {}
-
-struct MblkPacketReader {
-    pkt: MblkPacket,
-    cur_pos: usize,
-    total_pos: usize,
-}
-
-impl MblkPacketReader {
-    fn new(pkt: MblkPacket) -> MblkPacketReader {
-        MblkPacketReader { pkt, cur_pos: 0, total_pos: 0 }
-    }
-
-    fn follow_cont(&mut self) {
-        assert!(self.cur_pos <= self.pkt.cur_len);
-
-        unsafe {
-            if self.cur_pos == self.pkt.cur_len
-                && !(*self.pkt.source_mp).b_cont.is_null()
-            {
-                self.pkt = MblkPacket::wrap((*self.pkt.source_mp).b_cont);
-                self.cur_pos = 0;
-            }
-        }
-    }
-
-    // Any given read should _never_ cross a `b_cont` boundary. In
-    // fact, a given header should always be contained in one mblk,
-    // because when you think about it any given header should be
-    // contained in the same allocation. Therefore, I think it is
-    // reasonable to reject any packets which have a header crossing a
-    // `b_cont` boundary.
-    fn check_buf(&mut self, len: usize) -> input::Result<()> {
-        self.follow_cont();
-
-        if self.cur_pos + len > self.pkt.cur_len {
-            unsafe {
-                if !(*self.pkt.source_mp).b_cont.is_null() {
-                    return Err(ReadErr::StraddledHeader);
-                }
-            }
-
-            return Err(ReadErr::NotEnoughBytes);
-        }
-
-        Ok(())
-    }
-}
-
-impl PacketReader for MblkPacketReader {
-    fn get_slice(
-        &mut self,
-        len: usize,
-    ) -> core::result::Result<&[u8], ReadErr> {
-        self.check_buf(len)?;
-        let start = unsafe { (*self.pkt.source_mp).b_rptr.add(self.cur_pos) };
-        let ret = unsafe { slice::from_raw_parts(start, len) };
-        self.cur_pos += len;
-        self.total_pos += len;
-        Ok(ret)
-    }
-
-    fn get_slice_mut(
-        &mut self,
-        len: usize,
-    ) -> core::result::Result<&mut [u8], ReadErr> {
-        self.check_buf(len)?;
-        let start = unsafe { (*self.pkt.source_mp).b_rptr.add(self.cur_pos) };
-        let ret = unsafe { slice::from_raw_parts_mut(start, len) };
-        self.cur_pos += len;
-        self.total_pos += len;
-        Ok(ret)
-    }
-
-    fn read_bytes(&mut self, dst: &mut [u8]) -> input::Result<()> {
-        self.check_buf(dst.len())?;
-
-        unsafe {
-            let start = (*self.pkt.source_mp).b_rptr.add(self.cur_pos);
-            start.copy_to_nonoverlapping(dst.as_mut_ptr(), dst.len());
-        }
-
-        self.cur_pos += dst.len();
-        self.total_pos += dst.len();
-        Ok(())
-    }
-
-    fn read_u8(&mut self, dst: &mut u8) -> input::Result<()> {
-        self.check_buf(1)?;
-
-        unsafe {
-            let mut tmp = [0u8; 1];
-            let start = (*self.pkt.source_mp).b_rptr.add(self.cur_pos);
-            start.copy_to_nonoverlapping(tmp.as_mut_ptr(), tmp.len());
-            *dst = u8::from_be_bytes(tmp);
-        }
-
-        self.cur_pos += 1;
-        self.total_pos += 1;
-        Ok(())
-    }
-
-    fn read_u16(&mut self, dst: &mut u16) -> input::Result<()> {
-        self.check_buf(2)?;
-
-        unsafe {
-            let mut tmp = [0u8; 2];
-            let start = (*self.pkt.source_mp).b_rptr.add(self.cur_pos);
-            start.copy_to_nonoverlapping(tmp.as_mut_ptr(), tmp.len());
-            *dst = u16::from_be_bytes(tmp);
-        }
-
-        self.cur_pos += 2;
-        self.total_pos += 2;
-        Ok(())
-    }
-
-    fn read_u32(&mut self, dst: &mut u32) -> input::Result<()> {
-        self.check_buf(4)?;
-
-        unsafe {
-            let mut tmp = [0u8; 4];
-            let start = (*self.pkt.source_mp).b_rptr.add(self.cur_pos);
-            start.copy_to_nonoverlapping(tmp.as_mut_ptr(), tmp.len());
-            *dst = u32::from_be_bytes(tmp);
-        }
-
-        self.cur_pos += 4;
-        self.total_pos += 4;
-        Ok(())
-    }
-
-    // We only allow to seek backwards to the beginning of the current
-    // mblk, which should be enough in all situations this is needed.
-    fn seek_back(&mut self, offset: usize) -> input::Result<()> {
-        if offset > self.cur_pos {
-            return Err(ReadErr::NotEnoughBytes);
-        }
-
-        self.cur_pos -= offset;
-        Ok(())
-    }
-
-    fn seek(&mut self, offset: usize) -> input::Result<()> {
-        self.check_buf(offset)?;
-        self.cur_pos += offset;
-        self.total_pos += offset;
-        Ok(())
-    }
-}
-
-// ================================================================
 // mac client intercept APIs
 //
 // Thes APIs are meant to mimic the mac client APIs, allowing opte to
@@ -1257,234 +976,6 @@ pub unsafe extern "C" fn opte_promisc_remove(ocsp: *mut OpteClientState) {
     let _ = ocs.promisc_state.take();
 }
 
-// It's easy to become confused by endianess and networking code when
-// looking at code that deals with checksums; it's worth making clear
-// what is going on.
-//
-// Any logical value stored in a network header (or application data
-// for that matter) needs to consider endianess. That is, a multi-byte
-// value like an IP header's "total length" or TCP's "port", which has
-// a logical value like "total length = 60" or "port = 443", needs to
-// make sure its value is interpreted correctly no matter which byte
-// order the underlying hardware uses. To this effect, all logical
-// values sent across the network are sent in "network order" (big
-// endian) and then adjusted accordingly on the host. In an AMD64 arch
-// you will see network code which calls `hton{s,l}()` in order to
-// convert the logical value in memory to the correct byte order for
-// the network. However, not all values have a logical, numerial
-// meaning. For example, a mac address is made up of 6 consecutive
-// bytes, for which the order is important, but this string of bytes
-// is never interpreted as an integer. Thus, there is no conversion to
-// be made: the bytes are in the same order in the network as they are
-// in memory (because they are just that, a sequence of bytes). The
-// same goes for the various checksums. The internet checksum is just
-// a sequence of two bytes. However, in order to implement the
-// checksum (one's complement sum), we happen to treat these two bytes
-// as a 16-bit integer, and the sequence of bytes to be summed as a
-// set of 16-bit integers. Because of this it's easy to think of the
-// checksum as a logical value when it's really not. This brings us to
-// the point: you never perform byte-order conversion on the checksum
-// field. You treat each pair of bytes (both the checksum field
-// itself, and the bytes you are summing) as if it's a native 16-bit
-// integer. Yes, this means that on a little-endian architecture you
-// are logically flipping the bytes, but as the bytes being summed are
-// all in network-order, you are also storing them in network-order
-// when you write the final sum to memory.
-//
-// While said a slightly different way, this is also covered in RFC
-// 1071 §1.B.
-//
-// > Therefore, the sum may be calculated in exactly the same way
-// > regardless of the byte order ("big-endian" or "little-endian")
-// > of the underlaying hardware.  For example, assume a "little-
-// > endian" machine summing data that is stored in memory in network
-// > ("big-endian") order.  Fetching each 16-bit word will swap
-// > bytes, resulting in the sum [4]; however, storing the result
-// > back into memory will swap the sum back into network byte order.
-fn set_headers(
-    _ocs: &OpteClientState,
-    meta: &PacketMeta,
-    mut rdr: MblkPacketReader,
-) {
-    let mut ether = match EtherHdrRaw::parse_mut::<MblkPacketReader>(&mut rdr) {
-        Ok(v) => v,
-        Err(err) => {
-            dbg(format!("error reading ether header: {:?}", err));
-            return;
-        }
-    };
-
-    ether.src = meta.inner_ether.as_ref().unwrap().src;
-    ether.dst = meta.inner_ether.as_ref().unwrap().dst;
-    drop(ether);
-
-    let mut ip4 = match Ipv4HdrRaw::parse_mut::<MblkPacketReader>(&mut rdr) {
-        Ok(v) => v,
-        Err(e) => {
-            dbg(format!("error reading IPv4 header: {:?}", e));
-            return;
-        }
-    };
-
-    // We stash these here because we need them for the pseudo-header
-    // checksum update for the ULP.
-    let old_ip_src = ip4.src;
-    let old_ip_dst = ip4.dst;
-    let (new_ip_src, new_ip_dst, proto) = match meta.inner_ip.as_ref().unwrap()
-    {
-        IpMeta::Ip4(v) => (v.src.to_be_bytes(), v.dst.to_be_bytes(), v.proto),
-        _ => panic!("unexpected IPv6 in set_headers"),
-    };
-
-    let mut csum: u32 = (!u16::from_ne_bytes(ip4.csum)) as u32;
-    csum_incremental(
-        &mut csum,
-        u16::from_ne_bytes([ip4.src[0], ip4.src[1]]),
-        u16::from_ne_bytes([new_ip_src[0], new_ip_src[1]]),
-    );
-    csum_incremental(
-        &mut csum,
-        u16::from_ne_bytes([ip4.src[2], ip4.src[3]]),
-        u16::from_ne_bytes([new_ip_src[2], new_ip_src[3]]),
-    );
-    csum_incremental(
-        &mut csum,
-        u16::from_ne_bytes([ip4.dst[0], ip4.dst[1]]),
-        u16::from_ne_bytes([new_ip_dst[0], new_ip_dst[1]]),
-    );
-    csum_incremental(
-        &mut csum,
-        u16::from_ne_bytes([ip4.dst[2], ip4.dst[3]]),
-        u16::from_ne_bytes([new_ip_dst[2], new_ip_dst[3]]),
-    );
-    assert_eq!(csum & 0xFFFF_0000, 0);
-
-    ip4.src = new_ip_src;
-    ip4.dst = new_ip_dst;
-    // Note: We do not convert the endianess of the checksum because
-    // the sum was computed in network order. If you change this to
-    // `to_be_bytes()`, you will break the checksum.
-    ip4.csum = (!(csum as u16)).to_ne_bytes();
-
-    drop(ip4);
-
-    match proto {
-        Protocol::UDP => {
-            let mut udp =
-                match UdpHdrRaw::parse_mut::<MblkPacketReader>(&mut rdr) {
-                    Ok(udp) => udp,
-                    Err(err) => {
-                        dbg(format!("error parsing UDP header: {:?}", err));
-                        return;
-                    }
-                };
-
-            let (new_sport, new_dport) = match meta.ulp.as_ref().unwrap() {
-                UlpMeta::Udp(v) => (v.src.to_be_bytes(), v.dst.to_be_bytes()),
-                _ => panic!("ULP data doesn't match IP protocol"),
-            };
-            let mut csum: u32 = (!u16::from_ne_bytes(udp.csum)) as u32;
-
-            // Update pseudo-header checksum.
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([old_ip_src[0], old_ip_src[1]]),
-                u16::from_ne_bytes([new_ip_src[0], new_ip_src[1]]),
-            );
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([old_ip_src[2], old_ip_src[3]]),
-                u16::from_ne_bytes([new_ip_src[2], new_ip_src[3]]),
-            );
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([old_ip_dst[0], old_ip_dst[1]]),
-                u16::from_ne_bytes([new_ip_dst[0], new_ip_dst[1]]),
-            );
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([old_ip_dst[2], old_ip_dst[3]]),
-                u16::from_ne_bytes([new_ip_dst[2], new_ip_dst[3]]),
-            );
-
-            // Update UDP checksum.
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([udp.src_port[0], udp.src_port[1]]),
-                u16::from_ne_bytes([new_sport[0], new_sport[1]]),
-            );
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([udp.dst_port[0], udp.dst_port[1]]),
-                u16::from_ne_bytes([new_dport[0], new_dport[1]]),
-            );
-            assert_eq!(csum & 0xFFFF_0000, 0);
-
-            udp.src_port = new_sport;
-            udp.dst_port = new_dport;
-            udp.csum = (!(csum as u16)).to_ne_bytes();
-        }
-
-        Protocol::TCP => {
-            let mut tcp =
-                match TcpHdrRaw::parse_mut::<MblkPacketReader>(&mut rdr) {
-                    Ok(tcp) => tcp,
-                    Err(err) => {
-                        dbg(format!("error parsing TCP header: {:?}", err));
-                        return;
-                    }
-                };
-
-            let (new_sport, new_dport) = match meta.ulp.as_ref().unwrap() {
-                UlpMeta::Tcp(v) => (v.src.to_be_bytes(), v.dst.to_be_bytes()),
-                _ => panic!("ULP data doesn't match IP protocol"),
-            };
-            let mut csum: u32 = (!u16::from_ne_bytes(tcp.csum)) as u32;
-
-            // Update pseudo-header checksum.
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([old_ip_src[0], old_ip_src[1]]),
-                u16::from_ne_bytes([new_ip_src[0], new_ip_src[1]]),
-            );
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([old_ip_src[2], old_ip_src[3]]),
-                u16::from_ne_bytes([new_ip_src[2], new_ip_src[3]]),
-            );
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([old_ip_dst[0], old_ip_dst[1]]),
-                u16::from_ne_bytes([new_ip_dst[0], new_ip_dst[1]]),
-            );
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([old_ip_dst[2], old_ip_dst[3]]),
-                u16::from_ne_bytes([new_ip_dst[2], new_ip_dst[3]]),
-            );
-
-            // Update TCP checksum.
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([tcp.src_port[0], tcp.src_port[1]]),
-                u16::from_ne_bytes([new_sport[0], new_sport[1]]),
-            );
-            csum_incremental(
-                &mut csum,
-                u16::from_ne_bytes([tcp.dst_port[0], tcp.dst_port[1]]),
-                u16::from_ne_bytes([new_dport[0], new_dport[1]]),
-            );
-            assert_eq!(csum & 0xFFFF_0000, 0);
-
-            tcp.src_port = new_sport;
-            tcp.dst_port = new_dport;
-            tcp.csum = (!(csum as u16)).to_ne_bytes();
-        }
-
-        _ => (),
-    }
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn opte_tx(
     ocsp: *mut OpteClientState,
@@ -1534,7 +1025,7 @@ pub unsafe extern "C" fn opte_tx(
             }
         };
 
-    set_headers(ocs, &meta, MblkPacketReader::new(pkt));
+    parse::set_headers(&meta, MblkPacketReader::new(pkt));
     mac_tx(ocs.mch, mp_chain, hint, flag, ret_mp);
 
     // Send out any fake ARP replies. The underlying `mblk_t` is now
@@ -1704,7 +1195,7 @@ pub unsafe extern "C" fn opte_rx(
         }
     };
 
-    set_headers(ocs, &meta, MblkPacketReader::new(pkt));
+    parse::set_headers(&meta, MblkPacketReader::new(pkt));
     (rx_state.rx_fn)(rx_state.arg, mrh, mp_chain, loopback);
 }
 

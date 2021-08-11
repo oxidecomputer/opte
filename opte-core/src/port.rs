@@ -707,6 +707,33 @@ impl Port {
     }
 }
 
+// The follow functions are useful for validating state during
+// testing. If one of these functions becomes useful outside of
+// testing, then add it to the impl block above.
+#[cfg(test)]
+impl Port {
+    /// Get the number of flows curently in the layer and direction
+    /// specified. The value `"uft"` can be used to get the number of
+    /// UFT flows.
+    pub fn num_flows(&self, layer: &str, dir: Direction) -> u32 {
+        use Direction::*;
+
+        match (layer, dir) {
+            ("uft", In) => self.uft_in.lock().unwrap().num_flows(),
+            ("uft", Out) => self.uft_out.lock().unwrap().num_flows(),
+            (name, dir) => {
+                for layer in &*self.layers.lock().unwrap() {
+                    if layer.get_name() == name {
+                        return layer.num_flows(dir);
+                    }
+                }
+
+                panic!("layer not found: {}", name);
+            }
+        }
+    }
+}
+
 pub enum Pos {
     Last,
     First,

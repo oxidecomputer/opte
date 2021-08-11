@@ -58,6 +58,9 @@ pub mod tcp_state;
 pub mod udp;
 pub mod vpc;
 
+#[cfg(test)]
+mod int_test;
+
 use ip4::IpError;
 
 // TODO For std env we don't have to redefine these, we can pull them

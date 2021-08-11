@@ -375,6 +375,19 @@ impl Layer {
     }
 }
 
+// The follow functions are useful for validating state during
+// testing. If one of these functions becomes useful outside of
+// testing, then add it to the impl block above.
+#[cfg(test)]
+impl Layer {
+    pub fn num_flows(&self, dir: Direction) -> u32 {
+        match dir {
+            Direction::Out => self.ft_out.lock().unwrap().num_flows(),
+            Direction::In => self.ft_in.lock().unwrap().num_flows(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum IpAddr {
     Ip4(Ipv4Addr),

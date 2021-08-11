@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ether::{EtherHdrRaw, ETHER_TYPE_IPV4};
 use crate::headers::{
-    EtherMeta, GeneveMeta, IcmpDuMeta, IcmpEchoMeta, IpMeta, Ipv4Meta, TcpMeta,
-    UdpMeta, UlpMeta,
+    csum_incremental, EtherMeta, GeneveMeta, IcmpDuMeta, IcmpEchoMeta, IpMeta,
+    Ipv4Meta, TcpMeta, UdpMeta, UlpMeta,
 };
 use crate::icmp::{
     IcmpBaseHdrRaw, IcmpDuHdrRaw, IcmpEchoHdrRaw, ICMP_DEST_UNREACHABLE,
@@ -54,10 +54,9 @@ pub fn parse<R: PacketReader>(rdr: &mut R) -> PacketMeta {
 
     let ether_raw = match EtherHdrRaw::parse::<R>(rdr) {
         Ok(raw) => raw,
-        Err(_err) => {
-            // dbg(format!("error reading raw ether header: {:?}", err));
-            // freemsgchain(mp_chain);
-            todo!("return Result");
+        Err(e) => {
+            // TODO: return error
+            todo!("error parsing ether header: {:?}", e);
         }
     };
 
@@ -82,10 +81,9 @@ where
 {
     let ip4_raw = match Ipv4HdrRaw::parse::<R>(rdr) {
         Ok(raw) => raw,
-        Err(_e) => {
-            // dbg(format!("error reading IPv4 header: {:?}", e));
-            // return Err(L4MetaError::BadHeader);
-            todo!("return result/error");
+        Err(e) => {
+            // TODO return errorx
+            todo!("error parsing ipv4 header: {:?}", e);
         }
     };
 
@@ -108,8 +106,9 @@ where
 {
     let icmp_base_raw = match IcmpBaseHdrRaw::parse::<R>(rdr) {
         Ok(raw) => raw,
-        Err(_) => {
-            todo!("parse_icmp() return result");
+        Err(e) => {
+            // TODO return error
+            todo!("error parsing ICMP header: {:?}", e);
         }
     };
 
@@ -125,7 +124,8 @@ where
                     meta
                 }
 
-                Err(_) => todo!("IcmpEchoHdrRaw::parse() return result"),
+                // TODO return error
+                Err(e) => todo!("error parsing ICMP echo: {:?}", e),
             }
         }
 
@@ -140,7 +140,7 @@ where
                     meta
                 }
 
-                Err(_) => todo!("IcmpDuHdrRaw::parse() return result"),
+                Err(e) => todo!("error parsing ICMP DU: {:?}", e),
             }
         }
 
@@ -225,7 +225,7 @@ fn parse_guest_out() {
     let src_ip = "10.0.0.99".parse::<Ipv4Addr>().unwrap();
     let dst_ip = "34.215.244.109".parse::<Ipv4Addr>().unwrap();
 
-    let mut pkt = VecPacket::from_slice(&bytes);
+    let mut pkt = VecPacket::copy_slice(&bytes);
     let mut rdr = VecPacketReader::new(&mut pkt);
     let meta = parse(&mut rdr);
     let ifid = InnerFlowId::try_from(&meta).unwrap();
@@ -270,4 +270,244 @@ fn parse_guest_out() {
     assert_eq!(tcp_meta.src, 4021);
     assert_eq!(tcp_meta.dst, 443);
     assert_eq!(tcp_meta.flags, 2);
+}
+
+// It's easy to become confused by endianess and networking code when
+// looking at code that deals with checksums; it's worth making clear
+// what is going on.
+//
+// Any logical value stored in a network header (or application data
+// for that matter) needs to consider endianess. That is, a multi-byte
+// value like an IP header's "total length" or TCP's "port", which has
+// a logical value like "total length = 60" or "port = 443", needs to
+// make sure its value is interpreted correctly no matter which byte
+// order the underlying hardware uses. To this effect, all logical
+// values sent across the network are sent in "network order" (big
+// endian) and then adjusted accordingly on the host. In an AMD64 arch
+// you will see network code which calls `hton{s,l}()` in order to
+// convert the logical value in memory to the correct byte order for
+// the network. However, not all values have a logical, numerial
+// meaning. For example, a mac address is made up of 6 consecutive
+// bytes, for which the order is important, but this string of bytes
+// is never interpreted as an integer. Thus, there is no conversion to
+// be made: the bytes are in the same order in the network as they are
+// in memory (because they are just that, a sequence of bytes). The
+// same goes for the various checksums. The internet checksum is just
+// a sequence of two bytes. However, in order to implement the
+// checksum (one's complement sum), we happen to treat these two bytes
+// as a 16-bit integer, and the sequence of bytes to be summed as a
+// set of 16-bit integers. Because of this it's easy to think of the
+// checksum as a logical value when it's really not. This brings us to
+// the point: you never perform byte-order conversion on the checksum
+// field. You treat each pair of bytes (both the checksum field
+// itself, and the bytes you are summing) as if it's a native 16-bit
+// integer. Yes, this means that on a little-endian architecture you
+// are logically flipping the bytes, but as the bytes being summed are
+// all in network-order, you are also storing them in network-order
+// when you write the final sum to memory.
+//
+// While said a slightly different way, this is also covered in RFC
+// 1071 §1.B.
+//
+// > Therefore, the sum may be calculated in exactly the same way
+// > regardless of the byte order ("big-endian" or "little-endian")
+// > of the underlaying hardware.  For example, assume a "little-
+// > endian" machine summing data that is stored in memory in network
+// > ("big-endian") order.  Fetching each 16-bit word will swap
+// > bytes, resulting in the sum [4]; however, storing the result
+// > back into memory will swap the sum back into network byte order.
+//
+// TODO: Not sure this is where this function should live, just
+// putting it here for now since it's kinda-sorta the dual of parse().
+//
+// TODO: It's pretty odd that we are using a "reader" to perform
+// modification (this code was written in a rush to test PoC). We
+// should add a PacketWriter trait as well and use that instead.
+pub fn set_headers<R: PacketReader>(meta: &PacketMeta, mut rdr: R) {
+    // For the moment we assume any header modification starts at the
+    // beginning of the buffer. This prevents passing an already
+    // offset reader, which could result in corrupted packets. This
+    // restriction may change in the future.
+    if rdr.get_pos() != 0 {
+        panic!(
+            "attempting to modify headers starting at non-zero offset: {}",
+            rdr.get_pos()
+        );
+    }
+
+    let mut ether = match EtherHdrRaw::parse_mut::<R>(&mut rdr) {
+        Ok(v) => v,
+        Err(err) => {
+            crate::dbg(format!("error reading ether header: {:?}", err));
+            return;
+        }
+    };
+
+    ether.src = meta.inner_ether.as_ref().unwrap().src;
+    ether.dst = meta.inner_ether.as_ref().unwrap().dst;
+    drop(ether);
+
+    let mut ip4 = match Ipv4HdrRaw::parse_mut::<R>(&mut rdr) {
+        Ok(v) => v,
+        Err(e) => {
+            crate::dbg(format!("error reading IPv4 header: {:?}", e));
+            return;
+        }
+    };
+
+    // We stash these here because we need them for the pseudo-header
+    // checksum update for the ULP.
+    let old_ip_src = ip4.src;
+    let old_ip_dst = ip4.dst;
+    let (new_ip_src, new_ip_dst, proto) = match meta.inner_ip.as_ref().unwrap()
+    {
+        IpMeta::Ip4(v) => (v.src.to_be_bytes(), v.dst.to_be_bytes(), v.proto),
+        _ => panic!("unexpected IPv6 in set_headers"),
+    };
+
+    let mut csum: u32 = (!u16::from_ne_bytes(ip4.csum)) as u32;
+    csum_incremental(
+        &mut csum,
+        u16::from_ne_bytes([ip4.src[0], ip4.src[1]]),
+        u16::from_ne_bytes([new_ip_src[0], new_ip_src[1]]),
+    );
+    csum_incremental(
+        &mut csum,
+        u16::from_ne_bytes([ip4.src[2], ip4.src[3]]),
+        u16::from_ne_bytes([new_ip_src[2], new_ip_src[3]]),
+    );
+    csum_incremental(
+        &mut csum,
+        u16::from_ne_bytes([ip4.dst[0], ip4.dst[1]]),
+        u16::from_ne_bytes([new_ip_dst[0], new_ip_dst[1]]),
+    );
+    csum_incremental(
+        &mut csum,
+        u16::from_ne_bytes([ip4.dst[2], ip4.dst[3]]),
+        u16::from_ne_bytes([new_ip_dst[2], new_ip_dst[3]]),
+    );
+    assert_eq!(csum & 0xFFFF_0000, 0);
+
+    ip4.src = new_ip_src;
+    ip4.dst = new_ip_dst;
+    // Note: We do not convert the endianess of the checksum because
+    // the sum was computed in network order. If you change this to
+    // `to_be_bytes()`, you will break the checksum.
+    ip4.csum = (!(csum as u16)).to_ne_bytes();
+
+    drop(ip4);
+
+    match proto {
+        Protocol::UDP => {
+            let mut udp = match UdpHdrRaw::parse_mut::<R>(&mut rdr) {
+                Ok(udp) => udp,
+                Err(err) => {
+                    crate::dbg(format!("error parsing UDP header: {:?}", err));
+                    return;
+                }
+            };
+
+            let (new_sport, new_dport) = match meta.ulp.as_ref().unwrap() {
+                UlpMeta::Udp(v) => (v.src.to_be_bytes(), v.dst.to_be_bytes()),
+                _ => panic!("ULP data doesn't match IP protocol"),
+            };
+            let mut csum: u32 = (!u16::from_ne_bytes(udp.csum)) as u32;
+
+            // Update pseudo-header checksum.
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([old_ip_src[0], old_ip_src[1]]),
+                u16::from_ne_bytes([new_ip_src[0], new_ip_src[1]]),
+            );
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([old_ip_src[2], old_ip_src[3]]),
+                u16::from_ne_bytes([new_ip_src[2], new_ip_src[3]]),
+            );
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([old_ip_dst[0], old_ip_dst[1]]),
+                u16::from_ne_bytes([new_ip_dst[0], new_ip_dst[1]]),
+            );
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([old_ip_dst[2], old_ip_dst[3]]),
+                u16::from_ne_bytes([new_ip_dst[2], new_ip_dst[3]]),
+            );
+
+            // Update UDP checksum.
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([udp.src_port[0], udp.src_port[1]]),
+                u16::from_ne_bytes([new_sport[0], new_sport[1]]),
+            );
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([udp.dst_port[0], udp.dst_port[1]]),
+                u16::from_ne_bytes([new_dport[0], new_dport[1]]),
+            );
+            assert_eq!(csum & 0xFFFF_0000, 0);
+
+            udp.src_port = new_sport;
+            udp.dst_port = new_dport;
+            udp.csum = (!(csum as u16)).to_ne_bytes();
+        }
+
+        Protocol::TCP => {
+            let mut tcp = match TcpHdrRaw::parse_mut::<R>(&mut rdr) {
+                Ok(tcp) => tcp,
+                Err(err) => {
+                    crate::dbg(format!("error parsing TCP header: {:?}", err));
+                    return;
+                }
+            };
+
+            let (new_sport, new_dport) = match meta.ulp.as_ref().unwrap() {
+                UlpMeta::Tcp(v) => (v.src.to_be_bytes(), v.dst.to_be_bytes()),
+                _ => panic!("ULP data doesn't match IP protocol"),
+            };
+            let mut csum: u32 = (!u16::from_ne_bytes(tcp.csum)) as u32;
+
+            // Update pseudo-header checksum.
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([old_ip_src[0], old_ip_src[1]]),
+                u16::from_ne_bytes([new_ip_src[0], new_ip_src[1]]),
+            );
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([old_ip_src[2], old_ip_src[3]]),
+                u16::from_ne_bytes([new_ip_src[2], new_ip_src[3]]),
+            );
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([old_ip_dst[0], old_ip_dst[1]]),
+                u16::from_ne_bytes([new_ip_dst[0], new_ip_dst[1]]),
+            );
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([old_ip_dst[2], old_ip_dst[3]]),
+                u16::from_ne_bytes([new_ip_dst[2], new_ip_dst[3]]),
+            );
+
+            // Update TCP checksum.
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([tcp.src_port[0], tcp.src_port[1]]),
+                u16::from_ne_bytes([new_sport[0], new_sport[1]]),
+            );
+            csum_incremental(
+                &mut csum,
+                u16::from_ne_bytes([tcp.dst_port[0], tcp.dst_port[1]]),
+                u16::from_ne_bytes([new_dport[0], new_dport[1]]),
+            );
+            assert_eq!(csum & 0xFFFF_0000, 0);
+
+            tcp.src_port = new_sport;
+            tcp.dst_port = new_dport;
+            tcp.csum = (!(csum as u16)).to_ne_bytes();
+        }
+
+        _ => (),
+    }
 }
