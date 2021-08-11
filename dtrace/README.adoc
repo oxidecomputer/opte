@@ -1,0 +1,22 @@
+= DTrace Scripts
+
+This directory contains DTrace scripts for monitoring and debugging
+various aspects of OPTE's operation.
+
+|===
+|Script |Description
+
+a|`opte-ht.d`
+|Track header transpositions as they happen. Printing the direction,
+location, and before/after flow IDs.
+
+a|`opte-rule-match.d`
+|Track rule match/no-match as it happens. Printing the direction,
+ layer, and flow ID of the match/no-match, as well as the result of
+ the match (allow/deny).
+
+a|`opte-tcp-flow-state.d`
+|Track the TCP flow state changes as they happen. Printing the state
+ transition as well as the flow ID.
+
+|===
