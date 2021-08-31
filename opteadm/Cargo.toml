@@ -9,6 +9,8 @@ libc = "0.2"
 illumos-ddi-dki = { path = "../illumos-ddi-dki" }
 opte-core = { path = "../opte-core", default-features = true }
 postcard = { version = "0.7.0", features = ["alloc"] }
+structopt = "0.3.23"
+thiserror = "1.0.28"
 
 [dependencies.serde]
 version = "1.0"
