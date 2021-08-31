@@ -130,6 +130,12 @@ pub enum ParseErr {
     ValTooLong(String, usize),
 }
 
+impl std::fmt::Display for ParseErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 pub type ParseResult<T> = core::result::Result<T, ParseErr>;
 
 impl From<IpError> for ParseErr {

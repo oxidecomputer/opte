@@ -1,131 +1,109 @@
 #![feature(extern_types)]
-#![allow(unused_imports)]
 
-extern crate opte_core;
+use std::convert::TryInto;
+use std::net::Ipv4Addr;
 
-use libc::{close, ioctl, malloc, open, strlen, strncpy, O_RDWR};
-use std::ffi::{CStr, CString};
-use std::fmt;
-use std::mem;
-use std::os::raw::{c_char, c_int, c_void};
-use std::process;
-use std::ptr;
-use std::slice;
-use std::str::FromStr;
+use structopt::StructOpt;
 
+use opte_core::firewallng::FwRemRuleReq;
 use opte_core::firewallng::{
-    FwAddRuleReq, FwAddRuleResp, FwRemRuleReq, FwRemRuleResp,
+    self, Action, Address, FirewallRule, Ports, ProtoFilter,
 };
-use opte_core::flow_table::{FlowEntryDump, FlowTable};
-use opte_core::ioctl::{Ioctl, IoctlCmd, SetIpConfigReq, SetIpConfigResp};
-use opte_core::layer::{InnerFlowId, IpAddr, LayerDumpReq, LayerDumpResp};
-use opte_core::port::{
-    TcpFlowsDumpReq, TcpFlowsDumpResp, UftDumpReq, UftDumpResp,
-};
-use opte_core::rule::{ActionSummary, RuleDump};
-use opte_core::tcp_state::TcpFlowState;
+use opte_core::flow_table::FlowEntryDump;
+use opte_core::ioctl::SetIpConfigReq;
+use opte_core::layer::{InnerFlowId, IpAddr, LayerDumpResp};
+use opte_core::port::UftDumpResp;
+use opte_core::rule::RuleDump;
 use opte_core::Direction;
 
-use serde::de::DeserializeOwned;
-use serde::Serialize;
+/// Administer the Oxide Packet Transformation Engine (OPTE)
+#[derive(Debug, StructOpt)]
+enum Command {
+    SetIpConfig(SetIpConfig),
 
-extern crate postcard;
+    /// Dump the contents of the layer with the given name
+    LayerDump {
+        name: String,
+    },
 
-const OPTE_DEV: &str = "/dev/opte";
+    /// Dump the unified flow tables (UFT)
+    UftDump,
 
-fn run_ioctl<R, P>(
-    dev: c_int,
-    cmd: IoctlCmd,
-    req: &mut R,
-) -> Result<P, postcard::Error>
-where
-    R: Serialize,
-    P: DeserializeOwned,
-{
-    let mut iterations = 0;
-    let req_bytes = postcard::to_allocvec(req).unwrap();
-    let mut resp_buf: Vec<u8> = vec![0; 32];
-    let mut rioctl = Ioctl {
-        req_bytes: req_bytes.as_ptr(),
-        req_len: req_bytes.len(),
-        resp_bytes: resp_buf.as_mut_ptr(),
-        resp_len: resp_buf.len(),
-        resp_len_needed: 0,
-    };
+    /// Dump TCP flows
+    TcpFlowsDump,
 
-    loop {
-        let ret = unsafe { ioctl(dev, cmd as c_int, &rioctl) };
+    /// Add a firewall rule
+    FwAdd {
+        direction: Direction,
+        #[structopt(flatten)]
+        filters: Filters,
+        action: Action,
+        priority: u16,
+    },
 
-        unsafe {
-            if ret == -1 && *libc::___errno() != libc::ENOBUFS {
-                eprintln!("ioctl failed: {:?}: {:?}", cmd, *libc::___errno());
-                return postcard::from_bytes(slice::from_raw_parts(
-                    rioctl.resp_bytes,
-                    rioctl.resp_len_needed,
-                ));
-            }
-        }
+    /// Remove a firewall rule
+    FwRm {
+        direction: Direction,
+        id: u64,
+    },
+}
 
-        // TODO Probably want a separate field to indicate response
-        // len needed: e.g. resp_len is the length of buffer supplied
-        // by userspace and resp_len_needed is length needed.
-        assert!(rioctl.resp_len_needed != 0);
-        if rioctl.resp_len_needed > rioctl.resp_len {
-            if iterations > 3 {
-                eprintln!(
-                    "failed to dump fw tables after {} iterations",
-                    iterations
-                );
-                unsafe { close(dev) };
-                process::exit(1);
-            }
+#[derive(Debug, StructOpt)]
+struct Filters {
+    /// The host address or subnet to which the rule applies
+    hosts: Address,
 
-            iterations += 1;
-            resp_buf = Vec::with_capacity(rioctl.resp_len_needed);
-            for _i in 0..rioctl.resp_len_needed {
-                resp_buf.push(0);
-            }
-            rioctl = Ioctl {
-                req_bytes: req_bytes.as_ptr(),
-                req_len: req_bytes.len(),
-                resp_bytes: resp_buf.as_mut_ptr(),
-                resp_len: resp_buf.len(),
-                resp_len_needed: 0,
-            };
+    /// The protocol to which the rule applies
+    protocol: ProtoFilter,
 
-            continue;
-        } else {
-            break;
-        }
-    }
+    /// The port(s) to which the rule applies
+    ports: Ports,
+}
 
-    unsafe {
-        postcard::from_bytes(slice::from_raw_parts(
-            rioctl.resp_bytes,
-            rioctl.resp_len_needed,
-        ))
+impl From<Filters> for firewallng::Filters {
+    fn from(f: Filters) -> Self {
+        firewallng::Filters::new()
+            .set_hosts(f.hosts)
+            .protocol(f.protocol)
+            .ports(f.ports)
+            .clone()
     }
 }
 
-fn dump_layer(dev: c_int, name: &str) -> LayerDumpResp {
-    let mut req = LayerDumpReq { name: name.to_string() };
-    let resp: LayerDumpResp =
-        run_ioctl(dev, IoctlCmd::LayerDump, &mut req).unwrap();
-    resp
+/// Create an IP configuration in OPTE
+#[derive(Debug, StructOpt)]
+struct SetIpConfig {
+    /// Private IP address
+    #[structopt(long)]
+    private_ip: Ipv4Addr,
+
+    /// Public IP address
+    #[structopt(long)]
+    public_ip: Ipv4Addr,
+
+    /// Start port
+    #[structopt(long)]
+    port_start: u16,
+
+    /// End port
+    #[structopt(long)]
+    port_end: u16,
+
+    /// VPC subnet
+    #[structopt(long)]
+    vpc_sub4: String,
 }
 
-fn dump_tcp_flows(dev: c_int) -> Vec<(InnerFlowId, FlowEntryDump)> {
-    let mut req = TcpFlowsDumpReq { req: () };
-    let resp: TcpFlowsDumpResp =
-        run_ioctl(dev, IoctlCmd::TcpFlowsDump, &mut req).unwrap();
-    resp.flows
-}
-
-fn dump_uft(dev: c_int) -> UftDumpResp {
-    let mut req = UftDumpReq { unused: () };
-    let resp: UftDumpResp =
-        run_ioctl(dev, IoctlCmd::UftDump, &mut req).unwrap();
-    resp
+impl From<SetIpConfig> for SetIpConfigReq {
+    fn from(s: SetIpConfig) -> SetIpConfigReq {
+        SetIpConfigReq {
+            private_ip: s.private_ip.to_string(),
+            public_ip: s.public_ip.to_string(),
+            port_start: s.port_start.to_string(),
+            port_end: s.port_end.to_string(),
+            vpc_sub4: s.vpc_sub4,
+        }
+    }
 }
 
 fn print_flow_header() {
@@ -135,7 +113,7 @@ fn print_flow_header() {
     );
 }
 
-fn print_flow(flow_id: InnerFlowId, flow_entry: FlowEntryDump) {
+fn print_flow(flow_id: &InnerFlowId, flow_entry: &FlowEntryDump) {
     let (src_ip, dst_ip) = match (flow_id.src_ip, flow_id.dst_ip) {
         (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => (src, dst),
         _ => todo!("support for IPv6"),
@@ -161,7 +139,7 @@ fn print_rule_header() {
     println!("{:<8} {:<6} {:<48} {:<18}", "ID", "PRI", "PREDICATES", "ACTION");
 }
 
-fn print_rule(id: u64, rule: RuleDump) {
+fn print_rule(id: u64, rule: &RuleDump) {
     let mut preds = rule
         .predicates
         .iter()
@@ -183,127 +161,93 @@ fn print_hr() {
     println!("{:-<70}", "-");
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let dev = CString::new(OPTE_DEV).unwrap();
-    let fd = unsafe { open(dev.as_ptr(), O_RDWR) };
-    if fd == -1 {
-        unsafe {
-            eprintln!("failed to open opte device: {}", *libc::___errno());
-        }
-        process::exit(1);
+fn print_layer(resp: &LayerDumpResp) {
+    println!("Layer {}", resp.name);
+    print_hrb();
+    println!("Inbound Flows");
+    print_hr();
+    print_flow_header();
+    for (flow_id, flow_state) in &resp.ft_in {
+        print_flow(flow_id, flow_state);
     }
 
-    if args.len() >= 2 {
-        if args[1] == "layer-dump" {
-            if args.len() == 2 {
-                eprintln!("must specify layer name");
-                process::exit(1);
-            }
+    println!("\nOutbound Flows");
+    print_hr();
+    print_flow_header();
+    for (flow_id, flow_state) in &resp.ft_out {
+        print_flow(flow_id, flow_state);
+    }
 
-            let resp = dump_layer(fd, &args[2]);
-            println!("Layer {}", resp.name);
-            print_hrb();
-            println!("Inbound Flows");
-            print_hr();
-            print_flow_header();
-            for (flow_id, flow_state) in resp.ft_in {
-                print_flow(flow_id, flow_state);
-            }
+    println!("\nInbound Rules");
+    print_hr();
+    print_rule_header();
+    for (id, rule) in &resp.rules_in {
+        print_rule(*id, rule);
+    }
 
-            println!("\nOutbound Flows");
-            print_hr();
-            print_flow_header();
-            for (flow_id, flow_state) in resp.ft_out {
-                print_flow(flow_id, flow_state);
-            }
+    println!("\nOutbound Rules");
+    print_hr();
+    print_rule_header();
+    for (id, rule) in &resp.rules_out {
+        print_rule(*id, rule);
+    }
 
-            println!("\nInbound Rules");
-            print_hr();
-            print_rule_header();
-            for (id, rule) in resp.rules_in {
-                print_rule(id, rule);
-            }
+    println!("");
+}
 
-            println!("\nOutbound Rules");
-            print_hr();
-            print_rule_header();
-            for (id, rule) in resp.rules_out {
-                print_rule(id, rule);
-            }
+fn print_uft(resp: &UftDumpResp) {
+    println!("Unified Flow Table");
+    print_hrb();
+    println!("Inbound Flows [{}/{}]", resp.uft_in_num_flows, resp.uft_in_limit);
+    print_hr();
+    print_flow_header();
+    for (flow_id, flow_state) in &resp.uft_in {
+        print_flow(flow_id, flow_state);
+    }
 
-            println!("");
+    println!(
+        "\nOutbound Flows [{}/{}]",
+        resp.uft_out_num_flows, resp.uft_out_limit
+    );
+    print_hr();
+    print_flow_header();
+    for (flow_id, flow_state) in &resp.uft_out {
+        print_flow(flow_id, flow_state);
+    }
+
+    println!("");
+}
+
+fn main() {
+    let cmd = Command::from_args();
+    let handle = opteadm::OpteAdm::new().unwrap();
+    match cmd {
+        Command::SetIpConfig(request) => {
+            handle.set_ip_config(&request.try_into().unwrap()).unwrap();
         }
-
-        if args[1] == "uft-dump" {
-            let resp = dump_uft(fd);
-            println!("Unified Flow Table");
-            print_hrb();
-            println!(
-                "Inbound Flows [{}/{}]",
-                resp.uft_in_num_flows, resp.uft_in_limit
-            );
-            print_hr();
-            print_flow_header();
-            for (flow_id, flow_state) in resp.uft_in {
-                print_flow(flow_id, flow_state);
-            }
-
-            println!(
-                "\nOutbound Flows [{}/{}]",
-                resp.uft_out_num_flows, resp.uft_out_limit
-            );
-            print_hr();
-            print_flow_header();
-            for (flow_id, flow_state) in resp.uft_out {
-                print_flow(flow_id, flow_state);
-            }
-
-            println!("");
+        Command::LayerDump { name } => {
+            print_layer(&handle.get_layer_by_name(&name).unwrap());
         }
-
-        if args[1] == "tcp-flows-dump" {
-            let flows = dump_tcp_flows(fd);
-            for (flow_id, entry) in flows {
+        Command::UftDump => {
+            print_uft(&handle.uft().unwrap());
+        }
+        Command::TcpFlowsDump => {
+            for (flow_id, entry) in handle.tcp_flows().unwrap() {
                 println!("{} {:?}", flow_id, entry);
             }
         }
-
-        if args[1] == "fw-add" {
-            let rulestr = args[2..].join(" ");
-            let rule = rulestr.parse().unwrap();
-            let mut req = FwAddRuleReq { rule };
-            let resp: FwAddRuleResp =
-                run_ioctl(fd, IoctlCmd::FwAddRule, &mut req).unwrap();
-            match resp.resp {
-                Ok(()) => println!("added firewall rule"),
-                Err(msg) => println!("failed to add firewall rule: {}", msg),
-            }
+        Command::FwAdd { direction, filters, action, priority } => {
+            let rule = FirewallRule {
+                direction,
+                filters: filters.into(),
+                action,
+                priority,
+            };
+            handle.add_firewall_rule(&rule).unwrap();
         }
-
-        if args[1] == "fw-rm" {
-            let dir = args[2].parse().unwrap();
-            let id = args[3].parse().unwrap();
-            let mut req = FwRemRuleReq { dir, id };
-            let resp: FwRemRuleResp =
-                run_ioctl(fd, IoctlCmd::FwRemRule, &mut req).unwrap();
-            match resp.resp {
-                Ok(()) => println!("removed firewall rule"),
-                Err(msg) => println!("failed to remove firewall rule: {}", msg),
-            }
-        }
-
-        if args[1] == "set-ip-config" {
-            let mut req: SetIpConfigReq = args[2..].join(" ").parse().unwrap();
-            println!("Sending request: {:?}", req);
-            let resp: SetIpConfigResp =
-                run_ioctl(fd, IoctlCmd::SetIpConfig, &mut req).unwrap();
-            match resp.resp {
-                Ok(_) => println!("set IP config successfully"),
-                Err(msg) => println!("error setting IP config: {}", msg),
-            }
+        Command::FwRm { direction, id } => {
+            let request = FwRemRuleReq { dir: direction, id };
+            handle.remove_firewall_rule(&request).unwrap();
         }
     }
-
-    unsafe { close(fd) };
 }
