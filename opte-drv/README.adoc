@@ -1,12 +1,156 @@
+This crate provides the OPTE kernel module, aka `opte`
+footnote:opte[I tend to use lowercase when referring to the kernel
+module]. The opte module provides two main functions.
+
+1. It hooks into the guest's networking datapath so that *all* packets
+are intercepted footnote:temporary[opte currently requires a modified
+viona. This is not how it will work in the future. It will more likely
+be its own device like a VNIC, which is created by Propolis at VM
+start, and somehow connects into the native routing table to determine
+which physical NIC to use for next hop]. It feeds these packets into
+OPTE's engine, `opte-core`, for processing. It is there where the
+actual packet inspection and modification logic is performed
+footnote:half-truth[There is still some logic in opte-drv that should
+be in opte-core, but the end goal is to have all packet processing and
+decision making done in opte-core].
+
+2. It provides an API for programming the opte-core engine via an
+ioctl interface. Any Rust program needing to interact with this
+interface should use libopte (XXX: make link when libopte is pushed).
+
+In order to use opte two kernel modules must be built: viona and opte.
+
 == Building
 
-1. Build the kernel module.
+=== Building viona
+
+The viona module is an in-kernel implementation of a virtio networking
+device. It provides all network connectivity to bhyve guests. In order
+for opte to hook into the guest's network datapath a custom viona must
+be built.
+
+https://github.com/oxidecomputer/illumos-gate/tree/viona-opte-08-31-21
+
+This module must be built and then copied over the existing viona
+module. The easiest way to go about building it is to first do a full
+nightly build of the stock gate.
+
+----
+$ pfexec pkg install illumos-tools
+$ pfexec zfs create -o mountpoint=/build rpool/build
+$ cd /build
+$ git clone https://github.com/oxidecomputer/illumos-gate
+$ cd illumos-gate
+$ ./usr/src/tools/scripts/nightly /opt/onbld/env/omnios-illumos-gate
+----
+
+If that's successful, then you can switch over to the custom viona
+branch and build just the viona module.
+
+NOTE: You could also just run the nightly against the viona branch,
+but it will report the build as a failure due to pkg linting. However,
+the module itself should be there.
+
+----
+$ git checkout viona-opte-08-31-21
+$ ./usr/src/tools/scripts/bldenv /opt/onbld/env/omnios-illumos-gate
+$ cd usr/src/uts/i86pc/viona
+$ make install
+----
+
+The https://omnios.org/dev/gate[build instructions] are taken almost
+verbatim from the OmniOS wiki, with the exception of the branch we are
+building against. If you are inclined to learn more about building
+illumos I also recommend the illumos dev guide
+https://illumos.org/books/dev/workflow.html[workflow] page.
+
+If you already have a previous nightly you could also just switch to
+the `viona-opte-08-31-21` branch and build just the viona module under
+`usr/src/uts/i86pc/viona/`.
+
+=== Building opte
+
+NOTE: You *MUST* build the opte kernel module on an illumos host. This
+cannot be cross-compiled.
+
+The opte kernel module is an illumos kernel module written in Rust. It
+uses stable kernel APIs to do its job, and thus it doesn't need to be
+built with the illumos-gate infrastructure. Rather, it's more like
+building any other Rust program, but with a few small exceptions:
+
+1. Currently an older toolchain is needed to avoid
+https://github.com/oxidecomputer/opte/issues/1[codegen issues].
 +
 ----
+$ rustup toolchain install nightly-2021-01-15
+$ rustup default nightly-2021-01-15-x86_64-unknown-illumos
+----
++
+2. We need to use the unstable cargo
+https://doc.rust-lang.org/cargo/reference/unstable.html#build-std[build-std]
+feature in order to build core and alloc for our custom illumos target.
+
+3. We need to use a custom
+https://doc.rust-lang.org/cargo/commands/cargo-build.html#compilation-options[rustc
+target] in order to generate code which can run in the illumos kernel.
+(XXX It looks like we could use the `build.target` config value
+instead).
+
+4. We need to run the linker manually as
+https://doc.rust-lang.org/reference/linkage.html[staticlib] crates do
+not run the linker.
+
+----
+$ cd ~/opte/opte-drv
 $ cargo -v rustc -Z build-std=core,alloc --target x86_64-unknown-unknown.json
 $ ld -r -dy -N"drv/mac" -z allextract target/x86_64-unknown-unknown/debug/opte.a -o opte
-$ pfexec cp opte /kernel/drv/amd64/
-$ pfexec cp opte.conf /kernel/drv/
+----
+
+== Installing
+
+=== Pre-install
+
+You may want to create a dedicated boot environment (BE) before
+installing your custom modules. This way you can easily rollback to a
+known working environment.
+
+----
+$ pfexec beadm create -a opte-test
+
+$ beadm list
+BE                      Active Mountpoint Space   Policy Created
+omnios-r151037          -      -          44.70M  static 2021-03-24 22:03
+omnios-r151037-backup-1 -      -          220K    static 2021-03-24 22:51
+omnios-r151037-1        -      -          8.26M   static 2021-03-24 23:00
+viona-rmc               -      -          6.08M   static 2021-03-25 19:23
+viona-opte              -      -          89.43G  static 2021-04-07 03:34
+omnios-r151039          N      /          182.50K static 2021-08-31 18:55
+opte-test               R      -          3.33G   static 2021-09-01 03:47
+
+$ pfexec reboot
+----
+
+=== Installing viona
+
+Installing viona is a matter of copying the custom-built module
+overtop of the system one.
+
+----
+$ pfexec cp /usr/kernel/drv/amd64/viona{,.orig}
+$ pfexec cp /build/illumos-gate/proto/root_i386/usr/kernel/drv/amd64/viona /usr/kernel/drv/amd64/viona
+----
+
+=== Installing opte
+
+Installing opte is a bit more involved. It's not a module that comes
+packaged with the system. We need to install it and we want to add an
+entry under `/dev` so we have a place to send ioctls.
+
+1. Copy the module and its conf file.
++
+----
+$ pfexec cp ~/opte/opte-drv/opte /kernel/drv/amd64/
+$ pfexec cp ~/opte/opte-drv/opte.conf /kernel/drv/
 ----
 +
 2. Edit `/etc/devlink.tab`:
@@ -18,7 +162,100 @@ type=ddi_pseudo;name=opte	\D
 3. Install the driver.
 +
 ----
-$ pfexec rem_drv opte
 $ pfexec add_drv opte
 $ pfexec devfsadm -i opte
 ----
+
+On subsequent builds of opte you don't need to repeat all these steps.
+It's enough to just copy the kernel module.
+
+----
+$ pfexec cp opte /kernel/drv/amd64/
+----
+
+== Running
+
+NOTE: XXX These instructions currently assume you are using the bhyve
+zone in OmniOS, we probably need to update this to use Propolis soon.
+That said, there's no reason opte shouldn't work with Propolis, in
+fact, Propolis should have no idea that opte is even on the scene and
+vice versa.
+
+NOTE: This assumes no guests are running and the viona module is not
+currently loaded.
+
+NOTE: Currently opte can only have one guest instance running on a
+given host.
+
+Now that all necessary modules are in place we can actually run a
+guest on top of OPTE.
+
+1. Load the viona module.
++
+----
+$ pfexec modload -p drv/amd64/viona
+----
++
+2. Set `viona_use_opte` to `1`. Optionally enable some debug printing
+by setting `opte_debug` to `1`.
++
+----
+$ pfexec mdb -kw
+Loading modules: [ unix genunix specfs mac cpu.generic uppc apix scsi_vhci zfs sata sd ip hook neti sockfs arp usba xhci mm stmf stmf_sbd lofs random ufs logindmux ptm nfs ]
+
+> viona_use_opte/W 1
+viona_use_opte: 0               =       0x1
+> opte_debug/W 1
+opte_debug:     0               =       0x1
+>
+----
++
+3. Start the guest.
++
+----
+$ pfexec zoneadm -z guest1 boot
+----
++
+4. Start a server to proxy VNC.
++
+----
+$ pfexec /usr/lib/brand/bhyve/socat /zones/guest1/root/tmp/vm.vnc 5905
+----
++
+5. Wait for the guest to get to its login screen, then set the IP
+config and remove various IP/mac protection.
++
+----
+$ cd ~/opte/opteadm
+$ pfexec cargo run set-ip-config private_ip=10.0.0.210 public_ip=10.0.0.99 port_start=1025 port_end=4096 vpc_sub4=10.0.0.0/24 gw_mac=78:23:ae:5d:4f:0d gw_ip=10.0.0.1
+$ pfexec dladm reset-linkprop -p protection guest1
+$ pfexec dladm set-linkprop -p secondary-macs="a8:40:25:00:00:63" guest1
+----
+
+|===
+|Field |Description
+
+a|`private_ip`
+|The IPv4 address of the guest.
+
+a|`public_ip`
+|The public IP of the guest. This should be an unused IP in the same
+ subnet as the guest. OPTE will adopt this IP by responding to any
+ ARPs for it and then use it as the outbound NAT IP.
+
+a|`port_start`, `port_end`
+a|The start and end of the port range for outbound NAT. This is used in
+ conjunction with `public_ip`.
+
+a|`vpc_sub4`
+|The VPC subnet of the guest. For most of you playing along at home
+ this is the same subnet that all your home devices are on: typically
+ a `10.0.0.0/24` or `192.168.{0,1}.0/24`.
+
+a|`gw_mac`
+|The MAC address of your router/gateway.
+
+a|`gw_ip`
+|The IPv4 address of your router/gateway.
+
+|===
