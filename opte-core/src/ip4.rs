@@ -1,9 +1,20 @@
-extern crate zerocopy;
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::prelude::v1::*;
+
+#[cfg(any(feature = "std", test))]
+use std::prelude::v1::*;
+
+use std::convert::TryFrom;
+use std::fmt::{self, Debug, Display};
+use std::num::ParseIntError;
+use std::result;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::input::{PacketReader, ReadErr};
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
+
+use crate::packet::{PacketRead, ReadErr, WriteErr};
 use crate::rule::{
     MatchExact, MatchExactVal, MatchPrefix, MatchPrefixVal, MatchRangeVal,
 };
@@ -14,18 +25,7 @@ use illumos_ddi_dki::uintptr_t;
 #[cfg(any(feature = "std", test))]
 use crate::uintptr_t;
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
-
-#[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
-
-use std::convert::TryFrom;
-use std::fmt::{self, Debug, Display};
-use std::mem::size_of;
-use std::num::ParseIntError;
-use std::result;
-use std::str::FromStr;
+pub const IPV4_HDR_SZ: usize = std::mem::size_of::<Ipv4HdrRaw>();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IpError {
@@ -65,7 +65,6 @@ impl Ipv4Cidr {
         ip.mask(self.net_prefix) == self.ip
     }
 
-    // TODO Can I use some trait to just accept any integer type?
     pub fn new(ip: Ipv4Addr, net_prefix: u8) -> result::Result<Self, IpError> {
         // In this case we are only checking that it's a valid CIDR in
         // the general sense; VPC-specific CIDR enforcement is done by
@@ -162,7 +161,6 @@ pub struct Ipv4CidrPrefix {
 }
 
 impl Ipv4CidrPrefix {
-    // TODO Can I use some trait to just accept any integer type?
     pub fn new(net_prefix: u8) -> result::Result<Self, IpError> {
         if net_prefix > 32 {
             return Err(IpError::BadNetPrefix(net_prefix));
@@ -174,7 +172,16 @@ impl Ipv4CidrPrefix {
 
 #[repr(C)]
 #[derive(
-    Clone, Copy, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
 )]
 pub struct Ipv4Addr {
     val: u32,
@@ -198,9 +205,9 @@ impl Ipv4Addr {
     }
 
     /// Create a new `IPv4Addr` from an array of bytes in network order.
-    pub fn new(bytes: [u8; 4]) -> Self {
+    pub const fn new(bytes: [u8; 4]) -> Self {
         // We really aren't concerned with LE vs. BE here, but the
-        // fact is that an IPv4 address is represented as four octects
+        // fact is that an IPv4 address is represented as four octets
         // in network-order, so we use the BE parsing function here,
         // even though we're storing the u32 in native-endian, and we
         // still need to convert it to network order when writing to
@@ -343,6 +350,13 @@ pub enum Protocol {
     IGMP = 0x2,
     TCP = 0x6,
     UDP = 0x11,
+    Reserved = 0xFF,
+}
+
+impl Default for Protocol {
+    fn default() -> Self {
+        Protocol::Reserved
+    }
 }
 
 impl Display for Protocol {
@@ -352,6 +366,7 @@ impl Display for Protocol {
             Protocol::IGMP => write!(f, "IGMP"),
             Protocol::TCP => write!(f, "TCP"),
             Protocol::UDP => write!(f, "UDP"),
+            Protocol::Reserved => write!(f, "Reserved"),
         }
     }
 }
@@ -395,11 +410,10 @@ pub struct Ipv4HdrRaw {
 }
 
 impl Ipv4HdrRaw {
-    // TODO avoid trait object.
-    pub fn parse<R: PacketReader>(
-        rdr: &mut dyn PacketReader,
+    pub fn parse<R: PacketRead>(
+        rdr: &mut R,
     ) -> Result<LayoutVerified<&[u8], Self>, ReadErr> {
-        let slice = rdr.get_slice(size_of::<Self>())?;
+        let slice = rdr.slice(std::mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
             None => return Err(ReadErr::BadLayout),
@@ -407,13 +421,12 @@ impl Ipv4HdrRaw {
         Ok(hdr)
     }
 
-    pub fn parse_mut<R: PacketReader>(
-        rdr: &mut dyn PacketReader,
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
-        let slice = rdr.get_slice_mut(size_of::<Self>())?;
-        let hdr = match LayoutVerified::new(slice) {
+    pub fn parse_mut(
+        dst: &mut [u8],
+    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteErr> {
+        let hdr = match LayoutVerified::new(dst) {
             Some(bytes) => bytes,
-            None => return Err(ReadErr::BadLayout),
+            None => return Err(WriteErr::BadLayout),
         };
         Ok(hdr)
     }

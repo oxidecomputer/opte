@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::headers::{TcpMeta, UlpMeta};
 use crate::layer::InnerFlowId;
-use crate::parse::PacketMeta;
+use crate::packet::PacketMeta;
 use crate::rule::flow_id_sdt_arg;
 use crate::tcp::{TcpFlags, TcpState};
 use crate::Direction;
@@ -277,9 +277,13 @@ impl TcpFlowState {
                 // In this case we are retransmitting the SYN packet.
                 if tcp.has_flag(TcpFlags::SYN) {
                     return Ok(None);
-                } else {
-                    return Err(format!("outbound non-SYN in SynSent state"));
                 }
+
+                if tcp.has_flag(TcpFlags::RST) {
+                    return Ok(Some(Closed));
+                }
+
+                return Err(format!("outbound non-SYN in SynSent state"));
             }
 
             // TODO passive close
@@ -310,7 +314,7 @@ impl TcpFlowState {
                 return Err(format!("unexpected outbound in FinWait"));
             }
 
-            // The guest in in actie close.
+            // The guest in in active close.
             FinWait2 => {
                 // Presumably the guest saw something it did not like.
                 if tcp.has_flag(TcpFlags::RST) {

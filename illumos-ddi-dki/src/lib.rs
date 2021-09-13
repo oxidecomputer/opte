@@ -59,6 +59,7 @@ pub type hrtime_t = c_longlong;
 pub type id_t = c_int;
 pub type minor_t = c_ulong;
 pub type offset_t = c_longlong;
+pub type pid_t = c_int;
 
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -323,7 +324,58 @@ pub unsafe extern "C" fn nodev_power(
     nodev()
 }
 
+// Many of these fields are not needed at the moment and thus defined
+// imprecisely for expediency.
 #[repr(C)]
+#[derive(Debug)]
+pub struct dblk_t {
+    pub db_frtnp: *const c_void, // imprecise
+    pub db_base: *const c_uchar,
+    pub db_lim: *const c_uchar,
+    pub db_ref: c_uchar,
+    pub db_type: c_uchar,
+    pub db_flags: c_uchar,
+    pub db_struioflag: c_uchar,
+    pub db_cpid: pid_t,
+    pub db_cache: *const c_void,
+    pub db_mblk: *const mblk_t,
+    pub db_free: *const c_void, // imprecise
+    pub db_lastfree: *const c_void, // imprecise
+    pub db_cksumstart: intptr_t,
+    pub db_cksumend: intptr_t,
+    pub db_cksumstuff: intptr_t,
+    pub db_struioun: u64, // imprecise
+    pub db_fthdr: *const c_void, // imprecise
+    pub db_credp: *const c_void, // imprecise
+}
+
+impl Default for dblk_t {
+    fn default() -> Self {
+        dblk_t {
+            db_frtnp: ptr::null(),
+            db_base: ptr::null(),
+            db_lim: ptr::null(),
+            db_ref: 0,
+            db_type: 0,
+            db_flags: 0,
+            db_struioflag: 0,
+            db_cpid: 0,
+            db_cache: ptr::null(),
+            db_mblk: ptr::null(),
+            db_free: ptr::null(),
+            db_lastfree: ptr::null(),
+            db_cksumstart: 0,
+            db_cksumend: 0,
+            db_cksumstuff: 0,
+            db_struioun: 0,
+            db_fthdr: ptr::null(),
+            db_credp: ptr::null(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
 pub struct mblk_t {
     pub b_next: *mut mblk_t,
     pub b_prev: *mut mblk_t,
@@ -338,7 +390,24 @@ pub struct mblk_t {
     // could probably have an optional flag in OPTE/mac to say that
     // certain path aren't using STREAMS and could repurpose these 8
     // bytes.
-    pub b_queue: *const queue_t,
+    pub b_queue: *const c_void,
+}
+
+impl Default for mblk_t {
+    fn default() -> Self {
+        mblk_t {
+            b_next: ptr::null_mut(),
+            b_prev: ptr::null_mut(),
+            b_cont: ptr::null_mut(),
+            b_rptr: ptr::null_mut(),
+            b_wptr: ptr::null_mut(),
+            b_datap: ptr::null(),
+            b_band: 0,
+            b_tag: 0,
+            b_flag: 0,
+            b_queue: ptr::null_mut(),
+        }
+    }
 }
 
 #[repr(C)]
@@ -402,8 +471,6 @@ extern "C" {
 
     pub type cred_t;
 
-    pub type dblk_t; // We don't need to poke at dblk yet.
-
     pub type ddi_periodic;
     pub type dev_info;
 
@@ -464,6 +531,8 @@ extern "C" {
     ) -> c_int;
     pub fn ddi_soft_state_fini(state_p: *mut *mut c_void);
     pub fn ddi_soft_state_zalloc(state: *mut c_void, item: c_int) -> c_int;
+
+    pub fn freemsg(mp: *mut mblk_t);
 
     pub fn gethrtime() -> hrtime_t;
 

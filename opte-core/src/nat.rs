@@ -1,7 +1,5 @@
-use crate::ether::EtherAddr;
-use crate::headers::{
-    EtherMeta, HeaderAction, IcmpEchoMeta, Ipv4Meta, TcpMeta, UdpMeta,
-};
+use crate::ether::{EtherAddr, EtherMeta};
+use crate::headers::{HeaderAction, IcmpEchoMeta, Ipv4Meta, TcpMeta, UdpMeta};
 use crate::ip4::Ipv4Addr;
 use crate::layer::InnerFlowId;
 use crate::rule::{
@@ -201,13 +199,14 @@ impl ActionDesc for DynNat4Desc {
 
 #[test]
 fn dyn_nat4_ht() {
+    use crate::ether::ETHER_TYPE_IPV4;
     use crate::headers::{IpMeta, UlpMeta};
     use crate::ip4::Protocol;
-    use crate::parse::PacketMeta;
+    use crate::packet::PacketMeta;
 
-    let priv_mac = [0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf];
-    let pub_mac = [0xa8, 0x40, 0x25, 0x00, 0x00, 0x63];
-    let dest_mac = [0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d];
+    let priv_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
+    let pub_mac = EtherAddr::from([0xa8, 0x40, 0x25, 0x00, 0x00, 0x63]);
+    let dest_mac = EtherAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
     let priv_ip = "10.0.0.220".parse().unwrap();
     let priv_port = "4999".parse().unwrap();
     let pub_ip = "52.10.128.69".parse().unwrap();
@@ -220,7 +219,8 @@ fn dyn_nat4_ht() {
     // TODO test in_ht
     let out_ht = nat.gen_ht(Direction::Out);
 
-    let ether = EtherMeta { src: priv_mac, dst: dest_mac };
+    let ether =
+        EtherMeta { src: priv_mac, dst: dest_mac, ether_type: ETHER_TYPE_IPV4 };
     let ip = IpMeta::from(Ipv4Meta {
         src: priv_ip,
         dst: outside_ip,

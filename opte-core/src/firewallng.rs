@@ -13,13 +13,14 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ether::ETHER_TYPE_ARP;
 use crate::headers::DYNAMIC_PORT;
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Protocol};
 use crate::layer::{InnerFlowId, Layer};
 use crate::rule::{
-    Action as LayerAction, ActionDesc, IdentityDesc, IpProtoMatch,
-    Ipv4AddrMatch, PortMatch, Predicate, Resources, Rule, RuleAction,
-    StatefulAction,
+    Action as LayerAction, ActionDesc, EtherTypeMatch, Identity, IdentityDesc,
+    IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate, Resources, Rule,
+    RuleAction, StatefulAction,
 };
 use crate::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
 use crate::{Direction, ParseErr, ParseResult};
@@ -39,8 +40,20 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     // Thus, to match all incoming traffic, we add no predicates.
     layer.add_rule(Direction::In, Rule::new(65535, RuleAction::Deny));
 
+    // This rule is not listed in the RFDs, nor does the Oxide VPC
+    // Firewall have any features for matching L2 data. The underlying
+    // firewall mechanism in OPTE is stronger than the model offered
+    // by RFD 21. We use this to our advantage here to allow ARP
+    // traffic to pass, which will be dealt with by the ARP layer in
+    // the Oxide Network configuration.
+    let mut arp = Rule::new(1, RuleAction::Allow(1));
+    arp.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+        ETHER_TYPE_ARP,
+    )]));
+    layer.add_rule(Direction::In, arp);
+
     // Allow SSH traffic from anywhere.
-    let mut ssh = Rule::new(65534, RuleAction::Allow);
+    let mut ssh = Rule::new(65534, RuleAction::Allow(0));
     ssh.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
         Protocol::TCP,
     )]));
@@ -50,14 +63,14 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     layer.add_rule(Direction::In, ssh);
 
     // Allow ICMP traffic from anywhere.
-    let mut icmp = Rule::new(65534, RuleAction::Allow);
+    let mut icmp = Rule::new(65534, RuleAction::Allow(0));
     icmp.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
         Protocol::ICMP,
     )]));
     layer.add_rule(Direction::In, icmp);
 
     // Allow RDP from anywhere.
-    let mut rdp = Rule::new(65534, RuleAction::Allow);
+    let mut rdp = Rule::new(65534, RuleAction::Allow(0));
     rdp.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
         Protocol::TCP,
     )]));
@@ -68,13 +81,13 @@ fn add_default_inbound_rules(layer: &mut Layer) {
 }
 
 fn add_default_outbound_rules(layer: &mut Layer) {
-    layer.add_rule(Direction::Out, Rule::new(65535, RuleAction::Allow));
+    layer.add_rule(Direction::Out, Rule::new(65535, RuleAction::Allow(0)));
 }
 
 impl From<FirewallRule> for Rule {
     fn from(fw_rule: FirewallRule) -> Self {
         let action = match fw_rule.action {
-            Action::Allow => RuleAction::Allow,
+            Action::Allow => RuleAction::Allow(0),
             Action::Deny => RuleAction::Deny,
         };
 
@@ -160,10 +173,23 @@ impl StatefulAction for FwStatefulAction {
 
 impl Firewall {
     pub fn create_layer() -> Layer {
-        let action = LayerAction::Stateful(Box::new(FwStatefulAction::new(
-            "fw".to_string(),
+        // A stateful action creates a FlowTable entry.
+        let stateful_action = LayerAction::Stateful(
+            Box::new(FwStatefulAction::new("fw".to_string()))
+        );
+
+        // A static action does not create an entry in the FlowTable.
+        // For the moment this is only used to allow ARP to bypass the
+        // firewall layer, but it may be useful to expose this more
+        // generally in the future.
+        let static_action = LayerAction::Static(Box::new(Identity::new(
+            "fw_arp".to_string(),
         )));
-        let mut layer = Layer::new("firewall", action);
+
+        let mut layer = Layer::new(
+            "firewall",
+            vec![stateful_action, static_action]
+        );
         add_default_inbound_rules(&mut layer);
         add_default_outbound_rules(&mut layer);
         layer

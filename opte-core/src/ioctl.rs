@@ -45,18 +45,6 @@ impl TryFrom<c_int> for IoctlCmd {
     }
 }
 
-// TODO There will then be a RuleDump struct passed via `req_bytes`
-// with a Dir, and the size of the serialized bytes is specified in
-// `req_len`. Then a heap allocation is made (by opteadm) and its
-// pointer placed in `resp_bytes` along with its size in `resp_len`.
-// The kernel will attempt to serialize the rule table, if it can't
-// fit it into `resp_len` it will return ENOBUFS so opteadm can
-// increase the buffer size and try again.
-//
-// Actually, perhaps there should be no resp_bytes/len, because it's
-// up to the particular ioctl if it needs a response other than the
-// return code.
-//
 // We need repr(C) for a stable layout across compilations. This is a
 // generic structure for all ioctls, the actual request/response data
 // is serialized/deserialized by serde. In the future, if we need this
@@ -82,6 +70,8 @@ pub struct SetIpConfigReq {
     pub port_start: String,
     pub port_end: String,
     pub vpc_sub4: String,
+    pub gw_mac: String,
+    pub gw_ip: String,
 }
 
 impl FromStr for SetIpConfigReq {
@@ -93,6 +83,8 @@ impl FromStr for SetIpConfigReq {
         let mut port_start = None;
         let mut port_end = None;
         let mut vpc_sub4 = None;
+        let mut gw_mac = None;
+        let mut gw_ip = None;
 
         for token in s.split(" ") {
             match token.split_once("=") {
@@ -114,6 +106,14 @@ impl FromStr for SetIpConfigReq {
 
                 Some(("vpc_sub4", val)) => {
                     vpc_sub4 = Some(val.to_string());
+                }
+
+                Some(("gw_mac", val)) => {
+                    gw_mac = Some(val.to_string());
+                }
+
+                Some(("gw_ip", val)) => {
+                    gw_ip = Some(val.to_string());
                 }
 
                 _ => {
@@ -142,12 +142,22 @@ impl FromStr for SetIpConfigReq {
             return Err(format!("missing vpc_sub4"));
         }
 
+        if gw_mac == None {
+            return Err(format!("missing gw_mac"));
+        }
+
+        if gw_ip == None {
+            return Err(format!("missing gw_ip"));
+        }
+
         Ok(SetIpConfigReq {
             private_ip: private_ip.unwrap(),
             public_ip: public_ip.unwrap(),
             port_start: port_start.unwrap(),
             port_end: port_end.unwrap(),
             vpc_sub4: vpc_sub4.unwrap(),
+            gw_mac: gw_mac.unwrap(),
+            gw_ip: gw_ip.unwrap(),
         })
     }
 }

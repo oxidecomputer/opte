@@ -1,12 +1,12 @@
-extern crate zerocopy;
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
-
-use crate::input::{PacketReader, ReadErr};
+use std::fmt::{self, Display};
 
 use serde::{Deserialize, Serialize};
 
-use std::fmt::{self, Display};
-use std::mem::size_of;
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
+
+use crate::packet::{PacketRead, ReadErr, WriteErr};
+
+pub const TCP_HDR_SZ: usize = std::mem::size_of::<TcpHdrRaw>();
 
 pub const TCP_PORT_RDP: u16 = 3389;
 pub const TCP_PORT_SSH: u16 = 22;
@@ -75,11 +75,10 @@ pub struct TcpHdrRaw {
 }
 
 impl TcpHdrRaw {
-    // TODO avoid trait object.
-    pub fn parse<R: PacketReader>(
-        rdr: &mut dyn PacketReader,
+    pub fn parse<R: PacketRead>(
+        rdr: &mut R,
     ) -> Result<LayoutVerified<&[u8], Self>, ReadErr> {
-        let slice = rdr.get_slice(size_of::<Self>())?;
+        let slice = rdr.slice(std::mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
             None => return Err(ReadErr::BadLayout),
@@ -87,13 +86,12 @@ impl TcpHdrRaw {
         Ok(hdr)
     }
 
-    pub fn parse_mut<R: PacketReader>(
-        rdr: &mut dyn PacketReader,
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
-        let slice = rdr.get_slice_mut(size_of::<Self>())?;
-        let hdr = match LayoutVerified::new(slice) {
+    pub fn parse_mut(
+        dst: &mut [u8],
+    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteErr> {
+        let hdr = match LayoutVerified::new(dst) {
             Some(bytes) => bytes,
-            None => return Err(ReadErr::BadLayout),
+            None => return Err(WriteErr::BadLayout),
         };
         Ok(hdr)
     }

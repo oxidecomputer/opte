@@ -1,21 +1,3 @@
-use crate::flow_table::StateSummary;
-use crate::headers::{
-    EtherMeta, EtherMetaOpt, GeneveMeta, GeneveMetaOpt, HeaderAction,
-    HeaderActionModify, IcmpDuMeta, IcmpDuMetaOpt, IcmpEchoMeta,
-    IcmpEchoMetaOpt, IpMeta, IpMetaOpt, Ipv4Meta, TcpMeta, TcpMetaOpt, UdpMeta,
-    UdpMetaOpt, UlpMeta,
-};
-use crate::ip4::{Ipv4Addr, Ipv4Cidr, Protocol};
-use crate::layer::{InnerFlowId, IpAddr};
-use crate::nat::NatPool;
-use crate::parse::PacketMeta;
-use crate::sync::{KMutex, KMutexType};
-use crate::{CString, Direction};
-
-use illumos_ddi_dki::{c_char, uintptr_t};
-
-use serde::{Deserialize, Serialize};
-
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::prelude::v1::*;
 
@@ -29,6 +11,33 @@ use alloc::sync::Arc;
 use std::sync::Arc;
 
 use std::fmt::{self, Display};
+
+use crate::arp::{
+    ArpEth4Payload, ArpEth4PayloadRaw, ArpMeta, ArpOp, ARP_HTYPE_ETHERNET,
+};
+use crate::ether::{EtherAddr, EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
+use crate::flow_table::StateSummary;
+use crate::headers::{
+    GeneveMeta, GeneveMetaOpt, HeaderAction, HeaderActionModify, IcmpDuMeta,
+    IcmpDuMetaOpt, IcmpEchoMeta, IcmpEchoMetaOpt, IpMeta, IpMetaOpt, Ipv4Meta,
+    TcpMeta, TcpMetaOpt, UdpMeta, UdpMetaOpt, UlpMeta,
+};
+use crate::ip4::{Ipv4Addr, Ipv4Cidr, Protocol};
+use crate::layer::{InnerFlowId, IpAddr};
+use crate::nat::NatPool;
+use crate::packet::{
+    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
+};
+use crate::sync::{KMutex, KMutexType};
+use crate::{CString, Direction};
+
+use illumos_ddi_dki::{c_char, uintptr_t};
+
+use serde::{Deserialize, Serialize};
+
+// A marker trait for types which represent packet payloads. Examples
+// of payloads include an ARP request, ICMP body, or TCP body.
+pub trait Payload {}
 
 pub trait MatchExactVal {}
 
@@ -46,6 +55,121 @@ pub trait MatchRangeVal {}
 
 pub trait MatchRange<M: MatchRangeVal> {
     fn match_range(&self, start: &M, end: &M) -> bool;
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum EtherTypeMatch {
+    Exact(u16),
+}
+
+impl EtherTypeMatch {
+    fn matches(&self, flow_et: u16) -> bool {
+        match self {
+            EtherTypeMatch::Exact(et) => flow_et == *et,
+        }
+    }
+}
+
+impl Display for EtherTypeMatch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use EtherTypeMatch::*;
+
+        match self {
+            Exact(et) => write!(f, "0x{:X}", et),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum EtherAddrMatch {
+    Exact(EtherAddr),
+}
+
+impl EtherAddrMatch {
+    fn matches(&self, flow_addr: EtherAddr) -> bool {
+        match self {
+            EtherAddrMatch::Exact(addr) => flow_addr == *addr,
+        }
+    }
+}
+
+impl Display for EtherAddrMatch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use EtherAddrMatch::*;
+
+        match self {
+            Exact(addr) => write!(f, "{}", addr),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum ArpHtypeMatch {
+    Exact(u16),
+}
+
+impl ArpHtypeMatch {
+    fn matches(&self, flow_htype: u16) -> bool {
+        match self {
+            ArpHtypeMatch::Exact(htype) => flow_htype == *htype,
+        }
+    }
+}
+
+impl Display for ArpHtypeMatch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use ArpHtypeMatch::*;
+
+        match self {
+            Exact(htype) => write!(f, "{}", htype),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum ArpPtypeMatch {
+    Exact(u16),
+}
+
+impl ArpPtypeMatch {
+    fn matches(&self, flow_ptype: u16) -> bool {
+        match self {
+            ArpPtypeMatch::Exact(ptype) => flow_ptype == *ptype,
+        }
+    }
+}
+
+impl Display for ArpPtypeMatch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use ArpPtypeMatch::*;
+
+        match self {
+            Exact(ptype) => write!(f, "0x{:4X}", ptype),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum ArpOpMatch {
+    Exact(ArpOp),
+}
+
+impl ArpOpMatch {
+    fn matches(&self, flow_op: ArpOp) -> bool {
+        match self {
+            ArpOpMatch::Exact(op) => flow_op == *op,
+        }
+    }
+}
+
+impl Display for ArpOpMatch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use ArpOpMatch::*;
+
+        match self {
+            Exact(op) => write!(f, "{}", op),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -131,6 +255,12 @@ impl Display for PortMatch {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Predicate {
+    InnerEtherType(Vec<EtherTypeMatch>),
+    InnerEtherDst(Vec<EtherAddrMatch>),
+    InnerEtherSrc(Vec<EtherAddrMatch>),
+    InnerArpHtype(ArpHtypeMatch),
+    InnerArpPtype(ArpPtypeMatch),
+    InnerArpOp(ArpOpMatch),
     InnerSrcIp4(Vec<Ipv4AddrMatch>),
     InnerDstIp4(Vec<Ipv4AddrMatch>),
     InnerIpProto(Vec<IpProtoMatch>),
@@ -147,6 +277,45 @@ impl Display for Predicate {
         use Predicate::*;
 
         match self {
+            InnerEtherType(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.ether.ether_type={}", s)
+            }
+
+            InnerEtherDst(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.ether.dst={}", s)
+            }
+
+            InnerEtherSrc(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.ether.src={}", s)
+            }
+
+            InnerArpHtype(ArpHtypeMatch::Exact(htype)) => {
+                write!(f, "inner.arp.htype={}", htype)
+            }
+
+            InnerArpPtype(ArpPtypeMatch::Exact(ptype)) => {
+                write!(f, "inner.arp.ptype={}", ptype)
+            }
+
+            InnerArpOp(ArpOpMatch::Exact(op)) => {
+                write!(f, "inner.arp.op={}", op)
+            }
+
             InnerIpProto(list) => {
                 let s = list
                     .iter()
@@ -195,6 +364,72 @@ impl Predicate {
     fn is_match(&self, meta: &PacketMeta) -> bool {
         match self {
             Self::Not(pred) => return !pred.is_match(meta),
+
+            Self::InnerEtherType(list) => match meta.inner_ether {
+                None => return false,
+
+                Some(EtherMeta { ether_type, .. }) => {
+                    for m in list {
+                        if m.matches(ether_type) {
+                            return true;
+                        }
+                    }
+                }
+            },
+
+            Self::InnerEtherDst(list) => match meta.inner_ether {
+                None => return false,
+
+                Some(EtherMeta { dst, .. }) => {
+                    for m in list {
+                        if m.matches(dst) {
+                            return true;
+                        }
+                    }
+                }
+            },
+
+            Self::InnerEtherSrc(list) => match meta.inner_ether {
+                None => return false,
+
+                Some(EtherMeta { src, .. }) => {
+                    for m in list {
+                        if m.matches(src) {
+                            return true;
+                        }
+                    }
+                }
+            },
+
+            Self::InnerArpHtype(m) => match meta.inner_arp {
+                None => return false,
+
+                Some(ArpMeta { htype, .. }) => {
+                    if m.matches(htype) {
+                        return true;
+                    }
+                }
+            },
+
+            Self::InnerArpPtype(m) => match meta.inner_arp {
+                None => return false,
+
+                Some(ArpMeta { ptype, .. }) => {
+                    if m.matches(ptype) {
+                        return true;
+                    }
+                }
+            },
+
+            Self::InnerArpOp(m) => match meta.inner_arp {
+                None => return false,
+
+                Some(ArpMeta { op, .. }) => {
+                    if m.matches(op) {
+                        return true;
+                    }
+                }
+            },
 
             Self::InnerIpProto(list) => match meta.inner_ip {
                 None => return false,
@@ -273,11 +508,95 @@ impl Predicate {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum DataPredicate {
+    InnerArpTpa(Vec<Ipv4AddrMatch>),
+    Not(Box<DataPredicate>),
+}
+
+impl Display for DataPredicate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use DataPredicate::*;
+
+        match self {
+            InnerArpTpa(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.arp.data.tpa={}", s)
+            }
+
+            Not(pred) => {
+                write!(f, "!")?;
+                pred.fmt(f)
+            }
+        }
+    }
+}
+
+impl DataPredicate {
+    // Determine if the given `DataPredicate` matches the payload. We
+    // use `PacketMeta` to determine if there is a suitable payload to
+    // be inspected. That is, if there is no metadata for a given
+    // header, there is certainly no payload.
+    fn is_match<R>(&self, meta: &PacketMeta, rdr: &mut R) -> bool
+    where
+        R: PacketRead,
+    {
+        match self {
+            Self::Not(pred) => return !pred.is_match(meta, rdr),
+
+            Self::InnerArpTpa(list) => match meta.inner_arp {
+                None => return false,
+
+                Some(ArpMeta { htype, ptype, .. }) => {
+                    if htype != ARP_HTYPE_ETHERNET || ptype != ETHER_TYPE_IPV4 {
+                        return false;
+                    }
+
+                    // let raw = match LayoutVerified::new(payload) {
+                    //     Some(raw) => raw,
+                    //     None => return false,
+                    // };
+
+                    let raw = match ArpEth4PayloadRaw::parse(rdr) {
+                        Ok(raw) => raw,
+                        Err(_) => return false,
+                    };
+
+                    let arp = ArpEth4Payload::from(&raw);
+                    // TODO It would be nice to add some type of undo
+                    // method to the reader interface, allowing you to
+                    // track back to the cursor position before the
+                    // last read. Or, even better, have the ability to
+                    // get a new type from the PacketReader, like
+                    // TempPacketRead (or something) that undoes the
+                    // most recent read in its Drop implementation.
+                    // That way there is no chance to forget to undo
+                    // the read.
+                    rdr.seek_back(crate::arp::ARP_ETH4_PAYLOAD_SZ)
+                        .expect("failed to seek back");
+
+                    for m in list {
+                        if m.matches(arp.tpa) {
+                            return true;
+                        }
+                    }
+                }
+            },
+        }
+
+        false
+    }
+}
+
 /// An Action Descriptor type holds the information needed to create
 /// an HT which implements the desired action. An ActionDesc is
 /// created by an Action implementation.
 pub trait ActionDesc {
-    /// Perform any finilization needed. For a stateful action this
+    /// Perform any finalization needed. For a stateful action this
     /// will typically release ownership of a resource.
     fn fini(&self);
 
@@ -383,12 +702,32 @@ impl ActionDesc for IdentityDesc {
 
 #[derive(Debug)]
 pub struct Identity {
-    layer: String,
+    name: String,
 }
 
 impl Identity {
-    pub fn new(layer: String) -> Self {
-        Identity { layer }
+    pub fn new(name: String) -> Self {
+        Identity { name }
+    }
+}
+
+impl StaticAction for Identity {
+    fn gen_ht(&self, _dir: Direction, _flow_id: InnerFlowId) -> HT {
+        HT {
+            name: self.name.clone(),
+            outer_ether: HeaderAction::Ignore,
+            outer_ip: HeaderAction::Ignore,
+            outer_udp: HeaderAction::Ignore,
+            geneve: HeaderAction::Ignore,
+            inner_ether: HeaderAction::Ignore,
+            inner_ip: HeaderAction::Ignore,
+            ulp: UlpHdrAction {
+                icmp_du: HeaderAction::Ignore,
+                icmp_echo: HeaderAction::Ignore,
+                tcp: HeaderAction::Ignore,
+                udp: HeaderAction::Ignore,
+            },
+        }
     }
 }
 
@@ -409,7 +748,10 @@ impl UlpHdrAction {
 
                     // TODO For now we only implement Ignore for ICMP DU.
                     action => {
-                        todo!("action {:?} not implemented for ICMP", action);
+                        todo!(
+                            "action {:?} not implemented for ICMP DU",
+                            action
+                        );
                     }
                 },
 
@@ -427,7 +769,22 @@ impl UlpHdrAction {
                     // it a compile time error. Or all header types
                     // need to support all action types.
                     action => {
-                        todo!("action {:?} not implemented for ICMP", action);
+                        todo!(
+                            "action {:?} not implemented for ICMP Echo",
+                            action
+                        );
+                    }
+                },
+
+                UlpMeta::IcmpRedirect(_icmp_meta) => match &self.icmp_du {
+                    HeaderAction::Ignore => (),
+
+                    // TODO For now we only implement Ignore for ICMP Redirect.
+                    action => {
+                        todo!(
+                            "action {:?} not implemented for ICMP Redirect",
+                            action
+                        );
                     }
                 },
 
@@ -492,7 +849,7 @@ extern "C" {
 
 // We mark all the std-built probes as `unsafe`, not because they are,
 // but in order to stay consistent with the externs, which are
-// implicitly unsafe. This also keeps the compiler from thorwing up a
+// implicitly unsafe. This also keeps the compiler from throwing up a
 // warning for every probe callsite when compiling with std.
 //
 // TODO In the future we could have these std versions of the probes
@@ -634,25 +991,52 @@ pub trait StaticAction {
     fn gen_ht(&self, dir: Direction, flow_id: InnerFlowId) -> HT;
 }
 
+#[derive(Debug)]
+pub enum GenErr {
+    BadPayload(crate::packet::ReadErr),
+    MissingMeta,
+}
+
+pub type GenResult<T> = Result<T, GenErr>;
+
+/// A hairpin action is one that generates a new packet based on the
+/// current inbound/outbound packet, and then "hairpins" that new
+/// packet back to the source of the original packet. For example, you
+/// could use this to hairpin an ARP Reply in response to a guest's
+/// ARP request.
+pub trait HairpinAction {
+    /// Generate a [`Packet`] to hairpin back to the source. The
+    /// `meta` argument holds the packet metadata, inlucding any
+    /// modifications made by previous layers up to this point. The
+    /// `rdr` argument provides a [`PacketReader`] against
+    /// [`Packet<Parsed>`], with its starting position set to the
+    /// beginning of the packet's payload.
+    fn gen_packet(
+        &self,
+        meta: &PacketMeta,
+        rdr: &mut PacketReader<Parsed, ()>,
+    ) -> GenResult<Packet<Initialized>>;
+}
+
 pub enum Action {
     Static(Box<dyn StaticAction>),
-    // Stateful(Box<dyn StatefulAction<Desc = Arc<dyn ActionDesc>>>),
     Stateful(Box<dyn StatefulAction>),
+    Hairpin(Box<dyn HairpinAction>),
 }
 
 // TODO I should probably name this something else now. It's role is
 // to declare whether or not a rule match should execute the layer's
 // associated action (Allow), or whether it should deny the packet
 // (Deny).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum RuleAction {
-    Allow,
+    Allow(usize),
     Deny,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum RuleActionDump {
-    Allow,
+    Allow(usize),
     Deny,
 }
 
@@ -661,31 +1045,45 @@ impl From<&RuleAction> for RuleActionDump {
         use RuleAction::*;
 
         match ra {
-            Allow => RuleActionDump::Allow,
+            Allow(idx) => RuleActionDump::Allow(*idx),
             Deny => RuleActionDump::Deny,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Rule {
     pub priority: u16,
     predicates: Vec<Predicate>,
+    data_predicates: Vec<DataPredicate>,
     pub action: RuleAction,
 }
 
 impl Rule {
     pub fn new(priority: u16, action: RuleAction) -> Self {
-        Rule { priority, predicates: vec![], action }
+        Rule { priority, predicates: vec![], data_predicates: vec![], action }
     }
 
     pub fn add_predicate(&mut self, pred: Predicate) {
         self.predicates.push(pred);
     }
 
-    pub fn is_match(&self, meta: &PacketMeta) -> bool {
+    pub fn add_data_predicate(&mut self, pred: DataPredicate) {
+        self.data_predicates.push(pred);
+    }
+
+    pub fn is_match<R>(&self, meta: &PacketMeta, rdr: &mut R) -> bool
+    where
+        R: PacketRead,
+    {
         for p in &self.predicates {
             if !p.is_match(meta) {
+                return false;
+            }
+        }
+
+        for p in &self.data_predicates {
+            if !p.is_match(meta, rdr) {
                 return false;
             }
         }
@@ -713,11 +1111,15 @@ impl From<&Rule> for RuleDump {
 
 #[test]
 fn rule_matching() {
-    let mut r1 = Rule::new(1, RuleAction::Allow);
+    let mut r1 = Rule::new(1, RuleAction::Allow(0));
     let src_ip = "10.11.11.100".parse().unwrap();
     let src_port = "1026".parse().unwrap();
     let dst_ip = "52.10.128.69".parse().unwrap();
     let dst_port = "443".parse().unwrap();
+    // There is no DataPredicate usage in this test, so this pkt/rdr
+    // can be bogus.
+    let pkt = Packet::copy(&[0xA]);
+    let mut rdr = PacketReader::new(&pkt, ());
 
     let ip = IpMeta::from(Ipv4Meta {
         src: src_ip,
@@ -738,7 +1140,8 @@ fn rule_matching() {
     r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
         src_ip,
     )]));
-    assert!(r1.is_match(&meta));
+
+    assert!(r1.is_match(&meta, &mut rdr));
 
     let new_src_ip = "10.11.11.99".parse().unwrap();
 
@@ -762,5 +1165,5 @@ fn rule_matching() {
         ..Default::default()
     };
 
-    assert!(!r1.is_match(&meta));
+    assert!(!r1.is_match(&meta, &mut rdr));
 }

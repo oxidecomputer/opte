@@ -1,6 +1,6 @@
-use crate::ether::{EtherAddr, EtherHdrRaw};
-use crate::icmp::{IcmpDuHdrRaw, IcmpEchoHdrRaw};
+use crate::icmp::{IcmpDuHdrRaw, IcmpEchoHdrRaw, IcmpRedirectHdrRaw};
 use crate::ip4::{Ipv4Addr, Ipv4HdrRaw, Protocol};
+use crate::ip6::Ipv6HdrRaw;
 use crate::tcp::TcpHdrRaw;
 use crate::udp::UdpHdrRaw;
 
@@ -18,50 +18,6 @@ pub const DYNAMIC_PORT: u16 = 0;
 
 pub trait PushActionArg {}
 pub trait ModActionArg {}
-
-#[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub struct EtherMeta {
-    pub src: EtherAddr,
-    pub dst: EtherAddr,
-}
-
-impl From<&LayoutVerified<&[u8], EtherHdrRaw>> for EtherMeta {
-    fn from(raw: &LayoutVerified<&[u8], EtherHdrRaw>) -> Self {
-        EtherMeta { src: raw.src, dst: raw.dst }
-    }
-}
-
-impl EtherMeta {
-    pub fn modify(
-        src: Option<EtherAddr>,
-        dst: Option<EtherAddr>,
-    ) -> HeaderAction<EtherMeta, EtherMetaOpt> {
-        HeaderAction::Modify(EtherMetaOpt { src, dst })
-    }
-}
-
-impl HeaderActionModify<EtherMetaOpt> for EtherMeta {
-    fn run_modify(&mut self, spec: &EtherMetaOpt) {
-        if spec.src.is_some() {
-            self.src = spec.src.unwrap()
-        }
-
-        if spec.dst.is_some() {
-            self.dst = spec.dst.unwrap()
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct EtherMetaOpt {
-    src: Option<EtherAddr>,
-    dst: Option<EtherAddr>,
-}
-
-impl PushActionArg for EtherMeta {}
-impl ModActionArg for EtherMetaOpt {}
 
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
@@ -134,6 +90,22 @@ pub struct Ipv6Meta {
     pub proto: Protocol,
 }
 
+impl From<&LayoutVerified<&[u8], Ipv6HdrRaw>> for Ipv6Meta {
+    fn from(raw: &LayoutVerified<&[u8], Ipv6HdrRaw>) -> Self {
+        Ipv6Meta {
+            src: raw.src,
+            dst: raw.dst,
+            // TODO: For now we assume no extension headers.
+            proto: match Protocol::try_from(raw.next_hdr) {
+                Ok(v) => v,
+                Err(_) => {
+                    todo!("deal with protocol: {}", raw.next_hdr);
+                }
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Ipv6MetaOpt {
     src: Option<[u8; 16]>,
@@ -151,6 +123,12 @@ pub enum IpMeta {
 impl From<Ipv4Meta> for IpMeta {
     fn from(ip4: Ipv4Meta) -> Self {
         IpMeta::Ip4(ip4)
+    }
+}
+
+impl From<Ipv6Meta> for IpMeta {
+    fn from(ip6: Ipv6Meta) -> Self {
+        IpMeta::Ip6(ip6)
     }
 }
 
@@ -254,6 +232,38 @@ pub struct IcmpDuMetaOpt {
 }
 
 impl ModActionArg for IcmpDuMetaOpt {}
+
+#[derive(
+    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub struct IcmpRedirectMeta {
+    pub gateway_ip: Ipv4Addr,
+    pub src_ip: Ipv4Addr,
+    pub dst_ip: Ipv4Addr,
+}
+
+impl PushActionArg for IcmpRedirectMeta {}
+
+impl From<&LayoutVerified<&[u8], IcmpRedirectHdrRaw>> for IcmpRedirectMeta {
+    fn from(raw: &LayoutVerified<&[u8], IcmpRedirectHdrRaw>) -> Self {
+        let ip4: LayoutVerified<_, Ipv4HdrRaw> =
+            LayoutVerified::new(&raw.ip_hdr[..]).unwrap();
+        IcmpRedirectMeta {
+            gateway_ip: u32::from_be_bytes(raw.gateway_ip).into(),
+            src_ip: u32::from_be_bytes(ip4.src).into(),
+            dst_ip: u32::from_be_bytes(ip4.dst).into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct IcmpRedirectMetaOpt {
+    gateway_ip: Option<Ipv4Addr>,
+    src_ip: Option<Ipv4Addr>,
+    dst_ip: Option<Ipv4Addr>,
+}
+
+impl ModActionArg for IcmpRedirectMetaOpt {}
 
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
@@ -374,6 +384,7 @@ impl HeaderActionModify<UdpMetaOpt> for UdpMeta {
 pub enum UlpMeta {
     IcmpDu(IcmpDuMeta),
     IcmpEcho(IcmpEchoMeta),
+    IcmpRedirect(IcmpRedirectMeta),
     Tcp(TcpMeta),
     Udp(UdpMeta),
 }
@@ -387,6 +398,12 @@ impl From<IcmpDuMeta> for UlpMeta {
 impl From<IcmpEchoMeta> for UlpMeta {
     fn from(icmp: IcmpEchoMeta) -> Self {
         UlpMeta::IcmpEcho(icmp)
+    }
+}
+
+impl From<IcmpRedirectMeta> for UlpMeta {
+    fn from(icmp: IcmpRedirectMeta) -> Self {
+        UlpMeta::IcmpRedirect(icmp)
     }
 }
 

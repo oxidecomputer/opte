@@ -3,6 +3,7 @@
 #![feature(btree_retain)]
 #![feature(extern_types)]
 #![feature(str_split_once)]
+#![feature(vec_into_raw_parts)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
@@ -44,12 +45,12 @@ pub mod firewallng;
 pub mod flow_table;
 pub mod headers;
 pub mod icmp;
-pub mod input;
 pub mod ioctl;
 pub mod ip4;
+pub mod ip6;
 pub mod layer;
 pub mod nat;
-pub mod parse;
+pub mod packet;
 pub mod port;
 pub mod rule;
 pub mod sync;

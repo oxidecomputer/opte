@@ -37,7 +37,6 @@ extern crate alloc;
 
 use alloc::prelude::v1::*;
 use core::convert::TryFrom;
-use core::mem;
 use core::ops::Range;
 use core::panic::PanicInfo;
 use core::ptr;
@@ -45,30 +44,25 @@ use core::ptr;
 use crate::ioctl::IoctlEnvelope;
 
 extern crate opte_core;
-use opte_core::arp::{
-    ArpHardware, ArpHdrRaw, ArpOp, ArpProtocol, ARP_HTYPE_ETHERNET,
-};
-use opte_core::ether::{
-    EtherAddr, EtherHdrRaw, ETHER_TYPE_ARP, ETHER_TYPE_IPV4,
-};
+use opte_core::arp::{ArpOp, ArpReply};
+use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
 use opte_core::firewallng::{
     Firewall, FwAddRuleReq, FwAddRuleResp, FwRemRuleReq, FwRemRuleResp,
-};
-use opte_core::input::{
-    MblkPacket, MblkPacketReader, PacketMetaOld, PacketReader,
 };
 use opte_core::ioctl::{IoctlCmd, SetIpConfigReq, SetIpConfigResp};
 use opte_core::ip4::{Ipv4Addr, Protocol};
 use opte_core::layer::{Layer, LayerDumpReq};
 use opte_core::nat::{DynNat4, NatPool};
-use opte_core::parse;
-use opte_core::port::{Port, Pos, TcpFlowsDumpReq, UftDumpReq};
+use opte_core::packet::{Initialized, Packet};
+use opte_core::port::{Port, Pos, ProcessResult, TcpFlowsDumpReq, UftDumpReq};
 use opte_core::rule::{
-    Action, IpProtoMatch, Ipv4AddrMatch, Predicate, Rule, RuleAction,
+    Action, ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate,
+    EtherAddrMatch, EtherTypeMatch, Identity, IpProtoMatch, Ipv4AddrMatch,
+    Predicate, Rule, RuleAction,
 };
 use opte_core::sync::{KMutex, KMutexType};
 use opte_core::vpc::{SetVpcSubnet4Req, SetVpcSubnet4Resp, VpcSubnet4};
-use opte_core::{dbg, CStr, CString, Direction};
+use opte_core::{CStr, CString, Direction};
 
 // For now I glob import all of DDI/DKI until I have a better idea of
 // how I would want to organize it. Also, for the time being, if it's
@@ -82,9 +76,6 @@ extern crate illumos_ddi_dki;
 use ddi_attach_cmd_t::*;
 use ddi_detach_cmd_t::*;
 use illumos_ddi_dki::*;
-
-extern crate zerocopy;
-use zerocopy::AsBytes;
 
 // TODO To `_t` or not to `_t`, that is the question.
 //
@@ -134,12 +125,6 @@ const OPTE_CTL_MINOR: minor_t = 0;
 
 #[no_mangle]
 static mut opte_dip: *mut dev_info = ptr::null_mut::<c_void>() as *mut dev_info;
-
-extern "C" {
-    // Unfortunately this seems to be a private API. Should this be in
-    // the DDI/DKI?
-    fn freemsgchain(mp: *mut mblk_t);
-}
 
 // This block is purely for SDT probes.
 extern "C" {
@@ -298,13 +283,29 @@ fn set_ip_config(
         Err(e) => return Err((EINVAL, format!("port_end: {:?}", e))),
     };
 
+    let gw_mac = match req.gw_mac.parse() {
+        Ok(v) => v,
+        Err(e) => return Err((EINVAL, format!("gw_mac: {:?}", e))),
+    };
+
+    let gw_ip = match req.gw_ip.parse() {
+        Ok(v) => v,
+        Err(e) => return Err((EINVAL, format!("gw_ip: {:?}", e))),
+    };
+
     let mut pool = NatPool::new();
     pool.add(private_ip, public_ip, Range { start, end });
     ocs.port.set_nat_pool(pool);
 
     let ip_bytes = ocs.public_ip.unwrap().to_be_bytes();
-    ocs.public_mac =
-        Some([0xa8, 0x40, 0x25, ip_bytes[1], ip_bytes[2], ip_bytes[3]]);
+    ocs.public_mac = Some(EtherAddr::from([
+        0xa8,
+        0x40,
+        0x25,
+        ip_bytes[1],
+        ip_bytes[2],
+        ip_bytes[3],
+    ]));
 
     let nat = DynNat4::new(
         "dyn-nat4".to_string(),
@@ -312,9 +313,9 @@ fn set_ip_config(
         ocs.guest_mac,
         ocs.public_mac.unwrap(),
     );
-    let layer = Layer::new("dyn-nat4", Action::Stateful(Box::new(nat)));
+    let layer = Layer::new("dyn-nat4", vec![Action::Stateful(Box::new(nat))]);
 
-    let mut rule = Rule::new(1, RuleAction::Allow);
+    let mut rule = Rule::new(1, RuleAction::Allow(0));
     rule.add_predicate(Predicate::InnerIpProto(vec![
         IpProtoMatch::Exact(Protocol::TCP),
         IpProtoMatch::Exact(Protocol::UDP),
@@ -344,14 +345,113 @@ fn set_ip_config(
     ]))));
     layer.add_rule(Direction::Out, rule);
     ocs.port.add_layer(layer, Pos::After("firewall"));
+
+    let arp = Layer::new(
+        "arp",
+        vec![
+            // ARP Reply for gateway's IP.
+            Action::Hairpin(Box::new(ArpReply::new(gw_ip, gw_mac))),
+            // ARP Reply for guest's private IP.
+            Action::Hairpin(Box::new(ArpReply::new(private_ip, ocs.guest_mac))),
+            // ARP Reply for guest's public IP.
+            Action::Hairpin(Box::new(ArpReply::new(
+                public_ip,
+                ocs.public_mac.unwrap(),
+            ))),
+        ],
+    );
+
+    // ================================================================
+    // Outbound ARP Request for Gateway, from Guest
+    // ================================================================
+    let mut rule = Rule::new(1, RuleAction::Allow(0));
+    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+        ETHER_TYPE_ARP,
+    )]));
+    rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
+        EtherAddr::from([0xFF; 6]),
+    )]));
+    rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
+    rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
+        ETHER_TYPE_IPV4,
+    )));
+    rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
+        ArpOp::Request,
+    )));
+    rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
+        Ipv4AddrMatch::Exact(gw_ip),
+    ]));
+    arp.add_rule(Direction::Out, rule);
+
+    // ================================================================
+    // Drop all other outbound ARP Requests from Guest
+    // ================================================================
+    let mut rule = Rule::new(2, RuleAction::Deny);
+    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+        ETHER_TYPE_ARP,
+    )]));
+    arp.add_rule(Direction::Out, rule);
+
+    // ================================================================
+    // Inbound ARP Request from Gateway, for Guest Private IP
+    // ================================================================
+    let mut rule = Rule::new(1, RuleAction::Allow(1));
+    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+        ETHER_TYPE_ARP,
+    )]));
+    rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
+        EtherAddr::from([0xFF; 6]),
+    )]));
+    rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
+    rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
+        ETHER_TYPE_IPV4,
+    )));
+    rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
+        ArpOp::Request,
+    )));
+    rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
+        Ipv4AddrMatch::Exact(private_ip),
+    ]));
+    arp.add_rule(Direction::In, rule);
+
+    // ================================================================
+    // Inbound ARP Request from Gateway, for Guest Public IP
+    // ================================================================
+    let mut rule = Rule::new(1, RuleAction::Allow(2));
+    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+        ETHER_TYPE_ARP,
+    )]));
+    rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
+        EtherAddr::from([0xFF; 6]),
+    )]));
+    rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
+    rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
+        ETHER_TYPE_IPV4,
+    )));
+    rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
+        ArpOp::Request,
+    )));
+    rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
+        Ipv4AddrMatch::Exact(public_ip),
+    ]));
+    arp.add_rule(Direction::In, rule);
+
+    // ================================================================
+    // Drop all other inbound ARP Requests
+    // ================================================================
+    let mut rule = Rule::new(2, RuleAction::Deny);
+    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+        ETHER_TYPE_ARP,
+    )]));
+    arp.add_rule(Direction::In, rule);
+
+    ocs.port.add_layer(arp, Pos::Before("firewall"));
+    // Remove the old ARP layer now that the new one is in place.
+    ocs.port.remove_layer("arp-drop");
+
     Ok(())
 }
 
-// TODO: Implement safe wrapper around arg/ddi_copyin() + mode that
-// provides ability to read Rust structure from provided arg. Use
-// rust-for-linux `UserSlicePtr` as inspiration. However, ours will be
-// different because we have to consider layered drivers and the
-// `mode` argument.
 #[no_mangle]
 unsafe extern "C" fn opte_ioctl(
     _dev: dev_t,
@@ -800,10 +900,10 @@ pub struct OpteClientState {
     vpc_sub4: Option<VpcSubnet4>,
     private_ip: Option<Ipv4Addr>,
     public_ip: Option<Ipv4Addr>,
-    public_mac: Option<[u8; 6]>,
-    // Mock ARP queue (for faking out NAT until we have a real Oxide
-    // physical network).
-    marp_queue: KMutex<Vec<MblkPacket>>,
+    public_mac: Option<EtherAddr>,
+    // Packets generated by OPTE on the guest's/network's behalf, to
+    // be returned to the source (aka a "hairpin" packet).
+    hairpin_queue: KMutex<Vec<Packet<Initialized>>>,
 }
 
 const ONE_SECOND: hrtime_t = 1_000_000_000;
@@ -829,8 +929,9 @@ pub unsafe extern "C" fn opte_client_open(
         return ret;
     }
 
-    let mut guest_mac: EtherAddr = [0; 6];
+    let mut guest_mac = [0u8; 6];
     mac_unicast_primary_get(mh, &mut guest_mac);
+    let guest_mac = EtherAddr::from(guest_mac);
     let port = Box::new(Port::new(
         CStr::from_ptr(name).to_str().unwrap().to_string(),
         guest_mac,
@@ -838,6 +939,19 @@ pub unsafe extern "C" fn opte_client_open(
 
     let fw_layer = Firewall::create_layer();
     port.add_layer(fw_layer, Pos::First);
+
+    // We drop all outbound ARP until the the IP/gateway information
+    // is set via opetadm set-ip-config, at which point we remove this
+    // layer and put a new ARP layer in its place.
+    let arp_drop = Identity::new("arp-drop".to_string());
+    let arp = Layer::new("arp-drop", vec![Action::Static(Box::new(arp_drop))]);
+    let mut rule = Rule::new(1, RuleAction::Deny);
+    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+        ETHER_TYPE_ARP,
+    )]));
+    arp.add_rule(Direction::Out, rule.clone());
+    arp.add_rule(Direction::In, rule);
+    port.add_layer(arp, Pos::First);
 
     let port_periodic = ddi_periodic_add(
         opte_port_periodic,
@@ -858,7 +972,7 @@ pub unsafe extern "C" fn opte_client_open(
         private_ip: None,
         public_ip: None,
         public_mac: None,
-        marp_queue: KMutex::new(Vec::with_capacity(4), KMutexType::Driver),
+        hairpin_queue: KMutex::new(Vec::with_capacity(4), KMutexType::Driver),
     });
 
     let state = &mut *(ddi_get_driver_private(opte_dip) as *mut OpteState);
@@ -989,59 +1103,72 @@ pub unsafe extern "C" fn opte_tx(
     assert!((*mp_chain).b_next == ptr::null_mut());
     __dtrace_probe_tx(mp_chain as uintptr_t);
 
-    let pkt = MblkPacket::wrap(mp_chain);
-    let mut rdr = MblkPacketReader::new(pkt);
-    // TODO probably don't need ocs/ocsp to be mut?
-    let ocs = &mut *ocsp;
-    let mut meta_old = PacketMetaOld::new(Direction::Out);
-    let ether = match EtherHdrRaw::parse::<MblkPacketReader>(&mut rdr) {
-        Ok(ehdr_raw) => ehdr_raw,
-        Err(err) => {
-            dbg(format!("error reading raw ether header: {:?}", err));
-            freemsgchain(mp_chain);
+    let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
+        Ok(pkt) => pkt,
+        Err(e) => {
+            // TODO SDT probe
+            // TODO stat
+            opte_core::dbg(format!("failed to parse packet: {:?}", e));
             return;
         }
     };
+    let ocs = &*ocsp;
+    // TODO This `mp_chain` arg was for debug purposes; now that we
+    // have Packet we can probably get rid of it?
+    let res = ocs.port.process(Direction::Out, &mut pkt, mp_chain as uintptr_t);
 
-    meta_old.ether_src = ether.src;
-    meta_old.ether_dst = ether.dst;
-    let etype = u16::from_be_bytes(ether.ether_type);
-
-    // TODO: Deal with non-IPv4.
-    if etype != 0x800 {
-        mac_tx(ocs.mch, mp_chain, hint, flag, ret_mp);
-        return;
-    }
-    drop(ether);
-
-    let mut rdr = MblkPacketReader::new(pkt);
-    let meta =
-        match ocs.port.process(Direction::Out, &mut rdr, mp_chain as uintptr_t)
-        {
-            Some(val) => val,
-            None => {
-                freemsgchain(mp_chain);
-                return;
+    match res {
+        ProcessResult::Modify(meta) => {
+            if pkt.set_headers(&meta).is_err() {
+                todo!("implement set_headers err stat + SDT probe");
             }
-        };
 
-    parse::set_headers(&meta, MblkPacketReader::new(pkt));
-    mac_tx(ocs.mch, mp_chain, hint, flag, ret_mp);
+            // It's vital to get the raw `mblk_t` back out of the
+            // `pkt` here, otherwise the mblk_t would be dropped
+            // at the end of this function along with `pkt`.
+            mac_tx(ocs.mch, pkt.unwrap(), hint, flag, ret_mp);
+        }
 
-    // Send out any fake ARP replies. The underlying `mblk_t` is now
-    // owned (and later freed) by `mac_tx()`.
-    let mut marp_queue = ocs.marp_queue.lock().unwrap();
-    while let Some(mp) = marp_queue.pop() {
-        mac_tx(ocs.mch, mp.unwrap(), hint, flag, ret_mp);
+        // TODO Probably want a state + a probe along with a reason
+        // carried up via `ProcessResult::Drop(String)` so that a
+        // reason can be given as part of the probe.
+        ProcessResult::Drop => {
+            return;
+        }
+
+        ProcessResult::Hairpin(hppkt) => {
+            let rx_state = ocs.rx_state.as_ref().unwrap();
+            (rx_state.rx_fn)(
+                rx_state.arg,
+                // TODO: IIRC we can just set the mrh (mac
+                // resource handle) to NULL and it will
+                // deliver via the default ring. If this
+                // doesn't work we can create some type of
+                // hairpin queue.
+                0 as *mut c_void as *mut mac_resource_handle,
+                hppkt.unwrap(),
+                boolean_t::B_FALSE,
+            );
+            return;
+        }
+
+        // In this case the packet is bypassing processing. This
+        // result type will probably go away eventually. For now we
+        // use it for protocols/traffic we aren't ready to deal with
+        // yet.
+        ProcessResult::Bypass(_meta) => {
+            mac_tx(ocs.mch, pkt.unwrap(), hint, flag, ret_mp);
+        }
+    }
+
+    // Deal with any pending hairpin packets.
+    while let Some(p) = ocs.hairpin_queue.lock().unwrap().pop() {
+        mac_tx(ocs.mch, p.unwrap(), hint, flag, ret_mp);
     }
 }
 
 // This doesn't need to be no_mangle, but I like keeping callbacks
 // demangled.
-//
-// TODO arg should change to *const OpteClientState, that way we don't
-// have to stash circular ref/pointers between OpteClientState and
-// OpteRxState.
 #[no_mangle]
 pub unsafe extern "C" fn opte_rx(
     arg: *mut c_void,
@@ -1053,150 +1180,76 @@ pub unsafe extern "C" fn opte_rx(
     assert!((*mp_chain).b_next == ptr::null_mut());
     __dtrace_probe_rx(mp_chain as uintptr_t);
 
-    let pkt = MblkPacket::wrap(mp_chain);
-    let mut rdr = MblkPacketReader::new(pkt);
+    let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
+        Ok(pkt) => pkt,
+        Err(e) => {
+            // TODO SDT probe
+            // TODO stat
+            opte_core::dbg(format!("failed to parse packet: {:?}", e));
+            return;
+        }
+    };
     let ocs = &*(arg as *const OpteClientState);
-    let mut meta_old = PacketMetaOld::new(Direction::In);
-    let ehdr = match EtherHdrRaw::parse::<MblkPacketReader>(&mut rdr) {
-        Ok(v) => v,
-        Err(err) => {
-            dbg(format!("error reading ether header: {:?}", err));
-            freemsgchain(mp_chain);
-            return;
-        }
-    };
-    meta_old.ether_src = ehdr.src;
-    meta_old.ether_dst = ehdr.dst;
-    let etype = u16::from_be_bytes(ehdr.ether_type);
     let rx_state = ocs.rx_state.as_ref().unwrap();
-
-    // TODO: Deal with non-IPv4
-    if etype != ETHER_TYPE_IPV4 && etype != ETHER_TYPE_ARP {
-        (rx_state.rx_fn)(rx_state.arg, mrh, mp_chain, loopback);
-        return;
-    }
-
-    if etype == ETHER_TYPE_ARP {
-        let arp_raw = match ArpHdrRaw::parse::<MblkPacketReader>(&mut rdr) {
-            Ok(v) => v,
-            Err(err) => {
-                dbg(format!("error reading ARP header: {:?}", err));
-                freemsgchain(mp_chain);
-                return;
-            }
-        };
-
-        let htype = u16::from_be_bytes(arp_raw.htype);
-
-        if htype != ARP_HTYPE_ETHERNET {
-            dbg(format!("unexpected ARP hardware type: {}", htype));
-            freemsgchain(mp_chain);
-            return;
-        }
-
-        let _arp_hw = ArpHardware::Ethernet(arp_raw.hlen);
-        let _arp_proto = match u16::from_be_bytes(arp_raw.ptype) {
-            ETHER_TYPE_IPV4 => ArpProtocol::Ip4(arp_raw.plen),
-            proto_type => {
-                dbg(format!("unexpected ARP protocol type: {}", proto_type));
-                freemsgchain(mp_chain);
-                return;
-            }
-        };
-
-        let arp_op = ArpOp::try_from(u16::from_be_bytes(arp_raw.op)).unwrap();
-
-        let mut sender_hw = [0u8; 6];
-        rdr.read_bytes(&mut sender_hw).unwrap();
-        let mut sender_proto = [0u8; 4];
-        rdr.read_bytes(&mut sender_proto).unwrap();
-        let mut target_hw = [0u8; 6];
-        rdr.read_bytes(&mut target_hw).unwrap();
-        let mut target_proto = [0u8; 4];
-        rdr.read_bytes(&mut target_proto).unwrap();
-        let target_ip = Ipv4Addr::from(u32::from_be_bytes(target_proto));
-
-        // We have an ARP request for the instances public IP. In this
-        // case opte is acting as the public interface and needs to
-        // fool the gateway. All other ARP requests/replies should
-        // flow through to the guest untouched.
-        //
-        // TODO Yes, this is greasy, but it's here temporarily to
-        // serve a useful purpose until we have something closer to
-        // the real Oxide Physical Network.
-        if ArpOp::Req == arp_op
-            && ocs.public_ip.is_some()
-            && target_ip == ocs.public_ip.unwrap()
-        {
-            const SZ: usize = mem::size_of::<EtherHdrRaw>()
-                + mem::size_of::<ArpHdrRaw>()
-                + (6 * 2)
-                + (4 * 2);
-            let mut reply = Box::new([0u8; SZ]);
-            let mut pos = 0;
-
-            let ether = EtherHdrRaw {
-                dst: sender_hw,
-                src: ocs.public_mac.unwrap(),
-                ether_type: ETHER_TYPE_ARP.to_be_bytes(),
+    let res = ocs.port.process(Direction::In, &mut pkt, mp_chain as uintptr_t);
+    match res {
+        ProcessResult::Modify(meta) => {
+            let etype = match meta.inner_ether.as_ref() {
+                Some(ether) => ether.ether_type,
+                _ => panic!("no inner ether"),
             };
 
-            let ether_size = mem::size_of::<EtherHdrRaw>();
-            &reply[pos..pos + ether_size].copy_from_slice(ether.as_bytes());
-            pos += ether_size;
+            // We should never see ARP here. The only outbound ARP
+            // should be for the gateway, and that should be handled
+            // by a hairpin action in opte_tx(). Any inbound should be
+            // the gateway ARPing for the private or public IP and
+            // should be handled by the hairpin below, all other
+            // inbound ARP should be denied.
+            //
+            // TODO This check will eventually go away. Just want it
+            // here for now to verify no ARP is getting thru to the
+            // guest.
+            if etype == ETHER_TYPE_ARP {
+                panic!("Should never see ARP here");
+            }
 
-            let arp = ArpHdrRaw {
-                htype: 1u16.to_be_bytes(),
-                ptype: ETHER_TYPE_IPV4.to_be_bytes(),
-                hlen: 6,
-                plen: 4,
-                op: 2u16.to_be_bytes(),
+            if pkt.set_headers(&meta).is_err() {
+                todo!("implement set_headers err stat + SDT probe");
+            }
+
+            (rx_state.rx_fn)(rx_state.arg, mrh, pkt.unwrap(), loopback);
+        }
+
+        // TODO Probably want a state + a probe along with a reason
+        // carried up via `ProcessResult::Drop(String)` so that a
+        // reason can be given as part of the probe.
+        ProcessResult::Drop => {
+            return;
+        }
+
+        ProcessResult::Hairpin(hppkt) => {
+            ocs.hairpin_queue.lock().unwrap().push(hppkt);
+            return;
+        }
+
+        // In this case the packet is bypassing processing. This
+        // result type will probably go away eventually. For now we
+        // use it for protocols/traffic we aren't ready to deal with
+        // yet.
+        ProcessResult::Bypass(meta) => {
+            let etype = match meta.inner_ether.as_ref() {
+                Some(ether) => ether.ether_type,
+                _ => panic!("no inner ether"),
             };
 
-            let arp_size = mem::size_of::<ArpHdrRaw>();
-            &reply[pos..pos + arp_size].copy_from_slice(arp.as_bytes());
-            pos += arp_size;
+            // See comment above.
+            if etype == ETHER_TYPE_ARP {
+                panic!("Should never see ARP here");
+            }
 
-            // ARP reply body
-            &reply[pos..pos + 6].copy_from_slice(&ocs.public_mac.unwrap());
-            pos += 6;
-            &reply[pos..pos + 4].copy_from_slice(&target_proto);
-            pos += 4;
-            &reply[pos..pos + 6].copy_from_slice(&sender_hw);
-            pos += 6;
-            &reply[pos..pos + 4].copy_from_slice(&sender_proto);
-            pos += 4;
-            assert_eq!(pos, SZ);
-
-            let mut mp = MblkPacket::alloc(SZ);
-            mp.copy_bytes(&*reply);
-            ocs.marp_queue.lock().unwrap().push(mp);
-            freemsgchain(mp_chain);
-            return;
+            (rx_state.rx_fn)(rx_state.arg, mrh, pkt.unwrap(), loopback);
         }
-
-        // This is an ARP packet the guest should handle.
-        (rx_state.rx_fn)(rx_state.arg, mrh, mp_chain, loopback);
-        return;
     }
-
-    drop(ehdr);
-
-    let mut rdr = MblkPacketReader::new(pkt);
-    let meta = match ocs.port.process(
-        Direction::In,
-        &mut rdr,
-        mp_chain as uintptr_t,
-    ) {
-        Some(val) => val,
-        None => {
-            freemsgchain(mp_chain);
-            return;
-        }
-    };
-
-    parse::set_headers(&meta, MblkPacketReader::new(pkt));
-    (rx_state.rx_fn)(rx_state.arg, mrh, mp_chain, loopback);
 }
 
 // This doesn't need to be no_mangle, but I like keeping callbacks
