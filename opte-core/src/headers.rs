@@ -95,11 +95,30 @@ impl From<&LayoutVerified<&[u8], Ipv6HdrRaw>> for Ipv6Meta {
         Ipv6Meta {
             src: raw.src,
             dst: raw.dst,
-            // TODO: For now we assume no extension headers.
+            // TODO Parse extension headers
+            //
+            // * Create ExtensionHdrs enum and various Extension
+            // Header types
+            //
+            // * Create a NextHdr enum which can be either Protocol or ExtHdr
+            //
+            // * Write parse_ipv6_ext() function to parse various ext
+            // headers. Call that in parse_ipv6().
+            //
+            // * Change how this meta structure is built. That is,
+            // replace this function with something that builds the
+            // IPv6 Metadata from base header + extensions.
+            //
+            // * Remember that you don't need to do all this right
+            // now, you have a demo to make.
             proto: match Protocol::try_from(raw.next_hdr) {
                 Ok(v) => v,
                 Err(_) => {
-                    todo!("deal with protocol: {}", raw.next_hdr);
+                    // TODO I'm doing this just to meet demo deadline.
+                    // IPv6 support (guest and underlay) is the next
+                    // big task anyways.
+                    Protocol::Reserved
+                    // todo!("deal with protocol: {}", raw.next_hdr);
                 }
             },
         }

@@ -57,7 +57,7 @@ pub type datalink_id_t = uint32_t;
 pub type dev_t = c_ulong;
 pub type hrtime_t = c_longlong;
 pub type id_t = c_int;
-pub type minor_t = c_ulong;
+pub type minor_t = c_uint;
 pub type offset_t = c_longlong;
 pub type pid_t = c_int;
 
@@ -452,6 +452,7 @@ pub const DDI_PSEUDO: *const c_char = b"ddi_pseudo\0".as_ptr() as *const c_char;
 
 pub const ENOENT: c_int = 2;
 pub const EFAULT: c_int = 14;
+pub const EBUSY: c_int = 16;
 pub const EINVAL: c_int = 22;
 pub const ENOBUFS: c_int = 132;
 
@@ -535,7 +536,10 @@ extern "C" {
     pub fn freemsg(mp: *mut mblk_t);
 
     pub fn gethrtime() -> hrtime_t;
+    pub fn getminor(dev: dev_t) -> minor_t;
 
+    pub fn id_alloc_nosleep(idspace: *const id_space_t) -> id_t;
+    pub fn id_free(idspace: *const id_space_t, id: id_t);
     pub fn id_space_create(
         name: *const c_char,
         low: id_t,

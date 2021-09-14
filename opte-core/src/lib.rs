@@ -29,8 +29,6 @@ use std::str::FromStr;
 extern crate illumos_ddi_dki;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_ddi_dki as ddi;
-#[cfg(all(not(feature = "std"), not(test)))]
-use illumos_ddi_dki::CE_NOTE;
 
 // TODO Not sure reexporting makes sense, but felt like trying it on
 // for size.
@@ -86,6 +84,8 @@ pub fn dbg<S: AsRef<str>>(msg: S)
 where
     Vec<u8>: From<S>,
 {
+    use ddi::CE_NOTE;
+
     unsafe {
         if opte_debug != 0 {
             let cstr = CString::new(msg).unwrap();
@@ -97,6 +97,24 @@ where
 #[cfg(any(feature = "std", test))]
 fn dbg<S: AsRef<str> + Display>(msg: S) {
     println!("{}", msg);
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+pub fn err<S: AsRef<str>>(msg: S)
+where
+    Vec<u8>: From<S>,
+{
+    use ddi::CE_WARN;
+
+    unsafe {
+        let cstr = CString::new(msg).unwrap();
+        ddi::cmn_err(CE_WARN, cstr.as_ptr());
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+pub fn err<S: AsRef<str> + Display>(msg: S) {
+    println!("ERROR: {}", msg);
 }
 
 /// Return value with `bit` set.

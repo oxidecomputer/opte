@@ -73,7 +73,7 @@ impl Display for EtherAddr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{:2X}:{:2X}:{:2X}:{:2X}:{:2X}:{:2X}",
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
             self.bytes[0],
             self.bytes[1],
             self.bytes[2],

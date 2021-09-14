@@ -13,13 +13,12 @@ use alloc::prelude::v1::*;
 use std::prelude::v1::*;
 
 use std::convert::TryFrom;
-use std::result;
 use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub enum IoctlCmd {
-    SetVpcSubnet4 = 1, // set the VPC subnet
+    ListPorts = 1,     // list all ports
     SetIpConfig = 2,   // set various IP config
     FwAddRule = 3,     // add firewall rule
     FwRemRule = 4,     // remove firewall rule
@@ -33,7 +32,7 @@ impl TryFrom<c_int> for IoctlCmd {
 
     fn try_from(num: c_int) -> Result<Self, Self::Error> {
         match num {
-            1 => Ok(IoctlCmd::SetVpcSubnet4),
+            1 => Ok(IoctlCmd::ListPorts),
             2 => Ok(IoctlCmd::SetIpConfig),
             3 => Ok(IoctlCmd::FwAddRule),
             4 => Ok(IoctlCmd::FwRemRule),
@@ -164,5 +163,15 @@ impl FromStr for SetIpConfigReq {
 
 #[derive(Deserialize, Serialize)]
 pub struct SetIpConfigResp {
-    pub resp: result::Result<(), String>,
+    pub resp: Result<(), String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ListPortsReq {
+    pub unused: (),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ListPortsResp {
+    pub links: Vec<(illumos_ddi_dki::minor_t, String, crate::ether::EtherAddr)>,
 }

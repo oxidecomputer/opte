@@ -13,6 +13,7 @@ use postcard;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+#[derive(Debug)]
 pub enum Error {
     DeserError(postcard::Error),
     FailedCopyin,

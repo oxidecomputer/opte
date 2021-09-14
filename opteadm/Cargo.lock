@@ -138,6 +138,7 @@ dependencies = [
 name = "opteadm"
 version = "0.1.0"
 dependencies = [
+ "illumos-ddi-dki",
  "libc",
  "opte-core",
  "postcard",

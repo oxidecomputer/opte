@@ -36,7 +36,9 @@ mod ioctl;
 extern crate alloc;
 
 use alloc::prelude::v1::*;
-use core::convert::TryFrom;
+use alloc::collections::btree_map::BTreeMap;
+
+use core::convert::{TryFrom, TryInto};
 use core::ops::Range;
 use core::panic::PanicInfo;
 use core::ptr;
@@ -49,7 +51,9 @@ use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
 use opte_core::firewallng::{
     Firewall, FwAddRuleReq, FwAddRuleResp, FwRemRuleReq, FwRemRuleResp,
 };
-use opte_core::ioctl::{IoctlCmd, SetIpConfigReq, SetIpConfigResp};
+use opte_core::ioctl::{
+    IoctlCmd, ListPortsReq, ListPortsResp, SetIpConfigReq, SetIpConfigResp
+};
 use opte_core::ip4::{Ipv4Addr, Protocol};
 use opte_core::layer::{Layer, LayerDumpReq};
 use opte_core::nat::{DynNat4, NatPool};
@@ -61,7 +65,7 @@ use opte_core::rule::{
     Predicate, Rule, RuleAction,
 };
 use opte_core::sync::{KMutex, KMutexType};
-use opte_core::vpc::{SetVpcSubnet4Req, SetVpcSubnet4Resp, VpcSubnet4};
+use opte_core::vpc::VpcSubnet4;
 use opte_core::{CStr, CString, Direction};
 
 // For now I glob import all of DDI/DKI until I have a better idea of
@@ -126,6 +130,10 @@ const OPTE_CTL_MINOR: minor_t = 0;
 #[no_mangle]
 static mut opte_dip: *mut dev_info = ptr::null_mut::<c_void>() as *mut dev_info;
 
+#[no_mangle]
+static mut opte_minors: *mut id_space_t =
+    ptr::null_mut::<c_void>() as *mut id_space_t;
+
 // This block is purely for SDT probes.
 extern "C" {
     fn __dtrace_probe_copy__msg(
@@ -173,6 +181,7 @@ extern "C" {
     ) -> c_int;
 
     fn mac_client_close(mch: *const mac_client_handle, flags: u16);
+    fn mac_client_name(mch: *const mac_client_handle) -> *const c_char;
     fn mac_promisc_add(
         mch: *const mac_client_handle,
         ptype: mac_client_promisc_type_t,
@@ -242,13 +251,14 @@ unsafe extern "C" fn opte_close(
 }
 
 struct OpteState {
-    // There can only be one client for the moment.
-    client: Option<*mut OpteClientState>,
+    clients: KMutex<BTreeMap<minor_t, *mut OpteClientState>>,
 }
 
 impl OpteState {
     fn new() -> Self {
-        OpteState { client: None }
+        OpteState {
+            clients: KMutex::new(BTreeMap::new(), KMutexType::Driver),
+        }
     }
 }
 
@@ -454,7 +464,7 @@ fn set_ip_config(
 
 #[no_mangle]
 unsafe extern "C" fn opte_ioctl(
-    _dev: dev_t,
+    dev: dev_t,
     cmd: c_int,
     arg: intptr_t,
     mode: c_int,
@@ -463,50 +473,39 @@ unsafe extern "C" fn opte_ioctl(
 ) -> c_int {
     let cmd = match IoctlCmd::try_from(cmd) {
         Ok(v) => v,
-        Err(_) => return EINVAL,
+        Err(_) => {
+            opte_core::err(format!("invalid ioctl cmd: {}", cmd));
+            return EINVAL;
+        }
     };
 
-    match cmd {
-        // TODO While this is fine for now we probably want something
-        // much more controlled in the future. Setting the guest IP +
-        // VPC subnet should be done at (Port) creation and should
-        // probably never change (without destroying/recreating the
-        // interface). If this is something that can change, it
-        // probably requires a quiescence and barrier for all traffic.
-        // We need to do it this way for now because it's actually
-        // viona creating the opte instance at the moment, when really
-        // opte should probably be a vnic-like thing and be created by
-        // the control plane and assigned to a guest's interface.
-        //
-        // You'll also notice there is no mutex around the subnet
-        // value...once again, this is temporary.
-        IoctlCmd::SetVpcSubnet4 => {
-            let mut ioctlenv =
-                match IoctlEnvelope::new(arg as *const c_void, mode) {
-                    Ok(val) => val,
-                    _ => return EFAULT,
-                };
+    let mut ioctlenv = match IoctlEnvelope::new(arg as *const c_void, mode) {
+            Ok(val) => val,
+            _ => return EFAULT,
+    };
 
-            let req: SetVpcSubnet4Req = match ioctlenv.copy_in_req() {
+    let minor = getminor(dev);
+
+    match cmd {
+        IoctlCmd::ListPorts => {
+            let _req: ListPortsReq = match ioctlenv.copy_in_req() {
                 Ok(val) => val,
-                Err(ioctl::Error::DeserError(_)) => return EINVAL,
+                Err(e @ ioctl::Error::DeserError(_)) => {
+                    opte_core::err(
+                        format!("failed to deser ListPortsReq: {:?}", e)
+                    );
+                    return EINVAL;
+                }
                 _ => return EFAULT,
             };
 
+            let mut resp = ListPortsResp { links: vec![] };
             let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = &mut *state.client.unwrap();
-            ocs.vpc_sub4 = match VpcSubnet4::from_req(req) {
-                Ok(v) => Some(v),
+            for (_k, v) in state.clients.lock().unwrap().iter() {
+                let ocs = &(**v);
+                resp.links.push((ocs.minor, ocs.name.clone(), ocs.guest_mac));
+            }
 
-                // TODO There is no reason to limit ourselves to
-                // errno.h. Allow all responses to include error
-                // reason + message to pass back up to userland.
-                Err(_) => {
-                    return EINVAL;
-                }
-            };
-
-            let resp = SetVpcSubnet4Resp { resp: Ok(()) };
             match ioctlenv.copy_out_resp(&resp) {
                 Ok(()) => return 0,
                 Err(ioctl::Error::RespTooLong) => return ENOBUFS,
@@ -515,12 +514,6 @@ unsafe extern "C" fn opte_ioctl(
         }
 
         IoctlCmd::SetIpConfig => {
-            let mut ioctlenv =
-                match IoctlEnvelope::new(arg as *const c_void, mode) {
-                    Ok(val) => val,
-                    _ => return EFAULT,
-                };
-
             let req: SetIpConfigReq = match ioctlenv.copy_in_req() {
                 Ok(val) => val,
                 Err(ioctl::Error::DeserError(_)) => return EINVAL,
@@ -528,9 +521,15 @@ unsafe extern "C" fn opte_ioctl(
             };
 
             let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = &mut *state.client.unwrap();
+            let mut ocs = match state.clients.lock().unwrap().get(&minor) {
+                None => {
+                    return ENOENT;
+                }
 
-            let (code, val) = match set_ip_config(req, ocs) {
+                Some(v) => &mut *(*v),
+            };
+
+            let (code, val) = match set_ip_config(req, &mut ocs) {
                 Ok(_) => (0, Ok(())),
                 Err((code, msg)) => (code, Err(msg)),
             };
@@ -544,12 +543,6 @@ unsafe extern "C" fn opte_ioctl(
         }
 
         IoctlCmd::FwAddRule => {
-            let mut ioctlenv =
-                match IoctlEnvelope::new(arg as *const c_void, mode) {
-                    Ok(val) => val,
-                    _ => return EFAULT,
-                };
-
             let req: FwAddRuleReq = match ioctlenv.copy_in_req() {
                 Ok(val) => val,
                 Err(ioctl::Error::DeserError(_)) => return EINVAL,
@@ -557,7 +550,14 @@ unsafe extern "C" fn opte_ioctl(
             };
 
             let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = &*state.client.unwrap();
+            let ocs = match state.clients.lock().unwrap().get(&minor) {
+                None => {
+                    return ENOENT;
+                }
+
+                Some(v) => &mut *(*v),
+            };
+
             // TODO actually check response.
             let dir = req.rule.direction;
             let rule = Rule::from(req.rule);
@@ -573,12 +573,6 @@ unsafe extern "C" fn opte_ioctl(
         }
 
         IoctlCmd::FwRemRule => {
-            let mut ioctlenv =
-                match IoctlEnvelope::new(arg as *const c_void, mode) {
-                    Ok(val) => val,
-                    _ => return EFAULT,
-                };
-
             // This step validates that the bytes were able to be
             // derserialized, but that doesn't mean we should consider
             // this a valid, legal, or safe request. Before adding a
@@ -598,7 +592,13 @@ unsafe extern "C" fn opte_ioctl(
             };
 
             let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = &*state.client.unwrap();
+            let ocs = match state.clients.lock().unwrap().get(&minor) {
+                None => {
+                    return ENOENT;
+                }
+
+                Some(v) => &mut *(*v),
+            };
             let res = ocs.port.remove_rule("firewall", req.dir, req.id);
             let resp = FwRemRuleResp { resp: res };
 
@@ -610,19 +610,19 @@ unsafe extern "C" fn opte_ioctl(
         }
 
         IoctlCmd::TcpFlowsDump => {
-            let mut ioctlenv =
-                match IoctlEnvelope::new(arg as *const c_void, mode) {
-                    Ok(val) => val,
-                    _ => return EFAULT,
-                };
-
             let _req: TcpFlowsDumpReq = match ioctlenv.copy_in_req() {
                 Ok(val) => val,
                 Err(ioctl::Error::DeserError(_)) => return EINVAL,
                 _ => return EFAULT,
             };
             let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = &*state.client.unwrap();
+            let ocs = match state.clients.lock().unwrap().get(&minor) {
+                None => {
+                    return ENOENT;
+                }
+
+                Some(v) => &mut *(*v),
+            };
             let resp = ocs.port.dump_tcp_flows();
             match ioctlenv.copy_out_resp(&resp) {
                 Ok(()) => return 0,
@@ -632,12 +632,6 @@ unsafe extern "C" fn opte_ioctl(
         }
 
         IoctlCmd::LayerDump => {
-            let mut ioctlenv =
-                match IoctlEnvelope::new(arg as *const c_void, mode) {
-                    Ok(val) => val,
-                    _ => return EFAULT,
-                };
-
             let req: LayerDumpReq = match ioctlenv.copy_in_req() {
                 Ok(val) => val,
                 Err(ioctl::Error::DeserError(_)) => return EINVAL,
@@ -645,7 +639,13 @@ unsafe extern "C" fn opte_ioctl(
             };
 
             let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = &*state.client.unwrap();
+            let ocs = match state.clients.lock().unwrap().get(&minor) {
+                None => {
+                    return ENOENT;
+                }
+
+                Some(v) => &mut *(*v),
+            };
             let resp = ocs.port.dump_layer(&req.name);
 
             if resp.is_none() {
@@ -660,12 +660,6 @@ unsafe extern "C" fn opte_ioctl(
         }
 
         IoctlCmd::UftDump => {
-            let mut ioctlenv =
-                match IoctlEnvelope::new(arg as *const c_void, mode) {
-                    Ok(val) => val,
-                    _ => return EFAULT,
-                };
-
             let _req: UftDumpReq = match ioctlenv.copy_in_req() {
                 Ok(val) => val,
                 Err(ioctl::Error::DeserError(_)) => return EINVAL,
@@ -673,7 +667,13 @@ unsafe extern "C" fn opte_ioctl(
             };
 
             let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = &*state.client.unwrap();
+            let ocs = match state.clients.lock().unwrap().get(&minor) {
+                None => {
+                    return ENOENT;
+                }
+
+                Some(v) => &mut *(*v),
+            };
             let resp = ocs.port.dump_uft();
 
             match ioctlenv.copy_out_resp(&resp) {
@@ -839,11 +839,15 @@ unsafe extern "C" fn opte_detach(
 
 #[no_mangle]
 unsafe extern "C" fn _init() -> c_int {
-    // We could use id_space_create(9F) and ddi_soft_state_init(9F) to
-    // support multiple viona links (and thus bhyve instances), but
-    // for now the prototype is limited to a single instance/link.
+    opte_minors = id_space_create(
+        b"opte_minors\0" as *const u8 as *const c_char,
+        (OPTE_CTL_MINOR + 1).try_into().unwrap(),
+        u16::MAX.into()
+    );
+
     let ret = mod_install(&opte_linkage);
     if ret != 0 {
+        id_space_destroy(opte_minors);
         return ret;
     }
 
@@ -862,6 +866,7 @@ unsafe extern "C" fn _fini() -> c_int {
         return ret;
     }
 
+    id_space_destroy(opte_minors);
     0
 }
 
@@ -890,6 +895,8 @@ pub struct OpteClientState {
     mch: *mut mac_client_handle,
     rx_state: Option<OpteRxState>,
     mph: *const mac_promisc_handle,
+    name: String,
+    minor: minor_t,
     promisc_state: Option<OptePromiscState>,
     port: Box<Port>,
     port_periodic: *const ddi_periodic,
@@ -937,6 +944,27 @@ pub unsafe extern "C" fn opte_client_open(
         guest_mac,
     ));
 
+    let link_name = mac_client_name(mch);
+    let minor = id_alloc_nosleep(opte_minors);
+
+    if minor == -1 {
+        return EBUSY;
+    }
+
+    let ret = ddi_create_minor_node(
+        opte_dip,
+        link_name,
+        S_IFCHR,
+        minor.try_into().unwrap(),
+        DDI_PSEUDO,
+        0,
+    );
+
+    if ret != DDI_SUCCESS {
+        id_free(opte_minors, minor);
+        mac_client_close(mch, flags);
+    }
+
     let fw_layer = Firewall::create_layer();
     port.add_layer(fw_layer, Pos::First);
 
@@ -962,6 +990,8 @@ pub unsafe extern "C" fn opte_client_open(
 
     let ocs = Box::new(OpteClientState {
         mch,
+        minor: minor.try_into().unwrap(),
+        name: CStr::from_ptr(link_name).to_str().unwrap().to_string(),
         rx_state: None,
         mph: 0 as *mut mac_promisc_handle,
         promisc_state: None,
@@ -993,7 +1023,7 @@ pub unsafe extern "C" fn opte_client_open(
     // pointers to other MT-safe types (aka interior mutability).
     let ocsp = Box::into_raw(ocs);
     *ocspo = ocsp;
-    state.client = Some(ocsp);
+    state.clients.lock().unwrap().insert(minor.try_into().unwrap(), ocsp);
     0
 }
 
@@ -1007,7 +1037,7 @@ pub unsafe extern "C" fn opte_client_close(
     // resources are properly dropped.
     let ocs = Box::from_raw(ocsp);
     let state = &mut *(ddi_get_driver_private(opte_dip) as *mut OpteState);
-    let _ = state.client.take();
+    state.clients.lock().unwrap().remove(&ocs.minor);
 
     // First, tell mac we no longer want to be a client.
     mac_client_close(ocs.mch, flags);
