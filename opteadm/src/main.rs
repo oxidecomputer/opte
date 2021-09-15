@@ -42,7 +42,7 @@ enum Command {
     /// Dump TCP flows
     TcpFlowsDump {
         #[structopt(short)]
-        port: String
+        port: String,
     },
 
     /// Add a firewall rule
@@ -50,7 +50,7 @@ enum Command {
         #[structopt(short)]
         port: String,
 
-        #[structopt(long="dir")]
+        #[structopt(long = "dir")]
         direction: Direction,
 
         #[structopt(flatten)]
@@ -68,7 +68,7 @@ enum Command {
         #[structopt(short)]
         port: String,
 
-        #[structopt(long="dir")]
+        #[structopt(long = "dir")]
         direction: Direction,
 
         id: u64,
@@ -99,14 +99,6 @@ impl From<Filters> for firewallng::Filters {
             .clone()
     }
 }
-
-// TODO I have to move this to lib.rs
-// fn list_ports(dev: c_int) -> ListPortsResp {
-//     let mut req = ListPortsReq { unused: () };
-//     let resp: ListPortsResp =
-//         run_ioctl(dev, IoctlCmd::ListPorts, &mut req).unwrap();
-//     resp
-// }
 
 /// Create an IP configuration in OPTE
 #[derive(Debug, StructOpt)]
@@ -140,7 +132,7 @@ struct SetIpConfig {
 
     /// Gateway MAC address
     #[structopt(long)]
-    gw_mac: EtherAddr
+    gw_mac: EtherAddr,
 }
 
 impl From<SetIpConfig> for SetIpConfigReq {
@@ -209,7 +201,7 @@ fn print_rule(id: u64, rule: &RuleDump) {
         preds = "*".to_string();
     }
 
-    println!("{:<8} {:<6} {:<48} {:<?}", id, rule.priority, preds, rule.action,);
+    println!("{:<8} {:<6} {:<48} {:<?}", id, rule.priority, preds, rule.action);
 }
 
 fn print_hrb() {
@@ -219,69 +211,6 @@ fn print_hrb() {
 fn print_hr() {
     println!("{:-<70}", "-");
 }
-
-
-// TODO: Figure out how to integrate the list-ports and multiple
-// instance stuff with Ben's work
-
-// fn main() {
-//     let args: Vec<String> = std::env::args().collect();
-
-//     if args.len() == 2 {
-//         let cmd = &args[1];
-
-//         if cmd == "list-ports" {
-//             let dev = CString::new(OPTE_DEV).unwrap();
-//             let fd = unsafe { open(dev.as_ptr(), O_RDWR) };
-//             if fd == -1 {
-//                 unsafe {
-//                     eprintln!(
-//                         "failed to open opte device: {}",
-//                         *libc::___errno()
-//                     );
-//                 }
-//                 process::exit(1);
-//             }
-
-//             let resp = list_ports(fd);
-//             print_port_header();
-//             for x in resp.links {
-//                 print_port(x);
-//             }
-
-//             unsafe { close(fd) };
-//             process::exit(0);
-//         }
-//     }
-
-//     if args.len() >= 3 {
-//         let link = &args[1];
-//         let cmd = &args[2];
-//         let path = format!("/devices/pseudo/opte@0:{}", link);
-//         let dev = CString::new(path.clone()).unwrap();
-//         let fd = unsafe { open(dev.as_ptr(), O_RDWR) };
-//         if fd == -1 {
-//             unsafe {
-//                 eprintln!("failed to open {}: {}", path, *libc::___errno());
-//             }
-//             process::exit(1);
-//         }
-
-//         if cmd == "layer-dump" {
-//             if args.len() == 3 {
-//                 eprintln!("must specify layer name");
-//                 process::exit(1);
-//             }
-
-//             let resp = dump_layer(fd, &args[3]);
-//             println!("Layer {}", resp.name);
-//             print_hrb();
-//             println!("Inbound Flows");
-//             print_hr();
-//             print_flow_header();
-//             for (flow_id, flow_state) in resp.ft_in {
-//                 print_flow(flow_id, flow_state);
-//             }
 
 fn print_layer(resp: &LayerDumpResp) {
     println!("Layer {}", resp.name);

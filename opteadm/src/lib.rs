@@ -15,7 +15,7 @@ use opte_core::firewallng::{
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::ioctl::{
     Ioctl, IoctlCmd, ListPortsReq, ListPortsResp, SetIpConfigReq,
-    SetIpConfigResp
+    SetIpConfigResp,
 };
 use opte_core::layer::{InnerFlowId, LayerDumpReq, LayerDumpResp};
 use opte_core::port::{
@@ -56,7 +56,7 @@ impl From<postcard::Error> for Error {
 /// A handle used to administer the OPTE driver.
 #[derive(Debug)]
 pub struct OpteAdm {
-    device: File
+    device: File,
 }
 
 impl OpteAdm {
@@ -77,7 +77,7 @@ impl OpteAdm {
     pub fn open_port(name: &str) -> Result<Self, Error> {
         let path = format!("{}{}", Self::OPTE_PORT_PREFIX, name);
         Ok(OpteAdm {
-            device: OpenOptions::new().read(true).write(true).open(path)?
+            device: OpenOptions::new().read(true).write(true).open(path)?,
         })
     }
 
@@ -197,6 +197,9 @@ where
         rioctl.resp_len_needed = 0;
     }
 
-    panic!("failed to allocate sufficient ioctl(2) response \
-            buffer in {} iterations", MAX_ITERATIONS);
+    panic!(
+        "failed to allocate sufficient ioctl(2) response \
+            buffer in {} iterations",
+        MAX_ITERATIONS
+    );
 }
