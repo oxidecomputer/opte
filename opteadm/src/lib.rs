@@ -34,6 +34,10 @@ pub enum Error {
     #[error("error transferring data to/from driver: {0}")]
     Serdes(String),
 
+    /// Something in the opte ioctl(2) handler failed.
+    #[error("ioctl {0:?} failed: {1}")]
+    IoctlFailed(IoctlCmd, String),
+
     #[error("command {0:?} failed: {1}")]
     CommandFailed(IoctlCmd, String),
 }
@@ -170,13 +174,29 @@ where
         // The ioctl(2) failed for a reason other than the response
         // buffer being too small.
         if ret == -1 && unsafe { *libc::___errno() } != libc::ENOBUFS {
-            let response = unsafe {
-                slice::from_raw_parts(rioctl.resp_bytes, rioctl.resp_len_needed)
+            let msg = match unsafe { *libc::___errno() } {
+                // This should never really happen. It indicates a
+                // mismatch between the minor number of the device
+                // node used to send the ioctl and the key used in the
+                // opte driver's `clients` map.
+                libc::ENOENT => {
+                    "port not found".to_string()
+                }
+
+                libc::EFAULT => {
+                    "opte driver failed to copyin/copyout req/resp".to_string()
+                }
+
+                libc::EINVAL => {
+                    "opte driver failed to deserialize request".to_string()
+                }
+
+                errno => {
+                    format!("errno: {}", errno)
+                }
             };
-            return Err(Error::CommandFailed(
-                cmd,
-                postcard::from_bytes(response)?,
-            ));
+
+            return Err(Error::IoctlFailed(cmd, msg));
         }
 
         // Check for successful response, try to deserialize it
