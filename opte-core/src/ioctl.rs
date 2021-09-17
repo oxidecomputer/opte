@@ -25,6 +25,7 @@ pub enum IoctlCmd {
     TcpFlowsDump = 6,  // dump TCP flows
     LayerDump = 8,     // dump the specified Layer
     UftDump = 9,       // dump the Unified Flow Table
+    RemoveLayer = 10,  // remove a layer from the port
 }
 
 impl TryFrom<c_int> for IoctlCmd {
@@ -39,6 +40,7 @@ impl TryFrom<c_int> for IoctlCmd {
             6 => Ok(IoctlCmd::TcpFlowsDump),
             8 => Ok(IoctlCmd::LayerDump),
             9 => Ok(IoctlCmd::UftDump),
+            10 => Ok(IoctlCmd::RemoveLayer),
             _ => Err(()),
         }
     }
@@ -65,6 +67,7 @@ pub struct Ioctl {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SetIpConfigReq {
     pub private_ip: String,
+    pub public_mac: String,
     pub public_ip: String,
     pub port_start: String,
     pub port_end: String,
@@ -78,6 +81,7 @@ impl FromStr for SetIpConfigReq {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut private_ip = None;
+        let mut public_mac = None;
         let mut public_ip = None;
         let mut port_start = None;
         let mut port_end = None;
@@ -89,6 +93,10 @@ impl FromStr for SetIpConfigReq {
             match token.split_once("=") {
                 Some(("private_ip", val)) => {
                     private_ip = Some(val.to_string());
+                }
+
+                Some(("public_mac", val)) => {
+                    public_mac = Some(val.to_string());
                 }
 
                 Some(("public_ip", val)) => {
@@ -125,6 +133,10 @@ impl FromStr for SetIpConfigReq {
             return Err(format!("missing private_ip"));
         }
 
+        if public_mac == None {
+            return Err(format!("missing public_mac"));
+        }
+
         if public_ip == None {
             return Err(format!("missing public_ip"));
         }
@@ -151,6 +163,7 @@ impl FromStr for SetIpConfigReq {
 
         Ok(SetIpConfigReq {
             private_ip: private_ip.unwrap(),
+            public_mac: public_mac.unwrap(),
             public_ip: public_ip.unwrap(),
             port_start: port_start.unwrap(),
             port_end: port_end.unwrap(),
@@ -174,4 +187,14 @@ pub struct ListPortsReq {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListPortsResp {
     pub links: Vec<(illumos_ddi_dki::minor_t, String, crate::ether::EtherAddr)>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RemoveLayerReq {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RemoveLayerResp {
+    pub resp: Result<(), String>,
 }

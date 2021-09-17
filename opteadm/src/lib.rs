@@ -14,8 +14,8 @@ use opte_core::firewallng::{
 };
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::ioctl::{
-    Ioctl, IoctlCmd, ListPortsReq, ListPortsResp, SetIpConfigReq,
-    SetIpConfigResp,
+    Ioctl, IoctlCmd, ListPortsReq, ListPortsResp, RemoveLayerReq,
+    RemoveLayerResp, SetIpConfigReq, SetIpConfigResp,
 };
 use opte_core::layer::{InnerFlowId, LayerDumpReq, LayerDumpResp};
 use opte_core::port::{
@@ -148,6 +148,17 @@ impl OpteAdm {
         let cmd = IoctlCmd::FwRemRule;
         let response: FwRemRuleResp =
             run_ioctl(self.device.as_raw_fd(), cmd, rule)?;
+        response.resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+    }
+
+    /// Remove the layer specified by `name`.
+    pub fn remove_layer(&self, name: &str) -> Result<(), Error> {
+        let cmd = IoctlCmd::RemoveLayer;
+        let response: RemoveLayerResp = run_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            &RemoveLayerReq { name: name.to_string() }
+        )?;
         response.resp.map_err(|msg| Error::CommandFailed(cmd, msg))
     }
 }

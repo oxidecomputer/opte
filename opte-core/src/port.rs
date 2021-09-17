@@ -42,6 +42,22 @@ pub enum ProcessResult {
     Hairpin(Packet<Initialized>),
 }
 
+#[derive(Clone, Debug)]
+pub enum PortError {
+    LayerNotFound(String),
+}
+
+impl std::fmt::Display for PortError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::LayerNotFound(layer) => {
+                write!(f, "layer not found: {}", layer)
+            }
+        }
+    }
+
+}
+
 pub struct Port {
     #[allow(dead_code)]
     name: String,
@@ -62,12 +78,10 @@ pub struct Port {
 }
 
 impl Port {
-    // TODO Maybe Pipeline should be merged in Port?
-
-    /// Add a new layer to the pipeline. The position may be first,
-    /// last, or relative to another layer. The position is based on
-    /// the outbound direction. The first layer is the first to see
-    /// a packet from the guest. The last is the last to see a packet
+    /// Add a new layer to the port. The position may be first, last,
+    /// or relative to another layer. The position is based on the
+    /// outbound direction. The first layer is the first to see a
+    /// packet from the guest. The last is the last to see a packet
     /// before it is delivered to the guest.
     pub fn add_layer(&self, new_layer: Layer, pos: Pos) {
         let mut lock = self.layers.lock().unwrap();
@@ -760,17 +774,23 @@ impl Port {
         }
     }
 
-    /// Remove the `Layer` registered under `name`, if such a layer
+    /// Remove the [`Layer`] registered under `name`, if such a layer
     /// exists.
-    pub fn remove_layer(&self, name: &str) {
+    pub fn remove_layer(
+        &self,
+        name: &str
+    ) -> Result<(), PortError>
+    {
         let mut lock = self.layers.lock().unwrap();
 
         for (i, layer) in lock.iter().enumerate() {
             if layer.name() == name {
                 lock.remove(i);
-                return;
+                return Ok(());
             }
         }
+
+        return Err(PortError::LayerNotFound(name.to_string()));
     }
 
     /// Remove the rule identified by the `dir`, `layer_name`, `id`

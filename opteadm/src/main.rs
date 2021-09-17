@@ -22,7 +22,15 @@ use illumos_ddi_dki::minor_t;
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, StructOpt)]
 enum Command {
+    /// List all registered ports.
     ListPorts,
+
+    /// Remove the layer specified.
+    RemoveLayer {
+        #[structopt(short)]
+        port: String,
+        name: String
+    },
 
     SetIpConfig(SetIpConfig),
 
@@ -114,6 +122,10 @@ struct SetIpConfig {
     #[structopt(long)]
     public_ip: Ipv4Addr,
 
+    /// Public MAC address
+    #[structopt(long)]
+    public_mac: EtherAddr,
+
     /// Start port
     #[structopt(long)]
     port_start: u16,
@@ -140,6 +152,7 @@ impl From<SetIpConfig> for SetIpConfigReq {
         SetIpConfigReq {
             private_ip: s.private_ip.to_string(),
             public_ip: s.public_ip.to_string(),
+            public_mac: s.public_mac.to_string(),
             port_start: s.port_start.to_string(),
             port_end: s.port_end.to_string(),
             vpc_sub4: s.vpc_sub4,
@@ -278,6 +291,11 @@ fn main() {
             for p in hdl.list_ports().unwrap().links {
                 print_port(p);
             }
+        }
+
+        Command::RemoveLayer { port, name } => {
+            let hdl = opteadm::OpteAdm::open_port(&port).unwrap();
+            hdl.remove_layer(&name).unwrap();
         }
 
         Command::SetIpConfig(req) => {

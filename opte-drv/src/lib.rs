@@ -52,7 +52,8 @@ use opte_core::firewallng::{
     Firewall, FwAddRuleReq, FwAddRuleResp, FwRemRuleReq, FwRemRuleResp,
 };
 use opte_core::ioctl::{
-    IoctlCmd, ListPortsReq, ListPortsResp, SetIpConfigReq, SetIpConfigResp
+    IoctlCmd, ListPortsReq, ListPortsResp, RemoveLayerReq, RemoveLayerResp,
+    SetIpConfigReq, SetIpConfigResp
 };
 use opte_core::ip4::{Ipv4Addr, Protocol};
 use opte_core::layer::{Layer, LayerDumpReq};
@@ -265,57 +266,53 @@ impl OpteState {
 fn set_ip_config(
     req: SetIpConfigReq,
     ocs: &mut OpteClientState,
-) -> Result<(), (c_int, String)> {
+) -> Result<(), String> {
     ocs.vpc_sub4 = match req.vpc_sub4.parse() {
         Ok(v) => Some(v),
-        Err(e) => return Err((EINVAL, format!("vpc_sub4: {:?}", e))),
+        Err(e) => return Err(format!("vpc_sub4: {:?}", e)),
     };
 
     let private_ip = match req.private_ip.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("private_ip: {:?}", e))),
+        Err(e) => return Err(format!("private_ip: {:?}", e)),
     };
     ocs.private_ip = Some(private_ip);
 
+    let public_mac = match req.public_mac.parse() {
+        Ok(v) => v,
+        Err(e) => return Err(format!("public_mac: {:?}", e)),
+    };
+    ocs.public_mac = Some(public_mac);
+
     let public_ip = match req.public_ip.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("public_ip: {:?}", e))),
+        Err(e) => return Err(format!("public_ip: {:?}", e)),
     };
     ocs.public_ip = Some(public_ip);
 
     let start = match req.port_start.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("port_start: {:?}", e))),
+        Err(e) => return Err(format!("port_start: {:?}", e)),
     };
 
     let end = match req.port_end.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("port_end: {:?}", e))),
+        Err(e) => return Err(format!("port_end: {:?}", e)),
     };
 
     let gw_mac = match req.gw_mac.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("gw_mac: {:?}", e))),
+        Err(e) => return Err(format!("gw_mac: {:?}", e)),
     };
 
     let gw_ip = match req.gw_ip.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("gw_ip: {:?}", e))),
+        Err(e) => return Err(format!("gw_ip: {:?}", e)),
     };
 
     let mut pool = NatPool::new();
     pool.add(private_ip, public_ip, Range { start, end });
     ocs.port.set_nat_pool(pool);
-
-    let ip_bytes = ocs.public_ip.unwrap().to_be_bytes();
-    ocs.public_mac = Some(EtherAddr::from([
-        0xa8,
-        0x40,
-        0x25,
-        ip_bytes[1],
-        ip_bytes[2],
-        ip_bytes[3],
-    ]));
 
     let nat = DynNat4::new(
         "dyn-nat4".to_string(),
@@ -516,7 +513,10 @@ unsafe extern "C" fn opte_ioctl(
         IoctlCmd::SetIpConfig => {
             let req: SetIpConfigReq = match ioctlenv.copy_in_req() {
                 Ok(val) => val,
-                Err(ioctl::Error::DeserError(_)) => return EINVAL,
+                Err(ioctl::Error::DeserError(e)) => {
+                    opte_core::err(format!("cmd deser error: {:?}", e));
+                    return EINVAL;
+                }
                 _ => return EFAULT,
             };
 
@@ -529,14 +529,10 @@ unsafe extern "C" fn opte_ioctl(
                 Some(v) => &mut *(*v),
             };
 
-            let (code, val) = match set_ip_config(req, &mut ocs) {
-                Ok(_) => (0, Ok(())),
-                Err((code, msg)) => (code, Err(msg)),
-            };
-
+            let val = set_ip_config(req, &mut ocs);
             let resp = SetIpConfigResp { resp: val };
             match ioctlenv.copy_out_resp(&resp) {
-                Ok(()) => return code,
+                Ok(()) => return 0,
                 Err(ioctl::Error::RespTooLong) => return ENOBUFS,
                 Err(_) => return EFAULT,
             }
@@ -648,6 +644,7 @@ unsafe extern "C" fn opte_ioctl(
             };
             let resp = ocs.port.dump_layer(&req.name);
 
+            // Fix this to be in resp struct
             if resp.is_none() {
                 return ENOENT;
             }
@@ -677,6 +674,31 @@ unsafe extern "C" fn opte_ioctl(
             let resp = ocs.port.dump_uft();
 
             match ioctlenv.copy_out_resp(&resp) {
+                Ok(()) => return 0,
+                Err(ioctl::Error::RespTooLong) => return ENOBUFS,
+                Err(_) => return EFAULT,
+            }
+        }
+
+        IoctlCmd::RemoveLayer => {
+            let req: RemoveLayerReq = match ioctlenv.copy_in_req() {
+                Ok(val) => val,
+                Err(ioctl::Error::DeserError(_)) => return EINVAL,
+                _ => return EFAULT,
+            };
+
+            let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
+            let ocs = match state.clients.lock().unwrap().get(&minor) {
+                None => {
+                    return ENOENT;
+                }
+
+                Some(v) => &mut *(*v),
+            };
+            let resp = ocs.port.remove_layer(&req.name)
+                .map_err(|e| e.to_string());
+
+            match ioctlenv.copy_out_resp(&RemoveLayerResp { resp }) {
                 Ok(()) => return 0,
                 Err(ioctl::Error::RespTooLong) => return ENOBUFS,
                 Err(_) => return EFAULT,
@@ -1037,6 +1059,8 @@ pub unsafe extern "C" fn opte_client_close(
     // resources are properly dropped.
     let ocs = Box::from_raw(ocsp);
     let state = &mut *(ddi_get_driver_private(opte_dip) as *mut OpteState);
+    ddi_remove_minor_node(opte_dip, CString::new(ocs.name).unwrap().as_ptr());
+    id_free(opte_minors, ocs.minor.try_into().unwrap());
     state.clients.lock().unwrap().remove(&ocs.minor);
 
     // First, tell mac we no longer want to be a client.
