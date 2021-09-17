@@ -27,6 +27,8 @@ use crate::uintptr_t;
 
 pub const IPV4_HDR_SZ: usize = std::mem::size_of::<Ipv4HdrRaw>();
 
+pub const LOCAL_BROADCAST: Ipv4Addr = Ipv4Addr::new([255; 4]);
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IpError {
     BadNetPrefix(u8),

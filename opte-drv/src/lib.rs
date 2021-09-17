@@ -55,7 +55,7 @@ use opte_core::ioctl::{
     IoctlCmd, ListPortsReq, ListPortsResp, RemoveLayerReq, RemoveLayerResp,
     SetIpConfigReq, SetIpConfigResp
 };
-use opte_core::ip4::{Ipv4Addr, Protocol};
+use opte_core::ip4::{self, Ipv4Addr, Protocol};
 use opte_core::layer::{Layer, LayerDumpReq};
 use opte_core::nat::{DynNat4, NatPool};
 use opte_core::packet::{Initialized, Packet};
@@ -349,6 +349,7 @@ fn set_ip_config(
     // IP+CIDR).
     rule.add_predicate(Predicate::Not(Box::new(Predicate::InnerDstIp4(vec![
         Ipv4AddrMatch::Prefix(ocs.vpc_sub4.unwrap().get_cidr()),
+        Ipv4AddrMatch::Exact(ip4::LOCAL_BROADCAST),
     ]))));
     layer.add_rule(Direction::Out, rule);
     ocs.port.add_layer(layer, Pos::After("firewall"));
