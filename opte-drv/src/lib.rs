@@ -1038,6 +1038,8 @@ pub unsafe extern "C" fn opte_client_close(
     let ocs = Box::from_raw(ocsp);
     let state = &mut *(ddi_get_driver_private(opte_dip) as *mut OpteState);
     state.clients.lock().unwrap().remove(&ocs.minor);
+    ddi_remove_minor_node(opte_dip, CString::new(ocs.name).unwrap().as_ptr());
+    id_free(opte_minors, ocs.minor.try_into().unwrap());
 
     // First, tell mac we no longer want to be a client.
     mac_client_close(ocs.mch, flags);
