@@ -1,6 +1,7 @@
 extern crate zerocopy;
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use crate::headers::UdpMeta;
 use crate::packet::{PacketRead, ReadErr, WriteErr};
 
 pub const UDP_HDR_SZ: usize = std::mem::size_of::<UdpHdrRaw>();
@@ -35,5 +36,26 @@ impl UdpHdrRaw {
             None => return Err(WriteErr::BadLayout),
         };
         Ok(hdr)
+    }
+}
+
+impl Default for UdpHdrRaw {
+    fn default() -> Self {
+        UdpHdrRaw {
+            src_port: [0x0; 2],
+            dst_port: [0x0; 2],
+            length: [0x0; 2],
+            csum: [0x0; 2],
+        }
+    }
+}
+
+impl From<&UdpMeta> for UdpHdrRaw {
+    fn from(meta: &UdpMeta) -> Self {
+        UdpHdrRaw {
+            src_port: meta.src.to_be_bytes(),
+            dst_port: meta.dst.to_be_bytes(),
+            ..Default::default()
+        }
     }
 }

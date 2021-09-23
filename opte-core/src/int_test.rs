@@ -24,21 +24,24 @@ use pcap_parser::pcap::{self, LegacyPcapBlock, PcapHeader};
 use zerocopy::AsBytes;
 
 use crate::arp::{ArpEth4Payload, ArpEth4PayloadRaw, ArpHdrRaw, ARP_HDR_SZ};
-use crate::ether::{EtherAddr, EtherHdrRaw, ETHER_HDR_SZ, ETHER_TYPE_ARP};
-use crate::firewallng::Firewall;
+use crate::ether::{
+    self, EtherAddr, EtherHdrRaw, EtherMeta, ETHER_HDR_SZ, ETHER_TYPE_ARP,
+    ETHER_TYPE_IPV4
+};
 use crate::flow_table::FLOW_DEF_EXPIRE_SECS;
-use crate::ip4::Protocol;
+use crate::headers::{Ipv4Meta, IpMeta, UdpMeta};
+use crate::ip4::{self, Ipv4HdrRaw, Protocol};
 use crate::layer::Layer;
-use crate::nat::{DynNat4, NatPool};
+use crate::oxide_net;
 use crate::packet::{
     mock_allocb, Initialized, Packet, PacketRead, PacketReader, PacketSeg,
-    WritePos,
+    PacketWriter, WritePos,
 };
 use crate::port::{Port, Pos, ProcessResult};
 use crate::rule::{
-    Action, EtherTypeMatch, Identity, IpProtoMatch, Ipv4AddrMatch, Predicate,
-    Rule, RuleAction,
+    Action, EtherTypeMatch, Identity, Predicate, Rule, RuleAction,
 };
+use crate::udp::UdpHdrRaw;
 use crate::Direction::{self, *};
 
 use ProcessResult::*;
@@ -62,23 +65,119 @@ fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
     }
 }
 
+fn home_cfg() -> oxide_net::PortConfig {
+    oxide_net::PortConfig {
+        private_ip: "10.0.0.210".parse().unwrap(),
+        private_mac: EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]),
+        vpc_subnet: "10.0.0.0/24".parse().unwrap(),
+        dyn_nat: oxide_net::DynNat4Config {
+            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0x00, 0x00, 0x63]),
+            public_ip: "10.0.0.99".parse().unwrap(),
+            ports: Range { start: 1025, end: 4096 },
+        },
+        gw_mac: EtherAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
+        gw_ip: "10.0.0.1".parse().unwrap(),
+    }
+}
+
+fn lab_cfg() -> oxide_net::PortConfig {
+    oxide_net::PortConfig {
+        private_ip: "172.20.14.16".parse().unwrap(),
+        private_mac: EtherAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
+        vpc_subnet: "172.20.14.0/24".parse().unwrap(),
+        dyn_nat: oxide_net::DynNat4Config {
+            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0x00, 0x01, 0xEE]),
+            public_ip: "76.76.21.21".parse().unwrap(),
+            ports: Range { start: 1025, end: 4096 },
+        },
+        gw_mac: EtherAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x01]),
+        gw_ip: "172.20.14.1".parse().unwrap(),
+    }
+}
+
+fn oxide_net_setup(port: &mut Port, cfg: &oxide_net::PortConfig) {
+    // ================================================================
+    // Firewall layer
+    // ================================================================
+    oxide_net::firewall::setup(port);
+
+    // ================================================================
+    // Dynamic NAT Layer (IPv4)
+    // ================================================================
+    oxide_net::dyn_nat4::setup(port, cfg);
+
+    // ================================================================
+    // ARP layer
+    // ================================================================
+    oxide_net::arp::setup(port, cfg);
+}
+
+#[test]
+fn dhcp_req() {
+    let cfg = lab_cfg();
+    let mut port = Port::new("dhcp_req".to_string(), cfg.private_mac);
+    oxide_net_setup(&mut port, &cfg);
+
+    let pkt = Packet::alloc(42);
+
+    let ether = EtherMeta {
+        src: cfg.private_mac,
+        dst: ether::ETHER_BROADCAST,
+        ether_type: ETHER_TYPE_IPV4
+    };
+
+    let ip = Ipv4Meta {
+        src: "0.0.0.0".parse().unwrap(),
+        dst: ip4::LOCAL_BROADCAST,
+        proto: Protocol::UDP,
+    };
+
+    let udp = UdpMeta { src: 68, dst: 67 };
+
+    let mut wtr = PacketWriter::new(pkt, None);
+    let _ = wtr.write(EtherHdrRaw::from(&ether).as_bytes()).unwrap();
+    let _ = wtr.write(Ipv4HdrRaw::from(&ip).as_bytes()).unwrap();
+    let _ = wtr.write(UdpHdrRaw::from(&udp).as_bytes()).unwrap();
+
+    let mut pkt = wtr.finish().parse().unwrap();
+
+    let res = port.process(Out, &mut pkt, 0);
+    match res {
+        Modify(meta) => {
+            // TODO This packet wasn't actually moidfied (that's the
+            // point of this test), but `Modify()` is what processing
+            // returns since it technically did pass through the
+            // firewall action (which is just Identity). It would be
+            // nice if we only returned `Modify()` when the metadata
+            // actually changes.
+            let ethm = meta.inner_ether.as_ref().unwrap();
+            assert_eq!(ethm.src, cfg.private_mac);
+            assert_eq!(ethm.dst, ether::ETHER_BROADCAST);
+
+            let ip4m = match meta.inner_ip.as_ref().unwrap() {
+                IpMeta::Ip4(v) => v,
+                _ => panic!("expect Ipv4Meta"),
+            };
+
+            assert_eq!(ip4m.src, "0.0.0.0".parse().unwrap());
+            assert_eq!(ip4m.dst, ip4::LOCAL_BROADCAST);
+            assert_eq!(ip4m.proto, Protocol::UDP);
+        }
+
+        res => panic!("expected Modify result, got {:?}", res),
+    }
+}
+
 /// Verify that any early ARP traffic is dropped.
 #[test]
 fn early_arp() {
-    use crate::packet::PacketWriter;
-
     let host_mac = EtherAddr::from([0x80, 0xe8, 0x2c, 0xf5, 0x10, 0x35]);
     let host_ip = "10.0.0.206".parse().unwrap();
-    let gw_mac = EtherAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
-    let gw_ip = "10.0.0.1".parse().unwrap();
-    let guest_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
-    let guest_ip = "10.0.0.210".parse().unwrap();
-    let pub_ip = "10.0.0.99".parse().unwrap();
-    let port = Port::new("int_test".to_string(), guest_mac);
 
-    // Setup firewall.
-    let fw_layer = Firewall::create_layer();
-    port.add_layer(fw_layer, Pos::First);
+    let cfg = home_cfg();
+    let mut port = Port::new("int_test".to_string(), cfg.private_mac);
+
+    oxide_net::firewall::setup(&mut port);
 
     // We drop all outbound ARP until the the IP/gateway information
     // is set via opetadm set-ip-config, at which point we remove this
@@ -149,7 +248,7 @@ fn early_arp() {
     let pkt = Packet::alloc(42);
     let eth_hdr = EtherHdrRaw {
         dst: [0xff; 6],
-        src: gw_mac.to_bytes(),
+        src: cfg.gw_mac.to_bytes(),
         ether_type: [0x08, 0x06],
     };
 
@@ -162,10 +261,10 @@ fn early_arp() {
     };
 
     let arp = ArpEth4Payload {
-        sha: gw_mac,
-        spa: gw_ip,
+        sha: cfg.gw_mac,
+        spa: cfg.gw_ip,
         tha: EtherAddr::from([0x00; 6]),
-        tpa: pub_ip,
+        tpa: cfg.dyn_nat.public_ip,
     };
 
     let mut wtr = PacketWriter::new(pkt, None);
@@ -185,7 +284,7 @@ fn early_arp() {
     let pkt = Packet::alloc(42);
     let eth_hdr = EtherHdrRaw {
         dst: [0xff; 6],
-        src: guest_mac.to_bytes(),
+        src: cfg.private_mac.to_bytes(),
         ether_type: [0x08, 0x06],
     };
 
@@ -198,10 +297,10 @@ fn early_arp() {
     };
 
     let arp = ArpEth4Payload {
-        sha: guest_mac,
-        spa: guest_ip,
+        sha: cfg.private_mac,
+        spa: cfg.private_ip,
         tha: EtherAddr::from([0x00; 6]),
-        tpa: gw_ip,
+        tpa: cfg.gw_ip,
     };
 
     let mut wtr = PacketWriter::new(pkt, None);
@@ -221,135 +320,14 @@ fn early_arp() {
 // ARP traffic is dropped.
 #[test]
 fn arp_hairpin() {
-    use crate::arp::{ArpOp, ArpReply};
+    use crate::arp::ArpOp;
     use crate::ether::ETHER_TYPE_IPV4;
-    use crate::ip4::Ipv4Addr;
-    use crate::packet::PacketWriter;
-    use crate::rule::{
-        ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate, EtherAddrMatch,
-    };
 
+    let cfg = home_cfg();
     let host_mac = EtherAddr::from([0x80, 0xe8, 0x2c, 0xf5, 0x10, 0x35]);
     let host_ip = "10.0.0.206".parse().unwrap();
-    let gw_mac = EtherAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
-    let gw_ip = "10.0.0.1".parse().unwrap();
-    let guest_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
-    let guest_ip = "10.0.0.210".parse().unwrap();
-    let pub_ip = "10.0.0.99".parse::<Ipv4Addr>().unwrap();
-    let pub_ip_bytes = pub_ip.to_be_bytes();
-    let pub_mac = EtherAddr::from([
-        0xa8,
-        0x40,
-        0x25,
-        pub_ip_bytes[1],
-        pub_ip_bytes[2],
-        pub_ip_bytes[3],
-    ]);
-    let port = Port::new("int_test".to_string(), guest_mac);
-
-    // Setup firewall layer.
-    let fw_layer = Firewall::create_layer();
-    port.add_layer(fw_layer, Pos::First);
-
-    // Setup ARP layer.
-    let arp = Layer::new(
-        "arp",
-        vec![
-            // ARP Reply for gateway's IP.
-            Action::Hairpin(Box::new(ArpReply::new(gw_ip, gw_mac))),
-            // ARP Reply for guest's private IP.
-            Action::Hairpin(Box::new(ArpReply::new(guest_ip, guest_mac))),
-            // ARP Reply for guest's public IP.
-            Action::Hairpin(Box::new(ArpReply::new(pub_ip, pub_mac))),
-        ],
-    );
-
-    // ================================================================
-    // Outbound ARP Request for Gateway, from Guest
-    // ================================================================
-    let mut rule = Rule::new(1, RuleAction::Allow(0));
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-        EtherAddr::from([0xFF; 6]),
-    )]));
-    rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
-    rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
-        ETHER_TYPE_IPV4,
-    )));
-    rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
-        ArpOp::Request,
-    )));
-    rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
-        Ipv4AddrMatch::Exact(gw_ip),
-    ]));
-    arp.add_rule(Direction::Out, rule);
-
-    // ================================================================
-    // Drop all other outbound ARP Requests from Guest
-    // ================================================================
-    let mut rule = Rule::new(2, RuleAction::Deny);
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    arp.add_rule(Direction::Out, rule);
-
-    // ================================================================
-    // Inbound ARP Request from Gateway, for Guest Private IP
-    // ================================================================
-    let mut rule = Rule::new(1, RuleAction::Allow(1));
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-        EtherAddr::from([0xFF; 6]),
-    )]));
-    rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
-    rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
-        ETHER_TYPE_IPV4,
-    )));
-    rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
-        ArpOp::Request,
-    )));
-    rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
-        Ipv4AddrMatch::Exact(guest_ip),
-    ]));
-    arp.add_rule(Direction::In, rule);
-
-    // ================================================================
-    // Inbound ARP Request from Gateway, for Guest Public IP
-    // ================================================================
-    let mut rule = Rule::new(1, RuleAction::Allow(2));
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-        EtherAddr::from([0xFF; 6]),
-    )]));
-    rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
-    rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
-        ETHER_TYPE_IPV4,
-    )));
-    rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
-        ArpOp::Request,
-    )));
-    rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
-        Ipv4AddrMatch::Exact(pub_ip),
-    ]));
-    arp.add_rule(Direction::In, rule);
-
-    // ================================================================
-    // Drop all other inbound ARP Requests
-    // ================================================================
-    let mut rule = Rule::new(2, RuleAction::Deny);
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    arp.add_rule(Direction::In, rule);
-
-    port.add_layer(arp, Pos::Before("firewall"));
-
+    let mut port = Port::new("int_test".to_string(), cfg.private_mac);
+    oxide_net_setup(&mut port, &cfg);
     let reply_hdr_sz = ETHER_HDR_SZ + ARP_HDR_SZ;
 
     // ================================================================
@@ -410,7 +388,7 @@ fn arp_hairpin() {
     let pkt = Packet::alloc(42);
     let eth_hdr = EtherHdrRaw {
         dst: [0xff; 6],
-        src: guest_mac.to_bytes(),
+        src: cfg.private_mac.to_bytes(),
         ether_type: [0x08, 0x06],
     };
 
@@ -423,10 +401,10 @@ fn arp_hairpin() {
     };
 
     let arp = ArpEth4Payload {
-        sha: guest_mac,
-        spa: guest_ip,
+        sha: cfg.private_mac,
+        spa: cfg.private_ip,
         tha: EtherAddr::from([0x00; 6]),
-        tpa: gw_ip,
+        tpa: cfg.gw_ip,
     };
 
     let mut wtr = PacketWriter::new(pkt, None);
@@ -442,8 +420,8 @@ fn arp_hairpin() {
             let meta = hppkt.clone_meta();
             let ethm = meta.inner_ether.as_ref().unwrap();
             let arpm = meta.inner_arp.as_ref().unwrap();
-            assert_eq!(ethm.dst, guest_mac);
-            assert_eq!(ethm.src, gw_mac);
+            assert_eq!(ethm.dst, cfg.private_mac);
+            assert_eq!(ethm.src, cfg.gw_mac);
             assert_eq!(ethm.ether_type, ETHER_TYPE_ARP);
             assert_eq!(arpm.op, ArpOp::Reply);
             assert_eq!(arpm.ptype, ETHER_TYPE_IPV4);
@@ -454,10 +432,10 @@ fn arp_hairpin() {
                 &ArpEth4PayloadRaw::parse(&mut rdr).unwrap(),
             );
 
-            assert_eq!(arp.sha, gw_mac);
-            assert_eq!(arp.spa, gw_ip);
-            assert_eq!(arp.tha, guest_mac);
-            assert_eq!(arp.tpa, guest_ip);
+            assert_eq!(arp.sha, cfg.gw_mac);
+            assert_eq!(arp.spa, cfg.gw_ip);
+            assert_eq!(arp.tha, cfg.private_mac);
+            assert_eq!(arp.tpa, cfg.private_ip);
         }
 
         res => panic!("expected a Hairpin, got {:?}", res),
@@ -470,7 +448,7 @@ fn arp_hairpin() {
     let pkt = Packet::alloc(42);
     let eth_hdr = EtherHdrRaw {
         dst: [0xff; 6],
-        src: gw_mac.to_bytes(),
+        src: cfg.gw_mac.to_bytes(),
         ether_type: [0x08, 0x06],
     };
 
@@ -483,10 +461,10 @@ fn arp_hairpin() {
     };
 
     let arp = ArpEth4Payload {
-        sha: gw_mac,
-        spa: gw_ip,
+        sha: cfg.gw_mac,
+        spa: cfg.gw_ip,
         tha: EtherAddr::from([0x00; 6]),
-        tpa: guest_ip,
+        tpa: cfg.private_ip,
     };
 
     let mut wtr = PacketWriter::new(pkt, None);
@@ -502,8 +480,8 @@ fn arp_hairpin() {
             let meta = hppkt.clone_meta();
             let ethm = meta.inner_ether.as_ref().unwrap();
             let arpm = meta.inner_arp.as_ref().unwrap();
-            assert_eq!(ethm.dst, gw_mac);
-            assert_eq!(ethm.src, guest_mac);
+            assert_eq!(ethm.dst, cfg.gw_mac);
+            assert_eq!(ethm.src, cfg.private_mac);
             assert_eq!(ethm.ether_type, ETHER_TYPE_ARP);
             assert_eq!(arpm.op, ArpOp::Reply);
             assert_eq!(arpm.ptype, ETHER_TYPE_IPV4);
@@ -514,10 +492,10 @@ fn arp_hairpin() {
                 &ArpEth4PayloadRaw::parse(&mut rdr).unwrap(),
             );
 
-            assert_eq!(arp.sha, guest_mac);
-            assert_eq!(arp.spa, guest_ip);
-            assert_eq!(arp.tha, gw_mac);
-            assert_eq!(arp.tpa, gw_ip);
+            assert_eq!(arp.sha, cfg.private_mac);
+            assert_eq!(arp.spa, cfg.private_ip);
+            assert_eq!(arp.tha, cfg.gw_mac);
+            assert_eq!(arp.tpa, cfg.gw_ip);
         }
 
         res => panic!("expected a Hairpin, got {:?}", res),
@@ -530,7 +508,7 @@ fn arp_hairpin() {
     let pkt = Packet::alloc(42);
     let eth_hdr = EtherHdrRaw {
         dst: [0xff; 6],
-        src: gw_mac.to_bytes(),
+        src: cfg.gw_mac.to_bytes(),
         ether_type: [0x08, 0x06],
     };
 
@@ -543,10 +521,10 @@ fn arp_hairpin() {
     };
 
     let arp = ArpEth4Payload {
-        sha: gw_mac,
-        spa: gw_ip,
+        sha: cfg.gw_mac,
+        spa: cfg.gw_ip,
         tha: EtherAddr::from([0x00; 6]),
-        tpa: pub_ip,
+        tpa: cfg.dyn_nat.public_ip,
     };
 
     let mut wtr = PacketWriter::new(pkt, None);
@@ -562,8 +540,8 @@ fn arp_hairpin() {
             let meta = hppkt.clone_meta();
             let ethm = meta.inner_ether.as_ref().unwrap();
             let arpm = meta.inner_arp.as_ref().unwrap();
-            assert_eq!(ethm.dst, gw_mac);
-            assert_eq!(ethm.src, pub_mac);
+            assert_eq!(ethm.dst, cfg.gw_mac);
+            assert_eq!(ethm.src, cfg.dyn_nat.public_mac);
             assert_eq!(ethm.ether_type, ETHER_TYPE_ARP);
             assert_eq!(arpm.op, ArpOp::Reply);
             assert_eq!(arpm.ptype, ETHER_TYPE_IPV4);
@@ -574,10 +552,10 @@ fn arp_hairpin() {
                 &ArpEth4PayloadRaw::parse(&mut rdr).unwrap(),
             );
 
-            assert_eq!(arp.sha, pub_mac);
-            assert_eq!(arp.spa, pub_ip);
-            assert_eq!(arp.tha, gw_mac);
-            assert_eq!(arp.tpa, gw_ip);
+            assert_eq!(arp.sha, cfg.dyn_nat.public_mac);
+            assert_eq!(arp.spa, cfg.dyn_nat.public_ip);
+            assert_eq!(arp.tha, cfg.gw_mac);
+            assert_eq!(arp.tpa, cfg.gw_ip);
         }
 
         res => panic!("expected a Hairpin, got {:?}", res),
@@ -593,36 +571,9 @@ fn arp_hairpin() {
 /// and UFT.
 #[test]
 fn outgoing_dns_lookup() {
-    let sub = "10.0.0.0/24".parse().unwrap();
-    let guest_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
-    let guest_ip = "10.0.0.210".parse().unwrap();
-    let pub_mac = EtherAddr::from([0xa8, 0x40, 0x25, 0x0, 0x0, 0x63]);
-    let pub_ip = "10.0.0.99".parse().unwrap();
-    let port = Port::new("int_test".to_string(), guest_mac);
-
-    // Setup firewall.
-    let fw_layer = Firewall::create_layer();
-    port.add_layer(fw_layer, Pos::First);
-
-    // Setup Dynamic NAT
-    let mut nat_pool = NatPool::new();
-    nat_pool.add(guest_ip, pub_ip, Range { start: 1025, end: 4096 });
-    port.set_nat_pool(nat_pool);
-    let nat =
-        DynNat4::new("dyn-nat4".to_string(), guest_ip, guest_mac, pub_mac);
-    let nat_layer =
-        Layer::new("dyn-nat4", vec![Action::Stateful(Box::new(nat))]);
-    let mut rule = Rule::new(1, RuleAction::Allow(0));
-    rule.add_predicate(Predicate::InnerIpProto(vec![
-        IpProtoMatch::Exact(Protocol::TCP),
-        IpProtoMatch::Exact(Protocol::UDP),
-    ]));
-    rule.add_predicate(Predicate::Not(Box::new(Predicate::InnerDstIp4(vec![
-        Ipv4AddrMatch::Prefix(sub),
-    ]))));
-    nat_layer.add_rule(Direction::Out, rule);
-    port.add_layer(nat_layer, Pos::After("firewall"));
-
+    let cfg = home_cfg();
+    let mut port = Port::new("int_test".to_string(), cfg.private_mac);
+    oxide_net_setup(&mut port, &cfg);
     let gpath = "dns-lookup-guest.pcap";
     let gbytes = fs::read(gpath).unwrap();
     let hpath = "dns-lookup-host.pcap";
@@ -709,38 +660,13 @@ fn outgoing_dns_lookup() {
 // smaller-scale test (Ubuntu uses this to check for captive portals).
 #[test]
 fn outgoing_http_req() {
-    let sub = "10.0.0.0/24".parse().unwrap();
-    let guest_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
-    let guest_ip = "10.0.0.210".parse().unwrap();
-    let pub_mac = EtherAddr::from([0xa8, 0x40, 0x25, 0x0, 0x0, 0x63]);
-    let pub_ip = "10.0.0.99".parse().unwrap();
-    let port = Port::new("int_test".to_string(), guest_mac);
-
-    // Setup firewall.
-    let fw_layer = Firewall::create_layer();
-    port.add_layer(fw_layer, Pos::First);
-
-    // Setup Dynamic NAT
-    let mut nat_pool = NatPool::new();
+    let mut cfg = home_cfg();
     // We have to specify exactly one port to match up with the actual
     // port from the pcap.
-    nat_pool.add(guest_ip, pub_ip, Range { start: 3839, end: 3840 });
-    port.set_nat_pool(nat_pool);
-    let nat =
-        DynNat4::new("dyn-nat4".to_string(), guest_ip, guest_mac, pub_mac);
-    let nat_layer =
-        Layer::new("dyn-nat4", vec![Action::Stateful(Box::new(nat))]);
-    let mut rule = Rule::new(1, RuleAction::Allow(0));
-    rule.add_predicate(Predicate::InnerIpProto(vec![
-        IpProtoMatch::Exact(Protocol::TCP),
-        IpProtoMatch::Exact(Protocol::UDP),
-    ]));
-    rule.add_predicate(Predicate::Not(Box::new(Predicate::InnerDstIp4(vec![
-        Ipv4AddrMatch::Prefix(sub),
-    ]))));
-    nat_layer.add_rule(Direction::Out, rule);
-    port.add_layer(nat_layer, Pos::After("firewall"));
-
+    cfg.dyn_nat.ports.start = 3839;
+    cfg.dyn_nat.ports.end = 3840;
+    let mut port = Port::new("int_test".to_string(), cfg.private_mac);
+    oxide_net_setup(&mut port, &cfg);
     let gpath = "http-out-guest.pcap";
     let gbytes = fs::read(gpath).unwrap();
     let hpath = "http-out-host.pcap";

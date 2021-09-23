@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use crate::headers::Ipv4Meta;
 use crate::packet::{PacketRead, ReadErr, WriteErr};
 use crate::rule::{
     MatchExact, MatchExactVal, MatchPrefix, MatchPrefixVal, MatchRangeVal,
@@ -26,6 +27,8 @@ use illumos_ddi_dki::uintptr_t;
 use crate::uintptr_t;
 
 pub const IPV4_HDR_SZ: usize = std::mem::size_of::<Ipv4HdrRaw>();
+
+pub const LOCAL_BROADCAST: Ipv4Addr = Ipv4Addr::new([255; 4]);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IpError {
@@ -429,5 +432,33 @@ impl Ipv4HdrRaw {
             None => return Err(WriteErr::BadLayout),
         };
         Ok(hdr)
+    }
+}
+
+impl Default for Ipv4HdrRaw {
+    fn default() -> Self {
+        Ipv4HdrRaw {
+            ver_hdr_len: 0x45,
+            dscp_ecn: 0x0,
+            total_len: [0x0; 2],
+            ident: [0x0; 2],
+            frag_and_flags: [0x40, 0x0],
+            ttl: 64,
+            proto: Protocol::Reserved as u8,
+            csum: [0x0; 2],
+            src: [0x0; 4],
+            dst: [0x0; 4],
+        }
+    }
+}
+
+impl From<&Ipv4Meta> for Ipv4HdrRaw {
+    fn from(meta: &Ipv4Meta) -> Self {
+        Ipv4HdrRaw {
+            src: meta.src.to_be_bytes(),
+            dst: meta.dst.to_be_bytes(),
+            proto: meta.proto as u8,
+            ..Default::default()
+        }
     }
 }

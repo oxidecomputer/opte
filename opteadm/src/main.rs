@@ -6,9 +6,8 @@ use std::net::Ipv4Addr;
 use structopt::StructOpt;
 
 use opte_core::ether::EtherAddr;
-use opte_core::firewallng::FwRemRuleReq;
-use opte_core::firewallng::{
-    self, Action, Address, FirewallRule, Ports, ProtoFilter,
+use opte_core::oxide_net::firewall::{
+    self, Action, Address, FirewallRule, FwRemRuleReq, Ports, ProtoFilter,
 };
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::ioctl::SetIpConfigReq;
@@ -90,9 +89,9 @@ struct Filters {
     ports: Ports,
 }
 
-impl From<Filters> for firewallng::Filters {
+impl From<Filters> for firewall::Filters {
     fn from(f: Filters) -> Self {
-        firewallng::Filters::new()
+        firewall::Filters::new()
             .set_hosts(f.hosts)
             .protocol(f.protocol)
             .ports(f.ports)

@@ -46,23 +46,19 @@ use core::ptr;
 use crate::ioctl::IoctlEnvelope;
 
 extern crate opte_core;
-use opte_core::arp::{ArpOp, ArpReply};
-use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
-use opte_core::firewallng::{
-    Firewall, FwAddRuleReq, FwAddRuleResp, FwRemRuleReq, FwRemRuleResp,
+use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP};
+use opte_core::oxide_net::firewall::{
+    self, FwAddRuleReq, FwAddRuleResp, FwRemRuleReq, FwRemRuleResp,
 };
 use opte_core::ioctl::{
     IoctlCmd, ListPortsReq, ListPortsResp, SetIpConfigReq, SetIpConfigResp
 };
-use opte_core::ip4::{Ipv4Addr, Protocol};
+use opte_core::ip4::Ipv4Addr;
 use opte_core::layer::{Layer, LayerDumpReq};
-use opte_core::nat::{DynNat4, NatPool};
 use opte_core::packet::{Initialized, Packet};
 use opte_core::port::{Port, Pos, ProcessResult, TcpFlowsDumpReq, UftDumpReq};
 use opte_core::rule::{
-    Action, ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate,
-    EtherAddrMatch, EtherTypeMatch, Identity, IpProtoMatch, Ipv4AddrMatch,
-    Predicate, Rule, RuleAction,
+    Action, EtherTypeMatch, Identity, Predicate, Rule, RuleAction
 };
 use opte_core::sync::{KMutex, KMutexType};
 use opte_core::vpc::VpcSubnet4;
@@ -303,10 +299,6 @@ fn set_ip_config(
         Err(e) => return Err((EINVAL, format!("gw_ip: {:?}", e))),
     };
 
-    let mut pool = NatPool::new();
-    pool.add(private_ip, public_ip, Range { start, end });
-    ocs.port.set_nat_pool(pool);
-
     let ip_bytes = ocs.public_ip.unwrap().to_be_bytes();
     ocs.public_mac = Some(EtherAddr::from([
         0xa8,
@@ -317,148 +309,23 @@ fn set_ip_config(
         ip_bytes[3],
     ]));
 
-    let nat = DynNat4::new(
-        "dyn-nat4".to_string(),
-        ocs.private_ip.unwrap(),
-        ocs.guest_mac,
-        ocs.public_mac.unwrap(),
-    );
-    let layer = Layer::new("dyn-nat4", vec![Action::Stateful(Box::new(nat))]);
+    let cfg = opte_core::oxide_net::PortConfig {
+        vpc_subnet: ocs.vpc_sub4.as_ref().unwrap().clone(),
+        private_mac: ocs.guest_mac,
+        private_ip,
+        gw_mac,
+        gw_ip,
+        dyn_nat: opte_core::oxide_net::DynNat4Config {
+            public_mac: ocs.public_mac.as_ref().unwrap().clone(),
+            public_ip,
+            ports: Range { start, end }
+        },
+    };
 
-    let mut rule = Rule::new(1, RuleAction::Allow(0));
-    rule.add_predicate(Predicate::InnerIpProto(vec![
-        IpProtoMatch::Exact(Protocol::TCP),
-        IpProtoMatch::Exact(Protocol::UDP),
-    ]));
-
-    // RFD 21 §2.10.4 (Primary and Multiple Interfaces) dictates that
-    // there may be more than one interface, but one is primary.
-    //
-    //  * A given guest may only ever be a part of one VPC, i.e. every
-    //    interface in a guest sits in the same VPC.
-    //
-    //  * However, each interface may be on a different subnet within
-    //    the VPC.
-    //
-    //  * Only the primary interface participates in DNS, ephemeral &
-    //    floating public IP, and is specified as the default route to
-    //    the guest via DHCP
-    //
-    // All this means that I can determine if a address needs NAT
-    // translation by checking to see if the destination IP belongs to
-    // the interface's subnet. As each interface, for now, has its own
-    // opte instance, it should be whatever IP + CIDR it was assigned
-    // (as opposed to some table mapping src L2 src address to
-    // IP+CIDR).
-    rule.add_predicate(Predicate::Not(Box::new(Predicate::InnerDstIp4(vec![
-        Ipv4AddrMatch::Prefix(ocs.vpc_sub4.unwrap().get_cidr()),
-    ]))));
-    layer.add_rule(Direction::Out, rule);
-    ocs.port.add_layer(layer, Pos::After("firewall"));
-
-    let arp = Layer::new(
-        "arp",
-        vec![
-            // ARP Reply for gateway's IP.
-            Action::Hairpin(Box::new(ArpReply::new(gw_ip, gw_mac))),
-            // ARP Reply for guest's private IP.
-            Action::Hairpin(Box::new(ArpReply::new(private_ip, ocs.guest_mac))),
-            // ARP Reply for guest's public IP.
-            Action::Hairpin(Box::new(ArpReply::new(
-                public_ip,
-                ocs.public_mac.unwrap(),
-            ))),
-        ],
-    );
-
-    // ================================================================
-    // Outbound ARP Request for Gateway, from Guest
-    // ================================================================
-    let mut rule = Rule::new(1, RuleAction::Allow(0));
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-        EtherAddr::from([0xFF; 6]),
-    )]));
-    rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
-    rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
-        ETHER_TYPE_IPV4,
-    )));
-    rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
-        ArpOp::Request,
-    )));
-    rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
-        Ipv4AddrMatch::Exact(gw_ip),
-    ]));
-    arp.add_rule(Direction::Out, rule);
-
-    // ================================================================
-    // Drop all other outbound ARP Requests from Guest
-    // ================================================================
-    let mut rule = Rule::new(2, RuleAction::Deny);
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    arp.add_rule(Direction::Out, rule);
-
-    // ================================================================
-    // Inbound ARP Request from Gateway, for Guest Private IP
-    // ================================================================
-    let mut rule = Rule::new(1, RuleAction::Allow(1));
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-        EtherAddr::from([0xFF; 6]),
-    )]));
-    rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
-    rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
-        ETHER_TYPE_IPV4,
-    )));
-    rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
-        ArpOp::Request,
-    )));
-    rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
-        Ipv4AddrMatch::Exact(private_ip),
-    ]));
-    arp.add_rule(Direction::In, rule);
-
-    // ================================================================
-    // Inbound ARP Request from Gateway, for Guest Public IP
-    // ================================================================
-    let mut rule = Rule::new(1, RuleAction::Allow(2));
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-        EtherAddr::from([0xFF; 6]),
-    )]));
-    rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
-    rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
-        ETHER_TYPE_IPV4,
-    )));
-    rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
-        ArpOp::Request,
-    )));
-    rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
-        Ipv4AddrMatch::Exact(public_ip),
-    ]));
-    arp.add_rule(Direction::In, rule);
-
-    // ================================================================
-    // Drop all other inbound ARP Requests
-    // ================================================================
-    let mut rule = Rule::new(2, RuleAction::Deny);
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    arp.add_rule(Direction::In, rule);
-
-    ocs.port.add_layer(arp, Pos::Before("firewall"));
+    opte_core::oxide_net::dyn_nat4::setup(&mut ocs.port, &cfg);
+    opte_core::oxide_net::arp::setup(&mut ocs.port, &cfg);
     // Remove the old ARP layer now that the new one is in place.
     ocs.port.remove_layer("arp-drop");
-
     Ok(())
 }
 
@@ -561,7 +428,6 @@ unsafe extern "C" fn opte_ioctl(
             // TODO actually check response.
             let dir = req.rule.direction;
             let rule = Rule::from(req.rule);
-            // let res = firewallng::add_fw_rule(&ocs.port, req.rule);
             let res = ocs.port.add_rule("firewall", dir, rule);
             let resp = FwAddRuleResp { resp: res };
 
@@ -939,7 +805,7 @@ pub unsafe extern "C" fn opte_client_open(
     let mut guest_mac = [0u8; 6];
     mac_unicast_primary_get(mh, &mut guest_mac);
     let guest_mac = EtherAddr::from(guest_mac);
-    let port = Box::new(Port::new(
+    let mut port = Box::new(Port::new(
         CStr::from_ptr(name).to_str().unwrap().to_string(),
         guest_mac,
     ));
@@ -965,8 +831,7 @@ pub unsafe extern "C" fn opte_client_open(
         mac_client_close(mch, flags);
     }
 
-    let fw_layer = Firewall::create_layer();
-    port.add_layer(fw_layer, Pos::First);
+    firewall::setup(&mut port);
 
     // We drop all outbound ARP until the the IP/gateway information
     // is set via opetadm set-ip-config, at which point we remove this

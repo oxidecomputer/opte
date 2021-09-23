@@ -17,6 +17,7 @@ use crate::ether::ETHER_TYPE_ARP;
 use crate::headers::DYNAMIC_PORT;
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Protocol};
 use crate::layer::{InnerFlowId, Layer};
+use crate::port::{Port, Pos};
 use crate::rule::{
     Action as LayerAction, ActionDesc, EtherTypeMatch, Identity, IdentityDesc,
     IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate, Resources, Rule,
@@ -24,6 +25,11 @@ use crate::rule::{
 };
 use crate::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
 use crate::{Direction, ParseErr, ParseResult};
+
+pub fn setup(port: &mut Port) {
+    let fw_layer = Firewall::create_layer();
+    port.add_layer(fw_layer, Pos::First);
+}
 
 pub struct Firewall {}
 

@@ -70,7 +70,11 @@ impl VpcSubnet4 {
                 Ok(Self::new_unchecked(cidr))
             }
 
-            (172, 16, _, _) => {
+            (172, x, _, _) => {
+                if x < 16 || x > 31 {
+                    return Err(IpError::Ipv4NonPrivateNetwork(ip));
+                }
+
                 if prefix < 12 || prefix > OXIDE_MIN_IP4_BLOCK {
                     return Err(IpError::BadNetPrefix(prefix));
                 }
@@ -115,6 +119,11 @@ pub struct SetVpcSubnet4Resp {
 #[test]
 fn bad_subnet() {
     assert_eq!(
+        "172.43.3.0/24".parse::<VpcSubnet4>(),
+        Err(IpError::Ipv4NonPrivateNetwork("172.43.3.0".parse().unwrap()))
+    );
+
+    assert_eq!(
         "12.0.0.0/8".parse::<VpcSubnet4>(),
         Err(IpError::Ipv4NonPrivateNetwork("12.0.0.0".parse().unwrap()))
     );
@@ -132,6 +141,11 @@ fn bad_subnet() {
 
 #[test]
 fn good_subnet() {
+    assert_eq!(
+        "172.20.14.0/24".parse::<VpcSubnet4>(),
+        Ok(VpcSubnet4 { cidr: "172.20.14.0/24".parse().unwrap() })
+    );
+
     assert_eq!(
         "192.168.13.0/24".parse::<VpcSubnet4>(),
         Ok(VpcSubnet4 { cidr: "192.168.13.0/24".parse().unwrap() })

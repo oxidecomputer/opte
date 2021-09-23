@@ -21,12 +21,13 @@ pub const ETHER_TYPE_IPV4: u16 = 0x0800;
 pub const ETHER_TYPE_ARP: u16 = 0x0806;
 pub const ETHER_TYPE_IPV6: u16 = 0x86DD;
 
+pub const ETHER_BROADCAST: EtherAddr = EtherAddr { bytes: [0xFF; 6] };
 pub const ETHER_ADDR_LEN: usize = 6;
 
 pub const ETHER_HDR_SZ: usize = std::mem::size_of::<EtherHdrRaw>();
 
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone, Copy, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct EtherAddr {
     bytes: [u8; ETHER_ADDR_LEN],
@@ -81,6 +82,14 @@ impl Display for EtherAddr {
             self.bytes[4],
             self.bytes[5]
         )
+    }
+}
+
+/// We are never really interested in internal representation of
+/// EtherAddr.
+impl std::fmt::Debug for EtherAddr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f,"{}", self)
     }
 }
 

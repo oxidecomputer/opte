@@ -131,8 +131,8 @@ impl StatefulAction for DynNat4 {
                 Arc::new(desc)
             }
 
-            Err(_e) => {
-                todo!("return error on resource acquisition failure");
+            Err(e) => {
+                todo!("return error on resource acquisition failure: {:?}", e);
                 // return Err(ActionInitError::ResourceError(e)),
             }
         }

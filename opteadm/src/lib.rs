@@ -9,7 +9,7 @@ use libc::{c_int, ioctl};
 use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
-use opte_core::firewallng::{
+use opte_core::oxide_net::firewall::{
     FirewallRule, FwAddRuleReq, FwAddRuleResp, FwRemRuleReq, FwRemRuleResp,
 };
 use opte_core::flow_table::FlowEntryDump;

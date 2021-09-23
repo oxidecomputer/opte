@@ -39,7 +39,6 @@ use serde::{Deserialize, Serialize};
 
 pub mod arp;
 pub mod ether;
-pub mod firewallng;
 pub mod flow_table;
 pub mod headers;
 pub mod icmp;
@@ -48,6 +47,7 @@ pub mod ip4;
 pub mod ip6;
 pub mod layer;
 pub mod nat;
+pub mod oxide_net;
 pub mod packet;
 pub mod port;
 pub mod rule;
