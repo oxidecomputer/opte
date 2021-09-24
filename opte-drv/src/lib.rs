@@ -273,6 +273,12 @@ fn set_ip_config(
     };
     ocs.private_ip = Some(private_ip);
 
+    let public_mac = match req.public_mac.parse() {
+        Ok(v) => v,
+        Err(e) => return Err((EINVAL, format!("public_mac: {:?}", e))),
+    };
+    ocs.public_mac = Some(public_mac);
+
     let public_ip = match req.public_ip.parse() {
         Ok(v) => v,
         Err(e) => return Err((EINVAL, format!("public_ip: {:?}", e))),
@@ -298,16 +304,6 @@ fn set_ip_config(
         Ok(v) => v,
         Err(e) => return Err((EINVAL, format!("gw_ip: {:?}", e))),
     };
-
-    let ip_bytes = ocs.public_ip.unwrap().to_be_bytes();
-    ocs.public_mac = Some(EtherAddr::from([
-        0xa8,
-        0x40,
-        0x25,
-        ip_bytes[1],
-        ip_bytes[2],
-        ip_bytes[3],
-    ]));
 
     let cfg = opte_core::oxide_net::PortConfig {
         vpc_subnet: ocs.vpc_sub4.as_ref().unwrap().clone(),

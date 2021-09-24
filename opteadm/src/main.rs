@@ -21,6 +21,7 @@ use illumos_ddi_dki::minor_t;
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, StructOpt)]
 enum Command {
+    /// List all registered ports.
     ListPorts,
 
     SetIpConfig(SetIpConfig),
@@ -109,6 +110,10 @@ struct SetIpConfig {
     #[structopt(long)]
     private_ip: Ipv4Addr,
 
+    /// Public MAC address
+    #[structopt(long)]
+    public_mac: EtherAddr,
+
     /// Public IP address
     #[structopt(long)]
     public_ip: Ipv4Addr,
@@ -138,6 +143,7 @@ impl From<SetIpConfig> for SetIpConfigReq {
     fn from(s: SetIpConfig) -> SetIpConfigReq {
         SetIpConfigReq {
             private_ip: s.private_ip.to_string(),
+            public_mac: s.public_mac.to_string(),
             public_ip: s.public_ip.to_string(),
             port_start: s.port_start.to_string(),
             port_end: s.port_end.to_string(),
