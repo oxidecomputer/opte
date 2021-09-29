@@ -59,6 +59,8 @@ pub struct Ioctl {
     pub resp_len_needed: size_t,
 }
 
+pub type CmdResp<R> = Result<R, String>;
+
 // TODO These should really be String. A malicious client could craft
 // a byte stream and deserializes to these structures, but doesn't
 // conform to the checks make in their constructors.
@@ -172,11 +174,6 @@ impl FromStr for SetIpConfigReq {
     }
 }
 
-#[derive(Deserialize, Serialize)]
-pub struct SetIpConfigResp {
-    pub resp: Result<(), String>,
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListPortsReq {
     pub unused: (),
@@ -184,5 +181,5 @@ pub struct ListPortsReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListPortsResp {
-    pub links: Vec<(illumos_ddi_dki::minor_t, String, crate::ether::EtherAddr)>,
+    pub ports: Vec<(illumos_ddi_dki::minor_t, String, crate::ether::EtherAddr)>,
 }

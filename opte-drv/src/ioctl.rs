@@ -1,12 +1,13 @@
 use alloc::prelude::v1::*;
 
+use core::fmt::Debug;
 use core::mem::{self, MaybeUninit};
 use core::result;
 
 use ddi::{c_int, c_void};
 use illumos_ddi_dki as ddi;
 
-use opte_core::ioctl::Ioctl;
+use opte_core::ioctl::{CmdResp, Ioctl};
 
 use postcard;
 
@@ -86,7 +87,10 @@ impl IoctlEnvelope {
     /// `resp_bytes`. Return an error if the `resp_len` indicates that
     /// the user buffer is not large enough to hold the serialized
     /// bytes.
-    pub fn copy_out_resp<T: Serialize>(&mut self, val: &T) -> Result<()> {
+    pub fn copy_out_resp<T>(&mut self, val: &CmdResp<T>) -> Result<()>
+    where
+        T: Debug + Serialize
+    {
         // We expect the kernel to pass values of `T` which will
         // serialize, thus the use of `unwrap()`.
         let vec = postcard::to_allocvec(val).unwrap();

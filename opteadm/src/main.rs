@@ -280,7 +280,7 @@ fn main() {
         Command::ListPorts => {
             let hdl = opteadm::OpteAdm::open_ctl().unwrap();
             print_port_header();
-            for p in hdl.list_ports().unwrap().links {
+            for p in hdl.list_ports().unwrap().ports {
                 print_port(p);
             }
         }

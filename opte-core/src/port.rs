@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
 use crate::flow_table::{FlowEntryDump, FlowTable, StateSummary};
 use crate::headers::IpMeta;
+use crate::ioctl::CmdResp;
 use crate::ip4::{Ipv4Addr, Protocol};
 use crate::layer::{
     InnerFlowId, Layer, LayerDumpResp, LayerResult, FLOW_ID_DEFAULT,
@@ -125,14 +126,14 @@ impl Port {
 
     /// Dump the contents of the layer named `name`, if such a layer
     /// exists.
-    pub fn dump_layer(&self, name: &str) -> Option<LayerDumpResp> {
+    pub fn dump_layer(&self, name: &str) -> CmdResp<LayerDumpResp> {
         for l in &*self.layers.lock().unwrap() {
             if l.name() == name {
-                return Some(l.dump());
+                return Ok(l.dump());
             }
         }
 
-        None
+        Err(format!("layer not found: {}", name))
     }
 
     /// Dump the contents of the TCP flow connection tracking table.
@@ -908,12 +909,12 @@ pub struct UftDumpResp {
     pub uft_out: Vec<(InnerFlowId, FlowEntryDump)>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TcpFlowsDumpReq {
     pub req: (),
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TcpFlowsDumpResp {
     pub flows: Vec<(InnerFlowId, FlowEntryDump)>,
 }

@@ -209,18 +209,8 @@ pub struct FwRemRuleReq {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct FwRemRuleResp {
-    pub resp: Result<(), String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
 pub struct FwAddRuleReq {
     pub rule: FirewallRule,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct FwAddRuleResp {
-    pub resp: Result<(), String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

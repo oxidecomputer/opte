@@ -47,11 +47,9 @@ use crate::ioctl::IoctlEnvelope;
 
 extern crate opte_core;
 use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP};
-use opte_core::oxide_net::firewall::{
-    self, FwAddRuleReq, FwAddRuleResp, FwRemRuleReq, FwRemRuleResp,
-};
+use opte_core::oxide_net::firewall::{self, FwAddRuleReq, FwRemRuleReq};
 use opte_core::ioctl::{
-    IoctlCmd, ListPortsReq, ListPortsResp, SetIpConfigReq, SetIpConfigResp
+    CmdResp, IoctlCmd, ListPortsReq, ListPortsResp, SetIpConfigReq,
 };
 use opte_core::ip4::Ipv4Addr;
 use opte_core::layer::{Layer, LayerDumpReq};
@@ -261,48 +259,48 @@ impl OpteState {
 fn set_ip_config(
     req: SetIpConfigReq,
     ocs: &mut OpteClientState,
-) -> Result<(), (c_int, String)> {
+) -> CmdResp<()> {
     ocs.vpc_sub4 = match req.vpc_sub4.parse() {
         Ok(v) => Some(v),
-        Err(e) => return Err((EINVAL, format!("vpc_sub4: {:?}", e))),
+        Err(e) => return Err(format!("vpc_sub4: {:?}", e)),
     };
 
     let private_ip = match req.private_ip.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("private_ip: {:?}", e))),
+        Err(e) => return Err(format!("private_ip: {:?}", e)),
     };
     ocs.private_ip = Some(private_ip);
 
     let public_mac = match req.public_mac.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("public_mac: {:?}", e))),
+        Err(e) => return Err(format!("public_mac: {:?}", e)),
     };
     ocs.public_mac = Some(public_mac);
 
     let public_ip = match req.public_ip.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("public_ip: {:?}", e))),
+        Err(e) => return Err(format!("public_ip: {:?}", e)),
     };
     ocs.public_ip = Some(public_ip);
 
     let start = match req.port_start.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("port_start: {:?}", e))),
+        Err(e) => return Err(format!("port_start: {:?}", e)),
     };
 
     let end = match req.port_end.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("port_end: {:?}", e))),
+        Err(e) => return Err(format!("port_end: {:?}", e)),
     };
 
     let gw_mac = match req.gw_mac.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("gw_mac: {:?}", e))),
+        Err(e) => return Err(format!("gw_mac: {:?}", e)),
     };
 
     let gw_ip = match req.gw_ip.parse() {
         Ok(v) => v,
-        Err(e) => return Err((EINVAL, format!("gw_ip: {:?}", e))),
+        Err(e) => return Err(format!("gw_ip: {:?}", e)),
     };
 
     let cfg = opte_core::oxide_net::PortConfig {
@@ -362,14 +360,14 @@ unsafe extern "C" fn opte_ioctl(
                 _ => return EFAULT,
             };
 
-            let mut resp = ListPortsResp { links: vec![] };
+            let mut resp = ListPortsResp { ports: vec![] };
             let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
             for (_k, v) in state.clients.lock().unwrap().iter() {
                 let ocs = &(**v);
-                resp.links.push((ocs.minor, ocs.name.clone(), ocs.guest_mac));
+                resp.ports.push((ocs.minor, ocs.name.clone(), ocs.guest_mac));
             }
 
-            match ioctlenv.copy_out_resp(&resp) {
+            match ioctlenv.copy_out_resp(&Ok(resp)) {
                 Ok(()) => return 0,
                 Err(ioctl::Error::RespTooLong) => return ENOBUFS,
                 Err(_) => return EFAULT,
@@ -392,14 +390,9 @@ unsafe extern "C" fn opte_ioctl(
                 Some(v) => &mut *(*v),
             };
 
-            let (code, val) = match set_ip_config(req, &mut ocs) {
-                Ok(_) => (0, Ok(())),
-                Err((code, msg)) => (code, Err(msg)),
-            };
-
-            let resp = SetIpConfigResp { resp: val };
+            let resp = set_ip_config(req, &mut ocs);
             match ioctlenv.copy_out_resp(&resp) {
-                Ok(()) => return code,
+                Ok(()) => return 0,
                 Err(ioctl::Error::RespTooLong) => return ENOBUFS,
                 Err(_) => return EFAULT,
             }
@@ -424,8 +417,7 @@ unsafe extern "C" fn opte_ioctl(
             // TODO actually check response.
             let dir = req.rule.direction;
             let rule = Rule::from(req.rule);
-            let res = ocs.port.add_rule("firewall", dir, rule);
-            let resp = FwAddRuleResp { resp: res };
+            let resp = ocs.port.add_rule("firewall", dir, rule);
 
             match ioctlenv.copy_out_resp(&resp) {
                 Ok(()) => return 0,
@@ -461,8 +453,7 @@ unsafe extern "C" fn opte_ioctl(
 
                 Some(v) => &mut *(*v),
             };
-            let res = ocs.port.remove_rule("firewall", req.dir, req.id);
-            let resp = FwRemRuleResp { resp: res };
+            let resp = ocs.port.remove_rule("firewall", req.dir, req.id);
 
             match ioctlenv.copy_out_resp(&resp) {
                 Ok(()) => return 0,
@@ -485,7 +476,7 @@ unsafe extern "C" fn opte_ioctl(
 
                 Some(v) => &mut *(*v),
             };
-            let resp = ocs.port.dump_tcp_flows();
+            let resp = Ok(ocs.port.dump_tcp_flows());
             match ioctlenv.copy_out_resp(&resp) {
                 Ok(()) => return 0,
                 Err(ioctl::Error::RespTooLong) => return ENOBUFS,
@@ -509,12 +500,7 @@ unsafe extern "C" fn opte_ioctl(
                 Some(v) => &mut *(*v),
             };
             let resp = ocs.port.dump_layer(&req.name);
-
-            if resp.is_none() {
-                return ENOENT;
-            }
-
-            match ioctlenv.copy_out_resp(&resp.unwrap()) {
+            match ioctlenv.copy_out_resp(&resp) {
                 Ok(()) => return 0,
                 Err(ioctl::Error::RespTooLong) => return ENOBUFS,
                 Err(_) => return EFAULT,
@@ -536,7 +522,7 @@ unsafe extern "C" fn opte_ioctl(
 
                 Some(v) => &mut *(*v),
             };
-            let resp = ocs.port.dump_uft();
+            let resp = Ok(ocs.port.dump_uft());
 
             match ioctlenv.copy_out_resp(&resp) {
                 Ok(()) => return 0,
