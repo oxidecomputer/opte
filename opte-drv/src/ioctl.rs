@@ -24,6 +24,17 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
+pub fn to_errno<T>(res: Result<T>) -> c_int
+where
+    T: core::fmt::Debug + serde::Serialize
+{
+    match res {
+        Ok(_) => 0,
+        Err(Error::RespTooLong) => ddi::ENOBUFS,
+        Err(_) => ddi::EFAULT,
+    }
+}
+
 /// An envelope for dealing with `Ioctl`. It contains all information
 /// needed to deserialize the user's request and serialize the
 /// kernel's response.

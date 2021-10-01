@@ -46,6 +46,44 @@ impl From<ParseIntError> for IpError {
     }
 }
 
+impl Display for IpError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use IpError::*;
+
+        match self {
+            BadNetPrefix(prefix) => {
+                write!(f, "bad net prefix: {}", prefix)
+            }
+
+            Ipv4NonPrivateNetwork(addr) => {
+                write!(f, "non-private network: {}", addr)
+            }
+
+            MalformedCidr(cidr) => {
+                write!(f, "malformed CIDR: {}", cidr)
+            }
+
+            MalformedInt => {
+                write!(f, "malformed integer")
+            }
+
+            MalformedIp(ip) => {
+                write!(f, "malformed IP: {}", ip)
+            }
+
+            MalformedNetPrefix(prefix) => {
+                write!(f, "malformed net prefix: {}", prefix)
+            }
+        }
+    }
+}
+
+impl From<IpError> for String {
+    fn from(err: IpError) -> Self {
+        format!("{}", err)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ipv4Cidr {
     ip: Ipv4Addr,

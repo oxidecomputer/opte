@@ -896,7 +896,7 @@ pub fn port_process_return_probe(dir: Direction, name: &str) {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UftDumpReq {
-    pub unused: (),
+    pub port_name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -911,7 +911,7 @@ pub struct UftDumpResp {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TcpFlowsDumpReq {
-    pub req: (),
+    pub port_name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

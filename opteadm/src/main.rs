@@ -1,22 +1,21 @@
 #![feature(extern_types)]
 
 use std::convert::TryInto;
-use std::net::Ipv4Addr;
 
 use structopt::StructOpt;
 
 use opte_core::ether::EtherAddr;
+use opte_core::ip4::Ipv4Addr;
 use opte_core::oxide_net::firewall::{
     self, Action, Address, FirewallRule, FwRemRuleReq, Ports, ProtoFilter,
 };
 use opte_core::flow_table::FlowEntryDump;
-use opte_core::ioctl::SetIpConfigReq;
+use opte_core::ioctl::{self, RegisterPortReq};
 use opte_core::layer::{InnerFlowId, IpAddr, LayerDumpResp};
 use opte_core::port::UftDumpResp;
 use opte_core::rule::RuleDump;
+use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
-
-use illumos_ddi_dki::minor_t;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, StructOpt)]
@@ -24,7 +23,12 @@ enum Command {
     /// List all registered ports.
     ListPorts,
 
-    SetIpConfig(SetIpConfig),
+    RegisterPort(RegisterPort),
+
+    UnregisterPort {
+        #[structopt(long)]
+        name: String,
+    },
 
     /// Dump the contents of the layer with the given name
     LayerDump {
@@ -100,12 +104,26 @@ impl From<Filters> for firewall::Filters {
     }
 }
 
-/// Create an IP configuration in OPTE
 #[derive(Debug, StructOpt)]
-struct SetIpConfig {
-    #[structopt(short)]
-    port: String,
+struct RegisterPort {
+    #[structopt(long)]
+    name: String,
 
+    #[structopt(flatten)]
+    ip_cfg: IpConfig,
+}
+
+impl From<RegisterPort> for RegisterPortReq {
+    fn from(r: RegisterPort) -> Self {
+        Self {
+            link_name: r.name,
+            ip_cfg: r.ip_cfg.into(),
+        }
+    }
+}
+
+#[derive(Debug, StructOpt)]
+struct IpConfig {
     /// Private IP address
     #[structopt(long)]
     private_ip: Ipv4Addr,
@@ -128,7 +146,7 @@ struct SetIpConfig {
 
     /// VPC subnet
     #[structopt(long)]
-    vpc_sub4: String,
+    vpc_sub4: VpcSubnet4,
 
     /// Gateway IP
     #[structopt(long)]
@@ -139,27 +157,27 @@ struct SetIpConfig {
     gw_mac: EtherAddr,
 }
 
-impl From<SetIpConfig> for SetIpConfigReq {
-    fn from(s: SetIpConfig) -> SetIpConfigReq {
-        SetIpConfigReq {
-            private_ip: s.private_ip.to_string(),
-            public_mac: s.public_mac.to_string(),
-            public_ip: s.public_ip.to_string(),
-            port_start: s.port_start.to_string(),
-            port_end: s.port_end.to_string(),
+impl From<IpConfig> for ioctl::IpConfig {
+    fn from(s: IpConfig) -> ioctl::IpConfig {
+        ioctl::IpConfig {
+            private_ip: s.private_ip,
+            public_mac: s.public_mac,
+            public_ip: s.public_ip,
+            port_start: s.port_start,
+            port_end: s.port_end,
             vpc_sub4: s.vpc_sub4,
-            gw_ip: s.gw_ip.to_string(),
-            gw_mac: s.gw_mac.to_string(),
+            gw_ip: s.gw_ip,
+            gw_mac: s.gw_mac,
         }
     }
 }
 
 fn print_port_header() {
-    println!("{:<6} {:<32} {:<24}", "MINOR", "LINK", "MAC ADDRESS");
+    println!("{:<32} {:<24}", "LINK", "MAC ADDRESS");
 }
 
-fn print_port((minor, link, mac): (minor_t, String, EtherAddr)) {
-    println!("{:<6} {:<32} {:<42}", minor, link, mac);
+fn print_port((link, mac): (String, EtherAddr)) {
+    println!("{:<32} {:<42}", link, mac);
 }
 
 fn print_flow_header() {
@@ -278,49 +296,54 @@ fn main() {
     let cmd = Command::from_args();
     match cmd {
         Command::ListPorts => {
-            let hdl = opteadm::OpteAdm::open_ctl().unwrap();
+            let hdl = opteadm::OpteAdm::open().unwrap();
             print_port_header();
             for p in hdl.list_ports().unwrap().ports {
                 print_port(p);
             }
         }
 
-        Command::SetIpConfig(req) => {
-            let hdl = opteadm::OpteAdm::open_port(&req.port).unwrap();
-            hdl.set_ip_config(&req.try_into().unwrap()).unwrap();
+        Command::RegisterPort(req) => {
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            hdl.register_port(&req.try_into().unwrap()).unwrap();
+        }
+
+        Command::UnregisterPort { name } => {
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            hdl.unregister_port(&name).unwrap();
         }
 
         Command::LayerDump { port, name } => {
-            let hdl = opteadm::OpteAdm::open_port(&port).unwrap();
-            print_layer(&hdl.get_layer_by_name(&name).unwrap());
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            print_layer(&hdl.get_layer_by_name(&port, &name).unwrap());
         }
 
         Command::UftDump { port } => {
-            let hdl = opteadm::OpteAdm::open_port(&port).unwrap();
-            print_uft(&hdl.uft().unwrap());
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            print_uft(&hdl.uft(&port).unwrap());
         }
 
         Command::TcpFlowsDump { port } => {
-            let hdl = opteadm::OpteAdm::open_port(&port).unwrap();
-            for (flow_id, entry) in hdl.tcp_flows().unwrap() {
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            for (flow_id, entry) in hdl.tcp_flows(&port).unwrap() {
                 println!("{} {:?}", flow_id, entry);
             }
         }
 
         Command::FwAdd { port, direction, filters, action, priority } => {
-            let hdl = opteadm::OpteAdm::open_port(&port).unwrap();
+            let hdl = opteadm::OpteAdm::open().unwrap();
             let rule = FirewallRule {
                 direction,
                 filters: filters.into(),
                 action,
                 priority,
             };
-            hdl.add_firewall_rule(&rule).unwrap();
+            hdl.add_firewall_rule(&port, &rule).unwrap();
         }
 
         Command::FwRm { port, direction, id } => {
-            let hdl = opteadm::OpteAdm::open_port(&port).unwrap();
-            let request = FwRemRuleReq { dir: direction, id };
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            let request = FwRemRuleReq { port_name: port, dir: direction, id };
             hdl.remove_firewall_rule(&request).unwrap();
         }
     }

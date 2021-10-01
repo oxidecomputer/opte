@@ -204,12 +204,14 @@ impl Firewall {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct FwRemRuleReq {
+    pub port_name: String,
     pub dir: Direction,
     pub id: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct FwAddRuleReq {
+    pub port_name: String,
     pub rule: FirewallRule,
 }
 

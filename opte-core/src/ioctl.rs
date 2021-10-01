@@ -15,16 +15,21 @@ use std::prelude::v1::*;
 use std::convert::TryFrom;
 use std::str::FromStr;
 
+use crate::ether::EtherAddr;
+use crate::ip4::Ipv4Addr;
+use crate::vpc::VpcSubnet4;
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub enum IoctlCmd {
     ListPorts = 1,     // list all ports
-    SetIpConfig = 2,   // set various IP config
-    FwAddRule = 3,     // add firewall rule
-    FwRemRule = 4,     // remove firewall rule
-    TcpFlowsDump = 6,  // dump TCP flows
-    LayerDump = 8,     // dump the specified Layer
-    UftDump = 9,       // dump the Unified Flow Table
+    RegisterPort = 2,     // register new port
+    UnregisterPort = 3,     // unregister port
+    FwAddRule = 20,     // add firewall rule
+    FwRemRule = 21,     // remove firewall rule
+    TcpFlowsDump = 30,  // dump TCP flows
+    LayerDump = 31,     // dump the specified Layer
+    UftDump = 32,       // dump the Unified Flow Table
 }
 
 impl TryFrom<c_int> for IoctlCmd {
@@ -33,12 +38,13 @@ impl TryFrom<c_int> for IoctlCmd {
     fn try_from(num: c_int) -> Result<Self, Self::Error> {
         match num {
             1 => Ok(IoctlCmd::ListPorts),
-            2 => Ok(IoctlCmd::SetIpConfig),
-            3 => Ok(IoctlCmd::FwAddRule),
-            4 => Ok(IoctlCmd::FwRemRule),
-            6 => Ok(IoctlCmd::TcpFlowsDump),
-            8 => Ok(IoctlCmd::LayerDump),
-            9 => Ok(IoctlCmd::UftDump),
+            2 => Ok(IoctlCmd::RegisterPort),
+            3 => Ok(IoctlCmd::UnregisterPort),
+            20 => Ok(IoctlCmd::FwAddRule),
+            21 => Ok(IoctlCmd::FwRemRule),
+            30 => Ok(IoctlCmd::TcpFlowsDump),
+            31 => Ok(IoctlCmd::LayerDump),
+            32 => Ok(IoctlCmd::UftDump),
             _ => Err(()),
         }
     }
@@ -61,22 +67,30 @@ pub struct Ioctl {
 
 pub type CmdResp<R> = Result<R, String>;
 
-// TODO These should really be String. A malicious client could craft
-// a byte stream and deserializes to these structures, but doesn't
-// conform to the checks make in their constructors.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct SetIpConfigReq {
-    pub private_ip: String,
-    pub public_mac: String,
-    pub public_ip: String,
-    pub port_start: String,
-    pub port_end: String,
-    pub vpc_sub4: String,
-    pub gw_mac: String,
-    pub gw_ip: String,
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct IpConfig {
+    pub private_ip: Ipv4Addr,
+    pub public_mac: EtherAddr,
+    pub public_ip: Ipv4Addr,
+    pub port_start: u16,
+    pub port_end: u16,
+    pub vpc_sub4: VpcSubnet4,
+    pub gw_mac: EtherAddr,
+    pub gw_ip: Ipv4Addr,
 }
 
-impl FromStr for SetIpConfigReq {
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RegisterPortReq {
+    pub link_name: String,
+    pub ip_cfg: IpConfig,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UnregisterPortReq {
+    pub name: String,
+}
+
+impl FromStr for IpConfig {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -92,35 +106,39 @@ impl FromStr for SetIpConfigReq {
         for token in s.split(" ") {
             match token.split_once("=") {
                 Some(("private_ip", val)) => {
-                    private_ip = Some(val.to_string());
+                    private_ip = Some(val.parse()?);
                 }
 
                 Some(("public_mac", val)) => {
-                    public_mac = Some(val.to_string());
+                    public_mac = Some(val.parse()?);
                 }
 
                 Some(("public_ip", val)) => {
-                    public_ip = Some(val.to_string());
+                    public_ip = Some(val.parse()?);
                 }
 
                 Some(("port_start", val)) => {
-                    port_start = Some(val.to_string());
+                    port_start = Some(
+                        val.parse::<u16>().map_err(|e| e.to_string())?
+                    );
                 }
 
                 Some(("port_end", val)) => {
-                    port_end = Some(val.to_string());
+                    port_end = Some(
+                        val.parse::<u16>().map_err(|e| e.to_string())?
+                    );
                 }
 
                 Some(("vpc_sub4", val)) => {
-                    vpc_sub4 = Some(val.to_string());
+                    vpc_sub4 = Some(val.parse()?);
                 }
 
                 Some(("gw_mac", val)) => {
-                    gw_mac = Some(val.to_string());
+                    gw_mac = Some(val.parse()?);
                 }
 
                 Some(("gw_ip", val)) => {
-                    gw_ip = Some(val.to_string());
+                    gw_ip = Some(val.parse()?);
                 }
 
                 _ => {
@@ -161,7 +179,7 @@ impl FromStr for SetIpConfigReq {
             return Err(format!("missing gw_ip"));
         }
 
-        Ok(SetIpConfigReq {
+        Ok(IpConfig {
             private_ip: private_ip.unwrap(),
             public_mac: public_mac.unwrap(),
             public_ip: public_ip.unwrap(),
@@ -181,5 +199,5 @@ pub struct ListPortsReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListPortsResp {
-    pub ports: Vec<(illumos_ddi_dki::minor_t, String, crate::ether::EtherAddr)>,
+    pub ports: Vec<(String, crate::ether::EtherAddr)>,
 }

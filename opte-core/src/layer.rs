@@ -1180,9 +1180,11 @@ fn find_rule() {
 /// * The inbound and outbound rule tables.
 /// * The inbound and outbound flow tables.
 ///
-/// *name*: The name of the `Layer` to dump.
+/// *port_name*: The name of the port.
+/// *name*: The name of the [`Layer`] to dump.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct LayerDumpReq {
+    pub port_name: String,
     pub name: String,
 }
 

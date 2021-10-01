@@ -19,6 +19,7 @@ use alloc::prelude::v1::*;
 #[cfg(any(feature = "std", test))]
 use std::prelude::v1::*;
 
+use std::convert::TryFrom;
 use std::result;
 use std::str::FromStr;
 
@@ -29,8 +30,17 @@ pub const OXIDE_MIN_IP4_BLOCK: u8 = 26;
 
 pub type Result<T> = result::Result<T, IpError>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "VpcSubnet4Deser")]
 pub struct VpcSubnet4 {
+    cidr: Ipv4Cidr,
+}
+
+/// A shadow type of [`VpcSubnet4`] dedicated to desersialization of
+/// user-input data. This makes sure that any data deserialized via
+/// serde is still sent through [`VpcSubnet4::new()`] for validation.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct VpcSubnet4Deser {
     cidr: Ipv4Cidr,
 }
 
@@ -94,6 +104,14 @@ impl VpcSubnet4 {
                 return Err(IpError::Ipv4NonPrivateNetwork(ip));
             }
         }
+    }
+}
+
+impl TryFrom<VpcSubnet4Deser> for VpcSubnet4 {
+    type Error = IpError;
+
+    fn try_from(val: VpcSubnet4Deser) -> Result<Self> {
+        Self::new(val.cidr)
     }
 }
 
