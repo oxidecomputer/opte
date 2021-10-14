@@ -31,8 +31,10 @@ pub struct FlowTable<S> {
     name: String,
     limit: u32,
 
-    // TODO: Using a Vec for now because of Double Fault with BTreeMap
-    // that I don't have time to debug at the moment.
+    // XXX I originally commented this out because I thought it was
+    // causing a double fault that I was seeing, but the DFs were
+    // actually being caused by blowing the kernel stack. Go ahead and
+    // reinstate the BTreeMap.
     //
     // map: BTreeMap<FlowId, FlowState>,
     map: Vec<(InnerFlowId, FlowEntry<S>)>,
@@ -283,7 +285,7 @@ impl StateSummary for () {
 #[test]
 fn flow_expired() {
     use crate::ip4::Protocol;
-    use crate::layer::IpAddr;
+    use crate::headers::IpAddr;
 
     let flowid = InnerFlowId {
         proto: Protocol::TCP,

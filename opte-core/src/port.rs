@@ -1,3 +1,6 @@
+use core::convert::TryFrom;
+use core::result;
+
 /// A virtual switch port.
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::{String, ToString};
@@ -13,23 +16,19 @@ use illumos_ddi_dki::hrtime_t;
 #[cfg(any(feature = "std", test))]
 use std::time::Instant;
 
-use std::convert::TryFrom;
-
 use serde::{Deserialize, Serialize};
 
 use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
 use crate::flow_table::{FlowEntryDump, FlowTable, StateSummary};
 use crate::headers::IpMeta;
 use crate::ioctl::CmdResp;
-use crate::ip4::{Ipv4Addr, Protocol};
+use crate::ip4::Protocol;
 use crate::layer::{
-    InnerFlowId, Layer, LayerDumpResp, LayerResult, FLOW_ID_DEFAULT,
+    InnerFlowId, Layer, LayerDumpResp, LayerError, LayerResult, RuleId,
+    FLOW_ID_DEFAULT,
 };
-use crate::nat::NatPool;
-use crate::packet::{
-    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
-};
-use crate::rule::{ht_fire_probe, Resources, Rule, HT};
+use crate::packet::{Initialized, Packet, PacketMeta, Parsed};
+use crate::rule::{ht_fire_probe, Finalized, Rule, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::tcp::TcpState;
 use crate::tcp_state::{self, TcpFlowState};
@@ -39,25 +38,59 @@ use illumos_ddi_dki::uintptr_t;
 
 pub const UFT_DEF_MAX_ENTIRES: u32 = 8192;
 
+#[derive(Clone, Debug)]
+pub enum Error {
+    BadLayerPos { name: String, pos: Pos },
+    LayerNotFound { name: String },
+    RuleNotFound { layer: String, dir: Direction, id: RuleId }
+}
+
+pub type Result<T> = result::Result<T, Error>;
+
+#[derive(Debug)]
+pub enum ProcessError {
+    Layer(LayerError),
+    // ResourceError(ResourceError),
+    WriteError(crate::packet::WriteError),
+}
+
+impl From<crate::packet::WriteError> for ProcessError {
+    fn from(e: crate::packet::WriteError) -> Self {
+        Self::WriteError(e)
+    }
+}
+
+/// The result of processing a packet.
+///
+/// * Bypass: Let this packet bypass the system; do not process it at
+/// all. XXX This is probably going away as its only use is for
+/// punting on traffic I didn't want to deal with yet.
+///
+/// * Drop: The packet has beend dropped, as determined by the rules
+/// or because of resource exhaustion.
+///
+/// * Modified: The packet has been modified based on its matching rules.
+///
+/// * Hairpin: One of the layers has determined that it should reply
+/// directly with a packet of its own. In this case the original
+/// packet is dropped.
 #[derive(Debug)]
 pub enum ProcessResult {
-    Bypass(PacketMeta),
+    Bypass,
     Drop,
-    Modify(PacketMeta),
+    Modified,
     Hairpin(Packet<Initialized>),
 }
 
-pub struct Port {
-    #[allow(dead_code)]
-    name: String,
-    #[allow(dead_code)]
-    mac: EtherAddr,
-    // TODO: Eventually the IP will be specified at the time of Port
-    // creation. But right now OPTE is welded into viona and we can't
-    // get this information until after the Port has been created.
-    ip: KMutex<Option<Ipv4Addr>>,
+pub trait PortState {}
+
+pub struct Inactive {
     layers: KMutex<Vec<Layer>>,
-    resources: Resources,
+}
+
+pub struct Active {
+    // TODO: Could I use const generics here in order to use array instead?
+    layers: Vec<Layer>,
     uft_in: KMutex<FlowTable<Vec<HT>>>,
     uft_out: KMutex<FlowTable<Vec<HT>>>,
     // We keep a record of the inbound UFID in the TCP flow table so
@@ -66,33 +99,79 @@ pub struct Port {
     tcp_flows: KMutex<FlowTable<TcpFlowEntryState>>,
 }
 
-impl Port {
-    // TODO Maybe Pipeline should be merged in Port?
+impl PortState for Inactive {}
+impl PortState for Active {}
+
+
+pub struct Port<S: PortState> {
+    state: S,
+    name: String,
+    mac: EtherAddr,
+}
+
+impl Port<Inactive> {
+    pub fn activate(self) -> Port<Active> {
+        Port {
+            state: Active {
+                // An active port's layer pipeline is immutable, thus
+                // we move the layers out of the mutex.
+                layers: self.state.layers.into_inner(),
+                uft_in: KMutex::new(
+                    FlowTable::new(
+                        "uft-in".to_string(),
+                        Some(UFT_DEF_MAX_ENTIRES)
+                    ),
+                    KMutexType::Driver,
+                ),
+                uft_out: KMutex::new(
+                    FlowTable::new(
+                        "uft-out".to_string(),
+                        Some(UFT_DEF_MAX_ENTIRES)
+                    ),
+                    KMutexType::Driver,
+                ),
+                tcp_flows: KMutex::new(
+                    FlowTable::new(
+                        "tcp-flows".to_string(),
+                        Some(UFT_DEF_MAX_ENTIRES)
+                    ),
+                    KMutexType::Driver,
+                ),
+
+            },
+            name: self.name,
+            mac: self.mac,
+        }
+    }
 
     /// Add a new layer to the pipeline. The position may be first,
     /// last, or relative to another layer. The position is based on
     /// the outbound direction. The first layer is the first to see
     /// a packet from the guest. The last is the last to see a packet
     /// before it is delivered to the guest.
-    pub fn add_layer(&self, new_layer: Layer, pos: Pos) {
-        let mut lock = self.layers.lock().unwrap();
+    pub fn add_layer(
+        &self,
+        new_layer: Layer,
+        pos: Pos
+    ) -> Result<()> {
+        let mut lock = self.state.layers.lock();
 
         match pos {
             Pos::Last => {
                 lock.push(new_layer);
-                return;
+                return Ok(());
             }
 
             Pos::First => {
                 lock.insert(0, new_layer);
-                return;
+                return Ok(());
             }
 
             Pos::Before(name) => {
                 for (i, layer) in lock.iter().enumerate() {
                     if layer.name() == name {
                         lock.insert(i, new_layer);
-                        return;
+                        return Ok(());
                     }
                 }
             }
@@ -101,37 +180,95 @@ impl Port {
                 for (i, layer) in lock.iter().enumerate() {
                     if layer.name() == name {
                         lock.insert(i + 1, new_layer);
-                        return;
+                        return Ok(());
                     }
                 }
             }
         }
 
-        panic!("bad position for layer: {}", new_layer.name());
+        Err(Error::BadLayerPos { name: new_layer.name().to_string(), pos })
     }
 
+    pub fn new(name: String, mac: EtherAddr) -> Self {
+        Port {
+            state: Inactive {
+                layers: KMutex::new(Vec::new(), KMutexType::Driver),
+            },
+            name,
+            mac,
+        }
+    }
+
+    /// Remove the [`Layer`] registered under `name`, if such a layer
+    /// exists.
+    pub fn remove_layer(&self, name: &str) {
+        let mut lock = self.state.layers.lock();
+
+        for (i, layer) in lock.iter().enumerate() {
+            if layer.name() == name {
+                let _ = lock.remove(i);
+                return;
+            }
+        }
+    }
+}
+
+impl Port<Active> {
     /// Add a new `Rule` to the layer named by `layer`, if such a
     /// layer exists. Otherwise, return an error.
     pub fn add_rule(
         &self,
         layer_name: &str,
         dir: Direction,
-        rule: Rule,
-    ) -> Result<(), String> {
-        for layer in &*self.layers.lock().unwrap() {
+        rule: Rule<Finalized>,
+    ) -> Result<()> {
+        for layer in &*self.state.layers {
             if layer.name() == layer_name {
                 layer.add_rule(dir, rule);
                 return Ok(());
             }
         }
 
-        Err(format!("layer {} not found", layer_name))
+        Err(Error::LayerNotFound { name: layer_name.to_string() })
+    }
+
+    // XXX While it's been helpful to panic on a bad packet for the
+    // purposes of developement, this needs to go away before v1.
+    // While an error here is probably an indication of a bug or some
+    // very odd input (which is probably still a bug because we should
+    // gracefully deal with whatever the network throws at us), we
+    // need to NOT panic in this case. Instead, we'll want to perform
+    // several steps:
+    //
+    // 1. Collect all the useful data that one might need to
+    // understand why this event occured.
+    //
+    // 2. Fire a DTrace probe with pointers to this data.
+    //
+    // 3. Increment a kstat to indicate this even has occurred.
+    //
+    // 4. Send an event to FMA that includes all the data in step (1).
+    //
+    fn bad_packet_err(
+        &self,
+        msg: String,
+        ptr: uintptr_t,
+        ifid: &InnerFlowId
+    ) -> ! {
+        crate::dbg(format!("ptr: {:x}", ptr));
+        crate::dbg(format!("ifid: {}", ifid));
+        // crate::dbg(format!("meta: {:?}", meta));
+        crate::dbg(format!(
+            "flows: {:?}",
+            *self.state.tcp_flows.lock(),
+        ));
+        todo!("bad packet: {}", msg);
     }
 
     /// Dump the contents of the layer named `name`, if such a layer
     /// exists.
     pub fn dump_layer(&self, name: &str) -> CmdResp<LayerDumpResp> {
-        for l in &*self.layers.lock().unwrap() {
+        for l in &*self.state.layers {
             if l.name() == name {
                 return Ok(l.dump());
             }
@@ -142,18 +279,18 @@ impl Port {
 
     /// Dump the contents of the TCP flow connection tracking table.
     pub fn dump_tcp_flows(&self) -> TcpFlowsDumpResp {
-        TcpFlowsDumpResp { flows: self.tcp_flows.lock().unwrap().dump() }
+        TcpFlowsDumpResp { flows: self.state.tcp_flows.lock().dump() }
     }
 
     /// Dump the contents of the Unified Flow Table.
     pub fn dump_uft(&self) -> UftDumpResp {
-        let in_lock = self.uft_in.lock().unwrap();
+        let in_lock = self.state.uft_in.lock();
         let uft_in_limit = in_lock.get_limit();
         let uft_in_num_flows = in_lock.num_flows();
         let uft_in = in_lock.dump();
         drop(in_lock);
 
-        let out_lock = self.uft_out.lock().unwrap();
+        let out_lock = self.state.uft_out.lock();
         let uft_out_limit = out_lock.get_limit();
         let uft_out_num_flows = out_lock.num_flows();
         let uft_out = out_lock.dump();
@@ -172,118 +309,106 @@ impl Port {
     /// Expire all flows whose TTL is overdue as of `now`.
     #[cfg(all(not(feature = "std"), not(test)))]
     pub fn expire_flows(&self, now: hrtime_t) {
-        for l in &*self.layers.lock().unwrap() {
+        for l in &self.state.layers {
             l.expire_flows(now);
         }
-        self.uft_in.lock().unwrap().expire_flows(now);
-        self.uft_out.lock().unwrap().expire_flows(now);
+        self.state.uft_in.lock().expire_flows(now);
+        self.state.uft_out.lock().expire_flows(now);
     }
 
     #[cfg(any(feature = "std", test))]
     pub fn expire_flows(&self, now: Instant) {
-        for l in &*self.layers.lock().unwrap() {
+        for l in &self.state.layers {
             l.expire_flows(now);
         }
-        self.uft_in.lock().unwrap().expire_flows(now);
-        self.uft_out.lock().unwrap().expire_flows(now);
+        self.state.uft_in.lock().expire_flows(now);
+        self.state.uft_out.lock().expire_flows(now);
     }
 
-    // Process the packet metadata against each layer in turn. If any
-    // layer rejects the packet it will return `Deny`, causing
-    // immediate return of `Deny` from this function. Otherwise,
-    // `Allow` is returned, `meta` contains the updated metadata, and
-    // `hts` contains the list of HTs run against the metadata.
+    // Process the packet against each layer in turn. If `Allow` is
+    // returned, then `meta` contains the updated metadata, and `hts`
+    // contains the list of HTs run against the metadata.
+    //
+    // Processing may return early for several reasons.
+    //
+    // * Deny: A layer can choose to deny a packet, in which case the
+    // packet is dropped and no further processing is done.
+    //
+    // * Hairpin: A layer has generated a hairpin packet.
+    //
+    // * Error: An error has ocurred and processing cannot continue.
     fn layers_process(
         &self,
         dir: Direction,
-        meta: &mut PacketMeta,
-        rdr: &mut PacketReader<Parsed, ()>,
+        pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
-        resources: &Resources,
-    ) -> LayerResult {
+        meta: &mut meta::Meta,
+    ) -> result::Result<LayerResult, LayerError> {
         match dir {
             Direction::Out => {
-                for layer in &*self.layers.lock().unwrap() {
-                    match layer.process(dir, meta, rdr, hts, resources) {
-                        LayerResult::Allow => (),
-                        ret @ LayerResult::Deny => return ret,
-                        // Hairpin consumes the packet and no further
-                        // processing takes place.
-                        ret @ LayerResult::Hairpin(_) => return ret,
+                for layer in &self.state.layers {
+                    match layer.process(dir, pkt, hts, meta) {
+                        Ok(LayerResult::Allow) => (),
+                        ret @ Ok(LayerResult::Deny) => return ret,
+                        ret @ Ok(LayerResult::Hairpin(_)) => return ret,
+                        ret @ Err(_) => return ret,
                     }
                 }
             }
 
             Direction::In => {
-                for layer in self.layers.lock().unwrap().iter().rev() {
-                    match layer.process(dir, meta, rdr, hts, resources) {
-                        LayerResult::Allow => (),
-                        ret @ LayerResult::Deny => return ret,
-                        // Hairpin consumes the packet and no further
-                        // processing takes place.
-                        ret @ LayerResult::Hairpin(_) => return ret,
+                for layer in self.state.layers.iter().rev() {
+                    match layer.process(dir, pkt, hts, meta) {
+                        Ok(LayerResult::Allow) => (),
+                        ret @ Ok(LayerResult::Deny) => return ret,
+                        ret @ Ok(LayerResult::Hairpin(_)) => return ret,
+                        ret @ Err(_) => return ret,
                     }
                 }
             }
         }
 
-        return LayerResult::Allow;
+        return Ok(LayerResult::Allow);
     }
 
-    pub fn new(name: String, mac: EtherAddr) -> Self {
-        let resources = Resources::new();
-        let layers = KMutex::new(Vec::new(), KMutexType::Driver);
-        let ip = KMutex::new(None, KMutexType::Driver);
-        let uft_in = KMutex::new(
-            FlowTable::new("uft-in".to_string(), Some(UFT_DEF_MAX_ENTIRES)),
-            KMutexType::Driver,
-        );
-        let uft_out = KMutex::new(
-            FlowTable::new("uft-out".to_string(), Some(UFT_DEF_MAX_ENTIRES)),
-            KMutexType::Driver,
-        );
-
-        let tcp_flows = KMutex::new(
-            FlowTable::new("tcp-flows".to_string(), Some(UFT_DEF_MAX_ENTIRES)),
-            KMutexType::Driver,
-        );
-
-        Port { name, mac, ip, layers, resources, uft_in, uft_out, tcp_flows }
-    }
-
-    /// Process the packet represented by the bytes returned by `rdr`.
+    /// Process the packet.
     pub fn process(
         &self,
         dir: Direction,
         pkt: &mut Packet<Parsed>,
         ptr: uintptr_t,
-    ) -> ProcessResult {
+    ) -> std::result::Result<ProcessResult, ProcessError> {
         port_process_entry_probe(dir, &self.name);
+        let mut meta = meta::Meta::new();
         let res = match dir {
-            Direction::Out => self.process_out(pkt, ptr),
-            Direction::In => self.process_in(pkt, ptr),
+            Direction::Out => self.process_out(pkt, ptr, &mut meta),
+            Direction::In => self.process_in(pkt, ptr, &mut meta),
         };
         port_process_return_probe(dir, &self.name);
+        pkt.emit_headers()?;
         res
     }
 
     // Process the TCP packet for the purposes of connection tracking
     // when an inbound UFT entry exists.
+    //
+    // NOTE: This function is for internal use only, and thus returns
+    // a standard Result type.
     fn process_in_tcp_existing(
         &self,
-        meta: PacketMeta,
-    ) -> Result<(TcpState, PacketMeta), String> {
+        meta: &PacketMeta,
+    ) -> std::result::Result<TcpState, String> {
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we take the dual.
-        let ifid_after = InnerFlowId::try_from(&meta).unwrap().dual();
-        let mut lock = self.tcp_flows.lock().unwrap();
+        let ifid_after = InnerFlowId::try_from(meta).unwrap().dual();
+        let tcp = meta.inner_tcp().unwrap();
+        let mut lock = self.state.tcp_flows.lock();
 
         let tcp_state = match lock.get_mut(&ifid_after) {
             Some((_, entry)) => {
                 let tfes = entry.get_state_mut();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    let tcp = tcp_state::get_tcp_meta(&meta);
                     tcp_state::tcp_flow_drop_probe(
                         &ifid_after,
                         &tfes.tcp_state,
@@ -291,13 +416,18 @@ impl Port {
                         tcp.flags,
                     );
 
-                    return Ok((TcpState::Closed, meta));
+                    return Ok(TcpState::Closed);
                 }
 
                 // The connection may have transitioned to CLOSED, but
                 // we don't remove its entry here. That happens as
                 // part of the expiration logic.
-                let res = tfes.tcp_state.process(Direction::In, &meta);
+                let res = tfes.tcp_state.process(
+                    Direction::In,
+                    &ifid_after,
+                    tcp
+                );
+
                 match res {
                     Ok(tcp_state) => tcp_state,
                     Err(e) => return Err(e),
@@ -307,20 +437,24 @@ impl Port {
             None => return Err(format!("TCP flow missing: {}", ifid_after)),
         };
 
-        Ok((tcp_state, meta))
+        Ok(tcp_state)
     }
 
     // Process the TCP packet for the purposes of connection tracking
     // when an inbound UFT entry was just created.
+    //
+    // NOTE: This function is for internal use only, and thus returns
+    // a standard Result type.
     fn process_in_tcp_new(
         &self,
-        ifid: InnerFlowId,
-        meta: PacketMeta,
-    ) -> Result<(TcpState, PacketMeta), String> {
+        ifid: &InnerFlowId,
+        meta: &PacketMeta,
+    ) -> std::result::Result<TcpState, String> {
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we take the dual.
-        let ifid_after = InnerFlowId::try_from(&meta).unwrap().dual();
-        let mut lock = self.tcp_flows.lock().unwrap();
+        let ifid_after = InnerFlowId::try_from(meta).unwrap().dual();
+        let mut lock = self.state.tcp_flows.lock();
+        let tcp = meta.inner_tcp().unwrap();
 
         let tcp_state = match lock.get_mut(&ifid_after) {
             // We may have already created a TCP flow entry due to an
@@ -330,18 +464,22 @@ impl Port {
                 let tfes = entry.get_state_mut();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    let tcp = tcp_state::get_tcp_meta(&meta);
-                    tcp_state::tcp_flow_drop_probe(
+                     tcp_state::tcp_flow_drop_probe(
                         &ifid_after,
                         &tfes.tcp_state,
                         Direction::In,
                         tcp.flags,
                     );
 
-                    return Ok((TcpState::Closed, meta));
+                    return Ok(TcpState::Closed);
                 }
 
-                let res = tfes.tcp_state.process(Direction::In, &meta);
+                let res = tfes.tcp_state.process(
+                    Direction::In,
+                    &ifid_after,
+                    &tcp
+                );
+
                 let tcp_state = match res {
                     Ok(tcp_state) => tcp_state,
                     Err(e) => return Err(e),
@@ -352,7 +490,7 @@ impl Port {
                 // correct UFT/LFT entries upon connection
                 // termination.
                 if tfes.inbound_ufid.is_none() {
-                    tfes.inbound_ufid = Some(ifid);
+                    tfes.inbound_ufid = Some(*ifid);
                 }
 
                 tcp_state
@@ -362,7 +500,6 @@ impl Port {
                 // Add a new flow entry in the `Listen` state, we'll
                 // wait for the outgoing SYN+ACK to transition to
                 // `SynRcvd`.
-                let tcp = crate::tcp_state::get_tcp_meta(&meta);
                 let tfs =
                     TcpFlowState::new(TcpState::Listen, None, Some(tcp.seq));
 
@@ -370,7 +507,7 @@ impl Port {
                 let tfes = TcpFlowEntryState {
                     // This must be the UFID of inbound traffic _as it
                     // arrives_, not after it's processed.
-                    inbound_ufid: Some(ifid),
+                    inbound_ufid: Some(*ifid),
                     tcp_state: tfs,
                 };
                 lock.add(ifid_after, tfes);
@@ -379,159 +516,140 @@ impl Port {
             }
         };
 
-        Ok((tcp_state, meta))
+        Ok(tcp_state)
     }
 
     pub fn process_in(
         &self,
         pkt: &mut Packet<Parsed>,
         ptr: uintptr_t,
-    ) -> ProcessResult {
-        // TODO For now we modify a copy of the packet's metadata.
-        let mut meta = pkt.clone_meta();
-        let etype = meta.inner_ether.as_ref().unwrap().ether_type;
-
-        // TODO: Deal with non-IPv4/ARP, for now we let all
-        // non-IPv4/ARP ether types proceed untouched.
-        if etype != ETHER_TYPE_IPV4 && etype != ETHER_TYPE_ARP {
-            return ProcessResult::Bypass(meta);
-        }
-
-        let ifid = InnerFlowId::try_from(&meta).unwrap();
+        meta: &mut meta::Meta,
+    ) -> result::Result<ProcessResult, ProcessError> {
+        let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
 
         // There is no FlowId, thus there can be no use of the UFT.
         if ifid == FLOW_ID_DEFAULT {
             let mut hts = Vec::new();
-            let body_offset = pkt.body_offset();
-            let mut rdr = PacketReader::new(pkt, ());
-            rdr.seek(body_offset as usize).unwrap();
             let res = self.layers_process(
                 Direction::In,
-                &mut meta,
-                &mut rdr,
+                pkt,
                 &mut hts,
-                &self.resources,
+                meta,
             );
-            let _ = rdr.finish();
 
             match res {
-                LayerResult::Allow => return ProcessResult::Modify(meta),
-                LayerResult::Hairpin(hppkt) => {
-                    return ProcessResult::Hairpin(hppkt);
+                Ok(LayerResult::Allow) => {
+                    return Ok(ProcessResult::Modified);
                 }
-                LayerResult::Deny => return ProcessResult::Drop,
+
+                Ok(LayerResult::Hairpin(hppkt)) => {
+                    return Ok(ProcessResult::Hairpin(hppkt));
+                }
+
+                Ok(LayerResult::Deny) => return Ok(ProcessResult::Drop),
+
+                Err(e) => return Err(ProcessError::Layer(e)),
             }
         }
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        match self.uft_in.lock().unwrap().get_mut(&ifid) {
+        match self.state.uft_in.lock().get_mut(&ifid) {
             Some((_, entry)) => {
                 entry.hit();
                 for ht in entry.get_state() {
-                    ht.run(&mut meta);
-                    let ifid_after = InnerFlowId::try_from(&meta).unwrap();
-
+                    ht.run(pkt.meta_mut());
+                    let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
                     ht_fire_probe("UFT", Direction::In, &ifid, &ifid_after);
                 }
 
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
-                if meta.is_tcp() {
-                    match self.process_in_tcp_existing(meta) {
+                if pkt.meta().is_inner_tcp() {
+                    match self.process_in_tcp_existing(pkt.meta()) {
                         // Drop any data that comes in after close.
-                        Ok((TcpState::Closed, _meta)) => {
-                            return ProcessResult::Drop;
+                        Ok(TcpState::Closed) => {
+                            return Ok(ProcessResult::Drop);
                         }
 
-                        Ok((_, meta)) => {
-                            return ProcessResult::Modify(meta);
+                        Ok(_) => {
+                            return Ok(ProcessResult::Modified);
                         }
 
                         Err(e) => {
-                            crate::dbg(format!("ptr: {:x}", ptr));
-                            crate::dbg(format!("ifid: {}", ifid));
-                            // crate::dbg(format!("meta: {:?}", meta));
-                            crate::dbg(format!(
-                                "flows: {:?}",
-                                *self.tcp_flows.lock().unwrap()
-                            ));
-                            panic!("bad packet: {}", e);
+                            self.bad_packet_err(e, ptr, &ifid);
                         }
                     }
                 }
 
-                return ProcessResult::Modify(meta);
+                return Ok(ProcessResult::Modified);
             }
 
             None => (),
         }
 
         let mut hts = Vec::new();
-        let body_offset = pkt.body_offset();
-        let mut rdr = PacketReader::new(pkt, ());
-        rdr.seek(body_offset as usize).unwrap();
         let res = self.layers_process(
             Direction::In,
-            &mut meta,
-            &mut rdr,
+            pkt,
             &mut hts,
-            &self.resources,
+            meta
         );
-        let _ = rdr.finish();
 
         match res {
-            LayerResult::Allow => {
-                self.uft_in.lock().unwrap().add(ifid, hts);
+            Ok(LayerResult::Allow) => {
+                self.state.uft_in.lock().add(ifid, hts);
 
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
-                if meta.is_tcp() {
-                    match self.process_in_tcp_new(ifid, meta) {
+                if pkt.meta().is_inner_tcp() {
+                    match self.process_in_tcp_new(&ifid, pkt.meta()) {
                         // Drop any data that comes in after close.
-                        Ok((TcpState::Closed, _meta)) => {
-                            return ProcessResult::Drop;
+                        Ok(TcpState::Closed) => {
+                            return Ok(ProcessResult::Drop);
                         }
 
-                        Ok((_, meta)) => {
-                            return ProcessResult::Modify(meta);
+                        Ok(_) => {
+                            return Ok(ProcessResult::Modified);
                         }
 
                         Err(e) => {
-                            crate::dbg(format!("ptr: {:x}", ptr));
-                            crate::dbg(format!("ifid: {}", ifid));
-                            // crate::dbg(format!("meta: {:?}", meta));
-                            crate::dbg(format!(
-                                "flows: {:?}",
-                                *self.tcp_flows.lock().unwrap()
-                            ));
-                            panic!("bad packet: {}", e);
+                            self.bad_packet_err(e, ptr, &ifid);
                         }
                     }
                 }
 
-                ProcessResult::Modify(meta)
+                Ok(ProcessResult::Modified)
             }
 
-            LayerResult::Deny => ProcessResult::Drop,
+            Ok(LayerResult::Deny) => Ok(ProcessResult::Drop),
 
-            LayerResult::Hairpin(hppkt) => ProcessResult::Hairpin(hppkt),
+            Ok(LayerResult::Hairpin(hppkt)) => {
+                Ok(ProcessResult::Hairpin(hppkt))
+            }
+
+            Err(e) => Err(ProcessError::Layer(e)),
         }
     }
 
     // Process the TCP packet for the purposes of connection tracking
     // when an outbound UFT entry exists.
+    //
+    // NOTE: This function is for internal use only, and thus returns
+    // a standard Result type.
     fn process_out_tcp_existing(
         &self,
         ifid: &InnerFlowId,
         meta: &PacketMeta,
-    ) -> Result<TcpState, String> {
-        let tcp_state = match self.tcp_flows.lock().unwrap().get_mut(&ifid) {
+    ) -> std::result::Result<TcpState, String> {
+        let mut lock = self.state.tcp_flows.lock();
+
+        let tcp_state = match lock.get_mut(&ifid) {
             Some((_, entry)) => {
                 let tfes = entry.get_state_mut();
+                let tcp = meta.inner_tcp().unwrap();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    let tcp = tcp_state::get_tcp_meta(&meta);
                     tcp_state::tcp_flow_drop_probe(
                         &ifid,
                         &tfes.tcp_state,
@@ -545,7 +663,7 @@ impl Port {
                 // The connection may have transitioned to CLOSED, but
                 // we don't remove its entry here. That happens as
                 // part of the expiration logic.
-                let res = tfes.tcp_state.process(Direction::Out, meta);
+                let res = tfes.tcp_state.process(Direction::Out, ifid, tcp);
                 match res {
                     Ok(tcp_state) => tcp_state,
 
@@ -562,12 +680,17 @@ impl Port {
 
     // Process the TCP packet for the purposes of connection tracking
     // when an outbound UFT entry was just created.
+    //
+    // NOTE: This function is for internal use only, and thus returns
+    // a standard Result type.
     fn process_out_tcp_new(
         &self,
         ifid: InnerFlowId,
         meta: &PacketMeta,
-    ) -> Result<TcpState, String> {
-        let mut lock = self.tcp_flows.lock().unwrap();
+    ) -> std::result::Result<TcpState, String> {
+        let tcp = meta.inner_tcp().unwrap();
+        let mut lock = self.state.tcp_flows.lock();
+
         let tcp_state = match lock.get_mut(&ifid) {
             // We may have already created a TCP flow entry
             // due to an inbound packet.
@@ -575,7 +698,6 @@ impl Port {
                 let tfes = entry.get_state_mut();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    let tcp = tcp_state::get_tcp_meta(&meta);
                     tcp_state::tcp_flow_drop_probe(
                         &ifid,
                         &tfes.tcp_state,
@@ -586,7 +708,7 @@ impl Port {
                     return Ok(TcpState::Closed);
                 }
 
-                let res = tfes.tcp_state.process(Direction::Out, &meta);
+                let res = tfes.tcp_state.process(Direction::Out, &ifid, &tcp);
                 match res {
                     Ok(tcp_state) => tcp_state,
 
@@ -599,11 +721,10 @@ impl Port {
                 // Create a new entry and find its current state. In
                 // this case it should always be `SynSent` as a flow
                 // would have already existed in the `SynRcvd` case.
-                let tcp = crate::tcp_state::get_tcp_meta(&meta);
                 let mut tfs =
                     TcpFlowState::new(TcpState::Closed, Some(tcp.seq), None);
 
-                let tcp_state = match tfs.process(Direction::Out, &meta) {
+                let tcp_state = match tfs.process(Direction::Out, &ifid, &tcp) {
                     Ok(tcp_state) => tcp_state,
 
                     // TODO SDT probe for rejected packet.
@@ -628,78 +749,66 @@ impl Port {
         &self,
         pkt: &mut Packet<Parsed>,
         ptr: uintptr_t,
-    ) -> ProcessResult {
-        let mut meta = pkt.clone_meta();
-        let etype = meta.inner_ether.as_ref().unwrap().ether_type;
+        meta: &mut meta::Meta,
+    ) -> result::Result<ProcessResult, ProcessError> {
+        let etype = pkt.meta().inner.ether.as_ref().unwrap().ether_type;
 
         // TODO: Deal with non-IPv4/ARP, for now we let all
         // non-IPv4/ARP proceed untouched.
         if etype != ETHER_TYPE_IPV4 && etype != ETHER_TYPE_ARP {
-            return ProcessResult::Bypass(meta);
+            return Ok(ProcessResult::Bypass);
         }
 
         // TODO: Deal with IGMP, for now we let IGMP pass through
         // untouched.
-        if let Some(IpMeta::Ip4(ip4)) = &meta.inner_ip {
+        if let Some(IpMeta::Ip4(ip4)) = &pkt.meta().inner.ip {
             if ip4.proto == Protocol::IGMP {
-                return ProcessResult::Bypass(meta);
+                return Ok(ProcessResult::Bypass);
             }
         }
 
-        let ifid = InnerFlowId::try_from(&meta).unwrap();
+        let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
 
         // There is no FlowId, thus there can be no use of the UFT.
         if ifid == FLOW_ID_DEFAULT {
             let mut hts = Vec::new();
-            // TODO While this works for now it might be nice to have
-            // a more dedicated type/mechanism for dealing with the
-            // body. For example, we know this seek() call can't fail,
-            // but the current abstraction isn't powerful enough to
-            // encode that in the type system.
-            let body_offset = pkt.body_offset();
-            let mut rdr = PacketReader::new(pkt, ());
-            rdr.seek(body_offset as usize).unwrap();
             let res = self.layers_process(
                 Direction::Out,
-                &mut meta,
-                &mut rdr,
+                pkt,
                 &mut hts,
-                &self.resources,
+                meta,
             );
-            let _ = rdr.finish();
 
             match res {
-                LayerResult::Allow => return ProcessResult::Modify(meta),
-                LayerResult::Hairpin(hppkt) => {
-                    return ProcessResult::Hairpin(hppkt);
+                Ok(LayerResult::Allow) => {
+                    return Ok(ProcessResult::Modified);
                 }
-                LayerResult::Deny => return ProcessResult::Drop,
+
+                Ok(LayerResult::Hairpin(hppkt)) => {
+                    return Ok(ProcessResult::Hairpin(hppkt));
+                }
+
+                Ok(LayerResult::Deny) => return Ok(ProcessResult::Drop),
+                Err(e) => return Err(ProcessError::Layer(e)),
             }
         }
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        match self.uft_out.lock().unwrap().get_mut(&ifid) {
+        match self.state.uft_out.lock().get_mut(&ifid) {
             Some((_, entry)) => {
                 entry.hit();
 
                 // For outbound traffic the TCP flow table must be
                 // checked _before_ processing take place.
-                if meta.is_tcp() {
-                    match self.process_out_tcp_existing(&ifid, &meta) {
+                if pkt.meta().is_inner_tcp() {
+                    match self.process_out_tcp_existing(&ifid, pkt.meta()) {
                         Err(e) => {
-                            crate::dbg(format!("ptr: {:x}", ptr));
-                            crate::dbg(format!("ifid: {}", ifid));
-                            // crate::dbg(format!("meta: {:?}", meta));
-                            crate::dbg(format!(
-                                "flows: {:?}",
-                                *self.tcp_flows.lock().unwrap()
-                            ));
-                            panic!("bad packet: {}", e);
+                            self.bad_packet_err(e, ptr, &ifid);
                         }
 
                         // Drop any data that comes in after close.
-                        Ok(TcpState::Closed) => return ProcessResult::Drop,
+                        Ok(TcpState::Closed) => return Ok(ProcessResult::Drop),
 
                         // Continue with processing.
                         Ok(_) => (),
@@ -707,12 +816,12 @@ impl Port {
                 }
 
                 for ht in entry.get_state() {
-                    ht.run(&mut meta);
-                    let ifid_after = InnerFlowId::try_from(&meta).unwrap();
+                    ht.run(pkt.meta_mut());
+                    let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
                     ht_fire_probe("UFT", Direction::Out, &ifid, &ifid_after);
                 }
 
-                return ProcessResult::Modify(meta);
+                return Ok(ProcessResult::Modified);
             }
 
             // Continue with processing.
@@ -721,21 +830,14 @@ impl Port {
 
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
-        if meta.is_tcp() {
-            match self.process_out_tcp_new(ifid, &meta) {
+        if pkt.meta().is_inner_tcp() {
+            match self.process_out_tcp_new(ifid, pkt.meta()) {
                 Err(e) => {
-                    crate::dbg(format!("ptr: {:x}", ptr));
-                    crate::dbg(format!("ifid: {}", ifid));
-                    // crate::dbg(format!("meta: {:?}", meta));
-                    crate::dbg(format!(
-                        "flows: {:?}",
-                        *self.tcp_flows.lock().unwrap()
-                    ));
-                    panic!("bad packet: {}", e);
+                    self.bad_packet_err(e, ptr, &ifid);
                 }
 
                 // Drop any data that comes in after close.
-                Ok(TcpState::Closed) => return ProcessResult::Drop,
+                Ok(TcpState::Closed) => return Ok(ProcessResult::Drop),
 
                 // Continue with processing.
                 Ok(_) => (),
@@ -743,38 +845,25 @@ impl Port {
         }
 
         let mut hts = Vec::new();
-        let body_offset = pkt.body_offset();
-        let mut rdr = PacketReader::new(pkt, ());
-        rdr.seek(body_offset as usize).unwrap();
         let res = self.layers_process(
             Direction::Out,
-            &mut meta,
-            &mut rdr,
+            pkt,
             &mut hts,
-            &self.resources,
+            meta,
         );
-        let _ = rdr.finish();
 
         match res {
-            LayerResult::Allow => {
-                self.uft_out.lock().unwrap().add(ifid, hts);
-                ProcessResult::Modify(meta)
+            Ok(LayerResult::Allow) => {
+                self.state.uft_out.lock().add(ifid, hts);
+                Ok(ProcessResult::Modified)
             }
-            LayerResult::Hairpin(hppkt) => ProcessResult::Hairpin(hppkt),
-            LayerResult::Deny => ProcessResult::Drop,
-        }
-    }
 
-    /// Remove the `Layer` registered under `name`, if such a layer
-    /// exists.
-    pub fn remove_layer(&self, name: &str) {
-        let mut lock = self.layers.lock().unwrap();
-
-        for (i, layer) in lock.iter().enumerate() {
-            if layer.name() == name {
-                lock.remove(i);
-                return;
+            Ok(LayerResult::Hairpin(hppkt)) => {
+                Ok(ProcessResult::Hairpin(hppkt))
             }
+
+            Ok(LayerResult::Deny) => Ok(ProcessResult::Drop),
+            Err(e) => Err(ProcessError::Layer(e)),
         }
     }
 
@@ -784,23 +873,21 @@ impl Port {
         &self,
         layer_name: &str,
         dir: Direction,
-        id: u64,
-    ) -> Result<(), String> {
-        for layer in &*self.layers.lock().unwrap() {
+        id: RuleId,
+    ) -> Result<()> {
+        for layer in &self.state.layers {
             if layer.name() == layer_name {
-                return layer.remove_rule(dir, id);
+                if layer.remove_rule(dir, id).is_err() {
+                    return Err(Error::RuleNotFound {
+                        layer: layer_name.to_string(),
+                        dir,
+                        id
+                    });
+                }
             }
         }
 
-        Err(format!("layer {} not found", layer_name))
-    }
-
-    pub fn set_ip(&self, ip: Ipv4Addr) {
-        self.ip.lock().unwrap().replace(ip);
-    }
-
-    pub fn set_nat_pool(&self, pool: NatPool) {
-        self.resources.set_nat_pool(pool);
+        Err(Error::LayerNotFound { name: layer_name.to_string() })
     }
 }
 
@@ -808,7 +895,7 @@ impl Port {
 // testing. If one of these functions becomes useful outside of
 // testing, then add it to the impl block above.
 #[cfg(test)]
-impl Port {
+impl Port<Active> {
     /// Get the number of flows currently in the layer and direction
     /// specified. The value `"uft"` can be used to get the number of
     /// UFT flows.
@@ -816,10 +903,10 @@ impl Port {
         use Direction::*;
 
         match (layer, dir) {
-            ("uft", In) => self.uft_in.lock().unwrap().num_flows(),
-            ("uft", Out) => self.uft_out.lock().unwrap().num_flows(),
+            ("uft", In) => self.state.uft_in.lock().num_flows(),
+            ("uft", Out) => self.state.uft_out.lock().num_flows(),
             (name, dir) => {
-                for layer in &*self.layers.lock().unwrap() {
+                for layer in &self.state.layers {
                     if layer.name() == name {
                         return layer.num_flows(dir);
                     }
@@ -831,6 +918,7 @@ impl Port {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum Pos {
     Last,
     First,
@@ -921,4 +1009,61 @@ pub struct TcpFlowsDumpReq {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TcpFlowsDumpResp {
     pub flows: Vec<(InnerFlowId, FlowEntryDump)>,
+}
+
+/// Metadata which may be accessed and modified by any [`Action`][a]
+/// as a method of inter-action communication.
+///
+/// This metadata is a heterogeneous map of values, keyed by their
+/// type.
+///
+/// [a]: crate::rule::Action
+pub mod meta {
+    #[derive(Debug)]
+    pub enum Error {
+        AlreadyExists,
+    }
+
+    pub struct Meta {
+        inner: anymap::Map<dyn anymap::any::Any + Send + Sync>
+    }
+
+    impl Meta {
+        pub fn new() -> Self {
+            Meta { inner: anymap::Map::new() }
+        }
+
+        pub fn add<V>(&mut self, val: V) -> Result<(), Error>
+        where
+            V: 'static + Send + Sync
+        {
+            if self.inner.contains::<V>() {
+                return Err(Error::AlreadyExists);
+            }
+
+            self.inner.insert(val);
+            Ok(())
+        }
+
+        pub fn remove<V>(&mut self) -> Option<V>
+        where
+            V: 'static + Send + Sync
+        {
+            self.inner.remove::<V>()
+        }
+
+        pub fn get<V>(&mut self) -> Option<&V>
+        where
+            V: 'static + Send + Sync
+        {
+            self.inner.get::<V>()
+        }
+
+        pub fn get_mut<V>(&mut self) -> Option<&mut V>
+        where
+            V: 'static + Send + Sync
+        {
+            self.inner.get_mut::<V>()
+        }
+    }
 }

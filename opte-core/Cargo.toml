@@ -13,10 +13,26 @@ std = ["libc"]
 
 [dependencies]
 cstr_core = "0.2.3"
+heapless = "0.7.9"
 illumos-ddi-dki = { path = "../illumos-ddi-dki", default-features = false }
 libc = { version = "0.2", optional = true }
 postcard = { version = "0.7.0", features = ["alloc"] }
-zerocopy = "0.5.0"
+zerocopy = "0.6.1"
+
+#
+# XXX I'm using both anymap (and Miachel's no_std branch) purely out
+# of convenience. At this time I'm pretty sure I want to make use of
+# Any for some runtime polymorphism for the purpose of dealing with
+# port resources. I noticed that anymap does not seem to be actively
+# maintained (though it also seems fairly complete with the exception
+# of no_std support and maybe a handful of other things), so we may
+# want to come back around and just use Any directly for our purposes.
+# Even if we stick with anymap, we certainly don't want to rely on
+# someone's branch going forward.
+#
+[dependencies.anymap]
+git = "https://github.com/michaelmelanson/anymap"
+branch = "no_std"
 
 [dependencies.serde]
 version = "1.0"

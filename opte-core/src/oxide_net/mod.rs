@@ -17,18 +17,35 @@
 use std::ops::Range;
 
 use crate::ether::EtherAddr;
+use crate::geneve::Vni;
 use crate::ip4::Ipv4Addr;
+use crate::ip6::Ipv6Addr;
 use crate::vpc::VpcSubnet4;
 
 pub mod arp;
 pub mod dyn_nat4;
 pub mod firewall;
+pub mod overlay;
+pub mod router;
 
 #[derive(Clone, Debug)]
 pub struct DynNat4Config {
     pub public_mac: EtherAddr,
     pub public_ip: Ipv4Addr,
     pub ports: Range<u16>,
+}
+
+#[derive(Clone, Debug)]
+pub struct OverlayConfig {
+    pub boundary_services: overlay::PhysNet,
+    pub vni: Vni,
+    // NOTE: The phys_mac_{src,dst} currently stand in for the
+    // physical routing service. The src should be the host NIC MAC
+    // address, and the dst should be the physical gateway MAC address
+    // on your home/lab network.
+    pub phys_mac_src: EtherAddr,
+    pub phys_mac_dst: EtherAddr,
+    pub phys_ip_src: Ipv6Addr,
 }
 
 #[derive(Clone, Debug)]
@@ -39,4 +56,9 @@ pub struct PortConfig {
     pub gw_mac: EtherAddr,
     pub gw_ip: Ipv4Addr,
     pub dyn_nat: DynNat4Config,
+    // XXX For the moment we allow the overlay to be optional. This
+    // allows the Oxide Network to continue functioning on a local
+    // IPv4 network until the IPv6 underlay support is more flushed
+    // out and development/testing strategies are determined.
+    pub overlay: Option<OverlayConfig>,
 }

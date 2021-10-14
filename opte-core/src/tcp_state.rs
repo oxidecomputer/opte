@@ -1,4 +1,3 @@
-use core::convert::TryFrom;
 use core::fmt::{self, Display};
 
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -8,11 +7,9 @@ use std::string::String;
 
 use serde::{Deserialize, Serialize};
 
-use crate::headers::{TcpMeta, UlpMeta};
 use crate::layer::InnerFlowId;
-use crate::packet::PacketMeta;
 use crate::rule::flow_id_sdt_arg;
-use crate::tcp::{TcpFlags, TcpState};
+use crate::tcp::{TcpFlags, TcpMeta, TcpState};
 use crate::Direction;
 
 use illumos_ddi_dki::uintptr_t;
@@ -65,10 +62,9 @@ impl TcpFlowState {
     /// TODO Actually flesh out error cases.
     fn flow_in(
         &mut self,
-        meta: &PacketMeta,
+        tcp: &TcpMeta,
     ) -> Result<Option<TcpState>, String> {
         use TcpState::*;
-        let tcp = get_tcp_meta(meta);
 
         match self.tcp_state {
             // The guest is in active open and waiting for the
@@ -244,10 +240,9 @@ impl TcpFlowState {
 
     fn flow_out(
         &mut self,
-        meta: &PacketMeta,
+        tcp: &TcpMeta,
     ) -> Result<Option<TcpState>, String> {
         use TcpState::*;
-        let tcp = get_tcp_meta(meta);
 
         match self.tcp_state {
             // This is our initial state for a potential active open.
@@ -415,21 +410,20 @@ impl TcpFlowState {
     pub fn process(
         &mut self,
         dir: Direction,
-        meta: &PacketMeta,
+        flow_id: &InnerFlowId,
+        tcp: &TcpMeta,
     ) -> Result<TcpState, String> {
-        let tcp = get_tcp_meta(meta);
         let curr_state = self.tcp_state;
 
         let res = match dir {
-            Direction::In => self.flow_in(meta),
-            Direction::Out => self.flow_out(meta),
+            Direction::In => self.flow_in(tcp),
+            Direction::Out => self.flow_out(tcp),
         };
 
         let new_state = match res {
             Ok(Some(new_state)) => new_state,
             Ok(None) => curr_state,
             Err(e) => {
-                let flow_id = InnerFlowId::try_from(meta).unwrap();
                 tcp_flow_drop_probe(&flow_id, &self, dir, tcp.flags);
                 return Err(e);
             }
@@ -439,20 +433,11 @@ impl TcpFlowState {
         self.guest_ack = Some(tcp.ack);
 
         if new_state != curr_state {
-            let flow_id = InnerFlowId::try_from(meta).unwrap();
             tcp_flow_state_probe(&flow_id, curr_state, new_state);
             self.tcp_state = new_state;
         }
 
         Ok(new_state)
-    }
-}
-
-pub fn get_tcp_meta(meta: &PacketMeta) -> &TcpMeta {
-    match &meta.ulp {
-        Some(UlpMeta::Tcp(tcp)) => tcp,
-
-        _ => panic!("expected to find TCP metadata"),
     }
 }
 

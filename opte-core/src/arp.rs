@@ -9,22 +9,23 @@ use core::convert::TryFrom;
 use core::fmt::{self, Display};
 
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::String;
+use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
-use std::string::String;
+use std::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use crate::headers::{Header, RawHeader};
 use crate::ether::{
-    EtherAddr, EtherHdrRaw, EtherMeta, ETHER_HDR_SZ, ETHER_TYPE_ARP,
+    EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ, ETHER_TYPE_ARP,
     ETHER_TYPE_IPV4,
 };
 use crate::ip4::Ipv4Addr;
 use crate::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, PacketWriter,
-    Parsed, ReadErr,
+    Parsed, ReadErr, WriteError
 };
 use crate::rule::{GenErr, GenResult, HairpinAction, Payload};
 
@@ -53,7 +54,7 @@ pub enum ArpOp {
 }
 
 impl ArpOp {
-    fn to_be_bytes(self) -> [u8; 2] {
+    pub fn to_be_bytes(self) -> [u8; 2] {
         match self {
             ArpOp::Request => 1u16.to_be_bytes(),
             ArpOp::Reply => 2u16.to_be_bytes(),
@@ -62,13 +63,13 @@ impl ArpOp {
 }
 
 impl TryFrom<u16> for ArpOp {
-    type Error = String;
+    type Error = ArpHdrError;
 
     fn try_from(val: u16) -> Result<Self, Self::Error> {
         match val {
             1 => Ok(ArpOp::Request),
             2 => Ok(ArpOp::Reply),
-            _ => Err(format!("bad ARP oper: {}", val)),
+            _ => Err(Self::Error::BadOp { op: val }),
         }
     }
 }
@@ -94,21 +95,123 @@ pub struct ArpMeta {
     pub op: ArpOp,
 }
 
-impl TryFrom<&LayoutVerified<&[u8], ArpHdrRaw>> for ArpMeta {
-    type Error = String;
+impl From<&ArpHdr> for ArpMeta {
+    fn from(arp: &ArpHdr) -> Self {
+        Self {
+            htype: arp.htype,
+            ptype: arp.ptype,
+            hlen: arp.hlen,
+            plen: arp.plen,
+            op: arp.op
+        }
+    }
+}
 
+#[derive(Clone, Debug)]
+pub struct ArpHdr {
+    htype: u16,
+    ptype: u16,
+    hlen: u8,
+    plen: u8,
+    op: ArpOp,
+}
+
+impl ArpHdr {
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(ARP_HDR_SZ);
+        let raw = ArpHdrRaw::from(self);
+        bytes.extend_from_slice(raw.as_bytes());
+        bytes
+    }
+
+    pub fn unify(&mut self, meta: &ArpMeta) {
+        self.htype = meta.htype;
+        self.ptype = meta.ptype;
+        self.hlen = meta.hlen;
+        self.plen = meta.plen;
+        self.op = meta.op;
+    }
+}
+
+impl Header for ArpHdr {
+    type Error = ArpHdrError;
+
+    fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Self::Error>
+    where
+        R: PacketRead<'a>
+    {
+        Self::try_from(&ArpHdrRaw::raw_zc(rdr)?)
+    }
+}
+
+#[derive(Debug)]
+pub enum ArpHdrError {
+    BadOp { op: u16 },
+    ReadError { error: ReadErr },
+    UnexpectedProtoLen { plen: u8 },
+    UnexpectedProtoType { ptype: u16 },
+    UnexpectedHwLen { hlen: u8 },
+    UnexpectedHwType { htype: u16 },
+}
+
+impl From<ReadErr> for ArpHdrError {
+    fn from(error: ReadErr) -> Self {
+        Self::ReadError { error }
+    }
+}
+
+impl TryFrom<&LayoutVerified<&[u8], ArpHdrRaw>> for ArpHdr {
+    type Error = ArpHdrError;
+
+    // NOTE: This only accepts IPv4/Ethernet ARP.
     fn try_from(
-        raw: &LayoutVerified<&[u8], ArpHdrRaw>,
-    ) -> Result<Self, String> {
+        raw: &LayoutVerified<&[u8], ArpHdrRaw>
+    ) -> Result<Self, Self::Error> {
+        let htype = u16::from_be_bytes(raw.htype);
+
+        if htype != ARP_HTYPE_ETHERNET {
+            return Err(Self::Error::UnexpectedHwType { htype });
+        }
+
+        let hlen = raw.hlen;
+
+        if hlen != 6 {
+            return Err(Self::Error::UnexpectedHwLen { hlen });
+        }
+
+        let ptype = u16::from_be_bytes(raw.ptype);
+
+        if ptype != crate::ether::ETHER_TYPE_IPV4 {
+            return Err(Self::Error::UnexpectedProtoType { ptype });
+        }
+
+        let plen = raw.plen;
+
+        if plen != 4 {
+            return Err(Self::Error::UnexpectedProtoLen { plen });
+        }
+
         let op = ArpOp::try_from(u16::from_be_bytes(raw.op))?;
 
-        Ok(ArpMeta {
-            htype: u16::from_be_bytes(raw.htype),
-            ptype: u16::from_be_bytes(raw.ptype),
-            hlen: raw.hlen,
-            plen: raw.plen,
+        Ok(Self {
+            htype,
+            ptype,
+            hlen,
+            plen,
             op,
         })
+    }
+}
+
+impl From<&ArpMeta> for ArpHdr {
+    fn from(meta: &ArpMeta) -> Self {
+        Self {
+            htype: meta.htype,
+            ptype: meta.ptype,
+            hlen: meta.hlen,
+            plen: meta.plen,
+            op: meta.op,
+        }
     }
 }
 
@@ -122,10 +225,10 @@ pub struct ArpHdrRaw {
     pub op: [u8; 2],
 }
 
-impl ArpHdrRaw {
-    pub fn parse<R: PacketRead>(
-        rdr: &mut R,
-    ) -> Result<LayoutVerified<&[u8], Self>, ReadErr> {
+impl<'a> RawHeader<'a> for ArpHdrRaw {
+    fn raw_zc<'b, R: PacketRead<'a>>(
+        rdr: &'b mut R,
+    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
         let slice = rdr.slice(std::mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
@@ -133,11 +236,33 @@ impl ArpHdrRaw {
         };
         Ok(hdr)
     }
+
+    fn raw_mut_zc(
+        dst: &mut [u8],
+    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteError> {
+        let hdr = match LayoutVerified::new(dst) {
+            Some(bytes) => bytes,
+            None => return Err(WriteError::BadLayout),
+        };
+        Ok(hdr)
+    }
+}
+
+impl From<&ArpHdr> for ArpHdrRaw {
+    fn from(arp: &ArpHdr) -> Self {
+        Self {
+            htype: arp.htype.to_be_bytes(),
+            ptype: arp.ptype.to_be_bytes(),
+            hlen: arp.hlen,
+            plen: arp.plen,
+            op: arp.op.to_be_bytes(),
+        }
+    }
 }
 
 impl From<&ArpMeta> for ArpHdrRaw {
     fn from(meta: &ArpMeta) -> Self {
-        ArpHdrRaw {
+        Self {
             htype: meta.htype.to_be_bytes(),
             ptype: meta.ptype.to_be_bytes(),
             hlen: meta.hlen,
@@ -177,10 +302,10 @@ pub struct ArpEth4PayloadRaw {
     tpa: [u8; 4],
 }
 
-impl ArpEth4PayloadRaw {
-    pub fn parse<R: PacketRead>(
-        rdr: &mut R,
-    ) -> Result<LayoutVerified<&[u8], Self>, ReadErr> {
+impl<'a> ArpEth4PayloadRaw {
+    pub fn parse<'b, R: PacketRead<'a>>(
+        rdr: &'b mut R,
+    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
         let slice = rdr.slice(std::mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
@@ -233,10 +358,7 @@ impl HairpinAction for ArpReply {
             Packet::alloc(ETHER_HDR_SZ + ARP_HDR_SZ + ARP_ETH4_PAYLOAD_SZ);
         let mut wtr = PacketWriter::new(pkt, None);
 
-        let ethm = match meta.inner_ether.as_ref() {
-            Some(v) => v,
-            None => return Err(GenErr::MissingMeta),
-        };
+        let ethm = &meta.inner.ether.as_ref().unwrap();
 
         let req_raw = match ArpEth4PayloadRaw::parse(rdr) {
             Ok(v) => v,
@@ -245,13 +367,13 @@ impl HairpinAction for ArpReply {
 
         let req = ArpEth4Payload::from(&req_raw);
 
-        let eth_hdr = EtherHdrRaw::from(&EtherMeta {
+        let eth_hdr = EtherHdr::from(&EtherMeta {
             dst: ethm.src,
             src: self.tha,
             ether_type: ETHER_TYPE_ARP,
         });
 
-        let _ = wtr.write(eth_hdr.as_bytes()).unwrap();
+        let _ = wtr.write(&eth_hdr.as_bytes()).unwrap();
 
         let arp_hdr = ArpHdrRaw::from(&ArpMeta {
             htype: ARP_HTYPE_ETHERNET,

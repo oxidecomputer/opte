@@ -7,7 +7,8 @@ use std::mem;
 
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-use crate::packet::{PacketRead, ReadErr, WriteErr};
+use crate::headers::RawHeader;
+use crate::packet::{PacketRead, ReadErr, WriteError};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum IcmpType {
@@ -31,10 +32,10 @@ pub struct IcmpBaseHdrRaw {
     pub csum: [u8; 2],
 }
 
-impl IcmpBaseHdrRaw {
-    pub fn parse<R: PacketRead>(
-        rdr: &mut R,
-    ) -> Result<LayoutVerified<&[u8], Self>, ReadErr> {
+impl<'a> IcmpBaseHdrRaw {
+    pub fn parse<'b, R: PacketRead<'a>>(
+        rdr: &'b mut R,
+    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
         let slice = rdr.slice(mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
@@ -45,65 +46,45 @@ impl IcmpBaseHdrRaw {
 
     pub fn parse_mut(
         dst: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteErr> {
+    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteError> {
         let hdr = match LayoutVerified::new(dst) {
             Some(bytes) => bytes,
-            None => return Err(WriteErr::BadLayout),
+            None => return Err(WriteError::BadLayout),
         };
         Ok(hdr)
     }
 }
 
-/// Note: For now we keep this unaligned to be safe.
-#[repr(C)]
-#[derive(Clone, FromBytes, AsBytes, Unaligned)]
-pub struct IcmpEchoHdrRaw {
-    pub icmp_type: u8,
-    pub code: u8,
-    pub csum: [u8; 2],
-    pub id: [u8; 2],
-    pub seq: [u8; 2],
-}
-
-impl IcmpEchoHdrRaw {
-    pub fn parse<R: PacketRead>(
-        rdr: &mut R,
-    ) -> Result<LayoutVerified<&[u8], Self>, ReadErr> {
-        let slice = rdr.slice(mem::size_of::<Self>())?;
-        let hdr = match LayoutVerified::new(slice) {
-            Some(bytes) => bytes,
-            None => return Err(ReadErr::BadLayout),
-        };
-        Ok(hdr)
-    }
-
-    pub fn parse_mut(
-        dst: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteErr> {
-        let hdr = match LayoutVerified::new(dst) {
-            Some(bytes) => bytes,
-            None => return Err(WriteErr::BadLayout),
-        };
-        Ok(hdr)
-    }
-}
-
+/// XXX
+///
+///  * There is actually a length in octect 5 (2nd octet in unused) as
+///  specific in RFC 4884. This length describes how long the ULP field is.
+///
+///  * The ip_hdr may be more than 20 bytes if options are specified.
+///
+///  * The ULP field may be longer than 8 bytes (as specified by the
+///  length field), but for our purposes we only care about the first
+///  8 bytes anyways.
+///
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
 #[derive(Clone, FromBytes, AsBytes, Unaligned)]
 pub struct IcmpDuHdrRaw {
     pub icmp_type: u8,
     pub code: u8,
+    // XXX Make sure to update this csum when changing any fields in
+    // the body (e.g., during NAT rewrite).
     pub csum: [u8; 2],
-    pub unused: [u8; 4],
-    pub ip_hdr: [u8; 20],
-    pub ulp_start: [u8; 8],
+    pub unused: u8,
+    pub ulp_length: u8,
+    pub next_hop_mtu: [u8; 2],
+    // pub ip_base_hdr: [u8; 20],
 }
 
-impl IcmpDuHdrRaw {
-    pub fn parse<R: PacketRead>(
-        rdr: &mut R,
-    ) -> Result<LayoutVerified<&[u8], Self>, ReadErr> {
+impl<'a> RawHeader<'a> for IcmpDuHdrRaw {
+    fn raw_zc<'b, R: PacketRead<'a>>(
+        rdr: &'b mut R,
+    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
         let slice = rdr.slice(mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
@@ -112,12 +93,12 @@ impl IcmpDuHdrRaw {
         Ok(hdr)
     }
 
-    pub fn parse_mut(
+    fn raw_mut_zc(
         dst: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteErr> {
+    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteError> {
         let hdr = match LayoutVerified::new(dst) {
             Some(bytes) => bytes,
-            None => return Err(WriteErr::BadLayout),
+            None => return Err(WriteError::BadLayout),
         };
         Ok(hdr)
     }
@@ -135,10 +116,10 @@ pub struct IcmpRedirectHdrRaw {
     pub ulp_start: [u8; 8],
 }
 
-impl IcmpRedirectHdrRaw {
-    pub fn parse<R: PacketRead>(
-        rdr: &mut R,
-    ) -> Result<LayoutVerified<&[u8], Self>, ReadErr> {
+impl<'a> RawHeader<'a> for IcmpRedirectHdrRaw {
+    fn raw_zc<'b, R: PacketRead<'a>>(
+        rdr: &'b mut R,
+    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
         let slice = rdr.slice(mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
@@ -147,12 +128,12 @@ impl IcmpRedirectHdrRaw {
         Ok(hdr)
     }
 
-    pub fn parse_mut(
+    fn raw_mut_zc(
         dst: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteErr> {
+    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteError> {
         let hdr = match LayoutVerified::new(dst) {
             Some(bytes) => bytes,
-            None => return Err(WriteErr::BadLayout),
+            None => return Err(WriteError::BadLayout),
         };
         Ok(hdr)
     }

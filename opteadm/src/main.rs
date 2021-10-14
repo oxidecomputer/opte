@@ -10,8 +10,9 @@ use opte_core::oxide_net::firewall::{
     self, Action, Address, FirewallRule, FwRemRuleReq, Ports, ProtoFilter,
 };
 use opte_core::flow_table::FlowEntryDump;
+use opte_core::headers::IpAddr;
 use opte_core::ioctl::{self, PortInfo, AddPortReq};
-use opte_core::layer::{InnerFlowId, IpAddr, LayerDumpResp};
+use opte_core::layer::{InnerFlowId, LayerDumpResp};
 use opte_core::port::UftDumpResp;
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;

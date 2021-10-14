@@ -6,14 +6,17 @@ use std::boxed::Box;
 use crate::arp::{ArpOp, ArpReply};
 use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
 use crate::layer::{Layer};
-use crate::port::{Port, Pos};
+use crate::port::{self, Inactive, Port, Pos};
 use crate::rule::{
     Action, ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate,
     EtherAddrMatch, EtherTypeMatch, Ipv4AddrMatch, Predicate, Rule, RuleAction,
 };
 use crate::Direction;
 
-pub fn setup(port: &mut Port, cfg: &super::PortConfig) {
+pub fn setup(
+    port: &mut Port<Inactive>,
+    cfg: &super::PortConfig
+) -> port::Result<()> {
     let arp = Layer::new(
         "arp",
         vec![
@@ -37,10 +40,10 @@ pub fn setup(port: &mut Port, cfg: &super::PortConfig) {
     // ================================================================
     // Outbound ARP Request for Gateway, from Guest
     // ================================================================
-    let mut rule = Rule::new(1, RuleAction::Allow(0));
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
+    let rule = Rule::new(1, RuleAction::Allow(0));
+    let mut rule = rule.add_predicate(
+        Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
+    );
     rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
         EtherAddr::from([0xFF; 6]),
     )]));
@@ -54,24 +57,24 @@ pub fn setup(port: &mut Port, cfg: &super::PortConfig) {
     rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
         Ipv4AddrMatch::Exact(cfg.gw_ip),
     ]));
-    arp.add_rule(Direction::Out, rule);
+    arp.add_rule(Direction::Out, rule.finalize());
 
     // ================================================================
     // Drop all other outbound ARP Requests from Guest
     // ================================================================
-    let mut rule = Rule::new(2, RuleAction::Deny);
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    arp.add_rule(Direction::Out, rule);
+    let rule = Rule::new(2, RuleAction::Deny);
+    let rule = rule.add_predicate(
+        Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
+    );
+    arp.add_rule(Direction::Out, rule.finalize());
 
     // ================================================================
     // Inbound ARP Request from Gateway, for Guest Private IP
     // ================================================================
-    let mut rule = Rule::new(1, RuleAction::Allow(1));
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
+    let rule = Rule::new(1, RuleAction::Allow(1));
+    let mut rule = rule.add_predicate(
+        Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
+    );
     rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
         EtherAddr::from([0xFF; 6]),
     )]));
@@ -85,15 +88,15 @@ pub fn setup(port: &mut Port, cfg: &super::PortConfig) {
     rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
         Ipv4AddrMatch::Exact(cfg.private_ip),
     ]));
-    arp.add_rule(Direction::In, rule);
+    arp.add_rule(Direction::In, rule.finalize());
 
     // ================================================================
     // Inbound ARP Request from Gateway, for Guest Public IP
     // ================================================================
-    let mut rule = Rule::new(1, RuleAction::Allow(2));
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
+    let rule = Rule::new(1, RuleAction::Allow(2));
+    let mut rule = rule.add_predicate(
+        Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
+    );
     rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
         EtherAddr::from([0xFF; 6]),
     )]));
@@ -107,16 +110,16 @@ pub fn setup(port: &mut Port, cfg: &super::PortConfig) {
     rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
         Ipv4AddrMatch::Exact(cfg.dyn_nat.public_ip),
     ]));
-    arp.add_rule(Direction::In, rule);
+    arp.add_rule(Direction::In, rule.finalize());
 
     // ================================================================
     // Drop all other inbound ARP Requests
     // ================================================================
-    let mut rule = Rule::new(2, RuleAction::Deny);
-    rule.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    arp.add_rule(Direction::In, rule);
+    let rule = Rule::new(2, RuleAction::Deny);
+    let rule = rule.add_predicate(
+        Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
+    );
+    arp.add_rule(Direction::In, rule.finalize());
 
-    port.add_layer(arp, Pos::Before("firewall"));
+    port.add_layer(arp, Pos::Before("firewall"))
 }

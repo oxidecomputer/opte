@@ -1,134 +1,216 @@
-use crate::icmp::{IcmpDuHdrRaw, IcmpEchoHdrRaw, IcmpRedirectHdrRaw};
-use crate::ip4::{Ipv4Addr, Ipv4HdrRaw, Protocol};
-use crate::ip6::Ipv6HdrRaw;
-use crate::tcp::TcpHdrRaw;
-use crate::udp::UdpHdrRaw;
+use core::fmt;
 
-use std::convert::TryFrom;
-use std::fmt;
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
 
 use serde::{Deserialize, Serialize};
-
 use zerocopy::LayoutVerified;
+
+use crate::checksum::Checksum;
+use crate::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Ipv4MetaOpt, IPV4_HDR_SZ};
+use crate::ip6::{Ipv6Addr, Ipv6Hdr, Ipv6Meta, Ipv6MetaOpt, IPV6_HDR_SZ};
+use crate::packet::{PacketRead, ReadErr, WriteError};
+use crate::tcp::{TcpHdr, TcpMeta, TcpMetaOpt};
+use crate::udp::{UdpHdr, UdpMeta, UdpMetaOpt};
 
 /// Port 0 is reserved by the sockets layer. It is used by clients to
 /// indicate they want the operating system to choose a port on their
 /// behalf.
 pub const DYNAMIC_PORT: u16 = 0;
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum IpAddr {
+    Ip4(Ipv4Addr),
+    Ip6(Ipv6Addr),
+}
+
+impl Default for IpAddr {
+    fn default() -> Self {
+        IpAddr::Ip4(Default::default())
+    }
+}
+
+impl fmt::Display for IpAddr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            IpAddr::Ip4(ip4) => write!(f, "{}", ip4),
+            IpAddr::Ip6(_) => write!(f, "<IPv6 addr>"),
+        }
+    }
+}
+
+/// A raw header.
+///
+/// A raw header is the most basic and raw representation of a given
+/// header type. A raw header value preserves the bytes as they are,
+/// in network order. A raw header undergoes no validation of header
+/// fields. A raw header represents only the base header, eschewing
+/// any options or extensions.
+pub trait RawHeader<'a> {
+    /// Read a zerocopy version of the raw header from the [`Packet`]
+    /// backing `rdr`.
+    fn raw_zc<'b, R: PacketRead<'a>>(
+        rdr: &'b mut R,
+    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr>;
+
+    /// Read a mutable, zerocopy version of the raw header from the
+    /// passed in mutable slice.
+    fn raw_mut_zc(
+        src: &mut [u8],
+    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteError>;
+}
+
+/// A parsed, partially validated header.
+///
+/// A value of this type represents a header type which has been
+/// parsed from a [`RawHeader`]. This parsing includes some amount of
+/// intra-header validation along with conversion from a sequence of
+/// network-order bytes to native host types. This header value may
+/// also include options or extension headers.
+///
+/// In general, this is the primary type of header value that OPTE
+/// code should be dealing with. The idea is to convert [`RawHeader`]
+/// to [`Header`] as close to the edges as possible.
+///
+/// NOTE: OPTE currently performs all header reads as copy-only. This
+/// was done as a measure of expedience for development and to cut
+/// down on initial complexity. Furthermore, while zerocopy can be
+/// important, it's less important at this moment, especially for the
+/// header data. There are larger performance wins to be had before we
+/// worry too much about header zercopy, such as the Unified Flow
+/// Table, checksum offloads, LSO, and LRO.
+pub trait Header {
+    type Error;
+
+    /// Create a value of `Self` by attempting to parse and validate a
+    /// copy of it from the provided [`PacketRead`] argument.
+    fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Self::Error>
+    where
+        Self: core::marker::Sized,
+        R: PacketRead<'a>;
+}
+
 pub trait PushActionArg {}
 pub trait ModActionArg {}
 
-#[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub struct Ipv4Meta {
-    pub src: Ipv4Addr,
-    pub dst: Ipv4Addr,
-    pub proto: Protocol,
+#[derive(Clone, Copy, Debug)]
+pub enum IpType {
+    Ipv4,
+    Ipv6,
 }
 
-impl Ipv4Meta {
-    // TODO: check that at least one field was specified.
-    pub fn modify(
-        src: Option<Ipv4Addr>,
-        dst: Option<Ipv4Addr>,
-        proto: Option<Protocol>,
-    ) -> HeaderAction<IpMeta, IpMetaOpt> {
-        HeaderAction::Modify(Ipv4MetaOpt { src, dst, proto }.into())
-    }
+#[derive(Debug)]
+pub enum IpHdr {
+    Ip4(Ipv4Hdr),
+    Ip6(Ipv6Hdr),
 }
 
-impl From<&LayoutVerified<&[u8], Ipv4HdrRaw>> for Ipv4Meta {
-    fn from(raw: &LayoutVerified<&[u8], Ipv4HdrRaw>) -> Self {
-        Ipv4Meta {
-            src: u32::from_be_bytes(raw.src).into(),
-            dst: u32::from_be_bytes(raw.dst).into(),
-            proto: match Protocol::try_from(raw.proto) {
-                Ok(v) => v,
-                Err(_) => {
-                    todo!("deal with protocol: {}", raw.proto);
-                }
-            },
+#[macro_export]
+macro_rules! assert_ip {
+    ($left:expr, $right:expr) => {
+        match ($left, $right) {
+            (
+                Some($crate::headers::IpHdr::Ip4(ip4_left)),
+                Some($crate::headers::IpHdr::Ip4(ip4_right)),
+            ) => {
+                assert_ip4!(ip4_left, ip4_right);
+            }
+
+            (
+                Some($crate::headers::IpHdr::Ip6(ip6_left)),
+                Some($crate::headers::IpHdr::Ip6(ip6_right)),
+            ) => {
+                assert_ip6!(ip6_left, ip6_right);
+            }
+
+            (left, right) => {
+                panic!(
+                    "IP headers not same type\nleft: {:?}\nright: {:?}",
+                    left,
+                    right,
+                );
+            }
         }
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Ipv4MetaOpt {
-    src: Option<Ipv4Addr>,
-    dst: Option<Ipv4Addr>,
-    proto: Option<Protocol>,
-}
-
-impl ModActionArg for Ipv4MetaOpt {}
-
-impl HeaderActionModify<Ipv4MetaOpt> for Ipv4Meta {
-    fn run_modify(&mut self, spec: &Ipv4MetaOpt) {
-        if spec.src.is_some() {
-            self.src = spec.src.unwrap()
+impl IpHdr {
+    pub fn hdr_len(&self) -> usize {
+        match self {
+            Self::Ip4(ip4) => ip4.hdr_len(),
+            Self::Ip6(ip6) => ip6.hdr_len(),
         }
+    }
 
-        if spec.dst.is_some() {
-            self.dst = spec.dst.unwrap()
+    pub fn ip4(&self) -> Option<&Ipv4Hdr> {
+        match self {
+            Self::Ip4(ip4) => Some(ip4),
+            _ => None,
         }
+    }
 
-        if spec.proto.is_some() {
-            self.proto = spec.proto.unwrap()
+    pub fn ip6(&self) -> Option<&Ipv6Hdr> {
+        match self {
+            Self::Ip6(ip6) => Some(ip6),
+            _ => None,
+        }
+    }
+
+    pub fn pay_len(&self) -> usize {
+        match self {
+            Self::Ip4(ip4) => ip4.pay_len(),
+            Self::Ip6(ip6) => ip6.pay_len(),
+        }
+    }
+
+    pub fn pseudo_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Ip4(ip4) => ip4.pseudo_bytes(),
+            Self::Ip6(_ip6) => todo!("implement"),
+        }
+    }
+
+    pub fn pseudo_csum(&self) -> Checksum {
+        match self {
+            Self::Ip4(ip4) => ip4.pseudo_csum(),
+            Self::Ip6(_ip6) => todo!("implement"),
+        }
+    }
+
+    pub fn set_total_len(&mut self, len: usize) {
+        match self {
+            Self::Ip4(ip4) => ip4.set_total_len(len as u16),
+            Self::Ip6(ip6) => ip6.set_total_len(len as u16),
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        match self {
+            Self::Ip4(_) => IPV4_HDR_SZ,
+            Self::Ip6(_) => IPV6_HDR_SZ,
+        }
+    }
+
+    pub fn total_len(&self) -> u16 {
+        match self {
+            Self::Ip4(ip4) => ip4.total_len(),
+            Self::Ip6(_ip6) => todo!("implement"),
         }
     }
 }
 
-// TODO We haven't actually done any IPv6 work yet, this is just a
-// stand in.
-#[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub struct Ipv6Meta {
-    pub src: [u8; 16],
-    pub dst: [u8; 16],
-    pub proto: Protocol,
-}
-
-impl From<&LayoutVerified<&[u8], Ipv6HdrRaw>> for Ipv6Meta {
-    fn from(raw: &LayoutVerified<&[u8], Ipv6HdrRaw>) -> Self {
-        Ipv6Meta {
-            src: raw.src,
-            dst: raw.dst,
-            // TODO Parse extension headers
-            //
-            // * Create ExtensionHdrs enum and various Extension
-            // Header types
-            //
-            // * Create a NextHdr enum which can be either Protocol or ExtHdr
-            //
-            // * Write parse_ipv6_ext() function to parse various ext
-            // headers. Call that in parse_ipv6().
-            //
-            // * Change how this meta structure is built. That is,
-            // replace this function with something that builds the
-            // IPv6 Metadata from base header + extensions.
-            //
-            // * Remember that you don't need to do all this right
-            // now, you have a demo to make.
-            proto: match Protocol::try_from(raw.next_hdr) {
-                Ok(v) => v,
-                Err(_) => {
-                    // TODO I'm doing this just to meet demo deadline.
-                    // IPv6 support (guest and underlay) is the next
-                    // big task anyways.
-                    Protocol::Reserved
-                    // todo!("deal with protocol: {}", raw.next_hdr);
-                }
-            },
-        }
+impl From<Ipv4Hdr> for IpHdr {
+    fn from(ip4: Ipv4Hdr) -> Self {
+        IpHdr::Ip4(ip4)
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Ipv6MetaOpt {
-    src: Option<[u8; 16]>,
-    dst: Option<[u8; 16]>,
+impl From<Ipv6Hdr> for IpHdr {
+    fn from(ip6: Ipv6Hdr) -> Self {
+        IpHdr::Ip6(ip6)
+    }
 }
 
 #[derive(
@@ -148,6 +230,15 @@ impl From<Ipv4Meta> for IpMeta {
 impl From<Ipv6Meta> for IpMeta {
     fn from(ip6: Ipv6Meta) -> Self {
         IpMeta::Ip6(ip6)
+    }
+}
+
+impl From<&IpHdr> for IpMeta {
+    fn from(ip: &IpHdr) -> Self {
+        match ip {
+            IpHdr::Ip4(ip4) => IpMeta::Ip4(Ipv4Meta::from(ip4)),
+            IpHdr::Ip6(ip6) => IpMeta::Ip6(Ipv6Meta::from(ip6)),
+        }
     }
 }
 
@@ -184,215 +275,78 @@ impl HeaderActionModify<IpMetaOpt> for IpMeta {
     }
 }
 
-#[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub struct IcmpEchoMeta {
-    pub id: u16,
+#[derive(Debug)]
+pub enum UlpHdr {
+    Tcp(TcpHdr),
+    Udp(UdpHdr),
 }
 
-impl PushActionArg for IcmpEchoMeta {}
+#[macro_export]
+macro_rules! assert_ulp {
+    ($left:expr, $right:expr) => {
+        match ($left, $right) {
+            (
+                Some($crate::headers::UlpHdr::Tcp(tcp_left)),
+                Some($crate::headers::UlpHdr::Tcp(tcp_right)),
+            ) => {
+                assert_tcp!(tcp_left, tcp_right);
+            }
 
-impl IcmpEchoMeta {
-    pub fn modify(
-        id: Option<u16>,
-    ) -> HeaderAction<IcmpEchoMeta, IcmpEchoMetaOpt> {
-        HeaderAction::Modify(IcmpEchoMetaOpt { id }.into())
-    }
-}
+            (
+                Some($crate::headers::UlpHdr::Udp(udp_left)),
+                Some($crate::headers::UlpHdr::Udp(udp_right)),
+            ) => {
+                assert_udp!(udp_left, udp_right);
+            }
 
-impl From<&LayoutVerified<&[u8], IcmpEchoHdrRaw>> for IcmpEchoMeta {
-    fn from(raw: &LayoutVerified<&[u8], IcmpEchoHdrRaw>) -> Self {
-        IcmpEchoMeta { id: u16::from_be_bytes(raw.id) }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct IcmpEchoMetaOpt {
-    id: Option<u16>,
-}
-
-impl ModActionArg for IcmpEchoMetaOpt {}
-
-impl HeaderActionModify<IcmpEchoMetaOpt> for IcmpEchoMeta {
-    fn run_modify(&mut self, spec: &IcmpEchoMetaOpt) {
-        if spec.id.is_some() {
-            self.id = spec.id.unwrap()
+            (left, right) => {
+                panic!(
+                    "ULP headers not same type\nleft: {:?}\nright: {:?}",
+                    left,
+                    right,
+                );
+            }
         }
     }
 }
 
-#[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub struct IcmpDuMeta {
-    pub src_ip: Ipv4Addr,
-    pub dst_ip: Ipv4Addr,
-}
-
-impl PushActionArg for IcmpDuMeta {}
-
-// TODO Need to inspect protocol and set port numbers.
-impl From<&LayoutVerified<&[u8], IcmpDuHdrRaw>> for IcmpDuMeta {
-    fn from(raw: &LayoutVerified<&[u8], IcmpDuHdrRaw>) -> Self {
-        let ip4: LayoutVerified<_, Ipv4HdrRaw> =
-            LayoutVerified::new(&raw.ip_hdr[..]).unwrap();
-        IcmpDuMeta {
-            src_ip: u32::from_be_bytes(ip4.src).into(),
-            dst_ip: u32::from_be_bytes(ip4.dst).into(),
+impl UlpHdr {
+    pub fn csum_minus_hdr(&self) -> Checksum {
+        match self {
+            Self::Tcp(tcp) => tcp.csum_minus_hdr(),
+            Self::Udp(udp) => udp.csum_minus_hdr(),
         }
     }
-}
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct IcmpDuMetaOpt {
-    src_ip: Option<Ipv4Addr>,
-    dst_ip: Option<Ipv4Addr>,
-}
-
-impl ModActionArg for IcmpDuMetaOpt {}
-
-#[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub struct IcmpRedirectMeta {
-    pub gateway_ip: Ipv4Addr,
-    pub src_ip: Ipv4Addr,
-    pub dst_ip: Ipv4Addr,
-}
-
-impl PushActionArg for IcmpRedirectMeta {}
-
-impl From<&LayoutVerified<&[u8], IcmpRedirectHdrRaw>> for IcmpRedirectMeta {
-    fn from(raw: &LayoutVerified<&[u8], IcmpRedirectHdrRaw>) -> Self {
-        let ip4: LayoutVerified<_, Ipv4HdrRaw> =
-            LayoutVerified::new(&raw.ip_hdr[..]).unwrap();
-        IcmpRedirectMeta {
-            gateway_ip: u32::from_be_bytes(raw.gateway_ip).into(),
-            src_ip: u32::from_be_bytes(ip4.src).into(),
-            dst_ip: u32::from_be_bytes(ip4.dst).into(),
+    pub fn hdr_len(&self) -> usize {
+        match self {
+            Self::Tcp(tcp) => tcp.hdr_len(),
+            Self::Udp(udp) => udp.hdr_len(),
         }
     }
-}
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct IcmpRedirectMetaOpt {
-    gateway_ip: Option<Ipv4Addr>,
-    src_ip: Option<Ipv4Addr>,
-    dst_ip: Option<Ipv4Addr>,
-}
-
-impl ModActionArg for IcmpRedirectMetaOpt {}
-
-#[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub struct TcpMeta {
-    pub src: u16,
-    pub dst: u16,
-    pub flags: u8,
-    pub seq: u32,
-    pub ack: u32,
-}
-
-impl TcpMeta {
-    pub fn has_flag(&self, flag: u8) -> bool {
-        (self.flags & flag) != 0
-    }
-
-    // TODO: check that at least one field was specified.
-    pub fn modify(
-        src: Option<u16>,
-        dst: Option<u16>,
-        flags: Option<u8>,
-    ) -> HeaderAction<TcpMeta, TcpMetaOpt> {
-        HeaderAction::Modify(TcpMetaOpt { src, dst, flags }.into())
-    }
-}
-
-impl PushActionArg for TcpMeta {}
-
-impl From<&LayoutVerified<&[u8], TcpHdrRaw>> for TcpMeta {
-    fn from(raw: &LayoutVerified<&[u8], TcpHdrRaw>) -> Self {
-        TcpMeta {
-            src: u16::from_be_bytes(raw.src_port),
-            dst: u16::from_be_bytes(raw.dst_port),
-            flags: raw.flags,
-            seq: u32::from_be_bytes(raw.seq),
-            ack: u32::from_be_bytes(raw.ack),
+    pub fn set_pay_len(&mut self, len: usize) {
+        match self {
+            // Nothing to do for TCP as it determines payload len from
+            // IP header.
+            Self::Tcp(_tcp) => (),
+            Self::Udp(udp) => udp.set_pay_len(len as u16),
         }
     }
-}
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct TcpMetaOpt {
-    src: Option<u16>,
-    dst: Option<u16>,
-    flags: Option<u8>,
-}
-
-impl ModActionArg for TcpMetaOpt {}
-
-impl HeaderActionModify<TcpMetaOpt> for TcpMeta {
-    fn run_modify(&mut self, spec: &TcpMetaOpt) {
-        if spec.src.is_some() {
-            self.src = spec.src.unwrap()
-        }
-
-        if spec.dst.is_some() {
-            self.dst = spec.dst.unwrap()
-        }
-
-        if spec.flags.is_some() {
-            self.flags = spec.flags.unwrap()
+    pub fn set_total_len(&mut self, len: usize) {
+        match self {
+            // Nothing to do for TCP as it determines payload len from
+            // IP header.
+            Self::Tcp(_tcp) => (),
+            Self::Udp(udp) => udp.set_total_len(len as u16),
         }
     }
-}
 
-#[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub struct UdpMeta {
-    pub src: u16,
-    pub dst: u16,
-}
-
-impl UdpMeta {
-    pub fn modify(
-        src: Option<u16>,
-        dst: Option<u16>,
-    ) -> HeaderAction<UdpMeta, UdpMetaOpt> {
-        HeaderAction::Modify(UdpMetaOpt { src, dst }.into())
-    }
-}
-
-impl PushActionArg for UdpMeta {}
-
-impl From<&LayoutVerified<&[u8], UdpHdrRaw>> for UdpMeta {
-    fn from(raw: &LayoutVerified<&[u8], UdpHdrRaw>) -> Self {
-        UdpMeta {
-            src: u16::from_be_bytes(raw.src_port),
-            dst: u16::from_be_bytes(raw.dst_port),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct UdpMetaOpt {
-    src: Option<u16>,
-    dst: Option<u16>,
-}
-
-impl ModActionArg for UdpMetaOpt {}
-
-impl HeaderActionModify<UdpMetaOpt> for UdpMeta {
-    fn run_modify(&mut self, spec: &UdpMetaOpt) {
-        if spec.src.is_some() {
-            self.src = spec.src.unwrap()
-        }
-
-        if spec.dst.is_some() {
-            self.dst = spec.dst.unwrap()
+    pub fn udp(&self) -> Option<&UdpHdr> {
+        match self {
+            Self::Udp(udp) => Some(udp),
+            _ => None,
         }
     }
 }
@@ -401,28 +355,35 @@ impl HeaderActionModify<UdpMetaOpt> for UdpMeta {
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub enum UlpMeta {
-    IcmpDu(IcmpDuMeta),
-    IcmpEcho(IcmpEchoMeta),
-    IcmpRedirect(IcmpRedirectMeta),
     Tcp(TcpMeta),
     Udp(UdpMeta),
 }
 
-impl From<IcmpDuMeta> for UlpMeta {
-    fn from(icmp: IcmpDuMeta) -> Self {
-        UlpMeta::IcmpDu(icmp)
-    }
+impl PushActionArg for UlpMeta {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum UlpMetaOpt {
+    Tcp(TcpMetaOpt),
+    Udp(UdpMetaOpt),
 }
 
-impl From<IcmpEchoMeta> for UlpMeta {
-    fn from(icmp: IcmpEchoMeta) -> Self {
-        UlpMeta::IcmpEcho(icmp)
-    }
-}
+impl ModActionArg for UlpMetaOpt {}
 
-impl From<IcmpRedirectMeta> for UlpMeta {
-    fn from(icmp: IcmpRedirectMeta) -> Self {
-        UlpMeta::IcmpRedirect(icmp)
+impl HeaderActionModify<UlpMetaOpt> for UlpMeta {
+    fn run_modify(&mut self, spec: &UlpMetaOpt) {
+        match (self, spec) {
+            (UlpMeta::Tcp(tcp_meta), UlpMetaOpt::Tcp(tcp_spec)) => {
+                tcp_meta.run_modify(tcp_spec);
+            }
+
+            (UlpMeta::Udp(udp_meta), UlpMetaOpt::Udp(udp_spec)) => {
+                udp_meta.run_modify(udp_spec);
+            }
+
+            (meta, spec) => {
+                panic!("differeing IP meta and spec: {:?} {:?}", meta, spec);
+            }
+        }
     }
 }
 
@@ -438,42 +399,28 @@ impl From<UdpMeta> for UlpMeta {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum UlpMetaOpt {
-    Tcp(TcpMetaOpt),
-    Udp(UdpMetaOpt),
-}
-
-impl PushActionArg for UlpMeta {}
-impl ModActionArg for UlpMetaOpt {}
-
-impl From<TcpMetaOpt> for UlpMetaOpt {
-    fn from(tcp: TcpMetaOpt) -> Self {
-        UlpMetaOpt::Tcp(tcp)
+impl From<&UlpHdr> for UlpMeta {
+    fn from(ulp: &UlpHdr) -> Self {
+        match ulp {
+            UlpHdr::Tcp(tcp) => UlpMeta::Tcp(TcpMeta::from(tcp)),
+            UlpHdr::Udp(udp) => UlpMeta::Udp(UdpMeta::from(udp)),
+        }
     }
 }
 
-impl From<UdpMetaOpt> for UlpMetaOpt {
-    fn from(udp: UdpMetaOpt) -> Self {
-        UlpMetaOpt::Udp(udp)
+impl HeaderActionModify<UlpMetaModify> for UlpMeta {
+    fn run_modify(&mut self, spec: &UlpMetaModify) {
+        match self {
+            UlpMeta::Tcp(tcp_meta) => {
+                tcp_meta.run_modify(spec)
+            },
+
+            UlpMeta::Udp(udp_meta) => {
+                udp_meta.run_modify(spec)
+            }
+        }
     }
 }
-
-#[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub struct GeneveMeta {
-    vni: u32,
-}
-
-impl PushActionArg for GeneveMeta {}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct GeneveMetaOpt {
-    vni: Option<u32>,
-}
-
-impl ModActionArg for GeneveMetaOpt {}
 
 /// The action to take for a particular header transposition.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -483,10 +430,9 @@ where
     M: ModActionArg + fmt::Debug,
 {
     Push(P),
-    Pop(),
+    Pop,
     Modify(M),
     Ignore,
-    NotPresent,
 }
 
 impl<P, M> Default for HeaderAction<P, M>
@@ -495,22 +441,39 @@ where
     M: ModActionArg + fmt::Debug,
 {
     fn default() -> HeaderAction<P, M> {
-        HeaderAction::NotPresent
+        HeaderAction::Ignore
     }
 }
 
+// XXX Every time I look at this I ask myself "why must P be
+// PushActionArg?". This is just saying that the metadata passed to
+// run() must be the actual full header metadata (e.g. `TcpMeta`). But
+// because of the way I coded this up originally that's also the same
+// type as the argument for a push action. That is, I've conflated the
+// header metadata and the action arguments a bit. This is mostly fine
+// because the two overlap almost 100% (i.e., the values needed for
+// header metadata and the values needed to push a header are
+// basically always the same), but it's a bit confusing and it would
+// probably be better to place a seam between these two things.
 impl<P, M> HeaderAction<P, M>
 where
-    P: HeaderActionModify<M> + PushActionArg + fmt::Debug,
+    P: HeaderActionModify<M> + PushActionArg + Clone + fmt::Debug,
     M: ModActionArg + fmt::Debug,
 {
     pub fn run(&self, meta: &mut Option<P>) {
         match self {
-            Self::Modify(arg) => meta.as_mut().unwrap().run_modify(arg),
             Self::Ignore => (),
-            action => todo!("implment run() for action {:?}", action),
+
+            Self::Modify(arg) => meta.as_mut().unwrap().run_modify(arg),
+
+            Self::Push(arg) => {
+                meta.replace(arg.clone());
+            },
+
+            Self::Pop => {
+                meta.take();
+            },
         }
-        return;
     }
 }
 
@@ -518,95 +481,57 @@ pub trait HeaderActionModify<M: ModActionArg> {
     fn run_modify(&mut self, mod_spec: &M);
 }
 
-// Perform incremental checksum update. It is expected that `csum` is
-// the one's complement of the header checksum (i.e.: `!hdr.csum`).
-//
-// RFC 1624 Computation of the Internet Checksum via Incremental Update
-pub fn csum_incremental(csum: &mut u32, old: u16, new: u16) {
-    *csum += (!old as u32) + new as u32;
-    while (*csum >> 16) != 0 {
-        *csum = (*csum >> 16) + (*csum & 0xFFFF);
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct UlpGenericModify {
+    pub src_port: Option<u16>,
+    pub dst_port: Option<u16>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct UlpMetaModify {
+    pub generic: UlpGenericModify,
+    pub tcp_flags: Option<u8>,
+}
+
+impl ModActionArg for UlpMetaModify {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum UlpHeaderAction<M>
+where
+    M: ModActionArg + fmt::Debug,
+{
+    Ignore,
+    Modify(M)
+}
+
+impl<M> Default for UlpHeaderAction<M>
+where
+    M: ModActionArg + fmt::Debug,
+{
+    fn default() -> UlpHeaderAction<M> {
+        UlpHeaderAction::Ignore
     }
 }
 
-// Test actual NAT-rewrite incremental checksum update scenario.
-#[test]
-fn csum_nat_rewrite() {
-    use zerocopy::AsBytes;
+impl<M> UlpHeaderAction<M>
+where
+    M: ModActionArg + fmt::Debug,
 
-    fn rfc1071_sum(initial: u32, bytes: &[u8]) -> u16 {
-        let mut sum = initial;
-        let mut len = bytes.len();
-        let mut pos = 0;
-
-        while len > 1 {
-            sum += (u16::from_ne_bytes([bytes[pos], bytes[pos + 1]])) as u32;
-            pos += 2;
-            len -= 2;
+{
+    pub fn run<P>(&self, meta: &mut Option<P>)
+    where
+        P: HeaderActionModify<M> + fmt::Debug,
+    {
+        match self {
+            Self::Ignore => (),
+            Self::Modify(arg) => meta.as_mut().unwrap().run_modify(arg),
         }
-
-        if len == 1 {
-            sum += bytes[pos] as u32;
-        }
-
-        while (sum >> 16) != 0 {
-            sum = (sum >> 16) + (sum & 0xFFFF);
-        }
-
-        (!sum & 0xFFFF) as u16
     }
+}
 
-    let mut ip4 = Ipv4HdrRaw {
-        ver_hdr_len: 0x45,
-        dscp_ecn: 0x00,
-        total_len: 60u16.to_be_bytes(),
-        ident: 16335u16.to_be_bytes(),
-        frag_and_flags: [0x40, 0x00],
-        ttl: 64,
-        proto: 6,
-        csum: 0u16.to_be_bytes(),
-        src: "10.0.0.210".parse::<Ipv4Addr>().unwrap().to_be_bytes(),
-        dst: "52.13.236.190".parse::<Ipv4Addr>().unwrap().to_be_bytes(),
-    };
-    ip4.csum = rfc1071_sum(0, ip4.as_bytes()).to_ne_bytes();
-    assert_ne!(u16::from_be_bytes(ip4.csum), 0);
-
-    let new_ip_src = "10.0.0.99".parse::<Ipv4Addr>().unwrap().to_be_bytes();
-    let new_ip_dst = ip4.dst;
-
-    //================================================================
-    // The code starting here is from opte-drv
-    //================================================================
-    let mut csum: u32 = (!u16::from_ne_bytes(ip4.csum)) as u32;
-    csum_incremental(
-        &mut csum,
-        u16::from_ne_bytes([ip4.src[0], ip4.src[1]]),
-        u16::from_ne_bytes([new_ip_src[0], new_ip_src[1]]),
-    );
-    csum_incremental(
-        &mut csum,
-        u16::from_ne_bytes([ip4.src[2], ip4.src[3]]),
-        u16::from_ne_bytes([new_ip_src[2], new_ip_src[3]]),
-    );
-    csum_incremental(
-        &mut csum,
-        u16::from_ne_bytes([ip4.dst[0], ip4.dst[1]]),
-        u16::from_ne_bytes([new_ip_dst[0], new_ip_dst[1]]),
-    );
-    csum_incremental(
-        &mut csum,
-        u16::from_ne_bytes([ip4.dst[2], ip4.dst[3]]),
-        u16::from_ne_bytes([new_ip_dst[2], new_ip_dst[3]]),
-    );
-    assert_eq!(csum & 0xFFFF_0000, 0);
-
-    ip4.src = new_ip_src;
-    ip4.dst = new_ip_dst;
-    ip4.csum = (!(csum as u16)).to_ne_bytes();
-    //================================================================
-    // End of code from opte-drv
-    //================================================================
-
-    let check_csum = rfc1071_sum(0, ip4.as_bytes()).to_ne_bytes();
-    assert_eq!(check_csum, [0u8; 2]);
+#[derive(Clone, Debug)]
+pub enum IpCidr {
+    Ip4(crate::ip4::Ipv4Cidr),
+    // XXX Real Ipv6Cidr
+    Ip6(u8),
 }

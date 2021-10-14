@@ -3,6 +3,8 @@
 #![feature(vec_into_raw_parts)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
+#![deny(unreachable_patterns)]
+#![deny(unused_must_use)]
 
 #[cfg(any(feature = "std", test))]
 #[macro_use]
@@ -39,22 +41,31 @@ pub use cstr_core::CString;
 use serde::{Deserialize, Serialize};
 
 pub mod arp;
+pub mod checksum;
+#[macro_use]
 pub mod ether;
 pub mod flow_table;
+pub mod geneve;
+#[macro_use]
 pub mod headers;
 pub mod icmp;
 pub mod ioctl;
+#[macro_use]
 pub mod ip4;
+#[macro_use]
 pub mod ip6;
 pub mod layer;
 pub mod nat;
 pub mod oxide_net;
+#[macro_use]
 pub mod packet;
 pub mod port;
 pub mod rule;
 pub mod sync;
+#[macro_use]
 pub mod tcp;
 pub mod tcp_state;
+#[macro_use]
 pub mod udp;
 pub mod vpc;
 
@@ -206,4 +217,8 @@ impl Display for Direction {
 
         write!(f, "{}", dirstr)
     }
+}
+
+pub enum Error {
+    ResourceAlreadyExists,
 }

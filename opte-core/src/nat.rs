@@ -18,17 +18,19 @@ use alloc::vec::Vec;
 use std::vec::Vec;
 
 use crate::ether::{EtherAddr, EtherMeta};
-use crate::headers::{HeaderAction, IcmpEchoMeta, Ipv4Meta, TcpMeta, UdpMeta};
-use crate::ip4::Ipv4Addr;
+use crate::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
+use crate::ip4::{Ipv4Addr, Ipv4Meta};
 use crate::layer::InnerFlowId;
+use crate::port::meta::Meta;
 use crate::rule::{
-    ActionDesc, ResourceError, Resources, StatefulAction, UlpHdrAction, HT,
+    self, ActionDesc, ResourceError, StatefulAction, HT,
 };
+use crate::sync::{KMutex, KMutexType};
 use crate::Direction;
 
 pub struct NatPool {
     // Map private IP to public IP + free list of ports
-    free_list: BTreeMap<Ipv4Addr, (Ipv4Addr, Vec<u16>)>,
+    free_list: KMutex<BTreeMap<Ipv4Addr, (Ipv4Addr, Vec<u16>)>>,
 }
 
 impl NatPool {
@@ -39,25 +41,27 @@ impl NatPool {
         pub_ports: Range<u16>,
     ) {
         let free_list = pub_ports.clone().collect();
-        self.free_list.insert(priv_ip, (pub_ip, free_list));
+        self.free_list.lock().insert(priv_ip, (pub_ip, free_list));
     }
 
     pub fn num_avail(&self, priv_ip: Ipv4Addr) -> Result<usize, ResourceError> {
-        match self.free_list.get(&priv_ip) {
+        match self.free_list.lock().get(&priv_ip) {
             Some((_, ports)) => Ok(ports.len()),
             _ => Err(ResourceError::NoMatch(priv_ip.to_string())),
         }
     }
 
     pub fn new() -> Self {
-        NatPool { free_list: BTreeMap::new() }
+        NatPool {
+            free_list: KMutex::new(BTreeMap::new(), KMutexType::Driver)
+        }
     }
 
     pub fn obtain(
-        &mut self,
+        &self,
         priv_ip: Ipv4Addr,
     ) -> Result<(Ipv4Addr, u16), ResourceError> {
-        match self.free_list.get_mut(&priv_ip) {
+        match self.free_list.lock().get_mut(&priv_ip) {
             Some((ip, ports)) => {
                 if ports.len() == 0 {
                     return Err(ResourceError::Exhausted);
@@ -78,7 +82,7 @@ impl NatPool {
     // would return a BorrowedResource. The release function would
     // take a BorrowedResource and return nothing.
     pub fn release(&mut self, priv_ip: Ipv4Addr, p: (Ipv4Addr, u16)) {
-        match self.free_list.get_mut(&priv_ip) {
+        match self.free_list.lock().get_mut(&priv_ip) {
             Some((_ip, ports)) => {
                 let (_, pub_port) = p;
                 ports.push(pub_port);
@@ -91,12 +95,13 @@ impl NatPool {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DynNat4 {
     layer: String,
     priv_ip: Ipv4Addr,
     priv_mac: EtherAddr,
     pub_mac: EtherAddr,
+    ip_pool: Arc<NatPool>,
 }
 
 impl DynNat4 {
@@ -105,8 +110,9 @@ impl DynNat4 {
         addr: Ipv4Addr,
         priv_mac: EtherAddr,
         pub_mac: EtherAddr,
+        ip_pool: Arc<NatPool>,
     ) -> Self {
-        DynNat4 { layer, priv_ip: addr.into(), priv_mac, pub_mac }
+        DynNat4 { layer, priv_ip: addr.into(), priv_mac, pub_mac, ip_pool }
     }
 }
 
@@ -114,12 +120,11 @@ impl StatefulAction for DynNat4 {
     fn gen_desc(
         &self,
         flow_id: InnerFlowId,
-        resources: &Resources,
-    ) -> Arc<dyn ActionDesc> {
-        let pool = &resources.nat_pool;
+        _meta: &mut Meta,
+    ) -> rule::GenDescResult {
+        let pool = &self.ip_pool;
         let priv_port = flow_id.src_port;
-        let mut lock = pool.lock().unwrap();
-        match lock.as_mut().unwrap().obtain(self.priv_ip) {
+        match pool.obtain(self.priv_ip) {
             Ok((pub_ip, pub_port)) => {
                 let desc = DynNat4Desc {
                     priv_mac: self.priv_mac,
@@ -129,14 +134,15 @@ impl StatefulAction for DynNat4 {
                     pub_ip,
                     pub_port,
                 };
-                // TODO replace this with SDT probe
-                // println!("desc: {:?}", desc);
-                Arc::new(desc)
+
+                Ok(Arc::new(desc))
             }
 
-            Err(e) => {
-                todo!("return error on resource acquisition failure: {:?}", e);
-                // return Err(ActionInitError::ResourceError(e)),
+            // XXX This needs improving.
+            Err(_e) => {
+                Err(rule::GenDescError::ResourceExhausted {
+                    name: "SNAT Pool".to_string()
+                })
             }
         }
     }
@@ -161,34 +167,50 @@ impl ActionDesc for DynNat4Desc {
 
     fn gen_ht(&self, dir: Direction) -> HT {
         match dir {
+            // Outbound traffic needs it's source IP and source port
+            // mapped to the public values obtained from the NAT pool.
+            //
+            // XXX I also currently remap the MAC address to work
+            // around what seems to be a limitation with my home
+            // router, this should be removed eventually.
             Direction::Out => {
                 HT {
                     name: DYN_NAT4_NAME.to_string(),
                     inner_ether: EtherMeta::modify(Some(self.pub_mac), None),
                     inner_ip: Ipv4Meta::modify(Some(self.pub_ip), None, None),
-                    ulp: UlpHdrAction {
-                        // TODO Implement NAT support for DU messages.
-                        icmp_du: HeaderAction::Ignore,
-                        icmp_echo: IcmpEchoMeta::modify(Some(self.pub_port)),
-                        tcp: TcpMeta::modify(Some(self.pub_port), None, None),
-                        udp: UdpMeta::modify(Some(self.pub_port), None),
-                    },
+                    inner_ulp: UlpHeaderAction::Modify(
+                        UlpMetaModify {
+                            generic: UlpGenericModify {
+                                src_port: Some(self.pub_port),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }
+                    ),
                     ..Default::default()
                 }
             }
 
+            // Inbound traffic needs its destination IP and
+            // destination port mapped back to the private values that
+            // the guest expects to see.
+            //
+            // XXX As mentioned above, we currently also remap the MAC
+            // address to work around a router limitation.
             Direction::In => {
                 HT {
                     name: DYN_NAT4_NAME.to_string(),
                     inner_ether: EtherMeta::modify(None, Some(self.priv_mac)),
                     inner_ip: Ipv4Meta::modify(None, Some(self.priv_ip), None),
-                    ulp: UlpHdrAction {
-                        // TODO Implement NAT support for DU messages.
-                        icmp_du: HeaderAction::Ignore,
-                        icmp_echo: IcmpEchoMeta::modify(Some(self.priv_port)),
-                        tcp: TcpMeta::modify(None, Some(self.priv_port), None),
-                        udp: UdpMeta::modify(None, Some(self.priv_port)),
-                    },
+                    inner_ulp: UlpHeaderAction::Modify(
+                        UlpMetaModify {
+                            generic: UlpGenericModify {
+                                dst_port: Some(self.priv_port),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                    ),
                     ..Default::default()
                 }
             }
@@ -205,7 +227,8 @@ fn dyn_nat4_ht() {
     use crate::ether::ETHER_TYPE_IPV4;
     use crate::headers::{IpMeta, UlpMeta};
     use crate::ip4::Protocol;
-    use crate::packet::PacketMeta;
+    use crate::packet::{MetaGroup, PacketMeta};
+    use crate::tcp::TcpMeta;
 
     let priv_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
     let pub_mac = EtherAddr::from([0xa8, 0x40, 0x25, 0x00, 0x00, 0x63]);
@@ -238,23 +261,26 @@ fn dyn_nat4_ht() {
     });
 
     let mut meta = PacketMeta {
-        inner_ether: Some(ether),
-        inner_ip: Some(ip),
-        ulp: Some(ulp),
-        ..Default::default()
+        outer: Default::default(),
+        inner: MetaGroup {
+            ether: Some(ether),
+            ip: Some(ip),
+            ulp: Some(ulp),
+            ..Default::default()
+        },
     };
 
-    let ether_meta = meta.inner_ether.as_ref().unwrap();
+    let ether_meta = meta.inner.ether.as_ref().unwrap();
     assert_eq!(ether_meta.src, priv_mac);
     assert_eq!(ether_meta.dst, dest_mac);
 
     out_ht.run(&mut meta);
 
-    let ether_meta = meta.inner_ether.as_ref().unwrap();
+    let ether_meta = meta.inner.ether.as_ref().unwrap();
     assert_eq!(ether_meta.src, pub_mac);
     assert_eq!(ether_meta.dst, dest_mac);
 
-    let ip4_meta = match meta.inner_ip.as_ref().unwrap() {
+    let ip4_meta = match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(v) => v,
         _ => panic!("expect Ipv4Meta"),
     };
@@ -263,7 +289,7 @@ fn dyn_nat4_ht() {
     assert_eq!(ip4_meta.dst, outside_ip);
     assert_eq!(ip4_meta.proto, Protocol::TCP);
 
-    let tcp_meta = match meta.ulp.as_ref().unwrap() {
+    let tcp_meta = match meta.inner.ulp.as_ref().unwrap() {
         UlpMeta::Tcp(v) => v,
         _ => panic!("expect TcpMeta"),
     };

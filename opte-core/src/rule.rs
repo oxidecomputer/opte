@@ -22,18 +22,19 @@ use crate::arp::{
 };
 use crate::ether::{EtherAddr, EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
 use crate::flow_table::StateSummary;
+use crate::geneve::{GeneveMeta, GeneveMetaOpt};
 use crate::headers::{
-    GeneveMeta, GeneveMetaOpt, HeaderAction, HeaderActionModify, IcmpDuMeta,
-    IcmpDuMetaOpt, IcmpEchoMeta, IcmpEchoMetaOpt, IpMeta, IpMetaOpt, Ipv4Meta,
-    TcpMeta, TcpMetaOpt, UdpMeta, UdpMetaOpt, UlpMeta,
+    HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
+    UlpMetaOpt
 };
-use crate::ip4::{Ipv4Addr, Ipv4Cidr, Protocol};
-use crate::layer::{InnerFlowId, IpAddr};
-use crate::nat::NatPool;
+use crate::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
+use crate::layer::{InnerFlowId};
 use crate::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
 };
-use crate::sync::{KMutex, KMutexType};
+use crate::port::meta::Meta;
+use crate::tcp::TcpMeta;
+use crate::udp::UdpMeta;
 use crate::{CString, Direction};
 
 use illumos_ddi_dki::{c_char, uintptr_t};
@@ -370,7 +371,7 @@ impl Predicate {
         match self {
             Self::Not(pred) => return !pred.is_match(meta),
 
-            Self::InnerEtherType(list) => match meta.inner_ether {
+            Self::InnerEtherType(list) => match meta.inner.ether {
                 None => return false,
 
                 Some(EtherMeta { ether_type, .. }) => {
@@ -382,7 +383,7 @@ impl Predicate {
                 }
             },
 
-            Self::InnerEtherDst(list) => match meta.inner_ether {
+            Self::InnerEtherDst(list) => match meta.inner.ether {
                 None => return false,
 
                 Some(EtherMeta { dst, .. }) => {
@@ -394,7 +395,7 @@ impl Predicate {
                 }
             },
 
-            Self::InnerEtherSrc(list) => match meta.inner_ether {
+            Self::InnerEtherSrc(list) => match meta.inner.ether {
                 None => return false,
 
                 Some(EtherMeta { src, .. }) => {
@@ -406,7 +407,7 @@ impl Predicate {
                 }
             },
 
-            Self::InnerArpHtype(m) => match meta.inner_arp {
+            Self::InnerArpHtype(m) => match meta.inner.arp {
                 None => return false,
 
                 Some(ArpMeta { htype, .. }) => {
@@ -416,7 +417,7 @@ impl Predicate {
                 }
             },
 
-            Self::InnerArpPtype(m) => match meta.inner_arp {
+            Self::InnerArpPtype(m) => match meta.inner.arp {
                 None => return false,
 
                 Some(ArpMeta { ptype, .. }) => {
@@ -426,7 +427,7 @@ impl Predicate {
                 }
             },
 
-            Self::InnerArpOp(m) => match meta.inner_arp {
+            Self::InnerArpOp(m) => match meta.inner.arp {
                 None => return false,
 
                 Some(ArpMeta { op, .. }) => {
@@ -436,7 +437,7 @@ impl Predicate {
                 }
             },
 
-            Self::InnerIpProto(list) => match meta.inner_ip {
+            Self::InnerIpProto(list) => match meta.inner.ip {
                 None => return false,
 
                 Some(IpMeta::Ip4(Ipv4Meta { proto, .. })) => {
@@ -450,9 +451,7 @@ impl Predicate {
                 _ => todo!("implement IPv6 for InnerIpProto"),
             },
 
-            Self::InnerSrcIp4(list) => match meta.inner_ip {
-                None => return false,
-
+            Self::InnerSrcIp4(list) => match meta.inner.ip {
                 Some(IpMeta::Ip4(Ipv4Meta { src: ip, .. })) => {
                     for m in list {
                         if m.matches(ip) {
@@ -461,12 +460,12 @@ impl Predicate {
                     }
                 }
 
-                _ => todo!("implement Ip6 meta for InnerSrcIp4"),
+                // Either there is no Inner IP metadata or this is an
+                // IPv6 packet.
+                _ => return false,
             },
 
-            Self::InnerDstIp4(list) => match meta.inner_ip {
-                None => return false,
-
+            Self::InnerDstIp4(list) => match meta.inner.ip {
                 Some(IpMeta::Ip4(Ipv4Meta { dst: ip, .. })) => {
                     for m in list {
                         if m.matches(ip) {
@@ -475,19 +474,13 @@ impl Predicate {
                     }
                 }
 
-                _ => todo!("implement Ip6 meta for InnerDstIp4"),
+                // Either there is no Inner IP metadata or this is an
+                // IPv6 packet.
+                _ => return false,
             },
 
-            Self::InnerDstPort(list) => match meta.ulp {
+            Self::InnerDstPort(list) => match meta.inner.ulp {
                 None => return false,
-
-                Some(UlpMeta::IcmpEcho(IcmpEchoMeta { id: port })) => {
-                    for m in list {
-                        if m.matches(port) {
-                            return true;
-                        }
-                    }
-                }
 
                 Some(UlpMeta::Tcp(TcpMeta { dst: port, .. })) => {
                     for m in list {
@@ -504,8 +497,6 @@ impl Predicate {
                         }
                     }
                 }
-
-                _ => todo!("implement InnerDstPort for {:?}", meta.ulp),
             },
         }
 
@@ -546,14 +537,14 @@ impl DataPredicate {
     // use `PacketMeta` to determine if there is a suitable payload to
     // be inspected. That is, if there is no metadata for a given
     // header, there is certainly no payload.
-    fn is_match<R>(&self, meta: &PacketMeta, rdr: &mut R) -> bool
+    fn is_match<'a, 'b, R>(&self, meta: &PacketMeta, rdr: &'b mut R) -> bool
     where
-        R: PacketRead,
+        R: PacketRead<'a>,
     {
         match self {
             Self::Not(pred) => return !pred.is_match(meta, rdr),
 
-            Self::InnerArpTpa(list) => match meta.inner_arp {
+            Self::InnerArpTpa(list) => match meta.inner.arp {
                 None => return false,
 
                 Some(ArpMeta { htype, ptype, .. }) => {
@@ -599,13 +590,13 @@ impl DataPredicate {
 
 /// An Action Descriptor type holds the information needed to create
 /// an HT which implements the desired action. An ActionDesc is
-/// created by an Action implementation.
+/// created by an [`Action`] implementation.
 pub trait ActionDesc {
-    /// Perform any finalization needed. For a stateful action this
-    /// will typically release ownership of a resource.
+    /// Perform any finalization needed. For a [`StatefulAction`] this
+    /// will typically release ownership of any obtained resource.
     fn fini(&self);
 
-    /// Generate the `HT` which implements this descriptor.
+    /// Generate the [`HT`] which implements this descriptor.
     fn gen_ht(&self, dir: Direction) -> HT;
 
     fn name(&self) -> &str;
@@ -641,7 +632,6 @@ pub trait ActionContext {
     fn exec(
         &self,
         meta: &PacketMeta,
-        resources: &Resources,
         payload: &mut [u8],
     ) -> Result<(), String>;
 }
@@ -683,21 +673,7 @@ impl ActionDesc for IdentityDesc {
     }
 
     fn gen_ht(&self, _dir: Direction) -> HT {
-        HT {
-            name: self.name.clone(),
-            outer_ether: HeaderAction::Ignore,
-            outer_ip: HeaderAction::Ignore,
-            outer_udp: HeaderAction::Ignore,
-            geneve: HeaderAction::Ignore,
-            inner_ether: HeaderAction::Ignore,
-            inner_ip: HeaderAction::Ignore,
-            ulp: UlpHdrAction {
-                icmp_du: HeaderAction::Ignore,
-                icmp_echo: HeaderAction::Ignore,
-                tcp: HeaderAction::Ignore,
-                udp: HeaderAction::Ignore,
-            },
-        }
+        Default::default()
     }
 
     fn name(&self) -> &str {
@@ -722,103 +698,11 @@ impl StaticAction for Identity {
             name: self.name.clone(),
             outer_ether: HeaderAction::Ignore,
             outer_ip: HeaderAction::Ignore,
-            outer_udp: HeaderAction::Ignore,
-            geneve: HeaderAction::Ignore,
+            outer_ulp: HeaderAction::Ignore,
+            outer_encap: HeaderAction::Ignore,
             inner_ether: HeaderAction::Ignore,
             inner_ip: HeaderAction::Ignore,
-            ulp: UlpHdrAction {
-                icmp_du: HeaderAction::Ignore,
-                icmp_echo: HeaderAction::Ignore,
-                tcp: HeaderAction::Ignore,
-                udp: HeaderAction::Ignore,
-            },
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct UlpHdrAction {
-    pub icmp_du: HeaderAction<IcmpDuMeta, IcmpDuMetaOpt>,
-    pub icmp_echo: HeaderAction<IcmpEchoMeta, IcmpEchoMetaOpt>,
-    pub tcp: HeaderAction<TcpMeta, TcpMetaOpt>,
-    pub udp: HeaderAction<UdpMeta, UdpMetaOpt>,
-}
-
-impl UlpHdrAction {
-    pub fn run(&self, meta: &mut PacketMeta) {
-        match &mut meta.ulp {
-            Some(ulp) => match ulp {
-                UlpMeta::IcmpDu(_icmp_meta) => match &self.icmp_du {
-                    HeaderAction::Ignore => (),
-
-                    // TODO For now we only implement Ignore for ICMP DU.
-                    action => {
-                        todo!(
-                            "action {:?} not implemented for ICMP DU",
-                            action
-                        );
-                    }
-                },
-
-                UlpMeta::IcmpEcho(icmp_meta) => match &self.icmp_echo {
-                    HeaderAction::Modify(arg) => {
-                        icmp_meta.run_modify(&arg);
-                    }
-
-                    HeaderAction::Ignore => (),
-
-                    // TODO: We really need to either a) return a
-                    // runtime error when a user tries to create an
-                    // action type (push, pop, modify, etc) for a
-                    // header type which doesn't support it or b) make
-                    // it a compile time error. Or all header types
-                    // need to support all action types.
-                    action => {
-                        todo!(
-                            "action {:?} not implemented for ICMP Echo",
-                            action
-                        );
-                    }
-                },
-
-                UlpMeta::IcmpRedirect(_icmp_meta) => match &self.icmp_du {
-                    HeaderAction::Ignore => (),
-
-                    // TODO For now we only implement Ignore for ICMP Redirect.
-                    action => {
-                        todo!(
-                            "action {:?} not implemented for ICMP Redirect",
-                            action
-                        );
-                    }
-                },
-
-                UlpMeta::Tcp(tcp_meta) => match &self.tcp {
-                    HeaderAction::Modify(arg) => {
-                        tcp_meta.run_modify(&arg);
-                    }
-
-                    HeaderAction::Ignore => (),
-
-                    action => {
-                        todo!("implement run() for action {:?}", action);
-                    }
-                },
-
-                UlpMeta::Udp(udp_meta) => match &self.udp {
-                    HeaderAction::Modify(arg) => {
-                        udp_meta.run_modify(&arg);
-                    }
-
-                    HeaderAction::Ignore => (),
-
-                    action => {
-                        todo!("implement run() for action {:?}", action);
-                    }
-                },
-            },
-
-            None => (),
+            inner_ulp: UlpHeaderAction::Ignore,
         }
     }
 }
@@ -828,11 +712,12 @@ pub struct HT {
     pub name: String,
     pub outer_ether: HeaderAction<EtherMeta, EtherMetaOpt>,
     pub outer_ip: HeaderAction<IpMeta, IpMetaOpt>,
-    pub outer_udp: HeaderAction<UdpMeta, UdpMetaOpt>,
-    pub geneve: HeaderAction<GeneveMeta, GeneveMetaOpt>,
+    pub outer_ulp: HeaderAction<UlpMeta, UlpMetaOpt>,
+    pub outer_encap: HeaderAction<GeneveMeta, GeneveMetaOpt>,
     pub inner_ether: HeaderAction<EtherMeta, EtherMetaOpt>,
     pub inner_ip: HeaderAction<IpMeta, IpMetaOpt>,
-    pub ulp: UlpHdrAction,
+    // We don't support push/pop for inner_ulp.
+    pub inner_ulp: UlpHeaderAction<crate::headers::UlpMetaModify>,
 }
 
 impl StateSummary for Vec<HT> {
@@ -944,14 +829,13 @@ pub fn ht_fire_probe(
 
 impl HT {
     pub fn run(&self, meta: &mut PacketMeta) {
-        // TODO eventually we expect the inner_ether to always be
-        // present, this is just here for now because in some testing
-        // cases it's not always set.
-        if meta.inner_ether.is_some() {
-            self.inner_ether.run(&mut meta.inner_ether);
-        }
-        self.inner_ip.run(&mut meta.inner_ip);
-        self.ulp.run(meta);
+        self.outer_ether.run(&mut meta.outer.ether);
+        self.outer_ip.run(&mut meta.outer.ip);
+        self.outer_ulp.run(&mut meta.outer.ulp);
+        self.outer_encap.run(&mut meta.outer.encap);
+        self.inner_ether.run(&mut meta.inner.ether);
+        self.inner_ip.run(&mut meta.inner.ip);
+        self.inner_ulp.run(&mut meta.inner.ulp);
     }
 }
 
@@ -961,35 +845,36 @@ pub enum ResourceError {
     NoMatch(String),
 }
 
-pub struct Resources {
-    pub nat_pool: KMutex<Option<NatPool>>,
-}
+#[derive(Clone, Debug)]
+pub enum GenDescError {
+    ResourceExhausted {
+        name: String,
+    },
 
-impl Resources {
-    pub fn new() -> Self {
-        Resources { nat_pool: KMutex::new(None, KMutexType::Driver) }
-    }
-
-    pub fn set_nat_pool(&self, pool: NatPool) {
-        if self.nat_pool.lock().unwrap().is_some() {
-            // TODO: This is temporary, just want to avoid overwriting
-            // the NAT Pool which could lead to very hard-to-debug
-            // issues.
-            panic!("attempt to overwrite NAT Pool");
-        }
-
-        self.nat_pool.lock().unwrap().replace(pool);
+    Unexpected {
+        msg: String,
     }
 }
+
+pub type GenDescResult = Result<Arc<dyn ActionDesc>, GenDescError>;
 
 pub trait StatefulAction {
-    // TODO: Need to change to Result<Self::Desc, InitError> in order
-    // to account for failures to obtain resources and such.
+    /// Generate a an [`ActionDesc`] based on the [`InnerFlowId`] and
+    /// [`Meta`]. This action may also add, remove, or modify metadata
+    /// to communicate data to downstream actions.
+    ///
+    /// # Errors
+    ///
+    /// * [`GenDescError::ResourceExhausted`]: This action relies on a
+    /// dynamic resource which has been exhausted.
+    ///
+    /// * [`GenDescError::Unexpected`]: This action encountered an
+    /// unexpected error while trying to generate a descriptor.
     fn gen_desc(
         &self,
         flow_id: InnerFlowId,
-        resources: &Resources,
-    ) -> Arc<dyn ActionDesc>;
+        meta: &mut Meta,
+    ) -> GenDescResult;
 }
 
 pub trait StaticAction {
@@ -1056,44 +941,154 @@ impl From<&RuleAction> for RuleActionDump {
     }
 }
 
+// TODO Use const generics to make this array?
 #[derive(Clone, Debug)]
-pub struct Rule {
+pub struct RulePredicates {
+    hdr_preds: Vec<Predicate>,
+    data_preds: Vec<DataPredicate>,
+}
+
+pub trait RuleState {}
+
+#[derive(Clone, Debug)]
+pub struct Empty {}
+impl RuleState for Empty {}
+
+#[derive(Clone, Debug)]
+pub struct Ready {
+    hdr_preds: Vec<Predicate>,
+    data_preds: Vec<DataPredicate>,
+
+}
+impl RuleState for Ready {}
+
+#[derive(Clone, Debug)]
+pub struct Finalized {
+    preds: Option<RulePredicates>,
+}
+impl RuleState for Finalized {}
+
+#[derive(Clone, Debug)]
+pub struct Rule<S: RuleState> {
+    state: S,
     pub priority: u16,
-    predicates: Vec<Predicate>,
-    data_predicates: Vec<DataPredicate>,
     pub action: RuleAction,
 }
 
-impl Rule {
+impl Rule<Empty> {
     pub fn new(priority: u16, action: RuleAction) -> Self {
-        Rule { priority, predicates: vec![], data_predicates: vec![], action }
+        Rule {
+            state: Empty {},
+            priority,
+            action
+        }
     }
 
+    pub fn add_predicate(self, pred: Predicate) -> Rule<Ready> {
+        Rule {
+            state: Ready {
+                hdr_preds: vec![pred],
+                data_preds: vec![],
+            },
+            priority: self.priority,
+            action: self.action,
+        }
+    }
+
+    pub fn add_predicates(self, preds: Vec<Predicate>) -> Rule<Ready> {
+        Rule {
+            state: Ready {
+                hdr_preds: preds,
+                data_preds: vec![],
+            },
+            priority: self.priority,
+            action: self.action,
+        }
+    }
+
+    pub fn add_data_predicate(self, pred: DataPredicate) -> Rule<Ready> {
+        Rule {
+            state: Ready {
+                hdr_preds: vec![],
+                data_preds: vec![pred],
+            },
+            priority: self.priority,
+            action: self.action,
+        }
+    }
+
+    pub fn match_any(self) -> Rule<Finalized> {
+        Rule {
+            state: Finalized {
+                preds: None,
+            },
+            priority: self.priority,
+            action: self.action,
+        }
+    }
+}
+
+impl Rule<Ready> {
     pub fn add_predicate(&mut self, pred: Predicate) {
-        self.predicates.push(pred);
+        self.state.hdr_preds.push(pred);
     }
 
     pub fn add_data_predicate(&mut self, pred: DataPredicate) {
-        self.data_predicates.push(pred);
+        self.state.data_preds.push(pred)
     }
 
-    pub fn is_match<R>(&self, meta: &PacketMeta, rdr: &mut R) -> bool
+    pub fn finalize(self) -> Rule<Finalized> {
+        Rule {
+            state: Finalized {
+                preds: Some(RulePredicates {
+                    hdr_preds: self.state.hdr_preds,
+                    data_preds: self.state.data_preds,
+                }),
+            },
+            priority: self.priority,
+            action: self.action,
+        }
+    }
+}
+
+impl<'a> Rule<Finalized> {
+    pub fn is_match<'b, R>(&self, meta: &PacketMeta, rdr: &'b mut R) -> bool
     where
-        R: PacketRead,
+        R: PacketRead<'a>,
     {
-        for p in &self.predicates {
-            if !p.is_match(meta) {
-                return false;
+        #[cfg(debug_assert)]
+        {
+            if let Some(preds) = &self.state.preds {
+                if preds.hdr_preds.len() == 0 && preds.data_preds.len() == 0 {
+                    panic!("bug: RulePredicates must have at least one \
+                            predicate");
+                }
             }
         }
 
-        for p in &self.data_predicates {
-            if !p.is_match(meta, rdr) {
-                return false;
+        match &self.state.preds {
+            // A rule with no predicates always matches.
+            None => {
+                true
+            }
+
+            Some(preds) => {
+
+                for p in &preds.hdr_preds {
+                    if !p.is_match(meta) {
+                        return false;
+                    }
+                }
+
+                for p in &preds.data_preds {
+                    if !p.is_match(meta, rdr) {
+                        return false;
+                    }
+                }
+
+                true
             }
         }
-
-        true
     }
 }
 
@@ -1104,11 +1099,17 @@ pub struct RuleDump {
     pub action: RuleActionDump,
 }
 
-impl From<&Rule> for RuleDump {
-    fn from(rule: &Rule) -> Self {
+impl From<&Rule<Finalized>> for RuleDump {
+    fn from(rule: &Rule<Finalized>) -> Self {
+        let predicates = rule.state.preds.as_ref().map_or(
+            vec![],
+            |rp| rp.hdr_preds.clone()
+        );
+
         RuleDump {
             priority: rule.priority,
-            predicates: rule.predicates.clone(),
+            predicates,
+            // XXX What about data predicates?
             action: RuleActionDump::from(&rule.action),
         }
     }
@@ -1116,7 +1117,9 @@ impl From<&Rule> for RuleDump {
 
 #[test]
 fn rule_matching() {
-    let mut r1 = Rule::new(1, RuleAction::Allow(0));
+    use crate::packet::MetaGroup;
+
+    let r1 = Rule::new(1, RuleAction::Allow(0));
     let src_ip = "10.11.11.100".parse().unwrap();
     let src_port = "1026".parse().unwrap();
     let dst_ip = "52.10.128.69".parse().unwrap();
@@ -1139,12 +1142,19 @@ fn rule_matching() {
         ack: 0,
     });
 
-    let meta =
-        PacketMeta { inner_ip: Some(ip), ulp: Some(ulp), ..Default::default() };
+    let meta = PacketMeta {
+        outer: Default::default(),
+        inner: MetaGroup {
+            ip: Some(ip),
+            ulp: Some(ulp),
+            ..Default::default()
+        },
+    };
 
-    r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
+    let r1 = r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
         src_ip,
     )]));
+    let r1 = r1.finalize();
 
     assert!(r1.is_match(&meta, &mut rdr));
 
@@ -1164,10 +1174,12 @@ fn rule_matching() {
     });
 
     let meta = PacketMeta {
-        // inner_ether: Some(ether),
-        inner_ip: Some(ip),
-        ulp: Some(ulp),
-        ..Default::default()
+        outer: Default::default(),
+        inner: MetaGroup {
+            ip: Some(ip),
+            ulp: Some(ulp),
+            ..Default::default()
+        },
     };
 
     assert!(!r1.is_match(&meta, &mut rdr));

@@ -2,25 +2,19 @@
 //!
 //! TODO: This should be in its own crate, wrapping the illumos-ddi-dki
 //! crate. But for now just let it live here.
+use core::ops::{Deref, DerefMut};
+
 #[cfg(all(not(feature = "std"), not(test)))]
-extern crate core as std;
+use core::cell::UnsafeCell;
+#[cfg(all(not(feature = "std"), not(test)))]
+use core::ptr;
+#[cfg(any(feature = "std", test))]
+use std::sync::Mutex;
 
 use illumos_ddi_dki::kmutex_type_t;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_ddi_dki::{kmutex_t, mutex_enter, mutex_exit, mutex_init};
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use std::cell::UnsafeCell;
-#[cfg(all(not(feature = "std"), not(test)))]
-use std::convert::Infallible;
-use std::ops::Deref;
-#[cfg(all(not(feature = "std"), not(test)))]
-use std::ops::DerefMut;
-#[cfg(all(not(feature = "std"), not(test)))]
-use std::ptr;
-
-#[cfg(any(feature = "std", test))]
-use std::sync::Mutex;
 
 /// Exposes the illumos mutex(9F) API in a safe manner. We name it
 /// `KMutex` (Kernel Mutex) on purpose. The API for a kernel mutex
@@ -87,10 +81,15 @@ impl From<KMutexType> for kmutex_type_t {
 // TODO understand:
 //
 // o Why does rust-for-linux use `T: ?Sized` for struct def.
-//
-// o Why is the guard referred to as an RAII guard.
 #[cfg(all(not(feature = "std"), not(test)))]
 impl<T> KMutex<T> {
+    pub fn into_inner(self) -> T
+    where
+        T: Sized,
+    {
+        self.data.into_inner()
+    }
+
     /// Create, initialize, and return a new kernel mutex (mutex(9F))
     /// of type `mtype`, and wrap it around `val`. The returned
     /// `KMutex` is the new owner of `val`. All access from here on out
@@ -114,16 +113,15 @@ impl<T> KMutex<T> {
     /// Try to acquire the mutex guard to gain access to the underlying
     /// value. If the guard is currently held, then this call will
     /// block. The mutex is released when the guard is dropped.
-    ///
-    /// We return a `Result` to be consistent with `Mutex` so that we
-    /// can run opte-core tests in userland. However, `KMutex` will
-    /// always return `Ok(...)`.
-    pub fn lock(&self) -> Result<KMutexGuard<T>, Infallible> {
+    pub fn lock(&self) -> KMutexGuard<T> {
         // Safety: ???.
         unsafe { mutex_enter(self.mutex.get()) };
-        Ok(KMutexGuard { lock: self })
+        KMutexGuard { lock: self }
     }
 }
+
+unsafe impl<T: Send> Send for KMutex<T> {}
+unsafe impl<T: Sync> Sync for KMutex<T> {}
 
 #[cfg(all(not(feature = "std"), not(test)))]
 pub struct KMutexGuard<'a, T: 'a> {
@@ -161,17 +159,41 @@ pub struct KMutex<T> {
 }
 
 #[cfg(any(feature = "std", test))]
-impl<T> KMutex<T> {
-    pub fn new(val: T, _mtype: KMutexType) -> Self {
-        KMutex { inner: Mutex::new(val) }
+pub struct KMutexGuard<'a, T: 'a> {
+    guard: std::sync::MutexGuard<'a, T>,
+}
+
+#[cfg(any(feature = "std", test))]
+impl<T> Deref for KMutexGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.guard.deref()
     }
 }
 
 #[cfg(any(feature = "std", test))]
-impl<T> Deref for KMutex<T> {
-    type Target = Mutex<T>;
+impl<T> DerefMut for KMutexGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.guard.deref_mut()
+    }
+}
 
-    fn deref(&self) -> &Mutex<T> {
-        &self.inner
+#[cfg(any(feature = "std", test))]
+impl<T> KMutex<T> {
+    pub fn into_inner(self) -> T
+    where
+        T: Sized,
+    {
+        self.inner.into_inner().unwrap()
+    }
+
+    pub fn new(val: T, _mtype: KMutexType) -> Self {
+        KMutex { inner: Mutex::new(val) }
+    }
+
+    pub fn lock(&self) -> KMutexGuard<T> {
+        let guard = self.inner.lock().unwrap();
+        KMutexGuard { guard }
     }
 }
