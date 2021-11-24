@@ -286,20 +286,43 @@ fn register_port(req: &RegisterPortReq) -> CmdResp<()> {
     unsafe { mac_unicast_primary_get(mh, &mut private_mac) };
     let private_mac = EtherAddr::from(private_mac);
 
+    let vpc_subnet = if req.ip_cfg.snat.is_none() {
+        "192.168.77.0/24".parse().unwrap()
+    } else {
+        req.ip_cfg.snat.as_ref().unwrap().vpc_sub4
+    };
+
+    let dyn_nat = match req.ip_cfg.snat.as_ref() {
+        None => {
+            opte_core::oxide_net::DynNat4Config {
+                public_mac: EtherAddr::from([0x99; 6]),
+                public_ip: "192.168.99.99".parse().unwrap(),
+                ports: Range {
+                    start: 999,
+                    end: 1000,
+                }
+            }
+        },
+
+        Some(snat) => {
+            opte_core::oxide_net::DynNat4Config {
+                public_mac: snat.public_mac.clone(),
+                public_ip: snat.public_ip,
+                ports: Range {
+                    start: snat.port_start,
+                    end: snat.port_end
+                }
+            }
+        }
+    };
+
     let port_cfg = PortConfig {
-        vpc_subnet: req.ip_cfg.vpc_sub4.clone(),
+        vpc_subnet,
         private_mac,
         private_ip: req.ip_cfg.private_ip,
         gw_mac: req.ip_cfg.gw_mac,
         gw_ip: req.ip_cfg.gw_ip,
-        dyn_nat: opte_core::oxide_net::DynNat4Config {
-            public_mac: req.ip_cfg.public_mac.clone(),
-            public_ip: req.ip_cfg.public_ip,
-            ports: Range {
-                start: req.ip_cfg.port_start,
-                end: req.ip_cfg.port_end
-            }
-        },
+        dyn_nat,
     };
 
     let mut port = Box::new(Port::new(
@@ -308,7 +331,13 @@ fn register_port(req: &RegisterPortReq) -> CmdResp<()> {
     ));
 
     opte_core::oxide_net::firewall::setup(&mut port);
-    opte_core::oxide_net::dyn_nat4::setup(&mut port, &port_cfg);
+
+    // TODO: In order to demo this in the lab environment we currently
+    // allow SNAT to be optional.
+    if req.ip_cfg.snat.is_some() {
+        opte_core::oxide_net::dyn_nat4::setup(&mut port, &port_cfg);
+    }
+
     opte_core::oxide_net::arp::setup(&mut port, &port_cfg);
 
     let port_periodic = unsafe {

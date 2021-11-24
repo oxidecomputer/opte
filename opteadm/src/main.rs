@@ -110,65 +110,151 @@ struct RegisterPort {
     name: String,
 
     #[structopt(flatten)]
-    ip_cfg: IpConfig,
+    port_cfg: PortConfig,
 }
 
 impl From<RegisterPort> for RegisterPortReq {
     fn from(r: RegisterPort) -> Self {
         Self {
             link_name: r.name,
-            ip_cfg: r.ip_cfg.into(),
+            ip_cfg: ioctl::IpConfig::from(r.port_cfg),
         }
     }
 }
 
+// The port configuration determines the networking configuration of
+// said port (and thus the guest that is linked to it).
 #[derive(Debug, StructOpt)]
-struct IpConfig {
-    /// Private IP address
+struct PortConfig {
     #[structopt(long)]
     private_ip: Ipv4Addr,
 
-    /// Public MAC address
+    #[structopt(long)]
+    gateway_ip: Ipv4Addr,
+
+    #[structopt(long)]
+    gateway_mac: EtherAddr,
+
+    #[structopt(long)]
+    snat: Option<SnatConfig>,
+}
+
+impl From<PortConfig> for ioctl::IpConfig {
+    fn from(s: PortConfig) -> Self {
+        Self {
+            private_ip: s.private_ip,
+            gw_ip: s.gateway_ip,
+            gw_mac: s.gateway_mac,
+            snat: s.snat.map(ioctl::SnatCfg::from),
+        }
+    }
+}
+
+// A Source NAT (SNAT) configuration. This configuration allows a
+// guest to map its private IP to a slice of a public IP, by
+// allocating a contiguous range of ports from that public IP to the
+// private IP. This range is then used to perform outgoing NAT for the
+// purposes of allowing the guest to talk to the internet without a
+// dedicated public IP.
+#[derive(Debug, StructOpt)]
+struct SnatConfig {
     #[structopt(long)]
     public_mac: EtherAddr,
 
-    /// Public IP address
     #[structopt(long)]
     public_ip: Ipv4Addr,
 
-    /// Start port
     #[structopt(long)]
     port_start: u16,
 
-    /// End port
     #[structopt(long)]
     port_end: u16,
 
-    /// VPC subnet
     #[structopt(long)]
     vpc_sub4: VpcSubnet4,
-
-    /// Gateway IP
-    #[structopt(long)]
-    gw_ip: Ipv4Addr,
-
-    /// Gateway MAC address
-    #[structopt(long)]
-    gw_mac: EtherAddr,
 }
 
-impl From<IpConfig> for ioctl::IpConfig {
-    fn from(s: IpConfig) -> ioctl::IpConfig {
-        ioctl::IpConfig {
-            private_ip: s.private_ip,
+impl From<SnatConfig> for ioctl::SnatCfg {
+    fn from(s: SnatConfig) -> Self {
+        Self {
             public_mac: s.public_mac,
             public_ip: s.public_ip,
             port_start: s.port_start,
             port_end: s.port_end,
             vpc_sub4: s.vpc_sub4,
-            gw_ip: s.gw_ip,
-            gw_mac: s.gw_mac,
         }
+    }
+}
+
+impl std::str::FromStr for SnatConfig {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut public_mac = None;
+        let mut public_ip = None;
+        let mut port_start = None;
+        let mut port_end = None;
+        let mut vpc_sub4 = None;
+
+        for token in s.split(" ") {
+            match token.split_once("=") {
+                Some(("public_mac", val)) => {
+                    public_mac = Some(val.parse()?);
+                }
+
+                Some(("public_ip", val)) => {
+                    public_ip = Some(val.parse()?);
+                }
+
+                Some(("port_start", val)) => {
+                    port_start = Some(
+                        val.parse::<u16>().map_err(|e| e.to_string())?
+                    );
+                }
+
+                Some(("port_end", val)) => {
+                    port_end = Some(
+                        val.parse::<u16>().map_err(|e| e.to_string())?
+                    );
+                }
+
+                Some(("vpc_sub4", val)) => {
+                    vpc_sub4 = Some(val.parse()?);
+                }
+
+                _ => {
+                    return Err(format!("bad token: {}", token));
+                }
+            };
+        }
+
+        if public_mac == None {
+            return Err(format!("missing public_mac"));
+        }
+
+        if public_ip == None {
+            return Err(format!("missing public_ip"));
+        }
+
+        if port_start == None {
+            return Err(format!("missing port_start"));
+        }
+
+        if port_end == None {
+            return Err(format!("missing port_end"));
+        }
+
+        if vpc_sub4 == None {
+            return Err(format!("missing vpc_sub4"));
+        }
+
+        Ok(Self {
+            public_mac: public_mac.unwrap(),
+            public_ip: public_ip.unwrap(),
+            port_start: port_start.unwrap(),
+            port_end: port_end.unwrap(),
+            vpc_sub4: vpc_sub4.unwrap()
+        })
     }
 }
 
