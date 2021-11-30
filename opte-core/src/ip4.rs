@@ -379,6 +379,13 @@ fn match_check() {
     assert!(ip.match_prefix(&"192.168.2.0/24".parse::<Ipv4Cidr>().unwrap()));
 }
 
+#[cfg(any(feature = "std", test))]
+impl From<std::net::Ipv4Addr> for Ipv4Addr {
+    fn from(ip4_std: std::net::Ipv4Addr) -> Self {
+        Ipv4Addr::from(u32::from(ip4_std))
+    }
+}
+
 /// An IP protocol value.
 ///
 /// TODO repr(u8)?
