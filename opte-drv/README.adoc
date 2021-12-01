@@ -147,8 +147,7 @@ $ pfexec cp /build/illumos-gate/proto/root_i386/usr/kernel/drv/amd64/viona /usr/
 === Installing opte
 
 Installing opte is a bit more involved. It's not a module that comes
-packaged with the system. We need to install it and we want to add an
-entry under `/dev` so we have a place to send ioctls.
+packaged with the system.
 
 1. Copy the module and its conf file.
 +
@@ -157,17 +156,10 @@ $ pfexec cp ~/opte/opte-drv/opte /kernel/drv/amd64/
 $ pfexec cp ~/opte/opte-drv/opte.conf /kernel/drv/
 ----
 +
-2. Edit `/etc/devlink.tab`:
-+
-----
-type=ddi_pseudo;name=opte	\D
-----
-+
-3. Install the driver.
+2. Install the driver.
 +
 ----
 $ pfexec add_drv opte
-$ pfexec devfsadm -i opte
 ----
 
 On subsequent builds of opte you don't need to repeat all these steps.
