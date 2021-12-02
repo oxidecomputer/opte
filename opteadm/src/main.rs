@@ -259,11 +259,11 @@ impl std::str::FromStr for SnatConfig {
 }
 
 fn print_port_header() {
-    println!("{:<32} {:<24}", "LINK", "MAC ADDRESS");
+    println!("{:<32} {:<24} {:<16}", "LINK", "MAC ADDRESS", "IPv4 ADDRESS");
 }
 
-fn print_port((link, mac): (String, EtherAddr)) {
-    println!("{:<32} {:<42}", link, mac);
+fn print_port((link, mac, ip4): (String, EtherAddr, Ipv4Addr)) {
+    println!("{:<32} {:<24} {:<16}", link, mac.to_string(), ip4.to_string());
 }
 
 fn print_flow_header() {

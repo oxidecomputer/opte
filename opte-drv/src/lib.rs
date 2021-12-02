@@ -485,9 +485,9 @@ unsafe extern "C" fn opte_ioctl(
             let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
             for (_k, v) in state.clients.lock().unwrap().iter() {
                 let ocs = &(**v);
-                opte_core::dbg(format!("name: {} mac: {}", ocs.name,
-                                       ocs.private_mac));
-                resp.ports.push((ocs.name.clone(), ocs.private_mac));
+                resp.ports.push(
+                    (ocs.name.clone(), ocs.private_mac, ocs.port_cfg.private_ip)
+                );
             }
 
             to_errno(ioctlenv.copy_out_resp(&Ok(resp)))

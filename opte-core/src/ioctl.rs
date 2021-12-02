@@ -104,5 +104,5 @@ pub struct ListPortsReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListPortsResp {
-    pub ports: Vec<(String, crate::ether::EtherAddr)>,
+    pub ports: Vec<(String, EtherAddr, Ipv4Addr)>,
 }
