@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(alloc_prelude)]
 #![feature(btree_retain)]
 #![feature(extern_types)]
 #![feature(str_split_once)]
@@ -17,13 +16,17 @@ extern crate core as std;
 #[cfg(all(not(feature = "std"), not(test)))]
 #[macro_use]
 extern crate alloc;
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
 
-use std::fmt::{self, Display};
-use std::num::ParseIntError;
-use std::prelude::v1::*;
-use std::str::FromStr;
+use core::fmt::{self, Display};
+use core::num::ParseIntError;
+use core::str::FromStr;
+
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::string::String;
+#[cfg(any(feature = "std", test))]
+use std::string::String;
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::vec::Vec;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 extern crate illumos_ddi_dki;

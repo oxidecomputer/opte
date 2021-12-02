@@ -9,17 +9,19 @@
 //!
 //! * Add hardware offload information to [`Packet`].
 //!
+use core::convert::{TryFrom, TryInto};
+use core::mem;
+use core::ptr;
+use core::result;
+use core::slice;
+
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
+use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
 
 #[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
-
-use std::convert::{TryFrom, TryInto};
-use std::mem;
-use std::ptr;
-use std::result;
-use std::slice;
+use std::boxed::Box;
 
 use serde::{Deserialize, Serialize};
 

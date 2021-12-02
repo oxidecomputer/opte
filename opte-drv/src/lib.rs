@@ -26,7 +26,6 @@
 #![no_std]
 #![allow(non_camel_case_types)]
 #![feature(str_split_once)]
-#![feature(alloc_prelude)]
 #![feature(alloc_error_handler)]
 #![feature(rustc_private)]
 
@@ -35,9 +34,10 @@ mod ioctl;
 #[macro_use]
 extern crate alloc;
 
-use alloc::prelude::v1::*;
+use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
-
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::ops::Range;
 use core::panic::PanicInfo;

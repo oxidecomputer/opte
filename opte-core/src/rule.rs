@@ -1,16 +1,21 @@
+use core::fmt::{self, Display};
+
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
-
+use alloc::boxed::Box;
 #[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
-
+use std::boxed::Box;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
-
 #[cfg(any(feature = "std", test))]
 use std::sync::Arc;
-
-use std::fmt::{self, Display};
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::string::{String, ToString};
+#[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
 
 use crate::arp::{
     ArpEth4Payload, ArpEth4PayloadRaw, ArpMeta, ArpOp, ARP_HTYPE_ETHERNET,

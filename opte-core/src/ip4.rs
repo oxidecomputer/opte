@@ -1,14 +1,17 @@
+use core::convert::TryFrom;
+use core::fmt::{self, Debug, Display};
+use core::num::ParseIntError;
+use core::result;
+use core::str::FromStr;
+
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
-
+use alloc::string::{String, ToString};
 #[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
-
-use std::convert::TryFrom;
-use std::fmt::{self, Debug, Display};
-use std::num::ParseIntError;
-use std::result;
-use std::str::FromStr;
+use std::string::{String, ToString};
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 

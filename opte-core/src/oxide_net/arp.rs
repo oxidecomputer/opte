@@ -1,7 +1,7 @@
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
+use alloc::boxed::Box;
 #[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
+use std::boxed::Box;
 
 use crate::arp::{ArpOp, ArpReply};
 use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};

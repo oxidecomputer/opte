@@ -1,15 +1,22 @@
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
-#[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
+use core::fmt::{self, Display};
+use core::str::FromStr;
 
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::boxed::Box;
+#[cfg(any(feature = "std", test))]
+use std::boxed::Box;
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::string::{String, ToString};
+#[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::sync::Arc;
-
-use std::fmt::{self, Display};
-use std::str::FromStr;
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 

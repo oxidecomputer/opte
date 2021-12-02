@@ -11,19 +11,18 @@
 //! ** §2.2 VPC Subnets
 //! * RFD 63 Network Architecture
 //! ** §3.1 Mappings to User API Concepts
-use crate::ip4::{IpError, Ipv4Addr, Ipv4Cidr};
+use core::convert::TryFrom;
+use core::result;
+use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
-
+use alloc::string::String;
 #[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
-
-use std::convert::TryFrom;
-use std::result;
-use std::str::FromStr;
+use std::string::String;
 
 use serde::{Deserialize, Serialize};
+
+use crate::ip4::{IpError, Ipv4Addr, Ipv4Cidr};
 
 /// RFD 21 §2.2
 pub const OXIDE_MIN_IP4_BLOCK: u8 = 26;

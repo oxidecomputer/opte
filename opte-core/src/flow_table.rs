@@ -1,14 +1,17 @@
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
-#[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
+use core::fmt;
 
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::string::{String, ToString};
+#[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_ddi_dki::{gethrtime, hrtime_t};
 #[cfg(any(feature = "std", test))]
 use std::time::{Duration, Instant};
-
-use std::fmt;
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 

@@ -5,14 +5,13 @@
 /// * RFD 9 -- NETWORKING CONSIDERATIONS
 /// ** §1.13 ARP
 /// * RFC 826 -- An Ethernet Address Resolution Protocol
+use core::convert::TryFrom;
+use core::fmt::{self, Display};
+
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
-
+use alloc::string::String;
 #[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
-
-use std::convert::TryFrom;
-use std::fmt::{self, Display};
+use std::string::String;
 
 use serde::{Deserialize, Serialize};
 

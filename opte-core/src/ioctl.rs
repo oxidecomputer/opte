@@ -1,18 +1,21 @@
 //! The ioctl interface.
+use core::convert::TryFrom;
+
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::string::String;
+#[cfg(any(feature = "std", test))]
+use std::string::String;
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
+
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_ddi_dki::{c_int, size_t};
 #[cfg(any(feature = "std", test))]
 use libc::{c_int, size_t};
 
 use serde::{Deserialize, Serialize};
-
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
-
-#[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
-
-use std::convert::TryFrom;
 
 use crate::ether::EtherAddr;
 use crate::ip4::Ipv4Addr;

@@ -1,8 +1,12 @@
 /// A virtual switch port.
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
+use alloc::string::{String, ToString};
 #[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
+use std::string::{String, ToString};
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_ddi_dki::hrtime_t;

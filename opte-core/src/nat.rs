@@ -1,3 +1,22 @@
+use core::ops::Range;
+
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::sync::Arc;
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::collections::btree_map::BTreeMap;
+#[cfg(any(feature = "std", test))]
+use std::collections::btree_map::BTreeMap;
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::string::{String, ToString};
+#[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
+
 use crate::ether::{EtherAddr, EtherMeta};
 use crate::headers::{HeaderAction, IcmpEchoMeta, Ipv4Meta, TcpMeta, UdpMeta};
 use crate::ip4::Ipv4Addr;
@@ -6,22 +25,6 @@ use crate::rule::{
     ActionDesc, ResourceError, Resources, StatefulAction, UlpHdrAction, HT,
 };
 use crate::Direction;
-
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
-
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::collections::btree_map::BTreeMap;
-#[cfg(any(feature = "std", test))]
-use std::collections::btree_map::BTreeMap;
-
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
-
-use std::ops::Range;
-use std::prelude::v1::*;
 
 pub struct NatPool {
     // Map private IP to public IP + free list of ports

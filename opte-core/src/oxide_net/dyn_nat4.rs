@@ -1,7 +1,11 @@
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::prelude::v1::*;
+use alloc::boxed::Box;
 #[cfg(any(feature = "std", test))]
-use std::prelude::v1::*;
+use std::boxed::Box;
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::string::ToString;
+#[cfg(any(feature = "std", test))]
+use std::string::ToString;
 
 use crate::ip4::{self, Protocol};
 use crate::layer::Layer;
