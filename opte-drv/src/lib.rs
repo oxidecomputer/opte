@@ -49,7 +49,7 @@ extern crate opte_core;
 use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP};
 use opte_core::oxide_net::firewall::{FwAddRuleReq, FwRemRuleReq};
 use opte_core::ioctl::{
-    CmdResp, IoctlCmd, ListPortsReq, ListPortsResp, RegisterPortReq,
+    CmdResp, IoctlCmd, ListPortsReq, ListPortsResp, PortInfo, RegisterPortReq,
     UnregisterPortReq
 };
 use opte_core::layer::LayerDumpReq;
@@ -479,9 +479,12 @@ unsafe extern "C" fn opte_ioctl(
             let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
             for (_k, v) in state.clients.lock().unwrap().iter() {
                 let ocs = &(**v);
-                resp.ports.push(
-                    (ocs.name.clone(), ocs.private_mac, ocs.port_cfg.private_ip)
-                );
+                resp.ports.push(PortInfo {
+                    name: ocs.name.clone(),
+                    mac_addr: ocs.private_mac,
+                    ip4_addr: ocs.port_cfg.private_ip,
+                    in_use: *ocs.in_use.lock().unwrap()
+                });
             }
 
             to_errno(ioctlenv.copy_out_resp(&Ok(resp)))

@@ -103,6 +103,14 @@ pub struct ListPortsReq {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct PortInfo {
+    pub name: String,
+    pub mac_addr: EtherAddr,
+    pub ip4_addr: Ipv4Addr,
+    pub in_use: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ListPortsResp {
-    pub ports: Vec<(String, EtherAddr, Ipv4Addr)>,
+    pub ports: Vec<PortInfo>,
 }

@@ -10,7 +10,7 @@ use opte_core::oxide_net::firewall::{
     self, Action, Address, FirewallRule, FwRemRuleReq, Ports, ProtoFilter,
 };
 use opte_core::flow_table::FlowEntryDump;
-use opte_core::ioctl::{self, RegisterPortReq};
+use opte_core::ioctl::{self, PortInfo, RegisterPortReq};
 use opte_core::layer::{InnerFlowId, IpAddr, LayerDumpResp};
 use opte_core::port::UftDumpResp;
 use opte_core::rule::RuleDump;
@@ -259,11 +259,20 @@ impl std::str::FromStr for SnatConfig {
 }
 
 fn print_port_header() {
-    println!("{:<32} {:<24} {:<16}", "LINK", "MAC ADDRESS", "IPv4 ADDRESS");
+    println!(
+        "{:<32} {:<24} {:<16} {:<6}",
+        "LINK", "MAC ADDRESS", "IPv4 ADDRESS", "IN USE"
+    );
 }
 
-fn print_port((link, mac, ip4): (String, EtherAddr, Ipv4Addr)) {
-    println!("{:<32} {:<24} {:<16}", link, mac.to_string(), ip4.to_string());
+fn print_port(pi: PortInfo) {
+    println!(
+        "{:<32} {:<24} {:<16} {:<6}",
+        pi.name,
+        pi.mac_addr.to_string(),
+        pi.ip4_addr.to_string(),
+        if pi.in_use { "Y".to_string() } else { "N".to_string() },
+    );
 }
 
 fn print_flow_header() {
