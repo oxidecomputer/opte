@@ -10,7 +10,7 @@ use opte_core::oxide_net::firewall::{
     self, Action, Address, FirewallRule, FwRemRuleReq, Ports, ProtoFilter,
 };
 use opte_core::flow_table::FlowEntryDump;
-use opte_core::ioctl::{self, PortInfo, RegisterPortReq};
+use opte_core::ioctl::{self, PortInfo, AddPortReq};
 use opte_core::layer::{InnerFlowId, IpAddr, LayerDumpResp};
 use opte_core::port::UftDumpResp;
 use opte_core::rule::RuleDump;
@@ -20,12 +20,14 @@ use opte_core::Direction;
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, StructOpt)]
 enum Command {
-    /// List all registered ports.
+    /// List all ports.
     ListPorts,
 
-    RegisterPort(RegisterPort),
+    /// Add a new port.
+    AddPort(AddPort),
 
-    UnregisterPort {
+    /// Delete an existing port.
+    DeletePort {
         #[structopt(long)]
         name: String,
     },
@@ -105,7 +107,7 @@ impl From<Filters> for firewall::Filters {
 }
 
 #[derive(Debug, StructOpt)]
-struct RegisterPort {
+struct AddPort {
     #[structopt(long)]
     name: String,
 
@@ -113,8 +115,8 @@ struct RegisterPort {
     port_cfg: PortConfig,
 }
 
-impl From<RegisterPort> for RegisterPortReq {
-    fn from(r: RegisterPort) -> Self {
+impl From<AddPort> for AddPortReq {
+    fn from(r: AddPort) -> Self {
         Self {
             link_name: r.name,
             ip_cfg: ioctl::IpConfig::from(r.port_cfg),
@@ -398,14 +400,14 @@ fn main() {
             }
         }
 
-        Command::RegisterPort(req) => {
+        Command::AddPort(req) => {
             let hdl = opteadm::OpteAdm::open().unwrap();
-            hdl.register_port(&req.try_into().unwrap()).unwrap();
+            hdl.add_port(&req.try_into().unwrap()).unwrap();
         }
 
-        Command::UnregisterPort { name } => {
+        Command::DeletePort { name } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
-            hdl.unregister_port(&name).unwrap();
+            hdl.delete_port(&name).unwrap();
         }
 
         Command::LayerDump { port, name } => {

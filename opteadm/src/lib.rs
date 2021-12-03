@@ -12,8 +12,8 @@ use thiserror::Error;
 use opte_core::oxide_net::firewall::{FirewallRule, FwAddRuleReq, FwRemRuleReq};
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::ioctl::{
-    CmdResp, Ioctl, IoctlCmd, ListPortsReq, ListPortsResp, RegisterPortReq,
-    UnregisterPortReq
+    CmdResp, Ioctl, IoctlCmd, ListPortsReq, ListPortsResp, AddPortReq,
+    DeletePortReq
 };
 use opte_core::layer::{InnerFlowId, LayerDumpReq, LayerDumpResp};
 use opte_core::port::{
@@ -80,7 +80,7 @@ impl OpteAdm {
         resp.map_err(|msg| Error::CommandFailed(cmd, msg))
     }
 
-    /// Return the contents of an OPTE layer
+    /// Return the contents of an OPTE layer.
     pub fn get_layer_by_name(
         &self,
         port_name: &str,
@@ -95,7 +95,7 @@ impl OpteAdm {
         resp.map_err(|msg| Error::CommandFailed(cmd, msg))
     }
 
-    /// List all ports registered with the OPTE control node.
+    /// List all the ports.
     pub fn list_ports(&self) -> Result<ListPortsResp, Error> {
         let cmd = IoctlCmd::ListPorts;
         let resp = run_ioctl(
@@ -116,13 +116,14 @@ impl OpteAdm {
         })
     }
 
-    pub fn register_port(&self, req: &RegisterPortReq) -> Result<(), Error> {
-        let cmd = IoctlCmd::RegisterPort;
+    /// Add a new port.
+    pub fn add_port(&self, req: &AddPortReq) -> Result<(), Error> {
+        let cmd = IoctlCmd::AddPort;
         let resp = run_ioctl(self.device.as_raw_fd(), cmd, req)?;
         resp.map_err(|msg| Error::CommandFailed(cmd, msg))
     }
 
-    /// Remove a firewall rule
+    /// Remove a firewall rule.
     pub fn remove_firewall_rule(
         &self,
         req: &FwRemRuleReq,
@@ -132,7 +133,7 @@ impl OpteAdm {
         resp.map_err(|msg| Error::CommandFailed(cmd, msg))
     }
 
-    /// Return the TCP flows
+    /// Return the TCP flows.
     pub fn tcp_flows(
         &self,
         port_name: &str,
@@ -146,7 +147,7 @@ impl OpteAdm {
         resp.map(|r| r.flows).map_err(|msg| Error::CommandFailed(cmd, msg))
     }
 
-    /// Return the unified flow table (UFT)
+    /// Return the unified flow table (UFT).
     pub fn uft(&self, port_name: &str) -> Result<UftDumpResp, Error> {
         let cmd = IoctlCmd::UftDump;
         let resp = run_ioctl(
@@ -157,9 +158,10 @@ impl OpteAdm {
         resp.map_err(|msg| Error::CommandFailed(cmd, msg))
     }
 
-    pub fn unregister_port(&self, name: &str) -> Result<(), Error> {
-        let cmd = IoctlCmd::UnregisterPort;
-        let req = UnregisterPortReq { name: name.to_string() };
+    /// Delete a port.
+    pub fn delete_port(&self, name: &str) -> Result<(), Error> {
+        let cmd = IoctlCmd::DeletePort;
+        let req = DeletePortReq { name: name.to_string() };
         let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
         resp.map_err(|msg| Error::CommandFailed(cmd, msg))
     }

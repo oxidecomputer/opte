@@ -49,8 +49,8 @@ extern crate opte_core;
 use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP};
 use opte_core::oxide_net::firewall::{FwAddRuleReq, FwRemRuleReq};
 use opte_core::ioctl::{
-    CmdResp, IoctlCmd, ListPortsReq, ListPortsResp, PortInfo, RegisterPortReq,
-    UnregisterPortReq
+    CmdResp, IoctlCmd, ListPortsReq, ListPortsResp, PortInfo, AddPortReq,
+    DeletePortReq
 };
 use opte_core::layer::LayerDumpReq;
 use opte_core::oxide_net::PortConfig;
@@ -255,7 +255,7 @@ impl OpteState {
     }
 }
 
-fn register_port(req: &RegisterPortReq) -> CmdResp<()> {
+fn add_port(req: &AddPortReq) -> CmdResp<()> {
     // Safety: The opte_dip pointer is write-once and is a valid
     // pointer passed to attach(9E). The returned pointer is valid as
     // it was derived from Box::into_raw() during attach(9E).
@@ -380,7 +380,7 @@ fn register_port(req: &RegisterPortReq) -> CmdResp<()> {
     Ok(())
 }
 
-fn unregister_port(req: UnregisterPortReq) -> CmdResp<()> {
+fn delete_port(req: DeletePortReq) -> CmdResp<()> {
     unsafe {
         let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
         let ocsp = match state.clients.lock().unwrap().get(&req.name) {
@@ -433,34 +433,34 @@ unsafe extern "C" fn opte_ioctl(
     };
 
     match cmd {
-        IoctlCmd::RegisterPort => {
-            let req: RegisterPortReq = match ioctlenv.copy_in_req() {
+        IoctlCmd::AddPort => {
+            let req: AddPortReq = match ioctlenv.copy_in_req() {
                 Ok(val) => val,
                 Err(e @ ioctl::Error::DeserError(_)) => {
                     opte_core::err(
-                        format!("failed to deser RegisterPortReq: {:?}", e)
+                        format!("failed to deser AddPortReq: {:?}", e)
                     );
                     return EINVAL;
                 }
                 _ => return EFAULT,
             };
 
-            to_errno(ioctlenv.copy_out_resp(&register_port(&req)))
+            to_errno(ioctlenv.copy_out_resp(&add_port(&req)))
         }
 
-        IoctlCmd::UnregisterPort => {
-            let req: UnregisterPortReq = match ioctlenv.copy_in_req() {
+        IoctlCmd::DeletePort => {
+            let req: DeletePortReq = match ioctlenv.copy_in_req() {
                 Ok(val) => val,
                 Err(e @ ioctl::Error::DeserError(_)) => {
                     opte_core::err(
-                        format!("failed to deser UnegisterPortReq: {:?}", e)
+                        format!("failed to deser DeletePortReq: {:?}", e)
                     );
                     return EINVAL;
                 }
                 _ => return EFAULT,
             };
 
-            to_errno(ioctlenv.copy_out_resp(&unregister_port(req)))
+            to_errno(ioctlenv.copy_out_resp(&delete_port(req)))
         }
 
         IoctlCmd::ListPorts => {

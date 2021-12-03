@@ -25,8 +25,8 @@ use crate::vpc::VpcSubnet4;
 #[repr(C)]
 pub enum IoctlCmd {
     ListPorts = 1,     // list all ports
-    RegisterPort = 2,     // register new port
-    UnregisterPort = 3,     // unregister port
+    AddPort = 2,     // add new port
+    DeletePort = 3,     // delete a port
     FwAddRule = 20,     // add firewall rule
     FwRemRule = 21,     // remove firewall rule
     TcpFlowsDump = 30,  // dump TCP flows
@@ -40,8 +40,8 @@ impl TryFrom<c_int> for IoctlCmd {
     fn try_from(num: c_int) -> Result<Self, Self::Error> {
         match num {
             1 => Ok(IoctlCmd::ListPorts),
-            2 => Ok(IoctlCmd::RegisterPort),
-            3 => Ok(IoctlCmd::UnregisterPort),
+            2 => Ok(IoctlCmd::AddPort),
+            3 => Ok(IoctlCmd::DeletePort),
             20 => Ok(IoctlCmd::FwAddRule),
             21 => Ok(IoctlCmd::FwRemRule),
             30 => Ok(IoctlCmd::TcpFlowsDump),
@@ -87,13 +87,13 @@ pub struct IpConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct RegisterPortReq {
+pub struct AddPortReq {
     pub link_name: String,
     pub ip_cfg: IpConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct UnregisterPortReq {
+pub struct DeletePortReq {
     pub name: String,
 }
 
