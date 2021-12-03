@@ -170,6 +170,7 @@ extern "C" {
 
     fn mac_client_close(mch: *const mac_client_handle, flags: u16);
     fn mac_client_name(mch: *const mac_client_handle) -> *const c_char;
+    fn mac_close(mh: *mut mac_handle);
     fn mac_open_by_linkname(
         link: *const c_char,
         mhp: *mut *mut mac_handle
@@ -267,19 +268,11 @@ fn register_port(req: &RegisterPortReq) -> CmdResp<()> {
     }
 
     let mut mh: *mut mac_handle = ptr::null_mut::<c_void>() as *mut mac_handle;
-    let mut mch: *mut mac_client_handle =
-        ptr::null_mut::<c_void> as *mut mac_client_handle;
     let link_name_c = CString::new(req.link_name.clone()).unwrap();
     let ret = unsafe { mac_open_by_linkname(link_name_c.as_ptr(), &mut mh) };
 
     if ret != 0 {
         return Err(format!("failed to open mac: {}", ret));
-    }
-
-    let ret = unsafe { mac_client_open(mh, &mut mch, ptr::null(), 0) };
-
-    if ret != 0 {
-        return Err(format!("failed to open mac client: {}", ret));
     }
 
     let mut private_mac = [0u8; 6];
@@ -351,7 +344,8 @@ fn register_port(req: &RegisterPortReq) -> CmdResp<()> {
 
     let ocs = Box::new(OpteClientState {
         in_use: KMutex::new(false, KMutexType::Driver),
-        mch,
+        mh,
+        mch: ptr::null_mut::<c_void> as *mut mac_client_handle,
         name: req.link_name.clone(),
         rx_state: None,
         mph: 0 as *mut mac_promisc_handle,
@@ -405,8 +399,8 @@ fn unregister_port(req: UnregisterPortReq) -> CmdResp<()> {
         // resources are properly dropped.
         let ocs = Box::from_raw(ocsp);
 
-        // Release out client handle.
-        mac_client_close(ocs.mch, 0);
+        // Release the mac handle.
+        mac_close(ocs.mh);
 
         // Stop the periodic before dropping everything.
         ddi_periodic_delete(ocs.port_periodic);
@@ -811,6 +805,7 @@ fn panic_hdlr(info: &PanicInfo) -> ! {
 // state like the hairpin queue.
 pub struct OpteClientState {
     in_use: KMutex<bool>,
+    mh: *mut mac_handle,
     mch: *mut mac_client_handle,
     rx_state: Option<OpteRxState>,
     mph: *const mac_promisc_handle,
@@ -843,8 +838,7 @@ pub unsafe extern "C" fn opte_client_open(
     flags: u16,
 ) -> c_int {
     *ocspo = ptr::null_mut();
-    // We open a client just to get the VNIC name.
-    let mut mch = 0 as *mut mac_client_handle;
+    let mut mch = ptr::null_mut::<c_void> as *mut mac_client_handle;
     let ret = mac_client_open(mh, &mut mch, ptr::null(), flags);
 
     if ret != 0 {
@@ -855,7 +849,6 @@ pub unsafe extern "C" fn opte_client_open(
         .to_str()
         .unwrap()
         .to_string();
-    mac_client_close(mch, flags);
 
     let state = &mut *(ddi_get_driver_private(opte_dip) as *mut OpteState);
     let ocsp = match state.clients.lock().unwrap().get(&link_name) {
@@ -863,13 +856,14 @@ pub unsafe extern "C" fn opte_client_open(
         None => return ENOENT,
     };
     let ocs = &mut (*ocsp);
-
     let mut in_use = ocs.in_use.lock().unwrap();
 
     if *in_use {
+        mac_client_close(ocs.mch, 0);
         return EBUSY;
     }
 
+    ocs.mch = mch;
     *ocspo = ocsp;
     *in_use = true;
     0
