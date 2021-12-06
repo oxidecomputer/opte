@@ -34,6 +34,7 @@ mod ioctl;
 #[macro_use]
 extern crate alloc;
 
+use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::{String, ToString};
@@ -42,6 +43,7 @@ use core::convert::TryFrom;
 use core::ops::Range;
 use core::panic::PanicInfo;
 use core::ptr;
+use core::str::FromStr;
 
 use crate::ioctl::{to_errno, IoctlEnvelope};
 
@@ -52,6 +54,7 @@ use opte_core::ioctl::{
     CmdResp, IoctlCmd, ListPortsReq, ListPortsResp, PortInfo, AddPortReq,
     DeletePortReq
 };
+use opte_core::ip4::Ipv4Addr;
 use opte_core::layer::LayerDumpReq;
 use opte_core::oxide_net::PortConfig;
 use opte_core::packet::{Initialized, Packet};
@@ -223,6 +226,64 @@ extern "C" {
     fn mac_unicast_primary_get(mh: *const mac_handle, addr: *mut [u8; 6]);
 }
 
+fn get_gw_mac(dip: *mut dev_info) -> EtherAddr {
+    let mut gw_mac_c: *const c_char = ptr::null();
+
+    let ret = unsafe {
+        ddi_prop_lookup_string(
+            DDI_DEV_T_ANY,
+            dip,
+            DDI_PROP_DONTPASS,
+            b"gateway_mac\0".as_ptr() as *const c_char,
+            &mut gw_mac_c,
+        )
+    };
+
+    if ret != DDI_PROP_SUCCESS {
+        let err = format!("failed to get gateway_mac: {}", ret);
+        unsafe { cmn_err(CE_WARN, CString::new(err).unwrap().as_ptr()) };
+        return EtherAddr::from([0; 6]);
+    }
+
+    let gw_mac = unsafe { CStr::from_ptr(gw_mac_c).to_owned() };
+    unsafe { ddi_prop_free(gw_mac_c as *mut c_void) };
+
+    EtherAddr::from_str(gw_mac.to_str().unwrap()).unwrap_or_else(|err| {
+        let msg = format!("failed to parse gateway_mac property: {}", err);
+        unsafe { cmn_err(CE_WARN, CString::new(msg).unwrap().as_ptr()) };
+        EtherAddr::from([0; 6])
+    })
+}
+
+fn get_gw_ip(dip: *mut dev_info) -> Ipv4Addr {
+    let mut gw_ip_c: *const c_char = ptr::null();
+
+    let ret = unsafe {
+        ddi_prop_lookup_string(
+            DDI_DEV_T_ANY,
+            dip,
+            DDI_PROP_DONTPASS,
+            b"gateway_ipv4\0".as_ptr() as *const c_char,
+            &mut gw_ip_c,
+        )
+    };
+
+    if ret != DDI_PROP_SUCCESS {
+        let err = format!("failed to get gateway_ipv4: {}", ret);
+        unsafe { cmn_err(CE_WARN, CString::new(err).unwrap().as_ptr()) };
+        return Ipv4Addr::from_str("0.0.0.0").unwrap();
+    }
+
+    let gw_ip = unsafe { CStr::from_ptr(gw_ip_c).to_owned() };
+    unsafe { ddi_prop_free(gw_ip_c as *mut c_void) };
+
+    Ipv4Addr::from_str(gw_ip.to_str().unwrap()).unwrap_or_else(|err| {
+        let msg = format!("failed to parse gateway_ipv4 property: {}", err);
+        unsafe { cmn_err(CE_WARN, CString::new(msg).unwrap().as_ptr()) };
+        Ipv4Addr::from_str("0.0.0.0").unwrap()
+    })
+}
+
 #[no_mangle]
 unsafe extern "C" fn opte_open(
     _devp: *mut dev_t,
@@ -244,12 +305,16 @@ unsafe extern "C" fn opte_close(
 }
 
 struct OpteState {
+    gateway_mac: EtherAddr,
+    gateway_ip: Ipv4Addr,
     clients: KMutex<BTreeMap<String, *mut OpteClientState>>,
 }
 
 impl OpteState {
-    fn new() -> Self {
+    fn new(gateway_mac: EtherAddr, gateway_ip: Ipv4Addr,) -> Self {
         OpteState {
+            gateway_mac,
+            gateway_ip,
             clients: KMutex::new(BTreeMap::new(), KMutexType::Driver),
         }
     }
@@ -313,8 +378,8 @@ fn add_port(req: &AddPortReq) -> CmdResp<()> {
         vpc_subnet,
         private_mac,
         private_ip: req.ip_cfg.private_ip,
-        gw_mac: req.ip_cfg.gw_mac,
-        gw_ip: req.ip_cfg.gw_ip,
+        gw_mac: state.gateway_mac,
+        gw_ip: state.gateway_ip,
         dyn_nat,
     };
 
@@ -720,7 +785,16 @@ unsafe extern "C" fn opte_attach(
         return DDI_FAILURE;
     }
 
-    let state = Box::new(OpteState::new());
+    let gateway_mac = get_gw_mac(dip);
+    let gateway_ip = get_gw_ip(dip);
+    cmn_err(
+        CE_NOTE,
+        CString::new(
+            format!("gateway_mac: {}, gateway_ip: {}", gateway_mac, gateway_ip)
+        ).unwrap().as_ptr()
+    );
+    let state = Box::new(OpteState::new(gateway_mac, gateway_ip));
+
     // We consume the box and place it's raw pointer in the
     // per-instance device state. On detach we place this pointer back
     // into the box so it can be dropped. All other uses of the

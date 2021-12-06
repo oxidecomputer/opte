@@ -81,8 +81,6 @@ pub struct SnatCfg {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IpConfig {
     pub private_ip: Ipv4Addr,
-    pub gw_mac: EtherAddr,
-    pub gw_ip: Ipv4Addr,
     pub snat: Option<SnatCfg>,
 }
 

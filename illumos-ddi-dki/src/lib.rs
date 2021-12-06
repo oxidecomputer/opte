@@ -433,6 +433,14 @@ pub const DEVO_REV: c_int = 4;
 pub const D_MTSAFE: c_int = 0x0020;
 pub const D_MP: c_int = D_MTSAFE;
 
+pub const DDI_DEV_T_NONE: dev_t = dev_t::MAX;
+pub const DDI_DEV_T_ANY: dev_t = dev_t::MAX - 1;
+
+pub const DDI_PROP_DONTPASS: c_uint = 0x0001;
+pub const DDI_PROP_CANSLEEP: c_uint = 0x0002;
+
+pub const DDI_PROP_SUCCESS: c_int = 0;
+
 pub const DDI_IPL_0: c_int = 0;
 
 pub const DDI_IPL_1: c_int = 1;
@@ -520,6 +528,14 @@ extern "C" {
         level: c_int,
     ) -> *const ddi_periodic;
     pub fn ddi_periodic_delete(request: *const ddi_periodic);
+    pub fn ddi_prop_free(data: *mut c_void);
+    pub fn ddi_prop_lookup_string(
+        match_dev: dev_t,
+        dip: *mut dev_info,
+        flags: c_uint,
+        name: *const c_char,
+        datap: *mut *const c_char,
+    ) -> c_int;
     pub fn ddi_prop_op() -> c_int;
     pub fn ddi_quiesce_not_needed(dip: *mut dev_info) -> c_int;
     pub fn ddi_remove_minor_node(dip: *mut dev_info, name: *const c_char);

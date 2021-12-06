@@ -132,12 +132,6 @@ struct PortConfig {
     private_ip: Ipv4Addr,
 
     #[structopt(long)]
-    gateway_ip: Ipv4Addr,
-
-    #[structopt(long)]
-    gateway_mac: EtherAddr,
-
-    #[structopt(long)]
     snat: Option<SnatConfig>,
 }
 
@@ -145,8 +139,6 @@ impl From<PortConfig> for ioctl::IpConfig {
     fn from(s: PortConfig) -> Self {
         Self {
             private_ip: s.private_ip,
-            gw_ip: s.gateway_ip,
-            gw_mac: s.gateway_mac,
             snat: s.snat.map(ioctl::SnatCfg::from),
         }
     }
