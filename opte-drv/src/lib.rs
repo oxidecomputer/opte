@@ -25,7 +25,6 @@
 #![feature(panic_info_message)]
 #![no_std]
 #![allow(non_camel_case_types)]
-#![feature(str_split_once)]
 #![feature(alloc_error_handler)]
 #![feature(rustc_private)]
 

@@ -78,19 +78,21 @@ uses stable kernel APIs to do its job, and thus it doesn't need to be
 built with the illumos-gate infrastructure. Rather, it's more like
 building any other Rust program, but with a few small exceptions:
 
-1. Currently an older toolchain is needed to avoid
-https://github.com/oxidecomputer/opte/issues/1[codegen issues].
-+
-----
-$ rustup toolchain install nightly-2021-01-15
-$ rustup default nightly-2021-01-15-x86_64-unknown-illumos
-----
-+
-2. We need to use the unstable cargo
-https://doc.rust-lang.org/cargo/reference/unstable.html#build-std[build-std]
-feature in order to build core and alloc for our custom illumos target.
+NOTE: Previously there were
+https://github.com/oxidecomputer/opte/issues/1[codegen issues] when
+compiling opte-drv with certain toolchains. As of
+`nightly-2021-09-03-x86_64-unknown-illumos` the issue seems resolved.
+However, if your opte driver fails to load, then perform the following
+check: `elfdump opte | grep GOTPCREL`.
 
-3. We need to use a custom
+1. The opte driver relies on nightly features and thus requires a
+nightly toolchain.
+
+2. The opte driver requires the unstable cargo feature
+https://doc.rust-lang.org/cargo/reference/unstable.html#build-std[build-std]
+in order to build core and alloc for our custom illumos target.
+
+3. The opte driver uses a custom
 https://doc.rust-lang.org/cargo/commands/cargo-build.html#compilation-options[rustc
 target] in order to generate code which can run in the illumos kernel.
 (XXX It looks like we could use the `build.target` config value

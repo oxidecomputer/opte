@@ -8,7 +8,6 @@
 // we just use comments and group them accordingly.
 #![feature(extern_types)]
 #![feature(const_fn_fn_ptr_basics)]
-#![feature(const_panic)]
 #![allow(non_camel_case_types)]
 #![no_std]
 

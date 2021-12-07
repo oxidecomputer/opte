@@ -1,7 +1,5 @@
 #![no_std]
-#![feature(btree_retain)]
 #![feature(extern_types)]
-#![feature(str_split_once)]
 #![feature(vec_into_raw_parts)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
