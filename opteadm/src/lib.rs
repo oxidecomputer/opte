@@ -3,17 +3,15 @@
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
-use std::slice;
 
-use libc::{c_int, ioctl};
+use libc;
 use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
 use opte_core::oxide_net::firewall::{FirewallRule, FwAddRuleReq, FwRemRuleReq};
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::ioctl::{
-    CmdResp, Ioctl, IoctlCmd, ListPortsReq, ListPortsResp, AddPortReq,
-    DeletePortReq
+    CmdResp, IoctlCmd, ListPortsReq, ListPortsResp, AddPortReq, DeletePortReq
 };
 use opte_core::layer::{InnerFlowId, LayerDumpReq, LayerDumpResp};
 use opte_core::port::{
@@ -167,8 +165,22 @@ impl OpteAdm {
     }
 }
 
+#[cfg(not(target_os = "illumos"))]
 fn run_ioctl<R, P>(
-    dev: c_int,
+    _dev: libc::c_int,
+    _cmd: IoctlCmd,
+    _req: &R
+) -> Result<CmdResp<P>, Error>
+where
+    R: Serialize,
+    P: DeserializeOwned,
+{
+    panic!("non-illumos system, your ioctl(2) is no good here");
+}
+
+#[cfg(target_os = "illumos")]
+fn run_ioctl<R, P>(
+    dev: libc::c_int,
     cmd: IoctlCmd,
     req: &R
 ) -> Result<CmdResp<P>, Error>
@@ -178,7 +190,7 @@ where
 {
     let req_bytes = postcard::to_allocvec(req).unwrap();
     let mut resp_buf: Vec<u8> = vec![0; 1024];
-    let mut rioctl = Ioctl {
+    let mut rioctl = opte_core::ioctl::Ioctl {
         req_bytes: req_bytes.as_ptr(),
         req_len: req_bytes.len(),
         resp_bytes: resp_buf.as_mut_ptr(),
@@ -188,7 +200,7 @@ where
 
     const MAX_ITERATIONS: usize = 3;
     for _ in 0..MAX_ITERATIONS {
-        let ret = unsafe { ioctl(dev, cmd as c_int, &rioctl) };
+        let ret = unsafe { libc::ioctl(dev, cmd as libc::c_int, &rioctl) };
 
         // The ioctl(2) failed for a reason other than the response
         // buffer being too small.
@@ -222,7 +234,10 @@ where
         assert!(rioctl.resp_len_needed != 0);
         if rioctl.resp_len_needed <= rioctl.resp_len {
             let response = unsafe {
-                slice::from_raw_parts(rioctl.resp_bytes, rioctl.resp_len_needed)
+                std::slice::from_raw_parts(
+                    rioctl.resp_bytes,
+                    rioctl.resp_len_needed
+                )
             };
             return postcard::from_bytes(response).map_err(Error::from);
         }
