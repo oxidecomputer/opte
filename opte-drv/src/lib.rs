@@ -313,19 +313,19 @@ unsafe extern "C" fn opte_close(
 type LinkName = String;
 
 
-struct InactivePort {
-    port: Port<port::Inactive>,
-    cfg: PortCfg,
-}
+// struct InactivePort {
+//     port: Port<port::Inactive>,
+//     cfg: PortCfg,
+// }
 
-struct ActivePort {
-    client: OpteClientState,
-    cfg: PortCfg,
-}
+// struct ActivePort {
+//     client: OpteClientState,
+//     cfg: PortCfg,
+// }
 
 enum PortState {
-    Inactive(InactivePort),
-    Active(ActivePort),
+    Inactive(Port<port::Inactive>, PortConfig),
+    Active(*mut OpteClientState),
 }
 
 struct OpteState {
@@ -334,7 +334,7 @@ struct OpteState {
     v2p: Arc<overlay::Virt2Phys>,
     // clients: KMutex<BTreeMap<LinkName, *mut OpteClientState>>,
     // ports: KMutex<BTreeMap<LinkName, (Port<port::Inactive>, PortConfig)>>,
-    ports: 
+    ports: KMutex<BTreeMap<LinkName, PortState>>,
 }
 
 impl OpteState {
@@ -343,7 +343,7 @@ impl OpteState {
             gateway_mac,
             gateway_ip,
             v2p: Arc::new(overlay::Virt2Phys::new()),
-            clients: KMutex::new(BTreeMap::new(), KMutexType::Driver),
+            // clients: KMutex::new(BTreeMap::new(), KMutexType::Driver),
             ports: KMutex::new(BTreeMap::new(), KMutexType::Driver),
         }
     }
@@ -360,7 +360,7 @@ fn add_port(req: &AddPortReq) -> CmdResp<()> {
     // We must hold this lock until we have inserted the new port into
     // the map; otherwise, multiple threads could race to add the same
     // port.
-    let ports_lock = state.ports.lock();
+    let mut ports_lock = state.ports.lock();
 
     if let Some(_) = ports_lock.get(&req.link_name) {
         return Err(format!("port already exists"))
@@ -428,85 +428,27 @@ fn add_port(req: &AddPortReq) -> CmdResp<()> {
     }
     opte_core::oxide_net::arp::setup(&mut new_port, &port_cfg).unwrap();
 
-    ports_lock.insert(req.link_name.clone(), (new_port, port_cfg));
+    ports_lock.insert(
+        req.link_name.clone(),
+        PortState::Inactive(new_port, port_cfg),
+    );
     Ok(())
-
-
-    // let port = PortState::Inactive(Box::new(new_port));
-
-    // let ocs = Box::new(OpteClientState {
-    //     in_use: KMutex::new(false, KMutexType::Driver),
-    //     mh,
-    //     mch: ptr::null_mut::<c_void> as *mut mac_client_handle,
-    //     name: req.link_name.clone(),
-    //     rx_state: None,
-    //     mph: 0 as *mut mac_promisc_handle,
-    //     promisc_state: None,
-    //     port,
-    //     port_cfg,
-    //     port_periodic: ptr::null::<c_void>() as *const ddi_periodic,
-    //     private_mac,
-    //     hairpin_queue: KMutex::new(Vec::with_capacity(4), KMutexType::Driver),
-    // });
-
-    // We need to pull the raw pointer out of the box and give it to
-    // the client (viona). It will pass this pointer back to us during
-    // every invocation. To viona, the pointer points to an opaque type.
-    //
-    // ```
-    // typedef struct __opte_client_state opte_client_state_t;
-    // ```
-    //
-    // The "owner" of `ocs` is now viona. When the guest instance is
-    // tore down, and viona is closing, it will give ownership back to
-    // opte via `opte_client_close()`.
-    //
-    // There is no concern over shared ownership or data races from
-    // viona as `ocs` is simply a top-level state structure with
-    // pointers to other MT-safe types (aka interior mutability).
-    //
-    // TODO Move or delete this comment?
-    // state.clients.lock().insert(req.link_name.clone(), Box::into_raw(ocs));
-    // Ok(())
 }
 
 fn delete_port(req: DeletePortReq) -> CmdResp<()> {
-    unsafe {
-        let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
+    let state = unsafe {
+        &*(ddi_get_driver_private(opte_dip) as *mut OpteState)
+    };
 
-        let clients_lock = state.clients.lock();
-        let ports_lock = state.ports.lock();
+    let mut ports_lock = state.ports.lock();
 
-        if clients_lock.contains_key(&req.name) {
-            return Err(format!("port is in use"));
-        }
+    let _ = match ports_lock.get(&req.name) {
+        Some(PortState::Inactive(inactive_port, _)) => inactive_port,
+        Some(PortState::Active(_)) => return Err(format!("port is in use")),
+        None => return Err(format!("port not found")),
+    };
 
-        let port = match ports_lock.remove(&req.name) {
-            None => return Err(format!("port not found: {}", req.name)),
-            Some((p, _)) => p,
-        };
-
-        // let ocsp = match state.clients.lock().get(&req.name) {
-        //     Some(ocspp) => *ocspp,
-        //     None =>  return Err(format!("port not found: {}", req.name)),
-        // };
-
-        // if *(*ocsp).in_use.lock() {
-        //     return Err(format!("port is in use"));
-        // }
-
-        // let ocsp = state.clients.lock().remove(&req.name).unwrap();
-
-        // The ownership of `ocs` is being given back to opte. We need
-        // to put it back in the box so that the value and its owned
-        // resources are properly dropped.
-        // let ocs = Box::from_raw(ocsp);
-
-        // Release the mac handle.
-        // mac_close(ocs.mh);
-    }
-
-    // Resources dropped with `ocs`.
+    let _ = ports_lock.remove(&req.name);
     Ok(())
 }
 
@@ -520,9 +462,12 @@ fn get_port_mut<'a, 'b>(
     state: &'a OpteState,
     name: &'b str
 ) -> Result<*mut OpteClientState, opte_core::ioctl::PortError> {
-    match state.clients.lock().get_mut(name) {
+    match state.ports.lock().get_mut(name) {
         None => Err(opte_core::ioctl::PortError::PortNotFound),
-        Some(ocspp) => Ok(*ocspp)
+        Some(PortState::Inactive(_, _)) => {
+            Err(opte_core::ioctl::PortError::PortInactive)
+        }
+        Some(PortState::Active(ocspp)) => Ok(*ocspp),
     }
 }
 
@@ -1149,7 +1094,6 @@ fn panic_hdlr(info: &PanicInfo) -> ! {
 // port configuration handed down during port registration from actual
 // state like the hairpin queue.
 struct OpteClientState {
-    // in_use: KMutex<bool>,
     mh: *const mac_handle,
     mch: *mut mac_client_handle,
     rx_state: Option<OpteRxState>,
@@ -1197,49 +1141,27 @@ pub unsafe extern "C" fn opte_client_open(
 
     let state = &mut *(ddi_get_driver_private(opte_dip) as *mut OpteState);
 
-    // We must hold the client's lock for the duration of this call to
-    // ensure that threads cannot race to create a new client; as each
-    // Port may have only a single client.
-    let clients_lock = state.clients.lock();
+    // We must hold the ports's lock for the duration of this call to ensure
+    // that transition from inactive to active is atomic.
+    let mut ports_lock = state.ports.lock();
 
-    match clients_lock.get(&link_name) {
-        Some(_) => return EBUSY,
-        None => (),
-    }
-
-    let (port, port_cfg) = match state.ports.lock().remove(&link_name) {
-        Some(v) => v,
+    let (port, port_cfg) = match ports_lock.remove(&link_name) {
+        Some(PortState::Inactive(p,c)) => (p, c),
+        Some(PortState::Active(_)) => return EBUSY,
         None => return ENOENT,
     };
 
-    // let ocs = &mut (*ocsp);
-    // let mut in_use = ocs.in_use.lock();
-
-    // if *in_use {
-    //     mac_client_close(ocs.mch, 0);
-    //     return EBUSY;
-    // }
-
-
-    // ocs.port = PortState::Active(Box::new(ocs.port.inactive().activate()));
-
     let active_port = port.activate();
+    let mac_addr = active_port.mac_addr();
 
-    let port_periodic = unsafe {
-        ddi_periodic_add(
+    let port_periodic =  ddi_periodic_add(
             opte_port_periodic,
             &active_port as *const Port<_> as *const c_void,
             ONE_SECOND,
             DDI_IPL_0,
-        )
-    };
-
-    // ocs.mch = mch;
-    // *ocspo = &*ocsp;
-    // *in_use = true;
+    );
 
     let ocs = Box::new(OpteClientState {
-        // in_use: KMutex::new(false, KMutexType::Driver),
         mh,
         mch,
         name: link_name.clone(),
@@ -1249,7 +1171,7 @@ pub unsafe extern "C" fn opte_client_open(
         port: active_port,
         port_cfg,
         port_periodic,
-        private_mac: port.mac_addr(),
+        private_mac: mac_addr,
         hairpin_queue: KMutex::new(Vec::with_capacity(4), KMutexType::Driver),
     });
 
@@ -1275,7 +1197,7 @@ pub unsafe extern "C" fn opte_client_open(
     // moving it into the map put it on the heap? Furthermore, when I
     // need to hand out a raw pointer to the client I think I could
     // just cast the reference I get back from lookup?
-    clients_lock.insert(link_name.clone(), Box::into_raw(ocs));
+    ports_lock.insert(link_name.clone(), PortState::Active(Box::into_raw(ocs)));
     0
 }
 
@@ -1288,7 +1210,7 @@ pub unsafe extern "C" fn opte_client_close(
     let state = &mut *(ddi_get_driver_private(opte_dip) as *mut OpteState);
     // This should NEVER happen. It would mean we have an active OPTE
     // client but are not tracking it at all in our clients list.
-    state.clients.lock().remove(link_name).expect("something is amiss");
+    let _ = state.ports.lock().remove(link_name).expect("something is amiss");
 
     // The ownership of `ocs` is being given back to opte. We need
     // to put it back in the box so that the value and its owned
@@ -1303,20 +1225,17 @@ pub unsafe extern "C" fn opte_client_close(
     // configuration.
     ddi_periodic_delete(ocs.port_periodic);
 
-    // let = match state.clients.remove(ocs.link_name) {
-    //     None => return ENOENT,
-    //     Some(...)
-    // }
-
-    let mut new_port = Box::new(Port::new(
+    let mut new_port = Port::new(
         ocs.name.clone(),
         ocs.private_mac
-    ));
+    );
+
+    let port_cfg = ocs.port_cfg;
 
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
-    opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &ocs.port_cfg)
+    opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg)
         .unwrap();
-    opte_core::oxide_net::arp::setup(&mut new_port, &ocs.port_cfg).unwrap();
+    opte_core::oxide_net::arp::setup(&mut new_port, &port_cfg).unwrap();
 
     // TODO This line made me realize that once a port has a client
     // someone could come along an add the port again now that there
@@ -1327,8 +1246,10 @@ pub unsafe extern "C" fn opte_client_close(
     //   Port(Port<Inavtive>),
     //   Client(*const OpteClientState),
     // }
-    state.ports.lock().insert(&link_name, (new_port, );
-    // *ocs.in_use.lock() = false;
+    state.ports.lock().insert(
+        link_name.to_string(),
+        PortState::Inactive(new_port, port_cfg)
+    );
 }
 
 #[no_mangle]
