@@ -125,6 +125,10 @@ fn oxide_net_setup(port: &mut Port<Inactive>, cfg: &oxide_net::PortConfig) {
 // around the various header types or just using some exsiting crate.
 // We're also going to want to this ability to test all sorts of
 // invalid and malformed packets.
+//
+// TODO This test sucks. Replace it with a test that generates the
+// packet data in the test itself and split it into two different
+// tests: one for BS, and one for guest-to-guest.
 #[test]
 fn encap_decap() {
     use std::sync::Arc;

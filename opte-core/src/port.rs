@@ -109,6 +109,12 @@ pub struct Port<S: PortState> {
     mac: EtherAddr,
 }
 
+impl<S: PortState> Port<S> {
+    pub fn mac_addr(&self) -> EtherAddr {
+        self.mac
+    }
+}
+
 impl Port<Inactive> {
     pub fn activate(self) -> Port<Active> {
         Port {
@@ -213,6 +219,11 @@ impl Port<Inactive> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum AddRuleError {
+    LayerNotFound,
+}
+
 impl Port<Active> {
     /// Add a new `Rule` to the layer named by `layer`, if such a
     /// layer exists. Otherwise, return an error.
@@ -221,7 +232,7 @@ impl Port<Active> {
         layer_name: &str,
         dir: Direction,
         rule: Rule<Finalized>,
-    ) -> Result<()> {
+    ) -> result::Result<(), AddRuleError> {
         for layer in &*self.state.layers {
             if layer.name() == layer_name {
                 layer.add_rule(dir, rule);
@@ -229,7 +240,7 @@ impl Port<Active> {
             }
         }
 
-        Err(Error::LayerNotFound { name: layer_name.to_string() })
+        Err(AddRuleError::LayerNotFound)
     }
 
     // XXX While it's been helpful to panic on a bad packet for the

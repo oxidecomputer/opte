@@ -34,6 +34,8 @@ use crate::rule::{
 use crate::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
 use crate::{Direction, ParseErr, ParseResult};
 
+pub const FW_LAYER_NAME: &'static str = "firewall";
+
 pub fn setup(port: &mut Port<Inactive>) -> port::Result<()> {
     let fw_layer = Firewall::create_layer();
     port.add_layer(fw_layer, Pos::First)
@@ -180,7 +182,7 @@ impl Firewall {
         )));
 
         let mut layer = Layer::new(
-            "firewall",
+            FW_LAYER_NAME,
             vec![stateful_action, static_action]
         );
         add_default_inbound_rules(&mut layer);
@@ -233,6 +235,7 @@ impl FromStr for FirewallRule {
                     direction = Some(val.parse::<Direction>()?);
                 }
 
+                // TODO Get rid of this dead code (thoughout this file)
                 // Some(("target", val)) => {
                 //     target = Some(val.parse::<Target>()?);
                 // }

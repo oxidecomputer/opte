@@ -33,6 +33,10 @@ enum Command {
         name: String,
     },
 
+    SetOverlay {
+        
+    }
+
     /// Dump the contents of the layer with the given name
     LayerDump {
         #[structopt(short)]
@@ -428,6 +432,12 @@ fn main() {
                 action,
                 priority,
             };
+            // TODO With the new IoctlError type I would change all
+            // these calls to check return and either print response
+            // or print error. In fact, I think the command errors,
+            // like AddFwRuleError could implement display for this,
+            // and all response types from command could implement
+            // display as well.
             hdl.add_firewall_rule(&port, &rule).unwrap();
         }
 

@@ -1,3 +1,4 @@
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::mem::{self, MaybeUninit};
@@ -11,13 +12,15 @@ use opte_core::ioctl::{CmdResp, Ioctl};
 use postcard;
 
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub enum Error {
-    DeserError(postcard::Error),
+    DeserError(String),
     FailedCopyin,
     FailedCopyout,
+    PortInactive,
+    PortNotFound,
     RespTooLong,
 }
 
@@ -29,6 +32,7 @@ where
 {
     match res {
         Ok(_) => 0,
+        Err(Error::DeserError(_)) => ddi::EPROTO,
         Err(Error::RespTooLong) => ddi::ENOBUFS,
         Err(_) => ddi::EFAULT,
     }
@@ -97,7 +101,7 @@ impl IoctlEnvelope {
     /// `resp_bytes`. Return an error if the `resp_len` indicates that
     /// the user buffer is not large enough to hold the serialized
     /// bytes.
-    pub fn copy_out_resp<T>(&mut self, val: &CmdResp<T>) -> Result<()>
+    pub fn copy_out_resp<T>(&mut self, val: &T) -> Result<()>
     where
         T: Debug + Serialize
     {
@@ -129,10 +133,11 @@ impl IoctlEnvelope {
             return Err(Error::FailedCopyout);
         }
 
-        // TODO We leave resp_len as the value given by the user
+        // TODOx We leave resp_len as the value given by the user
         // program. May want to rename the fields `resp_bytes_len` and
         // `resp_len_needed`.
 
+        // TODOx Remove?
         // self.ioctl.resp_len = vec.len();
         self.copy_out_self()?;
         Ok(())
@@ -144,7 +149,7 @@ impl IoctlEnvelope {
         // malicious/malformed requests from allocating large amounts
         // of kmem.
         //
-        // TODO This actually just needs to be a Box'd array and I
+        // TODOx This actually just needs to be a Box'd array and I
         // need to use MaybeInit pattern.
         let mut bytes = Vec::with_capacity(self.ioctl.req_len);
         let ret = unsafe {
@@ -157,7 +162,7 @@ impl IoctlEnvelope {
         };
 
         if ret != 0 {
-            return Err(Error::FailedCopyin);
+                return Err(Error::FailedCopyin);
         }
 
         // Safety: We know the `Vec` has `req_len` capacity, and that
@@ -169,7 +174,9 @@ impl IoctlEnvelope {
         // postcard might read here?
         match postcard::from_bytes(&bytes) {
             Ok(val) => Ok(val),
-            Err(deser_error) => Err(Error::DeserError(deser_error)),
+            Err(deser_error) => {
+                Err(Error::DeserError(format!("{}", deser_error)))
+            }
         }
     }
 }

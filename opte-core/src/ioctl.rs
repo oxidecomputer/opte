@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ether::EtherAddr;
 use crate::ip4::Ipv4Addr;
+use crate::oxide_net::firewall as fw;
+use crate::port;
+use crate::rule::Rule;
 use crate::vpc::VpcSubnet4;
 
 #[derive(Clone, Copy, Debug)]
@@ -32,6 +35,7 @@ pub enum IoctlCmd {
     TcpFlowsDump = 30,  // dump TCP flows
     LayerDump = 31,     // dump the specified Layer
     UftDump = 32,       // dump the Unified Flow Table
+    SetOverlay = 40     // set the overlay config
 }
 
 impl TryFrom<c_int> for IoctlCmd {
@@ -47,7 +51,41 @@ impl TryFrom<c_int> for IoctlCmd {
             30 => Ok(IoctlCmd::TcpFlowsDump),
             31 => Ok(IoctlCmd::LayerDump),
             32 => Ok(IoctlCmd::UftDump),
+            40 => Ok(IoctlCmd::SetOverlay),
             _ => Err(()),
+        }
+    }
+}
+
+pub trait ApiError {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub enum PortError {
+    PortNotFound,
+    PortInactive,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub enum AddFwRuleError {
+    FirewallNotEnabled
+}
+
+impl ApiError for AddFwRuleError {}
+
+pub fn add_fw_rule(
+    port: &port::Port<port::Active>,
+    req: fw::FwAddRuleReq
+) -> Result<(), AddFwRuleError> {
+    let res = port.add_rule(
+        fw::FW_LAYER_NAME,
+        req.rule.direction,
+        Rule::from(req.rule)
+    );
+
+    match res {
+        Ok(()) => Ok(()),
+        Err(port::AddRuleError::LayerNotFound) => {
+            Err(AddFwRuleError::FirewallNotEnabled)
         }
     }
 }
@@ -67,6 +105,9 @@ pub struct Ioctl {
     pub resp_len_needed: size_t,
 }
 
+// TODO should I make the error a T: Debug, Deserialize, Serialize?
+// That way the userland library/program has the option to
+// programmatically inspect an error if needed?
 pub type CmdResp<R> = Result<R, String>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

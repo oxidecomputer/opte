@@ -461,6 +461,7 @@ pub const ENOENT: c_int = 2;
 pub const EFAULT: c_int = 14;
 pub const EBUSY: c_int = 16;
 pub const EINVAL: c_int = 22;
+pub const EPROTO: c_int = 71;
 pub const ENOBUFS: c_int = 132;
 
 pub const KM_SLEEP: i32 = 0x0000;

@@ -36,19 +36,6 @@ pub struct DynNat4Config {
 }
 
 #[derive(Clone, Debug)]
-pub struct OverlayConfig {
-    pub boundary_services: overlay::PhysNet,
-    pub vni: Vni,
-    // NOTE: The phys_mac_{src,dst} currently stand in for the
-    // physical routing service. The src should be the host NIC MAC
-    // address, and the dst should be the physical gateway MAC address
-    // on your home/lab network.
-    pub phys_mac_src: EtherAddr,
-    pub phys_mac_dst: EtherAddr,
-    pub phys_ip_src: Ipv6Addr,
-}
-
-#[derive(Clone, Debug)]
 pub struct PortConfig {
     pub vpc_subnet: VpcSubnet4,
     pub private_mac: EtherAddr,
@@ -60,5 +47,5 @@ pub struct PortConfig {
     // allows the Oxide Network to continue functioning on a local
     // IPv4 network until the IPv6 underlay support is more flushed
     // out and development/testing strategies are determined.
-    pub overlay: Option<OverlayConfig>,
+    pub overlay: Option<overlay::OverlayConfig>,
 }

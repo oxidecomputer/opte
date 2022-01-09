@@ -60,6 +60,18 @@ pub struct OpteAdm {
     device: File,
 }
 
+pub fn add_fw_rule_ioctl(
+    port_name: &str,
+    rule: &FirewallRule
+) -> Result<(), IoctlError<AdFwRuleError>> {
+        let cmd = IoctlCmd::FwAddRule;
+        let req = FwAddRuleReq {
+            port_name: port_name.to_string(),
+            rule: rule.clone()
+        };
+        run_ioctl(self.device.as_raw_fd(), cmd, &req)
+}
+
 impl OpteAdm {
     pub const OPTE_CTL: &'static str = "/devices/pseudo/opte@0:opte";
 
@@ -189,7 +201,10 @@ where
     P: DeserializeOwned,
 {
     let req_bytes = postcard::to_allocvec(req).unwrap();
-    let mut resp_buf: Vec<u8> = vec![0; 1024];
+    // It would be a shame if the command failed and we didn't have
+    // enough bytes to serialize the error response, so we set this to
+    // default to 16 KiB.
+    let mut resp_buf: Vec<u8> = vec![0; 16 * 1024];
     let mut rioctl = opte_core::ioctl::Ioctl {
         req_bytes: req_bytes.as_ptr(),
         req_len: req_bytes.len(),
@@ -206,10 +221,6 @@ where
         // buffer being too small.
         if ret == -1 && unsafe { *libc::___errno() } != libc::ENOBUFS {
             let msg = match unsafe { *libc::___errno() } {
-                // This should never really happen. It indicates a
-                // mismatch between the minor number of the device
-                // node used to send the ioctl and the key used in the
-                // opte driver's `clients` map.
                 libc::ENOENT => {
                     "port not found".to_string()
                 }
@@ -221,6 +232,9 @@ where
                 libc::EINVAL => {
                     "opte driver failed to deserialize request".to_string()
                 }
+
+                // TODO Need to handle sentinel value EPROTO which
+                // indicates the error is serialized in user's buffer.
 
                 errno => {
                     format!("errno: {}", errno)

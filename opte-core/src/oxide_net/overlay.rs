@@ -15,6 +15,8 @@ use alloc::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV6};
 use crate::headers::{HeaderAction, IpAddr};
 use crate::geneve::{GeneveMeta, Vni, GENEVE_PORT};
@@ -31,7 +33,7 @@ use crate::sync::{KMutex, KMutexType};
 use crate::udp::UdpMeta;
 use crate::Direction;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct PhysNet {
     pub ether: EtherAddr,
     pub ip: Ipv6Addr,
@@ -40,17 +42,17 @@ pub struct PhysNet {
 
 pub fn setup(
     port: &mut Port<Inactive>,
-    cfg: &super::PortConfig,
+    cfg: &OverlayConfig,
     v2p: Arc<Virt2Phys>,
 ) -> port::Result<()> {
     // Action Index 0
     let encap_decap = Action::Stateful(
         Box::new(EncapDecapAction::new(
             "encap".to_string(),
-            cfg.overlay.as_ref().unwrap().boundary_services,
-            cfg.overlay.as_ref().unwrap().phys_mac_src,
-            cfg.overlay.as_ref().unwrap().phys_mac_dst,
-            cfg.overlay.as_ref().unwrap().phys_ip_src.clone(),
+            cfg.boundary_services,
+            cfg.phys_mac_src,
+            cfg.phys_mac_dst,
+            cfg.phys_ip_src,
             v2p,
         ))
     );
@@ -293,6 +295,17 @@ impl StatefulAction for EncapDecapAction {
 /// A mapping from virtual IPs to physical location.
 pub struct Virt2Phys {
     name: &'static str,
+    // XXX Wrapping these in a mutex is definitely a terrible idea (in
+    // terms of lock contention as this resource is actually shared by
+    // all ports); but for purposes of dev this is fine for now.
+    // However, before v1 we'll want something like a shadow copy and
+    // atomic pointer swap or perhaps some CoW/persistent data
+    // strcuture that can be efficiently and safely updated. However,
+    // there is another problem that needs to be solved here: when a
+    // mapping is **MODIFIED** we need to invalidate any UFT/LFT entry
+    // that makes use of this virtual destination (for all Ports).
+    // That means updating the generation number of all Ports anytme
+    // an entry is **MODIFIED**.
     ip4: KMutex<BTreeMap<Ipv4Addr, PhysNet>>,
     ip6: KMutex<BTreeMap<Ipv6Addr, PhysNet>>,
 }
@@ -321,4 +334,23 @@ impl Virt2Phys {
             ip6: KMutex::new(BTreeMap::new(), KMutexType::Driver),
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct OverlayConfig {
+    pub boundary_services: PhysNet,
+    pub vni: Vni,
+    // NOTE: The phys_mac_{src,dst} currently stand in for the
+    // physical routing service. The src should be the host NIC MAC
+    // address, and the dst should be the physical gateway MAC address
+    // on your home/lab network.
+    pub phys_mac_src: EtherAddr,
+    pub phys_mac_dst: EtherAddr,
+    pub phys_ip_src: Ipv6Addr,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SetOverlayReq {
+    pub port_name: String,
+    pub cfg: OverlayConfig,
 }
