@@ -19,8 +19,8 @@ pub enum Error {
     DeserError(String),
     FailedCopyin,
     FailedCopyout,
-    PortInactive,
-    PortNotFound,
+    // PortInactive,
+    // PortNotFound,
     RespTooLong,
 }
 

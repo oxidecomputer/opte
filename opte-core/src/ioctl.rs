@@ -61,8 +61,10 @@ pub trait ApiError {}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum PortError {
-    PortNotFound,
-    PortInactive,
+    Exists,
+    Inactive,
+    MacOpenFailed(c_int),
+    NotFound,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

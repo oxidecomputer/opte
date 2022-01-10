@@ -43,6 +43,7 @@ use alloc::sync::Arc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::convert::TryFrom;
+use core::fmt::Debug;
 use core::ops::Range;
 use core::panic::PanicInfo;
 use core::ptr;
@@ -349,7 +350,9 @@ impl OpteState {
     }
 }
 
-fn add_port(req: &AddPortReq) -> CmdResp<()> {
+fn add_port(
+    req: &AddPortReq
+) -> Result<(), HdlrError2<api::PortError>> {
     // Safety: The opte_dip pointer is write-once and is a valid
     // pointer passed to attach(9E). The returned pointer is valid as
     // it was derived from Box::into_raw() during attach(9E).
@@ -363,7 +366,7 @@ fn add_port(req: &AddPortReq) -> CmdResp<()> {
     let mut ports_lock = state.ports.lock();
 
     if let Some(_) = ports_lock.get(&req.link_name) {
-        return Err(format!("port already exists"))
+        return Err(HdlrError2::Api(api::PortError::Exists));
     }
 
     let mut mh: *mut mac_handle = ptr::null_mut::<c_void>() as *mut mac_handle;
@@ -371,7 +374,7 @@ fn add_port(req: &AddPortReq) -> CmdResp<()> {
     let ret = unsafe { mac_open_by_linkname(link_name_c.as_ptr(), &mut mh) };
 
     if ret != 0 {
-        return Err(format!("failed to open mac: {}", ret));
+        return Err(HdlrError2::Api(api::PortError::MacOpenFailed(ret)));
     }
 
     let mut private_mac = [0u8; 6];
@@ -461,11 +464,11 @@ fn delete_port(req: DeletePortReq) -> CmdResp<()> {
 fn get_port_mut<'a, 'b>(
     state: &'a OpteState,
     name: &'b str
-) -> Result<*mut OpteClientState, opte_core::ioctl::PortError> {
+) -> Result<*mut OpteClientState, api::PortError> {
     match state.ports.lock().get_mut(name) {
-        None => Err(opte_core::ioctl::PortError::PortNotFound),
+        None => Err(api::PortError::NotFound),
         Some(PortState::Inactive(_, _)) => {
-            Err(opte_core::ioctl::PortError::PortInactive)
+            Err(api::PortError::Inactive)
         }
         Some(PortState::Active(ocspp)) => Ok(*ocspp),
     }
@@ -518,6 +521,42 @@ fn get_port_mut<'a, 'b>(
 
 // }
 
+#[derive(Debug, Serialize)]
+enum HdlrError2<E: Serialize> {
+    Api(E),
+    Port(api::PortError),
+    System(i32),
+}
+
+// impl<E: Serialize> From<> for HdlrError2<E> {
+//     fn from(e: E) -> Self {
+//         Self::Api(e)
+//     }
+// }
+
+impl<E: Serialize> From<api::PortError> for HdlrError2<E> {
+    fn from(e: api::PortError) -> Self {
+        Self::Port(e)
+    }
+}
+
+impl<E: Serialize> From<self::ioctl::Error> for HdlrError2<E> {
+    fn from(e: self::ioctl::Error) -> Self {
+        match e {
+            self::ioctl::Error::DeserError(_) => Self::System(EINVAL),
+            self::ioctl::Error::FailedCopyin => Self::System(EFAULT),
+            self::ioctl::Error::FailedCopyout => Self::System(EFAULT),
+            self::ioctl::Error::RespTooLong => Self::System(ENOBUFS),
+        }
+    }
+}
+
+impl From<api::AddFwRuleError> for HdlrError2<api::AddFwRuleError> {
+    fn from(e: api::AddFwRuleError) -> Self {
+        Self::Api(e)
+    }
+}
+
 // TODO Would match against this in opte_ioctl and then convert to
 // type that lives in API-land that can map to either the particular
 // API response or to the more generic PortNotFound PortInactive
@@ -546,13 +585,54 @@ impl From<opte_core::ioctl::AddFwRuleError> for HdlrError<opte_core::ioctl::AddF
     }
 }
 
-fn add_fw_rule_hdlr(ioctlenv: &IoctlEnvelope) -> Result<(), HdlrError<opte_core::ioctl::AddFwRuleError>> {
+fn add_port_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<(), HdlrError2<api::PortError>> {
+    let req: AddPortReq = ioctlenv.copy_in_req()?;
+    add_port(&req)
+}
+
+fn add_fw_rule_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<(), HdlrError2<api::AddFwRuleError>> {
     let req: FwAddRuleReq = ioctlenv.copy_in_req()?;
     let ocs = unsafe {
         let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
         &mut *get_port_mut(state, &req.port_name)?
     };
-    api::add_fw_rule(&ocs.port, req).map_err(HdlrError::from)
+    api::add_fw_rule(&ocs.port, req).map_err(HdlrError2::from)
+}
+
+// macro_rules! hdlr {
+//     ($val:expr) => {
+//         match $val {
+//             Ok(resp) => to_errno(ioctlenv.copy_out_resp(&resp)),
+//             Err(HdlrError::Api(eresp)) => {
+//                 to_errno(ioctlenv.copy_out_resp(&eresp))
+//             }
+//             // TODO Actually implement the rest of this
+//             Err(_) => EFAULT,
+//         }
+//     }
+// }
+
+fn hdlr_resp<E, R>(
+    ioctlenv: &mut IoctlEnvelope,
+    resp: Result<R, HdlrError2<E>>
+) -> c_int
+where
+    E: Debug + Serialize,
+    R: Debug + Serialize,
+{
+    match resp {
+        Ok(resp) => to_errno(ioctlenv.copy_out_resp(&resp)),
+        Err(HdlrError2::Api(eresp)) => {
+            to_errno(ioctlenv.copy_out_resp(&eresp))
+        }
+        // TODO Actually implement the rest of this
+        Err(_) => EFAULT,
+    }
+
 }
 
 // TODO opte_ioctl must return c_int, but want something that
@@ -600,20 +680,10 @@ unsafe extern "C" fn opte_ioctl(
     // }
 
     match cmd {
-    //     IoctlCmd::AddPort => {
-    //         let req: AddPortReq = match ioctlenv.copy_in_req() {
-    //             Ok(val) => val,
-    //             Err(e @ ioctl::Error::DeserError(_)) => {
-    //                 opte_core::err(
-    //                     format!("failed to deser AddPortReq: {:?}", e)
-    //                 );
-    //                 return EINVAL;
-    //             }
-    //             _ => return EFAULT,
-    //         };
-
-    //         to_errno(ioctlenv.copy_out_resp(&add_port(&req)))
-    //     }
+        IoctlCmd::AddPort => {
+            let resp = add_port_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
 
     //     IoctlCmd::DeletePort => {
     //         let req: DeletePortReq = match ioctlenv.copy_in_req() {
@@ -731,7 +801,7 @@ unsafe extern "C" fn opte_ioctl(
             // `hdrl!(add_fw_rule_hdr(&ioctlenv))`
             match add_fw_rule_hdlr(&ioctlenv) {
                 Ok(resp) => to_errno(ioctlenv.copy_out_resp(&resp)),
-                Err(HdlrError::Api(eresp)) => to_errno(ioctlenv.copy_out_resp(&eresp)),
+                Err(HdlrError2::Api(eresp)) => to_errno(ioctlenv.copy_out_resp(&eresp)),
                 // TODO Actually implement the rest of this
                 Err(_) => EFAULT,
             }
