@@ -350,15 +350,19 @@ impl OpteState {
     }
 }
 
-fn add_port(
-    req: &AddPortReq
-) -> Result<(), HdlrError2<api::PortError>> {
+fn get_opte_state() -> &'static OpteState {
     // Safety: The opte_dip pointer is write-once and is a valid
     // pointer passed to attach(9E). The returned pointer is valid as
     // it was derived from Box::into_raw() during attach(9E).
-    let state = unsafe {
+    unsafe {
         &*(ddi_get_driver_private(opte_dip) as *mut OpteState)
-    };
+    }
+}
+
+fn add_port(
+    req: &AddPortReq
+) -> Result<(), api::AddPortError> {
+    let state = get_opte_state();
 
     // We must hold this lock until we have inserted the new port into
     // the map; otherwise, multiple threads could race to add the same
@@ -366,7 +370,7 @@ fn add_port(
     let mut ports_lock = state.ports.lock();
 
     if let Some(_) = ports_lock.get(&req.link_name) {
-        return Err(HdlrError2::Api(api::PortError::Exists));
+        return Err(api::AddPortError::Exists);
     }
 
     let mut mh: *mut mac_handle = ptr::null_mut::<c_void>() as *mut mac_handle;
@@ -374,7 +378,7 @@ fn add_port(
     let ret = unsafe { mac_open_by_linkname(link_name_c.as_ptr(), &mut mh) };
 
     if ret != 0 {
-        return Err(HdlrError2::Api(api::PortError::MacOpenFailed(ret)));
+        return Err(api::AddPortError::MacOpenFailed(ret));
     }
 
     let mut private_mac = [0u8; 6];
@@ -438,7 +442,7 @@ fn add_port(
     Ok(())
 }
 
-fn delete_port(req: DeletePortReq) -> CmdResp<()> {
+fn delete_port(req: &DeletePortReq) -> Result<(), api::DeletePortError> {
     let state = unsafe {
         &*(ddi_get_driver_private(opte_dip) as *mut OpteState)
     };
@@ -447,8 +451,8 @@ fn delete_port(req: DeletePortReq) -> CmdResp<()> {
 
     let _ = match ports_lock.get(&req.name) {
         Some(PortState::Inactive(inactive_port, _)) => inactive_port,
-        Some(PortState::Active(_)) => return Err(format!("port is in use")),
-        None => return Err(format!("port not found")),
+        Some(PortState::Active(_)) => return Err(api::DeletePortError::InUse),
+        None => return Err(api::DeletePortError::NotFound),
     };
 
     let _ = ports_lock.remove(&req.name);
@@ -461,7 +465,7 @@ fn delete_port(req: DeletePortReq) -> CmdResp<()> {
 //     resp: T,
 // }
 
-fn get_port_mut<'a, 'b>(
+fn get_active_port_mut<'a, 'b>(
     state: &'a OpteState,
     name: &'b str
 ) -> Result<*mut OpteClientState, api::PortError> {
@@ -551,8 +555,26 @@ impl<E: Serialize> From<self::ioctl::Error> for HdlrError2<E> {
     }
 }
 
+impl From<api::AddPortError> for HdlrError2<api::AddPortError> {
+    fn from(e: api::AddPortError) -> Self {
+        Self::Api(e)
+    }
+}
+
+impl From<api::DeletePortError> for HdlrError2<api::DeletePortError> {
+    fn from(e: api::DeletePortError) -> Self {
+        Self::Api(e)
+    }
+}
+
 impl From<api::AddFwRuleError> for HdlrError2<api::AddFwRuleError> {
     fn from(e: api::AddFwRuleError) -> Self {
+        Self::Api(e)
+    }
+}
+
+impl From<api::RemFwRuleError> for HdlrError2<api::RemFwRuleError> {
+    fn from(e: api::RemFwRuleError) -> Self {
         Self::Api(e)
     }
 }
@@ -587,9 +609,48 @@ impl From<opte_core::ioctl::AddFwRuleError> for HdlrError<opte_core::ioctl::AddF
 
 fn add_port_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<(), HdlrError2<api::PortError>> {
+) -> Result<(), HdlrError2<api::AddPortError>> {
     let req: AddPortReq = ioctlenv.copy_in_req()?;
-    add_port(&req)
+    add_port(&req).map_err(HdlrError2::from)
+}
+
+fn delete_port_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<(), HdlrError2<api::DeletePortError>> {
+    let req: DeletePortReq = ioctlenv.copy_in_req()?;
+    delete_port(&req).map_err(HdlrError2::from)
+}
+
+fn list_ports_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<ListPortsResp, HdlrError2<()>> {
+    let _req: ListPortsReq = ioctlenv.copy_in_req()?;
+    let mut resp = ListPortsResp { ports: vec![] };
+    let state = get_opte_state();
+    for (_k, ps) in state.ports.lock().iter() {
+        match ps {
+            PortState::Inactive(port, cfg) => {
+                resp.ports.push(PortInfo {
+                    name: port.name().to_string(),
+                    mac_addr: port.mac_addr(),
+                    ip4_addr: cfg.private_ip,
+                    in_use: false,
+                });
+            }
+
+            PortState::Active(ocspp) => {
+                let ocs = unsafe { &*(*ocspp) };
+                resp.ports.push(PortInfo {
+                    name: ocs.name.clone(),
+                    mac_addr: ocs.private_mac,
+                    ip4_addr: ocs.port_cfg.private_ip,
+                    in_use: true,
+                });
+            }
+        }
+    }
+
+    Ok(resp)
 }
 
 fn add_fw_rule_hdlr(
@@ -598,9 +659,18 @@ fn add_fw_rule_hdlr(
     let req: FwAddRuleReq = ioctlenv.copy_in_req()?;
     let ocs = unsafe {
         let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-        &mut *get_port_mut(state, &req.port_name)?
+        &mut *get_active_port_mut(state, &req.port_name)?
     };
-    api::add_fw_rule(&ocs.port, req).map_err(HdlrError2::from)
+    api::add_fw_rule(&ocs.port, &req).map_err(HdlrError2::from)
+}
+
+fn rem_fw_rule_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<(), HdlrError2<api::RemFwRuleError>> {
+    let req: FwRemRuleReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
+    api::rem_fw_rule(&ocs.port, &req).map_err(HdlrError2::from)
 }
 
 // macro_rules! hdlr {
@@ -685,20 +755,10 @@ unsafe extern "C" fn opte_ioctl(
             hdlr_resp(&mut ioctlenv, resp)
         }
 
-    //     IoctlCmd::DeletePort => {
-    //         let req: DeletePortReq = match ioctlenv.copy_in_req() {
-    //             Ok(val) => val,
-    //             Err(e @ ioctl::Error::DeserError(_)) => {
-    //                 opte_core::err(
-    //                     format!("failed to deser DeletePortReq: {:?}", e)
-    //                 );
-    //                 return EINVAL;
-    //             }
-    //             _ => return EFAULT,
-    //         };
-
-    //         to_errno(ioctlenv.copy_out_resp(&delete_port(req)))
-    //     }
+        IoctlCmd::DeletePort => {
+            let resp = delete_port_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
 
     //     // XXX Eventually this information (or some subset of it)
     //     // comes from Omicron/SA, but for now we require manual config
@@ -746,100 +806,26 @@ unsafe extern "C" fn opte_ioctl(
     //         ))
     //     }
 
-    //     IoctlCmd::ListPorts => {
-    //         let _req: ListPortsReq = match ioctlenv.copy_in_req() {
-    //             Ok(val) => val,
-    //             Err(e @ ioctl::Error::DeserError(_)) => {
-    //                 opte_core::err(
-    //                     format!("failed to deser ListPortsReq: {:?}", e)
-    //                 );
-    //                 return EINVAL;
-    //             }
-    //             _ => return EFAULT,
-    //         };
-
-    //         let mut resp = ListPortsResp { ports: vec![] };
-    //         let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-    //         for (_k, ocs) in state.clients.lock().iter() {
-    //             resp.ports.push(PortInfo {
-    //                 name: ocs.name.clone(),
-    //                 mac_addr: ocs.private_mac,
-    //                 ip4_addr: ocs.port_cfg.private_ip,
-    //                 in_use: *ocs.in_use.lock()
-    //             });
-    //         }
-
-    //         to_errno(ioctlenv.copy_out_resp(&Ok(resp)))
-    //     }
-
-    //     IoctlCmd::FwAddRule => {
-    //         let req: FwAddRuleReq = match ioctlenv.copy_in_req() {
-    //             Ok(val) => val,
-    //             Err(ioctl::Error::DeserError(_)) => return EINVAL,
-    //             _ => return EFAULT,
-    //         };
-
-    //         let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-    //         let ocs = match state.clients.lock().get(&req.port_name) {
-    //             None => {
-    //                 return ENOENT;
-    //             }
-
-    //             Some(v) => &mut *(*v),
-    //         };
-
-    //         let dir = req.rule.direction;
-    //         let rule = Rule::from(req.rule);
-    //         let resp = ocs.port.active()?.add_rule("firewall", dir, rule);
-    //         to_errno(ioctlenv.copy_out_resp(
-    //             &resp.map_err(|e| format!("{:?}", e))
-    //         ))
-    //     }
-
-        IoctlCmd::FwAddRule => {
-            // TODO Could use macro for this match, like
-            // `hdrl!(add_fw_rule_hdr(&ioctlenv))`
-            match add_fw_rule_hdlr(&ioctlenv) {
-                Ok(resp) => to_errno(ioctlenv.copy_out_resp(&resp)),
-                Err(HdlrError2::Api(eresp)) => to_errno(ioctlenv.copy_out_resp(&eresp)),
-                // TODO Actually implement the rest of this
-                Err(_) => EFAULT,
-            }
+        IoctlCmd::ListPorts => {
+            let resp = list_ports_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
         }
 
-    //     IoctlCmd::FwRemRule => {
-    //         // This step validates that the bytes were able to be
-    //         // derserialized, but that doesn't mean we should consider
-    //         // this a valid, legal, or safe request. Before adding a
-    //         // new rule to the firewall we must make sure it meets all
-    //         // requirements. To make sure that the programmer cannot
-    //         // forget to make these checks, they are done as part of
-    //         // the `add_rule()` method.
-    //         //
-    //         // TODO For example, we need to make sure that a default
-    //         // rule cannot be deleted (assuming they should not be
-    //         // deleted), or that a given target is something that
-    //         // actually exists.
-    //         let req: FwRemRuleReq = match ioctlenv.copy_in_req() {
-    //             Ok(val) => val,
-    //             Err(ioctl::Error::DeserError(_)) => return EINVAL,
-    //             _ => return EFAULT,
-    //         };
+        IoctlCmd::FwAddRule => {
+            let resp = add_fw_rule_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
 
-    //         let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-    //         let ocs = match state.clients.lock().get(&req.port_name) {
-    //             None => {
-    //                 return ENOENT;
-    //             }
 
-    //             Some(v) => &mut *(*v),
-    //         };
-
-    //         let resp = ocs.port.remove_rule("firewall", req.dir, req.id);
-    //         to_errno(ioctlenv.copy_out_resp(
-    //             &resp.map_err(|e| format!("{:?}", e))
-    //         ))
-    //     }
+        IoctlCmd::FwRemRule => {
+            // XXX At the moment a default rule can be removed. That's
+            // something we may want to prevent at the OPTE layer
+            // moving forward. Or we may want to allow complete
+            // freedom at this level and place that enforcement at the
+            // control plane level.
+            let resp = rem_fw_rule_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
 
     //     IoctlCmd::TcpFlowsDump => {
     //         let req: TcpFlowsDumpReq = match ioctlenv.copy_in_req() {

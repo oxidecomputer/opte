@@ -113,6 +113,10 @@ impl<S: PortState> Port<S> {
     pub fn mac_addr(&self) -> EtherAddr {
         self.mac
     }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl Port<Inactive> {
@@ -222,6 +226,12 @@ impl Port<Inactive> {
 #[derive(Clone, Debug)]
 pub enum AddRuleError {
     LayerNotFound,
+}
+
+#[derive(Clone, Debug)]
+pub enum RemoveRuleError {
+    LayerNotFound,
+    RuleNotFound,
 }
 
 impl Port<Active> {
@@ -885,20 +895,16 @@ impl Port<Active> {
         layer_name: &str,
         dir: Direction,
         id: RuleId,
-    ) -> Result<()> {
+    ) -> result::Result<(), RemoveRuleError> {
         for layer in &self.state.layers {
             if layer.name() == layer_name {
                 if layer.remove_rule(dir, id).is_err() {
-                    return Err(Error::RuleNotFound {
-                        layer: layer_name.to_string(),
-                        dir,
-                        id
-                    });
+                    return Err(RemoveRuleError::RuleNotFound);
                 }
             }
         }
 
-        Err(Error::LayerNotFound { name: layer_name.to_string() })
+        Err(RemoveRuleError::LayerNotFound)
     }
 }
 

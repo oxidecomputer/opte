@@ -68,26 +68,60 @@ pub enum PortError {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub enum AddPortError {
+    Exists,
+    MacOpenFailed(c_int),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub enum DeletePortError {
+    InUse,
+    NotFound,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub enum AddFwRuleError {
-    FirewallNotEnabled
+    FirewallNotEnabled,
 }
 
 impl ApiError for AddFwRuleError {}
 
+#[derive(Debug, Deserialize, Serialize)]
+pub enum RemFwRuleError {
+    FirewallNotEnabled,
+    RuleNotFound,
+}
+
 pub fn add_fw_rule(
     port: &port::Port<port::Active>,
-    req: fw::FwAddRuleReq
+    req: &fw::FwAddRuleReq
 ) -> Result<(), AddFwRuleError> {
     let res = port.add_rule(
         fw::FW_LAYER_NAME,
         req.rule.direction,
-        Rule::from(req.rule)
+        Rule::from(req.rule.clone())
     );
 
     match res {
         Ok(()) => Ok(()),
         Err(port::AddRuleError::LayerNotFound) => {
             Err(AddFwRuleError::FirewallNotEnabled)
+        }
+    }
+}
+
+pub fn rem_fw_rule(
+    port: &port::Port<port::Active>,
+    req: &fw::FwRemRuleReq,
+) -> Result<(), RemFwRuleError> {
+    let res = port.remove_rule(fw::FW_LAYER_NAME, req.dir, req.id);
+    match res {
+        Ok(()) => Ok(()),
+        Err(port::RemoveRuleError::LayerNotFound) => {
+            Err(RemFwRuleError::FirewallNotEnabled)
+        }
+        Err(port::RemoveRuleError::RuleNotFound) => {
+            Err(RemFwRuleError::RuleNotFound)
         }
     }
 }
