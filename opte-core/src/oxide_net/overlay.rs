@@ -33,6 +33,8 @@ use crate::sync::{KMutex, KMutexType};
 use crate::udp::UdpMeta;
 use crate::Direction;
 
+pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct PhysNet {
     pub ether: EtherAddr,
@@ -41,14 +43,14 @@ pub struct PhysNet {
 }
 
 pub fn setup(
-    port: &mut Port<Inactive>,
+    port: &Port<Inactive>,
     cfg: &OverlayConfig,
     v2p: Arc<Virt2Phys>,
-) -> port::Result<()> {
+) {
     // Action Index 0
     let encap_decap = Action::Stateful(
         Box::new(EncapDecapAction::new(
-            "encap".to_string(),
+            ENCAP_DECAP_NAME.to_string(),
             cfg.boundary_services,
             cfg.phys_mac_src,
             cfg.phys_mac_dst,
@@ -57,14 +59,16 @@ pub fn setup(
         ))
     );
 
-    let layer = Layer::new("overlay", vec![encap_decap]);
+    let layer = Layer::new(OVERLAY_LAYER_NAME, vec![encap_decap]);
     let encap_decap_rule = Rule::new(1, RuleAction::Allow(0));
     layer.add_rule(Direction::Out, encap_decap_rule.clone().match_any());
     // XXX Currently this will decap any outer 5-tuple and pass along
     // the inner frame. Should this be the case? Is there any type of
     // validation of the outer frame that should occur?
     layer.add_rule(Direction::In, encap_decap_rule.match_any());
-    port.add_layer(layer, Pos::Last)
+    // NOTE The First/Last positions cannot fail; perhaps I should
+    // improve the API to avoid the unwrap().
+    port.add_layer(layer, Pos::Last).unwrap();
 }
 
 #[derive(Clone, Debug)]
@@ -349,6 +353,7 @@ pub struct OverlayConfig {
     pub phys_ip_src: Ipv6Addr,
 }
 
+// TODO move to api module
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SetOverlayReq {
     pub port_name: String,

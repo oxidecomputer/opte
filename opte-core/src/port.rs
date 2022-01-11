@@ -24,8 +24,7 @@ use crate::headers::IpMeta;
 use crate::ioctl::CmdResp;
 use crate::ip4::Protocol;
 use crate::layer::{
-    InnerFlowId, Layer, LayerDumpResp, LayerError, LayerResult, RuleId,
-    FLOW_ID_DEFAULT,
+    self, InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT
 };
 use crate::packet::{Initialized, Packet, PacketMeta, Parsed};
 use crate::rule::{ht_fire_probe, Finalized, Rule, HT};
@@ -119,6 +118,11 @@ impl<S: PortState> Port<S> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum AddLayerError {
+    BadLayerPos(Pos),
+}
+
 impl Port<Inactive> {
     pub fn activate(self) -> Port<Active> {
         Port {
@@ -163,7 +167,7 @@ impl Port<Inactive> {
         &self,
         new_layer: Layer,
         pos: Pos
-    ) -> Result<()> {
+    ) -> result::Result<(), AddLayerError> {
         let mut lock = self.state.layers.lock();
 
         match pos {
@@ -196,7 +200,7 @@ impl Port<Inactive> {
             }
         }
 
-        Err(Error::BadLayerPos { name: new_layer.name().to_string(), pos })
+        Err(AddLayerError::BadLayerPos(pos))
     }
 
     pub fn new(name: String, mac: EtherAddr) -> Self {
@@ -225,6 +229,11 @@ impl Port<Inactive> {
 
 #[derive(Clone, Debug)]
 pub enum AddRuleError {
+    LayerNotFound,
+}
+
+#[derive(Clone, Debug)]
+pub enum DumpLayerError {
     LayerNotFound,
 }
 
@@ -288,23 +297,26 @@ impl Port<Active> {
 
     /// Dump the contents of the layer named `name`, if such a layer
     /// exists.
-    pub fn dump_layer(&self, name: &str) -> CmdResp<LayerDumpResp> {
+    pub fn dump_layer(
+        &self,
+        name: &str
+    ) -> result::Result<layer::DumpLayerResp, DumpLayerError> {
         for l in &*self.state.layers {
             if l.name() == name {
                 return Ok(l.dump());
             }
         }
 
-        Err(format!("layer not found: {}", name))
+        Err(DumpLayerError::LayerNotFound)
     }
 
     /// Dump the contents of the TCP flow connection tracking table.
-    pub fn dump_tcp_flows(&self) -> TcpFlowsDumpResp {
-        TcpFlowsDumpResp { flows: self.state.tcp_flows.lock().dump() }
+    pub fn dump_tcp_flows(&self) -> DumpTcpFlowsResp {
+        DumpTcpFlowsResp { flows: self.state.tcp_flows.lock().dump() }
     }
 
     /// Dump the contents of the Unified Flow Table.
-    pub fn dump_uft(&self) -> UftDumpResp {
+    pub fn dump_uft(&self) -> DumpUftResp {
         let in_lock = self.state.uft_in.lock();
         let uft_in_limit = in_lock.get_limit();
         let uft_in_num_flows = in_lock.num_flows();
@@ -317,7 +329,7 @@ impl Port<Active> {
         let uft_out = out_lock.dump();
         drop(out_lock);
 
-        UftDumpResp {
+        DumpUftResp {
             uft_in_limit,
             uft_in_num_flows,
             uft_in,
@@ -1004,12 +1016,12 @@ pub fn port_process_return_probe(dir: Direction, name: &str) {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct UftDumpReq {
+pub struct DumpUftReq {
     pub port_name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct UftDumpResp {
+pub struct DumpUftResp {
     pub uft_in_limit: u32,
     pub uft_in_num_flows: u32,
     pub uft_in: Vec<(InnerFlowId, FlowEntryDump)>,
@@ -1019,12 +1031,12 @@ pub struct UftDumpResp {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct TcpFlowsDumpReq {
+pub struct DumpTcpFlowsReq {
     pub port_name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct TcpFlowsDumpResp {
+pub struct DumpTcpFlowsResp {
     pub flows: Vec<(InnerFlowId, FlowEntryDump)>,
 }
 

@@ -61,13 +61,13 @@ use opte_core::ioctl::{
     DeletePortReq
 };
 use opte_core::ip4::Ipv4Addr;
-use opte_core::layer::LayerDumpReq;
+use opte_core::layer;
 use opte_core::oxide_net::overlay;
 use opte_core::oxide_net::PortConfig;
 use opte_core::packet::{Initialized, Packet};
-use opte_core::port::{self, Port, ProcessResult, TcpFlowsDumpReq, UftDumpReq};
+use opte_core::port::{self, Port, ProcessResult};
 use opte_core::rule::Rule;
-use opte_core::sync::{KMutex, KMutexType};
+use opte_core::sync::{KMutex, KMutexGuard, KMutexType};
 use opte_core::{CStr, CString, Direction};
 
 // For now I glob import all of DDI/DKI until I have a better idea of
@@ -333,8 +333,6 @@ struct OpteState {
     gateway_mac: EtherAddr,
     gateway_ip: Ipv4Addr,
     v2p: Arc<overlay::Virt2Phys>,
-    // clients: KMutex<BTreeMap<LinkName, *mut OpteClientState>>,
-    // ports: KMutex<BTreeMap<LinkName, (Port<port::Inactive>, PortConfig)>>,
     ports: KMutex<BTreeMap<LinkName, PortState>>,
 }
 
@@ -344,7 +342,6 @@ impl OpteState {
             gateway_mac,
             gateway_ip,
             v2p: Arc::new(overlay::Virt2Phys::new()),
-            // clients: KMutex::new(BTreeMap::new(), KMutexType::Driver),
             ports: KMutex::new(BTreeMap::new(), KMutexType::Driver),
         }
     }
@@ -465,6 +462,7 @@ fn delete_port(req: &DeletePortReq) -> Result<(), api::DeletePortError> {
 //     resp: T,
 // }
 
+// TODO This should probably be renamed get_client_mut()
 fn get_active_port_mut<'a, 'b>(
     state: &'a OpteState,
     name: &'b str
@@ -475,6 +473,23 @@ fn get_active_port_mut<'a, 'b>(
             Err(api::PortError::Inactive)
         }
         Some(PortState::Active(ocspp)) => Ok(*ocspp),
+    }
+}
+
+// TODO This should probably be renamed get_port()
+//
+// We need to pass this function a lock because the caller is likely
+// performing several actions on a given Port and thus must hold the
+// lock the entire time to prevent another thread from deleting the
+// same Port.
+fn get_inactive_port<'a, 'b>(
+    ports_lock: &'a KMutexGuard<BTreeMap<LinkName, PortState>>,
+    name: &'b str,
+) -> Result<&'a Port<port::Inactive>, api::PortError> {
+    match ports_lock.get(name) {
+        None => Err(api::PortError::NotFound),
+        Some(PortState::Inactive(port, _)) => Ok(&port),
+        Some(PortState::Active(_)) => Err(api::PortError::Active),
     }
 }
 
@@ -579,6 +594,12 @@ impl From<api::RemFwRuleError> for HdlrError2<api::RemFwRuleError> {
     }
 }
 
+impl From<api::DumpLayerError> for HdlrError2<api::DumpLayerError> {
+    fn from(e: api::DumpLayerError) -> Self {
+        Self::Api(e)
+    }
+}
+
 // TODO Would match against this in opte_ioctl and then convert to
 // type that lives in API-land that can map to either the particular
 // API response or to the more generic PortNotFound PortInactive
@@ -673,18 +694,42 @@ fn rem_fw_rule_hdlr(
     api::rem_fw_rule(&ocs.port, &req).map_err(HdlrError2::from)
 }
 
-// macro_rules! hdlr {
-//     ($val:expr) => {
-//         match $val {
-//             Ok(resp) => to_errno(ioctlenv.copy_out_resp(&resp)),
-//             Err(HdlrError::Api(eresp)) => {
-//                 to_errno(ioctlenv.copy_out_resp(&eresp))
-//             }
-//             // TODO Actually implement the rest of this
-//             Err(_) => EFAULT,
-//         }
-//     }
-// }
+fn dump_tcp_flows_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<port::DumpTcpFlowsResp, HdlrError2<()>> {
+    let req: port::DumpTcpFlowsReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
+    Ok(api::dump_tcp_flows(&ocs.port, &req))
+}
+
+fn dump_layer_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<layer::DumpLayerResp, HdlrError2<api::DumpLayerError>> {
+    let req: layer::DumpLayerReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
+    api::dump_layer(&ocs.port, &req).map_err(HdlrError2::from)
+}
+
+fn dump_uft_hdlr(
+    ioctlenv: &IoctlEnvelope,
+) -> Result<port::DumpUftResp, HdlrError2<()>> {
+    let req: port::DumpUftReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
+    Ok(api::dump_uft(&ocs.port, &req))
+}
+
+fn set_overlay_hdlr(
+    ioctlenv: &IoctlEnvelope,
+) -> Result<(), HdlrError2<()>> {
+    let req: overlay::SetOverlayReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let ports_lock = state.ports.lock();
+    let port = get_inactive_port(&ports_lock, &req.port_name)?;
+    Ok(api::set_overlay(&port, &req, state.v2p.clone()))
+}
 
 fn hdlr_resp<E, R>(
     ioctlenv: &mut IoctlEnvelope,
@@ -732,23 +777,6 @@ unsafe extern "C" fn opte_ioctl(
             _ => return EFAULT,
     };
 
-    // match do_ioctl(cmd, &ioctlenv) {
-    //     Ok(resp) => to_errno(ioctlenv.copy_out_resp(resp)),
-    //     Err(UberError::Ioctl(self::ioctl::Error::FailedCopyin)) => EFAULT,
-    //     Err(UberError::Ioctl(self::ioctl::Error::DeserError(e))) => {
-    //         to_errno(ioctlenv.copy_out_resp(
-    //             &Err(format!("deserialization failue: {}", e))
-    //         ))
-    //     }
-    //     // Err(self::ioctl::Error::FailedCopyin) => EFAULT,
-    //     // Err(self::ioctl::Error::DeserError(e)) => {
-    //     //     to_errno(ioctlenv.copy_out_resp(
-    //     //         format!("deserialization failue: {}", e)
-    //     //     ))
-    //     // }
-
-    // }
-
     match cmd {
         IoctlCmd::AddPort => {
             let resp = add_port_hdlr(&ioctlenv);
@@ -760,51 +788,14 @@ unsafe extern "C" fn opte_ioctl(
             hdlr_resp(&mut ioctlenv, resp)
         }
 
-    //     // XXX Eventually this information (or some subset of it)
-    //     // comes from Omicron/SA, but for now we require manual config
-    //     // between the window of creating an instance (which creates
-    //     // an OPTE Port) and starting it.
-    //     IoctlCmd::SetOverlay => {
-    //         let req: overlay::SetOverlayReq = match ioctlenv.copy_in_req() {
-    //             Ok(val) => val,
-    //             Err(ioctl::Error::DeserError(_)) => return EINVAL,
-    //             _ => return EFAULT,
-    //         };
-
-    //         let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-    //         let ocs = match state.clients.lock().get(&req.port_name) {
-    //             None => {
-    //                 return ENOENT;
-    //             }
-    //             Some(v) => v,
-    //         };
-
-    //         // let overlay = OverlayConfig {
-    //         //     // TODO Using nonsense for BS for the moment.
-    //         //     boundary_services: PhysNet {
-    //         //         ether: EtherAddr::from([0; 6]),
-    //         //         ip: Ipv6Addr::from([0; 16]),
-    //         //         vni: Vni::new(11),
-    //         //     },
-    //         //     vni: 
-    //         // };
-
-    //         let mut port = match ocs.port {
-    //             PortState::Active(_) => {
-    //                 return to_errno(ioctlenv.copy_out_resp(&Err(
-    //                     format!("cannot modify active port")))
-    //                 );
-    //             },
-
-    //             PortState::Inactive(port) => port,
-    //         };
-
-    //         let resp = overlay::setup(&mut port, &req.cfg, state.v2p.clone());
-
-    //         to_errno(ioctlenv.copy_out_resp(
-    //             &resp.map_err(|e| format!("{:?}", e))
-    //         ))
-    //     }
+        // XXX Eventually this information (or some subset of it)
+        // comes from Omicron/SA, but for now we require manual config
+        // between the window of creating an instance (which creates
+        // an OPTE Port) and starting it.
+        IoctlCmd::SetOverlay => {
+            let resp = set_overlay_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
 
         IoctlCmd::ListPorts => {
             let resp = list_ports_hdlr(&ioctlenv);
@@ -816,7 +807,6 @@ unsafe extern "C" fn opte_ioctl(
             hdlr_resp(&mut ioctlenv, resp)
         }
 
-
         IoctlCmd::FwRemRule => {
             // XXX At the moment a default rule can be removed. That's
             // something we may want to prevent at the OPTE layer
@@ -827,64 +817,20 @@ unsafe extern "C" fn opte_ioctl(
             hdlr_resp(&mut ioctlenv, resp)
         }
 
-    //     IoctlCmd::TcpFlowsDump => {
-    //         let req: TcpFlowsDumpReq = match ioctlenv.copy_in_req() {
-    //             Ok(val) => val,
-    //             Err(ioctl::Error::DeserError(_)) => return EINVAL,
-    //             _ => return EFAULT,
-    //         };
-    //         let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-    //         let ocs = match state.clients.lock().get(&req.port_name) {
-    //             None => {
-    //                 return ENOENT;
-    //             }
+        IoctlCmd::DumpTcpFlows => {
+            let resp = dump_tcp_flows_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
 
-    //             Some(v) => &mut *(*v),
-    //         };
+        IoctlCmd::DumpLayer => {
+            let resp = dump_layer_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
 
-    //         let resp = Ok(ocs.port.dump_tcp_flows());
-    //         to_errno(ioctlenv.copy_out_resp(&resp))
-    //     }
-
-    //     IoctlCmd::LayerDump => {
-    //         let req: LayerDumpReq = match ioctlenv.copy_in_req() {
-    //             Ok(val) => val,
-    //             Err(ioctl::Error::DeserError(_)) => return EINVAL,
-    //             _ => return EFAULT,
-    //         };
-
-    //         let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-    //         let ocs = match state.clients.lock().get(&req.port_name) {
-    //             None => {
-    //                 return ENOENT;
-    //             }
-
-    //             Some(v) => &mut *(*v),
-    //         };
-
-    //         let resp = ocs.port.dump_layer(&req.name);
-    //         to_errno(ioctlenv.copy_out_resp(&resp))
-    //     }
-
-    //     IoctlCmd::UftDump => {
-    //         let req: UftDumpReq = match ioctlenv.copy_in_req() {
-    //             Ok(val) => val,
-    //             Err(ioctl::Error::DeserError(_)) => return EINVAL,
-    //             _ => return EFAULT,
-    //         };
-
-    //         let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-    //         let ocs = match state.clients.lock().get(&req.port_name) {
-    //             None => {
-    //                 return ENOENT;
-    //             }
-
-    //             Some(v) => &mut *(*v),
-    //         };
-
-    //         let resp = Ok(ocs.port.dump_uft());
-    //         to_errno(ioctlenv.copy_out_resp(&resp))
-    //     }
+        IoctlCmd::DumpUft => {
+            let resp = dump_uft_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
     }
 }
 
@@ -1149,7 +1095,7 @@ fn panic_hdlr(info: &PanicInfo) -> ! {
 // Though you might tease this out a bit more and separate the static
 // port configuration handed down during port registration from actual
 // state like the hairpin queue.
-struct OpteClientState {
+pub struct OpteClientState {
     mh: *const mac_handle,
     mch: *mut mac_client_handle,
     rx_state: Option<OpteRxState>,

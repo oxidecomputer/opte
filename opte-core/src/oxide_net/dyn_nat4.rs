@@ -14,16 +14,16 @@ use std::sync::Arc;
 use crate::ip4::{self, Protocol};
 use crate::layer::Layer;
 use crate::nat::{DynNat4, NatPool};
-use crate::port::{self, Inactive, Port, Pos};
+use crate::port::{self, Port, Pos};
 use crate::rule::{
     Action, Ipv4AddrMatch, IpProtoMatch, Predicate, Rule, RuleAction
 };
 use crate::Direction;
 
 pub fn setup(
-    port: &mut Port<Inactive>,
+    port: &mut Port<port::Inactive>,
     cfg: &super::PortConfig
-) -> port::Result<()> {
+) -> core::result::Result<(), port::AddLayerError> {
     let mut pool = NatPool::new();
     pool.add(cfg.private_ip, cfg.dyn_nat.public_ip, cfg.dyn_nat.ports.clone());
 

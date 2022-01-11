@@ -6,6 +6,10 @@ use alloc::string::String;
 #[cfg(any(feature = "std", test))]
 use std::string::String;
 #[cfg(all(not(feature = "std"), not(test)))]
+use alloc::sync::Arc;
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
+#[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
@@ -19,7 +23,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ether::EtherAddr;
 use crate::ip4::Ipv4Addr;
-use crate::oxide_net::firewall as fw;
+use crate::oxide_net::{firewall as fw, overlay};
+use crate::layer;
 use crate::port;
 use crate::rule::Rule;
 use crate::vpc::VpcSubnet4;
@@ -32,9 +37,9 @@ pub enum IoctlCmd {
     DeletePort = 3,     // delete a port
     FwAddRule = 20,     // add firewall rule
     FwRemRule = 21,     // remove firewall rule
-    TcpFlowsDump = 30,  // dump TCP flows
-    LayerDump = 31,     // dump the specified Layer
-    UftDump = 32,       // dump the Unified Flow Table
+    DumpTcpFlows = 30,  // dump TCP flows
+    DumpLayer = 31,     // dump the specified Layer
+    DumpUft = 32,       // dump the Unified Flow Table
     SetOverlay = 40     // set the overlay config
 }
 
@@ -48,9 +53,9 @@ impl TryFrom<c_int> for IoctlCmd {
             3 => Ok(IoctlCmd::DeletePort),
             20 => Ok(IoctlCmd::FwAddRule),
             21 => Ok(IoctlCmd::FwRemRule),
-            30 => Ok(IoctlCmd::TcpFlowsDump),
-            31 => Ok(IoctlCmd::LayerDump),
-            32 => Ok(IoctlCmd::UftDump),
+            30 => Ok(IoctlCmd::DumpTcpFlows),
+            31 => Ok(IoctlCmd::DumpLayer),
+            32 => Ok(IoctlCmd::DumpUft),
             40 => Ok(IoctlCmd::SetOverlay),
             _ => Err(()),
         }
@@ -61,6 +66,7 @@ pub trait ApiError {}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum PortError {
+    Active,
     Exists,
     Inactive,
     MacOpenFailed(c_int),
@@ -90,6 +96,21 @@ impl ApiError for AddFwRuleError {}
 pub enum RemFwRuleError {
     FirewallNotEnabled,
     RuleNotFound,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub enum DumpLayerError {
+    LayerNotFound
+}
+
+impl From<port::DumpLayerError> for DumpLayerError {
+    fn from(e: port::DumpLayerError) -> Self {
+        use port::DumpLayerError as Dle;
+
+        match e {
+            Dle::LayerNotFound => Self::LayerNotFound,
+        }
+    }
 }
 
 pub fn add_fw_rule(
@@ -124,6 +145,44 @@ pub fn rem_fw_rule(
             Err(RemFwRuleError::RuleNotFound)
         }
     }
+}
+
+pub fn dump_layer(
+    port: &port::Port<port::Active>,
+    req: &layer::DumpLayerReq,
+) -> Result<layer::DumpLayerResp, DumpLayerError> {
+    port.dump_layer(&req.name).map_err(DumpLayerError::from)
+}
+
+pub fn dump_tcp_flows(
+    port: &port::Port<port::Active>,
+    req: &port::DumpTcpFlowsReq,
+) -> port::DumpTcpFlowsResp {
+    port.dump_tcp_flows()
+}
+
+pub fn dump_uft(
+    port: &port::Port<port::Active>,
+    _req: &port::DumpUftReq,
+) -> port::DumpUftResp {
+    port.dump_uft()
+}
+
+pub fn set_overlay(
+    port: &port::Port<port::Inactive>,
+    req: &overlay::SetOverlayReq,
+    v2p: Arc<overlay::Virt2Phys>,
+) {
+    // let cfg = OverlayConfig {
+    //     // TODO Using nonsense for BS for the moment.
+    //     boundary_services: PhysNet {
+    //         ether: EtherAddr::from([0; 6]),
+    //         ip: Ipv6Addr::from([0; 16]),
+    //         vni: Vni::new(11),
+    //     },
+    //     vni: 
+    // }
+    overlay::setup(port, &req.cfg, v2p);
 }
 
 // We need repr(C) for a stable layout across compilations. This is a

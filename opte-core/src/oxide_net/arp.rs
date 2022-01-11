@@ -6,7 +6,7 @@ use std::boxed::Box;
 use crate::arp::{ArpOp, ArpReply};
 use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
 use crate::layer::{Layer};
-use crate::port::{self, Inactive, Port, Pos};
+use crate::port::{self, Port, Pos};
 use crate::rule::{
     Action, ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate,
     EtherAddrMatch, EtherTypeMatch, Ipv4AddrMatch, Predicate, Rule, RuleAction,
@@ -14,9 +14,9 @@ use crate::rule::{
 use crate::Direction;
 
 pub fn setup(
-    port: &mut Port<Inactive>,
+    port: &mut Port<port::Inactive>,
     cfg: &super::PortConfig
-) -> port::Result<()> {
+) -> core::result::Result<(), port::AddLayerError> {
     let arp = Layer::new(
         "arp",
         vec![

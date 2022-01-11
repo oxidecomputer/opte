@@ -24,7 +24,7 @@ use crate::ether::ETHER_TYPE_ARP;
 use crate::headers::DYNAMIC_PORT;
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Protocol};
 use crate::layer::{InnerFlowId, Layer};
-use crate::port::{self, Inactive, Port, Pos};
+use crate::port::{self, Port, Pos};
 use crate::port::meta::Meta;
 use crate::rule::{
     self, Action as LayerAction, EtherTypeMatch, Finalized, Identity,
@@ -36,7 +36,9 @@ use crate::{Direction, ParseErr, ParseResult};
 
 pub const FW_LAYER_NAME: &'static str = "firewall";
 
-pub fn setup(port: &mut Port<Inactive>) -> port::Result<()> {
+pub fn setup(
+    port: &mut Port<port::Inactive>
+) -> core::result::Result<(), port::AddLayerError> {
     let fw_layer = Firewall::create_layer();
     port.add_layer(fw_layer, Pos::First)
 }

@@ -75,12 +75,12 @@ impl Layer {
         }
     }
 
-    pub fn dump(&self) -> LayerDumpResp {
+    pub fn dump(&self) -> DumpLayerResp {
         let rules_in = self.rules_in.lock().dump();
         let rules_out = self.rules_out.lock().dump();
         let ft_in = self.ft_in.lock().dump();
         let ft_out = self.ft_out.lock().dump();
-        LayerDumpResp {
+        DumpLayerResp {
             name: self.name.clone(),
             ft_in,
             ft_out,
@@ -1215,13 +1215,13 @@ fn find_rule() {
 /// *port_name*: The name of the port.
 /// *name*: The name of the [`Layer`] to dump.
 #[derive(Debug, Deserialize, Serialize)]
-pub struct LayerDumpReq {
+pub struct DumpLayerReq {
     pub port_name: String,
     pub name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct LayerDumpResp {
+pub struct DumpLayerResp {
     pub name: String,
     pub rules_in: Vec<(RuleId, RuleDump)>,
     pub rules_out: Vec<(RuleId, RuleDump)>,
