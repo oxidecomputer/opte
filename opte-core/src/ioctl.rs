@@ -203,7 +203,7 @@ pub struct Ioctl {
 // TODO should I make the error a T: Debug, Deserialize, Serialize?
 // That way the userland library/program has the option to
 // programmatically inspect an error if needed?
-pub type CmdResp<R> = Result<R, String>;
+pub type CmdResp<T, E> = Result<T, E>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SnatCfg {
@@ -214,6 +214,9 @@ pub struct SnatCfg {
     pub vpc_sub4: VpcSubnet4,
 }
 
+// TODO Rename this PortConfig
+//
+// TODO Rename everything with Config -> Cfg
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IpConfig {
     pub private_ip: Ipv4Addr,

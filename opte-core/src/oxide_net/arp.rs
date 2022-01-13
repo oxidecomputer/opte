@@ -15,7 +15,7 @@ use crate::Direction;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
-    cfg: &super::PortConfig
+    cfg: &super::PortCfg
 ) -> core::result::Result<(), port::AddLayerError> {
     let arp = Layer::new(
         "arp",

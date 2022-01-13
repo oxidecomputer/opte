@@ -29,23 +29,23 @@ pub mod overlay;
 pub mod router;
 
 #[derive(Clone, Debug)]
-pub struct DynNat4Config {
+pub struct DynNat4Cfg {
     pub public_mac: EtherAddr,
     pub public_ip: Ipv4Addr,
     pub ports: Range<u16>,
 }
 
 #[derive(Clone, Debug)]
-pub struct PortConfig {
+pub struct PortCfg {
     pub vpc_subnet: VpcSubnet4,
     pub private_mac: EtherAddr,
     pub private_ip: Ipv4Addr,
     pub gw_mac: EtherAddr,
     pub gw_ip: Ipv4Addr,
-    pub dyn_nat: DynNat4Config,
+    pub dyn_nat: DynNat4Cfg,
     // XXX For the moment we allow the overlay to be optional. This
     // allows the Oxide Network to continue functioning on a local
     // IPv4 network until the IPv6 underlay support is more flushed
     // out and development/testing strategies are determined.
-    pub overlay: Option<overlay::OverlayConfig>,
+    pub overlay: Option<overlay::OverlayCfg>,
 }

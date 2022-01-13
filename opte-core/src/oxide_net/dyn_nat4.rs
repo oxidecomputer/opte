@@ -22,7 +22,7 @@ use crate::Direction;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
-    cfg: &super::PortConfig
+    cfg: &super::PortCfg
 ) -> core::result::Result<(), port::AddLayerError> {
     let mut pool = NatPool::new();
     pool.add(cfg.private_ip, cfg.dyn_nat.public_ip, cfg.dyn_nat.ports.clone());

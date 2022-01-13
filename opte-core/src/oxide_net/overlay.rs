@@ -44,7 +44,7 @@ pub struct PhysNet {
 
 pub fn setup(
     port: &Port<Inactive>,
-    cfg: &OverlayConfig,
+    cfg: &OverlayCfg,
     v2p: Arc<Virt2Phys>,
 ) {
     // Action Index 0
@@ -341,7 +341,7 @@ impl Virt2Phys {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct OverlayConfig {
+pub struct OverlayCfg {
     pub boundary_services: PhysNet,
     pub vni: Vni,
     // NOTE: The phys_mac_{src,dst} currently stand in for the
@@ -357,5 +357,5 @@ pub struct OverlayConfig {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SetOverlayReq {
     pub port_name: String,
-    pub cfg: OverlayConfig,
+    pub cfg: OverlayCfg,
 }

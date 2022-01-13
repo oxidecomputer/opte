@@ -68,6 +68,13 @@ impl fmt::Display for Ipv6Addr {
     }
 }
 
+#[cfg(any(feature = "std", test))]
+impl From<std::net::Ipv6Addr> for Ipv6Addr {
+    fn from(ip6: std::net::Ipv6Addr) -> Self {
+        Self::from(ip6.octets())
+    }
+}
+
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]

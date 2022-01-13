@@ -19,22 +19,19 @@ pub enum Error {
     DeserError(String),
     FailedCopyin,
     FailedCopyout,
-    // PortInactive,
-    // PortNotFound,
     RespTooLong,
 }
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub fn to_errno<T>(res: Result<T>) -> c_int
-where
-    T: core::fmt::Debug + serde::Serialize
+pub fn to_errno(e: Error) -> c_int
+// where
+//     T: core::fmt::Debug + serde::Serialize
 {
-    match res {
-        Ok(_) => 0,
-        Err(Error::DeserError(_)) => ddi::EPROTO,
-        Err(Error::RespTooLong) => ddi::ENOBUFS,
-        Err(_) => ddi::EFAULT,
+    match e {
+        Error::DeserError(_) => ddi::EINVAL,
+        Error::RespTooLong => ddi::ENOBUFS,
+        _ => ddi::EFAULT,
     }
 }
 

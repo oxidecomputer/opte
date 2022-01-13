@@ -1,19 +1,24 @@
 #![feature(extern_types)]
 
 use std::convert::TryInto;
+use std::net::Ipv6Addr;
 
 use structopt::StructOpt;
 
 use opte_core::ether::EtherAddr;
+// TODO Use std Ipv4Addr
 use opte_core::ip4::Ipv4Addr;
+use opte_core::ip6;
 use opte_core::oxide_net::firewall::{
     self, Action, Address, FirewallRule, FwRemRuleReq, Ports, ProtoFilter,
 };
+use opte_core::oxide_net::overlay;
 use opte_core::flow_table::FlowEntryDump;
+use opte_core::geneve;
 use opte_core::headers::IpAddr;
 use opte_core::ioctl::{self, PortInfo, AddPortReq};
-use opte_core::layer::{InnerFlowId, LayerDumpResp};
-use opte_core::port::UftDumpResp;
+use opte_core::layer::{InnerFlowId, DumpLayerResp};
+use opte_core::port::DumpUftResp;
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
@@ -33,9 +38,8 @@ enum Command {
         name: String,
     },
 
-    SetOverlay {
-        
-    }
+    /// Set the overlay configuration.
+    SetOverlay(SetOverlay),
 
     /// Dump the contents of the layer with the given name
     LayerDump {
@@ -87,6 +91,66 @@ enum Command {
 }
 
 #[derive(Debug, StructOpt)]
+struct SetOverlay {
+    #[structopt(short)]
+    port: String,
+
+    #[structopt(flatten)]
+    boundary_services: BoundarySvcs,
+
+    #[structopt(long)]
+    vni: u32,
+
+    #[structopt(long)]
+    mac_src: EtherAddr,
+
+    #[structopt(long)]
+    mac_dst: EtherAddr,
+
+    #[structopt(long)]
+    ip: Ipv6Addr,
+}
+
+#[derive(Debug, StructOpt)]
+struct BoundarySvcs {
+    #[structopt(long)]
+    bs_mac_addr: EtherAddr,
+
+    #[structopt(long)]
+    bs_ip: std::net::Ipv6Addr,
+
+    #[structopt(long)]
+    bs_vni: u32,
+}
+
+impl From<BoundarySvcs> for overlay::PhysNet {
+    fn from(bs: BoundarySvcs) -> Self {
+        Self {
+            ether: bs.bs_mac_addr,
+            ip: ip6::Ipv6Addr::from(bs.bs_ip),
+            vni: geneve::Vni::new(bs.bs_vni).unwrap(),
+        }
+    }
+}
+
+impl From<SetOverlay> for overlay::SetOverlayReq {
+    fn from(req: SetOverlay) -> Self {
+        Self {
+            port_name: req.port,
+            cfg: overlay::OverlayCfg {
+                boundary_services: overlay::PhysNet::from(
+                    req.boundary_services
+                ),
+                vni: geneve::Vni::new(req.vni).unwrap(),
+                phys_mac_src: req.mac_src,
+                phys_mac_dst: req.mac_dst,
+                phys_ip_src: ip6::Ipv6Addr::from(req.ip.octets()),
+            }
+        }
+    }
+}
+
+#[derive(Debug, StructOpt)]
 struct Filters {
     /// The host address or subnet to which the rule applies
     #[structopt(long)]
@@ -103,7 +167,7 @@ struct Filters {
 
 impl From<Filters> for firewall::Filters {
     fn from(f: Filters) -> Self {
-        firewall::Filters::new()
+        Self::new()
             .set_hosts(f.hosts)
             .protocol(f.protocol)
             .ports(f.ports)
@@ -329,7 +393,7 @@ fn print_hr() {
     println!("{:-<70}", "-");
 }
 
-fn print_layer(resp: &LayerDumpResp) {
+fn print_layer(resp: &DumpLayerResp) {
     println!("Layer {}", resp.name);
     print_hrb();
     println!("Inbound Flows");
@@ -363,7 +427,7 @@ fn print_layer(resp: &LayerDumpResp) {
     println!("");
 }
 
-fn print_uft(resp: &UftDumpResp) {
+fn print_uft(resp: &DumpUftResp) {
     println!("Unified Flow Table");
     print_hrb();
     println!("Inbound Flows [{}/{}]", resp.uft_in_num_flows, resp.uft_in_limit);
@@ -405,6 +469,11 @@ fn main() {
         Command::DeletePort { name } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
             hdl.delete_port(&name).unwrap();
+        }
+
+        Command::SetOverlay(req) => {
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            hdl.set_overlay(&req.into()).unwrap();
         }
 
         Command::LayerDump { port, name } => {
