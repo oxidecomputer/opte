@@ -42,26 +42,26 @@ enum Command {
     SetOverlay(SetOverlay),
 
     /// Dump the contents of the layer with the given name
-    LayerDump {
+    DumpLayer {
         #[structopt(short)]
         port: String,
         name: String,
     },
 
     /// Dump the unified flow tables (UFT)
-    UftDump {
+    DumpUft {
         #[structopt(short)]
         port: String,
     },
 
     /// Dump TCP flows
-    TcpFlowsDump {
+    DumpTcpFlows {
         #[structopt(short)]
         port: String,
     },
 
     /// Add a firewall rule
-    FwAdd {
+    AddFwRule {
         #[structopt(short)]
         port: String,
 
@@ -79,7 +79,7 @@ enum Command {
     },
 
     /// Remove a firewall rule
-    FwRm {
+    RmFwRule {
         #[structopt(short)]
         port: String,
 
@@ -181,14 +181,14 @@ struct AddPort {
     name: String,
 
     #[structopt(flatten)]
-    port_cfg: PortConfig,
+    port_cfg: PortCfg,
 }
 
 impl From<AddPort> for AddPortReq {
     fn from(r: AddPort) -> Self {
         Self {
             link_name: r.name,
-            ip_cfg: ioctl::IpConfig::from(r.port_cfg),
+            ip_cfg: ioctl::IpCfg::from(r.port_cfg),
         }
     }
 }
@@ -196,16 +196,16 @@ impl From<AddPort> for AddPortReq {
 // The port configuration determines the networking configuration of
 // said port (and thus the guest that is linked to it).
 #[derive(Debug, StructOpt)]
-struct PortConfig {
+struct PortCfg {
     #[structopt(long)]
     private_ip: Ipv4Addr,
 
     #[structopt(long)]
-    snat: Option<SnatConfig>,
+    snat: Option<SnatCfg>,
 }
 
-impl From<PortConfig> for ioctl::IpConfig {
-    fn from(s: PortConfig) -> Self {
+impl From<PortCfg> for ioctl::IpCfg {
+    fn from(s: PortCfg) -> Self {
         Self {
             private_ip: s.private_ip,
             snat: s.snat.map(ioctl::SnatCfg::from),
@@ -220,7 +220,7 @@ impl From<PortConfig> for ioctl::IpConfig {
 // purposes of allowing the guest to talk to the internet without a
 // dedicated public IP.
 #[derive(Debug, StructOpt)]
-struct SnatConfig {
+struct SnatCfg {
     #[structopt(long)]
     public_mac: EtherAddr,
 
@@ -237,8 +237,8 @@ struct SnatConfig {
     vpc_sub4: VpcSubnet4,
 }
 
-impl From<SnatConfig> for ioctl::SnatCfg {
-    fn from(s: SnatConfig) -> Self {
+impl From<SnatCfg> for ioctl::SnatCfg {
+    fn from(s: SnatCfg) -> Self {
         Self {
             public_mac: s.public_mac,
             public_ip: s.public_ip,
@@ -249,7 +249,7 @@ impl From<SnatConfig> for ioctl::SnatCfg {
     }
 }
 
-impl std::str::FromStr for SnatConfig {
+impl std::str::FromStr for SnatCfg {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -476,24 +476,24 @@ fn main() {
             hdl.set_overlay(&req.into()).unwrap();
         }
 
-        Command::LayerDump { port, name } => {
+        Command::DumpLayer { port, name } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
             print_layer(&hdl.get_layer_by_name(&port, &name).unwrap());
         }
 
-        Command::UftDump { port } => {
+        Command::DumpUft { port } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
             print_uft(&hdl.uft(&port).unwrap());
         }
 
-        Command::TcpFlowsDump { port } => {
+        Command::DumpTcpFlows { port } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
             for (flow_id, entry) in hdl.tcp_flows(&port).unwrap() {
                 println!("{} {:?}", flow_id, entry);
             }
         }
 
-        Command::FwAdd { port, direction, filters, action, priority } => {
+        Command::AddFwRule { port, direction, filters, action, priority } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
             let rule = FirewallRule {
                 direction,
@@ -510,7 +510,7 @@ fn main() {
             hdl.add_firewall_rule(&port, &rule).unwrap();
         }
 
-        Command::FwRm { port, direction, id } => {
+        Command::RmFwRule { port, direction, id } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
             let request = FwRemRuleReq { port_name: port, dir: direction, id };
             hdl.remove_firewall_rule(&request).unwrap();

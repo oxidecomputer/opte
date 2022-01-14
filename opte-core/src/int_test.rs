@@ -63,12 +63,12 @@ fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
     }
 }
 
-fn home_cfg() -> oxide_net::PortConfig {
-    oxide_net::PortConfig {
+fn home_cfg() -> oxide_net::PortCfg {
+    oxide_net::PortCfg {
         private_ip: "10.0.0.210".parse().unwrap(),
         private_mac: EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]),
         vpc_subnet: "10.0.0.0/24".parse().unwrap(),
-        dyn_nat: oxide_net::DynNat4Config {
+        dyn_nat: oxide_net::DynNat4Cfg {
             public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0x00, 0x00, 0x63]),
             public_ip: "10.0.0.99".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
@@ -79,12 +79,12 @@ fn home_cfg() -> oxide_net::PortConfig {
     }
 }
 
-fn lab_cfg() -> oxide_net::PortConfig {
-    oxide_net::PortConfig {
+fn lab_cfg() -> oxide_net::PortCfg {
+    oxide_net::PortCfg {
         private_ip: "172.20.14.16".parse().unwrap(),
         private_mac: EtherAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
-        dyn_nat: oxide_net::DynNat4Config {
+        dyn_nat: oxide_net::DynNat4Cfg {
             public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0x00, 0x01, 0xEE]),
             public_ip: "76.76.21.21".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
@@ -95,7 +95,7 @@ fn lab_cfg() -> oxide_net::PortConfig {
     }
 }
 
-fn oxide_net_setup(port: &mut Port<Inactive>, cfg: &oxide_net::PortConfig) {
+fn oxide_net_setup(port: &mut Port<Inactive>, cfg: &oxide_net::PortCfg) {
     // ================================================================
     // Firewall layer
     // ================================================================
@@ -153,7 +153,7 @@ fn encap_decap() {
 
     let phys_ip6_src = Ipv6Addr::from([0; 16]);
     let v2p = Arc::new(Virt2Phys::new());
-    cfg.overlay = Some(oxide_net::OverlayConfig {
+    cfg.overlay = Some(oxide_net::OverlayCfg {
         boundary_services: PhysNet {
             ether: EtherAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
             ip: Ipv6Addr::from([

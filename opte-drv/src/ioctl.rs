@@ -25,8 +25,6 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub fn to_errno(e: Error) -> c_int
-// where
-//     T: core::fmt::Debug + serde::Serialize
 {
     match e {
         Error::DeserError(_) => ddi::EINVAL,

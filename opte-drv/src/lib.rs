@@ -313,17 +313,6 @@ unsafe extern "C" fn opte_close(
 
 type LinkName = String;
 
-
-// struct InactivePort {
-//     port: Port<port::Inactive>,
-//     cfg: PortCfg,
-// }
-
-// struct ActivePort {
-//     client: OpteClientState,
-//     cfg: PortCfg,
-// }
-
 enum PortState {
     Inactive(Port<port::Inactive>, PortCfg),
     Active(*mut OpteClientState),
@@ -546,12 +535,6 @@ enum HdlrError2<E: Serialize> {
     Port(api::PortError),
     System(i32),
 }
-
-// impl<E: Serialize> From<> for HdlrError2<E> {
-//     fn from(e: E) -> Self {
-//         Self::Api(e)
-//     }
-// }
 
 impl<E: Serialize> From<api::PortError> for HdlrError2<E> {
     fn from(e: api::PortError) -> Self {

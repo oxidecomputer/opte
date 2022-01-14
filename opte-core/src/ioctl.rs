@@ -173,7 +173,7 @@ pub fn set_overlay(
     req: &overlay::SetOverlayReq,
     v2p: Arc<overlay::Virt2Phys>,
 ) {
-    // let cfg = OverlayConfig {
+    // let cfg = OverlayCfg {
     //     // TODO Using nonsense for BS for the moment.
     //     boundary_services: PhysNet {
     //         ether: EtherAddr::from([0; 6]),
@@ -215,10 +215,8 @@ pub struct SnatCfg {
 }
 
 // TODO Rename this PortConfig
-//
-// TODO Rename everything with Config -> Cfg
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct IpConfig {
+pub struct IpCfg {
     pub private_ip: Ipv4Addr,
     pub snat: Option<SnatCfg>,
 }
@@ -226,7 +224,7 @@ pub struct IpConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AddPortReq {
     pub link_name: String,
-    pub ip_cfg: IpConfig,
+    pub ip_cfg: IpCfg,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
