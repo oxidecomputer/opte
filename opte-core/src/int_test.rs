@@ -173,8 +173,11 @@ fn g2_cfg() -> oxide_net::PortCfg {
 #[test]
 fn overlay_guest_to_guest() {
     use crate::checksum::HeaderChecksum;
+    use crate::geneve;
+    use crate::headers::{IpAddr, IpCidr};
     use crate::ip4::UlpCsumOpt;
     use crate::oxide_net::overlay::{OverlayCfg, PhysNet, Virt2Phys};
+    use crate::oxide_net::router::RouterTarget;
     use crate::tcp::TcpFlags;
 
     let mut g1_cfg = g1_cfg();
@@ -218,14 +221,22 @@ fn overlay_guest_to_guest() {
             0x0000, 0x0000, 0x0000, 0x0001
         ]),
     });
+    let g2_phys = PhysNet {
+        ether: g2_cfg.private_mac,
+        ip: g2_cfg.overlay.as_ref().unwrap().phys_ip_src,
+        vni: g2_cfg.overlay.as_ref().unwrap().vni,
+    };
 
-    // TODO Add v2p mappings.
+    // Add V2P mappings that allow guests to resolve each others
+    // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
+    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
 
     // TODO Setup ports here, but first I want to figure out packet
     // gen.
     let mut g1_port = Port::new("g1_port".to_string(), g1_cfg.private_mac);
     oxide_net_setup(&mut g1_port, &g1_cfg);
+    oxide_net::router::setup(&mut g1_port).unwrap();
     oxide_net::overlay::setup(
         &mut g1_port,
         g1_cfg.overlay.as_ref().unwrap(),
@@ -233,7 +244,12 @@ fn overlay_guest_to_guest() {
     );
     let g1_port = g1_port.activate();
 
-    // TODO Implement router layer and add VPC system router entries.
+    // Add router entry that allows Guest 1 to send to Guest 2.
+    oxide_net::router::add_entry(
+        &g1_port,
+        IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()))
+    ).unwrap();
 
     // TODO figure out packet gen. Start with outgoing TCP conn
     // request from g1 to g2.
@@ -268,7 +284,76 @@ fn overlay_guest_to_guest() {
     let mut pkt = Packet::copy(&bytes).parse().unwrap();
     let res = g1_port.process(Out, &mut pkt, 0);
     assert!(matches!(res, Ok(Modified)));
+    println!("\n{:#?}", pkt);
 
+    // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
+    assert_eq!(pkt.body_offset(), 14 + 40 + 8 + 8 + 14 + 20 + 20);
+    assert_eq!(pkt.body_seg(), 1);
+
+    let meta = pkt.meta();
+    match meta.outer.ether.as_ref() {
+        Some(eth) => {
+	    assert_eq!(eth.src, g1_cfg.overlay.as_ref().unwrap().phys_mac_src);
+            assert_eq!(eth.dst, g1_cfg.overlay.as_ref().unwrap().phys_mac_dst);
+        },
+
+        None => panic!("no outer ether header"),
+    }
+
+    match meta.outer.ip.as_ref().unwrap() {
+        IpMeta::Ip6(ip6) => {
+	    assert_eq!(ip6.src, g1_cfg.overlay.as_ref().unwrap().phys_ip_src);
+            assert_eq!(ip6.dst, g2_cfg.overlay.as_ref().unwrap().phys_ip_src);
+        }
+
+        val => panic!("expected outer IPv6, got: {:?}", val),
+    }
+
+    match meta.outer.ulp.as_ref().unwrap() {
+	UlpMeta::Udp(udp) => {
+	    assert_eq!(udp.src, 7777);
+	    assert_eq!(udp.dst, geneve::GENEVE_PORT);
+	}
+
+	ulp => panic!("expected outer UDP metadata, got: {:?}", ulp),
+    }
+
+    match meta.outer.encap.as_ref() {
+	Some(geneve) => {
+	    assert_eq!(geneve.vni, Vni::new(99u32).unwrap());
+	}
+
+	None => panic!("expected outer Geneve metadata"),
+    }
+
+    match meta.inner.ether.as_ref() {
+	Some(eth) => {
+	    assert_eq!(eth.src, g1_cfg.private_mac);
+	    assert_eq!(eth.dst, g2_cfg.private_mac);
+	    assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
+	}
+
+	None => panic!("expected inner Ether header"),
+    }
+
+    match meta.inner.ip.as_ref().unwrap() {
+	IpMeta::Ip4(ip4) => {
+	    assert_eq!(ip4.src, g1_cfg.private_ip);
+	    assert_eq!(ip4.dst, g2_cfg.private_ip);
+	    assert_eq!(ip4.proto, Protocol::TCP);
+	}
+
+	ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+    }
+
+    match meta.inner.ulp.as_ref().unwrap() {
+        UlpMeta::Tcp(tcp) => {
+            assert_eq!(tcp.src, 7865);
+            assert_eq!(tcp.dst, 23);
+        },
+
+        ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
+    }
 
 }
 

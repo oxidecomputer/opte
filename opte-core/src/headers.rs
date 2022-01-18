@@ -536,6 +536,15 @@ pub enum IpCidr {
     Ip6(u8),
 }
 
+impl IpCidr {
+    pub fn prefix(&self) -> usize {
+        match self {
+            Self::Ip4(ip4) => ip4.prefix() as usize,
+            Self::Ip6(_) => todo!("IPv6 prefix"),
+        }
+    }
+}
+
 impl fmt::Display for IpCidr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

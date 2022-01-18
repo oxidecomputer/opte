@@ -38,12 +38,12 @@ pub const LOCAL_BROADCAST: Ipv4Addr = Ipv4Addr::new([255; 4]);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IpError {
-    BadNetPrefix(u8),
+    BadPrefix(u8),
     Ipv4NonPrivateNetwork(Ipv4Addr),
     MalformedCidr(String),
     MalformedInt,
     MalformedIp(String),
-    MalformedNetPrefix(String),
+    MalformedPrefix(String),
 }
 
 impl From<ParseIntError> for IpError {
@@ -57,8 +57,8 @@ impl Display for IpError {
         use IpError::*;
 
         match self {
-            BadNetPrefix(prefix) => {
-                write!(f, "bad net prefix: {}", prefix)
+            BadPrefix(prefix) => {
+                write!(f, "bad prefix: {}", prefix)
             }
 
             Ipv4NonPrivateNetwork(addr) => {
@@ -77,8 +77,8 @@ impl Display for IpError {
                 write!(f, "malformed IP: {}", ip)
             }
 
-            MalformedNetPrefix(prefix) => {
-                write!(f, "malformed net prefix: {}", prefix)
+            MalformedPrefix(prefix) => {
+                write!(f, "malformed prefix: {}", prefix)
             }
         }
     }
@@ -93,7 +93,7 @@ impl From<IpError> for String {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ipv4Cidr {
     ip: Ipv4Addr,
-    net_prefix: u8,
+    prefix: u8,
 }
 
 impl MatchPrefixVal for Ipv4Cidr {}
@@ -103,31 +103,31 @@ impl Ipv4Cidr {
         self.ip
     }
 
-    pub fn get_net_prefix(self) -> u8 {
-        self.net_prefix
+    pub fn prefix(self) -> u8 {
+        self.prefix
     }
 
     /// Is this `ip` a member of the CIDR?
     pub fn is_member(&self, ip: Ipv4Addr) -> bool {
-        ip.mask(self.net_prefix) == self.ip
+        ip.mask(self.prefix) == self.ip
     }
 
-    pub fn new(ip: Ipv4Addr, net_prefix: u8) -> result::Result<Self, IpError> {
+    pub fn new(ip: Ipv4Addr, prefix: u8) -> result::Result<Self, IpError> {
         // In this case we are only checking that it's a valid CIDR in
         // the general sense; VPC-specific CIDR enforcement is done by
         // the VPC types.
-        if net_prefix > 32 {
-            return Err(IpError::BadNetPrefix(net_prefix));
+        if prefix > 32 {
+            return Err(IpError::BadPrefix(prefix));
         }
 
-        let ip = ip.mask(net_prefix);
-        Ok(Ipv4Cidr { ip, net_prefix })
+        let ip = ip.mask(prefix);
+        Ok(Ipv4Cidr { ip, prefix })
     }
 }
 
 impl Display for Ipv4Cidr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}/{}", self.ip, self.net_prefix)
+        write!(f, "{}/{}", self.ip, self.prefix)
     }
 }
 
@@ -136,7 +136,7 @@ impl FromStr for Ipv4Cidr {
 
     /// Convert a string like "192.168.2.0/24" into an `Ipv4Cidr`.
     fn from_str(val: &str) -> result::Result<Self, Self::Err> {
-        let (ip_s, net_prefix_s) = match val.split_once("/") {
+        let (ip_s, prefix_s) = match val.split_once("/") {
             Some(v) => v,
             None => return Err(IpError::MalformedCidr(val.to_string())),
         };
@@ -146,26 +146,26 @@ impl FromStr for Ipv4Cidr {
             Err(err) => return Err(err),
         };
 
-        let net_prefix = match net_prefix_s.parse::<u8>() {
+        let prefix = match prefix_s.parse::<u8>() {
             Ok(v) => v,
             Err(_) => {
-                return Err(IpError::MalformedNetPrefix(
-                    net_prefix_s.to_string(),
+                return Err(IpError::MalformedPrefix(
+                    prefix_s.to_string(),
                 ));
             }
         };
 
-        Ipv4Cidr::new(ip, net_prefix)
+        Ipv4Cidr::new(ip, prefix)
     }
 }
 
 #[test]
 fn bad_cidr() {
     let ip = "10.0.0.1".parse().unwrap();
-    assert_eq!(Ipv4Cidr::new(ip, 33), Err(IpError::BadNetPrefix(33)));
+    assert_eq!(Ipv4Cidr::new(ip, 33), Err(IpError::BadPrefix(33)));
     assert_eq!(
         "192.168.2.9/33".parse::<Ipv4Cidr>(),
-        Err(IpError::BadNetPrefix(33))
+        Err(IpError::BadPrefix(33))
     );
 }
 
@@ -176,7 +176,7 @@ fn good_cidr() {
         Ipv4Cidr::new(ip, 24),
         Ok(Ipv4Cidr {
             ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-            net_prefix: 24
+            prefix: 24
         })
     );
 
@@ -184,7 +184,7 @@ fn good_cidr() {
         "192.168.2.0/24".parse(),
         Ok(Ipv4Cidr {
             ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-            net_prefix: 24
+            prefix: 24
         })
     );
 
@@ -192,7 +192,7 @@ fn good_cidr() {
         "192.168.2.9/24".parse(),
         Ok(Ipv4Cidr {
             ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-            net_prefix: 24
+            prefix: 24
         })
     );
 
@@ -210,7 +210,7 @@ pub struct Ipv4CidrPrefix {
 impl Ipv4CidrPrefix {
     pub fn new(net_prefix: u8) -> result::Result<Self, IpError> {
         if net_prefix > 32 {
-            return Err(IpError::BadNetPrefix(net_prefix));
+            return Err(IpError::BadPrefix(net_prefix));
         }
 
         Ok(Ipv4CidrPrefix { val: net_prefix })

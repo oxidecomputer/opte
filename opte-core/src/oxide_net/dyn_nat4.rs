@@ -57,7 +57,7 @@ pub fn setup(
     // Therefore, we can determine if an address needs NAT by checking
     // to see if the destination IP belongs to the interface's subnet.
     rule.add_predicate(Predicate::Not(Box::new(Predicate::InnerDstIp4(vec![
-        Ipv4AddrMatch::Prefix(cfg.vpc_subnet.get_cidr()),
+        Ipv4AddrMatch::Prefix(cfg.vpc_subnet.cidr()),
         Ipv4AddrMatch::Exact(ip4::LOCAL_BROADCAST),
     ]))));
     layer.add_rule(Direction::Out, rule.finalize());

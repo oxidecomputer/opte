@@ -233,12 +233,6 @@ impl StatefulAction for EncapDecapAction {
         flow_id: InnerFlowId,
         meta: &mut Meta,
     ) -> rule::GenDescResult {
-
-        // XXX Actually implement the router layer. For now this is
-        // hard-coded to work with one unit test.
-        meta.add(RouterTarget::Ip(IpAddr::Ip4("52.10.128.69".parse().unwrap())))
-            .expect("Ipv4 type already exists");
-
         // The router layer determines a RouterTarget and stores it in
         // the meta map. We need to map this virtual target to a
         // physical one.

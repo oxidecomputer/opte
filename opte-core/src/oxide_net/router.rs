@@ -17,8 +17,9 @@ use alloc::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::sync::Arc;
 
-use crate::headers::IpAddr;
+use crate::headers::{IpAddr, IpCidr};
 use crate::layer::{InnerFlowId, Layer};
+use crate::oxide_net::firewall as fw;
 use crate::port::{self, meta::Meta, Port};
 use crate::rule::{
     self, Action, ActionDesc, HT, GenDescResult, Predicate, Rule, StatefulAction
@@ -99,31 +100,64 @@ fn build_ip4_len_to_pri() -> [u16; 33] {
     v
 }
 
-pub fn setup(port: &Port<port::Inactive>) {
+pub fn setup(port: &Port<port::Inactive>) -> Result<(), port::AddLayerError> {
     let pri_map = build_ip4_len_to_pri();
-
-    // let router = Action::Stateful(
-    //     Box::new(RouterAction::new(ROUTER_ACTION_NAME))
-    // );
 
     let ig = Action::Stateful(
         Arc::new(RouterAction::new(RouterTarget::InternetGateway))
     );
+    let ig_idx = 0;
 
     // Indexes:
     //
     // * 0: InternetGateway
     let layer = Layer::new(ROUTER_LAYER_NAME, vec![ig]);
-    let ig_idx = 0;
 
     // TODO These hard-coded rules will actually come dynamically from
     // Nexus. Just keeping them here for now.
-    let ig4 = Rule::new(pri_map[0], layer.action(0).unwrap().clone());
-    ig4.add_predicate(
+    let ig4 = Rule::new(pri_map[0], layer.action(ig_idx).unwrap().clone());
+    let rule = ig4.add_predicate(
         Predicate::InnerDstIp4(vec![
             rule::Ipv4AddrMatch::Prefix("0.0.0.0/0".parse().unwrap())
         ])
     );
+
+    layer.add_rule(Direction::Out, rule.finalize());
+    port.add_layer(layer, port::Pos::After(fw::FW_LAYER_NAME))
+}
+
+pub fn add_entry(
+    port: &Port<port::Active>,
+    dest: IpCidr,
+    target: RouterTarget,
+) -> Result<(), port::AddRuleError> {
+    let pri_map4 = build_ip4_len_to_pri();
+
+    match &target {
+        RouterTarget::Drop => todo!("drop entry"),
+        RouterTarget::InternetGateway => todo!("add IG entry"),
+        RouterTarget::Ip(_) => todo!("add IP entry"),
+        RouterTarget::VpcSubnet(cidr) => {
+            match dest {
+                IpCidr::Ip4(ip4) => {
+                    let rule = Rule::new(
+                        pri_map4[dest.prefix()],
+                        Action::Stateful(Arc::new(
+                            RouterAction::new(target.clone())
+                        )),
+                    );
+                    let rule = rule.add_predicate(
+                        Predicate::InnerDstIp4(vec![
+                            rule::Ipv4AddrMatch::Prefix(ip4)
+                        ])
+                    ).finalize();
+                    port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)
+                }
+
+                IpCidr::Ip6(_) => todo!("IPv6 router entry"),
+            }
+        }
+    }
 }
 
 // TODO For each router table entry we should mark whether it came
@@ -167,7 +201,7 @@ impl StatefulAction for RouterAction {
         _meta: &mut Meta
     ) -> GenDescResult {
         Ok(Arc::new(RouterDesc {
-            target: RouterTarget::Drop,
+            target: self.target.clone(),
         }))
     }
 }
