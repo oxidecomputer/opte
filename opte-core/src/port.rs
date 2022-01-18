@@ -21,7 +21,6 @@ use serde::{Deserialize, Serialize};
 use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
 use crate::flow_table::{FlowEntryDump, FlowTable, StateSummary};
 use crate::headers::IpMeta;
-use crate::ioctl::CmdResp;
 use crate::ip4::Protocol;
 use crate::layer::{
     self, InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT

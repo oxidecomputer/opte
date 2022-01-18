@@ -49,7 +49,7 @@ use core::panic::PanicInfo;
 use core::ptr;
 use core::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::ioctl::{to_errno, IoctlEnvelope};
 
@@ -57,16 +57,15 @@ extern crate opte_core;
 use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP};
 use opte_core::oxide_net::firewall::{FwAddRuleReq, FwRemRuleReq};
 use opte_core::ioctl::{
-    self as api, CmdResp, IoctlCmd, ListPortsReq, ListPortsResp, PortInfo, AddPortReq,
+    self as api, IoctlCmd, ListPortsReq, ListPortsResp, PortInfo, AddPortReq,
     DeletePortReq
 };
 use opte_core::ip4::Ipv4Addr;
 use opte_core::layer;
 use opte_core::oxide_net::overlay;
 use opte_core::oxide_net::PortCfg;
-use opte_core::packet::{Initialized, Packet};
+use opte_core::packet::{Initialized, Packet, Parsed};
 use opte_core::port::{self, Port, ProcessResult};
-use opte_core::rule::Rule;
 use opte_core::sync::{KMutex, KMutexGuard, KMutexType};
 use opte_core::{CStr, CString, Direction};
 
@@ -164,6 +163,9 @@ type mac_rx_fn = unsafe extern "C" fn(
     boolean_t,
 );
 
+// See uts/common/sys/mac_client.h.
+pub const MAC_DROP_ON_NO_DESC: u16 = 0x01;
+
 // The mac APIs.
 extern "C" {
     pub type mac_handle;
@@ -212,7 +214,7 @@ extern "C" {
         // don't believe unsafe/raw pointers can assume
         // any of the strict aliasing rules that
         // shared/unique references do.
-        mphp: *mut *const mac_promisc_handle,
+        mphp: *mut *mut mac_promisc_handle,
         flags: u16,
     ) -> c_int;
     fn mac_promisc_remove(mph: *const mac_promisc_handle);
@@ -231,6 +233,110 @@ extern "C" {
         ret_mp: *mut *const mblk_t,
     ) -> mac_tx_cookie_t;
     fn mac_unicast_primary_get(mh: *const mac_handle, addr: *mut [u8; 6]);
+}
+
+// A step towards a safe abstraction over the mac_client.h API.
+struct MacClient {
+    close_flags: u16,
+    mch: *mut mac_client_handle
+}
+
+impl MacClient {
+    // Open a new mac client on top of the mac provider specified by `mh`.
+    fn open(
+        mh: *const mac_handle,
+        open_flags: u16,
+        close_flags: u16
+    ) -> Result<Self, c_int> {
+        let mut mch = ptr::null_mut::<c_void> as *mut mac_client_handle;
+        let ret = unsafe {
+            mac_client_open(mh, &mut mch, ptr::null(), open_flags)
+        };
+
+        if ret != 0 {
+            return Err(ret);
+        }
+
+        Ok(Self { close_flags, mch })
+    }
+
+    // Get the name of the client.
+    fn name(&self) -> String {
+        unsafe {
+            CStr::from_ptr(mac_client_name(self.mch))
+                .to_str()
+                .unwrap()
+                .to_string()
+        }
+    }
+
+    fn rx_barrier(&self) {
+        unsafe { mac_rx_barrier(self.mch) };
+    }
+
+    // Clear the function to receive Rx packets. All future packets
+    // destined for this client are dropped by mac.
+    fn clear_rx_fn(&self) {
+        unsafe { mac_rx_clear(self.mch) };
+    }
+
+    // Set the function to receive Rx packets.
+    fn set_rx_fn(&self, rx_fn: mac_rx_fn, arg: *mut c_void) {
+        unsafe { mac_rx_set(self.mch, rx_fn, arg) };
+    }
+
+    fn add_promisc_fn(
+        &self,
+        ptype: mac_client_promisc_type_t,
+        promisc_fn: mac_rx_fn,
+        arg: *mut c_void,
+        flags: u16,
+    ) -> Result<*mut mac_promisc_handle, c_int> {
+        let mut mph = 0 as *mut mac_promisc_handle;
+
+        let ret = unsafe {
+            mac_promisc_add(self.mch, ptype, promisc_fn, arg, &mut mph, flags)
+        };
+
+        if ret == 0 {
+            Ok(mph)
+        } else {
+            return Err(ret);
+        }
+    }
+
+    fn rem_promisc_fn(&self, mph: *mut mac_promisc_handle) {
+        unsafe { mac_promisc_remove(mph) };
+    }
+
+    // Send the packet on this client. This function consumes the packet.
+    //
+    // TODO This function can actually take a packet chain, but for
+    // now we just pass a single packet at a time.
+    //
+    // TODO Probably want two separate functions, one for
+    // MAC_DROP_ON_NO_DESC and one for ret_mp.
+    fn tx(
+        &self,
+        pkt: Packet<Parsed>,
+        hint: uintptr_t,
+        flag: u16,
+        ret_mp: *mut *const mblk_t
+    ) {
+        // We must unwrap the raw `mblk_t` out of the `pkt` here,
+        // otherwise the mblk_t would be dropped at the end of this
+        // function along with `pkt`.
+        unsafe { mac_tx(self.mch, pkt.unwrap(), hint, flag, ret_mp) };
+    }
+}
+
+impl Drop for MacClient {
+    fn drop(&mut self) {
+        // Safety: We know that a MacClient can only exist if a mac
+        // client handle was successfully obtained, and thus mch is
+        // valid.
+        unsafe { mac_client_close(self.mch, self.close_flags) };
+    }
 }
 
 fn get_gw_mac(dip: *mut dev_info) -> EtherAddr {
@@ -314,8 +420,8 @@ unsafe extern "C" fn opte_close(
 type LinkName = String;
 
 enum PortState {
-    Inactive(Port<port::Inactive>, PortCfg),
-    Active(*mut OpteClientState),
+    Inactive(Port<port::Inactive>, PortCfg, *const mac_handle),
+    Active(*mut OpteClientState, *const mac_handle),
 }
 
 struct OpteState {
@@ -423,7 +529,7 @@ fn add_port(
 
     ports_lock.insert(
         req.link_name.clone(),
-        PortState::Inactive(new_port, port_cfg),
+        PortState::Inactive(new_port, port_cfg, mh),
     );
     Ok(())
 }
@@ -436,20 +542,21 @@ fn delete_port(req: &DeletePortReq) -> Result<(), api::DeletePortError> {
     let mut ports_lock = state.ports.lock();
 
     let _ = match ports_lock.get(&req.name) {
-        Some(PortState::Inactive(inactive_port, _)) => inactive_port,
-        Some(PortState::Active(_)) => return Err(api::DeletePortError::InUse),
+        Some(PortState::Inactive(inactive_port, _, _)) => inactive_port,
+
+        Some(PortState::Active(_, _)) => {
+            return Err(api::DeletePortError::InUse);
+        }
+
         None => return Err(api::DeletePortError::NotFound),
     };
 
-    let _ = ports_lock.remove(&req.name);
+    if let Some(PortState::Inactive(_, _, mh)) = ports_lock.remove(&req.name) {
+        unsafe { mac_close(mh) };
+    }
+
     Ok(())
 }
-
-// TODO I think T need Serialize too
-// struct IoctlResponse<T: Debug> {
-//     ret: c_int,
-//     resp: T,
-// }
 
 // TODO This should probably be renamed get_client_mut()
 fn get_active_port_mut<'a, 'b>(
@@ -458,10 +565,10 @@ fn get_active_port_mut<'a, 'b>(
 ) -> Result<*mut OpteClientState, api::PortError> {
     match state.ports.lock().get_mut(name) {
         None => Err(api::PortError::NotFound),
-        Some(PortState::Inactive(_, _)) => {
+        Some(PortState::Inactive(_, _, _)) => {
             Err(api::PortError::Inactive)
         }
-        Some(PortState::Active(ocspp)) => Ok(*ocspp),
+        Some(PortState::Active(ocspp, _)) => Ok(*ocspp),
     }
 }
 
@@ -477,57 +584,10 @@ fn get_inactive_port<'a, 'b>(
 ) -> Result<&'a Port<port::Inactive>, api::PortError> {
     match ports_lock.get(name) {
         None => Err(api::PortError::NotFound),
-        Some(PortState::Inactive(port, _)) => Ok(&port),
-        Some(PortState::Active(_)) => Err(api::PortError::Active),
+        Some(PortState::Inactive(port, _, _)) => Ok(&port),
+        Some(PortState::Active(_, _)) => Err(api::PortError::Active),
     }
 }
-
-// enum UberError<A: serde::de::DeserializeOwned + Serialize> {
-//     Api(A),
-//     // Api(Vec,u8>),
-//     Ioctl(ioctl::Error),
-//     // AddFwRule(AddFwRuleError),
-// }
-
-// impl<E: serde::de::DeserializeOwned + Serialize> From<E> for UberError<E> {
-//     fn from(err: E) -> Self {
-//         // let bytes = postcard::to_allocvec(e).unwrap();
-//         // Self::Api(bytes)
-//         Self::Api(err)
-//     }
-// }
-
-// impl From<ioctl::Error> for UberError<ioctl::Error> {
-//     fn from(e: ioctl::Error) -> Self {
-//         Self::Ioctl(e)
-//     }
-// }
-
-// fn do_ioctl<G, E>(
-//     cmd: IoctlCmd,
-//     ioctlenv: &IoctlEnvelope,
-// ) -> Result<G, UberError<E>>
-// where
-//     G: Serialize,
-//     E: serde::de::DeserializeOwned + Serialize
-// {
-//     match cmd {
-//         IoctlCmd::FwAddRule => {
-//             let req: FwAddRuleReq = ioctlenv.copy_in_req()?;
-//             let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-//             let ocs = get_port_mut(state, &req.port_name)?;
-//             api::add_fw_rule(ocs.port.active()?, req)
-
-//             // let dir = req.rule.direction;
-//             // let rule = Rule::from(req.rule);
-
-//             // ocs.port.active()?.add_rule("firewall", dir, rule)
-//         }
-
-//         _ => todo!("other stuff"),
-//     }
-
-// }
 
 #[derive(Debug, Serialize)]
 enum HdlrError2<E: Serialize> {
@@ -633,7 +693,7 @@ fn list_ports_hdlr(
     let state = get_opte_state();
     for (_k, ps) in state.ports.lock().iter() {
         match ps {
-            PortState::Inactive(port, cfg) => {
+            PortState::Inactive(port, cfg, _) => {
                 resp.ports.push(PortInfo {
                     name: port.name().to_string(),
                     mac_addr: port.mac_addr(),
@@ -642,7 +702,7 @@ fn list_ports_hdlr(
                 });
             }
 
-            PortState::Active(ocspp) => {
+            PortState::Active(ocspp, _) => {
                 let ocs = unsafe { &*(*ocspp) };
                 resp.ports.push(PortInfo {
                     name: ocs.name.clone(),
@@ -1093,9 +1153,9 @@ fn panic_hdlr(info: &PanicInfo) -> ! {
 // state like the hairpin queue.
 pub struct OpteClientState {
     mh: *const mac_handle,
-    mch: *mut mac_client_handle,
+    mc: MacClient,
     rx_state: Option<OpteRxState>,
-    mph: *const mac_promisc_handle,
+    mph: *mut mac_promisc_handle,
     name: String,
     promisc_state: Option<OptePromiscState>,
     port: Port<port::Active>,
@@ -1125,27 +1185,22 @@ pub unsafe extern "C" fn opte_client_open(
     flags: u16,
 ) -> c_int {
     *ocspo = ptr::null_mut();
-    let mut mch = ptr::null_mut::<c_void> as *mut mac_client_handle;
-    let ret = mac_client_open(mh, &mut mch, ptr::null(), flags);
 
-    if ret != 0 {
-        return ret;
-    }
+    let mc = match MacClient::open(mh, flags, 0) {
+        Err(ret) => return ret,
+        Ok(mc) => mc,
+    };
 
-    let link_name = CStr::from_ptr(mac_client_name(mch))
-        .to_str()
-        .unwrap()
-        .to_string();
-
+    let link_name = mc.name();
     let state = &mut *(ddi_get_driver_private(opte_dip) as *mut OpteState);
 
     // We must hold the ports's lock for the duration of this call to ensure
     // that transition from inactive to active is atomic.
     let mut ports_lock = state.ports.lock();
 
-    let (port, port_cfg) = match ports_lock.remove(&link_name) {
-        Some(PortState::Inactive(p,c)) => (p, c),
-        Some(PortState::Active(_)) => return EBUSY,
+    let (port, port_cfg, port_mh) = match ports_lock.remove(&link_name) {
+        Some(PortState::Inactive(p, c, port_mh)) => (p, c, port_mh),
+        Some(PortState::Active(_, _)) => return EBUSY,
         None => return ENOENT,
     };
 
@@ -1161,7 +1216,7 @@ pub unsafe extern "C" fn opte_client_open(
 
     let ocs = Box::new(OpteClientState {
         mh,
-        mch,
+        mc,
         name: link_name.clone(),
         rx_state: None,
         mph: 0 as *mut mac_promisc_handle,
@@ -1195,7 +1250,10 @@ pub unsafe extern "C" fn opte_client_open(
     // moving it into the map put it on the heap? Furthermore, when I
     // need to hand out a raw pointer to the client I think I could
     // just cast the reference I get back from lookup?
-    ports_lock.insert(link_name.clone(), PortState::Active(Box::into_raw(ocs)));
+    ports_lock.insert(
+        link_name.clone(),
+        PortState::Active(Box::into_raw(ocs), port_mh)
+    );
     0
 }
 
@@ -1235,25 +1293,16 @@ pub unsafe extern "C" fn opte_client_close(
         .unwrap();
     opte_core::oxide_net::arp::setup(&mut new_port, &port_cfg).unwrap();
 
-    // TODO This line made me realize that once a port has a client
-    // someone could come along an add the port again now that there
-    // is no longer an entry in the ports map. It might be a better
-    // idea to put these back into one map but have an enum type like:
-    //
-    // enum {
-    //   Port(Port<Inavtive>),
-    //   Client(*const OpteClientState),
-    // }
     state.ports.lock().insert(
         link_name.to_string(),
-        PortState::Inactive(new_port, port_cfg)
+        PortState::Inactive(new_port, port_cfg, ocs.mh)
     );
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn opte_rx_barrier(ocsp: *const OpteClientState) {
     let ocs = &*ocsp;
-    mac_rx_barrier(ocs.mch);
+    ocs.mc.rx_barrier();
 }
 
 struct OpteRxState {
@@ -1269,7 +1318,7 @@ pub unsafe extern "C" fn opte_rx_set(
 ) {
     let ocs = &mut *ocsp;
     ocs.rx_state = Some(OpteRxState { rx_fn, arg });
-    mac_rx_set(ocs.mch, opte_rx, ocsp as *mut c_void);
+    ocs.mc.set_rx_fn(opte_rx, ocsp as *mut c_void);
 }
 
 #[no_mangle]
@@ -1277,7 +1326,7 @@ pub unsafe extern "C" fn opte_rx_clear(ocsp: *mut OpteClientState) {
     let ocs = &mut *ocsp;
     // Need to take the state out so it is dropped.
     let _ = ocs.rx_state.take();
-    mac_rx_clear(ocs.mch);
+    ocs.mc.clear_rx_fn();
 }
 
 struct OptePromiscState {
@@ -1295,30 +1344,30 @@ pub unsafe extern "C" fn opte_promisc_add(
 ) -> c_int {
     let mut ocs = &mut *ocsp;
     ocs.promisc_state = Some(OptePromiscState { promisc_fn, arg });
-    let mut mph = 0 as *const mac_promisc_handle;
-    let ret = mac_promisc_add(
-        ocs.mch,
+
+    let res = ocs.mc.add_promisc_fn(
         ptype,
         opte_rx_mcast,
         ocsp as *mut c_void,
-        &mut mph,
-        flags,
+        flags
     );
 
-    if ret != 0 {
-        let _ = ocs.promisc_state.take();
-        return ret;
-    }
+    ocs.mph = match res {
+        Ok(mph) => mph,
+        Err(ret) => {
+            let _ = ocs.promisc_state.take();
+            return ret;
+        }
+    };
 
-    ocs.mph = mph;
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn opte_promisc_remove(ocsp: *mut OpteClientState) {
     let mut ocs = &mut *ocsp;
-    mac_promisc_remove(ocs.mph);
-    ocs.mph = 0 as *const mac_promisc_handle;
+    ocs.mc.rem_promisc_fn(ocs.mph);
+    ocs.mph = 0 as *mut mac_promisc_handle;
     let _ = ocs.promisc_state.take();
 }
 
@@ -1345,16 +1394,13 @@ pub unsafe extern "C" fn opte_tx(
         }
     };
     let ocs = &*ocsp;
-    // TODO This `mp_chain` arg was for debug purposes; now that we
+    // TODOx This `mp_chain` arg was for debug purposes; now that we
     // have Packet we can probably get rid of it?
     let res = ocs.port.process(Direction::Out, &mut pkt, mp_chain as uintptr_t);
 
     match res {
         Ok(ProcessResult::Modified) => {
-            // It's vital to get the raw `mblk_t` back out of the
-            // `pkt` here, otherwise the mblk_t would be dropped
-            // at the end of this function along with `pkt`.
-            mac_tx(ocs.mch, pkt.unwrap(), hint, flag, ret_mp);
+            ocs.mc.tx(pkt, hint, flag, ret_mp);
         }
 
         // TODO Probably want a state + a probe along with a reason
@@ -1385,7 +1431,7 @@ pub unsafe extern "C" fn opte_tx(
         // use it for protocols/traffic we aren't ready to deal with
         // yet.
         Ok(ProcessResult::Bypass) => {
-            mac_tx(ocs.mch, pkt.unwrap(), hint, flag, ret_mp);
+            ocs.mc.tx(pkt, hint, flag, ret_mp);
         }
 
         // TODO Want something better here eventually:
@@ -1411,7 +1457,14 @@ pub unsafe extern "C" fn opte_tx(
     // clear the hairpin queue when the guest is actively trying to
     // send packets.
     while let Some(p) = ocs.hairpin_queue.lock().pop() {
-        mac_tx(ocs.mch, p.unwrap(), hint, flag, ret_mp);
+        // TODO: Get rid of unwrap() here and instead do
+        // stat/probe/log if hairpin packet fails to parse.
+        ocs.mc.tx(
+            p.parse().unwrap(),
+            hint,
+            MAC_DROP_ON_NO_DESC,
+            ptr::null_mut()
+        );
     }
 }
 

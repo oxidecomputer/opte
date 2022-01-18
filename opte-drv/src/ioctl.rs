@@ -7,7 +7,7 @@ use core::result;
 use ddi::{c_int, c_void};
 use illumos_ddi_dki as ddi;
 
-use opte_core::ioctl::{CmdResp, Ioctl};
+use opte_core::ioctl::Ioctl;
 
 use postcard;
 

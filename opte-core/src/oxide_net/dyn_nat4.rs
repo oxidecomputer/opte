@@ -3,10 +3,6 @@ use alloc::boxed::Box;
 #[cfg(any(feature = "std", test))]
 use std::boxed::Box;
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::ToString;
-#[cfg(any(feature = "std", test))]
-use std::string::ToString;
-#[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::sync::Arc;
@@ -26,7 +22,6 @@ pub fn setup(
     pool.add(cfg.private_ip, cfg.dyn_nat.public_ip, cfg.dyn_nat.ports.clone());
 
     let nat = DynNat4::new(
-        "dyn-nat4".to_string(),
         cfg.private_ip,
         cfg.private_mac,
         cfg.dyn_nat.public_mac,

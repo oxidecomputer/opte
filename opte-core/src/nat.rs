@@ -10,9 +10,9 @@ use alloc::collections::btree_map::BTreeMap;
 #[cfg(any(feature = "std", test))]
 use std::collections::btree_map::BTreeMap;
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::{String, ToString};
+use alloc::string::ToString;
 #[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
+use std::string::ToString;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
@@ -54,7 +54,7 @@ impl NatPool {
 
     pub fn mapping(&self, priv_ip: Ipv4Addr) -> Option<(Ipv4Addr, Range<u16>)> {
         self.free_list.lock().get(&priv_ip)
-            .map(|(pub_ip, range, free_list)| (pub_ip.clone(), range.clone()))
+            .map(|(pub_ip, range, _)| (pub_ip.clone(), range.clone()))
     }
 
     pub fn new() -> Self {
@@ -103,7 +103,6 @@ impl NatPool {
 
 #[derive(Clone)]
 pub struct DynNat4 {
-    layer: String,
     priv_ip: Ipv4Addr,
     priv_mac: EtherAddr,
     pub_mac: EtherAddr,
@@ -112,13 +111,12 @@ pub struct DynNat4 {
 
 impl DynNat4 {
     pub fn new(
-        layer: String,
         addr: Ipv4Addr,
         priv_mac: EtherAddr,
         pub_mac: EtherAddr,
         ip_pool: Arc<NatPool>,
     ) -> Self {
-        DynNat4 { layer, priv_ip: addr.into(), priv_mac, pub_mac, ip_pool }
+        DynNat4 { priv_ip: addr.into(), priv_mac, pub_mac, ip_pool }
     }
 }
 

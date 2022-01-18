@@ -167,9 +167,6 @@ fn g2_cfg() -> oxide_net::PortCfg {
 
 // Verify that two guests on the same VPC can communicate via overlay.
 // I.e., test routing + encap/decap.
-//
-// * TODO Build headers from scratch.
-// * TODO setup routing layer
 #[test]
 fn overlay_guest_to_guest() {
     use crate::checksum::HeaderChecksum;

@@ -2,10 +2,6 @@ use core::fmt::{self, Display};
 use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::boxed::Box;
-#[cfg(any(feature = "std", test))]
-use std::boxed::Box;
-#[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::{String, ToString};
 #[cfg(any(feature = "std", test))]
 use std::string::{String, ToString};

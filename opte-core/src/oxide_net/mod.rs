@@ -17,9 +17,7 @@
 use std::ops::Range;
 
 use crate::ether::EtherAddr;
-use crate::geneve::Vni;
 use crate::ip4::Ipv4Addr;
-use crate::ip6::Ipv6Addr;
 use crate::vpc::VpcSubnet4;
 
 pub mod arp;

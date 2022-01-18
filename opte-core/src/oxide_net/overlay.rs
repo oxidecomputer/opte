@@ -4,10 +4,6 @@
 use core::fmt;
 
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::boxed::Box;
-#[cfg(any(feature = "std", test))]
-use std::boxed::Box;
-#[cfg(all(not(feature = "std"), not(test)))]
 use alloc::collections::btree_map::BTreeMap;
 #[cfg(any(feature = "std", test))]
 use std::collections::btree_map::BTreeMap;
@@ -29,7 +25,7 @@ use crate::ip4::{Ipv4Addr, Protocol};
 use crate::ip6::{Ipv6Addr, Ipv6Meta};
 use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::router::RouterTarget;
-use crate::port::{self, Inactive, Port, Pos};
+use crate::port::{self, Port, Pos};
 use crate::port::meta::Meta;
 use crate::rule::{self, Action, ActionDesc, HT, Rule, StatefulAction};
 use crate::sync::{KMutex, KMutexType};
@@ -46,14 +42,13 @@ pub struct PhysNet {
 }
 
 pub fn setup(
-    port: &Port<Inactive>,
+    port: &Port<port::Inactive>,
     cfg: &OverlayCfg,
     v2p: Arc<Virt2Phys>,
 ) {
     // Action Index 0
     let encap_decap = Action::Stateful(
         Arc::new(EncapDecapAction::new(
-            ENCAP_DECAP_NAME.to_string(),
             cfg.boundary_services,
             cfg.phys_mac_src,
             cfg.phys_mac_dst,
@@ -190,7 +185,6 @@ impl ActionDesc for EncapDecapDesc {
 /// destination to the physical location. These mappings are
 /// determined by Nexus and pushed down to individual OPTE instances.
 pub struct EncapDecapAction {
-    name: String,
     // The physical address of boundary services.
     boundary_services: PhysNet,
     phys_mac_src: EtherAddr,
@@ -203,7 +197,6 @@ pub struct EncapDecapAction {
 
 impl EncapDecapAction {
     pub fn new(
-        name: String,
         boundary_services: PhysNet,
         phys_mac_src: EtherAddr,
         phys_mac_dst: EtherAddr,
@@ -211,7 +204,6 @@ impl EncapDecapAction {
         v2p: Arc<Virt2Phys>,
     ) -> EncapDecapAction {
         EncapDecapAction {
-            name,
             boundary_services,
             phys_mac_src,
             phys_mac_dst,
@@ -301,7 +293,6 @@ impl StatefulAction for EncapDecapAction {
 
 /// A mapping from virtual IPs to physical location.
 pub struct Virt2Phys {
-    name: &'static str,
     // XXX Wrapping these in a mutex is definitely a terrible idea (in
     // terms of lock contention as this resource is actually shared by
     // all ports); but for purposes of dev this is fine for now.
@@ -336,7 +327,6 @@ impl Virt2Phys {
 
     pub fn new() -> Self {
         Virt2Phys {
-            name: VIRT_2_PHYS_NAME,
             ip4: KMutex::new(BTreeMap::new(), KMutexType::Driver),
             ip6: KMutex::new(BTreeMap::new(), KMutexType::Driver),
         }

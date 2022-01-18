@@ -26,7 +26,7 @@ use crate::ip4::Ipv4Addr;
 use crate::oxide_net::{firewall as fw, overlay};
 use crate::layer;
 use crate::port;
-use crate::rule::{self, Rule};
+use crate::rule;
 use crate::vpc::VpcSubnet4;
 
 #[derive(Clone, Copy, Debug)]
@@ -166,7 +166,7 @@ pub fn dump_layer(
 
 pub fn dump_tcp_flows(
     port: &port::Port<port::Active>,
-    req: &port::DumpTcpFlowsReq,
+    _req: &port::DumpTcpFlowsReq,
 ) -> port::DumpTcpFlowsResp {
     port.dump_tcp_flows()
 }
@@ -209,11 +209,6 @@ pub struct Ioctl {
     pub resp_len: size_t,
     pub resp_len_needed: size_t,
 }
-
-// TODO should I make the error a T: Debug, Deserialize, Serialize?
-// That way the userland library/program has the option to
-// programmatically inspect an error if needed?
-pub type CmdResp<T, E> = Result<T, E>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SnatCfg {

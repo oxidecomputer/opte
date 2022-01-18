@@ -5,10 +5,6 @@
 use core::fmt;
 
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::boxed::Box;
-#[cfg(any(feature = "std", test))]
-use std::boxed::Box;
-#[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::ToString;
 #[cfg(any(feature = "std", test))]
 use std::string::ToString;
@@ -67,7 +63,6 @@ impl fmt::Display for RouterTarget {
     }
 }
 
-// TODO Implement stateful action to map destination IP to RourterTarget.
 #[derive(Clone, Debug)]
 struct RouterDesc {
     target: RouterTarget,
@@ -137,7 +132,7 @@ pub fn add_entry(
         RouterTarget::Drop => todo!("drop entry"),
         RouterTarget::InternetGateway => todo!("add IG entry"),
         RouterTarget::Ip(_) => todo!("add IP entry"),
-        RouterTarget::VpcSubnet(cidr) => {
+        RouterTarget::VpcSubnet(_) => {
             match dest {
                 IpCidr::Ip4(ip4) => {
                     let rule = Rule::new(

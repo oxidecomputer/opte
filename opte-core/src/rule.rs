@@ -648,17 +648,6 @@ pub trait ActionSummary {
     fn summary(&self) -> String;
 }
 
-#[derive(Debug)]
-pub struct StatefulIdentity {
-    layer: String,
-}
-
-impl StatefulIdentity {
-    pub fn new(layer: &str) -> Self {
-        StatefulIdentity { layer: layer.to_string() }
-    }
-}
-
 pub struct IdentityDesc {
     name: String,
 }
