@@ -590,19 +590,19 @@ fn get_inactive_port<'a, 'b>(
 }
 
 #[derive(Debug, Serialize)]
-enum HdlrError2<E: Serialize> {
+enum HdlrError<E: Serialize> {
     Api(E),
     Port(api::PortError),
     System(i32),
 }
 
-impl<E: Serialize> From<api::PortError> for HdlrError2<E> {
+impl<E: Serialize> From<api::PortError> for HdlrError<E> {
     fn from(e: api::PortError) -> Self {
         Self::Port(e)
     }
 }
 
-impl<E: Serialize> From<self::ioctl::Error> for HdlrError2<E> {
+impl<E: Serialize> From<self::ioctl::Error> for HdlrError<E> {
     fn from(e: self::ioctl::Error) -> Self {
         match e {
             self::ioctl::Error::DeserError(_) => Self::System(EINVAL),
@@ -613,81 +613,53 @@ impl<E: Serialize> From<self::ioctl::Error> for HdlrError2<E> {
     }
 }
 
-impl From<api::AddPortError> for HdlrError2<api::AddPortError> {
+impl From<api::AddPortError> for HdlrError<api::AddPortError> {
     fn from(e: api::AddPortError) -> Self {
         Self::Api(e)
     }
 }
 
-impl From<api::DeletePortError> for HdlrError2<api::DeletePortError> {
+impl From<api::DeletePortError> for HdlrError<api::DeletePortError> {
     fn from(e: api::DeletePortError) -> Self {
         Self::Api(e)
     }
 }
 
-impl From<api::AddFwRuleError> for HdlrError2<api::AddFwRuleError> {
+impl From<api::AddFwRuleError> for HdlrError<api::AddFwRuleError> {
     fn from(e: api::AddFwRuleError) -> Self {
         Self::Api(e)
     }
 }
 
-impl From<api::RemFwRuleError> for HdlrError2<api::RemFwRuleError> {
+impl From<api::RemFwRuleError> for HdlrError<api::RemFwRuleError> {
     fn from(e: api::RemFwRuleError) -> Self {
         Self::Api(e)
     }
 }
 
-impl From<api::DumpLayerError> for HdlrError2<api::DumpLayerError> {
+impl From<api::DumpLayerError> for HdlrError<api::DumpLayerError> {
     fn from(e: api::DumpLayerError) -> Self {
-        Self::Api(e)
-    }
-}
-
-// TODO Would match against this in opte_ioctl and then convert to
-// type that lives in API-land that can map to either the particular
-// API response or to the more generic PortNotFound PortInactive
-// errors.
-enum HdlrError<E> {
-    Api(E),
-    Ioctl(self::ioctl::Error),
-    Port(opte_core::ioctl::PortError),
-}
-
-impl<E> From<self::ioctl::Error> for HdlrError<E> {
-    fn from(e: self::ioctl::Error) -> Self {
-        Self::Ioctl(e)
-    }
-}
-
-impl<E> From<opte_core::ioctl::PortError> for HdlrError<E> {
-    fn from(e: opte_core::ioctl::PortError) -> Self {
-        Self::Port(e)
-    }
-}
-
-impl From<opte_core::ioctl::AddFwRuleError> for HdlrError<opte_core::ioctl::AddFwRuleError> {
-    fn from(e: opte_core::ioctl::AddFwRuleError) -> Self {
         Self::Api(e)
     }
 }
 
 fn add_port_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<(), HdlrError2<api::AddPortError>> {
+) -> Result<(), HdlrError<api::AddPortError>> {
     let req: AddPortReq = ioctlenv.copy_in_req()?;
-    add_port(&req).map_err(HdlrError2::from)
+    add_port(&req).map_err(HdlrError::from)
 }
 
 fn delete_port_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<(), HdlrError2<api::DeletePortError>> {
+) -> Result<(), HdlrError<api::DeletePortError>> {
     let req: DeletePortReq = ioctlenv.copy_in_req()?;
-    delete_port(&req).map_err(HdlrError2::from)
+    delete_port(&req).map_err(HdlrError::from)
 }
 
 fn list_ports_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<ListPortsResp, HdlrError2<()>> {
+) -> Result<ListPortsResp, HdlrError<()>> {
     let _req: ListPortsReq = ioctlenv.copy_in_req()?;
     let mut resp = ListPortsResp { ports: vec![] };
     let state = get_opte_state();
@@ -719,27 +691,27 @@ fn list_ports_hdlr(
 
 fn add_fw_rule_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<(), HdlrError2<api::AddFwRuleError>> {
+) -> Result<(), HdlrError<api::AddFwRuleError>> {
     let req: FwAddRuleReq = ioctlenv.copy_in_req()?;
     let ocs = unsafe {
         let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
         &mut *get_active_port_mut(state, &req.port_name)?
     };
-    api::add_fw_rule(&ocs.port, &req).map_err(HdlrError2::from)
+    api::add_fw_rule(&ocs.port, &req).map_err(HdlrError::from)
 }
 
 fn rem_fw_rule_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<(), HdlrError2<api::RemFwRuleError>> {
+) -> Result<(), HdlrError<api::RemFwRuleError>> {
     let req: FwRemRuleReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
-    api::rem_fw_rule(&ocs.port, &req).map_err(HdlrError2::from)
+    api::rem_fw_rule(&ocs.port, &req).map_err(HdlrError::from)
 }
 
 fn dump_tcp_flows_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<port::DumpTcpFlowsResp, HdlrError2<()>> {
+) -> Result<port::DumpTcpFlowsResp, HdlrError<()>> {
     let req: port::DumpTcpFlowsReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
@@ -748,16 +720,16 @@ fn dump_tcp_flows_hdlr(
 
 fn dump_layer_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<layer::DumpLayerResp, HdlrError2<api::DumpLayerError>> {
+) -> Result<layer::DumpLayerResp, HdlrError<api::DumpLayerError>> {
     let req: layer::DumpLayerReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
-    api::dump_layer(&ocs.port, &req).map_err(HdlrError2::from)
+    api::dump_layer(&ocs.port, &req).map_err(HdlrError::from)
 }
 
 fn dump_uft_hdlr(
     ioctlenv: &IoctlEnvelope,
-) -> Result<port::DumpUftResp, HdlrError2<()>> {
+) -> Result<port::DumpUftResp, HdlrError<()>> {
     let req: port::DumpUftReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
@@ -766,7 +738,7 @@ fn dump_uft_hdlr(
 
 fn set_overlay_hdlr(
     ioctlenv: &IoctlEnvelope,
-) -> Result<(), HdlrError2<()>> {
+) -> Result<(), HdlrError<()>> {
     let req: overlay::SetOverlayReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let ports_lock = state.ports.lock();
@@ -776,7 +748,7 @@ fn set_overlay_hdlr(
 
 fn hdlr_resp<E, R>(
     ioctlenv: &mut IoctlEnvelope,
-    resp: Result<R, HdlrError2<E>>
+    resp: Result<R, HdlrError<E>>
 ) -> c_int
 where
     E: Debug + Serialize,
@@ -790,7 +762,7 @@ where
             }
         }
 
-        Err(HdlrError2::Api(eresp)) => {
+        Err(HdlrError::Api(eresp)) => {
             match ioctlenv.copy_out_resp(&eresp) {
                 // We use EPROTO as a sentinel value to tell an ioctl
                 // consumer that there was an error and there is
@@ -1091,57 +1063,6 @@ fn panic_hdlr(info: &PanicInfo) -> ! {
 // Thes APIs are meant to mimic the mac client APIs, allowing opte to
 // act as an intermediary between viona and mac.
 // ================================================================
-
-// trait ClientState {}
-
-// struct Inactive {
-//     port: Box<Port<opte_core::port::Inactive>>,
-// }
-
-// struct Active {
-//     // Packets generated by OPTE on the guest's/network's behalf, to
-//     // be returned to the source (aka a "hairpin" packet).
-//     hairpin_queue: KMutex<Vec<Packet<Initialized>>>,
-//     mch: *mut mac_client_handle,
-//     port: Box<Port<opte_core::port::Active>>,
-//     // TODO Should this use NonNull?
-//     port_periodic: *const ddi_periodic,
-//     promisc_state: Option<OptePromiscState>,
-//     rx_state: Option<OpteRxState>,
-// }
-
-// TODO A hack for now to differentiate between active/inactive port.
-// enum PortState {
-//     Active(Box<Port<port::Active>>),
-//     Inactive(Box<Port<port::Inactive>>),
-// }
-
-// impl PortState {
-//     fn active(&self) -> Result<&Port<port::Active>, self::ioctl::Error> {
-//         match self {
-//             Self::Active(p) => Ok(p),
-//             Self::Inactive(_) => Err(self::ioctl::Error::PortInactive),
-//         }
-//     }
-
-//     fn activate(&mut self) {
-//         match self {
-//             Self::Inactive(p) => {
-//                 let p1 = p.activate();
-//                 core::mem::replace(self, PortState::Active(Box::new(p1)));
-//             }
-
-//             Self::Active(_) => panic!("already active"),
-//         }
-//     }
-
-//     fn inactive(self) -> Box<Port<port::Inactive>> {
-//         match self {
-//             Self::Active(_) => panic!("port should not be active"),
-//             Self::Inactive(p) => p,
-//         }
-//     }
-// }
 
 // TODO The port configuration and client state are conflated here. It
 // would be good to tease them apart into separate types to better
