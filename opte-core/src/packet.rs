@@ -2266,7 +2266,7 @@ mod test {
     use super::*;
 
     use crate::ether::ETHER_TYPE_IPV4;
-    use crate::ip4::{Ipv4AddrTuple, Ipv4CsumOpt};
+    use crate::ip4::Ipv4AddrTuple;
     use crate::tcp::{TcpFlags, TCP_HDR_SZ};
 
     const SRC_MAC: [u8; 6] = [0xa8, 0x40, 0x25, 0x00, 0x00, 0x63];
@@ -2349,7 +2349,6 @@ mod test {
             &body,
             SRC_IP4,
             DST_IP4,
-            Ipv4CsumOpt::None
         );
         let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
 
@@ -2421,7 +2420,6 @@ mod test {
             &body,
             SRC_IP4,
             DST_IP4,
-            Ipv4CsumOpt::None
         );
         let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
 
@@ -2495,7 +2493,6 @@ mod test {
             &body,
             SRC_IP4,
             DST_IP4,
-            Ipv4CsumOpt::None
         );
         let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
 
@@ -2528,7 +2525,6 @@ mod test {
             &body,
             SRC_IP4,
             DST_IP4,
-            Ipv4CsumOpt::None
         );
         let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
 
@@ -2566,7 +2562,6 @@ mod test {
             &body,
             SRC_IP4,
             DST_IP4,
-            Ipv4CsumOpt::None
         );
         let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
 

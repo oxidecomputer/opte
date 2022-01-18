@@ -27,9 +27,8 @@ use crate::layer::{InnerFlowId, Layer};
 use crate::port::{self, Port, Pos};
 use crate::port::meta::Meta;
 use crate::rule::{
-    self, Action as LayerAction, EtherTypeMatch, Finalized, Identity,
-    IdentityDesc, IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate, Rule,
-    RuleAction, StatefulAction,
+    self, EtherTypeMatch, Identity, IdentityDesc, IpProtoMatch,
+    Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
 };
 use crate::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
 use crate::{Direction, ParseErr, ParseResult};
@@ -58,7 +57,7 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     // Thus, to match all incoming traffic, we add no predicates.
     layer.add_rule(
         Direction::In,
-        Rule::new(65535, RuleAction::Deny).match_any()
+        Rule::new(65535, rule::Action::Deny).match_any()
     );
 
     // This rule is not listed in the RFDs, nor does the Oxide VPC
@@ -67,14 +66,14 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     // by RFD 21. We use this to our advantage here to allow ARP
     // traffic to pass, which will be dealt with by the ARP layer in
     // the Oxide Network configuration.
-    let arp = Rule::new(1, RuleAction::Allow(1));
+    let arp = Rule::new(1, layer.action(1).unwrap().clone());
     let arp = arp.add_predicate(
         Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
     );
     layer.add_rule(Direction::In, arp.finalize());
 
     // Allow SSH traffic from anywhere.
-    let ssh = Rule::new(65534, RuleAction::Allow(0));
+    let ssh = Rule::new(65534, layer.action(0).unwrap().clone());
     let mut ssh = ssh.add_predicate(
         Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::TCP)])
     );
@@ -90,14 +89,14 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     // we don't expose these things in the Oxide Virtual Firewall, it
     // would allow us to perform finer-grained ICMP filtering in the
     // event that is useful.
-    let icmp = Rule::new(65534, RuleAction::Allow(0));
+    let icmp = Rule::new(65534, layer.action(0).unwrap().clone());
     let icmp = icmp.add_predicate(
         Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::ICMP)])
     );
     layer.add_rule(Direction::In, icmp.finalize());
 
     // Allow RDP from anywhere.
-    let rdp = Rule::new(65534, RuleAction::Allow(0));
+    let rdp = Rule::new(65534, layer.action(0).unwrap().clone());
     let mut rdp = rdp.add_predicate(
         Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::TCP)])
     );
@@ -108,44 +107,47 @@ fn add_default_inbound_rules(layer: &mut Layer) {
 }
 
 fn add_default_outbound_rules(layer: &mut Layer) {
+    let act = layer.action(0).unwrap().clone();
     layer.add_rule(
         Direction::Out,
-        Rule::new(65535, RuleAction::Allow(0)).match_any()
+        Rule::new(65535, act).match_any()
     );
 }
 
-impl From<FirewallRule> for Rule<Finalized> {
-    fn from(fw_rule: FirewallRule) -> Self {
-        let action = match fw_rule.action {
-            Action::Allow => RuleAction::Allow(0),
-            Action::Deny => RuleAction::Deny,
-        };
+// impl From<FirewallRule> for Rule<rule::Build> {
+pub fn from_fw_rule(
+    fw_rule: FirewallRule,
+    action: rule::Action
+) -> Rule<rule::Finalized> {
+    // let action = match fw_rule.action {
+    //     Action::Allow => ActionOrIdx::Idx(0),
+    //     Action::Deny => ActionOrIdx::Action(LayerAction::Drop),
+    // };
 
-        let rule = Rule::new(fw_rule.priority, action);
-        let addr_pred = fw_rule.filters.hosts.into_predicate(fw_rule.direction);
-        let proto_pred = fw_rule.filters.protocol.into_predicate();
-        let port_pred = fw_rule.filters.ports.into_predicate();
+    let rule = Rule::new(fw_rule.priority, action);
+    let addr_pred = fw_rule.filters.hosts.into_predicate(fw_rule.direction);
+    let proto_pred = fw_rule.filters.protocol.into_predicate();
+    let port_pred = fw_rule.filters.ports.into_predicate();
 
-        if addr_pred.is_none() && proto_pred.is_none() && port_pred.is_none() {
-            return rule.match_any();
-        }
-
-        let mut preds = vec![];
-
-        if proto_pred.is_some() {
-            preds.push(proto_pred.unwrap());
-        }
-
-        if port_pred.is_some() {
-            preds.push(port_pred.unwrap());
-        }
-
-        if addr_pred.is_some() {
-            preds.push(addr_pred.unwrap());
-        }
-
-        rule.add_predicates(preds).finalize()
+    if addr_pred.is_none() && proto_pred.is_none() && port_pred.is_none() {
+        return rule.match_any();
     }
+
+    let mut preds = vec![];
+
+    if proto_pred.is_some() {
+        preds.push(proto_pred.unwrap());
+    }
+
+    if port_pred.is_some() {
+        preds.push(port_pred.unwrap());
+    }
+
+    if addr_pred.is_some() {
+        preds.push(addr_pred.unwrap());
+    }
+
+    rule.add_predicates(preds).finalize()
 }
 
 pub struct FwStatefulAction {
@@ -155,6 +157,12 @@ pub struct FwStatefulAction {
 impl FwStatefulAction {
     fn new(name: String) -> Self {
         FwStatefulAction { name }
+    }
+}
+
+impl fmt::Display for FwStatefulAction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Firewall")
     }
 }
 
@@ -171,16 +179,16 @@ impl StatefulAction for FwStatefulAction {
 impl Firewall {
     pub fn create_layer() -> Layer {
         // A stateful action creates a FlowTable entry.
-        let stateful_action = LayerAction::Stateful(
-            Box::new(FwStatefulAction::new("fw".to_string()))
+        let stateful_action = rule::Action::Stateful(
+            Arc::new(FwStatefulAction::new("fw".to_string()))
         );
 
         // A static action does not create an entry in the FlowTable.
         // For the moment this is only used to allow ARP to bypass the
         // firewall layer, but it may be useful to expose this more
         // generally in the future.
-        let static_action = LayerAction::Static(Box::new(Identity::new(
-            "fw_arp".to_string(),
+        let static_action = rule::Action::Static(Arc::new(Identity::new(
+            "fw_arp",
         )));
 
         let mut layer = Layer::new(

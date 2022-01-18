@@ -535,3 +535,12 @@ pub enum IpCidr {
     // XXX Real Ipv6Cidr
     Ip6(u8),
 }
+
+impl fmt::Display for IpCidr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Ip4(ip4) => write!(f, "{}", ip4),
+            Self::Ip6(ip6) => write!(f, "{}", ip6),
+        }
+    }
+}

@@ -57,6 +57,19 @@ impl From<[u8; 16]> for Ipv6Addr {
     }
 }
 
+impl From<[u16; 8]> for Ipv6Addr {
+    fn from(bytes: [u16; 8]) -> Ipv6Addr {
+        let tmp = bytes.map(u16::to_be_bytes);
+        let mut addr = [0; 16];
+        for (i, pair) in tmp.iter().enumerate() {
+            addr[i] = pair[0];
+            addr[i+1] = pair[1];
+        }
+
+        Ipv6Addr { addr }
+    }
+}
+
 impl fmt::Display for Ipv6Addr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(

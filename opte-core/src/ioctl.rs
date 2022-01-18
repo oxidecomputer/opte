@@ -26,7 +26,7 @@ use crate::ip4::Ipv4Addr;
 use crate::oxide_net::{firewall as fw, overlay};
 use crate::layer;
 use crate::port;
-use crate::rule::Rule;
+use crate::rule::{self, Rule};
 use crate::vpc::VpcSubnet4;
 
 #[derive(Clone, Copy, Debug)]
@@ -117,10 +117,20 @@ pub fn add_fw_rule(
     port: &port::Port<port::Active>,
     req: &fw::FwAddRuleReq
 ) -> Result<(), AddFwRuleError> {
+    let action = match req.rule.action {
+        fw::Action::Allow => {
+            port.layer_action(fw::FW_LAYER_NAME, 0).unwrap().clone()
+        }
+
+        fw::Action::Deny => rule::Action::Deny,
+    };
+
+    let rule = fw::from_fw_rule(req.rule.clone(), action);
+
     let res = port.add_rule(
         fw::FW_LAYER_NAME,
         req.rule.direction,
-        Rule::from(req.rule.clone())
+        rule,
     );
 
     match res {

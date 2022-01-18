@@ -346,6 +346,12 @@ impl ArpReply {
     }
 }
 
+impl fmt::Display for ArpReply {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ArpReply {} => {}", self.tpa, self.tha)
+    }
+}
+
 impl HairpinAction for ArpReply {
     fn gen_packet(
         &self,

@@ -27,7 +27,7 @@ use crate::layer::{
     self, InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT
 };
 use crate::packet::{Initialized, Packet, PacketMeta, Parsed};
-use crate::rule::{ht_fire_probe, Finalized, Rule, HT};
+use crate::rule::{ht_fire_probe, Action, Finalized, Rule, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::tcp::TcpState;
 use crate::tcp_state::{self, TcpFlowState};
@@ -356,6 +356,16 @@ impl Port<Active> {
         }
         self.state.uft_in.lock().expire_flows(now);
         self.state.uft_out.lock().expire_flows(now);
+    }
+
+    pub fn layer_action(&self, layer: &str, idx: usize) -> Option<&Action> {
+        for l in &*self.state.layers {
+            if l.name() == layer {
+                return l.action(idx);
+            }
+        }
+
+        None
     }
 
     // Process the packet against each layer in turn. If `Allow` is

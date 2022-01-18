@@ -596,8 +596,10 @@ pub trait ActionDesc {
     /// will typically release ownership of any obtained resource.
     fn fini(&self);
 
-    /// Generate the [`HT`] which implements this descriptor.
-    fn gen_ht(&self, dir: Direction) -> HT;
+    /// Generate the [`HT`] which implements this descriptor. An
+    /// action may optionally (or only) modify the processing metadata
+    /// as well.
+    fn gen_ht(&self, dir: Direction, meta: &mut Meta) -> HT;
 
     fn name(&self) -> &str;
 }
@@ -652,8 +654,8 @@ pub struct StatefulIdentity {
 }
 
 impl StatefulIdentity {
-    pub fn new(layer: String) -> Self {
-        StatefulIdentity { layer }
+    pub fn new(layer: &str) -> Self {
+        StatefulIdentity { layer: layer.to_string() }
     }
 }
 
@@ -672,7 +674,7 @@ impl ActionDesc for IdentityDesc {
         return;
     }
 
-    fn gen_ht(&self, _dir: Direction) -> HT {
+    fn gen_ht(&self, _dir: Direction, _meta: &mut Meta) -> HT {
         Default::default()
     }
 
@@ -687,23 +689,20 @@ pub struct Identity {
 }
 
 impl Identity {
-    pub fn new(name: String) -> Self {
-        Identity { name }
+    pub fn new(name: &str) -> Self {
+        Identity { name: name.to_string() }
+    }
+}
+
+impl Display for Identity {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Identity")
     }
 }
 
 impl StaticAction for Identity {
     fn gen_ht(&self, _dir: Direction, _flow_id: InnerFlowId) -> HT {
-        HT {
-            name: self.name.clone(),
-            outer_ether: HeaderAction::Ignore,
-            outer_ip: HeaderAction::Ignore,
-            outer_ulp: HeaderAction::Ignore,
-            outer_encap: HeaderAction::Ignore,
-            inner_ether: HeaderAction::Ignore,
-            inner_ip: HeaderAction::Ignore,
-            inner_ulp: UlpHeaderAction::Ignore,
-        }
+        HT::identity(&self.name)
     }
 }
 
@@ -828,6 +827,21 @@ pub fn ht_fire_probe(
 }
 
 impl HT {
+    /// The "identity" header transformation; one which leaves the
+    /// header as-isl
+    pub fn identity(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            outer_ether: HeaderAction::Ignore,
+            outer_ip: HeaderAction::Ignore,
+            outer_ulp: HeaderAction::Ignore,
+            outer_encap: HeaderAction::Ignore,
+            inner_ether: HeaderAction::Ignore,
+            inner_ip: HeaderAction::Ignore,
+            inner_ulp: UlpHeaderAction::Ignore,
+        }
+    }
+
     pub fn run(&self, meta: &mut PacketMeta) {
         self.outer_ether.run(&mut meta.outer.ether);
         self.outer_ip.run(&mut meta.outer.ip);
@@ -858,7 +872,7 @@ pub enum GenDescError {
 
 pub type GenDescResult = Result<Arc<dyn ActionDesc>, GenDescError>;
 
-pub trait StatefulAction {
+pub trait StatefulAction: Display {
     /// Generate a an [`ActionDesc`] based on the [`InnerFlowId`] and
     /// [`Meta`]. This action may also add, remove, or modify metadata
     /// to communicate data to downstream actions.
@@ -877,7 +891,7 @@ pub trait StatefulAction {
     ) -> GenDescResult;
 }
 
-pub trait StaticAction {
+pub trait StaticAction: Display {
     fn gen_ht(&self, dir: Direction, flow_id: InnerFlowId) -> HT;
 }
 
@@ -894,7 +908,7 @@ pub type GenResult<T> = Result<T, GenErr>;
 /// packet back to the source of the original packet. For example, you
 /// could use this to hairpin an ARP Reply in response to a guest's
 /// ARP request.
-pub trait HairpinAction {
+pub trait HairpinAction: Display {
     /// Generate a [`Packet`] to hairpin back to the source. The
     /// `meta` argument holds the packet metadata, inlucding any
     /// modifications made by previous layers up to this point. The
@@ -908,38 +922,90 @@ pub trait HairpinAction {
     ) -> GenResult<Packet<Initialized>>;
 }
 
+#[derive(Clone)]
 pub enum Action {
-    Static(Box<dyn StaticAction>),
-    Stateful(Box<dyn StatefulAction>),
-    Hairpin(Box<dyn HairpinAction>),
-}
-
-// TODO I should probably name this something else now. It's role is
-// to declare whether or not a rule match should execute the layer's
-// associated action (Allow), or whether it should deny the packet
-// (Deny).
-#[derive(Clone, Debug)]
-pub enum RuleAction {
-    Allow(usize),
     Deny,
+    Static(Arc<dyn StaticAction>),
+    Stateful(Arc<dyn StatefulAction>),
+    Hairpin(Arc<dyn HairpinAction>),
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub enum RuleActionDump {
-    Allow(usize),
-    Deny,
-}
-
-impl From<&RuleAction> for RuleActionDump {
-    fn from(ra: &RuleAction) -> Self {
-        use RuleAction::*;
-
-        match ra {
-            Allow(idx) => RuleActionDump::Allow(*idx),
-            Deny => RuleActionDump::Deny,
+impl Action {
+    pub fn is_deny(&self) -> bool {
+        match self {
+            Self::Deny => true,
+            _ => false,
         }
     }
 }
+
+// pub enum ActionOrIdx {
+//     Action(Action),
+//     Idx(usize),
+// }
+
+#[derive(Clone, Deserialize, Serialize)]
+pub enum ActionDump {
+    Deny,
+    Static(String),
+    Stateful(String),
+    Hairpin(String),
+}
+
+impl From<&Action> for ActionDump {
+    fn from(action: &Action) -> Self {
+        match action {
+            Action::Deny => Self::Deny,
+            Action::Static(sa) => Self::Static(sa.to_string()),
+            Action::Stateful(sa) => Self::Stateful(sa.to_string()),
+            Action::Hairpin(ha) => Self::Hairpin(ha.to_string()),
+        }
+    }
+}
+
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Deny => write!(f, "DENY"),
+            Self::Static(a) => write!(f, "STATIC: {}", a),
+            Self::Stateful(a) => write!(f, "STATEFUL: {}", a),
+            Self::Hairpin(a) => write!(f, "HAIRPIN: {}", a),
+        }
+    }
+}
+
+impl fmt::Debug for Action {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "todo: implement Debug for Action")
+    }
+}
+
+// TODOx I should probably name this something else now. It's role is
+// to declare whether or not a rule match should execute the layer's
+// associated action (Allow), or whether it should deny the packet
+// (Deny).
+// #[derive(Clone, Debug)]
+// pub enum RuleAction {
+//     Allow(Action),
+//     Deny,
+// }
+
+// #[derive(Debug, Deserialize, Serialize)]
+// pub enum RuleActionDump {
+//     Allow(usize),
+//     Deny,
+// }
+
+// impl From<&RuleAction> for RuleActionDump {
+//     fn from(ra: &RuleAction) -> Self {
+//         use RuleAction::*;
+
+//         match ra {
+//             Allow(idx) => RuleActionDump::Allow(*idx),
+//             Deny => RuleActionDump::Deny,
+//         }
+//     }
+// }
 
 // TODO Use const generics to make this array?
 #[derive(Clone, Debug)]
@@ -953,6 +1019,12 @@ pub trait RuleState {}
 #[derive(Clone, Debug)]
 pub struct Empty {}
 impl RuleState for Empty {}
+
+// pub struct Prepared {
+//     action: ActionOrIdx,
+// }
+// impl RuleState for Prepared {}
+
 
 #[derive(Clone, Debug)]
 pub struct Ready {
@@ -971,16 +1043,27 @@ impl RuleState for Finalized {}
 #[derive(Clone, Debug)]
 pub struct Rule<S: RuleState> {
     state: S,
+    action: Action,
     pub priority: u16,
-    pub action: RuleAction,
 }
 
+impl<S: RuleState> Rule<S> {
+    pub fn action(&self) -> &Action {
+        &self.action
+    }
+}
+
+// TODO Need to change things so that <Ready> (or maybe rename it
+// Prepared) is passed to port/layer add_rule(). Then layer calls
+// finalize to convert the ActionOrIdx to an Action. We need to do
+// this because the shared actions are owned by the Layer so we need
+// to delay their resolution until we are in the Layer's scope.
 impl Rule<Empty> {
-    pub fn new(priority: u16, action: RuleAction) -> Self {
+    pub fn new(priority: u16, action: Action) -> Self {
         Rule {
             state: Empty {},
+            action,
             priority,
-            action
         }
     }
 
@@ -990,8 +1073,8 @@ impl Rule<Empty> {
                 hdr_preds: vec![pred],
                 data_preds: vec![],
             },
-            priority: self.priority,
             action: self.action,
+            priority: self.priority,
         }
     }
 
@@ -1001,8 +1084,8 @@ impl Rule<Empty> {
                 hdr_preds: preds,
                 data_preds: vec![],
             },
-            priority: self.priority,
             action: self.action,
+            priority: self.priority,
         }
     }
 
@@ -1012,8 +1095,8 @@ impl Rule<Empty> {
                 hdr_preds: vec![],
                 data_preds: vec![pred],
             },
-            priority: self.priority,
             action: self.action,
+            priority: self.priority,
         }
     }
 
@@ -1022,8 +1105,8 @@ impl Rule<Empty> {
             state: Finalized {
                 preds: None,
             },
-            priority: self.priority,
             action: self.action,
+            priority: self.priority,
         }
     }
 }
@@ -1096,7 +1179,7 @@ impl<'a> Rule<Finalized> {
 pub struct RuleDump {
     pub priority: u16,
     pub predicates: Vec<Predicate>,
-    pub action: RuleActionDump,
+    pub action: String,
 }
 
 impl From<&Rule<Finalized>> for RuleDump {
@@ -1110,7 +1193,7 @@ impl From<&Rule<Finalized>> for RuleDump {
             priority: rule.priority,
             predicates,
             // XXX What about data predicates?
-            action: RuleActionDump::from(&rule.action),
+            action: rule.action.to_string(),
         }
     }
 }
@@ -1119,7 +1202,8 @@ impl From<&Rule<Finalized>> for RuleDump {
 fn rule_matching() {
     use crate::packet::MetaGroup;
 
-    let r1 = Rule::new(1, RuleAction::Allow(0));
+    let action = Identity::new("rule_matching");
+    let r1 = Rule::new(1, Action::Static(Arc::new(action)));
     let src_ip = "10.11.11.100".parse().unwrap();
     let src_port = "1026".parse().unwrap();
     let dst_ip = "52.10.128.69".parse().unwrap();

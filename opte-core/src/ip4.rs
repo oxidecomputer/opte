@@ -592,11 +592,9 @@ macro_rules! assert_ip4 {
     }
 }
 
-pub enum Ipv4CsumOpt {
-    None,
-    Header,
-    UlpPartial,
-    UlpFull,
+pub enum UlpCsumOpt {
+    Partial,
+    Full,
 }
 
 impl Ipv4Hdr {
@@ -605,6 +603,32 @@ impl Ipv4Hdr {
         let raw = Ipv4HdrRaw::from(self);
         bytes.extend_from_slice(raw.as_bytes());
         bytes
+    }
+
+    fn compute_pseudo_csum(&self) -> Checksum {
+        Checksum::compute(&self.pseudo_bytes())
+    }
+
+    pub fn compute_hdr_csum(&mut self) {
+        self.csum = [0; 2];
+        self.csum = HeaderChecksum::from(
+            Checksum::compute(&self.as_bytes())
+        ).bytes();
+    }
+
+    pub fn compute_ulp_csum(
+        &self,
+        opt: UlpCsumOpt,
+        body: &[u8]
+    ) -> Checksum {
+        match opt {
+            UlpCsumOpt::Partial => todo!("implement partial csum"),
+            UlpCsumOpt::Full => {
+                let mut csum = self.compute_pseudo_csum();
+                csum.add(body);
+                csum
+            }
+        }
     }
 
     pub fn csum(&self) -> [u8; 2] {
@@ -630,14 +654,8 @@ impl Ipv4Hdr {
         body: &[u8],
         src: A,
         dst: A,
-        csum_opt: Ipv4CsumOpt,
     ) -> Self {
         let data_len = tcp.hdr_len() as u16 + body.len() as u16;
-
-        let csum = match csum_opt {
-            Ipv4CsumOpt::None => [0; 2],
-            _ => todo!("implement software checksum"),
-        };
 
         Self {
             hdr_len_bytes: IPV4_HDR_SZ as u8,
@@ -647,7 +665,7 @@ impl Ipv4Hdr {
             frag_and_flags: [0x40, 0x00],
             ttl: 255,
             proto: Protocol::TCP,
-            csum,
+            csum: [0; 2],
             src: src.into(),
             dst: dst.into(),
         }

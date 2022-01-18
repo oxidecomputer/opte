@@ -16,6 +16,7 @@
 use std::fs;
 use std::ops::Range;
 use std::prelude::v1::*;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 extern crate pcap_parser;
@@ -25,7 +26,7 @@ use zerocopy::AsBytes;
 
 use crate::arp::{ArpEth4Payload, ArpEth4PayloadRaw, ArpHdrRaw, ARP_HDR_SZ};
 use crate::ether::{
-    self, EtherAddr, EtherHdr, EtherHdrRaw, EtherMeta, ETHER_HDR_SZ,
+    self, EtherAddr, EtherHdr, EtherHdrRaw, EtherMeta, EtherType, ETHER_HDR_SZ,
     ETHER_TYPE_ARP, ETHER_TYPE_IPV4
 };
 use crate::flow_table::FLOW_DEF_EXPIRE_SECS;
@@ -39,6 +40,7 @@ use crate::packet::{
     PacketWriter, ParseError, WritePos,
 };
 use crate::port::{Inactive, Port, ProcessResult};
+use crate::tcp::TcpHdr;
 use crate::udp::{UdpHdr, UdpHdrRaw, UdpMeta};
 use crate::Direction::*;
 
@@ -113,6 +115,163 @@ fn oxide_net_setup(port: &mut Port<Inactive>, cfg: &oxide_net::PortCfg) {
     oxide_net::arp::setup(port, cfg).expect("failed to add ARP layer");
 }
 
+fn g1_cfg() -> oxide_net::PortCfg {
+    oxide_net::PortCfg {
+        private_ip: "192.168.77.101".parse().unwrap(),
+        private_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
+        vpc_subnet: "192.168.77.0/24".parse().unwrap(),
+        dyn_nat: oxide_net::DynNat4Cfg {
+            // NOTE: This member is used for home routers that might
+            // balk at multiple IPs sharing a MAC address. As these
+            // tests are meant to mimic the Oxide Rack Network we just
+            // keep this the same.
+            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
+            // NOTE: This is not a routable IP, but remember that a
+            // "public IP" for an Oxide guest could either be a
+            // public, routable IP or simply an IP on their wider LAN
+            // which the oxide Rack is simply a part of.
+            public_ip: "10.77.77.13".parse().unwrap(),
+            ports: Range { start: 1025, end: 4096 },
+        },
+        gw_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
+        gw_ip: "192.168.77.1".parse().unwrap(),
+        // TODO For now we set the overlay in the test.
+        overlay: None,
+    }
+}
+
+fn g2_cfg() -> oxide_net::PortCfg {
+    oxide_net::PortCfg {
+        private_ip: "192.168.77.102".parse().unwrap(),
+        private_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x66]),
+        vpc_subnet: "192.168.77.0/24".parse().unwrap(),
+        dyn_nat: oxide_net::DynNat4Cfg {
+            // NOTE: This member is used for home routers that might
+            // balk at multiple IPs sharing a MAC address. As these
+            // tests are meant to mimic the Oxide Rack Network we just
+            // keep this the same.
+            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x66]),
+            // NOTE: This is not a routable IP, but remember that a
+            // "public IP" for an Oxide guest could either be a
+            // public, routable IP or simply an IP on their wider LAN
+            // which the oxide Rack is simply a part of.
+            public_ip: "10.77.77.23".parse().unwrap(),
+            ports: Range { start: 4097, end: 8192 },
+        },
+        gw_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
+        gw_ip: "192.168.77.1".parse().unwrap(),
+        // TODO For now we set the overlay in the test.
+        overlay: None,
+    }
+}
+
+// Verify that two guests on the same VPC can communicate via overlay.
+// I.e., test routing + encap/decap.
+//
+// * TODO Build headers from scratch.
+// * TODO setup routing layer
+#[test]
+fn overlay_guest_to_guest() {
+    use crate::checksum::HeaderChecksum;
+    use crate::ip4::UlpCsumOpt;
+    use crate::oxide_net::overlay::{OverlayCfg, PhysNet, Virt2Phys};
+    use crate::tcp::TcpFlags;
+
+    let mut g1_cfg = g1_cfg();
+    let mut g2_cfg = g2_cfg();
+
+    // NOTE: We're not testing Boundary Services in this test, so the
+    // values are irrelevant here.
+    let bs = PhysNet {
+        ether: EtherAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+        ip: Ipv6Addr::from([
+            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x77
+        ]),
+        vni: Vni::new(7777u32).unwrap(),
+    };
+
+    g1_cfg.overlay = Some(OverlayCfg {
+        boundary_services: bs.clone(),
+        vni: Vni::new(99u32).unwrap(),
+        // Chelsio NIC
+        phys_mac_src: EtherAddr::from([0x00, 0x07, 0x43, 0xF7, 0x00, 0x01]),
+        // Tofino port
+        phys_mac_dst: EtherAddr::from([0xF8, 0x1D, 0x78, 0xDF, 0x00, 0x01]),
+        // Site 0xF7, Rack 1, Sled 1, Interface 1
+        phys_ip_src: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0101,
+            0x0000, 0x0000, 0x0000, 0x0001
+        ]),
+    });
+
+    g2_cfg.overlay = Some(OverlayCfg {
+        boundary_services: bs.clone(),
+        vni: Vni::new(99u32).unwrap(),
+        // Chelsio NIC
+        phys_mac_src: EtherAddr::from([0x00, 0x07, 0x43, 0xF7, 0x00, 0x22]),
+        // Tofino port
+        phys_mac_dst: EtherAddr::from([0xF8, 0x1D, 0x78, 0xDF, 0x00, 0x22]),
+        // Site 0xF7, Rack 1, Sled 22, Interface 1
+        phys_ip_src: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0116,
+            0x0000, 0x0000, 0x0000, 0x0001
+        ]),
+    });
+
+    // TODO Add v2p mappings.
+    let v2p = Arc::new(Virt2Phys::new());
+
+    // TODO Setup ports here, but first I want to figure out packet
+    // gen.
+    let mut g1_port = Port::new("g1_port".to_string(), g1_cfg.private_mac);
+    oxide_net_setup(&mut g1_port, &g1_cfg);
+    oxide_net::overlay::setup(
+        &mut g1_port,
+        g1_cfg.overlay.as_ref().unwrap(),
+        v2p.clone()
+    );
+    let g1_port = g1_port.activate();
+
+    // TODO Implement router layer and add VPC system router entries.
+
+    // TODO figure out packet gen. Start with outgoing TCP conn
+    // request from g1 to g2.
+    let body = vec![];
+    let mut tcp = TcpHdr::new(7865, 23);
+    tcp.set_flags(TcpFlags::SYN);
+    tcp.set_seq(4224936861);
+    let mut ip4 = Ipv4Hdr::new_tcp(
+        &mut tcp,
+        &body,
+        g1_cfg.private_ip,
+        g2_cfg.private_ip,
+    );
+    ip4.compute_hdr_csum();
+    let tcp_csum = ip4.compute_ulp_csum(UlpCsumOpt::Full, &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(
+        EtherType::Ipv4,
+        g1_cfg.private_mac,
+        g2_cfg.private_mac
+    );
+
+    println!("{:#?}", eth);
+    println!("{:#?}", ip4);
+    println!("{:#?}", tcp);
+
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&eth.as_bytes());
+    bytes.extend_from_slice(&ip4.as_bytes());
+    bytes.extend_from_slice(&tcp.as_bytes());
+    bytes.extend_from_slice(&body);
+    let mut pkt = Packet::copy(&bytes).parse().unwrap();
+    let res = g1_port.process(Out, &mut pkt, 0);
+    assert!(matches!(res, Ok(Modified)));
+
+
+}
+
 // Verify that basic encap/decap works.
 //
 // XXX This test is a bit of a hack in that it repurposes the
@@ -138,7 +297,7 @@ fn encap_decap() {
     use crate::ip6::{Ipv6Hdr, Ipv6Meta};
     use crate::tcp::TcpFlags;
     use crate::udp::UdpHdr;
-    use crate::oxide_net::overlay::{PhysNet, Virt2Phys};
+    use crate::oxide_net::overlay::{OverlayCfg, PhysNet, Virt2Phys};
 
     let mut cfg = home_cfg();
     // We have to specify exactly one port to match up with the actual
@@ -153,7 +312,7 @@ fn encap_decap() {
 
     let phys_ip6_src = Ipv6Addr::from([0; 16]);
     let v2p = Arc::new(Virt2Phys::new());
-    cfg.overlay = Some(oxide_net::OverlayCfg {
+    cfg.overlay = Some(OverlayCfg {
         boundary_services: PhysNet {
             ether: EtherAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
             ip: Ipv6Addr::from([
@@ -167,8 +326,11 @@ fn encap_decap() {
         phys_mac_dst: EtherAddr::from([0x02, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA]),
         phys_ip_src: phys_ip6_src,
     });
-    oxide_net::overlay::setup(&mut port, &cfg, v2p.clone())
-        .expect("failed to add overlay layer");
+    oxide_net::overlay::setup(
+        &mut port,
+        cfg.overlay.as_ref().unwrap(),
+        v2p.clone()
+    );
     let port = port.activate();
 
     // Here we setup the virtual-to-physical mapping for the

@@ -15,9 +15,7 @@ use crate::ip4::{self, Protocol};
 use crate::layer::Layer;
 use crate::nat::{DynNat4, NatPool};
 use crate::port::{self, Port, Pos};
-use crate::rule::{
-    Action, Ipv4AddrMatch, IpProtoMatch, Predicate, Rule, RuleAction
-};
+use crate::rule::{Action, Ipv4AddrMatch, IpProtoMatch, Predicate, Rule};
 use crate::Direction;
 
 pub fn setup(
@@ -35,9 +33,9 @@ pub fn setup(
         Arc::new(pool),
     );
 
-    let layer = Layer::new("dyn-nat4", vec![Action::Stateful(Box::new(nat))]);
+    let layer = Layer::new("dyn-nat4", vec![Action::Stateful(Arc::new(nat))]);
 
-    let rule = Rule::new(1, RuleAction::Allow(0));
+    let rule = Rule::new(1, layer.action(0).unwrap().clone());
     let mut rule = rule.add_predicate(Predicate::InnerIpProto(vec![
         IpProtoMatch::Exact(Protocol::TCP),
         IpProtoMatch::Exact(Protocol::UDP),

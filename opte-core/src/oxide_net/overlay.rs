@@ -1,3 +1,8 @@
+//! The Oxide Network VPC Overlay.
+//!
+//! This implements the Oxide Network VPC Overlay.
+use core::fmt;
+
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::boxed::Box;
 #[cfg(any(feature = "std", test))]
@@ -25,10 +30,8 @@ use crate::ip6::{Ipv6Addr, Ipv6Meta};
 use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::router::RouterTarget;
 use crate::port::{self, Inactive, Port, Pos};
-use crate::port::meta::{Meta};
-use crate::rule::{
-    self, Action, ActionDesc, HT, Rule, RuleAction, StatefulAction
-};
+use crate::port::meta::Meta;
+use crate::rule::{self, Action, ActionDesc, HT, Rule, StatefulAction};
 use crate::sync::{KMutex, KMutexType};
 use crate::udp::UdpMeta;
 use crate::Direction;
@@ -49,7 +52,7 @@ pub fn setup(
 ) {
     // Action Index 0
     let encap_decap = Action::Stateful(
-        Box::new(EncapDecapAction::new(
+        Arc::new(EncapDecapAction::new(
             ENCAP_DECAP_NAME.to_string(),
             cfg.boundary_services,
             cfg.phys_mac_src,
@@ -60,7 +63,7 @@ pub fn setup(
     );
 
     let layer = Layer::new(OVERLAY_LAYER_NAME, vec![encap_decap]);
-    let encap_decap_rule = Rule::new(1, RuleAction::Allow(0));
+    let encap_decap_rule = Rule::new(1, layer.action(0).unwrap().clone());
     layer.add_rule(Direction::Out, encap_decap_rule.clone().match_any());
     // XXX Currently this will decap any outer 5-tuple and pass along
     // the inner frame. Should this be the case? Is there any type of
@@ -89,7 +92,7 @@ impl ActionDesc for EncapDecapDesc {
     // There's no cleanup needed.
     fn fini(&self) {}
 
-    fn gen_ht(&self, dir: Direction) -> HT {
+    fn gen_ht(&self, dir: Direction, _meta: &mut Meta) -> HT {
         match dir {
             Direction::Out => {
                 HT {
@@ -215,6 +218,12 @@ impl EncapDecapAction {
             phys_ip_src,
             v2p
         }
+    }
+}
+
+impl fmt::Display for EncapDecapAction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "EncapDecap")
     }
 }
 
@@ -347,7 +356,9 @@ pub struct OverlayCfg {
     // NOTE: The phys_mac_{src,dst} currently stand in for the
     // physical routing service. The src should be the host NIC MAC
     // address, and the dst should be the physical gateway MAC address
-    // on your home/lab network.
+    // on your home/lab network. However, as the mac layer doesn't
+    // currently have the ability to steer packets based on inner
+    // frame, we use the MAC address of the guest/VNIC for the moment.
     pub phys_mac_src: EtherAddr,
     pub phys_mac_dst: EtherAddr,
     pub phys_ip_src: Ipv6Addr,
