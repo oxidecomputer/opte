@@ -60,6 +60,7 @@ pub mod oxide_net;
 #[macro_use]
 pub mod packet;
 pub mod port;
+pub mod resource;
 pub mod rule;
 pub mod sync;
 #[macro_use]

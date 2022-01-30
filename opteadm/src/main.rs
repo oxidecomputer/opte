@@ -8,7 +8,7 @@ use structopt::StructOpt;
 use opte_core::ether::EtherAddr;
 // TODO Use std Ipv4Addr
 use opte_core::ip4::Ipv4Addr;
-use opte_core::ip6;
+use opte_core::ip6 as opte_ip6;
 use opte_core::oxide_net::firewall::{
     self, Action, Address, FirewallRule, FwRemRuleReq, Ports, ProtoFilter,
 };
@@ -16,7 +16,7 @@ use opte_core::oxide_net::overlay;
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::geneve;
 use opte_core::headers::IpAddr;
-use opte_core::ioctl::{self, PortInfo, AddPortReq};
+use opte_core::ioctl::{self as api, PortInfo, AddPortReq};
 use opte_core::layer::{InnerFlowId, DumpLayerResp};
 use opte_core::port::DumpUftResp;
 use opte_core::rule::RuleDump;
@@ -88,6 +88,14 @@ enum Command {
 
         id: u64,
     },
+
+    /// Set a virtual-to-physical mapping
+    SetV2P {
+        vip4: Ipv4Addr,
+        phys_ether: EtherAddr,
+        phys_ip: Ipv6Addr,
+        vni: geneve::Vni,
+    }
 }
 
 #[derive(Debug, StructOpt)]
@@ -127,7 +135,7 @@ impl From<BoundarySvcs> for overlay::PhysNet {
     fn from(bs: BoundarySvcs) -> Self {
         Self {
             ether: bs.bs_mac_addr,
-            ip: ip6::Ipv6Addr::from(bs.bs_ip),
+            ip: opte_ip6::Ipv6Addr::from(bs.bs_ip),
             vni: geneve::Vni::new(bs.bs_vni).unwrap(),
         }
     }
@@ -144,7 +152,7 @@ impl From<SetOverlay> for overlay::SetOverlayReq {
                 vni: geneve::Vni::new(req.vni).unwrap(),
                 phys_mac_src: req.mac_src,
                 phys_mac_dst: req.mac_dst,
-                phys_ip_src: ip6::Ipv6Addr::from(req.ip.octets()),
+                phys_ip_src: opte_ip6::Ipv6Addr::from(req.ip.octets()),
             }
         }
     }
@@ -188,7 +196,7 @@ impl From<AddPort> for AddPortReq {
     fn from(r: AddPort) -> Self {
         Self {
             link_name: r.name,
-            ip_cfg: ioctl::IpCfg::from(r.port_cfg),
+            ip_cfg: api::IpCfg::from(r.port_cfg),
         }
     }
 }
@@ -204,11 +212,11 @@ struct PortCfg {
     snat: Option<SnatCfg>,
 }
 
-impl From<PortCfg> for ioctl::IpCfg {
+impl From<PortCfg> for api::IpCfg {
     fn from(s: PortCfg) -> Self {
         Self {
             private_ip: s.private_ip,
-            snat: s.snat.map(ioctl::SnatCfg::from),
+            snat: s.snat.map(api::SnatCfg::from),
         }
     }
 }
@@ -237,7 +245,7 @@ struct SnatCfg {
     vpc_sub4: VpcSubnet4,
 }
 
-impl From<SnatCfg> for ioctl::SnatCfg {
+impl From<SnatCfg> for api::SnatCfg {
     fn from(s: SnatCfg) -> Self {
         Self {
             public_mac: s.public_mac,
@@ -514,6 +522,18 @@ fn main() {
             let hdl = opteadm::OpteAdm::open().unwrap();
             let request = FwRemRuleReq { port_name: port, dir: direction, id };
             hdl.remove_firewall_rule(&request).unwrap();
+        }
+
+        Command::SetV2P { vip4, phys_ether, phys_ip, vni } => {
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            let vip = IpAddr::Ip4(vip4);
+            let phys = overlay::PhysNet {
+                ether: phys_ether,
+                ip: opte_ip6::Ipv6Addr::from(phys_ip),
+                vni,
+            };
+            let req = api::SetVirt2PhysReq { vip, phys };
+            hdl.set_v2p(&req).unwrap();
         }
     }
 }

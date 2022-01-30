@@ -12,7 +12,7 @@ use opte_core::oxide_net::firewall::{FirewallRule, FwAddRuleReq, FwRemRuleReq};
 use opte_core::oxide_net::overlay::SetOverlayReq;
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::ioctl::{
-    self as api, CmdResp, IoctlCmd, AddPortReq, DeletePortReq
+    self as api, IoctlCmd, AddPortReq, DeletePortReq, SetVirt2PhysReq,
 };
 use opte_core::layer::{InnerFlowId, DumpLayerReq, DumpLayerResp};
 use opte_core::port::{
@@ -55,6 +55,8 @@ impl From<postcard::Error> for Error {
         Error::Serdes(e.to_string())
     }
 }
+
+pub type CmdResp<T, E> = Result<T, E>;
 
 /// The handle used to send administration commands to the OPTE
 /// control node.
@@ -182,6 +184,12 @@ impl OpteAdm {
     pub fn delete_port(&self, name: &str) -> Result<(), Error> {
         let cmd = IoctlCmd::DeletePort;
         let req = DeletePortReq { name: name.to_string() };
+        let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
+        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+    }
+
+    pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<(), Error> {
+        let cmd = IoctlCmd::SetVirt2Phys;
         let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
         resp.map_err(|msg| Error::CommandFailed(cmd, msg))
     }

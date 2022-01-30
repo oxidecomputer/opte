@@ -22,6 +22,7 @@ use libc::{c_int, size_t};
 use serde::{Deserialize, Serialize};
 
 use crate::ether::EtherAddr;
+use crate::headers::IpAddr;
 use crate::ip4::Ipv4Addr;
 use crate::oxide_net::{firewall as fw, overlay};
 use crate::layer;
@@ -40,7 +41,8 @@ pub enum IoctlCmd {
     DumpTcpFlows = 30,  // dump TCP flows
     DumpLayer = 31,     // dump the specified Layer
     DumpUft = 32,       // dump the Unified Flow Table
-    SetOverlay = 40     // set the overlay config
+    SetOverlay = 40,     // set the overlay config
+    SetVirt2Phys = 50,    // set a v2p mapping
 }
 
 impl TryFrom<c_int> for IoctlCmd {
@@ -57,6 +59,7 @@ impl TryFrom<c_int> for IoctlCmd {
             31 => Ok(IoctlCmd::DumpLayer),
             32 => Ok(IoctlCmd::DumpUft),
             40 => Ok(IoctlCmd::SetOverlay),
+            50 => Ok(IoctlCmd::SetVirt2Phys),
             _ => Err(()),
         }
     }
@@ -253,4 +256,10 @@ pub struct PortInfo {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListPortsResp {
     pub ports: Vec<PortInfo>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SetVirt2PhysReq {
+    pub vip: IpAddr,
+    pub phys: overlay::PhysNet,
 }

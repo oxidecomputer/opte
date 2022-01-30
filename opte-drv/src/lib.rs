@@ -58,7 +58,7 @@ use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP};
 use opte_core::oxide_net::firewall::{FwAddRuleReq, FwRemRuleReq};
 use opte_core::ioctl::{
     self as api, IoctlCmd, ListPortsReq, ListPortsResp, PortInfo, AddPortReq,
-    DeletePortReq
+    DeletePortReq, SetVirt2PhysReq,
 };
 use opte_core::ip4::Ipv4Addr;
 use opte_core::layer;
@@ -746,6 +746,12 @@ fn set_overlay_hdlr(
     Ok(api::set_overlay(&port, &req, state.v2p.clone()))
 }
 
+fn set_v2p_hdlr(ioctlenv: &IoctlEnvelope) -> Result<(), HdlrError<()>> {
+    let req: SetVirt2PhysReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    Ok(state.v2p.set(req.vip, req.phys))
+}
+
 fn hdlr_resp<E, R>(
     ioctlenv: &mut IoctlEnvelope,
     resp: Result<R, HdlrError<E>>
@@ -857,6 +863,11 @@ unsafe extern "C" fn opte_ioctl(
 
         IoctlCmd::DumpUft => {
             let resp = dump_uft_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
+
+        IoctlCmd::SetVirt2Phys => {
+            let resp = set_v2p_hdlr(&ioctlenv);
             hdlr_resp(&mut ioctlenv, resp)
         }
     }
