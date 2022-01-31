@@ -140,6 +140,7 @@ extern "C" {
         len: uintptr_t,
         idx: uintptr_t,
     );
+    fn __dtrace_probe_hdlr_resp(resp_str: uintptr_t);
     fn __dtrace_probe_read__buf(count: uintptr_t);
     fn __dtrace_probe_rx(mp: uintptr_t);
     fn __dtrace_probe_tx(mp: uintptr_t);
@@ -801,6 +802,16 @@ fn add_router_entry_hdlr(
     Ok(())
 }
 
+fn dtrace_probe_hdlr_resp<E, R>(resp: &Result<R, HdlrError<E>>)
+where
+    E: Debug + Serialize,
+    R: Debug + Serialize,
+{
+    let cstr = CString::new(format!("{:?}", resp)).unwrap();
+
+    unsafe { __dtrace_probe_hdlr_resp(cstr.as_ptr() as uintptr_t); }
+}
+
 fn hdlr_resp<E, R>(
     ioctlenv: &mut IoctlEnvelope,
     resp: Result<R, HdlrError<E>>
@@ -809,6 +820,7 @@ where
     E: Debug + Serialize,
     R: Debug + Serialize,
 {
+    dtrace_probe_hdlr_resp(&resp);
     match resp {
         Ok(resp) => {
             match ioctlenv.copy_out_resp(&resp) {
