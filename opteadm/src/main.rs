@@ -542,7 +542,7 @@ fn main() {
                 ip: opte_ip6::Ipv6Addr::from(phys_ip),
                 vni,
             };
-            let req = api::SetVirt2PhysReq { vip, phys };
+            let req = overlay::SetVirt2PhysReq { vip, phys };
             hdl.set_v2p(&req).unwrap();
         }
 
