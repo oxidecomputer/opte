@@ -59,7 +59,7 @@ use opte_core::headers::IpCidr;
 use opte_core::oxide_net::firewall::{FwAddRuleReq, FwRemRuleReq};
 use opte_core::ioctl::{
     self as api, IoctlCmd, ListPortsReq, ListPortsResp, PortInfo, AddPortReq,
-    DeletePortReq, SetVirt2PhysReq,
+    DeletePortReq
 };
 use opte_core::ip4::Ipv4Addr;
 use opte_core::layer;
@@ -767,7 +767,7 @@ fn set_overlay_hdlr(
 }
 
 fn set_v2p_hdlr(ioctlenv: &IoctlEnvelope) -> Result<(), HdlrError<()>> {
-    let req: SetVirt2PhysReq = ioctlenv.copy_in_req()?;
+    let req: overlay::SetVirt2PhysReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     Ok(state.v2p.set(req.vip, req.phys))
 }
