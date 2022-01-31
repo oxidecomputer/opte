@@ -354,3 +354,9 @@ pub struct SetOverlayReq {
     pub port_name: String,
     pub cfg: OverlayCfg,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SetVirt2PhysReq {
+    pub vip: IpAddr,
+    pub phys: PhysNet,
+}

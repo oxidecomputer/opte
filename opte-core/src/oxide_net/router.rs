@@ -3,17 +3,21 @@
 //! This implements both the Oxide Network VPC "System Router" and
 //! "Custom Router" abstractions, as described in RFD 21 §2.3.
 use core::fmt;
+use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 #[cfg(any(feature = "std", test))]
-use std::string::ToString;
+use std::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::headers::{IpAddr, IpCidr};
+use crate::ip4::Ipv4Cidr;
 use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::firewall as fw;
 use crate::port::{self, meta::Meta, Port};
@@ -43,12 +47,40 @@ pub const ROUTER_LAYER_NAME: &'static str = "router";
 /// abstraction, it's simply allowing one subnet to talk to another.
 /// There is no separate VPC router process, the real routing is done
 /// by the underlay.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum RouterTarget {
     Drop,
     InternetGateway,
     Ip(IpAddr),
     VpcSubnet(crate::headers::IpCidr),
+}
+
+impl FromStr for RouterTarget {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "drop" => Ok(Self::Drop),
+            "ig" => Ok(Self::InternetGateway),
+            lower => {
+                match lower.split_once("=") {
+                    Some(("ip4", ip4s)) => {
+                        let ip4 = ip4s.parse()?;
+                        Ok(Self::Ip(IpAddr::Ip4(ip4)))
+                    }
+
+                    Some(("sub4", cidr4s)) => {
+                        let cidr4 = cidr4s.parse()?;
+                        Ok(Self::VpcSubnet(IpCidr::Ip4(cidr4)))
+                    }
+
+                    _ => {
+                        Err(format!("malformed router target: {}", lower))
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Display for RouterTarget {
@@ -121,7 +153,41 @@ pub fn setup(port: &Port<port::Inactive>) -> Result<(), port::AddLayerError> {
     port.add_layer(layer, port::Pos::After(fw::FW_LAYER_NAME))
 }
 
-pub fn add_entry(
+pub fn add_entry_inactive(
+    port: &Port<port::Inactive>,
+    dest: IpCidr,
+    target: RouterTarget,
+) -> Result<(), port::AddRuleError> {
+    let pri_map4 = build_ip4_len_to_pri();
+
+    match &target {
+        RouterTarget::Drop => todo!("drop entry"),
+        RouterTarget::InternetGateway => todo!("add IG entry"),
+        RouterTarget::Ip(_) => todo!("add IP entry"),
+        RouterTarget::VpcSubnet(_) => {
+            match dest {
+                IpCidr::Ip4(ip4) => {
+                    let rule = Rule::new(
+                        pri_map4[dest.prefix()],
+                        Action::Stateful(Arc::new(
+                            RouterAction::new(target.clone())
+                        )),
+                    );
+                    let rule = rule.add_predicate(
+                        Predicate::InnerDstIp4(vec![
+                            rule::Ipv4AddrMatch::Prefix(ip4)
+                        ])
+                    ).finalize();
+                    port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)
+                }
+
+                IpCidr::Ip6(_) => todo!("IPv6 router entry"),
+            }
+        }
+    }
+}
+
+pub fn add_entry_active(
     port: &Port<port::Active>,
     dest: IpCidr,
     target: RouterTarget,
@@ -199,4 +265,11 @@ impl StatefulAction for RouterAction {
             target: self.target.clone(),
         }))
     }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AddRouterEntryIpv4Req {
+    pub port_name: String,
+    pub dest: Ipv4Cidr,
+    pub target: RouterTarget,
 }

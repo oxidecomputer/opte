@@ -242,7 +242,7 @@ fn overlay_guest_to_guest() {
     let g1_port = g1_port.activate();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
-    oxide_net::router::add_entry(
+    oxide_net::router::add_entry_active(
         &g1_port,
         IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()))

@@ -7,12 +7,12 @@ use structopt::StructOpt;
 
 use opte_core::ether::EtherAddr;
 // TODO Use std Ipv4Addr
-use opte_core::ip4::Ipv4Addr;
+use opte_core::ip4::{Ipv4Addr, Ipv4Cidr};
 use opte_core::ip6 as opte_ip6;
 use opte_core::oxide_net::firewall::{
     self, Action, Address, FirewallRule, FwRemRuleReq, Ports, ProtoFilter,
 };
-use opte_core::oxide_net::overlay;
+use opte_core::oxide_net::{overlay, router};
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::geneve;
 use opte_core::headers::IpAddr;
@@ -95,7 +95,17 @@ enum Command {
         phys_ether: EtherAddr,
         phys_ip: Ipv6Addr,
         vni: geneve::Vni,
-    }
+    },
+
+    /// Add a new IPv4 router entry
+    AddRouterEntryIpv4 {
+        #[structopt(short)]
+        port: String,
+
+        dest: Ipv4Cidr,
+
+        target: router::RouterTarget,
+    },
 }
 
 #[derive(Debug, StructOpt)]
@@ -534,6 +544,16 @@ fn main() {
             };
             let req = api::SetVirt2PhysReq { vip, phys };
             hdl.set_v2p(&req).unwrap();
+        }
+
+        Command::AddRouterEntryIpv4 { port, dest, target } => {
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            let req = router::AddRouterEntryIpv4Req {
+                port_name: port,
+                dest,
+                target
+            };
+            hdl.add_router_entry_ip4(&req).unwrap();
         }
     }
 }

@@ -529,7 +529,7 @@ where
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum IpCidr {
     Ip4(crate::ip4::Ipv4Cidr),
     // XXX Real Ipv6Cidr

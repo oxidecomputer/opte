@@ -55,6 +55,7 @@ use crate::ioctl::{to_errno, IoctlEnvelope};
 
 extern crate opte_core;
 use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP};
+use opte_core::headers::IpCidr;
 use opte_core::oxide_net::firewall::{FwAddRuleReq, FwRemRuleReq};
 use opte_core::ioctl::{
     self as api, IoctlCmd, ListPortsReq, ListPortsResp, PortInfo, AddPortReq,
@@ -62,7 +63,7 @@ use opte_core::ioctl::{
 };
 use opte_core::ip4::Ipv4Addr;
 use opte_core::layer;
-use opte_core::oxide_net::overlay;
+use opte_core::oxide_net::{overlay, router};
 use opte_core::oxide_net::PortCfg;
 use opte_core::packet::{Initialized, Packet, Parsed};
 use opte_core::port::{self, Port, ProcessResult};
@@ -560,10 +561,10 @@ fn delete_port(req: &DeletePortReq) -> Result<(), api::DeletePortError> {
 
 // TODO This should probably be renamed get_client_mut()
 fn get_active_port_mut<'a, 'b>(
-    state: &'a OpteState,
+    ports_lock: &'a mut KMutexGuard<BTreeMap<LinkName, PortState>>,
     name: &'b str
 ) -> Result<*mut OpteClientState, api::PortError> {
-    match state.ports.lock().get_mut(name) {
+    match ports_lock.get_mut(name) {
         None => Err(api::PortError::NotFound),
         Some(PortState::Inactive(_, _, _)) => {
             Err(api::PortError::Inactive)
@@ -643,6 +644,12 @@ impl From<api::DumpLayerError> for HdlrError<api::DumpLayerError> {
     }
 }
 
+impl From<port::AddRuleError> for HdlrError<port::AddRuleError> {
+    fn from(e: port::AddRuleError) -> Self {
+        Self::Api(e)
+    }
+}
+
 fn add_port_hdlr(
     ioctlenv: &IoctlEnvelope
 ) -> Result<(), HdlrError<api::AddPortError>> {
@@ -693,9 +700,10 @@ fn add_fw_rule_hdlr(
     ioctlenv: &IoctlEnvelope
 ) -> Result<(), HdlrError<api::AddFwRuleError>> {
     let req: FwAddRuleReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let mut ports_lock = state.ports.lock();
     let ocs = unsafe {
-        let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-        &mut *get_active_port_mut(state, &req.port_name)?
+        &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
     };
     api::add_fw_rule(&ocs.port, &req).map_err(HdlrError::from)
 }
@@ -705,7 +713,10 @@ fn rem_fw_rule_hdlr(
 ) -> Result<(), HdlrError<api::RemFwRuleError>> {
     let req: FwRemRuleReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
-    let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
+    let mut ports_lock = state.ports.lock();
+    let ocs = unsafe {
+        &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
+    };
     api::rem_fw_rule(&ocs.port, &req).map_err(HdlrError::from)
 }
 
@@ -714,7 +725,10 @@ fn dump_tcp_flows_hdlr(
 ) -> Result<port::DumpTcpFlowsResp, HdlrError<()>> {
     let req: port::DumpTcpFlowsReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
-    let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
+    let mut ports_lock = state.ports.lock();
+    let ocs = unsafe {
+        &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
+    };
     Ok(api::dump_tcp_flows(&ocs.port, &req))
 }
 
@@ -723,7 +737,10 @@ fn dump_layer_hdlr(
 ) -> Result<layer::DumpLayerResp, HdlrError<api::DumpLayerError>> {
     let req: layer::DumpLayerReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
-    let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
+    let mut ports_lock = state.ports.lock();
+    let ocs = unsafe {
+        &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
+    };
     api::dump_layer(&ocs.port, &req).map_err(HdlrError::from)
 }
 
@@ -732,7 +749,10 @@ fn dump_uft_hdlr(
 ) -> Result<port::DumpUftResp, HdlrError<()>> {
     let req: port::DumpUftReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
-    let ocs = unsafe { &mut *get_active_port_mut(state, &req.port_name)? };
+    let mut ports_lock = state.ports.lock();
+    let ocs = unsafe {
+        &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
+    };
     Ok(api::dump_uft(&ocs.port, &req))
 }
 
@@ -750,6 +770,35 @@ fn set_v2p_hdlr(ioctlenv: &IoctlEnvelope) -> Result<(), HdlrError<()>> {
     let req: SetVirt2PhysReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     Ok(state.v2p.set(req.vip, req.phys))
+}
+
+fn add_router_entry_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<(), HdlrError<port::AddRuleError>> {
+    let req: router::AddRouterEntryIpv4Req = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let mut ports_lock = state.ports.lock();
+    match get_inactive_port(&ports_lock, &req.port_name) {
+        Ok(port) => {
+            router::add_entry_inactive(
+                port,
+                IpCidr::Ip4(req.dest), req.target
+            )?;
+        }
+
+        _ => {
+            let ocs = unsafe {
+                &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
+            };
+            router::add_entry_active(
+                &ocs.port,
+                IpCidr::Ip4(req.dest),
+                req.target
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 fn hdlr_resp<E, R>(
@@ -868,6 +917,11 @@ unsafe extern "C" fn opte_ioctl(
 
         IoctlCmd::SetVirt2Phys => {
             let resp = set_v2p_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
+
+        IoctlCmd::AddRouterEntryIpv4 => {
+            let resp = add_router_entry_hdlr(&ioctlenv);
             hdlr_resp(&mut ioctlenv, resp)
         }
     }

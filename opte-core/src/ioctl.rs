@@ -43,6 +43,7 @@ pub enum IoctlCmd {
     DumpUft = 32,       // dump the Unified Flow Table
     SetOverlay = 40,     // set the overlay config
     SetVirt2Phys = 50,    // set a v2p mapping
+    AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
 }
 
 impl TryFrom<c_int> for IoctlCmd {
@@ -60,6 +61,7 @@ impl TryFrom<c_int> for IoctlCmd {
             32 => Ok(IoctlCmd::DumpUft),
             40 => Ok(IoctlCmd::SetOverlay),
             50 => Ok(IoctlCmd::SetVirt2Phys),
+            60 => Ok(IoctlCmd::AddRouterEntryIpv4),
             _ => Err(()),
         }
     }
@@ -256,10 +258,4 @@ pub struct PortInfo {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ListPortsResp {
     pub ports: Vec<PortInfo>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct SetVirt2PhysReq {
-    pub vip: IpAddr,
-    pub phys: overlay::PhysNet,
 }

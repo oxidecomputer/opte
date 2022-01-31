@@ -9,10 +9,11 @@ use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
 use opte_core::oxide_net::firewall::{FirewallRule, FwAddRuleReq, FwRemRuleReq};
-use opte_core::oxide_net::overlay::SetOverlayReq;
+use opte_core::oxide_net::overlay::{SetOverlayReq, SetVirt2PhysReq};
+use opte_core::oxide_net::router;
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::ioctl::{
-    self as api, IoctlCmd, AddPortReq, DeletePortReq, SetVirt2PhysReq,
+    self as api, IoctlCmd, AddPortReq, DeletePortReq,
 };
 use opte_core::layer::{InnerFlowId, DumpLayerReq, DumpLayerResp};
 use opte_core::port::{
@@ -190,6 +191,15 @@ impl OpteAdm {
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<(), Error> {
         let cmd = IoctlCmd::SetVirt2Phys;
+        let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
+        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+    }
+
+    pub fn add_router_entry_ip4(
+        &self,
+        req: &router::AddRouterEntryIpv4Req
+    ) -> Result<(), Error> {
+        let cmd = IoctlCmd::AddRouterEntryIpv4;
         let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
         resp.map_err(|msg| Error::CommandFailed(cmd, msg))
     }

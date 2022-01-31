@@ -202,6 +202,26 @@ impl Port<Inactive> {
         Err(AddLayerError::BadLayerPos(pos))
     }
 
+    /// Add a new `Rule` to the layer named by `layer`, if such a
+    /// layer exists. Otherwise, return an error.
+    pub fn add_rule(
+        &self,
+        layer_name: &str,
+        dir: Direction,
+        rule: Rule<Finalized>,
+    ) -> result::Result<(), AddRuleError> {
+        let lock = self.state.layers.lock();
+
+        for layer in &*lock {
+            if layer.name() == layer_name {
+                layer.add_rule(dir, rule);
+                return Ok(());
+            }
+        }
+
+        Err(AddRuleError::LayerNotFound)
+    }
+
     pub fn new(name: String, mac: EtherAddr) -> Self {
         Port {
             state: Inactive {
@@ -226,7 +246,7 @@ impl Port<Inactive> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum AddRuleError {
     LayerNotFound,
 }
