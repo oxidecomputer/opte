@@ -140,7 +140,7 @@ extern "C" {
         len: uintptr_t,
         idx: uintptr_t,
     );
-    fn __dtrace_probe_hdlr_resp(resp_str: uintptr_t);
+    fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
     fn __dtrace_probe_read__buf(count: uintptr_t);
     fn __dtrace_probe_rx(mp: uintptr_t);
     fn __dtrace_probe_tx(mp: uintptr_t);
@@ -809,7 +809,7 @@ where
 {
     let cstr = CString::new(format!("{:?}", resp)).unwrap();
 
-    unsafe { __dtrace_probe_hdlr_resp(cstr.as_ptr() as uintptr_t); }
+    unsafe { __dtrace_probe_hdlr__resp(cstr.as_ptr() as uintptr_t); }
 }
 
 fn hdlr_resp<E, R>(

@@ -8,6 +8,7 @@ use ddi::{c_int, c_void};
 use illumos_ddi_dki as ddi;
 
 use opte_core::ioctl::Ioctl;
+use opte_core::CString;
 
 use postcard;
 
@@ -31,6 +32,15 @@ pub fn to_errno(e: Error) -> c_int
         Error::RespTooLong => ddi::ENOBUFS,
         _ => ddi::EFAULT,
     }
+}
+
+extern "C" {
+    fn __dtrace_probe_copy__out__resp(resp_str: ddi::uintptr_t);
+}
+
+fn dtrace_probe_copy_out_resp<T: Debug + Serialize>(resp: &T) {
+    let cstr = CString::new(format!("{:?}", resp)).unwrap();
+    unsafe { __dtrace_probe_copy__out__resp(cstr.as_ptr() as ddi::uintptr_t); }
 }
 
 /// An envelope for dealing with `Ioctl`. It contains all information
@@ -100,6 +110,8 @@ impl IoctlEnvelope {
     where
         T: Debug + Serialize
     {
+        dtrace_probe_copy_out_resp(val);
+
         // We expect the kernel to pass values of `T` which will
         // serialize, thus the use of `unwrap()`.
         let vec = postcard::to_allocvec(val).unwrap();
