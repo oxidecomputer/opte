@@ -17,8 +17,7 @@ use opte_core::flow_table::FlowEntryDump;
 use opte_core::geneve;
 use opte_core::headers::IpAddr;
 use opte_core::ioctl::{self as api, PortInfo, AddPortReq};
-use opte_core::layer::{InnerFlowId, DumpLayerResp};
-use opte_core::port::DumpUftResp;
+use opte_core::layer::InnerFlowId;
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
@@ -411,7 +410,7 @@ fn print_hr() {
     println!("{:-<70}", "-");
 }
 
-fn print_layer(resp: &DumpLayerResp) {
+fn print_layer(resp: &api::DumpLayerResp) {
     println!("Layer {}", resp.name);
     print_hrb();
     println!("Inbound Flows");
@@ -445,7 +444,7 @@ fn print_layer(resp: &DumpLayerResp) {
     println!("");
 }
 
-fn print_uft(resp: &DumpUftResp) {
+fn print_uft(resp: &api::DumpUftResp) {
     println!("Unified Flow Table");
     print_hrb();
     println!("Inbound Flows [{}/{}]", resp.uft_in_num_flows, resp.uft_in_limit);
@@ -506,7 +505,7 @@ fn main() {
 
         Command::DumpTcpFlows { port } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
-            for (flow_id, entry) in hdl.tcp_flows(&port).unwrap() {
+            for (flow_id, entry) in hdl.tcp_flows(&port).unwrap().flows {
                 println!("{} {:?}", flow_id, entry);
             }
         }

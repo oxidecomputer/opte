@@ -17,6 +17,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::headers::{IpAddr, IpCidr};
+use crate::ioctl::{self, CmdErr};
 use crate::ip4::Ipv4Cidr;
 use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::firewall as fw;
@@ -153,11 +154,31 @@ pub fn setup(port: &Port<port::Inactive>) -> Result<(), port::AddLayerError> {
     port.add_layer(layer, port::Pos::After(fw::FW_LAYER_NAME))
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum AddEntryError {
+    AddRuleError(port::AddRuleError),
+    PortError(ioctl::PortError),
+}
+
+impl CmdErr for AddEntryError {}
+
+impl From<port::AddRuleError> for AddEntryError {
+    fn from(e: port::AddRuleError) -> Self {
+        Self::AddRuleError(e)
+    }
+}
+
+impl From<ioctl::PortError> for AddEntryError {
+    fn from(e: ioctl::PortError) -> Self {
+        Self::PortError(e)
+    }
+}
+
 pub fn add_entry_inactive(
     port: &Port<port::Inactive>,
     dest: IpCidr,
     target: RouterTarget,
-) -> Result<(), port::AddRuleError> {
+) -> Result<(), AddEntryError> {
     let pri_map4 = build_ip4_len_to_pri();
 
     match &target {
@@ -178,7 +199,7 @@ pub fn add_entry_inactive(
                             rule::Ipv4AddrMatch::Prefix(ip4)
                         ])
                     ).finalize();
-                    port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)
+                    Ok(port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?)
                 }
 
                 IpCidr::Ip6(_) => todo!("IPv6 router entry"),
@@ -191,7 +212,7 @@ pub fn add_entry_active(
     port: &Port<port::Active>,
     dest: IpCidr,
     target: RouterTarget,
-) -> Result<(), port::AddRuleError> {
+) -> Result<(), AddEntryError> {
     let pri_map4 = build_ip4_len_to_pri();
 
     match &target {
@@ -212,7 +233,7 @@ pub fn add_entry_active(
                             rule::Ipv4AddrMatch::Prefix(ip4)
                         ])
                     ).finalize();
-                    port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)
+                    Ok(port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?)
                 }
 
                 IpCidr::Ip6(_) => todo!("IPv6 router entry"),

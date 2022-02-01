@@ -58,11 +58,9 @@ use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP};
 use opte_core::headers::IpCidr;
 use opte_core::oxide_net::firewall::{FwAddRuleReq, FwRemRuleReq};
 use opte_core::ioctl::{
-    self as api, IoctlCmd, ListPortsReq, ListPortsResp, PortInfo, AddPortReq,
-    DeletePortReq
+    self as api, AddPortReq, CmdErr, CmdOk, DeletePortReq, IoctlCmd, PortInfo
 };
 use opte_core::ip4::Ipv4Addr;
-use opte_core::layer;
 use opte_core::oxide_net::{overlay, router};
 use opte_core::oxide_net::PortCfg;
 use opte_core::packet::{Initialized, Packet, Parsed};
@@ -592,19 +590,11 @@ fn get_inactive_port<'a, 'b>(
 }
 
 #[derive(Debug, Serialize)]
-enum HdlrError<E: Serialize> {
-    Api(E),
-    Port(api::PortError),
+enum HdlrError {
     System(i32),
 }
 
-impl<E: Serialize> From<api::PortError> for HdlrError<E> {
-    fn from(e: api::PortError) -> Self {
-        Self::Port(e)
-    }
-}
-
-impl<E: Serialize> From<self::ioctl::Error> for HdlrError<E> {
+impl From<self::ioctl::Error> for HdlrError {
     fn from(e: self::ioctl::Error) -> Self {
         match e {
             self::ioctl::Error::DeserError(_) => Self::System(EINVAL),
@@ -615,61 +605,25 @@ impl<E: Serialize> From<self::ioctl::Error> for HdlrError<E> {
     }
 }
 
-impl From<api::AddPortError> for HdlrError<api::AddPortError> {
-    fn from(e: api::AddPortError) -> Self {
-        Self::Api(e)
-    }
-}
-
-impl From<api::DeletePortError> for HdlrError<api::DeletePortError> {
-    fn from(e: api::DeletePortError) -> Self {
-        Self::Api(e)
-    }
-}
-
-impl From<api::AddFwRuleError> for HdlrError<api::AddFwRuleError> {
-    fn from(e: api::AddFwRuleError) -> Self {
-        Self::Api(e)
-    }
-}
-
-impl From<api::RemFwRuleError> for HdlrError<api::RemFwRuleError> {
-    fn from(e: api::RemFwRuleError) -> Self {
-        Self::Api(e)
-    }
-}
-
-impl From<api::DumpLayerError> for HdlrError<api::DumpLayerError> {
-    fn from(e: api::DumpLayerError) -> Self {
-        Self::Api(e)
-    }
-}
-
-impl From<port::AddRuleError> for HdlrError<port::AddRuleError> {
-    fn from(e: port::AddRuleError) -> Self {
-        Self::Api(e)
-    }
-}
-
 fn add_port_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<(), HdlrError<api::AddPortError>> {
+) -> Result<Result<(), api::AddPortError>, HdlrError> {
     let req: AddPortReq = ioctlenv.copy_in_req()?;
-    add_port(&req).map_err(HdlrError::from)
+    Ok(add_port(&req))
 }
 
 fn delete_port_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<(), HdlrError<api::DeletePortError>> {
+) -> Result<Result<(), api::DeletePortError>, HdlrError> {
     let req: DeletePortReq = ioctlenv.copy_in_req()?;
-    delete_port(&req).map_err(HdlrError::from)
+    Ok(delete_port(&req))
 }
 
 fn list_ports_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<ListPortsResp, HdlrError<()>> {
-    let _req: ListPortsReq = ioctlenv.copy_in_req()?;
-    let mut resp = ListPortsResp { ports: vec![] };
+) -> Result<Result<api::ListPortsResp, ()>, HdlrError> {
+    let _req: api::ListPortsReq = ioctlenv.copy_in_req()?;
+    let mut resp = api::ListPortsResp { ports: vec![] };
     let state = get_opte_state();
     for (_k, ps) in state.ports.lock().iter() {
         match ps {
@@ -694,133 +648,162 @@ fn list_ports_hdlr(
         }
     }
 
-    Ok(resp)
+    Ok(Ok(resp))
 }
 
 fn add_fw_rule_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<(), HdlrError<api::AddFwRuleError>> {
+) -> Result<Result<(), api::AddFwRuleError>, HdlrError> {
     let req: FwAddRuleReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
     let ocs = unsafe {
-        &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
+        match get_active_port_mut(&mut ports_lock, &req.port_name) {
+            Ok(portp) => &mut *portp,
+            Err(e) => return Ok(Err(api::AddFwRuleError::from(e))),
+        }
     };
-    api::add_fw_rule(&ocs.port, &req).map_err(HdlrError::from)
+    Ok(api::add_fw_rule(&ocs.port, &req))
 }
 
 fn rem_fw_rule_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<(), HdlrError<api::RemFwRuleError>> {
+) -> Result<Result<(), api::RemFwRuleError>, HdlrError> {
     let req: FwRemRuleReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
     let ocs = unsafe {
-        &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
+        match get_active_port_mut(&mut ports_lock, &req.port_name) {
+            Ok(portp) => &mut *portp,
+            Err(e) => return Ok(Err(api::RemFwRuleError::from(e))),
+        }
     };
-    api::rem_fw_rule(&ocs.port, &req).map_err(HdlrError::from)
+    Ok(api::rem_fw_rule(&ocs.port, &req))
 }
 
 fn dump_tcp_flows_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<port::DumpTcpFlowsResp, HdlrError<()>> {
-    let req: port::DumpTcpFlowsReq = ioctlenv.copy_in_req()?;
+) -> Result<Result<api::DumpTcpFlowsResp, api::DumpTcpFlowsError>, HdlrError> {
+    let req: api::DumpTcpFlowsReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
     let ocs = unsafe {
-        &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
+        match get_active_port_mut(&mut ports_lock, &req.port_name) {
+            Ok(portp) => &mut *portp,
+            Err(e) => return Ok(Err(api::DumpTcpFlowsError::from(e))),
+        }
     };
-    Ok(api::dump_tcp_flows(&ocs.port, &req))
+    Ok(Ok(api::dump_tcp_flows(&ocs.port, &req)))
 }
 
 fn dump_layer_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<layer::DumpLayerResp, HdlrError<api::DumpLayerError>> {
-    let req: layer::DumpLayerReq = ioctlenv.copy_in_req()?;
+) -> Result<Result<api::DumpLayerResp, api::DumpLayerError>, HdlrError> {
+    let req: api::DumpLayerReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
     let ocs = unsafe {
-        &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
+        match get_active_port_mut(&mut ports_lock, &req.port_name) {
+            Ok(portp) => &mut *portp,
+            Err(e) => return Ok(Err(api::DumpLayerError::from(e))),
+        }
     };
-    api::dump_layer(&ocs.port, &req).map_err(HdlrError::from)
+    Ok(api::dump_layer(&ocs.port, &req))
 }
 
 fn dump_uft_hdlr(
     ioctlenv: &IoctlEnvelope,
-) -> Result<port::DumpUftResp, HdlrError<()>> {
-    let req: port::DumpUftReq = ioctlenv.copy_in_req()?;
+) -> Result<Result<api::DumpUftResp, api::DumpUftError>, HdlrError> {
+    let req: api::DumpUftReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
     let ocs = unsafe {
-        &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
+        match get_active_port_mut(&mut ports_lock, &req.port_name) {
+            Ok(portp) => &mut *portp,
+            Err(e) => return Ok(Err(api::DumpUftError::from(e))),
+        }
     };
-    Ok(api::dump_uft(&ocs.port, &req))
+    Ok(Ok(api::dump_uft(&ocs.port, &req)))
 }
 
 fn set_overlay_hdlr(
     ioctlenv: &IoctlEnvelope,
-) -> Result<(), HdlrError<()>> {
+) -> Result<Result<(), overlay::SetOverlayError>, HdlrError> {
     let req: overlay::SetOverlayReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let ports_lock = state.ports.lock();
-    let port = get_inactive_port(&ports_lock, &req.port_name)?;
-    Ok(api::set_overlay(&port, &req, state.v2p.clone()))
+    let port = match get_inactive_port(&ports_lock, &req.port_name) {
+        Ok(p) => p,
+        Err(e) => return Ok(Err(overlay::SetOverlayError::from(e))),
+    };
+    api::set_overlay(&port, &req, state.v2p.clone());
+    Ok(Ok(()))
 }
 
-fn set_v2p_hdlr(ioctlenv: &IoctlEnvelope) -> Result<(), HdlrError<()>> {
+fn set_v2p_hdlr(ioctlenv: &IoctlEnvelope) -> Result<Result<(), ()>, HdlrError> {
     let req: overlay::SetVirt2PhysReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
-    Ok(state.v2p.set(req.vip, req.phys))
+    state.v2p.set(req.vip, req.phys);
+    Ok(Ok(()))
 }
 
 fn add_router_entry_hdlr(
     ioctlenv: &IoctlEnvelope
-) -> Result<(), HdlrError<port::AddRuleError>> {
+) -> Result<Result<(), router::AddEntryError>, HdlrError> {
     let req: router::AddRouterEntryIpv4Req = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
     match get_inactive_port(&ports_lock, &req.port_name) {
         Ok(port) => {
-            router::add_entry_inactive(
+            Ok(router::add_entry_inactive(
                 port,
                 IpCidr::Ip4(req.dest), req.target
-            )?;
+            ))
         }
 
         _ => {
             let ocs = unsafe {
-                &mut *get_active_port_mut(&mut ports_lock, &req.port_name)?
+                match get_active_port_mut(&mut ports_lock, &req.port_name) {
+                    Ok(portp) => &mut *portp,
+                    Err(e) => return Ok(Err(router::AddEntryError::from(e))),
+                }
             };
-            router::add_entry_active(
+            Ok(router::add_entry_active(
                 &ocs.port,
                 IpCidr::Ip4(req.dest),
                 req.target
-            )?;
+            ))
         }
     }
-
-    Ok(())
 }
 
-fn dtrace_probe_hdlr_resp<E, R>(resp: &Result<R, HdlrError<E>>)
+fn dtrace_probe_hdlr_resp<T, E>(resp: &Result<Result<T, E>, HdlrError>)
 where
-    E: Debug + Serialize,
-    R: Debug + Serialize,
+    T: CmdOk,
+    E: CmdErr,
 {
     let cstr = CString::new(format!("{:?}", resp)).unwrap();
-
     unsafe { __dtrace_probe_hdlr__resp(cstr.as_ptr() as uintptr_t); }
 }
 
-fn hdlr_resp<E, R>(
+// Convert the handler's response to the appropriate ioctl(2) return
+// value and copyout any command response. In the case of a failure
+// with the command we return success for the ioctl(2) call but the
+// command response buffer will contain a Result so that the client
+// can differentiate between success or failure. Non-zero ioctl(2)
+// return values are used to indicate the more typical error
+// conditions you would expect in the ioctl mechanisms itself, like
+// copyin, copyout, etc.
+fn hdlr_resp<T, E>(
     ioctlenv: &mut IoctlEnvelope,
-    resp: Result<R, HdlrError<E>>
+    resp: Result<Result<T, E>, HdlrError>
 ) -> c_int
 where
-    E: Debug + Serialize,
-    R: Debug + Serialize,
+    T: CmdOk,
+    E: CmdErr,
 {
     dtrace_probe_hdlr_resp(&resp);
+
     match resp {
         Ok(resp) => {
             match ioctlenv.copy_out_resp(&resp) {
@@ -829,26 +812,10 @@ where
             }
         }
 
-        Err(HdlrError::Api(eresp)) => {
-            match ioctlenv.copy_out_resp(&eresp) {
-                // We use EPROTO as a sentinel value to tell an ioctl
-                // consumer that there was an error and there is
-                // additional information about the error in the
-                // user-supplied buffer.
-                Ok(()) => EPROTO,
-                Err(e) => to_errno(e),
-            }
-        }
-
-        // TODO Actually implement the rest of this
-        Err(_) => EFAULT,
+        Err(HdlrError::System(ret)) => ret,
     }
 }
 
-// TODO opte_ioctl must return c_int, but want something that
-// automatically writes a user response when things fail, by having
-// do_ioctl return an IoctlResponse we should be able to generically
-// handle ok vs. error in opte_ioctl.
 #[no_mangle]
 unsafe extern "C" fn opte_ioctl(
     _dev: dev_t,

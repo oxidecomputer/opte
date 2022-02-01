@@ -7,7 +7,7 @@ use core::result;
 use ddi::{c_int, c_void};
 use illumos_ddi_dki as ddi;
 
-use opte_core::ioctl::Ioctl;
+use opte_core::ioctl::{CmdErr, CmdOk, Ioctl};
 use opte_core::CString;
 
 use postcard;
@@ -106,9 +106,13 @@ impl IoctlEnvelope {
     /// `resp_bytes`. Return an error if the `resp_len` indicates that
     /// the user buffer is not large enough to hold the serialized
     /// bytes.
-    pub fn copy_out_resp<T>(&mut self, val: &T) -> Result<()>
+    pub fn copy_out_resp<T, E>(
+        &mut self,
+        val: &result::Result<T, E>
+    ) -> Result<()>
     where
-        T: Debug + Serialize
+        E: CmdErr,
+        T: CmdOk,
     {
         dtrace_probe_copy_out_resp(val);
 

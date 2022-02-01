@@ -9,15 +9,10 @@ use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
 use opte_core::oxide_net::firewall::{FirewallRule, FwAddRuleReq, FwRemRuleReq};
-use opte_core::oxide_net::overlay::{SetOverlayReq, SetVirt2PhysReq};
+use opte_core::oxide_net::overlay::{self, SetOverlayReq, SetVirt2PhysReq};
 use opte_core::oxide_net::router;
-use opte_core::flow_table::FlowEntryDump;
 use opte_core::ioctl::{
-    self as api, IoctlCmd, AddPortReq, DeletePortReq,
-};
-use opte_core::layer::{InnerFlowId, DumpLayerReq, DumpLayerResp};
-use opte_core::port::{
-    DumpTcpFlowsReq, DumpTcpFlowsResp, DumpUftReq, DumpUftResp,
+    self as api, AddPortReq, CmdErr, CmdOk, DeletePortReq, IoctlCmd
 };
 
 /// Errors related to administering the OPTE driver.
@@ -57,8 +52,6 @@ impl From<postcard::Error> for Error {
     }
 }
 
-pub type CmdResp<T, E> = Result<T, E>;
-
 /// The handle used to send administration commands to the OPTE
 /// control node.
 #[derive(Debug)]
@@ -93,7 +86,11 @@ impl OpteAdm {
             port_name: port_name.to_string(),
             rule: rule.clone()
         };
-        let resp: CmdResp<(), api::AddFwRuleError> = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
+        let resp = run_ioctl::<(), api::AddFwRuleError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &req
+        )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
@@ -102,25 +99,29 @@ impl OpteAdm {
         &self,
         port_name: &str,
         name: &str,
-    ) -> Result<DumpLayerResp, Error> {
+    ) -> Result<api::DumpLayerResp, Error> {
         let cmd = IoctlCmd::DumpLayer;
-        let req = DumpLayerReq {
+        let req = api::DumpLayerReq {
             port_name: port_name.to_string(),
             name: name.to_string()
         };
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<api::DumpLayerResp, api::DumpLayerError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// List all the ports.
     pub fn list_ports(&self) -> Result<api::ListPortsResp, Error> {
         let cmd = IoctlCmd::ListPorts;
-        let resp = run_ioctl(
+        let resp = run_ioctl::<api::ListPortsResp, (), _>(
             self.device.as_raw_fd(),
             cmd,
             &api::ListPortsReq { unused: () }
         )?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// Create a new handle to the OPTE control node.
@@ -136,14 +137,22 @@ impl OpteAdm {
     /// Add a new port.
     pub fn add_port(&self, req: &AddPortReq) -> Result<(), Error> {
         let cmd = IoctlCmd::AddPort;
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<(), api::AddPortError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     pub fn set_overlay(&self, req: &SetOverlayReq) -> Result<(), Error> {
         let cmd = IoctlCmd::SetOverlay;
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<(), overlay::SetOverlayError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// Remove a firewall rule.
@@ -152,47 +161,56 @@ impl OpteAdm {
         req: &FwRemRuleReq,
     ) -> Result<(), Error> {
         let cmd = IoctlCmd::FwRemRule;
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<(), api::RemFwRuleError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// Return the TCP flows.
     pub fn tcp_flows(
         &self,
         port_name: &str,
-    ) -> Result<Vec<(InnerFlowId, FlowEntryDump)>, Error> {
+    ) -> Result<api::DumpTcpFlowsResp, Error> {
         let cmd = IoctlCmd::DumpTcpFlows;
-        let resp: CmdResp<DumpTcpFlowsResp, ()> = run_ioctl(
-            self.device.as_raw_fd(),
-            cmd,
-            &DumpTcpFlowsReq { port_name: port_name.to_string() },
-        )?;
-        Ok(resp.unwrap().flows) //map(|r| r.flows)
+        let resp =
+            run_ioctl::<api::DumpTcpFlowsResp, api::DumpTcpFlowsError, _>(
+                self.device.as_raw_fd(),
+                cmd,
+                &api::DumpTcpFlowsReq { port_name: port_name.to_string() },
+            )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// Return the unified flow table (UFT).
-    pub fn uft(&self, port_name: &str) -> Result<DumpUftResp, Error> {
+    pub fn uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
         let cmd = IoctlCmd::DumpUft;
-        let resp = run_ioctl(
+        let resp = run_ioctl::<api::DumpUftResp, api::DumpUftError, _>(
             self.device.as_raw_fd(),
             cmd,
-            &DumpUftReq { port_name: port_name.to_string() }
+            &api::DumpUftReq { port_name: port_name.to_string() }
         )?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// Delete a port.
     pub fn delete_port(&self, name: &str) -> Result<(), Error> {
         let cmd = IoctlCmd::DeletePort;
         let req = DeletePortReq { name: name.to_string() };
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<(), api::DeletePortError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<(), Error> {
         let cmd = IoctlCmd::SetVirt2Phys;
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<(), (), _>(self.device.as_raw_fd(), cmd, &req)?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     pub fn add_router_entry_ip4(
@@ -200,21 +218,25 @@ impl OpteAdm {
         req: &router::AddRouterEntryIpv4Req
     ) -> Result<(), Error> {
         let cmd = IoctlCmd::AddRouterEntryIpv4;
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<(), router::AddEntryError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 }
 
 #[cfg(not(target_os = "illumos"))]
-fn run_ioctl<E, R, P>(
+fn run_ioctl<T, E, R>(
     _dev: libc::c_int,
     _cmd: IoctlCmd,
     _req: &R
-) -> Result<CmdResp<P, E>, Error>
+) -> Result<Result<T, E>, Error>
 where
-    E: DeserializeOwned,
+    T: CmdOk + DeserializeOwned,
+    E: CmdErr + DeserializeOwned,
     R: Serialize,
-    P: DeserializeOwned,
 {
     panic!("non-illumos system, your ioctl(2) is no good here");
 }
@@ -233,15 +255,15 @@ where
 // the ioctl machinery. The inner Result indicates whether the command
 // response is a success result or error.
 #[cfg(target_os = "illumos")]
-fn run_ioctl<E, R, T>(
+fn run_ioctl<T, E, R>(
     dev: libc::c_int,
     cmd: IoctlCmd,
     req: &R
-) -> Result<CmdResp<T, E>, Error>
+) -> Result<Result<T, E>, Error>
 where
-    E: DeserializeOwned,
+    T: CmdOk + DeserializeOwned,
+    E: CmdErr + DeserializeOwned,
     R: Serialize,
-    T: DeserializeOwned,
 {
     let req_bytes = postcard::to_allocvec(req).unwrap();
     // It would be a shame if the command failed and we didn't have

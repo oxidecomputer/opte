@@ -22,7 +22,7 @@ use libc::{c_int, size_t};
 use serde::{Deserialize, Serialize};
 
 use crate::ether::EtherAddr;
-use crate::headers::IpAddr;
+use crate::flow_table::FlowEntryDump;
 use crate::ip4::Ipv4Addr;
 use crate::oxide_net::{firewall as fw, overlay};
 use crate::layer;
@@ -67,9 +67,21 @@ impl TryFrom<c_int> for IoctlCmd {
     }
 }
 
-pub trait ApiError {}
+/// A marker trait indicating a success response type that is returned
+/// from a command and may be passed across the ioctl/API boundary.
+pub trait CmdOk: core::fmt::Debug + Serialize {}
 
-#[derive(Debug, Deserialize, Serialize)]
+// Use the unit type to indicate no meaningful response value on success.
+impl CmdOk for () {}
+
+/// A marker trait indicating an error response type that is returned
+/// from a command and may be passed across the ioctl/API boundary.
+pub trait CmdErr: Clone + core::fmt::Debug + Serialize {}
+
+// Use the unit type to indicate that the command is infalliable.
+impl CmdErr for () {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum PortError {
     Active,
     Exists,
@@ -78,34 +90,63 @@ pub enum PortError {
     NotFound,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum AddPortError {
     Exists,
     MacOpenFailed(c_int),
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl CmdErr for AddPortError {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum DeletePortError {
     InUse,
     NotFound,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl CmdErr for DeletePortError {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum AddFwRuleError {
     FirewallNotEnabled,
+    PortError(PortError),
 }
 
-impl ApiError for AddFwRuleError {}
+impl CmdErr for AddFwRuleError {}
 
-#[derive(Debug, Deserialize, Serialize)]
+impl From<PortError> for AddFwRuleError {
+    fn from(e: PortError) -> Self {
+        Self::PortError(e)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum RemFwRuleError {
     FirewallNotEnabled,
+    PortError(PortError),
     RuleNotFound,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl CmdErr for RemFwRuleError {}
+
+impl From<PortError> for RemFwRuleError {
+    fn from(e: PortError) -> Self {
+        Self::PortError(e)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum DumpLayerError {
-    LayerNotFound
+    LayerNotFound,
+    PortError(PortError),
+}
+
+impl CmdErr for DumpLayerError {}
+
+impl From<PortError> for DumpLayerError {
+    fn from(e: PortError) -> Self {
+        Self::PortError(e)
+    }
 }
 
 impl From<port::DumpLayerError> for DumpLayerError {
@@ -115,6 +156,87 @@ impl From<port::DumpLayerError> for DumpLayerError {
         match e {
             Dle::LayerNotFound => Self::LayerNotFound,
         }
+    }
+}
+
+/// Dump various information about a `Layer` for use in debugging or
+/// administrative purposes.
+///
+/// * The Layer name.
+/// * The inbound and outbound rule tables.
+/// * The inbound and outbound flow tables.
+///
+/// *port_name*: The name of the port.
+/// *name*: The name of the [`Layer`] to dump.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpLayerReq {
+    pub port_name: String,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpLayerResp {
+    pub name: String,
+    pub rules_in: Vec<(layer::RuleId, rule::RuleDump)>,
+    pub rules_out: Vec<(layer::RuleId, rule::RuleDump)>,
+    pub ft_in: Vec<(layer::InnerFlowId, FlowEntryDump)>,
+    pub ft_out: Vec<(layer::InnerFlowId, FlowEntryDump)>,
+}
+
+impl CmdOk for DumpLayerResp {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpUftReq {
+    pub port_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpUftResp {
+    pub uft_in_limit: u32,
+    pub uft_in_num_flows: u32,
+    pub uft_in: Vec<(layer::InnerFlowId, FlowEntryDump)>,
+    pub uft_out_limit: u32,
+    pub uft_out_num_flows: u32,
+    pub uft_out: Vec<(layer::InnerFlowId, FlowEntryDump)>,
+}
+
+impl CmdOk for DumpUftResp {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum DumpUftError {
+    PortError(PortError),
+}
+
+impl CmdErr for DumpUftError {}
+
+impl From<PortError> for DumpUftError {
+    fn from(e: PortError) -> Self {
+        Self::PortError(e)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpTcpFlowsReq {
+    pub port_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpTcpFlowsResp {
+    pub flows: Vec<(layer::InnerFlowId, FlowEntryDump)>,
+}
+
+impl CmdOk for DumpTcpFlowsResp {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum DumpTcpFlowsError {
+    PortError(PortError),
+}
+
+impl CmdErr for DumpTcpFlowsError {}
+
+impl From<PortError> for DumpTcpFlowsError {
+    fn from(e: PortError) -> Self {
+        Self::PortError(e)
     }
 }
 
@@ -164,22 +286,22 @@ pub fn rem_fw_rule(
 
 pub fn dump_layer(
     port: &port::Port<port::Active>,
-    req: &layer::DumpLayerReq,
-) -> Result<layer::DumpLayerResp, DumpLayerError> {
+    req: &DumpLayerReq,
+) -> Result<DumpLayerResp, DumpLayerError> {
     port.dump_layer(&req.name).map_err(DumpLayerError::from)
 }
 
 pub fn dump_tcp_flows(
     port: &port::Port<port::Active>,
-    _req: &port::DumpTcpFlowsReq,
-) -> port::DumpTcpFlowsResp {
+    _req: &DumpTcpFlowsReq,
+) -> DumpTcpFlowsResp {
     port.dump_tcp_flows()
 }
 
 pub fn dump_uft(
     port: &port::Port<port::Active>,
-    _req: &port::DumpUftReq,
-) -> port::DumpUftResp {
+    _req: &DumpUftReq,
+) -> DumpUftResp {
     port.dump_uft()
 }
 
@@ -188,15 +310,6 @@ pub fn set_overlay(
     req: &overlay::SetOverlayReq,
     v2p: Arc<overlay::Virt2Phys>,
 ) {
-    // let cfg = OverlayCfg {
-    //     // TODO Using nonsense for BS for the moment.
-    //     boundary_services: PhysNet {
-    //         ether: EtherAddr::from([0; 6]),
-    //         ip: Ipv6Addr::from([0; 16]),
-    //         vni: Vni::new(11),
-    //     },
-    //     vni: 
-    // }
     overlay::setup(port, &req.cfg, v2p);
 }
 
@@ -259,3 +372,5 @@ pub struct PortInfo {
 pub struct ListPortsResp {
     pub ports: Vec<PortInfo>,
 }
+
+impl CmdOk for ListPortsResp {}

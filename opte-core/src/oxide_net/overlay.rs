@@ -19,8 +19,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV6};
-use crate::headers::{HeaderAction, IpAddr};
 use crate::geneve::{GeneveMeta, Vni, GENEVE_PORT};
+use crate::headers::{HeaderAction, IpAddr};
+use crate::ioctl::{self, CmdErr};
 use crate::ip4::{Ipv4Addr, Protocol};
 use crate::ip6::{Ipv6Addr, Ipv6Meta};
 use crate::layer::{InnerFlowId, Layer};
@@ -353,6 +354,19 @@ pub struct OverlayCfg {
 pub struct SetOverlayReq {
     pub port_name: String,
     pub cfg: OverlayCfg,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum SetOverlayError {
+    PortError(ioctl::PortError),
+}
+
+impl CmdErr for SetOverlayError {}
+
+impl From<ioctl::PortError> for SetOverlayError {
+    fn from(e: ioctl::PortError) -> Self {
+        Self::PortError(e)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]

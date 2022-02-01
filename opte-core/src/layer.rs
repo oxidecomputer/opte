@@ -18,8 +18,9 @@ use std::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
-use crate::flow_table::{FlowEntryDump, FlowTable};
+use crate::flow_table::FlowTable;
 use crate::headers::{IpAddr, IpMeta, UlpMeta};
+use crate::ioctl;
 use crate::ip4::{Ipv4Addr, Protocol};
 use crate::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
 use crate::port::meta::Meta;
@@ -79,12 +80,12 @@ impl Layer {
         }
     }
 
-    pub fn dump(&self) -> DumpLayerResp {
+    pub fn dump(&self) -> ioctl::DumpLayerResp {
         let rules_in = self.rules_in.lock().dump();
         let rules_out = self.rules_out.lock().dump();
         let ft_in = self.ft_in.lock().dump();
         let ft_out = self.ft_out.lock().dump();
-        DumpLayerResp {
+        ioctl::DumpLayerResp {
             name: self.name.clone(),
             ft_in,
             ft_out,
@@ -1191,30 +1192,3 @@ fn find_rule() {
 //     assert_eq!(udp_meta.dst, 7777);
 // }
 
-// ================================================================
-// ioctl interface
-// ================================================================
-
-/// Dump various information about a `Layer` for use in debugging or
-/// administrative purposes.
-///
-/// * The Layer name.
-/// * The inbound and outbound rule tables.
-/// * The inbound and outbound flow tables.
-///
-/// *port_name*: The name of the port.
-/// *name*: The name of the [`Layer`] to dump.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpLayerReq {
-    pub port_name: String,
-    pub name: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpLayerResp {
-    pub name: String,
-    pub rules_in: Vec<(RuleId, RuleDump)>,
-    pub rules_out: Vec<(RuleId, RuleDump)>,
-    pub ft_in: Vec<(InnerFlowId, FlowEntryDump)>,
-    pub ft_out: Vec<(InnerFlowId, FlowEntryDump)>,
-}
