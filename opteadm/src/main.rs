@@ -418,13 +418,13 @@ fn print_hr() {
 
 fn print_list_layers(resp: &api::ListLayersResp) {
     println!(
-        "{:<12} {:<8} {:<8} {:<8} {:<8}",
+        "{:<12} {:<10} {:<10} {:<10} {:<10}",
         "NAME", "RULES IN", "RULES OUT", "FLOWS IN", "FLOWS OUT"
     );
 
     for desc in &resp.layers {
         println!(
-            "{:<12} {:<8} {:<8} {:<8} {:<8}",
+            "{:<12} {:<10} {:<10} {:<10} {:<10}",
             desc.name,
             desc.rules_in,
             desc.rules_out,

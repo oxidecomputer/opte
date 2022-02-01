@@ -1283,6 +1283,8 @@ pub unsafe extern "C" fn opte_client_close(
     opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg)
         .unwrap();
     opte_core::oxide_net::arp::setup(&mut new_port, &port_cfg).unwrap();
+    // We know the firewall layer is there so it can't fail.
+    router::setup(&mut new_port).unwrap();
 
     state.ports.lock().insert(
         link_name.to_string(),
