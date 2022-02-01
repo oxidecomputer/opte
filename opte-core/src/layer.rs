@@ -106,6 +106,7 @@ impl Layer {
         self.ft_out.lock().expire_flows(now);
     }
 
+    /// Return the name of the layer.
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -133,6 +134,13 @@ impl Layer {
                 RuleTable::new(name.to_string(), Direction::Out),
                 KMutexType::Driver,
             ),
+        }
+    }
+
+    pub fn num_flows(&self, dir: Direction) -> u32 {
+        match dir {
+            Direction::Out => self.ft_out.lock().num_flows(),
+            Direction::In => self.ft_in.lock().num_flows(),
         }
     }
 
@@ -488,19 +496,6 @@ impl Layer {
         match dir {
             Direction::In => self.rules_in.lock().remove(id),
             Direction::Out => self.rules_out.lock().remove(id),
-        }
-    }
-}
-
-// The follow functions are useful for validating state during
-// testing. If one of these functions becomes useful outside of
-// testing, then add it to the impl block above.
-#[cfg(test)]
-impl Layer {
-    pub fn num_flows(&self, dir: Direction) -> u32 {
-        match dir {
-            Direction::Out => self.ft_out.lock().num_flows(),
-            Direction::In => self.ft_in.lock().num_flows(),
         }
     }
 }

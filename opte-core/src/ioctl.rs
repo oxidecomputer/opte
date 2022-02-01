@@ -41,6 +41,7 @@ pub enum IoctlCmd {
     DumpTcpFlows = 30,  // dump TCP flows
     DumpLayer = 31,     // dump the specified Layer
     DumpUft = 32,       // dump the Unified Flow Table
+    ListLayers = 33,    // list the layers on a given port
     SetOverlay = 40,     // set the overlay config
     SetVirt2Phys = 50,    // set a v2p mapping
     AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
@@ -59,6 +60,7 @@ impl TryFrom<c_int> for IoctlCmd {
             30 => Ok(IoctlCmd::DumpTcpFlows),
             31 => Ok(IoctlCmd::DumpLayer),
             32 => Ok(IoctlCmd::DumpUft),
+            33 => Ok(IoctlCmd::ListLayers),
             40 => Ok(IoctlCmd::SetOverlay),
             50 => Ok(IoctlCmd::SetVirt2Phys),
             60 => Ok(IoctlCmd::AddRouterEntryIpv4),
@@ -184,6 +186,38 @@ pub struct DumpLayerResp {
 }
 
 impl CmdOk for DumpLayerResp {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ListLayersReq {
+    pub port_name: String,
+}
+
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct LayerDesc {
+    // Name of the layer.
+    pub name: String,
+    // Number of rules in/out.
+    pub rules_in: usize,
+    pub rules_out: usize,
+    // Number of flows in/out.
+    pub flows_in: u32,
+    pub flows_out: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ListLayersResp {
+    pub layers: Vec<LayerDesc>,
+}
+
+impl CmdOk for ListLayersResp {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum ListLayersError {
+    PortError(PortError),
+}
+
+impl CmdErr for ListLayersError {}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpUftReq {

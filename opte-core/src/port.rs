@@ -223,6 +223,24 @@ impl Port<Inactive> {
         Err(AddRuleError::LayerNotFound)
     }
 
+    /// List each [`Layer`] under this port.
+    pub fn list_layers(&self) -> ioctl::ListLayersResp {
+        let mut tmp = vec![];
+        let lock = self.state.layers.lock();
+
+        for layer in lock.iter() {
+            tmp.push(ioctl::LayerDesc {
+                name: layer.name().to_string(),
+                rules_in: layer.num_rules(Direction::In),
+                rules_out: layer.num_rules(Direction::Out),
+                flows_in: layer.num_flows(Direction::In),
+                flows_out: layer.num_flows(Direction::Out),
+            });
+        }
+
+        ioctl::ListLayersResp { layers: tmp }
+    }
+
     pub fn new(name: String, mac: EtherAddr) -> Self {
         Port {
             state: Inactive {
@@ -432,6 +450,23 @@ impl Port<Active> {
         }
 
         return Ok(LayerResult::Allow);
+    }
+
+    /// List each [`Layer`] under this port.
+    pub fn list_layers(&self) -> ioctl::ListLayersResp {
+        let mut tmp = vec![];
+
+        for layer in &*self.state.layers {
+            tmp.push(ioctl::LayerDesc {
+                name: layer.name().to_string(),
+                rules_in: layer.num_rules(Direction::In),
+                rules_out: layer.num_rules(Direction::Out),
+                flows_in: layer.num_flows(Direction::In),
+                flows_out: layer.num_flows(Direction::Out),
+            });
+        }
+
+        ioctl::ListLayersResp { layers: tmp }
     }
 
     /// Process the packet.

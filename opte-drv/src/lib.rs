@@ -711,6 +711,27 @@ fn dump_layer_hdlr(
     Ok(api::dump_layer(&ocs.port, &req))
 }
 
+fn list_layers_hdlr(
+    ioctlenv: &IoctlEnvelope
+)-> Result<Result<api::ListLayersResp, api::ListLayersError>, HdlrError> {
+    let req: api::ListLayersReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let mut ports_lock = state.ports.lock();
+    match get_inactive_port(&mut ports_lock, &req.port_name) {
+        Ok(port) => return Ok(Ok(port.list_layers())),
+        Err(_) => (),
+    };
+    match get_active_port_mut(&mut ports_lock, &req.port_name) {
+        Ok(ocsp) => {
+            unsafe { Ok(Ok((*ocsp).port.list_layers())) }
+        }
+
+        Err(_) => {
+            Ok(Err(api::ListLayersError::PortError(api::PortError::NotFound)))
+        }
+    }
+}
+
 fn dump_uft_hdlr(
     ioctlenv: &IoctlEnvelope,
 ) -> Result<Result<api::DumpUftResp, api::DumpUftError>, HdlrError> {
@@ -886,6 +907,11 @@ unsafe extern "C" fn opte_ioctl(
 
         IoctlCmd::DumpLayer => {
             let resp = dump_layer_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
+
+        IoctlCmd::ListLayers => {
+            let resp = list_layers_hdlr(&ioctlenv);
             hdlr_resp(&mut ioctlenv, resp)
         }
 

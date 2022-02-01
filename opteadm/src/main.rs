@@ -40,6 +40,12 @@ enum Command {
     /// Set the overlay configuration.
     SetOverlay(SetOverlay),
 
+    // List all layers under a given port.
+    ListLayers {
+        #[structopt(short)]
+        port: String
+    },
+
     /// Dump the contents of the layer with the given name
     DumpLayer {
         #[structopt(short)]
@@ -410,6 +416,24 @@ fn print_hr() {
     println!("{:-<70}", "-");
 }
 
+fn print_list_layers(resp: &api::ListLayersResp) {
+    println!(
+        "{:<12} {:<8} {:<8} {:<8} {:<8}",
+        "NAME", "RULES IN", "RULES OUT", "FLOWS IN", "FLOWS OUT"
+    );
+
+    for desc in &resp.layers {
+        println!(
+            "{:<12} {:<8} {:<8} {:<8} {:<8}",
+            desc.name,
+            desc.rules_in,
+            desc.rules_out,
+            desc.flows_in,
+            desc.flows_out,
+        );
+    }
+}
+
 fn print_layer(resp: &api::DumpLayerResp) {
     println!("Layer {}", resp.name);
     print_hrb();
@@ -491,6 +515,11 @@ fn main() {
         Command::SetOverlay(req) => {
             let hdl = opteadm::OpteAdm::open().unwrap();
             hdl.set_overlay(&req.into()).unwrap();
+        }
+
+        Command::ListLayers { port } => {
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            print_list_layers(&hdl.list_layers(&port).unwrap());
         }
 
         Command::DumpLayer { port, name } => {

@@ -124,6 +124,19 @@ impl OpteAdm {
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
+    pub fn list_layers(
+        &self,
+        port: &str
+    ) -> Result<api::ListLayersResp, Error> {
+        let cmd = IoctlCmd::ListLayers;
+        let resp = run_ioctl::<api::ListLayersResp, (), _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &api::ListLayersReq { port_name: port.to_string() }
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+    }
+
     /// Create a new handle to the OPTE control node.
     pub fn open() -> Result<Self, Error> {
         Ok(OpteAdm {
