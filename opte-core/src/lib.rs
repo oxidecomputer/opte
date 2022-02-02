@@ -285,7 +285,6 @@ impl LogProvider for PrintlnLog {
     }
 }
 
-
 #[cfg(all(not(feature = "std"), not(test)))]
 pub struct KernelLog {}
 

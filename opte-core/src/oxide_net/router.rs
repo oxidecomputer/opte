@@ -151,6 +151,11 @@ pub fn setup(port: &Port<port::Inactive>) -> Result<(), port::AddLayerError> {
     );
 
     layer.add_rule(Direction::Out, rule.finalize());
+
+    // If there is no matching router entry we drop the packet.
+    let drop_rule = Rule::new(65535, rule::Action::Deny).match_any();
+    layer.add_rule(Direction::Out, drop_rule);
+
     port.add_layer(layer, port::Pos::After(fw::FW_LAYER_NAME))
 }
 
