@@ -142,6 +142,7 @@ extern "C" {
     fn __dtrace_probe_read__buf(count: uintptr_t);
     fn __dtrace_probe_rx(mp: uintptr_t);
     fn __dtrace_probe_tx(mp: uintptr_t);
+    fn __dtrace_probe_rx__chain__todo(mp: uintptr_t);
 }
 
 #[allow(dead_code)]
@@ -1457,8 +1458,12 @@ pub unsafe extern "C" fn opte_rx(
     mp_chain: *mut mblk_t,
     loopback: boolean_t,
 ) {
-    // TODO: I haven't dealt with chains yet.
-    assert!((*mp_chain).b_next == ptr::null_mut());
+    // XXX Need to deal with chains. This was an assert but it's
+    // blocking other work that's more pressing at the moment as I
+    // keep tripping it.
+    if !(*mp_chain).b_next.is_null() {
+        __dtrace_probe_rx__chain__todo(mp_chain as uintptr_t);
+    }
     __dtrace_probe_rx(mp_chain as uintptr_t);
 
     let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
