@@ -421,7 +421,7 @@ type LinkName = String;
 
 enum PortState {
     Inactive(Port<port::Inactive>, PortCfg, *const mac_handle),
-    Active(*mut OpteClientState, *const mac_handle),
+    Active(Arc<OpteClientState>, *const mac_handle),
 }
 
 struct OpteState {
@@ -561,17 +561,16 @@ fn delete_port(req: &DeletePortReq) -> Result<(), api::DeletePortError> {
     Ok(())
 }
 
-// TODO This should probably be renamed get_client_mut()
-fn get_active_port_mut<'a, 'b>(
+fn get_ocs<'a, 'b>(
     ports_lock: &'a mut KMutexGuard<BTreeMap<LinkName, PortState>>,
     name: &'b str
-) -> Result<*mut OpteClientState, api::PortError> {
-    match ports_lock.get_mut(name) {
+) -> Result<Arc<OpteClientState>, api::PortError> {
+    match ports_lock.get(name) {
         None => Err(api::PortError::NotFound),
         Some(PortState::Inactive(_, _, _)) => {
             Err(api::PortError::Inactive)
         }
-        Some(PortState::Active(ocspp, _)) => Ok(*ocspp),
+        Some(PortState::Active(ocs, _)) => Ok(ocs.clone()),
     }
 }
 
@@ -639,8 +638,7 @@ fn list_ports_hdlr(
                 });
             }
 
-            PortState::Active(ocspp, _) => {
-                let ocs = unsafe { &*(*ocspp) };
+            PortState::Active(ocs, _) => {
                 resp.ports.push(PortInfo {
                     name: ocs.name.clone(),
                     mac_addr: ocs.private_mac,
@@ -660,11 +658,9 @@ fn add_fw_rule_hdlr(
     let req: FwAddRuleReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
-    let ocs = unsafe {
-        match get_active_port_mut(&mut ports_lock, &req.port_name) {
-            Ok(portp) => &mut *portp,
-            Err(e) => return Ok(Err(api::AddFwRuleError::from(e))),
-        }
+    let ocs = match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(api::AddFwRuleError::from(e))),
     };
     Ok(api::add_fw_rule(&ocs.port, &req))
 }
@@ -675,11 +671,9 @@ fn rem_fw_rule_hdlr(
     let req: FwRemRuleReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
-    let ocs = unsafe {
-        match get_active_port_mut(&mut ports_lock, &req.port_name) {
-            Ok(portp) => &mut *portp,
-            Err(e) => return Ok(Err(api::RemFwRuleError::from(e))),
-        }
+    let ocs = match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(api::RemFwRuleError::from(e))),
     };
     Ok(api::rem_fw_rule(&ocs.port, &req))
 }
@@ -690,11 +684,9 @@ fn dump_tcp_flows_hdlr(
     let req: api::DumpTcpFlowsReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
-    let ocs = unsafe {
-        match get_active_port_mut(&mut ports_lock, &req.port_name) {
-            Ok(portp) => &mut *portp,
-            Err(e) => return Ok(Err(api::DumpTcpFlowsError::from(e))),
-        }
+    let ocs = match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(api::DumpTcpFlowsError::from(e))),
     };
     Ok(Ok(api::dump_tcp_flows(&ocs.port, &req)))
 }
@@ -705,11 +697,9 @@ fn dump_layer_hdlr(
     let req: api::DumpLayerReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
-    let ocs = unsafe {
-        match get_active_port_mut(&mut ports_lock, &req.port_name) {
-            Ok(portp) => &mut *portp,
-            Err(e) => return Ok(Err(api::DumpLayerError::from(e))),
-        }
+    let ocs = match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(api::DumpLayerError::from(e))),
     };
     Ok(api::dump_layer(&ocs.port, &req))
 }
@@ -724,9 +714,9 @@ fn list_layers_hdlr(
         Ok(port) => return Ok(Ok(port.list_layers())),
         Err(_) => (),
     };
-    match get_active_port_mut(&mut ports_lock, &req.port_name) {
-        Ok(ocsp) => {
-            unsafe { Ok(Ok((*ocsp).port.list_layers())) }
+    match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(ocs) => {
+            Ok(Ok(ocs.port.list_layers()))
         }
 
         Err(_) => {
@@ -741,11 +731,9 @@ fn dump_uft_hdlr(
     let req: api::DumpUftReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
-    let ocs = unsafe {
-        match get_active_port_mut(&mut ports_lock, &req.port_name) {
-            Ok(portp) => &mut *portp,
-            Err(e) => return Ok(Err(api::DumpUftError::from(e))),
-        }
+    let ocs = match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(api::DumpUftError::from(e))),
     };
     Ok(Ok(api::dump_uft(&ocs.port, &req)))
 }
@@ -786,11 +774,9 @@ fn add_router_entry_hdlr(
         }
 
         _ => {
-            let ocs = unsafe {
-                match get_active_port_mut(&mut ports_lock, &req.port_name) {
-                    Ok(portp) => &mut *portp,
-                    Err(e) => return Ok(Err(router::AddEntryError::from(e))),
-                }
+            let ocs =  match get_ocs(&mut ports_lock, &req.port_name) {
+                Ok(v) => v,
+                Err(e) => return Ok(Err(router::AddEntryError::from(e))),
             };
             Ok(router::add_entry_active(
                 &ocs.port,
@@ -1208,7 +1194,7 @@ pub unsafe extern "C" fn opte_client_open(
             DDI_IPL_0,
     );
 
-    let ocs = Box::new(OpteClientState {
+    let ocs = Arc::new(OpteClientState {
         mh,
         mc,
         name: link_name.clone(),
@@ -1222,31 +1208,15 @@ pub unsafe extern "C" fn opte_client_open(
         hairpin_queue: KMutex::new(Vec::with_capacity(4), KMutexType::Driver),
     });
 
-    // We need to pull the raw pointer out of the box and give it to
-    // the client (viona). It will pass this pointer back to us during
-    // every invocation. To viona, the pointer points to an opaque type.
-    //
-    // ```
-    // typedef struct __opte_client_state opte_client_state_t;
-    // ```
-    //
-    // The "owner" of `ocs` is now viona. When the guest instance is
-    // tore down, and viona is closing, it will give ownership back to
-    // opte via `opte_client_close()`.
-    //
-    // There is no concern over shared ownership or data races from
-    // viona as `ocs` is simply a top-level state structure with
-    // pointers to other MT-safe types (aka interior mutability).
-    //
-    // TODO Move or delete this comment?
-    //
-    // TODO Do I really need to have ocs in a Box? Wouldn't the act of
-    // moving it into the map put it on the heap? Furthermore, when I
-    // need to hand out a raw pointer to the client I think I could
-    // just cast the reference I get back from lookup?
+    // We can lease this uncounted reference to viona because this
+    // driver guarantees to the client that a port cannot be deleted
+    // until the client is finished with it. There is no concern over
+    // aliasing as this structure is opaque to the client and any
+    // structure inside ocs should provide its own thread-safety.
+    *ocspo = Arc::as_ptr(&ocs);
     ports_lock.insert(
         link_name.clone(),
-        PortState::Active(Box::into_raw(ocs), port_mh)
+        PortState::Active(ocs, port_mh)
     );
     0
 }
