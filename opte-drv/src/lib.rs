@@ -519,6 +519,7 @@ fn add_port(
 
     let mut new_port = Port::new(req.link_name.clone(), private_mac);
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
+
     // TODO: In order to demo this in the lab environment we currently
     // allow SNAT to be optional.
     if req.ip_cfg.snat.is_some() {
@@ -526,6 +527,8 @@ fn add_port(
             .unwrap();
     }
     opte_core::oxide_net::arp::setup(&mut new_port, &port_cfg).unwrap();
+    // We know the firewall layer is there so it can't fail.
+    router::setup(&mut new_port).unwrap();
 
     ports_lock.insert(
         req.link_name.clone(),
