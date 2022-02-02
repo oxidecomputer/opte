@@ -66,7 +66,7 @@ use opte_core::oxide_net::PortCfg;
 use opte_core::packet::{Initialized, Packet, Parsed};
 use opte_core::port::{self, Port, ProcessResult};
 use opte_core::sync::{KMutex, KMutexGuard, KMutexType};
-use opte_core::{CStr, CString, Direction};
+use opte_core::{CStr, CString, Direction, ExecCtx};
 
 // For now I glob import all of DDI/DKI until I have a better idea of
 // how I would want to organize it. Also, for the time being, if it's
@@ -425,6 +425,7 @@ enum PortState {
 }
 
 struct OpteState {
+    ectx: Arc<ExecCtx>,
     gateway_mac: EtherAddr,
     gateway_ip: Ipv4Addr,
     v2p: Arc<overlay::Virt2Phys>,
@@ -433,7 +434,12 @@ struct OpteState {
 
 impl OpteState {
     fn new(gateway_mac: EtherAddr, gateway_ip: Ipv4Addr,) -> Self {
+        let ectx = Arc::new(ExecCtx {
+            log: Box::new(opte_core::KernelLog {})
+        });
+
         OpteState {
+            ectx,
             gateway_mac,
             gateway_ip,
             v2p: Arc::new(overlay::Virt2Phys::new()),
@@ -517,7 +523,11 @@ fn add_port(
         overlay: None,
     };
 
-    let mut new_port = Port::new(req.link_name.clone(), private_mac);
+    let mut new_port = Port::new(
+        &req.link_name,
+        private_mac,
+        state.ectx.clone()
+    );
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
 
     // TODO: In order to demo this in the lab environment we currently
@@ -1246,8 +1256,9 @@ pub unsafe extern "C" fn opte_client_close(
     ddi_periodic_delete(ocs.port_periodic);
 
     let mut new_port = Port::new(
-        ocs.name.clone(),
-        ocs.private_mac
+        &ocs.name,
+        ocs.private_mac,
+        state.ectx.clone(),
     );
 
     let port_cfg = ocs.port_cfg;

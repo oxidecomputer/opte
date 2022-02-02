@@ -29,7 +29,7 @@ use crate::rule::{
     HT,
 };
 use crate::sync::{KMutex, KMutexType};
-use crate::{CString, Direction};
+use crate::{CString, Direction, ExecCtx, LogLevel};
 
 use illumos_ddi_dki::{c_char, uintptr_t};
 
@@ -111,10 +111,7 @@ impl Layer {
         &self.name
     }
 
-    pub fn new<S>(name: S, actions: Vec<Action>) -> Self
-    where
-        S: AsRef<str> + ToString,
-    {
+    pub fn new(name: &str, actions: Vec<Action>) -> Self {
         Layer {
             actions,
             name: name.to_string(),
@@ -153,6 +150,7 @@ impl Layer {
 
     pub fn process(
         &self,
+        ectx: &ExecCtx,
         dir: Direction,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
@@ -160,8 +158,8 @@ impl Layer {
     ) -> result::Result<LayerResult, LayerError> {
         layer_process_entry_probe(dir, &self.name);
         let res = match dir {
-            Direction::Out => self.process_out(pkt, hts, meta),
-            Direction::In => self.process_in(pkt, hts, meta),
+            Direction::Out => self.process_out(ectx, pkt, hts, meta),
+            Direction::In => self.process_in(ectx, pkt, hts, meta),
         };
         layer_process_return_probe(dir, &self.name, &res);
         res
@@ -169,6 +167,7 @@ impl Layer {
 
     fn process_in(
         &self,
+        ectx: &ExecCtx,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         meta: &mut Meta,
@@ -177,7 +176,7 @@ impl Layer {
 
         // We have no FlowId, thus there can be no FlowTable entry.
         if ifid == FLOW_ID_DEFAULT {
-            return self.process_in_rules(ifid, pkt, hts, meta);
+            return self.process_in_rules(ectx, ifid, pkt, hts, meta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
@@ -208,11 +207,12 @@ impl Layer {
         // XXX Flow table miss stat
 
         // No FlowTable entry, perhaps there is a matching Rule?
-        self.process_in_rules(ifid, pkt, hts, meta)
+        self.process_in_rules(ectx, ifid, pkt, hts, meta)
     }
 
     fn process_in_rules(
         &self,
+        ectx: &ExecCtx,
         ifid: InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
@@ -268,7 +268,7 @@ impl Layer {
                         Ok(d) => d,
 
                         Err(e) => {
-                            self.record_gen_desc_failure(&ifid, &e);
+                            self.record_gen_desc_failure(&ectx, &ifid, &e);
                             return Err(LayerError::GenDesc(e));
                         }
                     };
@@ -326,6 +326,7 @@ impl Layer {
 
     fn process_out(
         &self,
+        ectx: &ExecCtx,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         meta: &mut Meta,
@@ -334,7 +335,7 @@ impl Layer {
 
         // We have no FlowId, thus there can be no FlowTable entry.
         if ifid == FLOW_ID_DEFAULT {
-            return self.process_out_rules(ifid, pkt, hts, meta);
+            return self.process_out_rules(ectx, ifid, pkt, hts, meta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
@@ -367,11 +368,12 @@ impl Layer {
         }
 
         // No FlowTable entry, perhaps there is matching Rule?
-        self.process_out_rules(ifid, pkt, hts, meta)
+        self.process_out_rules(ectx, ifid, pkt, hts, meta)
     }
 
     fn process_out_rules(
         &self,
+        ectx: &ExecCtx,
         ifid: InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
@@ -427,7 +429,7 @@ impl Layer {
                         Ok(d) => d,
 
                         Err(e) => {
-                            self.record_gen_desc_failure(&ifid, &e);
+                            self.record_gen_desc_failure(&ectx, &ifid, &e);
                             return Err(LayerError::GenDesc(e));
                         }
                     };
@@ -485,11 +487,20 @@ impl Layer {
 
     fn record_gen_desc_failure(
         &self,
+        ectx: &ExecCtx,
         ifid: &InnerFlowId,
         err: &rule::GenDescError
     ) {
-        // XXX Log message, + SDT + increment stat
-        todo!("log a msg, fire SDT, increment a stat: {}\n{:?}", ifid, err);
+        // XXX increment stat
+        ectx.log.log(
+            LogLevel::Error,
+            &format!(
+                "failed to generate descriptor for stateful action: {} {:?}",
+                ifid,
+                err
+            )
+        );
+        gen_desc_fail_probe(ifid, err);
     }
 
     pub fn remove_rule(&self, dir: Direction, id: RuleId) -> Result<()> {
@@ -889,6 +900,31 @@ pub fn rule_deny_probe(layer: &str, dir: Direction, flow_id: &InnerFlowId) {
     unsafe {
         __dtrace_probe_rule__deny(
             &arg as *const rule_deny_sdt_arg as uintptr_t,
+        );
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+pub unsafe fn __dtrace_probe_gen__desc__fail(
+    _ifid: uintptr_t,
+    _msg: uintptr_t
+) {
+    ()
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+extern "C" {
+    pub fn __dtrace_probe_gen__desc__fail(ifid: uintptr_t, msg: uintptr_t);
+}
+
+fn gen_desc_fail_probe(ifid: &InnerFlowId, err: &rule::GenDescError) {
+    let flow_id = flow_id_sdt_arg::from(ifid);
+    let msg_c = CString::new(format!("{:?}", err)).unwrap();
+
+    unsafe {
+        __dtrace_probe_gen__desc__fail(
+            &flow_id as *const flow_id_sdt_arg as uintptr_t,
+            msg_c.as_ptr() as uintptr_t,
         );
     }
 }

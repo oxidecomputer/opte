@@ -13,6 +13,7 @@
 //! verify it's blocked by firewall, add a new rule to allow incoming
 //! on 80/443, verify the next request passes, remove the rules,
 //! verify it once again is denied, etc.
+use std::boxed::Box;
 use std::fs;
 use std::ops::Range;
 use std::prelude::v1::*;
@@ -34,7 +35,7 @@ use crate::geneve::Vni;
 use crate::headers::{IpMeta, UlpMeta};
 use crate::ip4::{self, Ipv4Hdr, Ipv4HdrRaw, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Addr;
-use crate::oxide_net;
+use crate::oxide_net::{self, arp, dyn_nat4, firewall, router, overlay};
 use crate::packet::{
     mock_allocb, Initialized, Packet, PacketRead, PacketReader, PacketSeg,
     PacketWriter, ParseError, WritePos,
@@ -42,7 +43,7 @@ use crate::packet::{
 use crate::port::{Inactive, Port, ProcessResult};
 use crate::tcp::TcpHdr;
 use crate::udp::{UdpHdr, UdpHdrRaw, UdpMeta};
-use crate::Direction::*;
+use crate::{Direction::*, ExecCtx};
 
 use ProcessResult::*;
 
@@ -97,22 +98,28 @@ fn lab_cfg() -> oxide_net::PortCfg {
     }
 }
 
-fn oxide_net_setup(port: &mut Port<Inactive>, cfg: &oxide_net::PortCfg) {
+fn oxide_net_setup(name: &str, cfg: &oxide_net::PortCfg) -> Port<Inactive> {
+    let ectx = Arc::new(ExecCtx {
+        log: Box::new(crate::PrintlnLog {})
+    });
+    let mut port = Port::new(name, cfg.private_mac, ectx.clone());
+
     // ================================================================
     // Firewall layer
     // ================================================================
-    oxide_net::firewall::setup(port).expect("failed to add firewall layer");
+    firewall::setup(&mut port).expect("failed to add firewall layer");
 
     // ================================================================
     // Dynamic NAT Layer (IPv4)
     // ================================================================
-    oxide_net::dyn_nat4::setup(port, cfg)
-        .expect("failed to add dyn-nat4 layer");
+    dyn_nat4::setup(&mut port, cfg).expect("failed to add dyn-nat4 layer");
 
     // ================================================================
     // ARP layer
     // ================================================================
-    oxide_net::arp::setup(port, cfg).expect("failed to add ARP layer");
+    arp::setup(&mut port, cfg).expect("failed to add ARP layer");
+
+    port
 }
 
 fn g1_cfg() -> oxide_net::PortCfg {
@@ -231,10 +238,9 @@ fn overlay_guest_to_guest() {
 
     // TODO Setup ports here, but first I want to figure out packet
     // gen.
-    let mut g1_port = Port::new("g1_port".to_string(), g1_cfg.private_mac);
-    oxide_net_setup(&mut g1_port, &g1_cfg);
-    oxide_net::router::setup(&mut g1_port).unwrap();
-    oxide_net::overlay::setup(
+    let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
+    router::setup(&mut g1_port).unwrap();
+    overlay::setup(
         &mut g1_port,
         g1_cfg.overlay.as_ref().unwrap(),
         v2p.clone()
@@ -242,7 +248,7 @@ fn overlay_guest_to_guest() {
     let g1_port = g1_port.activate();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
-    oxide_net::router::add_entry_active(
+    router::add_entry_active(
         &g1_port,
         IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()))
@@ -386,8 +392,7 @@ fn encap_decap() {
     // port from the pcap.
     cfg.dyn_nat.ports.start = 3839;
     cfg.dyn_nat.ports.end = 3840;
-    let mut port = Port::new("encap_decap".to_string(), cfg.private_mac);
-    oxide_net_setup(&mut port, &cfg);
+    let mut port = oxide_net_setup("encap_decap", &cfg);
 
     let inner_eth_dst = EtherAddr::from([0x78, 0x23, 0xAE, 0x5D, 0x4F, 0x0D]);
     let inner_ip_dst = "52.10.128.69".parse().unwrap();
@@ -408,7 +413,7 @@ fn encap_decap() {
         phys_mac_dst: EtherAddr::from([0x02, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA]),
         phys_ip_src: phys_ip6_src,
     });
-    oxide_net::overlay::setup(
+    overlay::setup(
         &mut port,
         cfg.overlay.as_ref().unwrap(),
         v2p.clone()
@@ -639,10 +644,6 @@ fn encap_decap() {
 #[test]
 fn bad_ip_len() {
     let cfg = lab_cfg();
-    let mut setup_port = Port::new("bad_ip_len".to_string(), cfg.private_mac);
-    oxide_net_setup(&mut setup_port, &cfg);
-    let _port = setup_port.activate();
-
     let pkt = Packet::alloc(42);
 
     let ether = EtherHdr::from(&EtherMeta {
@@ -716,9 +717,7 @@ fn bad_ip_len() {
 #[test]
 fn dhcp_req() {
     let cfg = lab_cfg();
-    let mut port = Port::new("dhcp_req".to_string(), cfg.private_mac);
-    oxide_net_setup(&mut port, &cfg);
-    let port = port.activate();
+    let port = oxide_net_setup("dhcp_req", &cfg).activate();
     let pkt = Packet::alloc(42);
 
     let ether = EtherHdr::from(&EtherMeta {
@@ -780,9 +779,7 @@ fn arp_hairpin() {
     let cfg = home_cfg();
     let host_mac = EtherAddr::from([0x80, 0xe8, 0x2c, 0xf5, 0x10, 0x35]);
     let host_ip = "10.0.0.206".parse().unwrap();
-    let mut port = Port::new("int_test".to_string(), cfg.private_mac);
-    oxide_net_setup(&mut port, &cfg);
-    let port = port.activate();
+    let port = oxide_net_setup("arp_hairpin", &cfg).activate();
     let reply_hdr_sz = ETHER_HDR_SZ + ARP_HDR_SZ;
 
     // ================================================================
@@ -1032,9 +1029,7 @@ fn arp_hairpin() {
 #[test]
 fn outgoing_dns_lookup() {
     let cfg = home_cfg();
-    let mut port = Port::new("int_test".to_string(), cfg.private_mac);
-    oxide_net_setup(&mut port, &cfg);
-    let port = port.activate();
+    let port = oxide_net_setup("outdoing_dns_lookup", &cfg).activate();
     let gpath = "dns-lookup-guest.pcap";
     let gbytes = fs::read(gpath).unwrap();
     let hpath = "dns-lookup-host.pcap";
@@ -1111,9 +1106,10 @@ fn outgoing_http_req() {
     // port from the pcap.
     cfg.dyn_nat.ports.start = 3839;
     cfg.dyn_nat.ports.end = 3840;
-    let mut port = Port::new("int_test".to_string(), cfg.private_mac);
-    oxide_net_setup(&mut port, &cfg);
-    let port = port.activate();
+    let ectx = Arc::new(ExecCtx {
+        log: Box::new(crate::PrintlnLog {})
+    });
+    let port = oxide_net_setup("outgoing_http_req", &cfg).activate();
     let gpath = "http-out-guest.pcap";
     let gbytes = fs::read(gpath).unwrap();
     let hpath = "http-out-host.pcap";

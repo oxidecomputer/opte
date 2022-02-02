@@ -7,6 +7,10 @@ use alloc::string::{String, ToString};
 #[cfg(any(feature = "std", test))]
 use std::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
+use alloc::sync::Arc;
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
+#[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
@@ -31,7 +35,7 @@ use crate::rule::{ht_fire_probe, Action, Finalized, Rule, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::tcp::TcpState;
 use crate::tcp_state::{self, TcpFlowState};
-use crate::{CString, Direction};
+use crate::{CString, Direction, ExecCtx};
 
 use illumos_ddi_dki::uintptr_t;
 
@@ -104,6 +108,7 @@ impl PortState for Active {}
 
 pub struct Port<S: PortState> {
     state: S,
+    ectx: Arc<ExecCtx>,
     name: String,
     mac: EtherAddr,
 }
@@ -155,6 +160,7 @@ impl Port<Inactive> {
             },
             name: self.name,
             mac: self.mac,
+            ectx: self.ectx,
         }
     }
 
@@ -241,13 +247,14 @@ impl Port<Inactive> {
         ioctl::ListLayersResp { layers: tmp }
     }
 
-    pub fn new(name: String, mac: EtherAddr) -> Self {
+    pub fn new(name: &str, mac: EtherAddr, ectx: Arc<ExecCtx>) -> Self {
         Port {
             state: Inactive {
                 layers: KMutex::new(Vec::new(), KMutexType::Driver),
             },
-            name,
+            name: name.to_string(),
             mac,
+            ectx,
         }
     }
 
@@ -428,7 +435,7 @@ impl Port<Active> {
         match dir {
             Direction::Out => {
                 for layer in &self.state.layers {
-                    match layer.process(dir, pkt, hts, meta) {
+                    match layer.process(&self.ectx, dir, pkt, hts, meta) {
                         Ok(LayerResult::Allow) => (),
                         ret @ Ok(LayerResult::Deny) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
@@ -439,7 +446,7 @@ impl Port<Active> {
 
             Direction::In => {
                 for layer in self.state.layers.iter().rev() {
-                    match layer.process(dir, pkt, hts, meta) {
+                    match layer.process(&self.ectx, dir, pkt, hts, meta) {
                         Ok(LayerResult::Allow) => (),
                         ret @ Ok(LayerResult::Deny) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
