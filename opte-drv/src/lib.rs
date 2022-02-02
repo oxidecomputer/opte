@@ -1148,7 +1148,7 @@ pub struct OpteClientState {
     mph: *mut mac_promisc_handle,
     name: String,
     promisc_state: Option<OptePromiscState>,
-    port: Port<port::Active>,
+    port: Arc<Port<port::Active>>,
     port_cfg: PortCfg,
     port_periodic: *const ddi_periodic,
     private_mac: EtherAddr,
@@ -1163,6 +1163,7 @@ const ONE_SECOND: hrtime_t = 1_000_000_000;
 pub unsafe extern "C" fn opte_port_periodic(arg: *mut c_void) {
     // The `arg` is a raw pointer to a `Port`, as guaranteed by
     // opte_client_open().
+    assert!(!arg.is_null());
     let port = &*(arg as *const Port<opte_core::port::Active>);
     port.expire_flows(gethrtime());
 }
@@ -1194,14 +1195,16 @@ pub unsafe extern "C" fn opte_client_open(
         None => return ENOENT,
     };
 
-    let active_port = port.activate();
+    let active_port = Arc::new(port.activate());
     let mac_addr = active_port.mac_addr();
-
     let port_periodic =  ddi_periodic_add(
-            opte_port_periodic,
-            &active_port as *const Port<_> as *const c_void,
-            ONE_SECOND,
-            DDI_IPL_0,
+        opte_port_periodic,
+        // The non-counted alias is fine as the periodic is cleaned up
+        // as part of opte_client_close(), prior to the Port being
+        // dropped.
+        active_port.as_ref() as *const Port<_> as *const c_void,
+        ONE_SECOND,
+        DDI_IPL_0,
     );
 
     let ocs = Arc::new(OpteClientState {
