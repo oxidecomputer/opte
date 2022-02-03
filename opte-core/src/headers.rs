@@ -168,14 +168,14 @@ impl IpHdr {
     pub fn pseudo_bytes(&self) -> Vec<u8> {
         match self {
             Self::Ip4(ip4) => ip4.pseudo_bytes(),
-            Self::Ip6(_ip6) => todo!("implement"),
+            Self::Ip6(ip6) => ip6.pseudo_bytes(),
         }
     }
 
     pub fn pseudo_csum(&self) -> Checksum {
         match self {
             Self::Ip4(ip4) => ip4.pseudo_csum(),
-            Self::Ip6(_ip6) => todo!("implement"),
+            Self::Ip6(ip6) => ip6.pseudo_csum(),
         }
     }
 

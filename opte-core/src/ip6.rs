@@ -10,6 +10,7 @@ use std::vec::Vec;
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use crate::checksum::Checksum;
 use crate::headers::{
     Header, HeaderAction, IpMeta, IpMetaOpt, ModActionArg, PushActionArg,
     RawHeader
@@ -195,9 +196,16 @@ impl Ipv6Hdr {
         self.dst
     }
 
+    /// The length of the extension headers, if any.
+    ///
+    /// XXX We currently don't check for extension headers.
+    pub fn ext_len(&self) -> usize {
+        0
+    }
+
     /// Return the length of the header porition of the packet.
     ///
-    /// XXX We currently don't check for extension headers at all.
+    /// XXX We currently don't check for extension headers.
     pub fn hdr_len(&self) -> usize {
         IPV6_HDR_SZ
     }
@@ -214,12 +222,28 @@ impl Ipv6Hdr {
     /// XXX We should probably check for the Jumbogram extension
     /// header and drop any packets with it.
     pub fn pay_len(&self) -> usize {
-        self.payload_len as usize
+        self.payload_len as usize - self.ext_len()
     }
 
     /// Return the [`Protocol`] of the packet.
     pub fn proto(&self) -> Protocol {
         self.proto
+    }
+
+    /// Return the pseudo header bytes.
+    pub fn pseudo_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(40);
+        bytes.extend_from_slice(&self.src.to_bytes());
+        bytes.extend_from_slice(&self.dst.to_bytes());
+        bytes.extend_from_slice(&(self.pay_len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&[0u8, 0u8, 0u8, self.next_hdr as u8]);
+        assert_eq!(bytes.len(), 40);
+        bytes
+    }
+
+    /// Return a [`Checksum`] of the pseudo header.
+    pub fn pseudo_csum(&self) -> Checksum {
+        Checksum::compute(&self.pseudo_bytes())
     }
 
     pub fn set_total_len(&mut self, len: u16) {

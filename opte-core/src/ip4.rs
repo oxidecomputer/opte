@@ -681,6 +681,7 @@ impl Ipv4Hdr {
         self.proto
     }
 
+    /// Return the pseudo header bytes.
     pub fn pseudo_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(12);
         bytes.extend_from_slice(&self.src.to_be_bytes());
@@ -692,6 +693,7 @@ impl Ipv4Hdr {
         bytes
     }
 
+    /// Return a [`Checksum`] of the pseudo header.
     pub fn pseudo_csum(&self) -> Checksum {
         Checksum::compute(&self.pseudo_bytes())
     }
