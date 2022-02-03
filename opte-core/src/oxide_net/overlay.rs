@@ -257,7 +257,6 @@ impl StatefulAction for EncapDecapAction {
                 match self.v2p.get(virt_ip) {
                     Some(val) => val,
                     None => {
-                        // XXX log, stat, SDT probe
                         return Err(rule::GenDescError::Unexpected {
                             msg: format!("no v2p mapping for {}", virt_ip)
                         });
@@ -269,7 +268,6 @@ impl StatefulAction for EncapDecapAction {
                 match self.v2p.get(&flow_id.dst_ip) {
                     Some(val) => val,
                     None => {
-                        // XXX log, stat, SDT probe
                         return Err(rule::GenDescError::Unexpected {
                             msg: format!(
                                 "no v2p mapping for {}",

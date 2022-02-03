@@ -24,7 +24,7 @@ use crate::ether::{EtherAddr, EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
 use crate::flow_table::StateSummary;
 use crate::geneve::{GeneveMeta, GeneveMetaOpt};
 use crate::headers::{
-    HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
+    self, HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
     UlpMetaOpt
 };
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
@@ -741,8 +741,11 @@ pub unsafe fn __dtrace_probe_ht__run(_arg: uintptr_t) {
 
 #[repr(C)]
 pub struct flow_id_sdt_arg {
-    src_ip: u32,
-    dst_ip: u32,
+    af: i32,
+    src_ip4: u32,
+    dst_ip4: u32,
+    src_ip6: [u8; 16],
+    dst_ip6: [u8; 16],
     src_port: u16,
     dst_port: u16,
     proto: u8,
@@ -750,21 +753,24 @@ pub struct flow_id_sdt_arg {
 
 impl From<&InnerFlowId> for flow_id_sdt_arg {
     fn from(ifid: &InnerFlowId) -> Self {
-        let src_ip = match ifid.src_ip {
-            IpAddr::Ip4(v) => v,
-            _ => panic!("add IPv6 support for flow_id_sdt_arg"),
+        // Consumers expect all data to be presented as it would be
+        // traveling across the network.
+        let (af, src_ip4, src_ip6) = match ifid.src_ip {
+            IpAddr::Ip4(ip4) => (headers::AF_INET, ip4.to_be(), [0; 16]),
+            IpAddr::Ip6(ip6) => (headers::AF_INET6, 0, ip6.to_bytes()),
         };
 
-        let dst_ip = match ifid.dst_ip {
-            IpAddr::Ip4(v) => v,
-            _ => panic!("add IPv6 support for flow_id_sdt_arg"),
+        let (dst_ip4, dst_ip6) = match ifid.dst_ip {
+            IpAddr::Ip4(ip4) => (ip4.to_be(), [0; 16]),
+            IpAddr::Ip6(ip6) => (0, ip6.to_bytes()),
         };
 
         flow_id_sdt_arg {
-            // Consumers expect all data to be presented as it would
-            // be traveling across the network.
-            src_ip: src_ip.to_be(),
-            dst_ip: dst_ip.to_be(),
+            af,
+            src_ip4,
+            dst_ip4,
+            src_ip6,
+            dst_ip6,
             src_port: ifid.src_port.to_be(),
             dst_port: ifid.dst_port.to_be(),
             proto: ifid.proto as u8,
