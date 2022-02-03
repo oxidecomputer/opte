@@ -28,7 +28,11 @@ pub fn setup(
         Arc::new(pool),
     );
 
-    let layer = Layer::new("dyn-nat4", vec![Action::Stateful(Arc::new(nat))]);
+    let layer = Layer::new(
+        "dyn-nat4",
+        port.name(),
+        vec![Action::Stateful(Arc::new(nat))]
+    );
 
     let rule = Rule::new(1, layer.action(0).unwrap().clone());
     let mut rule = rule.add_predicate(Predicate::InnerIpProto(vec![

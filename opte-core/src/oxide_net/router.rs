@@ -139,7 +139,7 @@ pub fn setup(port: &Port<port::Inactive>) -> Result<(), port::AddLayerError> {
     // Indexes:
     //
     // * 0: InternetGateway
-    let layer = Layer::new(ROUTER_LAYER_NAME, vec![ig]);
+    let layer = Layer::new(ROUTER_LAYER_NAME, port.name(), vec![ig]);
 
     // TODO These hard-coded rules will actually come dynamically from
     // Nexus. Just keeping them here for now.

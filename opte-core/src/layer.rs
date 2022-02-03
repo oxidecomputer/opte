@@ -60,6 +60,7 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub struct Layer {
+    port_name: String,
     name: String,
     actions: Vec<Action>,
     ft_in: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
@@ -94,6 +95,29 @@ impl Layer {
         }
     }
 
+    fn gen_desc_fail_probe(
+        &self,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        err: &rule::GenDescError
+    ) {
+        let flow_id = flow_id_sdt_arg::from(ifid);
+        let port_c = CString::new(format!("{}", self.port_name)).unwrap();
+        let layer_c = CString::new(format!("{}", self.name)).unwrap();
+        let dir_c = CString::new(format!("{}", dir)).unwrap();
+        let msg_c = CString::new(format!("{:?}", err)).unwrap();
+
+        unsafe {
+            __dtrace_probe_gen__desc__fail(
+                port_c.as_ptr() as uintptr_t,
+                layer_c.as_ptr() as uintptr_t,
+                dir_c.as_ptr() as uintptr_t,
+                &flow_id as *const flow_id_sdt_arg as uintptr_t,
+                msg_c.as_ptr() as uintptr_t,
+            );
+        }
+    }
+
     #[cfg(all(not(feature = "std"), not(test)))]
     pub fn expire_flows(&self, now: hrtime_t) {
         self.ft_in.lock().expire_flows(now);
@@ -111,10 +135,11 @@ impl Layer {
         &self.name
     }
 
-    pub fn new(name: &str, actions: Vec<Action>) -> Self {
+    pub fn new(name: &str, port_name: &str, actions: Vec<Action>) -> Self {
         Layer {
             actions,
             name: name.to_string(),
+            port_name: port_name.to_string(),
             ft_in: KMutex::new(
                 FlowTable::new(name.to_string(), None),
                 KMutexType::Driver,
@@ -268,7 +293,12 @@ impl Layer {
                         Ok(d) => d,
 
                         Err(e) => {
-                            self.record_gen_desc_failure(&ectx, &ifid, &e);
+                            self.record_gen_desc_failure(
+                                &ectx,
+                                Direction::In,
+                                &ifid,
+                                &e
+                            );
                             return Err(LayerError::GenDesc(e));
                         }
                     };
@@ -429,7 +459,12 @@ impl Layer {
                         Ok(d) => d,
 
                         Err(e) => {
-                            self.record_gen_desc_failure(&ectx, &ifid, &e);
+                            self.record_gen_desc_failure(
+                                &ectx,
+                                Direction::Out,
+                                &ifid,
+                                &e
+                            );
                             return Err(LayerError::GenDesc(e));
                         }
                     };
@@ -488,6 +523,7 @@ impl Layer {
     fn record_gen_desc_failure(
         &self,
         ectx: &ExecCtx,
+        dir: Direction,
         ifid: &InnerFlowId,
         err: &rule::GenDescError
     ) {
@@ -500,7 +536,7 @@ impl Layer {
                 err
             )
         );
-        gen_desc_fail_probe(ifid, err);
+        self.gen_desc_fail_probe(dir, ifid, err);
     }
 
     pub fn remove_rule(&self, dir: Direction, id: RuleId) -> Result<()> {
@@ -906,6 +942,9 @@ pub fn rule_deny_probe(layer: &str, dir: Direction, flow_id: &InnerFlowId) {
 
 #[cfg(any(feature = "std", test))]
 pub unsafe fn __dtrace_probe_gen__desc__fail(
+    _port: uintptr_t,
+    _layer: uintptr_t,
+    _dir: uintptr_t,
     _ifid: uintptr_t,
     _msg: uintptr_t
 ) {
@@ -914,19 +953,13 @@ pub unsafe fn __dtrace_probe_gen__desc__fail(
 
 #[cfg(all(not(feature = "std"), not(test)))]
 extern "C" {
-    pub fn __dtrace_probe_gen__desc__fail(ifid: uintptr_t, msg: uintptr_t);
-}
-
-fn gen_desc_fail_probe(ifid: &InnerFlowId, err: &rule::GenDescError) {
-    let flow_id = flow_id_sdt_arg::from(ifid);
-    let msg_c = CString::new(format!("{:?}", err)).unwrap();
-
-    unsafe {
-        __dtrace_probe_gen__desc__fail(
-            &flow_id as *const flow_id_sdt_arg as uintptr_t,
-            msg_c.as_ptr() as uintptr_t,
-        );
-    }
+    pub fn __dtrace_probe_gen__desc__fail(
+        port: uintptr_t,
+        layer: uintptr_t,
+        dir: uintptr_t,
+        ifid: uintptr_t,
+        msg: uintptr_t
+    );
 }
 
 #[test]

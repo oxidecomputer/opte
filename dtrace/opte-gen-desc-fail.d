@@ -22,8 +22,11 @@ BEGIN {
 }
 
 gen-desc-fail {
-	this->flow_id = (flow_id_sdt_arg_t *)arg0;
-	this->msg = arg1;
+	this->port = stringof(arg0);
+	this->layer = stringof(arg1);
+	this->dir = stringof(arg2);
+	this->flow_id = (flow_id_sdt_arg_t *)arg3;
+	this->msg = stringof(arg4);
 
 	/*
 	 * inet_ntoa() wants an ipaddr_t pointer, but opte is passing
@@ -36,8 +39,8 @@ gen-desc-fail {
 	*this->srcp = this->flow_id->src_ip;
 	*this->dstp = this->flow_id->dst_ip;
 
-	printf("%s %s:%u %s:%u %s\n", protos[this->flow_id->proto],
-	    inet_ntoa(this->srcp), this->flow_id->src_port,
-	    inet_ntoa(this->dstp), this->flow_id->dst_port,
-	    stringof(this->msg));
+	printf("%s:%s %s %s %s:%u %s:%u %s\n", this->port, this->layer,
+	    this->dir, protos[this->flow_id->proto], inet_ntoa(this->srcp),
+	    this->flow_id->src_port, inet_ntoa(this->dstp),
+	    this->flow_id->dst_port, this->msg);
 }

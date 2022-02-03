@@ -19,6 +19,7 @@ pub fn setup(
 ) -> core::result::Result<(), port::AddLayerError> {
     let arp = Layer::new(
         "arp",
+        port.name(),
         vec![
             // ARP Reply for gateway's IP.
             Action::Hairpin(Arc::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),

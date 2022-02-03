@@ -58,7 +58,7 @@ pub fn setup(
         ))
     );
 
-    let layer = Layer::new(OVERLAY_LAYER_NAME, vec![encap_decap]);
+    let layer = Layer::new(OVERLAY_LAYER_NAME, port.name(), vec![encap_decap]);
     let encap_decap_rule = Rule::new(1, layer.action(0).unwrap().clone());
     layer.add_rule(Direction::Out, encap_decap_rule.clone().match_any());
     // XXX Currently this will decap any outer 5-tuple and pass along

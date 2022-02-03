@@ -34,7 +34,7 @@ pub const FW_LAYER_NAME: &'static str = "firewall";
 pub fn setup(
     port: &mut Port<port::Inactive>
 ) -> core::result::Result<(), port::AddLayerError> {
-    let fw_layer = Firewall::create_layer();
+    let fw_layer = Firewall::create_layer(port.name());
     port.add_layer(fw_layer, Pos::First)
 }
 
@@ -173,7 +173,7 @@ impl StatefulAction for FwStatefulAction {
 }
 
 impl Firewall {
-    pub fn create_layer() -> Layer {
+    pub fn create_layer(port_name: &str) -> Layer {
         // A stateful action creates a FlowTable entry.
         let stateful_action = rule::Action::Stateful(
             Arc::new(FwStatefulAction::new("fw".to_string()))
@@ -189,6 +189,7 @@ impl Firewall {
 
         let mut layer = Layer::new(
             FW_LAYER_NAME,
+            port_name,
             vec![stateful_action, static_action]
         );
         add_default_inbound_rules(&mut layer);
