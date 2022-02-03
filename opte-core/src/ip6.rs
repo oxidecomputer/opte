@@ -62,8 +62,8 @@ impl From<[u16; 8]> for Ipv6Addr {
         let tmp = bytes.map(u16::to_be_bytes);
         let mut addr = [0; 16];
         for (i, pair) in tmp.iter().enumerate() {
-            addr[i] = pair[0];
-            addr[i+1] = pair[1];
+            addr[i*2] = pair[0];
+            addr[(i*2)+1] = pair[1];
         }
 
         Ipv6Addr { addr }
@@ -390,5 +390,30 @@ impl From<Ipv6Meta> for Ipv6HdrRaw {
             next_hdr: meta.proto as u8,
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    fn from_pairs() {
+        let ip6 = super::Ipv6Addr::from(
+            [
+                0x2601, 0x0284, 0x4100, 0xE240,
+                0x0000, 0x0000, 0xC0A8, 0x01F5,
+            ]
+        );
+
+        assert_eq!(
+            ip6.to_bytes(),
+            [0x26, 0x01,
+             0x02, 0x84,
+             0x41, 0x00,
+             0xE2, 0x40,
+             0x00, 0x00,
+             0x00, 0x00,
+             0xC0, 0xA8,
+             0x01, 0xF5
+            ]
+        );
     }
 }
