@@ -28,6 +28,7 @@ use crate::headers::{
     UlpMetaOpt
 };
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
+use crate::ip6::Ipv6Meta;
 use crate::layer::{InnerFlowId};
 use crate::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
@@ -448,7 +449,13 @@ impl Predicate {
                     }
                 }
 
-                _ => todo!("implement IPv6 for InnerIpProto"),
+                Some(IpMeta::Ip6(Ipv6Meta { proto, .. })) => {
+                    for m in list {
+                        if m.matches(proto) {
+                            return true;
+                        }
+                    }
+                }
             },
 
             Self::InnerSrcIp4(list) => match meta.inner.ip {

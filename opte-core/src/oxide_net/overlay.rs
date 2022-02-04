@@ -73,8 +73,6 @@ pub fn setup(
 
 pub const DECAP_NAME: &'static str = "decap";
 pub const ENCAP_NAME: &'static str = "encap";
-pub const ENCAP_DECAP_NAME: &'static str = "encap/decap";
-
 
 /// A [`StaticAction`] representing the act of encapsulating a packet
 /// for the purpose of implementing an overlay network.
