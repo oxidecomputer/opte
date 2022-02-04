@@ -142,7 +142,8 @@ fn g1_cfg() -> oxide_net::PortCfg {
         },
         gw_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
         gw_ip: "192.168.77.1".parse().unwrap(),
-        // TODO For now we set the overlay in the test.
+        // We set the overlay in the test because some tests use it
+        // and some don't.
         overlay: None,
     }
 }
@@ -167,7 +168,8 @@ fn g2_cfg() -> oxide_net::PortCfg {
         },
         gw_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
         gw_ip: "192.168.77.1".parse().unwrap(),
-        // TODO For now we set the overlay in the test.
+        // We set the overlay in the test because some tests use it
+        // and some don't.
         overlay: None,
     }
 }
@@ -184,6 +186,9 @@ fn overlay_guest_to_guest() {
     use crate::oxide_net::router::RouterTarget;
     use crate::tcp::TcpFlags;
 
+    // ================================================================
+    // Configure ports for g1 and g2.
+    // ================================================================
     let mut g1_cfg = g1_cfg();
     let mut g2_cfg = g2_cfg();
 
@@ -236,15 +241,9 @@ fn overlay_guest_to_guest() {
     let v2p = Arc::new(Virt2Phys::new());
     v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
 
-    // TODO Setup ports here, but first I want to figure out packet
-    // gen.
     let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
     router::setup(&mut g1_port).unwrap();
-    overlay::setup(
-        &mut g1_port,
-        g1_cfg.overlay.as_ref().unwrap(),
-        v2p.clone()
-    );
+    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone());
     let g1_port = g1_port.activate();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
@@ -254,8 +253,36 @@ fn overlay_guest_to_guest() {
         RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()))
     ).unwrap();
 
-    // TODO figure out packet gen. Start with outgoing TCP conn
-    // request from g1 to g2.
+    let mut g2_port = oxide_net_setup("g2_port", &g2_cfg);
+    router::setup(&mut g2_port).unwrap();
+    overlay::setup(&mut g2_port, g2_cfg.overlay.as_ref().unwrap(), v2p.clone());
+    let g2_port = g2_port.activate();
+
+    // Add router entry that allows Guest 2 to send to Guest 1.
+    //
+    // XXX I just realized that it might make sense to move the router
+    // tables up to a global level like the Virt2Phys mappings. This
+    // way a new router entry that applies to many guests can placed
+    // once instead of on each port individually.
+    router::add_entry_active(
+        &g2_port,
+        IpCidr::Ip4(g1_cfg.vpc_subnet.cidr()),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet.cidr()))
+    ).unwrap();
+
+    // Allow incoming TCP connection from anyone.
+    let rule = "dir=in action=allow priority=10 protocol=TCP";
+    crate::ioctl::add_fw_rule(
+        &g2_port,
+        &firewall::FwAddRuleReq {
+            port_name: g2_port.name().to_string(),
+            rule: rule.parse().unwrap()
+        }
+    ).unwrap();
+
+    // ================================================================
+    // Generate a telnet SYN packet from g1 to g2.
+    // ================================================================
     let body = vec![];
     let mut tcp = TcpHdr::new(7865, 23);
     tcp.set_flags(TcpFlags::SYN);
@@ -275,29 +302,38 @@ fn overlay_guest_to_guest() {
         g2_cfg.private_mac
     );
 
-    println!("{:#?}", eth);
-    println!("{:#?}", ip4);
-    println!("{:#?}", tcp);
-
     let mut bytes = vec![];
     bytes.extend_from_slice(&eth.as_bytes());
     bytes.extend_from_slice(&ip4.as_bytes());
     bytes.extend_from_slice(&tcp.as_bytes());
     bytes.extend_from_slice(&body);
-    let mut pkt = Packet::copy(&bytes).parse().unwrap();
-    let res = g1_port.process(Out, &mut pkt, 0);
+    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
+
+    // ================================================================
+    // Run the telnet SYN packet through g1's port in the outbound
+    // direction and verify the resulting packet meets expectations.
+    // ================================================================
+    let res = g1_port.process(Out, &mut g1_pkt, 0);
     assert!(matches!(res, Ok(Modified)));
-    println!("\n{:#?}", pkt);
 
     // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
-    assert_eq!(pkt.body_offset(), 14 + 40 + 8 + 8 + 14 + 20 + 20);
-    assert_eq!(pkt.body_seg(), 1);
+    assert_eq!(g1_pkt.body_offset(), 14 + 40 + 8 + 8 + 14 + 20 + 20);
+    assert_eq!(g1_pkt.body_seg(), 1);
 
-    let meta = pkt.meta();
+    let meta = g1_pkt.meta();
     match meta.outer.ether.as_ref() {
         Some(eth) => {
 	    assert_eq!(eth.src, g1_cfg.overlay.as_ref().unwrap().phys_mac_src);
-            assert_eq!(eth.dst, g1_cfg.overlay.as_ref().unwrap().phys_mac_dst);
+            // XXX See the note in overlay.rs about the outer ethernet
+            // destination. For the time being we use the guest's VNIC
+            // MAC address to avoid needing underlay routing.
+            //
+            // assert_eq!(
+            //     eth.dst,
+            //     g1_cfg.overlay.as_ref().unwrap().phys_mac_dst
+            // );
+
+            assert_eq!(eth.dst, g2_cfg.private_mac);
         },
 
         None => panic!("no outer ether header"),
@@ -350,6 +386,59 @@ fn overlay_guest_to_guest() {
     }
 
     match meta.inner.ulp.as_ref().unwrap() {
+        UlpMeta::Tcp(tcp) => {
+            assert_eq!(tcp.src, 7865);
+            assert_eq!(tcp.dst, 23);
+        },
+
+        ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
+    }
+
+    // ================================================================
+    // Now that the packet has been encap'd let's play the role of
+    // router and send this inbound to g2's port. For maximum fidelity
+    // of the real process we first dump the raw bytes of g1's
+    // outgoing packet and then reparse it.
+    // ================================================================
+    let mblk = g1_pkt.unwrap();
+    let mut g2_pkt = unsafe {
+        Packet::<Initialized>::wrap(mblk).parse().unwrap()
+    };
+
+    let res = g2_port.process(In, &mut g2_pkt, 0);
+    assert!(matches!(res, Ok(Modified)));
+
+    // Ether + IPv4 + TCP
+    assert_eq!(g2_pkt.body_offset(), 14 + 20 + 20);
+    assert_eq!(g2_pkt.body_seg(), 1);
+
+    let g2_meta = g2_pkt.meta();
+    assert!(g2_meta.outer.ether.is_none());
+    assert!(g2_meta.outer.ip.is_none());
+    assert!(g2_meta.outer.ulp.is_none());
+    assert!(g2_meta.outer.encap.is_none());
+
+    match g2_meta.inner.ether.as_ref() {
+	Some(eth) => {
+	    assert_eq!(eth.src, g1_cfg.private_mac);
+	    assert_eq!(eth.dst, g2_cfg.private_mac);
+	    assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
+	}
+
+	None => panic!("expected inner Ether header"),
+    }
+
+    match g2_meta.inner.ip.as_ref().unwrap() {
+	IpMeta::Ip4(ip4) => {
+	    assert_eq!(ip4.src, g1_cfg.private_ip);
+	    assert_eq!(ip4.dst, g2_cfg.private_ip);
+	    assert_eq!(ip4.proto, Protocol::TCP);
+	}
+
+	ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+    }
+
+    match g2_meta.inner.ulp.as_ref().unwrap() {
         UlpMeta::Tcp(tcp) => {
             assert_eq!(tcp.src, 7865);
             assert_eq!(tcp.dst, 23);

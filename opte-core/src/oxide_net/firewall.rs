@@ -214,7 +214,6 @@ pub struct FwAddRuleReq {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FirewallRule {
     pub direction: Direction,
-    // pub target: Target,
     pub filters: Filters,
     pub action: Action,
     pub priority: u16,
@@ -227,7 +226,6 @@ impl FromStr for FirewallRule {
         let mut action = None;
         let mut direction = None;
         let mut priority = None;
-        // let mut target = None;
         let mut hosts = None;
         let mut protocol = None;
         let mut ports = None;
@@ -242,10 +240,6 @@ impl FromStr for FirewallRule {
                     direction = Some(val.parse::<Direction>()?);
                 }
 
-                // TODO Get rid of this dead code (thoughout this file)
-                // Some(("target", val)) => {
-                //     target = Some(val.parse::<Target>()?);
-                // }
                 Some(("action", val)) => {
                     action = Some(val.parse::<Action>()?);
                 }
@@ -274,9 +268,7 @@ impl FromStr for FirewallRule {
             }
         }
 
-        if action.is_none() || direction.is_none() || priority.is_none()
-        // || target.is_none()
-        {
+        if action.is_none() || direction.is_none() || priority.is_none() {
             return Err(ParseErr::MissingField);
         }
 

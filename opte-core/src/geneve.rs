@@ -27,14 +27,6 @@ pub struct Vni {
     inner: u32
 }
 
-// TODO Need to delete this. It allows creating an invalid Vni as it
-// bypasses the ctor validation.
-impl<T: Into<u32>> From<T> for Vni {
-    fn from(inner: T) -> Vni {
-        Vni { inner: inner.into() }
-    }
-}
-
 impl FromStr for Vni {
     type Err = String;
 
