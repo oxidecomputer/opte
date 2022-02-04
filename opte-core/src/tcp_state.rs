@@ -67,6 +67,17 @@ impl TcpFlowState {
         use TcpState::*;
 
         match self.tcp_state {
+            Listen => {
+                // If the guest doesn't respond to the first SYN, or
+                // the sender never sees the guest's ACK, then the
+                // sender may send more SYNs.
+                if tcp.has_flag(TcpFlags::SYN) {
+                    return Ok(None);
+                }
+
+                return Err(format!("unexpected inbound in Listen"));
+            }
+
             // The guest is in active open and waiting for the
             // remote's SYN+ACK.
             SynSent => {

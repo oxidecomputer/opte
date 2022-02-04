@@ -214,7 +214,22 @@ impl StaticAction for EncapAction {
             name: ENCAP_NAME.to_string(),
             outer_ether: EtherMeta::push(
                 self.phys_mac_src,
-                self.phys_mac_dst,
+                // XXX The outer ethernet dest should be the MAC
+                // address of the sidecar switch/router. But, for the
+                // time being, in order to get two guests talking via
+                // the overlay network we can fake it out by relying
+                // on the internal L2 switch inside every illumos mac
+                // instance (sometimes referred to as "mac loopback").
+                // By placing both guests's VNICs on the same mac you
+                // can rely on the underlying mac to switch the frame
+                // for you, without actally needing anything to route
+                // the packet. This is a stopgap until I can better
+                // understand standing up our physical network
+                // implementation. The actual value here should be
+                // `self.phys_mac_dst`.
+                //
+                // self.phys_mac_dst,
+                phys_target.ether,
                 ETHER_TYPE_IPV6,
             ),
             outer_ip: Ipv6Meta::push(
