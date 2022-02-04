@@ -596,10 +596,8 @@ pub trait ActionDesc {
     /// will typically release ownership of any obtained resource.
     fn fini(&self);
 
-    /// Generate the [`HT`] which implements this descriptor. An
-    /// action may optionally (or only) modify the processing metadata
-    /// as well.
-    fn gen_ht(&self, dir: Direction, meta: &mut Meta) -> HT;
+    /// Generate the [`HT`] which implements this descriptor.
+    fn gen_ht(&self, dir: Direction) -> HT;
 
     fn name(&self) -> &str;
 }
@@ -663,7 +661,7 @@ impl ActionDesc for IdentityDesc {
         return;
     }
 
-    fn gen_ht(&self, _dir: Direction, _meta: &mut Meta) -> HT {
+    fn gen_ht(&self, _dir: Direction) -> HT {
         Default::default()
     }
 
@@ -690,8 +688,13 @@ impl Display for Identity {
 }
 
 impl StaticAction for Identity {
-    fn gen_ht(&self, _dir: Direction, _flow_id: InnerFlowId) -> HT {
-        HT::identity(&self.name)
+    fn gen_ht(
+        &self,
+        _dir: Direction,
+        _flow_id: InnerFlowId,
+        _meta: &mut Meta
+    ) -> GenHtResult {
+        Ok(HT::identity(&self.name))
     }
 }
 
@@ -886,8 +889,35 @@ pub trait StatefulAction: Display {
     ) -> GenDescResult;
 }
 
+
+#[derive(Clone, Debug)]
+pub enum GenHtError {
+    ResourceExhausted {
+        name: String,
+    },
+
+    Unexpected {
+        msg: String,
+    }
+}
+
+pub type GenHtResult = Result<HT, GenHtError>;
+
 pub trait StaticAction: Display {
-    fn gen_ht(&self, dir: Direction, flow_id: InnerFlowId) -> HT;
+    fn gen_ht(
+        &self,
+        dir: Direction,
+        flow_id: InnerFlowId,
+        meta: &mut Meta
+    ) -> GenHtResult;
+}
+
+/// A meta action is one that's only goal is to modify the processing
+/// metadata in some way. That is, it has no transformation to make on
+/// the packet, only add/modify/remove metadata for use by later
+/// layers.
+pub trait MetaAction: Display {
+    fn mod_meta(&self, flow_id: InnerFlowId, meta: &mut Meta);
 }
 
 #[derive(Debug)]
@@ -920,6 +950,7 @@ pub trait HairpinAction: Display {
 #[derive(Clone)]
 pub enum Action {
     Deny,
+    Meta(Arc<dyn MetaAction>),
     Static(Arc<dyn StaticAction>),
     Stateful(Arc<dyn StatefulAction>),
     Hairpin(Arc<dyn HairpinAction>),
@@ -934,14 +965,10 @@ impl Action {
     }
 }
 
-// pub enum ActionOrIdx {
-//     Action(Action),
-//     Idx(usize),
-// }
-
 #[derive(Clone, Deserialize, Serialize)]
 pub enum ActionDump {
     Deny,
+    Meta(String),
     Static(String),
     Stateful(String),
     Hairpin(String),
@@ -951,6 +978,7 @@ impl From<&Action> for ActionDump {
     fn from(action: &Action) -> Self {
         match action {
             Action::Deny => Self::Deny,
+            Action::Meta(ma) => Self::Meta(ma.to_string()),
             Action::Static(sa) => Self::Static(sa.to_string()),
             Action::Stateful(sa) => Self::Stateful(sa.to_string()),
             Action::Hairpin(ha) => Self::Hairpin(ha.to_string()),
@@ -962,6 +990,7 @@ impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Deny => write!(f, "DENY"),
+            Self::Meta(a) => write!(f, "META: {}", a),
             Self::Static(a) => write!(f, "STATIC: {}", a),
             Self::Stateful(a) => write!(f, "STATEFUL: {}", a),
             Self::Hairpin(a) => write!(f, "HAIRPIN: {}", a),

@@ -22,9 +22,7 @@ use crate::ip4::Ipv4Cidr;
 use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::firewall as fw;
 use crate::port::{self, meta::Meta, Port};
-use crate::rule::{
-    self, Action, ActionDesc, HT, GenDescResult, Predicate, Rule, StatefulAction
-};
+use crate::rule::{self, Action, MetaAction, Predicate, Rule};
 use crate::Direction;
 
 pub const ROUTER_LAYER_NAME: &'static str = "router";
@@ -96,28 +94,6 @@ impl fmt::Display for RouterTarget {
     }
 }
 
-#[derive(Clone, Debug)]
-struct RouterDesc {
-    target: RouterTarget,
-}
-
-impl ActionDesc for RouterDesc {
-    fn fini(&self) {}
-
-    fn gen_ht(&self, _dir: Direction, meta: &mut Meta) -> HT {
-        // TODO Eiter gen_ht() needs to be able to return an error;
-        // setting metadata needs to be a different callback; or we
-        // should handle failure here and overwrite any existing
-        // entry.
-        meta.add::<RouterTarget>(self.target.clone()).unwrap();
-        HT::identity(ROUTER_LAYER_NAME)
-    }
-
-    fn name(&self) -> &str {
-        ROUTER_LAYER_NAME
-    }
-}
-
 // The array index represents the subnet prefix length (thus the need
 // for 33 entries). The value represents the Rule priority.
 fn build_ip4_len_to_pri() -> [u16; 33] {
@@ -131,7 +107,7 @@ fn build_ip4_len_to_pri() -> [u16; 33] {
 pub fn setup(port: &Port<port::Inactive>) -> Result<(), port::AddLayerError> {
     let pri_map = build_ip4_len_to_pri();
 
-    let ig = Action::Stateful(
+    let ig = Action::Meta(
         Arc::new(RouterAction::new(RouterTarget::InternetGateway))
     );
     let ig_idx = 0;
@@ -195,7 +171,7 @@ pub fn add_entry_inactive(
                 IpCidr::Ip4(ip4) => {
                     let rule = Rule::new(
                         pri_map4[dest.prefix()],
-                        Action::Stateful(Arc::new(
+                        Action::Meta(Arc::new(
                             RouterAction::new(target.clone())
                         )),
                     );
@@ -229,7 +205,7 @@ pub fn add_entry_active(
                 IpCidr::Ip4(ip4) => {
                     let rule = Rule::new(
                         pri_map4[dest.prefix()],
-                        Action::Stateful(Arc::new(
+                        Action::Meta(Arc::new(
                             RouterAction::new(target.clone())
                         )),
                     );
@@ -281,15 +257,13 @@ impl fmt::Display for RouterAction {
     }
 }
 
-impl StatefulAction for RouterAction {
-    fn gen_desc(
-        &self,
-        _flow_id: InnerFlowId,
-        _meta: &mut Meta
-    ) -> GenDescResult {
-        Ok(Arc::new(RouterDesc {
-            target: self.target.clone(),
-        }))
+impl MetaAction for RouterAction {
+    fn mod_meta(&self, _flow_id: InnerFlowId, meta: &mut Meta) {
+        // TODO Eiter mod_meta() needs to be able to return an error,
+        // setting metadata needs to be a different callback, or we
+        // should handle failure here and overwrite any existing
+        // entry.
+        meta.add::<RouterTarget>(self.target.clone()).unwrap();
     }
 }
 

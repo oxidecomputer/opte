@@ -28,7 +28,7 @@ use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::router::RouterTarget;
 use crate::port::{self, Port, Pos};
 use crate::port::meta::Meta;
-use crate::rule::{self, Action, ActionDesc, HT, Rule, StatefulAction};
+use crate::rule::{self, Action, HT, Rule, StaticAction};
 use crate::sync::{KMutex, KMutexType};
 use crate::udp::UdpMeta;
 use crate::Direction;
@@ -48,8 +48,8 @@ pub fn setup(
     v2p: Arc<Virt2Phys>,
 ) {
     // Action Index 0
-    let encap_decap = Action::Stateful(
-        Arc::new(EncapDecapAction::new(
+    let encap = Action::Static(
+        Arc::new(EncapAction::new(
             cfg.boundary_services,
             cfg.phys_mac_src,
             cfg.phys_mac_dst,
@@ -58,95 +58,26 @@ pub fn setup(
         ))
     );
 
-    let layer = Layer::new(OVERLAY_LAYER_NAME, port.name(), vec![encap_decap]);
-    let encap_decap_rule = Rule::new(1, layer.action(0).unwrap().clone());
-    layer.add_rule(Direction::Out, encap_decap_rule.clone().match_any());
-    // XXX Currently this will decap any outer 5-tuple and pass along
-    // the inner frame. Should this be the case? Is there any type of
-    // validation of the outer frame that should occur?
-    layer.add_rule(Direction::In, encap_decap_rule.match_any());
+    // Action Index 1
+    let decap = Action::Static(Arc::new(DecapAction::new()));
+
+    let layer = Layer::new(OVERLAY_LAYER_NAME, port.name(), vec![encap, decap]);
+    let encap_rule = Rule::new(1, layer.action(0).unwrap().clone());
+    layer.add_rule(Direction::Out, encap_rule.clone().match_any());
+    let decap_rule = Rule::new(1, layer.action(1).unwrap().clone());
+    layer.add_rule(Direction::In, decap_rule.match_any());
     // NOTE The First/Last positions cannot fail; perhaps I should
     // improve the API to avoid the unwrap().
     port.add_layer(layer, Pos::Last).unwrap();
-}
-
-#[derive(Clone, Debug)]
-pub struct EncapDecapDesc {
-    inner_mac_dest: EtherAddr,
-    phys_ip_src: Ipv6Addr,
-    phys_ip_dst: Ipv6Addr,
-    phys_mac_src: EtherAddr,
-    phys_mac_dst: EtherAddr,
-    vni: Vni,
 }
 
 pub const DECAP_NAME: &'static str = "decap";
 pub const ENCAP_NAME: &'static str = "encap";
 pub const ENCAP_DECAP_NAME: &'static str = "encap/decap";
 
-impl ActionDesc for EncapDecapDesc {
-    // There's no cleanup needed.
-    fn fini(&self) {}
 
-    fn gen_ht(&self, dir: Direction, _meta: &mut Meta) -> HT {
-        match dir {
-            Direction::Out => {
-                HT {
-                    name: ENCAP_NAME.to_string(),
-                    outer_ether: EtherMeta::push(
-                        self.phys_mac_src,
-                        self.phys_mac_dst,
-                        ETHER_TYPE_IPV6,
-                    ),
-                    outer_ip: Ipv6Meta::push(
-                        self.phys_ip_src,
-                        self.phys_ip_dst,
-                        Protocol::UDP,
-                    ),
-                    outer_ulp: UdpMeta::push(
-                        // XXX Geneve uses the UDP source port as a
-                        // flow label value for the purposes of ECMP
-                        // -- a hash of the 5-tuple. However, when
-                        // using Geneve in IPv6 one could also choose
-                        // to use the IPv6 Flow Label field, which has
-                        // 4 more bits of entropy and could be argued
-                        // to be more fit for this purpose. As we know
-                        // that our physical network is always IPv6,
-                        // perhaps we should just use that? For now I
-                        // defer the choice and leave this hard-coded.
-                        7777,
-                        GENEVE_PORT
-                    ),
-                    outer_encap: GeneveMeta::push(self.vni),
-                    inner_ether: EtherMeta::modify(
-                        None,
-                        Some(self.inner_mac_dest)
-                    ),
-                    ..Default::default()
-                }
-            },
-
-            Direction::In => {
-                HT {
-                    name: DECAP_NAME.to_string(),
-                    outer_ether: HeaderAction::Pop,
-                    outer_ip: HeaderAction::Pop,
-                    outer_ulp: HeaderAction::Pop,
-                    outer_encap: HeaderAction::Pop,
-                    ..Default::default()
-                }
-            }
-        }
-    }
-
-    fn name(&self) -> &str {
-        ENCAP_DECAP_NAME
-    }
-}
-
-/// A [`StatefulAction`] representing the act of encapsulating and
-/// decapsulating a packet for the purpose of implementing an overlay
-/// network.
+/// A [`StaticAction`] representing the act of encapsulating a packet
+/// for the purpose of implementing an overlay network.
 ///
 /// NOTE: Currently the encapsulation is hard-coded to use Geneve.
 ///
@@ -185,7 +116,7 @@ impl ActionDesc for EncapDecapDesc {
 /// This action uses the [`Virt2Phys`] resource to map the vritual
 /// destination to the physical location. These mappings are
 /// determined by Nexus and pushed down to individual OPTE instances.
-pub struct EncapDecapAction {
+pub struct EncapAction {
     // The physical address of boundary services.
     boundary_services: PhysNet,
     phys_mac_src: EtherAddr,
@@ -196,15 +127,15 @@ pub struct EncapDecapAction {
     v2p: Arc<Virt2Phys>,
 }
 
-impl EncapDecapAction {
+impl EncapAction {
     pub fn new(
         boundary_services: PhysNet,
         phys_mac_src: EtherAddr,
         phys_mac_dst: EtherAddr,
         phys_ip_src: Ipv6Addr,
         v2p: Arc<Virt2Phys>,
-    ) -> EncapDecapAction {
-        EncapDecapAction {
+    ) -> Self {
+        Self {
             boundary_services,
             phys_mac_src,
             phys_mac_dst,
@@ -214,18 +145,20 @@ impl EncapDecapAction {
     }
 }
 
-impl fmt::Display for EncapDecapAction {
+impl fmt::Display for EncapAction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "EncapDecap")
+        write!(f, "Encap")
     }
 }
 
-impl StatefulAction for EncapDecapAction {
-    fn gen_desc(
+impl StaticAction for EncapAction {
+    fn gen_ht(
         &self,
+        // The encap action is only used for outgoing.
+        _dir: Direction,
         flow_id: InnerFlowId,
         meta: &mut Meta,
-    ) -> rule::GenDescResult {
+    ) -> rule::GenHtResult {
         // The router layer determines a RouterTarget and stores it in
         // the meta map. We need to map this virtual target to a
         // physical one.
@@ -237,14 +170,14 @@ impl StatefulAction for EncapDecapAction {
                 // we currently have no way to enforce this in the
                 // type system, and thus must account for this
                 // situation.
-                return Err(rule::GenDescError::Unexpected {
+                return Err(rule::GenHtError::Unexpected {
                     msg: format!("no RouterTarget metadata entry found")
                 });
             }
         };
 
         // Given the virtual target, determine its physical mapping.
-        let phys = match virt_target {
+        let phys_target = match virt_target {
             RouterTarget::Drop => {
                 todo!("should we even make it here?");
             }
@@ -257,7 +190,7 @@ impl StatefulAction for EncapDecapAction {
                 match self.v2p.get(virt_ip) {
                     Some(val) => val,
                     None => {
-                        return Err(rule::GenDescError::Unexpected {
+                        return Err(rule::GenHtError::Unexpected {
                             msg: format!("no v2p mapping for {}", virt_ip)
                         });
                     }
@@ -268,7 +201,7 @@ impl StatefulAction for EncapDecapAction {
                 match self.v2p.get(&flow_id.dst_ip) {
                     Some(val) => val,
                     None => {
-                        return Err(rule::GenDescError::Unexpected {
+                        return Err(rule::GenHtError::Unexpected {
                             msg: format!(
                                 "no v2p mapping for {}",
                                 flow_id.dst_ip
@@ -279,14 +212,74 @@ impl StatefulAction for EncapDecapAction {
             }
         };
 
-        Ok(Arc::new(EncapDecapDesc {
-            inner_mac_dest: phys.ether,
-            phys_mac_src: self.phys_mac_src,
-            phys_mac_dst: self.phys_mac_dst,
-            phys_ip_src: self.phys_ip_src,
-            phys_ip_dst: phys.ip,
-            vni: phys.vni,
-        }))
+        Ok(HT {
+            name: ENCAP_NAME.to_string(),
+            outer_ether: EtherMeta::push(
+                self.phys_mac_src,
+                self.phys_mac_dst,
+                ETHER_TYPE_IPV6,
+            ),
+            outer_ip: Ipv6Meta::push(
+                self.phys_ip_src,
+                phys_target.ip,
+                Protocol::UDP,
+            ),
+            outer_ulp: UdpMeta::push(
+                // XXX Geneve uses the UDP source port as a
+                // flow label value for the purposes of ECMP
+                // -- a hash of the 5-tuple. However, when
+                // using Geneve in IPv6 one could also choose
+                // to use the IPv6 Flow Label field, which has
+                // 4 more bits of entropy and could be argued
+                // to be more fit for this purpose. As we know
+                // that our physical network is always IPv6,
+                // perhaps we should just use that? For now I
+                // defer the choice and leave this hard-coded.
+                7777,
+                GENEVE_PORT
+            ),
+            outer_encap: GeneveMeta::push(phys_target.vni),
+            inner_ether: EtherMeta::modify(
+                None,
+                Some(phys_target.ether)
+            ),
+            ..Default::default()
+        })
+    }
+}
+
+pub struct DecapAction {}
+
+/// A [`StaticAction`] representing the act of decapsulating a packet
+/// for the purpose of implementing an overlay network.
+impl DecapAction {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl fmt::Display for DecapAction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Decap")
+    }
+}
+
+impl StaticAction for DecapAction {
+    fn gen_ht(
+        &self,
+        // The decap action is only used for ingoing.
+        _dir: Direction,
+        _flow_id: InnerFlowId,
+        _meta: &mut Meta,
+    ) -> rule::GenHtResult {
+        Ok(HT {
+            name: DECAP_NAME.to_string(),
+            outer_ether: HeaderAction::Pop,
+            outer_ip: HeaderAction::Pop,
+            outer_ulp: HeaderAction::Pop,
+            outer_encap: HeaderAction::Pop,
+            ..Default::default()
+        })
     }
 }
 
@@ -347,7 +340,6 @@ pub struct OverlayCfg {
     pub phys_ip_src: Ipv6Addr,
 }
 
-// TODO move to api module
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SetOverlayReq {
     pub port_name: String,

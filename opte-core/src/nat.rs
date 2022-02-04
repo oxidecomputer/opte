@@ -176,7 +176,7 @@ impl ActionDesc for DynNat4Desc {
         todo!("implement fini() for DynNat4Desc");
     }
 
-    fn gen_ht(&self, dir: Direction, _meta: &mut Meta) -> HT {
+    fn gen_ht(&self, dir: Direction) -> HT {
         match dir {
             // Outbound traffic needs it's source IP and source port
             // mapped to the public values obtained from the NAT pool.
@@ -250,13 +250,12 @@ fn dyn_nat4_ht() {
     let pub_ip = "52.10.128.69".parse().unwrap();
     let pub_port = "8765".parse().unwrap();
     let outside_ip = "76.76.21.21".parse().unwrap();
-    let mut meta = port::meta::Meta::new();
 
     let nat =
         DynNat4Desc { pub_mac, pub_ip, pub_port, priv_mac, priv_ip, priv_port };
 
     // TODO test in_ht
-    let out_ht = nat.gen_ht(Direction::Out, &mut meta);
+    let out_ht = nat.gen_ht(Direction::Out);
 
     let ether =
         EtherMeta { src: priv_mac, dst: dest_mac, ether_type: ETHER_TYPE_IPV4 };

@@ -40,8 +40,9 @@ use std::time::Instant;
 
 #[derive(Debug)]
 pub enum LayerError {
-    GenDesc(crate::rule::GenDescError),
-    GenPacket(crate::rule::GenErr),
+    GenDesc(rule::GenDescError),
+    GenHt(rule::GenHtError),
+    GenPacket(rule::GenErr),
 }
 
 #[derive(Debug)]
@@ -109,6 +110,29 @@ impl Layer {
 
         unsafe {
             __dtrace_probe_gen__desc__fail(
+                port_c.as_ptr() as uintptr_t,
+                layer_c.as_ptr() as uintptr_t,
+                dir_c.as_ptr() as uintptr_t,
+                &flow_id as *const flow_id_sdt_arg as uintptr_t,
+                msg_c.as_ptr() as uintptr_t,
+            );
+        }
+    }
+
+    fn gen_ht_fail_probe(
+        &self,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        err: &rule::GenHtError
+    ) {
+        let flow_id = flow_id_sdt_arg::from(ifid);
+        let port_c = CString::new(format!("{}", self.port_name)).unwrap();
+        let layer_c = CString::new(format!("{}", self.name)).unwrap();
+        let dir_c = CString::new(format!("{}", dir)).unwrap();
+        let msg_c = CString::new(format!("{:?}", err)).unwrap();
+
+        unsafe {
+            __dtrace_probe_gen__ht__fail(
                 port_c.as_ptr() as uintptr_t,
                 layer_c.as_ptr() as uintptr_t,
                 dir_c.as_ptr() as uintptr_t,
@@ -208,7 +232,7 @@ impl Layer {
         if let Some((_, entry)) = self.ft_in.lock().get_mut(&ifid) {
             entry.hit();
             let desc = entry.get_state();
-            let ht = desc.gen_ht(Direction::In, meta);
+            let ht = desc.gen_ht(Direction::In);
             hts.push(ht.clone());
 
             ht.run(pkt.meta_mut());
@@ -262,14 +286,31 @@ impl Layer {
             return Ok(LayerResult::Allow);
         }
 
-        match &rule.unwrap().action() {
+        match rule.unwrap().action() {
             Action::Deny => {
                 rule_deny_probe(&self.name, Direction::In, &ifid);
                 return Ok(LayerResult::Deny);
             }
 
+            Action::Meta(action) => {
+                action.mod_meta(ifid, meta);
+                return Ok(LayerResult::Allow);
+            }
+
             Action::Static(action) => {
-                let ht = action.gen_ht(Direction::In, ifid);
+                let ht = match action.gen_ht(Direction::Out, ifid, meta) {
+                    Ok(ht) => ht,
+                    Err(e) => {
+                        self.record_gen_ht_failure(
+                            &ectx,
+                            Direction::Out,
+                            &ifid,
+                            &e
+                        );
+                        return Err(LayerError::GenHt(e));
+                    }
+                };
+
                 hts.push(ht.clone());
 
                 ht.run(pkt.meta_mut());
@@ -303,7 +344,7 @@ impl Layer {
                         }
                     };
 
-                let ht_in = desc.gen_ht(Direction::In, meta);
+                let ht_in = desc.gen_ht(Direction::In);
                 hts.push(ht_in.clone());
 
                 self.ft_in.lock().add(ifid, desc.clone());
@@ -372,7 +413,7 @@ impl Layer {
         if let Some((_, entry)) = self.ft_out.lock().get_mut(&ifid) {
             entry.hit();
             let desc = entry.get_state();
-            let ht = desc.gen_ht(Direction::Out, meta);
+            let ht = desc.gen_ht(Direction::Out);
             hts.push(ht.clone());
 
             ht.run(pkt.meta_mut());
@@ -428,14 +469,31 @@ impl Layer {
             return Ok(LayerResult::Allow);
         }
 
-        match &rule.unwrap().action() {
+        match rule.unwrap().action() {
             Action::Deny => {
                 rule_deny_probe(&self.name, Direction::Out, &ifid);
                 return Ok(LayerResult::Deny);
             }
 
+            Action::Meta(action) => {
+                action.mod_meta(ifid, meta);
+                return Ok(LayerResult::Allow);
+            }
+
             Action::Static(action) => {
-                let ht = action.gen_ht(Direction::Out, ifid);
+                let ht = match action.gen_ht(Direction::Out, ifid, meta) {
+                    Ok(ht) => ht,
+                    Err(e) => {
+                        self.record_gen_ht_failure(
+                            &ectx,
+                            Direction::Out,
+                            &ifid,
+                            &e
+                        );
+                        return Err(LayerError::GenHt(e));
+                    }
+                };
+
                 hts.push(ht.clone());
 
                 ht.run(pkt.meta_mut());
@@ -469,7 +527,7 @@ impl Layer {
                         }
                     };
 
-                let ht_out = desc.gen_ht(Direction::Out, meta);
+                let ht_out = desc.gen_ht(Direction::Out);
                 hts.push(ht_out.clone());
 
                 self.ft_out.lock().add(ifid, desc.clone());
@@ -537,6 +595,25 @@ impl Layer {
             )
         );
         self.gen_desc_fail_probe(dir, ifid, err);
+    }
+
+    fn record_gen_ht_failure(
+        &self,
+        ectx: &ExecCtx,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        err: &rule::GenHtError
+    ) {
+        // XXX increment stat
+        ectx.log.log(
+            LogLevel::Error,
+            &format!(
+                "failed to generate HT for static action: {} {:?}",
+                ifid,
+                err
+            )
+        );
+        self.gen_ht_fail_probe(dir, ifid, err);
     }
 
     pub fn remove_rule(&self, dir: Direction, id: RuleId) -> Result<()> {
@@ -954,6 +1031,28 @@ pub unsafe fn __dtrace_probe_gen__desc__fail(
 #[cfg(all(not(feature = "std"), not(test)))]
 extern "C" {
     pub fn __dtrace_probe_gen__desc__fail(
+        port: uintptr_t,
+        layer: uintptr_t,
+        dir: uintptr_t,
+        ifid: uintptr_t,
+        msg: uintptr_t
+    );
+}
+
+#[cfg(any(feature = "std", test))]
+pub unsafe fn __dtrace_probe_gen__ht__fail(
+    _port: uintptr_t,
+    _layer: uintptr_t,
+    _dir: uintptr_t,
+    _ifid: uintptr_t,
+    _msg: uintptr_t
+) {
+    ()
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+extern "C" {
+    pub fn __dtrace_probe_gen__ht__fail(
         port: uintptr_t,
         layer: uintptr_t,
         dir: uintptr_t,
