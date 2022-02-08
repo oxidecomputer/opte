@@ -70,7 +70,8 @@ impl From<crate::packet::WriteError> for ProcessError {
 /// punting on traffic I didn't want to deal with yet.
 ///
 /// * Drop: The packet has beend dropped, as determined by the rules
-/// or because of resource exhaustion.
+/// or because of resource exhaustion. Included is the reason for the
+/// drop.
 ///
 /// * Modified: The packet has been modified based on its matching rules.
 ///
@@ -80,9 +81,16 @@ impl From<crate::packet::WriteError> for ProcessError {
 #[derive(Debug)]
 pub enum ProcessResult {
     Bypass,
-    Drop,
+    Drop { reason: DropReason },
     Modified,
     Hairpin(Packet<Initialized>),
+}
+
+/// The reason for a packet being dropped.
+#[derive(Clone, Debug)]
+pub enum DropReason {
+    Layer { name: String },
+    TcpClosed,
 }
 
 pub trait PortState {}
@@ -327,10 +335,10 @@ impl Port<Active> {
     fn bad_packet_err(
         &self,
         msg: String,
-        ptr: uintptr_t,
+        pkt: &mut Packet<Parsed>,
         ifid: &InnerFlowId
     ) -> ! {
-        crate::dbg(format!("ptr: {:x}", ptr));
+        crate::dbg(format!("mblk: {}", pkt.mblk_ptr_str()));
         crate::dbg(format!("ifid: {}", ifid));
         // crate::dbg(format!("meta: {:?}", meta));
         crate::dbg(format!(
@@ -437,7 +445,7 @@ impl Port<Active> {
                 for layer in &self.state.layers {
                     match layer.process(&self.ectx, dir, pkt, hts, meta) {
                         Ok(LayerResult::Allow) => (),
-                        ret @ Ok(LayerResult::Deny) => return ret,
+                        ret @ Ok(LayerResult::Deny { .. }) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
                         ret @ Err(_) => return ret,
                     }
@@ -448,7 +456,7 @@ impl Port<Active> {
                 for layer in self.state.layers.iter().rev() {
                     match layer.process(&self.ectx, dir, pkt, hts, meta) {
                         Ok(LayerResult::Allow) => (),
-                        ret @ Ok(LayerResult::Deny) => return ret,
+                        ret @ Ok(LayerResult::Deny { .. }) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
                         ret @ Err(_) => return ret,
                     }
@@ -481,13 +489,12 @@ impl Port<Active> {
         &self,
         dir: Direction,
         pkt: &mut Packet<Parsed>,
-        ptr: uintptr_t,
     ) -> std::result::Result<ProcessResult, ProcessError> {
         port_process_entry_probe(dir, &self.name);
         let mut meta = meta::Meta::new();
         let res = match dir {
-            Direction::Out => self.process_out(pkt, ptr, &mut meta),
-            Direction::In => self.process_in(pkt, ptr, &mut meta),
+            Direction::Out => self.process_out(pkt, &mut meta),
+            Direction::In => self.process_in(pkt, &mut meta),
         };
         port_process_return_probe(dir, &self.name);
         pkt.emit_headers()?;
@@ -627,7 +634,6 @@ impl Port<Active> {
     pub fn process_in(
         &self,
         pkt: &mut Packet<Parsed>,
-        ptr: uintptr_t,
         meta: &mut meta::Meta,
     ) -> result::Result<ProcessResult, ProcessError> {
         let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
@@ -651,7 +657,11 @@ impl Port<Active> {
                     return Ok(ProcessResult::Hairpin(hppkt));
                 }
 
-                Ok(LayerResult::Deny) => return Ok(ProcessResult::Drop),
+                Ok(LayerResult::Deny { name }) => {
+                    return Ok(ProcessResult::Drop {
+                        reason: DropReason::Layer { name }
+                    });
+                }
 
                 Err(e) => return Err(ProcessError::Layer(e)),
             }
@@ -674,7 +684,9 @@ impl Port<Active> {
                     match self.process_in_tcp_existing(pkt.meta()) {
                         // Drop any data that comes in after close.
                         Ok(TcpState::Closed) => {
-                            return Ok(ProcessResult::Drop);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpClosed
+                            });
                         }
 
                         Ok(_) => {
@@ -682,7 +694,7 @@ impl Port<Active> {
                         }
 
                         Err(e) => {
-                            self.bad_packet_err(e, ptr, &ifid);
+                            self.bad_packet_err(e, pkt, &ifid);
                         }
                     }
                 }
@@ -711,7 +723,9 @@ impl Port<Active> {
                     match self.process_in_tcp_new(&ifid, pkt.meta()) {
                         // Drop any data that comes in after close.
                         Ok(TcpState::Closed) => {
-                            return Ok(ProcessResult::Drop);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpClosed
+                            });
                         }
 
                         Ok(_) => {
@@ -719,7 +733,7 @@ impl Port<Active> {
                         }
 
                         Err(e) => {
-                            self.bad_packet_err(e, ptr, &ifid);
+                            self.bad_packet_err(e, pkt, &ifid);
                         }
                     }
                 }
@@ -727,7 +741,11 @@ impl Port<Active> {
                 Ok(ProcessResult::Modified)
             }
 
-            Ok(LayerResult::Deny) => Ok(ProcessResult::Drop),
+            Ok(LayerResult::Deny { name }) => {
+                Ok(ProcessResult::Drop {
+                    reason: DropReason::Layer { name }
+                })
+            }
 
             Ok(LayerResult::Hairpin(hppkt)) => {
                 Ok(ProcessResult::Hairpin(hppkt))
@@ -853,7 +871,6 @@ impl Port<Active> {
     pub fn process_out(
         &self,
         pkt: &mut Packet<Parsed>,
-        ptr: uintptr_t,
         meta: &mut meta::Meta,
     ) -> result::Result<ProcessResult, ProcessError> {
         let etype = pkt.meta().inner.ether.as_ref().unwrap().ether_type;
@@ -893,7 +910,12 @@ impl Port<Active> {
                     return Ok(ProcessResult::Hairpin(hppkt));
                 }
 
-                Ok(LayerResult::Deny) => return Ok(ProcessResult::Drop),
+                Ok(LayerResult::Deny { name }) => {
+                    return Ok(ProcessResult::Drop {
+                        reason: DropReason::Layer { name }
+                    });
+                }
+
                 Err(e) => return Err(ProcessError::Layer(e)),
             }
         }
@@ -909,11 +931,15 @@ impl Port<Active> {
                 if pkt.meta().is_inner_tcp() {
                     match self.process_out_tcp_existing(&ifid, pkt.meta()) {
                         Err(e) => {
-                            self.bad_packet_err(e, ptr, &ifid);
+                            self.bad_packet_err(e, pkt, &ifid);
                         }
 
                         // Drop any data that comes in after close.
-                        Ok(TcpState::Closed) => return Ok(ProcessResult::Drop),
+                        Ok(TcpState::Closed) => {
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpClosed
+                            });
+                        }
 
                         // Continue with processing.
                         Ok(_) => (),
@@ -938,11 +964,15 @@ impl Port<Active> {
         if pkt.meta().is_inner_tcp() {
             match self.process_out_tcp_new(ifid, pkt.meta()) {
                 Err(e) => {
-                    self.bad_packet_err(e, ptr, &ifid);
+                    self.bad_packet_err(e, pkt, &ifid);
                 }
 
                 // Drop any data that comes in after close.
-                Ok(TcpState::Closed) => return Ok(ProcessResult::Drop),
+                Ok(TcpState::Closed) => {
+                    return Ok(ProcessResult::Drop {
+                        reason: DropReason::TcpClosed
+                    });
+                }
 
                 // Continue with processing.
                 Ok(_) => (),
@@ -967,7 +997,10 @@ impl Port<Active> {
                 Ok(ProcessResult::Hairpin(hppkt))
             }
 
-            Ok(LayerResult::Deny) => Ok(ProcessResult::Drop),
+            Ok(LayerResult::Deny { name }) => {
+                Ok(ProcessResult::Drop { reason: DropReason::Layer { name } })
+            }
+
             Err(e) => Err(ProcessError::Layer(e)),
         }
     }

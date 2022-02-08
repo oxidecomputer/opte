@@ -1254,6 +1254,12 @@ impl Packet<Parsed> {
         &mut self.state.meta
     }
 
+    /// Return the mblk pointer value as a formatted String. This is
+    /// for debugging purposes.
+    pub fn mblk_ptr_str(&self) -> String {
+        format!("{:p}", self.segs[0].mp)
+    }
+
     fn replace_headers(&mut self, mut hdr_seg: PacketSeg) {
         let body_seg_idx = self.state.body.seg_index;
 

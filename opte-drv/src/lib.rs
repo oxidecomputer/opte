@@ -484,13 +484,13 @@ fn add_port(
     unsafe { mac_unicast_primary_get(mh, &mut private_mac) };
     let private_mac = EtherAddr::from(private_mac);
 
-    let vpc_subnet = if req.ip_cfg.snat.is_none() {
+    let vpc_subnet = if req.port_cfg.snat.is_none() {
         "192.168.77.0/24".parse().unwrap()
     } else {
-        req.ip_cfg.snat.as_ref().unwrap().vpc_sub4
+        req.port_cfg.snat.as_ref().unwrap().vpc_sub4
     };
 
-    let dyn_nat = match req.ip_cfg.snat.as_ref() {
+    let dyn_nat = match req.port_cfg.snat.as_ref() {
         None => {
             opte_core::oxide_net::DynNat4Cfg {
                 public_mac: EtherAddr::from([0x99; 6]),
@@ -517,7 +517,7 @@ fn add_port(
     let port_cfg = PortCfg {
         vpc_subnet,
         private_mac,
-        private_ip: req.ip_cfg.private_ip,
+        private_ip: req.port_cfg.private_ip,
         gw_mac: state.gateway_mac,
         gw_ip: state.gateway_ip,
         dyn_nat,
@@ -533,7 +533,7 @@ fn add_port(
 
     // TODO: In order to demo this in the lab environment we currently
     // allow SNAT to be optional.
-    if req.ip_cfg.snat.is_some() {
+    if req.port_cfg.snat.is_some() {
         opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg)
             .unwrap();
     }
@@ -849,7 +849,7 @@ unsafe extern "C" fn opte_ioctl(
     let cmd = match IoctlCmd::try_from(cmd) {
         Ok(v) => v,
         Err(_) => {
-            // TODO Replace this with a stat.
+            // XXX Replace this with a stat.
             opte_core::err(format!("invalid ioctl cmd: {}", cmd));
             return EINVAL;
         }
@@ -1375,9 +1375,7 @@ pub unsafe extern "C" fn opte_tx(
         }
     };
     let ocs = &*ocsp;
-    // TODOx This `mp_chain` arg was for debug purposes; now that we
-    // have Packet we can probably get rid of it?
-    let res = ocs.port.process(Direction::Out, &mut pkt, mp_chain as uintptr_t);
+    let res = ocs.port.process(Direction::Out, &mut pkt);
 
     match res {
         Ok(ProcessResult::Modified) => {
@@ -1387,7 +1385,7 @@ pub unsafe extern "C" fn opte_tx(
         // TODO Probably want a state + a probe along with a reason
         // carried up via `ProcessResult::Drop(String)` so that a
         // reason can be given as part of the probe.
-        Ok(ProcessResult::Drop) => {
+        Ok(ProcessResult::Drop { .. }) => {
             return;
         }
 
@@ -1438,8 +1436,8 @@ pub unsafe extern "C" fn opte_tx(
     // clear the hairpin queue when the guest is actively trying to
     // send packets.
     while let Some(p) = ocs.hairpin_queue.lock().pop() {
-        // TODO: Get rid of unwrap() here and instead do
-        // stat/probe/log if hairpin packet fails to parse.
+        // XXX Get rid of unwrap() here and instead do stat/probe/log
+        // if hairpin packet fails to parse.
         ocs.mc.tx(
             p.parse().unwrap(),
             hint,
@@ -1477,7 +1475,8 @@ pub unsafe extern "C" fn opte_rx(
     };
     let ocs = &*(arg as *const OpteClientState);
     let rx_state = ocs.rx_state.as_ref().unwrap();
-    let res = ocs.port.process(Direction::In, &mut pkt, mp_chain as uintptr_t);
+    let res = ocs.port.process(Direction::In, &mut pkt);
+
     match res {
         Ok(ProcessResult::Modified) => {
             let meta = pkt.meta();
@@ -1506,7 +1505,7 @@ pub unsafe extern "C" fn opte_rx(
         // TODO Probably want a state + a probe along with a reason
         // carried up via `ProcessResult::Drop(String)` so that a
         // reason can be given as part of the probe.
-        Ok(ProcessResult::Drop) => {
+        Ok(ProcessResult::Drop { .. }) => {
             return;
         }
 

@@ -540,6 +540,13 @@ pub enum IpCidr {
 }
 
 impl IpCidr {
+    pub fn is_default(&self) -> bool {
+        match self {
+            Self::Ip4(ip4) => ip4.is_default(),
+            Self::Ip6(_) => todo!("IPv6 is_default"),
+        }
+    }
+
     pub fn prefix(&self) -> usize {
         match self {
             Self::Ip4(ip4) => ip4.prefix() as usize,

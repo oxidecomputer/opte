@@ -371,9 +371,11 @@ pub struct SnatCfg {
     pub vpc_sub4: VpcSubnet4,
 }
 
-// TODO Rename this PortConfig
+// XXX An OPTE Port is really both a virtual switch port as well as
+// the implementation of a virtual interface; namely the VPC
+// interface.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct IpCfg {
+pub struct PortCfg {
     pub private_ip: Ipv4Addr,
     pub snat: Option<SnatCfg>,
 }
@@ -381,7 +383,7 @@ pub struct IpCfg {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AddPortReq {
     pub link_name: String,
-    pub ip_cfg: IpCfg,
+    pub port_cfg: PortCfg,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -34,7 +34,10 @@ pub const IPV4_HDR_VER_SHIFT: u8 = 4;
 pub const IPV4_HDR_SZ: usize = std::mem::size_of::<Ipv4HdrRaw>();
 pub const IPV4_VERSION: u8 = 4;
 
+pub const ANY_ADDR: Ipv4Addr = Ipv4Addr::new([0; 4]);
 pub const LOCAL_BROADCAST: Ipv4Addr = Ipv4Addr::new([255; 4]);
+
+pub const DEF_ROUTE: &'static str = "0.0.0.0/0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IpError {
@@ -103,6 +106,11 @@ impl Ipv4Cidr {
         self.ip
     }
 
+    /// Does this CIDR represent the default route subnet?
+    pub fn is_default(&self) -> bool {
+        self.ip == ANY_ADDR && self.prefix == 0
+    }
+
     pub fn prefix(self) -> u8 {
         self.prefix
     }
@@ -157,6 +165,21 @@ impl FromStr for Ipv4Cidr {
 
         Ipv4Cidr::new(ip, prefix)
     }
+}
+
+#[test]
+fn cidr_match() {
+    let ip1 = "192.168.2.22".parse::<Ipv4Addr>().unwrap();
+    let cidr1 = "192.168.2.0/24".parse().unwrap();
+    assert!(ip1.match_prefix(&cidr1));
+
+    let ip2 = "10.7.7.7".parse::<Ipv4Addr>().unwrap();
+    let cidr2 = "10.0.0.0/8".parse().unwrap();
+    assert!(ip2.match_prefix(&cidr2));
+
+    let ip3 = "52.10.128.69".parse::<Ipv4Addr>().unwrap();
+    let cidr3 = DEF_ROUTE.parse().unwrap();
+    assert!(ip3.match_prefix(&cidr3));
 }
 
 #[test]
@@ -243,11 +266,11 @@ impl Ipv4Addr {
         (&self.inner).iter()
     }
 
-    // TODO Consider creating Ipv4CidrPrefix so we can have a
-    // compile-time guarantee that prefix is valid.
+    /// Return the address after applying the netmask for the given
+    /// network prefix.
     pub const fn mask(mut self, net_prefix: u8) -> Self {
         if net_prefix == 0 {
-            return self;
+            return ANY_ADDR;
         }
 
         let mut n = u32::from_be_bytes(self.inner);
@@ -293,6 +316,13 @@ impl From<Ipv4AddrTuple> for Ipv4Addr {
     fn from(tuple: Ipv4AddrTuple) -> Self {
         Self::new([tuple.0, tuple.1, tuple.2, tuple.3])
     }
+}
+
+#[test]
+fn ip4_mask() {
+    let ip = "192.168.2.77".parse::<Ipv4Addr>().unwrap();
+    assert_eq!(ip.mask(24), "192.168.2.0".parse().unwrap());
+    assert_eq!(ip.mask(0), "0.0.0.0".parse().unwrap());
 }
 
 #[test]

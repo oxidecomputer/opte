@@ -211,7 +211,7 @@ impl From<AddPort> for AddPortReq {
     fn from(r: AddPort) -> Self {
         Self {
             link_name: r.name,
-            ip_cfg: api::IpCfg::from(r.port_cfg),
+            port_cfg: api::PortCfg::from(r.port_cfg),
         }
     }
 }
@@ -227,7 +227,7 @@ struct PortCfg {
     snat: Option<SnatCfg>,
 }
 
-impl From<PortCfg> for api::IpCfg {
+impl From<PortCfg> for api::PortCfg {
     fn from(s: PortCfg) -> Self {
         Self {
             private_ip: s.private_ip,

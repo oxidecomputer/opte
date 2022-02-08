@@ -48,7 +48,7 @@ pub enum LayerError {
 #[derive(Debug)]
 pub enum LayerResult {
     Allow,
-    Deny,
+    Deny { name: String },
     Hairpin(Packet<Initialized>),
 }
 
@@ -289,7 +289,7 @@ impl Layer {
         match rule.unwrap().action() {
             Action::Deny => {
                 rule_deny_probe(&self.name, Direction::In, &ifid);
-                return Ok(LayerResult::Deny);
+                return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
             Action::Meta(action) => {
@@ -451,7 +451,6 @@ impl Layer {
         meta: &mut Meta,
     ) -> result::Result<LayerResult, LayerError> {
         let lock = self.rules_out.lock();
-
         let mut rdr = pkt.get_body_rdr();
         let rule = lock.find_match(pkt.meta(), &mut rdr);
         let _ = rdr.finish();
@@ -472,7 +471,7 @@ impl Layer {
         match rule.unwrap().action() {
             Action::Deny => {
                 rule_deny_probe(&self.name, Direction::Out, &ifid);
-                return Ok(LayerResult::Deny);
+                return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
             Action::Meta(action) => {

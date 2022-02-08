@@ -183,7 +183,6 @@ impl Display for ArpOpMatch {
 pub enum Ipv4AddrMatch {
     Exact(Ipv4Addr),
     Prefix(Ipv4Cidr),
-    // Range(Ipv4Addr, Ipv4Addr),
 }
 
 impl Ipv4AddrMatch {
@@ -1011,33 +1010,6 @@ impl fmt::Debug for Action {
     }
 }
 
-// TODOx I should probably name this something else now. It's role is
-// to declare whether or not a rule match should execute the layer's
-// associated action (Allow), or whether it should deny the packet
-// (Deny).
-// #[derive(Clone, Debug)]
-// pub enum RuleAction {
-//     Allow(Action),
-//     Deny,
-// }
-
-// #[derive(Debug, Deserialize, Serialize)]
-// pub enum RuleActionDump {
-//     Allow(usize),
-//     Deny,
-// }
-
-// impl From<&RuleAction> for RuleActionDump {
-//     fn from(ra: &RuleAction) -> Self {
-//         use RuleAction::*;
-
-//         match ra {
-//             Allow(idx) => RuleActionDump::Allow(*idx),
-//             Deny => RuleActionDump::Deny,
-//         }
-//     }
-// }
-
 // TODO Use const generics to make this array?
 #[derive(Clone, Debug)]
 pub struct RulePredicates {
@@ -1050,12 +1022,6 @@ pub trait RuleState {}
 #[derive(Clone, Debug)]
 pub struct Empty {}
 impl RuleState for Empty {}
-
-// pub struct Prepared {
-//     action: ActionOrIdx,
-// }
-// impl RuleState for Prepared {}
-
 
 #[derive(Clone, Debug)]
 pub struct Ready {
