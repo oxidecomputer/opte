@@ -6,7 +6,6 @@ use std::net::Ipv6Addr;
 use structopt::StructOpt;
 
 use opte_core::ether::EtherAddr;
-// TODO Use std Ipv4Addr
 use opte_core::ip4::{Ipv4Addr, Ipv4Cidr};
 use opte_core::ip6 as opte_ip6;
 use opte_core::oxide_net::firewall::{
@@ -547,12 +546,6 @@ fn main() {
                 action,
                 priority,
             };
-            // TODO With the new IoctlError type I would change all
-            // these calls to check return and either print response
-            // or print error. In fact, I think the command errors,
-            // like AddFwRuleError could implement display for this,
-            // and all response types from command could implement
-            // display as well.
             hdl.add_firewall_rule(&port, &rule).unwrap();
         }
 

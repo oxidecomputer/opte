@@ -312,10 +312,10 @@ impl MacClient {
 
     // Send the packet on this client. This function consumes the packet.
     //
-    // TODO This function can actually take a packet chain, but for
-    // now we just pass a single packet at a time.
+    // XXX This function can actually take a packet chain, but for now
+    // we just pass a single packet at a time.
     //
-    // TODO Probably want two separate functions, one for
+    // XXX Probably want two separate functions, one for
     // MAC_DROP_ON_NO_DESC and one for ret_mp.
     fn tx(
         &self,
@@ -585,13 +585,11 @@ fn get_ocs<'a, 'b>(
     }
 }
 
-// TODO This should probably be renamed get_port()
-//
 // We need to pass this function a lock because the caller is likely
 // performing several actions on a given Port and thus must hold the
 // lock the entire time to prevent another thread from deleting the
 // same Port.
-fn get_inactive_port<'a, 'b>(
+fn get_port<'a, 'b>(
     ports_lock: &'a KMutexGuard<BTreeMap<LinkName, PortState>>,
     name: &'b str,
 ) -> Result<&'a Port<port::Inactive>, api::PortError> {
@@ -721,7 +719,7 @@ fn list_layers_hdlr(
     let req: api::ListLayersReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
-    match get_inactive_port(&mut ports_lock, &req.port_name) {
+    match get_port(&mut ports_lock, &req.port_name) {
         Ok(port) => return Ok(Ok(port.list_layers())),
         Err(_) => (),
     };
@@ -755,7 +753,7 @@ fn set_overlay_hdlr(
     let req: overlay::SetOverlayReq = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let ports_lock = state.ports.lock();
-    let port = match get_inactive_port(&ports_lock, &req.port_name) {
+    let port = match get_port(&ports_lock, &req.port_name) {
         Ok(p) => p,
         Err(e) => return Ok(Err(overlay::SetOverlayError::from(e))),
     };
@@ -776,7 +774,7 @@ fn add_router_entry_hdlr(
     let req: router::AddRouterEntryIpv4Req = ioctlenv.copy_in_req()?;
     let state = get_opte_state();
     let mut ports_lock = state.ports.lock();
-    match get_inactive_port(&ports_lock, &req.port_name) {
+    match get_port(&ports_lock, &req.port_name) {
         Ok(port) => {
             Ok(router::add_entry_inactive(
                 port,

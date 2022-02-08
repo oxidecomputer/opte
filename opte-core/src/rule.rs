@@ -1050,11 +1050,6 @@ impl<S: RuleState> Rule<S> {
     }
 }
 
-// TODO Need to change things so that <Ready> (or maybe rename it
-// Prepared) is passed to port/layer add_rule(). Then layer calls
-// finalize to convert the ActionOrIdx to an Action. We need to do
-// this because the shared actions are owned by the Layer so we need
-// to delay their resolution until we are in the Layer's scope.
 impl Rule<Empty> {
     pub fn new(priority: u16, action: Action) -> Self {
         Rule {

@@ -144,12 +144,6 @@ impl IoctlEnvelope {
             return Err(Error::FailedCopyout);
         }
 
-        // TODOx We leave resp_len as the value given by the user
-        // program. May want to rename the fields `resp_bytes_len` and
-        // `resp_len_needed`.
-
-        // TODOx Remove?
-        // self.ioctl.resp_len = vec.len();
         self.copy_out_self()?;
         Ok(())
     }
@@ -159,9 +153,6 @@ impl IoctlEnvelope {
         // TODO place upper limit on req_len to prevent
         // malicious/malformed requests from allocating large amounts
         // of kmem.
-        //
-        // TODOx This actually just needs to be a Box'd array and I
-        // need to use MaybeInit pattern.
         let mut bytes = Vec::with_capacity(self.ioctl.req_len);
         let ret = unsafe {
             ddi::ddi_copyin(

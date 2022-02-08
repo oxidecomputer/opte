@@ -24,9 +24,7 @@ pub enum Error {
     #[error("error interacting with device: {0}")]
     Io(std::io::Error),
 
-    // TODO Pretty sure this message is wrong, should be more like
-    // "error with ser/deser: {0}"
-    #[error("error transferring data to/from driver: {0}")]
+    #[error("error with serdes: {0}")]
     Serdes(String),
 
     /// Something in the opte ioctl(2) handler failed.
@@ -58,19 +56,6 @@ impl From<postcard::Error> for Error {
 pub struct OpteAdm {
     device: File,
 }
-
-// pub fn add_fw_rule_ioctl(
-//     port_name: &str,
-//     rule: &FirewallRule
-// ) -> Result<(), IoctlError<AdFwRuleError>> {
-// ) -> Result<(), Error> {
-//         let cmd = IoctlCmd::FwAddRule;
-//         let req = FwAddRuleReq {
-//             port_name: port_name.to_string(),
-//             rule: rule.clone()
-//         };
-//         run_ioctl(self.device.as_raw_fd(), cmd, &req)
-// }
 
 impl OpteAdm {
     pub const OPTE_CTL: &'static str = "/devices/pseudo/opte@0:opte";
@@ -254,19 +239,19 @@ where
     panic!("non-illumos system, your ioctl(2) is no good here");
 }
 
-// TODO A ioctl is going to return in one of 3 ways:
+// An ioctl is going to return in one of two ways:
 //
-// 1. success: errno == 0 and we have a cmd response to deser
+// 1. success: errno == 0 and we have a command response (Ok or Err)
+// to deser.
 //
-// 2. command failure: errno == EPROTO, there is an error response to deser
+// 2. system failure: errno != 0, there is no command response.
 //
-// 3. system failure: errno != 0, there is no error response
-//
-// This effectively requires nested Result.
-//
-// The outer Result indicates a command response vs. system error with
-// the ioctl machinery. The inner Result indicates whether the command
-// response is a success result or error.
+// This requires a nested Result. The outer Result indicates a command
+// response vs. system error with the ioctl machinery. If the outer
+// result is Ok, the inner Result indicates whether the command ran
+// successfully or not. This allows us to give more detailed error
+// response to a failed command instead of trying to map everything to
+// a Unix errno.
 #[cfg(target_os = "illumos")]
 fn run_ioctl<T, E, R>(
     dev: libc::c_int,
@@ -309,32 +294,6 @@ where
 
                 libc::EINVAL => {
                     "opte driver failed to deser/ser req/resp".to_string()
-                }
-
-                // TODO It would be nicer if run_ioctl returned the
-                // actual error response struct, but for now this will
-                // do.
-                libc::EPROTO => {
-                    let eslice = unsafe {
-                        std::slice::from_raw_parts(
-                            rioctl.resp_bytes,
-                            rioctl.resp_len_needed
-                        )
-                    };
-
-                    match postcard::from_bytes(eslice) {
-                        Ok(eresp) => {
-                            return Ok(Err(eresp));
-                            // format!("cmd error resp: {}", eresp),
-                        }
-
-                        Err(deser_err) => {
-                            format!(
-                                "failed to deser error respon: {}",
-                                deser_err
-                            )
-                        }
-                    }
                 }
 
                 errno => {
