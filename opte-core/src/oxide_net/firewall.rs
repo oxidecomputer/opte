@@ -115,11 +115,6 @@ pub fn from_fw_rule(
     fw_rule: FirewallRule,
     action: rule::Action
 ) -> Rule<rule::Finalized> {
-    // let action = match fw_rule.action {
-    //     Action::Allow => ActionOrIdx::Idx(0),
-    //     Action::Deny => ActionOrIdx::Action(LayerAction::Drop),
-    // };
-
     let rule = Rule::new(fw_rule.priority, action);
     let addr_pred = fw_rule.filters.hosts.into_predicate(fw_rule.direction);
     let proto_pred = fw_rule.filters.protocol.into_predicate();
