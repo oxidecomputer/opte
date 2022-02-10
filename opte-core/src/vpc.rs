@@ -48,7 +48,7 @@ impl VpcSubnet4 {
         req.vpc_sub_cidr.parse()
     }
 
-    pub fn get_cidr(&self) -> Ipv4Cidr {
+    pub fn cidr(&self) -> Ipv4Cidr {
         self.cidr
     }
 
@@ -68,12 +68,12 @@ impl VpcSubnet4 {
     // sits in one of the allowed blocks.
     pub fn new(cidr: Ipv4Cidr) -> result::Result<Self, IpError> {
         let ip = cidr.get_ip();
-        let prefix = cidr.get_net_prefix();
+        let prefix = cidr.prefix();
 
         match ip.into() {
             (10, _, _, _) => {
                 if prefix < 8 || prefix > OXIDE_MIN_IP4_BLOCK {
-                    return Err(IpError::BadNetPrefix(prefix));
+                    return Err(IpError::BadPrefix(prefix));
                 }
 
                 Ok(Self::new_unchecked(cidr))
@@ -85,7 +85,7 @@ impl VpcSubnet4 {
                 }
 
                 if prefix < 12 || prefix > OXIDE_MIN_IP4_BLOCK {
-                    return Err(IpError::BadNetPrefix(prefix));
+                    return Err(IpError::BadPrefix(prefix));
                 }
 
                 Ok(Self::new_unchecked(cidr))
@@ -93,7 +93,7 @@ impl VpcSubnet4 {
 
             (192, 168, _, _) => {
                 if prefix < 16 || prefix > OXIDE_MIN_IP4_BLOCK {
-                    return Err(IpError::BadNetPrefix(prefix));
+                    return Err(IpError::BadPrefix(prefix));
                 }
 
                 Ok(Self::new_unchecked(cidr))
@@ -147,12 +147,12 @@ fn bad_subnet() {
 
     assert_eq!(
         "192.168.2.9/27".parse::<VpcSubnet4>(),
-        Err(IpError::BadNetPrefix(27))
+        Err(IpError::BadPrefix(27))
     );
 
     assert_eq!(
         "10.0.0.0/7".parse::<VpcSubnet4>(),
-        Err(IpError::BadNetPrefix(7))
+        Err(IpError::BadPrefix(7))
     );
 }
 

@@ -1,3 +1,4 @@
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::mem::{self, MaybeUninit};
@@ -6,16 +7,17 @@ use core::result;
 use ddi::{c_int, c_void};
 use illumos_ddi_dki as ddi;
 
-use opte_core::ioctl::{CmdResp, Ioctl};
+use opte_core::ioctl::{CmdErr, CmdOk, Ioctl};
+use opte_core::CString;
 
 use postcard;
 
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub enum Error {
-    DeserError(postcard::Error),
+    DeserError(String),
     FailedCopyin,
     FailedCopyout,
     RespTooLong,
@@ -23,15 +25,22 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub fn to_errno<T>(res: Result<T>) -> c_int
-where
-    T: core::fmt::Debug + serde::Serialize
+pub fn to_errno(e: Error) -> c_int
 {
-    match res {
-        Ok(_) => 0,
-        Err(Error::RespTooLong) => ddi::ENOBUFS,
-        Err(_) => ddi::EFAULT,
+    match e {
+        Error::DeserError(_) => ddi::EINVAL,
+        Error::RespTooLong => ddi::ENOBUFS,
+        _ => ddi::EFAULT,
     }
+}
+
+extern "C" {
+    fn __dtrace_probe_copy__out__resp(resp_str: ddi::uintptr_t);
+}
+
+fn dtrace_probe_copy_out_resp<T: Debug + Serialize>(resp: &T) {
+    let cstr = CString::new(format!("{:?}", resp)).unwrap();
+    unsafe { __dtrace_probe_copy__out__resp(cstr.as_ptr() as ddi::uintptr_t); }
 }
 
 /// An envelope for dealing with `Ioctl`. It contains all information
@@ -97,10 +106,16 @@ impl IoctlEnvelope {
     /// `resp_bytes`. Return an error if the `resp_len` indicates that
     /// the user buffer is not large enough to hold the serialized
     /// bytes.
-    pub fn copy_out_resp<T>(&mut self, val: &CmdResp<T>) -> Result<()>
+    pub fn copy_out_resp<T, E>(
+        &mut self,
+        val: &result::Result<T, E>
+    ) -> Result<()>
     where
-        T: Debug + Serialize
+        E: CmdErr,
+        T: CmdOk,
     {
+        dtrace_probe_copy_out_resp(val);
+
         // We expect the kernel to pass values of `T` which will
         // serialize, thus the use of `unwrap()`.
         let vec = postcard::to_allocvec(val).unwrap();
@@ -129,11 +144,6 @@ impl IoctlEnvelope {
             return Err(Error::FailedCopyout);
         }
 
-        // TODO We leave resp_len as the value given by the user
-        // program. May want to rename the fields `resp_bytes_len` and
-        // `resp_len_needed`.
-
-        // self.ioctl.resp_len = vec.len();
         self.copy_out_self()?;
         Ok(())
     }
@@ -143,9 +153,6 @@ impl IoctlEnvelope {
         // TODO place upper limit on req_len to prevent
         // malicious/malformed requests from allocating large amounts
         // of kmem.
-        //
-        // TODO This actually just needs to be a Box'd array and I
-        // need to use MaybeInit pattern.
         let mut bytes = Vec::with_capacity(self.ioctl.req_len);
         let ret = unsafe {
             ddi::ddi_copyin(
@@ -157,7 +164,7 @@ impl IoctlEnvelope {
         };
 
         if ret != 0 {
-            return Err(Error::FailedCopyin);
+                return Err(Error::FailedCopyin);
         }
 
         // Safety: We know the `Vec` has `req_len` capacity, and that
@@ -169,7 +176,9 @@ impl IoctlEnvelope {
         // postcard might read here?
         match postcard::from_bytes(&bytes) {
             Ok(val) => Ok(val),
-            Err(deser_error) => Err(Error::DeserError(deser_error)),
+            Err(deser_error) => {
+                Err(Error::DeserError(format!("{}", deser_error)))
+            }
         }
     }
 }

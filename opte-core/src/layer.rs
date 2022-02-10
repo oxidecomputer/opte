@@ -18,17 +18,18 @@ use std::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
-use crate::flow_table::{FlowEntryDump, FlowTable};
+use crate::flow_table::FlowTable;
 use crate::headers::{IpAddr, IpMeta, UlpMeta};
+use crate::ioctl;
 use crate::ip4::{Ipv4Addr, Protocol};
 use crate::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
 use crate::port::meta::Meta;
 use crate::rule::{
-    flow_id_sdt_arg, ht_fire_probe, self, Action, ActionDesc, Finalized, Rule,
-    RuleAction, RuleDump, HT,
+    flow_id_sdt_arg, ht_fire_probe, self, Action, ActionDesc, Rule, RuleDump,
+    HT,
 };
 use crate::sync::{KMutex, KMutexType};
-use crate::{CString, Direction};
+use crate::{CString, Direction, ExecCtx, LogLevel};
 
 use illumos_ddi_dki::{c_char, uintptr_t};
 
@@ -39,14 +40,15 @@ use std::time::Instant;
 
 #[derive(Debug)]
 pub enum LayerError {
-    GenDesc(crate::rule::GenDescError),
-    GenPacket(crate::rule::GenErr),
+    GenDesc(rule::GenDescError),
+    GenHt(rule::GenHtError),
+    GenPacket(rule::GenErr),
 }
 
 #[derive(Debug)]
 pub enum LayerResult {
     Allow,
-    Deny,
+    Deny { name: String },
     Hairpin(Packet<Initialized>),
 }
 
@@ -59,6 +61,7 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub struct Layer {
+    port_name: String,
     name: String,
     actions: Vec<Action>,
     ft_in: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
@@ -68,24 +71,74 @@ pub struct Layer {
 }
 
 impl Layer {
-    pub fn add_rule(&self, dir: Direction, rule: Rule<Finalized>) {
+    pub fn action(&self, idx: usize) -> Option<&Action> {
+        self.actions.get(idx)
+    }
+
+    pub fn add_rule(&self, dir: Direction, rule: Rule<rule::Finalized>) {
         match dir {
             Direction::Out => self.rules_out.lock().add(rule),
             Direction::In => self.rules_in.lock().add(rule),
         }
     }
 
-    pub fn dump(&self) -> LayerDumpResp {
+    pub fn dump(&self) -> ioctl::DumpLayerResp {
         let rules_in = self.rules_in.lock().dump();
         let rules_out = self.rules_out.lock().dump();
         let ft_in = self.ft_in.lock().dump();
         let ft_out = self.ft_out.lock().dump();
-        LayerDumpResp {
+        ioctl::DumpLayerResp {
             name: self.name.clone(),
             ft_in,
             ft_out,
             rules_in,
             rules_out,
+        }
+    }
+
+    fn gen_desc_fail_probe(
+        &self,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        err: &rule::GenDescError
+    ) {
+        let flow_id = flow_id_sdt_arg::from(ifid);
+        let port_c = CString::new(format!("{}", self.port_name)).unwrap();
+        let layer_c = CString::new(format!("{}", self.name)).unwrap();
+        let dir_c = CString::new(format!("{}", dir)).unwrap();
+        let msg_c = CString::new(format!("{:?}", err)).unwrap();
+
+        unsafe {
+            __dtrace_probe_gen__desc__fail(
+                port_c.as_ptr() as uintptr_t,
+                layer_c.as_ptr() as uintptr_t,
+                dir_c.as_ptr() as uintptr_t,
+                &flow_id as *const flow_id_sdt_arg as uintptr_t,
+                msg_c.as_ptr() as uintptr_t,
+            );
+        }
+    }
+
+    fn gen_ht_fail_probe(
+        &self,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        err: &rule::GenHtError
+    ) {
+        let flow_id = flow_id_sdt_arg::from(ifid);
+        let port_c = CString::new(format!("{}", self.port_name)).unwrap();
+        let layer_c = CString::new(format!("{}", self.name)).unwrap();
+        let dir_c = CString::new(format!("{}", dir)).unwrap();
+        let msg_c = CString::new(format!("{:?}", err)).unwrap();
+
+        unsafe {
+            __dtrace_probe_gen__ht__fail(
+                port_c.as_ptr() as uintptr_t,
+                layer_c.as_ptr() as uintptr_t,
+                dir_c.as_ptr() as uintptr_t,
+                &flow_id as *const flow_id_sdt_arg as uintptr_t,
+                msg_c.as_ptr() as uintptr_t,
+            );
         }
     }
 
@@ -101,17 +154,16 @@ impl Layer {
         self.ft_out.lock().expire_flows(now);
     }
 
+    /// Return the name of the layer.
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn new<S>(name: S, actions: Vec<Action>) -> Self
-    where
-        S: AsRef<str> + ToString,
-    {
+    pub fn new(name: &str, port_name: &str, actions: Vec<Action>) -> Self {
         Layer {
             actions,
             name: name.to_string(),
+            port_name: port_name.to_string(),
             ft_in: KMutex::new(
                 FlowTable::new(name.to_string(), None),
                 KMutexType::Driver,
@@ -131,6 +183,13 @@ impl Layer {
         }
     }
 
+    pub fn num_flows(&self, dir: Direction) -> u32 {
+        match dir {
+            Direction::Out => self.ft_out.lock().num_flows(),
+            Direction::In => self.ft_in.lock().num_flows(),
+        }
+    }
+
     pub fn num_rules(&self, dir: Direction) -> usize {
         match dir {
             Direction::Out => self.rules_out.lock().num_rules(),
@@ -140,6 +199,7 @@ impl Layer {
 
     pub fn process(
         &self,
+        ectx: &ExecCtx,
         dir: Direction,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
@@ -147,8 +207,8 @@ impl Layer {
     ) -> result::Result<LayerResult, LayerError> {
         layer_process_entry_probe(dir, &self.name);
         let res = match dir {
-            Direction::Out => self.process_out(pkt, hts, meta),
-            Direction::In => self.process_in(pkt, hts, meta),
+            Direction::Out => self.process_out(ectx, pkt, hts, meta),
+            Direction::In => self.process_in(ectx, pkt, hts, meta),
         };
         layer_process_return_probe(dir, &self.name, &res);
         res
@@ -156,6 +216,7 @@ impl Layer {
 
     fn process_in(
         &self,
+        ectx: &ExecCtx,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         meta: &mut Meta,
@@ -164,7 +225,7 @@ impl Layer {
 
         // We have no FlowId, thus there can be no FlowTable entry.
         if ifid == FLOW_ID_DEFAULT {
-            return self.process_in_rules(ifid, pkt, hts, meta);
+            return self.process_in_rules(ectx, ifid, pkt, hts, meta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
@@ -195,11 +256,12 @@ impl Layer {
         // XXX Flow table miss stat
 
         // No FlowTable entry, perhaps there is a matching Rule?
-        self.process_in_rules(ifid, pkt, hts, meta)
+        self.process_in_rules(ectx, ifid, pkt, hts, meta)
     }
 
     fn process_in_rules(
         &self,
+        ectx: &ExecCtx,
         ifid: InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
@@ -224,91 +286,109 @@ impl Layer {
             return Ok(LayerResult::Allow);
         }
 
-        match &rule.unwrap().action {
-            RuleAction::Deny => {
+        match rule.unwrap().action() {
+            Action::Deny => {
                 rule_deny_probe(&self.name, Direction::In, &ifid);
-                return Ok(LayerResult::Deny);
+                return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            RuleAction::Allow(idx) => {
-                match &self.actions[*idx] {
-                    Action::Static(action) => {
-                        let ht = action.gen_ht(Direction::In, ifid);
-                        hts.push(ht.clone());
+            Action::Meta(action) => {
+                action.mod_meta(ifid, meta);
+                return Ok(LayerResult::Allow);
+            }
 
-                        ht.run(pkt.meta_mut());
-
-                        let ifid_after =
-                            InnerFlowId::try_from(pkt.meta()).unwrap();
-
-                        ht_fire_probe(
-                            &format!("{}-rt", self.name),
-                            Direction::In,
+            Action::Static(action) => {
+                let ht = match action.gen_ht(Direction::Out, ifid, meta) {
+                    Ok(ht) => ht,
+                    Err(e) => {
+                        self.record_gen_ht_failure(
+                            &ectx,
+                            Direction::Out,
                             &ifid,
-                            &ifid_after,
+                            &e
                         );
-
-                        return Ok(LayerResult::Allow);
+                        return Err(LayerError::GenHt(e));
                     }
+                };
 
-                    Action::Stateful(action) => {
-                        let desc =
-                            match action.gen_desc(ifid, meta) {
-                                Ok(d) => d,
+                hts.push(ht.clone());
 
-                                Err(e) => {
-                                    self.record_gen_desc_failure(&ifid, &e);
-                                    return Err(LayerError::GenDesc(e));
-                                }
-                            };
+                ht.run(pkt.meta_mut());
 
-                        let ht_in = desc.gen_ht(Direction::In);
-                        hts.push(ht_in.clone());
+                let ifid_after =
+                    InnerFlowId::try_from(pkt.meta()).unwrap();
 
-                        self.ft_in.lock().add(ifid, desc.clone());
+                ht_fire_probe(
+                    &format!("{}-rt", self.name),
+                    Direction::In,
+                    &ifid,
+                    &ifid_after,
+                );
 
-                        ht_in.run(pkt.meta_mut());
+                return Ok(LayerResult::Allow);
+            }
 
-                        let ifid_after =
-                            InnerFlowId::try_from(pkt.meta()).unwrap();
+            Action::Stateful(action) => {
+                let desc =
+                    match action.gen_desc(ifid, meta) {
+                        Ok(d) => d,
 
-                        ht_fire_probe(
-                            &format!("{}-rt", self.name),
-                            Direction::In,
-                            &ifid,
-                            &ifid_after,
-                        );
-
-                        // The outbound FlowId must be calculated _after_
-                        // the header transposition. Remember, the two
-                        // flow tables act as duals of each other, and the
-                        // HT might change how the other side of this
-                        // layer sees this flow.
-                        let out_ifid =
-                            InnerFlowId::try_from(pkt.meta()).unwrap().dual();
-                        self.ft_out.lock().add(out_ifid, desc);
-
-                        // if let Some(ctx) = ra_in.ctx {
-                        //     ctx.exec(flow_id, &mut [0; 0]);
-                        // }
-
-                        return Ok(LayerResult::Allow);
-                    }
-
-                    Action::Hairpin(action) => {
-                        let mut rdr = pkt.get_body_rdr();
-                        match action.gen_packet(pkt.meta(), &mut rdr) {
-                            Ok(pkt) => {
-                                let _ = rdr.finish();
-                                return Ok(LayerResult::Hairpin(pkt));
-                            }
-
-                            Err(e) => {
-                                // XXX SDT probe, error stat, log
-                                let _ = rdr.finish();
-                                return Err(LayerError::GenPacket(e));
-                            }
+                        Err(e) => {
+                            self.record_gen_desc_failure(
+                                &ectx,
+                                Direction::In,
+                                &ifid,
+                                &e
+                            );
+                            return Err(LayerError::GenDesc(e));
                         }
+                    };
+
+                let ht_in = desc.gen_ht(Direction::In);
+                hts.push(ht_in.clone());
+
+                self.ft_in.lock().add(ifid, desc.clone());
+
+                ht_in.run(pkt.meta_mut());
+
+                let ifid_after =
+                    InnerFlowId::try_from(pkt.meta()).unwrap();
+
+                ht_fire_probe(
+                    &format!("{}-rt", self.name),
+                    Direction::In,
+                    &ifid,
+                    &ifid_after,
+                );
+
+                // The outbound FlowId must be calculated _after_
+                // the header transposition. Remember, the two
+                // flow tables act as duals of each other, and the
+                // HT might change how the other side of this
+                // layer sees this flow.
+                let out_ifid =
+                    InnerFlowId::try_from(pkt.meta()).unwrap().dual();
+                self.ft_out.lock().add(out_ifid, desc);
+
+                // if let Some(ctx) = ra_in.ctx {
+                //     ctx.exec(flow_id, &mut [0; 0]);
+                // }
+
+                return Ok(LayerResult::Allow);
+            }
+
+            Action::Hairpin(action) => {
+                let mut rdr = pkt.get_body_rdr();
+                match action.gen_packet(pkt.meta(), &mut rdr) {
+                    Ok(pkt) => {
+                        let _ = rdr.finish();
+                        return Ok(LayerResult::Hairpin(pkt));
+                    }
+
+                    Err(e) => {
+                        // XXX SDT probe, error stat, log
+                        let _ = rdr.finish();
+                        return Err(LayerError::GenPacket(e));
                     }
                 }
             }
@@ -317,6 +397,7 @@ impl Layer {
 
     fn process_out(
         &self,
+        ectx: &ExecCtx,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         meta: &mut Meta,
@@ -325,7 +406,7 @@ impl Layer {
 
         // We have no FlowId, thus there can be no FlowTable entry.
         if ifid == FLOW_ID_DEFAULT {
-            return self.process_out_rules(ifid, pkt, hts, meta);
+            return self.process_out_rules(ectx, ifid, pkt, hts, meta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
@@ -358,18 +439,18 @@ impl Layer {
         }
 
         // No FlowTable entry, perhaps there is matching Rule?
-        self.process_out_rules(ifid, pkt, hts, meta)
+        self.process_out_rules(ectx, ifid, pkt, hts, meta)
     }
 
     fn process_out_rules(
         &self,
+        ectx: &ExecCtx,
         ifid: InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         meta: &mut Meta,
     ) -> result::Result<LayerResult, LayerError> {
         let lock = self.rules_out.lock();
-
         let mut rdr = pkt.get_body_rdr();
         let rule = lock.find_match(pkt.meta(), &mut rdr);
         let _ = rdr.finish();
@@ -387,91 +468,109 @@ impl Layer {
             return Ok(LayerResult::Allow);
         }
 
-        match &rule.unwrap().action {
-            RuleAction::Deny => {
+        match rule.unwrap().action() {
+            Action::Deny => {
                 rule_deny_probe(&self.name, Direction::Out, &ifid);
-                return Ok(LayerResult::Deny);
+                return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            RuleAction::Allow(idx) => {
-                match &self.actions[*idx] {
-                    Action::Static(action) => {
-                        let ht = action.gen_ht(Direction::Out, ifid);
-                        hts.push(ht.clone());
+            Action::Meta(action) => {
+                action.mod_meta(ifid, meta);
+                return Ok(LayerResult::Allow);
+            }
 
-                        ht.run(pkt.meta_mut());
-
-                        let ifid_after =
-                            InnerFlowId::try_from(pkt.meta()).unwrap();
-
-                        ht_fire_probe(
-                            &format!("{}-rt", self.name),
+            Action::Static(action) => {
+                let ht = match action.gen_ht(Direction::Out, ifid, meta) {
+                    Ok(ht) => ht,
+                    Err(e) => {
+                        self.record_gen_ht_failure(
+                            &ectx,
                             Direction::Out,
                             &ifid,
-                            &ifid_after,
+                            &e
                         );
-
-                        return Ok(LayerResult::Allow);
+                        return Err(LayerError::GenHt(e));
                     }
+                };
 
-                    Action::Stateful(action) => {
-                        let desc =
-                            match action.gen_desc(ifid, meta) {
-                                Ok(d) => d,
+                hts.push(ht.clone());
 
-                                Err(e) => {
-                                    self.record_gen_desc_failure(&ifid, &e);
-                                    return Err(LayerError::GenDesc(e));
-                                }
-                            };
+                ht.run(pkt.meta_mut());
 
-                        let ht_out = desc.gen_ht(Direction::Out);
-                        hts.push(ht_out.clone());
+                let ifid_after =
+                    InnerFlowId::try_from(pkt.meta()).unwrap();
 
-                        self.ft_out.lock().add(ifid, desc.clone());
+                ht_fire_probe(
+                    &format!("{}-rt", self.name),
+                    Direction::Out,
+                    &ifid,
+                    &ifid_after,
+                );
 
-                        ht_out.run(pkt.meta_mut());
+                return Ok(LayerResult::Allow);
+            }
 
-                        let ifid_after =
-                            InnerFlowId::try_from(pkt.meta()).unwrap();
+            Action::Stateful(action) => {
+                let desc =
+                    match action.gen_desc(ifid, meta) {
+                        Ok(d) => d,
 
-                        ht_fire_probe(
-                            &format!("{}-rt", self.name),
-                            Direction::Out,
-                            &ifid,
-                            &ifid_after,
-                        );
-
-                        // The inbound FlowId must be calculated _after_
-                        // the header transposition. Remember, the two
-                        // flow tables act as duals of each other, and the
-                        // HT might change how the other side of this
-                        // layer sees this flow.
-                        let in_ifid =
-                            InnerFlowId::try_from(pkt.meta()).unwrap().dual();
-                        self.ft_in.lock().add(in_ifid, desc);
-
-                        // if let Some(ctx) = ra_out2.ctx {
-                        //     ctx.exec(flow_id, &mut [0; 0]);
-                        // }
-
-                        return Ok(LayerResult::Allow);
-                    }
-
-                    Action::Hairpin(action) => {
-                        let mut rdr = pkt.get_body_rdr();
-                        match action.gen_packet(pkt.meta(), &mut rdr) {
-                            Ok(new_pkt) => {
-                                let _ = rdr.finish();
-                                return Ok(LayerResult::Hairpin(new_pkt));
-                            }
-
-                            Err(e) => {
-                                // XXX SDT probe, error stat, log
-                                let _ = rdr.finish();
-                                return Err(LayerError::GenPacket(e));
-                            }
+                        Err(e) => {
+                            self.record_gen_desc_failure(
+                                &ectx,
+                                Direction::Out,
+                                &ifid,
+                                &e
+                            );
+                            return Err(LayerError::GenDesc(e));
                         }
+                    };
+
+                let ht_out = desc.gen_ht(Direction::Out);
+                hts.push(ht_out.clone());
+
+                self.ft_out.lock().add(ifid, desc.clone());
+
+                ht_out.run(pkt.meta_mut());
+
+                let ifid_after =
+                    InnerFlowId::try_from(pkt.meta()).unwrap();
+
+                ht_fire_probe(
+                    &format!("{}-rt", self.name),
+                    Direction::Out,
+                    &ifid,
+                    &ifid_after,
+                );
+
+                // The inbound FlowId must be calculated _after_
+                // the header transposition. Remember, the two
+                // flow tables act as duals of each other, and the
+                // HT might change how the other side of this
+                // layer sees this flow.
+                let in_ifid =
+                    InnerFlowId::try_from(pkt.meta()).unwrap().dual();
+                self.ft_in.lock().add(in_ifid, desc);
+
+                // if let Some(ctx) = ra_out2.ctx {
+                //     ctx.exec(flow_id, &mut [0; 0]);
+                // }
+
+                return Ok(LayerResult::Allow);
+            }
+
+            Action::Hairpin(action) => {
+                let mut rdr = pkt.get_body_rdr();
+                match action.gen_packet(pkt.meta(), &mut rdr) {
+                    Ok(new_pkt) => {
+                        let _ = rdr.finish();
+                        return Ok(LayerResult::Hairpin(new_pkt));
+                    }
+
+                    Err(e) => {
+                        // XXX SDT probe, error stat, log
+                        let _ = rdr.finish();
+                        return Err(LayerError::GenPacket(e));
                     }
                 }
             }
@@ -480,30 +579,46 @@ impl Layer {
 
     fn record_gen_desc_failure(
         &self,
-        _ifid: &InnerFlowId,
-        _err: &rule::GenDescError
+        ectx: &ExecCtx,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        err: &rule::GenDescError
     ) {
-        // XXX Log message, + SDT + increment stat
-        todo!("log a msg, fire SDT, increment a stat");
+        // XXX increment stat
+        ectx.log.log(
+            LogLevel::Error,
+            &format!(
+                "failed to generate descriptor for stateful action: {} {:?}",
+                ifid,
+                err
+            )
+        );
+        self.gen_desc_fail_probe(dir, ifid, err);
+    }
+
+    fn record_gen_ht_failure(
+        &self,
+        ectx: &ExecCtx,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        err: &rule::GenHtError
+    ) {
+        // XXX increment stat
+        ectx.log.log(
+            LogLevel::Error,
+            &format!(
+                "failed to generate HT for static action: {} {:?}",
+                ifid,
+                err
+            )
+        );
+        self.gen_ht_fail_probe(dir, ifid, err);
     }
 
     pub fn remove_rule(&self, dir: Direction, id: RuleId) -> Result<()> {
         match dir {
             Direction::In => self.rules_in.lock().remove(id),
             Direction::Out => self.rules_out.lock().remove(id),
-        }
-    }
-}
-
-// The follow functions are useful for validating state during
-// testing. If one of these functions becomes useful outside of
-// testing, then add it to the impl block above.
-#[cfg(test)]
-impl Layer {
-    pub fn num_flows(&self, dir: Direction) -> u32 {
-        match dir {
-            Direction::Out => self.ft_out.lock().num_flows(),
-            Direction::In => self.ft_in.lock().num_flows(),
         }
     }
 }
@@ -578,7 +693,7 @@ impl TryFrom<&PacketMeta> for InnerFlowId {
 pub struct RuleTable {
     layer: String,
     dir: Direction,
-    rules: Vec<(RuleId, Rule<Finalized>)>,
+    rules: Vec<(RuleId, Rule<rule::Finalized>)>,
     next_id: RuleId,
 }
 
@@ -595,7 +710,7 @@ pub enum RuleRemoveErr {
 
 impl<'a> RuleTable {
     // TODO Add SDT probe for rule add.
-    fn add(&mut self, rule: Rule<Finalized>) {
+    fn add(&mut self, rule: Rule<rule::Finalized>) {
         match self.find_pos(&rule) {
             RulePlace::End => self.rules.push((self.next_id, rule)),
             RulePlace::Insert(idx) => {
@@ -617,7 +732,7 @@ impl<'a> RuleTable {
         &self,
         meta: &PacketMeta,
         rdr: &'b mut R
-    ) -> Option<&Rule<Finalized>>
+    ) -> Option<&Rule<rule::Finalized>>
     where
         R: PacketRead<'a>,
     {
@@ -643,7 +758,7 @@ impl<'a> RuleTable {
     }
 
     // Find the position in which to insert this rule.
-    fn find_pos(&self, rule: &Rule<Finalized>) -> RulePlace {
+    fn find_pos(&self, rule: &Rule<rule::Finalized>) -> RulePlace {
         for (i, (_, r)) in self.rules.iter().enumerate() {
             if rule.priority < r.priority {
                 return RulePlace::Insert(i);
@@ -652,14 +767,11 @@ impl<'a> RuleTable {
             // Deny takes precedence at the same priority. If we are
             // adding a Deny, and one or more Deny entries already
             // exist, the new rule is added in the front. The same
-            // goes for multiple Allow entries at the same priority.
+            // goes for multiple non-deny entries at the same
+            // priority.
             if rule.priority == r.priority {
-                match (&rule.action, &r.action) {
-                    (RuleAction::Deny, _) | (_, RuleAction::Allow(_)) => {
-                        return RulePlace::Insert(i);
-                    }
-
-                    _ => (),
+                if rule.action().is_deny() || !r.action().is_deny() {
+                    return RulePlace::Insert(i);
                 }
             }
         }
@@ -765,7 +877,7 @@ pub fn rule_match_probe(
     layer: &str,
     dir: Direction,
     flow_id: &InnerFlowId,
-    rule: &Rule<Finalized>,
+    rule: &Rule<rule::Finalized>,
 ) {
     let layer_c = CString::new(layer).unwrap();
     let dir_c = match dir {
@@ -773,13 +885,7 @@ pub fn rule_match_probe(
         Direction::Out => CString::new("out").unwrap(),
     };
     let flow_id = flow_id_sdt_arg::from(flow_id);
-    let rule_type_c = match rule.action {
-        RuleAction::Allow(idx) => {
-            CString::new(format!("allow({})", idx)).unwrap()
-        }
-
-        RuleAction::Deny => CString::new("deny").unwrap(),
-    };
+    let rule_type_c = CString::new(rule.action().to_string()).unwrap();
 
     let arg = rule_match_sdt_arg {
         // TODO: Sigh, I'm only doing this because some
@@ -910,16 +1016,63 @@ pub fn rule_deny_probe(layer: &str, dir: Direction, flow_id: &InnerFlowId) {
     }
 }
 
+#[cfg(any(feature = "std", test))]
+pub unsafe fn __dtrace_probe_gen__desc__fail(
+    _port: uintptr_t,
+    _layer: uintptr_t,
+    _dir: uintptr_t,
+    _ifid: uintptr_t,
+    _msg: uintptr_t
+) {
+    ()
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+extern "C" {
+    pub fn __dtrace_probe_gen__desc__fail(
+        port: uintptr_t,
+        layer: uintptr_t,
+        dir: uintptr_t,
+        ifid: uintptr_t,
+        msg: uintptr_t
+    );
+}
+
+#[cfg(any(feature = "std", test))]
+pub unsafe fn __dtrace_probe_gen__ht__fail(
+    _port: uintptr_t,
+    _layer: uintptr_t,
+    _dir: uintptr_t,
+    _ifid: uintptr_t,
+    _msg: uintptr_t
+) {
+    ()
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+extern "C" {
+    pub fn __dtrace_probe_gen__ht__fail(
+        port: uintptr_t,
+        layer: uintptr_t,
+        dir: uintptr_t,
+        ifid: uintptr_t,
+        msg: uintptr_t
+    );
+}
+
 #[test]
 fn find_rule() {
     use crate::headers::{IpMeta, UlpMeta};
     use crate::ip4::Ipv4Meta;
     use crate::packet::{MetaGroup, PacketReader};
-    use crate::rule::{Ipv4AddrMatch, Predicate};
+    use crate::rule::{self, Ipv4AddrMatch, Predicate};
     use crate::tcp::TcpMeta;
 
     let mut rule_table = RuleTable::new("test".to_string(), Direction::Out);
-    let rule = Rule::new(1, RuleAction::Allow(0));
+    let rule = Rule::new(
+        1,
+        Action::Static(Arc::new(rule::Identity::new("find_rule")))
+    );
     let cidr = "10.0.0.0/24".parse().unwrap();
     let rule = rule.add_predicate(
         Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Prefix(cidr)])
@@ -1201,30 +1354,3 @@ fn find_rule() {
 //     assert_eq!(udp_meta.dst, 7777);
 // }
 
-// ================================================================
-// ioctl interface
-// ================================================================
-
-/// Dump various information about a `Layer` for use in debugging or
-/// administrative purposes.
-///
-/// * The Layer name.
-/// * The inbound and outbound rule tables.
-/// * The inbound and outbound flow tables.
-///
-/// *port_name*: The name of the port.
-/// *name*: The name of the [`Layer`] to dump.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct LayerDumpReq {
-    pub port_name: String,
-    pub name: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct LayerDumpResp {
-    pub name: String,
-    pub rules_in: Vec<(RuleId, RuleDump)>,
-    pub rules_out: Vec<(RuleId, RuleDump)>,
-    pub ft_in: Vec<(InnerFlowId, FlowEntryDump)>,
-    pub ft_out: Vec<(InnerFlowId, FlowEntryDump)>,
-}

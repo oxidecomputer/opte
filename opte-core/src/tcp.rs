@@ -285,6 +285,10 @@ impl TcpHdr {
         self.csum = csum;
     }
 
+    pub fn set_flags(&mut self, flags: u8) {
+        self.flags = flags;
+    }
+
     pub fn set_seq(&mut self, seq: u32) {
         self.seq = seq;
     }

@@ -1,0 +1,110 @@
+:toc: left
+:toclevels: 5
+
+= OPTE
+
+The Oxide Packet Transformation Engine, or OPTE for short, is a
+generic, flexible packet filtering and transformation engine. It takes
+a steam of packets as input, sends them through a configurable,
+dynamic processing pipeline, and produces a stream of packets as
+output. It's much like a Match-Action Table found in a typical
+hardware switch, but with a focus on stateful flows like TCP/IP. RFD
+63, *Network Architecture*, desrcibes the design of the Oxide Rack
+Network along with the role OPTE plays within it.
+
+NOTE: The reference documentation is a work-in-progress; living here
+for the time being.
+
+== Architecture
+
+The architecture of OPTE is greatly influenced by the design of
+https://www.microsoft.com/en-us/research/publication/vfp-virtual-switch-platform-host-sdn-public-cloud/[Microsoft's
+VFP].
+
+=== Direction
+
+Many aspects of OPTE have a notion of direction: which way the packet
+is flowing.
+
+Inbound::
+The packet is flowing from the port towards the guest.
+
+Outbound::
+The packet is flow from the guest towards the port.
+
+=== Layers
+
+OPTE abstracts the processing of packets to a series of layers through
+which each packet must pass. Much like layers in the TCP/IP model,
+they demarcate different aspects of packet processing which must take
+place. Each layer is comprised of a set of actions and a set of rules.
+The rules are further demarcated between the <<_direction,inbound>>
+and <<_direction,outbound>> directions. The ultimate purpose of a
+layer is to match pakcets to rules, and those rules to actions. The
+end result is some action being taken either on the packet itself or
+some side-effect which may affect later layers (where "later" depends
+on the direction the packet is flowing).
+
+=== Rules
+
+A rule matches zero, one, or more <<_predicates>> to an action. Rules live
+inside of <<_layers>>.
+
+=== Predicates
+
+XXX: Describe what predicates are and how we use them.
+
+=== Actions
+
+XXX: Describe difference between static, statefule, hairpin, etc.
+
+=== Pipeline Metadata
+
+XXX: Describe mutable metadata passed through the piepline and how
+actions use it.
+
+=== Packet
+
+XXX: Describe how packets are read, parsed, and modified.
+
+=== Flow Tables
+
+XXX: Describe how layers cache the result of rule processing to map
+"flows" (TCP/UDP) to cached actions.
+
+=== Unified Flow Table
+
+XXX: Describe what the UFT is and how the ultimate goal is to compile
+the various layer actions into a UFT entry so that only a handful of
+packets pay the full cost of layer/rule processing.
+
+=== Header Transformations
+
+XXX: Describe what HTs are and how they are defined in such a way as
+to easily compose into a cached action in the UFT.
+
+XXX: I originally called these Header Transpositions like VFP, but the
+more I think about it the more I'd rather call them transformations as
+it's a) a bit more general the transposition (i.e. tranposition
+suggests the rearranging of headers, whereas we often will either not
+modify the headers at all or will add/remove headers, which is more in
+line with transforming), and b) it aligns with the T in OPTE.
+
+=== OPTE vs. Network Definitions
+
+While the current codebase conflates these two a bit, there is ongoing
+effort to clearly separate the generic engine (OPTE) from its
+configuration as an implementation of a specific network vis-à-vis the
+Oxide Rack Network.footnote:[While you won't find anything in the RFDs about
+the Oxide "Rack" Network, I'm adding this qualifier to empahsize that
+there may be other future networks in an Oxide environment that we
+want to implement, which may be separate from the one desrcibed in RFD
+63].
+
+A "network definition" is simply a particular configuration of OPTE,
+from which a particular network implementation is derived. The current
+codebase defines the Oxide Rack Network under the `oxide_net` module
+(the plan is to eventually move this out to its own crate, or perhaps
+make it part of opte-drv).
+
+XXX: Go into more depth about the nuance here.

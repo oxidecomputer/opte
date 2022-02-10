@@ -9,13 +9,10 @@ use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
 use opte_core::oxide_net::firewall::{FirewallRule, FwAddRuleReq, FwRemRuleReq};
-use opte_core::flow_table::FlowEntryDump;
+use opte_core::oxide_net::overlay::{self, SetOverlayReq, SetVirt2PhysReq};
+use opte_core::oxide_net::router;
 use opte_core::ioctl::{
-    CmdResp, IoctlCmd, ListPortsReq, ListPortsResp, AddPortReq, DeletePortReq
-};
-use opte_core::layer::{InnerFlowId, LayerDumpReq, LayerDumpResp};
-use opte_core::port::{
-    TcpFlowsDumpReq, TcpFlowsDumpResp, UftDumpReq, UftDumpResp,
+    self as api, AddPortReq, CmdErr, CmdOk, DeletePortReq, IoctlCmd
 };
 
 /// Errors related to administering the OPTE driver.
@@ -27,7 +24,7 @@ pub enum Error {
     #[error("error interacting with device: {0}")]
     Io(std::io::Error),
 
-    #[error("error transferring data to/from driver: {0}")]
+    #[error("error with serdes: {0}")]
     Serdes(String),
 
     /// Something in the opte ioctl(2) handler failed.
@@ -74,8 +71,12 @@ impl OpteAdm {
             port_name: port_name.to_string(),
             rule: rule.clone()
         };
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<(), api::AddFwRuleError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// Return the contents of an OPTE layer.
@@ -83,25 +84,42 @@ impl OpteAdm {
         &self,
         port_name: &str,
         name: &str,
-    ) -> Result<LayerDumpResp, Error> {
-        let cmd = IoctlCmd::LayerDump;
-        let req = LayerDumpReq {
+    ) -> Result<api::DumpLayerResp, Error> {
+        let cmd = IoctlCmd::DumpLayer;
+        let req = api::DumpLayerReq {
             port_name: port_name.to_string(),
             name: name.to_string()
         };
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<api::DumpLayerResp, api::DumpLayerError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// List all the ports.
-    pub fn list_ports(&self) -> Result<ListPortsResp, Error> {
+    pub fn list_ports(&self) -> Result<api::ListPortsResp, Error> {
         let cmd = IoctlCmd::ListPorts;
-        let resp = run_ioctl(
+        let resp = run_ioctl::<api::ListPortsResp, (), _>(
             self.device.as_raw_fd(),
             cmd,
-            &ListPortsReq { unused: () }
+            &api::ListPortsReq { unused: () }
         )?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+    }
+
+    pub fn list_layers(
+        &self,
+        port: &str
+    ) -> Result<api::ListLayersResp, Error> {
+        let cmd = IoctlCmd::ListLayers;
+        let resp = run_ioctl::<api::ListLayersResp, (), _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &api::ListLayersReq { port_name: port.to_string() }
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// Create a new handle to the OPTE control node.
@@ -117,8 +135,22 @@ impl OpteAdm {
     /// Add a new port.
     pub fn add_port(&self, req: &AddPortReq) -> Result<(), Error> {
         let cmd = IoctlCmd::AddPort;
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<(), api::AddPortError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+    }
+
+    pub fn set_overlay(&self, req: &SetOverlayReq) -> Result<(), Error> {
+        let cmd = IoctlCmd::SetOverlay;
+        let resp = run_ioctl::<(), overlay::SetOverlayError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// Remove a firewall rule.
@@ -127,69 +159,115 @@ impl OpteAdm {
         req: &FwRemRuleReq,
     ) -> Result<(), Error> {
         let cmd = IoctlCmd::FwRemRule;
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<(), api::RemFwRuleError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// Return the TCP flows.
     pub fn tcp_flows(
         &self,
         port_name: &str,
-    ) -> Result<Vec<(InnerFlowId, FlowEntryDump)>, Error> {
-        let cmd = IoctlCmd::TcpFlowsDump;
-        let resp: CmdResp<TcpFlowsDumpResp> = run_ioctl(
-            self.device.as_raw_fd(),
-            cmd,
-            &TcpFlowsDumpReq { port_name: port_name.to_string() },
-        )?;
-        resp.map(|r| r.flows).map_err(|msg| Error::CommandFailed(cmd, msg))
+    ) -> Result<api::DumpTcpFlowsResp, Error> {
+        let cmd = IoctlCmd::DumpTcpFlows;
+        let resp =
+            run_ioctl::<api::DumpTcpFlowsResp, api::DumpTcpFlowsError, _>(
+                self.device.as_raw_fd(),
+                cmd,
+                &api::DumpTcpFlowsReq { port_name: port_name.to_string() },
+            )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// Return the unified flow table (UFT).
-    pub fn uft(&self, port_name: &str) -> Result<UftDumpResp, Error> {
-        let cmd = IoctlCmd::UftDump;
-        let resp = run_ioctl(
+    pub fn uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
+        let cmd = IoctlCmd::DumpUft;
+        let resp = run_ioctl::<api::DumpUftResp, api::DumpUftError, _>(
             self.device.as_raw_fd(),
             cmd,
-            &UftDumpReq { port_name: port_name.to_string() }
+            &api::DumpUftReq { port_name: port_name.to_string() }
         )?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     /// Delete a port.
     pub fn delete_port(&self, name: &str) -> Result<(), Error> {
         let cmd = IoctlCmd::DeletePort;
         let req = DeletePortReq { name: name.to_string() };
-        let resp = run_ioctl(self.device.as_raw_fd(), cmd, &req)?;
-        resp.map_err(|msg| Error::CommandFailed(cmd, msg))
+        let resp = run_ioctl::<(), api::DeletePortError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+    }
+
+    pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<(), Error> {
+        let cmd = IoctlCmd::SetVirt2Phys;
+        let resp = run_ioctl::<(), (), _>(self.device.as_raw_fd(), cmd, &req)?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+    }
+
+    pub fn add_router_entry_ip4(
+        &self,
+        req: &router::AddRouterEntryIpv4Req
+    ) -> Result<(), Error> {
+        let cmd = IoctlCmd::AddRouterEntryIpv4;
+        let resp = run_ioctl::<(), router::AddEntryError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 }
 
 #[cfg(not(target_os = "illumos"))]
-fn run_ioctl<R, P>(
+fn run_ioctl<T, E, R>(
     _dev: libc::c_int,
     _cmd: IoctlCmd,
     _req: &R
-) -> Result<CmdResp<P>, Error>
+) -> Result<Result<T, E>, Error>
 where
+    T: CmdOk + DeserializeOwned,
+    E: CmdErr + DeserializeOwned,
     R: Serialize,
-    P: DeserializeOwned,
 {
     panic!("non-illumos system, your ioctl(2) is no good here");
 }
 
+// An ioctl is going to return in one of two ways:
+//
+// 1. success: errno == 0 and we have a command response (Ok or Err)
+// to deser.
+//
+// 2. system failure: errno != 0, there is no command response.
+//
+// This requires a nested Result. The outer Result indicates a command
+// response vs. system error with the ioctl machinery. If the outer
+// result is Ok, the inner Result indicates whether the command ran
+// successfully or not. This allows us to give more detailed error
+// response to a failed command instead of trying to map everything to
+// a Unix errno.
 #[cfg(target_os = "illumos")]
-fn run_ioctl<R, P>(
+fn run_ioctl<T, E, R>(
     dev: libc::c_int,
     cmd: IoctlCmd,
     req: &R
-) -> Result<CmdResp<P>, Error>
+) -> Result<Result<T, E>, Error>
 where
+    T: CmdOk + DeserializeOwned,
+    E: CmdErr + DeserializeOwned,
     R: Serialize,
-    P: DeserializeOwned,
 {
     let req_bytes = postcard::to_allocvec(req).unwrap();
-    let mut resp_buf: Vec<u8> = vec![0; 1024];
+    // It would be a shame if the command failed and we didn't have
+    // enough bytes to serialize the error response, so we set this to
+    // default to 16 KiB.
+    let mut resp_buf: Vec<u8> = vec![0; 16 * 1024];
     let mut rioctl = opte_core::ioctl::Ioctl {
         req_bytes: req_bytes.as_ptr(),
         req_len: req_bytes.len(),
@@ -206,10 +284,6 @@ where
         // buffer being too small.
         if ret == -1 && unsafe { *libc::___errno() } != libc::ENOBUFS {
             let msg = match unsafe { *libc::___errno() } {
-                // This should never really happen. It indicates a
-                // mismatch between the minor number of the device
-                // node used to send the ioctl and the key used in the
-                // opte driver's `clients` map.
                 libc::ENOENT => {
                     "port not found".to_string()
                 }
@@ -219,11 +293,11 @@ where
                 }
 
                 libc::EINVAL => {
-                    "opte driver failed to deserialize request".to_string()
+                    "opte driver failed to deser/ser req/resp".to_string()
                 }
 
                 errno => {
-                    format!("errno: {}", errno)
+                    format!("unexpected errno: {}", errno)
                 }
             };
 

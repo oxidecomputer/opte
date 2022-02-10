@@ -1,3 +1,4 @@
+use core::fmt;
 use core::ops::Range;
 
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -9,9 +10,9 @@ use alloc::collections::btree_map::BTreeMap;
 #[cfg(any(feature = "std", test))]
 use std::collections::btree_map::BTreeMap;
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::{String, ToString};
+use alloc::string::ToString;
 #[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
+use std::string::ToString;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
@@ -30,7 +31,7 @@ use crate::Direction;
 
 pub struct NatPool {
     // Map private IP to public IP + free list of ports
-    free_list: KMutex<BTreeMap<Ipv4Addr, (Ipv4Addr, Vec<u16>)>>,
+    free_list: KMutex<BTreeMap<Ipv4Addr, (Ipv4Addr, Range<u16>, Vec<u16>)>>,
 }
 
 impl NatPool {
@@ -41,14 +42,19 @@ impl NatPool {
         pub_ports: Range<u16>,
     ) {
         let free_list = pub_ports.clone().collect();
-        self.free_list.lock().insert(priv_ip, (pub_ip, free_list));
+        self.free_list.lock().insert(priv_ip, (pub_ip, pub_ports, free_list));
     }
 
     pub fn num_avail(&self, priv_ip: Ipv4Addr) -> Result<usize, ResourceError> {
         match self.free_list.lock().get(&priv_ip) {
-            Some((_, ports)) => Ok(ports.len()),
+            Some((_, _, ports)) => Ok(ports.len()),
             _ => Err(ResourceError::NoMatch(priv_ip.to_string())),
         }
+    }
+
+    pub fn mapping(&self, priv_ip: Ipv4Addr) -> Option<(Ipv4Addr, Range<u16>)> {
+        self.free_list.lock().get(&priv_ip)
+            .map(|(pub_ip, range, _)| (pub_ip.clone(), range.clone()))
     }
 
     pub fn new() -> Self {
@@ -62,7 +68,7 @@ impl NatPool {
         priv_ip: Ipv4Addr,
     ) -> Result<(Ipv4Addr, u16), ResourceError> {
         match self.free_list.lock().get_mut(&priv_ip) {
-            Some((ip, ports)) => {
+            Some((ip, _, ports)) => {
                 if ports.len() == 0 {
                     return Err(ResourceError::Exhausted);
                 }
@@ -83,7 +89,7 @@ impl NatPool {
     // take a BorrowedResource and return nothing.
     pub fn release(&mut self, priv_ip: Ipv4Addr, p: (Ipv4Addr, u16)) {
         match self.free_list.lock().get_mut(&priv_ip) {
-            Some((_ip, ports)) => {
+            Some((_ip, _, ports)) => {
                 let (_, pub_port) = p;
                 ports.push(pub_port);
             }
@@ -97,7 +103,6 @@ impl NatPool {
 
 #[derive(Clone)]
 pub struct DynNat4 {
-    layer: String,
     priv_ip: Ipv4Addr,
     priv_mac: EtherAddr,
     pub_mac: EtherAddr,
@@ -106,13 +111,19 @@ pub struct DynNat4 {
 
 impl DynNat4 {
     pub fn new(
-        layer: String,
         addr: Ipv4Addr,
         priv_mac: EtherAddr,
         pub_mac: EtherAddr,
         ip_pool: Arc<NatPool>,
     ) -> Self {
-        DynNat4 { layer, priv_ip: addr.into(), priv_mac, pub_mac, ip_pool }
+        DynNat4 { priv_ip: addr.into(), priv_mac, pub_mac, ip_pool }
+    }
+}
+
+impl fmt::Display for DynNat4 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let (pub_ip, ports) = self.ip_pool.mapping(self.priv_ip).unwrap();
+        write!(f, "{}:{}-{}", pub_ip, ports.start, ports.end)
     }
 }
 
@@ -228,6 +239,7 @@ fn dyn_nat4_ht() {
     use crate::headers::{IpMeta, UlpMeta};
     use crate::ip4::Protocol;
     use crate::packet::{MetaGroup, PacketMeta};
+    use crate::port;
     use crate::tcp::TcpMeta;
 
     let priv_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);

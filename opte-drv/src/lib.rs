@@ -37,31 +37,36 @@ extern crate alloc;
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
+// TODO Is Arc okay for illumos-kernel use? I.e., it uses atomics
+// underneath, is the code generated okay for the illumos kernel?
+use alloc::sync::Arc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::convert::TryFrom;
+use core::fmt::Debug;
 use core::ops::Range;
 use core::panic::PanicInfo;
 use core::ptr;
 use core::str::FromStr;
 
+use serde::Serialize;
+
 use crate::ioctl::{to_errno, IoctlEnvelope};
 
 extern crate opte_core;
 use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP};
+use opte_core::headers::IpCidr;
 use opte_core::oxide_net::firewall::{FwAddRuleReq, FwRemRuleReq};
 use opte_core::ioctl::{
-    CmdResp, IoctlCmd, ListPortsReq, ListPortsResp, PortInfo, AddPortReq,
-    DeletePortReq
+    self as api, AddPortReq, CmdErr, CmdOk, DeletePortReq, IoctlCmd, PortInfo
 };
 use opte_core::ip4::Ipv4Addr;
-use opte_core::layer::LayerDumpReq;
-use opte_core::oxide_net::PortConfig;
-use opte_core::packet::{Initialized, Packet};
-use opte_core::port::{Port, ProcessResult, TcpFlowsDumpReq, UftDumpReq};
-use opte_core::rule::Rule;
-use opte_core::sync::{KMutex, KMutexType};
-use opte_core::{CStr, CString, Direction};
+use opte_core::oxide_net::{overlay, router};
+use opte_core::oxide_net::PortCfg;
+use opte_core::packet::{Initialized, Packet, Parsed};
+use opte_core::port::{self, Port, ProcessResult};
+use opte_core::sync::{KMutex, KMutexGuard, KMutexType};
+use opte_core::{CStr, CString, Direction, ExecCtx};
 
 // For now I glob import all of DDI/DKI until I have a better idea of
 // how I would want to organize it. Also, for the time being, if it's
@@ -133,9 +138,11 @@ extern "C" {
         len: uintptr_t,
         idx: uintptr_t,
     );
+    fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
     fn __dtrace_probe_read__buf(count: uintptr_t);
     fn __dtrace_probe_rx(mp: uintptr_t);
     fn __dtrace_probe_tx(mp: uintptr_t);
+    fn __dtrace_probe_rx__chain__todo(mp: uintptr_t);
 }
 
 #[allow(dead_code)]
@@ -157,6 +164,9 @@ type mac_rx_fn = unsafe extern "C" fn(
     boolean_t,
 );
 
+// See uts/common/sys/mac_client.h.
+pub const MAC_DROP_ON_NO_DESC: u16 = 0x01;
+
 // The mac APIs.
 extern "C" {
     pub type mac_handle;
@@ -173,7 +183,7 @@ extern "C" {
 
     fn mac_client_close(mch: *const mac_client_handle, flags: u16);
     fn mac_client_name(mch: *const mac_client_handle) -> *const c_char;
-    fn mac_close(mh: *mut mac_handle);
+    fn mac_close(mh: *const mac_handle);
     fn mac_open_by_linkname(
         link: *const c_char,
         mhp: *mut *mut mac_handle
@@ -205,7 +215,7 @@ extern "C" {
         // don't believe unsafe/raw pointers can assume
         // any of the strict aliasing rules that
         // shared/unique references do.
-        mphp: *mut *const mac_promisc_handle,
+        mphp: *mut *mut mac_promisc_handle,
         flags: u16,
     ) -> c_int;
     fn mac_promisc_remove(mph: *const mac_promisc_handle);
@@ -224,6 +234,110 @@ extern "C" {
         ret_mp: *mut *const mblk_t,
     ) -> mac_tx_cookie_t;
     fn mac_unicast_primary_get(mh: *const mac_handle, addr: *mut [u8; 6]);
+}
+
+// A step towards a safe abstraction over the mac_client.h API.
+struct MacClient {
+    close_flags: u16,
+    mch: *mut mac_client_handle
+}
+
+impl MacClient {
+    // Open a new mac client on top of the mac provider specified by `mh`.
+    fn open(
+        mh: *const mac_handle,
+        open_flags: u16,
+        close_flags: u16
+    ) -> Result<Self, c_int> {
+        let mut mch = ptr::null_mut::<c_void> as *mut mac_client_handle;
+        let ret = unsafe {
+            mac_client_open(mh, &mut mch, ptr::null(), open_flags)
+        };
+
+        if ret != 0 {
+            return Err(ret);
+        }
+
+        Ok(Self { close_flags, mch })
+    }
+
+    // Get the name of the client.
+    fn name(&self) -> String {
+        unsafe {
+            CStr::from_ptr(mac_client_name(self.mch))
+                .to_str()
+                .unwrap()
+                .to_string()
+        }
+    }
+
+    fn rx_barrier(&self) {
+        unsafe { mac_rx_barrier(self.mch) };
+    }
+
+    // Clear the function to receive Rx packets. All future packets
+    // destined for this client are dropped by mac.
+    fn clear_rx_fn(&self) {
+        unsafe { mac_rx_clear(self.mch) };
+    }
+
+    // Set the function to receive Rx packets.
+    fn set_rx_fn(&self, rx_fn: mac_rx_fn, arg: *mut c_void) {
+        unsafe { mac_rx_set(self.mch, rx_fn, arg) };
+    }
+
+    fn add_promisc_fn(
+        &self,
+        ptype: mac_client_promisc_type_t,
+        promisc_fn: mac_rx_fn,
+        arg: *mut c_void,
+        flags: u16,
+    ) -> Result<*mut mac_promisc_handle, c_int> {
+        let mut mph = 0 as *mut mac_promisc_handle;
+
+        let ret = unsafe {
+            mac_promisc_add(self.mch, ptype, promisc_fn, arg, &mut mph, flags)
+        };
+
+        if ret == 0 {
+            Ok(mph)
+        } else {
+            return Err(ret);
+        }
+    }
+
+    fn rem_promisc_fn(&self, mph: *mut mac_promisc_handle) {
+        unsafe { mac_promisc_remove(mph) };
+    }
+
+    // Send the packet on this client. This function consumes the packet.
+    //
+    // XXX This function can actually take a packet chain, but for now
+    // we just pass a single packet at a time.
+    //
+    // XXX Probably want two separate functions, one for
+    // MAC_DROP_ON_NO_DESC and one for ret_mp.
+    fn tx(
+        &self,
+        pkt: Packet<Parsed>,
+        hint: uintptr_t,
+        flag: u16,
+        ret_mp: *mut *const mblk_t
+    ) {
+        // We must unwrap the raw `mblk_t` out of the `pkt` here,
+        // otherwise the mblk_t would be dropped at the end of this
+        // function along with `pkt`.
+        unsafe { mac_tx(self.mch, pkt.unwrap(), hint, flag, ret_mp) };
+    }
+}
+
+impl Drop for MacClient {
+    fn drop(&mut self) {
+        // Safety: We know that a MacClient can only exist if a mac
+        // client handle was successfully obtained, and thus mch is
+        // valid.
+        unsafe { mac_client_close(self.mch, self.close_flags) };
+    }
 }
 
 fn get_gw_mac(dip: *mut dev_info) -> EtherAddr {
@@ -304,32 +418,58 @@ unsafe extern "C" fn opte_close(
     0
 }
 
+type LinkName = String;
+
+enum PortState {
+    Inactive(Port<port::Inactive>, PortCfg, *const mac_handle),
+    Active(Arc<OpteClientState>, *const mac_handle),
+}
+
 struct OpteState {
+    ectx: Arc<ExecCtx>,
     gateway_mac: EtherAddr,
     gateway_ip: Ipv4Addr,
-    clients: KMutex<BTreeMap<String, *mut OpteClientState>>,
+    v2p: Arc<overlay::Virt2Phys>,
+    ports: KMutex<BTreeMap<LinkName, PortState>>,
 }
 
 impl OpteState {
     fn new(gateway_mac: EtherAddr, gateway_ip: Ipv4Addr,) -> Self {
+        let ectx = Arc::new(ExecCtx {
+            log: Box::new(opte_core::KernelLog {})
+        });
+
         OpteState {
+            ectx,
             gateway_mac,
             gateway_ip,
-            clients: KMutex::new(BTreeMap::new(), KMutexType::Driver),
+            v2p: Arc::new(overlay::Virt2Phys::new()),
+            ports: KMutex::new(BTreeMap::new(), KMutexType::Driver),
         }
     }
 }
 
-fn add_port(req: &AddPortReq) -> CmdResp<()> {
+fn get_opte_state() -> &'static OpteState {
     // Safety: The opte_dip pointer is write-once and is a valid
     // pointer passed to attach(9E). The returned pointer is valid as
     // it was derived from Box::into_raw() during attach(9E).
-    let state = unsafe {
+    unsafe {
         &*(ddi_get_driver_private(opte_dip) as *mut OpteState)
-    };
+    }
+}
 
-    if let Some(_) = state.clients.lock().get(&req.link_name) {
-        return Err(format!("port already exists"))
+fn add_port(
+    req: &AddPortReq
+) -> Result<(), api::AddPortError> {
+    let state = get_opte_state();
+
+    // We must hold this lock until we have inserted the new port into
+    // the map; otherwise, multiple threads could race to add the same
+    // port.
+    let mut ports_lock = state.ports.lock();
+
+    if let Some(_) = ports_lock.get(&req.link_name) {
+        return Err(api::AddPortError::Exists);
     }
 
     let mut mh: *mut mac_handle = ptr::null_mut::<c_void>() as *mut mac_handle;
@@ -337,22 +477,22 @@ fn add_port(req: &AddPortReq) -> CmdResp<()> {
     let ret = unsafe { mac_open_by_linkname(link_name_c.as_ptr(), &mut mh) };
 
     if ret != 0 {
-        return Err(format!("failed to open mac: {}", ret));
+        return Err(api::AddPortError::MacOpenFailed(ret));
     }
 
     let mut private_mac = [0u8; 6];
     unsafe { mac_unicast_primary_get(mh, &mut private_mac) };
     let private_mac = EtherAddr::from(private_mac);
 
-    let vpc_subnet = if req.ip_cfg.snat.is_none() {
+    let vpc_subnet = if req.port_cfg.snat.is_none() {
         "192.168.77.0/24".parse().unwrap()
     } else {
-        req.ip_cfg.snat.as_ref().unwrap().vpc_sub4
+        req.port_cfg.snat.as_ref().unwrap().vpc_sub4
     };
 
-    let dyn_nat = match req.ip_cfg.snat.as_ref() {
+    let dyn_nat = match req.port_cfg.snat.as_ref() {
         None => {
-            opte_core::oxide_net::DynNat4Config {
+            opte_core::oxide_net::DynNat4Cfg {
                 public_mac: EtherAddr::from([0x99; 6]),
                 public_ip: "192.168.99.99".parse().unwrap(),
                 ports: Range {
@@ -363,7 +503,7 @@ fn add_port(req: &AddPortReq) -> CmdResp<()> {
         },
 
         Some(snat) => {
-            opte_core::oxide_net::DynNat4Config {
+            opte_core::oxide_net::DynNat4Cfg {
                 public_mac: snat.public_mac.clone(),
                 public_ip: snat.public_ip,
                 ports: Range {
@@ -374,102 +514,325 @@ fn add_port(req: &AddPortReq) -> CmdResp<()> {
         }
     };
 
-    let port_cfg = PortConfig {
+    let port_cfg = PortCfg {
         vpc_subnet,
         private_mac,
-        private_ip: req.ip_cfg.private_ip,
+        private_ip: req.port_cfg.private_ip,
         gw_mac: state.gateway_mac,
         gw_ip: state.gateway_ip,
         dyn_nat,
         overlay: None,
     };
 
-    let mut new_port = Port::new(req.link_name.clone(), private_mac);
+    let mut new_port = Port::new(
+        &req.link_name,
+        private_mac,
+        state.ectx.clone()
+    );
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
+
     // TODO: In order to demo this in the lab environment we currently
     // allow SNAT to be optional.
-    if req.ip_cfg.snat.is_some() {
+    if req.port_cfg.snat.is_some() {
         opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg)
             .unwrap();
     }
     opte_core::oxide_net::arp::setup(&mut new_port, &port_cfg).unwrap();
-    let port = Box::new(new_port.activate());
+    // We know the firewall layer is there so it can't fail.
+    router::setup(&mut new_port).unwrap();
 
-    let port_periodic = unsafe {
-        ddi_periodic_add(
-            opte_port_periodic,
-            port.as_ref() as *const Port<_> as *const c_void,
-            ONE_SECOND,
-            DDI_IPL_0,
-        )
+    ports_lock.insert(
+        req.link_name.clone(),
+        PortState::Inactive(new_port, port_cfg, mh),
+    );
+    Ok(())
+}
+
+fn delete_port(req: &DeletePortReq) -> Result<(), api::DeletePortError> {
+    let state = unsafe {
+        &*(ddi_get_driver_private(opte_dip) as *mut OpteState)
     };
 
-    let ocs = Box::new(OpteClientState {
-        in_use: KMutex::new(false, KMutexType::Driver),
-        mh,
-        mch: ptr::null_mut::<c_void> as *mut mac_client_handle,
-        name: req.link_name.clone(),
-        rx_state: None,
-        mph: 0 as *mut mac_promisc_handle,
-        promisc_state: None,
-        port,
-        port_cfg,
-        port_periodic,
-        private_mac,
-        hairpin_queue: KMutex::new(Vec::with_capacity(4), KMutexType::Driver),
-    });
+    let mut ports_lock = state.ports.lock();
 
-    // We need to pull the raw pointer out of the box and give it to
-    // the client (viona). It will pass this pointer back to us during
-    // every invocation. To viona, the pointer points to an opaque type.
-    //
-    // ```
-    // typedef struct __opte_client_state opte_client_state_t;
-    // ```
-    //
-    // The "owner" of `ocs` is now viona. When the guest instance is
-    // tore down, and viona is closing, it will give ownership back to
-    // opte via `opte_client_close()`.
-    //
-    // There is no concern over shared ownership or data races from
-    // viona as `ocs` is simply a top-level state structure with
-    // pointers to other MT-safe types (aka interior mutability).
-    state.clients.lock().insert(
-        req.link_name.clone(),
-        Box::into_raw(ocs)
-    );
+    let _ = match ports_lock.get(&req.name) {
+        Some(PortState::Inactive(inactive_port, _, _)) => inactive_port,
+
+        Some(PortState::Active(_, _)) => {
+            return Err(api::DeletePortError::InUse);
+        }
+
+        None => return Err(api::DeletePortError::NotFound),
+    };
+
+    if let Some(PortState::Inactive(_, _, mh)) = ports_lock.remove(&req.name) {
+        unsafe { mac_close(mh) };
+    }
 
     Ok(())
 }
 
-fn delete_port(req: DeletePortReq) -> CmdResp<()> {
-    unsafe {
-        let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-        let ocsp = match state.clients.lock().get(&req.name) {
-            Some(ocspp) => *ocspp,
-            None =>  return Err(format!("port not found: {}", req.name)),
-        };
-
-        if *(*ocsp).in_use.lock() {
-            return Err(format!("port is in use"));
+fn get_ocs<'a, 'b>(
+    ports_lock: &'a mut KMutexGuard<BTreeMap<LinkName, PortState>>,
+    name: &'b str
+) -> Result<Arc<OpteClientState>, api::PortError> {
+    match ports_lock.get(name) {
+        None => Err(api::PortError::NotFound),
+        Some(PortState::Inactive(_, _, _)) => {
+            Err(api::PortError::Inactive)
         }
+        Some(PortState::Active(ocs, _)) => Ok(ocs.clone()),
+    }
+}
 
-        let ocsp = state.clients.lock().remove(&req.name).unwrap();
+// We need to pass this function a lock because the caller is likely
+// performing several actions on a given Port and thus must hold the
+// lock the entire time to prevent another thread from deleting the
+// same Port.
+fn get_port<'a, 'b>(
+    ports_lock: &'a KMutexGuard<BTreeMap<LinkName, PortState>>,
+    name: &'b str,
+) -> Result<&'a Port<port::Inactive>, api::PortError> {
+    match ports_lock.get(name) {
+        None => Err(api::PortError::NotFound),
+        Some(PortState::Inactive(port, _, _)) => Ok(&port),
+        Some(PortState::Active(_, _)) => Err(api::PortError::Active),
+    }
+}
 
-        // The ownership of `ocs` is being given back to opte. We need
-        // to put it back in the box so that the value and its owned
-        // resources are properly dropped.
-        let ocs = Box::from_raw(ocsp);
+#[derive(Debug, Serialize)]
+enum HdlrError {
+    System(i32),
+}
 
-        // Release the mac handle.
-        mac_close(ocs.mh);
+impl From<self::ioctl::Error> for HdlrError {
+    fn from(e: self::ioctl::Error) -> Self {
+        match e {
+            self::ioctl::Error::DeserError(_) => Self::System(EINVAL),
+            self::ioctl::Error::FailedCopyin => Self::System(EFAULT),
+            self::ioctl::Error::FailedCopyout => Self::System(EFAULT),
+            self::ioctl::Error::RespTooLong => Self::System(ENOBUFS),
+        }
+    }
+}
 
-        // Stop the periodic before dropping everything.
-        ddi_periodic_delete(ocs.port_periodic);
+fn add_port_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<Result<(), api::AddPortError>, HdlrError> {
+    let req: AddPortReq = ioctlenv.copy_in_req()?;
+    Ok(add_port(&req))
+}
+
+fn delete_port_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<Result<(), api::DeletePortError>, HdlrError> {
+    let req: DeletePortReq = ioctlenv.copy_in_req()?;
+    Ok(delete_port(&req))
+}
+
+fn list_ports_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<Result<api::ListPortsResp, ()>, HdlrError> {
+    let _req: api::ListPortsReq = ioctlenv.copy_in_req()?;
+    let mut resp = api::ListPortsResp { ports: vec![] };
+    let state = get_opte_state();
+    for (_k, ps) in state.ports.lock().iter() {
+        match ps {
+            PortState::Inactive(port, cfg, _) => {
+                resp.ports.push(PortInfo {
+                    name: port.name().to_string(),
+                    mac_addr: port.mac_addr(),
+                    ip4_addr: cfg.private_ip,
+                    in_use: false,
+                });
+            }
+
+            PortState::Active(ocs, _) => {
+                resp.ports.push(PortInfo {
+                    name: ocs.name.clone(),
+                    mac_addr: ocs.private_mac,
+                    ip4_addr: ocs.port_cfg.private_ip,
+                    in_use: true,
+                });
+            }
+        }
     }
 
-    // Resources dropped with `ocs`.
-    Ok(())
+    Ok(Ok(resp))
+}
+
+fn add_fw_rule_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<Result<(), api::AddFwRuleError>, HdlrError> {
+    let req: FwAddRuleReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let mut ports_lock = state.ports.lock();
+    let ocs = match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(api::AddFwRuleError::from(e))),
+    };
+    Ok(api::add_fw_rule(&ocs.port, &req))
+}
+
+fn rem_fw_rule_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<Result<(), api::RemFwRuleError>, HdlrError> {
+    let req: FwRemRuleReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let mut ports_lock = state.ports.lock();
+    let ocs = match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(api::RemFwRuleError::from(e))),
+    };
+    Ok(api::rem_fw_rule(&ocs.port, &req))
+}
+
+fn dump_tcp_flows_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<Result<api::DumpTcpFlowsResp, api::DumpTcpFlowsError>, HdlrError> {
+    let req: api::DumpTcpFlowsReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let mut ports_lock = state.ports.lock();
+    let ocs = match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(api::DumpTcpFlowsError::from(e))),
+    };
+    Ok(Ok(api::dump_tcp_flows(&ocs.port, &req)))
+}
+
+fn dump_layer_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<Result<api::DumpLayerResp, api::DumpLayerError>, HdlrError> {
+    let req: api::DumpLayerReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let mut ports_lock = state.ports.lock();
+    let ocs = match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(api::DumpLayerError::from(e))),
+    };
+    Ok(api::dump_layer(&ocs.port, &req))
+}
+
+fn list_layers_hdlr(
+    ioctlenv: &IoctlEnvelope
+)-> Result<Result<api::ListLayersResp, api::ListLayersError>, HdlrError> {
+    let req: api::ListLayersReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let mut ports_lock = state.ports.lock();
+    match get_port(&mut ports_lock, &req.port_name) {
+        Ok(port) => return Ok(Ok(port.list_layers())),
+        Err(_) => (),
+    };
+    match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(ocs) => {
+            Ok(Ok(ocs.port.list_layers()))
+        }
+
+        Err(_) => {
+            Ok(Err(api::ListLayersError::PortError(api::PortError::NotFound)))
+        }
+    }
+}
+
+fn dump_uft_hdlr(
+    ioctlenv: &IoctlEnvelope,
+) -> Result<Result<api::DumpUftResp, api::DumpUftError>, HdlrError> {
+    let req: api::DumpUftReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let mut ports_lock = state.ports.lock();
+    let ocs = match get_ocs(&mut ports_lock, &req.port_name) {
+        Ok(v) => v,
+        Err(e) => return Ok(Err(api::DumpUftError::from(e))),
+    };
+    Ok(Ok(api::dump_uft(&ocs.port, &req)))
+}
+
+fn set_overlay_hdlr(
+    ioctlenv: &IoctlEnvelope,
+) -> Result<Result<(), overlay::SetOverlayError>, HdlrError> {
+    let req: overlay::SetOverlayReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let ports_lock = state.ports.lock();
+    let port = match get_port(&ports_lock, &req.port_name) {
+        Ok(p) => p,
+        Err(e) => return Ok(Err(overlay::SetOverlayError::from(e))),
+    };
+    api::set_overlay(&port, &req, state.v2p.clone());
+    Ok(Ok(()))
+}
+
+fn set_v2p_hdlr(ioctlenv: &IoctlEnvelope) -> Result<Result<(), ()>, HdlrError> {
+    let req: overlay::SetVirt2PhysReq = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    state.v2p.set(req.vip, req.phys);
+    Ok(Ok(()))
+}
+
+fn add_router_entry_hdlr(
+    ioctlenv: &IoctlEnvelope
+) -> Result<Result<(), router::AddEntryError>, HdlrError> {
+    let req: router::AddRouterEntryIpv4Req = ioctlenv.copy_in_req()?;
+    let state = get_opte_state();
+    let mut ports_lock = state.ports.lock();
+    match get_port(&ports_lock, &req.port_name) {
+        Ok(port) => {
+            Ok(router::add_entry_inactive(
+                port,
+                IpCidr::Ip4(req.dest), req.target
+            ))
+        }
+
+        _ => {
+            let ocs =  match get_ocs(&mut ports_lock, &req.port_name) {
+                Ok(v) => v,
+                Err(e) => return Ok(Err(router::AddEntryError::from(e))),
+            };
+            Ok(router::add_entry_active(
+                &ocs.port,
+                IpCidr::Ip4(req.dest),
+                req.target
+            ))
+        }
+    }
+}
+
+fn dtrace_probe_hdlr_resp<T, E>(resp: &Result<Result<T, E>, HdlrError>)
+where
+    T: CmdOk,
+    E: CmdErr,
+{
+    let cstr = CString::new(format!("{:?}", resp)).unwrap();
+    unsafe { __dtrace_probe_hdlr__resp(cstr.as_ptr() as uintptr_t); }
+}
+
+// Convert the handler's response to the appropriate ioctl(2) return
+// value and copyout any command response. In the case of a failure
+// with the command we return success for the ioctl(2) call but the
+// command response buffer will contain a Result so that the client
+// can differentiate between success or failure. Non-zero ioctl(2)
+// return values are used to indicate the more typical error
+// conditions you would expect in the ioctl mechanisms itself, like
+// copyin, copyout, etc.
+fn hdlr_resp<T, E>(
+    ioctlenv: &mut IoctlEnvelope,
+    resp: Result<Result<T, E>, HdlrError>
+) -> c_int
+where
+    T: CmdOk,
+    E: CmdErr,
+{
+    dtrace_probe_hdlr_resp(&resp);
+
+    match resp {
+        Ok(resp) => {
+            match ioctlenv.copy_out_resp(&resp) {
+                Ok(()) => 0,
+                Err(e) => to_errno(e),
+            }
+        }
+
+        Err(HdlrError::System(ret)) => ret,
+    }
 }
 
 #[no_mangle]
@@ -484,6 +847,7 @@ unsafe extern "C" fn opte_ioctl(
     let cmd = match IoctlCmd::try_from(cmd) {
         Ok(v) => v,
         Err(_) => {
+            // XXX Replace this with a stat.
             opte_core::err(format!("invalid ioctl cmd: {}", cmd));
             return EINVAL;
         }
@@ -496,177 +860,72 @@ unsafe extern "C" fn opte_ioctl(
 
     match cmd {
         IoctlCmd::AddPort => {
-            let req: AddPortReq = match ioctlenv.copy_in_req() {
-                Ok(val) => val,
-                Err(e @ ioctl::Error::DeserError(_)) => {
-                    opte_core::err(
-                        format!("failed to deser AddPortReq: {:?}", e)
-                    );
-                    return EINVAL;
-                }
-                _ => return EFAULT,
-            };
-
-            to_errno(ioctlenv.copy_out_resp(&add_port(&req)))
+            let resp = add_port_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
         }
 
         IoctlCmd::DeletePort => {
-            let req: DeletePortReq = match ioctlenv.copy_in_req() {
-                Ok(val) => val,
-                Err(e @ ioctl::Error::DeserError(_)) => {
-                    opte_core::err(
-                        format!("failed to deser DeletePortReq: {:?}", e)
-                    );
-                    return EINVAL;
-                }
-                _ => return EFAULT,
-            };
+            let resp = delete_port_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
 
-            to_errno(ioctlenv.copy_out_resp(&delete_port(req)))
+        // XXX Eventually this information (or some subset of it)
+        // comes from Omicron/SA, but for now we require manual config
+        // between the window of creating an instance (which creates
+        // an OPTE Port) and starting it.
+        IoctlCmd::SetOverlay => {
+            let resp = set_overlay_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
         }
 
         IoctlCmd::ListPorts => {
-            let _req: ListPortsReq = match ioctlenv.copy_in_req() {
-                Ok(val) => val,
-                Err(e @ ioctl::Error::DeserError(_)) => {
-                    opte_core::err(
-                        format!("failed to deser ListPortsReq: {:?}", e)
-                    );
-                    return EINVAL;
-                }
-                _ => return EFAULT,
-            };
-
-            let mut resp = ListPortsResp { ports: vec![] };
-            let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            for (_k, v) in state.clients.lock().iter() {
-                let ocs = &(**v);
-                resp.ports.push(PortInfo {
-                    name: ocs.name.clone(),
-                    mac_addr: ocs.private_mac,
-                    ip4_addr: ocs.port_cfg.private_ip,
-                    in_use: *ocs.in_use.lock()
-                });
-            }
-
-            to_errno(ioctlenv.copy_out_resp(&Ok(resp)))
+            let resp = list_ports_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
         }
 
         IoctlCmd::FwAddRule => {
-            let req: FwAddRuleReq = match ioctlenv.copy_in_req() {
-                Ok(val) => val,
-                Err(ioctl::Error::DeserError(_)) => return EINVAL,
-                _ => return EFAULT,
-            };
-
-            let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = match state.clients.lock().get(&req.port_name) {
-                None => {
-                    return ENOENT;
-                }
-
-                Some(v) => &mut *(*v),
-            };
-
-            let dir = req.rule.direction;
-            let rule = Rule::from(req.rule);
-            let resp = ocs.port.add_rule("firewall", dir, rule);
-            to_errno(ioctlenv.copy_out_resp(
-                &resp.map_err(|e| format!("{:?}", e))
-            ))
+            let resp = add_fw_rule_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
         }
 
         IoctlCmd::FwRemRule => {
-            // This step validates that the bytes were able to be
-            // derserialized, but that doesn't mean we should consider
-            // this a valid, legal, or safe request. Before adding a
-            // new rule to the firewall we must make sure it meets all
-            // requirements. To make sure that the programmer cannot
-            // forget to make these checks, they are done as part of
-            // the `add_rule()` method.
-            //
-            // TODO For example, we need to make sure that a default
-            // rule cannot be deleted (assuming they should not be
-            // deleted), or that a given target is something that
-            // actually exists.
-            let req: FwRemRuleReq = match ioctlenv.copy_in_req() {
-                Ok(val) => val,
-                Err(ioctl::Error::DeserError(_)) => return EINVAL,
-                _ => return EFAULT,
-            };
-
-            let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = match state.clients.lock().get(&req.port_name) {
-                None => {
-                    return ENOENT;
-                }
-
-                Some(v) => &mut *(*v),
-            };
-
-            let resp = ocs.port.remove_rule("firewall", req.dir, req.id);
-            to_errno(ioctlenv.copy_out_resp(
-                &resp.map_err(|e| format!("{:?}", e))
-            ))
+            // XXX At the moment a default rule can be removed. That's
+            // something we may want to prevent at the OPTE layer
+            // moving forward. Or we may want to allow complete
+            // freedom at this level and place that enforcement at the
+            // control plane level.
+            let resp = rem_fw_rule_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
         }
 
-        IoctlCmd::TcpFlowsDump => {
-            let req: TcpFlowsDumpReq = match ioctlenv.copy_in_req() {
-                Ok(val) => val,
-                Err(ioctl::Error::DeserError(_)) => return EINVAL,
-                _ => return EFAULT,
-            };
-            let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = match state.clients.lock().get(&req.port_name) {
-                None => {
-                    return ENOENT;
-                }
-
-                Some(v) => &mut *(*v),
-            };
-
-            let resp = Ok(ocs.port.dump_tcp_flows());
-            to_errno(ioctlenv.copy_out_resp(&resp))
+        IoctlCmd::DumpTcpFlows => {
+            let resp = dump_tcp_flows_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
         }
 
-        IoctlCmd::LayerDump => {
-            let req: LayerDumpReq = match ioctlenv.copy_in_req() {
-                Ok(val) => val,
-                Err(ioctl::Error::DeserError(_)) => return EINVAL,
-                _ => return EFAULT,
-            };
-
-            let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = match state.clients.lock().get(&req.port_name) {
-                None => {
-                    return ENOENT;
-                }
-
-                Some(v) => &mut *(*v),
-            };
-
-            let resp = ocs.port.dump_layer(&req.name);
-            to_errno(ioctlenv.copy_out_resp(&resp))
+        IoctlCmd::DumpLayer => {
+            let resp = dump_layer_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
         }
 
-        IoctlCmd::UftDump => {
-            let req: UftDumpReq = match ioctlenv.copy_in_req() {
-                Ok(val) => val,
-                Err(ioctl::Error::DeserError(_)) => return EINVAL,
-                _ => return EFAULT,
-            };
+        IoctlCmd::ListLayers => {
+            let resp = list_layers_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
 
-            let state = &*(ddi_get_driver_private(opte_dip) as *mut OpteState);
-            let ocs = match state.clients.lock().get(&req.port_name) {
-                None => {
-                    return ENOENT;
-                }
+        IoctlCmd::DumpUft => {
+            let resp = dump_uft_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
 
-                Some(v) => &mut *(*v),
-            };
+        IoctlCmd::SetVirt2Phys => {
+            let resp = set_v2p_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
+        }
 
-            let resp = Ok(ocs.port.dump_uft());
-            to_errno(ioctlenv.copy_out_resp(&resp))
+        IoctlCmd::AddRouterEntryIpv4 => {
+            let resp = add_router_entry_hdlr(&ioctlenv);
+            hdlr_resp(&mut ioctlenv, resp)
         }
     }
 }
@@ -882,15 +1141,14 @@ fn panic_hdlr(info: &PanicInfo) -> ! {
 // port configuration handed down during port registration from actual
 // state like the hairpin queue.
 pub struct OpteClientState {
-    in_use: KMutex<bool>,
-    mh: *mut mac_handle,
-    mch: *mut mac_client_handle,
+    mh: *const mac_handle,
+    mc: MacClient,
     rx_state: Option<OpteRxState>,
-    mph: *const mac_promisc_handle,
+    mph: *mut mac_promisc_handle,
     name: String,
     promisc_state: Option<OptePromiscState>,
-    port: Box<Port<opte_core::port::Active>>,
-    port_cfg: PortConfig,
+    port: Arc<Port<port::Active>>,
+    port_cfg: PortCfg,
     port_periodic: *const ddi_periodic,
     private_mac: EtherAddr,
     // Packets generated by OPTE on the guest's/network's behalf, to
@@ -904,6 +1162,7 @@ const ONE_SECOND: hrtime_t = 1_000_000_000;
 pub unsafe extern "C" fn opte_port_periodic(arg: *mut c_void) {
     // The `arg` is a raw pointer to a `Port`, as guaranteed by
     // opte_client_open().
+    assert!(!arg.is_null());
     let port = &*(arg as *const Port<opte_core::port::Active>);
     port.expire_flows(gethrtime());
 }
@@ -916,34 +1175,61 @@ pub unsafe extern "C" fn opte_client_open(
     flags: u16,
 ) -> c_int {
     *ocspo = ptr::null_mut();
-    let mut mch = ptr::null_mut::<c_void> as *mut mac_client_handle;
-    let ret = mac_client_open(mh, &mut mch, ptr::null(), flags);
 
-    if ret != 0 {
-        return ret;
-    }
+    let mc = match MacClient::open(mh, flags, 0) {
+        Err(ret) => return ret,
+        Ok(mc) => mc,
+    };
 
-    let link_name = CStr::from_ptr(mac_client_name(mch))
-        .to_str()
-        .unwrap()
-        .to_string();
-
+    let link_name = mc.name();
     let state = &mut *(ddi_get_driver_private(opte_dip) as *mut OpteState);
-    let ocsp = match state.clients.lock().get(&link_name) {
-        Some(ocspp) => *ocspp,
+
+    // We must hold the ports's lock for the duration of this call to ensure
+    // that transition from inactive to active is atomic.
+    let mut ports_lock = state.ports.lock();
+
+    let (port, port_cfg, port_mh) = match ports_lock.remove(&link_name) {
+        Some(PortState::Inactive(p, c, port_mh)) => (p, c, port_mh),
+        Some(PortState::Active(_, _)) => return EBUSY,
         None => return ENOENT,
     };
-    let ocs = &mut (*ocsp);
-    let mut in_use = ocs.in_use.lock();
 
-    if *in_use {
-        mac_client_close(ocs.mch, 0);
-        return EBUSY;
-    }
+    let active_port = Arc::new(port.activate());
+    let mac_addr = active_port.mac_addr();
+    let port_periodic =  ddi_periodic_add(
+        opte_port_periodic,
+        // The non-counted alias is fine as the periodic is cleaned up
+        // as part of opte_client_close(), prior to the Port being
+        // dropped.
+        active_port.as_ref() as *const Port<_> as *const c_void,
+        ONE_SECOND,
+        DDI_IPL_0,
+    );
 
-    ocs.mch = mch;
-    *ocspo = ocsp;
-    *in_use = true;
+    let ocs = Arc::new(OpteClientState {
+        mh,
+        mc,
+        name: link_name.clone(),
+        rx_state: None,
+        mph: 0 as *mut mac_promisc_handle,
+        promisc_state: None,
+        port: active_port,
+        port_cfg,
+        port_periodic,
+        private_mac: mac_addr,
+        hairpin_queue: KMutex::new(Vec::with_capacity(4), KMutexType::Driver),
+    });
+
+    // We can lease this uncounted reference to viona because this
+    // driver guarantees to the client that a port cannot be deleted
+    // until the client is finished with it. There is no concern over
+    // aliasing as this structure is opaque to the client and any
+    // structure inside ocs should provide its own thread-safety.
+    *ocspo = Arc::as_ptr(&ocs);
+    ports_lock.insert(
+        link_name.clone(),
+        PortState::Active(ocs, port_mh)
+    );
     0
 }
 
@@ -952,7 +1238,16 @@ pub unsafe extern "C" fn opte_client_close(
     ocsp: *mut OpteClientState,
     _flags: u16,
 ) {
-    let ocs = &mut *ocsp;
+    let link_name = &((*ocsp).name);
+    let state = &mut *(ddi_get_driver_private(opte_dip) as *mut OpteState);
+    // This should NEVER happen. It would mean we have an active OPTE
+    // client but are not tracking it at all in our clients list.
+    let _ = state.ports.lock().remove(link_name).expect("something is amiss");
+
+    // The ownership of `ocs` is being given back to opte. We need
+    // to put it back in the box so that the value and its owned
+    // resources are properly dropped.
+    let ocs = Box::from_raw(ocsp);
 
     // The client is closing its handle to this port. We need to
     // effectively "reset" the port by wiping all of its current state
@@ -961,34 +1256,32 @@ pub unsafe extern "C" fn opte_client_close(
     // and replacing it with a new one with the identical
     // configuration.
     ddi_periodic_delete(ocs.port_periodic);
-    ocs.port_periodic = 0 as *const c_void as *const ddi_periodic;
 
     let mut new_port = Port::new(
-        ocs.name.clone(),
-        ocs.private_mac
+        &ocs.name,
+        ocs.private_mac,
+        state.ectx.clone(),
     );
+
+    let port_cfg = ocs.port_cfg;
 
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
-    opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &ocs.port_cfg)
+    opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg)
         .unwrap();
-    opte_core::oxide_net::arp::setup(&mut new_port, &ocs.port_cfg).unwrap();
-    let _ = core::mem::replace(&mut *ocs.port, new_port.activate());
+    opte_core::oxide_net::arp::setup(&mut new_port, &port_cfg).unwrap();
+    // We know the firewall layer is there so it can't fail.
+    router::setup(&mut new_port).unwrap();
 
-    let port_periodic = ddi_periodic_add(
-        opte_port_periodic,
-        ocs.port.as_ref() as *const Port<_> as *const c_void,
-        ONE_SECOND,
-        DDI_IPL_0,
+    state.ports.lock().insert(
+        link_name.to_string(),
+        PortState::Inactive(new_port, port_cfg, ocs.mh)
     );
-
-    ocs.port_periodic = port_periodic;
-    *ocs.in_use.lock() = false;
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn opte_rx_barrier(ocsp: *const OpteClientState) {
     let ocs = &*ocsp;
-    mac_rx_barrier(ocs.mch);
+    ocs.mc.rx_barrier();
 }
 
 struct OpteRxState {
@@ -1004,7 +1297,7 @@ pub unsafe extern "C" fn opte_rx_set(
 ) {
     let ocs = &mut *ocsp;
     ocs.rx_state = Some(OpteRxState { rx_fn, arg });
-    mac_rx_set(ocs.mch, opte_rx, ocsp as *mut c_void);
+    ocs.mc.set_rx_fn(opte_rx, ocsp as *mut c_void);
 }
 
 #[no_mangle]
@@ -1012,7 +1305,7 @@ pub unsafe extern "C" fn opte_rx_clear(ocsp: *mut OpteClientState) {
     let ocs = &mut *ocsp;
     // Need to take the state out so it is dropped.
     let _ = ocs.rx_state.take();
-    mac_rx_clear(ocs.mch);
+    ocs.mc.clear_rx_fn();
 }
 
 struct OptePromiscState {
@@ -1030,30 +1323,30 @@ pub unsafe extern "C" fn opte_promisc_add(
 ) -> c_int {
     let mut ocs = &mut *ocsp;
     ocs.promisc_state = Some(OptePromiscState { promisc_fn, arg });
-    let mut mph = 0 as *const mac_promisc_handle;
-    let ret = mac_promisc_add(
-        ocs.mch,
+
+    let res = ocs.mc.add_promisc_fn(
         ptype,
         opte_rx_mcast,
         ocsp as *mut c_void,
-        &mut mph,
-        flags,
+        flags
     );
 
-    if ret != 0 {
-        let _ = ocs.promisc_state.take();
-        return ret;
-    }
+    ocs.mph = match res {
+        Ok(mph) => mph,
+        Err(ret) => {
+            let _ = ocs.promisc_state.take();
+            return ret;
+        }
+    };
 
-    ocs.mph = mph;
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn opte_promisc_remove(ocsp: *mut OpteClientState) {
     let mut ocs = &mut *ocsp;
-    mac_promisc_remove(ocs.mph);
-    ocs.mph = 0 as *const mac_promisc_handle;
+    ocs.mc.rem_promisc_fn(ocs.mph);
+    ocs.mph = 0 as *mut mac_promisc_handle;
     let _ = ocs.promisc_state.take();
 }
 
@@ -1080,22 +1373,17 @@ pub unsafe extern "C" fn opte_tx(
         }
     };
     let ocs = &*ocsp;
-    // TODO This `mp_chain` arg was for debug purposes; now that we
-    // have Packet we can probably get rid of it?
-    let res = ocs.port.process(Direction::Out, &mut pkt, mp_chain as uintptr_t);
+    let res = ocs.port.process(Direction::Out, &mut pkt);
 
     match res {
         Ok(ProcessResult::Modified) => {
-            // It's vital to get the raw `mblk_t` back out of the
-            // `pkt` here, otherwise the mblk_t would be dropped
-            // at the end of this function along with `pkt`.
-            mac_tx(ocs.mch, pkt.unwrap(), hint, flag, ret_mp);
+            ocs.mc.tx(pkt, hint, flag, ret_mp);
         }
 
         // TODO Probably want a state + a probe along with a reason
         // carried up via `ProcessResult::Drop(String)` so that a
         // reason can be given as part of the probe.
-        Ok(ProcessResult::Drop) => {
+        Ok(ProcessResult::Drop { .. }) => {
             return;
         }
 
@@ -1120,7 +1408,7 @@ pub unsafe extern "C" fn opte_tx(
         // use it for protocols/traffic we aren't ready to deal with
         // yet.
         Ok(ProcessResult::Bypass) => {
-            mac_tx(ocs.mch, pkt.unwrap(), hint, flag, ret_mp);
+            ocs.mc.tx(pkt, hint, flag, ret_mp);
         }
 
         // TODO Want something better here eventually:
@@ -1146,7 +1434,14 @@ pub unsafe extern "C" fn opte_tx(
     // clear the hairpin queue when the guest is actively trying to
     // send packets.
     while let Some(p) = ocs.hairpin_queue.lock().pop() {
-        mac_tx(ocs.mch, p.unwrap(), hint, flag, ret_mp);
+        // XXX Get rid of unwrap() here and instead do stat/probe/log
+        // if hairpin packet fails to parse.
+        ocs.mc.tx(
+            p.parse().unwrap(),
+            hint,
+            MAC_DROP_ON_NO_DESC,
+            ptr::null_mut()
+        );
     }
 }
 
@@ -1159,8 +1454,12 @@ pub unsafe extern "C" fn opte_rx(
     mp_chain: *mut mblk_t,
     loopback: boolean_t,
 ) {
-    // TODO: I haven't dealt with chains yet.
-    assert!((*mp_chain).b_next == ptr::null_mut());
+    // XXX Need to deal with chains. This was an assert but it's
+    // blocking other work that's more pressing at the moment as I
+    // keep tripping it.
+    if !(*mp_chain).b_next.is_null() {
+        __dtrace_probe_rx__chain__todo(mp_chain as uintptr_t);
+    }
     __dtrace_probe_rx(mp_chain as uintptr_t);
 
     let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
@@ -1174,7 +1473,8 @@ pub unsafe extern "C" fn opte_rx(
     };
     let ocs = &*(arg as *const OpteClientState);
     let rx_state = ocs.rx_state.as_ref().unwrap();
-    let res = ocs.port.process(Direction::In, &mut pkt, mp_chain as uintptr_t);
+    let res = ocs.port.process(Direction::In, &mut pkt);
+
     match res {
         Ok(ProcessResult::Modified) => {
             let meta = pkt.meta();
@@ -1203,7 +1503,7 @@ pub unsafe extern "C" fn opte_rx(
         // TODO Probably want a state + a probe along with a reason
         // carried up via `ProcessResult::Drop(String)` so that a
         // reason can be given as part of the probe.
-        Ok(ProcessResult::Drop) => {
+        Ok(ProcessResult::Drop { .. }) => {
             return;
         }
 

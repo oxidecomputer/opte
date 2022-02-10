@@ -24,10 +24,11 @@ use crate::ether::{EtherAddr, EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
 use crate::flow_table::StateSummary;
 use crate::geneve::{GeneveMeta, GeneveMetaOpt};
 use crate::headers::{
-    HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
+    self, HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
     UlpMetaOpt
 };
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
+use crate::ip6::Ipv6Meta;
 use crate::layer::{InnerFlowId};
 use crate::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
@@ -182,7 +183,6 @@ impl Display for ArpOpMatch {
 pub enum Ipv4AddrMatch {
     Exact(Ipv4Addr),
     Prefix(Ipv4Cidr),
-    // Range(Ipv4Addr, Ipv4Addr),
 }
 
 impl Ipv4AddrMatch {
@@ -448,7 +448,13 @@ impl Predicate {
                     }
                 }
 
-                _ => todo!("implement IPv6 for InnerIpProto"),
+                Some(IpMeta::Ip6(Ipv6Meta { proto, .. })) => {
+                    for m in list {
+                        if m.matches(proto) {
+                            return true;
+                        }
+                    }
+                }
             },
 
             Self::InnerSrcIp4(list) => match meta.inner.ip {
@@ -646,17 +652,6 @@ pub trait ActionSummary {
     fn summary(&self) -> String;
 }
 
-#[derive(Debug)]
-pub struct StatefulIdentity {
-    layer: String,
-}
-
-impl StatefulIdentity {
-    pub fn new(layer: String) -> Self {
-        StatefulIdentity { layer }
-    }
-}
-
 pub struct IdentityDesc {
     name: String,
 }
@@ -687,23 +682,25 @@ pub struct Identity {
 }
 
 impl Identity {
-    pub fn new(name: String) -> Self {
-        Identity { name }
+    pub fn new(name: &str) -> Self {
+        Identity { name: name.to_string() }
+    }
+}
+
+impl Display for Identity {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Identity")
     }
 }
 
 impl StaticAction for Identity {
-    fn gen_ht(&self, _dir: Direction, _flow_id: InnerFlowId) -> HT {
-        HT {
-            name: self.name.clone(),
-            outer_ether: HeaderAction::Ignore,
-            outer_ip: HeaderAction::Ignore,
-            outer_ulp: HeaderAction::Ignore,
-            outer_encap: HeaderAction::Ignore,
-            inner_ether: HeaderAction::Ignore,
-            inner_ip: HeaderAction::Ignore,
-            inner_ulp: UlpHeaderAction::Ignore,
-        }
+    fn gen_ht(
+        &self,
+        _dir: Direction,
+        _flow_id: InnerFlowId,
+        _meta: &mut Meta
+    ) -> GenHtResult {
+        Ok(HT::identity(&self.name))
     }
 }
 
@@ -753,8 +750,11 @@ pub unsafe fn __dtrace_probe_ht__run(_arg: uintptr_t) {
 
 #[repr(C)]
 pub struct flow_id_sdt_arg {
-    src_ip: u32,
-    dst_ip: u32,
+    af: i32,
+    src_ip4: u32,
+    dst_ip4: u32,
+    src_ip6: [u8; 16],
+    dst_ip6: [u8; 16],
     src_port: u16,
     dst_port: u16,
     proto: u8,
@@ -762,21 +762,24 @@ pub struct flow_id_sdt_arg {
 
 impl From<&InnerFlowId> for flow_id_sdt_arg {
     fn from(ifid: &InnerFlowId) -> Self {
-        let src_ip = match ifid.src_ip {
-            IpAddr::Ip4(v) => v,
-            _ => panic!("add IPv6 support for flow_id_sdt_arg"),
+        // Consumers expect all data to be presented as it would be
+        // traveling across the network.
+        let (af, src_ip4, src_ip6) = match ifid.src_ip {
+            IpAddr::Ip4(ip4) => (headers::AF_INET, ip4.to_be(), [0; 16]),
+            IpAddr::Ip6(ip6) => (headers::AF_INET6, 0, ip6.to_bytes()),
         };
 
-        let dst_ip = match ifid.dst_ip {
-            IpAddr::Ip4(v) => v,
-            _ => panic!("add IPv6 support for flow_id_sdt_arg"),
+        let (dst_ip4, dst_ip6) = match ifid.dst_ip {
+            IpAddr::Ip4(ip4) => (ip4.to_be(), [0; 16]),
+            IpAddr::Ip6(ip6) => (0, ip6.to_bytes()),
         };
 
         flow_id_sdt_arg {
-            // Consumers expect all data to be presented as it would
-            // be traveling across the network.
-            src_ip: src_ip.to_be(),
-            dst_ip: dst_ip.to_be(),
+            af,
+            src_ip4,
+            dst_ip4,
+            src_ip6,
+            dst_ip6,
             src_port: ifid.src_port.to_be(),
             dst_port: ifid.dst_port.to_be(),
             proto: ifid.proto as u8,
@@ -828,6 +831,21 @@ pub fn ht_fire_probe(
 }
 
 impl HT {
+    /// The "identity" header transformation; one which leaves the
+    /// header as-isl
+    pub fn identity(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            outer_ether: HeaderAction::Ignore,
+            outer_ip: HeaderAction::Ignore,
+            outer_ulp: HeaderAction::Ignore,
+            outer_encap: HeaderAction::Ignore,
+            inner_ether: HeaderAction::Ignore,
+            inner_ip: HeaderAction::Ignore,
+            inner_ulp: UlpHeaderAction::Ignore,
+        }
+    }
+
     pub fn run(&self, meta: &mut PacketMeta) {
         self.outer_ether.run(&mut meta.outer.ether);
         self.outer_ip.run(&mut meta.outer.ip);
@@ -858,7 +876,7 @@ pub enum GenDescError {
 
 pub type GenDescResult = Result<Arc<dyn ActionDesc>, GenDescError>;
 
-pub trait StatefulAction {
+pub trait StatefulAction: Display {
     /// Generate a an [`ActionDesc`] based on the [`InnerFlowId`] and
     /// [`Meta`]. This action may also add, remove, or modify metadata
     /// to communicate data to downstream actions.
@@ -877,8 +895,35 @@ pub trait StatefulAction {
     ) -> GenDescResult;
 }
 
-pub trait StaticAction {
-    fn gen_ht(&self, dir: Direction, flow_id: InnerFlowId) -> HT;
+
+#[derive(Clone, Debug)]
+pub enum GenHtError {
+    ResourceExhausted {
+        name: String,
+    },
+
+    Unexpected {
+        msg: String,
+    }
+}
+
+pub type GenHtResult = Result<HT, GenHtError>;
+
+pub trait StaticAction: Display {
+    fn gen_ht(
+        &self,
+        dir: Direction,
+        flow_id: InnerFlowId,
+        meta: &mut Meta
+    ) -> GenHtResult;
+}
+
+/// A meta action is one that's only goal is to modify the processing
+/// metadata in some way. That is, it has no transformation to make on
+/// the packet, only add/modify/remove metadata for use by later
+/// layers.
+pub trait MetaAction: Display {
+    fn mod_meta(&self, flow_id: InnerFlowId, meta: &mut Meta);
 }
 
 #[derive(Debug)]
@@ -894,7 +939,7 @@ pub type GenResult<T> = Result<T, GenErr>;
 /// packet back to the source of the original packet. For example, you
 /// could use this to hairpin an ARP Reply in response to a guest's
 /// ARP request.
-pub trait HairpinAction {
+pub trait HairpinAction: Display {
     /// Generate a [`Packet`] to hairpin back to the source. The
     /// `meta` argument holds the packet metadata, inlucding any
     /// modifications made by previous layers up to this point. The
@@ -908,36 +953,60 @@ pub trait HairpinAction {
     ) -> GenResult<Packet<Initialized>>;
 }
 
+#[derive(Clone)]
 pub enum Action {
-    Static(Box<dyn StaticAction>),
-    Stateful(Box<dyn StatefulAction>),
-    Hairpin(Box<dyn HairpinAction>),
-}
-
-// TODO I should probably name this something else now. It's role is
-// to declare whether or not a rule match should execute the layer's
-// associated action (Allow), or whether it should deny the packet
-// (Deny).
-#[derive(Clone, Debug)]
-pub enum RuleAction {
-    Allow(usize),
     Deny,
+    Meta(Arc<dyn MetaAction>),
+    Static(Arc<dyn StaticAction>),
+    Stateful(Arc<dyn StatefulAction>),
+    Hairpin(Arc<dyn HairpinAction>),
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub enum RuleActionDump {
-    Allow(usize),
-    Deny,
-}
-
-impl From<&RuleAction> for RuleActionDump {
-    fn from(ra: &RuleAction) -> Self {
-        use RuleAction::*;
-
-        match ra {
-            Allow(idx) => RuleActionDump::Allow(*idx),
-            Deny => RuleActionDump::Deny,
+impl Action {
+    pub fn is_deny(&self) -> bool {
+        match self {
+            Self::Deny => true,
+            _ => false,
         }
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub enum ActionDump {
+    Deny,
+    Meta(String),
+    Static(String),
+    Stateful(String),
+    Hairpin(String),
+}
+
+impl From<&Action> for ActionDump {
+    fn from(action: &Action) -> Self {
+        match action {
+            Action::Deny => Self::Deny,
+            Action::Meta(ma) => Self::Meta(ma.to_string()),
+            Action::Static(sa) => Self::Static(sa.to_string()),
+            Action::Stateful(sa) => Self::Stateful(sa.to_string()),
+            Action::Hairpin(ha) => Self::Hairpin(ha.to_string()),
+        }
+    }
+}
+
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Deny => write!(f, "DENY"),
+            Self::Meta(a) => write!(f, "META: {}", a),
+            Self::Static(a) => write!(f, "STATIC: {}", a),
+            Self::Stateful(a) => write!(f, "STATEFUL: {}", a),
+            Self::Hairpin(a) => write!(f, "HAIRPIN: {}", a),
+        }
+    }
+}
+
+impl fmt::Debug for Action {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "todo: implement Debug for Action")
     }
 }
 
@@ -971,16 +1040,22 @@ impl RuleState for Finalized {}
 #[derive(Clone, Debug)]
 pub struct Rule<S: RuleState> {
     state: S,
+    action: Action,
     pub priority: u16,
-    pub action: RuleAction,
+}
+
+impl<S: RuleState> Rule<S> {
+    pub fn action(&self) -> &Action {
+        &self.action
+    }
 }
 
 impl Rule<Empty> {
-    pub fn new(priority: u16, action: RuleAction) -> Self {
+    pub fn new(priority: u16, action: Action) -> Self {
         Rule {
             state: Empty {},
+            action,
             priority,
-            action
         }
     }
 
@@ -990,8 +1065,8 @@ impl Rule<Empty> {
                 hdr_preds: vec![pred],
                 data_preds: vec![],
             },
-            priority: self.priority,
             action: self.action,
+            priority: self.priority,
         }
     }
 
@@ -1001,8 +1076,8 @@ impl Rule<Empty> {
                 hdr_preds: preds,
                 data_preds: vec![],
             },
-            priority: self.priority,
             action: self.action,
+            priority: self.priority,
         }
     }
 
@@ -1012,8 +1087,8 @@ impl Rule<Empty> {
                 hdr_preds: vec![],
                 data_preds: vec![pred],
             },
-            priority: self.priority,
             action: self.action,
+            priority: self.priority,
         }
     }
 
@@ -1022,8 +1097,8 @@ impl Rule<Empty> {
             state: Finalized {
                 preds: None,
             },
-            priority: self.priority,
             action: self.action,
+            priority: self.priority,
         }
     }
 }
@@ -1096,7 +1171,7 @@ impl<'a> Rule<Finalized> {
 pub struct RuleDump {
     pub priority: u16,
     pub predicates: Vec<Predicate>,
-    pub action: RuleActionDump,
+    pub action: String,
 }
 
 impl From<&Rule<Finalized>> for RuleDump {
@@ -1110,7 +1185,7 @@ impl From<&Rule<Finalized>> for RuleDump {
             priority: rule.priority,
             predicates,
             // XXX What about data predicates?
-            action: RuleActionDump::from(&rule.action),
+            action: rule.action.to_string(),
         }
     }
 }
@@ -1119,7 +1194,8 @@ impl From<&Rule<Finalized>> for RuleDump {
 fn rule_matching() {
     use crate::packet::MetaGroup;
 
-    let r1 = Rule::new(1, RuleAction::Allow(0));
+    let action = Identity::new("rule_matching");
+    let r1 = Rule::new(1, Action::Static(Arc::new(action)));
     let src_ip = "10.11.11.100".parse().unwrap();
     let src_port = "1026".parse().unwrap();
     let dst_ip = "52.10.128.69".parse().unwrap();

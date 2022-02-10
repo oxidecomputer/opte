@@ -6,8 +6,11 @@
 #include <sys/inttypes.h>
 
 typedef struct flow_id_sdt_arg {
-	uint32_t	src_ip;
-	uint32_t	dst_ip;
+	int		af;
+	ipaddr_t	src_ip4;
+	ipaddr_t	dst_ip4;
+	in6_addr_t	src_ip6;
+	in6_addr_t	dst_ip6;
 	uint16_t	src_port;
 	uint16_t	dst_port;
 	uint8_t		proto;
@@ -32,18 +35,34 @@ BEGIN {
 
 tcp-flow-state {
 	this->flow_id = (flow_id_sdt_arg_t *)arg0;
+	this->af = this->flow_id->af;
+}
+
+tcp-flow-state /this->af == AF_INET/ {
 	/*
 	 * inet_ntoa() wants an ipaddr_t pointer, but opte is passing
 	 * up the actual 32-bit IP value. You can't take the address
 	 * of a dynamic variable, so make local allocations to
 	 * reference.
 	 */
-	this->srcp = (ipaddr_t *)alloca(4);
-	this->dstp = (ipaddr_t *)alloca(4);
-	*this->srcp = this->flow_id->src_ip;
-	*this->dstp = this->flow_id->dst_ip;
+	this->src_ip = (ipaddr_t *)alloca(4);
+	this->dst_ip = (ipaddr_t *)alloca(4);
+	*this->src_ip = this->flow_id->src_ip4;
+	*this->dst_ip = this->flow_id->dst_ip4;
 
 	printf("%16s -> %-16s %s:%u %s:%u\n", tcp_states[arg1],
-	    tcp_states[arg2], inet_ntoa(this->srcp), this->flow_id->src_port,
-	    inet_ntoa(this->dstp), this->flow_id->dst_port);
+	    tcp_states[arg2], inet_ntoa(this->src_ip), this->flow_id->src_port,
+	    inet_ntoa(this->dst_ip), this->flow_id->dst_port);
+}
+
+tcp-flow-state /this->af == AF_INET6/ {
+	this->src_ip6 = (in6_addr_t *)alloca(16);
+	this->dst_ip6 = (in6_addr_t *)alloca(16);
+	*this->src_ip6 = this->flow_id->src_ip6;
+	*this->dst_ip6 = this->flow_id->dst_ip6;
+
+	printf("%16s -> %-16s %s:%u %s:%u\n", tcp_states[arg1],
+	    tcp_states[arg2], inet_ntoa6(this->src_ip6),
+	    this->flow_id->src_port, inet_ntoa6(this->dst_ip6),
+	    this->flow_id->dst_port);
 }

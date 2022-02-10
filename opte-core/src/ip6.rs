@@ -10,6 +10,7 @@ use std::vec::Vec;
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use crate::checksum::Checksum;
 use crate::headers::{
     Header, HeaderAction, IpMeta, IpMetaOpt, ModActionArg, PushActionArg,
     RawHeader
@@ -57,6 +58,19 @@ impl From<[u8; 16]> for Ipv6Addr {
     }
 }
 
+impl From<[u16; 8]> for Ipv6Addr {
+    fn from(bytes: [u16; 8]) -> Ipv6Addr {
+        let tmp = bytes.map(u16::to_be_bytes);
+        let mut addr = [0; 16];
+        for (i, pair) in tmp.iter().enumerate() {
+            addr[i*2] = pair[0];
+            addr[(i*2)+1] = pair[1];
+        }
+
+        Ipv6Addr { addr }
+    }
+}
+
 impl fmt::Display for Ipv6Addr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -65,6 +79,13 @@ impl fmt::Display for Ipv6Addr {
             self.addr[0],
             self.addr[1]
         )
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl From<std::net::Ipv6Addr> for Ipv6Addr {
+    fn from(ip6: std::net::Ipv6Addr) -> Self {
+        Self::from(ip6.octets())
     }
 }
 
@@ -175,9 +196,16 @@ impl Ipv6Hdr {
         self.dst
     }
 
+    /// The length of the extension headers, if any.
+    ///
+    /// XXX We currently don't check for extension headers.
+    pub fn ext_len(&self) -> usize {
+        0
+    }
+
     /// Return the length of the header porition of the packet.
     ///
-    /// XXX We currently don't check for extension headers at all.
+    /// XXX We currently don't check for extension headers.
     pub fn hdr_len(&self) -> usize {
         IPV6_HDR_SZ
     }
@@ -194,12 +222,28 @@ impl Ipv6Hdr {
     /// XXX We should probably check for the Jumbogram extension
     /// header and drop any packets with it.
     pub fn pay_len(&self) -> usize {
-        self.payload_len as usize
+        self.payload_len as usize - self.ext_len()
     }
 
     /// Return the [`Protocol`] of the packet.
     pub fn proto(&self) -> Protocol {
         self.proto
+    }
+
+    /// Return the pseudo header bytes.
+    pub fn pseudo_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(40);
+        bytes.extend_from_slice(&self.src.to_bytes());
+        bytes.extend_from_slice(&self.dst.to_bytes());
+        bytes.extend_from_slice(&(self.pay_len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&[0u8, 0u8, 0u8, self.next_hdr as u8]);
+        assert_eq!(bytes.len(), 40);
+        bytes
+    }
+
+    /// Return a [`Checksum`] of the pseudo header.
+    pub fn pseudo_csum(&self) -> Checksum {
+        Checksum::compute(&self.pseudo_bytes())
     }
 
     pub fn set_total_len(&mut self, len: u16) {
@@ -370,5 +414,30 @@ impl From<Ipv6Meta> for Ipv6HdrRaw {
             next_hdr: meta.proto as u8,
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    fn from_pairs() {
+        let ip6 = super::Ipv6Addr::from(
+            [
+                0x2601, 0x0284, 0x4100, 0xE240,
+                0x0000, 0x0000, 0xC0A8, 0x01F5,
+            ]
+        );
+
+        assert_eq!(
+            ip6.to_bytes(),
+            [0x26, 0x01,
+             0x02, 0x84,
+             0x41, 0x00,
+             0xE2, 0x40,
+             0x00, 0x00,
+             0x00, 0x00,
+             0xC0, 0xA8,
+             0x01, 0xF5
+            ]
+        );
     }
 }

@@ -1,19 +1,22 @@
 #![feature(extern_types)]
 
 use std::convert::TryInto;
+use std::net::Ipv6Addr;
 
 use structopt::StructOpt;
 
 use opte_core::ether::EtherAddr;
-use opte_core::ip4::Ipv4Addr;
+use opte_core::ip4::{Ipv4Addr, Ipv4Cidr};
+use opte_core::ip6 as opte_ip6;
 use opte_core::oxide_net::firewall::{
     self, Action, Address, FirewallRule, FwRemRuleReq, Ports, ProtoFilter,
 };
+use opte_core::oxide_net::{overlay, router};
 use opte_core::flow_table::FlowEntryDump;
+use opte_core::geneve;
 use opte_core::headers::IpAddr;
-use opte_core::ioctl::{self, PortInfo, AddPortReq};
-use opte_core::layer::{InnerFlowId, LayerDumpResp};
-use opte_core::port::UftDumpResp;
+use opte_core::ioctl::{self as api, PortInfo, AddPortReq};
+use opte_core::layer::InnerFlowId;
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
@@ -33,27 +36,36 @@ enum Command {
         name: String,
     },
 
+    /// Set the overlay configuration.
+    SetOverlay(SetOverlay),
+
+    // List all layers under a given port.
+    ListLayers {
+        #[structopt(short)]
+        port: String
+    },
+
     /// Dump the contents of the layer with the given name
-    LayerDump {
+    DumpLayer {
         #[structopt(short)]
         port: String,
         name: String,
     },
 
     /// Dump the unified flow tables (UFT)
-    UftDump {
+    DumpUft {
         #[structopt(short)]
         port: String,
     },
 
     /// Dump TCP flows
-    TcpFlowsDump {
+    DumpTcpFlows {
         #[structopt(short)]
         port: String,
     },
 
     /// Add a firewall rule
-    FwAdd {
+    AddFwRule {
         #[structopt(short)]
         port: String,
 
@@ -71,7 +83,7 @@ enum Command {
     },
 
     /// Remove a firewall rule
-    FwRm {
+    RmFwRule {
         #[structopt(short)]
         port: String,
 
@@ -80,6 +92,84 @@ enum Command {
 
         id: u64,
     },
+
+    /// Set a virtual-to-physical mapping
+    SetV2P {
+        vip4: Ipv4Addr,
+        phys_ether: EtherAddr,
+        phys_ip: Ipv6Addr,
+        vni: geneve::Vni,
+    },
+
+    /// Add a new IPv4 router entry
+    AddRouterEntryIpv4 {
+        #[structopt(short)]
+        port: String,
+
+        dest: Ipv4Cidr,
+
+        target: router::RouterTarget,
+    },
+}
+
+#[derive(Debug, StructOpt)]
+struct SetOverlay {
+    #[structopt(short)]
+    port: String,
+
+    #[structopt(flatten)]
+    boundary_services: BoundarySvcs,
+
+    #[structopt(long)]
+    vni: u32,
+
+    #[structopt(long)]
+    mac_src: EtherAddr,
+
+    #[structopt(long)]
+    mac_dst: EtherAddr,
+
+    #[structopt(long)]
+    ip: Ipv6Addr,
+}
+
+#[derive(Debug, StructOpt)]
+struct BoundarySvcs {
+    #[structopt(long)]
+    bs_mac_addr: EtherAddr,
+
+    #[structopt(long)]
+    bs_ip: std::net::Ipv6Addr,
+
+    #[structopt(long)]
+    bs_vni: u32,
+}
+
+impl From<BoundarySvcs> for overlay::PhysNet {
+    fn from(bs: BoundarySvcs) -> Self {
+        Self {
+            ether: bs.bs_mac_addr,
+            ip: opte_ip6::Ipv6Addr::from(bs.bs_ip),
+            vni: geneve::Vni::new(bs.bs_vni).unwrap(),
+        }
+    }
+}
+
+impl From<SetOverlay> for overlay::SetOverlayReq {
+    fn from(req: SetOverlay) -> Self {
+        Self {
+            port_name: req.port,
+            cfg: overlay::OverlayCfg {
+                boundary_services: overlay::PhysNet::from(
+                    req.boundary_services
+                ),
+                vni: geneve::Vni::new(req.vni).unwrap(),
+                phys_mac_src: req.mac_src,
+                phys_mac_dst: req.mac_dst,
+                phys_ip_src: opte_ip6::Ipv6Addr::from(req.ip.octets()),
+            }
+        }
+    }
 }
 
 #[derive(Debug, StructOpt)]
@@ -99,7 +189,7 @@ struct Filters {
 
 impl From<Filters> for firewall::Filters {
     fn from(f: Filters) -> Self {
-        firewall::Filters::new()
+        Self::new()
             .set_hosts(f.hosts)
             .protocol(f.protocol)
             .ports(f.ports)
@@ -113,14 +203,14 @@ struct AddPort {
     name: String,
 
     #[structopt(flatten)]
-    port_cfg: PortConfig,
+    port_cfg: PortCfg,
 }
 
 impl From<AddPort> for AddPortReq {
     fn from(r: AddPort) -> Self {
         Self {
             link_name: r.name,
-            ip_cfg: ioctl::IpConfig::from(r.port_cfg),
+            port_cfg: api::PortCfg::from(r.port_cfg),
         }
     }
 }
@@ -128,19 +218,19 @@ impl From<AddPort> for AddPortReq {
 // The port configuration determines the networking configuration of
 // said port (and thus the guest that is linked to it).
 #[derive(Debug, StructOpt)]
-struct PortConfig {
+struct PortCfg {
     #[structopt(long)]
     private_ip: Ipv4Addr,
 
     #[structopt(long)]
-    snat: Option<SnatConfig>,
+    snat: Option<SnatCfg>,
 }
 
-impl From<PortConfig> for ioctl::IpConfig {
-    fn from(s: PortConfig) -> Self {
+impl From<PortCfg> for api::PortCfg {
+    fn from(s: PortCfg) -> Self {
         Self {
             private_ip: s.private_ip,
-            snat: s.snat.map(ioctl::SnatCfg::from),
+            snat: s.snat.map(api::SnatCfg::from),
         }
     }
 }
@@ -152,7 +242,7 @@ impl From<PortConfig> for ioctl::IpConfig {
 // purposes of allowing the guest to talk to the internet without a
 // dedicated public IP.
 #[derive(Debug, StructOpt)]
-struct SnatConfig {
+struct SnatCfg {
     #[structopt(long)]
     public_mac: EtherAddr,
 
@@ -169,8 +259,8 @@ struct SnatConfig {
     vpc_sub4: VpcSubnet4,
 }
 
-impl From<SnatConfig> for ioctl::SnatCfg {
-    fn from(s: SnatConfig) -> Self {
+impl From<SnatCfg> for api::SnatCfg {
+    fn from(s: SnatCfg) -> Self {
         Self {
             public_mac: s.public_mac,
             public_ip: s.public_ip,
@@ -181,7 +271,7 @@ impl From<SnatConfig> for ioctl::SnatCfg {
     }
 }
 
-impl std::str::FromStr for SnatConfig {
+impl std::str::FromStr for SnatCfg {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -325,7 +415,25 @@ fn print_hr() {
     println!("{:-<70}", "-");
 }
 
-fn print_layer(resp: &LayerDumpResp) {
+fn print_list_layers(resp: &api::ListLayersResp) {
+    println!(
+        "{:<12} {:<10} {:<10} {:<10} {:<10}",
+        "NAME", "RULES IN", "RULES OUT", "FLOWS IN", "FLOWS OUT"
+    );
+
+    for desc in &resp.layers {
+        println!(
+            "{:<12} {:<10} {:<10} {:<10} {:<10}",
+            desc.name,
+            desc.rules_in,
+            desc.rules_out,
+            desc.flows_in,
+            desc.flows_out,
+        );
+    }
+}
+
+fn print_layer(resp: &api::DumpLayerResp) {
     println!("Layer {}", resp.name);
     print_hrb();
     println!("Inbound Flows");
@@ -359,7 +467,7 @@ fn print_layer(resp: &LayerDumpResp) {
     println!("");
 }
 
-fn print_uft(resp: &UftDumpResp) {
+fn print_uft(resp: &api::DumpUftResp) {
     println!("Unified Flow Table");
     print_hrb();
     println!("Inbound Flows [{}/{}]", resp.uft_in_num_flows, resp.uft_in_limit);
@@ -403,24 +511,34 @@ fn main() {
             hdl.delete_port(&name).unwrap();
         }
 
-        Command::LayerDump { port, name } => {
+        Command::SetOverlay(req) => {
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            hdl.set_overlay(&req.into()).unwrap();
+        }
+
+        Command::ListLayers { port } => {
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            print_list_layers(&hdl.list_layers(&port).unwrap());
+        }
+
+        Command::DumpLayer { port, name } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
             print_layer(&hdl.get_layer_by_name(&port, &name).unwrap());
         }
 
-        Command::UftDump { port } => {
+        Command::DumpUft { port } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
             print_uft(&hdl.uft(&port).unwrap());
         }
 
-        Command::TcpFlowsDump { port } => {
+        Command::DumpTcpFlows { port } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
-            for (flow_id, entry) in hdl.tcp_flows(&port).unwrap() {
+            for (flow_id, entry) in hdl.tcp_flows(&port).unwrap().flows {
                 println!("{} {:?}", flow_id, entry);
             }
         }
 
-        Command::FwAdd { port, direction, filters, action, priority } => {
+        Command::AddFwRule { port, direction, filters, action, priority } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
             let rule = FirewallRule {
                 direction,
@@ -431,10 +549,32 @@ fn main() {
             hdl.add_firewall_rule(&port, &rule).unwrap();
         }
 
-        Command::FwRm { port, direction, id } => {
+        Command::RmFwRule { port, direction, id } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
             let request = FwRemRuleReq { port_name: port, dir: direction, id };
             hdl.remove_firewall_rule(&request).unwrap();
+        }
+
+        Command::SetV2P { vip4, phys_ether, phys_ip, vni } => {
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            let vip = IpAddr::Ip4(vip4);
+            let phys = overlay::PhysNet {
+                ether: phys_ether,
+                ip: opte_ip6::Ipv6Addr::from(phys_ip),
+                vni,
+            };
+            let req = overlay::SetVirt2PhysReq { vip, phys };
+            hdl.set_v2p(&req).unwrap();
+        }
+
+        Command::AddRouterEntryIpv4 { port, dest, target } => {
+            let hdl = opteadm::OpteAdm::open().unwrap();
+            let req = router::AddRouterEntryIpv4Req {
+                port_name: port,
+                dest,
+                target
+            };
+            hdl.add_router_entry_ip4(&req).unwrap();
         }
     }
 }

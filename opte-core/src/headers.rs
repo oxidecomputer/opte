@@ -20,6 +20,9 @@ use crate::udp::{UdpHdr, UdpMeta, UdpMetaOpt};
 /// behalf.
 pub const DYNAMIC_PORT: u16 = 0;
 
+pub const AF_INET: i32 = 2;
+pub const AF_INET6: i32 = 26;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum IpAddr {
     Ip4(Ipv4Addr),
@@ -168,14 +171,14 @@ impl IpHdr {
     pub fn pseudo_bytes(&self) -> Vec<u8> {
         match self {
             Self::Ip4(ip4) => ip4.pseudo_bytes(),
-            Self::Ip6(_ip6) => todo!("implement"),
+            Self::Ip6(ip6) => ip6.pseudo_bytes(),
         }
     }
 
     pub fn pseudo_csum(&self) -> Checksum {
         match self {
             Self::Ip4(ip4) => ip4.pseudo_csum(),
-            Self::Ip6(_ip6) => todo!("implement"),
+            Self::Ip6(ip6) => ip6.pseudo_csum(),
         }
     }
 
@@ -529,9 +532,34 @@ where
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum IpCidr {
     Ip4(crate::ip4::Ipv4Cidr),
     // XXX Real Ipv6Cidr
     Ip6(u8),
+}
+
+impl IpCidr {
+    pub fn is_default(&self) -> bool {
+        match self {
+            Self::Ip4(ip4) => ip4.is_default(),
+            Self::Ip6(_) => todo!("IPv6 is_default"),
+        }
+    }
+
+    pub fn prefix(&self) -> usize {
+        match self {
+            Self::Ip4(ip4) => ip4.prefix() as usize,
+            Self::Ip6(_) => todo!("IPv6 prefix"),
+        }
+    }
+}
+
+impl fmt::Display for IpCidr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Ip4(ip4) => write!(f, "{}", ip4),
+            Self::Ip6(ip6) => write!(f, "{}", ip6),
+        }
+    }
 }

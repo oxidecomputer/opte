@@ -1,36 +1,37 @@
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::boxed::Box;
+use alloc::sync::Arc;
 #[cfg(any(feature = "std", test))]
-use std::boxed::Box;
+use std::sync::Arc;
 
 use crate::arp::{ArpOp, ArpReply};
 use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
 use crate::layer::{Layer};
-use crate::port::{self, Inactive, Port, Pos};
+use crate::port::{self, Port, Pos};
 use crate::rule::{
     Action, ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate,
-    EtherAddrMatch, EtherTypeMatch, Ipv4AddrMatch, Predicate, Rule, RuleAction,
+    EtherAddrMatch, EtherTypeMatch, Ipv4AddrMatch, Predicate, Rule,
 };
 use crate::Direction;
 
 pub fn setup(
-    port: &mut Port<Inactive>,
-    cfg: &super::PortConfig
-) -> port::Result<()> {
+    port: &mut Port<port::Inactive>,
+    cfg: &super::PortCfg
+) -> core::result::Result<(), port::AddLayerError> {
     let arp = Layer::new(
         "arp",
+        port.name(),
         vec![
             // ARP Reply for gateway's IP.
-            Action::Hairpin(Box::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),
+            Action::Hairpin(Arc::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),
 
             // ARP Reply for guest's private IP.
-            Action::Hairpin(Box::new(ArpReply::new(
+            Action::Hairpin(Arc::new(ArpReply::new(
                 cfg.private_ip,
                 cfg.private_mac
             ))),
 
             // ARP Reply for guest's public IP.
-            Action::Hairpin(Box::new(ArpReply::new(
+            Action::Hairpin(Arc::new(ArpReply::new(
                 cfg.dyn_nat.public_ip,
                 cfg.dyn_nat.public_mac,
             ))),
@@ -40,7 +41,7 @@ pub fn setup(
     // ================================================================
     // Outbound ARP Request for Gateway, from Guest
     // ================================================================
-    let rule = Rule::new(1, RuleAction::Allow(0));
+    let rule = Rule::new(1, arp.action(0).unwrap().clone());
     let mut rule = rule.add_predicate(
         Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
     );
@@ -62,7 +63,7 @@ pub fn setup(
     // ================================================================
     // Drop all other outbound ARP Requests from Guest
     // ================================================================
-    let rule = Rule::new(2, RuleAction::Deny);
+    let rule = Rule::new(2, Action::Deny);
     let rule = rule.add_predicate(
         Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
     );
@@ -71,7 +72,7 @@ pub fn setup(
     // ================================================================
     // Inbound ARP Request from Gateway, for Guest Private IP
     // ================================================================
-    let rule = Rule::new(1, RuleAction::Allow(1));
+    let rule = Rule::new(1, arp.action(1).unwrap().clone());
     let mut rule = rule.add_predicate(
         Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
     );
@@ -93,7 +94,7 @@ pub fn setup(
     // ================================================================
     // Inbound ARP Request from Gateway, for Guest Public IP
     // ================================================================
-    let rule = Rule::new(1, RuleAction::Allow(2));
+    let rule = Rule::new(1, arp.action(2).unwrap().clone());
     let mut rule = rule.add_predicate(
         Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
     );
@@ -115,7 +116,7 @@ pub fn setup(
     // ================================================================
     // Drop all other inbound ARP Requests
     // ================================================================
-    let rule = Rule::new(2, RuleAction::Deny);
+    let rule = Rule::new(2, Action::Deny);
     let rule = rule.add_predicate(
         Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
     );

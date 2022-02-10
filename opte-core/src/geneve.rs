@@ -1,13 +1,14 @@
 use core::convert::TryFrom;
+use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::String;
+use alloc::string::{String, ToString};
 #[cfg(any(feature = "std", test))]
-use std::string::String;
+use std::string::{String, ToString};
 
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
@@ -26,9 +27,12 @@ pub struct Vni {
     inner: u32
 }
 
-impl<T: Into<u32>> From<T> for Vni {
-    fn from(inner: T) -> Vni {
-        Vni { inner: inner.into() }
+impl FromStr for Vni {
+    type Err = String;
+
+    fn from_str(val: &str) -> Result<Self, Self::Err> {
+        let n = val.parse::<u32>().map_err(|e| e.to_string())?;
+        Self::new(n)
     }
 }
 

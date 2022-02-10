@@ -7,6 +7,10 @@ use alloc::string::{String, ToString};
 #[cfg(any(feature = "std", test))]
 use std::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
+use alloc::sync::Arc;
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
+#[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
@@ -19,20 +23,19 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
-use crate::flow_table::{FlowEntryDump, FlowTable, StateSummary};
+use crate::flow_table::{FlowTable, StateSummary};
 use crate::headers::IpMeta;
-use crate::ioctl::CmdResp;
+use crate::ioctl;
 use crate::ip4::Protocol;
 use crate::layer::{
-    InnerFlowId, Layer, LayerDumpResp, LayerError, LayerResult, RuleId,
-    FLOW_ID_DEFAULT,
+    InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT
 };
 use crate::packet::{Initialized, Packet, PacketMeta, Parsed};
-use crate::rule::{ht_fire_probe, Finalized, Rule, HT};
+use crate::rule::{ht_fire_probe, Action, Finalized, Rule, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::tcp::TcpState;
 use crate::tcp_state::{self, TcpFlowState};
-use crate::{CString, Direction};
+use crate::{CString, Direction, ExecCtx};
 
 use illumos_ddi_dki::uintptr_t;
 
@@ -67,7 +70,8 @@ impl From<crate::packet::WriteError> for ProcessError {
 /// punting on traffic I didn't want to deal with yet.
 ///
 /// * Drop: The packet has beend dropped, as determined by the rules
-/// or because of resource exhaustion.
+/// or because of resource exhaustion. Included is the reason for the
+/// drop.
 ///
 /// * Modified: The packet has been modified based on its matching rules.
 ///
@@ -77,9 +81,16 @@ impl From<crate::packet::WriteError> for ProcessError {
 #[derive(Debug)]
 pub enum ProcessResult {
     Bypass,
-    Drop,
+    Drop { reason: DropReason },
     Modified,
     Hairpin(Packet<Initialized>),
+}
+
+/// The reason for a packet being dropped.
+#[derive(Clone, Debug)]
+pub enum DropReason {
+    Layer { name: String },
+    TcpClosed,
 }
 
 pub trait PortState {}
@@ -105,8 +116,24 @@ impl PortState for Active {}
 
 pub struct Port<S: PortState> {
     state: S,
+    ectx: Arc<ExecCtx>,
     name: String,
     mac: EtherAddr,
+}
+
+impl<S: PortState> Port<S> {
+    pub fn mac_addr(&self) -> EtherAddr {
+        self.mac
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum AddLayerError {
+    BadLayerPos(Pos),
 }
 
 impl Port<Inactive> {
@@ -141,6 +168,7 @@ impl Port<Inactive> {
             },
             name: self.name,
             mac: self.mac,
+            ectx: self.ectx,
         }
     }
 
@@ -153,7 +181,7 @@ impl Port<Inactive> {
         &self,
         new_layer: Layer,
         pos: Pos
-    ) -> Result<()> {
+    ) -> result::Result<(), AddLayerError> {
         let mut lock = self.state.layers.lock();
 
         match pos {
@@ -186,16 +214,55 @@ impl Port<Inactive> {
             }
         }
 
-        Err(Error::BadLayerPos { name: new_layer.name().to_string(), pos })
+        Err(AddLayerError::BadLayerPos(pos))
     }
 
-    pub fn new(name: String, mac: EtherAddr) -> Self {
+    /// Add a new `Rule` to the layer named by `layer`, if such a
+    /// layer exists. Otherwise, return an error.
+    pub fn add_rule(
+        &self,
+        layer_name: &str,
+        dir: Direction,
+        rule: Rule<Finalized>,
+    ) -> result::Result<(), AddRuleError> {
+        let lock = self.state.layers.lock();
+
+        for layer in &*lock {
+            if layer.name() == layer_name {
+                layer.add_rule(dir, rule);
+                return Ok(());
+            }
+        }
+
+        Err(AddRuleError::LayerNotFound)
+    }
+
+    /// List each [`Layer`] under this port.
+    pub fn list_layers(&self) -> ioctl::ListLayersResp {
+        let mut tmp = vec![];
+        let lock = self.state.layers.lock();
+
+        for layer in lock.iter() {
+            tmp.push(ioctl::LayerDesc {
+                name: layer.name().to_string(),
+                rules_in: layer.num_rules(Direction::In),
+                rules_out: layer.num_rules(Direction::Out),
+                flows_in: layer.num_flows(Direction::In),
+                flows_out: layer.num_flows(Direction::Out),
+            });
+        }
+
+        ioctl::ListLayersResp { layers: tmp }
+    }
+
+    pub fn new(name: &str, mac: EtherAddr, ectx: Arc<ExecCtx>) -> Self {
         Port {
             state: Inactive {
                 layers: KMutex::new(Vec::new(), KMutexType::Driver),
             },
-            name,
+            name: name.to_string(),
             mac,
+            ectx,
         }
     }
 
@@ -213,6 +280,22 @@ impl Port<Inactive> {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum AddRuleError {
+    LayerNotFound,
+}
+
+#[derive(Clone, Debug)]
+pub enum DumpLayerError {
+    LayerNotFound,
+}
+
+#[derive(Clone, Debug)]
+pub enum RemoveRuleError {
+    LayerNotFound,
+    RuleNotFound,
+}
+
 impl Port<Active> {
     /// Add a new `Rule` to the layer named by `layer`, if such a
     /// layer exists. Otherwise, return an error.
@@ -221,7 +304,7 @@ impl Port<Active> {
         layer_name: &str,
         dir: Direction,
         rule: Rule<Finalized>,
-    ) -> Result<()> {
+    ) -> result::Result<(), AddRuleError> {
         for layer in &*self.state.layers {
             if layer.name() == layer_name {
                 layer.add_rule(dir, rule);
@@ -229,7 +312,7 @@ impl Port<Active> {
             }
         }
 
-        Err(Error::LayerNotFound { name: layer_name.to_string() })
+        Err(AddRuleError::LayerNotFound)
     }
 
     // XXX While it's been helpful to panic on a bad packet for the
@@ -252,10 +335,10 @@ impl Port<Active> {
     fn bad_packet_err(
         &self,
         msg: String,
-        ptr: uintptr_t,
+        pkt: &mut Packet<Parsed>,
         ifid: &InnerFlowId
     ) -> ! {
-        crate::dbg(format!("ptr: {:x}", ptr));
+        crate::dbg(format!("mblk: {}", pkt.mblk_ptr_str()));
         crate::dbg(format!("ifid: {}", ifid));
         // crate::dbg(format!("meta: {:?}", meta));
         crate::dbg(format!(
@@ -267,23 +350,26 @@ impl Port<Active> {
 
     /// Dump the contents of the layer named `name`, if such a layer
     /// exists.
-    pub fn dump_layer(&self, name: &str) -> CmdResp<LayerDumpResp> {
+    pub fn dump_layer(
+        &self,
+        name: &str
+    ) -> result::Result<ioctl::DumpLayerResp, DumpLayerError> {
         for l in &*self.state.layers {
             if l.name() == name {
                 return Ok(l.dump());
             }
         }
 
-        Err(format!("layer not found: {}", name))
+        Err(DumpLayerError::LayerNotFound)
     }
 
     /// Dump the contents of the TCP flow connection tracking table.
-    pub fn dump_tcp_flows(&self) -> TcpFlowsDumpResp {
-        TcpFlowsDumpResp { flows: self.state.tcp_flows.lock().dump() }
+    pub fn dump_tcp_flows(&self) -> ioctl::DumpTcpFlowsResp {
+        ioctl::DumpTcpFlowsResp { flows: self.state.tcp_flows.lock().dump() }
     }
 
     /// Dump the contents of the Unified Flow Table.
-    pub fn dump_uft(&self) -> UftDumpResp {
+    pub fn dump_uft(&self) -> ioctl::DumpUftResp {
         let in_lock = self.state.uft_in.lock();
         let uft_in_limit = in_lock.get_limit();
         let uft_in_num_flows = in_lock.num_flows();
@@ -296,7 +382,7 @@ impl Port<Active> {
         let uft_out = out_lock.dump();
         drop(out_lock);
 
-        UftDumpResp {
+        ioctl::DumpUftResp {
             uft_in_limit,
             uft_in_num_flows,
             uft_in,
@@ -325,6 +411,16 @@ impl Port<Active> {
         self.state.uft_out.lock().expire_flows(now);
     }
 
+    pub fn layer_action(&self, layer: &str, idx: usize) -> Option<&Action> {
+        for l in &*self.state.layers {
+            if l.name() == layer {
+                return l.action(idx);
+            }
+        }
+
+        None
+    }
+
     // Process the packet against each layer in turn. If `Allow` is
     // returned, then `meta` contains the updated metadata, and `hts`
     // contains the list of HTs run against the metadata.
@@ -347,9 +443,9 @@ impl Port<Active> {
         match dir {
             Direction::Out => {
                 for layer in &self.state.layers {
-                    match layer.process(dir, pkt, hts, meta) {
+                    match layer.process(&self.ectx, dir, pkt, hts, meta) {
                         Ok(LayerResult::Allow) => (),
-                        ret @ Ok(LayerResult::Deny) => return ret,
+                        ret @ Ok(LayerResult::Deny { .. }) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
                         ret @ Err(_) => return ret,
                     }
@@ -358,9 +454,9 @@ impl Port<Active> {
 
             Direction::In => {
                 for layer in self.state.layers.iter().rev() {
-                    match layer.process(dir, pkt, hts, meta) {
+                    match layer.process(&self.ectx, dir, pkt, hts, meta) {
                         Ok(LayerResult::Allow) => (),
-                        ret @ Ok(LayerResult::Deny) => return ret,
+                        ret @ Ok(LayerResult::Deny { .. }) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
                         ret @ Err(_) => return ret,
                     }
@@ -371,18 +467,34 @@ impl Port<Active> {
         return Ok(LayerResult::Allow);
     }
 
+    /// List each [`Layer`] under this port.
+    pub fn list_layers(&self) -> ioctl::ListLayersResp {
+        let mut tmp = vec![];
+
+        for layer in &*self.state.layers {
+            tmp.push(ioctl::LayerDesc {
+                name: layer.name().to_string(),
+                rules_in: layer.num_rules(Direction::In),
+                rules_out: layer.num_rules(Direction::Out),
+                flows_in: layer.num_flows(Direction::In),
+                flows_out: layer.num_flows(Direction::Out),
+            });
+        }
+
+        ioctl::ListLayersResp { layers: tmp }
+    }
+
     /// Process the packet.
     pub fn process(
         &self,
         dir: Direction,
         pkt: &mut Packet<Parsed>,
-        ptr: uintptr_t,
     ) -> std::result::Result<ProcessResult, ProcessError> {
         port_process_entry_probe(dir, &self.name);
         let mut meta = meta::Meta::new();
         let res = match dir {
-            Direction::Out => self.process_out(pkt, ptr, &mut meta),
-            Direction::In => self.process_in(pkt, ptr, &mut meta),
+            Direction::Out => self.process_out(pkt, &mut meta),
+            Direction::In => self.process_in(pkt, &mut meta),
         };
         port_process_return_probe(dir, &self.name);
         pkt.emit_headers()?;
@@ -522,7 +634,6 @@ impl Port<Active> {
     pub fn process_in(
         &self,
         pkt: &mut Packet<Parsed>,
-        ptr: uintptr_t,
         meta: &mut meta::Meta,
     ) -> result::Result<ProcessResult, ProcessError> {
         let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
@@ -546,7 +657,11 @@ impl Port<Active> {
                     return Ok(ProcessResult::Hairpin(hppkt));
                 }
 
-                Ok(LayerResult::Deny) => return Ok(ProcessResult::Drop),
+                Ok(LayerResult::Deny { name }) => {
+                    return Ok(ProcessResult::Drop {
+                        reason: DropReason::Layer { name }
+                    });
+                }
 
                 Err(e) => return Err(ProcessError::Layer(e)),
             }
@@ -569,7 +684,9 @@ impl Port<Active> {
                     match self.process_in_tcp_existing(pkt.meta()) {
                         // Drop any data that comes in after close.
                         Ok(TcpState::Closed) => {
-                            return Ok(ProcessResult::Drop);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpClosed
+                            });
                         }
 
                         Ok(_) => {
@@ -577,7 +694,7 @@ impl Port<Active> {
                         }
 
                         Err(e) => {
-                            self.bad_packet_err(e, ptr, &ifid);
+                            self.bad_packet_err(e, pkt, &ifid);
                         }
                     }
                 }
@@ -606,7 +723,9 @@ impl Port<Active> {
                     match self.process_in_tcp_new(&ifid, pkt.meta()) {
                         // Drop any data that comes in after close.
                         Ok(TcpState::Closed) => {
-                            return Ok(ProcessResult::Drop);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpClosed
+                            });
                         }
 
                         Ok(_) => {
@@ -614,7 +733,7 @@ impl Port<Active> {
                         }
 
                         Err(e) => {
-                            self.bad_packet_err(e, ptr, &ifid);
+                            self.bad_packet_err(e, pkt, &ifid);
                         }
                     }
                 }
@@ -622,7 +741,11 @@ impl Port<Active> {
                 Ok(ProcessResult::Modified)
             }
 
-            Ok(LayerResult::Deny) => Ok(ProcessResult::Drop),
+            Ok(LayerResult::Deny { name }) => {
+                Ok(ProcessResult::Drop {
+                    reason: DropReason::Layer { name }
+                })
+            }
 
             Ok(LayerResult::Hairpin(hppkt)) => {
                 Ok(ProcessResult::Hairpin(hppkt))
@@ -748,7 +871,6 @@ impl Port<Active> {
     pub fn process_out(
         &self,
         pkt: &mut Packet<Parsed>,
-        ptr: uintptr_t,
         meta: &mut meta::Meta,
     ) -> result::Result<ProcessResult, ProcessError> {
         let etype = pkt.meta().inner.ether.as_ref().unwrap().ether_type;
@@ -788,7 +910,12 @@ impl Port<Active> {
                     return Ok(ProcessResult::Hairpin(hppkt));
                 }
 
-                Ok(LayerResult::Deny) => return Ok(ProcessResult::Drop),
+                Ok(LayerResult::Deny { name }) => {
+                    return Ok(ProcessResult::Drop {
+                        reason: DropReason::Layer { name }
+                    });
+                }
+
                 Err(e) => return Err(ProcessError::Layer(e)),
             }
         }
@@ -804,11 +931,15 @@ impl Port<Active> {
                 if pkt.meta().is_inner_tcp() {
                     match self.process_out_tcp_existing(&ifid, pkt.meta()) {
                         Err(e) => {
-                            self.bad_packet_err(e, ptr, &ifid);
+                            self.bad_packet_err(e, pkt, &ifid);
                         }
 
                         // Drop any data that comes in after close.
-                        Ok(TcpState::Closed) => return Ok(ProcessResult::Drop),
+                        Ok(TcpState::Closed) => {
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpClosed
+                            });
+                        }
 
                         // Continue with processing.
                         Ok(_) => (),
@@ -833,11 +964,15 @@ impl Port<Active> {
         if pkt.meta().is_inner_tcp() {
             match self.process_out_tcp_new(ifid, pkt.meta()) {
                 Err(e) => {
-                    self.bad_packet_err(e, ptr, &ifid);
+                    self.bad_packet_err(e, pkt, &ifid);
                 }
 
                 // Drop any data that comes in after close.
-                Ok(TcpState::Closed) => return Ok(ProcessResult::Drop),
+                Ok(TcpState::Closed) => {
+                    return Ok(ProcessResult::Drop {
+                        reason: DropReason::TcpClosed
+                    });
+                }
 
                 // Continue with processing.
                 Ok(_) => (),
@@ -862,7 +997,10 @@ impl Port<Active> {
                 Ok(ProcessResult::Hairpin(hppkt))
             }
 
-            Ok(LayerResult::Deny) => Ok(ProcessResult::Drop),
+            Ok(LayerResult::Deny { name }) => {
+                Ok(ProcessResult::Drop { reason: DropReason::Layer { name } })
+            }
+
             Err(e) => Err(ProcessError::Layer(e)),
         }
     }
@@ -874,20 +1012,16 @@ impl Port<Active> {
         layer_name: &str,
         dir: Direction,
         id: RuleId,
-    ) -> Result<()> {
+    ) -> result::Result<(), RemoveRuleError> {
         for layer in &self.state.layers {
             if layer.name() == layer_name {
                 if layer.remove_rule(dir, id).is_err() {
-                    return Err(Error::RuleNotFound {
-                        layer: layer_name.to_string(),
-                        dir,
-                        id
-                    });
+                    return Err(RemoveRuleError::RuleNotFound);
                 }
             }
         }
 
-        Err(Error::LayerNotFound { name: layer_name.to_string() })
+        Err(RemoveRuleError::LayerNotFound)
     }
 }
 
@@ -984,31 +1118,6 @@ pub fn port_process_return_probe(dir: Direction, name: &str) {
             name_c.as_ptr() as uintptr_t,
         );
     }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct UftDumpReq {
-    pub port_name: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct UftDumpResp {
-    pub uft_in_limit: u32,
-    pub uft_in_num_flows: u32,
-    pub uft_in: Vec<(InnerFlowId, FlowEntryDump)>,
-    pub uft_out_limit: u32,
-    pub uft_out_num_flows: u32,
-    pub uft_out: Vec<(InnerFlowId, FlowEntryDump)>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct TcpFlowsDumpReq {
-    pub port_name: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct TcpFlowsDumpResp {
-    pub flows: Vec<(InnerFlowId, FlowEntryDump)>,
 }
 
 /// Metadata which may be accessed and modified by any [`Action`][a]
