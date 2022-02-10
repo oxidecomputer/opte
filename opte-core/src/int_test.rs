@@ -319,7 +319,7 @@ fn overlay_guest_to_guest() {
     // Run the telnet SYN packet through g1's port in the outbound
     // direction and verify the resulting packet meets expectations.
     // ================================================================
-    let res = g1_port.process(Out, &mut g1_pkt, 0);
+    let res = g1_port.process(Out, &mut g1_pkt);
     assert!(matches!(res, Ok(Modified)));
 
     // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
@@ -411,7 +411,7 @@ fn overlay_guest_to_guest() {
         Packet::<Initialized>::wrap(mblk).parse().unwrap()
     };
 
-    let res = g2_port.process(In, &mut g2_pkt, 0);
+    let res = g2_port.process(In, &mut g2_pkt);
     assert!(matches!(res, Ok(Modified)));
 
     // Ether + IPv4 + TCP
@@ -541,7 +541,7 @@ fn overlay_guest_to_internet() {
     // Run the telnet SYN packet through g1's port in the outbound
     // direction and verify the resulting packet meets expectations.
     // ================================================================
-    let res = g1_port.process(Out, &mut g1_pkt, 0);
+    let res = g1_port.process(Out, &mut g1_pkt);
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
 
     // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
@@ -724,7 +724,7 @@ fn dhcp_req() {
     let _ = wtr.write(UdpHdrRaw::from(&udp).as_bytes()).unwrap();
     let mut pkt = wtr.finish().parse().unwrap();
 
-    let res = port.process(Out, &mut pkt, 0);
+    let res = port.process(Out, &mut pkt);
 
     match res {
         Ok(Modified) => {
@@ -809,7 +809,7 @@ fn arp_hairpin() {
     assert_eq!(pkt.num_segs(), 2);
     assert_eq!(pkt.len(), 42);
 
-    let res = port.process(In, &mut pkt, 0);
+    let res = port.process(In, &mut pkt);
     assert!(res.is_ok(), "bad result: {:?}", res);
     let val = res.unwrap();
     assert!(
@@ -853,7 +853,7 @@ fn arp_hairpin() {
     let _ = wtr.write(ArpEth4PayloadRaw::from(arp).as_bytes()).unwrap();
     let mut pkt = wtr.finish().parse().unwrap();
 
-    let res = port.process(Out, &mut pkt, 0);
+    let res = port.process(Out, &mut pkt);
     match res {
         Ok(Hairpin(hppkt)) => {
             let hppkt = hppkt.parse().unwrap();
@@ -913,7 +913,7 @@ fn arp_hairpin() {
     let _ = wtr.write(ArpEth4PayloadRaw::from(arp).as_bytes()).unwrap();
     let mut pkt = wtr.finish().parse().unwrap();
 
-    let res = port.process(In, &mut pkt, 0);
+    let res = port.process(In, &mut pkt);
     match res {
         Ok(Hairpin(hppkt)) => {
             let hppkt = hppkt.parse().unwrap();
@@ -973,7 +973,7 @@ fn arp_hairpin() {
     let _ = wtr.write(ArpEth4PayloadRaw::from(arp).as_bytes()).unwrap();
     let mut pkt = wtr.finish().parse().unwrap();
 
-    let res = port.process(In, &mut pkt, 0);
+    let res = port.process(In, &mut pkt);
     match res {
         Ok(Hairpin(hppkt)) => {
             let hppkt = hppkt.parse().unwrap();
@@ -1038,7 +1038,7 @@ fn outgoing_dns_lookup() {
     let (gbytes, _) = get_header(&gbytes[..]);
     let (gbytes, gblock) = next_block(&gbytes);
     let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt, 0);
+    let res = port.process(Out, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 0);
     assert_eq!(port.num_flows("dyn-nat4", Out), 0);
@@ -1056,7 +1056,7 @@ fn outgoing_dns_lookup() {
     // ================================================================
     let (_hbytes, hblock) = next_block(&hbytes);
     let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt, 0);
+    let res = port.process(In, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 0);
     assert_eq!(port.num_flows("dyn-nat4", Out), 0);
@@ -1116,7 +1116,7 @@ fn outgoing_http_req() {
     let (gbytes, _) = get_header(&gbytes[..]);
     let (gbytes, gblock) = next_block(gbytes);
     let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt, 0);
+    let res = port.process(Out, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 1);
     assert_eq!(port.num_flows("dyn-nat4", Out), 1);
@@ -1135,7 +1135,7 @@ fn outgoing_http_req() {
     // ================================================================
     let (hbytes, hblock) = next_block(hbytes);
     let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt, 0);
+    let res = port.process(In, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 1);
     assert_eq!(port.num_flows("dyn-nat4", Out), 1);
@@ -1153,7 +1153,7 @@ fn outgoing_http_req() {
     // ================================================================
     let (gbytes, gblock) = next_block(gbytes);
     let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt, 0);
+    let res = port.process(Out, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 1);
     assert_eq!(port.num_flows("dyn-nat4", Out), 1);
@@ -1171,7 +1171,7 @@ fn outgoing_http_req() {
     // ================================================================
     let (gbytes, gblock) = next_block(gbytes);
     let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt, 0);
+    let res = port.process(Out, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 1);
     assert_eq!(port.num_flows("dyn-nat4", Out), 1);
@@ -1189,7 +1189,7 @@ fn outgoing_http_req() {
     // ================================================================
     let (hbytes, hblock) = next_block(hbytes);
     let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt, 0);
+    let res = port.process(In, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 1);
     assert_eq!(port.num_flows("dyn-nat4", Out), 1);
@@ -1207,7 +1207,7 @@ fn outgoing_http_req() {
     // ================================================================
     let (hbytes, hblock) = next_block(hbytes);
     let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt, 0);
+    let res = port.process(In, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 1);
     assert_eq!(port.num_flows("dyn-nat4", Out), 1);
@@ -1225,7 +1225,7 @@ fn outgoing_http_req() {
     // ================================================================
     let (gbytes, gblock) = next_block(gbytes);
     let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt, 0);
+    let res = port.process(Out, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 1);
     assert_eq!(port.num_flows("dyn-nat4", Out), 1);
@@ -1243,7 +1243,7 @@ fn outgoing_http_req() {
     // ================================================================
     let (gbytes, gblock) = next_block(gbytes);
     let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt, 0);
+    let res = port.process(Out, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 1);
     assert_eq!(port.num_flows("dyn-nat4", Out), 1);
@@ -1261,7 +1261,7 @@ fn outgoing_http_req() {
     // ================================================================
     let (hbytes, hblock) = next_block(hbytes);
     let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt, 0);
+    let res = port.process(In, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 1);
     assert_eq!(port.num_flows("dyn-nat4", Out), 1);
@@ -1279,7 +1279,7 @@ fn outgoing_http_req() {
     // ================================================================
     let (hbytes, hblock) = next_block(hbytes);
     let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt, 0);
+    let res = port.process(In, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 1);
     assert_eq!(port.num_flows("dyn-nat4", Out), 1);
@@ -1297,7 +1297,7 @@ fn outgoing_http_req() {
     // ================================================================
     let (_gbytes, gblock) = next_block(gbytes);
     let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt, 0);
+    let res = port.process(Out, &mut pkt);
     assert!(matches!(res, Ok(Modified)));
     assert_eq!(port.num_flows("dyn-nat4", In), 1);
     assert_eq!(port.num_flows("dyn-nat4", Out), 1);
