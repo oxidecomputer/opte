@@ -150,10 +150,7 @@ fn bad_subnet() {
         Err(IpError::BadPrefix(27))
     );
 
-    assert_eq!(
-        "10.0.0.0/7".parse::<VpcSubnet4>(),
-        Err(IpError::BadPrefix(7))
-    );
+    assert_eq!("10.0.0.0/7".parse::<VpcSubnet4>(), Err(IpError::BadPrefix(7)));
 }
 
 #[test]

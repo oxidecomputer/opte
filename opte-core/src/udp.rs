@@ -11,7 +11,7 @@ use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 use crate::checksum::{Checksum, HeaderChecksum};
 use crate::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
-    RawHeader, UlpHdr, UlpMetaModify, UlpMeta, UlpMetaOpt, DYNAMIC_PORT,
+    RawHeader, UlpHdr, UlpMeta, UlpMetaModify, UlpMetaOpt, DYNAMIC_PORT,
 };
 use crate::packet::{PacketRead, ReadErr, WriteError};
 
@@ -43,10 +43,7 @@ impl PushActionArg for UdpMeta {}
 
 impl From<&UdpHdr> for UdpMeta {
     fn from(udp: &UdpHdr) -> Self {
-        UdpMeta {
-            src: udp.src_port,
-            dst: udp.dst_port,
-        }
+        UdpMeta { src: udp.src_port, dst: udp.dst_port }
     }
 }
 
@@ -121,10 +118,12 @@ macro_rules! assert_udp {
         assert!(
             lcsum == rcsum,
             "UDP csum mismatch: 0x{:02X}{:02X} != 0x{:02X}{:02X}",
-            lcsum[0], lcsum[1],
-            rcsum[0], rcsum[1],
+            lcsum[0],
+            lcsum[1],
+            rcsum[0],
+            rcsum[1],
         );
-    }
+    };
 }
 
 impl UdpHdr {
@@ -187,7 +186,7 @@ impl Header for UdpHdr {
 
     fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Self::Error>
     where
-        R: PacketRead<'a>
+        R: PacketRead<'a>,
     {
         let raw = UdpHdrRaw::raw_zc(rdr)?;
         let mut udp = UdpHdr::try_from(&raw)?;
@@ -204,7 +203,6 @@ impl Header for UdpHdr {
         Ok(udp)
     }
 }
-
 
 impl From<&UdpMeta> for UdpHdr {
     fn from(meta: &UdpMeta) -> Self {
@@ -236,7 +234,7 @@ impl TryFrom<&LayoutVerified<&[u8], UdpHdrRaw>> for UdpHdr {
     type Error = UdpHdrError;
 
     fn try_from(
-        raw: &LayoutVerified<&[u8], UdpHdrRaw>
+        raw: &LayoutVerified<&[u8], UdpHdrRaw>,
     ) -> Result<Self, Self::Error> {
         const UDP_HDR_MIN_SZ: u16 = 8;
 

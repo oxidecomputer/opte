@@ -338,12 +338,12 @@ pub struct dblk_t {
     pub db_cpid: pid_t,
     pub db_cache: *const c_void,
     pub db_mblk: *const mblk_t,
-    pub db_free: *const c_void, // imprecise
+    pub db_free: *const c_void,     // imprecise
     pub db_lastfree: *const c_void, // imprecise
     pub db_cksumstart: intptr_t,
     pub db_cksumend: intptr_t,
     pub db_cksumstuff: intptr_t,
-    pub db_struioun: u64, // imprecise
+    pub db_struioun: u64,        // imprecise
     pub db_fthdr: *const c_void, // imprecise
     pub db_credp: *const c_void, // imprecise
 }

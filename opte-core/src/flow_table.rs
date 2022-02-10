@@ -2,14 +2,14 @@ use core::fmt;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::vec::Vec;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_ddi_dki::{gethrtime, hrtime_t};
 #[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
+#[cfg(any(feature = "std", test))]
 use std::time::{Duration, Instant};
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
@@ -284,8 +284,8 @@ impl StateSummary for () {
 
 #[test]
 fn flow_expired() {
-    use crate::ip4::Protocol;
     use crate::headers::IpAddr;
+    use crate::ip4::Protocol;
 
     let flowid = InnerFlowId {
         proto: Protocol::TCP,

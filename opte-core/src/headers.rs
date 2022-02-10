@@ -131,12 +131,11 @@ macro_rules! assert_ip {
             (left, right) => {
                 panic!(
                     "IP headers not same type\nleft: {:?}\nright: {:?}",
-                    left,
-                    right,
+                    left, right,
                 );
             }
         }
-    }
+    };
 }
 
 impl IpHdr {
@@ -305,12 +304,11 @@ macro_rules! assert_ulp {
             (left, right) => {
                 panic!(
                     "ULP headers not same type\nleft: {:?}\nright: {:?}",
-                    left,
-                    right,
+                    left, right,
                 );
             }
         }
-    }
+    };
 }
 
 impl UlpHdr {
@@ -414,13 +412,9 @@ impl From<&UlpHdr> for UlpMeta {
 impl HeaderActionModify<UlpMetaModify> for UlpMeta {
     fn run_modify(&mut self, spec: &UlpMetaModify) {
         match self {
-            UlpMeta::Tcp(tcp_meta) => {
-                tcp_meta.run_modify(spec)
-            },
+            UlpMeta::Tcp(tcp_meta) => tcp_meta.run_modify(spec),
 
-            UlpMeta::Udp(udp_meta) => {
-                udp_meta.run_modify(spec)
-            }
+            UlpMeta::Udp(udp_meta) => udp_meta.run_modify(spec),
         }
     }
 }
@@ -471,11 +465,11 @@ where
 
             Self::Push(arg) => {
                 meta.replace(arg.clone());
-            },
+            }
 
             Self::Pop => {
                 meta.take();
-            },
+            }
         }
     }
 }
@@ -504,7 +498,7 @@ where
     M: ModActionArg + fmt::Debug,
 {
     Ignore,
-    Modify(M)
+    Modify(M),
 }
 
 impl<M> Default for UlpHeaderAction<M>
@@ -519,7 +513,6 @@ where
 impl<M> UlpHeaderAction<M>
 where
     M: ModActionArg + fmt::Debug,
-
 {
     pub fn run<P>(&self, meta: &mut Option<P>)
     where

@@ -8,12 +8,14 @@ use libc;
 use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
-use opte_core::oxide_net::firewall::{FirewallRule, FwAddRuleReq, FwRemRuleReq};
+use opte_core::ioctl::{
+    self as api, AddPortReq, CmdErr, CmdOk, DeletePortReq, IoctlCmd,
+};
+use opte_core::oxide_net::firewall::{
+    FirewallRule, FwAddRuleReq, FwRemRuleReq,
+};
 use opte_core::oxide_net::overlay::{self, SetOverlayReq, SetVirt2PhysReq};
 use opte_core::oxide_net::router;
-use opte_core::ioctl::{
-    self as api, AddPortReq, CmdErr, CmdOk, DeletePortReq, IoctlCmd
-};
 
 /// Errors related to administering the OPTE driver.
 #[derive(Debug, Error)]
@@ -64,17 +66,17 @@ impl OpteAdm {
     pub fn add_firewall_rule(
         &self,
         port_name: &str,
-        rule: &FirewallRule
+        rule: &FirewallRule,
     ) -> Result<(), Error> {
         let cmd = IoctlCmd::FwAddRule;
         let req = FwAddRuleReq {
             port_name: port_name.to_string(),
-            rule: rule.clone()
+            rule: rule.clone(),
         };
         let resp = run_ioctl::<(), api::AddFwRuleError, _>(
             self.device.as_raw_fd(),
             cmd,
-            &req
+            &req,
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
@@ -88,12 +90,12 @@ impl OpteAdm {
         let cmd = IoctlCmd::DumpLayer;
         let req = api::DumpLayerReq {
             port_name: port_name.to_string(),
-            name: name.to_string()
+            name: name.to_string(),
         };
         let resp = run_ioctl::<api::DumpLayerResp, api::DumpLayerError, _>(
             self.device.as_raw_fd(),
             cmd,
-            &req
+            &req,
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
@@ -104,20 +106,20 @@ impl OpteAdm {
         let resp = run_ioctl::<api::ListPortsResp, (), _>(
             self.device.as_raw_fd(),
             cmd,
-            &api::ListPortsReq { unused: () }
+            &api::ListPortsReq { unused: () },
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
     pub fn list_layers(
         &self,
-        port: &str
+        port: &str,
     ) -> Result<api::ListLayersResp, Error> {
         let cmd = IoctlCmd::ListLayers;
         let resp = run_ioctl::<api::ListLayersResp, (), _>(
             self.device.as_raw_fd(),
             cmd,
-            &api::ListLayersReq { port_name: port.to_string() }
+            &api::ListLayersReq { port_name: port.to_string() },
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
@@ -138,7 +140,7 @@ impl OpteAdm {
         let resp = run_ioctl::<(), api::AddPortError, _>(
             self.device.as_raw_fd(),
             cmd,
-            req
+            req,
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
@@ -148,7 +150,7 @@ impl OpteAdm {
         let resp = run_ioctl::<(), overlay::SetOverlayError, _>(
             self.device.as_raw_fd(),
             cmd,
-            req
+            req,
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
@@ -162,7 +164,7 @@ impl OpteAdm {
         let resp = run_ioctl::<(), api::RemFwRuleError, _>(
             self.device.as_raw_fd(),
             cmd,
-            req
+            req,
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
@@ -173,12 +175,11 @@ impl OpteAdm {
         port_name: &str,
     ) -> Result<api::DumpTcpFlowsResp, Error> {
         let cmd = IoctlCmd::DumpTcpFlows;
-        let resp =
-            run_ioctl::<api::DumpTcpFlowsResp, api::DumpTcpFlowsError, _>(
-                self.device.as_raw_fd(),
-                cmd,
-                &api::DumpTcpFlowsReq { port_name: port_name.to_string() },
-            )?;
+        let resp = run_ioctl::<api::DumpTcpFlowsResp, api::DumpTcpFlowsError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &api::DumpTcpFlowsReq { port_name: port_name.to_string() },
+        )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
@@ -188,7 +189,7 @@ impl OpteAdm {
         let resp = run_ioctl::<api::DumpUftResp, api::DumpUftError, _>(
             self.device.as_raw_fd(),
             cmd,
-            &api::DumpUftReq { port_name: port_name.to_string() }
+            &api::DumpUftReq { port_name: port_name.to_string() },
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
@@ -200,7 +201,7 @@ impl OpteAdm {
         let resp = run_ioctl::<(), api::DeletePortError, _>(
             self.device.as_raw_fd(),
             cmd,
-            &req
+            &req,
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
@@ -213,13 +214,13 @@ impl OpteAdm {
 
     pub fn add_router_entry_ip4(
         &self,
-        req: &router::AddRouterEntryIpv4Req
+        req: &router::AddRouterEntryIpv4Req,
     ) -> Result<(), Error> {
         let cmd = IoctlCmd::AddRouterEntryIpv4;
         let resp = run_ioctl::<(), router::AddEntryError, _>(
             self.device.as_raw_fd(),
             cmd,
-            &req
+            &req,
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
@@ -229,7 +230,7 @@ impl OpteAdm {
 fn run_ioctl<T, E, R>(
     _dev: libc::c_int,
     _cmd: IoctlCmd,
-    _req: &R
+    _req: &R,
 ) -> Result<Result<T, E>, Error>
 where
     T: CmdOk + DeserializeOwned,
@@ -256,7 +257,7 @@ where
 fn run_ioctl<T, E, R>(
     dev: libc::c_int,
     cmd: IoctlCmd,
-    req: &R
+    req: &R,
 ) -> Result<Result<T, E>, Error>
 where
     T: CmdOk + DeserializeOwned,
@@ -284,9 +285,7 @@ where
         // buffer being too small.
         if ret == -1 && unsafe { *libc::___errno() } != libc::ENOBUFS {
             let msg = match unsafe { *libc::___errno() } {
-                libc::ENOENT => {
-                    "port not found".to_string()
-                }
+                libc::ENOENT => "port not found".to_string(),
 
                 libc::EFAULT => {
                     "opte driver failed to copyin/copyout req/resp".to_string()
@@ -310,7 +309,7 @@ where
             let response = unsafe {
                 std::slice::from_raw_parts(
                     rioctl.resp_bytes,
-                    rioctl.resp_len_needed
+                    rioctl.resp_len_needed,
                 )
             };
             return postcard::from_bytes(response).map_err(Error::from);

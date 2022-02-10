@@ -4,10 +4,10 @@ use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::String;
-#[cfg(any(feature = "std", test))]
-use std::string::String;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::string::String;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
@@ -32,14 +32,7 @@ pub const ETHER_HDR_SZ: usize = std::mem::size_of::<EtherHdrRaw>();
 
 #[repr(u16)]
 #[derive(
-    Clone,
-    Copy,
-    Deserialize,
-    Eq,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
+    Clone, Copy, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub enum EtherType {
     Ether = 0x6558,
@@ -60,7 +53,7 @@ impl TryFrom<u16> for EtherType {
 
             _ => {
                 return Err(EtherHdrError::UnsupportedEtherType {
-                    ether_type: raw
+                    ether_type: raw,
                 })
             }
         };
@@ -68,7 +61,6 @@ impl TryFrom<u16> for EtherType {
         Ok(val)
     }
 }
-
 
 impl Display for EtherType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -80,20 +72,12 @@ impl Display for EtherType {
 /// [`EtherType`].
 impl Debug for EtherType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,"{}", self)
+        write!(f, "{}", self)
     }
 }
 
 #[derive(
-    Clone,
-    Copy,
-    Default,
-    Deserialize,
-    Eq,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
+    Clone, Copy, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct EtherAddr {
     bytes: [u8; ETHER_ADDR_LEN],
@@ -155,7 +139,7 @@ impl Display for EtherAddr {
 /// EtherAddr.
 impl Debug for EtherAddr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,"{}", self)
+        write!(f, "{}", self)
     }
 }
 
@@ -261,7 +245,7 @@ macro_rules! assert_eth {
             $left.ether_type(),
             $right.ether_type(),
         );
-    }
+    };
 }
 
 #[test]
@@ -299,13 +283,9 @@ impl EtherHdr {
     pub fn new<A: Into<EtherAddr>>(
         ether_type: EtherType,
         src: A,
-        dst: A
+        dst: A,
     ) -> Self {
-        Self {
-            dst: dst.into(),
-            src: src.into(),
-            ether_type,
-        }
+        Self { dst: dst.into(), src: src.into(), ether_type }
     }
 
     /// Get the frame's source address.
@@ -326,7 +306,7 @@ impl Header for EtherHdr {
 
     fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, EtherHdrError>
     where
-        R: PacketRead<'a>
+        R: PacketRead<'a>,
     {
         EtherHdr::try_from(&EtherHdrRaw::raw_zc(rdr)?)
     }
@@ -334,7 +314,7 @@ impl Header for EtherHdr {
 
 pub enum EtherHdrError {
     ReadError { error: ReadErr },
-    UnsupportedEtherType { ether_type: u16 }
+    UnsupportedEtherType { ether_type: u16 },
 }
 
 impl From<ReadErr> for EtherHdrError {
@@ -359,7 +339,7 @@ impl Display for EtherHdrError {
 
 impl Debug for EtherHdrError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,"{}", self)
+        write!(f, "{}", self)
     }
 }
 
@@ -367,7 +347,7 @@ impl TryFrom<&LayoutVerified<&[u8], EtherHdrRaw>> for EtherHdr {
     type Error = EtherHdrError;
 
     fn try_from(
-        raw: &LayoutVerified<&[u8], EtherHdrRaw>
+        raw: &LayoutVerified<&[u8], EtherHdrRaw>,
     ) -> Result<Self, Self::Error> {
         let ether_type =
             EtherType::try_from(u16::from_be_bytes(raw.ether_type))?;

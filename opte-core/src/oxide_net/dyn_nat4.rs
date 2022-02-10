@@ -1,9 +1,9 @@
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::boxed::Box;
-#[cfg(any(feature = "std", test))]
-use std::boxed::Box;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
+#[cfg(any(feature = "std", test))]
+use std::boxed::Box;
 #[cfg(any(feature = "std", test))]
 use std::sync::Arc;
 
@@ -11,12 +11,12 @@ use crate::ip4::{self, Protocol};
 use crate::layer::Layer;
 use crate::nat::{DynNat4, NatPool};
 use crate::port::{self, Port, Pos};
-use crate::rule::{Action, Ipv4AddrMatch, IpProtoMatch, Predicate, Rule};
+use crate::rule::{Action, IpProtoMatch, Ipv4AddrMatch, Predicate, Rule};
 use crate::Direction;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
-    cfg: &super::PortCfg
+    cfg: &super::PortCfg,
 ) -> core::result::Result<(), port::AddLayerError> {
     let mut pool = NatPool::new();
     pool.add(cfg.private_ip, cfg.dyn_nat.public_ip, cfg.dyn_nat.ports.clone());
@@ -31,7 +31,7 @@ pub fn setup(
     let layer = Layer::new(
         "dyn-nat4",
         port.name(),
-        vec![Action::Stateful(Arc::new(nat))]
+        vec![Action::Stateful(Arc::new(nat))],
     );
 
     let rule = Rule::new(1, layer.action(0).unwrap().clone());

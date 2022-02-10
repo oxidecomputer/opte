@@ -5,14 +5,14 @@ use core::result;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
@@ -25,7 +25,7 @@ use crate::ip4::{Ipv4Addr, Protocol};
 use crate::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
 use crate::port::meta::Meta;
 use crate::rule::{
-    flow_id_sdt_arg, ht_fire_probe, self, Action, ActionDesc, Rule, RuleDump,
+    self, flow_id_sdt_arg, ht_fire_probe, Action, ActionDesc, Rule, RuleDump,
     HT,
 };
 use crate::sync::{KMutex, KMutexType};
@@ -55,7 +55,7 @@ pub enum LayerResult {
 pub type RuleId = u64;
 
 pub enum Error {
-    RuleNotFound { id: RuleId }
+    RuleNotFound { id: RuleId },
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -100,7 +100,7 @@ impl Layer {
         &self,
         dir: Direction,
         ifid: &InnerFlowId,
-        err: &rule::GenDescError
+        err: &rule::GenDescError,
     ) {
         let flow_id = flow_id_sdt_arg::from(ifid);
         let port_c = CString::new(format!("{}", self.port_name)).unwrap();
@@ -123,7 +123,7 @@ impl Layer {
         &self,
         dir: Direction,
         ifid: &InnerFlowId,
-        err: &rule::GenHtError
+        err: &rule::GenHtError,
     ) {
         let flow_id = flow_id_sdt_arg::from(ifid);
         let port_c = CString::new(format!("{}", self.port_name)).unwrap();
@@ -305,7 +305,7 @@ impl Layer {
                             &ectx,
                             Direction::Out,
                             &ifid,
-                            &e
+                            &e,
                         );
                         return Err(LayerError::GenHt(e));
                     }
@@ -315,8 +315,7 @@ impl Layer {
 
                 ht.run(pkt.meta_mut());
 
-                let ifid_after =
-                    InnerFlowId::try_from(pkt.meta()).unwrap();
+                let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
 
                 ht_fire_probe(
                     &format!("{}-rt", self.name),
@@ -329,20 +328,19 @@ impl Layer {
             }
 
             Action::Stateful(action) => {
-                let desc =
-                    match action.gen_desc(ifid, meta) {
-                        Ok(d) => d,
+                let desc = match action.gen_desc(ifid, meta) {
+                    Ok(d) => d,
 
-                        Err(e) => {
-                            self.record_gen_desc_failure(
-                                &ectx,
-                                Direction::In,
-                                &ifid,
-                                &e
-                            );
-                            return Err(LayerError::GenDesc(e));
-                        }
-                    };
+                    Err(e) => {
+                        self.record_gen_desc_failure(
+                            &ectx,
+                            Direction::In,
+                            &ifid,
+                            &e,
+                        );
+                        return Err(LayerError::GenDesc(e));
+                    }
+                };
 
                 let ht_in = desc.gen_ht(Direction::In);
                 hts.push(ht_in.clone());
@@ -351,8 +349,7 @@ impl Layer {
 
                 ht_in.run(pkt.meta_mut());
 
-                let ifid_after =
-                    InnerFlowId::try_from(pkt.meta()).unwrap();
+                let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
 
                 ht_fire_probe(
                     &format!("{}-rt", self.name),
@@ -487,7 +484,7 @@ impl Layer {
                             &ectx,
                             Direction::Out,
                             &ifid,
-                            &e
+                            &e,
                         );
                         return Err(LayerError::GenHt(e));
                     }
@@ -497,8 +494,7 @@ impl Layer {
 
                 ht.run(pkt.meta_mut());
 
-                let ifid_after =
-                    InnerFlowId::try_from(pkt.meta()).unwrap();
+                let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
 
                 ht_fire_probe(
                     &format!("{}-rt", self.name),
@@ -511,20 +507,19 @@ impl Layer {
             }
 
             Action::Stateful(action) => {
-                let desc =
-                    match action.gen_desc(ifid, meta) {
-                        Ok(d) => d,
+                let desc = match action.gen_desc(ifid, meta) {
+                    Ok(d) => d,
 
-                        Err(e) => {
-                            self.record_gen_desc_failure(
-                                &ectx,
-                                Direction::Out,
-                                &ifid,
-                                &e
-                            );
-                            return Err(LayerError::GenDesc(e));
-                        }
-                    };
+                    Err(e) => {
+                        self.record_gen_desc_failure(
+                            &ectx,
+                            Direction::Out,
+                            &ifid,
+                            &e,
+                        );
+                        return Err(LayerError::GenDesc(e));
+                    }
+                };
 
                 let ht_out = desc.gen_ht(Direction::Out);
                 hts.push(ht_out.clone());
@@ -533,8 +528,7 @@ impl Layer {
 
                 ht_out.run(pkt.meta_mut());
 
-                let ifid_after =
-                    InnerFlowId::try_from(pkt.meta()).unwrap();
+                let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
 
                 ht_fire_probe(
                     &format!("{}-rt", self.name),
@@ -548,8 +542,7 @@ impl Layer {
                 // flow tables act as duals of each other, and the
                 // HT might change how the other side of this
                 // layer sees this flow.
-                let in_ifid =
-                    InnerFlowId::try_from(pkt.meta()).unwrap().dual();
+                let in_ifid = InnerFlowId::try_from(pkt.meta()).unwrap().dual();
                 self.ft_in.lock().add(in_ifid, desc);
 
                 // if let Some(ctx) = ra_out2.ctx {
@@ -582,16 +575,15 @@ impl Layer {
         ectx: &ExecCtx,
         dir: Direction,
         ifid: &InnerFlowId,
-        err: &rule::GenDescError
+        err: &rule::GenDescError,
     ) {
         // XXX increment stat
         ectx.log.log(
             LogLevel::Error,
             &format!(
                 "failed to generate descriptor for stateful action: {} {:?}",
-                ifid,
-                err
-            )
+                ifid, err
+            ),
         );
         self.gen_desc_fail_probe(dir, ifid, err);
     }
@@ -601,16 +593,15 @@ impl Layer {
         ectx: &ExecCtx,
         dir: Direction,
         ifid: &InnerFlowId,
-        err: &rule::GenHtError
+        err: &rule::GenHtError,
     ) {
         // XXX increment stat
         ectx.log.log(
             LogLevel::Error,
             &format!(
                 "failed to generate HT for static action: {} {:?}",
-                ifid,
-                err
-            )
+                ifid, err
+            ),
         );
         self.gen_ht_fail_probe(dir, ifid, err);
     }
@@ -731,7 +722,7 @@ impl<'a> RuleTable {
     fn find_match<'b, R>(
         &self,
         meta: &PacketMeta,
-        rdr: &'b mut R
+        rdr: &'b mut R,
     ) -> Option<&Rule<rule::Finalized>>
     where
         R: PacketRead<'a>,
@@ -843,7 +834,7 @@ pub fn layer_process_entry_probe(dir: Direction, name: &str) {
 pub fn layer_process_return_probe(
     dir: Direction,
     name: &str,
-    _res: &result::Result<LayerResult, LayerError>
+    _res: &result::Result<LayerResult, LayerError>,
 ) {
     let name_c = CString::new(name).unwrap();
 
@@ -1022,7 +1013,7 @@ pub unsafe fn __dtrace_probe_gen__desc__fail(
     _layer: uintptr_t,
     _dir: uintptr_t,
     _ifid: uintptr_t,
-    _msg: uintptr_t
+    _msg: uintptr_t,
 ) {
     ()
 }
@@ -1034,7 +1025,7 @@ extern "C" {
         layer: uintptr_t,
         dir: uintptr_t,
         ifid: uintptr_t,
-        msg: uintptr_t
+        msg: uintptr_t,
     );
 }
 
@@ -1044,7 +1035,7 @@ pub unsafe fn __dtrace_probe_gen__ht__fail(
     _layer: uintptr_t,
     _dir: uintptr_t,
     _ifid: uintptr_t,
-    _msg: uintptr_t
+    _msg: uintptr_t,
 ) {
     ()
 }
@@ -1056,7 +1047,7 @@ extern "C" {
         layer: uintptr_t,
         dir: uintptr_t,
         ifid: uintptr_t,
-        msg: uintptr_t
+        msg: uintptr_t,
     );
 }
 
@@ -1071,12 +1062,12 @@ fn find_rule() {
     let mut rule_table = RuleTable::new("test".to_string(), Direction::Out);
     let rule = Rule::new(
         1,
-        Action::Static(Arc::new(rule::Identity::new("find_rule")))
+        Action::Static(Arc::new(rule::Identity::new("find_rule"))),
     );
     let cidr = "10.0.0.0/24".parse().unwrap();
-    let rule = rule.add_predicate(
-        Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Prefix(cidr)])
-    );
+    let rule = rule.add_predicate(Predicate::InnerSrcIp4(vec![
+        Ipv4AddrMatch::Prefix(cidr),
+    ]));
 
     rule_table.add(rule.finalize());
 
@@ -1095,11 +1086,7 @@ fn find_rule() {
 
     let meta = PacketMeta {
         outer: Default::default(),
-        inner: MetaGroup {
-            ip: Some(ip),
-            ulp: Some(ulp),
-            ..Default::default()
-        },
+        inner: MetaGroup { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
     };
 
     // The pkt/rdr aren't actually used in this case.
@@ -1353,4 +1340,3 @@ fn find_rule() {
 //     assert_eq!(udp_meta.src, 9000);
 //     assert_eq!(udp_meta.dst, 7777);
 // }
-

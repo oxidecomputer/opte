@@ -3,14 +3,14 @@ use core::convert::TryFrom;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::String;
-#[cfg(any(feature = "std", test))]
-use std::string::String;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::string::String;
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use crate::ether::EtherAddr;
 use crate::flow_table::FlowEntryDump;
 use crate::ip4::Ipv4Addr;
-use crate::oxide_net::{firewall as fw, overlay};
 use crate::layer;
+use crate::oxide_net::{firewall as fw, overlay};
 use crate::port;
 use crate::rule;
 use crate::vpc::VpcSubnet4;
@@ -33,17 +33,17 @@ use crate::vpc::VpcSubnet4;
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub enum IoctlCmd {
-    ListPorts = 1,     // list all ports
-    AddPort = 2,     // add new port
-    DeletePort = 3,     // delete a port
-    FwAddRule = 20,     // add firewall rule
-    FwRemRule = 21,     // remove firewall rule
-    DumpTcpFlows = 30,  // dump TCP flows
-    DumpLayer = 31,     // dump the specified Layer
-    DumpUft = 32,       // dump the Unified Flow Table
-    ListLayers = 33,    // list the layers on a given port
-    SetOverlay = 40,     // set the overlay config
-    SetVirt2Phys = 50,    // set a v2p mapping
+    ListPorts = 1,           // list all ports
+    AddPort = 2,             // add new port
+    DeletePort = 3,          // delete a port
+    FwAddRule = 20,          // add firewall rule
+    FwRemRule = 21,          // remove firewall rule
+    DumpTcpFlows = 30,       // dump TCP flows
+    DumpLayer = 31,          // dump the specified Layer
+    DumpUft = 32,            // dump the Unified Flow Table
+    ListLayers = 33,         // list the layers on a given port
+    SetOverlay = 40,         // set the overlay config
+    SetVirt2Phys = 50,       // set a v2p mapping
     AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
 }
 
@@ -192,7 +192,6 @@ pub struct ListLayersReq {
     pub port_name: String,
 }
 
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct LayerDesc {
     // Name of the layer.
@@ -276,7 +275,7 @@ impl From<PortError> for DumpTcpFlowsError {
 
 pub fn add_fw_rule(
     port: &port::Port<port::Active>,
-    req: &fw::FwAddRuleReq
+    req: &fw::FwAddRuleReq,
 ) -> Result<(), AddFwRuleError> {
     let action = match req.rule.action {
         fw::Action::Allow => {
@@ -288,11 +287,7 @@ pub fn add_fw_rule(
 
     let rule = fw::from_fw_rule(req.rule.clone(), action);
 
-    let res = port.add_rule(
-        fw::FW_LAYER_NAME,
-        req.rule.direction,
-        rule,
-    );
+    let res = port.add_rule(fw::FW_LAYER_NAME, req.rule.direction, rule);
 
     match res {
         Ok(()) => Ok(()),

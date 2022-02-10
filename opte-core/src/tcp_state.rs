@@ -60,10 +60,7 @@ impl TcpFlowState {
     /// transition occurs, then an error is returned.
     ///
     /// TODO Actually flesh out error cases.
-    fn flow_in(
-        &mut self,
-        tcp: &TcpMeta,
-    ) -> Result<Option<TcpState>, String> {
+    fn flow_in(&mut self, tcp: &TcpMeta) -> Result<Option<TcpState>, String> {
         use TcpState::*;
 
         match self.tcp_state {
@@ -249,10 +246,7 @@ impl TcpFlowState {
         }
     }
 
-    fn flow_out(
-        &mut self,
-        tcp: &TcpMeta,
-    ) -> Result<Option<TcpState>, String> {
+    fn flow_out(&mut self, tcp: &TcpMeta) -> Result<Option<TcpState>, String> {
         use TcpState::*;
 
         match self.tcp_state {

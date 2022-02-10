@@ -2,13 +2,13 @@ use core::convert::TryFrom;
 use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
+use alloc::string::{String, ToString};
+#[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
-use std::vec::Vec;
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
 use std::string::{String, ToString};
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
@@ -16,15 +16,15 @@ use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 use crate::ether::{EtherType, ETHER_TYPE_ETHER};
 use crate::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
-    RawHeader
+    RawHeader,
 };
 use crate::packet::{PacketRead, ReadErr, WriteError};
 
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct Vni {
-    inner: u32
+    inner: u32,
 }
 
 impl FromStr for Vni {
@@ -48,7 +48,7 @@ impl Vni {
     pub fn new<N: Into<u32>>(val: N) -> Result<Vni, String> {
         let val = val.into();
         if val > VNI_MAX {
-            return Err(format!("VNI value exceeds maximum: {}", val))
+            return Err(format!("VNI value exceeds maximum: {}", val));
         }
 
         Ok(Vni { inner: val })
@@ -136,7 +136,7 @@ impl Header for GeneveHdr {
 
     fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, GeneveHdrError>
     where
-        R: PacketRead<'a>
+        R: PacketRead<'a>,
     {
         GeneveHdr::try_from(&GeneveHdrRaw::raw_zc(rdr)?)
     }
@@ -171,7 +171,7 @@ impl TryFrom<&LayoutVerified<&[u8], GeneveHdrRaw>> for GeneveHdr {
     type Error = GeneveHdrError;
 
     fn try_from(
-        raw: &LayoutVerified<&[u8], GeneveHdrRaw>
+        raw: &LayoutVerified<&[u8], GeneveHdrRaw>,
     ) -> Result<Self, Self::Error> {
         let vsn = raw.version();
 
@@ -185,13 +185,12 @@ impl TryFrom<&LayoutVerified<&[u8], GeneveHdrRaw>> for GeneveHdr {
 
         let proto = EtherType::try_from(u16::from_be_bytes(raw.proto))
             .map_err(|_s| GeneveHdrError::UnexpectedProtocol {
-                protocol: u16::from_be_bytes(raw.proto)
+                protocol: u16::from_be_bytes(raw.proto),
             })?;
 
-        let vni = Vni::new(u32::from_be_bytes(raw.vni))
-            .map_err(|_s| GeneveHdrError::BadVni {
-                vni: u32::from_be_bytes(raw.vni)
-            })?;
+        let vni = Vni::new(u32::from_be_bytes(raw.vni)).map_err(|_s| {
+            GeneveHdrError::BadVni { vni: u32::from_be_bytes(raw.vni) }
+        })?;
 
         Ok(GeneveHdr {
             opt_len_bytes: raw.options_len() as u16 * 4,
@@ -201,7 +200,6 @@ impl TryFrom<&LayoutVerified<&[u8], GeneveHdrRaw>> for GeneveHdr {
         })
     }
 }
-
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
@@ -289,5 +287,4 @@ mod test {
         assert!(Vni::new(2u32.pow(24)).is_err());
         assert!(Vni::new(2u32.pow(30)).is_err());
     }
-
 }

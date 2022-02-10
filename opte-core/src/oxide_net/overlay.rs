@@ -5,14 +5,14 @@ use core::fmt;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::collections::btree_map::BTreeMap;
-#[cfg(any(feature = "std", test))]
-use std::collections::btree_map::BTreeMap;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
+#[cfg(any(feature = "std", test))]
+use std::collections::btree_map::BTreeMap;
+#[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
 #[cfg(any(feature = "std", test))]
 use std::sync::Arc;
 
@@ -26,9 +26,9 @@ use crate::ip4::{Ipv4Addr, Protocol};
 use crate::ip6::{Ipv6Addr, Ipv6Meta};
 use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::router::RouterTarget;
-use crate::port::{self, Port, Pos};
 use crate::port::meta::Meta;
-use crate::rule::{self, Action, HT, Rule, StaticAction};
+use crate::port::{self, Port, Pos};
+use crate::rule::{self, Action, Rule, StaticAction, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::udp::UdpMeta;
 use crate::Direction;
@@ -39,7 +39,7 @@ pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 pub struct PhysNet {
     pub ether: EtherAddr,
     pub ip: Ipv6Addr,
-    pub vni: Vni
+    pub vni: Vni,
 }
 
 pub fn setup(
@@ -48,15 +48,13 @@ pub fn setup(
     v2p: Arc<Virt2Phys>,
 ) {
     // Action Index 0
-    let encap = Action::Static(
-        Arc::new(EncapAction::new(
-            cfg.boundary_services,
-            cfg.phys_mac_src,
-            cfg.phys_mac_dst,
-            cfg.phys_ip_src,
-            v2p,
-        ))
-    );
+    let encap = Action::Static(Arc::new(EncapAction::new(
+        cfg.boundary_services,
+        cfg.phys_mac_src,
+        cfg.phys_mac_dst,
+        cfg.phys_ip_src,
+        v2p,
+    )));
 
     // Action Index 1
     let decap = Action::Static(Arc::new(DecapAction::new()));
@@ -133,13 +131,7 @@ impl EncapAction {
         phys_ip_src: Ipv6Addr,
         v2p: Arc<Virt2Phys>,
     ) -> Self {
-        Self {
-            boundary_services,
-            phys_mac_src,
-            phys_mac_dst,
-            phys_ip_src,
-            v2p
-        }
+        Self { boundary_services, phys_mac_src, phys_mac_dst, phys_ip_src, v2p }
     }
 }
 
@@ -169,7 +161,7 @@ impl StaticAction for EncapAction {
                 // type system, and thus must account for this
                 // situation.
                 return Err(rule::GenHtError::Unexpected {
-                    msg: format!("no RouterTarget metadata entry found")
+                    msg: format!("no RouterTarget metadata entry found"),
                 });
             }
         };
@@ -180,34 +172,25 @@ impl StaticAction for EncapAction {
                 todo!("should we even make it here?");
             }
 
-            RouterTarget::InternetGateway => {
-                self.boundary_services.clone()
-            }
+            RouterTarget::InternetGateway => self.boundary_services.clone(),
 
-            RouterTarget::Ip(virt_ip) => {
-                match self.v2p.get(virt_ip) {
-                    Some(val) => val,
-                    None => {
-                        return Err(rule::GenHtError::Unexpected {
-                            msg: format!("no v2p mapping for {}", virt_ip)
-                        });
-                    }
+            RouterTarget::Ip(virt_ip) => match self.v2p.get(virt_ip) {
+                Some(val) => val,
+                None => {
+                    return Err(rule::GenHtError::Unexpected {
+                        msg: format!("no v2p mapping for {}", virt_ip),
+                    });
                 }
-            }
+            },
 
-            RouterTarget::VpcSubnet(_) => {
-                match self.v2p.get(&flow_id.dst_ip) {
-                    Some(val) => val,
-                    None => {
-                        return Err(rule::GenHtError::Unexpected {
-                            msg: format!(
-                                "no v2p mapping for {}",
-                                flow_id.dst_ip
-                            )
-                        });
-                    }
+            RouterTarget::VpcSubnet(_) => match self.v2p.get(&flow_id.dst_ip) {
+                Some(val) => val,
+                None => {
+                    return Err(rule::GenHtError::Unexpected {
+                        msg: format!("no v2p mapping for {}", flow_id.dst_ip),
+                    });
                 }
-            }
+            },
         };
 
         Ok(HT {
@@ -249,13 +232,10 @@ impl StaticAction for EncapAction {
                 // perhaps we should just use that? For now I
                 // defer the choice and leave this hard-coded.
                 7777,
-                GENEVE_PORT
+                GENEVE_PORT,
             ),
             outer_encap: GeneveMeta::push(phys_target.vni),
-            inner_ether: EtherMeta::modify(
-                None,
-                Some(phys_target.ether)
-            ),
+            inner_ether: EtherMeta::modify(None, Some(phys_target.ether)),
             ..Default::default()
         })
     }

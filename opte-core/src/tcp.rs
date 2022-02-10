@@ -219,10 +219,12 @@ macro_rules! assert_tcp {
         assert!(
             lcsum == rcsum,
             "TCP csum mismatch: 0x{:02X}{:02X} != 0x{:02X}{:02X}",
-            lcsum[0], lcsum[1],
-            rcsum[0], rcsum[1],
+            lcsum[0],
+            lcsum[1],
+            rcsum[0],
+            rcsum[1],
         );
-    }
+    };
 }
 
 impl TcpHdr {
@@ -313,7 +315,7 @@ impl Header for TcpHdr {
 
     fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Self::Error>
     where
-        R: PacketRead<'a>
+        R: PacketRead<'a>,
     {
         let raw = TcpHdrRaw::raw_zc(rdr)?;
         let mut tcp = TcpHdr::try_from(&raw)?;
@@ -379,7 +381,7 @@ impl TryFrom<&LayoutVerified<&[u8], TcpHdrRaw>> for TcpHdr {
     type Error = TcpHdrError;
 
     fn try_from(
-        raw: &LayoutVerified<&[u8], TcpHdrRaw>
+        raw: &LayoutVerified<&[u8], TcpHdrRaw>,
     ) -> Result<Self, Self::Error> {
         let src_port = u16::from_be_bytes(raw.src_port);
 
@@ -399,7 +401,7 @@ impl TryFrom<&LayoutVerified<&[u8], TcpHdrRaw>> for TcpHdr {
         if hdr_len_bytes < 20 {
             return Err(TcpHdrError::BadOffset {
                 offset,
-                len_in_bytes: hdr_len_bytes
+                len_in_bytes: hdr_len_bytes,
             });
         }
 

@@ -15,7 +15,6 @@ use illumos_ddi_dki::kmutex_type_t;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_ddi_dki::{kmutex_t, mutex_enter, mutex_exit, mutex_init};
 
-
 /// Exposes the illumos mutex(9F) API in a safe manner. We name it
 /// `KMutex` (Kernel Mutex) on purpose. The API for a kernel mutex
 /// isn't quite the same as a userland `Mutex`, and there's no reason

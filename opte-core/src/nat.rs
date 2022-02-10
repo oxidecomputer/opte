@@ -2,19 +2,19 @@ use core::fmt;
 use core::ops::Range;
 
 #[cfg(all(not(feature = "std"), not(test)))]
-use alloc::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
-#[cfg(all(not(feature = "std"), not(test)))]
 use alloc::collections::btree_map::BTreeMap;
-#[cfg(any(feature = "std", test))]
-use std::collections::btree_map::BTreeMap;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::ToString;
-#[cfg(any(feature = "std", test))]
-use std::string::ToString;
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::sync::Arc;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::collections::btree_map::BTreeMap;
+#[cfg(any(feature = "std", test))]
+use std::string::ToString;
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
@@ -23,9 +23,7 @@ use crate::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
 use crate::ip4::{Ipv4Addr, Ipv4Meta};
 use crate::layer::InnerFlowId;
 use crate::port::meta::Meta;
-use crate::rule::{
-    self, ActionDesc, ResourceError, StatefulAction, HT,
-};
+use crate::rule::{self, ActionDesc, ResourceError, StatefulAction, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::Direction;
 
@@ -53,14 +51,14 @@ impl NatPool {
     }
 
     pub fn mapping(&self, priv_ip: Ipv4Addr) -> Option<(Ipv4Addr, Range<u16>)> {
-        self.free_list.lock().get(&priv_ip)
+        self.free_list
+            .lock()
+            .get(&priv_ip)
             .map(|(pub_ip, range, _)| (pub_ip.clone(), range.clone()))
     }
 
     pub fn new() -> Self {
-        NatPool {
-            free_list: KMutex::new(BTreeMap::new(), KMutexType::Driver)
-        }
+        NatPool { free_list: KMutex::new(BTreeMap::new(), KMutexType::Driver) }
     }
 
     pub fn obtain(
@@ -150,11 +148,9 @@ impl StatefulAction for DynNat4 {
             }
 
             // XXX This needs improving.
-            Err(_e) => {
-                Err(rule::GenDescError::ResourceExhausted {
-                    name: "SNAT Pool".to_string()
-                })
-            }
+            Err(_e) => Err(rule::GenDescError::ResourceExhausted {
+                name: "SNAT Pool".to_string(),
+            }),
         }
     }
 }
@@ -184,23 +180,19 @@ impl ActionDesc for DynNat4Desc {
             // XXX I also currently remap the MAC address to work
             // around what seems to be a limitation with my home
             // router, this should be removed eventually.
-            Direction::Out => {
-                HT {
-                    name: DYN_NAT4_NAME.to_string(),
-                    inner_ether: EtherMeta::modify(Some(self.pub_mac), None),
-                    inner_ip: Ipv4Meta::modify(Some(self.pub_ip), None, None),
-                    inner_ulp: UlpHeaderAction::Modify(
-                        UlpMetaModify {
-                            generic: UlpGenericModify {
-                                src_port: Some(self.pub_port),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        }
-                    ),
+            Direction::Out => HT {
+                name: DYN_NAT4_NAME.to_string(),
+                inner_ether: EtherMeta::modify(Some(self.pub_mac), None),
+                inner_ip: Ipv4Meta::modify(Some(self.pub_ip), None, None),
+                inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
+                    generic: UlpGenericModify {
+                        src_port: Some(self.pub_port),
+                        ..Default::default()
+                    },
                     ..Default::default()
-                }
-            }
+                }),
+                ..Default::default()
+            },
 
             // Inbound traffic needs its destination IP and
             // destination port mapped back to the private values that
@@ -208,23 +200,19 @@ impl ActionDesc for DynNat4Desc {
             //
             // XXX As mentioned above, we currently also remap the MAC
             // address to work around a router limitation.
-            Direction::In => {
-                HT {
-                    name: DYN_NAT4_NAME.to_string(),
-                    inner_ether: EtherMeta::modify(None, Some(self.priv_mac)),
-                    inner_ip: Ipv4Meta::modify(None, Some(self.priv_ip), None),
-                    inner_ulp: UlpHeaderAction::Modify(
-                        UlpMetaModify {
-                            generic: UlpGenericModify {
-                                dst_port: Some(self.priv_port),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        },
-                    ),
+            Direction::In => HT {
+                name: DYN_NAT4_NAME.to_string(),
+                inner_ether: EtherMeta::modify(None, Some(self.priv_mac)),
+                inner_ip: Ipv4Meta::modify(None, Some(self.priv_ip), None),
+                inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
+                    generic: UlpGenericModify {
+                        dst_port: Some(self.priv_port),
+                        ..Default::default()
+                    },
                     ..Default::default()
-                }
-            }
+                }),
+                ..Default::default()
+            },
         }
     }
 

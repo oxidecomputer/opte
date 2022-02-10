@@ -6,10 +6,10 @@ use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
@@ -21,7 +21,7 @@ use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 use crate::checksum::{Checksum, HeaderChecksum};
 use crate::headers::{
     Header, HeaderAction, HeaderActionModify, IpMeta, IpMetaOpt, ModActionArg,
-    RawHeader
+    RawHeader,
 };
 use crate::packet::{PacketRead, ReadErr, WriteError};
 use crate::rule::{
@@ -157,9 +157,7 @@ impl FromStr for Ipv4Cidr {
         let prefix = match prefix_s.parse::<u8>() {
             Ok(v) => v,
             Err(_) => {
-                return Err(IpError::MalformedPrefix(
-                    prefix_s.to_string(),
-                ));
+                return Err(IpError::MalformedPrefix(prefix_s.to_string()));
             }
         };
 
@@ -197,26 +195,17 @@ fn good_cidr() {
     let ip = "192.168.2.0".parse().unwrap();
     assert_eq!(
         Ipv4Cidr::new(ip, 24),
-        Ok(Ipv4Cidr {
-            ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-            prefix: 24
-        })
+        Ok(Ipv4Cidr { ip: Ipv4Addr { inner: [192, 168, 2, 0] }, prefix: 24 })
     );
 
     assert_eq!(
         "192.168.2.0/24".parse(),
-        Ok(Ipv4Cidr {
-            ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-            prefix: 24
-        })
+        Ok(Ipv4Cidr { ip: Ipv4Addr { inner: [192, 168, 2, 0] }, prefix: 24 })
     );
 
     assert_eq!(
         "192.168.2.9/24".parse(),
-        Ok(Ipv4Cidr {
-            ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-            prefix: 24
-        })
+        Ok(Ipv4Cidr { ip: Ipv4Addr { inner: [192, 168, 2, 0] }, prefix: 24 })
     );
 
     assert_eq!(
@@ -387,10 +376,7 @@ impl Display for Ipv4Addr {
         write!(
             f,
             "{}.{}.{}.{}",
-            self.inner[0],
-            self.inner[1],
-            self.inner[2],
-            self.inner[3],
+            self.inner[0], self.inner[1], self.inner[2], self.inner[3],
         )
     }
 }
@@ -506,11 +492,7 @@ impl Ipv4Meta {
 
 impl From<&Ipv4Hdr> for Ipv4Meta {
     fn from(ip4: &Ipv4Hdr) -> Self {
-        Ipv4Meta {
-            src: ip4.src,
-            dst: ip4.dst,
-            proto: ip4.proto,
-        }
+        Ipv4Meta { src: ip4.src, dst: ip4.dst, proto: ip4.proto }
     }
 }
 
@@ -602,8 +584,10 @@ macro_rules! assert_ip4 {
         assert!(
             lcsum == rcsum,
             "IPv4 csum mismatch: 0x{:02X}{:02X} != 0x{:02X}{:02X}",
-            lcsum[0], lcsum[1],
-            rcsum[0], rcsum[1],
+            lcsum[0],
+            lcsum[1],
+            rcsum[0],
+            rcsum[1],
         );
 
         assert!(
@@ -619,7 +603,7 @@ macro_rules! assert_ip4 {
             $left.dst(),
             $right.dst(),
         );
-    }
+    };
 }
 
 pub enum UlpCsumOpt {
@@ -641,16 +625,11 @@ impl Ipv4Hdr {
 
     pub fn compute_hdr_csum(&mut self) {
         self.csum = [0; 2];
-        self.csum = HeaderChecksum::from(
-            Checksum::compute(&self.as_bytes())
-        ).bytes();
+        self.csum =
+            HeaderChecksum::from(Checksum::compute(&self.as_bytes())).bytes();
     }
 
-    pub fn compute_ulp_csum(
-        &self,
-        opt: UlpCsumOpt,
-        body: &[u8]
-    ) -> Checksum {
+    pub fn compute_ulp_csum(&self, opt: UlpCsumOpt, body: &[u8]) -> Checksum {
         match opt {
             UlpCsumOpt::Partial => todo!("implement partial csum"),
             UlpCsumOpt::Full => {
@@ -717,9 +696,12 @@ impl Ipv4Hdr {
         bytes.extend_from_slice(&self.src.to_be_bytes());
         bytes.extend_from_slice(&self.dst.to_be_bytes());
         let len_bytes = self.pay_len().to_be_bytes();
-        bytes.extend_from_slice(
-            &[0u8, self.proto as u8, len_bytes[0], len_bytes[1]]
-        );
+        bytes.extend_from_slice(&[
+            0u8,
+            self.proto as u8,
+            len_bytes[0],
+            len_bytes[1],
+        ]);
         bytes
     }
 
@@ -776,7 +758,7 @@ impl Header for Ipv4Hdr {
 
     fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Ipv4HdrError>
     where
-        R: PacketRead<'a>
+        R: PacketRead<'a>,
     {
         Ipv4Hdr::try_from(&Ipv4HdrRaw::raw_zc(rdr)?)
     }
@@ -801,7 +783,7 @@ impl TryFrom<&LayoutVerified<&[u8], Ipv4HdrRaw>> for Ipv4Hdr {
     type Error = Ipv4HdrError;
 
     fn try_from(
-        raw: &LayoutVerified<&[u8], Ipv4HdrRaw>
+        raw: &LayoutVerified<&[u8], Ipv4HdrRaw>,
     ) -> Result<Self, Self::Error> {
         let vsn = (raw.ver_hdr_len & IPV4_HDR_VER_MASK) >> IPV4_HDR_VER_SHIFT;
 
@@ -809,8 +791,7 @@ impl TryFrom<&LayoutVerified<&[u8], Ipv4HdrRaw>> for Ipv4Hdr {
             return Err(Ipv4HdrError::BadVersion { vsn });
         }
 
-        let hdr_len_bytes =
-            u8::from(raw.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4;
+        let hdr_len_bytes = u8::from(raw.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4;
 
         if hdr_len_bytes < 20 {
             return Err(Ipv4HdrError::HeaderTruncated { hdr_len_bytes });
@@ -828,10 +809,9 @@ impl TryFrom<&LayoutVerified<&[u8], Ipv4HdrRaw>> for Ipv4Hdr {
             return Err(Ipv4HdrError::BadTotalLen { total_len });
         }
 
-        let proto = Protocol::try_from(raw.proto)
-            .map_err(|_s| Ipv4HdrError::UnexpectedProtocol {
-                protocol: raw.proto
-            })?;
+        let proto = Protocol::try_from(raw.proto).map_err(|_s| {
+            Ipv4HdrError::UnexpectedProtocol { protocol: raw.proto }
+        })?;
 
         let src = Ipv4Addr::from(u32::from_be_bytes(raw.src));
         let dst = Ipv4Addr::from(u32::from_be_bytes(raw.dst));

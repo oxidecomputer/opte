@@ -7,10 +7,10 @@ use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
+#[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
 #[cfg(any(feature = "std", test))]
 use std::sync::Arc;
 
@@ -61,23 +61,19 @@ impl FromStr for RouterTarget {
         match s.to_ascii_lowercase().as_str() {
             "drop" => Ok(Self::Drop),
             "ig" => Ok(Self::InternetGateway),
-            lower => {
-                match lower.split_once("=") {
-                    Some(("ip4", ip4s)) => {
-                        let ip4 = ip4s.parse()?;
-                        Ok(Self::Ip(IpAddr::Ip4(ip4)))
-                    }
-
-                    Some(("sub4", cidr4s)) => {
-                        let cidr4 = cidr4s.parse()?;
-                        Ok(Self::VpcSubnet(IpCidr::Ip4(cidr4)))
-                    }
-
-                    _ => {
-                        Err(format!("malformed router target: {}", lower))
-                    }
+            lower => match lower.split_once("=") {
+                Some(("ip4", ip4s)) => {
+                    let ip4 = ip4s.parse()?;
+                    Ok(Self::Ip(IpAddr::Ip4(ip4)))
                 }
-            }
+
+                Some(("sub4", cidr4s)) => {
+                    let cidr4 = cidr4s.parse()?;
+                    Ok(Self::VpcSubnet(IpCidr::Ip4(cidr4)))
+                }
+
+                _ => Err(format!("malformed router target: {}", lower)),
+            },
         }
     }
 }
@@ -107,9 +103,9 @@ fn build_ip4_len_to_pri() -> [u16; 33] {
 pub fn setup(port: &Port<port::Inactive>) -> Result<(), port::AddLayerError> {
     let pri_map = build_ip4_len_to_pri();
 
-    let ig = Action::Meta(
-        Arc::new(RouterAction::new(RouterTarget::InternetGateway))
-    );
+    let ig = Action::Meta(Arc::new(RouterAction::new(
+        RouterTarget::InternetGateway,
+    )));
     let ig_idx = 0;
 
     // Indexes:
@@ -120,11 +116,9 @@ pub fn setup(port: &Port<port::Inactive>) -> Result<(), port::AddLayerError> {
     // TODO These hard-coded rules will actually come dynamically from
     // Nexus. Just keeping them here for now.
     let ig4 = Rule::new(pri_map[0], layer.action(ig_idx).unwrap().clone());
-    let rule = ig4.add_predicate(
-        Predicate::InnerDstIp4(vec![
-            rule::Ipv4AddrMatch::Prefix("0.0.0.0/0".parse().unwrap())
-        ])
-    );
+    let rule = ig4.add_predicate(Predicate::InnerDstIp4(vec![
+        rule::Ipv4AddrMatch::Prefix("0.0.0.0/0".parse().unwrap()),
+    ]));
 
     layer.add_rule(Direction::Out, rule.finalize());
 
@@ -175,16 +169,20 @@ pub fn add_entry_inactive(
                 IpCidr::Ip4(ip4) => {
                     let rule = Rule::new(
                         pri_map4[dest.prefix()],
-                        Action::Meta(Arc::new(
-                            RouterAction::new(target.clone())
-                        )),
+                        Action::Meta(Arc::new(RouterAction::new(
+                            target.clone(),
+                        ))),
                     );
-                    let rule = rule.add_predicate(
-                        Predicate::InnerDstIp4(vec![
-                            rule::Ipv4AddrMatch::Prefix(ip4)
-                        ])
-                    ).finalize();
-                    Ok(port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?)
+                    let rule = rule
+                        .add_predicate(Predicate::InnerDstIp4(vec![
+                            rule::Ipv4AddrMatch::Prefix(ip4),
+                        ]))
+                        .finalize();
+                    Ok(port.add_rule(
+                        ROUTER_LAYER_NAME,
+                        Direction::Out,
+                        rule,
+                    )?)
                 }
 
                 IpCidr::Ip6(_) => todo!("IPv6 IG"),
@@ -193,26 +191,22 @@ pub fn add_entry_inactive(
 
         RouterTarget::Ip(_) => todo!("add IP entry"),
 
-        RouterTarget::VpcSubnet(_) => {
-            match dest {
-                IpCidr::Ip4(ip4) => {
-                    let rule = Rule::new(
-                        pri_map4[dest.prefix()],
-                        Action::Meta(Arc::new(
-                            RouterAction::new(target.clone())
-                        )),
-                    );
-                    let rule = rule.add_predicate(
-                        Predicate::InnerDstIp4(vec![
-                            rule::Ipv4AddrMatch::Prefix(ip4)
-                        ])
-                    ).finalize();
-                    Ok(port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?)
-                }
-
-                IpCidr::Ip6(_) => todo!("IPv6 VpcSubnet"),
+        RouterTarget::VpcSubnet(_) => match dest {
+            IpCidr::Ip4(ip4) => {
+                let rule = Rule::new(
+                    pri_map4[dest.prefix()],
+                    Action::Meta(Arc::new(RouterAction::new(target.clone()))),
+                );
+                let rule = rule
+                    .add_predicate(Predicate::InnerDstIp4(vec![
+                        rule::Ipv4AddrMatch::Prefix(ip4),
+                    ]))
+                    .finalize();
+                Ok(port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?)
             }
-        }
+
+            IpCidr::Ip6(_) => todo!("IPv6 VpcSubnet"),
+        },
     }
 }
 
@@ -235,16 +229,20 @@ pub fn add_entry_active(
                 IpCidr::Ip4(ip4) => {
                     let rule = Rule::new(
                         pri_map4[dest.prefix()],
-                        Action::Meta(Arc::new(
-                            RouterAction::new(target.clone())
-                        )),
+                        Action::Meta(Arc::new(RouterAction::new(
+                            target.clone(),
+                        ))),
                     );
-                    let rule = rule.add_predicate(
-                        Predicate::InnerDstIp4(vec![
-                            rule::Ipv4AddrMatch::Prefix(ip4)
-                        ])
-                    ).finalize();
-                    Ok(port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?)
+                    let rule = rule
+                        .add_predicate(Predicate::InnerDstIp4(vec![
+                            rule::Ipv4AddrMatch::Prefix(ip4),
+                        ]))
+                        .finalize();
+                    Ok(port.add_rule(
+                        ROUTER_LAYER_NAME,
+                        Direction::Out,
+                        rule,
+                    )?)
                 }
 
                 IpCidr::Ip6(_) => todo!("IPv6 IG"),
@@ -253,26 +251,22 @@ pub fn add_entry_active(
 
         RouterTarget::Ip(_) => todo!("add IP entry"),
 
-        RouterTarget::VpcSubnet(_) => {
-            match dest {
-                IpCidr::Ip4(ip4) => {
-                    let rule = Rule::new(
-                        pri_map4[dest.prefix()],
-                        Action::Meta(Arc::new(
-                            RouterAction::new(target.clone())
-                        )),
-                    );
-                    let rule = rule.add_predicate(
-                        Predicate::InnerDstIp4(vec![
-                            rule::Ipv4AddrMatch::Prefix(ip4)
-                        ])
-                    ).finalize();
-                    Ok(port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?)
-                }
-
-                IpCidr::Ip6(_) => todo!("IPv6 router entry"),
+        RouterTarget::VpcSubnet(_) => match dest {
+            IpCidr::Ip4(ip4) => {
+                let rule = Rule::new(
+                    pri_map4[dest.prefix()],
+                    Action::Meta(Arc::new(RouterAction::new(target.clone()))),
+                );
+                let rule = rule
+                    .add_predicate(Predicate::InnerDstIp4(vec![
+                        rule::Ipv4AddrMatch::Prefix(ip4),
+                    ]))
+                    .finalize();
+                Ok(port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?)
             }
-        }
+
+            IpCidr::Ip6(_) => todo!("IPv6 router entry"),
+        },
     }
 }
 

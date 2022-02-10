@@ -23,14 +23,14 @@ use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::boxed::Box;
-#[cfg(any(feature = "std", test))]
-use std::boxed::Box;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::string::String;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::boxed::Box;
+#[cfg(any(feature = "std", test))]
+use std::string::String;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 extern crate illumos_ddi_dki;
@@ -223,7 +223,6 @@ impl Display for Direction {
     }
 }
 
-
 // ================================================================
 // Providers
 //
@@ -267,7 +266,7 @@ impl Display for LogLevel {
         let level_s = match self {
             Self::Note => "[NOTE]",
             Self::Warn => "[WARN]",
-            Self::Error => "[ERROR]"
+            Self::Error => "[ERROR]",
         };
         write!(f, "{}", level_s)
     }
@@ -299,7 +298,7 @@ impl LogProvider for KernelLog {
         unsafe {
             ddi::cmn_err(
                 cmn_level,
-                CString::new(msg.to_string()).unwrap().as_ptr()
+                CString::new(msg.to_string()).unwrap().as_ptr(),
             )
         }
     }

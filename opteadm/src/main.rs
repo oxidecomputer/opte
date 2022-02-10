@@ -6,17 +6,17 @@ use std::net::Ipv6Addr;
 use structopt::StructOpt;
 
 use opte_core::ether::EtherAddr;
+use opte_core::flow_table::FlowEntryDump;
+use opte_core::geneve;
+use opte_core::headers::IpAddr;
+use opte_core::ioctl::{self as api, AddPortReq, PortInfo};
 use opte_core::ip4::{Ipv4Addr, Ipv4Cidr};
 use opte_core::ip6 as opte_ip6;
+use opte_core::layer::InnerFlowId;
 use opte_core::oxide_net::firewall::{
     self, Action, Address, FirewallRule, FwRemRuleReq, Ports, ProtoFilter,
 };
 use opte_core::oxide_net::{overlay, router};
-use opte_core::flow_table::FlowEntryDump;
-use opte_core::geneve;
-use opte_core::headers::IpAddr;
-use opte_core::ioctl::{self as api, PortInfo, AddPortReq};
-use opte_core::layer::InnerFlowId;
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
@@ -42,7 +42,7 @@ enum Command {
     // List all layers under a given port.
     ListLayers {
         #[structopt(short)]
-        port: String
+        port: String,
     },
 
     /// Dump the contents of the layer with the given name
@@ -161,13 +161,13 @@ impl From<SetOverlay> for overlay::SetOverlayReq {
             port_name: req.port,
             cfg: overlay::OverlayCfg {
                 boundary_services: overlay::PhysNet::from(
-                    req.boundary_services
+                    req.boundary_services,
                 ),
                 vni: geneve::Vni::new(req.vni).unwrap(),
                 phys_mac_src: req.mac_src,
                 phys_mac_dst: req.mac_dst,
                 phys_ip_src: opte_ip6::Ipv6Addr::from(req.ip.octets()),
-            }
+            },
         }
     }
 }
@@ -208,10 +208,7 @@ struct AddPort {
 
 impl From<AddPort> for AddPortReq {
     fn from(r: AddPort) -> Self {
-        Self {
-            link_name: r.name,
-            port_cfg: api::PortCfg::from(r.port_cfg),
-        }
+        Self { link_name: r.name, port_cfg: api::PortCfg::from(r.port_cfg) }
     }
 }
 
@@ -228,10 +225,7 @@ struct PortCfg {
 
 impl From<PortCfg> for api::PortCfg {
     fn from(s: PortCfg) -> Self {
-        Self {
-            private_ip: s.private_ip,
-            snat: s.snat.map(api::SnatCfg::from),
-        }
+        Self { private_ip: s.private_ip, snat: s.snat.map(api::SnatCfg::from) }
     }
 }
 
@@ -292,15 +286,13 @@ impl std::str::FromStr for SnatCfg {
                 }
 
                 Some(("port_start", val)) => {
-                    port_start = Some(
-                        val.parse::<u16>().map_err(|e| e.to_string())?
-                    );
+                    port_start =
+                        Some(val.parse::<u16>().map_err(|e| e.to_string())?);
                 }
 
                 Some(("port_end", val)) => {
-                    port_end = Some(
-                        val.parse::<u16>().map_err(|e| e.to_string())?
-                    );
+                    port_end =
+                        Some(val.parse::<u16>().map_err(|e| e.to_string())?);
                 }
 
                 Some(("vpc_sub4", val)) => {
@@ -338,7 +330,7 @@ impl std::str::FromStr for SnatCfg {
             public_ip: public_ip.unwrap(),
             port_start: port_start.unwrap(),
             port_end: port_end.unwrap(),
-            vpc_sub4: vpc_sub4.unwrap()
+            vpc_sub4: vpc_sub4.unwrap(),
         })
     }
 }
@@ -569,11 +561,8 @@ fn main() {
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
             let hdl = opteadm::OpteAdm::open().unwrap();
-            let req = router::AddRouterEntryIpv4Req {
-                port_name: port,
-                dest,
-                target
-            };
+            let req =
+                router::AddRouterEntryIpv4Req { port_name: port, dest, target };
             hdl.add_router_entry_ip4(&req).unwrap();
         }
     }

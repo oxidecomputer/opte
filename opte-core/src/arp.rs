@@ -17,15 +17,15 @@ use serde::{Deserialize, Serialize};
 
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-use crate::headers::{Header, RawHeader};
 use crate::ether::{
     EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ, ETHER_TYPE_ARP,
     ETHER_TYPE_IPV4,
 };
+use crate::headers::{Header, RawHeader};
 use crate::ip4::Ipv4Addr;
 use crate::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, PacketWriter,
-    Parsed, ReadErr, WriteError
+    Parsed, ReadErr, WriteError,
 };
 use crate::rule::{GenErr, GenResult, HairpinAction, Payload};
 
@@ -102,7 +102,7 @@ impl From<&ArpHdr> for ArpMeta {
             ptype: arp.ptype,
             hlen: arp.hlen,
             plen: arp.plen,
-            op: arp.op
+            op: arp.op,
         }
     }
 }
@@ -138,7 +138,7 @@ impl Header for ArpHdr {
 
     fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Self::Error>
     where
-        R: PacketRead<'a>
+        R: PacketRead<'a>,
     {
         Self::try_from(&ArpHdrRaw::raw_zc(rdr)?)
     }
@@ -165,7 +165,7 @@ impl TryFrom<&LayoutVerified<&[u8], ArpHdrRaw>> for ArpHdr {
 
     // NOTE: This only accepts IPv4/Ethernet ARP.
     fn try_from(
-        raw: &LayoutVerified<&[u8], ArpHdrRaw>
+        raw: &LayoutVerified<&[u8], ArpHdrRaw>,
     ) -> Result<Self, Self::Error> {
         let htype = u16::from_be_bytes(raw.htype);
 
@@ -193,13 +193,7 @@ impl TryFrom<&LayoutVerified<&[u8], ArpHdrRaw>> for ArpHdr {
 
         let op = ArpOp::try_from(u16::from_be_bytes(raw.op))?;
 
-        Ok(Self {
-            htype,
-            ptype,
-            hlen,
-            plen,
-            op,
-        })
+        Ok(Self { htype, ptype, hlen, plen, op })
     }
 }
 

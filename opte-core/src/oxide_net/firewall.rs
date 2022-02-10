@@ -3,14 +3,14 @@ use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
@@ -20,11 +20,11 @@ use crate::ether::ETHER_TYPE_ARP;
 use crate::headers::DYNAMIC_PORT;
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Protocol};
 use crate::layer::{InnerFlowId, Layer};
-use crate::port::{self, Port, Pos};
 use crate::port::meta::Meta;
+use crate::port::{self, Port, Pos};
 use crate::rule::{
-    self, EtherTypeMatch, Identity, IdentityDesc, IpProtoMatch,
-    Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
+    self, EtherTypeMatch, Identity, IdentityDesc, IpProtoMatch, Ipv4AddrMatch,
+    PortMatch, Predicate, Rule, StatefulAction,
 };
 use crate::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
 use crate::{Direction, ParseErr, ParseResult};
@@ -32,7 +32,7 @@ use crate::{Direction, ParseErr, ParseResult};
 pub const FW_LAYER_NAME: &'static str = "firewall";
 
 pub fn setup(
-    port: &mut Port<port::Inactive>
+    port: &mut Port<port::Inactive>,
 ) -> core::result::Result<(), port::AddLayerError> {
     let fw_layer = Firewall::create_layer(port.name());
     port.add_layer(fw_layer, Pos::First)
@@ -53,7 +53,7 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     // Thus, to match all incoming traffic, we add no predicates.
     layer.add_rule(
         Direction::In,
-        Rule::new(65535, rule::Action::Deny).match_any()
+        Rule::new(65535, rule::Action::Deny).match_any(),
     );
 
     // This rule is not listed in the RFDs, nor does the Oxide VPC
@@ -63,16 +63,17 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     // traffic to pass, which will be dealt with by the ARP layer in
     // the Oxide Network configuration.
     let arp = Rule::new(1, layer.action(1).unwrap().clone());
-    let arp = arp.add_predicate(
-        Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(ETHER_TYPE_ARP)])
-    );
+    let arp = arp.add_predicate(Predicate::InnerEtherType(vec![
+        EtherTypeMatch::Exact(ETHER_TYPE_ARP),
+    ]));
     layer.add_rule(Direction::In, arp.finalize());
 
     // Allow SSH traffic from anywhere.
     let ssh = Rule::new(65534, layer.action(0).unwrap().clone());
-    let mut ssh = ssh.add_predicate(
-        Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::TCP)])
-    );
+    let mut ssh =
+        ssh.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
+            Protocol::TCP,
+        )]));
     ssh.add_predicate(Predicate::InnerDstPort(vec![PortMatch::Exact(
         TCP_PORT_SSH,
     )]));
@@ -86,16 +87,18 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     // would allow us to perform finer-grained ICMP filtering in the
     // event that is useful.
     let icmp = Rule::new(65534, layer.action(0).unwrap().clone());
-    let icmp = icmp.add_predicate(
-        Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::ICMP)])
-    );
+    let icmp =
+        icmp.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
+            Protocol::ICMP,
+        )]));
     layer.add_rule(Direction::In, icmp.finalize());
 
     // Allow RDP from anywhere.
     let rdp = Rule::new(65534, layer.action(0).unwrap().clone());
-    let mut rdp = rdp.add_predicate(
-        Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::TCP)])
-    );
+    let mut rdp =
+        rdp.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
+            Protocol::TCP,
+        )]));
     rdp.add_predicate(Predicate::InnerDstPort(vec![PortMatch::Exact(
         TCP_PORT_RDP,
     )]));
@@ -104,16 +107,13 @@ fn add_default_inbound_rules(layer: &mut Layer) {
 
 fn add_default_outbound_rules(layer: &mut Layer) {
     let act = layer.action(0).unwrap().clone();
-    layer.add_rule(
-        Direction::Out,
-        Rule::new(65535, act).match_any()
-    );
+    layer.add_rule(Direction::Out, Rule::new(65535, act).match_any());
 }
 
 // impl From<FirewallRule> for Rule<rule::Build> {
 pub fn from_fw_rule(
     fw_rule: FirewallRule,
-    action: rule::Action
+    action: rule::Action,
 ) -> Rule<rule::Finalized> {
     let rule = Rule::new(fw_rule.priority, action);
     let addr_pred = fw_rule.filters.hosts.into_predicate(fw_rule.direction);
@@ -170,22 +170,21 @@ impl StatefulAction for FwStatefulAction {
 impl Firewall {
     pub fn create_layer(port_name: &str) -> Layer {
         // A stateful action creates a FlowTable entry.
-        let stateful_action = rule::Action::Stateful(
-            Arc::new(FwStatefulAction::new("fw".to_string()))
-        );
+        let stateful_action = rule::Action::Stateful(Arc::new(
+            FwStatefulAction::new("fw".to_string()),
+        ));
 
         // A static action does not create an entry in the FlowTable.
         // For the moment this is only used to allow ARP to bypass the
         // firewall layer, but it may be useful to expose this more
         // generally in the future.
-        let static_action = rule::Action::Static(Arc::new(Identity::new(
-            "fw_arp",
-        )));
+        let static_action =
+            rule::Action::Static(Arc::new(Identity::new("fw_arp")));
 
         let mut layer = Layer::new(
             FW_LAYER_NAME,
             port_name,
-            vec![stateful_action, static_action]
+            vec![stateful_action, static_action],
         );
         add_default_inbound_rules(&mut layer);
         add_default_outbound_rules(&mut layer);
@@ -430,17 +429,13 @@ impl Address {
                 Some(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(ip4)]))
             }
 
-            (Direction::Out, Address::Subnet(ip4_sub)) => {
-                Some(
-                    Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(ip4_sub)])
-                )
-            }
+            (Direction::Out, Address::Subnet(ip4_sub)) => Some(
+                Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(ip4_sub)]),
+            ),
 
-            (Direction::In, Address::Subnet(ip4_sub)) => {
-                Some(
-                    Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Prefix(ip4_sub)])
-                )
-            }
+            (Direction::In, Address::Subnet(ip4_sub)) => Some(
+                Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Prefix(ip4_sub)]),
+            ),
         }
     }
 }

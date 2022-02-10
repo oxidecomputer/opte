@@ -22,9 +22,7 @@ impl HeaderChecksum {
 
 impl From<Checksum> for HeaderChecksum {
     fn from(mut csum: Checksum) -> HeaderChecksum {
-        Self {
-            inner: (!u16::from_ne_bytes(csum.bytes())).to_ne_bytes()
-        }
+        Self { inner: (!u16::from_ne_bytes(csum.bytes())).to_ne_bytes() }
     }
 }
 
@@ -43,9 +41,7 @@ impl Checksum {
     }
 
     pub fn compute(bytes: &[u8]) -> Self {
-        Self {
-            inner: csum_add(0, bytes),
-        }
+        Self { inner: csum_add(0, bytes) }
     }
 
     pub fn sub(&mut self, bytes: &[u8]) {
@@ -63,9 +59,7 @@ impl Checksum {
 
 impl From<HeaderChecksum> for Checksum {
     fn from(hc: HeaderChecksum) -> Self {
-        Self {
-            inner: (!u16::from_ne_bytes(hc.bytes())) as u32,
-        }
+        Self { inner: (!u16::from_ne_bytes(hc.bytes())) as u32 }
     }
 }
 

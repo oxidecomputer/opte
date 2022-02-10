@@ -4,14 +4,14 @@ use core::result;
 /// A virtual switch port.
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
@@ -28,7 +28,7 @@ use crate::headers::IpMeta;
 use crate::ioctl;
 use crate::ip4::Protocol;
 use crate::layer::{
-    InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT
+    InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT,
 };
 use crate::packet::{Initialized, Packet, PacketMeta, Parsed};
 use crate::rule::{ht_fire_probe, Action, Finalized, Rule, HT};
@@ -45,7 +45,7 @@ pub const UFT_DEF_MAX_ENTIRES: u32 = 8192;
 pub enum Error {
     BadLayerPos { name: String, pos: Pos },
     LayerNotFound { name: String },
-    RuleNotFound { layer: String, dir: Direction, id: RuleId }
+    RuleNotFound { layer: String, dir: Direction, id: RuleId },
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -113,7 +113,6 @@ pub struct Active {
 impl PortState for Inactive {}
 impl PortState for Active {}
 
-
 pub struct Port<S: PortState> {
     state: S,
     ectx: Arc<ExecCtx>,
@@ -146,25 +145,24 @@ impl Port<Inactive> {
                 uft_in: KMutex::new(
                     FlowTable::new(
                         "uft-in".to_string(),
-                        Some(UFT_DEF_MAX_ENTIRES)
+                        Some(UFT_DEF_MAX_ENTIRES),
                     ),
                     KMutexType::Driver,
                 ),
                 uft_out: KMutex::new(
                     FlowTable::new(
                         "uft-out".to_string(),
-                        Some(UFT_DEF_MAX_ENTIRES)
+                        Some(UFT_DEF_MAX_ENTIRES),
                     ),
                     KMutexType::Driver,
                 ),
                 tcp_flows: KMutex::new(
                     FlowTable::new(
                         "tcp-flows".to_string(),
-                        Some(UFT_DEF_MAX_ENTIRES)
+                        Some(UFT_DEF_MAX_ENTIRES),
                     ),
                     KMutexType::Driver,
                 ),
-
             },
             name: self.name,
             mac: self.mac,
@@ -180,7 +178,7 @@ impl Port<Inactive> {
     pub fn add_layer(
         &self,
         new_layer: Layer,
-        pos: Pos
+        pos: Pos,
     ) -> result::Result<(), AddLayerError> {
         let mut lock = self.state.layers.lock();
 
@@ -336,15 +334,12 @@ impl Port<Active> {
         &self,
         msg: String,
         pkt: &mut Packet<Parsed>,
-        ifid: &InnerFlowId
+        ifid: &InnerFlowId,
     ) -> ! {
         crate::dbg(format!("mblk: {}", pkt.mblk_ptr_str()));
         crate::dbg(format!("ifid: {}", ifid));
         // crate::dbg(format!("meta: {:?}", meta));
-        crate::dbg(format!(
-            "flows: {:?}",
-            *self.state.tcp_flows.lock(),
-        ));
+        crate::dbg(format!("flows: {:?}", *self.state.tcp_flows.lock(),));
         todo!("bad packet: {}", msg);
     }
 
@@ -352,7 +347,7 @@ impl Port<Active> {
     /// exists.
     pub fn dump_layer(
         &self,
-        name: &str
+        name: &str,
     ) -> result::Result<ioctl::DumpLayerResp, DumpLayerError> {
         for l in &*self.state.layers {
             if l.name() == name {
@@ -534,11 +529,8 @@ impl Port<Active> {
                 // The connection may have transitioned to CLOSED, but
                 // we don't remove its entry here. That happens as
                 // part of the expiration logic.
-                let res = tfes.tcp_state.process(
-                    Direction::In,
-                    &ifid_after,
-                    tcp
-                );
+                let res =
+                    tfes.tcp_state.process(Direction::In, &ifid_after, tcp);
 
                 match res {
                     Ok(tcp_state) => tcp_state,
@@ -576,7 +568,7 @@ impl Port<Active> {
                 let tfes = entry.get_state_mut();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                     tcp_state::tcp_flow_drop_probe(
+                    tcp_state::tcp_flow_drop_probe(
                         &ifid_after,
                         &tfes.tcp_state,
                         Direction::In,
@@ -586,11 +578,8 @@ impl Port<Active> {
                     return Ok(TcpState::Closed);
                 }
 
-                let res = tfes.tcp_state.process(
-                    Direction::In,
-                    &ifid_after,
-                    &tcp
-                );
+                let res =
+                    tfes.tcp_state.process(Direction::In, &ifid_after, &tcp);
 
                 let tcp_state = match res {
                     Ok(tcp_state) => tcp_state,
@@ -641,12 +630,7 @@ impl Port<Active> {
         // There is no FlowId, thus there can be no use of the UFT.
         if ifid == FLOW_ID_DEFAULT {
             let mut hts = Vec::new();
-            let res = self.layers_process(
-                Direction::In,
-                pkt,
-                &mut hts,
-                meta,
-            );
+            let res = self.layers_process(Direction::In, pkt, &mut hts, meta);
 
             match res {
                 Ok(LayerResult::Allow) => {
@@ -659,7 +643,7 @@ impl Port<Active> {
 
                 Ok(LayerResult::Deny { name }) => {
                     return Ok(ProcessResult::Drop {
-                        reason: DropReason::Layer { name }
+                        reason: DropReason::Layer { name },
                     });
                 }
 
@@ -685,7 +669,7 @@ impl Port<Active> {
                         // Drop any data that comes in after close.
                         Ok(TcpState::Closed) => {
                             return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpClosed
+                                reason: DropReason::TcpClosed,
                             });
                         }
 
@@ -706,12 +690,7 @@ impl Port<Active> {
         }
 
         let mut hts = Vec::new();
-        let res = self.layers_process(
-            Direction::In,
-            pkt,
-            &mut hts,
-            meta
-        );
+        let res = self.layers_process(Direction::In, pkt, &mut hts, meta);
 
         match res {
             Ok(LayerResult::Allow) => {
@@ -724,7 +703,7 @@ impl Port<Active> {
                         // Drop any data that comes in after close.
                         Ok(TcpState::Closed) => {
                             return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpClosed
+                                reason: DropReason::TcpClosed,
                             });
                         }
 
@@ -742,9 +721,7 @@ impl Port<Active> {
             }
 
             Ok(LayerResult::Deny { name }) => {
-                Ok(ProcessResult::Drop {
-                    reason: DropReason::Layer { name }
-                })
+                Ok(ProcessResult::Drop { reason: DropReason::Layer { name } })
             }
 
             Ok(LayerResult::Hairpin(hppkt)) => {
@@ -894,12 +871,7 @@ impl Port<Active> {
         // There is no FlowId, thus there can be no use of the UFT.
         if ifid == FLOW_ID_DEFAULT {
             let mut hts = Vec::new();
-            let res = self.layers_process(
-                Direction::Out,
-                pkt,
-                &mut hts,
-                meta,
-            );
+            let res = self.layers_process(Direction::Out, pkt, &mut hts, meta);
 
             match res {
                 Ok(LayerResult::Allow) => {
@@ -912,7 +884,7 @@ impl Port<Active> {
 
                 Ok(LayerResult::Deny { name }) => {
                     return Ok(ProcessResult::Drop {
-                        reason: DropReason::Layer { name }
+                        reason: DropReason::Layer { name },
                     });
                 }
 
@@ -937,7 +909,7 @@ impl Port<Active> {
                         // Drop any data that comes in after close.
                         Ok(TcpState::Closed) => {
                             return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpClosed
+                                reason: DropReason::TcpClosed,
                             });
                         }
 
@@ -970,7 +942,7 @@ impl Port<Active> {
                 // Drop any data that comes in after close.
                 Ok(TcpState::Closed) => {
                     return Ok(ProcessResult::Drop {
-                        reason: DropReason::TcpClosed
+                        reason: DropReason::TcpClosed,
                     });
                 }
 
@@ -980,12 +952,7 @@ impl Port<Active> {
         }
 
         let mut hts = Vec::new();
-        let res = self.layers_process(
-            Direction::Out,
-            pkt,
-            &mut hts,
-            meta,
-        );
+        let res = self.layers_process(Direction::Out, pkt, &mut hts, meta);
 
         match res {
             Ok(LayerResult::Allow) => {
@@ -1134,7 +1101,7 @@ pub mod meta {
     }
 
     pub struct Meta {
-        inner: anymap::Map<dyn anymap::any::Any + Send + Sync>
+        inner: anymap::Map<dyn anymap::any::Any + Send + Sync>,
     }
 
     impl Meta {
@@ -1144,7 +1111,7 @@ pub mod meta {
 
         pub fn add<V>(&mut self, val: V) -> Result<(), Error>
         where
-            V: 'static + Send + Sync
+            V: 'static + Send + Sync,
         {
             if self.inner.contains::<V>() {
                 return Err(Error::AlreadyExists);
@@ -1156,21 +1123,21 @@ pub mod meta {
 
         pub fn remove<V>(&mut self) -> Option<V>
         where
-            V: 'static + Send + Sync
+            V: 'static + Send + Sync,
         {
             self.inner.remove::<V>()
         }
 
         pub fn get<V>(&mut self) -> Option<&V>
         where
-            V: 'static + Send + Sync
+            V: 'static + Send + Sync,
         {
             self.inner.get::<V>()
         }
 
         pub fn get_mut<V>(&mut self) -> Option<&mut V>
         where
-            V: 'static + Send + Sync
+            V: 'static + Send + Sync,
         {
             self.inner.get_mut::<V>()
         }

@@ -13,7 +13,7 @@ use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 use crate::checksum::Checksum;
 use crate::headers::{
     Header, HeaderAction, IpMeta, IpMetaOpt, ModActionArg, PushActionArg,
-    RawHeader
+    RawHeader,
 };
 use crate::ip4::Protocol;
 use crate::packet::{PacketRead, ReadErr, WriteError};
@@ -34,7 +34,7 @@ pub const IPV6_VERSION: u8 = 6;
     Ord,
     PartialEq,
     PartialOrd,
-    Serialize
+    Serialize,
 )]
 pub struct Ipv6Addr {
     addr: [u8; 16],
@@ -63,8 +63,8 @@ impl From<[u16; 8]> for Ipv6Addr {
         let tmp = bytes.map(u16::to_be_bytes);
         let mut addr = [0; 16];
         for (i, pair) in tmp.iter().enumerate() {
-            addr[i*2] = pair[0];
-            addr[(i*2)+1] = pair[1];
+            addr[i * 2] = pair[0];
+            addr[(i * 2) + 1] = pair[1];
         }
 
         Ipv6Addr { addr }
@@ -73,12 +73,7 @@ impl From<[u16; 8]> for Ipv6Addr {
 
 impl fmt::Display for Ipv6Addr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{:X}{:X}:",
-            self.addr[0],
-            self.addr[1]
-        )
+        write!(f, "{:X}{:X}:", self.addr[0], self.addr[1])
     }
 }
 
@@ -138,7 +133,7 @@ impl Ipv6Meta {
     pub fn push(
         src: Ipv6Addr,
         dst: Ipv6Addr,
-        proto: Protocol
+        proto: Protocol,
     ) -> HeaderAction<IpMeta, IpMetaOpt> {
         HeaderAction::Push(IpMeta::Ip6(Ipv6Meta { src, dst, proto }))
     }
@@ -181,7 +176,7 @@ macro_rules! assert_ip6 {
             $left.dst(),
             $right.dst(),
         );
-    }
+    };
 }
 
 impl Ipv6Hdr {
@@ -266,12 +261,11 @@ impl Header for Ipv6Hdr {
 
     fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Self::Error>
     where
-        R: PacketRead<'a>
+        R: PacketRead<'a>,
     {
         Ipv6Hdr::try_from(&Ipv6HdrRaw::raw_zc(rdr)?)
     }
 }
-
 
 #[derive(Debug)]
 pub enum Ipv6HdrError {
@@ -290,7 +284,7 @@ impl TryFrom<&LayoutVerified<&[u8], Ipv6HdrRaw>> for Ipv6Hdr {
     type Error = Ipv6HdrError;
 
     fn try_from(
-        raw: &LayoutVerified<&[u8], Ipv6HdrRaw>
+        raw: &LayoutVerified<&[u8], Ipv6HdrRaw>,
     ) -> Result<Self, Self::Error> {
         let vsn_class_flow = raw.vsn_class_flow;
         let vsn = (vsn_class_flow[0] & IPV6_HDR_VSN_MASK) >> IPV6_HDR_VSN_SHIFT;
@@ -299,10 +293,9 @@ impl TryFrom<&LayoutVerified<&[u8], Ipv6HdrRaw>> for Ipv6Hdr {
             return Err(Ipv6HdrError::BadVersion { vsn });
         }
 
-        let next_hdr = Protocol::try_from(raw.next_hdr)
-            .map_err(|_s| Ipv6HdrError::UnexpectedNextHeader {
-                next_header: raw.next_hdr
-            })?;
+        let next_hdr = Protocol::try_from(raw.next_hdr).map_err(|_s| {
+            Ipv6HdrError::UnexpectedNextHeader { next_header: raw.next_hdr }
+        })?;
 
         Ok(Ipv6Hdr {
             vsn_class_flow,
@@ -420,23 +413,15 @@ impl From<Ipv6Meta> for Ipv6HdrRaw {
 #[cfg(test)]
 mod test {
     fn from_pairs() {
-        let ip6 = super::Ipv6Addr::from(
-            [
-                0x2601, 0x0284, 0x4100, 0xE240,
-                0x0000, 0x0000, 0xC0A8, 0x01F5,
-            ]
-        );
+        let ip6 = super::Ipv6Addr::from([
+            0x2601, 0x0284, 0x4100, 0xE240, 0x0000, 0x0000, 0xC0A8, 0x01F5,
+        ]);
 
         assert_eq!(
             ip6.to_bytes(),
-            [0x26, 0x01,
-             0x02, 0x84,
-             0x41, 0x00,
-             0xE2, 0x40,
-             0x00, 0x00,
-             0x00, 0x00,
-             0xC0, 0xA8,
-             0x01, 0xF5
+            [
+                0x26, 0x01, 0x02, 0x84, 0x41, 0x00, 0xE2, 0x40, 0x00, 0x00,
+                0x00, 0x00, 0xC0, 0xA8, 0x01, 0xF5
             ]
         );
     }

@@ -2,18 +2,18 @@ use core::fmt::{self, Display};
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::boxed::Box;
-#[cfg(any(feature = "std", test))]
-use std::boxed::Box;
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::sync::Arc;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
+#[cfg(any(feature = "std", test))]
+use std::boxed::Box;
+#[cfg(any(feature = "std", test))]
+use std::string::{String, ToString};
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
@@ -25,11 +25,11 @@ use crate::flow_table::StateSummary;
 use crate::geneve::{GeneveMeta, GeneveMetaOpt};
 use crate::headers::{
     self, HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
-    UlpMetaOpt
+    UlpMetaOpt,
 };
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Meta;
-use crate::layer::{InnerFlowId};
+use crate::layer::InnerFlowId;
 use crate::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
 };
@@ -635,11 +635,8 @@ impl fmt::Debug for dyn StaticAction {
 pub trait ActionContext {
     // The `payload` is the mutable bytes of the packet payload (after
     // the headers parsed for FlowId).
-    fn exec(
-        &self,
-        meta: &PacketMeta,
-        payload: &mut [u8],
-    ) -> Result<(), String>;
+    fn exec(&self, meta: &PacketMeta, payload: &mut [u8])
+        -> Result<(), String>;
 }
 
 impl fmt::Debug for dyn StatefulAction {
@@ -698,7 +695,7 @@ impl StaticAction for Identity {
         &self,
         _dir: Direction,
         _flow_id: InnerFlowId,
-        _meta: &mut Meta
+        _meta: &mut Meta,
     ) -> GenHtResult {
         Ok(HT::identity(&self.name))
     }
@@ -865,13 +862,9 @@ pub enum ResourceError {
 
 #[derive(Clone, Debug)]
 pub enum GenDescError {
-    ResourceExhausted {
-        name: String,
-    },
+    ResourceExhausted { name: String },
 
-    Unexpected {
-        msg: String,
-    }
+    Unexpected { msg: String },
 }
 
 pub type GenDescResult = Result<Arc<dyn ActionDesc>, GenDescError>;
@@ -888,23 +881,14 @@ pub trait StatefulAction: Display {
     ///
     /// * [`GenDescError::Unexpected`]: This action encountered an
     /// unexpected error while trying to generate a descriptor.
-    fn gen_desc(
-        &self,
-        flow_id: InnerFlowId,
-        meta: &mut Meta,
-    ) -> GenDescResult;
+    fn gen_desc(&self, flow_id: InnerFlowId, meta: &mut Meta) -> GenDescResult;
 }
-
 
 #[derive(Clone, Debug)]
 pub enum GenHtError {
-    ResourceExhausted {
-        name: String,
-    },
+    ResourceExhausted { name: String },
 
-    Unexpected {
-        msg: String,
-    }
+    Unexpected { msg: String },
 }
 
 pub type GenHtResult = Result<HT, GenHtError>;
@@ -914,7 +898,7 @@ pub trait StaticAction: Display {
         &self,
         dir: Direction,
         flow_id: InnerFlowId,
-        meta: &mut Meta
+        meta: &mut Meta,
     ) -> GenHtResult;
 }
 
@@ -1027,7 +1011,6 @@ impl RuleState for Empty {}
 pub struct Ready {
     hdr_preds: Vec<Predicate>,
     data_preds: Vec<DataPredicate>,
-
 }
 impl RuleState for Ready {}
 
@@ -1052,19 +1035,12 @@ impl<S: RuleState> Rule<S> {
 
 impl Rule<Empty> {
     pub fn new(priority: u16, action: Action) -> Self {
-        Rule {
-            state: Empty {},
-            action,
-            priority,
-        }
+        Rule { state: Empty {}, action, priority }
     }
 
     pub fn add_predicate(self, pred: Predicate) -> Rule<Ready> {
         Rule {
-            state: Ready {
-                hdr_preds: vec![pred],
-                data_preds: vec![],
-            },
+            state: Ready { hdr_preds: vec![pred], data_preds: vec![] },
             action: self.action,
             priority: self.priority,
         }
@@ -1072,10 +1048,7 @@ impl Rule<Empty> {
 
     pub fn add_predicates(self, preds: Vec<Predicate>) -> Rule<Ready> {
         Rule {
-            state: Ready {
-                hdr_preds: preds,
-                data_preds: vec![],
-            },
+            state: Ready { hdr_preds: preds, data_preds: vec![] },
             action: self.action,
             priority: self.priority,
         }
@@ -1083,10 +1056,7 @@ impl Rule<Empty> {
 
     pub fn add_data_predicate(self, pred: DataPredicate) -> Rule<Ready> {
         Rule {
-            state: Ready {
-                hdr_preds: vec![],
-                data_preds: vec![pred],
-            },
+            state: Ready { hdr_preds: vec![], data_preds: vec![pred] },
             action: self.action,
             priority: self.priority,
         }
@@ -1094,9 +1064,7 @@ impl Rule<Empty> {
 
     pub fn match_any(self) -> Rule<Finalized> {
         Rule {
-            state: Finalized {
-                preds: None,
-            },
+            state: Finalized { preds: None },
             action: self.action,
             priority: self.priority,
         }
@@ -1135,20 +1103,19 @@ impl<'a> Rule<Finalized> {
         {
             if let Some(preds) = &self.state.preds {
                 if preds.hdr_preds.len() == 0 && preds.data_preds.len() == 0 {
-                    panic!("bug: RulePredicates must have at least one \
-                            predicate");
+                    panic!(
+                        "bug: RulePredicates must have at least one \
+                            predicate"
+                    );
                 }
             }
         }
 
         match &self.state.preds {
             // A rule with no predicates always matches.
-            None => {
-                true
-            }
+            None => true,
 
             Some(preds) => {
-
                 for p in &preds.hdr_preds {
                     if !p.is_match(meta) {
                         return false;
@@ -1176,10 +1143,8 @@ pub struct RuleDump {
 
 impl From<&Rule<Finalized>> for RuleDump {
     fn from(rule: &Rule<Finalized>) -> Self {
-        let predicates = rule.state.preds.as_ref().map_or(
-            vec![],
-            |rp| rp.hdr_preds.clone()
-        );
+        let predicates =
+            rule.state.preds.as_ref().map_or(vec![], |rp| rp.hdr_preds.clone());
 
         RuleDump {
             priority: rule.priority,
@@ -1220,16 +1185,13 @@ fn rule_matching() {
 
     let meta = PacketMeta {
         outer: Default::default(),
-        inner: MetaGroup {
-            ip: Some(ip),
-            ulp: Some(ulp),
-            ..Default::default()
-        },
+        inner: MetaGroup { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
     };
 
-    let r1 = r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
-        src_ip,
-    )]));
+    let r1 =
+        r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
+            src_ip,
+        )]));
     let r1 = r1.finalize();
 
     assert!(r1.is_match(&meta, &mut rdr));
@@ -1251,11 +1213,7 @@ fn rule_matching() {
 
     let meta = PacketMeta {
         outer: Default::default(),
-        inner: MetaGroup {
-            ip: Some(ip),
-            ulp: Some(ulp),
-            ..Default::default()
-        },
+        inner: MetaGroup { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
     };
 
     assert!(!r1.is_match(&meta, &mut rdr));

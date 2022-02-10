@@ -28,14 +28,14 @@ use zerocopy::AsBytes;
 use crate::arp::{ArpEth4Payload, ArpEth4PayloadRaw, ArpHdrRaw, ARP_HDR_SZ};
 use crate::ether::{
     self, EtherAddr, EtherHdr, EtherHdrRaw, EtherMeta, EtherType, ETHER_HDR_SZ,
-    ETHER_TYPE_ARP, ETHER_TYPE_IPV4
+    ETHER_TYPE_ARP, ETHER_TYPE_IPV4,
 };
 use crate::flow_table::FLOW_DEF_EXPIRE_SECS;
 use crate::geneve::Vni;
 use crate::headers::{IpMeta, UlpMeta};
 use crate::ip4::{self, Ipv4Hdr, Ipv4HdrRaw, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Addr;
-use crate::oxide_net::{self, arp, dyn_nat4, firewall, router, overlay};
+use crate::oxide_net::{self, arp, dyn_nat4, firewall, overlay, router};
 use crate::packet::{
     mock_allocb, Initialized, Packet, PacketRead, PacketReader, PacketSeg,
     PacketWriter, ParseError, WritePos,
@@ -103,9 +103,7 @@ fn lab_cfg() -> oxide_net::PortCfg {
 }
 
 fn oxide_net_setup(name: &str, cfg: &oxide_net::PortCfg) -> Port<Inactive> {
-    let ectx = Arc::new(ExecCtx {
-        log: Box::new(crate::PrintlnLog {})
-    });
+    let ectx = Arc::new(ExecCtx { log: Box::new(crate::PrintlnLog {}) });
     let mut port = Port::new(name, cfg.private_mac, ectx.clone());
 
     // ================================================================
@@ -201,8 +199,8 @@ fn overlay_guest_to_guest() {
     let bs = PhysNet {
         ether: EtherAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
         ip: Ipv6Addr::from([
-            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x77
+            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x77, 0x77,
         ]),
         vni: Vni::new(7777u32).unwrap(),
     };
@@ -216,8 +214,7 @@ fn overlay_guest_to_guest() {
         phys_mac_dst: EtherAddr::from([0xF8, 0x1D, 0x78, 0xDF, 0x00, 0x01]),
         // Site 0xF7, Rack 1, Sled 1, Interface 1
         phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0101,
-            0x0000, 0x0000, 0x0000, 0x0001
+            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
     });
 
@@ -230,8 +227,7 @@ fn overlay_guest_to_guest() {
         phys_mac_dst: EtherAddr::from([0xF8, 0x1D, 0x78, 0xDF, 0x00, 0x22]),
         // Site 0xF7, Rack 1, Sled 22, Interface 1
         phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0116,
-            0x0000, 0x0000, 0x0000, 0x0001
+            0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
     });
     let g2_phys = PhysNet {
@@ -254,8 +250,9 @@ fn overlay_guest_to_guest() {
     router::add_entry_active(
         &g1_port,
         IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()))
-    ).unwrap();
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet.cidr())),
+    )
+    .unwrap();
 
     let mut g2_port = oxide_net_setup("g2_port", &g2_cfg);
     router::setup(&mut g2_port).unwrap();
@@ -271,8 +268,9 @@ fn overlay_guest_to_guest() {
     router::add_entry_active(
         &g2_port,
         IpCidr::Ip4(g1_cfg.vpc_subnet.cidr()),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet.cidr()))
-    ).unwrap();
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet.cidr())),
+    )
+    .unwrap();
 
     // Allow incoming TCP connection from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
@@ -280,9 +278,10 @@ fn overlay_guest_to_guest() {
         &g2_port,
         &firewall::FwAddRuleReq {
             port_name: g2_port.name().to_string(),
-            rule: rule.parse().unwrap()
-        }
-    ).unwrap();
+            rule: rule.parse().unwrap(),
+        },
+    )
+    .unwrap();
 
     // ================================================================
     // Generate a telnet SYN packet from g1 to g2.
@@ -291,12 +290,8 @@ fn overlay_guest_to_guest() {
     let mut tcp = TcpHdr::new(7865, 23);
     tcp.set_flags(TcpFlags::SYN);
     tcp.set_seq(4224936861);
-    let mut ip4 = Ipv4Hdr::new_tcp(
-        &mut tcp,
-        &body,
-        g1_cfg.private_ip,
-        g2_cfg.private_ip,
-    );
+    let mut ip4 =
+        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
     ip4.compute_hdr_csum();
     let tcp_csum = ip4.compute_ulp_csum(UlpCsumOpt::Full, &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
@@ -305,7 +300,7 @@ fn overlay_guest_to_guest() {
         g1_cfg.private_mac,
         // TODO This dest mac is wrong, it would be using the mac of
         // the gateway.
-        g2_cfg.private_mac
+        g2_cfg.private_mac,
     );
 
     let mut bytes = vec![];
@@ -329,7 +324,7 @@ fn overlay_guest_to_guest() {
     let meta = g1_pkt.meta();
     match meta.outer.ether.as_ref() {
         Some(eth) => {
-	    assert_eq!(eth.src, g1_cfg.overlay.as_ref().unwrap().phys_mac_src);
+            assert_eq!(eth.src, g1_cfg.overlay.as_ref().unwrap().phys_mac_src);
             // XXX See the note in overlay.rs about the outer ethernet
             // destination. For the time being we use the guest's VNIC
             // MAC address to avoid needing underlay routing.
@@ -340,14 +335,14 @@ fn overlay_guest_to_guest() {
             // );
 
             assert_eq!(eth.dst, g2_cfg.private_mac);
-        },
+        }
 
         None => panic!("no outer ether header"),
     }
 
     match meta.outer.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
-	    assert_eq!(ip6.src, g1_cfg.overlay.as_ref().unwrap().phys_ip_src);
+            assert_eq!(ip6.src, g1_cfg.overlay.as_ref().unwrap().phys_ip_src);
             assert_eq!(ip6.dst, g2_cfg.overlay.as_ref().unwrap().phys_ip_src);
         }
 
@@ -355,47 +350,47 @@ fn overlay_guest_to_guest() {
     }
 
     match meta.outer.ulp.as_ref().unwrap() {
-	UlpMeta::Udp(udp) => {
-	    assert_eq!(udp.src, 7777);
-	    assert_eq!(udp.dst, geneve::GENEVE_PORT);
-	}
+        UlpMeta::Udp(udp) => {
+            assert_eq!(udp.src, 7777);
+            assert_eq!(udp.dst, geneve::GENEVE_PORT);
+        }
 
-	ulp => panic!("expected outer UDP metadata, got: {:?}", ulp),
+        ulp => panic!("expected outer UDP metadata, got: {:?}", ulp),
     }
 
     match meta.outer.encap.as_ref() {
-	Some(geneve) => {
-	    assert_eq!(geneve.vni, Vni::new(99u32).unwrap());
-	}
+        Some(geneve) => {
+            assert_eq!(geneve.vni, Vni::new(99u32).unwrap());
+        }
 
-	None => panic!("expected outer Geneve metadata"),
+        None => panic!("expected outer Geneve metadata"),
     }
 
     match meta.inner.ether.as_ref() {
-	Some(eth) => {
-	    assert_eq!(eth.src, g1_cfg.private_mac);
-	    assert_eq!(eth.dst, g2_cfg.private_mac);
-	    assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
-	}
+        Some(eth) => {
+            assert_eq!(eth.src, g1_cfg.private_mac);
+            assert_eq!(eth.dst, g2_cfg.private_mac);
+            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
+        }
 
-	None => panic!("expected inner Ether header"),
+        None => panic!("expected inner Ether header"),
     }
 
     match meta.inner.ip.as_ref().unwrap() {
-	IpMeta::Ip4(ip4) => {
-	    assert_eq!(ip4.src, g1_cfg.private_ip);
-	    assert_eq!(ip4.dst, g2_cfg.private_ip);
-	    assert_eq!(ip4.proto, Protocol::TCP);
-	}
+        IpMeta::Ip4(ip4) => {
+            assert_eq!(ip4.src, g1_cfg.private_ip);
+            assert_eq!(ip4.dst, g2_cfg.private_ip);
+            assert_eq!(ip4.proto, Protocol::TCP);
+        }
 
-	ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+        ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
     }
 
     match meta.inner.ulp.as_ref().unwrap() {
         UlpMeta::Tcp(tcp) => {
             assert_eq!(tcp.src, 7865);
             assert_eq!(tcp.dst, 23);
-        },
+        }
 
         ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
     }
@@ -407,9 +402,8 @@ fn overlay_guest_to_guest() {
     // outgoing packet and then reparse it.
     // ================================================================
     let mblk = g1_pkt.unwrap();
-    let mut g2_pkt = unsafe {
-        Packet::<Initialized>::wrap(mblk).parse().unwrap()
-    };
+    let mut g2_pkt =
+        unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
 
     let res = g2_port.process(In, &mut g2_pkt);
     assert!(matches!(res, Ok(Modified)));
@@ -425,30 +419,30 @@ fn overlay_guest_to_guest() {
     assert!(g2_meta.outer.encap.is_none());
 
     match g2_meta.inner.ether.as_ref() {
-	Some(eth) => {
-	    assert_eq!(eth.src, g1_cfg.private_mac);
-	    assert_eq!(eth.dst, g2_cfg.private_mac);
-	    assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
-	}
+        Some(eth) => {
+            assert_eq!(eth.src, g1_cfg.private_mac);
+            assert_eq!(eth.dst, g2_cfg.private_mac);
+            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
+        }
 
-	None => panic!("expected inner Ether header"),
+        None => panic!("expected inner Ether header"),
     }
 
     match g2_meta.inner.ip.as_ref().unwrap() {
-	IpMeta::Ip4(ip4) => {
-	    assert_eq!(ip4.src, g1_cfg.private_ip);
-	    assert_eq!(ip4.dst, g2_cfg.private_ip);
-	    assert_eq!(ip4.proto, Protocol::TCP);
-	}
+        IpMeta::Ip4(ip4) => {
+            assert_eq!(ip4.src, g1_cfg.private_ip);
+            assert_eq!(ip4.dst, g2_cfg.private_ip);
+            assert_eq!(ip4.proto, Protocol::TCP);
+        }
 
-	ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+        ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
     }
 
     match g2_meta.inner.ulp.as_ref().unwrap() {
         UlpMeta::Tcp(tcp) => {
             assert_eq!(tcp.src, 7865);
             assert_eq!(tcp.dst, 23);
-        },
+        }
 
         ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
     }
@@ -473,8 +467,8 @@ fn overlay_guest_to_internet() {
     let bs = PhysNet {
         ether: EtherAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
         ip: Ipv6Addr::from([
-            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x77
+            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x77, 0x77,
         ]),
         vni: Vni::new(7777u32).unwrap(),
     };
@@ -488,8 +482,7 @@ fn overlay_guest_to_internet() {
         phys_mac_dst: EtherAddr::from([0xF8, 0x1D, 0x78, 0xDF, 0x00, 0x01]),
         // Site 0xF7, Rack 1, Sled 1, Interface 1
         phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0101,
-            0x0000, 0x0000, 0x0000, 0x0001
+            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
     });
 
@@ -504,7 +497,8 @@ fn overlay_guest_to_internet() {
         &g1_port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
-    ).unwrap();
+    )
+    .unwrap();
 
     let dst_ip = "52.10.128.69".parse().unwrap();
 
@@ -515,12 +509,7 @@ fn overlay_guest_to_internet() {
     let mut tcp = TcpHdr::new(54854, 443);
     tcp.set_flags(TcpFlags::SYN);
     tcp.set_seq(1741469041);
-    let mut ip4 = Ipv4Hdr::new_tcp(
-        &mut tcp,
-        &body,
-        g1_cfg.private_ip,
-        dst_ip,
-    );
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, dst_ip);
     ip4.compute_hdr_csum();
     let tcp_csum = ip4.compute_ulp_csum(UlpCsumOpt::Full, &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
@@ -551,7 +540,7 @@ fn overlay_guest_to_internet() {
     let meta = g1_pkt.meta();
     match meta.outer.ether.as_ref() {
         Some(eth) => {
-	    assert_eq!(eth.src, g1_cfg.overlay.as_ref().unwrap().phys_mac_src);
+            assert_eq!(eth.src, g1_cfg.overlay.as_ref().unwrap().phys_mac_src);
             // XXX See the note in overlay.rs about the outer ethernet
             // destination. For the time being we use the guest's VNIC
             // MAC address to avoid needing underlay routing.
@@ -562,14 +551,14 @@ fn overlay_guest_to_internet() {
             // );
 
             assert_eq!(eth.dst, bs.ether);
-        },
+        }
 
         None => panic!("no outer ether header"),
     }
 
     match meta.outer.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
-	    assert_eq!(ip6.src, g1_cfg.overlay.as_ref().unwrap().phys_ip_src);
+            assert_eq!(ip6.src, g1_cfg.overlay.as_ref().unwrap().phys_ip_src);
             assert_eq!(ip6.dst, bs.ip);
         }
 
@@ -577,47 +566,47 @@ fn overlay_guest_to_internet() {
     }
 
     match meta.outer.ulp.as_ref().unwrap() {
-	UlpMeta::Udp(udp) => {
-	    assert_eq!(udp.src, 7777);
-	    assert_eq!(udp.dst, geneve::GENEVE_PORT);
-	}
+        UlpMeta::Udp(udp) => {
+            assert_eq!(udp.src, 7777);
+            assert_eq!(udp.dst, geneve::GENEVE_PORT);
+        }
 
-	ulp => panic!("expected outer UDP metadata, got: {:?}", ulp),
+        ulp => panic!("expected outer UDP metadata, got: {:?}", ulp),
     }
 
     match meta.outer.encap.as_ref() {
-	Some(geneve) => {
-	    assert_eq!(geneve.vni, bs.vni);
-	}
+        Some(geneve) => {
+            assert_eq!(geneve.vni, bs.vni);
+        }
 
-	None => panic!("expected outer Geneve metadata"),
+        None => panic!("expected outer Geneve metadata"),
     }
 
     match meta.inner.ether.as_ref() {
-	Some(eth) => {
-	    assert_eq!(eth.src, g1_cfg.private_mac);
-	    assert_eq!(eth.dst, bs.ether);
-	    assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
-	}
+        Some(eth) => {
+            assert_eq!(eth.src, g1_cfg.private_mac);
+            assert_eq!(eth.dst, bs.ether);
+            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
+        }
 
-	None => panic!("expected inner Ether header"),
+        None => panic!("expected inner Ether header"),
     }
 
     match meta.inner.ip.as_ref().unwrap() {
-	IpMeta::Ip4(ip4) => {
-	    assert_eq!(ip4.src, g1_cfg.dyn_nat.public_ip);
-	    assert_eq!(ip4.dst, dst_ip);
-	    assert_eq!(ip4.proto, Protocol::TCP);
-	}
+        IpMeta::Ip4(ip4) => {
+            assert_eq!(ip4.src, g1_cfg.dyn_nat.public_ip);
+            assert_eq!(ip4.dst, dst_ip);
+            assert_eq!(ip4.proto, Protocol::TCP);
+        }
 
-	ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+        ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
     }
 
     match meta.inner.ulp.as_ref().unwrap() {
         UlpMeta::Tcp(tcp) => {
             assert_eq!(tcp.src, g1_cfg.dyn_nat.ports.rev().next().unwrap());
             assert_eq!(tcp.dst, 443);
-        },
+        }
 
         ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
     }
@@ -728,7 +717,7 @@ fn dhcp_req() {
 
     match res {
         Ok(Modified) => {
-	    let meta = pkt.meta();
+            let meta = pkt.meta();
             // XXX Modified is what processing returns since it
             // technically did pass through the firewall action (which
             // is just Identity). It would be nice if we only returned
@@ -812,12 +801,8 @@ fn arp_hairpin() {
     let res = port.process(In, &mut pkt);
     assert!(res.is_ok(), "bad result: {:?}", res);
     let val = res.unwrap();
-    assert!(
-        matches!(val, ProcessResult::Drop { .. }),
-        "bad val: {:?}",
-        val
-    );
-    if let ProcessResult::Drop { reason : DropReason::Layer { name } } = val {
+    assert!(matches!(val, ProcessResult::Drop { .. }), "bad val: {:?}", val);
+    if let ProcessResult::Drop { reason: DropReason::Layer { name } } = val {
         assert_eq!(name, "arp")
     }
 
