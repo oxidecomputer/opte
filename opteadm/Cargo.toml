@@ -2,7 +2,7 @@
 name = "opteadm"
 version = "0.1.0"
 authors = ["Ryan Zezeski <ryan@oxide.computer>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 libc = "0.2"
