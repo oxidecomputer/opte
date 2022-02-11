@@ -1,4 +1,3 @@
-
 //! Types for creating, reading, and writing network packets.
 //!
 //! TODO
