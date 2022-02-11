@@ -7,6 +7,7 @@
 /// * RFC 826 -- An Ethernet Address Resolution Protocol
 use core::convert::TryFrom;
 use core::fmt::{self, Display};
+use core::mem;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
@@ -31,8 +32,8 @@ use crate::rule::{GenErr, GenResult, HairpinAction, Payload};
 
 pub const ARP_HTYPE_ETHERNET: u16 = 1;
 
-pub const ARP_HDR_SZ: usize = std::mem::size_of::<ArpHdrRaw>();
-pub const ARP_ETH4_PAYLOAD_SZ: usize = std::mem::size_of::<ArpEth4PayloadRaw>();
+pub const ARP_HDR_SZ: usize = mem::size_of::<ArpHdrRaw>();
+pub const ARP_ETH4_PAYLOAD_SZ: usize = mem::size_of::<ArpEth4PayloadRaw>();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ArpHardware {
@@ -223,7 +224,7 @@ impl<'a> RawHeader<'a> for ArpHdrRaw {
     fn raw_zc<'b, R: PacketRead<'a>>(
         rdr: &'b mut R,
     ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(std::mem::size_of::<Self>())?;
+        let slice = rdr.slice(mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
             None => return Err(ReadErr::BadLayout),
@@ -300,7 +301,7 @@ impl<'a> ArpEth4PayloadRaw {
     pub fn parse<'b, R: PacketRead<'a>>(
         rdr: &'b mut R,
     ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(std::mem::size_of::<Self>())?;
+        let slice = rdr.slice(mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
             None => return Err(ReadErr::BadLayout),

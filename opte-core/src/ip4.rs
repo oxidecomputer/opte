@@ -1,5 +1,6 @@
 use core::convert::TryFrom;
 use core::fmt::{self, Debug, Display};
+use core::mem;
 use core::num::ParseIntError;
 use core::result;
 use core::str::FromStr;
@@ -31,7 +32,7 @@ use crate::rule::{
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
 pub const IPV4_HDR_VER_MASK: u8 = 0xF0;
 pub const IPV4_HDR_VER_SHIFT: u8 = 4;
-pub const IPV4_HDR_SZ: usize = std::mem::size_of::<Ipv4HdrRaw>();
+pub const IPV4_HDR_SZ: usize = mem::size_of::<Ipv4HdrRaw>();
 pub const IPV4_VERSION: u8 = 4;
 
 pub const ANY_ADDR: Ipv4Addr = Ipv4Addr::new([0; 4]);
@@ -341,7 +342,7 @@ impl FromStr for Ipv4Addr {
         let octets: Vec<u8> = val
             .split(".")
             .map(|s| s.parse())
-            .collect::<std::result::Result<Vec<u8>, _>>()?;
+            .collect::<result::Result<Vec<u8>, _>>()?;
 
         if octets.len() != 4 {
             return Err(IpError::MalformedIp(val.to_string()));
@@ -868,7 +869,7 @@ impl<'a> RawHeader<'a> for Ipv4HdrRaw {
     fn raw_zc<'b, R: PacketRead<'a>>(
         rdr: &'b mut R,
     ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(std::mem::size_of::<Self>())?;
+        let slice = rdr.slice(mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
             None => return Err(ReadErr::BadLayout),

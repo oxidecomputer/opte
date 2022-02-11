@@ -654,7 +654,7 @@ impl Display for InnerFlowId {
 impl TryFrom<&PacketMeta> for InnerFlowId {
     type Error = String;
 
-    fn try_from(meta: &PacketMeta) -> std::result::Result<Self, Self::Error> {
+    fn try_from(meta: &PacketMeta) -> result::Result<Self, Self::Error> {
         let (proto, src_ip, dst_ip) = match &meta.inner.ip {
             Some(IpMeta::Ip4(ip4)) => {
                 (ip4.proto, IpAddr::Ip4(ip4.src), IpAddr::Ip4(ip4.dst))

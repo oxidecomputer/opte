@@ -14,7 +14,7 @@
 //!
 //! [rfd63]: [RFD 63 Network
 //! Architecture](https://rfd.shared.oxide.computer/rfd/0063)
-use std::ops::Range;
+use core::ops::Range;
 
 use crate::ether::EtherAddr;
 use crate::ip4::Ipv4Addr;

@@ -1,4 +1,5 @@
 use core::convert::TryFrom;
+use core::mem;
 use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -41,7 +42,7 @@ pub const GENEVE_VER_MASK: u8 = 0xC0;
 pub const GENEVE_VER_SHIFT: u8 = 6;
 pub const GENEVE_OPT_LEN_MASK: u8 = 0x3F;
 pub const GENEVE_PORT: u16 = 6081;
-pub const GENEVE_HDR_SZ: usize = std::mem::size_of::<GeneveHdrRaw>();
+pub const GENEVE_HDR_SZ: usize = mem::size_of::<GeneveHdrRaw>();
 const VNI_MAX: u32 = 0x00_FF_FF_FF;
 
 impl Vni {
@@ -228,7 +229,7 @@ impl<'a> RawHeader<'a> for GeneveHdrRaw {
     fn raw_zc<'b, R: PacketRead<'a>>(
         rdr: &'b mut R,
     ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(std::mem::size_of::<Self>())?;
+        let slice = rdr.slice(mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
             None => return Err(ReadErr::BadLayout),

@@ -1,4 +1,5 @@
 use core::fmt::{self, Display};
+use core::result;
 use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -519,7 +520,7 @@ impl FromStr for Ports {
                 let ports: Vec<u16> =
                     s.split(",")
                         .map(|s| s.parse())
-                        .collect::<std::result::Result<Vec<u16>, _>>()?;
+                        .collect::<result::Result<Vec<u16>, _>>()?;
 
                 if ports.len() == 0 {
                     return Err(ParseErr::MalformedPort);

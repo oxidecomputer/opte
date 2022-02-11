@@ -1,4 +1,5 @@
 use core::convert::TryFrom;
+use core::mem;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
@@ -16,7 +17,7 @@ use crate::headers::{
 use crate::packet::{PacketRead, ReadErr, WriteError};
 
 pub const UDP_HDR_CSUM_OFF: usize = 6;
-pub const UDP_HDR_SZ: usize = std::mem::size_of::<UdpHdrRaw>();
+pub const UDP_HDR_SZ: usize = mem::size_of::<UdpHdrRaw>();
 
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
@@ -286,7 +287,7 @@ impl<'a> RawHeader<'a> for UdpHdrRaw {
     fn raw_zc<'b, R: PacketRead<'a>>(
         rdr: &'b mut R,
     ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(std::mem::size_of::<Self>())?;
+        let slice = rdr.slice(mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
             None => return Err(ReadErr::BadLayout),

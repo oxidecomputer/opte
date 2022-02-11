@@ -53,7 +53,6 @@ use serde::Serialize;
 
 use crate::ioctl::{to_errno, IoctlEnvelope};
 
-extern crate opte_core;
 use opte_core::ether::{EtherAddr, ETHER_TYPE_ARP};
 use opte_core::headers::IpCidr;
 use opte_core::ioctl::{
@@ -76,7 +75,6 @@ use opte_core::{CStr, CString, Direction, ExecCtx};
 // glob imports. I think I'd rather just import the DDI types I need
 // and then also bind the module to `ddi` so I can call functions like
 // `ddi::msgsize()`, making it apparent where they come from.
-extern crate illumos_ddi_dki;
 use ddi_attach_cmd_t::*;
 use ddi_detach_cmd_t::*;
 use illumos_ddi_dki::*;

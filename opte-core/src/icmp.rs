@@ -3,7 +3,7 @@
 //! We treat each ICMP type as its own header type. When parsing, we
 //! use `IcmpBaseHdrRaw` to determine which type of ICMP message we
 //! are ultimately parsing.
-use std::mem;
+use core::mem;
 
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 

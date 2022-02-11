@@ -1,5 +1,7 @@
 use core::convert::TryFrom;
 use core::fmt::{self, Debug, Display};
+use core::mem;
+use core::result;
 use core::str::FromStr;
 
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -28,7 +30,7 @@ pub const ETHER_TYPE_IPV6: u16 = 0x86DD;
 pub const ETHER_BROADCAST: EtherAddr = EtherAddr { bytes: [0xFF; 6] };
 pub const ETHER_ADDR_LEN: usize = 6;
 
-pub const ETHER_HDR_SZ: usize = std::mem::size_of::<EtherHdrRaw>();
+pub const ETHER_HDR_SZ: usize = mem::size_of::<EtherHdrRaw>();
 
 #[repr(u16)]
 #[derive(
@@ -104,7 +106,7 @@ impl FromStr for EtherAddr {
             .map(|s| {
                 u8::from_str_radix(s, 16).or(Err(format!("bad octet: {}", s)))
             })
-            .collect::<std::result::Result<Vec<u8>, _>>()?;
+            .collect::<result::Result<Vec<u8>, _>>()?;
 
         if octets.len() != 6 {
             return Err(format!("incorrect number of bytes: {}", octets.len()));
@@ -384,7 +386,7 @@ impl<'a> RawHeader<'a> for EtherHdrRaw {
     fn raw_zc<'b, R: PacketRead<'a>>(
         rdr: &'b mut R,
     ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(std::mem::size_of::<Self>())?;
+        let slice = rdr.slice(mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
             None => return Err(ReadErr::BadLayout),

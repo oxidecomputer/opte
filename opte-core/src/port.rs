@@ -484,7 +484,7 @@ impl Port<Active> {
         &self,
         dir: Direction,
         pkt: &mut Packet<Parsed>,
-    ) -> std::result::Result<ProcessResult, ProcessError> {
+    ) -> result::Result<ProcessResult, ProcessError> {
         port_process_entry_probe(dir, &self.name);
         let mut meta = meta::Meta::new();
         let res = match dir {
@@ -504,7 +504,7 @@ impl Port<Active> {
     fn process_in_tcp_existing(
         &self,
         meta: &PacketMeta,
-    ) -> std::result::Result<TcpState, String> {
+    ) -> result::Result<TcpState, String> {
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we take the dual.
         let ifid_after = InnerFlowId::try_from(meta).unwrap().dual();
@@ -553,7 +553,7 @@ impl Port<Active> {
         &self,
         ifid: &InnerFlowId,
         meta: &PacketMeta,
-    ) -> std::result::Result<TcpState, String> {
+    ) -> result::Result<TcpState, String> {
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we take the dual.
         let ifid_after = InnerFlowId::try_from(meta).unwrap().dual();
@@ -741,7 +741,7 @@ impl Port<Active> {
         &self,
         ifid: &InnerFlowId,
         meta: &PacketMeta,
-    ) -> std::result::Result<TcpState, String> {
+    ) -> result::Result<TcpState, String> {
         let mut lock = self.state.tcp_flows.lock();
 
         let tcp_state = match lock.get_mut(&ifid) {
@@ -787,7 +787,7 @@ impl Port<Active> {
         &self,
         ifid: InnerFlowId,
         meta: &PacketMeta,
-    ) -> std::result::Result<TcpState, String> {
+    ) -> result::Result<TcpState, String> {
         let tcp = meta.inner_tcp().unwrap();
         let mut lock = self.state.tcp_flows.lock();
 

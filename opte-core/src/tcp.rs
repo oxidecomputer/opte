@@ -1,5 +1,6 @@
 use core::convert::TryFrom;
 use core::fmt::{self, Display};
+use core::mem;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
@@ -19,7 +20,7 @@ use crate::packet::{PacketRead, ReadErr, WriteError};
 pub const TCP_HDR_CSUM_OFF: usize = 16;
 pub const TCP_HDR_OFFSET_MASK: u8 = 0xF0;
 pub const TCP_HDR_OFFSET_SHIFT: u8 = 4;
-pub const TCP_HDR_SZ: usize = std::mem::size_of::<TcpHdrRaw>();
+pub const TCP_HDR_SZ: usize = mem::size_of::<TcpHdrRaw>();
 
 pub const TCP_PORT_RDP: u16 = 3389;
 pub const TCP_PORT_SSH: u16 = 22;
@@ -451,7 +452,7 @@ impl<'a> RawHeader<'a> for TcpHdrRaw {
     fn raw_zc<'b, R: PacketRead<'a>>(
         rdr: &'b mut R,
     ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(std::mem::size_of::<Self>())?;
+        let slice = rdr.slice(mem::size_of::<Self>())?;
         let hdr = match LayoutVerified::new(slice) {
             Some(bytes) => bytes,
             None => return Err(ReadErr::BadLayout),

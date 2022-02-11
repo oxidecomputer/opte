@@ -11,9 +11,6 @@
 extern crate std;
 
 #[cfg(all(not(feature = "std"), not(test)))]
-extern crate core as std;
-
-#[cfg(all(not(feature = "std"), not(test)))]
 #[macro_use]
 extern crate alloc;
 
@@ -32,9 +29,6 @@ use std::boxed::Box;
 #[cfg(any(feature = "std", test))]
 use std::string::String;
 
-#[cfg(all(not(feature = "std"), not(test)))]
-extern crate illumos_ddi_dki;
-#[cfg(all(not(feature = "std"), not(test)))]
 use illumos_ddi_dki as ddi;
 
 // TODO Not sure reexporting makes sense, but felt like trying it on
@@ -165,8 +159,8 @@ pub enum ParseErr {
     ValTooLong(String, usize),
 }
 
-impl std::fmt::Display for ParseErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Display for ParseErr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
