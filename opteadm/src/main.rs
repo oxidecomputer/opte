@@ -124,12 +124,6 @@ struct SetOverlay {
     vni: u32,
 
     #[structopt(long)]
-    mac_src: EtherAddr,
-
-    #[structopt(long)]
-    mac_dst: EtherAddr,
-
-    #[structopt(long)]
     ip: Ipv6Addr,
 }
 
@@ -164,8 +158,6 @@ impl From<SetOverlay> for overlay::SetOverlayReq {
                     req.boundary_services,
                 ),
                 vni: geneve::Vni::new(req.vni).unwrap(),
-                phys_mac_src: req.mac_src,
-                phys_mac_dst: req.mac_dst,
                 phys_ip_src: opte_ip6::Ipv6Addr::from(req.ip.octets()),
             },
         }

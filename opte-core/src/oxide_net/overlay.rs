@@ -50,8 +50,6 @@ pub fn setup(
     // Action Index 0
     let encap = Action::Static(Arc::new(EncapAction::new(
         cfg.boundary_services,
-        cfg.phys_mac_src,
-        cfg.phys_mac_dst,
         cfg.phys_ip_src,
         v2p,
     )));
@@ -101,13 +99,15 @@ pub const ENCAP_NAME: &'static str = "encap";
 /// The VNI is either the destination VPC identifier or the VNI of
 /// Boundary Services.
 ///
-/// XXX This leaves us with the outer Ethernet Frame still to be
-/// filled out. That is an area of active development. Either OPTE
-/// will use some query mechanism into the physical routing service to
-/// determine NIC egress; or some layer between OPTE and mac will take
-/// hold of the IPv6+Geneve packet and fill out the Ethernet Frame.
-/// For now the outer frame information will be provided statically at
-/// the [`Port`] level and stashed as `phys_mac_{src,dst}`.
+/// XXX The outer MAC addresses are zero'd out. The current plan is to
+/// have their values filled out by the upcoming `xde` device, which
+/// is responsible for querying the routing table and determining the
+/// physical path.
+///
+/// XXX There is no need for physical MAC address for Boundary
+/// Services as it lives on the switch. That value is one of the two
+/// switch ports determined by the upcoming `xde` device (opte-drv
+/// replacement).
 ///
 /// This action uses the [`Virt2Phys`] resource to map the vritual
 /// destination to the physical location. These mappings are
@@ -115,8 +115,6 @@ pub const ENCAP_NAME: &'static str = "encap";
 pub struct EncapAction {
     // The physical address of boundary services.
     boundary_services: PhysNet,
-    phys_mac_src: EtherAddr,
-    phys_mac_dst: EtherAddr,
     // The physical IPv6 ULA of the server that hosts this guest
     // sending data.
     phys_ip_src: Ipv6Addr,
@@ -126,12 +124,10 @@ pub struct EncapAction {
 impl EncapAction {
     pub fn new(
         boundary_services: PhysNet,
-        phys_mac_src: EtherAddr,
-        phys_mac_dst: EtherAddr,
         phys_ip_src: Ipv6Addr,
         v2p: Arc<Virt2Phys>,
     ) -> Self {
-        Self { boundary_services, phys_mac_src, phys_mac_dst, phys_ip_src, v2p }
+        Self { boundary_services, phys_ip_src, v2p }
     }
 }
 
@@ -195,24 +191,10 @@ impl StaticAction for EncapAction {
 
         Ok(HT {
             name: ENCAP_NAME.to_string(),
+            // We leave the outer src/dst up to the driver.
             outer_ether: EtherMeta::push(
-                self.phys_mac_src,
-                // XXX The outer ethernet dest should be the MAC
-                // address of the sidecar switch/router. But, for the
-                // time being, in order to get two guests talking via
-                // the overlay network we can fake it out by relying
-                // on the internal L2 switch inside every illumos mac
-                // instance (sometimes referred to as "mac loopback").
-                // By placing both guests's VNICs on the same mac you
-                // can rely on the underlying mac to switch the frame
-                // for you, without actally needing anything to route
-                // the packet. This is a stopgap until I can better
-                // understand standing up our physical network
-                // implementation. The actual value here should be
-                // `self.phys_mac_dst`.
-                //
-                // self.phys_mac_dst,
-                phys_target.ether,
+                Default::default(),
+                Default::default(),
                 ETHER_TYPE_IPV6,
             ),
             outer_ip: Ipv6Meta::push(
@@ -322,14 +304,6 @@ impl Virt2Phys {
 pub struct OverlayCfg {
     pub boundary_services: PhysNet,
     pub vni: Vni,
-    // NOTE: The phys_mac_{src,dst} currently stand in for the
-    // physical routing service. The src should be the host NIC MAC
-    // address, and the dst should be the physical gateway MAC address
-    // on your home/lab network. However, as the mac layer doesn't
-    // currently have the ability to steer packets based on inner
-    // frame, we use the MAC address of the guest/VNIC for the moment.
-    pub phys_mac_src: EtherAddr,
-    pub phys_mac_dst: EtherAddr,
     pub phys_ip_src: Ipv6Addr,
 }
 

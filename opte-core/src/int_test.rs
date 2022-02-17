@@ -208,11 +208,6 @@ fn overlay_guest_to_guest() {
     g1_cfg.overlay = Some(OverlayCfg {
         boundary_services: bs.clone(),
         vni: Vni::new(99u32).unwrap(),
-        // Chelsio NIC
-        phys_mac_src: EtherAddr::from([0x00, 0x07, 0x43, 0xF7, 0x00, 0x01]),
-        // Tofino port
-        phys_mac_dst: EtherAddr::from([0xF8, 0x1D, 0x78, 0xDF, 0x00, 0x01]),
-        // Site 0xF7, Rack 1, Sled 1, Interface 1
         phys_ip_src: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
@@ -221,10 +216,6 @@ fn overlay_guest_to_guest() {
     g2_cfg.overlay = Some(OverlayCfg {
         boundary_services: bs.clone(),
         vni: Vni::new(99u32).unwrap(),
-        // Chelsio NIC
-        phys_mac_src: EtherAddr::from([0x00, 0x07, 0x43, 0xF7, 0x00, 0x22]),
-        // Tofino port
-        phys_mac_dst: EtherAddr::from([0xF8, 0x1D, 0x78, 0xDF, 0x00, 0x22]),
         // Site 0xF7, Rack 1, Sled 22, Interface 1
         phys_ip_src: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
@@ -324,17 +315,8 @@ fn overlay_guest_to_guest() {
     let meta = g1_pkt.meta();
     match meta.outer.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.overlay.as_ref().unwrap().phys_mac_src);
-            // XXX See the note in overlay.rs about the outer ethernet
-            // destination. For the time being we use the guest's VNIC
-            // MAC address to avoid needing underlay routing.
-            //
-            // assert_eq!(
-            //     eth.dst,
-            //     g1_cfg.overlay.as_ref().unwrap().phys_mac_dst
-            // );
-
-            assert_eq!(eth.dst, g2_cfg.private_mac);
+            assert_eq!(eth.src, Default::default());
+            assert_eq!(eth.dst, Default::default());
         }
 
         None => panic!("no outer ether header"),
@@ -476,10 +458,6 @@ fn overlay_guest_to_internet() {
     g1_cfg.overlay = Some(OverlayCfg {
         boundary_services: bs.clone(),
         vni: Vni::new(99u32).unwrap(),
-        // Chelsio NIC
-        phys_mac_src: EtherAddr::from([0x00, 0x07, 0x43, 0xF7, 0x00, 0x01]),
-        // Tofino port
-        phys_mac_dst: EtherAddr::from([0xF8, 0x1D, 0x78, 0xDF, 0x00, 0x01]),
         // Site 0xF7, Rack 1, Sled 1, Interface 1
         phys_ip_src: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
@@ -540,17 +518,8 @@ fn overlay_guest_to_internet() {
     let meta = g1_pkt.meta();
     match meta.outer.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.overlay.as_ref().unwrap().phys_mac_src);
-            // XXX See the note in overlay.rs about the outer ethernet
-            // destination. For the time being we use the guest's VNIC
-            // MAC address to avoid needing underlay routing.
-            //
-            // assert_eq!(
-            //     eth.dst,
-            //     g1_cfg.overlay.as_ref().unwrap().phys_mac_dst
-            // );
-
-            assert_eq!(eth.dst, bs.ether);
+            assert_eq!(eth.src, Default::default());
+            assert_eq!(eth.dst, Default::default());
         }
 
         None => panic!("no outer ether header"),
