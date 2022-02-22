@@ -5,30 +5,32 @@ use core::convert::TryFrom;
 use alloc::string::String;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
 use std::string::String;
 #[cfg(any(feature = "std", test))]
-use std::sync::Arc;
-#[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
 #[cfg(all(not(feature = "std"), not(test)))]
-use illumos_ddi_dki::{c_int, size_t};
+use illumos_ddi_dki::{c_int, size_t, datalink_id_t};
 #[cfg(any(feature = "std", test))]
-use libc::{c_int, size_t};
+use illumos_ddi_dki::{c_int, size_t, datalink_id_t};
 
 use serde::{Deserialize, Serialize};
 
 use crate::ether::EtherAddr;
 use crate::flow_table::FlowEntryDump;
 use crate::ip4::Ipv4Addr;
-use crate::layer;
+use crate::ip6::Ipv6Addr;
 use crate::oxide_net::{firewall as fw, overlay};
+use crate::layer;
 use crate::port;
 use crate::rule;
 use crate::vpc::VpcSubnet4;
+use crate::geneve::Vni;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -43,7 +45,10 @@ pub enum IoctlCmd {
     DumpUft = 32,            // dump the Unified Flow Table
     ListLayers = 33,         // list the layers on a given port
     SetOverlay = 40,         // set the overlay config
+    XdeCreate = 47,          // create an xde device
+    XdeDelete = 48,          // delete an xde device
     SetVirt2Phys = 50,       // set a v2p mapping
+    GetVirt2Phys = 51,       // get v2p mapping
     AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
 }
 
@@ -62,7 +67,10 @@ impl TryFrom<c_int> for IoctlCmd {
             32 => Ok(IoctlCmd::DumpUft),
             33 => Ok(IoctlCmd::ListLayers),
             40 => Ok(IoctlCmd::SetOverlay),
+            47 => Ok(IoctlCmd::XdeCreate),
+            48 => Ok(IoctlCmd::XdeDelete),
             50 => Ok(IoctlCmd::SetVirt2Phys),
+            51 => Ok(IoctlCmd::GetVirt2Phys),
             60 => Ok(IoctlCmd::AddRouterEntryIpv4),
             _ => Err(()),
         }
@@ -275,7 +283,7 @@ impl From<PortError> for DumpTcpFlowsError {
 
 pub fn add_fw_rule(
     port: &port::Port<port::Active>,
-    req: &fw::FwAddRuleReq,
+    req: &fw::FwAddRuleReq
 ) -> Result<(), AddFwRuleError> {
     let action = match req.rule.action {
         fw::Action::Allow => {
@@ -287,7 +295,11 @@ pub fn add_fw_rule(
 
     let rule = fw::from_fw_rule(req.rule.clone(), action);
 
-    let res = port.add_rule(fw::FW_LAYER_NAME, req.rule.direction, rule);
+    let res = port.add_rule(
+        fw::FW_LAYER_NAME,
+        req.rule.direction,
+        rule,
+    );
 
     match res {
         Ok(()) => Ok(()),
@@ -403,5 +415,41 @@ pub struct PortInfo {
 pub struct ListPortsResp {
     pub ports: Vec<PortInfo>,
 }
-
 impl CmdOk for ListPortsResp {}
+
+/// Xde create ioctl parameter data.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct CreateXdeReq {
+    // afaict - dlmgmd is the owner of link ids, there are even upcalls from the
+    // kernel to get linkids! (see dls_mgmt_create)
+    pub linkid: datalink_id_t,
+    pub xde_devname: String,
+
+    // names of the underlay links to use
+    //XXX pub u1_devname: String,
+    //XXX pub u2_devname: String,
+
+    pub private_ip: Ipv4Addr,
+    pub private_mac: EtherAddr,
+    pub gw_mac: EtherAddr,
+    pub gw_ip: Ipv4Addr,
+
+    pub boundary_services_addr: Ipv6Addr,
+    pub boundary_services_vni: Vni,
+    pub src_underlay_addr: Ipv6Addr,
+    pub vpc_vni: Vni,
+
+    pub passthrough: bool,
+}
+
+/// Xde delete ioctl parameter data.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeleteXdeReq {
+    pub xde_devname: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct XdeError {
+    code: i32, // standard error code such as EINVAL
+}
+impl CmdErr for XdeError {}

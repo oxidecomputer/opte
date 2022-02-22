@@ -271,8 +271,8 @@ pub struct Virt2Phys {
     // that makes use of this virtual destination (for all Ports).
     // That means updating the generation number of all Ports anytme
     // an entry is **MODIFIED**.
-    ip4: KMutex<BTreeMap<Ipv4Addr, PhysNet>>,
-    ip6: KMutex<BTreeMap<Ipv6Addr, PhysNet>>,
+    pub ip4: KMutex<BTreeMap<Ipv4Addr, PhysNet>>,
+    pub ip6: KMutex<BTreeMap<Ipv6Addr, PhysNet>>,
 }
 
 pub const VIRT_2_PHYS_NAME: &'static str = "Virt2Phys";
@@ -331,3 +331,16 @@ pub struct SetVirt2PhysReq {
     pub vip: IpAddr,
     pub phys: PhysNet,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GetVirt2PhysReq { 
+    pub unused: (),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GetVirt2PhysResp { 
+    pub ip4: BTreeMap<Ipv4Addr, PhysNet>,
+    pub ip6: BTreeMap<Ipv6Addr, PhysNet>,
+}
+
+impl crate::ioctl::CmdOk for GetVirt2PhysResp {}

@@ -772,7 +772,14 @@ impl Packet<Initialized> {
         // still need to account for them as it changes the starting
         // position of the ULP.
         if hdr_len > IPV4_HDR_SZ {
-            todo!("need to deal with IPv4 header options!!!");
+
+            // NOTE(ry) this happens a few seconds after creating a vnic atop an
+            // OPTE mac provider.
+            //todo!("need to deal with IPv4 header options!!!");
+            return Err(ParseError::BadOuterIpLen{
+                expected: IPV4_HDR_SZ,
+                actual: hdr_len,
+            });
         }
 
         let proto = ip4.proto();
@@ -787,6 +794,7 @@ impl Packet<Initialized> {
         match proto {
             Protocol::TCP => Self::parse_hg_tcp(rdr, hg, offsets)?,
             Protocol::UDP => Self::parse_hg_udp(rdr, hg, offsets)?,
+            Protocol::ICMP => { /* something? */ }
             _ => return Err(ParseError::UnsupportedProtocol(proto)),
         }
 
@@ -824,6 +832,7 @@ impl Packet<Initialized> {
 
         Ok(())
     }
+
 
     fn parse_hg_arp<'a>(
         rdr: &mut PacketReader<'a, Initialized, ()>,
@@ -1934,7 +1943,7 @@ pub enum WritePos {
 
 pub struct PacketWriter {
     pkt: Packet<Uninitialized>,
-    margin: Option<usize>,
+    pub margin: Option<usize>,
     pkt_len: usize,
     pkt_pos: usize,
     seg_idx: usize,
@@ -2028,7 +2037,7 @@ where
         self.pkt_pos
     }
 
-    fn state_mut(&mut self) -> &mut S {
+    pub fn state_mut(&mut self) -> &mut S {
         &mut self.state
     }
 }

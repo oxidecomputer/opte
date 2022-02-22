@@ -18,12 +18,14 @@ pub type c_void = core::ffi::c_void;
 pub type c_schar = i8;
 pub type c_uchar = u8;
 pub type c_char = c_schar;
+pub type c_short = i16;
 pub type c_ushort = u16;
 pub type c_int = i32;
 pub type c_uint = u32;
 pub type c_long = i64;
 pub type c_ulong = u64;
 pub type c_longlong = i64;
+pub type c_ulonglong = u64;
 
 pub type int32_t = i32;
 
@@ -59,6 +61,7 @@ pub type id_t = c_int;
 pub type minor_t = c_uint;
 pub type offset_t = c_longlong;
 pub type pid_t = c_int;
+pub type zoneid_t = id_t;
 
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -117,6 +120,24 @@ impl kmutex_t {
         }
         kmutex
     }
+}
+
+#[repr(C)]
+pub struct krwlock_t {
+    pub _opaque: u64,
+}
+
+#[repr(C)]
+pub enum krw_type_t {
+    RW_DRIVER = 2,  /* driver (DDI) rwlock */
+    RW_DEFAULT = 4, /* kernel default rwlock */
+}
+
+#[repr(C)]
+pub enum krw_t {
+    RW_WRITER,
+    RW_READER,
+    RW_READER_STARVEWRITER
 }
 
 // This definition assumes applications are compiled with XPG4v2
@@ -282,6 +303,13 @@ pub struct dev_ops {
 }
 unsafe impl Sync for dev_ops {}
 
+#[repr(C)]
+pub enum MacVirt {
+    None = 0,
+    Level1,
+    Hio,
+}
+
 // C allows us to sidestep strict type definition conformance when
 // setting callback functions, but Rust doesn't. Therefore, we can't
 // just assign generic callbacks like `nulldev()` to these structure
@@ -294,6 +322,26 @@ pub unsafe extern "C" fn nulldev_identify(_dip: *mut dev_info) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn nulldev_probe(_dip: *mut dev_info) -> c_int {
+    nulldev()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nulldev_open(
+    _devp: *mut dev_t,
+    _flags: c_int,
+    _otype: c_int,
+    _credp: *mut cred_t,
+) -> c_int {
+    nulldev()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nulldev_close(
+    _dev: dev_t,
+    _flags: c_int,
+    _otype: c_int,
+    _credp: *mut cred_t,
+) -> c_int {
     nulldev()
 }
 
@@ -315,12 +363,43 @@ pub unsafe extern "C" fn nodev_reset(
     nodev()
 }
 
+#[no_mangle]
 pub unsafe extern "C" fn nodev_power(
     _dip: *mut dev_info,
     _component: c_int,
     _level: c_int,
 ) -> c_int {
     nodev()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nodev_read(
+    _dev: dev_t,
+    _uiop: *mut uio,
+    _credp: *mut cred_t,
+) -> c_int {
+    nodev()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nodev_ioctl(
+    _dev: dev_t,
+    _cmd: c_int,
+    _arg: intptr_t,
+    _mode: c_int,
+    _credp: *mut cred_t,
+    _rvalp: *mut c_int,
+) -> c_int {
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn nodev_write(
+    _dev: dev_t,
+    _uiop: *mut uio,
+    _credp: *mut cred_t,
+) -> c_int {
+    0
 }
 
 // Many of these fields are not needed at the moment and thus defined
@@ -458,9 +537,11 @@ pub const DDI_FAILURE: c_int = -1;
 pub const DDI_PSEUDO: *const c_char = b"ddi_pseudo\0".as_ptr() as *const c_char;
 
 pub const ENOENT: c_int = 2;
+pub const EAGAIN: c_int = 11;
 pub const EFAULT: c_int = 14;
 pub const EBUSY: c_int = 16;
 pub const EINVAL: c_int = 22;
+pub const ENOTSUP: c_int = 48;
 pub const EPROTO: c_int = 71;
 pub const ENOBUFS: c_int = 132;
 
@@ -468,9 +549,15 @@ pub const KM_SLEEP: i32 = 0x0000;
 pub const KM_NOSLEEP: i32 = 0x0001;
 
 pub const MAXNAMELEN: c_int = 256;
+pub const MAXLINKNAMELEN: c_int = 32;
 pub const MODREV_1: c_int = 1;
 
 pub const S_IFCHR: c_int = 0x2000;
+
+
+pub const MAC_VERSION_V1: c_int = 0x1;
+pub const MAC_VERSION: c_int = MAC_VERSION_V1;
+pub const MAC_PLUGIN_IDENT_ETHER: *const c_char = b"mac_ether\0".as_ptr() as *const c_char;
 
 pub type periodic_cb = unsafe extern "C" fn(arg: *mut c_void);
 
@@ -520,6 +607,7 @@ extern "C" {
         flag: c_int,
     ) -> c_int;
     pub fn ddi_get_driver_private(dip: *mut dev_info) -> *mut c_void;
+    pub fn ddi_get_instance(dip: *mut dev_info) -> c_int;
     pub fn ddi_get_soft_state(state: *mut c_void, item: c_int) -> *mut c_void;
     pub fn ddi_periodic_add(
         cb: periodic_cb,
@@ -587,6 +675,20 @@ extern "C" {
     );
     pub fn mutex_owned(mp: *mut kmutex_t) -> c_int;
     pub fn mutex_tryenter(mp: *mut kmutex_t) -> c_int;
+
+    pub fn rw_init(
+        rwlp: *mut krwlock_t,
+        name: *const c_char,
+        typ: krw_type_t,
+        arg: *const c_void,
+    );
+    pub fn rw_destroy(rwlp: *mut krwlock_t);
+    pub fn rw_enter(rwlp: *mut krwlock_t, enter_type: krw_t);
+    pub fn rw_exit(rwlp: *mut krwlock_t);
+    pub fn rw_tryenter(rwlp: *mut krwlock_t, enter_type: krw_t);
+    pub fn rw_downgrade(rwlp: *mut krwlock_t);
+    pub fn rw_tryupgrade(rwlp: *mut krwlock_t);
+    pub fn rw_read_locked(rwlp: *mut krwlock_t);
 
     pub fn nochpoll() -> c_int;
     pub fn nodev() -> c_int;

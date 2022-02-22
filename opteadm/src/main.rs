@@ -20,6 +20,8 @@ use opte_core::oxide_net::{overlay, router};
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
+use opteadm::OpteAdm;
+use opte_core::geneve::Vni;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, StructOpt)]
@@ -64,6 +66,9 @@ enum Command {
         port: String,
     },
 
+    /// Dump virtual to physical address mapping
+    DumpV2P,
+
     /// Add a firewall rule
     AddFwRule {
         #[structopt(short)]
@@ -91,6 +96,24 @@ enum Command {
         direction: Direction,
 
         id: u64,
+    },
+
+    XdeCreate {
+        name: String,
+        private_mac: String,
+        private_ip: String,
+        gateway_mac: String,
+        gateway_ip: String,
+        boundary_services_addr: std::net::Ipv6Addr,
+        boundary_services_vni: Vni,
+        vpc_vni: Vni,
+        src_underlay_addr: std::net::Ipv6Addr,
+        #[structopt(long)]
+        passthrough: bool,
+    },
+
+    XdeDelete {
+        name: String,
     },
 
     /// Set a virtual-to-physical mapping
@@ -417,6 +440,46 @@ fn print_list_layers(resp: &api::ListLayersResp) {
     }
 }
 
+fn print_v2p(resp: &overlay::GetVirt2PhysResp) {
+    println!("ipv4");
+    println!("{:<12} {:<20} {:<20} {:<10}",
+        "SOURCE", "DEST ETH", "DEST IP", "VNI");
+
+
+    for (src, dst) in &resp.ip4 {
+        //XXX something about the Display impl for these types is interacting
+        //badly with column layout
+        let v4 = std::net::Ipv4Addr::from(src.to_be_bytes());
+        let v6 = std::net::Ipv6Addr::from(dst.ip.to_bytes());
+        let eth = format!("{}", dst.ether);
+        println!("{:<12} {:<20} {:<20} {:<10}",
+            v4,
+            eth,
+            v6,
+            dst.vni.value(),
+        );
+    }
+
+    println!("ipv6");
+    println!("{:<12} {:<20} {:<20} {:<10}",
+        "SOURCE", "DEST ETH", "DEST IP", "VNI");
+
+
+    for (src, dst) in &resp.ip6 {
+        //XXX something about the Display impl for these types is interacting
+        //badly with column layout
+        let v6s = std::net::Ipv6Addr::from(src.to_bytes());
+        let v6 = std::net::Ipv6Addr::from(dst.ip.to_bytes());
+        let eth = format!("{}", dst.ether);
+        println!("{:<12} {:<20} {:<20} {:<10}",
+            v6s,
+            eth,
+            v6,
+            dst.vni.value(),
+        );
+    }
+}
+
 fn print_layer(resp: &api::DumpLayerResp) {
     println!("Layer {}", resp.name);
     print_hrb();
@@ -478,7 +541,7 @@ fn main() {
     let cmd = Command::from_args();
     match cmd {
         Command::ListPorts => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::OPTE_CTL).unwrap();
             print_port_header();
             for p in hdl.list_ports().unwrap().ports {
                 print_port(p);
@@ -486,44 +549,50 @@ fn main() {
         }
 
         Command::AddPort(req) => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::OPTE_CTL).unwrap();
             hdl.add_port(&req.try_into().unwrap()).unwrap();
         }
 
         Command::DeletePort { name } => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::OPTE_CTL).unwrap();
             hdl.delete_port(&name).unwrap();
         }
 
         Command::SetOverlay(req) => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::OPTE_CTL).unwrap();
             hdl.set_overlay(&req.into()).unwrap();
         }
 
         Command::ListLayers { port } => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
             print_list_layers(&hdl.list_layers(&port).unwrap());
         }
 
         Command::DumpLayer { port, name } => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
             print_layer(&hdl.get_layer_by_name(&port, &name).unwrap());
         }
 
         Command::DumpUft { port } => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
             print_uft(&hdl.uft(&port).unwrap());
         }
 
         Command::DumpTcpFlows { port } => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::OPTE_CTL).unwrap();
             for (flow_id, entry) in hdl.tcp_flows(&port).unwrap().flows {
                 println!("{} {:?}", flow_id, entry);
             }
         }
 
+        Command::DumpV2P => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            print_v2p(&hdl.get_v2p().unwrap());
+            //println!("{:#?}", hdl.get_v2p().unwrap());
+        }
+
         Command::AddFwRule { port, direction, filters, action, priority } => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
             let rule = FirewallRule {
                 direction,
                 filters: filters.into(),
@@ -533,14 +602,46 @@ fn main() {
             hdl.add_firewall_rule(&port, &rule).unwrap();
         }
 
+        Command::XdeCreate {
+            name,
+            private_mac,
+            private_ip,
+            gateway_mac,
+            gateway_ip,
+            boundary_services_addr,
+            boundary_services_vni,
+            vpc_vni,
+            src_underlay_addr,
+            passthrough
+        } => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            hdl.create_xde(
+                &name,
+                &private_mac,
+                &private_ip,
+                &gateway_mac,
+                &gateway_ip,
+                boundary_services_addr,
+                boundary_services_vni,
+                vpc_vni,
+                src_underlay_addr,
+                passthrough
+             ).unwrap();
+        }
+
+        Command::XdeDelete { name } => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            hdl.delete_xde(&name).unwrap();
+        }
+
         Command::RmFwRule { port, direction, id } => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
             let request = FwRemRuleReq { port_name: port, dir: direction, id };
             hdl.remove_firewall_rule(&request).unwrap();
         }
 
         Command::SetV2P { vip4, phys_ether, phys_ip, vni } => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
             let vip = IpAddr::Ip4(vip4);
             let phys = overlay::PhysNet {
                 ether: phys_ether,
@@ -552,9 +653,12 @@ fn main() {
         }
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
-            let hdl = opteadm::OpteAdm::open().unwrap();
-            let req =
-                router::AddRouterEntryIpv4Req { port_name: port, dest, target };
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            let req = router::AddRouterEntryIpv4Req {
+                port_name: port,
+                dest,
+                target
+            };
             hdl.add_router_entry_ip4(&req).unwrap();
         }
     }

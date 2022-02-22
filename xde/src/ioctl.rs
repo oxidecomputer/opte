@@ -1,3 +1,9 @@
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+//
+// TODO this is complete copy pasta with opte-drv/src/ioctl.rs - just trying to
+// keep things separated for the moment.
+//
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Debug;
@@ -25,22 +31,12 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub fn to_errno(e: Error) -> c_int {
+pub fn to_errno(e: Error) -> c_int
+{
     match e {
         Error::DeserError(_) => ddi::EINVAL,
         Error::RespTooLong => ddi::ENOBUFS,
         _ => ddi::EFAULT,
-    }
-}
-
-extern "C" {
-    fn __dtrace_probe_copy__out__resp(resp_str: ddi::uintptr_t);
-}
-
-fn dtrace_probe_copy_out_resp<T: Debug + Serialize>(resp: &T) {
-    let cstr = CString::new(format!("{:?}", resp)).unwrap();
-    unsafe {
-        __dtrace_probe_copy__out__resp(cstr.as_ptr() as ddi::uintptr_t);
     }
 }
 
@@ -118,7 +114,7 @@ impl IoctlEnvelope {
     /// bytes.
     pub fn copy_out_resp<T, E>(
         &mut self,
-        val: &result::Result<T, E>,
+        val: &result::Result<T, E>
     ) -> Result<()>
     where
         E: CmdErr,

@@ -6,12 +6,12 @@ use core::result;
 use alloc::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
+#[cfg(any(feature = "std", test))]
+use std::sync::Arc;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
 use std::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
@@ -1058,11 +1058,17 @@ pub unsafe fn __dtrace_probe_port__process__return(
     ()
 }
 
+#[cfg(any(feature = "std", test))]
+pub unsafe fn __dtrace_probe_drop__packet() {
+    ()
+}
+
 #[cfg(all(not(feature = "std"), not(test)))]
 extern "C" {
     pub fn __dtrace_probe_port__process__entry(dir: uintptr_t, arg: uintptr_t);
 
     pub fn __dtrace_probe_port__process__return(dir: uintptr_t, arg: uintptr_t);
+    pub fn __dtrace_probe_drop__packet();
 }
 
 pub fn port_process_entry_probe(dir: Direction, name: &str) {

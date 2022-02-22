@@ -11,6 +11,7 @@ opte-core = { path = "../opte-core", default-features = true }
 postcard = { version = "0.7.0", features = ["alloc"] }
 structopt = "0.3.23"
 thiserror = "1.0.28"
+libnet = { git = "ssh://git@github.com/oxidecomputer/netadm-sys" }
 
 [dependencies.serde]
 version = "1.0"

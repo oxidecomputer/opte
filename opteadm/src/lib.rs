@@ -2,6 +2,7 @@
 // Copyright 2021 Oxide Computer Company
 
 use std::fs::{File, OpenOptions};
+use std::str::FromStr;
 use std::os::unix::io::AsRawFd;
 
 use libc;
@@ -9,13 +10,18 @@ use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
 use opte_core::ioctl::{
-    self as api, AddPortReq, CmdErr, CmdOk, DeletePortReq, IoctlCmd,
+    self as api, AddPortReq, CmdErr, CmdOk, DeletePortReq, IoctlCmd, 
+    CreateXdeReq, DeleteXdeReq,
 };
 use opte_core::oxide_net::firewall::{
     FirewallRule, FwAddRuleReq, FwRemRuleReq,
 };
 use opte_core::oxide_net::overlay::{self, SetOverlayReq, SetVirt2PhysReq};
 use opte_core::oxide_net::router;
+use opte_core::ip6::Ipv6Addr;
+use opte_core::ip4::Ipv4Addr;
+use opte_core::ether::EtherAddr;
+use opte_core::geneve::Vni;
 
 /// Errors related to administering the OPTE driver.
 #[derive(Debug, Error)]
@@ -35,6 +41,12 @@ pub enum Error {
 
     #[error("command {0:?} failed: {1}")]
     CommandFailed(IoctlCmd, String),
+
+    #[error("invalid argument {0}")]
+    InvalidArgument(String),
+
+    #[error("netadm failed {0}")]
+    NetadmFailed(libnet::Error)
 }
 
 impl From<std::io::Error> for Error {
@@ -61,6 +73,91 @@ pub struct OpteAdm {
 
 impl OpteAdm {
     pub const OPTE_CTL: &'static str = "/devices/pseudo/opte@0:opte";
+    //XXX remove this when xde marges into opte-drv
+    pub const XDE_CTL: &'static str = "/devices/pseudo/xde@0:xde";
+
+    /// Add xde device
+    pub fn create_xde(
+        &self,
+        name: &str,
+        private_mac: &str,
+        private_ip: &str,
+        gw_mac: &str,
+        gw_ip: &str,
+        boundary_services_addr: std::net::Ipv6Addr,
+        boundary_services_vni: Vni,
+        vpc_vni: Vni,
+        src_underlay_addr: std::net::Ipv6Addr,
+        passthrough: bool
+    ) -> Result<(), Error> {
+
+        let linkid = libnet::link::create_link_id(
+            name,
+            libnet::LinkClass::Xde,
+            libnet::LinkFlags::Active,
+        ).map_err(|e| Error::NetadmFailed(e))?;
+
+        let private_mac = EtherAddr::from_str(private_mac)
+            .map_err(|e| Error::InvalidArgument(e))?;
+
+        let gw_mac = EtherAddr::from_str(gw_mac)
+            .map_err(|e| Error::InvalidArgument(e))?;
+
+        let private_ip = Ipv4Addr::from_str(private_ip)
+            .map_err(|e| Error::InvalidArgument(e.to_string()))?;
+
+        let gw_ip = Ipv4Addr::from_str(gw_ip)
+            .map_err(|e| Error::InvalidArgument(e.to_string()))?;
+
+        let xde_devname = name.into();
+        let boundary_services_addr = Ipv6Addr::from(boundary_services_addr.octets());
+        let src_underlay_addr = Ipv6Addr::from(src_underlay_addr.octets());
+
+        let cmd = IoctlCmd::XdeCreate;
+        let req = CreateXdeReq {
+            xde_devname,
+            linkid,
+            private_mac,
+            private_ip,
+            gw_mac,
+            gw_ip,
+            boundary_services_addr,
+            boundary_services_vni,
+            vpc_vni,
+            src_underlay_addr,
+            passthrough,
+            .. Default::default()
+        };
+
+        let resp = run_ioctl::<(), api::XdeError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &req
+        )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+
+    }
+
+    /// Delete xde device
+    pub fn delete_xde(&self, name: &str) -> Result<(), Error> {
+
+        let link_id = libnet::LinkHandle::Name(name.into())
+            .id()
+            .expect("get link id");
+
+        let req = DeleteXdeReq{ xde_devname: name.into() };
+        let cmd = IoctlCmd::XdeDelete;
+        let resp = run_ioctl::<(), api::XdeError, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &req
+        )?;
+
+        libnet::link::delete_link_id(link_id, libnet::LinkFlags::Active)
+            .expect("delete link id");
+
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+    }
 
     /// Add a firewall rule
     pub fn add_firewall_rule(
@@ -125,12 +222,12 @@ impl OpteAdm {
     }
 
     /// Create a new handle to the OPTE control node.
-    pub fn open() -> Result<Self, Error> {
+    pub fn open(what: &str) -> Result<Self, Error> {
         Ok(OpteAdm {
             device: OpenOptions::new()
                 .read(true)
                 .write(true)
-                .open(Self::OPTE_CTL)?,
+                .open(what)?
         })
     }
 
@@ -209,6 +306,18 @@ impl OpteAdm {
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<(), Error> {
         let cmd = IoctlCmd::SetVirt2Phys;
         let resp = run_ioctl::<(), (), _>(self.device.as_raw_fd(), cmd, &req)?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+    }
+
+    pub fn get_v2p(
+        &self,
+    ) -> Result<overlay::GetVirt2PhysResp, Error> {
+        let cmd = IoctlCmd::GetVirt2Phys;
+        let resp = run_ioctl::<overlay::GetVirt2PhysResp, (), _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &overlay::GetVirt2PhysReq { unused: () }
+        )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 

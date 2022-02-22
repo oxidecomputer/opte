@@ -13,7 +13,10 @@ use std::sync::Mutex;
 
 use illumos_ddi_dki::kmutex_type_t;
 #[cfg(all(not(feature = "std"), not(test)))]
-use illumos_ddi_dki::{kmutex_t, mutex_enter, mutex_exit, mutex_init};
+use illumos_ddi_dki::{
+    kmutex_t, mutex_enter, mutex_exit, mutex_init,
+    krwlock_t, krw_t, krw_type_t, rw_init, rw_enter, rw_exit,
+};
 
 /// Exposes the illumos mutex(9F) API in a safe manner. We name it
 /// `KMutex` (Kernel Mutex) on purpose. The API for a kernel mutex
@@ -194,5 +197,124 @@ impl<T> KMutex<T> {
     pub fn lock(&self) -> KMutexGuard<T> {
         let guard = self.inner.lock().unwrap();
         KMutexGuard { guard }
+    }
+}
+
+/// A wrapper around illumos rwlock(9F)
+#[cfg(all(not(feature = "std"), not(test)))]
+pub struct KRwLock<T> {
+    rwl: UnsafeCell<krwlock_t>,
+    data: UnsafeCell<T>,
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+pub enum KRwLockType {
+    Driver = krw_type_t::RW_DRIVER as isize,
+    Default = krw_type_t::RW_DEFAULT as isize,
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl From<KRwLockType> for krw_type_t {
+    fn from(typ: KRwLockType) -> Self {
+        match typ {
+            KRwLockType::Driver => krw_type_t::RW_DRIVER,
+            KRwLockType::Default => krw_type_t::RW_DEFAULT,
+        }
+    }
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+pub enum KRwEnterType {
+    Writer = krw_t::RW_WRITER as isize,
+    Reader = krw_t::RW_READER as isize,
+    ReaderStarveWriter = krw_t::RW_READER_STARVEWRITER as isize,
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl From<KRwEnterType> for krw_t {
+    fn from(typ: KRwEnterType) -> Self {
+        match typ {
+            KRwEnterType::Writer => krw_t::RW_WRITER,
+            KRwEnterType::Reader => krw_t::RW_READER,
+            KRwEnterType::ReaderStarveWriter => krw_t::RW_READER_STARVEWRITER,
+        }
+    }
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl<T> KRwLock<T> {
+
+    pub const fn new(val: T) -> Self {
+        let rwl = krwlock_t { _opaque: 0 };
+        KRwLock { rwl: UnsafeCell::new(rwl), data: UnsafeCell::new(val) }
+    }
+
+    pub fn init(&mut self, typ: KRwLockType) {
+        unsafe {
+            rw_init(self.rwl.get_mut(), ptr::null(), typ.into(), ptr::null());
+        }
+    }
+
+    pub fn read(&self) -> KRwLockReadGuard<T> {
+        unsafe { rw_enter(self.rwl.get(), krw_t::RW_READER) };
+        KRwLockReadGuard { lock: self }
+    }
+
+    pub fn write(&self) -> KRwLockWriteGuard<T> {
+        unsafe { rw_enter(self.rwl.get(), krw_t::RW_WRITER) };
+        KRwLockWriteGuard { lock: self }
+    }
+
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+unsafe impl<T: Send> Send for KRwLock<T> {}
+#[cfg(all(not(feature = "std"), not(test)))]
+unsafe impl<T: Sync> Sync for KRwLock<T> {}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+pub struct KRwLockReadGuard<'a, T: 'a> {
+    lock: &'a KRwLock<T>,
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl<T> Deref for KRwLockReadGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { &*self.lock.data.get() }
+    }
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl<T> Drop for KRwLockReadGuard<'_, T> {
+    fn drop(&mut self) {
+        unsafe { rw_exit(self.lock.rwl.get()) };
+    }
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+pub struct KRwLockWriteGuard<'a, T: 'a> {
+    lock: &'a KRwLock<T>,
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl<T> Deref for KRwLockWriteGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { &*self.lock.data.get() }
+    }
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl<T> DerefMut for KRwLockWriteGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.lock.data.get() }
+    }
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl<T> Drop for KRwLockWriteGuard<'_, T> {
+    fn drop(&mut self) {
+        unsafe { rw_exit(self.lock.rwl.get()) };
     }
 }

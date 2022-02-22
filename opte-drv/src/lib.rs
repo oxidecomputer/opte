@@ -1234,6 +1234,8 @@ pub unsafe extern "C" fn opte_client_close(
 
     let port_cfg = ocs.port_cfg;
 
+    let port_cfg = ocs.port_cfg;
+
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
     opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg).unwrap();
     opte_core::oxide_net::arp::setup(&mut new_port, &port_cfg).unwrap();

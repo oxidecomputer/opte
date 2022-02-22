@@ -249,7 +249,25 @@ pub fn add_entry_active(
             }
         }
 
-        RouterTarget::Ip(_) => todo!("add IP entry"),
+        RouterTarget::Ip(_) => {
+            match dest {
+                IpCidr::Ip4(ip4) => {
+                    let rule = Rule::new(
+                        pri_map4[dest.prefix()],
+                        Action::Meta(Arc::new(
+                            RouterAction::new(target.clone())
+                        )),
+                    );
+                    let rule = rule.add_predicate(
+                        Predicate::InnerDstIp4(vec![
+                            rule::Ipv4AddrMatch::Prefix(ip4)
+                        ])
+                    ).finalize();
+                    Ok(port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?)
+                }
+                IpCidr::Ip6(_) => todo!("IPv6 IP"),
+            }
+        }
 
         RouterTarget::VpcSubnet(_) => match dest {
             IpCidr::Ip4(ip4) => {
