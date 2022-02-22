@@ -50,7 +50,9 @@ extern "C" {
 
 fn dtrace_probe_copy_out_resp<T: Debug + Serialize>(resp: &T) {
     let cstr = CString::new(format!("{:?}", resp)).unwrap();
-    unsafe { __dtrace_probe_copy__out__resp(cstr.as_ptr() as ddi::uintptr_t); }
+    unsafe {
+        __dtrace_probe_copy__out__resp(cstr.as_ptr() as ddi::uintptr_t);
+    }
 }
 
 /// An envelope for dealing with `Ioctl`. It contains all information
@@ -174,7 +176,7 @@ impl IoctlEnvelope {
         };
 
         if ret != 0 {
-                return Err(Error::FailedCopyin);
+            return Err(Error::FailedCopyin);
         }
 
         // Safety: We know the `Vec` has `req_len` capacity, and that
