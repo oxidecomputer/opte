@@ -44,17 +44,6 @@ fn dtrace_probe_copy_out_resp<T: Debug + Serialize>(resp: &T) {
     }
 }
 
-extern "C" {
-    fn __dtrace_probe_copy__out__resp(resp_str: ddi::uintptr_t);
-}
-
-fn dtrace_probe_copy_out_resp<T: Debug + Serialize>(resp: &T) {
-    let cstr = CString::new(format!("{:?}", resp)).unwrap();
-    unsafe {
-        __dtrace_probe_copy__out__resp(cstr.as_ptr() as ddi::uintptr_t);
-    }
-}
-
 /// An envelope for dealing with `Ioctl`. It contains all information
 /// needed to deserialize the user's request and serialize the
 /// kernel's response.

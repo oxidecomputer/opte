@@ -1,6 +1,6 @@
 #!/bin/bash
 #:
-#: name = "opte-drv"
+#: name = "opte-xde"
 #: variety = "basic"
 #: target = "helios"
 #: rust_toolchain = "nightly"
@@ -35,17 +35,9 @@ ptime -m cargo +nightly check
 header "install rust-src"
 ptime -m rustup component add rust-src --toolchain nightly
 
-header "debug build"
-ptime -m cargo +nightly -v rustc -Z build-std=core,alloc \
-      --target x86_64-unknown-unknown.json
-ld -r -dy -N"drv/mac" -z allextract \
-   target/x86_64-unknown-unknown/debug/opte.a -o opte.debug
-
-header "release build"
-ptime -m cargo +nightly -v rustc -Z build-std=core,alloc \
-      --target x86_64-unknown-unknown.json --release
-ld -r -dy -N"drv/mac" -z allextract \
-   target/x86_64-unknown-unknown/release/opte.a -o opte
+header "compile"
+ptime -m ./compile.sh
+ptime -m ./link.sh
 
 #
 # XXX Inspect kernel module for bad relocations in case old codegen
