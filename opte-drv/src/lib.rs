@@ -483,13 +483,11 @@ fn add_port(req: &AddPortReq) -> Result<(), api::AddPortError> {
 
     let dyn_nat = match req.port_cfg.snat.as_ref() {
         None => opte_core::oxide_net::DynNat4Cfg {
-            public_mac: EtherAddr::from([0x99; 6]),
             public_ip: "192.168.99.99".parse().unwrap(),
             ports: Range { start: 999, end: 1000 },
         },
 
         Some(snat) => opte_core::oxide_net::DynNat4Cfg {
-            public_mac: snat.public_mac.clone(),
             public_ip: snat.public_ip,
             ports: Range { start: snat.port_start, end: snat.port_end },
         },
@@ -508,6 +506,8 @@ fn add_port(req: &AddPortReq) -> Result<(), api::AddPortError> {
     let mut new_port =
         Port::new(&req.link_name, private_mac, state.ectx.clone());
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
+    opte_core::oxide_net::dhcp4::setup(&mut new_port, &port_cfg).unwrap();
+    opte_core::oxide_net::icmp::setup(&mut new_port, &port_cfg).unwrap();
 
     // TODO: In order to demo this in the lab environment we currently
     // allow SNAT to be optional.
@@ -1236,6 +1236,8 @@ pub unsafe extern "C" fn opte_client_close(
     let port_cfg = ocs.port_cfg;
 
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
+    opte_core::oxide_net::dhcp4::setup(&mut new_port, &port_cfg).unwrap();
+    opte_core::oxide_net::icmp::setup(&mut new_port, &port_cfg).unwrap();
     opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg).unwrap();
     opte_core::oxide_net::arp::setup(&mut new_port, &port_cfg).unwrap();
     // We know the firewall layer is there so it can't fail.

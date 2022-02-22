@@ -28,7 +28,7 @@ use crate::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, PacketWriter,
     Parsed, ReadErr, WriteError,
 };
-use crate::rule::{GenErr, GenResult, HairpinAction, Payload};
+use crate::rule::{GenResult, HairpinAction, Payload};
 
 pub const ARP_HTYPE_ETHERNET: u16 = 1;
 
@@ -360,12 +360,7 @@ impl HairpinAction for ArpReply {
         let mut wtr = PacketWriter::new(pkt, None);
 
         let ethm = &meta.inner.ether.as_ref().unwrap();
-
-        let req_raw = match ArpEth4PayloadRaw::parse(rdr) {
-            Ok(v) => v,
-            Err(e) => return Err(GenErr::BadPayload(e)),
-        };
-
+        let req_raw = ArpEth4PayloadRaw::parse(rdr)?;
         let req = ArpEth4Payload::from(&req_raw);
 
         let eth_hdr = EtherHdr::from(&EtherMeta {

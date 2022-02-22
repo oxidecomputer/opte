@@ -1,0 +1,53 @@
+#!/bin/bash
+#
+# Run the specified DTrace script. This is a convenience wrapper to
+# allow the use of a DTrace library and common header without
+# requiring the user to understand all these mechanisms.
+#
+# For this to work the DTrace scripts, lib, and common header must all
+# reside at their precise relative locations to this runner script.
+# It's easiest to just run these scripts from the OPTE repo itself.
+#
+# Usage
+#
+#    opte-trace <name>
+#
+# Example
+#
+#    ~/foo/opte/dtrace/opte-trace opte-rule-match
+#
+MYDIR=$(dirname "$0")
+MYPROG=$(basename "$0")
+
+function print_help
+{
+	echo "$MYPROG [-h] <name>"
+	echo
+	echo "\tWhere <name> is the filename of the script you want to run."
+	echo "\tFor convenience, the <name> does not have to include the"
+	echo "\t.d file extension"
+}
+
+while getopts "h" opt; do
+	case $opt in
+	h)
+		print_help
+		exit 0
+		;;
+	esac
+done
+
+shift $((OPTIND - 1))
+
+if (($# != 1)); then
+	echo "ERROR: must specify single script" >&2
+	echo
+	print_help
+	exit 1
+fi
+
+# Remove the .d extension to normalize the script name; add it back
+# when calling DTrace.
+script=${1%.d}
+
+dtrace -L $MYDIR/lib -I $MYDIR -Cqs $MYDIR/${script}.d

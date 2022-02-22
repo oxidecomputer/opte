@@ -319,7 +319,7 @@ impl fmt::Display for RouterAction {
 }
 
 impl MetaAction for RouterAction {
-    fn mod_meta(&self, _flow_id: InnerFlowId, meta: &mut Meta) {
+    fn mod_meta(&self, _flow_id: &InnerFlowId, meta: &mut Meta) {
         // TODO Eiter mod_meta() needs to be able to return an error,
         // setting metadata needs to be a different callback, or we
         // should handle failure here and overwrite any existing

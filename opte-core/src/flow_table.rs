@@ -56,7 +56,7 @@ where
     pub fn dump(&self) -> Vec<(InnerFlowId, FlowEntryDump)> {
         let mut flows = Vec::with_capacity(self.map.len());
         for (flow_id, entry) in &self.map {
-            flows.push((*flow_id, FlowEntryDump::from(entry)));
+            flows.push((flow_id.clone(), FlowEntryDump::from(entry)));
         }
         flows
     }

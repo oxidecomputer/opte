@@ -142,7 +142,7 @@ impl StaticAction for EncapAction {
         &self,
         // The encap action is only used for outgoing.
         _dir: Direction,
-        flow_id: InnerFlowId,
+        flow_id: &InnerFlowId,
         meta: &mut Meta,
     ) -> rule::GenHtResult {
         // The router layer determines a RouterTarget and stores it in
@@ -244,7 +244,7 @@ impl StaticAction for DecapAction {
         &self,
         // The decap action is only used for ingoing.
         _dir: Direction,
-        _flow_id: InnerFlowId,
+        _flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> rule::GenHtResult {
         Ok(HT {

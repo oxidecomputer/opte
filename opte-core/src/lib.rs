@@ -1,4 +1,10 @@
 #![no_std]
+// XXX This allows me to run `cargo +nightly test` on a macOS system.
+// I'd prefer to run everything with
+// `--target=x86_64-unknown-illumos`, but the usdt crate doesn't
+// compile when I do that thanks to `asm!` shenanigans -- I don't have
+// time for that yak at this moment.
+#![cfg_attr(target_os = "macos", feature(asm_sym))]
 #![feature(extern_types)]
 #![feature(vec_into_raw_parts)]
 #![allow(non_camel_case_types)]
@@ -13,6 +19,9 @@ extern crate std;
 #[cfg(all(not(feature = "std"), not(test)))]
 #[macro_use]
 extern crate alloc;
+
+#[macro_use]
+extern crate cfg_if;
 
 use core::fmt::{self, Display};
 use core::num::ParseIntError;
@@ -41,6 +50,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod arp;
 pub mod checksum;
+pub mod dhcp;
 #[macro_use]
 pub mod ether;
 pub mod flow_table;
@@ -219,6 +229,30 @@ impl Display for Direction {
 }
 
 // ================================================================
+// DTrace USDT Provider
+//
+// Allowing us to use USDT to trace the opte-core SDT probes when
+// running in std/test.
+// ================================================================
+#[cfg(feature = "usdt")]
+#[usdt::provider]
+mod opte_provider {
+    use crate::layer::InnerFlowId;
+    use crate::Direction;
+
+    fn port_process_entry(dir: Direction, name: &str) {}
+    fn rule__match(layer: &str, dir: Direction, flow: &str, action: &str) {}
+    fn rule__no__match(layer: &str, dir: Direction, flow: &str) {}
+    fn layer_process_return(
+        dir: Direction,
+        name: &str,
+        id: &InnerFlowId,
+        res: &str,
+    ) {
+    }
+}
+
+// ================================================================
 // Providers
 //
 // Providers allow opte-core to work in different contexts (in theory)
@@ -301,4 +335,52 @@ impl LogProvider for KernelLog {
 
 pub struct ExecCtx {
     pub log: Box<dyn LogProvider>,
+}
+
+#[cfg(test)]
+mod test {
+    use std::fs::File;
+    use std::io::Write;
+
+    use pcap_parser::pcap::LegacyPcapBlock;
+    use pcap_parser::{Linktype, PcapHeader, ToVec};
+
+    use crate::packet::{Packet, PacketRead, PacketReader, Parsed};
+
+    pub struct PcapBuilder {
+        file: File,
+    }
+
+    impl PcapBuilder {
+        pub fn new(path: &str) -> Self {
+            let mut file = File::create(path).unwrap();
+
+            let mut hdr = PcapHeader {
+                magic_number: 0xa1b2c3d4,
+                version_major: 2,
+                version_minor: 4,
+                thiszone: 0,
+                sigfigs: 0,
+                snaplen: 1500,
+                network: Linktype::ETHERNET,
+            };
+
+            file.write_all(&hdr.to_vec().unwrap()).unwrap();
+
+            Self { file }
+        }
+
+        pub fn add_pkt(&mut self, pkt: &Packet<Parsed>) {
+            let pkt_bytes = PacketReader::new(&pkt, ()).copy_remaining();
+            let mut block = LegacyPcapBlock {
+                ts_sec: 7777,
+                ts_usec: 7777,
+                caplen: pkt_bytes.len() as u32,
+                origlen: pkt_bytes.len() as u32,
+                data: &pkt_bytes,
+            };
+
+            self.file.write_all(&block.to_vec().unwrap()).unwrap();
+        }
+    }
 }

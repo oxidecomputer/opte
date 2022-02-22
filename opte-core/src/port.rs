@@ -492,6 +492,7 @@ impl Port<Active> {
             Direction::In => self.process_in(pkt, &mut meta),
         };
         port_process_return_probe(dir, &self.name);
+        // XXX If this is a Hairpin result there is no need for this call.
         pkt.emit_headers()?;
         res
     }
@@ -591,7 +592,7 @@ impl Port<Active> {
                 // correct UFT/LFT entries upon connection
                 // termination.
                 if tfes.inbound_ufid.is_none() {
-                    tfes.inbound_ufid = Some(*ifid);
+                    tfes.inbound_ufid = Some(ifid.clone());
                 }
 
                 tcp_state
@@ -608,7 +609,7 @@ impl Port<Active> {
                 let tfes = TcpFlowEntryState {
                     // This must be the UFID of inbound traffic _as it
                     // arrives_, not after it's processed.
-                    inbound_ufid: Some(*ifid),
+                    inbound_ufid: Some(ifid.clone()),
                     tcp_state: tfs,
                 };
                 lock.add(ifid_after, tfes);
@@ -694,7 +695,7 @@ impl Port<Active> {
 
         match res {
             Ok(LayerResult::Allow) => {
-                self.state.uft_in.lock().add(ifid, hts);
+                self.state.uft_in.lock().add(ifid.clone(), hts);
 
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
@@ -785,7 +786,7 @@ impl Port<Active> {
     // a standard Result type.
     fn process_out_tcp_new(
         &self,
-        ifid: InnerFlowId,
+        ifid: &InnerFlowId,
         meta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
         let tcp = meta.inner_tcp().unwrap();
@@ -837,7 +838,7 @@ impl Port<Active> {
                 let tfes =
                     TcpFlowEntryState { inbound_ufid: None, tcp_state: tfs };
 
-                lock.add(ifid, tfes);
+                lock.add(ifid.clone(), tfes);
                 tcp_state
             }
         };
@@ -934,7 +935,7 @@ impl Port<Active> {
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
         if pkt.meta().is_inner_tcp() {
-            match self.process_out_tcp_new(ifid, pkt.meta()) {
+            match self.process_out_tcp_new(&ifid, pkt.meta()) {
                 Err(e) => {
                     self.bad_packet_err(e, pkt, &ifid);
                 }
@@ -1035,19 +1036,11 @@ pub struct TcpFlowEntryState {
 
 impl StateSummary for TcpFlowEntryState {
     fn summary(&self) -> String {
-        match self.inbound_ufid {
+        match &self.inbound_ufid {
             None => format!("None {}", self.tcp_state),
             Some(ufid) => format!("{} {}", ufid, self.tcp_state),
         }
     }
-}
-
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_port__process__entry(
-    _dir: uintptr_t,
-    _arg: uintptr_t,
-) {
-    ()
 }
 
 #[cfg(any(feature = "std", test))]
@@ -1061,18 +1054,26 @@ pub unsafe fn __dtrace_probe_port__process__return(
 #[cfg(all(not(feature = "std"), not(test)))]
 extern "C" {
     pub fn __dtrace_probe_port__process__entry(dir: uintptr_t, arg: uintptr_t);
-
     pub fn __dtrace_probe_port__process__return(dir: uintptr_t, arg: uintptr_t);
 }
 
 pub fn port_process_entry_probe(dir: Direction, name: &str) {
-    let name_c = CString::new(name).unwrap();
+    cfg_if::cfg_if! {
+        if #[cfg(all(not(feature = "std"), not(test)))] {
+            let name_c = CString::new(name).unwrap();
 
-    unsafe {
-        __dtrace_probe_port__process__entry(
-            dir as uintptr_t,
-            name_c.as_ptr() as uintptr_t,
-        );
+            unsafe {
+                __dtrace_probe_port__process__entry(
+                    dir as uintptr_t,
+                    name_c.as_ptr() as uintptr_t,
+                );
+            }
+        } else if #[cfg(feature = "usdt")] {
+            use std::arch::asm;
+            crate::opte_provider::port_process_entry!(|| (dir, name));
+        } else {
+            let (_, _) = (dir, name);
+        }
     }
 }
 

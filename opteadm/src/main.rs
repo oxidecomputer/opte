@@ -401,12 +401,22 @@ fn print_rule_header() {
 }
 
 fn print_rule(id: u64, rule: &RuleDump) {
-    let mut preds = rule
+    let hdr_preds = rule
         .predicates
         .iter()
         .map(|p| p.to_string())
         .collect::<Vec<String>>()
         .join(" ");
+
+    let data_preds = rule
+        .data_predicates
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<String>>()
+        .join(" ");
+
+    let mut preds = format!("{} {}", hdr_preds, data_preds);
+
     if preds == "" {
         preds = "*".to_string();
     }

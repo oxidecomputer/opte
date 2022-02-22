@@ -790,10 +790,23 @@ impl Packet<Initialized> {
             seg_pos: rdr.seg_pos() - hdr_len,
         });
 
+        // TODO Should this be a white list of protocols supported? Or
+        // should we deal with the protos OPTE gives access to and
+        // just ignore the rest (aka let it pass parsing and let the
+        // layers decide)?
         match proto {
             Protocol::TCP => Self::parse_hg_tcp(rdr, hg, offsets)?,
             Protocol::UDP => Self::parse_hg_udp(rdr, hg, offsets)?,
-            Protocol::ICMP => { /* something? */ }
+            // While one could consider part of the ICMP message to be
+            // a header, we do not. From a purely technical
+            // perspective, RFC 792 indicates that the only thing that
+            // you can be sure of is that the first octect defines the
+            // ICMP Message Type, which then defines how the rest of
+            // the packet is to be interpreted. Practically speaking,
+            // we could have an ICMP header type that represents the
+            // "header" of each Message Type, but instead we opt to
+            // treat it purely as payload.
+            Protocol::ICMP => (),
             _ => return Err(ParseError::UnsupportedProtocol(proto)),
         }
 
@@ -1881,6 +1894,10 @@ pub type WriteResult<T> = result::Result<T, WriteError>;
 /// forward, with the exception of `seek_back()`, which moves the
 /// position backwards within the current segment.
 pub trait PacketRead<'a> {
+    /// Copy all bytes from current position to the end of the packet
+    /// leaving the reader's internal state untouched.
+    fn copy_remaining(&self) -> Vec<u8>;
+
     /// Return the current position in the packet.
     fn pos(&self) -> usize;
 
@@ -1901,6 +1918,7 @@ pub trait PacketRead<'a> {
     /// segment, then an error is returned.
     fn seek_back(&mut self, amount: usize) -> ReadResult<()>;
 
+    fn seg_left(&self) -> usize;
     fn seg_idx(&self) -> usize;
     fn seg_pos(&self) -> usize;
 
@@ -2076,6 +2094,10 @@ where
         Ok(())
     }
 
+    fn seg_left(&self) -> usize {
+        self.seg_len - self.seg_pos
+    }
+
     fn seg_idx(&self) -> usize {
         self.seg_idx
     }
@@ -2114,6 +2136,34 @@ where
         self.pkt_pos += len;
         self.seg_pos += len;
         Ok(ret)
+    }
+
+    fn copy_remaining(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.pkt.len() - self.pkt_pos);
+        let mut seg_idx = self.seg_idx;
+        let mut seg_pos = self.seg_pos;
+        let mut seg_len = self.seg_len;
+        let mut seg = &self.pkt.segs[seg_idx];
+
+        loop {
+            let seg_slice = unsafe {
+                let start = (*seg.mp).b_rptr.add(seg_pos);
+                slice::from_raw_parts(start, seg_len - seg_pos)
+            };
+            bytes.extend_from_slice(seg_slice);
+
+            seg_idx += 1;
+
+            if seg_idx >= self.pkt.num_segs() {
+                break;
+            }
+
+            seg = &self.pkt.segs[seg_idx];
+            seg_pos = 0;
+            seg_len = seg.len
+        }
+
+        bytes
     }
 }
 

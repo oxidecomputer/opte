@@ -20,6 +20,7 @@ use std::vec::Vec;
 use crate::arp::{
     ArpEth4Payload, ArpEth4PayloadRaw, ArpMeta, ArpOp, ARP_HTYPE_ETHERNET,
 };
+use crate::dhcp::MessageType as DhcpMessageType;
 use crate::ether::{EtherAddr, EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
 use crate::flow_table::StateSummary;
 use crate::geneve::{GeneveMeta, GeneveMetaOpt};
@@ -27,6 +28,7 @@ use crate::headers::{
     self, HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
     UlpMetaOpt,
 };
+use crate::icmp::MessageType as Icmp4MessageType;
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Meta;
 use crate::layer::InnerFlowId;
@@ -41,6 +43,9 @@ use crate::{CString, Direction};
 use illumos_ddi_dki::{c_char, uintptr_t};
 
 use serde::{Deserialize, Serialize};
+
+use smoltcp::phy::ChecksumCapabilities as Csum;
+use smoltcp::wire::{DhcpPacket, DhcpRepr, Icmpv4Packet, Icmpv4Repr};
 
 // A marker trait for types which represent packet payloads. Examples
 // of payloads include an ARP request, ICMP body, or TCP body.
@@ -270,6 +275,7 @@ pub enum Predicate {
     InnerSrcIp4(Vec<Ipv4AddrMatch>),
     InnerDstIp4(Vec<Ipv4AddrMatch>),
     InnerIpProto(Vec<IpProtoMatch>),
+    InnerSrcPort(Vec<PortMatch>),
     InnerDstPort(Vec<PortMatch>),
     Not(Box<Predicate>),
     // Match on metadata stored by previous layers.
@@ -347,6 +353,15 @@ impl Display for Predicate {
                     .collect::<Vec<String>>()
                     .join(",");
                 write!(f, "inner.ip.dst={}", s)
+            }
+
+            InnerSrcPort(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.ulp.src={}", s)
             }
 
             InnerDstPort(list) => {
@@ -485,6 +500,26 @@ impl Predicate {
                 _ => return false,
             },
 
+            Self::InnerSrcPort(list) => match meta.inner.ulp {
+                None => return false,
+
+                Some(UlpMeta::Tcp(TcpMeta { src: port, .. })) => {
+                    for m in list {
+                        if m.matches(port) {
+                            return true;
+                        }
+                    }
+                }
+
+                Some(UlpMeta::Udp(UdpMeta { src: port, .. })) => {
+                    for m in list {
+                        if m.matches(port) {
+                            return true;
+                        }
+                    }
+                }
+            },
+
             Self::InnerDstPort(list) => match meta.inner.ulp {
                 None => return false,
 
@@ -512,6 +547,8 @@ impl Predicate {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum DataPredicate {
+    Dhcp4MsgType(DhcpMessageType),
+    Icmp4MsgType(Icmp4MessageType),
     InnerArpTpa(Vec<Ipv4AddrMatch>),
     Not(Box<DataPredicate>),
 }
@@ -521,6 +558,14 @@ impl Display for DataPredicate {
         use DataPredicate::*;
 
         match self {
+            Dhcp4MsgType(mt) => {
+                write!(f, "dhcp4.msg_type={}", mt)
+            }
+
+            Icmp4MsgType(mt) => {
+                write!(f, "icmp.msg_type={}", mt)
+            }
+
             InnerArpTpa(list) => {
                 let s = list
                     .iter()
@@ -550,6 +595,60 @@ impl DataPredicate {
         match self {
             Self::Not(pred) => return !pred.is_match(meta, rdr),
 
+            Self::Dhcp4MsgType(mt) => {
+                let bytes = rdr.copy_remaining();
+                let pkt = match DhcpPacket::new_checked(&bytes) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        crate::err(format!(
+                            "DhcpPacket::new_checked() failed: {:?}",
+                            e
+                        ));
+                        return false;
+                    }
+                };
+                let dhcp = match DhcpRepr::parse(&pkt) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        crate::err(format!(
+                            "DhcpRepr::parse() failed: {:?}",
+                            e
+                        ));
+
+                        return false;
+                    }
+                };
+
+                let res = DhcpMessageType::from(dhcp.message_type) == *mt;
+                return res;
+            }
+
+            Self::Icmp4MsgType(mt) => {
+                let bytes = rdr.copy_remaining();
+                let pkt = match Icmpv4Packet::new_checked(&bytes) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        crate::err(format!(
+                            "Icmpv4Packet::new_checked() failed: {:?}",
+                            e
+                        ));
+                        return false;
+                    }
+                };
+                let _icmp = match Icmpv4Repr::parse(&pkt, &Csum::ignored()) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        crate::err(format!(
+                            "Icmpv4Repr::parse() failed: {:?}",
+                            e
+                        ));
+                        return false;
+                    }
+                };
+
+                return Icmp4MessageType::from(pkt.msg_type()) == *mt;
+            }
+
             Self::InnerArpTpa(list) => match meta.inner.arp {
                 None => return false,
 
@@ -557,11 +656,6 @@ impl DataPredicate {
                     if htype != ARP_HTYPE_ETHERNET || ptype != ETHER_TYPE_IPV4 {
                         return false;
                     }
-
-                    // let raw = match LayoutVerified::new(payload) {
-                    //     Some(raw) => raw,
-                    //     None => return false,
-                    // };
 
                     let raw = match ArpEth4PayloadRaw::parse(rdr) {
                         Ok(raw) => raw,
@@ -694,7 +788,7 @@ impl StaticAction for Identity {
     fn gen_ht(
         &self,
         _dir: Direction,
-        _flow_id: InnerFlowId,
+        _flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> GenHtResult {
         Ok(HT::identity(&self.name))
@@ -881,7 +975,8 @@ pub trait StatefulAction: Display {
     ///
     /// * [`GenDescError::Unexpected`]: This action encountered an
     /// unexpected error while trying to generate a descriptor.
-    fn gen_desc(&self, flow_id: InnerFlowId, meta: &mut Meta) -> GenDescResult;
+    fn gen_desc(&self, flow_id: &InnerFlowId, meta: &mut Meta)
+        -> GenDescResult;
 }
 
 #[derive(Clone, Debug)]
@@ -897,7 +992,7 @@ pub trait StaticAction: Display {
     fn gen_ht(
         &self,
         dir: Direction,
-        flow_id: InnerFlowId,
+        flow_id: &InnerFlowId,
         meta: &mut Meta,
     ) -> GenHtResult;
 }
@@ -907,13 +1002,34 @@ pub trait StaticAction: Display {
 /// the packet, only add/modify/remove metadata for use by later
 /// layers.
 pub trait MetaAction: Display {
-    fn mod_meta(&self, flow_id: InnerFlowId, meta: &mut Meta);
+    fn mod_meta(&self, flow_id: &InnerFlowId, meta: &mut Meta);
 }
 
 #[derive(Debug)]
 pub enum GenErr {
     BadPayload(crate::packet::ReadErr),
+    Malformed,
     MissingMeta,
+    Truncated,
+    Unexpected(String),
+}
+
+impl From<crate::packet::ReadErr> for GenErr {
+    fn from(err: crate::packet::ReadErr) -> Self {
+        Self::BadPayload(err)
+    }
+}
+
+impl From<smoltcp::Error> for GenErr {
+    fn from(err: smoltcp::Error) -> Self {
+        use smoltcp::Error::*;
+
+        match err {
+            Malformed => Self::Malformed,
+            Truncated => Self::Truncated,
+            _ => Self::Unexpected(format!("smoltcp error {}", err)),
+        }
+    }
 }
 
 pub type GenResult<T> = Result<T, GenErr>;
@@ -1138,6 +1254,7 @@ impl<'a> Rule<Finalized> {
 pub struct RuleDump {
     pub priority: u16,
     pub predicates: Vec<Predicate>,
+    pub data_predicates: Vec<DataPredicate>,
     pub action: String,
 }
 
@@ -1145,11 +1262,16 @@ impl From<&Rule<Finalized>> for RuleDump {
     fn from(rule: &Rule<Finalized>) -> Self {
         let predicates =
             rule.state.preds.as_ref().map_or(vec![], |rp| rp.hdr_preds.clone());
+        let data_predicates = rule
+            .state
+            .preds
+            .as_ref()
+            .map_or(vec![], |rp| rp.data_preds.clone());
 
         RuleDump {
             priority: rule.priority,
             predicates,
-            // XXX What about data predicates?
+            data_predicates,
             action: rule.action.to_string(),
         }
     }

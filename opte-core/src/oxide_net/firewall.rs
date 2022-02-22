@@ -161,7 +161,7 @@ impl fmt::Display for FwStatefulAction {
 impl StatefulAction for FwStatefulAction {
     fn gen_desc(
         &self,
-        _flow_id: InnerFlowId,
+        _flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> rule::GenDescResult {
         Ok(Arc::new(IdentityDesc::new(self.name.clone())))

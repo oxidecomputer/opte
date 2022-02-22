@@ -20,8 +20,9 @@ use std::prelude::v1::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-extern crate pcap_parser;
 use pcap_parser::pcap::{self, LegacyPcapBlock, PcapHeader};
+
+use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 
 use zerocopy::AsBytes;
 
@@ -32,15 +33,15 @@ use crate::ether::{
 };
 use crate::flow_table::FLOW_DEF_EXPIRE_SECS;
 use crate::geneve::Vni;
-use crate::headers::{IpMeta, UlpMeta};
+use crate::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
 use crate::ip4::{self, Ipv4Hdr, Ipv4HdrRaw, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Addr;
-use crate::oxide_net::{self, arp, dyn_nat4, firewall, overlay, router};
+use crate::oxide_net::overlay::{self, OverlayCfg, PhysNet, Virt2Phys};
+use crate::oxide_net::{self, arp, dyn_nat4, firewall, icmp, router};
 use crate::packet::{
-    mock_allocb, Initialized, Packet, PacketRead, PacketReader, PacketSeg,
-    PacketWriter, ParseError, WritePos,
+    Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
 };
-use crate::port::{DropReason, Inactive, Port, ProcessResult};
+use crate::port::{Inactive, Port, ProcessResult};
 use crate::tcp::TcpHdr;
 use crate::udp::{UdpHdr, UdpHdrRaw, UdpMeta};
 use crate::{Direction::*, ExecCtx};
@@ -76,7 +77,6 @@ fn home_cfg() -> oxide_net::PortCfg {
         private_mac: EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]),
         vpc_subnet: "10.0.0.0/24".parse().unwrap(),
         dyn_nat: oxide_net::DynNat4Cfg {
-            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0x00, 0x00, 0x63]),
             public_ip: "10.0.0.99".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
         },
@@ -92,7 +92,6 @@ fn lab_cfg() -> oxide_net::PortCfg {
         private_mac: EtherAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
         dyn_nat: oxide_net::DynNat4Cfg {
-            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0x00, 0x01, 0xEE]),
             public_ip: "76.76.21.21".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
         },
@@ -110,6 +109,13 @@ fn oxide_net_setup(name: &str, cfg: &oxide_net::PortCfg) -> Port<Inactive> {
     // Firewall layer
     // ================================================================
     firewall::setup(&mut port).expect("failed to add firewall layer");
+
+    // ================================================================
+    // ICMP layer
+    //
+    // For intercepting ICMP Echo Requests to the virtual gateway.
+    // ================================================================
+    icmp::setup(&mut port, cfg).expect("failed to add icmp layer");
 
     // ================================================================
     // Dynamic NAT Layer (IPv4)
@@ -130,11 +136,6 @@ fn g1_cfg() -> oxide_net::PortCfg {
         private_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
         dyn_nat: oxide_net::DynNat4Cfg {
-            // NOTE: This member is used for home routers that might
-            // balk at multiple IPs sharing a MAC address. As these
-            // tests are meant to mimic the Oxide Rack Network we just
-            // keep this the same.
-            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
             // NOTE: This is not a routable IP, but remember that a
             // "public IP" for an Oxide guest could either be a
             // public, routable IP or simply an IP on their wider LAN
@@ -156,11 +157,6 @@ fn g2_cfg() -> oxide_net::PortCfg {
         private_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x66]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
         dyn_nat: oxide_net::DynNat4Cfg {
-            // NOTE: This member is used for home routers that might
-            // balk at multiple IPs sharing a MAC address. As these
-            // tests are meant to mimic the Oxide Rack Network we just
-            // keep this the same.
-            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x66]),
             // NOTE: This is not a routable IP, but remember that a
             // "public IP" for an Oxide guest could either be a
             // public, routable IP or simply an IP on their wider LAN
@@ -176,15 +172,173 @@ fn g2_cfg() -> oxide_net::PortCfg {
     }
 }
 
+// Verify that the guest can ping the virtual gateway.
+#[test]
+fn gateway_icmp4_ping() {
+    use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
+
+    #[cfg(feature = "usdt")]
+    usdt::register_probes().unwrap();
+
+    let mut g1_cfg = g1_cfg();
+    let mut g2_cfg = g2_cfg();
+
+    // NOTE: We're not testing Boundary Services in this test, so the
+    // values are irrelevant here.
+    let bs = PhysNet {
+        ether: EtherAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+        ip: Ipv6Addr::from([
+            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x77, 0x77,
+        ]),
+        vni: Vni::new(7777u32).unwrap(),
+    };
+
+    g1_cfg.overlay = Some(OverlayCfg {
+        boundary_services: bs.clone(),
+        vni: Vni::new(99u32).unwrap(),
+        phys_ip_src: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+    });
+
+    g2_cfg.overlay = Some(OverlayCfg {
+        boundary_services: bs.clone(),
+        vni: Vni::new(99u32).unwrap(),
+        // Site 0xF7, Rack 1, Sled 22, Interface 1
+        phys_ip_src: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+    });
+    let g2_phys = PhysNet {
+        ether: g2_cfg.private_mac,
+        ip: g2_cfg.overlay.as_ref().unwrap().phys_ip_src,
+        vni: g2_cfg.overlay.as_ref().unwrap().vni,
+    };
+
+    // Add V2P mappings that allow guests to resolve each others
+    // physical addresses.
+    let v2p = Arc::new(Virt2Phys::new());
+    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+
+    let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
+    router::setup(&mut g1_port).unwrap();
+    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone());
+    let g1_port = g1_port.activate();
+
+    let mut pcap = crate::test::PcapBuilder::new("gateway_icmpv4_ping.pcap");
+
+    // ================================================================
+    // Generate an ICMP Echo Request from G1 to Virtual GW
+    // ================================================================
+    let ident = 7;
+    let seq_no = 777;
+    let data = b"reunion\0";
+
+    let req = Icmpv4Repr::EchoRequest { ident, seq_no, data: &data[..] };
+
+    let mut body_bytes = vec![0u8; req.buffer_len()];
+    let mut req_pkt = Icmpv4Packet::new_unchecked(&mut body_bytes);
+    let _ = req.emit(&mut req_pkt, &Default::default());
+
+    let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
+        src: g1_cfg.private_ip,
+        dst: g1_cfg.gw_ip,
+        proto: Protocol::ICMP,
+    });
+    ip4.set_total_len(ip4.hdr_len() as u16 + req.buffer_len() as u16);
+    ip4.compute_hdr_csum();
+
+    let eth = EtherHdr::from(&EtherMeta {
+        dst: g1_cfg.gw_mac,
+        src: g1_cfg.private_mac,
+        ether_type: ETHER_TYPE_IPV4,
+    });
+
+    let mut pkt_bytes =
+        Vec::with_capacity(ETHER_HDR_SZ + ip4.hdr_len() + req.buffer_len());
+    pkt_bytes.extend_from_slice(&eth.as_bytes());
+    pkt_bytes.extend_from_slice(&ip4.as_bytes());
+    pkt_bytes.extend_from_slice(&body_bytes);
+    let mut g1_pkt = Packet::copy(&pkt_bytes).parse().unwrap();
+    pcap.add_pkt(&g1_pkt);
+
+    // ================================================================
+    // Run the Echo Request through g1's port in the outbound
+    // direction and verify it results in an Echo Reply Hairpin packet
+    // back to guest.
+    // ================================================================
+    let res = g1_port.process(Out, &mut g1_pkt);
+    let hp = match res {
+        Ok(Hairpin(hp)) => hp,
+        _ => panic!("expected Hairpin, got {:?}", res),
+    };
+
+    let reply = hp.parse().unwrap();
+    pcap.add_pkt(&reply);
+
+    // Ether + IPv4
+    assert_eq!(reply.body_offset(), 14 + 20);
+    assert_eq!(reply.body_seg(), 0);
+
+    let meta = reply.meta();
+    assert!(meta.outer.ether.is_none());
+    assert!(meta.outer.ip.is_none());
+    assert!(meta.outer.ulp.is_none());
+
+    match meta.inner.ether.as_ref() {
+        Some(eth) => {
+            assert_eq!(eth.src, g1_cfg.gw_mac);
+            assert_eq!(eth.dst, g1_cfg.private_mac);
+        }
+
+        None => panic!("no inner ether header"),
+    }
+
+    match meta.inner.ip.as_ref().unwrap() {
+        IpMeta::Ip4(ip4) => {
+            assert_eq!(ip4.src, g1_cfg.gw_ip);
+            assert_eq!(ip4.dst, g1_cfg.private_ip);
+            assert_eq!(ip4.proto, Protocol::ICMP);
+        }
+
+        ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+    }
+
+    let mut rdr = PacketReader::new(&reply, ());
+    // Need to seek to body.
+    rdr.seek(14 + 20).unwrap();
+    let reply_body = rdr.copy_remaining();
+    let reply_pkt = Icmpv4Packet::new_checked(&reply_body).unwrap();
+    // TODO The 2nd arguemnt is the checksum capab, while the default
+    // value should verify the checksums better to make this explicit
+    // so it's clear what is happening.
+    let mut csum = CsumCapab::ignored();
+    csum.ipv4 = smoltcp::phy::Checksum::Rx;
+    csum.icmpv4 = smoltcp::phy::Checksum::Rx;
+    let reply_icmp = Icmpv4Repr::parse(&reply_pkt, &csum).unwrap();
+    match reply_icmp {
+        Icmpv4Repr::EchoReply {
+            ident: r_ident,
+            seq_no: r_seq_no,
+            data: r_data,
+        } => {
+            assert_eq!(r_ident, ident);
+            assert_eq!(r_seq_no, seq_no);
+            assert_eq!(r_data, data);
+        }
+
+        _ => panic!("expected Echo Reply, got {:?}", reply_icmp),
+    }
+}
+
 // Verify that two guests on the same VPC can communicate via overlay.
 // I.e., test routing + encap/decap.
 #[test]
 fn overlay_guest_to_guest() {
     use crate::checksum::HeaderChecksum;
     use crate::geneve;
-    use crate::headers::{IpAddr, IpCidr};
     use crate::ip4::UlpCsumOpt;
-    use crate::oxide_net::overlay::{OverlayCfg, PhysNet, Virt2Phys};
     use crate::oxide_net::router::RouterTarget;
     use crate::tcp::TcpFlags;
 
@@ -274,6 +428,16 @@ fn overlay_guest_to_guest() {
     )
     .unwrap();
 
+    let mut pcap_guest1 =
+        crate::test::PcapBuilder::new("overlay_guest_to_guest-guest-1.pcap");
+    let mut pcap_phys1 =
+        crate::test::PcapBuilder::new("overlay_guest_to_guest-phys-1.pcap");
+
+    let mut pcap_guest2 =
+        crate::test::PcapBuilder::new("overlay_guest_to_guest-guest-2.pcap");
+    let mut pcap_phys2 =
+        crate::test::PcapBuilder::new("overlay_guest_to_guest-phys-2.pcap");
+
     // ================================================================
     // Generate a telnet SYN packet from g1 to g2.
     // ================================================================
@@ -284,15 +448,10 @@ fn overlay_guest_to_guest() {
     let mut ip4 =
         Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
     ip4.compute_hdr_csum();
-    let tcp_csum = ip4.compute_ulp_csum(UlpCsumOpt::Full, &body);
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(
-        EtherType::Ipv4,
-        g1_cfg.private_mac,
-        // TODO This dest mac is wrong, it would be using the mac of
-        // the gateway.
-        g2_cfg.private_mac,
-    );
+    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
 
     let mut bytes = vec![];
     bytes.extend_from_slice(&eth.as_bytes());
@@ -300,12 +459,14 @@ fn overlay_guest_to_guest() {
     bytes.extend_from_slice(&tcp.as_bytes());
     bytes.extend_from_slice(&body);
     let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
+    pcap_guest1.add_pkt(&g1_pkt);
 
     // ================================================================
     // Run the telnet SYN packet through g1's port in the outbound
     // direction and verify the resulting packet meets expectations.
     // ================================================================
     let res = g1_port.process(Out, &mut g1_pkt);
+    pcap_phys1.add_pkt(&g1_pkt);
     assert!(matches!(res, Ok(Modified)));
 
     // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
@@ -386,8 +547,10 @@ fn overlay_guest_to_guest() {
     let mblk = g1_pkt.unwrap();
     let mut g2_pkt =
         unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
+    pcap_phys2.add_pkt(&g2_pkt);
 
     let res = g2_port.process(In, &mut g2_pkt);
+    pcap_guest2.add_pkt(&g2_pkt);
     assert!(matches!(res, Ok(Modified)));
 
     // Ether + IPv4 + TCP
@@ -435,7 +598,7 @@ fn overlay_guest_to_guest() {
 fn overlay_guest_to_internet() {
     use crate::checksum::HeaderChecksum;
     use crate::geneve;
-    use crate::headers::{IpAddr, IpCidr};
+    use crate::headers::IpCidr;
     use crate::ip4::UlpCsumOpt;
     use crate::oxide_net::overlay::{OverlayCfg, PhysNet, Virt2Phys};
     use crate::oxide_net::router::RouterTarget;
@@ -489,7 +652,8 @@ fn overlay_guest_to_internet() {
     tcp.set_seq(1741469041);
     let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, dst_ip);
     ip4.compute_hdr_csum();
-    let tcp_csum = ip4.compute_ulp_csum(UlpCsumOpt::Full, &body);
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
     let eth = EtherHdr::new(
         EtherType::Ipv4,
@@ -709,76 +873,17 @@ fn dhcp_req() {
     }
 }
 
-// Verify the various parts of ARP hairpinning work and that any other
-// ARP traffic is dropped.
+// Verify that OPTE generates a hairpin ARP reply when the guest
+// queries for the gateway.
 #[test]
-fn arp_hairpin() {
+fn arp_gateway() {
     use crate::arp::ArpOp;
     use crate::ether::ETHER_TYPE_IPV4;
 
-    let cfg = home_cfg();
-    let host_mac = EtherAddr::from([0x80, 0xe8, 0x2c, 0xf5, 0x10, 0x35]);
-    let host_ip = "10.0.0.206".parse().unwrap();
+    let cfg = g1_cfg();
     let port = oxide_net_setup("arp_hairpin", &cfg).activate();
     let reply_hdr_sz = ETHER_HDR_SZ + ARP_HDR_SZ;
 
-    // ================================================================
-    // GARP from the host. This should be dropped.
-    // ================================================================
-    let mut mp_head = mock_allocb(14);
-    let mut mp2 = mock_allocb(28);
-
-    // Use PacketSeg for the sole purpose of writing some bytes to these
-    // segments before they are collected into the `Pkt` type.
-    let eth_hdr = EtherHdrRaw {
-        dst: host_mac.to_bytes(),
-        src: host_mac.to_bytes(),
-        ether_type: [0x08, 0x06],
-    };
-    let mut seg = unsafe { PacketSeg::wrap(mp_head) };
-    seg.write(eth_hdr.as_bytes(), WritePos::Append).unwrap();
-    mp_head = seg.unwrap();
-
-    let arp_hdr = ArpHdrRaw {
-        htype: [0x00, 0x01],
-        ptype: [0x08, 0x00],
-        hlen: 0x06,
-        plen: 0x04,
-        op: [0x00, 0x01],
-    };
-    seg = unsafe { PacketSeg::wrap(mp2) };
-    seg.write(arp_hdr.as_bytes(), WritePos::Append).unwrap();
-    let arp = ArpEth4Payload {
-        sha: host_mac,
-        spa: host_ip,
-        tha: EtherAddr::from([0xFF; 6]),
-        tpa: host_ip,
-    };
-    seg.write(ArpEth4PayloadRaw::from(arp).as_bytes(), WritePos::Append)
-        .unwrap();
-    mp2 = seg.unwrap();
-
-    unsafe {
-        (*mp_head).b_cont = mp2;
-    }
-
-    let mut pkt =
-        unsafe { Packet::<Initialized>::wrap(mp_head).parse().unwrap() };
-    assert_eq!(pkt.num_segs(), 2);
-    assert_eq!(pkt.len(), 42);
-
-    let res = port.process(In, &mut pkt);
-    assert!(res.is_ok(), "bad result: {:?}", res);
-    let val = res.unwrap();
-    assert!(matches!(val, ProcessResult::Drop { .. }), "bad val: {:?}", val);
-    if let ProcessResult::Drop { reason: DropReason::Layer { name } } = val {
-        assert_eq!(name, "arp")
-    }
-
-    // ================================================================
-    // ARP Request from guest for gateway. This should generate a
-    // hairpin result.
-    // ================================================================
     let pkt = Packet::alloc(42);
     let eth_hdr = EtherHdrRaw {
         dst: [0xff; 6],
@@ -830,126 +935,6 @@ fn arp_hairpin() {
             assert_eq!(arp.spa, cfg.gw_ip);
             assert_eq!(arp.tha, cfg.private_mac);
             assert_eq!(arp.tpa, cfg.private_ip);
-        }
-
-        res => panic!("expected a Hairpin, got {:?}", res),
-    }
-
-    // ================================================================
-    // ARP Request from gateway for guest private IP. This should
-    // generate a hairpin result.
-    // ================================================================
-    let pkt = Packet::alloc(42);
-    let eth_hdr = EtherHdrRaw {
-        dst: [0xff; 6],
-        src: cfg.gw_mac.to_bytes(),
-        ether_type: [0x08, 0x06],
-    };
-
-    let arp_hdr = ArpHdrRaw {
-        htype: [0x00, 0x01],
-        ptype: [0x08, 0x00],
-        hlen: 0x06,
-        plen: 0x04,
-        op: [0x00, 0x01],
-    };
-
-    let arp = ArpEth4Payload {
-        sha: cfg.gw_mac,
-        spa: cfg.gw_ip,
-        tha: EtherAddr::from([0x00; 6]),
-        tpa: cfg.private_ip,
-    };
-
-    let mut wtr = PacketWriter::new(pkt, None);
-    let _ = wtr.write(eth_hdr.as_bytes()).unwrap();
-    let _ = wtr.write(arp_hdr.as_bytes()).unwrap();
-    let _ = wtr.write(ArpEth4PayloadRaw::from(arp).as_bytes()).unwrap();
-    let mut pkt = wtr.finish().parse().unwrap();
-
-    let res = port.process(In, &mut pkt);
-    match res {
-        Ok(Hairpin(hppkt)) => {
-            let hppkt = hppkt.parse().unwrap();
-            let meta = hppkt.meta();
-            let ethm = meta.inner.ether.as_ref().unwrap();
-            let arpm = meta.inner.arp.as_ref().unwrap();
-            assert_eq!(ethm.dst, cfg.gw_mac);
-            assert_eq!(ethm.src, cfg.private_mac);
-            assert_eq!(ethm.ether_type, ETHER_TYPE_ARP);
-            assert_eq!(arpm.op, ArpOp::Reply);
-            assert_eq!(arpm.ptype, ETHER_TYPE_IPV4);
-
-            let mut rdr = PacketReader::new(&hppkt, ());
-            assert!(rdr.seek(reply_hdr_sz).is_ok());
-            let arp = ArpEth4Payload::from(
-                &ArpEth4PayloadRaw::parse(&mut rdr).unwrap(),
-            );
-
-            assert_eq!(arp.sha, cfg.private_mac);
-            assert_eq!(arp.spa, cfg.private_ip);
-            assert_eq!(arp.tha, cfg.gw_mac);
-            assert_eq!(arp.tpa, cfg.gw_ip);
-        }
-
-        res => panic!("expected a Hairpin, got {:?}", res),
-    }
-
-    // ================================================================
-    // ARP Request from gateway for guest public IP. This should
-    // generate a hairpin result.
-    // ================================================================
-    let pkt = Packet::alloc(42);
-    let eth_hdr = EtherHdrRaw {
-        dst: [0xff; 6],
-        src: cfg.gw_mac.to_bytes(),
-        ether_type: [0x08, 0x06],
-    };
-
-    let arp_hdr = ArpHdrRaw {
-        htype: [0x00, 0x01],
-        ptype: [0x08, 0x00],
-        hlen: 0x06,
-        plen: 0x04,
-        op: [0x00, 0x01],
-    };
-
-    let arp = ArpEth4Payload {
-        sha: cfg.gw_mac,
-        spa: cfg.gw_ip,
-        tha: EtherAddr::from([0x00; 6]),
-        tpa: cfg.dyn_nat.public_ip,
-    };
-
-    let mut wtr = PacketWriter::new(pkt, None);
-    let _ = wtr.write(eth_hdr.as_bytes()).unwrap();
-    let _ = wtr.write(arp_hdr.as_bytes()).unwrap();
-    let _ = wtr.write(ArpEth4PayloadRaw::from(arp).as_bytes()).unwrap();
-    let mut pkt = wtr.finish().parse().unwrap();
-
-    let res = port.process(In, &mut pkt);
-    match res {
-        Ok(Hairpin(hppkt)) => {
-            let hppkt = hppkt.parse().unwrap();
-            let meta = hppkt.meta();
-            let ethm = meta.inner.ether.as_ref().unwrap();
-            let arpm = meta.inner.arp.as_ref().unwrap();
-            assert_eq!(ethm.dst, cfg.gw_mac);
-            assert_eq!(ethm.src, cfg.dyn_nat.public_mac);
-            assert_eq!(ethm.ether_type, ETHER_TYPE_ARP);
-            assert_eq!(arpm.op, ArpOp::Reply);
-            assert_eq!(arpm.ptype, ETHER_TYPE_IPV4);
-
-            let mut rdr = PacketReader::new(&hppkt, ());
-            assert!(rdr.seek(reply_hdr_sz).is_ok());
-            let arp = ArpEth4Payload::from(
-                &ArpEth4PayloadRaw::parse(&mut rdr).unwrap(),
-            );
-
-            assert_eq!(arp.sha, cfg.dyn_nat.public_mac);
-            assert_eq!(arp.spa, cfg.dyn_nat.public_ip);
-            assert_eq!(arp.tha, cfg.gw_mac);
-            assert_eq!(arp.tpa, cfg.gw_ip);
         }
 
         res => panic!("expected a Hairpin, got {:?}", res),
@@ -1030,252 +1015,6 @@ fn outgoing_dns_lookup() {
     port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0));
     assert_eq!(port.num_flows("dyn-nat4", In), 0);
     assert_eq!(port.num_flows("dyn-nat4", Out), 0);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    // Verify the flow is expired when it should be.
-    port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64 + 1, 0));
-    assert_eq!(port.num_flows("dyn-nat4", In), 0);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 0);
-    assert_eq!(port.num_flows("firewall", In), 0);
-    assert_eq!(port.num_flows("firewall", Out), 0);
-}
-
-// Test an outgoing HTTP request/connection. I happened upon a small
-// connectivity check that Ubuntu makes which is good for this
-// smaller-scale test (Ubuntu uses this to check for captive portals).
-#[test]
-fn outgoing_http_req() {
-    let mut cfg = home_cfg();
-    // We have to specify exactly one port to match up with the actual
-    // port from the pcap.
-    cfg.dyn_nat.ports.start = 3839;
-    cfg.dyn_nat.ports.end = 3840;
-    let port = oxide_net_setup("outgoing_http_req", &cfg).activate();
-    let gpath = "http-out-guest.pcap";
-    let gbytes = fs::read(gpath).unwrap();
-    let hpath = "http-out-host.pcap";
-    let hbytes = fs::read(hpath).unwrap();
-
-    // Assert the baseline before any packet processing occurs.
-    assert_eq!(port.num_flows("dyn-nat4", In), 0);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 0);
-    assert_eq!(port.num_flows("firewall", In), 0);
-    assert_eq!(port.num_flows("firewall", Out), 0);
-    let now = Instant::now();
-
-    // ================================================================
-    // Packet 1 (SYN)
-    // ================================================================
-    let (gbytes, _) = get_header(&gbytes[..]);
-    let (gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (hbytes, _) = get_header(&hbytes[..]);
-    let (hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 2 (SYN+ACK)
-    // ================================================================
-    let (hbytes, hblock) = next_block(hbytes);
-    let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (gbytes, gblock) = next_block(gbytes);
-    let pcap_pkt = Packet::copy(gblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), gblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 3 (ACK)
-    // ================================================================
-    let (gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 4 (HTTP GET)
-    // ================================================================
-    let (gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 5 (ACK #4)
-    // ================================================================
-    let (hbytes, hblock) = next_block(hbytes);
-    let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (gbytes, gblock) = next_block(gbytes);
-    let pcap_pkt = Packet::copy(gblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), gblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 6 (HTTP 301)
-    // ================================================================
-    let (hbytes, hblock) = next_block(hbytes);
-    let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (gbytes, gblock) = next_block(gbytes);
-    let pcap_pkt = Packet::copy(gblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), gblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 7 (ACK #6)
-    // ================================================================
-    let (gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 8 (Guest FIN ACK)
-    // ================================================================
-    let (gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 9 (ACK #8)
-    // ================================================================
-    let (hbytes, hblock) = next_block(hbytes);
-    let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (gbytes, gblock) = next_block(gbytes);
-    let pcap_pkt = Packet::copy(gblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), gblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 10 (Remote FIN ACK)
-    // ================================================================
-    let (hbytes, hblock) = next_block(hbytes);
-    let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (gbytes, gblock) = next_block(gbytes);
-    let pcap_pkt = Packet::copy(gblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), gblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 11 (ACK #10)
-    // ================================================================
-    let (_gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (_hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Expiration
-    // ================================================================
-
-    // TODO: TCP flow table needs to hook into expiry, in which case
-    // the flows would all expire at the moment of connection
-    // teardown.
-
-    // Verify that the flow is still valid when it should be.
-    port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
     assert_eq!(port.num_flows("firewall", In), 1);
     assert_eq!(port.num_flows("firewall", Out), 1);
 

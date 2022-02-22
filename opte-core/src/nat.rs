@@ -18,7 +18,6 @@ use std::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
-use crate::ether::{EtherAddr, EtherMeta};
 use crate::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
 use crate::ip4::{Ipv4Addr, Ipv4Meta};
 use crate::layer::InnerFlowId;
@@ -102,19 +101,12 @@ impl NatPool {
 #[derive(Clone)]
 pub struct DynNat4 {
     priv_ip: Ipv4Addr,
-    priv_mac: EtherAddr,
-    pub_mac: EtherAddr,
     ip_pool: Arc<NatPool>,
 }
 
 impl DynNat4 {
-    pub fn new(
-        addr: Ipv4Addr,
-        priv_mac: EtherAddr,
-        pub_mac: EtherAddr,
-        ip_pool: Arc<NatPool>,
-    ) -> Self {
-        DynNat4 { priv_ip: addr.into(), priv_mac, pub_mac, ip_pool }
+    pub fn new(addr: Ipv4Addr, ip_pool: Arc<NatPool>) -> Self {
+        DynNat4 { priv_ip: addr.into(), ip_pool }
     }
 }
 
@@ -128,7 +120,7 @@ impl fmt::Display for DynNat4 {
 impl StatefulAction for DynNat4 {
     fn gen_desc(
         &self,
-        flow_id: InnerFlowId,
+        flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> rule::GenDescResult {
         let pool = &self.ip_pool;
@@ -136,10 +128,8 @@ impl StatefulAction for DynNat4 {
         match pool.obtain(self.priv_ip) {
             Ok((pub_ip, pub_port)) => {
                 let desc = DynNat4Desc {
-                    priv_mac: self.priv_mac,
                     priv_ip: self.priv_ip,
                     priv_port: priv_port,
-                    pub_mac: self.pub_mac,
                     pub_ip,
                     pub_port,
                 };
@@ -157,10 +147,8 @@ impl StatefulAction for DynNat4 {
 
 #[derive(Clone, Debug)]
 pub struct DynNat4Desc {
-    pub_mac: EtherAddr,
     pub_ip: Ipv4Addr,
     pub_port: u16,
-    priv_mac: EtherAddr,
     priv_ip: Ipv4Addr,
     priv_port: u16,
 }
@@ -175,14 +163,8 @@ impl ActionDesc for DynNat4Desc {
     fn gen_ht(&self, dir: Direction) -> HT {
         match dir {
             // Outbound traffic needs it's source IP and source port
-            // mapped to the public values obtained from the NAT pool.
-            //
-            // XXX I also currently remap the MAC address to work
-            // around what seems to be a limitation with my home
-            // router, this should be removed eventually.
             Direction::Out => HT {
                 name: DYN_NAT4_NAME.to_string(),
-                inner_ether: EtherMeta::modify(Some(self.pub_mac), None),
                 inner_ip: Ipv4Meta::modify(Some(self.pub_ip), None, None),
                 inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                     generic: UlpGenericModify {
@@ -197,12 +179,8 @@ impl ActionDesc for DynNat4Desc {
             // Inbound traffic needs its destination IP and
             // destination port mapped back to the private values that
             // the guest expects to see.
-            //
-            // XXX As mentioned above, we currently also remap the MAC
-            // address to work around a router limitation.
             Direction::In => HT {
                 name: DYN_NAT4_NAME.to_string(),
-                inner_ether: EtherMeta::modify(None, Some(self.priv_mac)),
                 inner_ip: Ipv4Meta::modify(None, Some(self.priv_ip), None),
                 inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                     generic: UlpGenericModify {
@@ -223,15 +201,14 @@ impl ActionDesc for DynNat4Desc {
 
 #[test]
 fn dyn_nat4_ht() {
-    use crate::ether::ETHER_TYPE_IPV4;
+    use crate::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV4};
     use crate::headers::{IpMeta, UlpMeta};
     use crate::ip4::Protocol;
     use crate::packet::{MetaGroup, PacketMeta};
-    use crate::port;
+
     use crate::tcp::TcpMeta;
 
     let priv_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
-    let pub_mac = EtherAddr::from([0xa8, 0x40, 0x25, 0x00, 0x00, 0x63]);
     let dest_mac = EtherAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
     let priv_ip = "10.0.0.220".parse().unwrap();
     let priv_port = "4999".parse().unwrap();
@@ -239,8 +216,7 @@ fn dyn_nat4_ht() {
     let pub_port = "8765".parse().unwrap();
     let outside_ip = "76.76.21.21".parse().unwrap();
 
-    let nat =
-        DynNat4Desc { pub_mac, pub_ip, pub_port, priv_mac, priv_ip, priv_port };
+    let nat = DynNat4Desc { pub_ip, pub_port, priv_ip, priv_port };
 
     // TODO test in_ht
     let out_ht = nat.gen_ht(Direction::Out);
@@ -277,7 +253,6 @@ fn dyn_nat4_ht() {
     out_ht.run(&mut meta);
 
     let ether_meta = meta.inner.ether.as_ref().unwrap();
-    assert_eq!(ether_meta.src, pub_mac);
     assert_eq!(ether_meta.dst, dest_mac);
 
     let ip4_meta = match meta.inner.ip.as_ref().unwrap() {
