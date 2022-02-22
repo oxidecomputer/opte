@@ -859,6 +859,10 @@ pub fn layer_process_return_probe(
     ifid: &InnerFlowId,
     res: &result::Result<LayerResult, LayerError>,
 ) {
+    let dir_c = match dir {
+        Direction::In => CString::new("in").unwrap(),
+        Direction::Out => CString::new("out").unwrap(),
+    };
     let name_c = CString::new(name).unwrap();
     let ifid_arg = flow_id_sdt_arg::from(ifid);
     // XXX This would probably be better as separate probes; for now
@@ -871,7 +875,7 @@ pub fn layer_process_return_probe(
 
     unsafe {
         __dtrace_probe_layer__process__return(
-            dir as uintptr_t,
+            dir_c.as_ptr() as uintptr_t,
             name_c.as_ptr() as uintptr_t,
             &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
             res_c.as_ptr() as uintptr_t,

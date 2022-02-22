@@ -1,7 +1,8 @@
 /*
- * Track flow expiration.
+ * Track a flow as it is processed by different layers. This only
+ * applies to flows without a current UFT entry.
  *
- * dtrace -Cqs ./opte-flow-expire.d
+ * dtrace -Cqs ./opte-layer-process.d
  */
 #include <sys/inttypes.h>
 
@@ -16,7 +17,7 @@ typedef struct flow_id_sdt_arg {
 	uint8_t		proto;
 } flow_id_sdt_arg_t;
 
-#define	HDR_FMT "%-12s %-40s\n"
+#define	HDR_FMT "%-3s %-12s %-40s %s\n"
 
 BEGIN {
 	/*
@@ -27,16 +28,18 @@ BEGIN {
 	protos[6] = "TCP";
 	protos[17] = "UDP";
 
-	printf(HDR_FMT, "NAME", "FLOW");
+	printf(HDR_FMT, "DIR", "NAME", "FLOW", "RES");
 	num = 0;
 }
 
-sdt:opte::flow-expired {
-	this->name = stringof(arg0);
-	this->flow = (flow_id_sdt_arg_t *)arg1;
+sdt:opte::layer-process-return {
+	this->dir = stringof(arg0);
+	this->name = stringof(arg1);
+	this->flow = (flow_id_sdt_arg_t *)arg2;
+	this->res = stringof(arg3);
 
 	if (num >= 10) {
-		printf(HDR_FMT, "NAME", "FLOW");
+		printf(HDR_FMT, "DIR", "NAME", "FLOW", "RES");
 		num = 0;
 	}
 
@@ -47,7 +50,7 @@ sdt:opte::flow-expired {
 	}
 }
 
-sdt:opte::flow-expired /this->af == AF_INET/ {
+sdt:opte::layer-process-return /this->af == AF_INET/ {
 	/*
 	 * inet_ntoa() wants an ipaddr_t pointer, but opte is passing
 	 * up the actual 32-bit IP value. You can't take the address
@@ -60,15 +63,15 @@ sdt:opte::flow-expired /this->af == AF_INET/ {
 	*this->dst_ip = this->flow->dst_ip4;
 
 
-	printf("%-12s %s,%s:%u,%s:%u\n",
-	    this->name, protos[this->flow->proto], inet_ntoa(this->src_ip),
-	    ntohs(this->flow->src_port), inet_ntoa(this->dst_ip),
-	    ntohs(this->flow->dst_port));
+	printf("%-3s %-12s %s,%s:%u,%s:%u %s\n",
+	    this->dir, this->name, protos[this->flow->proto],
+	    inet_ntoa(this->src_ip), ntohs(this->flow->src_port),
+	    inet_ntoa(this->dst_ip), ntohs(this->flow->dst_port), this->res);
 
 	num++;
 }
 
-sdt:opte::flow-expired /this->af == AF_INET6/ {
+sdt:opte::layer-process-return /this->af == AF_INET6/ {
 	/*
 	 * inet_ntoa() wants an ipaddr_t pointer, but opte is passing
 	 * up the actual 32-bit IP value. You can't take the address
@@ -80,11 +83,10 @@ sdt:opte::flow-expired /this->af == AF_INET6/ {
 	*this->src_ip6 = this->flow->src_ip6;
 	*this->dst_ip6 = this->flow->dst_ip6;
 
-	printf("%-12s %s,%s:%u,%s:%u\n",
-	    this->name, protos[this->flow->proto], inet_ntoa6(this->src_ip6),
-	    ntohs(this->flow->src_port), inet_ntoa6(this->dst_ip6),
-	    ntohs(this->flow->dst_port));
+	printf("%-3s %-12s %s,%s:%u,%s:%u %s\n",
+	    this->dir, this->name, protos[this->flow->proto],
+	    inet_ntoa6(this->src_ip6), ntohs(this->flow->src_port),
+	    inet_ntoa6(this->dst_ip6), ntohs(this->flow->dst_port), res);
 
 	num++;
 }
-
