@@ -591,7 +591,7 @@ impl Port<Active> {
                 // correct UFT/LFT entries upon connection
                 // termination.
                 if tfes.inbound_ufid.is_none() {
-                    tfes.inbound_ufid = Some(*ifid);
+                    tfes.inbound_ufid = Some(ifid.clone());
                 }
 
                 tcp_state
@@ -608,7 +608,7 @@ impl Port<Active> {
                 let tfes = TcpFlowEntryState {
                     // This must be the UFID of inbound traffic _as it
                     // arrives_, not after it's processed.
-                    inbound_ufid: Some(*ifid),
+                    inbound_ufid: Some(ifid.clone()),
                     tcp_state: tfs,
                 };
                 lock.add(ifid_after, tfes);
@@ -694,7 +694,7 @@ impl Port<Active> {
 
         match res {
             Ok(LayerResult::Allow) => {
-                self.state.uft_in.lock().add(ifid, hts);
+                self.state.uft_in.lock().add(ifid.clone(), hts);
 
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
@@ -785,7 +785,7 @@ impl Port<Active> {
     // a standard Result type.
     fn process_out_tcp_new(
         &self,
-        ifid: InnerFlowId,
+        ifid: &InnerFlowId,
         meta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
         let tcp = meta.inner_tcp().unwrap();
@@ -837,7 +837,7 @@ impl Port<Active> {
                 let tfes =
                     TcpFlowEntryState { inbound_ufid: None, tcp_state: tfs };
 
-                lock.add(ifid, tfes);
+                lock.add(ifid.clone(), tfes);
                 tcp_state
             }
         };
@@ -934,7 +934,7 @@ impl Port<Active> {
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
         if pkt.meta().is_inner_tcp() {
-            match self.process_out_tcp_new(ifid, pkt.meta()) {
+            match self.process_out_tcp_new(&ifid, pkt.meta()) {
                 Err(e) => {
                     self.bad_packet_err(e, pkt, &ifid);
                 }
@@ -1035,7 +1035,7 @@ pub struct TcpFlowEntryState {
 
 impl StateSummary for TcpFlowEntryState {
     fn summary(&self) -> String {
-        match self.inbound_ufid {
+        match &self.inbound_ufid {
             None => format!("None {}", self.tcp_state),
             Some(ufid) => format!("{} {}", ufid, self.tcp_state),
         }

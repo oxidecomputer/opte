@@ -743,7 +743,7 @@ impl StaticAction for Identity {
     fn gen_ht(
         &self,
         _dir: Direction,
-        _flow_id: InnerFlowId,
+        _flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> GenHtResult {
         Ok(HT::identity(&self.name))
@@ -930,7 +930,7 @@ pub trait StatefulAction: Display {
     ///
     /// * [`GenDescError::Unexpected`]: This action encountered an
     /// unexpected error while trying to generate a descriptor.
-    fn gen_desc(&self, flow_id: InnerFlowId, meta: &mut Meta) -> GenDescResult;
+    fn gen_desc(&self, flow_id: &InnerFlowId, meta: &mut Meta) -> GenDescResult;
 }
 
 #[derive(Clone, Debug)]
@@ -946,7 +946,7 @@ pub trait StaticAction: Display {
     fn gen_ht(
         &self,
         dir: Direction,
-        flow_id: InnerFlowId,
+        flow_id: &InnerFlowId,
         meta: &mut Meta,
     ) -> GenHtResult;
 }
@@ -956,7 +956,7 @@ pub trait StaticAction: Display {
 /// the packet, only add/modify/remove metadata for use by later
 /// layers.
 pub trait MetaAction: Display {
-    fn mod_meta(&self, flow_id: InnerFlowId, meta: &mut Meta);
+    fn mod_meta(&self, flow_id: &InnerFlowId, meta: &mut Meta);
 }
 
 #[derive(Debug)]

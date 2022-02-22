@@ -128,7 +128,7 @@ impl fmt::Display for DynNat4 {
 impl StatefulAction for DynNat4 {
     fn gen_desc(
         &self,
-        flow_id: InnerFlowId,
+        flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> rule::GenDescResult {
         let pool = &self.ip_pool;

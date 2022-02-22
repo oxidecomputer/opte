@@ -2,6 +2,12 @@
 //!
 //! This implements DHCPv4 support allowing OPTE act as the gateway
 //! for the guest without the need to static configuration.
+//!
+//! TODO rename layer to "gateway" for Virtual Gateway and move ARP
+//! code in here too. Then add high-value priority rule to drop all
+//! traffic destined for gateway that doesn't match lower-value
+//! priority rule; keeping gateway-bound packets from ending up on the
+//! underlay.
 use core::fmt::{self, Display};
 use core::result::Result;
 

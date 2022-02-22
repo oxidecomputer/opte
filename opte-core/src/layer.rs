@@ -52,6 +52,19 @@ pub enum LayerResult {
     Hairpin(Packet<Initialized>),
 }
 
+impl Display for LayerResult {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use LayerResult::*;
+
+        let rstr = match self {
+            Allow => "Allow".to_string(),
+            Deny { name } => format!("Deny: {}", name),
+            Hairpin(_) => "Hairpin".to_string(),
+        };
+        write!(f, "{}", &rstr)
+    }
+}
+
 pub type RuleId = u64;
 
 pub enum Error {
@@ -205,12 +218,13 @@ impl Layer {
         hts: &mut Vec<HT>,
         meta: &mut Meta,
     ) -> result::Result<LayerResult, LayerError> {
-        layer_process_entry_probe(dir, &self.name);
+        let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
+        layer_process_entry_probe(dir, &self.name, &ifid);
         let res = match dir {
-            Direction::Out => self.process_out(ectx, pkt, hts, meta),
-            Direction::In => self.process_in(ectx, pkt, hts, meta),
+            Direction::Out => self.process_out(ectx, pkt, &ifid, hts, meta),
+            Direction::In => self.process_in(ectx, pkt, &ifid, hts, meta),
         };
-        layer_process_return_probe(dir, &self.name, &res);
+        layer_process_return_probe(dir, &self.name, &ifid, &res);
         res
     }
 
@@ -218,13 +232,12 @@ impl Layer {
         &self,
         ectx: &ExecCtx,
         pkt: &mut Packet<Parsed>,
+        ifid: &InnerFlowId,
         hts: &mut Vec<HT>,
         meta: &mut Meta,
     ) -> result::Result<LayerResult, LayerError> {
-        let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
-
         // We have no FlowId, thus there can be no FlowTable entry.
-        if ifid == FLOW_ID_DEFAULT {
+        if *ifid == FLOW_ID_DEFAULT {
             return self.process_in_rules(ectx, ifid, pkt, hts, meta);
         }
 
@@ -262,7 +275,7 @@ impl Layer {
     fn process_in_rules(
         &self,
         ectx: &ExecCtx,
-        ifid: InnerFlowId,
+        ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         meta: &mut Meta,
@@ -328,7 +341,7 @@ impl Layer {
             }
 
             Action::Stateful(action) => {
-                let desc = match action.gen_desc(ifid, meta) {
+                let desc = match action.gen_desc(&ifid, meta) {
                     Ok(d) => d,
 
                     Err(e) => {
@@ -345,7 +358,7 @@ impl Layer {
                 let ht_in = desc.gen_ht(Direction::In);
                 hts.push(ht_in.clone());
 
-                self.ft_in.lock().add(ifid, desc.clone());
+                self.ft_in.lock().add(ifid.clone(), desc.clone());
 
                 ht_in.run(pkt.meta_mut());
 
@@ -396,13 +409,12 @@ impl Layer {
         &self,
         ectx: &ExecCtx,
         pkt: &mut Packet<Parsed>,
+        ifid: &InnerFlowId,
         hts: &mut Vec<HT>,
         meta: &mut Meta,
     ) -> result::Result<LayerResult, LayerError> {
-        let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
-
         // We have no FlowId, thus there can be no FlowTable entry.
-        if ifid == FLOW_ID_DEFAULT {
+        if *ifid == FLOW_ID_DEFAULT {
             return self.process_out_rules(ectx, ifid, pkt, hts, meta);
         }
 
@@ -436,13 +448,13 @@ impl Layer {
         }
 
         // No FlowTable entry, perhaps there is matching Rule?
-        self.process_out_rules(ectx, ifid, pkt, hts, meta)
+        self.process_out_rules(ectx, &ifid, pkt, hts, meta)
     }
 
     fn process_out_rules(
         &self,
         ectx: &ExecCtx,
-        ifid: InnerFlowId,
+        ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         meta: &mut Meta,
@@ -477,7 +489,7 @@ impl Layer {
             }
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(Direction::Out, ifid, meta) {
+                let ht = match action.gen_ht(Direction::Out, &ifid, meta) {
                     Ok(ht) => ht,
                     Err(e) => {
                         self.record_gen_ht_failure(
@@ -507,7 +519,7 @@ impl Layer {
             }
 
             Action::Stateful(action) => {
-                let desc = match action.gen_desc(ifid, meta) {
+                let desc = match action.gen_desc(&ifid, meta) {
                     Ok(d) => d,
 
                     Err(e) => {
@@ -524,7 +536,7 @@ impl Layer {
                 let ht_out = desc.gen_ht(Direction::Out);
                 hts.push(ht_out.clone());
 
-                self.ft_out.lock().add(ifid, desc.clone());
+                self.ft_out.lock().add(ifid.clone(), desc.clone());
 
                 ht_out.run(pkt.meta_mut());
 
@@ -622,9 +634,7 @@ pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     dst_port: 0,
 };
 
-#[derive(
-    Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize,
-)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InnerFlowId {
     pub proto: Protocol,
     pub src_ip: IpAddr,
@@ -795,6 +805,7 @@ impl<'a> RuleTable {
 pub unsafe fn __dtrace_probe_layer__process__entry(
     _dir: uintptr_t,
     _name: uintptr_t,
+    _ifid: uintptr_t,
 ) {
     ()
 }
@@ -803,6 +814,8 @@ pub unsafe fn __dtrace_probe_layer__process__entry(
 pub unsafe fn __dtrace_probe_layer__process__return(
     _dir: uintptr_t,
     _name: uintptr_t,
+    _ifid: uintptr_t,
+    _res: uintptr_t,
 ) {
     ()
 }
@@ -812,21 +825,30 @@ extern "C" {
     pub fn __dtrace_probe_layer__process__entry(
         dir: uintptr_t,
         name: uintptr_t,
+        ifid: uintptr_t,
     );
 
     pub fn __dtrace_probe_layer__process__return(
         dir: uintptr_t,
         name: uintptr_t,
+        ifid: uintptr_t,
+        res: uintptr_t,
     );
 }
 
-pub fn layer_process_entry_probe(dir: Direction, name: &str) {
+pub fn layer_process_entry_probe(
+    dir: Direction,
+    name: &str,
+    ifid: &InnerFlowId
+) {
     let name_c = CString::new(name).unwrap();
+    let ifid_arg = flow_id_sdt_arg::from(ifid);
 
     unsafe {
         __dtrace_probe_layer__process__entry(
             dir as uintptr_t,
             name_c.as_ptr() as uintptr_t,
+            &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
         );
     }
 }
@@ -834,14 +856,25 @@ pub fn layer_process_entry_probe(dir: Direction, name: &str) {
 pub fn layer_process_return_probe(
     dir: Direction,
     name: &str,
-    _res: &result::Result<LayerResult, LayerError>,
+    ifid: &InnerFlowId,
+    res: &result::Result<LayerResult, LayerError>,
 ) {
     let name_c = CString::new(name).unwrap();
+    let ifid_arg = flow_id_sdt_arg::from(ifid);
+    // XXX This would probably be better as separate probes; for now
+    // this does the trick.
+    let res_str = match res {
+        Ok(v) => format!("{}", v),
+        Err(e) => format!("ERROR: {:?}", e),
+    };
+    let res_c = CString::new(res_str).unwrap();
 
     unsafe {
         __dtrace_probe_layer__process__return(
             dir as uintptr_t,
             name_c.as_ptr() as uintptr_t,
+            &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+            res_c.as_ptr() as uintptr_t,
         );
     }
 }
