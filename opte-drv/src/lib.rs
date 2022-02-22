@@ -508,6 +508,7 @@ fn add_port(req: &AddPortReq) -> Result<(), api::AddPortError> {
     let mut new_port =
         Port::new(&req.link_name, private_mac, state.ectx.clone());
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
+    opte_core::oxide_net::dhcp4::setup(&mut new_port, &port_cfg).unwrap();
 
     // TODO: In order to demo this in the lab environment we currently
     // allow SNAT to be optional.
@@ -1236,6 +1237,7 @@ pub unsafe extern "C" fn opte_client_close(
     let port_cfg = ocs.port_cfg;
 
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
+    opte_core::oxide_net::dhcp4::setup(&mut new_port, &port_cfg).unwrap();
     opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg).unwrap();
     opte_core::oxide_net::arp::setup(&mut new_port, &port_cfg).unwrap();
     // We know the firewall layer is there so it can't fail.

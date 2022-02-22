@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod arp;
 pub mod checksum;
+pub mod dhcp;
 #[macro_use]
 pub mod ether;
 pub mod flow_table;

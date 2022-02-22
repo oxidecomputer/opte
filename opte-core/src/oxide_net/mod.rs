@@ -21,6 +21,7 @@ use crate::ip4::Ipv4Addr;
 use crate::vpc::VpcSubnet4;
 
 pub mod arp;
+pub mod dhcp4;
 pub mod dyn_nat4;
 pub mod firewall;
 pub mod overlay;
@@ -28,6 +29,7 @@ pub mod router;
 
 #[derive(Clone, Debug)]
 pub struct DynNat4Cfg {
+    // TODO Remove this field, leftover from days of working with home router.
     pub public_mac: EtherAddr,
     pub public_ip: Ipv4Addr,
     pub ports: Range<u16>,

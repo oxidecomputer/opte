@@ -1901,6 +1901,7 @@ pub trait PacketRead<'a> {
     /// segment, then an error is returned.
     fn seek_back(&mut self, amount: usize) -> ReadResult<()>;
 
+    fn seg_left(&self) -> usize;
     fn seg_idx(&self) -> usize;
     fn seg_pos(&self) -> usize;
 
@@ -2074,6 +2075,10 @@ where
         self.seg_pos -= amount;
         self.pkt_pos -= amount;
         Ok(())
+    }
+
+    fn seg_left(&self) -> usize {
+        self.seg_len - self.seg_pos
     }
 
     fn seg_idx(&self) -> usize {

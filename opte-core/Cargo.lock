@@ -245,6 +245,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "managed"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
+
+[[package]]
 name = "memchr"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -290,6 +296,7 @@ dependencies = [
  "pcap-parser",
  "postcard",
  "serde",
+ "smoltcp",
  "zerocopy",
 ]
 
@@ -414,6 +421,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "smoltcp"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2308a1657c8db1f5b4993bab4e620bdbe5623bd81f254cf60326767bb243237"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "managed",
 ]
 
 [[package]]

@@ -20,6 +20,7 @@ use std::vec::Vec;
 use crate::arp::{
     ArpEth4Payload, ArpEth4PayloadRaw, ArpMeta, ArpOp, ARP_HTYPE_ETHERNET,
 };
+use crate::dhcp::{MessageType as DhcpMessageType};
 use crate::ether::{EtherAddr, EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
 use crate::flow_table::StateSummary;
 use crate::geneve::{GeneveMeta, GeneveMetaOpt};
@@ -41,6 +42,8 @@ use crate::{CString, Direction};
 use illumos_ddi_dki::{c_char, uintptr_t};
 
 use serde::{Deserialize, Serialize};
+
+use smoltcp::wire::{DhcpPacket, DhcpRepr};
 
 // A marker trait for types which represent packet payloads. Examples
 // of payloads include an ARP request, ICMP body, or TCP body.
@@ -270,6 +273,7 @@ pub enum Predicate {
     InnerSrcIp4(Vec<Ipv4AddrMatch>),
     InnerDstIp4(Vec<Ipv4AddrMatch>),
     InnerIpProto(Vec<IpProtoMatch>),
+    InnerSrcPort(Vec<PortMatch>),
     InnerDstPort(Vec<PortMatch>),
     Not(Box<Predicate>),
     // Match on metadata stored by previous layers.
@@ -349,6 +353,15 @@ impl Display for Predicate {
                 write!(f, "inner.ip.dst={}", s)
             }
 
+            InnerSrcPort(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.ulp.src={}", s)
+            }
+
             InnerDstPort(list) => {
                 let s = list
                     .iter()
@@ -393,7 +406,7 @@ impl Predicate {
                         }
                     }
                 }
-            },
+            }
 
             Self::InnerEtherSrc(list) => match meta.inner.ether {
                 None => return false,
@@ -405,7 +418,7 @@ impl Predicate {
                         }
                     }
                 }
-            },
+            }
 
             Self::InnerArpHtype(m) => match meta.inner.arp {
                 None => return false,
@@ -415,7 +428,7 @@ impl Predicate {
                         return true;
                     }
                 }
-            },
+            }
 
             Self::InnerArpPtype(m) => match meta.inner.arp {
                 None => return false,
@@ -425,7 +438,7 @@ impl Predicate {
                         return true;
                     }
                 }
-            },
+            }
 
             Self::InnerArpOp(m) => match meta.inner.arp {
                 None => return false,
@@ -435,7 +448,7 @@ impl Predicate {
                         return true;
                     }
                 }
-            },
+            }
 
             Self::InnerIpProto(list) => match meta.inner.ip {
                 None => return false,
@@ -455,7 +468,7 @@ impl Predicate {
                         }
                     }
                 }
-            },
+            }
 
             Self::InnerSrcIp4(list) => match meta.inner.ip {
                 Some(IpMeta::Ip4(Ipv4Meta { src: ip, .. })) => {
@@ -469,7 +482,7 @@ impl Predicate {
                 // Either there is no Inner IP metadata or this is an
                 // IPv6 packet.
                 _ => return false,
-            },
+            }
 
             Self::InnerDstIp4(list) => match meta.inner.ip {
                 Some(IpMeta::Ip4(Ipv4Meta { dst: ip, .. })) => {
@@ -483,7 +496,27 @@ impl Predicate {
                 // Either there is no Inner IP metadata or this is an
                 // IPv6 packet.
                 _ => return false,
-            },
+            }
+
+            Self::InnerSrcPort(list) => match meta.inner.ulp {
+                None => return false,
+
+                Some(UlpMeta::Tcp(TcpMeta { src: port, .. })) => {
+                    for m in list {
+                        if m.matches(port) {
+                            return true;
+                        }
+                    }
+                }
+
+                Some(UlpMeta::Udp(UdpMeta { src: port, .. })) => {
+                    for m in list {
+                        if m.matches(port) {
+                            return true;
+                        }
+                    }
+                }
+            }
 
             Self::InnerDstPort(list) => match meta.inner.ulp {
                 None => return false,
@@ -503,7 +536,7 @@ impl Predicate {
                         }
                     }
                 }
-            },
+            }
         }
 
         false
@@ -512,6 +545,7 @@ impl Predicate {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum DataPredicate {
+    InnerDhcp4MsgType(DhcpMessageType),
     InnerArpTpa(Vec<Ipv4AddrMatch>),
     Not(Box<DataPredicate>),
 }
@@ -521,6 +555,10 @@ impl Display for DataPredicate {
         use DataPredicate::*;
 
         match self {
+            InnerDhcp4MsgType(mt) => {
+                write!(f, "inner.dhcp4.msg_type={}", mt)
+            }
+
             InnerArpTpa(list) => {
                 let s = list
                     .iter()
@@ -550,6 +588,22 @@ impl DataPredicate {
         match self {
             Self::Not(pred) => return !pred.is_match(meta, rdr),
 
+            Self::InnerDhcp4MsgType(mt) => {
+                let bytes = rdr.slice(rdr.seg_left()).unwrap();
+                let pkt = match DhcpPacket::new_checked(bytes) {
+                    Ok(v) => v,
+                    Err(_) => return false,
+                };
+                let dhcp = match DhcpRepr::parse(&pkt) {
+                    Ok(v) => v,
+                    Err(_) => return false,
+                };
+
+                let res = DhcpMessageType::from(dhcp.message_type) == *mt;
+                rdr.seek_back(bytes.len()).unwrap();
+                return res;
+            }
+
             Self::InnerArpTpa(list) => match meta.inner.arp {
                 None => return false,
 
@@ -557,11 +611,6 @@ impl DataPredicate {
                     if htype != ARP_HTYPE_ETHERNET || ptype != ETHER_TYPE_IPV4 {
                         return false;
                     }
-
-                    // let raw = match LayoutVerified::new(payload) {
-                    //     Some(raw) => raw,
-                    //     None => return false,
-                    // };
 
                     let raw = match ArpEth4PayloadRaw::parse(rdr) {
                         Ok(raw) => raw,
@@ -587,7 +636,7 @@ impl DataPredicate {
                         }
                     }
                 }
-            },
+            }
         }
 
         false

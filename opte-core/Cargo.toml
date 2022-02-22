@@ -39,5 +39,13 @@ version = "1.0"
 default-features = false
 features = ["alloc", "derive"]
 
+[dependencies.smoltcp]
+version = "0.8.0"
+default-features = false
+#
+# TODO Would defmt be of any use?
+#
+features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-ipv6", "proto-dhcpv4", "socket", "socket-raw"]
+
 [dev-dependencies]
 pcap-parser = "0.11.1"

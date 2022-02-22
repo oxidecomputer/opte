@@ -128,6 +128,12 @@ impl FromStr for EtherAddr {
     }
 }
 
+impl From<EtherAddr> for smoltcp::wire::EthernetAddress {
+    fn from(addr: EtherAddr) -> Self {
+        Self(addr.bytes)
+    }
+}
+
 impl Display for EtherAddr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(

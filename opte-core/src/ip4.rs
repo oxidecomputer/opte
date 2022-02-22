@@ -132,6 +132,13 @@ impl Ipv4Cidr {
         let ip = ip.mask(prefix);
         Ok(Ipv4Cidr { ip, prefix })
     }
+
+    /// Convert the CIDR into a subnet mask.
+    pub fn to_mask(self) -> Ipv4Addr {
+        let mut bits = i32::MIN;
+        bits = bits >> (self.prefix - 1);
+        Ipv4Addr { inner: bits.to_be_bytes() }
+    }
 }
 
 impl Display for Ipv4Cidr {
@@ -305,6 +312,19 @@ impl From<Ipv4Addr> for Ipv4AddrTuple {
 impl From<Ipv4AddrTuple> for Ipv4Addr {
     fn from(tuple: Ipv4AddrTuple) -> Self {
         Self::new([tuple.0, tuple.1, tuple.2, tuple.3])
+    }
+}
+
+impl From<smoltcp::wire::Ipv4Address> for Ipv4Addr {
+    fn from(smolip4: smoltcp::wire::Ipv4Address) -> Self {
+        let bytes = smolip4.as_bytes();
+        Self { inner: [bytes[0], bytes[1], bytes[2], bytes[3]] }
+    }
+}
+
+impl From<Ipv4Addr> for smoltcp::wire::Ipv4Address {
+    fn from(ip: Ipv4Addr) -> Self {
+        Self::from_bytes(&ip.inner)
     }
 }
 
