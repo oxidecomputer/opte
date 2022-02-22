@@ -5,32 +5,32 @@ use core::convert::TryFrom;
 use alloc::string::String;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
 use std::string::String;
 #[cfg(any(feature = "std", test))]
+use std::sync::Arc;
+#[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
 #[cfg(all(not(feature = "std"), not(test)))]
-use illumos_ddi_dki::{c_int, size_t, datalink_id_t};
+use illumos_ddi_dki::{c_int, datalink_id_t, size_t};
 #[cfg(any(feature = "std", test))]
-use illumos_ddi_dki::{c_int, size_t, datalink_id_t};
+use illumos_ddi_dki::{c_int, datalink_id_t, size_t};
 
 use serde::{Deserialize, Serialize};
 
 use crate::ether::EtherAddr;
 use crate::flow_table::FlowEntryDump;
+use crate::geneve::Vni;
 use crate::ip4::Ipv4Addr;
 use crate::ip6::Ipv6Addr;
-use crate::oxide_net::{firewall as fw, overlay};
 use crate::layer;
+use crate::oxide_net::{firewall as fw, overlay};
 use crate::port;
 use crate::rule;
 use crate::vpc::VpcSubnet4;
-use crate::geneve::Vni;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -283,7 +283,7 @@ impl From<PortError> for DumpTcpFlowsError {
 
 pub fn add_fw_rule(
     port: &port::Port<port::Active>,
-    req: &fw::FwAddRuleReq
+    req: &fw::FwAddRuleReq,
 ) -> Result<(), AddFwRuleError> {
     let action = match req.rule.action {
         fw::Action::Allow => {
@@ -295,11 +295,7 @@ pub fn add_fw_rule(
 
     let rule = fw::from_fw_rule(req.rule.clone(), action);
 
-    let res = port.add_rule(
-        fw::FW_LAYER_NAME,
-        req.rule.direction,
-        rule,
-    );
+    let res = port.add_rule(fw::FW_LAYER_NAME, req.rule.direction, rule);
 
     match res {
         Ok(()) => Ok(()),
@@ -428,7 +424,6 @@ pub struct CreateXdeReq {
     // names of the underlay links to use
     //XXX pub u1_devname: String,
     //XXX pub u2_devname: String,
-
     pub private_ip: Ipv4Addr,
     pub private_mac: EtherAddr,
     pub gw_mac: EtherAddr,

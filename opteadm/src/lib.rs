@@ -2,26 +2,26 @@
 // Copyright 2021 Oxide Computer Company
 
 use std::fs::{File, OpenOptions};
-use std::str::FromStr;
 use std::os::unix::io::AsRawFd;
+use std::str::FromStr;
 
 use libc;
 use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
+use opte_core::ether::EtherAddr;
+use opte_core::geneve::Vni;
 use opte_core::ioctl::{
-    self as api, AddPortReq, CmdErr, CmdOk, DeletePortReq, IoctlCmd, 
-    CreateXdeReq, DeleteXdeReq,
+    self as api, AddPortReq, CmdErr, CmdOk, CreateXdeReq, DeletePortReq,
+    DeleteXdeReq, IoctlCmd,
 };
+use opte_core::ip4::Ipv4Addr;
+use opte_core::ip6::Ipv6Addr;
 use opte_core::oxide_net::firewall::{
     FirewallRule, FwAddRuleReq, FwRemRuleReq,
 };
 use opte_core::oxide_net::overlay::{self, SetOverlayReq, SetVirt2PhysReq};
 use opte_core::oxide_net::router;
-use opte_core::ip6::Ipv6Addr;
-use opte_core::ip4::Ipv4Addr;
-use opte_core::ether::EtherAddr;
-use opte_core::geneve::Vni;
 
 /// Errors related to administering the OPTE driver.
 #[derive(Debug, Error)]
@@ -46,7 +46,7 @@ pub enum Error {
     InvalidArgument(String),
 
     #[error("netadm failed {0}")]
-    NetadmFailed(libnet::Error)
+    NetadmFailed(libnet::Error),
 }
 
 impl From<std::io::Error> for Error {
@@ -88,14 +88,14 @@ impl OpteAdm {
         boundary_services_vni: Vni,
         vpc_vni: Vni,
         src_underlay_addr: std::net::Ipv6Addr,
-        passthrough: bool
+        passthrough: bool,
     ) -> Result<(), Error> {
-
         let linkid = libnet::link::create_link_id(
             name,
             libnet::LinkClass::Xde,
             libnet::LinkFlags::Active,
-        ).map_err(|e| Error::NetadmFailed(e))?;
+        )
+        .map_err(|e| Error::NetadmFailed(e))?;
 
         let private_mac = EtherAddr::from_str(private_mac)
             .map_err(|e| Error::InvalidArgument(e))?;
@@ -110,7 +110,8 @@ impl OpteAdm {
             .map_err(|e| Error::InvalidArgument(e.to_string()))?;
 
         let xde_devname = name.into();
-        let boundary_services_addr = Ipv6Addr::from(boundary_services_addr.octets());
+        let boundary_services_addr =
+            Ipv6Addr::from(boundary_services_addr.octets());
         let src_underlay_addr = Ipv6Addr::from(src_underlay_addr.octets());
 
         let cmd = IoctlCmd::XdeCreate;
@@ -126,31 +127,28 @@ impl OpteAdm {
             vpc_vni,
             src_underlay_addr,
             passthrough,
-            .. Default::default()
+            ..Default::default()
         };
 
         let resp = run_ioctl::<(), api::XdeError, _>(
             self.device.as_raw_fd(),
             cmd,
-            &req
+            &req,
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
-
     }
 
     /// Delete xde device
     pub fn delete_xde(&self, name: &str) -> Result<(), Error> {
+        let link_id =
+            libnet::LinkHandle::Name(name.into()).id().expect("get link id");
 
-        let link_id = libnet::LinkHandle::Name(name.into())
-            .id()
-            .expect("get link id");
-
-        let req = DeleteXdeReq{ xde_devname: name.into() };
+        let req = DeleteXdeReq { xde_devname: name.into() };
         let cmd = IoctlCmd::XdeDelete;
         let resp = run_ioctl::<(), api::XdeError, _>(
             self.device.as_raw_fd(),
             cmd,
-            &req
+            &req,
         )?;
 
         libnet::link::delete_link_id(link_id, libnet::LinkFlags::Active)
@@ -224,10 +222,7 @@ impl OpteAdm {
     /// Create a new handle to the OPTE control node.
     pub fn open(what: &str) -> Result<Self, Error> {
         Ok(OpteAdm {
-            device: OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(what)?
+            device: OpenOptions::new().read(true).write(true).open(what)?,
         })
     }
 
@@ -309,14 +304,12 @@ impl OpteAdm {
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
 
-    pub fn get_v2p(
-        &self,
-    ) -> Result<overlay::GetVirt2PhysResp, Error> {
+    pub fn get_v2p(&self) -> Result<overlay::GetVirt2PhysResp, Error> {
         let cmd = IoctlCmd::GetVirt2Phys;
         let resp = run_ioctl::<overlay::GetVirt2PhysResp, (), _>(
             self.device.as_raw_fd(),
             cmd,
-            &overlay::GetVirt2PhysReq { unused: () }
+            &overlay::GetVirt2PhysReq { unused: () },
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }

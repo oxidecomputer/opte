@@ -103,9 +103,7 @@ fn lab_cfg() -> oxide_net::PortCfg {
 }
 
 fn oxide_net_setup(name: &str, cfg: &oxide_net::PortCfg) -> Port<Inactive> {
-    let ectx = Arc::new(ExecCtx {
-        log: Box::new(crate::PrintlnLog {})
-    });
+    let ectx = Arc::new(ExecCtx { log: Box::new(crate::PrintlnLog {}) });
     let mut port = Port::new(name, cfg.private_mac, ectx.clone());
 
     // ================================================================
@@ -201,8 +199,8 @@ fn overlay_guest_to_guest() {
     let bs = PhysNet {
         ether: EtherAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
         ip: Ipv6Addr::from([
-            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x77
+            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x77, 0x77,
         ]),
         vni: Vni::new(7777u32).unwrap(),
     };

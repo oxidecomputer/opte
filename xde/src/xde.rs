@@ -9,37 +9,32 @@
 //   first device)
 
 use crate::{
-    dld,
-    dls,
-    ioctl::{self, IoctlEnvelope, to_errno},
-    mac,
-    secpolicy,
-    warn,
-    ip,
+    dld, dls,
+    ioctl::{self, to_errno, IoctlEnvelope},
+    ip, mac, secpolicy, warn,
 };
-use alloc::{
-    boxed::Box,
-    string::String,
-    vec::Vec,
-    sync::Arc
+use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
+use core::{
+    convert::{TryFrom, TryInto},
+    ops::Range,
+    ptr,
 };
-use core::{convert::{TryFrom, TryInto}, ops::Range, ptr};
 extern crate opte_core;
-use illumos_ddi_dki::*;
 use illumos_ddi_dki as ddi;
+use illumos_ddi_dki::*;
 use opte_core::{
-    headers::{IpCidr, IpHdr},
     ether::EtherAddr,
+    geneve::Vni,
+    headers::{IpCidr, IpHdr},
     ioctl::{
-        self as api,
-        CreateXdeReq, DeleteXdeReq, IoctlCmd, SnatCfg, CmdOk, CmdErr, XdeError
+        self as api, CmdErr, CmdOk, CreateXdeReq, DeleteXdeReq, IoctlCmd,
+        SnatCfg, XdeError,
     },
     ip4::Ipv4Addr,
     ip6::Ipv6Addr,
-    oxide_net::{router, PortCfg, firewall::FwAddRuleReq, overlay},
+    oxide_net::{firewall::FwAddRuleReq, overlay, router, PortCfg},
     packet::{Initialized, Packet, Parsed},
     port::{Port, ProcessResult},
-    geneve::{Vni},
     sync::{KRwLock, KRwLockType},
     CStr, CString, Direction, ExecCtx,
 };
@@ -100,16 +95,12 @@ fn get_xde_state() -> &'static XdeState {
     // Safety: The opte_dip pointer is write-once and is a valid
     // pointer passed to attach(9E). The returned pointer is valid as
     // it was derived from Box::into_raw() during attach(9E).
-    unsafe {
-        &*(ddi_get_driver_private(xde_dip) as *mut XdeState)
-    }
+    unsafe { &*(ddi_get_driver_private(xde_dip) as *mut XdeState) }
 }
 
 impl XdeState {
     fn new(underlay1: String, underlay2: String) -> Self {
-        let ectx = Arc::new(ExecCtx {
-            log: Box::new(opte_core::KernelLog {})
-        });
+        let ectx = Arc::new(ExecCtx { log: Box::new(opte_core::KernelLog {}) });
         XdeState {
             u1: xde_underlay_port {
                 name: underlay1,
@@ -130,8 +121,6 @@ impl XdeState {
         }
     }
 }
-
-
 
 #[repr(C)]
 struct XdeDev {
@@ -283,13 +272,13 @@ unsafe extern "C" fn xde_ioctl(
                 }
             };
             match xde_ioc_create(&mut req) {
-                0 => {
-                    hdlr_resp::<(), XdeError>(&mut ioctlenv, Ok(Ok(())))
-                }
+                0 => hdlr_resp::<(), XdeError>(&mut ioctlenv, Ok(Ok(()))),
                 err => {
                     warn!("xde_ioc_create failed: {}", err);
                     hdlr_resp::<(), XdeError>(
-                        &mut ioctlenv, Err(HdlrError::System(err)))
+                        &mut ioctlenv,
+                        Err(HdlrError::System(err)),
+                    )
                 }
             }
         }
@@ -306,13 +295,13 @@ unsafe extern "C" fn xde_ioctl(
                 }
             };
             match xde_ioc_delete(&mut req) {
-                0 => {
-                    hdlr_resp::<(), XdeError>(&mut ioctlenv, Ok(Ok(())))
-                }
+                0 => hdlr_resp::<(), XdeError>(&mut ioctlenv, Ok(Ok(()))),
                 err => {
                     warn!("xde_ioc_delete failed: {}", err);
                     hdlr_resp::<(), XdeError>(
-                        &mut ioctlenv, Err(HdlrError::System(err)))
+                        &mut ioctlenv,
+                        Err(HdlrError::System(err)),
+                    )
                 }
             }
         }
@@ -350,7 +339,7 @@ unsafe extern "C" fn xde_ioctl(
 
 fn hdlr_resp<T, E>(
     ioctlenv: &mut IoctlEnvelope,
-    resp: Result<Result<T, E>, HdlrError>
+    resp: Result<Result<T, E>, HdlrError>,
 ) -> c_int
 where
     T: CmdOk,
@@ -360,12 +349,10 @@ where
     //dtrace_probe_hdlr_resp(&resp);
 
     match resp {
-        Ok(resp) => {
-            match ioctlenv.copy_out_resp(&resp) {
-                Ok(()) => 0,
-                Err(e) => to_errno(e),
-            }
-        }
+        Ok(resp) => match ioctlenv.copy_out_resp(&resp) {
+            Ok(()) => 0,
+            Err(e) => to_errno(e),
+        },
 
         Err(HdlrError::System(ret)) => ret,
     }
@@ -496,8 +483,7 @@ unsafe extern "C" fn xde_ioc_create(req: &CreateXdeReq) -> c_int {
 #[no_mangle]
 unsafe extern "C" fn xde_ioc_delete(req: &DeleteXdeReq) -> c_int {
     let mut devs = xde_devs.write();
-    let index = match devs.iter().position(|x| x.devname == req.xde_devname)
-    {
+    let index = match devs.iter().position(|x| x.devname == req.xde_devname) {
         Some(index) => index,
         None => return EINVAL,
     };
@@ -635,10 +621,9 @@ unsafe extern "C" fn xde_attach(
         }
     }
 
-
     let mut state = XdeState::new(u1, u2);
     match init_underlay_ingress_handlers(&mut state) {
-        ddi::DDI_SUCCESS => {},
+        ddi::DDI_SUCCESS => {}
         error => {
             //TODO tear down
             return error;
@@ -653,7 +638,6 @@ unsafe extern "C" fn xde_attach(
 
 #[no_mangle]
 unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
-
     // null terminated underlay device names
 
     let u1_devname = match CString::new(state.u1.name.as_str()) {
@@ -770,14 +754,14 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
     }
 
     // set up promisc rx handlers for underlay devices
-    
+
     match mac::mac_promisc_add(
         state.u1.mch,
         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
         xde_rx,
         ptr::null_mut(),
         &mut state.u1.mph,
-        0
+        0,
     ) {
         0 => {}
         err => {
@@ -792,7 +776,7 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
         xde_rx,
         ptr::null_mut(),
         &mut state.u2.mph,
-        0
+        0,
     ) {
         0 => {}
         err => {
@@ -802,12 +786,10 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
     }
 
     DDI_SUCCESS
-
 }
 
 #[no_mangle]
 unsafe fn get_driver_prop_string(pname: &str) -> Option<String> {
-
     let name = match CString::new(pname) {
         Ok(s) => s,
         Err(e) => {
@@ -832,13 +814,14 @@ unsafe fn get_driver_prop_string(pname: &str) -> Option<String> {
     let s = match s.to_str() {
         Ok(s) => s,
         Err(e) => {
-            warn!("failed to create string from property value for {}: {:?}", 
-                pname, e);
+            warn!(
+                "failed to create string from property value for {}: {:?}",
+                pname, e
+            );
             return None;
         }
     };
     Some(s.into())
-
 }
 
 #[no_mangle]
@@ -1114,7 +1097,7 @@ unsafe extern "C" fn xde_mc_tx(
             mac::mac_rx(
                 (*dev).mh,
                 0 as *mut mac::mac_resource_handle,
-                hpkt.unwrap()
+                hpkt.unwrap(),
             );
         }
 
@@ -1136,11 +1119,8 @@ unsafe extern "C" fn xde_mc_tx(
 }
 
 #[no_mangle]
-fn finish_outer_frame(pkt: &Packet<Parsed>) 
--> (EtherAddr, EtherAddr) {
-
-    unsafe { 
-
+fn finish_outer_frame(pkt: &Packet<Parsed>) -> (EtherAddr, EtherAddr) {
+    unsafe {
         let outer = match pkt.headers().outer {
             Some(ref outer) => outer,
             None => {
@@ -1157,7 +1137,6 @@ fn finish_outer_frame(pkt: &Packet<Parsed>)
             }
         };
 
-
         // assuming global zone
         let netstack = ip::netstack_find_by_zoneid(0);
         assert!(!netstack.is_null());
@@ -1165,9 +1144,9 @@ fn finish_outer_frame(pkt: &Packet<Parsed>)
         assert!(!ipst.is_null());
 
         let addr = ip::in6_addr_t {
-            _S6_un: ip::in6_addr__bindgen_ty_1{
+            _S6_un: ip::in6_addr__bindgen_ty_1 {
                 _S6_u8: ip6_hdr.dst().to_bytes(),
-            }
+            },
         };
         let xmit_hint = 0;
         let mut generation_op = 0u32;
@@ -1178,7 +1157,7 @@ fn finish_outer_frame(pkt: &Packet<Parsed>)
         // situation.
         let ire = ip::ire_ftable_lookup_simple_v6(
             &addr,
-            xmit_hint, 
+            xmit_hint,
             ipst,
             &mut generation_op as *mut ip::uint_t,
         );
@@ -1195,7 +1174,7 @@ fn finish_outer_frame(pkt: &Packet<Parsed>)
         // get the gateway ire
         let gw_ire = ip::ire_ftable_lookup_simple_v6(
             &gw,
-            xmit_hint, 
+            xmit_hint,
             ipst,
             &mut generation_op as *mut ip::uint_t,
         );
@@ -1216,7 +1195,7 @@ fn finish_outer_frame(pkt: &Packet<Parsed>)
             warn!("gw ill src is null for {:?}", ip6_hdr.dst());
             return (EtherAddr::zero(), EtherAddr::zero());
         }
-        let src: [u8;6] = alloc::slice::from_raw_parts(src, 6)
+        let src: [u8; 6] = alloc::slice::from_raw_parts(src, 6)
             .try_into()
             .expect("src mac from pointer");
         let src = EtherAddr::from(src);
@@ -1240,7 +1219,7 @@ fn finish_outer_frame(pkt: &Packet<Parsed>)
         let maclen = (*nce_common).ncec_lladdr_length;
         assert!(maclen == 6);
 
-        let dst: [u8;6] = alloc::slice::from_raw_parts(mac, 6)
+        let dst: [u8; 6] = alloc::slice::from_raw_parts(mac, 6)
             .try_into()
             .expect("mac from pointer");
         let dst = EtherAddr::from(dst);
@@ -1359,11 +1338,7 @@ fn new_port(
         dyn_nat,
         overlay: None,
     };
-    let mut new_port = Port::new(
-        &xde_dev_name,
-        private_mac,
-        ectx,
-    );
+    let mut new_port = Port::new(&xde_dev_name, private_mac, ectx);
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
     if snat.is_some() {
         opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg)
@@ -1373,8 +1348,8 @@ fn new_port(
     router::setup(&mut new_port).unwrap();
 
     let oc = overlay::OverlayCfg {
-        boundary_services: overlay::PhysNet{
-            ether: EtherAddr::from([0;6]), //XXX this should not be needed
+        boundary_services: overlay::PhysNet {
+            ether: EtherAddr::from([0; 6]), //XXX this should not be needed
             ip: boundary_services_addr,
             vni: boundary_services_vni,
         },
@@ -1396,7 +1371,6 @@ unsafe extern "C" fn xde_rx(
     mp_chain: *mut mblk_t,
     _is_loopback: boolean_t,
 ) {
-
     // first parse the packet so we can get at the geneve header
     let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
         Ok(pkt) => pkt,
@@ -1426,7 +1400,7 @@ unsafe extern "C" fn xde_rx(
 
     //TODO create a fast lookup table
     let vni = geneve.vni.value();
-    let dev = match devs.iter().find(|x| x.vni == vni){
+    let dev = match devs.iter().find(|x| x.vni == vni) {
         Some(dev) => dev,
         None => {
             warn!("no device for vni = {}, dropping", vni);
@@ -1438,7 +1412,6 @@ unsafe extern "C" fn xde_rx(
     if (*dev).passthrough {
         mac::mac_rx((*dev).mh, mrh, mp_chain);
     }
-
 
     let port = match (*dev).port {
         Some(ref port) => port,
@@ -1474,19 +1447,16 @@ unsafe extern "C" fn xde_rx(
             warn!("opte-rx port process error: {:?}", e);
         }
     }
-
 }
 
 fn add_router_entry_hdlr(
-    ioctlenv: &IoctlEnvelope
+    ioctlenv: &IoctlEnvelope,
 ) -> Result<Result<(), router::AddEntryError>, HdlrError> {
-
     let req: router::AddRouterEntryIpv4Req = ioctlenv.copy_in_req()?;
 
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name)
-    {
+    let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
         None => {
             return Err(HdlrError::System(ENOENT));
@@ -1494,30 +1464,23 @@ fn add_router_entry_hdlr(
     };
 
     match dev.port {
-        None => {
-            Err(HdlrError::System(EAGAIN))
-        }
-        Some(ref port) => {
-            Ok(router::add_entry_active(
-                port,
-                IpCidr::Ip4(req.dest),
-                req.target
-            ))
-
-        }
+        None => Err(HdlrError::System(EAGAIN)),
+        Some(ref port) => Ok(router::add_entry_active(
+            port,
+            IpCidr::Ip4(req.dest),
+            req.target,
+        )),
     }
 }
 
 fn add_fw_rule_hdlr(
-    ioctlenv: &IoctlEnvelope
+    ioctlenv: &IoctlEnvelope,
 ) -> Result<Result<(), api::AddFwRuleError>, HdlrError> {
-
     let req: FwAddRuleReq = ioctlenv.copy_in_req()?;
 
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name)
-    {
+    let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
         None => {
             return Err(HdlrError::System(ENOENT));
@@ -1525,12 +1488,8 @@ fn add_fw_rule_hdlr(
     };
 
     match dev.port {
-        None => {
-            Err(HdlrError::System(EAGAIN))
-        }
-        Some(ref port) => {
-            Ok(api::add_fw_rule(port, &req))
-        }
+        None => Err(HdlrError::System(EAGAIN)),
+        Some(ref port) => Ok(api::add_fw_rule(port, &req)),
     }
 }
 
@@ -1546,21 +1505,20 @@ fn get_v2p_hdlr(
 ) -> Result<Result<overlay::GetVirt2PhysResp, ()>, HdlrError> {
     let _req: overlay::GetVirt2PhysReq = ioctlenv.copy_in_req()?;
     let state = get_xde_state();
-    Ok(Ok(overlay::GetVirt2PhysResp{
+    Ok(Ok(overlay::GetVirt2PhysResp {
         ip4: state.v2p.ip4.lock().clone(),
         ip6: state.v2p.ip6.lock().clone(),
     }))
 }
 
 fn list_layers_hdlr(
-    ioctlenv: &IoctlEnvelope
-)-> Result<Result<api::ListLayersResp, api::ListLayersError>, HdlrError> {
+    ioctlenv: &IoctlEnvelope,
+) -> Result<Result<api::ListLayersResp, api::ListLayersError>, HdlrError> {
     let req: api::ListLayersReq = ioctlenv.copy_in_req()?;
 
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name)
-    {
+    let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
         None => {
             return Err(HdlrError::System(ENOENT));
@@ -1568,14 +1526,9 @@ fn list_layers_hdlr(
     };
 
     match dev.port {
-        None => {
-            Err(HdlrError::System(EAGAIN))
-        }
-        Some(ref port) => {
-            Ok(Ok(port.list_layers()))
-        }
+        None => Err(HdlrError::System(EAGAIN)),
+        Some(ref port) => Ok(Ok(port.list_layers())),
     }
-
 }
 
 fn dump_uft_hdlr(
@@ -1585,8 +1538,7 @@ fn dump_uft_hdlr(
 
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name)
-    {
+    let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
         None => {
             return Err(HdlrError::System(ENOENT));
@@ -1594,24 +1546,19 @@ fn dump_uft_hdlr(
     };
 
     match dev.port {
-        None => {
-            Err(HdlrError::System(EAGAIN))
-        }
-        Some(ref port) => {
-            Ok(Ok(api::dump_uft(port, &req)))
-        }
+        None => Err(HdlrError::System(EAGAIN)),
+        Some(ref port) => Ok(Ok(api::dump_uft(port, &req))),
     }
 }
 
 fn dump_layer_hdlr(
-    ioctlenv: &IoctlEnvelope
+    ioctlenv: &IoctlEnvelope,
 ) -> Result<Result<api::DumpLayerResp, api::DumpLayerError>, HdlrError> {
     let req: api::DumpLayerReq = ioctlenv.copy_in_req()?;
 
     let devs = unsafe { xde_devs.read() };
-    let mut iter =  devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name)
-    {
+    let mut iter = devs.iter();
+    let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
         None => {
             return Err(HdlrError::System(ENOENT));
@@ -1619,12 +1566,7 @@ fn dump_layer_hdlr(
     };
 
     match dev.port {
-        None => {
-            Err(HdlrError::System(EAGAIN))
-        }
-        Some(ref port) => {
-            Ok(api::dump_layer(port, &req))
-        }
+        None => Err(HdlrError::System(EAGAIN)),
+        Some(ref port) => Ok(api::dump_layer(port, &req)),
     }
-
 }

@@ -7,9 +7,9 @@ use alloc::string::{String, ToString};
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::vec::Vec;
 #[cfg(any(feature = "std", test))]
-use std::vec::Vec;
-#[cfg(any(feature = "std", test))]
 use std::string::{String, ToString};
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
@@ -31,7 +31,7 @@ use crate::packet::{PacketRead, ReadErr, WriteError};
     Ord,
     PartialEq,
     PartialOrd,
-    Serialize
+    Serialize,
 )]
 pub struct Vni {
     inner: u32,
@@ -104,8 +104,10 @@ impl From<&GeneveHdr> for GeneveMeta {
 
 impl From<&GeneveHdrRaw> for GeneveMeta {
     fn from(raw: &GeneveHdrRaw) -> Self {
-        let vni = Vni::new(u32::from_be_bytes([0, raw.vni[0], raw.vni[1], raw.vni[2]]))
-            .expect("need to verify this beforehand");
+        let vni = Vni::new(u32::from_be_bytes([
+            0, raw.vni[0], raw.vni[1], raw.vni[2],
+        ]))
+        .expect("need to verify this beforehand");
 
         Self { vni }
     }
@@ -203,10 +205,12 @@ impl TryFrom<&LayoutVerified<&[u8], GeneveHdrRaw>> for GeneveHdr {
                 protocol: u16::from_be_bytes(raw.proto),
             })?;
 
-        let vni = Vni::new(u32::from_be_bytes([0, raw.vni[0], raw.vni[1], raw.vni[2]]))
-            .map_err(|_s| GeneveHdrError::BadVni {
-                vni: u32::from_be_bytes([0, raw.vni[0], raw.vni[1], raw.vni[2]])
-            })?;
+        let vni = Vni::new(u32::from_be_bytes([
+            0, raw.vni[0], raw.vni[1], raw.vni[2],
+        ]))
+        .map_err(|_s| GeneveHdrError::BadVni {
+            vni: u32::from_be_bytes([0, raw.vni[0], raw.vni[1], raw.vni[2]]),
+        })?;
 
         Ok(GeneveHdr {
             opt_len_bytes: raw.options_len() as u16 * 4,

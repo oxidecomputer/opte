@@ -333,12 +333,12 @@ pub struct SetVirt2PhysReq {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct GetVirt2PhysReq { 
+pub struct GetVirt2PhysReq {
     pub unused: (),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct GetVirt2PhysResp { 
+pub struct GetVirt2PhysResp {
     pub ip4: BTreeMap<Ipv4Addr, PhysNet>,
     pub ip6: BTreeMap<Ipv6Addr, PhysNet>,
 }

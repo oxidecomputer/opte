@@ -14,8 +14,8 @@ use std::sync::Mutex;
 use illumos_ddi_dki::kmutex_type_t;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_ddi_dki::{
-    kmutex_t, mutex_enter, mutex_exit, mutex_init,
-    krwlock_t, krw_t, krw_type_t, rw_init, rw_enter, rw_exit,
+    kmutex_t, krw_t, krw_type_t, krwlock_t, mutex_enter, mutex_exit,
+    mutex_init, rw_enter, rw_exit, rw_init,
 };
 
 /// Exposes the illumos mutex(9F) API in a safe manner. We name it
@@ -243,7 +243,6 @@ impl From<KRwEnterType> for krw_t {
 
 #[cfg(all(not(feature = "std"), not(test)))]
 impl<T> KRwLock<T> {
-
     pub const fn new(val: T) -> Self {
         let rwl = krwlock_t { _opaque: 0 };
         KRwLock { rwl: UnsafeCell::new(rwl), data: UnsafeCell::new(val) }
@@ -264,7 +263,6 @@ impl<T> KRwLock<T> {
         unsafe { rw_enter(self.rwl.get(), krw_t::RW_WRITER) };
         KRwLockWriteGuard { lock: self }
     }
-
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]

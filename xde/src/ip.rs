@@ -49,7 +49,10 @@ where
     pub fn get(&self, bit_offset: usize, bit_width: u8) -> u64 {
         debug_assert!(bit_width <= 64);
         debug_assert!(bit_offset / 8 < self.storage.as_ref().len());
-        debug_assert!((bit_offset + (bit_width as usize)) / 8 <= self.storage.as_ref().len());
+        debug_assert!(
+            (bit_offset + (bit_width as usize)) / 8
+                <= self.storage.as_ref().len()
+        );
         let mut val = 0;
         for i in 0..(bit_width as usize) {
             if self.get_bit(i + bit_offset) {
@@ -67,7 +70,10 @@ where
     pub fn set(&mut self, bit_offset: usize, bit_width: u8, val: u64) {
         debug_assert!(bit_width <= 64);
         debug_assert!(bit_offset / 8 < self.storage.as_ref().len());
-        debug_assert!((bit_offset + (bit_width as usize)) / 8 <= self.storage.as_ref().len());
+        debug_assert!(
+            (bit_offset + (bit_width as usize)) / 8
+                <= self.storage.as_ref().len()
+        );
         for i in 0..(bit_width as usize) {
             let mask = 1 << i;
             let val_bit_is_set = val & mask == mask;
@@ -3133,7 +3139,8 @@ pub const UA_FASTREBOOT_DEFAULT: u32 = 1;
 pub const UA_FASTREBOOT_ONPANIC: u32 = 2;
 pub const FASTREBOOT_DEFAULT: &[u8; 19usize] = b"fastreboot_default\0";
 pub const FASTREBOOT_ONPANIC: &[u8; 19usize] = b"fastreboot_onpanic\0";
-pub const FASTREBOOT_ONPANIC_CMDLINE: &[u8; 27usize] = b"fastreboot_onpanic_cmdline\0";
+pub const FASTREBOOT_ONPANIC_CMDLINE: &[u8; 27usize] =
+    b"fastreboot_onpanic_cmdline\0";
 pub const TOD_GET_FAILED: u32 = 1;
 pub const TOD_SET_DONE: u32 = 2;
 pub const TOD_CPR_RESUME_DONE: u32 = 4;
@@ -4062,7 +4069,8 @@ extern "C" {
     pub static mut mutex_backoff_shift: uchar_t;
 }
 extern "C" {
-    pub static mut mutex_lock_delay: ::core::option::Option<unsafe extern "C" fn(arg1: uint_t)>;
+    pub static mut mutex_lock_delay:
+        ::core::option::Option<unsafe extern "C" fn(arg1: uint_t)>;
 }
 extern "C" {
     pub static mut mutex_lock_backoff:
@@ -4192,11 +4200,16 @@ extern "C" {
     pub fn tv2hrt(arg1: *mut timeval) -> hrtime_t;
 }
 extern "C" {
-    pub fn itimerfix(arg1: *mut timeval, arg2: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn itimerfix(
+        arg1: *mut timeval,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn itimerdecr(arg1: *mut itimerval, arg2: illumos_ddi_dki::c_int)
-        -> illumos_ddi_dki::c_int;
+    pub fn itimerdecr(
+        arg1: *mut itimerval,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn timevaladd(arg1: *mut timeval, arg2: *mut timeval);
@@ -4343,7 +4356,11 @@ extern "C" {
     pub fn ulock_clear(lp: *mut lock_t);
 }
 extern "C" {
-    pub fn lock_set_spl(lp: *mut lock_t, new_pil: illumos_ddi_dki::c_int, old_pil: *mut ushort_t);
+    pub fn lock_set_spl(
+        lp: *mut lock_t,
+        new_pil: illumos_ddi_dki::c_int,
+        old_pil: *mut ushort_t,
+    );
 }
 extern "C" {
     pub fn lock_clear_splx(lp: *mut lock_t, s: illumos_ddi_dki::c_int);
@@ -4461,7 +4478,10 @@ extern "C" {
     pub fn rw_enter(arg1: *mut krwlock_t, arg2: krw_t);
 }
 extern "C" {
-    pub fn rw_tryenter(arg1: *mut krwlock_t, arg2: krw_t) -> illumos_ddi_dki::c_int;
+    pub fn rw_tryenter(
+        arg1: *mut krwlock_t,
+        arg2: krw_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn rw_exit(arg1: *mut krwlock_t);
@@ -4495,7 +4515,8 @@ extern "C" {
         ::core::option::Option<unsafe extern "C" fn(arg1: uint_t) -> uint_t>;
 }
 extern "C" {
-    pub static mut rw_lock_delay: ::core::option::Option<unsafe extern "C" fn(arg1: uint_t)>;
+    pub static mut rw_lock_delay:
+        ::core::option::Option<unsafe extern "C" fn(arg1: uint_t)>;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -4531,10 +4552,18 @@ extern "C" {
     pub fn cv_wait(arg1: *mut kcondvar_t, arg2: *mut kmutex_t);
 }
 extern "C" {
-    pub fn cv_wait_stop(arg1: *mut kcondvar_t, arg2: *mut kmutex_t, arg3: illumos_ddi_dki::c_int);
+    pub fn cv_wait_stop(
+        arg1: *mut kcondvar_t,
+        arg2: *mut kmutex_t,
+        arg3: illumos_ddi_dki::c_int,
+    );
 }
 extern "C" {
-    pub fn cv_timedwait(arg1: *mut kcondvar_t, arg2: *mut kmutex_t, arg3: clock_t) -> clock_t;
+    pub fn cv_timedwait(
+        arg1: *mut kcondvar_t,
+        arg2: *mut kmutex_t,
+        arg3: clock_t,
+    ) -> clock_t;
 }
 extern "C" {
     pub fn cv_timedwait_hires(
@@ -4554,10 +4583,17 @@ extern "C" {
     ) -> clock_t;
 }
 extern "C" {
-    pub fn cv_wait_sig(arg1: *mut kcondvar_t, arg2: *mut kmutex_t) -> illumos_ddi_dki::c_int;
+    pub fn cv_wait_sig(
+        arg1: *mut kcondvar_t,
+        arg2: *mut kmutex_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn cv_timedwait_sig(arg1: *mut kcondvar_t, arg2: *mut kmutex_t, arg3: clock_t) -> clock_t;
+    pub fn cv_timedwait_sig(
+        arg1: *mut kcondvar_t,
+        arg2: *mut kmutex_t,
+        arg3: clock_t,
+    ) -> clock_t;
 }
 extern "C" {
     pub fn cv_timedwait_sig_hrtime(
@@ -4575,7 +4611,10 @@ extern "C" {
     ) -> clock_t;
 }
 extern "C" {
-    pub fn cv_wait_sig_swap(arg1: *mut kcondvar_t, arg2: *mut kmutex_t) -> illumos_ddi_dki::c_int;
+    pub fn cv_wait_sig_swap(
+        arg1: *mut kcondvar_t,
+        arg2: *mut kmutex_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn cv_wait_sig_swap_core(
@@ -4613,7 +4652,8 @@ pub struct sigevent {
     pub sigev_notify: illumos_ddi_dki::c_int,
     pub sigev_signo: illumos_ddi_dki::c_int,
     pub sigev_value: sigval,
-    pub sigev_notify_function: ::core::option::Option<unsafe extern "C" fn(arg1: sigval)>,
+    pub sigev_notify_function:
+        ::core::option::Option<unsafe extern "C" fn(arg1: sigval)>,
     pub sigev_notify_attributes: *mut pthread_attr_t,
     pub __sigev_pad2: illumos_ddi_dki::c_int,
 }
@@ -4726,8 +4766,10 @@ pub struct k_siginfo__bindgen_ty_1__bindgen_ty_1 {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union k_siginfo__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1 {
-    pub __kill: k_siginfo__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1,
-    pub __cld: k_siginfo__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1__bindgen_ty_2,
+    pub __kill:
+        k_siginfo__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1,
+    pub __cld:
+        k_siginfo__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1__bindgen_ty_2,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -4775,7 +4817,8 @@ pub type k_siginfo_t = k_siginfo;
 pub struct sigqueue {
     pub sq_next: *mut sigqueue,
     pub sq_info: k_siginfo_t,
-    pub sq_func: ::core::option::Option<unsafe extern "C" fn(arg1: *mut sigqueue)>,
+    pub sq_func:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut sigqueue)>,
     pub sq_backptr: *mut illumos_ddi_dki::c_void,
     pub sq_external: illumos_ddi_dki::c_int,
 }
@@ -4881,7 +4924,9 @@ pub type sigqhdr_t = sigqhdr;
 extern "C" {
     pub fn setsigact(
         arg1: illumos_ddi_dki::c_int,
-        arg2: ::core::option::Option<unsafe extern "C" fn(arg1: illumos_ddi_dki::c_int)>,
+        arg2: ::core::option::Option<
+            unsafe extern "C" fn(arg1: illumos_ddi_dki::c_int),
+        >,
         arg3: *const k_sigset_t,
         arg4: illumos_ddi_dki::c_int,
     );
@@ -4905,7 +4950,10 @@ extern "C" {
     pub fn sigreplace(arg1: *mut k_sigset_t, arg2: *mut k_sigset_t);
 }
 extern "C" {
-    pub fn kill(arg1: pid_t, arg2: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn kill(
+        arg1: pid_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> illumos_ddi_dki::c_int;
 }
 pub type greg_t = illumos_ddi_dki::c_long;
 pub type gregset_t = [greg_t; 28usize];
@@ -5114,7 +5162,9 @@ pub struct user_desc {
 impl user_desc {
     #[inline]
     pub fn usd_lolimit(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 16u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 16u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_lolimit(&mut self, val: u64) {
@@ -5125,7 +5175,9 @@ impl user_desc {
     }
     #[inline]
     pub fn usd_lobase(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(16usize, 16u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(16usize, 16u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_lobase(&mut self, val: u64) {
@@ -5136,7 +5188,9 @@ impl user_desc {
     }
     #[inline]
     pub fn usd_midbase(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(32usize, 8u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(32usize, 8u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_midbase(&mut self, val: u64) {
@@ -5147,7 +5201,9 @@ impl user_desc {
     }
     #[inline]
     pub fn usd_type(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(40usize, 5u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(40usize, 5u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_type(&mut self, val: u64) {
@@ -5158,7 +5214,9 @@ impl user_desc {
     }
     #[inline]
     pub fn usd_dpl(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(45usize, 2u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(45usize, 2u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_dpl(&mut self, val: u64) {
@@ -5169,7 +5227,9 @@ impl user_desc {
     }
     #[inline]
     pub fn usd_p(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(47usize, 1u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(47usize, 1u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_p(&mut self, val: u64) {
@@ -5180,7 +5240,9 @@ impl user_desc {
     }
     #[inline]
     pub fn usd_hilimit(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(48usize, 4u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(48usize, 4u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_hilimit(&mut self, val: u64) {
@@ -5191,7 +5253,9 @@ impl user_desc {
     }
     #[inline]
     pub fn usd_avl(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(52usize, 1u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(52usize, 1u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_avl(&mut self, val: u64) {
@@ -5202,7 +5266,9 @@ impl user_desc {
     }
     #[inline]
     pub fn usd_long(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(53usize, 1u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(53usize, 1u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_long(&mut self, val: u64) {
@@ -5213,7 +5279,9 @@ impl user_desc {
     }
     #[inline]
     pub fn usd_def32(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(54usize, 1u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(54usize, 1u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_def32(&mut self, val: u64) {
@@ -5224,7 +5292,9 @@ impl user_desc {
     }
     #[inline]
     pub fn usd_gran(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(55usize, 1u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(55usize, 1u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_gran(&mut self, val: u64) {
@@ -5235,7 +5305,9 @@ impl user_desc {
     }
     #[inline]
     pub fn usd_hibase(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(56usize, 8u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(56usize, 8u8) as u64)
+        }
     }
     #[inline]
     pub fn set_usd_hibase(&mut self, val: u64) {
@@ -5259,9 +5331,11 @@ impl user_desc {
         usd_gran: u64,
         usd_hibase: u64,
     ) -> __BindgenBitfieldUnit<[u8; 8usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 8usize]> = Default::default();
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 8usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 16u8, {
-            let usd_lolimit: u64 = unsafe { ::core::mem::transmute(usd_lolimit) };
+            let usd_lolimit: u64 =
+                unsafe { ::core::mem::transmute(usd_lolimit) };
             usd_lolimit as u64
         });
         __bindgen_bitfield_unit.set(16usize, 16u8, {
@@ -5269,7 +5343,8 @@ impl user_desc {
             usd_lobase as u64
         });
         __bindgen_bitfield_unit.set(32usize, 8u8, {
-            let usd_midbase: u64 = unsafe { ::core::mem::transmute(usd_midbase) };
+            let usd_midbase: u64 =
+                unsafe { ::core::mem::transmute(usd_midbase) };
             usd_midbase as u64
         });
         __bindgen_bitfield_unit.set(40usize, 5u8, {
@@ -5285,7 +5360,8 @@ impl user_desc {
             usd_p as u64
         });
         __bindgen_bitfield_unit.set(48usize, 4u8, {
-            let usd_hilimit: u64 = unsafe { ::core::mem::transmute(usd_hilimit) };
+            let usd_hilimit: u64 =
+                unsafe { ::core::mem::transmute(usd_hilimit) };
             usd_hilimit as u64
         });
         __bindgen_bitfield_unit.set(52usize, 1u8, {
@@ -5322,7 +5398,9 @@ pub struct system_desc {
 impl system_desc {
     #[inline]
     pub fn ssd_lolimit(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 16u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 16u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_lolimit(&mut self, val: u64) {
@@ -5333,7 +5411,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_lobase(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(16usize, 16u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(16usize, 16u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_lobase(&mut self, val: u64) {
@@ -5344,7 +5424,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_midbase(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(32usize, 8u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(32usize, 8u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_midbase(&mut self, val: u64) {
@@ -5355,7 +5437,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_type(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(40usize, 4u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(40usize, 4u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_type(&mut self, val: u64) {
@@ -5366,7 +5450,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_zero1(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(44usize, 1u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(44usize, 1u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_zero1(&mut self, val: u64) {
@@ -5377,7 +5463,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_dpl(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(45usize, 2u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(45usize, 2u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_dpl(&mut self, val: u64) {
@@ -5388,7 +5476,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_p(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(47usize, 1u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(47usize, 1u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_p(&mut self, val: u64) {
@@ -5399,7 +5489,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_hilimit(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(48usize, 4u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(48usize, 4u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_hilimit(&mut self, val: u64) {
@@ -5410,7 +5502,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_avl(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(52usize, 1u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(52usize, 1u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_avl(&mut self, val: u64) {
@@ -5421,7 +5515,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_resv1(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(53usize, 2u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(53usize, 2u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_resv1(&mut self, val: u64) {
@@ -5432,7 +5528,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_gran(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(55usize, 1u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(55usize, 1u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_gran(&mut self, val: u64) {
@@ -5443,7 +5541,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_hibase(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(56usize, 8u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(56usize, 8u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_hibase(&mut self, val: u64) {
@@ -5454,7 +5554,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_hi64base(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(64usize, 32u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(64usize, 32u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_hi64base(&mut self, val: u64) {
@@ -5465,7 +5567,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_resv2(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(96usize, 8u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(96usize, 8u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_resv2(&mut self, val: u64) {
@@ -5476,7 +5580,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_zero2(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(104usize, 5u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(104usize, 5u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_zero2(&mut self, val: u64) {
@@ -5487,7 +5593,9 @@ impl system_desc {
     }
     #[inline]
     pub fn ssd_resv3(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(109usize, 19u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(109usize, 19u8) as u64)
+        }
     }
     #[inline]
     pub fn set_ssd_resv3(&mut self, val: u64) {
@@ -5515,9 +5623,11 @@ impl system_desc {
         ssd_zero2: u64,
         ssd_resv3: u64,
     ) -> __BindgenBitfieldUnit<[u8; 16usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 16usize]> = Default::default();
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 16usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 16u8, {
-            let ssd_lolimit: u64 = unsafe { ::core::mem::transmute(ssd_lolimit) };
+            let ssd_lolimit: u64 =
+                unsafe { ::core::mem::transmute(ssd_lolimit) };
             ssd_lolimit as u64
         });
         __bindgen_bitfield_unit.set(16usize, 16u8, {
@@ -5525,7 +5635,8 @@ impl system_desc {
             ssd_lobase as u64
         });
         __bindgen_bitfield_unit.set(32usize, 8u8, {
-            let ssd_midbase: u64 = unsafe { ::core::mem::transmute(ssd_midbase) };
+            let ssd_midbase: u64 =
+                unsafe { ::core::mem::transmute(ssd_midbase) };
             ssd_midbase as u64
         });
         __bindgen_bitfield_unit.set(40usize, 4u8, {
@@ -5545,7 +5656,8 @@ impl system_desc {
             ssd_p as u64
         });
         __bindgen_bitfield_unit.set(48usize, 4u8, {
-            let ssd_hilimit: u64 = unsafe { ::core::mem::transmute(ssd_hilimit) };
+            let ssd_hilimit: u64 =
+                unsafe { ::core::mem::transmute(ssd_hilimit) };
             ssd_hilimit as u64
         });
         __bindgen_bitfield_unit.set(52usize, 1u8, {
@@ -5565,7 +5677,8 @@ impl system_desc {
             ssd_hibase as u64
         });
         __bindgen_bitfield_unit.set(64usize, 32u8, {
-            let ssd_hi64base: u64 = unsafe { ::core::mem::transmute(ssd_hi64base) };
+            let ssd_hi64base: u64 =
+                unsafe { ::core::mem::transmute(ssd_hi64base) };
             ssd_hi64base as u64
         });
         __bindgen_bitfield_unit.set(96usize, 8u8, {
@@ -5594,7 +5707,9 @@ pub struct gate_desc {
 impl gate_desc {
     #[inline]
     pub fn sgd_looffset(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 16u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 16u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_looffset(&mut self, val: u64) {
@@ -5605,7 +5720,9 @@ impl gate_desc {
     }
     #[inline]
     pub fn sgd_selector(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(16usize, 16u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(16usize, 16u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_selector(&mut self, val: u64) {
@@ -5616,7 +5733,9 @@ impl gate_desc {
     }
     #[inline]
     pub fn sgd_ist(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(32usize, 3u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(32usize, 3u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_ist(&mut self, val: u64) {
@@ -5627,7 +5746,9 @@ impl gate_desc {
     }
     #[inline]
     pub fn sgd_resv1(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(35usize, 5u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(35usize, 5u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_resv1(&mut self, val: u64) {
@@ -5638,7 +5759,9 @@ impl gate_desc {
     }
     #[inline]
     pub fn sgd_type(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(40usize, 5u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(40usize, 5u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_type(&mut self, val: u64) {
@@ -5649,7 +5772,9 @@ impl gate_desc {
     }
     #[inline]
     pub fn sgd_dpl(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(45usize, 2u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(45usize, 2u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_dpl(&mut self, val: u64) {
@@ -5660,7 +5785,9 @@ impl gate_desc {
     }
     #[inline]
     pub fn sgd_p(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(47usize, 1u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(47usize, 1u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_p(&mut self, val: u64) {
@@ -5671,7 +5798,9 @@ impl gate_desc {
     }
     #[inline]
     pub fn sgd_hioffset(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(48usize, 16u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(48usize, 16u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_hioffset(&mut self, val: u64) {
@@ -5682,7 +5811,9 @@ impl gate_desc {
     }
     #[inline]
     pub fn sgd_hi64offset(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(64usize, 32u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(64usize, 32u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_hi64offset(&mut self, val: u64) {
@@ -5693,7 +5824,9 @@ impl gate_desc {
     }
     #[inline]
     pub fn sgd_resv2(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(96usize, 8u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(96usize, 8u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_resv2(&mut self, val: u64) {
@@ -5704,7 +5837,9 @@ impl gate_desc {
     }
     #[inline]
     pub fn sgd_zero(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(104usize, 5u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(104usize, 5u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_zero(&mut self, val: u64) {
@@ -5715,7 +5850,9 @@ impl gate_desc {
     }
     #[inline]
     pub fn sgd_resv3(&self) -> u64 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(109usize, 19u8) as u64) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(109usize, 19u8) as u64)
+        }
     }
     #[inline]
     pub fn set_sgd_resv3(&mut self, val: u64) {
@@ -5739,13 +5876,16 @@ impl gate_desc {
         sgd_zero: u64,
         sgd_resv3: u64,
     ) -> __BindgenBitfieldUnit<[u8; 16usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 16usize]> = Default::default();
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 16usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 16u8, {
-            let sgd_looffset: u64 = unsafe { ::core::mem::transmute(sgd_looffset) };
+            let sgd_looffset: u64 =
+                unsafe { ::core::mem::transmute(sgd_looffset) };
             sgd_looffset as u64
         });
         __bindgen_bitfield_unit.set(16usize, 16u8, {
-            let sgd_selector: u64 = unsafe { ::core::mem::transmute(sgd_selector) };
+            let sgd_selector: u64 =
+                unsafe { ::core::mem::transmute(sgd_selector) };
             sgd_selector as u64
         });
         __bindgen_bitfield_unit.set(32usize, 3u8, {
@@ -5769,11 +5909,13 @@ impl gate_desc {
             sgd_p as u64
         });
         __bindgen_bitfield_unit.set(48usize, 16u8, {
-            let sgd_hioffset: u64 = unsafe { ::core::mem::transmute(sgd_hioffset) };
+            let sgd_hioffset: u64 =
+                unsafe { ::core::mem::transmute(sgd_hioffset) };
             sgd_hioffset as u64
         });
         __bindgen_bitfield_unit.set(64usize, 32u8, {
-            let sgd_hi64offset: u64 = unsafe { ::core::mem::transmute(sgd_hi64offset) };
+            let sgd_hi64offset: u64 =
+                unsafe { ::core::mem::transmute(sgd_hi64offset) };
             sgd_hi64offset as u64
         });
         __bindgen_bitfield_unit.set(96usize, 8u8, {
@@ -5827,7 +5969,9 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn get_ssd_base(arg1: *mut system_desc_t) -> *mut illumos_ddi_dki::c_void;
+    pub fn get_ssd_base(
+        arg1: *mut system_desc_t,
+    ) -> *mut illumos_ddi_dki::c_void;
 }
 extern "C" {
     pub fn gdt_update_usegd(arg1: uint_t, arg2: *mut user_desc_t);
@@ -6142,12 +6286,14 @@ extern "C" {
     pub fn xsaveopt_excp_clr_ctxt(arg1: *mut illumos_ddi_dki::c_void);
 }
 extern "C" {
-    pub static mut fpsave_ctxt:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>;
+    pub static mut fpsave_ctxt: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+    >;
 }
 extern "C" {
-    pub static mut xsavep:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut xsave_state, arg2: u64)>;
+    pub static mut xsavep: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut xsave_state, arg2: u64),
+    >;
 }
 extern "C" {
     pub fn fpxrestore_ctxt(arg1: *mut illumos_ddi_dki::c_void);
@@ -6156,8 +6302,9 @@ extern "C" {
     pub fn xrestore_ctxt(arg1: *mut illumos_ddi_dki::c_void);
 }
 extern "C" {
-    pub static mut fprestore_ctxt:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>;
+    pub static mut fprestore_ctxt: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+    >;
 }
 extern "C" {
     pub fn fxsave_insn(arg1: *mut fxsave_state);
@@ -6638,7 +6785,9 @@ extern "C" {
     pub fn kcpc_cpu_program(arg1: *mut cpu, arg2: *mut kcpc_ctx_t);
 }
 extern "C" {
-    pub fn kcpc_register_dcpc(func: ::core::option::Option<unsafe extern "C" fn(arg1: u64)>);
+    pub fn kcpc_register_dcpc(
+        func: ::core::option::Option<unsafe extern "C" fn(arg1: u64)>,
+    );
 }
 extern "C" {
     pub fn kcpc_unregister_dcpc();
@@ -6647,7 +6796,10 @@ extern "C" {
     pub fn kcpc_ctx_alloc(arg1: illumos_ddi_dki::c_int) -> *mut kcpc_ctx_t;
 }
 extern "C" {
-    pub fn kcpc_assign_reqs(arg1: *mut _kcpc_set, arg2: *mut kcpc_ctx_t) -> illumos_ddi_dki::c_int;
+    pub fn kcpc_assign_reqs(
+        arg1: *mut _kcpc_set,
+        arg2: *mut kcpc_ctx_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn kcpc_ctx_free(arg1: *mut kcpc_ctx_t);
@@ -6705,7 +6857,10 @@ pub struct _kcpc_request_list {
 }
 pub type kcpc_request_list_t = _kcpc_request_list;
 pub type kcpc_update_func_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void, arg2: u64) -> illumos_ddi_dki::c_int,
+    unsafe extern "C" fn(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: u64,
+    ) -> illumos_ddi_dki::c_int,
 >;
 pub type kcpc_read_func_t = ::core::option::Option<
     unsafe extern "C" fn(arg1: kcpc_update_func_t) -> illumos_ddi_dki::c_int,
@@ -6745,7 +6900,9 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn kcpc_event_supported(event: *mut illumos_ddi_dki::c_char) -> boolean_t;
+    pub fn kcpc_event_supported(
+        event: *mut illumos_ddi_dki::c_char,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn kcpc_reqs_init(
@@ -6766,16 +6923,24 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn kcpc_reqs_reset(req_list: *mut kcpc_request_list_t) -> illumos_ddi_dki::c_int;
+    pub fn kcpc_reqs_reset(
+        req_list: *mut kcpc_request_list_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn kcpc_reqs_fini(req_list: *mut kcpc_request_list_t) -> illumos_ddi_dki::c_int;
+    pub fn kcpc_reqs_fini(
+        req_list: *mut kcpc_request_list_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn kcpc_read(arg1: kcpc_update_func_t) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn kcpc_program(ctx: *mut kcpc_ctx_t, for_thread: boolean_t, cu_interpose: boolean_t);
+    pub fn kcpc_program(
+        ctx: *mut kcpc_ctx_t,
+        for_thread: boolean_t,
+        cu_interpose: boolean_t,
+    );
 }
 extern "C" {
     pub fn kcpc_unprogram(ctx: *mut kcpc_ctx_t, cu_interpose: boolean_t);
@@ -6828,7 +6993,8 @@ extern "C" {
     pub static mut dtrace_cpc_in_use: u32;
 }
 extern "C" {
-    pub static mut dtrace_cpc_fire: ::core::option::Option<unsafe extern "C" fn(arg1: u64)>;
+    pub static mut dtrace_cpc_fire:
+        ::core::option::Option<unsafe extern "C" fn(arg1: u64)>;
 }
 extern "C" {
     pub fn kcpc_free_set(set: *mut kcpc_set_t);
@@ -6856,7 +7022,9 @@ extern "C" {
     pub fn kcpc_pcbe_loaded() -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn kcpc_allow_nonpriv(token: *mut illumos_ddi_dki::c_void) -> illumos_ddi_dki::c_int;
+    pub fn kcpc_allow_nonpriv(
+        token: *mut illumos_ddi_dki::c_void,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn kcpc_register_pcbe(arg1: *mut __pcbe_ops);
@@ -6864,9 +7032,12 @@ extern "C" {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ctxop {
-    pub save_op: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
-    pub restore_op:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+    pub save_op: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+    >,
+    pub restore_op: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+    >,
     pub fork_op: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut illumos_ddi_dki::c_void,
@@ -6879,9 +7050,14 @@ pub struct ctxop {
             arg2: *mut illumos_ddi_dki::c_void,
         ),
     >,
-    pub exit_op: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+    pub exit_op: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+    >,
     pub free_op: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void, arg2: illumos_ddi_dki::c_int),
+        unsafe extern "C" fn(
+            arg1: *mut illumos_ddi_dki::c_void,
+            arg2: illumos_ddi_dki::c_int,
+        ),
     >,
     pub arg: *mut illumos_ddi_dki::c_void,
     pub next: *mut ctxop,
@@ -7256,7 +7432,10 @@ extern "C" {
     pub fn disp_lock_exit_high(arg1: *mut disp_lock_t);
 }
 extern "C" {
-    pub fn disp_lock_init(lp: *mut disp_lock_t, name: *mut illumos_ddi_dki::c_char);
+    pub fn disp_lock_init(
+        lp: *mut disp_lock_t,
+        name: *mut illumos_ddi_dki::c_char,
+    );
 }
 extern "C" {
     pub fn disp_lock_destroy(lp: *mut disp_lock_t);
@@ -7297,7 +7476,10 @@ extern "C" {
     pub fn kstat_delete(arg1: *mut kstat_t);
 }
 extern "C" {
-    pub fn kstat_named_setstr(knp: *mut kstat_named_t, src: *const illumos_ddi_dki::c_char);
+    pub fn kstat_named_setstr(
+        knp: *mut kstat_named_t,
+        src: *const illumos_ddi_dki::c_char,
+    );
 }
 extern "C" {
     pub fn kstat_set_string(
@@ -7328,7 +7510,10 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn kstat_timer_init(arg1: *mut kstat_timer_t, arg2: *const illumos_ddi_dki::c_char);
+    pub fn kstat_timer_init(
+        arg1: *mut kstat_timer_t,
+        arg2: *const illumos_ddi_dki::c_char,
+    );
 }
 extern "C" {
     pub fn kstat_waitq_enter(arg1: *mut kstat_io_t);
@@ -7361,7 +7546,10 @@ extern "C" {
     pub fn kstat_zone_remove(arg1: *mut kstat_t, arg2: zoneid_t);
 }
 extern "C" {
-    pub fn kstat_zone_find(arg1: *mut kstat_t, arg2: zoneid_t) -> illumos_ddi_dki::c_int;
+    pub fn kstat_zone_find(
+        arg1: *mut kstat_t,
+        arg2: zoneid_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn kstat_hold_bykid(kid: kid_t, arg1: zoneid_t) -> *mut kstat_t;
@@ -7454,13 +7642,22 @@ extern "C" {
     pub fn crset_zone_privall(arg1: *mut cred_t);
 }
 extern "C" {
-    pub fn groupmember(arg1: gid_t, arg2: *const cred_t) -> illumos_ddi_dki::c_int;
+    pub fn groupmember(
+        arg1: gid_t,
+        arg2: *const cred_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn supgroupmember(arg1: gid_t, arg2: *const cred_t) -> illumos_ddi_dki::c_int;
+    pub fn supgroupmember(
+        arg1: gid_t,
+        arg2: *const cred_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn hasprocperm(arg1: *const cred_t, arg2: *const cred_t) -> illumos_ddi_dki::c_int;
+    pub fn hasprocperm(
+        arg1: *const cred_t,
+        arg2: *const cred_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn prochasprocperm(
@@ -7470,7 +7667,10 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn crcmp(arg1: *const cred_t, arg2: *const cred_t) -> illumos_ddi_dki::c_int;
+    pub fn crcmp(
+        arg1: *const cred_t,
+        arg2: *const cred_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn zone_kcred() -> *mut cred_t;
@@ -7537,7 +7737,11 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn crsetugid(arg1: *mut cred_t, arg2: uid_t, arg3: gid_t) -> illumos_ddi_dki::c_int;
+    pub fn crsetugid(
+        arg1: *mut cred_t,
+        arg2: uid_t,
+        arg3: gid_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn crsetgroups(
@@ -7547,7 +7751,10 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn crgrpcopyin(arg1: illumos_ddi_dki::c_int, arg2: *mut gid_t) -> *mut credgrp;
+    pub fn crgrpcopyin(
+        arg1: illumos_ddi_dki::c_int,
+        arg2: *mut gid_t,
+    ) -> *mut credgrp;
 }
 extern "C" {
     pub fn crgrprele(arg1: *mut credgrp);
@@ -7604,13 +7811,20 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn crsetsid(arg1: *mut cred_t, arg2: *mut ksid, arg3: illumos_ddi_dki::c_int);
+    pub fn crsetsid(
+        arg1: *mut cred_t,
+        arg2: *mut ksid,
+        arg3: illumos_ddi_dki::c_int,
+    );
 }
 extern "C" {
     pub fn crsetsidlist(arg1: *mut cred_t, arg2: *mut ksidlist);
 }
 extern "C" {
-    pub fn crgetsid(arg1: *const cred_t, arg2: illumos_ddi_dki::c_int) -> *mut ksid;
+    pub fn crgetsid(
+        arg1: *const cred_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> *mut ksid;
 }
 extern "C" {
     pub fn crgetsidlist(arg1: *const cred_t) -> *mut ksidlist;
@@ -7685,10 +7899,16 @@ pub struct netstack_registry {
         ) -> *mut illumos_ddi_dki::c_void,
     >,
     pub nr_shutdown: ::core::option::Option<
-        unsafe extern "C" fn(arg1: netstackid_t, arg2: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(
+            arg1: netstackid_t,
+            arg2: *mut illumos_ddi_dki::c_void,
+        ),
     >,
     pub nr_destroy: ::core::option::Option<
-        unsafe extern "C" fn(arg1: netstackid_t, arg2: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(
+            arg1: netstackid_t,
+            arg2: *mut illumos_ddi_dki::c_void,
+        ),
     >,
 }
 extern "C" {
@@ -7737,10 +7957,16 @@ extern "C" {
             ) -> *mut illumos_ddi_dki::c_void,
         >,
         arg3: ::core::option::Option<
-            unsafe extern "C" fn(arg1: netstackid_t, arg2: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(
+                arg1: netstackid_t,
+                arg2: *mut illumos_ddi_dki::c_void,
+            ),
         >,
         arg4: ::core::option::Option<
-            unsafe extern "C" fn(arg1: netstackid_t, arg2: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(
+                arg1: netstackid_t,
+                arg2: *mut illumos_ddi_dki::c_void,
+            ),
         >,
     );
 }
@@ -7786,7 +8012,9 @@ pub struct sockaddr_un {
     pub sun_path: [illumos_ddi_dki::c_char; 108usize],
 }
 extern "C" {
-    pub fn strlen(arg1: *const illumos_ddi_dki::c_char) -> illumos_ddi_dki::c_ulong;
+    pub fn strlen(
+        arg1: *const illumos_ddi_dki::c_char,
+    ) -> illumos_ddi_dki::c_ulong;
 }
 extern "C" {
     pub fn unp_discard() -> illumos_ddi_dki::c_int;
@@ -8067,7 +8295,9 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn inet6_rth_segments(bp: *const illumos_ddi_dki::c_void) -> illumos_ddi_dki::c_int;
+    pub fn inet6_rth_segments(
+        bp: *const illumos_ddi_dki::c_void,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn inet6_rth_getaddr(
@@ -8159,7 +8389,9 @@ pub struct ip {
 impl ip {
     #[inline]
     pub fn ip_hl(&self) -> uchar_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 4u8) as u8) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 4u8) as u8)
+        }
     }
     #[inline]
     pub fn set_ip_hl(&mut self, val: uchar_t) {
@@ -8170,7 +8402,9 @@ impl ip {
     }
     #[inline]
     pub fn ip_v(&self) -> uchar_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(4usize, 4u8) as u8) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(4usize, 4u8) as u8)
+        }
     }
     #[inline]
     pub fn set_ip_v(&mut self, val: uchar_t) {
@@ -8180,8 +8414,12 @@ impl ip {
         }
     }
     #[inline]
-    pub fn new_bitfield_1(ip_hl: uchar_t, ip_v: uchar_t) -> __BindgenBitfieldUnit<[u8; 1usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 1usize]> = Default::default();
+    pub fn new_bitfield_1(
+        ip_hl: uchar_t,
+        ip_v: uchar_t,
+    ) -> __BindgenBitfieldUnit<[u8; 1usize]> {
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 1usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 4u8, {
             let ip_hl: u8 = unsafe { ::core::mem::transmute(ip_hl) };
             ip_hl as u64
@@ -8218,7 +8456,9 @@ pub struct ip_timestamp_ipt_timestamp_ipt_ta {
 impl ip_timestamp {
     #[inline]
     pub fn ipt_flg(&self) -> uchar_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 4u8) as u8) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 4u8) as u8)
+        }
     }
     #[inline]
     pub fn set_ipt_flg(&mut self, val: uchar_t) {
@@ -8229,7 +8469,9 @@ impl ip_timestamp {
     }
     #[inline]
     pub fn ipt_oflw(&self) -> uchar_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(4usize, 4u8) as u8) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(4usize, 4u8) as u8)
+        }
     }
     #[inline]
     pub fn set_ipt_oflw(&mut self, val: uchar_t) {
@@ -8243,7 +8485,8 @@ impl ip_timestamp {
         ipt_flg: uchar_t,
         ipt_oflw: uchar_t,
     ) -> __BindgenBitfieldUnit<[u8; 1usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 1usize]> = Default::default();
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 1usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 4u8, {
             let ipt_flg: u8 = unsafe { ::core::mem::transmute(ipt_flg) };
             ipt_flg as u64
@@ -8268,7 +8511,10 @@ extern "C" {
     pub fn rwst_enter(arg1: *mut rwstlock_t, arg2: krw_t);
 }
 extern "C" {
-    pub fn rwst_enter_sig(arg1: *mut rwstlock_t, arg2: krw_t) -> illumos_ddi_dki::c_int;
+    pub fn rwst_enter_sig(
+        arg1: *mut rwstlock_t,
+        arg2: krw_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn rwst_exit(arg1: *mut rwstlock_t);
@@ -8285,10 +8531,16 @@ extern "C" {
     pub fn rwst_destroy(arg1: *mut rwstlock_t);
 }
 extern "C" {
-    pub fn rwst_lock_held(arg1: *mut rwstlock_t, arg2: krw_t) -> illumos_ddi_dki::c_int;
+    pub fn rwst_lock_held(
+        arg1: *mut rwstlock_t,
+        arg2: krw_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn rwst_tryenter(arg1: *mut rwstlock_t, arg2: krw_t) -> illumos_ddi_dki::c_int;
+    pub fn rwst_tryenter(
+        arg1: *mut rwstlock_t,
+        arg2: krw_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn rwst_owner(arg1: *mut rwstlock_t) -> *mut _kthread;
@@ -8412,7 +8664,10 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn ureadc(arg1: illumos_ddi_dki::c_int, arg2: *mut uio_t) -> illumos_ddi_dki::c_int;
+    pub fn ureadc(
+        arg1: illumos_ddi_dki::c_int,
+        arg2: *mut uio_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn uwritec(arg1: *mut uio) -> illumos_ddi_dki::c_int;
@@ -8437,10 +8692,16 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn uioainit(arg1: *mut uio_t, arg2: *mut uioa_t) -> illumos_ddi_dki::c_int;
+    pub fn uioainit(
+        arg1: *mut uio_t,
+        arg2: *mut uioa_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn uioafini(arg1: *mut uio_t, arg2: *mut uioa_t) -> illumos_ddi_dki::c_int;
+    pub fn uioafini(
+        arg1: *mut uio_t,
+        arg2: *mut uioa_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub static mut uioasync: uioasync_t;
@@ -8540,7 +8801,11 @@ pub type vmem_alloc_t = ::core::option::Option<
     ) -> *mut illumos_ddi_dki::c_void,
 >;
 pub type vmem_free_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut vmem_t, arg2: *mut illumos_ddi_dki::c_void, arg3: size_t),
+    unsafe extern "C" fn(
+        arg1: *mut vmem_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+        arg3: size_t,
+    ),
 >;
 pub type vmem_ximport_t = ::core::option::Option<
     unsafe extern "C" fn(
@@ -8618,10 +8883,18 @@ extern "C" {
     ) -> *mut illumos_ddi_dki::c_void;
 }
 extern "C" {
-    pub fn vmem_free(arg1: *mut vmem_t, arg2: *mut illumos_ddi_dki::c_void, arg3: size_t);
+    pub fn vmem_free(
+        arg1: *mut vmem_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+        arg3: size_t,
+    );
 }
 extern "C" {
-    pub fn vmem_xfree(arg1: *mut vmem_t, arg2: *mut illumos_ddi_dki::c_void, arg3: size_t);
+    pub fn vmem_xfree(
+        arg1: *mut vmem_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+        arg3: size_t,
+    );
 }
 extern "C" {
     pub fn vmem_add(
@@ -8653,7 +8926,8 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn vmem_size(arg1: *mut vmem_t, arg2: illumos_ddi_dki::c_int) -> size_t;
+    pub fn vmem_size(arg1: *mut vmem_t, arg2: illumos_ddi_dki::c_int)
+        -> size_t;
 }
 extern "C" {
     pub fn vmem_qcache_reap(vmp: *mut vmem_t);
@@ -8687,7 +8961,10 @@ extern "C" {
     pub fn kmem_dump_begin();
 }
 extern "C" {
-    pub fn kmem_dump_finish(buf: *mut illumos_ddi_dki::c_char, size: size_t) -> size_t;
+    pub fn kmem_dump_finish(
+        buf: *mut illumos_ddi_dki::c_char,
+        size: size_t,
+    ) -> size_t;
 }
 pub type kmem_cache_t = kmem_cache;
 pub const kmem_cbrc_KMEM_CBRC_YES: kmem_cbrc = 0;
@@ -8748,7 +9025,9 @@ extern "C" {
                 arg2: *mut illumos_ddi_dki::c_void,
             ),
         >,
-        arg6: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg6: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
         arg7: *mut illumos_ddi_dki::c_void,
         arg8: *mut vmem_t,
         arg9: illumos_ddi_dki::c_int,
@@ -8777,10 +9056,16 @@ extern "C" {
     ) -> *mut illumos_ddi_dki::c_void;
 }
 extern "C" {
-    pub fn kmem_cache_free(arg1: *mut kmem_cache_t, arg2: *mut illumos_ddi_dki::c_void);
+    pub fn kmem_cache_free(
+        arg1: *mut kmem_cache_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+    );
 }
 extern "C" {
-    pub fn kmem_cache_stat(arg1: *mut kmem_cache_t, arg2: *mut illumos_ddi_dki::c_char) -> u64;
+    pub fn kmem_cache_stat(
+        arg1: *mut kmem_cache_t,
+        arg2: *mut illumos_ddi_dki::c_char,
+    ) -> u64;
 }
 extern "C" {
     pub fn kmem_cache_reap_active() -> boolean_t;
@@ -8789,7 +9074,10 @@ extern "C" {
     pub fn kmem_cache_reap_soon(arg1: *mut kmem_cache_t);
 }
 extern "C" {
-    pub fn kmem_cache_move_notify(arg1: *mut kmem_cache_t, arg2: *mut illumos_ddi_dki::c_void);
+    pub fn kmem_cache_move_notify(
+        arg1: *mut kmem_cache_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+    );
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -8827,10 +9115,16 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn list_insert_head(arg1: *mut list_t, arg2: *mut illumos_ddi_dki::c_void);
+    pub fn list_insert_head(
+        arg1: *mut list_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+    );
 }
 extern "C" {
-    pub fn list_insert_tail(arg1: *mut list_t, arg2: *mut illumos_ddi_dki::c_void);
+    pub fn list_insert_tail(
+        arg1: *mut list_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+    );
 }
 extern "C" {
     pub fn list_remove(arg1: *mut list_t, arg2: *mut illumos_ddi_dki::c_void);
@@ -8893,8 +9187,9 @@ pub struct buf {
     pub b_pages: *mut page,
     pub b_obs2: clock_t,
     pub b_bufsize: size_t,
-    pub b_iodone:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut buf) -> illumos_ddi_dki::c_int>,
+    pub b_iodone: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut buf) -> illumos_ddi_dki::c_int,
+    >,
     pub b_vp: *mut vnode,
     pub b_chain: *mut buf,
     pub b_obs3: illumos_ddi_dki::c_int,
@@ -8974,12 +9269,18 @@ extern "C" {
 }
 extern "C" {
     pub static mut bio_lufs_strategy: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void, arg2: *mut buf_t),
+        unsafe extern "C" fn(
+            arg1: *mut illumos_ddi_dki::c_void,
+            arg2: *mut buf_t,
+        ),
     >;
 }
 extern "C" {
     pub static mut bio_snapshot_strategy: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void, arg2: *mut buf_t),
+        unsafe extern "C" fn(
+            arg1: *mut illumos_ddi_dki::c_void,
+            arg2: *mut buf_t,
+        ),
     >;
 }
 extern "C" {
@@ -9049,7 +9350,10 @@ extern "C" {
     pub fn binval(arg1: dev_t);
 }
 extern "C" {
-    pub fn bfinval(arg1: dev_t, arg2: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn bfinval(
+        arg1: dev_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn binit();
@@ -9101,7 +9405,11 @@ extern "C" {
     pub fn pageio_done(arg1: *mut buf);
 }
 extern "C" {
-    pub fn bread(arg1: dev_t, arg2: daddr_t, arg3: illumos_ddi_dki::c_long) -> *mut buf;
+    pub fn bread(
+        arg1: dev_t,
+        arg2: daddr_t,
+        arg3: illumos_ddi_dki::c_long,
+    ) -> *mut buf;
 }
 extern "C" {
     pub fn bread_common(
@@ -9120,7 +9428,11 @@ extern "C" {
     ) -> *mut buf;
 }
 extern "C" {
-    pub fn getblk(arg1: dev_t, arg2: daddr_t, arg3: illumos_ddi_dki::c_long) -> *mut buf;
+    pub fn getblk(
+        arg1: dev_t,
+        arg2: daddr_t,
+        arg3: illumos_ddi_dki::c_long,
+    ) -> *mut buf;
 }
 extern "C" {
     pub fn getblk_common(
@@ -9673,7 +9985,11 @@ pub struct vnodeops {
         ) -> illumos_ddi_dki::c_int,
     >,
     pub vop_inactive: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut vnode_t, arg2: *mut cred_t, arg3: *mut caller_context_t),
+        unsafe extern "C" fn(
+            arg1: *mut vnode_t,
+            arg2: *mut cred_t,
+            arg3: *mut caller_context_t,
+        ),
     >,
     pub vop_fid: ::core::option::Option<
         unsafe extern "C" fn(
@@ -10124,7 +10440,11 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn fop_inactive(arg1: *mut vnode_t, arg2: *mut cred_t, arg3: *mut caller_context_t);
+    pub fn fop_inactive(
+        arg1: *mut vnode_t,
+        arg2: *mut cred_t,
+        arg3: *mut caller_context_t,
+    );
 }
 extern "C" {
     pub fn fop_fid(
@@ -10386,13 +10706,22 @@ extern "C" {
     pub fn vn_is_readonly(arg1: *mut vnode_t) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn vn_is_opened(arg1: *mut vnode_t, arg2: v_mode_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_is_opened(
+        arg1: *mut vnode_t,
+        arg2: v_mode_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn vn_is_mapped(arg1: *mut vnode_t, arg2: v_mode_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_is_mapped(
+        arg1: *mut vnode_t,
+        arg2: v_mode_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn vn_has_other_opens(arg1: *mut vnode_t, arg2: v_mode_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_has_other_opens(
+        arg1: *mut vnode_t,
+        arg2: v_mode_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn vn_open_upgrade(arg1: *mut vnode_t, arg2: illumos_ddi_dki::c_int);
@@ -10422,7 +10751,10 @@ extern "C" {
     pub fn vn_getops(arg1: *mut vnode_t) -> *mut vnodeops_t;
 }
 extern "C" {
-    pub fn vn_matchops(arg1: *mut vnode_t, arg2: *mut vnodeops_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_matchops(
+        arg1: *mut vnode_t,
+        arg2: *mut vnodeops_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn vn_matchopval(
@@ -10575,7 +10907,10 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn vn_compare(vp1: *mut vnode_t, vp2: *mut vnode_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_compare(
+        vp1: *mut vnode_t,
+        vp2: *mut vnode_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn vn_vfswlock(vp: *mut vnode) -> illumos_ddi_dki::c_int;
@@ -10596,13 +10931,20 @@ extern "C" {
     pub fn vn_vfswlock_held(vp: *mut vnode) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn specvp(vp: *mut vnode, dev: dev_t, type_: vtype_t, cr: *mut cred) -> *mut vnode_t;
+    pub fn specvp(
+        vp: *mut vnode,
+        dev: dev_t,
+        type_: vtype_t,
+        cr: *mut cred,
+    ) -> *mut vnode_t;
 }
 extern "C" {
     pub fn makespecvp(dev: dev_t, type_: vtype_t) -> *mut vnode_t;
 }
 extern "C" {
-    pub fn vn_vfslocks_getlock(arg1: *mut illumos_ddi_dki::c_void) -> *mut vn_vfslocks_entry_t;
+    pub fn vn_vfslocks_getlock(
+        arg1: *mut illumos_ddi_dki::c_void,
+    ) -> *mut vn_vfslocks_entry_t;
 }
 extern "C" {
     pub fn vn_vfslocks_rele(arg1: *mut vn_vfslocks_entry_t);
@@ -10618,7 +10960,11 @@ extern "C" {
     pub fn vn_copypath(src: *mut vnode, dst: *mut vnode);
 }
 extern "C" {
-    pub fn vn_setpath_str(vp: *mut vnode, str_: *const illumos_ddi_dki::c_char, len: size_t);
+    pub fn vn_setpath_str(
+        vp: *mut vnode,
+        str_: *const illumos_ddi_dki::c_char,
+        len: size_t,
+    );
 }
 extern "C" {
     pub fn vn_setpath(
@@ -10686,7 +11032,10 @@ extern "C" {
     pub fn vnevent_link(arg1: *mut vnode_t, arg2: *mut caller_context_t);
 }
 extern "C" {
-    pub fn vnevent_rename_dest_dir(arg1: *mut vnode_t, ct: *mut caller_context_t);
+    pub fn vnevent_rename_dest_dir(
+        arg1: *mut vnode_t,
+        ct: *mut caller_context_t,
+    );
 }
 extern "C" {
     pub fn vnevent_mountedover(arg1: *mut vnode_t, arg2: *mut caller_context_t);
@@ -10727,14 +11076,19 @@ extern "C" {
 extern "C" {
     pub fn vsd_create(
         arg1: *mut uint_t,
-        arg2: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg2: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
     );
 }
 extern "C" {
     pub fn vsd_destroy(arg1: *mut uint_t);
 }
 extern "C" {
-    pub fn vsd_get(arg1: *mut vnode_t, arg2: uint_t) -> *mut illumos_ddi_dki::c_void;
+    pub fn vsd_get(
+        arg1: *mut vnode_t,
+        arg2: uint_t,
+    ) -> *mut illumos_ddi_dki::c_void;
 }
 extern "C" {
     pub fn vsd_set(
@@ -10889,19 +11243,34 @@ pub struct tsol_mlp_s {
 }
 pub type tsol_mlp_t = tsol_mlp_s;
 extern "C" {
-    pub fn bltype(arg1: *const illumos_ddi_dki::c_void, arg2: u8) -> illumos_ddi_dki::c_int;
+    pub fn bltype(
+        arg1: *const illumos_ddi_dki::c_void,
+        arg2: u8,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn blequal(arg1: *const m_label_t, arg2: *const m_label_t) -> illumos_ddi_dki::c_int;
+    pub fn blequal(
+        arg1: *const m_label_t,
+        arg2: *const m_label_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn bldominates(arg1: *const m_label_t, arg2: *const m_label_t) -> illumos_ddi_dki::c_int;
+    pub fn bldominates(
+        arg1: *const m_label_t,
+        arg2: *const m_label_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn blstrictdom(arg1: *const m_label_t, arg2: *const m_label_t) -> illumos_ddi_dki::c_int;
+    pub fn blstrictdom(
+        arg1: *const m_label_t,
+        arg2: *const m_label_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn blinrange(arg1: *const m_label_t, arg2: *const m_range_t) -> illumos_ddi_dki::c_int;
+    pub fn blinrange(
+        arg1: *const m_label_t,
+        arg2: *const m_range_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn blmaximum(arg1: *mut m_label_t, arg2: *const m_label_t);
@@ -10982,7 +11351,10 @@ extern "C" {
     ) -> *mut ts_label_t;
 }
 extern "C" {
-    pub fn labeldup(arg1: *const ts_label_t, arg2: illumos_ddi_dki::c_int) -> *mut ts_label_t;
+    pub fn labeldup(
+        arg1: *const ts_label_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> *mut ts_label_t;
 }
 extern "C" {
     pub fn label_hold(arg1: *mut ts_label_t);
@@ -10997,7 +11369,10 @@ extern "C" {
     pub fn label2doi(arg1: *mut ts_label_t) -> u32;
 }
 extern "C" {
-    pub fn label_equal(arg1: *const ts_label_t, arg2: *const ts_label_t) -> boolean_t;
+    pub fn label_equal(
+        arg1: *const ts_label_t,
+        arg2: *const ts_label_t,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn newcred_from_bslabel(
@@ -11031,14 +11406,22 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn fgetlabel(arg1: illumos_ddi_dki::c_int, arg2: *mut m_label_t) -> illumos_ddi_dki::c_int;
+    pub fn fgetlabel(
+        arg1: illumos_ddi_dki::c_int,
+        arg2: *mut m_label_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn _blinrange(arg1: *const m_label_t, arg2: *const brange_t) -> illumos_ddi_dki::c_int;
+    pub fn _blinrange(
+        arg1: *const m_label_t,
+        arg2: *const brange_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn blinlset(arg1: *const m_label_t, arg2: *mut _mac_label_impl_t)
-        -> illumos_ddi_dki::c_int;
+    pub fn blinlset(
+        arg1: *const m_label_t,
+        arg2: *mut _mac_label_impl_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn l_to_str_internal(
@@ -11816,7 +12199,8 @@ extern "C" {
 extern "C" {
     pub static mut bcd_to_byte: [illumos_ddi_dki::c_uchar; 256usize];
 }
-pub type pfi_t = ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>;
+pub type pfi_t =
+    ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>;
 pub type pfv_t = ::core::option::Option<unsafe extern "C" fn()>;
 pub type IDP = *mut illumos_ddi_dki::c_char;
 pub type MBLKP = *mut msgb;
@@ -11846,10 +12230,15 @@ extern "C" {
     pub fn pollwakeup(arg1: *mut pollhead_t, arg2: illumos_ddi_dki::c_short);
 }
 extern "C" {
-    pub fn polllock(arg1: *mut pollhead_t, arg2: *mut kmutex_t) -> illumos_ddi_dki::c_int;
+    pub fn polllock(
+        arg1: *mut pollhead_t,
+        arg2: *mut kmutex_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn pollunlock(arg1: *mut illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn pollunlock(
+        arg1: *mut illumos_ddi_dki::c_int,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn pollrelock(arg1: illumos_ddi_dki::c_int);
@@ -11943,10 +12332,14 @@ pub type mblk_t = msgb;
 pub type struiod_t = struiod;
 pub type infod_t = infod;
 pub type qi_putp_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut queue_t, arg2: *mut mblk_t) -> illumos_ddi_dki::c_int,
+    unsafe extern "C" fn(
+        arg1: *mut queue_t,
+        arg2: *mut mblk_t,
+    ) -> illumos_ddi_dki::c_int,
 >;
-pub type qi_srvp_t =
-    ::core::option::Option<unsafe extern "C" fn(arg1: *mut queue_t) -> illumos_ddi_dki::c_int>;
+pub type qi_srvp_t = ::core::option::Option<
+    unsafe extern "C" fn(arg1: *mut queue_t) -> illumos_ddi_dki::c_int,
+>;
 pub type qi_qopen_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut queue_t,
@@ -11963,12 +12356,19 @@ pub type qi_qclose_t = ::core::option::Option<
         arg3: *mut cred_t,
     ) -> illumos_ddi_dki::c_int,
 >;
-pub type qi_qadmin_t = ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>;
+pub type qi_qadmin_t =
+    ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>;
 pub type qi_rwp_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut queue_t, arg2: *mut struiod_t) -> illumos_ddi_dki::c_int,
+    unsafe extern "C" fn(
+        arg1: *mut queue_t,
+        arg2: *mut struiod_t,
+    ) -> illumos_ddi_dki::c_int,
 >;
 pub type qi_infop_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut queue_t, arg2: *mut infod_t) -> illumos_ddi_dki::c_int,
+    unsafe extern "C" fn(
+        arg1: *mut queue_t,
+        arg2: *mut infod_t,
+    ) -> illumos_ddi_dki::c_int,
 >;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -12019,9 +12419,12 @@ pub struct datab {
     pub db_cpid: pid_t,
     pub db_cache: *mut illumos_ddi_dki::c_void,
     pub db_mblk: *mut msgb,
-    pub db_free: ::core::option::Option<unsafe extern "C" fn(arg1: *mut msgb, arg2: *mut datab)>,
-    pub db_lastfree:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut msgb, arg2: *mut datab)>,
+    pub db_free: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut msgb, arg2: *mut datab),
+    >,
+    pub db_lastfree: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut msgb, arg2: *mut datab),
+    >,
     pub db_cksumstart: isize,
     pub db_cksumend: isize,
     pub db_cksumstuff: isize,
@@ -12199,14 +12602,18 @@ extern "C" {
     pub fn bufcall(
         arg1: size_t,
         arg2: uint_t,
-        arg3: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg3: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
         arg4: *mut illumos_ddi_dki::c_void,
     ) -> bufcall_id_t;
 }
 extern "C" {
     pub fn esbbcall(
         arg1: uint_t,
-        arg2: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg2: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
         arg3: *mut illumos_ddi_dki::c_void,
     ) -> bufcall_id_t;
 }
@@ -12238,7 +12645,11 @@ extern "C" {
     pub fn unlinkb(arg1: *mut mblk_t) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn reallocb(arg1: *mut mblk_t, arg2: size_t, arg3: uint_t) -> *mut mblk_t;
+    pub fn reallocb(
+        arg1: *mut mblk_t,
+        arg2: size_t,
+        arg3: uint_t,
+    ) -> *mut mblk_t;
 }
 extern "C" {
     pub fn rmvb(arg1: *mut mblk_t, arg2: *mut mblk_t) -> *mut mblk_t;
@@ -12282,7 +12693,10 @@ extern "C" {
     pub fn canput(arg1: *mut queue_t) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn bcanput(arg1: *mut queue_t, arg2: illumos_ddi_dki::c_uchar) -> illumos_ddi_dki::c_int;
+    pub fn bcanput(
+        arg1: *mut queue_t,
+        arg2: illumos_ddi_dki::c_uchar,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn canputnext(arg1: *mut queue_t) -> illumos_ddi_dki::c_int;
@@ -12294,14 +12708,23 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn putq(arg1: *mut queue_t, arg2: *mut mblk_t) -> illumos_ddi_dki::c_int;
+    pub fn putq(
+        arg1: *mut queue_t,
+        arg2: *mut mblk_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn putbq(arg1: *mut queue_t, arg2: *mut mblk_t) -> illumos_ddi_dki::c_int;
+    pub fn putbq(
+        arg1: *mut queue_t,
+        arg2: *mut mblk_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn insq(arg1: *mut queue_t, arg2: *mut mblk_t, arg3: *mut mblk_t)
-        -> illumos_ddi_dki::c_int;
+    pub fn insq(
+        arg1: *mut queue_t,
+        arg2: *mut mblk_t,
+        arg3: *mut mblk_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn put(arg1: *mut queue_t, arg2: *mut mblk_t);
@@ -12310,7 +12733,10 @@ extern "C" {
     pub fn putnext(arg1: *mut queue_t, arg2: *mut mblk_t);
 }
 extern "C" {
-    pub fn putctl(arg1: *mut queue_t, arg2: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn putctl(
+        arg1: *mut queue_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn putctl1(
@@ -12320,7 +12746,10 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn putnextctl(arg1: *mut queue_t, arg2: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn putnextctl(
+        arg1: *mut queue_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn putnextctl1(
@@ -12398,7 +12827,9 @@ extern "C" {
 extern "C" {
     pub fn qtimeout(
         arg1: *mut queue_t,
-        func: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        func: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
         arg2: *mut illumos_ddi_dki::c_void,
         arg3: clock_t,
     ) -> timeout_id_t;
@@ -12408,7 +12839,9 @@ extern "C" {
         arg1: *mut queue_t,
         arg2: size_t,
         arg3: uint_t,
-        arg4: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg4: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
         arg5: *mut illumos_ddi_dki::c_void,
     ) -> bufcall_id_t;
 }
@@ -12430,10 +12863,16 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn rwnext(arg1: *mut queue_t, arg2: *mut struiod_t) -> illumos_ddi_dki::c_int;
+    pub fn rwnext(
+        arg1: *mut queue_t,
+        arg2: *mut struiod_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn infonext(arg1: *mut queue_t, arg2: *mut infod_t) -> illumos_ddi_dki::c_int;
+    pub fn infonext(
+        arg1: *mut queue_t,
+        arg2: *mut infod_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn isuioq(arg1: *mut queue_t) -> illumos_ddi_dki::c_int;
@@ -12520,7 +12959,11 @@ extern "C" {
     pub fn nd_free(arg1: *mut caddr_t);
 }
 extern "C" {
-    pub fn nd_getset(arg1: *mut queue_t, arg2: caddr_t, arg3: MBLKP) -> illumos_ddi_dki::c_int;
+    pub fn nd_getset(
+        arg1: *mut queue_t,
+        arg2: caddr_t,
+        arg3: MBLKP,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn nd_get_default(
@@ -12622,7 +13065,10 @@ extern "C" {
     pub fn atomic_add_16(arg1: *mut u16, arg2: i16);
 }
 extern "C" {
-    pub fn atomic_add_short(arg1: *mut ushort_t, arg2: illumos_ddi_dki::c_short);
+    pub fn atomic_add_short(
+        arg1: *mut ushort_t,
+        arg2: illumos_ddi_dki::c_short,
+    );
 }
 extern "C" {
     pub fn atomic_add_32(arg1: *mut u32, arg2: i32);
@@ -12739,19 +13185,28 @@ extern "C" {
     pub fn atomic_add_8_nv(arg1: *mut u8, arg2: i8) -> u8;
 }
 extern "C" {
-    pub fn atomic_add_char_nv(arg1: *mut uchar_t, arg2: illumos_ddi_dki::c_schar) -> uchar_t;
+    pub fn atomic_add_char_nv(
+        arg1: *mut uchar_t,
+        arg2: illumos_ddi_dki::c_schar,
+    ) -> uchar_t;
 }
 extern "C" {
     pub fn atomic_add_16_nv(arg1: *mut u16, arg2: i16) -> u16;
 }
 extern "C" {
-    pub fn atomic_add_short_nv(arg1: *mut ushort_t, arg2: illumos_ddi_dki::c_short) -> ushort_t;
+    pub fn atomic_add_short_nv(
+        arg1: *mut ushort_t,
+        arg2: illumos_ddi_dki::c_short,
+    ) -> ushort_t;
 }
 extern "C" {
     pub fn atomic_add_32_nv(arg1: *mut u32, arg2: i32) -> u32;
 }
 extern "C" {
-    pub fn atomic_add_int_nv(arg1: *mut uint_t, arg2: illumos_ddi_dki::c_int) -> uint_t;
+    pub fn atomic_add_int_nv(
+        arg1: *mut uint_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> uint_t;
 }
 extern "C" {
     pub fn atomic_add_ptr_nv(
@@ -12760,7 +13215,10 @@ extern "C" {
     ) -> *mut illumos_ddi_dki::c_void;
 }
 extern "C" {
-    pub fn atomic_add_long_nv(arg1: *mut ulong_t, arg2: illumos_ddi_dki::c_long) -> ulong_t;
+    pub fn atomic_add_long_nv(
+        arg1: *mut ulong_t,
+        arg2: illumos_ddi_dki::c_long,
+    ) -> ulong_t;
 }
 extern "C" {
     pub fn atomic_add_64_nv(arg1: *mut u64, arg2: i64) -> u64;
@@ -12775,7 +13233,8 @@ extern "C" {
     pub fn atomic_or_16_nv(arg1: *mut u16, arg2: u16) -> u16;
 }
 extern "C" {
-    pub fn atomic_or_ushort_nv(arg1: *mut ushort_t, arg2: ushort_t) -> ushort_t;
+    pub fn atomic_or_ushort_nv(arg1: *mut ushort_t, arg2: ushort_t)
+        -> ushort_t;
 }
 extern "C" {
     pub fn atomic_or_32_nv(arg1: *mut u32, arg2: u32) -> u32;
@@ -12799,7 +13258,10 @@ extern "C" {
     pub fn atomic_and_16_nv(arg1: *mut u16, arg2: u16) -> u16;
 }
 extern "C" {
-    pub fn atomic_and_ushort_nv(arg1: *mut ushort_t, arg2: ushort_t) -> ushort_t;
+    pub fn atomic_and_ushort_nv(
+        arg1: *mut ushort_t,
+        arg2: ushort_t,
+    ) -> ushort_t;
 }
 extern "C" {
     pub fn atomic_and_32_nv(arg1: *mut u32, arg2: u32) -> u32;
@@ -12817,19 +13279,31 @@ extern "C" {
     pub fn atomic_cas_8(arg1: *mut u8, arg2: u8, arg3: u8) -> u8;
 }
 extern "C" {
-    pub fn atomic_cas_uchar(arg1: *mut uchar_t, arg2: uchar_t, arg3: uchar_t) -> uchar_t;
+    pub fn atomic_cas_uchar(
+        arg1: *mut uchar_t,
+        arg2: uchar_t,
+        arg3: uchar_t,
+    ) -> uchar_t;
 }
 extern "C" {
     pub fn atomic_cas_16(arg1: *mut u16, arg2: u16, arg3: u16) -> u16;
 }
 extern "C" {
-    pub fn atomic_cas_ushort(arg1: *mut ushort_t, arg2: ushort_t, arg3: ushort_t) -> ushort_t;
+    pub fn atomic_cas_ushort(
+        arg1: *mut ushort_t,
+        arg2: ushort_t,
+        arg3: ushort_t,
+    ) -> ushort_t;
 }
 extern "C" {
     pub fn atomic_cas_32(arg1: *mut u32, arg2: u32, arg3: u32) -> u32;
 }
 extern "C" {
-    pub fn atomic_cas_uint(arg1: *mut uint_t, arg2: uint_t, arg3: uint_t) -> uint_t;
+    pub fn atomic_cas_uint(
+        arg1: *mut uint_t,
+        arg2: uint_t,
+        arg3: uint_t,
+    ) -> uint_t;
 }
 extern "C" {
     pub fn atomic_cas_ptr(
@@ -12839,7 +13313,11 @@ extern "C" {
     ) -> *mut illumos_ddi_dki::c_void;
 }
 extern "C" {
-    pub fn atomic_cas_ulong(arg1: *mut ulong_t, arg2: ulong_t, arg3: ulong_t) -> ulong_t;
+    pub fn atomic_cas_ulong(
+        arg1: *mut ulong_t,
+        arg2: ulong_t,
+        arg3: ulong_t,
+    ) -> ulong_t;
 }
 extern "C" {
     pub fn atomic_cas_64(arg1: *mut u64, arg2: u64, arg3: u64) -> u64;
@@ -12875,10 +13353,16 @@ extern "C" {
     pub fn atomic_swap_64(arg1: *mut u64, arg2: u64) -> u64;
 }
 extern "C" {
-    pub fn atomic_set_long_excl(arg1: *mut ulong_t, arg2: uint_t) -> illumos_ddi_dki::c_int;
+    pub fn atomic_set_long_excl(
+        arg1: *mut ulong_t,
+        arg2: uint_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn atomic_clear_long_excl(arg1: *mut ulong_t, arg2: uint_t) -> illumos_ddi_dki::c_int;
+    pub fn atomic_clear_long_excl(
+        arg1: *mut ulong_t,
+        arg2: uint_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn membar_enter();
@@ -12953,11 +13437,21 @@ pub struct ifnet {
     pub if_metric: illumos_ddi_dki::c_int,
     pub if_addrlist: *mut ifaddr,
     pub if_snd: ifnet_ifqueue,
-    pub if_init: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
-    pub if_output: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
-    pub if_ioctl: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
-    pub if_reset: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
-    pub if_watchdog: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
+    pub if_init: ::core::option::Option<
+        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+    >,
+    pub if_output: ::core::option::Option<
+        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+    >,
+    pub if_ioctl: ::core::option::Option<
+        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+    >,
+    pub if_reset: ::core::option::Option<
+        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+    >,
+    pub if_watchdog: ::core::option::Option<
+        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+    >,
     pub if_ipackets: illumos_ddi_dki::c_int,
     pub if_ierrors: illumos_ddi_dki::c_int,
     pub if_opackets: illumos_ddi_dki::c_int,
@@ -12966,9 +13460,15 @@ pub struct ifnet {
     pub if_next: *mut ifnet,
     pub if_upper: *mut ifnet,
     pub if_lower: *mut ifnet,
-    pub if_input: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
-    pub if_ctlin: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
-    pub if_ctlout: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
+    pub if_input: ::core::option::Option<
+        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+    >,
+    pub if_ctlin: ::core::option::Option<
+        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+    >,
+    pub if_ctlout: ::core::option::Option<
+        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+    >,
     pub if_memmap: *mut map,
 }
 #[repr(C)]
@@ -13246,7 +13746,9 @@ pub struct if_nameindex {
     pub if_name: *mut illumos_ddi_dki::c_char,
 }
 extern "C" {
-    pub fn if_nametoindex(arg1: *const illumos_ddi_dki::c_char) -> illumos_ddi_dki::c_uint;
+    pub fn if_nametoindex(
+        arg1: *const illumos_ddi_dki::c_char,
+    ) -> illumos_ddi_dki::c_uint;
 }
 extern "C" {
     pub fn if_indextoname(
@@ -13665,10 +14167,14 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn hook_family_remove(arg1: *mut hook_family_int_t) -> illumos_ddi_dki::c_int;
+    pub fn hook_family_remove(
+        arg1: *mut hook_family_int_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn hook_family_shutdown(arg1: *mut hook_family_int_t) -> illumos_ddi_dki::c_int;
+    pub fn hook_family_shutdown(
+        arg1: *mut hook_family_int_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn hook_stack_notify_register(
@@ -13729,8 +14235,9 @@ pub struct net_protocol_s {
             arg3: lif_if_t,
         ) -> illumos_ddi_dki::c_int,
     >,
-    pub netp_getpmtuenabled:
-        ::core::option::Option<unsafe extern "C" fn(arg1: net_handle_t) -> illumos_ddi_dki::c_int>,
+    pub netp_getpmtuenabled: ::core::option::Option<
+        unsafe extern "C" fn(arg1: net_handle_t) -> illumos_ddi_dki::c_int,
+    >,
     pub netp_getlifaddr: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: net_handle_t,
@@ -13761,10 +14268,17 @@ pub struct net_protocol_s {
         unsafe extern "C" fn(arg1: net_handle_t, arg2: phy_if_t) -> phy_if_t,
     >,
     pub netp_phylookup: ::core::option::Option<
-        unsafe extern "C" fn(arg1: net_handle_t, arg2: *const illumos_ddi_dki::c_char) -> phy_if_t,
+        unsafe extern "C" fn(
+            arg1: net_handle_t,
+            arg2: *const illumos_ddi_dki::c_char,
+        ) -> phy_if_t,
     >,
     pub netp_lifgetnext: ::core::option::Option<
-        unsafe extern "C" fn(arg1: net_handle_t, arg2: phy_if_t, arg3: lif_if_t) -> lif_if_t,
+        unsafe extern "C" fn(
+            arg1: net_handle_t,
+            arg2: phy_if_t,
+            arg3: lif_if_t,
+        ) -> lif_if_t,
     >,
     pub netp_inject: ::core::option::Option<
         unsafe extern "C" fn(
@@ -13781,10 +14295,16 @@ pub struct net_protocol_s {
         ) -> phy_if_t,
     >,
     pub netp_ispartialchecksum: ::core::option::Option<
-        unsafe extern "C" fn(arg1: net_handle_t, arg2: *mut msgb) -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn(
+            arg1: net_handle_t,
+            arg2: *mut msgb,
+        ) -> illumos_ddi_dki::c_int,
     >,
     pub netp_isvalidchecksum: ::core::option::Option<
-        unsafe extern "C" fn(arg1: net_handle_t, arg2: *mut msgb) -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn(
+            arg1: net_handle_t,
+            arg2: *mut msgb,
+        ) -> illumos_ddi_dki::c_int,
     >,
 }
 pub type net_protocol_t = net_protocol_s;
@@ -13817,8 +14337,9 @@ pub type injection_t = injection_s;
 pub struct net_instance_s {
     pub nin_version: illumos_ddi_dki::c_int,
     pub nin_name: *mut illumos_ddi_dki::c_char,
-    pub nin_create:
-        ::core::option::Option<unsafe extern "C" fn(arg1: netid_t) -> *mut illumos_ddi_dki::c_void>,
+    pub nin_create: ::core::option::Option<
+        unsafe extern "C" fn(arg1: netid_t) -> *mut illumos_ddi_dki::c_void,
+    >,
     pub nin_destroy: ::core::option::Option<
         unsafe extern "C" fn(arg1: netid_t, arg2: *mut illumos_ddi_dki::c_void),
     >,
@@ -13907,7 +14428,10 @@ extern "C" {
     pub fn net_getzoneidbynetid(arg1: netid_t) -> zoneid_t;
 }
 extern "C" {
-    pub fn net_event_register(arg1: net_handle_t, arg2: *mut hook_event_t) -> hook_event_token_t;
+    pub fn net_event_register(
+        arg1: net_handle_t,
+        arg2: *mut hook_event_t,
+    ) -> hook_event_token_t;
 }
 extern "C" {
     pub fn net_event_shutdown(
@@ -13982,16 +14506,22 @@ extern "C" {
     pub fn net_inject_free(arg1: *mut net_inject_t);
 }
 extern "C" {
-    pub fn net_instance_alloc(version: illumos_ddi_dki::c_int) -> *mut net_instance_t;
+    pub fn net_instance_alloc(
+        version: illumos_ddi_dki::c_int,
+    ) -> *mut net_instance_t;
 }
 extern "C" {
     pub fn net_instance_free(arg1: *mut net_instance_t);
 }
 extern "C" {
-    pub fn net_instance_register(arg1: *mut net_instance_t) -> illumos_ddi_dki::c_int;
+    pub fn net_instance_register(
+        arg1: *mut net_instance_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn net_instance_unregister(arg1: *mut net_instance_t) -> illumos_ddi_dki::c_int;
+    pub fn net_instance_unregister(
+        arg1: *mut net_instance_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn net_instance_notify_register(
@@ -14022,20 +14552,28 @@ extern "C" {
     pub fn net_kstat_delete(arg1: netid_t, arg2: *mut kstat_t);
 }
 extern "C" {
-    pub fn net_protocol_lookup(arg1: netid_t, arg2: *const illumos_ddi_dki::c_char)
-        -> net_handle_t;
+    pub fn net_protocol_lookup(
+        arg1: netid_t,
+        arg2: *const illumos_ddi_dki::c_char,
+    ) -> net_handle_t;
 }
 extern "C" {
-    pub fn net_protocol_register(arg1: netid_t, arg2: *const net_protocol_t) -> net_handle_t;
+    pub fn net_protocol_register(
+        arg1: netid_t,
+        arg2: *const net_protocol_t,
+    ) -> net_handle_t;
 }
 extern "C" {
     pub fn net_protocol_release(arg1: net_handle_t) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn net_protocol_unregister(arg1: net_handle_t) -> illumos_ddi_dki::c_int;
+    pub fn net_protocol_unregister(
+        arg1: net_handle_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn net_protocol_walk(arg1: netid_t, arg2: net_handle_t) -> net_handle_t;
+    pub fn net_protocol_walk(arg1: netid_t, arg2: net_handle_t)
+        -> net_handle_t;
 }
 extern "C" {
     pub fn net_protocol_notify_register(
@@ -14059,8 +14597,11 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn net_getmtu(arg1: net_handle_t, arg2: phy_if_t, arg3: lif_if_t)
-        -> illumos_ddi_dki::c_int;
+    pub fn net_getmtu(
+        arg1: net_handle_t,
+        arg2: phy_if_t,
+        arg3: lif_if_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn net_getpmtuenabled(arg1: net_handle_t) -> illumos_ddi_dki::c_int;
@@ -14095,19 +14636,36 @@ extern "C" {
     pub fn net_phygetnext(arg1: net_handle_t, arg2: phy_if_t) -> phy_if_t;
 }
 extern "C" {
-    pub fn net_phylookup(arg1: net_handle_t, arg2: *const illumos_ddi_dki::c_char) -> phy_if_t;
+    pub fn net_phylookup(
+        arg1: net_handle_t,
+        arg2: *const illumos_ddi_dki::c_char,
+    ) -> phy_if_t;
 }
 extern "C" {
-    pub fn net_lifgetnext(arg1: net_handle_t, arg2: phy_if_t, arg3: lif_if_t) -> lif_if_t;
+    pub fn net_lifgetnext(
+        arg1: net_handle_t,
+        arg2: phy_if_t,
+        arg3: lif_if_t,
+    ) -> lif_if_t;
 }
 extern "C" {
-    pub fn net_routeto(arg1: net_handle_t, arg2: *mut sockaddr, arg3: *mut sockaddr) -> phy_if_t;
+    pub fn net_routeto(
+        arg1: net_handle_t,
+        arg2: *mut sockaddr,
+        arg3: *mut sockaddr,
+    ) -> phy_if_t;
 }
 extern "C" {
-    pub fn net_ispartialchecksum(arg1: net_handle_t, arg2: *mut msgb) -> illumos_ddi_dki::c_int;
+    pub fn net_ispartialchecksum(
+        arg1: net_handle_t,
+        arg2: *mut msgb,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn net_isvalidchecksum(arg1: net_handle_t, arg2: *mut msgb) -> illumos_ddi_dki::c_int;
+    pub fn net_isvalidchecksum(
+        arg1: net_handle_t,
+        arg2: *mut msgb,
+    ) -> illumos_ddi_dki::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -14203,16 +14761,29 @@ pub struct swrand_stats {
 }
 pub type swrand_stats_t = swrand_stats;
 extern "C" {
-    pub fn random_add_entropy(arg1: *mut u8, arg2: size_t, arg3: uint_t) -> illumos_ddi_dki::c_int;
+    pub fn random_add_entropy(
+        arg1: *mut u8,
+        arg2: size_t,
+        arg3: uint_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn random_get_bytes(arg1: *mut u8, arg2: size_t) -> illumos_ddi_dki::c_int;
+    pub fn random_get_bytes(
+        arg1: *mut u8,
+        arg2: size_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn random_get_blocking_bytes(arg1: *mut u8, arg2: size_t) -> illumos_ddi_dki::c_int;
+    pub fn random_get_blocking_bytes(
+        arg1: *mut u8,
+        arg2: size_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn random_get_pseudo_bytes(arg1: *mut u8, arg2: size_t) -> illumos_ddi_dki::c_int;
+    pub fn random_get_pseudo_bytes(
+        arg1: *mut u8,
+        arg2: size_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn getrandom(
@@ -14234,7 +14805,9 @@ extern "C" {
     pub fn mod_hash_create_strhash(
         arg1: *mut illumos_ddi_dki::c_char,
         arg2: size_t,
-        arg3: ::core::option::Option<unsafe extern "C" fn(arg1: mod_hash_val_t)>,
+        arg3: ::core::option::Option<
+            unsafe extern "C" fn(arg1: mod_hash_val_t),
+        >,
     ) -> *mut mod_hash_t;
 }
 extern "C" {
@@ -14253,13 +14826,18 @@ extern "C" {
     pub fn mod_hash_strval_dtor(arg1: mod_hash_val_t);
 }
 extern "C" {
-    pub fn mod_hash_bystr(arg1: *mut illumos_ddi_dki::c_void, arg2: mod_hash_key_t) -> uint_t;
+    pub fn mod_hash_bystr(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: mod_hash_key_t,
+    ) -> uint_t;
 }
 extern "C" {
     pub fn mod_hash_create_ptrhash(
         arg1: *mut illumos_ddi_dki::c_char,
         arg2: size_t,
-        arg3: ::core::option::Option<unsafe extern "C" fn(arg1: mod_hash_val_t)>,
+        arg3: ::core::option::Option<
+            unsafe extern "C" fn(arg1: mod_hash_val_t),
+        >,
         arg4: size_t,
     ) -> *mut mod_hash_t;
 }
@@ -14273,24 +14851,34 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn mod_hash_byptr(arg1: *mut illumos_ddi_dki::c_void, arg2: mod_hash_key_t) -> uint_t;
+    pub fn mod_hash_byptr(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: mod_hash_key_t,
+    ) -> uint_t;
 }
 extern "C" {
     pub fn mod_hash_create_idhash(
         arg1: *mut illumos_ddi_dki::c_char,
         arg2: size_t,
-        arg3: ::core::option::Option<unsafe extern "C" fn(arg1: mod_hash_val_t)>,
+        arg3: ::core::option::Option<
+            unsafe extern "C" fn(arg1: mod_hash_val_t),
+        >,
     ) -> *mut mod_hash_t;
 }
 extern "C" {
     pub fn mod_hash_destroy_idhash(arg1: *mut mod_hash_t);
 }
 extern "C" {
-    pub fn mod_hash_idkey_cmp(arg1: mod_hash_key_t, arg2: mod_hash_key_t)
-        -> illumos_ddi_dki::c_int;
+    pub fn mod_hash_idkey_cmp(
+        arg1: mod_hash_key_t,
+        arg2: mod_hash_key_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn mod_hash_byid(arg1: *mut illumos_ddi_dki::c_void, arg2: mod_hash_key_t) -> uint_t;
+    pub fn mod_hash_byid(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: mod_hash_key_t,
+    ) -> uint_t;
 }
 extern "C" {
     pub fn mod_hash_iddata_gen(arg1: size_t) -> uint_t;
@@ -14299,8 +14887,12 @@ extern "C" {
     pub fn mod_hash_create_extended(
         arg1: *mut illumos_ddi_dki::c_char,
         arg2: size_t,
-        arg3: ::core::option::Option<unsafe extern "C" fn(arg1: mod_hash_key_t)>,
-        arg4: ::core::option::Option<unsafe extern "C" fn(arg1: mod_hash_val_t)>,
+        arg3: ::core::option::Option<
+            unsafe extern "C" fn(arg1: mod_hash_key_t),
+        >,
+        arg4: ::core::option::Option<
+            unsafe extern "C" fn(arg1: mod_hash_val_t),
+        >,
         arg5: ::core::option::Option<
             unsafe extern "C" fn(
                 arg1: *mut illumos_ddi_dki::c_void,
@@ -14351,7 +14943,10 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn mod_hash_destroy(arg1: *mut mod_hash_t, arg2: mod_hash_key_t) -> illumos_ddi_dki::c_int;
+    pub fn mod_hash_destroy(
+        arg1: *mut mod_hash_t,
+        arg2: mod_hash_key_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn mod_hash_find(
@@ -14904,16 +15499,28 @@ extern "C" {
     pub fn avl_add(tree: *mut avl_tree_t, node: *mut illumos_ddi_dki::c_void);
 }
 extern "C" {
-    pub fn avl_remove(tree: *mut avl_tree_t, node: *mut illumos_ddi_dki::c_void);
+    pub fn avl_remove(
+        tree: *mut avl_tree_t,
+        node: *mut illumos_ddi_dki::c_void,
+    );
 }
 extern "C" {
-    pub fn avl_update(arg1: *mut avl_tree_t, arg2: *mut illumos_ddi_dki::c_void) -> boolean_t;
+    pub fn avl_update(
+        arg1: *mut avl_tree_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+    ) -> boolean_t;
 }
 extern "C" {
-    pub fn avl_update_lt(arg1: *mut avl_tree_t, arg2: *mut illumos_ddi_dki::c_void) -> boolean_t;
+    pub fn avl_update_lt(
+        arg1: *mut avl_tree_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+    ) -> boolean_t;
 }
 extern "C" {
-    pub fn avl_update_gt(arg1: *mut avl_tree_t, arg2: *mut illumos_ddi_dki::c_void) -> boolean_t;
+    pub fn avl_update_gt(
+        arg1: *mut avl_tree_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn avl_swap(tree1: *mut avl_tree_t, tree2: *mut avl_tree_t);
@@ -14970,25 +15577,38 @@ pub type procset_t = procset;
 extern "C" {
     pub fn dotoprocs(
         arg1: *mut procset_t,
-        arg2: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
+        arg2: ::core::option::Option<
+            unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        >,
         arg3: *mut illumos_ddi_dki::c_char,
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn dotolwp(
         arg1: *mut procset_t,
-        arg2: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
+        arg2: ::core::option::Option<
+            unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        >,
         arg3: *mut illumos_ddi_dki::c_char,
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn procinset(arg1: *mut proc_, arg2: *mut procset_t) -> illumos_ddi_dki::c_int;
+    pub fn procinset(
+        arg1: *mut proc_,
+        arg2: *mut procset_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn sigsendproc(arg1: *mut proc_, arg2: *mut sigsend_t) -> illumos_ddi_dki::c_int;
+    pub fn sigsendproc(
+        arg1: *mut proc_,
+        arg2: *mut sigsend_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn sigsendset(arg1: *mut procset_t, arg2: *mut sigsend_t) -> illumos_ddi_dki::c_int;
+    pub fn sigsendset(
+        arg1: *mut procset_t,
+        arg2: *mut sigsend_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn cur_inset_only(arg1: *mut procset_t) -> boolean_t;
@@ -15054,7 +15674,10 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn squeue_getprivate(arg1: *mut squeue_t, arg2: sqprivate_t) -> *mut usize;
+    pub fn squeue_getprivate(
+        arg1: *mut squeue_t,
+        arg2: sqprivate_t,
+    ) -> *mut usize;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -15062,7 +15685,10 @@ pub struct conn_s {
     _unused: [u8; 0],
 }
 extern "C" {
-    pub fn squeue_synch_enter(arg1: *mut conn_s, arg2: *mut mblk_t) -> illumos_ddi_dki::c_int;
+    pub fn squeue_synch_enter(
+        arg1: *mut conn_s,
+        arg2: *mut mblk_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn squeue_synch_exit(arg1: *mut conn_s, arg2: illumos_ddi_dki::c_int);
@@ -15289,8 +15915,12 @@ pub struct aio_req {
 }
 extern "C" {
     pub fn aphysio(
-        arg1: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
-        arg2: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
+        arg1: ::core::option::Option<
+            unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        >,
+        arg2: ::core::option::Option<
+            unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        >,
         arg3: dev_t,
         arg4: illumos_ddi_dki::c_int,
         arg5: ::core::option::Option<unsafe extern "C" fn()>,
@@ -15501,7 +16131,11 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn watch_enable_addr(arg1: *const illumos_ddi_dki::c_void, arg2: size_t, arg3: seg_rw);
+    pub fn watch_enable_addr(
+        arg1: *const illumos_ddi_dki::c_void,
+        arg2: size_t,
+        arg3: seg_rw,
+    );
 }
 extern "C" {
     pub fn watch_enable(arg1: kthread_id_t);
@@ -15513,7 +16147,10 @@ extern "C" {
     pub fn setallwatch();
 }
 extern "C" {
-    pub fn pr_is_watchpage(arg1: caddr_t, arg2: seg_rw) -> illumos_ddi_dki::c_int;
+    pub fn pr_is_watchpage(
+        arg1: caddr_t,
+        arg2: seg_rw,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn pr_is_watchpage_as(
@@ -15584,7 +16221,8 @@ pub struct itimer {
     pub it_pending: illumos_ddi_dki::c_int,
     pub it_overrun: illumos_ddi_dki::c_int,
     pub it_backend: *mut clock_backend,
-    pub it_fire: ::core::option::Option<unsafe extern "C" fn(arg1: *mut itimer_t)>,
+    pub it_fire:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut itimer_t)>,
     pub it_mutex: kmutex_t,
     pub it_portev: *mut illumos_ddi_dki::c_void,
     pub it_portsrc: *mut illumos_ddi_dki::c_void,
@@ -15618,7 +16256,9 @@ pub struct clock_backend {
     pub clk_timer_create: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut itimer_t,
-            arg2: ::core::option::Option<unsafe extern "C" fn(arg1: *mut itimer_t)>,
+            arg2: ::core::option::Option<
+                unsafe extern "C" fn(arg1: *mut itimer_t),
+            >,
         ) -> illumos_ddi_dki::c_int,
     >,
     pub clk_timer_settime: ::core::option::Option<
@@ -15629,11 +16269,16 @@ pub struct clock_backend {
         ) -> illumos_ddi_dki::c_int,
     >,
     pub clk_timer_gettime: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut itimer_t, arg2: *mut itimerspec) -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn(
+            arg1: *mut itimer_t,
+            arg2: *mut itimerspec,
+        ) -> illumos_ddi_dki::c_int,
     >,
-    pub clk_timer_delete:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut itimer_t) -> illumos_ddi_dki::c_int>,
-    pub clk_timer_lwpbind: ::core::option::Option<unsafe extern "C" fn(arg1: *mut itimer_t)>,
+    pub clk_timer_delete: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut itimer_t) -> illumos_ddi_dki::c_int,
+    >,
+    pub clk_timer_lwpbind:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut itimer_t)>,
 }
 pub type clock_backend_t = clock_backend;
 extern "C" {
@@ -15703,7 +16348,8 @@ pub struct oldsigevent {
 #[derive(Copy, Clone)]
 pub union oldsigevent__bindgen_ty_1 {
     pub _signo: illumos_ddi_dki::c_int,
-    pub _notify_function: ::core::option::Option<unsafe extern "C" fn(arg1: sigval)>,
+    pub _notify_function:
+        ::core::option::Option<unsafe extern "C" fn(arg1: sigval)>,
 }
 pub type utrap_entry_t = illumos_ddi_dki::c_int;
 pub type utrap_handler_t = *mut illumos_ddi_dki::c_void;
@@ -15775,7 +16421,11 @@ pub type rctl_entity_p_t = rctl_entity_p_struct;
 #[derive(Debug, Copy, Clone)]
 pub struct rctl_ops {
     pub rco_action: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut rctl, arg2: *mut proc_, arg3: *mut rctl_entity_p_t),
+        unsafe extern "C" fn(
+            arg1: *mut rctl,
+            arg2: *mut proc_,
+            arg3: *mut rctl_entity_p_t,
+        ),
     >,
     pub rco_get_usage: ::core::option::Option<
         unsafe extern "C" fn(arg1: *mut rctl, arg2: *mut proc_) -> rctl_qty_t,
@@ -15801,7 +16451,11 @@ pub struct rctl_ops {
 }
 pub type rctl_ops_t = rctl_ops;
 extern "C" {
-    pub fn rcop_no_action(arg1: *mut rctl, arg2: *mut proc_, arg3: *mut rctl_entity_p_t);
+    pub fn rcop_no_action(
+        arg1: *mut rctl,
+        arg2: *mut proc_,
+        arg3: *mut rctl_entity_p_t,
+    );
 }
 extern "C" {
     pub fn rcop_no_usage(arg1: *mut rctl, arg2: *mut proc_) -> rctl_qty_t;
@@ -15919,10 +16573,14 @@ extern "C" {
     ) -> rctl_hndl_t;
 }
 extern "C" {
-    pub fn rctl_hndl_lookup(arg1: *const illumos_ddi_dki::c_char) -> rctl_hndl_t;
+    pub fn rctl_hndl_lookup(
+        arg1: *const illumos_ddi_dki::c_char,
+    ) -> rctl_hndl_t;
 }
 extern "C" {
-    pub fn rctl_dict_lookup(arg1: *const illumos_ddi_dki::c_char) -> *mut rctl_dict_entry_t;
+    pub fn rctl_dict_lookup(
+        arg1: *const illumos_ddi_dki::c_char,
+    ) -> *mut rctl_dict_entry_t;
 }
 extern "C" {
     pub fn rctl_dict_lookup_hndl(arg1: rctl_hndl_t) -> *mut rctl_dict_entry_t;
@@ -15945,7 +16603,10 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn rctl_model_maximum(arg1: *mut rctl_dict_entry_t, arg2: *mut proc_) -> rctl_qty_t;
+    pub fn rctl_model_maximum(
+        arg1: *mut rctl_dict_entry_t,
+        arg2: *mut proc_,
+    ) -> rctl_qty_t;
 }
 extern "C" {
     pub fn rctl_model_value(
@@ -16038,7 +16699,8 @@ extern "C" {
     ) -> *mut rctl_set_t;
 }
 extern "C" {
-    pub fn rctl_set_dup_prealloc(arg1: *mut rctl_set_t) -> *mut rctl_alloc_gp_t;
+    pub fn rctl_set_dup_prealloc(arg1: *mut rctl_set_t)
+        -> *mut rctl_alloc_gp_t;
 }
 extern "C" {
     pub fn rctl_set_dup_ready(
@@ -16058,7 +16720,11 @@ extern "C" {
     ) -> *mut rctl_set_t;
 }
 extern "C" {
-    pub fn rctl_set_reset(arg1: *mut rctl_set_t, arg2: *mut proc_, arg3: *mut rctl_entity_p_t);
+    pub fn rctl_set_reset(
+        arg1: *mut rctl_set_t,
+        arg2: *mut proc_,
+        arg3: *mut rctl_entity_p_t,
+    );
 }
 extern "C" {
     pub fn rctl_set_tearoff(arg1: *mut rctl_set_t, arg2: *mut proc_);
@@ -16077,7 +16743,9 @@ extern "C" {
     pub fn rctl_prealloc_destroy(arg1: *mut rctl_alloc_gp_t);
 }
 extern "C" {
-    pub fn rctl_build_name_buf(arg1: *mut *mut illumos_ddi_dki::c_char) -> size_t;
+    pub fn rctl_build_name_buf(
+        arg1: *mut *mut illumos_ddi_dki::c_char,
+    ) -> size_t;
 }
 extern "C" {
     pub fn rctl_global_get(
@@ -16259,13 +16927,17 @@ pub type signalfd_siginfo_t = signalfd_siginfo;
 #[derive(Debug, Copy, Clone)]
 pub struct sigfd_proc_state {
     pub sigfd_pollwake_cb: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void, arg2: illumos_ddi_dki::c_int),
+        unsafe extern "C" fn(
+            arg1: *mut illumos_ddi_dki::c_void,
+            arg2: illumos_ddi_dki::c_int,
+        ),
     >,
     pub sigfd_list: list_t,
 }
 pub type sigfd_proc_state_t = sigfd_proc_state;
 extern "C" {
-    pub static mut sigfd_exit_helper: ::core::option::Option<unsafe extern "C" fn()>;
+    pub static mut sigfd_exit_helper:
+        ::core::option::Option<unsafe extern "C" fn()>;
 }
 pub type secflagset_t = u64;
 #[repr(C)]
@@ -16320,19 +16992,31 @@ extern "C" {
     pub fn secflags_copy(arg1: *mut secflagset_t, arg2: *const secflagset_t);
 }
 extern "C" {
-    pub fn secflags_issubset(arg1: secflagset_t, arg2: secflagset_t) -> boolean_t;
+    pub fn secflags_issubset(
+        arg1: secflagset_t,
+        arg2: secflagset_t,
+    ) -> boolean_t;
 }
 extern "C" {
-    pub fn secflags_issuperset(arg1: secflagset_t, arg2: secflagset_t) -> boolean_t;
+    pub fn secflags_issuperset(
+        arg1: secflagset_t,
+        arg2: secflagset_t,
+    ) -> boolean_t;
 }
 extern "C" {
-    pub fn secflags_intersection(arg1: secflagset_t, arg2: secflagset_t) -> boolean_t;
+    pub fn secflags_intersection(
+        arg1: secflagset_t,
+        arg2: secflagset_t,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn secflags_union(arg1: *mut secflagset_t, arg2: *const secflagset_t);
 }
 extern "C" {
-    pub fn secflags_difference(arg1: *mut secflagset_t, arg2: *const secflagset_t);
+    pub fn secflags_difference(
+        arg1: *mut secflagset_t,
+        arg2: *const secflagset_t,
+    );
 }
 extern "C" {
     pub fn psecflags_validate_delta(
@@ -16350,11 +17034,17 @@ extern "C" {
     pub fn secflag_to_str(arg1: secflag_t) -> *const illumos_ddi_dki::c_char;
 }
 extern "C" {
-    pub fn secflag_by_name(arg1: *const illumos_ddi_dki::c_char, arg2: *mut secflag_t)
-        -> boolean_t;
+    pub fn secflag_by_name(
+        arg1: *const illumos_ddi_dki::c_char,
+        arg2: *mut secflag_t,
+    ) -> boolean_t;
 }
 extern "C" {
-    pub fn secflags_to_str(arg1: secflagset_t, arg2: *mut illumos_ddi_dki::c_char, arg3: size_t);
+    pub fn secflags_to_str(
+        arg1: secflagset_t,
+        arg2: *mut illumos_ddi_dki::c_char,
+        arg3: size_t,
+    );
 }
 extern "C" {
     pub fn secflag_enabled(arg1: *mut proc_, arg2: secflag_t) -> boolean_t;
@@ -16363,7 +17053,10 @@ extern "C" {
     pub fn secflags_promote(arg1: *mut proc_);
 }
 extern "C" {
-    pub fn secflags_apply_delta(arg1: *mut secflagset_t, arg2: *const secflagdelta_t);
+    pub fn secflags_apply_delta(
+        arg1: *mut secflagset_t,
+        arg2: *const secflagdelta_t,
+    );
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -16388,18 +17081,26 @@ pub type lwpent_t = lwpent;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct pctxop {
-    pub save_op: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
-    pub restore_op:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+    pub save_op: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+    >,
+    pub restore_op: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+    >,
     pub fork_op: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut illumos_ddi_dki::c_void,
             arg2: *mut illumos_ddi_dki::c_void,
         ),
     >,
-    pub exit_op: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+    pub exit_op: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+    >,
     pub free_op: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void, arg2: illumos_ddi_dki::c_int),
+        unsafe extern "C" fn(
+            arg1: *mut illumos_ddi_dki::c_void,
+            arg2: illumos_ddi_dki::c_int,
+        ),
     >,
     pub arg: *mut illumos_ddi_dki::c_void,
     pub next: *mut pctxop,
@@ -16654,7 +17355,9 @@ pub struct pid {
 impl pid {
     #[inline]
     pub fn pid_prinactive(&self) -> illumos_ddi_dki::c_uint {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_pid_prinactive(&mut self, val: illumos_ddi_dki::c_uint) {
@@ -16665,7 +17368,9 @@ impl pid {
     }
     #[inline]
     pub fn pid_pgorphaned(&self) -> illumos_ddi_dki::c_uint {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_pid_pgorphaned(&mut self, val: illumos_ddi_dki::c_uint) {
@@ -16676,7 +17381,9 @@ impl pid {
     }
     #[inline]
     pub fn pid_padding(&self) -> illumos_ddi_dki::c_uint {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(2usize, 6u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(2usize, 6u8) as u32)
+        }
     }
     #[inline]
     pub fn set_pid_padding(&mut self, val: illumos_ddi_dki::c_uint) {
@@ -16687,7 +17394,9 @@ impl pid {
     }
     #[inline]
     pub fn pid_prslot(&self) -> illumos_ddi_dki::c_uint {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(8usize, 24u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(8usize, 24u8) as u32)
+        }
     }
     #[inline]
     pub fn set_pid_prslot(&mut self, val: illumos_ddi_dki::c_uint) {
@@ -16703,17 +17412,21 @@ impl pid {
         pid_padding: illumos_ddi_dki::c_uint,
         pid_prslot: illumos_ddi_dki::c_uint,
     ) -> __BindgenBitfieldUnit<[u8; 4usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> = Default::default();
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 1u8, {
-            let pid_prinactive: u32 = unsafe { ::core::mem::transmute(pid_prinactive) };
+            let pid_prinactive: u32 =
+                unsafe { ::core::mem::transmute(pid_prinactive) };
             pid_prinactive as u64
         });
         __bindgen_bitfield_unit.set(1usize, 1u8, {
-            let pid_pgorphaned: u32 = unsafe { ::core::mem::transmute(pid_pgorphaned) };
+            let pid_pgorphaned: u32 =
+                unsafe { ::core::mem::transmute(pid_pgorphaned) };
             pid_pgorphaned as u64
         });
         __bindgen_bitfield_unit.set(2usize, 6u8, {
-            let pid_padding: u32 = unsafe { ::core::mem::transmute(pid_padding) };
+            let pid_padding: u32 =
+                unsafe { ::core::mem::transmute(pid_padding) };
             pid_padding as u64
         });
         __bindgen_bitfield_unit.set(8usize, 24u8, {
@@ -16824,7 +17537,10 @@ extern "C" {
     pub fn sigcld_repost();
 }
 extern "C" {
-    pub fn fsig(arg1: *mut k_sigset_t, arg2: *mut kthread_t) -> illumos_ddi_dki::c_int;
+    pub fn fsig(
+        arg1: *mut k_sigset_t,
+        arg2: *mut kthread_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn psig();
@@ -16833,7 +17549,10 @@ extern "C" {
     pub fn stop(arg1: illumos_ddi_dki::c_int, arg2: illumos_ddi_dki::c_int);
 }
 extern "C" {
-    pub fn stop_on_fault(arg1: uint_t, arg2: *mut k_siginfo_t) -> illumos_ddi_dki::c_int;
+    pub fn stop_on_fault(
+        arg1: uint_t,
+        arg2: *mut k_siginfo_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn issig(arg1: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
@@ -16848,7 +17567,11 @@ extern "C" {
     pub fn tsignal(arg1: *mut kthread_t, arg2: illumos_ddi_dki::c_int);
 }
 extern "C" {
-    pub fn sigtoproc(arg1: *mut proc_t, arg2: *mut kthread_t, arg3: illumos_ddi_dki::c_int);
+    pub fn sigtoproc(
+        arg1: *mut proc_t,
+        arg2: *mut kthread_t,
+        arg3: illumos_ddi_dki::c_int,
+    );
 }
 extern "C" {
     pub fn trapsig(arg1: *mut k_siginfo_t, arg2: illumos_ddi_dki::c_int);
@@ -16861,8 +17584,10 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn eat_signal(arg1: *mut kthread_t, arg2: illumos_ddi_dki::c_int)
-        -> illumos_ddi_dki::c_int;
+    pub fn eat_signal(
+        arg1: *mut kthread_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn signal_is_blocked(
@@ -16871,7 +17596,10 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn sigcheck(arg1: *mut proc_t, arg2: *mut kthread_t) -> illumos_ddi_dki::c_int;
+    pub fn sigcheck(
+        arg1: *mut proc_t,
+        arg2: *mut kthread_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn sigdefault(arg1: *mut proc_t);
@@ -16880,7 +17608,11 @@ extern "C" {
     pub fn pid_setmin();
 }
 extern "C" {
-    pub fn pid_allocate(arg1: *mut proc_t, arg2: pid_t, arg3: illumos_ddi_dki::c_int) -> pid_t;
+    pub fn pid_allocate(
+        arg1: *mut proc_t,
+        arg2: pid_t,
+        arg3: illumos_ddi_dki::c_int,
+    ) -> pid_t;
 }
 extern "C" {
     pub fn pid_rele(arg1: *mut pid) -> illumos_ddi_dki::c_int;
@@ -16974,8 +17706,10 @@ extern "C" {
     pub fn init_mstate(arg1: *mut kthread_t, arg2: illumos_ddi_dki::c_int);
 }
 extern "C" {
-    pub fn new_mstate(arg1: *mut kthread_t, arg2: illumos_ddi_dki::c_int)
-        -> illumos_ddi_dki::c_int;
+    pub fn new_mstate(
+        arg1: *mut kthread_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn restore_mstate(arg1: *mut kthread_t);
@@ -16990,16 +17724,26 @@ extern "C" {
     pub fn disable_msacct(arg1: *mut proc_t);
 }
 extern "C" {
-    pub fn mstate_aggr_state(arg1: *mut proc_t, arg2: illumos_ddi_dki::c_int) -> hrtime_t;
+    pub fn mstate_aggr_state(
+        arg1: *mut proc_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> hrtime_t;
 }
 extern "C" {
     pub fn mstate_thread_onproc_time(arg1: *mut kthread_t) -> hrtime_t;
 }
 extern "C" {
-    pub fn mstate_systhread_times(arg1: *mut kthread_t, arg2: *mut hrtime_t, arg3: *mut hrtime_t);
+    pub fn mstate_systhread_times(
+        arg1: *mut kthread_t,
+        arg2: *mut hrtime_t,
+        arg3: *mut hrtime_t,
+    );
 }
 extern "C" {
-    pub fn syscall_mstate(arg1: illumos_ddi_dki::c_int, arg2: illumos_ddi_dki::c_int);
+    pub fn syscall_mstate(
+        arg1: illumos_ddi_dki::c_int,
+        arg2: illumos_ddi_dki::c_int,
+    );
 }
 extern "C" {
     pub fn cpu_update_pct(arg1: *mut kthread_t, arg2: hrtime_t) -> uint_t;
@@ -17054,9 +17798,12 @@ extern "C" {
 pub struct ctxop_template {
     pub ct_rev: u32,
     pub ct_pad: u32,
-    pub ct_save: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
-    pub ct_restore:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+    pub ct_save: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+    >,
+    pub ct_restore: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+    >,
     pub ct_fork: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut illumos_ddi_dki::c_void,
@@ -17069,9 +17816,14 @@ pub struct ctxop_template {
             arg2: *mut illumos_ddi_dki::c_void,
         ),
     >,
-    pub ct_exit: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+    pub ct_exit: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+    >,
     pub ct_free: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void, arg2: illumos_ddi_dki::c_int),
+        unsafe extern "C" fn(
+            arg1: *mut illumos_ddi_dki::c_void,
+            arg2: illumos_ddi_dki::c_int,
+        ),
     >,
 }
 extern "C" {
@@ -17175,7 +17927,9 @@ extern "C" {
 extern "C" {
     pub fn tsd_create(
         arg1: *mut uint_t,
-        arg2: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg2: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
     );
 }
 extern "C" {
@@ -17184,21 +17938,31 @@ extern "C" {
 extern "C" {
     pub fn tsd_getcreate(
         arg1: *mut uint_t,
-        arg2: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
-        arg3: ::core::option::Option<unsafe extern "C" fn() -> *mut illumos_ddi_dki::c_void>,
+        arg2: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
+        arg3: ::core::option::Option<
+            unsafe extern "C" fn() -> *mut illumos_ddi_dki::c_void,
+        >,
     ) -> *mut illumos_ddi_dki::c_void;
 }
 extern "C" {
     pub fn tsd_get(arg1: uint_t) -> *mut illumos_ddi_dki::c_void;
 }
 extern "C" {
-    pub fn tsd_set(arg1: uint_t, arg2: *mut illumos_ddi_dki::c_void) -> illumos_ddi_dki::c_int;
+    pub fn tsd_set(
+        arg1: uint_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn tsd_exit();
 }
 extern "C" {
-    pub fn tsd_agent_get(arg1: *mut kthread_t, arg2: uint_t) -> *mut illumos_ddi_dki::c_void;
+    pub fn tsd_agent_get(
+        arg1: *mut kthread_t,
+        arg2: uint_t,
+    ) -> *mut illumos_ddi_dki::c_void;
 }
 extern "C" {
     pub fn tsd_agent_set(
@@ -17300,7 +18064,11 @@ extern "C" {
     pub fn lwp_ctmpl_clear(arg1: *mut klwp_t);
 }
 extern "C" {
-    pub fn forklwp(arg1: *mut klwp_t, arg2: *mut proc_t, arg3: id_t) -> *mut klwp_t;
+    pub fn forklwp(
+        arg1: *mut klwp_t,
+        arg2: *mut proc_t,
+        arg3: id_t,
+    ) -> *mut klwp_t;
 }
 extern "C" {
     pub fn lwp_load(arg1: *mut klwp_t, arg2: *mut greg_t, arg3: usize);
@@ -17367,7 +18135,11 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn sigdelq(arg1: *mut proc_t, arg2: *mut kthread_t, arg3: illumos_ddi_dki::c_int);
+    pub fn sigdelq(
+        arg1: *mut proc_t,
+        arg2: *mut kthread_t,
+        arg3: illumos_ddi_dki::c_int,
+    );
 }
 extern "C" {
     pub fn sigaddq(
@@ -17378,7 +18150,11 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn sigaddqa(arg1: *mut proc_t, arg2: *mut kthread_t, arg3: *mut sigqueue_t);
+    pub fn sigaddqa(
+        arg1: *mut proc_t,
+        arg2: *mut kthread_t,
+        arg3: *mut sigqueue_t,
+    );
 }
 extern "C" {
     pub fn sigqsend(
@@ -17423,7 +18199,11 @@ extern "C" {
     ) -> *mut sigqueue_t;
 }
 extern "C" {
-    pub fn winfo(arg1: *mut proc_t, arg2: *mut k_siginfo_t, arg3: illumos_ddi_dki::c_int);
+    pub fn winfo(
+        arg1: *mut proc_t,
+        arg2: *mut k_siginfo_t,
+        arg3: illumos_ddi_dki::c_int,
+    );
 }
 extern "C" {
     pub fn wstat(
@@ -17788,7 +18568,8 @@ extern "C" {
     pub fn grow(arg1: caddr_t) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn grow_internal(arg1: caddr_t, arg2: uint_t) -> illumos_ddi_dki::c_int;
+    pub fn grow_internal(arg1: caddr_t, arg2: uint_t)
+        -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn brk_internal(arg1: caddr_t, arg2: uint_t) -> illumos_ddi_dki::c_int;
@@ -17796,14 +18577,18 @@ extern "C" {
 pub type callout_id_t = u64;
 extern "C" {
     pub fn timeout(
-        arg1: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg1: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
         arg2: *mut illumos_ddi_dki::c_void,
         arg3: clock_t,
     ) -> timeout_id_t;
 }
 extern "C" {
     pub fn realtime_timeout(
-        arg1: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg1: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
         arg2: *mut illumos_ddi_dki::c_void,
         arg3: clock_t,
     ) -> timeout_id_t;
@@ -17814,7 +18599,9 @@ extern "C" {
 extern "C" {
     pub fn timeout_generic(
         arg1: illumos_ddi_dki::c_int,
-        arg2: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg2: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
         arg3: *mut illumos_ddi_dki::c_void,
         arg4: hrtime_t,
         arg5: hrtime_t,
@@ -17823,23 +18610,33 @@ extern "C" {
 }
 extern "C" {
     pub fn timeout_default(
-        arg1: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg1: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
         arg2: *mut illumos_ddi_dki::c_void,
         arg3: clock_t,
     ) -> callout_id_t;
 }
 extern "C" {
     pub fn realtime_timeout_default(
-        arg1: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg1: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
         arg2: *mut illumos_ddi_dki::c_void,
         arg3: clock_t,
     ) -> callout_id_t;
 }
 extern "C" {
-    pub fn untimeout_generic(arg1: callout_id_t, arg2: illumos_ddi_dki::c_int) -> hrtime_t;
+    pub fn untimeout_generic(
+        arg1: callout_id_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> hrtime_t;
 }
 extern "C" {
-    pub fn untimeout_default(arg1: callout_id_t, arg2: illumos_ddi_dki::c_int) -> clock_t;
+    pub fn untimeout_default(
+        arg1: callout_id_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> clock_t;
 }
 extern "C" {
     pub fn delay(arg1: clock_t);
@@ -17873,16 +18670,23 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn stoi(arg1: *mut *mut illumos_ddi_dki::c_char) -> illumos_ddi_dki::c_int;
+    pub fn stoi(
+        arg1: *mut *mut illumos_ddi_dki::c_char,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn numtos(arg1: ulong_t, arg2: *mut illumos_ddi_dki::c_char);
 }
 extern "C" {
-    pub fn kmem_asprintf(fmt: *const illumos_ddi_dki::c_char, ...) -> *mut illumos_ddi_dki::c_char;
+    pub fn kmem_asprintf(
+        fmt: *const illumos_ddi_dki::c_char,
+        ...
+    ) -> *mut illumos_ddi_dki::c_char;
 }
 extern "C" {
-    pub fn strident_valid(arg1: *const illumos_ddi_dki::c_char) -> illumos_ddi_dki::c_int;
+    pub fn strident_valid(
+        arg1: *const illumos_ddi_dki::c_char,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn strident_canon(arg1: *mut illumos_ddi_dki::c_char, arg2: size_t);
@@ -18051,18 +18855,28 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn kzero(arg1: *mut illumos_ddi_dki::c_void, arg2: size_t) -> illumos_ddi_dki::c_int;
+    pub fn kzero(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: size_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn fuword8(arg1: *const illumos_ddi_dki::c_void, arg2: *mut u8) -> illumos_ddi_dki::c_int;
+    pub fn fuword8(
+        arg1: *const illumos_ddi_dki::c_void,
+        arg2: *mut u8,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn fuword16(arg1: *const illumos_ddi_dki::c_void, arg2: *mut u16)
-        -> illumos_ddi_dki::c_int;
+    pub fn fuword16(
+        arg1: *const illumos_ddi_dki::c_void,
+        arg2: *mut u16,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn fuword32(arg1: *const illumos_ddi_dki::c_void, arg2: *mut u32)
-        -> illumos_ddi_dki::c_int;
+    pub fn fuword32(
+        arg1: *const illumos_ddi_dki::c_void,
+        arg2: *mut u32,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn fulword(
@@ -18080,29 +18894,49 @@ extern "C" {
     pub fn fuword32_noerr(arg1: *const illumos_ddi_dki::c_void, arg2: *mut u32);
 }
 extern "C" {
-    pub fn fulword_noerr(arg1: *const illumos_ddi_dki::c_void, arg2: *mut ulong_t);
+    pub fn fulword_noerr(
+        arg1: *const illumos_ddi_dki::c_void,
+        arg2: *mut ulong_t,
+    );
 }
 extern "C" {
-    pub fn fuword64(arg1: *const illumos_ddi_dki::c_void, arg2: *mut u64)
-        -> illumos_ddi_dki::c_int;
+    pub fn fuword64(
+        arg1: *const illumos_ddi_dki::c_void,
+        arg2: *mut u64,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn fuword64_noerr(arg1: *const illumos_ddi_dki::c_void, arg2: *mut u64);
 }
 extern "C" {
-    pub fn subyte(arg1: *mut illumos_ddi_dki::c_void, arg2: u8) -> illumos_ddi_dki::c_int;
+    pub fn subyte(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: u8,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn suword8(arg1: *mut illumos_ddi_dki::c_void, arg2: u8) -> illumos_ddi_dki::c_int;
+    pub fn suword8(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: u8,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn suword16(arg1: *mut illumos_ddi_dki::c_void, arg2: u16) -> illumos_ddi_dki::c_int;
+    pub fn suword16(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: u16,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn suword32(arg1: *mut illumos_ddi_dki::c_void, arg2: u32) -> illumos_ddi_dki::c_int;
+    pub fn suword32(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: u32,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn sulword(arg1: *mut illumos_ddi_dki::c_void, arg2: ulong_t) -> illumos_ddi_dki::c_int;
+    pub fn sulword(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: ulong_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn subyte_noerr(arg1: *mut illumos_ddi_dki::c_void, arg2: u8);
@@ -18120,7 +18954,10 @@ extern "C" {
     pub fn sulword_noerr(arg1: *mut illumos_ddi_dki::c_void, arg2: ulong_t);
 }
 extern "C" {
-    pub fn suword64(arg1: *mut illumos_ddi_dki::c_void, arg2: u64) -> illumos_ddi_dki::c_int;
+    pub fn suword64(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: u64,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn suword64_noerr(arg1: *mut illumos_ddi_dki::c_void, arg2: u64);
@@ -18150,7 +18987,10 @@ extern "C" {
     pub fn callee() -> caddr_t;
 }
 extern "C" {
-    pub fn getpcstack(arg1: *mut pc_t, arg2: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn getpcstack(
+        arg1: *mut pc_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn on_fault(arg1: *mut label_t) -> illumos_ddi_dki::c_int;
@@ -18218,7 +19058,9 @@ extern "C" {
 }
 extern "C" {
     pub fn softcall(
-        arg1: ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void)>,
+        arg1: ::core::option::Option<
+            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        >,
         arg2: *mut illumos_ddi_dki::c_void,
     );
 }
@@ -18275,7 +19117,9 @@ extern "C" {
 pub struct sysent {
     pub sy_narg: illumos_ddi_dki::c_char,
     pub sy_flags: illumos_ddi_dki::c_ushort,
-    pub sy_call: ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>,
+    pub sy_call: ::core::option::Option<
+        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+    >,
     pub sy_lock: *mut krwlock_t,
     pub sy_callc: ::core::option::Option<unsafe extern "C" fn() -> i64>,
 }
@@ -18412,7 +19256,9 @@ extern "C" {
     ) -> illumos_ddi_dki::c_ulong;
 }
 extern "C" {
-    pub fn strdup(arg1: *const illumos_ddi_dki::c_char) -> *mut illumos_ddi_dki::c_char;
+    pub fn strdup(
+        arg1: *const illumos_ddi_dki::c_char,
+    ) -> *mut illumos_ddi_dki::c_char;
 }
 extern "C" {
     pub fn strfree(arg1: *mut illumos_ddi_dki::c_char);
@@ -18482,7 +19328,10 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn bzero(arg1: *mut illumos_ddi_dki::c_void, arg2: illumos_ddi_dki::c_ulong);
+    pub fn bzero(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: illumos_ddi_dki::c_ulong,
+    );
 }
 extern "C" {
     pub fn memset(
@@ -18565,9 +19414,13 @@ pub type walktree_f_t = ::core::option::Option<
     ) -> illumos_ddi_dki::c_int,
 >;
 pub type match_leaf_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut radix_node, arg2: *mut illumos_ddi_dki::c_void) -> boolean_t,
+    unsafe extern "C" fn(
+        arg1: *mut radix_node,
+        arg2: *mut illumos_ddi_dki::c_void,
+    ) -> boolean_t,
 >;
-pub type lockf_t = ::core::option::Option<unsafe extern "C" fn(arg1: *mut radix_node)>;
+pub type lockf_t =
+    ::core::option::Option<unsafe extern "C" fn(arg1: *mut radix_node)>;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct radix_node_head {
@@ -18756,7 +19609,9 @@ pub struct ipf_s {
 impl ipf_s {
     #[inline]
     pub fn ipf_last_frag_seen(&self) -> uchar_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u8) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u8)
+        }
     }
     #[inline]
     pub fn set_ipf_last_frag_seen(&mut self, val: uchar_t) {
@@ -18766,10 +19621,14 @@ impl ipf_s {
         }
     }
     #[inline]
-    pub fn new_bitfield_1(ipf_last_frag_seen: uchar_t) -> __BindgenBitfieldUnit<[u8; 1usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 1usize]> = Default::default();
+    pub fn new_bitfield_1(
+        ipf_last_frag_seen: uchar_t,
+    ) -> __BindgenBitfieldUnit<[u8; 1usize]> {
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 1usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 1u8, {
-            let ipf_last_frag_seen: u8 = unsafe { ::core::mem::transmute(ipf_last_frag_seen) };
+            let ipf_last_frag_seen: u8 =
+                unsafe { ::core::mem::transmute(ipf_last_frag_seen) };
             ipf_last_frag_seen as u64
         });
         __bindgen_bitfield_unit
@@ -18831,13 +19690,22 @@ pub struct ipha_s {
     pub ipha_dst: ipaddr_t,
 }
 pub type ipha_t = ipha_s;
-pub type ip_v6intfid_func_t =
-    ::core::option::Option<unsafe extern "C" fn(arg1: *mut ill_s, arg2: *mut in6_addr_t)>;
+pub type ip_v6intfid_func_t = ::core::option::Option<
+    unsafe extern "C" fn(arg1: *mut ill_s, arg2: *mut in6_addr_t),
+>;
 pub type ip_v6mapinfo_func_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut ill_s, arg2: *mut uchar_t, arg3: *mut uchar_t),
+    unsafe extern "C" fn(
+        arg1: *mut ill_s,
+        arg2: *mut uchar_t,
+        arg3: *mut uchar_t,
+    ),
 >;
 pub type ip_v4mapinfo_func_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut ill_s, arg2: *mut uchar_t, arg3: *mut uchar_t),
+    unsafe extern "C" fn(
+        arg1: *mut ill_s,
+        arg2: *mut uchar_t,
+        arg3: *mut uchar_t,
+    ),
 >;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -18853,7 +19721,11 @@ pub struct ip_m_s {
 }
 pub type ip_m_t = ip_m_s;
 extern "C" {
-    pub fn ip_mcast_mapping(arg1: *mut ill_s, arg2: *mut uchar_t, arg3: *mut uchar_t);
+    pub fn ip_mcast_mapping(
+        arg1: *mut ill_s,
+        arg2: *mut uchar_t,
+        arg3: *mut uchar_t,
+    );
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -18940,7 +19812,9 @@ pub struct ipsec_latch_s {
 impl ipsec_latch_s {
     #[inline]
     pub fn ipl_ids_latched(&self) -> illumos_ddi_dki::c_uint {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ipl_ids_latched(&mut self, val: illumos_ddi_dki::c_uint) {
@@ -18951,7 +19825,9 @@ impl ipsec_latch_s {
     }
     #[inline]
     pub fn ipl_pad_to_bit_31(&self) -> illumos_ddi_dki::c_uint {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(1usize, 31u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(1usize, 31u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ipl_pad_to_bit_31(&mut self, val: illumos_ddi_dki::c_uint) {
@@ -18965,13 +19841,16 @@ impl ipsec_latch_s {
         ipl_ids_latched: illumos_ddi_dki::c_uint,
         ipl_pad_to_bit_31: illumos_ddi_dki::c_uint,
     ) -> __BindgenBitfieldUnit<[u8; 4usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> = Default::default();
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 1u8, {
-            let ipl_ids_latched: u32 = unsafe { ::core::mem::transmute(ipl_ids_latched) };
+            let ipl_ids_latched: u32 =
+                unsafe { ::core::mem::transmute(ipl_ids_latched) };
             ipl_ids_latched as u64
         });
         __bindgen_bitfield_unit.set(1usize, 31u8, {
-            let ipl_pad_to_bit_31: u32 = unsafe { ::core::mem::transmute(ipl_pad_to_bit_31) };
+            let ipl_pad_to_bit_31: u32 =
+                unsafe { ::core::mem::transmute(ipl_pad_to_bit_31) };
             ipl_pad_to_bit_31 as u64
         });
         __bindgen_bitfield_unit
@@ -18995,7 +19874,9 @@ pub struct ipsec_selector {
 impl ipsec_selector {
     #[inline]
     pub fn ips_isv4(&self) -> u8 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u8) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u8)
+        }
     }
     #[inline]
     pub fn set_ips_isv4(&mut self, val: u8) {
@@ -19006,7 +19887,9 @@ impl ipsec_selector {
     }
     #[inline]
     pub fn ips_is_icmp_inv_acq(&self) -> u8 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u8) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u8)
+        }
     }
     #[inline]
     pub fn set_ips_is_icmp_inv_acq(&mut self, val: u8) {
@@ -19020,13 +19903,15 @@ impl ipsec_selector {
         ips_isv4: u8,
         ips_is_icmp_inv_acq: u8,
     ) -> __BindgenBitfieldUnit<[u8; 1usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 1usize]> = Default::default();
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 1usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 1u8, {
             let ips_isv4: u8 = unsafe { ::core::mem::transmute(ips_isv4) };
             ips_isv4 as u64
         });
         __bindgen_bitfield_unit.set(1usize, 1u8, {
-            let ips_is_icmp_inv_acq: u8 = unsafe { ::core::mem::transmute(ips_is_icmp_inv_acq) };
+            let ips_is_icmp_inv_acq: u8 =
+                unsafe { ::core::mem::transmute(ips_is_icmp_inv_acq) };
             ips_is_icmp_inv_acq as u64
         });
         __bindgen_bitfield_unit
@@ -19051,7 +19936,9 @@ pub struct iulp_s {
 impl iulp_s {
     #[inline]
     pub fn iulp_tstamp_ok(&self) -> u32 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_iulp_tstamp_ok(&mut self, val: u32) {
@@ -19062,7 +19949,9 @@ impl iulp_s {
     }
     #[inline]
     pub fn iulp_wscale_ok(&self) -> u32 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_iulp_wscale_ok(&mut self, val: u32) {
@@ -19073,7 +19962,9 @@ impl iulp_s {
     }
     #[inline]
     pub fn iulp_ecn_ok(&self) -> u32 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(2usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(2usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_iulp_ecn_ok(&mut self, val: u32) {
@@ -19084,7 +19975,9 @@ impl iulp_s {
     }
     #[inline]
     pub fn iulp_pmtud_ok(&self) -> u32 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(3usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(3usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_iulp_pmtud_ok(&mut self, val: u32) {
@@ -19095,7 +19988,9 @@ impl iulp_s {
     }
     #[inline]
     pub fn iulp_localnet(&self) -> u32 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(4usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(4usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_iulp_localnet(&mut self, val: u32) {
@@ -19106,7 +20001,9 @@ impl iulp_s {
     }
     #[inline]
     pub fn iulp_loopback(&self) -> u32 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(5usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(5usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_iulp_loopback(&mut self, val: u32) {
@@ -19117,7 +20014,9 @@ impl iulp_s {
     }
     #[inline]
     pub fn iulp_local(&self) -> u32 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(6usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(6usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_iulp_local(&mut self, val: u32) {
@@ -19128,7 +20027,9 @@ impl iulp_s {
     }
     #[inline]
     pub fn iulp_not_used(&self) -> u32 {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(7usize, 25u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(7usize, 25u8) as u32)
+        }
     }
     #[inline]
     pub fn set_iulp_not_used(&mut self, val: u32) {
@@ -19148,29 +20049,36 @@ impl iulp_s {
         iulp_local: u32,
         iulp_not_used: u32,
     ) -> __BindgenBitfieldUnit<[u8; 4usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> = Default::default();
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 1u8, {
-            let iulp_tstamp_ok: u32 = unsafe { ::core::mem::transmute(iulp_tstamp_ok) };
+            let iulp_tstamp_ok: u32 =
+                unsafe { ::core::mem::transmute(iulp_tstamp_ok) };
             iulp_tstamp_ok as u64
         });
         __bindgen_bitfield_unit.set(1usize, 1u8, {
-            let iulp_wscale_ok: u32 = unsafe { ::core::mem::transmute(iulp_wscale_ok) };
+            let iulp_wscale_ok: u32 =
+                unsafe { ::core::mem::transmute(iulp_wscale_ok) };
             iulp_wscale_ok as u64
         });
         __bindgen_bitfield_unit.set(2usize, 1u8, {
-            let iulp_ecn_ok: u32 = unsafe { ::core::mem::transmute(iulp_ecn_ok) };
+            let iulp_ecn_ok: u32 =
+                unsafe { ::core::mem::transmute(iulp_ecn_ok) };
             iulp_ecn_ok as u64
         });
         __bindgen_bitfield_unit.set(3usize, 1u8, {
-            let iulp_pmtud_ok: u32 = unsafe { ::core::mem::transmute(iulp_pmtud_ok) };
+            let iulp_pmtud_ok: u32 =
+                unsafe { ::core::mem::transmute(iulp_pmtud_ok) };
             iulp_pmtud_ok as u64
         });
         __bindgen_bitfield_unit.set(4usize, 1u8, {
-            let iulp_localnet: u32 = unsafe { ::core::mem::transmute(iulp_localnet) };
+            let iulp_localnet: u32 =
+                unsafe { ::core::mem::transmute(iulp_localnet) };
             iulp_localnet as u64
         });
         __bindgen_bitfield_unit.set(5usize, 1u8, {
-            let iulp_loopback: u32 = unsafe { ::core::mem::transmute(iulp_loopback) };
+            let iulp_loopback: u32 =
+                unsafe { ::core::mem::transmute(iulp_loopback) };
             iulp_loopback as u64
         });
         __bindgen_bitfield_unit.set(6usize, 1u8, {
@@ -19178,7 +20086,8 @@ impl iulp_s {
             iulp_local as u64
         });
         __bindgen_bitfield_unit.set(7usize, 25u8, {
-            let iulp_not_used: u32 = unsafe { ::core::mem::transmute(iulp_not_used) };
+            let iulp_not_used: u32 =
+                unsafe { ::core::mem::transmute(iulp_not_used) };
             iulp_not_used as u64
         });
         __bindgen_bitfield_unit
@@ -19274,7 +20183,9 @@ pub struct ipif_s {
 impl ipif_s {
     #[inline]
     pub fn ipif_was_up(&self) -> illumos_ddi_dki::c_uint {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ipif_was_up(&mut self, val: illumos_ddi_dki::c_uint) {
@@ -19285,7 +20196,9 @@ impl ipif_s {
     }
     #[inline]
     pub fn ipif_addr_ready(&self) -> illumos_ddi_dki::c_uint {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ipif_addr_ready(&mut self, val: illumos_ddi_dki::c_uint) {
@@ -19296,7 +20209,9 @@ impl ipif_s {
     }
     #[inline]
     pub fn ipif_was_dup(&self) -> illumos_ddi_dki::c_uint {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(2usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(2usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ipif_was_dup(&mut self, val: illumos_ddi_dki::c_uint) {
@@ -19307,7 +20222,9 @@ impl ipif_s {
     }
     #[inline]
     pub fn ipif_added_nce(&self) -> illumos_ddi_dki::c_uint {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(3usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(3usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ipif_added_nce(&mut self, val: illumos_ddi_dki::c_uint) {
@@ -19318,7 +20235,9 @@ impl ipif_s {
     }
     #[inline]
     pub fn ipif_pad_to_31(&self) -> illumos_ddi_dki::c_uint {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(4usize, 28u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(4usize, 28u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ipif_pad_to_31(&mut self, val: illumos_ddi_dki::c_uint) {
@@ -19335,25 +20254,31 @@ impl ipif_s {
         ipif_added_nce: illumos_ddi_dki::c_uint,
         ipif_pad_to_31: illumos_ddi_dki::c_uint,
     ) -> __BindgenBitfieldUnit<[u8; 4usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> = Default::default();
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 1u8, {
-            let ipif_was_up: u32 = unsafe { ::core::mem::transmute(ipif_was_up) };
+            let ipif_was_up: u32 =
+                unsafe { ::core::mem::transmute(ipif_was_up) };
             ipif_was_up as u64
         });
         __bindgen_bitfield_unit.set(1usize, 1u8, {
-            let ipif_addr_ready: u32 = unsafe { ::core::mem::transmute(ipif_addr_ready) };
+            let ipif_addr_ready: u32 =
+                unsafe { ::core::mem::transmute(ipif_addr_ready) };
             ipif_addr_ready as u64
         });
         __bindgen_bitfield_unit.set(2usize, 1u8, {
-            let ipif_was_dup: u32 = unsafe { ::core::mem::transmute(ipif_was_dup) };
+            let ipif_was_dup: u32 =
+                unsafe { ::core::mem::transmute(ipif_was_dup) };
             ipif_was_dup as u64
         });
         __bindgen_bitfield_unit.set(3usize, 1u8, {
-            let ipif_added_nce: u32 = unsafe { ::core::mem::transmute(ipif_added_nce) };
+            let ipif_added_nce: u32 =
+                unsafe { ::core::mem::transmute(ipif_added_nce) };
             ipif_added_nce as u64
         });
         __bindgen_bitfield_unit.set(4usize, 28u8, {
-            let ipif_pad_to_31: u32 = unsafe { ::core::mem::transmute(ipif_pad_to_31) };
+            let ipif_pad_to_31: u32 =
+                unsafe { ::core::mem::transmute(ipif_pad_to_31) };
             ipif_pad_to_31 as u64
         });
         __bindgen_bitfield_unit
@@ -19782,7 +20707,9 @@ pub struct ill_s {
 impl ill_s {
     #[inline]
     pub fn ill_needs_attach(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_needs_attach(&mut self, val: uint_t) {
@@ -19793,7 +20720,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_reserved(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_reserved(&mut self, val: uint_t) {
@@ -19804,7 +20733,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_isv6(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(2usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(2usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_isv6(&mut self, val: uint_t) {
@@ -19815,7 +20746,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_dlpi_style_set(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(3usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(3usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_dlpi_style_set(&mut self, val: uint_t) {
@@ -19826,7 +20759,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_ifname_pending(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(4usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(4usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_ifname_pending(&mut self, val: uint_t) {
@@ -19837,7 +20772,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_logical_down(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(5usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(5usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_logical_down(&mut self, val: uint_t) {
@@ -19848,7 +20785,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_dl_up(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(6usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(6usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_dl_up(&mut self, val: uint_t) {
@@ -19859,7 +20798,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_up_ipifs(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(7usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(7usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_up_ipifs(&mut self, val: uint_t) {
@@ -19870,7 +20811,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_note_link(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(8usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(8usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_note_link(&mut self, val: uint_t) {
@@ -19881,7 +20824,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_capab_reneg(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(9usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(9usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_capab_reneg(&mut self, val: uint_t) {
@@ -19892,7 +20837,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_dld_capab_inprog(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(10usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(10usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_dld_capab_inprog(&mut self, val: uint_t) {
@@ -19903,7 +20850,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_need_recover_multicast(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(11usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(11usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_need_recover_multicast(&mut self, val: uint_t) {
@@ -19914,7 +20863,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_replumbing(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(12usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(12usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_replumbing(&mut self, val: uint_t) {
@@ -19925,7 +20876,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_arl_dlpi_pending(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(13usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(13usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_arl_dlpi_pending(&mut self, val: uint_t) {
@@ -19936,7 +20889,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_grp_pending(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(14usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(14usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_grp_pending(&mut self, val: uint_t) {
@@ -19947,7 +20902,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_pad_to_bit_31(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(15usize, 17u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(15usize, 17u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_pad_to_bit_31(&mut self, val: uint_t) {
@@ -19958,7 +20915,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_fragtimer_executing(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(32usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(32usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_fragtimer_executing(&mut self, val: uint_t) {
@@ -19969,7 +20928,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_fragtimer_needrestart(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(33usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(33usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_fragtimer_needrestart(&mut self, val: uint_t) {
@@ -19980,7 +20941,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_manual_token(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(34usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(34usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_manual_token(&mut self, val: uint_t) {
@@ -19991,7 +20954,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_manual_linklocal(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(35usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(35usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_manual_linklocal(&mut self, val: uint_t) {
@@ -20002,7 +20967,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_manual_dst_linklocal(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(36usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(36usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_manual_dst_linklocal(&mut self, val: uint_t) {
@@ -20013,7 +20980,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_mcast_ncec_cleanup(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(37usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(37usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_mcast_ncec_cleanup(&mut self, val: uint_t) {
@@ -20024,7 +20993,9 @@ impl ill_s {
     }
     #[inline]
     pub fn ill_pad_bit_31(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(38usize, 26u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(38usize, 26u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ill_pad_bit_31(&mut self, val: uint_t) {
@@ -20059,13 +21030,16 @@ impl ill_s {
         ill_mcast_ncec_cleanup: uint_t,
         ill_pad_bit_31: uint_t,
     ) -> __BindgenBitfieldUnit<[u8; 8usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 8usize]> = Default::default();
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 8usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 1u8, {
-            let ill_needs_attach: u32 = unsafe { ::core::mem::transmute(ill_needs_attach) };
+            let ill_needs_attach: u32 =
+                unsafe { ::core::mem::transmute(ill_needs_attach) };
             ill_needs_attach as u64
         });
         __bindgen_bitfield_unit.set(1usize, 1u8, {
-            let ill_reserved: u32 = unsafe { ::core::mem::transmute(ill_reserved) };
+            let ill_reserved: u32 =
+                unsafe { ::core::mem::transmute(ill_reserved) };
             ill_reserved as u64
         });
         __bindgen_bitfield_unit.set(2usize, 1u8, {
@@ -20073,15 +21047,18 @@ impl ill_s {
             ill_isv6 as u64
         });
         __bindgen_bitfield_unit.set(3usize, 1u8, {
-            let ill_dlpi_style_set: u32 = unsafe { ::core::mem::transmute(ill_dlpi_style_set) };
+            let ill_dlpi_style_set: u32 =
+                unsafe { ::core::mem::transmute(ill_dlpi_style_set) };
             ill_dlpi_style_set as u64
         });
         __bindgen_bitfield_unit.set(4usize, 1u8, {
-            let ill_ifname_pending: u32 = unsafe { ::core::mem::transmute(ill_ifname_pending) };
+            let ill_ifname_pending: u32 =
+                unsafe { ::core::mem::transmute(ill_ifname_pending) };
             ill_ifname_pending as u64
         });
         __bindgen_bitfield_unit.set(5usize, 1u8, {
-            let ill_logical_down: u32 = unsafe { ::core::mem::transmute(ill_logical_down) };
+            let ill_logical_down: u32 =
+                unsafe { ::core::mem::transmute(ill_logical_down) };
             ill_logical_down as u64
         });
         __bindgen_bitfield_unit.set(6usize, 1u8, {
@@ -20089,19 +21066,23 @@ impl ill_s {
             ill_dl_up as u64
         });
         __bindgen_bitfield_unit.set(7usize, 1u8, {
-            let ill_up_ipifs: u32 = unsafe { ::core::mem::transmute(ill_up_ipifs) };
+            let ill_up_ipifs: u32 =
+                unsafe { ::core::mem::transmute(ill_up_ipifs) };
             ill_up_ipifs as u64
         });
         __bindgen_bitfield_unit.set(8usize, 1u8, {
-            let ill_note_link: u32 = unsafe { ::core::mem::transmute(ill_note_link) };
+            let ill_note_link: u32 =
+                unsafe { ::core::mem::transmute(ill_note_link) };
             ill_note_link as u64
         });
         __bindgen_bitfield_unit.set(9usize, 1u8, {
-            let ill_capab_reneg: u32 = unsafe { ::core::mem::transmute(ill_capab_reneg) };
+            let ill_capab_reneg: u32 =
+                unsafe { ::core::mem::transmute(ill_capab_reneg) };
             ill_capab_reneg as u64
         });
         __bindgen_bitfield_unit.set(10usize, 1u8, {
-            let ill_dld_capab_inprog: u32 = unsafe { ::core::mem::transmute(ill_dld_capab_inprog) };
+            let ill_dld_capab_inprog: u32 =
+                unsafe { ::core::mem::transmute(ill_dld_capab_inprog) };
             ill_dld_capab_inprog as u64
         });
         __bindgen_bitfield_unit.set(11usize, 1u8, {
@@ -20110,19 +21091,23 @@ impl ill_s {
             ill_need_recover_multicast as u64
         });
         __bindgen_bitfield_unit.set(12usize, 1u8, {
-            let ill_replumbing: u32 = unsafe { ::core::mem::transmute(ill_replumbing) };
+            let ill_replumbing: u32 =
+                unsafe { ::core::mem::transmute(ill_replumbing) };
             ill_replumbing as u64
         });
         __bindgen_bitfield_unit.set(13usize, 1u8, {
-            let ill_arl_dlpi_pending: u32 = unsafe { ::core::mem::transmute(ill_arl_dlpi_pending) };
+            let ill_arl_dlpi_pending: u32 =
+                unsafe { ::core::mem::transmute(ill_arl_dlpi_pending) };
             ill_arl_dlpi_pending as u64
         });
         __bindgen_bitfield_unit.set(14usize, 1u8, {
-            let ill_grp_pending: u32 = unsafe { ::core::mem::transmute(ill_grp_pending) };
+            let ill_grp_pending: u32 =
+                unsafe { ::core::mem::transmute(ill_grp_pending) };
             ill_grp_pending as u64
         });
         __bindgen_bitfield_unit.set(15usize, 17u8, {
-            let ill_pad_to_bit_31: u32 = unsafe { ::core::mem::transmute(ill_pad_to_bit_31) };
+            let ill_pad_to_bit_31: u32 =
+                unsafe { ::core::mem::transmute(ill_pad_to_bit_31) };
             ill_pad_to_bit_31 as u64
         });
         __bindgen_bitfield_unit.set(32usize, 1u8, {
@@ -20136,11 +21121,13 @@ impl ill_s {
             ill_fragtimer_needrestart as u64
         });
         __bindgen_bitfield_unit.set(34usize, 1u8, {
-            let ill_manual_token: u32 = unsafe { ::core::mem::transmute(ill_manual_token) };
+            let ill_manual_token: u32 =
+                unsafe { ::core::mem::transmute(ill_manual_token) };
             ill_manual_token as u64
         });
         __bindgen_bitfield_unit.set(35usize, 1u8, {
-            let ill_manual_linklocal: u32 = unsafe { ::core::mem::transmute(ill_manual_linklocal) };
+            let ill_manual_linklocal: u32 =
+                unsafe { ::core::mem::transmute(ill_manual_linklocal) };
             ill_manual_linklocal as u64
         });
         __bindgen_bitfield_unit.set(36usize, 1u8, {
@@ -20154,7 +21141,8 @@ impl ill_s {
             ill_mcast_ncec_cleanup as u64
         });
         __bindgen_bitfield_unit.set(38usize, 26u8, {
-            let ill_pad_bit_31: u32 = unsafe { ::core::mem::transmute(ill_pad_bit_31) };
+            let ill_pad_bit_31: u32 =
+                unsafe { ::core::mem::transmute(ill_pad_bit_31) };
             ill_pad_bit_31 as u64
         });
         __bindgen_bitfield_unit
@@ -20212,7 +21200,9 @@ pub struct ipmx_s {
 impl ipmx_s {
     #[inline]
     pub fn ipmx_arpdev_stream(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ipmx_arpdev_stream(&mut self, val: uint_t) {
@@ -20223,7 +21213,9 @@ impl ipmx_s {
     }
     #[inline]
     pub fn ipmx_notused(&self) -> uint_t {
-        unsafe { ::core::mem::transmute(self._bitfield_1.get(1usize, 31u8) as u32) }
+        unsafe {
+            ::core::mem::transmute(self._bitfield_1.get(1usize, 31u8) as u32)
+        }
     }
     #[inline]
     pub fn set_ipmx_notused(&mut self, val: uint_t) {
@@ -20237,13 +21229,16 @@ impl ipmx_s {
         ipmx_arpdev_stream: uint_t,
         ipmx_notused: uint_t,
     ) -> __BindgenBitfieldUnit<[u8; 4usize]> {
-        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> = Default::default();
+        let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> =
+            Default::default();
         __bindgen_bitfield_unit.set(0usize, 1u8, {
-            let ipmx_arpdev_stream: u32 = unsafe { ::core::mem::transmute(ipmx_arpdev_stream) };
+            let ipmx_arpdev_stream: u32 =
+                unsafe { ::core::mem::transmute(ipmx_arpdev_stream) };
             ipmx_arpdev_stream as u64
         });
         __bindgen_bitfield_unit.set(1usize, 31u8, {
-            let ipmx_notused: u32 = unsafe { ::core::mem::transmute(ipmx_notused) };
+            let ipmx_notused: u32 =
+                unsafe { ::core::mem::transmute(ipmx_notused) };
             ipmx_notused as u64
         });
         __bindgen_bitfield_unit
@@ -20649,10 +21644,19 @@ pub type ihandle_t = illumos_ddi_dki::c_int;
 pub type phandle_t = illumos_ddi_dki::c_int;
 pub type pnode_t = phandle_t;
 extern "C" {
-    pub fn prom_map(virthint: caddr_t, space: uint_t, phys: uint_t, size: uint_t) -> caddr_t;
+    pub fn prom_map(
+        virthint: caddr_t,
+        space: uint_t,
+        phys: uint_t,
+        size: uint_t,
+    ) -> caddr_t;
 }
 extern "C" {
-    pub fn prom_alloc(virthint: caddr_t, size: uint_t, align: illumos_ddi_dki::c_int) -> caddr_t;
+    pub fn prom_alloc(
+        virthint: caddr_t,
+        size: uint_t,
+        align: illumos_ddi_dki::c_int,
+    ) -> caddr_t;
 }
 extern "C" {
     pub fn prom_free(virt: caddr_t, size: uint_t);
@@ -20673,13 +21677,24 @@ extern "C" {
     pub fn prom_rootnode() -> pnode_t;
 }
 extern "C" {
-    pub fn prom_getproplen(nodeid: pnode_t, name: caddr_t) -> illumos_ddi_dki::c_int;
+    pub fn prom_getproplen(
+        nodeid: pnode_t,
+        name: caddr_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn prom_getprop(nodeid: pnode_t, name: caddr_t, value: caddr_t) -> illumos_ddi_dki::c_int;
+    pub fn prom_getprop(
+        nodeid: pnode_t,
+        name: caddr_t,
+        value: caddr_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn prom_nextprop(nodeid: pnode_t, previous: caddr_t, next: caddr_t) -> caddr_t;
+    pub fn prom_nextprop(
+        nodeid: pnode_t,
+        previous: caddr_t,
+        next: caddr_t,
+    ) -> caddr_t;
 }
 extern "C" {
     pub fn prom_decode_composite_string(
@@ -20736,7 +21751,10 @@ extern "C" {
     pub fn prom_stdoutpath() -> *mut illumos_ddi_dki::c_char;
 }
 extern "C" {
-    pub fn prom_strip_options(from: *mut illumos_ddi_dki::c_char, to: *mut illumos_ddi_dki::c_char);
+    pub fn prom_strip_options(
+        from: *mut illumos_ddi_dki::c_char,
+        to: *mut illumos_ddi_dki::c_char,
+    );
 }
 extern "C" {
     pub fn prom_pathname(arg1: *mut illumos_ddi_dki::c_char);
@@ -20797,7 +21815,9 @@ extern "C" {
     pub fn prom_mayput(c: illumos_ddi_dki::c_char) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn prom_open(name: *mut illumos_ddi_dki::c_char) -> illumos_ddi_dki::c_int;
+    pub fn prom_open(
+        name: *mut illumos_ddi_dki::c_char,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn prom_close(fd: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
@@ -20833,7 +21853,10 @@ extern "C" {
     pub fn prom_printf(fmt: *const illumos_ddi_dki::c_char, ...);
 }
 extern "C" {
-    pub fn prom_vprintf(fmt: *const illumos_ddi_dki::c_char, adx: *mut __va_list_tag);
+    pub fn prom_vprintf(
+        fmt: *const illumos_ddi_dki::c_char,
+        adx: *mut __va_list_tag,
+    );
 }
 extern "C" {
     pub fn prom_sprintf(
@@ -20850,13 +21873,18 @@ extern "C" {
     ) -> *mut illumos_ddi_dki::c_char;
 }
 extern "C" {
-    pub fn prom_findnode_byname(id: pnode_t, name: *mut illumos_ddi_dki::c_char) -> pnode_t;
+    pub fn prom_findnode_byname(
+        id: pnode_t,
+        name: *mut illumos_ddi_dki::c_char,
+    ) -> pnode_t;
 }
 extern "C" {
     pub fn prom_get_extend_name() -> *mut illumos_ddi_dki::c_char;
 }
 extern "C" {
-    pub fn prom_devreset(arg1: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn prom_devreset(
+        arg1: illumos_ddi_dki::c_int,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub static mut OpenCount: illumos_ddi_dki::c_int;
@@ -20917,7 +21945,10 @@ extern "C" {
     ) -> *mut ill_t;
 }
 extern "C" {
-    pub fn ill_next(arg1: *mut ill_walk_context_t, arg2: *mut ill_t) -> *mut ill_t;
+    pub fn ill_next(
+        arg1: *mut ill_walk_context_t,
+        arg2: *mut ill_t,
+    ) -> *mut ill_t;
 }
 extern "C" {
     pub fn ill_frag_timer_start(arg1: *mut ill_t);
@@ -20941,7 +21972,11 @@ extern "C" {
     pub fn ip_dlnotify_alloc(arg1: uint_t, arg2: uint_t) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn ip_dlnotify_alloc2(arg1: uint_t, arg2: uint_t, arg3: uint_t) -> *mut mblk_t;
+    pub fn ip_dlnotify_alloc2(
+        arg1: uint_t,
+        arg2: uint_t,
+        arg3: uint_t,
+    ) -> *mut mblk_t;
 }
 extern "C" {
     pub fn ip_dot_addr(
@@ -20958,7 +21993,10 @@ extern "C" {
     ) -> *const illumos_ddi_dki::c_char;
 }
 extern "C" {
-    pub fn ip_lwput(arg1: *mut queue_t, arg2: *mut mblk_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_lwput(
+        arg1: *mut queue_t,
+        arg2: *mut mblk_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn icmp_err_rate_limit(arg1: *mut ip_stack_t) -> boolean_t;
@@ -20971,13 +22009,24 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn icmp_inbound_v4(arg1: *mut mblk_t, arg2: *mut ip_recv_attr_t) -> *mut mblk_t;
+    pub fn icmp_inbound_v4(
+        arg1: *mut mblk_t,
+        arg2: *mut ip_recv_attr_t,
+    ) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn icmp_time_exceeded(arg1: *mut mblk_t, arg2: u8, arg3: *mut ip_recv_attr_t);
+    pub fn icmp_time_exceeded(
+        arg1: *mut mblk_t,
+        arg2: u8,
+        arg3: *mut ip_recv_attr_t,
+    );
 }
 extern "C" {
-    pub fn icmp_unreachable(arg1: *mut mblk_t, arg2: u8, arg3: *mut ip_recv_attr_t);
+    pub fn icmp_unreachable(
+        arg1: *mut mblk_t,
+        arg2: u8,
+        arg3: *mut ip_recv_attr_t,
+    );
 }
 extern "C" {
     pub fn ip_ipsec_policy_inherit(
@@ -20994,7 +22043,11 @@ extern "C" {
     ) -> *mut illumos_ddi_dki::c_void;
 }
 extern "C" {
-    pub fn ip_setl2src(arg1: *mut mblk_t, arg2: *mut ip_recv_attr_t, arg3: *mut ill_t);
+    pub fn ip_setl2src(
+        arg1: *mut mblk_t,
+        arg2: *mut ip_recv_attr_t,
+        arg3: *mut ill_t,
+    );
 }
 extern "C" {
     pub fn ip_check_and_align_header(
@@ -21023,10 +22076,17 @@ extern "C" {
     ) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn ip_fix_dbref(arg1: *mut mblk_t, arg2: *mut ip_recv_attr_t) -> *mut mblk_t;
+    pub fn ip_fix_dbref(
+        arg1: *mut mblk_t,
+        arg2: *mut ip_recv_attr_t,
+    ) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn ip_cksum(arg1: *mut mblk_t, arg2: illumos_ddi_dki::c_int, arg3: u32) -> uint_t;
+    pub fn ip_cksum(
+        arg1: *mut mblk_t,
+        arg2: illumos_ddi_dki::c_int,
+        arg3: u32,
+    ) -> uint_t;
 }
 extern "C" {
     pub fn ip_close(
@@ -21087,7 +22147,11 @@ extern "C" {
     pub fn ip_ire_init(arg1: *mut ip_stack_t);
 }
 extern "C" {
-    pub fn ip_mdata_to_mhi(arg1: *mut ill_t, arg2: *mut mblk_t, arg3: *mut mac_header_info_s);
+    pub fn ip_mdata_to_mhi(
+        arg1: *mut ill_t,
+        arg2: *mut mblk_t,
+        arg3: *mut mac_header_info_s,
+    );
 }
 extern "C" {
     pub fn ip_openv4(
@@ -21118,7 +22182,10 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn ip_rput(arg1: *mut queue_t, arg2: *mut mblk_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_rput(
+        arg1: *mut queue_t,
+        arg2: *mut mblk_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ip_input(
@@ -21230,10 +22297,18 @@ extern "C" {
     pub fn ip_input_post_ipsec(arg1: *mut mblk_t, arg2: *mut ip_recv_attr_t);
 }
 extern "C" {
-    pub fn ip_fanout_v4(arg1: *mut mblk_t, arg2: *mut ipha_t, arg3: *mut ip_recv_attr_t);
+    pub fn ip_fanout_v4(
+        arg1: *mut mblk_t,
+        arg2: *mut ipha_t,
+        arg3: *mut ip_recv_attr_t,
+    );
 }
 extern "C" {
-    pub fn ip_fanout_v6(arg1: *mut mblk_t, arg2: *mut ip6_t, arg3: *mut ip_recv_attr_t);
+    pub fn ip_fanout_v6(
+        arg1: *mut mblk_t,
+        arg2: *mut ip6_t,
+        arg3: *mut ip_recv_attr_t,
+    );
 }
 extern "C" {
     pub fn ip_fanout_proto_conn(
@@ -21245,7 +22320,11 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn ip_fanout_proto_v4(arg1: *mut mblk_t, arg2: *mut ipha_t, arg3: *mut ip_recv_attr_t);
+    pub fn ip_fanout_proto_v4(
+        arg1: *mut mblk_t,
+        arg2: *mut ipha_t,
+        arg3: *mut ip_recv_attr_t,
+    );
 }
 extern "C" {
     pub fn ip_fanout_send_icmp_v4(
@@ -21274,10 +22353,18 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn zero_spi_check(arg1: *mut mblk_t, arg2: *mut ip_recv_attr_t) -> *mut mblk_t;
+    pub fn zero_spi_check(
+        arg1: *mut mblk_t,
+        arg2: *mut ip_recv_attr_t,
+    ) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn ip_build_hdrs_v4(arg1: *mut uchar_t, arg2: uint_t, arg3: *const ip_pkt_t, arg4: u8);
+    pub fn ip_build_hdrs_v4(
+        arg1: *mut uchar_t,
+        arg2: uint_t,
+        arg3: *const ip_pkt_t,
+        arg4: u8,
+    );
 }
 extern "C" {
     pub fn ip_find_hdr_v4(
@@ -21287,7 +22374,9 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn ip_total_hdrs_len_v4(arg1: *const ip_pkt_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_total_hdrs_len_v4(
+        arg1: *const ip_pkt_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ip_accept_tcp(
@@ -21306,7 +22395,10 @@ extern "C" {
     pub fn ip_rput_notdata(arg1: *mut ill_t, arg2: *mut mblk_t);
 }
 extern "C" {
-    pub fn ip_mib2_add_ip_stats(arg1: *mut mib2_ipIfStatsEntry_t, arg2: *mut mib2_ipIfStatsEntry_t);
+    pub fn ip_mib2_add_ip_stats(
+        arg1: *mut mib2_ipIfStatsEntry_t,
+        arg2: *mut mib2_ipIfStatsEntry_t,
+    );
 }
 extern "C" {
     pub fn ip_mib2_add_icmp6_stats(
@@ -21360,8 +22452,10 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn ip_output_simple(arg1: *mut mblk_t, arg2: *mut ip_xmit_attr_t)
-        -> illumos_ddi_dki::c_int;
+    pub fn ip_output_simple(
+        arg1: *mut mblk_t,
+        arg2: *mut ip_xmit_attr_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ip_output_simple_v4(
@@ -21387,25 +22481,42 @@ extern "C" {
     pub fn ip_output_local_options(arg1: *mut ipha_t, arg2: *mut ip_stack_t);
 }
 extern "C" {
-    pub fn conn_get_ixa(arg1: *mut conn_t, arg2: boolean_t) -> *mut ip_xmit_attr_t;
+    pub fn conn_get_ixa(
+        arg1: *mut conn_t,
+        arg2: boolean_t,
+    ) -> *mut ip_xmit_attr_t;
 }
 extern "C" {
-    pub fn conn_get_ixa_tryhard(arg1: *mut conn_t, arg2: boolean_t) -> *mut ip_xmit_attr_t;
+    pub fn conn_get_ixa_tryhard(
+        arg1: *mut conn_t,
+        arg2: boolean_t,
+    ) -> *mut ip_xmit_attr_t;
 }
 extern "C" {
-    pub fn conn_replace_ixa(arg1: *mut conn_t, arg2: *mut ip_xmit_attr_t) -> *mut ip_xmit_attr_t;
+    pub fn conn_replace_ixa(
+        arg1: *mut conn_t,
+        arg2: *mut ip_xmit_attr_t,
+    ) -> *mut ip_xmit_attr_t;
 }
 extern "C" {
     pub fn conn_get_ixa_exclusive(arg1: *mut conn_t) -> *mut ip_xmit_attr_t;
 }
 extern "C" {
-    pub fn ip_xmit_attr_duplicate(arg1: *mut ip_xmit_attr_t) -> *mut ip_xmit_attr_t;
+    pub fn ip_xmit_attr_duplicate(
+        arg1: *mut ip_xmit_attr_t,
+    ) -> *mut ip_xmit_attr_t;
 }
 extern "C" {
-    pub fn ip_xmit_attr_replace_tsl(arg1: *mut ip_xmit_attr_t, arg2: *mut ts_label_t);
+    pub fn ip_xmit_attr_replace_tsl(
+        arg1: *mut ip_xmit_attr_t,
+        arg2: *mut ts_label_t,
+    );
 }
 extern "C" {
-    pub fn ip_xmit_attr_restore_tsl(arg1: *mut ip_xmit_attr_t, arg2: *mut cred_t);
+    pub fn ip_xmit_attr_restore_tsl(
+        arg1: *mut ip_xmit_attr_t,
+        arg2: *mut cred_t,
+    );
 }
 extern "C" {
     pub fn ip_recv_attr_replace_label(
@@ -21420,7 +22531,10 @@ extern "C" {
     pub fn ixa_refrele(arg1: *mut ip_xmit_attr_t);
 }
 extern "C" {
-    pub fn ixa_check_drain_insert(arg1: *mut conn_t, arg2: *mut ip_xmit_attr_t) -> boolean_t;
+    pub fn ixa_check_drain_insert(
+        arg1: *mut conn_t,
+        arg2: *mut ip_xmit_attr_t,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn ixa_cleanup(arg1: *mut ip_xmit_attr_t);
@@ -21432,7 +22546,10 @@ extern "C" {
     pub fn ixa_safe_copy(arg1: *mut ip_xmit_attr_t, arg2: *mut ip_xmit_attr_t);
 }
 extern "C" {
-    pub fn conn_ip_output(arg1: *mut mblk_t, arg2: *mut ip_xmit_attr_t) -> illumos_ddi_dki::c_int;
+    pub fn conn_ip_output(
+        arg1: *mut mblk_t,
+        arg2: *mut ip_xmit_attr_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ip_output_verify_local(arg1: *mut ip_xmit_attr_t) -> boolean_t;
@@ -21466,10 +22583,16 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn conn_same_as_last_v4(arg1: *mut conn_t, arg2: *mut sin_t) -> boolean_t;
+    pub fn conn_same_as_last_v4(
+        arg1: *mut conn_t,
+        arg2: *mut sin_t,
+    ) -> boolean_t;
 }
 extern "C" {
-    pub fn conn_same_as_last_v6(arg1: *mut conn_t, arg2: *mut sin6_t) -> boolean_t;
+    pub fn conn_same_as_last_v6(
+        arg1: *mut conn_t,
+        arg2: *mut sin6_t,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn conn_update_label(
@@ -21549,7 +22672,11 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn conn_connect(arg1: *mut conn_t, arg2: *mut iulp_t, arg3: u32) -> illumos_ddi_dki::c_int;
+    pub fn conn_connect(
+        arg1: *mut conn_t,
+        arg2: *mut iulp_t,
+        arg3: u32,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ip_attr_connect(
@@ -21565,10 +22692,16 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn conn_inherit_parent(arg1: *mut conn_t, arg2: *mut conn_t) -> illumos_ddi_dki::c_int;
+    pub fn conn_inherit_parent(
+        arg1: *mut conn_t,
+        arg2: *mut conn_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn conn_ixa_cleanup(connp: *mut conn_t, arg: *mut illumos_ddi_dki::c_void);
+    pub fn conn_ixa_cleanup(
+        connp: *mut conn_t,
+        arg: *mut illumos_ddi_dki::c_void,
+    );
 }
 extern "C" {
     pub fn conn_wantpacket(
@@ -21581,10 +22714,14 @@ extern "C" {
     pub fn ip_type_v4(arg1: ipaddr_t, arg2: *mut ip_stack_t) -> uint_t;
 }
 extern "C" {
-    pub fn ip_type_v6(arg1: *const in6_addr_t, arg2: *mut ip_stack_t) -> uint_t;
+    pub fn ip_type_v6(arg1: *const in6_addr_t, arg2: *mut ip_stack_t)
+        -> uint_t;
 }
 extern "C" {
-    pub fn ip_wput_nondata(arg1: *mut queue_t, arg2: *mut mblk_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_wput_nondata(
+        arg1: *mut queue_t,
+        arg2: *mut mblk_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ip_wsrv(arg1: *mut queue_t) -> illumos_ddi_dki::c_int;
@@ -21596,13 +22733,22 @@ extern "C" {
     ) -> *mut illumos_ddi_dki::c_char;
 }
 extern "C" {
-    pub fn ip_local_addr_ok_v6(arg1: *const in6_addr_t, arg2: *const in6_addr_t) -> boolean_t;
+    pub fn ip_local_addr_ok_v6(
+        arg1: *const in6_addr_t,
+        arg2: *const in6_addr_t,
+    ) -> boolean_t;
 }
 extern "C" {
-    pub fn ip_remote_addr_ok_v6(arg1: *const in6_addr_t, arg2: *const in6_addr_t) -> boolean_t;
+    pub fn ip_remote_addr_ok_v6(
+        arg1: *const in6_addr_t,
+        arg2: *const in6_addr_t,
+    ) -> boolean_t;
 }
 extern "C" {
-    pub fn ip_massage_options(arg1: *mut ipha_t, arg2: *mut netstack_t) -> ipaddr_t;
+    pub fn ip_massage_options(
+        arg1: *mut ipha_t,
+        arg2: *mut netstack_t,
+    ) -> ipaddr_t;
 }
 extern "C" {
     pub fn ip_net_mask(arg1: ipaddr_t) -> ipaddr_t;
@@ -21659,7 +22805,10 @@ extern "C" {
     pub fn ipmp_illgrp_destroy(arg1: *mut ipmp_illgrp_t);
 }
 extern "C" {
-    pub fn ipmp_illgrp_add_ipif(arg1: *mut ipmp_illgrp_t, arg2: *mut ipif_t) -> *mut ill_t;
+    pub fn ipmp_illgrp_add_ipif(
+        arg1: *mut ipmp_illgrp_t,
+        arg2: *mut ipif_t,
+    ) -> *mut ill_t;
 }
 extern "C" {
     pub fn ipmp_illgrp_del_ipif(arg1: *mut ipmp_illgrp_t, arg2: *mut ipif_t);
@@ -21690,7 +22839,10 @@ extern "C" {
     ) -> *mut ipmp_arpent_t;
 }
 extern "C" {
-    pub fn ipmp_illgrp_destroy_arpent(arg1: *mut ipmp_illgrp_t, arg2: *mut ipmp_arpent_t);
+    pub fn ipmp_illgrp_destroy_arpent(
+        arg1: *mut ipmp_illgrp_t,
+        arg2: *mut ipmp_arpent_t,
+    );
 }
 extern "C" {
     pub fn ipmp_illgrp_lookup_arpent(
@@ -21702,7 +22854,10 @@ extern "C" {
     pub fn ipmp_illgrp_refresh_arpent(arg1: *mut ipmp_illgrp_t);
 }
 extern "C" {
-    pub fn ipmp_illgrp_mark_arpent(arg1: *mut ipmp_illgrp_t, arg2: *mut ipmp_arpent_t);
+    pub fn ipmp_illgrp_mark_arpent(
+        arg1: *mut ipmp_illgrp_t,
+        arg2: *mut ipmp_arpent_t,
+    );
 }
 extern "C" {
     pub fn ipmp_illgrp_find_ill(
@@ -21712,10 +22867,15 @@ extern "C" {
     ) -> *mut ill_t;
 }
 extern "C" {
-    pub fn ipmp_illgrp_link_grp(arg1: *mut ipmp_illgrp_t, arg2: *mut ipmp_grp_t);
+    pub fn ipmp_illgrp_link_grp(
+        arg1: *mut ipmp_illgrp_t,
+        arg2: *mut ipmp_grp_t,
+    );
 }
 extern "C" {
-    pub fn ipmp_illgrp_unlink_grp(arg1: *mut ipmp_illgrp_t) -> illumos_ddi_dki::c_int;
+    pub fn ipmp_illgrp_unlink_grp(
+        arg1: *mut ipmp_illgrp_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ipmp_ill_get_ipmp_ifindex(arg1: *const ill_t) -> uint_t;
@@ -21730,7 +22890,10 @@ extern "C" {
     pub fn ipmp_ill_hold_ipmp_ill(arg1: *mut ill_t) -> *mut ill_t;
 }
 extern "C" {
-    pub fn ipmp_ill_hold_xmit_ill(arg1: *mut ill_t, arg2: boolean_t) -> *mut ill_t;
+    pub fn ipmp_ill_hold_xmit_ill(
+        arg1: *mut ill_t,
+        arg2: boolean_t,
+    ) -> *mut ill_t;
 }
 extern "C" {
     pub fn ipmp_ill_is_active(arg1: *mut ill_t) -> boolean_t;
@@ -21760,7 +22923,10 @@ extern "C" {
     pub fn ipmp_ipif_is_stubaddr(arg1: *const ipif_t) -> boolean_t;
 }
 extern "C" {
-    pub fn ipmp_packet_is_probe(arg1: *mut mblk_t, arg2: *mut ill_t) -> boolean_t;
+    pub fn ipmp_packet_is_probe(
+        arg1: *mut mblk_t,
+        arg2: *mut ill_t,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn ipmp_ncec_delete_nce(arg1: *mut ncec_t);
@@ -21799,7 +22965,9 @@ extern "C" {
     ) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn ipsec_out_extra_length(arg1: *mut ip_xmit_attr_t) -> illumos_ddi_dki::c_int;
+    pub fn ipsec_out_extra_length(
+        arg1: *mut ip_xmit_attr_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ipsec_out_process(
@@ -21814,7 +22982,11 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn ipsec_out_to_in(arg1: *mut ip_xmit_attr_t, ill: *mut ill_t, arg2: *mut ip_recv_attr_t);
+    pub fn ipsec_out_to_in(
+        arg1: *mut ip_xmit_attr_t,
+        ill: *mut ill_t,
+        arg2: *mut ip_recv_attr_t,
+    );
 }
 extern "C" {
     pub fn ire_cleanup(arg1: *mut ire_t);
@@ -21865,7 +23037,10 @@ extern "C" {
     pub fn ipoptp_first(arg1: *mut ipoptp_t, arg2: *mut ipha_t) -> u8;
 }
 extern "C" {
-    pub fn ip_opt_get_user(arg1: *mut conn_t, arg2: *mut uchar_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_opt_get_user(
+        arg1: *mut conn_t,
+        arg2: *mut uchar_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ipsec_req_from_conn(
@@ -21947,7 +23122,10 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn ipsq_pending_mp_cleanup(arg1: *mut ill_t, arg2: *mut conn_t) -> boolean_t;
+    pub fn ipsq_pending_mp_cleanup(
+        arg1: *mut ill_t,
+        arg2: *mut conn_t,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn conn_ioctl_cleanup(arg1: *mut conn_t);
@@ -22115,10 +23293,14 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn ip_cgtp_filter_unregister(arg1: netstackid_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_cgtp_filter_unregister(
+        arg1: netstackid_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn ip_cgtp_filter_is_registered(arg1: netstackid_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_cgtp_filter_is_registered(
+        arg1: netstackid_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 pub const ip_ring_state_t_RR_FREE: ip_ring_state_t = 0;
 pub const ip_ring_state_t_RR_SQUEUE_UNBOUND: ip_ring_state_t = 1;
@@ -22126,10 +23308,13 @@ pub const ip_ring_state_t_RR_SQUEUE_BIND_INPROG: ip_ring_state_t = 2;
 pub const ip_ring_state_t_RR_SQUEUE_BOUND: ip_ring_state_t = 3;
 pub const ip_ring_state_t_RR_FREE_INPROG: ip_ring_state_t = 4;
 pub type ip_ring_state_t = illumos_ddi_dki::c_uint;
-pub type ip_mac_intr_disable_t =
-    ::core::option::Option<unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void) -> boolean_t>;
+pub type ip_mac_intr_disable_t = ::core::option::Option<
+    unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void) -> boolean_t,
+>;
 pub type ip_mac_intr_enable_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void) -> illumos_ddi_dki::c_int,
+    unsafe extern "C" fn(
+        arg1: *mut illumos_ddi_dki::c_void,
+    ) -> illumos_ddi_dki::c_int,
 >;
 pub type ip_dld_tx_t = ::core::option::Option<
     unsafe extern "C" fn(
@@ -22140,7 +23325,10 @@ pub type ip_dld_tx_t = ::core::option::Option<
     ) -> ip_mac_tx_cookie_t,
 >;
 pub type ip_flow_enable_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void, arg2: ip_mac_tx_cookie_t),
+    unsafe extern "C" fn(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: ip_mac_tx_cookie_t,
+    ),
 >;
 pub type ip_dld_callb_t = ::core::option::Option<
     unsafe extern "C" fn(
@@ -22150,7 +23338,10 @@ pub type ip_dld_callb_t = ::core::option::Option<
     ) -> *mut illumos_ddi_dki::c_void,
 >;
 pub type ip_dld_fctl_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void, arg2: ip_mac_tx_cookie_t) -> boolean_t,
+    unsafe extern "C" fn(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: ip_mac_tx_cookie_t,
+    ) -> boolean_t,
 >;
 pub type ip_capab_func_t = ::core::option::Option<
     unsafe extern "C" fn(
@@ -22161,7 +23352,10 @@ pub type ip_capab_func_t = ::core::option::Option<
     ) -> illumos_ddi_dki::c_int,
 >;
 pub type ip_mac_rx_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void, arg2: size_t) -> *mut mblk_t,
+    unsafe extern "C" fn(
+        arg1: *mut illumos_ddi_dki::c_void,
+        arg2: size_t,
+    ) -> *mut mblk_t,
 >;
 pub type ip_accept_t = ::core::option::Option<
     unsafe extern "C" fn(
@@ -22215,7 +23409,9 @@ extern "C" {
     pub static mut ip_squeue_fanout: boolean_t;
 }
 extern "C" {
-    pub fn ip_squeue_init(arg1: ::core::option::Option<unsafe extern "C" fn(arg1: *mut squeue_t)>);
+    pub fn ip_squeue_init(
+        arg1: ::core::option::Option<unsafe extern "C" fn(arg1: *mut squeue_t)>,
+    );
 }
 extern "C" {
     pub fn ip_squeue_random(arg1: uint_t) -> *mut squeue_t;
@@ -22227,7 +23423,10 @@ extern "C" {
     pub fn ip_squeue_getfree(arg1: pri_t) -> *mut squeue_t;
 }
 extern "C" {
-    pub fn ip_squeue_cpu_move(arg1: *mut squeue_t, arg2: processorid_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_squeue_cpu_move(
+        arg1: *mut squeue_t,
+        arg2: processorid_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ip_squeue_add_ring(
@@ -22236,7 +23435,11 @@ extern "C" {
     ) -> *mut illumos_ddi_dki::c_void;
 }
 extern "C" {
-    pub fn ip_squeue_bind_ring(arg1: *mut ill_t, arg2: *mut ill_rx_ring_t, arg3: processorid_t);
+    pub fn ip_squeue_bind_ring(
+        arg1: *mut ill_t,
+        arg2: *mut ill_rx_ring_t,
+        arg3: processorid_t,
+    );
 }
 extern "C" {
     pub fn ip_squeue_clean_ring(arg1: *mut ill_t, arg2: *mut ill_rx_ring_t);
@@ -22251,10 +23454,16 @@ extern "C" {
     pub fn ip_squeue_clean_all(arg1: *mut ill_t);
 }
 extern "C" {
-    pub fn ip_source_routed(arg1: *mut ipha_t, arg2: *mut ip_stack_t) -> boolean_t;
+    pub fn ip_source_routed(
+        arg1: *mut ipha_t,
+        arg2: *mut ip_stack_t,
+    ) -> boolean_t;
 }
 extern "C" {
-    pub fn tcp_wput(arg1: *mut queue_t, arg2: *mut mblk_t) -> illumos_ddi_dki::c_int;
+    pub fn tcp_wput(
+        arg1: *mut queue_t,
+        arg2: *mut mblk_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ip_fill_mtuinfo(
@@ -22264,7 +23473,10 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn ipobs_register_hook(arg1: *mut netstack_t, arg2: pfv_t) -> *mut hook_t;
+    pub fn ipobs_register_hook(
+        arg1: *mut netstack_t,
+        arg2: pfv_t,
+    ) -> *mut hook_t;
 }
 extern "C" {
     pub fn ipobs_unregister_hook(arg1: *mut netstack_t, arg2: *mut hook_t);
@@ -22313,7 +23525,11 @@ extern "C" {
     ) -> *mut dce_t;
 }
 extern "C" {
-    pub fn dce_lookup_v4(arg1: ipaddr_t, arg2: *mut ip_stack_t, arg3: *mut uint_t) -> *mut dce_t;
+    pub fn dce_lookup_v4(
+        arg1: ipaddr_t,
+        arg2: *mut ip_stack_t,
+        arg3: *mut uint_t,
+    ) -> *mut dce_t;
 }
 extern "C" {
     pub fn dce_lookup_v6(
@@ -22324,7 +23540,10 @@ extern "C" {
     ) -> *mut dce_t;
 }
 extern "C" {
-    pub fn dce_lookup_and_add_v4(arg1: ipaddr_t, arg2: *mut ip_stack_t) -> *mut dce_t;
+    pub fn dce_lookup_and_add_v4(
+        arg1: ipaddr_t,
+        arg2: *mut ip_stack_t,
+    ) -> *mut dce_t;
 }
 extern "C" {
     pub fn dce_lookup_and_add_v6(
@@ -22360,7 +23579,10 @@ extern "C" {
     pub fn dce_increment_generation(arg1: *mut dce_t);
 }
 extern "C" {
-    pub fn dce_increment_all_generations(arg1: boolean_t, arg2: *mut ip_stack_t);
+    pub fn dce_increment_all_generations(
+        arg1: boolean_t,
+        arg2: *mut ip_stack_t,
+    );
 }
 extern "C" {
     pub fn dce_refrele(arg1: *mut dce_t);
@@ -22409,13 +23631,19 @@ extern "C" {
     ) -> boolean_t;
 }
 extern "C" {
-    pub fn ip_verify_ire(arg1: *mut mblk_t, arg2: *mut ip_xmit_attr_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_verify_ire(
+        arg1: *mut mblk_t,
+        arg2: *mut ip_xmit_attr_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ip_xmit_attr_to_mblk(arg1: *mut ip_xmit_attr_t) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn ip_xmit_attr_from_mblk(arg1: *mut mblk_t, arg2: *mut ip_xmit_attr_t) -> boolean_t;
+    pub fn ip_xmit_attr_from_mblk(
+        arg1: *mut mblk_t,
+        arg2: *mut ip_xmit_attr_t,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn ip_xmit_attr_free_mblk(arg1: *mut mblk_t) -> *mut mblk_t;
@@ -22424,7 +23652,10 @@ extern "C" {
     pub fn ip_recv_attr_to_mblk(arg1: *mut ip_recv_attr_t) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn ip_recv_attr_from_mblk(arg1: *mut mblk_t, arg2: *mut ip_recv_attr_t) -> boolean_t;
+    pub fn ip_recv_attr_from_mblk(
+        arg1: *mut mblk_t,
+        arg2: *mut ip_recv_attr_t,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn ip_recv_attr_free_mblk(arg1: *mut mblk_t) -> *mut mblk_t;
@@ -22635,7 +23866,10 @@ pub struct ip2mac {
 pub type ip2mac_t = ip2mac;
 pub type ip2mac_id_t = *mut illumos_ddi_dki::c_void;
 pub type ip2mac_callback_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut ip2mac_t, arg2: *mut illumos_ddi_dki::c_void),
+    unsafe extern "C" fn(
+        arg1: *mut ip2mac_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+    ),
 >;
 extern "C" {
     pub fn ip2mac(
@@ -22647,7 +23881,10 @@ extern "C" {
     ) -> ip2mac_id_t;
 }
 extern "C" {
-    pub fn ip2mac_cancel(arg1: ip2mac_id_t, arg2: zoneid_t) -> illumos_ddi_dki::c_int;
+    pub fn ip2mac_cancel(
+        arg1: ip2mac_id_t,
+        arg2: zoneid_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -22730,7 +23967,10 @@ extern "C" {
     pub fn ncec_delete(arg1: *mut ncec_t);
 }
 extern "C" {
-    pub fn ncec_delete_per_ill(arg1: *mut ncec_t, arg2: *mut illumos_ddi_dki::c_void);
+    pub fn ncec_delete_per_ill(
+        arg1: *mut ncec_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+    );
 }
 extern "C" {
     pub fn nce_fastpath_update(arg1: *mut ill_t, arg2: *mut mblk_t);
@@ -22749,16 +23989,28 @@ extern "C" {
     pub fn ndp_input(arg1: *mut mblk_t, arg2: *mut ip_recv_attr_t);
 }
 extern "C" {
-    pub fn ncec_lookup_illgrp_v6(arg1: *mut ill_t, arg2: *const in6_addr_t) -> *mut ncec_t;
+    pub fn ncec_lookup_illgrp_v6(
+        arg1: *mut ill_t,
+        arg2: *const in6_addr_t,
+    ) -> *mut ncec_t;
 }
 extern "C" {
-    pub fn ncec_lookup_illgrp_v4(arg1: *mut ill_t, arg2: *const in_addr_t) -> *mut ncec_t;
+    pub fn ncec_lookup_illgrp_v4(
+        arg1: *mut ill_t,
+        arg2: *const in_addr_t,
+    ) -> *mut ncec_t;
 }
 extern "C" {
-    pub fn nce_lookup_v4(arg1: *mut ill_t, arg2: *const in_addr_t) -> *mut nce_t;
+    pub fn nce_lookup_v4(
+        arg1: *mut ill_t,
+        arg2: *const in_addr_t,
+    ) -> *mut nce_t;
 }
 extern "C" {
-    pub fn nce_lookup_v6(arg1: *mut ill_t, arg2: *const in6_addr_t) -> *mut nce_t;
+    pub fn nce_lookup_v6(
+        arg1: *mut ill_t,
+        arg2: *const in6_addr_t,
+    ) -> *mut nce_t;
 }
 extern "C" {
     pub fn nce_make_unreachable(arg1: *mut ncec_t);
@@ -22780,16 +24032,30 @@ extern "C" {
     ) -> *mut nce_t;
 }
 extern "C" {
-    pub fn nce_process(arg1: *mut ncec_t, arg2: *mut uchar_t, arg3: u32, arg4: boolean_t);
+    pub fn nce_process(
+        arg1: *mut ncec_t,
+        arg2: *mut uchar_t,
+        arg3: u32,
+        arg4: boolean_t,
+    );
 }
 extern "C" {
-    pub fn ndp_query(arg1: *mut ill_t, arg2: *mut lif_nd_req_t) -> illumos_ddi_dki::c_int;
+    pub fn ndp_query(
+        arg1: *mut ill_t,
+        arg2: *mut lif_nd_req_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn ndp_sioc_update(arg1: *mut ill_t, arg2: *mut lif_nd_req_t) -> illumos_ddi_dki::c_int;
+    pub fn ndp_sioc_update(
+        arg1: *mut ill_t,
+        arg2: *mut lif_nd_req_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn ndp_verify_optlen(arg1: *mut nd_opt_hdr_t, arg2: illumos_ddi_dki::c_int) -> boolean_t;
+    pub fn ndp_verify_optlen(
+        arg1: *mut nd_opt_hdr_t,
+        arg2: illumos_ddi_dki::c_int,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn nce_timer(arg1: *mut illumos_ddi_dki::c_void);
@@ -22821,13 +24087,20 @@ extern "C" {
     pub fn arp_resolv_failed(arg1: *mut ncec_t);
 }
 extern "C" {
-    pub fn nce_fastpath_list_delete(arg1: *mut ill_t, arg2: *mut ncec_t, arg3: *mut list_t);
+    pub fn nce_fastpath_list_delete(
+        arg1: *mut ill_t,
+        arg2: *mut ncec_t,
+        arg3: *mut list_t,
+    );
 }
 extern "C" {
     pub fn nce_queue_mp(arg1: *mut ncec_t, arg2: *mut mblk_t, arg3: boolean_t);
 }
 extern "C" {
-    pub fn nce_update_hw_changed(arg1: *mut ncec_t, arg2: *mut illumos_ddi_dki::c_void);
+    pub fn nce_update_hw_changed(
+        arg1: *mut ncec_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+    );
 }
 extern "C" {
     pub fn nce_lookup_then_add_v6(
@@ -22852,13 +24125,20 @@ extern "C" {
     ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn nce_cmp_ll_addr(arg1: *const ncec_t, arg2: *const uchar_t, arg3: u32) -> boolean_t;
+    pub fn nce_cmp_ll_addr(
+        arg1: *const ncec_t,
+        arg2: *const uchar_t,
+        arg3: u32,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn nce_update(arg1: *mut ncec_t, arg2: u16, arg3: *mut uchar_t);
 }
 extern "C" {
-    pub fn nce_lookup_mapping(arg1: *mut ill_t, arg2: *const in6_addr_t) -> *mut nce_t;
+    pub fn nce_lookup_mapping(
+        arg1: *mut ill_t,
+        arg2: *const in6_addr_t,
+    ) -> *mut nce_t;
 }
 extern "C" {
     pub fn nce_restart_timer(arg1: *mut ncec_t, arg2: uint_t);
@@ -22879,7 +24159,11 @@ extern "C" {
     pub fn nce_resolv_ok(arg1: *mut ncec_t);
 }
 extern "C" {
-    pub fn ndp_solicit(arg1: *mut ncec_t, arg2: in6_addr_t, arg3: *mut ill_t) -> u32;
+    pub fn ndp_solicit(
+        arg1: *mut ncec_t,
+        arg2: in6_addr_t,
+        arg3: *mut ill_t,
+    ) -> u32;
 }
 extern "C" {
     pub fn ip_nce_conflict(
@@ -22914,7 +24198,11 @@ extern "C" {
     pub fn nce_flush(arg1: *mut ill_t, arg2: boolean_t);
 }
 extern "C" {
-    pub fn nce_walk(arg1: *mut ill_t, arg2: pfi_t, arg3: *mut illumos_ddi_dki::c_void);
+    pub fn nce_walk(
+        arg1: *mut ill_t,
+        arg2: pfi_t,
+        arg3: *mut illumos_ddi_dki::c_void,
+    );
 }
 extern "C" {
     pub fn ip_ndp_resolve(arg1: *mut ncec_s);
@@ -22945,7 +24233,10 @@ extern "C" {
     pub fn ip_plen_to_mask(arg1: uint_t) -> ipaddr_t;
 }
 extern "C" {
-    pub fn ip_plen_to_mask_v6(arg1: uint_t, arg2: *mut in6_addr_t) -> *mut in6_addr_t;
+    pub fn ip_plen_to_mask_v6(
+        arg1: uint_t,
+        arg2: *mut in6_addr_t,
+    ) -> *mut in6_addr_t;
 }
 extern "C" {
     pub fn ip_ire_advise(
@@ -22968,7 +24259,9 @@ extern "C" {
     pub fn ip_mask_to_plen(arg1: ipaddr_t) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
-    pub fn ip_mask_to_plen_v6(arg1: *const in6_addr_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_mask_to_plen_v6(
+        arg1: *const in6_addr_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ire_add(arg1: *mut ire_t) -> *mut ire_t;
@@ -22977,7 +24270,10 @@ extern "C" {
     pub fn ire_add_v6(arg1: *mut ire_t) -> *mut ire_t;
 }
 extern "C" {
-    pub fn ire_atomic_start(irb_ptr: *mut irb_t, ire: *mut ire_t) -> illumos_ddi_dki::c_int;
+    pub fn ire_atomic_start(
+        irb_ptr: *mut irb_t,
+        ire: *mut ire_t,
+    ) -> illumos_ddi_dki::c_int;
 }
 extern "C" {
     pub fn ire_atomic_end(irb_ptr: *mut irb_t, ire: *mut ire_t);
@@ -23011,7 +24307,11 @@ extern "C" {
     ) -> *mut ire_t;
 }
 extern "C" {
-    pub fn ire_lookup_bcast(arg1: *mut ill_t, arg2: ipaddr_t, arg3: zoneid_t) -> *mut ire_t;
+    pub fn ire_lookup_bcast(
+        arg1: *mut ill_t,
+        arg2: ipaddr_t,
+        arg3: zoneid_t,
+    ) -> *mut ire_t;
 }
 extern "C" {
     pub fn ire_init_v4(
@@ -23073,7 +24373,11 @@ extern "C" {
     pub fn ire_delete_v6(arg1: *mut ire_t);
 }
 extern "C" {
-    pub fn ire_dep_build(arg1: *mut *mut ire_t, arg2: *mut uint_t, arg3: uint_t) -> boolean_t;
+    pub fn ire_dep_build(
+        arg1: *mut *mut ire_t,
+        arg2: *mut uint_t,
+        arg3: uint_t,
+    ) -> boolean_t;
 }
 extern "C" {
     pub fn ire_dep_delete_if_clone(arg1: *mut ire_t);
@@ -23569,7 +24873,11 @@ extern "C" {
     pub fn ire_to_nce_pkt(arg1: *mut ire_t, arg2: *mut mblk_t) -> *mut nce_t;
 }
 extern "C" {
-    pub fn ire_to_nce(arg1: *mut ire_t, arg2: ipaddr_t, arg3: *const in6_addr_t) -> *mut nce_t;
+    pub fn ire_to_nce(
+        arg1: *mut ire_t,
+        arg2: ipaddr_t,
+        arg3: *const in6_addr_t,
+    ) -> *mut nce_t;
 }
 extern "C" {
     pub fn ip_xmit(
@@ -23674,7 +24982,11 @@ extern "C" {
     ) -> *mut ire_t;
 }
 extern "C" {
-    pub fn ire_walk(arg1: pfv_t, arg2: *mut illumos_ddi_dki::c_void, arg3: *mut ip_stack_t);
+    pub fn ire_walk(
+        arg1: pfv_t,
+        arg2: *mut illumos_ddi_dki::c_void,
+        arg3: *mut ip_stack_t,
+    );
 }
 extern "C" {
     pub fn ire_walk_ill(
@@ -23762,7 +25074,10 @@ extern "C" {
     pub fn ire_increment_generation(arg1: *mut ire_t);
 }
 extern "C" {
-    pub fn ire_increment_multicast_generation(arg1: *mut ip_stack_t, arg2: boolean_t);
+    pub fn ire_increment_multicast_generation(
+        arg1: *mut ip_stack_t,
+        arg2: boolean_t,
+    );
 }
 extern "C" {
     pub fn ire_rebind(arg1: *mut ire_t);

@@ -158,9 +158,7 @@ impl FromStr for Ipv4Cidr {
         let prefix = match prefix_s.parse::<u8>() {
             Ok(v) => v,
             Err(_) => {
-                return Err(IpError::MalformedPrefix(
-                    prefix_s.to_string(),
-                ));
+                return Err(IpError::MalformedPrefix(prefix_s.to_string()));
             }
         };
 
@@ -198,26 +196,17 @@ fn good_cidr() {
     let ip = "192.168.2.0".parse().unwrap();
     assert_eq!(
         Ipv4Cidr::new(ip, 24),
-        Ok(Ipv4Cidr {
-            ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-            prefix: 24
-        })
+        Ok(Ipv4Cidr { ip: Ipv4Addr { inner: [192, 168, 2, 0] }, prefix: 24 })
     );
 
     assert_eq!(
         "192.168.2.0/24".parse(),
-        Ok(Ipv4Cidr {
-            ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-            prefix: 24
-        })
+        Ok(Ipv4Cidr { ip: Ipv4Addr { inner: [192, 168, 2, 0] }, prefix: 24 })
     );
 
     assert_eq!(
         "192.168.2.9/24".parse(),
-        Ok(Ipv4Cidr {
-            ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-            prefix: 24
-        })
+        Ok(Ipv4Cidr { ip: Ipv4Addr { inner: [192, 168, 2, 0] }, prefix: 24 })
     );
 
     assert_eq!(
@@ -637,16 +626,11 @@ impl Ipv4Hdr {
 
     pub fn compute_hdr_csum(&mut self) {
         self.csum = [0; 2];
-        self.csum = HeaderChecksum::from(
-            Checksum::compute(&self.as_bytes())
-        ).bytes();
+        self.csum =
+            HeaderChecksum::from(Checksum::compute(&self.as_bytes())).bytes();
     }
 
-    pub fn compute_ulp_csum(
-        &self,
-        opt: UlpCsumOpt,
-        body: &[u8]
-    ) -> Checksum {
+    pub fn compute_ulp_csum(&self, opt: UlpCsumOpt, body: &[u8]) -> Checksum {
         match opt {
             UlpCsumOpt::Partial => todo!("implement partial csum"),
             UlpCsumOpt::Full => {

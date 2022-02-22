@@ -31,8 +31,7 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub fn to_errno(e: Error) -> c_int
-{
+pub fn to_errno(e: Error) -> c_int {
     match e {
         Error::DeserError(_) => ddi::EINVAL,
         Error::RespTooLong => ddi::ENOBUFS,
@@ -46,7 +45,9 @@ extern "C" {
 
 fn dtrace_probe_copy_out_resp<T: Debug + Serialize>(resp: &T) {
     let cstr = CString::new(format!("{:?}", resp)).unwrap();
-    unsafe { __dtrace_probe_copy__out__resp(cstr.as_ptr() as ddi::uintptr_t); }
+    unsafe {
+        __dtrace_probe_copy__out__resp(cstr.as_ptr() as ddi::uintptr_t);
+    }
 }
 
 /// An envelope for dealing with `Ioctl`. It contains all information
@@ -114,7 +115,7 @@ impl IoctlEnvelope {
     /// bytes.
     pub fn copy_out_resp<T, E>(
         &mut self,
-        val: &result::Result<T, E>
+        val: &result::Result<T, E>,
     ) -> Result<()>
     where
         E: CmdErr,
@@ -170,7 +171,7 @@ impl IoctlEnvelope {
         };
 
         if ret != 0 {
-                return Err(Error::FailedCopyin);
+            return Err(Error::FailedCopyin);
         }
 
         // Safety: We know the `Vec` has `req_len` capacity, and that

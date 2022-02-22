@@ -8,6 +8,7 @@ use structopt::StructOpt;
 use opte_core::ether::EtherAddr;
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::geneve;
+use opte_core::geneve::Vni;
 use opte_core::headers::IpAddr;
 use opte_core::ioctl::{self as api, AddPortReq, PortInfo};
 use opte_core::ip4::{Ipv4Addr, Ipv4Cidr};
@@ -21,7 +22,6 @@ use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
 use opteadm::OpteAdm;
-use opte_core::geneve::Vni;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, StructOpt)]
@@ -442,9 +442,10 @@ fn print_list_layers(resp: &api::ListLayersResp) {
 
 fn print_v2p(resp: &overlay::GetVirt2PhysResp) {
     println!("ipv4");
-    println!("{:<12} {:<20} {:<20} {:<10}",
-        "SOURCE", "DEST ETH", "DEST IP", "VNI");
-
+    println!(
+        "{:<12} {:<20} {:<20} {:<10}",
+        "SOURCE", "DEST ETH", "DEST IP", "VNI"
+    );
 
     for (src, dst) in &resp.ip4 {
         //XXX something about the Display impl for these types is interacting
@@ -452,18 +453,14 @@ fn print_v2p(resp: &overlay::GetVirt2PhysResp) {
         let v4 = std::net::Ipv4Addr::from(src.to_be_bytes());
         let v6 = std::net::Ipv6Addr::from(dst.ip.to_bytes());
         let eth = format!("{}", dst.ether);
-        println!("{:<12} {:<20} {:<20} {:<10}",
-            v4,
-            eth,
-            v6,
-            dst.vni.value(),
-        );
+        println!("{:<12} {:<20} {:<20} {:<10}", v4, eth, v6, dst.vni.value(),);
     }
 
     println!("ipv6");
-    println!("{:<12} {:<20} {:<20} {:<10}",
-        "SOURCE", "DEST ETH", "DEST IP", "VNI");
-
+    println!(
+        "{:<12} {:<20} {:<20} {:<10}",
+        "SOURCE", "DEST ETH", "DEST IP", "VNI"
+    );
 
     for (src, dst) in &resp.ip6 {
         //XXX something about the Display impl for these types is interacting
@@ -471,12 +468,7 @@ fn print_v2p(resp: &overlay::GetVirt2PhysResp) {
         let v6s = std::net::Ipv6Addr::from(src.to_bytes());
         let v6 = std::net::Ipv6Addr::from(dst.ip.to_bytes());
         let eth = format!("{}", dst.ether);
-        println!("{:<12} {:<20} {:<20} {:<10}",
-            v6s,
-            eth,
-            v6,
-            dst.vni.value(),
-        );
+        println!("{:<12} {:<20} {:<20} {:<10}", v6s, eth, v6, dst.vni.value(),);
     }
 }
 
@@ -612,7 +604,7 @@ fn main() {
             boundary_services_vni,
             vpc_vni,
             src_underlay_addr,
-            passthrough
+            passthrough,
         } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
             hdl.create_xde(
@@ -625,8 +617,9 @@ fn main() {
                 boundary_services_vni,
                 vpc_vni,
                 src_underlay_addr,
-                passthrough
-             ).unwrap();
+                passthrough,
+            )
+            .unwrap();
         }
 
         Command::XdeDelete { name } => {
@@ -654,11 +647,8 @@ fn main() {
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
-            let req = router::AddRouterEntryIpv4Req {
-                port_name: port,
-                dest,
-                target
-            };
+            let req =
+                router::AddRouterEntryIpv4Req { port_name: port, dest, target };
             hdl.add_router_entry_ip4(&req).unwrap();
         }
     }

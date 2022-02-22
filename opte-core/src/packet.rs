@@ -772,11 +772,10 @@ impl Packet<Initialized> {
         // still need to account for them as it changes the starting
         // position of the ULP.
         if hdr_len > IPV4_HDR_SZ {
-
             // NOTE(ry) this happens a few seconds after creating a vnic atop an
             // OPTE mac provider.
             //todo!("need to deal with IPv4 header options!!!");
-            return Err(ParseError::BadOuterIpLen{
+            return Err(ParseError::BadOuterIpLen {
                 expected: IPV4_HDR_SZ,
                 actual: hdr_len,
             });
@@ -832,7 +831,6 @@ impl Packet<Initialized> {
 
         Ok(())
     }
-
 
     fn parse_hg_arp<'a>(
         rdr: &mut PacketReader<'a, Initialized, ()>,
