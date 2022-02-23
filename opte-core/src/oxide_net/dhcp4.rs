@@ -13,14 +13,21 @@ use core::result::Result;
 
 #[cfg(all(not(feature = "std"), not(test)))]
 use alloc::sync::Arc;
+#[cfg(all(not(feature = "std"), not(test)))]
+use alloc::vec::Vec;
+
 #[cfg(any(feature = "std", test))]
 use std::sync::Arc;
+#[cfg(any(feature = "std", test))]
+use std::vec::Vec;
 
 use smoltcp::wire::{
     DhcpPacket, DhcpRepr, EthernetAddress, Ipv4Address
 };
 
-use crate::dhcp::{MessageType as DhcpMessageType};
+use crate::dhcp::{
+    ClasslessStaticRouteOpt, MessageType as DhcpMessageType, SubnetRouterPair
+};
 use crate::ether::{self, EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ};
 use crate::ip4::{
     self, Ipv4Addr, Ipv4Cidr, Ipv4Hdr, Ipv4Meta, IPV4_HDR_SZ, Protocol,
@@ -165,19 +172,35 @@ impl HairpinAction for Dhcp4Action {
             lease_duration: Some(86400),
         };
 
+        let reply_len = reply.buffer_len();
+
+        let island_net = Ipv4Cidr::new(self.guest_ip4, 32).unwrap();
+        let def_route = Ipv4Cidr::new(ip4::ANY_ADDR, 0).unwrap();
+        let csr_opt = ClasslessStaticRouteOpt::new(
+            SubnetRouterPair::new(island_net, ip4::ANY_ADDR),
+            Some(SubnetRouterPair::new(def_route, self.gw_ip4)),
+            None,
+        );
+
         // TODO This is temporary until I can add interface to Packet
         // to initialize a zero'd mblk of N bytes and then get a
         // direct mutable reference to the PacketSeg.
-        let mut tmp = vec![0; reply.buffer_len()];
+        let mut tmp = vec![0u8; reply_len];
         let mut dhcp = DhcpPacket::new_unchecked(&mut tmp);
         let _ = reply.emit(&mut dhcp).unwrap();
+
+        // Need to overwrite the End Option with Classless Static
+        // Route Option and then write new End Option marker.
+        assert_eq!(tmp.pop(), Some(255));
+        tmp.extend_from_slice(&csr_opt.encode());
+        tmp.push(255);
+        assert_eq!(tmp.len(), reply_len + csr_opt.encode_len() as usize);
 
         let mut udp = UdpHdr::from(&UdpMeta {
             src: 67,
             dst: 68,
         });
         udp.set_pay_len(reply.buffer_len() as u16);
-
 
         let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
             src: self.gw_ip4,
@@ -193,14 +216,13 @@ impl HairpinAction for Dhcp4Action {
             ether_type: ether::ETHER_TYPE_IPV4,
         });
 
-        let pkt = Packet::alloc(ETHER_HDR_SZ + IPV4_HDR_SZ + UDP_HDR_SZ +
-                                reply.buffer_len());
-        let mut wtr = PacketWriter::new(pkt, None);
-        let _ = wtr.write(&eth.as_bytes()).unwrap();
-        let _ = wtr.write(&ip4.as_bytes()).unwrap();
-        let _ = wtr.write(&udp.as_bytes()).unwrap();
-        let _ = wtr.write(&dhcp.into_inner()).unwrap();
-        Ok(wtr.finish())
+        let mut pkt_bytes = Vec::with_capacity(ETHER_HDR_SZ + IPV4_HDR_SZ +
+                                               UDP_HDR_SZ + tmp.len());
+        pkt_bytes.extend_from_slice(&eth.as_bytes());
+        pkt_bytes.extend_from_slice(&ip4.as_bytes());
+        pkt_bytes.extend_from_slice(&udp.as_bytes());
+        pkt_bytes.extend_from_slice(&tmp);
+        Ok(Packet::copy(&pkt_bytes))
     }
 }
 
