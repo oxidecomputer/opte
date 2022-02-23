@@ -86,7 +86,7 @@ sdt:opte::layer-process-return /this->af == AF_INET6/ {
 	printf("%-3s %-12s %s,%s:%u,%s:%u %s\n",
 	    this->dir, this->name, protos[this->flow->proto],
 	    inet_ntoa6(this->src_ip6), ntohs(this->flow->src_port),
-	    inet_ntoa6(this->dst_ip6), ntohs(this->flow->dst_port), res);
+	    inet_ntoa6(this->dst_ip6), ntohs(this->flow->dst_port), this->res);
 
 	num++;
 }
