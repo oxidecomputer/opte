@@ -131,9 +131,9 @@ impl HairpinAction for Dhcp4Action {
         _meta: &PacketMeta,
         rdr: &mut PacketReader<Parsed, ()>
     ) -> GenResult<Packet<Initialized>> {
-        let body = rdr.slice(rdr.seg_left()).unwrap();
+        let body = rdr.copy_remaining();
         // TODO Deal with failure.
-        let offer_pkt = DhcpPacket::new_checked(body).unwrap();
+        let offer_pkt = DhcpPacket::new_checked(&body).unwrap();
         // TODO Deal with failure.
         let offer = DhcpRepr::parse(&offer_pkt).unwrap();
 
