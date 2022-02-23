@@ -617,7 +617,6 @@ impl DataPredicate {
                     *mt
                 ));
                 let res = DhcpMessageType::from(dhcp.message_type) == *mt;
-                rdr.seek_back(bytes.len()).unwrap();
                 return res;
             }
 
