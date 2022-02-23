@@ -592,13 +592,29 @@ impl DataPredicate {
                 let bytes = rdr.slice(rdr.seg_left()).unwrap();
                 let pkt = match DhcpPacket::new_checked(bytes) {
                     Ok(v) => v,
-                    Err(_) => return false,
+                    Err(e) => {
+                        crate::err(
+                            format!("DhcpPacket::new_checked() failed: {:?}", e)
+                        );
+                        return false;
+                    }
                 };
                 let dhcp = match DhcpRepr::parse(&pkt) {
                     Ok(v) => v,
-                    Err(_) => return false,
+                    Err(e) => {
+                        crate::err(
+                            format!("DhcpRepr::parse() failed: {:?}", e)
+                        );
+
+                        return false;
+                    }
                 };
 
+                crate::dbg(format!(
+                    "{} == {}?",
+                    DhcpMessageType::from(dhcp.message_type),
+                    *mt
+                ));
                 let res = DhcpMessageType::from(dhcp.message_type) == *mt;
                 rdr.seek_back(bytes.len()).unwrap();
                 return res;
