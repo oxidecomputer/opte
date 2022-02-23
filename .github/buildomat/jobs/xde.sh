@@ -18,7 +18,7 @@ function header {
 cargo --version
 rustc --version
 
-cd opte-drv
+cd xde
 
 header "check style"
 ptime -m cargo +nightly fmt -- --check
