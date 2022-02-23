@@ -165,9 +165,27 @@ impl HairpinAction for Dhcp4Action {
             lease_duration: Some(86400),
         };
 
-        let pkt = Packet::alloc(ETHER_HDR_SZ + IPV4_HDR_SZ + UDP_HDR_SZ +
-                                reply.buffer_len());
-        let mut wtr = PacketWriter::new(pkt, None);
+        // TODO This is temporary until I can add interface to Packet
+        // to initialize a zero'd mblk of N bytes and then get a
+        // direct mutable reference to the PacketSeg.
+        let mut tmp = vec![0; reply.buffer_len()];
+        let mut dhcp = DhcpPacket::new_unchecked(&mut tmp);
+        let _ = reply.emit(&mut dhcp).unwrap();
+
+        let mut udp = UdpHdr::from(&UdpMeta {
+            src: 67,
+            dst: 68,
+        });
+        udp.set_pay_len(reply.buffer_len() as u16);
+
+
+        let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
+            src: self.gw_ip4,
+            dst: ip4::LOCAL_BROADCAST,
+            proto: Protocol::UDP,
+        });
+        ip4.set_total_len(ip4.hdr_len() as u16 + udp.total_len());
+        ip4.compute_hdr_csum();
 
         let eth = EtherHdr::from(&EtherMeta {
             dst: ether::ETHER_BROADCAST,
@@ -175,33 +193,14 @@ impl HairpinAction for Dhcp4Action {
             ether_type: ether::ETHER_TYPE_IPV4,
         });
 
+        let pkt = Packet::alloc(ETHER_HDR_SZ + IPV4_HDR_SZ + UDP_HDR_SZ +
+                                reply.buffer_len());
+        let mut wtr = PacketWriter::new(pkt, None);
         let _ = wtr.write(&eth.as_bytes()).unwrap();
-
-        let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
-            src: self.gw_ip4,
-            dst: ip4::LOCAL_BROADCAST,
-            proto: Protocol::UDP,
-        });
-        ip4.compute_hdr_csum();
-
         let _ = wtr.write(&ip4.as_bytes()).unwrap();
-
-        let udp = UdpHdr::from(&UdpMeta {
-            src: 67,
-            dst: 68,
-        });
-
         let _ = wtr.write(&udp.as_bytes()).unwrap();
-
-        // TODO This is temporary until I can add interface to Packet
-        // to initialize a zero'd mblk of N bytes and then get a
-        // direct mutable reference to the PacketSeg.
-        let mut tmp = vec![0; reply.buffer_len()];
-        let mut dhcp = DhcpPacket::new_unchecked(&mut tmp);
-        let _ = reply.emit(&mut dhcp).unwrap();
         let _ = wtr.write(&dhcp.into_inner()).unwrap();
-        let pkt_final = wtr.finish();
-        Ok(pkt_final)
+        Ok(wtr.finish())
     }
 }
 
