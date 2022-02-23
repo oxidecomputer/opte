@@ -1881,6 +1881,10 @@ pub type WriteResult<T> = result::Result<T, WriteError>;
 /// forward, with the exception of `seek_back()`, which moves the
 /// position backwards within the current segment.
 pub trait PacketRead<'a> {
+    /// Copy all bytes from current position to the end of the packet
+    /// leaving the reader's internal state untouched.
+    fn copy_remaining(&self) -> Vec<u8>;
+
     /// Return the current position in the packet.
     fn pos(&self) -> usize;
 
@@ -2119,6 +2123,34 @@ where
         self.pkt_pos += len;
         self.seg_pos += len;
         Ok(ret)
+    }
+
+    fn copy_remaining(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.pkt.len() - self.pkt_pos);
+        let mut seg_idx = self.seg_idx;
+        let mut seg_pos = self.seg_pos;
+        let mut seg_len = self.seg_len;
+        let mut seg = &self.pkt.segs[seg_idx];
+
+        loop {
+            let seg_slice = unsafe {
+                let start = (*seg.mp).b_rptr.add(seg_pos);
+                slice::from_raw_parts(start, seg_len - seg_pos)
+            };
+            bytes.extend_from_slice(seg_slice);
+
+            seg_idx += 1;
+
+            if seg_idx >= self.pkt.num_segs() {
+                break;
+            }
+
+            seg = &self.pkt.segs[seg_idx];
+            seg_pos = 0;
+            seg_len = seg.len
+        }
+
+        bytes
     }
 }
 

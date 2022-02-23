@@ -589,8 +589,9 @@ impl DataPredicate {
             Self::Not(pred) => return !pred.is_match(meta, rdr),
 
             Self::InnerDhcp4MsgType(mt) => {
-                let bytes = rdr.slice(rdr.seg_left()).unwrap();
-                let pkt = match DhcpPacket::new_checked(bytes) {
+                let bytes = rdr.copy_remaining();
+                crate::dbg(format!("remaining bytes: {}", bytes.len()));
+                let pkt = match DhcpPacket::new_checked(&bytes) {
                     Ok(v) => v,
                     Err(e) => {
                         crate::err(
