@@ -177,11 +177,12 @@ impl HairpinAction for Dhcp4Action {
 
         let _ = wtr.write(&eth.as_bytes()).unwrap();
 
-        let ip4 = Ipv4Hdr::from(&Ipv4Meta {
+        let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
             src: self.gw_ip4,
             dst: ip4::LOCAL_BROADCAST,
             proto: Protocol::UDP,
         });
+        ip4.compute_hdr_csum();
 
         let _ = wtr.write(&ip4.as_bytes()).unwrap();
 

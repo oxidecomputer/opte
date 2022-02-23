@@ -492,6 +492,7 @@ impl Port<Active> {
             Direction::In => self.process_in(pkt, &mut meta),
         };
         port_process_return_probe(dir, &self.name);
+        // TODO If this is a Hairpin result there is no need for this call.
         pkt.emit_headers()?;
         res
     }
