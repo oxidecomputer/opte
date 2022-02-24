@@ -4,7 +4,10 @@
 #: variety = "basic"
 #: target = "helios"
 #: rust_toolchain = "nightly"
-#: output_rules = []
+#: output_rules = [
+#:   "/work/debug/*",
+#:   "/work/release/*",
+#: ]
 #:
 
 set -o errexit
@@ -18,7 +21,7 @@ function header {
 cargo --version
 rustc --version
 
-cd xde
+pushd xde
 
 header "check style"
 ptime -m cargo +nightly fmt -- --check
@@ -35,11 +38,24 @@ ptime -m cargo +nightly check
 header "install rust-src"
 ptime -m rustup component add rust-src --toolchain nightly
 
-header "compile"
+header "compile xde"
 ptime -m ./compile.sh
 ptime -m ./link.sh
 
-#
-# XXX Inspect kernel module for bad relocations in case old codegen
-# issue ever shows its face again.
-#
+for x in debug release
+do
+    mkdir -p /work/$x
+done
+
+cp xde /work/release/
+
+header "compile opteadm"
+popd
+pushd opteadm
+ptime -m cargo +nightly build
+ptime -m cargo +nightly build --release
+
+for x in debug release
+do
+    cp target/$x/opteadm /work/$x/
+done
