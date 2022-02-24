@@ -5,7 +5,6 @@
 #: target = "helios"
 #: rust_toolchain = "nightly"
 #: output_rules = [
-#:   "/work/debug/*",
 #:   "/work/release/*",
 #: ]
 #:
@@ -42,20 +41,5 @@ header "compile xde"
 ptime -m ./compile.sh
 ptime -m ./link.sh
 
-for x in debug release
-do
-    mkdir -p /work/$x
-done
-
+mkdir -p /work/release
 cp xde /work/release/
-
-header "compile opteadm"
-popd
-pushd opteadm
-ptime -m cargo +nightly build
-ptime -m cargo +nightly build --release
-
-for x in debug release
-do
-    cp target/$x/opteadm /work/$x/
-done

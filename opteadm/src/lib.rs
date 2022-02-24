@@ -150,11 +150,12 @@ impl OpteAdm {
             cmd,
             &req,
         )?;
+        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))?;
 
         libnet::link::delete_link_id(link_id, libnet::LinkFlags::Active)
             .expect("delete link id");
 
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+        Ok(())
     }
 
     /// Add a firewall rule

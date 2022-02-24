@@ -1941,7 +1941,6 @@ pub enum WritePos {
 
 pub struct PacketWriter {
     pkt: Packet<Uninitialized>,
-    pub margin: Option<usize>,
     pkt_len: usize,
     pkt_pos: usize,
     seg_idx: usize,
@@ -1969,7 +1968,6 @@ impl PacketWriter {
 
         PacketWriter {
             pkt,
-            margin,
             pkt_len: 0,
             pkt_pos: margin.unwrap_or(0),
             seg_idx: 0,
@@ -2033,10 +2031,6 @@ where
 
     fn pkt_pos(&self) -> usize {
         self.pkt_pos
-    }
-
-    pub fn state_mut(&mut self) -> &mut S {
-        &mut self.state
     }
 }
 

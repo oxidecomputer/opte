@@ -1058,17 +1058,11 @@ pub unsafe fn __dtrace_probe_port__process__return(
     ()
 }
 
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_drop__packet() {
-    ()
-}
-
 #[cfg(all(not(feature = "std"), not(test)))]
 extern "C" {
     pub fn __dtrace_probe_port__process__entry(dir: uintptr_t, arg: uintptr_t);
 
     pub fn __dtrace_probe_port__process__return(dir: uintptr_t, arg: uintptr_t);
-    pub fn __dtrace_probe_drop__packet();
 }
 
 pub fn port_process_entry_probe(dir: Direction, name: &str) {

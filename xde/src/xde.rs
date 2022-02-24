@@ -405,7 +405,7 @@ unsafe extern "C" fn xde_ioc_create(req: &CreateXdeReq) -> c_int {
     mreg.m_max_sdu = 1500; // TODO hardcode
     mreg.m_multicast_sdu = 0;
     mreg.m_margin = 0;
-    mreg.m_v12n = MacVirt::None as u32;
+    mreg.m_v12n = mac::MAC_VIRT_NONE as u32;
 
     mreg.m_callbacks = &mut xde_mac_callbacks;
 
@@ -1086,9 +1086,6 @@ unsafe extern "C" fn xde_mc_tx(
         }
 
         Ok(ProcessResult::Drop { .. }) => {
-            // NOTE(ry) so uncommenting this probe causes segfaults in the
-            // Packet::wrap() call above?
-            //opte_core::port::drop_packet_probe();
             mac::mac_drop_chain(mp_chain, b"drop\0".as_ptr() as *const c_char);
             return ptr::null_mut();
         }

@@ -4,7 +4,10 @@
 #: variety = "basic"
 #: target = "helios"
 #: rust_toolchain = "nightly"
-#: output_rules = []
+#: output_rules = [
+#:   "/work/debug/*",
+#:   "/work/release/*",
+#: ]
 #:
 
 set -o errexit
@@ -34,3 +37,9 @@ ptime -m cargo +nightly build --release
 
 header "test"
 ptime -m cargo +nightly test
+
+for x in debug release
+do
+    mkdir -p /work/$x
+    cp target/$x/opteadm /work/$x/
+done

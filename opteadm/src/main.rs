@@ -580,7 +580,6 @@ fn main() {
         Command::DumpV2P => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
             print_v2p(&hdl.get_v2p().unwrap());
-            //println!("{:#?}", hdl.get_v2p().unwrap());
         }
 
         Command::AddFwRule { port, direction, filters, action, priority } => {

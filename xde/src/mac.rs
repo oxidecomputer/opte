@@ -10,6 +10,10 @@ pub const MAC_TX_NO_ENQUEUE: u16 = 0x02;
 pub const MAC_TX_NO_HOLD: u16 = 0x04;
 pub const MCIS_NO_UNICAST_ADDR: u16 = 0x2000;
 
+pub const MAC_VIRT_NONE: c_int = 0x0;
+pub const MAC_VIRT_LEVEL1: c_int = 0x0;
+pub const MAC_VIRT_HIO: c_int = 0x0;
+
 #[allow(dead_code)]
 #[repr(C)]
 pub enum mac_client_promisc_type_t {

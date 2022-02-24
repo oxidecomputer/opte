@@ -416,14 +416,9 @@ impl CmdOk for ListPortsResp {}
 /// Xde create ioctl parameter data.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct CreateXdeReq {
-    // afaict - dlmgmd is the owner of link ids, there are even upcalls from the
-    // kernel to get linkids! (see dls_mgmt_create)
     pub linkid: datalink_id_t,
     pub xde_devname: String,
 
-    // names of the underlay links to use
-    //XXX pub u1_devname: String,
-    //XXX pub u2_devname: String,
     pub private_ip: Ipv4Addr,
     pub private_mac: EtherAddr,
     pub gw_mac: EtherAddr,

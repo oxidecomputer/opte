@@ -303,13 +303,6 @@ pub struct dev_ops {
 }
 unsafe impl Sync for dev_ops {}
 
-#[repr(C)]
-pub enum MacVirt {
-    None = 0,
-    Level1,
-    Hio,
-}
-
 // C allows us to sidestep strict type definition conformance when
 // setting callback functions, but Rust doesn't. Therefore, we can't
 // just assign generic callbacks like `nulldev()` to these structure
