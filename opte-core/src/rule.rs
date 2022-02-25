@@ -1203,6 +1203,7 @@ impl<'a> Rule<Finalized> {
 pub struct RuleDump {
     pub priority: u16,
     pub predicates: Vec<Predicate>,
+    pub data_predicates: Vec<DataPredicate>,
     pub action: String,
 }
 
@@ -1210,11 +1211,13 @@ impl From<&Rule<Finalized>> for RuleDump {
     fn from(rule: &Rule<Finalized>) -> Self {
         let predicates =
             rule.state.preds.as_ref().map_or(vec![], |rp| rp.hdr_preds.clone());
+        let data_predicates = rule.state.preds.as_ref()
+            .map_or(vec![], |rp| rp.data_preds.clone());
 
         RuleDump {
             priority: rule.priority,
             predicates,
-            // XXX What about data predicates?
+            data_predicates,
             action: rule.action.to_string(),
         }
     }
