@@ -28,6 +28,7 @@ use crate::headers::{
     self, HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
     UlpMetaOpt,
 };
+use crate::icmp::IcmpType;
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Meta;
 use crate::layer::InnerFlowId;
@@ -43,7 +44,8 @@ use illumos_ddi_dki::{c_char, uintptr_t};
 
 use serde::{Deserialize, Serialize};
 
-use smoltcp::wire::{DhcpPacket, DhcpRepr};
+use smoltcp::phy::ChecksumCapabilities as Csum;
+use smoltcp::wire::{DhcpPacket, DhcpRepr, Icmpv4Packet, Icmpv4Repr};
 
 // A marker trait for types which represent packet payloads. Examples
 // of payloads include an ARP request, ICMP body, or TCP body.
@@ -545,7 +547,8 @@ impl Predicate {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum DataPredicate {
-    InnerDhcp4MsgType(DhcpMessageType),
+    Dhcp4MsgType(DhcpMessageType),
+    IcmpMsgType(IcmpType),
     InnerArpTpa(Vec<Ipv4AddrMatch>),
     Not(Box<DataPredicate>),
 }
@@ -555,8 +558,12 @@ impl Display for DataPredicate {
         use DataPredicate::*;
 
         match self {
-            InnerDhcp4MsgType(mt) => {
-                write!(f, "inner.dhcp4.msg_type={}", mt)
+            Dhcp4MsgType(mt) => {
+                write!(f, "dhcp4.msg_type={}", mt)
+            }
+
+            IcmpMsgType(mt) => {
+                write!(f, "icmp.msg_type={}", mt)
             }
 
             InnerArpTpa(list) => {
@@ -588,7 +595,7 @@ impl DataPredicate {
         match self {
             Self::Not(pred) => return !pred.is_match(meta, rdr),
 
-            Self::InnerDhcp4MsgType(mt) => {
+            Self::Dhcp4MsgType(mt) => {
                 let bytes = rdr.copy_remaining();
                 crate::dbg(format!("remaining bytes: {}", bytes.len()));
                 let pkt = match DhcpPacket::new_checked(&bytes) {
@@ -618,6 +625,32 @@ impl DataPredicate {
                 ));
                 let res = DhcpMessageType::from(dhcp.message_type) == *mt;
                 return res;
+            }
+
+            Self::IcmpMsgType(mt) => {
+                let bytes = rdr.copy_remaining();
+                let pkt = match Icmpv4Packet::new_checked(&bytes) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        crate::err(format!(
+                            "Icmpv4Packet::new_checked() failed: {:?}",
+                            e
+                        ));
+                        return false;
+                    }
+                };
+                let _icmp = match Icmpv4Repr::parse(&pkt, &Csum::ignored()) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        crate::err(
+                            format!("Icmpv4Repr::parse() failed: {:?}", e)
+                        );
+                        return false;
+                    }
+                };
+
+                crate::dbg(format!("{:?} == {}?", pkt.msg_type(), *mt));
+                return IcmpType::from(pkt.msg_type()) == *mt;
             }
 
             Self::InnerArpTpa(list) => match meta.inner.arp {

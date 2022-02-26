@@ -77,7 +77,7 @@ pub fn setup(
     );
     let p_dst_port67 = Predicate::InnerDstPort(vec![PortMatch::Exact(67)]);
     let p_src_port68 = Predicate::InnerSrcPort(vec![PortMatch::Exact(68)]);
-    let dp_discover = DataPredicate::InnerDhcp4MsgType(
+    let dp_discover = DataPredicate::Dhcp4MsgType(
         DhcpMessageType::from(SmolDMT::Discover)
     );
     let discover_rule = Rule::new(1, dhcp.action(offer_idx).unwrap().clone());
@@ -87,7 +87,7 @@ pub fn setup(
     discover_rule.add_data_predicate(dp_discover);
     dhcp.add_rule(Direction::Out, discover_rule.finalize());
 
-    let dp_request = DataPredicate::InnerDhcp4MsgType(
+    let dp_request = DataPredicate::Dhcp4MsgType(
         DhcpMessageType::from(SmolDMT::Request)
     );
     let request_rule = Rule::new(1, dhcp.action(ack_idx).unwrap().clone());

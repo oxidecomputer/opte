@@ -4,23 +4,52 @@
 //! use `IcmpBaseHdrRaw` to determine which type of ICMP message we
 //! are ultimately parsing.
 use core::mem;
+use core::fmt::{self, Display};
+
+use serde::{Deserialize, Serialize};
 
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 use crate::headers::RawHeader;
 use crate::packet::{PacketRead, ReadErr, WriteError};
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum IcmpType {
     DestUnreachable = 3,
     EchoReply = 0,
     EchoRequest = 8,
 }
 
+impl Display for IcmpType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self {
+            Self::DestUnreachable => "Dest Unreachable",
+            Self::EchoReply => "Echo Reply",
+            Self::EchoRequest => "Echo Request",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 pub const ICMP_ECHO_REPLY: u8 = 0;
 pub const ICMP_DEST_UNREACHABLE: u8 = 3;
 pub const ICMP_REDIRECT: u8 = 5;
 pub const ICMP_ECHO: u8 = 8;
+
+// TODO replace IcmpType with pattern that I used for DhcpMessageType.
+// Just doing this for now to get a demo working before I hop on a
+// train.
+impl From<smoltcp::wire::Icmpv4Message> for IcmpType {
+    fn from(x: smoltcp::wire::Icmpv4Message) -> Self {
+        use smoltcp::wire::Icmpv4Message::*;
+
+        match x {
+            EchoReply => Self::EchoReply,
+            EchoRequest => Self::EchoRequest,
+            _ => todo!("not now damnit!"),
+        }
+    }
+}
 
 /// The base ICMP header
 /// Note: For now we keep this unaligned to be safe.

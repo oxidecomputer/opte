@@ -223,6 +223,15 @@ pub enum IpMeta {
     Ip6(Ipv6Meta),
 }
 
+impl IpMeta {
+    pub fn ip4(&self) -> Option<&Ipv4Meta> {
+        match self {
+            Self::Ip4(meta) => Some(meta),
+            _ => None,
+        }
+    }
+}
+
 impl From<Ipv4Meta> for IpMeta {
     fn from(ip4: Ipv4Meta) -> Self {
         IpMeta::Ip4(ip4)

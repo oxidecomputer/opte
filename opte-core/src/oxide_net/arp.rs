@@ -24,15 +24,15 @@ pub fn setup(
             // ARP Reply for gateway's IP.
             Action::Hairpin(Arc::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),
             // ARP Reply for guest's private IP.
-            Action::Hairpin(Arc::new(ArpReply::new(
-                cfg.private_ip,
-                cfg.private_mac,
-            ))),
+            // Action::Hairpin(Arc::new(ArpReply::new(
+            //     cfg.private_ip,
+            //     cfg.private_mac,
+            // ))),
             // ARP Reply for guest's public IP.
-            Action::Hairpin(Arc::new(ArpReply::new(
-                cfg.dyn_nat.public_ip,
-                cfg.dyn_nat.public_mac,
-            ))),
+            // Action::Hairpin(Arc::new(ArpReply::new(
+            //     cfg.dyn_nat.public_ip,
+            //     cfg.dyn_nat.public_mac,
+            // ))),
         ],
     );
 
@@ -70,46 +70,46 @@ pub fn setup(
     // ================================================================
     // Inbound ARP Request from Gateway, for Guest Private IP
     // ================================================================
-    let rule = Rule::new(1, arp.action(1).unwrap().clone());
-    let mut rule = rule.add_predicate(Predicate::InnerEtherType(vec![
-        EtherTypeMatch::Exact(ETHER_TYPE_ARP),
-    ]));
-    rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-        EtherAddr::from([0xFF; 6]),
-    )]));
-    rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
-    rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
-        ETHER_TYPE_IPV4,
-    )));
-    rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
-        ArpOp::Request,
-    )));
-    rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
-        Ipv4AddrMatch::Exact(cfg.private_ip),
-    ]));
-    arp.add_rule(Direction::In, rule.finalize());
+    // let rule = Rule::new(1, arp.action(1).unwrap().clone());
+    // let mut rule = rule.add_predicate(Predicate::InnerEtherType(vec![
+    //     EtherTypeMatch::Exact(ETHER_TYPE_ARP),
+    // ]));
+    // rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
+    //     EtherAddr::from([0xFF; 6]),
+    // )]));
+    // rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
+    // rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
+    //     ETHER_TYPE_IPV4,
+    // )));
+    // rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
+    //     ArpOp::Request,
+    // )));
+    // rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
+    //     Ipv4AddrMatch::Exact(cfg.private_ip),
+    // ]));
+    // arp.add_rule(Direction::In, rule.finalize());
 
     // ================================================================
     // Inbound ARP Request from Gateway, for Guest Public IP
     // ================================================================
-    let rule = Rule::new(1, arp.action(2).unwrap().clone());
-    let mut rule = rule.add_predicate(Predicate::InnerEtherType(vec![
-        EtherTypeMatch::Exact(ETHER_TYPE_ARP),
-    ]));
-    rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-        EtherAddr::from([0xFF; 6]),
-    )]));
-    rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
-    rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
-        ETHER_TYPE_IPV4,
-    )));
-    rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
-        ArpOp::Request,
-    )));
-    rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
-        Ipv4AddrMatch::Exact(cfg.dyn_nat.public_ip),
-    ]));
-    arp.add_rule(Direction::In, rule.finalize());
+    // let rule = Rule::new(1, arp.action(2).unwrap().clone());
+    // let mut rule = rule.add_predicate(Predicate::InnerEtherType(vec![
+    //     EtherTypeMatch::Exact(ETHER_TYPE_ARP),
+    // ]));
+    // rule.add_predicate(Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
+    //     EtherAddr::from([0xFF; 6]),
+    // )]));
+    // rule.add_predicate(Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)));
+    // rule.add_predicate(Predicate::InnerArpPtype(ArpPtypeMatch::Exact(
+    //     ETHER_TYPE_IPV4,
+    // )));
+    // rule.add_predicate(Predicate::InnerArpOp(ArpOpMatch::Exact(
+    //     ArpOp::Request,
+    // )));
+    // rule.add_data_predicate(DataPredicate::InnerArpTpa(vec![
+    //     Ipv4AddrMatch::Exact(cfg.dyn_nat.public_ip),
+    // ]));
+    // arp.add_rule(Direction::In, rule.finalize());
 
     // ================================================================
     // Drop all other inbound ARP Requests
