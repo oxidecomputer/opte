@@ -1059,6 +1059,13 @@ pub unsafe fn __dtrace_probe_port__process__return(
     ()
 }
 
+#[usdt::provider]
+mod opte_provider {
+    use crate::Direction;
+
+    fn port_process_entry(dir: Direction, name: &str) {}
+}
+
 #[cfg(all(not(feature = "std"), not(test)))]
 extern "C" {
     pub fn __dtrace_probe_port__process__entry(dir: uintptr_t, arg: uintptr_t);
@@ -1066,14 +1073,23 @@ extern "C" {
     pub fn __dtrace_probe_port__process__return(dir: uintptr_t, arg: uintptr_t);
 }
 
+use usdt::register_probes;
+
 pub fn port_process_entry_probe(dir: Direction, name: &str) {
     let name_c = CString::new(name).unwrap();
 
-    unsafe {
-        __dtrace_probe_port__process__entry(
-            dir as uintptr_t,
-            name_c.as_ptr() as uintptr_t,
-        );
+    cfg_if::cfg_if! {
+        if #[cfg(all(not(feature = "std"), not(test)))] {
+            unsafe {
+                __dtrace_probe_port__process__entry(
+                    dir as uintptr_t,
+                    name_c.as_ptr() as uintptr_t,
+                );
+            }
+        } else {
+            use std::arch::asm;
+            opte_provider::port_process_entry!(|| (dir, name));
+        }
     }
 }
 

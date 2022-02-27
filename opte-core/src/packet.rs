@@ -790,10 +790,23 @@ impl Packet<Initialized> {
             seg_pos: rdr.seg_pos() - hdr_len,
         });
 
+        // TODO Should this be a white list of protocols supported? Or
+        // should we deal with the protos OPTE gives access to and
+        // just ignore the rest (aka let it pass parsing and let the
+        // layers decide)?
         match proto {
             Protocol::TCP => Self::parse_hg_tcp(rdr, hg, offsets)?,
             Protocol::UDP => Self::parse_hg_udp(rdr, hg, offsets)?,
-            Protocol::ICMP => { /* something? */ }
+            // While one could consider part of the ICMP message to be
+            // a header, we do not. From a purely technical
+            // perspective, RFC 792 indicates that the only thing that
+            // you can be sure of is that the first octect defines the
+            // ICMP Message Type, which then defines how the rest of
+            // the packet is to be interpreted. Practically speaking,
+            // we could have an ICMP header type that represents the
+            // "header" of each Message Type, but instead we opt to
+            // treat it purely as payload.
+            Protocol::ICMP => (),
             _ => return Err(ParseError::UnsupportedProtocol(proto)),
         }
 

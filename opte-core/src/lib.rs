@@ -1,4 +1,7 @@
 #![no_std]
+// TODO I think Patrick's recent change nullifies this requirement?
+#![feature(asm)]
+#![cfg_attr(target_os = "macos", feature(asm_sym))]
 #![feature(extern_types)]
 #![feature(vec_into_raw_parts)]
 #![allow(non_camel_case_types)]

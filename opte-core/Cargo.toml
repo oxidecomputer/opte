@@ -12,11 +12,14 @@ default = ["std"]
 std = ["libc"]
 
 [dependencies]
+cfg-if = "0.1"
 cstr_core = "0.2.3"
 heapless = "0.7.9"
 illumos-ddi-dki = { path = "../illumos-ddi-dki", default-features = false }
 libc = { version = "0.2", optional = true }
 postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
+# TODO this is really just a test dep
+usdt = "*"
 zerocopy = "0.6.1"
 
 #
@@ -48,4 +51,4 @@ default-features = false
 features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-ipv6", "proto-dhcpv4", "socket", "socket-raw"]
 
 [dev-dependencies]
-pcap-parser = "0.11.1"
+pcap-parser = { version = "0.11.1", features = ["serialize"] }

@@ -20,8 +20,9 @@ use std::prelude::v1::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-extern crate pcap_parser;
 use pcap_parser::pcap::{self, LegacyPcapBlock, PcapHeader};
+
+use smoltcp::phy::{ChecksumCapabilities as CsumCapab};
 
 use zerocopy::AsBytes;
 
@@ -32,10 +33,11 @@ use crate::ether::{
 };
 use crate::flow_table::FLOW_DEF_EXPIRE_SECS;
 use crate::geneve::Vni;
-use crate::headers::{IpMeta, UlpMeta};
+use crate::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
 use crate::ip4::{self, Ipv4Hdr, Ipv4HdrRaw, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Addr;
-use crate::oxide_net::{self, arp, dyn_nat4, firewall, overlay, router};
+use crate::oxide_net::{self, arp, dyn_nat4, firewall, router};
+use crate::oxide_net::overlay::{self, OverlayCfg, PhysNet, Virt2Phys};
 use crate::packet::{
     mock_allocb, Initialized, Packet, PacketRead, PacketReader, PacketSeg,
     PacketWriter, ParseError, WritePos,
@@ -176,15 +178,111 @@ fn g2_cfg() -> oxide_net::PortCfg {
     }
 }
 
+// Verify that the guest can ping the virtual gateway.
+#[test]
+fn gateway_icmp4_ping() {
+    use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
+
+    usdt::register_probes().unwrap();
+
+    let mut g1_cfg = g1_cfg();
+    let mut g2_cfg = g2_cfg();
+
+    // NOTE: We're not testing Boundary Services in this test, so the
+    // values are irrelevant here.
+    let bs = PhysNet {
+        ether: EtherAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+        ip: Ipv6Addr::from([
+            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x77, 0x77,
+        ]),
+        vni: Vni::new(7777u32).unwrap(),
+    };
+
+    g1_cfg.overlay = Some(OverlayCfg {
+        boundary_services: bs.clone(),
+        vni: Vni::new(99u32).unwrap(),
+        phys_ip_src: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+    });
+
+    g2_cfg.overlay = Some(OverlayCfg {
+        boundary_services: bs.clone(),
+        vni: Vni::new(99u32).unwrap(),
+        // Site 0xF7, Rack 1, Sled 22, Interface 1
+        phys_ip_src: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+    });
+    let g2_phys = PhysNet {
+        ether: g2_cfg.private_mac,
+        ip: g2_cfg.overlay.as_ref().unwrap().phys_ip_src,
+        vni: g2_cfg.overlay.as_ref().unwrap().vni,
+    };
+
+    // Add V2P mappings that allow guests to resolve each others
+    // physical addresses.
+    let v2p = Arc::new(Virt2Phys::new());
+    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+
+    let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
+    router::setup(&mut g1_port).unwrap();
+    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone());
+    let g1_port = g1_port.activate();
+
+    // ================================================================
+    // Generate an ICMP Echo Request from G1 to Virtual GW
+    // ================================================================
+    let req = Icmpv4Repr::EchoRequest {
+        ident: 7,
+        seq_no: 777,
+        data: &(b"reunion\0")[..],
+    };
+
+    let mut body_bytes = vec![0u8; req.buffer_len()];
+    let mut req_pkt = Icmpv4Packet::new_unchecked(&mut body_bytes);
+    let _ = req.emit(&mut req_pkt, &Default::default());
+
+    let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
+        src: g1_cfg.private_ip,
+        dst: g1_cfg.gw_ip,
+        proto: Protocol::ICMP,
+    });
+    ip4.set_total_len(ip4.hdr_len() as u16 + req.buffer_len() as u16);
+    ip4.compute_hdr_csum();
+
+    let eth = EtherHdr::from(&EtherMeta {
+        dst: g1_cfg.gw_mac,
+        src: g1_cfg.private_mac,
+        ether_type: ETHER_TYPE_IPV4,
+    });
+
+    let mut pkt_bytes =
+        Vec::with_capacity(ETHER_HDR_SZ + ip4.hdr_len() + req.buffer_len());
+    pkt_bytes.extend_from_slice(&eth.as_bytes());
+    pkt_bytes.extend_from_slice(&ip4.as_bytes());
+    pkt_bytes.extend_from_slice(&body_bytes);
+    let mut g1_pkt = Packet::copy(&pkt_bytes).parse().unwrap();
+
+    // ================================================================
+    // Run the Echo Request through g1's port in the outbound
+    // direction and verify it results in an Echo Reply Hairpin packet
+    // back to guest.
+    // ================================================================
+    let res = g1_port.process(Out, &mut g1_pkt);
+    println!("res: {:?}", res);
+    assert!(matches!(res, Ok(Hairpin(_))));
+
+}
+
 // Verify that two guests on the same VPC can communicate via overlay.
 // I.e., test routing + encap/decap.
 #[test]
 fn overlay_guest_to_guest() {
     use crate::checksum::HeaderChecksum;
     use crate::geneve;
-    use crate::headers::{IpAddr, IpCidr};
     use crate::ip4::UlpCsumOpt;
-    use crate::oxide_net::overlay::{OverlayCfg, PhysNet, Virt2Phys};
     use crate::oxide_net::router::RouterTarget;
     use crate::tcp::TcpFlags;
 
