@@ -101,7 +101,7 @@ impl HairpinAction for Icmp4Reply {
             .unwrap();
 
         let (guest_ident, guest_seq_no, guest_data) = match guest_icmp {
-            val @ Icmpv4Repr::EchoRequest { ident, seq_no, data } => {
+            Icmpv4Repr::EchoRequest { ident, seq_no, data } => {
                 (ident, seq_no, data)
             }
             _ => todo!("this shouldn't happen, but deal with it somehow"),
@@ -116,7 +116,9 @@ impl HairpinAction for Icmp4Reply {
         let reply_len = reply.buffer_len();
         let mut tmp = vec![0u8; reply_len];
         let mut icmp_reply = Icmpv4Packet::new_unchecked(&mut tmp);
-        let _ = reply.emit(&mut icmp_reply, &Csum::ignored());
+        let mut csum = Csum::ignored();
+        csum.icmpv4 = Checksum::Tx;
+        let _ = reply.emit(&mut icmp_reply, &csum);
 
         let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
             src: self.gw_ip4,

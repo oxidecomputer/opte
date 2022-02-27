@@ -36,7 +36,7 @@ use crate::geneve::Vni;
 use crate::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
 use crate::ip4::{self, Ipv4Hdr, Ipv4HdrRaw, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Addr;
-use crate::oxide_net::{self, arp, dyn_nat4, firewall, router};
+use crate::oxide_net::{self, arp, dyn_nat4, firewall, icmp, router};
 use crate::oxide_net::overlay::{self, OverlayCfg, PhysNet, Virt2Phys};
 use crate::packet::{
     mock_allocb, Initialized, Packet, PacketRead, PacketReader, PacketSeg,
@@ -112,6 +112,13 @@ fn oxide_net_setup(name: &str, cfg: &oxide_net::PortCfg) -> Port<Inactive> {
     // Firewall layer
     // ================================================================
     firewall::setup(&mut port).expect("failed to add firewall layer");
+
+    // ================================================================
+    // ICMP layer
+    //
+    // For intercepting ICMP Echo Requests to the virtual gateway.
+    // ================================================================
+    icmp::setup(&mut port, cfg).expect("failed to add icmp layer");
 
     // ================================================================
     // Dynamic NAT Layer (IPv4)
@@ -234,10 +241,14 @@ fn gateway_icmp4_ping() {
     // ================================================================
     // Generate an ICMP Echo Request from G1 to Virtual GW
     // ================================================================
+    let ident = 7;
+    let seq_no = 777;
+    let data = b"reunion\0";
+
     let req = Icmpv4Repr::EchoRequest {
-        ident: 7,
-        seq_no: 777,
-        data: &(b"reunion\0")[..],
+        ident,
+        seq_no,
+        data: &data[..],
     };
 
     let mut body_bytes = vec![0u8; req.buffer_len()];
@@ -271,8 +282,66 @@ fn gateway_icmp4_ping() {
     // back to guest.
     // ================================================================
     let res = g1_port.process(Out, &mut g1_pkt);
-    println!("res: {:?}", res);
-    assert!(matches!(res, Ok(Hairpin(_))));
+    let hp = match res {
+        Ok(Hairpin(hp)) => hp,
+        _ => panic!("expected Hairpin, got {:?}", res),
+    };
+
+    let reply = hp.parse().unwrap();
+
+    // Ether + IPv4
+    assert_eq!(reply.body_offset(), 14 + 20);
+    assert_eq!(reply.body_seg(), 0);
+
+    let meta = reply.meta();
+    assert!(meta.outer.ether.is_none());
+    assert!(meta.outer.ip.is_none());
+    assert!(meta.outer.ulp.is_none());
+
+    match meta.inner.ether.as_ref() {
+        Some(eth) => {
+            assert_eq!(eth.src, g1_cfg.gw_mac);
+            assert_eq!(eth.dst, g1_cfg.private_mac);
+        }
+
+        None => panic!("no inner ether header"),
+    }
+
+    match meta.inner.ip.as_ref().unwrap() {
+        IpMeta::Ip4(ip4) => {
+            assert_eq!(ip4.src, g1_cfg.gw_ip);
+            assert_eq!(ip4.dst, g1_cfg.private_ip);
+            assert_eq!(ip4.proto, Protocol::ICMP);
+        }
+
+        ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+    }
+
+    let mut rdr = PacketReader::new(&reply, ());
+    // Need to seek to body.
+    rdr.seek(14 + 20).unwrap();
+    let reply_body = rdr.copy_remaining();
+    let reply_pkt = Icmpv4Packet::new_checked(&reply_body).unwrap();
+    // TODO The 2nd arguemnt is the checksum capab, while the default
+    // value should verify the checksums better to make this explicit
+    // so it's clear what is happening.
+    let mut csum = CsumCapab::ignored();
+    csum.ipv4 = smoltcp::phy::Checksum::Rx;
+    csum.icmpv4 = smoltcp::phy::Checksum::Rx;
+    let reply_icmp = Icmpv4Repr::parse(&reply_pkt, &csum).unwrap();
+    match reply_icmp {
+        Icmpv4Repr::EchoReply {
+            ident: r_ident,
+            seq_no: r_seq_no,
+            data: r_data
+        } => {
+            assert_eq!(r_ident, ident);
+            assert_eq!(r_seq_no, seq_no);
+            assert_eq!(r_data, data);
+        }
+
+        _ => panic!("expected Echo Reply, got {:?}", reply_icmp),
+    }
 
 }
 
@@ -533,7 +602,7 @@ fn overlay_guest_to_guest() {
 fn overlay_guest_to_internet() {
     use crate::checksum::HeaderChecksum;
     use crate::geneve;
-    use crate::headers::{IpAddr, IpCidr};
+    use crate::headers::IpCidr;
     use crate::ip4::UlpCsumOpt;
     use crate::oxide_net::overlay::{OverlayCfg, PhysNet, Virt2Phys};
     use crate::oxide_net::router::RouterTarget;

@@ -223,6 +223,25 @@ impl Display for Direction {
 }
 
 // ================================================================
+// DTrace USDT Provider
+//
+// Allowing us to use USDT to trace the opte-core SDT probes when
+// running in std/test.
+// ================================================================
+#[usdt::provider]
+mod opte_provider {
+    use crate::Direction;
+
+    fn port_process_entry(dir: Direction, name: &str) {}
+    fn layer_process_return(
+        dir: Direction,
+        name: &str,
+        id: &crate::layer::InnerFlowId,
+        res: &str
+    ) {}
+}
+
+// ================================================================
 // Providers
 //
 // Providers allow opte-core to work in different contexts (in theory)

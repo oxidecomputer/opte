@@ -859,27 +859,37 @@ pub fn layer_process_return_probe(
     ifid: &InnerFlowId,
     res: &result::Result<LayerResult, LayerError>,
 ) {
-    let dir_c = match dir {
-        Direction::In => CString::new("in").unwrap(),
-        Direction::Out => CString::new("out").unwrap(),
-    };
-    let name_c = CString::new(name).unwrap();
-    let ifid_arg = flow_id_sdt_arg::from(ifid);
     // XXX This would probably be better as separate probes; for now
     // this does the trick.
     let res_str = match res {
         Ok(v) => format!("{}", v),
         Err(e) => format!("ERROR: {:?}", e),
     };
-    let res_c = CString::new(res_str).unwrap();
 
-    unsafe {
-        __dtrace_probe_layer__process__return(
-            dir_c.as_ptr() as uintptr_t,
-            name_c.as_ptr() as uintptr_t,
-            &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
-            res_c.as_ptr() as uintptr_t,
-        );
+    cfg_if::cfg_if! {
+        if #[cfg(all(not(feature = "std"), not(test)))] {
+            let dir_c = match dir {
+                Direction::In => CString::new("in").unwrap(),
+                Direction::Out => CString::new("out").unwrap(),
+            };
+            let name_c = CString::new(name).unwrap();
+            let ifid_arg = flow_id_sdt_arg::from(ifid);
+            let res_c = CString::new(res_str).unwrap();
+
+            unsafe {
+                __dtrace_probe_layer__process__return(
+                    dir_c.as_ptr() as uintptr_t,
+                    name_c.as_ptr() as uintptr_t,
+                    &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                    res_c.as_ptr() as uintptr_t,
+                );
+            }
+        } else {
+            use std::arch::asm;
+            crate::opte_provider::layer_process_return!(
+                || (dir, name, ifid, &res_str)
+            );
+        }
     }
 }
 
