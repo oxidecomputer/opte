@@ -893,11 +893,6 @@ pub fn layer_process_return_probe(
     }
 }
 
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_rule__match(_arg: uintptr_t) {
-    ()
-}
-
 #[cfg(all(not(feature = "std"), not(test)))]
 extern "C" {
     pub fn __dtrace_probe_rule__match(arg: uintptr_t);
@@ -917,43 +912,37 @@ pub fn rule_match_probe(
     flow_id: &InnerFlowId,
     rule: &Rule<rule::Finalized>,
 ) {
-    let layer_c = CString::new(layer).unwrap();
-    let dir_c = match dir {
-        Direction::In => CString::new("in").unwrap(),
-        Direction::Out => CString::new("out").unwrap(),
-    };
-    let flow_id = flow_id_sdt_arg::from(flow_id);
-    let rule_type_c = CString::new(rule.action().to_string()).unwrap();
+    let action_str = rule.action().to_string();
 
-    let arg = rule_match_sdt_arg {
-        // TODO: Sigh, I'm only doing this because some
-        // platforms define c_char as u8, and I want to be
-        // able to run unit tests on those other platforms.
-        #[cfg(all(not(feature = "std"), not(test)))]
-        layer: layer_c.as_ptr(),
-        #[cfg(any(feature = "std", test))]
-        layer: layer_c.as_ptr() as *const u8 as *const c_char,
-        #[cfg(all(not(feature = "std"), not(test)))]
-        dir: dir_c.as_ptr(),
-        #[cfg(any(feature = "std", test))]
-        dir: dir_c.as_ptr() as *const u8 as *const c_char,
-        flow_id: &flow_id,
-        #[cfg(all(not(feature = "std"), not(test)))]
-        rule_type: rule_type_c.as_ptr(),
-        #[cfg(any(feature = "std", test))]
-        rule_type: rule_type_c.as_ptr() as *const u8 as *const c_char,
-    };
+    cfg_if::cfg_if! {
+        if #[cfg(all(not(feature = "std"), not(test)))] {
+            let layer_c = CString::new(layer).unwrap();
+            let dir_c = match dir {
+                Direction::In => CString::new("in").unwrap(),
+                Direction::Out => CString::new("out").unwrap(),
+            };
+            let flow_id = flow_id_sdt_arg::from(flow_id);
+            let action_str_c = CString::new(action_str).unwrap();
 
-    unsafe {
-        __dtrace_probe_rule__match(
-            &arg as *const rule_match_sdt_arg as uintptr_t,
-        );
+            let arg = rule_match_sdt_arg {
+                layer: layer_c.as_ptr(),
+                dir: dir_c.as_ptr(),
+                flow_id: &flow_id,
+                rule_type: action_str_c.as_ptr(),
+            };
+
+            unsafe {
+                __dtrace_probe_rule__match(
+                    &arg as *const rule_match_sdt_arg as uintptr_t,
+                );
+            }
+        } else {
+            use std::arch::asm;
+            crate::opte_provider::rule__match!(
+                || (layer, dir, flow_id.to_string(), action_str)
+            );
+        }
     }
-}
-
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_rule__no__match(_arg: uintptr_t) {
-    ()
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -969,32 +958,32 @@ pub struct rule_no_match_sdt_arg {
 }
 
 pub fn rule_no_match_probe(layer: &str, dir: Direction, flow_id: &InnerFlowId) {
-    let layer_c = CString::new(layer).unwrap();
-    let dir_c = match dir {
-        Direction::In => CString::new("in").unwrap(),
-        Direction::Out => CString::new("out").unwrap(),
-    };
-    let flow_id = flow_id_sdt_arg::from(flow_id);
+    cfg_if::cfg_if! {
+        if #[cfg(all(not(feature = "std"), not(test)))] {
+            let layer_c = CString::new(layer).unwrap();
+            let dir_c = match dir {
+                Direction::In => CString::new("in").unwrap(),
+                Direction::Out => CString::new("out").unwrap(),
+            };
+            let flow_id = flow_id_sdt_arg::from(flow_id);
 
-    let arg = rule_no_match_sdt_arg {
-        // TODO: Sigh, I'm only doing this because some
-        // platforms define c_char as u8, and I want to be
-        // able to run unit tests on those other platforms.
-        #[cfg(all(not(feature = "std"), not(test)))]
-        layer: layer_c.as_ptr(),
-        #[cfg(any(feature = "std", test))]
-        layer: layer_c.as_ptr() as *const u8 as *const c_char,
-        #[cfg(all(not(feature = "std"), not(test)))]
-        dir: dir_c.as_ptr(),
-        #[cfg(any(feature = "std", test))]
-        dir: dir_c.as_ptr() as *const u8 as *const c_char,
-        flow_id: &flow_id,
-    };
+            let arg = rule_no_match_sdt_arg {
+                layer: layer_c.as_ptr(),
+                dir: dir_c.as_ptr(),
+                flow_id: &flow_id,
+            };
 
-    unsafe {
-        __dtrace_probe_rule__no__match(
-            &arg as *const rule_no_match_sdt_arg as uintptr_t,
-        );
+            unsafe {
+                __dtrace_probe_rule__no__match(
+                    &arg as *const rule_no_match_sdt_arg as uintptr_t,
+                );
+            }
+        } else {
+            use std::arch::asm;
+            crate::opte_provider::rule__no__match!(
+                || (layer, dir, flow_id.to_string())
+            );
+        }
     }
 }
 

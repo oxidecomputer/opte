@@ -230,13 +230,22 @@ impl Display for Direction {
 // ================================================================
 #[usdt::provider]
 mod opte_provider {
+    use crate::layer::InnerFlowId;
+    use crate::rule::{self, Rule};
     use crate::Direction;
 
     fn port_process_entry(dir: Direction, name: &str) {}
+    fn rule__match(
+        layer: &str,
+        dir: Direction,
+        flow: &str,
+        action: &str,
+    ) {}
+    fn rule__no__match(layer: &str, dir: Direction, flow: &str) {}
     fn layer_process_return(
         dir: Direction,
         name: &str,
-        id: &crate::layer::InnerFlowId,
+        id: &InnerFlowId,
         res: &str
     ) {}
 }
