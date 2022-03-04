@@ -61,7 +61,6 @@ struct xde_underlay_port {
     name: String,
     mh: *mut mac::mac_handle,
     mch: *mut mac::mac_client_handle,
-    muh: *mut mac::mac_unicast_handle,
     mph: *mut mac::mac_promisc_handle,
 }
 
@@ -106,14 +105,12 @@ impl XdeState {
                 name: underlay1,
                 mh: 0 as *mut mac::mac_handle,
                 mch: 0 as *mut mac::mac_client_handle,
-                muh: 0 as *mut mac::mac_unicast_handle,
                 mph: 0 as *mut mac::mac_promisc_handle,
             },
             u2: xde_underlay_port {
                 name: underlay2,
                 mh: 0 as *mut mac::mac_handle,
                 mch: 0 as *mut mac::mac_client_handle,
-                muh: 0 as *mut mac::mac_unicast_handle,
                 mph: 0 as *mut mac::mac_promisc_handle,
             },
             ectx,
@@ -169,14 +166,12 @@ impl Default for XdeDev {
                 name: "".into(),
                 mh: 0 as *mut mac::mac_handle,
                 mch: 0 as *mut mac::mac_client_handle,
-                muh: 0 as *mut mac::mac_unicast_handle,
                 mph: 0 as *mut mac::mac_promisc_handle,
             },
             u2: xde_underlay_port {
                 name: "".into(),
                 mh: 0 as *mut mac::mac_handle,
                 mch: 0 as *mut mac::mac_client_handle,
-                muh: 0 as *mut mac::mac_unicast_handle,
                 mph: 0 as *mut mac::mac_promisc_handle,
             },
         }
@@ -728,6 +723,20 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
         }
     }
 
+    /*
+     * TODO: this - curently promisc RX is needed to get packets into the xde
+     * device. Maybehapps setting something like MAC_OPEN_FLAGS_MULTI_PRIMARY
+     * and doing a mac_unicast_add with MAC_UNICAST_PRIMARY would work?.
+     *
+    mac::mac_rx_set(
+        state.u1.mch,
+        xde_rx,
+        ptr::null_mut(),
+    );
+     *
+     */
+
+
     match mac::mac_promisc_add(
         state.u2.mch,
         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
@@ -742,6 +751,13 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
             return err;
         }
     }
+    /*
+    mac::mac_rx_set(
+        state.u2.mch,
+        xde_rx,
+        ptr::null_mut(),
+    );
+    */
 
     DDI_SUCCESS
 }
@@ -799,23 +815,7 @@ unsafe extern "C" fn xde_detach(
     mac::mac_promisc_remove(state.u1.mph);
     mac::mac_promisc_remove(state.u2.mph);
 
-    let mut ret = 0;
-
-    // mac unicast remove for underlay devices
-    match mac::mac_unicast_remove(state.u1.mch, state.u1.muh) {
-        0 => {}
-        err => {
-            warn!("mac_unicast remove failed for u1: {}", err);
-            ret = err;
-        }
-    }
-    match mac::mac_unicast_remove(state.u2.mch, state.u2.muh) {
-        0 => {}
-        err => {
-            warn!("mac_unicast remove failed for u2: {}", err);
-            ret = err;
-        }
-    }
+    //let mut ret = 0;
 
     // close mac client handle for underlay devices
     mac::mac_client_close(state.u1.mch, 0);
@@ -829,7 +829,7 @@ unsafe extern "C" fn xde_detach(
 
     ddi_remove_minor_node(xde_dip, ptr::null());
     xde_dip = ptr::null_mut::<c_void>() as *mut dev_info;
-    ret
+    0
 }
 
 #[no_mangle]
