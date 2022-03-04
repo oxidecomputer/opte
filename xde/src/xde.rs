@@ -683,11 +683,7 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
 
     // get mac clients for underlay ports
 
-    // we listen in promisc mode and set up all L2 framing ourselves
-    // TODO understand why the following does not work in liu of mac_unicast add
-    // see comment below for more details
-    //let mac_client_flags = mac::MCIS_NO_UNICAST_ADDR;
-    let mac_client_flags = 0;
+    let mac_client_flags = mac::MAC_OPEN_FLAGS_NO_UNICAST_ADDR;
 
     match mac::mac_client_open(
         state.u1.mh,
@@ -711,44 +707,6 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
         0 => {}
         err => {
             warn!("mac client open for u2 failed: {}", err);
-            return err;
-        }
-    }
-
-    // XXX should not be needed as we're using the underlying phy mac. i tried
-    // this with the MCIS_NO_UNICAST_ADDR which I expected to set up a minimal
-    // tx path based on my reading of the code, however, tx'd packets just fell
-    // on the floor.
-    // set up unicast address for tx on mac client handles
-    let xxx = EtherAddr::from([0xa8, 0x40, 0x25, 0xff, 0x00, 0x01]);
-    let mut diag = mac::mac_diag::MAC_DIAG_NONE;
-    let mut ether = xxx.to_bytes();
-    match mac::mac_unicast_add(
-        state.u1.mch,
-        ether.as_mut_ptr(),
-        0,
-        &mut state.u1.muh,
-        0,
-        &mut diag,
-    ) {
-        0 => {}
-        err => {
-            warn!("mac unicast add u1 failed: {} {:?}", err, diag);
-            return err;
-        }
-    }
-
-    match mac::mac_unicast_add(
-        state.u2.mch,
-        ether.as_mut_ptr(),
-        0,
-        &mut state.u2.muh,
-        0,
-        &mut diag,
-    ) {
-        0 => {}
-        err => {
-            warn!("mac unicast add u2 failed: {} {:?}", err, diag);
             return err;
         }
     }

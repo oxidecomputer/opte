@@ -14,6 +14,22 @@ pub const MAC_VIRT_NONE: c_int = 0x0;
 pub const MAC_VIRT_LEVEL1: c_int = 0x0;
 pub const MAC_VIRT_HIO: c_int = 0x0;
 
+pub const MAC_UNICAST_NODUPCHECK: u16 = 0x0001;
+pub const MAC_UNICAST_PRIMARY: u16 = 0x0002;
+pub const MAC_UNICAST_HW: u16 = 0x0004;
+pub const MAC_UNICAST_VNIC_PRIMARY: u16 = 0x0008;
+pub const MAC_UNICAST_TAG_DISABLE: u16 = 0x0010;
+pub const MAC_UNICAST_STRIP_DISABLE: u16 = 0x0020;
+pub const MAC_UNICAST_DISABLE_TX_VID_CHECK: u16 = 0x0040;
+
+pub const MAC_OPEN_FLAGS_IS_VNIC: u16 = 0x0001;
+pub const MAC_OPEN_FLAGS_EXCLUSIVE: u16 = 0x0002;
+pub const MAC_OPEN_FLAGS_IS_AGGR_PORT: u16 = 0x0004;
+pub const MAC_OPEN_FLAGS_SHARES_DESIRED: u16 = 0x0008;
+pub const MAC_OPEN_FLAGS_USE_DATALINK_NAME: u16 = 0x0010;
+pub const MAC_OPEN_FLAGS_MULTI_PRIMARY: u16 = 0x0020;
+pub const MAC_OPEN_FLAGS_NO_UNICAST_ADDR: u16 = 0x0040;
+
 #[allow(dead_code)]
 #[repr(C)]
 pub enum mac_client_promisc_type_t {
