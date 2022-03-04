@@ -736,7 +736,6 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
      *
      */
 
-
     match mac::mac_promisc_add(
         state.u2.mch,
         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
