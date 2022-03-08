@@ -208,26 +208,6 @@ unsafe extern "C" fn _fini() -> c_int {
 }
 
 #[no_mangle]
-unsafe extern "C" fn xde_open(
-    _devp: *mut dev_t,
-    _flags: c_int,
-    _otype: c_int,
-    _credp: *mut cred_t,
-) -> c_int {
-    0
-}
-
-#[no_mangle]
-unsafe extern "C" fn xde_close(
-    _dev: dev_t,
-    _flags: c_int,
-    _otype: c_int,
-    _credp: *mut cred_t,
-) -> c_int {
-    0
-}
-
-#[no_mangle]
 unsafe extern "C" fn xde_ioctl(
     _dev: dev_t,
     cmd: c_int,
@@ -523,24 +503,6 @@ unsafe extern "C" fn xde_dld_ioc_delete(
     _rvalp: *mut c_int,
 ) -> c_int {
     ENOTSUP
-}
-
-#[no_mangle]
-unsafe extern "C" fn xde_read(
-    _dev: dev_t,
-    _uiop: *mut uio,
-    _credp: *mut cred_t,
-) -> c_int {
-    0
-}
-
-#[no_mangle]
-unsafe extern "C" fn xde_write(
-    _dev: dev_t,
-    _uiop: *mut uio,
-    _credp: *mut cred_t,
-) -> c_int {
-    0
 }
 
 static xde_ioc_list: [dld::dld_ioc_info_t; 2] = [
