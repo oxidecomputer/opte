@@ -11,7 +11,7 @@
 use crate::{
     dld, dls,
     ioctl::{self, to_errno, IoctlEnvelope},
-    ip, mac, secpolicy, warn,
+    ip, mac, secpolicy, warn, sys,
 };
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::{
@@ -379,7 +379,7 @@ unsafe extern "C" fn xde_ioc_create(req: &CreateXdeReq) -> c_int {
     mreg.m_min_sdu = 1;
     mreg.m_max_sdu = 1500; // TODO hardcode
     mreg.m_multicast_sdu = 0;
-    mreg.m_margin = 0;
+    mreg.m_margin = sys::VLAN_TAGSZ;
     mreg.m_v12n = mac::MAC_VIRT_NONE as u32;
 
     mreg.m_callbacks = &mut xde_mac_callbacks;
