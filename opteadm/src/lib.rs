@@ -75,6 +75,7 @@ impl OpteAdm {
     pub const OPTE_CTL: &'static str = "/devices/pseudo/opte@0:opte";
     //XXX remove this when xde marges into opte-drv
     pub const XDE_CTL: &'static str = "/devices/pseudo/xde@0:xde";
+    pub const DLD_CTL: &'static str = "/dev/dld";
 
     /// Add xde device
     pub fn create_xde(
@@ -306,7 +307,7 @@ impl OpteAdm {
     }
 
     pub fn get_v2p(&self) -> Result<overlay::GetVirt2PhysResp, Error> {
-        let cmd = IoctlCmd::GetVirt2Phys;
+        let cmd = IoctlCmd::DLDGetVirt2Phys;
         let resp = run_ioctl::<overlay::GetVirt2PhysResp, (), _>(
             self.device.as_raw_fd(),
             cmd,

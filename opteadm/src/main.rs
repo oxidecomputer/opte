@@ -578,7 +578,7 @@ fn main() {
         }
 
         Command::DumpV2P => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
             print_v2p(&hdl.get_v2p().unwrap());
         }
 

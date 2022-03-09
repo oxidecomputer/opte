@@ -50,6 +50,9 @@ pub enum IoctlCmd {
     SetVirt2Phys = 50,       // set a v2p mapping
     GetVirt2Phys = 51,       // get v2p mapping
     AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
+
+    //XXX
+    DLDGetVirt2Phys = ((0xde00u32<<16) | 51u32) as isize,
 }
 
 impl TryFrom<c_int> for IoctlCmd {

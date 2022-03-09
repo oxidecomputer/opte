@@ -27,8 +27,8 @@ use opte_core::{
     geneve::Vni,
     headers::{IpCidr, IpHdr},
     ioctl::{
-        self as api, CmdErr, CmdOk, CreateXdeReq, DeleteXdeReq, IoctlCmd,
-        SnatCfg, XdeError,
+        self as api, CmdErr, CmdOk, CreateXdeReq, IoctlCmd,
+        SnatCfg, XdeError, DeleteXdeReq, 
     },
     ip4::Ipv4Addr,
     ip6::Ipv6Addr,
@@ -181,10 +181,11 @@ impl Default for XdeDev {
 #[no_mangle]
 unsafe extern "C" fn _init() -> c_int {
     xde_devs.init(KRwLockType::Driver);
-    mac::mac_init_ops(ptr::null_mut(), XDE_STR);
+    mac::mac_init_ops(&mut xde_devops, XDE_STR);
     match mod_install(&xde_linkage) {
         0 => 0,
         err => {
+            mac::mac_fini_ops(&mut xde_devops);
             warn!("mod install failed: {}", err);
             err
         }
@@ -199,7 +200,10 @@ unsafe extern "C" fn _info(modinfop: *mut modinfo) -> c_int {
 #[no_mangle]
 unsafe extern "C" fn _fini() -> c_int {
     match mod_remove(&xde_linkage) {
-        0 => 0,
+        0 => {
+            mac::mac_fini_ops(&mut xde_devops);
+            0
+        }
         err => {
             warn!("mod remove failed: {}", err);
             err
@@ -216,6 +220,9 @@ unsafe extern "C" fn xde_ioctl(
     _credp: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
+
+    warn!("xde_ioctl");
+
     let cmd = match IoctlCmd::try_from(cmd) {
         Ok(c) => c,
         Err(_) => {
@@ -391,6 +398,7 @@ unsafe extern "C" fn xde_ioc_create(req: &CreateXdeReq) -> c_int {
         0 => {}
         err => {
             warn!("mac register failed: {}", err);
+            mac::mac_free(mreg);
             return err;
         }
     }
@@ -407,6 +415,7 @@ unsafe extern "C" fn xde_ioc_create(req: &CreateXdeReq) -> c_int {
         0 => {}
         err => {
             warn!("mac client open failed: {}", err);
+            mac::mac_unregister(xde.mh);
             return err;
         }
     }
@@ -416,6 +425,8 @@ unsafe extern "C" fn xde_ioc_create(req: &CreateXdeReq) -> c_int {
         0 => {}
         err => {
             warn!("dls devnet createa failed: {}", err);
+            mac::mac_client_close(xde.mch, mac_client_flags);
+            mac::mac_unregister(xde.mh);
             return err;
         }
     }
@@ -442,6 +453,15 @@ unsafe extern "C" fn xde_ioc_create(req: &CreateXdeReq) -> c_int {
         Ok(p) => xde.port = Some(p),
         Err(()) => {
             warn!("creating opte port failed");
+            match dls::dls_devnet_destroy(
+                xde.mh, &mut xde.linkid, boolean_t::B_TRUE) {
+                0 => {}
+                err => {
+                    warn!("dls devnet destroy failed: {}", err);
+                }
+            }
+            mac::mac_client_close(xde.mch, mac_client_flags);
+            mac::mac_unregister(xde.mh);
             return EFAULT;
         }
     }
@@ -505,7 +525,20 @@ unsafe extern "C" fn xde_dld_ioc_delete(
     ENOTSUP
 }
 
-static xde_ioc_list: [dld::dld_ioc_info_t; 2] = [
+unsafe extern "C" fn xde_dld_ioc_v2p(
+    _karg: *mut c_void,
+    _arg: intptr_t,
+    _mode: c_int,
+    _cred: *mut cred_t,
+    _rvalp: *mut c_int,
+) -> c_int {
+
+    warn!("bo jackson!");
+    ENOTSUP
+}
+
+static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [
+    /*
     dld::dld_ioc_info_t {
         di_cmd: IoctlCmd::XdeCreate as u32,
         di_flags: 0,
@@ -518,6 +551,14 @@ static xde_ioc_list: [dld::dld_ioc_info_t; 2] = [
         di_flags: 0,
         di_argsize: core::mem::size_of::<DeleteXdeReq>(),
         di_func: xde_dld_ioc_delete,
+        di_priv_func: secpolicy::secpolicy_dl_config,
+    },
+    */
+    dld::dld_ioc_info_t {
+        di_cmd: IoctlCmd::DLDGetVirt2Phys as u32,
+        di_flags: 0,
+        di_argsize: core::mem::size_of::<overlay::GetVirt2PhysReq>(),
+        di_func: xde_dld_ioc_v2p,
         di_priv_func: secpolicy::secpolicy_dl_config,
     },
 ];
@@ -574,6 +615,7 @@ unsafe extern "C" fn xde_attach(
         0 => {}
         err => {
             warn!("dld_ioc_register failed: {}", err);
+            ddi_remove_minor_node(xde_dip, ptr::null());
             return DDI_FAILURE;
         }
     }
@@ -583,6 +625,7 @@ unsafe extern "C" fn xde_attach(
         ddi::DDI_SUCCESS => {}
         error => {
             //TODO tear down
+            ddi_remove_minor_node(xde_dip, ptr::null());
             return error;
         }
     }
@@ -1151,6 +1194,7 @@ unsafe extern "C" fn xde_mc_ioctl(
     _mp: *mut mblk_t,
 ) {
     //TODO
+    warn!("call to unimplemented xde_mc_ioctl");
 }
 
 #[no_mangle]
