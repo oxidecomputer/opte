@@ -238,6 +238,8 @@ fn gateway_icmp4_ping() {
     overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone());
     let g1_port = g1_port.activate();
 
+    let mut pcap = crate::test::PcapBuilder::new("gateway_icmpv4_ping.pcap");
+
     // ================================================================
     // Generate an ICMP Echo Request from G1 to Virtual GW
     // ================================================================
@@ -275,6 +277,7 @@ fn gateway_icmp4_ping() {
     pkt_bytes.extend_from_slice(&ip4.as_bytes());
     pkt_bytes.extend_from_slice(&body_bytes);
     let mut g1_pkt = Packet::copy(&pkt_bytes).parse().unwrap();
+    pcap.add_pkt(&g1_pkt);
 
     // ================================================================
     // Run the Echo Request through g1's port in the outbound
@@ -288,6 +291,7 @@ fn gateway_icmp4_ping() {
     };
 
     let reply = hp.parse().unwrap();
+    pcap.add_pkt(&reply);
 
     // Ether + IPv4
     assert_eq!(reply.body_offset(), 14 + 20);
@@ -441,6 +445,16 @@ fn overlay_guest_to_guest() {
     )
     .unwrap();
 
+    let mut pcap_guest1 =
+        crate::test::PcapBuilder::new("overlay_guest_to_guest-guest-1.pcap");
+    let mut pcap_phys1 =
+        crate::test::PcapBuilder::new("overlay_guest_to_guest-phys-1.pcap");
+
+    let mut pcap_guest2 =
+        crate::test::PcapBuilder::new("overlay_guest_to_guest-guest-2.pcap");
+    let mut pcap_phys2 =
+        crate::test::PcapBuilder::new("overlay_guest_to_guest-phys-2.pcap");
+
     // ================================================================
     // Generate a telnet SYN packet from g1 to g2.
     // ================================================================
@@ -451,14 +465,13 @@ fn overlay_guest_to_guest() {
     let mut ip4 =
         Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
     ip4.compute_hdr_csum();
-    let tcp_csum = ip4.compute_ulp_csum(UlpCsumOpt::Full, &body);
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
     let eth = EtherHdr::new(
         EtherType::Ipv4,
         g1_cfg.private_mac,
-        // TODO This dest mac is wrong, it would be using the mac of
-        // the gateway.
-        g2_cfg.private_mac,
+        g1_cfg.gw_mac,
     );
 
     let mut bytes = vec![];
@@ -467,12 +480,14 @@ fn overlay_guest_to_guest() {
     bytes.extend_from_slice(&tcp.as_bytes());
     bytes.extend_from_slice(&body);
     let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
+    pcap_guest1.add_pkt(&g1_pkt);
 
     // ================================================================
     // Run the telnet SYN packet through g1's port in the outbound
     // direction and verify the resulting packet meets expectations.
     // ================================================================
     let res = g1_port.process(Out, &mut g1_pkt);
+    pcap_phys1.add_pkt(&g1_pkt);
     assert!(matches!(res, Ok(Modified)));
 
     // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
@@ -553,8 +568,10 @@ fn overlay_guest_to_guest() {
     let mblk = g1_pkt.unwrap();
     let mut g2_pkt =
         unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
+    pcap_phys2.add_pkt(&g2_pkt);
 
     let res = g2_port.process(In, &mut g2_pkt);
+    pcap_guest2.add_pkt(&g2_pkt);
     assert!(matches!(res, Ok(Modified)));
 
     // Ether + IPv4 + TCP
@@ -656,7 +673,8 @@ fn overlay_guest_to_internet() {
     tcp.set_seq(1741469041);
     let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, dst_ip);
     ip4.compute_hdr_csum();
-    let tcp_csum = ip4.compute_ulp_csum(UlpCsumOpt::Full, &body);
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
     let eth = EtherHdr::new(
         EtherType::Ipv4,

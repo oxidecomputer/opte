@@ -650,11 +650,17 @@ impl Ipv4Hdr {
             HeaderChecksum::from(Checksum::compute(&self.as_bytes())).bytes();
     }
 
-    pub fn compute_ulp_csum(&self, opt: UlpCsumOpt, body: &[u8]) -> Checksum {
+    pub fn compute_ulp_csum(
+        &self,
+        opt: UlpCsumOpt,
+        ulp_hdr: &[u8],
+        body: &[u8],
+    ) -> Checksum {
         match opt {
             UlpCsumOpt::Partial => todo!("implement partial csum"),
             UlpCsumOpt::Full => {
                 let mut csum = self.compute_pseudo_csum();
+                csum.add(ulp_hdr);
                 csum.add(body);
                 csum
             }
@@ -716,7 +722,7 @@ impl Ipv4Hdr {
         let mut bytes = Vec::with_capacity(12);
         bytes.extend_from_slice(&self.src.to_be_bytes());
         bytes.extend_from_slice(&self.dst.to_be_bytes());
-        let len_bytes = self.pay_len().to_be_bytes();
+        let len_bytes = (self.pay_len() as u16).to_be_bytes();
         bytes.extend_from_slice(&[
             0u8,
             self.proto as u8,

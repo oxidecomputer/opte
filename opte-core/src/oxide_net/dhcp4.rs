@@ -53,7 +53,7 @@ pub fn setup(
     let offer = Action::Hairpin(Arc::new(Dhcp4Action {
         guest_mac: cfg.private_mac,
         guest_ip4: cfg.private_ip,
-        subnet: cfg.vpc_subnet.cidr(),
+        // subnet: cfg.vpc_subnet.cidr(),
         gw_mac: cfg.gw_mac,
         gw_ip4: cfg.gw_ip,
         reply_type: Dhcp4ReplyType::Offer,
@@ -63,7 +63,7 @@ pub fn setup(
     let ack = Action::Hairpin(Arc::new(Dhcp4Action {
         guest_mac: cfg.private_mac,
         guest_ip4: cfg.private_ip,
-        subnet: cfg.vpc_subnet.cidr(),
+        // subnet: cfg.vpc_subnet.cidr(),
         gw_mac: cfg.gw_mac,
         gw_ip4: cfg.gw_ip,
         reply_type: Dhcp4ReplyType::Ack,
@@ -102,7 +102,7 @@ pub fn setup(
 pub struct Dhcp4Action {
     guest_mac: EtherAddr,
     guest_ip4: Ipv4Addr,
-    subnet: Ipv4Cidr,
+    // subnet: Ipv4Cidr,
     gw_mac: EtherAddr,
     gw_ip4: Ipv4Addr,
     reply_type: Dhcp4ReplyType,

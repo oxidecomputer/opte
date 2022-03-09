@@ -227,7 +227,6 @@ fn dyn_nat4_ht() {
     use crate::headers::{IpMeta, UlpMeta};
     use crate::ip4::Protocol;
     use crate::packet::{MetaGroup, PacketMeta};
-    use crate::port;
     use crate::tcp::TcpMeta;
 
     let priv_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);

@@ -35,7 +35,7 @@ pub fn setup(
         gw_mac: cfg.gw_mac,
         gw_ip4: cfg.gw_ip,
         guest_mac: cfg.private_mac,
-        guest_ip4: cfg.private_ip,
+        // guest_ip4: cfg.private_ip,
     }));
     let icmp = Layer::new("icmp", port.name(), vec![reply]);
 
@@ -78,7 +78,7 @@ pub struct Icmp4Reply {
     gw_mac: EtherAddr,
     gw_ip4: Ipv4Addr,
     guest_mac: EtherAddr,
-    guest_ip4: Ipv4Addr,
+    // guest_ip4: Ipv4Addr,
 }
 
 impl Display for Icmp4Reply {

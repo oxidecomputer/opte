@@ -321,6 +321,13 @@ macro_rules! assert_ulp {
 }
 
 impl UlpHdr {
+    pub fn as_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Tcp(tcp) => tcp.as_bytes(),
+            Self::Udp(udp) => udp.as_bytes(),
+        }
+    }
+
     pub fn csum_minus_hdr(&self) -> Checksum {
         match self {
             Self::Tcp(tcp) => tcp.csum_minus_hdr(),

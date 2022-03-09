@@ -9,7 +9,7 @@ default = ["std"]
 # This feature indicates that OPTE is being built with std so that it
 # may be used by a userland binary/library for the purpose of userland
 # emulation/testing.
-std = ["libc"]
+std = ["libc", "usdt"]
 
 [dependencies]
 cfg-if = "0.1"
@@ -18,8 +18,11 @@ heapless = "0.7.9"
 illumos-ddi-dki = { path = "../illumos-ddi-dki", default-features = false }
 libc = { version = "0.2", optional = true }
 postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
-# TODO this is really just a test dep
-usdt = "*"
+#
+# XXX usdt is really a dev dependency, but when I move it there weird
+# stuff happens (TM). Maybe to do with feature flags?
+#
+usdt = { version = "*", optional = true }
 zerocopy = "0.6.1"
 
 #

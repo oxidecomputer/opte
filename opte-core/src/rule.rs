@@ -597,7 +597,6 @@ impl DataPredicate {
 
             Self::Dhcp4MsgType(mt) => {
                 let bytes = rdr.copy_remaining();
-                crate::dbg(format!("remaining bytes: {}", bytes.len()));
                 let pkt = match DhcpPacket::new_checked(&bytes) {
                     Ok(v) => v,
                     Err(e) => {
@@ -618,11 +617,6 @@ impl DataPredicate {
                     }
                 };
 
-                crate::dbg(format!(
-                    "{} == {}?",
-                    DhcpMessageType::from(dhcp.message_type),
-                    *mt
-                ));
                 let res = DhcpMessageType::from(dhcp.message_type) == *mt;
                 return res;
             }
@@ -649,7 +643,6 @@ impl DataPredicate {
                     }
                 };
 
-                crate::dbg(format!("{:?} == {}?", pkt.msg_type(), *mt));
                 return IcmpType::from(pkt.msg_type()) == *mt;
             }
 

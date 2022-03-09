@@ -135,6 +135,10 @@ impl UdpHdr {
         bytes
     }
 
+    // pub fn compute_hdr_csum(&self) -> Checksum {
+    //     Checksum::compute(&self.as_bytes())
+    // }
+
     pub fn csum(&self) -> [u8; 2] {
         self.csum
     }
