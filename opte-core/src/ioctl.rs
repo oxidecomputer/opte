@@ -32,6 +32,16 @@ use crate::port;
 use crate::rule;
 use crate::vpc::VpcSubnet4;
 
+const DLD_XDE_CREATE: i32 = ((0xde00u32<<16) | 47) as i32;
+const DLD_XDE_DELETE: i32 = ((0xde00u32<<16) | 48) as i32;
+const DLD_SET_VIRT_2_PHYS: i32 = ((0xde00u32<<16) | 50u32) as i32;
+const DLD_GET_VIRT_2_PHYS: i32 = ((0xde00u32<<16) | 51u32) as i32;
+const DLD_ADD_ROUTER_ENTRY_IPV4: i32 = ((0xde00u32<<16) | 60u32) as i32;
+const DLD_ADD_FW_RULE: i32 = ((0xde00u32<<16) | 20u32) as i32;
+const DLD_DUMP_LAYER: i32 = ((0xde00u32<<16) | 31u32) as i32;
+const DLD_DUMP_UFT: i32 = ((0xde00u32<<16) | 32u32) as i32;
+const DLD_LIST_LAYERS: i32 = ((0xde00u32<<16) | 33u32) as i32;
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub enum IoctlCmd {
@@ -41,18 +51,17 @@ pub enum IoctlCmd {
     FwAddRule = 20,          // add firewall rule
     FwRemRule = 21,          // remove firewall rule
     DumpTcpFlows = 30,       // dump TCP flows
-    DumpLayer = 31,          // dump the specified Layer
-    DumpUft = 32,            // dump the Unified Flow Table
-    ListLayers = 33,         // list the layers on a given port
     SetOverlay = 40,         // set the overlay config
-    XdeCreate = 47,          // create an xde device
-    XdeDelete = 48,          // delete an xde device
-    SetVirt2Phys = 50,       // set a v2p mapping
-    GetVirt2Phys = 51,       // get v2p mapping
-    AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
 
-    DLDSetVirt2Phys = ((0xde00u32<<16) | 50u32) as isize,
-    DLDGetVirt2Phys = ((0xde00u32<<16) | 51u32) as isize,
+    DLDAddFwRule = DLD_ADD_FW_RULE as isize,
+    DLDDumpLayer = DLD_DUMP_LAYER as isize,
+    DLDDumpUft = DLD_DUMP_UFT as isize,
+    DLDListLayers = DLD_LIST_LAYERS as isize,
+    DLDXdeCreate = DLD_XDE_CREATE as isize,
+    DLDXdeDelete = DLD_XDE_DELETE as isize,
+    DLDSetVirt2Phys = DLD_SET_VIRT_2_PHYS as isize,
+    DLDGetVirt2Phys = DLD_GET_VIRT_2_PHYS as isize,
+    DLDAddRouterEntryIpv4 = DLD_ADD_ROUTER_ENTRY_IPV4 as isize,
 }
 
 impl TryFrom<c_int> for IoctlCmd {
@@ -66,15 +75,16 @@ impl TryFrom<c_int> for IoctlCmd {
             20 => Ok(IoctlCmd::FwAddRule),
             21 => Ok(IoctlCmd::FwRemRule),
             30 => Ok(IoctlCmd::DumpTcpFlows),
-            31 => Ok(IoctlCmd::DumpLayer),
-            32 => Ok(IoctlCmd::DumpUft),
-            33 => Ok(IoctlCmd::ListLayers),
             40 => Ok(IoctlCmd::SetOverlay),
-            47 => Ok(IoctlCmd::XdeCreate),
-            48 => Ok(IoctlCmd::XdeDelete),
-            50 => Ok(IoctlCmd::SetVirt2Phys),
-            51 => Ok(IoctlCmd::GetVirt2Phys),
-            60 => Ok(IoctlCmd::AddRouterEntryIpv4),
+            DLD_ADD_FW_RULE => Ok(IoctlCmd::DLDAddRouterEntryIpv4),
+            DLD_DUMP_LAYER => Ok(IoctlCmd::DLDDumpLayer),
+            DLD_DUMP_UFT => Ok(IoctlCmd::DLDDumpUft),
+            DLD_LIST_LAYERS => Ok(IoctlCmd::DLDListLayers),
+            DLD_XDE_CREATE => Ok(IoctlCmd::DLDXdeCreate),
+            DLD_XDE_DELETE => Ok(IoctlCmd::DLDXdeDelete), 
+            DLD_SET_VIRT_2_PHYS => Ok(IoctlCmd::DLDSetVirt2Phys),
+            DLD_GET_VIRT_2_PHYS => Ok(IoctlCmd::DLDGetVirt2Phys),
+            DLD_ADD_ROUTER_ENTRY_IPV4 => Ok(IoctlCmd::DLDAddRouterEntryIpv4),
             _ => Err(()),
         }
     }

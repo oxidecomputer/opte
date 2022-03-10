@@ -15,7 +15,7 @@ use crate::{
 };
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::{
-    convert::{TryFrom, TryInto},
+    convert::TryInto,
     ops::Range,
     ptr,
 };
@@ -214,101 +214,15 @@ unsafe extern "C" fn _fini() -> c_int {
 #[no_mangle]
 unsafe extern "C" fn xde_ioctl(
     _dev: dev_t,
-    cmd: c_int,
-    arg: intptr_t,
-    mode: c_int,
+    _cmd: c_int,
+    _arg: intptr_t,
+    _mode: c_int,
     _credp: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
 
-    warn!("xde_ioctl");
-
-    let cmd = match IoctlCmd::try_from(cmd) {
-        Ok(c) => c,
-        Err(_) => {
-            warn!("ioctl cmd try from failed");
-            return EINVAL;
-        }
-    };
-
-    let mut ioctlenv =
-        match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
-            Ok(val) => val,
-            Err(e) => {
-                warn!("ioctl envelope failed: {:?}", e);
-                return EFAULT;
-            }
-        };
-
-    match cmd {
-        IoctlCmd::XdeCreate => {
-            let mut req: CreateXdeReq = match ioctlenv.copy_in_req() {
-                Ok(x) => x,
-                Err(e @ crate::ioctl::Error::DeserError(_)) => {
-                    warn!("dser xde_ioc_create failed: {:?}", e);
-                    return EINVAL;
-                }
-                Err(e) => {
-                    warn!("ioctl envelope copy in failed: {:?}", e);
-                    return EFAULT;
-                }
-            };
-            match xde_ioc_create(&mut req) {
-                0 => hdlr_resp::<(), XdeError>(&mut ioctlenv, Ok(Ok(()))),
-                err => {
-                    warn!("xde_ioc_create failed: {}", err);
-                    hdlr_resp::<(), XdeError>(
-                        &mut ioctlenv,
-                        Err(HdlrError::System(err)),
-                    )
-                }
-            }
-        }
-        IoctlCmd::XdeDelete => {
-            let mut req: DeleteXdeReq = match ioctlenv.copy_in_req() {
-                Ok(x) => x,
-                Err(e @ crate::ioctl::Error::DeserError(_)) => {
-                    warn!("dser xde_ioc_delete failed: {:?}", e);
-                    return EINVAL;
-                }
-                Err(e) => {
-                    warn!("ioctl envelope copy in failed: {:?}", e);
-                    return EFAULT;
-                }
-            };
-            match xde_ioc_delete(&mut req) {
-                0 => hdlr_resp::<(), XdeError>(&mut ioctlenv, Ok(Ok(()))),
-                err => {
-                    warn!("xde_ioc_delete failed: {}", err);
-                    hdlr_resp::<(), XdeError>(
-                        &mut ioctlenv,
-                        Err(HdlrError::System(err)),
-                    )
-                }
-            }
-        }
-        IoctlCmd::AddRouterEntryIpv4 => {
-            let resp = add_router_entry_hdlr(&ioctlenv);
-            hdlr_resp(&mut ioctlenv, resp)
-        }
-        IoctlCmd::FwAddRule => {
-            let resp = add_fw_rule_hdlr(&ioctlenv);
-            hdlr_resp(&mut ioctlenv, resp)
-        }
-        IoctlCmd::ListLayers => {
-            let resp = list_layers_hdlr(&ioctlenv);
-            hdlr_resp(&mut ioctlenv, resp)
-        }
-        IoctlCmd::DumpUft => {
-            let resp = dump_uft_hdlr(&ioctlenv);
-            hdlr_resp(&mut ioctlenv, resp)
-        }
-        IoctlCmd::DumpLayer => {
-            let resp = dump_layer_hdlr(&ioctlenv);
-            hdlr_resp(&mut ioctlenv, resp)
-        }
-        _ => ENOTSUP,
-    }
+    warn!("xde_ioctl not supported, use dld_ioc");
+    ENOTSUP
 }
 
 fn hdlr_resp<T, E>(
@@ -335,12 +249,40 @@ where
 #[no_mangle]
 unsafe extern "C" fn xde_dld_ioc_create(
     _karg: *mut c_void,
-    _arg: intptr_t,
-    _mode: c_int,
+    arg: intptr_t,
+    mode: c_int,
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-    0
+    let mut ioctlenv =
+        match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
+            Ok(val) => val,
+            Err(e) => {
+                warn!("ioctl envelope failed: {:?}", e);
+                return EFAULT;
+            }
+        };
+    let mut req: CreateXdeReq = match ioctlenv.copy_in_req() {
+        Ok(x) => x,
+        Err(e @ crate::ioctl::Error::DeserError(_)) => {
+            warn!("dser xde_ioc_create failed: {:?}", e);
+            return EINVAL;
+        }
+        Err(e) => {
+            warn!("ioctl envelope copy in failed: {:?}", e);
+            return EFAULT;
+        }
+    };
+    match xde_ioc_create(&mut req) {
+        0 => hdlr_resp::<(), XdeError>(&mut ioctlenv, Ok(Ok(()))),
+        err => {
+            warn!("xde_ioc_create failed: {}", err);
+            hdlr_resp::<(), XdeError>(
+                &mut ioctlenv,
+                Err(HdlrError::System(err)),
+            )
+        }
+    }
 }
 
 #[no_mangle]
@@ -509,12 +451,40 @@ unsafe extern "C" fn xde_ioc_delete(req: &DeleteXdeReq) -> c_int {
 
 unsafe extern "C" fn xde_dld_ioc_delete(
     _karg: *mut c_void,
-    _arg: intptr_t,
-    _mode: c_int,
+    arg: intptr_t,
+    mode: c_int,
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-    ENOTSUP
+    let mut ioctlenv =
+        match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
+            Ok(val) => val,
+            Err(e) => {
+                warn!("ioctl envelope failed: {:?}", e);
+                return EFAULT;
+            }
+        };
+    let mut req: DeleteXdeReq = match ioctlenv.copy_in_req() {
+        Ok(x) => x,
+        Err(e @ crate::ioctl::Error::DeserError(_)) => {
+            warn!("dser xde_ioc_delete failed: {:?}", e);
+            return EINVAL;
+        }
+        Err(e) => {
+            warn!("ioctl envelope copy in failed: {:?}", e);
+            return EFAULT;
+        }
+    };
+    match xde_ioc_delete(&mut req) {
+        0 => hdlr_resp::<(), XdeError>(&mut ioctlenv, Ok(Ok(()))),
+        err => {
+            warn!("xde_ioc_delete failed: {}", err);
+            hdlr_resp::<(), XdeError>(
+                &mut ioctlenv,
+                Err(HdlrError::System(err)),
+            )
+        }
+    }
 }
 
 unsafe extern "C" fn xde_dld_ioc_get_v2p(
@@ -561,23 +531,131 @@ unsafe extern "C" fn xde_dld_ioc_set_v2p(
 
 }
 
-static xde_ioc_list: [dld::dld_ioc_info_t; 2] = [
-    /*
+unsafe extern "C" fn xde_dld_ioc_add_router_entry_ipv4(
+    _karg: *mut c_void,
+    arg: intptr_t,
+    mode: c_int,
+    _cred: *mut cred_t,
+    _rvalp: *mut c_int,
+) -> c_int {
+
+    let mut ioctlenv =
+        match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
+            Ok(val) => val,
+            Err(e) => {
+                warn!("ioctl envelope failed: {:?}", e);
+                return EFAULT;
+            }
+        };
+
+    let resp = add_router_entry_hdlr(&ioctlenv);
+    hdlr_resp(&mut ioctlenv, resp)
+
+}
+
+unsafe extern "C" fn xde_dld_ioc_add_fw_rule(
+    _karg: *mut c_void,
+    arg: intptr_t,
+    mode: c_int,
+    _cred: *mut cred_t,
+    _rvalp: *mut c_int,
+) -> c_int {
+
+    let mut ioctlenv =
+        match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
+            Ok(val) => val,
+            Err(e) => {
+                warn!("ioctl envelope failed: {:?}", e);
+                return EFAULT;
+            }
+        };
+
+    let resp = add_fw_rule_hdlr(&ioctlenv);
+    hdlr_resp(&mut ioctlenv, resp)
+
+}
+
+unsafe extern "C" fn xde_dld_ioc_list_layers(
+    _karg: *mut c_void,
+    arg: intptr_t,
+    mode: c_int,
+    _cred: *mut cred_t,
+    _rvalp: *mut c_int,
+) -> c_int {
+
+    let mut ioctlenv =
+        match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
+            Ok(val) => val,
+            Err(e) => {
+                warn!("ioctl envelope failed: {:?}", e);
+                return EFAULT;
+            }
+        };
+
+    let resp = list_layers_hdlr(&ioctlenv);
+    hdlr_resp(&mut ioctlenv, resp)
+
+}
+
+unsafe extern "C" fn xde_dld_ioc_dump_uft(
+    _karg: *mut c_void,
+    arg: intptr_t,
+    mode: c_int,
+    _cred: *mut cred_t,
+    _rvalp: *mut c_int,
+) -> c_int {
+
+    let mut ioctlenv =
+        match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
+            Ok(val) => val,
+            Err(e) => {
+                warn!("ioctl envelope failed: {:?}", e);
+                return EFAULT;
+            }
+        };
+
+    let resp = dump_uft_hdlr(&ioctlenv);
+    hdlr_resp(&mut ioctlenv, resp)
+
+}
+
+unsafe extern "C" fn xde_dld_ioc_dump_layer(
+    _karg: *mut c_void,
+    arg: intptr_t,
+    mode: c_int,
+    _cred: *mut cred_t,
+    _rvalp: *mut c_int,
+) -> c_int {
+
+    let mut ioctlenv =
+        match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
+            Ok(val) => val,
+            Err(e) => {
+                warn!("ioctl envelope failed: {:?}", e);
+                return EFAULT;
+            }
+        };
+
+    let resp = dump_layer_hdlr(&ioctlenv);
+    hdlr_resp(&mut ioctlenv, resp)
+
+}
+
+static xde_ioc_list: [dld::dld_ioc_info_t; 9] = [
     dld::dld_ioc_info_t {
-        di_cmd: IoctlCmd::XdeCreate as u32,
+        di_cmd: IoctlCmd::DLDXdeCreate as u32,
         di_flags: 0,
         di_argsize: core::mem::size_of::<CreateXdeReq>(),
         di_func: xde_dld_ioc_create,
         di_priv_func: secpolicy::secpolicy_dl_config,
     },
     dld::dld_ioc_info_t {
-        di_cmd: IoctlCmd::XdeDelete as u32,
+        di_cmd: IoctlCmd::DLDXdeDelete as u32,
         di_flags: 0,
         di_argsize: core::mem::size_of::<DeleteXdeReq>(),
         di_func: xde_dld_ioc_delete,
         di_priv_func: secpolicy::secpolicy_dl_config,
     },
-    */
     dld::dld_ioc_info_t {
         di_cmd: IoctlCmd::DLDGetVirt2Phys as u32,
         di_flags: 0,
@@ -590,6 +668,41 @@ static xde_ioc_list: [dld::dld_ioc_info_t; 2] = [
         di_flags: 0,
         di_argsize: core::mem::size_of::<overlay::SetVirt2PhysReq>(),
         di_func: xde_dld_ioc_set_v2p,
+        di_priv_func: secpolicy::secpolicy_dl_config,
+    },
+    dld::dld_ioc_info_t {
+        di_cmd: IoctlCmd::DLDAddRouterEntryIpv4 as u32,
+        di_flags: 0,
+        di_argsize: core::mem::size_of::<router::AddRouterEntryIpv4Req>(),
+        di_func: xde_dld_ioc_add_router_entry_ipv4,
+        di_priv_func: secpolicy::secpolicy_dl_config,
+    },
+    dld::dld_ioc_info_t {
+        di_cmd: IoctlCmd::DLDAddFwRule as u32,
+        di_flags: 0,
+        di_argsize: core::mem::size_of::<FwAddRuleReq>(),
+        di_func: xde_dld_ioc_add_fw_rule,
+        di_priv_func: secpolicy::secpolicy_dl_config,
+    },
+    dld::dld_ioc_info_t {
+        di_cmd: IoctlCmd::DLDListLayers as u32,
+        di_flags: 0,
+        di_argsize: core::mem::size_of::<api::ListLayersReq>(),
+        di_func: xde_dld_ioc_list_layers,
+        di_priv_func: secpolicy::secpolicy_dl_config,
+    },
+    dld::dld_ioc_info_t {
+        di_cmd: IoctlCmd::DLDDumpUft as u32,
+        di_flags: 0,
+        di_argsize: core::mem::size_of::<api::DumpUftReq>(),
+        di_func: xde_dld_ioc_dump_uft,
+        di_priv_func: secpolicy::secpolicy_dl_config,
+    },
+    dld::dld_ioc_info_t {
+        di_cmd: IoctlCmd::DLDDumpLayer as u32,
+        di_flags: 0,
+        di_argsize: core::mem::size_of::<api::DumpLayerReq>(),
+        di_func: xde_dld_ioc_dump_layer,
         di_priv_func: secpolicy::secpolicy_dl_config,
     },
 ];

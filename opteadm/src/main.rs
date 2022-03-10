@@ -556,17 +556,17 @@ fn main() {
         }
 
         Command::ListLayers { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
             print_list_layers(&hdl.list_layers(&port).unwrap());
         }
 
         Command::DumpLayer { port, name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
             print_layer(&hdl.get_layer_by_name(&port, &name).unwrap());
         }
 
         Command::DumpUft { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
             print_uft(&hdl.uft(&port).unwrap());
         }
 
@@ -583,7 +583,7 @@ fn main() {
         }
 
         Command::AddFwRule { port, direction, filters, action, priority } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
             let rule = FirewallRule {
                 direction,
                 filters: filters.into(),
@@ -605,7 +605,7 @@ fn main() {
             src_underlay_addr,
             passthrough,
         } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
             hdl.create_xde(
                 &name,
                 &private_mac,
@@ -622,12 +622,12 @@ fn main() {
         }
 
         Command::XdeDelete { name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
             hdl.delete_xde(&name).unwrap();
         }
 
         Command::RmFwRule { port, direction, id } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
             let request = FwRemRuleReq { port_name: port, dir: direction, id };
             hdl.remove_firewall_rule(&request).unwrap();
         }
@@ -645,7 +645,7 @@ fn main() {
         }
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
             let req =
                 router::AddRouterEntryIpv4Req { port_name: port, dest, target };
             hdl.add_router_entry_ip4(&req).unwrap();

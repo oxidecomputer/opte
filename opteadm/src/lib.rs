@@ -115,7 +115,7 @@ impl OpteAdm {
             Ipv6Addr::from(boundary_services_addr.octets());
         let src_underlay_addr = Ipv6Addr::from(src_underlay_addr.octets());
 
-        let cmd = IoctlCmd::XdeCreate;
+        let cmd = IoctlCmd::DLDXdeCreate;
         let req = CreateXdeReq {
             xde_devname,
             linkid,
@@ -145,7 +145,7 @@ impl OpteAdm {
             libnet::LinkHandle::Name(name.into()).id().expect("get link id");
 
         let req = DeleteXdeReq { xde_devname: name.into() };
-        let cmd = IoctlCmd::XdeDelete;
+        let cmd = IoctlCmd::DLDXdeDelete;
         let resp = run_ioctl::<(), api::XdeError, _>(
             self.device.as_raw_fd(),
             cmd,
@@ -184,7 +184,7 @@ impl OpteAdm {
         port_name: &str,
         name: &str,
     ) -> Result<api::DumpLayerResp, Error> {
-        let cmd = IoctlCmd::DumpLayer;
+        let cmd = IoctlCmd::DLDDumpLayer;
         let req = api::DumpLayerReq {
             port_name: port_name.to_string(),
             name: name.to_string(),
@@ -212,7 +212,7 @@ impl OpteAdm {
         &self,
         port: &str,
     ) -> Result<api::ListLayersResp, Error> {
-        let cmd = IoctlCmd::ListLayers;
+        let cmd = IoctlCmd::DLDListLayers;
         let resp = run_ioctl::<api::ListLayersResp, (), _>(
             self.device.as_raw_fd(),
             cmd,
@@ -279,7 +279,7 @@ impl OpteAdm {
 
     /// Return the unified flow table (UFT).
     pub fn uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
-        let cmd = IoctlCmd::DumpUft;
+        let cmd = IoctlCmd::DLDDumpUft;
         let resp = run_ioctl::<api::DumpUftResp, api::DumpUftError, _>(
             self.device.as_raw_fd(),
             cmd,
@@ -320,7 +320,7 @@ impl OpteAdm {
         &self,
         req: &router::AddRouterEntryIpv4Req,
     ) -> Result<(), Error> {
-        let cmd = IoctlCmd::AddRouterEntryIpv4;
+        let cmd = IoctlCmd::DLDAddRouterEntryIpv4;
         let resp = run_ioctl::<(), router::AddEntryError, _>(
             self.device.as_raw_fd(),
             cmd,
