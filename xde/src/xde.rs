@@ -228,9 +228,6 @@ where
     T: CmdOk,
     E: CmdErr,
 {
-    //TODO
-    //dtrace_probe_hdlr_resp(&resp);
-
     match resp {
         Ok(resp) => match ioctlenv.copy_out_resp(&resp) {
             Ok(()) => 0,
@@ -702,25 +699,6 @@ unsafe extern "C" fn xde_attach(
         ddi_attach_cmd_t::DDI_ATTACH => {}
     }
 
-    // create a minor node so /devices/xde is a thing, this acts as an entry
-    // point for ioctls.
-    /*
-    match ddi_create_minor_node(
-        dip,
-        b"xde\0".as_ptr() as *const c_char,
-        S_IFCHR,
-        ddi_get_instance(dip) as u32,
-        DDI_PSEUDO,
-        0,
-    ) {
-        0 => {}
-        err => {
-            warn!("ddi_create_minor_node failed: {}", err);
-            return DDI_FAILURE;
-        }
-    }
-    */
-
     xde_dip = dip;
 
     let u1 = match get_driver_prop_string("underlay1") {
@@ -747,7 +725,6 @@ unsafe extern "C" fn xde_attach(
         0 => {}
         err => {
             warn!("dld_ioc_register failed: {}", err);
-            //ddi_remove_minor_node(xde_dip, ptr::null());
             return DDI_FAILURE;
         }
     }
@@ -756,7 +733,6 @@ unsafe extern "C" fn xde_attach(
     match init_underlay_ingress_handlers(&mut state) {
         ddi::DDI_SUCCESS => {}
         error => {
-            //ddi_remove_minor_node(xde_dip, ptr::null());
             dld::dld_ioc_unregister(dld::XDE_IOC);
             return error;
         }
@@ -951,8 +927,6 @@ unsafe extern "C" fn xde_detach(
     mac::mac_promisc_remove(state.u1.mph);
     mac::mac_promisc_remove(state.u2.mph);
 
-    //let mut ret = 0;
-
     // close mac client handle for underlay devices
     mac::mac_client_close(state.u1.mch, 0);
     mac::mac_client_close(state.u2.mch, 0);
@@ -963,7 +937,6 @@ unsafe extern "C" fn xde_detach(
 
     let _ = Box::from_raw(rstate as *mut XdeState);
 
-    //ddi_remove_minor_node(xde_dip, ptr::null());
     dld::dld_ioc_unregister(dld::XDE_IOC);
     xde_dip = ptr::null_mut::<c_void>() as *mut dev_info;
     0
@@ -1081,7 +1054,7 @@ unsafe extern "C" fn xde_mc_setpromisc(
     _arg: *mut c_void,
     _val: boolean_t,
 ) -> c_int {
-    // TODO ... something
+    // TODO ... something?
     0
 }
 
@@ -1326,7 +1299,6 @@ unsafe extern "C" fn xde_mc_ioctl(
     _queue: *mut queue_t,
     _mp: *mut mblk_t,
 ) {
-    //TODO
     warn!("call to unimplemented xde_mc_ioctl");
 }
 
