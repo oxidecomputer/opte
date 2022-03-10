@@ -11,14 +11,10 @@
 use crate::{
     dld, dls,
     ioctl::{self, to_errno, IoctlEnvelope},
-    ip, mac, secpolicy, warn, sys,
+    ip, mac, secpolicy, sys, warn,
 };
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
-use core::{
-    convert::TryInto,
-    ops::Range,
-    ptr,
-};
+use core::{convert::TryInto, ops::Range, ptr};
 extern crate opte_core;
 use illumos_ddi_dki as ddi;
 use illumos_ddi_dki::*;
@@ -27,8 +23,8 @@ use opte_core::{
     geneve::Vni,
     headers::{IpCidr, IpHdr},
     ioctl::{
-        self as api, CmdErr, CmdOk, CreateXdeReq, IoctlCmd,
-        SnatCfg, XdeError, DeleteXdeReq, 
+        self as api, CmdErr, CmdOk, CreateXdeReq, DeleteXdeReq, IoctlCmd,
+        SnatCfg, XdeError,
     },
     ip4::Ipv4Addr,
     ip6::Ipv6Addr,
@@ -220,7 +216,6 @@ unsafe extern "C" fn xde_ioctl(
     _credp: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-
     warn!("xde_ioctl not supported, use dld_ioc");
     ENOTSUP
 }
@@ -388,7 +383,10 @@ unsafe extern "C" fn xde_ioc_create(req: &CreateXdeReq) -> c_int {
         Err(()) => {
             warn!("creating opte port failed");
             match dls::dls_devnet_destroy(
-                xde.mh, &mut xde.linkid, boolean_t::B_TRUE) {
+                xde.mh,
+                &mut xde.linkid,
+                boolean_t::B_TRUE,
+            ) {
                 0 => {}
                 err => {
                     warn!("dls devnet destroy failed: {}", err);
@@ -494,7 +492,6 @@ unsafe extern "C" fn xde_dld_ioc_get_v2p(
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-
     let mut ioctlenv =
         match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
             Ok(val) => val,
@@ -506,7 +503,6 @@ unsafe extern "C" fn xde_dld_ioc_get_v2p(
 
     let resp = get_v2p_hdlr(&ioctlenv);
     hdlr_resp(&mut ioctlenv, resp)
-
 }
 
 unsafe extern "C" fn xde_dld_ioc_set_v2p(
@@ -516,7 +512,6 @@ unsafe extern "C" fn xde_dld_ioc_set_v2p(
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-
     let mut ioctlenv =
         match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
             Ok(val) => val,
@@ -528,7 +523,6 @@ unsafe extern "C" fn xde_dld_ioc_set_v2p(
 
     let resp = set_v2p_hdlr(&ioctlenv);
     hdlr_resp(&mut ioctlenv, resp)
-
 }
 
 unsafe extern "C" fn xde_dld_ioc_add_router_entry_ipv4(
@@ -538,7 +532,6 @@ unsafe extern "C" fn xde_dld_ioc_add_router_entry_ipv4(
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-
     let mut ioctlenv =
         match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
             Ok(val) => val,
@@ -550,7 +543,6 @@ unsafe extern "C" fn xde_dld_ioc_add_router_entry_ipv4(
 
     let resp = add_router_entry_hdlr(&ioctlenv);
     hdlr_resp(&mut ioctlenv, resp)
-
 }
 
 unsafe extern "C" fn xde_dld_ioc_add_fw_rule(
@@ -560,7 +552,6 @@ unsafe extern "C" fn xde_dld_ioc_add_fw_rule(
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-
     let mut ioctlenv =
         match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
             Ok(val) => val,
@@ -572,7 +563,6 @@ unsafe extern "C" fn xde_dld_ioc_add_fw_rule(
 
     let resp = add_fw_rule_hdlr(&ioctlenv);
     hdlr_resp(&mut ioctlenv, resp)
-
 }
 
 unsafe extern "C" fn xde_dld_ioc_list_layers(
@@ -582,7 +572,6 @@ unsafe extern "C" fn xde_dld_ioc_list_layers(
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-
     let mut ioctlenv =
         match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
             Ok(val) => val,
@@ -594,7 +583,6 @@ unsafe extern "C" fn xde_dld_ioc_list_layers(
 
     let resp = list_layers_hdlr(&ioctlenv);
     hdlr_resp(&mut ioctlenv, resp)
-
 }
 
 unsafe extern "C" fn xde_dld_ioc_dump_uft(
@@ -604,7 +592,6 @@ unsafe extern "C" fn xde_dld_ioc_dump_uft(
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-
     let mut ioctlenv =
         match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
             Ok(val) => val,
@@ -616,7 +603,6 @@ unsafe extern "C" fn xde_dld_ioc_dump_uft(
 
     let resp = dump_uft_hdlr(&ioctlenv);
     hdlr_resp(&mut ioctlenv, resp)
-
 }
 
 unsafe extern "C" fn xde_dld_ioc_dump_layer(
@@ -626,7 +612,6 @@ unsafe extern "C" fn xde_dld_ioc_dump_layer(
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-
     let mut ioctlenv =
         match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
             Ok(val) => val,
@@ -638,7 +623,6 @@ unsafe extern "C" fn xde_dld_ioc_dump_layer(
 
     let resp = dump_layer_hdlr(&ioctlenv);
     hdlr_resp(&mut ioctlenv, resp)
-
 }
 
 static xde_ioc_list: [dld::dld_ioc_info_t; 9] = [

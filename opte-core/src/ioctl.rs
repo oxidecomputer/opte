@@ -32,26 +32,26 @@ use crate::port;
 use crate::rule;
 use crate::vpc::VpcSubnet4;
 
-const DLD_XDE_CREATE: i32 = ((0xde00u32<<16) | 47) as i32;
-const DLD_XDE_DELETE: i32 = ((0xde00u32<<16) | 48) as i32;
-const DLD_SET_VIRT_2_PHYS: i32 = ((0xde00u32<<16) | 50u32) as i32;
-const DLD_GET_VIRT_2_PHYS: i32 = ((0xde00u32<<16) | 51u32) as i32;
-const DLD_ADD_ROUTER_ENTRY_IPV4: i32 = ((0xde00u32<<16) | 60u32) as i32;
-const DLD_ADD_FW_RULE: i32 = ((0xde00u32<<16) | 20u32) as i32;
-const DLD_DUMP_LAYER: i32 = ((0xde00u32<<16) | 31u32) as i32;
-const DLD_DUMP_UFT: i32 = ((0xde00u32<<16) | 32u32) as i32;
-const DLD_LIST_LAYERS: i32 = ((0xde00u32<<16) | 33u32) as i32;
+const DLD_XDE_CREATE: i32 = ((0xde00u32 << 16) | 47) as i32;
+const DLD_XDE_DELETE: i32 = ((0xde00u32 << 16) | 48) as i32;
+const DLD_SET_VIRT_2_PHYS: i32 = ((0xde00u32 << 16) | 50u32) as i32;
+const DLD_GET_VIRT_2_PHYS: i32 = ((0xde00u32 << 16) | 51u32) as i32;
+const DLD_ADD_ROUTER_ENTRY_IPV4: i32 = ((0xde00u32 << 16) | 60u32) as i32;
+const DLD_ADD_FW_RULE: i32 = ((0xde00u32 << 16) | 20u32) as i32;
+const DLD_DUMP_LAYER: i32 = ((0xde00u32 << 16) | 31u32) as i32;
+const DLD_DUMP_UFT: i32 = ((0xde00u32 << 16) | 32u32) as i32;
+const DLD_LIST_LAYERS: i32 = ((0xde00u32 << 16) | 33u32) as i32;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub enum IoctlCmd {
-    ListPorts = 1,           // list all ports
-    AddPort = 2,             // add new port
-    DeletePort = 3,          // delete a port
-    FwAddRule = 20,          // add firewall rule
-    FwRemRule = 21,          // remove firewall rule
-    DumpTcpFlows = 30,       // dump TCP flows
-    SetOverlay = 40,         // set the overlay config
+    ListPorts = 1,     // list all ports
+    AddPort = 2,       // add new port
+    DeletePort = 3,    // delete a port
+    FwAddRule = 20,    // add firewall rule
+    FwRemRule = 21,    // remove firewall rule
+    DumpTcpFlows = 30, // dump TCP flows
+    SetOverlay = 40,   // set the overlay config
 
     DLDAddFwRule = DLD_ADD_FW_RULE as isize,
     DLDDumpLayer = DLD_DUMP_LAYER as isize,
@@ -81,7 +81,7 @@ impl TryFrom<c_int> for IoctlCmd {
             DLD_DUMP_UFT => Ok(IoctlCmd::DLDDumpUft),
             DLD_LIST_LAYERS => Ok(IoctlCmd::DLDListLayers),
             DLD_XDE_CREATE => Ok(IoctlCmd::DLDXdeCreate),
-            DLD_XDE_DELETE => Ok(IoctlCmd::DLDXdeDelete), 
+            DLD_XDE_DELETE => Ok(IoctlCmd::DLDXdeDelete),
             DLD_SET_VIRT_2_PHYS => Ok(IoctlCmd::DLDSetVirt2Phys),
             DLD_GET_VIRT_2_PHYS => Ok(IoctlCmd::DLDGetVirt2Phys),
             DLD_ADD_ROUTER_ENTRY_IPV4 => Ok(IoctlCmd::DLDAddRouterEntryIpv4),

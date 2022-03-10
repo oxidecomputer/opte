@@ -28,8 +28,8 @@ pub mod dls;
 pub mod ip;
 pub mod mac;
 pub mod secpolicy;
-pub mod xde;
 pub mod sys;
+pub mod xde;
 
 use illumos_ddi_dki::{
     c_void, cmn_err, kmem_alloc, kmem_free, panic, size_t, CE_WARN, KM_SLEEP,
