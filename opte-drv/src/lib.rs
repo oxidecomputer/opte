@@ -899,7 +899,7 @@ unsafe extern "C" fn opte_ioctl(
             let resp = add_router_entry_hdlr(&ioctlenv);
             hdlr_resp(&mut ioctlenv, resp)
         }
-        IoctlCmd::XdeCreate | IoctlCmd::XdeDelete | IoctlCmd::GetVirt2Phys => {
+        _ => {
             ENOTSUP
         }
     }

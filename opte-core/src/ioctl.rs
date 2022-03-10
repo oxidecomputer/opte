@@ -45,13 +45,18 @@ const DLD_LIST_LAYERS: i32 = ((0xde00u32 << 16) | 33u32) as i32;
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub enum IoctlCmd {
-    ListPorts = 1,     // list all ports
-    AddPort = 2,       // add new port
-    DeletePort = 3,    // delete a port
-    FwAddRule = 20,    // add firewall rule
-    FwRemRule = 21,    // remove firewall rule
-    DumpTcpFlows = 30, // dump TCP flows
-    SetOverlay = 40,   // set the overlay config
+    ListPorts = 1,           // list all ports
+    AddPort = 2,             // add new port
+    DeletePort = 3,          // delete a port
+    FwAddRule = 20,          // add firewall rule
+    FwRemRule = 21,          // remove firewall rule
+    DumpTcpFlows = 30,       // dump TCP flows
+    DumpLayer = 31,          // dump the specified Layer
+    DumpUft = 32,            // dump the Unified Flow Table
+    ListLayers = 33,         // list the layers on a given port
+    SetOverlay = 40,         // set the overlay config
+    SetVirt2Phys = 50,       // set a v2p mapping
+    AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
 
     DLDAddFwRule = DLD_ADD_FW_RULE as isize,
     DLDDumpLayer = DLD_DUMP_LAYER as isize,
