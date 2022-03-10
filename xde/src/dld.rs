@@ -5,6 +5,7 @@ use illumos_ddi_dki::{c_int, c_uint, c_void, cred_t, intptr_t, size_t};
 pub const XDE_IOC: u16 = 0xde00;
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct dld_ioc_info_t {
     pub di_cmd: c_uint,
     pub di_flags: c_uint,
@@ -28,4 +29,6 @@ extern "C" {
         list: *const dld_ioc_info_t,
         count: c_uint,
     ) -> c_int;
+
+    pub fn dld_ioc_unregister(modid: u16);
 }

@@ -633,7 +633,7 @@ fn main() {
         }
 
         Command::SetV2P { vip4, phys_ether, phys_ip, vni } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
             let vip = IpAddr::Ip4(vip4);
             let phys = overlay::PhysNet {
                 ether: phys_ether,

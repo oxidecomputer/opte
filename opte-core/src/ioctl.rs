@@ -51,7 +51,7 @@ pub enum IoctlCmd {
     GetVirt2Phys = 51,       // get v2p mapping
     AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
 
-    //XXX
+    DLDSetVirt2Phys = ((0xde00u32<<16) | 50u32) as isize,
     DLDGetVirt2Phys = ((0xde00u32<<16) | 51u32) as isize,
 }
 

@@ -332,9 +332,10 @@ pub struct SetVirt2PhysReq {
     pub phys: PhysNet,
 }
 
+#[repr(C)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetVirt2PhysReq {
-    pub unused: (),
+    pub unused: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

@@ -301,7 +301,7 @@ impl OpteAdm {
     }
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<(), Error> {
-        let cmd = IoctlCmd::SetVirt2Phys;
+        let cmd = IoctlCmd::DLDSetVirt2Phys;
         let resp = run_ioctl::<(), (), _>(self.device.as_raw_fd(), cmd, &req)?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }
@@ -311,7 +311,7 @@ impl OpteAdm {
         let resp = run_ioctl::<overlay::GetVirt2PhysResp, (), _>(
             self.device.as_raw_fd(),
             cmd,
-            &overlay::GetVirt2PhysReq { unused: () },
+            &overlay::GetVirt2PhysReq { unused: 99 },
         )?;
         resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
     }

@@ -295,14 +295,6 @@ unsafe extern "C" fn xde_ioctl(
             let resp = add_fw_rule_hdlr(&ioctlenv);
             hdlr_resp(&mut ioctlenv, resp)
         }
-        IoctlCmd::SetVirt2Phys => {
-            let resp = set_v2p_hdlr(&ioctlenv);
-            hdlr_resp(&mut ioctlenv, resp)
-        }
-        IoctlCmd::GetVirt2Phys => {
-            let resp = get_v2p_hdlr(&ioctlenv);
-            hdlr_resp(&mut ioctlenv, resp)
-        }
         IoctlCmd::ListLayers => {
             let resp = list_layers_hdlr(&ioctlenv);
             hdlr_resp(&mut ioctlenv, resp)
@@ -525,19 +517,51 @@ unsafe extern "C" fn xde_dld_ioc_delete(
     ENOTSUP
 }
 
-unsafe extern "C" fn xde_dld_ioc_v2p(
+unsafe extern "C" fn xde_dld_ioc_get_v2p(
     _karg: *mut c_void,
-    _arg: intptr_t,
-    _mode: c_int,
+    arg: intptr_t,
+    mode: c_int,
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
 
-    warn!("bo jackson!");
-    ENOTSUP
+    let mut ioctlenv =
+        match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
+            Ok(val) => val,
+            Err(e) => {
+                warn!("ioctl envelope failed: {:?}", e);
+                return EFAULT;
+            }
+        };
+
+    let resp = get_v2p_hdlr(&ioctlenv);
+    hdlr_resp(&mut ioctlenv, resp)
+
 }
 
-static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [
+unsafe extern "C" fn xde_dld_ioc_set_v2p(
+    _karg: *mut c_void,
+    arg: intptr_t,
+    mode: c_int,
+    _cred: *mut cred_t,
+    _rvalp: *mut c_int,
+) -> c_int {
+
+    let mut ioctlenv =
+        match ioctl::IoctlEnvelope::new(arg as *const c_void, mode) {
+            Ok(val) => val,
+            Err(e) => {
+                warn!("ioctl envelope failed: {:?}", e);
+                return EFAULT;
+            }
+        };
+
+    let resp = set_v2p_hdlr(&ioctlenv);
+    hdlr_resp(&mut ioctlenv, resp)
+
+}
+
+static xde_ioc_list: [dld::dld_ioc_info_t; 2] = [
     /*
     dld::dld_ioc_info_t {
         di_cmd: IoctlCmd::XdeCreate as u32,
@@ -558,7 +582,14 @@ static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [
         di_cmd: IoctlCmd::DLDGetVirt2Phys as u32,
         di_flags: 0,
         di_argsize: core::mem::size_of::<overlay::GetVirt2PhysReq>(),
-        di_func: xde_dld_ioc_v2p,
+        di_func: xde_dld_ioc_get_v2p,
+        di_priv_func: secpolicy::secpolicy_dl_config,
+    },
+    dld::dld_ioc_info_t {
+        di_cmd: IoctlCmd::DLDSetVirt2Phys as u32,
+        di_flags: 0,
+        di_argsize: core::mem::size_of::<overlay::SetVirt2PhysReq>(),
+        di_func: xde_dld_ioc_set_v2p,
         di_priv_func: secpolicy::secpolicy_dl_config,
     },
 ];
@@ -576,6 +607,7 @@ unsafe extern "C" fn xde_attach(
 
     // create a minor node so /devices/xde is a thing, this acts as an entry
     // point for ioctls.
+    /*
     match ddi_create_minor_node(
         dip,
         b"xde\0".as_ptr() as *const c_char,
@@ -590,6 +622,7 @@ unsafe extern "C" fn xde_attach(
             return DDI_FAILURE;
         }
     }
+    */
 
     xde_dip = dip;
 
@@ -607,6 +640,8 @@ unsafe extern "C" fn xde_attach(
         }
     };
 
+    warn!("dld_ioc_add: {:#?}", xde_ioc_list);
+
     match dld::dld_ioc_register(
         dld::XDE_IOC,
         xde_ioc_list.as_ptr(),
@@ -615,7 +650,7 @@ unsafe extern "C" fn xde_attach(
         0 => {}
         err => {
             warn!("dld_ioc_register failed: {}", err);
-            ddi_remove_minor_node(xde_dip, ptr::null());
+            //ddi_remove_minor_node(xde_dip, ptr::null());
             return DDI_FAILURE;
         }
     }
@@ -624,8 +659,8 @@ unsafe extern "C" fn xde_attach(
     match init_underlay_ingress_handlers(&mut state) {
         ddi::DDI_SUCCESS => {}
         error => {
-            //TODO tear down
-            ddi_remove_minor_node(xde_dip, ptr::null());
+            //ddi_remove_minor_node(xde_dip, ptr::null());
+            dld::dld_ioc_unregister(dld::XDE_IOC);
             return error;
         }
     }
@@ -831,7 +866,8 @@ unsafe extern "C" fn xde_detach(
 
     let _ = Box::from_raw(rstate as *mut XdeState);
 
-    ddi_remove_minor_node(xde_dip, ptr::null());
+    //ddi_remove_minor_node(xde_dip, ptr::null());
+    dld::dld_ioc_unregister(dld::XDE_IOC);
     xde_dip = ptr::null_mut::<c_void>() as *mut dev_info;
     0
 }
