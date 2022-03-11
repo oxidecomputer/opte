@@ -11,3 +11,23 @@ typedef struct flow_id_sdt_arg {
 	uint16_t	dst_port;
 	uint8_t		proto;
 } flow_id_sdt_arg_t;
+
+typedef struct rule_match_sdt_arg {
+	char			*layer;
+	char			*dir;
+	flow_id_sdt_arg_t	*flow;
+	char			*rule_type;
+} rule_match_sdt_arg_t;
+
+typedef struct rule_no_match_sdt_arg {
+	char			*layer;
+	char			*dir;
+	flow_id_sdt_arg_t	*flow;
+} rule_no_match_sdt_arg_t;
+
+typedef struct ht_run_sdt_arg {
+	char			*loc;
+	char			*dir;
+	flow_id_sdt_arg_t	*flow_before;
+	flow_id_sdt_arg_t	*flow_after;
+} ht_run_sdt_arg_t;

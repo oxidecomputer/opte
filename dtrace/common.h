@@ -24,8 +24,8 @@
 #define FLOW_FMT6(svar, fvar)					\
 	this->src_ip6 = (in6_addr_t *)alloca(16);		\
 	this->dst_ip6 = (in6_addr_t *)alloca(16);		\
-	*this->src_ip6 = this->flow->src_ip6;			\
-	*this->dst_ip6 = this->flow->dst_ip6;			\
+	*this->src_ip6 = fvar->src_ip6;				\
+	*this->dst_ip6 = fvar->dst_ip6;				\
 	svar = protos[fvar->proto];				\
 	svar = strjoin(svar, ",");				\
 	svar = strjoin(svar, inet_ntoa6(this->src_ip6));	\

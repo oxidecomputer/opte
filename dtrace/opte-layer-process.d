@@ -14,7 +14,6 @@ BEGIN {
 	/*
 	 * Use an associative array to stringify the protocol number.
 	 */
-	protos[0] = "FIX";
 	protos[1] = "ICMP";
 	protos[2] = "IGMP";
 	protos[6] = "TCP";

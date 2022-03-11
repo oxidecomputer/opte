@@ -1,22 +1,9 @@
 /*
  * Track rule match/no-match as it happens.
  *
- * dtrace -Cqs ./opte-rule-match.d
+ * dtrace -L ./lib -I . -Cqs ./opte-rule-match.d
  */
 #include "common.h"
-
-typedef struct rule_match_sdt_arg {
-	char			*layer;
-	char			*dir;
-	flow_id_sdt_arg_t	*flow;
-	char			*rule_type;
-} rule_match_sdt_arg_t;
-
-typedef struct rule_no_match_sdt_arg {
-	char			*layer;
-	char			*dir;
-	flow_id_sdt_arg_t	*flow;
-} rule_no_match_sdt_arg_t;
 
 #define	HDR_FMT		"%-6s %-3s %-12s %-43s %s\n"
 
@@ -35,7 +22,7 @@ BEGIN {
 }
 
 rule-match {
-	this->match = (rule_match_sdt_arg_t*)arg0;
+	this->match = (rule_match_sdt_arg_t *)arg0;
 	this->flow = this->match->flow;
 	this->dir = stringof(this->match->dir);
 	this->layer = stringof(this->match->layer);
@@ -61,7 +48,7 @@ rule-match /this->af == AF_INET6/ {
 }
 
 rule-no-match {
-	this->no_match = (rule_no_match_sdt_arg_t*)arg0;
+	this->no_match = (rule_no_match_sdt_arg_t *)arg0;
 	this->flow = this->no_match->flow;
 	this->dir = stringof(this->no_match->dir);
 	this->layer = stringof(this->no_match->layer);
