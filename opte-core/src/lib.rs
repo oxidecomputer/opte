@@ -29,6 +29,7 @@ use std::boxed::Box;
 #[cfg(any(feature = "std", test))]
 use std::string::String;
 
+#[cfg(all(not(feature = "std"), not(test)))]
 use illumos_ddi_dki as ddi;
 
 // TODO Not sure reexporting makes sense, but felt like trying it on

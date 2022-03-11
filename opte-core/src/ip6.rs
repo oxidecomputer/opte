@@ -28,6 +28,7 @@ pub const IPV6_VERSION: u8 = 6;
     Clone,
     Copy,
     Debug,
+    Default,
     Deserialize,
     Eq,
     Hash,

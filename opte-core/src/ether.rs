@@ -89,6 +89,12 @@ impl EtherAddr {
     pub fn to_bytes(self) -> [u8; ETHER_ADDR_LEN] {
         self.bytes
     }
+    pub fn zero() -> Self {
+        EtherAddr { bytes: [0u8; ETHER_ADDR_LEN] }
+    }
+    pub fn as_ptr(&self) -> *const u8 {
+        &self.bytes as *const u8
+    }
 }
 
 impl From<[u8; ETHER_ADDR_LEN]> for EtherAddr {

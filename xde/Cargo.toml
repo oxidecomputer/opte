@@ -1,0 +1,35 @@
+[package]
+name = "xde"
+version = "0.1.0"
+authors = ["Ryan Goodfellow <ryan.goodfellow@oxide.computer>"]
+edition = "2018"
+
+[dependencies]
+illumos-ddi-dki = { path = "../illumos-ddi-dki", default-features = false }
+opte-core = { path = "../opte-core", default-features = false }
+cstr_core = { version = "0.2.4", default-features = false }
+postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
+
+[dependencies.serde]
+version = "1.0"
+default-features = false
+features = ["alloc", "derive"]
+
+[lib]
+crate-type = ["staticlib"]
+name = "xde"
+
+# Some of these values are the same as the defaults, but it helps to
+# be explicit sometimes.
+[profile.dev]
+codegen-units = 1
+debug = 2
+incremental = false
+opt-level = 0
+panic = 'abort'
+
+[profile.release]
+codegen-units = 1
+debug = 2
+incremental = false
+panic = 'abort'

@@ -22,7 +22,16 @@ use crate::headers::{
 use crate::packet::{PacketRead, ReadErr, WriteError};
 
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
 )]
 pub struct Vni {
     inner: u32,
@@ -55,8 +64,13 @@ impl Vni {
         Ok(Vni { inner: val })
     }
 
-    pub fn to_be_bytes(&self) -> [u8; 4] {
-        self.inner.to_be_bytes()
+    pub fn to_be_bytes(&self) -> [u8; 3] {
+        let bs = (self.inner).to_be_bytes();
+        [bs[1], bs[2], bs[3]]
+    }
+
+    pub fn value(&self) -> u32 {
+        self.inner
     }
 }
 
@@ -90,8 +104,10 @@ impl From<&GeneveHdr> for GeneveMeta {
 
 impl From<&GeneveHdrRaw> for GeneveMeta {
     fn from(raw: &GeneveHdrRaw) -> Self {
-        let vni = Vni::new(u32::from_be_bytes(raw.vni))
-            .expect("need to verify this beforehand");
+        let vni = Vni::new(u32::from_be_bytes([
+            0, raw.vni[0], raw.vni[1], raw.vni[2],
+        ]))
+        .expect("need to verify this beforehand");
 
         Self { vni }
     }
@@ -189,8 +205,11 @@ impl TryFrom<&LayoutVerified<&[u8], GeneveHdrRaw>> for GeneveHdr {
                 protocol: u16::from_be_bytes(raw.proto),
             })?;
 
-        let vni = Vni::new(u32::from_be_bytes(raw.vni)).map_err(|_s| {
-            GeneveHdrError::BadVni { vni: u32::from_be_bytes(raw.vni) }
+        let vni = Vni::new(u32::from_be_bytes([
+            0, raw.vni[0], raw.vni[1], raw.vni[2],
+        ]))
+        .map_err(|_s| GeneveHdrError::BadVni {
+            vni: u32::from_be_bytes([0, raw.vni[0], raw.vni[1], raw.vni[2]]),
         })?;
 
         Ok(GeneveHdr {
@@ -209,7 +228,8 @@ pub struct GeneveHdrRaw {
     pub ver_opt_len: u8,
     pub flags: u8,
     pub proto: [u8; 2],
-    pub vni: [u8; 4],
+    pub vni: [u8; 3],
+    pub reserved: u8,
 }
 
 impl<'a> GeneveHdrRaw {
@@ -254,7 +274,8 @@ impl Default for GeneveHdrRaw {
             ver_opt_len: 0x0,
             flags: 0x0,
             proto: ETHER_TYPE_ETHER.to_be_bytes(),
-            vni: [0x0; 4],
+            vni: [0x0; 3],
+            reserved: 0,
         }
     }
 }
@@ -268,6 +289,7 @@ impl From<&GeneveHdr> for GeneveHdrRaw {
             flags: geneve.flags,
             proto: (geneve.proto as u16).to_be_bytes(),
             vni: geneve.vni.to_be_bytes(),
+            reserved: 0,
         }
     }
 }

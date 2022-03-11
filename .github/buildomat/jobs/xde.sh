@@ -1,10 +1,12 @@
 #!/bin/bash
 #:
-#: name = "opte-drv"
+#: name = "opte-xde"
 #: variety = "basic"
 #: target = "helios"
 #: rust_toolchain = "nightly"
-#: output_rules = []
+#: output_rules = [
+#:   "/work/release/*",
+#: ]
 #:
 
 set -o errexit
@@ -18,7 +20,7 @@ function header {
 cargo --version
 rustc --version
 
-cd opte-drv
+pushd xde
 
 header "check style"
 ptime -m cargo +nightly fmt -- --check
@@ -35,19 +37,9 @@ ptime -m cargo +nightly check
 header "install rust-src"
 ptime -m rustup component add rust-src --toolchain nightly
 
-header "debug build"
-ptime -m cargo +nightly -v rustc -Z build-std=core,alloc \
-      --target x86_64-unknown-unknown.json
-ld -r -dy -N"drv/mac" -z allextract \
-   target/x86_64-unknown-unknown/debug/opte.a -o opte.debug
+header "compile xde"
+ptime -m ./compile.sh
+ptime -m ./link.sh
 
-header "release build"
-ptime -m cargo +nightly -v rustc -Z build-std=core,alloc \
-      --target x86_64-unknown-unknown.json --release
-ld -r -dy -N"drv/mac" -z allextract \
-   target/x86_64-unknown-unknown/release/opte.a -o opte
-
-#
-# XXX Inspect kernel module for bad relocations in case old codegen
-# issue ever shows its face again.
-#
+mkdir -p /work/release
+cp xde /work/release/
