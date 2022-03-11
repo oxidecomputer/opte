@@ -1,19 +1,35 @@
 = DTrace Scripts
 
 This directory contains DTrace scripts for monitoring and debugging
-various aspects of OPTE's operation.
+various aspects of OPTE's operation. It also contains the `opte-trace`
+script which makes it more convenient to run these scripts; otherwise
+you have to make sure to pass the correct DTrace flags to import the
+local library file and common header.
 
 |===
 |Script |Description
+
+a|`opte-flow-expire.d`
+|Track flows as they expire.
+
+a|`opte-gen-desc-fail.d`
+|Track `gen_desc()` failures of stateful actions.
+
+a|`opte-gen-ht-fail.d`
+|Track `StaticAction::gen_gt()` failures.
 
 a|`opte-ht.d`
 |Track header transpositions as they happen. Printing the direction,
 location, and before/after flow IDs.
 
+a|`opte-layer-process.d`
+|Track a flow as it is processed by the different layers. This only
+ applies to flows without a UFT entry.
+
 a|`opte-rule-match.d`
 |Track rule match/no-match as it happens. Printing the direction,
- layer, and flow ID of the match/no-match, as well as the result of
- the match (allow/deny).
+ layer, and flow ID of the match/no-match, as well as the resulting
+ `Action` of the match.
 
 a|`opte-tcp-flow-state.d`
 |Track the TCP flow state changes as they happen. Printing the state
