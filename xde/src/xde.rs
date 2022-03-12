@@ -181,8 +181,8 @@ unsafe extern "C" fn _init() -> c_int {
     match mod_install(&xde_linkage) {
         0 => 0,
         err => {
+            warn!("mod_install failed: {}", err);
             mac::mac_fini_ops(&mut xde_devops);
-            warn!("mod install failed: {}", err);
             err
         }
     }
@@ -943,7 +943,7 @@ unsafe extern "C" fn xde_detach(
 }
 
 #[no_mangle]
-static xde_cb_ops: cb_ops = cb_ops {
+static mut xde_cb_ops: cb_ops = cb_ops {
     cb_open: nulldev_open,
     cb_close: nulldev_close,
     cb_strategy: nodev,
@@ -974,7 +974,10 @@ static mut xde_devops: dev_ops = dev_ops {
     devo_attach: xde_attach,
     devo_detach: xde_detach,
     devo_reset: nodev_reset,
-    devo_cb_ops: &xde_cb_ops,
+    // Safety: Yes, this is a mutable static. No, there is no race as
+    // it's mutated only during `_init()`. Yes, it needs to be mutable
+    // to allow `dld_init_ops()` to set `cb_str`.
+    devo_cb_ops: unsafe { &xde_cb_ops },
     devo_bus_ops: 0 as *const bus_ops,
     devo_power: nodev_power,
     devo_quiesce: ddi_quiesce_not_needed,
