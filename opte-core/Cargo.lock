@@ -285,7 +285,6 @@ checksum = "7e476c64197665c3725621f0ac3f9e5209aa5e889e02a08b1daf5f16dc5fd952"
 dependencies = [
  "atomic-polyfill",
  "hash32",
- "serde",
  "spin",
  "stable_deref_trait",
 ]
@@ -465,7 +464,6 @@ version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8863e251332eb18520388099b8b0acc4810ed6e602e3b6f674e8a46ba20e15c"
 dependencies = [
- "heapless",
  "postcard-cobs",
  "serde",
 ]

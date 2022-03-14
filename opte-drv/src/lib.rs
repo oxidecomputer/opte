@@ -483,13 +483,11 @@ fn add_port(req: &AddPortReq) -> Result<(), api::AddPortError> {
 
     let dyn_nat = match req.port_cfg.snat.as_ref() {
         None => opte_core::oxide_net::DynNat4Cfg {
-            public_mac: EtherAddr::from([0x99; 6]),
             public_ip: "192.168.99.99".parse().unwrap(),
             ports: Range { start: 999, end: 1000 },
         },
 
         Some(snat) => opte_core::oxide_net::DynNat4Cfg {
-            public_mac: snat.public_mac.clone(),
             public_ip: snat.public_ip,
             ports: Range { start: snat.port_start, end: snat.port_end },
         },

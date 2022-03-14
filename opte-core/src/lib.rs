@@ -234,7 +234,7 @@ impl Display for Direction {
 // Allowing us to use USDT to trace the opte-core SDT probes when
 // running in std/test.
 // ================================================================
-#[cfg(any(feature = "std", test))]
+#[cfg(feature = "usdt")]
 #[usdt::provider]
 mod opte_provider {
     use crate::layer::InnerFlowId;

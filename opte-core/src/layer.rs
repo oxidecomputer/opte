@@ -859,15 +859,14 @@ pub fn layer_process_return_probe(
     ifid: &InnerFlowId,
     res: &result::Result<LayerResult, LayerError>,
 ) {
-    // XXX This would probably be better as separate probes; for now
-    // this does the trick.
-    let res_str = match res {
-        Ok(v) => format!("{}", v),
-        Err(e) => format!("ERROR: {:?}", e),
-    };
-
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
+            // XXX This would probably be better as separate probes;
+            // for now this does the trick.
+            let res_str = match res {
+                Ok(v) => format!("{}", v),
+                Err(e) => format!("ERROR: {:?}", e),
+            };
             let dir_c = match dir {
                 Direction::In => CString::new("in").unwrap(),
                 Direction::Out => CString::new("out").unwrap(),
@@ -884,11 +883,19 @@ pub fn layer_process_return_probe(
                     res_c.as_ptr() as uintptr_t,
                 );
             }
-        } else {
+        } else if #[cfg(feature = "usdt")] {
             use std::arch::asm;
+            // XXX This would probably be better as separate probes;
+            // for now this does the trick.
+            let res_str = match res {
+                Ok(v) => format!("{}", v),
+                Err(e) => format!("ERROR: {:?}", e),
+            };
             crate::opte_provider::layer_process_return!(
                 || (dir, name, ifid, &res_str)
             );
+        } else {
+            let (_, _, _, _) = (dir, name, ifid, res);
         }
     }
 }
@@ -912,10 +919,9 @@ pub fn rule_match_probe(
     flow_id: &InnerFlowId,
     rule: &Rule<rule::Finalized>,
 ) {
-    let action_str = rule.action().to_string();
-
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
+            let action_str = rule.action().to_string();
             let layer_c = CString::new(layer).unwrap();
             let dir_c = match dir {
                 Direction::In => CString::new("in").unwrap(),
@@ -936,11 +942,14 @@ pub fn rule_match_probe(
                     &arg as *const rule_match_sdt_arg as uintptr_t,
                 );
             }
-        } else {
+        } else if #[cfg(feature = "usdt")] {
             use std::arch::asm;
+            let action_str = rule.action().to_string();
             crate::opte_provider::rule__match!(
                 || (layer, dir, flow_id.to_string(), action_str)
             );
+        } else {
+            let (_, _, _, _) = (layer, dir, flow_id, rule);
         }
     }
 }
@@ -978,11 +987,13 @@ pub fn rule_no_match_probe(layer: &str, dir: Direction, flow_id: &InnerFlowId) {
                     &arg as *const rule_no_match_sdt_arg as uintptr_t,
                 );
             }
-        } else {
+        } else if #[cfg(feature = "usdt")] {
             use std::arch::asm;
             crate::opte_provider::rule__no__match!(
                 || (layer, dir, flow_id.to_string())
             );
+        } else {
+            let (_, _, _) = (layer, dir, flow_id);
         }
     }
 }

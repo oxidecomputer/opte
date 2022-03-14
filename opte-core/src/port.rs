@@ -1044,14 +1044,6 @@ impl StateSummary for TcpFlowEntryState {
 }
 
 #[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_port__process__entry(
-    _dir: uintptr_t,
-    _arg: uintptr_t,
-) {
-    ()
-}
-
-#[cfg(any(feature = "std", test))]
 pub unsafe fn __dtrace_probe_port__process__return(
     _dir: uintptr_t,
     _arg: uintptr_t,
@@ -1062,7 +1054,6 @@ pub unsafe fn __dtrace_probe_port__process__return(
 #[cfg(all(not(feature = "std"), not(test)))]
 extern "C" {
     pub fn __dtrace_probe_port__process__entry(dir: uintptr_t, arg: uintptr_t);
-
     pub fn __dtrace_probe_port__process__return(dir: uintptr_t, arg: uintptr_t);
 }
 
@@ -1077,9 +1068,11 @@ pub fn port_process_entry_probe(dir: Direction, name: &str) {
                     name_c.as_ptr() as uintptr_t,
                 );
             }
-        } else {
+        } else if #[cfg(feature = "usdt")] {
             use std::arch::asm;
             crate::opte_provider::port_process_entry!(|| (dir, name));
+        } else {
+            let (_, _) = (dir, name);
         }
     }
 }

@@ -5,11 +5,11 @@ authors = ["Ryan Zezeski <ryan@oxide.computer>"]
 edition = "2021"
 
 [features]
-default = ["std"]
+default = ["std", "usdt"]
 # This feature indicates that OPTE is being built with std so that it
 # may be used by a userland binary/library for the purpose of userland
 # emulation/testing.
-std = ["libc", "usdt"]
+std = ["libc"]
 
 [dependencies]
 cfg-if = "0.1"

@@ -1383,8 +1383,6 @@ fn new_port(
         None => {
             opte_core::oxide_net::DynNat4Cfg {
                 //TODO hardcode
-                public_mac: EtherAddr::from([0x99; 6]),
-                //TODO hardcode
                 public_ip: "192.168.99.99".parse().unwrap(),
                 //TODO hardcode
                 ports: Range { start: 999, end: 1000 },
@@ -1392,7 +1390,6 @@ fn new_port(
         }
 
         Some(snat) => opte_core::oxide_net::DynNat4Cfg {
-            public_mac: snat.public_mac.clone(),
             public_ip: snat.public_ip,
             ports: Range { start: snat.port_start, end: snat.port_end },
         },
