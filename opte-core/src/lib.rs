@@ -241,19 +241,15 @@ mod opte_provider {
     use crate::Direction;
 
     fn port_process_entry(dir: Direction, name: &str) {}
-    fn rule__match(
-        layer: &str,
-        dir: Direction,
-        flow: &str,
-        action: &str,
-    ) {}
+    fn rule__match(layer: &str, dir: Direction, flow: &str, action: &str) {}
     fn rule__no__match(layer: &str, dir: Direction, flow: &str) {}
     fn layer_process_return(
         dir: Direction,
         name: &str,
         id: &InnerFlowId,
-        res: &str
-    ) {}
+        res: &str,
+    ) {
+    }
 }
 
 // ================================================================
@@ -346,8 +342,8 @@ mod test {
     use std::fs::File;
     use std::io::Write;
 
-    use pcap_parser::{Linktype, PcapHeader, ToVec};
     use pcap_parser::pcap::LegacyPcapBlock;
+    use pcap_parser::{Linktype, PcapHeader, ToVec};
 
     use crate::packet::{Packet, PacketRead, PacketReader, Parsed};
 

@@ -276,46 +276,44 @@ mod test {
 
         let p1 = SubnetRouterPair {
             subnet: Ipv4Cidr::new(Ipv4Addr::new([0, 0, 0, 0]), 0).unwrap(),
-            router
+            router,
         };
 
         let p2 = SubnetRouterPair {
             subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 0, 0, 0]), 8).unwrap(),
-            router
+            router,
         };
 
         let p3 = SubnetRouterPair {
             subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 0, 0, 0]), 24).unwrap(),
-            router
+            router,
         };
 
         let p4 = SubnetRouterPair {
             subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 17, 0, 0]), 16).unwrap(),
-            router
+            router,
         };
 
         let p5 = SubnetRouterPair {
             subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 27, 129, 0]), 24).unwrap(),
-            router
+            router,
         };
 
         let p6 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(
-                Ipv4Addr::new([10, 229, 0, 128]), 25
-            ).unwrap(),
-            router
+            subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 229, 0, 128]), 25)
+                .unwrap(),
+            router,
         };
 
         let p7 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(
-                Ipv4Addr::new([10, 198, 122, 47]), 32
-            ).unwrap(),
-            router
+            subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 198, 122, 47]), 32)
+                .unwrap(),
+            router,
         };
 
         let p8 = SubnetRouterPair {
             subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 16, 0, 0]), 15).unwrap(),
-            router
+            router,
         };
 
         let opt = ClasslessStaticRouteOpt::new(p1.clone(), None, None);
@@ -335,22 +333,22 @@ mod test {
         );
         assert_eq!(
             opt.encode(),
-            vec![121, 19, 0, 10, 0, 0, 1, 8, 10, 10, 0, 0, 1, 24, 10, 0, 0, 10,
-                 0, 0, 1]
+            vec![
+                121, 19, 0, 10, 0, 0, 1, 8, 10, 10, 0, 0, 1, 24, 10, 0, 0, 10,
+                0, 0, 1
+            ]
         );
 
         let opt = ClasslessStaticRouteOpt::new(p4.clone(), None, None);
-        assert_eq!(
-            opt.encode(),
-            vec![121, 7, 16, 10, 17, 10, 0, 0, 1],
-        );
+        assert_eq!(opt.encode(), vec![121, 7, 16, 10, 17, 10, 0, 0, 1],);
 
         let opt =
             ClasslessStaticRouteOpt::new(p4.clone(), Some(p5.clone()), None);
         assert_eq!(
             opt.encode(),
-            vec![121, 15, 16, 10, 17, 10, 0, 0, 1, 24, 10, 27, 129, 10, 0, 0,
-                 1],
+            vec![
+                121, 15, 16, 10, 17, 10, 0, 0, 1, 24, 10, 27, 129, 10, 0, 0, 1
+            ],
         );
 
         let opt = ClasslessStaticRouteOpt::new(
@@ -360,19 +358,20 @@ mod test {
         );
         assert_eq!(
             opt.encode(),
-            vec![121, 24, 16, 10, 17, 10, 0, 0, 1, 24, 10, 27, 129, 10, 0, 0,
-                 1, 25, 10, 229, 0, 128, 10, 0, 0, 1],
+            vec![
+                121, 24, 16, 10, 17, 10, 0, 0, 1, 24, 10, 27, 129, 10, 0, 0, 1,
+                25, 10, 229, 0, 128, 10, 0, 0, 1
+            ],
         );
 
-        let opt = ClasslessStaticRouteOpt::new(
-            p6.clone(),
-            Some(p7.clone()),
-            None,
-        );
+        let opt =
+            ClasslessStaticRouteOpt::new(p6.clone(), Some(p7.clone()), None);
         assert_eq!(
             opt.encode(),
-            vec![121, 18, 25, 10, 229, 0, 128, 10, 0, 0, 1, 32, 10, 198, 122,
-                 47, 10, 0, 0, 1]
+            vec![
+                121, 18, 25, 10, 229, 0, 128, 10, 0, 0, 1, 32, 10, 198, 122,
+                47, 10, 0, 0, 1
+            ]
         );
 
         let opt = ClasslessStaticRouteOpt::new(
@@ -382,8 +381,10 @@ mod test {
         );
         assert_eq!(
             opt.encode(),
-            vec![121, 25, 25, 10, 229, 0, 128, 10, 0, 0, 1, 32, 10, 198, 122,
-                 47, 10, 0, 0, 1, 15, 10, 16, 10, 0, 0, 1]
+            vec![
+                121, 25, 25, 10, 229, 0, 128, 10, 0, 0, 1, 32, 10, 198, 122,
+                47, 10, 0, 0, 1, 15, 10, 16, 10, 0, 0, 1
+            ]
         );
     }
 }

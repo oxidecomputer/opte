@@ -839,7 +839,7 @@ extern "C" {
 pub fn layer_process_entry_probe(
     dir: Direction,
     name: &str,
-    ifid: &InnerFlowId
+    ifid: &InnerFlowId,
 ) {
     let name_c = CString::new(name).unwrap();
     let ifid_arg = flow_id_sdt_arg::from(ifid);

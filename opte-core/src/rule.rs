@@ -20,7 +20,7 @@ use std::vec::Vec;
 use crate::arp::{
     ArpEth4Payload, ArpEth4PayloadRaw, ArpMeta, ArpOp, ARP_HTYPE_ETHERNET,
 };
-use crate::dhcp::{MessageType as DhcpMessageType};
+use crate::dhcp::MessageType as DhcpMessageType;
 use crate::ether::{EtherAddr, EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
 use crate::flow_table::StateSummary;
 use crate::geneve::{GeneveMeta, GeneveMetaOpt};
@@ -28,7 +28,7 @@ use crate::headers::{
     self, HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
     UlpMetaOpt,
 };
-use crate::icmp::{MessageType as Icmp4MessageType};
+use crate::icmp::MessageType as Icmp4MessageType;
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Meta;
 use crate::layer::InnerFlowId;
@@ -408,7 +408,7 @@ impl Predicate {
                         }
                     }
                 }
-            }
+            },
 
             Self::InnerEtherSrc(list) => match meta.inner.ether {
                 None => return false,
@@ -420,7 +420,7 @@ impl Predicate {
                         }
                     }
                 }
-            }
+            },
 
             Self::InnerArpHtype(m) => match meta.inner.arp {
                 None => return false,
@@ -430,7 +430,7 @@ impl Predicate {
                         return true;
                     }
                 }
-            }
+            },
 
             Self::InnerArpPtype(m) => match meta.inner.arp {
                 None => return false,
@@ -440,7 +440,7 @@ impl Predicate {
                         return true;
                     }
                 }
-            }
+            },
 
             Self::InnerArpOp(m) => match meta.inner.arp {
                 None => return false,
@@ -450,7 +450,7 @@ impl Predicate {
                         return true;
                     }
                 }
-            }
+            },
 
             Self::InnerIpProto(list) => match meta.inner.ip {
                 None => return false,
@@ -470,7 +470,7 @@ impl Predicate {
                         }
                     }
                 }
-            }
+            },
 
             Self::InnerSrcIp4(list) => match meta.inner.ip {
                 Some(IpMeta::Ip4(Ipv4Meta { src: ip, .. })) => {
@@ -484,7 +484,7 @@ impl Predicate {
                 // Either there is no Inner IP metadata or this is an
                 // IPv6 packet.
                 _ => return false,
-            }
+            },
 
             Self::InnerDstIp4(list) => match meta.inner.ip {
                 Some(IpMeta::Ip4(Ipv4Meta { dst: ip, .. })) => {
@@ -498,7 +498,7 @@ impl Predicate {
                 // Either there is no Inner IP metadata or this is an
                 // IPv6 packet.
                 _ => return false,
-            }
+            },
 
             Self::InnerSrcPort(list) => match meta.inner.ulp {
                 None => return false,
@@ -518,7 +518,7 @@ impl Predicate {
                         }
                     }
                 }
-            }
+            },
 
             Self::InnerDstPort(list) => match meta.inner.ulp {
                 None => return false,
@@ -538,7 +538,7 @@ impl Predicate {
                         }
                     }
                 }
-            }
+            },
         }
 
         false
@@ -600,18 +600,20 @@ impl DataPredicate {
                 let pkt = match DhcpPacket::new_checked(&bytes) {
                     Ok(v) => v,
                     Err(e) => {
-                        crate::err(
-                            format!("DhcpPacket::new_checked() failed: {:?}", e)
-                        );
+                        crate::err(format!(
+                            "DhcpPacket::new_checked() failed: {:?}",
+                            e
+                        ));
                         return false;
                     }
                 };
                 let dhcp = match DhcpRepr::parse(&pkt) {
                     Ok(v) => v,
                     Err(e) => {
-                        crate::err(
-                            format!("DhcpRepr::parse() failed: {:?}", e)
-                        );
+                        crate::err(format!(
+                            "DhcpRepr::parse() failed: {:?}",
+                            e
+                        ));
 
                         return false;
                     }
@@ -636,9 +638,10 @@ impl DataPredicate {
                 let _icmp = match Icmpv4Repr::parse(&pkt, &Csum::ignored()) {
                     Ok(v) => v,
                     Err(e) => {
-                        crate::err(
-                            format!("Icmpv4Repr::parse() failed: {:?}", e)
-                        );
+                        crate::err(format!(
+                            "Icmpv4Repr::parse() failed: {:?}",
+                            e
+                        ));
                         return false;
                     }
                 };
@@ -678,7 +681,7 @@ impl DataPredicate {
                         }
                     }
                 }
-            }
+            },
         }
 
         false
@@ -972,7 +975,8 @@ pub trait StatefulAction: Display {
     ///
     /// * [`GenDescError::Unexpected`]: This action encountered an
     /// unexpected error while trying to generate a descriptor.
-    fn gen_desc(&self, flow_id: &InnerFlowId, meta: &mut Meta) -> GenDescResult;
+    fn gen_desc(&self, flow_id: &InnerFlowId, meta: &mut Meta)
+        -> GenDescResult;
 }
 
 #[derive(Clone, Debug)]
@@ -1258,7 +1262,10 @@ impl From<&Rule<Finalized>> for RuleDump {
     fn from(rule: &Rule<Finalized>) -> Self {
         let predicates =
             rule.state.preds.as_ref().map_or(vec![], |rp| rp.hdr_preds.clone());
-        let data_predicates = rule.state.preds.as_ref()
+        let data_predicates = rule
+            .state
+            .preds
+            .as_ref()
             .map_or(vec![], |rp| rp.data_preds.clone());
 
         RuleDump {

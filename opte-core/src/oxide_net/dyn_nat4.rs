@@ -21,10 +21,7 @@ pub fn setup(
     let mut pool = NatPool::new();
     pool.add(cfg.private_ip, cfg.dyn_nat.public_ip, cfg.dyn_nat.ports.clone());
 
-    let nat = DynNat4::new(
-        cfg.private_ip,
-        Arc::new(pool),
-    );
+    let nat = DynNat4::new(cfg.private_ip, Arc::new(pool));
 
     let layer = Layer::new(
         "dyn-nat4",

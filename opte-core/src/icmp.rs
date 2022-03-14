@@ -17,7 +17,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MessageType {
-    inner: smoltcp::wire::Icmpv4Message
+    inner: smoltcp::wire::Icmpv4Message,
 }
 
 impl From<smoltcp::wire::Icmpv4Message> for MessageType {

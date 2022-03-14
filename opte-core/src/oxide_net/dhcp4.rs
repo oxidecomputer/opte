@@ -21,32 +21,30 @@ use std::sync::Arc;
 #[cfg(any(feature = "std", test))]
 use std::vec::Vec;
 
-use smoltcp::wire::{
-    DhcpPacket, DhcpRepr, EthernetAddress, Ipv4Address
-};
+use smoltcp::wire::{DhcpPacket, DhcpRepr, EthernetAddress, Ipv4Address};
 
 use crate::dhcp::{
-    ClasslessStaticRouteOpt, MessageType as DhcpMessageType, SubnetRouterPair
+    ClasslessStaticRouteOpt, MessageType as DhcpMessageType, SubnetRouterPair,
 };
 use crate::ether::{self, EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ};
 use crate::ip4::{
-    self, Ipv4Addr, Ipv4Cidr, Ipv4Hdr, Ipv4Meta, IPV4_HDR_SZ, Protocol,
+    self, Ipv4Addr, Ipv4Cidr, Ipv4Hdr, Ipv4Meta, Protocol, IPV4_HDR_SZ,
 };
 use crate::layer::Layer;
 use crate::packet::{
-    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed
+    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
 };
 use crate::port::{self, Port, Pos};
 use crate::rule::{
     Action, DataPredicate, EtherAddrMatch, GenResult, HairpinAction,
-    Ipv4AddrMatch, IpProtoMatch, PortMatch, Predicate, Rule
+    IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate, Rule,
 };
 use crate::udp::{UdpHdr, UdpMeta, UDP_HDR_SZ};
 use crate::Direction;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
-    cfg: &super::PortCfg
+    cfg: &super::PortCfg,
 ) -> Result<(), port::AddLayerError> {
     use smoltcp::wire::DhcpMessageType as SmolDMT;
 
@@ -71,31 +69,29 @@ pub fn setup(
     let dhcp = Layer::new("dhcp4", port.name(), vec![offer, ack]);
 
     let common = vec![
-        Predicate::InnerEtherDst(vec![
-            EtherAddrMatch::Exact(ether::ETHER_BROADCAST)
-        ]),
+        Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
+            ether::ETHER_BROADCAST,
+        )]),
         Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(cfg.private_mac)]),
         Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(ip4::ANY_ADDR)]),
         // XXX I believe DHCP can also come via subnet broadcast. Add
         // additional match for that.
-        Predicate::InnerDstIp4(vec![
-            Ipv4AddrMatch::Exact(ip4::LOCAL_BROADCAST)
-        ]),
+        Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Exact(
+            ip4::LOCAL_BROADCAST,
+        )]),
         Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::UDP)]),
         Predicate::InnerDstPort(vec![PortMatch::Exact(67)]),
         Predicate::InnerSrcPort(vec![PortMatch::Exact(68)]),
     ];
-    let dp_discover = DataPredicate::Dhcp4MsgType(
-        DhcpMessageType::from(SmolDMT::Discover)
-    );
+    let dp_discover =
+        DataPredicate::Dhcp4MsgType(DhcpMessageType::from(SmolDMT::Discover));
     let discover_rule = Rule::new(1, dhcp.action(offer_idx).unwrap().clone());
-    let mut discover_rule =  discover_rule.add_predicates(common.clone());
+    let mut discover_rule = discover_rule.add_predicates(common.clone());
     discover_rule.add_data_predicate(dp_discover);
     dhcp.add_rule(Direction::Out, discover_rule.finalize());
 
-    let dp_request = DataPredicate::Dhcp4MsgType(
-        DhcpMessageType::from(SmolDMT::Request)
-    );
+    let dp_request =
+        DataPredicate::Dhcp4MsgType(DhcpMessageType::from(SmolDMT::Request));
     let request_rule = Rule::new(1, dhcp.action(ack_idx).unwrap().clone());
     let mut request_rule = request_rule.add_predicates(common);
     request_rule.add_data_predicate(dp_request);
@@ -154,7 +150,7 @@ impl HairpinAction for Dhcp4Action {
     fn gen_packet(
         &self,
         _meta: &PacketMeta,
-        rdr: &mut PacketReader<Parsed, ()>
+        rdr: &mut PacketReader<Parsed, ()>,
     ) -> GenResult<Packet<Initialized>> {
         let body = rdr.copy_remaining();
         let guest_pkt = DhcpPacket::new_checked(&body)?;
@@ -219,10 +215,7 @@ impl HairpinAction for Dhcp4Action {
         tmp.push(255);
         assert_eq!(tmp.len(), reply_len + csr_opt.encode_len() as usize);
 
-        let mut udp = UdpHdr::from(&UdpMeta {
-            src: 67,
-            dst: 68,
-        });
+        let mut udp = UdpHdr::from(&UdpMeta { src: 67, dst: 68 });
         udp.set_pay_len(tmp.len() as u16);
 
         let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
@@ -239,8 +232,9 @@ impl HairpinAction for Dhcp4Action {
             ether_type: ether::ETHER_TYPE_IPV4,
         });
 
-        let mut pkt_bytes = Vec::with_capacity(ETHER_HDR_SZ + IPV4_HDR_SZ +
-                                               UDP_HDR_SZ + tmp.len());
+        let mut pkt_bytes = Vec::with_capacity(
+            ETHER_HDR_SZ + IPV4_HDR_SZ + UDP_HDR_SZ + tmp.len(),
+        );
         pkt_bytes.extend_from_slice(&eth.as_bytes());
         pkt_bytes.extend_from_slice(&ip4.as_bytes());
         pkt_bytes.extend_from_slice(&udp.as_bytes());

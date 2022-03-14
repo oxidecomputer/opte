@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use pcap_parser::pcap::{self, LegacyPcapBlock, PcapHeader};
 
-use smoltcp::phy::{ChecksumCapabilities as CsumCapab};
+use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 
 use zerocopy::AsBytes;
 
@@ -36,10 +36,10 @@ use crate::geneve::Vni;
 use crate::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
 use crate::ip4::{self, Ipv4Hdr, Ipv4HdrRaw, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Addr;
-use crate::oxide_net::{self, arp, dyn_nat4, firewall, icmp, router};
 use crate::oxide_net::overlay::{self, OverlayCfg, PhysNet, Virt2Phys};
+use crate::oxide_net::{self, arp, dyn_nat4, firewall, icmp, router};
 use crate::packet::{
-    Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError
+    Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
 };
 use crate::port::{Inactive, Port, ProcessResult};
 use crate::tcp::TcpHdr;
@@ -234,11 +234,7 @@ fn gateway_icmp4_ping() {
     let seq_no = 777;
     let data = b"reunion\0";
 
-    let req = Icmpv4Repr::EchoRequest {
-        ident,
-        seq_no,
-        data: &data[..],
-    };
+    let req = Icmpv4Repr::EchoRequest { ident, seq_no, data: &data[..] };
 
     let mut body_bytes = vec![0u8; req.buffer_len()];
     let mut req_pkt = Icmpv4Packet::new_unchecked(&mut body_bytes);
@@ -324,7 +320,7 @@ fn gateway_icmp4_ping() {
         Icmpv4Repr::EchoReply {
             ident: r_ident,
             seq_no: r_seq_no,
-            data: r_data
+            data: r_data,
         } => {
             assert_eq!(r_ident, ident);
             assert_eq!(r_seq_no, seq_no);
@@ -333,7 +329,6 @@ fn gateway_icmp4_ping() {
 
         _ => panic!("expected Echo Reply, got {:?}", reply_icmp),
     }
-
 }
 
 // Verify that two guests on the same VPC can communicate via overlay.
@@ -455,11 +450,7 @@ fn overlay_guest_to_guest() {
     let tcp_csum =
         ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(
-        EtherType::Ipv4,
-        g1_cfg.private_mac,
-        g1_cfg.gw_mac,
-    );
+    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
 
     let mut bytes = vec![];
     bytes.extend_from_slice(&eth.as_bytes());

@@ -14,16 +14,16 @@ use smoltcp::phy::{Checksum, ChecksumCapabilities as Csum};
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
 
 use crate::ether::{self, EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ};
-use crate::icmp::{MessageType as Icmp4MessageType};
-use crate::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, IPV4_HDR_SZ, Protocol};
+use crate::icmp::MessageType as Icmp4MessageType;
+use crate::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol, IPV4_HDR_SZ};
 use crate::layer::Layer;
 use crate::packet::{
-    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed
+    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
 };
 use crate::port::{self, Port, Pos};
 use crate::rule::{
     Action, DataPredicate, EtherAddrMatch, GenErr, GenResult, HairpinAction,
-    IpProtoMatch, Ipv4AddrMatch, Predicate, Rule
+    IpProtoMatch, Ipv4AddrMatch, Predicate, Rule,
 };
 use crate::Direction;
 
@@ -69,11 +69,9 @@ pub fn setup(
         Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Exact(cfg.gw_ip)]),
         Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::ICMP)]),
     ]);
-    rule.add_data_predicate(
-        DataPredicate::Icmp4MsgType(Icmp4MessageType::from(
-            smoltcp::wire::Icmpv4Message::EchoRequest
-        ))
-    );
+    rule.add_data_predicate(DataPredicate::Icmp4MsgType(
+        Icmp4MessageType::from(smoltcp::wire::Icmpv4Message::EchoRequest),
+    ));
     icmp.add_rule(Direction::Out, rule.finalize());
 
     port.add_layer(icmp, Pos::Before("firewall"))
@@ -112,9 +110,10 @@ impl HairpinAction for Icmp4Reply {
                 // should have verified that we are dealing with an
                 // Echo Request. However, programming error could
                 // cause this to happen -- let's not take any chances.
-                return Err(GenErr::Unexpected(
-                    format!("expected an ICMP Echo Request, got {:?}", repr)
-                ));
+                return Err(GenErr::Unexpected(format!(
+                    "expected an ICMP Echo Request, got {:?}",
+                    repr
+                )));
             }
         };
 

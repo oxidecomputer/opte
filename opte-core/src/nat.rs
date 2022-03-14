@@ -105,10 +105,7 @@ pub struct DynNat4 {
 }
 
 impl DynNat4 {
-    pub fn new(
-        addr: Ipv4Addr,
-        ip_pool: Arc<NatPool>,
-    ) -> Self {
+    pub fn new(addr: Ipv4Addr, ip_pool: Arc<NatPool>) -> Self {
         DynNat4 { priv_ip: addr.into(), ip_pool }
     }
 }
@@ -204,7 +201,7 @@ impl ActionDesc for DynNat4Desc {
 
 #[test]
 fn dyn_nat4_ht() {
-    use crate::ether::{ETHER_TYPE_IPV4, EtherAddr, EtherMeta};
+    use crate::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV4};
     use crate::headers::{IpMeta, UlpMeta};
     use crate::ip4::Protocol;
     use crate::packet::{MetaGroup, PacketMeta};
@@ -219,8 +216,7 @@ fn dyn_nat4_ht() {
     let pub_port = "8765".parse().unwrap();
     let outside_ip = "76.76.21.21".parse().unwrap();
 
-    let nat =
-        DynNat4Desc { pub_ip, pub_port, priv_ip, priv_port };
+    let nat = DynNat4Desc { pub_ip, pub_port, priv_ip, priv_port };
 
     // TODO test in_ht
     let out_ht = nat.gen_ht(Direction::Out);
