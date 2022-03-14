@@ -1,20 +1,27 @@
 use core::fmt::{self, Display};
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::ToString;
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::vec::Vec;
-
-#[cfg(any(feature = "std", test))]
-use std::string::ToString;
-#[cfg(any(feature = "std", test))]
-use std::vec::Vec;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::string::ToString;
+        use alloc::vec::Vec;
+    } else {
+        use std::string::ToString;
+        use std::vec::Vec;
+    }
+}
 
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::ip4::{Ipv4Addr, Ipv4Cidr};
 
+/// The DHCP message type.
+///
+/// Why define our own wrapper type when smoltcp already provides this
+/// type? We need to use this type as part of a rule predicate value;
+/// therefore it must be serializable. There are ways to get around
+/// this without creating a new type; the author prefers this way as
+/// it's less "magic".
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MessageType {
     inner: smoltcp::wire::DhcpMessageType,
@@ -117,14 +124,15 @@ impl Display for MessageType {
 
 /// A Classes Static Route Option (121).
 ///
-/// We allow for up to three routes to be specified.
-///
-/// See RFC 3442.
+/// We must implement this type ourselves as smoltcp does not provide
+/// this option out of the box. We allow for up to three routes to be
+/// specified. See RFC 3442 for more detail.
 #[derive(Clone, Debug)]
 pub struct ClasslessStaticRouteOpt {
     routes: Vec<SubnetRouterPair>,
 }
 
+/// As it says on the tin: map a subnet to its next-hop.
 #[derive(Clone, Debug)]
 pub struct SubnetRouterPair {
     subnet: Ipv4Cidr,
@@ -179,6 +187,10 @@ impl SubnetRouterPair {
 }
 
 impl ClasslessStaticRouteOpt {
+    /// Create a new Classless Static Route Option (121).
+    ///
+    /// At least one [`SubnetRouterPair`] must be specified. Up to two
+    /// additional pairs may also be specified.
     pub fn new(
         r1: SubnetRouterPair,
         r2: Option<SubnetRouterPair>,
@@ -220,7 +232,7 @@ impl ClasslessStaticRouteOpt {
         let mut bytes = vec![0u8; len as usize];
         bytes[0] = 121;
         // The length byte indicates the length of the encoded subnet
-        // + router pairs; it does not include the option code or
+        // and router pairs; it does not include the option code or
         // itself.
         bytes[1] = len - 2;
         let mut pos = 2;

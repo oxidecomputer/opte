@@ -28,7 +28,7 @@ use crate::headers::{
     self, HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
     UlpMetaOpt,
 };
-use crate::icmp::IcmpType;
+use crate::icmp::{MessageType as Icmp4MessageType};
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Meta;
 use crate::layer::InnerFlowId;
@@ -548,7 +548,7 @@ impl Predicate {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum DataPredicate {
     Dhcp4MsgType(DhcpMessageType),
-    IcmpMsgType(IcmpType),
+    Icmp4MsgType(Icmp4MessageType),
     InnerArpTpa(Vec<Ipv4AddrMatch>),
     Not(Box<DataPredicate>),
 }
@@ -562,7 +562,7 @@ impl Display for DataPredicate {
                 write!(f, "dhcp4.msg_type={}", mt)
             }
 
-            IcmpMsgType(mt) => {
+            Icmp4MsgType(mt) => {
                 write!(f, "icmp.msg_type={}", mt)
             }
 
@@ -621,7 +621,7 @@ impl DataPredicate {
                 return res;
             }
 
-            Self::IcmpMsgType(mt) => {
+            Self::Icmp4MsgType(mt) => {
                 let bytes = rdr.copy_remaining();
                 let pkt = match Icmpv4Packet::new_checked(&bytes) {
                     Ok(v) => v,
@@ -643,7 +643,7 @@ impl DataPredicate {
                     }
                 };
 
-                return IcmpType::from(pkt.msg_type()) == *mt;
+                return Icmp4MessageType::from(pkt.msg_type()) == *mt;
             }
 
             Self::InnerArpTpa(list) => match meta.inner.arp {
@@ -1004,7 +1004,28 @@ pub trait MetaAction: Display {
 #[derive(Debug)]
 pub enum GenErr {
     BadPayload(crate::packet::ReadErr),
+    Malformed,
     MissingMeta,
+    Truncated,
+    Unexpected(String),
+}
+
+impl From<crate::packet::ReadErr> for GenErr {
+    fn from(err: crate::packet::ReadErr) -> Self {
+        Self::BadPayload(err)
+    }
+}
+
+impl From<smoltcp::Error> for GenErr {
+    fn from(err: smoltcp::Error) -> Self {
+        use smoltcp::Error::*;
+
+        match err {
+            Malformed => Self::Malformed,
+            Truncated => Self::Truncated,
+            _ => Self::Unexpected(format!("smoltcp error {}", err)),
+        }
+    }
 }
 
 pub type GenResult<T> = Result<T, GenErr>;

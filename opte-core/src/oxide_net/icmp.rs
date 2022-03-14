@@ -14,7 +14,7 @@ use smoltcp::phy::{Checksum, ChecksumCapabilities as Csum};
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
 
 use crate::ether::{self, EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ};
-use crate::icmp::IcmpType;
+use crate::icmp::{MessageType as Icmp4MessageType};
 use crate::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, IPV4_HDR_SZ, Protocol};
 use crate::layer::Layer;
 use crate::packet::{
@@ -50,14 +50,15 @@ pub fn setup(
     // with an invalid packet but still get a response. Or even worse,
     // could ping for some other valid address but instead of getting
     // a response from that host end up getting a response from OPTE!
-    // This makes me thing I need to check all my other rules to make
+    // This makes me think I need to check all my other rules to make
     // sure I didn't short cut the predicates.
     //
-    // TODO It would be nice to have a macro shortcut for header
+    // XXX It would be nice to have a macro shortcut for header
     // predicate that allows you do something like:
     //
-    // hdr_pred!(cfg.gw_mac, cfg.guest_mac, EtherType::Ipv4,
-    // cfg.guest_ip4, cfg.gw_ip4, Protocol::ICMP)
+    // hdr_pred!(eth_dst: cfg.gw_mac, eth_src: cfg.guest_mac,
+    // eth_type: EtherType::Ipv4, ip_src: cfg.guest_ip4, ip_dst: cfg.gw_ip4,
+    // ip_proto: Protocol::ICMP)
     //
     // which would generate a Vec of the header predicates.
     let rule = Rule::new(1, icmp.action(0).unwrap().clone());
@@ -68,7 +69,11 @@ pub fn setup(
         Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Exact(cfg.gw_ip)]),
         Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::ICMP)]),
     ]);
-    rule.add_data_predicate(DataPredicate::IcmpMsgType(IcmpType::EchoRequest));
+    rule.add_data_predicate(
+        DataPredicate::Icmp4MsgType(Icmp4MessageType::from(
+            smoltcp::wire::Icmpv4Message::EchoRequest
+        ))
+    );
     icmp.add_rule(Direction::Out, rule.finalize());
 
     port.add_layer(icmp, Pos::Before("firewall"))

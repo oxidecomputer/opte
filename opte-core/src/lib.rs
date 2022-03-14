@@ -1,6 +1,9 @@
 #![no_std]
-// TODO I think Patrick's recent change nullifies this requirement?
-#![feature(asm)]
+// XXX This allows me to run `cargo +nightly test` on a macOS system.
+// I'd prefer to run everything with
+// `--target=x86_64-unknown-illumos`, but the usdt crate doesn't
+// compile when I do that thanks to `asm!` shenanigans -- I don't have
+// time for that yak at this moment.
 #![cfg_attr(target_os = "macos", feature(asm_sym))]
 #![feature(extern_types)]
 #![feature(vec_into_raw_parts)]
@@ -16,6 +19,9 @@ extern crate std;
 #[cfg(all(not(feature = "std"), not(test)))]
 #[macro_use]
 extern crate alloc;
+
+#[macro_use]
+extern crate cfg_if;
 
 use core::fmt::{self, Display};
 use core::num::ParseIntError;

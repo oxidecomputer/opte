@@ -301,7 +301,7 @@ impl Layer {
 
         match rule.unwrap().action() {
             Action::Deny => {
-                rule_deny_probe(&self.name, Direction::In, &ifid);
+                rule_deny_probe(&self.name, Direction::In, ifid);
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
@@ -479,7 +479,7 @@ impl Layer {
 
         match rule.unwrap().action() {
             Action::Deny => {
-                rule_deny_probe(&self.name, Direction::Out, &ifid);
+                rule_deny_probe(&self.name, Direction::Out, ifid);
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
@@ -489,7 +489,7 @@ impl Layer {
             }
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(Direction::Out, &ifid, meta) {
+                let ht = match action.gen_ht(Direction::Out, ifid, meta) {
                     Ok(ht) => ht,
                     Err(e) => {
                         self.record_gen_ht_failure(
@@ -866,7 +866,7 @@ pub fn layer_process_return_probe(
         Err(e) => format!("ERROR: {:?}", e),
     };
 
-    cfg_if::cfg_if! {
+    cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
             let dir_c = match dir {
                 Direction::In => CString::new("in").unwrap(),
@@ -914,7 +914,7 @@ pub fn rule_match_probe(
 ) {
     let action_str = rule.action().to_string();
 
-    cfg_if::cfg_if! {
+    cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
             let layer_c = CString::new(layer).unwrap();
             let dir_c = match dir {
@@ -958,7 +958,7 @@ pub struct rule_no_match_sdt_arg {
 }
 
 pub fn rule_no_match_probe(layer: &str, dir: Direction, flow_id: &InnerFlowId) {
-    cfg_if::cfg_if! {
+    cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
             let layer_c = CString::new(layer).unwrap();
             let dir_c = match dir {
