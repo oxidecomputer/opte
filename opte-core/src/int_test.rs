@@ -39,10 +39,9 @@ use crate::ip6::Ipv6Addr;
 use crate::oxide_net::{self, arp, dyn_nat4, firewall, icmp, router};
 use crate::oxide_net::overlay::{self, OverlayCfg, PhysNet, Virt2Phys};
 use crate::packet::{
-    mock_allocb, Initialized, Packet, PacketRead, PacketReader, PacketSeg,
-    PacketWriter, ParseError, WritePos,
+    Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError
 };
-use crate::port::{DropReason, Inactive, Port, ProcessResult};
+use crate::port::{Inactive, Port, ProcessResult};
 use crate::tcp::TcpHdr;
 use crate::udp::{UdpHdr, UdpHdrRaw, UdpMeta};
 use crate::{Direction::*, ExecCtx};
@@ -882,76 +881,17 @@ fn dhcp_req() {
     }
 }
 
-// Verify the various parts of ARP hairpinning work and that any other
-// ARP traffic is dropped.
+// Verify that OPTE generates a hairpin ARP reply when the guest
+// queries for the gateway.
 #[test]
-fn arp_hairpin() {
+fn arp_gateway() {
     use crate::arp::ArpOp;
     use crate::ether::ETHER_TYPE_IPV4;
 
-    let cfg = home_cfg();
-    let host_mac = EtherAddr::from([0x80, 0xe8, 0x2c, 0xf5, 0x10, 0x35]);
-    let host_ip = "10.0.0.206".parse().unwrap();
+    let cfg = g1_cfg();
     let port = oxide_net_setup("arp_hairpin", &cfg).activate();
     let reply_hdr_sz = ETHER_HDR_SZ + ARP_HDR_SZ;
 
-    // ================================================================
-    // GARP from the host. This should be dropped.
-    // ================================================================
-    let mut mp_head = mock_allocb(14);
-    let mut mp2 = mock_allocb(28);
-
-    // Use PacketSeg for the sole purpose of writing some bytes to these
-    // segments before they are collected into the `Pkt` type.
-    let eth_hdr = EtherHdrRaw {
-        dst: host_mac.to_bytes(),
-        src: host_mac.to_bytes(),
-        ether_type: [0x08, 0x06],
-    };
-    let mut seg = unsafe { PacketSeg::wrap(mp_head) };
-    seg.write(eth_hdr.as_bytes(), WritePos::Append).unwrap();
-    mp_head = seg.unwrap();
-
-    let arp_hdr = ArpHdrRaw {
-        htype: [0x00, 0x01],
-        ptype: [0x08, 0x00],
-        hlen: 0x06,
-        plen: 0x04,
-        op: [0x00, 0x01],
-    };
-    seg = unsafe { PacketSeg::wrap(mp2) };
-    seg.write(arp_hdr.as_bytes(), WritePos::Append).unwrap();
-    let arp = ArpEth4Payload {
-        sha: host_mac,
-        spa: host_ip,
-        tha: EtherAddr::from([0xFF; 6]),
-        tpa: host_ip,
-    };
-    seg.write(ArpEth4PayloadRaw::from(arp).as_bytes(), WritePos::Append)
-        .unwrap();
-    mp2 = seg.unwrap();
-
-    unsafe {
-        (*mp_head).b_cont = mp2;
-    }
-
-    let mut pkt =
-        unsafe { Packet::<Initialized>::wrap(mp_head).parse().unwrap() };
-    assert_eq!(pkt.num_segs(), 2);
-    assert_eq!(pkt.len(), 42);
-
-    let res = port.process(In, &mut pkt);
-    assert!(res.is_ok(), "bad result: {:?}", res);
-    let val = res.unwrap();
-    assert!(matches!(val, ProcessResult::Drop { .. }), "bad val: {:?}", val);
-    if let ProcessResult::Drop { reason: DropReason::Layer { name } } = val {
-        assert_eq!(name, "arp")
-    }
-
-    // ================================================================
-    // ARP Request from guest for gateway. This should generate a
-    // hairpin result.
-    // ================================================================
     let pkt = Packet::alloc(42);
     let eth_hdr = EtherHdrRaw {
         dst: [0xff; 6],
@@ -1003,124 +943,6 @@ fn arp_hairpin() {
             assert_eq!(arp.spa, cfg.gw_ip);
             assert_eq!(arp.tha, cfg.private_mac);
             assert_eq!(arp.tpa, cfg.private_ip);
-        }
-
-        res => panic!("expected a Hairpin, got {:?}", res),
-    }
-
-    // ================================================================
-    // ARP Request from gateway for guest private IP. This should
-    // generate a hairpin result.
-    // ================================================================
-    let pkt = Packet::alloc(42);
-    let eth_hdr = EtherHdrRaw {
-        dst: [0xff; 6],
-        src: cfg.gw_mac.to_bytes(),
-        ether_type: [0x08, 0x06],
-    };
-
-    let arp_hdr = ArpHdrRaw {
-        htype: [0x00, 0x01],
-        ptype: [0x08, 0x00],
-        hlen: 0x06,
-        plen: 0x04,
-        op: [0x00, 0x01],
-    };
-
-    let arp = ArpEth4Payload {
-        sha: cfg.gw_mac,
-        spa: cfg.gw_ip,
-        tha: EtherAddr::from([0x00; 6]),
-        tpa: cfg.private_ip,
-    };
-
-    let mut wtr = PacketWriter::new(pkt, None);
-    let _ = wtr.write(eth_hdr.as_bytes()).unwrap();
-    let _ = wtr.write(arp_hdr.as_bytes()).unwrap();
-    let _ = wtr.write(ArpEth4PayloadRaw::from(arp).as_bytes()).unwrap();
-    let mut pkt = wtr.finish().parse().unwrap();
-
-    let res = port.process(In, &mut pkt);
-    match res {
-        Ok(Hairpin(hppkt)) => {
-            let hppkt = hppkt.parse().unwrap();
-            let meta = hppkt.meta();
-            let ethm = meta.inner.ether.as_ref().unwrap();
-            let arpm = meta.inner.arp.as_ref().unwrap();
-            assert_eq!(ethm.dst, cfg.gw_mac);
-            assert_eq!(ethm.src, cfg.private_mac);
-            assert_eq!(ethm.ether_type, ETHER_TYPE_ARP);
-            assert_eq!(arpm.op, ArpOp::Reply);
-            assert_eq!(arpm.ptype, ETHER_TYPE_IPV4);
-
-            let mut rdr = PacketReader::new(&hppkt, ());
-            assert!(rdr.seek(reply_hdr_sz).is_ok());
-            let arp = ArpEth4Payload::from(
-                &ArpEth4PayloadRaw::parse(&mut rdr).unwrap(),
-            );
-
-            assert_eq!(arp.sha, cfg.private_mac);
-            assert_eq!(arp.spa, cfg.private_ip);
-            assert_eq!(arp.tha, cfg.gw_mac);
-            assert_eq!(arp.tpa, cfg.gw_ip);
-        }
-
-        res => panic!("expected a Hairpin, got {:?}", res),
-    }
-
-    // ================================================================
-    // ARP Request from gateway for guest public IP. This should
-    // generate a hairpin result.
-    // ================================================================
-    let pkt = Packet::alloc(42);
-    let eth_hdr = EtherHdrRaw {
-        dst: [0xff; 6],
-        src: cfg.gw_mac.to_bytes(),
-        ether_type: [0x08, 0x06],
-    };
-
-    let arp_hdr = ArpHdrRaw {
-        htype: [0x00, 0x01],
-        ptype: [0x08, 0x00],
-        hlen: 0x06,
-        plen: 0x04,
-        op: [0x00, 0x01],
-    };
-
-    let arp = ArpEth4Payload {
-        sha: cfg.gw_mac,
-        spa: cfg.gw_ip,
-        tha: EtherAddr::from([0x00; 6]),
-        tpa: cfg.dyn_nat.public_ip,
-    };
-
-    let mut wtr = PacketWriter::new(pkt, None);
-    let _ = wtr.write(eth_hdr.as_bytes()).unwrap();
-    let _ = wtr.write(arp_hdr.as_bytes()).unwrap();
-    let _ = wtr.write(ArpEth4PayloadRaw::from(arp).as_bytes()).unwrap();
-    let mut pkt = wtr.finish().parse().unwrap();
-
-    let res = port.process(In, &mut pkt);
-    match res {
-        Ok(Hairpin(hppkt)) => {
-            let hppkt = hppkt.parse().unwrap();
-            let meta = hppkt.meta();
-            let ethm = meta.inner.ether.as_ref().unwrap();
-            let arpm = meta.inner.arp.as_ref().unwrap();
-            assert_eq!(ethm.dst, cfg.gw_mac);
-            assert_eq!(ethm.ether_type, ETHER_TYPE_ARP);
-            assert_eq!(arpm.op, ArpOp::Reply);
-            assert_eq!(arpm.ptype, ETHER_TYPE_IPV4);
-
-            let mut rdr = PacketReader::new(&hppkt, ());
-            assert!(rdr.seek(reply_hdr_sz).is_ok());
-            let arp = ArpEth4Payload::from(
-                &ArpEth4PayloadRaw::parse(&mut rdr).unwrap(),
-            );
-
-            assert_eq!(arp.spa, cfg.dyn_nat.public_ip);
-            assert_eq!(arp.tha, cfg.gw_mac);
-            assert_eq!(arp.tpa, cfg.gw_ip);
         }
 
         res => panic!("expected a Hairpin, got {:?}", res),
