@@ -1,9 +1,6 @@
-// stuff we need from mac
-
-use illumos_ddi_dki::{
-    boolean_t, c_char, c_int, c_uint, c_void, dev_info, dev_ops, mblk_t,
-    queue_t, size_t, uintptr_t,
-};
+// mac/mac_client APIs that we need.
+use crate::ip::{in6_addr_t, in6_addr__bindgen_ty_1};
+use illumos_ddi_dki::*;
 
 pub const MAC_DROP_ON_NO_DESC: u16 = 0x01;
 pub const MAC_TX_NO_ENQUEUE: u16 = 0x02;
@@ -86,6 +83,10 @@ extern "C" {
     pub fn mac_client_close(mch: *const mac_client_handle, flags: u16);
     pub fn mac_client_name(mch: *const mac_client_handle) -> *const c_char;
     pub fn mac_close(mh: *mut mac_handle);
+    pub fn mac_open_by_linkid(
+        linkid: datalink_id_t,
+        mhp: *mut *mut mac_handle,
+    ) -> c_int;
     pub fn mac_open_by_linkname(
         link: *const c_char,
         mhp: *mut *mut mac_handle,
@@ -134,6 +135,12 @@ extern "C" {
         mp_chain: *mut mblk_t,
     );
 
+    pub fn mac_link_flow_add(
+        linkid: datalink_id_t,
+        flow_name: *const c_char,
+        flow_desc: *const flow_desc_t,
+        mrp: *const mac_resource_props_t,
+    ) -> c_int;
 }
 
 #[repr(C)]
@@ -348,4 +355,292 @@ pub struct mac_register_t {
     pub m_margin: u32,
     pub m_v12n: u32,
     pub m_multicast_sdu: c_uint,
+}
+
+pub type flow_mask_t = u64;
+pub const MAXMACADDR: usize = 20;
+
+#[repr(C)]
+pub struct flow_desc_t {
+    pub fd_mask: flow_mask_t,
+    pub fd_mac_len: u32,
+    pub fd_dst_mac: [u8; MAXMACADDR],
+    pub fd_src_mac: [u8; MAXMACADDR],
+    pub fd_vid: u16,
+    pub fd_sap: u32,
+    pub fd_ipversion: u8,
+    pub fd_protocol: u8,
+    pub fd_local_addr: crate::ip::in6_addr_t,
+    pub fd_local_netmask: crate::ip::in6_addr_t,
+    pub fd_remote_addr: crate::ip::in6_addr_t,
+    pub fd_remote_netmask: crate::ip::in6_addr_t,
+    pub fd_local_port: crate::ip::in_port_t,
+    pub fd_remote_port: crate::ip::in_port_t,
+    pub fd_dsfield: u8,
+    pub fd_dsfield_mask: u8,
+}
+
+// TODO Move this somewhere else?
+#[derive(Clone, Default)]
+pub struct MacFlow {
+    mask: flow_mask_t,
+    ip_ver: Option<u8>,
+    proto: Option<opte_core::ip4::Protocol>,
+    local_port: Option<u16>,
+}
+
+// TODO At the moment the flow system only allows six different
+// combinations of attributes:
+//
+//   local_ip=address[/prefixlen]
+//   remote_ip=address[/prefixlen]
+//   transport={tcp|udp|sctp|icmp|icmpv6}
+//   transport={tcp|udp|sctp},local_port=port
+//   transport={tcp|udp|sctp},remote_port=port
+//   dsfield=val[:dsfield_mask]
+//
+// Update this type to enforce the above.
+//
+// For now my best bet is to use
+// transport={tcp|udp|sctp},local_port=port to classify on Geneve
+// packets.
+impl MacFlow {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// TODO create an IpVersion type to avoid invalid descriptors.
+    pub fn set_ipver(&mut self, ver: u8) -> &mut Self {
+        self.mask |= FLOW_IP_VERSION;
+        self.ip_ver = Some(ver);
+        self
+    }
+
+    pub fn set_proto(&mut self, proto: opte_core::ip4::Protocol) -> &mut Self {
+        self.mask |= FLOW_IP_PROTOCOL;
+        self.proto = Some(proto);
+        self
+    }
+
+    pub fn set_local_port(&mut self, port: u16) -> &mut Self {
+        self.mask |= FLOW_ULP_PORT_LOCAL;
+        self.local_port = Some(port);
+        self
+    }
+
+    pub fn to_desc(&self) -> flow_desc_t {
+        flow_desc_t::from(self.clone())
+    }
+}
+
+pub const IP_NO_ADDR: in6_addr_t = in6_addr_t {
+    _S6_un: in6_addr__bindgen_ty_1 { _S6_u16: [0u16; 8] }
+};
+
+impl From<MacFlow> for flow_desc_t {
+    fn from(mf: MacFlow) -> Self {
+        let no_addr = IP_NO_ADDR;
+        let fd_ipversion = mf.ip_ver.unwrap_or(0);
+
+        // The mac flow subsystem uses 0 as sentinel to indicate no
+        // filtering on protocol.
+        let fd_protocol = match mf.proto {
+            Some(p) => p as u8,
+            None => 0,
+        };
+
+        // Apparently mac flow wants this in network order.
+        let fd_local_port = mf.local_port.unwrap_or(0).to_be();
+
+        Self {
+            // The mask controls options like priority and bandwidth,
+            // which we are not using at the moment.
+            fd_mask: mf.mask,
+            fd_mac_len: 0,
+            fd_dst_mac: [0u8; MAXMACADDR],
+            fd_src_mac: [0u8; MAXMACADDR],
+            fd_vid: 0,
+            // XXX Typically I would saw the SAP is the EtherType
+            // (when talking about Ethernet, but this stuff always
+            // confuses me. This doesn't seem to be used to filter
+            // anything.
+            fd_sap: 0,
+            fd_ipversion,
+            fd_protocol,
+            fd_local_addr: no_addr,
+            fd_local_netmask: no_addr,
+            fd_remote_addr: no_addr,
+            fd_remote_netmask: no_addr,
+            fd_local_port,
+            fd_remote_port: 0,
+            fd_dsfield: 0,
+            fd_dsfield_mask: 0,
+        }
+    }
+}
+
+#[repr(C)]
+pub struct mac_resource_props_t {
+    mrp_mask: u32,
+    mrp_maxbw: u64,
+    mrp_priority: mac_priority_level_t,
+    mrp_cpus: mac_cpus_t,
+    mrp_protect: mac_protect_t,
+    mrp_nrxings: u32,
+    mrp_ntxrings: u32,
+    mrp_pool: [c_char; MAXPATHLEN],
+}
+
+pub const FLOW_LINK_DST: u64 = 0x00000001;
+pub const FLOW_LINK_SRC: u64 = 0x00000002;
+pub const FLOW_LINK_VID: u64 = 0x00000004;
+pub const FLOW_LINK_SAP: u64 = 0x00000008;
+
+pub const FLOW_IP_VERSION: u64 = 0x00000010;
+pub const FLOW_IP_PROTOCOL: u64 = 0x00000020;
+pub const FLOW_IP_LOCAL: u64 = 0x00000040;
+pub const FLOW_IP_REMOTE: u64 = 0x00000080;
+pub const FLOW_IP_DSFIELD: u64 = 0x00000100;
+
+pub const FLOW_ULP_PORT_LOCAL: u64 = 0x00001000;
+pub const FLOW_ULP_PORT_REMOTE: u64 = 0x00002000;
+
+pub const MPT_MACNOSPOOF: c_int = 0x00000001;
+pub const MPT_RESTRICTED: c_int = 0x00000002;
+pub const MPT_IPNOSPOOF: c_int = 0x00000004;
+pub const MPT_DHCPNOSPOOF: c_int = 0x00000008;
+pub const MPT_ALL: c_int = 0x0000000f;
+pub const MPT_RESET: c_int = -1;
+pub const MPT_MAXCNT: usize = 32;
+pub const MPT_MAXIPADDR: usize = MPT_MAXCNT;
+pub const MPT_MAXCID: usize = MPT_MAXCNT;
+pub const MPT_MAXCIDLEN: usize = 256;
+
+pub const MRP_MAXBW: c_int = 0x00000001;
+pub const MRP_CPUS: c_int = 0x00000002;
+pub const MRP_CPUS_USERSPEC: c_int = 0x00000004;
+pub const MRP_PRIORITY: c_int = 0x00000008;
+pub const MRP_PROTECT: c_int = 0x00000010;
+pub const MRP_RX_RINGS: c_int =	0x00000020;
+pub const MRP_TX_RINGS: c_int = 0x00000040;
+pub const MRP_RXRINGS_UNSPEC: c_int = 0x00000080;
+pub const MRP_TXRINGS_UNSPEC: c_int = 0x00000100;
+pub const MRP_RINGS_RESET: c_int = 0x00000200;
+pub const MRP_POOL: c_int = 0x00000400;
+
+pub const MRP_NCPUS: usize = 256;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum mac_priority_level_t {
+    MPL_LOW,
+    MPL_MEDIUM,
+    MPL_HIGH,
+    MPL_RESET,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum mac_cpu_mode_t {
+    MCM_FANOUT = 1,
+    MCM_CPUS,
+}
+
+
+pub const MAC_RESOURCE_PROPS_DEF: mac_resource_props_t = mac_resource_props_t {
+    mrp_mask: 0,
+    mrp_maxbw: 0,
+    mrp_priority: mac_priority_level_t::MPL_HIGH,
+    mrp_cpus: MAC_CPUS_DEF,
+    mrp_protect: MAC_PROTECT_DEF,
+    mrp_nrxings: 0,
+    mrp_ntxrings: 0,
+    mrp_pool: [0; MAXPATHLEN],
+};
+
+pub const MAC_CPUS_DEF: mac_cpus_t = mac_cpus_t {
+    mc_ncpus: 0,
+    mc_cpus: [0; MRP_NCPUS],
+    mc_rx_fanout_cnt: 0,
+    mc_rx_fanout_cpus: [0; MRP_NCPUS],
+    mc_rx_pollid: 0,
+    mc_rx_workerid: 0,
+    mc_rx_intr_cpu: 0,
+    mc_tx_fanout_cpus: [0; MRP_NCPUS],
+    mc_tx_intr_cpus: mac_tx_intr_cpu_t {
+        mtc_intr_cpu: [0; MRP_NCPUS],
+        mtc_retargeted_cpu: [0; MRP_NCPUS],
+    },
+    mc_fanout_mode: mac_cpu_mode_t::MCM_FANOUT,
+};
+
+#[repr(C)]
+pub struct mac_cpus_t {
+    mc_ncpus: u32,
+    mc_cpus: [u32; MRP_NCPUS],
+    mc_rx_fanout_cnt: u32,
+    mc_rx_fanout_cpus: [u32; MRP_NCPUS],
+    mc_rx_pollid: u32,
+    mc_rx_workerid: u32,
+    mc_rx_intr_cpu: i32,
+    mc_tx_fanout_cpus: [i32; MRP_NCPUS],
+    mc_tx_intr_cpus: mac_tx_intr_cpu_t,
+    mc_fanout_mode: mac_cpu_mode_t,
+}
+
+#[repr(C)]
+pub struct mac_tx_intr_cpu_t {
+    mtc_intr_cpu: [i32; MRP_NCPUS],
+    mtc_retargeted_cpu: [i32; MRP_NCPUS],
+}
+
+#[repr(C)]
+pub struct mac_protect_t {
+    mp_types: u32,
+    mp_ipaddrcnt: u32,
+    mp_ipaddrs: [mac_ipaddr_t; MPT_MAXIPADDR as usize],
+    mp_cidcnt: u32,
+    mp_cids: [mac_dhcpcid_t; MPT_MAXCID as usize],
+}
+
+pub const MAC_PROTECT_DEF: mac_protect_t = mac_protect_t {
+    mp_types: 0,
+    mp_ipaddrcnt: 0,
+    mp_ipaddrs: [MAC_IPADDR_DEF; MPT_MAXIPADDR],
+    mp_cidcnt: 0,
+    mp_cids: [MAC_DHCPCID_DEF; MPT_MAXCID],
+};
+
+#[repr(C)]
+pub struct mac_ipaddr_t {
+    ip_version: u32,
+    ip_addr: in6_addr_t,
+    ip_netmask: u8,
+}
+
+pub const MAC_IPADDR_DEF: mac_ipaddr_t = mac_ipaddr_t {
+    ip_version: 0,
+    ip_addr: IP_NO_ADDR,
+    ip_netmask: 0,
+};
+
+#[repr(C)]
+pub struct mac_dhcpcid_t {
+    dc_id: [c_uchar; MPT_MAXCIDLEN as usize],
+    dc_len: u32,
+    dc_form: mac_dhcpcid_form_t,
+}
+
+pub const MAC_DHCPCID_DEF: mac_dhcpcid_t  = mac_dhcpcid_t {
+    dc_id: [0; MPT_MAXCIDLEN],
+    dc_len: 0,
+    dc_form: mac_dhcpcid_form_t::CIDFORM_TYPED,
+};
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum mac_dhcpcid_form_t {
+    CIDFORM_TYPED = 1,
+    CIDFORM_HEX,
+    CIDFORM_STR,
 }

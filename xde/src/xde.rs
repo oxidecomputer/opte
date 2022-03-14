@@ -26,7 +26,7 @@ use opte_core::{
         self as api, CmdErr, CmdOk, CreateXdeReq, DeleteXdeReq, IoctlCmd,
         SnatCfg, XdeError,
     },
-    ip4::Ipv4Addr,
+    ip4::{Ipv4Addr, Protocol},
     ip6::Ipv6Addr,
     oxide_net::{firewall::FwAddRuleReq, overlay, router, PortCfg},
     packet::{Initialized, Packet, Parsed},
@@ -746,45 +746,59 @@ unsafe extern "C" fn xde_attach(
 
 #[no_mangle]
 unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
-    // null terminated underlay device names
-
-    let u1_devname = match CString::new(state.u1.name.as_str()) {
+    let u1_link = match CString::new(state.u1.name.as_str()) {
         Ok(s) => s,
         Err(e) => {
-            warn!("bad u1 dev name: {:?}", e);
+            warn!("bad string for underlay port#1: {:?}", e);
             return EINVAL;
         }
     };
 
-    let u2_devname = match CString::new(state.u2.name.as_str()) {
+    let u2_link = match CString::new(state.u2.name.as_str()) {
         Ok(s) => s,
         Err(e) => {
-            warn!("bad u2 dev name: {:?}", e);
+            warn!("bad string for underlay port#2: {:?}", e);
             return EINVAL;
         }
     };
 
-    // get mac handles for underlay ports
-
-    match mac::mac_open_by_linkname(
-        u1_devname.as_ptr() as *const c_char,
-        &mut state.u1.mh,
-    ) {
+    // Open up handles to the underlay links.
+    let mut u1_linkid = 0;
+    match dls::dls_mgmt_get_linkid(u1_link.as_ptr(), &mut u1_linkid) {
         0 => {}
         err => {
-            let p = CStr::from_ptr(u1_devname.as_ptr() as *const c_char);
-            warn!("failed to open underlay port 1: {:?}", p);
+            warn!(
+                "failed to get linkid for underlay port#1 {}: {}",
+                state.u1.name,
+                err
+            );
+        }
+    }
+
+    let mut u2_linkid = 0;
+    match dls::dls_mgmt_get_linkid(u2_link.as_ptr(), &mut u2_linkid) {
+        0 => {}
+        err => {
+            warn!(
+                "failed to get linkid for underlay port#2 {}: {}",
+                state.u2.name,
+                err
+            );
+        }
+    }
+
+    match mac::mac_open_by_linkid(u1_linkid,  &mut state.u1.mh) {
+        0 => {}
+        err => {
+            warn!("failed to open underlay port#1 {}: {}", state.u1.name, err);
             return err;
         }
     }
 
-    match mac::mac_open_by_linkname(
-        u2_devname.as_ptr() as *const c_char,
-        &mut state.u2.mh,
-    ) {
+    match mac::mac_open_by_linkid(u2_linkid, &mut state.u2.mh) {
         0 => {}
         err => {
-            warn!("failed to open underlay port 2");
+            warn!("failed to open underlay port#2 {}: {}", state.u2.name, err);
             return err;
         }
     }
@@ -801,7 +815,13 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
     ) {
         0 => {}
         err => {
-            warn!("mac client open for u1 failed: {}", err);
+            warn!(
+                "failed to open mac client for port#1 {}: {}",
+                state.u1.name,
+                err
+            );
+            // TODO leaking mac_open here, might as well just create a
+            // safe abstraction for mac and mac client handles.
             return err;
         }
     }
@@ -814,63 +834,120 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
     ) {
         0 => {}
         err => {
-            warn!("mac client open for u2 failed: {}", err);
+            warn!(
+                "failed to open mac client for port#2 {}: {}",
+                state.u2.name,
+                err
+            );
+            // TODO leaking mac_open here, might as well just create a
+            // safe abstraction for mac and mac client handles.
+            return err;
+        }
+    }
+
+    // Use a link flow to steer only IPv6 + Geneve traffic to our Rx
+    // handler.
+    //
+    // XXX The mac flow mechanism is currently not sophisticated
+    // enough to understand encapsulated packets. Each xde instance
+    // will receive all client traffic. It is up to each xde instance
+    // to further filter the traffic so that only packets destined for
+    // its client are sent upstream. The plan is to expand mac's flow
+    // classification to handle encapsulated packets; at which point
+    // we should be able to setup a distinct flow per xde instance.
+    let flow_desc = mac::MacFlow::new()
+        // .set_ipver(6)
+        .set_proto(Protocol::UDP)
+        .set_local_port(opte_core::geneve::GENEVE_PORT)
+        .to_desc();
+
+    // TODO I'm able to remove these flows via flowadm while the
+    // driver is still attached -- that's no good. Either find a way
+    // to add a hold or I'll need to implement such a mechanism.
+    //
+    // There is a fe_refcnt and fe_user_refcnt, I'll have to look at
+    // those.
+
+    // We already know this string is valid.
+    let u1_flow =
+        CString::new(format!("{}_xde", state.u1.name).as_str()).unwrap();
+
+    match mac::mac_link_flow_add(
+        u1_linkid,
+        u1_flow.as_ptr(),
+        &flow_desc,
+        &mac::MAC_RESOURCE_PROPS_DEF,
+    ) {
+        0 => {}
+        err => {
+            warn!("failed to add flow for port#1 {}: {}", state.u1.name, err);
+            // TODO leaking mac_open + mac_client_open here, might as
+            // well just create a safe abstraction for mac and mac
+            // client handles.
+            return err;
+        }
+    }
+
+    // We already know this string is valid.
+    let u2_flow =
+        CString::new(format!("{}_xde", state.u2.name).as_str()).unwrap();
+
+    match mac::mac_link_flow_add(
+        u2_linkid,
+        u2_flow.as_ptr(),
+        &flow_desc,
+        &mac::MAC_RESOURCE_PROPS_DEF,
+    ) {
+        0 => {}
+        err => {
+            warn!("failed to add flow for port#2 {}: {}", state.u2.name, err);
+            // TODO leaking mac_open + mac_client_open here, might as
+            // well just create a safe abstraction for mac and mac
+            // client handles.
             return err;
         }
     }
 
     // set up promisc rx handlers for underlay devices
 
-    match mac::mac_promisc_add(
-        state.u1.mch,
-        mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-        xde_rx,
-        ptr::null_mut(),
-        &mut state.u1.mph,
-        0,
-    ) {
-        0 => {}
-        err => {
-            warn!("mac promisc add u1 failed: {}", err);
-            return err;
-        }
-    }
+    // match mac::mac_promisc_add(
+    //     state.u1.mch,
+    //     mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
+    //     xde_rx,
+    //     ptr::null_mut(),
+    //     &mut state.u1.mph,
+    //     0,
+    // ) {
+    //     0 => {}
+    //     err => {
+    //         warn!("mac promisc add u1 failed: {}", err);
+    //         return err;
+    //     }
+    // }
 
     /*
      * TODO: this - curently promisc RX is needed to get packets into the xde
      * device. Maybehapps setting something like MAC_OPEN_FLAGS_MULTI_PRIMARY
      * and doing a mac_unicast_add with MAC_UNICAST_PRIMARY would work?.
-     *
-    mac::mac_rx_set(
-        state.u1.mch,
-        xde_rx,
-        ptr::null_mut(),
-    );
-     *
      */
+    mac::mac_rx_set(state.u1.mch, xde_rx, ptr::null_mut());
 
-    match mac::mac_promisc_add(
-        state.u2.mch,
-        mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-        xde_rx,
-        ptr::null_mut(),
-        &mut state.u2.mph,
-        0,
-    ) {
-        0 => {}
-        err => {
-            warn!("mac promisc add u2 failed: {}", err);
-            return err;
-        }
-    }
-    /*
-    mac::mac_rx_set(
-        state.u2.mch,
-        xde_rx,
-        ptr::null_mut(),
-    );
-    */
+    // match mac::mac_promisc_add(
+    //     state.u2.mch,
+    //     mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
+    //     xde_rx,
+    //     ptr::null_mut(),
+    //     &mut state.u2.mph,
+    //     0,
+    // ) {
+    //     0 => {}
+    //     err => {
+    //         warn!("mac promisc add u2 failed: {}", err);
+    //         return err;
+    //     }
+    // }
 
+    mac::mac_rx_set(state.u2.mch, xde_rx, ptr::null_mut());
     DDI_SUCCESS
 }
 
@@ -924,8 +1001,10 @@ unsafe extern "C" fn xde_detach(
     // mac rx clear for underlay devices
     mac::mac_rx_clear(state.u1.mch);
     mac::mac_rx_clear(state.u2.mch);
-    mac::mac_promisc_remove(state.u1.mph);
-    mac::mac_promisc_remove(state.u2.mph);
+    // mac::mac_promisc_remove(state.u1.mph);
+    // mac::mac_promisc_remove(state.u2.mph);
+
+    // TODO Add code to remove flows
 
     // close mac client handle for underlay devices
     mac::mac_client_close(state.u1.mch, 0);
@@ -1139,7 +1218,6 @@ unsafe extern "C" fn xde_mc_tx(
             //  Then ask NCE for the mac associated with the IRE nexthop to fill
             //  in the outer frame of the packet
             let (src, dst) = finish_outer_frame(&pkt);
-            //let len = pkt.len();
             let mblk = pkt.unwrap();
 
             // get a pointer to the beginning of the outer frame
@@ -1149,10 +1227,6 @@ unsafe extern "C" fn xde_mc_tx(
             // set L2 source and destination
             ptr::copy(dst.as_ptr(), basep, 6);
             ptr::copy(src.as_ptr(), basep.add(6), 6);
-
-            // NOTE assuming L2 checksum is going to be computed in hardware on
-            // the way out the door.
-
             mac::mac_tx(mch, mblk, hint, flags, ret_mp);
         }
 
