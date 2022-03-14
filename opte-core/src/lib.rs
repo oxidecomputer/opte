@@ -12,6 +12,11 @@
 #![deny(unreachable_patterns)]
 #![deny(unused_must_use)]
 
+use core::fmt::{self, Display};
+use core::num::ParseIntError;
+use core::str::FromStr;
+
+// NOTE: Things get weird if you move the extern crate into cfg_if!.
 #[cfg(any(feature = "std", test))]
 #[macro_use]
 extern crate std;
@@ -23,23 +28,17 @@ extern crate alloc;
 #[macro_use]
 extern crate cfg_if;
 
-use core::fmt::{self, Display};
-use core::num::ParseIntError;
-use core::str::FromStr;
-
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::boxed::Box;
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::{String, ToString};
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::vec::Vec;
-#[cfg(any(feature = "std", test))]
-use std::boxed::Box;
-#[cfg(any(feature = "std", test))]
-use std::string::String;
-
-#[cfg(all(not(feature = "std"), not(test)))]
-use illumos_ddi_dki as ddi;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::boxed::Box;
+        use alloc::string::{String, ToString};
+        use alloc::vec::Vec;
+        use illumos_ddi_dki as ddi;
+    } else {
+        use std::boxed::Box;
+        use std::string::String;
+    }
+}
 
 // TODO Not sure reexporting makes sense, but felt like trying it on
 // for size.

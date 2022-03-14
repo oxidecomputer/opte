@@ -14,17 +14,17 @@ use core::ptr;
 use core::result;
 use core::slice;
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::String;
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::vec::Vec;
-#[cfg(any(feature = "std", test))]
-use std::string::String;
-#[cfg(any(feature = "std", test))]
-use std::vec::Vec;
-
-#[cfg(any(feature = "std", test))]
-use std::boxed::Box;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::string::String;
+        use alloc::vec::Vec;
+        use illumos_ddi_dki as ddi;
+    } else {
+        use std::boxed::Box;
+        use std::string::String;
+        use std::vec::Vec;
+    }
+}
 
 use serde::{Deserialize, Serialize};
 
@@ -39,9 +39,6 @@ use crate::ip4::{Ipv4Hdr, Ipv4HdrError, Ipv4Meta, Protocol, IPV4_HDR_SZ};
 use crate::ip6::{Ipv6Hdr, Ipv6HdrError, Ipv6Meta, IPV6_HDR_SZ};
 use crate::tcp::{TcpHdr, TcpHdrError, TcpMeta};
 use crate::udp::{UdpHdr, UdpHdrError, UdpMeta, UDP_HDR_SZ};
-
-#[cfg(all(not(feature = "std"), not(test)))]
-use illumos_ddi_dki as ddi;
 
 use illumos_ddi_dki::{c_uchar, dblk_t, mblk_t};
 

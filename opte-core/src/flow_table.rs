@@ -1,17 +1,17 @@
 use core::fmt;
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::{String, ToString};
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::vec::Vec;
-#[cfg(all(not(feature = "std"), not(test)))]
-use illumos_ddi_dki::{gethrtime, hrtime_t};
-#[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::time::{Duration, Instant};
-#[cfg(any(feature = "std", test))]
-use std::vec::Vec;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::string::{String, ToString};
+        use alloc::vec::Vec;
+        use illumos_ddi_dki::{gethrtime, hrtime_t};
+    } else {
+        use std::string::{String, ToString};
+        use std::time::{Duration, Instant};
+        use std::vec::Vec;
+        use illumos_ddi_dki::c_char;
+    }
+}
 
 use serde::{Deserialize, Serialize};
 
@@ -19,8 +19,6 @@ use crate::layer::InnerFlowId;
 use crate::rule::flow_id_sdt_arg;
 use crate::CString;
 
-#[cfg(any(feature = "std", test))]
-use illumos_ddi_dki::c_char;
 use illumos_ddi_dki::uintptr_t;
 
 pub const FLOW_DEF_EXPIRE_SECS: u32 = 60;

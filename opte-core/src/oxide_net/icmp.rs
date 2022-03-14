@@ -1,14 +1,14 @@
 use core::fmt::{self, Display};
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::sync::Arc;
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::vec::Vec;
-
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::vec::Vec;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::sync::Arc;
+        use alloc::vec::Vec;
+    } else {
+        use std::sync::Arc;
+        use std::vec::Vec;
+    }
+}
 
 use smoltcp::phy::{Checksum, ChecksumCapabilities as Csum};
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};

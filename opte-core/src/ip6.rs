@@ -2,10 +2,13 @@ use core::convert::TryFrom;
 use core::fmt;
 use core::mem::size_of;
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::vec::Vec;
-#[cfg(any(feature = "std", test))]
-use std::vec::Vec;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::vec::Vec;
+    } else {
+        use std::vec::Vec;
+    }
+}
 
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};

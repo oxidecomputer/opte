@@ -1,11 +1,12 @@
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::boxed::Box;
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::boxed::Box;
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::boxed::Box;
+        use alloc::sync::Arc;
+    } else {
+        use std::boxed::Box;
+        use std::sync::Arc;
+    }
+}
 
 use crate::ip4::{self, Protocol};
 use crate::layer::Layer;

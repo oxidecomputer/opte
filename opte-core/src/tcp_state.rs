@@ -1,9 +1,12 @@
 use core::fmt::{self, Display};
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::String;
-#[cfg(any(feature = "std", test))]
-use std::string::String;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::string::String;
+    } else {
+        use std::string::String;
+    }
+}
 
 use serde::{Deserialize, Serialize};
 

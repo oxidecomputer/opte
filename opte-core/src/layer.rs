@@ -3,18 +3,19 @@ use core::fmt::{self, Display};
 use core::mem;
 use core::result;
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::{String, ToString};
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::sync::Arc;
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::vec::Vec;
-#[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::vec::Vec;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::string::{String, ToString};
+        use alloc::sync::Arc;
+        use alloc::vec::Vec;
+        use illumos_ddi_dki::hrtime_t;
+    } else {
+        use std::string::{String, ToString};
+        use std::sync::Arc;
+        use std::time::Instant;
+        use std::vec::Vec;
+    }
+}
 
 use serde::{Deserialize, Serialize};
 
@@ -32,11 +33,6 @@ use crate::sync::{KMutex, KMutexType};
 use crate::{CString, Direction, ExecCtx, LogLevel};
 
 use illumos_ddi_dki::{c_char, uintptr_t};
-
-#[cfg(all(not(feature = "std"), not(test)))]
-use illumos_ddi_dki::hrtime_t;
-#[cfg(any(feature = "std", test))]
-use std::time::Instant;
 
 #[derive(Debug)]
 pub enum LayerError {

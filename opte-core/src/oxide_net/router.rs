@@ -5,14 +5,15 @@
 use core::fmt;
 use core::str::FromStr;
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::string::{String, ToString};
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::string::{String, ToString};
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::string::{String, ToString};
+        use alloc::sync::Arc;
+    } else {
+        use std::string::{String, ToString};
+        use std::sync::Arc;
+    }
+}
 
 use serde::{Deserialize, Serialize};
 

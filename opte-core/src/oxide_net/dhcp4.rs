@@ -11,15 +11,15 @@
 use core::fmt::{self, Display};
 use core::result::Result;
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::sync::Arc;
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::vec::Vec;
-
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::vec::Vec;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::sync::Arc;
+        use alloc::vec::Vec;
+    } else {
+        use std::sync::Arc;
+        use std::vec::Vec;
+    }
+}
 
 use smoltcp::wire::{DhcpPacket, DhcpRepr, EthernetAddress, Ipv4Address};
 

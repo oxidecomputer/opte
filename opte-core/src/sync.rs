@@ -4,19 +4,20 @@
 //! crate. But for now just let it live here.
 use core::ops::{Deref, DerefMut};
 
-#[cfg(all(not(feature = "std"), not(test)))]
-use core::cell::UnsafeCell;
-#[cfg(all(not(feature = "std"), not(test)))]
-use core::ptr;
-#[cfg(any(feature = "std", test))]
-use std::sync::Mutex;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use core::cell::UnsafeCell;
+        use core::ptr;
+        use illumos_ddi_dki::{
+            kmutex_t, krw_t, krw_type_t, krwlock_t, mutex_enter, mutex_exit,
+            mutex_init, rw_enter, rw_exit, rw_init,
+        };
+    } else {
+        use std::sync::Mutex;
+    }
+}
 
 use illumos_ddi_dki::kmutex_type_t;
-#[cfg(all(not(feature = "std"), not(test)))]
-use illumos_ddi_dki::{
-    kmutex_t, krw_t, krw_type_t, krwlock_t, mutex_enter, mutex_exit,
-    mutex_init, rw_enter, rw_exit, rw_init,
-};
 
 /// Exposes the illumos mutex(9F) API in a safe manner. We name it
 /// `KMutex` (Kernel Mutex) on purpose. The API for a kernel mutex

@@ -1,7 +1,10 @@
-#[cfg(all(not(feature = "std"), not(test)))]
-use alloc::sync::Arc;
-#[cfg(any(feature = "std", test))]
-use std::sync::Arc;
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::sync::Arc;
+    } else {
+        use std::sync::Arc;
+    }
+}
 
 use crate::arp::{ArpOp, ArpReply};
 use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
