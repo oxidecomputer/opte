@@ -20,8 +20,8 @@ use crate::ioctl::IoctlEnvelope;
 use crate::mac;
 use crate::mac::ChecksumOffloadCapabs;
 use crate::mac::MacEmul;
+use crate::mac::MacFlow;
 use crate::mac::MacHandle;
-use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
 use crate::mac::OffloadInfo;
 use crate::mac::TcpLsoFlags;
@@ -239,11 +239,11 @@ pub struct xde_underlay_port {
     /// The MAC address associated with this underlay port.
     pub mac: [u8; 6],
 
+    /// Handles to created MacFlow instances.
+    flows: Vec<MacFlow<DlsStream>>,
+
     /// The MTU of this link.
     pub mtu: u32,
-
-    /// MAC promiscuous handle for receiving packets on the underlay link.
-    mph: MacPromiscHandle<DlsStream>,
 
     /// DLS-level handle on a device for promiscuous registration and
     /// packet Tx.
@@ -962,12 +962,12 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         };
 
         for u in [u1, u2] {
-            // We have a chain of refs here: `MacPromiscHandle` holds a ref to
+            // We have a chain of refs here: `MacFlow` holds a ref to
             // `DldStream`. We explicitly drop them in order here to ensure
             // there are no outstanding refs.
 
-            // 1. Remove promisc callback.
-            drop(u.mph);
+            // 1. Remove flow callback.
+            drop(u.flows);
 
             // Although `xde_rx` can be called into without any running ports
             // via the promisc handle, illumos guarantees that this callback won't
@@ -1113,20 +1113,35 @@ fn create_underlay_port(
             msg: format!("failed to grab open stream for {link_name}: {e}"),
         })?);
 
-    // Setup promiscuous callback to receive all packets on this link.
+    // Use a link flow to steer only IPv6 + Geneve traffic to our Rx
+    // handler.
     //
-    // We specify `MAC_PROMISC_FLAGS_NO_TX_LOOP` here to skip receiving copies
-    // of outgoing packets we sent ourselves.
-    let mph = MacPromiscHandle::new(
-        stream.clone(),
-        mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-        xde_rx,
-        mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
-    )
-    .map_err(|e| OpteError::System {
-        errno: EFAULT,
-        msg: format!("mac_promisc_add failed for {link_name}: {e}"),
-    })?;
+    // XXX The mac flow mechanism is currently not sophisticated
+    // enough to understand encapsulated packets. Each xde instance
+    // will receive all client traffic. It is up to each xde instance
+    // to further filter the traffic so that only packets destined for
+    // its client are sent upstream. The plan is to expand mac's flow
+    // classification to handle encapsulated packets; at which point
+    // we should be able to setup a distinct flow per xde instance.
+    let mut flow_desc = mac::MacFlowDesc::new();
+    flow_desc
+        // .set_ipver(6)
+        .set_proto(IpProtocol::UDP)
+        .set_local_port(opte::engine::geneve::GENEVE_PORT)
+        .to_desc();
+
+    // TODO I'm able to remove these flows via flowadm while the
+    // driver is still attached -- that's no good. Either find a way
+    // to add a hold or I'll need to implement such a mechanism.
+    //
+    // There is a fe_refcnt and fe_user_refcnt, I'll have to look at
+    // those.
+    let mut fkey = flow_desc
+        .new_flow(format!("{link_name}_xde").as_str(), link_id)
+        .map_err(|e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("{e}"),
+        })?;
 
     // Grab mac handle for underlying link, to retrieve its MAC address.
     let mh = MacHandle::open_by_link_name(&link_name).map(Arc::new).map_err(
@@ -1136,16 +1151,29 @@ fn create_underlay_port(
         },
     )?;
 
+    /*
+     * TODO: this - curently promisc RX is needed to get packets into the xde
+     * device. Maybehapps setting something like MAC_OPEN_FLAGS_MULTI_PRIMARY
+     * and doing a mac_unicast_add with MAC_UNICAST_PRIMARY would work?.
+     */
+    // How does this compare to the above?
+    // mch.rx_set(xde_rx);
+    // mch.rx_bypass_disable();
+    // mch.set_flow_cb(xde_rx);
+
     let mtu = *mh.get_valid_mtus().end();
     let cso_state = mh.get_cso_capabs();
     let lso_state = mh.get_lso_capabs();
+
+    fkey.set_flow_cb(xde_rx, stream.clone());
+    let flows = vec![fkey];
 
     Ok((
         xde_underlay_port {
             name: link_name,
             mac: mh.get_mac_addr(),
             mtu,
-            mph,
+            flows,
             stream,
         },
         OffloadInfo { lso_state, cso_state, mtu },
@@ -2071,7 +2099,7 @@ unsafe extern "C" fn xde_rx(
 
     // Safety: This arg comes from `Arc::from_ptr()` on the `MacClientHandle`
     // corresponding to the underlay port we're receiving on. Being
-    // here in the callback means the `MacPromiscHandle` hasn't been
+    // here in the callback means the `MacFlow` hasn't been
     // dropped yet and thus our `MacClientHandle` is also still valid.
     let stream: Arc<DlsStream> = unsafe {
         let mch_ptr = arg as *const DlsStream;
