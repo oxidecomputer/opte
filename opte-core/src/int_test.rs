@@ -177,6 +177,7 @@ fn g2_cfg() -> oxide_net::PortCfg {
 fn gateway_icmp4_ping() {
     use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
 
+    #[cfg(feature = "usdt")]
     usdt::register_probes().unwrap();
 
     let mut g1_cfg = g1_cfg();
