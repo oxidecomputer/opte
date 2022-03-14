@@ -78,7 +78,6 @@ fn home_cfg() -> oxide_net::PortCfg {
         private_mac: EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]),
         vpc_subnet: "10.0.0.0/24".parse().unwrap(),
         dyn_nat: oxide_net::DynNat4Cfg {
-            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0x00, 0x00, 0x63]),
             public_ip: "10.0.0.99".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
         },
@@ -94,7 +93,6 @@ fn lab_cfg() -> oxide_net::PortCfg {
         private_mac: EtherAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
         dyn_nat: oxide_net::DynNat4Cfg {
-            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0x00, 0x01, 0xEE]),
             public_ip: "76.76.21.21".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
         },
@@ -139,11 +137,6 @@ fn g1_cfg() -> oxide_net::PortCfg {
         private_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
         dyn_nat: oxide_net::DynNat4Cfg {
-            // NOTE: This member is used for home routers that might
-            // balk at multiple IPs sharing a MAC address. As these
-            // tests are meant to mimic the Oxide Rack Network we just
-            // keep this the same.
-            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
             // NOTE: This is not a routable IP, but remember that a
             // "public IP" for an Oxide guest could either be a
             // public, routable IP or simply an IP on their wider LAN
@@ -165,11 +158,6 @@ fn g2_cfg() -> oxide_net::PortCfg {
         private_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x66]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
         dyn_nat: oxide_net::DynNat4Cfg {
-            // NOTE: This member is used for home routers that might
-            // balk at multiple IPs sharing a MAC address. As these
-            // tests are meant to mimic the Oxide Rack Network we just
-            // keep this the same.
-            public_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x66]),
             // NOTE: This is not a routable IP, but remember that a
             // "public IP" for an Oxide guest could either be a
             // public, routable IP or simply an IP on their wider LAN
@@ -1120,7 +1108,6 @@ fn arp_hairpin() {
             let ethm = meta.inner.ether.as_ref().unwrap();
             let arpm = meta.inner.arp.as_ref().unwrap();
             assert_eq!(ethm.dst, cfg.gw_mac);
-            assert_eq!(ethm.src, cfg.dyn_nat.public_mac);
             assert_eq!(ethm.ether_type, ETHER_TYPE_ARP);
             assert_eq!(arpm.op, ArpOp::Reply);
             assert_eq!(arpm.ptype, ETHER_TYPE_IPV4);
@@ -1131,7 +1118,6 @@ fn arp_hairpin() {
                 &ArpEth4PayloadRaw::parse(&mut rdr).unwrap(),
             );
 
-            assert_eq!(arp.sha, cfg.dyn_nat.public_mac);
             assert_eq!(arp.spa, cfg.dyn_nat.public_ip);
             assert_eq!(arp.tha, cfg.gw_mac);
             assert_eq!(arp.tpa, cfg.gw_ip);
@@ -1215,252 +1201,6 @@ fn outgoing_dns_lookup() {
     port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0));
     assert_eq!(port.num_flows("dyn-nat4", In), 0);
     assert_eq!(port.num_flows("dyn-nat4", Out), 0);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    // Verify the flow is expired when it should be.
-    port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64 + 1, 0));
-    assert_eq!(port.num_flows("dyn-nat4", In), 0);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 0);
-    assert_eq!(port.num_flows("firewall", In), 0);
-    assert_eq!(port.num_flows("firewall", Out), 0);
-}
-
-// Test an outgoing HTTP request/connection. I happened upon a small
-// connectivity check that Ubuntu makes which is good for this
-// smaller-scale test (Ubuntu uses this to check for captive portals).
-#[test]
-fn outgoing_http_req() {
-    let mut cfg = home_cfg();
-    // We have to specify exactly one port to match up with the actual
-    // port from the pcap.
-    cfg.dyn_nat.ports.start = 3839;
-    cfg.dyn_nat.ports.end = 3840;
-    let port = oxide_net_setup("outgoing_http_req", &cfg).activate();
-    let gpath = "http-out-guest.pcap";
-    let gbytes = fs::read(gpath).unwrap();
-    let hpath = "http-out-host.pcap";
-    let hbytes = fs::read(hpath).unwrap();
-
-    // Assert the baseline before any packet processing occurs.
-    assert_eq!(port.num_flows("dyn-nat4", In), 0);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 0);
-    assert_eq!(port.num_flows("firewall", In), 0);
-    assert_eq!(port.num_flows("firewall", Out), 0);
-    let now = Instant::now();
-
-    // ================================================================
-    // Packet 1 (SYN)
-    // ================================================================
-    let (gbytes, _) = get_header(&gbytes[..]);
-    let (gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (hbytes, _) = get_header(&hbytes[..]);
-    let (hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 2 (SYN+ACK)
-    // ================================================================
-    let (hbytes, hblock) = next_block(hbytes);
-    let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (gbytes, gblock) = next_block(gbytes);
-    let pcap_pkt = Packet::copy(gblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), gblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 3 (ACK)
-    // ================================================================
-    let (gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 4 (HTTP GET)
-    // ================================================================
-    let (gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 5 (ACK #4)
-    // ================================================================
-    let (hbytes, hblock) = next_block(hbytes);
-    let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (gbytes, gblock) = next_block(gbytes);
-    let pcap_pkt = Packet::copy(gblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), gblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 6 (HTTP 301)
-    // ================================================================
-    let (hbytes, hblock) = next_block(hbytes);
-    let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (gbytes, gblock) = next_block(gbytes);
-    let pcap_pkt = Packet::copy(gblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), gblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 7 (ACK #6)
-    // ================================================================
-    let (gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 8 (Guest FIN ACK)
-    // ================================================================
-    let (gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 9 (ACK #8)
-    // ================================================================
-    let (hbytes, hblock) = next_block(hbytes);
-    let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (gbytes, gblock) = next_block(gbytes);
-    let pcap_pkt = Packet::copy(gblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), gblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 10 (Remote FIN ACK)
-    // ================================================================
-    let (hbytes, hblock) = next_block(hbytes);
-    let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (gbytes, gblock) = next_block(gbytes);
-    let pcap_pkt = Packet::copy(gblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), gblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Packet 11 (ACK #10)
-    // ================================================================
-    let (_gbytes, gblock) = next_block(gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (_hbytes, hblock) = next_block(hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
-    drop(pkt);
-
-    // ================================================================
-    // Expiration
-    // ================================================================
-
-    // TODO: TCP flow table needs to hook into expiry, in which case
-    // the flows would all expire at the moment of connection
-    // teardown.
-
-    // Verify that the flow is still valid when it should be.
-    port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0));
-    assert_eq!(port.num_flows("dyn-nat4", In), 1);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 1);
     assert_eq!(port.num_flows("firewall", In), 1);
     assert_eq!(port.num_flows("firewall", Out), 1);
 

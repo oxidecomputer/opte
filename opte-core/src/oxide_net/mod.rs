@@ -30,8 +30,6 @@ pub mod router;
 
 #[derive(Clone, Debug)]
 pub struct DynNat4Cfg {
-    // TODO Remove this field, leftover from days of working with home router.
-    pub public_mac: EtherAddr,
     pub public_ip: Ipv4Addr,
     pub ports: Range<u16>,
 }

@@ -23,8 +23,6 @@ pub fn setup(
 
     let nat = DynNat4::new(
         cfg.private_ip,
-        cfg.private_mac,
-        cfg.dyn_nat.public_mac,
         Arc::new(pool),
     );
 
