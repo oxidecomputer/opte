@@ -18,22 +18,21 @@ use core::{convert::TryInto, ops::Range, ptr};
 extern crate opte_core;
 use illumos_ddi_dki as ddi;
 use illumos_ddi_dki::*;
-use opte_core::{
-    ether::EtherAddr,
-    geneve::Vni,
-    headers::{IpCidr, IpHdr},
-    ioctl::{
-        self as api, CmdErr, CmdOk, CreateXdeReq, DeleteXdeReq, IoctlCmd,
-        SnatCfg, XdeError,
-    },
-    ip4::Ipv4Addr,
-    ip6::Ipv6Addr,
-    oxide_net::{firewall::FwAddRuleReq, overlay, router, PortCfg},
-    packet::{Initialized, Packet, Parsed},
-    port::{Port, ProcessResult},
-    sync::{KRwLock, KRwLockType},
-    CStr, CString, Direction, ExecCtx,
+use opte_core::ether::EtherAddr;
+use opte_core::geneve::Vni;
+use opte_core::headers::{IpCidr, IpHdr};
+use opte_core::ioctl::{
+    self as api, CmdErr, CmdOk, CreateXdeReq, DeleteXdeReq, IoctlCmd,
+    SnatCfg, XdeError,
 };
+use opte_core::ip4::Ipv4Addr;
+use opte_core::ip6::Ipv6Addr;
+use opte_core::oxide_net::firewall::FwAddRuleReq;
+use opte_core::oxide_net::{overlay, router, PortCfg};
+use opte_core::packet::{Initialized, Packet, Parsed, ParseError};
+use opte_core::port::{Port, ProcessResult};
+use opte_core::sync::{KRwLock, KRwLockType};
+use opte_core::{CStr, CString, Direction, ExecCtx};
 
 use serde::Serialize;
 
@@ -45,6 +44,15 @@ static mut xde_devs: KRwLock<Vec<Box<XdeDev>>> = KRwLock::new(Vec::new());
 
 /// DDI dev info pointer to the attached xde device.
 static mut xde_dip: *mut dev_info = 0 as *mut dev_info;
+
+extern "C" {
+    pub fn __dtrace_probe_bad__packet(mp: uintptr_t, msg: uintptr_t);
+}
+
+fn bad_packet_probe(mp: uintptr_t, err: &ParseError) {
+    let msg_arg = CString::new(format!("{:?}", err)).unwrap();
+    unsafe { __dtrace_probe_bad__packet(mp, msg_arg.as_ptr() as uintptr_t) };
+}
 
 #[repr(u64)]
 enum XdeDeviceFlags {
@@ -1156,10 +1164,13 @@ unsafe extern "C" fn xde_mc_tx(
     let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
         Ok(pkt) => pkt,
         Err(e) => {
-            // TODO get rid of warn!, replace with bad packet probe
-            // (issue #38).
+            // TODO Add bad packet stat.
             //
-            // TODO add bad packet stat
+            // NOTE: We are using mp_chain as read only here to get
+            // the pointer value so that the DTrace consumer can
+            // examine the packet on failure.
+            bad_packet_probe(mp_chain as uintptr_t, &e);
+            // Let's be noisy about this for now to catch bugs.
             warn!("failed to parse packet: {:?}", e);
             return core::ptr::null_mut();
         }
