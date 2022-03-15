@@ -1088,9 +1088,11 @@ unsafe extern "C" fn xde_mc_tx(
     arg: *mut c_void,
     mp_chain: *mut mblk_t,
 ) -> *mut mblk_t {
-    // make sure we have started
+    // The device must be started before we can transmit.
     let dev = arg as *mut XdeDev;
     if ((*dev).flags | XdeDeviceFlags::Started as u64) == 0 {
+        // It's okay to call mac_drop_chain() here as we have not yet
+        // handed ownership off to Packet.
         mac::mac_drop_chain(
             mp_chain,
             b"xde dev not ready\0".as_ptr() as *const c_char,
@@ -1098,32 +1100,36 @@ unsafe extern "C" fn xde_mc_tx(
         return ptr::null_mut();
     }
 
+    // TODO I haven't dealt with chains, though I'm pretty sure it's
+    // always just one.
     assert!((*mp_chain).b_next == ptr::null_mut());
 
-    // arbitrarily choose u1, later when we integrate with DDM we'll have the
-    // information needed to make a real choice.
+    // TODO Arbitrarily choose u1, later when we integrate with DDM
+    // we'll have the information needed to make a real choice.
     let mch = (*dev).u1.mch;
     let hint = 0;
     let flags = mac::MAC_DROP_ON_NO_DESC;
     let ret_mp = ptr::null_mut();
 
-    // just go straight to underlay in passthrough mode
+    // Send straight to underlay in passthrough mode.
     if (*dev).passthrough {
+        // TODO We need to deal with flow control. This could actually
+        // get weird, this is the first provider to use mac_tx(). Is
+        // there something we can learn from aggr here? I need to
+        // refresh my memory on all of this.
+        //
+        // TODO Is there way to set mac_tx to must use result?
+        //
+        // TODO Bring in MacClient safe abstraction from opte-drv.
         mac::mac_tx(mch, mp_chain, hint, flags, ret_mp);
         return ptr::null_mut();
     }
 
-    let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
-        Ok(pkt) => pkt,
-        Err(e) => {
-            warn!("failed to parse packet: {:?}", e);
-            return core::ptr::null_mut();
-        }
-    };
-
     let port = match (*dev).port {
         Some(ref port) => port,
         None => {
+            // It's okay to call mac_drop_chain() here as we have not
+            // yet handed ownership off to Packet.
             mac::mac_drop_chain(
                 mp_chain,
                 b"no opte port avail\0".as_ptr() as *const c_char,
@@ -1132,38 +1138,66 @@ unsafe extern "C" fn xde_mc_tx(
         }
     };
 
+    // ================================================================
+    // IMPORTANT: Packet now takes ownership of mp_chain. When Packet
+    // is dropped so is the chain. Be careful with any calls involving
+    // mp_chain after this point. They should only be calls that read,
+    // nothing that writes or frees. But really you should think of
+    // mp_chain as &mut and avoid any reference to it past this point.
+    // If needed, owernship can be taken back by calling
+    // Packet::unwrap().
+    //
+    // XXX Make this fool proof by converting the mblk_t pointer to an
+    // &mut or some smart pointer type that can be truly owned by the
+    // Packet type. This way rustc gives us lifetime enforcement
+    // instead of my code comments. But that work is more involved
+    // than the immediate fix that needs to happen.
+    // ================================================================
+    let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
+        Ok(pkt) => pkt,
+        Err(e) => {
+            // TODO get rid of warn!, replace with bad packet probe
+            // (issue #38).
+            //
+            // TODO add bad packet stat
+            warn!("failed to parse packet: {:?}", e);
+            return core::ptr::null_mut();
+        }
+    };
+
+    // The port processing code will fire a probe that describes what
+    // action was taken -- there should be no need to add probes here.
     let res = port.process(Direction::Out, &mut pkt);
     match res {
         Ok(ProcessResult::Modified) => {
-            //  Ask IRE for the route associated with the underlay destination.
-            //  Then ask NCE for the mac associated with the IRE nexthop to fill
-            //  in the outer frame of the packet
+            // Currently the overlay layer leaves the outer frame
+            // destination and source zero'd. Ask IRE for the route
+            // associated with the underlay destination. Then ask NCE
+            // for the mac associated with the IRE nexthop to fill in
+            // the outer frame of the packet.
             let (src, dst) = finish_outer_frame(&pkt);
-            //let len = pkt.len();
             let mblk = pkt.unwrap();
 
-            // get a pointer to the beginning of the outer frame
-            let datap = (*mblk).b_datap as *mut dblk_t;
-            let basep = (*datap).db_base as *mut u8;
-
-            // set L2 source and destination
-            ptr::copy(dst.as_ptr(), basep, 6);
-            ptr::copy(src.as_ptr(), basep.add(6), 6);
-
-            // NOTE assuming L2 checksum is going to be computed in hardware on
-            // the way out the door.
-
+            // Get a pointer to the beginning of the outer frame and
+            // fill in the dst/src addresses before sending out the
+            // device.
+            let rptr = (*mblk).b_rptr as *mut u8;
+            ptr::copy(dst.as_ptr(), rptr, 6);
+            ptr::copy(src.as_ptr(), rptr.add(6), 6);
             mac::mac_tx(mch, mblk, hint, flags, ret_mp);
         }
 
         Ok(ProcessResult::Drop { .. }) => {
-            mac::mac_drop_chain(mp_chain, b"drop\0".as_ptr() as *const c_char);
             return ptr::null_mut();
         }
 
         Ok(ProcessResult::Hairpin(hpkt)) => {
             mac::mac_rx(
                 (*dev).mh,
+                // TODO: IIRC we can just set the mrh (mac resource
+                // handle) to NULL and it will deliver via the default
+                // ring. If this doesn't work we can create some type
+                // of hairpin queue.
                 0 as *mut mac::mac_resource_handle,
                 hpkt.unwrap(),
             );
@@ -1174,15 +1208,14 @@ unsafe extern "C" fn xde_mc_tx(
         }
 
         Err(e) => {
+            // TODO Get wrid of warn! and replace with more info in
+            // the process-return probe.
             warn!("opte-tx port process error: {:?}", e);
-            mac::mac_drop_chain(
-                mp_chain,
-                b"packet processing error\0".as_ptr() as *const c_char,
-            );
-            return ptr::null_mut();
         }
     }
 
+    // On return the Packet is dropped and its underlying mblk
+    // segments are freed.
     ptr::null_mut()
 }
 
