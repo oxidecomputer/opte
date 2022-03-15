@@ -18,22 +18,21 @@ use core::{convert::TryInto, ops::Range, ptr};
 extern crate opte_core;
 use illumos_ddi_dki as ddi;
 use illumos_ddi_dki::*;
-use opte_core::{
-    ether::EtherAddr,
-    geneve::Vni,
-    headers::{IpCidr, IpHdr},
-    ioctl::{
-        self as api, CmdErr, CmdOk, CreateXdeReq, DeleteXdeReq, IoctlCmd,
-        SnatCfg, XdeError,
-    },
-    ip4::Ipv4Addr,
-    ip6::Ipv6Addr,
-    oxide_net::{firewall::FwAddRuleReq, overlay, router, PortCfg},
-    packet::{Initialized, Packet, Parsed},
-    port::{Port, ProcessResult},
-    sync::{KRwLock, KRwLockType},
-    CStr, CString, Direction, ExecCtx,
+use opte_core::ether::EtherAddr;
+use opte_core::geneve::Vni;
+use opte_core::headers::{IpCidr, IpHdr};
+use opte_core::ioctl::{
+    self as api, CmdErr, CmdOk, CreateXdeReq, DeleteXdeReq, IoctlCmd, SnatCfg,
+    XdeError,
 };
+use opte_core::ip4::Ipv4Addr;
+use opte_core::ip6::Ipv6Addr;
+use opte_core::oxide_net::firewall::FwAddRuleReq;
+use opte_core::oxide_net::{overlay, router, PortCfg};
+use opte_core::packet::{Initialized, Packet, ParseError, Parsed};
+use opte_core::port::{Port, ProcessResult};
+use opte_core::sync::{KRwLock, KRwLockType};
+use opte_core::{CStr, CString, Direction, ExecCtx};
 
 use serde::Serialize;
 
@@ -45,6 +44,15 @@ static mut xde_devs: KRwLock<Vec<Box<XdeDev>>> = KRwLock::new(Vec::new());
 
 /// DDI dev info pointer to the attached xde device.
 static mut xde_dip: *mut dev_info = 0 as *mut dev_info;
+
+extern "C" {
+    pub fn __dtrace_probe_bad__packet(mp: uintptr_t, msg: uintptr_t);
+}
+
+fn bad_packet_probe(mp: uintptr_t, err: &ParseError) {
+    let msg_arg = CString::new(format!("{:?}", err)).unwrap();
+    unsafe { __dtrace_probe_bad__packet(mp, msg_arg.as_ptr() as uintptr_t) };
+}
 
 #[repr(u64)]
 enum XdeDeviceFlags {
@@ -1088,9 +1096,11 @@ unsafe extern "C" fn xde_mc_tx(
     arg: *mut c_void,
     mp_chain: *mut mblk_t,
 ) -> *mut mblk_t {
-    // make sure we have started
+    // The device must be started before we can transmit.
     let dev = arg as *mut XdeDev;
     if ((*dev).flags | XdeDeviceFlags::Started as u64) == 0 {
+        // It's okay to call mac_drop_chain() here as we have not yet
+        // handed ownership off to Packet.
         mac::mac_drop_chain(
             mp_chain,
             b"xde dev not ready\0".as_ptr() as *const c_char,
@@ -1098,32 +1108,36 @@ unsafe extern "C" fn xde_mc_tx(
         return ptr::null_mut();
     }
 
+    // TODO I haven't dealt with chains, though I'm pretty sure it's
+    // always just one.
     assert!((*mp_chain).b_next == ptr::null_mut());
 
-    // arbitrarily choose u1, later when we integrate with DDM we'll have the
-    // information needed to make a real choice.
+    // TODO Arbitrarily choose u1, later when we integrate with DDM
+    // we'll have the information needed to make a real choice.
     let mch = (*dev).u1.mch;
     let hint = 0;
     let flags = mac::MAC_DROP_ON_NO_DESC;
     let ret_mp = ptr::null_mut();
 
-    // just go straight to underlay in passthrough mode
+    // Send straight to underlay in passthrough mode.
     if (*dev).passthrough {
+        // TODO We need to deal with flow control. This could actually
+        // get weird, this is the first provider to use mac_tx(). Is
+        // there something we can learn from aggr here? I need to
+        // refresh my memory on all of this.
+        //
+        // TODO Is there way to set mac_tx to must use result?
+        //
+        // TODO Bring in MacClient safe abstraction from opte-drv.
         mac::mac_tx(mch, mp_chain, hint, flags, ret_mp);
         return ptr::null_mut();
     }
 
-    let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
-        Ok(pkt) => pkt,
-        Err(e) => {
-            warn!("failed to parse packet: {:?}", e);
-            return core::ptr::null_mut();
-        }
-    };
-
     let port = match (*dev).port {
         Some(ref port) => port,
         None => {
+            // It's okay to call mac_drop_chain() here as we have not
+            // yet handed ownership off to Packet.
             mac::mac_drop_chain(
                 mp_chain,
                 b"no opte port avail\0".as_ptr() as *const c_char,
@@ -1132,32 +1146,60 @@ unsafe extern "C" fn xde_mc_tx(
         }
     };
 
+    // ================================================================
+    // IMPORTANT: Packet now takes ownership of mp_chain. When Packet
+    // is dropped so is the chain. Be careful with any calls involving
+    // mp_chain after this point. They should only be calls that read,
+    // nothing that writes or frees. But really you should think of
+    // mp_chain as &mut and avoid any reference to it past this point.
+    // If needed, owernship can be taken back by calling
+    // Packet::unwrap().
+    //
+    // XXX Make this fool proof by converting the mblk_t pointer to an
+    // &mut or some smart pointer type that can be truly owned by the
+    // Packet type. This way rustc gives us lifetime enforcement
+    // instead of my code comments. But that work is more involved
+    // than the immediate fix that needs to happen.
+    // ================================================================
+    let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
+        Ok(pkt) => pkt,
+        Err(e) => {
+            // TODO Add bad packet stat.
+            //
+            // NOTE: We are using mp_chain as read only here to get
+            // the pointer value so that the DTrace consumer can
+            // examine the packet on failure.
+            bad_packet_probe(mp_chain as uintptr_t, &e);
+            // Let's be noisy about this for now to catch bugs.
+            warn!("failed to parse packet: {:?}", e);
+            return core::ptr::null_mut();
+        }
+    };
+
+    // The port processing code will fire a probe that describes what
+    // action was taken -- there should be no need to add probes or
+    // prints here.
     let res = port.process(Direction::Out, &mut pkt);
     match res {
         Ok(ProcessResult::Modified) => {
-            //  Ask IRE for the route associated with the underlay destination.
-            //  Then ask NCE for the mac associated with the IRE nexthop to fill
-            //  in the outer frame of the packet
+            // Currently the overlay layer leaves the outer frame
+            // destination and source zero'd. Ask IRE for the route
+            // associated with the underlay destination. Then ask NCE
+            // for the mac associated with the IRE nexthop to fill in
+            // the outer frame of the packet.
             let (src, dst) = finish_outer_frame(&pkt);
-            //let len = pkt.len();
             let mblk = pkt.unwrap();
 
-            // get a pointer to the beginning of the outer frame
-            let datap = (*mblk).b_datap as *mut dblk_t;
-            let basep = (*datap).db_base as *mut u8;
-
-            // set L2 source and destination
-            ptr::copy(dst.as_ptr(), basep, 6);
-            ptr::copy(src.as_ptr(), basep.add(6), 6);
-
-            // NOTE assuming L2 checksum is going to be computed in hardware on
-            // the way out the door.
-
+            // Get a pointer to the beginning of the outer frame and
+            // fill in the dst/src addresses before sending out the
+            // device.
+            let rptr = (*mblk).b_rptr as *mut u8;
+            ptr::copy(dst.as_ptr(), rptr, 6);
+            ptr::copy(src.as_ptr(), rptr.add(6), 6);
             mac::mac_tx(mch, mblk, hint, flags, ret_mp);
         }
 
         Ok(ProcessResult::Drop { .. }) => {
-            mac::mac_drop_chain(mp_chain, b"drop\0".as_ptr() as *const c_char);
             return ptr::null_mut();
         }
 
@@ -1173,16 +1215,11 @@ unsafe extern "C" fn xde_mc_tx(
             mac::mac_tx(mch, pkt.unwrap(), hint, flags, ret_mp);
         }
 
-        Err(e) => {
-            warn!("opte-tx port process error: {:?}", e);
-            mac::mac_drop_chain(
-                mp_chain,
-                b"packet processing error\0".as_ptr() as *const c_char,
-            );
-            return ptr::null_mut();
-        }
+        Err(_) => {}
     }
 
+    // On return the Packet is dropped and its underlying mblk
+    // segments are freed.
     ptr::null_mut()
 }
 
@@ -1440,6 +1477,12 @@ unsafe extern "C" fn xde_rx(
     let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
         Ok(pkt) => pkt,
         Err(e) => {
+            // TODO Add bad packet stat.
+            //
+            // NOTE: We are using mp_chain as read only here to get
+            // the pointer value so that the DTrace consumer can
+            // examine the packet on failure.
+            bad_packet_probe(mp_chain as uintptr_t, &e);
             warn!("failed to parse packet: {:?}", e);
             return;
         }

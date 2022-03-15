@@ -40,7 +40,7 @@ use crate::ip6::{Ipv6Hdr, Ipv6HdrError, Ipv6Meta, IPV6_HDR_SZ};
 use crate::tcp::{TcpHdr, TcpHdrError, TcpMeta};
 use crate::udp::{UdpHdr, UdpHdrError, UdpMeta, UDP_HDR_SZ};
 
-use illumos_ddi_dki::{c_uchar, dblk_t, mblk_t};
+use illumos_ddi_dki::{c_uchar, dblk_t, mblk_t, uintptr_t};
 
 pub static MBLK_MAX_SIZE: usize = u16::MAX as usize;
 
@@ -548,6 +548,15 @@ impl CanRead for Parsed {
 impl<S: PacketState> Packet<S> {
     pub fn avail(&self) -> usize {
         self.avail
+    }
+
+    /// Return the pointer address of the underlying mblk_t.
+    ///
+    /// NOTE: This is purely to allow passing the pointer value up to
+    /// DTrace so that the mblk can be inspected (read only) in probe
+    /// context.
+    pub fn mblk_addr(&self) -> uintptr_t {
+        self.segs[0].mp as uintptr_t
     }
 
     /// Return the number of segments that make up this packet.
