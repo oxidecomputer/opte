@@ -102,26 +102,14 @@ fn build_ip4_len_to_pri() -> [u16; 33] {
 }
 
 pub fn setup(port: &Port<port::Inactive>) -> Result<(), port::AddLayerError> {
-    let pri_map = build_ip4_len_to_pri();
-
     let ig = Action::Meta(Arc::new(RouterAction::new(
         RouterTarget::InternetGateway,
     )));
-    let ig_idx = 0;
 
     // Indexes:
     //
     // * 0: InternetGateway
     let layer = Layer::new(ROUTER_LAYER_NAME, port.name(), vec![ig]);
-
-    // TODO These hard-coded rules will actually come dynamically from
-    // Nexus. Just keeping them here for now.
-    let ig4 = Rule::new(pri_map[0], layer.action(ig_idx).unwrap().clone());
-    let rule = ig4.add_predicate(Predicate::InnerDstIp4(vec![
-        rule::Ipv4AddrMatch::Prefix("0.0.0.0/0".parse().unwrap()),
-    ]));
-
-    layer.add_rule(Direction::Out, rule.finalize());
 
     // If there is no matching router entry we drop the packet.
     let drop_rule = Rule::new(65535, rule::Action::Deny).match_any();

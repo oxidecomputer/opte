@@ -32,7 +32,7 @@ use crate::ether::{
     ETHER_TYPE_ARP, ETHER_TYPE_IPV4,
 };
 use crate::flow_table::FLOW_DEF_EXPIRE_SECS;
-use crate::geneve::Vni;
+use crate::geneve::{self, Vni};
 use crate::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
 use crate::ip4::{self, Ipv4Hdr, Ipv4HdrRaw, Ipv4Meta, Protocol};
 use crate::ip6::Ipv6Addr;
@@ -332,12 +332,99 @@ fn gateway_icmp4_ping() {
     }
 }
 
+// Try to send a TCP packet from one guest to another; but in this
+// case the guest has not route to the other guest, resulting in the
+// packet being dropped.
+#[test]
+fn overlay_guest_to_guest_no_route() {
+    use crate::checksum::HeaderChecksum;
+    use crate::ip4::UlpCsumOpt;
+    use crate::tcp::TcpFlags;
+
+    // ================================================================
+    // Configure ports for g1 and g2.
+    // ================================================================
+    let mut g1_cfg = g1_cfg();
+    let mut g2_cfg = g2_cfg();
+
+    // NOTE: We're not testing Boundary Services in this test, so the
+    // values are irrelevant here.
+    let bs = PhysNet {
+        ether: EtherAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+        ip: Ipv6Addr::from([
+            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x77, 0x77,
+        ]),
+        vni: Vni::new(7777u32).unwrap(),
+    };
+
+    g1_cfg.overlay = Some(OverlayCfg {
+        boundary_services: bs.clone(),
+        vni: Vni::new(99u32).unwrap(),
+        phys_ip_src: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+    });
+
+    g2_cfg.overlay = Some(OverlayCfg {
+        boundary_services: bs.clone(),
+        vni: Vni::new(99u32).unwrap(),
+        // Site 0xF7, Rack 1, Sled 22, Interface 1
+        phys_ip_src: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+    });
+    let g2_phys = PhysNet {
+        ether: g2_cfg.private_mac,
+        ip: g2_cfg.overlay.as_ref().unwrap().phys_ip_src,
+        vni: g2_cfg.overlay.as_ref().unwrap().vni,
+    };
+
+    // Add V2P mappings that allow guests to resolve each others
+    // physical addresses.
+    let v2p = Arc::new(Virt2Phys::new());
+    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+
+    let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
+    router::setup(&mut g1_port).unwrap();
+    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone());
+    let g1_port = g1_port.activate();
+
+    // ================================================================
+    // Generate a telnet SYN packet from g1 to g2.
+    // ================================================================
+    let body = vec![];
+    let mut tcp = TcpHdr::new(7865, 23);
+    tcp.set_flags(TcpFlags::SYN);
+    tcp.set_seq(4224936861);
+    let mut ip4 =
+        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
+
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&eth.as_bytes());
+    bytes.extend_from_slice(&ip4.as_bytes());
+    bytes.extend_from_slice(&tcp.as_bytes());
+    bytes.extend_from_slice(&body);
+    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
+
+    // ================================================================
+    // Run the telnet SYN packet through g1's port in the outbound
+    // direction and verify the resulting packet meets expectations.
+    // ================================================================
+    let res = g1_port.process(Out, &mut g1_pkt);
+    assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
+}
+
 // Verify that two guests on the same VPC can communicate via overlay.
 // I.e., test routing + encap/decap.
 #[test]
 fn overlay_guest_to_guest() {
     use crate::checksum::HeaderChecksum;
-    use crate::geneve;
     use crate::ip4::UlpCsumOpt;
     use crate::oxide_net::router::RouterTarget;
     use crate::tcp::TcpFlags;
@@ -597,8 +684,6 @@ fn overlay_guest_to_guest() {
 #[test]
 fn overlay_guest_to_internet() {
     use crate::checksum::HeaderChecksum;
-    use crate::geneve;
-    use crate::headers::IpCidr;
     use crate::ip4::UlpCsumOpt;
     use crate::oxide_net::overlay::{OverlayCfg, PhysNet, Virt2Phys};
     use crate::oxide_net::router::RouterTarget;

@@ -1166,7 +1166,8 @@ unsafe extern "C" fn xde_mc_tx(
     };
 
     // The port processing code will fire a probe that describes what
-    // action was taken -- there should be no need to add probes here.
+    // action was taken -- there should be no need to add probes or
+    // prints here.
     let res = port.process(Direction::Out, &mut pkt);
     match res {
         Ok(ProcessResult::Modified) => {
@@ -1194,10 +1195,6 @@ unsafe extern "C" fn xde_mc_tx(
         Ok(ProcessResult::Hairpin(hpkt)) => {
             mac::mac_rx(
                 (*dev).mh,
-                // TODO: IIRC we can just set the mrh (mac resource
-                // handle) to NULL and it will deliver via the default
-                // ring. If this doesn't work we can create some type
-                // of hairpin queue.
                 0 as *mut mac::mac_resource_handle,
                 hpkt.unwrap(),
             );
@@ -1207,11 +1204,7 @@ unsafe extern "C" fn xde_mc_tx(
             mac::mac_tx(mch, pkt.unwrap(), hint, flags, ret_mp);
         }
 
-        Err(e) => {
-            // TODO Get wrid of warn! and replace with more info in
-            // the process-return probe.
-            warn!("opte-tx port process error: {:?}", e);
-        }
+        Err(_) => {}
     }
 
     // On return the Packet is dropped and its underlying mblk
