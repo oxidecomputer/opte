@@ -7,7 +7,8 @@ cfg_if! {
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
-        use illumos_ddi_dki::hrtime_t;
+        use crate::rule::flow_id_sdt_arg;
+        use illumos_ddi_dki::{self as ddi, uintptr_t};
     } else {
         use std::string::{String, ToString};
         use std::sync::Arc;
@@ -18,22 +19,18 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
+use crate::ether::EtherAddr;
 use crate::flow_table::{FlowTable, StateSummary};
-use crate::headers::IpMeta;
 use crate::ioctl;
-use crate::ip4::Protocol;
 use crate::layer::{
     InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT,
 };
-use crate::packet::{Initialized, Packet, PacketMeta, Parsed};
+use crate::packet::{Initialized, Packet, PacketMeta, PacketState, Parsed};
 use crate::rule::{ht_fire_probe, Action, Finalized, Rule, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::tcp::TcpState;
 use crate::tcp_state::{self, TcpFlowState};
-use crate::{CString, Direction, ExecCtx};
-
-use illumos_ddi_dki::uintptr_t;
+use crate::{Direction, ExecCtx};
 
 pub const UFT_DEF_MAX_ENTIRES: u32 = 8192;
 
@@ -385,7 +382,7 @@ impl Port<Active> {
 
     /// Expire all flows whose TTL is overdue as of `now`.
     #[cfg(all(not(feature = "std"), not(test)))]
-    pub fn expire_flows(&self, now: hrtime_t) {
+    pub fn expire_flows(&self, now: ddi::hrtime_t) {
         for l in &self.state.layers {
             l.expire_flows(now);
         }
@@ -481,13 +478,14 @@ impl Port<Active> {
         dir: Direction,
         pkt: &mut Packet<Parsed>,
     ) -> result::Result<ProcessResult, ProcessError> {
-        port_process_entry_probe(dir, &self.name);
+        let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
+        port_process_entry_probe(dir, &self.name, &ifid, &pkt);
         let mut meta = meta::Meta::new();
         let res = match dir {
-            Direction::Out => self.process_out(pkt, &mut meta),
-            Direction::In => self.process_in(pkt, &mut meta),
+            Direction::Out => self.process_out(&ifid, pkt, &mut meta),
+            Direction::In => self.process_in(&ifid, pkt, &mut meta),
         };
-        port_process_return_probe(dir, &self.name);
+        port_process_return_probe(dir, &self.name, &ifid, &pkt, &res);
         // XXX If this is a Hairpin result there is no need for this call.
         pkt.emit_headers()?;
         res
@@ -619,13 +617,12 @@ impl Port<Active> {
 
     pub fn process_in(
         &self,
+        ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         meta: &mut meta::Meta,
     ) -> result::Result<ProcessResult, ProcessError> {
-        let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
-
         // There is no FlowId, thus there can be no use of the UFT.
-        if ifid == FLOW_ID_DEFAULT {
+        if *ifid == FLOW_ID_DEFAULT {
             let mut hts = Vec::new();
             let res = self.layers_process(Direction::In, pkt, &mut hts, meta);
 
@@ -844,29 +841,12 @@ impl Port<Active> {
 
     pub fn process_out(
         &self,
+        ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         meta: &mut meta::Meta,
     ) -> result::Result<ProcessResult, ProcessError> {
-        let etype = pkt.meta().inner.ether.as_ref().unwrap().ether_type;
-
-        // TODO: Deal with non-IPv4/ARP, for now we let all
-        // non-IPv4/ARP proceed untouched.
-        if etype != ETHER_TYPE_IPV4 && etype != ETHER_TYPE_ARP {
-            return Ok(ProcessResult::Bypass);
-        }
-
-        // TODO: Deal with IGMP, for now we let IGMP pass through
-        // untouched.
-        if let Some(IpMeta::Ip4(ip4)) = &pkt.meta().inner.ip {
-            if ip4.proto == Protocol::IGMP {
-                return Ok(ProcessResult::Bypass);
-            }
-        }
-
-        let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
-
         // There is no FlowId, thus there can be no use of the UFT.
-        if ifid == FLOW_ID_DEFAULT {
+        if *ifid == FLOW_ID_DEFAULT {
             let mut hts = Vec::new();
             let res = self.layers_process(Direction::Out, pkt, &mut hts, meta);
 
@@ -953,7 +933,7 @@ impl Port<Active> {
 
         match res {
             Ok(LayerResult::Allow) => {
-                self.state.uft_out.lock().add(ifid, hts);
+                self.state.uft_out.lock().add(ifid.clone(), hts);
                 Ok(ProcessResult::Modified)
             }
 
@@ -1039,48 +1019,95 @@ impl StateSummary for TcpFlowEntryState {
     }
 }
 
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_port__process__return(
-    _dir: uintptr_t,
-    _arg: uintptr_t,
-) {
-    ()
-}
-
 #[cfg(all(not(feature = "std"), not(test)))]
 extern "C" {
-    pub fn __dtrace_probe_port__process__entry(dir: uintptr_t, arg: uintptr_t);
-    pub fn __dtrace_probe_port__process__return(dir: uintptr_t, arg: uintptr_t);
+    pub fn __dtrace_probe_port__process__entry(
+        dir: uintptr_t,
+        name: uintptr_t,
+        ifid: uintptr_t,
+        pkt: uintptr_t,
+    );
+    pub fn __dtrace_probe_port__process__return(
+        dir: uintptr_t,
+        name: uintptr_t,
+        ifid: uintptr_t,
+        pkt: uintptr_t,
+        res: uintptr_t,
+    );
 }
 
-pub fn port_process_entry_probe(dir: Direction, name: &str) {
+pub fn port_process_entry_probe<S: PacketState>(
+    dir: Direction,
+    name: &str,
+    ifid: &InnerFlowId,
+    pkt: &Packet<S>,
+) {
     cfg_if::cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
-            let name_c = CString::new(name).unwrap();
+            let name_arg = cstr_core::CString::new(name).unwrap();
+            let ifid_arg = flow_id_sdt_arg::from(ifid);
 
             unsafe {
                 __dtrace_probe_port__process__entry(
                     dir as uintptr_t,
-                    name_c.as_ptr() as uintptr_t,
+                    name_arg.as_ptr() as uintptr_t,
+                    &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                    pkt.mblk_addr(),
                 );
             }
         } else if #[cfg(feature = "usdt")] {
             use std::arch::asm;
-            crate::opte_provider::port_process_entry!(|| (dir, name));
+            crate::opte_provider::port__process__entry!(
+                || (dir, name, ifid.to_string(), pkt.mblk_addr())
+            );
         } else {
-            let (_, _) = (dir, name);
+            let (_, _, _, _) = (dir, name, ifid, pkt);
         }
     }
 }
 
-pub fn port_process_return_probe(dir: Direction, name: &str) {
-    let name_c = CString::new(name).unwrap();
+pub fn port_process_return_probe<S: PacketState>(
+    dir: Direction,
+    name: &str,
+    ifid: &InnerFlowId,
+    pkt: &Packet<S>,
+    res: &result::Result<ProcessResult, ProcessError>
+) {
+    cfg_if! {
+        if #[cfg(all(not(feature = "std"), not(test)))] {
+            let name_arg = cstr_core::CString::new(name).unwrap();
+            let ifid_arg = flow_id_sdt_arg::from(ifid);
+            // XXX This would probably be better as separate probes;
+            // for now this does the trick.
+            let res_str = match res {
+                Ok(v) => format!("{:?}", v),
+                Err(e) => format!("ERROR: {:?}", e),
+            };
+            let res_arg = cstr_core::CString::new(res_str).unwrap();
 
-    unsafe {
-        __dtrace_probe_port__process__return(
-            dir as uintptr_t,
-            name_c.as_ptr() as uintptr_t,
-        );
+            unsafe {
+                __dtrace_probe_port__process__return(
+                    dir as uintptr_t,
+                    name_arg.as_ptr() as uintptr_t,
+                    &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                    pkt.mblk_addr(),
+                    res_arg.as_ptr() as uintptr_t,
+                );
+            }
+
+        } else if #[cfg(feature = "usdt")] {
+            use std::arch::asm;
+            let res_str = match res {
+                Ok(v) => format!("{:?}", v),
+                Err(e) => format!("ERROR: {:?}", e),
+            };
+
+            crate::opte_provider::port__process__return!(
+                || (dir, name, ifid.to_string(), pkt.mblk_addr(), res_str)
+            );
+        } else {
+            let (_, _, _, _, _) = (dir, name, ifid, pkt, res);
+        }
     }
 }
 

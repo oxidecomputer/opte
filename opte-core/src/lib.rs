@@ -238,8 +238,21 @@ impl Display for Direction {
 mod opte_provider {
     use crate::layer::InnerFlowId;
     use crate::Direction;
+    use illumos_ddi_dki as ddi;
 
-    fn port_process_entry(dir: Direction, name: &str) {}
+    fn port__process__entry(
+        dir: Direction,
+        name: &str,
+        ifid: &str,
+        pkt: &ddi::uintptr_t,
+    ) {}
+    pub fn port__process__return(
+        dir: Direction,
+        name: &str,
+        ifid: &str,
+        pkt: &ddi::uintptr_t,
+        res: &str,
+    ) {}
     fn rule__match(layer: &str, dir: Direction, flow: &str, action: &str) {}
     fn rule__no__match(layer: &str, dir: Direction, flow: &str) {}
     fn layer_process_return(
