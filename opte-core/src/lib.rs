@@ -244,14 +244,16 @@ mod opte_provider {
         name: &str,
         ifid: &str,
         pkt: &illumos_ddi_dki::uintptr_t,
-    ) {}
+    ) {
+    }
     pub fn port__process__return(
         dir: Direction,
         name: &str,
         ifid: &str,
         pkt: &illumos_ddi_dki::uintptr_t,
         res: &str,
-    ) {}
+    ) {
+    }
     fn rule__match(layer: &str, dir: Direction, flow: &str, action: &str) {}
     fn rule__no__match(layer: &str, dir: Direction, flow: &str) {}
     fn layer_process_return(

@@ -1071,7 +1071,7 @@ pub fn port_process_return_probe<S: PacketState>(
     name: &str,
     ifid: &InnerFlowId,
     pkt: &Packet<S>,
-    res: &result::Result<ProcessResult, ProcessError>
+    res: &result::Result<ProcessResult, ProcessError>,
 ) {
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {

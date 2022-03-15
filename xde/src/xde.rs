@@ -22,14 +22,14 @@ use opte_core::ether::EtherAddr;
 use opte_core::geneve::Vni;
 use opte_core::headers::{IpCidr, IpHdr};
 use opte_core::ioctl::{
-    self as api, CmdErr, CmdOk, CreateXdeReq, DeleteXdeReq, IoctlCmd,
-    SnatCfg, XdeError,
+    self as api, CmdErr, CmdOk, CreateXdeReq, DeleteXdeReq, IoctlCmd, SnatCfg,
+    XdeError,
 };
 use opte_core::ip4::Ipv4Addr;
 use opte_core::ip6::Ipv6Addr;
 use opte_core::oxide_net::firewall::FwAddRuleReq;
 use opte_core::oxide_net::{overlay, router, PortCfg};
-use opte_core::packet::{Initialized, Packet, Parsed, ParseError};
+use opte_core::packet::{Initialized, Packet, ParseError, Parsed};
 use opte_core::port::{Port, ProcessResult};
 use opte_core::sync::{KRwLock, KRwLockType};
 use opte_core::{CStr, CString, Direction, ExecCtx};
