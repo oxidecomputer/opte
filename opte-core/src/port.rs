@@ -1044,12 +1044,18 @@ pub fn port_process_entry_probe<S: PacketState>(
 ) {
     cfg_if::cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
-            let name_arg = cstr_core::CString::new(name).unwrap();
+            use cstr_core::CString;
+            // TODO should really just have a dir.c_str() method.
+            let dir_arg = match dir {
+                Direction::In => CString::new("in").unwrap(),
+                Direction::Out => CString::new("out").unwrap(),
+            };
+            let name_arg = CString::new(name).unwrap();
             let ifid_arg = flow_id_sdt_arg::from(ifid);
 
             unsafe {
                 __dtrace_probe_port__process__entry(
-                    dir as uintptr_t,
+                    dir_arg.as_ptr() as uintptr_t,
                     name_arg.as_ptr() as uintptr_t,
                     &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
                     pkt.mblk_addr(),

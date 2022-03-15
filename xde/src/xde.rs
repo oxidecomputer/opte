@@ -1477,6 +1477,12 @@ unsafe extern "C" fn xde_rx(
     let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
         Ok(pkt) => pkt,
         Err(e) => {
+            // TODO Add bad packet stat.
+            //
+            // NOTE: We are using mp_chain as read only here to get
+            // the pointer value so that the DTrace consumer can
+            // examine the packet on failure.
+            bad_packet_probe(mp_chain as uintptr_t, &e);
             warn!("failed to parse packet: {:?}", e);
             return;
         }
