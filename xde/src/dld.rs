@@ -4,6 +4,10 @@ use illumos_ddi_dki::{c_int, c_uint, c_void, cred_t, intptr_t, size_t};
 
 pub const XDE_IOC: u16 = 0xde00;
 
+pub const DLDCOPYIN: u32 = 0x00000001;
+pub const DLDCOPYOUT: u32 = 0x00000002;
+pub const DLDCOPYINOUT: u32 = DLDCOPYIN | DLDCOPYOUT;
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct dld_ioc_info_t {

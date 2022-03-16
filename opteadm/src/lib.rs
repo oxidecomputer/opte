@@ -12,16 +12,16 @@ use thiserror::Error;
 use opte_core::ether::EtherAddr;
 use opte_core::geneve::Vni;
 use opte_core::ioctl::{
-    self as api, AddPortReq, CmdErr, CmdOk, CreateXdeReq, DeletePortReq,
-    DeleteXdeReq, IoctlCmd,
+    self as api, CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd,
 };
 use opte_core::ip4::Ipv4Addr;
 use opte_core::ip6::Ipv6Addr;
 use opte_core::oxide_net::firewall::{
-    FirewallRule, FwAddRuleReq, FwRemRuleReq,
+    AddFwRuleReq, FirewallRule, RemFwRuleReq,
 };
-use opte_core::oxide_net::overlay::{self, SetOverlayReq, SetVirt2PhysReq};
+use opte_core::oxide_net::overlay::{self, SetVirt2PhysReq};
 use opte_core::oxide_net::router;
+use opte_core::OpteError;
 
 /// Errors related to administering the OPTE driver.
 #[derive(Debug, Error)]
@@ -32,25 +32,31 @@ pub enum Error {
     #[error("error interacting with device: {0}")]
     Io(std::io::Error),
 
-    #[error("error with serdes: {0}")]
-    Serdes(String),
-
     /// Something in the opte ioctl(2) handler failed.
     #[error("ioctl {0:?} failed: {1}")]
-    IoctlFailed(IoctlCmd, String),
-
-    #[error("command {0:?} failed: {1}")]
-    CommandFailed(IoctlCmd, String),
+    IoctlFailed(OpteCmd, String),
 
     #[error("invalid argument {0}")]
     InvalidArgument(String),
 
     #[error("netadm failed {0}")]
     NetadmFailed(libnet::Error),
+
+    #[error("request serialization failed for command {0:?}: {1}")]
+    ReqSer(OpteCmd, postcard::Error),
+
+    #[error("response deserialization failed for command {0:?}: {1}")]
+    RespDeser(OpteCmd, postcard::Error),
+
+    #[error("failed to get response for command {0:?} in {1} attempts")]
+    MaxAttempts(OpteCmd, u8),
+
+    #[error("command {0:?} failed: {1:?}")]
+    CommandError(OpteCmd, OpteError),
 }
 
 impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Error {
+    fn from(e: std::io::Error) -> Self {
         match e.kind() {
             std::io::ErrorKind::NotFound => Error::DriverNotAttached,
             _ => Error::Io(e),
@@ -58,9 +64,9 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<postcard::Error> for Error {
-    fn from(e: postcard::Error) -> Error {
-        Error::Serdes(e.to_string())
+impl From<libnet::Error> for Error {
+    fn from(e: libnet::Error) -> Self {
+        Self::NetadmFailed(e)
     }
 }
 
@@ -72,9 +78,6 @@ pub struct OpteAdm {
 }
 
 impl OpteAdm {
-    pub const OPTE_CTL: &'static str = "/devices/pseudo/opte@0:opte";
-    //XXX remove this when xde marges into opte-drv
-    pub const XDE_CTL: &'static str = "/devices/pseudo/xde@0:xde";
     pub const DLD_CTL: &'static str = "/dev/dld";
 
     /// Add xde device
@@ -90,13 +93,12 @@ impl OpteAdm {
         vpc_vni: Vni,
         src_underlay_addr: std::net::Ipv6Addr,
         passthrough: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<NoResp, Error> {
         let linkid = libnet::link::create_link_id(
             name,
             libnet::LinkClass::Xde,
             libnet::LinkFlags::Active,
-        )
-        .map_err(|e| Error::NetadmFailed(e))?;
+        )?;
 
         let private_mac = EtherAddr::from_str(private_mac)
             .map_err(|e| Error::InvalidArgument(e))?;
@@ -115,7 +117,7 @@ impl OpteAdm {
             Ipv6Addr::from(boundary_services_addr.octets());
         let src_underlay_addr = Ipv6Addr::from(src_underlay_addr.octets());
 
-        let cmd = IoctlCmd::DLDXdeCreate;
+        let cmd = OpteCmd::CreateXde;
         let req = CreateXdeReq {
             xde_devname,
             linkid,
@@ -131,32 +133,17 @@ impl OpteAdm {
             ..Default::default()
         };
 
-        let resp = run_ioctl::<(), api::XdeError, _>(
-            self.device.as_raw_fd(),
-            cmd,
-            &req,
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 
     /// Delete xde device
-    pub fn delete_xde(&self, name: &str) -> Result<(), Error> {
-        let link_id =
-            libnet::LinkHandle::Name(name.into()).id().expect("get link id");
-
+    pub fn delete_xde(&self, name: &str) -> Result<NoResp, Error> {
+        let link_id = libnet::LinkHandle::Name(name.into()).id()?;
         let req = DeleteXdeReq { xde_devname: name.into() };
-        let cmd = IoctlCmd::DLDXdeDelete;
-        let resp = run_ioctl::<(), api::XdeError, _>(
-            self.device.as_raw_fd(),
-            cmd,
-            &req,
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))?;
-
-        libnet::link::delete_link_id(link_id, libnet::LinkFlags::Active)
-            .expect("delete link id");
-
-        Ok(())
+        let cmd = OpteCmd::DeleteXde;
+        let resp = run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)?;
+        libnet::link::delete_link_id(link_id, libnet::LinkFlags::Active)?;
+        Ok(resp)
     }
 
     /// Add a firewall rule
@@ -164,18 +151,13 @@ impl OpteAdm {
         &self,
         port_name: &str,
         rule: &FirewallRule,
-    ) -> Result<(), Error> {
-        let cmd = IoctlCmd::FwAddRule;
-        let req = FwAddRuleReq {
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::AddFwRule;
+        let req = AddFwRuleReq {
             port_name: port_name.to_string(),
             rule: rule.clone(),
         };
-        let resp = run_ioctl::<(), api::AddFwRuleError, _>(
-            self.device.as_raw_fd(),
-            cmd,
-            &req,
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 
     /// Return the contents of an OPTE layer.
@@ -184,41 +166,38 @@ impl OpteAdm {
         port_name: &str,
         name: &str,
     ) -> Result<api::DumpLayerResp, Error> {
-        let cmd = IoctlCmd::DLDDumpLayer;
+        let cmd = OpteCmd::DumpLayer;
         let req = api::DumpLayerReq {
             port_name: port_name.to_string(),
             name: name.to_string(),
         };
-        let resp = run_ioctl::<api::DumpLayerResp, api::DumpLayerError, _>(
+        run_cmd_ioctl::<api::DumpLayerResp, _>(
             self.device.as_raw_fd(),
             cmd,
             &req,
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+        )
     }
 
     /// List all the ports.
     pub fn list_ports(&self) -> Result<api::ListPortsResp, Error> {
-        let cmd = IoctlCmd::ListPorts;
-        let resp = run_ioctl::<api::ListPortsResp, (), _>(
+        let cmd = OpteCmd::ListPorts;
+        run_cmd_ioctl::<api::ListPortsResp, _>(
             self.device.as_raw_fd(),
             cmd,
             &api::ListPortsReq { unused: () },
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+        )
     }
 
     pub fn list_layers(
         &self,
         port: &str,
     ) -> Result<api::ListLayersResp, Error> {
-        let cmd = IoctlCmd::DLDListLayers;
-        let resp = run_ioctl::<api::ListLayersResp, (), _>(
+        let cmd = OpteCmd::ListLayers;
+        run_cmd_ioctl::<api::ListLayersResp, _>(
             self.device.as_raw_fd(),
             cmd,
             &api::ListLayersReq { port_name: port.to_string() },
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+        )
     }
 
     /// Create a new handle to the OPTE control node.
@@ -228,174 +207,143 @@ impl OpteAdm {
         })
     }
 
-    /// Add a new port.
-    pub fn add_port(&self, req: &AddPortReq) -> Result<(), Error> {
-        let cmd = IoctlCmd::AddPort;
-        let resp = run_ioctl::<(), api::AddPortError, _>(
-            self.device.as_raw_fd(),
-            cmd,
-            req,
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
-    }
-
-    pub fn set_overlay(&self, req: &SetOverlayReq) -> Result<(), Error> {
-        let cmd = IoctlCmd::SetOverlay;
-        let resp = run_ioctl::<(), overlay::SetOverlayError, _>(
-            self.device.as_raw_fd(),
-            cmd,
-            req,
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
-    }
-
     /// Remove a firewall rule.
     pub fn remove_firewall_rule(
         &self,
-        req: &FwRemRuleReq,
-    ) -> Result<(), Error> {
-        let cmd = IoctlCmd::FwRemRule;
-        let resp = run_ioctl::<(), api::RemFwRuleError, _>(
-            self.device.as_raw_fd(),
-            cmd,
-            req,
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+        req: &RemFwRuleReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::RemFwRule;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, req)
     }
 
     /// Return the TCP flows.
-    pub fn tcp_flows(
+    pub fn dump_tcp_flows(
         &self,
         port_name: &str,
     ) -> Result<api::DumpTcpFlowsResp, Error> {
-        let cmd = IoctlCmd::DumpTcpFlows;
-        let resp = run_ioctl::<api::DumpTcpFlowsResp, api::DumpTcpFlowsError, _>(
+        let cmd = OpteCmd::DumpTcpFlows;
+        run_cmd_ioctl::<api::DumpTcpFlowsResp, _>(
             self.device.as_raw_fd(),
             cmd,
             &api::DumpTcpFlowsReq { port_name: port_name.to_string() },
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+        )
     }
 
     /// Return the unified flow table (UFT).
-    pub fn uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
-        let cmd = IoctlCmd::DLDDumpUft;
-        let resp = run_ioctl::<api::DumpUftResp, api::DumpUftError, _>(
+    pub fn dump_uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
+        let cmd = OpteCmd::DumpUft;
+        run_cmd_ioctl::<api::DumpUftResp, _>(
             self.device.as_raw_fd(),
             cmd,
             &api::DumpUftReq { port_name: port_name.to_string() },
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+        )
     }
 
-    /// Delete a port.
-    pub fn delete_port(&self, name: &str) -> Result<(), Error> {
-        let cmd = IoctlCmd::DeletePort;
-        let req = DeletePortReq { name: name.to_string() };
-        let resp = run_ioctl::<(), api::DeletePortError, _>(
+    pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetVirt2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+    }
+
+    /// Dump the Virtual-to-Physical mappings.
+    pub fn dump_v2p(&self) -> Result<overlay::DumpVirt2PhysResp, Error> {
+        let cmd = OpteCmd::DumpVirt2Phys;
+        run_cmd_ioctl::<overlay::DumpVirt2PhysResp, _>(
             self.device.as_raw_fd(),
             cmd,
-            &req,
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
-    }
-
-    pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<(), Error> {
-        let cmd = IoctlCmd::DLDSetVirt2Phys;
-        let resp = run_ioctl::<(), (), _>(self.device.as_raw_fd(), cmd, &req)?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
-    }
-
-    pub fn get_v2p(&self) -> Result<overlay::GetVirt2PhysResp, Error> {
-        let cmd = IoctlCmd::DLDGetVirt2Phys;
-        let resp = run_ioctl::<overlay::GetVirt2PhysResp, (), _>(
-            self.device.as_raw_fd(),
-            cmd,
-            &overlay::GetVirt2PhysReq { unused: 99 },
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+            &overlay::DumpVirt2PhysReq { unused: 99 },
+        )
     }
 
     pub fn add_router_entry_ip4(
         &self,
         req: &router::AddRouterEntryIpv4Req,
-    ) -> Result<(), Error> {
-        let cmd = IoctlCmd::DLDAddRouterEntryIpv4;
-        let resp = run_ioctl::<(), router::AddEntryError, _>(
-            self.device.as_raw_fd(),
-            cmd,
-            &req,
-        )?;
-        resp.map_err(|e| Error::CommandFailed(cmd, format!("{:?}", e)))
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::AddRouterEntryIpv4;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 }
 
 #[cfg(not(target_os = "illumos"))]
-fn run_ioctl<T, E, R>(
+fn run_cmd_ioctl<T, R>(
     _dev: libc::c_int,
-    _cmd: IoctlCmd,
+    _cmd: OpteCmd,
     _req: &R,
 ) -> Result<Result<T, E>, Error>
 where
     T: CmdOk + DeserializeOwned,
-    E: CmdErr + DeserializeOwned,
     R: Serialize,
 {
     panic!("non-illumos system, your ioctl(2) is no good here");
 }
 
-// An ioctl is going to return in one of two ways:
-//
-// 1. success: errno == 0 and we have a command response (Ok or Err)
-// to deser.
-//
-// 2. system failure: errno != 0, there is no command response.
-//
-// This requires a nested Result. The outer Result indicates a command
-// response vs. system error with the ioctl machinery. If the outer
-// result is Ok, the inner Result indicates whether the command ran
-// successfully or not. This allows us to give more detailed error
-// response to a failed command instead of trying to map everything to
-// a Unix errno.
 #[cfg(target_os = "illumos")]
-fn run_ioctl<T, E, R>(
+fn run_cmd_ioctl<T, R>(
     dev: libc::c_int,
-    cmd: IoctlCmd,
+    cmd: OpteCmd,
     req: &R,
-) -> Result<Result<T, E>, Error>
+) -> Result<T, Error>
 where
     T: CmdOk + DeserializeOwned,
-    E: CmdErr + DeserializeOwned,
     R: Serialize,
 {
-    let req_bytes = postcard::to_allocvec(req).unwrap();
+    let req_bytes =
+        postcard::to_allocvec(req).map_err(|e| Error::ReqSer(cmd, e))?;
+
     // It would be a shame if the command failed and we didn't have
     // enough bytes to serialize the error response, so we set this to
     // default to 16 KiB.
     let mut resp_buf: Vec<u8> = vec![0; 16 * 1024];
-    let mut rioctl = opte_core::ioctl::Ioctl {
+    let mut rioctl = opte_core::ioctl::OpteCmdIoctl {
+        api_version: opte_core::ioctl::API_VERSION,
+        cmd,
+        flags: 0,
+        reserved1: 0,
         req_bytes: req_bytes.as_ptr(),
         req_len: req_bytes.len(),
         resp_bytes: resp_buf.as_mut_ptr(),
         resp_len: resp_buf.len(),
-        resp_len_needed: 0,
+        resp_len_actual: 0,
     };
 
-    const MAX_ITERATIONS: usize = 3;
+    const MAX_ITERATIONS: u8 = 3;
     for _ in 0..MAX_ITERATIONS {
-        let ret = unsafe { libc::ioctl(dev, cmd as libc::c_int, &rioctl) };
+        let ret = unsafe {
+            libc::ioctl(dev, api::XDE_DLD_OPTE_CMD as libc::c_int, &rioctl)
+        };
 
         // The ioctl(2) failed for a reason other than the response
         // buffer being too small.
+        //
+        // errno == ENOBUFS
+        //
+        //    The command ran successfully, but there is not enough
+        //    space to copyout(9F) the response. In this case bump
+        //    up the size of the response buffer and retry.
+        //
+        // errno != 0 && OPTE_CMD_RESP_COPY_OUT
+        //
+        //    The command failed and we have an error response
+        //    serialized in the response buffer.
+        //
+        // errno != 0
+        //
+        //    Either the command failed or the general ioctl mechanism
+        //    failed: make our best guess as to what might have gone
+        //    wrong based on errno value.
         if ret == -1 && unsafe { *libc::___errno() } != libc::ENOBUFS {
+            // Anytime a response is present it will have more context
+            // for the error. Otherwise, we have to approximate the
+            // error via errno.
+            if let Some(cmd_err) = rioctl.cmd_err_resp() {
+                return Err(Error::CommandError(cmd, cmd_err));
+            }
+
             let msg = match unsafe { *libc::___errno() } {
-                libc::ENOENT => "port not found".to_string(),
+                libc::EPROTO => "API version mismatch".to_string(),
 
-                libc::EFAULT => {
-                    "opte driver failed to copyin/copyout req/resp".to_string()
-                }
+                libc::EFAULT => "failed to copyin/copyout req/resp".to_string(),
 
-                libc::EINVAL => {
+                libc::ENOMSG => {
                     "opte driver failed to deser/ser req/resp".to_string()
                 }
 
@@ -408,29 +356,26 @@ where
         }
 
         // Check for successful response, try to deserialize it
-        assert!(rioctl.resp_len_needed != 0);
-        if rioctl.resp_len_needed <= rioctl.resp_len {
+        assert!(rioctl.resp_len_actual != 0);
+        if ret == 0 && rioctl.resp_len_actual <= rioctl.resp_len {
             let response = unsafe {
                 std::slice::from_raw_parts(
                     rioctl.resp_bytes,
-                    rioctl.resp_len_needed,
+                    rioctl.resp_len_actual,
                 )
             };
-            return postcard::from_bytes(response).map_err(Error::from);
+            return postcard::from_bytes(response)
+                .map_err(|e| Error::RespDeser(cmd, e));
         }
 
         // The buffer wasn't large enough to hold the response.
         // Enlarge the buffer by asking for more capacity and
         // initializing it so that it is usable.
-        resp_buf.resize(rioctl.resp_len_needed, 0);
+        resp_buf.resize(rioctl.resp_len_actual, 0);
         rioctl.resp_bytes = resp_buf.as_mut_ptr();
         rioctl.resp_len = resp_buf.len();
-        rioctl.resp_len_needed = 0;
+        rioctl.resp_len_actual = 0;
     }
 
-    panic!(
-        "failed to allocate sufficient ioctl(2) response \
-            buffer in {} iterations",
-        MAX_ITERATIONS
-    );
+    Err(Error::MaxAttempts(cmd, MAX_ITERATIONS))
 }

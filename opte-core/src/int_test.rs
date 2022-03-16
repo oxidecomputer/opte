@@ -223,7 +223,8 @@ fn gateway_icmp4_ping() {
 
     let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
     router::setup(&mut g1_port).unwrap();
-    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone());
+    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone())
+        .unwrap();
     let g1_port = g1_port.activate();
 
     let mut pcap = crate::test::PcapBuilder::new("gateway_icmpv4_ping.pcap");
@@ -387,7 +388,8 @@ fn overlay_guest_to_guest_no_route() {
 
     let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
     router::setup(&mut g1_port).unwrap();
-    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone());
+    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone())
+        .unwrap();
     let g1_port = g1_port.activate();
 
     // ================================================================
@@ -475,7 +477,8 @@ fn overlay_guest_to_guest() {
 
     let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
     router::setup(&mut g1_port).unwrap();
-    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone());
+    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone())
+        .unwrap();
     let g1_port = g1_port.activate();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
@@ -488,7 +491,8 @@ fn overlay_guest_to_guest() {
 
     let mut g2_port = oxide_net_setup("g2_port", &g2_cfg);
     router::setup(&mut g2_port).unwrap();
-    overlay::setup(&mut g2_port, g2_cfg.overlay.as_ref().unwrap(), v2p.clone());
+    overlay::setup(&mut g2_port, g2_cfg.overlay.as_ref().unwrap(), v2p.clone())
+        .unwrap();
     let g2_port = g2_port.activate();
 
     // Add router entry that allows Guest 2 to send to Guest 1.
@@ -508,7 +512,7 @@ fn overlay_guest_to_guest() {
     let rule = "dir=in action=allow priority=10 protocol=TCP";
     crate::ioctl::add_fw_rule(
         &g2_port,
-        &firewall::FwAddRuleReq {
+        &firewall::AddFwRuleReq {
             port_name: g2_port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
@@ -715,7 +719,8 @@ fn overlay_guest_to_internet() {
     let v2p = Arc::new(Virt2Phys::new());
     let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
     router::setup(&mut g1_port).unwrap();
-    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone());
+    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone())
+        .unwrap();
     let g1_port = g1_port.activate();
 
     // Add router entry that allows Guest 1 to send to Guest 2.

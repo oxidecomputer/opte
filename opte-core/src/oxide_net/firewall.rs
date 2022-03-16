@@ -27,13 +27,13 @@ use crate::rule::{
     PortMatch, Predicate, Rule, StatefulAction,
 };
 use crate::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
-use crate::{Direction, ParseErr, ParseResult};
+use crate::{Direction, OpteError, ParseErr, ParseResult};
 
 pub const FW_LAYER_NAME: &'static str = "firewall";
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
-) -> core::result::Result<(), port::AddLayerError> {
+) -> core::result::Result<(), OpteError> {
     let fw_layer = Firewall::create_layer(port.name());
     port.add_layer(fw_layer, Pos::First)
 }
@@ -193,14 +193,14 @@ impl Firewall {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct FwRemRuleReq {
+pub struct RemFwRuleReq {
     pub port_name: String,
     pub dir: Direction,
     pub id: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct FwAddRuleReq {
+pub struct AddFwRuleReq {
     pub port_name: String,
     pub rule: FirewallRule,
 }

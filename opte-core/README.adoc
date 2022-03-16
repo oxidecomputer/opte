@@ -108,3 +108,277 @@ codebase defines the Oxide Rack Network under the `oxide_net` module
 make it part of opte-drv).
 
 XXX: Go into more depth about the nuance here.
+
+== Communicating with OPTE
+
+The `xde` device registers a single entry point with the DLD ioctl
+framework. This entry point allows a client to send OPTE commands for
+the purpose of programming the engine:
+
+.entry point into `xde` via DLD
+----
+static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [
+    dld::dld_ioc_info_t {
+        di_cmd: opte_core::ioctl::XDE_OPTE_CMD as u32,
+        di_flags: dld::DLDCOPYINOUT,
+        di_argsize: IOCTL_SZ,
+        di_func: xde_dld_ioc_opte_cmd,
+        di_priv_func: secpolicy::secpolicy_dl_config,
+    },
+];
+----
+
+There are four values which make up an OPTE command.
+
+`OpteCmd`:: `OpteCmd` is analogous to the `ioctl(2)` `request`
+argument: it's an integer used to determine what type of request is
+being made; this value is used by the kernel side to determine how to
+interpret the ioctl argument
+
+`OpteCmdIoctl`:: `OpteCmdIoctl` is analogous to the `ioctl(2)` `arg`
+command: a pointer to a structure whose definition is shared across
+both userspace and kernelspace; in this case both `opteadm` running in
+userland and the `opte-core` engine running in the kernel share a
+consistent (`repr(C)`) layout of this structure. Think of it as the
+common delivery mechanism for the various `XxxReq`/`XxxResp` pairs.
+
+`XxxReq`:: The request value for a given `OpteCmd`. It contains the
+input needed to perform the specified command. E.g., the
+`ListLayersReq` requires a `port_name: String` argument to know which
+port to query. This value is shuttled from user to kernel via
+`OpteCmdIotcl.req_bytes`. It is serialized in userland, written to
+`req_bytes`. On the kernel side `resp_bytes` is copied into Kernel
+Address Space (KAS) and deserialized.
+
+`XxxResp`:: The response value for a given `OpteCmd`. E.g., the
+`ListLayersResp` value contains a `Vec<LayerDesc>` describing the
+layers registered for the given port. A command that has no response
+data specifies `NoResp`. This value is shuttled from kernel to user
+via `OpteCmdIoctl.resp_bytes`. The `resp_bytes` buffer is allocated
+and initialized by the client in userspace. In the kernel the response
+structure is serialized and then copied out to the userspace address.
+When control returns to userland the client can then deserialize the
+response buffer into the appropriate struct.
+
+There's one more value that plays an important role in OPTE commands
+and separates the OPTE ioctl mechanism from the more traditional
+`ioctl(2)` APIs: `OpteError`. The OPTE ioctl mechanism is built in
+such a way that in the case of command failure it tries its best to
+deliver an `OpteError` value to the client. This is done via the same
+`OpteCmdIoctl.resp_bytes` buffer used for the `XxxResp` value when a
+command is successful. This allows the client to get more context
+about the error compared to the traditional `ioctl(2)` usage which
+gives you only an `errno` to work with (which is often ambiguous and
+of little immediate help). This allows for the client to potentially
+take additional measures on command failure. At minimum it allows
+client logs to contain much better context about why a command failed,
+allowing for quicker debugging.
+
+Finally, on the kernel side, there is the `IoctlEnvelope` for wrapping
+`OpteCmdIoctl`. This type provides a safe API for accessing the
+request and marshaling a response out to the user. It relieves the
+handler code of having to know the details of
+`ddi_copyin(9F)`/`ddi_copyout(9F)`; allowing them to focus purely on
+executing commands and returning a response.
+
+Here's what the user/kernel address space looks like upon initial
+entry into `xde_dld_ioc_opte_cmd()`. The key point this visual is
+meant to convey is that at initial entry into the parent handler the
+`req_bytes` and `resp_bytes` pointers still point to the userland
+buffers. The `OpteCmdIoctl` data was copied-in by DLD on xde's behalf,
+visualized by the dotted line from `karg` to `arg`. At this point the
+xde ioctl handler still needs to copy-in the request. After processing
+it needs to copy-out the response value to `resp_bytes` (`0x86ddf20`)
+as well as the `OpteCmdIoctl` itself in order to update the
+`resp_len_needed` value. Keep in mind this shows the logical value of
+what's in `req_bytes`. The real value is actually the byte stream
+produced from serializing this request value.
+
+
+----
+      ┌─────────────────────────────┐
+  ┌ ─ │arg: 0x86de011               │
+      └─────────────────────────────┘
+  │                  │
+                     ▼
+  │ OpteCmdIoctl──────────────────────┐             ListLayersReq───────┐
+    │ ┌─────────────────────────────┐ │             │┌─────────────────┐│
+  │ │ │api_version: 0x1             │ │     ┌──────▶││port_name: "xde0"││◀─┐
+    │ ├─────────────────────────────┤ │     │       │└─────────────────┘│  │
+  │ │ │cmd: OpteCmd::ListLayers     │ │     │       └───────────────────┘  │
+    │ ├─────────────────────────────┤ │     │                              │
+  │ │ │req_bytes: 0x86dd010         │─┼─────┘                              │
+    │ ├─────────────────────────────┤ │                                    │
+  │ │ │req_len: 18                  │ │             ┌─────────────────┐    │
+    │ ├─────────────────────────────┤ │             │┌─┬─┬─┬─┬─┬─┬─┬─┐│    │
+  │ │ │resp_bytes: 0x86ddf20        │─┼────────────▶││0│0│0│0│0│0│0│0││    │
+    │ ├─────────────────────────────┤ │             │└─┴─┴─┴─┴─┴─┴─┴─┘│    │
+  │ │ │resp_len: 16384 (16K)        │ │             └─────────────────┘    │
+    │ ├─────────────────────────────┤ │                      ▲             │
+  │ │ │resp_len_needed: 0           │ │                      │             │
+    │ └─────────────────────────────┘ │                      │             │
+  │ └─────────────────────────────────┘                      │             │
+                                                             │             │
+  │                                                          │             │
+                                                             │             │
+  │                           User Address Space             │             │
+   ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ╋ ━ ━ ━ ━ ━ ━ ╋ ━
+  │                          Kernel Address Space            │             │
+                                                             │             │
+┌ ┴ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                                      │             │
+     ddi_copyin(9F)    │                                     │             │
+└ ┬ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                                      │             │
+     ┌─────────────────────────────┐                         │             │
+  └ ▶│karg: 0xfffffeb4eaafbe00     │                         │             │
+     └─────────────────────────────┘                         │             │
+                    │                                        │             │
+   OpteCmdIoctl─────▼────────────────┐                       │             │
+   │ ┌─────────────────────────────┐ │                       │             │
+   │ │api_version: 0x1             │ │                       │             │
+   │ ├─────────────────────────────┤ │                       │             │
+   │ │cmd: OpteCmd::ListLayers     │─┼───────────────────────┼─────────────┘
+   │ ├─────────────────────────────┤ │                       │
+   │ │req_bytes: 0x86dd010         │ │                       │
+   │ ├─────────────────────────────┤ │                       │
+   │ │req_len: 18                  │ │                       │
+   │ ├─────────────────────────────┤ │                       │
+   │ │resp_bytes: 0x86ddf20        │─┼───────────────────────┘
+   │ ├─────────────────────────────┤ │
+   │ │resp_len: 16384 (16K)        │ │
+   │ ├─────────────────────────────┤ │
+   │ │resp_len_needed: 0           │ │
+   │ └─────────────────────────────┘ │
+   └─────────────────────────────────┘
+----
+
+Here's what the address spaces look like after `list_layers_hdlr()` has
+called `IoctlEnvelope::copy_in_req()`. Notice the kernel now has its
+own copy of the `ListLayersReq` that it can access. Once again, keep
+in mind that the truth is a little more complicated: `req_bytes`
+contains the serialized bytes of `ListLayersReq`, and the
+`IoctlEnvelope::copy_in_req()` deserializes the byte stream to create
+a `ListLayersReq` value on the stack.
+
+----
+      ┌─────────────────────────────┐
+  ┌ ─ │arg: 0x86de011               │
+      └─────────────────────────────┘
+  │                  │
+                     ▼
+  │ OpteCmdIoctl──────────────────────┐             ListLayersReq───────┐
+    │ ┌─────────────────────────────┐ │             │┌─────────────────┐│
+  │ │ │api_version: 0x1             │ │     ┌──────▶││port_name: "xde0"││
+    │ ├─────────────────────────────┤ │     │       │└─────────────────┘│
+  │ │ │cmd: OpteCmd::ListLayers     │ │     │       └───────────────────┘
+    │ ├─────────────────────────────┤ │     │
+  │ │ │req_bytes: 0x86dd010         │─┼─────┘
+    │ ├─────────────────────────────┤ │
+  │ │ │req_len: 18                  │ │             ┌─────────────────┐
+    │ ├─────────────────────────────┤ │             │┌─┬─┬─┬─┬─┬─┬─┬─┐│
+  │ │ │resp_bytes: 0x86ddf20        │─┼────────────▶││0│0│0│0│0│0│0│0││
+    │ ├─────────────────────────────┤ │             │└─┴─┴─┴─┴─┴─┴─┴─┘│
+  │ │ │resp_len: 16384 (16K)        │ │             └─────────────────┘
+    │ ├─────────────────────────────┤ │                      ▲
+  │ │ │resp_len_needed: 0           │ │                      │
+    │ └─────────────────────────────┘ │                      │
+  │ └─────────────────────────────────┘                      │
+                                                             │
+  │                                                          │
+                                                             │
+  │                           User Address Space             │
+   ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ╋ ━ ━ ━ ━ ━ ━ ━ ━
+  │                          Kernel Address Space            │
+                                                             │
+┌ ┴ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                                      │
+     ddi_copyin(9F)    │                                     │
+└ ┬ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                                      │
+     ┌─────────────────────────────┐                         │
+  └ ▶│karg: 0xfffffeb4eaafbe00     │                         │
+     └─────────────────────────────┘                         │
+                    │                                        │
+   OpteCmdIoctl─────▼────────────────┐               ListLayersReq───────┐
+   │ ┌─────────────────────────────┐ │               │┌─────────────────┐│
+   │ │api_version: 0x1             │ │      ┌───────▶││port_name: "xde0"││
+   │ ├─────────────────────────────┤ │      │        │└─────────────────┘│
+   │ │cmd: OpteCmd::ListLayers     │ │      │        └───────┬───────────┘
+   │ ├─────────────────────────────┤ │      │                │
+   │ │req_bytes: 0xfffffeb4eaaf... │─┼──────┘                │
+   │ ├─────────────────────────────┤ │                       │
+   │ │req_len: 18                  │ │                       │
+   │ ├─────────────────────────────┤ │                       │
+   │ │resp_bytes: 0x86ddf20        │─┼───────────────────────┘
+   │ ├─────────────────────────────┤ │
+   │ │resp_len: 16384 (16K)        │ │
+   │ ├─────────────────────────────┤ │
+   │ │resp_len_needed: 0           │ │
+   │ └─────────────────────────────┘ │
+   └─────────────────────────────────┘
+----
+
+
+Finally, here's the address space after `hdlr_resp()` has called
+`IoctlEnvelope::copy_out_resp()`. Notice the response has been
+copied-out to the user's `resp_bytes` buffer **AND** the kernel's copy
+of `OpteCmdIoctl` has been copied-out as well to overwrite the user's
+copy. This later step is required in order to update `resp_len_needed`
+which is how the client knows how many bytes to read during
+deserialization. Once again, I'm showing the logical view of
+`resp_bytes` here. The reality is that it points to the serialized
+bytes and the client uses this pointer along with `resp_len_needed` to
+deserialize into a `ListLayersResp` value on the stack.
+
+----
+      ┌─────────────────────────────┐
+  ┌ ─▶│arg: 0x86de011               │
+      └─────────────────────────────┘
+  │                  │
+                     ▼
+  │ OpteCmdIoctl──────────────────────┐             ListLayersReq───────┐
+    │ ┌─────────────────────────────┐ │             │┌─────────────────┐│
+  │ │ │api_version: 0x1             │ │     ┌──────▶││port_name: "xde0"││
+    │ ├─────────────────────────────┤ │     │       │└─────────────────┘│
+  │ │ │cmd: OpteCmd::ListLayers     │ │     │       └───────────────────┘
+    │ ├─────────────────────────────┤ │     │
+  │ │ │req_bytes: 0x86dd010         │─┼─────┘
+    │ ├─────────────────────────────┤ │
+  │ │ │req_len: 18                  │ │             ListLayersResp──────┐
+    │ ├─────────────────────────────┤ │             │┌─────────────────┐│
+  │ │ │resp_bytes: 0x86ddf20        │─┼────────────▶││layers: Vec<...> ││
+    │ ├─────────────────────────────┤ │             │└─────────────────┘│
+  │ │ │resp_len: 16384 (16K)        │ │             └───────────────────┘
+    │ ├─────────────────────────────┤ │                       ▲
+  │ │ │resp_len_needed: 179         │ │
+    │ └─────────────────────────────┘ │                       │
+  │ └─────────────────────────────────┘
+                                                              │
+  │
+                                                              │
+  │                           User Address Space
+   ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━│━ ━ ━ ━ ━ ━ ━ ━
+  │                          Kernel Address Space
+                                                              │
+┌ ┴ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+    ddi_copyout(9F)    │                                      │
+└ ┬ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+     ┌─────────────────────────────┐                          │
+  └ ─│karg: 0xfffffeb4eaafbe00     │
+     └─────────────────────────────┘                          │
+                    │
+   OpteCmdIoctl─────▼────────────────┐               ListLayersReq───────┐
+   │ ┌─────────────────────────────┐ │               │┌─────────────────┐│
+   │ │api_version: 0x1             │ │      ┌───────▶││port_name: "xde0"││
+   │ ├─────────────────────────────┤ │      │        │└─────────────────┘│
+   │ │cmd: OpteCmd::ListLayers     │ │      │        └────────┬──────────┘
+   │ ├─────────────────────────────┤ │      │
+   │ │req_bytes: 0xfffffeb4eaaf... │─┼──────┘                 │
+   │ ├─────────────────────────────┤ │
+   │ │req_len: 18                  │ │                        │
+   │ ├─────────────────────────────┤ │             ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+   │ │resp_bytes: 0x86ddf20        │─│─ ─ ─ ─ ─ ─ ─   ddi_copyout(9F)
+   │ ├─────────────────────────────┤ │             └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+   │ │resp_len: 16384 (16K)        │ │
+   │ ├─────────────────────────────┤ │
+   │ │resp_len_needed: 179         │ │
+   │ └─────────────────────────────┘ │
+   └─────────────────────────────────┘
+----

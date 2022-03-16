@@ -14,12 +14,12 @@ use crate::rule::{
     Action, ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate,
     EtherAddrMatch, EtherTypeMatch, Ipv4AddrMatch, Predicate, Rule,
 };
-use crate::Direction;
+use crate::{Direction, OpteError};
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
     cfg: &super::PortCfg,
-) -> core::result::Result<(), port::AddLayerError> {
+) -> core::result::Result<(), OpteError> {
     let arp = Layer::new(
         "arp",
         port.name(),

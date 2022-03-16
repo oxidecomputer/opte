@@ -18,13 +18,13 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 
 use crate::headers::{IpAddr, IpCidr};
-use crate::ioctl::{self, CmdErr};
+use crate::ioctl::NoResp;
 use crate::ip4::Ipv4Cidr;
 use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::firewall as fw;
 use crate::port::{self, meta::Meta, Port};
 use crate::rule::{self, Action, MetaAction, Predicate, Rule};
-use crate::Direction;
+use crate::{Direction, OpteError};
 
 pub const ROUTER_LAYER_NAME: &'static str = "router";
 
@@ -101,7 +101,7 @@ fn build_ip4_len_to_pri() -> [u16; 33] {
     v
 }
 
-pub fn setup(port: &Port<port::Inactive>) -> Result<(), port::AddLayerError> {
+pub fn setup(port: &Port<port::Inactive>) -> Result<(), OpteError> {
     let ig = Action::Meta(Arc::new(RouterAction::new(
         RouterTarget::InternetGateway,
     )));
@@ -118,32 +118,11 @@ pub fn setup(port: &Port<port::Inactive>) -> Result<(), port::AddLayerError> {
     port.add_layer(layer, port::Pos::After(fw::FW_LAYER_NAME))
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum AddEntryError {
-    AddRuleError(port::AddRuleError),
-    InvalidDest,
-    PortError(ioctl::PortError),
-}
-
-impl CmdErr for AddEntryError {}
-
-impl From<port::AddRuleError> for AddEntryError {
-    fn from(e: port::AddRuleError) -> Self {
-        Self::AddRuleError(e)
-    }
-}
-
-impl From<ioctl::PortError> for AddEntryError {
-    fn from(e: ioctl::PortError) -> Self {
-        Self::PortError(e)
-    }
-}
-
 pub fn add_entry_inactive(
     port: &Port<port::Inactive>,
     dest: IpCidr,
     target: RouterTarget,
-) -> Result<(), AddEntryError> {
+) -> Result<(), OpteError> {
     let pri_map4 = build_ip4_len_to_pri();
 
     match &target {
@@ -151,7 +130,7 @@ pub fn add_entry_inactive(
 
         RouterTarget::InternetGateway => {
             if !dest.is_default() {
-                return Err(AddEntryError::InvalidDest);
+                return Err(OpteError::InvalidRouteDest(dest));
             }
 
             match dest {
@@ -203,7 +182,7 @@ pub fn add_entry_active(
     port: &Port<port::Active>,
     dest: IpCidr,
     target: RouterTarget,
-) -> Result<(), AddEntryError> {
+) -> Result<NoResp, OpteError> {
     let pri_map4 = build_ip4_len_to_pri();
 
     match &target {
@@ -211,7 +190,7 @@ pub fn add_entry_active(
 
         RouterTarget::InternetGateway => {
             if !dest.is_default() {
-                return Err(AddEntryError::InvalidDest);
+                return Err(OpteError::InvalidRouteDest(dest));
             }
 
             match dest {
@@ -227,11 +206,8 @@ pub fn add_entry_active(
                             rule::Ipv4AddrMatch::Prefix(ip4),
                         ]))
                         .finalize();
-                    Ok(port.add_rule(
-                        ROUTER_LAYER_NAME,
-                        Direction::Out,
-                        rule,
-                    )?)
+                    port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?;
+                    Ok(NoResp::default())
                 }
 
                 IpCidr::Ip6(_) => todo!("IPv6 IG"),
@@ -249,7 +225,8 @@ pub fn add_entry_active(
                         rule::Ipv4AddrMatch::Prefix(ip4),
                     ]))
                     .finalize();
-                Ok(port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?)
+                port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?;
+                Ok(NoResp::default())
             }
             IpCidr::Ip6(_) => todo!("IPv6 IP"),
         },
@@ -265,7 +242,8 @@ pub fn add_entry_active(
                         rule::Ipv4AddrMatch::Prefix(ip4),
                     ]))
                     .finalize();
-                Ok(port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?)
+                port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?;
+                Ok(NoResp::default())
             }
 
             IpCidr::Ip6(_) => todo!("IPv6 router entry"),

@@ -1,7 +1,7 @@
 #![feature(extern_types)]
 
-use std::convert::TryInto;
-use std::net::Ipv6Addr;
+// use std::net::{Ipv4Addr, Ipv6Addr};
+use std::process::exit;
 
 use structopt::StructOpt;
 
@@ -10,12 +10,12 @@ use opte_core::flow_table::FlowEntryDump;
 use opte_core::geneve;
 use opte_core::geneve::Vni;
 use opte_core::headers::IpAddr;
-use opte_core::ioctl::{self as api, AddPortReq, PortInfo};
+use opte_core::ioctl::{self as api, PortInfo};
 use opte_core::ip4::{Ipv4Addr, Ipv4Cidr};
-use opte_core::ip6 as opte_ip6;
+use opte_core::ip6::Ipv6Addr;
 use opte_core::layer::InnerFlowId;
 use opte_core::oxide_net::firewall::{
-    self, Action, Address, FirewallRule, FwRemRuleReq, Ports, ProtoFilter,
+    self, Action, Address, FirewallRule, Ports, ProtoFilter, RemFwRuleReq,
 };
 use opte_core::oxide_net::{overlay, router};
 use opte_core::rule::RuleDump;
@@ -29,19 +29,7 @@ enum Command {
     /// List all ports.
     ListPorts,
 
-    /// Add a new port.
-    AddPort(AddPort),
-
-    /// Delete an existing port.
-    DeletePort {
-        #[structopt(long)]
-        name: String,
-    },
-
-    /// Set the overlay configuration.
-    SetOverlay(SetOverlay),
-
-    // List all layers under a given port.
+    /// List all layers under a given port.
     ListLayers {
         #[structopt(short)]
         port: String,
@@ -98,7 +86,8 @@ enum Command {
         id: u64,
     },
 
-    XdeCreate {
+    /// Create an xde device
+    CreateXde {
         name: String,
         private_mac: String,
         private_ip: String,
@@ -112,15 +101,14 @@ enum Command {
         passthrough: bool,
     },
 
-    XdeDelete {
-        name: String,
-    },
+    /// Delete an xde device
+    DeleteXde { name: String },
 
     /// Set a virtual-to-physical mapping
     SetV2P {
         vip4: Ipv4Addr,
         phys_ether: EtherAddr,
-        phys_ip: Ipv6Addr,
+        phys_ip: std::net::Ipv6Addr,
         vni: geneve::Vni,
     },
 
@@ -147,7 +135,7 @@ struct SetOverlay {
     vni: u32,
 
     #[structopt(long)]
-    ip: Ipv6Addr,
+    ip: std::net::Ipv6Addr,
 }
 
 #[derive(Debug, StructOpt)]
@@ -166,7 +154,7 @@ impl From<BoundarySvcs> for overlay::PhysNet {
     fn from(bs: BoundarySvcs) -> Self {
         Self {
             ether: bs.bs_mac_addr,
-            ip: opte_ip6::Ipv6Addr::from(bs.bs_ip),
+            ip: Ipv6Addr::from(bs.bs_ip),
             vni: geneve::Vni::new(bs.bs_vni).unwrap(),
         }
     }
@@ -181,7 +169,7 @@ impl From<SetOverlay> for overlay::SetOverlayReq {
                     req.boundary_services,
                 ),
                 vni: geneve::Vni::new(req.vni).unwrap(),
-                phys_ip_src: opte_ip6::Ipv6Addr::from(req.ip.octets()),
+                phys_ip_src: Ipv6Addr::from(req.ip.octets()),
             },
         }
     }
@@ -209,21 +197,6 @@ impl From<Filters> for firewall::Filters {
             .protocol(f.protocol)
             .ports(f.ports)
             .clone()
-    }
-}
-
-#[derive(Debug, StructOpt)]
-struct AddPort {
-    #[structopt(long)]
-    name: String,
-
-    #[structopt(flatten)]
-    port_cfg: PortCfg,
-}
-
-impl From<AddPort> for AddPortReq {
-    fn from(r: AddPort) -> Self {
-        Self { link_name: r.name, port_cfg: api::PortCfg::from(r.port_cfg) }
     }
 }
 
@@ -450,35 +423,52 @@ fn print_list_layers(resp: &api::ListLayersResp) {
     }
 }
 
-fn print_v2p(resp: &overlay::GetVirt2PhysResp) {
-    println!("ipv4");
+fn print_v2p_header() {
     println!(
-        "{:<12} {:<20} {:<20} {:<10}",
-        "SOURCE", "DEST ETH", "DEST IP", "VNI"
+        "{:<15} {:<8} {:<20} {:<20}",
+        "SOURCE", "VNI", "DEST ETH", "DEST IP"
     );
+}
 
-    for (src, dst) in &resp.ip4 {
-        //XXX something about the Display impl for these types is interacting
-        //badly with column layout
-        let v4 = std::net::Ipv4Addr::from(src.to_be_bytes());
-        let v6 = std::net::Ipv6Addr::from(dst.ip.to_bytes());
-        let eth = format!("{}", dst.ether);
-        println!("{:<12} {:<20} {:<20} {:<10}", v4, eth, v6, dst.vni.value(),);
+fn print_v2p_ip4((src, phys): (&Ipv4Addr, &overlay::PhysNet)) {
+    let eth = format!("{}", phys.ether);
+    println!(
+        "{:<15} {:<8} {:<20} {:<20}",
+        std::net::Ipv4Addr::from(src.to_be_bytes()),
+        phys.vni.value(),
+        eth,
+        std::net::Ipv6Addr::from(phys.ip.to_bytes()),
+    );
+}
+
+fn print_v2p_ip6((src, phys): (&Ipv6Addr, &overlay::PhysNet)) {
+    let eth = format!("{}", phys.ether);
+    println!(
+        "{:<15} {:<8} {:<20} {:<20}",
+        std::net::Ipv6Addr::from(src.to_bytes()),
+        phys.vni.value(),
+        eth,
+        std::net::Ipv6Addr::from(phys.ip.to_bytes()),
+    );
+}
+
+fn print_v2p(resp: &overlay::DumpVirt2PhysResp) {
+    println!("Virtual to Physical Mappings");
+    print_hrb();
+    println!("");
+    println!("IPv4 mappings");
+    print_hr();
+    print_v2p_header();
+    for pair in &resp.ip4 {
+        print_v2p_ip4(pair);
     }
 
-    println!("ipv6");
-    println!(
-        "{:<12} {:<20} {:<20} {:<10}",
-        "SOURCE", "DEST ETH", "DEST IP", "VNI"
-    );
-
-    for (src, dst) in &resp.ip6 {
-        //XXX something about the Display impl for these types is interacting
-        //badly with column layout
-        let v6s = std::net::Ipv6Addr::from(src.to_bytes());
-        let v6 = std::net::Ipv6Addr::from(dst.ip.to_bytes());
-        let eth = format!("{}", dst.ether);
-        println!("{:<12} {:<20} {:<20} {:<10}", v6s, eth, v6, dst.vni.value(),);
+    println!("");
+    println!("IPv6 mappings");
+    print_hr();
+    print_v2p_header();
+    for pair in &resp.ip6 {
+        print_v2p_ip6(pair);
     }
 }
 
@@ -539,71 +529,75 @@ fn print_uft(resp: &api::DumpUftResp) {
     println!("");
 }
 
+fn die(error: opteadm::Error) -> ! {
+    eprintln!("ERROR: {}", error);
+    exit(1);
+}
+
+trait UnwrapOrDie<T, E> {
+    fn unwrap_or_die(self) -> T;
+}
+
+impl<T> UnwrapOrDie<T, opteadm::Error> for Result<T, opteadm::Error> {
+    fn unwrap_or_die(self) -> T {
+        match self {
+            Ok(val) => val,
+            Err(e) => die(e),
+        }
+    }
+}
+
 fn main() {
     let cmd = Command::from_args();
     match cmd {
         Command::ListPorts => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::OPTE_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
             print_port_header();
             for p in hdl.list_ports().unwrap().ports {
                 print_port(p);
             }
         }
 
-        Command::AddPort(req) => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::OPTE_CTL).unwrap();
-            hdl.add_port(&req.try_into().unwrap()).unwrap();
-        }
-
-        Command::DeletePort { name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::OPTE_CTL).unwrap();
-            hdl.delete_port(&name).unwrap();
-        }
-
-        Command::SetOverlay(req) => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::OPTE_CTL).unwrap();
-            hdl.set_overlay(&req.into()).unwrap();
-        }
-
         Command::ListLayers { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
-            print_list_layers(&hdl.list_layers(&port).unwrap());
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            print_list_layers(&hdl.list_layers(&port).unwrap_or_die());
         }
 
         Command::DumpLayer { port, name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
-            print_layer(&hdl.get_layer_by_name(&port, &name).unwrap());
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            print_layer(&hdl.get_layer_by_name(&port, &name).unwrap_or_die());
         }
 
         Command::DumpUft { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
-            print_uft(&hdl.uft(&port).unwrap());
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            print_uft(&hdl.dump_uft(&port).unwrap_or_die());
         }
 
         Command::DumpTcpFlows { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::OPTE_CTL).unwrap();
-            for (flow_id, entry) in hdl.tcp_flows(&port).unwrap().flows {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let flows = hdl.dump_tcp_flows(&port).unwrap_or_die().flows;
+            for (flow_id, entry) in flows {
                 println!("{} {:?}", flow_id, entry);
             }
         }
 
         Command::DumpV2P => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
-            print_v2p(&hdl.get_v2p().unwrap());
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            print_v2p(&hdl.dump_v2p().unwrap_or_die());
         }
 
         Command::AddFwRule { port, direction, filters, action, priority } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
             let rule = FirewallRule {
                 direction,
                 filters: filters.into(),
                 action,
                 priority,
             };
-            hdl.add_firewall_rule(&port, &rule).unwrap();
+            hdl.add_firewall_rule(&port, &rule).unwrap_or_die();
         }
 
-        Command::XdeCreate {
+        Command::CreateXde {
             name,
             private_mac,
             private_ip,
@@ -615,7 +609,7 @@ fn main() {
             src_underlay_addr,
             passthrough,
         } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
             hdl.create_xde(
                 &name,
                 &private_mac,
@@ -628,37 +622,37 @@ fn main() {
                 src_underlay_addr,
                 passthrough,
             )
-            .unwrap();
+            .unwrap_or_die();
         }
 
-        Command::XdeDelete { name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
-            hdl.delete_xde(&name).unwrap();
+        Command::DeleteXde { name } => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let _ = hdl.delete_xde(&name).unwrap_or_die();
         }
 
         Command::RmFwRule { port, direction, id } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
-            let request = FwRemRuleReq { port_name: port, dir: direction, id };
-            hdl.remove_firewall_rule(&request).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let request = RemFwRuleReq { port_name: port, dir: direction, id };
+            hdl.remove_firewall_rule(&request).unwrap_or_die();
         }
 
         Command::SetV2P { vip4, phys_ether, phys_ip, vni } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
             let vip = IpAddr::Ip4(vip4);
             let phys = overlay::PhysNet {
                 ether: phys_ether,
-                ip: opte_ip6::Ipv6Addr::from(phys_ip),
+                ip: Ipv6Addr::from(phys_ip),
                 vni,
             };
             let req = overlay::SetVirt2PhysReq { vip, phys };
-            hdl.set_v2p(&req).unwrap();
+            hdl.set_v2p(&req).unwrap_or_die();
         }
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
             let req =
                 router::AddRouterEntryIpv4Req { port_name: port, dest, target };
-            hdl.add_router_entry_ip4(&req).unwrap();
+            hdl.add_router_entry_ip4(&req).unwrap_or_die();
         }
     }
 }

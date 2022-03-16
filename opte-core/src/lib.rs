@@ -37,6 +37,7 @@ cfg_if! {
     } else {
         use std::boxed::Box;
         use std::string::String;
+        use illumos_ddi_dki as ddi;
     }
 }
 
@@ -144,6 +145,46 @@ pub const fn bit_on(bit: u8) -> u8 {
     // TODO Uncomment when `const_panic` feature is stable.
     // assert!(bit < 16);
     0x1 << bit
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum OpteError {
+    BadApiVersion { user: u64, kernel: u64 },
+    BadLayerPos { layer: String, pos: String },
+    CopyinReq,
+    CopyoutResp,
+    DeserCmdErr(String),
+    DeserCmdReq(String),
+    InvalidRouteDest(crate::headers::IpCidr),
+    LayerNotFound(String),
+    PortNotFound(String),
+    RespTooLarge { needed: usize, given: usize },
+    RuleNotFound(crate::layer::RuleId),
+    SerCmdErr(String),
+    SerCmdResp(String),
+    System { errno: c_int, msg: String },
+}
+
+impl OpteError {
+    /// Convert to an errno value.
+    pub fn to_errno(&self) -> c_int {
+        match self {
+            Self::BadApiVersion { .. } => ddi::EPROTO,
+            Self::BadLayerPos { .. } => ddi::EINVAL,
+            Self::CopyinReq => ddi::EFAULT,
+            Self::CopyoutResp => ddi::EFAULT,
+            Self::DeserCmdErr(_) => ddi::ENOMSG,
+            Self::DeserCmdReq(_) => ddi::ENOMSG,
+            Self::InvalidRouteDest(_) => ddi::EINVAL,
+            Self::LayerNotFound(_) => ddi::ENOENT,
+            Self::PortNotFound(_) => ddi::ENOENT,
+            Self::RespTooLarge { .. } => ddi::ENOBUFS,
+            Self::RuleNotFound(_) => ddi::ENOENT,
+            Self::SerCmdErr(_) => ddi::ENOMSG,
+            Self::SerCmdResp(_) => ddi::ENOMSG,
+            Self::System { errno, .. } => *errno,
+        }
+    }
 }
 
 // TODO Currently I'm using this for parsing many different things. It

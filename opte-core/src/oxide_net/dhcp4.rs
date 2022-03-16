@@ -40,12 +40,12 @@ use crate::rule::{
     IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate, Rule,
 };
 use crate::udp::{UdpHdr, UdpMeta, UDP_HDR_SZ};
-use crate::Direction;
+use crate::{Direction, OpteError};
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
     cfg: &super::PortCfg,
-) -> Result<(), port::AddLayerError> {
+) -> Result<(), OpteError> {
     use smoltcp::wire::DhcpMessageType as SmolDMT;
 
     let offer = Action::Hairpin(Arc::new(Dhcp4Action {

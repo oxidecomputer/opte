@@ -30,23 +30,15 @@ use crate::rule::{ht_fire_probe, Action, Finalized, Rule, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::tcp::TcpState;
 use crate::tcp_state::{self, TcpFlowState};
-use crate::{Direction, ExecCtx};
+use crate::{Direction, ExecCtx, OpteError};
 
 pub const UFT_DEF_MAX_ENTIRES: u32 = 8192;
 
-#[derive(Clone, Debug)]
-pub enum Error {
-    BadLayerPos { name: String, pos: Pos },
-    LayerNotFound { name: String },
-    RuleNotFound { layer: String, dir: Direction, id: RuleId },
-}
-
-pub type Result<T> = result::Result<T, Error>;
+pub type Result<T> = result::Result<T, OpteError>;
 
 #[derive(Debug)]
 pub enum ProcessError {
     Layer(LayerError),
-    // ResourceError(ResourceError),
     WriteError(crate::packet::WriteError),
 }
 
@@ -123,11 +115,6 @@ impl<S: PortState> Port<S> {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum AddLayerError {
-    BadLayerPos(Pos),
-}
-
 impl Port<Inactive> {
     pub fn activate(self) -> Port<Active> {
         Port {
@@ -172,7 +159,7 @@ impl Port<Inactive> {
         &self,
         new_layer: Layer,
         pos: Pos,
-    ) -> result::Result<(), AddLayerError> {
+    ) -> result::Result<(), OpteError> {
         let mut lock = self.state.layers.lock();
 
         match pos {
@@ -205,7 +192,10 @@ impl Port<Inactive> {
             }
         }
 
-        Err(AddLayerError::BadLayerPos(pos))
+        Err(OpteError::BadLayerPos {
+            layer: new_layer.name().to_string(),
+            pos: format!("{:?}", pos),
+        })
     }
 
     /// Add a new `Rule` to the layer named by `layer`, if such a
@@ -215,7 +205,7 @@ impl Port<Inactive> {
         layer_name: &str,
         dir: Direction,
         rule: Rule<Finalized>,
-    ) -> result::Result<(), AddRuleError> {
+    ) -> result::Result<(), OpteError> {
         let lock = self.state.layers.lock();
 
         for layer in &*lock {
@@ -225,7 +215,7 @@ impl Port<Inactive> {
             }
         }
 
-        Err(AddRuleError::LayerNotFound)
+        Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
 
     /// List each [`Layer`] under this port.
@@ -271,20 +261,9 @@ impl Port<Inactive> {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum AddRuleError {
-    LayerNotFound,
-}
-
 #[derive(Clone, Debug)]
 pub enum DumpLayerError {
     LayerNotFound,
-}
-
-#[derive(Clone, Debug)]
-pub enum RemoveRuleError {
-    LayerNotFound,
-    RuleNotFound,
 }
 
 impl Port<Active> {
@@ -295,7 +274,7 @@ impl Port<Active> {
         layer_name: &str,
         dir: Direction,
         rule: Rule<Finalized>,
-    ) -> result::Result<(), AddRuleError> {
+    ) -> result::Result<(), OpteError> {
         for layer in &*self.state.layers {
             if layer.name() == layer_name {
                 layer.add_rule(dir, rule);
@@ -303,7 +282,7 @@ impl Port<Active> {
             }
         }
 
-        Err(AddRuleError::LayerNotFound)
+        Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
 
     // XXX While it's been helpful to panic on a bad packet for the
@@ -341,14 +320,14 @@ impl Port<Active> {
     pub fn dump_layer(
         &self,
         name: &str,
-    ) -> result::Result<ioctl::DumpLayerResp, DumpLayerError> {
+    ) -> result::Result<ioctl::DumpLayerResp, OpteError> {
         for l in &*self.state.layers {
             if l.name() == name {
                 return Ok(l.dump());
             }
         }
 
-        Err(DumpLayerError::LayerNotFound)
+        Err(OpteError::LayerNotFound(name.to_string()))
     }
 
     /// Dump the contents of the TCP flow connection tracking table.
@@ -956,16 +935,16 @@ impl Port<Active> {
         layer_name: &str,
         dir: Direction,
         id: RuleId,
-    ) -> result::Result<(), RemoveRuleError> {
+    ) -> result::Result<(), OpteError> {
         for layer in &self.state.layers {
             if layer.name() == layer_name {
                 if layer.remove_rule(dir, id).is_err() {
-                    return Err(RemoveRuleError::RuleNotFound);
+                    return Err(OpteError::RuleNotFound(id));
                 }
             }
         }
 
-        Err(RemoveRuleError::LayerNotFound)
+        Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
 }
 

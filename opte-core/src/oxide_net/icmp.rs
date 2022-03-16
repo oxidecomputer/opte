@@ -25,12 +25,12 @@ use crate::rule::{
     Action, DataPredicate, EtherAddrMatch, GenErr, GenResult, HairpinAction,
     IpProtoMatch, Ipv4AddrMatch, Predicate, Rule,
 };
-use crate::Direction;
+use crate::{Direction, OpteError};
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
     cfg: &super::PortCfg,
-) -> core::result::Result<(), port::AddLayerError> {
+) -> core::result::Result<(), OpteError> {
     let reply = Action::Hairpin(Arc::new(Icmp4Reply {
         gw_mac: cfg.gw_mac,
         gw_ip4: cfg.gw_ip,

@@ -530,9 +530,12 @@ pub const DDI_PSEUDO: *const c_char = b"ddi_pseudo\0".as_ptr() as *const c_char;
 
 pub const ENOENT: c_int = 2;
 pub const EAGAIN: c_int = 11;
+pub const ENOMEM: c_int = 12;
 pub const EFAULT: c_int = 14;
 pub const EBUSY: c_int = 16;
 pub const EINVAL: c_int = 22;
+pub const EPIPE: c_int = 32;
+pub const ENOMSG: c_int = 35;
 pub const ENOTSUP: c_int = 48;
 pub const EPROTO: c_int = 71;
 pub const ENOBUFS: c_int = 132;

@@ -1,14 +1,13 @@
 //! The ioctl interface.
 use core::convert::TryFrom;
+use core::fmt::Debug;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::String;
-        use alloc::sync::Arc;
         use alloc::vec::Vec;
     } else {
         use std::string::String;
-        use std::sync::Arc;
         use std::vec::Vec;
     }
 }
@@ -22,69 +21,62 @@ use crate::geneve::Vni;
 use crate::ip4::Ipv4Addr;
 use crate::ip6::Ipv6Addr;
 use crate::layer;
-use crate::oxide_net::{firewall as fw, overlay};
+use crate::oxide_net::firewall as fw;
 use crate::port;
 use crate::rule;
 use crate::vpc::VpcSubnet4;
+use crate::OpteError;
 
-const DLD_XDE_CREATE: i32 = ((0xde00u32 << 16) | 47) as i32;
-const DLD_XDE_DELETE: i32 = ((0xde00u32 << 16) | 48) as i32;
-const DLD_SET_VIRT_2_PHYS: i32 = ((0xde00u32 << 16) | 50u32) as i32;
-const DLD_GET_VIRT_2_PHYS: i32 = ((0xde00u32 << 16) | 51u32) as i32;
-const DLD_ADD_ROUTER_ENTRY_IPV4: i32 = ((0xde00u32 << 16) | 60u32) as i32;
-const DLD_ADD_FW_RULE: i32 = ((0xde00u32 << 16) | 20u32) as i32;
-const DLD_DUMP_LAYER: i32 = ((0xde00u32 << 16) | 31u32) as i32;
-const DLD_DUMP_UFT: i32 = ((0xde00u32 << 16) | 32u32) as i32;
-const DLD_LIST_LAYERS: i32 = ((0xde00u32 << 16) | 33u32) as i32;
+/// The overall version of the API. Anytmie an API is added, removed,
+/// or modified, this number should increment. Currently we attach no
+/// semantic meaning to the number other than as a means to verify
+/// that the user and kernel are compiled for the same API.
+///
+/// NOTE: Unfortunately this doesn't automatically catch changes to
+/// the API and upate itself. We must be vigilant to increment this
+/// number when modifying the API.
+///
+/// NOTE: A u64 is used to give future wiggle room to play bit games
+/// if neeeded.
+///
+/// NOTE: XXX This method of catching version mismatches is currently
+/// soft; better ideas are welcome.
+pub const API_VERSION: u64 = 1;
+
+pub const XDE_DLD_PREFIX: i32 = (0xde00u32 << 16) as i32;
+pub const XDE_DLD_OPTE_CMD: i32 = XDE_DLD_PREFIX | 7777;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
-pub enum IoctlCmd {
+pub enum OpteCmd {
     ListPorts = 1,           // list all ports
-    AddPort = 2,             // add new port
-    DeletePort = 3,          // delete a port
-    FwAddRule = 20,          // add firewall rule
-    FwRemRule = 21,          // remove firewall rule
+    AddFwRule = 20,          // add firewall rule
+    RemFwRule = 21,          // remove firewall rule
     DumpTcpFlows = 30,       // dump TCP flows
     DumpLayer = 31,          // dump the specified Layer
     DumpUft = 32,            // dump the Unified Flow Table
     ListLayers = 33,         // list the layers on a given port
-    SetOverlay = 40,         // set the overlay config
     SetVirt2Phys = 50,       // set a v2p mapping
+    DumpVirt2Phys = 51,      // dump the v2p mappings
     AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
-
-    DLDAddFwRule = DLD_ADD_FW_RULE as isize,
-    DLDDumpLayer = DLD_DUMP_LAYER as isize,
-    DLDDumpUft = DLD_DUMP_UFT as isize,
-    DLDListLayers = DLD_LIST_LAYERS as isize,
-    DLDXdeCreate = DLD_XDE_CREATE as isize,
-    DLDXdeDelete = DLD_XDE_DELETE as isize,
-    DLDSetVirt2Phys = DLD_SET_VIRT_2_PHYS as isize,
-    DLDGetVirt2Phys = DLD_GET_VIRT_2_PHYS as isize,
-    DLDAddRouterEntryIpv4 = DLD_ADD_ROUTER_ENTRY_IPV4 as isize,
+    CreateXde = 70,          // create a new xde device
+    DeleteXde = 71,          // delete an xde device
 }
 
-impl TryFrom<c_int> for IoctlCmd {
+impl TryFrom<c_int> for OpteCmd {
     type Error = ();
 
     fn try_from(num: c_int) -> Result<Self, Self::Error> {
         match num {
-            1 => Ok(IoctlCmd::ListPorts),
-            2 => Ok(IoctlCmd::AddPort),
-            3 => Ok(IoctlCmd::DeletePort),
-            20 => Ok(IoctlCmd::FwAddRule),
-            21 => Ok(IoctlCmd::FwRemRule),
-            30 => Ok(IoctlCmd::DumpTcpFlows),
-            40 => Ok(IoctlCmd::SetOverlay),
-            DLD_ADD_FW_RULE => Ok(IoctlCmd::DLDAddRouterEntryIpv4),
-            DLD_DUMP_LAYER => Ok(IoctlCmd::DLDDumpLayer),
-            DLD_DUMP_UFT => Ok(IoctlCmd::DLDDumpUft),
-            DLD_LIST_LAYERS => Ok(IoctlCmd::DLDListLayers),
-            DLD_XDE_CREATE => Ok(IoctlCmd::DLDXdeCreate),
-            DLD_XDE_DELETE => Ok(IoctlCmd::DLDXdeDelete),
-            DLD_SET_VIRT_2_PHYS => Ok(IoctlCmd::DLDSetVirt2Phys),
-            DLD_GET_VIRT_2_PHYS => Ok(IoctlCmd::DLDGetVirt2Phys),
-            DLD_ADD_ROUTER_ENTRY_IPV4 => Ok(IoctlCmd::DLDAddRouterEntryIpv4),
+            1 => Ok(Self::ListPorts),
+            20 => Ok(Self::AddFwRule),
+            21 => Ok(Self::RemFwRule),
+            30 => Ok(Self::DumpTcpFlows),
+            50 => Ok(Self::SetVirt2Phys),
+            51 => Ok(Self::DumpVirt2Phys),
+            60 => Ok(Self::AddRouterEntryIpv4),
+            70 => Ok(Self::CreateXde),
+            71 => Ok(Self::DeleteXde),
             _ => Err(()),
         }
     }
@@ -96,91 +88,6 @@ pub trait CmdOk: core::fmt::Debug + Serialize {}
 
 // Use the unit type to indicate no meaningful response value on success.
 impl CmdOk for () {}
-
-/// A marker trait indicating an error response type that is returned
-/// from a command and may be passed across the ioctl/API boundary.
-pub trait CmdErr: Clone + core::fmt::Debug + Serialize {}
-
-// Use the unit type to indicate that the command is infalliable.
-impl CmdErr for () {}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum PortError {
-    Active,
-    Exists,
-    Inactive,
-    MacOpenFailed(c_int),
-    NotFound,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum AddPortError {
-    Exists,
-    MacOpenFailed(c_int),
-}
-
-impl CmdErr for AddPortError {}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum DeletePortError {
-    InUse,
-    NotFound,
-}
-
-impl CmdErr for DeletePortError {}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum AddFwRuleError {
-    FirewallNotEnabled,
-    PortError(PortError),
-}
-
-impl CmdErr for AddFwRuleError {}
-
-impl From<PortError> for AddFwRuleError {
-    fn from(e: PortError) -> Self {
-        Self::PortError(e)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum RemFwRuleError {
-    FirewallNotEnabled,
-    PortError(PortError),
-    RuleNotFound,
-}
-
-impl CmdErr for RemFwRuleError {}
-
-impl From<PortError> for RemFwRuleError {
-    fn from(e: PortError) -> Self {
-        Self::PortError(e)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum DumpLayerError {
-    LayerNotFound,
-    PortError(PortError),
-}
-
-impl CmdErr for DumpLayerError {}
-
-impl From<PortError> for DumpLayerError {
-    fn from(e: PortError) -> Self {
-        Self::PortError(e)
-    }
-}
-
-impl From<port::DumpLayerError> for DumpLayerError {
-    fn from(e: port::DumpLayerError) -> Self {
-        use port::DumpLayerError as Dle;
-
-        match e {
-            Dle::LayerNotFound => Self::LayerNotFound,
-        }
-    }
-}
 
 /// Dump various information about a `Layer` for use in debugging or
 /// administrative purposes.
@@ -232,13 +139,6 @@ pub struct ListLayersResp {
 
 impl CmdOk for ListLayersResp {}
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum ListLayersError {
-    PortError(PortError),
-}
-
-impl CmdErr for ListLayersError {}
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpUftReq {
     pub port_name: String,
@@ -256,19 +156,6 @@ pub struct DumpUftResp {
 
 impl CmdOk for DumpUftResp {}
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum DumpUftError {
-    PortError(PortError),
-}
-
-impl CmdErr for DumpUftError {}
-
-impl From<PortError> for DumpUftError {
-    fn from(e: PortError) -> Self {
-        Self::PortError(e)
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpTcpFlowsReq {
     pub port_name: String,
@@ -281,23 +168,10 @@ pub struct DumpTcpFlowsResp {
 
 impl CmdOk for DumpTcpFlowsResp {}
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum DumpTcpFlowsError {
-    PortError(PortError),
-}
-
-impl CmdErr for DumpTcpFlowsError {}
-
-impl From<PortError> for DumpTcpFlowsError {
-    fn from(e: PortError) -> Self {
-        Self::PortError(e)
-    }
-}
-
 pub fn add_fw_rule(
     port: &port::Port<port::Active>,
-    req: &fw::FwAddRuleReq,
-) -> Result<(), AddFwRuleError> {
+    req: &fw::AddFwRuleReq,
+) -> Result<(), OpteError> {
     let action = match req.rule.action {
         fw::Action::Allow => {
             port.layer_action(fw::FW_LAYER_NAME, 0).unwrap().clone()
@@ -307,38 +181,21 @@ pub fn add_fw_rule(
     };
 
     let rule = fw::from_fw_rule(req.rule.clone(), action);
-
-    let res = port.add_rule(fw::FW_LAYER_NAME, req.rule.direction, rule);
-
-    match res {
-        Ok(()) => Ok(()),
-        Err(port::AddRuleError::LayerNotFound) => {
-            Err(AddFwRuleError::FirewallNotEnabled)
-        }
-    }
+    port.add_rule(fw::FW_LAYER_NAME, req.rule.direction, rule)
 }
 
 pub fn rem_fw_rule(
     port: &port::Port<port::Active>,
-    req: &fw::FwRemRuleReq,
-) -> Result<(), RemFwRuleError> {
-    let res = port.remove_rule(fw::FW_LAYER_NAME, req.dir, req.id);
-    match res {
-        Ok(()) => Ok(()),
-        Err(port::RemoveRuleError::LayerNotFound) => {
-            Err(RemFwRuleError::FirewallNotEnabled)
-        }
-        Err(port::RemoveRuleError::RuleNotFound) => {
-            Err(RemFwRuleError::RuleNotFound)
-        }
-    }
+    req: &fw::RemFwRuleReq,
+) -> Result<(), OpteError> {
+    port.remove_rule(fw::FW_LAYER_NAME, req.dir, req.id)
 }
 
 pub fn dump_layer(
     port: &port::Port<port::Active>,
     req: &DumpLayerReq,
-) -> Result<DumpLayerResp, DumpLayerError> {
-    port.dump_layer(&req.name).map_err(DumpLayerError::from)
+) -> Result<DumpLayerResp, OpteError> {
+    port.dump_layer(&req.name)
 }
 
 pub fn dump_tcp_flows(
@@ -355,27 +212,73 @@ pub fn dump_uft(
     port.dump_uft()
 }
 
-pub fn set_overlay(
-    port: &port::Port<port::Inactive>,
-    req: &overlay::SetOverlayReq,
-    v2p: Arc<overlay::Virt2Phys>,
-) {
-    overlay::setup(port, &req.cfg, v2p);
-}
+/// Indicates that a command response has been written to the response
+/// buffer (`resp_bytes`).
+pub const OPTE_CMD_RESP_COPY_OUT: u64 = 0x1;
 
-// We need repr(C) for a stable layout across compilations. This is a
-// generic structure for all ioctls, the actual request/response data
-// is serialized/deserialized by serde. In the future, if we need this
-// to work with non-Rust programs in illumos, we could write an nvlist
-// provider that works with serde.
+/// The `ioctl(2)` argument passed when sending an `OpteCmd`.
+///
+/// We need `repr(C)` for a stable layout across compilations. This is
+/// a generic structure used to carry the various commands; the
+/// command's actual request/response data is serialized/deserialized
+/// by serde into the user supplied pointers in
+/// `req_bytes`/`resp_bytes`. In the future, if we need this to work
+/// with non-Rust programs in illumos, we could write an nvlist
+/// provider that works with serde.
 #[derive(Debug)]
 #[repr(C)]
-pub struct Ioctl {
+pub struct OpteCmdIoctl {
+    pub api_version: u64,
+    pub cmd: OpteCmd,
+    pub flags: u64,
+    // Reserve some additional bytes in case we need them in the
+    // future.
+    pub reserved1: u64,
     pub req_bytes: *const u8,
     pub req_len: size_t,
     pub resp_bytes: *mut u8,
     pub resp_len: size_t,
-    pub resp_len_needed: size_t,
+    pub resp_len_actual: size_t,
+}
+
+impl OpteCmdIoctl {
+    pub fn cmd_err_resp(&self) -> Option<OpteError> {
+        if self.has_cmd_resp() {
+            // Safety: We know the resp_bytes point to a Vec and that
+            // resp_len_actual is within range.
+            let resp = unsafe {
+                core::slice::from_raw_parts(
+                    self.resp_bytes,
+                    self.resp_len_actual,
+                )
+            };
+
+            match postcard::from_bytes(resp) {
+                Ok(cmd_err) => Some(cmd_err),
+                Err(deser_err) => {
+                    Some(OpteError::DeserCmdErr(format!("{}", deser_err)))
+                }
+            }
+        } else {
+            None
+        }
+    }
+
+    fn has_cmd_resp(&self) -> bool {
+        (self.flags & OPTE_CMD_RESP_COPY_OUT) != 0
+    }
+}
+
+impl OpteCmdIoctl {
+    /// Is this the expected API version?
+    ///
+    /// NOTE: This function is compiled twice: once for the userland
+    /// client, again for the kernel driver. As long as we remember to
+    /// update the `API_VERSION` value when making API changes, this
+    /// method will return `false` when user and kernel disagree.
+    pub fn check_version(&self) -> bool {
+        self.api_version == API_VERSION
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -451,8 +354,9 @@ pub struct DeleteXdeReq {
     pub xde_devname: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct XdeError {
-    code: i32, // standard error code such as EINVAL
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct NoResp {
+    pub unused: u64,
 }
-impl CmdErr for XdeError {}
+
+impl CmdOk for NoResp {}

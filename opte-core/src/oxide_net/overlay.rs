@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use crate::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV6};
 use crate::geneve::{GeneveMeta, Vni, GENEVE_PORT};
 use crate::headers::{HeaderAction, IpAddr};
-use crate::ioctl::{self, CmdErr};
 use crate::ip4::{Ipv4Addr, Protocol};
 use crate::ip6::{Ipv6Addr, Ipv6Meta};
 use crate::layer::{InnerFlowId, Layer};
@@ -30,7 +29,7 @@ use crate::port::{self, Port, Pos};
 use crate::rule::{self, Action, Rule, StaticAction, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::udp::UdpMeta;
-use crate::Direction;
+use crate::{Direction, OpteError};
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 
@@ -45,7 +44,7 @@ pub fn setup(
     port: &Port<port::Inactive>,
     cfg: &OverlayCfg,
     v2p: Arc<Virt2Phys>,
-) {
+) -> core::result::Result<(), OpteError> {
     // Action Index 0
     let encap = Action::Static(Arc::new(EncapAction::new(
         cfg.boundary_services,
@@ -63,7 +62,7 @@ pub fn setup(
     layer.add_rule(Direction::In, decap_rule.match_any());
     // NOTE The First/Last positions cannot fail; perhaps I should
     // improve the API to avoid the unwrap().
-    port.add_layer(layer, Pos::Last).unwrap();
+    port.add_layer(layer, Pos::Last)
 }
 
 pub const DECAP_NAME: &'static str = "decap";
@@ -312,19 +311,6 @@ pub struct SetOverlayReq {
     pub cfg: OverlayCfg,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum SetOverlayError {
-    PortError(ioctl::PortError),
-}
-
-impl CmdErr for SetOverlayError {}
-
-impl From<ioctl::PortError> for SetOverlayError {
-    fn from(e: ioctl::PortError) -> Self {
-        Self::PortError(e)
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SetVirt2PhysReq {
     pub vip: IpAddr,
@@ -333,14 +319,14 @@ pub struct SetVirt2PhysReq {
 
 #[repr(C)]
 #[derive(Debug, Deserialize, Serialize)]
-pub struct GetVirt2PhysReq {
+pub struct DumpVirt2PhysReq {
     pub unused: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct GetVirt2PhysResp {
+pub struct DumpVirt2PhysResp {
     pub ip4: BTreeMap<Ipv4Addr, PhysNet>,
     pub ip6: BTreeMap<Ipv6Addr, PhysNet>,
 }
 
-impl crate::ioctl::CmdOk for GetVirt2PhysResp {}
+impl crate::ioctl::CmdOk for DumpVirt2PhysResp {}

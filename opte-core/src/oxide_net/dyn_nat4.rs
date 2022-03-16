@@ -13,12 +13,12 @@ use crate::layer::Layer;
 use crate::nat::{DynNat4, NatPool};
 use crate::port::{self, Port, Pos};
 use crate::rule::{Action, IpProtoMatch, Ipv4AddrMatch, Predicate, Rule};
-use crate::Direction;
+use crate::{Direction, OpteError};
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
     cfg: &super::PortCfg,
-) -> core::result::Result<(), port::AddLayerError> {
+) -> core::result::Result<(), OpteError> {
     let mut pool = NatPool::new();
     pool.add(cfg.private_ip, cfg.dyn_nat.public_ip, cfg.dyn_nat.ports.clone());
 

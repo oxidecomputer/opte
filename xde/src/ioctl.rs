@@ -1,43 +1,17 @@
-// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-//
-// TODO this is complete copy pasta with opte-drv/src/ioctl.rs - just trying to
-// keep things separated for the moment.
-//
-// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use core::mem::{self, MaybeUninit};
 use core::result;
 
 use ddi::{c_int, c_void};
 use illumos_ddi_dki as ddi;
 
-use opte_core::ioctl::{CmdErr, CmdOk, Ioctl};
-use opte_core::CString;
+use opte_core::ioctl::{CmdOk, OpteCmdIoctl, OPTE_CMD_RESP_COPY_OUT};
+use opte_core::{CString, OpteError};
 
 use postcard;
 
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Deserialize, Serialize)]
-pub enum Error {
-    DeserError(String),
-    FailedCopyin,
-    FailedCopyout,
-    RespTooLong,
-}
-
-pub type Result<T> = result::Result<T, Error>;
-
-pub fn to_errno(e: Error) -> c_int {
-    match e {
-        Error::DeserError(_) => ddi::EINVAL,
-        Error::RespTooLong => ddi::ENOBUFS,
-        _ => ddi::EFAULT,
-    }
-}
+use serde::Serialize;
 
 extern "C" {
     fn __dtrace_probe_copy__out__resp(resp_str: ddi::uintptr_t);
@@ -53,110 +27,44 @@ fn dtrace_probe_copy_out_resp<T: Debug + Serialize>(resp: &T) {
 /// An envelope for dealing with `Ioctl`. It contains all information
 /// needed to deserialize the user's request and serialize the
 /// kernel's response.
-pub struct IoctlEnvelope {
-    //The kernel-side copy of the user's `Ioctl`.
-    ioctl: Ioctl,
-
-    // A pointer to the user's copy of the `Ioctl`.
-    arg_ptr: *const c_void,
+#[derive(Debug)]
+pub struct IoctlEnvelope<'a> {
+    // The kernel-side copy of the user's ioctl(2) argument.
+    ioctl: &'a mut OpteCmdIoctl,
 
     // A copy of the `mode` argument passed to the ioctl(9E)
     // interface.
     mode: c_int,
 }
 
-impl IoctlEnvelope {
-    /// Safety: The `arg_ptr` should come directly from the `arg`
-    /// argument passed to the `ioctl(9E)` callback.
-    pub unsafe fn new(arg_ptr: *const c_void, mode: c_int) -> Result<Self> {
-        let mut ioctl = MaybeUninit::<Ioctl>::uninit();
-
-        let ret = ddi::ddi_copyin(
-            arg_ptr,
-            ioctl.as_mut_ptr() as *mut c_void,
-            mem::size_of::<Ioctl>(),
-            mode,
-        );
-
-        if ret != 0 {
-            return Err(Error::FailedCopyin);
-        }
-
-        let ioctl = ioctl.assume_init();
-        Ok(IoctlEnvelope { ioctl, arg_ptr, mode })
+impl<'a> IoctlEnvelope<'a> {
+    pub fn ioctl_cmd(&self) -> opte_core::ioctl::OpteCmd {
+        self.ioctl.cmd
     }
 
-    fn copy_out_self(&self) -> Result<()> {
-        // Safety: We know the `self.ioctl` pointer is valid as our
-        // `new()` constructor made the allocation. We also know the
-        // `self.arg` pointer is valid as long as the caller obeyed
-        // the safety invariant of the constructor: that it's
-        // `arg_ptr` be the `arg` passed to `ioctl(9E)`.
-        let ret = unsafe {
-            ddi::ddi_copyout(
-                &self.ioctl as *const Ioctl as *const c_void,
-                self.arg_ptr as *mut c_void,
-                mem::size_of::<Ioctl>(),
-                self.mode,
-            )
-        };
+    /// Safety: The `karg` should come directly from the `karg`
+    /// argument passed to the `dld_ioc_info_t` callback.
+    pub unsafe fn wrap(
+        ioctl: &'a mut OpteCmdIoctl,
+        mode: c_int,
+    ) -> result::Result<Self, c_int> {
+        if !ioctl.check_version() {
+            let badver = OpteError::BadApiVersion {
+                user: ioctl.api_version,
+                kernel: opte_core::ioctl::API_VERSION,
+            };
 
-        if ret != 0 {
-            return Err(Error::FailedCopyout);
+            let _ = Self::copy_out_resp_i::<()>(ioctl, &Err(badver), mode);
+            return Err(ddi::EPROTO);
         }
 
-        Ok(())
-    }
-
-    /// Take any type which implements `Serialize`, serialize it, and
-    /// then `ddi_copyoyt(9F)` it to the user address specified in
-    /// `resp_bytes`. Return an error if the `resp_len` indicates that
-    /// the user buffer is not large enough to hold the serialized
-    /// bytes.
-    pub fn copy_out_resp<T, E>(
-        &mut self,
-        val: &result::Result<T, E>,
-    ) -> Result<()>
-    where
-        E: CmdErr,
-        T: CmdOk,
-    {
-        dtrace_probe_copy_out_resp(val);
-
-        // We expect the kernel to pass values of `T` which will
-        // serialize, thus the use of `unwrap()`.
-        let vec = postcard::to_allocvec(val).unwrap();
-        self.ioctl.resp_len_needed = vec.len();
-
-        if vec.len() > self.ioctl.resp_len {
-            self.copy_out_self()?;
-            return Err(Error::RespTooLong);
-        }
-
-        // Safety: We know the `vec` pointer is valid as we just
-        // created it. We assume the `resp_bytes` pointer is valid,
-        // but since it's coming from userspace it could be anything.
-        // However, it is `ddi_copyout()`'s job to protect against an
-        // invalid pointer, not ours.
-        let ret = unsafe {
-            ddi::ddi_copyout(
-                vec.as_ptr() as *const c_void,
-                self.ioctl.resp_bytes as *mut c_void,
-                vec.len(),
-                self.mode,
-            )
-        };
-
-        if ret != 0 {
-            return Err(Error::FailedCopyout);
-        }
-
-        self.copy_out_self()?;
-        Ok(())
+        Ok(Self { ioctl, mode })
     }
 
     /// Given `self`, return the deserialized ioctl request.
-    pub fn copy_in_req<T: DeserializeOwned>(&self) -> Result<T> {
+    pub fn copy_in_req<T: DeserializeOwned>(
+        &mut self,
+    ) -> result::Result<T, OpteError> {
         // TODO place upper limit on req_len to prevent
         // malicious/malformed requests from allocating large amounts
         // of kmem.
@@ -171,7 +79,8 @@ impl IoctlEnvelope {
         };
 
         if ret != 0 {
-            return Err(Error::FailedCopyin);
+            let _ = self.copy_out_resp::<()>(&Err(OpteError::CopyinReq));
+            return Err(OpteError::CopyinReq);
         }
 
         // Safety: We know the `Vec` has `req_len` capacity, and that
@@ -184,8 +93,86 @@ impl IoctlEnvelope {
         match postcard::from_bytes(&bytes) {
             Ok(val) => Ok(val),
             Err(deser_error) => {
-                Err(Error::DeserError(format!("{}", deser_error)))
+                Err(OpteError::DeserCmdReq(format!("{}", deser_error)))
             }
         }
+    }
+
+    fn copy_out_resp_i<T>(
+        ioctl: &mut OpteCmdIoctl,
+        resp: &result::Result<T, OpteError>,
+        mode: c_int,
+    ) -> c_int
+    where
+        T: CmdOk,
+    {
+        dtrace_probe_copy_out_resp(resp);
+        let ser_result = match resp {
+            Ok(v) => postcard::to_allocvec(v)
+                .map_err(|e| OpteError::SerCmdResp(format!("{}", e))),
+
+            Err(e) => postcard::to_allocvec(e)
+                .map_err(|e| OpteError::SerCmdErr(format!("{}", e))),
+        };
+
+        // We failed to serialize the response, communicate this with ENOMSG.
+        if let Err(_) = ser_result {
+            // XXX In this case we aren't trying to serialize +
+            // copyout the serialization error. We should do that so
+            // there is more context for the caller.
+            return ddi::ENOMSG;
+        }
+
+        let vec = ser_result.unwrap();
+        ioctl.resp_len_actual = vec.len();
+
+        if vec.len() > ioctl.resp_len {
+            return ddi::ENOBUFS;
+        }
+
+        // Safety: We know the `vec` pointer is valid as we just
+        // created it. We assume the `resp_bytes` pointer is valid,
+        // but since it's coming from userspace it could be anything.
+        // However, it is `ddi_copyout()`'s job to protect against an
+        // invalid pointer, not ours.
+        let ret = unsafe {
+            ddi::ddi_copyout(
+                vec.as_ptr() as *const c_void,
+                ioctl.resp_bytes as *mut c_void,
+                vec.len(),
+                mode,
+            )
+        };
+
+        if ret != 0 {
+            // We failed to copyout, respond with the recommended
+            // EFAULT.
+            return ddi::EFAULT;
+        } else {
+            // We successfully copied out a response. If the response
+            // is a command error, set the errno based on the type of
+            // error.
+            ioctl.flags |= OPTE_CMD_RESP_COPY_OUT;
+            if let Err(err) = resp {
+                err.to_errno()
+            } else {
+                0
+            }
+        }
+    }
+
+    /// Take any type which implements `Serialize`, serialize it, and
+    /// then `ddi_copyoyt(9F)` it to the user address specified in
+    /// `resp_bytes`. Return an error if the `resp_len` indicates that
+    /// the user buffer is not large enough to hold the serialized
+    /// bytes.
+    pub fn copy_out_resp<T>(
+        &mut self,
+        val: &result::Result<T, OpteError>,
+    ) -> c_int
+    where
+        T: CmdOk,
+    {
+        Self::copy_out_resp_i(self.ioctl, val, self.mode)
     }
 }
