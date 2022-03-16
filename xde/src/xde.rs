@@ -1442,6 +1442,8 @@ fn new_port(
     };
     let mut new_port = Port::new(&xde_dev_name, private_mac, ectx);
     opte_core::oxide_net::firewall::setup(&mut new_port).unwrap();
+    opte_core::oxide_net::dhcp4::setup(&mut new_port, &port_cfg).unwrap();
+    opte_core::oxide_net::icmp::setup(&mut new_port, &port_cfg).unwrap();
     if snat.is_some() {
         opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg)
             .unwrap();
