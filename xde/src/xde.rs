@@ -128,9 +128,6 @@ struct XdeDev {
     // opte-core processing.
     passthrough: bool,
 
-    // For the moment we assume a VNI uniquely identifies a port within a host.
-    // This may be changed later such that a VNI plus something like an inner
-    // packet destination IP is needed.
     vni: u32,
 
     // these are clones of the underlay ports initialized by the driver
@@ -1240,30 +1237,42 @@ unsafe extern "C" fn xde_rx(
         }
     };
 
+    let hdrs = pkt.headers();
+
     // determine where to send packet based on geneve vni
-    let outer = match pkt.headers().outer {
+    let outer = match hdrs.outer {
         Some(ref outer) => outer,
         None => {
+            // TODO add SDT probe
+            // TODO add stat
             warn!("no outer header, dropping");
             return;
         }
     };
+
     let geneve = match outer.encap {
         Some(ref geneve) => geneve,
         None => {
+            // TODO add SDT probe
+            // TODO add stat
             warn!("no geneve header, dropping");
             return;
         }
     };
 
-    let devs = xde_devs.read();
-
     //TODO create a fast lookup table
+    let devs = xde_devs.read();
     let vni = geneve.vni.value();
-    let dev = match devs.iter().find(|x| x.vni == vni) {
+    let ether_dst = hdrs.inner.ether.dst();
+    let dev = match devs
+        .iter()
+        .find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
+    {
         Some(dev) => dev,
         None => {
-            warn!("no device for vni = {}, dropping", vni);
+            // TODO add SDT probe
+            // TODO add stat
+            warn!("no device found for vni: {} mac: {}", vni, ether_dst);
             return;
         }
     };
