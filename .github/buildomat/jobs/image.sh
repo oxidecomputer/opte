@@ -25,6 +25,7 @@ set -o xtrace
 
 cargo --version
 rustc --version
+rustup component add rust-src --toolchain nightly
 
 banner build
 pushd opteadm
