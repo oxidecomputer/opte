@@ -25,7 +25,11 @@ set -o xtrace
 
 cargo --version
 rustc --version
+
+# for xde build
 rustup component add rust-src --toolchain nightly
+# for package build
+rustup toolchain install stable
 
 banner build
 pushd opteadm
