@@ -382,7 +382,7 @@ pub unsafe extern "C" fn nodev_ioctl(
     _credp: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-    0
+    nodev()
 }
 
 #[no_mangle]
@@ -391,7 +391,7 @@ pub unsafe extern "C" fn nodev_write(
     _uiop: *mut uio,
     _credp: *mut cred_t,
 ) -> c_int {
-    0
+    nodev()
 }
 
 // Many of these fields are not needed at the moment and thus defined

@@ -129,8 +129,6 @@ const OPTE_CTL_MINOR: minor_t = 0;
 static mut opte_dip: *mut dev_info = ptr::null_mut::<c_void>() as *mut dev_info;
 
 // This block is purely for SDT probes.
-//
-// TODO Need to migrate all of these to xde
 extern "C" {
     fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
     fn __dtrace_probe_rx(mp: uintptr_t);

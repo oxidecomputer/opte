@@ -50,6 +50,9 @@ static mut xde_dip: *mut dev_info = 0 as *mut dev_info;
 extern "C" {
     pub fn __dtrace_probe_bad__packet(mp: uintptr_t, msg: uintptr_t);
     pub fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
+    pub fn __dtrace_probe_rx(mp: uintptr_t);
+    pub fn __dtrace_probe_rx__chain__todo(mp: uintptr_t);
+    pub fn __dtrace_probe_tx(mp: uintptr_t);
 }
 
 fn bad_packet_probe(mp: uintptr_t, err: &ParseError) {
@@ -876,6 +879,8 @@ unsafe extern "C" fn xde_mc_tx(
     // always just one.
     assert!((*mp_chain).b_next == ptr::null_mut());
 
+    __dtrace_probe_tx(mp_chain as uintptr_t);
+
     // TODO Arbitrarily choose u1, later when we integrate with DDM
     // we'll have the information needed to make a real choice.
     let mch = (*dev).u1.mch;
@@ -1222,6 +1227,14 @@ unsafe extern "C" fn xde_rx(
     mp_chain: *mut mblk_t,
     _is_loopback: boolean_t,
 ) {
+    // XXX Need to deal with chains. This was an assert but it's
+    // blocking other work that's more pressing at the moment as I
+    // keep tripping it.
+    if !(*mp_chain).b_next.is_null() {
+        __dtrace_probe_rx__chain__todo(mp_chain as uintptr_t);
+    }
+    __dtrace_probe_rx(mp_chain as uintptr_t);
+
     // first parse the packet so we can get at the geneve header
     let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
         Ok(pkt) => pkt,
