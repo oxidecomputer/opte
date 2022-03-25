@@ -33,7 +33,7 @@ rustup toolchain install stable
 
 banner build
 pushd opteadm
-ptime -m cargo build --release --verbose
+cargo +nightly build --release --verbose
 popd
 
 pushd xde
@@ -42,7 +42,7 @@ popd
 
 banner image
 pushd package
-ptime -m cargo +stable run
+cargo +stable run
 
 banner contents
 tar tvfz out/opte.tar.gz
