@@ -1,0 +1,15 @@
+[package.opte]
+service_name = "opte"
+zone = true
+[[package.opte.paths]]
+from = "smf/opte"
+to = "/var/svc/manifest/site/opte"
+[[package.opte.paths]]
+from = "../xde/xde"
+to = "/kernel/drv/amd64/xde"
+[[package.opte.paths]]
+from = "smf/opte_method_script.sh"
+to = "/opt/oxide/opte/bin/opte_method_script.sh"
+[[package.opte.paths]]
+from = "../opteadm/target/release/opteadm"
+to = "/opt/oxide/opte/bin/opteadm"
