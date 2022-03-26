@@ -103,7 +103,8 @@ fn lab_cfg() -> oxide_net::PortCfg {
 
 fn oxide_net_setup(name: &str, cfg: &oxide_net::PortCfg) -> Port<Inactive> {
     let ectx = Arc::new(ExecCtx { log: Box::new(crate::PrintlnLog {}) });
-    let mut port = Port::new(name, cfg.private_mac, ectx.clone());
+    let name_cstr = crate::CString::new(name).unwrap();
+    let mut port = Port::new(name, name_cstr, cfg.private_mac, ectx.clone());
 
     // ================================================================
     // Firewall layer

@@ -24,7 +24,7 @@ use crate::ioctl::IoctlEnvelope;
 use crate::{dld, dls, ip, mac, secpolicy, sys, warn};
 use opte_core::ether::EtherAddr;
 use opte_core::geneve::Vni;
-use opte_core::headers::{IpCidr, IpHdr};
+use opte_core::headers::IpCidr;
 use opte_core::ioctl::{
     self as api, CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, SnatCfg,
 };
@@ -49,7 +49,20 @@ static mut xde_dip: *mut dev_info = 0 as *mut dev_info;
 // This block is purely for SDT probes.
 extern "C" {
     pub fn __dtrace_probe_bad__packet(mp: uintptr_t, msg: uintptr_t);
+    pub fn __dtrace_probe_guest__loopback(
+        mp: uintptr_t,
+        flow: uintptr_t,
+        src_port: uintptr_t,
+        dst_port: uintptr_t,
+    );
     pub fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
+    pub fn __dtrace_probe_next__hop(
+        dst: uintptr_t,
+        gw: uintptr_t,
+        gw_ether_src: uintptr_t,
+        gw_ether_dst: uintptr_t,
+        msg: uintptr_t,
+    );
     pub fn __dtrace_probe_rx(mp: uintptr_t);
     pub fn __dtrace_probe_rx__chain__todo(mp: uintptr_t);
     pub fn __dtrace_probe_tx(mp: uintptr_t);
@@ -58,6 +71,26 @@ extern "C" {
 fn bad_packet_probe(mp: uintptr_t, err: &ParseError) {
     let msg_arg = CString::new(format!("{:?}", err)).unwrap();
     unsafe { __dtrace_probe_bad__packet(mp, msg_arg.as_ptr() as uintptr_t) };
+}
+
+fn next_hop_probe(
+    dst: &Ipv6Addr,
+    gw: Option<&Ipv6Addr>,
+    gw_eth_src: EtherAddr,
+    gw_eth_dst: EtherAddr,
+    msg: &[u8],
+) {
+    let gw_bytes = gw.unwrap_or(&Ipv6Addr::from([0u8; 16])).to_bytes();
+
+    unsafe {
+        __dtrace_probe_next__hop(
+            dst.to_bytes().as_ptr() as uintptr_t,
+            gw_bytes.as_ptr() as uintptr_t,
+            gw_eth_src.to_bytes().as_ptr() as uintptr_t,
+            gw_eth_dst.to_bytes().as_ptr() as uintptr_t,
+            msg.as_ptr() as uintptr_t,
+        );
+    }
 }
 
 #[repr(u64)]
@@ -813,6 +846,9 @@ unsafe extern "C" fn xde_mc_getstat(
     ENOTSUP
 }
 
+// The mac framework calls this when the first client has opened the
+// xde device. From ths point on we know that this port is in use and
+// remains in use until `xde_mc_stop()` is called.
 #[no_mangle]
 unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
     let dev = arg as *mut XdeDev;
@@ -820,6 +856,8 @@ unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
     0
 }
 
+// The mac framework calls this when the last client closes its handle
+// to the device. At this point we know the port is no longer in use.
 #[no_mangle]
 unsafe extern "C" fn xde_mc_stop(arg: *mut c_void) {
     let dev = arg as *mut XdeDev;
@@ -858,14 +896,110 @@ unsafe extern "C" fn xde_mc_unicst(
     0
 }
 
+fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
+    use opte_core::rule::flow_id_sdt_arg;
+
+    let fid = opte_core::layer::InnerFlowId::from(pkt.meta());
+    let fid_arg = flow_id_sdt_arg::from(&fid);
+
+    unsafe {
+        __dtrace_probe_guest__loopback(
+            pkt.mblk_addr(),
+            &fid_arg as *const flow_id_sdt_arg as uintptr_t,
+            src.port.name_cstr().as_ptr() as uintptr_t,
+            dst.port.name_cstr().as_ptr() as uintptr_t,
+        )
+    };
+}
+
+#[no_mangle]
+fn guest_loopback(
+    src_dev: &XdeDev,
+    mut pkt: Packet<Parsed>,
+    vni: Vni,
+) -> *mut mblk_t {
+    let devs = unsafe { xde_devs.read() };
+    let ether_dst = pkt.headers().inner.ether.dst();
+
+    match devs
+        .iter()
+        .find(|x| x.vni == vni.value() && x.port.mac_addr() == ether_dst)
+    {
+        Some(dest_dev) => {
+            // We have found a matching Port on this host; "loop back"
+            // the packet into the inbound processing path of the
+            // destination Port.
+            match dest_dev.port.process(Direction::In, &mut pkt) {
+                Ok(ProcessResult::Modified) => {
+                    guest_loopback_probe(&pkt, src_dev, dest_dev);
+
+                    unsafe {
+                        mac::mac_rx(
+                            (*dest_dev).mh,
+                            0 as *mut mac::mac_resource_handle,
+                            pkt.unwrap(),
+                        )
+                    };
+                    return ptr::null_mut();
+                }
+
+                Ok(ProcessResult::Drop { reason }) => {
+                    warn!("loopback rx drop: {:?}", reason);
+                    return ptr::null_mut();
+                }
+
+                Ok(ProcessResult::Hairpin(_hppkt)) => {
+                    // There should be no reason for an loopback
+                    // inbound packet to generate a hairpin response
+                    // from the destination port.
+                    warn!("unexpected loopback rx hairpin");
+                    return ptr::null_mut();
+                }
+
+                Ok(ProcessResult::Bypass) => {
+                    warn!("loopback rx bypass");
+                    unsafe {
+                        mac::mac_rx(
+                            (*dest_dev).mh,
+                            0 as *mut mac::mac_resource_handle,
+                            pkt.unwrap(),
+                        )
+                    };
+                    return ptr::null_mut();
+                }
+
+                Err(e) => {
+                    warn!(
+                        "loopback port process error: {} -> {} {:?}",
+                        src_dev.port.name(),
+                        dest_dev.port.name(),
+                        e
+                    );
+                    return ptr::null_mut();
+                }
+            }
+        }
+
+        None => {
+            warn!(
+                "underlay dest is same as src but the Port was not found \
+                 vni = {}, mac = {}",
+                vni.value(),
+                ether_dst
+            );
+            return ptr::null_mut();
+        }
+    }
+}
+
 #[no_mangle]
 unsafe extern "C" fn xde_mc_tx(
     arg: *mut c_void,
     mp_chain: *mut mblk_t,
 ) -> *mut mblk_t {
     // The device must be started before we can transmit.
-    let dev = arg as *mut XdeDev;
-    if ((*dev).flags | XdeDeviceFlags::Started as u64) == 0 {
+    let src_dev = &*(arg as *mut XdeDev);
+    if (src_dev.flags | XdeDeviceFlags::Started as u64) == 0 {
         // It's okay to call mac_drop_chain() here as we have not yet
         // handed ownership off to Packet.
         mac::mac_drop_chain(
@@ -878,31 +1012,7 @@ unsafe extern "C" fn xde_mc_tx(
     // TODO I haven't dealt with chains, though I'm pretty sure it's
     // always just one.
     assert!((*mp_chain).b_next == ptr::null_mut());
-
     __dtrace_probe_tx(mp_chain as uintptr_t);
-
-    // TODO Arbitrarily choose u1, later when we integrate with DDM
-    // we'll have the information needed to make a real choice.
-    let mch = (*dev).u1.mch;
-    let hint = 0;
-    let flags = mac::MAC_DROP_ON_NO_DESC;
-    let ret_mp = ptr::null_mut();
-
-    // Send straight to underlay in passthrough mode.
-    if (*dev).passthrough {
-        // TODO We need to deal with flow control. This could actually
-        // get weird, this is the first provider to use mac_tx(). Is
-        // there something we can learn from aggr here? I need to
-        // refresh my memory on all of this.
-        //
-        // TODO Is there way to set mac_tx to must use result?
-        //
-        // TODO Bring in MacClient safe abstraction from opte-drv.
-        mac::mac_tx(mch, mp_chain, hint, flags, ret_mp);
-        return ptr::null_mut();
-    }
-
-    let port = &(*dev).port;
 
     // ================================================================
     // IMPORTANT: Packet now takes ownership of mp_chain. When Packet
@@ -930,9 +1040,32 @@ unsafe extern "C" fn xde_mc_tx(
             bad_packet_probe(mp_chain as uintptr_t, &e);
             // Let's be noisy about this for now to catch bugs.
             warn!("failed to parse packet: {:?}", e);
-            return core::ptr::null_mut();
+            return ptr::null_mut();
         }
     };
+
+    // TODO Arbitrarily choose u1, later when we integrate with DDM
+    // we'll have the information needed to make a real choice.
+    let mch = src_dev.u1.mch;
+    let hint = 0;
+    let flags = mac::MAC_DROP_ON_NO_DESC;
+    let ret_mp = ptr::null_mut();
+
+    // Send straight to underlay in passthrough mode.
+    if src_dev.passthrough {
+        // TODO We need to deal with flow control. This could actually
+        // get weird, this is the first provider to use mac_tx(). Is
+        // there something we can learn from aggr here? I need to
+        // refresh my memory on all of this.
+        //
+        // TODO Is there way to set mac_tx to must use result?
+        //
+        // TODO Bring in MacClient safe abstraction from opte-drv.
+        mac::mac_tx(mch, pkt.unwrap(), hint, flags, ret_mp);
+        return ptr::null_mut();
+    }
+
+    let port = &src_dev.port;
 
     // The port processing code will fire a probe that describes what
     // action was taken -- there should be no need to add probes or
@@ -940,12 +1073,57 @@ unsafe extern "C" fn xde_mc_tx(
     let res = port.process(Direction::Out, &mut pkt);
     match res {
         Ok(ProcessResult::Modified) => {
+            // If the outer IPv6 destination is the same as the
+            // source, then we need to loop the packet inbound to the
+            // guest on this same host.
+            let outer = match pkt.headers().outer {
+                Some(ref v) => v,
+                None => {
+                    // XXX add SDT probe
+                    // XXX add stat
+                    warn!("no outer header, dropping");
+                    return ptr::null_mut();
+                }
+            };
+
+            let ip = match outer.ip {
+                Some(ref v) => v,
+                None => {
+                    // XXX add SDT probe
+                    // XXX add stat
+                    warn!("no outer ip header, dropping");
+                    return ptr::null_mut();
+                }
+            };
+
+            let ip6 = match ip.ip6() {
+                Some(ref v) => v.clone(),
+                None => {
+                    warn!("outer IP header is not v6, dropping");
+                    return ptr::null_mut();
+                }
+            };
+
+            let vni = match outer.encap {
+                Some(ref geneve) => geneve.vni,
+                None => {
+                    // XXX add SDT probe
+                    // XXX add stat
+                    warn!("no geneve header, dropping");
+                    return ptr::null_mut();
+                }
+            };
+
+            if ip6.dst() == ip6.src() {
+                return guest_loopback(src_dev, pkt, vni);
+            }
+
             // Currently the overlay layer leaves the outer frame
             // destination and source zero'd. Ask IRE for the route
             // associated with the underlay destination. Then ask NCE
             // for the mac associated with the IRE nexthop to fill in
             // the outer frame of the packet.
-            let (src, dst) = finish_outer_frame(&pkt);
+            let (src, dst) = next_hop(&ip6.dst());
             let mblk = pkt.unwrap();
 
             // Get a pointer to the beginning of the outer frame and
@@ -963,7 +1141,7 @@ unsafe extern "C" fn xde_mc_tx(
 
         Ok(ProcessResult::Hairpin(hpkt)) => {
             mac::mac_rx(
-                (*dev).mh,
+                src_dev.mh,
                 0 as *mut mac::mac_resource_handle,
                 hpkt.unwrap(),
             );
@@ -981,104 +1159,270 @@ unsafe extern "C" fn xde_mc_tx(
     ptr::null_mut()
 }
 
+// At this point the core engine of OPTE has delivered a Geneve
+// encapsulated guest Ethernet Frame (also simply referred to as "the
+// packet") to xde to be sent to the specific outer IPv6 destination
+// address. This packet includes the outer Ethernet Frame as well;
+// however, the outer frame's destination and source addresses are set
+// to zero. It is the job of this function to determine what those
+// values should be.
+//
+// Adjacent to xde is the native IPv6 stack along with its routing
+// table. This table is routinely updated to indicate the best path to
+// any given IPv6 destination that may be specified in the outer IP
+// header. As xde is not utilizing the native IPv6 stack to send out
+// the packet, but rather is handing it directly to the mac module, it
+// must somehow query the native routing table to determine which port
+// this packet should egress and fill in the outer frame accordingly.
+// This query is done via a private interface which allows a kernel
+// module outside of IP to query the routing table.
+//
+// This process happens in a sequence of steps described below.
+//
+// 1. With an IPv6 destination in hand we need to determine the next
+//    hop, also known as the gateway, for this address. That is, of
+//    our neighbors (in this case one of the two switches, which are
+//    also acting as routers), who should we forward this packet to in
+//    order for it to arrive at its destination? We get this
+//    information from the routing table, which contains Internet
+//    Routing Entries, or IREs. Specifically, we query the native IPv6
+//    routing table using the kernel function
+//    `ire_ftable_lookup_simple_v6()`. This function returns an
+//    `ire_t`, which includes the member `ire_u`, which contains the
+//    address of the gateway as `ire6_gateway_addr`.
+//
+// 2. We have the gateway IPv6 address; but in the world of the Oxide
+//    Network that is not enough to deliver the packet. In the Oxide
+//    Network the router (switch) is not a member of the host's
+//    network. Instead, we rely on link-local addresses to reach the
+//    switches. The lookup in step (1) gave us that link-local address
+//    of the gateway; now we need to figure out how to reach it. That
+//    requires consulting the routing table a second time: this time
+//    to find the IRE for the gateway's link-local address.
+//
+// 3. The IRE of the link-local address from step (2) allows us to
+//    determine which interface this traffic should traverse.
+//    Specifically it gives us access to the `ill_t` of the gateway's
+//    link-local address. This structure contains the IP Lower Level
+//    information. In particular it contains the `ill_phys_addr`
+//    which gives us the source MAC address for our outer frame.
+//
+// 4. The final piece of information to obtain is the destination MAC
+//    address. We have the link-local address of the switch port we
+//    want to send to. To get the MAC address of this port it must
+//    first be assumed that the host and its connected switches have
+//    performed NDP in order to learn each other's IPv6 addresses and
+//    corresponding MAC addresses. With that information in hand it is
+//    a matter of querying the kernel's Neighbor Cache Entry Table
+//    (NCE) for the mapping that belongs to our gateway's link-local
+//    address. This is done via the `nce_lookup_v6()` kernel function.
+//
+// With those four steps we have obtained the source and destination
+// MAC addresses and the packet can be sent to mac to be delivered to
+// the underlying NIC. However, the careful reader may find themselves
+// confused about how step (1) actually works.
+//
+//   If step (1) always returns a single gateway, then how do we
+//   actually utilize both NICs/switches?
+//
+// This is where a bit of knowledge about routing tables comes into
+// play along with our very own Delay Driven Multipath in-rack routing
+// protocol. You might imagine the IPv6 routing table on an Oxide Sled
+// looking something like this.
+//
+// Destination/Mask             Gateway                 Flags  If
+// ----------------          -------------------------  ----- ---------
+// default                   fe80::<sc1_p5>             UG     cxgbe0
+// default                   fe80::<sc1_p6>             UG     cxgbe1
+// fe80::/10                 fe80::<sc1_p5>             U      cxgbe0
+// fe80::/10                 fe80::<sc1_p6>             U      cxgbe1
+// fd00:<rack1_sled1>::/64   fe80::<sc1_p5>             U      cxgbe0
+// fd00:<rack1_sled1>::/64   fe80::<sc1_p6>             U      cxgbe1
+//
+// Let's say this host (sled1) wants to send a packet to sled2. Our
+// sled1 host lives on network `fd00:<rack1_sled1>::/64` while our
+// sled2 host lives on `fd00:<rack1_seld2>::/64` -- the key point
+// being they are two different networks and thus must be routed to
+// talk to each other. For sled1 to send this packet it will attempt
+// to look up destination `fd00:<rack1_sled2>::7777` (in this case
+// `7777` is the IP of sled2) in the routing table above. The routing
+// table will then perform a longest prefix match against the
+// `Destination` field for all entries: the longest prefix that
+// matches wins and that entry is returned. However, in this case, no
+// destinations match except for the `default` ones. When more than
+// one entry matches it is left to the system to decide which one to
+// return; typically this just means the first one that matches. But
+// not for us! This is where DDM comes into play.
+//
+// Let's reimagine the routing table again, this time with a
+// probability added to each gateway entry.
+//
+// Destination/Mask             Gateway                 Flags  If      P
+// ----------------          -------------------------  ----- ------- ----
+// default                   fe80::<sc1_p5>             UG     cxgbe0  0.70
+// default                   fe80::<sc1_p6>             UG     cxgbe1  0.30
+// fe80::/10                 fe80::<sc1_p5>             U      cxgbe0
+// fe80::/10                 fe80::<sc1_p6>             U      cxgbe1
+// fd00:<rack1_sled1>::/64   fe80::<sc1_p5>             U      cxgbe0
+// fd00:<rack1_sled1>::/64   fe80::<sc1_p6>             U      cxgbe1
+//
+// With these P values added we now have a new option for deciding
+// which IRE to return when faced with two matches: give each a
+// probability of return based on their P value. In this case, for any
+// given gateway IRE lookup, there would be a 70% chance
+// `fe80::<sc1_p5>` is returned and a 30% chance `fe80::<sc1_p6>` is
+// returned.
+//
+// But wait, what determines those P values? That's the job of DDM.
+// The full story of what DDM is and how it works is outside the scope
+// of this already long block comment; but suffice to say it monitors
+// the flow of the network based on precise latency measurements and
+// with that data constantly refines the P values of all the hosts's
+// routing tables to bias new packets towards one path or another.
 #[no_mangle]
-fn finish_outer_frame(pkt: &Packet<Parsed>) -> (EtherAddr, EtherAddr) {
+fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
     unsafe {
-        let outer = match pkt.headers().outer {
-            Some(ref outer) => outer,
-            None => {
-                warn!("no outer frame");
-                return (EtherAddr::zero(), EtherAddr::zero());
-            }
-        };
-
-        let ip6_hdr = match outer.ip {
-            Some(IpHdr::Ip6(ref ip6_hdr)) => ip6_hdr,
-            _ => {
-                warn!("no outer ip");
-                return (EtherAddr::zero(), EtherAddr::zero());
-            }
-        };
-
-        // assuming global zone
+        // Use the GZ's routing table.
         let netstack = ip::netstack_find_by_zoneid(0);
         assert!(!netstack.is_null());
         let ipst = (*netstack).netstack_u.nu_s.nu_ip;
         assert!(!ipst.is_null());
 
         let addr = ip::in6_addr_t {
-            _S6_un: ip::in6_addr__bindgen_ty_1 {
-                _S6_u8: ip6_hdr.dst().to_bytes(),
-            },
+            _S6_un: ip::in6_addr__bindgen_ty_1 { _S6_u8: ip6_dst.to_bytes() },
         };
         let xmit_hint = 0;
         let mut generation_op = 0u32;
 
-        // there are a few ways to go about looking up the mac, one obvious one
-        // is ip2mac, however that function assumes we know what interface we
-        // want to go out which in this case we do not as we are in a multipath
-        // situation.
+        // Step (1): Lookup the IRE for the destination. This is going
+        // to return one of the default gateway entries.
         let ire = ip::ire_ftable_lookup_simple_v6(
             &addr,
             xmit_hint,
             ipst,
             &mut generation_op as *mut ip::uint_t,
         );
+
+        // TODO If there is no entry should we return host
+        // unreachable? I'm not sure since really the guest would map
+        // that with its VPC network. That is, if a user saw host
+        // unreachable they would be correct to think that their VPC
+        // routing table is misconfigured, but in reality it would be
+        // an underlay network issue. How do we convey this situation
+        // to the user/operator?
         if ire.is_null() {
-            warn!("no ire for {:?}", ip6_hdr.dst());
+            warn!("no IRE for destination {:?}", ip6_dst);
+            next_hop_probe(
+                ip6_dst,
+                None,
+                EtherAddr::zero(),
+                EtherAddr::zero(),
+                b"no IRE for destination\0",
+            );
             return (EtherAddr::zero(), EtherAddr::zero());
         }
 
-        // get the gateway address
+        // Step (2): Lookup the IRE for the gateway's link-local
+        // address. This is going to return one of the `fe80::/10`
+        // entries.
         let ireu = (*ire).ire_u;
-        // we asked for this from the v6 table so we can assume v6
         let gw = ireu.ire6_u.ire6_gateway_addr;
-
-        // get the gateway ire
+        let gw_ip6 = Ipv6Addr::from(&ireu.ire6_u.ire6_gateway_addr);
         let gw_ire = ip::ire_ftable_lookup_simple_v6(
             &gw,
             xmit_hint,
             ipst,
             &mut generation_op as *mut ip::uint_t,
         );
+
         if gw_ire.is_null() {
-            warn!("no gw ire for {:?}", ip6_hdr.dst());
+            warn!("no IRE for gateway {:?}", gw_ip6);
+            next_hop_probe(
+                ip6_dst,
+                Some(&gw_ip6),
+                EtherAddr::zero(),
+                EtherAddr::zero(),
+                b"no IRE for gateway\0",
+            );
             return (EtherAddr::zero(), EtherAddr::zero());
         }
 
-        // set the source address of the outer frame from the physical address
-        // of the ip lower layer object member or the internet routing entry.
+        // Step (3): Determine the source address of the outer frame
+        // from the physical address of the IP Lower Layer object
+        // member or the internet routing entry.
         let ill = (*gw_ire).ire_ill;
         if ill.is_null() {
-            warn!("gw ill is null for {:?}", ip6_hdr.dst());
+            warn!("gateway ILL is NULL for {:?}", gw_ip6);
+            next_hop_probe(
+                ip6_dst,
+                Some(&gw_ip6),
+                EtherAddr::zero(),
+                EtherAddr::zero(),
+                b"gateway ILL is NULL\0",
+            );
             return (EtherAddr::zero(), EtherAddr::zero());
         }
+
         let src = (*ill).ill_phys_addr;
         if src.is_null() {
-            warn!("gw ill src is null for {:?}", ip6_hdr.dst());
+            warn!("gateway ILL phys addr is NULL for {:?}", gw_ip6);
+            next_hop_probe(
+                ip6_dst,
+                Some(&gw_ip6),
+                EtherAddr::zero(),
+                EtherAddr::zero(),
+                b"gateway ILL phys addr is NULL\0",
+            );
             return (EtherAddr::zero(), EtherAddr::zero());
         }
+
         let src: [u8; 6] = alloc::slice::from_raw_parts(src, 6)
             .try_into()
             .expect("src mac from pointer");
         let src = EtherAddr::from(src);
 
-        // find an nce entry for the gateway
+        // Step (4): Determine the destination address of the outer
+        // frame by retrieving the NCE entry for the gateway's
+        // link-local address.
         let nce = ip::nce_lookup_v6(ill, &gw);
         if nce.is_null() {
-            warn!("no nce for {:?}", ip6_hdr.dst());
+            warn!("no NCE for gateway {:?}", gw_ip6);
+            next_hop_probe(
+                ip6_dst,
+                Some(&gw_ip6),
+                EtherAddr::zero(),
+                EtherAddr::zero(),
+                b"no NCE for gateway\0",
+            );
             return (EtherAddr::zero(), EtherAddr::zero());
         }
+
         let nce_common = (*nce).nce_common;
         if nce_common.is_null() {
-            warn!("no nce common for {:?}", ip6_hdr.dst());
+            warn!("no NCE common for gateway {:?}", gw_ip6);
+            next_hop_probe(
+                ip6_dst,
+                Some(&gw_ip6),
+                EtherAddr::zero(),
+                EtherAddr::zero(),
+                b"no NCE common for gateway\0",
+            );
             return (EtherAddr::zero(), EtherAddr::zero());
         }
+
         let mac = (*nce_common).ncec_lladdr;
         if mac.is_null() {
-            warn!("nce mac is null {:?}", ip6_hdr.dst());
+            warn!("NCE MAC address is NULL {:?}", gw_ip6);
+            next_hop_probe(
+                ip6_dst,
+                Some(&gw_ip6),
+                EtherAddr::zero(),
+                EtherAddr::zero(),
+                b"NCE MAC address if NULL for gateway\0",
+            );
             return (EtherAddr::zero(), EtherAddr::zero());
         }
+
         let maclen = (*nce_common).ncec_lladdr_length;
         assert!(maclen == 6);
 
@@ -1087,6 +1431,7 @@ fn finish_outer_frame(pkt: &Packet<Parsed>) -> (EtherAddr, EtherAddr) {
             .expect("mac from pointer");
         let dst = EtherAddr::from(dst);
 
+        next_hop_probe(ip6_dst, Some(&gw_ip6), src, dst, b"\0");
         (src, dst)
     }
 }
@@ -1151,7 +1496,7 @@ unsafe extern "C" fn xde_mc_propinfo(
 
 #[no_mangle]
 fn new_port(
-    xde_dev_name: String,
+    name: String,
     private_ip: Ipv4Addr,
     private_mac: EtherAddr,
     gateway_mac: EtherAddr,
@@ -1163,12 +1508,18 @@ fn new_port(
     ectx: Arc<ExecCtx>,
     snat: Option<SnatCfg>,
 ) -> Result<(Box<Port<opte_core::port::Active>>, PortCfg), OpteError> {
-    //TODO hardcode
+    let name_cstr = match CString::new(name.clone()) {
+        Ok(v) => v,
+        Err(_) => return Err(OpteError::BadName),
+    };
+
+    //TODO hardcoded
     let vpc_subnet = if snat.is_none() {
         "192.168.77.0/24".parse().unwrap()
     } else {
         snat.as_ref().unwrap().vpc_sub4
     };
+
     let dyn_nat = match snat.as_ref() {
         None => {
             opte_core::oxide_net::DynNat4Cfg {
@@ -1184,6 +1535,7 @@ fn new_port(
             ports: Range { start: snat.port_start, end: snat.port_end },
         },
     };
+
     let port_cfg = PortCfg {
         vpc_subnet,
         private_mac,
@@ -1193,7 +1545,8 @@ fn new_port(
         dyn_nat,
         overlay: None,
     };
-    let mut new_port = Port::new(&xde_dev_name, private_mac, ectx);
+
+    let mut new_port = Port::new(&name, name_cstr, private_mac, ectx);
     opte_core::oxide_net::firewall::setup(&mut new_port)?;
     opte_core::oxide_net::dhcp4::setup(&mut new_port, &port_cfg)?;
     opte_core::oxide_net::icmp::setup(&mut new_port, &port_cfg)?;
@@ -1463,4 +1816,12 @@ fn list_ports_hdlr(
     }
 
     Ok(resp)
+}
+
+impl From<&crate::ip::in6_addr> for Ipv6Addr {
+    fn from(in6: &crate::ip::in6_addr) -> Self {
+        // Safety: We are reading from a [u8; 16] and interpreting the
+        // value as [u8; 16].
+        unsafe { Self::from(in6._S6_un._S6_u8) }
+    }
 }

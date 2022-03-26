@@ -1,5 +1,4 @@
 /// A virtual switch port.
-use core::convert::TryFrom;
 use core::result;
 
 cfg_if! {
@@ -30,7 +29,7 @@ use crate::rule::{ht_fire_probe, Action, Finalized, Rule, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::tcp::TcpState;
 use crate::tcp_state::{self, TcpFlowState};
-use crate::{Direction, ExecCtx, OpteError};
+use crate::{CString, Direction, ExecCtx, OpteError};
 
 pub const UFT_DEF_MAX_ENTIRES: u32 = 8192;
 
@@ -102,6 +101,9 @@ pub struct Port<S: PortState> {
     state: S,
     ectx: Arc<ExecCtx>,
     name: String,
+    // Cache the CString version of the name for use with DTrace
+    // probes.
+    name_cstr: CString,
     mac: EtherAddr,
 }
 
@@ -112,6 +114,10 @@ impl<S: PortState> Port<S> {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn name_cstr(&self) -> &CString {
+        &self.name_cstr
     }
 }
 
@@ -145,6 +151,7 @@ impl Port<Inactive> {
                 ),
             },
             name: self.name,
+            name_cstr: self.name_cstr,
             mac: self.mac,
             ectx: self.ectx,
         }
@@ -236,12 +243,18 @@ impl Port<Inactive> {
         ioctl::ListLayersResp { layers: tmp }
     }
 
-    pub fn new(name: &str, mac: EtherAddr, ectx: Arc<ExecCtx>) -> Self {
+    pub fn new(
+        name: &str,
+        name_cstr: CString,
+        mac: EtherAddr,
+        ectx: Arc<ExecCtx>,
+    ) -> Self {
         Port {
             state: Inactive {
                 layers: KMutex::new(Vec::new(), KMutexType::Driver),
             },
             name: name.to_string(),
+            name_cstr,
             mac,
             ectx,
         }
@@ -457,7 +470,7 @@ impl Port<Active> {
         dir: Direction,
         pkt: &mut Packet<Parsed>,
     ) -> result::Result<ProcessResult, ProcessError> {
-        let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
+        let ifid = InnerFlowId::from(pkt.meta());
         port_process_entry_probe(dir, &self.name, &ifid, &pkt);
         let mut meta = meta::Meta::new();
         let res = match dir {
@@ -481,7 +494,7 @@ impl Port<Active> {
     ) -> result::Result<TcpState, String> {
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we take the dual.
-        let ifid_after = InnerFlowId::try_from(meta).unwrap().dual();
+        let ifid_after = InnerFlowId::from(meta).dual();
         let tcp = meta.inner_tcp().unwrap();
         let mut lock = self.state.tcp_flows.lock();
 
@@ -530,7 +543,7 @@ impl Port<Active> {
     ) -> result::Result<TcpState, String> {
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we take the dual.
-        let ifid_after = InnerFlowId::try_from(meta).unwrap().dual();
+        let ifid_after = InnerFlowId::from(meta).dual();
         let mut lock = self.state.tcp_flows.lock();
         let tcp = meta.inner_tcp().unwrap();
 
@@ -631,7 +644,7 @@ impl Port<Active> {
                 entry.hit();
                 for ht in entry.get_state() {
                     ht.run(pkt.meta_mut());
-                    let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
+                    let ifid_after = InnerFlowId::from(pkt.meta());
                     ht_fire_probe("UFT", Direction::In, &ifid, &ifid_after);
                 }
 
@@ -876,7 +889,7 @@ impl Port<Active> {
 
                 for ht in entry.get_state() {
                     ht.run(pkt.meta_mut());
-                    let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
+                    let ifid_after = InnerFlowId::from(pkt.meta());
                     ht_fire_probe("UFT", Direction::Out, &ifid, &ifid_after);
                 }
 

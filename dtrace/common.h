@@ -35,3 +35,16 @@
 	svar = strjoin(svar, inet_ntoa6(this->dst_ip6));	\
 	svar = strjoin(svar, ":");				\
 	svar = strjoin(svar, lltostr(ntohs(fvar->dst_port)));
+
+#define ETH_FMT(svar, evar)					\
+	svar = substr(lltostr(evar[0], 16), 2);			\
+	svar = strjoin(svar, ":");				\
+	svar = strjoin(svar, substr(lltostr(evar[1], 16), 2));	\
+	svar = strjoin(svar, ":");				\
+	svar = strjoin(svar, substr(lltostr(evar[2], 16), 2));	\
+	svar = strjoin(svar, ":");				\
+	svar = strjoin(svar, substr(lltostr(evar[3], 16), 2));	\
+	svar = strjoin(svar, ":");				\
+	svar = strjoin(svar, substr(lltostr(evar[4], 16), 2));	\
+	svar = strjoin(svar, ":");				\
+	svar = strjoin(svar, substr(lltostr(evar[5], 16), 2));

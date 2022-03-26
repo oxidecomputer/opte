@@ -1,4 +1,3 @@
-use core::convert::TryFrom;
 use core::fmt::{self, Display};
 use core::mem;
 use core::result;
@@ -214,7 +213,7 @@ impl Layer {
         hts: &mut Vec<HT>,
         meta: &mut Meta,
     ) -> result::Result<LayerResult, LayerError> {
-        let ifid = InnerFlowId::try_from(pkt.meta()).unwrap();
+        let ifid = InnerFlowId::from(pkt.meta());
         layer_process_entry_probe(dir, &self.name, &ifid);
         let res = match dir {
             Direction::Out => self.process_out(ectx, pkt, &ifid, hts, meta),
@@ -246,7 +245,7 @@ impl Layer {
 
             ht.run(pkt.meta_mut());
 
-            let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
+            let ifid_after = InnerFlowId::from(pkt.meta());
             ht_fire_probe(
                 &format!("{}-ft", self.name),
                 Direction::In,
@@ -324,7 +323,7 @@ impl Layer {
 
                 ht.run(pkt.meta_mut());
 
-                let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
+                let ifid_after = InnerFlowId::from(pkt.meta());
 
                 ht_fire_probe(
                     &format!("{}-rt", self.name),
@@ -358,7 +357,7 @@ impl Layer {
 
                 ht_in.run(pkt.meta_mut());
 
-                let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
+                let ifid_after = InnerFlowId::from(pkt.meta());
 
                 ht_fire_probe(
                     &format!("{}-rt", self.name),
@@ -372,8 +371,7 @@ impl Layer {
                 // flow tables act as duals of each other, and the
                 // HT might change how the other side of this
                 // layer sees this flow.
-                let out_ifid =
-                    InnerFlowId::try_from(pkt.meta()).unwrap().dual();
+                let out_ifid = InnerFlowId::from(pkt.meta()).dual();
                 self.ft_out.lock().add(out_ifid, desc);
 
                 // if let Some(ctx) = ra_in.ctx {
@@ -423,7 +421,7 @@ impl Layer {
 
             ht.run(pkt.meta_mut());
 
-            let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
+            let ifid_after = InnerFlowId::from(pkt.meta());
             ht_fire_probe(
                 &format!("{}-ft", self.name),
                 Direction::Out,
@@ -502,7 +500,7 @@ impl Layer {
 
                 ht.run(pkt.meta_mut());
 
-                let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
+                let ifid_after = InnerFlowId::from(pkt.meta());
 
                 ht_fire_probe(
                     &format!("{}-rt", self.name),
@@ -536,7 +534,7 @@ impl Layer {
 
                 ht_out.run(pkt.meta_mut());
 
-                let ifid_after = InnerFlowId::try_from(pkt.meta()).unwrap();
+                let ifid_after = InnerFlowId::from(pkt.meta());
 
                 ht_fire_probe(
                     &format!("{}-rt", self.name),
@@ -550,7 +548,7 @@ impl Layer {
                 // flow tables act as duals of each other, and the
                 // HT might change how the other side of this
                 // layer sees this flow.
-                let in_ifid = InnerFlowId::try_from(pkt.meta()).unwrap().dual();
+                let in_ifid = InnerFlowId::from(pkt.meta()).dual();
                 self.ft_in.lock().add(in_ifid, desc);
 
                 // if let Some(ctx) = ra_out2.ctx {
@@ -657,10 +655,8 @@ impl Display for InnerFlowId {
     }
 }
 
-impl TryFrom<&PacketMeta> for InnerFlowId {
-    type Error = String;
-
-    fn try_from(meta: &PacketMeta) -> result::Result<Self, Self::Error> {
+impl From<&PacketMeta> for InnerFlowId {
+    fn from(meta: &PacketMeta) -> Self {
         let (proto, src_ip, dst_ip) = match &meta.inner.ip {
             Some(IpMeta::Ip4(ip4)) => {
                 (ip4.proto, IpAddr::Ip4(ip4.src), IpAddr::Ip4(ip4.dst))
@@ -681,7 +677,7 @@ impl TryFrom<&PacketMeta> for InnerFlowId {
             None => (0, 0),
         };
 
-        Ok(InnerFlowId { proto, src_ip, src_port, dst_ip, dst_port })
+        InnerFlowId { proto, src_ip, src_port, dst_ip, dst_port }
     }
 }
 
@@ -738,18 +734,14 @@ impl<'a> RuleTable {
                 rule_match_probe(
                     &self.layer,
                     self.dir,
-                    &InnerFlowId::try_from(meta).unwrap(),
+                    &InnerFlowId::from(meta),
                     &r,
                 );
                 return Some(r);
             }
         }
 
-        rule_no_match_probe(
-            &self.layer,
-            self.dir,
-            &InnerFlowId::try_from(meta).unwrap(),
-        );
+        rule_no_match_probe(&self.layer, self.dir, &InnerFlowId::from(meta));
 
         None
     }

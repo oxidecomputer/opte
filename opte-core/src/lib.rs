@@ -151,6 +151,7 @@ pub const fn bit_on(bit: u8) -> u8 {
 pub enum OpteError {
     BadApiVersion { user: u64, kernel: u64 },
     BadLayerPos { layer: String, pos: String },
+    BadName,
     CopyinReq,
     CopyoutResp,
     DeserCmdErr(String),
@@ -171,6 +172,7 @@ impl OpteError {
         match self {
             Self::BadApiVersion { .. } => ddi::EPROTO,
             Self::BadLayerPos { .. } => ddi::EINVAL,
+            Self::BadName => ddi::EINVAL,
             Self::CopyinReq => ddi::EFAULT,
             Self::CopyoutResp => ddi::EFAULT,
             Self::DeserCmdErr(_) => ddi::ENOMSG,
