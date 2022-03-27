@@ -1,0 +1,35 @@
+<transform dir file link hardlink -> default variant.opensolaris.zone global>
+set name=pkg.fmri \
+    value=pkg://%PUBLISHER%/driver/network/opte@1.0.%COMMIT_COUNT%
+set name=pkg.summary value="The Oxide Packet Transformation Engine"
+set name=info.classification \
+    value=org.opensolaris.category.2008:Drivers/Networking
+set name=variant.opensolaris.zone value=global
+set name=variant.arch value=i386
+dir path=opt owner=root group=sys mode=0755
+dir path=opt/oxide owner=root group=bin mode=0755
+dir path=opt/oxide/opte owner=root group=bin mode=0755
+dir path=opt/oxide/opte/bin owner=root group=bin mode=0755
+file path=opt/oxide/opte/bin/opteadm owner=root group=bin mode=0755
+dir path=kernel owner=root group=sys mode=0755
+dir path=kernel/drv owner=root group=sys mode=0755
+
+# XXX the bypasses below are a hack, but idk what the right thing to do is.
+# Without the bypass this happens
+#:
+#:  + pkgdepend resolve -d packages -s resolve.p5m opte.generate.p5m
+#:  /home/ry/src/opte/pkg/opte.generate.p5m has unresolved dependency '
+#:     depend type=require fmri=__TBD pkg.debug.depend.file=mac \
+#:         pkg.debug.depend.reason=kernel/drv/amd64/xde \
+#:         pkg.debug.depend.type=elf \
+#:         pkg.debug.depend.path=kernel/drv/amd64 \
+#:         pkg.debug.depend.path=usr/kernel/drv/amd64
+#:  ' under the following combinations of variants:
+#:  variant.opensolaris.zone:global
+#:
+file path=kernel/drv/amd64/xde owner=root group=sys mode=0666 \
+    pkg.depend.bypass-generate=.*dld.* \
+    pkg.depend.bypass-generate=.*mac.*
+driver name=xde perms="* 0666 root sys" clone_perms="cxgbe 0666 root sys"
+depend type=incorporate fmri=pkg:/system/network/opte@1.0.%COMMIT_COUNT%
+depend type=require fmri=pkg:/system/network/opte@1.0.%COMMIT_COUNT%
