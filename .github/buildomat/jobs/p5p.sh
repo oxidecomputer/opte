@@ -1,6 +1,6 @@
 #!/bin/bash
 #:
-#: name = "opte-xde"
+#: name = "opte-p5p"
 #: variety = "basic"
 #: target = "helios"
 #: rust_toolchain = "nightly"
