@@ -13,6 +13,7 @@ use opte_core::ether::EtherAddr;
 use opte_core::geneve::Vni;
 use opte_core::ioctl::{
     self as api, CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd,
+    SetXdeUnderlayReq,
 };
 use opte_core::ip4::Ipv4Addr;
 use opte_core::ip6::Ipv6Addr;
@@ -143,6 +144,18 @@ impl OpteAdm {
         let cmd = OpteCmd::DeleteXde;
         let resp = run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)?;
         libnet::link::delete_link_id(link_id, libnet::LinkFlags::Active)?;
+        Ok(resp)
+    }
+
+    /// Set xde underlay devices
+    pub fn set_xde_underlay(
+        &self,
+        u1: &str,
+        u2: &str,
+    ) -> Result<NoResp, Error> {
+        let req = SetXdeUnderlayReq { u1: u1.into(), u2: u2.into() };
+        let cmd = OpteCmd::SetXdeUnderlay;
+        let resp = run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)?;
         Ok(resp)
     }
 

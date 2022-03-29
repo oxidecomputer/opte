@@ -26,7 +26,8 @@ use opte_core::ether::EtherAddr;
 use opte_core::geneve::Vni;
 use opte_core::headers::{IpCidr, IpHdr};
 use opte_core::ioctl::{
-    self as api, CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, SnatCfg,
+    self as api, CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd,
+    SetXdeUnderlayReq, SnatCfg,
 };
 use opte_core::ip4::Ipv4Addr;
 use opte_core::ip6::Ipv6Addr;
@@ -84,11 +85,19 @@ struct XdeState {
     u2: xde_underlay_port,
 }
 
-fn get_xde_state() -> &'static XdeState {
+fn get_xde_state() -> Result<&'static XdeState, OpteError> {
     // Safety: The opte_dip pointer is write-once and is a valid
     // pointer passed to attach(9E). The returned pointer is valid as
-    // it was derived from Box::into_raw() during attach(9E).
-    unsafe { &*(ddi_get_driver_private(xde_dip) as *mut XdeState) }
+    // it was derived from Box::into_raw() during set_xde_underlay
+    let p = unsafe { ddi_get_driver_private(xde_dip) };
+    if p.is_null() {
+        Err(OpteError::System {
+            errno: EINVAL,
+            msg: "underlay not initialized".to_string(),
+        })
+    } else {
+        Ok(unsafe { &*(p as *mut XdeState) })
+    }
 }
 
 impl XdeState {
@@ -214,6 +223,11 @@ fn delete_xde_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     delete_xde(&req)
 }
 
+fn set_xde_underlay_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: SetXdeUnderlayReq = env.copy_in_req()?;
+    set_xde_underlay(&req)
+}
+
 // This is the entry point for all OPTE commands. It verifies the API
 // version and then multiplexes the command to its appropriate handler.
 #[no_mangle]
@@ -261,6 +275,11 @@ unsafe extern "C" fn xde_dld_ioc_opte_cmd(
             hdlr_resp(&mut env, resp)
         }
 
+        OpteCmd::SetXdeUnderlay => {
+            let resp = set_xde_underlay_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
         OpteCmd::DumpLayer => {
             let resp = dump_layer_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
@@ -302,7 +321,7 @@ unsafe extern "C" fn xde_dld_ioc_opte_cmd(
 fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // TODO name validation
     // TODO check if xde is already in list before proceeding
-    let state = get_xde_state();
+    let state = get_xde_state()?;
 
     let (port, port_cfg) = new_port(
         req.xde_devname.clone(),
@@ -452,6 +471,27 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
+#[no_mangle]
+fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
+    let mut state = XdeState::new(req.u1.clone(), req.u2.clone());
+    match unsafe { init_underlay_ingress_handlers(&mut state) } {
+        ddi::DDI_SUCCESS => {}
+        err => {
+            return Err(OpteError::System {
+                errno: err,
+                msg: format!("failed to init underlay handlers: {}", err),
+            });
+        }
+    }
+
+    let state = Box::new(state);
+    unsafe {
+        ddi_set_driver_private(xde_dip, Box::into_raw(state) as *mut c_void)
+    };
+
+    Ok(NoResp::default())
+}
+
 const IOCTL_SZ: usize = core::mem::size_of::<api::OpteCmdIoctl>();
 
 static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [dld::dld_ioc_info_t {
@@ -473,21 +513,9 @@ unsafe extern "C" fn xde_attach(
         ddi_attach_cmd_t::DDI_ATTACH => {}
     }
 
+    ddi_set_driver_private(xde_dip, ptr::null_mut() as *mut c_void);
+
     xde_dip = dip;
-
-    let u1 = match get_driver_prop_string("underlay1") {
-        Some(p) => p,
-        None => {
-            return DDI_FAILURE;
-        }
-    };
-
-    let u2 = match get_driver_prop_string("underlay2") {
-        Some(p) => p,
-        None => {
-            return DDI_FAILURE;
-        }
-    };
 
     warn!("dld_ioc_add: {:#?}", xde_ioc_list);
 
@@ -502,18 +530,6 @@ unsafe extern "C" fn xde_attach(
             return DDI_FAILURE;
         }
     }
-
-    let mut state = XdeState::new(u1, u2);
-    match init_underlay_ingress_handlers(&mut state) {
-        ddi::DDI_SUCCESS => {}
-        error => {
-            dld::dld_ioc_unregister(dld::XDE_IOC);
-            return error;
-        }
-    }
-
-    let state = Box::new(state);
-    ddi_set_driver_private(dip, Box::into_raw(state) as *mut c_void);
 
     return DDI_SUCCESS;
 }
@@ -1213,7 +1229,7 @@ fn new_port(
         vni: vpc_vni,
     };
 
-    let state = get_xde_state();
+    let state = get_xde_state()?;
 
     overlay::setup(&new_port, &oc, state.v2p.clone())?;
     let port = Box::new(new_port.activate());
@@ -1368,7 +1384,7 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 #[no_mangle]
 fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: overlay::SetVirt2PhysReq = env.copy_in_req()?;
-    let state = get_xde_state();
+    let state = get_xde_state()?;
     state.v2p.set(req.vip, req.phys);
     Ok(NoResp::default())
 }
@@ -1378,7 +1394,7 @@ fn list_v2p_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<overlay::DumpVirt2PhysResp, OpteError> {
     let _req: overlay::DumpVirt2PhysReq = env.copy_in_req()?;
-    let state = get_xde_state();
+    let state = get_xde_state()?;
     Ok(overlay::DumpVirt2PhysResp {
         ip4: state.v2p.ip4.lock().clone(),
         ip6: state.v2p.ip6.lock().clone(),

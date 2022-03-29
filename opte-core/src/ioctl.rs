@@ -61,6 +61,7 @@ pub enum OpteCmd {
     AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
     CreateXde = 70,          // create a new xde device
     DeleteXde = 71,          // delete an xde device
+    SetXdeUnderlay = 72,     // set xde underlay devices
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -77,6 +78,7 @@ impl TryFrom<c_int> for OpteCmd {
             60 => Ok(Self::AddRouterEntryIpv4),
             70 => Ok(Self::CreateXde),
             71 => Ok(Self::DeleteXde),
+            72 => Ok(Self::SetXdeUnderlay),
             _ => Err(()),
         }
     }
@@ -352,6 +354,13 @@ pub struct CreateXdeReq {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeleteXdeReq {
     pub xde_devname: String,
+}
+
+/// Set the underlay devices used by the xde kernel module
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SetXdeUnderlayReq {
+    pub u1: String,
+    pub u2: String,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
