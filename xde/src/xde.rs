@@ -34,6 +34,7 @@ use opte_core::oxide_net::firewall::{AddFwRuleReq, RemFwRuleReq};
 use opte_core::oxide_net::{overlay, router, PortCfg};
 use opte_core::packet::{Initialized, Packet, ParseError, Parsed};
 use opte_core::port::{Port, ProcessResult};
+use opte_core::sync::{KMutex, KMutexType};
 use opte_core::sync::{KRwLock, KRwLockType};
 use opte_core::{CStr, CString, Direction, ExecCtx, OpteError};
 
@@ -77,7 +78,7 @@ struct xde_underlay_port {
 struct XdeState {
     ectx: Arc<ExecCtx>,
     v2p: Arc<overlay::Virt2Phys>,
-    underlay: Option<UnderlayState>,
+    underlay: KMutex<Option<UnderlayState>>,
 }
 
 struct UnderlayState {
@@ -120,7 +121,7 @@ impl XdeState {
     fn new() -> Self {
         let ectx = Arc::new(ExecCtx { log: Box::new(opte_core::KernelLog {}) });
         XdeState {
-            underlay: None,
+            underlay: KMutex::new(None, KMutexType::Driver),
             ectx,
             v2p: Arc::new(overlay::Virt2Phys::new()),
         }
@@ -327,7 +328,8 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // TODO name validation
     // TODO check if xde is already in list before proceeding
     let state = get_xde_state();
-    let underlay = match state.underlay {
+    let underlay_ = state.underlay.lock();
+    let underlay = match *underlay_ {
         Some(ref u) => u,
         None => {
             return Err(OpteError::System {
@@ -364,6 +366,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         u1: underlay.u1.clone(),
         u2: underlay.u2.clone(),
     });
+    drop(underlay_);
 
     // set up upper mac
     let mreg = match unsafe { mac::mac_alloc(MAC_VERSION as u32).as_mut() } {
@@ -487,8 +490,15 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
 
 #[no_mangle]
 fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
-    let mut state = get_xde_state();
-    state.underlay = Some(unsafe {
+    let state = get_xde_state();
+    let mut underlay = state.underlay.lock();
+    if underlay.is_some() {
+        return Err(OpteError::System {
+            errno: EINVAL,
+            msg: "underlay already initialized".into(),
+        });
+    }
+    *underlay = Some(unsafe {
         init_underlay_ingress_handlers(req.u1.clone(), req.u2.clone())?
     });
 
@@ -741,7 +751,8 @@ unsafe extern "C" fn xde_detach(
     let rstate = ddi_get_driver_private(xde_dip);
     assert!(!rstate.is_null());
     let state = &*(rstate as *mut XdeState);
-    let underlay = match state.underlay {
+    let underlay_ = state.underlay.lock();
+    let underlay = match *underlay_ {
         Some(ref u) => u,
         None => {
             warn!("underlay not initialized");

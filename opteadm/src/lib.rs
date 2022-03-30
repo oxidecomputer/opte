@@ -155,8 +155,7 @@ impl OpteAdm {
     ) -> Result<NoResp, Error> {
         let req = SetXdeUnderlayReq { u1: u1.into(), u2: u2.into() };
         let cmd = OpteCmd::SetXdeUnderlay;
-        let resp = run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)?;
-        Ok(resp)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 
     /// Add a firewall rule
