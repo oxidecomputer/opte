@@ -21,13 +21,10 @@ set -o xtrace
 #
 TGT_BASE=${TGT_BASE:=/work}
 
-DBG_SRC=target/x86_64-unknown-unknown/debug
-DBG_TGT=$TGT_BASE/debug
-
 REL_SRC=target/x86_64-unknown-unknown/release
 REL_TGT=$TGT_BASE/release
 
-mkdir -p $DBG_TGT $REL_TGT
+mkdir -p $REL_TGT
 
 function header {
 	echo "# ==== $* ==== #"
@@ -53,11 +50,6 @@ ptime -m ./build.sh
 # Inspect the kernel module for bad relocations in case the old
 # codegen issue ever shows its face again.
 #
-if elfdump $DBG_SRC/xde.dbg | grep GOTPCREL; then
-	echo "found GOTPCREL relocation in debug build"
-	exit 1
-fi
-
 if elfdump $REL_SRC/xde | grep GOTPCREL; then
 	echo "found GOTPCREL relocation in release build"
 	exit 1

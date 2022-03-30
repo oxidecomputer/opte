@@ -1,6 +1,6 @@
 <transform dir file link hardlink -> default variant.opensolaris.zone global>
 set name=pkg.fmri \
-    value=pkg://%PUBLISHER%/driver/network/opte@1.0.%COMMIT_COUNT%
+    value=pkg://%PUBLISHER%/driver/network/opte@0.1.%COMMIT_COUNT%
 set name=pkg.summary value="The Oxide Packet Transformation Engine"
 set name=info.classification \
     value=org.opensolaris.category.2008:Drivers/Networking
@@ -27,9 +27,9 @@ dir path=kernel/drv owner=root group=sys mode=0755
 #:  ' under the following combinations of variants:
 #:  variant.opensolaris.zone:global
 #:
-file path=kernel/drv/amd64/xde owner=root group=sys mode=0666 \
+file path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
     pkg.depend.bypass-generate=.*dld.* \
     pkg.depend.bypass-generate=.*mac.*
-driver name=xde perms="* 0666 root sys" clone_perms="cxgbe 0666 root sys"
-depend type=incorporate fmri=pkg:/driver/network/opte@1.0.%COMMIT_COUNT%
-depend type=require fmri=pkg:/driver/network/opte@1.0.%COMMIT_COUNT%
+driver name=xde
+depend type=incorporate fmri=pkg:/driver/network/opte@0.1.%COMMIT_COUNT%
+depend type=require fmri=pkg:/driver/network/opte@0.1.%COMMIT_COUNT%
