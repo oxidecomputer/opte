@@ -229,7 +229,17 @@ impl OpteAdm {
         )
     }
 
-    /// Return the unified flow table (UFT).
+    /// Clear all entries from the Unified Flow Table (UFT).
+    pub fn clear_uft(&self, port_name: &str) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearUft;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            &api::ClearUftReq { port_name: port_name.to_string() },
+        )
+    }
+
+    /// Return the Unified Flow Table (UFT).
     pub fn dump_uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
         let cmd = OpteCmd::DumpUft;
         run_cmd_ioctl::<api::DumpUftResp, _>(

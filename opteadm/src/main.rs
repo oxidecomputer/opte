@@ -42,7 +42,13 @@ enum Command {
         name: String,
     },
 
-    /// Dump the unified flow tables (UFT)
+    /// Clear all entries from the Unified Flow Table
+    ClearUft {
+        #[structopt(short)]
+        port: String,
+    },
+
+    /// Dump the Unified Flow Table
     DumpUft {
         #[structopt(short)]
         port: String,
@@ -566,6 +572,11 @@ fn main() {
         Command::DumpLayer { port, name } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
             print_layer(&hdl.get_layer_by_name(&port, &name).unwrap_or_die());
+        }
+
+        Command::ClearUft { port } => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            hdl.clear_uft(&port).unwrap_or_die();
         }
 
         Command::DumpUft { port } => {

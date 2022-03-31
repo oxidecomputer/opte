@@ -51,6 +51,11 @@ where
         self.map.push((flow_id, entry));
     }
 
+    // Clear all entries from the flow table.
+    pub fn clear(&mut self) {
+        self.map.clear()
+    }
+
     pub fn dump(&self) -> Vec<(InnerFlowId, FlowEntryDump)> {
         let mut flows = Vec::with_capacity(self.map.len());
         for (flow_id, entry) in &self.map {
@@ -302,5 +307,27 @@ fn flow_expired() {
     ft.expire_flows(now);
     assert_eq!(ft.num_flows(), 1);
     ft.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0));
+    assert_eq!(ft.num_flows(), 0);
+}
+
+#[test]
+fn flow_clear() {
+    use crate::headers::IpAddr;
+    use crate::ip4::Protocol;
+
+    let flowid = InnerFlowId {
+        proto: Protocol::TCP,
+        src_ip: IpAddr::Ip4("192.168.2.10".parse().unwrap()),
+        src_port: 37890,
+        dst_ip: IpAddr::Ip4("76.76.21.21".parse().unwrap()),
+        dst_port: 443,
+    };
+
+    let mut ft = FlowTable::new("flow-clear-test".to_string(), None);
+
+    assert_eq!(ft.num_flows(), 0);
+    ft.add(flowid, ());
+    assert_eq!(ft.num_flows(), 1);
+    ft.clear();
     assert_eq!(ft.num_flows(), 0);
 }

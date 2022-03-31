@@ -41,7 +41,7 @@ use crate::OpteError;
 ///
 /// NOTE: XXX This method of catching version mismatches is currently
 /// soft; better ideas are welcome.
-pub const API_VERSION: u64 = 1;
+pub const API_VERSION: u64 = 2;
 
 pub const XDE_DLD_PREFIX: i32 = (0xde00u32 << 16) as i32;
 pub const XDE_DLD_OPTE_CMD: i32 = XDE_DLD_PREFIX | 7777;
@@ -56,6 +56,7 @@ pub enum OpteCmd {
     DumpLayer = 31,          // dump the specified Layer
     DumpUft = 32,            // dump the Unified Flow Table
     ListLayers = 33,         // list the layers on a given port
+    ClearUft = 40,           // clear the UFT
     SetVirt2Phys = 50,       // set a v2p mapping
     DumpVirt2Phys = 51,      // dump the v2p mappings
     AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
@@ -72,6 +73,10 @@ impl TryFrom<c_int> for OpteCmd {
             20 => Ok(Self::AddFwRule),
             21 => Ok(Self::RemFwRule),
             30 => Ok(Self::DumpTcpFlows),
+            31 => Ok(Self::DumpLayer),
+            32 => Ok(Self::DumpUft),
+            33 => Ok(Self::ListLayers),
+            40 => Ok(Self::ClearUft),
             50 => Ok(Self::SetVirt2Phys),
             51 => Ok(Self::DumpVirt2Phys),
             60 => Ok(Self::AddRouterEntryIpv4),
@@ -140,6 +145,11 @@ pub struct ListLayersResp {
 impl CmdOk for ListLayersResp {}
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct ClearUftReq {
+    pub port_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct DumpUftReq {
     pub port_name: String,
 }
@@ -203,13 +213,6 @@ pub fn dump_tcp_flows(
     _req: &DumpTcpFlowsReq,
 ) -> DumpTcpFlowsResp {
     port.dump_tcp_flows()
-}
-
-pub fn dump_uft(
-    port: &port::Port<port::Active>,
-    _req: &DumpUftReq,
-) -> DumpUftResp {
-    port.dump_uft()
 }
 
 /// Indicates that a command response has been written to the response

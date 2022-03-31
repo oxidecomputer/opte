@@ -348,6 +348,11 @@ impl Port<Active> {
         ioctl::DumpTcpFlowsResp { flows: self.state.tcp_flows.lock().dump() }
     }
 
+    pub fn clear_uft(&self) {
+        self.state.uft_in.lock().clear();
+        self.state.uft_out.lock().clear();
+    }
+
     /// Dump the contents of the Unified Flow Table.
     pub fn dump_uft(&self) -> ioctl::DumpUftResp {
         let in_lock = self.state.uft_in.lock();
