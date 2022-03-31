@@ -106,9 +106,9 @@ enum Command {
 
     /// Set a virtual-to-physical mapping
     SetV2P {
-        vip4: Ipv4Addr,
-        phys_ether: EtherAddr,
-        phys_ip: std::net::Ipv6Addr,
+        vpc_ip4: Ipv4Addr,
+        vpc_ether: EtherAddr,
+        underlay_ip: std::net::Ipv6Addr,
         vni: geneve::Vni,
     },
 
@@ -425,15 +425,15 @@ fn print_list_layers(resp: &api::ListLayersResp) {
 
 fn print_v2p_header() {
     println!(
-        "{:<15} {:<8} {:<20} {:<20}",
-        "SOURCE", "VNI", "DEST ETH", "DEST IP"
+        "{:<24} {:<8} {:<17} {}",
+        "VPC IP", "VNI", "VPC MAC ADDR", "UNDERLAY IP"
     );
 }
 
 fn print_v2p_ip4((src, phys): (&Ipv4Addr, &overlay::PhysNet)) {
     let eth = format!("{}", phys.ether);
     println!(
-        "{:<15} {:<8} {:<20} {:<20}",
+        "{:<24} {:<8} {:<17} {}",
         std::net::Ipv4Addr::from(src.to_be_bytes()),
         phys.vni.value(),
         eth,
@@ -444,7 +444,7 @@ fn print_v2p_ip4((src, phys): (&Ipv4Addr, &overlay::PhysNet)) {
 fn print_v2p_ip6((src, phys): (&Ipv6Addr, &overlay::PhysNet)) {
     let eth = format!("{}", phys.ether);
     println!(
-        "{:<15} {:<8} {:<20} {:<20}",
+        "{:<24} {:<8} {:<17} {}",
         std::net::Ipv6Addr::from(src.to_bytes()),
         phys.vni.value(),
         eth,
@@ -636,12 +636,12 @@ fn main() {
             hdl.remove_firewall_rule(&request).unwrap_or_die();
         }
 
-        Command::SetV2P { vip4, phys_ether, phys_ip, vni } => {
+        Command::SetV2P { vpc_ip4, vpc_ether, underlay_ip, vni } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let vip = IpAddr::Ip4(vip4);
+            let vip = IpAddr::Ip4(vpc_ip4);
             let phys = overlay::PhysNet {
-                ether: phys_ether,
-                ip: Ipv6Addr::from(phys_ip),
+                ether: vpc_ether,
+                ip: Ipv6Addr::from(underlay_ip),
                 vni,
             };
             let req = overlay::SetVirt2PhysReq { vip, phys };

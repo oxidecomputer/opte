@@ -269,8 +269,8 @@ pub struct Virt2Phys {
     // that makes use of this virtual destination (for all Ports).
     // That means updating the generation number of all Ports anytme
     // an entry is **MODIFIED**.
-    pub ip4: KMutex<BTreeMap<Ipv4Addr, PhysNet>>,
-    pub ip6: KMutex<BTreeMap<Ipv6Addr, PhysNet>>,
+    ip4: KMutex<BTreeMap<Ipv4Addr, PhysNet>>,
+    ip6: KMutex<BTreeMap<Ipv6Addr, PhysNet>>,
 }
 
 pub const VIRT_2_PHYS_NAME: &'static str = "Virt2Phys";
@@ -280,6 +280,13 @@ impl Virt2Phys {
         match vip {
             IpAddr::Ip4(ip4) => self.ip4.lock().get(ip4).cloned(),
             IpAddr::Ip6(ip6) => self.ip6.lock().get(ip6).cloned(),
+        }
+    }
+
+    pub fn dump(&self) -> DumpVirt2PhysResp {
+        DumpVirt2PhysResp {
+            ip4: self.ip4.lock().clone(),
+            ip6: self.ip6.lock().clone(),
         }
     }
 

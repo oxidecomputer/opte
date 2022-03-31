@@ -310,7 +310,7 @@ unsafe extern "C" fn xde_dld_ioc_opte_cmd(
         }
 
         OpteCmd::DumpVirt2Phys => {
-            let resp = list_v2p_hdlr(&mut env);
+            let resp = dump_v2p_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
 
@@ -1727,15 +1727,12 @@ fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 }
 
 #[no_mangle]
-fn list_v2p_hdlr(
+fn dump_v2p_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<overlay::DumpVirt2PhysResp, OpteError> {
     let _req: overlay::DumpVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
-    Ok(overlay::DumpVirt2PhysResp {
-        ip4: state.v2p.ip4.lock().clone(),
-        ip6: state.v2p.ip6.lock().clone(),
-    })
+    Ok(state.v2p.dump())
 }
 
 #[no_mangle]
