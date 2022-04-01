@@ -17,7 +17,6 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use illumos_ddi_dki as ddi;
 use illumos_ddi_dki::*;
 
 use crate::ioctl::IoctlEnvelope;
@@ -26,7 +25,8 @@ use opte_core::ether::EtherAddr;
 use opte_core::geneve::Vni;
 use opte_core::headers::IpCidr;
 use opte_core::ioctl::{
-    self as api, CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, SnatCfg,
+    self as api, CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd,
+    SetXdeUnderlayReq, SnatCfg,
 };
 use opte_core::ip4::Ipv4Addr;
 use opte_core::ip6::Ipv6Addr;
@@ -34,6 +34,7 @@ use opte_core::oxide_net::firewall::{AddFwRuleReq, RemFwRuleReq};
 use opte_core::oxide_net::{overlay, router, PortCfg};
 use opte_core::packet::{Initialized, Packet, ParseError, Parsed};
 use opte_core::port::{Port, ProcessResult};
+use opte_core::sync::{KMutex, KMutexType};
 use opte_core::sync::{KRwLock, KRwLockType};
 use opte_core::{CStr, CString, Direction, ExecCtx, OpteError};
 
@@ -110,36 +111,50 @@ struct xde_underlay_port {
 struct XdeState {
     ectx: Arc<ExecCtx>,
     v2p: Arc<overlay::Virt2Phys>,
+    underlay: KMutex<Option<UnderlayState>>,
+}
 
+struct UnderlayState {
     // each xde driver has a handle to two underlay ports that are used for I/O
     // onto the underlay network
     u1: xde_underlay_port,
     u2: xde_underlay_port,
 }
 
-fn get_xde_state() -> &'static XdeState {
-    // Safety: The opte_dip pointer is write-once and is a valid
-    // pointer passed to attach(9E). The returned pointer is valid as
-    // it was derived from Box::into_raw() during attach(9E).
-    unsafe { &*(ddi_get_driver_private(xde_dip) as *mut XdeState) }
-}
-
-impl XdeState {
-    fn new(underlay1: String, underlay2: String) -> Self {
-        let ectx = Arc::new(ExecCtx { log: Box::new(opte_core::KernelLog {}) });
-        XdeState {
+impl UnderlayState {
+    pub fn new(u1: String, u2: String) -> Self {
+        UnderlayState {
             u1: xde_underlay_port {
-                name: underlay1,
+                name: u1,
                 mh: 0 as *mut mac::mac_handle,
                 mch: 0 as *mut mac::mac_client_handle,
                 mph: 0 as *mut mac::mac_promisc_handle,
             },
             u2: xde_underlay_port {
-                name: underlay2,
+                name: u2,
                 mh: 0 as *mut mac::mac_handle,
                 mch: 0 as *mut mac::mac_client_handle,
                 mph: 0 as *mut mac::mac_promisc_handle,
             },
+        }
+    }
+}
+
+fn get_xde_state() -> &'static mut XdeState {
+    // Safety: The opte_dip pointer is write-once and is a valid
+    // pointer passed to attach(9E). The returned pointer is valid as
+    // it was derived from Box::into_raw() during set_xde_underlay
+    unsafe {
+        let p = ddi_get_driver_private(xde_dip);
+        &mut *(p as *mut XdeState)
+    }
+}
+
+impl XdeState {
+    fn new() -> Self {
+        let ectx = Arc::new(ExecCtx { log: Box::new(opte_core::KernelLog {}) });
+        XdeState {
+            underlay: KMutex::new(None, KMutexType::Driver),
             ectx,
             v2p: Arc::new(overlay::Virt2Phys::new()),
         }
@@ -247,6 +262,11 @@ fn delete_xde_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     delete_xde(&req)
 }
 
+fn set_xde_underlay_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: SetXdeUnderlayReq = env.copy_in_req()?;
+    set_xde_underlay(&req)
+}
+
 // This is the entry point for all OPTE commands. It verifies the API
 // version and then multiplexes the command to its appropriate handler.
 #[no_mangle]
@@ -291,6 +311,11 @@ unsafe extern "C" fn xde_dld_ioc_opte_cmd(
 
         OpteCmd::DeleteXde => {
             let resp = delete_xde_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::SetXdeUnderlay => {
+            let resp = set_xde_underlay_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
 
@@ -341,6 +366,16 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // TODO name validation
     // TODO check if xde is already in list before proceeding
     let state = get_xde_state();
+    let underlay_ = state.underlay.lock();
+    let underlay = match *underlay_ {
+        Some(ref u) => u,
+        None => {
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: "underlay not initialized".to_string(),
+            })
+        }
+    };
 
     let (port, port_cfg) = new_port(
         req.xde_devname.clone(),
@@ -366,9 +401,10 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         port_cfg,
         passthrough: req.passthrough,
         vni: req.vpc_vni.value(),
-        u1: state.u1.clone(),
-        u2: state.u2.clone(),
+        u1: underlay.u1.clone(),
+        u2: underlay.u2.clone(),
     });
+    drop(underlay_);
 
     // set up upper mac
     let mreg = match unsafe { mac::mac_alloc(MAC_VERSION as u32).as_mut() } {
@@ -490,6 +526,23 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
+#[no_mangle]
+fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
+    let state = get_xde_state();
+    let mut underlay = state.underlay.lock();
+    if underlay.is_some() {
+        return Err(OpteError::System {
+            errno: EEXIST,
+            msg: "underlay already initialized".into(),
+        });
+    }
+    *underlay = Some(unsafe {
+        init_underlay_ingress_handlers(req.u1.clone(), req.u2.clone())?
+    });
+
+    Ok(NoResp::default())
+}
+
 const IOCTL_SZ: usize = core::mem::size_of::<api::OpteCmdIoctl>();
 
 static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [dld::dld_ioc_info_t {
@@ -513,19 +566,8 @@ unsafe extern "C" fn xde_attach(
 
     xde_dip = dip;
 
-    let u1 = match get_driver_prop_string("underlay1") {
-        Some(p) => p,
-        None => {
-            return DDI_FAILURE;
-        }
-    };
-
-    let u2 = match get_driver_prop_string("underlay2") {
-        Some(p) => p,
-        None => {
-            return DDI_FAILURE;
-        }
-    };
+    let state = Box::new(XdeState::new());
+    ddi_set_driver_private(xde_dip, Box::into_raw(state) as *mut c_void);
 
     warn!("dld_ioc_add: {:#?}", xde_ioc_list);
 
@@ -541,38 +583,34 @@ unsafe extern "C" fn xde_attach(
         }
     }
 
-    let mut state = XdeState::new(u1, u2);
-    match init_underlay_ingress_handlers(&mut state) {
-        ddi::DDI_SUCCESS => {}
-        error => {
-            dld::dld_ioc_unregister(dld::XDE_IOC);
-            return error;
-        }
-    }
-
-    let state = Box::new(state);
-    ddi_set_driver_private(dip, Box::into_raw(state) as *mut c_void);
-
     return DDI_SUCCESS;
 }
 
 #[no_mangle]
-unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
+unsafe fn init_underlay_ingress_handlers(
+    u1: String,
+    u2: String,
+) -> Result<UnderlayState, OpteError> {
+    let mut state = UnderlayState::new(u1.clone(), u2.clone());
     // null terminated underlay device names
 
-    let u1_devname = match CString::new(state.u1.name.as_str()) {
+    let u1_devname = match CString::new(u1.as_str()) {
         Ok(s) => s,
         Err(e) => {
-            warn!("bad u1 dev name: {:?}", e);
-            return EINVAL;
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: format!("bad u1 dev name: {:?}", e),
+            });
         }
     };
 
-    let u2_devname = match CString::new(state.u2.name.as_str()) {
+    let u2_devname = match CString::new(u2.as_str()) {
         Ok(s) => s,
         Err(e) => {
-            warn!("bad u2 dev name: {:?}", e);
-            return EINVAL;
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: format!("bad u2 dev name: {:?}", e),
+            });
         }
     };
 
@@ -585,8 +623,13 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
         0 => {}
         err => {
             let p = CStr::from_ptr(u1_devname.as_ptr() as *const c_char);
-            warn!("failed to open underlay port 1: {:?}", p);
-            return err;
+            return Err(OpteError::System {
+                errno: EFAULT,
+                msg: format!(
+                    "failed to open underlay port 1: {:?}: {}",
+                    p, err
+                ),
+            });
         }
     }
 
@@ -596,8 +639,14 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
     ) {
         0 => {}
         err => {
-            warn!("failed to open underlay port 2");
-            return err;
+            let p = CStr::from_ptr(u2_devname.as_ptr() as *const c_char);
+            return Err(OpteError::System {
+                errno: EFAULT,
+                msg: format!(
+                    "failed to open underlay port 2: {:?}: {}",
+                    p, err
+                ),
+            });
         }
     }
 
@@ -613,8 +662,10 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
     ) {
         0 => {}
         err => {
-            warn!("mac client open for u1 failed: {}", err);
-            return err;
+            return Err(OpteError::System {
+                errno: EFAULT,
+                msg: format!("mac client open for u1 failed: {}", err),
+            });
         }
     }
 
@@ -626,8 +677,10 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
     ) {
         0 => {}
         err => {
-            warn!("mac client open for u2 failed: {}", err);
-            return err;
+            return Err(OpteError::System {
+                errno: EFAULT,
+                msg: format!("mac client open for u2 failed: {}", err),
+            });
         }
     }
 
@@ -643,8 +696,10 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
     ) {
         0 => {}
         err => {
-            warn!("mac promisc add u1 failed: {}", err);
-            return err;
+            return Err(OpteError::System {
+                errno: EFAULT,
+                msg: format!("mac promisc add u1 failed: {}", err),
+            });
         }
     }
 
@@ -671,8 +726,10 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
     ) {
         0 => {}
         err => {
-            warn!("mac promisc add u2 failed: {}", err);
-            return err;
+            return Err(OpteError::System {
+                errno: EFAULT,
+                msg: format!("mac promisc add u2 failed: {}", err),
+            });
         }
     }
     /*
@@ -683,7 +740,7 @@ unsafe fn init_underlay_ingress_handlers(state: &mut XdeState) -> c_int {
     );
     */
 
-    DDI_SUCCESS
+    Ok(state)
 }
 
 #[no_mangle]
@@ -732,20 +789,25 @@ unsafe extern "C" fn xde_detach(
     let rstate = ddi_get_driver_private(xde_dip);
     assert!(!rstate.is_null());
     let state = &*(rstate as *mut XdeState);
+    let underlay = state.underlay.lock();
+    match *underlay {
+        Some(ref underlay) => {
+            // mac rx clear for underlay devices
+            mac::mac_rx_clear(underlay.u1.mch);
+            mac::mac_rx_clear(underlay.u2.mch);
+            mac::mac_promisc_remove(underlay.u1.mph);
+            mac::mac_promisc_remove(underlay.u2.mph);
 
-    // mac rx clear for underlay devices
-    mac::mac_rx_clear(state.u1.mch);
-    mac::mac_rx_clear(state.u2.mch);
-    mac::mac_promisc_remove(state.u1.mph);
-    mac::mac_promisc_remove(state.u2.mph);
+            // close mac client handle for underlay devices
+            mac::mac_client_close(underlay.u1.mch, 0);
+            mac::mac_client_close(underlay.u2.mch, 0);
 
-    // close mac client handle for underlay devices
-    mac::mac_client_close(state.u1.mch, 0);
-    mac::mac_client_close(state.u2.mch, 0);
-
-    // close mac handle for underlay devices
-    mac::mac_close(state.u1.mh);
-    mac::mac_close(state.u2.mh);
+            // close mac handle for underlay devices
+            mac::mac_close(underlay.u1.mh);
+            mac::mac_close(underlay.u2.mh);
+        }
+        None => {}
+    };
 
     let _ = Box::from_raw(rstate as *mut XdeState);
 

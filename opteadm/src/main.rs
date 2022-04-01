@@ -110,6 +110,9 @@ enum Command {
     /// Delete an xde device
     DeleteXde { name: String },
 
+    /// Set up xde underlay devices
+    SetXdeUnderlay { u1: String, u2: String },
+
     /// Set a virtual-to-physical mapping
     SetV2P {
         vpc_ip4: Ipv4Addr,
@@ -639,6 +642,11 @@ fn main() {
         Command::DeleteXde { name } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
             let _ = hdl.delete_xde(&name).unwrap_or_die();
+        }
+
+        Command::SetXdeUnderlay { u1, u2 } => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let _ = hdl.set_xde_underlay(&u1, &u2).unwrap_or_die();
         }
 
         Command::RmFwRule { port, direction, id } => {

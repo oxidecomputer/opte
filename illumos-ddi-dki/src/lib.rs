@@ -533,6 +533,7 @@ pub const EAGAIN: c_int = 11;
 pub const ENOMEM: c_int = 12;
 pub const EFAULT: c_int = 14;
 pub const EBUSY: c_int = 16;
+pub const EEXIST: c_int = 17;
 pub const EINVAL: c_int = 22;
 pub const EPIPE: c_int = 32;
 pub const ENOMSG: c_int = 35;
