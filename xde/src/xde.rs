@@ -494,7 +494,7 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     let mut underlay = state.underlay.lock();
     if underlay.is_some() {
         return Err(OpteError::System {
-            errno: EINVAL,
+            errno: EEXIST,
             msg: "underlay already initialized".into(),
         });
     }
@@ -601,7 +601,7 @@ unsafe fn init_underlay_ingress_handlers(
     ) {
         0 => {}
         err => {
-            let p = CStr::from_ptr(u1_devname.as_ptr() as *const c_char);
+            let p = CStr::from_ptr(u2_devname.as_ptr() as *const c_char);
             return Err(OpteError::System {
                 errno: EFAULT,
                 msg: format!(
@@ -690,7 +690,7 @@ unsafe fn init_underlay_ingress_handlers(
         err => {
             return Err(OpteError::System {
                 errno: EFAULT,
-                msg: format!("mac promisc add u1 failed: {}", err),
+                msg: format!("mac promisc add u2 failed: {}", err),
             });
         }
     }
@@ -751,28 +751,25 @@ unsafe extern "C" fn xde_detach(
     let rstate = ddi_get_driver_private(xde_dip);
     assert!(!rstate.is_null());
     let state = &*(rstate as *mut XdeState);
-    let underlay_ = state.underlay.lock();
-    let underlay = match *underlay_ {
-        Some(ref u) => u,
-        None => {
-            warn!("underlay not initialized");
-            return EINVAL;
+    let underlay = state.underlay.lock();
+    match *underlay {
+        Some(ref underlay) => {
+            // mac rx clear for underlay devices
+            mac::mac_rx_clear(underlay.u1.mch);
+            mac::mac_rx_clear(underlay.u2.mch);
+            mac::mac_promisc_remove(underlay.u1.mph);
+            mac::mac_promisc_remove(underlay.u2.mph);
+
+            // close mac client handle for underlay devices
+            mac::mac_client_close(underlay.u1.mch, 0);
+            mac::mac_client_close(underlay.u2.mch, 0);
+
+            // close mac handle for underlay devices
+            mac::mac_close(underlay.u1.mh);
+            mac::mac_close(underlay.u2.mh);
         }
+        None => {}
     };
-
-    // mac rx clear for underlay devices
-    mac::mac_rx_clear(underlay.u1.mch);
-    mac::mac_rx_clear(underlay.u2.mch);
-    mac::mac_promisc_remove(underlay.u1.mph);
-    mac::mac_promisc_remove(underlay.u2.mph);
-
-    // close mac client handle for underlay devices
-    mac::mac_client_close(underlay.u1.mch, 0);
-    mac::mac_client_close(underlay.u2.mch, 0);
-
-    // close mac handle for underlay devices
-    mac::mac_close(underlay.u1.mh);
-    mac::mac_close(underlay.u2.mh);
 
     let _ = Box::from_raw(rstate as *mut XdeState);
 
