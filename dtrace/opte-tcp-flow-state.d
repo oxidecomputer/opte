@@ -5,7 +5,7 @@
  */
 #include "common.h"
 
-#define	FMT	"%-16s %-16s %s\n"
+#define	FMT	"%-16s %-8s %-8s %s\n"
 
 BEGIN {
 	/*
@@ -13,10 +13,7 @@ BEGIN {
 	 * It's always going to be TCP but we need this declared so
 	 * the FLOW_FMT macros work.
 	 */
-	protos[1]= "ICMP";
-	protos[2] = "IGMP";
 	protos[6] = "TCP";
-	protos[17] = "UDP";
 
 	/*
 	 * Use an associative array to stringify the TCP state
@@ -32,21 +29,32 @@ BEGIN {
 	tcp_states[7] = "FIN_WAIT_1";
 	tcp_states[8] = "FIN_WAIT_2";
 	tcp_states[9] = "TIME_WAIT";
+
+	printf(FMT, "PORT", "CURR", "NEW", "FLOW");
+	num = 0;
 }
 
 tcp-flow-state {
-	this->flow = (flow_id_sdt_arg_t *)arg0;
+	this->port = stringof(arg0);
+	this->flow = (flow_id_sdt_arg_t *)arg1;
 	this->af = this->flow->af;
-	this->bstate = tcp_states[arg1];
-	this->astate = tcp_states[arg2];
+	this->curr = tcp_states[arg2];
+	this->new = tcp_states[arg3];
+
+	if (num >= 10) {
+		printf(FMT, "PORT", "CURR", "NEW", "FLOW");
+		num = 0;
+	}
+
+	num++;
 }
 
 tcp-flow-state /this->af == AF_INET/ {
 	FLOW_FMT(this->s, this->flow);
-	printf(FMT, this->bstate, this->astate, this->s);
+	printf(FMT, this->port, this->curr, this->new, this->s);
 }
 
 tcp-flow-state /this->af == AF_INET6/ {
 	FLOW_FMT6(this->s, this->flow);
-	printf(FMT, this->bstate, this->astate, this->s);
+	printf(FMT, this->port, this->curr, this->new, this->s);
 }

@@ -49,7 +49,11 @@ static mut xde_dip: *mut dev_info = 0 as *mut dev_info;
 
 // This block is purely for SDT probes.
 extern "C" {
-    pub fn __dtrace_probe_bad__packet(mp: uintptr_t, msg: uintptr_t);
+    pub fn __dtrace_probe_bad__packet(
+        port: uintptr_t,
+        mp: uintptr_t,
+        msg: uintptr_t,
+    );
     pub fn __dtrace_probe_guest__loopback(
         mp: uintptr_t,
         flow: uintptr_t,
@@ -69,9 +73,26 @@ extern "C" {
     pub fn __dtrace_probe_tx(mp: uintptr_t);
 }
 
-fn bad_packet_probe(mp: uintptr_t, err: &ParseError) {
+fn bad_packet_unknown_probe(mp: uintptr_t, err: &ParseError) {
     let msg_arg = CString::new(format!("{:?}", err)).unwrap();
-    unsafe { __dtrace_probe_bad__packet(mp, msg_arg.as_ptr() as uintptr_t) };
+    unsafe {
+        __dtrace_probe_bad__packet(
+            b"unknown\0" as *const u8 as uintptr_t,
+            mp,
+            msg_arg.as_ptr() as uintptr_t,
+        )
+    };
+}
+
+fn bad_packet_probe(port: &CString, mp: uintptr_t, err: &ParseError) {
+    let msg_arg = CString::new(format!("{:?}", err)).unwrap();
+    unsafe {
+        __dtrace_probe_bad__packet(
+            port.as_ptr() as uintptr_t,
+            mp,
+            msg_arg.as_ptr() as uintptr_t,
+        )
+    };
 }
 
 fn next_hop_probe(
@@ -1104,7 +1125,11 @@ unsafe extern "C" fn xde_mc_tx(
             // NOTE: We are using mp_chain as read only here to get
             // the pointer value so that the DTrace consumer can
             // examine the packet on failure.
-            bad_packet_probe(mp_chain as uintptr_t, &e);
+            bad_packet_probe(
+                src_dev.port.name_cstr(),
+                mp_chain as uintptr_t,
+                &e,
+            );
             // Let's be noisy about this for now to catch bugs.
             warn!("failed to parse packet: {:?}", e);
             return ptr::null_mut();
@@ -1664,7 +1689,9 @@ unsafe extern "C" fn xde_rx(
             // NOTE: We are using mp_chain as read only here to get
             // the pointer value so that the DTrace consumer can
             // examine the packet on failure.
-            bad_packet_probe(mp_chain as uintptr_t, &e);
+            //
+            // We don't know the port yet, thus the "unknown".
+            bad_packet_unknown_probe(mp_chain as uintptr_t, &e);
             warn!("failed to parse packet: {:?}", e);
             return;
         }

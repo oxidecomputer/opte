@@ -13,6 +13,7 @@ typedef struct flow_id_sdt_arg {
 } flow_id_sdt_arg_t;
 
 typedef struct rule_match_sdt_arg {
+	char			*port;
 	char			*layer;
 	char			*dir;
 	flow_id_sdt_arg_t	*flow;
@@ -20,6 +21,7 @@ typedef struct rule_match_sdt_arg {
 } rule_match_sdt_arg_t;
 
 typedef struct rule_no_match_sdt_arg {
+	char			*port;
 	char			*layer;
 	char			*dir;
 	flow_id_sdt_arg_t	*flow;

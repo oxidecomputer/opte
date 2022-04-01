@@ -4,39 +4,40 @@
  *
  * dtrace -ZCqs ./usdt-opte-rule-match.d
  */
-#define	HDR_FMT		"%-6s %-3s %-12s %-43s %s\n"
+#define	HDR_FMT		"%-8s %-12s %-6s %-3s %-43s %s\n"
 
 BEGIN {
-	printf(HDR_FMT, "MATCH", "DIR", "LAYER", "FLOW", "ACTION");
+	printf(HDR_FMT, "PORT", "LAYER", "MATCH", "DIR", "FLOW", "ACTION");
 	num = 0;
 }
 
 rule-match {
-	this->layer = copyinstr(arg0);
-	this->dir = json(copyinstr(arg1), "ok");
-	this->flow = copyinstr(arg2);
-	this->action = copyinstr(arg3);
-	num++;
+	this->port = copyinstr(arg0);
+	this->layer = copyinstr(arg1);
+	this->dir = json(copyinstr(arg2), "ok");
+	this->flow = copyinstr(arg3);
+	this->action = copyinstr(arg4);
 
-	if (num >= 10) {
-		printf(HDR_FMT, "MATCH", "DIR", "LAYER", "FLOW", "ACTION");
-		num = 0;
-	}
-
-	printf(HDR_FMT, "YES", this->dir, this->layer, this->flow,
+	printf(HDR_FMT, this->port, this->layer, "YES", this->dir, this->flow,
 	    this->action);
 }
 
 rule-no-match {
-	this->layer = copyinstr(arg0);
-	this->dir = json(copyinstr(arg1), "ok");
-	this->flow = copyinstr(arg2);
-	num++;
+	this->port = copyinstr(arg0);
+	this->layer = copyinstr(arg1);
+	this->dir = json(copyinstr(arg2), "ok");
+	this->flow = copyinstr(arg3);
 
+	printf(HDR_FMT, this->port, this->layer, "NO", this->dir, this->flow,
+	    "--");
+}
+
+rule-match,rule-no-match {
 	if (num >= 10) {
-		printf(HDR_FMT, "MATCH", "DIR", "LAYER", "FLOW", "ACTION");
+		printf(HDR_FMT, "PORT", "LAYER", "MATCH", "DIR", "FLOW",
+		    "ACTION");
 		num = 0;
 	}
 
-	printf(HDR_FMT, "NO", this->dir, this->layer, this->flow, "--");
+	num++;
 }

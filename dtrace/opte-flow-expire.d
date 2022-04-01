@@ -8,7 +8,7 @@
 #include "common.h"
 #include <sys/inttypes.h>
 
-#define	HDR_FMT "%-12s %s\n"
+#define	HDR_FMT "%-24s %-18s %s\n"
 
 BEGIN {
 	/*
@@ -19,16 +19,17 @@ BEGIN {
 	protos[6] = "TCP";
 	protos[17] = "UDP";
 
-	printf(HDR_FMT, "LAYER", "FLOW");
+	printf(HDR_FMT, "PORT", "FT NAME", "FLOW");
 	num = 0;
 }
 
 sdt:opte::flow-expired {
-	this->name = stringof(arg0);
-	this->flow = (flow_id_sdt_arg_t *)arg1;
+	this->port = stringof(arg0);
+	this->name = stringof(arg1);
+	this->flow = (flow_id_sdt_arg_t *)arg2;
 
 	if (num >= 10) {
-		printf(HDR_FMT, "NAME", "FLOW");
+		printf(HDR_FMT, "PORT", "FT NAME", "FLOW");
 		num = 0;
 	}
 
@@ -41,13 +42,13 @@ sdt:opte::flow-expired {
 
 sdt:opte::flow-expired /this->af == AF_INET/ {
 	FLOW_FMT(this->s, this->flow);
-	printf(HDR_FMT, this->name, this->s);
+	printf(HDR_FMT, this->port, this->name, this->s);
 	num++;
 }
 
 sdt:opte::flow-expired /this->af == AF_INET6/ {
 	FLOW_FMT6(this->s, this->flow);
-	printf(HDR_FMT, this->name, this->s);
+	printf(HDR_FMT, this->port, this->name, this->s);
 	num++;
 }
 

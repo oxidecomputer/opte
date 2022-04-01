@@ -16,8 +16,6 @@ cfg_if! {
     }
 }
 
-use serde::{Deserialize, Serialize};
-
 use crate::ether::EtherAddr;
 use crate::flow_table::{FlowTable, StateSummary};
 use crate::ioctl;
@@ -25,10 +23,10 @@ use crate::layer::{
     InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT,
 };
 use crate::packet::{Initialized, Packet, PacketMeta, PacketState, Parsed};
-use crate::rule::{ht_fire_probe, Action, Finalized, Rule, HT};
+use crate::rule::{ht_probe, Action, Finalized, Rule, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::tcp::TcpState;
-use crate::tcp_state::{self, TcpFlowState};
+use crate::tcp_state::TcpFlowState;
 use crate::{CString, Direction, ExecCtx, OpteError};
 
 pub const UFT_DEF_MAX_ENTIRES: u32 = 8192;
@@ -119,6 +117,83 @@ impl<S: PortState> Port<S> {
     pub fn name_cstr(&self) -> &CString {
         &self.name_cstr
     }
+
+    pub fn port_process_entry_probe<P: PacketState>(
+        &self,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        pkt: &Packet<P>,
+    ) {
+        cfg_if::cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let ifid_arg = flow_id_sdt_arg::from(ifid);
+
+                unsafe {
+                    __dtrace_probe_port__process__entry(
+                        dir.cstr_raw() as uintptr_t,
+                        self.name_cstr.as_ptr() as uintptr_t,
+                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        pkt.mblk_addr(),
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                use std::arch::asm;
+
+                let ifid_s = ifid.to_string();
+                crate::opte_provider::port__process__entry!(
+                    || (dir, &self.name, ifid_s, pkt.mblk_addr())
+                );
+            } else {
+                let (_, _, _) = (dir, ifid, pkt);
+            }
+        }
+    }
+
+    pub fn port_process_return_probe<P: PacketState>(
+        &self,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        pkt: &Packet<P>,
+        res: &result::Result<ProcessResult, ProcessError>,
+    ) {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let ifid_arg = flow_id_sdt_arg::from(ifid);
+                // XXX This would probably be better as separate probes;
+                // for now this does the trick.
+                let res_str = match res {
+                    Ok(v) => format!("{:?}", v),
+                    Err(e) => format!("ERROR: {:?}", e),
+                };
+                let res_arg = cstr_core::CString::new(res_str).unwrap();
+
+                unsafe {
+                    __dtrace_probe_port__process__return(
+                        dir.cstr_raw() as uintptr_t,
+                        self.name_cstr.as_ptr() as uintptr_t,
+                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        pkt.mblk_addr(),
+                        res_arg.as_ptr() as uintptr_t,
+                    );
+                }
+
+            } else if #[cfg(feature = "usdt")] {
+                use std::arch::asm;
+
+                let ifid_s = ifid.to_string();
+                let res_str = match res {
+                    Ok(v) => format!("{:?}", v),
+                    Err(e) => format!("ERROR: {:?}", e),
+                };
+
+                crate::opte_provider::port__process__return!(
+                    || (dir, &self.name, ifid_s, pkt.mblk_addr(), res_str)
+                );
+            } else {
+                let (_, _, _, _) = (dir, ifid, pkt, res);
+            }
+        }
+    }
 }
 
 impl Port<Inactive> {
@@ -130,21 +205,24 @@ impl Port<Inactive> {
                 layers: self.state.layers.into_inner(),
                 uft_in: KMutex::new(
                     FlowTable::new(
-                        "uft-in".to_string(),
+                        &self.name,
+                        "uft_in",
                         Some(UFT_DEF_MAX_ENTIRES),
                     ),
                     KMutexType::Driver,
                 ),
                 uft_out: KMutex::new(
                     FlowTable::new(
-                        "uft-out".to_string(),
+                        &self.name,
+                        "uft_out",
                         Some(UFT_DEF_MAX_ENTIRES),
                     ),
                     KMutexType::Driver,
                 ),
                 tcp_flows: KMutex::new(
                     FlowTable::new(
-                        "tcp-flows".to_string(),
+                        &self.name,
+                        "tcp_flows",
                         Some(UFT_DEF_MAX_ENTIRES),
                     ),
                     KMutexType::Driver,
@@ -476,13 +554,13 @@ impl Port<Active> {
         pkt: &mut Packet<Parsed>,
     ) -> result::Result<ProcessResult, ProcessError> {
         let ifid = InnerFlowId::from(pkt.meta());
-        port_process_entry_probe(dir, &self.name, &ifid, &pkt);
+        self.port_process_entry_probe(dir, &ifid, &pkt);
         let mut meta = meta::Meta::new();
         let res = match dir {
             Direction::Out => self.process_out(&ifid, pkt, &mut meta),
             Direction::In => self.process_in(&ifid, pkt, &mut meta),
         };
-        port_process_return_probe(dir, &self.name, &ifid, &pkt, &res);
+        self.port_process_return_probe(dir, &ifid, &pkt, &res);
         // XXX If this is a Hairpin result there is no need for this call.
         pkt.emit_headers()?;
         res
@@ -507,10 +585,10 @@ impl Port<Active> {
             Some((_, entry)) => {
                 let tfes = entry.get_state_mut();
 
+                // XXX Could this be wrapped into tcp_state.rs?
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    tcp_state::tcp_flow_drop_probe(
+                    tfes.tcp_state.tcp_flow_drop_probe(
                         &ifid_after,
-                        &tfes.tcp_state,
                         Direction::In,
                         tcp.flags,
                     );
@@ -560,9 +638,8 @@ impl Port<Active> {
                 let tfes = entry.get_state_mut();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    tcp_state::tcp_flow_drop_probe(
+                    tfes.tcp_state.tcp_flow_drop_probe(
                         &ifid_after,
-                        &tfes.tcp_state,
                         Direction::In,
                         tcp.flags,
                     );
@@ -593,10 +670,13 @@ impl Port<Active> {
                 // Add a new flow entry in the `Listen` state, we'll
                 // wait for the outgoing SYN+ACK to transition to
                 // `SynRcvd`.
-                let tfs =
-                    TcpFlowState::new(TcpState::Listen, None, Some(tcp.seq));
+                let tfs = TcpFlowState::new(
+                    &self.name,
+                    TcpState::Listen,
+                    None,
+                    Some(tcp.seq),
+                );
 
-                // TODO Deal with error.
                 let tfes = TcpFlowEntryState {
                     // This must be the UFID of inbound traffic _as it
                     // arrives_, not after it's processed.
@@ -650,7 +730,13 @@ impl Port<Active> {
                 for ht in entry.get_state() {
                     ht.run(pkt.meta_mut());
                     let ifid_after = InnerFlowId::from(pkt.meta());
-                    ht_fire_probe("UFT", Direction::In, &ifid, &ifid_after);
+                    ht_probe(
+                        &self.name_cstr,
+                        "UFT-in",
+                        Direction::In,
+                        &ifid,
+                        &ifid_after,
+                    );
                 }
 
                 // For inbound traffic the TCP flow table must be
@@ -741,9 +827,8 @@ impl Port<Active> {
                 let tcp = meta.inner_tcp().unwrap();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    tcp_state::tcp_flow_drop_probe(
+                    tfes.tcp_state.tcp_flow_drop_probe(
                         &ifid,
-                        &tfes.tcp_state,
                         Direction::Out,
                         tcp.flags,
                     );
@@ -789,9 +874,8 @@ impl Port<Active> {
                 let tfes = entry.get_state_mut();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    tcp_state::tcp_flow_drop_probe(
+                    tfes.tcp_state.tcp_flow_drop_probe(
                         &ifid,
-                        &tfes.tcp_state,
                         Direction::Out,
                         tcp.flags,
                     );
@@ -812,8 +896,12 @@ impl Port<Active> {
                 // Create a new entry and find its current state. In
                 // this case it should always be `SynSent` as a flow
                 // would have already existed in the `SynRcvd` case.
-                let mut tfs =
-                    TcpFlowState::new(TcpState::Closed, Some(tcp.seq), None);
+                let mut tfs = TcpFlowState::new(
+                    &self.name,
+                    TcpState::Closed,
+                    Some(tcp.seq),
+                    None,
+                );
 
                 let tcp_state = match tfs.process(Direction::Out, &ifid, &tcp) {
                     Ok(tcp_state) => tcp_state,
@@ -823,8 +911,6 @@ impl Port<Active> {
                 };
 
                 // The inbound UFID is determined on the inbound side.
-                //
-                // TODO Deal with error.
                 let tfes =
                     TcpFlowEntryState { inbound_ufid: None, tcp_state: tfs };
 
@@ -895,7 +981,13 @@ impl Port<Active> {
                 for ht in entry.get_state() {
                     ht.run(pkt.meta_mut());
                     let ifid_after = InnerFlowId::from(pkt.meta());
-                    ht_fire_probe("UFT", Direction::Out, &ifid, &ifid_after);
+                    ht_probe(
+                        &self.name_cstr,
+                        "UFT-out",
+                        Direction::Out,
+                        &ifid,
+                        &ifid_after,
+                    );
                 }
 
                 return Ok(ProcessResult::Modified);
@@ -1001,7 +1093,7 @@ pub enum Pos {
     After(&'static str),
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub struct TcpFlowEntryState {
     inbound_ufid: Option<InnerFlowId>,
     tcp_state: TcpFlowState,
@@ -1031,87 +1123,6 @@ extern "C" {
         pkt: uintptr_t,
         res: uintptr_t,
     );
-}
-
-pub fn port_process_entry_probe<S: PacketState>(
-    dir: Direction,
-    name: &str,
-    ifid: &InnerFlowId,
-    pkt: &Packet<S>,
-) {
-    cfg_if::cfg_if! {
-        if #[cfg(all(not(feature = "std"), not(test)))] {
-            use cstr_core::CString;
-            // TODO should really just have a dir.c_str() method.
-            let dir_arg = match dir {
-                Direction::In => CString::new("in").unwrap(),
-                Direction::Out => CString::new("out").unwrap(),
-            };
-            let name_arg = CString::new(name).unwrap();
-            let ifid_arg = flow_id_sdt_arg::from(ifid);
-
-            unsafe {
-                __dtrace_probe_port__process__entry(
-                    dir_arg.as_ptr() as uintptr_t,
-                    name_arg.as_ptr() as uintptr_t,
-                    &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
-                    pkt.mblk_addr(),
-                );
-            }
-        } else if #[cfg(feature = "usdt")] {
-            use std::arch::asm;
-            crate::opte_provider::port__process__entry!(
-                || (dir, name, ifid.to_string(), pkt.mblk_addr())
-            );
-        } else {
-            let (_, _, _, _) = (dir, name, ifid, pkt);
-        }
-    }
-}
-
-pub fn port_process_return_probe<S: PacketState>(
-    dir: Direction,
-    name: &str,
-    ifid: &InnerFlowId,
-    pkt: &Packet<S>,
-    res: &result::Result<ProcessResult, ProcessError>,
-) {
-    cfg_if! {
-        if #[cfg(all(not(feature = "std"), not(test)))] {
-            let name_arg = cstr_core::CString::new(name).unwrap();
-            let ifid_arg = flow_id_sdt_arg::from(ifid);
-            // XXX This would probably be better as separate probes;
-            // for now this does the trick.
-            let res_str = match res {
-                Ok(v) => format!("{:?}", v),
-                Err(e) => format!("ERROR: {:?}", e),
-            };
-            let res_arg = cstr_core::CString::new(res_str).unwrap();
-
-            unsafe {
-                __dtrace_probe_port__process__return(
-                    dir as uintptr_t,
-                    name_arg.as_ptr() as uintptr_t,
-                    &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
-                    pkt.mblk_addr(),
-                    res_arg.as_ptr() as uintptr_t,
-                );
-            }
-
-        } else if #[cfg(feature = "usdt")] {
-            use std::arch::asm;
-            let res_str = match res {
-                Ok(v) => format!("{:?}", v),
-                Err(e) => format!("ERROR: {:?}", e),
-            };
-
-            crate::opte_provider::port__process__return!(
-                || (dir, name, ifid.to_string(), pkt.mblk_addr(), res_str)
-            );
-        } else {
-            let (_, _, _, _, _) = (dir, name, ifid, pkt, res);
-        }
-    }
 }
 
 /// Metadata which may be accessed and modified by any [`Action`][a]

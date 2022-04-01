@@ -6,6 +6,7 @@ cfg_if! {
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
+        use illumos_ddi_dki::uintptr_t;
     } else {
         use std::boxed::Box;
         use std::string::{String, ToString};
@@ -37,7 +38,7 @@ use crate::tcp::TcpMeta;
 use crate::udp::UdpMeta;
 use crate::{CString, Direction};
 
-use illumos_ddi_dki::{c_char, uintptr_t};
+use illumos_ddi_dki::c_char;
 
 use serde::{Deserialize, Serialize};
 
@@ -822,20 +823,6 @@ extern "C" {
     pub fn __dtrace_probe_ht__run(arg: uintptr_t);
 }
 
-// We mark all the std-built probes as `unsafe`, not because they are,
-// but in order to stay consistent with the externs, which are
-// implicitly unsafe. This also keeps the compiler from throwing up a
-// warning for every probe callsite when compiling with std.
-//
-// TODO In the future we could have these std versions of the probes
-// modify some global state so that unit/functional tests can verify
-// that they fire when expected. We could also wire them up as USDTs,
-// allowing someone to inspect a test with DTrace.
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_ht__run(_arg: uintptr_t) {
-    ()
-}
-
 #[repr(C)]
 pub struct flow_id_sdt_arg {
     af: i32,
@@ -877,44 +864,52 @@ impl From<&InnerFlowId> for flow_id_sdt_arg {
 
 #[repr(C)]
 pub struct ht_run_sdt_arg {
+    pub port: *const c_char,
     pub loc: *const c_char,
     pub dir: *const c_char,
     pub flow_id_before: *const flow_id_sdt_arg,
     pub flow_id_after: *const flow_id_sdt_arg,
 }
 
-pub fn ht_fire_probe(
+pub fn ht_probe(
+    port: &CString,
     loc: &str,
     dir: Direction,
     before: &InnerFlowId,
     after: &InnerFlowId,
 ) {
-    let loc_c = CString::new(loc).unwrap();
-    let dir_c = match dir {
-        Direction::In => CString::new("in").unwrap(),
-        Direction::Out => CString::new("out").unwrap(),
-    };
-    let flow_id_before = flow_id_sdt_arg::from(before);
-    let flow_id_after = flow_id_sdt_arg::from(after);
+    cfg_if! {
+        if #[cfg(all(not(feature = "std"), not(test)))] {
+            let loc_c = CString::new(loc).unwrap();
+            let flow_id_before = flow_id_sdt_arg::from(before);
+            let flow_id_after = flow_id_sdt_arg::from(after);
 
-    let arg = ht_run_sdt_arg {
-        // TODO: Sigh, I'm only doing this because some
-        // platforms define c_char as u8, and I want to be
-        // able to run unit tests on those other platforms.
-        #[cfg(all(not(feature = "std"), not(test)))]
-        loc: loc_c.as_ptr(),
-        #[cfg(any(feature = "std", test))]
-        loc: loc_c.as_ptr() as *const u8 as *const c_char,
-        #[cfg(all(not(feature = "std"), not(test)))]
-        dir: dir_c.as_ptr(),
-        #[cfg(any(feature = "std", test))]
-        dir: dir_c.as_ptr() as *const u8 as *const c_char,
-        flow_id_before: &flow_id_before,
-        flow_id_after: &flow_id_after,
-    };
+            let arg = ht_run_sdt_arg {
+                port: port.as_ptr(),
+                loc: loc_c.as_ptr(),
+                dir: dir.cstr_raw(),
+                flow_id_before: &flow_id_before,
+                flow_id_after: &flow_id_after,
+            };
 
-    unsafe {
-        __dtrace_probe_ht__run(&arg as *const ht_run_sdt_arg as uintptr_t);
+            unsafe {
+                __dtrace_probe_ht__run(
+                    &arg as *const ht_run_sdt_arg as uintptr_t
+                );
+            }
+        } else if #[cfg(feature = "usdt")] {
+            use std::arch::asm;
+
+            let port_s = port.to_str().unwrap();
+            let before_s = before.to_string();
+            let after_s = after.to_string();
+
+            crate::opte_provider::ht__run!(
+                || (port_s, loc, dir, before_s, after_s)
+            );
+        } else {
+            let (_, _, _, _, _) = (port, loc, dir, before, after);
+        }
     }
 }
 

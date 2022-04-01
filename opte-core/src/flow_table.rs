@@ -4,29 +4,27 @@ cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::{String, ToString};
         use alloc::vec::Vec;
-        use illumos_ddi_dki::{gethrtime, hrtime_t};
+        use illumos_ddi_dki::{gethrtime, hrtime_t, uintptr_t};
+        use crate::rule::flow_id_sdt_arg;
     } else {
         use std::string::{String, ToString};
         use std::time::{Duration, Instant};
         use std::vec::Vec;
-        use illumos_ddi_dki::c_char;
     }
 }
 
 use serde::{Deserialize, Serialize};
 
 use crate::layer::InnerFlowId;
-use crate::rule::flow_id_sdt_arg;
 use crate::CString;
-
-use illumos_ddi_dki::uintptr_t;
 
 pub const FLOW_DEF_EXPIRE_SECS: u32 = 60;
 pub const FLOW_TABLE_DEF_MAX_ENTRIES: u32 = 8192;
 
 #[derive(Debug)]
 pub struct FlowTable<S> {
-    name: String,
+    port_c: CString,
+    name_c: CString,
     limit: u32,
 
     // XXX I originally commented this out because I thought it was
@@ -66,13 +64,15 @@ where
 
     #[cfg(all(not(feature = "std"), not(test)))]
     pub fn expire_flows(&mut self, now: hrtime_t) {
-        let name = &self.name;
+        let name_c = &self.name_c;
+        let port_c = &self.port_c;
+
         self.map.retain(|(flowid, state)| {
             #[cfg(any(feature = "std", test))]
             let now = Instant::now();
 
             if state.is_expired(now) {
-                flow_expired_sdt(name, flowid);
+                flow_expired_probe(port_c, name_c, flowid);
                 return false;
             }
 
@@ -82,10 +82,12 @@ where
 
     #[cfg(any(feature = "std", test))]
     pub fn expire_flows(&mut self, now: Instant) {
-        let name = &self.name;
+        let name_c = &self.name_c;
+        let port_c = &self.port_c;
+
         self.map.retain(|(flowid, state)| {
             if state.is_expired(now) {
-                flow_expired_sdt(name, flowid);
+                flow_expired_probe(port_c, name_c, flowid);
                 return false;
             }
 
@@ -124,14 +126,45 @@ where
         None
     }
 
-    pub fn new(name: String, limit: Option<u32>) -> FlowTable<S> {
+    pub fn new(port: &str, name: &str, limit: Option<u32>) -> FlowTable<S> {
         let limit = limit.unwrap_or(FLOW_TABLE_DEF_MAX_ENTRIES);
-        FlowTable { limit, map: Vec::with_capacity(limit as usize), name }
+        FlowTable {
+            port_c: CString::new(port).unwrap(),
+            name_c: CString::new(name).unwrap(),
+            limit,
+            map: Vec::with_capacity(limit as usize),
+        }
     }
 
     /// Get the number of flows in this table.
     pub fn num_flows(&self) -> u32 {
         self.map.len() as u32
+    }
+}
+
+fn flow_expired_probe(port: &CString, name: &CString, flowid: &InnerFlowId) {
+    cfg_if! {
+        if #[cfg(all(not(feature = "std"), not(test)))] {
+            let arg = flow_id_sdt_arg::from(flowid);
+
+            unsafe {
+                __dtrace_probe_flow__expired(
+                    port.as_ptr() as uintptr_t,
+                    name.as_ptr() as uintptr_t,
+                    &arg as *const flow_id_sdt_arg as uintptr_t,
+                );
+            }
+        } else if #[cfg(feature = "usdt")] {
+            use std::arch::asm;
+
+            let port_s = port.to_str().unwrap();
+            let name_s = name.to_str().unwrap();
+            crate::opte_provider::flow__expired!(
+                || (port_s, name_s, flowid.to_string())
+            );
+        } else {
+            let (_, _, _) = (port, name, flowid);
+        }
     }
 }
 
@@ -244,39 +277,11 @@ impl<S: StateSummary> From<&FlowEntry<S>> for FlowEntryDump {
 
 #[cfg(all(not(feature = "std"), not(test)))]
 extern "C" {
-    pub fn __dtrace_probe_flow__expired(layer: uintptr_t, flowid: uintptr_t);
-}
-
-// We mark all the std-built probes as `unsafe`, not because they are,
-// but in order to stay consistent with the externs, which are
-// implicitly unsafe. This also keeps the compiler from thorwing up a
-// warning for every probe callsite when compiling with std.
-//
-// TODO In the future we could have these std versions of the probes
-// modify some global state so that unit/functional tests can verify
-// that they fire when expected. We could also wire them up as USDTs,
-// allowing someone to inspect a test with DTrace.
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_flow__expired(
-    _layer: uintptr_t,
-    _flowid: uintptr_t,
-) {
-    ()
-}
-
-fn flow_expired_sdt(name: &str, flowid: &InnerFlowId) {
-    #[cfg(all(not(feature = "std"), not(test)))]
-    let name_c = CString::new(name).unwrap().as_ptr();
-    #[cfg(any(feature = "std", test))]
-    let name_c =
-        CString::new(name).unwrap().as_ptr() as *const u8 as *const c_char;
-    let arg = flow_id_sdt_arg::from(flowid);
-    unsafe {
-        __dtrace_probe_flow__expired(
-            name_c as uintptr_t,
-            &arg as *const flow_id_sdt_arg as uintptr_t,
-        );
-    }
+    pub fn __dtrace_probe_flow__expired(
+        port: uintptr_t,
+        layer: uintptr_t,
+        flowid: uintptr_t,
+    );
 }
 
 impl StateSummary for () {
@@ -298,7 +303,7 @@ fn flow_expired() {
         dst_port: 443,
     };
 
-    let mut ft = FlowTable::new("flow-expired-test".to_string(), None);
+    let mut ft = FlowTable::new("port", "flow-expired-test", None);
 
     assert_eq!(ft.num_flows(), 0);
     ft.add(flowid, ());
@@ -323,7 +328,7 @@ fn flow_clear() {
         dst_port: 443,
     };
 
-    let mut ft = FlowTable::new("flow-clear-test".to_string(), None);
+    let mut ft = FlowTable::new("port", "flow-clear-test", None);
 
     assert_eq!(ft.num_flows(), 0);
     ft.add(flowid, ());

@@ -7,7 +7,7 @@ cfg_if! {
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
-        use illumos_ddi_dki::hrtime_t;
+        use illumos_ddi_dki::{hrtime_t, uintptr_t};
     } else {
         use std::string::{String, ToString};
         use std::sync::Arc;
@@ -25,13 +25,12 @@ use crate::ip4::{Ipv4Addr, Protocol};
 use crate::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
 use crate::port::meta::Meta;
 use crate::rule::{
-    self, flow_id_sdt_arg, ht_fire_probe, Action, ActionDesc, Rule, RuleDump,
-    HT,
+    self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, Rule, RuleDump, HT,
 };
 use crate::sync::{KMutex, KMutexType};
 use crate::{CString, Direction, ExecCtx, LogLevel};
 
-use illumos_ddi_dki::{c_char, uintptr_t};
+use illumos_ddi_dki::c_char;
 
 #[derive(Debug)]
 pub enum LayerError {
@@ -69,8 +68,9 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 pub struct Layer {
-    port_name: String,
+    port_c: CString,
     name: String,
+    name_c: CString,
     actions: Vec<Action>,
     ft_in: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
     ft_out: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
@@ -110,20 +110,36 @@ impl Layer {
         ifid: &InnerFlowId,
         err: &rule::GenDescError,
     ) {
-        let flow_id = flow_id_sdt_arg::from(ifid);
-        let port_c = CString::new(format!("{}", self.port_name)).unwrap();
-        let layer_c = CString::new(format!("{}", self.name)).unwrap();
-        let dir_c = CString::new(format!("{}", dir)).unwrap();
-        let msg_c = CString::new(format!("{:?}", err)).unwrap();
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let flow_id = flow_id_sdt_arg::from(ifid);
+                let dir_c = CString::new(format!("{}", dir)).unwrap();
+                let msg_c = CString::new(format!("{:?}", err)).unwrap();
 
-        unsafe {
-            __dtrace_probe_gen__desc__fail(
-                port_c.as_ptr() as uintptr_t,
-                layer_c.as_ptr() as uintptr_t,
-                dir_c.as_ptr() as uintptr_t,
-                &flow_id as *const flow_id_sdt_arg as uintptr_t,
-                msg_c.as_ptr() as uintptr_t,
-            );
+                unsafe {
+                    __dtrace_probe_gen__desc__fail(
+                        self.port_c.as_ptr() as uintptr_t,
+                        self.name_c.as_ptr() as uintptr_t,
+                        dir_c.as_ptr() as uintptr_t,
+                        &flow_id as *const flow_id_sdt_arg as uintptr_t,
+                        msg_c.as_ptr() as uintptr_t,
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                use std::arch::asm;
+
+                let port_s = self.port_c.to_str().unwrap();
+                let name_s = self.name_c.to_str().unwrap();
+                let flow_s = ifid.to_string();
+                let msg_s = format!("{:?}", err);
+
+                crate::opte_provider::gen__desc__fail!(
+                    || (port_s, name_s, dir, flow_s, msg_s)
+                );
+            } else {
+                let (_, _, _, _, _) =
+                    (&self.port_c, &self.name_c, dir, ifid, err);
+            }
         }
     }
 
@@ -133,20 +149,34 @@ impl Layer {
         ifid: &InnerFlowId,
         err: &rule::GenHtError,
     ) {
-        let flow_id = flow_id_sdt_arg::from(ifid);
-        let port_c = CString::new(format!("{}", self.port_name)).unwrap();
-        let layer_c = CString::new(format!("{}", self.name)).unwrap();
-        let dir_c = CString::new(format!("{}", dir)).unwrap();
-        let msg_c = CString::new(format!("{:?}", err)).unwrap();
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let flow_id = flow_id_sdt_arg::from(ifid);
+                let dir_c = CString::new(format!("{}", dir)).unwrap();
+                let msg_c = CString::new(format!("{:?}", err)).unwrap();
 
-        unsafe {
-            __dtrace_probe_gen__ht__fail(
-                port_c.as_ptr() as uintptr_t,
-                layer_c.as_ptr() as uintptr_t,
-                dir_c.as_ptr() as uintptr_t,
-                &flow_id as *const flow_id_sdt_arg as uintptr_t,
-                msg_c.as_ptr() as uintptr_t,
-            );
+                unsafe {
+                    __dtrace_probe_gen__ht__fail(
+                        self.port_c.as_ptr() as uintptr_t,
+                        self.name_c.as_ptr() as uintptr_t,
+                        dir_c.as_ptr() as uintptr_t,
+                        &flow_id as *const flow_id_sdt_arg as uintptr_t,
+                        msg_c.as_ptr() as uintptr_t,
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                use std::arch::asm;
+
+                let port_s = self.port_c.to_str().unwrap();
+                let flow_s = ifid.to_string();
+                let err_s = format!("{:?}", err);
+
+                crate::opte_provider::gen__ht__fail!(
+                    || (port_s, &self.name, dir, flow_s, err_s)
+                );
+            } else {
+                let (_, _, _) = (dir, ifid, err);
+            }
         }
     }
 
@@ -162,30 +192,113 @@ impl Layer {
         self.ft_out.lock().expire_flows(now);
     }
 
+    pub fn layer_process_entry_probe(
+        &self,
+        dir: Direction,
+        ifid: &InnerFlowId,
+    ) {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+
+                let ifid_arg = flow_id_sdt_arg::from(ifid);
+
+                unsafe {
+                    __dtrace_probe_layer__process__entry(
+                        dir as uintptr_t,
+                        self.port_c.as_ptr() as uintptr_t,
+                        self.name_c.as_ptr() as uintptr_t,
+                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                use std::arch::asm;
+
+                let port_s = self.port_c.to_str().unwrap();
+                let ifid_s = ifid.to_string();
+
+                crate::opte_provider::layer__process__entry!(
+                    || (dir, port_s, &self.name, ifid_s)
+                );
+            } else {
+                let (_, _) = (dir, ifid);
+            }
+        }
+    }
+
+    fn layer_process_return_probe(
+        &self,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        res: &result::Result<LayerResult, LayerError>,
+    ) {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                // XXX This would probably be better as separate probes;
+                // for now this does the trick.
+                let res_str = match res {
+                    Ok(v) => format!("{}", v),
+                    Err(e) => format!("ERROR: {:?}", e),
+                };
+                let ifid_arg = flow_id_sdt_arg::from(ifid);
+                let res_c = CString::new(res_str).unwrap();
+
+                unsafe {
+                    __dtrace_probe_layer__process__return(
+                        dir.cstr_raw() as uintptr_t,
+                        self.port_c.as_ptr() as uintptr_t,
+                        self.name_c.as_ptr() as uintptr_t,
+                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        res_c.as_ptr() as uintptr_t,
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                use std::arch::asm;
+
+                let port_s = self.port_c.to_str().unwrap();
+                let ifid_s = ifid.to_string();
+                // XXX This would probably be better as separate probes;
+                // for now this does the trick.
+                let res_s = match res {
+                    Ok(v) => format!("{}", v),
+                    Err(e) => format!("ERROR: {:?}", e),
+                };
+                crate::opte_provider::layer__process__return!(
+                    || (dir, port_s, &self.name, ifid_s, &res_s)
+                );
+            } else {
+                let (_, _, _) = (dir, ifid, res);
+            }
+        }
+    }
+
     /// Return the name of the layer.
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn new(name: &str, port_name: &str, actions: Vec<Action>) -> Self {
+    pub fn new(name: &str, port: &str, actions: Vec<Action>) -> Self {
+        let port_c = CString::new(port).unwrap();
+        let name_c = CString::new(name).unwrap();
+
         Layer {
             actions,
             name: name.to_string(),
-            port_name: port_name.to_string(),
+            name_c,
+            port_c: port_c.clone(),
             ft_in: KMutex::new(
-                FlowTable::new(name.to_string(), None),
+                FlowTable::new(port, &format!("{}_in", name), None),
                 KMutexType::Driver,
             ),
             ft_out: KMutex::new(
-                FlowTable::new(name.to_string(), None),
+                FlowTable::new(port, &format!("{}_out", name), None),
                 KMutexType::Driver,
             ),
             rules_in: KMutex::new(
-                RuleTable::new(name.to_string(), Direction::In),
+                RuleTable::new(port, name, Direction::In),
                 KMutexType::Driver,
             ),
             rules_out: KMutex::new(
-                RuleTable::new(name.to_string(), Direction::Out),
+                RuleTable::new(port, name, Direction::Out),
                 KMutexType::Driver,
             ),
         }
@@ -214,12 +327,12 @@ impl Layer {
         meta: &mut Meta,
     ) -> result::Result<LayerResult, LayerError> {
         let ifid = InnerFlowId::from(pkt.meta());
-        layer_process_entry_probe(dir, &self.name, &ifid);
+        self.layer_process_entry_probe(dir, &ifid);
         let res = match dir {
             Direction::Out => self.process_out(ectx, pkt, &ifid, hts, meta),
             Direction::In => self.process_in(ectx, pkt, &ifid, hts, meta),
         };
-        layer_process_return_probe(dir, &self.name, &ifid, &res);
+        self.layer_process_return_probe(dir, &ifid, &res);
         res
     }
 
@@ -246,7 +359,8 @@ impl Layer {
             ht.run(pkt.meta_mut());
 
             let ifid_after = InnerFlowId::from(pkt.meta());
-            ht_fire_probe(
+            ht_probe(
+                &self.port_c,
                 &format!("{}-ft", self.name),
                 Direction::In,
                 &ifid,
@@ -296,7 +410,7 @@ impl Layer {
 
         match rule.unwrap().action() {
             Action::Deny => {
-                rule_deny_probe(&self.name, Direction::In, ifid);
+                self.rule_deny_probe(Direction::In, ifid);
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
@@ -325,7 +439,8 @@ impl Layer {
 
                 let ifid_after = InnerFlowId::from(pkt.meta());
 
-                ht_fire_probe(
+                ht_probe(
+                    &self.port_c,
                     &format!("{}-rt", self.name),
                     Direction::In,
                     &ifid,
@@ -359,7 +474,8 @@ impl Layer {
 
                 let ifid_after = InnerFlowId::from(pkt.meta());
 
-                ht_fire_probe(
+                ht_probe(
+                    &self.port_c,
                     &format!("{}-rt", self.name),
                     Direction::In,
                     &ifid,
@@ -422,7 +538,8 @@ impl Layer {
             ht.run(pkt.meta_mut());
 
             let ifid_after = InnerFlowId::from(pkt.meta());
-            ht_fire_probe(
+            ht_probe(
+                &self.port_c,
                 &format!("{}-ft", self.name),
                 Direction::Out,
                 &ifid,
@@ -473,7 +590,7 @@ impl Layer {
 
         match rule.unwrap().action() {
             Action::Deny => {
-                rule_deny_probe(&self.name, Direction::Out, ifid);
+                self.rule_deny_probe(Direction::Out, ifid);
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
@@ -502,7 +619,8 @@ impl Layer {
 
                 let ifid_after = InnerFlowId::from(pkt.meta());
 
-                ht_fire_probe(
+                ht_probe(
+                    &self.port_c,
                     &format!("{}-rt", self.name),
                     Direction::Out,
                     &ifid,
@@ -536,7 +654,8 @@ impl Layer {
 
                 let ifid_after = InnerFlowId::from(pkt.meta());
 
-                ht_fire_probe(
+                ht_probe(
+                    &self.port_c,
                     &format!("{}-rt", self.name),
                     Direction::Out,
                     &ifid,
@@ -618,6 +737,34 @@ impl Layer {
             Direction::Out => self.rules_out.lock().remove(id),
         }
     }
+
+    pub fn rule_deny_probe(&self, dir: Direction, flow_id: &InnerFlowId) {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let flow_arg = flow_id_sdt_arg::from(flow_id);
+
+                unsafe {
+                    __dtrace_probe_rule__deny(
+                        self.port_c.as_ptr() as uintptr_t,
+                        self.name_c.as_ptr() as uintptr_t,
+                        dir.cstr_raw() as uintptr_t,
+                        &flow_arg as *const flow_id_sdt_arg as uintptr_t,
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                use std::arch::asm;
+
+                let port_s = self.port_c.to_str().unwrap();
+                let flow_s = flow_id.to_string();
+
+                crate::opte_provider::rule__deny!(
+                    || (port_s, &self.name, dir, flow_s)
+                );
+            } else {
+                let (_, _) = (dir, flow_id);
+            }
+        }
+    }
 }
 
 pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
@@ -684,7 +831,8 @@ impl From<&PacketMeta> for InnerFlowId {
 // TODO move this into Layer itself.
 #[derive(Debug)]
 pub struct RuleTable {
-    layer: String,
+    port_c: CString,
+    layer_c: CString,
     dir: Direction,
     rules: Vec<(RuleId, Rule<rule::Finalized>)>,
     next_id: RuleId,
@@ -731,18 +879,12 @@ impl<'a> RuleTable {
     {
         for (_, r) in &self.rules {
             if r.is_match(meta, rdr) {
-                rule_match_probe(
-                    &self.layer,
-                    self.dir,
-                    &InnerFlowId::from(meta),
-                    &r,
-                );
+                self.rule_match_probe(&InnerFlowId::from(meta), &r);
                 return Some(r);
             }
         }
 
-        rule_no_match_probe(&self.layer, self.dir, &InnerFlowId::from(meta));
-
+        self.rule_no_match_probe(self.dir, &InnerFlowId::from(meta));
         None
     }
 
@@ -768,8 +910,14 @@ impl<'a> RuleTable {
         RulePlace::End
     }
 
-    fn new(layer: String, dir: Direction) -> Self {
-        Self { layer, dir, rules: vec![], next_id: 0 }
+    fn new(port: &str, layer: &str, dir: Direction) -> Self {
+        Self {
+            port_c: CString::new(port).unwrap(),
+            layer_c: CString::new(layer).unwrap(),
+            dir,
+            rules: vec![],
+            next_id: 0,
+        }
     }
 
     fn num_rules(&self) -> usize {
@@ -787,270 +935,78 @@ impl<'a> RuleTable {
 
         Err(Error::RuleNotFound { id })
     }
-}
 
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_layer__process__entry(
-    _dir: uintptr_t,
-    _name: uintptr_t,
-    _ifid: uintptr_t,
-) {
-    ()
-}
+    pub fn rule_no_match_probe(&self, dir: Direction, flow_id: &InnerFlowId) {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let flow_id = flow_id_sdt_arg::from(flow_id);
 
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_layer__process__return(
-    _dir: uintptr_t,
-    _name: uintptr_t,
-    _ifid: uintptr_t,
-    _res: uintptr_t,
-) {
-    ()
-}
+                let arg = rule_no_match_sdt_arg {
+                    port: self.port_c.as_ptr(),
+                    layer: self.layer_c.as_ptr(),
+                    dir: dir.cstr_raw(),
+                    flow_id: &flow_id,
+                };
 
-#[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
-    pub fn __dtrace_probe_layer__process__entry(
-        dir: uintptr_t,
-        name: uintptr_t,
-        ifid: uintptr_t,
-    );
+                unsafe {
+                    __dtrace_probe_rule__no__match(
+                        &arg as *const rule_no_match_sdt_arg as uintptr_t,
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                use std::arch::asm;
 
-    pub fn __dtrace_probe_layer__process__return(
-        dir: uintptr_t,
-        name: uintptr_t,
-        ifid: uintptr_t,
-        res: uintptr_t,
-    );
-}
+                let port_s = self.port_c.to_str().unwrap();
+                let layer_s = self.layer_c.to_str().unwrap();
 
-pub fn layer_process_entry_probe(
-    dir: Direction,
-    name: &str,
-    ifid: &InnerFlowId,
-) {
-    let name_c = CString::new(name).unwrap();
-    let ifid_arg = flow_id_sdt_arg::from(ifid);
-
-    unsafe {
-        __dtrace_probe_layer__process__entry(
-            dir as uintptr_t,
-            name_c.as_ptr() as uintptr_t,
-            &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
-        );
-    }
-}
-
-pub fn layer_process_return_probe(
-    dir: Direction,
-    name: &str,
-    ifid: &InnerFlowId,
-    res: &result::Result<LayerResult, LayerError>,
-) {
-    cfg_if! {
-        if #[cfg(all(not(feature = "std"), not(test)))] {
-            // XXX This would probably be better as separate probes;
-            // for now this does the trick.
-            let res_str = match res {
-                Ok(v) => format!("{}", v),
-                Err(e) => format!("ERROR: {:?}", e),
-            };
-            let dir_c = match dir {
-                Direction::In => CString::new("in").unwrap(),
-                Direction::Out => CString::new("out").unwrap(),
-            };
-            let name_c = CString::new(name).unwrap();
-            let ifid_arg = flow_id_sdt_arg::from(ifid);
-            let res_c = CString::new(res_str).unwrap();
-
-            unsafe {
-                __dtrace_probe_layer__process__return(
-                    dir_c.as_ptr() as uintptr_t,
-                    name_c.as_ptr() as uintptr_t,
-                    &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
-                    res_c.as_ptr() as uintptr_t,
+                crate::opte_provider::rule__no__match!(
+                    || (port_s, layer_s, dir, flow_id.to_string())
                 );
+            } else {
+                let (_, _, _, _) = (&self.port_c, &self.layer_c, dir, flow_id);
             }
-        } else if #[cfg(feature = "usdt")] {
-            use std::arch::asm;
-            // XXX This would probably be better as separate probes;
-            // for now this does the trick.
-            let res_str = match res {
-                Ok(v) => format!("{}", v),
-                Err(e) => format!("ERROR: {:?}", e),
-            };
-            crate::opte_provider::layer_process_return!(
-                || (dir, name, ifid, &res_str)
-            );
-        } else {
-            let (_, _, _, _) = (dir, name, ifid, res);
         }
     }
-}
 
-#[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
-    pub fn __dtrace_probe_rule__match(arg: uintptr_t);
-}
+    fn rule_match_probe(
+        &self,
+        flow_id: &InnerFlowId,
+        rule: &Rule<rule::Finalized>,
+    ) {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let action_str = rule.action().to_string();
+                let flow_id = flow_id_sdt_arg::from(flow_id);
+                let action_str_c = CString::new(action_str).unwrap();
+                let arg = rule_match_sdt_arg {
+                    port: self.port_c.as_ptr(),
+                    layer: self.layer_c.as_ptr(),
+                    dir: self.dir.cstr_raw(),
+                    flow_id: &flow_id,
+                    rule_type: action_str_c.as_ptr(),
+                };
 
-#[repr(C)]
-pub struct rule_match_sdt_arg {
-    pub layer: *const c_char,
-    pub dir: *const c_char,
-    pub flow_id: *const flow_id_sdt_arg,
-    pub rule_type: *const c_char,
-}
+                unsafe {
+                    __dtrace_probe_rule__match(
+                        &arg as *const rule_match_sdt_arg as uintptr_t,
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                use std::arch::asm;
 
-pub fn rule_match_probe(
-    layer: &str,
-    dir: Direction,
-    flow_id: &InnerFlowId,
-    rule: &Rule<rule::Finalized>,
-) {
-    cfg_if! {
-        if #[cfg(all(not(feature = "std"), not(test)))] {
-            let action_str = rule.action().to_string();
-            let layer_c = CString::new(layer).unwrap();
-            let dir_c = match dir {
-                Direction::In => CString::new("in").unwrap(),
-                Direction::Out => CString::new("out").unwrap(),
-            };
-            let flow_id = flow_id_sdt_arg::from(flow_id);
-            let action_str_c = CString::new(action_str).unwrap();
+                let port_s = self.port_c.to_str().unwrap();
+                let layer_s = self.layer_c.to_str().unwrap();
+                let action_s = rule.action().to_string();
 
-            let arg = rule_match_sdt_arg {
-                layer: layer_c.as_ptr(),
-                dir: dir_c.as_ptr(),
-                flow_id: &flow_id,
-                rule_type: action_str_c.as_ptr(),
-            };
-
-            unsafe {
-                __dtrace_probe_rule__match(
-                    &arg as *const rule_match_sdt_arg as uintptr_t,
+                crate::opte_provider::rule__match!(
+                    || (port_s, layer_s, self.dir, flow_id.to_string(),
+                        action_s)
                 );
+            } else {
+                let (_, _) = (flow_id, rule);
             }
-        } else if #[cfg(feature = "usdt")] {
-            use std::arch::asm;
-            let action_str = rule.action().to_string();
-            crate::opte_provider::rule__match!(
-                || (layer, dir, flow_id.to_string(), action_str)
-            );
-        } else {
-            let (_, _, _, _) = (layer, dir, flow_id, rule);
         }
     }
-}
-
-#[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
-    pub fn __dtrace_probe_rule__no__match(arg: uintptr_t);
-}
-
-#[repr(C)]
-pub struct rule_no_match_sdt_arg {
-    pub layer: *const c_char,
-    pub dir: *const c_char,
-    pub flow_id: *const flow_id_sdt_arg,
-}
-
-pub fn rule_no_match_probe(layer: &str, dir: Direction, flow_id: &InnerFlowId) {
-    cfg_if! {
-        if #[cfg(all(not(feature = "std"), not(test)))] {
-            let layer_c = CString::new(layer).unwrap();
-            let dir_c = match dir {
-                Direction::In => CString::new("in").unwrap(),
-                Direction::Out => CString::new("out").unwrap(),
-            };
-            let flow_id = flow_id_sdt_arg::from(flow_id);
-
-            let arg = rule_no_match_sdt_arg {
-                layer: layer_c.as_ptr(),
-                dir: dir_c.as_ptr(),
-                flow_id: &flow_id,
-            };
-
-            unsafe {
-                __dtrace_probe_rule__no__match(
-                    &arg as *const rule_no_match_sdt_arg as uintptr_t,
-                );
-            }
-        } else if #[cfg(feature = "usdt")] {
-            use std::arch::asm;
-            crate::opte_provider::rule__no__match!(
-                || (layer, dir, flow_id.to_string())
-            );
-        } else {
-            let (_, _, _) = (layer, dir, flow_id);
-        }
-    }
-}
-
-// We mark all the std-built probes as `unsafe`, not because they are,
-// but in order to stay consistent with the externs, which are
-// implicitly unsafe. This also keeps the compiler from throwing up a
-// warning for every probe callsite when compiling with std.
-//
-// TODO In the future we could have these std versions of the probes
-// modify some global state so that unit/functional tests can verify
-// that they fire when expected. We could also wire them up as USDTs,
-// allowing someone to inspect a test with DTrace.
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_rule__deny(_arg: uintptr_t) {
-    ()
-}
-
-#[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
-    pub fn __dtrace_probe_rule__deny(arg: uintptr_t);
-}
-
-#[repr(C)]
-pub struct rule_deny_sdt_arg {
-    pub layer: *const c_char,
-    pub dir: *const c_char,
-    pub flow_id: *const flow_id_sdt_arg,
-}
-
-pub fn rule_deny_probe(layer: &str, dir: Direction, flow_id: &InnerFlowId) {
-    let layer_c = CString::new(layer).unwrap();
-    let dir_c = match dir {
-        Direction::In => CString::new("in").unwrap(),
-        Direction::Out => CString::new("out").unwrap(),
-    };
-    let flow_id = flow_id_sdt_arg::from(flow_id);
-
-    let arg = rule_deny_sdt_arg {
-        // TODO: Sigh, I'm only doing this because some
-        // platforms define c_char as u8, and I want to be
-        // able to run unit tests on those other platforms.
-        #[cfg(all(not(feature = "std"), not(test)))]
-        layer: layer_c.as_ptr(),
-        #[cfg(any(feature = "std", test))]
-        layer: layer_c.as_ptr() as *const u8 as *const c_char,
-        #[cfg(all(not(feature = "std"), not(test)))]
-        dir: dir_c.as_ptr(),
-        #[cfg(any(feature = "std", test))]
-        dir: dir_c.as_ptr() as *const u8 as *const c_char,
-        flow_id: &flow_id,
-    };
-
-    unsafe {
-        __dtrace_probe_rule__deny(
-            &arg as *const rule_deny_sdt_arg as uintptr_t,
-        );
-    }
-}
-
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_gen__desc__fail(
-    _port: uintptr_t,
-    _layer: uintptr_t,
-    _dir: uintptr_t,
-    _ifid: uintptr_t,
-    _msg: uintptr_t,
-) {
-    ()
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -1062,21 +1018,7 @@ extern "C" {
         ifid: uintptr_t,
         msg: uintptr_t,
     );
-}
 
-#[cfg(any(feature = "std", test))]
-pub unsafe fn __dtrace_probe_gen__ht__fail(
-    _port: uintptr_t,
-    _layer: uintptr_t,
-    _dir: uintptr_t,
-    _ifid: uintptr_t,
-    _msg: uintptr_t,
-) {
-    ()
-}
-
-#[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
     pub fn __dtrace_probe_gen__ht__fail(
         port: uintptr_t,
         layer: uintptr_t,
@@ -1084,6 +1026,47 @@ extern "C" {
         ifid: uintptr_t,
         msg: uintptr_t,
     );
+
+    pub fn __dtrace_probe_layer__process__entry(
+        dir: uintptr_t,
+        port: uintptr_t,
+        name: uintptr_t,
+        ifid: uintptr_t,
+    );
+    pub fn __dtrace_probe_layer__process__return(
+        dir: uintptr_t,
+        port: uintptr_t,
+        name: uintptr_t,
+        ifid: uintptr_t,
+        res: uintptr_t,
+    );
+
+    pub fn __dtrace_probe_rule__match(arg: uintptr_t);
+    pub fn __dtrace_probe_rule__no__match(arg: uintptr_t);
+
+    pub fn __dtrace_probe_rule__deny(
+        port: uintptr_t,
+        layer: uintptr_t,
+        dir: uintptr_t,
+        flow: uintptr_t,
+    );
+}
+
+#[repr(C)]
+pub struct rule_match_sdt_arg {
+    pub port: *const c_char,
+    pub layer: *const c_char,
+    pub dir: *const c_char,
+    pub flow_id: *const flow_id_sdt_arg,
+    pub rule_type: *const c_char,
+}
+
+#[repr(C)]
+pub struct rule_no_match_sdt_arg {
+    pub port: *const c_char,
+    pub layer: *const c_char,
+    pub dir: *const c_char,
+    pub flow_id: *const flow_id_sdt_arg,
 }
 
 #[test]
@@ -1094,7 +1077,7 @@ fn find_rule() {
     use crate::rule::{self, Ipv4AddrMatch, Predicate};
     use crate::tcp::TcpMeta;
 
-    let mut rule_table = RuleTable::new("test".to_string(), Direction::Out);
+    let mut rule_table = RuleTable::new("port", "test", Direction::Out);
     let rule = Rule::new(
         1,
         Action::Static(Arc::new(rule::Identity::new("find_rule"))),

@@ -8,7 +8,7 @@
  */
 #include "common.h"
 
-#define	HDR_FMT		"%-3s %-12s %-43s %s\n"
+#define	HDR_FMT		"%-16s %-16s %-3s %-48s %s\n"
 
 BEGIN {
 	/*
@@ -20,18 +20,19 @@ BEGIN {
 	protos[17] = "UDP";
 	protos[255] = "XXX";
 
-	printf(HDR_FMT, "DIR", "NAME", "FLOW", "RES");
+	printf(HDR_FMT, "PORT", "LAYER", "DIR", "FLOW", "RES");
 	num = 0;
 }
 
-sdt:opte::layer-process-return {
+layer-process-return {
 	this->dir = stringof(arg0);
-	this->name = stringof(arg1);
-	this->flow = (flow_id_sdt_arg_t *)arg2;
-	this->res = stringof(arg3);
+	this->port = stringof(arg1);
+	this->layer = stringof(arg2);
+	this->flow = (flow_id_sdt_arg_t *)arg3;
+	this->res = stringof(arg4);
 
 	if (num >= 10) {
-		printf(HDR_FMT, "DIR", "NAME", "FLOW", "RES");
+		printf(HDR_FMT, "PORT", "LAYER", "DIR", "FLOW", "RES");
 		num = 0;
 	}
 
@@ -42,14 +43,14 @@ sdt:opte::layer-process-return {
 	}
 }
 
-sdt:opte::layer-process-return /this->af == AF_INET/ {
+layer-process-return /this->af == AF_INET/ {
 	FLOW_FMT(this->s, this->flow);
-	printf(HDR_FMT, this->dir, this->name, this->s, this->res);
+	printf(HDR_FMT, this->port, this->layer, this->dir, this->s, this->res);
 	num++;
 }
 
-sdt:opte::layer-process-return /this->af == AF_INET6/ {
+layer-process-return /this->af == AF_INET6/ {
 	FLOW_FMT6(this->s, this->flow);
-	printf(HDR_FMT,  this->dir, this->name, this->s, this->res);
+	printf(HDR_FMT, this->port, this->layer, this->dir, this->s, this->res);
 	num++;
 }

@@ -238,6 +238,15 @@ pub enum Direction {
     Out,
 }
 
+impl Direction {
+    pub fn cstr_raw(&self) -> *const c_char {
+        match self {
+            Self::In => b"in\0".as_ptr() as *const c_char,
+            Self::Out => b"out\0".as_ptr() as *const c_char,
+        }
+    }
+}
+
 impl FromStr for Direction {
     type Err = ParseErr;
 
@@ -279,9 +288,48 @@ impl Display for Direction {
 #[cfg(feature = "usdt")]
 #[usdt::provider]
 mod opte_provider {
-    use crate::layer::InnerFlowId;
     use crate::Direction;
 
+    fn flow__expired(port: &str, ft_name: &str, flow: &str) {}
+    fn gen__desc__fail(
+        port: &str,
+        layer: &str,
+        dir: Direction,
+        flow: &str,
+        err: &str,
+    ) {
+    }
+    fn gen__ht__fail(
+        port: &str,
+        layer: &str,
+        dir: Direction,
+        flow: &str,
+        err: &str,
+    ) {
+    }
+    fn ht__run(
+        port: &str,
+        loc: &str,
+        dir: Direction,
+        before: &str,
+        after: &str,
+    ) {
+    }
+    fn layer__process__entry(
+        dir: Direction,
+        port: &str,
+        name: &str,
+        flow: &str,
+    ) {
+    }
+    fn layer__process__return(
+        dir: Direction,
+        port: &str,
+        name: &str,
+        flow: &str,
+        res: &str,
+    ) {
+    }
     fn port__process__entry(
         dir: Direction,
         name: &str,
@@ -297,13 +345,21 @@ mod opte_provider {
         res: &str,
     ) {
     }
-    fn rule__match(layer: &str, dir: Direction, flow: &str, action: &str) {}
-    fn rule__no__match(layer: &str, dir: Direction, flow: &str) {}
-    fn layer_process_return(
+    fn rule__deny(port: &str, layer: &str, dir: Direction, flow: &str) {}
+    fn rule__match(
+        port: &str,
+        layer: &str,
         dir: Direction,
-        name: &str,
-        id: &InnerFlowId,
-        res: &str,
+        flow: &str,
+        action: &str,
+    ) {
+    }
+    fn rule__no__match(port: &str, layer: &str, dir: Direction, flow: &str) {}
+    fn tcp__flow__state(
+        port: &str,
+        flow: &str,
+        curr_state: &str,
+        new_state: &str,
     ) {
     }
 }
