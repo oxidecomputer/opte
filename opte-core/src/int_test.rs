@@ -18,7 +18,7 @@ use std::fs;
 use std::ops::Range;
 use std::prelude::v1::*;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use pcap_parser::pcap::{self, LegacyPcapBlock, PcapHeader};
 
@@ -43,6 +43,7 @@ use crate::packet::{
 };
 use crate::port::{Inactive, Port, ProcessResult};
 use crate::tcp::TcpHdr;
+use crate::time::Moment;
 use crate::udp::{UdpHdr, UdpHdrRaw, UdpMeta};
 use crate::{Direction::*, ExecCtx};
 
@@ -1060,7 +1061,7 @@ fn outgoing_dns_lookup() {
     assert_eq!(port.num_flows("dyn-nat4", Out), 0);
     assert_eq!(port.num_flows("firewall", In), 0);
     assert_eq!(port.num_flows("firewall", Out), 0);
-    let now = Instant::now();
+    let now = Moment::now();
 
     // ================================================================
     // Packet 1 (DNS query)

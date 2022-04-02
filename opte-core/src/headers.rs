@@ -26,7 +26,9 @@ pub const DYNAMIC_PORT: u16 = 0;
 pub const AF_INET: i32 = 2;
 pub const AF_INET6: i32 = 26;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub enum IpAddr {
     Ip4(Ipv4Addr),
     Ip6(Ipv6Addr),

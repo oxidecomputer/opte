@@ -74,6 +74,7 @@ pub mod sync;
 #[macro_use]
 pub mod tcp;
 pub mod tcp_state;
+pub mod time;
 #[macro_use]
 pub mod udp;
 pub mod vpc;
@@ -82,6 +83,7 @@ pub mod vpc;
 mod int_test;
 
 use ip4::IpError;
+use layer::InnerFlowId;
 
 // TODO For std env we don't have to redefine these, we can pull them
 // from some path in std I'm forgetting at the moment.
@@ -156,8 +158,10 @@ pub enum OpteError {
     CopyoutResp,
     DeserCmdErr(String),
     DeserCmdReq(String),
+    FlowExists(InnerFlowId),
     InvalidRouteDest(crate::headers::IpCidr),
     LayerNotFound(String),
+    MaxCapacity(u64),
     PortNotFound(String),
     RespTooLarge { needed: usize, given: usize },
     RuleNotFound(crate::layer::RuleId),
@@ -168,6 +172,12 @@ pub enum OpteError {
 
 impl OpteError {
     /// Convert to an errno value.
+    ///
+    /// NOTE: In order for opteadm `run_cmd_ioctl()` to function
+    /// correctly only `RespTooLarge` may use `ENOBUFS`.
+    ///
+    /// XXX We should probably add the extra code necessary to enforce
+    /// this constraint at compile time.
     pub fn to_errno(&self) -> c_int {
         match self {
             Self::BadApiVersion { .. } => ddi::EPROTO,
@@ -177,8 +187,10 @@ impl OpteError {
             Self::CopyoutResp => ddi::EFAULT,
             Self::DeserCmdErr(_) => ddi::ENOMSG,
             Self::DeserCmdReq(_) => ddi::ENOMSG,
+            Self::FlowExists(_) => ddi::EEXIST,
             Self::InvalidRouteDest(_) => ddi::EINVAL,
             Self::LayerNotFound(_) => ddi::ENOENT,
+            Self::MaxCapacity(_) => ddi::ENFILE,
             Self::PortNotFound(_) => ddi::ENOENT,
             Self::RespTooLarge { .. } => ddi::ENOBUFS,
             Self::RuleNotFound(_) => ddi::ENOENT,

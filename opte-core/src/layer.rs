@@ -7,11 +7,10 @@ cfg_if! {
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
-        use illumos_ddi_dki::{hrtime_t, uintptr_t};
+        use illumos_ddi_dki::uintptr_t;
     } else {
         use std::string::{String, ToString};
         use std::sync::Arc;
-        use std::time::Instant;
         use std::vec::Vec;
     }
 }
@@ -28,6 +27,7 @@ use crate::rule::{
     self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, Rule, RuleDump, HT,
 };
 use crate::sync::{KMutex, KMutexType};
+use crate::time::Moment;
 use crate::{CString, Direction, ExecCtx, LogLevel};
 
 use illumos_ddi_dki::c_char;
@@ -180,14 +180,7 @@ impl Layer {
         }
     }
 
-    #[cfg(all(not(feature = "std"), not(test)))]
-    pub fn expire_flows(&self, now: hrtime_t) {
-        self.ft_in.lock().expire_flows(now);
-        self.ft_out.lock().expire_flows(now);
-    }
-
-    #[cfg(any(feature = "std", test))]
-    pub fn expire_flows(&self, now: Instant) {
+    pub fn expire_flows(&self, now: Moment) {
         self.ft_in.lock().expire_flows(now);
         self.ft_out.lock().expire_flows(now);
     }
@@ -286,11 +279,11 @@ impl Layer {
             name_c,
             port_c: port_c.clone(),
             ft_in: KMutex::new(
-                FlowTable::new(port, &format!("{}_in", name), None),
+                FlowTable::new(port, &format!("{}_in", name), None, None),
                 KMutexType::Driver,
             ),
             ft_out: KMutex::new(
-                FlowTable::new(port, &format!("{}_out", name), None),
+                FlowTable::new(port, &format!("{}_out", name), None, None),
                 KMutexType::Driver,
             ),
             rules_in: KMutex::new(
@@ -350,9 +343,9 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        if let Some((_, entry)) = self.ft_in.lock().get_mut(&ifid) {
+        if let Some(entry) = self.ft_in.lock().get_mut(&ifid) {
             entry.hit();
-            let desc = entry.get_state();
+            let desc = entry.state();
             let ht = desc.gen_ht(Direction::In);
             hts.push(ht.clone());
 
@@ -468,7 +461,8 @@ impl Layer {
                 let ht_in = desc.gen_ht(Direction::In);
                 hts.push(ht_in.clone());
 
-                self.ft_in.lock().add(ifid.clone(), desc.clone());
+                // TODO kill unwrap
+                self.ft_in.lock().add(ifid.clone(), desc.clone()).unwrap();
 
                 ht_in.run(pkt.meta_mut());
 
@@ -488,7 +482,26 @@ impl Layer {
                 // HT might change how the other side of this
                 // layer sees this flow.
                 let out_ifid = InnerFlowId::from(pkt.meta()).dual();
-                self.ft_out.lock().add(out_ifid, desc);
+                // TODO okay time to deal with the fallout of this
+                // returning an error and see how the info percolates
+                // up the processing chain.
+                //
+                // TODO#2 On second thought this bleeds into a whole
+                // thing about restructuring the various error types.
+                // While putting everything in OpteError is certainly
+                // conveinent it feels like it might lose some
+                // fidelity in places. It might be that we want a
+                // handful of different error types like admin vs.
+                // processing or maybe just allow some of the more
+                // specific error types around layer processing to
+                // nest into the OpteError type. But at this very
+                // moment I need to get some other stuff done to
+                // unblock other work. So for now I've marked all this
+                // places with `TODO kill unwrap` and should be the
+                // first thing I come back to after unbloking others.
+                //
+                // TODO kill unwrap
+                self.ft_out.lock().add(out_ifid, desc).unwrap();
 
                 // if let Some(ctx) = ra_in.ctx {
                 //     ctx.exec(flow_id, &mut [0; 0]);
@@ -529,9 +542,9 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        if let Some((_, entry)) = self.ft_out.lock().get_mut(&ifid) {
+        if let Some(entry) = self.ft_out.lock().get_mut(&ifid) {
             entry.hit();
-            let desc = entry.get_state();
+            let desc = entry.state();
             let ht = desc.gen_ht(Direction::Out);
             hts.push(ht.clone());
 
@@ -648,7 +661,8 @@ impl Layer {
                 let ht_out = desc.gen_ht(Direction::Out);
                 hts.push(ht_out.clone());
 
-                self.ft_out.lock().add(ifid.clone(), desc.clone());
+                // TODO kill unwrap
+                self.ft_out.lock().add(ifid.clone(), desc.clone()).unwrap();
 
                 ht_out.run(pkt.meta_mut());
 
@@ -668,7 +682,8 @@ impl Layer {
                 // HT might change how the other side of this
                 // layer sees this flow.
                 let in_ifid = InnerFlowId::from(pkt.meta()).dual();
-                self.ft_in.lock().add(in_ifid, desc);
+                // TODO kill unwrap
+                self.ft_in.lock().add(in_ifid, desc).unwrap();
 
                 // if let Some(ctx) = ra_out2.ctx {
                 //     ctx.exec(flow_id, &mut [0; 0]);
@@ -775,7 +790,17 @@ pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     dst_port: 0,
 };
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
 pub struct InnerFlowId {
     pub proto: Protocol,
     pub src_ip: IpAddr,

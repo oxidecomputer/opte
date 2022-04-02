@@ -535,6 +535,7 @@ pub const EFAULT: c_int = 14;
 pub const EBUSY: c_int = 16;
 pub const EEXIST: c_int = 17;
 pub const EINVAL: c_int = 22;
+pub const ENFILE: c_int = 23;
 pub const EPIPE: c_int = 32;
 pub const ENOMSG: c_int = 35;
 pub const ENOTSUP: c_int = 48;

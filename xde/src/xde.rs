@@ -11,6 +11,7 @@
 use core::convert::TryInto;
 use core::ops::Range;
 use core::ptr;
+use core::time::Duration;
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
@@ -33,9 +34,10 @@ use opte_core::ip6::Ipv6Addr;
 use opte_core::oxide_net::firewall::{AddFwRuleReq, RemFwRuleReq};
 use opte_core::oxide_net::{overlay, router, PortCfg};
 use opte_core::packet::{Initialized, Packet, ParseError, Parsed};
-use opte_core::port::{Port, ProcessResult};
+use opte_core::port::{Active, Port, ProcessResult};
 use opte_core::sync::{KMutex, KMutexType};
 use opte_core::sync::{KRwLock, KRwLockType};
+use opte_core::time::{Interval, Moment, Periodic};
 use opte_core::{CStr, CString, Direction, ExecCtx, OpteError};
 
 /// The name of this driver.
@@ -193,8 +195,9 @@ struct XdeDev {
     link_state: mac::link_state_t,
 
     // opte port associated with this xde device
-    port: Box<Port<opte_core::port::Active>>,
+    port: Arc<Port<Active>>,
     port_cfg: PortCfg,
+    port_periodic: Periodic<Arc<Port<Active>>>,
 
     // simply pass the packets through to the underlay devices, skipping
     // opte-core processing.
@@ -382,6 +385,14 @@ unsafe extern "C" fn xde_dld_ioc_opte_cmd(
     }
 }
 
+const NANOS: i64 = 1_000_000_000;
+const ONE_SECOND: Interval = Interval::from_duration(Duration::new(1, 0));
+
+#[no_mangle]
+fn expire_periodic(port: &mut Arc<Port<Active>>) {
+    port.expire_flows(Moment::now());
+}
+
 #[no_mangle]
 fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // TODO name validation
@@ -412,6 +423,13 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         None,
     )?;
 
+    let port_periodic = Periodic::new(
+        port.name_cstr().clone(),
+        expire_periodic,
+        Box::new(port.clone()),
+        ONE_SECOND,
+    );
+
     let mut xde = Box::new(XdeDev {
         devname: req.xde_devname.clone(),
         linkid: req.linkid,
@@ -419,6 +437,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         flags: 0,
         link_state: mac::link_state_t::Down,
         port,
+        port_periodic,
         port_cfg,
         passthrough: req.passthrough,
         vni: req.vpc_vni.value(),
@@ -1599,7 +1618,7 @@ fn new_port(
     vpc_vni: Vni,
     ectx: Arc<ExecCtx>,
     snat: Option<SnatCfg>,
-) -> Result<(Box<Port<opte_core::port::Active>>, PortCfg), OpteError> {
+) -> Result<(Arc<Port<Active>>, PortCfg), OpteError> {
     let name_cstr = match CString::new(name.clone()) {
         Ok(v) => v,
         Err(_) => return Err(OpteError::BadName),
@@ -1661,7 +1680,7 @@ fn new_port(
     let state = get_xde_state();
 
     overlay::setup(&new_port, &oc, state.v2p.clone())?;
-    let port = Box::new(new_port.activate());
+    let port = Arc::new(new_port.activate());
     Ok((port, port_cfg))
 }
 

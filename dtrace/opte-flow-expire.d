@@ -6,7 +6,6 @@
  * dtrace -L ./lib -I . -Cqs ./opte-flow-expire.d
  */
 #include "common.h"
-#include <sys/inttypes.h>
 
 #define	HDR_FMT "%-24s %-18s %s\n"
 
@@ -23,7 +22,7 @@ BEGIN {
 	num = 0;
 }
 
-sdt:opte::flow-expired {
+flow-expired {
 	this->port = stringof(arg0);
 	this->name = stringof(arg1);
 	this->flow = (flow_id_sdt_arg_t *)arg2;
@@ -40,13 +39,13 @@ sdt:opte::flow-expired {
 	}
 }
 
-sdt:opte::flow-expired /this->af == AF_INET/ {
+flow-expired /this->af == AF_INET/ {
 	FLOW_FMT(this->s, this->flow);
 	printf(HDR_FMT, this->port, this->name, this->s);
 	num++;
 }
 
-sdt:opte::flow-expired /this->af == AF_INET6/ {
+flow-expired /this->af == AF_INET6/ {
 	FLOW_FMT6(this->s, this->flow);
 	printf(HDR_FMT, this->port, this->name, this->s);
 	num++;

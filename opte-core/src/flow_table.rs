@@ -2,13 +2,14 @@ use core::fmt;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::collections::BTreeMap;
         use alloc::string::{String, ToString};
         use alloc::vec::Vec;
-        use illumos_ddi_dki::{gethrtime, hrtime_t, uintptr_t};
+        use illumos_ddi_dki::uintptr_t;
         use crate::rule::flow_id_sdt_arg;
     } else {
+        use std::collections::BTreeMap;
         use std::string::{String, ToString};
-        use std::time::{Duration, Instant};
         use std::vec::Vec;
     }
 }
@@ -16,37 +17,75 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 
 use crate::layer::InnerFlowId;
-use crate::CString;
+use crate::time::{Moment, MILLIS};
+use crate::{CString, OpteError};
 
-pub const FLOW_DEF_EXPIRE_SECS: u32 = 60;
+// XXX This really shouldn't be pub but for now we are leaking this
+// info for the purpose of testing until the Port API has support for
+// setting/getting TTL on a per Flow Table basis.
+pub const FLOW_DEF_EXPIRE_SECS: u64 = 60;
+pub const FLOW_DEF_TTL: Ttl = Ttl::new_seconds(FLOW_DEF_EXPIRE_SECS);
+
 pub const FLOW_TABLE_DEF_MAX_ENTRIES: u32 = 8192;
+
+type Result<T> = core::result::Result<T, OpteError>;
+
+/// The Time To Live in milliseconds.
+#[derive(Clone, Copy, Debug)]
+pub struct Ttl(u64);
+
+impl Ttl {
+    pub fn as_seconds(&self) -> u64 {
+        self.0 / 1_000
+    }
+
+    pub fn as_milliseconds(&self) -> u64 {
+        self.0
+    }
+
+    /// Is `last_hit` expired?
+    pub fn is_expired(&self, last_hit: Moment, now: Moment) -> bool {
+        now.delta_as_millis(last_hit) >= self.0
+    }
+
+    /// Create a new TTL based on seconds.
+    pub const fn new_seconds(seconds: u64) -> Self {
+        Ttl(seconds * MILLIS)
+    }
+}
 
 #[derive(Debug)]
 pub struct FlowTable<S> {
     port_c: CString,
     name_c: CString,
     limit: u32,
-
-    // XXX I originally commented this out because I thought it was
-    // causing a double fault that I was seeing, but the DFs were
-    // actually being caused by blowing the kernel stack. Go ahead and
-    // reinstate the BTreeMap.
-    //
-    // map: BTreeMap<FlowId, FlowState>,
-    map: Vec<(InnerFlowId, FlowEntry<S>)>,
+    ttl: Ttl,
+    map: BTreeMap<InnerFlowId, FlowEntry<S>>,
 }
 
 impl<S> FlowTable<S>
 where
     S: Clone + fmt::Debug + StateSummary,
 {
-    pub fn add(&mut self, flow_id: InnerFlowId, state: S) {
+    /// Add a new entry to the flow table.
+    ///
+    /// # Errors
+    ///
+    /// If the table is at max capacity, an error is returned and no
+    /// modification is made to the table.
+    ///
+    /// If an entry already exists for this flow, an error is returned
+    /// and no modification is made to the table.
+    pub fn add(&mut self, flow_id: InnerFlowId, state: S) -> Result<()> {
         if self.map.len() == self.limit as usize {
-            todo!("return error indicating max capacity");
+            return Err(OpteError::MaxCapacity(self.limit as u64));
         }
 
         let entry = FlowEntry::new(state);
-        self.map.push((flow_id, entry));
+        match self.map.insert(flow_id.clone(), entry) {
+            None => Ok(()),
+            Some(_) => return Err(OpteError::FlowExists(flow_id.clone())),
+        }
     }
 
     // Clear all entries from the flow table.
@@ -62,31 +101,13 @@ where
         flows
     }
 
-    #[cfg(all(not(feature = "std"), not(test)))]
-    pub fn expire_flows(&mut self, now: hrtime_t) {
+    pub fn expire_flows(&mut self, now: Moment) {
         let name_c = &self.name_c;
         let port_c = &self.port_c;
+        let ttl = self.ttl;
 
-        self.map.retain(|(flowid, state)| {
-            #[cfg(any(feature = "std", test))]
-            let now = Instant::now();
-
-            if state.is_expired(now) {
-                flow_expired_probe(port_c, name_c, flowid);
-                return false;
-            }
-
-            true
-        });
-    }
-
-    #[cfg(any(feature = "std", test))]
-    pub fn expire_flows(&mut self, now: Instant) {
-        let name_c = &self.name_c;
-        let port_c = &self.port_c;
-
-        self.map.retain(|(flowid, state)| {
-            if state.is_expired(now) {
+        self.map.retain(|flowid, state| {
+            if state.is_expired(now, ttl) {
                 flow_expired_probe(port_c, name_c, flowid);
                 return false;
             }
@@ -100,45 +121,38 @@ where
         self.limit
     }
 
-    pub fn get(
-        &self,
-        flow_id: &InnerFlowId,
-    ) -> Option<&(InnerFlowId, FlowEntry<S>)> {
-        for (i, (k, _v)) in self.map.iter().enumerate() {
-            if k == flow_id {
-                return self.map.get(i);
-            }
-        }
-
-        None
-    }
-
     pub fn get_mut(
         &mut self,
         flow_id: &InnerFlowId,
-    ) -> Option<&mut (InnerFlowId, FlowEntry<S>)> {
-        for (i, (k, _v)) in self.map.iter().enumerate() {
-            if k == flow_id {
-                return self.map.get_mut(i);
-            }
-        }
-
-        None
+    ) -> Option<&mut FlowEntry<S>> {
+        self.map.get_mut(flow_id)
     }
 
-    pub fn new(port: &str, name: &str, limit: Option<u32>) -> FlowTable<S> {
+    pub fn new(
+        port: &str,
+        name: &str,
+        limit: Option<u32>,
+        ttl: Option<Ttl>,
+    ) -> FlowTable<S> {
         let limit = limit.unwrap_or(FLOW_TABLE_DEF_MAX_ENTRIES);
-        FlowTable {
+        let ttl = ttl.unwrap_or(FLOW_DEF_TTL);
+
+        Self {
             port_c: CString::new(port).unwrap(),
             name_c: CString::new(name).unwrap(),
             limit,
-            map: Vec::with_capacity(limit as usize),
+            ttl,
+            map: BTreeMap::new(),
         }
     }
 
     /// Get the number of flows in this table.
     pub fn num_flows(&self) -> u32 {
         self.map.len() as u32
+    }
+
+    pub fn ttl(&self) -> Ttl {
+        self.ttl
     }
 }
 
@@ -168,11 +182,6 @@ fn flow_expired_probe(port: &CString, name: &CString, flowid: &InnerFlowId) {
     }
 }
 
-#[cfg(any(feature = "std", test))]
-fn instant_default() -> Instant {
-    Instant::now()
-}
-
 /// The FlowEntry holds any arbitrary state type `S`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FlowEntry<S> {
@@ -181,81 +190,39 @@ pub struct FlowEntry<S> {
     // Number of times this flow has been matched.
     hits: u64,
 
-    // Expiration is based on a monotonic time source (like hrtime).
-    // It contains the number of seconds after which this flow should
-    // be considered expired.
-    #[cfg(all(not(feature = "std"), not(test)))]
-    #[serde(skip)]
-    ttl: u32,
-    #[cfg(any(feature = "std", test))]
-    #[serde(skip)]
-    ttl: Duration,
-
     // This tracks the last time the flow was matched.
-    #[cfg(all(not(feature = "std"), not(test)))]
     #[serde(skip)]
-    last_hit: hrtime_t,
-    #[cfg(any(feature = "std", test))]
-    #[serde(skip)]
-    // TODO Not sure why I had to supply default here when I already
-    // marked it as skip, but the compiler complained about `Instant`
-    // not implementing `Default`.
-    #[serde(default = "instant_default")]
-    last_hit: Instant,
+    last_hit: Moment,
 }
 
 impl<S> FlowEntry<S> {
-    pub fn get_state_mut(&mut self) -> &mut S {
+    pub fn state_mut(&mut self) -> &mut S {
         &mut self.state
     }
 
-    pub fn get_state(&self) -> &S {
+    pub fn state(&self) -> &S {
         &self.state
     }
 
-    pub fn get_hits(&self) -> u64 {
+    pub fn hits(&self) -> u64 {
         self.hits
     }
 
-    #[cfg(all(not(feature = "std"), not(test)))]
     pub fn hit(&mut self) {
         self.hits += 1;
-        unsafe {
-            self.last_hit = gethrtime();
-        }
+        self.last_hit = Moment::now();
     }
 
-    #[cfg(any(feature = "std", test))]
-    pub fn hit(&mut self) {
-        self.hits += 1;
-        self.last_hit = Instant::now();
+    pub fn last_hit(&self) -> &Moment {
+        &self.last_hit
     }
 
-    #[cfg(all(not(feature = "std"), not(test)))]
-    fn is_expired(&self, now: hrtime_t) -> bool {
-        ((now - self.last_hit) / 1_000_000_000) > self.ttl.into()
-    }
-
-    #[cfg(any(feature = "std", test))]
-    fn is_expired(&self, now: Instant) -> bool {
-        now.duration_since(self.last_hit) >= self.ttl
+    fn is_expired(&self, now: Moment, ttl: Ttl) -> bool {
+        ttl.is_expired(self.last_hit, now)
     }
 
     fn new(state: S) -> Self {
-        FlowEntry {
-            state,
-            hits: 0,
-
-            #[cfg(all(not(feature = "std"), not(test)))]
-            ttl: FLOW_DEF_EXPIRE_SECS,
-            #[cfg(any(feature = "std", test))]
-            ttl: Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0),
-
-            #[cfg(all(not(feature = "std"), not(test)))]
-            last_hit: unsafe { gethrtime() },
-            #[cfg(any(feature = "std", test))]
-            last_hit: Instant::now(),
-        }
+        FlowEntry { state, hits: 0, last_hit: Moment::now() }
     }
 }
 
@@ -290,49 +257,66 @@ impl StateSummary for () {
     }
 }
 
-#[test]
-fn flow_expired() {
+#[cfg(test)]
+mod test {
+    use super::*;
     use crate::headers::IpAddr;
     use crate::ip4::Protocol;
+    use core::time::Duration;
 
-    let flowid = InnerFlowId {
-        proto: Protocol::TCP,
-        src_ip: IpAddr::Ip4("192.168.2.10".parse().unwrap()),
-        src_port: 37890,
-        dst_ip: IpAddr::Ip4("76.76.21.21".parse().unwrap()),
-        dst_port: 443,
-    };
+    #[test]
+    fn flow_exists() {
+        let flowid = InnerFlowId {
+            proto: Protocol::TCP,
+            src_ip: IpAddr::Ip4("192.168.2.10".parse().unwrap()),
+            src_port: 37890,
+            dst_ip: IpAddr::Ip4("76.76.21.21".parse().unwrap()),
+            dst_port: 443,
+        };
 
-    let mut ft = FlowTable::new("port", "flow-expired-test", None);
+        let mut ft = FlowTable::new("port", "flow-expired-test", None, None);
+        assert_eq!(ft.num_flows(), 0);
+        ft.add(flowid.clone(), ()).unwrap();
+        assert_eq!(ft.num_flows(), 1);
+        assert!(ft.add(flowid, ()).is_err());
+    }
 
-    assert_eq!(ft.num_flows(), 0);
-    ft.add(flowid, ());
-    let now = Instant::now();
-    assert_eq!(ft.num_flows(), 1);
-    ft.expire_flows(now);
-    assert_eq!(ft.num_flows(), 1);
-    ft.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0));
-    assert_eq!(ft.num_flows(), 0);
-}
+    #[test]
+    fn flow_expired() {
+        let flowid = InnerFlowId {
+            proto: Protocol::TCP,
+            src_ip: IpAddr::Ip4("192.168.2.10".parse().unwrap()),
+            src_port: 37890,
+            dst_ip: IpAddr::Ip4("76.76.21.21".parse().unwrap()),
+            dst_port: 443,
+        };
 
-#[test]
-fn flow_clear() {
-    use crate::headers::IpAddr;
-    use crate::ip4::Protocol;
+        let mut ft = FlowTable::new("port", "flow-expired-test", None, None);
+        assert_eq!(ft.num_flows(), 0);
+        ft.add(flowid, ()).unwrap();
+        let now = Moment::now();
+        assert_eq!(ft.num_flows(), 1);
+        ft.expire_flows(now);
+        assert_eq!(ft.num_flows(), 1);
+        ft.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0));
+        assert_eq!(ft.num_flows(), 0);
+    }
 
-    let flowid = InnerFlowId {
-        proto: Protocol::TCP,
-        src_ip: IpAddr::Ip4("192.168.2.10".parse().unwrap()),
-        src_port: 37890,
-        dst_ip: IpAddr::Ip4("76.76.21.21".parse().unwrap()),
-        dst_port: 443,
-    };
+    #[test]
+    fn flow_clear() {
+        let flowid = InnerFlowId {
+            proto: Protocol::TCP,
+            src_ip: IpAddr::Ip4("192.168.2.10".parse().unwrap()),
+            src_port: 37890,
+            dst_ip: IpAddr::Ip4("76.76.21.21".parse().unwrap()),
+            dst_port: 443,
+        };
 
-    let mut ft = FlowTable::new("port", "flow-clear-test", None);
-
-    assert_eq!(ft.num_flows(), 0);
-    ft.add(flowid, ());
-    assert_eq!(ft.num_flows(), 1);
-    ft.clear();
-    assert_eq!(ft.num_flows(), 0);
+        let mut ft = FlowTable::new("port", "flow-clear-test", None, None);
+        assert_eq!(ft.num_flows(), 0);
+        ft.add(flowid, ()).unwrap();
+        assert_eq!(ft.num_flows(), 1);
+        ft.clear();
+        assert_eq!(ft.num_flows(), 0);
+    }
 }

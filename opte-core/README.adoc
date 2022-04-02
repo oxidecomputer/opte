@@ -109,6 +109,132 @@ make it part of opte-drv).
 
 XXX: Go into more depth about the nuance here.
 
+=== OPTE running context
+
+The core engine of OPTE, `opte-core`, is designed to run in either a
+user or kernel context. When running in user context the engine may
+take advantage of Rust's `std` library: providing heap allocation and
+various system APIs. When running in kernel context the engine is
+constrained to Rust's `core` and `alloc` libraries. The engine
+**cannot** make use of `std` in this context for several reasons, the
+main ones being:
+
+* Some of the APIs `std` relies on do not exist in kernel context;
+  others exist but in different form.
+
+* The engine's functions may be called in more constrained contexts
+  like interrupt context, requiring more careful consideration of the
+  code allowed to execute.
+
+The upshot of all this is that `opte-core` is designed with kernel
+context in mind first, but at the same time is built with the shims
+needed to lift it into userland when helpful. Currently the only
+purpose, though one that has proven its value over and over again, is
+to run unit tests and simulate traffic against the engine. For this
+reason it's imperative that the engine continues to be developed so
+that it can run in both contexts.
+
+NOTE: The running context of OPTE **must** be determined at compile
+time. That is, you cannot compile OPTE in such a way that the
+resulting object code can run in user or kernel context. Rather, there
+is an additional step of having another executable object that uses
+(or "wraps") OPTE providing the communication between it and the
+greater system. This wrapping executable will naturally dictate how
+`opte-core` is compiled in that case. For example, the `xde` kernel
+driver uses the `opte-core` code in kernel context to provide the
+Oxide VPC Network implementation. It is the liasion between the OPTE
+and the greater system.
+
+NOTE: When talking about "kernel context" we are limiting ourselves to
+the illumos kernel only. It is a non-goal to maintain OPTE in a manner
+that would allow it to run in other kernel environments such as Linux
+or FreeBSD. To do so would require a kernel-shim layer in order to
+present a single abstraction (say a mutex) with different kernel
+implementations backing it. Shim layers like this often quickly
+breakdown because the underlying abstractions ultimately leak into the
+API (you see this in network drivers where FreeBSD uses a shim header
+to map Linux network driver code into their kernel API and the result
+is never pretty).
+
+Allowing OPTE to run in user or kernel context is achieved using
+different methods laid out below.
+
+==== Synonym types
+
+A synonym type is one that provides a kernel-context API which can be
+replicated with high fidelity with a different API in user-context,
+using a type from `std` or an external crate. When compiled for
+kernel-context if provides a kernel API, when compiled for
+user-context it presents a sort of "new type" pattern: opte-core
+always uses the synonym type, but may be backed by an existing
+`std`/crate type when compiled with `std` enabled.
+
+The canonical example of this is the `opte_core::sync::KMutex` synonym
+type. It provides a safe abstraction to the illumos kernel
+https://illumos.org/man/9F/mutex_enter[mutex_enter(9F)] API when
+compiled for kernel context. When compiled for user context it simply
+uses `std::sync::Mutex` under the covers.
+
+NOTE: One could argue that opte-core should just define this type as
+Mutex, replicate the `std::sync::Mutex` API 1:1, and map that to the
+underlying `mutex_enter(9F)` API. This mostly works, but if you look
+closely cracks start to appear in the paint. The `std::sync::Mutex`
+lives in the Rust `std` world, and that world needs to consider
+non-abort panics: that is a thread that unwinds itself on panic
+instead of aborting the entire process. For this reason the std mutex
+returns a `Result` when attempting to lock the mutex. In the case that
+a thread panics/unwinds while holding this mutex, it will be placed in
+a poisened state and all future lock attempts (by other threads) will
+return an error. Such a concern dost not exist in the illumos kernel:
+if you panic the party is over. Therefore, there is no `Result` to
+check when calling `lock()`: either you acquired the lock or you
+ruined the party for everyone. Now, you could achieve this with
+`Infalliable` in the error position, but it would still require
+`unwrap()` calls against all the locks. This isn't the worst thing in
+the world, but given OPTE's perogative to run in kernel context, all
+`unwrap()` calls must be eyed with great suspicion, as anyone of them
+could take out the entire host.
+
+The upshot of a synonym type is that the kernel/user context problem
+is solved at a type level, behind the type's implementation.
+
+==== Providers
+
+XXX Providers are also compile-time but allow more flexibility for
+what types can stand in for a given API. Defined as trait that any
+type can implement. Potentially allows operator to select at runtime
+different implementations for a given context. Good example of this is
+logging, where an basic API can be defined and kernel context can
+define in terms of `cmn_err(9F)` and userland can have several impls
+including `println!` or some logging crate (granted the developer
+writes a shim for that crate to work with the provider trait define by
+opte-core).
+
+XXX While opte-core can provide an user context implementation of a
+provider interface, it doesn't have to. This means the provider method
+allows opte-core to distance itself from the user context
+implementation while at the same time giving the developer more
+freedom. For example, it means that opte-core doesn't have to pull in
+third-party crates to provide these user context implementations and
+instead can just provide the interface to which the developer of the
+userland application needs to provide an impl. It's like a synonym
+type but the developer of the user program provides the user context
+impl. Which seems good for a type like `Periodic` where there is a
+clear kernel API to use but perhaps an assortment of userland
+providers a developer may want to choose from, and rather than have
+opte-core provide the shim for all those crates it can simply as the
+developer to write their own shim to the provider interface.
+
+==== cfg/attribute based
+
+XXX Some things ultimately can only exist in a specific context. Good
+example of this is SDT probes, which are defined as symbols of the
+form `__dtrace_probe_xxx`. These symbols mean nothing in user context.
+However, there do exist USDT probes, which can emulate the kernel
+context behavior. However, in order to do so we must restort to `cfg`
+blocks.
+
+
 == Communicating with OPTE
 
 The `xde` device registers a single entry point with the DLD ioctl

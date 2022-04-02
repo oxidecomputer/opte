@@ -7,11 +7,10 @@ cfg_if! {
         use alloc::sync::Arc;
         use alloc::vec::Vec;
         use crate::rule::flow_id_sdt_arg;
-        use illumos_ddi_dki::{self as ddi, uintptr_t};
+        use illumos_ddi_dki::uintptr_t;
     } else {
         use std::string::{String, ToString};
         use std::sync::Arc;
-        use std::time::Instant;
         use std::vec::Vec;
     }
 }
@@ -27,6 +26,7 @@ use crate::rule::{ht_probe, Action, Finalized, Rule, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::tcp::TcpState;
 use crate::tcp_state::TcpFlowState;
+use crate::time::Moment;
 use crate::{CString, Direction, ExecCtx, OpteError};
 
 pub const UFT_DEF_MAX_ENTIRES: u32 = 8192;
@@ -208,6 +208,7 @@ impl Port<Inactive> {
                         &self.name,
                         "uft_in",
                         Some(UFT_DEF_MAX_ENTIRES),
+                        None,
                     ),
                     KMutexType::Driver,
                 ),
@@ -216,6 +217,7 @@ impl Port<Inactive> {
                         &self.name,
                         "uft_out",
                         Some(UFT_DEF_MAX_ENTIRES),
+                        None,
                     ),
                     KMutexType::Driver,
                 ),
@@ -224,6 +226,7 @@ impl Port<Inactive> {
                         &self.name,
                         "tcp_flows",
                         Some(UFT_DEF_MAX_ENTIRES),
+                        None,
                     ),
                     KMutexType::Driver,
                 ),
@@ -456,17 +459,7 @@ impl Port<Active> {
     }
 
     /// Expire all flows whose TTL is overdue as of `now`.
-    #[cfg(all(not(feature = "std"), not(test)))]
-    pub fn expire_flows(&self, now: ddi::hrtime_t) {
-        for l in &self.state.layers {
-            l.expire_flows(now);
-        }
-        self.state.uft_in.lock().expire_flows(now);
-        self.state.uft_out.lock().expire_flows(now);
-    }
-
-    #[cfg(any(feature = "std", test))]
-    pub fn expire_flows(&self, now: Instant) {
+    pub fn expire_flows(&self, now: Moment) {
         for l in &self.state.layers {
             l.expire_flows(now);
         }
@@ -582,8 +575,8 @@ impl Port<Active> {
         let mut lock = self.state.tcp_flows.lock();
 
         let tcp_state = match lock.get_mut(&ifid_after) {
-            Some((_, entry)) => {
-                let tfes = entry.get_state_mut();
+            Some(entry) => {
+                let tfes = entry.state_mut();
 
                 // XXX Could this be wrapped into tcp_state.rs?
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
@@ -634,8 +627,8 @@ impl Port<Active> {
             // We may have already created a TCP flow entry due to an
             // outbound packet, in that case simply fill in the
             // inbound UFID for expiration purposes.
-            Some((_, entry)) => {
-                let tfes = entry.get_state_mut();
+            Some(entry) => {
+                let tfes = entry.state_mut();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
                     tfes.tcp_state.tcp_flow_drop_probe(
@@ -683,7 +676,8 @@ impl Port<Active> {
                     inbound_ufid: Some(ifid.clone()),
                     tcp_state: tfs,
                 };
-                lock.add(ifid_after, tfes);
+                // TODO kill unwrap
+                lock.add(ifid_after, tfes).unwrap();
 
                 TcpState::Listen
             }
@@ -725,9 +719,9 @@ impl Port<Active> {
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
         match self.state.uft_in.lock().get_mut(&ifid) {
-            Some((_, entry)) => {
+            Some(entry) => {
                 entry.hit();
-                for ht in entry.get_state() {
+                for ht in entry.state() {
                     ht.run(pkt.meta_mut());
                     let ifid_after = InnerFlowId::from(pkt.meta());
                     ht_probe(
@@ -771,7 +765,8 @@ impl Port<Active> {
 
         match res {
             Ok(LayerResult::Allow) => {
-                self.state.uft_in.lock().add(ifid.clone(), hts);
+                // TODO kill unwrapx
+                self.state.uft_in.lock().add(ifid.clone(), hts).unwrap();
 
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
@@ -822,8 +817,8 @@ impl Port<Active> {
         let mut lock = self.state.tcp_flows.lock();
 
         let tcp_state = match lock.get_mut(&ifid) {
-            Some((_, entry)) => {
-                let tfes = entry.get_state_mut();
+            Some(entry) => {
+                let tfes = entry.state_mut();
                 let tcp = meta.inner_tcp().unwrap();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
@@ -870,8 +865,8 @@ impl Port<Active> {
         let tcp_state = match lock.get_mut(&ifid) {
             // We may have already created a TCP flow entry
             // due to an inbound packet.
-            Some((_, entry)) => {
-                let tfes = entry.get_state_mut();
+            Some(entry) => {
+                let tfes = entry.state_mut();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
                     tfes.tcp_state.tcp_flow_drop_probe(
@@ -914,7 +909,8 @@ impl Port<Active> {
                 let tfes =
                     TcpFlowEntryState { inbound_ufid: None, tcp_state: tfs };
 
-                lock.add(ifid.clone(), tfes);
+                // TODO kill unwrap
+                lock.add(ifid.clone(), tfes).unwrap();
                 tcp_state
             }
         };
@@ -955,7 +951,7 @@ impl Port<Active> {
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
         match self.state.uft_out.lock().get_mut(&ifid) {
-            Some((_, entry)) => {
+            Some(entry) => {
                 entry.hit();
 
                 // For outbound traffic the TCP flow table must be
@@ -978,7 +974,7 @@ impl Port<Active> {
                     }
                 }
 
-                for ht in entry.get_state() {
+                for ht in entry.state() {
                     ht.run(pkt.meta_mut());
                     let ifid_after = InnerFlowId::from(pkt.meta());
                     ht_probe(
@@ -1022,7 +1018,8 @@ impl Port<Active> {
 
         match res {
             Ok(LayerResult::Allow) => {
-                self.state.uft_out.lock().add(ifid.clone(), hts);
+                // TODO kill unwrap
+                self.state.uft_out.lock().add(ifid.clone(), hts).unwrap();
                 Ok(ProcessResult::Modified)
             }
 
