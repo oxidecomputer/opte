@@ -1,0 +1,13 @@
+[workspace]
+
+members = [
+    "illumos-ddi-dki",
+    "opteadm",
+    "opte-core",
+]
+
+# A kernel module does not follow a standard rust build procedure.
+exclude = [
+    "opte-drv",
+    "xde",
+]
