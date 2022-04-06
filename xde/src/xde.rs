@@ -25,9 +25,7 @@ use crate::{dld, dls, ip, mac, secpolicy, sys, warn};
 use opte_core::ether::EtherAddr;
 use opte_core::geneve::Vni;
 use opte_core::headers::IpCidr;
-use opte_core::ioctl::{
-    self as api, NoResp, SetXdeUnderlayReq, SnatCfg,
-};
+use opte_core::ioctl::{self as api, SetXdeUnderlayReq, SnatCfg};
 use opte_core::ip4::Ipv4Addr;
 use opte_core::ip6::Ipv6Addr;
 use opte_core::oxide_net::firewall::{AddFwRuleReq, RemFwRuleReq};
@@ -39,7 +37,7 @@ use opte_core::sync::{KRwLock, KRwLockType};
 use opte_core::time::{Interval, Moment, Periodic};
 use opte_core::{CStr, CString, Direction, ExecCtx};
 use opte_core_api::{
-    CmdOk, CreateXdeReq, DeleteXdeReq, OpteCmd, OpteCmdIoctl, OpteError
+    CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, OpteCmdIoctl, OpteError
 };
 
 /// The name of this driver.

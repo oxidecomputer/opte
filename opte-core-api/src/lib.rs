@@ -220,8 +220,15 @@ impl OpteError {
 /// from a command and may be passed across the ioctl/API boundary.
 pub trait CmdOk: core::fmt::Debug + Serialize {}
 
-// Use the unit type to indicate no meaningful response value on success.
 impl CmdOk for () {}
+
+// Use this type to indicate no meaningful response value on success.
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct NoResp {
+    pub unused: u64,
+}
+
+impl CmdOk for NoResp {}
 
 /// An IPv4 or IPv6 address.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

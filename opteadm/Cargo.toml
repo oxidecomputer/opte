@@ -6,8 +6,14 @@ edition = "2021"
 
 [features]
 default = []
+# XXX Allow pulling in opte-core when you need access to its types.
+# This is a temporary hack to allow opteadm the binary to continue
+# having access to evertyhing while limiting all other clients to
+# opte-core-api.
+xxx-leak-types = ["opte-core"]
 
 [dependencies]
+cfg-if = "0.1"
 libc = "0.2"
 illumos-ddi-dki = { path = "../illumos-ddi-dki" }
 # XXX We allow this feature to be optional for the time being so that

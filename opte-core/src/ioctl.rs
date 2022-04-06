@@ -198,10 +198,3 @@ pub struct SetXdeUnderlayReq {
     pub u1: String,
     pub u2: String,
 }
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-pub struct NoResp {
-    pub unused: u64,
-}
-
-impl CmdOk for NoResp {}
