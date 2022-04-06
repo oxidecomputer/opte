@@ -5,22 +5,29 @@ authors = ["Ryan Zezeski <ryan@oxide.computer>"]
 edition = "2021"
 
 [features]
-default = ["std", "usdt"]
-# This feature indicates that OPTE is being built with std so that it
-# may be used by a userland binary/library for the purpose of userland
-# emulation/testing.
-std = ["libc"]
+default = ["api", "std"]
+api = []
+engine = ["api"]
+# This feature indicates that OPTE is being built with std. This is
+# mostly useful to consumers of the API, providing convenient methods
+# for working with the API types in a std context.
+std = []
 
 [dependencies]
 cfg-if = "0.1"
 cstr_core = "0.2.3"
 heapless = "0.7.9"
-illumos-ddi-dki = { path = "../illumos-ddi-dki", default-features = false }
-libc = { version = "0.2", optional = true }
+illumos-ddi-dki = { path = "../illumos-ddi-dki" }
+illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
 postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
 #
 # XXX usdt is really a dev dependency, but when I move it there weird
 # stuff happens (TM). Maybe to do with feature flags?
+#
+# At the moment the only purpose of the usdt feature is to enable the
+# USDT probes when running the tests.
+#
+# cargo test --features=usdt
 #
 usdt = { version = "*", optional = true }
 zerocopy = "0.6.1"

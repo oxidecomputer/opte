@@ -15,8 +15,9 @@ cfg_if! {
     }
 }
 
+use crate::api::Ipv4Addr;
 use crate::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
-use crate::ip4::{Ipv4Addr, Ipv4Meta};
+use crate::ip4::Ipv4Meta;
 use crate::layer::InnerFlowId;
 use crate::port::meta::Meta;
 use crate::rule::{self, ActionDesc, ResourceError, StatefulAction, HT};

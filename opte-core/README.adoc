@@ -508,3 +508,11 @@ deserialize into a `ListLayersResp` value on the stack.
    │ └─────────────────────────────┘ │
    └─────────────────────────────────┘
 ----
+
+== Code Conventions
+
+Unwrap:: A panic in the kernel is for keeps. Any `unwrap()` call is a
+potentially angry (understandably so) support call in the future. For
+this reason `unwrap()` should be agressively avoided; in all other
+cases an `Unwrap:` comment should comment on why this particular
+instance is an acceptable risk (or in some cases no risk at all).

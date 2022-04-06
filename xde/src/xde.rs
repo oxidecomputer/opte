@@ -22,13 +22,13 @@ use illumos_ddi_dki::*;
 
 use crate::ioctl::IoctlEnvelope;
 use crate::{dld, dls, ip, mac, secpolicy, sys, warn};
+use opte_core::api::{
+    CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
+};
 use opte_core::ether::EtherAddr;
 use opte_core::geneve::Vni;
 use opte_core::headers::IpCidr;
-use opte_core::ioctl::{
-    self as api, CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd,
-    SetXdeUnderlayReq, SnatCfg,
-};
+use opte_core::ioctl::{self as api, SetXdeUnderlayReq, SnatCfg};
 use opte_core::ip4::Ipv4Addr;
 use opte_core::ip6::Ipv6Addr;
 use opte_core::oxide_net::firewall::{AddFwRuleReq, RemFwRuleReq};
@@ -38,7 +38,7 @@ use opte_core::port::{Active, Port, ProcessResult};
 use opte_core::sync::{KMutex, KMutexType};
 use opte_core::sync::{KRwLock, KRwLockType};
 use opte_core::time::{Interval, Moment, Periodic};
-use opte_core::{CStr, CString, Direction, ExecCtx, OpteError};
+use opte_core::{CStr, CString, Direction, ExecCtx};
 
 /// The name of this driver.
 const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
@@ -104,11 +104,11 @@ fn next_hop_probe(
     gw_eth_dst: EtherAddr,
     msg: &[u8],
 ) {
-    let gw_bytes = gw.unwrap_or(&Ipv6Addr::from([0u8; 16])).to_bytes();
+    let gw_bytes = gw.unwrap_or(&Ipv6Addr::from([0u8; 16])).bytes();
 
     unsafe {
         __dtrace_probe_next__hop(
-            dst.to_bytes().as_ptr() as uintptr_t,
+            dst.bytes().as_ptr() as uintptr_t,
             gw_bytes.as_ptr() as uintptr_t,
             gw_eth_src.to_bytes().as_ptr() as uintptr_t,
             gw_eth_dst.to_bytes().as_ptr() as uintptr_t,
@@ -203,7 +203,7 @@ struct XdeDev {
     // opte-core processing.
     passthrough: bool,
 
-    vni: u32,
+    vni: Vni,
 
     // these are clones of the underlay ports initialized by the driver
     u1: xde_underlay_port,
@@ -301,7 +301,7 @@ unsafe extern "C" fn xde_dld_ioc_opte_cmd(
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-    let ioctl: &mut api::OpteCmdIoctl = &mut *(karg as *mut api::OpteCmdIoctl);
+    let ioctl: &mut OpteCmdIoctl = &mut *(karg as *mut OpteCmdIoctl);
     let mut env = match IoctlEnvelope::wrap(ioctl, mode) {
         Ok(v) => v,
         Err(errno) => return errno,
@@ -411,14 +411,14 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     let (port, port_cfg) = new_port(
         req.xde_devname.clone(),
-        req.private_ip,
-        req.private_mac,
-        req.gw_mac,
-        req.gw_ip,
-        req.boundary_services_addr,
-        req.boundary_services_vni,
-        req.src_underlay_addr,
-        req.vpc_vni,
+        req.private_ip.into(),
+        req.private_mac.into(),
+        req.gw_mac.into(),
+        req.gw_ip.into(),
+        req.bsvc_addr.into(),
+        req.bsvc_vni.into(),
+        req.src_underlay_addr.into(),
+        req.vpc_vni.into(),
         state.ectx.clone(),
         None,
     )?;
@@ -440,7 +440,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         port_periodic,
         port_cfg,
         passthrough: req.passthrough,
-        vni: req.vpc_vni.value(),
+        vni: req.vpc_vni.into(),
         u1: underlay.u1.clone(),
         u2: underlay.u2.clone(),
     });
@@ -583,10 +583,10 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-const IOCTL_SZ: usize = core::mem::size_of::<api::OpteCmdIoctl>();
+const IOCTL_SZ: usize = core::mem::size_of::<OpteCmdIoctl>();
 
 static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [dld::dld_ioc_info_t {
-    di_cmd: opte_core::ioctl::XDE_DLD_OPTE_CMD as u32,
+    di_cmd: opte_core::api::XDE_DLD_OPTE_CMD as u32,
     di_flags: dld::DLDCOPYINOUT,
     di_argsize: IOCTL_SZ,
     di_func: xde_dld_ioc_opte_cmd,
@@ -1028,10 +1028,7 @@ fn guest_loopback(
     let devs = unsafe { xde_devs.read() };
     let ether_dst = pkt.headers().inner.ether.dst();
 
-    match devs
-        .iter()
-        .find(|x| x.vni == vni.value() && x.port.mac_addr() == ether_dst)
-    {
+    match devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst) {
         Some(dest_dev) => {
             // We have found a matching Port on this host; "loop back"
             // the packet into the inbound processing path of the
@@ -1091,7 +1088,7 @@ fn guest_loopback(
             warn!(
                 "underlay dest is same as src but the Port was not found \
                  vni = {}, mac = {}",
-                vni.value(),
+                vni.as_u32(),
                 ether_dst
             );
             return ptr::null_mut();
@@ -1400,7 +1397,7 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
         assert!(!ipst.is_null());
 
         let addr = ip::in6_addr_t {
-            _S6_un: ip::in6_addr__bindgen_ty_1 { _S6_u8: ip6_dst.to_bytes() },
+            _S6_un: ip::in6_addr__bindgen_ty_1 { _S6_u8: ip6_dst.bytes() },
         };
         let xmit_hint = 0;
         let mut generation_op = 0u32;
@@ -1741,7 +1738,7 @@ unsafe extern "C" fn xde_rx(
 
     //TODO create a fast lookup table
     let devs = xde_devs.read();
-    let vni = geneve.vni.value();
+    let vni = geneve.vni;
     let ether_dst = hdrs.inner.ether.dst();
     let dev = match devs
         .iter()
@@ -1792,7 +1789,7 @@ unsafe extern "C" fn xde_rx(
 
 #[no_mangle]
 fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: router::AddRouterEntryIpv4Req = env.copy_in_req()?;
+    let req: opte_core::api::AddRouterEntryIpv4Req = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
@@ -1800,7 +1797,11 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    router::add_entry_active(&dev.port, IpCidr::Ip4(req.dest), req.target)
+    router::add_entry_active(
+        &dev.port,
+        IpCidr::Ip4(req.dest.into()),
+        req.target.into(),
+    )
 }
 
 #[no_mangle]
@@ -1833,9 +1834,9 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 
 #[no_mangle]
 fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: overlay::SetVirt2PhysReq = env.copy_in_req()?;
+    let req: opte_core::api::SetVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
-    state.v2p.set(req.vip, req.phys);
+    state.v2p.set(req.vip.into(), req.phys.into());
     Ok(NoResp::default())
 }
 

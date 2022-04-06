@@ -1,8 +1,7 @@
 [package]
-name = "illumos-ddi-dki"
+name = "illumos-sys-hdrs"
 version = "0.1.0"
 authors = ["Ryan Zezeski <ryan@oxide.computer>"]
 edition = "2021"
 
 [dependencies]
-illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }

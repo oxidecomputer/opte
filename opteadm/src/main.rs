@@ -1,26 +1,25 @@
 #![feature(extern_types)]
 
-// use std::net::{Ipv4Addr, Ipv6Addr};
 use std::process::exit;
 
 use structopt::StructOpt;
 
+use opte_core::api::{MacAddr, Vni};
 use opte_core::ether::EtherAddr;
 use opte_core::flow_table::FlowEntryDump;
-use opte_core::geneve;
-use opte_core::geneve::Vni;
 use opte_core::headers::IpAddr;
 use opte_core::ioctl::{self as api, PortInfo};
-use opte_core::ip4::{Ipv4Addr, Ipv4Cidr};
+use opte_core::ip4::Ipv4Addr;
 use opte_core::ip6::Ipv6Addr;
 use opte_core::layer::InnerFlowId;
 use opte_core::oxide_net::firewall::{
     self, Action, Address, FirewallRule, Ports, ProtoFilter, RemFwRuleReq,
 };
-use opte_core::oxide_net::{overlay, router};
+use opte_core::oxide_net::overlay;
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
+use opte_ioctl::Error;
 use opteadm::OpteAdm;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
@@ -94,15 +93,33 @@ enum Command {
 
     /// Create an xde device
     CreateXde {
+        #[structopt(long)]
         name: String,
-        private_mac: String,
-        private_ip: String,
-        gateway_mac: String,
-        gateway_ip: String,
-        boundary_services_addr: std::net::Ipv6Addr,
-        boundary_services_vni: Vni,
+
+        #[structopt(long)]
+        private_mac: MacAddr,
+
+        #[structopt(long)]
+        private_ip: std::net::Ipv4Addr,
+
+        #[structopt(long)]
+        gateway_mac: MacAddr,
+
+        #[structopt(long)]
+        gateway_ip: std::net::Ipv4Addr,
+
+        #[structopt(long)]
+        bsvc_addr: std::net::Ipv6Addr,
+
+        #[structopt(long)]
+        bsvc_vni: Vni,
+
+        #[structopt(long)]
         vpc_vni: Vni,
+
+        #[structopt(long)]
         src_underlay_addr: std::net::Ipv6Addr,
+
         #[structopt(long)]
         passthrough: bool,
     },
@@ -115,10 +132,10 @@ enum Command {
 
     /// Set a virtual-to-physical mapping
     SetV2P {
-        vpc_ip4: Ipv4Addr,
-        vpc_ether: EtherAddr,
+        vpc_ip4: std::net::Ipv4Addr,
+        vpc_mac: MacAddr,
         underlay_ip: std::net::Ipv6Addr,
-        vni: geneve::Vni,
+        vni: Vni,
     },
 
     /// Add a new IPv4 router entry
@@ -126,62 +143,10 @@ enum Command {
         #[structopt(short)]
         port: String,
 
-        dest: Ipv4Cidr,
+        dest: opte_core::api::Ipv4Cidr,
 
-        target: router::RouterTarget,
+        target: opte_core::api::RouterTarget,
     },
-}
-
-#[derive(Debug, StructOpt)]
-struct SetOverlay {
-    #[structopt(short)]
-    port: String,
-
-    #[structopt(flatten)]
-    boundary_services: BoundarySvcs,
-
-    #[structopt(long)]
-    vni: u32,
-
-    #[structopt(long)]
-    ip: std::net::Ipv6Addr,
-}
-
-#[derive(Debug, StructOpt)]
-struct BoundarySvcs {
-    #[structopt(long)]
-    bs_mac_addr: EtherAddr,
-
-    #[structopt(long)]
-    bs_ip: std::net::Ipv6Addr,
-
-    #[structopt(long)]
-    bs_vni: u32,
-}
-
-impl From<BoundarySvcs> for overlay::PhysNet {
-    fn from(bs: BoundarySvcs) -> Self {
-        Self {
-            ether: bs.bs_mac_addr,
-            ip: Ipv6Addr::from(bs.bs_ip),
-            vni: geneve::Vni::new(bs.bs_vni).unwrap(),
-        }
-    }
-}
-
-impl From<SetOverlay> for overlay::SetOverlayReq {
-    fn from(req: SetOverlay) -> Self {
-        Self {
-            port_name: req.port,
-            cfg: overlay::OverlayCfg {
-                boundary_services: overlay::PhysNet::from(
-                    req.boundary_services,
-                ),
-                vni: geneve::Vni::new(req.vni).unwrap(),
-                phys_ip_src: Ipv6Addr::from(req.ip.octets()),
-            },
-        }
-    }
 }
 
 #[derive(Debug, StructOpt)]
@@ -443,10 +408,10 @@ fn print_v2p_ip4((src, phys): (&Ipv4Addr, &overlay::PhysNet)) {
     let eth = format!("{}", phys.ether);
     println!(
         "{:<24} {:<8} {:<17} {}",
-        std::net::Ipv4Addr::from(src.to_be_bytes()),
-        phys.vni.value(),
+        std::net::Ipv4Addr::from(src.bytes()),
+        phys.vni,
         eth,
-        std::net::Ipv6Addr::from(phys.ip.to_bytes()),
+        std::net::Ipv6Addr::from(phys.ip.bytes()),
     );
 }
 
@@ -454,10 +419,10 @@ fn print_v2p_ip6((src, phys): (&Ipv6Addr, &overlay::PhysNet)) {
     let eth = format!("{}", phys.ether);
     println!(
         "{:<24} {:<8} {:<17} {}",
-        std::net::Ipv6Addr::from(src.to_bytes()),
-        phys.vni.value(),
+        std::net::Ipv6Addr::from(src.bytes()),
+        phys.vni,
         eth,
-        std::net::Ipv6Addr::from(phys.ip.to_bytes()),
+        std::net::Ipv6Addr::from(phys.ip.bytes()),
     );
 }
 
@@ -538,7 +503,7 @@ fn print_uft(resp: &api::DumpUftResp) {
     println!("");
 }
 
-fn die(error: opteadm::Error) -> ! {
+fn die(error: Error) -> ! {
     eprintln!("ERROR: {}", error);
     exit(1);
 }
@@ -547,7 +512,7 @@ trait UnwrapOrDie<T, E> {
     fn unwrap_or_die(self) -> T;
 }
 
-impl<T> UnwrapOrDie<T, opteadm::Error> for Result<T, opteadm::Error> {
+impl<T> UnwrapOrDie<T, Error> for Result<T, Error> {
     fn unwrap_or_die(self) -> T {
         match self {
             Ok(val) => val,
@@ -617,8 +582,8 @@ fn main() {
             private_ip,
             gateway_mac,
             gateway_ip,
-            boundary_services_addr,
-            boundary_services_vni,
+            bsvc_addr,
+            bsvc_vni,
             vpc_vni,
             src_underlay_addr,
             passthrough,
@@ -626,12 +591,12 @@ fn main() {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
             hdl.create_xde(
                 &name,
-                &private_mac,
-                &private_ip,
-                &gateway_mac,
-                &gateway_ip,
-                boundary_services_addr,
-                boundary_services_vni,
+                private_mac,
+                private_ip,
+                gateway_mac,
+                gateway_ip,
+                bsvc_addr,
+                bsvc_vni,
                 vpc_vni,
                 src_underlay_addr,
                 passthrough,
@@ -655,22 +620,25 @@ fn main() {
             hdl.remove_firewall_rule(&request).unwrap_or_die();
         }
 
-        Command::SetV2P { vpc_ip4, vpc_ether, underlay_ip, vni } => {
+        Command::SetV2P { vpc_ip4, vpc_mac, underlay_ip, vni } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let vip = IpAddr::Ip4(vpc_ip4);
-            let phys = overlay::PhysNet {
-                ether: vpc_ether,
-                ip: Ipv6Addr::from(underlay_ip),
+            let vip = opte_core::api::IpAddr::Ip4(vpc_ip4.into());
+            let phys = opte_core::api::PhysNet {
+                ether: vpc_mac,
+                ip: underlay_ip.into(),
                 vni,
             };
-            let req = overlay::SetVirt2PhysReq { vip, phys };
+            let req = opte_core::api::SetVirt2PhysReq { vip, phys };
             hdl.set_v2p(&req).unwrap_or_die();
         }
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let req =
-                router::AddRouterEntryIpv4Req { port_name: port, dest, target };
+            let req = opte_core::api::AddRouterEntryIpv4Req {
+                port_name: port,
+                dest,
+                target,
+            };
             hdl.add_router_entry_ip4(&req).unwrap_or_die();
         }
     }

@@ -15,14 +15,6 @@ use core::convert::TryFrom;
 use core::result;
 use core::str::FromStr;
 
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-    } else {
-        use std::string::String;
-    }
-}
-
 use serde::{Deserialize, Serialize};
 
 use crate::ip4::{IpError, Ipv4Addr, Ipv4Cidr};
@@ -47,10 +39,6 @@ pub struct VpcSubnet4Deser {
 }
 
 impl VpcSubnet4 {
-    pub fn from_req(req: SetVpcSubnet4Req) -> Result<Self> {
-        req.vpc_sub_cidr.parse()
-    }
-
     pub fn cidr(&self) -> Ipv4Cidr {
         self.cidr
     }
@@ -70,8 +58,8 @@ impl VpcSubnet4 {
     // that value from these two values and then check if the Ipv4Cidr
     // sits in one of the allowed blocks.
     pub fn new(cidr: Ipv4Cidr) -> result::Result<Self, IpError> {
-        let ip = cidr.get_ip();
-        let prefix = cidr.prefix();
+        let ip = cidr.ip();
+        let prefix = cidr.prefix_len();
 
         match ip.into() {
             (10, _, _, _) => {
@@ -124,16 +112,6 @@ impl FromStr for VpcSubnet4 {
         let cidr = val.parse::<Ipv4Cidr>()?;
         VpcSubnet4::new(cidr)
     }
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct SetVpcSubnet4Req {
-    pub vpc_sub_cidr: String,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct SetVpcSubnet4Resp {
-    pub resp: result::Result<(), String>,
 }
 
 #[test]

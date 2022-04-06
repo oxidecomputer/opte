@@ -8,12 +8,13 @@ cfg_if! {
     }
 }
 
+use crate::api::OpteError;
 use crate::ip4::{self, Protocol};
 use crate::layer::Layer;
 use crate::nat::{DynNat4, NatPool};
 use crate::port::{self, Port, Pos};
 use crate::rule::{Action, IpProtoMatch, Ipv4AddrMatch, Predicate, Rule};
-use crate::{Direction, OpteError};
+use crate::Direction;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
@@ -53,7 +54,7 @@ pub fn setup(
     // to see if the destination IP belongs to the interface's subnet.
     rule.add_predicate(Predicate::Not(Box::new(Predicate::InnerDstIp4(vec![
         Ipv4AddrMatch::Prefix(cfg.vpc_subnet.cidr()),
-        Ipv4AddrMatch::Exact(ip4::LOCAL_BROADCAST),
+        Ipv4AddrMatch::Exact(ip4::IPV4_LOCAL_BCAST),
     ]))));
     layer.add_rule(Direction::Out, rule.finalize());
     port.add_layer(layer, Pos::After("firewall"))

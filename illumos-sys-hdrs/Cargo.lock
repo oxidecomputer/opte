@@ -3,12 +3,5 @@
 version = 3
 
 [[package]]
-name = "illumos-ddi-dki"
-version = "0.1.0"
-dependencies = [
- "illumos-sys-hdrs",
-]
-
-[[package]]
 name = "illumos-sys-hdrs"
 version = "0.1.0"

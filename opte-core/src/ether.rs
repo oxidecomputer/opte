@@ -17,6 +17,7 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use crate::api;
 use crate::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
     RawHeader,
@@ -95,6 +96,12 @@ impl EtherAddr {
     }
     pub fn as_ptr(&self) -> *const u8 {
         &self.bytes as *const u8
+    }
+}
+
+impl From<api::MacAddr> for EtherAddr {
+    fn from(mac: api::MacAddr) -> Self {
+        Self { bytes: mac.bytes() }
     }
 }
 

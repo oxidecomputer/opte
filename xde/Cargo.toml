@@ -1,14 +1,22 @@
 [package]
 name = "xde"
 version = "0.1.0"
-authors = ["Ryan Goodfellow <ryan.goodfellow@oxide.computer>"]
+authors = [
+    "Ryan Goodfellow <ryan.goodfellow@oxide.computer>",
+    "Ryan Zezeski <ryan@oxide.computer>"
+]
+# XXX convert to 2021
 edition = "2018"
 
 [dependencies]
-illumos-ddi-dki = { path = "../illumos-ddi-dki", default-features = false }
-opte-core = { path = "../opte-core", default-features = false }
 cstr_core = { version = "0.2.4", default-features = false }
+illumos-ddi-dki = { path = "../illumos-ddi-dki" }
 postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
+
+[dependencies.opte-core]
+path = "../opte-core"
+default-features = false
+features = ["engine"]
 
 [dependencies.serde]
 version = "1.0"

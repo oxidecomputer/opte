@@ -20,32 +20,26 @@ rustc --version
 
 cd opte-core
 
-#
-# XXX usdt has been giving me all sorts of grief, so for now do not
-# enable that feature:
-#
-#    --no-default-features --features std
-#
 header "check style"
 ptime -m cargo +nightly fmt -- --check
 
-header "analyze"
-ptime -m cargo +nightly check --no-default-features --features std
+header "analyze std + api"
+ptime -m cargo +nightly check
 
-header "analyze no_std"
-ptime -m cargo +nightly check --no-default-features
+header "analyze no_std + engine"
+ptime -m cargo +nightly check --no-default-features --features engine
 
-header "debug build"
-ptime -m cargo +nightly build --no-default-features --features std
+header "debug build std + api"
+ptime -m cargo +nightly build
 
-header "debug build no_std"
-ptime -m cargo +nightly build --no-default-features
+header "debug build no_std + engine"
+ptime -m cargo +nightly build --no-default-features --features engine
 
-header "release build"
-ptime -m cargo +nightly build --release --no-default-features --features std
+header "release build std + api"
+ptime -m cargo +nightly build --release
 
-header "release build no_std"
-ptime -m cargo +nightly build --release --no-default-features
+header "release build no_std + engine"
+ptime -m cargo +nightly build --release --no-default-features --features engine
 
 header "test"
-ptime -m cargo +nightly test --no-default-features --features std
+ptime -m cargo +nightly test

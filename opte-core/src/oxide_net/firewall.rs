@@ -16,9 +16,10 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
+use crate::api::{Ipv4Addr, OpteError};
 use crate::ether::ETHER_TYPE_ARP;
 use crate::headers::DYNAMIC_PORT;
-use crate::ip4::{Ipv4Addr, Ipv4Cidr, Protocol};
+use crate::ip4::{Ipv4Cidr, Protocol};
 use crate::layer::{InnerFlowId, Layer};
 use crate::port::meta::Meta;
 use crate::port::{self, Port, Pos};
@@ -27,7 +28,7 @@ use crate::rule::{
     PortMatch, Predicate, Rule, StatefulAction,
 };
 use crate::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
-use crate::{Direction, OpteError, ParseErr, ParseResult};
+use crate::{Direction, ParseErr, ParseResult};
 
 pub const FW_LAYER_NAME: &'static str = "firewall";
 
@@ -386,17 +387,12 @@ fn parse_good_address() {
 
 #[test]
 fn parse_bad_address() {
-    use crate::ip4::IpError;
-
     assert_eq!("ip:192.168.2.1".parse::<Address>(), Err(ParseErr::Malformed));
     assert_eq!(
         "ip=192.168.2".parse::<Address>(),
-        Err(ParseErr::IpError(IpError::MalformedIp("192.168.2".to_string())))
+        Err(ParseErr::Other("malformed ip: 192.168.2".to_string()))
     );
-    assert_eq!(
-        "ip=192.168.O.1".parse::<Address>(),
-        Err(ParseErr::IpError(IpError::MalformedInt))
-    );
+    assert!("ip=192.168.O.1".parse::<Address>().is_err());
     assert_eq!("addr=192.168.2.1".parse::<Address>(), Err(ParseErr::Malformed));
 }
 

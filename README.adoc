@@ -1,16 +1,37 @@
 = Oxide Packet Transformation Engine
 
-More docs imminent.
+== Relevant RFDs and Inspiration
 
 * https://rfd.shared.oxide.computer/rfd/0009[RFD 9: Networking Considerations]
 * https://rfd.shared.oxide.computer/rfd/0021[RFD 21: User Networking API]
 * https://rfd.shared.oxide.computer/rfd/0063[RFD 63: Network Architecture]
 * https://www.microsoft.com/en-us/research/wp-content/uploads/2017/03/vfp-nsdi-2017-final.pdf[Microsoft's VFP]
 
-* opteadm: The command line utility used to configure and inspect the
-  opte kernel module.
-* opte-core: The implementation of the *engine* in OPTE.
-* opte-drv: A kernel module which hooks into the network path between
-  bhyve and mac, feeding all packets into opte-core for processing.
-* illumos-ddi-dki: A basic and raw interface onto the illumos DDI/DKI
-  APIs.
+== Directory Index
+
+dtrace:: A collection of DTrace scripts for common tracing and
+diagnostic processes useful for understanding the runtime behavior of
+OPTE.
+
+illumos-ddi-dki:: A raw interface to the illumos DDI/DKI APIs.
+
+illumos-sys-hdrs:: A raw interface to various illumos `uts/common/sys`
+headers.
+
+opte-ioctl:: The userland library used for interacting with OPTE.
+
+opte-core:: The implementation of the *engine* in OPTE.
+
+opte-drv (obsolete):: A kernel module which hooks into the network
+path between viona (bhyve) and mac, feeding all packets into opte-core
+for processing. This module has been rendered obsolete by `xde`, but
+it still remains until all features are transitioned over.
+
+opteadm:: The command line utility used to configure and inspect OPTE.
+This is meant to be used by an operator, not by a client program.
+
+pkg:: A script for generating an IPS package for the `xde` driver.
+
+xde:: A kernel module for running OPTE in the kernel. This module
+allows OPTE to interface with the system and for clients to interface
+with OPTE. It currently focuses purely on the Oxide VPC use case.

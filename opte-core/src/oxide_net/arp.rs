@@ -6,6 +6,7 @@ cfg_if! {
     }
 }
 
+use crate::api::OpteError;
 use crate::arp::{ArpOp, ArpReply};
 use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
 use crate::layer::Layer;
@@ -14,7 +15,7 @@ use crate::rule::{
     Action, ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate,
     EtherAddrMatch, EtherTypeMatch, Ipv4AddrMatch, Predicate, Rule,
 };
-use crate::{Direction, OpteError};
+use crate::Direction;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,

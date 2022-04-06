@@ -17,10 +17,11 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
+use crate::api::{self, CmdOk, Ipv4Addr, OpteError};
 use crate::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV6};
 use crate::geneve::{GeneveMeta, Vni, GENEVE_PORT};
 use crate::headers::{HeaderAction, IpAddr};
-use crate::ip4::{Ipv4Addr, Protocol};
+use crate::ip4::Protocol;
 use crate::ip6::{Ipv6Addr, Ipv6Meta};
 use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::router::RouterTarget;
@@ -29,7 +30,7 @@ use crate::port::{self, Port, Pos};
 use crate::rule::{self, Action, Rule, StaticAction, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::udp::UdpMeta;
-use crate::{Direction, OpteError};
+use crate::Direction;
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 
@@ -38,6 +39,16 @@ pub struct PhysNet {
     pub ether: EtherAddr,
     pub ip: Ipv6Addr,
     pub vni: Vni,
+}
+
+impl From<api::PhysNet> for PhysNet {
+    fn from(phys: api::PhysNet) -> Self {
+        Self {
+            ether: phys.ether.into(),
+            ip: phys.ip.into(),
+            vni: phys.vni.into(),
+        }
+    }
 }
 
 pub fn setup(
@@ -197,7 +208,7 @@ impl StaticAction for EncapAction {
             ),
             outer_ip: Ipv6Meta::push(
                 self.phys_ip_src,
-                phys_target.ip,
+                phys_target.ip.into(),
                 Protocol::UDP,
             ),
             outer_ulp: UdpMeta::push(
@@ -214,8 +225,11 @@ impl StaticAction for EncapAction {
                 7777,
                 GENEVE_PORT,
             ),
-            outer_encap: GeneveMeta::push(phys_target.vni),
-            inner_ether: EtherMeta::modify(None, Some(phys_target.ether)),
+            outer_encap: GeneveMeta::push(phys_target.vni.into()),
+            inner_ether: EtherMeta::modify(
+                None,
+                Some(phys_target.ether.into()),
+            ),
             ..Default::default()
         })
     }
@@ -318,12 +332,6 @@ pub struct SetOverlayReq {
     pub cfg: OverlayCfg,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct SetVirt2PhysReq {
-    pub vip: IpAddr,
-    pub phys: PhysNet,
-}
-
 #[repr(C)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpVirt2PhysReq {
@@ -336,4 +344,4 @@ pub struct DumpVirt2PhysResp {
     pub ip6: BTreeMap<Ipv6Addr, PhysNet>,
 }
 
-impl crate::ioctl::CmdOk for DumpVirt2PhysResp {}
+impl CmdOk for DumpVirt2PhysResp {}

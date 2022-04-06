@@ -21,12 +21,12 @@ use serde::{Deserialize, Serialize};
 
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use crate::api::Ipv4Addr;
 use crate::ether::{
     EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ, ETHER_TYPE_ARP,
     ETHER_TYPE_IPV4,
 };
 use crate::headers::{Header, RawHeader};
-use crate::ip4::Ipv4Addr;
 use crate::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, PacketWriter,
     Parsed, ReadErr, WriteError,
@@ -317,9 +317,9 @@ impl From<ArpEth4Payload> for ArpEth4PayloadRaw {
     fn from(arp: ArpEth4Payload) -> Self {
         ArpEth4PayloadRaw {
             sha: arp.sha.to_bytes(),
-            spa: arp.spa.to_be_bytes(),
+            spa: arp.spa.bytes(),
             tha: arp.tha.to_bytes(),
-            tpa: arp.tpa.to_be_bytes(),
+            tpa: arp.tpa.bytes(),
         }
     }
 }
