@@ -4,22 +4,10 @@ version = "0.2.0"
 authors = ["Ryan Zezeski <ryan@oxide.computer>"]
 edition = "2021"
 
-[features]
-default = []
-# XXX Allow pulling in opte-core when you need access to its types.
-# This is a temporary hack to allow opteadm the binary to continue
-# having access to evertyhing while limiting all other clients to
-# opte-core-api.
-xxx-leak-types = ["opte-core"]
-
 [dependencies]
 cfg-if = "0.1"
 libc = "0.2"
-illumos-ddi-dki = { path = "../illumos-ddi-dki" }
-# XXX We allow this feature to be optional for the time being so that
-# we can gate the non-omicron APIs behind a feature tag for the
-# moment.
-opte-core = { path = "../opte-core", features = ["std"], default-features = false, optional = true }
+opte-core = { path = "../opte-core", features = ["std"], default-features = false }
 opte-core-api = { path = "../opte-core-api" }
 postcard = { version = "0.7.0", features = ["alloc"] }
 structopt = "0.3.23"

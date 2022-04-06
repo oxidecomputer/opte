@@ -8,16 +8,11 @@ use libc;
 use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
-cfg_if::cfg_if! {
-    if #[cfg(feature = "xxx-leak-types")] {
-        use opte_core::ioctl::{self as api, SetXdeUnderlayReq};
-        use opte_core::oxide_net::firewall::{
-            AddFwRuleReq, FirewallRule, RemFwRuleReq,
-        };
-        use opte_core::oxide_net::overlay;
-    }
-}
-
+use opte_core::ioctl::{self as api, SetXdeUnderlayReq};
+use opte_core::oxide_net::firewall::{
+    AddFwRuleReq, FirewallRule, RemFwRuleReq,
+};
+use opte_core::oxide_net::overlay;
 use opte_core_api::{
     AddRouterEntryIpv4Req, CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, NoResp,
     OpteCmd, OpteCmdIoctl, OpteError, SetVirt2PhysReq, Vni
@@ -120,7 +115,6 @@ impl OpteAdm {
     }
 
     /// Delete xde device
-    #[cfg(feature = "xxx-leak-types")]
     pub fn delete_xde(&self, name: &str) -> Result<NoResp, Error> {
         let link_id = libnet::LinkHandle::Name(name.into()).id()?;
         let req = DeleteXdeReq { xde_devname: name.into() };
@@ -131,7 +125,6 @@ impl OpteAdm {
     }
 
     /// Set xde underlay devices
-    #[cfg(feature = "xxx-leak-types")]
     pub fn set_xde_underlay(
         &self,
         u1: &str,
@@ -143,7 +136,6 @@ impl OpteAdm {
     }
 
     /// Add a firewall rule
-    #[cfg(feature = "xxx-leak-types")]
     pub fn add_firewall_rule(
         &self,
         port_name: &str,
@@ -158,7 +150,6 @@ impl OpteAdm {
     }
 
     /// Return the contents of an OPTE layer.
-    #[cfg(feature = "xxx-leak-types")]
     pub fn get_layer_by_name(
         &self,
         port_name: &str,
@@ -177,7 +168,6 @@ impl OpteAdm {
     }
 
     /// List all the ports.
-    #[cfg(feature = "xxx-leak-types")]
     pub fn list_ports(&self) -> Result<api::ListPortsResp, Error> {
         let cmd = OpteCmd::ListPorts;
         run_cmd_ioctl::<api::ListPortsResp, _>(
@@ -187,7 +177,6 @@ impl OpteAdm {
         )
     }
 
-    #[cfg(feature = "xxx-leak-types")]
     pub fn list_layers(
         &self,
         port: &str,
@@ -208,7 +197,6 @@ impl OpteAdm {
     }
 
     /// Remove a firewall rule.
-    #[cfg(feature = "xxx-leak-types")]
     pub fn remove_firewall_rule(
         &self,
         req: &RemFwRuleReq,
@@ -218,7 +206,6 @@ impl OpteAdm {
     }
 
     /// Return the TCP flows.
-    #[cfg(feature = "xxx-leak-types")]
     pub fn dump_tcp_flows(
         &self,
         port_name: &str,
@@ -232,7 +219,6 @@ impl OpteAdm {
     }
 
     /// Clear all entries from the Unified Flow Table (UFT).
-    #[cfg(feature = "xxx-leak-types")]
     pub fn clear_uft(&self, port_name: &str) -> Result<NoResp, Error> {
         let cmd = OpteCmd::ClearUft;
         run_cmd_ioctl(
@@ -243,7 +229,6 @@ impl OpteAdm {
     }
 
     /// Return the Unified Flow Table (UFT).
-    #[cfg(feature = "xxx-leak-types")]
     pub fn dump_uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
         let cmd = OpteCmd::DumpUft;
         run_cmd_ioctl::<api::DumpUftResp, _>(
@@ -259,7 +244,6 @@ impl OpteAdm {
     }
 
     /// Dump the Virtual-to-Physical mappings.
-    #[cfg(feature = "xxx-leak-types")]
     pub fn dump_v2p(&self) -> Result<overlay::DumpVirt2PhysResp, Error> {
         let cmd = OpteCmd::DumpVirt2Phys;
         run_cmd_ioctl::<overlay::DumpVirt2PhysResp, _>(

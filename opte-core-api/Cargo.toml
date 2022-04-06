@@ -6,14 +6,21 @@ edition = "2021"
 
 [features]
 default = ["std"]
-std = []
+std = ["libc", "libnet", "thiserror"]
 
 [dependencies]
 cfg-if = "0.1"
 illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
+libc = { version = "0.2", optional = true }
 postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
+thiserror = { version = "1.0.28", optional = true }
 
 [dependencies.serde]
 version = "1.0"
 default-features = false
 features = ["alloc", "derive"]
+
+# We need to avoid pulling in illumos-only deps on non-illumos
+# platforms. This allows one to run check/test on any platform.
+[target.'cfg(target_os = "illumos")'.dependencies]
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys", optional = true }

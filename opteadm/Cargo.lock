@@ -445,8 +445,11 @@ version = "0.1.0"
 dependencies = [
  "cfg-if 0.1.10",
  "illumos-sys-hdrs",
+ "libc",
+ "libnet",
  "postcard",
  "serde",
+ "thiserror",
 ]
 
 [[package]]
@@ -454,7 +457,6 @@ name = "opteadm"
 version = "0.2.0"
 dependencies = [
  "cfg-if 0.1.10",
- "illumos-ddi-dki",
  "libc",
  "libnet",
  "opte-core",
