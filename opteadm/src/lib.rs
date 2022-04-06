@@ -12,11 +12,11 @@ use opte_core::ioctl::{self as api, NoResp, SetXdeUnderlayReq};
 use opte_core::oxide_net::firewall::{
     AddFwRuleReq, FirewallRule, RemFwRuleReq,
 };
-use opte_core::oxide_net::overlay::{self, SetVirt2PhysReq};
+use opte_core::oxide_net::overlay;
 use opte_core::oxide_net::router;
 use opte_core_api::{
     CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, OpteCmd, OpteCmdIoctl,
-    OpteError, Vni
+    OpteError, SetVirt2PhysReq, Vni
 };
 
 /// Errors related to administering the OPTE driver.

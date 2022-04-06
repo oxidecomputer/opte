@@ -41,6 +41,16 @@ pub struct PhysNet {
     pub vni: Vni,
 }
 
+impl From<opte_core_api::PhysNet> for PhysNet {
+    fn from(phys: opte_core_api::PhysNet) -> Self {
+        Self {
+            ether: phys.ether.into(),
+            ip: phys.ip.into(),
+            vni: phys.vni.into(),
+        }
+    }
+}
+
 pub fn setup(
     port: &Port<port::Inactive>,
     cfg: &OverlayCfg,
@@ -198,7 +208,7 @@ impl StaticAction for EncapAction {
             ),
             outer_ip: Ipv6Meta::push(
                 self.phys_ip_src,
-                phys_target.ip,
+                phys_target.ip.into(),
                 Protocol::UDP,
             ),
             outer_ulp: UdpMeta::push(
@@ -215,8 +225,11 @@ impl StaticAction for EncapAction {
                 7777,
                 GENEVE_PORT,
             ),
-            outer_encap: GeneveMeta::push(phys_target.vni),
-            inner_ether: EtherMeta::modify(None, Some(phys_target.ether)),
+            outer_encap: GeneveMeta::push(phys_target.vni.into()),
+            inner_ether: EtherMeta::modify(
+                None,
+                Some(phys_target.ether.into())
+            ),
             ..Default::default()
         })
     }
@@ -317,12 +330,6 @@ pub struct OverlayCfg {
 pub struct SetOverlayReq {
     pub port_name: String,
     pub cfg: OverlayCfg,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct SetVirt2PhysReq {
-    pub vip: IpAddr,
-    pub phys: PhysNet,
 }
 
 #[repr(C)]

@@ -417,8 +417,8 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         req.private_mac.into(),
         req.gw_mac.into(),
         req.gw_ip.into(),
-        req.boundary_services_addr.into(),
-        req.boundary_services_vni.into(),
+        req.bsvc_addr.into(),
+        req.bsvc_vni.into(),
         req.src_underlay_addr.into(),
         req.vpc_vni.into(),
         state.ectx.clone(),
@@ -1835,9 +1835,9 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 
 #[no_mangle]
 fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: overlay::SetVirt2PhysReq = env.copy_in_req()?;
+    let req: opte_core_api::SetVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
-    state.v2p.set(req.vip, req.phys);
+    state.v2p.set(req.vip.into(), req.phys.into());
     Ok(NoResp::default())
 }
 

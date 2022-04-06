@@ -25,6 +25,7 @@ cfg_if! {
     }
 }
 
+use core::fmt::{self, Display};
 use serde::{Deserialize, Serialize};
 
 use illumos_sys_hdrs::{c_int, datalink_id_t, size_t};
@@ -222,6 +223,13 @@ pub trait CmdOk: core::fmt::Debug + Serialize {}
 // Use the unit type to indicate no meaningful response value on success.
 impl CmdOk for () {}
 
+/// An IPv4 or IPv6 address.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum IpAddr {
+    Ip4(Ipv4Addr),
+    Ip6(Ipv6Addr),
+}
+
 /// An IPv4 address.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Ipv4Addr {
@@ -229,7 +237,7 @@ pub struct Ipv4Addr {
 }
 
 #[cfg(any(feature = "std", test))]
-impl From <std::net::Ipv4Addr> for Ipv4Addr {
+impl From<std::net::Ipv4Addr> for Ipv4Addr {
     fn from(ip4: std::net::Ipv4Addr) -> Self {
         Self { inner: ip4.octets() }
     }
@@ -306,6 +314,21 @@ impl FromStr for MacAddr {
     }
 }
 
+impl Display for MacAddr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            self.inner[0],
+            self.inner[1],
+            self.inner[2],
+            self.inner[3],
+            self.inner[4],
+            self.inner[5]
+        )
+    }
+}
+
 impl MacAddr {
     /// Return the bytes of the MAC address.
     pub fn bytes(&self) -> [u8; 6] {
@@ -338,6 +361,12 @@ impl FromStr for Vni {
     fn from_str(val: &str) -> Result<Self, Self::Err> {
         let n = val.parse::<u32>().map_err(|e| e.to_string())?;
         Self::new(n)
+    }
+}
+
+impl Display for Vni {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", u32::from(*self))
     }
 }
 
@@ -374,7 +403,19 @@ fn vni_round_trip() {
     assert_eq!(7777, u32::from(vni));
 }
 
+/// A network destination on the Oxide Rack's physical network (underlay)
+///
+/// XXX This is oxide-specific and ultimately should not live here.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct PhysNet {
+    pub ether: MacAddr,
+    pub ip: Ipv6Addr,
+    pub vni: Vni,
+}
+
 /// Xde create ioctl parameter data.
+///
+/// XXX This is oxide-specific and ultimately should not live here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateXdeReq {
     pub linkid: datalink_id_t,
@@ -394,7 +435,18 @@ pub struct CreateXdeReq {
 }
 
 /// Xde delete ioctl parameter data.
+///
+/// XXX This is oxide-specific and ultimately should not live here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeleteXdeReq {
     pub xde_devname: String,
+}
+
+/// Set mapping from VPC IP to physical network destination.
+///
+/// XXX This is oxide-specific and ultimately should not live here.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SetVirt2PhysReq {
+    pub vip: IpAddr,
+    pub phys: PhysNet,
 }

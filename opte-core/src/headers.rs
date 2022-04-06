@@ -34,6 +34,17 @@ pub enum IpAddr {
     Ip6(Ipv6Addr),
 }
 
+impl From<opte_core_api::IpAddr> for IpAddr {
+    fn from(addr: opte_core_api::IpAddr) -> Self {
+        use opte_core_api::IpAddr as ApiIpAddr;
+
+        match addr {
+            ApiIpAddr::Ip4(ip4) => Self::Ip4(ip4.into()),
+            ApiIpAddr::Ip6(ip6) => Self::Ip6(ip6.into()),
+        }
+    }
+}
+
 impl Default for IpAddr {
     fn default() -> Self {
         IpAddr::Ip4(Default::default())
