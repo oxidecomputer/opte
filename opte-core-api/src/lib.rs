@@ -14,10 +14,13 @@ extern crate cfg_if;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
+        use core::result;
         use alloc::string::String;
         use alloc::vec::Vec;
     } else {
-        use std::string::String;
+        use std::result;
+        use std::str::FromStr;
+        use std::string::{String, ToString};
         use std::vec::Vec;
     }
 }
@@ -25,10 +28,6 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 
 use illumos_sys_hdrs::{c_int, datalink_id_t, size_t};
-
-pub mod flow_table;
-pub mod layer;
-pub mod rule;
 
 /// The overall version of the API. Anytmie an API is added, removed,
 /// or modified, this number should increment. Currently we attach no
@@ -281,6 +280,32 @@ impl From<&[u8; 6]> for MacAddr {
     }
 }
 
+#[cfg(any(feature = "std", test))]
+impl FromStr for MacAddr {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let octets: Vec<u8> = s
+            .split(":")
+            .map(|s| {
+                u8::from_str_radix(s, 16).or(Err(format!("bad octet: {}", s)))
+            })
+            .collect::<result::Result<Vec<u8>, _>>()?;
+
+        if octets.len() != 6 {
+            return Err(format!("incorrect number of bytes: {}", octets.len()));
+        }
+
+        // At the time of writing there is no TryFrom impl for Vec to
+        // array in the alloc create. Honestly this looks a bit
+        // cleaner anyways.
+        let bytes =
+            [octets[0], octets[1], octets[2], octets[3], octets[4], octets[5]];
+
+        Ok(MacAddr { inner: bytes })
+    }
+}
+
 impl MacAddr {
     /// Return the bytes of the MAC address.
     pub fn bytes(&self) -> [u8; 6] {
@@ -306,11 +331,15 @@ impl From<Vni> for u32 {
     }
 }
 
-// impl From<u32> for Vni {
-//     fn from(v: u32) -> Self {
-//         Self { inner: v }
-//     }
-// }
+#[cfg(any(feature = "std", test))]
+impl FromStr for Vni {
+    type Err = String;
+
+    fn from_str(val: &str) -> Result<Self, Self::Err> {
+        let n = val.parse::<u32>().map_err(|e| e.to_string())?;
+        Self::new(n)
+    }
+}
 
 const VNI_MAX: u32 = 0x00_FF_FF_FF;
 
@@ -356,8 +385,8 @@ pub struct CreateXdeReq {
     pub gw_mac: MacAddr,
     pub gw_ip: Ipv4Addr,
 
-    pub boundary_services_addr: Ipv6Addr,
-    pub boundary_services_vni: Vni,
+    pub bsvc_addr: Ipv6Addr,
+    pub bsvc_vni: Vni,
     pub src_underlay_addr: Ipv6Addr,
     pub vpc_vni: Vni,
 

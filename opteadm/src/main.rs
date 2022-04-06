@@ -8,7 +8,6 @@ use structopt::StructOpt;
 use opte_core::ether::EtherAddr;
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::geneve;
-use opte_core::geneve::Vni;
 use opte_core::headers::IpAddr;
 use opte_core::ioctl::{self as api, PortInfo};
 use opte_core::ip4::{Ipv4Addr, Ipv4Cidr};
@@ -21,6 +20,7 @@ use opte_core::oxide_net::{overlay, router};
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
+use opte_core_api::{MacAddr, Vni};
 use opteadm::OpteAdm;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
@@ -95,12 +95,12 @@ enum Command {
     /// Create an xde device
     CreateXde {
         name: String,
-        private_mac: String,
-        private_ip: String,
-        gateway_mac: String,
-        gateway_ip: String,
-        boundary_services_addr: std::net::Ipv6Addr,
-        boundary_services_vni: Vni,
+        private_mac: MacAddr,
+        private_ip: std::net::Ipv4Addr,
+        gateway_mac: MacAddr,
+        gateway_ip: std::net::Ipv4Addr,
+        bsvc_addr: std::net::Ipv6Addr,
+        bsvc_vni: Vni,
         vpc_vni: Vni,
         src_underlay_addr: std::net::Ipv6Addr,
         #[structopt(long)]
@@ -617,8 +617,8 @@ fn main() {
             private_ip,
             gateway_mac,
             gateway_ip,
-            boundary_services_addr,
-            boundary_services_vni,
+            bsvc_addr,
+            bsvc_vni,
             vpc_vni,
             src_underlay_addr,
             passthrough,
@@ -626,12 +626,12 @@ fn main() {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
             hdl.create_xde(
                 &name,
-                &private_mac,
-                &private_ip,
-                &gateway_mac,
-                &gateway_ip,
-                boundary_services_addr,
-                boundary_services_vni,
+                private_mac,
+                private_ip,
+                gateway_mac,
+                gateway_ip,
+                bsvc_addr,
+                bsvc_vni,
                 vpc_vni,
                 src_underlay_addr,
                 passthrough,

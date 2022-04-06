@@ -3,24 +3,20 @@
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
-use std::str::FromStr;
 
 use libc;
 use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
-use opte_core::ether::EtherAddr;
-use opte_core::geneve::Vni;
 use opte_core::ioctl::{self as api, NoResp, SetXdeUnderlayReq};
-use opte_core::ip4::Ipv4Addr;
-use opte_core::ip6::Ipv6Addr;
 use opte_core::oxide_net::firewall::{
     AddFwRuleReq, FirewallRule, RemFwRuleReq,
 };
 use opte_core::oxide_net::overlay::{self, SetVirt2PhysReq};
 use opte_core::oxide_net::router;
 use opte_core_api::{
-    CmdOk, CreateXdeReq, DeleteXdeReq, OpteCmd, OpteCmdIoctl, OpteError
+    CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, OpteCmd, OpteCmdIoctl,
+    OpteError, Vni
 };
 
 /// Errors related to administering the OPTE driver.
@@ -84,12 +80,12 @@ impl OpteAdm {
     pub fn create_xde(
         &self,
         name: &str,
-        private_mac: &str,
+        private_mac: MacAddr,
         private_ip: std::net::Ipv4Addr,
-        gw_mac: &str,
+        gw_mac: MacAddr,
         gw_ip: std::net::Ipv4Addr,
-        boundary_services_addr: std::net::Ipv6Addr,
-        boundary_services_vni: Vni,
+        bsvc_addr: std::net::Ipv6Addr,
+        bsvc_vni: Vni,
         vpc_vni: Vni,
         src_underlay_addr: std::net::Ipv6Addr,
         passthrough: bool,
@@ -100,37 +96,20 @@ impl OpteAdm {
             libnet::LinkFlags::Active,
         )?;
 
-        let private_mac = EtherAddr::from_str(private_mac)
-            .map_err(|e| Error::InvalidArgument(e))?;
-
-        let gw_mac = EtherAddr::from_str(gw_mac)
-            .map_err(|e| Error::InvalidArgument(e))?;
-
-        let private_ip = Ipv4Addr::from_str(private_ip)
-            .map_err(|e| Error::InvalidArgument(e.to_string()))?;
-
-        let gw_ip = Ipv4Addr::from_str(gw_ip)
-            .map_err(|e| Error::InvalidArgument(e.to_string()))?;
-
         let xde_devname = name.into();
-        let boundary_services_addr =
-            Ipv6Addr::from(boundary_services_addr.octets());
-        let src_underlay_addr = Ipv6Addr::from(src_underlay_addr.octets());
-
         let cmd = OpteCmd::CreateXde;
         let req = CreateXdeReq {
             xde_devname,
             linkid,
             private_mac,
-            private_ip,
+            private_ip: private_ip.into(),
             gw_mac,
-            gw_ip,
-            boundary_services_addr,
-            boundary_services_vni,
+            gw_ip: gw_ip.into(),
+            bsvc_addr: bsvc_addr.into(),
+            bsvc_vni,
             vpc_vni,
-            src_underlay_addr,
+            src_underlay_addr: src_underlay_addr.into(),
             passthrough,
-            ..Default::default()
         };
 
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
