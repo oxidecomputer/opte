@@ -4,8 +4,10 @@ use core::mem::size_of;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::string::String;
         use alloc::vec::Vec;
     } else {
+        use std::string::String;
         use std::vec::Vec;
     }
 }
@@ -13,6 +15,7 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use opte_core_api as api;
 use crate::checksum::Checksum;
 use crate::headers::{
     Header, HeaderAction, IpMeta, IpMetaOpt, ModActionArg, PushActionArg,
@@ -45,6 +48,44 @@ pub struct Ipv6Addr {
 }
 
 impl Ipv6Addr {
+    /// Return the address after applying the network mask.
+    pub fn mask(mut self, mask: u8) -> Result<Self, String> {
+        if mask > 128 {
+            return Err(format!("bad mask: {}", mask));
+        }
+
+        if mask == 128 {
+            return Ok(self);
+        }
+
+        if mask == 0 {
+            for byte in &mut self.addr[0..15] {
+                *byte = 0;
+            }
+            return Ok(self);
+        }
+
+        // The mask is in bits and we want to determine which byte (of
+        // the 16 that make up the address) to start with. A byte is 8
+        // bits, if 8 goes into `mask` N times, then the first N bytes
+        // stay as-is. However, byte N may need partial masking, and
+        // bytes N+1..16 must be set to zero.
+        let mut byte_idx = usize::from(mask / 8);
+        let partial = mask % 8;
+
+        if partial > 0 {
+            let bits = i8::MIN >> (partial - 1);
+            self.addr[byte_idx] = self.addr[byte_idx] & bits as u8;
+            byte_idx += 1;
+        }
+
+        for byte in &mut self.addr[byte_idx..16] {
+            *byte = 0;
+        }
+
+        Ok(self)
+    }
+
     pub fn to_bytes(&self) -> [u8; 16] {
         self.addr
     }
@@ -91,6 +132,33 @@ impl fmt::Display for Ipv6Addr {
 impl From<std::net::Ipv6Addr> for Ipv6Addr {
     fn from(ip6: std::net::Ipv6Addr) -> Self {
         Self::from(ip6.octets())
+    }
+}
+
+/// An IPv6 CIDR.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct Ipv6Cidr {
+    ip: Ipv6Addr,
+    prefix_len: u8,
+}
+
+impl From<api::Ipv6Cidr> for Ipv6Cidr {
+    fn from(cidr: api::Ipv6Cidr) -> Self {
+        let parts = cidr.parts();
+        // Unwrap: We know the Ipv6Cidr type has already validated
+        // itself.
+        Self::new(parts.0.into(), parts.1).unwrap()
+    }
+}
+
+impl Ipv6Cidr {
+    pub fn new(ip: Ipv6Addr, prefix_len: u8) -> Result<Self, String> {
+        if prefix_len > 128 {
+            return Err(format!("bad prefix length: {}", prefix_len));
+        }
+
+        let ip = ip.mask(prefix_len)?;
+        Ok(Ipv6Cidr { ip, prefix_len })
     }
 }
 

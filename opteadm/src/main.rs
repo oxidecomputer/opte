@@ -8,13 +8,13 @@ use opte_core::ether::EtherAddr;
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::headers::IpAddr;
 use opte_core::ioctl::{self as api, PortInfo};
-use opte_core::ip4::{Ipv4Addr, Ipv4Cidr};
+use opte_core::ip4::Ipv4Addr;
 use opte_core::ip6::Ipv6Addr;
 use opte_core::layer::InnerFlowId;
 use opte_core::oxide_net::firewall::{
     self, Action, Address, FirewallRule, Ports, ProtoFilter, RemFwRuleReq,
 };
-use opte_core::oxide_net::{overlay, router};
+use opte_core::oxide_net::overlay;
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
@@ -142,9 +142,9 @@ enum Command {
         #[structopt(short)]
         port: String,
 
-        dest: Ipv4Cidr,
+        dest: opte_core_api::Ipv4Cidr,
 
-        target: router::RouterTarget,
+        target: opte_core_api::RouterTarget,
     },
 }
 
@@ -633,8 +633,11 @@ fn main() {
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let req =
-                router::AddRouterEntryIpv4Req { port_name: port, dest, target };
+            let req = opte_core_api::AddRouterEntryIpv4Req {
+                port_name: port,
+                dest,
+                target,
+            };
             hdl.add_router_entry_ip4(&req).unwrap_or_die();
         }
     }

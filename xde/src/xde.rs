@@ -1794,7 +1794,7 @@ unsafe extern "C" fn xde_rx(
 
 #[no_mangle]
 fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: router::AddRouterEntryIpv4Req = env.copy_in_req()?;
+    let req: opte_core_api::AddRouterEntryIpv4Req = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
@@ -1802,7 +1802,11 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    router::add_entry_active(&dev.port, IpCidr::Ip4(req.dest), req.target)
+    router::add_entry_active(
+        &dev.port,
+        IpCidr::Ip4(req.dest.into()),
+        req.target.into(),
+    )
 }
 
 #[no_mangle]

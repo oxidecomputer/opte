@@ -20,6 +20,7 @@ use heapless::Vec as FVec;
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use opte_core_api as api;
 use crate::checksum::{Checksum, HeaderChecksum};
 use crate::headers::{
     Header, HeaderAction, HeaderActionModify, IpMeta, IpMetaOpt, ModActionArg,
@@ -101,6 +102,15 @@ pub struct Ipv4Cidr {
     prefix: u8,
 }
 
+impl From<api::Ipv4Cidr> for Ipv4Cidr {
+    fn from(cidr: api::Ipv4Cidr) -> Self {
+        let parts = cidr.parts();
+        // Unwrap: We know the Ipv4Cidr type has already validated
+        // itself.
+        Self::new(parts.0.into(), parts.1).unwrap()
+    }
+}
+
 impl MatchPrefixVal for Ipv4Cidr {}
 
 impl Ipv4Cidr {
@@ -148,6 +158,8 @@ impl Display for Ipv4Cidr {
     }
 }
 
+// XXX Still need this until all APIs are moved out of opte-core. In
+// this case the firewall rule parsing code still needs this.
 impl FromStr for Ipv4Cidr {
     type Err = IpError;
 
@@ -187,40 +199,6 @@ fn cidr_match() {
     let ip3 = "52.10.128.69".parse::<Ipv4Addr>().unwrap();
     let cidr3 = DEF_ROUTE.parse().unwrap();
     assert!(ip3.match_prefix(&cidr3));
-}
-
-#[test]
-fn bad_cidr() {
-    let ip = "10.0.0.1".parse().unwrap();
-    assert_eq!(Ipv4Cidr::new(ip, 33), Err(IpError::BadPrefix(33)));
-    assert_eq!(
-        "192.168.2.9/33".parse::<Ipv4Cidr>(),
-        Err(IpError::BadPrefix(33))
-    );
-}
-
-#[test]
-fn good_cidr() {
-    let ip = "192.168.2.0".parse().unwrap();
-    assert_eq!(
-        Ipv4Cidr::new(ip, 24),
-        Ok(Ipv4Cidr { ip: Ipv4Addr { inner: [192, 168, 2, 0] }, prefix: 24 })
-    );
-
-    assert_eq!(
-        "192.168.2.0/24".parse(),
-        Ok(Ipv4Cidr { ip: Ipv4Addr { inner: [192, 168, 2, 0] }, prefix: 24 })
-    );
-
-    assert_eq!(
-        "192.168.2.9/24".parse(),
-        Ok(Ipv4Cidr { ip: Ipv4Addr { inner: [192, 168, 2, 0] }, prefix: 24 })
-    );
-
-    assert_eq!(
-        "192.168.2.9/24".parse::<Ipv4Cidr>().unwrap().to_string(),
-        "192.168.2.0/24".to_string()
-    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -301,8 +279,8 @@ impl Ipv4Addr {
     }
 }
 
-impl From<opte_core_api::Ipv4Addr> for Ipv4Addr {
-    fn from(ip: opte_core_api::Ipv4Addr) -> Self {
+impl From<api::Ipv4Addr> for Ipv4Addr {
+    fn from(ip: api::Ipv4Addr) -> Self {
         Self::new(ip.bytes())
     }
 }

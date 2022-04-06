@@ -15,14 +15,6 @@ use core::convert::TryFrom;
 use core::result;
 use core::str::FromStr;
 
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-    } else {
-        use std::string::String;
-    }
-}
-
 use serde::{Deserialize, Serialize};
 
 use crate::ip4::{IpError, Ipv4Addr, Ipv4Cidr};
@@ -47,10 +39,6 @@ pub struct VpcSubnet4Deser {
 }
 
 impl VpcSubnet4 {
-    pub fn from_req(req: SetVpcSubnet4Req) -> Result<Self> {
-        req.vpc_sub_cidr.parse()
-    }
-
     pub fn cidr(&self) -> Ipv4Cidr {
         self.cidr
     }
@@ -117,6 +105,8 @@ impl TryFrom<VpcSubnet4Deser> for VpcSubnet4 {
     }
 }
 
+// XXX This is still needed for SnatCfg. When that moves to
+// opte-core-api this can be removed.
 impl FromStr for VpcSubnet4 {
     type Err = IpError;
 
@@ -124,16 +114,6 @@ impl FromStr for VpcSubnet4 {
         let cidr = val.parse::<Ipv4Cidr>()?;
         VpcSubnet4::new(cidr)
     }
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct SetVpcSubnet4Req {
-    pub vpc_sub_cidr: String,
-}
-
-#[derive(Deserialize, Serialize)]
-pub struct SetVpcSubnet4Resp {
-    pub resp: result::Result<(), String>,
 }
 
 #[test]

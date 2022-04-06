@@ -3,25 +3,23 @@
 //! This implements both the Oxide Network VPC "System Router" and
 //! "Custom Router" abstractions, as described in RFD 21 §2.3.
 use core::fmt;
-use core::str::FromStr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::{String, ToString};
+        use alloc::string::ToString;
         use alloc::sync::Arc;
     } else {
-        use std::string::{String, ToString};
+        use std::string::ToString;
         use std::sync::Arc;
     }
 }
 
 use serde::{Deserialize, Serialize};
 
-use opte_core_api::OpteError;
+use opte_core_api::{self as api, OpteError};
 
 use crate::headers::{IpAddr, IpCidr};
 use crate::ioctl::NoResp;
-use crate::ip4::Ipv4Cidr;
 use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::firewall as fw;
 use crate::port::{self, meta::Meta, Port};
@@ -57,26 +55,13 @@ pub enum RouterTarget {
     VpcSubnet(crate::headers::IpCidr),
 }
 
-impl FromStr for RouterTarget {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "drop" => Ok(Self::Drop),
-            "ig" => Ok(Self::InternetGateway),
-            lower => match lower.split_once("=") {
-                Some(("ip4", ip4s)) => {
-                    let ip4 = ip4s.parse()?;
-                    Ok(Self::Ip(IpAddr::Ip4(ip4)))
-                }
-
-                Some(("sub4", cidr4s)) => {
-                    let cidr4 = cidr4s.parse()?;
-                    Ok(Self::VpcSubnet(IpCidr::Ip4(cidr4)))
-                }
-
-                _ => Err(format!("malformed router target: {}", lower)),
-            },
+impl From<api::RouterTarget> for RouterTarget {
+    fn from(rt: api::RouterTarget) -> Self {
+        match rt {
+            api::RouterTarget::Drop => Self::Drop,
+            api::RouterTarget::InternetGateway => Self::InternetGateway,
+            api::RouterTarget::Ip(addr) => Self::Ip(addr.into()),
+            api::RouterTarget::VpcSubnet(cidr) => Self::VpcSubnet(cidr.into()),
         }
     }
 }
@@ -295,11 +280,4 @@ impl MetaAction for RouterAction {
         // entry.
         meta.add::<RouterTarget>(self.target.clone()).unwrap();
     }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct AddRouterEntryIpv4Req {
-    pub port_name: String,
-    pub dest: Ipv4Cidr,
-    pub target: RouterTarget,
 }

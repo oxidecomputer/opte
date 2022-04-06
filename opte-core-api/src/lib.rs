@@ -231,7 +231,7 @@ pub enum IpAddr {
 }
 
 /// An IPv4 address.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Ipv4Addr {
     inner: [u8; 4],
 }
@@ -243,15 +243,54 @@ impl From<std::net::Ipv4Addr> for Ipv4Addr {
     }
 }
 
+#[cfg(any(feature = "std", test))]
+impl FromStr for Ipv4Addr {
+    type Err = String;
+
+    fn from_str(val: &str) -> result::Result<Self, Self::Err> {
+        let ip =
+            val.parse::<std::net::Ipv4Addr>().map_err(|e| format!("{}", e))?;
+        Ok(ip.into())
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl Display for Ipv4Addr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", std::net::Ipv4Addr::from(self.bytes()))
+    }
+}
+
+pub const ANY_ADDR: Ipv4Addr = Ipv4Addr { inner: [0; 4] };
+
 impl Ipv4Addr {
     /// Return the bytes of the address.
     pub fn bytes(&self) -> [u8; 4] {
         self.inner
     }
+
+    /// Return the address after applying the network mask.
+    pub fn mask(mut self, mask: u8) -> Result<Self, String> {
+        if mask > 32 {
+            return Err(format!("bad mask: {}", mask));
+        }
+
+        if mask == 0 {
+            return Ok(ANY_ADDR);
+        }
+
+        let mut n = u32::from_be_bytes(self.inner);
+
+        let mut bits = i32::MIN;
+        bits = bits >> (mask - 1);
+        n = n & bits as u32;
+        self.inner = n.to_be_bytes();
+        Ok(self)
+    }
 }
 
 /// An IPv6 address.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Ipv6Addr {
     inner: [u8; 16],
 }
@@ -263,11 +302,257 @@ impl From <std::net::Ipv6Addr> for Ipv6Addr {
     }
 }
 
+#[cfg(any(feature = "std", test))]
+impl FromStr for Ipv6Addr {
+    type Err = String;
+
+    fn from_str(val: &str) -> result::Result<Self, Self::Err> {
+        let ip =
+            val.parse::<std::net::Ipv6Addr>().map_err(|e| format!("{}", e))?;
+        Ok(ip.into())
+    }
+}
+
 impl Ipv6Addr {
     /// Return the bytes of the address.
     pub fn bytes(&self) -> [u8; 16] {
         self.inner
     }
+
+    /// Return the address after applying the network mask.
+    pub fn mask(mut self, mask: u8) -> Result<Self, String> {
+        if mask > 128 {
+            return Err(format!("bad mask: {}", mask));
+        }
+
+        if mask == 128 {
+            return Ok(self);
+        }
+
+        if mask == 0 {
+            for byte in &mut self.inner[0..15] {
+                *byte = 0;
+            }
+            return Ok(self);
+        }
+
+        // The mask is in bits and we want to determine which byte (of
+        // the 16 that make up the address) to start with. A byte is 8
+        // bits, if 8 goes into `mask` N times, then the first N bytes
+        // stay as-is. However, byte N may need partial masking, and
+        // bytes N+1..16 must be set to zero.
+        let mut byte_idx = usize::from(mask / 8);
+        let partial = mask % 8;
+
+        if partial > 0 {
+            let bits = i8::MIN >> (partial - 1);
+            self.inner[byte_idx] = self.inner[byte_idx] & bits as u8;
+            byte_idx += 1;
+        }
+
+        for byte in &mut self.inner[byte_idx..16] {
+            *byte = 0;
+        }
+
+        Ok(self)
+    }
+}
+
+/// An IPv4 or IPv6 CIDR.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum IpCidr {
+    Ip4(Ipv4Cidr),
+    Ip6(Ipv6Cidr),
+}
+
+/// An IPv4 CIDR.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Ipv4Cidr {
+    ip: Ipv4Addr,
+    prefix_len: u8,
+}
+
+#[cfg(any(feature = "std", test))]
+impl FromStr for Ipv4Cidr {
+    type Err = String;
+
+    /// Convert a string like "192.168.2.0/24" into an `Ipv4Cidr`.
+    fn from_str(val: &str) -> result::Result<Self, Self::Err> {
+        let (ip_s, prefix_s) = match val.split_once("/") {
+            Some(v) => v,
+            None => return Err(format!("no '/' found")),
+        };
+
+        let ip = match ip_s.parse::<std::net::Ipv4Addr>() {
+            Ok(v) => v.into(),
+            Err(e) => return Err(format!("bad IP: {}", e)),
+        };
+
+        let prefix_len = match prefix_s.parse::<u8>() {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(format!("bad prefix length: {}", e));
+            }
+        };
+
+        Ipv4Cidr::new(ip, prefix_len)
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl Display for Ipv4Cidr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}/{}", self.ip, self.prefix_len)
+    }
+}
+
+impl Ipv4Cidr {
+    pub fn new(ip: Ipv4Addr, prefix_len: u8) -> result::Result<Self, String> {
+        // In this case we are only checking that it's a valid CIDR in
+        // the general sense; VPC-specific CIDR enforcement is done by
+        // the VPC types.
+        if prefix_len > 32 {
+            return Err(format!("bad prefix length: {}", prefix_len));
+        }
+
+        let ip = ip.mask(prefix_len)?;
+        Ok(Ipv4Cidr { ip, prefix_len })
+    }
+
+    pub fn parts(&self) -> (Ipv4Addr, u8) {
+        (self.ip, self.prefix_len)
+    }
+}
+
+/// An IPv6 CIDR.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Ipv6Cidr {
+    ip: Ipv6Addr,
+    prefix_len: u8,
+}
+
+#[cfg(any(feature = "std", test))]
+impl FromStr for Ipv6Cidr {
+    type Err = String;
+
+    /// Convert a string like "fd00:dead:beef:cafe::/64" into an [`Ipv6Cidr`].
+    fn from_str(val: &str) -> result::Result<Self, Self::Err> {
+        let (ip_s, prefix_s) = match val.split_once("/") {
+            Some(v) => v,
+            None => return Err(format!("no '/' found")),
+        };
+
+        let ip = match ip_s.parse::<std::net::Ipv6Addr>() {
+            Ok(v) => v.into(),
+            Err(e) => return Err(format!("bad IP: {}", e)),
+        };
+
+        let prefix_len = match prefix_s.parse::<u8>() {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(format!("bad prefix length: {}", e));
+            }
+        };
+
+        Ipv6Cidr::new(ip, prefix_len)
+    }
+}
+
+impl Ipv6Cidr {
+    pub fn new(ip: Ipv6Addr, prefix_len: u8) -> result::Result<Self, String> {
+        if prefix_len > 128 {
+            return Err(format!("bad prefix length: {}", prefix_len));
+        }
+
+        let ip = ip.mask(prefix_len)?;
+        Ok(Ipv6Cidr { ip, prefix_len })
+    }
+
+    pub fn parts(&self) -> (Ipv6Addr, u8) {
+        (self.ip, self.prefix_len)
+    }
+}
+
+#[test]
+fn bad_cidr() {
+    let ip = "10.0.0.1".parse().unwrap();
+    let mut msg = "bad prefix length: 33".to_string();
+    assert_eq!(Ipv4Cidr::new(ip, 33), Err(msg.clone()));
+    assert_eq!("192.168.2.9/33".parse::<Ipv4Cidr>(), Err(msg.clone()));
+
+    msg = "bad prefix length: 129".to_string();
+    let ip6 = "fd01:dead:beef::1".parse().unwrap();
+    assert_eq!(Ipv6Cidr::new(ip6, 129), Err(msg.clone()));
+
+    assert_eq!("fd01:dead:beef::1/129".parse::<Ipv6Cidr>(), Err(msg.clone()))
+}
+
+#[test]
+fn good_cidr() {
+    let ip = "192.168.2.0".parse().unwrap();
+    assert_eq!(
+        Ipv4Cidr::new(ip, 24),
+        Ok(Ipv4Cidr {
+            ip: Ipv4Addr { inner: [192, 168, 2, 0] },
+            prefix_len: 24,
+        })
+    );
+
+    assert_eq!(
+        "192.168.2.0/24".parse(),
+        Ok(Ipv4Cidr {
+            ip: Ipv4Addr { inner: [192, 168, 2, 0] },
+            prefix_len: 24
+        })
+    );
+
+    assert_eq!(
+        "192.168.2.9/24".parse(),
+        Ok(Ipv4Cidr {
+            ip: Ipv4Addr { inner: [192, 168, 2, 0] },
+            prefix_len: 24,
+        })
+    );
+
+    assert_eq!(
+        "192.168.2.9/24".parse::<Ipv4Cidr>().unwrap().to_string(),
+        "192.168.2.0/24".to_string()
+    );
+
+
+    let mut ip6_cidr = "fd01:dead:beef::1/64".parse::<Ipv6Cidr>().unwrap();
+    let mut ip6_prefix = "fd01:dead:beef::".parse().unwrap();
+    assert_eq!(ip6_cidr.parts(), (ip6_prefix, 64));
+
+    ip6_cidr = "fe80::8:20ff:fe35:f794/10".parse::<Ipv6Cidr>().unwrap();
+    ip6_prefix = "fe80::".parse().unwrap();
+    assert_eq!(ip6_cidr.parts(), (ip6_prefix, 10));
+
+    ip6_cidr = "fe80::8:20ff:fe35:f794/128".parse::<Ipv6Cidr>().unwrap();
+    ip6_prefix = "fe80::8:20ff:fe35:f794".parse().unwrap();
+    assert_eq!(ip6_cidr.parts(), (ip6_prefix, 128));
+
+    ip6_cidr = "fd00:1122:3344:0201::/56".parse::<Ipv6Cidr>().unwrap();
+    ip6_prefix = "fd00:1122:3344:0200::".parse().unwrap();
+    assert_eq!(ip6_cidr.parts(), (ip6_prefix, 56));
+}
+
+#[test]
+fn ip_mask() {
+    let mut ip6: Ipv6Addr = "fd01:dead:beef::1".parse().unwrap();
+    let mut ip6_prefix = "fd01:dead:beef::".parse().unwrap();
+    assert_eq!(ip6.mask(64).unwrap(), ip6_prefix);
+
+    ip6 = "fe80::8:20ff:fe35:f794".parse().unwrap();
+    ip6_prefix = "fe80::".parse().unwrap();
+    assert_eq!(ip6.mask(10).unwrap(), ip6_prefix);
+
+    ip6 = "fe80::8:20ff:fe35:f794".parse().unwrap();
+    assert_eq!(ip6.mask(128).unwrap(), ip6);
+
+    ip6 = "fd00:1122:3344:0201::".parse().unwrap();
+    ip6_prefix = "fd00:1122:3344:0200::".parse().unwrap();
+    assert_eq!(ip6.mask(56).unwrap(), ip6_prefix);
 }
 
 /// A MAC address.
@@ -413,6 +698,59 @@ pub struct PhysNet {
     pub vni: Vni,
 }
 
+/// The target for a given router entry.
+///
+/// * Drop: Packets matching this entry are dropped.
+///
+/// * InternetGateway: Packets matching this entry are forwarded to
+/// the internet. In the case of the Oxide Network the IG is not an
+/// actual destination, but rather a configuration that determines how
+/// we should NAT the flow.
+///
+/// * Ip: Packets matching this entry are forwarded to the specified IP.
+///
+/// XXX Make sure that if a router's target is an IP address that it
+/// matches the destination IP type.
+///
+/// * VpcSubnet: Packets matching this entry are forwarded to the
+/// specified VPC Subnet. In the Oxide Network this is just an
+/// abstraction, it's simply allowing one subnet to talk to another.
+/// There is no separate VPC router process, the real routing is done
+/// by the underlay.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum RouterTarget {
+    Drop,
+    InternetGateway,
+    Ip(IpAddr),
+    VpcSubnet(IpCidr),
+}
+
+#[cfg(any(feature = "std", test))]
+impl FromStr for RouterTarget {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "drop" => Ok(Self::Drop),
+            "ig" => Ok(Self::InternetGateway),
+            lower => match lower.split_once("=") {
+                Some(("ip4", ip4s)) => {
+                    let ip4 = ip4s.parse::<std::net::Ipv4Addr>()
+                        .map_err(|e| format!("bad IP: {}", e))?;
+                    Ok(Self::Ip(IpAddr::Ip4(ip4.into())))
+                }
+
+                Some(("sub4", cidr4s)) => {
+                    let cidr4 = cidr4s.parse()?;
+                    Ok(Self::VpcSubnet(IpCidr::Ip4(cidr4)))
+                }
+
+                _ => Err(format!("malformed router target: {}", lower)),
+            },
+        }
+    }
+}
+
 /// Xde create ioctl parameter data.
 ///
 /// XXX This is oxide-specific and ultimately should not live here.
@@ -445,8 +783,18 @@ pub struct DeleteXdeReq {
 /// Set mapping from VPC IP to physical network destination.
 ///
 /// XXX This is oxide-specific and ultimately should not live here.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2PhysReq {
     pub vip: IpAddr,
     pub phys: PhysNet,
+}
+
+/// Add an entry to the IPv4 router.
+///
+/// XXX This is oxide-specific and ultimately should not live here.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AddRouterEntryIpv4Req {
+    pub port_name: String,
+    pub dest: Ipv4Cidr,
+    pub target: RouterTarget,
 }

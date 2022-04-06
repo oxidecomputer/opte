@@ -13,10 +13,9 @@ use opte_core::oxide_net::firewall::{
     AddFwRuleReq, FirewallRule, RemFwRuleReq,
 };
 use opte_core::oxide_net::overlay;
-use opte_core::oxide_net::router;
 use opte_core_api::{
-    CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, OpteCmd, OpteCmdIoctl,
-    OpteError, SetVirt2PhysReq, Vni
+    AddRouterEntryIpv4Req, CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, OpteCmd,
+    OpteCmdIoctl, OpteError, SetVirt2PhysReq, Vni
 };
 
 /// Errors related to administering the OPTE driver.
@@ -256,7 +255,7 @@ impl OpteAdm {
 
     pub fn add_router_entry_ip4(
         &self,
-        req: &router::AddRouterEntryIpv4Req,
+        req: &AddRouterEntryIpv4Req,
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::AddRouterEntryIpv4;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)

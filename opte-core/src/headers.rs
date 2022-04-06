@@ -11,6 +11,7 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::LayoutVerified;
 
+use opte_core_api as api;
 use crate::checksum::Checksum;
 use crate::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Ipv4MetaOpt, IPV4_HDR_SZ};
 use crate::ip6::{Ipv6Addr, Ipv6Hdr, Ipv6Meta, Ipv6MetaOpt, IPV6_HDR_SZ};
@@ -34,13 +35,11 @@ pub enum IpAddr {
     Ip6(Ipv6Addr),
 }
 
-impl From<opte_core_api::IpAddr> for IpAddr {
-    fn from(addr: opte_core_api::IpAddr) -> Self {
-        use opte_core_api::IpAddr as ApiIpAddr;
-
+impl From<api::IpAddr> for IpAddr {
+    fn from(addr: api::IpAddr) -> Self {
         match addr {
-            ApiIpAddr::Ip4(ip4) => Self::Ip4(ip4.into()),
-            ApiIpAddr::Ip6(ip6) => Self::Ip6(ip6.into()),
+            api::IpAddr::Ip4(ip4) => Self::Ip4(ip4.into()),
+            api::IpAddr::Ip6(ip6) => Self::Ip6(ip6.into()),
         }
     }
 }
@@ -560,8 +559,16 @@ where
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum IpCidr {
     Ip4(crate::ip4::Ipv4Cidr),
-    // XXX Real Ipv6Cidr
-    Ip6(u8),
+    Ip6(crate::ip6::Ipv6Cidr),
+}
+
+impl From<api::IpCidr> for IpCidr {
+    fn from(cidr: api::IpCidr) -> Self {
+        match cidr {
+            api::IpCidr::Ip4(ip4) => Self::Ip4(ip4.into()),
+            api::IpCidr::Ip6(ip6) => Self::Ip6(ip6.into()),
+        }
+    }
 }
 
 impl IpCidr {
@@ -584,7 +591,7 @@ impl fmt::Display for IpCidr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Ip4(ip4) => write!(f, "{}", ip4),
-            Self::Ip6(ip6) => write!(f, "{}", ip6),
+            Self::Ip6(ip6) => write!(f, "{:?}", ip6),
         }
     }
 }
