@@ -65,6 +65,10 @@ impl Vni {
         Ok(Vni { inner: val })
     }
 
+    pub fn from_be_bytes(bytes: [u8; 3]) -> Self {
+        Self { inner: u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]) }
+    }
+
     pub fn to_be_bytes(&self) -> [u8; 3] {
         let bs = (self.inner).to_be_bytes();
         [bs[1], bs[2], bs[3]]
@@ -72,6 +76,18 @@ impl Vni {
 
     pub fn value(&self) -> u32 {
         self.inner
+    }
+}
+
+impl From<opte_core_api::Vni> for Vni {
+    fn from(vni: opte_core_api::Vni) -> Self {
+        Self::from_be_bytes(vni.bytes())
+    }
+}
+
+impl core::fmt::Display for Vni {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "{}", self.inner)
     }
 }
 

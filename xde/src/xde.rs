@@ -26,8 +26,7 @@ use opte_core::ether::EtherAddr;
 use opte_core::geneve::Vni;
 use opte_core::headers::IpCidr;
 use opte_core::ioctl::{
-    self as api, CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd,
-    SetXdeUnderlayReq, SnatCfg,
+    self as api, NoResp, SetXdeUnderlayReq, SnatCfg,
 };
 use opte_core::ip4::Ipv4Addr;
 use opte_core::ip6::Ipv6Addr;
@@ -38,7 +37,10 @@ use opte_core::port::{Active, Port, ProcessResult};
 use opte_core::sync::{KMutex, KMutexType};
 use opte_core::sync::{KRwLock, KRwLockType};
 use opte_core::time::{Interval, Moment, Periodic};
-use opte_core::{CStr, CString, Direction, ExecCtx, OpteError};
+use opte_core::{CStr, CString, Direction, ExecCtx};
+use opte_core_api::{
+    CmdOk, CreateXdeReq, DeleteXdeReq, OpteCmd, OpteCmdIoctl, OpteError
+};
 
 /// The name of this driver.
 const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
@@ -203,7 +205,7 @@ struct XdeDev {
     // opte-core processing.
     passthrough: bool,
 
-    vni: u32,
+    vni: Vni,
 
     // these are clones of the underlay ports initialized by the driver
     u1: xde_underlay_port,
@@ -301,7 +303,7 @@ unsafe extern "C" fn xde_dld_ioc_opte_cmd(
     _cred: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-    let ioctl: &mut api::OpteCmdIoctl = &mut *(karg as *mut api::OpteCmdIoctl);
+    let ioctl: &mut OpteCmdIoctl = &mut *(karg as *mut OpteCmdIoctl);
     let mut env = match IoctlEnvelope::wrap(ioctl, mode) {
         Ok(v) => v,
         Err(errno) => return errno,
@@ -411,14 +413,14 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     let (port, port_cfg) = new_port(
         req.xde_devname.clone(),
-        req.private_ip,
-        req.private_mac,
-        req.gw_mac,
-        req.gw_ip,
-        req.boundary_services_addr,
-        req.boundary_services_vni,
-        req.src_underlay_addr,
-        req.vpc_vni,
+        req.private_ip.into(),
+        req.private_mac.into(),
+        req.gw_mac.into(),
+        req.gw_ip.into(),
+        req.boundary_services_addr.into(),
+        req.boundary_services_vni.into(),
+        req.src_underlay_addr.into(),
+        req.vpc_vni.into(),
         state.ectx.clone(),
         None,
     )?;
@@ -440,7 +442,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         port_periodic,
         port_cfg,
         passthrough: req.passthrough,
-        vni: req.vpc_vni.value(),
+        vni: req.vpc_vni.into(),
         u1: underlay.u1.clone(),
         u2: underlay.u2.clone(),
     });
@@ -583,10 +585,10 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-const IOCTL_SZ: usize = core::mem::size_of::<api::OpteCmdIoctl>();
+const IOCTL_SZ: usize = core::mem::size_of::<OpteCmdIoctl>();
 
 static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [dld::dld_ioc_info_t {
-    di_cmd: opte_core::ioctl::XDE_DLD_OPTE_CMD as u32,
+    di_cmd: opte_core_api::XDE_DLD_OPTE_CMD as u32,
     di_flags: dld::DLDCOPYINOUT,
     di_argsize: IOCTL_SZ,
     di_func: xde_dld_ioc_opte_cmd,
@@ -1030,7 +1032,7 @@ fn guest_loopback(
 
     match devs
         .iter()
-        .find(|x| x.vni == vni.value() && x.port.mac_addr() == ether_dst)
+        .find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
     {
         Some(dest_dev) => {
             // We have found a matching Port on this host; "loop back"
@@ -1741,7 +1743,7 @@ unsafe extern "C" fn xde_rx(
 
     //TODO create a fast lookup table
     let devs = xde_devs.read();
-    let vni = geneve.vni.value();
+    let vni = geneve.vni;
     let ether_dst = hdrs.inner.ether.dst();
     let dev = match devs
         .iter()

@@ -5,8 +5,11 @@ use core::result;
 use ddi::{c_int, c_void};
 use illumos_ddi_dki as ddi;
 
-use opte_core::ioctl::{CmdOk, OpteCmdIoctl, OPTE_CMD_RESP_COPY_OUT};
-use opte_core::{CString, OpteError};
+use opte_core::CString;
+use opte_core_api::{
+    CmdOk, OpteCmd, OpteCmdIoctl, OpteError, API_VERSION,
+    OPTE_CMD_RESP_COPY_OUT
+};
 
 use postcard;
 
@@ -38,7 +41,7 @@ pub struct IoctlEnvelope<'a> {
 }
 
 impl<'a> IoctlEnvelope<'a> {
-    pub fn ioctl_cmd(&self) -> opte_core::ioctl::OpteCmd {
+    pub fn ioctl_cmd(&self) -> OpteCmd {
         self.ioctl.cmd
     }
 
@@ -51,7 +54,7 @@ impl<'a> IoctlEnvelope<'a> {
         if !ioctl.check_version() {
             let badver = OpteError::BadApiVersion {
                 user: ioctl.api_version,
-                kernel: opte_core::ioctl::API_VERSION,
+                kernel: API_VERSION,
             };
 
             let _ = Self::copy_out_resp_i::<()>(ioctl, &Err(badver), mode);

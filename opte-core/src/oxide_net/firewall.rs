@@ -16,6 +16,8 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
+use opte_core_api::OpteError;
+
 use crate::ether::ETHER_TYPE_ARP;
 use crate::headers::DYNAMIC_PORT;
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Protocol};
@@ -27,7 +29,7 @@ use crate::rule::{
     PortMatch, Predicate, Rule, StatefulAction,
 };
 use crate::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
-use crate::{Direction, OpteError, ParseErr, ParseResult};
+use crate::{Direction, ParseErr, ParseResult};
 
 pub const FW_LAYER_NAME: &'static str = "firewall";
 

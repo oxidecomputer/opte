@@ -11,10 +11,7 @@ use thiserror::Error;
 
 use opte_core::ether::EtherAddr;
 use opte_core::geneve::Vni;
-use opte_core::ioctl::{
-    self as api, CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd,
-    SetXdeUnderlayReq,
-};
+use opte_core::ioctl::{self as api, NoResp, SetXdeUnderlayReq};
 use opte_core::ip4::Ipv4Addr;
 use opte_core::ip6::Ipv6Addr;
 use opte_core::oxide_net::firewall::{
@@ -22,7 +19,9 @@ use opte_core::oxide_net::firewall::{
 };
 use opte_core::oxide_net::overlay::{self, SetVirt2PhysReq};
 use opte_core::oxide_net::router;
-use opte_core::OpteError;
+use opte_core_api::{
+    CmdOk, CreateXdeReq, DeleteXdeReq, OpteCmd, OpteCmdIoctl, OpteError
+};
 
 /// Errors related to administering the OPTE driver.
 #[derive(Debug, Error)]
@@ -86,9 +85,9 @@ impl OpteAdm {
         &self,
         name: &str,
         private_mac: &str,
-        private_ip: &str,
+        private_ip: std::net::Ipv4Addr,
         gw_mac: &str,
-        gw_ip: &str,
+        gw_ip: std::net::Ipv4Addr,
         boundary_services_addr: std::net::Ipv6Addr,
         boundary_services_vni: Vni,
         vpc_vni: Vni,
@@ -315,8 +314,8 @@ where
     // enough bytes to serialize the error response, so we set this to
     // default to 16 KiB.
     let mut resp_buf: Vec<u8> = vec![0; 16 * 1024];
-    let mut rioctl = opte_core::ioctl::OpteCmdIoctl {
-        api_version: opte_core::ioctl::API_VERSION,
+    let mut rioctl = OpteCmdIoctl {
+        api_version: opte_core_api::API_VERSION,
         cmd,
         flags: 0,
         reserved1: 0,
@@ -330,7 +329,11 @@ where
     const MAX_ITERATIONS: u8 = 3;
     for _ in 0..MAX_ITERATIONS {
         let ret = unsafe {
-            libc::ioctl(dev, api::XDE_DLD_OPTE_CMD as libc::c_int, &rioctl)
+            libc::ioctl(
+                dev,
+                opte_core_api::XDE_DLD_OPTE_CMD as libc::c_int,
+                &rioctl
+            )
         };
 
         // The ioctl(2) failed for a reason other than the response

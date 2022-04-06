@@ -50,6 +50,12 @@ impl Ipv6Addr {
     }
 }
 
+impl From<opte_core_api::Ipv6Addr> for Ipv6Addr {
+    fn from(ip6: opte_core_api::Ipv6Addr) -> Self {
+        Self { addr: ip6.bytes() }
+    }
+}
+
 impl From<&[u8; 16]> for Ipv6Addr {
     fn from(bytes: &[u8; 16]) -> Ipv6Addr {
         Ipv6Addr { addr: *bytes }

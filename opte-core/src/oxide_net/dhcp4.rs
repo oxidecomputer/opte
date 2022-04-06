@@ -23,6 +23,8 @@ cfg_if! {
 
 use smoltcp::wire::{DhcpPacket, DhcpRepr, EthernetAddress, Ipv4Address};
 
+use opte_core_api::OpteError;
+
 use crate::dhcp::{
     ClasslessStaticRouteOpt, MessageType as DhcpMessageType, SubnetRouterPair,
 };
@@ -40,7 +42,7 @@ use crate::rule::{
     IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate, Rule,
 };
 use crate::udp::{UdpHdr, UdpMeta, UDP_HDR_SZ};
-use crate::{Direction, OpteError};
+use crate::Direction;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,

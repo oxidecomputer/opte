@@ -303,6 +303,13 @@ dependencies = [
 [[package]]
 name = "illumos-ddi-dki"
 version = "0.1.0"
+dependencies = [
+ "illumos-sys-hdrs",
+]
+
+[[package]]
+name = "illumos-sys-hdrs"
+version = "0.1.0"
 
 [[package]]
 name = "lazy_static"
@@ -414,11 +421,23 @@ dependencies = [
  "cstr_core",
  "heapless",
  "illumos-ddi-dki",
+ "illumos-sys-hdrs",
  "libc",
+ "opte-core-api",
  "postcard",
  "serde",
  "smoltcp",
  "zerocopy",
+]
+
+[[package]]
+name = "opte-core-api"
+version = "0.1.0"
+dependencies = [
+ "cfg-if 0.1.10",
+ "illumos-sys-hdrs",
+ "postcard",
+ "serde",
 ]
 
 [[package]]
@@ -429,6 +448,7 @@ dependencies = [
  "libc",
  "libnet",
  "opte-core",
+ "opte-core-api",
  "postcard",
  "serde",
  "structopt",

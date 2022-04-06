@@ -149,58 +149,6 @@ pub const fn bit_on(bit: u8) -> u8 {
     0x1 << bit
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum OpteError {
-    BadApiVersion { user: u64, kernel: u64 },
-    BadLayerPos { layer: String, pos: String },
-    BadName,
-    CopyinReq,
-    CopyoutResp,
-    DeserCmdErr(String),
-    DeserCmdReq(String),
-    FlowExists(InnerFlowId),
-    InvalidRouteDest(crate::headers::IpCidr),
-    LayerNotFound(String),
-    MaxCapacity(u64),
-    PortNotFound(String),
-    RespTooLarge { needed: usize, given: usize },
-    RuleNotFound(crate::layer::RuleId),
-    SerCmdErr(String),
-    SerCmdResp(String),
-    System { errno: c_int, msg: String },
-}
-
-impl OpteError {
-    /// Convert to an errno value.
-    ///
-    /// NOTE: In order for opteadm `run_cmd_ioctl()` to function
-    /// correctly only `RespTooLarge` may use `ENOBUFS`.
-    ///
-    /// XXX We should probably add the extra code necessary to enforce
-    /// this constraint at compile time.
-    pub fn to_errno(&self) -> c_int {
-        match self {
-            Self::BadApiVersion { .. } => ddi::EPROTO,
-            Self::BadLayerPos { .. } => ddi::EINVAL,
-            Self::BadName => ddi::EINVAL,
-            Self::CopyinReq => ddi::EFAULT,
-            Self::CopyoutResp => ddi::EFAULT,
-            Self::DeserCmdErr(_) => ddi::ENOMSG,
-            Self::DeserCmdReq(_) => ddi::ENOMSG,
-            Self::FlowExists(_) => ddi::EEXIST,
-            Self::InvalidRouteDest(_) => ddi::EINVAL,
-            Self::LayerNotFound(_) => ddi::ENOENT,
-            Self::MaxCapacity(_) => ddi::ENFILE,
-            Self::PortNotFound(_) => ddi::ENOENT,
-            Self::RespTooLarge { .. } => ddi::ENOBUFS,
-            Self::RuleNotFound(_) => ddi::ENOENT,
-            Self::SerCmdErr(_) => ddi::ENOMSG,
-            Self::SerCmdResp(_) => ddi::ENOMSG,
-            Self::System { errno, .. } => *errno,
-        }
-    }
-}
-
 // TODO Currently I'm using this for parsing many different things. It
 // might be wise to have different parse error types. E.g., one for
 // parsing ioctl strings, another for parsing IPv4 strings, for IPv6,
@@ -301,6 +249,7 @@ impl Display for Direction {
 #[usdt::provider]
 mod opte_provider {
     use crate::Direction;
+    use illumos_sys_hdrs::uintptr_t;
 
     fn flow__expired(port: &str, ft_name: &str, flow: &str) {}
     fn gen__desc__fail(
@@ -346,14 +295,14 @@ mod opte_provider {
         dir: Direction,
         name: &str,
         ifid: &str,
-        pkt: &illumos_ddi_dki::uintptr_t,
+        pkt: &uintptr_t,
     ) {
     }
     pub fn port__process__return(
         dir: Direction,
         name: &str,
         ifid: &str,
-        pkt: &illumos_ddi_dki::uintptr_t,
+        pkt: &uintptr_t,
         res: &str,
     ) {
     }

@@ -17,6 +17,8 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
+use opte_core_api::OpteError;
+
 use crate::headers::{IpAddr, IpCidr};
 use crate::ioctl::NoResp;
 use crate::ip4::Ipv4Cidr;
@@ -24,7 +26,7 @@ use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::firewall as fw;
 use crate::port::{self, meta::Meta, Port};
 use crate::rule::{self, Action, MetaAction, Predicate, Rule};
-use crate::{Direction, OpteError};
+use crate::Direction;
 
 pub const ROUTER_LAYER_NAME: &'static str = "router";
 
@@ -130,7 +132,7 @@ pub fn add_entry_inactive(
 
         RouterTarget::InternetGateway => {
             if !dest.is_default() {
-                return Err(OpteError::InvalidRouteDest(dest));
+                return Err(OpteError::InvalidRouteDest(dest.to_string()));
             }
 
             match dest {
@@ -190,7 +192,7 @@ pub fn add_entry_active(
 
         RouterTarget::InternetGateway => {
             if !dest.is_default() {
-                return Err(OpteError::InvalidRouteDest(dest));
+                return Err(OpteError::InvalidRouteDest(dest.to_string()));
             }
 
             match dest {

@@ -10,13 +10,16 @@ default = ["std", "usdt"]
 # may be used by a userland binary/library for the purpose of userland
 # emulation/testing.
 std = ["libc"]
+# kernel = ["illumos-ddi-dki"]
 
 [dependencies]
 cfg-if = "0.1"
 cstr_core = "0.2.3"
 heapless = "0.7.9"
-illumos-ddi-dki = { path = "../illumos-ddi-dki", default-features = false }
+illumos-ddi-dki = { path = "../illumos-ddi-dki" }
+illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
 libc = { version = "0.2", optional = true }
+opte-core-api = { path = "../opte-core-api", default-features = false }
 postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
 #
 # XXX usdt is really a dev dependency, but when I move it there weird

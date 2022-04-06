@@ -8,12 +8,14 @@ cfg_if! {
     }
 }
 
+use opte_core_api::OpteError;
+
 use crate::ip4::{self, Protocol};
 use crate::layer::Layer;
 use crate::nat::{DynNat4, NatPool};
 use crate::port::{self, Port, Pos};
 use crate::rule::{Action, IpProtoMatch, Ipv4AddrMatch, Predicate, Rule};
-use crate::{Direction, OpteError};
+use crate::Direction;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,

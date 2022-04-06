@@ -16,9 +16,11 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
+use opte_core_api::OpteError;
+
 use crate::layer::InnerFlowId;
 use crate::time::{Moment, MILLIS};
-use crate::{CString, OpteError};
+use crate::CString;
 
 // XXX This really shouldn't be pub but for now we are leaking this
 // info for the purpose of testing until the Port API has support for
@@ -84,7 +86,7 @@ where
         let entry = FlowEntry::new(state);
         match self.map.insert(flow_id.clone(), entry) {
             None => Ok(()),
-            Some(_) => return Err(OpteError::FlowExists(flow_id.clone())),
+            Some(_) => return Err(OpteError::FlowExists(flow_id.to_string())),
         }
     }
 

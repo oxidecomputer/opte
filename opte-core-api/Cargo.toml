@@ -1,0 +1,19 @@
+[package]
+name = "opte-core-api"
+version = "0.1.0"
+authors = ["Ryan Zezeski <ryan@oxide.computer>"]
+edition = "2021"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+cfg-if = "0.1"
+illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
+postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
+
+[dependencies.serde]
+version = "1.0"
+default-features = false
+features = ["alloc", "derive"]

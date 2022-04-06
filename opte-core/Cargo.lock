@@ -292,6 +292,13 @@ dependencies = [
 [[package]]
 name = "illumos-ddi-dki"
 version = "0.1.0"
+dependencies = [
+ "illumos-sys-hdrs",
+]
+
+[[package]]
+name = "illumos-sys-hdrs"
+version = "0.1.0"
 
 [[package]]
 name = "itoa"
@@ -394,13 +401,25 @@ dependencies = [
  "cstr_core",
  "heapless",
  "illumos-ddi-dki",
+ "illumos-sys-hdrs",
  "libc",
+ "opte-core-api",
  "pcap-parser",
  "postcard",
  "serde",
  "smoltcp",
  "usdt",
  "zerocopy 0.6.1",
+]
+
+[[package]]
+name = "opte-core-api"
+version = "0.1.0"
+dependencies = [
+ "cfg-if 0.1.10",
+ "illumos-sys-hdrs",
+ "postcard",
+ "serde",
 ]
 
 [[package]]

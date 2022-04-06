@@ -301,6 +301,12 @@ impl Ipv4Addr {
     }
 }
 
+impl From<opte_core_api::Ipv4Addr> for Ipv4Addr {
+    fn from(ip: opte_core_api::Ipv4Addr) -> Self {
+        Self::new(ip.bytes())
+    }
+}
+
 pub type Ipv4AddrTuple = (u8, u8, u8, u8);
 
 impl From<Ipv4Addr> for Ipv4AddrTuple {

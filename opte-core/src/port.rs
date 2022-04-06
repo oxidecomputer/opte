@@ -15,6 +15,8 @@ cfg_if! {
     }
 }
 
+use opte_core_api::OpteError;
+
 use crate::ether::EtherAddr;
 use crate::flow_table::{FlowTable, StateSummary};
 use crate::ioctl;
@@ -27,7 +29,7 @@ use crate::sync::{KMutex, KMutexType};
 use crate::tcp::TcpState;
 use crate::tcp_state::TcpFlowState;
 use crate::time::Moment;
-use crate::{CString, Direction, ExecCtx, OpteError};
+use crate::{CString, Direction, ExecCtx};
 
 pub const UFT_DEF_MAX_ENTIRES: u32 = 8192;
 

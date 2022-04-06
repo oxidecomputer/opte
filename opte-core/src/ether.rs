@@ -98,6 +98,12 @@ impl EtherAddr {
     }
 }
 
+impl From<opte_core_api::MacAddr> for EtherAddr {
+    fn from(mac: opte_core_api::MacAddr) -> Self {
+        Self { bytes: mac.bytes() }
+    }
+}
+
 impl From<[u8; ETHER_ADDR_LEN]> for EtherAddr {
     fn from(bytes: [u8; ETHER_ADDR_LEN]) -> Self {
         EtherAddr { bytes }

@@ -15,6 +15,7 @@ cfg_if! {
     }
 }
 
+use opte_core_api::{CmdOk, OpteError};
 use serde::{Deserialize, Serialize};
 
 use crate::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV6};
@@ -29,7 +30,7 @@ use crate::port::{self, Port, Pos};
 use crate::rule::{self, Action, Rule, StaticAction, HT};
 use crate::sync::{KMutex, KMutexType};
 use crate::udp::UdpMeta;
-use crate::{Direction, OpteError};
+use crate::Direction;
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 
@@ -336,4 +337,4 @@ pub struct DumpVirt2PhysResp {
     pub ip6: BTreeMap<Ipv6Addr, PhysNet>,
 }
 
-impl crate::ioctl::CmdOk for DumpVirt2PhysResp {}
+impl CmdOk for DumpVirt2PhysResp {}
