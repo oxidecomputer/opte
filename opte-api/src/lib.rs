@@ -185,8 +185,8 @@ pub enum OpteError {
 impl OpteError {
     /// Convert to an errno value.
     ///
-    /// NOTE: In order for opteadm `run_cmd_ioctl()` to function
-    /// correctly only `RespTooLarge` may use `ENOBUFS`.
+    /// NOTE: In order for `run_cmd_ioctl()` to function correctly
+    /// only `RespTooLarge` may use `ENOBUFS`.
     ///
     /// XXX We should probably add the extra code necessary to enforce
     /// this constraint at compile time.
@@ -865,16 +865,15 @@ impl From<libnet::Error> for Error {
     }
 }
 
-/// The handle used to send administration commands to the OPTE
-/// control node.
+/// The handle used to send administration commands to OPTE.
 #[derive(Debug)]
 #[cfg(all(target_os = "illumos", feature = "std"))]
-pub struct OpteAdm {
+pub struct OpteHdl {
     device: File,
 }
 
 #[cfg(all(target_os = "illumos", feature = "std"))]
-impl OpteAdm {
+impl OpteApi {
     pub const DLD_CTL: &'static str = "/dev/dld";
 
     /// Add xde device
@@ -928,7 +927,7 @@ impl OpteAdm {
 
     /// Create a new handle to the OPTE control node.
     pub fn open(what: &str) -> Result<Self, Error> {
-        Ok(OpteAdm {
+        Ok(OpteHdl {
             device: OpenOptions::new().read(true).write(true).open(what)?,
         })
     }
