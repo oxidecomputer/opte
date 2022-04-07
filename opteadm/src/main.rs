@@ -4,6 +4,7 @@ use std::process::exit;
 
 use structopt::StructOpt;
 
+use opte_api::{MacAddr, Vni};
 use opte_core::ether::EtherAddr;
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::headers::IpAddr;
@@ -18,7 +19,6 @@ use opte_core::oxide_net::overlay;
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
-use opte_api::{MacAddr, Vni};
 use opteadm::OpteAdm;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)

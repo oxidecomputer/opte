@@ -22,6 +22,9 @@ use illumos_ddi_dki::*;
 
 use crate::ioctl::IoctlEnvelope;
 use crate::{dld, dls, ip, mac, secpolicy, sys, warn};
+use opte_api::{
+    CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
+};
 use opte_core::ether::EtherAddr;
 use opte_core::geneve::Vni;
 use opte_core::headers::IpCidr;
@@ -36,9 +39,6 @@ use opte_core::sync::{KMutex, KMutexType};
 use opte_core::sync::{KRwLock, KRwLockType};
 use opte_core::time::{Interval, Moment, Periodic};
 use opte_core::{CStr, CString, Direction, ExecCtx};
-use opte_api::{
-    CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
-};
 
 /// The name of this driver.
 const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;

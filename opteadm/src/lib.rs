@@ -8,15 +8,15 @@ use libc;
 use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
+use opte_api::{
+    AddRouterEntryIpv4Req, CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, NoResp,
+    OpteCmd, OpteCmdIoctl, OpteError, SetVirt2PhysReq, Vni,
+};
 use opte_core::ioctl::{self as api, SetXdeUnderlayReq};
 use opte_core::oxide_net::firewall::{
     AddFwRuleReq, FirewallRule, RemFwRuleReq,
 };
 use opte_core::oxide_net::overlay;
-use opte_api::{
-    AddRouterEntryIpv4Req, CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, NoResp,
-    OpteCmd, OpteCmdIoctl, OpteError, SetVirt2PhysReq, Vni,
-};
 
 /// Errors related to administering the OPTE driver.
 #[derive(Debug, Error)]
@@ -307,11 +307,7 @@ where
     const MAX_ITERATIONS: u8 = 3;
     for _ in 0..MAX_ITERATIONS {
         let ret = unsafe {
-            libc::ioctl(
-                dev,
-                opte_api::XDE_DLD_OPTE_CMD as libc::c_int,
-                &rioctl,
-            )
+            libc::ioctl(dev, opte_api::XDE_DLD_OPTE_CMD as libc::c_int, &rioctl)
         };
 
         // The ioctl(2) failed for a reason other than the response
