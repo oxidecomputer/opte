@@ -807,7 +807,7 @@ pub struct AddRouterEntryIpv4Req {
 }
 
 cfg_if! {
-    if #[cfg(target_os = "illumos")] {
+    if #[cfg(all(target_os = "illumos", feature = "std"))] {
         use std::fs::{File, OpenOptions};
         use std::os::unix::io::AsRawFd;
         use libc;
@@ -818,7 +818,7 @@ cfg_if! {
 
 /// Errors related to administering the OPTE driver.
 #[derive(Debug, Error)]
-#[cfg(target_os = "illumos")]
+#[cfg(all(target_os = "illumos", feature = "std"))]
 pub enum Error {
     #[error("OPTE driver is not attached")]
     DriverNotAttached,
@@ -849,7 +849,7 @@ pub enum Error {
     CommandError(OpteCmd, OpteError),
 }
 
-#[cfg(target_os = "illumos")]
+#[cfg(all(target_os = "illumos", feature = "std"))]
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         match e.kind() {
@@ -859,7 +859,7 @@ impl From<std::io::Error> for Error {
     }
 }
 
-#[cfg(target_os = "illumos")]
+#[cfg(all(target_os = "illumos", feature = "std"))]
 impl From<libnet::Error> for Error {
     fn from(e: libnet::Error) -> Self {
         Self::NetadmFailed(e)
@@ -869,12 +869,12 @@ impl From<libnet::Error> for Error {
 /// The handle used to send administration commands to the OPTE
 /// control node.
 #[derive(Debug)]
-#[cfg(target_os = "illumos")]
+#[cfg(all(target_os = "illumos", feature = "std"))]
 pub struct OpteAdm {
     device: File,
 }
 
-#[cfg(target_os = "illumos")]
+#[cfg(all(target_os = "illumos", feature = "std"))]
 impl OpteAdm {
     pub const DLD_CTL: &'static str = "/dev/dld";
 
@@ -948,7 +948,7 @@ impl OpteAdm {
     }
 }
 
-#[cfg(target_os = "illumos")]
+#[cfg(all(target_os = "illumos", feature = "std"))]
 fn run_cmd_ioctl<T, R>(
     dev: libc::c_int,
     cmd: OpteCmd,
