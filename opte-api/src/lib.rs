@@ -873,7 +873,7 @@ pub struct OpteHdl {
 }
 
 #[cfg(all(target_os = "illumos", feature = "std"))]
-impl OpteApi {
+impl OpteHdl {
     pub const DLD_CTL: &'static str = "/dev/dld";
 
     /// Add xde device
