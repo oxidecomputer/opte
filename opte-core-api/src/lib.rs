@@ -303,7 +303,7 @@ pub struct Ipv6Addr {
 }
 
 #[cfg(any(feature = "std", test))]
-impl From <std::net::Ipv6Addr> for Ipv6Addr {
+impl From<std::net::Ipv6Addr> for Ipv6Addr {
     fn from(ip6: std::net::Ipv6Addr) -> Self {
         Self { inner: ip6.octets() }
     }
@@ -526,7 +526,6 @@ fn good_cidr() {
         "192.168.2.0/24".to_string()
     );
 
-
     let mut ip6_cidr = "fd01:dead:beef::1/64".parse::<Ipv6Cidr>().unwrap();
     let mut ip6_prefix = "fd01:dead:beef::".parse().unwrap();
     assert_eq!(ip6_cidr.parts(), (ip6_prefix, 64));
@@ -668,7 +667,7 @@ impl Vni {
     /// Return the bytes that represent this VNI. The bytes are in
     /// network order.
     pub fn bytes(&self) -> [u8; 3] {
-        return self.inner
+        return self.inner;
     }
 
     /// Attempt to create a new VNI from any value which can be
@@ -742,7 +741,8 @@ impl FromStr for RouterTarget {
             "ig" => Ok(Self::InternetGateway),
             lower => match lower.split_once("=") {
                 Some(("ip4", ip4s)) => {
-                    let ip4 = ip4s.parse::<std::net::Ipv4Addr>()
+                    let ip4 = ip4s
+                        .parse::<std::net::Ipv4Addr>()
                         .map_err(|e| format!("bad IP: {}", e))?;
                     Ok(Self::Ip(IpAddr::Ip4(ip4.into())))
                 }
@@ -805,7 +805,6 @@ pub struct AddRouterEntryIpv4Req {
     pub dest: Ipv4Cidr,
     pub target: RouterTarget,
 }
-
 
 cfg_if! {
     if #[cfg(target_os = "illumos")] {
@@ -981,11 +980,7 @@ where
     const MAX_ITERATIONS: u8 = 3;
     for _ in 0..MAX_ITERATIONS {
         let ret = unsafe {
-            libc::ioctl(
-                dev,
-                XDE_DLD_OPTE_CMD as libc::c_int,
-                &rioctl
-            )
+            libc::ioctl(dev, XDE_DLD_OPTE_CMD as libc::c_int, &rioctl)
         };
 
         // The ioctl(2) failed for a reason other than the response

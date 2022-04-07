@@ -37,7 +37,7 @@ use opte_core::sync::{KRwLock, KRwLockType};
 use opte_core::time::{Interval, Moment, Periodic};
 use opte_core::{CStr, CString, Direction, ExecCtx};
 use opte_core_api::{
-    CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, OpteCmdIoctl, OpteError
+    CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
 };
 
 /// The name of this driver.
@@ -1028,10 +1028,7 @@ fn guest_loopback(
     let devs = unsafe { xde_devs.read() };
     let ether_dst = pkt.headers().inner.ether.dst();
 
-    match devs
-        .iter()
-        .find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
-    {
+    match devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst) {
         Some(dest_dev) => {
             // We have found a matching Port on this host; "loop back"
             // the packet into the inbound processing path of the

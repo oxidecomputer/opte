@@ -86,7 +86,7 @@ pub enum krw_type_t {
 pub enum krw_t {
     RW_WRITER,
     RW_READER,
-    RW_READER_STARVEWRITER
+    RW_READER_STARVEWRITER,
 }
 
 // Not all of these callback signatures are filled out completely, the

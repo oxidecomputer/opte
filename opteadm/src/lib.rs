@@ -15,7 +15,7 @@ use opte_core::oxide_net::firewall::{
 use opte_core::oxide_net::overlay;
 use opte_core_api::{
     AddRouterEntryIpv4Req, CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, NoResp,
-    OpteCmd, OpteCmdIoctl, OpteError, SetVirt2PhysReq, Vni
+    OpteCmd, OpteCmdIoctl, OpteError, SetVirt2PhysReq, Vni,
 };
 
 /// Errors related to administering the OPTE driver.
@@ -310,7 +310,7 @@ where
             libc::ioctl(
                 dev,
                 opte_core_api::XDE_DLD_OPTE_CMD as libc::c_int,
-                &rioctl
+                &rioctl,
             )
         };
 

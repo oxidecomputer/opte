@@ -8,7 +8,7 @@ use illumos_ddi_dki as ddi;
 use opte_core::CString;
 use opte_core_api::{
     CmdOk, OpteCmd, OpteCmdIoctl, OpteError, API_VERSION,
-    OPTE_CMD_RESP_COPY_OUT
+    OPTE_CMD_RESP_COPY_OUT,
 };
 
 use postcard;

@@ -228,7 +228,7 @@ impl StaticAction for EncapAction {
             outer_encap: GeneveMeta::push(phys_target.vni.into()),
             inner_ether: EtherMeta::modify(
                 None,
-                Some(phys_target.ether.into())
+                Some(phys_target.ether.into()),
             ),
             ..Default::default()
         })
