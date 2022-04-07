@@ -16,7 +16,7 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use opte_core_api::OpteError;
+use opte_api::OpteError;
 
 use crate::ether::ETHER_TYPE_ARP;
 use crate::headers::DYNAMIC_PORT;

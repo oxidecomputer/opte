@@ -6,7 +6,7 @@ cfg_if! {
     }
 }
 
-use opte_core_api::OpteError;
+use opte_api::OpteError;
 
 use crate::arp::{ArpOp, ArpReply};
 use crate::ether::{EtherAddr, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};

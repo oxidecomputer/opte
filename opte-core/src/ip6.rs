@@ -22,7 +22,7 @@ use crate::headers::{
 };
 use crate::ip4::Protocol;
 use crate::packet::{PacketRead, ReadErr, WriteError};
-use opte_core_api as api;
+use opte_api as api;
 
 pub const IPV6_HDR_VSN_MASK: u8 = 0xF0;
 pub const IPV6_HDR_VSN_SHIFT: u8 = 4;
@@ -91,8 +91,8 @@ impl Ipv6Addr {
     }
 }
 
-impl From<opte_core_api::Ipv6Addr> for Ipv6Addr {
-    fn from(ip6: opte_core_api::Ipv6Addr) -> Self {
+impl From<api::Ipv6Addr> for Ipv6Addr {
+    fn from(ip6: api::Ipv6Addr) -> Self {
         Self { addr: ip6.bytes() }
     }
 }

@@ -13,7 +13,7 @@ use opte_core::oxide_net::firewall::{
     AddFwRuleReq, FirewallRule, RemFwRuleReq,
 };
 use opte_core::oxide_net::overlay;
-use opte_core_api::{
+use opte_api::{
     AddRouterEntryIpv4Req, CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, NoResp,
     OpteCmd, OpteCmdIoctl, OpteError, SetVirt2PhysReq, Vni,
 };
@@ -293,7 +293,7 @@ where
     // default to 16 KiB.
     let mut resp_buf: Vec<u8> = vec![0; 16 * 1024];
     let mut rioctl = OpteCmdIoctl {
-        api_version: opte_core_api::API_VERSION,
+        api_version: opte_api::API_VERSION,
         cmd,
         flags: 0,
         reserved1: 0,
@@ -309,7 +309,7 @@ where
         let ret = unsafe {
             libc::ioctl(
                 dev,
-                opte_core_api::XDE_DLD_OPTE_CMD as libc::c_int,
+                opte_api::XDE_DLD_OPTE_CMD as libc::c_int,
                 &rioctl,
             )
         };

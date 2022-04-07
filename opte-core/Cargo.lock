@@ -393,6 +393,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2839e79665f131bdb5782e51f2c6c9599c133c6098982a54c794358bf432529c"
 
 [[package]]
+name = "opte-api"
+version = "0.1.0"
+dependencies = [
+ "cfg-if 0.1.10",
+ "illumos-sys-hdrs",
+ "postcard",
+ "serde",
+]
+
+[[package]]
 name = "opte-core"
 version = "0.1.0"
 dependencies = [
@@ -403,23 +413,13 @@ dependencies = [
  "illumos-ddi-dki",
  "illumos-sys-hdrs",
  "libc",
- "opte-core-api",
+ "opte-api",
  "pcap-parser",
  "postcard",
  "serde",
  "smoltcp",
  "usdt",
  "zerocopy 0.6.1",
-]
-
-[[package]]
-name = "opte-core-api"
-version = "0.1.0"
-dependencies = [
- "cfg-if 0.1.10",
- "illumos-sys-hdrs",
- "postcard",
- "serde",
 ]
 
 [[package]]

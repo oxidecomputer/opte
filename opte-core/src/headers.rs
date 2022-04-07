@@ -17,7 +17,7 @@ use crate::ip6::{Ipv6Addr, Ipv6Hdr, Ipv6Meta, Ipv6MetaOpt, IPV6_HDR_SZ};
 use crate::packet::{PacketRead, ReadErr, WriteError};
 use crate::tcp::{TcpHdr, TcpMeta, TcpMetaOpt};
 use crate::udp::{UdpHdr, UdpMeta, UdpMetaOpt};
-use opte_core_api as api;
+use opte_api as api;
 
 /// Port 0 is reserved by the sockets layer. It is used by clients to
 /// indicate they want the operating system to choose a port on their

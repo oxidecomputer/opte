@@ -98,8 +98,8 @@ impl EtherAddr {
     }
 }
 
-impl From<opte_core_api::MacAddr> for EtherAddr {
-    fn from(mac: opte_core_api::MacAddr) -> Self {
+impl From<opte_api::MacAddr> for EtherAddr {
+    fn from(mac: opte_api::MacAddr) -> Self {
         Self { bytes: mac.bytes() }
     }
 }

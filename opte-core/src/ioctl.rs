@@ -11,7 +11,7 @@ cfg_if! {
     }
 }
 
-use opte_core_api::{CmdOk, OpteError};
+use opte_api::{CmdOk, OpteError};
 use serde::{Deserialize, Serialize};
 
 use crate::ether::EtherAddr;

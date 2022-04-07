@@ -79,8 +79,8 @@ impl Vni {
     }
 }
 
-impl From<opte_core_api::Vni> for Vni {
-    fn from(vni: opte_core_api::Vni) -> Self {
+impl From<opte_api::Vni> for Vni {
+    fn from(vni: opte_api::Vni) -> Self {
         Self::from_be_bytes(vni.bytes())
     }
 }

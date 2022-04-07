@@ -18,7 +18,7 @@ use opte_core::oxide_net::overlay;
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
-use opte_core_api::{MacAddr, Vni};
+use opte_api::{MacAddr, Vni};
 use opteadm::OpteAdm;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
@@ -142,9 +142,9 @@ enum Command {
         #[structopt(short)]
         port: String,
 
-        dest: opte_core_api::Ipv4Cidr,
+        dest: opte_api::Ipv4Cidr,
 
-        target: opte_core_api::RouterTarget,
+        target: opte_api::RouterTarget,
     },
 }
 
@@ -621,19 +621,19 @@ fn main() {
 
         Command::SetV2P { vpc_ip4, vpc_mac, underlay_ip, vni } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let vip = opte_core_api::IpAddr::Ip4(vpc_ip4.into());
-            let phys = opte_core_api::PhysNet {
+            let vip = opte_api::IpAddr::Ip4(vpc_ip4.into());
+            let phys = opte_api::PhysNet {
                 ether: vpc_mac,
                 ip: underlay_ip.into(),
                 vni,
             };
-            let req = opte_core_api::SetVirt2PhysReq { vip, phys };
+            let req = opte_api::SetVirt2PhysReq { vip, phys };
             hdl.set_v2p(&req).unwrap_or_die();
         }
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let req = opte_core_api::AddRouterEntryIpv4Req {
+            let req = opte_api::AddRouterEntryIpv4Req {
                 port_name: port,
                 dest,
                 target,

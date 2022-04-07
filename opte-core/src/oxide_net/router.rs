@@ -16,7 +16,7 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use opte_core_api::{self as api, NoResp, OpteError};
+use opte_api::{self as api, NoResp, OpteError};
 
 use crate::headers::{IpAddr, IpCidr};
 use crate::layer::{InnerFlowId, Layer};

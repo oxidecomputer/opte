@@ -8,7 +8,7 @@ cfg_if! {
     }
 }
 
-use opte_core_api::OpteError;
+use opte_api::OpteError;
 
 use crate::ip4::{self, Protocol};
 use crate::layer::Layer;

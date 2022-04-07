@@ -8,7 +8,7 @@ edition = "2021"
 cfg-if = "0.1"
 libc = "0.2"
 opte-core = { path = "../opte-core", features = ["std"], default-features = false }
-opte-core-api = { path = "../opte-core-api" }
+opte-api = { path = "../opte-api" }
 postcard = { version = "0.7.0", features = ["alloc"] }
 structopt = "0.3.23"
 thiserror = "1.0.28"

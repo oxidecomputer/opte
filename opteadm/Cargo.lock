@@ -422,25 +422,7 @@ version = "0.4.0"
 source = "git+https://github.com/jmesmon/rust-libzfs?branch=master#1d6bc9e400d96c2c41049b27ff33283dea0fa5d0"
 
 [[package]]
-name = "opte-core"
-version = "0.1.0"
-dependencies = [
- "anymap",
- "cfg-if 0.1.10",
- "cstr_core",
- "heapless",
- "illumos-ddi-dki",
- "illumos-sys-hdrs",
- "libc",
- "opte-core-api",
- "postcard",
- "serde",
- "smoltcp",
- "zerocopy",
-]
-
-[[package]]
-name = "opte-core-api"
+name = "opte-api"
 version = "0.1.0"
 dependencies = [
  "cfg-if 0.1.10",
@@ -453,14 +435,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "opte-core"
+version = "0.1.0"
+dependencies = [
+ "anymap",
+ "cfg-if 0.1.10",
+ "cstr_core",
+ "heapless",
+ "illumos-ddi-dki",
+ "illumos-sys-hdrs",
+ "libc",
+ "opte-api",
+ "postcard",
+ "serde",
+ "smoltcp",
+ "zerocopy",
+]
+
+[[package]]
 name = "opteadm"
 version = "0.2.0"
 dependencies = [
  "cfg-if 0.1.10",
  "libc",
  "libnet",
+ "opte-api",
  "opte-core",
- "opte-core-api",
  "postcard",
  "serde",
  "structopt",

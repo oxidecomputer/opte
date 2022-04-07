@@ -15,7 +15,7 @@ cfg_if! {
     }
 }
 
-use opte_core_api::{CmdOk, OpteError};
+use opte_api::{CmdOk, OpteError};
 use serde::{Deserialize, Serialize};
 
 use crate::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV6};
@@ -41,8 +41,8 @@ pub struct PhysNet {
     pub vni: Vni,
 }
 
-impl From<opte_core_api::PhysNet> for PhysNet {
-    fn from(phys: opte_core_api::PhysNet) -> Self {
+impl From<opte_api::PhysNet> for PhysNet {
+    fn from(phys: opte_api::PhysNet) -> Self {
         Self {
             ether: phys.ether.into(),
             ip: phys.ip.into(),
