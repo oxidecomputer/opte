@@ -16,7 +16,6 @@ cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use core::result;
         use alloc::string::String;
-        use alloc::vec::Vec;
     } else {
         use std::result;
         use std::str::FromStr;
@@ -222,7 +221,7 @@ pub trait CmdOk: core::fmt::Debug + Serialize {}
 
 impl CmdOk for () {}
 
-// Use this type to indicate no meaningful response value on success.
+/// Indicates no meaningful response value on success.
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct NoResp {
     pub unused: u64,
