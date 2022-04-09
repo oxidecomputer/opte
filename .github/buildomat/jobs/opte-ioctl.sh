@@ -1,6 +1,6 @@
 #!/bin/bash
 #:
-#: name = "opte-api"
+#: name = "opte-ioctl"
 #: variety = "basic"
 #: target = "helios"
 #: rust_toolchain = "nightly"
@@ -18,7 +18,7 @@ function header {
 cargo --version
 rustc --version
 
-cd opte-api
+cd opte-ioctl
 
 header "check style"
 ptime -m cargo +nightly fmt -- --check
@@ -26,20 +26,8 @@ ptime -m cargo +nightly fmt -- --check
 header "analyze"
 ptime -m cargo +nightly check
 
-header "analyze --no-default-features"
-ptime -m cargo +nightly check --no-default-features
-
 header "debug build"
 ptime -m cargo +nightly build
 
-header "debug build --no-default-features"
-ptime -m cargo +nightly build --no-default-features
-
 header "release build"
 ptime -m cargo +nightly build --release
-
-header "release build --no-default-features"
-ptime -m cargo +nightly build --release --no-default-features
-
-header "test"
-ptime -m cargo +nightly test
