@@ -402,7 +402,6 @@ dependencies = [
  "heapless",
  "illumos-ddi-dki",
  "illumos-sys-hdrs",
- "libc",
  "pcap-parser",
  "postcard",
  "serde",

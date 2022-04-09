@@ -4,33 +4,16 @@ version = "0.2.0"
 authors = ["Ryan Zezeski <ryan@oxide.computer>"]
 edition = "2021"
 
-# We are abusing features in order to allow running `cargo check` from
-# non-illumos platforms.
-#
-#   cargo +nightly check --target=x86_64-unknown-illumos \
-#   --no-default-features --features=non-illumos
-[features]
-# default = ["illumos"]
-# illumos = ["opte-core/engine"]
-# non-illumos = ["opte-core/api", "opte-core/std"]
-
 [dependencies]
 cfg-if = "0.1"
 libc = "0.2"
-# opte-core = { path = "../opte-core", default-features = false, optional = true }
-
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
 # XXX For the time being opteadm needs to set the engine feature to
 # get all the types. Once there types are move to their appropriate
 # place this feature flag will be replaced/removed.
 opte-core = { path = "../opte-core", features = ["engine"] }
 opte-ioctl = { path = "../opte-ioctl" }
-# opte-api = { path = "../opte-api" }
-postcard = { version = "0.7.0", features = ["alloc"] }
+postcard = "0.7.0"
+serde = "1.0"
 structopt = "0.3.23"
 thiserror = "1.0.28"
-libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
-
-[dependencies.serde]
-version = "1.0"
-default-features = false
-features = ["alloc", "derive"]

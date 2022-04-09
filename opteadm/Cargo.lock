@@ -431,7 +431,6 @@ dependencies = [
  "heapless",
  "illumos-ddi-dki",
  "illumos-sys-hdrs",
- "libc",
  "postcard",
  "serde",
  "smoltcp",
