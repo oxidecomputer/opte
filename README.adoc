@@ -18,8 +18,7 @@ illumos-ddi-dki:: A raw interface to the illumos DDI/DKI APIs.
 illumos-sys-hdrs:: A raw interface to various illumos `uts/common/sys`
 headers.
 
-opte-api:: The library used for interacting with OPTE. Clients use
-this crate to query and program OPTE.
+opte-ioctl:: The userland library used for interacting with OPTE.
 
 opte-core:: The implementation of the *engine* in OPTE.
 

@@ -16,8 +16,6 @@ cfg_if! {
 }
 
 /// A network destination on the Oxide Rack's physical network (underlay)
-///
-/// XXX This is oxide-specific and ultimately should not live here.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct PhysNet {
     pub ether: MacAddr,
@@ -80,8 +78,6 @@ impl FromStr for RouterTarget {
 }
 
 /// Xde create ioctl parameter data.
-///
-/// XXX This is oxide-specific and ultimately should not live here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateXdeReq {
     pub linkid: datalink_id_t,
@@ -101,16 +97,12 @@ pub struct CreateXdeReq {
 }
 
 /// Xde delete ioctl parameter data.
-///
-/// XXX This is oxide-specific and ultimately should not live here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeleteXdeReq {
     pub xde_devname: String,
 }
 
 /// Set mapping from VPC IP to physical network destination.
-///
-/// XXX This is oxide-specific and ultimately should not live here.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2PhysReq {
     pub vip: IpAddr,
@@ -118,8 +110,6 @@ pub struct SetVirt2PhysReq {
 }
 
 /// Add an entry to the IPv4 router.
-///
-/// XXX This is oxide-specific and ultimately should not live here.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AddRouterEntryIpv4Req {
     pub port_name: String,

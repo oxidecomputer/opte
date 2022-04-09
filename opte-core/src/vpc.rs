@@ -105,8 +105,6 @@ impl TryFrom<VpcSubnet4Deser> for VpcSubnet4 {
     }
 }
 
-// XXX This is still needed for SnatCfg. When that moves to
-// opte-core-api this can be removed.
 impl FromStr for VpcSubnet4 {
     type Err = IpError;
 
