@@ -9,8 +9,8 @@ edition = "2018"
 
 [dependencies]
 illumos-ddi-dki = { path = "../illumos-ddi-dki", default-features = false }
-opte-core = { path = "../opte-core", default-features = false }
-opte-api = { path = "../opte-api", default-features = false }
+opte-core = { path = "../opte-core", default-features = false, features = ["engine"] }
+# opte-api = { path = "../opte-api", default-features = false }
 cstr_core = { version = "0.2.4", default-features = false }
 postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
 

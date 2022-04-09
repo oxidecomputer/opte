@@ -15,6 +15,7 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use crate::api as api;
 use crate::checksum::Checksum;
 use crate::headers::{
     Header, HeaderAction, IpMeta, IpMetaOpt, ModActionArg, PushActionArg,
@@ -22,7 +23,6 @@ use crate::headers::{
 };
 use crate::ip4::Protocol;
 use crate::packet::{PacketRead, ReadErr, WriteError};
-use opte_api as api;
 
 pub const IPV6_HDR_VSN_MASK: u8 = 0xF0;
 pub const IPV6_HDR_VSN_SHIFT: u8 = 4;

@@ -16,8 +16,7 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use opte_api::{self as api, NoResp, OpteError};
-
+use crate::api::{self, NoResp, OpteError};
 use crate::headers::{IpAddr, IpCidr};
 use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::firewall as fw;

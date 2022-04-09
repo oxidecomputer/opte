@@ -23,8 +23,7 @@ cfg_if! {
 
 use smoltcp::wire::{DhcpPacket, DhcpRepr, EthernetAddress, Ipv4Address};
 
-use opte_api::OpteError;
-
+use crate::api::OpteError;
 use crate::dhcp::{
     ClasslessStaticRouteOpt, MessageType as DhcpMessageType, SubnetRouterPair,
 };

@@ -13,8 +13,7 @@ cfg_if! {
 use smoltcp::phy::{Checksum, ChecksumCapabilities as Csum};
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
 
-use opte_api::OpteError;
-
+use crate::api::OpteError;
 use crate::ether::{self, EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ};
 use crate::icmp::MessageType as Icmp4MessageType;
 use crate::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol, IPV4_HDR_SZ};

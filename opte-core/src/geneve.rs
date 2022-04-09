@@ -15,6 +15,7 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use crate::api as api;
 use crate::ether::{EtherType, ETHER_TYPE_ETHER};
 use crate::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
@@ -79,8 +80,8 @@ impl Vni {
     }
 }
 
-impl From<opte_api::Vni> for Vni {
-    fn from(vni: opte_api::Vni) -> Self {
+impl From<api::Vni> for Vni {
+    fn from(vni: api::Vni) -> Self {
         Self::from_be_bytes(vni.bytes())
     }
 }

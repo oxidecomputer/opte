@@ -22,7 +22,7 @@ use illumos_ddi_dki::*;
 
 use crate::ioctl::IoctlEnvelope;
 use crate::{dld, dls, ip, mac, secpolicy, sys, warn};
-use opte_api::{
+use opte_core::api::{
     CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
 };
 use opte_core::ether::EtherAddr;
@@ -586,7 +586,7 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
 const IOCTL_SZ: usize = core::mem::size_of::<OpteCmdIoctl>();
 
 static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [dld::dld_ioc_info_t {
-    di_cmd: opte_api::XDE_DLD_OPTE_CMD as u32,
+    di_cmd: opte_core::api::XDE_DLD_OPTE_CMD as u32,
     di_flags: dld::DLDCOPYINOUT,
     di_argsize: IOCTL_SZ,
     di_func: xde_dld_ioc_opte_cmd,
@@ -1789,7 +1789,7 @@ unsafe extern "C" fn xde_rx(
 
 #[no_mangle]
 fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: opte_api::AddRouterEntryIpv4Req = env.copy_in_req()?;
+    let req: opte_core::api::AddRouterEntryIpv4Req = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
@@ -1834,7 +1834,7 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 
 #[no_mangle]
 fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: opte_api::SetVirt2PhysReq = env.copy_in_req()?;
+    let req: opte_core::api::SetVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
     state.v2p.set(req.vip.into(), req.phys.into());
     Ok(NoResp::default())

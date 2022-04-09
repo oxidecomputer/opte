@@ -20,6 +20,7 @@ use heapless::Vec as FVec;
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use crate::api as api;
 use crate::checksum::{Checksum, HeaderChecksum};
 use crate::headers::{
     Header, HeaderAction, HeaderActionModify, IpMeta, IpMetaOpt, ModActionArg,
@@ -29,7 +30,6 @@ use crate::packet::{PacketRead, ReadErr, WriteError};
 use crate::rule::{
     MatchExact, MatchExactVal, MatchPrefix, MatchPrefixVal, MatchRangeVal,
 };
-use opte_api as api;
 
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
 pub const IPV4_HDR_VER_MASK: u8 = 0xF0;

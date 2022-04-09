@@ -4,7 +4,7 @@ use std::process::exit;
 
 use structopt::StructOpt;
 
-use opte_api::{MacAddr, Vni};
+use opte_core::api::{MacAddr, Vni};
 use opte_core::ether::EtherAddr;
 use opte_core::flow_table::FlowEntryDump;
 use opte_core::headers::IpAddr;
@@ -19,6 +19,7 @@ use opte_core::oxide_net::overlay;
 use opte_core::rule::RuleDump;
 use opte_core::vpc::VpcSubnet4;
 use opte_core::Direction;
+use opte_ioctl::Error;
 use opteadm::OpteAdm;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
@@ -142,9 +143,9 @@ enum Command {
         #[structopt(short)]
         port: String,
 
-        dest: opte_api::Ipv4Cidr,
+        dest: opte_core::api::Ipv4Cidr,
 
-        target: opte_api::RouterTarget,
+        target: opte_core::api::RouterTarget,
     },
 }
 
@@ -502,7 +503,7 @@ fn print_uft(resp: &api::DumpUftResp) {
     println!("");
 }
 
-fn die(error: opteadm::Error) -> ! {
+fn die(error: Error) -> ! {
     eprintln!("ERROR: {}", error);
     exit(1);
 }
@@ -511,7 +512,7 @@ trait UnwrapOrDie<T, E> {
     fn unwrap_or_die(self) -> T;
 }
 
-impl<T> UnwrapOrDie<T, opteadm::Error> for Result<T, opteadm::Error> {
+impl<T> UnwrapOrDie<T, Error> for Result<T, Error> {
     fn unwrap_or_die(self) -> T {
         match self {
             Ok(val) => val,
@@ -621,19 +622,19 @@ fn main() {
 
         Command::SetV2P { vpc_ip4, vpc_mac, underlay_ip, vni } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let vip = opte_api::IpAddr::Ip4(vpc_ip4.into());
-            let phys = opte_api::PhysNet {
+            let vip = opte_core::api::IpAddr::Ip4(vpc_ip4.into());
+            let phys = opte_core::api::PhysNet {
                 ether: vpc_mac,
                 ip: underlay_ip.into(),
                 vni,
             };
-            let req = opte_api::SetVirt2PhysReq { vip, phys };
+            let req = opte_core::api::SetVirt2PhysReq { vip, phys };
             hdl.set_v2p(&req).unwrap_or_die();
         }
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let req = opte_api::AddRouterEntryIpv4Req {
+            let req = opte_core::api::AddRouterEntryIpv4Req {
                 port_name: port,
                 dest,
                 target,

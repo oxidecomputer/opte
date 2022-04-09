@@ -15,8 +15,7 @@ cfg_if! {
     }
 }
 
-use opte_api::OpteError;
-
+use crate::api::OpteError;
 use crate::ether::EtherAddr;
 use crate::flow_table::{FlowTable, StateSummary};
 use crate::ioctl;

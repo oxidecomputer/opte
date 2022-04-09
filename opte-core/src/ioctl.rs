@@ -11,9 +11,9 @@ cfg_if! {
     }
 }
 
-use opte_api::{CmdOk, OpteError};
 use serde::{Deserialize, Serialize};
 
+use crate::api::{CmdOk, OpteError};
 use crate::ether::EtherAddr;
 use crate::flow_table::FlowEntryDump;
 use crate::ip4::Ipv4Addr;

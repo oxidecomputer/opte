@@ -5,7 +5,7 @@ use core::result;
 use ddi::{c_int, c_void};
 use illumos_ddi_dki as ddi;
 
-use opte_api::{
+use opte_core::api::{
     CmdOk, OpteCmd, OpteCmdIoctl, OpteError, API_VERSION,
     OPTE_CMD_RESP_COPY_OUT,
 };

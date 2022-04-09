@@ -8,8 +8,7 @@ cfg_if! {
     }
 }
 
-use opte_api::OpteError;
-
+use crate::api::OpteError;
 use crate::ip4::{self, Protocol};
 use crate::layer::Layer;
 use crate::nat::{DynNat4, NatPool};

@@ -16,8 +16,7 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use opte_api::OpteError;
-
+use crate::api::OpteError;
 use crate::layer::InnerFlowId;
 use crate::time::{Moment, MILLIS};
 use crate::CString;

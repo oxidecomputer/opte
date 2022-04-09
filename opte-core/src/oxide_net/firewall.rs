@@ -16,8 +16,7 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use opte_api::OpteError;
-
+use crate::api::OpteError;
 use crate::ether::ETHER_TYPE_ARP;
 use crate::headers::DYNAMIC_PORT;
 use crate::ip4::{Ipv4Addr, Ipv4Cidr, Protocol};
