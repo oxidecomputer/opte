@@ -14,7 +14,7 @@ cfg_if! {
 }
 
 /// An IPv4 or IPv6 address.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum IpAddr {
     Ip4(Ipv4Addr),
     Ip6(Ipv6Addr),

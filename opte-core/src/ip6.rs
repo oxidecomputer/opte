@@ -34,6 +34,13 @@ impl fmt::Display for Ipv6Addr {
     }
 }
 
+impl fmt::Display for Ipv6Cidr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let (ip, prefix_len) = self.parts();
+        write!(f, "{}/{}", ip, prefix_len.val())
+    }
+}
+
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
