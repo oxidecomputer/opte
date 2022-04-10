@@ -22,23 +22,23 @@ use illumos_ddi_dki::*;
 
 use crate::ioctl::IoctlEnvelope;
 use crate::{dld, dls, ip, mac, secpolicy, sys, warn};
-use opte_core::api::{
+use opte::api::{
     CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
 };
-use opte_core::ether::EtherAddr;
-use opte_core::geneve::Vni;
-use opte_core::headers::IpCidr;
-use opte_core::ioctl::{self as api, SetXdeUnderlayReq, SnatCfg};
-use opte_core::ip4::Ipv4Addr;
-use opte_core::ip6::Ipv6Addr;
-use opte_core::oxide_net::firewall::{AddFwRuleReq, RemFwRuleReq};
-use opte_core::oxide_net::{overlay, router, PortCfg};
-use opte_core::packet::{Initialized, Packet, ParseError, Parsed};
-use opte_core::port::{Active, Port, ProcessResult};
-use opte_core::sync::{KMutex, KMutexType};
-use opte_core::sync::{KRwLock, KRwLockType};
-use opte_core::time::{Interval, Moment, Periodic};
-use opte_core::{CStr, CString, Direction, ExecCtx};
+use opte::ether::EtherAddr;
+use opte::geneve::Vni;
+use opte::headers::IpCidr;
+use opte::ioctl::{self as api, SetXdeUnderlayReq, SnatCfg};
+use opte::ip4::Ipv4Addr;
+use opte::ip6::Ipv6Addr;
+use opte::oxide_net::firewall::{AddFwRuleReq, RemFwRuleReq};
+use opte::oxide_net::{overlay, router, PortCfg};
+use opte::packet::{Initialized, Packet, ParseError, Parsed};
+use opte::port::{Active, Port, ProcessResult};
+use opte::sync::{KMutex, KMutexType};
+use opte::sync::{KRwLock, KRwLockType};
+use opte::time::{Interval, Moment, Periodic};
+use opte::{CStr, CString, Direction, ExecCtx};
 
 /// The name of this driver.
 const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
@@ -175,7 +175,7 @@ fn get_xde_state() -> &'static mut XdeState {
 
 impl XdeState {
     fn new() -> Self {
-        let ectx = Arc::new(ExecCtx { log: Box::new(opte_core::KernelLog {}) });
+        let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
         XdeState {
             underlay: KMutex::new(None, KMutexType::Driver),
             ectx,
@@ -586,7 +586,7 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
 const IOCTL_SZ: usize = core::mem::size_of::<OpteCmdIoctl>();
 
 static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [dld::dld_ioc_info_t {
-    di_cmd: opte_core::api::XDE_DLD_OPTE_CMD as u32,
+    di_cmd: opte::api::XDE_DLD_OPTE_CMD as u32,
     di_flags: dld::DLDCOPYINOUT,
     di_argsize: IOCTL_SZ,
     di_func: xde_dld_ioc_opte_cmd,
@@ -1004,9 +1004,9 @@ unsafe extern "C" fn xde_mc_unicst(
 }
 
 fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
-    use opte_core::rule::flow_id_sdt_arg;
+    use opte::rule::flow_id_sdt_arg;
 
-    let fid = opte_core::layer::InnerFlowId::from(pkt.meta());
+    let fid = opte::layer::InnerFlowId::from(pkt.meta());
     let fid_arg = flow_id_sdt_arg::from(&fid);
 
     unsafe {
@@ -1630,7 +1630,7 @@ fn new_port(
 
     let dyn_nat = match snat.as_ref() {
         None => {
-            opte_core::oxide_net::DynNat4Cfg {
+            opte::oxide_net::DynNat4Cfg {
                 //TODO hardcode
                 public_ip: "192.168.99.99".parse().unwrap(),
                 //TODO hardcode
@@ -1638,7 +1638,7 @@ fn new_port(
             }
         }
 
-        Some(snat) => opte_core::oxide_net::DynNat4Cfg {
+        Some(snat) => opte::oxide_net::DynNat4Cfg {
             public_ip: snat.public_ip,
             ports: Range { start: snat.port_start, end: snat.port_end },
         },
@@ -1655,13 +1655,13 @@ fn new_port(
     };
 
     let mut new_port = Port::new(&name, name_cstr, private_mac, ectx);
-    opte_core::oxide_net::firewall::setup(&mut new_port)?;
-    opte_core::oxide_net::dhcp4::setup(&mut new_port, &port_cfg)?;
-    opte_core::oxide_net::icmp::setup(&mut new_port, &port_cfg)?;
+    opte::oxide_net::firewall::setup(&mut new_port)?;
+    opte::oxide_net::dhcp4::setup(&mut new_port, &port_cfg)?;
+    opte::oxide_net::icmp::setup(&mut new_port, &port_cfg)?;
     if snat.is_some() {
-        opte_core::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg)?;
+        opte::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg)?;
     }
-    opte_core::oxide_net::arp::setup(&mut new_port, &port_cfg)?;
+    opte::oxide_net::arp::setup(&mut new_port, &port_cfg)?;
     router::setup(&mut new_port)?;
 
     let oc = overlay::OverlayCfg {
@@ -1789,7 +1789,7 @@ unsafe extern "C" fn xde_rx(
 
 #[no_mangle]
 fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: opte_core::api::AddRouterEntryIpv4Req = env.copy_in_req()?;
+    let req: opte::api::AddRouterEntryIpv4Req = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
@@ -1834,7 +1834,7 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 
 #[no_mangle]
 fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: opte_core::api::SetVirt2PhysReq = env.copy_in_req()?;
+    let req: opte::api::SetVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
     state.v2p.set(req.vip.into(), req.phys.into());
     Ok(NoResp::default())

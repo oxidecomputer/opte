@@ -11,7 +11,7 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
 # XXX For the time being opteadm needs to set the engine feature to
 # get all the types. Once there types are move to their appropriate
 # place this feature flag will be replaced/removed.
-opte-core = { path = "../opte-core", features = ["engine"] }
+opte = { path = "../opte", features = ["engine"] }
 opte-ioctl = { path = "../opte-ioctl" }
 postcard = "0.7.0"
 serde = "1.0"

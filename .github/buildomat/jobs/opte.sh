@@ -1,6 +1,6 @@
 #!/bin/bash
 #:
-#: name = "opte-core"
+#: name = "opte"
 #: variety = "basic"
 #: target = "helios"
 #: rust_toolchain = "nightly"
@@ -18,7 +18,7 @@ function header {
 cargo --version
 rustc --version
 
-cd opte-core
+cd opte
 
 header "check style"
 ptime -m cargo +nightly fmt -- --check

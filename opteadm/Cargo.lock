@@ -422,7 +422,7 @@ version = "0.4.0"
 source = "git+https://github.com/jmesmon/rust-libzfs?branch=master#2d9b97f220926d95d91a187fbce1d61b8c2209c8"
 
 [[package]]
-name = "opte-core"
+name = "opte"
 version = "0.1.0"
 dependencies = [
  "anymap",
@@ -443,7 +443,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "libnet",
- "opte-core",
+ "opte",
  "postcard",
  "serde",
  "thiserror",
@@ -456,7 +456,7 @@ dependencies = [
  "cfg-if 0.1.10",
  "libc",
  "libnet",
- "opte-core",
+ "opte",
  "opte-ioctl",
  "postcard",
  "serde",

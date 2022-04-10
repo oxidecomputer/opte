@@ -4,21 +4,21 @@ use std::process::exit;
 
 use structopt::StructOpt;
 
-use opte_core::api::{MacAddr, Vni};
-use opte_core::ether::EtherAddr;
-use opte_core::flow_table::FlowEntryDump;
-use opte_core::headers::IpAddr;
-use opte_core::ioctl::{self as api, PortInfo};
-use opte_core::ip4::Ipv4Addr;
-use opte_core::ip6::Ipv6Addr;
-use opte_core::layer::InnerFlowId;
-use opte_core::oxide_net::firewall::{
+use opte::api::{MacAddr, Vni};
+use opte::ether::EtherAddr;
+use opte::flow_table::FlowEntryDump;
+use opte::headers::IpAddr;
+use opte::ioctl::{self as api, PortInfo};
+use opte::ip4::Ipv4Addr;
+use opte::ip6::Ipv6Addr;
+use opte::layer::InnerFlowId;
+use opte::oxide_net::firewall::{
     self, Action, Address, FirewallRule, Ports, ProtoFilter, RemFwRuleReq,
 };
-use opte_core::oxide_net::overlay;
-use opte_core::rule::RuleDump;
-use opte_core::vpc::VpcSubnet4;
-use opte_core::Direction;
+use opte::oxide_net::overlay;
+use opte::rule::RuleDump;
+use opte::vpc::VpcSubnet4;
+use opte::Direction;
 use opte_ioctl::Error;
 use opteadm::OpteAdm;
 
@@ -143,9 +143,9 @@ enum Command {
         #[structopt(short)]
         port: String,
 
-        dest: opte_core::api::Ipv4Cidr,
+        dest: opte::api::Ipv4Cidr,
 
-        target: opte_core::api::RouterTarget,
+        target: opte::api::RouterTarget,
     },
 }
 
@@ -622,19 +622,19 @@ fn main() {
 
         Command::SetV2P { vpc_ip4, vpc_mac, underlay_ip, vni } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let vip = opte_core::api::IpAddr::Ip4(vpc_ip4.into());
-            let phys = opte_core::api::PhysNet {
+            let vip = opte::api::IpAddr::Ip4(vpc_ip4.into());
+            let phys = opte::api::PhysNet {
                 ether: vpc_mac,
                 ip: underlay_ip.into(),
                 vni,
             };
-            let req = opte_core::api::SetVirt2PhysReq { vip, phys };
+            let req = opte::api::SetVirt2PhysReq { vip, phys };
             hdl.set_v2p(&req).unwrap_or_die();
         }
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let req = opte_core::api::AddRouterEntryIpv4Req {
+            let req = opte::api::AddRouterEntryIpv4Req {
                 port_name: port,
                 dest,
                 target,

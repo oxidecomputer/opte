@@ -1,4 +1,4 @@
-use opte_core::api::{
+use opte::api::{
     AddRouterEntryIpv4Req, CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, NoResp,
     OpteCmd, OpteCmdIoctl, OpteError, SetVirt2PhysReq, Vni, API_VERSION,
     XDE_DLD_OPTE_CMD,

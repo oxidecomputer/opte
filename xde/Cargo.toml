@@ -13,8 +13,8 @@ cstr_core = { version = "0.2.4", default-features = false }
 illumos-ddi-dki = { path = "../illumos-ddi-dki" }
 postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
 
-[dependencies.opte-core]
-path = "../opte-core"
+[dependencies.opte]
+path = "../opte"
 default-features = false
 features = ["engine"]
 
