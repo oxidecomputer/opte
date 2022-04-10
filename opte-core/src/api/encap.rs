@@ -12,7 +12,7 @@ cfg_if! {
 }
 
 /// A Geneve Virtual Network Identifier (VNI).
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Vni {
     // A VNI is 24-bit. By storing it this way we don't have to check
     // the value on the opte-core side to know if it's a valid VNI, we
@@ -48,6 +48,10 @@ impl Display for Vni {
 const VNI_MAX: u32 = 0x00_FF_FF_FF;
 
 impl Vni {
+    pub fn as_u32(&self) -> u32 {
+        u32::from_be_bytes([0, self.inner[0], self.inner[1], self.inner[2]])
+    }
+
     /// Return the bytes that represent this VNI. The bytes are in
     /// network order.
     pub fn bytes(&self) -> [u8; 3] {
@@ -71,9 +75,27 @@ impl Vni {
     }
 }
 
-#[test]
-fn vni_round_trip() {
-    let vni = Vni::new(7777u32).unwrap();
-    assert_eq!([0x00, 0x1E, 0x61], vni.inner);
-    assert_eq!(7777, u32::from(vni));
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn good_vni() {
+        assert!(Vni::new(0u32).is_ok());
+        assert!(Vni::new(11u8).is_ok());
+        assert!(Vni::new(VNI_MAX).is_ok());
+    }
+
+    #[test]
+    fn bad_vni() {
+        assert!(Vni::new(2u32.pow(24)).is_err());
+        assert!(Vni::new(2u32.pow(30)).is_err());
+    }
+
+    #[test]
+    fn vni_round_trip() {
+        let vni = Vni::new(7777u32).unwrap();
+        assert_eq!([0x00, 0x1E, 0x61], vni.inner);
+        assert_eq!(7777, u32::from(vni));
+    }
 }

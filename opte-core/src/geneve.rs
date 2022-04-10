@@ -1,13 +1,10 @@
 use core::convert::TryFrom;
 use core::mem;
-use core::str::FromStr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::{String, ToString};
         use alloc::vec::Vec;
     } else {
-        use std::string::{String, ToString};
         use std::vec::Vec;
     }
 }
@@ -15,7 +12,7 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-use crate::api as api;
+pub use crate::api::Vni;
 use crate::ether::{EtherType, ETHER_TYPE_ETHER};
 use crate::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
@@ -23,74 +20,12 @@ use crate::headers::{
 };
 use crate::packet::{PacketRead, ReadErr, WriteError};
 
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    Deserialize,
-    Eq,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-)]
-pub struct Vni {
-    inner: u32,
-}
-
-impl FromStr for Vni {
-    type Err = String;
-
-    fn from_str(val: &str) -> Result<Self, Self::Err> {
-        let n = val.parse::<u32>().map_err(|e| e.to_string())?;
-        Self::new(n)
-    }
-}
-
 pub const GENEVE_VSN: u8 = 0;
 pub const GENEVE_VER_MASK: u8 = 0xC0;
 pub const GENEVE_VER_SHIFT: u8 = 6;
 pub const GENEVE_OPT_LEN_MASK: u8 = 0x3F;
 pub const GENEVE_PORT: u16 = 6081;
 pub const GENEVE_HDR_SZ: usize = mem::size_of::<GeneveHdrRaw>();
-const VNI_MAX: u32 = 0x00_FF_FF_FF;
-
-impl Vni {
-    pub fn new<N: Into<u32>>(val: N) -> Result<Vni, String> {
-        let val = val.into();
-        if val > VNI_MAX {
-            return Err(format!("VNI value exceeds maximum: {}", val));
-        }
-
-        Ok(Vni { inner: val })
-    }
-
-    pub fn from_be_bytes(bytes: [u8; 3]) -> Self {
-        Self { inner: u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]) }
-    }
-
-    pub fn to_be_bytes(&self) -> [u8; 3] {
-        let bs = (self.inner).to_be_bytes();
-        [bs[1], bs[2], bs[3]]
-    }
-
-    pub fn value(&self) -> u32 {
-        self.inner
-    }
-}
-
-impl From<api::Vni> for Vni {
-    fn from(vni: api::Vni) -> Self {
-        Self::from_be_bytes(vni.bytes())
-    }
-}
-
-impl core::fmt::Display for Vni {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        write!(f, "{}", self.inner)
-    }
-}
 
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
@@ -306,26 +241,8 @@ impl From<&GeneveHdr> for GeneveHdrRaw {
             ver_opt_len: opt_len_words as u8,
             flags: geneve.flags,
             proto: (geneve.proto as u16).to_be_bytes(),
-            vni: geneve.vni.to_be_bytes(),
+            vni: geneve.vni.bytes(),
             reserved: 0,
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn good_vni() {
-        assert!(Vni::new(0u32).is_ok());
-        assert!(Vni::new(11u8).is_ok());
-        assert!(Vni::new(VNI_MAX).is_ok());
-    }
-
-    #[test]
-    fn bad_vni() {
-        assert!(Vni::new(2u32.pow(24)).is_err());
-        assert!(Vni::new(2u32.pow(30)).is_err());
     }
 }

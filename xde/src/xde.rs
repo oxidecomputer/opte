@@ -1088,7 +1088,7 @@ fn guest_loopback(
             warn!(
                 "underlay dest is same as src but the Port was not found \
                  vni = {}, mac = {}",
-                vni.value(),
+                vni.as_u32(),
                 ether_dst
             );
             return ptr::null_mut();
