@@ -15,28 +15,29 @@ cfg_if! {
     }
 }
 
-use crate::arp::{
+use super::arp::{
     ArpEth4Payload, ArpEth4PayloadRaw, ArpMeta, ArpOp, ARP_HTYPE_ETHERNET,
 };
-use crate::dhcp::MessageType as DhcpMessageType;
-use crate::ether::{EtherAddr, EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
-use crate::flow_table::StateSummary;
-use crate::geneve::{GeneveMeta, GeneveMetaOpt};
-use crate::headers::{
+use super::dhcp::MessageType as DhcpMessageType;
+use super::ether::{EtherAddr, EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
+use super::flow_table::StateSummary;
+use super::geneve::{GeneveMeta, GeneveMetaOpt};
+use super::headers::{
     self, HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
     UlpMetaOpt,
 };
-use crate::icmp::MessageType as Icmp4MessageType;
-use crate::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
-use crate::ip6::Ipv6Meta;
-use crate::layer::InnerFlowId;
-use crate::packet::{
+use super::icmp::MessageType as Icmp4MessageType;
+use super::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
+use super::ip6::Ipv6Meta;
+use super::layer::InnerFlowId;
+use super::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
 };
-use crate::port::meta::Meta;
-use crate::tcp::TcpMeta;
-use crate::udp::UdpMeta;
-use crate::{CString, Direction};
+use super::port::meta::Meta;
+use super::tcp::TcpMeta;
+use super::udp::UdpMeta;
+use crate::api::Direction;
+use crate::CString;
 
 use illumos_ddi_dki::c_char;
 
@@ -598,7 +599,7 @@ impl DataPredicate {
                 let pkt = match DhcpPacket::new_checked(&bytes) {
                     Ok(v) => v,
                     Err(e) => {
-                        crate::err(format!(
+                        super::err(format!(
                             "DhcpPacket::new_checked() failed: {:?}",
                             e
                         ));
@@ -608,7 +609,7 @@ impl DataPredicate {
                 let dhcp = match DhcpRepr::parse(&pkt) {
                     Ok(v) => v,
                     Err(e) => {
-                        crate::err(format!(
+                        super::err(format!(
                             "DhcpRepr::parse() failed: {:?}",
                             e
                         ));
@@ -626,7 +627,7 @@ impl DataPredicate {
                 let pkt = match Icmpv4Packet::new_checked(&bytes) {
                     Ok(v) => v,
                     Err(e) => {
-                        crate::err(format!(
+                        super::err(format!(
                             "Icmpv4Packet::new_checked() failed: {:?}",
                             e
                         ));
@@ -636,7 +637,7 @@ impl DataPredicate {
                 let _icmp = match Icmpv4Repr::parse(&pkt, &Csum::ignored()) {
                     Ok(v) => v,
                     Err(e) => {
-                        crate::err(format!(
+                        super::err(format!(
                             "Icmpv4Repr::parse() failed: {:?}",
                             e
                         ));
@@ -670,7 +671,7 @@ impl DataPredicate {
                     // most recent read in its Drop implementation.
                     // That way there is no chance to forget to undo
                     // the read.
-                    rdr.seek_back(crate::arp::ARP_ETH4_PAYLOAD_SZ)
+                    rdr.seek_back(super::arp::ARP_ETH4_PAYLOAD_SZ)
                         .expect("failed to seek back");
 
                     for m in list {
@@ -803,7 +804,7 @@ pub struct HT {
     pub inner_ether: HeaderAction<EtherMeta, EtherMetaOpt>,
     pub inner_ip: HeaderAction<IpMeta, IpMetaOpt>,
     // We don't support push/pop for inner_ulp.
-    pub inner_ulp: UlpHeaderAction<crate::headers::UlpMetaModify>,
+    pub inner_ulp: UlpHeaderAction<super::headers::UlpMetaModify>,
 }
 
 impl StateSummary for Vec<HT> {
@@ -999,15 +1000,15 @@ pub trait MetaAction: Display {
 
 #[derive(Debug)]
 pub enum GenErr {
-    BadPayload(crate::packet::ReadErr),
+    BadPayload(super::packet::ReadErr),
     Malformed,
     MissingMeta,
     Truncated,
     Unexpected(String),
 }
 
-impl From<crate::packet::ReadErr> for GenErr {
-    fn from(err: crate::packet::ReadErr) -> Self {
+impl From<super::packet::ReadErr> for GenErr {
+    fn from(err: super::packet::ReadErr) -> Self {
         Self::BadPayload(err)
     }
 }
@@ -1271,7 +1272,7 @@ impl From<&Rule<Finalized>> for RuleDump {
 
 #[test]
 fn rule_matching() {
-    use crate::packet::MetaGroup;
+    use crate::engine::packet::MetaGroup;
 
     let action = Identity::new("rule_matching");
     let r1 = Rule::new(1, Action::Static(Arc::new(action)));

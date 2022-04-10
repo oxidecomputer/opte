@@ -17,7 +17,7 @@ use core::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ip4::{IpError, Ipv4Addr, Ipv4Cidr};
+use super::ip4::{IpError, Ipv4Addr, Ipv4Cidr};
 
 /// RFD 21 §2.2
 pub const OXIDE_MIN_IP4_BLOCK: u8 = 26;

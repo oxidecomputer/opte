@@ -13,14 +13,14 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
+use super::ether::EtherAddr;
+use super::flow_table::FlowEntryDump;
+use super::layer;
+use super::port;
+use super::rule;
+use super::vpc::VpcSubnet4;
 use crate::api::{CmdOk, Ipv4Addr, OpteError};
-use crate::ether::EtherAddr;
-use crate::flow_table::FlowEntryDump;
-use crate::layer;
 use crate::oxide_net::firewall as fw;
-use crate::port;
-use crate::rule;
-use crate::vpc::VpcSubnet4;
 
 /// Dump various information about a `Layer` for use in debugging or
 /// administrative purposes.

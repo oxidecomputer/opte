@@ -13,20 +13,21 @@ cfg_if! {
 use smoltcp::phy::{Checksum, ChecksumCapabilities as Csum};
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
 
-use crate::api::{Ipv4Addr, OpteError};
-use crate::ether::{self, EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ};
-use crate::icmp::MessageType as Icmp4MessageType;
-use crate::ip4::{Ipv4Hdr, Ipv4Meta, Protocol, IPV4_HDR_SZ};
-use crate::layer::Layer;
-use crate::packet::{
+use crate::api::{Direction, Ipv4Addr, OpteError};
+use crate::engine::ether::{
+    self, EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ,
+};
+use crate::engine::icmp::MessageType as Icmp4MessageType;
+use crate::engine::ip4::{Ipv4Hdr, Ipv4Meta, Protocol, IPV4_HDR_SZ};
+use crate::engine::layer::Layer;
+use crate::engine::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
 };
-use crate::port::{self, Port, Pos};
-use crate::rule::{
+use crate::engine::port::{self, Port, Pos};
+use crate::engine::rule::{
     Action, DataPredicate, EtherAddrMatch, GenErr, GenResult, HairpinAction,
     IpProtoMatch, Ipv4AddrMatch, Predicate, Rule,
 };
-use crate::Direction;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,

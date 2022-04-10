@@ -23,26 +23,27 @@ cfg_if! {
 
 use smoltcp::wire::{DhcpPacket, DhcpRepr, EthernetAddress, Ipv4Address};
 
-use crate::api::{Ipv4Addr, OpteError, IP4_MASK_ALL, IP4_MASK_NONE};
-use crate::dhcp::{
+use crate::api::{Direction, Ipv4Addr, OpteError, IP4_MASK_ALL, IP4_MASK_NONE};
+use crate::engine::dhcp::{
     ClasslessStaticRouteOpt, MessageType as DhcpMessageType, SubnetRouterPair,
 };
-use crate::ether::{self, EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ};
-use crate::ip4::{
+use crate::engine::ether::{
+    self, EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ,
+};
+use crate::engine::ip4::{
     Ipv4Cidr, Ipv4Hdr, Ipv4Meta, Protocol, IPV4_ANY_ADDR, IPV4_HDR_SZ,
     IPV4_LOCAL_BCAST,
 };
-use crate::layer::Layer;
-use crate::packet::{
+use crate::engine::layer::Layer;
+use crate::engine::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
 };
-use crate::port::{self, Port, Pos};
-use crate::rule::{
+use crate::engine::port::{self, Port, Pos};
+use crate::engine::rule::{
     Action, DataPredicate, EtherAddrMatch, GenResult, HairpinAction,
     IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate, Rule,
 };
-use crate::udp::{UdpHdr, UdpMeta, UDP_HDR_SZ};
-use crate::Direction;
+use crate::engine::udp::{UdpHdr, UdpMeta, UDP_HDR_SZ};
 
 pub fn setup(
     port: &mut Port<port::Inactive>,

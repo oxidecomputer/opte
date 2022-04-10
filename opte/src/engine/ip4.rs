@@ -19,16 +19,16 @@ use heapless::Vec as FVec;
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-pub use crate::api::{Ipv4Addr, Ipv4Cidr, IPV4_ANY_ADDR, IPV4_LOCAL_BCAST};
-use crate::checksum::{Checksum, HeaderChecksum};
-use crate::headers::{
+use super::checksum::{Checksum, HeaderChecksum};
+use super::headers::{
     Header, HeaderAction, HeaderActionModify, IpMeta, IpMetaOpt, ModActionArg,
     RawHeader,
 };
-use crate::packet::{PacketRead, ReadErr, WriteError};
-use crate::rule::{
+use super::packet::{PacketRead, ReadErr, WriteError};
+use super::rule::{
     MatchExact, MatchExactVal, MatchPrefix, MatchPrefixVal, MatchRangeVal,
 };
+pub use crate::api::{Ipv4Addr, Ipv4Cidr, IPV4_ANY_ADDR, IPV4_LOCAL_BCAST};
 
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
 pub const IPV4_HDR_VER_MASK: u8 = 0xF0;
@@ -477,7 +477,7 @@ impl Ipv4Hdr {
 
     #[cfg(any(feature = "std", test))]
     pub fn new_tcp<A: Into<Ipv4Addr>>(
-        tcp: &mut crate::tcp::TcpHdr,
+        tcp: &mut super::tcp::TcpHdr,
         body: &[u8],
         src: A,
         dst: A,

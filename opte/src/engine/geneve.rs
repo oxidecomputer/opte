@@ -12,13 +12,13 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-pub use crate::api::Vni;
-use crate::ether::{EtherType, ETHER_TYPE_ETHER};
-use crate::headers::{
+use super::ether::{EtherType, ETHER_TYPE_ETHER};
+use super::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
     RawHeader,
 };
-use crate::packet::{PacketRead, ReadErr, WriteError};
+use super::packet::{PacketRead, ReadErr, WriteError};
+pub use crate::api::Vni;
 
 pub const GENEVE_VSN: u8 = 0;
 pub const GENEVE_VER_MASK: u8 = 0xC0;

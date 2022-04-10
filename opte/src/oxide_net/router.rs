@@ -16,13 +16,12 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{self, NoResp, OpteError};
-use crate::headers::{IpAddr, IpCidr};
-use crate::layer::{InnerFlowId, Layer};
+use crate::api::{self, Direction, NoResp, OpteError};
+use crate::engine::headers::{IpAddr, IpCidr};
+use crate::engine::layer::{InnerFlowId, Layer};
+use crate::engine::port::{self, meta::Meta, Port};
+use crate::engine::rule::{self, Action, MetaAction, Predicate, Rule};
 use crate::oxide_net::firewall as fw;
-use crate::port::{self, meta::Meta, Port};
-use crate::rule::{self, Action, MetaAction, Predicate, Rule};
-use crate::Direction;
 
 pub const ROUTER_LAYER_NAME: &'static str = "router";
 
@@ -50,7 +49,7 @@ pub enum RouterTarget {
     Drop,
     InternetGateway,
     Ip(IpAddr),
-    VpcSubnet(crate::headers::IpCidr),
+    VpcSubnet(IpCidr),
 }
 
 impl From<api::RouterTarget> for RouterTarget {

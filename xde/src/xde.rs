@@ -23,22 +23,23 @@ use illumos_ddi_dki::*;
 use crate::ioctl::IoctlEnvelope;
 use crate::{dld, dls, ip, mac, secpolicy, sys, warn};
 use opte::api::{
-    CmdOk, CreateXdeReq, DeleteXdeReq, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
+    CmdOk, CreateXdeReq, DeleteXdeReq, Direction, NoResp, OpteCmd,
+    OpteCmdIoctl, OpteError,
 };
-use opte::ether::EtherAddr;
-use opte::geneve::Vni;
-use opte::headers::IpCidr;
-use opte::ioctl::{self as api, SetXdeUnderlayReq, SnatCfg};
-use opte::ip4::Ipv4Addr;
-use opte::ip6::Ipv6Addr;
+use opte::engine::ether::EtherAddr;
+use opte::engine::geneve::Vni;
+use opte::engine::headers::IpCidr;
+use opte::engine::ioctl::{self as api, SetXdeUnderlayReq, SnatCfg};
+use opte::engine::ip4::Ipv4Addr;
+use opte::engine::ip6::Ipv6Addr;
+use opte::engine::packet::{Initialized, Packet, ParseError, Parsed};
+use opte::engine::port::{Active, Port, ProcessResult};
+use opte::engine::sync::{KMutex, KMutexType};
+use opte::engine::sync::{KRwLock, KRwLockType};
+use opte::engine::time::{Interval, Moment, Periodic};
 use opte::oxide_net::firewall::{AddFwRuleReq, RemFwRuleReq};
 use opte::oxide_net::{overlay, router, PortCfg};
-use opte::packet::{Initialized, Packet, ParseError, Parsed};
-use opte::port::{Active, Port, ProcessResult};
-use opte::sync::{KMutex, KMutexType};
-use opte::sync::{KRwLock, KRwLockType};
-use opte::time::{Interval, Moment, Periodic};
-use opte::{CStr, CString, Direction, ExecCtx};
+use opte::{CStr, CString, ExecCtx};
 
 /// The name of this driver.
 const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
@@ -1004,9 +1005,9 @@ unsafe extern "C" fn xde_mc_unicst(
 }
 
 fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
-    use opte::rule::flow_id_sdt_arg;
+    use opte::engine::rule::flow_id_sdt_arg;
 
-    let fid = opte::layer::InnerFlowId::from(pkt.meta());
+    let fid = opte::engine::layer::InnerFlowId::from(pkt.meta());
     let fid_arg = flow_id_sdt_arg::from(&fid);
 
     unsafe {

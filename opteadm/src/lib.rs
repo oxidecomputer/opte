@@ -8,7 +8,7 @@ use opte::api::{
     AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, MacAddr, NoResp,
     OpteCmd, SetVirt2PhysReq, Vni,
 };
-use opte::ioctl::{self as api, SetXdeUnderlayReq};
+use opte::engine::ioctl::{self as api, SetXdeUnderlayReq};
 use opte::oxide_net::firewall::{AddFwRuleReq, FirewallRule, RemFwRuleReq};
 use opte::oxide_net::overlay;
 use opte_ioctl::{run_cmd_ioctl, Error};

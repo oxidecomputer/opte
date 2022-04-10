@@ -16,19 +16,19 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{Ipv4Addr, OpteError};
-use crate::ether::ETHER_TYPE_ARP;
-use crate::headers::DYNAMIC_PORT;
-use crate::ip4::{Ipv4Cidr, Protocol};
-use crate::layer::{InnerFlowId, Layer};
-use crate::port::meta::Meta;
-use crate::port::{self, Port, Pos};
-use crate::rule::{
+use crate::api::{Direction, Ipv4Addr, OpteError};
+use crate::engine::ether::ETHER_TYPE_ARP;
+use crate::engine::headers::DYNAMIC_PORT;
+use crate::engine::ip4::{Ipv4Cidr, Protocol};
+use crate::engine::layer::{InnerFlowId, Layer};
+use crate::engine::port::meta::Meta;
+use crate::engine::port::{self, Port, Pos};
+use crate::engine::rule::{
     self, EtherTypeMatch, Identity, IdentityDesc, IpProtoMatch, Ipv4AddrMatch,
     PortMatch, Predicate, Rule, StatefulAction,
 };
-use crate::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
-use crate::{Direction, ParseErr, ParseResult};
+use crate::engine::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
+use crate::engine::{ParseErr, ParseResult};
 
 pub const FW_LAYER_NAME: &'static str = "firewall";
 

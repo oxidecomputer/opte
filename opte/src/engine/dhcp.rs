@@ -13,8 +13,8 @@ cfg_if! {
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use super::ip4::Ipv4Cidr;
 use crate::api::Ipv4Addr;
-use crate::ip4::Ipv4Cidr;
 
 /// The DHCP message type.
 ///

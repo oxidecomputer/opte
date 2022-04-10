@@ -17,12 +17,12 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-use crate::api;
-use crate::headers::{
+use super::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
     RawHeader,
 };
-use crate::packet::{PacketRead, ReadErr, WriteError};
+use super::packet::{PacketRead, ReadErr, WriteError};
+use crate::api;
 
 pub const ETHER_TYPE_ETHER: u16 = 0x6558;
 pub const ETHER_TYPE_IPV4: u16 = 0x0800;

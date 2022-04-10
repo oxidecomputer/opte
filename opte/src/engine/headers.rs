@@ -11,13 +11,13 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::LayoutVerified;
 
+use super::checksum::Checksum;
+use super::ip4::{Ipv4Hdr, Ipv4Meta, Ipv4MetaOpt, IPV4_HDR_SZ};
+use super::ip6::{Ipv6Hdr, Ipv6Meta, Ipv6MetaOpt, IPV6_HDR_SZ};
+use super::packet::{PacketRead, ReadErr, WriteError};
+use super::tcp::{TcpHdr, TcpMeta, TcpMetaOpt};
+use super::udp::{UdpHdr, UdpMeta, UdpMetaOpt};
 pub use crate::api::{IpAddr, IpCidr};
-use crate::checksum::Checksum;
-use crate::ip4::{Ipv4Hdr, Ipv4Meta, Ipv4MetaOpt, IPV4_HDR_SZ};
-use crate::ip6::{Ipv6Hdr, Ipv6Meta, Ipv6MetaOpt, IPV6_HDR_SZ};
-use crate::packet::{PacketRead, ReadErr, WriteError};
-use crate::tcp::{TcpHdr, TcpMeta, TcpMetaOpt};
-use crate::udp::{UdpHdr, UdpMeta, UdpMetaOpt};
 
 /// Port 0 is reserved by the sockets layer. It is used by clients to
 /// indicate they want the operating system to choose a port on their
@@ -113,15 +113,15 @@ macro_rules! assert_ip {
     ($left:expr, $right:expr) => {
         match ($left, $right) {
             (
-                Some($crate::headers::IpHdr::Ip4(ip4_left)),
-                Some($crate::headers::IpHdr::Ip4(ip4_right)),
+                Some($crate::engine::headers::IpHdr::Ip4(ip4_left)),
+                Some($crate::engine::headers::IpHdr::Ip4(ip4_right)),
             ) => {
                 assert_ip4!(ip4_left, ip4_right);
             }
 
             (
-                Some($crate::headers::IpHdr::Ip6(ip6_left)),
-                Some($crate::headers::IpHdr::Ip6(ip6_right)),
+                Some($crate::engine::headers::IpHdr::Ip6(ip6_left)),
+                Some($crate::engine::headers::IpHdr::Ip6(ip6_right)),
             ) => {
                 assert_ip6!(ip6_left, ip6_right);
             }
@@ -295,15 +295,15 @@ macro_rules! assert_ulp {
     ($left:expr, $right:expr) => {
         match ($left, $right) {
             (
-                Some($crate::headers::UlpHdr::Tcp(tcp_left)),
-                Some($crate::headers::UlpHdr::Tcp(tcp_right)),
+                Some($crate::engine::headers::UlpHdr::Tcp(tcp_left)),
+                Some($crate::engine::headers::UlpHdr::Tcp(tcp_right)),
             ) => {
                 assert_tcp!(tcp_left, tcp_right);
             }
 
             (
-                Some($crate::headers::UlpHdr::Udp(udp_left)),
-                Some($crate::headers::UlpHdr::Udp(udp_right)),
+                Some($crate::engine::headers::UlpHdr::Udp(udp_left)),
+                Some($crate::engine::headers::UlpHdr::Udp(udp_right)),
             ) => {
                 assert_udp!(udp_left, udp_right);
             }

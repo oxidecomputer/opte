@@ -4,15 +4,16 @@ cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::String;
         use illumos_ddi_dki::uintptr_t;
-        use crate::rule::flow_id_sdt_arg;
+        use super::rule::flow_id_sdt_arg;
     } else {
         use std::string::String;
     }
 }
 
-use crate::layer::InnerFlowId;
-use crate::tcp::{TcpFlags, TcpMeta, TcpState};
-use crate::{CString, Direction};
+use super::layer::InnerFlowId;
+use super::tcp::{TcpFlags, TcpMeta, TcpState};
+use crate::api::Direction;
+use crate::CString;
 
 /// Tracks TCP-specific flow state. Specifically it tracks which TCP
 /// state the flow is currently in as well as the seq/ack values in

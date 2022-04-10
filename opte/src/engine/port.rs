@@ -6,7 +6,7 @@ cfg_if! {
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
-        use crate::rule::flow_id_sdt_arg;
+        use super::rule::flow_id_sdt_arg;
         use illumos_ddi_dki::uintptr_t;
     } else {
         use std::string::{String, ToString};
@@ -15,20 +15,20 @@ cfg_if! {
     }
 }
 
-use crate::api::OpteError;
-use crate::ether::EtherAddr;
-use crate::flow_table::{FlowTable, StateSummary};
-use crate::ioctl;
-use crate::layer::{
+use super::ether::EtherAddr;
+use super::flow_table::{FlowTable, StateSummary};
+use super::ioctl;
+use super::layer::{
     InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT,
 };
-use crate::packet::{Initialized, Packet, PacketMeta, PacketState, Parsed};
-use crate::rule::{ht_probe, Action, Finalized, Rule, HT};
-use crate::sync::{KMutex, KMutexType};
-use crate::tcp::TcpState;
-use crate::tcp_state::TcpFlowState;
-use crate::time::Moment;
-use crate::{CString, Direction, ExecCtx};
+use super::packet::{Initialized, Packet, PacketMeta, PacketState, Parsed};
+use super::rule::{ht_probe, Action, Finalized, Rule, HT};
+use super::sync::{KMutex, KMutexType};
+use super::tcp::TcpState;
+use super::tcp_state::TcpFlowState;
+use super::time::Moment;
+use crate::api::{Direction, OpteError};
+use crate::{CString, ExecCtx};
 
 pub const UFT_DEF_MAX_ENTIRES: u32 = 8192;
 
@@ -37,11 +37,11 @@ pub type Result<T> = result::Result<T, OpteError>;
 #[derive(Debug)]
 pub enum ProcessError {
     Layer(LayerError),
-    WriteError(crate::packet::WriteError),
+    WriteError(super::packet::WriteError),
 }
 
-impl From<crate::packet::WriteError> for ProcessError {
-    fn from(e: crate::packet::WriteError) -> Self {
+impl From<super::packet::WriteError> for ProcessError {
+    fn from(e: super::packet::WriteError) -> Self {
         Self::WriteError(e)
     }
 }
@@ -403,10 +403,10 @@ impl Port<Active> {
         pkt: &mut Packet<Parsed>,
         ifid: &InnerFlowId,
     ) -> ! {
-        crate::dbg(format!("mblk: {}", pkt.mblk_ptr_str()));
-        crate::dbg(format!("ifid: {}", ifid));
-        // crate::dbg(format!("meta: {:?}", meta));
-        crate::dbg(format!("flows: {:?}", *self.state.tcp_flows.lock(),));
+        super::dbg(format!("mblk: {}", pkt.mblk_ptr_str()));
+        super::dbg(format!("ifid: {}", ifid));
+        // super::dbg(format!("meta: {:?}", meta));
+        super::dbg(format!("flows: {:?}", *self.state.tcp_flows.lock(),));
         todo!("bad packet: {}", msg);
     }
 

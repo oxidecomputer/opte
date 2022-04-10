@@ -17,19 +17,19 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::Ipv4Addr;
-use crate::flow_table::FlowTable;
-use crate::headers::{IpAddr, IpMeta, UlpMeta};
-use crate::ioctl;
-use crate::ip4::{self, Protocol};
-use crate::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
-use crate::port::meta::Meta;
-use crate::rule::{
+use super::flow_table::FlowTable;
+use super::headers::{IpAddr, IpMeta, UlpMeta};
+use super::ioctl;
+use super::ip4::{self, Protocol};
+use super::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
+use super::port::meta::Meta;
+use super::rule::{
     self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, Rule, RuleDump, HT,
 };
-use crate::sync::{KMutex, KMutexType};
-use crate::time::Moment;
-use crate::{CString, Direction, ExecCtx, LogLevel};
+use super::sync::{KMutex, KMutexType};
+use super::time::Moment;
+use crate::api::{Direction, Ipv4Addr};
+use crate::{CString, ExecCtx, LogLevel};
 
 use illumos_ddi_dki::c_char;
 
@@ -1097,11 +1097,11 @@ pub struct rule_no_match_sdt_arg {
 
 #[test]
 fn find_rule() {
-    use crate::headers::{IpMeta, UlpMeta};
-    use crate::ip4::Ipv4Meta;
-    use crate::packet::{MetaGroup, PacketReader};
-    use crate::rule::{self, Ipv4AddrMatch, Predicate};
-    use crate::tcp::TcpMeta;
+    use super::headers::{IpMeta, UlpMeta};
+    use super::ip4::Ipv4Meta;
+    use super::packet::{MetaGroup, PacketReader};
+    use super::rule::{self, Ipv4AddrMatch, Predicate};
+    use super::tcp::TcpMeta;
 
     let mut rule_table = RuleTable::new("port", "test", Direction::Out);
     let rule = Rule::new(

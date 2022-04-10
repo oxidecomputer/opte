@@ -25,3 +25,11 @@ pub use oxide_vpc::*;
 /// NOTE: XXX This method of catching version mismatches is currently
 /// soft; better ideas are welcome.
 pub const API_VERSION: u64 = 3;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum Direction {
+    In,
+    Out,
+}

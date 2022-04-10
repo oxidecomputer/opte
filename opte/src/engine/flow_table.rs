@@ -6,7 +6,7 @@ cfg_if! {
         use alloc::string::{String, ToString};
         use alloc::vec::Vec;
         use illumos_ddi_dki::uintptr_t;
-        use crate::rule::flow_id_sdt_arg;
+        use super::rule::flow_id_sdt_arg;
     } else {
         use std::collections::BTreeMap;
         use std::string::{String, ToString};
@@ -16,9 +16,9 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
+use super::layer::InnerFlowId;
+use super::time::{Moment, MILLIS};
 use crate::api::OpteError;
-use crate::layer::InnerFlowId;
-use crate::time::{Moment, MILLIS};
 use crate::CString;
 
 // XXX This really shouldn't be pub but for now we are leaking this
@@ -261,8 +261,8 @@ impl StateSummary for () {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::headers::IpAddr;
-    use crate::ip4::Protocol;
+    use crate::engine::headers::IpAddr;
+    use crate::engine::ip4::Protocol;
     use core::time::Duration;
 
     #[test]

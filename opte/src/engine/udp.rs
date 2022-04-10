@@ -12,12 +12,12 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-use crate::checksum::{Checksum, HeaderChecksum};
-use crate::headers::{
+use crate::engine::checksum::{Checksum, HeaderChecksum};
+use crate::engine::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
     RawHeader, UlpHdr, UlpMeta, UlpMetaModify, UlpMetaOpt, DYNAMIC_PORT,
 };
-use crate::packet::{PacketRead, ReadErr, WriteError};
+use crate::engine::packet::{PacketRead, ReadErr, WriteError};
 
 pub const UDP_HDR_CSUM_OFF: usize = 6;
 pub const UDP_HDR_SZ: usize = mem::size_of::<UdpHdrRaw>();

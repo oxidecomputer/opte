@@ -13,14 +13,14 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-pub use crate::api::{Ipv6Addr, Ipv6Cidr};
-use crate::checksum::Checksum;
-use crate::headers::{
+use super::checksum::Checksum;
+use super::headers::{
     Header, HeaderAction, IpMeta, IpMetaOpt, ModActionArg, PushActionArg,
     RawHeader,
 };
-use crate::ip4::Protocol;
-use crate::packet::{PacketRead, ReadErr, WriteError};
+use super::ip4::Protocol;
+use super::packet::{PacketRead, ReadErr, WriteError};
+pub use crate::api::{Ipv6Addr, Ipv6Cidr};
 
 pub const IPV6_HDR_VSN_MASK: u8 = 0xF0;
 pub const IPV6_HDR_VSN_SHIFT: u8 = 4;

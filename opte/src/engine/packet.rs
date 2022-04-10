@@ -28,17 +28,17 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use crate::arp::{ArpHdr, ArpHdrError, ArpMeta, ARP_HDR_SZ};
-use crate::checksum::{Checksum, HeaderChecksum};
-use crate::ether::{
+use super::arp::{ArpHdr, ArpHdrError, ArpMeta, ARP_HDR_SZ};
+use super::checksum::{Checksum, HeaderChecksum};
+use super::ether::{
     EtherHdr, EtherHdrError, EtherMeta, EtherType, ETHER_HDR_SZ,
 };
-use crate::geneve::{GeneveHdr, GeneveHdrError, GeneveMeta, GENEVE_HDR_SZ};
-use crate::headers::{Header, IpHdr, IpMeta, UlpHdr, UlpMeta};
-use crate::ip4::{Ipv4Hdr, Ipv4HdrError, Ipv4Meta, Protocol, IPV4_HDR_SZ};
-use crate::ip6::{Ipv6Hdr, Ipv6HdrError, Ipv6Meta, IPV6_HDR_SZ};
-use crate::tcp::{TcpHdr, TcpHdrError, TcpMeta};
-use crate::udp::{UdpHdr, UdpHdrError, UdpMeta, UDP_HDR_SZ};
+use super::geneve::{GeneveHdr, GeneveHdrError, GeneveMeta, GENEVE_HDR_SZ};
+use super::headers::{Header, IpHdr, IpMeta, UlpHdr, UlpMeta};
+use super::ip4::{Ipv4Hdr, Ipv4HdrError, Ipv4Meta, Protocol, IPV4_HDR_SZ};
+use super::ip6::{Ipv6Hdr, Ipv6HdrError, Ipv6Meta, IPV6_HDR_SZ};
+use super::tcp::{TcpHdr, TcpHdrError, TcpMeta};
+use super::udp::{UdpHdr, UdpHdrError, UdpMeta, UDP_HDR_SZ};
 
 use illumos_ddi_dki::{c_uchar, dblk_t, mblk_t, uintptr_t};
 
@@ -891,7 +891,7 @@ impl Packet<Initialized> {
         hg: &mut HeaderGroup,
         offsets: &mut HeaderGroupOffsets,
     ) -> Result<(), ParseError> {
-        use crate::geneve::GENEVE_PORT;
+        use super::geneve::GENEVE_PORT;
 
         let udp = UdpHdr::parse(rdr)?;
         let dport = udp.dst_port();
@@ -1392,7 +1392,7 @@ impl Packet<Parsed> {
                         let ip = self.state.headers.inner.ip.as_ref().unwrap();
                         let tcp_off = self.state.hdr_offsets.inner.ulp.unwrap();
                         let csum_off =
-                            tcp_off.seg_pos + crate::tcp::TCP_HDR_CSUM_OFF;
+                            tcp_off.seg_pos + super::tcp::TCP_HDR_CSUM_OFF;
                         self.segs[0]
                             .write(&[0; 2], WritePos::Modify(csum_off as u16))
                             .unwrap();
@@ -1417,7 +1417,7 @@ impl Packet<Parsed> {
                             let udp_off =
                                 self.state.hdr_offsets.inner.ulp.unwrap();
                             let csum_off =
-                                udp_off.seg_pos + crate::udp::UDP_HDR_CSUM_OFF;
+                                udp_off.seg_pos + super::udp::UDP_HDR_CSUM_OFF;
                             self.segs[0]
                                 .write(
                                     &[0; 2],
@@ -2294,8 +2294,8 @@ fn mock_freeb(mp: *mut mblk_t) {
 mod test {
     use super::*;
 
-    use crate::ether::ETHER_TYPE_IPV4;
-    use crate::tcp::{TcpFlags, TCP_HDR_SZ};
+    use crate::engine::ether::ETHER_TYPE_IPV4;
+    use crate::engine::tcp::{TcpFlags, TCP_HDR_SZ};
 
     const SRC_MAC: [u8; 6] = [0xa8, 0x40, 0x25, 0x00, 0x00, 0x63];
     const DST_MAC: [u8; 6] = [0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d];

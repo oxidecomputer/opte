@@ -15,14 +15,13 @@ cfg_if! {
     }
 }
 
-use crate::api::Ipv4Addr;
-use crate::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
-use crate::ip4::Ipv4Meta;
-use crate::layer::InnerFlowId;
-use crate::port::meta::Meta;
-use crate::rule::{self, ActionDesc, ResourceError, StatefulAction, HT};
-use crate::sync::{KMutex, KMutexType};
-use crate::Direction;
+use super::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
+use super::ip4::Ipv4Meta;
+use super::layer::InnerFlowId;
+use super::port::meta::Meta;
+use super::rule::{self, ActionDesc, ResourceError, StatefulAction, HT};
+use super::sync::{KMutex, KMutexType};
+use crate::api::{Direction, Ipv4Addr};
 
 pub struct NatPool {
     // Map private IP to public IP + free list of ports
@@ -197,113 +196,120 @@ impl ActionDesc for DynNat4Desc {
     }
 }
 
-#[test]
-fn dyn_nat4_ht() {
-    use crate::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV4};
-    use crate::headers::{IpMeta, UlpMeta};
-    use crate::ip4::Protocol;
-    use crate::packet::{MetaGroup, PacketMeta};
+#[cfg(test)]
+mod test {
+    use super::*;
 
-    use crate::tcp::TcpMeta;
+    #[test]
+    fn dyn_nat4_ht() {
+        use crate::engine::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV4};
+        use crate::engine::headers::{IpMeta, UlpMeta};
+        use crate::engine::ip4::Protocol;
+        use crate::engine::packet::{MetaGroup, PacketMeta};
+        use crate::engine::tcp::TcpMeta;
 
-    let priv_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
-    let dest_mac = EtherAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
-    let priv_ip = "10.0.0.220".parse().unwrap();
-    let priv_port = "4999".parse().unwrap();
-    let pub_ip = "52.10.128.69".parse().unwrap();
-    let pub_port = "8765".parse().unwrap();
-    let outside_ip = "76.76.21.21".parse().unwrap();
+        let priv_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
+        let dest_mac = EtherAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
+        let priv_ip = "10.0.0.220".parse().unwrap();
+        let priv_port = "4999".parse().unwrap();
+        let pub_ip = "52.10.128.69".parse().unwrap();
+        let pub_port = "8765".parse().unwrap();
+        let outside_ip = "76.76.21.21".parse().unwrap();
 
-    let nat = DynNat4Desc { pub_ip, pub_port, priv_ip, priv_port };
+        let nat = DynNat4Desc { pub_ip, pub_port, priv_ip, priv_port };
 
-    // TODO test in_ht
-    let out_ht = nat.gen_ht(Direction::Out);
+        // TODO test in_ht
+        let out_ht = nat.gen_ht(Direction::Out);
 
-    let ether =
-        EtherMeta { src: priv_mac, dst: dest_mac, ether_type: ETHER_TYPE_IPV4 };
-    let ip = IpMeta::from(Ipv4Meta {
-        src: priv_ip,
-        dst: outside_ip,
-        proto: Protocol::TCP,
-    });
-    let ulp = UlpMeta::from(TcpMeta {
-        src: priv_port,
-        dst: 80,
-        flags: 0,
-        seq: 0,
-        ack: 0,
-    });
+        let ether = EtherMeta {
+            src: priv_mac,
+            dst: dest_mac,
+            ether_type: ETHER_TYPE_IPV4,
+        };
+        let ip = IpMeta::from(Ipv4Meta {
+            src: priv_ip,
+            dst: outside_ip,
+            proto: Protocol::TCP,
+        });
+        let ulp = UlpMeta::from(TcpMeta {
+            src: priv_port,
+            dst: 80,
+            flags: 0,
+            seq: 0,
+            ack: 0,
+        });
 
-    let mut meta = PacketMeta {
-        outer: Default::default(),
-        inner: MetaGroup {
-            ether: Some(ether),
-            ip: Some(ip),
-            ulp: Some(ulp),
-            ..Default::default()
-        },
-    };
+        let mut meta = PacketMeta {
+            outer: Default::default(),
+            inner: MetaGroup {
+                ether: Some(ether),
+                ip: Some(ip),
+                ulp: Some(ulp),
+                ..Default::default()
+            },
+        };
 
-    let ether_meta = meta.inner.ether.as_ref().unwrap();
-    assert_eq!(ether_meta.src, priv_mac);
-    assert_eq!(ether_meta.dst, dest_mac);
+        let ether_meta = meta.inner.ether.as_ref().unwrap();
+        assert_eq!(ether_meta.src, priv_mac);
+        assert_eq!(ether_meta.dst, dest_mac);
 
-    out_ht.run(&mut meta);
+        out_ht.run(&mut meta);
 
-    let ether_meta = meta.inner.ether.as_ref().unwrap();
-    assert_eq!(ether_meta.dst, dest_mac);
+        let ether_meta = meta.inner.ether.as_ref().unwrap();
+        assert_eq!(ether_meta.dst, dest_mac);
 
-    let ip4_meta = match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip4(v) => v,
-        _ => panic!("expect Ipv4Meta"),
-    };
+        let ip4_meta = match meta.inner.ip.as_ref().unwrap() {
+            IpMeta::Ip4(v) => v,
+            _ => panic!("expect Ipv4Meta"),
+        };
 
-    assert_eq!(ip4_meta.src, pub_ip);
-    assert_eq!(ip4_meta.dst, outside_ip);
-    assert_eq!(ip4_meta.proto, Protocol::TCP);
+        assert_eq!(ip4_meta.src, pub_ip);
+        assert_eq!(ip4_meta.dst, outside_ip);
+        assert_eq!(ip4_meta.proto, Protocol::TCP);
 
-    let tcp_meta = match meta.inner.ulp.as_ref().unwrap() {
-        UlpMeta::Tcp(v) => v,
-        _ => panic!("expect TcpMeta"),
-    };
+        let tcp_meta = match meta.inner.ulp.as_ref().unwrap() {
+            UlpMeta::Tcp(v) => v,
+            _ => panic!("expect TcpMeta"),
+        };
 
-    assert_eq!(tcp_meta.src, 8765);
-    assert_eq!(tcp_meta.dst, 80);
-    assert_eq!(tcp_meta.flags, 0);
-}
+        assert_eq!(tcp_meta.src, 8765);
+        assert_eq!(tcp_meta.dst, 80);
+        assert_eq!(tcp_meta.flags, 0);
+    }
 
-#[test]
-fn nat_mappings() {
-    let mut pool = NatPool::new();
-    let priv1 = "192.168.2.8".parse::<Ipv4Addr>().unwrap();
-    let priv2 = "192.168.2.33".parse::<Ipv4Addr>().unwrap();
-    let public = "52.10.128.69".parse().unwrap();
+    #[test]
+    fn nat_mappings() {
+        let mut pool = NatPool::new();
+        let priv1 = "192.168.2.8".parse::<Ipv4Addr>().unwrap();
+        let priv2 = "192.168.2.33".parse::<Ipv4Addr>().unwrap();
+        let public = "52.10.128.69".parse().unwrap();
 
-    pool.add(priv1, public, 1025..4096);
-    pool.add(priv2, public, 4096..8192);
+        pool.add(priv1, public, 1025..4096);
+        pool.add(priv2, public, 4096..8192);
 
-    assert_eq!(pool.num_avail(priv1).unwrap(), 3071);
-    let (mip1, mport1) = match pool.obtain(priv1) {
-        Ok((ip, port)) => (ip, port),
-        _ => panic!("failed to obtain mapping"),
-    };
-    assert_eq!(pool.num_avail(priv1).unwrap(), 3070);
-    assert_eq!(mip1, public);
-    assert!(mport1 >= 1025);
-    assert!(mport1 < 4096);
+        assert_eq!(pool.num_avail(priv1).unwrap(), 3071);
+        let (mip1, mport1) = match pool.obtain(priv1) {
+            Ok((ip, port)) => (ip, port),
+            _ => panic!("failed to obtain mapping"),
+        };
+        assert_eq!(pool.num_avail(priv1).unwrap(), 3070);
+        assert_eq!(mip1, public);
+        assert!(mport1 >= 1025);
+        assert!(mport1 < 4096);
 
-    assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
-    let (mip2, mport2) = match pool.obtain(priv2) {
-        Ok((ip, port)) => (ip, port),
-        _ => panic!("failed to obtain mapping"),
-    };
-    assert_eq!(pool.num_avail(priv2).unwrap(), 4095);
-    assert_eq!(mip2, public);
-    assert!(mport2 >= 4096);
-    assert!(mport2 < 8192);
+        assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
+        let (mip2, mport2) = match pool.obtain(priv2) {
+            Ok((ip, port)) => (ip, port),
+            _ => panic!("failed to obtain mapping"),
+        };
+        assert_eq!(pool.num_avail(priv2).unwrap(), 4095);
+        assert_eq!(mip2, public);
+        assert!(mport2 >= 4096);
+        assert!(mport2 < 8192);
 
-    pool.release(priv1, (mip1, mport1));
-    assert_eq!(pool.num_avail(priv1).unwrap(), 3071);
-    pool.release(priv2, (mip2, mport2));
-    assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
+        pool.release(priv1, (mip1, mport1));
+        assert_eq!(pool.num_avail(priv1).unwrap(), 3071);
+        pool.release(priv2, (mip2, mport2));
+        assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
+    }
 }

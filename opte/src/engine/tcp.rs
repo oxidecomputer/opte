@@ -13,12 +13,12 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-use crate::checksum::{Checksum, HeaderChecksum};
-use crate::headers::{
+use super::checksum::{Checksum, HeaderChecksum};
+use super::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
     RawHeader, UlpHdr, UlpMetaModify, DYNAMIC_PORT,
 };
-use crate::packet::{PacketRead, ReadErr, WriteError};
+use super::packet::{PacketRead, ReadErr, WriteError};
 
 pub const TCP_HDR_CSUM_OFF: usize = 16;
 pub const TCP_HDR_OFFSET_MASK: u8 = 0xF0;

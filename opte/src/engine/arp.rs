@@ -21,17 +21,17 @@ use serde::{Deserialize, Serialize};
 
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-use crate::api::Ipv4Addr;
-use crate::ether::{
+use super::ether::{
     EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ, ETHER_TYPE_ARP,
     ETHER_TYPE_IPV4,
 };
-use crate::headers::{Header, RawHeader};
-use crate::packet::{
+use super::headers::{Header, RawHeader};
+use super::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, PacketWriter,
     Parsed, ReadErr, WriteError,
 };
-use crate::rule::{GenResult, HairpinAction, Payload};
+use super::rule::{GenResult, HairpinAction, Payload};
+use crate::api::Ipv4Addr;
 
 pub const ARP_HTYPE_ETHERNET: u16 = 1;
 
@@ -185,7 +185,7 @@ impl TryFrom<&LayoutVerified<&[u8], ArpHdrRaw>> for ArpHdr {
 
         let ptype = u16::from_be_bytes(raw.ptype);
 
-        if ptype != crate::ether::ETHER_TYPE_IPV4 {
+        if ptype != super::ether::ETHER_TYPE_IPV4 {
             return Err(Self::Error::UnexpectedProtoType { ptype });
         }
 

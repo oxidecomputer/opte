@@ -16,9 +16,9 @@
 //! Architecture](https://rfd.shared.oxide.computer/rfd/0063)
 use core::ops::Range;
 
-use crate::api::Ipv4Addr;
-use crate::ether::EtherAddr;
-use crate::vpc::VpcSubnet4;
+use crate::engine::ether::EtherAddr;
+use crate::engine::ip4::Ipv4Addr;
+use crate::engine::vpc::VpcSubnet4;
 
 pub mod arp;
 pub mod dhcp4;

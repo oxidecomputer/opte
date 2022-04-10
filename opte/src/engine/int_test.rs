@@ -26,26 +26,27 @@ use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 
 use zerocopy::AsBytes;
 
-use crate::arp::{ArpEth4Payload, ArpEth4PayloadRaw, ArpHdrRaw, ARP_HDR_SZ};
-use crate::ether::{
+use super::arp::{ArpEth4Payload, ArpEth4PayloadRaw, ArpHdrRaw, ARP_HDR_SZ};
+use super::ether::{
     self, EtherAddr, EtherHdr, EtherHdrRaw, EtherMeta, EtherType, ETHER_HDR_SZ,
     ETHER_TYPE_ARP, ETHER_TYPE_IPV4,
 };
-use crate::flow_table::FLOW_DEF_EXPIRE_SECS;
-use crate::geneve::{self, Vni};
-use crate::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
-use crate::ip4::{self, Ipv4Hdr, Ipv4HdrRaw, Ipv4Meta, Protocol};
-use crate::ip6::Ipv6Addr;
-use crate::oxide_net::overlay::{self, OverlayCfg, PhysNet, Virt2Phys};
-use crate::oxide_net::{self, arp, dyn_nat4, firewall, icmp, router};
-use crate::packet::{
+use super::flow_table::FLOW_DEF_EXPIRE_SECS;
+use super::geneve::{self, Vni};
+use super::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
+use super::ip4::{self, Ipv4Hdr, Ipv4HdrRaw, Ipv4Meta, Protocol};
+use super::ip6::Ipv6Addr;
+use super::packet::{
     Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
 };
-use crate::port::{Inactive, Port, ProcessResult};
-use crate::tcp::TcpHdr;
-use crate::time::Moment;
-use crate::udp::{UdpHdr, UdpHdrRaw, UdpMeta};
-use crate::{Direction::*, ExecCtx};
+use super::port::{Inactive, Port, ProcessResult};
+use super::tcp::TcpHdr;
+use super::time::Moment;
+use super::udp::{UdpHdr, UdpHdrRaw, UdpMeta};
+use crate::api::Direction::*;
+use crate::oxide_net::overlay::{self, OverlayCfg, PhysNet, Virt2Phys};
+use crate::oxide_net::{self, arp, dyn_nat4, firewall, icmp, router};
+use crate::ExecCtx;
 
 use ProcessResult::*;
 
@@ -340,9 +341,9 @@ fn gateway_icmp4_ping() {
 // packet being dropped.
 #[test]
 fn overlay_guest_to_guest_no_route() {
-    use crate::checksum::HeaderChecksum;
-    use crate::ip4::UlpCsumOpt;
-    use crate::tcp::TcpFlags;
+    use crate::engine::checksum::HeaderChecksum;
+    use crate::engine::ip4::UlpCsumOpt;
+    use crate::engine::tcp::TcpFlags;
 
     // ================================================================
     // Configure ports for g1 and g2.
@@ -428,10 +429,10 @@ fn overlay_guest_to_guest_no_route() {
 // I.e., test routing + encap/decap.
 #[test]
 fn overlay_guest_to_guest() {
-    use crate::checksum::HeaderChecksum;
-    use crate::ip4::UlpCsumOpt;
+    use super::checksum::HeaderChecksum;
+    use super::ip4::UlpCsumOpt;
+    use super::tcp::TcpFlags;
     use crate::oxide_net::router::RouterTarget;
-    use crate::tcp::TcpFlags;
 
     // ================================================================
     // Configure ports for g1 and g2.
@@ -512,7 +513,7 @@ fn overlay_guest_to_guest() {
 
     // Allow incoming TCP connection from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
-    crate::ioctl::add_fw_rule(
+    super::ioctl::add_fw_rule(
         &g2_port,
         &firewall::AddFwRuleReq {
             port_name: g2_port.name().to_string(),
@@ -689,11 +690,11 @@ fn overlay_guest_to_guest() {
 // Verify that a guest can communicate with the internet.
 #[test]
 fn overlay_guest_to_internet() {
-    use crate::checksum::HeaderChecksum;
-    use crate::ip4::UlpCsumOpt;
-    use crate::oxide_net::overlay::{OverlayCfg, PhysNet, Virt2Phys};
+    use super::checksum::HeaderChecksum;
+    use super::ip4::UlpCsumOpt;
+    use super::tcp::TcpFlags;
+    use crate::oxide_net::overlay::{OverlayCfg, PhysNet};
     use crate::oxide_net::router::RouterTarget;
-    use crate::tcp::TcpFlags;
 
     // ================================================================
     // Configure ports for g1 and g2.
@@ -969,8 +970,8 @@ fn dhcp_req() {
 // queries for the gateway.
 #[test]
 fn arp_gateway() {
-    use crate::arp::ArpOp;
-    use crate::ether::ETHER_TYPE_IPV4;
+    use super::arp::ArpOp;
+    use super::ether::ETHER_TYPE_IPV4;
 
     let cfg = g1_cfg();
     let port = oxide_net_setup("arp_hairpin", &cfg).activate();

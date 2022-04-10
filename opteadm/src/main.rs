@@ -4,21 +4,17 @@ use std::process::exit;
 
 use structopt::StructOpt;
 
-use opte::api::{MacAddr, Vni};
-use opte::ether::EtherAddr;
-use opte::flow_table::FlowEntryDump;
-use opte::headers::IpAddr;
-use opte::ioctl::{self as api, PortInfo};
-use opte::ip4::Ipv4Addr;
-use opte::ip6::Ipv6Addr;
-use opte::layer::InnerFlowId;
+use opte::api::{Direction, IpAddr, Ipv4Addr, Ipv6Addr, MacAddr, Vni};
+use opte::engine::ether::EtherAddr;
+use opte::engine::flow_table::FlowEntryDump;
+use opte::engine::ioctl::{self as api, PortInfo};
+use opte::engine::layer::InnerFlowId;
+use opte::engine::rule::RuleDump;
+use opte::engine::vpc::VpcSubnet4;
 use opte::oxide_net::firewall::{
     self, Action, Address, FirewallRule, Ports, ProtoFilter, RemFwRuleReq,
 };
 use opte::oxide_net::overlay;
-use opte::rule::RuleDump;
-use opte::vpc::VpcSubnet4;
-use opte::Direction;
 use opte_ioctl::Error;
 use opteadm::OpteAdm;
 
