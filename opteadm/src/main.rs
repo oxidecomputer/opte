@@ -408,7 +408,7 @@ fn print_v2p_ip4((src, phys): (&Ipv4Addr, &overlay::PhysNet)) {
     let eth = format!("{}", phys.ether);
     println!(
         "{:<24} {:<8} {:<17} {}",
-        std::net::Ipv4Addr::from(src.to_be_bytes()),
+        std::net::Ipv4Addr::from(src.bytes()),
         phys.vni,
         eth,
         std::net::Ipv6Addr::from(phys.ip.to_bytes()),

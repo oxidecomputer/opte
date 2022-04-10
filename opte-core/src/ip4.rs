@@ -3,14 +3,13 @@ use core::fmt::{self, Debug, Display};
 use core::mem;
 use core::num::ParseIntError;
 use core::result;
-use core::str::FromStr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::{String, ToString};
+        use alloc::string::String;
         use alloc::vec::Vec;
     } else {
-        use std::string::{String, ToString};
+        use std::string::String;
         use std::vec::Vec;
     }
 }
@@ -20,7 +19,7 @@ use heapless::Vec as FVec;
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-use crate::api as api;
+pub use crate::api::{Ipv4Addr, Ipv4Cidr, IPV4_ANY_ADDR, IPV4_LOCAL_BCAST};
 use crate::checksum::{Checksum, HeaderChecksum};
 use crate::headers::{
     Header, HeaderAction, HeaderActionModify, IpMeta, IpMetaOpt, ModActionArg,
@@ -37,9 +36,6 @@ pub const IPV4_HDR_VER_SHIFT: u8 = 4;
 pub const IPV4_HDR_SZ: usize = mem::size_of::<Ipv4HdrRaw>();
 pub const IPV4_VERSION: u8 = 4;
 
-pub const ANY_ADDR: Ipv4Addr = Ipv4Addr::new([0; 4]);
-pub const LOCAL_BROADCAST: Ipv4Addr = Ipv4Addr::new([255; 4]);
-
 pub const DEF_ROUTE: &'static str = "0.0.0.0/0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,11 +46,18 @@ pub enum IpError {
     MalformedInt,
     MalformedIp(String),
     MalformedPrefix(String),
+    Other(String),
 }
 
 impl From<ParseIntError> for IpError {
     fn from(_err: ParseIntError) -> Self {
         IpError::MalformedInt
+    }
+}
+
+impl From<String> for IpError {
+    fn from(err: String) -> Self {
+        IpError::Other(err)
     }
 }
 
@@ -86,6 +89,10 @@ impl Display for IpError {
             MalformedPrefix(prefix) => {
                 write!(f, "malformed prefix: {}", prefix)
             }
+
+            Other(msg) => {
+                write!(f, "{}", msg)
+            }
         }
     }
 }
@@ -96,93 +103,33 @@ impl From<IpError> for String {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Ipv4Cidr {
-    ip: Ipv4Addr,
-    prefix: u8,
-}
-
-impl From<api::Ipv4Cidr> for Ipv4Cidr {
-    fn from(cidr: api::Ipv4Cidr) -> Self {
-        let parts = cidr.parts();
-        // Unwrap: We know the Ipv4Cidr type has already validated
-        // itself.
-        Self::new(parts.0.into(), parts.1).unwrap()
-    }
-}
-
 impl MatchPrefixVal for Ipv4Cidr {}
 
 impl Ipv4Cidr {
-    pub fn get_ip(self) -> Ipv4Addr {
-        self.ip
+    pub fn ip(&self) -> Ipv4Addr {
+        self.parts().0
     }
 
     /// Does this CIDR represent the default route subnet?
     pub fn is_default(&self) -> bool {
-        self.ip == ANY_ADDR && self.prefix == 0
+        let (ip, prefix_len) = self.parts();
+        ip == IPV4_ANY_ADDR && prefix_len.val() == 0
     }
 
-    pub fn prefix(self) -> u8 {
-        self.prefix
+    pub fn prefix_len(self) -> u8 {
+        self.parts().1.val()
     }
 
     /// Is this `ip` a member of the CIDR?
     pub fn is_member(&self, ip: Ipv4Addr) -> bool {
-        ip.mask(self.prefix) == self.ip
+        ip.safe_mask(self.parts().1) == self.ip()
     }
 
-    pub fn new(ip: Ipv4Addr, prefix: u8) -> result::Result<Self, IpError> {
-        // In this case we are only checking that it's a valid CIDR in
-        // the general sense; VPC-specific CIDR enforcement is done by
-        // the VPC types.
-        if prefix > 32 {
-            return Err(IpError::BadPrefix(prefix));
-        }
-
-        let ip = ip.mask(prefix);
-        Ok(Ipv4Cidr { ip, prefix })
-    }
-
-    /// Convert the CIDR into a subnet mask.
+    /// Convert the CIDR prefix length into a subnet mask.
     pub fn to_mask(self) -> Ipv4Addr {
         let mut bits = i32::MIN;
-        bits = bits >> (self.prefix - 1);
-        Ipv4Addr { inner: bits.to_be_bytes() }
-    }
-}
-
-impl Display for Ipv4Cidr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}/{}", self.ip, self.prefix)
-    }
-}
-
-// XXX Still need this until all APIs are moved out of opte-core. In
-// this case the firewall rule parsing code still needs this.
-impl FromStr for Ipv4Cidr {
-    type Err = IpError;
-
-    /// Convert a string like "192.168.2.0/24" into an `Ipv4Cidr`.
-    fn from_str(val: &str) -> result::Result<Self, Self::Err> {
-        let (ip_s, prefix_s) = match val.split_once("/") {
-            Some(v) => v,
-            None => return Err(IpError::MalformedCidr(val.to_string())),
-        };
-
-        let ip = match ip_s.parse() {
-            Ok(v) => v,
-            Err(err) => return Err(err),
-        };
-
-        let prefix = match prefix_s.parse::<u8>() {
-            Ok(v) => v,
-            Err(_) => {
-                return Err(IpError::MalformedPrefix(prefix_s.to_string()));
-            }
-        };
-
-        Ipv4Cidr::new(ip, prefix)
+        bits = bits >> (self.prefix_len() - 1);
+        Ipv4Addr::from(bits.to_be_bytes())
     }
 }
 
@@ -216,53 +163,10 @@ impl Ipv4CidrPrefix {
     }
 }
 
-#[repr(C)]
-#[derive(
-    Clone,
-    Copy,
-    Default,
-    Deserialize,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-)]
-pub struct Ipv4Addr {
-    // These bytes are kept in network order.
-    inner: [u8; 4],
-}
-
 impl MatchExactVal for Ipv4Addr {}
 impl MatchRangeVal for Ipv4Addr {}
 
 impl Ipv4Addr {
-    pub fn iter(&self) -> core::slice::Iter<u8> {
-        (&self.inner).iter()
-    }
-
-    /// Return the address after applying the netmask for the given
-    /// network prefix.
-    pub const fn mask(mut self, net_prefix: u8) -> Self {
-        if net_prefix == 0 {
-            return ANY_ADDR;
-        }
-
-        let mut n = u32::from_be_bytes(self.inner);
-
-        let mut bits = i32::MIN;
-        bits = bits >> (net_prefix - 1);
-        n = n & bits as u32;
-        self.inner = n.to_be_bytes();
-        self
-    }
-
-    /// Create a new `IPv4Addr` from an array of bytes in network order.
-    pub const fn new(bytes: [u8; 4]) -> Self {
-        Self { inner: bytes }
-    }
-
     /// Produce a `u32` which itself is stored in memory in network
     /// order. This is needed for passing this type up to DTrace so
     /// its inet_ntoa() subroutine works.
@@ -270,18 +174,7 @@ impl Ipv4Addr {
         // First we create a native-endian u32 from the network-order
         // bytes, then we convert that to an in-memroy network-order
         // u32.
-        u32::from_be_bytes(self.inner).to_be()
-    }
-
-    /// Return the bytes in network-order.
-    pub fn to_be_bytes(self) -> [u8; 4] {
-        self.inner
-    }
-}
-
-impl From<api::Ipv4Addr> for Ipv4Addr {
-    fn from(ip: api::Ipv4Addr) -> Self {
-        Self::new(ip.bytes())
+        u32::from_be_bytes(self.bytes()).to_be()
     }
 }
 
@@ -289,35 +182,22 @@ pub type Ipv4AddrTuple = (u8, u8, u8, u8);
 
 impl From<Ipv4Addr> for Ipv4AddrTuple {
     fn from(ip: Ipv4Addr) -> Ipv4AddrTuple {
-        let bytes = ip.inner;
+        let bytes = ip.bytes();
         (bytes[0], bytes[1], bytes[2], bytes[3])
-    }
-}
-
-impl From<Ipv4AddrTuple> for Ipv4Addr {
-    fn from(tuple: Ipv4AddrTuple) -> Self {
-        Self::new([tuple.0, tuple.1, tuple.2, tuple.3])
     }
 }
 
 impl From<smoltcp::wire::Ipv4Address> for Ipv4Addr {
     fn from(smolip4: smoltcp::wire::Ipv4Address) -> Self {
         let bytes = smolip4.as_bytes();
-        Self { inner: [bytes[0], bytes[1], bytes[2], bytes[3]] }
+        Self::from([bytes[0], bytes[1], bytes[2], bytes[3]])
     }
 }
 
 impl From<Ipv4Addr> for smoltcp::wire::Ipv4Address {
     fn from(ip: Ipv4Addr) -> Self {
-        Self::from_bytes(&ip.inner)
+        Self::from_bytes(&ip.bytes())
     }
-}
-
-#[test]
-fn ip4_mask() {
-    let ip = "192.168.2.77".parse::<Ipv4Addr>().unwrap();
-    assert_eq!(ip.mask(24), "192.168.2.0".parse().unwrap());
-    assert_eq!(ip.mask(0), "0.0.0.0".parse().unwrap());
 }
 
 #[test]
@@ -326,73 +206,6 @@ fn ip4_addr_to_tuple() {
         Ipv4AddrTuple::from("44.241.36.226".parse::<Ipv4Addr>().unwrap()),
         (44, 241, 36, 226)
     );
-}
-
-impl From<Ipv4Addr> for u32 {
-    fn from(ip: Ipv4Addr) -> u32 {
-        u32::from_be_bytes(ip.inner)
-    }
-}
-
-impl From<u32> for Ipv4Addr {
-    fn from(val: u32) -> Self {
-        Self { inner: val.to_be_bytes() }
-    }
-}
-
-impl FromStr for Ipv4Addr {
-    type Err = IpError;
-
-    fn from_str(val: &str) -> result::Result<Self, Self::Err> {
-        let octets: Vec<u8> = val
-            .split(".")
-            .map(|s| s.parse())
-            .collect::<result::Result<Vec<u8>, _>>()?;
-
-        if octets.len() != 4 {
-            return Err(IpError::MalformedIp(val.to_string()));
-        }
-
-        // At the time of writing there is no TryFrom impl for Vec to
-        // array in the alloc create. Honestly this looks a bit
-        // cleaner anyways.
-        Ok(Self { inner: [octets[0], octets[1], octets[2], octets[3]] })
-    }
-}
-
-#[test]
-fn ipv4_addr_good() {
-    assert_eq!(
-        "192.168.33.10".parse(),
-        Ok(Ipv4Addr { inner: [192, 168, 33, 10] })
-    );
-}
-
-#[test]
-fn ipv4_addr_bad() {
-    assert_eq!("192.168.33.1O".parse::<Ipv4Addr>(), Err(IpError::MalformedInt));
-    assert_eq!(
-        "192.168.33.256".parse::<Ipv4Addr>(),
-        Err(IpError::MalformedInt)
-    );
-}
-
-impl Display for Ipv4Addr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}.{}.{}.{}",
-            self.inner[0], self.inner[1], self.inner[2], self.inner[3],
-        )
-    }
-}
-
-// There's no real reason to view an Ipv4Addr as its raw array, so
-// just present it in a human-friendly manner.
-impl Debug for Ipv4Addr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Ipv4Addr {{ inner: {} }}", self)
-    }
 }
 
 impl MatchExact<Ipv4Addr> for Ipv4Addr {
@@ -412,13 +225,6 @@ fn match_check() {
     let ip = "192.168.2.11".parse::<Ipv4Addr>().unwrap();
     assert!(ip.match_exact(&ip));
     assert!(ip.match_prefix(&"192.168.2.0/24".parse::<Ipv4Cidr>().unwrap()));
-}
-
-#[cfg(any(feature = "std", test))]
-impl From<std::net::Ipv4Addr> for Ipv4Addr {
-    fn from(ip4_std: std::net::Ipv4Addr) -> Self {
-        Ipv4Addr::from(u32::from(ip4_std))
-    }
 }
 
 /// An IP protocol value.
@@ -705,8 +511,8 @@ impl Ipv4Hdr {
     /// Return the pseudo header bytes.
     pub fn pseudo_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(12);
-        bytes.extend_from_slice(&self.src.to_be_bytes());
-        bytes.extend_from_slice(&self.dst.to_be_bytes());
+        bytes.extend_from_slice(&self.src.bytes());
+        bytes.extend_from_slice(&self.dst.bytes());
         let len_bytes = (self.pay_len() as u16).to_be_bytes();
         bytes.extend_from_slice(&[
             0u8,
@@ -745,16 +551,16 @@ impl Ipv4Hdr {
         // XXX Might be nice to have Checksum work on iterator of u8
         // instead, then we could chain slice iterators together.
         let mut old: FVec<u8, 10> = FVec::new();
-        old.extend_from_slice(&self.src.to_be_bytes()).unwrap();
-        old.extend_from_slice(&self.dst.to_be_bytes()).unwrap();
+        old.extend_from_slice(&self.src.bytes()).unwrap();
+        old.extend_from_slice(&self.dst.bytes()).unwrap();
         old.extend_from_slice(&[0, self.proto as u8]).unwrap();
         csum.sub(&old);
         let _ = csum.finalize();
 
         // Add new bytes.
         let mut new: FVec<u8, 10> = FVec::new();
-        new.extend_from_slice(&meta.src.to_be_bytes()).unwrap();
-        new.extend_from_slice(&meta.dst.to_be_bytes()).unwrap();
+        new.extend_from_slice(&meta.src.bytes()).unwrap();
+        new.extend_from_slice(&meta.dst.bytes()).unwrap();
         new.extend_from_slice(&[0, meta.proto as u8]).unwrap();
         csum.add(&new);
 
@@ -929,8 +735,8 @@ impl From<&Ipv4Hdr> for Ipv4HdrRaw {
             ttl: ip4.ttl,
             proto: ip4.proto as u8,
             csum: ip4.csum,
-            src: ip4.src.to_be_bytes(),
-            dst: ip4.dst.to_be_bytes(),
+            src: ip4.src.bytes(),
+            dst: ip4.dst.bytes(),
         }
     }
 }
@@ -938,8 +744,8 @@ impl From<&Ipv4Hdr> for Ipv4HdrRaw {
 impl From<&Ipv4Meta> for Ipv4HdrRaw {
     fn from(meta: &Ipv4Meta) -> Self {
         Ipv4HdrRaw {
-            src: meta.src.to_be_bytes(),
-            dst: meta.dst.to_be_bytes(),
+            src: meta.src.bytes(),
+            dst: meta.dst.bytes(),
             proto: meta.proto as u8,
             ..Default::default()
         }

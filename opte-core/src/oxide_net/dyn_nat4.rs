@@ -54,7 +54,7 @@ pub fn setup(
     // to see if the destination IP belongs to the interface's subnet.
     rule.add_predicate(Predicate::Not(Box::new(Predicate::InnerDstIp4(vec![
         Ipv4AddrMatch::Prefix(cfg.vpc_subnet.cidr()),
-        Ipv4AddrMatch::Exact(ip4::LOCAL_BROADCAST),
+        Ipv4AddrMatch::Exact(ip4::IPV4_LOCAL_BCAST),
     ]))));
     layer.add_rule(Direction::Out, rule.finalize());
     port.add_layer(layer, Pos::After("firewall"))

@@ -172,6 +172,7 @@ cfg_if! {
             MalformedInt,
             MalformedPort,
             MissingField,
+            Other(String),
             UnknownToken(String),
             ValTooLong(String, usize),
         }
@@ -193,6 +194,12 @@ cfg_if! {
         impl From<ParseIntError> for ParseErr {
             fn from(_err: ParseIntError) -> Self {
                 ParseErr::MalformedInt
+            }
+        }
+
+        impl From<String> for ParseErr {
+            fn from(err: String) -> Self {
+                ParseErr::Other(err)
             }
         }
     }

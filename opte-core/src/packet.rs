@@ -2295,14 +2295,13 @@ mod test {
     use super::*;
 
     use crate::ether::ETHER_TYPE_IPV4;
-    use crate::ip4::Ipv4AddrTuple;
     use crate::tcp::{TcpFlags, TCP_HDR_SZ};
 
     const SRC_MAC: [u8; 6] = [0xa8, 0x40, 0x25, 0x00, 0x00, 0x63];
     const DST_MAC: [u8; 6] = [0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d];
 
-    const SRC_IP4: Ipv4AddrTuple = (10, 0, 0, 99);
-    const DST_IP4: Ipv4AddrTuple = (52, 10, 128, 69);
+    const SRC_IP4: [u8; 4] = [10, 0, 0, 99];
+    const DST_IP4: [u8; 4] = [52, 10, 128, 69];
 
     // Verify uninitialized packet.
     #[test]

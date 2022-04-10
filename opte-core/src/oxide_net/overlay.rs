@@ -17,11 +17,11 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{self, CmdOk, OpteError};
+use crate::api::{self, CmdOk, Ipv4Addr, OpteError};
 use crate::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV6};
 use crate::geneve::{GeneveMeta, Vni, GENEVE_PORT};
 use crate::headers::{HeaderAction, IpAddr};
-use crate::ip4::{Ipv4Addr, Protocol};
+use crate::ip4::Protocol;
 use crate::ip6::{Ipv6Addr, Ipv6Meta};
 use crate::layer::{InnerFlowId, Layer};
 use crate::oxide_net::router::RouterTarget;

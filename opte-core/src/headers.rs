@@ -11,9 +11,9 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::LayoutVerified;
 
-use crate::api as api;
+use crate::api::{self, Ipv4Addr};
 use crate::checksum::Checksum;
-use crate::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Ipv4MetaOpt, IPV4_HDR_SZ};
+use crate::ip4::{Ipv4Hdr, Ipv4Meta, Ipv4MetaOpt, IPV4_HDR_SZ};
 use crate::ip6::{Ipv6Addr, Ipv6Hdr, Ipv6Meta, Ipv6MetaOpt, IPV6_HDR_SZ};
 use crate::packet::{PacketRead, ReadErr, WriteError};
 use crate::tcp::{TcpHdr, TcpMeta, TcpMetaOpt};
@@ -581,7 +581,7 @@ impl IpCidr {
 
     pub fn prefix(&self) -> usize {
         match self {
-            Self::Ip4(ip4) => ip4.prefix() as usize,
+            Self::Ip4(ip4) => ip4.prefix_len() as usize,
             Self::Ip6(_) => todo!("IPv6 prefix"),
         }
     }

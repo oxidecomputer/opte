@@ -13,7 +13,8 @@ cfg_if! {
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::ip4::{Ipv4Addr, Ipv4Cidr};
+use crate::api::Ipv4Addr;
+use crate::ip4::Ipv4Cidr;
 
 /// The DHCP message type.
 ///
@@ -155,16 +156,16 @@ impl SubnetRouterPair {
 
     fn encode(&self, bytes: &mut [u8]) {
         let mut pos = 0;
-        bytes[pos] = self.subnet.prefix();
+        bytes[pos] = self.subnet.prefix_len();
         pos += 1;
         let n = self.subnet_encode_len();
-        let subnet_bytes = self.subnet.get_ip().to_be_bytes();
+        let subnet_bytes = self.subnet.ip().bytes();
         for i in 0..n {
             bytes[pos] = subnet_bytes[i as usize];
             pos += 1;
         }
 
-        for b in self.router.to_be_bytes() {
+        for b in self.router.bytes() {
             bytes[pos] = b;
             pos += 1;
         }
@@ -175,7 +176,7 @@ impl SubnetRouterPair {
     }
 
     fn subnet_encode_len(&self) -> u8 {
-        let prefix = self.subnet.prefix();
+        let prefix = self.subnet.prefix_len();
 
         if prefix == 0 {
             0
@@ -253,13 +254,15 @@ mod test {
     #[test]
     fn offlink_encode() {
         let if_ip = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(Ipv4Addr::new([172, 30, 7, 77]), 32).unwrap(),
-            router: Ipv4Addr::new([0, 0, 0, 0]),
+            subnet: Ipv4Cidr::new_checked(Ipv4Addr::from([172, 30, 7, 77]), 32)
+                .unwrap(),
+            router: Ipv4Addr::from([0, 0, 0, 0]),
         };
 
         let gw = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(Ipv4Addr::new([0, 0, 0, 0]), 0).unwrap(),
-            router: Ipv4Addr::new([172, 30, 4, 1]),
+            subnet: Ipv4Cidr::new_checked(Ipv4Addr::from([0, 0, 0, 0]), 0)
+                .unwrap(),
+            router: Ipv4Addr::from([172, 30, 4, 1]),
         };
 
         let opt =
@@ -272,47 +275,67 @@ mod test {
 
     #[test]
     fn rfc3442_encode() {
-        let router = Ipv4Addr::new([10, 0, 0, 1]);
+        let router = Ipv4Addr::from([10, 0, 0, 1]);
 
         let p1 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(Ipv4Addr::new([0, 0, 0, 0]), 0).unwrap(),
+            subnet: Ipv4Cidr::new_checked(
+                Ipv4Addr::from([0, 0, 0, 0]),
+                0
+            ).unwrap(),
             router,
         };
 
         let p2 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 0, 0, 0]), 8).unwrap(),
+            subnet: Ipv4Cidr::new_checked(
+                Ipv4Addr::from([10, 0, 0, 0]),
+                8
+            ).unwrap(),
             router,
         };
 
         let p3 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 0, 0, 0]), 24).unwrap(),
+            subnet: Ipv4Cidr::new_checked(
+                Ipv4Addr::from([10, 0, 0, 0]),
+                24
+            ).unwrap(),
             router,
         };
 
         let p4 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 17, 0, 0]), 16).unwrap(),
+            subnet: Ipv4Cidr::new_checked(
+                Ipv4Addr::from([10, 17, 0, 0]),
+                16
+            ).unwrap(),
             router,
         };
 
         let p5 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 27, 129, 0]), 24).unwrap(),
+            subnet: Ipv4Cidr::new_checked(
+                Ipv4Addr::from([10, 27, 129, 0]),
+                24
+            ).unwrap(),
             router,
         };
 
         let p6 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 229, 0, 128]), 25)
-                .unwrap(),
+            subnet: Ipv4Cidr::new_checked(
+                Ipv4Addr::from([10, 229, 0, 128]),
+                25
+            ).unwrap(),
             router,
         };
 
         let p7 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 198, 122, 47]), 32)
-                .unwrap(),
+            subnet: Ipv4Cidr::new_checked(
+                Ipv4Addr::from([10, 198, 122, 47]),
+                32
+            ).unwrap(),
             router,
         };
 
         let p8 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new(Ipv4Addr::new([10, 16, 0, 0]), 15).unwrap(),
+            subnet: Ipv4Cidr::new_checked(Ipv4Addr::from([10, 16, 0, 0]), 15)
+                .unwrap(),
             router,
         };
 

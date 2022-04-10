@@ -17,10 +17,11 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
+use crate::api::Ipv4Addr;
 use crate::flow_table::FlowTable;
 use crate::headers::{IpAddr, IpMeta, UlpMeta};
 use crate::ioctl;
-use crate::ip4::{Ipv4Addr, Protocol};
+use crate::ip4::{self, Protocol};
 use crate::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
 use crate::port::meta::Meta;
 use crate::rule::{
@@ -784,9 +785,9 @@ impl Layer {
 
 pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     proto: Protocol::Reserved,
-    src_ip: IpAddr::Ip4(Ipv4Addr::new([0; 4])),
+    src_ip: IpAddr::Ip4(ip4::IPV4_ANY_ADDR),
     src_port: 0,
-    dst_ip: IpAddr::Ip4(Ipv4Addr::new([0; 4])),
+    dst_ip: IpAddr::Ip4(ip4::IPV4_ANY_ADDR),
     dst_port: 0,
 };
 
@@ -838,8 +839,8 @@ impl From<&PacketMeta> for InnerFlowId {
             }
             None => (
                 Protocol::Reserved,
-                IpAddr::Ip4(Ipv4Addr::new([0; 4])),
-                IpAddr::Ip4(Ipv4Addr::new([0; 4])),
+                IpAddr::Ip4(Ipv4Addr::from([0; 4])),
+                IpAddr::Ip4(Ipv4Addr::from([0; 4])),
             ),
         };
 

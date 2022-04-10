@@ -23,13 +23,14 @@ cfg_if! {
 
 use smoltcp::wire::{DhcpPacket, DhcpRepr, EthernetAddress, Ipv4Address};
 
-use crate::api::OpteError;
+use crate::api::{Ipv4Addr, OpteError, IP4_MASK_ALL, IP4_MASK_NONE};
 use crate::dhcp::{
     ClasslessStaticRouteOpt, MessageType as DhcpMessageType, SubnetRouterPair,
 };
 use crate::ether::{self, EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ};
 use crate::ip4::{
-    self, Ipv4Addr, Ipv4Cidr, Ipv4Hdr, Ipv4Meta, Protocol, IPV4_HDR_SZ,
+    Ipv4Cidr, Ipv4Hdr, Ipv4Meta, Protocol, IPV4_ANY_ADDR, IPV4_HDR_SZ,
+    IPV4_LOCAL_BCAST
 };
 use crate::layer::Layer;
 use crate::packet::{
@@ -74,12 +75,10 @@ pub fn setup(
             ether::ETHER_BROADCAST,
         )]),
         Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(cfg.private_mac)]),
-        Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(ip4::ANY_ADDR)]),
+        Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(IPV4_ANY_ADDR)]),
         // XXX I believe DHCP can also come via subnet broadcast. Add
         // additional match for that.
-        Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Exact(
-            ip4::LOCAL_BROADCAST,
-        )]),
+        Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Exact(IPV4_LOCAL_BCAST)]),
         Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::UDP)]),
         Predicate::InnerDstPort(vec![PortMatch::Exact(67)]),
         Predicate::InnerSrcPort(vec![PortMatch::Exact(68)]),
@@ -191,10 +190,10 @@ impl HairpinAction for Dhcp4Action {
 
         let reply_len = reply.buffer_len();
 
-        let island_net = Ipv4Cidr::new(self.guest_ip4, 32).unwrap();
-        let def_route = Ipv4Cidr::new(ip4::ANY_ADDR, 0).unwrap();
+        let island_net = Ipv4Cidr::new(self.guest_ip4, IP4_MASK_ALL);
+        let def_route = Ipv4Cidr::new(IPV4_ANY_ADDR, IP4_MASK_NONE);
         let csr_opt = ClasslessStaticRouteOpt::new(
-            SubnetRouterPair::new(island_net, ip4::ANY_ADDR),
+            SubnetRouterPair::new(island_net, IPV4_ANY_ADDR),
             Some(SubnetRouterPair::new(def_route, self.gw_ip4)),
             None,
         );
@@ -221,7 +220,7 @@ impl HairpinAction for Dhcp4Action {
 
         let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
             src: self.gw_ip4,
-            dst: ip4::LOCAL_BROADCAST,
+            dst: IPV4_LOCAL_BCAST,
             proto: Protocol::UDP,
         });
         ip4.set_total_len(ip4.hdr_len() as u16 + udp.total_len());

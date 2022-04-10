@@ -850,7 +850,7 @@ fn bad_ip_len() {
 
     let mut ip = Ipv4Hdr::from(&Ipv4Meta {
         src: "0.0.0.0".parse().unwrap(),
-        dst: ip4::LOCAL_BROADCAST,
+        dst: ip4::IPV4_LOCAL_BCAST,
         proto: Protocol::UDP,
     });
 
@@ -880,7 +880,7 @@ fn bad_ip_len() {
 
     let mut ip = Ipv4Hdr::from(&Ipv4Meta {
         src: "0.0.0.0".parse().unwrap(),
-        dst: ip4::LOCAL_BROADCAST,
+        dst: ip4::IPV4_LOCAL_BCAST,
         proto: Protocol::UDP,
     });
 
@@ -924,7 +924,7 @@ fn dhcp_req() {
 
     let ip = Ipv4Hdr::from(&Ipv4Meta {
         src: "0.0.0.0".parse().unwrap(),
-        dst: ip4::LOCAL_BROADCAST,
+        dst: ip4::IPV4_LOCAL_BCAST,
         proto: Protocol::UDP,
     });
 
@@ -957,7 +957,7 @@ fn dhcp_req() {
             };
 
             assert_eq!(ip4m.src, "0.0.0.0".parse().unwrap());
-            assert_eq!(ip4m.dst, ip4::LOCAL_BROADCAST);
+            assert_eq!(ip4m.dst, ip4::IPV4_LOCAL_BCAST);
             assert_eq!(ip4m.proto, Protocol::UDP);
         }
 

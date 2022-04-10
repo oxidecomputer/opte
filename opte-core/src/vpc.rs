@@ -58,8 +58,8 @@ impl VpcSubnet4 {
     // that value from these two values and then check if the Ipv4Cidr
     // sits in one of the allowed blocks.
     pub fn new(cidr: Ipv4Cidr) -> result::Result<Self, IpError> {
-        let ip = cidr.get_ip();
-        let prefix = cidr.prefix();
+        let ip = cidr.ip();
+        let prefix = cidr.prefix_len();
 
         match ip.into() {
             (10, _, _, _) => {

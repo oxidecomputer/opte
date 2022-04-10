@@ -13,10 +13,9 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{CmdOk, OpteError};
+use crate::api::{CmdOk, Ipv4Addr, OpteError};
 use crate::ether::EtherAddr;
 use crate::flow_table::FlowEntryDump;
-use crate::ip4::Ipv4Addr;
 use crate::layer;
 use crate::oxide_net::firewall as fw;
 use crate::port;

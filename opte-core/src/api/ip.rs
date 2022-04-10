@@ -1,13 +1,15 @@
+use core::fmt::{self, Debug, Display};
 use core::result;
+use core::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::String;
+        use alloc::vec::Vec;
     } else {
-        use std::fmt::{self, Display};
-        use std::str::FromStr;
         use std::string::String;
+        use std::vec::Vec;
     }
 }
 
@@ -19,7 +21,7 @@ pub enum IpAddr {
 }
 
 /// An IPv4 address.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Ipv4Addr {
     inner: [u8; 4],
 }
@@ -31,25 +33,64 @@ impl From<std::net::Ipv4Addr> for Ipv4Addr {
     }
 }
 
-#[cfg(any(feature = "std", test))]
+impl From<Ipv4Addr> for u32 {
+    fn from(ip: Ipv4Addr) -> u32 {
+        u32::from_be_bytes(ip.bytes())
+    }
+}
+
+impl From<u32> for Ipv4Addr {
+    fn from(val: u32) -> Self {
+        Self { inner: val.to_be_bytes() }
+    }
+}
+
+impl From<[u8; 4]> for Ipv4Addr {
+    fn from(bytes: [u8; 4]) -> Self {
+        Self { inner: bytes }
+    }
+}
+
 impl FromStr for Ipv4Addr {
     type Err = String;
 
     fn from_str(val: &str) -> result::Result<Self, Self::Err> {
-        let ip =
-            val.parse::<std::net::Ipv4Addr>().map_err(|e| format!("{}", e))?;
-        Ok(ip.into())
+        let octets: Vec<u8> = val
+            .split(".")
+            .map(|s| s.parse().map_err(|e| format!("{}", e)))
+            .collect::<result::Result<Vec<u8>, _>>()?;
+
+        if octets.len() != 4 {
+            return Err(format!("malformed ip: {}", val));
+        }
+
+        // At the time of writing there is no TryFrom impl for Vec to
+        // array in the alloc create. Honestly this looks a bit
+        // cleaner anyways.
+        Ok(Self { inner: [octets[0], octets[1], octets[2], octets[3]] })
     }
 }
 
-#[cfg(any(feature = "std", test))]
 impl Display for Ipv4Addr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", std::net::Ipv4Addr::from(self.bytes()))
+        write!(
+            f,
+            "{}.{}.{}.{}",
+            self.inner[0], self.inner[1], self.inner[2], self.inner[3],
+        )
     }
 }
 
-pub const ANY_ADDR: Ipv4Addr = Ipv4Addr { inner: [0; 4] };
+// There's no reason to view an Ipv4Addr as its raw array, so just
+// present it in a human-friendly manner.
+impl Debug for Ipv4Addr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Ipv4Addr {{ inner: {} }}", self)
+    }
+}
+
+pub const IPV4_ANY_ADDR: Ipv4Addr = Ipv4Addr { inner: [0; 4] };
+pub const IPV4_LOCAL_BCAST: Ipv4Addr = Ipv4Addr { inner: [255; 4] };
 
 impl Ipv4Addr {
     /// Return the bytes of the address.
@@ -64,7 +105,7 @@ impl Ipv4Addr {
         }
 
         if mask == 0 {
-            return Ok(ANY_ADDR);
+            return Ok(IPV4_ANY_ADDR);
         }
 
         let mut n = u32::from_be_bytes(self.inner);
@@ -74,6 +115,10 @@ impl Ipv4Addr {
         n = n & bits as u32;
         self.inner = n.to_be_bytes();
         Ok(self)
+    }
+
+    pub fn safe_mask(self, prefix_len: Ipv4PrefixLen) -> Self {
+        self.mask(prefix_len.0).unwrap()
     }
 }
 
@@ -153,14 +198,34 @@ pub enum IpCidr {
     Ip6(Ipv6Cidr),
 }
 
+// A valid IPv4 prefix legnth.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Ipv4PrefixLen(u8);
+
+pub const IP4_MASK_NONE: Ipv4PrefixLen = Ipv4PrefixLen(0);
+pub const IP4_MASK_ALL: Ipv4PrefixLen = Ipv4PrefixLen(32);
+
+impl Ipv4PrefixLen {
+    pub fn new(prefix_len: u8) -> Result<Self, String> {
+        if prefix_len > 32 {
+            return Err(format!("bad IPv4 prefix length: {}", prefix_len));
+        }
+
+n        Ok(Self(prefix_len))
+    }
+
+    pub fn val(&self) -> u8 {
+        self.0
+    }
+}
+
 /// An IPv4 CIDR.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ipv4Cidr {
     ip: Ipv4Addr,
-    prefix_len: u8,
+    prefix_len: Ipv4PrefixLen,
 }
 
-#[cfg(any(feature = "std", test))]
 impl FromStr for Ipv4Cidr {
     type Err = String;
 
@@ -171,43 +236,42 @@ impl FromStr for Ipv4Cidr {
             None => return Err(format!("no '/' found")),
         };
 
-        let ip = match ip_s.parse::<std::net::Ipv4Addr>() {
-            Ok(v) => v.into(),
+        let ip = match ip_s.parse() {
+            Ok(v) => v,
             Err(e) => return Err(format!("bad IP: {}", e)),
         };
 
-        let prefix_len = match prefix_s.parse::<u8>() {
+        let raw = match prefix_s.parse::<u8>() {
             Ok(v) => v,
             Err(e) => {
                 return Err(format!("bad prefix length: {}", e));
             }
         };
 
-        Ipv4Cidr::new(ip, prefix_len)
+        let prefix_len = Ipv4PrefixLen::new(raw)?;
+        Ok(Ipv4Cidr::new(ip, prefix_len))
     }
 }
 
-#[cfg(any(feature = "std", test))]
 impl Display for Ipv4Cidr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}/{}", self.ip, self.prefix_len)
+        write!(f, "{}/{}", self.ip, self.prefix_len.val())
     }
 }
 
 impl Ipv4Cidr {
-    pub fn new(ip: Ipv4Addr, prefix_len: u8) -> result::Result<Self, String> {
-        // In this case we are only checking that it's a valid CIDR in
-        // the general sense; VPC-specific CIDR enforcement is done by
-        // the VPC types.
-        if prefix_len > 32 {
-            return Err(format!("bad prefix length: {}", prefix_len));
-        }
-
-        let ip = ip.mask(prefix_len)?;
-        Ok(Ipv4Cidr { ip, prefix_len })
+    pub fn new(ip: Ipv4Addr, prefix_len: Ipv4PrefixLen) -> Self {
+        let ip = ip.safe_mask(prefix_len);
+        Ipv4Cidr { ip, prefix_len }
     }
 
-    pub fn parts(&self) -> (Ipv4Addr, u8) {
+    pub fn new_checked(ip: Ipv4Addr, prefix_len: u8) -> Result<Self, String> {
+        let pl = Ipv4PrefixLen::new(prefix_len)?;
+        let ip = ip.safe_mask(pl);
+        Ok(Ipv4Cidr { ip, prefix_len: pl })
+    }
+
+    pub fn parts(&self) -> (Ipv4Addr, Ipv4PrefixLen) {
         (self.ip, self.prefix_len)
     }
 }
@@ -267,10 +331,14 @@ mod test {
     use super::*;
 
     #[test]
+    fn bad_prefix_len() {
+        let msg = "bad IPv4 prefix length: 33".to_string();
+        assert_eq!(Ipv4PrefixLen::new(33), Err(msg));
+    }
+
+    #[test]
     fn bad_cidr() {
-        let ip = "10.0.0.1".parse().unwrap();
-        let mut msg = "bad prefix length: 33".to_string();
-        assert_eq!(Ipv4Cidr::new(ip, 33), Err(msg.clone()));
+        let mut msg = "bad IPv4 prefix length: 33".to_string();
         assert_eq!("192.168.2.9/33".parse::<Ipv4Cidr>(), Err(msg.clone()));
 
         msg = "bad prefix length: 129".to_string();
@@ -285,20 +353,21 @@ mod test {
 
     #[test]
     fn good_cidr() {
+        let pl = Ipv4PrefixLen::new(24).unwrap();
         let ip = "192.168.2.0".parse().unwrap();
         assert_eq!(
-            Ipv4Cidr::new(ip, 24),
-            Ok(Ipv4Cidr {
+            Ipv4Cidr::new(ip, pl),
+            Ipv4Cidr {
                 ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-                prefix_len: 24,
-            })
+                prefix_len: pl,
+            }
         );
 
         assert_eq!(
             "192.168.2.0/24".parse(),
             Ok(Ipv4Cidr {
                 ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-                prefix_len: 24
+                prefix_len: pl,
             })
         );
 
@@ -306,7 +375,7 @@ mod test {
             "192.168.2.9/24".parse(),
             Ok(Ipv4Cidr {
                 ip: Ipv4Addr { inner: [192, 168, 2, 0] },
-                prefix_len: 24,
+                prefix_len: pl,
             })
         );
 
@@ -333,7 +402,29 @@ mod test {
     }
 
     #[test]
-    fn ip_mask() {
+    fn ipv4_addr_bad() {
+        assert!("192.168.33.1O".parse::<Ipv4Addr>().is_err());
+        assert!("192.168.33.256".parse::<Ipv4Addr>().is_err());
+    }
+
+    #[test]
+    fn ipv4_addr_good() {
+        assert_eq!(
+            "192.168.33.10".parse(),
+            Ok(Ipv4Addr::from([192, 168, 33, 10]))
+        );
+    }
+
+    #[test]
+    fn ipv4_mask() {
+        let ip = "192.168.2.77".parse::<Ipv4Addr>().unwrap();
+        assert_eq!(ip.mask(24).unwrap(), "192.168.2.0".parse().unwrap());
+        assert_eq!(ip.mask(0).unwrap(), "0.0.0.0".parse().unwrap());
+        assert!(ip.mask(33).is_err());
+    }
+
+    #[test]
+    fn ipv6_mask() {
         let mut ip6: Ipv6Addr = "fd01:dead:beef::1".parse().unwrap();
         let mut ip6_prefix = "fd01:dead:beef::".parse().unwrap();
         assert_eq!(ip6.mask(64).unwrap(), ip6_prefix);
