@@ -411,7 +411,7 @@ fn print_v2p_ip4((src, phys): (&Ipv4Addr, &overlay::PhysNet)) {
         std::net::Ipv4Addr::from(src.bytes()),
         phys.vni,
         eth,
-        std::net::Ipv6Addr::from(phys.ip.to_bytes()),
+        std::net::Ipv6Addr::from(phys.ip.bytes()),
     );
 }
 
@@ -419,10 +419,10 @@ fn print_v2p_ip6((src, phys): (&Ipv6Addr, &overlay::PhysNet)) {
     let eth = format!("{}", phys.ether);
     println!(
         "{:<24} {:<8} {:<17} {}",
-        std::net::Ipv6Addr::from(src.to_bytes()),
+        std::net::Ipv6Addr::from(src.bytes()),
         phys.vni,
         eth,
-        std::net::Ipv6Addr::from(phys.ip.to_bytes()),
+        std::net::Ipv6Addr::from(phys.ip.bytes()),
     );
 }
 

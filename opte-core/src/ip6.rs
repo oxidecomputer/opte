@@ -4,10 +4,8 @@ use core::mem::size_of;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
         use alloc::vec::Vec;
     } else {
-        use std::string::String;
         use std::vec::Vec;
     }
 }
@@ -15,7 +13,7 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-use crate::api as api;
+pub use crate::api::{Ipv6Addr, Ipv6Cidr};
 use crate::checksum::Checksum;
 use crate::headers::{
     Header, HeaderAction, IpMeta, IpMetaOpt, ModActionArg, PushActionArg,
@@ -29,136 +27,10 @@ pub const IPV6_HDR_VSN_SHIFT: u8 = 4;
 pub const IPV6_HDR_SZ: usize = size_of::<Ipv6HdrRaw>();
 pub const IPV6_VERSION: u8 = 6;
 
-#[repr(C)]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    Deserialize,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-)]
-pub struct Ipv6Addr {
-    addr: [u8; 16],
-}
-
-impl Ipv6Addr {
-    /// Return the address after applying the network mask.
-    pub fn mask(mut self, mask: u8) -> Result<Self, String> {
-        if mask > 128 {
-            return Err(format!("bad mask: {}", mask));
-        }
-
-        if mask == 128 {
-            return Ok(self);
-        }
-
-        if mask == 0 {
-            for byte in &mut self.addr[0..15] {
-                *byte = 0;
-            }
-            return Ok(self);
-        }
-
-        // The mask is in bits and we want to determine which byte (of
-        // the 16 that make up the address) to start with. A byte is 8
-        // bits, if 8 goes into `mask` N times, then the first N bytes
-        // stay as-is. However, byte N may need partial masking, and
-        // bytes N+1..16 must be set to zero.
-        let mut byte_idx = usize::from(mask / 8);
-        let partial = mask % 8;
-
-        if partial > 0 {
-            let bits = i8::MIN >> (partial - 1);
-            self.addr[byte_idx] = self.addr[byte_idx] & bits as u8;
-            byte_idx += 1;
-        }
-
-        for byte in &mut self.addr[byte_idx..16] {
-            *byte = 0;
-        }
-
-        Ok(self)
-    }
-
-    pub fn to_bytes(&self) -> [u8; 16] {
-        self.addr
-    }
-}
-
-impl From<api::Ipv6Addr> for Ipv6Addr {
-    fn from(ip6: api::Ipv6Addr) -> Self {
-        Self { addr: ip6.bytes() }
-    }
-}
-
-impl From<&[u8; 16]> for Ipv6Addr {
-    fn from(bytes: &[u8; 16]) -> Ipv6Addr {
-        Ipv6Addr { addr: *bytes }
-    }
-}
-
-impl From<[u8; 16]> for Ipv6Addr {
-    fn from(bytes: [u8; 16]) -> Ipv6Addr {
-        Ipv6Addr { addr: bytes }
-    }
-}
-
-impl From<[u16; 8]> for Ipv6Addr {
-    fn from(bytes: [u16; 8]) -> Ipv6Addr {
-        let tmp = bytes.map(u16::to_be_bytes);
-        let mut addr = [0; 16];
-        for (i, pair) in tmp.iter().enumerate() {
-            addr[i * 2] = pair[0];
-            addr[(i * 2) + 1] = pair[1];
-        }
-
-        Ipv6Addr { addr }
-    }
-}
-
 impl fmt::Display for Ipv6Addr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:X}{:X}:", self.addr[0], self.addr[1])
-    }
-}
-
-#[cfg(any(feature = "std", test))]
-impl From<std::net::Ipv6Addr> for Ipv6Addr {
-    fn from(ip6: std::net::Ipv6Addr) -> Self {
-        Self::from(ip6.octets())
-    }
-}
-
-/// An IPv6 CIDR.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub struct Ipv6Cidr {
-    ip: Ipv6Addr,
-    prefix_len: u8,
-}
-
-impl From<api::Ipv6Cidr> for Ipv6Cidr {
-    fn from(cidr: api::Ipv6Cidr) -> Self {
-        let parts = cidr.parts();
-        // Unwrap: We know the Ipv6Cidr type has already validated
-        // itself.
-        Self::new(parts.0.into(), parts.1).unwrap()
-    }
-}
-
-impl Ipv6Cidr {
-    pub fn new(ip: Ipv6Addr, prefix_len: u8) -> Result<Self, String> {
-        if prefix_len > 128 {
-            return Err(format!("bad prefix length: {}", prefix_len));
-        }
-
-        let ip = ip.mask(prefix_len)?;
-        Ok(Ipv6Cidr { ip, prefix_len })
+        let sip6 = smoltcp::wire::Ipv6Address(self.bytes());
+        write!(f, "{}", sip6)
     }
 }
 
@@ -306,8 +178,8 @@ impl Ipv6Hdr {
     /// Return the pseudo header bytes.
     pub fn pseudo_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(40);
-        bytes.extend_from_slice(&self.src.to_bytes());
-        bytes.extend_from_slice(&self.dst.to_bytes());
+        bytes.extend_from_slice(&self.src.bytes());
+        bytes.extend_from_slice(&self.dst.bytes());
         bytes.extend_from_slice(&(self.pay_len() as u32).to_be_bytes());
         bytes.extend_from_slice(&[0u8, 0u8, 0u8, self.next_hdr as u8]);
         assert_eq!(bytes.len(), 40);
@@ -471,8 +343,8 @@ impl From<&Ipv6Hdr> for Ipv6HdrRaw {
             payload_len: ip6.payload_len.to_be_bytes(),
             next_hdr: ip6.next_hdr as u8,
             hop_limit: ip6.hop_limit,
-            src: ip6.src.to_bytes(),
-            dst: ip6.dst.to_bytes(),
+            src: ip6.src.bytes(),
+            dst: ip6.dst.bytes(),
         }
     }
 }
@@ -480,8 +352,8 @@ impl From<&Ipv6Hdr> for Ipv6HdrRaw {
 impl From<Ipv6Meta> for Ipv6HdrRaw {
     fn from(meta: Ipv6Meta) -> Self {
         Ipv6HdrRaw {
-            src: meta.src.to_bytes(),
-            dst: meta.dst.to_bytes(),
+            src: meta.src.bytes(),
+            dst: meta.dst.bytes(),
             next_hdr: meta.proto as u8,
             ..Default::default()
         }
@@ -496,7 +368,7 @@ mod test {
         ]);
 
         assert_eq!(
-            ip6.to_bytes(),
+            ip6.bytes(),
             [
                 0x26, 0x01, 0x02, 0x84, 0x41, 0x00, 0xE2, 0x40, 0x00, 0x00,
                 0x00, 0x00, 0xC0, 0xA8, 0x01, 0xF5

@@ -104,11 +104,11 @@ fn next_hop_probe(
     gw_eth_dst: EtherAddr,
     msg: &[u8],
 ) {
-    let gw_bytes = gw.unwrap_or(&Ipv6Addr::from([0u8; 16])).to_bytes();
+    let gw_bytes = gw.unwrap_or(&Ipv6Addr::from([0u8; 16])).bytes();
 
     unsafe {
         __dtrace_probe_next__hop(
-            dst.to_bytes().as_ptr() as uintptr_t,
+            dst.bytes().as_ptr() as uintptr_t,
             gw_bytes.as_ptr() as uintptr_t,
             gw_eth_src.to_bytes().as_ptr() as uintptr_t,
             gw_eth_dst.to_bytes().as_ptr() as uintptr_t,
@@ -1397,7 +1397,7 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
         assert!(!ipst.is_null());
 
         let addr = ip::in6_addr_t {
-            _S6_un: ip::in6_addr__bindgen_ty_1 { _S6_u8: ip6_dst.to_bytes() },
+            _S6_un: ip::in6_addr__bindgen_ty_1 { _S6_u8: ip6_dst.bytes() },
         };
         let xmit_hint = 0;
         let mut generation_op = 0u32;

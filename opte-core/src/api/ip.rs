@@ -123,7 +123,7 @@ impl Ipv4Addr {
 }
 
 /// An IPv6 address.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Ipv6Addr {
     inner: [u8; 16],
 }
@@ -132,6 +132,31 @@ pub struct Ipv6Addr {
 impl From<std::net::Ipv6Addr> for Ipv6Addr {
     fn from(ip6: std::net::Ipv6Addr) -> Self {
         Self { inner: ip6.octets() }
+    }
+}
+
+impl From<&[u8; 16]> for Ipv6Addr {
+    fn from(bytes: &[u8; 16]) -> Ipv6Addr {
+        Ipv6Addr { inner: *bytes }
+    }
+}
+
+impl From<[u8; 16]> for Ipv6Addr {
+    fn from(bytes: [u8; 16]) -> Ipv6Addr {
+        Ipv6Addr { inner: bytes }
+    }
+}
+
+impl From<[u16; 8]> for Ipv6Addr {
+    fn from(bytes: [u16; 8]) -> Ipv6Addr {
+        let tmp = bytes.map(u16::to_be_bytes);
+        let mut addr = [0; 16];
+        for (i, pair) in tmp.iter().enumerate() {
+            addr[i * 2] = pair[0];
+            addr[(i * 2) + 1] = pair[1];
+        }
+
+        Ipv6Addr { inner: addr }
     }
 }
 
@@ -189,6 +214,10 @@ impl Ipv6Addr {
 
         Ok(self)
     }
+
+    pub fn safe_mask(self, mask: Ipv6PrefixLen) -> Self {
+        self.mask(mask.val()).unwrap()
+    }
 }
 
 /// An IPv4 or IPv6 CIDR.
@@ -198,7 +227,7 @@ pub enum IpCidr {
     Ip6(Ipv6Cidr),
 }
 
-// A valid IPv4 prefix legnth.
+/// A valid IPv4 prefix legnth.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ipv4PrefixLen(u8);
 
@@ -211,7 +240,7 @@ impl Ipv4PrefixLen {
             return Err(format!("bad IPv4 prefix length: {}", prefix_len));
         }
 
-n        Ok(Self(prefix_len))
+        Ok(Self(prefix_len))
     }
 
     pub fn val(&self) -> u8 {
@@ -280,7 +309,7 @@ impl Ipv4Cidr {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ipv6Cidr {
     ip: Ipv6Addr,
-    prefix_len: u8,
+    prefix_len: Ipv6PrefixLen,
 }
 
 #[cfg(any(feature = "std", test))]
@@ -306,21 +335,39 @@ impl FromStr for Ipv6Cidr {
             }
         };
 
-        Ipv6Cidr::new(ip, prefix_len)
+        Ipv6Cidr::new_checked(ip, prefix_len)
+    }
+}
+
+/// A valid IPv6 prefix length.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Ipv6PrefixLen(u8);
+
+impl Ipv6PrefixLen {
+    pub fn new(prefix_len: u8) -> result::Result<Self, String> {
+        if prefix_len > 128 {
+            return Err(format!("bad IPv6 prefix length: {}", prefix_len));
+        }
+
+        Ok(Self(prefix_len))
+    }
+
+    pub fn val(&self) -> u8 {
+        self.0
     }
 }
 
 impl Ipv6Cidr {
-    pub fn new(ip: Ipv6Addr, prefix_len: u8) -> result::Result<Self, String> {
-        if prefix_len > 128 {
-            return Err(format!("bad prefix length: {}", prefix_len));
-        }
-
-        let ip = ip.mask(prefix_len)?;
-        Ok(Ipv6Cidr { ip, prefix_len })
+    pub fn new_checked(
+        ip: Ipv6Addr,
+        prefix_len: u8
+    ) -> result::Result<Self, String> {
+        let pl = Ipv6PrefixLen::new(prefix_len)?;
+        let ip = ip.safe_mask(pl);
+        Ok(Ipv6Cidr { ip, prefix_len: pl })
     }
 
-    pub fn parts(&self) -> (Ipv6Addr, u8) {
+    pub fn parts(&self) -> (Ipv6Addr, Ipv6PrefixLen) {
         (self.ip, self.prefix_len)
     }
 }
@@ -341,9 +388,9 @@ mod test {
         let mut msg = "bad IPv4 prefix length: 33".to_string();
         assert_eq!("192.168.2.9/33".parse::<Ipv4Cidr>(), Err(msg.clone()));
 
-        msg = "bad prefix length: 129".to_string();
+        msg = "bad IPv6 prefix length: 129".to_string();
         let ip6 = "fd01:dead:beef::1".parse().unwrap();
-        assert_eq!(Ipv6Cidr::new(ip6, 129), Err(msg.clone()));
+        assert_eq!(Ipv6Cidr::new_checked(ip6, 129), Err(msg.clone()));
 
         assert_eq!(
             "fd01:dead:beef::1/129".parse::<Ipv6Cidr>(),
@@ -386,19 +433,31 @@ mod test {
 
         let mut ip6_cidr = "fd01:dead:beef::1/64".parse::<Ipv6Cidr>().unwrap();
         let mut ip6_prefix = "fd01:dead:beef::".parse().unwrap();
-        assert_eq!(ip6_cidr.parts(), (ip6_prefix, 64));
+        assert_eq!(
+            ip6_cidr.parts(),
+            (ip6_prefix, Ipv6PrefixLen::new(64).unwrap())
+        );
 
         ip6_cidr = "fe80::8:20ff:fe35:f794/10".parse::<Ipv6Cidr>().unwrap();
         ip6_prefix = "fe80::".parse().unwrap();
-        assert_eq!(ip6_cidr.parts(), (ip6_prefix, 10));
+        assert_eq!(
+            ip6_cidr.parts(),
+            (ip6_prefix, Ipv6PrefixLen::new(10).unwrap())
+        );
 
         ip6_cidr = "fe80::8:20ff:fe35:f794/128".parse::<Ipv6Cidr>().unwrap();
         ip6_prefix = "fe80::8:20ff:fe35:f794".parse().unwrap();
-        assert_eq!(ip6_cidr.parts(), (ip6_prefix, 128));
+        assert_eq!(
+            ip6_cidr.parts(),
+            (ip6_prefix, Ipv6PrefixLen::new(128).unwrap())
+        );
 
         ip6_cidr = "fd00:1122:3344:0201::/56".parse::<Ipv6Cidr>().unwrap();
         ip6_prefix = "fd00:1122:3344:0200::".parse().unwrap();
-        assert_eq!(ip6_cidr.parts(), (ip6_prefix, 56));
+        assert_eq!(
+            ip6_cidr.parts(),
+            (ip6_prefix, Ipv6PrefixLen::new(56).unwrap())
+        );
     }
 
     #[test]

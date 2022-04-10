@@ -841,12 +841,12 @@ impl From<&InnerFlowId> for flow_id_sdt_arg {
         // traveling across the network.
         let (af, src_ip4, src_ip6) = match ifid.src_ip {
             IpAddr::Ip4(ip4) => (headers::AF_INET, ip4.to_be(), [0; 16]),
-            IpAddr::Ip6(ip6) => (headers::AF_INET6, 0, ip6.to_bytes()),
+            IpAddr::Ip6(ip6) => (headers::AF_INET6, 0, ip6.bytes()),
         };
 
         let (dst_ip4, dst_ip6) = match ifid.dst_ip {
             IpAddr::Ip4(ip4) => (ip4.to_be(), [0; 16]),
-            IpAddr::Ip6(ip6) => (0, ip6.to_bytes()),
+            IpAddr::Ip6(ip6) => (0, ip6.bytes()),
         };
 
         flow_id_sdt_arg {
