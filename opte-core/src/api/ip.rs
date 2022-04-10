@@ -14,14 +14,18 @@ cfg_if! {
 }
 
 /// An IPv4 or IPv6 address.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub enum IpAddr {
     Ip4(Ipv4Addr),
     Ip6(Ipv6Addr),
 }
 
 /// An IPv4 address.
-#[derive(Clone, Copy, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub struct Ipv4Addr {
     inner: [u8; 4],
 }
@@ -123,7 +127,9 @@ impl Ipv4Addr {
 }
 
 /// An IPv6 address.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 pub struct Ipv6Addr {
     inner: [u8; 16],
 }
@@ -360,7 +366,7 @@ impl Ipv6PrefixLen {
 impl Ipv6Cidr {
     pub fn new_checked(
         ip: Ipv6Addr,
-        prefix_len: u8
+        prefix_len: u8,
     ) -> result::Result<Self, String> {
         let pl = Ipv6PrefixLen::new(prefix_len)?;
         let ip = ip.safe_mask(pl);
@@ -374,8 +380,8 @@ impl Ipv6Cidr {
 
 #[cfg(test)]
 mod test {
-    use std::string::ToString;
     use super::*;
+    use std::string::ToString;
 
     #[test]
     fn bad_prefix_len() {

@@ -2,7 +2,7 @@ use super::encap::Vni;
 use super::ip::{IpAddr, IpCidr, Ipv4Addr, Ipv4Cidr, Ipv6Addr};
 use super::mac::MacAddr;
 
-use illumos_sys_hdrs::{datalink_id_t};
+use illumos_sys_hdrs::datalink_id_t;
 
 use serde::{Deserialize, Serialize};
 

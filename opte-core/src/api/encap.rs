@@ -12,7 +12,9 @@ cfg_if! {
 }
 
 /// A Geneve Virtual Network Identifier (VNI).
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub struct Vni {
     // A VNI is 24-bit. By storing it this way we don't have to check
     // the value on the opte-core side to know if it's a valid VNI, we

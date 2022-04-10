@@ -30,7 +30,7 @@ use crate::dhcp::{
 use crate::ether::{self, EtherAddr, EtherHdr, EtherMeta, ETHER_HDR_SZ};
 use crate::ip4::{
     Ipv4Cidr, Ipv4Hdr, Ipv4Meta, Protocol, IPV4_ANY_ADDR, IPV4_HDR_SZ,
-    IPV4_LOCAL_BCAST
+    IPV4_LOCAL_BCAST,
 };
 use crate::layer::Layer;
 use crate::packet::{

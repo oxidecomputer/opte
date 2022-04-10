@@ -5,15 +5,15 @@ use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 
 use opte_core::api::{
-    AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
-    MacAddr, NoResp, OpteCmd, SetVirt2PhysReq, Vni,
+    AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, MacAddr, NoResp,
+    OpteCmd, SetVirt2PhysReq, Vni,
 };
 use opte_core::ioctl::{self as api, SetXdeUnderlayReq};
 use opte_core::oxide_net::firewall::{
     AddFwRuleReq, FirewallRule, RemFwRuleReq,
 };
 use opte_core::oxide_net::overlay;
-use opte_ioctl::{Error, run_cmd_ioctl};
+use opte_ioctl::{run_cmd_ioctl, Error};
 
 /// The handle used to send administration commands to the OPTE
 /// control node.

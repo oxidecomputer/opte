@@ -1,9 +1,10 @@
 use opte_core::api::{
-    AddRouterEntryIpv4Req, CmdOk, CreateXdeReq, DeleteXdeReq,
-    MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError, SetVirt2PhysReq, Vni, API_VERSION, XDE_DLD_OPTE_CMD
+    AddRouterEntryIpv4Req, CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, NoResp,
+    OpteCmd, OpteCmdIoctl, OpteError, SetVirt2PhysReq, Vni, API_VERSION,
+    XDE_DLD_OPTE_CMD,
 };
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 use thiserror::Error;

@@ -1,6 +1,6 @@
+use super::API_VERSION;
 use illumos_sys_hdrs::{c_int, size_t};
 use serde::{Deserialize, Serialize};
-use super::API_VERSION;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

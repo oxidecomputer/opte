@@ -278,58 +278,50 @@ mod test {
         let router = Ipv4Addr::from([10, 0, 0, 1]);
 
         let p1 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new_checked(
-                Ipv4Addr::from([0, 0, 0, 0]),
-                0
-            ).unwrap(),
+            subnet: Ipv4Cidr::new_checked(Ipv4Addr::from([0, 0, 0, 0]), 0)
+                .unwrap(),
             router,
         };
 
         let p2 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new_checked(
-                Ipv4Addr::from([10, 0, 0, 0]),
-                8
-            ).unwrap(),
+            subnet: Ipv4Cidr::new_checked(Ipv4Addr::from([10, 0, 0, 0]), 8)
+                .unwrap(),
             router,
         };
 
         let p3 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new_checked(
-                Ipv4Addr::from([10, 0, 0, 0]),
-                24
-            ).unwrap(),
+            subnet: Ipv4Cidr::new_checked(Ipv4Addr::from([10, 0, 0, 0]), 24)
+                .unwrap(),
             router,
         };
 
         let p4 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new_checked(
-                Ipv4Addr::from([10, 17, 0, 0]),
-                16
-            ).unwrap(),
+            subnet: Ipv4Cidr::new_checked(Ipv4Addr::from([10, 17, 0, 0]), 16)
+                .unwrap(),
             router,
         };
 
         let p5 = SubnetRouterPair {
-            subnet: Ipv4Cidr::new_checked(
-                Ipv4Addr::from([10, 27, 129, 0]),
-                24
-            ).unwrap(),
+            subnet: Ipv4Cidr::new_checked(Ipv4Addr::from([10, 27, 129, 0]), 24)
+                .unwrap(),
             router,
         };
 
         let p6 = SubnetRouterPair {
             subnet: Ipv4Cidr::new_checked(
                 Ipv4Addr::from([10, 229, 0, 128]),
-                25
-            ).unwrap(),
+                25,
+            )
+            .unwrap(),
             router,
         };
 
         let p7 = SubnetRouterPair {
             subnet: Ipv4Cidr::new_checked(
                 Ipv4Addr::from([10, 198, 122, 47]),
-                32
-            ).unwrap(),
+                32,
+            )
+            .unwrap(),
             router,
         };
 

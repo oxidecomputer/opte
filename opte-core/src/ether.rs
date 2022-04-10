@@ -17,7 +17,7 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
-use crate::api as api;
+use crate::api;
 use crate::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
     RawHeader,
