@@ -22,7 +22,7 @@ use super::headers::{
     RawHeader,
 };
 use super::packet::{PacketRead, ReadErr, WriteError};
-use crate::api;
+use crate::api::MacAddr;
 
 pub const ETHER_TYPE_ETHER: u16 = 0x6558;
 pub const ETHER_TYPE_IPV4: u16 = 0x0800;
@@ -99,9 +99,15 @@ impl EtherAddr {
     }
 }
 
-impl From<api::MacAddr> for EtherAddr {
-    fn from(mac: api::MacAddr) -> Self {
+impl From<MacAddr> for EtherAddr {
+    fn from(mac: MacAddr) -> Self {
         Self { bytes: mac.bytes() }
+    }
+}
+
+impl From<EtherAddr> for MacAddr {
+    fn from(ether: EtherAddr) -> Self {
+        MacAddr::from(ether.bytes)
     }
 }
 
@@ -139,6 +145,12 @@ impl FromStr for EtherAddr {
 impl From<EtherAddr> for smoltcp::wire::EthernetAddress {
     fn from(addr: EtherAddr) -> Self {
         Self(addr.bytes)
+    }
+}
+
+impl From<MacAddr> for smoltcp::wire::EthernetAddress {
+    fn from(addr: MacAddr) -> Self {
+        Self(addr.bytes())
     }
 }
 

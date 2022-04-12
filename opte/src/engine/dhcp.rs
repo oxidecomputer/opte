@@ -10,11 +10,22 @@ cfg_if! {
     }
 }
 
+use smoltcp::wire::{DhcpPacket, DhcpRepr};
+
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::ip4::Ipv4Cidr;
-use crate::api::Ipv4Addr;
+use super::ether::{self, EtherHdr, EtherMeta, ETHER_HDR_SZ};
+use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol, IPV4_HDR_SZ};
+use super::packet::{
+    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
+};
+use super::rule::{
+    DataPredicate, EtherAddrMatch, GenResult, HairpinAction, IpProtoMatch,
+    Ipv4AddrMatch, PortMatch, Predicate,
+};
+use super::udp::{UdpHdr, UdpMeta};
+use crate::api::{Dhcp4Action, Dhcp4ReplyType, SubnetRouterPair};
 
 /// The DHCP message type.
 ///
@@ -37,6 +48,17 @@ impl From<smoltcp::wire::DhcpMessageType> for MessageType {
 impl From<MessageType> for smoltcp::wire::DhcpMessageType {
     fn from(mt: MessageType) -> Self {
         mt.inner
+    }
+}
+
+impl From<Dhcp4ReplyType> for MessageType {
+    fn from(rt: Dhcp4ReplyType) -> Self {
+        use smoltcp::wire::DhcpMessageType as SmolDMT;
+
+        match rt {
+            Dhcp4ReplyType::Offer => Self::from(SmolDMT::Offer),
+            Dhcp4ReplyType::Ack => Self::from(SmolDMT::Ack),
+        }
     }
 }
 
@@ -133,13 +155,6 @@ pub struct ClasslessStaticRouteOpt {
     routes: Vec<SubnetRouterPair>,
 }
 
-/// As it says on the tin: map a subnet to its next-hop.
-#[derive(Clone, Debug)]
-pub struct SubnetRouterPair {
-    subnet: Ipv4Cidr,
-    router: Ipv4Addr,
-}
-
 impl SubnetRouterPair {
     fn encode_len(&self) -> u8 {
         // One byte for the subnet mask width.
@@ -169,10 +184,6 @@ impl SubnetRouterPair {
             bytes[pos] = b;
             pos += 1;
         }
-    }
-
-    pub fn new(subnet: Ipv4Cidr, router: Ipv4Addr) -> Self {
-        Self { subnet, router }
     }
 
     fn subnet_encode_len(&self) -> u8 {
@@ -247,9 +258,157 @@ impl ClasslessStaticRouteOpt {
     }
 }
 
+// XXX I read up just enough on DHCP to get initial lease working.
+// However, I imagine there could be post-lease messages between
+// client/server and those might be unicast, at which point these
+// preds need to include that possibility. Though it may also require
+// a whole separate action (and this should perhaps be named the
+// Dhcp4LeaseAction).
+impl HairpinAction for Dhcp4Action {
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        use smoltcp::wire::DhcpMessageType as SmolDMT;
+
+        let hdr_preds = vec![
+            Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
+                ether::ETHER_BROADCAST,
+            )]),
+            Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(
+                self.client_mac.into(),
+            )]),
+            Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
+                Ipv4Addr::ANY_ADDR,
+            )]),
+            Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Exact(
+                Ipv4Addr::LOCAL_BCAST,
+            )]),
+            Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::UDP)]),
+            Predicate::InnerDstPort(vec![PortMatch::Exact(67)]),
+            Predicate::InnerSrcPort(vec![PortMatch::Exact(68)]),
+        ];
+
+        let data_preds = match self.reply_type {
+            Dhcp4ReplyType::Offer => {
+                vec![DataPredicate::Dhcp4MsgType(MessageType::from(
+                    SmolDMT::Discover,
+                ))]
+            }
+
+            Dhcp4ReplyType::Ack => {
+                vec![DataPredicate::Dhcp4MsgType(MessageType::from(
+                    SmolDMT::Request,
+                ))]
+            }
+        };
+
+        (hdr_preds, data_preds)
+    }
+
+    fn gen_packet(
+        &self,
+        _meta: &PacketMeta,
+        rdr: &mut PacketReader<Parsed, ()>,
+    ) -> GenResult<Packet<Initialized>> {
+        let body = rdr.copy_remaining();
+        let client_pkt = DhcpPacket::new_checked(&body)?;
+        let client_dhcp = DhcpRepr::parse(&client_pkt)?;
+        let mt = MessageType::from(self.reply_type);
+        // Forgive me.
+        let dns_servers =
+            self.dns_servers.map(|ips| ips.map(|mip| mip.map(|ip| ip.into())));
+
+        let reply = DhcpRepr {
+            message_type: mt.into(),
+            transaction_id: client_dhcp.transaction_id,
+            client_hardware_address: self.client_mac.into(),
+            client_ip: Ipv4Addr::ANY_ADDR.into(),
+            your_ip: self.client_ip.into(),
+            server_ip: self.gw_ip.into(),
+            router: Some(self.gw_ip.into()),
+            subnet_mask: Some(self.subnet_prefix_len.to_netmask().into()),
+            // There is no relay agent.
+            relay_agent_ip: Ipv4Addr::ANY_ADDR.into(),
+            broadcast: false,
+            requested_ip: None,
+            // The client identifier is an opaque token used by the
+            // server, in combination with the chaddr, to uniquely
+            // identify a client on the network in order to track its
+            // lease status. Our world is much simpler: we are hooked
+            // up directly to a guest's virtual interface, and we know
+            // this IP is theirs until the port is torn down. There is
+            // no tracking to do.
+            client_identifier: None,
+            server_identifier: Some(self.gw_ip.into()),
+            parameter_request_list: None,
+            dns_servers,
+            max_size: None,
+            lease_duration: Some(86400),
+        };
+
+        let reply_len = reply.buffer_len();
+        let csr_opt =
+            ClasslessStaticRouteOpt::new(self.re1, self.re2, self.re3);
+
+        // XXX This is temporary until I can add interface to Packet
+        // to initialize a zero'd mblk of N bytes and then get a
+        // direct mutable reference to the PacketSeg.
+        //
+        // We provide exactly the number of bytes needed guaranteeing
+        // that emit() should not fail.
+        let mut tmp = vec![0u8; reply_len];
+        let mut dhcp = DhcpPacket::new_unchecked(&mut tmp);
+        let _ = reply.emit(&mut dhcp).unwrap();
+
+        // Need to overwrite the End Option with Classless Static
+        // Route Option and then write new End Option marker.
+        assert_eq!(tmp.pop(), Some(255));
+        tmp.extend_from_slice(&csr_opt.encode());
+        tmp.push(255);
+        assert_eq!(tmp.len(), reply_len + csr_opt.encode_len() as usize);
+
+        let mut udp = UdpHdr::from(&UdpMeta { src: 67, dst: 68 });
+        udp.set_pay_len(tmp.len() as u16);
+
+        let ip_dst = if client_dhcp.broadcast {
+            Ipv4Addr::LOCAL_BCAST
+        } else {
+            self.client_ip.into()
+        };
+
+        let mut ip = Ipv4Hdr::from(&Ipv4Meta {
+            src: self.gw_ip,
+            dst: ip_dst,
+            proto: Protocol::UDP,
+        });
+        ip.set_total_len(ip.hdr_len() as u16 + udp.total_len());
+        ip.compute_hdr_csum();
+
+        let eth_dst = if client_dhcp.broadcast {
+            ether::ETHER_BROADCAST
+        } else {
+            self.client_mac.into()
+        };
+
+        let eth = EtherHdr::from(&EtherMeta {
+            dst: eth_dst,
+            src: self.gw_mac.into(),
+            ether_type: ether::ETHER_TYPE_IPV4,
+        });
+
+        let mut pkt_bytes = Vec::with_capacity(
+            ETHER_HDR_SZ + IPV4_HDR_SZ + UdpHdr::SIZE + tmp.len(),
+        );
+        pkt_bytes.extend_from_slice(&eth.as_bytes());
+        pkt_bytes.extend_from_slice(&ip.as_bytes());
+        pkt_bytes.extend_from_slice(&udp.as_bytes());
+        pkt_bytes.extend_from_slice(&tmp);
+        Ok(Packet::copy(&pkt_bytes))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::engine::ip4::{Ipv4Addr, Ipv4Cidr};
 
     #[test]
     fn offlink_encode() {

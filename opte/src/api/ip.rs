@@ -1,3 +1,4 @@
+use super::mac::MacAddr;
 use core::fmt::{self, Debug, Display};
 use core::result;
 use core::str::FromStr;
@@ -10,6 +11,132 @@ cfg_if! {
     } else {
         use std::string::String;
         use std::vec::Vec;
+    }
+}
+
+/// Generate an ICMPv4 Echo Reply message.
+///
+/// Map an ICMPv4 Echo Message (Type=8, Code=0) from `src` to `dst`
+/// into an ICMPv4 Echo Reply Message (Type=0, Code=0) from `dst` to
+/// `src`.
+#[derive(Clone, Debug)]
+pub struct Icmp4EchoReply {
+    /// The MAC address of the sender of the Echo message. The
+    /// destination MAC address of the Echo Reply.
+    pub echo_src_mac: MacAddr,
+
+    /// The IP address of the sender of the Echo message. The
+    /// destination IP address of the Echo Reply.
+    pub echo_src_ip: Ipv4Addr,
+
+    /// The MAC address of the destination of the Echo message. The
+    /// source MAC address of the Echo Reply.
+    pub echo_dst_mac: MacAddr,
+
+    /// The IP address of the destination of the Echo message. The
+    /// source IP address of the Echo Reply.
+    pub echo_dst_ip: Ipv4Addr,
+}
+
+impl Display for Icmp4EchoReply {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "ICMPv4 Echo Reply ({},{}) => ({},{})",
+            self.echo_dst_mac,
+            self.echo_dst_ip,
+            self.echo_src_mac,
+            self.echo_src_ip,
+        )
+    }
+}
+
+/// Generate DHCPv4 Offer+Ack.
+///
+/// Respond to a cilent's Discover and Request messages with Offer+Ack
+/// replies based on the information contained in this struct.
+///
+/// XXX Currently we return the same options no matter what the client
+/// specifies in the parameter request list. This has worked thus far,
+/// but we should come back to this and comb over RFC 2131 more
+/// carefully -- particularly §4.3.1 and §4.3.2.
+pub struct Dhcp4Action {
+    /// The client's MAC address.
+    pub client_mac: MacAddr,
+
+    /// The client's IPv4 address. Used to fill in the `yiaddr` field.
+    pub client_ip: Ipv4Addr,
+
+    /// The client's subnet mask specified as a prefix length. Used as
+    /// the value of `Subnet Mask Option (code 1)`.
+    pub subnet_prefix_len: Ipv4PrefixLen,
+
+    /// The gateway MAC address. The use of this action assumes that
+    /// the OPTE port is acting as gateway; this MAC address is what
+    /// the port will use when acting as a gateway to the client. This
+    /// is used as the Ethernet header's source address.
+    pub gw_mac: MacAddr,
+
+    /// The gateway IPv4 address. This is used for several purposes:
+    ///
+    /// * As the IP header's source address.
+    ///
+    /// * As the value of the `siaddr` field.
+    ///
+    /// * As the value of the `Router Option (code 3)`.
+    ///
+    /// * As the value of the `Server Identifier Option (code 54)`.
+    pub gw_ip: Ipv4Addr,
+
+    /// The value of the `DHCP Message Type Option (code 53)`. This
+    /// action supports only the Offer and Ack messages.
+    pub reply_type: Dhcp4ReplyType,
+
+    /// A static route entry, sent to the client via the `Classless
+    /// Static Route Option (code 131)`.
+    pub re1: SubnetRouterPair,
+
+    /// An optional second entry (see `re1`).
+    pub re2: Option<SubnetRouterPair>,
+
+    /// An optional third entry (see `re1`).
+    pub re3: Option<SubnetRouterPair>,
+
+    /// An optional list of 1-3 DNS servers.
+    pub dns_servers: Option<[Option<Ipv4Addr>; 3]>,
+}
+
+impl Display for Dhcp4Action {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "DHCPv4 {}: {}", self.reply_type, self.client_ip)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Dhcp4ReplyType {
+    Offer,
+    Ack,
+}
+
+impl Display for Dhcp4ReplyType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Offer => write!(f, "OFFER"),
+            Self::Ack => write!(f, "ACK"),
+        }
+    }
+}
+
+/// Map a subnet to its next-hop.
+#[derive(Clone, Copy, Debug)]
+pub struct SubnetRouterPair {
+    pub subnet: Ipv4Cidr,
+    pub router: Ipv4Addr,
+}
+
+impl SubnetRouterPair {
+    pub fn new(subnet: Ipv4Cidr, router: Ipv4Addr) -> Self {
+        Self { subnet, router }
     }
 }
 
@@ -140,10 +267,10 @@ impl Debug for Ipv4Addr {
     }
 }
 
-pub const IPV4_ANY_ADDR: Ipv4Addr = Ipv4Addr { inner: [0; 4] };
-pub const IPV4_LOCAL_BCAST: Ipv4Addr = Ipv4Addr { inner: [255; 4] };
-
 impl Ipv4Addr {
+    pub const ANY_ADDR: Self = Self { inner: [0; 4] };
+    pub const LOCAL_BCAST: Self = Self { inner: [255; 4] };
+
     /// Return the bytes of the address.
     pub fn bytes(&self) -> [u8; 4] {
         self.inner
@@ -156,7 +283,7 @@ impl Ipv4Addr {
         }
 
         if mask == 0 {
-            return Ok(IPV4_ANY_ADDR);
+            return Ok(Ipv4Addr::ANY_ADDR);
         }
 
         let mut n = u32::from_be_bytes(self.inner);
@@ -284,16 +411,23 @@ pub enum IpCidr {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ipv4PrefixLen(u8);
 
-pub const IP4_MASK_NONE: Ipv4PrefixLen = Ipv4PrefixLen(0);
-pub const IP4_MASK_ALL: Ipv4PrefixLen = Ipv4PrefixLen(32);
-
 impl Ipv4PrefixLen {
+    pub const NETMASK_NONE: Self = Self(0);
+    pub const NETMASK_ALL: Self = Self(32);
+
     pub fn new(prefix_len: u8) -> Result<Self, String> {
         if prefix_len > 32 {
             return Err(format!("bad IPv4 prefix length: {}", prefix_len));
         }
 
         Ok(Self(prefix_len))
+    }
+
+    /// Convert the prefix length into a subnet mask.
+    pub fn to_netmask(self) -> Ipv4Addr {
+        let mut bits = i32::MIN;
+        bits = bits >> (self.0 - 1);
+        Ipv4Addr::from(bits.to_be_bytes())
     }
 
     pub fn val(&self) -> u8 {

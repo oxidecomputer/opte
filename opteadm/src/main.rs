@@ -91,7 +91,6 @@ enum Command {
 
     /// Create an xde device
     CreateXde {
-        #[structopt(long)]
         name: String,
 
         #[structopt(long)]

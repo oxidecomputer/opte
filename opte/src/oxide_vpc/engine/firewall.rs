@@ -4,9 +4,11 @@ cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
+        use alloc::vec::Vec;
     } else {
         use std::string::{String, ToString};
         use std::sync::Arc;
+        use std::vec::Vec;
     }
 }
 
@@ -17,8 +19,8 @@ use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
 use crate::engine::port::{self, Port, Pos};
 use crate::engine::rule::{
-    self, EtherTypeMatch, Identity, IdentityDesc, IpProtoMatch, Ipv4AddrMatch,
-    PortMatch, Predicate, Rule, StatefulAction,
+    self, DataPredicate, EtherTypeMatch, Identity, IdentityDesc, IpProtoMatch,
+    Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
 };
 use crate::engine::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
 pub use crate::oxide_vpc::api::ProtoFilter;
@@ -69,10 +71,7 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     //
     // By default, if there are no predicates, then a rule matches.
     // Thus, to match all incoming traffic, we add no predicates.
-    layer.add_rule(
-        Direction::In,
-        Rule::new(65535, rule::Action::Deny).match_any(),
-    );
+    layer.add_rule(Direction::In, Rule::match_any(65535, rule::Action::Deny));
 
     // This rule is not listed in the RFDs, nor does the Oxide VPC
     // Firewall have any features for matching L2 data. The underlying
@@ -80,18 +79,17 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     // by RFD 21. We use this to our advantage here to allow ARP
     // traffic to pass, which will be dealt with by the ARP layer in
     // the Oxide Network configuration.
-    let arp = Rule::new(1, layer.action(1).unwrap().clone());
-    let arp = arp.add_predicate(Predicate::InnerEtherType(vec![
-        EtherTypeMatch::Exact(ETHER_TYPE_ARP),
-    ]));
+    let mut arp = Rule::new(1, layer.action(1).unwrap().clone());
+    arp.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+        ETHER_TYPE_ARP,
+    )]));
     layer.add_rule(Direction::In, arp.finalize());
 
     // Allow SSH traffic from anywhere.
-    let ssh = Rule::new(65534, layer.action(0).unwrap().clone());
-    let mut ssh =
-        ssh.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
-            Protocol::TCP,
-        )]));
+    let mut ssh = Rule::new(65534, layer.action(0).unwrap().clone());
+    ssh.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
+        Protocol::TCP,
+    )]));
     ssh.add_predicate(Predicate::InnerDstPort(vec![PortMatch::Exact(
         TCP_PORT_SSH,
     )]));
@@ -104,19 +102,17 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     // we don't expose these things in the Oxide Virtual Firewall, it
     // would allow us to perform finer-grained ICMP filtering in the
     // event that is useful.
-    let icmp = Rule::new(65534, layer.action(0).unwrap().clone());
-    let icmp =
-        icmp.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
-            Protocol::ICMP,
-        )]));
+    let mut icmp = Rule::new(65534, layer.action(0).unwrap().clone());
+    icmp.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
+        Protocol::ICMP,
+    )]));
     layer.add_rule(Direction::In, icmp.finalize());
 
     // Allow RDP from anywhere.
-    let rdp = Rule::new(65534, layer.action(0).unwrap().clone());
-    let mut rdp =
-        rdp.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
-            Protocol::TCP,
-        )]));
+    let mut rdp = Rule::new(65534, layer.action(0).unwrap().clone());
+    rdp.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
+        Protocol::TCP,
+    )]));
     rdp.add_predicate(Predicate::InnerDstPort(vec![PortMatch::Exact(
         TCP_PORT_RDP,
     )]));
@@ -125,38 +121,36 @@ fn add_default_inbound_rules(layer: &mut Layer) {
 
 fn add_default_outbound_rules(layer: &mut Layer) {
     let act = layer.action(0).unwrap().clone();
-    layer.add_rule(Direction::Out, Rule::new(65535, act).match_any());
+    layer.add_rule(Direction::Out, Rule::match_any(65535, act));
 }
 
-// impl From<FirewallRule> for Rule<rule::Build> {
 pub fn from_fw_rule(
     fw_rule: FirewallRule,
     action: rule::Action,
 ) -> Rule<rule::Finalized> {
-    let rule = Rule::new(fw_rule.priority, action);
     let addr_pred = fw_rule.filters.hosts().into_predicate(fw_rule.direction);
     let proto_pred = fw_rule.filters.protocol().into_predicate();
     let port_pred = fw_rule.filters.ports().into_predicate();
 
     if addr_pred.is_none() && proto_pred.is_none() && port_pred.is_none() {
-        return rule.match_any();
+        return Rule::match_any(fw_rule.priority, action);
     }
 
-    let mut preds = vec![];
+    let mut rule = Rule::new(fw_rule.priority, action);
 
     if proto_pred.is_some() {
-        preds.push(proto_pred.unwrap());
+        rule.add_predicate(proto_pred.unwrap());
     }
 
     if port_pred.is_some() {
-        preds.push(port_pred.unwrap());
+        rule.add_predicate(port_pred.unwrap());
     }
 
     if addr_pred.is_some() {
-        preds.push(addr_pred.unwrap());
+        rule.add_predicate(addr_pred.unwrap());
     }
 
-    rule.add_predicates(preds).finalize()
+    rule.finalize()
 }
 
 pub struct FwStatefulAction {
@@ -182,6 +176,10 @@ impl StatefulAction for FwStatefulAction {
         _meta: &mut Meta,
     ) -> rule::GenDescResult {
         Ok(Arc::new(IdentityDesc::new(self.name.clone())))
+    }
+
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
     }
 }
 

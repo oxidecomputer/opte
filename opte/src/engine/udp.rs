@@ -20,9 +20,6 @@ use crate::engine::headers::{
 };
 use crate::engine::packet::{PacketRead, ReadErr, WriteError};
 
-pub const UDP_HDR_CSUM_OFF: usize = 6;
-pub const UDP_HDR_SZ: usize = mem::size_of::<UdpHdrRaw>();
-
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
@@ -132,6 +129,9 @@ macro_rules! assert_udp {
 }
 
 impl UdpHdr {
+    pub const CSUM_OFFSET: usize = 6;
+    pub const SIZE: usize = mem::size_of::<UdpHdrRaw>();
+
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.hdr_len());
         let raw = UdpHdrRaw::from(self);
@@ -152,12 +152,12 @@ impl UdpHdr {
     }
 
     pub fn hdr_len(&self) -> usize {
-        UDP_HDR_SZ
+        Self::SIZE
     }
 
     /// Return the payload length, in bytes.
     pub fn pay_len(&self) -> usize {
-        usize::from(self.length) - UDP_HDR_SZ
+        usize::from(self.length) - Self::SIZE
     }
 
     pub fn set_csum(&mut self, csum: [u8; 2]) {
@@ -165,7 +165,7 @@ impl UdpHdr {
     }
 
     pub fn set_pay_len(&mut self, len: u16) {
-        self.length = UDP_HDR_SZ as u16 + len;
+        self.length = Self::SIZE as u16 + len;
     }
 
     pub fn set_total_len(&mut self, len: u16) {
@@ -214,7 +214,7 @@ impl From<&UdpMeta> for UdpHdr {
         UdpHdr {
             src_port: meta.src,
             dst_port: meta.dst,
-            length: UDP_HDR_SZ as u16,
+            length: Self::SIZE as u16,
             csum: [0; 2],
             csum_minus_hdr: Checksum::from(0),
         }

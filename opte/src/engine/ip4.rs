@@ -28,9 +28,7 @@ use super::packet::{PacketRead, ReadErr, WriteError};
 use super::rule::{
     MatchExact, MatchExactVal, MatchPrefix, MatchPrefixVal, MatchRangeVal,
 };
-pub use crate::api::{
-    Ipv4Addr, Ipv4Cidr, Protocol, IPV4_ANY_ADDR, IPV4_LOCAL_BCAST,
-};
+pub use crate::api::{Ipv4Addr, Ipv4Cidr, Ipv4PrefixLen, Protocol};
 
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
 pub const IPV4_HDR_VER_MASK: u8 = 0xF0;
@@ -115,7 +113,7 @@ impl Ipv4Cidr {
     /// Does this CIDR represent the default route subnet?
     pub fn is_default(&self) -> bool {
         let (ip, prefix_len) = self.parts();
-        ip == IPV4_ANY_ADDR && prefix_len.val() == 0
+        ip == Ipv4Addr::ANY_ADDR && prefix_len.val() == 0
     }
 
     pub fn prefix_len(self) -> u8 {

@@ -8,10 +8,12 @@ cfg_if! {
         use alloc::collections::btree_map::BTreeMap;
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
+        use alloc::vec::Vec;
     } else {
         use std::collections::btree_map::BTreeMap;
         use std::string::{String, ToString};
         use std::sync::Arc;
+        use std::vec::Vec;
     }
 }
 
@@ -26,7 +28,9 @@ use crate::engine::ip6::{Ipv6Addr, Ipv6Meta};
 use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
 use crate::engine::port::{self, Port, Pos};
-use crate::engine::rule::{self, Action, Rule, StaticAction, HT};
+use crate::engine::rule::{
+    self, Action, DataPredicate, Predicate, Rule, StaticAction, HT,
+};
 use crate::engine::sync::{KMutex, KMutexType};
 use crate::engine::udp::UdpMeta;
 use crate::oxide_vpc::api::{self as vpc_api, RouterTarget};
@@ -66,10 +70,10 @@ pub fn setup(
     let decap = Action::Static(Arc::new(DecapAction::new()));
 
     let layer = Layer::new(OVERLAY_LAYER_NAME, port.name(), vec![encap, decap]);
-    let encap_rule = Rule::new(1, layer.action(0).unwrap().clone());
-    layer.add_rule(Direction::Out, encap_rule.clone().match_any());
-    let decap_rule = Rule::new(1, layer.action(1).unwrap().clone());
-    layer.add_rule(Direction::In, decap_rule.match_any());
+    let encap_rule = Rule::match_any(1, layer.action(0).unwrap().clone());
+    layer.add_rule(Direction::Out, encap_rule);
+    let decap_rule = Rule::match_any(1, layer.action(1).unwrap().clone());
+    layer.add_rule(Direction::In, decap_rule);
     // NOTE The First/Last positions cannot fail; perhaps I should
     // improve the API to avoid the unwrap().
     port.add_layer(layer, Pos::Last)
@@ -232,6 +236,10 @@ impl StaticAction for EncapAction {
             ..Default::default()
         })
     }
+
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
+    }
 }
 
 pub struct DecapAction {}
@@ -266,6 +274,10 @@ impl StaticAction for DecapAction {
             outer_encap: HeaderAction::Pop,
             ..Default::default()
         })
+    }
+
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
     }
 }
 

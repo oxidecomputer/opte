@@ -30,7 +30,11 @@ use super::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, PacketWriter,
     Parsed, ReadErr, WriteError,
 };
-use super::rule::{GenResult, HairpinAction, Payload};
+use super::rule::{
+    ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate, EtherAddrMatch,
+    EtherTypeMatch, GenResult, HairpinAction, Ipv4AddrMatch, Payload,
+    Predicate,
+};
 use crate::api::Ipv4Addr;
 
 pub const ARP_HTYPE_ETHERNET: u16 = 1;
@@ -330,9 +334,7 @@ impl ArpEth4PayloadRaw {
     }
 }
 
-/// Generate an ARP Reply mapping the TPA to the THA. It is expected
-/// this is paired with a rule which filters on the TPA of an ARP
-/// Request.
+/// Generate an ARP Reply mapping the TPA to the THA.
 pub struct ArpReply {
     tpa: Ipv4Addr,
     tha: EtherAddr,
@@ -351,6 +353,27 @@ impl fmt::Display for ArpReply {
 }
 
 impl HairpinAction for ArpReply {
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        let hdr_preds = vec![
+            Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+                ETHER_TYPE_ARP,
+            )]),
+            Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
+                EtherAddr::from([0xFF; 6]),
+            )]),
+            Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)),
+            Predicate::InnerArpPtype(ArpPtypeMatch::Exact(ETHER_TYPE_IPV4)),
+            Predicate::InnerArpOp(ArpOpMatch::Exact(ArpOp::Request)),
+        ];
+
+        let data_preds =
+            vec![DataPredicate::InnerArpTpa(vec![Ipv4AddrMatch::Exact(
+                self.tpa,
+            )])];
+
+        (hdr_preds, data_preds)
+    }
+
     fn gen_packet(
         &self,
         meta: &PacketMeta,

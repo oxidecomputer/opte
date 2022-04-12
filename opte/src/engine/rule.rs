@@ -792,6 +792,10 @@ impl StaticAction for Identity {
     ) -> GenHtResult {
         Ok(HT::identity(&self.name))
     }
+
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -970,6 +974,8 @@ pub trait StatefulAction: Display {
     /// unexpected error while trying to generate a descriptor.
     fn gen_desc(&self, flow_id: &InnerFlowId, meta: &mut Meta)
         -> GenDescResult;
+
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 }
 
 #[derive(Clone, Debug)]
@@ -988,6 +994,13 @@ pub trait StaticAction: Display {
         flow_id: &InnerFlowId,
         meta: &mut Meta,
     ) -> GenHtResult;
+
+    /// Return the predicates implicit to this action.
+    ///
+    /// Return both the header [`Predicate`] list and
+    /// [`DataPredicate`] list implicit to this action. An empty list
+    /// implies there are no implicit predicates of that type.
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 }
 
 /// A meta action is one that's only goal is to modify the processing
@@ -995,6 +1008,13 @@ pub trait StaticAction: Display {
 /// the packet, only add/modify/remove metadata for use by later
 /// layers.
 pub trait MetaAction: Display {
+    /// Return the predicates implicit to this action.
+    ///
+    /// Return both the header [`Predicate`] list and
+    /// [`DataPredicate`] list implicit to this action. An empty list
+    /// implies there are no implicit predicates of that type.
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
+
     fn mod_meta(&self, flow_id: &InnerFlowId, meta: &mut Meta);
 }
 
@@ -1044,6 +1064,13 @@ pub trait HairpinAction: Display {
         meta: &PacketMeta,
         rdr: &mut PacketReader<Parsed, ()>,
     ) -> GenResult<Packet<Initialized>>;
+
+    /// Return the predicates implicit to this action.
+    ///
+    /// Return both the header [`Predicate`] list and
+    /// [`DataPredicate`] list implicit to this action. An empty list
+    /// implies there are no implicit predicates of that type.
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 }
 
 #[derive(Clone)]
@@ -1056,6 +1083,19 @@ pub enum Action {
 }
 
 impl Action {
+    pub fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        match self {
+            // The entire point of a Deny action is for the consumer
+            // to specify which types of packets it wants to deny,
+            // which means the predicates are always purely explicit.
+            Self::Deny => (vec![], vec![]),
+            Self::Meta(act) => act.implicit_preds(),
+            Self::Static(act) => act.implicit_preds(),
+            Self::Stateful(act) => act.implicit_preds(),
+            Self::Hairpin(act) => act.implicit_preds(),
+        }
+    }
+
     pub fn is_deny(&self) -> bool {
         match self {
             Self::Deny => true,
@@ -1113,10 +1153,6 @@ pub struct RulePredicates {
 pub trait RuleState {}
 
 #[derive(Clone, Debug)]
-pub struct Empty {}
-impl RuleState for Empty {}
-
-#[derive(Clone, Debug)]
 pub struct Ready {
     hdr_preds: Vec<Predicate>,
     data_preds: Vec<DataPredicate>,
@@ -1133,7 +1169,7 @@ impl RuleState for Finalized {}
 pub struct Rule<S: RuleState> {
     state: S,
     action: Action,
-    pub priority: u16,
+    priority: u16,
 }
 
 impl<S: RuleState> Rule<S> {
@@ -1142,61 +1178,70 @@ impl<S: RuleState> Rule<S> {
     }
 }
 
-impl Rule<Empty> {
-    pub fn new(priority: u16, action: Action) -> Self {
-        Rule { state: Empty {}, action, priority }
-    }
-
-    pub fn add_predicate(self, pred: Predicate) -> Rule<Ready> {
-        Rule {
-            state: Ready { hdr_preds: vec![pred], data_preds: vec![] },
-            action: self.action,
-            priority: self.priority,
-        }
-    }
-
-    pub fn add_predicates(self, preds: Vec<Predicate>) -> Rule<Ready> {
-        Rule {
-            state: Ready { hdr_preds: preds, data_preds: vec![] },
-            action: self.action,
-            priority: self.priority,
-        }
-    }
-
-    pub fn add_data_predicate(self, pred: DataPredicate) -> Rule<Ready> {
-        Rule {
-            state: Ready { hdr_preds: vec![], data_preds: vec![pred] },
-            action: self.action,
-            priority: self.priority,
-        }
-    }
-
-    pub fn match_any(self) -> Rule<Finalized> {
-        Rule {
-            state: Finalized { preds: None },
-            action: self.action,
-            priority: self.priority,
-        }
-    }
-}
-
 impl Rule<Ready> {
+    /// Create a new rule.
+    ///
+    /// Create a new rule with the given priority and [`Action`]. Add
+    /// any implicit predicates dictated by the action. Additional
+    /// predicates may be added along with the action's implicit ones.
+    pub fn new(priority: u16, action: Action) -> Self {
+        let (hdr_preds, data_preds) = action.implicit_preds();
+
+        Rule { state: Ready { hdr_preds, data_preds }, action, priority }
+    }
+
+    /// Create a new rule that matches anything.
+    ///
+    /// The same as [`Rule::new()`] + [`Rule::clear_preds()`] with the
+    /// additional effect of moving directly to the [`Finalized`]
+    /// state; preventing any chance for adding a predicate. This is
+    /// useful for making intentions clear that this rule is to match
+    /// anything.
+    pub fn match_any(priority: u16, action: Action) -> Rule<Finalized> {
+        Rule { state: Finalized { preds: None }, action, priority }
+    }
+
+    /// Add a single [`Predicate`] to the end of the list.
     pub fn add_predicate(&mut self, pred: Predicate) {
         self.state.hdr_preds.push(pred);
     }
 
+    /// Append a list of [`Predicate`]s to the existing list.
+    pub fn add_predicates(&mut self, preds: Vec<Predicate>) {
+        for p in preds {
+            self.state.hdr_preds.push(p);
+        }
+    }
+
+    /// Add a single [`DataPredicate`] to the end of the list.
     pub fn add_data_predicate(&mut self, pred: DataPredicate) {
         self.state.data_preds.push(pred)
     }
 
+    /// Clear all header and data predicates.
+    ///
+    /// For the rare occasion that you want to disregard an [`Action`]'s
+    /// implicit predicates.
+    pub fn clear_preds(&mut self) {
+        self.state.hdr_preds.clear();
+        self.state.data_preds.clear();
+    }
+
+    /// Finalize the rule; locking all predicates in stone.
     pub fn finalize(self) -> Rule<Finalized> {
+        let preds = if self.state.hdr_preds.len() == 0
+            && self.state.data_preds.len() == 0
+        {
+            None
+        } else {
+            Some(RulePredicates {
+                hdr_preds: self.state.hdr_preds,
+                data_preds: self.state.data_preds,
+            })
+        };
+
         Rule {
-            state: Finalized {
-                preds: Some(RulePredicates {
-                    hdr_preds: self.state.hdr_preds,
-                    data_preds: self.state.data_preds,
-                }),
-            },
+            state: Finalized { preds },
             priority: self.priority,
             action: self.action,
         }
@@ -1241,6 +1286,10 @@ impl<'a> Rule<Finalized> {
             }
         }
     }
+
+    pub fn priority(&self) -> u16 {
+        self.priority
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1275,7 +1324,7 @@ fn rule_matching() {
     use crate::engine::packet::MetaGroup;
 
     let action = Identity::new("rule_matching");
-    let r1 = Rule::new(1, Action::Static(Arc::new(action)));
+    let mut r1 = Rule::new(1, Action::Static(Arc::new(action)));
     let src_ip = "10.11.11.100".parse().unwrap();
     let src_port = "1026".parse().unwrap();
     let dst_ip = "52.10.128.69".parse().unwrap();
@@ -1303,10 +1352,9 @@ fn rule_matching() {
         inner: MetaGroup { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
     };
 
-    let r1 =
-        r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
-            src_ip,
-        )]));
+    r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
+        src_ip,
+    )]));
     let r1 = r1.finalize();
 
     assert!(r1.is_match(&meta, &mut rdr));
