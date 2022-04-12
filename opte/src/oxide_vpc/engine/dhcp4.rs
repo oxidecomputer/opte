@@ -149,6 +149,11 @@ impl Display for Dhcp4Action {
 }
 
 impl HairpinAction for Dhcp4Action {
+    // TODO placeholder to compile
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        todo!("placeholder to compile");
+    }
+
     fn gen_packet(
         &self,
         _meta: &PacketMeta,

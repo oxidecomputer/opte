@@ -1,6 +1,7 @@
 use core::fmt::{self, Debug, Display};
 use core::result;
 use core::str::FromStr;
+use super::mac::MacAddr;
 use serde::{Deserialize, Serialize};
 
 cfg_if! {
@@ -10,6 +11,32 @@ cfg_if! {
     } else {
         use std::string::String;
         use std::vec::Vec;
+    }
+}
+
+/// Generate an ICMPv4 Echo Reply message.
+///
+/// Map an ICMPv4 Echo Message (Type=8, Code=0) from `src` to `dst`
+/// into an ICMPv4 Echo Reply Message (Type=0, Code=0) from `dst` to
+/// `src`.
+///
+/// TODO Go over each field in detail.
+#[derive(Clone, Debug)]
+pub struct Icmp4EchoReply {
+    pub echo_src_mac: MacAddr,
+    pub echo_src_ip: Ipv4Addr,
+    pub echo_dst_mac: MacAddr,
+    pub echo_dst_ip: Ipv4Addr,
+}
+
+impl Display for Icmp4EchoReply {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "ICMPv4 Echo Reply ({},{}) => ({},{})",
+            self.echo_dst_mac, self.echo_dst_ip, self.echo_src_mac,
+            self.echo_src_ip,
+        )
     }
 }
 

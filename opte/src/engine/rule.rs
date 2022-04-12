@@ -1044,6 +1044,13 @@ pub trait HairpinAction: Display {
         meta: &PacketMeta,
         rdr: &mut PacketReader<Parsed, ()>,
     ) -> GenResult<Packet<Initialized>>;
+
+    /// Return the predicates implicit to this action.
+    ///
+    /// Return both the header [`Predicate`] list and
+    /// [`DataPredicate`] list implicit to this action. An empty list
+    /// implies there are no implicit predicates of that type.
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 }
 
 #[derive(Clone)]
@@ -1056,6 +1063,19 @@ pub enum Action {
 }
 
 impl Action {
+    pub fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        match self {
+            // The entire point of a Deny action is for the consumer
+            // to specify which types of packets it wants to deny,
+            // which means the predicates are always purely explicit.
+            Self::Deny => (vec![], vec![]),
+            Self::Hairpin(hp) => hp.implicit_preds(),
+            // TODO Need to implement implicit preds for the other
+            // action types.
+            _ => (vec![], vec![]),
+        }
+    }
+
     pub fn is_deny(&self) -> bool {
         match self {
             Self::Deny => true,
@@ -1143,7 +1163,22 @@ impl<S: RuleState> Rule<S> {
 }
 
 impl Rule<Empty> {
+    pub fn new_implicit(priority: u16, action: Action) -> Rule<Ready> {
+        let (hdr_preds, data_preds) = action.implicit_preds();
+
+        Rule {
+            state: Ready { hdr_preds, data_preds },
+            action,
+            priority
+        }
+    }
+
+    // TODO Keeping this alias around until I convert all call sites.
     pub fn new(priority: u16, action: Action) -> Self {
+        Rule::new_no_implicit(priority, action)
+    }
+
+    pub fn new_no_implicit(priority: u16, action: Action) -> Self {
         Rule { state: Empty {}, action, priority }
     }
 

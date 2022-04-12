@@ -30,7 +30,7 @@ use super::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, PacketWriter,
     Parsed, ReadErr, WriteError,
 };
-use super::rule::{GenResult, HairpinAction, Payload};
+use super::rule::{DataPredicate, GenResult, HairpinAction, Payload, Predicate};
 use crate::api::Ipv4Addr;
 
 pub const ARP_HTYPE_ETHERNET: u16 = 1;
@@ -351,6 +351,11 @@ impl fmt::Display for ArpReply {
 }
 
 impl HairpinAction for ArpReply {
+    // TODO placeholder for now to compile
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        todo!("placeholder to compile");
+    }
+
     fn gen_packet(
         &self,
         meta: &PacketMeta,

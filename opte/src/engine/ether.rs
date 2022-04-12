@@ -105,6 +105,12 @@ impl From<api::MacAddr> for EtherAddr {
     }
 }
 
+impl From<EtherAddr> for api::MacAddr {
+    fn from(ether: EtherAddr) -> Self {
+        api::MacAddr::from(ether.bytes)
+    }
+}
+
 impl From<[u8; ETHER_ADDR_LEN]> for EtherAddr {
     fn from(bytes: [u8; ETHER_ADDR_LEN]) -> Self {
         EtherAddr { bytes }
