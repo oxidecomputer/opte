@@ -20,7 +20,6 @@ use super::port;
 use super::rule;
 use super::vpc::VpcSubnet4;
 use crate::api::{CmdOk, Ipv4Addr, OpteError};
-use crate::oxide_net::firewall as fw;
 
 /// Dump various information about a `Layer` for use in debugging or
 /// administrative purposes.
@@ -106,29 +105,6 @@ pub struct DumpTcpFlowsResp {
 
 impl CmdOk for DumpTcpFlowsResp {}
 
-pub fn add_fw_rule(
-    port: &port::Port<port::Active>,
-    req: &fw::AddFwRuleReq,
-) -> Result<(), OpteError> {
-    let action = match req.rule.action {
-        fw::Action::Allow => {
-            port.layer_action(fw::FW_LAYER_NAME, 0).unwrap().clone()
-        }
-
-        fw::Action::Deny => rule::Action::Deny,
-    };
-
-    let rule = fw::from_fw_rule(req.rule.clone(), action);
-    port.add_rule(fw::FW_LAYER_NAME, req.rule.direction, rule)
-}
-
-pub fn rem_fw_rule(
-    port: &port::Port<port::Active>,
-    req: &fw::RemFwRuleReq,
-) -> Result<(), OpteError> {
-    port.remove_rule(fw::FW_LAYER_NAME, req.dir, req.id)
-}
-
 pub fn dump_layer(
     port: &port::Port<port::Active>,
     req: &DumpLayerReq,
@@ -190,10 +166,3 @@ pub struct ListPortsResp {
     pub ports: Vec<PortInfo>,
 }
 impl CmdOk for ListPortsResp {}
-
-/// Set the underlay devices used by the xde kernel module
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SetXdeUnderlayReq {
-    pub u1: String,
-    pub u2: String,
-}

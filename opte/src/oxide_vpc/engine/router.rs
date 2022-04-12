@@ -14,54 +14,15 @@ cfg_if! {
     }
 }
 
-use serde::{Deserialize, Serialize};
-
-use crate::api::{self, Direction, NoResp, OpteError};
-use crate::engine::headers::{IpAddr, IpCidr};
+use super::firewall as fw;
+use crate::api::{Direction, NoResp, OpteError};
+use crate::engine::headers::IpCidr;
 use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::{self, meta::Meta, Port};
 use crate::engine::rule::{self, Action, MetaAction, Predicate, Rule};
-use crate::oxide_net::firewall as fw;
+use crate::oxide_vpc::api::RouterTarget;
 
 pub const ROUTER_LAYER_NAME: &'static str = "router";
-
-/// The target for a given router entry.
-///
-/// * Drop: Packets matching this entry are dropped.
-///
-/// * InternetGateway: Packets matching this entry are forwarded to
-/// the internet. In the case of the Oxide Network the IG is not an
-/// actual destination, but rather a configuration that determines how
-/// we should NAT the flow.
-///
-/// * Ip: Packets matching this entry are forwarded to the specified IP.
-///
-/// XXX Make sure that if a router's target is an IP address that it
-/// matches the destination IP type.
-///
-/// * VpcSubnet: Packets matching this entry are forwarded to the
-/// specified VPC Subnet. In the Oxide Network this is just an
-/// abstraction, it's simply allowing one subnet to talk to another.
-/// There is no separate VPC router process, the real routing is done
-/// by the underlay.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum RouterTarget {
-    Drop,
-    InternetGateway,
-    Ip(IpAddr),
-    VpcSubnet(IpCidr),
-}
-
-impl From<api::RouterTarget> for RouterTarget {
-    fn from(rt: api::RouterTarget) -> Self {
-        match rt {
-            api::RouterTarget::Drop => Self::Drop,
-            api::RouterTarget::InternetGateway => Self::InternetGateway,
-            api::RouterTarget::Ip(addr) => Self::Ip(addr.into()),
-            api::RouterTarget::VpcSubnet(cidr) => Self::VpcSubnet(cidr.into()),
-        }
-    }
-}
 
 impl fmt::Display for RouterTarget {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

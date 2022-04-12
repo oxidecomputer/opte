@@ -44,8 +44,10 @@ use super::tcp::TcpHdr;
 use super::time::Moment;
 use super::udp::{UdpHdr, UdpHdrRaw, UdpMeta};
 use crate::api::Direction::*;
-use crate::oxide_net::overlay::{self, OverlayCfg, PhysNet, Virt2Phys};
-use crate::oxide_net::{self, arp, dyn_nat4, firewall, icmp, router};
+use crate::oxide_vpc::api::{AddFwRuleReq, RouterTarget};
+use crate::oxide_vpc::engine::overlay::{self, OverlayCfg, PhysNet, Virt2Phys};
+use crate::oxide_vpc::engine::{arp, dyn_nat4, firewall, icmp, router};
+use crate::oxide_vpc::{DynNat4Cfg, PortCfg};
 use crate::ExecCtx;
 
 use ProcessResult::*;
@@ -73,12 +75,12 @@ fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
     }
 }
 
-fn home_cfg() -> oxide_net::PortCfg {
-    oxide_net::PortCfg {
+fn home_cfg() -> PortCfg {
+    PortCfg {
         private_ip: "10.0.0.210".parse().unwrap(),
         private_mac: EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]),
         vpc_subnet: "10.0.0.0/24".parse().unwrap(),
-        dyn_nat: oxide_net::DynNat4Cfg {
+        dyn_nat: DynNat4Cfg {
             public_ip: "10.0.0.99".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
         },
@@ -88,12 +90,12 @@ fn home_cfg() -> oxide_net::PortCfg {
     }
 }
 
-fn lab_cfg() -> oxide_net::PortCfg {
-    oxide_net::PortCfg {
+fn lab_cfg() -> PortCfg {
+    PortCfg {
         private_ip: "172.20.14.16".parse().unwrap(),
         private_mac: EtherAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
-        dyn_nat: oxide_net::DynNat4Cfg {
+        dyn_nat: DynNat4Cfg {
             public_ip: "76.76.21.21".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
         },
@@ -103,7 +105,7 @@ fn lab_cfg() -> oxide_net::PortCfg {
     }
 }
 
-fn oxide_net_setup(name: &str, cfg: &oxide_net::PortCfg) -> Port<Inactive> {
+fn oxide_net_setup(name: &str, cfg: &PortCfg) -> Port<Inactive> {
     let ectx = Arc::new(ExecCtx { log: Box::new(crate::PrintlnLog {}) });
     let name_cstr = crate::CString::new(name).unwrap();
     let mut port = Port::new(name, name_cstr, cfg.private_mac, ectx.clone());
@@ -133,12 +135,12 @@ fn oxide_net_setup(name: &str, cfg: &oxide_net::PortCfg) -> Port<Inactive> {
     port
 }
 
-fn g1_cfg() -> oxide_net::PortCfg {
-    oxide_net::PortCfg {
+fn g1_cfg() -> PortCfg {
+    PortCfg {
         private_ip: "192.168.77.101".parse().unwrap(),
         private_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
-        dyn_nat: oxide_net::DynNat4Cfg {
+        dyn_nat: DynNat4Cfg {
             // NOTE: This is not a routable IP, but remember that a
             // "public IP" for an Oxide guest could either be a
             // public, routable IP or simply an IP on their wider LAN
@@ -154,12 +156,12 @@ fn g1_cfg() -> oxide_net::PortCfg {
     }
 }
 
-fn g2_cfg() -> oxide_net::PortCfg {
-    oxide_net::PortCfg {
+fn g2_cfg() -> PortCfg {
+    PortCfg {
         private_ip: "192.168.77.102".parse().unwrap(),
         private_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x66]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
-        dyn_nat: oxide_net::DynNat4Cfg {
+        dyn_nat: DynNat4Cfg {
             // NOTE: This is not a routable IP, but remember that a
             // "public IP" for an Oxide guest could either be a
             // public, routable IP or simply an IP on their wider LAN
@@ -432,7 +434,6 @@ fn overlay_guest_to_guest() {
     use super::checksum::HeaderChecksum;
     use super::ip4::UlpCsumOpt;
     use super::tcp::TcpFlags;
-    use crate::oxide_net::router::RouterTarget;
 
     // ================================================================
     // Configure ports for g1 and g2.
@@ -513,9 +514,9 @@ fn overlay_guest_to_guest() {
 
     // Allow incoming TCP connection from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
-    super::ioctl::add_fw_rule(
+    firewall::add_fw_rule(
         &g2_port,
-        &firewall::AddFwRuleReq {
+        &AddFwRuleReq {
             port_name: g2_port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
@@ -693,8 +694,6 @@ fn overlay_guest_to_internet() {
     use super::checksum::HeaderChecksum;
     use super::ip4::UlpCsumOpt;
     use super::tcp::TcpFlags;
-    use crate::oxide_net::overlay::{OverlayCfg, PhysNet};
-    use crate::oxide_net::router::RouterTarget;
 
     // ================================================================
     // Configure ports for g1 and g2.

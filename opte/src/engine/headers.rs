@@ -19,11 +19,6 @@ use super::tcp::{TcpHdr, TcpMeta, TcpMetaOpt};
 use super::udp::{UdpHdr, UdpMeta, UdpMetaOpt};
 pub use crate::api::{IpAddr, IpCidr};
 
-/// Port 0 is reserved by the sockets layer. It is used by clients to
-/// indicate they want the operating system to choose a port on their
-/// behalf.
-pub const DYNAMIC_PORT: u16 = 0;
-
 pub const AF_INET: i32 = 2;
 pub const AF_INET6: i32 = 26;
 

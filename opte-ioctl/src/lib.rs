@@ -1,7 +1,9 @@
 use opte::api::{
-    AddRouterEntryIpv4Req, CmdOk, CreateXdeReq, DeleteXdeReq, MacAddr, NoResp,
-    OpteCmd, OpteCmdIoctl, OpteError, SetVirt2PhysReq, Vni, API_VERSION,
-    XDE_DLD_OPTE_CMD,
+    CmdOk, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
+    SetXdeUnderlayReq, Vni, API_VERSION, XDE_DLD_OPTE_CMD,
+};
+use opte::oxide_vpc::api::{
+    AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, SetVirt2PhysReq,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -128,6 +130,17 @@ impl OpteHdl {
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetVirt2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+    }
+
+    /// Set xde underlay devices.
+    pub fn set_xde_underlay(
+        &self,
+        u1: &str,
+        u2: &str,
+    ) -> Result<NoResp, Error> {
+        let req = SetXdeUnderlayReq { u1: u1.into(), u2: u2.into() };
+        let cmd = OpteCmd::SetXdeUnderlay;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 

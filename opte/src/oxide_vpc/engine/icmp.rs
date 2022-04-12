@@ -28,10 +28,11 @@ use crate::engine::rule::{
     Action, DataPredicate, EtherAddrMatch, GenErr, GenResult, HairpinAction,
     IpProtoMatch, Ipv4AddrMatch, Predicate, Rule,
 };
+use crate::oxide_vpc::PortCfg;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
-    cfg: &super::PortCfg,
+    cfg: &PortCfg,
 ) -> core::result::Result<(), OpteError> {
     let reply = Action::Hairpin(Arc::new(Icmp4Reply {
         gw_mac: cfg.gw_mac,

@@ -11,10 +11,12 @@ use opte::engine::ioctl::{self as api, PortInfo};
 use opte::engine::layer::InnerFlowId;
 use opte::engine::rule::RuleDump;
 use opte::engine::vpc::VpcSubnet4;
-use opte::oxide_net::firewall::{
-    self, Action, Address, FirewallRule, Ports, ProtoFilter, RemFwRuleReq,
+use opte::oxide_vpc::api::{
+    Action as FirewallAction, AddRouterEntryIpv4Req, Address,
+    Filters as FirewallFilters, FirewallRule, PhysNet, Ports, ProtoFilter,
+    RemFwRuleReq, RouterTarget, SetVirt2PhysReq,
 };
-use opte::oxide_net::overlay;
+use opte::oxide_vpc::engine::overlay::DumpVirt2PhysResp;
 use opte_ioctl::Error;
 use opteadm::OpteAdm;
 
@@ -70,7 +72,7 @@ enum Command {
         filters: Filters,
 
         #[structopt(long)]
-        action: Action,
+        action: FirewallAction,
 
         #[structopt(long)]
         priority: u16,
@@ -141,7 +143,7 @@ enum Command {
 
         dest: opte::api::Ipv4Cidr,
 
-        target: opte::api::RouterTarget,
+        target: RouterTarget,
     },
 }
 
@@ -160,12 +162,12 @@ struct Filters {
     ports: Ports,
 }
 
-impl From<Filters> for firewall::Filters {
+impl From<Filters> for FirewallFilters {
     fn from(f: Filters) -> Self {
         Self::new()
             .set_hosts(f.hosts)
-            .protocol(f.protocol)
-            .ports(f.ports)
+            .set_protocol(f.protocol)
+            .set_ports(f.ports)
             .clone()
     }
 }
@@ -400,7 +402,9 @@ fn print_v2p_header() {
     );
 }
 
-fn print_v2p_ip4((src, phys): (&Ipv4Addr, &overlay::PhysNet)) {
+fn print_v2p_ip4(
+    (src, phys): (&Ipv4Addr, &opte::oxide_vpc::engine::overlay::PhysNet),
+) {
     let eth = format!("{}", phys.ether);
     println!(
         "{:<24} {:<8} {:<17} {}",
@@ -411,7 +415,9 @@ fn print_v2p_ip4((src, phys): (&Ipv4Addr, &overlay::PhysNet)) {
     );
 }
 
-fn print_v2p_ip6((src, phys): (&Ipv6Addr, &overlay::PhysNet)) {
+fn print_v2p_ip6(
+    (src, phys): (&Ipv6Addr, &opte::oxide_vpc::engine::overlay::PhysNet),
+) {
     let eth = format!("{}", phys.ether);
     println!(
         "{:<24} {:<8} {:<17} {}",
@@ -422,7 +428,7 @@ fn print_v2p_ip6((src, phys): (&Ipv6Addr, &overlay::PhysNet)) {
     );
 }
 
-fn print_v2p(resp: &overlay::DumpVirt2PhysResp) {
+fn print_v2p(resp: &DumpVirt2PhysResp) {
     println!("Virtual to Physical Mappings");
     print_hrb();
     println!("");
@@ -619,22 +625,14 @@ fn main() {
         Command::SetV2P { vpc_ip4, vpc_mac, underlay_ip, vni } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
             let vip = opte::api::IpAddr::Ip4(vpc_ip4.into());
-            let phys = opte::api::PhysNet {
-                ether: vpc_mac,
-                ip: underlay_ip.into(),
-                vni,
-            };
-            let req = opte::api::SetVirt2PhysReq { vip, phys };
+            let phys = PhysNet { ether: vpc_mac, ip: underlay_ip.into(), vni };
+            let req = SetVirt2PhysReq { vip, phys };
             hdl.set_v2p(&req).unwrap_or_die();
         }
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let req = opte::api::AddRouterEntryIpv4Req {
-                port_name: port,
-                dest,
-                target,
-            };
+            let req = AddRouterEntryIpv4Req { port_name: port, dest, target };
             hdl.add_router_entry_ip4(&req).unwrap_or_die();
         }
     }

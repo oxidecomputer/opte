@@ -40,14 +40,12 @@ cfg_if! {
 pub use cstr_core::CStr;
 pub use cstr_core::CString;
 
-#[cfg(any(feature = "engine", test))]
-pub mod oxide_net;
-
 #[cfg(any(feature = "api", test))]
 pub mod api;
-
 #[cfg(any(feature = "engine", test))]
 pub mod engine;
+#[cfg(any(feature = "vpc", test))]
+pub mod oxide_vpc;
 
 /// Return value with `bit` set.
 ///

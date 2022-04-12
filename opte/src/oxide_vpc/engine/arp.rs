@@ -15,10 +15,11 @@ use crate::engine::rule::{
     Action, ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate,
     EtherAddrMatch, EtherTypeMatch, Ipv4AddrMatch, Predicate, Rule,
 };
+use crate::oxide_vpc::PortCfg;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
-    cfg: &super::PortCfg,
+    cfg: &PortCfg,
 ) -> core::result::Result<(), OpteError> {
     let arp = Layer::new(
         "arp",

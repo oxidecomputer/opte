@@ -7,7 +7,7 @@ edition = "2021"
 [dependencies]
 libc = "0.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
-opte = { path = "../opte" }
+opte = { path = "../opte", features = ["vpc"]}
 postcard = "0.7.0"
 serde = "1.0"
 thiserror = "1.0.28"

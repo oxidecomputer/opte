@@ -12,10 +12,11 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
+use crate::api::DYNAMIC_PORT;
 use crate::engine::checksum::{Checksum, HeaderChecksum};
 use crate::engine::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
-    RawHeader, UlpHdr, UlpMeta, UlpMetaModify, UlpMetaOpt, DYNAMIC_PORT,
+    RawHeader, UlpHdr, UlpMeta, UlpMetaModify, UlpMetaOpt,
 };
 use crate::engine::packet::{PacketRead, ReadErr, WriteError};
 

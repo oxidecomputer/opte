@@ -44,10 +44,11 @@ use crate::engine::rule::{
     IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate, Rule,
 };
 use crate::engine::udp::{UdpHdr, UdpMeta, UDP_HDR_SZ};
+use crate::oxide_vpc::PortCfg;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
-    cfg: &super::PortCfg,
+    cfg: &PortCfg,
 ) -> Result<(), OpteError> {
     use smoltcp::wire::DhcpMessageType as SmolDMT;
 

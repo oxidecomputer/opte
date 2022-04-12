@@ -23,13 +23,13 @@ use illumos_ddi_dki::*;
 use crate::ioctl::IoctlEnvelope;
 use crate::{dld, dls, ip, mac, secpolicy, sys, warn};
 use opte::api::{
-    CmdOk, CreateXdeReq, DeleteXdeReq, Direction, NoResp, OpteCmd,
-    OpteCmdIoctl, OpteError,
+    CmdOk, Direction, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
+    SetXdeUnderlayReq,
 };
 use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpCidr;
-use opte::engine::ioctl::{self as api, SetXdeUnderlayReq, SnatCfg};
+use opte::engine::ioctl::{self as api, SnatCfg};
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::{Initialized, Packet, ParseError, Parsed};
@@ -37,8 +37,14 @@ use opte::engine::port::{Active, Port, ProcessResult};
 use opte::engine::sync::{KMutex, KMutexType};
 use opte::engine::sync::{KRwLock, KRwLockType};
 use opte::engine::time::{Interval, Moment, Periodic};
-use opte::oxide_net::firewall::{AddFwRuleReq, RemFwRuleReq};
-use opte::oxide_net::{overlay, router, PortCfg};
+use opte::oxide_vpc::api::{
+    AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
+    RemFwRuleReq, SetVirt2PhysReq,
+};
+use opte::oxide_vpc::engine::{
+    arp, dhcp4, dyn_nat4, firewall, icmp, overlay, router,
+};
+use opte::oxide_vpc::PortCfg;
 use opte::{CStr, CString, ExecCtx};
 
 /// The name of this driver.
@@ -1631,7 +1637,7 @@ fn new_port(
 
     let dyn_nat = match snat.as_ref() {
         None => {
-            opte::oxide_net::DynNat4Cfg {
+            opte::oxide_vpc::DynNat4Cfg {
                 //TODO hardcode
                 public_ip: "192.168.99.99".parse().unwrap(),
                 //TODO hardcode
@@ -1639,7 +1645,7 @@ fn new_port(
             }
         }
 
-        Some(snat) => opte::oxide_net::DynNat4Cfg {
+        Some(snat) => opte::oxide_vpc::DynNat4Cfg {
             public_ip: snat.public_ip,
             ports: Range { start: snat.port_start, end: snat.port_end },
         },
@@ -1656,13 +1662,13 @@ fn new_port(
     };
 
     let mut new_port = Port::new(&name, name_cstr, private_mac, ectx);
-    opte::oxide_net::firewall::setup(&mut new_port)?;
-    opte::oxide_net::dhcp4::setup(&mut new_port, &port_cfg)?;
-    opte::oxide_net::icmp::setup(&mut new_port, &port_cfg)?;
+    firewall::setup(&mut new_port)?;
+    dhcp4::setup(&mut new_port, &port_cfg)?;
+    icmp::setup(&mut new_port, &port_cfg)?;
     if snat.is_some() {
-        opte::oxide_net::dyn_nat4::setup(&mut new_port, &port_cfg)?;
+        dyn_nat4::setup(&mut new_port, &port_cfg)?;
     }
-    opte::oxide_net::arp::setup(&mut new_port, &port_cfg)?;
+    arp::setup(&mut new_port, &port_cfg)?;
     router::setup(&mut new_port)?;
 
     let oc = overlay::OverlayCfg {
@@ -1790,7 +1796,7 @@ unsafe extern "C" fn xde_rx(
 
 #[no_mangle]
 fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: opte::api::AddRouterEntryIpv4Req = env.copy_in_req()?;
+    let req: AddRouterEntryIpv4Req = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
@@ -1815,7 +1821,7 @@ fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    api::add_fw_rule(&dev.port, &req)?;
+    firewall::add_fw_rule(&dev.port, &req)?;
     Ok(NoResp::default())
 }
 
@@ -1829,13 +1835,13 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    api::rem_fw_rule(&dev.port, &req)?;
+    firewall::rem_fw_rule(&dev.port, &req)?;
     Ok(NoResp::default())
 }
 
 #[no_mangle]
 fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: opte::api::SetVirt2PhysReq = env.copy_in_req()?;
+    let req: SetVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
     state.v2p.set(req.vip.into(), req.phys.into());
     Ok(NoResp::default())

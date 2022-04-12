@@ -16,7 +16,7 @@ postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
 [dependencies.opte]
 path = "../opte"
 default-features = false
-features = ["engine"]
+features = ["engine", "vpc"]
 
 [dependencies.serde]
 version = "1.0"

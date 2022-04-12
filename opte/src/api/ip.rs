@@ -13,6 +13,53 @@ cfg_if! {
     }
 }
 
+/// An IP protocol value.
+///
+/// TODO repr(u8)?
+#[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub enum Protocol {
+    ICMP = 0x1,
+    IGMP = 0x2,
+    TCP = 0x6,
+    UDP = 0x11,
+    Reserved = 0xFF,
+}
+
+impl Default for Protocol {
+    fn default() -> Self {
+        Protocol::Reserved
+    }
+}
+
+impl Display for Protocol {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Protocol::ICMP => write!(f, "ICMP"),
+            Protocol::IGMP => write!(f, "IGMP"),
+            Protocol::TCP => write!(f, "TCP"),
+            Protocol::UDP => write!(f, "UDP"),
+            Protocol::Reserved => write!(f, "Reserved"),
+        }
+    }
+}
+
+impl TryFrom<u8> for Protocol {
+    type Error = String;
+
+    fn try_from(proto: u8) -> core::result::Result<Self, Self::Error> {
+        match proto {
+            0x1 => Ok(Protocol::ICMP),
+            0x2 => Ok(Protocol::IGMP),
+            0x6 => Ok(Protocol::TCP),
+            0x11 => Ok(Protocol::UDP),
+            proto => Err(format!("unhandled IP protocol: 0x{:X}", proto)),
+        }
+    }
+}
+
 /// An IPv4 or IPv6 address.
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,

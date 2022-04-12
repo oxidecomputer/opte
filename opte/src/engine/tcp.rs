@@ -16,9 +16,10 @@ use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 use super::checksum::{Checksum, HeaderChecksum};
 use super::headers::{
     Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
-    RawHeader, UlpHdr, UlpMetaModify, DYNAMIC_PORT,
+    RawHeader, UlpHdr, UlpMetaModify,
 };
 use super::packet::{PacketRead, ReadErr, WriteError};
+use crate::api::DYNAMIC_PORT;
 
 pub const TCP_HDR_CSUM_OFF: usize = 16;
 pub const TCP_HDR_OFFSET_MASK: u8 = 0xF0;

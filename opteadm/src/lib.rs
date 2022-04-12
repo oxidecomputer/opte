@@ -4,13 +4,13 @@
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 
-use opte::api::{
-    AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, MacAddr, NoResp,
-    OpteCmd, SetVirt2PhysReq, Vni,
+use opte::api::{MacAddr, NoResp, OpteCmd, SetXdeUnderlayReq, Vni};
+use opte::engine::ioctl::{self as api};
+use opte::oxide_vpc::api::{
+    AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
+    FirewallRule, RemFwRuleReq, SetVirt2PhysReq,
 };
-use opte::engine::ioctl::{self as api, SetXdeUnderlayReq};
-use opte::oxide_net::firewall::{AddFwRuleReq, FirewallRule, RemFwRuleReq};
-use opte::oxide_net::overlay;
+use opte::oxide_vpc::engine::overlay;
 use opte_ioctl::{run_cmd_ioctl, Error};
 
 /// The handle used to send administration commands to the OPTE

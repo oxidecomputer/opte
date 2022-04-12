@@ -47,18 +47,6 @@ impl Direction {
     }
 }
 
-impl core::str::FromStr for Direction {
-    type Err = ParseErr;
-
-    fn from_str(s: &str) -> ParseResult<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "in" => Ok(Direction::In),
-            "out" => Ok(Direction::Out),
-            _ => Err(ParseErr::BadDirectionError),
-        }
-    }
-}
-
 impl From<Direction> for illumos_sys_hdrs::uintptr_t {
     fn from(dir: Direction) -> Self {
         match dir {

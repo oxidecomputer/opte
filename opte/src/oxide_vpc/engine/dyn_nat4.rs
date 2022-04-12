@@ -16,10 +16,11 @@ use crate::engine::port::{self, Port, Pos};
 use crate::engine::rule::{
     Action, IpProtoMatch, Ipv4AddrMatch, Predicate, Rule,
 };
+use crate::oxide_vpc::PortCfg;
 
 pub fn setup(
     port: &mut Port<port::Inactive>,
-    cfg: &super::PortCfg,
+    cfg: &PortCfg,
 ) -> core::result::Result<(), OpteError> {
     let mut pool = NatPool::new();
     pool.add(cfg.private_ip, cfg.dyn_nat.public_ip, cfg.dyn_nat.ports.clone());

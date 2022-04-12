@@ -17,7 +17,7 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{self, CmdOk, Direction, Ipv4Addr, OpteError};
+use crate::api::{CmdOk, Direction, Ipv4Addr, OpteError};
 use crate::engine::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV6};
 use crate::engine::geneve::{GeneveMeta, Vni, GENEVE_PORT};
 use crate::engine::headers::{HeaderAction, IpAddr};
@@ -29,7 +29,7 @@ use crate::engine::port::{self, Port, Pos};
 use crate::engine::rule::{self, Action, Rule, StaticAction, HT};
 use crate::engine::sync::{KMutex, KMutexType};
 use crate::engine::udp::UdpMeta;
-use crate::oxide_net::router::RouterTarget;
+use crate::oxide_vpc::api::{self as vpc_api, RouterTarget};
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 
@@ -40,8 +40,8 @@ pub struct PhysNet {
     pub vni: Vni,
 }
 
-impl From<api::PhysNet> for PhysNet {
-    fn from(phys: api::PhysNet) -> Self {
+impl From<vpc_api::PhysNet> for PhysNet {
+    fn from(phys: vpc_api::PhysNet) -> Self {
         Self {
             ether: phys.ether.into(),
             ip: phys.ip.into(),
