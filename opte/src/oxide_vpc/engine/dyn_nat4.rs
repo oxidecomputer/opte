@@ -9,7 +9,7 @@ cfg_if! {
 }
 
 use crate::api::{Direction, OpteError};
-use crate::engine::ip4::{self, Protocol};
+use crate::engine::ip4::{Ipv4Addr, Protocol};
 use crate::engine::layer::Layer;
 use crate::engine::nat::{DynNat4, NatPool};
 use crate::engine::port::{self, Port, Pos};
@@ -56,7 +56,7 @@ pub fn setup(
     // to see if the destination IP belongs to the interface's subnet.
     rule.add_predicate(Predicate::Not(Box::new(Predicate::InnerDstIp4(vec![
         Ipv4AddrMatch::Prefix(cfg.vpc_subnet.cidr()),
-        Ipv4AddrMatch::Exact(ip4::IPV4_LOCAL_BCAST),
+        Ipv4AddrMatch::Exact(Ipv4Addr::LOCAL_BCAST),
     ]))));
     layer.add_rule(Direction::Out, rule.finalize());
     port.add_layer(layer, Pos::After("firewall"))

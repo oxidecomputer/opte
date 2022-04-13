@@ -38,7 +38,7 @@ use super::headers::{Header, IpHdr, IpMeta, UlpHdr, UlpMeta};
 use super::ip4::{Ipv4Hdr, Ipv4HdrError, Ipv4Meta, Protocol, IPV4_HDR_SZ};
 use super::ip6::{Ipv6Hdr, Ipv6HdrError, Ipv6Meta, IPV6_HDR_SZ};
 use super::tcp::{TcpHdr, TcpHdrError, TcpMeta};
-use super::udp::{UdpHdr, UdpHdrError, UdpMeta, UDP_HDR_SZ};
+use super::udp::{UdpHdr, UdpHdrError, UdpMeta};
 
 use illumos_ddi_dki::{c_uchar, dblk_t, mblk_t, uintptr_t};
 
@@ -898,9 +898,9 @@ impl Packet<Initialized> {
         hg.ulp = Some(UlpHdr::from(udp));
 
         offsets.ulp = Some(HdrOffset {
-            pkt_pos: rdr.pkt_pos() - UDP_HDR_SZ,
+            pkt_pos: rdr.pkt_pos() - UdpHdr::SIZE,
             seg_idx: rdr.seg_idx(),
-            seg_pos: rdr.seg_pos() - UDP_HDR_SZ,
+            seg_pos: rdr.seg_pos() - UdpHdr::SIZE,
         });
 
         match dport {
@@ -1417,7 +1417,7 @@ impl Packet<Parsed> {
                             let udp_off =
                                 self.state.hdr_offsets.inner.ulp.unwrap();
                             let csum_off =
-                                udp_off.seg_pos + super::udp::UDP_HDR_CSUM_OFF;
+                                udp_off.seg_pos + UdpHdr::CSUM_OFFSET;
                             self.segs[0]
                                 .write(
                                     &[0; 2],

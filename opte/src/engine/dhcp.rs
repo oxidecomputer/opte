@@ -13,8 +13,7 @@ cfg_if! {
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::ip4::Ipv4Cidr;
-use crate::api::Ipv4Addr;
+use crate::api::SubnetRouterPair;
 
 /// The DHCP message type.
 ///
@@ -133,13 +132,6 @@ pub struct ClasslessStaticRouteOpt {
     routes: Vec<SubnetRouterPair>,
 }
 
-/// As it says on the tin: map a subnet to its next-hop.
-#[derive(Clone, Debug)]
-pub struct SubnetRouterPair {
-    subnet: Ipv4Cidr,
-    router: Ipv4Addr,
-}
-
 impl SubnetRouterPair {
     fn encode_len(&self) -> u8 {
         // One byte for the subnet mask width.
@@ -169,10 +161,6 @@ impl SubnetRouterPair {
             bytes[pos] = b;
             pos += 1;
         }
-    }
-
-    pub fn new(subnet: Ipv4Cidr, router: Ipv4Addr) -> Self {
-        Self { subnet, router }
     }
 
     fn subnet_encode_len(&self) -> u8 {
@@ -250,6 +238,7 @@ impl ClasslessStaticRouteOpt {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::engine::ip4::{Ipv4Addr, Ipv4Cidr};
 
     #[test]
     fn offlink_encode() {

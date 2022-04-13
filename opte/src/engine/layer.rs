@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use super::flow_table::FlowTable;
 use super::headers::{IpAddr, IpMeta, UlpMeta};
 use super::ioctl;
-use super::ip4::{self, Protocol};
+use super::ip4::Protocol;
 use super::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
 use super::port::meta::Meta;
 use super::rule::{
@@ -785,9 +785,9 @@ impl Layer {
 
 pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     proto: Protocol::Reserved,
-    src_ip: IpAddr::Ip4(ip4::IPV4_ANY_ADDR),
+    src_ip: IpAddr::Ip4(Ipv4Addr::ANY_ADDR),
     src_port: 0,
-    dst_ip: IpAddr::Ip4(ip4::IPV4_ANY_ADDR),
+    dst_ip: IpAddr::Ip4(Ipv4Addr::ANY_ADDR),
     dst_port: 0,
 };
 

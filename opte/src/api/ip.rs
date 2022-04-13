@@ -40,6 +40,60 @@ impl Display for Icmp4EchoReply {
     }
 }
 
+/// Respond to guest DHCPDISCOVER and DHCPREQUEST messages.
+///
+/// TODO Document all the fields.
+///
+/// XXX Currently we return the same options no matter what the client
+/// specifies in the parameter request list. This has worked thus far,
+/// but we should come back to this and comb over RFC 2131 more
+/// carefully -- particularly §4.3.1 and §4.3.2.
+pub struct Dhcp4Action {
+    pub client_mac: MacAddr,
+    pub client_ip: Ipv4Addr,
+    pub subnet_prefix_len: Ipv4PrefixLen,
+    pub gw_mac: MacAddr,
+    pub gw_ip: Ipv4Addr,
+    pub reply_type: Dhcp4ReplyType,
+    pub re1: SubnetRouterPair,
+    pub re2: Option<SubnetRouterPair>,
+    pub re3: Option<SubnetRouterPair>,
+}
+
+impl Display for Dhcp4Action {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "DHCPv4 {}: {}", self.reply_type, self.client_ip)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Dhcp4ReplyType {
+    Offer,
+    Ack,
+}
+
+impl Display for Dhcp4ReplyType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Offer => write!(f, "OFFER"),
+            Self::Ack => write!(f, "ACK"),
+        }
+    }
+}
+
+/// Map a subnet to its next-hop.
+#[derive(Clone, Copy, Debug)]
+pub struct SubnetRouterPair {
+    pub subnet: Ipv4Cidr,
+    pub router: Ipv4Addr,
+}
+
+impl SubnetRouterPair {
+    pub fn new(subnet: Ipv4Cidr, router: Ipv4Addr) -> Self {
+        Self { subnet, router }
+    }
+}
+
 /// An IP protocol value.
 ///
 /// TODO repr(u8)?
@@ -167,10 +221,10 @@ impl Debug for Ipv4Addr {
     }
 }
 
-pub const IPV4_ANY_ADDR: Ipv4Addr = Ipv4Addr { inner: [0; 4] };
-pub const IPV4_LOCAL_BCAST: Ipv4Addr = Ipv4Addr { inner: [255; 4] };
-
 impl Ipv4Addr {
+    pub const ANY_ADDR: Self = Self { inner: [0; 4] };
+    pub const LOCAL_BCAST: Self = Self { inner: [255; 4] };
+
     /// Return the bytes of the address.
     pub fn bytes(&self) -> [u8; 4] {
         self.inner
@@ -183,7 +237,7 @@ impl Ipv4Addr {
         }
 
         if mask == 0 {
-            return Ok(IPV4_ANY_ADDR);
+            return Ok(Ipv4Addr::ANY_ADDR);
         }
 
         let mut n = u32::from_be_bytes(self.inner);
@@ -311,16 +365,23 @@ pub enum IpCidr {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ipv4PrefixLen(u8);
 
-pub const IP4_MASK_NONE: Ipv4PrefixLen = Ipv4PrefixLen(0);
-pub const IP4_MASK_ALL: Ipv4PrefixLen = Ipv4PrefixLen(32);
-
 impl Ipv4PrefixLen {
+    pub const NETMASK_NONE: Self = Self(0);
+    pub const NETMASK_ALL: Self = Self(32);
+
     pub fn new(prefix_len: u8) -> Result<Self, String> {
         if prefix_len > 32 {
             return Err(format!("bad IPv4 prefix length: {}", prefix_len));
         }
 
         Ok(Self(prefix_len))
+    }
+
+    /// Convert the prefix length into a subnet mask.
+    pub fn to_netmask(self) -> Ipv4Addr {
+        let mut bits = i32::MIN;
+        bits = bits >> (self.0 - 1);
+        Ipv4Addr::from(bits.to_be_bytes())
     }
 
     pub fn val(&self) -> u8 {
