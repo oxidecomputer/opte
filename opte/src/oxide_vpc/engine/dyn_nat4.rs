@@ -33,8 +33,8 @@ pub fn setup(
         vec![Action::Stateful(Arc::new(nat))],
     );
 
-    let rule = Rule::new(1, layer.action(0).unwrap().clone());
-    let mut rule = rule.add_predicate(Predicate::InnerIpProto(vec![
+    let mut rule = Rule::new(1, layer.action(0).unwrap().clone());
+    rule.add_predicate(Predicate::InnerIpProto(vec![
         IpProtoMatch::Exact(Protocol::TCP),
         IpProtoMatch::Exact(Protocol::UDP),
     ]));

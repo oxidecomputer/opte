@@ -30,7 +30,10 @@ use super::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, PacketWriter,
     Parsed, ReadErr, WriteError,
 };
-use super::rule::{DataPredicate, GenResult, HairpinAction, Payload, Predicate};
+use super::rule::{
+    ArpOpMatch, ArpPtypeMatch, ArpHtypeMatch, DataPredicate, EtherAddrMatch,
+    EtherTypeMatch, GenResult, HairpinAction, Ipv4AddrMatch, Payload, Predicate,
+};
 use crate::api::Ipv4Addr;
 
 pub const ARP_HTYPE_ETHERNET: u16 = 1;
@@ -353,7 +356,23 @@ impl fmt::Display for ArpReply {
 impl HairpinAction for ArpReply {
     // TODO placeholder for now to compile
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
-        todo!("placeholder to compile");
+        let hdr_preds = vec![
+            Predicate::InnerEtherType(vec![
+                EtherTypeMatch::Exact(ETHER_TYPE_ARP),
+            ]),
+            Predicate::InnerEtherDst(vec![
+                EtherAddrMatch::Exact(EtherAddr::from([0xFF; 6]))
+            ]),
+            Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)),
+            Predicate::InnerArpPtype(ArpPtypeMatch::Exact(ETHER_TYPE_IPV4)),
+            Predicate::InnerArpOp(ArpOpMatch::Exact(ArpOp::Request)),
+        ];
+
+        let data_preds = vec![
+            DataPredicate::InnerArpTpa(vec![Ipv4AddrMatch::Exact(self.tpa)]),
+        ];
+
+        (hdr_preds, data_preds)
     }
 
     fn gen_packet(

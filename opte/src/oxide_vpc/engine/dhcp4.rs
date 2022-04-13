@@ -34,11 +34,45 @@ pub fn setup(
     cfg: &PortCfg,
 ) -> Result<(), OpteError> {
     // All guest interfaces live on a `/32`-network in the Oxide VPC;
-    // restricting the L2 domain to two links: the guest NIC and the
+    // restricting the L2 domain to two nodes: the guest NIC and the
     // OPTE Port. This allows OPTE to act as the gateway for which all
-    // guest traffic must cross, no matter the destination.
-    let guest_cidr = Ipv4Cidr::new(cfg.private_ip, Ipv4PrefixLen::NETMASK_ALL);
-    let re1 = SubnetRouterPair::new(guest_cidr, Ipv4Addr::ANY_ADDR);
+    // guest traffic must cross, no matter the destination. In order
+    // to achieve this we use something called a "local subnet route".
+    // This is a router entry that maps a "local subnet" to the router
+    // `0.0.0.0`. If you read RFC 3442, you'll see the original
+    // intention for this type of route is to allow different subnets
+    // on the same link (L2 segment) to communicate with each other.
+    // In our case we place the guest in a network of 1, meaning the
+    // router itself must be on a different subnet. However, since the
+    // router, in this OPTE, is on the same link, we can use the local
+    // subnet route feature to deliver packets to the router.
+    //
+    // * `re1`: The local subnet router entry; mapping the gateway
+    // subnet to `0.0.0.0.`.
+    //
+    // * `re2`: The default router entry; mapping all packets to the
+    // gateway.
+    //
+    // You might wonder why the `re2` entry is needed when we have the
+    // `Router Option (code 3)`. RFC 3442 specifies the following:
+    //
+    // > If the DHCP server returns both a Classless Static Routes
+    // > option and a Router option, the DHCP client MUST ignore the
+    // > Router option.
+    //
+    // However, `Dhcp4Action` sets the `Router Option` as well just in
+    // case there is a client that disregards the RFC and looks at
+    // both options.
+
+    // TODO the previous code was using the guest CIDR as the local
+    // subnet route, but that's all wrong. Things still worked in my
+    // alpine guest, but this should still be corrected.
+    //
+    // let guest_cidr = Ipv4Cidr::new(cfg.private_ip, Ipv4PrefixLen::NETMASK_ALL);
+    // let re1 = SubnetRouterPair::new(guest_cidr, Ipv4Addr::ANY_ADDR);
+
+    let gw_cidr = Ipv4Cidr::new(cfg.gw_ip, Ipv4PrefixLen::NETMASK_ALL);
+    let re1 = SubnetRouterPair::new(gw_cidr, Ipv4Addr::ANY_ADDR);
     let re2 = SubnetRouterPair::new(
         Ipv4Cidr::new(Ipv4Addr::ANY_ADDR, Ipv4PrefixLen::NETMASK_NONE),
         cfg.gw_ip
@@ -72,13 +106,13 @@ pub fn setup(
 
     let dhcp = Layer::new("dhcp4", port.name(), vec![offer, ack]);
 
-    let discover_rule = Rule::new_implicit(
+    let discover_rule = Rule::new(
         1,
         dhcp.action(offer_idx).unwrap().clone()
     );
     dhcp.add_rule(Direction::Out, discover_rule.finalize());
 
-    let request_rule = Rule::new_implicit(
+    let request_rule = Rule::new(
         1,
         dhcp.action(ack_idx).unwrap().clone()
     );

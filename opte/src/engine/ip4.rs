@@ -179,6 +179,7 @@ impl HairpinAction for Dhcp4Action {
             server_ip: self.gw_ip.into(),
             router: Some(self.gw_ip.into()),
             subnet_mask: Some(self.subnet_prefix_len.to_netmask().into()),
+            // There is no relay agent.
             relay_agent_ip: Ipv4Addr::ANY_ADDR.into(),
             broadcast: false,
             requested_ip: None,

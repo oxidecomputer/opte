@@ -49,7 +49,7 @@ pub fn setup(
     // ip_proto: Protocol::ICMP)
     //
     // which would generate a Vec of the header predicates.
-    let rule = Rule::new_implicit(1, icmp.action(0).unwrap().clone());
+    let rule = Rule::new(1, icmp.action(0).unwrap().clone());
     icmp.add_rule(Direction::Out, rule.finalize());
     port.add_layer(icmp, Pos::Before("firewall"))
 }

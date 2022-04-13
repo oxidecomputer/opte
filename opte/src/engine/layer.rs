@@ -917,7 +917,7 @@ impl<'a> RuleTable {
     // Find the position in which to insert this rule.
     fn find_pos(&self, rule: &Rule<rule::Finalized>) -> RulePlace {
         for (i, (_, r)) in self.rules.iter().enumerate() {
-            if rule.priority < r.priority {
+            if rule.priority() < r.priority() {
                 return RulePlace::Insert(i);
             }
 
@@ -926,7 +926,7 @@ impl<'a> RuleTable {
             // exist, the new rule is added in the front. The same
             // goes for multiple non-deny entries at the same
             // priority.
-            if rule.priority == r.priority {
+            if rule.priority() == r.priority() {
                 if rule.action().is_deny() || !r.action().is_deny() {
                     return RulePlace::Insert(i);
                 }
@@ -1104,12 +1104,12 @@ fn find_rule() {
     use super::tcp::TcpMeta;
 
     let mut rule_table = RuleTable::new("port", "test", Direction::Out);
-    let rule = Rule::new(
+    let mut rule = Rule::new(
         1,
         Action::Static(Arc::new(rule::Identity::new("find_rule"))),
     );
     let cidr = "10.0.0.0/24".parse().unwrap();
-    let rule = rule.add_predicate(Predicate::InnerSrcIp4(vec![
+    rule.add_predicate(Predicate::InnerSrcIp4(vec![
         Ipv4AddrMatch::Prefix(cidr),
     ]));
 

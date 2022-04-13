@@ -40,23 +40,47 @@ impl Display for Icmp4EchoReply {
     }
 }
 
-/// Respond to guest DHCPDISCOVER and DHCPREQUEST messages.
+/// Generate DHCPv4 Offer+Ack.
 ///
-/// TODO Document all the fields.
+/// Respond to a cilent's Discover and Request messages with Offer+Ack
+/// replies based on the information contained in this struct.
 ///
 /// XXX Currently we return the same options no matter what the client
 /// specifies in the parameter request list. This has worked thus far,
 /// but we should come back to this and comb over RFC 2131 more
 /// carefully -- particularly §4.3.1 and §4.3.2.
 pub struct Dhcp4Action {
+    /// The client's MAC address.
     pub client_mac: MacAddr,
+    /// The client's IPv4 address. Used to fill in the `yiaddr` field.
     pub client_ip: Ipv4Addr,
+    /// The client's subnet mask specified as a prefix length. Used as
+    /// the value of `Subnet Mask Option (code 1)`.
     pub subnet_prefix_len: Ipv4PrefixLen,
+    /// The gateway MAC address. The use of this action assumes that
+    /// the OPTE port is acting as gateway; this MAC address is what
+    /// the port will use when acting as a gateway to the client. This
+    /// is used as the Ethernet header's source address.
     pub gw_mac: MacAddr,
+    /// The gateway IPv4 address. This is used for several purposes:
+    ///
+    /// * As the IP header's source address.
+    ///
+    /// * As the value of the `siaddr` field.
+    ///
+    /// * As the value of the `Router Option (code 3)`.
+    ///
+    /// * As the value of the `Server Identifier Option (code 54)`.
     pub gw_ip: Ipv4Addr,
+    /// The value of the `DHCP Message Type Option (code 53)`. This
+    /// action supports only the Offer and Ack messages.
     pub reply_type: Dhcp4ReplyType,
+    /// A static route entry, sent to the client via the `Classless
+    /// Static Route Option (code 131)`.
     pub re1: SubnetRouterPair,
+    /// An optional second entry (see `re1`).
     pub re2: Option<SubnetRouterPair>,
+    /// An optional third entry (see `re1`).
     pub re3: Option<SubnetRouterPair>,
 }
 

@@ -66,10 +66,10 @@ pub fn setup(
     let decap = Action::Static(Arc::new(DecapAction::new()));
 
     let layer = Layer::new(OVERLAY_LAYER_NAME, port.name(), vec![encap, decap]);
-    let encap_rule = Rule::new(1, layer.action(0).unwrap().clone());
-    layer.add_rule(Direction::Out, encap_rule.clone().match_any());
-    let decap_rule = Rule::new(1, layer.action(1).unwrap().clone());
-    layer.add_rule(Direction::In, decap_rule.match_any());
+    let encap_rule = Rule::match_any(1, layer.action(0).unwrap().clone());
+    layer.add_rule(Direction::Out, encap_rule);
+    let decap_rule = Rule::match_any(1, layer.action(1).unwrap().clone());
+    layer.add_rule(Direction::In, decap_rule);
     // NOTE The First/Last positions cannot fail; perhaps I should
     // improve the API to avoid the unwrap().
     port.add_layer(layer, Pos::Last)
