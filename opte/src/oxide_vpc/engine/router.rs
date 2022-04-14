@@ -8,9 +8,11 @@ cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::ToString;
         use alloc::sync::Arc;
+        use alloc::vec::Vec;
     } else {
         use std::string::ToString;
         use std::sync::Arc;
+        use std::vec::Vec;
     }
 }
 
@@ -237,6 +239,10 @@ impl fmt::Display for RouterAction {
 }
 
 impl MetaAction for RouterAction {
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<rule::DataPredicate>) {
+        (vec![], vec![])
+    }
+
     fn mod_meta(&self, _flow_id: &InnerFlowId, meta: &mut Meta) {
         // TODO Eiter mod_meta() needs to be able to return an error,
         // setting metadata needs to be a different callback, or we

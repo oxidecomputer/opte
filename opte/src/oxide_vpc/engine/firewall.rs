@@ -4,9 +4,11 @@ cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
+        use alloc::vec::Vec;
     } else {
         use std::string::{String, ToString};
         use std::sync::Arc;
+        use std::vec::Vec;
     }
 }
 
@@ -17,8 +19,8 @@ use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
 use crate::engine::port::{self, Port, Pos};
 use crate::engine::rule::{
-    self, EtherTypeMatch, Identity, IdentityDesc, IpProtoMatch, Ipv4AddrMatch,
-    PortMatch, Predicate, Rule, StatefulAction,
+    self, DataPredicate, EtherTypeMatch, Identity, IdentityDesc, IpProtoMatch,
+    Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
 };
 use crate::engine::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
 pub use crate::oxide_vpc::api::ProtoFilter;
@@ -177,6 +179,10 @@ impl StatefulAction for FwStatefulAction {
         _meta: &mut Meta,
     ) -> rule::GenDescResult {
         Ok(Arc::new(IdentityDesc::new(self.name.clone())))
+    }
+
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
     }
 }
 

@@ -792,6 +792,10 @@ impl StaticAction for Identity {
     ) -> GenHtResult {
         Ok(HT::identity(&self.name))
     }
+
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -970,6 +974,8 @@ pub trait StatefulAction: Display {
     /// unexpected error while trying to generate a descriptor.
     fn gen_desc(&self, flow_id: &InnerFlowId, meta: &mut Meta)
         -> GenDescResult;
+
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 }
 
 #[derive(Clone, Debug)]
@@ -988,6 +994,13 @@ pub trait StaticAction: Display {
         flow_id: &InnerFlowId,
         meta: &mut Meta,
     ) -> GenHtResult;
+
+    /// Return the predicates implicit to this action.
+    ///
+    /// Return both the header [`Predicate`] list and
+    /// [`DataPredicate`] list implicit to this action. An empty list
+    /// implies there are no implicit predicates of that type.
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 }
 
 /// A meta action is one that's only goal is to modify the processing
@@ -995,6 +1008,13 @@ pub trait StaticAction: Display {
 /// the packet, only add/modify/remove metadata for use by later
 /// layers.
 pub trait MetaAction: Display {
+    /// Return the predicates implicit to this action.
+    ///
+    /// Return both the header [`Predicate`] list and
+    /// [`DataPredicate`] list implicit to this action. An empty list
+    /// implies there are no implicit predicates of that type.
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
+
     fn mod_meta(&self, flow_id: &InnerFlowId, meta: &mut Meta);
 }
 
@@ -1069,10 +1089,10 @@ impl Action {
             // to specify which types of packets it wants to deny,
             // which means the predicates are always purely explicit.
             Self::Deny => (vec![], vec![]),
-            Self::Hairpin(hp) => hp.implicit_preds(),
-            // TODO Need to implement implicit preds for the other
-            // action types.
-            _ => (vec![], vec![]),
+            Self::Meta(act) => act.implicit_preds(),
+            Self::Static(act) => act.implicit_preds(),
+            Self::Stateful(act) => act.implicit_preds(),
+            Self::Hairpin(act) => act.implicit_preds(),
         }
     }
 

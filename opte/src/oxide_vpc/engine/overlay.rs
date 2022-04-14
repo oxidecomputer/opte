@@ -8,10 +8,12 @@ cfg_if! {
         use alloc::collections::btree_map::BTreeMap;
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
+        use alloc::vec::Vec;
     } else {
         use std::collections::btree_map::BTreeMap;
         use std::string::{String, ToString};
         use std::sync::Arc;
+        use std::vec::Vec;
     }
 }
 
@@ -26,7 +28,9 @@ use crate::engine::ip6::{Ipv6Addr, Ipv6Meta};
 use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
 use crate::engine::port::{self, Port, Pos};
-use crate::engine::rule::{self, Action, Rule, StaticAction, HT};
+use crate::engine::rule::{
+    self, Action, DataPredicate, Predicate, Rule, StaticAction, HT
+};
 use crate::engine::sync::{KMutex, KMutexType};
 use crate::engine::udp::UdpMeta;
 use crate::oxide_vpc::api::{self as vpc_api, RouterTarget};
@@ -232,6 +236,10 @@ impl StaticAction for EncapAction {
             ..Default::default()
         })
     }
+
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
+    }
 }
 
 pub struct DecapAction {}
@@ -266,6 +274,10 @@ impl StaticAction for DecapAction {
             outer_encap: HeaderAction::Pop,
             ..Default::default()
         })
+    }
+
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
     }
 }
 

@@ -19,7 +19,10 @@ use super::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
 use super::ip4::Ipv4Meta;
 use super::layer::InnerFlowId;
 use super::port::meta::Meta;
-use super::rule::{self, ActionDesc, ResourceError, StatefulAction, HT};
+use super::rule::{
+    self, ActionDesc, DataPredicate, Predicate, ResourceError, StatefulAction,
+    HT
+};
 use super::sync::{KMutex, KMutexType};
 use crate::api::{Direction, Ipv4Addr};
 
@@ -139,6 +142,13 @@ impl StatefulAction for DynNat4 {
                 name: "SNAT Pool".to_string(),
             }),
         }
+    }
+
+    // XXX we should be able to set implicit predicates if we add an
+    // IpCidr field to describe which subnet the client is on; but for
+    // now just keep the predicates fully explicit.
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
     }
 }
 

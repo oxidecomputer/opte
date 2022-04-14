@@ -354,7 +354,6 @@ impl fmt::Display for ArpReply {
 }
 
 impl HairpinAction for ArpReply {
-    // TODO placeholder for now to compile
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         let hdr_preds = vec![
             Predicate::InnerEtherType(vec![
