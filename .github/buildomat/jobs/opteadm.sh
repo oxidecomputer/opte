@@ -42,4 +42,5 @@ for x in debug release
 do
     mkdir -p /work/$x
     cp target/$x/opteadm /work/$x/
+    sha256sum "target/$x/opteadm" > "/work/$x/opteadm.$x.sha256"
 done
