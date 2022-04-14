@@ -60,17 +60,8 @@ pub fn setup(
     // > option and a Router option, the DHCP client MUST ignore the
     // > Router option.
     //
-    // However, `Dhcp4Action` sets the `Router Option` as well just in
-    // case there is a client that disregards the RFC and looks at
-    // both options.
-
-    // TODO the previous code was using the guest CIDR as the local
-    // subnet route, but that's all wrong. Things still worked in my
-    // alpine guest, but this should still be corrected.
-    //
-    // let guest_cidr = Ipv4Cidr::new(cfg.private_ip, Ipv4PrefixLen::NETMASK_ALL);
-    // let re1 = SubnetRouterPair::new(guest_cidr, Ipv4Addr::ANY_ADDR);
-
+    // Furthermore, RFC 3442 goes on to say that a DHCP server
+    // administrator should always set both to be on the safe side.
     let gw_cidr = Ipv4Cidr::new(cfg.gw_ip, Ipv4PrefixLen::NETMASK_ALL);
     let re1 = SubnetRouterPair::new(gw_cidr, Ipv4Addr::ANY_ADDR);
     let re2 = SubnetRouterPair::new(
@@ -88,6 +79,10 @@ pub fn setup(
         re1,
         re2: Some(re2),
         re3: None,
+        // XXX For now at least resolve the internet.
+        dns_servers: Some(
+            [Some(Ipv4Addr::from([8, 8, 8, 8]).into()), None, None]
+        ),
     }));
     let offer_idx = 0;
 
@@ -101,6 +96,10 @@ pub fn setup(
         re1,
         re2: Some(re2),
         re3: None,
+        // XXX For now at least resolve the internet.
+        dns_servers: Some(
+            [Some(Ipv4Addr::from([8, 8, 8, 8]).into()), None, None]
+        ),
     }));
     let ack_idx = 1;
 

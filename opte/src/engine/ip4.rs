@@ -169,6 +169,9 @@ impl HairpinAction for Dhcp4Action {
         let client_pkt = DhcpPacket::new_checked(&body)?;
         let client_dhcp = DhcpRepr::parse(&client_pkt)?;
         let mt = DhcpMessageType::from(self.reply_type);
+        // Forgive me.
+        let dns_servers =
+            self.dns_servers.map(|ips| ips.map(|mip| mip.map(|ip| ip.into())));
 
         let reply = DhcpRepr {
             message_type: mt.into(),
@@ -193,19 +196,12 @@ impl HairpinAction for Dhcp4Action {
             client_identifier: None,
             server_identifier: Some(self.gw_ip.into()),
             parameter_request_list: None,
-            // XXX For now we at least resolve the internet.
-            //
-            // TODO Need to parameterize resolvers.
-            dns_servers: Some([
-                Some(Ipv4Addr::from([8, 8, 8, 8]).into()), None, None
-            ]),
+            dns_servers,
             max_size: None,
             lease_duration: Some(86400),
         };
 
         let reply_len = reply.buffer_len();
-        // TODO Do we still send a Classes Static Route option or is
-        // that specific?
         let csr_opt = ClasslessStaticRouteOpt::new(
             self.re1,
             self.re2,

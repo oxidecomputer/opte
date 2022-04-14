@@ -8,10 +8,12 @@ cfg_if! {
 
 use crate::api::{Direction, OpteError};
 use crate::engine::arp::ArpReply;
-use crate::engine::ether::ETHER_TYPE_ARP;
+use crate::engine::ether::{EtherAddr, ETHER_TYPE_ARP};
 use crate::engine::layer::Layer;
 use crate::engine::port::{self, Port, Pos};
-use crate::engine::rule::{Action, EtherTypeMatch, Predicate, Rule};
+use crate::engine::rule::{
+    Action, EtherAddrMatch, EtherTypeMatch, Predicate, Rule
+};
 use crate::oxide_vpc::PortCfg;
 
 pub fn setup(
@@ -30,8 +32,10 @@ pub fn setup(
     // ================================================================
     // Outbound ARP Request for Gateway, from Guest
     // ================================================================
-    // TODO add predicate for SHA/SPA
-    let rule = Rule::new(1, arp.action(0).unwrap().clone());
+    let mut rule = Rule::new(1, arp.action(0).unwrap().clone());
+    rule.add_predicate(Predicate::InnerEtherSrc(vec![
+        EtherAddrMatch::Exact(EtherAddr::from(cfg.private_mac))
+    ]));
     arp.add_rule(Direction::Out, rule.finalize());
 
     // ================================================================

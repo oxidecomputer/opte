@@ -19,13 +19,22 @@ cfg_if! {
 /// Map an ICMPv4 Echo Message (Type=8, Code=0) from `src` to `dst`
 /// into an ICMPv4 Echo Reply Message (Type=0, Code=0) from `dst` to
 /// `src`.
-///
-/// TODO Go over each field in detail.
 #[derive(Clone, Debug)]
 pub struct Icmp4EchoReply {
+    /// The MAC address of the sender of the Echo message. The
+    /// destination MAC address of the Echo Reply.
     pub echo_src_mac: MacAddr,
+
+    /// The IP address of the sender of the Echo message. The
+    /// destination IP address of the Echo Reply.
     pub echo_src_ip: Ipv4Addr,
+
+    /// The MAC address of the destination of the Echo message. The
+    /// source MAC address of the Echo Reply.
     pub echo_dst_mac: MacAddr,
+
+    /// The IP address of the destination of the Echo message. The
+    /// source IP address of the Echo Reply.
     pub echo_dst_ip: Ipv4Addr,
 }
 
@@ -52,16 +61,20 @@ impl Display for Icmp4EchoReply {
 pub struct Dhcp4Action {
     /// The client's MAC address.
     pub client_mac: MacAddr,
+
     /// The client's IPv4 address. Used to fill in the `yiaddr` field.
     pub client_ip: Ipv4Addr,
+
     /// The client's subnet mask specified as a prefix length. Used as
     /// the value of `Subnet Mask Option (code 1)`.
     pub subnet_prefix_len: Ipv4PrefixLen,
+
     /// The gateway MAC address. The use of this action assumes that
     /// the OPTE port is acting as gateway; this MAC address is what
     /// the port will use when acting as a gateway to the client. This
     /// is used as the Ethernet header's source address.
     pub gw_mac: MacAddr,
+
     /// The gateway IPv4 address. This is used for several purposes:
     ///
     /// * As the IP header's source address.
@@ -72,16 +85,23 @@ pub struct Dhcp4Action {
     ///
     /// * As the value of the `Server Identifier Option (code 54)`.
     pub gw_ip: Ipv4Addr,
+
     /// The value of the `DHCP Message Type Option (code 53)`. This
     /// action supports only the Offer and Ack messages.
     pub reply_type: Dhcp4ReplyType,
+
     /// A static route entry, sent to the client via the `Classless
     /// Static Route Option (code 131)`.
     pub re1: SubnetRouterPair,
+
     /// An optional second entry (see `re1`).
     pub re2: Option<SubnetRouterPair>,
+
     /// An optional third entry (see `re1`).
     pub re3: Option<SubnetRouterPair>,
+
+    /// An optional list of 1-3 DNS servers.
+    pub dns_servers: Option<[Option<Ipv4Addr>; 3]>
 }
 
 impl Display for Dhcp4Action {

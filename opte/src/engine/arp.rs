@@ -333,9 +333,7 @@ impl ArpEth4PayloadRaw {
     }
 }
 
-/// Generate an ARP Reply mapping the TPA to the THA. It is expected
-/// this is paired with a rule which filters on the TPA of an ARP
-/// Request.
+/// Generate an ARP Reply mapping the TPA to the THA.
 pub struct ArpReply {
     tpa: Ipv4Addr,
     tha: EtherAddr,
