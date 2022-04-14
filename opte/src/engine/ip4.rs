@@ -29,7 +29,7 @@ use super::headers::{
 };
 use super::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed, ReadErr,
-    WriteError
+    WriteError,
 };
 use super::rule::{
     DataPredicate, EtherAddrMatch, GenResult, HairpinAction, IpProtoMatch,
@@ -39,7 +39,7 @@ use super::rule::{
 use super::udp::{UdpHdr, UdpMeta};
 pub use crate::api::{
     Dhcp4Action, Dhcp4ReplyType, Ipv4Addr, Ipv4Cidr, Ipv4PrefixLen, Protocol,
-    SubnetRouterPair
+    SubnetRouterPair,
 };
 
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
@@ -126,18 +126,18 @@ impl HairpinAction for Dhcp4Action {
         use smoltcp::wire::DhcpMessageType as SmolDMT;
 
         let hdr_preds = vec![
-            Predicate::InnerEtherDst(vec![
-                EtherAddrMatch::Exact(ether::ETHER_BROADCAST),
-            ]),
+            Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
+                ether::ETHER_BROADCAST,
+            )]),
             Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(
-                self.client_mac.into()
+                self.client_mac.into(),
             )]),
             Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
-                Ipv4Addr::ANY_ADDR
+                Ipv4Addr::ANY_ADDR,
             )]),
-            Predicate::InnerDstIp4(vec![
-                Ipv4AddrMatch::Exact(Ipv4Addr::LOCAL_BCAST),
-            ]),
+            Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Exact(
+                Ipv4Addr::LOCAL_BCAST,
+            )]),
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::UDP)]),
             Predicate::InnerDstPort(vec![PortMatch::Exact(67)]),
             Predicate::InnerSrcPort(vec![PortMatch::Exact(68)]),
@@ -146,13 +146,13 @@ impl HairpinAction for Dhcp4Action {
         let data_preds = match self.reply_type {
             Dhcp4ReplyType::Offer => {
                 vec![DataPredicate::Dhcp4MsgType(DhcpMessageType::from(
-                    SmolDMT::Discover
+                    SmolDMT::Discover,
                 ))]
             }
 
             Dhcp4ReplyType::Ack => {
                 vec![DataPredicate::Dhcp4MsgType(DhcpMessageType::from(
-                    SmolDMT::Request
+                    SmolDMT::Request,
                 ))]
             }
         };
@@ -202,11 +202,8 @@ impl HairpinAction for Dhcp4Action {
         };
 
         let reply_len = reply.buffer_len();
-        let csr_opt = ClasslessStaticRouteOpt::new(
-            self.re1,
-            self.re2,
-            self.re3,
-        );
+        let csr_opt =
+            ClasslessStaticRouteOpt::new(self.re1, self.re2, self.re3);
 
         // XXX This is temporary until I can add interface to Packet
         // to initialize a zero'd mblk of N bytes and then get a

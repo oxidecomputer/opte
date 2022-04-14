@@ -21,7 +21,7 @@ use super::layer::InnerFlowId;
 use super::port::meta::Meta;
 use super::rule::{
     self, ActionDesc, DataPredicate, Predicate, ResourceError, StatefulAction,
-    HT
+    HT,
 };
 use super::sync::{KMutex, KMutexType};
 use crate::api::{Direction, Ipv4Addr};

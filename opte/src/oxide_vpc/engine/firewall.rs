@@ -71,10 +71,7 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     //
     // By default, if there are no predicates, then a rule matches.
     // Thus, to match all incoming traffic, we add no predicates.
-    layer.add_rule(
-        Direction::In,
-        Rule::match_any(65535, rule::Action::Deny),
-    );
+    layer.add_rule(Direction::In, Rule::match_any(65535, rule::Action::Deny));
 
     // This rule is not listed in the RFDs, nor does the Oxide VPC
     // Firewall have any features for matching L2 data. The underlying
@@ -83,9 +80,9 @@ fn add_default_inbound_rules(layer: &mut Layer) {
     // traffic to pass, which will be dealt with by the ARP layer in
     // the Oxide Network configuration.
     let mut arp = Rule::new(1, layer.action(1).unwrap().clone());
-    arp.add_predicate(Predicate::InnerEtherType(vec![
-        EtherTypeMatch::Exact(ETHER_TYPE_ARP),
-    ]));
+    arp.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+        ETHER_TYPE_ARP,
+    )]));
     layer.add_rule(Direction::In, arp.finalize());
 
     // Allow SSH traffic from anywhere.

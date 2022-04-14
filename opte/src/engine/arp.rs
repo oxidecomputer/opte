@@ -31,8 +31,9 @@ use super::packet::{
     Parsed, ReadErr, WriteError,
 };
 use super::rule::{
-    ArpOpMatch, ArpPtypeMatch, ArpHtypeMatch, DataPredicate, EtherAddrMatch,
-    EtherTypeMatch, GenResult, HairpinAction, Ipv4AddrMatch, Payload, Predicate,
+    ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate, EtherAddrMatch,
+    EtherTypeMatch, GenResult, HairpinAction, Ipv4AddrMatch, Payload,
+    Predicate,
 };
 use crate::api::Ipv4Addr;
 
@@ -354,20 +355,21 @@ impl fmt::Display for ArpReply {
 impl HairpinAction for ArpReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         let hdr_preds = vec![
-            Predicate::InnerEtherType(vec![
-                EtherTypeMatch::Exact(ETHER_TYPE_ARP),
-            ]),
-            Predicate::InnerEtherDst(vec![
-                EtherAddrMatch::Exact(EtherAddr::from([0xFF; 6]))
-            ]),
+            Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+                ETHER_TYPE_ARP,
+            )]),
+            Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
+                EtherAddr::from([0xFF; 6]),
+            )]),
             Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)),
             Predicate::InnerArpPtype(ArpPtypeMatch::Exact(ETHER_TYPE_IPV4)),
             Predicate::InnerArpOp(ArpOpMatch::Exact(ArpOp::Request)),
         ];
 
-        let data_preds = vec![
-            DataPredicate::InnerArpTpa(vec![Ipv4AddrMatch::Exact(self.tpa)]),
-        ];
+        let data_preds =
+            vec![DataPredicate::InnerArpTpa(vec![Ipv4AddrMatch::Exact(
+                self.tpa,
+            )])];
 
         (hdr_preds, data_preds)
     }

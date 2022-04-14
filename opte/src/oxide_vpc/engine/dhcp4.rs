@@ -22,7 +22,7 @@ use crate::api::{
     Dhcp4Action, Dhcp4ReplyType, Direction, Ipv4Addr, Ipv4PrefixLen, OpteError,
     SubnetRouterPair,
 };
-use crate::engine::dhcp::{MessageType as DhcpMessageType};
+use crate::engine::dhcp::MessageType as DhcpMessageType;
 use crate::engine::ip4::Ipv4Cidr;
 use crate::engine::layer::Layer;
 use crate::engine::port::{self, Port, Pos};
@@ -66,7 +66,7 @@ pub fn setup(
     let re1 = SubnetRouterPair::new(gw_cidr, Ipv4Addr::ANY_ADDR);
     let re2 = SubnetRouterPair::new(
         Ipv4Cidr::new(Ipv4Addr::ANY_ADDR, Ipv4PrefixLen::NETMASK_NONE),
-        cfg.gw_ip
+        cfg.gw_ip,
     );
 
     let offer = Action::Hairpin(Arc::new(Dhcp4Action {
@@ -80,9 +80,11 @@ pub fn setup(
         re2: Some(re2),
         re3: None,
         // XXX For now at least resolve the internet.
-        dns_servers: Some(
-            [Some(Ipv4Addr::from([8, 8, 8, 8]).into()), None, None]
-        ),
+        dns_servers: Some([
+            Some(Ipv4Addr::from([8, 8, 8, 8]).into()),
+            None,
+            None,
+        ]),
     }));
     let offer_idx = 0;
 
@@ -97,24 +99,20 @@ pub fn setup(
         re2: Some(re2),
         re3: None,
         // XXX For now at least resolve the internet.
-        dns_servers: Some(
-            [Some(Ipv4Addr::from([8, 8, 8, 8]).into()), None, None]
-        ),
+        dns_servers: Some([
+            Some(Ipv4Addr::from([8, 8, 8, 8]).into()),
+            None,
+            None,
+        ]),
     }));
     let ack_idx = 1;
 
     let dhcp = Layer::new("dhcp4", port.name(), vec![offer, ack]);
 
-    let discover_rule = Rule::new(
-        1,
-        dhcp.action(offer_idx).unwrap().clone()
-    );
+    let discover_rule = Rule::new(1, dhcp.action(offer_idx).unwrap().clone());
     dhcp.add_rule(Direction::Out, discover_rule.finalize());
 
-    let request_rule = Rule::new(
-        1,
-        dhcp.action(ack_idx).unwrap().clone()
-    );
+    let request_rule = Rule::new(1, dhcp.action(ack_idx).unwrap().clone());
     dhcp.add_rule(Direction::Out, request_rule.finalize());
 
     port.add_layer(dhcp, Pos::Before("firewall"))

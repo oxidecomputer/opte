@@ -14,40 +14,38 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smoltcp::phy::{Checksum, ChecksumCapabilities as Csum};
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
 
-pub use crate::api::ip::{Icmp4EchoReply, Protocol};
 use super::ether::{self, EtherHdr, EtherMeta, ETHER_HDR_SZ};
 use super::ip4::{Ipv4Hdr, Ipv4Meta, IPV4_HDR_SZ};
 use super::packet::{
-    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed
+    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
 };
 use super::rule::{
     DataPredicate, EtherAddrMatch, GenErr, GenResult, HairpinAction,
     IpProtoMatch, Ipv4AddrMatch, Predicate,
 };
+pub use crate::api::ip::{Icmp4EchoReply, Protocol};
 
 impl HairpinAction for Icmp4EchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         let hdr_preds = vec![
-            Predicate::InnerEtherSrc(
-                vec![EtherAddrMatch::Exact(self.echo_src_mac.into())]
-            ),
-            Predicate::InnerEtherDst(
-                vec![EtherAddrMatch::Exact(self.echo_dst_mac.into())]
-            ),
-            Predicate::InnerSrcIp4(
-                vec![Ipv4AddrMatch::Exact(self.echo_src_ip)]
-            ),
-            Predicate::InnerDstIp4(
-                vec![Ipv4AddrMatch::Exact(self.echo_dst_ip)]
-            ),
-            Predicate::InnerIpProto(
-                vec![IpProtoMatch::Exact(Protocol::ICMP)]
-            ),
+            Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(
+                self.echo_src_mac.into(),
+            )]),
+            Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
+                self.echo_dst_mac.into(),
+            )]),
+            Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
+                self.echo_src_ip,
+            )]),
+            Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Exact(
+                self.echo_dst_ip,
+            )]),
+            Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::ICMP)]),
         ];
 
-        let data_preds = vec![DataPredicate::Icmp4MsgType(
-            MessageType::from(smoltcp::wire::Icmpv4Message::EchoRequest)
-        )];
+        let data_preds = vec![DataPredicate::Icmp4MsgType(MessageType::from(
+            smoltcp::wire::Icmpv4Message::EchoRequest,
+        ))];
 
         (hdr_preds, data_preds)
     }
@@ -73,7 +71,8 @@ impl HairpinAction for Icmp4EchoReply {
                 // cause this to happen -- let's not take any chances.
                 return Err(GenErr::Unexpected(format!(
                     "expected an ICMPv4 Echo Request, got {} {}",
-                    src_pkt.msg_type(), src_pkt.msg_code()
+                    src_pkt.msg_type(),
+                    src_pkt.msg_code()
                 )));
             }
         };

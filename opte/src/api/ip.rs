@@ -1,7 +1,7 @@
+use super::mac::MacAddr;
 use core::fmt::{self, Debug, Display};
 use core::result;
 use core::str::FromStr;
-use super::mac::MacAddr;
 use serde::{Deserialize, Serialize};
 
 cfg_if! {
@@ -43,7 +43,9 @@ impl Display for Icmp4EchoReply {
         write!(
             f,
             "ICMPv4 Echo Reply ({},{}) => ({},{})",
-            self.echo_dst_mac, self.echo_dst_ip, self.echo_src_mac,
+            self.echo_dst_mac,
+            self.echo_dst_ip,
+            self.echo_src_mac,
             self.echo_src_ip,
         )
     }
@@ -101,7 +103,7 @@ pub struct Dhcp4Action {
     pub re3: Option<SubnetRouterPair>,
 
     /// An optional list of 1-3 DNS servers.
-    pub dns_servers: Option<[Option<Ipv4Addr>; 3]>
+    pub dns_servers: Option<[Option<Ipv4Addr>; 3]>,
 }
 
 impl Display for Dhcp4Action {

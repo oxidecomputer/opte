@@ -1187,11 +1187,7 @@ impl Rule<Ready> {
     pub fn new(priority: u16, action: Action) -> Self {
         let (hdr_preds, data_preds) = action.implicit_preds();
 
-        Rule {
-            state: Ready { hdr_preds, data_preds },
-            action,
-            priority
-        }
+        Rule { state: Ready { hdr_preds, data_preds }, action, priority }
     }
 
     /// Create a new rule that matches anything.
@@ -1202,11 +1198,7 @@ impl Rule<Ready> {
     /// useful for making intentions clear that this rule is to match
     /// anything.
     pub fn match_any(priority: u16, action: Action) -> Rule<Finalized> {
-        Rule {
-            state: Finalized { preds: None },
-            action,
-            priority,
-        }
+        Rule { state: Finalized { preds: None }, action, priority }
     }
 
     /// Add a single [`Predicate`] to the end of the list.
@@ -1237,8 +1229,8 @@ impl Rule<Ready> {
 
     /// Finalize the rule; locking all predicates in stone.
     pub fn finalize(self) -> Rule<Finalized> {
-        let preds = if self.state.hdr_preds.len() == 0 &&
-            self.state.data_preds.len() == 0
+        let preds = if self.state.hdr_preds.len() == 0
+            && self.state.data_preds.len() == 0
         {
             None
         } else {

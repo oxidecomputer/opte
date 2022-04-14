@@ -154,7 +154,7 @@ pub fn add_entry_active(
                     port.add_rule(
                         ROUTER_LAYER_NAME,
                         Direction::Out,
-                        rule.finalize()
+                        rule.finalize(),
                     )?;
                     Ok(NoResp::default())
                 }
@@ -175,7 +175,7 @@ pub fn add_entry_active(
                 port.add_rule(
                     ROUTER_LAYER_NAME,
                     Direction::Out,
-                    rule.finalize()
+                    rule.finalize(),
                 )?;
                 Ok(NoResp::default())
             }
@@ -194,7 +194,7 @@ pub fn add_entry_active(
                 port.add_rule(
                     ROUTER_LAYER_NAME,
                     Direction::Out,
-                    rule.finalize()
+                    rule.finalize(),
                 )?;
                 Ok(NoResp::default())
             }

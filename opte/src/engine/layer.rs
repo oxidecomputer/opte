@@ -1109,9 +1109,9 @@ fn find_rule() {
         Action::Static(Arc::new(rule::Identity::new("find_rule"))),
     );
     let cidr = "10.0.0.0/24".parse().unwrap();
-    rule.add_predicate(Predicate::InnerSrcIp4(vec![
-        Ipv4AddrMatch::Prefix(cidr),
-    ]));
+    rule.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Prefix(
+        cidr,
+    )]));
 
     rule_table.add(rule.finalize());
 

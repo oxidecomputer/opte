@@ -29,7 +29,7 @@ use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
 use crate::engine::port::{self, Port, Pos};
 use crate::engine::rule::{
-    self, Action, DataPredicate, Predicate, Rule, StaticAction, HT
+    self, Action, DataPredicate, Predicate, Rule, StaticAction, HT,
 };
 use crate::engine::sync::{KMutex, KMutexType};
 use crate::engine::udp::UdpMeta;
