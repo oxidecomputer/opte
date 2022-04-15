@@ -22,7 +22,6 @@ use crate::api::{
     Dhcp4Action, Dhcp4ReplyType, Direction, Ipv4Addr, Ipv4PrefixLen, OpteError,
     SubnetRouterPair,
 };
-use crate::engine::dhcp::MessageType as DhcpMessageType;
 use crate::engine::ip4::Ipv4Cidr;
 use crate::engine::layer::Layer;
 use crate::engine::port::{self, Port, Pos};
@@ -116,15 +115,4 @@ pub fn setup(
     dhcp.add_rule(Direction::Out, request_rule.finalize());
 
     port.add_layer(dhcp, Pos::Before("firewall"))
-}
-
-impl From<Dhcp4ReplyType> for DhcpMessageType {
-    fn from(rt: Dhcp4ReplyType) -> Self {
-        use smoltcp::wire::DhcpMessageType as SmolDMT;
-
-        match rt {
-            Dhcp4ReplyType::Offer => Self::from(SmolDMT::Offer),
-            Dhcp4ReplyType::Ack => Self::from(SmolDMT::Ack),
-        }
-    }
 }
