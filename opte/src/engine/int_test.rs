@@ -688,6 +688,138 @@ fn overlay_guest_to_guest() {
     }
 }
 
+// Two guests on different, non-peered VPCs should not be able to
+// communicate.
+#[test]
+fn guest_to_guest_diff_vpc_no_peer() {
+    use super::checksum::HeaderChecksum;
+    use super::ip4::UlpCsumOpt;
+    use super::tcp::TcpFlags;
+
+    // ================================================================
+    // Configure ports for g1 and g2. Place g1 on VNI 99 and g2 on VNI
+    // 100.
+    // ================================================================
+    let mut g1_cfg = g1_cfg();
+    let mut g2_cfg = g2_cfg();
+
+    // NOTE: We're not testing Boundary Services in this test, so the
+    // values are irrelevant here.
+    let bs = PhysNet {
+        ether: EtherAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+        ip: Ipv6Addr::from([
+            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x77, 0x77,
+        ]),
+        vni: Vni::new(7777u32).unwrap(),
+    };
+
+    // TODO Can I just move these OverlayCfgs to the g*_cfg()
+    // functions now?
+    g1_cfg.overlay = Some(OverlayCfg {
+        boundary_services: bs.clone(),
+        vni: Vni::new(99u32).unwrap(),
+        phys_ip_src: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+    });
+
+    g2_cfg.overlay = Some(OverlayCfg {
+        boundary_services: bs.clone(),
+        vni: Vni::new(100u32).unwrap(),
+        // Site 0xF7, Rack 1, Sled 22, Interface 1
+        phys_ip_src: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+    });
+    let g2_phys = PhysNet {
+        ether: g2_cfg.private_mac,
+        ip: g2_cfg.overlay.as_ref().unwrap().phys_ip_src,
+        vni: g2_cfg.overlay.as_ref().unwrap().vni,
+    };
+
+    // Add V2P mappings that allow guests to resolve each others
+    // physical addresses.
+    let v2p = Arc::new(Virt2Phys::new());
+    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+
+    let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
+    router::setup(&mut g1_port).unwrap();
+    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap(), v2p.clone())
+        .unwrap();
+    let g1_port = g1_port.activate();
+
+    // Add router entry that allows comms between g1 and any other
+    // guest on its subnet. This is the same subnet that g2 is in, but
+    // remember g2 is in another VPC.
+    router::add_entry_active(
+        &g1_port,
+        IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet.cidr())),
+    )
+    .unwrap();
+
+    let mut g2_port = oxide_net_setup("g2_port", &g2_cfg);
+    router::setup(&mut g2_port).unwrap();
+    overlay::setup(&mut g2_port, g2_cfg.overlay.as_ref().unwrap(), v2p.clone())
+        .unwrap();
+    let g2_port = g2_port.activate();
+
+    // Add router entry that allows Guest 2 to send to Guest 1.
+    //
+    // XXX I just realized that it might make sense to move the router
+    // tables up to a global level like the Virt2Phys mappings. This
+    // way a new router entry that applies to many guests can placed
+    // once instead of on each port individually.
+    router::add_entry_active(
+        &g2_port,
+        IpCidr::Ip4(g1_cfg.vpc_subnet.cidr()),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet.cidr())),
+    )
+    .unwrap();
+
+    // Allow incoming TCP connection from anyone.
+    let rule = "dir=in action=allow priority=10 protocol=TCP";
+    firewall::add_fw_rule(
+        &g2_port,
+        &AddFwRuleReq {
+            port_name: g2_port.name().to_string(),
+            rule: rule.parse().unwrap(),
+        },
+    )
+    .unwrap();
+
+    // ================================================================
+    // Generate a telnet SYN packet from g1 to g2.
+    // ================================================================
+    let body = vec![];
+    let mut tcp = TcpHdr::new(7865, 23);
+    tcp.set_flags(TcpFlags::SYN);
+    tcp.set_seq(4224936861);
+    let mut ip4 =
+        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
+
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&eth.as_bytes());
+    bytes.extend_from_slice(&ip4.as_bytes());
+    bytes.extend_from_slice(&tcp.as_bytes());
+    bytes.extend_from_slice(&body);
+    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
+
+    // ================================================================
+    // Run the telnet SYN packet through g1's port in the outbound
+    // direction and verify the packet is dropped.
+    // ================================================================
+    let res = g1_port.process(Out, &mut g1_pkt);
+    println!("=== res: {:?}", res);
+    assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
+}
+
 // Verify that a guest can communicate with the internet.
 #[test]
 fn overlay_guest_to_internet() {
