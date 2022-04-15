@@ -8,6 +8,7 @@
 #![allow(improper_ctypes)] // for long double -> u128
 #![allow(non_camel_case_types)] // for bindgen code in ip.rs
 #![allow(non_snake_case)] // for bindgen code in ip.rs
+#![deny(unused_must_use)]
 #![feature(alloc_error_handler)]
 #![feature(rustc_private)]
 

@@ -23,22 +23,23 @@ use illumos_ddi_dki::*;
 use crate::ioctl::IoctlEnvelope;
 use crate::{dld, dls, ip, mac, secpolicy, sys, warn};
 use opte::api::{
-    CmdOk, Direction, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
+    CmdOk, Direction, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
     SetXdeUnderlayReq,
 };
 use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
-use opte::engine::headers::IpCidr;
+use opte::engine::headers::{IpAddr, IpCidr};
 use opte::engine::ioctl::{self as api, SnatCfg};
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::{Initialized, Packet, ParseError, Parsed};
+use opte::engine::port::meta;
 use opte::engine::port::{Active, Port, ProcessResult};
 use opte::engine::sync::{KMutex, KMutexType};
 use opte::engine::sync::{KRwLock, KRwLockType};
 use opte::engine::time::{Interval, Moment, Periodic};
 use opte::oxide_vpc::api::{
-    AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
+    AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, PhysNet,
     RemFwRuleReq, SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::{
@@ -140,7 +141,7 @@ struct xde_underlay_port {
 
 struct XdeState {
     ectx: Arc<ExecCtx>,
-    v2p: Arc<overlay::Virt2Phys>,
+    vpc_map: overlay::VpcMappings,
     underlay: KMutex<Option<UnderlayState>>,
 }
 
@@ -186,7 +187,8 @@ impl XdeState {
         XdeState {
             underlay: KMutex::new(None, KMutexType::Driver),
             ectx,
-            v2p: Arc::new(overlay::Virt2Phys::new()),
+            // v2p: BTreeMap::new(),
+            vpc_map: overlay::VpcMappings::new(),
         }
     }
 }
@@ -205,6 +207,7 @@ struct XdeDev {
     port: Arc<Port<Active>>,
     port_cfg: PortCfg,
     port_periodic: Periodic<Arc<Port<Active>>>,
+    port_v2p: Arc<overlay::Virt2Phys>,
 
     // simply pass the packets through to the underlay devices, skipping
     // opte-core processing.
@@ -437,6 +440,17 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         ONE_SECOND,
     );
 
+    // If this is the first guest in this VPC, then create a new
+    // mapping for said VPC. Otherwise, pull the existing one.
+    let port_v2p = state.vpc_map.add(
+        IpAddr::Ip4(req.private_ip),
+        PhysNet {
+            ether: req.private_mac,
+            ip: req.src_underlay_addr,
+            vni: req.vpc_vni,
+        },
+    );
+
     let mut xde = Box::new(XdeDev {
         devname: req.xde_devname.clone(),
         linkid: req.linkid,
@@ -445,6 +459,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         link_state: mac::link_state_t::Down,
         port,
         port_periodic,
+        port_v2p,
         port_cfg,
         passthrough: req.passthrough,
         vni: req.vpc_vni.into(),
@@ -1040,7 +1055,9 @@ fn guest_loopback(
             // We have found a matching Port on this host; "loop back"
             // the packet into the inbound processing path of the
             // destination Port.
-            match dest_dev.port.process(Direction::In, &mut pkt) {
+            let mut meta = meta::Meta::new();
+            let _ = meta.add(dest_dev.port_v2p.clone());
+            match dest_dev.port.process(Direction::In, &mut pkt, &mut meta) {
                 Ok(ProcessResult::Modified) => {
                     guest_loopback_probe(&pkt, src_dev, dest_dev);
 
@@ -1185,7 +1202,9 @@ unsafe extern "C" fn xde_mc_tx(
     // The port processing code will fire a probe that describes what
     // action was taken -- there should be no need to add probes or
     // prints here.
-    let res = port.process(Direction::Out, &mut pkt);
+    let mut meta = meta::Meta::new();
+    let _ = meta.add(src_dev.port_v2p.clone());
+    let res = port.process(Direction::Out, &mut pkt, &mut meta);
     match res {
         Ok(ProcessResult::Modified) => {
             // If the outer IPv6 destination is the same as the
@@ -1613,11 +1632,11 @@ unsafe extern "C" fn xde_mc_propinfo(
 fn new_port(
     name: String,
     private_ip: Ipv4Addr,
-    private_mac: EtherAddr,
-    gateway_mac: EtherAddr,
+    private_mac: MacAddr,
+    gateway_mac: MacAddr,
     gateway_ip: Ipv4Addr,
-    boundary_services_addr: Ipv6Addr,
-    boundary_services_vni: Vni,
+    bsvc_ip: Ipv6Addr,
+    bsvc_vni: Vni,
     src_underlay_addr: Ipv6Addr,
     vpc_vni: Vni,
     ectx: Arc<ExecCtx>,
@@ -1658,10 +1677,16 @@ fn new_port(
         gw_mac: gateway_mac,
         gw_ip: gateway_ip,
         dyn_nat,
-        overlay: None,
+        vni: vpc_vni,
+        phys_ip: src_underlay_addr,
+        bsvc_addr: PhysNet {
+            ether: MacAddr::from([0; 6]), //XXX this should not be needed
+            ip: bsvc_ip,
+            vni: bsvc_vni,
+        },
     };
 
-    let mut new_port = Port::new(&name, name_cstr, private_mac, ectx);
+    let mut new_port = Port::new(&name, name_cstr, private_mac.into(), ectx);
     firewall::setup(&mut new_port)?;
     dhcp4::setup(&mut new_port, &port_cfg)?;
     icmp::setup(&mut new_port, &port_cfg)?;
@@ -1669,21 +1694,8 @@ fn new_port(
         dyn_nat4::setup(&mut new_port, &port_cfg)?;
     }
     arp::setup(&mut new_port, &port_cfg)?;
-    router::setup(&mut new_port)?;
-
-    let oc = overlay::OverlayCfg {
-        boundary_services: overlay::PhysNet {
-            ether: EtherAddr::from([0; 6]), //XXX this should not be needed
-            ip: boundary_services_addr,
-            vni: boundary_services_vni,
-        },
-        phys_ip_src: src_underlay_addr,
-        vni: vpc_vni,
-    };
-
-    let state = get_xde_state();
-
-    overlay::setup(&new_port, &oc, state.v2p.clone())?;
+    router::setup(&mut new_port, &port_cfg)?;
+    overlay::setup(&new_port, &port_cfg)?;
     let port = Arc::new(new_port.activate());
     Ok((port, port_cfg))
 }
@@ -1766,7 +1778,9 @@ unsafe extern "C" fn xde_rx(
     }
 
     let port = &(*dev).port;
-    let res = port.process(Direction::In, &mut pkt);
+    let mut meta = meta::Meta::new();
+    let _ = meta.add(dev.port_v2p.clone());
+    let res = port.process(Direction::In, &mut pkt, &mut meta);
     match res {
         Ok(ProcessResult::Modified) => {
             warn!("rx accept");
@@ -1843,7 +1857,7 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
-    state.v2p.set(req.vip.into(), req.phys.into());
+    state.vpc_map.add(req.vip, req.phys);
     Ok(NoResp::default())
 }
 
@@ -1853,7 +1867,7 @@ fn dump_v2p_hdlr(
 ) -> Result<overlay::DumpVirt2PhysResp, OpteError> {
     let _req: overlay::DumpVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
-    Ok(state.v2p.dump())
+    Ok(state.vpc_map.dump())
 }
 
 #[no_mangle]

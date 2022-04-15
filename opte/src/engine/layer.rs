@@ -24,7 +24,8 @@ use super::ip4::Protocol;
 use super::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
 use super::port::meta::Meta;
 use super::rule::{
-    self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, Rule, RuleDump, HT,
+    self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, AllowOrDeny, Rule,
+    RuleDump, HT,
 };
 use super::sync::{KMutex, KMutexType};
 use super::time::Moment;
@@ -38,6 +39,7 @@ pub enum LayerError {
     GenDesc(rule::GenDescError),
     GenHt(rule::GenHtError),
     GenPacket(rule::GenErr),
+    ModMeta(String),
 }
 
 #[derive(Debug)]
@@ -408,14 +410,31 @@ impl Layer {
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            Action::Meta(action) => {
-                action.mod_meta(ifid, meta);
-                return Ok(LayerResult::Allow);
-            }
+            Action::Meta(action) => match action.mod_meta(ifid, meta) {
+                Ok(res) => match res {
+                    AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
+
+                    AllowOrDeny::Deny => {
+                        return Ok(LayerResult::Deny {
+                            name: self.name.clone(),
+                        })
+                    }
+                },
+
+                Err(msg) => return Err(LayerError::ModMeta(msg)),
+            },
 
             Action::Static(action) => {
                 let ht = match action.gen_ht(Direction::Out, ifid, meta) {
-                    Ok(ht) => ht,
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(ht) => ht,
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone(),
+                            });
+                        }
+                    },
+
                     Err(e) => {
                         self.record_gen_ht_failure(
                             &ectx,
@@ -446,7 +465,15 @@ impl Layer {
 
             Action::Stateful(action) => {
                 let desc = match action.gen_desc(&ifid, meta) {
-                    Ok(d) => d,
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(desc) => desc,
+
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone(),
+                            });
+                        }
+                    },
 
                     Err(e) => {
                         self.record_gen_desc_failure(
@@ -514,10 +541,18 @@ impl Layer {
             Action::Hairpin(action) => {
                 let mut rdr = pkt.get_body_rdr();
                 match action.gen_packet(pkt.meta(), &mut rdr) {
-                    Ok(pkt) => {
-                        let _ = rdr.finish();
-                        return Ok(LayerResult::Hairpin(pkt));
-                    }
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(pkt) => {
+                            let _ = rdr.finish();
+                            return Ok(LayerResult::Hairpin(pkt));
+                        }
+
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone(),
+                            });
+                        }
+                    },
 
                     Err(e) => {
                         // XXX SDT probe, error stat, log
@@ -608,14 +643,31 @@ impl Layer {
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            Action::Meta(action) => {
-                action.mod_meta(ifid, meta);
-                return Ok(LayerResult::Allow);
-            }
+            Action::Meta(action) => match action.mod_meta(ifid, meta) {
+                Ok(res) => match res {
+                    AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
+
+                    AllowOrDeny::Deny => {
+                        return Ok(LayerResult::Deny {
+                            name: self.name.clone(),
+                        })
+                    }
+                },
+
+                Err(msg) => return Err(LayerError::ModMeta(msg)),
+            },
 
             Action::Static(action) => {
                 let ht = match action.gen_ht(Direction::Out, ifid, meta) {
-                    Ok(ht) => ht,
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(ht) => ht,
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone(),
+                            });
+                        }
+                    },
+
                     Err(e) => {
                         self.record_gen_ht_failure(
                             &ectx,
@@ -646,7 +698,15 @@ impl Layer {
 
             Action::Stateful(action) => {
                 let desc = match action.gen_desc(&ifid, meta) {
-                    Ok(d) => d,
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(desc) => desc,
+
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone(),
+                            });
+                        }
+                    },
 
                     Err(e) => {
                         self.record_gen_desc_failure(
@@ -696,10 +756,18 @@ impl Layer {
             Action::Hairpin(action) => {
                 let mut rdr = pkt.get_body_rdr();
                 match action.gen_packet(pkt.meta(), &mut rdr) {
-                    Ok(new_pkt) => {
-                        let _ = rdr.finish();
-                        return Ok(LayerResult::Hairpin(new_pkt));
-                    }
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(pkt) => {
+                            let _ = rdr.finish();
+                            return Ok(LayerResult::Hairpin(pkt));
+                        }
+
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone(),
+                            });
+                        }
+                    },
 
                     Err(e) => {
                         // XXX SDT probe, error stat, log

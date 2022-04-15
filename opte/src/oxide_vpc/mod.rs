@@ -24,9 +24,9 @@ pub mod api;
 cfg_if! {
     if #[cfg(any(feature = "engine", test))] {
         use core::ops::Range;
-        use crate::engine::ether::EtherAddr;
-        use crate::engine::ip4::Ipv4Addr;
+        use crate::api::{Ipv4Addr, Ipv6Addr, MacAddr, Vni};
         use crate::engine::vpc::VpcSubnet4;
+        use crate::oxide_vpc::api::PhysNet;
 
         pub mod engine;
 
@@ -40,17 +40,14 @@ cfg_if! {
         #[derive(Clone, Debug)]
         pub struct PortCfg {
             pub vpc_subnet: VpcSubnet4,
-            pub private_mac: EtherAddr,
+            pub private_mac: MacAddr,
             pub private_ip: Ipv4Addr,
-            pub gw_mac: EtherAddr,
+            pub gw_mac: MacAddr,
             pub gw_ip: Ipv4Addr,
             pub dyn_nat: DynNat4Cfg,
-            // XXX For the moment we allow the overlay to be optional.
-            // This allows the Oxide Network to continue functioning
-            // on a local IPv4 network until the IPv6 underlay support
-            // is more flushed out and development/testing strategies
-            // are determined.
-            pub overlay: Option<engine::overlay::OverlayCfg>,
+            pub vni: Vni,
+            pub phys_ip: Ipv6Addr,
+            pub bsvc_addr: PhysNet,
         }
     }
 }

@@ -19,7 +19,7 @@ use super::arp::{
     ArpEth4Payload, ArpEth4PayloadRaw, ArpMeta, ArpOp, ARP_HTYPE_ETHERNET,
 };
 use super::dhcp::MessageType as DhcpMessageType;
-use super::ether::{EtherAddr, EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
+use super::ether::{EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
 use super::flow_table::StateSummary;
 use super::geneve::{GeneveMeta, GeneveMetaOpt};
 use super::headers::{
@@ -36,7 +36,7 @@ use super::packet::{
 use super::port::meta::Meta;
 use super::tcp::TcpMeta;
 use super::udp::UdpMeta;
-use crate::api::Direction;
+use crate::api::{Direction, MacAddr};
 use crate::CString;
 
 use illumos_ddi_dki::c_char;
@@ -93,11 +93,11 @@ impl Display for EtherTypeMatch {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum EtherAddrMatch {
-    Exact(EtherAddr),
+    Exact(MacAddr),
 }
 
 impl EtherAddrMatch {
-    fn matches(&self, flow_addr: EtherAddr) -> bool {
+    fn matches(&self, flow_addr: MacAddr) -> bool {
         match self {
             EtherAddrMatch::Exact(addr) => flow_addr == *addr,
         }
@@ -790,7 +790,7 @@ impl StaticAction for Identity {
         _flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> GenHtResult {
-        Ok(HT::identity(&self.name))
+        Ok(AllowOrDeny::Allow(HT::identity(&self.name)))
     }
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
@@ -958,7 +958,7 @@ pub enum GenDescError {
     Unexpected { msg: String },
 }
 
-pub type GenDescResult = Result<Arc<dyn ActionDesc>, GenDescError>;
+pub type GenDescResult = ActionResult<Arc<dyn ActionDesc>, GenDescError>;
 
 pub trait StatefulAction: Display {
     /// Generate a an [`ActionDesc`] based on the [`InnerFlowId`] and
@@ -981,11 +981,10 @@ pub trait StatefulAction: Display {
 #[derive(Clone, Debug)]
 pub enum GenHtError {
     ResourceExhausted { name: String },
-
     Unexpected { msg: String },
 }
 
-pub type GenHtResult = Result<HT, GenHtError>;
+pub type GenHtResult = ActionResult<HT, GenHtError>;
 
 pub trait StaticAction: Display {
     fn gen_ht(
@@ -1003,6 +1002,8 @@ pub trait StaticAction: Display {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 }
 
+pub type ModMetaResult = ActionResult<(), String>;
+
 /// A meta action is one that's only goal is to modify the processing
 /// metadata in some way. That is, it has no transformation to make on
 /// the packet, only add/modify/remove metadata for use by later
@@ -1015,7 +1016,8 @@ pub trait MetaAction: Display {
     /// implies there are no implicit predicates of that type.
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 
-    fn mod_meta(&self, flow_id: &InnerFlowId, meta: &mut Meta);
+    fn mod_meta(&self, flow_id: &InnerFlowId, meta: &mut Meta)
+        -> ModMetaResult;
 }
 
 #[derive(Debug)]
@@ -1045,7 +1047,7 @@ impl From<smoltcp::Error> for GenErr {
     }
 }
 
-pub type GenResult<T> = Result<T, GenErr>;
+pub type GenPacketResult = ActionResult<Packet<Initialized>, GenErr>;
 
 /// A hairpin action is one that generates a new packet based on the
 /// current inbound/outbound packet, and then "hairpins" that new
@@ -1063,7 +1065,7 @@ pub trait HairpinAction: Display {
         &self,
         meta: &PacketMeta,
         rdr: &mut PacketReader<Parsed, ()>,
-    ) -> GenResult<Packet<Initialized>>;
+    ) -> GenPacketResult;
 
     /// Return the predicates implicit to this action.
     ///
@@ -1072,6 +1074,14 @@ pub trait HairpinAction: Display {
     /// implies there are no implicit predicates of that type.
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 }
+
+#[derive(Debug)]
+pub enum AllowOrDeny<T> {
+    Allow(T),
+    Deny,
+}
+
+pub type ActionResult<T, E> = Result<AllowOrDeny<T>, E>;
 
 #[derive(Clone)]
 pub enum Action {

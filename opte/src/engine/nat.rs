@@ -20,8 +20,8 @@ use super::ip4::Ipv4Meta;
 use super::layer::InnerFlowId;
 use super::port::meta::Meta;
 use super::rule::{
-    self, ActionDesc, DataPredicate, Predicate, ResourceError, StatefulAction,
-    HT,
+    self, ActionDesc, AllowOrDeny, DataPredicate, Predicate, ResourceError,
+    StatefulAction, HT,
 };
 use super::sync::{KMutex, KMutexType};
 use crate::api::{Direction, Ipv4Addr};
@@ -134,7 +134,7 @@ impl StatefulAction for DynNat4 {
                     pub_port,
                 };
 
-                Ok(Arc::new(desc))
+                Ok(AllowOrDeny::Allow(Arc::new(desc)))
             }
 
             // XXX This needs improving.
@@ -212,14 +212,15 @@ mod test {
 
     #[test]
     fn dyn_nat4_ht() {
-        use crate::engine::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV4};
+        use crate::api::MacAddr;
+        use crate::engine::ether::{EtherMeta, ETHER_TYPE_IPV4};
         use crate::engine::headers::{IpMeta, UlpMeta};
         use crate::engine::ip4::Protocol;
         use crate::engine::packet::{MetaGroup, PacketMeta};
         use crate::engine::tcp::TcpMeta;
 
-        let priv_mac = EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
-        let dest_mac = EtherAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
+        let priv_mac = MacAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
+        let dest_mac = MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
         let priv_ip = "10.0.0.220".parse().unwrap();
         let priv_port = "4999".parse().unwrap();
         let pub_ip = "52.10.128.69".parse().unwrap();

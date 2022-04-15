@@ -12,7 +12,9 @@ cfg_if! {
 }
 
 /// A MAC address.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
 pub struct MacAddr {
     inner: [u8; 6],
 }
@@ -71,6 +73,9 @@ impl Display for MacAddr {
 }
 
 impl MacAddr {
+    pub const BROADCAST: Self = Self { inner: [0xFF; 6] };
+    pub const ZERO: Self = Self { inner: [0x00; 6] };
+
     /// Return the bytes of the MAC address.
     pub fn bytes(&self) -> [u8; 6] {
         self.inner

@@ -6,12 +6,12 @@ use core::fmt;
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::collections::btree_map::BTreeMap;
-        use alloc::string::{String, ToString};
+        use alloc::string::ToString;
         use alloc::sync::Arc;
         use alloc::vec::Vec;
     } else {
         use std::collections::btree_map::BTreeMap;
-        use std::string::{String, ToString};
+        use std::string::ToString;
         use std::sync::Arc;
         use std::vec::Vec;
     }
@@ -19,8 +19,9 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::{CmdOk, Direction, Ipv4Addr, OpteError};
-use crate::engine::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV6};
+use super::router::RouterTargetInternal;
+use crate::api::{CmdOk, Direction, Ipv4Addr, MacAddr, OpteError};
+use crate::engine::ether::{EtherMeta, ETHER_TYPE_IPV6};
 use crate::engine::geneve::{GeneveMeta, Vni, GENEVE_PORT};
 use crate::engine::headers::{HeaderAction, IpAddr};
 use crate::engine::ip4::Protocol;
@@ -29,41 +30,24 @@ use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
 use crate::engine::port::{self, Port, Pos};
 use crate::engine::rule::{
-    self, Action, DataPredicate, Predicate, Rule, StaticAction, HT,
+    self, Action, AllowOrDeny, DataPredicate, Predicate, Rule, StaticAction, HT,
 };
 use crate::engine::sync::{KMutex, KMutexType};
 use crate::engine::udp::UdpMeta;
-use crate::oxide_vpc::api::{self as vpc_api, RouterTarget};
+use crate::oxide_vpc::api::{GuestPhysAddr, PhysNet};
+use crate::oxide_vpc::PortCfg;
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub struct PhysNet {
-    pub ether: EtherAddr,
-    pub ip: Ipv6Addr,
-    pub vni: Vni,
-}
-
-impl From<vpc_api::PhysNet> for PhysNet {
-    fn from(phys: vpc_api::PhysNet) -> Self {
-        Self {
-            ether: phys.ether.into(),
-            ip: phys.ip.into(),
-            vni: phys.vni.into(),
-        }
-    }
-}
-
 pub fn setup(
     port: &Port<port::Inactive>,
-    cfg: &OverlayCfg,
-    v2p: Arc<Virt2Phys>,
+    cfg: &PortCfg,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
     let encap = Action::Static(Arc::new(EncapAction::new(
-        cfg.boundary_services,
-        cfg.phys_ip_src,
-        v2p,
+        cfg.bsvc_addr,
+        cfg.phys_ip,
+        cfg.vni,
     )));
 
     // Action Index 1
@@ -82,64 +66,79 @@ pub fn setup(
 pub const DECAP_NAME: &'static str = "decap";
 pub const ENCAP_NAME: &'static str = "encap";
 
-/// A [`StaticAction`] representing the act of encapsulating a packet
-/// for the purpose of implementing an overlay network.
+/// A [`StaticAction`] to encapsulate a packet for the purpose of
+/// implementing the Oxide VPC overlay network.
 ///
-/// NOTE: Currently the encapsulation is hard-coded to use Geneve.
-///
-/// This action maps the virtual destination to its physical location.
-/// In the case of a guest-to-guest packet the physical destination is
+/// This action maps the Virtual IP (VIP) to its physical location. In
+/// the case of a guest-to-guest packet the physical location is
 /// another sled in the Oxide Physical Network. In the case of a
-/// guest-to-external-network (whether external be the Internet or the
-/// customer's network) the physical destination is Boundary Services.
-/// In both cases there is a [`PhysNet`] value that identifies the
-/// physical location: MAC address + IPv6 address + VNI.
+/// guest-to-external (whether external be a host on the Internet or
+/// in the customer's network) the physical location is Boundary
+/// Services. In both cases there is a [`PhysNet`] value that
+/// identifies the physical location; it is comprised of three pieces
+/// of data.
 ///
-/// The physical MAC address of a guest is the same as its virtual
-/// one. We configure the guests in such a way that every destination
-/// is off link and must be routed through their gateway (OPTE). That
-/// means the destination MAC address coming from the guest is always
-/// some sentinel value representing this virtual gateway. OPTE uses
-/// the [`PhysNet`] MAC address to rewrite the destinaton. This allows
-/// the receiving sled to steer the incoming traffic to isolated
-/// receive queues based on the inner destination MAC address.
+/// 1. Inner frame MAC address
 ///
-/// The physical IPv6 of a guest is the ULA of the sled it currently
-/// lives on. The Oxide Physical Network takes care of routing this
-/// ULA correctly.
+/// 2. Outer frame IPv6 address
 ///
-/// The VNI is either the destination VPC identifier or the VNI of
+/// 3. Geneve VNI
+///
+/// The "physical" MAC address of a guest is the same as its virtual
+/// one. We configure the guests in such a way that all destinations
+/// are off link and must route through the gateway (OPTE). This
+/// implies that the inner frame destination MAC address coming from
+/// the guest is always some sentinel value representing the virtual
+/// gateway. OPTE uses the [`PhysNet`] MAC address to rewrite this
+/// inner frame destination.
+///
+/// In the case of Boundary Services things are a bit different with
+/// regard to the inner frame MAC address. It shouldn't need to care
+/// about this address, as Boundary Services doesn't really have a
+/// presence on the VPC network. Rather, OPTE and Boundary Services
+/// work together to implement the external side of the guest's
+/// gateway. When a packet reaches the edge, Boundary Services decaps
+/// the outer frame, stores some state, and then rewrites the inner
+/// frame MAC addresses to values the exist in the external network.
+/// For this reason, there is no need for Boundary Services to have a
+/// MAC address on the VPC, and therefore has no need for that part of
+/// [`PhysNet`]. We only need the IPv6 ULA address and VNI to address
 /// Boundary Services.
 ///
-/// XXX The outer MAC addresses are zero'd out. The current plan is to
-/// have their values filled out by the upcoming `xde` device, which
-/// is responsible for querying the routing table and determining the
-/// physical path.
+/// XXX Perhaps use a separate type for the Boundary Services addr.
 ///
-/// XXX There is no need for physical MAC address for Boundary
-/// Services as it lives on the switch. That value is one of the two
-/// switch ports determined by the upcoming `xde` device (opte-drv
-/// replacement).
+/// The outer frame IPv6 address of a guest is the ULA of the sled it
+/// currently lives on. The Oxide Physical Network takes care of
+/// routing this ULA correctly.
 ///
-/// This action uses the [`Virt2Phys`] resource to map the vritual
+/// The outer frame IPv6 address of Boundary Services is some ULA on
+/// the physical network, told to us during port creation.
+///
+/// The VNI of a guest is its VPC identifier. The VNI of Boundary
+/// Services is just a dedicated, cordoned off VNI explicitly for the
+/// purposes of talking to Boundary Services.
+///
+/// XXX The outer MAC addresses are zero'd out. Currently xde fills
+/// these out. However, the plan is to create a virtual switch
+/// abstraction in OPTE and have interfaces for querying the system
+/// for route/MAC address info.
+///
+/// This action uses the [`Virt2Phys`] resource to map the virtual
 /// destination to the physical location. These mappings are
 /// determined by Nexus and pushed down to individual OPTE instances.
+/// The mapping itself is available through the port metadata passes
+/// as argument to the [`StaticAction`] callback.
 pub struct EncapAction {
-    // The physical address of boundary services.
-    boundary_services: PhysNet,
+    bsvc_addr: PhysNet,
     // The physical IPv6 ULA of the server that hosts this guest
     // sending data.
     phys_ip_src: Ipv6Addr,
-    v2p: Arc<Virt2Phys>,
+    vni: Vni,
 }
 
 impl EncapAction {
-    pub fn new(
-        boundary_services: PhysNet,
-        phys_ip_src: Ipv6Addr,
-        v2p: Arc<Virt2Phys>,
-    ) -> Self {
-        Self { boundary_services, phys_ip_src, v2p }
+    pub fn new(bsvc_addr: PhysNet, phys_ip_src: Ipv6Addr, vni: Vni) -> Self {
+        Self { bsvc_addr, phys_ip_src, vni }
     }
 }
 
@@ -157,56 +156,95 @@ impl StaticAction for EncapAction {
         flow_id: &InnerFlowId,
         meta: &mut Meta,
     ) -> rule::GenHtResult {
+        let v2p = match meta.get::<Arc<Virt2Phys>>() {
+            Some(v2p) => v2p,
+            // This should never happen. If it does, then the driver
+            // forgot to add the Virt2Phys metadata before processing.
+            None => {
+                return Err(rule::GenHtError::Unexpected {
+                    msg: format!("no Virt2Phys metadata entry found"),
+                })
+            }
+        };
+
         // The router layer determines a RouterTarget and stores it in
         // the meta map. We need to map this virtual target to a
         // physical one.
-        let virt_target = match meta.get::<RouterTarget>() {
+        let target = match meta.get::<RouterTargetInternal>() {
             Some(val) => val,
             None => {
-                // This should never happen. The Oxide Network's
-                // router layer should always write an entry. However,
-                // we currently have no way to enforce this in the
-                // type system, and thus must account for this
-                // situation.
+                // This should never happen. The router should always
+                // write an entry. However, we currently have no way
+                // to enforce this in the type system, and thus must
+                // account for this situation.
                 return Err(rule::GenHtError::Unexpected {
                     msg: format!("no RouterTarget metadata entry found"),
                 });
             }
         };
 
-        // Given the virtual target, determine its physical mapping.
-        let phys_target = match virt_target {
-            RouterTarget::Drop => {
-                todo!("should we even make it here?");
+        let phys_target = match target {
+            RouterTargetInternal::InternetGateway => self.bsvc_addr,
+
+            RouterTargetInternal::Ip(virt_ip) => match v2p.get(&virt_ip) {
+                Some(phys) => PhysNet {
+                    ether: phys.ether.into(),
+                    ip: phys.ip,
+                    vni: self.vni,
+                },
+
+                // The router target has specified a VPC IP we do not
+                // currently know about; this could be for two
+                // reasons:
+                //
+                // 1. No such IP currently exists in the guest's VPC.
+                //
+                // 2. The destination IP exists in the guest's VPC,
+                //    but we do not yet have a mapping for it.
+                //
+                // We cannot differentiate these cases from the point
+                // of view of this code without more information from
+                // the control plane; rather we drop the packet. If we
+                // are dealing with scenario (2), the control plane
+                // should eventually provide us with a mapping.
+                None => return Ok(AllowOrDeny::Deny),
+            },
+
+            RouterTargetInternal::VpcSubnet(_) => {
+                match v2p.get(&flow_id.dst_ip) {
+                    Some(phys) => PhysNet {
+                        ether: phys.ether.into(),
+                        ip: phys.ip,
+                        vni: self.vni,
+                    },
+
+                    // The guest is attempting to contact a VPC IP we
+                    // do not currently know about; this could be for
+                    // two reasons:
+                    //
+                    // 1. No such IP currently exists in the guest's VPC.
+                    //
+                    // 2. The destination IP exists in the guest's
+                    //    VPC, but we do not yet have a mapping for
+                    //    it.
+                    //
+                    // We cannot differentiate these cases from the
+                    // point of view of this code without more
+                    // information from the control plane; rather we
+                    // drop the packet. If we are dealing with
+                    // scenario (2), the control plane should
+                    // eventually provide us with a mapping.
+                    None => return Ok(AllowOrDeny::Deny),
+                }
             }
-
-            RouterTarget::InternetGateway => self.boundary_services.clone(),
-
-            RouterTarget::Ip(virt_ip) => match self.v2p.get(virt_ip) {
-                Some(val) => val,
-                None => {
-                    return Err(rule::GenHtError::Unexpected {
-                        msg: format!("no v2p mapping for {}", virt_ip),
-                    });
-                }
-            },
-
-            RouterTarget::VpcSubnet(_) => match self.v2p.get(&flow_id.dst_ip) {
-                Some(val) => val,
-                None => {
-                    return Err(rule::GenHtError::Unexpected {
-                        msg: format!("no v2p mapping for {}", flow_id.dst_ip),
-                    });
-                }
-            },
         };
 
-        Ok(HT {
+        Ok(AllowOrDeny::Allow(HT {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
             outer_ether: EtherMeta::push(
-                Default::default(),
-                Default::default(),
+                MacAddr::ZERO,
+                MacAddr::ZERO,
                 ETHER_TYPE_IPV6,
             ),
             outer_ip: Ipv6Meta::push(
@@ -234,7 +272,7 @@ impl StaticAction for EncapAction {
                 Some(phys_target.ether.into()),
             ),
             ..Default::default()
-        })
+        }))
     }
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
@@ -266,18 +304,62 @@ impl StaticAction for DecapAction {
         _flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> rule::GenHtResult {
-        Ok(HT {
+        Ok(AllowOrDeny::Allow(HT {
             name: DECAP_NAME.to_string(),
             outer_ether: HeaderAction::Pop,
             outer_ip: HeaderAction::Pop,
             outer_ulp: HeaderAction::Pop,
             outer_encap: HeaderAction::Pop,
             ..Default::default()
-        })
+        }))
     }
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         (vec![], vec![])
+    }
+}
+
+pub struct VpcMappings {
+    inner: KMutex<BTreeMap<Vni, Arc<Virt2Phys>>>,
+}
+
+impl VpcMappings {
+    pub fn add(&self, vip: IpAddr, phys: PhysNet) -> Arc<Virt2Phys> {
+        let guest_phys = GuestPhysAddr { ether: phys.ether, ip: phys.ip };
+        let mut lock = self.inner.lock();
+
+        match lock.get(&phys.vni) {
+            Some(v2p) => {
+                v2p.set(vip, guest_phys);
+                v2p.clone()
+            }
+
+            None => {
+                let v2p = Arc::new(Virt2Phys::new());
+                v2p.set(vip, guest_phys);
+                lock.insert(phys.vni, v2p.clone());
+                v2p
+            }
+        }
+    }
+
+    pub fn dump(&self) -> DumpVirt2PhysResp {
+        let mut mappings = Vec::new();
+        let lock = self.inner.lock();
+
+        for (vni, v2p) in lock.iter() {
+            mappings.push(VpcMapResp {
+                vni: *vni,
+                ip4: v2p.dump_ip4(),
+                ip6: v2p.dump_ip6(),
+            });
+        }
+
+        DumpVirt2PhysResp { mappings }
+    }
+
+    pub fn new() -> Self {
+        VpcMappings { inner: KMutex::new(BTreeMap::new(), KMutexType::Driver) }
     }
 }
 
@@ -294,28 +376,37 @@ pub struct Virt2Phys {
     // that makes use of this virtual destination (for all Ports).
     // That means updating the generation number of all Ports anytme
     // an entry is **MODIFIED**.
-    ip4: KMutex<BTreeMap<Ipv4Addr, PhysNet>>,
-    ip6: KMutex<BTreeMap<Ipv6Addr, PhysNet>>,
+    ip4: KMutex<BTreeMap<Ipv4Addr, GuestPhysAddr>>,
+    ip6: KMutex<BTreeMap<Ipv6Addr, GuestPhysAddr>>,
 }
 
 pub const VIRT_2_PHYS_NAME: &'static str = "Virt2Phys";
 
 impl Virt2Phys {
-    fn get(&self, vip: &IpAddr) -> Option<PhysNet> {
+    pub fn get(&self, vip: &IpAddr) -> Option<GuestPhysAddr> {
         match vip {
             IpAddr::Ip4(ip4) => self.ip4.lock().get(ip4).cloned(),
             IpAddr::Ip6(ip6) => self.ip6.lock().get(ip6).cloned(),
         }
     }
 
-    pub fn dump(&self) -> DumpVirt2PhysResp {
-        DumpVirt2PhysResp {
-            ip4: self.ip4.lock().clone(),
-            ip6: self.ip6.lock().clone(),
+    pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, GuestPhysAddr)> {
+        let mut ip4 = Vec::new();
+        for (vip, gaddr) in self.ip4.lock().iter() {
+            ip4.push((*vip, *gaddr));
         }
+        ip4
     }
 
-    pub fn set(&self, vip: IpAddr, phys: PhysNet) {
+    pub fn dump_ip6(&self) -> Vec<(Ipv6Addr, GuestPhysAddr)> {
+        let mut ip6 = Vec::new();
+        for (vip, gaddr) in self.ip6.lock().iter() {
+            ip6.push((*vip, *gaddr));
+        }
+        ip6
+    }
+
+    pub fn set(&self, vip: IpAddr, phys: GuestPhysAddr) {
         match vip {
             IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, phys),
             IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, phys),
@@ -330,19 +421,6 @@ impl Virt2Phys {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct OverlayCfg {
-    pub boundary_services: PhysNet,
-    pub vni: Vni,
-    pub phys_ip_src: Ipv6Addr,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct SetOverlayReq {
-    pub port_name: String,
-    pub cfg: OverlayCfg,
-}
-
 #[repr(C)]
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpVirt2PhysReq {
@@ -350,9 +428,15 @@ pub struct DumpVirt2PhysReq {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct VpcMapResp {
+    pub vni: Vni,
+    pub ip4: Vec<(Ipv4Addr, GuestPhysAddr)>,
+    pub ip6: Vec<(Ipv6Addr, GuestPhysAddr)>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct DumpVirt2PhysResp {
-    pub ip4: BTreeMap<Ipv4Addr, PhysNet>,
-    pub ip6: BTreeMap<Ipv6Addr, PhysNet>,
+    pub mappings: Vec<VpcMapResp>,
 }
 
 impl CmdOk for DumpVirt2PhysResp {}

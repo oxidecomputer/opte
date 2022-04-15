@@ -19,8 +19,8 @@ use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
 use crate::engine::port::{self, Port, Pos};
 use crate::engine::rule::{
-    self, DataPredicate, EtherTypeMatch, Identity, IdentityDesc, IpProtoMatch,
-    Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
+    self, AllowOrDeny, DataPredicate, EtherTypeMatch, Identity, IdentityDesc,
+    IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
 };
 use crate::engine::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
 pub use crate::oxide_vpc::api::ProtoFilter;
@@ -175,7 +175,7 @@ impl StatefulAction for FwStatefulAction {
         _flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> rule::GenDescResult {
-        Ok(Arc::new(IdentityDesc::new(self.name.clone())))
+        Ok(AllowOrDeny::Allow(Arc::new(IdentityDesc::new(self.name.clone()))))
     }
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
