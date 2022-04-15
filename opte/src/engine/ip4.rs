@@ -28,10 +28,7 @@ use super::packet::{PacketRead, ReadErr, WriteError};
 use super::rule::{
     MatchExact, MatchExactVal, MatchPrefix, MatchPrefixVal, MatchRangeVal,
 };
-pub use crate::api::{
-    Dhcp4Action, Dhcp4ReplyType, Ipv4Addr, Ipv4Cidr, Ipv4PrefixLen, Protocol,
-    SubnetRouterPair,
-};
+pub use crate::api::{Ipv4Addr, Ipv4Cidr, Ipv4PrefixLen, Protocol};
 
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
 pub const IPV4_HDR_VER_MASK: u8 = 0xF0;
