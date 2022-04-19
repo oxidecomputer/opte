@@ -224,6 +224,8 @@ where
                     "opte driver failed to deser/ser req/resp".to_string()
                 }
 
+                libc::EPERM => "permission denied".to_string(),
+
                 errno => {
                     format!("unexpected errno: {}", errno)
                 }
