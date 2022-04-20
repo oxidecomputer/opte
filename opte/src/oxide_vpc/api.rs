@@ -119,7 +119,7 @@ pub struct DeleteXdeReq {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2PhysReq {
     pub vip: IpAddr,
-    pub phys: GuestPhysAddr,
+    pub phys: PhysNet,
 }
 
 /// Add an entry to the IPv4 router.

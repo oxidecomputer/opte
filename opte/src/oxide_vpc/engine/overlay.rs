@@ -281,6 +281,51 @@ impl StaticAction for DecapAction {
     }
 }
 
+pub struct VpcMappings {
+    inner: KMutex<BTreeMap<Vni, Arc<Virt2Phys>>>,
+}
+
+impl VpcMappings {
+    pub fn add(&self, vip: IpAddr, phys: PhysNet) -> Arc<Virt2Phys> {
+        let guest_phys = GuestPhysAddr { ether: phys.ether, ip: phys.ip };
+        let mut lock = self.inner.lock();
+
+        match lock.get(&phys.vni) {
+            Some(v2p) => {
+                v2p.set(vip, guest_phys);
+                v2p.clone()
+            }
+
+            None => {
+                let v2p = Arc::new(Virt2Phys::new());
+                v2p.set(vip, guest_phys);
+                lock.insert(phys.vni, v2p.clone());
+                v2p
+            }
+        }
+    }
+
+    pub fn dump(&self) -> DumpVirt2PhysResp {
+        let mut ip4 = Vec::new();
+        let mut ip6 = Vec::new();
+        let lock = self.inner.lock();
+
+        for (vni, v2p) in lock.iter() {
+            // let vni_dump = Vec::with_capacity(v2p.ip4_len());
+            ip4.push((*vni, v2p.dump_ip4()));
+            ip6.push((*vni, v2p.dump_ip6()));
+        }
+
+        DumpVirt2PhysResp { ip4, ip6 }
+    }
+
+    pub fn new() -> Self {
+        VpcMappings {
+            inner: KMutex::new(BTreeMap::new(), KMutexType::Driver)
+        }
+    }
+}
+
 /// A mapping from virtual IPs to physical location.
 pub struct Virt2Phys {
     // XXX Wrapping these in a mutex is definitely a terrible idea (in
@@ -308,11 +353,20 @@ impl Virt2Phys {
         }
     }
 
-    pub fn dump(&self) -> DumpVirt2PhysResp {
-        DumpVirt2PhysResp {
-            ip4: self.ip4.lock().clone(),
-            ip6: self.ip6.lock().clone(),
+    pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, GuestPhysAddr)> {
+        let mut ip4 = Vec::new();
+        for (vip, gaddr) in self.ip4.lock().iter() {
+            ip4.push((*vip, *gaddr));
         }
+        ip4
+    }
+
+    pub fn dump_ip6(&self) -> Vec<(Ipv6Addr, GuestPhysAddr)> {
+        let mut ip6 = Vec::new();
+        for (vip, gaddr) in self.ip6.lock().iter() {
+            ip6.push((*vip, *gaddr));
+        }
+        ip6
     }
 
     pub fn set(&self, vip: IpAddr, phys: GuestPhysAddr) {
@@ -351,8 +405,8 @@ pub struct DumpVirt2PhysReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpVirt2PhysResp {
-    pub ip4: BTreeMap<Ipv4Addr, GuestPhysAddr>,
-    pub ip6: BTreeMap<Ipv6Addr, GuestPhysAddr>,
+    pub ip4: Vec<(Vni, Vec<(Ipv4Addr, GuestPhysAddr)>)>,
+    pub ip6: Vec<(Vni, Vec<(Ipv6Addr, GuestPhysAddr)>)>,
 }
 
 impl CmdOk for DumpVirt2PhysResp {}
