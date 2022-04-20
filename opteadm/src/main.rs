@@ -396,8 +396,8 @@ fn print_list_layers(resp: &api::ListLayersResp) {
 
 fn print_v2p_header() {
     println!(
-        "{:<24} {:<8} {:<17} {}",
-        "VPC IP", "VNI", "VPC MAC ADDR", "UNDERLAY IP"
+        "{:<24} {:<17} {}",
+        "VPC IP", "VPC MAC ADDR", "UNDERLAY IP"
     );
 }
 
