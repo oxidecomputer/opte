@@ -13,8 +13,8 @@ use opte::engine::rule::RuleDump;
 use opte::engine::vpc::VpcSubnet4;
 use opte::oxide_vpc::api::{
     Action as FirewallAction, AddRouterEntryIpv4Req, Address,
-    Filters as FirewallFilters, FirewallRule, PhysNet, Ports, ProtoFilter,
-    RemFwRuleReq, RouterTarget, SetVirt2PhysReq,
+    Filters as FirewallFilters, FirewallRule, GuestPhysAddr, PhysNet, Ports,
+    ProtoFilter, RemFwRuleReq, RouterTarget, SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::overlay::DumpVirt2PhysResp;
 use opte_ioctl::Error;
@@ -401,27 +401,21 @@ fn print_v2p_header() {
     );
 }
 
-fn print_v2p_ip4(
-    (src, phys): (&Ipv4Addr, &opte::oxide_vpc::engine::overlay::PhysNet),
-) {
+fn print_v2p_ip4((src, phys): &(Ipv4Addr, GuestPhysAddr)) {
     let eth = format!("{}", phys.ether);
     println!(
-        "{:<24} {:<8} {:<17} {}",
+        "{:<24} {:<17} {}",
         std::net::Ipv4Addr::from(src.bytes()),
-        phys.vni,
         eth,
         std::net::Ipv6Addr::from(phys.ip.bytes()),
     );
 }
 
-fn print_v2p_ip6(
-    (src, phys): (&Ipv6Addr, &opte::oxide_vpc::engine::overlay::PhysNet),
-) {
+fn print_v2p_ip6((src, phys): &(Ipv6Addr, GuestPhysAddr)) {
     let eth = format!("{}", phys.ether);
     println!(
-        "{:<24} {:<8} {:<17} {}",
+        "{:<24} {:<17} {}",
         std::net::Ipv6Addr::from(src.bytes()),
-        phys.vni,
         eth,
         std::net::Ipv6Addr::from(phys.ip.bytes()),
     );
@@ -430,20 +424,24 @@ fn print_v2p_ip6(
 fn print_v2p(resp: &DumpVirt2PhysResp) {
     println!("Virtual to Physical Mappings");
     print_hrb();
-    println!("");
-    println!("IPv4 mappings");
-    print_hr();
-    print_v2p_header();
-    for pair in &resp.ip4 {
-        print_v2p_ip4(pair);
-    }
+    for vpc in &resp.mappings {
+        println!("VPC {}", vpc.vni);
+        print_hr();
+        println!("");
+        println!("IPv4 mappings");
+        print_hr();
+        print_v2p_header();
+        for pair in &vpc.ip4 {
+            print_v2p_ip4(pair);
+        }
 
-    println!("");
-    println!("IPv6 mappings");
-    print_hr();
-    print_v2p_header();
-    for pair in &resp.ip6 {
-        print_v2p_ip6(pair);
+        println!("");
+        println!("IPv6 mappings");
+        print_hr();
+        print_v2p_header();
+        for pair in &vpc.ip6 {
+            print_v2p_ip6(pair);
+        }
     }
 }
 

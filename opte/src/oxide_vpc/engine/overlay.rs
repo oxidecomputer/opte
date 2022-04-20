@@ -306,17 +306,18 @@ impl VpcMappings {
     }
 
     pub fn dump(&self) -> DumpVirt2PhysResp {
-        let mut ip4 = Vec::new();
-        let mut ip6 = Vec::new();
+        let mut mappings = Vec::new();
         let lock = self.inner.lock();
 
         for (vni, v2p) in lock.iter() {
-            // let vni_dump = Vec::with_capacity(v2p.ip4_len());
-            ip4.push((*vni, v2p.dump_ip4()));
-            ip6.push((*vni, v2p.dump_ip6()));
+            mappings.push(VpcMapResp {
+                vni: *vni,
+                ip4: v2p.dump_ip4(),
+                ip6: v2p.dump_ip6()
+            });
         }
 
-        DumpVirt2PhysResp { ip4, ip6 }
+        DumpVirt2PhysResp { mappings }
     }
 
     pub fn new() -> Self {
@@ -404,9 +405,15 @@ pub struct DumpVirt2PhysReq {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct VpcMapResp {
+    pub vni: Vni,
+    pub ip4: Vec<(Ipv4Addr, GuestPhysAddr)>,
+    pub ip6: Vec<(Ipv6Addr, GuestPhysAddr)>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct DumpVirt2PhysResp {
-    pub ip4: Vec<(Vni, Vec<(Ipv4Addr, GuestPhysAddr)>)>,
-    pub ip6: Vec<(Vni, Vec<(Ipv6Addr, GuestPhysAddr)>)>,
+    pub mappings: Vec<VpcMapResp>,
 }
 
 impl CmdOk for DumpVirt2PhysResp {}
