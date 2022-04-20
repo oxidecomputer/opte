@@ -25,7 +25,7 @@ use super::rule::{
     Ipv4AddrMatch, PortMatch, Predicate,
 };
 use super::udp::{UdpHdr, UdpMeta};
-use crate::api::{Dhcp4Action, Dhcp4ReplyType, SubnetRouterPair};
+use crate::api::{Dhcp4Action, Dhcp4ReplyType, MacAddr, SubnetRouterPair};
 
 /// The DHCP message type.
 ///
@@ -270,7 +270,7 @@ impl HairpinAction for Dhcp4Action {
 
         let hdr_preds = vec![
             Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-                ether::ETHER_BROADCAST,
+                MacAddr::BROADCAST,
             )]),
             Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(
                 self.client_mac.into(),
@@ -383,7 +383,7 @@ impl HairpinAction for Dhcp4Action {
         ip.compute_hdr_csum();
 
         let eth_dst = if client_dhcp.broadcast {
-            ether::ETHER_BROADCAST
+            MacAddr::BROADCAST
         } else {
             self.client_mac.into()
         };

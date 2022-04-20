@@ -31,8 +31,8 @@ use zerocopy::AsBytes;
 
 use super::arp::{ArpEth4Payload, ArpEth4PayloadRaw, ArpHdrRaw, ARP_HDR_SZ};
 use super::ether::{
-    self, EtherAddr, EtherHdr, EtherHdrRaw, EtherMeta, EtherType, ETHER_HDR_SZ,
-    ETHER_TYPE_ARP, ETHER_TYPE_IPV4,
+    EtherHdr, EtherHdrRaw, EtherMeta, EtherType, ETHER_HDR_SZ, ETHER_TYPE_ARP,
+    ETHER_TYPE_IPV4,
 };
 use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::geneve::{self, Vni};
@@ -84,13 +84,13 @@ fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
 fn home_cfg() -> PortCfg {
     PortCfg {
         private_ip: "10.0.0.210".parse().unwrap(),
-        private_mac: EtherAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]),
+        private_mac: MacAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]),
         vpc_subnet: "10.0.0.0/24".parse().unwrap(),
         dyn_nat: DynNat4Cfg {
             public_ip: "10.0.0.99".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
         },
-        gw_mac: EtherAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
+        gw_mac: MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
         gw_ip: "10.0.0.1".parse().unwrap(),
 
         // XXX These values don't really mean anything in this
@@ -117,13 +117,13 @@ fn home_cfg() -> PortCfg {
 fn lab_cfg() -> PortCfg {
     PortCfg {
         private_ip: "172.20.14.16".parse().unwrap(),
-        private_mac: EtherAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
+        private_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
         dyn_nat: DynNat4Cfg {
             public_ip: "76.76.21.21".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
         },
-        gw_mac: EtherAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x01]),
+        gw_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x01]),
         gw_ip: "172.20.14.1".parse().unwrap(),
 
         // XXX These values don't really mean anything in this
@@ -150,7 +150,8 @@ fn lab_cfg() -> PortCfg {
 fn oxide_net_setup(name: &str, cfg: &PortCfg) -> Port<Inactive> {
     let ectx = Arc::new(ExecCtx { log: Box::new(crate::PrintlnLog {}) });
     let name_cstr = crate::CString::new(name).unwrap();
-    let mut port = Port::new(name, name_cstr, cfg.private_mac, ectx.clone());
+    let mut port =
+        Port::new(name, name_cstr, cfg.private_mac.into(), ectx.clone());
 
     // ================================================================
     // Firewall layer
@@ -180,7 +181,7 @@ fn oxide_net_setup(name: &str, cfg: &PortCfg) -> Port<Inactive> {
 fn g1_cfg() -> PortCfg {
     PortCfg {
         private_ip: "192.168.77.101".parse().unwrap(),
-        private_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
+        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
         dyn_nat: DynNat4Cfg {
             // NOTE: This is not a routable IP, but remember that a
@@ -190,7 +191,7 @@ fn g1_cfg() -> PortCfg {
             public_ip: "10.77.77.13".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
         },
-        gw_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
+        gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
         gw_ip: "192.168.77.1".parse().unwrap(),
         vni: Vni::new(99u32).unwrap(),
         // Site 0xF7, Rack 1, Sled 1, Interface 1
@@ -211,7 +212,7 @@ fn g1_cfg() -> PortCfg {
 fn g2_cfg() -> PortCfg {
     PortCfg {
         private_ip: "192.168.77.102".parse().unwrap(),
-        private_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x66]),
+        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x66]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
         dyn_nat: DynNat4Cfg {
             // NOTE: This is not a routable IP, but remember that a
@@ -221,7 +222,7 @@ fn g2_cfg() -> PortCfg {
             public_ip: "10.77.77.23".parse().unwrap(),
             ports: Range { start: 4097, end: 8192 },
         },
-        gw_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
+        gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
         gw_ip: "192.168.77.1".parse().unwrap(),
         vni: Vni::new(99u32).unwrap(),
         // Site 0xF7, Rack 1, Sled 22, Interface 1
@@ -548,8 +549,8 @@ fn overlay_guest_to_guest() {
     let meta = g1_pkt.meta();
     match meta.outer.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, Default::default());
-            assert_eq!(eth.dst, Default::default());
+            assert_eq!(eth.src, MacAddr::ZERO);
+            assert_eq!(eth.dst, MacAddr::ZERO);
         }
 
         None => panic!("no outer ether header"),
@@ -817,7 +818,7 @@ fn overlay_guest_to_internet() {
     let eth = EtherHdr::new(
         EtherType::Ipv4,
         g1_cfg.private_mac,
-        EtherAddr::from(GW_MAC_ADDR),
+        MacAddr::from(GW_MAC_ADDR),
     );
 
     let mut bytes = vec![];
@@ -841,8 +842,8 @@ fn overlay_guest_to_internet() {
     let meta = g1_pkt.meta();
     match meta.outer.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, Default::default());
-            assert_eq!(eth.dst, Default::default());
+            assert_eq!(eth.src, MacAddr::ZERO);
+            assert_eq!(eth.dst, MacAddr::ZERO);
         }
 
         None => panic!("no outer ether header"),
@@ -911,7 +912,7 @@ fn bad_ip_len() {
 
     let ether = EtherHdr::from(&EtherMeta {
         src: cfg.private_mac,
-        dst: ether::ETHER_BROADCAST,
+        dst: MacAddr::BROADCAST,
         ether_type: ETHER_TYPE_IPV4,
     });
 
@@ -941,7 +942,7 @@ fn bad_ip_len() {
 
     let ether = EtherHdr::from(&EtherMeta {
         src: cfg.private_mac,
-        dst: ether::ETHER_BROADCAST,
+        dst: MacAddr::BROADCAST,
         ether_type: ETHER_TYPE_IPV4,
     });
 
@@ -986,7 +987,7 @@ fn dhcp_req() {
 
     let ether = EtherHdr::from(&EtherMeta {
         src: cfg.private_mac,
-        dst: ether::ETHER_BROADCAST,
+        dst: MacAddr::BROADCAST,
         ether_type: ETHER_TYPE_IPV4,
     });
 
@@ -1017,7 +1018,7 @@ fn dhcp_req() {
             // Modified when the metadata actually changes.
             let ethm = meta.inner.ether.as_ref().unwrap();
             assert_eq!(ethm.src, cfg.private_mac);
-            assert_eq!(ethm.dst, ether::ETHER_BROADCAST);
+            assert_eq!(ethm.dst, MacAddr::BROADCAST);
 
             let ip4m = match meta.inner.ip.as_ref().unwrap() {
                 IpMeta::Ip4(v) => v,
@@ -1048,7 +1049,7 @@ fn arp_gateway() {
     let pkt = Packet::alloc(42);
     let eth_hdr = EtherHdrRaw {
         dst: [0xff; 6],
-        src: cfg.private_mac.to_bytes(),
+        src: cfg.private_mac.bytes(),
         ether_type: [0x08, 0x06],
     };
 
@@ -1063,7 +1064,7 @@ fn arp_gateway() {
     let arp = ArpEth4Payload {
         sha: cfg.private_mac,
         spa: cfg.private_ip,
-        tha: EtherAddr::from([0x00; 6]),
+        tha: MacAddr::from([0x00; 6]),
         tpa: cfg.gw_ip,
     };
 

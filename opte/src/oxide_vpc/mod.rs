@@ -24,11 +24,9 @@ pub mod api;
 cfg_if! {
     if #[cfg(any(feature = "engine", test))] {
         use core::ops::Range;
-        use crate::oxide_vpc::api::PhysNet;
-        use crate::api::{Ipv6Addr, Vni};
-        use crate::engine::ether::EtherAddr;
-        use crate::engine::ip4::Ipv4Addr;
+        use crate::api::{Ipv4Addr, Ipv6Addr, MacAddr, Vni};
         use crate::engine::vpc::VpcSubnet4;
+        use crate::oxide_vpc::api::PhysNet;
 
         pub mod engine;
 
@@ -42,9 +40,9 @@ cfg_if! {
         #[derive(Clone, Debug)]
         pub struct PortCfg {
             pub vpc_subnet: VpcSubnet4,
-            pub private_mac: EtherAddr, // TODO change to MacAddr
+            pub private_mac: MacAddr,
             pub private_ip: Ipv4Addr,
-            pub gw_mac: EtherAddr, // TODO change to MacAddr
+            pub gw_mac: MacAddr,
             pub gw_ip: Ipv4Addr,
             pub dyn_nat: DynNat4Cfg,
             pub vni: Vni,

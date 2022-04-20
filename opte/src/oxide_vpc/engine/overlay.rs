@@ -20,7 +20,7 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 
 use super::router::RouterTargetInternal;
-use crate::api::{CmdOk, Direction, Ipv4Addr, OpteError};
+use crate::api::{CmdOk, Direction, Ipv4Addr, MacAddr, OpteError};
 use crate::engine::ether::{EtherMeta, ETHER_TYPE_IPV6};
 use crate::engine::geneve::{GeneveMeta, Vni, GENEVE_PORT};
 use crate::engine::headers::{HeaderAction, IpAddr};
@@ -206,8 +206,8 @@ impl StaticAction for EncapAction {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
             outer_ether: EtherMeta::push(
-                Default::default(),
-                Default::default(),
+                MacAddr::ZERO,
+                MacAddr::ZERO,
                 ETHER_TYPE_IPV6,
             ),
             outer_ip: Ipv6Meta::push(

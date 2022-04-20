@@ -29,7 +29,6 @@ pub const ETHER_TYPE_IPV4: u16 = 0x0800;
 pub const ETHER_TYPE_ARP: u16 = 0x0806;
 pub const ETHER_TYPE_IPV6: u16 = 0x86DD;
 
-pub const ETHER_BROADCAST: EtherAddr = EtherAddr { bytes: [0xFF; 6] };
 pub const ETHER_ADDR_LEN: usize = 6;
 
 pub const ETHER_HDR_SZ: usize = mem::size_of::<EtherHdrRaw>();
@@ -180,7 +179,6 @@ impl Debug for EtherAddr {
 #[derive(
     Clone,
     Debug,
-    Default,
     Deserialize,
     Eq,
     Ord,
@@ -189,8 +187,8 @@ impl Debug for EtherAddr {
     Serialize,
 )]
 pub struct EtherMeta {
-    pub dst: EtherAddr,
-    pub src: EtherAddr,
+    pub dst: MacAddr,
+    pub src: MacAddr,
     pub ether_type: u16,
 }
 
@@ -199,8 +197,8 @@ impl PushActionArg for EtherMeta {}
 impl From<&EtherHdr> for EtherMeta {
     fn from(eth: &EtherHdr) -> Self {
         EtherMeta {
-            src: eth.src,
-            dst: eth.dst,
+            src: eth.src.into(),
+            dst: eth.dst.into(),
             ether_type: eth.ether_type as u16,
         }
     }
@@ -220,16 +218,16 @@ impl HeaderActionModify<EtherMetaOpt> for EtherMeta {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct EtherMetaOpt {
-    src: Option<EtherAddr>,
-    dst: Option<EtherAddr>,
+    src: Option<MacAddr>,
+    dst: Option<MacAddr>,
 }
 
 impl ModActionArg for EtherMetaOpt {}
 
 impl EtherMeta {
     pub fn modify(
-        src: Option<EtherAddr>,
-        dst: Option<EtherAddr>,
+        src: Option<MacAddr>,
+        dst: Option<MacAddr>,
     ) -> HeaderAction<EtherMeta, EtherMetaOpt> {
         HeaderAction::Modify(EtherMetaOpt { src, dst })
     }
@@ -243,8 +241,8 @@ impl EtherMeta {
     // changed to infer these values, leaving one less bug that the
     // developer can introduce into the code.
     pub fn push(
-        src: EtherAddr,
-        dst: EtherAddr,
+        src: MacAddr,
+        dst: MacAddr,
         ether_type: u16,
     ) -> HeaderAction<EtherMeta, EtherMetaOpt> {
         HeaderAction::Push(EtherMeta { dst, src, ether_type })
@@ -329,8 +327,8 @@ impl EtherHdr {
 
     /// Unify the header with the metadata.
     pub fn unify(&mut self, meta: &EtherMeta) {
-        self.dst = meta.dst;
-        self.src = meta.src;
+        self.dst = meta.dst.into();
+        self.src = meta.src.into();
         self.ether_type = EtherType::try_from(meta.ether_type).unwrap();
     }
 }
@@ -397,8 +395,8 @@ impl TryFrom<&LayoutVerified<&[u8], EtherHdrRaw>> for EtherHdr {
 impl From<&EtherMeta> for EtherHdr {
     fn from(meta: &EtherMeta) -> Self {
         EtherHdr {
-            dst: meta.dst,
-            src: meta.src,
+            dst: meta.dst.into(),
+            src: meta.src.into(),
             // XXX: Temporary until I change EtherMeta to use EtherType
             ether_type: EtherType::try_from(meta.ether_type).unwrap(),
         }
@@ -450,8 +448,8 @@ impl From<&EtherHdr> for EtherHdrRaw {
 impl From<&EtherMeta> for EtherHdrRaw {
     fn from(meta: &EtherMeta) -> Self {
         EtherHdrRaw {
-            dst: meta.dst.to_bytes(),
-            src: meta.src.to_bytes(),
+            dst: meta.dst.bytes(),
+            src: meta.src.bytes(),
             ether_type: meta.ether_type.to_be_bytes(),
         }
     }

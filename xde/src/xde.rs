@@ -1632,8 +1632,8 @@ unsafe extern "C" fn xde_mc_propinfo(
 fn new_port(
     name: String,
     private_ip: Ipv4Addr,
-    private_mac: EtherAddr,
-    gateway_mac: EtherAddr,
+    private_mac: MacAddr,
+    gateway_mac: MacAddr,
     gateway_ip: Ipv4Addr,
     bsvc_ip: Ipv6Addr,
     bsvc_vni: Vni,
@@ -1686,7 +1686,7 @@ fn new_port(
         },
     };
 
-    let mut new_port = Port::new(&name, name_cstr, private_mac, ectx);
+    let mut new_port = Port::new(&name, name_cstr, private_mac.into(), ectx);
     firewall::setup(&mut new_port)?;
     dhcp4::setup(&mut new_port, &port_cfg)?;
     icmp::setup(&mut new_port, &port_cfg)?;

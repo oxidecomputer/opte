@@ -19,7 +19,7 @@ use super::arp::{
     ArpEth4Payload, ArpEth4PayloadRaw, ArpMeta, ArpOp, ARP_HTYPE_ETHERNET,
 };
 use super::dhcp::MessageType as DhcpMessageType;
-use super::ether::{EtherAddr, EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
+use super::ether::{EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
 use super::flow_table::StateSummary;
 use super::geneve::{GeneveMeta, GeneveMetaOpt};
 use super::headers::{
@@ -36,7 +36,7 @@ use super::packet::{
 use super::port::meta::Meta;
 use super::tcp::TcpMeta;
 use super::udp::UdpMeta;
-use crate::api::Direction;
+use crate::api::{Direction, MacAddr};
 use crate::CString;
 
 use illumos_ddi_dki::c_char;
@@ -93,11 +93,11 @@ impl Display for EtherTypeMatch {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum EtherAddrMatch {
-    Exact(EtherAddr),
+    Exact(MacAddr),
 }
 
 impl EtherAddrMatch {
-    fn matches(&self, flow_addr: EtherAddr) -> bool {
+    fn matches(&self, flow_addr: MacAddr) -> bool {
         match self {
             EtherAddrMatch::Exact(addr) => flow_addr == *addr,
         }
