@@ -542,10 +542,10 @@ impl IpCidr {
         }
     }
 
-    pub fn prefix(&self) -> usize {
+    pub fn prefix_len(&self) -> usize {
         match self {
             Self::Ip4(ip4) => ip4.prefix_len() as usize,
-            Self::Ip6(_) => todo!("IPv6 prefix"),
+            Self::Ip6(_) => todo!("IPv6 prefix_len"),
         }
     }
 }

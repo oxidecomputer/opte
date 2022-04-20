@@ -790,7 +790,7 @@ impl StaticAction for Identity {
         _flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> GenHtResult {
-        Ok(HT::identity(&self.name))
+        Ok(AllowOrDeny::Allow(HT::identity(&self.name)))
     }
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
@@ -981,11 +981,10 @@ pub trait StatefulAction: Display {
 #[derive(Clone, Debug)]
 pub enum GenHtError {
     ResourceExhausted { name: String },
-
     Unexpected { msg: String },
 }
 
-pub type GenHtResult = Result<HT, GenHtError>;
+pub type GenHtResult = ActionResult<HT, GenHtError>;
 
 pub trait StaticAction: Display {
     fn gen_ht(
@@ -1003,6 +1002,8 @@ pub trait StaticAction: Display {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 }
 
+pub type ModMetaResult = ActionResult<(), String>;
+
 /// A meta action is one that's only goal is to modify the processing
 /// metadata in some way. That is, it has no transformation to make on
 /// the packet, only add/modify/remove metadata for use by later
@@ -1015,7 +1016,11 @@ pub trait MetaAction: Display {
     /// implies there are no implicit predicates of that type.
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 
-    fn mod_meta(&self, flow_id: &InnerFlowId, meta: &mut Meta);
+    fn mod_meta(
+        &self,
+        flow_id: &InnerFlowId,
+        meta: &mut Meta
+    ) -> ModMetaResult;
 }
 
 #[derive(Debug)]
@@ -1072,6 +1077,14 @@ pub trait HairpinAction: Display {
     /// implies there are no implicit predicates of that type.
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 }
+
+#[derive(Debug)]
+pub enum AllowOrDeny<T> {
+    Allow(T),
+    Deny,
+}
+
+pub type ActionResult<T, E> = Result<AllowOrDeny<T>, E>;
 
 #[derive(Clone)]
 pub enum Action {

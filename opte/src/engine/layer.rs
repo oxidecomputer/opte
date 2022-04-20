@@ -24,7 +24,8 @@ use super::ip4::Protocol;
 use super::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
 use super::port::meta::Meta;
 use super::rule::{
-    self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, Rule, RuleDump, HT,
+    self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, AllowOrDeny, Rule,
+    RuleDump, HT,
 };
 use super::sync::{KMutex, KMutexType};
 use super::time::Moment;
@@ -38,6 +39,7 @@ pub enum LayerError {
     GenDesc(rule::GenDescError),
     GenHt(rule::GenHtError),
     GenPacket(rule::GenErr),
+    ModMeta(String),
 }
 
 #[derive(Debug)]
@@ -409,13 +411,36 @@ impl Layer {
             }
 
             Action::Meta(action) => {
-                action.mod_meta(ifid, meta);
-                return Ok(LayerResult::Allow);
+                match action.mod_meta(ifid, meta) {
+                    Ok(res) => {
+                        match res {
+                            AllowOrDeny::Allow(_) => {
+                                return Ok(LayerResult::Allow)
+                            }
+
+                            AllowOrDeny::Deny => {
+                                return Ok(LayerResult::Deny {
+                                    name: self.name.clone()
+                                })
+                            }
+                        }
+                    }
+
+                    Err(msg) => return Err(LayerError::ModMeta(msg)),
+                }
             }
 
             Action::Static(action) => {
                 let ht = match action.gen_ht(Direction::Out, ifid, meta) {
-                    Ok(ht) => ht,
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(ht) => ht,
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone()
+                            });
+                        }
+                    }
+
                     Err(e) => {
                         self.record_gen_ht_failure(
                             &ectx,
@@ -609,13 +634,36 @@ impl Layer {
             }
 
             Action::Meta(action) => {
-                action.mod_meta(ifid, meta);
-                return Ok(LayerResult::Allow);
+                match action.mod_meta(ifid, meta) {
+                    Ok(res) => {
+                        match res {
+                            AllowOrDeny::Allow(_) => {
+                                return Ok(LayerResult::Allow)
+                            }
+
+                            AllowOrDeny::Deny => {
+                                return Ok(LayerResult::Deny {
+                                    name: self.name.clone()
+                                })
+                            }
+                        }
+                    }
+
+                    Err(msg) => return Err(LayerError::ModMeta(msg)),
+                }
             }
 
             Action::Static(action) => {
                 let ht = match action.gen_ht(Direction::Out, ifid, meta) {
-                    Ok(ht) => ht,
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(ht) => ht,
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone()
+                            });
+                        }
+                    }
+
                     Err(e) => {
                         self.record_gen_ht_failure(
                             &ectx,

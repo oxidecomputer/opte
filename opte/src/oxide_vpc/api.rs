@@ -21,12 +21,19 @@ use illumos_sys_hdrs::datalink_id_t;
 
 use serde::{Deserialize, Serialize};
 
-/// A network destination on the Oxide Rack's physical network (underlay)
+/// A network destination on the Oxide Rack's physical network.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct PhysNet {
     pub ether: MacAddr,
     pub ip: Ipv6Addr,
     pub vni: Vni,
+}
+
+/// The physical address for a guest.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct GuestPhysAddr {
+    pub ether: MacAddr,
+    pub ip: Ipv6Addr,
 }
 
 /// The target for a given router entry.
@@ -112,7 +119,7 @@ pub struct DeleteXdeReq {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2PhysReq {
     pub vip: IpAddr,
-    pub phys: PhysNet,
+    pub phys: GuestPhysAddr,
 }
 
 /// Add an entry to the IPv4 router.

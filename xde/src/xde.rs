@@ -140,7 +140,7 @@ struct xde_underlay_port {
 
 struct XdeState {
     ectx: Arc<ExecCtx>,
-    v2p: Arc<overlay::Virt2Phys>,
+    v2p: Arc<BTreeMap<Vni, Virt2Phys>>,
     underlay: KMutex<Option<UnderlayState>>,
 }
 
@@ -186,7 +186,7 @@ impl XdeState {
         XdeState {
             underlay: KMutex::new(None, KMutexType::Driver),
             ectx,
-            v2p: Arc::new(overlay::Virt2Phys::new()),
+            v2p: Arc::new(BTreeMap<Vni, Virt2Phys>>),
         }
     }
 }
@@ -205,6 +205,7 @@ struct XdeDev {
     port: Arc<Port<Active>>,
     port_cfg: PortCfg,
     port_periodic: Periodic<Arc<Port<Active>>>,
+    port_v2p: Arc<overlay::Virt2Phys>,
 
     // simply pass the packets through to the underlay devices, skipping
     // opte-core processing.
@@ -1040,7 +1041,9 @@ fn guest_loopback(
             // We have found a matching Port on this host; "loop back"
             // the packet into the inbound processing path of the
             // destination Port.
-            match dest_dev.port.process(Direction::In, &mut pkt) {
+            let mut meta = meta::Meta::new();
+            meta.add(dest_dev.v2p.clone());
+            match dest_dev.port.process(Direction::In, &mut pkt, &mut meta) {
                 Ok(ProcessResult::Modified) => {
                     guest_loopback_probe(&pkt, src_dev, dest_dev);
 
@@ -1185,7 +1188,9 @@ unsafe extern "C" fn xde_mc_tx(
     // The port processing code will fire a probe that describes what
     // action was taken -- there should be no need to add probes or
     // prints here.
-    let res = port.process(Direction::Out, &mut pkt);
+    let mut meta = meta::Meta::new();
+    meta.add(dest_dev.v2p.clone());
+    let res = port.process(Direction::Out, &mut pkt, &mut meta);
     match res {
         Ok(ProcessResult::Modified) => {
             // If the outer IPv6 destination is the same as the
@@ -1766,7 +1771,9 @@ unsafe extern "C" fn xde_rx(
     }
 
     let port = &(*dev).port;
-    let res = port.process(Direction::In, &mut pkt);
+    let mut meta = meta::Meta::new();
+    meta.add(dest_dev.v2p.clone());
+    let res = port.process(Direction::In, &mut pkt, &mut meta);
     match res {
         Ok(ProcessResult::Modified) => {
             warn!("rx accept");

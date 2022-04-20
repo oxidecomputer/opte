@@ -40,9 +40,9 @@ cfg_if! {
         #[derive(Clone, Debug)]
         pub struct PortCfg {
             pub vpc_subnet: VpcSubnet4,
-            pub private_mac: EtherAddr,
+            pub private_mac: EtherAddr, // TODO change to MacAddr
             pub private_ip: Ipv4Addr,
-            pub gw_mac: EtherAddr,
+            pub gw_mac: EtherAddr, // TODO change to MacAddr
             pub gw_ip: Ipv4Addr,
             pub dyn_nat: DynNat4Cfg,
             // XXX For the moment we allow the overlay to be optional.

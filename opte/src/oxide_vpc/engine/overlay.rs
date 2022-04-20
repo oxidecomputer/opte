@@ -19,8 +19,9 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
+use super::router::RouterTargetInternal;
 use crate::api::{CmdOk, Direction, Ipv4Addr, OpteError};
-use crate::engine::ether::{EtherAddr, EtherMeta, ETHER_TYPE_IPV6};
+use crate::engine::ether::{EtherMeta, ETHER_TYPE_IPV6};
 use crate::engine::geneve::{GeneveMeta, Vni, GENEVE_PORT};
 use crate::engine::headers::{HeaderAction, IpAddr};
 use crate::engine::ip4::Protocol;
@@ -29,41 +30,23 @@ use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
 use crate::engine::port::{self, Port, Pos};
 use crate::engine::rule::{
-    self, Action, DataPredicate, Predicate, Rule, StaticAction, HT,
+    self, Action, AllowOrDeny, DataPredicate, Predicate, Rule, StaticAction, HT,
 };
 use crate::engine::sync::{KMutex, KMutexType};
 use crate::engine::udp::UdpMeta;
-use crate::oxide_vpc::api::{self as vpc_api, RouterTarget};
+use crate::oxide_vpc::api::{GuestPhysAddr, PhysNet};
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub struct PhysNet {
-    pub ether: EtherAddr,
-    pub ip: Ipv6Addr,
-    pub vni: Vni,
-}
-
-impl From<vpc_api::PhysNet> for PhysNet {
-    fn from(phys: vpc_api::PhysNet) -> Self {
-        Self {
-            ether: phys.ether.into(),
-            ip: phys.ip.into(),
-            vni: phys.vni.into(),
-        }
-    }
-}
 
 pub fn setup(
     port: &Port<port::Inactive>,
     cfg: &OverlayCfg,
-    v2p: Arc<Virt2Phys>,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
     let encap = Action::Static(Arc::new(EncapAction::new(
         cfg.boundary_services,
         cfg.phys_ip_src,
-        v2p,
+        cfg.vni,
     )));
 
     // Action Index 1
@@ -116,30 +99,20 @@ pub const ENCAP_NAME: &'static str = "encap";
 /// is responsible for querying the routing table and determining the
 /// physical path.
 ///
-/// XXX There is no need for physical MAC address for Boundary
-/// Services as it lives on the switch. That value is one of the two
-/// switch ports determined by the upcoming `xde` device (opte-drv
-/// replacement).
-///
 /// This action uses the [`Virt2Phys`] resource to map the vritual
 /// destination to the physical location. These mappings are
 /// determined by Nexus and pushed down to individual OPTE instances.
 pub struct EncapAction {
-    // The physical address of boundary services.
-    boundary_services: PhysNet,
+    bsvc_addr: PhysNet,
     // The physical IPv6 ULA of the server that hosts this guest
     // sending data.
     phys_ip_src: Ipv6Addr,
-    v2p: Arc<Virt2Phys>,
+    vni: Vni,
 }
 
 impl EncapAction {
-    pub fn new(
-        boundary_services: PhysNet,
-        phys_ip_src: Ipv6Addr,
-        v2p: Arc<Virt2Phys>,
-    ) -> Self {
-        Self { boundary_services, phys_ip_src, v2p }
+    pub fn new(bsvc_addr: PhysNet, phys_ip_src: Ipv6Addr, vni: Vni) -> Self {
+        Self { bsvc_addr, phys_ip_src, vni }
     }
 }
 
@@ -157,51 +130,78 @@ impl StaticAction for EncapAction {
         flow_id: &InnerFlowId,
         meta: &mut Meta,
     ) -> rule::GenHtResult {
+        let v2p = match meta.get::<Arc<Virt2Phys>>() {
+            // This should never happen. If it does, then the driver
+            // forgot to add the Virt2Phys metadata before processing.
+            None => todo!("need to return unexpected error"),
+            Some(v2p) => v2p,
+        };
+
         // The router layer determines a RouterTarget and stores it in
         // the meta map. We need to map this virtual target to a
         // physical one.
-        let virt_target = match meta.get::<RouterTarget>() {
+        let target = match meta.get::<RouterTargetInternal>() {
             Some(val) => val,
             None => {
-                // This should never happen. The Oxide Network's
-                // router layer should always write an entry. However,
-                // we currently have no way to enforce this in the
-                // type system, and thus must account for this
-                // situation.
+                // This should never happen. The router should always
+                // write an entry. However, we currently have no way
+                // to enforce this in the type system, and thus must
+                // account for this situation.
                 return Err(rule::GenHtError::Unexpected {
                     msg: format!("no RouterTarget metadata entry found"),
                 });
             }
         };
 
-        // Given the virtual target, determine its physical mapping.
-        let phys_target = match virt_target {
-            RouterTarget::Drop => {
-                todo!("should we even make it here?");
+        let phys_target = match target {
+            RouterTargetInternal::InternetGateway => self.bsvc_addr,
+
+            RouterTargetInternal::Ip(virt_ip) => match v2p.get(&virt_ip) {
+                Some(phys) => {
+                    PhysNet {
+                        ether: phys.ether.into(),
+                        ip: phys.ip,
+                        vni: self.vni,
+                    }
+                }
+
+                // In this case we don't have a mapping for the
+                // virtual IP specified as target.
+                None => todo!("return error about missing entry"),
             }
 
-            RouterTarget::InternetGateway => self.boundary_services.clone(),
+            RouterTargetInternal::VpcSubnet(_) => {
+                match v2p.get(&flow_id.dst_ip) {
+                    Some(phys) => {
+                        PhysNet {
+                            ether: phys.ether.into(),
+                            ip: phys.ip,
+                            vni: self.vni,
+                        }
+                    }
 
-            RouterTarget::Ip(virt_ip) => match self.v2p.get(virt_ip) {
-                Some(val) => val,
-                None => {
-                    return Err(rule::GenHtError::Unexpected {
-                        msg: format!("no v2p mapping for {}", virt_ip),
-                    });
+                    // The guest is attempting to contact a VPC IP we
+                    // do not currently know about; this could be for
+                    // two reasons:
+                    //
+                    // 1. No such IP currently exists in the guest's VPC.
+                    //
+                    // 2. The destination IP exists in the guest's
+                    //    VPC, but we do not yet have a mapping for
+                    //    it.
+                    //
+                    // We cannot differentiate these cases from the
+                    // point of view of this code without more
+                    // information from the control plane; rather we
+                    // drop the packet. If we are dealing with
+                    // scenario (2), the control plane should
+                    // eventually provide us with a mapping.
+                    None => return Ok(AllowOrDeny::Deny),
                 }
-            },
-
-            RouterTarget::VpcSubnet(_) => match self.v2p.get(&flow_id.dst_ip) {
-                Some(val) => val,
-                None => {
-                    return Err(rule::GenHtError::Unexpected {
-                        msg: format!("no v2p mapping for {}", flow_id.dst_ip),
-                    });
-                }
-            },
+            }
         };
 
-        Ok(HT {
+        Ok(AllowOrDeny::Allow(HT {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
             outer_ether: EtherMeta::push(
@@ -234,7 +234,7 @@ impl StaticAction for EncapAction {
                 Some(phys_target.ether.into()),
             ),
             ..Default::default()
-        })
+        }))
     }
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
@@ -266,14 +266,14 @@ impl StaticAction for DecapAction {
         _flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> rule::GenHtResult {
-        Ok(HT {
+        Ok(AllowOrDeny::Allow(HT {
             name: DECAP_NAME.to_string(),
             outer_ether: HeaderAction::Pop,
             outer_ip: HeaderAction::Pop,
             outer_ulp: HeaderAction::Pop,
             outer_encap: HeaderAction::Pop,
             ..Default::default()
-        })
+        }))
     }
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
@@ -294,14 +294,14 @@ pub struct Virt2Phys {
     // that makes use of this virtual destination (for all Ports).
     // That means updating the generation number of all Ports anytme
     // an entry is **MODIFIED**.
-    ip4: KMutex<BTreeMap<Ipv4Addr, PhysNet>>,
-    ip6: KMutex<BTreeMap<Ipv6Addr, PhysNet>>,
+    ip4: KMutex<BTreeMap<Ipv4Addr, GuestPhysAddr>>,
+    ip6: KMutex<BTreeMap<Ipv6Addr, GuestPhysAddr>>,
 }
 
 pub const VIRT_2_PHYS_NAME: &'static str = "Virt2Phys";
 
 impl Virt2Phys {
-    fn get(&self, vip: &IpAddr) -> Option<PhysNet> {
+    pub fn get(&self, vip: &IpAddr) -> Option<GuestPhysAddr> {
         match vip {
             IpAddr::Ip4(ip4) => self.ip4.lock().get(ip4).cloned(),
             IpAddr::Ip6(ip6) => self.ip6.lock().get(ip6).cloned(),
@@ -315,7 +315,7 @@ impl Virt2Phys {
         }
     }
 
-    pub fn set(&self, vip: IpAddr, phys: PhysNet) {
+    pub fn set(&self, vip: IpAddr, phys: GuestPhysAddr) {
         match vip {
             IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, phys),
             IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, phys),
@@ -351,8 +351,8 @@ pub struct DumpVirt2PhysReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpVirt2PhysResp {
-    pub ip4: BTreeMap<Ipv4Addr, PhysNet>,
-    pub ip6: BTreeMap<Ipv6Addr, PhysNet>,
+    pub ip4: BTreeMap<Ipv4Addr, GuestPhysAddr>,
+    pub ip6: BTreeMap<Ipv6Addr, GuestPhysAddr>,
 }
 
 impl CmdOk for DumpVirt2PhysResp {}

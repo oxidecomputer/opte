@@ -546,13 +546,13 @@ impl Port<Active> {
         &self,
         dir: Direction,
         pkt: &mut Packet<Parsed>,
+        meta: &mut meta::Meta,
     ) -> result::Result<ProcessResult, ProcessError> {
         let ifid = InnerFlowId::from(pkt.meta());
         self.port_process_entry_probe(dir, &ifid, &pkt);
-        let mut meta = meta::Meta::new();
         let res = match dir {
-            Direction::Out => self.process_out(&ifid, pkt, &mut meta),
-            Direction::In => self.process_in(&ifid, pkt, &mut meta),
+            Direction::Out => self.process_out(&ifid, pkt, meta),
+            Direction::In => self.process_in(&ifid, pkt, meta),
         };
         self.port_process_return_probe(dir, &ifid, &pkt, &res);
         // XXX If this is a Hairpin result there is no need for this call.
@@ -1145,6 +1145,11 @@ pub mod meta {
             Meta { inner: anymap::Map::new() }
         }
 
+        /// Add a new value to the metadata.
+        ///
+        /// # Errors
+        ///
+        /// Return an error if a value of this type already exists.
         pub fn add<V>(&mut self, val: V) -> Result<(), Error>
         where
             V: 'static + Send + Sync,
@@ -1157,6 +1162,16 @@ pub mod meta {
             Ok(())
         }
 
+        /// Add the value to the map, replacing any existing value.
+        /// Return the current value, if one exists.
+        pub fn replace<V>(&mut self, val: V) -> Option<V>
+        where
+            V: 'static + Send + Sync,
+        {
+            self.inner.insert(val)
+        }
+
+        /// Remove the value with the specified type.
         pub fn remove<V>(&mut self) -> Option<V>
         where
             V: 'static + Send + Sync,
@@ -1164,13 +1179,16 @@ pub mod meta {
             self.inner.remove::<V>()
         }
 
-        pub fn get<V>(&mut self) -> Option<&V>
+        /// Get a shared reference to the value with the specified
+        /// type.
+        pub fn get<V>(&self) -> Option<&V>
         where
             V: 'static + Send + Sync,
         {
             self.inner.get::<V>()
         }
 
+        /// Get a unique reference to the value with specified type.
         pub fn get_mut<V>(&mut self) -> Option<&mut V>
         where
             V: 'static + Send + Sync,
