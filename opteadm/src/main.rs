@@ -425,6 +425,7 @@ fn print_v2p(resp: &DumpVirt2PhysResp) {
     println!("Virtual to Physical Mappings");
     print_hrb();
     for vpc in &resp.mappings {
+        println!("");
         println!("VPC {}", vpc.vni);
         print_hr();
         println!("");

@@ -6,12 +6,12 @@ use core::fmt;
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::collections::btree_map::BTreeMap;
-        use alloc::string::{String, ToString};
+        use alloc::string::ToString;
         use alloc::sync::Arc;
         use alloc::vec::Vec;
     } else {
         use std::collections::btree_map::BTreeMap;
-        use std::string::{String, ToString};
+        use std::string::ToString;
         use std::sync::Arc;
         use std::vec::Vec;
     }
@@ -34,18 +34,19 @@ use crate::engine::rule::{
 };
 use crate::engine::sync::{KMutex, KMutexType};
 use crate::engine::udp::UdpMeta;
+use crate::oxide_vpc::PortCfg;
 use crate::oxide_vpc::api::{GuestPhysAddr, PhysNet};
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 
 pub fn setup(
     port: &Port<port::Inactive>,
-    cfg: &OverlayCfg,
+    cfg: &PortCfg,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
     let encap = Action::Static(Arc::new(EncapAction::new(
-        cfg.boundary_services,
-        cfg.phys_ip_src,
+        cfg.bsvc_addr,
+        cfg.phys_ip,
         cfg.vni,
     )));
 
@@ -383,19 +384,6 @@ impl Virt2Phys {
             ip6: KMutex::new(BTreeMap::new(), KMutexType::Driver),
         }
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct OverlayCfg {
-    pub boundary_services: PhysNet,
-    pub vni: Vni,
-    pub phys_ip_src: Ipv6Addr,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct SetOverlayReq {
-    pub port_name: String,
-    pub cfg: OverlayCfg,
 }
 
 #[repr(C)]

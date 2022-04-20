@@ -51,7 +51,7 @@ use crate::api::{Direction::*, MacAddr};
 use crate::oxide_vpc::api::{
     AddFwRuleReq, GuestPhysAddr, PhysNet, RouterTarget
 };
-use crate::oxide_vpc::engine::overlay::{self, OverlayCfg, Virt2Phys};
+use crate::oxide_vpc::engine::overlay::{self, Virt2Phys};
 use crate::oxide_vpc::engine::{arp, dyn_nat4, firewall, icmp, router};
 use crate::oxide_vpc::{DynNat4Cfg, PortCfg};
 use crate::ExecCtx;
@@ -92,7 +92,25 @@ fn home_cfg() -> PortCfg {
         },
         gw_mac: EtherAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
         gw_ip: "10.0.0.1".parse().unwrap(),
-        overlay: None,
+
+        // XXX These values don't really mean anything in this
+        // context. This "home cfg" was created during the early days
+        // of OPTE dev when the VPC implementation was just part of an
+        // existing IPv4 network. Any tests relying on this cfg need
+        // to be rewritten or deleted.
+        vni: Vni::new(99u32).unwrap(),
+        // Site 0xF7, Rack 1, Sled 1, Interface 1
+        phys_ip: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+        bsvc_addr: PhysNet {
+            ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+            ip: Ipv6Addr::from([
+                0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
+            ]),
+            vni: Vni::new(7777u32).unwrap(),
+        },
     }
 }
 
@@ -107,7 +125,25 @@ fn lab_cfg() -> PortCfg {
         },
         gw_mac: EtherAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x01]),
         gw_ip: "172.20.14.1".parse().unwrap(),
-        overlay: None,
+
+        // XXX These values don't really mean anything in this
+        // context. This "lab cfg" was created during the early days
+        // of OPTE dev when the VPC implementation was just part of an
+        // existing IPv4 network. Any tests relying on this cfg need
+        // to be rewritten or deleted.
+        vni: Vni::new(99u32).unwrap(),
+        // Site 0xF7, Rack 1, Sled 1, Interface 1
+        phys_ip: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+        bsvc_addr: PhysNet {
+            ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+            ip: Ipv6Addr::from([
+                0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
+            ]),
+            vni: Vni::new(7777u32).unwrap(),
+        },
     }
 }
 
@@ -156,9 +192,19 @@ fn g1_cfg() -> PortCfg {
         },
         gw_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
         gw_ip: "192.168.77.1".parse().unwrap(),
-        // We set the overlay in the test because some tests use it
-        // and some don't.
-        overlay: None,
+        vni: Vni::new(99u32).unwrap(),
+        // Site 0xF7, Rack 1, Sled 1, Interface 1
+        phys_ip: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+        bsvc_addr: PhysNet {
+            ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+            ip: Ipv6Addr::from([
+                0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
+            ]),
+            vni: Vni::new(7777u32).unwrap(),
+        },
     }
 }
 
@@ -177,9 +223,19 @@ fn g2_cfg() -> PortCfg {
         },
         gw_mac: EtherAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
         gw_ip: "192.168.77.1".parse().unwrap(),
-        // We set the overlay in the test because some tests use it
-        // and some don't.
-        overlay: None,
+        vni: Vni::new(99u32).unwrap(),
+        // Site 0xF7, Rack 1, Sled 22, Interface 1
+        phys_ip: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+        bsvc_addr: PhysNet {
+            ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+            ip: Ipv6Addr::from([
+                0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
+            ]),
+            vni: Vni::new(7777u32).unwrap(),
+        },
     }
 }
 
@@ -191,39 +247,11 @@ fn gateway_icmp4_ping() {
     #[cfg(feature = "usdt")]
     usdt::register_probes().unwrap();
 
-    let mut g1_cfg = g1_cfg();
-    let mut g2_cfg = g2_cfg();
-
-    // NOTE: We're not testing Boundary Services in this test, so the
-    // values are irrelevant here.
-    let bs = PhysNet {
-        ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-        ip: Ipv6Addr::from([
-            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x77, 0x77,
-        ]),
-        vni: Vni::new(7777u32).unwrap(),
-    };
-
-    g1_cfg.overlay = Some(OverlayCfg {
-        boundary_services: bs.clone(),
-        vni: Vni::new(99u32).unwrap(),
-        phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-    });
-
-    g2_cfg.overlay = Some(OverlayCfg {
-        boundary_services: bs.clone(),
-        vni: Vni::new(99u32).unwrap(),
-        // Site 0xF7, Rack 1, Sled 22, Interface 1
-        phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-    });
+    let g1_cfg = g1_cfg();
+    let g2_cfg = g2_cfg();
     let g2_phys = GuestPhysAddr {
         ether: g2_cfg.private_mac.into(),
-        ip: g2_cfg.overlay.as_ref().unwrap().phys_ip_src,
+        ip: g2_cfg.phys_ip,
     };
 
     // Add V2P mappings that allow guests to resolve each others
@@ -235,8 +263,7 @@ fn gateway_icmp4_ping() {
 
     let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
     router::setup(&mut g1_port, &g1_cfg).unwrap();
-    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap())
-        .unwrap();
+    overlay::setup(&mut g1_port, &g1_cfg).unwrap();
     let g1_port = g1_port.activate();
 
     let mut pcap = crate::test::PcapBuilder::new("gateway_icmpv4_ping.pcap");
@@ -357,39 +384,11 @@ fn overlay_guest_to_guest_no_route() {
     // ================================================================
     // Configure ports for g1 and g2.
     // ================================================================
-    let mut g1_cfg = g1_cfg();
-    let mut g2_cfg = g2_cfg();
-
-    // NOTE: We're not testing Boundary Services in this test, so the
-    // values are irrelevant here.
-    let bs = PhysNet {
-        ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-        ip: Ipv6Addr::from([
-            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x77, 0x77,
-        ]),
-        vni: Vni::new(7777u32).unwrap(),
-    };
-
-    g1_cfg.overlay = Some(OverlayCfg {
-        boundary_services: bs.clone(),
-        vni: Vni::new(99u32).unwrap(),
-        phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-    });
-
-    g2_cfg.overlay = Some(OverlayCfg {
-        boundary_services: bs.clone(),
-        vni: Vni::new(99u32).unwrap(),
-        // Site 0xF7, Rack 1, Sled 22, Interface 1
-        phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-    });
+    let g1_cfg = g1_cfg();
+    let g2_cfg = g2_cfg();
     let g2_phys = GuestPhysAddr {
         ether: g2_cfg.private_mac.into(),
-        ip: g2_cfg.overlay.as_ref().unwrap().phys_ip_src,
+        ip: g2_cfg.phys_ip,
     };
 
     // Add V2P mappings that allow guests to resolve each others
@@ -401,8 +400,7 @@ fn overlay_guest_to_guest_no_route() {
 
     let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
     router::setup(&mut g1_port, &g1_cfg).unwrap();
-    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap())
-        .unwrap();
+    overlay::setup(&mut g1_port, &g1_cfg).unwrap();
     let g1_port = g1_port.activate();
 
     // ================================================================
@@ -446,39 +444,11 @@ fn overlay_guest_to_guest() {
     // ================================================================
     // Configure ports for g1 and g2.
     // ================================================================
-    let mut g1_cfg = g1_cfg();
-    let mut g2_cfg = g2_cfg();
-
-    // NOTE: We're not testing Boundary Services in this test, so the
-    // values are irrelevant here.
-    let bs = PhysNet {
-        ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-        ip: Ipv6Addr::from([
-            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x77, 0x77,
-        ]),
-        vni: Vni::new(7777u32).unwrap(),
-    };
-
-    g1_cfg.overlay = Some(OverlayCfg {
-        boundary_services: bs.clone(),
-        vni: Vni::new(99u32).unwrap(),
-        phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-    });
-
-    g2_cfg.overlay = Some(OverlayCfg {
-        boundary_services: bs.clone(),
-        vni: Vni::new(99u32).unwrap(),
-        // Site 0xF7, Rack 1, Sled 22, Interface 1
-        phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-    });
+    let g1_cfg = g1_cfg();
+    let g2_cfg = g2_cfg();
     let g2_phys = GuestPhysAddr {
         ether: g2_cfg.private_mac.into(),
-        ip: g2_cfg.overlay.as_ref().unwrap().phys_ip_src,
+        ip: g2_cfg.phys_ip,
     };
 
     // Add V2P mappings that allow guests to resolve each others
@@ -490,8 +460,7 @@ fn overlay_guest_to_guest() {
 
     let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
     router::setup(&mut g1_port, &g1_cfg).unwrap();
-    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap())
-        .unwrap();
+    overlay::setup(&mut g1_port, &g1_cfg).unwrap();
     let g1_port = g1_port.activate();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
@@ -504,8 +473,7 @@ fn overlay_guest_to_guest() {
 
     let mut g2_port = oxide_net_setup("g2_port", &g2_cfg);
     router::setup(&mut g2_port, &g2_cfg).unwrap();
-    overlay::setup(&mut g2_port, g2_cfg.overlay.as_ref().unwrap())
-        .unwrap();
+    overlay::setup(&mut g2_port, &g2_cfg).unwrap();
     let g2_port = g2_port.activate();
 
     // Add router entry that allows Guest 2 to send to Guest 1.
@@ -589,8 +557,8 @@ fn overlay_guest_to_guest() {
 
     match meta.outer.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
-            assert_eq!(ip6.src, g1_cfg.overlay.as_ref().unwrap().phys_ip_src);
-            assert_eq!(ip6.dst, g2_cfg.overlay.as_ref().unwrap().phys_ip_src);
+            assert_eq!(ip6.src, g1_cfg.phys_ip);
+            assert_eq!(ip6.dst, g2_cfg.phys_ip);
         }
 
         val => panic!("expected outer IPv6, got: {:?}", val),
@@ -709,42 +677,14 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // Configure ports for g1 and g2. Place g1 on VNI 99 and g2 on VNI
     // 100.
     // ================================================================
-    let mut g1_cfg = g1_cfg();
+    let g1_cfg = g1_cfg();
     let mut g2_cfg = g2_cfg();
+    g2_cfg.vni = Vni::new(100u32).unwrap();
 
-    // NOTE: We're not testing Boundary Services in this test, so the
-    // values are irrelevant here.
-    let bs = PhysNet {
-        ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-        ip: Ipv6Addr::from([
-            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x77, 0x77,
-        ]),
-        vni: Vni::new(7777u32).unwrap(),
-    };
-
-    // TODO Can I just move these OverlayCfgs to the g*_cfg()
-    // functions now?
-    g1_cfg.overlay = Some(OverlayCfg {
-        boundary_services: bs.clone(),
-        vni: Vni::new(99u32).unwrap(),
-        phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-    });
     let g1_phys = GuestPhysAddr {
         ether: g1_cfg.private_mac.into(),
-        ip: g1_cfg.overlay.as_ref().unwrap().phys_ip_src,
+        ip: g1_cfg.phys_ip,
     };
-
-    g2_cfg.overlay = Some(OverlayCfg {
-        boundary_services: bs.clone(),
-        vni: Vni::new(100u32).unwrap(),
-        // Site 0xF7, Rack 1, Sled 22, Interface 1
-        phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-    });
 
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses. In this case the only guest in VNI 99 is
@@ -756,8 +696,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
 
     let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
     router::setup(&mut g1_port, &g1_cfg).unwrap();
-    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap())
-        .unwrap();
+    overlay::setup(&mut g1_port, &g1_cfg).unwrap();
     let g1_port = g1_port.activate();
 
     // Add router entry that allows g1 to talk to any other guest on
@@ -775,8 +714,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
 
     let mut g2_port = oxide_net_setup("g2_port", &g2_cfg);
     router::setup(&mut g2_port, &g2_cfg).unwrap();
-    overlay::setup(&mut g2_port, g2_cfg.overlay.as_ref().unwrap())
-        .unwrap();
+    overlay::setup(&mut g2_port, &g2_cfg).unwrap();
     let g2_port = g2_port.activate();
 
     // Add router entry that allows Guest 2 to send to Guest 1.
@@ -842,36 +780,16 @@ fn overlay_guest_to_internet() {
     use super::tcp::TcpFlags;
 
     // ================================================================
-    // Configure ports for g1 and g2.
+    // Configure g1 port.
     // ================================================================
-    let mut g1_cfg = g1_cfg();
-
-    let bs = PhysNet {
-        ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-        ip: Ipv6Addr::from([
-            0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x77, 0x77,
-        ]),
-        vni: Vni::new(7777u32).unwrap(),
-    };
-
-    g1_cfg.overlay = Some(OverlayCfg {
-        boundary_services: bs.clone(),
-        vni: Vni::new(99u32).unwrap(),
-        // Site 0xF7, Rack 1, Sled 1, Interface 1
-        phys_ip_src: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-    });
-
+    let g1_cfg = g1_cfg();
     let v2p = Arc::new(Virt2Phys::new());
     let mut port_meta = Meta::new();
     port_meta.add(v2p).unwrap();
 
     let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
     router::setup(&mut g1_port, &g1_cfg).unwrap();
-    overlay::setup(&mut g1_port, g1_cfg.overlay.as_ref().unwrap())
-        .unwrap();
+    overlay::setup(&mut g1_port, &g1_cfg).unwrap();
     let g1_port = g1_port.activate();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
@@ -932,8 +850,8 @@ fn overlay_guest_to_internet() {
 
     match meta.outer.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
-            assert_eq!(ip6.src, g1_cfg.overlay.as_ref().unwrap().phys_ip_src);
-            assert_eq!(ip6.dst, bs.ip);
+            assert_eq!(ip6.src, g1_cfg.phys_ip);
+            assert_eq!(ip6.dst, g1_cfg.bsvc_addr.ip);
         }
 
         val => panic!("expected outer IPv6, got: {:?}", val),
@@ -950,7 +868,7 @@ fn overlay_guest_to_internet() {
 
     match meta.outer.encap.as_ref() {
         Some(geneve) => {
-            assert_eq!(geneve.vni, bs.vni);
+            assert_eq!(geneve.vni, g1_cfg.bsvc_addr.vni);
         }
 
         None => panic!("expected outer Geneve metadata"),
@@ -959,7 +877,7 @@ fn overlay_guest_to_internet() {
     match meta.inner.ether.as_ref() {
         Some(eth) => {
             assert_eq!(eth.src, g1_cfg.private_mac);
-            assert_eq!(eth.dst, bs.ether.into());
+            assert_eq!(eth.dst, g1_cfg.bsvc_addr.ether.into());
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
 

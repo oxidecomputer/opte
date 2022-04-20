@@ -1635,8 +1635,8 @@ fn new_port(
     private_mac: EtherAddr,
     gateway_mac: EtherAddr,
     gateway_ip: Ipv4Addr,
-    boundary_services_addr: Ipv6Addr,
-    boundary_services_vni: Vni,
+    bsvc_ip: Ipv6Addr,
+    bsvc_vni: Vni,
     src_underlay_addr: Ipv6Addr,
     vpc_vni: Vni,
     ectx: Arc<ExecCtx>,
@@ -1677,7 +1677,13 @@ fn new_port(
         gw_mac: gateway_mac,
         gw_ip: gateway_ip,
         dyn_nat,
-        overlay: None,
+        vni: vpc_vni,
+        phys_ip: src_underlay_addr,
+        bsvc_addr: PhysNet {
+            ether: MacAddr::from([0; 6]), //XXX this should not be needed
+            ip: bsvc_ip,
+            vni: bsvc_vni,
+        },
     };
 
     let mut new_port = Port::new(&name, name_cstr, private_mac, ectx);
@@ -1689,18 +1695,7 @@ fn new_port(
     }
     arp::setup(&mut new_port, &port_cfg)?;
     router::setup(&mut new_port, &port_cfg)?;
-
-    let oc = overlay::OverlayCfg {
-        boundary_services: PhysNet {
-            ether: MacAddr::from([0; 6]), //XXX this should not be needed
-            ip: boundary_services_addr,
-            vni: boundary_services_vni,
-        },
-        phys_ip_src: src_underlay_addr,
-        vni: vpc_vni,
-    };
-
-    overlay::setup(&new_port, &oc)?;
+    overlay::setup(&new_port, &port_cfg)?;
     let port = Arc::new(new_port.activate());
     Ok((port, port_cfg))
 }
