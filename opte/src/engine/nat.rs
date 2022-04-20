@@ -20,11 +20,11 @@ use super::ip4::Ipv4Meta;
 use super::layer::InnerFlowId;
 use super::port::meta::Meta;
 use super::rule::{
-    self, ActionDesc, DataPredicate, Predicate, ResourceError, StatefulAction,
-    HT,
+    self, ActionDesc, AllowOrDeny, DataPredicate, Predicate, ResourceError,
+    StatefulAction, HT,
 };
 use super::sync::{KMutex, KMutexType};
-use crate::api::{Direction, Ipv4Addr, MacAddr};
+use crate::api::{Direction, Ipv4Addr};
 
 pub struct NatPool {
     // Map private IP to public IP + free list of ports
@@ -134,7 +134,7 @@ impl StatefulAction for DynNat4 {
                     pub_port,
                 };
 
-                Ok(Arc::new(desc))
+                Ok(AllowOrDeny::Allow(Arc::new(desc)))
             }
 
             // XXX This needs improving.
@@ -212,6 +212,7 @@ mod test {
 
     #[test]
     fn dyn_nat4_ht() {
+        use crate::api::MacAddr;
         use crate::engine::ether::{EtherMeta, ETHER_TYPE_IPV4};
         use crate::engine::headers::{IpMeta, UlpMeta};
         use crate::engine::ip4::Protocol;

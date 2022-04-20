@@ -471,7 +471,15 @@ impl Layer {
 
             Action::Stateful(action) => {
                 let desc = match action.gen_desc(&ifid, meta) {
-                    Ok(d) => d,
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(desc) => desc,
+
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone()
+                            });
+                        }
+                    }
 
                     Err(e) => {
                         self.record_gen_desc_failure(
@@ -539,9 +547,17 @@ impl Layer {
             Action::Hairpin(action) => {
                 let mut rdr = pkt.get_body_rdr();
                 match action.gen_packet(pkt.meta(), &mut rdr) {
-                    Ok(pkt) => {
-                        let _ = rdr.finish();
-                        return Ok(LayerResult::Hairpin(pkt));
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(pkt) => {
+                            let _ = rdr.finish();
+                            return Ok(LayerResult::Hairpin(pkt));
+                        }
+
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone()
+                            });
+                        }
                     }
 
                     Err(e) => {
@@ -694,7 +710,15 @@ impl Layer {
 
             Action::Stateful(action) => {
                 let desc = match action.gen_desc(&ifid, meta) {
-                    Ok(d) => d,
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(desc) => desc,
+
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone()
+                            });
+                        }
+                    }
 
                     Err(e) => {
                         self.record_gen_desc_failure(
@@ -744,9 +768,17 @@ impl Layer {
             Action::Hairpin(action) => {
                 let mut rdr = pkt.get_body_rdr();
                 match action.gen_packet(pkt.meta(), &mut rdr) {
-                    Ok(new_pkt) => {
-                        let _ = rdr.finish();
-                        return Ok(LayerResult::Hairpin(new_pkt));
+                    Ok(aord) => match aord {
+                        AllowOrDeny::Allow(pkt) => {
+                            let _ = rdr.finish();
+                            return Ok(LayerResult::Hairpin(pkt));
+                        }
+
+                        AllowOrDeny::Deny => {
+                            return Ok(LayerResult::Deny {
+                                name: self.name.clone()
+                            });
+                        }
                     }
 
                     Err(e) => {

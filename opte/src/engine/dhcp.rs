@@ -17,12 +17,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::ether::{self, EtherHdr, EtherMeta, ETHER_HDR_SZ};
 use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol, IPV4_HDR_SZ};
-use super::packet::{
-    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
-};
+use super::packet::{Packet, PacketMeta, PacketRead, PacketReader, Parsed};
 use super::rule::{
-    DataPredicate, EtherAddrMatch, GenResult, HairpinAction, IpProtoMatch,
-    Ipv4AddrMatch, PortMatch, Predicate,
+    AllowOrDeny, DataPredicate, EtherAddrMatch, GenPacketResult, HairpinAction,
+    IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate,
 };
 use super::udp::{UdpHdr, UdpMeta};
 use crate::api::{Dhcp4Action, Dhcp4ReplyType, MacAddr, SubnetRouterPair};
@@ -307,7 +305,7 @@ impl HairpinAction for Dhcp4Action {
         &self,
         _meta: &PacketMeta,
         rdr: &mut PacketReader<Parsed, ()>,
-    ) -> GenResult<Packet<Initialized>> {
+    ) -> GenPacketResult {
         let body = rdr.copy_remaining();
         let client_pkt = DhcpPacket::new_checked(&body)?;
         let client_dhcp = DhcpRepr::parse(&client_pkt)?;
@@ -401,7 +399,7 @@ impl HairpinAction for Dhcp4Action {
         pkt_bytes.extend_from_slice(&ip.as_bytes());
         pkt_bytes.extend_from_slice(&udp.as_bytes());
         pkt_bytes.extend_from_slice(&tmp);
-        Ok(Packet::copy(&pkt_bytes))
+        Ok(AllowOrDeny::Allow(Packet::copy(&pkt_bytes)))
     }
 }
 

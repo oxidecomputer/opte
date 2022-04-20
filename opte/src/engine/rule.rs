@@ -958,7 +958,7 @@ pub enum GenDescError {
     Unexpected { msg: String },
 }
 
-pub type GenDescResult = Result<Arc<dyn ActionDesc>, GenDescError>;
+pub type GenDescResult = ActionResult<Arc<dyn ActionDesc>, GenDescError>;
 
 pub trait StatefulAction: Display {
     /// Generate a an [`ActionDesc`] based on the [`InnerFlowId`] and
@@ -1050,7 +1050,7 @@ impl From<smoltcp::Error> for GenErr {
     }
 }
 
-pub type GenResult<T> = Result<T, GenErr>;
+pub type GenPacketResult = ActionResult<Packet<Initialized>, GenErr>;
 
 /// A hairpin action is one that generates a new packet based on the
 /// current inbound/outbound packet, and then "hairpins" that new
@@ -1068,7 +1068,7 @@ pub trait HairpinAction: Display {
         &self,
         meta: &PacketMeta,
         rdr: &mut PacketReader<Parsed, ()>,
-    ) -> GenResult<Packet<Initialized>>;
+    ) -> GenPacketResult;
 
     /// Return the predicates implicit to this action.
     ///

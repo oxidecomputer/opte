@@ -26,13 +26,13 @@ use super::ether::{
 };
 use super::headers::{Header, RawHeader};
 use super::packet::{
-    Initialized, Packet, PacketMeta, PacketRead, PacketReader, PacketWriter,
+    Packet, PacketMeta, PacketRead, PacketReader, PacketWriter,
     Parsed, ReadErr, WriteError,
 };
 use super::rule::{
-    ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate, EtherAddrMatch,
-    EtherTypeMatch, GenResult, HairpinAction, Ipv4AddrMatch, Payload,
-    Predicate,
+    AllowOrDeny, ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate,
+    EtherAddrMatch, EtherTypeMatch, GenPacketResult, HairpinAction,
+    Ipv4AddrMatch, Payload, Predicate,
 };
 use crate::api::{Ipv4Addr, MacAddr};
 
@@ -377,7 +377,7 @@ impl HairpinAction for ArpReply {
         &self,
         meta: &PacketMeta,
         rdr: &mut PacketReader<Parsed, ()>,
-    ) -> GenResult<Packet<Initialized>> {
+    ) -> GenPacketResult {
         // TODO Add 2 bytes to alloc and push b_rptr/b_wptr to make
         // sure IP header is properly aligned.
         let pkt =
@@ -415,6 +415,6 @@ impl HairpinAction for ArpReply {
 
         let _ = wtr.write(payload.as_bytes()).unwrap();
         let pkt = wtr.finish();
-        Ok(pkt)
+        Ok(AllowOrDeny::Allow(pkt))
     }
 }

@@ -16,12 +16,10 @@ use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
 
 use super::ether::{self, EtherHdr, EtherMeta, ETHER_HDR_SZ};
 use super::ip4::{Ipv4Hdr, Ipv4Meta, IPV4_HDR_SZ};
-use super::packet::{
-    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
-};
+use super::packet::{Packet, PacketMeta, PacketRead, PacketReader, Parsed};
 use super::rule::{
-    DataPredicate, EtherAddrMatch, GenErr, GenResult, HairpinAction,
-    IpProtoMatch, Ipv4AddrMatch, Predicate,
+    AllowOrDeny, DataPredicate, EtherAddrMatch, GenErr, GenPacketResult,
+    HairpinAction, IpProtoMatch, Ipv4AddrMatch, Predicate,
 };
 pub use crate::api::ip::{Icmp4EchoReply, Protocol};
 
@@ -54,7 +52,7 @@ impl HairpinAction for Icmp4EchoReply {
         &self,
         _meta: &PacketMeta,
         rdr: &mut PacketReader<Parsed, ()>,
-    ) -> GenResult<Packet<Initialized>> {
+    ) -> GenPacketResult {
         let body = rdr.copy_remaining();
         let src_pkt = Icmpv4Packet::new_checked(&body)?;
         let src_icmp = Icmpv4Repr::parse(&src_pkt, &Csum::ignored())?;
@@ -109,7 +107,7 @@ impl HairpinAction for Icmp4EchoReply {
         pkt_bytes.extend_from_slice(&eth.as_bytes());
         pkt_bytes.extend_from_slice(&ip4.as_bytes());
         pkt_bytes.extend_from_slice(&tmp);
-        Ok(Packet::copy(&pkt_bytes))
+        Ok(AllowOrDeny::Allow(Packet::copy(&pkt_bytes)))
     }
 }
 
