@@ -66,43 +66,68 @@ pub fn setup(
 pub const DECAP_NAME: &'static str = "decap";
 pub const ENCAP_NAME: &'static str = "encap";
 
-/// A [`StaticAction`] representing the act of encapsulating a packet
-/// for the purpose of implementing an overlay network.
+/// A [`StaticAction`] to encapsulate a packet for the purpose of
+/// implementing the Oxide VPC overlay network.
 ///
-/// NOTE: Currently the encapsulation is hard-coded to use Geneve.
-///
-/// This action maps the virtual destination to its physical location.
-/// In the case of a guest-to-guest packet the physical destination is
+/// This action maps the Virtual IP (VIP) to its physical location. In
+/// the case of a guest-to-guest packet the physical location is
 /// another sled in the Oxide Physical Network. In the case of a
-/// guest-to-external-network (whether external be the Internet or the
-/// customer's network) the physical destination is Boundary Services.
-/// In both cases there is a [`PhysNet`] value that identifies the
-/// physical location: MAC address + IPv6 address + VNI.
+/// guest-to-external (whether external be a host on the Internet or
+/// in the customer's network) the physical location is Boundary
+/// Services. In both cases there is a [`PhysNet`] value that
+/// identifies the physical location; it is comprised of three pieces
+/// of data.
 ///
-/// The physical MAC address of a guest is the same as its virtual
-/// one. We configure the guests in such a way that every destination
-/// is off link and must be routed through their gateway (OPTE). That
-/// means the destination MAC address coming from the guest is always
-/// some sentinel value representing this virtual gateway. OPTE uses
-/// the [`PhysNet`] MAC address to rewrite the destinaton. This allows
-/// the receiving sled to steer the incoming traffic to isolated
-/// receive queues based on the inner destination MAC address.
+/// 1. Inner frame MAC address
 ///
-/// The physical IPv6 of a guest is the ULA of the sled it currently
-/// lives on. The Oxide Physical Network takes care of routing this
-/// ULA correctly.
+/// 2. Outer frame IPv6 address
 ///
-/// The VNI is either the destination VPC identifier or the VNI of
+/// 3. Geneve VNI
+///
+/// The "physical" MAC address of a guest is the same as its virtual
+/// one. We configure the guests in such a way that all destinations
+/// are off link and must route through the gateway (OPTE). This
+/// implies that the inner frame destination MAC address coming from
+/// the guest is always some sentinel value representing the virtual
+/// gateway. OPTE uses the [`PhysNet`] MAC address to rewrite this
+/// inner frame destination.
+///
+/// In the case of Boundary Services things are a bit different with
+/// regard to the inner frame MAC address. It shouldn't need to care
+/// about this address, as Boundary Services doesn't really have a
+/// presence on the VPC network. Rather, OPTE and Boundary Services
+/// work together to implement the external side of the guest's
+/// gateway. When a packet reaches the edge, Boundary Services decaps
+/// the outer frame, stores some state, and then rewrites the inner
+/// frame MAC addresses to values the exist in the external network.
+/// For this reason, there is no need for Boundary Services to have a
+/// MAC address on the VPC, and therefore has no need for that part of
+/// [`PhysNet`]. We only need the IPv6 ULA address and VNI to address
 /// Boundary Services.
 ///
-/// XXX The outer MAC addresses are zero'd out. The current plan is to
-/// have their values filled out by the upcoming `xde` device, which
-/// is responsible for querying the routing table and determining the
-/// physical path.
+/// XXX Perhaps use a separate type for the Boundary Services addr.
 ///
-/// This action uses the [`Virt2Phys`] resource to map the vritual
+/// The outer frame IPv6 address of a guest is the ULA of the sled it
+/// currently lives on. The Oxide Physical Network takes care of
+/// routing this ULA correctly.
+///
+/// The outer frame IPv6 address of Boundary Services is some ULA on
+/// the physical network, told to us during port creation.
+///
+/// The VNI of a guest is its VPC identifier. The VNI of Boundary
+/// Services is just a dedicated, cordoned off VNI explicitly for the
+/// purposes of talking to Boundary Services.
+///
+/// XXX The outer MAC addresses are zero'd out. Currently xde fills
+/// these out. However, the plan is to create a virtual switch
+/// abstraction in OPTE and have interfaces for querying the system
+/// for route/MAC address info.
+///
+/// This action uses the [`Virt2Phys`] resource to map the virtual
 /// destination to the physical location. These mappings are
 /// determined by Nexus and pushed down to individual OPTE instances.
+/// The mapping itself is available through the port metadata passes
+/// as argument to the [`StaticAction`] callback.
 pub struct EncapAction {
     bsvc_addr: PhysNet,
     // The physical IPv6 ULA of the server that hosts this guest

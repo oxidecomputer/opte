@@ -24,7 +24,7 @@ pub use ulp::*;
 ///
 /// NOTE: XXX This method of catching version mismatches is currently
 /// soft; better ideas are welcome.
-pub const API_VERSION: u64 = 3;
+pub const API_VERSION: u64 = 4;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
