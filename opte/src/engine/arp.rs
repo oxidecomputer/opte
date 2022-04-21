@@ -26,8 +26,8 @@ use super::ether::{
 };
 use super::headers::{Header, RawHeader};
 use super::packet::{
-    Packet, PacketMeta, PacketRead, PacketReader, PacketWriter,
-    Parsed, ReadErr, WriteError,
+    Packet, PacketMeta, PacketRead, PacketReader, PacketWriter, Parsed,
+    ReadErr, WriteError,
 };
 use super::rule::{
     AllowOrDeny, ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate,

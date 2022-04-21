@@ -395,10 +395,7 @@ fn print_list_layers(resp: &api::ListLayersResp) {
 }
 
 fn print_v2p_header() {
-    println!(
-        "{:<24} {:<17} {}",
-        "VPC IP", "VPC MAC ADDR", "UNDERLAY IP"
-    );
+    println!("{:<24} {:<17} {}", "VPC IP", "VPC MAC ADDR", "UNDERLAY IP");
 }
 
 fn print_v2p_ip4((src, phys): &(Ipv4Addr, GuestPhysAddr)) {

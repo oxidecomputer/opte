@@ -410,25 +410,19 @@ impl Layer {
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            Action::Meta(action) => {
-                match action.mod_meta(ifid, meta) {
-                    Ok(res) => {
-                        match res {
-                            AllowOrDeny::Allow(_) => {
-                                return Ok(LayerResult::Allow)
-                            }
+            Action::Meta(action) => match action.mod_meta(ifid, meta) {
+                Ok(res) => match res {
+                    AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
 
-                            AllowOrDeny::Deny => {
-                                return Ok(LayerResult::Deny {
-                                    name: self.name.clone()
-                                })
-                            }
-                        }
+                    AllowOrDeny::Deny => {
+                        return Ok(LayerResult::Deny {
+                            name: self.name.clone(),
+                        })
                     }
+                },
 
-                    Err(msg) => return Err(LayerError::ModMeta(msg)),
-                }
-            }
+                Err(msg) => return Err(LayerError::ModMeta(msg)),
+            },
 
             Action::Static(action) => {
                 let ht = match action.gen_ht(Direction::Out, ifid, meta) {
@@ -436,10 +430,10 @@ impl Layer {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
-                                name: self.name.clone()
+                                name: self.name.clone(),
                             });
                         }
-                    }
+                    },
 
                     Err(e) => {
                         self.record_gen_ht_failure(
@@ -476,10 +470,10 @@ impl Layer {
 
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
-                                name: self.name.clone()
+                                name: self.name.clone(),
                             });
                         }
-                    }
+                    },
 
                     Err(e) => {
                         self.record_gen_desc_failure(
@@ -555,10 +549,10 @@ impl Layer {
 
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
-                                name: self.name.clone()
+                                name: self.name.clone(),
                             });
                         }
-                    }
+                    },
 
                     Err(e) => {
                         // XXX SDT probe, error stat, log
@@ -649,25 +643,19 @@ impl Layer {
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            Action::Meta(action) => {
-                match action.mod_meta(ifid, meta) {
-                    Ok(res) => {
-                        match res {
-                            AllowOrDeny::Allow(_) => {
-                                return Ok(LayerResult::Allow)
-                            }
+            Action::Meta(action) => match action.mod_meta(ifid, meta) {
+                Ok(res) => match res {
+                    AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
 
-                            AllowOrDeny::Deny => {
-                                return Ok(LayerResult::Deny {
-                                    name: self.name.clone()
-                                })
-                            }
-                        }
+                    AllowOrDeny::Deny => {
+                        return Ok(LayerResult::Deny {
+                            name: self.name.clone(),
+                        })
                     }
+                },
 
-                    Err(msg) => return Err(LayerError::ModMeta(msg)),
-                }
-            }
+                Err(msg) => return Err(LayerError::ModMeta(msg)),
+            },
 
             Action::Static(action) => {
                 let ht = match action.gen_ht(Direction::Out, ifid, meta) {
@@ -675,10 +663,10 @@ impl Layer {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
-                                name: self.name.clone()
+                                name: self.name.clone(),
                             });
                         }
-                    }
+                    },
 
                     Err(e) => {
                         self.record_gen_ht_failure(
@@ -715,10 +703,10 @@ impl Layer {
 
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
-                                name: self.name.clone()
+                                name: self.name.clone(),
                             });
                         }
-                    }
+                    },
 
                     Err(e) => {
                         self.record_gen_desc_failure(
@@ -776,10 +764,10 @@ impl Layer {
 
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
-                                name: self.name.clone()
+                                name: self.name.clone(),
                             });
                         }
-                    }
+                    },
 
                     Err(e) => {
                         // XXX SDT probe, error stat, log

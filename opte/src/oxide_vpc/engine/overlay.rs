@@ -34,8 +34,8 @@ use crate::engine::rule::{
 };
 use crate::engine::sync::{KMutex, KMutexType};
 use crate::engine::udp::UdpMeta;
-use crate::oxide_vpc::PortCfg;
 use crate::oxide_vpc::api::{GuestPhysAddr, PhysNet};
+use crate::oxide_vpc::PortCfg;
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 
@@ -135,9 +135,11 @@ impl StaticAction for EncapAction {
             Some(v2p) => v2p,
             // This should never happen. If it does, then the driver
             // forgot to add the Virt2Phys metadata before processing.
-            None => return Err(rule::GenHtError::Unexpected {
-                msg: format!("no Virt2Phys metadata entry found"),
-            }),
+            None => {
+                return Err(rule::GenHtError::Unexpected {
+                    msg: format!("no Virt2Phys metadata entry found"),
+                })
+            }
         };
 
         // The router layer determines a RouterTarget and stores it in
@@ -160,13 +162,11 @@ impl StaticAction for EncapAction {
             RouterTargetInternal::InternetGateway => self.bsvc_addr,
 
             RouterTargetInternal::Ip(virt_ip) => match v2p.get(&virt_ip) {
-                Some(phys) => {
-                    PhysNet {
-                        ether: phys.ether.into(),
-                        ip: phys.ip,
-                        vni: self.vni,
-                    }
-                }
+                Some(phys) => PhysNet {
+                    ether: phys.ether.into(),
+                    ip: phys.ip,
+                    vni: self.vni,
+                },
 
                 // The router target has specified a VPC IP we do not
                 // currently know about; this could be for two
@@ -183,17 +183,15 @@ impl StaticAction for EncapAction {
                 // are dealing with scenario (2), the control plane
                 // should eventually provide us with a mapping.
                 None => return Ok(AllowOrDeny::Deny),
-            }
+            },
 
             RouterTargetInternal::VpcSubnet(_) => {
                 match v2p.get(&flow_id.dst_ip) {
-                    Some(phys) => {
-                        PhysNet {
-                            ether: phys.ether.into(),
-                            ip: phys.ip,
-                            vni: self.vni,
-                        }
-                    }
+                    Some(phys) => PhysNet {
+                        ether: phys.ether.into(),
+                        ip: phys.ip,
+                        vni: self.vni,
+                    },
 
                     // The guest is attempting to contact a VPC IP we
                     // do not currently know about; this could be for
@@ -328,7 +326,7 @@ impl VpcMappings {
             mappings.push(VpcMapResp {
                 vni: *vni,
                 ip4: v2p.dump_ip4(),
-                ip6: v2p.dump_ip6()
+                ip6: v2p.dump_ip6(),
             });
         }
 
@@ -336,9 +334,7 @@ impl VpcMappings {
     }
 
     pub fn new() -> Self {
-        VpcMappings {
-            inner: KMutex::new(BTreeMap::new(), KMutexType::Driver)
-        }
+        VpcMappings { inner: KMutex::new(BTreeMap::new(), KMutexType::Driver) }
     }
 }
 

@@ -42,14 +42,14 @@ use super::ip6::Ipv6Addr;
 use super::packet::{
     Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
 };
-use super::port::{Inactive, Port, ProcessResult};
 use super::port::meta::Meta;
+use super::port::{Inactive, Port, ProcessResult};
 use super::tcp::TcpHdr;
 use super::time::Moment;
 use super::udp::{UdpHdr, UdpHdrRaw, UdpMeta};
 use crate::api::{Direction::*, MacAddr};
 use crate::oxide_vpc::api::{
-    AddFwRuleReq, GuestPhysAddr, PhysNet, RouterTarget
+    AddFwRuleReq, GuestPhysAddr, PhysNet, RouterTarget,
 };
 use crate::oxide_vpc::engine::overlay::{self, Virt2Phys};
 use crate::oxide_vpc::engine::{arp, dyn_nat4, firewall, icmp, router};
@@ -250,10 +250,8 @@ fn gateway_icmp4_ping() {
 
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let g2_phys = GuestPhysAddr {
-        ether: g2_cfg.private_mac.into(),
-        ip: g2_cfg.phys_ip,
-    };
+    let g2_phys =
+        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
 
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses.
@@ -387,10 +385,8 @@ fn overlay_guest_to_guest_no_route() {
     // ================================================================
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let g2_phys = GuestPhysAddr {
-        ether: g2_cfg.private_mac.into(),
-        ip: g2_cfg.phys_ip,
-    };
+    let g2_phys =
+        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
 
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses.
@@ -447,10 +443,8 @@ fn overlay_guest_to_guest() {
     // ================================================================
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let g2_phys = GuestPhysAddr {
-        ether: g2_cfg.private_mac.into(),
-        ip: g2_cfg.phys_ip,
-    };
+    let g2_phys =
+        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
 
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses.
@@ -682,10 +676,8 @@ fn guest_to_guest_diff_vpc_no_peer() {
     let mut g2_cfg = g2_cfg();
     g2_cfg.vni = Vni::new(100u32).unwrap();
 
-    let g1_phys = GuestPhysAddr {
-        ether: g1_cfg.private_mac.into(),
-        ip: g1_cfg.phys_ip,
-    };
+    let g1_phys =
+        GuestPhysAddr { ether: g1_cfg.private_mac.into(), ip: g1_cfg.phys_ip };
 
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses. In this case the only guest in VNI 99 is

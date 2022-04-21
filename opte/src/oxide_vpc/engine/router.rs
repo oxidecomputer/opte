@@ -22,7 +22,7 @@ use crate::engine::headers::{IpAddr, IpCidr};
 use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::{self, meta::Meta, Port};
 use crate::engine::rule::{
-    self, Action, AllowOrDeny, MetaAction, ModMetaResult, Predicate, Rule
+    self, Action, AllowOrDeny, MetaAction, ModMetaResult, Predicate, Rule,
 };
 use crate::oxide_vpc::api::RouterTarget;
 use crate::oxide_vpc::PortCfg;
@@ -38,7 +38,7 @@ pub const ROUTER_LAYER_NAME: &'static str = "router";
 pub enum RouterTargetInternal {
     InternetGateway,
     Ip(IpAddr),
-    VpcSubnet(IpCidr)
+    VpcSubnet(IpCidr),
 }
 
 impl fmt::Display for RouterTargetInternal {
@@ -64,7 +64,7 @@ fn build_ip4_len_to_pri() -> [u16; 33] {
 
 pub fn setup(
     port: &Port<port::Inactive>,
-    _cfg: &PortCfg
+    _cfg: &PortCfg,
 ) -> Result<(), OpteError> {
     let ig = Action::Meta(Arc::new(RouterAction::new(
         RouterTargetInternal::InternetGateway,
@@ -90,26 +90,24 @@ pub fn add_entry_inactive(
     let pri_map4 = build_ip4_len_to_pri();
 
     match target {
-        RouterTarget::Drop => {
-            match dest {
-                IpCidr::Ip4(ip4) => {
-                    let mut rule = Rule::new(
-                        pri_map4[ip4.prefix_len() as usize],
-                        Action::Deny
-                    );
-                    rule.add_predicate(Predicate::InnerDstIp4(vec![
-                        rule::Ipv4AddrMatch::Prefix(ip4),
-                    ]));
-                    Ok(port.add_rule(
-                        ROUTER_LAYER_NAME,
-                        Direction::Out,
-                        rule.finalize(),
-                    )?)
-                }
-
-                IpCidr::Ip6(_) => todo!("IPv6 drop"),
+        RouterTarget::Drop => match dest {
+            IpCidr::Ip4(ip4) => {
+                let mut rule = Rule::new(
+                    pri_map4[ip4.prefix_len() as usize],
+                    Action::Deny,
+                );
+                rule.add_predicate(Predicate::InnerDstIp4(vec![
+                    rule::Ipv4AddrMatch::Prefix(ip4),
+                ]));
+                Ok(port.add_rule(
+                    ROUTER_LAYER_NAME,
+                    Direction::Out,
+                    rule.finalize(),
+                )?)
             }
-        }
+
+            IpCidr::Ip6(_) => todo!("IPv6 drop"),
+        },
 
         RouterTarget::InternetGateway => {
             if !dest.is_default() {
@@ -171,27 +169,25 @@ pub fn add_entry_active(
     let pri_map4 = build_ip4_len_to_pri();
 
     match target {
-        RouterTarget::Drop => {
-            match dest {
-                IpCidr::Ip4(ip4) => {
-                    let mut rule = Rule::new(
-                        pri_map4[ip4.prefix_len() as usize],
-                        Action::Deny
-                    );
-                    rule.add_predicate(Predicate::InnerDstIp4(vec![
-                        rule::Ipv4AddrMatch::Prefix(ip4),
-                    ]));
-                    port.add_rule(
-                        ROUTER_LAYER_NAME,
-                        Direction::Out,
-                        rule.finalize(),
-                    )?;
-                    Ok(NoResp::default())
-                }
-
-                IpCidr::Ip6(_) => todo!("IPv6 drop"),
+        RouterTarget::Drop => match dest {
+            IpCidr::Ip4(ip4) => {
+                let mut rule = Rule::new(
+                    pri_map4[ip4.prefix_len() as usize],
+                    Action::Deny,
+                );
+                rule.add_predicate(Predicate::InnerDstIp4(vec![
+                    rule::Ipv4AddrMatch::Prefix(ip4),
+                ]));
+                port.add_rule(
+                    ROUTER_LAYER_NAME,
+                    Direction::Out,
+                    rule.finalize(),
+                )?;
+                Ok(NoResp::default())
             }
-        }
+
+            IpCidr::Ip6(_) => todo!("IPv6 drop"),
+        },
 
         RouterTarget::InternetGateway => {
             if !dest.is_default() {
@@ -308,7 +304,7 @@ impl MetaAction for RouterAction {
     fn mod_meta(
         &self,
         _flow_id: &InnerFlowId,
-        meta: &mut Meta
+        meta: &mut Meta,
     ) -> ModMetaResult {
         // No target entry should currently exist in the metadata; it
         // would be a bug. However, because of the dynamic nature of

@@ -177,14 +177,7 @@ impl Debug for EtherAddr {
 }
 
 #[derive(
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
+    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct EtherMeta {
     pub dst: MacAddr,

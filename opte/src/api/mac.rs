@@ -13,7 +13,7 @@ cfg_if! {
 
 /// A MAC address.
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct MacAddr {
     inner: [u8; 6],

@@ -1016,11 +1016,8 @@ pub trait MetaAction: Display {
     /// implies there are no implicit predicates of that type.
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 
-    fn mod_meta(
-        &self,
-        flow_id: &InnerFlowId,
-        meta: &mut Meta
-    ) -> ModMetaResult;
+    fn mod_meta(&self, flow_id: &InnerFlowId, meta: &mut Meta)
+        -> ModMetaResult;
 }
 
 #[derive(Debug)]
