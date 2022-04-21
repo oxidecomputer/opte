@@ -403,10 +403,10 @@ impl Port<Active> {
         pkt: &mut Packet<Parsed>,
         ifid: &InnerFlowId,
     ) -> ! {
-        super::dbg(format!("mblk: {}", pkt.mblk_ptr_str()));
-        super::dbg(format!("ifid: {}", ifid));
-        // super::dbg(format!("meta: {:?}", meta));
-        super::dbg(format!("flows: {:?}", *self.state.tcp_flows.lock(),));
+        super::err(format!("mblk: {}", pkt.mblk_ptr_str()));
+        super::err(format!("ifid: {}", ifid));
+        // super::err(format!("meta: {:?}", meta));
+        super::err(format!("flows: {:?}", *self.state.tcp_flows.lock(),));
         todo!("bad packet: {}", msg);
     }
 
