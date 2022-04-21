@@ -271,6 +271,10 @@ impl TcpFlowState {
                     return Ok(Some(SynRcvd));
                 }
 
+                if tcp.has_flag(TcpFlags::RST) {
+                    return Ok(Some(Closed));
+                }
+
                 return Err(format!("unexpected non-SYN+ACK in Listen state"));
             }
 
