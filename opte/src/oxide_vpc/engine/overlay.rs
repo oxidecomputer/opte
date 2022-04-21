@@ -132,10 +132,12 @@ impl StaticAction for EncapAction {
         meta: &mut Meta,
     ) -> rule::GenHtResult {
         let v2p = match meta.get::<Arc<Virt2Phys>>() {
+            Some(v2p) => v2p,
             // This should never happen. If it does, then the driver
             // forgot to add the Virt2Phys metadata before processing.
-            None => todo!("need to return unexpected error"),
-            Some(v2p) => v2p,
+            None => return Err(rule::GenHtError::Unexpected {
+                msg: format!("no Virt2Phys metadata entry found"),
+            }),
         };
 
         // The router layer determines a RouterTarget and stores it in
@@ -166,9 +168,21 @@ impl StaticAction for EncapAction {
                     }
                 }
 
-                // In this case we don't have a mapping for the
-                // virtual IP specified as target.
-                None => todo!("return error about missing entry"),
+                // The router target has specified a VPC IP we do not
+                // currently know about; this could be for two
+                // reasons:
+                //
+                // 1. No such IP currently exists in the guest's VPC.
+                //
+                // 2. The destination IP exists in the guest's VPC,
+                //    but we do not yet have a mapping for it.
+                //
+                // We cannot differentiate these cases from the point
+                // of view of this code without more information from
+                // the control plane; rather we drop the packet. If we
+                // are dealing with scenario (2), the control plane
+                // should eventually provide us with a mapping.
+                None => return Ok(AllowOrDeny::Deny),
             }
 
             RouterTargetInternal::VpcSubnet(_) => {
