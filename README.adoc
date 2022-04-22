@@ -1,5 +1,10 @@
 = Oxide Packet Transformation Engine
 
+== Contributing
+
+Please see the xref:CONTRIBUTING.adoc[CONTRIBUTING] doc if you are
+interested in contributing to the project.
+
 == Relevant RFDs and Inspiration
 
 * https://rfd.shared.oxide.computer/rfd/0009[RFD 9: Networking Considerations]

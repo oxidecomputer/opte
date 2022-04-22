@@ -1,0 +1,51 @@
+== OPTE status and open source
+
+The OPTE repo is public because:
+
+1. It has always been our intention to make this open-source.
+
+2. We figured it's best to err on the side of doing this early instead
+   of late.
+
+However, OPTE is not finished, or even ready.
+
+And so, we thought it was important to explain where we're currently
+at, and manage your expectations.
+
+- We are a small company.
+
+- Our current goal is to get our first generation products finished
+  and in customers' hands.
+
+- We're writing OPTE in support of that goal, not as its own thing.
+  We're all working on the products, and tool development is a side
+  effect. That said, OPTE will be more generally useful if you are
+  looking for a packet transformation engine to implement network
+  functions in an illumos-based environment; it's just the current
+  focus is solely on supporting Oxide and the Oxide Rack.
+
+- OPTE may have dependencies on other Oxide repositories, which
+  themselves may be undergoing similar churn.
+
+- These points together mean that we may not have enough bandwidth to
+  review and integrate outside PRs right now. We hope this will change
+  in the future.
+
+You're welcome to send PRs, but we want to set expectations right: if
+we have time, or if the PRs are very small or fix bugs, we may
+integrate them in the near future. But we might also not get to any PR
+for a while, by which time it might no longer be relevant. Also keep
+in mind that some aspects of the code which have obvious flaws or
+TODOs may already be scheduled for change, but there are other more
+pressing matters to attend to first. If you feel compelled to write a
+PR, it would be best to first reach out before starting any work in
+earnest, as there may already been planned changes that would obsolete
+such work.
+
+We've all dealt with those open source projects that feel open in name
+only, and have big patches and history-free source drops appearing
+from behind the walls of some large organization. We don't like that,
+and we're not going to do that. But it will take some time for us to
+scale up -- please bear with us.
+
+Thanks!

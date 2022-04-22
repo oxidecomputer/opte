@@ -1,3 +1,9 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Copyright 2022 Oxide Computer Company
+
 // This is a "sys" (raw interface) crate for the illumos DDI/DKI
 // interfaces. It contains definitions of C macros, opaque types, 9F
 // prototypes, and 9S structures which are required for proper use of
