@@ -137,6 +137,10 @@ impl TcpFlowState {
                     return Some(CloseWait);
                 }
 
+                if tcp.has_flag(TcpFlags::RST) {
+                    return Some(Closed);
+                }
+
                 return None;
             }
 

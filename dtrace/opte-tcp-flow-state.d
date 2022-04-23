@@ -5,7 +5,7 @@
  */
 #include "common.h"
 
-#define	FMT	"%-16s %-8s %-8s %s\n"
+#define	FMT	"%-16s %-12s %-12s %s\n"
 
 BEGIN {
 	/*
