@@ -62,7 +62,12 @@ impl TcpFlowState {
     /// transition occurs, then an error is returned.
     ///
     /// TODO Actually flesh out error cases.
-    fn flow_in(&mut self, tcp: &TcpMeta) -> Result<Option<TcpState>, String> {
+    ///
+    /// You might notice that we could remove all of the instances of
+    /// `return None` and replace them with a single `None` value at
+    /// the end of the function; but the author finds it useful to be
+    /// explicit for each case.
+    fn flow_in(&mut self, tcp: &TcpMeta) -> Option<TcpState> {
         use TcpState::*;
 
         match self.tcp_state {
@@ -71,21 +76,21 @@ impl TcpFlowState {
                 // the sender never sees the guest's ACK, then the
                 // sender may send more SYNs.
                 if tcp.has_flag(TcpFlags::SYN) {
-                    return Ok(None);
+                    return Some(Listen);
                 }
 
-                return Err(format!("unexpected inbound in Listen"));
+                return None;
             }
 
             // The guest is in active open and waiting for the
             // remote's SYN+ACK.
             SynSent => {
                 if tcp.has_flag(TcpFlags::SYN) && tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(Some(Established));
+                    return Some(Established);
                 } else {
                     // Could be simultaneous open, but not worrying
                     // about that for now.
-                    return Err(format!("unexpected inbound in SynSent"));
+                    return None;
                 }
             }
 
@@ -93,7 +98,7 @@ impl TcpFlowState {
             // remote's ACK.
             SynRcvd => {
                 if tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(Some(Established));
+                    return Some(Established);
                 }
 
                 // TODO Handle RST, which in our case would just close
@@ -101,22 +106,22 @@ impl TcpFlowState {
                 //
                 // TODO I imagine we could see a retrans of the
                 // remote's SYN here.
-                return Err(format!("unexpected inbound in SynRcvd"));
+                return None;
             }
 
             Established => {
                 if tcp.has_flag(TcpFlags::FIN) {
                     // In this case remote end has initiated the close
                     // and the guest is entering passive close.
-                    return Ok(Some(CloseWait));
+                    return Some(CloseWait);
                 }
 
                 if tcp.has_flag(TcpFlags::RST) {
-                    return Ok(Some(Closed));
+                    return Some(Closed);
                 }
 
                 // Normal traffic on an ESTABLISHED connection.
-                return Ok(None);
+                return Some(Established);
             }
 
             // The guest is in passive close.
@@ -129,10 +134,10 @@ impl TcpFlowState {
                 // We could also see an ACK for previous data sent
                 // from the guest.
                 if tcp.has_flag(TcpFlags::FIN) || tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(None);
+                    return Some(CloseWait);
                 }
 
-                return Err(format!("unexpected inbound in CloseWait"));
+                return None;
             }
 
             // The guest is in passive close.
@@ -149,17 +154,17 @@ impl TcpFlowState {
                 //     so it can log the duplicate ACK.
                 if tcp.has_flag(TcpFlags::ACK) {
                     if tcp.ack == self.guest_seq.unwrap() + 1 {
-                        return Ok(Some(Closed));
+                        return Some(Closed);
                     }
 
-                    return Ok(None);
+                    return Some(LastAck);
                 }
 
                 if tcp.has_flag(TcpFlags::RST) {
-                    return Ok(Some(Closed));
+                    return Some(Closed);
                 }
 
-                return Err(format!("unexpected inbound in LastAck"));
+                return None;
             }
 
             // The guest is in active close.
@@ -170,7 +175,7 @@ impl TcpFlowState {
                 //
                 // TODO Verify ack number.
                 if tcp.has_flag(TcpFlags::FIN) && tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(Some(TimeWait));
+                    return Some(TimeWait);
                 }
 
                 // The remote sent its ACK for out active FIN. We now
@@ -179,21 +184,21 @@ impl TcpFlowState {
                 if tcp.has_flag(TcpFlags::ACK)
                     && tcp.ack == self.guest_seq.unwrap() + 1
                 {
-                    return Ok(Some(FinWait2));
+                    return Some(FinWait2);
                 }
 
                 // Presumably an ACK for some previous data. Let the
                 // guest decide.
                 if tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(None);
+                    return Some(FinWait1);
                 }
 
                 if tcp.has_flag(TcpFlags::RST) {
-                    return Ok(Some(Closed));
+                    return Some(Closed);
                 }
 
                 // TODO This could be a simultaneous close.
-                return Err(format!("unexpected inbound in FinWait1"));
+                return None;
             }
 
             // The guest is in active close.
@@ -206,14 +211,14 @@ impl TcpFlowState {
                     // FIN from the passive side. This is the passive
                     // side's FIN. In this case the connection is
                     // officially closed and we enter TIME_WAIT.
-                    return Ok(Some(TimeWait));
+                    return Some(TimeWait);
                 }
 
                 if tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(None);
+                    return Some(FinWait2);
                 }
 
-                return Err(format!("unexpected inbound in FinWait2"));
+                return None;
             }
 
             // The guest is in active close.
@@ -221,7 +226,7 @@ impl TcpFlowState {
                 // The guest is receiving additional copies of FIN for
                 // remote's passive close.
                 if tcp.has_flag(TcpFlags::FIN) {
-                    return Ok(None);
+                    return Some(TimeWait);
                 }
 
                 // TODO We haven't implemented simultaneous close yet,
@@ -229,26 +234,25 @@ impl TcpFlowState {
                 // TIME_WAIT state. But for now I allow it to make
                 // progress.
                 if tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(None);
+                    return Some(TimeWait);
                 }
 
                 if tcp.has_flag(TcpFlags::RST) {
-                    return Ok(Some(Closed));
+                    return Some(Closed);
                 }
 
-                return Err(format!("unexpected inbound in TimeWait"));
+                return None;
             }
 
-            _ => {
-                return Err(format!(
-                    "unexpected inbound in state {}: {}",
-                    self.tcp_state, self
-                ));
-            }
+            _ => return None,
         }
     }
 
-    fn flow_out(&mut self, tcp: &TcpMeta) -> Result<Option<TcpState>, String> {
+    /// You might notice that we could remove all of the instances of
+    /// `return None` and replace them with a single `None` value at
+    /// the end of the function; but the author finds it useful to be
+    /// explicit for each case.
+    fn flow_out(&mut self, tcp: &TcpMeta) -> Option<TcpState> {
         use TcpState::*;
 
         match self.tcp_state {
@@ -257,10 +261,10 @@ impl TcpFlowState {
             // request to a remote server.
             Closed => {
                 if tcp.has_flag(TcpFlags::SYN) {
-                    return Ok(Some(SynSent));
+                    return Some(SynSent);
                 }
 
-                return Err(format!("unexpected non-SYN in Closed state"));
+                return None;
             }
 
             // This is our initial state for a potential passive open.
@@ -268,40 +272,40 @@ impl TcpFlowState {
             // remote client with SYN+ACK.
             Listen => {
                 if tcp.has_flag(TcpFlags::SYN) && tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(Some(SynRcvd));
+                    return Some(SynRcvd);
                 }
 
                 if tcp.has_flag(TcpFlags::RST) {
-                    return Ok(Some(Closed));
+                    return Some(Closed);
                 }
 
-                return Err(format!("unexpected non-SYN+ACK in Listen state"));
+                return None;
             }
 
             SynSent => {
                 // In this case we are retransmitting the SYN packet.
                 if tcp.has_flag(TcpFlags::SYN) {
-                    return Ok(None);
+                    return Some(SynSent);
                 }
 
                 if tcp.has_flag(TcpFlags::RST) {
-                    return Ok(Some(Closed));
+                    return Some(Closed);
                 }
 
-                return Err(format!("outbound non-SYN in SynSent state"));
+                return None;
             }
 
             // TODO passive close
             Established => {
                 if tcp.has_flag(TcpFlags::FIN) {
-                    return Ok(Some(FinWait1));
+                    return Some(FinWait1);
                 }
 
                 if tcp.has_flag(TcpFlags::RST) {
-                    return Ok(Some(Closed));
+                    return Some(Closed);
                 }
 
-                return Ok(None);
+                return Some(Established);
             }
 
             // The guest is in active close.
@@ -309,31 +313,31 @@ impl TcpFlowState {
                 // The guest is resending its FIN to the remote to
                 // indicate its active close, or sending an RST.
                 if tcp.has_flag(TcpFlags::FIN) || tcp.has_flag(TcpFlags::RST) {
-                    return Ok(None);
+                    return Some(FinWait1);
                 }
 
                 if tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(None);
+                    return Some(FinWait1);
                 }
 
-                return Err(format!("unexpected outbound in FinWait"));
+                return None;
             }
 
             // The guest in in active close.
             FinWait2 => {
                 // Presumably the guest saw something it did not like.
                 if tcp.has_flag(TcpFlags::RST) {
-                    return Ok(Some(Closed));
+                    return Some(Closed);
                 }
 
                 // The guest has closed its side but the remote might
                 // still be sending data, make sure to allow ACKs get
                 // out.
                 if tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(None);
+                    return Some(FinWait2);
                 }
 
-                return Err(format!("unexpected outbound in FinWit2"));
+                return None;
             }
 
             // The guest is in active close.
@@ -345,15 +349,15 @@ impl TcpFlowState {
                 // out on the guest and in that case an RST reply is
                 // sent. Or this flow will expire.
                 if tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(None);
+                    return Some(TimeWait);
                 }
 
                 // The TIME_WAIT has expired, sending an RST.
                 if tcp.has_flag(TcpFlags::RST) {
-                    return Ok(Some(Closed));
+                    return Some(Closed);
                 }
 
-                return Err(format!("unexpected outbound in TimeWait"));
+                return None;
             }
 
             // The guest is in a passive close state.
@@ -361,41 +365,36 @@ impl TcpFlowState {
                 // The guest is performing its half of the passive
                 // close now.
                 if tcp.has_flag(TcpFlags::FIN) {
-                    return Ok(Some(LastAck));
+                    return Some(LastAck);
                 }
 
                 if tcp.has_flag(TcpFlags::RST) {
-                    return Ok(Some(Closed));
+                    return Some(Closed);
                 }
 
                 // The guest could be sending ACKs or data here while
                 // it finishes up its half of the connection. I'm not
                 // sure there's anything else to really check for
                 // explicitly.
-                return Ok(None);
+                return Some(CloseWait);
             }
 
             // The guest is in a passive close state.
             LastAck => {
                 if tcp.has_flag(TcpFlags::RST) {
-                    return Ok(Some(Closed));
+                    return Some(Closed);
                 }
 
                 // The guest is either reacknowledging the remote's
                 // FIN or resending its own FIN to the remote.
                 if tcp.has_flag(TcpFlags::FIN) || tcp.has_flag(TcpFlags::ACK) {
-                    return Ok(None);
+                    return Some(LastAck);
                 }
 
-                return Err(format!("unexpected outbound in LastAck"));
+                return None;
             }
 
-            _ => {
-                return Err(format!(
-                    "packet outgoing for TCP with state: {:?} flags: {:?}",
-                    self.tcp_state, tcp.flags
-                ));
-            }
+            _ => return None,
         }
     }
 
@@ -427,23 +426,33 @@ impl TcpFlowState {
     ) -> Result<TcpState, String> {
         let curr_state = self.tcp_state;
 
+        // Run the segment through the corresponding side of the TCP
+        // state machine. A successful transition should return
+        // `Some(new_state)` where `new_state` may be the same as the
+        // current state. A return value of `None` indicates an
+        // unexpected transition.
         let res = match dir {
             Direction::In => self.flow_in(tcp),
             Direction::Out => self.flow_out(tcp),
         };
 
         let new_state = match res {
-            Ok(Some(new_state)) => new_state,
-            Ok(None) => curr_state,
-            Err(e) => {
+            Some(new_state) => new_state,
+            None => {
                 self.tcp_flow_drop_probe(&flow_id, dir, tcp.flags);
-                return Err(e);
+                return Err(format!(
+                    "unexpected TCP segment dir: {}, flow: {}, state: {}, \
+                     flags: 0x{:x}",
+                    dir, flow_id, curr_state, tcp.flags,
+                ));
             }
         };
 
         self.guest_seq = Some(tcp.seq);
         self.guest_ack = Some(tcp.ack);
 
+        // Make sure to transition the state if it has changed and
+        // fire the SDT probe.
         if new_state != curr_state {
             self.tcp_flow_state_probe(&flow_id, new_state);
             self.tcp_state = new_state;
