@@ -68,10 +68,10 @@ pcap-parser = { version = "0.11.1", features = ["serialize"] }
 codegen-units = 1
 
 [profile.dev]
-codegen-units = 16
+codegen-units = 1
 
 [profile.test]
-codegen-units = 16
+codegen-units = 1
 
 [profile.bench]
-codegen-units = 16
+codegen-units = 1

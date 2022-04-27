@@ -17,3 +17,15 @@ postcard = "0.7.0"
 serde = "1.0"
 structopt = "0.3.23"
 thiserror = "1.0.28"
+
+[profile.release]
+codegen-units = 1
+
+[profile.dev]
+codegen-units = 1
+
+[profile.test]
+codegen-units = 1
+
+[profile.bench]
+codegen-units = 1
