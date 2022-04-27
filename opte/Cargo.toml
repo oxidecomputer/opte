@@ -63,3 +63,15 @@ features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-ipv6", "proto-dhcpv
 
 [dev-dependencies]
 pcap-parser = { version = "0.11.1", features = ["serialize"] }
+
+[profile.release]
+codegen-units = 1
+
+[profile.dev]
+codegen-units = 16
+
+[profile.test]
+codegen-units = 16
+
+[profile.bench]
+codegen-units = 16
