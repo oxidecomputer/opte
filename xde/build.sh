@@ -2,7 +2,11 @@
 
 REL_DIR=target/x86_64-unknown-unknown/release/
 
-cargo +nightly -v rustc -Z build-std=core,alloc --target x86_64-unknown-unknown.json --release
+cargo -v rustc \
+      -Z build-std=core,alloc \
+      --target x86_64-unknown-unknown.json \
+      --release
+
 ld -ztype=kmod \
    -N"drv/mac" \
    -N"drv/ip" \

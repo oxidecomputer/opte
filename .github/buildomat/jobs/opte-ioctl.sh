@@ -21,13 +21,13 @@ rustc --version
 cd opte-ioctl
 
 header "check style"
-ptime -m cargo +nightly fmt -- --check
+ptime -m cargo fmt -- --check
 
 header "analyze"
-ptime -m cargo +nightly check
+ptime -m cargo check
 
 header "debug build"
-ptime -m cargo +nightly build
+ptime -m cargo build
 
 header "release build"
-ptime -m cargo +nightly build --release
+ptime -m cargo build --release

@@ -34,15 +34,6 @@ cargo --version
 rustc --version
 
 pushd xde
-#
-# XXX This might be something that should be controlled by buildomat
-# itself through the config above. But for now I'll try to do it here.
-#
-# This is required for the unstable buid-std feature to work.
-#
-header "install rust-src"
-ptime -m rustup component add rust-src --toolchain nightly
-
 header "build xde (release)"
 ptime -m ./build.sh
 
@@ -57,7 +48,7 @@ fi
 popd
 
 pushd opteadm
-cargo +nightly build --release
+cargo build --release
 popd
 
 pushd pkg

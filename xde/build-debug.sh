@@ -2,7 +2,10 @@
 
 DBG_DIR=target/x86_64-unknown-unknown/debug/
 
-cargo +nightly -v rustc -Z build-std=core,alloc --target x86_64-unknown-unknown.json
+cargo -v rustc \
+      -Z build-std=core,alloc \
+      --target x86_64-unknown-unknown.json
+
 ld -ztype=kmod \
    -N"drv/mac" \
    -N"drv/ip" \

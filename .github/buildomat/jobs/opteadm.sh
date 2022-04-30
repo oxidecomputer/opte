@@ -24,19 +24,19 @@ rustc --version
 cd opteadm
 
 header "check style"
-ptime -m cargo +nightly fmt -- --check
+ptime -m cargo fmt -- --check
 
 header "analyze"
-ptime -m cargo +nightly check
+ptime -m cargo check
 
 header "debug build"
-ptime -m cargo +nightly build
+ptime -m cargo build
 
 header "release build"
-ptime -m cargo +nightly build --release
+ptime -m cargo build --release
 
 header "test"
-ptime -m cargo +nightly test
+ptime -m cargo test
 
 for x in debug release
 do

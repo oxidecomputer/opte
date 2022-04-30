@@ -40,19 +40,10 @@ rustc --version
 pushd xde
 
 header "check style"
-ptime -m cargo +nightly fmt -- --check
+ptime -m cargo fmt -- --check
 
 header "analyze"
-ptime -m cargo +nightly check
-
-#
-# XXX This might be something that should be controlled by buildomat
-# itself through the config above. But for now I'll try to do it here.
-#
-# This is required for the unstable buid-std feature to work.
-#
-header "install rust-src"
-ptime -m rustup component add rust-src --toolchain nightly
+ptime -m cargo check
 
 header "build xde (debug)"
 ptime -m ./build-debug.sh
