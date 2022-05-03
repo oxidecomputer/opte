@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use super::ether::EtherAddr;
 use super::flow_table::FlowEntryDump;
 use super::layer;
-use super::port;
+use super::port::Port;
 use super::rule;
 use super::vpc::VpcSubnet4;
 use crate::api::{CmdOk, Ipv4Addr, OpteError};
@@ -112,16 +112,16 @@ pub struct DumpTcpFlowsResp {
 impl CmdOk for DumpTcpFlowsResp {}
 
 pub fn dump_layer(
-    port: &port::Port<port::Active>,
+    port: &Port,
     req: &DumpLayerReq,
 ) -> Result<DumpLayerResp, OpteError> {
     port.dump_layer(&req.name)
 }
 
 pub fn dump_tcp_flows(
-    port: &port::Port<port::Active>,
+    port: &Port,
     _req: &DumpTcpFlowsReq,
-) -> DumpTcpFlowsResp {
+) -> Result<DumpTcpFlowsResp, OpteError> {
     port.dump_tcp_flows()
 }
 
@@ -164,7 +164,7 @@ pub struct PortInfo {
     pub name: String,
     pub mac_addr: EtherAddr,
     pub ip4_addr: Ipv4Addr,
-    pub in_use: bool,
+    pub state: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

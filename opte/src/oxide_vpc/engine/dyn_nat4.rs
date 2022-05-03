@@ -18,14 +18,14 @@ use crate::api::{Direction, OpteError};
 use crate::engine::ip4::{Ipv4Addr, Protocol};
 use crate::engine::layer::Layer;
 use crate::engine::nat::{DynNat4, NatPool};
-use crate::engine::port::{self, Port, Pos};
+use crate::engine::port::{PortBuilder, Pos};
 use crate::engine::rule::{
     Action, IpProtoMatch, Ipv4AddrMatch, Predicate, Rule,
 };
 use crate::oxide_vpc::PortCfg;
 
 pub fn setup(
-    port: &mut Port<port::Inactive>,
+    pb: &mut PortBuilder,
     cfg: &PortCfg,
 ) -> core::result::Result<(), OpteError> {
     let mut pool = NatPool::new();
@@ -35,7 +35,7 @@ pub fn setup(
 
     let layer = Layer::new(
         "dyn-nat4",
-        port.name(),
+        pb.name(),
         vec![Action::Stateful(Arc::new(nat))],
     );
 
@@ -65,5 +65,5 @@ pub fn setup(
         Ipv4AddrMatch::Exact(Ipv4Addr::LOCAL_BCAST),
     ]))));
     layer.add_rule(Direction::Out, rule.finalize());
-    port.add_layer(layer, Pos::After("firewall"))
+    pb.add_layer(layer, Pos::After("firewall"))
 }

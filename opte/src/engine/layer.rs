@@ -99,6 +99,12 @@ impl Layer {
         }
     }
 
+    /// Clear all flows from the layer's flow tables.
+    pub fn clear_flows(&self) {
+        self.ft_in.lock().clear();
+        self.ft_out.lock().clear();
+    }
+
     pub fn dump(&self) -> ioctl::DumpLayerResp {
         let rules_in = self.rules_in.lock().dump();
         let rules_out = self.rules_out.lock().dump();

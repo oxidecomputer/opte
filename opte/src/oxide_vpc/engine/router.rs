@@ -26,7 +26,7 @@ use super::firewall as fw;
 use crate::api::{Direction, NoResp, OpteError};
 use crate::engine::headers::{IpAddr, IpCidr};
 use crate::engine::layer::{InnerFlowId, Layer};
-use crate::engine::port::{self, meta::Meta, Port};
+use crate::engine::port::{meta::Meta, Port, PortBuilder, Pos};
 use crate::engine::rule::{
     self, Action, AllowOrDeny, MetaAction, ModMetaResult, Predicate, Rule,
 };
@@ -68,10 +68,7 @@ fn build_ip4_len_to_pri() -> [u16; 33] {
     v
 }
 
-pub fn setup(
-    port: &Port<port::Inactive>,
-    _cfg: &PortCfg,
-) -> Result<(), OpteError> {
+pub fn setup(pb: &PortBuilder, _cfg: &PortCfg) -> Result<(), OpteError> {
     let ig = Action::Meta(Arc::new(RouterAction::new(
         RouterTargetInternal::InternetGateway,
     )));
@@ -79,96 +76,17 @@ pub fn setup(
     // Indexes:
     //
     // * 0: InternetGateway
-    let layer = Layer::new(ROUTER_LAYER_NAME, port.name(), vec![ig]);
+    let layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), vec![ig]);
 
     // If there is no matching router entry we drop the packet.
     let drop_rule = Rule::match_any(65535, rule::Action::Deny);
     layer.add_rule(Direction::Out, drop_rule);
 
-    port.add_layer(layer, port::Pos::After(fw::FW_LAYER_NAME))
+    pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
 
-pub fn add_entry_inactive(
-    port: &Port<port::Inactive>,
-    dest: IpCidr,
-    target: RouterTarget,
-) -> Result<(), OpteError> {
-    let pri_map4 = build_ip4_len_to_pri();
-
-    match target {
-        RouterTarget::Drop => match dest {
-            IpCidr::Ip4(ip4) => {
-                let mut rule = Rule::new(
-                    pri_map4[ip4.prefix_len() as usize],
-                    Action::Deny,
-                );
-                rule.add_predicate(Predicate::InnerDstIp4(vec![
-                    rule::Ipv4AddrMatch::Prefix(ip4),
-                ]));
-                Ok(port.add_rule(
-                    ROUTER_LAYER_NAME,
-                    Direction::Out,
-                    rule.finalize(),
-                )?)
-            }
-
-            IpCidr::Ip6(_) => todo!("IPv6 drop"),
-        },
-
-        RouterTarget::InternetGateway => {
-            if !dest.is_default() {
-                return Err(OpteError::InvalidRouteDest(dest.to_string()));
-            }
-
-            match dest {
-                IpCidr::Ip4(ip4) => {
-                    let mut rule = Rule::new(
-                        pri_map4[ip4.prefix_len() as usize],
-                        Action::Meta(Arc::new(RouterAction::new(
-                            RouterTargetInternal::InternetGateway,
-                        ))),
-                    );
-                    rule.add_predicate(Predicate::InnerDstIp4(vec![
-                        rule::Ipv4AddrMatch::Prefix(ip4),
-                    ]));
-                    Ok(port.add_rule(
-                        ROUTER_LAYER_NAME,
-                        Direction::Out,
-                        rule.finalize(),
-                    )?)
-                }
-
-                IpCidr::Ip6(_) => todo!("IPv6 IG"),
-            }
-        }
-
-        RouterTarget::Ip(_) => todo!("add IP entry"),
-
-        RouterTarget::VpcSubnet(sub) => match dest {
-            IpCidr::Ip4(ip4) => {
-                let mut rule = Rule::new(
-                    pri_map4[ip4.prefix_len() as usize],
-                    Action::Meta(Arc::new(RouterAction::new(
-                        RouterTargetInternal::VpcSubnet(sub),
-                    ))),
-                );
-                rule.add_predicate(Predicate::InnerDstIp4(vec![
-                    rule::Ipv4AddrMatch::Prefix(ip4),
-                ]));
-                Ok(port.add_rule(
-                    ROUTER_LAYER_NAME,
-                    Direction::Out,
-                    rule.finalize(),
-                )?)
-            }
-
-            IpCidr::Ip6(_) => todo!("IPv6 VpcSubnet"),
-        },
-    }
-}
-
-pub fn add_entry_active(
-    port: &Port<port::Active>,
+pub fn add_entry(
+    port: &Port,
     dest: IpCidr,
     target: RouterTarget,
 ) -> Result<NoResp, OpteError> {

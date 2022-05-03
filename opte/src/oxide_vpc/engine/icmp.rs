@@ -15,12 +15,12 @@ cfg_if! {
 use crate::api::{Direction, OpteError};
 use crate::engine::icmp::Icmp4EchoReply;
 use crate::engine::layer::Layer;
-use crate::engine::port::{self, Port, Pos};
+use crate::engine::port::{PortBuilder, Pos};
 use crate::engine::rule::{Action, Rule};
 use crate::oxide_vpc::PortCfg;
 
 pub fn setup(
-    port: &mut Port<port::Inactive>,
+    pb: &mut PortBuilder,
     cfg: &PortCfg,
 ) -> core::result::Result<(), OpteError> {
     let reply = Action::Hairpin(Arc::new(Icmp4EchoReply {
@@ -31,7 +31,7 @@ pub fn setup(
         echo_dst_mac: cfg.gw_mac.into(),
         echo_dst_ip: cfg.gw_ip,
     }));
-    let icmp = Layer::new("icmp", port.name(), vec![reply]);
+    let icmp = Layer::new("icmp", pb.name(), vec![reply]);
 
     // ================================================================
     // ICMPv4 Echo Reply
@@ -57,5 +57,5 @@ pub fn setup(
     // which would generate a Vec of the header predicates.
     let rule = Rule::new(1, icmp.action(0).unwrap().clone());
     icmp.add_rule(Direction::Out, rule.finalize());
-    port.add_layer(icmp, Pos::Before("firewall"))
+    pb.add_layer(icmp, Pos::Before("firewall"))
 }

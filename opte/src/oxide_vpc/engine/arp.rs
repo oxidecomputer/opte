@@ -16,19 +16,19 @@ use crate::api::{Direction, MacAddr, OpteError};
 use crate::engine::arp::ArpReply;
 use crate::engine::ether::ETHER_TYPE_ARP;
 use crate::engine::layer::Layer;
-use crate::engine::port::{self, Port, Pos};
+use crate::engine::port::{PortBuilder, Pos};
 use crate::engine::rule::{
     Action, EtherAddrMatch, EtherTypeMatch, Predicate, Rule,
 };
 use crate::oxide_vpc::PortCfg;
 
 pub fn setup(
-    port: &mut Port<port::Inactive>,
+    pb: &mut PortBuilder,
     cfg: &PortCfg,
 ) -> core::result::Result<(), OpteError> {
     let arp = Layer::new(
         "arp",
-        port.name(),
+        pb.name(),
         vec![
             // ARP Reply for gateway's IP.
             Action::Hairpin(Arc::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),
@@ -62,5 +62,5 @@ pub fn setup(
     )]));
     arp.add_rule(Direction::In, rule.finalize());
 
-    port.add_layer(arp, Pos::Before("firewall"))
+    pb.add_layer(arp, Pos::Before("firewall"))
 }

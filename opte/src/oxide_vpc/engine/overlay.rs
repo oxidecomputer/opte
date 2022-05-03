@@ -34,7 +34,7 @@ use crate::engine::ip4::Protocol;
 use crate::engine::ip6::{Ipv6Addr, Ipv6Meta};
 use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
-use crate::engine::port::{self, Port, Pos};
+use crate::engine::port::{PortBuilder, Pos};
 use crate::engine::rule::{
     self, Action, AllowOrDeny, DataPredicate, Predicate, Rule, StaticAction, HT,
 };
@@ -46,7 +46,7 @@ use crate::oxide_vpc::PortCfg;
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 
 pub fn setup(
-    port: &Port<port::Inactive>,
+    pb: &PortBuilder,
     cfg: &PortCfg,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
@@ -59,14 +59,14 @@ pub fn setup(
     // Action Index 1
     let decap = Action::Static(Arc::new(DecapAction::new()));
 
-    let layer = Layer::new(OVERLAY_LAYER_NAME, port.name(), vec![encap, decap]);
+    let layer = Layer::new(OVERLAY_LAYER_NAME, pb.name(), vec![encap, decap]);
     let encap_rule = Rule::match_any(1, layer.action(0).unwrap().clone());
     layer.add_rule(Direction::Out, encap_rule);
     let decap_rule = Rule::match_any(1, layer.action(1).unwrap().clone());
     layer.add_rule(Direction::In, decap_rule);
     // NOTE The First/Last positions cannot fail; perhaps I should
     // improve the API to avoid the unwrap().
-    port.add_layer(layer, Pos::Last)
+    pb.add_layer(layer, Pos::Last)
 }
 
 pub const DECAP_NAME: &'static str = "decap";

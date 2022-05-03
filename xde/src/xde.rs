@@ -40,7 +40,7 @@ use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::{Initialized, Packet, ParseError, Parsed};
 use opte::engine::port::meta;
-use opte::engine::port::{Active, Port, ProcessResult};
+use opte::engine::port::{Port, PortBuilder, ProcessResult};
 use opte::engine::sync::{KMutex, KMutexType};
 use opte::engine::sync::{KRwLock, KRwLockType};
 use opte::engine::time::{Interval, Moment, Periodic};
@@ -131,11 +131,6 @@ fn next_hop_probe(
     }
 }
 
-#[repr(u64)]
-enum XdeDeviceFlags {
-    Started = 1,
-}
-
 #[repr(C)]
 #[derive(Clone)]
 struct xde_underlay_port {
@@ -203,16 +198,14 @@ impl XdeState {
 struct XdeDev {
     devname: String,
     linkid: datalink_id_t,
-
     mh: *mut mac::mac_handle,
 
-    flags: u64,
     link_state: mac::link_state_t,
 
     // opte port associated with this xde device
-    port: Arc<Port<Active>>,
+    port: Arc<Port>,
     port_cfg: PortCfg,
-    port_periodic: Periodic<Arc<Port<Active>>>,
+    port_periodic: Periodic<Arc<Port>>,
     port_v2p: Arc<overlay::Virt2Phys>,
 
     // simply pass the packets through to the underlay devices, skipping
@@ -405,7 +398,7 @@ const NANOS: i64 = 1_000_000_000;
 const ONE_SECOND: Interval = Interval::from_duration(Duration::new(1, 0));
 
 #[no_mangle]
-fn expire_periodic(port: &mut Arc<Port<Active>>) {
+fn expire_periodic(port: &mut Arc<Port>) {
     port.expire_flows(Moment::now());
 }
 
@@ -423,6 +416,18 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
                 msg: "underlay not initialized".to_string(),
             })
         }
+    };
+
+    // It's imperative to take the devices write lock early. We want
+    // to hold it for the rest of this function in order for device
+    // creation to be atomic with regard to other threads.
+    //
+    // This does mean that the current Rx path is blocked on device
+    // creation, but that's a price we need to pay for the moment.
+    let mut devs = unsafe { xde_devs.write() };
+    match devs.iter().position(|x| x.devname == req.xde_devname) {
+        Some(_) => return Err(OpteError::PortExists(req.xde_devname.clone())),
+        None => (),
     };
 
     let (port, port_cfg) = new_port(
@@ -461,7 +466,6 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         devname: req.xde_devname.clone(),
         linkid: req.linkid,
         mh: 0 as *mut mac::mac_handle,
-        flags: 0,
         link_state: mac::link_state_t::Down,
         port,
         port_periodic,
@@ -549,7 +553,6 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         mac::mac_tx_update(xde.mh);
     }
 
-    let mut devs = unsafe { xde_devs.write() };
     devs.push(xde);
     Ok(NoResp::default())
 }
@@ -881,7 +884,7 @@ unsafe extern "C" fn xde_detach(
 
     dld::dld_ioc_unregister(dld::XDE_IOC);
     xde_dip = ptr::null_mut::<c_void>() as *mut dev_info;
-    0
+    DDI_SUCCESS
 }
 
 #[no_mangle]
@@ -987,7 +990,7 @@ unsafe extern "C" fn xde_mc_getstat(
 #[no_mangle]
 unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
     let dev = arg as *mut XdeDev;
-    (*dev).flags |= XdeDeviceFlags::Started as u64;
+    (*dev).port.start();
     0
 }
 
@@ -996,7 +999,7 @@ unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
 #[no_mangle]
 unsafe extern "C" fn xde_mc_stop(arg: *mut c_void) {
     let dev = arg as *mut XdeDev;
-    (*dev).flags ^= XdeDeviceFlags::Started as u64;
+    (*dev).port.reset();
 }
 
 #[no_mangle]
@@ -1133,15 +1136,6 @@ unsafe extern "C" fn xde_mc_tx(
 ) -> *mut mblk_t {
     // The device must be started before we can transmit.
     let src_dev = &*(arg as *mut XdeDev);
-    if (src_dev.flags | XdeDeviceFlags::Started as u64) == 0 {
-        // It's okay to call mac_drop_chain() here as we have not yet
-        // handed ownership off to Packet.
-        mac::mac_drop_chain(
-            mp_chain,
-            b"xde dev not ready\0".as_ptr() as *const c_char,
-        );
-        return ptr::null_mut();
-    }
 
     // TODO I haven't dealt with chains, though I'm pretty sure it's
     // always just one.
@@ -1647,7 +1641,7 @@ fn new_port(
     vpc_vni: Vni,
     ectx: Arc<ExecCtx>,
     snat: Option<SnatCfg>,
-) -> Result<(Arc<Port<Active>>, PortCfg), OpteError> {
+) -> Result<(Arc<Port>, PortCfg), OpteError> {
     let name_cstr = match CString::new(name.clone()) {
         Ok(v) => v,
         Err(_) => return Err(OpteError::BadName),
@@ -1692,17 +1686,17 @@ fn new_port(
         },
     };
 
-    let mut new_port = Port::new(&name, name_cstr, private_mac.into(), ectx);
-    firewall::setup(&mut new_port)?;
-    dhcp4::setup(&mut new_port, &port_cfg)?;
-    icmp::setup(&mut new_port, &port_cfg)?;
+    let mut pb = PortBuilder::new(&name, name_cstr, private_mac.into(), ectx);
+    firewall::setup(&mut pb)?;
+    dhcp4::setup(&mut pb, &port_cfg)?;
+    icmp::setup(&mut pb, &port_cfg)?;
     if snat.is_some() {
-        dyn_nat4::setup(&mut new_port, &port_cfg)?;
+        dyn_nat4::setup(&mut pb, &port_cfg)?;
     }
-    arp::setup(&mut new_port, &port_cfg)?;
-    router::setup(&mut new_port, &port_cfg)?;
-    overlay::setup(&new_port, &port_cfg)?;
-    let port = Arc::new(new_port.activate());
+    arp::setup(&mut pb, &port_cfg)?;
+    router::setup(&mut pb, &port_cfg)?;
+    overlay::setup(&pb, &port_cfg)?;
+    let port = Arc::new(pb.create());
     Ok((port, port_cfg))
 }
 
@@ -1824,7 +1818,7 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    router::add_entry_active(
+    router::add_entry(
         &dev.port,
         IpCidr::Ip4(req.dest.into()),
         req.target.into(),
@@ -1917,7 +1911,7 @@ fn dump_uft_hdlr(
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    Ok(dev.port.dump_uft())
+    dev.port.dump_uft()
 }
 
 #[no_mangle]
@@ -1947,7 +1941,7 @@ fn dump_tcp_flows_hdlr(
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    Ok(api::dump_tcp_flows(&dev.port, &req))
+    api::dump_tcp_flows(&dev.port, &req)
 }
 
 #[no_mangle]
@@ -1963,7 +1957,7 @@ fn list_ports_hdlr(
             name: dev.port.name().to_string(),
             mac_addr: dev.port.mac_addr(),
             ip4_addr: dev.port_cfg.private_ip,
-            in_use: false,
+            state: dev.port.state().to_string(),
         });
     }
 

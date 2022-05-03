@@ -30,14 +30,11 @@ use crate::api::{
 };
 use crate::engine::ip4::Ipv4Cidr;
 use crate::engine::layer::Layer;
-use crate::engine::port::{self, Port, Pos};
+use crate::engine::port::{PortBuilder, Pos};
 use crate::engine::rule::{Action, Rule};
 use crate::oxide_vpc::PortCfg;
 
-pub fn setup(
-    port: &mut Port<port::Inactive>,
-    cfg: &PortCfg,
-) -> Result<(), OpteError> {
+pub fn setup(pb: &mut PortBuilder, cfg: &PortCfg) -> Result<(), OpteError> {
     // All guest interfaces live on a `/32`-network in the Oxide VPC;
     // restricting the L2 domain to two nodes: the guest NIC and the
     // OPTE Port. This allows OPTE to act as the gateway for which all
@@ -112,7 +109,7 @@ pub fn setup(
     }));
     let ack_idx = 1;
 
-    let dhcp = Layer::new("dhcp4", port.name(), vec![offer, ack]);
+    let dhcp = Layer::new("dhcp4", pb.name(), vec![offer, ack]);
 
     let discover_rule = Rule::new(1, dhcp.action(offer_idx).unwrap().clone());
     dhcp.add_rule(Direction::Out, discover_rule.finalize());
@@ -120,5 +117,5 @@ pub fn setup(
     let request_rule = Rule::new(1, dhcp.action(ack_idx).unwrap().clone());
     dhcp.add_rule(Direction::Out, request_rule.finalize());
 
-    port.add_layer(dhcp, Pos::Before("firewall"))
+    pb.add_layer(dhcp, Pos::Before("firewall"))
 }

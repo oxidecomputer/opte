@@ -23,7 +23,7 @@ use crate::engine::ether::ETHER_TYPE_ARP;
 use crate::engine::ip4::Protocol;
 use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
-use crate::engine::port::{self, Port, Pos};
+use crate::engine::port::{Port, PortBuilder, Pos};
 use crate::engine::rule::{
     self, AllowOrDeny, DataPredicate, EtherTypeMatch, Identity, IdentityDesc,
     IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
@@ -36,17 +36,12 @@ use crate::oxide_vpc::api::{
 
 pub const FW_LAYER_NAME: &'static str = "firewall";
 
-pub fn setup(
-    port: &mut Port<port::Inactive>,
-) -> core::result::Result<(), OpteError> {
-    let fw_layer = Firewall::create_layer(port.name());
-    port.add_layer(fw_layer, Pos::First)
+pub fn setup(pb: &mut PortBuilder) -> core::result::Result<(), OpteError> {
+    let fw_layer = Firewall::create_layer(pb.name());
+    pb.add_layer(fw_layer, Pos::First)
 }
 
-pub fn add_fw_rule(
-    port: &port::Port<port::Active>,
-    req: &AddFwRuleReq,
-) -> Result<(), OpteError> {
+pub fn add_fw_rule(port: &Port, req: &AddFwRuleReq) -> Result<(), OpteError> {
     let action = match req.rule.action {
         Action::Allow => port.layer_action(FW_LAYER_NAME, 0).unwrap().clone(),
 
@@ -57,10 +52,7 @@ pub fn add_fw_rule(
     port.add_rule(FW_LAYER_NAME, req.rule.direction, rule)
 }
 
-pub fn rem_fw_rule(
-    port: &port::Port<port::Active>,
-    req: &RemFwRuleReq,
-) -> Result<(), OpteError> {
+pub fn rem_fw_rule(port: &Port, req: &RemFwRuleReq) -> Result<(), OpteError> {
     port.remove_rule(FW_LAYER_NAME, req.dir, req.id)
 }
 

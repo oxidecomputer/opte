@@ -302,18 +302,18 @@ impl std::str::FromStr for SnatCfg {
 
 fn print_port_header() {
     println!(
-        "{:<32} {:<24} {:<16} {:<6}",
-        "LINK", "MAC ADDRESS", "IPv4 ADDRESS", "IN USE"
+        "{:<32} {:<24} {:<16} {:<8}",
+        "LINK", "MAC ADDRESS", "IPv4 ADDRESS", "STATE"
     );
 }
 
 fn print_port(pi: PortInfo) {
     println!(
-        "{:<32} {:<24} {:<16} {:<6}",
+        "{:<32} {:<24} {:<16} {:<8}",
         pi.name,
         pi.mac_addr.to_string(),
         pi.ip4_addr.to_string(),
-        if pi.in_use { "Y".to_string() } else { "N".to_string() },
+        pi.state,
     );
 }
 

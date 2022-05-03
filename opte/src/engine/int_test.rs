@@ -23,7 +23,6 @@
 //! TODO This module belongs in oxide_vpc as it's testing VPC-specific
 //! configuration.
 use std::boxed::Box;
-use std::fs;
 use std::ops::Range;
 use std::prelude::v1::*;
 use std::sync::Arc;
@@ -43,16 +42,16 @@ use super::ether::{
 use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::geneve::{self, Vni};
 use super::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
-use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4HdrRaw, Ipv4Meta, Protocol};
+use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol};
 use super::ip6::Ipv6Addr;
 use super::packet::{
     Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
 };
 use super::port::meta::Meta;
-use super::port::{Inactive, Port, ProcessResult};
+use super::port::{PortBuilder, ProcessError, ProcessResult};
 use super::tcp::TcpHdr;
 use super::time::Moment;
-use super::udp::{UdpHdr, UdpHdrRaw, UdpMeta};
+use super::udp::{UdpHdr, UdpMeta};
 use crate::api::{Direction::*, MacAddr};
 use crate::oxide_vpc::api::{
     AddFwRuleReq, GuestPhysAddr, PhysNet, RouterTarget,
@@ -68,6 +67,7 @@ use ProcessResult::*;
 // masqurade as the guests gateway.
 pub const GW_MAC_ADDR: [u8; 6] = [0xA8, 0x40, 0x25, 0xFF, 0xFF, 0xFF];
 
+#[allow(dead_code)]
 fn get_header(offset: &[u8]) -> (&[u8], PcapHeader) {
     match pcap::parse_pcap_header(offset) {
         Ok((new_offset, header)) => (new_offset, header),
@@ -75,6 +75,7 @@ fn get_header(offset: &[u8]) -> (&[u8], PcapHeader) {
     }
 }
 
+#[allow(dead_code)]
 fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
     match pcap::parse_pcap_frame(offset) {
         Ok((new_offset, block)) => {
@@ -84,39 +85,6 @@ fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
         }
 
         Err(e) => panic!("failed to get next block: {:?}", e),
-    }
-}
-
-fn home_cfg() -> PortCfg {
-    PortCfg {
-        private_ip: "10.0.0.210".parse().unwrap(),
-        private_mac: MacAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]),
-        vpc_subnet: "10.0.0.0/24".parse().unwrap(),
-        dyn_nat: DynNat4Cfg {
-            public_ip: "10.0.0.99".parse().unwrap(),
-            ports: Range { start: 1025, end: 4096 },
-        },
-        gw_mac: MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
-        gw_ip: "10.0.0.1".parse().unwrap(),
-
-        // XXX These values don't really mean anything in this
-        // context. This "home cfg" was created during the early days
-        // of OPTE dev when the VPC implementation was just part of an
-        // existing IPv4 network. Any tests relying on this cfg need
-        // to be rewritten or deleted.
-        vni: Vni::new(99u32).unwrap(),
-        // Site 0xF7, Rack 1, Sled 1, Interface 1
-        phys_ip: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-        bsvc_addr: PhysNet {
-            ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-            ip: Ipv6Addr::from([
-                0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
-            ]),
-            vni: Vni::new(7777u32).unwrap(),
-        },
     }
 }
 
@@ -153,35 +121,19 @@ fn lab_cfg() -> PortCfg {
     }
 }
 
-fn oxide_net_setup(name: &str, cfg: &PortCfg) -> Port<Inactive> {
+fn oxide_net_setup(name: &str, cfg: &PortCfg) -> PortBuilder {
     let ectx = Arc::new(ExecCtx { log: Box::new(crate::PrintlnLog {}) });
     let name_cstr = crate::CString::new(name).unwrap();
-    let mut port =
-        Port::new(name, name_cstr, cfg.private_mac.into(), ectx.clone());
+    let mut pb =
+        PortBuilder::new(name, name_cstr, cfg.private_mac.into(), ectx.clone());
 
-    // ================================================================
-    // Firewall layer
-    // ================================================================
-    firewall::setup(&mut port).expect("failed to add firewall layer");
-
-    // ================================================================
-    // ICMP layer
-    //
-    // For intercepting ICMP Echo Requests to the virtual gateway.
-    // ================================================================
-    icmp::setup(&mut port, cfg).expect("failed to add icmp layer");
-
-    // ================================================================
-    // Dynamic NAT Layer (IPv4)
-    // ================================================================
-    dyn_nat4::setup(&mut port, cfg).expect("failed to add dyn-nat4 layer");
-
-    // ================================================================
-    // ARP layer
-    // ================================================================
-    arp::setup(&mut port, cfg).expect("failed to add ARP layer");
-
-    port
+    firewall::setup(&mut pb).expect("failed to add firewall layer");
+    icmp::setup(&mut pb, cfg).expect("failed to add icmp layer");
+    dyn_nat4::setup(&mut pb, cfg).expect("failed to add dyn-nat4 layer");
+    arp::setup(&mut pb, cfg).expect("failed to add ARP layer");
+    router::setup(&mut pb, cfg).expect("failed to add router layer");
+    overlay::setup(&mut pb, cfg).expect("failed to add overlay layer");
+    pb
 }
 
 fn g1_cfg() -> PortCfg {
@@ -246,6 +198,84 @@ fn g2_cfg() -> PortCfg {
     }
 }
 
+// Verify that two guests on the same VPC can communicate via overlay.
+// I.e., test routing + encap/decap.
+#[test]
+fn port_transitions() {
+    use super::checksum::HeaderChecksum;
+    use super::ip4::UlpCsumOpt;
+    use super::tcp::TcpFlags;
+
+    // ================================================================
+    // Configure ports for g1 and g2.
+    // ================================================================
+    let g1_cfg = g1_cfg();
+    let g2_cfg = g2_cfg();
+    let g2_phys =
+        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
+
+    // Add V2P mappings that allow guests to resolve each others
+    // physical addresses.
+    let v2p = Arc::new(Virt2Phys::new());
+    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    let mut port_meta = Meta::new();
+    port_meta.add(v2p).unwrap();
+
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    assert_eq!(g1_port.num_rules("firewall", Out), 1);
+
+    // Add router entry that allows Guest 1 to send to Guest 2.
+    router::add_entry(
+        &g1_port,
+        IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet.cidr())),
+    )
+    .unwrap();
+
+    // ================================================================
+    // Generate a telnet SYN packet from g1 to g2.
+    // ================================================================
+    let body = vec![];
+    let mut tcp = TcpHdr::new(7865, 23);
+    tcp.set_flags(TcpFlags::SYN);
+    tcp.set_seq(4224936861);
+    let mut ip4 =
+        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
+
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&eth.as_bytes());
+    bytes.extend_from_slice(&ip4.as_bytes());
+    bytes.extend_from_slice(&tcp.as_bytes());
+    bytes.extend_from_slice(&body);
+    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
+
+    // ================================================================
+    // Try processing the packet while taking the port through a Ready
+    // -> Running -> Ready transition. Verify that flows are cleared
+    // but rules remain.
+    // ================================================================
+    let res = g1_port.process(Out, &mut g1_pkt, &mut port_meta);
+    assert!(matches!(res, Err(ProcessError::BadState(_))));
+    g1_port.start();
+    assert_eq!(g1_port.num_rules("firewall", Out), 1);
+    let res = g1_port.process(Out, &mut g1_pkt, &mut port_meta);
+    assert!(matches!(res, Ok(Modified)));
+    assert_eq!(g1_port.num_flows("firewall", Out), 1);
+    assert_eq!(g1_port.num_flows("uft", Out), 1);
+
+    g1_port.reset();
+    assert_eq!(g1_port.num_rules("firewall", Out), 1);
+    let res = g1_port.process(Out, &mut g1_pkt, &mut port_meta);
+    assert!(matches!(res, Err(ProcessError::BadState(_))));
+    assert_eq!(g1_port.num_flows("firewall", Out), 0);
+    assert_eq!(g1_port.num_flows("uft", Out), 0);
+}
+
 // Verify that the guest can ping the virtual gateway.
 #[test]
 fn gateway_icmp4_ping() {
@@ -266,10 +296,8 @@ fn gateway_icmp4_ping() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p).unwrap();
 
-    let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    router::setup(&mut g1_port, &g1_cfg).unwrap();
-    overlay::setup(&mut g1_port, &g1_cfg).unwrap();
-    let g1_port = g1_port.activate();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    g1_port.start();
 
     let mut pcap = crate::test::PcapBuilder::new("gateway_icmpv4_ping.pcap");
 
@@ -401,10 +429,8 @@ fn overlay_guest_to_guest_no_route() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p).unwrap();
 
-    let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    router::setup(&mut g1_port, &g1_cfg).unwrap();
-    overlay::setup(&mut g1_port, &g1_cfg).unwrap();
-    let g1_port = g1_port.activate();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    g1_port.start();
 
     // ================================================================
     // Generate a telnet SYN packet from g1 to g2.
@@ -459,23 +485,19 @@ fn overlay_guest_to_guest() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p).unwrap();
 
-    let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    router::setup(&mut g1_port, &g1_cfg).unwrap();
-    overlay::setup(&mut g1_port, &g1_cfg).unwrap();
-    let g1_port = g1_port.activate();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    g1_port.start();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
-    router::add_entry_active(
+    router::add_entry(
         &g1_port,
         IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet.cidr())),
     )
     .unwrap();
 
-    let mut g2_port = oxide_net_setup("g2_port", &g2_cfg);
-    router::setup(&mut g2_port, &g2_cfg).unwrap();
-    overlay::setup(&mut g2_port, &g2_cfg).unwrap();
-    let g2_port = g2_port.activate();
+    let g2_port = oxide_net_setup("g2_port", &g2_cfg).create();
+    g2_port.start();
 
     // Add router entry that allows Guest 2 to send to Guest 1.
     //
@@ -483,7 +505,7 @@ fn overlay_guest_to_guest() {
     // tables up to a global level like the Virt2Phys mappings. This
     // way a new router entry that applies to many guests can placed
     // once instead of on each port individually.
-    router::add_entry_active(
+    router::add_entry(
         &g2_port,
         IpCidr::Ip4(g1_cfg.vpc_subnet.cidr()),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet.cidr())),
@@ -693,10 +715,8 @@ fn guest_to_guest_diff_vpc_no_peer() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p.clone()).unwrap();
 
-    let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    router::setup(&mut g1_port, &g1_cfg).unwrap();
-    overlay::setup(&mut g1_port, &g1_cfg).unwrap();
-    let g1_port = g1_port.activate();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    g1_port.start();
 
     // Add router entry that allows g1 to talk to any other guest on
     // its VPC subnet.
@@ -704,17 +724,15 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // In this case both g1 and g2 have the same subnet. However, g1
     // is part of VNI 99, and g2 is part of VNI 100. Without a VPC
     // Peering Gateway they have no way to reach each other.
-    router::add_entry_active(
+    router::add_entry(
         &g1_port,
         IpCidr::Ip4(g1_cfg.vpc_subnet.cidr()),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet.cidr())),
     )
     .unwrap();
 
-    let mut g2_port = oxide_net_setup("g2_port", &g2_cfg);
-    router::setup(&mut g2_port, &g2_cfg).unwrap();
-    overlay::setup(&mut g2_port, &g2_cfg).unwrap();
-    let g2_port = g2_port.activate();
+    let g2_port = oxide_net_setup("g2_port", &g2_cfg).create();
+    g2_port.start();
 
     // Add router entry that allows Guest 2 to send to Guest 1.
     //
@@ -722,7 +740,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // tables up to a global level like the Virt2Phys mappings. This
     // way a new router entry that applies to many guests can placed
     // once instead of on each port individually.
-    router::add_entry_active(
+    router::add_entry(
         &g2_port,
         IpCidr::Ip4(g1_cfg.vpc_subnet.cidr()),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet.cidr())),
@@ -786,13 +804,11 @@ fn overlay_guest_to_internet() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p).unwrap();
 
-    let mut g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    router::setup(&mut g1_port, &g1_cfg).unwrap();
-    overlay::setup(&mut g1_port, &g1_cfg).unwrap();
-    let g1_port = g1_port.activate();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    g1_port.start();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
-    router::add_entry_active(
+    router::add_entry(
         &g1_port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
@@ -967,71 +983,6 @@ fn bad_ip_len() {
     );
 }
 
-// This test was added to verify that the DHCP request in the Oxide
-// lab would not be re-written by the SNAT layer.
-//
-// XXX: At some point this test should go away as it tests an issue
-// that only applies to the Oxide lab network demos when using the
-// native IPv4 network as the "overlay" (with no underlay) and letting
-// the lab gateway perform DHCP. Moving forward, both of these go
-// away: 1) the Oxide Network uses an IPv6 underlay and 2) DHCP for
-// the guest is mocked-out by OPTE itself.
-#[test]
-fn dhcp_req() {
-    let cfg = lab_cfg();
-    let mut port_meta = Meta::new();
-    let port = oxide_net_setup("dhcp_req", &cfg).activate();
-    let pkt = Packet::alloc(42);
-
-    let ether = EtherHdr::from(&EtherMeta {
-        src: cfg.private_mac,
-        dst: MacAddr::BROADCAST,
-        ether_type: ETHER_TYPE_IPV4,
-    });
-
-    let ip = Ipv4Hdr::from(&Ipv4Meta {
-        src: "0.0.0.0".parse().unwrap(),
-        dst: Ipv4Addr::LOCAL_BCAST,
-        proto: Protocol::UDP,
-    });
-
-    let udp = UdpHdr::from(&UdpMeta { src: 68, dst: 67 });
-
-    let mut wtr = PacketWriter::new(pkt, None);
-    let _ = wtr.write(EtherHdrRaw::from(&ether).as_bytes()).unwrap();
-    let mut ipraw = Ipv4HdrRaw::from(&ip);
-    ipraw.total_len = 28u16.to_be_bytes();
-    let _ = wtr.write(ipraw.as_bytes()).unwrap();
-    let _ = wtr.write(UdpHdrRaw::from(&udp).as_bytes()).unwrap();
-    let mut pkt = wtr.finish().parse().unwrap();
-
-    let res = port.process(Out, &mut pkt, &mut port_meta);
-
-    match res {
-        Ok(Modified) => {
-            let meta = pkt.meta();
-            // XXX Modified is what processing returns since it
-            // technically did pass through the firewall action (which
-            // is just Identity). It would be nice if we only returned
-            // Modified when the metadata actually changes.
-            let ethm = meta.inner.ether.as_ref().unwrap();
-            assert_eq!(ethm.src, cfg.private_mac);
-            assert_eq!(ethm.dst, MacAddr::BROADCAST);
-
-            let ip4m = match meta.inner.ip.as_ref().unwrap() {
-                IpMeta::Ip4(v) => v,
-                _ => panic!("expect Ipv4Meta"),
-            };
-
-            assert_eq!(ip4m.src, "0.0.0.0".parse().unwrap());
-            assert_eq!(ip4m.dst, Ipv4Addr::LOCAL_BCAST);
-            assert_eq!(ip4m.proto, Protocol::UDP);
-        }
-
-        res => panic!("expected Modified result, got {:?}", res),
-    }
-}
-
 // Verify that OPTE generates a hairpin ARP reply when the guest
 // queries for the gateway.
 #[test]
@@ -1041,7 +992,8 @@ fn arp_gateway() {
 
     let cfg = g1_cfg();
     let mut port_meta = Meta::new();
-    let port = oxide_net_setup("arp_hairpin", &cfg).activate();
+    let port = oxide_net_setup("arp_hairpin", &cfg).create();
+    port.start();
     let reply_hdr_sz = ETHER_HDR_SZ + ARP_HDR_SZ;
 
     let pkt = Packet::alloc(42);
@@ -1101,88 +1053,81 @@ fn arp_gateway() {
     }
 }
 
-/// Test a DNS lookup from guest to internet.
-///
-/// TODO Would be nice to verify if packet hits a layer rule or flow
-/// or hits the UFT. Two ideas here:
-///
-/// 1. The `ProcessResult` could include a receipt of how the packet
-/// was processed. If this is only useful for testing I'm not sure
-/// it's worth it. However, if it could also be useful for production
-/// debugging, then it's definitely worth doing; sleep on it.
-///
-/// 2. Add stats for rule hits, layer hits, Layer Flow Table hits,
-/// Unified Flow Table hits, etc. These stats can be used by tests for
-/// verifying a given packet was processed in a certain way. They are
-/// also useful for production as a way to track if packets are being
-/// handled in the way we expect: e.g. that most packets hit the UFT.
 #[test]
-fn outgoing_dns_lookup() {
-    let cfg = home_cfg();
-    let mut port_meta = Meta::new();
-    let port = oxide_net_setup("outdoing_dns_lookup", &cfg).activate();
-    let gpath = "dns-lookup-guest.pcap";
-    let gbytes = fs::read(gpath).unwrap();
-    let hpath = "dns-lookup-host.pcap";
-    let hbytes = fs::read(hpath).unwrap();
+fn flow_expiration() {
+    use super::checksum::HeaderChecksum;
+    use super::ip4::UlpCsumOpt;
+    use super::tcp::TcpFlags;
 
-    assert_eq!(port.num_flows("dyn-nat4", In), 0);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 0);
-    assert_eq!(port.num_flows("firewall", In), 0);
-    assert_eq!(port.num_flows("firewall", Out), 0);
+    // ================================================================
+    // Configure ports for g1 and g2.
+    // ================================================================
+    let g1_cfg = g1_cfg();
+    let g2_cfg = g2_cfg();
+    let g2_phys =
+        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
+
+    // Add V2P mappings that allow guests to resolve each others
+    // physical addresses.
+    let v2p = Arc::new(Virt2Phys::new());
+    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    let mut port_meta = Meta::new();
+    port_meta.add(v2p).unwrap();
+
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    g1_port.start();
     let now = Moment::now();
 
+    // Add router entry that allows Guest 1 to send to Guest 2.
+    router::add_entry(
+        &g1_port,
+        IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet.cidr())),
+    )
+    .unwrap();
+
     // ================================================================
-    // Packet 1 (DNS query)
+    // Generate a telnet SYN packet from g1 to g2.
     // ================================================================
-    let (gbytes, _) = get_header(&gbytes[..]);
-    let (gbytes, gblock) = next_block(&gbytes);
-    let mut pkt = Packet::copy(gblock.data).parse().unwrap();
-    let res = port.process(Out, &mut pkt, &mut port_meta);
+    let body = vec![];
+    let mut tcp = TcpHdr::new(7865, 23);
+    tcp.set_flags(TcpFlags::SYN);
+    tcp.set_seq(4224936861);
+    let mut ip4 =
+        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
+
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&eth.as_bytes());
+    bytes.extend_from_slice(&ip4.as_bytes());
+    bytes.extend_from_slice(&tcp.as_bytes());
+    bytes.extend_from_slice(&body);
+    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
+
+    // ================================================================
+    // Run the telnet SYN packet through g1's port in the outbound
+    // direction and verify the resulting packet meets expectations.
+    // ================================================================
+    let res = g1_port.process(Out, &mut g1_pkt, &mut port_meta);
     assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 0);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 0);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    let (hbytes, _hdr) = get_header(&hbytes[..]);
-    let (hbytes, hblock) = next_block(&hbytes);
-    let pcap_pkt = Packet::copy(hblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), hblock.data);
 
     // ================================================================
-    // Packet 2 (DNS query response)
+    // Verify expiration
     // ================================================================
-    let (_hbytes, hblock) = next_block(&hbytes);
-    let mut pkt = Packet::copy(hblock.data).parse().unwrap();
-    let res = port.process(In, &mut pkt, &mut port_meta);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(port.num_flows("dyn-nat4", In), 0);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 0);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
+    g1_port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0));
+    assert_eq!(g1_port.num_flows("firewall", In), 1);
+    assert_eq!(g1_port.num_flows("firewall", Out), 1);
+    assert_eq!(g1_port.num_flows("uft", In), 0);
+    assert_eq!(g1_port.num_flows("uft", Out), 1);
 
-    let (_gbytes, gblock) = next_block(&gbytes);
-    let pcap_pkt = Packet::copy(gblock.data).parse().unwrap();
-    assert_hg!(pkt.headers().inner, pcap_pkt.headers().inner);
-    assert_eq!(pkt.all_bytes(), gblock.data);
-
-    // ================================================================
-    // Expiration
-    // ================================================================
-
-    // Verify that the flow is still valid when it should be.
-    port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0));
-    assert_eq!(port.num_flows("dyn-nat4", In), 0);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 0);
-    assert_eq!(port.num_flows("firewall", In), 1);
-    assert_eq!(port.num_flows("firewall", Out), 1);
-
-    // Verify the flow is expired when it should be.
-    port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64 + 1, 0));
-    assert_eq!(port.num_flows("dyn-nat4", In), 0);
-    assert_eq!(port.num_flows("dyn-nat4", Out), 0);
-    assert_eq!(port.num_flows("firewall", In), 0);
-    assert_eq!(port.num_flows("firewall", Out), 0);
+    g1_port
+        .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64 + 1, 0));
+    assert_eq!(g1_port.num_flows("firewall", In), 0);
+    assert_eq!(g1_port.num_flows("firewall", Out), 0);
+    assert_eq!(g1_port.num_flows("uft", In), 0);
+    assert_eq!(g1_port.num_flows("uft", Out), 0);
 }

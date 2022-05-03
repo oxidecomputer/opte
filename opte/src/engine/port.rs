@@ -5,6 +5,7 @@
 // Copyright 2022 Oxide Computer Company
 
 /// A virtual switch port.
+use core::fmt::{self, Display};
 use core::result;
 
 cfg_if! {
@@ -42,6 +43,7 @@ pub type Result<T> = result::Result<T, OpteError>;
 
 #[derive(Debug)]
 pub enum ProcessError {
+    BadState(PortState),
     Layer(LayerError),
     WriteError(super::packet::WriteError),
 }
@@ -82,169 +84,17 @@ pub enum DropReason {
     TcpClosed,
 }
 
-pub trait PortState {}
-
-pub struct Inactive {
-    layers: KMutex<Vec<Layer>>,
-}
-
-pub struct Active {
-    // TODO: Could I use const generics here in order to use array instead?
-    layers: Vec<Layer>,
-    uft_in: KMutex<FlowTable<Vec<HT>>>,
-    uft_out: KMutex<FlowTable<Vec<HT>>>,
-    // We keep a record of the inbound UFID in the TCP flow table so
-    // that we know which inbound UFT/FT entries to retire upon
-    // connection termination.
-    tcp_flows: KMutex<FlowTable<TcpFlowEntryState>>,
-}
-
-impl PortState for Inactive {}
-impl PortState for Active {}
-
-pub struct Port<S: PortState> {
-    state: S,
+pub struct PortBuilder {
     ectx: Arc<ExecCtx>,
     name: String,
     // Cache the CString version of the name for use with DTrace
     // probes.
     name_cstr: CString,
     mac: EtherAddr,
+    layers: KMutex<Vec<Layer>>,
 }
 
-impl<S: PortState> Port<S> {
-    pub fn mac_addr(&self) -> EtherAddr {
-        self.mac
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn name_cstr(&self) -> &CString {
-        &self.name_cstr
-    }
-
-    pub fn port_process_entry_probe<P: PacketState>(
-        &self,
-        dir: Direction,
-        ifid: &InnerFlowId,
-        pkt: &Packet<P>,
-    ) {
-        cfg_if::cfg_if! {
-            if #[cfg(all(not(feature = "std"), not(test)))] {
-                let ifid_arg = flow_id_sdt_arg::from(ifid);
-
-                unsafe {
-                    __dtrace_probe_port__process__entry(
-                        dir.cstr_raw() as uintptr_t,
-                        self.name_cstr.as_ptr() as uintptr_t,
-                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
-                        pkt.mblk_addr(),
-                    );
-                }
-            } else if #[cfg(feature = "usdt")] {
-                use std::arch::asm;
-
-                let ifid_s = ifid.to_string();
-                crate::opte_provider::port__process__entry!(
-                    || (dir, &self.name, ifid_s, pkt.mblk_addr())
-                );
-            } else {
-                let (_, _, _) = (dir, ifid, pkt);
-            }
-        }
-    }
-
-    pub fn port_process_return_probe<P: PacketState>(
-        &self,
-        dir: Direction,
-        ifid: &InnerFlowId,
-        pkt: &Packet<P>,
-        res: &result::Result<ProcessResult, ProcessError>,
-    ) {
-        cfg_if! {
-            if #[cfg(all(not(feature = "std"), not(test)))] {
-                let ifid_arg = flow_id_sdt_arg::from(ifid);
-                // XXX This would probably be better as separate probes;
-                // for now this does the trick.
-                let res_str = match res {
-                    Ok(v) => format!("{:?}", v),
-                    Err(e) => format!("ERROR: {:?}", e),
-                };
-                let res_arg = cstr_core::CString::new(res_str).unwrap();
-
-                unsafe {
-                    __dtrace_probe_port__process__return(
-                        dir.cstr_raw() as uintptr_t,
-                        self.name_cstr.as_ptr() as uintptr_t,
-                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
-                        pkt.mblk_addr(),
-                        res_arg.as_ptr() as uintptr_t,
-                    );
-                }
-
-            } else if #[cfg(feature = "usdt")] {
-                use std::arch::asm;
-
-                let ifid_s = ifid.to_string();
-                let res_str = match res {
-                    Ok(v) => format!("{:?}", v),
-                    Err(e) => format!("ERROR: {:?}", e),
-                };
-
-                crate::opte_provider::port__process__return!(
-                    || (dir, &self.name, ifid_s, pkt.mblk_addr(), res_str)
-                );
-            } else {
-                let (_, _, _, _) = (dir, ifid, pkt, res);
-            }
-        }
-    }
-}
-
-impl Port<Inactive> {
-    pub fn activate(self) -> Port<Active> {
-        Port {
-            state: Active {
-                // An active port's layer pipeline is immutable, thus
-                // we move the layers out of the mutex.
-                layers: self.state.layers.into_inner(),
-                uft_in: KMutex::new(
-                    FlowTable::new(
-                        &self.name,
-                        "uft_in",
-                        Some(UFT_DEF_MAX_ENTIRES),
-                        None,
-                    ),
-                    KMutexType::Driver,
-                ),
-                uft_out: KMutex::new(
-                    FlowTable::new(
-                        &self.name,
-                        "uft_out",
-                        Some(UFT_DEF_MAX_ENTIRES),
-                        None,
-                    ),
-                    KMutexType::Driver,
-                ),
-                tcp_flows: KMutex::new(
-                    FlowTable::new(
-                        &self.name,
-                        "tcp_flows",
-                        Some(UFT_DEF_MAX_ENTIRES),
-                        None,
-                    ),
-                    KMutexType::Driver,
-                ),
-            },
-            name: self.name,
-            name_cstr: self.name_cstr,
-            mac: self.mac,
-            ectx: self.ectx,
-        }
-    }
-
+impl PortBuilder {
     /// Add a new layer to the pipeline. The position may be first,
     /// last, or relative to another layer. The position is based on
     /// the outbound direction. The first layer is the first to see
@@ -255,7 +105,7 @@ impl Port<Inactive> {
         new_layer: Layer,
         pos: Pos,
     ) -> result::Result<(), OpteError> {
-        let mut lock = self.state.layers.lock();
+        let mut lock = self.layers.lock();
 
         match pos {
             Pos::Last => {
@@ -301,9 +151,7 @@ impl Port<Inactive> {
         dir: Direction,
         rule: Rule<Finalized>,
     ) -> result::Result<(), OpteError> {
-        let lock = self.state.layers.lock();
-
-        for layer in &*lock {
+        for layer in &*self.layers.lock() {
             if layer.name() == layer_name {
                 layer.add_rule(dir, rule);
                 return Ok(());
@@ -313,10 +161,50 @@ impl Port<Inactive> {
         Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
 
+    pub fn create(self) -> Port {
+        Port {
+            name: self.name.clone(),
+            name_cstr: self.name_cstr,
+            mac: self.mac,
+            ectx: self.ectx,
+            state: KMutex::new(PortState::Ready, KMutexType::Driver),
+            // At this point the layer pipeline is immutable, thus we
+            // move the layers out of the mutex.
+            layers: self.layers.into_inner(),
+            uft_in: KMutex::new(
+                FlowTable::new(
+                    &self.name,
+                    "uft_in",
+                    Some(UFT_DEF_MAX_ENTIRES),
+                    None,
+                ),
+                KMutexType::Driver,
+            ),
+            uft_out: KMutex::new(
+                FlowTable::new(
+                    &self.name,
+                    "uft_out",
+                    Some(UFT_DEF_MAX_ENTIRES),
+                    None,
+                ),
+                KMutexType::Driver,
+            ),
+            tcp_flows: KMutex::new(
+                FlowTable::new(
+                    &self.name,
+                    "tcp_flows",
+                    Some(UFT_DEF_MAX_ENTIRES),
+                    None,
+                ),
+                KMutexType::Driver,
+            ),
+        }
+    }
+
     /// List each [`Layer`] under this port.
     pub fn list_layers(&self) -> ioctl::ListLayersResp {
         let mut tmp = vec![];
-        let lock = self.state.layers.lock();
+        let lock = self.layers.lock();
 
         for layer in lock.iter() {
             tmp.push(ioctl::LayerDesc {
@@ -331,27 +219,30 @@ impl Port<Inactive> {
         ioctl::ListLayersResp { layers: tmp }
     }
 
+    /// Return the name of the port.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     pub fn new(
         name: &str,
         name_cstr: CString,
         mac: EtherAddr,
         ectx: Arc<ExecCtx>,
     ) -> Self {
-        Port {
-            state: Inactive {
-                layers: KMutex::new(Vec::new(), KMutexType::Driver),
-            },
+        PortBuilder {
             name: name.to_string(),
             name_cstr,
             mac,
             ectx,
+            layers: KMutex::new(Vec::new(), KMutexType::Driver),
         }
     }
 
     /// Remove the [`Layer`] registered under `name`, if such a layer
     /// exists.
     pub fn remove_layer(&self, name: &str) {
-        let mut lock = self.state.layers.lock();
+        let mut lock = self.layers.lock();
 
         for (i, layer) in lock.iter().enumerate() {
             if layer.name() == name {
@@ -362,21 +253,209 @@ impl Port<Inactive> {
     }
 }
 
+/// The current state of the [`Port`].
+///
+/// ```
+/// PortBuilder::create() -> Ready
+/// PortBuilder::restore() -> Restored
+///
+/// Ready -- mc_start() --> Running
+///
+/// Restored -- mc_start() --> Running
+///
+/// Running -- pause --> Paused
+/// Running -- mc_stop() --> Ready
+///
+/// Paused -- unpause --> Running
+/// Paused -- mc_stop() --> Ready
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PortState {
+    /// The port is configured with layers and rules, but has no flow
+    /// state. It is ready to enter the [`Running`] state to start
+    /// handling traffic.
+    ///
+    /// This state may be entered from:
+    ///
+    /// * [`PortBuilder::create()`]
+    /// * [`Self::Running`]: The transition wipes the flow state.
+    /// * [`Self::Stopped`]: The transition wipes the flow state.
+    Ready,
+
+    /// The port is running and packets are free to travel across the
+    /// port. Rules may be added or removed while running.
+    ///
+    /// This state may be entered from:
+    ///
+    /// * [`Self::Ready`]
+    /// * [`Self::Stopped`]
+    /// * [`Self::Restored`]
+    Running,
+
+    /// The port is paused. The layers and rules are intact as well as
+    /// the flow state. However, any inbound or outbound packets are
+    /// dropped.
+    ///
+    /// XXX This state isn't used yet; and I don't actually quite yet
+    /// know how we want to do this. E.g., perhaps pause/resume should
+    /// really be a mac abstraction with defined callbacks?
+    ///
+    /// This state may be entered from:
+    ///
+    /// * [`Self::Running`]
+    Paused,
+
+    /// The port has been restored from a saved state. This includes
+    /// layers and rules as well as the flow state.
+    ///
+    /// XXX This state isn't used yet.
+    ///
+    /// This state may be entered from:
+    ///
+    /// * [`PortBuilder::restore()`]
+    Restored,
+}
+
+impl Display for PortState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use PortState::*;
+
+        let s = match self {
+            Ready => "ready",
+            Running => "running",
+            Paused => "paused",
+            Restored => "restored",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum DumpLayerError {
     LayerNotFound,
 }
 
-impl Port<Active> {
-    /// Add a new `Rule` to the layer named by `layer`, if such a
-    /// layer exists. Otherwise, return an error.
+pub struct Port {
+    state: KMutex<PortState>,
+    ectx: Arc<ExecCtx>,
+    name: String,
+    // Cache the CString version of the name for use with DTrace
+    // probes.
+    name_cstr: CString,
+    mac: EtherAddr,
+    // TODO: Could I use const generics here in order to use array instead?
+    layers: Vec<Layer>,
+    uft_in: KMutex<FlowTable<Vec<HT>>>,
+    uft_out: KMutex<FlowTable<Vec<HT>>>,
+    // We keep a record of the inbound UFID in the TCP flow table so
+    // that we know which inbound UFT/FT entries to retire upon
+    // connection termination.
+    tcp_flows: KMutex<FlowTable<TcpFlowEntryState>>,
+}
+
+// Convert:
+//
+// ```
+// check_state!(state, [Running, Paused])?;
+// ```
+//
+// to:
+//
+//
+// ```
+// if *state != Running && *state != Paused {
+//     Err(ProcessError::BadState(*state_guard))
+// } else {
+//     Ok(())
+// }
+// ```
+macro_rules! check_state {
+    ( $sg:expr, [ $( $state:expr ),* ] ) => {
+        if $( *$sg != $state )&&* {
+            Err(OpteError::BadState)
+        } else {
+            Ok(())
+        }
+    };
+
+    // Trailing comma after state list (because check_state! call
+    // spans multiple lines).
+    ( $sg:expr, [ $( $state:expr ),* ], ) => {
+        check_state!($sg, [$( $state ),*])
+    };
+
+    // Trailing comma in state list.
+    ( $sg:expr, [ $( $state:expr ),+ ,] ) => {
+        check_state!($sg, [$( $state ),*])
+    };
+}
+
+impl Port {
+    /// Place the port in the [`PortState::Running`] state.
+    ///
+    /// After completion the port can receive packets for processing.
+    ///
+    /// # States
+    ///
+    /// This command is valid for all states. If the port is already
+    /// in the running state, this is a no op.
+    pub fn start(&self) {
+        let mut state = self.state.lock();
+        *state = PortState::Running;
+    }
+
+    /// Reset the port.
+    ///
+    /// A reset wipes all accumulated Layer and Unified flow state
+    /// tracking as well as TCP state tracking. But it leaves the
+    /// configuration, i.e. the layers and rules, as they are.
+    pub fn reset(&self) {
+        // It's imperative to hold the lock for the entire function so
+        // that its side effects are atomic from the point of view of
+        // other threads.
+        let mut state = self.state.lock();
+        *state = PortState::Ready;
+
+        // Clear all dynamic state related to the creation of flows.
+        for layer in &*self.layers {
+            layer.clear_flows();
+        }
+
+        self.clear_uft();
+        self.tcp_flows.lock().clear();
+    }
+
+    /// Get the current [`PortState`].
+    pub fn state(&self) -> PortState {
+        *self.state.lock()
+    }
+
+    /// Add a new `Rule` to the layer named by `layer`.
+    ///
+    /// # Errors
+    ///
+    /// If the layer does not exist, an error is returned.
+    ///
+    /// # States
+    ///
+    /// This command is valid for the following states:
+    ///
+    /// * [`PortState::Ready`]
+    /// * [`PortState::Running`]
+    /// * [`PortState::Paused`]
     pub fn add_rule(
         &self,
         layer_name: &str,
         dir: Direction,
         rule: Rule<Finalized>,
-    ) -> result::Result<(), OpteError> {
-        for layer in &*self.state.layers {
+    ) -> Result<()> {
+        let state = self.state.lock();
+        check_state!(
+            state,
+            [PortState::Ready, PortState::Running, PortState::Paused]
+        )?;
+
+        for layer in &*self.layers {
             if layer.name() == layer_name {
                 layer.add_rule(dir, rule);
                 return Ok(());
@@ -412,17 +491,18 @@ impl Port<Active> {
         super::err(format!("mblk: {}", pkt.mblk_ptr_str()));
         super::err(format!("ifid: {}", ifid));
         // super::err(format!("meta: {:?}", meta));
-        super::err(format!("flows: {:?}", *self.state.tcp_flows.lock(),));
+        super::err(format!("flows: {:?}", *self.tcp_flows.lock(),));
         todo!("bad packet: {}", msg);
     }
 
     /// Dump the contents of the layer named `name`, if such a layer
     /// exists.
-    pub fn dump_layer(
-        &self,
-        name: &str,
-    ) -> result::Result<ioctl::DumpLayerResp, OpteError> {
-        for l in &*self.state.layers {
+    ///
+    /// # States
+    ///
+    /// This command is valid for any [`PortState`].
+    pub fn dump_layer(&self, name: &str) -> Result<ioctl::DumpLayerResp> {
+        for l in &*self.layers {
             if l.name() == name {
                 return Ok(l.dump());
             }
@@ -432,50 +512,101 @@ impl Port<Active> {
     }
 
     /// Dump the contents of the TCP flow connection tracking table.
-    pub fn dump_tcp_flows(&self) -> ioctl::DumpTcpFlowsResp {
-        ioctl::DumpTcpFlowsResp { flows: self.state.tcp_flows.lock().dump() }
+    ///
+    /// # States
+    ///
+    /// This command is valid for the following states:
+    ///
+    /// * [`PortState::Running`]
+    /// * [`PortState::Paused`]
+    /// * [`PortState::Restored`]
+    pub fn dump_tcp_flows(&self) -> Result<ioctl::DumpTcpFlowsResp> {
+        let state = self.state.lock();
+        check_state!(
+            state,
+            [PortState::Running, PortState::Paused, PortState::Restored]
+        )?;
+
+        Ok(ioctl::DumpTcpFlowsResp { flows: self.tcp_flows.lock().dump() })
     }
 
+    /// Clear all entries from the Unified Flow Table (UFT).
+    ///
+    /// # States
+    ///
+    /// This command is valid for all states. In the case of
+    /// [`PortState::Ready`], there cannot possibly be any UFT entries
+    /// to clear; however, it causes no harm to allow calling this
+    /// function in said state in order to make the ergonomics better.
     pub fn clear_uft(&self) {
-        self.state.uft_in.lock().clear();
-        self.state.uft_out.lock().clear();
+        self.uft_in.lock().clear();
+        self.uft_out.lock().clear();
     }
 
-    /// Dump the contents of the Unified Flow Table.
-    pub fn dump_uft(&self) -> ioctl::DumpUftResp {
-        let in_lock = self.state.uft_in.lock();
+    /// Dump the contents of the Unified Flow Table (UFT).
+    ///
+    /// # States
+    ///
+    /// This command is valid for the following states:
+    ///
+    /// * [`PortState::Running`]
+    /// * [`PortState::Paused`]
+    /// * [`PortState::Restored`]
+    pub fn dump_uft(&self) -> Result<ioctl::DumpUftResp> {
+        let state = self.state.lock();
+
+        check_state!(
+            state,
+            [PortState::Running, PortState::Paused, PortState::Restored],
+        )?;
+
+        let in_lock = self.uft_in.lock();
         let uft_in_limit = in_lock.get_limit();
         let uft_in_num_flows = in_lock.num_flows();
         let uft_in = in_lock.dump();
         drop(in_lock);
 
-        let out_lock = self.state.uft_out.lock();
+        let out_lock = self.uft_out.lock();
         let uft_out_limit = out_lock.get_limit();
         let uft_out_num_flows = out_lock.num_flows();
         let uft_out = out_lock.dump();
         drop(out_lock);
 
-        ioctl::DumpUftResp {
+        Ok(ioctl::DumpUftResp {
             uft_in_limit,
             uft_in_num_flows,
             uft_in,
             uft_out_limit,
             uft_out_num_flows,
             uft_out,
-        }
+        })
     }
 
     /// Expire all flows whose TTL is overdue as of `now`.
+    ///
+    /// # States
+    ///
+    /// This command is valid for all states. In the case of
+    /// [`PortState::Ready`], there cannot possibly be any flows to
+    /// expire; however, it causes no harm to allow calling this
+    /// function in said state in order to make the ergonomics better.
     pub fn expire_flows(&self, now: Moment) {
-        for l in &self.state.layers {
+        for l in &self.layers {
             l.expire_flows(now);
         }
-        self.state.uft_in.lock().expire_flows(now);
-        self.state.uft_out.lock().expire_flows(now);
+        self.uft_in.lock().expire_flows(now);
+        self.uft_out.lock().expire_flows(now);
     }
 
+    /// Return a reference to the [`Action`] defined on the give
+    /// [`Layer`] at the given index. If the layer does not exist, or
+    /// has no action at that index, then `None` is returned.
+    ///
+    /// # States
+    ///
+    /// This command is valid for any [`PortState`].
     pub fn layer_action(&self, layer: &str, idx: usize) -> Option<&Action> {
-        for l in &*self.state.layers {
+        for l in &*self.layers {
             if l.name() == layer {
                 return l.action(idx);
             }
@@ -484,6 +615,114 @@ impl Port<Active> {
         None
     }
 
+    /// List each [`Layer`] under this port.
+    ///
+    /// # States
+    ///
+    /// This command is valid for any [`PortState`].
+    pub fn list_layers(&self) -> ioctl::ListLayersResp {
+        let mut tmp = vec![];
+
+        for layer in &*self.layers {
+            tmp.push(ioctl::LayerDesc {
+                name: layer.name().to_string(),
+                rules_in: layer.num_rules(Direction::In),
+                rules_out: layer.num_rules(Direction::Out),
+                flows_in: layer.num_flows(Direction::In),
+                flows_out: layer.num_flows(Direction::Out),
+            });
+        }
+
+        ioctl::ListLayersResp { layers: tmp }
+    }
+
+    /// Return the MAC address of this port.
+    pub fn mac_addr(&self) -> EtherAddr {
+        self.mac
+    }
+
+    /// Return the name of the port.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Return the name of the port as a CString.
+    pub fn name_cstr(&self) -> &CString {
+        &self.name_cstr
+    }
+
+    /// Process the packet.
+    ///
+    /// # States
+    ///
+    /// This command is valid only for [`PortState::Running`].
+    pub fn process(
+        &self,
+        dir: Direction,
+        pkt: &mut Packet<Parsed>,
+        meta: &mut meta::Meta,
+    ) -> result::Result<ProcessResult, ProcessError> {
+        // XXX Yes, we are holding this mutex on all admin calls as
+        // well. This means admin and datapath block each other --
+        // this is not great. Given that we only have the `mc_start()`
+        // and `mc_stop()` transitions to worry about, we drop the lock
+        // directly after checking the state, as we know there is no
+        // chance for a state transition unless the client is closing
+        // its handle to us. However, this brings up a much larger
+        // area of concern that needs to be figured out: and that is
+        // how to perform serialization/synchronization between admin
+        // commands and datapath. E.g., mac deals with these concerns
+        // via the "mac perimeter" along with per-CPU reference
+        // counting and flags. Given that OPTE is currently meant to
+        // only run as part of a mac provider, it is already taking
+        // advantage of some of this synchronization implicitly.
+        // However, the admin ioctls (via DLD) are currently not
+        // holding the mac perimeter, and thus present an area for
+        // problems. Furthermore, how do we want to do pause/resume,
+        // save/restore? Should these be first class operations in the
+        // mac framework? If not, are there other mac APIs we need to
+        // properly support pause/resume in OPTE while still playing
+        // nicely with mac?
+        let state = self.state.lock();
+        check_state!(state, [PortState::Running])
+            .map_err(|_| ProcessError::BadState(*state))?;
+        drop(state);
+
+        let ifid = InnerFlowId::from(pkt.meta());
+        self.port_process_entry_probe(dir, &ifid, &pkt);
+        let res = match dir {
+            Direction::Out => self.process_out(&ifid, pkt, meta),
+            Direction::In => self.process_in(&ifid, pkt, meta),
+        };
+        self.port_process_return_probe(dir, &ifid, &pkt, &res);
+        // XXX If this is a Hairpin result there is no need for this call.
+        pkt.emit_headers()?;
+        res
+    }
+
+    /// Remove the rule identified by the `dir`, `layer_name`, `id`
+    /// combination, if such a rule exists.
+    pub fn remove_rule(
+        &self,
+        layer_name: &str,
+        dir: Direction,
+        id: RuleId,
+    ) -> Result<()> {
+        for layer in &self.layers {
+            if layer.name() == layer_name {
+                if layer.remove_rule(dir, id).is_err() {
+                    return Err(OpteError::RuleNotFound(id));
+                }
+            }
+        }
+
+        Err(OpteError::LayerNotFound(layer_name.to_string()))
+    }
+}
+
+// Keeping the private functions here just for the sake of code
+// organization.
+impl Port {
     // Process the packet against each layer in turn. If `Allow` is
     // returned, then `meta` contains the updated metadata, and `hts`
     // contains the list of HTs run against the metadata.
@@ -505,7 +744,7 @@ impl Port<Active> {
     ) -> result::Result<LayerResult, LayerError> {
         match dir {
             Direction::Out => {
-                for layer in &self.state.layers {
+                for layer in &self.layers {
                     match layer.process(&self.ectx, dir, pkt, hts, meta) {
                         Ok(LayerResult::Allow) => (),
                         ret @ Ok(LayerResult::Deny { .. }) => return ret,
@@ -516,7 +755,7 @@ impl Port<Active> {
             }
 
             Direction::In => {
-                for layer in self.state.layers.iter().rev() {
+                for layer in self.layers.iter().rev() {
                     match layer.process(&self.ectx, dir, pkt, hts, meta) {
                         Ok(LayerResult::Allow) => (),
                         ret @ Ok(LayerResult::Deny { .. }) => return ret,
@@ -530,40 +769,81 @@ impl Port<Active> {
         return Ok(LayerResult::Allow);
     }
 
-    /// List each [`Layer`] under this port.
-    pub fn list_layers(&self) -> ioctl::ListLayersResp {
-        let mut tmp = vec![];
-
-        for layer in &*self.state.layers {
-            tmp.push(ioctl::LayerDesc {
-                name: layer.name().to_string(),
-                rules_in: layer.num_rules(Direction::In),
-                rules_out: layer.num_rules(Direction::Out),
-                flows_in: layer.num_flows(Direction::In),
-                flows_out: layer.num_flows(Direction::Out),
-            });
-        }
-
-        ioctl::ListLayersResp { layers: tmp }
-    }
-
-    /// Process the packet.
-    pub fn process(
+    fn port_process_entry_probe<P: PacketState>(
         &self,
         dir: Direction,
-        pkt: &mut Packet<Parsed>,
-        meta: &mut meta::Meta,
-    ) -> result::Result<ProcessResult, ProcessError> {
-        let ifid = InnerFlowId::from(pkt.meta());
-        self.port_process_entry_probe(dir, &ifid, &pkt);
-        let res = match dir {
-            Direction::Out => self.process_out(&ifid, pkt, meta),
-            Direction::In => self.process_in(&ifid, pkt, meta),
-        };
-        self.port_process_return_probe(dir, &ifid, &pkt, &res);
-        // XXX If this is a Hairpin result there is no need for this call.
-        pkt.emit_headers()?;
-        res
+        ifid: &InnerFlowId,
+        pkt: &Packet<P>,
+    ) {
+        cfg_if::cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let ifid_arg = flow_id_sdt_arg::from(ifid);
+
+                unsafe {
+                    __dtrace_probe_port__process__entry(
+                        dir.cstr_raw() as uintptr_t,
+                        self.name_cstr.as_ptr() as uintptr_t,
+                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        pkt.mblk_addr(),
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                use std::arch::asm;
+
+                let ifid_s = ifid.to_string();
+                crate::opte_provider::port__process__entry!(
+                    || (dir, &self.name, ifid_s, pkt.mblk_addr())
+                );
+            } else {
+                let (_, _, _) = (dir, ifid, pkt);
+            }
+        }
+    }
+
+    fn port_process_return_probe<P: PacketState>(
+        &self,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        pkt: &Packet<P>,
+        res: &result::Result<ProcessResult, ProcessError>,
+    ) {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let ifid_arg = flow_id_sdt_arg::from(ifid);
+                // XXX This would probably be better as separate probes;
+                // for now this does the trick.
+                let res_str = match res {
+                    Ok(v) => format!("{:?}", v),
+                    Err(e) => format!("ERROR: {:?}", e),
+                };
+                let res_arg = cstr_core::CString::new(res_str).unwrap();
+
+                unsafe {
+                    __dtrace_probe_port__process__return(
+                        dir.cstr_raw() as uintptr_t,
+                        self.name_cstr.as_ptr() as uintptr_t,
+                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        pkt.mblk_addr(),
+                        res_arg.as_ptr() as uintptr_t,
+                    );
+                }
+
+            } else if #[cfg(feature = "usdt")] {
+                use std::arch::asm;
+
+                let ifid_s = ifid.to_string();
+                let res_str = match res {
+                    Ok(v) => format!("{:?}", v),
+                    Err(e) => format!("ERROR: {:?}", e),
+                };
+
+                crate::opte_provider::port__process__return!(
+                    || (dir, &self.name, ifid_s, pkt.mblk_addr(), res_str)
+                );
+            } else {
+                let (_, _, _, _) = (dir, ifid, pkt, res);
+            }
+        }
     }
 
     // Process the TCP packet for the purposes of connection tracking
@@ -579,7 +859,7 @@ impl Port<Active> {
         // ID, therefore we take the dual.
         let ifid_after = InnerFlowId::from(meta).dual();
         let tcp = meta.inner_tcp().unwrap();
-        let mut lock = self.state.tcp_flows.lock();
+        let mut lock = self.tcp_flows.lock();
 
         let tcp_state = match lock.get_mut(&ifid_after) {
             Some(entry) => {
@@ -627,7 +907,7 @@ impl Port<Active> {
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we take the dual.
         let ifid_after = InnerFlowId::from(meta).dual();
-        let mut lock = self.state.tcp_flows.lock();
+        let mut lock = self.tcp_flows.lock();
         let tcp = meta.inner_tcp().unwrap();
 
         let tcp_state = match lock.get_mut(&ifid_after) {
@@ -693,7 +973,7 @@ impl Port<Active> {
         Ok(tcp_state)
     }
 
-    pub fn process_in(
+    fn process_in(
         &self,
         ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
@@ -725,7 +1005,7 @@ impl Port<Active> {
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        match self.state.uft_in.lock().get_mut(&ifid) {
+        match self.uft_in.lock().get_mut(&ifid) {
             Some(entry) => {
                 entry.hit();
                 for ht in entry.state() {
@@ -773,7 +1053,7 @@ impl Port<Active> {
         match res {
             Ok(LayerResult::Allow) => {
                 // TODO kill unwrapx
-                self.state.uft_in.lock().add(ifid.clone(), hts).unwrap();
+                self.uft_in.lock().add(ifid.clone(), hts).unwrap();
 
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
@@ -821,7 +1101,7 @@ impl Port<Active> {
         ifid: &InnerFlowId,
         meta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
-        let mut lock = self.state.tcp_flows.lock();
+        let mut lock = self.tcp_flows.lock();
 
         let tcp_state = match lock.get_mut(&ifid) {
             Some(entry) => {
@@ -867,7 +1147,7 @@ impl Port<Active> {
         meta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
         let tcp = meta.inner_tcp().unwrap();
-        let mut lock = self.state.tcp_flows.lock();
+        let mut lock = self.tcp_flows.lock();
 
         let tcp_state = match lock.get_mut(&ifid) {
             // We may have already created a TCP flow entry
@@ -925,7 +1205,7 @@ impl Port<Active> {
         Ok(tcp_state)
     }
 
-    pub fn process_out(
+    fn process_out(
         &self,
         ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
@@ -957,7 +1237,7 @@ impl Port<Active> {
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        match self.state.uft_out.lock().get_mut(&ifid) {
+        match self.uft_out.lock().get_mut(&ifid) {
             Some(entry) => {
                 entry.hit();
 
@@ -1026,7 +1306,7 @@ impl Port<Active> {
         match res {
             Ok(LayerResult::Allow) => {
                 // TODO kill unwrap
-                self.state.uft_out.lock().add(ifid.clone(), hts).unwrap();
+                self.uft_out.lock().add(ifid.clone(), hts).unwrap();
                 Ok(ProcessResult::Modified)
             }
 
@@ -1041,32 +1321,13 @@ impl Port<Active> {
             Err(e) => Err(ProcessError::Layer(e)),
         }
     }
-
-    /// Remove the rule identified by the `dir`, `layer_name`, `id`
-    /// combination, if such a rule exists.
-    pub fn remove_rule(
-        &self,
-        layer_name: &str,
-        dir: Direction,
-        id: RuleId,
-    ) -> result::Result<(), OpteError> {
-        for layer in &self.state.layers {
-            if layer.name() == layer_name {
-                if layer.remove_rule(dir, id).is_err() {
-                    return Err(OpteError::RuleNotFound(id));
-                }
-            }
-        }
-
-        Err(OpteError::LayerNotFound(layer_name.to_string()))
-    }
 }
 
 // The follow functions are useful for validating state during
 // testing. If one of these functions becomes useful outside of
 // testing, then add it to the impl block above.
 #[cfg(test)]
-impl Port<Active> {
+impl Port {
     /// Get the number of flows currently in the layer and direction
     /// specified. The value `"uft"` can be used to get the number of
     /// UFT flows.
@@ -1074,12 +1335,26 @@ impl Port<Active> {
         use Direction::*;
 
         match (layer, dir) {
-            ("uft", In) => self.state.uft_in.lock().num_flows(),
-            ("uft", Out) => self.state.uft_out.lock().num_flows(),
+            ("uft", In) => self.uft_in.lock().num_flows(),
+            ("uft", Out) => self.uft_out.lock().num_flows(),
             (name, dir) => {
-                for layer in &self.state.layers {
+                for layer in &self.layers {
                     if layer.name() == name {
                         return layer.num_flows(dir);
+                    }
+                }
+
+                panic!("layer not found: {}", name);
+            }
+        }
+    }
+
+    pub fn num_rules(&self, layer: &str, dir: Direction) -> u32 {
+        match (layer, dir) {
+            (name, dir) => {
+                for layer in &self.layers {
+                    if layer.name() == name {
+                        return layer.num_rules(dir) as u32;
                     }
                 }
 
