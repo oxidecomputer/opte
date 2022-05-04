@@ -8,6 +8,16 @@
 #:   "/out/*",
 #: ]
 #:
+#: [[publish]]
+#: series = "repo"
+#: name = "opte.p5p"
+#: from_output = "/out/opte.p5p"
+#:
+#: [[publish]]
+#: series = "repo"
+#: name = "opte.p5p.sha256"
+#: from_output = "/out/opte.p5p.sha256"
+#:
 
 set -o errexit
 set -o pipefail
@@ -57,7 +67,6 @@ pushd pkg
 banner copy
 pfexec mkdir -p /out
 pfexec chown "$UID" /out
-mv packages/repo/*.p5p /out/
-
-PKG_NAME="/out/$(ls -1 "/out/" | head -1)"
+PKG_NAME="/out/opte.p5p"
+mv packages/repo/*.p5p "$PKG_NAME"
 sha256sum "$PKG_NAME" > "$PKG_NAME.sha256"
