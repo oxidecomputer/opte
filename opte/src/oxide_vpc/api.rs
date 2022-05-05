@@ -219,8 +219,7 @@ impl FromStr for FirewallRule {
             return Err(format!("missing 'priority' key"));
         }
 
-        let mut filters = Filters::new();
-        filters
+        let filters = Filters::new()
             .set_hosts(hosts.unwrap_or(Address::Any))
             .set_protocol(protocol.unwrap_or(ProtoFilter::Any))
             .set_ports(ports.unwrap_or(Ports::Any));
@@ -296,25 +295,22 @@ impl Filters {
         self.protocol
     }
 
-    pub fn set_hosts<H: Into<Address>>(&mut self, hosts: H) -> &mut Self {
+    pub fn set_hosts<H: Into<Address>>(mut self, hosts: H) -> Self {
         self.hosts = hosts.into();
         self
     }
 
-    pub fn set_protocol<P: Into<ProtoFilter>>(
-        &mut self,
-        proto: P,
-    ) -> &mut Self {
+    pub fn set_protocol<P: Into<ProtoFilter>>(mut self, proto: P) -> Self {
         self.protocol = proto.into();
         self
     }
 
-    pub fn set_ports<P: Into<Ports>>(&mut self, ports: P) -> &mut Self {
+    pub fn set_ports<P: Into<Ports>>(mut self, ports: P) -> Self {
         self.ports = ports.into();
         self
     }
 
-    pub fn set_port(&mut self, port: u16) -> &mut Self {
+    pub fn set_port(mut self, port: u16) -> Self {
         self.ports = Ports::PortList(vec![port]);
         self
     }

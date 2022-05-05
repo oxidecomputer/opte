@@ -9,7 +9,8 @@ use opte::api::{
     SetXdeUnderlayReq, Vni, API_VERSION, XDE_DLD_OPTE_CMD,
 };
 use opte::oxide_vpc::api::{
-    AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, SetVirt2PhysReq,
+    AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
+    RemFwRuleReq, SetVirt2PhysReq,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -156,6 +157,22 @@ impl OpteHdl {
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::AddRouterEntryIpv4;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+    }
+
+    pub fn add_firewall_rule(
+        &self,
+        req: &AddFwRuleReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::AddFwRule;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, req)
+    }
+
+    pub fn remove_firewall_rule(
+        &self,
+        req: &RemFwRuleReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::RemFwRule;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, req)
     }
 }
 

@@ -173,7 +173,6 @@ impl From<Filters> for FirewallFilters {
             .set_hosts(f.hosts)
             .set_protocol(f.protocol)
             .set_ports(f.ports)
-            .clone()
     }
 }
 
