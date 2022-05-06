@@ -71,8 +71,9 @@ pub const fn bit_on(bit: u8) -> u8 {
 #[cfg(feature = "usdt")]
 #[usdt::provider]
 mod opte_provider {
-    use crate::Direction;
+    use crate::api::Direction;
 
+    fn uft__invalidate(dir: Direction, port: &str, flow: &str, epoch: u64) {}
     fn flow__expired(port: &str, ft_name: &str, flow: &str) {}
     fn gen__desc__fail(
         port: &str,
@@ -117,6 +118,7 @@ mod opte_provider {
         dir: Direction,
         name: &str,
         ifid: &str,
+        epoch: u64,
         pkt: &illumos_sys_hdrs::uintptr_t,
     ) {
     }
@@ -124,7 +126,10 @@ mod opte_provider {
         dir: Direction,
         name: &str,
         ifid: &str,
+        epoch: u64,
         pkt: &illumos_sys_hdrs::uintptr_t,
+        // XXX there appears to be a bug for usdt on ARM macOS where
+        // arg5 always comes back NULL.
         res: &str,
     ) {
     }

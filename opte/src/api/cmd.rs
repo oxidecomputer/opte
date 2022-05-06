@@ -25,6 +25,7 @@ pub enum OpteCmd {
     ListPorts = 1,           // list all ports
     AddFwRule = 20,          // add firewall rule
     RemFwRule = 21,          // remove firewall rule
+    SetFwRules = 22,         // set/replace all firewall rules at once
     DumpTcpFlows = 30,       // dump TCP flows
     DumpLayer = 31,          // dump the specified Layer
     DumpUft = 32,            // dump the Unified Flow Table
@@ -46,6 +47,7 @@ impl TryFrom<c_int> for OpteCmd {
             1 => Ok(Self::ListPorts),
             20 => Ok(Self::AddFwRule),
             21 => Ok(Self::RemFwRule),
+            22 => Ok(Self::SetFwRules),
             30 => Ok(Self::DumpTcpFlows),
             31 => Ok(Self::DumpLayer),
             32 => Ok(Self::DumpUft),

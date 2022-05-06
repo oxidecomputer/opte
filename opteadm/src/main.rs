@@ -6,7 +6,10 @@
 
 #![feature(extern_types)]
 
+use std::fmt::Display;
+use std::io;
 use std::process::exit;
+use std::str::FromStr;
 
 use structopt::StructOpt;
 
@@ -93,6 +96,12 @@ enum Command {
         direction: Direction,
 
         id: u64,
+    },
+
+    /// Set/replace all firewall rules atomically
+    SetFwRules {
+        #[structopt(short)]
+        port: String,
     },
 
     /// Create an xde device
@@ -506,16 +515,16 @@ fn print_uft(resp: &api::DumpUftResp) {
     println!("");
 }
 
-fn die(error: Error) -> ! {
+fn die<E: Display>(error: E) -> ! {
     eprintln!("ERROR: {}", error);
     exit(1);
 }
 
-trait UnwrapOrDie<T, E> {
+trait UnwrapOrDie<T, E: Display> {
     fn unwrap_or_die(self) -> T;
 }
 
-impl<T> UnwrapOrDie<T, Error> for Result<T, Error> {
+impl<T, E: Display> UnwrapOrDie<T, E> for Result<T, E> {
     fn unwrap_or_die(self) -> T {
         match self {
             Ok(val) => val,
@@ -577,6 +586,18 @@ fn main() {
                 priority,
             };
             hdl.add_firewall_rule(&port, &rule).unwrap_or_die();
+        }
+
+        Command::SetFwRules { port } => {
+            let mut rules = vec![];
+            for line in io::stdin().lines() {
+                let rule_str = line.unwrap_or_die();
+                let r = FirewallRule::from_str(&rule_str).unwrap_or_die();
+                rules.push(r);
+            }
+
+            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            hdl.set_firewall_rules(&port, rules).unwrap_or_die();
         }
 
         Command::CreateXde {

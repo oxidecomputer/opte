@@ -165,6 +165,12 @@ pub struct AddFwRuleReq {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct SetFwRulesReq {
+    pub port_name: String,
+    pub rules: Vec<FirewallRule>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RemFwRuleReq {
     pub port_name: String,
     pub dir: Direction,
@@ -205,13 +211,14 @@ impl FromStr for FirewallRule {
                 }
 
                 Some(("priority", val)) => {
-                    priority =
-                        Some(val.parse::<u16>().map_err(|e| e.to_string())?);
+                    priority = Some(val.parse::<u16>().map_err(|e| {
+                        format!("bad priroity: '{}' {}", val, e.to_string())
+                    })?);
                 }
 
                 // Parse the filters.
-                Some(("ip", _)) => {
-                    hosts = Some(token.parse::<Address>()?);
+                Some(("hosts", val)) => {
+                    hosts = Some(val.parse::<Address>()?);
                 }
 
                 Some(("protocol", val)) => {
@@ -414,7 +421,7 @@ impl FromStr for ProtoFilter {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "any" => Ok(ProtoFilter::Any),
-            "imcp" => Ok(ProtoFilter::Proto(Protocol::ICMP)),
+            "icmp" => Ok(ProtoFilter::Proto(Protocol::ICMP)),
             "tcp" => Ok(ProtoFilter::Proto(Protocol::TCP)),
             "udp" => Ok(ProtoFilter::Proto(Protocol::UDP)),
             _ => Err(format!("unknown protocol: {}", s)),

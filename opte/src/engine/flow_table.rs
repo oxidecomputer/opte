@@ -91,7 +91,7 @@ where
         let entry = FlowEntry::new(state);
         match self.map.insert(flow_id.clone(), entry) {
             None => Ok(()),
-            Some(_) => return Err(OpteError::FlowExists(flow_id.to_string())),
+            Some(_) => Err(OpteError::FlowExists(flow_id.to_string())),
         }
     }
 
@@ -158,6 +158,10 @@ where
         self.map.len() as u32
     }
 
+    pub fn remove(&mut self, flow: &InnerFlowId) -> Option<FlowEntry<S>> {
+        self.map.remove(flow)
+    }
+
     pub fn ttl(&self) -> Ttl {
         self.ttl
     }
@@ -176,8 +180,6 @@ fn flow_expired_probe(port: &CString, name: &CString, flowid: &InnerFlowId) {
                 );
             }
         } else if #[cfg(feature = "usdt")] {
-            use std::arch::asm;
-
             let port_s = port.to_str().unwrap();
             let name_s = name.to_str().unwrap();
             crate::opte_provider::flow__expired!(
@@ -255,6 +257,14 @@ extern "C" {
         port: uintptr_t,
         layer: uintptr_t,
         flowid: uintptr_t,
+    );
+
+    pub fn __dtrace_probe_ft__entry__invalidated(
+        dir: uintptr_t,
+        port: uintptr_t,
+        layer: uintptr_t,
+        ifid: uintptr_t,
+        epoch: uintptr_t,
     );
 }
 

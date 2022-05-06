@@ -47,7 +47,7 @@ use opte::engine::time::{Interval, Moment, Periodic};
 use opte::oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
     ListPortsReq, ListPortsResp, PhysNet, PortInfo, RemFwRuleReq,
-    SetVirt2PhysReq,
+    SetFwRulesReq, SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::{
     arp, dhcp4, dyn_nat4, firewall, icmp, overlay, router,
@@ -335,6 +335,11 @@ unsafe extern "C" fn xde_dld_ioc_opte_cmd(
             // freedom at this level and place that enforcement at the
             // control plane level.
             let resp = rem_fw_rule_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::SetFwRules => {
+            let resp = set_fw_rules_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
 
@@ -1851,6 +1856,20 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     };
 
     firewall::rem_fw_rule(&dev.port, &req)?;
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
+fn set_fw_rules_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: SetFwRulesReq = env.copy_in_req()?;
+    let devs = unsafe { xde_devs.read() };
+    let mut iter = devs.iter();
+    let dev = match iter.find(|x| x.devname == req.port_name) {
+        Some(dev) => dev,
+        None => return Err(OpteError::PortNotFound(req.port_name)),
+    };
+
+    firewall::set_fw_rules(&dev.port, &req)?;
     Ok(NoResp::default())
 }
 

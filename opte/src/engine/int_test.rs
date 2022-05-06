@@ -35,6 +35,7 @@ use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use zerocopy::AsBytes;
 
 use super::arp::{ArpEth4Payload, ArpEth4PayloadRaw, ArpHdrRaw, ARP_HDR_SZ};
+use super::checksum::HeaderChecksum;
 use super::ether::{
     EtherHdr, EtherHdrRaw, EtherMeta, EtherType, ETHER_HDR_SZ, ETHER_TYPE_ARP,
     ETHER_TYPE_IPV4,
@@ -42,19 +43,20 @@ use super::ether::{
 use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::geneve::{self, Vni};
 use super::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
-use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol};
+use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol, UlpCsumOpt};
 use super::ip6::Ipv6Addr;
 use super::packet::{
     Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
 };
 use super::port::meta::Meta;
 use super::port::{PortBuilder, ProcessError, ProcessResult};
-use super::tcp::TcpHdr;
+use super::rule::{self, Rule};
+use super::tcp::{TcpFlags, TcpHdr};
 use super::time::Moment;
 use super::udp::{UdpHdr, UdpMeta};
 use crate::api::{Direction::*, MacAddr};
 use crate::oxide_vpc::api::{
-    AddFwRuleReq, GuestPhysAddr, PhysNet, RouterTarget,
+    AddFwRuleReq, GuestPhysAddr, PhysNet, RouterTarget, SetFwRulesReq,
 };
 use crate::oxide_vpc::engine::overlay::{self, Virt2Phys};
 use crate::oxide_vpc::engine::{arp, dyn_nat4, firewall, icmp, router};
@@ -65,7 +67,15 @@ use ProcessResult::*;
 
 // I'm not sure if we've defined the MAC address OPTE uses to
 // masqurade as the guests gateway.
-pub const GW_MAC_ADDR: [u8; 6] = [0xA8, 0x40, 0x25, 0xFF, 0xFF, 0xFF];
+pub const GW_MAC_ADDR: [u8; 6] = [0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77];
+
+// If we are running `cargo test --feature=usdt`, then make sure to
+// register the USDT probes before running any tests.
+#[cfg(all(test, feature = "usdt"))]
+#[ctor::ctor]
+fn register_usdt() {
+    usdt::register_probes().unwrap();
+}
 
 #[allow(dead_code)]
 fn get_header(offset: &[u8]) -> (&[u8], PcapHeader) {
@@ -133,6 +143,13 @@ fn oxide_net_setup(name: &str, cfg: &PortCfg) -> PortBuilder {
     arp::setup(&mut pb, cfg).expect("failed to add ARP layer");
     router::setup(&mut pb, cfg).expect("failed to add router layer");
     overlay::setup(&mut pb, cfg).expect("failed to add overlay layer");
+
+    // Deny all inbound packets by default.
+    pb.add_rule("firewall", In, Rule::match_any(65535, rule::Action::Deny))
+        .unwrap();
+    // Allow all outbound by default.
+    let act = pb.layer_action("firewall", 0).unwrap();
+    pb.add_rule("firewall", Out, Rule::match_any(65535, act)).unwrap();
     pb
 }
 
@@ -202,10 +219,6 @@ fn g2_cfg() -> PortCfg {
 // I.e., test routing + encap/decap.
 #[test]
 fn port_transitions() {
-    use super::checksum::HeaderChecksum;
-    use super::ip4::UlpCsumOpt;
-    use super::tcp::TcpFlags;
-
     // ================================================================
     // Configure ports for g1 and g2.
     // ================================================================
@@ -280,10 +293,6 @@ fn port_transitions() {
 #[test]
 fn gateway_icmp4_ping() {
     use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
-
-    #[cfg(feature = "usdt")]
-    usdt::register_probes().unwrap();
-
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
     let g2_phys =
@@ -410,10 +419,6 @@ fn gateway_icmp4_ping() {
 // packet being dropped.
 #[test]
 fn overlay_guest_to_guest_no_route() {
-    use crate::engine::checksum::HeaderChecksum;
-    use crate::engine::ip4::UlpCsumOpt;
-    use crate::engine::tcp::TcpFlags;
-
     // ================================================================
     // Configure ports for g1 and g2.
     // ================================================================
@@ -466,10 +471,6 @@ fn overlay_guest_to_guest_no_route() {
 // I.e., test routing + encap/decap.
 #[test]
 fn overlay_guest_to_guest() {
-    use super::checksum::HeaderChecksum;
-    use super::ip4::UlpCsumOpt;
-    use super::tcp::TcpFlags;
-
     // ================================================================
     // Configure ports for g1 and g2.
     // ================================================================
@@ -692,10 +693,6 @@ fn overlay_guest_to_guest() {
 // communicate.
 #[test]
 fn guest_to_guest_diff_vpc_no_peer() {
-    use super::checksum::HeaderChecksum;
-    use super::ip4::UlpCsumOpt;
-    use super::tcp::TcpFlags;
-
     // ================================================================
     // Configure ports for g1 and g2. Place g1 on VNI 99 and g2 on VNI
     // 100.
@@ -792,10 +789,6 @@ fn guest_to_guest_diff_vpc_no_peer() {
 // Verify that a guest can communicate with the internet.
 #[test]
 fn overlay_guest_to_internet() {
-    use super::checksum::HeaderChecksum;
-    use super::ip4::UlpCsumOpt;
-    use super::tcp::TcpFlags;
-
     // ================================================================
     // Configure g1 port.
     // ================================================================
@@ -1055,10 +1048,6 @@ fn arp_gateway() {
 
 #[test]
 fn flow_expiration() {
-    use super::checksum::HeaderChecksum;
-    use super::ip4::UlpCsumOpt;
-    use super::tcp::TcpFlags;
-
     // ================================================================
     // Configure ports for g1 and g2.
     // ================================================================
@@ -1130,4 +1119,153 @@ fn flow_expiration() {
     assert_eq!(g1_port.num_flows("firewall", Out), 0);
     assert_eq!(g1_port.num_flows("uft", In), 0);
     assert_eq!(g1_port.num_flows("uft", Out), 0);
+}
+
+#[test]
+fn firewall_replace_rules() {
+    // ================================================================
+    // Configure ports for g1 and g2.
+    // ================================================================
+    let g1_cfg = g1_cfg();
+    let g2_cfg = g2_cfg();
+    let g2_phys =
+        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
+
+    // Add V2P mappings that allow guests to resolve each others
+    // physical addresses.
+    let v2p = Arc::new(Virt2Phys::new());
+    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    let mut port_meta = Meta::new();
+    port_meta.add(v2p.clone()).unwrap();
+
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    g1_port.start();
+
+    // Add router entry that allows Guest 1 to send to Guest 2.
+    router::add_entry(
+        &g1_port,
+        IpCidr::Ip4(g2_cfg.vpc_subnet.cidr()),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet.cidr())),
+    )
+    .unwrap();
+
+    let g2_port = oxide_net_setup("g2_port", &g2_cfg).create();
+    g2_port.start();
+
+    // Allow incoming TCP connection on g2 from anyone.
+    let rule = "dir=in action=allow priority=10 protocol=TCP";
+    firewall::add_fw_rule(
+        &g2_port,
+        &AddFwRuleReq {
+            port_name: g2_port.name().to_string(),
+            rule: rule.parse().unwrap(),
+        },
+    )
+    .unwrap();
+
+    // ================================================================
+    // Generate a telnet SYN packet from g1 to g2.
+    // ================================================================
+    let body = vec![];
+    let mut tcp = TcpHdr::new(7865, 23);
+    tcp.set_flags(TcpFlags::SYN);
+    tcp.set_seq(4224936861);
+    let mut ip4 =
+        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
+
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&eth.as_bytes());
+    bytes.extend_from_slice(&ip4.as_bytes());
+    bytes.extend_from_slice(&tcp.as_bytes());
+    bytes.extend_from_slice(&body);
+    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
+
+    // ================================================================
+    // Run the telnet SYN packet through g1's port in the outbound
+    // direction and verify if passes the firewall.
+    // ================================================================
+    let res = g1_port.process(Out, &mut g1_pkt, &mut port_meta);
+    assert!(matches!(res, Ok(Modified)));
+
+    // ================================================================
+    // Modify the outgoing ruleset, but still allow the traffic to
+    // pass. This test makes sure that flow table entries are updated
+    // without issue and everything still works.
+    //
+    // XXX It would be nice if tests could verify that a probe fires
+    // (in this case uft-invalidated) without using dtrace.
+    // ================================================================
+    let any_out = "dir=out action=deny priority=65535 protocol=any";
+    let tcp_out = "dir=out action=allow priority=1000 protocol=TCP";
+    firewall::set_fw_rules(
+        &g1_port,
+        &SetFwRulesReq {
+            port_name: g1_port.name().to_string(),
+            rules: vec![any_out.parse().unwrap(), tcp_out.parse().unwrap()],
+        },
+    )
+    .unwrap();
+    port_meta.clear();
+    port_meta.add(v2p.clone()).unwrap();
+    let mut g1_pkt2 = Packet::copy(&bytes).parse().unwrap();
+    let res = g1_port.process(Out, &mut g1_pkt2, &mut port_meta);
+    assert!(matches!(res, Ok(Modified)));
+
+    // ================================================================
+    // Now that the packet has been encap'd let's play the role of
+    // router and send this inbound to g2's port. For maximum fidelity
+    // of the real process we first dump the raw bytes of g1's
+    // outgoing packet and then reparse it.
+    // ================================================================
+    let mblk = g1_pkt.unwrap();
+    let mut g2_pkt =
+        unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
+    port_meta.clear();
+    port_meta.add(v2p).unwrap();
+    let res = g2_port.process(In, &mut g2_pkt, &mut port_meta);
+    assert!(matches!(res, Ok(Modified)));
+
+    // ================================================================
+    // Replace g2's firewall rule set to deny all inbound TCP traffic.
+    // Verify the rules have been replaced and retry processing of the
+    // g2_pkt, but this time it should be dropped.
+    // ================================================================
+    assert_eq!(g2_port.num_rules("firewall", In), 2);
+    assert_eq!(g2_port.num_flows("firewall", In), 1);
+    let new_rule = "dir=in action=deny priority=1000 protocol=TCP";
+    firewall::set_fw_rules(
+        &g2_port,
+        &SetFwRulesReq {
+            port_name: g2_port.name().to_string(),
+            rules: vec![new_rule.parse().unwrap()],
+        },
+    )
+    .unwrap();
+    assert_eq!(g2_port.num_rules("firewall", In), 1);
+    assert_eq!(g2_port.num_flows("firewall", In), 0);
+
+    // Need to create a new g2_pkt by re-running the process.
+    let mut g1_pkt3 = Packet::copy(&bytes).parse().unwrap();
+    let res = g1_port.process(Out, &mut g1_pkt3, &mut port_meta);
+    assert!(matches!(res, Ok(Modified)));
+    let mblk2 = g1_pkt3.unwrap();
+    let mut g2_pkt2 =
+        unsafe { Packet::<Initialized>::wrap(mblk2).parse().unwrap() };
+
+    // Verify the packet is dropped and that the firewall flow table
+    // entry (along with its dual) was invalidated.
+    let res = g2_port.process(In, &mut g2_pkt2, &mut port_meta);
+    use super::port::DropReason;
+    match res {
+        Ok(ProcessResult::Drop { reason: DropReason::Layer { name } }) => {
+            assert_eq!("firewall", name);
+        }
+
+        _ => panic!("expected drop but got: {:?}", res),
+    }
 }

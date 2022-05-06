@@ -7,6 +7,7 @@
 /// A virtual switch port.
 use core::fmt::{self, Display};
 use core::result;
+use core::sync::atomic::{AtomicU64, Ordering::SeqCst};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -168,6 +169,7 @@ impl PortBuilder {
             mac: self.mac,
             ectx: self.ectx,
             state: KMutex::new(PortState::Ready, KMutexType::Driver),
+            epoch: AtomicU64::new(1),
             // At this point the layer pipeline is immutable, thus we
             // move the layers out of the mutex.
             layers: self.layers.into_inner(),
@@ -199,6 +201,19 @@ impl PortBuilder {
                 KMutexType::Driver,
             ),
         }
+    }
+
+    /// Return a clone of the [`Action`] defined in the given
+    /// [`Layer`] at the given index. If the layer does not exist, or
+    /// has no action at that index, then `None` is returned.
+    pub fn layer_action(&self, layer: &str, idx: usize) -> Option<Action> {
+        for l in &*self.layers.lock() {
+            if l.name() == layer {
+                return l.action(idx).cloned();
+            }
+        }
+
+        None
     }
 
     /// List each [`Layer`] under this port.
@@ -335,8 +350,27 @@ pub enum DumpLayerError {
     LayerNotFound,
 }
 
+#[derive(Clone, Debug)]
+pub struct HtEntry {
+    hts: Vec<HT>,
+    // The port epoch upon which this entry was established. Used for
+    // invalidation when the rule set is updated.
+    epoch: u64,
+}
+
+impl StateSummary for HtEntry {
+    fn summary(&self) -> String {
+        self.hts
+            .iter()
+            .map(|ht| ht.to_string())
+            .collect::<Vec<String>>()
+            .join(",")
+    }
+}
+
 pub struct Port {
     state: KMutex<PortState>,
+    epoch: AtomicU64,
     ectx: Arc<ExecCtx>,
     name: String,
     // Cache the CString version of the name for use with DTrace
@@ -345,8 +379,8 @@ pub struct Port {
     mac: EtherAddr,
     // TODO: Could I use const generics here in order to use array instead?
     layers: Vec<Layer>,
-    uft_in: KMutex<FlowTable<Vec<HT>>>,
-    uft_out: KMutex<FlowTable<Vec<HT>>>,
+    uft_in: KMutex<FlowTable<HtEntry>>,
+    uft_out: KMutex<FlowTable<HtEntry>>,
     // We keep a record of the inbound UFID in the TCP flow table so
     // that we know which inbound UFT/FT entries to retire upon
     // connection termination.
@@ -432,6 +466,10 @@ impl Port {
 
     /// Add a new `Rule` to the layer named by `layer`.
     ///
+    /// The port's epoch is moved forward; flows processed after this
+    /// call will have their UFT entry invalidated and recomputed
+    /// lazily on the next packet to arrive.
+    ///
     /// # Errors
     ///
     /// If the layer does not exist, an error is returned.
@@ -440,9 +478,9 @@ impl Port {
     ///
     /// This command is valid for the following states:
     ///
+    /// * [`PortState::Paused`]
     /// * [`PortState::Ready`]
     /// * [`PortState::Running`]
-    /// * [`PortState::Paused`]
     pub fn add_rule(
         &self,
         layer_name: &str,
@@ -457,6 +495,7 @@ impl Port {
 
         for layer in &*self.layers {
             if layer.name() == layer_name {
+                self.epoch.fetch_add(1, SeqCst);
                 layer.add_rule(dir, rule);
                 return Ok(());
             }
@@ -598,7 +637,7 @@ impl Port {
         self.uft_out.lock().expire_flows(now);
     }
 
-    /// Return a reference to the [`Action`] defined on the give
+    /// Return a reference to the [`Action`] defined in the given
     /// [`Layer`] at the given index. If the layer does not exist, or
     /// has no action at that index, then `None` is returned.
     ///
@@ -689,12 +728,13 @@ impl Port {
         drop(state);
 
         let ifid = InnerFlowId::from(pkt.meta());
-        self.port_process_entry_probe(dir, &ifid, &pkt);
+        let epoch = self.epoch.load(SeqCst);
+        self.port_process_entry_probe(dir, &ifid, epoch, &pkt);
         let res = match dir {
-            Direction::Out => self.process_out(&ifid, pkt, meta),
-            Direction::In => self.process_in(&ifid, pkt, meta),
+            Direction::Out => self.process_out(&ifid, epoch, pkt, meta),
+            Direction::In => self.process_in(&ifid, epoch, pkt, meta),
         };
-        self.port_process_return_probe(dir, &ifid, &pkt, &res);
+        self.port_process_return_probe(dir, &ifid, epoch, &pkt, &res);
         // XXX If this is a Hairpin result there is no need for this call.
         pkt.emit_headers()?;
         res
@@ -702,17 +742,91 @@ impl Port {
 
     /// Remove the rule identified by the `dir`, `layer_name`, `id`
     /// combination, if such a rule exists.
+    ///
+    /// The port's epoch is moved forward; flows processed after this
+    /// call will have their UFT entry invalidated and recomputed
+    /// lazily on the next packet to arrive.
+    ///
+    /// # Errors
+    ///
+    /// If the layer does not exist, an error is returned.
+    ///
+    /// # States
+    ///
+    /// This command is valid for the following states:
+    ///
+    /// * [`PortState::Paused`]
+    /// * [`PortState::Ready`]
+    /// * [`PortState::Running`]
     pub fn remove_rule(
         &self,
         layer_name: &str,
         dir: Direction,
         id: RuleId,
     ) -> Result<()> {
+        let state = self.state.lock();
+        check_state!(
+            state,
+            [PortState::Paused, PortState::Ready, PortState::Running]
+        )?;
+
         for layer in &self.layers {
             if layer.name() == layer_name {
                 if layer.remove_rule(dir, id).is_err() {
                     return Err(OpteError::RuleNotFound(id));
                 }
+                // XXX There is a tiny window between the rule being
+                // removed and the epoch incremented. For now we don't
+                // worry about this as a few packets getting by with
+                // the old rule set is not a major issue. But in the
+                // future we could eliminate this window by passing a
+                // reference to the epoch to `Layer::remove_rule()`
+                // and let it perform the increment.
+                self.epoch.fetch_add(1, SeqCst);
+            }
+        }
+
+        Err(OpteError::LayerNotFound(layer_name.to_string()))
+    }
+
+    /// For the given layer, set both the inbound and outbound rules
+    /// atomically.
+    ///
+    /// This operation replaces the current inbound and outbound rule
+    /// sets with the ones passed as argument; it is not additive.
+    ///
+    /// The port's epoch is moved forward; flows processed after this
+    /// call will have their UFT entry invalidated and recomputed
+    /// lazily on the next packet to arrive.
+    ///
+    /// # Errors
+    ///
+    /// If the layer does not exist, an error is returned.
+    ///
+    /// # States
+    ///
+    /// This command is valid for the following states:
+    ///
+    /// * [`PortState::Paused`]
+    /// * [`PortState::Ready`]
+    /// * [`PortState::Running`]
+    pub fn set_rules(
+        &self,
+        layer_name: &str,
+        in_rules: Vec<Rule<Finalized>>,
+        out_rules: Vec<Rule<Finalized>>,
+    ) -> Result<()> {
+        let state = self.state.lock();
+        check_state!(
+            state,
+            [PortState::Paused, PortState::Ready, PortState::Running]
+        )?;
+
+        for layer in &self.layers {
+            if layer.name() == layer_name {
+                self.epoch.fetch_add(1, SeqCst);
+                layer.set_rules(in_rules, out_rules);
+                return Ok(());
             }
         }
 
@@ -738,6 +852,7 @@ impl Port {
     fn layers_process(
         &self,
         dir: Direction,
+        ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         meta: &mut meta::Meta,
@@ -745,7 +860,7 @@ impl Port {
         match dir {
             Direction::Out => {
                 for layer in &self.layers {
-                    match layer.process(&self.ectx, dir, pkt, hts, meta) {
+                    match layer.process(&self.ectx, dir, ifid, pkt, hts, meta) {
                         Ok(LayerResult::Allow) => (),
                         ret @ Ok(LayerResult::Deny { .. }) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
@@ -756,7 +871,7 @@ impl Port {
 
             Direction::In => {
                 for layer in self.layers.iter().rev() {
-                    match layer.process(&self.ectx, dir, pkt, hts, meta) {
+                    match layer.process(&self.ectx, dir, ifid, pkt, hts, meta) {
                         Ok(LayerResult::Allow) => (),
                         ret @ Ok(LayerResult::Deny { .. }) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
@@ -773,6 +888,7 @@ impl Port {
         &self,
         dir: Direction,
         ifid: &InnerFlowId,
+        epoch: u64,
         pkt: &Packet<P>,
     ) {
         cfg_if::cfg_if! {
@@ -784,18 +900,17 @@ impl Port {
                         dir.cstr_raw() as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
                         &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        epoch as uintptr_t,
                         pkt.mblk_addr(),
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                use std::arch::asm;
-
                 let ifid_s = ifid.to_string();
                 crate::opte_provider::port__process__entry!(
-                    || (dir, &self.name, ifid_s, pkt.mblk_addr())
+                    || (dir, &self.name, ifid_s, epoch, pkt.mblk_addr())
                 );
             } else {
-                let (_, _, _) = (dir, ifid, pkt);
+                let (_, _, _, _) = (dir, ifid, epoch, pkt);
             }
         }
     }
@@ -804,6 +919,7 @@ impl Port {
         &self,
         dir: Direction,
         ifid: &InnerFlowId,
+        epoch: u64,
         pkt: &Packet<P>,
         res: &result::Result<ProcessResult, ProcessError>,
     ) {
@@ -823,14 +939,13 @@ impl Port {
                         dir.cstr_raw() as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
                         &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        epoch as uintptr_t,
                         pkt.mblk_addr(),
                         res_arg.as_ptr() as uintptr_t,
                     );
                 }
 
             } else if #[cfg(feature = "usdt")] {
-                use std::arch::asm;
-
                 let ifid_s = ifid.to_string();
                 let res_str = match res {
                     Ok(v) => format!("{:?}", v),
@@ -838,10 +953,10 @@ impl Port {
                 };
 
                 crate::opte_provider::port__process__return!(
-                    || (dir, &self.name, ifid_s, pkt.mblk_addr(), res_str)
+                    || (dir, &self.name, ifid_s, epoch, pkt.mblk_addr(), res_str)
                 );
             } else {
-                let (_, _, _, _) = (dir, ifid, pkt, res);
+                let (_, _, _, _, _) = (dir, ifid, epoch, pkt, res);
             }
         }
     }
@@ -906,11 +1021,11 @@ impl Port {
     ) -> result::Result<TcpState, String> {
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we take the dual.
-        let ifid_after = InnerFlowId::from(meta).dual();
+        let ifid_out = InnerFlowId::from(meta).dual();
         let mut lock = self.tcp_flows.lock();
         let tcp = meta.inner_tcp().unwrap();
 
-        let tcp_state = match lock.get_mut(&ifid_after) {
+        let tcp_state = match lock.get_mut(&ifid_out) {
             // We may have already created a TCP flow entry due to an
             // outbound packet, in that case simply fill in the
             // inbound UFID for expiration purposes.
@@ -919,7 +1034,7 @@ impl Port {
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
                     tfes.tcp_state.tcp_flow_drop_probe(
-                        &ifid_after,
+                        &ifid_out,
                         Direction::In,
                         tcp.flags,
                     );
@@ -928,7 +1043,7 @@ impl Port {
                 }
 
                 let res =
-                    tfes.tcp_state.process(Direction::In, &ifid_after, &tcp);
+                    tfes.tcp_state.process(Direction::In, &ifid_out, &tcp);
 
                 let tcp_state = match res {
                     Ok(tcp_state) => tcp_state,
@@ -964,7 +1079,7 @@ impl Port {
                     tcp_state: tfs,
                 };
                 // TODO kill unwrap
-                lock.add(ifid_after, tfes).unwrap();
+                lock.add(ifid_out, tfes).unwrap();
 
                 TcpState::Listen
             }
@@ -976,13 +1091,15 @@ impl Port {
     fn process_in(
         &self,
         ifid: &InnerFlowId,
+        epoch: u64,
         pkt: &mut Packet<Parsed>,
         meta: &mut meta::Meta,
     ) -> result::Result<ProcessResult, ProcessError> {
         // There is no FlowId, thus there can be no use of the UFT.
         if *ifid == FLOW_ID_DEFAULT {
             let mut hts = Vec::new();
-            let res = self.layers_process(Direction::In, pkt, &mut hts, meta);
+            let res =
+                self.layers_process(Direction::In, ifid, pkt, &mut hts, meta);
 
             match res {
                 Ok(LayerResult::Allow) => {
@@ -1005,10 +1122,11 @@ impl Port {
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
+        let mut invalidated = None;
         match self.uft_in.lock().get_mut(&ifid) {
-            Some(entry) => {
+            Some(entry) if entry.state().epoch == epoch => {
                 entry.hit();
-                for ht in entry.state() {
+                for ht in &entry.state().hts {
                     ht.run(pkt.meta_mut());
                     let ifid_after = InnerFlowId::from(pkt.meta());
                     ht_probe(
@@ -1044,16 +1162,29 @@ impl Port {
                 return Ok(ProcessResult::Modified);
             }
 
+            // The entry is from a previous epoch; mark it for removal
+            // and proceed to rule processing.
+            Some(entry) => {
+                let ep = entry.state().epoch;
+                invalidated = Some(ep);
+            }
+
+            // There is no entry; proceed to rule processing;
             None => (),
         }
 
+        if let Some(ht_epoch) = invalidated {
+            self.uft_invalidate(Direction::In, ifid, ht_epoch);
+        }
+
         let mut hts = Vec::new();
-        let res = self.layers_process(Direction::In, pkt, &mut hts, meta);
+        let res = self.layers_process(Direction::In, ifid, pkt, &mut hts, meta);
+        let hte = HtEntry { hts, epoch };
 
         match res {
             Ok(LayerResult::Allow) => {
                 // TODO kill unwrapx
-                self.uft_in.lock().add(ifid.clone(), hts).unwrap();
+                self.uft_in.lock().add(ifid.clone(), hte).unwrap();
 
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
@@ -1208,13 +1339,15 @@ impl Port {
     fn process_out(
         &self,
         ifid: &InnerFlowId,
+        epoch: u64,
         pkt: &mut Packet<Parsed>,
         meta: &mut meta::Meta,
     ) -> result::Result<ProcessResult, ProcessError> {
         // There is no FlowId, thus there can be no use of the UFT.
         if *ifid == FLOW_ID_DEFAULT {
             let mut hts = Vec::new();
-            let res = self.layers_process(Direction::Out, pkt, &mut hts, meta);
+            let res =
+                self.layers_process(Direction::Out, ifid, pkt, &mut hts, meta);
 
             match res {
                 Ok(LayerResult::Allow) => {
@@ -1237,8 +1370,9 @@ impl Port {
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        match self.uft_out.lock().get_mut(&ifid) {
-            Some(entry) => {
+        let mut invalidated = None;
+        match self.uft_out.lock().get_mut(ifid) {
+            Some(entry) if entry.state().epoch == epoch => {
                 entry.hit();
 
                 // For outbound traffic the TCP flow table must be
@@ -1261,7 +1395,7 @@ impl Port {
                     }
                 }
 
-                for ht in entry.state() {
+                for ht in &entry.state().hts {
                     ht.run(pkt.meta_mut());
                     let ifid_after = InnerFlowId::from(pkt.meta());
                     ht_probe(
@@ -1276,8 +1410,19 @@ impl Port {
                 return Ok(ProcessResult::Modified);
             }
 
-            // Continue with processing.
+            // The entry is from a previous epoch; mark it for removal
+            // and proceed to rule processing.
+            Some(entry) => {
+                let ep = entry.state().epoch;
+                invalidated = Some(ep);
+            }
+
+            // There is no entry; proceed to layer processing.
             None => (),
+        }
+
+        if let Some(ht_epoch) = invalidated {
+            self.uft_invalidate(Direction::Out, ifid, ht_epoch);
         }
 
         // For outbound traffic the TCP flow table must be checked
@@ -1301,12 +1446,14 @@ impl Port {
         }
 
         let mut hts = Vec::new();
-        let res = self.layers_process(Direction::Out, pkt, &mut hts, meta);
+        let res =
+            self.layers_process(Direction::Out, ifid, pkt, &mut hts, meta);
+        let hte = HtEntry { hts, epoch };
 
         match res {
             Ok(LayerResult::Allow) => {
                 // TODO kill unwrap
-                self.uft_out.lock().add(ifid.clone(), hts).unwrap();
+                self.uft_out.lock().add(ifid.clone(), hte).unwrap();
                 Ok(ProcessResult::Modified)
             }
 
@@ -1319,6 +1466,56 @@ impl Port {
             }
 
             Err(e) => Err(ProcessError::Layer(e)),
+        }
+    }
+
+    fn uft_invalidate(&self, dir: Direction, ifid: &InnerFlowId, epoch: u64) {
+        let mut uft_in = self.uft_in.lock();
+        let mut uft_out = self.uft_out.lock();
+
+        // XXX Rather than using `dual()` we should really have these
+        // entries "paired" by way of their key because they could be
+        // asymmetric.
+        if dir == Direction::Out {
+            uft_in.remove(&ifid.clone().dual());
+            uft_out.remove(ifid);
+        } else {
+            uft_in.remove(ifid);
+            uft_out.remove(&ifid.clone().dual());
+        }
+        drop(uft_out);
+        drop(uft_in);
+        self.uft_invalidate_probe(Direction::In, ifid, epoch);
+        self.uft_invalidate_probe(Direction::Out, ifid, epoch);
+    }
+
+    fn uft_invalidate_probe(
+        &self,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        epoch: u64,
+    ) {
+        cfg_if::cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let ifid_arg = flow_id_sdt_arg::from(ifid);
+
+                unsafe {
+                    __dtrace_probe_uft__invalidate(
+                        dir.cstr_raw() as uintptr_t,
+                        self.name_cstr.as_ptr() as uintptr_t,
+                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        epoch as uintptr_t,
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                let port_s = self.name_cstr.to_str().unwrap();
+                let ifid_s = ifid.to_string();
+                crate::opte_provider::uft__invalidate!(
+                    || (dir, port_s, ifid_s, epoch)
+                );
+            } else {
+                let (_, _, _) = (dir, ifid, epoch);
+            }
         }
     }
 }
@@ -1391,16 +1588,24 @@ impl StateSummary for TcpFlowEntryState {
 extern "C" {
     pub fn __dtrace_probe_port__process__entry(
         dir: uintptr_t,
-        name: uintptr_t,
+        port: uintptr_t,
         ifid: uintptr_t,
+        epoch: uintptr_t,
         pkt: uintptr_t,
     );
     pub fn __dtrace_probe_port__process__return(
         dir: uintptr_t,
-        name: uintptr_t,
+        port: uintptr_t,
         ifid: uintptr_t,
+        epoch: uintptr_t,
         pkt: uintptr_t,
         res: uintptr_t,
+    );
+    pub fn __dtrace_probe_uft__invalidate(
+        dir: uintptr_t,
+        port: uintptr_t,
+        ifid: uintptr_t,
+        epoch: uintptr_t,
     );
 }
 
@@ -1441,6 +1646,11 @@ pub mod meta {
 
             self.inner.insert(val);
             Ok(())
+        }
+
+        /// Clear all entries.
+        pub fn clear(&mut self) {
+            self.inner.clear();
         }
 
         /// Add the value to the map, replacing any existing value.

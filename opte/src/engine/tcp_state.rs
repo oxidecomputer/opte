@@ -496,7 +496,6 @@ impl TcpFlowState {
                 }
             } else if #[cfg(feature = "usdt")] {
                 use std::string::ToString;
-                use std::arch::asm;
 
                 let port_s = self.port_c.to_str().unwrap();
                 let flow_s = flow_id.to_string();
@@ -528,7 +527,6 @@ impl TcpFlowState {
                 }
             } else if #[cfg(feature = "usdt")] {
                 use std::string::ToString;
-                use std::arch::asm;
 
                 let port_s = self.port_c.to_str().unwrap();
                 let flow_s = flow_id.to_string();

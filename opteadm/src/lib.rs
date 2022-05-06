@@ -15,7 +15,7 @@ use opte::engine::ioctl::{self as api};
 use opte::oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
     FirewallRule, ListPortsReq, ListPortsResp, PortInfo, RemFwRuleReq,
-    SetVirt2PhysReq,
+    SetFwRulesReq, SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::overlay;
 use opte_ioctl::{run_cmd_ioctl, Error};
@@ -101,6 +101,17 @@ impl OpteAdm {
             port_name: port_name.to_string(),
             rule: rule.clone(),
         };
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+    }
+
+    pub fn set_firewall_rules(
+        &self,
+        port_name: &str,
+        rules: Vec<FirewallRule>,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetFwRules;
+        let req =
+            SetFwRulesReq { port_name: port_name.to_string(), rules: rules };
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 

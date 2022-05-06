@@ -30,8 +30,8 @@ use super::ip4::Protocol;
 use super::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
 use super::port::meta::Meta;
 use super::rule::{
-    self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, AllowOrDeny, Rule,
-    RuleDump, HT,
+    self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, AllowOrDeny,
+    Finalized, Rule, RuleDump, HT,
 };
 use super::sync::{KMutex, KMutexType};
 use super::time::Moment;
@@ -81,6 +81,11 @@ pub struct Layer {
     name: String,
     name_c: CString,
     actions: Vec<Action>,
+    // Anytime the rules or flow tables need to be held at the same
+    // time the mutex order is always:
+    //
+    // 1) inbound
+    // 2) outbound
     ft_in: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
     ft_out: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
     rules_in: KMutex<RuleTable>,
@@ -92,7 +97,7 @@ impl Layer {
         self.actions.get(idx)
     }
 
-    pub fn add_rule(&self, dir: Direction, rule: Rule<rule::Finalized>) {
+    pub fn add_rule(&self, dir: Direction, rule: Rule<Finalized>) {
         match dir {
             Direction::Out => self.rules_out.lock().add(rule),
             Direction::In => self.rules_in.lock().add(rule),
@@ -141,8 +146,6 @@ impl Layer {
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                use std::arch::asm;
-
                 let port_s = self.port_c.to_str().unwrap();
                 let name_s = self.name_c.to_str().unwrap();
                 let flow_s = ifid.to_string();
@@ -180,8 +183,6 @@ impl Layer {
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                use std::arch::asm;
-
                 let port_s = self.port_c.to_str().unwrap();
                 let flow_s = ifid.to_string();
                 let err_s = format!("{:?}", err);
@@ -219,8 +220,6 @@ impl Layer {
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                use std::arch::asm;
-
                 let port_s = self.port_c.to_str().unwrap();
                 let ifid_s = ifid.to_string();
 
@@ -260,8 +259,6 @@ impl Layer {
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                use std::arch::asm;
-
                 let port_s = self.port_c.to_str().unwrap();
                 let ifid_s = ifid.to_string();
                 // XXX This would probably be better as separate probes;
@@ -330,14 +327,15 @@ impl Layer {
         &self,
         ectx: &ExecCtx,
         dir: Direction,
+        ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         meta: &mut Meta,
     ) -> result::Result<LayerResult, LayerError> {
-        let ifid = InnerFlowId::from(pkt.meta());
         self.layer_process_entry_probe(dir, &ifid);
         let res = match dir {
             Direction::Out => self.process_out(ectx, pkt, &ifid, hts, meta),
+
             Direction::In => self.process_in(ectx, pkt, &ifid, hts, meta),
         };
         self.layer_process_return_probe(dir, &ifid, &res);
@@ -598,7 +596,7 @@ impl Layer {
 
             ht.run(pkt.meta_mut());
 
-            let ifid_after = InnerFlowId::from(pkt.meta());
+            let ifid_after = InnerFlowId::from(pkt.meta()).dual();
             ht_probe(
                 &self.port_c,
                 &format!("{}-ft", self.name),
@@ -608,8 +606,8 @@ impl Layer {
             );
 
             // XXX I believe the `ra` field is from when a rule's
-            // state consisted of a RuleAction, but I changed it to be
-            // an action descriptor quite a ways back.
+            // state consisted of a RuleAction, but I changed it
+            // to be an action descriptor quite a ways back.
             //
             // if let Some(ctx) = state.ra.ctx {
             //     ctx.exec(flow_id, &mut [0; 0])
@@ -848,8 +846,6 @@ impl Layer {
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                use std::arch::asm;
-
                 let port_s = self.port_c.to_str().unwrap();
                 let flow_s = flow_id.to_string();
 
@@ -860,6 +856,28 @@ impl Layer {
                 let (_, _) = (dir, flow_id);
             }
         }
+    }
+
+    /// Set all rules at once, in an atomic manner.
+    ///
+    /// Updating the ruleset immediately invalidates all flows
+    /// established in the Flow Table.
+    pub fn set_rules(
+        &self,
+        in_rules: Vec<Rule<Finalized>>,
+        out_rules: Vec<Rule<Finalized>>,
+    ) {
+        // It's imperative to lock these both before changing any
+        // rules so that the change is atomic from the point of view
+        // of other threads.
+        let mut rules_in = self.rules_in.lock();
+        let mut rules_out = self.rules_out.lock();
+        let mut ft_in = self.ft_in.lock();
+        let mut ft_out = self.ft_out.lock();
+        rules_in.set_rules(in_rules);
+        rules_out.set_rules(out_rules);
+        ft_in.clear();
+        ft_out.clear();
     }
 }
 
@@ -1060,8 +1078,6 @@ impl<'a> RuleTable {
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                use std::arch::asm;
-
                 let port_s = self.port_c.to_str().unwrap();
                 let layer_s = self.layer_c.to_str().unwrap();
 
@@ -1098,8 +1114,6 @@ impl<'a> RuleTable {
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                use std::arch::asm;
-
                 let port_s = self.port_c.to_str().unwrap();
                 let layer_s = self.layer_c.to_str().unwrap();
                 let action_s = rule.action().to_string();
@@ -1111,6 +1125,13 @@ impl<'a> RuleTable {
             } else {
                 let (_, _) = (flow_id, rule);
             }
+        }
+    }
+
+    pub fn set_rules(&mut self, new_rules: Vec<Rule<rule::Finalized>>) {
+        self.rules.clear();
+        for r in new_rules {
+            self.add(r);
         }
     }
 }

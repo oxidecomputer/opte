@@ -19,19 +19,17 @@ cfg_if! {
 }
 
 use crate::api::{Direction, OpteError};
-use crate::engine::ether::ETHER_TYPE_ARP;
-use crate::engine::ip4::Protocol;
 use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
 use crate::engine::port::{Port, PortBuilder, Pos};
 use crate::engine::rule::{
-    self, AllowOrDeny, DataPredicate, EtherTypeMatch, Identity, IdentityDesc,
-    IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
+    self, AllowOrDeny, DataPredicate, IdentityDesc, IpProtoMatch,
+    Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
 };
-use crate::engine::tcp::{TCP_PORT_RDP, TCP_PORT_SSH};
 pub use crate::oxide_vpc::api::ProtoFilter;
 use crate::oxide_vpc::api::{
     Action, AddFwRuleReq, Address, FirewallRule, Ports, RemFwRuleReq,
+    SetFwRulesReq,
 };
 
 pub const FW_LAYER_NAME: &'static str = "firewall";
@@ -56,71 +54,31 @@ pub fn rem_fw_rule(port: &Port, req: &RemFwRuleReq) -> Result<(), OpteError> {
     port.remove_rule(FW_LAYER_NAME, req.dir, req.id)
 }
 
+pub fn set_fw_rules(port: &Port, req: &SetFwRulesReq) -> Result<(), OpteError> {
+    let mut in_rules = vec![];
+    let mut out_rules = vec![];
+
+    for fwr in &req.rules {
+        let action = match fwr.action {
+            Action::Allow => {
+                port.layer_action(FW_LAYER_NAME, 0).unwrap().clone()
+            }
+
+            Action::Deny => rule::Action::Deny,
+        };
+
+        let rule = from_fw_rule(fwr.clone(), action);
+        if fwr.direction == Direction::In {
+            in_rules.push(rule);
+        } else {
+            out_rules.push(rule);
+        }
+    }
+
+    port.set_rules(FW_LAYER_NAME, in_rules, out_rules)
+}
+
 pub struct Firewall {}
-
-// Default rules are defined in RFD 21 §2.8.1. These default rules are
-// technically part of the definition of the Oxide Network, and should
-// probably not live in opte-core itself. That is, there is a
-// difference between the engine itself and the specification of the
-// Oxide Network (to program the engine), for now it's okay to mix
-// them, but in the future it would be nice to cleanly separate them.
-fn add_default_inbound_rules(layer: &mut Layer) {
-    // Block all inbound traffic.
-    //
-    // By default, if there are no predicates, then a rule matches.
-    // Thus, to match all incoming traffic, we add no predicates.
-    layer.add_rule(Direction::In, Rule::match_any(65535, rule::Action::Deny));
-
-    // This rule is not listed in the RFDs, nor does the Oxide VPC
-    // Firewall have any features for matching L2 data. The underlying
-    // firewall mechanism in OPTE is stronger than the model offered
-    // by RFD 21. We use this to our advantage here to allow ARP
-    // traffic to pass, which will be dealt with by the ARP layer in
-    // the Oxide Network configuration.
-    let mut arp = Rule::new(1, layer.action(1).unwrap().clone());
-    arp.add_predicate(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-        ETHER_TYPE_ARP,
-    )]));
-    layer.add_rule(Direction::In, arp.finalize());
-
-    // Allow SSH traffic from anywhere.
-    let mut ssh = Rule::new(65534, layer.action(0).unwrap().clone());
-    ssh.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
-        Protocol::TCP,
-    )]));
-    ssh.add_predicate(Predicate::InnerDstPort(vec![PortMatch::Exact(
-        TCP_PORT_SSH,
-    )]));
-    layer.add_rule(Direction::In, ssh.finalize());
-
-    // Allow ICMP traffic from anywhere. This allows useful messages
-    // like Destination Unreachable to make it back to the guest.
-    //
-    // XXX It might be nice to add ICMP Type & Code predicates. While
-    // we don't expose these things in the Oxide Virtual Firewall, it
-    // would allow us to perform finer-grained ICMP filtering in the
-    // event that is useful.
-    let mut icmp = Rule::new(65534, layer.action(0).unwrap().clone());
-    icmp.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
-        Protocol::ICMP,
-    )]));
-    layer.add_rule(Direction::In, icmp.finalize());
-
-    // Allow RDP from anywhere.
-    let mut rdp = Rule::new(65534, layer.action(0).unwrap().clone());
-    rdp.add_predicate(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
-        Protocol::TCP,
-    )]));
-    rdp.add_predicate(Predicate::InnerDstPort(vec![PortMatch::Exact(
-        TCP_PORT_RDP,
-    )]));
-    layer.add_rule(Direction::In, rdp.finalize());
-}
-
-fn add_default_outbound_rules(layer: &mut Layer) {
-    let act = layer.action(0).unwrap().clone();
-    layer.add_rule(Direction::Out, Rule::match_any(65535, act));
-}
 
 pub fn from_fw_rule(
     fw_rule: FirewallRule,
@@ -183,26 +141,14 @@ impl StatefulAction for FwStatefulAction {
 
 impl Firewall {
     pub fn create_layer(port_name: &str) -> Layer {
-        // A stateful action creates a FlowTable entry.
-        let stateful_action = rule::Action::Stateful(Arc::new(
-            FwStatefulAction::new("fw".to_string()),
-        ));
+        // The allow action is currently stateful, causing an entry to
+        // be created in the flow table for each flow allowed by the
+        // firewall.
+        let allow = rule::Action::Stateful(Arc::new(FwStatefulAction::new(
+            "fw".to_string(),
+        )));
 
-        // A static action does not create an entry in the FlowTable.
-        // For the moment this is only used to allow ARP to bypass the
-        // firewall layer, but it may be useful to expose this more
-        // generally in the future.
-        let static_action =
-            rule::Action::Static(Arc::new(Identity::new("fw_arp")));
-
-        let mut layer = Layer::new(
-            FW_LAYER_NAME,
-            port_name,
-            vec![stateful_action, static_action],
-        );
-        add_default_inbound_rules(&mut layer);
-        add_default_outbound_rules(&mut layer);
-        layer
+        Layer::new(FW_LAYER_NAME, port_name, vec![allow])
     }
 }
 

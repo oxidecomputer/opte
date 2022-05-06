@@ -909,8 +909,6 @@ pub fn ht_probe(
                 );
             }
         } else if #[cfg(feature = "usdt")] {
-            use std::arch::asm;
-
             let port_s = port.to_str().unwrap();
             let before_s = before.to_string();
             let after_s = after.to_string();
