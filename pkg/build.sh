@@ -14,6 +14,7 @@ mkdir -p proto/kernel/drv/amd64
 mkdir -p proto/opt/oxide/opte/bin
 cp ../opteadm/target/release/opteadm proto/opt/oxide/opte/bin/
 cp ../xde/target/x86_64-unknown-unknown/release/xde proto/kernel/drv/amd64/xde
+cp ../xde/xde.conf proto/kernel/drv/
 
 # create the package
 sed -e "s/%PUBLISHER%/$PUBLISHER/g" \
