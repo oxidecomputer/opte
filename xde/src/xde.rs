@@ -46,7 +46,7 @@ use opte::engine::sync::{KRwLock, KRwLockType};
 use opte::engine::time::{Interval, Moment, Periodic};
 use opte::oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, PhysNet,
-    RemFwRuleReq, SetVirt2PhysReq,
+    RemFwRuleReq, SetVirt2PhysReq, ListPortsReq, ListPortsResp, PortInfo
 };
 use opte::oxide_vpc::engine::{
     arp, dhcp4, dyn_nat4, firewall, icmp, overlay, router,
@@ -1947,15 +1947,15 @@ fn dump_tcp_flows_hdlr(
 #[no_mangle]
 fn list_ports_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<api::ListPortsResp, OpteError> {
-    let _req: api::ListPortsReq = env.copy_in_req()?;
-    let mut resp = api::ListPortsResp { ports: vec![] };
+) -> Result<ListPortsResp, OpteError> {
+    let _req: ListPortsReq = env.copy_in_req()?;
+    let mut resp = ListPortsResp { ports: vec![] };
 
     let devs = unsafe { xde_devs.read() };
     for dev in devs.iter() {
-        resp.ports.push(api::PortInfo {
+        resp.ports.push(PortInfo {
             name: dev.port.name().to_string(),
-            mac_addr: dev.port.mac_addr(),
+            mac_addr: dev.port.mac_addr().into(),
             ip4_addr: dev.port_cfg.private_ip,
             state: dev.port.state().to_string(),
         });
