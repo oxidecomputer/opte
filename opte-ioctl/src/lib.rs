@@ -9,7 +9,8 @@ use opte::api::{
     SetXdeUnderlayReq, Vni, API_VERSION, XDE_DLD_OPTE_CMD,
 };
 use opte::oxide_vpc::api::{
-    AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, SetVirt2PhysReq,
+    AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, ListPortsReq,
+    ListPortsResp, SetVirt2PhysReq,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -125,6 +126,13 @@ impl OpteHdl {
         let resp = run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)?;
         libnet::link::delete_link_id(link_id, libnet::LinkFlags::Active)?;
         Ok(resp)
+    }
+
+    /// List the extant OPTE ports.
+    pub fn list_ports(&self) -> Result<ListPortsResp, Error> {
+        let req = ListPortsReq { unused: () };
+        let cmd = OpteCmd::ListPorts;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 
     /// Create a new handle to the OPTE control node.

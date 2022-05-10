@@ -121,6 +121,28 @@ pub struct DeleteXdeReq {
     pub xde_devname: String,
 }
 
+/// List existing xde ports.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ListPortsReq {
+    pub unused: (),
+}
+
+/// Information about a single existing xde port
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PortInfo {
+    pub name: String,
+    pub mac_addr: MacAddr,
+    pub ip4_addr: Ipv4Addr,
+    pub state: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ListPortsResp {
+    pub ports: Vec<PortInfo>,
+}
+
+impl crate::api::cmd::CmdOk for ListPortsResp {}
+
 /// Set mapping from VPC IP to physical network destination.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2PhysReq {

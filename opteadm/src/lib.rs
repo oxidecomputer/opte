@@ -14,7 +14,8 @@ use opte::api::{MacAddr, NoResp, OpteCmd, SetXdeUnderlayReq, Vni};
 use opte::engine::ioctl::{self as api};
 use opte::oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
-    FirewallRule, RemFwRuleReq, SetVirt2PhysReq,
+    FirewallRule, ListPortsReq, ListPortsResp, PortInfo, RemFwRuleReq,
+    SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::overlay;
 use opte_ioctl::{run_cmd_ioctl, Error};
@@ -122,12 +123,12 @@ impl OpteAdm {
     }
 
     /// List all the ports.
-    pub fn list_ports(&self) -> Result<api::ListPortsResp, Error> {
+    pub fn list_ports(&self) -> Result<ListPortsResp, Error> {
         let cmd = OpteCmd::ListPorts;
-        run_cmd_ioctl::<api::ListPortsResp, _>(
+        run_cmd_ioctl::<ListPortsResp, _>(
             self.device.as_raw_fd(),
             cmd,
-            &api::ListPortsReq { unused: () },
+            &ListPortsReq { unused: () },
         )
     }
 
