@@ -153,22 +153,3 @@ pub struct AddPortReq {
 pub struct DeletePortReq {
     pub name: String,
 }
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ListPortsReq {
-    pub unused: (),
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct PortInfo {
-    pub name: String,
-    pub mac_addr: EtherAddr,
-    pub ip4_addr: Ipv4Addr,
-    pub state: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ListPortsResp {
-    pub ports: Vec<PortInfo>,
-}
-impl CmdOk for ListPortsResp {}

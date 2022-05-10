@@ -13,14 +13,14 @@ use structopt::StructOpt;
 use opte::api::{Direction, IpAddr, Ipv4Addr, Ipv6Addr, MacAddr, Vni};
 use opte::engine::ether::EtherAddr;
 use opte::engine::flow_table::FlowEntryDump;
-use opte::engine::ioctl::{self as api, PortInfo};
+use opte::engine::ioctl as api;
 use opte::engine::layer::InnerFlowId;
 use opte::engine::rule::RuleDump;
 use opte::engine::vpc::VpcSubnet4;
 use opte::oxide_vpc::api::{
     Action as FirewallAction, AddRouterEntryIpv4Req, Address,
-    Filters as FirewallFilters, FirewallRule, GuestPhysAddr, PhysNet, Ports,
-    ProtoFilter, RemFwRuleReq, RouterTarget, SetVirt2PhysReq,
+    Filters as FirewallFilters, FirewallRule, GuestPhysAddr, PhysNet, PortInfo,
+    Ports, ProtoFilter, RemFwRuleReq, RouterTarget, SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::overlay::DumpVirt2PhysResp;
 use opte_ioctl::Error;
