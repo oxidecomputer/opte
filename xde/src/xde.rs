@@ -45,8 +45,9 @@ use opte::engine::sync::{KMutex, KMutexType};
 use opte::engine::sync::{KRwLock, KRwLockType};
 use opte::engine::time::{Interval, Moment, Periodic};
 use opte::oxide_vpc::api::{
-    AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, PhysNet,
-    RemFwRuleReq, SetVirt2PhysReq, ListPortsReq, ListPortsResp, PortInfo
+    AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
+    ListPortsReq, ListPortsResp, PhysNet, PortInfo, RemFwRuleReq,
+    SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::{
     arp, dhcp4, dyn_nat4, firewall, icmp, overlay, router,
