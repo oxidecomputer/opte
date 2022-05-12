@@ -158,6 +158,7 @@ pub enum Protocol {
     IGMP = 0x2,
     TCP = 0x6,
     UDP = 0x11,
+    ICMPv6 = 0x3A,
     Reserved = 0xFF,
 }
 
@@ -174,6 +175,7 @@ impl Display for Protocol {
             Protocol::IGMP => write!(f, "IGMP"),
             Protocol::TCP => write!(f, "TCP"),
             Protocol::UDP => write!(f, "UDP"),
+            Protocol::ICMPv6 => write!(f, "ICMPv6"),
             Protocol::Reserved => write!(f, "Reserved"),
         }
     }
@@ -188,6 +190,7 @@ impl TryFrom<u8> for Protocol {
             0x2 => Ok(Protocol::IGMP),
             0x6 => Ok(Protocol::TCP),
             0x11 => Ok(Protocol::UDP),
+            0x3A => Ok(Protocol::ICMPv6),
             proto => Err(format!("unhandled IP protocol: 0x{:X}", proto)),
         }
     }

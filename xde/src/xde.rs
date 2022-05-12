@@ -68,6 +68,7 @@ static mut xde_dip: *mut dev_info = 0 as *mut dev_info;
 extern "C" {
     pub fn __dtrace_probe_bad__packet(
         port: uintptr_t,
+        dir: uintptr_t,
         mp: uintptr_t,
         msg: uintptr_t,
     );
@@ -90,23 +91,32 @@ extern "C" {
     pub fn __dtrace_probe_tx(mp: uintptr_t);
 }
 
-fn bad_packet_unknown_probe(mp: uintptr_t, err: &ParseError) {
-    let msg_arg = CString::new(format!("{:?}", err)).unwrap();
-    unsafe {
-        __dtrace_probe_bad__packet(
-            b"unknown\0" as *const u8 as uintptr_t,
-            mp,
-            msg_arg.as_ptr() as uintptr_t,
-        )
-    };
+fn bad_packet_parse_probe(
+    port: Option<&CString>,
+    dir: Direction,
+    mp: *mut mblk_t,
+    err: &ParseError,
+) {
+    let msg = format!("{:?}", err);
+    bad_packet_probe(port, dir, mp, &msg);
 }
 
-fn bad_packet_probe(port: &CString, mp: uintptr_t, err: &ParseError) {
-    let msg_arg = CString::new(format!("{:?}", err)).unwrap();
+fn bad_packet_probe(
+    port: Option<&CString>,
+    dir: Direction,
+    mp: *mut mblk_t,
+    msg: &str,
+) {
+    let port_str = match port {
+        None => b"unknown\0" as *const u8 as *const i8,
+        Some(name) => name.as_ptr(),
+    };
+    let msg_arg = CString::new(msg).unwrap();
     unsafe {
         __dtrace_probe_bad__packet(
-            port.as_ptr() as uintptr_t,
-            mp,
+            port_str as uintptr_t,
+            dir.cstr_raw() as uintptr_t,
+            mp as uintptr_t,
             msg_arg.as_ptr() as uintptr_t,
         )
     };
@@ -411,7 +421,6 @@ fn expire_periodic(port: &mut Arc<Port>) {
 #[no_mangle]
 fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // TODO name validation
-    // TODO check if xde is already in list before proceeding
     let state = get_xde_state();
     let underlay_ = state.underlay.lock();
     let underlay = match *underlay_ {
@@ -1171,13 +1180,13 @@ unsafe extern "C" fn xde_mc_tx(
             // NOTE: We are using mp_chain as read only here to get
             // the pointer value so that the DTrace consumer can
             // examine the packet on failure.
-            bad_packet_probe(
-                src_dev.port.name_cstr(),
-                mp_chain as uintptr_t,
+            bad_packet_parse_probe(
+                Some(src_dev.port.name_cstr()),
+                Direction::Out,
+                mp_chain,
                 &e,
             );
-            // Let's be noisy about this for now to catch bugs.
-            warn!("failed to parse packet: {:?}", e);
+            opte::engine::dbg(format!("Tx bad packet: {:?}", e));
             return ptr::null_mut();
         }
     };
@@ -1731,9 +1740,9 @@ unsafe extern "C" fn xde_rx(
             // the pointer value so that the DTrace consumer can
             // examine the packet on failure.
             //
-            // We don't know the port yet, thus the "unknown".
-            bad_packet_unknown_probe(mp_chain as uintptr_t, &e);
-            warn!("failed to parse packet: {:?}", e);
+            // We don't know the port yet, thus the None.
+            bad_packet_parse_probe(None, Direction::In, mp_chain, &e);
+            opte::engine::dbg(format!("Rx bad packet: {:?}", e));
             return;
         }
     };
@@ -1744,9 +1753,10 @@ unsafe extern "C" fn xde_rx(
     let outer = match hdrs.outer {
         Some(ref outer) => outer,
         None => {
-            // TODO add SDT probe
             // TODO add stat
-            warn!("no outer header, dropping");
+            let msg = "Rx bad packet: no outer header";
+            bad_packet_probe(None, Direction::In, mp_chain, msg);
+            opte::engine::dbg(msg);
             return;
         }
     };

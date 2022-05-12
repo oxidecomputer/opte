@@ -14,8 +14,8 @@ use opte::api::{MacAddr, NoResp, OpteCmd, SetXdeUnderlayReq, Vni};
 use opte::engine::ioctl::{self as api};
 use opte::oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
-    FirewallRule, ListPortsReq, ListPortsResp, PortInfo, RemFwRuleReq,
-    SetFwRulesReq, SetVirt2PhysReq,
+    FirewallRule, ListPortsReq, ListPortsResp, RemFwRuleReq, SetFwRulesReq,
+    SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::overlay;
 use opte_ioctl::{run_cmd_ioctl, Error};

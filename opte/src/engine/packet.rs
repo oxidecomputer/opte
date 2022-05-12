@@ -833,10 +833,7 @@ impl Packet<Initialized> {
         let ip6 = Ipv6Hdr::parse(rdr)?;
 
         if ip6.next_hdr() != Protocol::TCP && ip6.next_hdr() != Protocol::UDP {
-            todo!(
-                "need to deal with IPv6 header extensions!!! (0x{:X})",
-                ip6.next_hdr() as u8
-            );
+            return Err(ParseError::UnsupportedProtocol(ip6.next_hdr()));
         }
 
         let proto = ip6.proto();
