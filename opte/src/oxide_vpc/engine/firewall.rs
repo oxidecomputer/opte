@@ -5,6 +5,7 @@
 // Copyright 2022 Oxide Computer Company
 
 use core::fmt;
+use core::num::NonZeroU32;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -34,8 +35,11 @@ use crate::oxide_vpc::api::{
 
 pub const FW_LAYER_NAME: &'static str = "firewall";
 
-pub fn setup(pb: &mut PortBuilder) -> core::result::Result<(), OpteError> {
-    let fw_layer = Firewall::create_layer(pb.name());
+pub fn setup(
+    pb: &mut PortBuilder,
+    ft_limit: NonZeroU32,
+) -> Result<(), OpteError> {
+    let fw_layer = Firewall::create_layer(pb.name(), ft_limit);
     pb.add_layer(fw_layer, Pos::First)
 }
 
@@ -140,7 +144,7 @@ impl StatefulAction for FwStatefulAction {
 }
 
 impl Firewall {
-    pub fn create_layer(port_name: &str) -> Layer {
+    pub fn create_layer(port_name: &str, ft_limit: NonZeroU32) -> Layer {
         // The allow action is currently stateful, causing an entry to
         // be created in the flow table for each flow allowed by the
         // firewall.
@@ -148,7 +152,7 @@ impl Firewall {
             "fw".to_string(),
         )));
 
-        Layer::new(FW_LAYER_NAME, port_name, vec![allow])
+        Layer::new(FW_LAYER_NAME, port_name, vec![allow], ft_limit)
     }
 }
 

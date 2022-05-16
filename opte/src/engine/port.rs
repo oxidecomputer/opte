@@ -6,6 +6,7 @@
 
 /// A virtual switch port.
 use core::fmt::{self, Display};
+use core::num::NonZeroU32;
 use core::result;
 use core::sync::atomic::{AtomicU64, Ordering::SeqCst};
 
@@ -37,8 +38,6 @@ use super::tcp_state::TcpFlowState;
 use super::time::Moment;
 use crate::api::{Direction, OpteError};
 use crate::{CString, ExecCtx};
-
-pub const UFT_DEF_MAX_ENTIRES: u32 = 8192;
 
 pub type Result<T> = result::Result<T, OpteError>;
 
@@ -162,7 +161,7 @@ impl PortBuilder {
         Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
 
-    pub fn create(self) -> Port {
+    pub fn create(self, uft_limit: NonZeroU32, tcp_limit: NonZeroU32) -> Port {
         Port {
             name: self.name.clone(),
             name_cstr: self.name_cstr,
@@ -174,30 +173,15 @@ impl PortBuilder {
             // move the layers out of the mutex.
             layers: self.layers.into_inner(),
             uft_in: KMutex::new(
-                FlowTable::new(
-                    &self.name,
-                    "uft_in",
-                    Some(UFT_DEF_MAX_ENTIRES),
-                    None,
-                ),
+                FlowTable::new(&self.name, "uft_in", uft_limit, None),
                 KMutexType::Driver,
             ),
             uft_out: KMutex::new(
-                FlowTable::new(
-                    &self.name,
-                    "uft_out",
-                    Some(UFT_DEF_MAX_ENTIRES),
-                    None,
-                ),
+                FlowTable::new(&self.name, "uft_out", uft_limit, None),
                 KMutexType::Driver,
             ),
             tcp_flows: KMutex::new(
-                FlowTable::new(
-                    &self.name,
-                    "tcp_flows",
-                    Some(UFT_DEF_MAX_ENTIRES),
-                    None,
-                ),
+                FlowTable::new(&self.name, "tcp_flows", tcp_limit, None),
                 KMutexType::Driver,
             ),
         }
@@ -226,8 +210,7 @@ impl PortBuilder {
                 name: layer.name().to_string(),
                 rules_in: layer.num_rules(Direction::In),
                 rules_out: layer.num_rules(Direction::Out),
-                flows_in: layer.num_flows(Direction::In),
-                flows_out: layer.num_flows(Direction::Out),
+                flows: layer.num_flows(),
             });
         }
 
@@ -377,7 +360,6 @@ pub struct Port {
     // probes.
     name_cstr: CString,
     mac: EtherAddr,
-    // TODO: Could I use const generics here in order to use array instead?
     layers: Vec<Layer>,
     uft_in: KMutex<FlowTable<HtEntry>>,
     uft_out: KMutex<FlowTable<HtEntry>>,
@@ -600,13 +582,13 @@ impl Port {
         )?;
 
         let in_lock = self.uft_in.lock();
-        let uft_in_limit = in_lock.get_limit();
+        let uft_in_limit = in_lock.get_limit().get();
         let uft_in_num_flows = in_lock.num_flows();
         let uft_in = in_lock.dump();
         drop(in_lock);
 
         let out_lock = self.uft_out.lock();
-        let uft_out_limit = out_lock.get_limit();
+        let uft_out_limit = out_lock.get_limit().get();
         let uft_out_num_flows = out_lock.num_flows();
         let uft_out = out_lock.dump();
         drop(out_lock);
@@ -667,8 +649,7 @@ impl Port {
                 name: layer.name().to_string(),
                 rules_in: layer.num_rules(Direction::In),
                 rules_out: layer.num_rules(Direction::Out),
-                flows_in: layer.num_flows(Direction::In),
-                flows_out: layer.num_flows(Direction::Out),
+                flows: layer.num_flows(),
             });
         }
 
@@ -971,8 +952,8 @@ impl Port {
         meta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
         // All TCP flows are keyed with respect to the outbound Flow
-        // ID, therefore we take the dual.
-        let ifid_after = InnerFlowId::from(meta).dual();
+        // ID, therefore we mirror the flow.
+        let ifid_after = InnerFlowId::from(meta).mirror();
         let tcp = meta.inner_tcp().unwrap();
         let mut lock = self.tcp_flows.lock();
 
@@ -1020,8 +1001,8 @@ impl Port {
         meta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
         // All TCP flows are keyed with respect to the outbound Flow
-        // ID, therefore we take the dual.
-        let ifid_out = InnerFlowId::from(meta).dual();
+        // ID, therefore we mirror the flow.
+        let ifid_out = InnerFlowId::from(meta).mirror();
         let mut lock = self.tcp_flows.lock();
         let tcp = meta.inner_tcp().unwrap();
 
@@ -1119,6 +1100,11 @@ impl Port {
                 Err(e) => return Err(ProcessError::Layer(e)),
             }
         }
+
+        // TODO at the moment I'm holding the UFT locks not just for
+        // loookup, but for the entire duration of processing. It
+        // might be better to ht.clone() or Arc<HT>; that way we only
+        // hold the lock for lookup.
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
@@ -1473,15 +1459,15 @@ impl Port {
         let mut uft_in = self.uft_in.lock();
         let mut uft_out = self.uft_out.lock();
 
-        // XXX Rather than using `dual()` we should really have these
+        // XXX Rather than mirroring we should really have these
         // entries "paired" by way of their key because they could be
         // asymmetric.
         if dir == Direction::Out {
-            uft_in.remove(&ifid.clone().dual());
+            uft_in.remove(&ifid.clone().mirror());
             uft_out.remove(ifid);
         } else {
             uft_in.remove(ifid);
-            uft_out.remove(&ifid.clone().dual());
+            uft_out.remove(&ifid.clone().mirror());
         }
         drop(uft_out);
         drop(uft_in);
@@ -1534,10 +1520,10 @@ impl Port {
         match (layer, dir) {
             ("uft", In) => self.uft_in.lock().num_flows(),
             ("uft", Out) => self.uft_out.lock().num_flows(),
-            (name, dir) => {
+            (name, _dir) => {
                 for layer in &self.layers {
                     if layer.name() == name {
-                        return layer.num_flows(dir);
+                        return layer.num_flows();
                     }
                 }
 

@@ -65,9 +65,8 @@ pub struct LayerDesc {
     // Number of rules in/out.
     pub rules_in: usize,
     pub rules_out: usize,
-    // Number of flows in/out.
-    pub flows_in: u32,
-    pub flows_out: u32,
+    // Number of flows.
+    pub flows: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

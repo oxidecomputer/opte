@@ -48,6 +48,7 @@ pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 pub fn setup(
     pb: &PortBuilder,
     cfg: &PortCfg,
+    ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
     let encap = Action::Static(Arc::new(EncapAction::new(
@@ -59,7 +60,8 @@ pub fn setup(
     // Action Index 1
     let decap = Action::Static(Arc::new(DecapAction::new()));
 
-    let layer = Layer::new(OVERLAY_LAYER_NAME, pb.name(), vec![encap, decap]);
+    let layer =
+        Layer::new(OVERLAY_LAYER_NAME, pb.name(), vec![encap, decap], ft_limit);
     let encap_rule = Rule::match_any(1, layer.action(0).unwrap().clone());
     layer.add_rule(Direction::Out, encap_rule);
     let decap_rule = Rule::match_any(1, layer.action(1).unwrap().clone());

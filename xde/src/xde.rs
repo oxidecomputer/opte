@@ -15,6 +15,7 @@
 //   first device)
 
 use core::convert::TryInto;
+use core::num::NonZeroU32;
 use core::ops::Range;
 use core::ptr;
 use core::time::Duration;
@@ -54,6 +55,18 @@ use opte::oxide_vpc::engine::{
 };
 use opte::oxide_vpc::PortCfg;
 use opte::{CStr, CString, ExecCtx};
+
+// Entry limits for the varous flow tables.
+//
+// XXX It would be nice to use const unwrap() but that's gated on the
+// `const_option` feature.
+//
+// Unwrap: We know all of these are safe to unwrap().
+const FW_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
+const SNAT_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
+const FT_LIMIT_ONE: Option<NonZeroU32> = NonZeroU32::new(1);
+const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
+const TCP_STATE_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
 
 /// The name of this driver.
 const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
@@ -1702,16 +1715,19 @@ fn new_port(
     };
 
     let mut pb = PortBuilder::new(&name, name_cstr, private_mac.into(), ectx);
-    firewall::setup(&mut pb)?;
-    dhcp4::setup(&mut pb, &port_cfg)?;
-    icmp::setup(&mut pb, &port_cfg)?;
+    firewall::setup(&mut pb, FW_FT_LIMIT.unwrap())?;
+    // XXX some layers have no need for LFT, perhaps have two types
+    // of Layer: one with, one without?
+    dhcp4::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
+    icmp::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
     if snat.is_some() {
-        dyn_nat4::setup(&mut pb, &port_cfg)?;
+        dyn_nat4::setup(&mut pb, &port_cfg, SNAT_FT_LIMIT.unwrap())?;
     }
-    arp::setup(&mut pb, &port_cfg)?;
-    router::setup(&mut pb, &port_cfg)?;
-    overlay::setup(&pb, &port_cfg)?;
-    let port = Arc::new(pb.create());
+    arp::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
+    router::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
+    overlay::setup(&pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
+    let port =
+        Arc::new(pb.create(UFT_LIMIT.unwrap(), TCP_STATE_LIMIT.unwrap()));
     Ok((port, port_cfg))
 }
 

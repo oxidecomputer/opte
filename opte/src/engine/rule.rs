@@ -693,14 +693,21 @@ impl DataPredicate {
     }
 }
 
-/// An Action Descriptor type holds the information needed to create
-/// an HT which implements the desired action. An ActionDesc is
-/// created by an [`Action`] implementation.
-pub trait ActionDesc {
-    /// Perform any finalization needed. For a [`StatefulAction`] this
-    /// will typically release ownership of any obtained resource.
-    fn fini(&self);
+/// A marker trait indicating a type is a resource.
+pub trait Resource: Copy {}
 
+pub trait ResourceMap<T: Clone> {
+    type Resource: Resource;
+
+    fn obtain(&self, key: &T) -> Result<Self::Resource, ResourceError>;
+
+    fn release(&self, key: &T, br: Self::Resource);
+}
+
+/// An Action Descriptor holds the information needed to create the HT
+/// which implements the desired action. An ActionDesc is created by
+/// an [`StatefulAction`] implementation.
+pub trait ActionDesc {
     /// Generate the [`HT`] which implements this descriptor.
     fn gen_ht(&self, dir: Direction) -> HT;
 
@@ -748,6 +755,7 @@ pub trait ActionSummary {
     fn summary(&self) -> String;
 }
 
+#[derive(Clone)]
 pub struct IdentityDesc {
     name: String,
 }
@@ -759,10 +767,6 @@ impl IdentityDesc {
 }
 
 impl ActionDesc for IdentityDesc {
-    fn fini(&self) {
-        return;
-    }
-
     fn gen_ht(&self, _dir: Direction) -> HT {
         Default::default()
     }

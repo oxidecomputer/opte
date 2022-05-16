@@ -68,7 +68,11 @@ fn build_ip4_len_to_pri() -> [u16; 33] {
     v
 }
 
-pub fn setup(pb: &PortBuilder, _cfg: &PortCfg) -> Result<(), OpteError> {
+pub fn setup(
+    pb: &PortBuilder,
+    _cfg: &PortCfg,
+    ft_limit: core::num::NonZeroU32,
+) -> Result<(), OpteError> {
     let ig = Action::Meta(Arc::new(RouterAction::new(
         RouterTargetInternal::InternetGateway,
     )));
@@ -76,7 +80,7 @@ pub fn setup(pb: &PortBuilder, _cfg: &PortCfg) -> Result<(), OpteError> {
     // Indexes:
     //
     // * 0: InternetGateway
-    let layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), vec![ig]);
+    let layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), vec![ig], ft_limit);
 
     // If there is no matching router entry we drop the packet.
     let drop_rule = Rule::match_any(65535, rule::Action::Deny);

@@ -34,7 +34,11 @@ use crate::engine::port::{PortBuilder, Pos};
 use crate::engine::rule::{Action, Rule};
 use crate::oxide_vpc::PortCfg;
 
-pub fn setup(pb: &mut PortBuilder, cfg: &PortCfg) -> Result<(), OpteError> {
+pub fn setup(
+    pb: &mut PortBuilder,
+    cfg: &PortCfg,
+    ft_limit: core::num::NonZeroU32,
+) -> Result<(), OpteError> {
     // All guest interfaces live on a `/32`-network in the Oxide VPC;
     // restricting the L2 domain to two nodes: the guest NIC and the
     // OPTE Port. This allows OPTE to act as the gateway for which all
@@ -109,7 +113,7 @@ pub fn setup(pb: &mut PortBuilder, cfg: &PortCfg) -> Result<(), OpteError> {
     }));
     let ack_idx = 1;
 
-    let dhcp = Layer::new("dhcp4", pb.name(), vec![offer, ack]);
+    let dhcp = Layer::new("dhcp4", pb.name(), vec![offer, ack], ft_limit);
 
     let discover_rule = Rule::new(1, dhcp.action(offer_idx).unwrap().clone());
     dhcp.add_rule(Direction::Out, discover_rule.finalize());

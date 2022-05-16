@@ -22,6 +22,7 @@ use crate::oxide_vpc::PortCfg;
 pub fn setup(
     pb: &mut PortBuilder,
     cfg: &PortCfg,
+    ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     let reply = Action::Hairpin(Arc::new(Icmp4EchoReply {
         // Map an Echo from guest (src) -> gateway (dst) to an Echo
@@ -31,7 +32,7 @@ pub fn setup(
         echo_dst_mac: cfg.gw_mac.into(),
         echo_dst_ip: cfg.gw_ip,
     }));
-    let icmp = Layer::new("icmp", pb.name(), vec![reply]);
+    let icmp = Layer::new("icmp", pb.name(), vec![reply], ft_limit);
 
     // ================================================================
     // ICMPv4 Echo Reply

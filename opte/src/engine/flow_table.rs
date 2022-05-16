@@ -5,6 +5,7 @@
 // Copyright 2022 Oxide Computer Company
 
 use core::fmt;
+use core::num::NonZeroU32;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -61,11 +62,13 @@ impl Ttl {
     }
 }
 
+pub type FlowTableDump = Vec<(InnerFlowId, FlowEntryDump)>;
+
 #[derive(Debug)]
 pub struct FlowTable<S> {
     port_c: CString,
     name_c: CString,
-    limit: u32,
+    limit: NonZeroU32,
     ttl: Ttl,
     map: BTreeMap<InnerFlowId, FlowEntry<S>>,
 }
@@ -81,18 +84,23 @@ where
     /// If the table is at max capacity, an error is returned and no
     /// modification is made to the table.
     ///
-    /// If an entry already exists for this flow, an error is returned
-    /// and no modification is made to the table.
+    /// If an entry already exists for this flow, it is overwritten.
     pub fn add(&mut self, flow_id: InnerFlowId, state: S) -> Result<()> {
-        if self.map.len() == self.limit as usize {
-            return Err(OpteError::MaxCapacity(self.limit as u64));
+        if self.map.len() == self.limit.get() as usize {
+            return Err(OpteError::MaxCapacity(self.limit.get() as u64));
         }
 
         let entry = FlowEntry::new(state);
-        match self.map.insert(flow_id.clone(), entry) {
-            None => Ok(()),
-            Some(_) => Err(OpteError::FlowExists(flow_id.to_string())),
-        }
+        self.map.insert(flow_id.clone(), entry);
+        Ok(())
+    }
+
+    /// Add a new entry to the flow table while eliding the capacity check.
+    ///
+    /// This is meant for table implementations that enforce their own limit.
+    pub fn add_unchecked(&mut self, flow_id: InnerFlowId, state: S) {
+        let entry = FlowEntry::new(state);
+        self.map.insert(flow_id.clone(), entry);
     }
 
     // Clear all entries from the flow table.
@@ -100,7 +108,7 @@ where
         self.map.clear()
     }
 
-    pub fn dump(&self) -> Vec<(InnerFlowId, FlowEntryDump)> {
+    pub fn dump(&self) -> FlowTableDump {
         let mut flows = Vec::with_capacity(self.map.len());
         for (flow_id, entry) in &self.map {
             flows.push((flow_id.clone(), FlowEntryDump::from(entry)));
@@ -108,23 +116,32 @@ where
         flows
     }
 
-    pub fn expire_flows(&mut self, now: Moment) {
+    pub fn expire(&mut self, flowid: &InnerFlowId) {
+        flow_expired_probe(&self.port_c, &self.name_c, flowid);
+        self.map.remove(flowid).unwrap();
+    }
+
+    pub fn expire_flows(&mut self, now: Moment) -> Vec<InnerFlowId> {
         let name_c = &self.name_c;
         let port_c = &self.port_c;
         let ttl = self.ttl;
+        let mut expired = vec![];
 
         self.map.retain(|flowid, state| {
             if state.is_expired(now, ttl) {
                 flow_expired_probe(port_c, name_c, flowid);
+                expired.push(flowid.clone().mirror());
                 return false;
             }
 
             true
         });
+
+        expired
     }
 
     /// Get the maximum number of entries this flow table may hold.
-    pub fn get_limit(&self) -> u32 {
+    pub fn get_limit(&self) -> NonZeroU32 {
         self.limit
     }
 
@@ -138,10 +155,9 @@ where
     pub fn new(
         port: &str,
         name: &str,
-        limit: Option<u32>,
+        limit: NonZeroU32,
         ttl: Option<Ttl>,
     ) -> FlowTable<S> {
-        let limit = limit.unwrap_or(FLOW_TABLE_DEF_MAX_ENTRIES);
         let ttl = ttl.unwrap_or(FLOW_DEF_TTL);
 
         Self {
@@ -281,22 +297,7 @@ mod test {
     use crate::engine::ip4::Protocol;
     use core::time::Duration;
 
-    #[test]
-    fn flow_exists() {
-        let flowid = InnerFlowId {
-            proto: Protocol::TCP,
-            src_ip: IpAddr::Ip4("192.168.2.10".parse().unwrap()),
-            src_port: 37890,
-            dst_ip: IpAddr::Ip4("76.76.21.21".parse().unwrap()),
-            dst_port: 443,
-        };
-
-        let mut ft = FlowTable::new("port", "flow-expired-test", None, None);
-        assert_eq!(ft.num_flows(), 0);
-        ft.add(flowid.clone(), ()).unwrap();
-        assert_eq!(ft.num_flows(), 1);
-        assert!(ft.add(flowid, ()).is_err());
-    }
+    pub const FT_SIZE: Option<NonZeroU32> = NonZeroU32::new(16);
 
     #[test]
     fn flow_expired() {
@@ -308,7 +309,8 @@ mod test {
             dst_port: 443,
         };
 
-        let mut ft = FlowTable::new("port", "flow-expired-test", None, None);
+        let mut ft =
+            FlowTable::new("port", "flow-expired-test", FT_SIZE.unwrap(), None);
         assert_eq!(ft.num_flows(), 0);
         ft.add(flowid, ()).unwrap();
         let now = Moment::now();
@@ -329,7 +331,8 @@ mod test {
             dst_port: 443,
         };
 
-        let mut ft = FlowTable::new("port", "flow-clear-test", None, None);
+        let mut ft =
+            FlowTable::new("port", "flow-clear-test", FT_SIZE.unwrap(), None);
         assert_eq!(ft.num_flows(), 0);
         ft.add(flowid, ()).unwrap();
         assert_eq!(ft.num_flows(), 1);

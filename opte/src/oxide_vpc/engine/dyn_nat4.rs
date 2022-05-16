@@ -27,8 +27,9 @@ use crate::oxide_vpc::PortCfg;
 pub fn setup(
     pb: &mut PortBuilder,
     cfg: &PortCfg,
+    ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
-    let mut pool = NatPool::new();
+    let pool = NatPool::new();
     pool.add(cfg.private_ip, cfg.dyn_nat.public_ip, cfg.dyn_nat.ports.clone());
 
     let nat = DynNat4::new(cfg.private_ip, Arc::new(pool));
@@ -37,6 +38,7 @@ pub fn setup(
         "dyn-nat4",
         pb.name(),
         vec![Action::Stateful(Arc::new(nat))],
+        ft_limit,
     );
 
     let mut rule = Rule::new(1, layer.action(0).unwrap().clone());

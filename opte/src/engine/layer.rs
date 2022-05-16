@@ -6,6 +6,7 @@
 
 use core::fmt::{self, Display};
 use core::mem;
+use core::num::NonZeroU32;
 use core::result;
 
 cfg_if! {
@@ -23,7 +24,7 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use super::flow_table::FlowTable;
+use super::flow_table::{FlowTable, FlowTableDump};
 use super::headers::{IpAddr, IpMeta, UlpMeta};
 use super::ioctl;
 use super::ip4::Protocol;
@@ -42,6 +43,7 @@ use illumos_ddi_dki::c_char;
 
 #[derive(Debug)]
 pub enum LayerError {
+    FlowTableFull { layer: String, dir: Direction },
     GenDesc(rule::GenDescError),
     GenHt(rule::GenHtError),
     GenPacket(rule::GenErr),
@@ -76,18 +78,167 @@ pub enum Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
+// This type should NEVER be Clone/Copy. It represents a reserved slot
+// in the LFT; allowing it to be copied would create a resource leak.
+struct LftReceipt<'a> {
+    used: bool,
+    count: &'a KMutex<u32>,
+}
+
+impl<'a> Drop for LftReceipt<'a> {
+    fn drop(&mut self) {
+        if !self.used {
+            *self.count.lock() -= 1
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum LftError {
+    MaxCapacity,
+}
+
+struct LayerFlowTable {
+    // Anytime the flow tables need to be held at the same time the
+    // mutex order is always:
+    //
+    // 1) count
+    // 2) ft_in
+    // 2) ft_out
+    limit: NonZeroU32,
+    count: KMutex<u32>,
+    ft_in: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
+    ft_out: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
+}
+
+pub struct LftDump {
+    ft_in: FlowTableDump,
+    ft_out: FlowTableDump,
+}
+
+impl LayerFlowTable {
+    // Receipt ownership is passed to this method, allowing it to be
+    // dropped and released after inserting the pair of entries.
+    fn add_pair(
+        &self,
+        mut receipt: LftReceipt,
+        action_desc: Arc<dyn ActionDesc>,
+        in_flow: InnerFlowId,
+        out_flow: InnerFlowId,
+    ) {
+        // We add unchekced because the limit is now enforced by
+        // LayerFlowTable, not the individual flow tables.
+        //
+        // XXX Eventually the UFT and TCP table will be given the same
+        // treatment; at that time we should probably remove the limit
+        // enforcement from FlowTable.
+        receipt.used = true;
+        self.ft_in.lock().add_unchecked(in_flow, action_desc.clone());
+        self.ft_out.lock().add_unchecked(out_flow, action_desc.clone());
+    }
+
+    fn clear(&self) {
+        let mut count = self.count.lock();
+        let mut ft_in = self.ft_in.lock();
+        let mut ft_out = self.ft_out.lock();
+        ft_in.clear();
+        ft_out.clear();
+        *count = 0;
+    }
+
+    // Be careful with this; you're contending with the data path.
+    fn dump(&self) -> LftDump {
+        let ftil = self.ft_in.lock();
+        let ftol = self.ft_out.lock();
+        let ft_in = ftil.dump();
+        let ft_out = ftol.dump();
+        LftDump { ft_in, ft_out }
+    }
+
+    fn expire_flows(&self, now: Moment) {
+        // It's imperative that both sides of the table and its count
+        // move in lockstep; thus we grab all locks.
+        let mut count = self.count.lock();
+        let mut ft_in = self.ft_in.lock();
+        let mut ft_out = self.ft_out.lock();
+
+        // XXX The two sides can have different traffic patterns and
+        // thus one side could be considered expired while the other
+        // is active. You could have one side seeing packets while the
+        // other side is idle; so what do we do? Currently this impl
+        // bases expiration on the outgoing side only, but expires
+        // both entries (just like it's imperative to add an entry as
+        // a pair, it's also imperative to remove an entry as a pair).
+        // Perhaps the two sides should share a single moment (though
+        // that would required mutex or atomic). Or perhaps both sides
+        // should be checked, and if either side is expired the pair
+        // is considered expired (or active). Maybe this should be
+        // configurable?
+        let expired = ft_out.expire_flows(now);
+        for flow in expired {
+            ft_in.expire(&flow);
+        }
+        *count = ft_out.num_flows();
+    }
+
+    fn get_in(&self, flow: &InnerFlowId) -> Option<Arc<dyn ActionDesc>> {
+        match self.ft_in.lock().get_mut(flow) {
+            Some(entry) => {
+                entry.hit();
+                Some(entry.state().clone())
+            }
+
+            None => None,
+        }
+    }
+
+    fn get_out(&self, flow: &InnerFlowId) -> Option<Arc<dyn ActionDesc>> {
+        match self.ft_out.lock().get_mut(flow) {
+            Some(entry) => {
+                entry.hit();
+                Some(entry.state().clone())
+            }
+
+            None => None,
+        }
+    }
+
+    fn new(port: &str, layer: &str, limit: NonZeroU32) -> Self {
+        Self {
+            count: KMutex::new(0, KMutexType::Driver),
+            limit,
+            ft_in: KMutex::new(
+                FlowTable::new(port, &format!("{}_in", layer), limit, None),
+                KMutexType::Driver,
+            ),
+            ft_out: KMutex::new(
+                FlowTable::new(port, &format!("{}_out", layer), limit, None),
+                KMutexType::Driver,
+            ),
+        }
+    }
+
+    fn num_flows(&self) -> u32 {
+        *self.count.lock()
+    }
+
+    fn take_receipt(&self) -> result::Result<LftReceipt, LftError> {
+        let mut count_guard = self.count.lock();
+        if *count_guard == self.limit.get() {
+            Err(LftError::MaxCapacity)
+        } else {
+            *count_guard += 1;
+            Ok(LftReceipt { used: false, count: &self.count })
+        }
+    }
+}
+
 pub struct Layer {
     port_c: CString,
     name: String,
     name_c: CString,
     actions: Vec<Action>,
-    // Anytime the rules or flow tables need to be held at the same
-    // time the mutex order is always:
-    //
-    // 1) inbound
-    // 2) outbound
-    ft_in: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
-    ft_out: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
+    ft: LayerFlowTable,
     rules_in: KMutex<RuleTable>,
     rules_out: KMutex<RuleTable>,
 }
@@ -106,19 +257,17 @@ impl Layer {
 
     /// Clear all flows from the layer's flow tables.
     pub fn clear_flows(&self) {
-        self.ft_in.lock().clear();
-        self.ft_out.lock().clear();
+        self.ft.clear();
     }
 
     pub fn dump(&self) -> ioctl::DumpLayerResp {
         let rules_in = self.rules_in.lock().dump();
         let rules_out = self.rules_out.lock().dump();
-        let ft_in = self.ft_in.lock().dump();
-        let ft_out = self.ft_out.lock().dump();
+        let ftd = self.ft.dump();
         ioctl::DumpLayerResp {
             name: self.name.clone(),
-            ft_in,
-            ft_out,
+            ft_in: ftd.ft_in,
+            ft_out: ftd.ft_out,
             rules_in,
             rules_out,
         }
@@ -197,8 +346,7 @@ impl Layer {
     }
 
     pub fn expire_flows(&self, now: Moment) {
-        self.ft_in.lock().expire_flows(now);
-        self.ft_out.lock().expire_flows(now);
+        self.ft.expire_flows(now);
     }
 
     pub fn layer_process_entry_probe(
@@ -281,7 +429,12 @@ impl Layer {
         &self.name
     }
 
-    pub fn new(name: &str, port: &str, actions: Vec<Action>) -> Self {
+    pub fn new(
+        name: &str,
+        port: &str,
+        actions: Vec<Action>,
+        ft_limit: NonZeroU32,
+    ) -> Self {
         let port_c = CString::new(port).unwrap();
         let name_c = CString::new(name).unwrap();
 
@@ -290,14 +443,7 @@ impl Layer {
             name: name.to_string(),
             name_c,
             port_c: port_c.clone(),
-            ft_in: KMutex::new(
-                FlowTable::new(port, &format!("{}_in", name), None, None),
-                KMutexType::Driver,
-            ),
-            ft_out: KMutex::new(
-                FlowTable::new(port, &format!("{}_out", name), None, None),
-                KMutexType::Driver,
-            ),
+            ft: LayerFlowTable::new(port, name, ft_limit),
             rules_in: KMutex::new(
                 RuleTable::new(port, name, Direction::In),
                 KMutexType::Driver,
@@ -309,11 +455,8 @@ impl Layer {
         }
     }
 
-    pub fn num_flows(&self, dir: Direction) -> u32 {
-        match dir {
-            Direction::Out => self.ft_out.lock().num_flows(),
-            Direction::In => self.ft_in.lock().num_flows(),
-        }
+    pub fn num_flows(&self) -> u32 {
+        self.ft.num_flows()
     }
 
     pub fn num_rules(&self, dir: Direction) -> usize {
@@ -356,9 +499,7 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        if let Some(entry) = self.ft_in.lock().get_mut(&ifid) {
-            entry.hit();
-            let desc = entry.state();
+        if let Some(desc) = self.ft.get_in(&ifid) {
             let ht = desc.gen_ht(Direction::In);
             hts.push(ht.clone());
 
@@ -474,6 +615,16 @@ impl Layer {
             }
 
             Action::Stateful(action) => {
+                let receipt = match self.ft.take_receipt() {
+                    Ok(r) => r,
+                    Err(LftError::MaxCapacity) => {
+                        return Err(LayerError::FlowTableFull {
+                            layer: self.name.clone(),
+                            dir: Direction::In,
+                        });
+                    }
+                };
+
                 let desc = match action.gen_desc(&ifid, meta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(desc) => desc,
@@ -486,6 +637,7 @@ impl Layer {
                     },
 
                     Err(e) => {
+                        drop(receipt);
                         self.record_gen_desc_failure(
                             &ectx,
                             Direction::In,
@@ -498,14 +650,17 @@ impl Layer {
 
                 let ht_in = desc.gen_ht(Direction::In);
                 hts.push(ht_in.clone());
-
-                // TODO kill unwrap
-                self.ft_in.lock().add(ifid.clone(), desc.clone()).unwrap();
-
                 ht_in.run(pkt.meta_mut());
-
                 let ifid_after = InnerFlowId::from(pkt.meta());
-
+                // The outbound FlowId must be calculated _after_ the
+                // header transformation. Remember, the "top" of layer
+                // represents how the client sees the traffic, and the
+                // "bottom" of the layer represents how the network
+                // sees the traffic. The `ifid_after` value represents
+                // how the cilent sees the traffic. The final step is
+                // to mirror the IPs and ports to reflect the traffic
+                // direction change.
+                let out_ifid = ifid_after.clone().mirror();
                 ht_probe(
                     &self.port_c,
                     &format!("{}-rt", self.name),
@@ -514,32 +669,7 @@ impl Layer {
                     &ifid_after,
                 );
 
-                // The outbound FlowId must be calculated _after_
-                // the header transposition. Remember, the two
-                // flow tables act as duals of each other, and the
-                // HT might change how the other side of this
-                // layer sees this flow.
-                let out_ifid = InnerFlowId::from(pkt.meta()).dual();
-                // TODO okay time to deal with the fallout of this
-                // returning an error and see how the info percolates
-                // up the processing chain.
-                //
-                // TODO#2 On second thought this bleeds into a whole
-                // thing about restructuring the various error types.
-                // While putting everything in OpteError is certainly
-                // conveinent it feels like it might lose some
-                // fidelity in places. It might be that we want a
-                // handful of different error types like admin vs.
-                // processing or maybe just allow some of the more
-                // specific error types around layer processing to
-                // nest into the OpteError type. But at this very
-                // moment I need to get some other stuff done to
-                // unblock other work. So for now I've marked all this
-                // places with `TODO kill unwrap` and should be the
-                // first thing I come back to after unbloking others.
-                //
-                // TODO kill unwrap
-                self.ft_out.lock().add(out_ifid, desc).unwrap();
+                self.ft.add_pair(receipt, desc, ifid.clone(), out_ifid);
 
                 // if let Some(ctx) = ra_in.ctx {
                 //     ctx.exec(flow_id, &mut [0; 0]);
@@ -588,15 +718,13 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        if let Some(entry) = self.ft_out.lock().get_mut(&ifid) {
-            entry.hit();
-            let desc = entry.state();
+        if let Some(desc) = self.ft.get_out(&ifid) {
             let ht = desc.gen_ht(Direction::Out);
             hts.push(ht.clone());
 
             ht.run(pkt.meta_mut());
 
-            let ifid_after = InnerFlowId::from(pkt.meta()).dual();
+            let ifid_after = InnerFlowId::from(pkt.meta());
             ht_probe(
                 &self.port_c,
                 &format!("{}-ft", self.name),
@@ -707,6 +835,48 @@ impl Layer {
             }
 
             Action::Stateful(action) => {
+                // A stateful action requires a flow entry in both
+                // directions: inbound and outbound. This entry holds
+                // an implementation of ActionDesc, which has two
+                // responsibilities:
+                //
+                // 1) To provide the means of generating a header
+                //    transformation (HT) for that given flow,
+                //
+                // 2) To track any resources obtained as part of
+                //    providing this HT, so that they may be released
+                //    when the flow expires.
+                //
+                // If we cannot obtain an entry, there is no sense in
+                // generating an action descriptor. By asking the FT
+                // for a receipt we reserve a slot ahead of time, that
+                // way we can proceed to _attempt_ to create an action
+                // descriptor (that may fail in its own right).
+                //
+                // You might think that a stateful action without a
+                // resource requirement can get by without an FT
+                // entry; i.e., that you could just generate the
+                // desc/HT from scratch for each packet until an FT
+                // entry becomes available. This is not correct. For
+                // example, in the case of implementing a stateful
+                // firewall, you want outbound connection attempts to
+                // create dynamic inbound rules to allow the handshake
+                // from the remote; an entry on the other side is
+                // required.
+                //
+                // In general, the semantic of a StatefulAction is
+                // that it gets an LFT entry. If there are no slots
+                // available, then we must fail until one opens up.
+                let receipt = match self.ft.take_receipt() {
+                    Ok(r) => r,
+                    Err(LftError::MaxCapacity) => {
+                        return Err(LayerError::FlowTableFull {
+                            layer: self.name.clone(),
+                            dir: Direction::Out,
+                        });
+                    }
+                };
+
                 let desc = match action.gen_desc(&ifid, meta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(desc) => desc,
@@ -719,6 +889,7 @@ impl Layer {
                     },
 
                     Err(e) => {
+                        drop(receipt);
                         self.record_gen_desc_failure(
                             &ectx,
                             Direction::Out,
@@ -731,14 +902,17 @@ impl Layer {
 
                 let ht_out = desc.gen_ht(Direction::Out);
                 hts.push(ht_out.clone());
-
-                // TODO kill unwrap
-                self.ft_out.lock().add(ifid.clone(), desc.clone()).unwrap();
-
                 ht_out.run(pkt.meta_mut());
-
                 let ifid_after = InnerFlowId::from(pkt.meta());
-
+                // The inbound FlowId must be calculated _after_ the
+                // header transformation. Remember, the "top" of layer
+                // represents how the client sees the traffic, and the
+                // "bottom" of the layer represents how the network
+                // sees the traffic. The `ifid_after` value represents
+                // how the network sees the traffic. The final step is
+                // to mirror the IPs and ports to reflect the traffic
+                // direction change.
+                let in_ifid = ifid_after.clone().mirror();
                 ht_probe(
                     &self.port_c,
                     &format!("{}-rt", self.name),
@@ -747,14 +921,7 @@ impl Layer {
                     &ifid_after,
                 );
 
-                // The inbound FlowId must be calculated _after_
-                // the header transposition. Remember, the two
-                // flow tables act as duals of each other, and the
-                // HT might change how the other side of this
-                // layer sees this flow.
-                let in_ifid = InnerFlowId::from(pkt.meta()).dual();
-                // TODO kill unwrap
-                self.ft_in.lock().add(in_ifid, desc).unwrap();
+                self.ft.add_pair(receipt, desc, in_ifid, ifid.clone());
 
                 // if let Some(ctx) = ra_out2.ctx {
                 //     ctx.exec(flow_id, &mut [0; 0]);
@@ -872,12 +1039,9 @@ impl Layer {
         // of other threads.
         let mut rules_in = self.rules_in.lock();
         let mut rules_out = self.rules_out.lock();
-        let mut ft_in = self.ft_in.lock();
-        let mut ft_out = self.ft_out.lock();
+        self.ft.clear();
         rules_in.set_rules(in_rules);
         rules_out.set_rules(out_rules);
-        ft_in.clear();
-        ft_out.clear();
     }
 }
 
@@ -909,7 +1073,9 @@ pub struct InnerFlowId {
 }
 
 impl InnerFlowId {
-    pub fn dual(mut self) -> Self {
+    /// Swap IP source and destination as well as ULP port source and
+    /// destination.
+    pub fn mirror(mut self) -> Self {
         mem::swap(&mut self.src_ip, &mut self.dst_ip);
         mem::swap(&mut self.src_port, &mut self.dst_port);
         self
@@ -952,7 +1118,6 @@ impl From<&PacketMeta> for InnerFlowId {
     }
 }
 
-// TODO move this into Layer itself.
 #[derive(Debug)]
 pub struct RuleTable {
     port_c: CString,
@@ -1196,50 +1361,86 @@ pub struct rule_no_match_sdt_arg {
     pub flow_id: *const flow_id_sdt_arg,
 }
 
-#[test]
-fn find_rule() {
-    use super::headers::{IpMeta, UlpMeta};
-    use super::ip4::Ipv4Meta;
-    use super::packet::{MetaGroup, PacketReader};
-    use super::rule::{self, Ipv4AddrMatch, Predicate};
-    use super::tcp::TcpMeta;
+#[cfg(test)]
+mod test {
+    use super::*;
 
-    let mut rule_table = RuleTable::new("port", "test", Direction::Out);
-    let mut rule = Rule::new(
-        1,
-        Action::Static(Arc::new(rule::Identity::new("find_rule"))),
-    );
-    let cidr = "10.0.0.0/24".parse().unwrap();
-    rule.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Prefix(
-        cidr,
-    )]));
+    #[test]
+    fn lft_receipt() {
+        let lft = LayerFlowTable::new(
+            "lft_receipt_test",
+            "lft_receipt_test",
+            NonZeroU32::new(2).unwrap(),
+        );
+        let r1 = lft.take_receipt().unwrap();
+        let r2 = lft.take_receipt().unwrap();
+        assert!(matches!(lft.take_receipt(), Err(_)));
+        let flowid = FLOW_ID_DEFAULT.clone();
+        let desc = super::rule::IdentityDesc::new("id".to_string());
+        lft.add_pair(
+            r1,
+            Arc::new(desc.clone()),
+            flowid.clone(),
+            flowid.clone(),
+        );
+        assert_eq!(lft.num_flows(), 2);
+        drop(r2);
+        assert_eq!(lft.num_flows(), 1);
+        let r3 = lft.take_receipt().unwrap();
+        let mut flowid2 = flowid.clone();
+        flowid2.proto = Protocol::TCP;
+        lft.add_pair(r3, Arc::new(desc), flowid2.clone(), flowid2.clone());
+        assert_eq!(lft.num_flows(), 2);
+    }
 
-    rule_table.add(rule.finalize());
+    #[test]
+    fn find_rule() {
+        use crate::engine::headers::{IpMeta, UlpMeta};
+        use crate::engine::ip4::Ipv4Meta;
+        use crate::engine::packet::{MetaGroup, PacketReader};
+        use crate::engine::rule::{self, Ipv4AddrMatch, Predicate};
+        use crate::engine::tcp::TcpMeta;
 
-    let ip = IpMeta::from(Ipv4Meta {
-        src: "10.0.0.77".parse().unwrap(),
-        dst: "52.10.128.69".parse().unwrap(),
-        proto: Protocol::TCP,
-    });
-    let ulp = UlpMeta::from(TcpMeta {
-        src: 5555,
-        dst: 443,
-        flags: 0,
-        seq: 0,
-        ack: 0,
-    });
+        let mut rule_table = RuleTable::new("port", "test", Direction::Out);
+        let mut rule = Rule::new(
+            1,
+            Action::Static(Arc::new(rule::Identity::new("find_rule"))),
+        );
+        let cidr = "10.0.0.0/24".parse().unwrap();
+        rule.add_predicate(Predicate::InnerSrcIp4(vec![
+            Ipv4AddrMatch::Prefix(cidr),
+        ]));
 
-    let meta = PacketMeta {
-        outer: Default::default(),
-        inner: MetaGroup { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
-    };
+        rule_table.add(rule.finalize());
 
-    // The pkt/rdr aren't actually used in this case.
-    let pkt = Packet::copy(&[0xA]);
-    let mut rdr = PacketReader::new(&pkt, ());
-    assert!(rule_table.find_match(&meta, &mut rdr).is_some());
+        let ip = IpMeta::from(Ipv4Meta {
+            src: "10.0.0.77".parse().unwrap(),
+            dst: "52.10.128.69".parse().unwrap(),
+            proto: Protocol::TCP,
+        });
+        let ulp = UlpMeta::from(TcpMeta {
+            src: 5555,
+            dst: 443,
+            flags: 0,
+            seq: 0,
+            ack: 0,
+        });
+
+        let meta = PacketMeta {
+            outer: Default::default(),
+            inner: MetaGroup {
+                ip: Some(ip),
+                ulp: Some(ulp),
+                ..Default::default()
+            },
+        };
+
+        // The pkt/rdr aren't actually used in this case.
+        let pkt = Packet::copy(&[0xA]);
+        let mut rdr = PacketReader::new(&pkt, ());
+        assert!(rule_table.find_match(&meta, &mut rdr).is_some());
+    }
 }
-
 // TODO Reinstate
 // #[test]
 // fn layer_nat() {

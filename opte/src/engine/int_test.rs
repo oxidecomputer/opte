@@ -23,6 +23,7 @@
 //! TODO This module belongs in oxide_vpc as it's testing VPC-specific
 //! configuration.
 use std::boxed::Box;
+use std::num::NonZeroU32;
 use std::ops::Range;
 use std::prelude::v1::*;
 use std::sync::Arc;
@@ -49,7 +50,7 @@ use super::packet::{
     Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
 };
 use super::port::meta::Meta;
-use super::port::{PortBuilder, ProcessError, ProcessResult};
+use super::port::{Port, PortBuilder, ProcessError, ProcessResult};
 use super::rule::{self, Rule};
 use super::tcp::{TcpFlags, TcpHdr};
 use super::time::Moment;
@@ -131,18 +132,24 @@ fn lab_cfg() -> PortCfg {
     }
 }
 
-fn oxide_net_setup(name: &str, cfg: &PortCfg) -> PortBuilder {
+fn oxide_net_builder(name: &str, cfg: &PortCfg) -> PortBuilder {
     let ectx = Arc::new(ExecCtx { log: Box::new(crate::PrintlnLog {}) });
     let name_cstr = crate::CString::new(name).unwrap();
     let mut pb =
         PortBuilder::new(name, name_cstr, cfg.private_mac.into(), ectx.clone());
 
-    firewall::setup(&mut pb).expect("failed to add firewall layer");
-    icmp::setup(&mut pb, cfg).expect("failed to add icmp layer");
-    dyn_nat4::setup(&mut pb, cfg).expect("failed to add dyn-nat4 layer");
-    arp::setup(&mut pb, cfg).expect("failed to add ARP layer");
-    router::setup(&mut pb, cfg).expect("failed to add router layer");
-    overlay::setup(&mut pb, cfg).expect("failed to add overlay layer");
+    let fw_limit = NonZeroU32::new(8096).unwrap();
+    let snat_limit = NonZeroU32::new(8096).unwrap();
+    let one_limit = NonZeroU32::new(1).unwrap();
+
+    firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
+    icmp::setup(&mut pb, cfg, one_limit).expect("failed to add icmp layer");
+    dyn_nat4::setup(&mut pb, cfg, snat_limit)
+        .expect("failed to add dyn-nat4 layer");
+    arp::setup(&mut pb, cfg, one_limit).expect("failed to add ARP layer");
+    router::setup(&mut pb, cfg, one_limit).expect("failed to add router layer");
+    overlay::setup(&mut pb, cfg, one_limit)
+        .expect("failed to add overlay layer");
 
     // Deny all inbound packets by default.
     pb.add_rule("firewall", In, Rule::match_any(65535, rule::Action::Deny))
@@ -152,6 +159,13 @@ fn oxide_net_setup(name: &str, cfg: &PortCfg) -> PortBuilder {
     pb.add_rule("firewall", Out, Rule::match_any(65535, act)).unwrap();
     pb
 }
+
+fn oxide_net_setup(name: &str, cfg: &PortCfg) -> Port {
+    oxide_net_builder(name, cfg).create(UFT_LIMIT.unwrap(), TCP_LIMIT.unwrap())
+}
+
+const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
+const TCP_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 
 fn g1_cfg() -> PortCfg {
     PortCfg {
@@ -234,7 +248,7 @@ fn port_transitions() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p).unwrap();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
     assert_eq!(g1_port.num_rules("firewall", Out), 1);
 
     // Add router entry that allows Guest 1 to send to Guest 2.
@@ -305,7 +319,7 @@ fn gateway_icmp4_ping() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p).unwrap();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
     g1_port.start();
 
     let mut pcap = crate::test::PcapBuilder::new("gateway_icmpv4_ping.pcap");
@@ -434,7 +448,7 @@ fn overlay_guest_to_guest_no_route() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p).unwrap();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
     g1_port.start();
 
     // ================================================================
@@ -486,7 +500,7 @@ fn overlay_guest_to_guest() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p).unwrap();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
     g1_port.start();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
@@ -497,7 +511,7 @@ fn overlay_guest_to_guest() {
     )
     .unwrap();
 
-    let g2_port = oxide_net_setup("g2_port", &g2_cfg).create();
+    let g2_port = oxide_net_setup("g2_port", &g2_cfg);
     g2_port.start();
 
     // Add router entry that allows Guest 2 to send to Guest 1.
@@ -712,7 +726,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p.clone()).unwrap();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
     g1_port.start();
 
     // Add router entry that allows g1 to talk to any other guest on
@@ -728,7 +742,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
     )
     .unwrap();
 
-    let g2_port = oxide_net_setup("g2_port", &g2_cfg).create();
+    let g2_port = oxide_net_setup("g2_port", &g2_cfg);
     g2_port.start();
 
     // Add router entry that allows Guest 2 to send to Guest 1.
@@ -797,7 +811,7 @@ fn overlay_guest_to_internet() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p).unwrap();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
     g1_port.start();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
@@ -985,7 +999,7 @@ fn arp_gateway() {
 
     let cfg = g1_cfg();
     let mut port_meta = Meta::new();
-    let port = oxide_net_setup("arp_hairpin", &cfg).create();
+    let port = oxide_net_setup("arp_hairpin", &cfg);
     port.start();
     let reply_hdr_sz = ETHER_HDR_SZ + ARP_HDR_SZ;
 
@@ -1063,7 +1077,7 @@ fn flow_expiration() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p).unwrap();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
     g1_port.start();
     let now = Moment::now();
 
@@ -1138,7 +1152,7 @@ fn firewall_replace_rules() {
     let mut port_meta = Meta::new();
     port_meta.add(v2p.clone()).unwrap();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg).create();
+    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
     g1_port.start();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
@@ -1149,7 +1163,7 @@ fn firewall_replace_rules() {
     )
     .unwrap();
 
-    let g2_port = oxide_net_setup("g2_port", &g2_cfg).create();
+    let g2_port = oxide_net_setup("g2_port", &g2_cfg);
     g2_port.start();
 
     // Allow incoming TCP connection on g2 from anyone.

@@ -25,6 +25,7 @@ use crate::oxide_vpc::PortCfg;
 pub fn setup(
     pb: &mut PortBuilder,
     cfg: &PortCfg,
+    ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     let arp = Layer::new(
         "arp",
@@ -33,6 +34,7 @@ pub fn setup(
             // ARP Reply for gateway's IP.
             Action::Hairpin(Arc::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),
         ],
+        ft_limit,
     );
 
     // ================================================================

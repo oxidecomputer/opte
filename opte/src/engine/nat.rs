@@ -26,11 +26,15 @@ use super::ip4::Ipv4Meta;
 use super::layer::InnerFlowId;
 use super::port::meta::Meta;
 use super::rule::{
-    self, ActionDesc, AllowOrDeny, DataPredicate, Predicate, ResourceError,
-    StatefulAction, HT,
+    self, ActionDesc, AllowOrDeny, DataPredicate, Predicate, Resource,
+    ResourceError, ResourceMap, StatefulAction, HT,
 };
 use super::sync::{KMutex, KMutexType};
 use crate::api::{Direction, Ipv4Addr};
+
+#[derive(Clone, Copy)]
+pub struct NatPoolResource(Ipv4Addr, u16);
+impl Resource for NatPoolResource {}
 
 pub struct NatPool {
     // Map private IP to public IP + free list of ports
@@ -39,7 +43,7 @@ pub struct NatPool {
 
 impl NatPool {
     pub fn add(
-        &mut self,
+        &self,
         priv_ip: Ipv4Addr,
         pub_ip: Ipv4Addr,
         pub_ports: Range<u16>,
@@ -66,34 +70,58 @@ impl NatPool {
         NatPool { free_list: KMutex::new(BTreeMap::new(), KMutexType::Driver) }
     }
 
-    pub fn obtain(
+    // A helper function to verify correct operation during testing.
+    #[cfg(test)]
+    fn verify_available(
         &self,
         priv_ip: Ipv4Addr,
-    ) -> Result<(Ipv4Addr, u16), ResourceError> {
+        pub_ip: Ipv4Addr,
+        pub_port: u16,
+    ) -> bool {
+        match self.free_list.lock().get(&priv_ip) {
+            Some((pip, _, free_list)) => {
+                if pub_ip != *pip {
+                    return false;
+                }
+
+                for p in free_list {
+                    if pub_port == *p {
+                        return true;
+                    }
+                }
+
+                false
+            }
+
+            None => false,
+        }
+    }
+}
+
+impl ResourceMap<Ipv4Addr> for NatPool {
+    type Resource = NatPoolResource;
+
+    fn obtain(
+        &self,
+        priv_ip: &Ipv4Addr,
+    ) -> Result<NatPoolResource, ResourceError> {
         match self.free_list.lock().get_mut(&priv_ip) {
             Some((ip, _, ports)) => {
                 if ports.len() == 0 {
                     return Err(ResourceError::Exhausted);
                 }
 
-                Ok((*ip, ports.pop().unwrap()))
+                Ok(NatPoolResource(*ip, ports.pop().unwrap()))
             }
 
             None => Err(ResourceError::NoMatch(priv_ip.to_string())),
         }
     }
 
-    // TODO Add a range to the mapping and verify this port a) isn't
-    // already in the free list and b) is within the range. I might
-    // want to take things a step further, and have a Resource trait
-    // which has obtain and release functions. The obtain function
-    // would take some type that has the ObtainArg marker trait and
-    // would return a BorrowedResource. The release function would
-    // take a BorrowedResource and return nothing.
-    pub fn release(&mut self, priv_ip: Ipv4Addr, p: (Ipv4Addr, u16)) {
+    fn release(&self, priv_ip: &Ipv4Addr, p: NatPoolResource) {
         match self.free_list.lock().get_mut(&priv_ip) {
             Some((_ip, _, ports)) => {
-                let (_, pub_port) = p;
+                let pub_port = p.1;
                 ports.push(pub_port);
             }
 
@@ -131,13 +159,14 @@ impl StatefulAction for DynNat4 {
     ) -> rule::GenDescResult {
         let pool = &self.ip_pool;
         let priv_port = flow_id.src_port;
-        match pool.obtain(self.priv_ip) {
-            Ok((pub_ip, pub_port)) => {
+        match pool.obtain(&self.priv_ip) {
+            Ok(resource) => {
                 let desc = DynNat4Desc {
+                    pool: pool.clone(),
                     priv_ip: self.priv_ip,
                     priv_port: priv_port,
-                    pub_ip,
-                    pub_port,
+                    pub_ip: resource.0,
+                    pub_port: resource.1,
                 };
 
                 Ok(AllowOrDeny::Allow(Arc::new(desc)))
@@ -158,8 +187,9 @@ impl StatefulAction for DynNat4 {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DynNat4Desc {
+    pool: Arc<NatPool>,
     pub_ip: Ipv4Addr,
     pub_port: u16,
     priv_ip: Ipv4Addr,
@@ -169,10 +199,6 @@ pub struct DynNat4Desc {
 pub const DYN_NAT4_NAME: &'static str = "dyn-nat4";
 
 impl ActionDesc for DynNat4Desc {
-    fn fini(&self) {
-        todo!("implement fini() for DynNat4Desc");
-    }
-
     fn gen_ht(&self, dir: Direction) -> HT {
         match dir {
             // Outbound traffic needs it's source IP and source port
@@ -212,12 +238,23 @@ impl ActionDesc for DynNat4Desc {
     }
 }
 
+impl Drop for DynNat4Desc {
+    fn drop(&mut self) {
+        #[cfg(any(feature = "std", test))]
+        println!("releasing {}:{}", self.pub_ip, self.pub_port);
+        self.pool.release(
+            &self.priv_ip,
+            NatPoolResource(self.pub_ip, self.pub_port),
+        );
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
-    fn dyn_nat4_ht() {
+    fn snat4_desc_lifecycle() {
         use crate::api::MacAddr;
         use crate::engine::ether::{EtherMeta, ETHER_TYPE_IPV4};
         use crate::engine::headers::{IpMeta, UlpMeta};
@@ -232,12 +269,17 @@ mod test {
         let pub_ip = "52.10.128.69".parse().unwrap();
         let pub_port = "8765".parse().unwrap();
         let outside_ip = "76.76.21.21".parse().unwrap();
+        let outside_port = 80;
 
-        let nat = DynNat4Desc { pub_ip, pub_port, priv_ip, priv_port };
+        let pool = Arc::new(NatPool::new());
+        pool.add(priv_ip, pub_ip, 8765..8766);
+        let snat = DynNat4::new(priv_ip, pool.clone());
+        let mut port_meta = Meta::new();
+        assert!(pool.verify_available(priv_ip, pub_ip, pub_port));
 
-        // TODO test in_ht
-        let out_ht = nat.gen_ht(Direction::Out);
-
+        // ================================================================
+        // Build the packet metadata
+        // ================================================================
         let ether = EtherMeta {
             src: priv_mac,
             dst: dest_mac,
@@ -250,13 +292,13 @@ mod test {
         });
         let ulp = UlpMeta::from(TcpMeta {
             src: priv_port,
-            dst: 80,
+            dst: outside_port,
             flags: 0,
             seq: 0,
             ack: 0,
         });
 
-        let mut meta = PacketMeta {
+        let mut pmo = PacketMeta {
             outer: Default::default(),
             inner: MetaGroup {
                 ether: Some(ether),
@@ -266,16 +308,27 @@ mod test {
             },
         };
 
-        let ether_meta = meta.inner.ether.as_ref().unwrap();
+        // ================================================================
+        // Verify descriptor generation.
+        // ================================================================
+        let flow_out = InnerFlowId::from(&pmo);
+        let desc = match snat.gen_desc(&flow_out, &mut port_meta) {
+            Ok(AllowOrDeny::Allow(desc)) => desc,
+            _ => panic!("expected AllowOrDeny::Allow(desc) result"),
+        };
+        assert!(!pool.verify_available(priv_ip, pub_ip, pub_port));
+
+        // ================================================================
+        // Verify outbound header transformation
+        // ================================================================
+        let out_ht = desc.gen_ht(Direction::Out);
+        out_ht.run(&mut pmo);
+
+        let ether_meta = pmo.inner.ether.as_ref().unwrap();
         assert_eq!(ether_meta.src, priv_mac);
         assert_eq!(ether_meta.dst, dest_mac);
 
-        out_ht.run(&mut meta);
-
-        let ether_meta = meta.inner.ether.as_ref().unwrap();
-        assert_eq!(ether_meta.dst, dest_mac);
-
-        let ip4_meta = match meta.inner.ip.as_ref().unwrap() {
+        let ip4_meta = match pmo.inner.ip.as_ref().unwrap() {
             IpMeta::Ip4(v) => v,
             _ => panic!("expect Ipv4Meta"),
         };
@@ -284,19 +337,82 @@ mod test {
         assert_eq!(ip4_meta.dst, outside_ip);
         assert_eq!(ip4_meta.proto, Protocol::TCP);
 
-        let tcp_meta = match meta.inner.ulp.as_ref().unwrap() {
+        let tcp_meta = match pmo.inner.ulp.as_ref().unwrap() {
             UlpMeta::Tcp(v) => v,
             _ => panic!("expect TcpMeta"),
         };
 
-        assert_eq!(tcp_meta.src, 8765);
-        assert_eq!(tcp_meta.dst, 80);
+        assert_eq!(tcp_meta.src, pub_port);
+        assert_eq!(tcp_meta.dst, outside_port);
         assert_eq!(tcp_meta.flags, 0);
+
+        // ================================================================
+        // Verify inbound header transformation.
+        // ================================================================
+        let ether = EtherMeta {
+            src: dest_mac,
+            dst: priv_mac,
+            ether_type: ETHER_TYPE_IPV4,
+        };
+        let ip = IpMeta::from(Ipv4Meta {
+            src: outside_ip,
+            dst: pub_ip,
+            proto: Protocol::TCP,
+        });
+        let ulp = UlpMeta::from(TcpMeta {
+            src: outside_port,
+            dst: pub_port,
+            flags: 0,
+            seq: 0,
+            ack: 0,
+        });
+
+        let mut pmi = PacketMeta {
+            outer: Default::default(),
+            inner: MetaGroup {
+                ether: Some(ether),
+                ip: Some(ip),
+                ulp: Some(ulp),
+                ..Default::default()
+            },
+        };
+
+        let in_ht = desc.gen_ht(Direction::In);
+        in_ht.run(&mut pmi);
+
+        let ether_meta = pmi.inner.ether.as_ref().unwrap();
+        assert_eq!(ether_meta.src, dest_mac);
+        assert_eq!(ether_meta.dst, priv_mac);
+
+        let ip4_meta = match pmi.inner.ip.as_ref().unwrap() {
+            IpMeta::Ip4(v) => v,
+            _ => panic!("expect Ipv4Meta"),
+        };
+
+        assert_eq!(ip4_meta.src, outside_ip);
+        assert_eq!(ip4_meta.dst, priv_ip);
+        assert_eq!(ip4_meta.proto, Protocol::TCP);
+
+        let tcp_meta = match pmi.inner.ulp.as_ref().unwrap() {
+            UlpMeta::Tcp(v) => v,
+            _ => panic!("expect TcpMeta"),
+        };
+
+        assert_eq!(tcp_meta.src, outside_port);
+        assert_eq!(tcp_meta.dst, priv_port);
+        assert_eq!(tcp_meta.flags, 0);
+
+        // ================================================================
+        // Drop the descriptor and verify the IP/port resource is
+        // handed back to the pool.
+        // ================================================================
+        drop(desc);
+        assert!(pool.verify_available(priv_ip, pub_ip, pub_port));
     }
 
     #[test]
     fn nat_mappings() {
-        let mut pool = NatPool::new();
+        let pool = NatPool::new();
         let priv1 = "192.168.2.8".parse::<Ipv4Addr>().unwrap();
         let priv2 = "192.168.2.33".parse::<Ipv4Addr>().unwrap();
         let public = "52.10.128.69".parse().unwrap();
@@ -305,8 +421,8 @@ mod test {
         pool.add(priv2, public, 4096..8192);
 
         assert_eq!(pool.num_avail(priv1).unwrap(), 3071);
-        let (mip1, mport1) = match pool.obtain(priv1) {
-            Ok((ip, port)) => (ip, port),
+        let (mip1, mport1) = match pool.obtain(&priv1) {
+            Ok(NatPoolResource(ip, port)) => (ip, port),
             _ => panic!("failed to obtain mapping"),
         };
         assert_eq!(pool.num_avail(priv1).unwrap(), 3070);
@@ -315,8 +431,8 @@ mod test {
         assert!(mport1 < 4096);
 
         assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
-        let (mip2, mport2) = match pool.obtain(priv2) {
-            Ok((ip, port)) => (ip, port),
+        let (mip2, mport2) = match pool.obtain(&priv2) {
+            Ok(NatPoolResource(ip, port)) => (ip, port),
             _ => panic!("failed to obtain mapping"),
         };
         assert_eq!(pool.num_avail(priv2).unwrap(), 4095);
@@ -324,9 +440,9 @@ mod test {
         assert!(mport2 >= 4096);
         assert!(mport2 < 8192);
 
-        pool.release(priv1, (mip1, mport1));
+        pool.release(&priv1, NatPoolResource(mip1, mport1));
         assert_eq!(pool.num_avail(priv1).unwrap(), 3071);
-        pool.release(priv2, (mip2, mport2));
+        pool.release(&priv2, NatPoolResource(mip2, mport2));
         assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
     }
 }
