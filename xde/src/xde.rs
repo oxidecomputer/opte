@@ -51,7 +51,7 @@ use opte::oxide_vpc::api::{
     SetFwRulesReq, SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::{
-    arp, dhcp4, dyn_nat4, firewall, icmp, overlay, router,
+    arp, dhcp4, firewall, icmp, overlay, router, snat4,
 };
 use opte::oxide_vpc::PortCfg;
 use opte::{CStr, CString, ExecCtx};
@@ -1668,7 +1668,7 @@ fn new_port(
     src_underlay_addr: Ipv6Addr,
     vpc_vni: Vni,
     ectx: Arc<ExecCtx>,
-    snat: Option<SnatCfg>,
+    snat_cfg: Option<SnatCfg>,
 ) -> Result<(Arc<Port>, PortCfg), OpteError> {
     let name_cstr = match CString::new(name.clone()) {
         Ok(v) => v,
@@ -1676,15 +1676,15 @@ fn new_port(
     };
 
     //TODO hardcoded
-    let vpc_subnet = if snat.is_none() {
+    let vpc_subnet = if snat_cfg.is_none() {
         "192.168.77.0/24".parse().unwrap()
     } else {
-        snat.as_ref().unwrap().vpc_sub4
+        snat_cfg.as_ref().unwrap().vpc_sub4
     };
 
-    let dyn_nat = match snat.as_ref() {
+    let snat = match snat_cfg.as_ref() {
         None => {
-            opte::oxide_vpc::DynNat4Cfg {
+            opte::oxide_vpc::SNat4Cfg {
                 //TODO hardcode
                 public_ip: "192.168.99.99".parse().unwrap(),
                 //TODO hardcode
@@ -1692,7 +1692,7 @@ fn new_port(
             }
         }
 
-        Some(snat) => opte::oxide_vpc::DynNat4Cfg {
+        Some(snat) => opte::oxide_vpc::SNat4Cfg {
             public_ip: snat.public_ip,
             ports: Range { start: snat.port_start, end: snat.port_end },
         },
@@ -1704,7 +1704,7 @@ fn new_port(
         private_ip: private_ip,
         gw_mac: gateway_mac,
         gw_ip: gateway_ip,
-        dyn_nat,
+        snat,
         vni: vpc_vni,
         phys_ip: src_underlay_addr,
         bsvc_addr: PhysNet {
@@ -1720,8 +1720,8 @@ fn new_port(
     // of Layer: one with, one without?
     dhcp4::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
     icmp::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
-    if snat.is_some() {
-        dyn_nat4::setup(&mut pb, &port_cfg, SNAT_FT_LIMIT.unwrap())?;
+    if snat_cfg.is_some() {
+        snat4::setup(&mut pb, &port_cfg, SNAT_FT_LIMIT.unwrap())?;
     }
     arp::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
     router::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;

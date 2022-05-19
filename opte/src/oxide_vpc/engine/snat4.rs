@@ -17,11 +17,11 @@ cfg_if! {
 use crate::api::{Direction, OpteError};
 use crate::engine::ip4::{Ipv4Addr, Protocol};
 use crate::engine::layer::Layer;
-use crate::engine::nat::{DynNat4, NatPool};
 use crate::engine::port::{PortBuilder, Pos};
 use crate::engine::rule::{
     Action, IpProtoMatch, Ipv4AddrMatch, Predicate, Rule,
 };
+use crate::engine::snat::{NatPool, SNat4};
 use crate::oxide_vpc::PortCfg;
 
 pub fn setup(
@@ -30,18 +30,17 @@ pub fn setup(
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     let pool = NatPool::new();
-    pool.add(cfg.private_ip, cfg.dyn_nat.public_ip, cfg.dyn_nat.ports.clone());
+    pool.add(cfg.private_ip, cfg.snat.public_ip, cfg.snat.ports.clone());
 
-    let nat = DynNat4::new(cfg.private_ip, Arc::new(pool));
-
+    let nat = SNat4::new(cfg.private_ip, Arc::new(pool));
     let layer = Layer::new(
         "dyn-nat4",
         pb.name(),
         vec![Action::Stateful(Arc::new(nat))],
         ft_limit,
     );
-
     let mut rule = Rule::new(1, layer.action(0).unwrap().clone());
+
     rule.add_predicate(Predicate::InnerIpProto(vec![
         IpProtoMatch::Exact(Protocol::TCP),
         IpProtoMatch::Exact(Protocol::UDP),

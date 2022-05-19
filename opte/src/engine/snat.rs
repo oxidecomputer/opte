@@ -133,25 +133,25 @@ impl ResourceMap<Ipv4Addr> for NatPool {
 }
 
 #[derive(Clone)]
-pub struct DynNat4 {
+pub struct SNat4 {
     priv_ip: Ipv4Addr,
     ip_pool: Arc<NatPool>,
 }
 
-impl DynNat4 {
+impl SNat4 {
     pub fn new(addr: Ipv4Addr, ip_pool: Arc<NatPool>) -> Self {
-        DynNat4 { priv_ip: addr.into(), ip_pool }
+        SNat4 { priv_ip: addr.into(), ip_pool }
     }
 }
 
-impl fmt::Display for DynNat4 {
+impl fmt::Display for SNat4 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (pub_ip, ports) = self.ip_pool.mapping(self.priv_ip).unwrap();
         write!(f, "{}:{}-{}", pub_ip, ports.start, ports.end)
     }
 }
 
-impl StatefulAction for DynNat4 {
+impl StatefulAction for SNat4 {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
@@ -161,7 +161,7 @@ impl StatefulAction for DynNat4 {
         let priv_port = flow_id.src_port;
         match pool.obtain(&self.priv_ip) {
             Ok(resource) => {
-                let desc = DynNat4Desc {
+                let desc = SNat4Desc {
                     pool: pool.clone(),
                     priv_ip: self.priv_ip,
                     priv_port: priv_port,
@@ -188,7 +188,7 @@ impl StatefulAction for DynNat4 {
 }
 
 #[derive(Clone)]
-pub struct DynNat4Desc {
+pub struct SNat4Desc {
     pool: Arc<NatPool>,
     pub_ip: Ipv4Addr,
     pub_port: u16,
@@ -196,14 +196,14 @@ pub struct DynNat4Desc {
     priv_port: u16,
 }
 
-pub const DYN_NAT4_NAME: &'static str = "dyn-nat4";
+pub const SNAT4_NAME: &'static str = "SNAT4";
 
-impl ActionDesc for DynNat4Desc {
+impl ActionDesc for SNat4Desc {
     fn gen_ht(&self, dir: Direction) -> HT {
         match dir {
             // Outbound traffic needs it's source IP and source port
             Direction::Out => HT {
-                name: DYN_NAT4_NAME.to_string(),
+                name: SNAT4_NAME.to_string(),
                 inner_ip: Ipv4Meta::modify(Some(self.pub_ip), None, None),
                 inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                     generic: UlpGenericModify {
@@ -219,7 +219,7 @@ impl ActionDesc for DynNat4Desc {
             // destination port mapped back to the private values that
             // the guest expects to see.
             Direction::In => HT {
-                name: DYN_NAT4_NAME.to_string(),
+                name: SNAT4_NAME.to_string(),
                 inner_ip: Ipv4Meta::modify(None, Some(self.priv_ip), None),
                 inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                     generic: UlpGenericModify {
@@ -234,11 +234,11 @@ impl ActionDesc for DynNat4Desc {
     }
 
     fn name(&self) -> &str {
-        DYN_NAT4_NAME
+        SNAT4_NAME
     }
 }
 
-impl Drop for DynNat4Desc {
+impl Drop for SNat4Desc {
     fn drop(&mut self) {
         #[cfg(any(feature = "std", test))]
         println!("releasing {}:{}", self.pub_ip, self.pub_port);
@@ -273,7 +273,7 @@ mod test {
 
         let pool = Arc::new(NatPool::new());
         pool.add(priv_ip, pub_ip, 8765..8766);
-        let snat = DynNat4::new(priv_ip, pool.clone());
+        let snat = SNat4::new(priv_ip, pool.clone());
         let mut port_meta = Meta::new();
         assert!(pool.verify_available(priv_ip, pub_ip, pub_port));
 

@@ -23,11 +23,11 @@ pub mod ip4;
 #[macro_use]
 pub mod ip6;
 pub mod layer;
-pub mod nat;
 #[macro_use]
 pub mod packet;
 pub mod port;
 pub mod rule;
+pub mod snat;
 pub mod sync;
 #[macro_use]
 pub mod tcp;

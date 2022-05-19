@@ -60,8 +60,8 @@ use crate::oxide_vpc::api::{
     AddFwRuleReq, GuestPhysAddr, PhysNet, RouterTarget, SetFwRulesReq,
 };
 use crate::oxide_vpc::engine::overlay::{self, Virt2Phys};
-use crate::oxide_vpc::engine::{arp, dyn_nat4, firewall, icmp, router};
-use crate::oxide_vpc::{DynNat4Cfg, PortCfg};
+use crate::oxide_vpc::engine::{arp, firewall, icmp, router, snat4};
+use crate::oxide_vpc::{PortCfg, SNat4Cfg};
 use crate::ExecCtx;
 
 use ProcessResult::*;
@@ -104,7 +104,7 @@ fn lab_cfg() -> PortCfg {
         private_ip: "172.20.14.16".parse().unwrap(),
         private_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
-        dyn_nat: DynNat4Cfg {
+        snat: SNat4Cfg {
             public_ip: "76.76.21.21".parse().unwrap(),
             ports: Range { start: 1025, end: 4096 },
         },
@@ -144,8 +144,7 @@ fn oxide_net_builder(name: &str, cfg: &PortCfg) -> PortBuilder {
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
     icmp::setup(&mut pb, cfg, one_limit).expect("failed to add icmp layer");
-    dyn_nat4::setup(&mut pb, cfg, snat_limit)
-        .expect("failed to add dyn-nat4 layer");
+    snat4::setup(&mut pb, cfg, snat_limit).expect("failed to add snat4 layer");
     arp::setup(&mut pb, cfg, one_limit).expect("failed to add ARP layer");
     router::setup(&mut pb, cfg, one_limit).expect("failed to add router layer");
     overlay::setup(&mut pb, cfg, one_limit)
@@ -172,7 +171,7 @@ fn g1_cfg() -> PortCfg {
         private_ip: "192.168.77.101".parse().unwrap(),
         private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
-        dyn_nat: DynNat4Cfg {
+        snat: SNat4Cfg {
             // NOTE: This is not a routable IP, but remember that a
             // "public IP" for an Oxide guest could either be a
             // public, routable IP or simply an IP on their wider LAN
@@ -203,7 +202,7 @@ fn g2_cfg() -> PortCfg {
         private_ip: "192.168.77.102".parse().unwrap(),
         private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x66]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
-        dyn_nat: DynNat4Cfg {
+        snat: SNat4Cfg {
             // NOTE: This is not a routable IP, but remember that a
             // "public IP" for an Oxide guest could either be a
             // public, routable IP or simply an IP on their wider LAN
@@ -908,7 +907,7 @@ fn overlay_guest_to_internet() {
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
-            assert_eq!(ip4.src, g1_cfg.dyn_nat.public_ip);
+            assert_eq!(ip4.src, g1_cfg.snat.public_ip);
             assert_eq!(ip4.dst, dst_ip);
             assert_eq!(ip4.proto, Protocol::TCP);
         }
@@ -918,7 +917,7 @@ fn overlay_guest_to_internet() {
 
     match meta.inner.ulp.as_ref().unwrap() {
         UlpMeta::Tcp(tcp) => {
-            assert_eq!(tcp.src, g1_cfg.dyn_nat.ports.rev().next().unwrap());
+            assert_eq!(tcp.src, g1_cfg.snat.ports.rev().next().unwrap());
             assert_eq!(tcp.dst, 443);
         }
 

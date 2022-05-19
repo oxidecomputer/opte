@@ -37,7 +37,7 @@ cfg_if! {
         pub mod engine;
 
         #[derive(Clone, Debug)]
-        pub struct DynNat4Cfg {
+        pub struct SNat4Cfg {
             pub public_ip: Ipv4Addr,
             pub ports: Range<u16>,
         }
@@ -50,7 +50,7 @@ cfg_if! {
             pub private_ip: Ipv4Addr,
             pub gw_mac: MacAddr,
             pub gw_ip: Ipv4Addr,
-            pub dyn_nat: DynNat4Cfg,
+            pub snat: SNat4Cfg,
             pub vni: Vni,
             pub phys_ip: Ipv6Addr,
             pub bsvc_addr: PhysNet,
