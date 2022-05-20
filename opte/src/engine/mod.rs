@@ -35,7 +35,6 @@ pub mod tcp_state;
 pub mod time;
 #[macro_use]
 pub mod udp;
-pub mod vpc;
 
 #[cfg(test)]
 mod int_test;

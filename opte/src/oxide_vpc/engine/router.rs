@@ -40,11 +40,23 @@ pub const ROUTER_LAYER_NAME: &'static str = "router";
 // `Rule` paired with `Action::Deny`. The MetaAction wants an internal
 // version of the router target without the "drop" target to match the
 // remaining possible targets.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouterTargetInternal {
     InternetGateway,
     Ip(IpAddr),
     VpcSubnet(IpCidr),
+}
+
+impl crate::engine::rule::MetaPredicate for RouterTargetInternal {
+    fn is_match(&self, meta: &Meta) -> bool {
+        if let Some(tgt) = meta.get::<Self>() {
+            if self == tgt {
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 impl fmt::Display for RouterTargetInternal {
@@ -85,7 +97,6 @@ pub fn setup(
     // If there is no matching router entry we drop the packet.
     let drop_rule = Rule::match_any(65535, rule::Action::Deny);
     layer.add_rule(Direction::Out, drop_rule);
-
     pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
 

@@ -28,6 +28,7 @@ typedef struct rule_no_match_sdt_arg {
 } rule_no_match_sdt_arg_t;
 
 typedef struct ht_run_sdt_arg {
+	char			*port;
 	char			*loc;
 	char			*dir;
 	flow_id_sdt_arg_t	*flow_before;

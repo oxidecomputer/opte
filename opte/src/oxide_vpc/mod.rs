@@ -29,28 +29,20 @@ pub mod api;
 
 cfg_if! {
     if #[cfg(any(feature = "engine", test))] {
-        use core::ops::Range;
-        use crate::api::{Ipv4Addr, Ipv6Addr, MacAddr, Vni};
-        use crate::engine::vpc::VpcSubnet4;
-        use crate::oxide_vpc::api::PhysNet;
+        use crate::api::{Ipv4Addr, Ipv4Cidr, Ipv6Addr, MacAddr, Vni};
+        use crate::oxide_vpc::api::{PhysNet, SNatCfg};
 
         pub mod engine;
-
-        #[derive(Clone, Debug)]
-        pub struct SNat4Cfg {
-            pub public_ip: Ipv4Addr,
-            pub ports: Range<u16>,
-        }
 
         // TODO Rename to VpcCfg, tease out generic PortCfg.
         #[derive(Clone, Debug)]
         pub struct PortCfg {
-            pub vpc_subnet: VpcSubnet4,
+            pub vpc_subnet: Ipv4Cidr,
             pub private_mac: MacAddr,
             pub private_ip: Ipv4Addr,
             pub gw_mac: MacAddr,
             pub gw_ip: Ipv4Addr,
-            pub snat: SNat4Cfg,
+            pub snat: Option<SNatCfg>,
             pub vni: Vni,
             pub phys_ip: Ipv6Addr,
             pub bsvc_addr: PhysNet,

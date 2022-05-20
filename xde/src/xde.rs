@@ -16,7 +16,6 @@
 
 use core::convert::TryInto;
 use core::num::NonZeroU32;
-use core::ops::Range;
 use core::ptr;
 use core::time::Duration;
 
@@ -30,24 +29,25 @@ use illumos_ddi_dki::*;
 use crate::ioctl::IoctlEnvelope;
 use crate::{dld, dls, ip, mac, secpolicy, sys, warn};
 use opte::api::{
-    CmdOk, Direction, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
-    SetXdeUnderlayReq,
+    CmdOk, Direction, Ipv4Cidr, MacAddr, NoResp, OpteCmd, OpteCmdIoctl,
+    OpteError, SetXdeUnderlayReq,
 };
 use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::{IpAddr, IpCidr};
-use opte::engine::ioctl::{self as api, SnatCfg};
+use opte::engine::ioctl::{self as api};
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::{Initialized, Packet, ParseError, Parsed};
 use opte::engine::port::meta;
+use opte::engine::port::resources::Resources;
 use opte::engine::port::{Port, PortBuilder, ProcessResult};
 use opte::engine::sync::{KMutex, KMutexType};
 use opte::engine::sync::{KRwLock, KRwLockType};
 use opte::engine::time::{Interval, Moment, Periodic};
 use opte::oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
-    ListPortsReq, ListPortsResp, PhysNet, PortInfo, RemFwRuleReq,
+    ListPortsReq, ListPortsResp, PhysNet, PortInfo, RemFwRuleReq, SNatCfg,
     SetFwRulesReq, SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::{
@@ -460,16 +460,17 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     let (port, port_cfg) = new_port(
         req.xde_devname.clone(),
-        req.private_ip.into(),
-        req.private_mac.into(),
-        req.gw_mac.into(),
-        req.gw_ip.into(),
-        req.bsvc_addr.into(),
-        req.bsvc_vni.into(),
-        req.src_underlay_addr.into(),
-        req.vpc_vni.into(),
+        req.private_ip,
+        req.vpc_subnet,
+        req.private_mac,
+        req.gw_mac,
+        req.gw_ip,
+        req.bsvc_addr,
+        req.bsvc_vni,
+        req.src_underlay_addr,
+        req.vpc_vni,
         state.ectx.clone(),
-        None,
+        req.snat.clone(),
     )?;
 
     let port_periodic = Periodic::new(
@@ -664,11 +665,9 @@ unsafe extern "C" fn xde_attach(
     }
 
     xde_dip = dip;
-
     let state = Box::new(XdeState::new());
     ddi_set_driver_private(xde_dip, Box::into_raw(state) as *mut c_void);
-
-    warn!("dld_ioc_add: {:#?}", xde_ioc_list);
+    opte::engine::dbg(format!("dld_ioc_add: {:#?}", xde_ioc_list));
 
     match dld::dld_ioc_register(
         dld::XDE_IOC,
@@ -1084,6 +1083,7 @@ fn guest_loopback(
     mut pkt: Packet<Parsed>,
     vni: Vni,
 ) -> *mut mblk_t {
+    use Direction::*;
     let devs = unsafe { xde_devs.read() };
     let ether_dst = pkt.headers().inner.ether.dst();
 
@@ -1093,8 +1093,9 @@ fn guest_loopback(
             // the packet into the inbound processing path of the
             // destination Port.
             let mut meta = meta::Meta::new();
-            let _ = meta.add(dest_dev.port_v2p.clone());
-            match dest_dev.port.process(Direction::In, &mut pkt, &mut meta) {
+            let mut rsrcs = Resources::new();
+            let _ = rsrcs.add(dest_dev.port_v2p.clone());
+            match dest_dev.port.process(In, &mut pkt, &mut meta, &rsrcs) {
                 Ok(ProcessResult::Modified) => {
                     guest_loopback_probe(&pkt, src_dev, dest_dev);
 
@@ -1109,7 +1110,10 @@ fn guest_loopback(
                 }
 
                 Ok(ProcessResult::Drop { reason }) => {
-                    warn!("loopback rx drop: {:?}", reason);
+                    opte::engine::dbg(format!(
+                        "loopback rx drop: {:?}",
+                        reason
+                    ));
                     return ptr::null_mut();
                 }
 
@@ -1117,12 +1121,14 @@ fn guest_loopback(
                     // There should be no reason for an loopback
                     // inbound packet to generate a hairpin response
                     // from the destination port.
-                    warn!("unexpected loopback rx hairpin");
+                    opte::engine::dbg(format!(
+                        "unexpected loopback rx hairpin"
+                    ));
                     return ptr::null_mut();
                 }
 
                 Ok(ProcessResult::Bypass) => {
-                    warn!("loopback rx bypass");
+                    opte::engine::dbg(format!("loopback rx bypass"));
                     unsafe {
                         mac::mac_rx(
                             (*dest_dev).mh,
@@ -1134,24 +1140,24 @@ fn guest_loopback(
                 }
 
                 Err(e) => {
-                    warn!(
+                    opte::engine::dbg(format!(
                         "loopback port process error: {} -> {} {:?}",
                         src_dev.port.name(),
                         dest_dev.port.name(),
                         e
-                    );
+                    ));
                     return ptr::null_mut();
                 }
             }
         }
 
         None => {
-            warn!(
+            opte::engine::dbg(format!(
                 "underlay dest is same as src but the Port was not found \
                  vni = {}, mac = {}",
                 vni.as_u32(),
                 ether_dst
-            );
+            ));
             return ptr::null_mut();
         }
     }
@@ -1231,8 +1237,9 @@ unsafe extern "C" fn xde_mc_tx(
     // action was taken -- there should be no need to add probes or
     // prints here.
     let mut meta = meta::Meta::new();
-    let _ = meta.add(src_dev.port_v2p.clone());
-    let res = port.process(Direction::Out, &mut pkt, &mut meta);
+    let mut rsrcs = Resources::new();
+    let _ = rsrcs.add(src_dev.port_v2p.clone());
+    let res = port.process(Direction::Out, &mut pkt, &mut meta, &rsrcs);
     match res {
         Ok(ProcessResult::Modified) => {
             // If the outer IPv6 destination is the same as the
@@ -1243,7 +1250,7 @@ unsafe extern "C" fn xde_mc_tx(
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
-                    warn!("no outer header, dropping");
+                    opte::engine::dbg(format!("no outer header, dropping"));
                     return ptr::null_mut();
                 }
             };
@@ -1253,7 +1260,7 @@ unsafe extern "C" fn xde_mc_tx(
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
-                    warn!("no outer ip header, dropping");
+                    opte::engine::dbg(format!("no outer ip header, dropping"));
                     return ptr::null_mut();
                 }
             };
@@ -1261,7 +1268,9 @@ unsafe extern "C" fn xde_mc_tx(
             let ip6 = match ip.ip6() {
                 Some(ref v) => v.clone(),
                 None => {
-                    warn!("outer IP header is not v6, dropping");
+                    opte::engine::dbg(format!(
+                        "outer IP header is not v6, dropping"
+                    ));
                     return ptr::null_mut();
                 }
             };
@@ -1271,7 +1280,7 @@ unsafe extern "C" fn xde_mc_tx(
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
-                    warn!("no geneve header, dropping");
+                    opte::engine::dbg(format!("no geneve header, dropping"));
                     return ptr::null_mut();
                 }
             };
@@ -1473,7 +1482,7 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
         // an underlay network issue. How do we convey this situation
         // to the user/operator?
         if ire.is_null() {
-            warn!("no IRE for destination {:?}", ip6_dst);
+            opte::engine::dbg(format!("no IRE for destination {:?}", ip6_dst));
             next_hop_probe(
                 ip6_dst,
                 None,
@@ -1498,7 +1507,7 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
         );
 
         if gw_ire.is_null() {
-            warn!("no IRE for gateway {:?}", gw_ip6);
+            opte::engine::dbg(format!("no IRE for gateway {:?}", gw_ip6));
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1514,7 +1523,7 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
         // member or the internet routing entry.
         let ill = (*gw_ire).ire_ill;
         if ill.is_null() {
-            warn!("gateway ILL is NULL for {:?}", gw_ip6);
+            opte::engine::dbg(format!("gateway ILL is NULL for {:?}", gw_ip6));
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1527,7 +1536,10 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
 
         let src = (*ill).ill_phys_addr;
         if src.is_null() {
-            warn!("gateway ILL phys addr is NULL for {:?}", gw_ip6);
+            opte::engine::dbg(format!(
+                "gateway ILL phys addr is NULL for {:?}",
+                gw_ip6
+            ));
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1548,7 +1560,7 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
         // link-local address.
         let nce = ip::nce_lookup_v6(ill, &gw);
         if nce.is_null() {
-            warn!("no NCE for gateway {:?}", gw_ip6);
+            opte::engine::dbg(format!("no NCE for gateway {:?}", gw_ip6));
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1561,7 +1573,10 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
 
         let nce_common = (*nce).nce_common;
         if nce_common.is_null() {
-            warn!("no NCE common for gateway {:?}", gw_ip6);
+            opte::engine::dbg(format!(
+                "no NCE common for gateway {:?}",
+                gw_ip6
+            ));
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1574,7 +1589,7 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
 
         let mac = (*nce_common).ncec_lladdr;
         if mac.is_null() {
-            warn!("NCE MAC address is NULL {:?}", gw_ip6);
+            opte::engine::dbg(format!("NCE MAC address is NULL {:?}", gw_ip6));
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1660,6 +1675,7 @@ unsafe extern "C" fn xde_mc_propinfo(
 fn new_port(
     name: String,
     private_ip: Ipv4Addr,
+    vpc_subnet: Ipv4Cidr,
     private_mac: MacAddr,
     gateway_mac: MacAddr,
     gateway_ip: Ipv4Addr,
@@ -1668,34 +1684,11 @@ fn new_port(
     src_underlay_addr: Ipv6Addr,
     vpc_vni: Vni,
     ectx: Arc<ExecCtx>,
-    snat_cfg: Option<SnatCfg>,
+    snat: Option<SNatCfg>,
 ) -> Result<(Arc<Port>, PortCfg), OpteError> {
     let name_cstr = match CString::new(name.clone()) {
         Ok(v) => v,
         Err(_) => return Err(OpteError::BadName),
-    };
-
-    //TODO hardcoded
-    let vpc_subnet = if snat_cfg.is_none() {
-        "192.168.77.0/24".parse().unwrap()
-    } else {
-        snat_cfg.as_ref().unwrap().vpc_sub4
-    };
-
-    let snat = match snat_cfg.as_ref() {
-        None => {
-            opte::oxide_vpc::SNat4Cfg {
-                //TODO hardcode
-                public_ip: "192.168.99.99".parse().unwrap(),
-                //TODO hardcode
-                ports: Range { start: 999, end: 1000 },
-            }
-        }
-
-        Some(snat) => opte::oxide_vpc::SNat4Cfg {
-            public_ip: snat.public_ip,
-            ports: Range { start: snat.port_start, end: snat.port_end },
-        },
     };
 
     let port_cfg = PortCfg {
@@ -1704,7 +1697,7 @@ fn new_port(
         private_ip: private_ip,
         gw_mac: gateway_mac,
         gw_ip: gateway_ip,
-        snat,
+        snat: snat.clone(),
         vni: vpc_vni,
         phys_ip: src_underlay_addr,
         bsvc_addr: PhysNet {
@@ -1720,11 +1713,11 @@ fn new_port(
     // of Layer: one with, one without?
     dhcp4::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
     icmp::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
-    if snat_cfg.is_some() {
-        snat4::setup(&mut pb, &port_cfg, SNAT_FT_LIMIT.unwrap())?;
-    }
     arp::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
     router::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
+    if snat.is_some() {
+        snat4::setup(&mut pb, &port_cfg, SNAT_FT_LIMIT.unwrap())?;
+    }
     overlay::setup(&pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
     let port =
         Arc::new(pb.create(UFT_LIMIT.unwrap(), TCP_STATE_LIMIT.unwrap()));
@@ -1782,7 +1775,7 @@ unsafe extern "C" fn xde_rx(
         None => {
             // TODO add SDT probe
             // TODO add stat
-            warn!("no geneve header, dropping");
+            opte::engine::dbg(format!("no geneve header, dropping"));
             return;
         }
     };
@@ -1799,7 +1792,10 @@ unsafe extern "C" fn xde_rx(
         None => {
             // TODO add SDT probe
             // TODO add stat
-            warn!("no device found for vni: {} mac: {}", vni, ether_dst);
+            opte::engine::dbg(format!(
+                "no device found for vni: {} mac: {}",
+                vni, ether_dst
+            ));
             return;
         }
     };
@@ -1811,18 +1807,14 @@ unsafe extern "C" fn xde_rx(
 
     let port = &(*dev).port;
     let mut meta = meta::Meta::new();
-    let _ = meta.add(dev.port_v2p.clone());
-    let res = port.process(Direction::In, &mut pkt, &mut meta);
+    let mut rsrcs = Resources::new();
+    let _ = rsrcs.add(dev.port_v2p.clone());
+    let res = port.process(Direction::In, &mut pkt, &mut meta, &rsrcs);
     match res {
         Ok(ProcessResult::Modified) => {
-            warn!("rx accept");
             mac::mac_rx((*dev).mh, mrh, pkt.unwrap());
         }
-        Ok(ProcessResult::Drop { reason }) => {
-            warn!("rx drop: {:?}", reason);
-        }
         Ok(ProcessResult::Hairpin(hppkt)) => {
-            warn!("rx hairpin");
             // TODO assuming underlay device 1
             let mch = (*dev).u1.mch;
             let hint = 0;
@@ -1831,12 +1823,9 @@ unsafe extern "C" fn xde_rx(
             mac::mac_tx(mch, hppkt.unwrap(), hint, flags, ret_mp);
         }
         Ok(ProcessResult::Bypass) => {
-            warn!("rx bypass");
             mac::mac_rx((*dev).mh, mrh, mp_chain);
         }
-        Err(e) => {
-            warn!("opte-rx port process error: {:?}", e);
-        }
+        _ => {}
     }
 }
 

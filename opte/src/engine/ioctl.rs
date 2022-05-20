@@ -19,13 +19,11 @@ cfg_if! {
 
 use serde::{Deserialize, Serialize};
 
-use super::ether::EtherAddr;
 use super::flow_table::FlowEntryDump;
 use super::layer;
 use super::port::Port;
 use super::rule;
-use super::vpc::VpcSubnet4;
-use crate::api::{CmdOk, Ipv4Addr, OpteError};
+use crate::api::{CmdOk, OpteError};
 
 /// Dump various information about a `Layer` for use in debugging or
 /// administrative purposes.
@@ -122,33 +120,4 @@ pub fn dump_tcp_flows(
     _req: &DumpTcpFlowsReq,
 ) -> Result<DumpTcpFlowsResp, OpteError> {
     port.dump_tcp_flows()
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SnatCfg {
-    pub public_mac: EtherAddr,
-    pub public_ip: Ipv4Addr,
-    pub port_start: u16,
-    pub port_end: u16,
-    pub vpc_sub4: VpcSubnet4,
-}
-
-// XXX An OPTE Port is really both a virtual switch port as well as
-// the implementation of a virtual interface; namely the VPC
-// interface.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct PortCfg {
-    pub private_ip: Ipv4Addr,
-    pub snat: Option<SnatCfg>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct AddPortReq {
-    pub link_name: String,
-    pub port_cfg: PortCfg,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct DeletePortReq {
-    pub name: String,
 }

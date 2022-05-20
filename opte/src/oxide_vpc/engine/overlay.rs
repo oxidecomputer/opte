@@ -34,9 +34,11 @@ use crate::engine::ip4::Protocol;
 use crate::engine::ip6::{Ipv6Addr, Ipv6Meta};
 use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::meta::Meta;
+use crate::engine::port::resources::Resources;
 use crate::engine::port::{PortBuilder, Pos};
 use crate::engine::rule::{
-    self, Action, AllowOrDeny, DataPredicate, Predicate, Rule, StaticAction, HT,
+    self, Action, AllowOrDeny, DataPredicate, MappingResource, Predicate,
+    Resource, ResourceEntry, Rule, StaticAction, HT,
 };
 use crate::engine::sync::{KMutex, KMutexType};
 use crate::engine::udp::UdpMeta;
@@ -163,8 +165,9 @@ impl StaticAction for EncapAction {
         _dir: Direction,
         flow_id: &InnerFlowId,
         meta: &mut Meta,
+        rsrcs: &Resources,
     ) -> rule::GenHtResult {
-        let v2p = match meta.get::<Arc<Virt2Phys>>() {
+        let v2p = match rsrcs.get::<Arc<Virt2Phys>>() {
             Some(v2p) => v2p,
             // This should never happen. If it does, then the driver
             // forgot to add the Virt2Phys metadata before processing.
@@ -311,6 +314,7 @@ impl StaticAction for DecapAction {
         _dir: Direction,
         _flow_id: &InnerFlowId,
         _meta: &mut Meta,
+        _rsrcs: &Resources,
     ) -> rule::GenHtResult {
         Ok(AllowOrDeny::Allow(HT {
             name: DECAP_NAME.to_string(),
@@ -391,13 +395,6 @@ pub struct Virt2Phys {
 pub const VIRT_2_PHYS_NAME: &'static str = "Virt2Phys";
 
 impl Virt2Phys {
-    pub fn get(&self, vip: &IpAddr) -> Option<GuestPhysAddr> {
-        match vip {
-            IpAddr::Ip4(ip4) => self.ip4.lock().get(ip4).cloned(),
-            IpAddr::Ip6(ip6) => self.ip6.lock().get(ip6).cloned(),
-        }
-    }
-
     pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, GuestPhysAddr)> {
         let mut ip4 = Vec::new();
         for (vip, gaddr) in self.ip4.lock().iter() {
@@ -414,17 +411,40 @@ impl Virt2Phys {
         ip6
     }
 
-    pub fn set(&self, vip: IpAddr, phys: GuestPhysAddr) {
-        match vip {
-            IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, phys),
-            IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, phys),
-        };
-    }
-
     pub fn new() -> Self {
         Virt2Phys {
             ip4: KMutex::new(BTreeMap::new(), KMutexType::Driver),
             ip6: KMutex::new(BTreeMap::new(), KMutexType::Driver),
+        }
+    }
+}
+
+impl Resource for Virt2Phys {}
+impl Resource for Arc<Virt2Phys> {}
+impl ResourceEntry for GuestPhysAddr {}
+
+impl MappingResource for Virt2Phys {
+    type Key = IpAddr;
+    type Entry = GuestPhysAddr;
+
+    fn get(&self, vip: &Self::Key) -> Option<Self::Entry> {
+        match vip {
+            IpAddr::Ip4(ip4) => self.ip4.lock().get(ip4).cloned(),
+            IpAddr::Ip6(ip6) => self.ip6.lock().get(ip6).cloned(),
+        }
+    }
+
+    fn remove(&self, vip: &Self::Key) -> Option<Self::Entry> {
+        match vip {
+            IpAddr::Ip4(ip4) => self.ip4.lock().remove(ip4),
+            IpAddr::Ip6(ip6) => self.ip6.lock().remove(ip6),
+        }
+    }
+
+    fn set(&self, vip: Self::Key, phys: GuestPhysAddr) -> Option<Self::Entry> {
+        match vip {
+            IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, phys),
+            IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, phys),
         }
     }
 }

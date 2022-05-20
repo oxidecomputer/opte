@@ -103,6 +103,7 @@ pub struct CreateXdeReq {
     pub xde_devname: String,
 
     pub private_ip: Ipv4Addr,
+    pub vpc_subnet: Ipv4Cidr,
     pub private_mac: MacAddr,
     pub gw_mac: MacAddr,
     pub gw_ip: Ipv4Addr,
@@ -112,7 +113,17 @@ pub struct CreateXdeReq {
     pub src_underlay_addr: Ipv6Addr,
     pub vpc_vni: Vni,
 
+    // XXX Keep this optional for now until NAT'ing is more thoroughly
+    // implemented in Omicron.
+    pub snat: Option<SNatCfg>,
+
     pub passthrough: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SNatCfg {
+    pub public_ip: Ipv4Addr,
+    pub ports: core::ops::Range<u16>,
 }
 
 /// Xde delete ioctl parameter data.

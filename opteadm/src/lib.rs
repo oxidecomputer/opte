@@ -10,12 +10,12 @@
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 
-use opte::api::{MacAddr, NoResp, OpteCmd, SetXdeUnderlayReq, Vni};
+use opte::api::{Ipv4Cidr, MacAddr, NoResp, OpteCmd, SetXdeUnderlayReq, Vni};
 use opte::engine::ioctl::{self as api};
 use opte::oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
-    FirewallRule, ListPortsReq, ListPortsResp, RemFwRuleReq, SetFwRulesReq,
-    SetVirt2PhysReq,
+    FirewallRule, ListPortsReq, ListPortsResp, RemFwRuleReq, SNatCfg,
+    SetFwRulesReq, SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::overlay;
 use opte_ioctl::{run_cmd_ioctl, Error};
@@ -36,12 +36,14 @@ impl OpteAdm {
         name: &str,
         private_mac: MacAddr,
         private_ip: std::net::Ipv4Addr,
+        vpc_subnet: Ipv4Cidr,
         gw_mac: MacAddr,
         gw_ip: std::net::Ipv4Addr,
         bsvc_addr: std::net::Ipv6Addr,
         bsvc_vni: Vni,
         vpc_vni: Vni,
         src_underlay_addr: std::net::Ipv6Addr,
+        snat: Option<SNatCfg>,
         passthrough: bool,
     ) -> Result<NoResp, Error> {
         let linkid = libnet::link::create_link_id(
@@ -57,12 +59,14 @@ impl OpteAdm {
             linkid,
             private_mac,
             private_ip: private_ip.into(),
+            vpc_subnet,
             gw_mac,
             gw_ip: gw_ip.into(),
             bsvc_addr: bsvc_addr.into(),
             bsvc_vni,
             vpc_vni,
             src_underlay_addr: src_underlay_addr.into(),
+            snat,
             passthrough,
         };
 

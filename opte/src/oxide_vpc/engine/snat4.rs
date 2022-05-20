@@ -14,15 +14,16 @@ cfg_if! {
     }
 }
 
+use super::router::{RouterTargetInternal, ROUTER_LAYER_NAME};
 use crate::api::{Direction, OpteError};
-use crate::engine::ip4::{Ipv4Addr, Protocol};
+use crate::engine::ip4::Protocol;
 use crate::engine::layer::Layer;
 use crate::engine::port::{PortBuilder, Pos};
-use crate::engine::rule::{
-    Action, IpProtoMatch, Ipv4AddrMatch, Predicate, Rule,
-};
+use crate::engine::rule::{Action, IpProtoMatch, Predicate, Rule};
 use crate::engine::snat::{NatPool, SNat4};
 use crate::oxide_vpc::PortCfg;
+
+pub const SNAT4_LAYER_NAME: &'static str = "snat4";
 
 pub fn setup(
     pb: &mut PortBuilder,
@@ -30,11 +31,15 @@ pub fn setup(
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     let pool = NatPool::new();
-    pool.add(cfg.private_ip, cfg.snat.public_ip, cfg.snat.ports.clone());
+    pool.add(
+        cfg.private_ip,
+        cfg.snat.as_ref().unwrap().public_ip,
+        cfg.snat.as_ref().unwrap().ports.clone(),
+    );
 
     let nat = SNat4::new(cfg.private_ip, Arc::new(pool));
     let layer = Layer::new(
-        "dyn-nat4",
+        SNAT4_LAYER_NAME,
         pb.name(),
         vec![Action::Stateful(Arc::new(nat))],
         ft_limit,
@@ -45,26 +50,9 @@ pub fn setup(
         IpProtoMatch::Exact(Protocol::TCP),
         IpProtoMatch::Exact(Protocol::UDP),
     ]));
-
-    // RFD 21 §2.10.4 (Primary and Multiple Interfaces) dictates that
-    // there may be more than one interface, but one is primary.
-    //
-    //  * A given guest may only ever be a part of one VPC, i.e. every
-    //    interface in a guest sits in the same VPC.
-    //
-    //  * However, each interface may be on a different subnet within
-    //    the VPC.
-    //
-    //  * Only the primary interface participates in DNS, ephemeral &
-    //    floating public IP, and is specified as the default route to
-    //    the guest via DHCP
-    //
-    // Therefore, we can determine if an address needs NAT by checking
-    // to see if the destination IP belongs to the interface's subnet.
-    rule.add_predicate(Predicate::Not(Box::new(Predicate::InnerDstIp4(vec![
-        Ipv4AddrMatch::Prefix(cfg.vpc_subnet.cidr()),
-        Ipv4AddrMatch::Exact(Ipv4Addr::LOCAL_BCAST),
-    ]))));
+    rule.add_predicate(Predicate::Meta(Box::new(
+        RouterTargetInternal::InternetGateway,
+    )));
     layer.add_rule(Direction::Out, rule.finalize());
-    pb.add_layer(layer, Pos::After("firewall"))
+    pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))
 }

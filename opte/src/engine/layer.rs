@@ -30,6 +30,7 @@ use super::ioctl;
 use super::ip4::Protocol;
 use super::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
 use super::port::meta::Meta;
+use super::port::resources::Resources;
 use super::rule::{
     self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, AllowOrDeny,
     Finalized, Rule, RuleDump, HT,
@@ -98,6 +99,24 @@ pub enum LftError {
     MaxCapacity,
 }
 
+#[derive(Clone, Debug)]
+struct LftOutEntry {
+    in_flow_pair: InnerFlowId,
+    action_desc: Arc<dyn ActionDesc>,
+}
+
+impl LftOutEntry {
+    fn extract_pair(&self) -> InnerFlowId {
+        self.in_flow_pair.clone()
+    }
+}
+
+impl super::flow_table::StateSummary for LftOutEntry {
+    fn summary(&self) -> String {
+        self.action_desc.summary()
+    }
+}
+
 struct LayerFlowTable {
     // Anytime the flow tables need to be held at the same time the
     // mutex order is always:
@@ -108,7 +127,7 @@ struct LayerFlowTable {
     limit: NonZeroU32,
     count: KMutex<u32>,
     ft_in: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
-    ft_out: KMutex<FlowTable<Arc<dyn ActionDesc>>>,
+    ft_out: KMutex<FlowTable<LftOutEntry>>,
 }
 
 pub struct LftDump {
@@ -126,6 +145,8 @@ impl LayerFlowTable {
         in_flow: InnerFlowId,
         out_flow: InnerFlowId,
     ) {
+        let mut ft_in = self.ft_in.lock();
+        let mut ft_out = self.ft_out.lock();
         // We add unchekced because the limit is now enforced by
         // LayerFlowTable, not the individual flow tables.
         //
@@ -133,8 +154,12 @@ impl LayerFlowTable {
         // treatment; at that time we should probably remove the limit
         // enforcement from FlowTable.
         receipt.used = true;
-        self.ft_in.lock().add_unchecked(in_flow, action_desc.clone());
-        self.ft_out.lock().add_unchecked(out_flow, action_desc.clone());
+        ft_in.add_unchecked(in_flow.clone(), action_desc.clone());
+        let out_entry = LftOutEntry {
+            in_flow_pair: in_flow,
+            action_desc: action_desc.clone(),
+        };
+        ft_out.add_unchecked(out_flow, out_entry);
     }
 
     fn clear(&self) {
@@ -174,8 +199,8 @@ impl LayerFlowTable {
         // should be checked, and if either side is expired the pair
         // is considered expired (or active). Maybe this should be
         // configurable?
-        let expired = ft_out.expire_flows(now);
-        for flow in expired {
+        let to_expire = ft_out.expire_flows(now, LftOutEntry::extract_pair);
+        for flow in to_expire {
             ft_in.expire(&flow);
         }
         *count = ft_out.num_flows();
@@ -196,7 +221,7 @@ impl LayerFlowTable {
         match self.ft_out.lock().get_mut(flow) {
             Some(entry) => {
                 entry.hit();
-                Some(entry.state().clone())
+                Some(entry.state().action_desc.clone())
             }
 
             None => None,
@@ -473,13 +498,14 @@ impl Layer {
         ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
-        meta: &mut Meta,
+        lmeta: &mut Meta,
+        rsrcs: &Resources,
     ) -> result::Result<LayerResult, LayerError> {
+        use Direction::*;
         self.layer_process_entry_probe(dir, &ifid);
         let res = match dir {
-            Direction::Out => self.process_out(ectx, pkt, &ifid, hts, meta),
-
-            Direction::In => self.process_in(ectx, pkt, &ifid, hts, meta),
+            Out => self.process_out(ectx, pkt, &ifid, hts, lmeta, rsrcs),
+            In => self.process_in(ectx, pkt, &ifid, hts, lmeta, rsrcs),
         };
         self.layer_process_return_probe(dir, &ifid, &res);
         res
@@ -491,20 +517,19 @@ impl Layer {
         pkt: &mut Packet<Parsed>,
         ifid: &InnerFlowId,
         hts: &mut Vec<HT>,
-        meta: &mut Meta,
+        lmeta: &mut Meta,
+        rsrcs: &Resources,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
         if *ifid == FLOW_ID_DEFAULT {
-            return self.process_in_rules(ectx, ifid, pkt, hts, meta);
+            return self.process_in_rules(ectx, ifid, pkt, hts, lmeta, rsrcs);
         }
 
         // Do we have a FlowTable entry? If so, use it.
         if let Some(desc) = self.ft.get_in(&ifid) {
             let ht = desc.gen_ht(Direction::In);
             hts.push(ht.clone());
-
             ht.run(pkt.meta_mut());
-
             let ifid_after = InnerFlowId::from(pkt.meta());
             ht_probe(
                 &self.port_c,
@@ -525,7 +550,7 @@ impl Layer {
         // XXX Flow table miss stat
 
         // No FlowTable entry, perhaps there is a matching Rule?
-        self.process_in_rules(ectx, ifid, pkt, hts, meta)
+        self.process_in_rules(ectx, ifid, pkt, hts, lmeta, rsrcs)
     }
 
     fn process_in_rules(
@@ -534,12 +559,13 @@ impl Layer {
         ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
-        meta: &mut Meta,
+        lmeta: &mut Meta,
+        rsrcs: &Resources,
     ) -> result::Result<LayerResult, LayerError> {
+        use Direction::In;
         let lock = self.rules_in.lock();
-
         let mut rdr = pkt.get_body_rdr();
-        let rule = lock.find_match(pkt.meta(), &mut rdr);
+        let rule = lock.find_match(ifid, pkt.meta(), lmeta, &mut rdr);
         let _ = rdr.finish();
 
         if rule.is_none() {
@@ -557,11 +583,11 @@ impl Layer {
 
         match rule.unwrap().action() {
             Action::Deny => {
-                self.rule_deny_probe(Direction::In, ifid);
+                self.rule_deny_probe(In, ifid);
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            Action::Meta(action) => match action.mod_meta(ifid, meta) {
+            Action::Meta(action) => match action.mod_meta(ifid, lmeta) {
                 Ok(res) => match res {
                     AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
 
@@ -576,7 +602,7 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(Direction::Out, ifid, meta) {
+                let ht = match action.gen_ht(In, ifid, lmeta, rsrcs) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
@@ -587,26 +613,18 @@ impl Layer {
                     },
 
                     Err(e) => {
-                        self.record_gen_ht_failure(
-                            &ectx,
-                            Direction::Out,
-                            &ifid,
-                            &e,
-                        );
+                        self.record_gen_ht_failure(&ectx, In, &ifid, &e);
                         return Err(LayerError::GenHt(e));
                     }
                 };
 
                 hts.push(ht.clone());
-
                 ht.run(pkt.meta_mut());
-
                 let ifid_after = InnerFlowId::from(pkt.meta());
-
                 ht_probe(
                     &self.port_c,
                     &format!("{}-rt", self.name),
-                    Direction::In,
+                    In,
                     &ifid,
                     &ifid_after,
                 );
@@ -620,12 +638,12 @@ impl Layer {
                     Err(LftError::MaxCapacity) => {
                         return Err(LayerError::FlowTableFull {
                             layer: self.name.clone(),
-                            dir: Direction::In,
+                            dir: In,
                         });
                     }
                 };
 
-                let desc = match action.gen_desc(&ifid, meta) {
+                let desc = match action.gen_desc(&ifid, lmeta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(desc) => desc,
 
@@ -638,17 +656,12 @@ impl Layer {
 
                     Err(e) => {
                         drop(receipt);
-                        self.record_gen_desc_failure(
-                            &ectx,
-                            Direction::In,
-                            &ifid,
-                            &e,
-                        );
+                        self.record_gen_desc_failure(&ectx, In, &ifid, &e);
                         return Err(LayerError::GenDesc(e));
                     }
                 };
 
-                let ht_in = desc.gen_ht(Direction::In);
+                let ht_in = desc.gen_ht(In);
                 hts.push(ht_in.clone());
                 ht_in.run(pkt.meta_mut());
                 let ifid_after = InnerFlowId::from(pkt.meta());
@@ -710,20 +723,19 @@ impl Layer {
         pkt: &mut Packet<Parsed>,
         ifid: &InnerFlowId,
         hts: &mut Vec<HT>,
-        meta: &mut Meta,
+        lmeta: &mut Meta,
+        rsrcs: &Resources,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
         if *ifid == FLOW_ID_DEFAULT {
-            return self.process_out_rules(ectx, ifid, pkt, hts, meta);
+            return self.process_out_rules(ectx, ifid, pkt, hts, lmeta, rsrcs);
         }
 
         // Do we have a FlowTable entry? If so, use it.
         if let Some(desc) = self.ft.get_out(&ifid) {
             let ht = desc.gen_ht(Direction::Out);
             hts.push(ht.clone());
-
             ht.run(pkt.meta_mut());
-
             let ifid_after = InnerFlowId::from(pkt.meta());
             ht_probe(
                 &self.port_c,
@@ -746,7 +758,7 @@ impl Layer {
         }
 
         // No FlowTable entry, perhaps there is matching Rule?
-        self.process_out_rules(ectx, &ifid, pkt, hts, meta)
+        self.process_out_rules(ectx, &ifid, pkt, hts, lmeta, rsrcs)
     }
 
     fn process_out_rules(
@@ -755,11 +767,13 @@ impl Layer {
         ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
-        meta: &mut Meta,
+        lmeta: &mut Meta,
+        rsrcs: &Resources,
     ) -> result::Result<LayerResult, LayerError> {
+        use Direction::Out;
         let lock = self.rules_out.lock();
         let mut rdr = pkt.get_body_rdr();
-        let rule = lock.find_match(pkt.meta(), &mut rdr);
+        let rule = lock.find_match(ifid, pkt.meta(), &lmeta, &mut rdr);
         let _ = rdr.finish();
 
         if rule.is_none() {
@@ -777,11 +791,11 @@ impl Layer {
 
         match rule.unwrap().action() {
             Action::Deny => {
-                self.rule_deny_probe(Direction::Out, ifid);
+                self.rule_deny_probe(Out, ifid);
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            Action::Meta(action) => match action.mod_meta(ifid, meta) {
+            Action::Meta(action) => match action.mod_meta(ifid, lmeta) {
                 Ok(res) => match res {
                     AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
 
@@ -796,7 +810,7 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(Direction::Out, ifid, meta) {
+                let ht = match action.gen_ht(Out, ifid, lmeta, rsrcs) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
@@ -807,26 +821,18 @@ impl Layer {
                     },
 
                     Err(e) => {
-                        self.record_gen_ht_failure(
-                            &ectx,
-                            Direction::Out,
-                            &ifid,
-                            &e,
-                        );
+                        self.record_gen_ht_failure(&ectx, Out, &ifid, &e);
                         return Err(LayerError::GenHt(e));
                     }
                 };
 
                 hts.push(ht.clone());
-
                 ht.run(pkt.meta_mut());
-
                 let ifid_after = InnerFlowId::from(pkt.meta());
-
                 ht_probe(
                     &self.port_c,
                     &format!("{}-rt", self.name),
-                    Direction::Out,
+                    Out,
                     &ifid,
                     &ifid_after,
                 );
@@ -872,12 +878,12 @@ impl Layer {
                     Err(LftError::MaxCapacity) => {
                         return Err(LayerError::FlowTableFull {
                             layer: self.name.clone(),
-                            dir: Direction::Out,
+                            dir: Out,
                         });
                     }
                 };
 
-                let desc = match action.gen_desc(&ifid, meta) {
+                let desc = match action.gen_desc(&ifid, lmeta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(desc) => desc,
 
@@ -890,17 +896,12 @@ impl Layer {
 
                     Err(e) => {
                         drop(receipt);
-                        self.record_gen_desc_failure(
-                            &ectx,
-                            Direction::Out,
-                            &ifid,
-                            &e,
-                        );
+                        self.record_gen_desc_failure(&ectx, Out, &ifid, &e);
                         return Err(LayerError::GenDesc(e));
                     }
                 };
 
-                let ht_out = desc.gen_ht(Direction::Out);
+                let ht_out = desc.gen_ht(Out);
                 hts.push(ht_out.clone());
                 ht_out.run(pkt.meta_mut());
                 let ifid_after = InnerFlowId::from(pkt.meta());
@@ -916,7 +917,7 @@ impl Layer {
                 ht_probe(
                     &self.port_c,
                     &format!("{}-rt", self.name),
-                    Direction::Out,
+                    Out,
                     &ifid,
                     &ifid_after,
                 );
@@ -1160,20 +1161,22 @@ impl<'a> RuleTable {
 
     fn find_match<'b, R>(
         &self,
-        meta: &PacketMeta,
+        ifid: &InnerFlowId,
+        pmeta: &PacketMeta,
+        lmeta: &Meta,
         rdr: &'b mut R,
     ) -> Option<&Rule<rule::Finalized>>
     where
         R: PacketRead<'a>,
     {
         for (_, r) in &self.rules {
-            if r.is_match(meta, rdr) {
-                self.rule_match_probe(&InnerFlowId::from(meta), &r);
+            if r.is_match(pmeta, lmeta, rdr) {
+                self.rule_match_probe(ifid, &r);
                 return Some(r);
             }
         }
 
-        self.rule_no_match_probe(self.dir, &InnerFlowId::from(meta));
+        self.rule_no_match_probe(self.dir, ifid);
         None
     }
 
@@ -1426,7 +1429,7 @@ mod test {
             ack: 0,
         });
 
-        let meta = PacketMeta {
+        let pmeta = PacketMeta {
             outer: Default::default(),
             inner: MetaGroup {
                 ip: Some(ip),
@@ -1438,7 +1441,11 @@ mod test {
         // The pkt/rdr aren't actually used in this case.
         let pkt = Packet::copy(&[0xA]);
         let mut rdr = PacketReader::new(&pkt, ());
-        assert!(rule_table.find_match(&meta, &mut rdr).is_some());
+        let lmeta = Meta::new();
+        let ifid = InnerFlowId::from(&pmeta);
+        assert!(rule_table
+            .find_match(&ifid, &pmeta, &lmeta, &mut rdr)
+            .is_some());
     }
 }
 // TODO Reinstate

@@ -5,12 +5,12 @@
 // Copyright 2022 Oxide Computer Company
 
 use opte::api::{
-    CmdOk, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
+    CmdOk, Ipv4Cidr, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
     SetXdeUnderlayReq, Vni, API_VERSION, XDE_DLD_OPTE_CMD,
 };
 use opte::oxide_vpc::api::{
     AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, ListPortsReq,
-    ListPortsResp, SetFwRulesReq, SetVirt2PhysReq,
+    ListPortsResp, SNatCfg, SetFwRulesReq, SetVirt2PhysReq,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -85,12 +85,14 @@ impl OpteHdl {
         name: &str,
         private_mac: MacAddr,
         private_ip: std::net::Ipv4Addr,
+        vpc_subnet: Ipv4Cidr,
         gw_mac: MacAddr,
         gw_ip: std::net::Ipv4Addr,
         bsvc_addr: std::net::Ipv6Addr,
         bsvc_vni: Vni,
         vpc_vni: Vni,
         src_underlay_addr: std::net::Ipv6Addr,
+        snat: Option<SNatCfg>,
         passthrough: bool,
     ) -> Result<NoResp, Error> {
         let linkid = libnet::link::create_link_id(
@@ -106,12 +108,14 @@ impl OpteHdl {
             linkid,
             private_mac,
             private_ip: private_ip.into(),
+            vpc_subnet,
             gw_mac,
             gw_ip: gw_ip.into(),
             bsvc_addr: bsvc_addr.into(),
             bsvc_vni,
             vpc_vni,
             src_underlay_addr: src_underlay_addr.into(),
+            snat,
             passthrough,
         };
 

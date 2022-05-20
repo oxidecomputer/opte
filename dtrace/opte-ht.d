@@ -5,7 +5,7 @@
  */
 #include "common.h"
 
-#define	HDR_FMT "%-3s %-12s %-40s %-40s\n"
+#define	HDR_FMT "%-3s %-12s %-12s %-40s %-40s\n"
 
 BEGIN {
 	/*
@@ -16,13 +16,14 @@ BEGIN {
 	protos[6] = "TCP";
 	protos[17] = "UDP";
 
-	printf(HDR_FMT, "DIR", "LOCATION", "BEFORE", "AFTER");
+	printf(HDR_FMT, "DIR", "PORT", "LOCATION", "BEFORE", "AFTER");
 	num = 0;
 }
 
 ht-run {
 	this->ht = (ht_run_sdt_arg_t*)arg0;
 	this->dir = stringof(this->ht->dir);
+	this->port = stringof(this->ht->port);
 	this->loc = stringof(this->ht->loc);
 	this->before = this->ht->flow_before;
 	this->after = this->ht->flow_after;
@@ -34,7 +35,7 @@ ht-run {
 	}
 
 	if (num >= 10) {
-		printf(HDR_FMT, "DIR", "LOCATION", "BEFORE", "AFTER");
+		printf(HDR_FMT, "DIR", "PORT", "LOCATION", "BEFORE", "AFTER");
 		num = 0;
 	}
 }
@@ -42,11 +43,11 @@ ht-run {
 ht-run /this->af == AF_INET/ {
 	FLOW_FMT(this->bs, this->before);
 	FLOW_FMT(this->as, this->after);
-	printf(HDR_FMT, this->dir, this->loc, this->bs, this->as);
+	printf(HDR_FMT, this->dir, this->port, this->loc, this->bs, this->as);
 }
 
 ht-run /this->af == AF_INET6/ {
 	FLOW_FMT6(this->bs, this->before);
 	FLOW_FMT6(this->as, this->after);
-	printf(HDR_FMT, this->dir, this->loc, this->bs, this->as);
+	printf(HDR_FMT, this->dir, this->port, this->loc, this->bs, this->as);
 }

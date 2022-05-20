@@ -4,7 +4,7 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use core::fmt::{self, Display};
+use core::fmt::{self, Debug, Display};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -40,6 +40,7 @@ use super::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
 };
 use super::port::meta::Meta;
+use super::port::resources::Resources;
 use super::tcp::TcpMeta;
 use super::udp::UdpMeta;
 use crate::api::{Direction, MacAddr};
@@ -269,7 +270,7 @@ impl Display for PortMatch {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Debug)]
 pub enum Predicate {
     InnerEtherType(Vec<EtherTypeMatch>),
     InnerEtherDst(Vec<EtherAddrMatch>),
@@ -283,10 +284,11 @@ pub enum Predicate {
     InnerSrcPort(Vec<PortMatch>),
     InnerDstPort(Vec<PortMatch>),
     Not(Box<Predicate>),
-    // Match on metadata stored by previous layers.
-    //
-    // TODO Use more structured types than string -> string.
-    // Meta(&'static str, &'static str),
+    Meta(Box<dyn MetaPredicate>),
+}
+
+pub trait MetaPredicate: Debug + Display {
+    fn is_match(&self, meta: &Meta) -> bool;
 }
 
 impl Display for Predicate {
@@ -378,18 +380,24 @@ impl Display for Predicate {
                 write!(f, "inner.ulp.dst={}", s)
             }
 
+            Meta(pred) => {
+                write!(f, "meta={}", pred)
+            }
+
             Not(pred) => {
                 write!(f, "!")?;
-                pred.fmt(f)
+                Display::fmt(&pred, f)
             }
         }
     }
 }
 
 impl Predicate {
-    fn is_match(&self, meta: &PacketMeta) -> bool {
+    fn is_match(&self, meta: &PacketMeta, layer_meta: &Meta) -> bool {
         match self {
-            Self::Not(pred) => return !pred.is_match(meta),
+            Self::Meta(pred) => return pred.is_match(layer_meta),
+
+            Self::Not(pred) => return !pred.is_match(meta, layer_meta),
 
             Self::InnerEtherType(list) => match meta.inner.ether {
                 None => return false,
@@ -582,7 +590,7 @@ impl Display for DataPredicate {
 
             Not(pred) => {
                 write!(f, "!")?;
-                pred.fmt(f)
+                Display::fmt(&pred, f)
             }
         }
     }
@@ -693,15 +701,53 @@ impl DataPredicate {
     }
 }
 
+/// A marker trait indicating a type is an entry acuired from a [`Resource`].
+pub trait ResourceEntry {}
+
 /// A marker trait indicating a type is a resource.
-pub trait Resource: Copy {}
+pub trait Resource {}
 
-pub trait ResourceMap<T: Clone> {
-    type Resource: Resource;
+/// A mapping resource represents a shared map from a key to a shared
+/// [`ResourceEntry`].
+///
+/// The idea being that multiple consumers can "own" the entry at once.
+pub trait MappingResource: Resource {
+    type Key: Clone;
+    type Entry: ResourceEntry;
 
-    fn obtain(&self, key: &T) -> Result<Self::Resource, ResourceError>;
+    /// Get the [`ResourceEntry`] with the given key, if one exists.
+    fn get(&self, key: &Self::Key) -> Option<Self::Entry>;
 
-    fn release(&self, key: &T, br: Self::Resource);
+    /// Remove the [`ResourceEntry`] with the given key, if one exists.
+    fn remove(&self, key: &Self::Key) -> Option<Self::Entry>;
+
+    /// Set the [`ResoruceEntry`] with the given key. Return the
+    /// current entry, if one exists.
+    fn set(&self, key: Self::Key, entry: Self::Entry) -> Option<Self::Entry>;
+}
+
+/// A finite resource represents a shared map from a key to an
+/// exclusively owned [`ResourceEntry`].
+///
+/// The idea being that a single consumer takes ownership of the
+/// [`ResourceEntry`] for some amount of time; and while that consumer
+/// owns the entry no other consumer may have access to it. The
+/// resource represents a finite collection of entries, and thus may
+/// be exhausted at any given moment.
+pub trait FiniteResource: Resource {
+    type Key: Clone;
+    type Entry: ResourceEntry;
+
+    /// Obtain a new [`ResourceEntry`] given the key.
+    ///
+    /// # Errors
+    ///
+    /// Return an error if no entry can be mapped to this key or if
+    /// the resource is exhausted.
+    fn obtain(&self, key: &Self::Key) -> Result<Self::Entry, ResourceError>;
+
+    /// Release the [`ResourceEntry`] back to the available resources.
+    fn release(&self, key: &Self::Key, br: Self::Entry);
 }
 
 /// An Action Descriptor holds the information needed to create the HT
@@ -799,6 +845,7 @@ impl StaticAction for Identity {
         _dir: Direction,
         _flow_id: &InnerFlowId,
         _meta: &mut Meta,
+        _rsrcs: &Resources,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HT::identity(&self.name)))
     }
@@ -1000,6 +1047,7 @@ pub trait StaticAction: Display {
         dir: Direction,
         flow_id: &InnerFlowId,
         meta: &mut Meta,
+        rsrcs: &Resources,
     ) -> GenHtResult;
 
     /// Return the predicates implicit to this action.
@@ -1162,7 +1210,7 @@ impl fmt::Debug for Action {
 }
 
 // TODO Use const generics to make this array?
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RulePredicates {
     hdr_preds: Vec<Predicate>,
     data_preds: Vec<DataPredicate>,
@@ -1170,14 +1218,14 @@ pub struct RulePredicates {
 
 pub trait RuleState {}
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Ready {
     hdr_preds: Vec<Predicate>,
     data_preds: Vec<DataPredicate>,
 }
 impl RuleState for Ready {}
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Finalized {
     preds: Option<RulePredicates>,
 }
@@ -1267,7 +1315,12 @@ impl Rule<Ready> {
 }
 
 impl<'a> Rule<Finalized> {
-    pub fn is_match<'b, R>(&self, meta: &PacketMeta, rdr: &'b mut R) -> bool
+    pub fn is_match<'b, R>(
+        &self,
+        meta: &PacketMeta,
+        layer_meta: &Meta,
+        rdr: &'b mut R,
+    ) -> bool
     where
         R: PacketRead<'a>,
     {
@@ -1289,7 +1342,7 @@ impl<'a> Rule<Finalized> {
 
             Some(preds) => {
                 for p in &preds.hdr_preds {
-                    if !p.is_match(meta) {
+                    if !p.is_match(meta, layer_meta) {
                         return false;
                     }
                 }
@@ -1313,15 +1366,16 @@ impl<'a> Rule<Finalized> {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RuleDump {
     pub priority: u16,
-    pub predicates: Vec<Predicate>,
+    pub predicates: Vec<String>,
     pub data_predicates: Vec<DataPredicate>,
     pub action: String,
 }
 
 impl From<&Rule<Finalized>> for RuleDump {
     fn from(rule: &Rule<Finalized>) -> Self {
-        let predicates =
-            rule.state.preds.as_ref().map_or(vec![], |rp| rp.hdr_preds.clone());
+        let predicates = rule.state.preds.as_ref().map_or(vec![], |rp| {
+            rp.hdr_preds.iter().map(ToString::to_string).collect()
+        });
         let data_predicates = rule
             .state
             .preds
@@ -1375,7 +1429,8 @@ fn rule_matching() {
     )]));
     let r1 = r1.finalize();
 
-    assert!(r1.is_match(&meta, &mut rdr));
+    let port_meta = Meta::new();
+    assert!(r1.is_match(&meta, &port_meta, &mut rdr));
 
     let new_src_ip = "10.11.11.99".parse().unwrap();
 
@@ -1397,5 +1452,5 @@ fn rule_matching() {
         inner: MetaGroup { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
     };
 
-    assert!(!r1.is_match(&meta, &mut rdr));
+    assert!(!r1.is_match(&meta, &port_meta, &mut rdr));
 }

@@ -26,15 +26,19 @@ use super::ip4::Ipv4Meta;
 use super::layer::InnerFlowId;
 use super::port::meta::Meta;
 use super::rule::{
-    self, ActionDesc, AllowOrDeny, DataPredicate, Predicate, Resource,
-    ResourceError, ResourceMap, StatefulAction, HT,
+    self, ActionDesc, AllowOrDeny, DataPredicate, FiniteResource, Predicate,
+    Resource, ResourceEntry, ResourceError, StatefulAction, HT,
 };
 use super::sync::{KMutex, KMutexType};
 use crate::api::{Direction, Ipv4Addr};
 
 #[derive(Clone, Copy)]
-pub struct NatPoolResource(Ipv4Addr, u16);
-impl Resource for NatPoolResource {}
+pub struct NatPoolEntry {
+    ip: Ipv4Addr,
+    port: u16,
+}
+
+impl ResourceEntry for NatPoolEntry {}
 
 pub struct NatPool {
     // Map private IP to public IP + free list of ports
@@ -98,31 +102,30 @@ impl NatPool {
     }
 }
 
-impl ResourceMap<Ipv4Addr> for NatPool {
-    type Resource = NatPoolResource;
+impl Resource for NatPool {}
 
-    fn obtain(
-        &self,
-        priv_ip: &Ipv4Addr,
-    ) -> Result<NatPoolResource, ResourceError> {
+impl FiniteResource for NatPool {
+    type Key = Ipv4Addr;
+    type Entry = NatPoolEntry;
+
+    fn obtain(&self, priv_ip: &Ipv4Addr) -> Result<Self::Entry, ResourceError> {
         match self.free_list.lock().get_mut(&priv_ip) {
             Some((ip, _, ports)) => {
                 if ports.len() == 0 {
                     return Err(ResourceError::Exhausted);
                 }
 
-                Ok(NatPoolResource(*ip, ports.pop().unwrap()))
+                Ok(Self::Entry { ip: *ip, port: ports.pop().unwrap() })
             }
 
             None => Err(ResourceError::NoMatch(priv_ip.to_string())),
         }
     }
 
-    fn release(&self, priv_ip: &Ipv4Addr, p: NatPoolResource) {
+    fn release(&self, priv_ip: &Ipv4Addr, entry: Self::Entry) {
         match self.free_list.lock().get_mut(&priv_ip) {
             Some((_ip, _, ports)) => {
-                let pub_port = p.1;
-                ports.push(pub_port);
+                ports.push(entry.port);
             }
 
             None => {
@@ -160,13 +163,12 @@ impl StatefulAction for SNat4 {
         let pool = &self.ip_pool;
         let priv_port = flow_id.src_port;
         match pool.obtain(&self.priv_ip) {
-            Ok(resource) => {
+            Ok(nat) => {
                 let desc = SNat4Desc {
                     pool: pool.clone(),
                     priv_ip: self.priv_ip,
                     priv_port: priv_port,
-                    pub_ip: resource.0,
-                    pub_port: resource.1,
+                    nat,
                 };
 
                 Ok(AllowOrDeny::Allow(Arc::new(desc)))
@@ -190,8 +192,7 @@ impl StatefulAction for SNat4 {
 #[derive(Clone)]
 pub struct SNat4Desc {
     pool: Arc<NatPool>,
-    pub_ip: Ipv4Addr,
-    pub_port: u16,
+    nat: NatPoolEntry,
     priv_ip: Ipv4Addr,
     priv_port: u16,
 }
@@ -204,10 +205,10 @@ impl ActionDesc for SNat4Desc {
             // Outbound traffic needs it's source IP and source port
             Direction::Out => HT {
                 name: SNAT4_NAME.to_string(),
-                inner_ip: Ipv4Meta::modify(Some(self.pub_ip), None, None),
+                inner_ip: Ipv4Meta::modify(Some(self.nat.ip), None, None),
                 inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                     generic: UlpGenericModify {
-                        src_port: Some(self.pub_port),
+                        src_port: Some(self.nat.port),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -240,12 +241,7 @@ impl ActionDesc for SNat4Desc {
 
 impl Drop for SNat4Desc {
     fn drop(&mut self) {
-        #[cfg(any(feature = "std", test))]
-        println!("releasing {}:{}", self.pub_ip, self.pub_port);
-        self.pool.release(
-            &self.priv_ip,
-            NatPoolResource(self.pub_ip, self.pub_port),
-        );
+        self.pool.release(&self.priv_ip, self.nat);
     }
 }
 
@@ -421,28 +417,28 @@ mod test {
         pool.add(priv2, public, 4096..8192);
 
         assert_eq!(pool.num_avail(priv1).unwrap(), 3071);
-        let (mip1, mport1) = match pool.obtain(&priv1) {
-            Ok(NatPoolResource(ip, port)) => (ip, port),
+        let npe1 = match pool.obtain(&priv1) {
+            Ok(npe) => npe,
             _ => panic!("failed to obtain mapping"),
         };
         assert_eq!(pool.num_avail(priv1).unwrap(), 3070);
-        assert_eq!(mip1, public);
-        assert!(mport1 >= 1025);
-        assert!(mport1 < 4096);
+        assert_eq!(npe1.ip, public);
+        assert!(npe1.port >= 1025);
+        assert!(npe1.port < 4096);
 
         assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
-        let (mip2, mport2) = match pool.obtain(&priv2) {
-            Ok(NatPoolResource(ip, port)) => (ip, port),
+        let npe2 = match pool.obtain(&priv2) {
+            Ok(npe) => npe,
             _ => panic!("failed to obtain mapping"),
         };
         assert_eq!(pool.num_avail(priv2).unwrap(), 4095);
-        assert_eq!(mip2, public);
-        assert!(mport2 >= 4096);
-        assert!(mport2 < 8192);
+        assert_eq!(npe2.ip, public);
+        assert!(npe2.port >= 4096);
+        assert!(npe2.port < 8192);
 
-        pool.release(&priv1, NatPoolResource(mip1, mport1));
+        pool.release(&priv1, npe1);
         assert_eq!(pool.num_avail(priv1).unwrap(), 3071);
-        pool.release(&priv2, NatPoolResource(mip2, mport2));
+        pool.release(&priv2, npe2);
         assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
     }
 }

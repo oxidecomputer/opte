@@ -13,17 +13,17 @@ use std::str::FromStr;
 
 use structopt::StructOpt;
 
-use opte::api::{Direction, IpAddr, Ipv4Addr, Ipv6Addr, MacAddr, Vni};
-use opte::engine::ether::EtherAddr;
+use opte::api::{
+    Direction, IpAddr, Ipv4Addr, Ipv4Cidr, Ipv6Addr, MacAddr, Vni,
+};
 use opte::engine::flow_table::FlowEntryDump;
 use opte::engine::ioctl as api;
 use opte::engine::layer::InnerFlowId;
 use opte::engine::rule::RuleDump;
-use opte::engine::vpc::VpcSubnet4;
 use opte::oxide_vpc::api::{
     Action as FirewallAction, AddRouterEntryIpv4Req, Address,
     Filters as FirewallFilters, FirewallRule, GuestPhysAddr, PhysNet, PortInfo,
-    Ports, ProtoFilter, RemFwRuleReq, RouterTarget, SetVirt2PhysReq,
+    Ports, ProtoFilter, RemFwRuleReq, RouterTarget, SNatCfg, SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::overlay::DumpVirt2PhysResp;
 use opteadm::OpteAdm;
@@ -114,6 +114,9 @@ enum Command {
         private_ip: std::net::Ipv4Addr,
 
         #[structopt(long)]
+        vpc_subnet: Ipv4Cidr,
+
+        #[structopt(long)]
         gateway_mac: MacAddr,
 
         #[structopt(long)]
@@ -130,6 +133,15 @@ enum Command {
 
         #[structopt(long)]
         src_underlay_addr: std::net::Ipv6Addr,
+
+        #[structopt(long, requires_all(&["snat-start", "snat-end"]))]
+        snat_ip: Option<std::net::Ipv4Addr>,
+
+        #[structopt(long)]
+        snat_start: Option<u16>,
+
+        #[structopt(long)]
+        snat_end: Option<u16>,
 
         #[structopt(long)]
         passthrough: bool,
@@ -182,129 +194,6 @@ impl From<Filters> for FirewallFilters {
             .set_protocol(f.protocol)
             .set_ports(f.ports)
             .clone()
-    }
-}
-
-// The port configuration determines the networking configuration of
-// said port (and thus the guest that is linked to it).
-#[derive(Debug, StructOpt)]
-struct PortCfg {
-    #[structopt(long)]
-    private_ip: Ipv4Addr,
-
-    #[structopt(long)]
-    snat: Option<SnatCfg>,
-}
-
-impl From<PortCfg> for api::PortCfg {
-    fn from(s: PortCfg) -> Self {
-        Self { private_ip: s.private_ip, snat: s.snat.map(api::SnatCfg::from) }
-    }
-}
-
-// A Source NAT (SNAT) configuration. This configuration allows a
-// guest to map its private IP to a slice of a public IP, by
-// allocating a contiguous range of ports from that public IP to the
-// private IP. This range is then used to perform outgoing NAT for the
-// purposes of allowing the guest to talk to the internet without a
-// dedicated public IP.
-#[derive(Debug, StructOpt)]
-struct SnatCfg {
-    #[structopt(long)]
-    public_mac: EtherAddr,
-
-    #[structopt(long)]
-    public_ip: Ipv4Addr,
-
-    #[structopt(long)]
-    port_start: u16,
-
-    #[structopt(long)]
-    port_end: u16,
-
-    #[structopt(long)]
-    vpc_sub4: VpcSubnet4,
-}
-
-impl From<SnatCfg> for api::SnatCfg {
-    fn from(s: SnatCfg) -> Self {
-        Self {
-            public_mac: s.public_mac,
-            public_ip: s.public_ip,
-            port_start: s.port_start,
-            port_end: s.port_end,
-            vpc_sub4: s.vpc_sub4,
-        }
-    }
-}
-
-impl std::str::FromStr for SnatCfg {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut public_mac = None;
-        let mut public_ip = None;
-        let mut port_start = None;
-        let mut port_end = None;
-        let mut vpc_sub4 = None;
-
-        for token in s.split(" ") {
-            match token.split_once("=") {
-                Some(("public_mac", val)) => {
-                    public_mac = Some(val.parse()?);
-                }
-
-                Some(("public_ip", val)) => {
-                    public_ip = Some(val.parse()?);
-                }
-
-                Some(("port_start", val)) => {
-                    port_start =
-                        Some(val.parse::<u16>().map_err(|e| e.to_string())?);
-                }
-
-                Some(("port_end", val)) => {
-                    port_end =
-                        Some(val.parse::<u16>().map_err(|e| e.to_string())?);
-                }
-
-                Some(("vpc_sub4", val)) => {
-                    vpc_sub4 = Some(val.parse()?);
-                }
-
-                _ => {
-                    return Err(format!("bad token: {}", token));
-                }
-            };
-        }
-
-        if public_mac == None {
-            return Err(format!("missing public_mac"));
-        }
-
-        if public_ip == None {
-            return Err(format!("missing public_ip"));
-        }
-
-        if port_start == None {
-            return Err(format!("missing port_start"));
-        }
-
-        if port_end == None {
-            return Err(format!("missing port_end"));
-        }
-
-        if vpc_sub4 == None {
-            return Err(format!("missing vpc_sub4"));
-        }
-
-        Ok(Self {
-            public_mac: public_mac.unwrap(),
-            public_ip: public_ip.unwrap(),
-            port_start: port_start.unwrap(),
-            port_end: port_end.unwrap(),
-            vpc_sub4: vpc_sub4.unwrap(),
-        })
     }
 }
 
@@ -599,25 +488,43 @@ fn main() {
             name,
             private_mac,
             private_ip,
+            vpc_subnet,
             gateway_mac,
             gateway_ip,
             bsvc_addr,
             bsvc_vni,
             vpc_vni,
             src_underlay_addr,
+            snat_ip,
+            snat_start,
+            snat_end,
             passthrough,
         } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let snat = match snat_ip {
+                Some(ip) => Some(SNatCfg {
+                    public_ip: ip.into(),
+                    ports: core::ops::Range {
+                        start: snat_start.unwrap(),
+                        end: snat_end.unwrap(),
+                    },
+                }),
+
+                None => None,
+            };
+
             hdl.create_xde(
                 &name,
                 private_mac,
                 private_ip,
+                vpc_subnet,
                 gateway_mac,
                 gateway_ip,
                 bsvc_addr,
                 bsvc_vni,
                 vpc_vni,
                 src_underlay_addr,
+                snat,
                 passthrough,
             )
             .unwrap_or_die();

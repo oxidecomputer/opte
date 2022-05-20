@@ -615,8 +615,10 @@ impl Port {
         for l in &self.layers {
             l.expire_flows(now);
         }
-        self.uft_in.lock().expire_flows(now);
-        self.uft_out.lock().expire_flows(now);
+        let _ =
+            self.uft_in.lock().expire_flows(now, |_| FLOW_ID_DEFAULT.clone());
+        let _ =
+            self.uft_out.lock().expire_flows(now, |_| FLOW_ID_DEFAULT.clone());
     }
 
     /// Return a reference to the [`Action`] defined in the given
@@ -680,7 +682,8 @@ impl Port {
         &self,
         dir: Direction,
         pkt: &mut Packet<Parsed>,
-        meta: &mut meta::Meta,
+        lmeta: &mut meta::Meta,
+        rsrcs: &resources::Resources,
     ) -> result::Result<ProcessResult, ProcessError> {
         // XXX Yes, we are holding this mutex on all admin calls as
         // well. This means admin and datapath block each other --
@@ -712,8 +715,8 @@ impl Port {
         let epoch = self.epoch.load(SeqCst);
         self.port_process_entry_probe(dir, &ifid, epoch, &pkt);
         let res = match dir {
-            Direction::Out => self.process_out(&ifid, epoch, pkt, meta),
-            Direction::In => self.process_in(&ifid, epoch, pkt, meta),
+            Direction::Out => self.process_out(&ifid, epoch, pkt, lmeta, rsrcs),
+            Direction::In => self.process_in(&ifid, epoch, pkt, lmeta, rsrcs),
         };
         self.port_process_return_probe(dir, &ifid, epoch, &pkt, &res);
         // XXX If this is a Hairpin result there is no need for this call.
@@ -836,12 +839,16 @@ impl Port {
         ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
-        meta: &mut meta::Meta,
+        lmeta: &mut meta::Meta,
+        rsrcs: &resources::Resources,
     ) -> result::Result<LayerResult, LayerError> {
         match dir {
             Direction::Out => {
                 for layer in &self.layers {
-                    match layer.process(&self.ectx, dir, ifid, pkt, hts, meta) {
+                    let res = layer
+                        .process(&self.ectx, dir, ifid, pkt, hts, lmeta, rsrcs);
+
+                    match res {
                         Ok(LayerResult::Allow) => (),
                         ret @ Ok(LayerResult::Deny { .. }) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
@@ -852,7 +859,10 @@ impl Port {
 
             Direction::In => {
                 for layer in self.layers.iter().rev() {
-                    match layer.process(&self.ectx, dir, ifid, pkt, hts, meta) {
+                    let res = layer
+                        .process(&self.ectx, dir, ifid, pkt, hts, lmeta, rsrcs);
+
+                    match res {
                         Ok(LayerResult::Allow) => (),
                         ret @ Ok(LayerResult::Deny { .. }) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
@@ -949,12 +959,14 @@ impl Port {
     // a standard Result type.
     fn process_in_tcp_existing(
         &self,
-        meta: &PacketMeta,
+        pmeta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
+        use Direction::In;
+
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we mirror the flow.
-        let ifid_after = InnerFlowId::from(meta).mirror();
-        let tcp = meta.inner_tcp().unwrap();
+        let ifid_after = InnerFlowId::from(pmeta).mirror();
+        let tcp = pmeta.inner_tcp().unwrap();
         let mut lock = self.tcp_flows.lock();
 
         let tcp_state = match lock.get_mut(&ifid_after) {
@@ -965,7 +977,7 @@ impl Port {
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
                     tfes.tcp_state.tcp_flow_drop_probe(
                         &ifid_after,
-                        Direction::In,
+                        In,
                         tcp.flags,
                     );
 
@@ -975,10 +987,7 @@ impl Port {
                 // The connection may have transitioned to CLOSED, but
                 // we don't remove its entry here. That happens as
                 // part of the expiration logic.
-                let res =
-                    tfes.tcp_state.process(Direction::In, &ifid_after, tcp);
-
-                match res {
+                match tfes.tcp_state.process(In, &ifid_after, tcp) {
                     Ok(tcp_state) => tcp_state,
                     Err(e) => return Err(e),
                 }
@@ -998,13 +1007,15 @@ impl Port {
     fn process_in_tcp_new(
         &self,
         ifid: &InnerFlowId,
-        meta: &PacketMeta,
+        pmeta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
+        use Direction::In;
+
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we mirror the flow.
-        let ifid_out = InnerFlowId::from(meta).mirror();
+        let ifid_out = InnerFlowId::from(pmeta).mirror();
         let mut lock = self.tcp_flows.lock();
-        let tcp = meta.inner_tcp().unwrap();
+        let tcp = pmeta.inner_tcp().unwrap();
 
         let tcp_state = match lock.get_mut(&ifid_out) {
             // We may have already created a TCP flow entry due to an
@@ -1014,17 +1025,13 @@ impl Port {
                 let tfes = entry.state_mut();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    tfes.tcp_state.tcp_flow_drop_probe(
-                        &ifid_out,
-                        Direction::In,
-                        tcp.flags,
-                    );
+                    tfes.tcp_state
+                        .tcp_flow_drop_probe(&ifid_out, In, tcp.flags);
 
                     return Ok(TcpState::Closed);
                 }
 
-                let res =
-                    tfes.tcp_state.process(Direction::In, &ifid_out, &tcp);
+                let res = tfes.tcp_state.process(In, &ifid_out, &tcp);
 
                 let tcp_state = match res {
                     Ok(tcp_state) => tcp_state,
@@ -1059,9 +1066,9 @@ impl Port {
                     inbound_ufid: Some(ifid.clone()),
                     tcp_state: tfs,
                 };
+
                 // TODO kill unwrap
                 lock.add(ifid_out, tfes).unwrap();
-
                 TcpState::Listen
             }
         };
@@ -1074,13 +1081,16 @@ impl Port {
         ifid: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
-        meta: &mut meta::Meta,
+        lmeta: &mut meta::Meta,
+        rsrcs: &resources::Resources,
     ) -> result::Result<ProcessResult, ProcessError> {
+        use Direction::In;
+
         // There is no FlowId, thus there can be no use of the UFT.
         if *ifid == FLOW_ID_DEFAULT {
             let mut hts = Vec::new();
             let res =
-                self.layers_process(Direction::In, ifid, pkt, &mut hts, meta);
+                self.layers_process(In, ifid, pkt, &mut hts, lmeta, rsrcs);
 
             match res {
                 Ok(LayerResult::Allow) => {
@@ -1115,13 +1125,7 @@ impl Port {
                 for ht in &entry.state().hts {
                     ht.run(pkt.meta_mut());
                     let ifid_after = InnerFlowId::from(pkt.meta());
-                    ht_probe(
-                        &self.name_cstr,
-                        "UFT-in",
-                        Direction::In,
-                        &ifid,
-                        &ifid_after,
-                    );
+                    ht_probe(&self.name_cstr, "UFT-in", In, &ifid, &ifid_after);
                 }
 
                 // For inbound traffic the TCP flow table must be
@@ -1160,11 +1164,11 @@ impl Port {
         }
 
         if let Some(ht_epoch) = invalidated {
-            self.uft_invalidate(Direction::In, ifid, ht_epoch);
+            self.uft_invalidate(In, ifid, ht_epoch);
         }
 
         let mut hts = Vec::new();
-        let res = self.layers_process(Direction::In, ifid, pkt, &mut hts, meta);
+        let res = self.layers_process(In, ifid, pkt, &mut hts, lmeta, rsrcs);
         let hte = HtEntry { hts, epoch };
 
         match res {
@@ -1216,14 +1220,14 @@ impl Port {
     fn process_out_tcp_existing(
         &self,
         ifid: &InnerFlowId,
-        meta: &PacketMeta,
+        pmeta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
         let mut lock = self.tcp_flows.lock();
 
         let tcp_state = match lock.get_mut(&ifid) {
             Some(entry) => {
                 let tfes = entry.state_mut();
-                let tcp = meta.inner_tcp().unwrap();
+                let tcp = pmeta.inner_tcp().unwrap();
 
                 if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
                     tfes.tcp_state.tcp_flow_drop_probe(
@@ -1261,9 +1265,9 @@ impl Port {
     fn process_out_tcp_new(
         &self,
         ifid: &InnerFlowId,
-        meta: &PacketMeta,
+        pmeta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
-        let tcp = meta.inner_tcp().unwrap();
+        let tcp = pmeta.inner_tcp().unwrap();
         let mut lock = self.tcp_flows.lock();
 
         let tcp_state = match lock.get_mut(&ifid) {
@@ -1327,13 +1331,16 @@ impl Port {
         ifid: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
-        meta: &mut meta::Meta,
+        lmeta: &mut meta::Meta,
+        rsrcs: &resources::Resources,
     ) -> result::Result<ProcessResult, ProcessError> {
+        use Direction::Out;
+
         // There is no FlowId, thus there can be no use of the UFT.
         if *ifid == FLOW_ID_DEFAULT {
             let mut hts = Vec::new();
             let res =
-                self.layers_process(Direction::Out, ifid, pkt, &mut hts, meta);
+                self.layers_process(Out, ifid, pkt, &mut hts, lmeta, rsrcs);
 
             match res {
                 Ok(LayerResult::Allow) => {
@@ -1387,7 +1394,7 @@ impl Port {
                     ht_probe(
                         &self.name_cstr,
                         "UFT-out",
-                        Direction::Out,
+                        Out,
                         &ifid,
                         &ifid_after,
                     );
@@ -1408,7 +1415,7 @@ impl Port {
         }
 
         if let Some(ht_epoch) = invalidated {
-            self.uft_invalidate(Direction::Out, ifid, ht_epoch);
+            self.uft_invalidate(Out, ifid, ht_epoch);
         }
 
         // For outbound traffic the TCP flow table must be checked
@@ -1432,8 +1439,7 @@ impl Port {
         }
 
         let mut hts = Vec::new();
-        let res =
-            self.layers_process(Direction::Out, ifid, pkt, &mut hts, meta);
+        let res = self.layers_process(Out, ifid, pkt, &mut hts, lmeta, rsrcs);
         let hte = HtEntry { hts, epoch };
 
         match res {
@@ -1671,6 +1677,65 @@ pub mod meta {
             V: 'static + Send + Sync,
         {
             self.inner.get_mut::<V>()
+        }
+    }
+}
+
+pub mod resources {
+    use crate::engine::rule::Resource;
+
+    #[derive(Debug)]
+    pub enum Error {
+        AlreadyExists,
+    }
+
+    /// A map of the available [`Resource`] types.
+    pub struct Resources {
+        inner: anymap::Map<dyn anymap::any::Any + Send + Sync>,
+    }
+
+    impl Resources {
+        pub fn new() -> Self {
+            Resources { inner: anymap::Map::new() }
+        }
+
+        /// Add a new [`Resource`].
+        ///
+        /// # Errors
+        ///
+        /// Return an error if a resource of this type already exists.
+        pub fn add<V>(&mut self, val: V) -> Result<(), Error>
+        where
+            V: 'static + Resource + Send + Sync,
+        {
+            if self.inner.contains::<V>() {
+                return Err(Error::AlreadyExists);
+            }
+
+            self.inner.insert(val);
+            Ok(())
+        }
+
+        /// Clear all entries.
+        #[cfg(test)]
+        pub fn clear(&mut self) {
+            self.inner.clear();
+        }
+
+        /// Remove the [`Resoruce`].
+        pub fn remove<V>(&mut self) -> Option<V>
+        where
+            V: 'static + Resource + Send + Sync,
+        {
+            self.inner.remove::<V>()
+        }
+
+        /// Get a shared reference to the [`Resource`].
+        pub fn get<V>(&self) -> Option<&V>
+        where
+            V: 'static + Resource + Send + Sync,
+        {
+            self.inner.get::<V>()
         }
     }
 }

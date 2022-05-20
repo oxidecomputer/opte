@@ -118,19 +118,22 @@ where
 
     pub fn expire(&mut self, flowid: &InnerFlowId) {
         flow_expired_probe(&self.port_c, &self.name_c, flowid);
-        self.map.remove(flowid).unwrap();
+        self.map.remove(flowid);
     }
 
-    pub fn expire_flows(&mut self, now: Moment) -> Vec<InnerFlowId> {
+    pub fn expire_flows<F>(&mut self, now: Moment, f: F) -> Vec<InnerFlowId>
+    where
+        F: Fn(&S) -> InnerFlowId,
+    {
         let name_c = &self.name_c;
         let port_c = &self.port_c;
         let ttl = self.ttl;
         let mut expired = vec![];
 
-        self.map.retain(|flowid, state| {
-            if state.is_expired(now, ttl) {
+        self.map.retain(|flowid, entry| {
+            if entry.is_expired(now, ttl) {
                 flow_expired_probe(port_c, name_c, flowid);
-                expired.push(flowid.clone().mirror());
+                expired.push(f(&entry.state()));
                 return false;
             }
 
@@ -295,6 +298,7 @@ mod test {
     use super::*;
     use crate::engine::headers::IpAddr;
     use crate::engine::ip4::Protocol;
+    use crate::engine::layer::FLOW_ID_DEFAULT;
     use core::time::Duration;
 
     pub const FT_SIZE: Option<NonZeroU32> = NonZeroU32::new(16);
@@ -315,9 +319,12 @@ mod test {
         ft.add(flowid, ()).unwrap();
         let now = Moment::now();
         assert_eq!(ft.num_flows(), 1);
-        ft.expire_flows(now);
+        ft.expire_flows(now, |_| FLOW_ID_DEFAULT.clone());
         assert_eq!(ft.num_flows(), 1);
-        ft.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0));
+        ft.expire_flows(
+            now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0),
+            |_| FLOW_ID_DEFAULT.clone(),
+        );
         assert_eq!(ft.num_flows(), 0);
     }
 

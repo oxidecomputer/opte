@@ -410,7 +410,7 @@ impl Ipv6Addr {
 }
 
 /// An IPv4 or IPv6 CIDR.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum IpCidr {
     Ip4(Ipv4Cidr),
     Ip6(Ipv6Cidr),
