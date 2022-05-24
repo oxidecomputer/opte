@@ -27,7 +27,8 @@ use alloc::vec::Vec;
 use illumos_ddi_dki::*;
 
 use crate::ioctl::IoctlEnvelope;
-use crate::{dld, dls, ip, mac, secpolicy, sys, warn};
+use crate::mac::{self, MacClient, MacOpenFlags, MacTxFlags};
+use crate::{dld, dls, ip, secpolicy, sys, warn};
 use opte::api::{
     CmdOk, Direction, Ipv4Cidr, MacAddr, NoResp, OpteCmd, OpteCmdIoctl,
     OpteError, SetXdeUnderlayReq,
@@ -156,11 +157,11 @@ fn next_hop_probe(
 }
 
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct xde_underlay_port {
     name: String,
     mh: *mut mac::mac_handle,
-    mch: *mut mac::mac_client_handle,
+    mch: MacClient,
     mph: *mut mac::mac_promisc_handle,
 }
 
@@ -173,33 +174,14 @@ struct XdeState {
 struct UnderlayState {
     // each xde driver has a handle to two underlay ports that are used for I/O
     // onto the underlay network
-    u1: xde_underlay_port,
-    u2: xde_underlay_port,
-}
-
-impl UnderlayState {
-    pub fn new(u1: String, u2: String) -> Self {
-        UnderlayState {
-            u1: xde_underlay_port {
-                name: u1,
-                mh: 0 as *mut mac::mac_handle,
-                mch: 0 as *mut mac::mac_client_handle,
-                mph: 0 as *mut mac::mac_promisc_handle,
-            },
-            u2: xde_underlay_port {
-                name: u2,
-                mh: 0 as *mut mac::mac_handle,
-                mch: 0 as *mut mac::mac_client_handle,
-                mph: 0 as *mut mac::mac_promisc_handle,
-            },
-        }
-    }
+    u1: Arc<xde_underlay_port>,
+    u2: Arc<xde_underlay_port>,
 }
 
 fn get_xde_state() -> &'static mut XdeState {
     // Safety: The opte_dip pointer is write-once and is a valid
     // pointer passed to attach(9E). The returned pointer is valid as
-    // it was derived from Box::into_raw() during set_xde_underlay
+    // it was derived from Box::into_raw() during set_xde_underlay.
     unsafe {
         let p = ddi_get_driver_private(xde_dip);
         &mut *(p as *mut XdeState)
@@ -212,7 +194,6 @@ impl XdeState {
         XdeState {
             underlay: KMutex::new(None, KMutexType::Driver),
             ectx,
-            // v2p: BTreeMap::new(),
             vpc_map: overlay::VpcMappings::new(),
         }
     }
@@ -239,8 +220,8 @@ struct XdeDev {
     vni: Vni,
 
     // these are clones of the underlay ports initialized by the driver
-    u1: xde_underlay_port,
-    u2: xde_underlay_port,
+    u1: Arc<xde_underlay_port>,
+    u2: Arc<xde_underlay_port>,
 }
 
 #[no_mangle]
@@ -689,10 +670,7 @@ unsafe fn init_underlay_ingress_handlers(
     u1: String,
     u2: String,
 ) -> Result<UnderlayState, OpteError> {
-    let mut state = UnderlayState::new(u1.clone(), u2.clone());
-    // null terminated underlay device names
-
-    let u1_devname = match CString::new(u1.as_str()) {
+    let u1_name = match CString::new(u1.as_str()) {
         Ok(s) => s,
         Err(e) => {
             return Err(OpteError::System {
@@ -702,7 +680,7 @@ unsafe fn init_underlay_ingress_handlers(
         }
     };
 
-    let u2_devname = match CString::new(u2.as_str()) {
+    let u2_name = match CString::new(u2.as_str()) {
         Ok(s) => s,
         Err(e) => {
             return Err(OpteError::System {
@@ -712,15 +690,16 @@ unsafe fn init_underlay_ingress_handlers(
         }
     };
 
-    // get mac handles for underlay ports
+    let mut u1_mh = ptr::null_mut() as *mut c_void as *mut mac::mac_handle;
 
+    // get mac handles for underlay ports
     match mac::mac_open_by_linkname(
-        u1_devname.as_ptr() as *const c_char,
-        &mut state.u1.mh,
+        u1_name.as_ptr() as *const c_char,
+        &mut u1_mh,
     ) {
         0 => {}
         err => {
-            let p = CStr::from_ptr(u1_devname.as_ptr() as *const c_char);
+            let p = CStr::from_ptr(u1_name.as_ptr() as *const c_char);
             return Err(OpteError::System {
                 errno: EFAULT,
                 msg: format!(
@@ -731,13 +710,15 @@ unsafe fn init_underlay_ingress_handlers(
         }
     }
 
+    let mut u2_mh = ptr::null_mut() as *mut c_void as *mut mac::mac_handle;
+
     match mac::mac_open_by_linkname(
-        u2_devname.as_ptr() as *const c_char,
-        &mut state.u2.mh,
+        u2_name.as_ptr() as *const c_char,
+        &mut u2_mh,
     ) {
         0 => {}
         err => {
-            let p = CStr::from_ptr(u2_devname.as_ptr() as *const c_char);
+            let p = CStr::from_ptr(u2_name.as_ptr() as *const c_char);
             return Err(OpteError::System {
                 errno: EFAULT,
                 msg: format!(
@@ -748,97 +729,87 @@ unsafe fn init_underlay_ingress_handlers(
         }
     }
 
-    // get mac clients for underlay ports
-
-    let mac_client_flags = mac::MAC_OPEN_FLAGS_NO_UNICAST_ADDR;
-
-    match mac::mac_client_open(
-        state.u1.mh,
-        &mut state.u1.mch,
-        b"xde\0" as *const u8 as *const c_char,
-        mac_client_flags,
-    ) {
-        0 => {}
-        err => {
+    // Open clients for the upstream ports.
+    let oflags = MacOpenFlags::NO_UNICAST_ADDR;
+    let u1_mch = match MacClient::open(u1_mh, Some("xdeu0"), oflags, 0) {
+        Ok(mch) => mch,
+        Err(e) => {
+            mac::mac_close(u2_mh);
+            mac::mac_close(u1_mh);
             return Err(OpteError::System {
                 errno: EFAULT,
-                msg: format!("mac client open for u1 failed: {}", err),
+                msg: format!("mac_client_open failed for {}: {}", u1, e),
             });
         }
-    }
+    };
 
-    match mac::mac_client_open(
-        state.u2.mh,
-        &mut state.u2.mch,
-        b"xde\0" as *const u8 as *const c_char,
-        mac_client_flags,
-    ) {
-        0 => {}
-        err => {
+    let u2_mch = match MacClient::open(u2_mh, Some("xdeu1"), oflags, 0) {
+        Ok(mch) => mch,
+        Err(e) => {
+            mac::mac_close(u2_mh);
+            mac::mac_close(u1_mh);
             return Err(OpteError::System {
                 errno: EFAULT,
-                msg: format!("mac client open for u2 failed: {}", err),
+                msg: format!("mac_client_open failed for {}: {}", u2, e),
             });
         }
-    }
+    };
 
     // set up promisc rx handlers for underlay devices
-
-    match mac::mac_promisc_add(
-        state.u1.mch,
+    let u1_mph = match u2_mch.add_promisc(
         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
         xde_rx,
         ptr::null_mut(),
-        &mut state.u1.mph,
         0,
     ) {
-        0 => {}
-        err => {
+        Ok(mph) => mph,
+        Err(e) => {
+            drop(u2_mch);
+            drop(u1_mch);
+            mac::mac_close(u2_mh);
+            mac::mac_close(u1_mh);
             return Err(OpteError::System {
                 errno: EFAULT,
-                msg: format!("mac promisc add u1 failed: {}", err),
+                msg: format!("mac_promisc_add failed for {}: {}", u1, e),
             });
         }
-    }
+    };
 
-    /*
-     * TODO: this - curently promisc RX is needed to get packets into the xde
-     * device. Maybehapps setting something like MAC_OPEN_FLAGS_MULTI_PRIMARY
-     * and doing a mac_unicast_add with MAC_UNICAST_PRIMARY would work?.
-     *
-    mac::mac_rx_set(
-        state.u1.mch,
-        xde_rx,
-        ptr::null_mut(),
-    );
-     *
-     */
-
-    match mac::mac_promisc_add(
-        state.u2.mch,
+    let u2_mph = match u2_mch.add_promisc(
         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
         xde_rx,
         ptr::null_mut(),
-        &mut state.u2.mph,
         0,
     ) {
-        0 => {}
-        err => {
+        Ok(mph) => mph,
+        Err(e) => {
+            u1_mch.rem_promisc(u1_mph);
+            drop(u2_mch);
+            drop(u1_mch);
+            mac::mac_close(u2_mh);
+            mac::mac_close(u1_mh);
             return Err(OpteError::System {
                 errno: EFAULT,
-                msg: format!("mac promisc add u2 failed: {}", err),
+                msg: format!("mac_promisc_add failed for {}: {}", u2, e),
             });
         }
-    }
-    /*
-    mac::mac_rx_set(
-        state.u2.mch,
-        xde_rx,
-        ptr::null_mut(),
-    );
-    */
+    };
 
-    Ok(state)
+    Ok(UnderlayState {
+        u1: Arc::new(xde_underlay_port {
+            name: u1,
+            mh: u1_mh,
+            mch: u1_mch,
+            mph: u1_mph,
+        }),
+
+        u2: Arc::new(xde_underlay_port {
+            name: u2,
+            mh: u2_mh,
+            mch: u2_mch,
+            mph: u2_mph,
+        }),
+    })
 }
 
 #[no_mangle]
@@ -883,31 +854,36 @@ unsafe extern "C" fn xde_detach(
     _cmd: ddi_detach_cmd_t,
 ) -> c_int {
     assert!(!xde_dip.is_null());
-
     let rstate = ddi_get_driver_private(xde_dip);
     assert!(!rstate.is_null());
-    let state = &*(rstate as *mut XdeState);
-    let underlay = state.underlay.lock();
-    match *underlay {
-        Some(ref underlay) => {
-            // mac rx clear for underlay devices
-            mac::mac_rx_clear(underlay.u1.mch);
-            mac::mac_rx_clear(underlay.u2.mch);
-            mac::mac_promisc_remove(underlay.u1.mph);
-            mac::mac_promisc_remove(underlay.u2.mph);
+    let state = Box::from_raw(rstate as *mut XdeState);
+    let underlay = state.underlay.into_inner();
 
-            // close mac client handle for underlay devices
-            mac::mac_client_close(underlay.u1.mch, 0);
-            mac::mac_client_close(underlay.u2.mch, 0);
+    match underlay {
+        Some(underlay) => {
+            let u1 = Arc::try_unwrap(underlay.u1).unwrap();
+            let u2 = Arc::try_unwrap(underlay.u2).unwrap();
 
-            // close mac handle for underlay devices
-            mac::mac_close(underlay.u1.mh);
-            mac::mac_close(underlay.u2.mh);
+            // Clear all Rx paths.
+            u1.mch.clear_rx();
+            u2.mch.clear_rx();
+            u1.mch.rem_promisc(u1.mph);
+            u2.mch.rem_promisc(u2.mph);
+
+            // It's imperative we drop the MacClient now, before
+            // attempting to close the underlying mac handle (as
+            // that's predicated on no outstanding clients). We
+            // wouldn't need the manual drop if the mac handle had a
+            // safe abstraction; but it does not at this time.
+            drop(u1.mch);
+            drop(u2.mch);
+
+            // Close mac handle for underlay devices.
+            mac::mac_close(u1.mh);
+            mac::mac_close(u2.mh);
         }
         None => {}
     };
-
-    let _ = Box::from_raw(rstate as *mut XdeState);
 
     dld::dld_ioc_unregister(dld::XDE_IOC);
     xde_dip = ptr::null_mut::<c_void>() as *mut dev_info;
@@ -1212,10 +1188,8 @@ unsafe extern "C" fn xde_mc_tx(
 
     // TODO Arbitrarily choose u1, later when we integrate with DDM
     // we'll have the information needed to make a real choice.
-    let mch = src_dev.u1.mch;
+    let mch = &src_dev.u1.mch;
     let hint = 0;
-    let flags = mac::MAC_DROP_ON_NO_DESC;
-    let ret_mp = ptr::null_mut();
 
     // Send straight to underlay in passthrough mode.
     if src_dev.passthrough {
@@ -1225,9 +1199,7 @@ unsafe extern "C" fn xde_mc_tx(
         // refresh my memory on all of this.
         //
         // TODO Is there way to set mac_tx to must use result?
-        //
-        // TODO Bring in MacClient safe abstraction from opte-drv.
-        mac::mac_tx(mch, pkt.unwrap(), hint, flags, ret_mp);
+        mch.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
         return ptr::null_mut();
     }
 
@@ -1295,15 +1267,16 @@ unsafe extern "C" fn xde_mc_tx(
             // for the mac associated with the IRE nexthop to fill in
             // the outer frame of the packet.
             let (src, dst) = next_hop(&ip6.dst());
-            let mblk = pkt.unwrap();
 
             // Get a pointer to the beginning of the outer frame and
             // fill in the dst/src addresses before sending out the
             // device.
+            let mblk = pkt.unwrap();
             let rptr = (*mblk).b_rptr as *mut u8;
             ptr::copy(dst.as_ptr(), rptr, 6);
             ptr::copy(src.as_ptr(), rptr.add(6), 6);
-            mac::mac_tx(mch, mblk, hint, flags, ret_mp);
+            let new_pkt = Packet::<Initialized>::wrap(mblk);
+            mch.tx_drop_on_no_desc(new_pkt, hint, MacTxFlags::empty());
         }
 
         Ok(ProcessResult::Drop { .. }) => {
@@ -1319,7 +1292,7 @@ unsafe extern "C" fn xde_mc_tx(
         }
 
         Ok(ProcessResult::Bypass) => {
-            mac::mac_tx(mch, pkt.unwrap(), hint, flags, ret_mp);
+            mch.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
         }
 
         Err(_) => {}
@@ -1816,11 +1789,7 @@ unsafe extern "C" fn xde_rx(
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
             // TODO assuming underlay device 1
-            let mch = (*dev).u1.mch;
-            let hint = 0;
-            let flags = mac::MAC_DROP_ON_NO_DESC;
-            let ret_mp = ptr::null_mut();
-            mac::mac_tx(mch, hppkt.unwrap(), hint, flags, ret_mp);
+            (*dev).u1.mch.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
         }
         Ok(ProcessResult::Bypass) => {
             mac::mac_rx((*dev).mh, mrh, mp_chain);

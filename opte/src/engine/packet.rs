@@ -572,6 +572,18 @@ impl<S: PacketState> Packet<S> {
     pub fn num_segs(&self) -> usize {
         self.segs.len()
     }
+
+    /// Return the head of the underlying `mblk_t` segment chain and
+    /// consume `self`. The caller of this function now owns the
+    /// `mblk_t` segment chain.
+    pub fn unwrap(mut self) -> *mut mblk_t {
+        let mp_head = self.segs[0].mp;
+        // We need to make sure to NULL out the mp pointer or else
+        // `drop()` will `freemsg(9F)` even though ownership of the
+        // mblk has passed on to someone else.
+        self.segs[0].mp = ptr::null_mut();
+        mp_head
+    }
 }
 
 /// For the `no_std`/illumos kernel environment, we want the `mblk_t`
@@ -1135,19 +1147,6 @@ impl Packet<Initialized> {
         })
     }
 
-    /// Return the head of the underlying `mblk_t` segment chain and
-    /// consume `self`. The caller of this function now owns the
-    /// `mblk_t` segment chain.
-    pub fn unwrap(mut self) -> *mut mblk_t {
-        // self.segs.pop().unwrap().unwrap()
-        let mp_head = self.segs[0].mp;
-        // We need to make sure to NULL out the mp pointer or else
-        // `drop()` will `freemsg(9F)` even though ownership of the
-        // mblk has passed on to someone else.
-        self.segs[0].mp = ptr::null_mut();
-        mp_head
-    }
-
     /// Wrap the `mblk_t` packet in a [`Packet`], taking ownership of
     /// the `mblk_t` packet as a result. An `mblk_t` packet consists
     /// of one or more `mblk_t` segments chained together via
@@ -1600,18 +1599,6 @@ impl Packet<Parsed> {
     pub fn unify_headers(&mut self) -> Result<usize, WriteError> {
         let pkt_offset = self.unify_outer_headers()?;
         self.unify_inner_headers(pkt_offset)
-    }
-
-    /// Return the head of the underlying `mblk_t` segment chain and
-    /// consume `self`. The caller of this function now owns the
-    /// `mblk_t` segment chain.
-    pub fn unwrap(mut self) -> *mut mblk_t {
-        let mp_head = self.segs[0].mp;
-        // We need to make sure to NULL out the mp pointer or else
-        // `drop()` will `freemsg(9F)` even though ownership of the
-        // mblk has passed on to someone else.
-        self.segs[0].mp = ptr::null_mut();
-        mp_head
     }
 }
 
