@@ -1279,6 +1279,9 @@ impl Packet<Parsed> {
             self.state.body.pkt_offset -= seg.len;
             self.state.body.seg_index -= 1;
             seg.nullify_cont();
+            // This segment has become an orphan and therefore must be
+            // freed manually.
+            PacketSeg::free(seg);
         }
 
         assert_eq!(self.state.body.seg_index, 0);
@@ -1644,6 +1647,18 @@ pub struct PacketSeg {
 }
 
 impl PacketSeg {
+    fn free(self) {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                // Safety: We know the mblk wrapped by PacketSeg is legit
+                // and came from the system's allocb(9F).
+                unsafe { ddi::freeb(self.unwrap()) };
+            } else {
+                mock_freeb(self.unwrap());
+            }
+        }
+    }
+
     fn link(&mut self, seg: &PacketSeg) {
         unsafe { (*self.mp).b_cont = seg.mp };
     }

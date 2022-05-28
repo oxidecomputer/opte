@@ -434,6 +434,7 @@ extern "C" {
     pub fn ddi_soft_state_fini(state_p: *mut *mut c_void);
     pub fn ddi_soft_state_zalloc(state: *mut c_void, item: c_int) -> c_int;
 
+    pub fn freeb(mp: *mut mblk_t);
     pub fn freemsg(mp: *mut mblk_t);
 
     pub fn gethrtime() -> hrtime_t;
