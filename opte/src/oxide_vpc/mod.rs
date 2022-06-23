@@ -46,6 +46,8 @@ cfg_if! {
             pub vni: Vni,
             pub phys_ip: Ipv6Addr,
             pub bsvc_addr: PhysNet,
+            // XXX-EXT-IP
+            pub proxy_arp_enable: bool,
         }
     }
 }

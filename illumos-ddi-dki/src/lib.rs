@@ -326,6 +326,7 @@ pub const DDI_PROP_DONTPASS: c_uint = 0x0001;
 pub const DDI_PROP_CANSLEEP: c_uint = 0x0002;
 
 pub const DDI_PROP_SUCCESS: c_int = 0;
+pub const DDI_PROP_NOT_FOUND: c_int = 1;
 
 pub const DDI_IPL_0: c_int = 0;
 
@@ -413,7 +414,27 @@ extern "C" {
         level: c_int,
     ) -> *const ddi_periodic;
     pub fn ddi_periodic_delete(request: *const ddi_periodic);
+    pub fn ddi_prop_exists(
+        match_dev: dev_t,
+        dip: *mut dev_info,
+        flags: c_uint,
+        name: *const c_char,
+    ) -> c_int;
     pub fn ddi_prop_free(data: *mut c_void);
+    pub fn ddi_prop_get_int(
+        match_dev: dev_t,
+        dip: *mut dev_info,
+        flags: c_uint,
+        name: *const c_char,
+        defvalue: c_int,
+    ) -> c_int;
+    pub fn ddi_prop_get_int64(
+        match_dev: dev_t,
+        dip: *mut dev_info,
+        flags: c_uint,
+        name: *const c_char,
+        defvalue: i64,
+    ) -> i64;
     pub fn ddi_prop_lookup_string(
         match_dev: dev_t,
         dip: *mut dev_info,

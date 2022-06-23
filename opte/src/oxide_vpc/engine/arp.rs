@@ -27,13 +27,35 @@ pub fn setup(
     cfg: &PortCfg,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
+    let mut actions = vec![
+        // ARP Reply for gateway's IP.
+        Action::Hairpin(Arc::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),
+    ];
+
+    if let Some(snat) = &cfg.snat {
+        if cfg.proxy_arp_enable {
+            // XXX-EXT-IP Hack to get remote access to guest instance
+            // via SNAT (which is not what it's intended for, but I
+            // think it'll work).
+            //
+            // Reuse the same MAC address for both IPs. This should be
+            // fine as the VIP is contained solely to the guest
+            // instance.
+            actions.push(Action::Hairpin(Arc::new(ArpReply::new(
+                snat.public_ip,
+                cfg.private_mac,
+            ))));
+        }
+    }
+
     let arp = Layer::new(
         "arp",
         pb.name(),
-        vec![
-            // ARP Reply for gateway's IP.
-            Action::Hairpin(Arc::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),
-        ],
+        // vec![
+        //     // ARP Reply for gateway's IP.
+        //     Action::Hairpin(Arc::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),
+        // ],
+        actions,
         ft_limit,
     );
 
@@ -54,6 +76,19 @@ pub fn setup(
         ETHER_TYPE_ARP,
     )]));
     arp.add_rule(Direction::Out, rule.finalize());
+
+    // ================================================================
+    // Proxy ARP for any incoming requests for guest's SNAT IP
+    //
+    // XXX-EXT-IP This is a hack to get guest access working until we
+    // have boundary services integrated.
+    // ================================================================
+    if let Some(_) = &cfg.snat {
+        if cfg.proxy_arp_enable {
+            let rule = Rule::new(1, arp.action(1).unwrap().clone());
+            arp.add_rule(Direction::In, rule.finalize());
+        }
+    }
 
     // ================================================================
     // Drop all inbound ARP Requests

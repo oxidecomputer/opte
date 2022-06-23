@@ -33,13 +33,15 @@ use opte::api::{
     CmdOk, Direction, Ipv4Cidr, MacAddr, NoResp, OpteCmd, OpteCmdIoctl,
     OpteError, SetXdeUnderlayReq,
 };
-use opte::engine::ether::EtherAddr;
+use opte::engine::ether::{EtherAddr, EtherType};
 use opte::engine::geneve::Vni;
 use opte::engine::headers::{IpAddr, IpCidr};
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip6::Ipv6Addr;
-use opte::engine::packet::{Initialized, Packet, ParseError, Parsed};
+use opte::engine::packet::{
+    Initialized, Packet, PacketRead, PacketReader, ParseError, Parsed,
+};
 use opte::engine::port::meta;
 use opte::engine::port::resources::Resources;
 use opte::engine::port::{Port, PortBuilder, ProcessResult};
@@ -52,7 +54,7 @@ use opte::oxide_vpc::api::{
     SetFwRulesReq, SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::{
-    arp, dhcp4, firewall, icmp, overlay, router, snat4,
+    arp, dhcp4, firewall, icmp, nat4, overlay, router, snat4,
 };
 use opte::oxide_vpc::PortCfg;
 use opte::{CStr, CString, ExecCtx};
@@ -64,6 +66,7 @@ use opte::{CStr, CString, ExecCtx};
 //
 // Unwrap: We know all of these are safe to unwrap().
 const FW_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
+const NAT_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
 const SNAT_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
 const FT_LIMIT_ONE: Option<NonZeroU32> = NonZeroU32::new(1);
 const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
@@ -77,6 +80,9 @@ static mut xde_devs: KRwLock<Vec<Box<XdeDev>>> = KRwLock::new(Vec::new());
 
 /// DDI dev info pointer to the attached xde device.
 static mut xde_dip: *mut dev_info = 0 as *mut dev_info;
+
+#[no_mangle]
+pub static mut xde_ext_ip_hack: i32 = 0;
 
 // This block is purely for SDT probes.
 extern "C" {
@@ -646,6 +652,29 @@ unsafe extern "C" fn xde_attach(
     }
 
     xde_dip = dip;
+
+    if !driver_prop_exists("ext_ip_hack") {
+        warn!("failed to find 'ext_ip_hack' property in xde.conf");
+        return DDI_FAILURE;
+    }
+
+    match get_driver_prop_bool("ext_ip_hack") {
+        Some(true) => {
+            warn!("ext_ip_hack enabled: traffic will NOT be encapsulated");
+            xde_ext_ip_hack = 1;
+        }
+
+        Some(_) => {
+            warn!("ext_ip_hack disabled: traffic will be encapsulated");
+            xde_ext_ip_hack = 0;
+        }
+
+        None => {
+            warn!("failed to read 'ext_ip_hack' from xde.conf, disabled");
+            xde_ext_ip_hack = 0;
+        }
+    };
+
     let state = Box::new(XdeState::new());
     ddi_set_driver_private(xde_dip, Box::into_raw(state) as *mut c_void);
     opte::engine::dbg(format!("dld_ioc_add: {:#?}", xde_ioc_list));
@@ -756,7 +785,7 @@ unsafe fn init_underlay_ingress_handlers(
     };
 
     // set up promisc rx handlers for underlay devices
-    let u1_mph = match u2_mch.add_promisc(
+    let u1_mph = match u1_mch.add_promisc(
         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
         xde_rx,
         ptr::null_mut(),
@@ -810,6 +839,60 @@ unsafe fn init_underlay_ingress_handlers(
             mph: u2_mph,
         }),
     })
+}
+
+#[no_mangle]
+unsafe fn driver_prop_exists(pname: &str) -> bool {
+    let name = match CString::new(pname) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("bad driver prop string name: {}: {:?}", pname, e);
+            return false;
+        }
+    };
+
+    let ret = ddi_prop_exists(
+        DDI_DEV_T_ANY,
+        xde_dip,
+        DDI_PROP_DONTPASS,
+        name.as_ptr() as *const c_char,
+    );
+
+    ret == 1
+}
+
+#[no_mangle]
+unsafe fn get_driver_prop_bool(pname: &str) -> Option<bool> {
+    let name = match CString::new(pname) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("bad driver prop string name: {}: {:?}", pname, e);
+            return None;
+        }
+    };
+
+    let ret = ddi_prop_get_int(
+        DDI_DEV_T_ANY,
+        xde_dip,
+        DDI_PROP_DONTPASS,
+        name.as_ptr() as *const c_char,
+        99,
+    );
+
+    // Technically, the system could also return DDI_PROP_NOT_FOUND,
+    // which indicates the property cannot be decoded as an int.
+    // However, DDI_PROP_NOT_FOUND has a value of 1, which is totally
+    // broken given that 1 is a perfectly reasonable value for someone
+    // to want to use for their property. This means that from the
+    // perspective of the driver there is no way to differentiate
+    // between a true value of 1 and the case where the user entered
+    // gibberish. In this case we treat gibberish as true.
+    if ret == 99 {
+        warn!("driver prop {} not found", pname);
+        return None;
+    }
+
+    Some(ret == 1)
 }
 
 #[no_mangle]
@@ -1214,6 +1297,15 @@ unsafe extern "C" fn xde_mc_tx(
     let res = port.process(Direction::Out, &mut pkt, &mut meta, &rsrcs);
     match res {
         Ok(ProcessResult::Modified) => {
+            if xde_ext_ip_hack == 1 {
+                opte::engine::dbg(format!("[Tx] ext_ip_hack, bypass encap"));
+                // TODO need to special-case guest-loopback here as
+                // well if we want intra-guest comms to work when the
+                // ext_ip_hack is enabled.
+                mch.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+                return ptr::null_mut();
+            }
+
             // If the outer IPv6 destination is the same as the
             // source, then we need to loop the packet inbound to the
             // guest on this same host.
@@ -1678,6 +1770,7 @@ fn new_port(
             ip: bsvc_ip,
             vni: bsvc_vni,
         },
+        proxy_arp_enable: unsafe { xde_ext_ip_hack == 1 },
     };
 
     let mut pb = PortBuilder::new(&name, name_cstr, private_mac.into(), ectx);
@@ -1689,9 +1782,23 @@ fn new_port(
     arp::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
     router::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
     if snat.is_some() {
-        snat4::setup(&mut pb, &port_cfg, SNAT_FT_LIMIT.unwrap())?;
+        // XXX This is a hack to allow incoming connections to the
+        // guest. In this case we hijack SNAT configuration and treat
+        // it as a public IP; performing 1:1 NAT.
+        if unsafe { xde_ext_ip_hack == 1 } {
+            nat4::setup(&mut pb, &port_cfg, NAT_FT_LIMIT.unwrap())?;
+        } else {
+            snat4::setup(&mut pb, &port_cfg, SNAT_FT_LIMIT.unwrap())?;
+        }
     }
-    overlay::setup(&pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
+
+    if unsafe { xde_ext_ip_hack != 1 } {
+        warn!("enabling overlay for port: {}", name);
+        overlay::setup(&pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
+    } else {
+        warn!("disabling overlay for port: {}", name);
+    }
+
     let port =
         Arc::new(pb.create(UFT_LIMIT.unwrap(), TCP_STATE_LIMIT.unwrap()));
     Ok((port, port_cfg))
@@ -1730,46 +1837,123 @@ unsafe extern "C" fn xde_rx(
     };
 
     let hdrs = pkt.headers();
-
-    // determine where to send packet based on geneve vni
-    let outer = match hdrs.outer {
-        Some(ref outer) => outer,
-        None => {
-            // TODO add stat
-            let msg = "Rx bad packet: no outer header";
-            bad_packet_probe(None, Direction::In, mp_chain, msg);
-            opte::engine::dbg(msg);
-            return;
-        }
-    };
-
-    let geneve = match outer.encap {
-        Some(ref geneve) => geneve,
-        None => {
-            // TODO add SDT probe
-            // TODO add stat
-            opte::engine::dbg(format!("no geneve header, dropping"));
-            return;
-        }
-    };
-
     //TODO create a fast lookup table
     let devs = xde_devs.read();
-    let vni = geneve.vni;
-    let ether_dst = hdrs.inner.ether.dst();
-    let dev = match devs
-        .iter()
-        .find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
-    {
-        Some(dev) => dev,
-        None => {
-            // TODO add SDT probe
-            // TODO add stat
-            opte::engine::dbg(format!(
-                "no device found for vni: {} mac: {}",
-                vni, ether_dst
-            ));
+
+    let dev = if xde_ext_ip_hack == 0 {
+        // determine where to send packet based on geneve vni
+        let outer = match hdrs.outer {
+            Some(ref outer) => outer,
+            None => {
+                // TODO add stat
+                let msg = "Rx bad packet: no outer header";
+                bad_packet_probe(None, Direction::In, mp_chain, msg);
+                opte::engine::dbg(msg);
+                return;
+            }
+        };
+
+        let geneve = match outer.encap {
+            Some(ref geneve) => geneve,
+            None => {
+                // TODO add SDT probe
+                // TODO add stat
+                opte::engine::dbg(format!("no geneve header, dropping"));
+                return;
+            }
+        };
+
+        let vni = geneve.vni;
+        let ether_dst = hdrs.inner.ether.dst();
+        let dev = match devs
+            .iter()
+            .find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
+        {
+            Some(dev) => dev,
+            None => {
+                // TODO add SDT probe
+                // TODO add stat
+                opte::engine::dbg(format!(
+                    "[encap] no device found for vni: {} mac: {}",
+                    vni, ether_dst
+                ));
+                return;
+            }
+        };
+        dev
+    } else {
+        let et = hdrs.inner.ether.ether_type();
+
+        // Learn the MAC address.
+        // if et == EtherType::Ipv4 {
+        //     let ether_src = hdrs.inner.ether.src();
+        //     let ip4_src = hdrs.inner.ip.as_ref().unwrap().ip4().unwrap().src();
+        //     let state = get_xde_state();
+        //     state.arp.write().insert(ip4_src, ether_src);
+        // }
+
+        let ether_dst = hdrs.inner.ether.dst();
+        if ether_dst == EtherAddr::from(MacAddr::BROADCAST) {
+            let rdr = PacketReader::new(&pkt, ());
+            let bytes = rdr.copy_remaining();
+            drop(rdr);
+
+            for dev in devs.iter() {
+                // just go straight to overlay in passthrough mode
+                if (*dev).passthrough {
+                    mac::mac_rx((*dev).mh, mrh, mp_chain);
+                }
+
+                let port = &(*dev).port;
+                let mut meta = meta::Meta::new();
+                let mut rsrcs = Resources::new();
+                let _ = rsrcs.add(dev.port_v2p.clone());
+                if et == EtherType::Ipv4 {
+                    let ether_src = hdrs.inner.ether.src();
+                    let _ = meta.replace(MacAddr::from(ether_src));
+                }
+
+                let mut pkt_copy = Packet::copy(&bytes).parse().unwrap();
+                let res = port.process(
+                    Direction::In,
+                    &mut pkt_copy,
+                    &mut meta,
+                    &rsrcs,
+                );
+
+                match res {
+                    Ok(ProcessResult::Modified) => {
+                        mac::mac_rx((*dev).mh, mrh, pkt_copy.unwrap());
+                    }
+                    Ok(ProcessResult::Hairpin(hppkt)) => {
+                        // TODO assuming underlay device 1
+                        (*dev).u1.mch.tx_drop_on_no_desc(
+                            hppkt,
+                            0,
+                            MacTxFlags::empty(),
+                        );
+                    }
+                    Ok(ProcessResult::Bypass) => {
+                        mac::mac_rx((*dev).mh, mrh, mp_chain);
+                    }
+                    _ => {}
+                }
+            }
+
             return;
+        } else {
+            match devs.iter().find(|x| x.port.mac_addr() == ether_dst) {
+                Some(dev) => dev,
+                None => {
+                    // TODO add SDT probe
+                    // TODO add stat
+                    opte::engine::dbg(format!(
+                        "[ext_ip_hack] no device found for mac: {}",
+                        ether_dst
+                    ));
+                    return;
+                }
+            }
         }
     };
 
@@ -1782,6 +1966,15 @@ unsafe extern "C" fn xde_rx(
     let mut meta = meta::Meta::new();
     let mut rsrcs = Resources::new();
     let _ = rsrcs.add(dev.port_v2p.clone());
+
+    let et = hdrs.inner.ether.ether_type();
+    if et == EtherType::Ipv4 {
+        // XXX-EXT-IP This is a hack to allow NAT action to have
+        // access to the source MAC address.
+        let ether_src = hdrs.inner.ether.src();
+        let _ = meta.replace(MacAddr::from(ether_src));
+    }
+
     let res = port.process(Direction::In, &mut pkt, &mut meta, &rsrcs);
     match res {
         Ok(ProcessResult::Modified) => {

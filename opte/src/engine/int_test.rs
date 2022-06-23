@@ -130,6 +130,7 @@ fn lab_cfg() -> PortCfg {
             ]),
             vni: Vni::new(7777u32).unwrap(),
         },
+        proxy_arp_enable: false,
     }
 }
 
@@ -195,6 +196,7 @@ fn g1_cfg() -> PortCfg {
             ]),
             vni: Vni::new(7777u32).unwrap(),
         },
+        proxy_arp_enable: false,
     }
 }
 
@@ -226,6 +228,7 @@ fn g2_cfg() -> PortCfg {
             ]),
             vni: Vni::new(7777u32).unwrap(),
         },
+        proxy_arp_enable: false,
     }
 }
 
