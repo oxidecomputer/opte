@@ -85,6 +85,10 @@ impl TcpFlowState {
                     return Some(Listen);
                 }
 
+                if tcp.has_flag(TcpFlags::RST) {
+                    return Some(Closed);
+                }
+
                 return None;
             }
 
@@ -305,6 +309,16 @@ impl TcpFlowState {
                 return None;
             }
 
+            SynRcvd => {
+                // In this case the guest is retransmitting the
+                // SYN+ACK from its SYN_RCVD state.
+                if tcp.has_flag(TcpFlags::SYN) && tcp.has_flag(TcpFlags::ACK) {
+                    return Some(SynRcvd);
+                }
+
+                return None;
+            }
+
             // TODO passive close
             Established => {
                 if tcp.has_flag(TcpFlags::FIN) {
@@ -403,8 +417,6 @@ impl TcpFlowState {
 
                 return None;
             }
-
-            _ => return None,
         }
     }
 
