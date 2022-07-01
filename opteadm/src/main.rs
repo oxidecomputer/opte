@@ -504,10 +504,10 @@ fn main() {
             let snat = match snat_ip {
                 Some(ip) => Some(SNatCfg {
                     public_ip: ip.into(),
-                    ports: core::ops::Range {
-                        start: snat_start.unwrap(),
-                        end: snat_end.unwrap(),
-                    },
+                    ports: core::ops::RangeInclusive::new(
+                        snat_start.unwrap(),
+                        snat_end.unwrap(),
+                    ),
                 }),
 
                 None => None,

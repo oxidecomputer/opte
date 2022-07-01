@@ -24,7 +24,6 @@
 //! configuration.
 use std::boxed::Box;
 use std::num::NonZeroU32;
-use std::ops::Range;
 use std::prelude::v1::*;
 use std::sync::Arc;
 use std::time::Duration;
@@ -107,7 +106,7 @@ fn lab_cfg() -> PortCfg {
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
         snat: Some(SNatCfg {
             public_ip: "76.76.21.21".parse().unwrap(),
-            ports: Range { start: 1025, end: 4096 },
+            ports: 1025..=4096,
         }),
         gw_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x01]),
         gw_ip: "172.20.14.1".parse().unwrap(),
@@ -179,7 +178,7 @@ fn g1_cfg() -> PortCfg {
             // public, routable IP or simply an IP on their wider LAN
             // which the oxide Rack is simply a part of.
             public_ip: "10.77.77.13".parse().unwrap(),
-            ports: Range { start: 1025, end: 4096 },
+            ports: 1025..=4096,
         }),
         gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
         gw_ip: "192.168.77.1".parse().unwrap(),
@@ -211,7 +210,7 @@ fn g2_cfg() -> PortCfg {
             // public, routable IP or simply an IP on their wider LAN
             // which the oxide Rack is simply a part of.
             public_ip: "10.77.77.23".parse().unwrap(),
-            ports: Range { start: 4097, end: 8192 },
+            ports: 4097..=8192,
         }),
         gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
         gw_ip: "192.168.77.1".parse().unwrap(),

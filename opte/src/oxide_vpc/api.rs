@@ -123,7 +123,7 @@ pub struct CreateXdeReq {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SNatCfg {
     pub public_ip: Ipv4Addr,
-    pub ports: core::ops::Range<u16>,
+    pub ports: core::ops::RangeInclusive<u16>,
 }
 
 /// Xde delete ioctl parameter data.

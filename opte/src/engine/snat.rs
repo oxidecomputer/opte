@@ -5,7 +5,7 @@
 // Copyright 2022 Oxide Computer Company
 
 use core::fmt;
-use core::ops::Range;
+use core::ops::RangeInclusive;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -42,7 +42,8 @@ impl ResourceEntry for NatPoolEntry {}
 
 pub struct NatPool {
     // Map private IP to public IP + free list of ports
-    free_list: KMutex<BTreeMap<Ipv4Addr, (Ipv4Addr, Range<u16>, Vec<u16>)>>,
+    free_list:
+        KMutex<BTreeMap<Ipv4Addr, (Ipv4Addr, RangeInclusive<u16>, Vec<u16>)>>,
 }
 
 impl NatPool {
@@ -50,7 +51,7 @@ impl NatPool {
         &self,
         priv_ip: Ipv4Addr,
         pub_ip: Ipv4Addr,
-        pub_ports: Range<u16>,
+        pub_ports: RangeInclusive<u16>,
     ) {
         let free_list = pub_ports.clone().collect();
         self.free_list.lock().insert(priv_ip, (pub_ip, pub_ports, free_list));
@@ -63,7 +64,10 @@ impl NatPool {
         }
     }
 
-    pub fn mapping(&self, priv_ip: Ipv4Addr) -> Option<(Ipv4Addr, Range<u16>)> {
+    pub fn mapping(
+        &self,
+        priv_ip: Ipv4Addr,
+    ) -> Option<(Ipv4Addr, RangeInclusive<u16>)> {
         self.free_list
             .lock()
             .get(&priv_ip)
@@ -150,7 +154,7 @@ impl SNat4 {
 impl fmt::Display for SNat4 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (pub_ip, ports) = self.ip_pool.mapping(self.priv_ip).unwrap();
-        write!(f, "{}:{}-{}", pub_ip, ports.start, ports.end)
+        write!(f, "{}:{}-{}", pub_ip, ports.start(), ports.end())
     }
 }
 
@@ -268,7 +272,7 @@ mod test {
         let outside_port = 80;
 
         let pool = Arc::new(NatPool::new());
-        pool.add(priv_ip, pub_ip, 8765..8766);
+        pool.add(priv_ip, pub_ip, 8765..=8765);
         let snat = SNat4::new(priv_ip, pool.clone());
         let mut port_meta = Meta::new();
         assert!(pool.verify_available(priv_ip, pub_ip, pub_port));
@@ -413,18 +417,18 @@ mod test {
         let priv2 = "192.168.2.33".parse::<Ipv4Addr>().unwrap();
         let public = "52.10.128.69".parse().unwrap();
 
-        pool.add(priv1, public, 1025..4096);
-        pool.add(priv2, public, 4096..8192);
+        pool.add(priv1, public, 1025..=4096);
+        pool.add(priv2, public, 4097..=8192);
 
-        assert_eq!(pool.num_avail(priv1).unwrap(), 3071);
+        assert_eq!(pool.num_avail(priv1).unwrap(), 3072);
         let npe1 = match pool.obtain(&priv1) {
             Ok(npe) => npe,
             _ => panic!("failed to obtain mapping"),
         };
-        assert_eq!(pool.num_avail(priv1).unwrap(), 3070);
+        assert_eq!(pool.num_avail(priv1).unwrap(), 3071);
         assert_eq!(npe1.ip, public);
         assert!(npe1.port >= 1025);
-        assert!(npe1.port < 4096);
+        assert!(npe1.port <= 4096);
 
         assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
         let npe2 = match pool.obtain(&priv2) {
@@ -433,11 +437,11 @@ mod test {
         };
         assert_eq!(pool.num_avail(priv2).unwrap(), 4095);
         assert_eq!(npe2.ip, public);
-        assert!(npe2.port >= 4096);
-        assert!(npe2.port < 8192);
+        assert!(npe2.port >= 4097);
+        assert!(npe2.port <= 8192);
 
         pool.release(&priv1, npe1);
-        assert_eq!(pool.num_avail(priv1).unwrap(), 3071);
+        assert_eq!(pool.num_avail(priv1).unwrap(), 3072);
         pool.release(&priv2, npe2);
         assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
     }
