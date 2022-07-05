@@ -67,14 +67,16 @@ impl TcpFlowState {
     /// metadata and the current TCP state. If an unexpected
     /// transition occurs, then an error is returned.
     ///
-    /// TODO Actually flesh out error cases.
-    ///
     /// You might notice that we could remove all of the instances of
     /// `return None` and replace them with a single `None` value at
     /// the end of the function; but the author finds it useful to be
     /// explicit for each case.
     fn flow_in(&mut self, tcp: &TcpMeta) -> Option<TcpState> {
         use TcpState::*;
+
+        if tcp.has_flag(TcpFlags::RST) {
+            return Some(Closed);
+        }
 
         match self.tcp_state {
             Listen => {
@@ -83,10 +85,6 @@ impl TcpFlowState {
                 // sender may send more SYNs.
                 if tcp.has_flag(TcpFlags::SYN) {
                     return Some(Listen);
-                }
-
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
                 }
 
                 return None;
@@ -111,9 +109,6 @@ impl TcpFlowState {
                     return Some(Established);
                 }
 
-                // TODO Handle RST, which in our case would just close
-                // the flow.
-                //
                 // TODO I imagine we could see a retrans of the
                 // remote's SYN here.
                 return None;
@@ -124,10 +119,6 @@ impl TcpFlowState {
                     // In this case remote end has initiated the close
                     // and the guest is entering passive close.
                     return Some(CloseWait);
-                }
-
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
                 }
 
                 // Normal traffic on an ESTABLISHED connection.
@@ -145,10 +136,6 @@ impl TcpFlowState {
                 // from the guest.
                 if tcp.has_flag(TcpFlags::FIN) || tcp.has_flag(TcpFlags::ACK) {
                     return Some(CloseWait);
-                }
-
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
                 }
 
                 return None;
@@ -172,10 +159,6 @@ impl TcpFlowState {
                     }
 
                     return Some(LastAck);
-                }
-
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
                 }
 
                 return None;
@@ -205,10 +188,6 @@ impl TcpFlowState {
                 // guest decide.
                 if tcp.has_flag(TcpFlags::ACK) {
                     return Some(FinWait1);
-                }
-
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
                 }
 
                 // TODO This could be a simultaneous close.
@@ -251,10 +230,6 @@ impl TcpFlowState {
                     return Some(TimeWait);
                 }
 
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
-                }
-
                 return None;
             }
 
@@ -268,6 +243,10 @@ impl TcpFlowState {
     /// explicit for each case.
     fn flow_out(&mut self, tcp: &TcpMeta) -> Option<TcpState> {
         use TcpState::*;
+
+        if tcp.has_flag(TcpFlags::RST) {
+            return Some(Closed);
+        }
 
         match self.tcp_state {
             // This is our initial state for a potential active open.
@@ -289,10 +268,6 @@ impl TcpFlowState {
                     return Some(SynRcvd);
                 }
 
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
-                }
-
                 return None;
             }
 
@@ -300,10 +275,6 @@ impl TcpFlowState {
                 // In this case we are retransmitting the SYN packet.
                 if tcp.has_flag(TcpFlags::SYN) {
                     return Some(SynSent);
-                }
-
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
                 }
 
                 return None;
@@ -325,18 +296,14 @@ impl TcpFlowState {
                     return Some(FinWait1);
                 }
 
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
-                }
-
                 return Some(Established);
             }
 
             // The guest is in active close.
             FinWait1 => {
                 // The guest is resending its FIN to the remote to
-                // indicate its active close, or sending an RST.
-                if tcp.has_flag(TcpFlags::FIN) || tcp.has_flag(TcpFlags::RST) {
+                // indicate its active close.
+                if tcp.has_flag(TcpFlags::FIN) {
                     return Some(FinWait1);
                 }
 
@@ -349,11 +316,6 @@ impl TcpFlowState {
 
             // The guest in in active close.
             FinWait2 => {
-                // Presumably the guest saw something it did not like.
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
-                }
-
                 // The guest has closed its side but the remote might
                 // still be sending data, make sure to allow ACKs get
                 // out.
@@ -376,11 +338,6 @@ impl TcpFlowState {
                     return Some(TimeWait);
                 }
 
-                // The TIME_WAIT has expired, sending an RST.
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
-                }
-
                 return None;
             }
 
@@ -392,10 +349,6 @@ impl TcpFlowState {
                     return Some(LastAck);
                 }
 
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
-                }
-
                 // The guest could be sending ACKs or data here while
                 // it finishes up its half of the connection. I'm not
                 // sure there's anything else to really check for
@@ -405,10 +358,6 @@ impl TcpFlowState {
 
             // The guest is in a passive close state.
             LastAck => {
-                if tcp.has_flag(TcpFlags::RST) {
-                    return Some(Closed);
-                }
-
                 // The guest is either reacknowledging the remote's
                 // FIN or resending its own FIN to the remote.
                 if tcp.has_flag(TcpFlags::FIN) || tcp.has_flag(TcpFlags::ACK) {
