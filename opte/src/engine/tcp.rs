@@ -358,10 +358,10 @@ impl From<&TcpMeta> for TcpHdr {
         TcpHdr {
             src_port: meta.src,
             dst_port: meta.dst,
-            seq: 0,
-            ack: 0,
+            seq: meta.seq,
+            ack: meta.ack,
             hdr_len_bytes: TCP_HDR_SZ as u8,
-            flags: 0,
+            flags: meta.flags,
             win: 0,
             csum: [0; 2],
             csum_minus_hdr: Checksum::from(0),

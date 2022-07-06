@@ -856,6 +856,11 @@ impl Port {
     }
 }
 
+enum TcpMaybeClosed {
+    Closed { ufid_inbound: Option<InnerFlowId> },
+    NewState(TcpState),
+}
+
 // Keeping the private functions here just for the sake of code
 // organization.
 impl Port {
@@ -913,12 +918,12 @@ impl Port {
         return Ok(LayerResult::Allow);
     }
 
-    fn port_process_entry_probe<P: PacketState>(
+    fn port_process_entry_probe(
         &self,
         dir: Direction,
         ifid: &InnerFlowId,
         epoch: u64,
-        pkt: &Packet<P>,
+        pkt: &Packet<impl PacketState>,
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -944,12 +949,12 @@ impl Port {
         }
     }
 
-    fn port_process_return_probe<P: PacketState>(
+    fn port_process_return_probe(
         &self,
         dir: Direction,
         ifid: &InnerFlowId,
         epoch: u64,
-        pkt: &Packet<P>,
+        pkt: &Packet<impl PacketState>,
         res: &result::Result<ProcessResult, ProcessError>,
     ) {
         cfg_if! {
@@ -962,6 +967,12 @@ impl Port {
                     Err(e) => format!("ERROR: {:?}", e),
                 };
                 let res_arg = cstr_core::CString::new(res_str).unwrap();
+                let hp_pkt_ptr = match res {
+                    Ok(ProcessResult::Hairpin(hp)) => {
+                        hp.mblk_addr()
+                    }
+                    _ => 0,
+                };
 
                 unsafe {
                     __dtrace_probe_port__process__return(
@@ -970,6 +981,7 @@ impl Port {
                         &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
                         epoch as uintptr_t,
                         pkt.mblk_addr(),
+                        hp_pkt_ptr,
                         res_arg.as_ptr() as uintptr_t,
                     );
                 }
@@ -992,9 +1004,6 @@ impl Port {
 
     // Process the TCP packet for the purposes of connection tracking
     // when an inbound UFT entry exists.
-    //
-    // NOTE: This function is for internal use only, and thus returns
-    // a standard Result type.
     fn process_in_tcp_existing(
         &self,
         pmeta: &PacketMeta,
@@ -1002,121 +1011,123 @@ impl Port {
         use Direction::In;
 
         // All TCP flows are keyed with respect to the outbound Flow
-        // ID, therefore we mirror the flow.
-        let ifid_after = InnerFlowId::from(pmeta).mirror();
+        // ID, therefore we mirror the flow. This value must represent
+        // the guest-sdie of the flow and thus come from the passed-in
+        // packet metadata that represents the post-processed packet.
+        let ufid_out = InnerFlowId::from(pmeta).mirror();
+
+        // Unwrap: We know this is a TCP packet at this point.
+        //
+        // XXX This will be even more foolproof in the future when
+        // we've implemented the notion of FlowSet and Packet is
+        // generic on header group/flow type.
         let tcp = pmeta.inner_tcp().unwrap();
         let mut lock = self.tcp_flows.lock();
 
-        let tcp_state = match lock.get_mut(&ifid_after) {
+        match lock.get_mut(&ufid_out) {
             Some(entry) => {
                 let tfes = entry.state_mut();
 
-                // XXX Could this be wrapped into tcp_state.rs?
-                if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    tfes.tcp_state.tcp_flow_drop_probe(
-                        &ifid_after,
-                        In,
-                        tcp.flags,
-                    );
+                match tfes.tcp_state.process(In, &ufid_out, tcp) {
+                    Ok(tcp_state) => {
+                        if tcp_state == TcpState::Closed {
+                            let entry = lock.remove(&ufid_out).unwrap();
+                            drop(lock);
+                            let ufid_in = entry.state().inbound_ufid.as_ref();
+                            self.uft_tcp_closed(&ufid_out, ufid_in);
+                        }
 
-                    return Ok(TcpState::Closed);
-                }
+                        Ok(tcp_state)
+                    }
 
-                // The connection may have transitioned to CLOSED, but
-                // we don't remove its entry here. That happens as
-                // part of the expiration logic.
-                match tfes.tcp_state.process(In, &ifid_after, tcp) {
-                    Ok(tcp_state) => tcp_state,
-                    Err(e) => return Err(e),
+                    Err(e) => Err(e),
                 }
             }
 
-            None => return Err(format!("TCP flow missing: {}", ifid_after)),
-        };
-
-        Ok(tcp_state)
+            None => Err(format!("TCP flow missing: {}", ufid_out)),
+        }
     }
 
     // Process the TCP packet for the purposes of connection tracking
     // when an inbound UFT entry was just created.
-    //
-    // NOTE: This function is for internal use only, and thus returns
-    // a standard Result type.
     fn process_in_tcp_new(
         &self,
-        ifid: &InnerFlowId,
+        ufid_in: &InnerFlowId,
         pmeta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
         use Direction::In;
 
         // All TCP flows are keyed with respect to the outbound Flow
-        // ID, therefore we mirror the flow.
-        let ifid_out = InnerFlowId::from(pmeta).mirror();
-        let mut lock = self.tcp_flows.lock();
-        let tcp = pmeta.inner_tcp().unwrap();
+        // ID, therefore we mirror the flow. This value must represent
+        // the guest-sdie of the flow and thus come from the passed-in
+        // packet metadata that represents the post-processed packet.
+        let ufid_out = InnerFlowId::from(pmeta).mirror();
 
-        let tcp_state = match lock.get_mut(&ifid_out) {
-            // We may have already created a TCP flow entry due to an
-            // outbound packet, in that case simply fill in the
-            // inbound UFID for expiration purposes.
+        // Unwrap: We know this is a TCP packet at this point.
+        //
+        // XXX This will be even more foolproof in the future when
+        // we've implemented the notion of FlowSet and Packet is
+        // generic on header group/flow type.
+        let tcp = pmeta.inner_tcp().unwrap();
+        let mut lock = self.tcp_flows.lock();
+
+        match lock.get_mut(&ufid_out) {
             Some(entry) => {
                 let tfes = entry.state_mut();
 
-                if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    tfes.tcp_state
-                        .tcp_flow_drop_probe(&ifid_out, In, tcp.flags);
+                let res = match tfes.tcp_state.process(In, &ufid_out, &tcp) {
+                    Ok(tcp_state) => {
+                        if tcp_state == TcpState::Closed {
+                            let entry = lock.remove(&ufid_out).unwrap();
+                            drop(lock);
+                            // The inbound side of the UFT is based on
+                            // the network-side of the flow (pre-processing).
+                            let ufid_in = entry.state().inbound_ufid.as_ref();
+                            self.uft_tcp_closed(&ufid_out, ufid_in);
+                            return Ok(tcp_state);
+                        }
 
-                    return Ok(TcpState::Closed);
-                }
+                        Ok(tcp_state)
+                    }
 
-                let res = tfes.tcp_state.process(In, &ifid_out, &tcp);
-
-                let tcp_state = match res {
-                    Ok(tcp_state) => tcp_state,
-                    Err(e) => return Err(e),
+                    Err(e) => Err(e),
                 };
 
                 // We need to store the UFID of the inbound packet
                 // before it was processed so that we can retire the
                 // correct UFT/LFT entries upon connection
                 // termination.
-                if tfes.inbound_ufid.is_none() {
-                    tfes.inbound_ufid = Some(ifid.clone());
-                }
-
-                tcp_state
+                tfes.inbound_ufid = Some(ufid_in.clone());
+                res
             }
 
             None => {
-                // Add a new flow entry in the `Listen` state, we'll
-                // wait for the outgoing SYN+ACK to transition to
-                // `SynRcvd`.
-                let tfs = TcpFlowState::new(
-                    &self.name,
-                    TcpState::Listen,
-                    None,
-                    Some(tcp.seq),
-                );
+                let mut tfs = TcpFlowState::new(self.name_cstr.clone());
+                let res = tfs.process(Direction::In, &ufid_out, &tcp);
+
+                let tcp_state = match res {
+                    Ok(TcpState::Closed) => return Ok(TcpState::Closed),
+                    Ok(tcp_state) => tcp_state,
+                    Err(e) => return Err(e),
+                };
 
                 let tfes = TcpFlowEntryState {
                     // This must be the UFID of inbound traffic _as it
                     // arrives_, not after it's processed.
-                    inbound_ufid: Some(ifid.clone()),
+                    inbound_ufid: Some(ufid_in.clone()),
                     tcp_state: tfs,
                 };
 
                 // TODO kill unwrap
-                lock.add(ifid_out, tfes).unwrap();
-                TcpState::Listen
+                lock.add(ufid_out.clone(), tfes).unwrap();
+                Ok(tcp_state)
             }
-        };
-
-        Ok(tcp_state)
+        }
     }
 
-    fn process_in(
+    fn process_in_miss(
         &self,
-        ifid: &InnerFlowId,
+        ufid_in: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         lmeta: &mut meta::Meta,
@@ -1124,217 +1135,186 @@ impl Port {
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::In;
 
-        // There is no FlowId, thus there can be no use of the UFT.
-        if *ifid == FLOW_ID_DEFAULT {
-            let mut hts = Vec::new();
-            let res =
-                self.layers_process(In, ifid, pkt, &mut hts, lmeta, rsrcs);
+        let mut hts = Vec::new();
+        let res = self.layers_process(In, ufid_in, pkt, &mut hts, lmeta, rsrcs);
+        match res {
+            Ok(LayerResult::Allow) => {
+                // If there is no flow ID, then do not create a UFT
+                // entry.
+                if *ufid_in == FLOW_ID_DEFAULT {
+                    return Ok(ProcessResult::Modified);
+                }
+            }
 
-            match res {
-                Ok(LayerResult::Allow) => {
+            Ok(LayerResult::Deny { name }) => {
+                return Ok(ProcessResult::Drop {
+                    reason: DropReason::Layer { name },
+                })
+            }
+
+            Ok(LayerResult::Hairpin(hppkt)) => {
+                return Ok(ProcessResult::Hairpin(hppkt))
+            }
+
+            Err(e) => return Err(ProcessError::Layer(e)),
+        }
+
+        let hte = HtEntry { hts, epoch };
+
+        // For inbound traffic the TCP flow table must be
+        // checked _after_ processing take place.
+        if pkt.meta().is_inner_tcp() {
+            match self.process_in_tcp_new(ufid_in, pkt.meta()) {
+                Ok(TcpState::Closed) => {
                     return Ok(ProcessResult::Modified);
                 }
 
-                Ok(LayerResult::Hairpin(hppkt)) => {
-                    return Ok(ProcessResult::Hairpin(hppkt));
+                Ok(_) => {
+                    // We have a good TCP flow, create a new UFT entry.
+                    //
+                    // TODO kill unwrap
+                    self.uft_in.lock().add(ufid_in.clone(), hte).unwrap();
+                    return Ok(ProcessResult::Modified);
                 }
 
-                Ok(LayerResult::Deny { name }) => {
+                Err(e) => {
+                    self.tcp_err(In, e, pkt, ufid_in);
                     return Ok(ProcessResult::Drop {
-                        reason: DropReason::Layer { name },
+                        reason: DropReason::TcpErr,
                     });
                 }
-
-                Err(e) => return Err(ProcessError::Layer(e)),
             }
+        } else {
+            // TODO kill unwrap
+            self.uft_in.lock().add(ufid_in.clone(), hte).unwrap();
         }
 
-        // TODO at the moment I'm holding the UFT locks not just for
-        // loookup, but for the entire duration of processing. It
-        // might be better to ht.clone() or Arc<HT>; that way we only
-        // hold the lock for lookup.
+        Ok(ProcessResult::Modified)
+    }
+
+    fn process_in(
+        &self,
+        ufid_in: &InnerFlowId,
+        epoch: u64,
+        pkt: &mut Packet<Parsed>,
+        lmeta: &mut meta::Meta,
+        rsrcs: &resources::Resources,
+    ) -> result::Result<ProcessResult, ProcessError> {
+        use Direction::In;
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        let mut invalidated = None;
-        match self.uft_in.lock().get_mut(&ifid) {
+        let mut lock = self.uft_in.lock();
+        match lock.get_mut(ufid_in) {
             Some(entry) if entry.state().epoch == epoch => {
+                // TODO At the moment I'm holding the UFT locks not
+                // just for lookup, but for the entire duration of
+                // processing. It might be better to ht.clone() or
+                // Arc<HT>; that way we only hold the lock for lookup.
                 entry.hit();
                 for ht in &entry.state().hts {
                     ht.run(pkt.meta_mut());
-                    let ifid_after = InnerFlowId::from(pkt.meta());
-                    ht_probe(&self.name_cstr, "UFT-in", In, &ifid, &ifid_after);
+                    // Guest-side flow id.
+                    let gfid_in = InnerFlowId::from(pkt.meta());
+                    ht_probe(&self.name_cstr, "UFT-in", In, ufid_in, &gfid_in);
                 }
+                drop(entry);
+                drop(lock);
 
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
                 if pkt.meta().is_inner_tcp() {
                     match self.process_in_tcp_existing(pkt.meta()) {
-                        // Drop any data that comes in after close.
-                        Ok(TcpState::Closed) => {
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpClosed,
-                            });
-                        }
-
-                        Ok(_) => {
-                            return Ok(ProcessResult::Modified);
-                        }
-
+                        Ok(_) => return Ok(ProcessResult::Modified),
                         Err(e) => {
-                            self.tcp_err(In, e, pkt, &ifid);
+                            self.tcp_err(In, e, pkt, ufid_in);
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
                         }
                     }
+                } else {
+                    return Ok(ProcessResult::Modified);
                 }
-
-                return Ok(ProcessResult::Modified);
             }
 
             // The entry is from a previous epoch; mark it for removal
             // and proceed to rule processing.
             Some(entry) => {
-                let ep = entry.state().epoch;
-                invalidated = Some(ep);
+                let epoch = entry.state().epoch;
+                drop(entry);
+                drop(lock);
+                let gfid_in = InnerFlowId::from(pkt.meta());
+                let ufid_out = gfid_in.mirror();
+                self.uft_invalidate(&ufid_out, ufid_in, epoch);
             }
 
             // There is no entry; proceed to rule processing;
-            None => (),
-        }
+            None => drop(lock),
+        };
 
-        if let Some(ht_epoch) = invalidated {
-            self.uft_invalidate(In, ifid, ht_epoch);
-        }
-
-        let mut hts = Vec::new();
-        let res = self.layers_process(In, ifid, pkt, &mut hts, lmeta, rsrcs);
-        let hte = HtEntry { hts, epoch };
-
-        match res {
-            Ok(LayerResult::Allow) => {
-                // TODO kill unwrapx
-                self.uft_in.lock().add(ifid.clone(), hte).unwrap();
-
-                // For inbound traffic the TCP flow table must be
-                // checked _after_ processing take place.
-                if pkt.meta().is_inner_tcp() {
-                    match self.process_in_tcp_new(&ifid, pkt.meta()) {
-                        // Drop any data that comes in after close.
-                        Ok(TcpState::Closed) => {
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpClosed,
-                            });
-                        }
-
-                        Ok(_) => {
-                            return Ok(ProcessResult::Modified);
-                        }
-
-                        Err(e) => {
-                            self.tcp_err(In, e, pkt, &ifid);
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
-                        }
-                    }
-                }
-
-                Ok(ProcessResult::Modified)
-            }
-
-            Ok(LayerResult::Deny { name }) => {
-                Ok(ProcessResult::Drop { reason: DropReason::Layer { name } })
-            }
-
-            Ok(LayerResult::Hairpin(hppkt)) => {
-                Ok(ProcessResult::Hairpin(hppkt))
-            }
-
-            Err(e) => Err(ProcessError::Layer(e)),
-        }
+        self.process_in_miss(ufid_in, epoch, pkt, lmeta, rsrcs)
     }
 
     // Process the TCP packet for the purposes of connection tracking
     // when an outbound UFT entry exists.
-    //
-    // NOTE: This function is for internal use only, and thus returns
-    // a standard Result type.
     fn process_out_tcp_existing(
         &self,
-        ifid: &InnerFlowId,
+        ufid_out: &InnerFlowId,
         pmeta: &PacketMeta,
-    ) -> result::Result<TcpState, String> {
+    ) -> result::Result<TcpMaybeClosed, String> {
         let mut lock = self.tcp_flows.lock();
 
-        let tcp_state = match lock.get_mut(&ifid) {
+        match lock.get_mut(ufid_out) {
             Some(entry) => {
                 let tfes = entry.state_mut();
                 let tcp = pmeta.inner_tcp().unwrap();
+                let res = tfes.tcp_state.process(Direction::Out, ufid_out, tcp);
 
-                if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    tfes.tcp_state.tcp_flow_drop_probe(
-                        &ifid,
-                        Direction::Out,
-                        tcp.flags,
-                    );
-
-                    return Ok(TcpState::Closed);
-                }
-
-                // The connection may have transitioned to CLOSED, but
-                // we don't remove its entry here. That happens as
-                // part of the expiration logic.
-                let res = tfes.tcp_state.process(Direction::Out, ifid, tcp);
                 match res {
-                    Ok(tcp_state) => tcp_state,
+                    Ok(tcp_state) => {
+                        if tcp_state == TcpState::Closed {
+                            let entry = lock.remove(&ufid_out).unwrap();
+                            return Ok(TcpMaybeClosed::Closed {
+                                ufid_inbound: entry
+                                    .state()
+                                    .inbound_ufid
+                                    .clone(),
+                            });
+                        }
+
+                        Ok(TcpMaybeClosed::NewState(tcp_state))
+                    }
 
                     // TODO SDT probe for rejected packet.
-                    Err(e) => return Err(e),
+                    Err(e) => Err(e),
                 }
             }
 
-            None => return Err(format!("TCP flow missing: {}", ifid)),
-        };
-
-        Ok(tcp_state)
+            None => Err(format!("TCP flow missing: {}", ufid_out)),
+        }
     }
 
     // Process the TCP packet for the purposes of connection tracking
     // when an outbound UFT entry was just created.
-    //
-    // NOTE: This function is for internal use only, and thus returns
-    // a standard Result type.
     fn process_out_tcp_new(
         &self,
-        ifid: &InnerFlowId,
+        ufid_out: &InnerFlowId,
         pmeta: &PacketMeta,
-    ) -> result::Result<TcpState, String> {
+    ) -> result::Result<TcpMaybeClosed, String> {
         let tcp = pmeta.inner_tcp().unwrap();
         let mut lock = self.tcp_flows.lock();
 
-        let tcp_state = match lock.get_mut(&ifid) {
+        let tcp_state = match lock.get_mut(ufid_out) {
             // We may have already created a TCP flow entry
             // due to an inbound packet.
             Some(entry) => {
                 let tfes = entry.state_mut();
+                let res =
+                    tfes.tcp_state.process(Direction::Out, &ufid_out, &tcp);
 
-                if tfes.tcp_state.get_tcp_state() == TcpState::Closed {
-                    tfes.tcp_state.tcp_flow_drop_probe(
-                        &ifid,
-                        Direction::Out,
-                        tcp.flags,
-                    );
-
-                    return Ok(TcpState::Closed);
-                }
-
-                let res = tfes.tcp_state.process(Direction::Out, &ifid, &tcp);
                 match res {
                     Ok(tcp_state) => tcp_state,
-
-                    // TODO SDT probe for rejected packet
                     Err(e) => return Err(e),
                 }
             }
@@ -1343,36 +1323,37 @@ impl Port {
                 // Create a new entry and find its current state. In
                 // this case it should always be `SynSent` as a flow
                 // would have already existed in the `SynRcvd` case.
-                let mut tfs = TcpFlowState::new(
-                    &self.name,
-                    TcpState::Closed,
-                    Some(tcp.seq),
-                    None,
-                );
+                let mut tfs = TcpFlowState::new(self.name_cstr.clone());
 
-                let tcp_state = match tfs.process(Direction::Out, &ifid, &tcp) {
-                    Ok(tcp_state) => tcp_state,
-
-                    // TODO SDT probe for rejected packet.
-                    Err(e) => return Err(e),
-                };
+                let tcp_state =
+                    match tfs.process(Direction::Out, &ufid_out, &tcp) {
+                        Ok(tcp_state) => tcp_state,
+                        Err(e) => return Err(e),
+                    };
 
                 // The inbound UFID is determined on the inbound side.
                 let tfes =
                     TcpFlowEntryState { inbound_ufid: None, tcp_state: tfs };
 
                 // TODO kill unwrap
-                lock.add(ifid.clone(), tfes).unwrap();
+                lock.add(ufid_out.clone(), tfes).unwrap();
                 tcp_state
             }
         };
 
-        Ok(tcp_state)
+        if tcp_state == TcpState::Closed {
+            let entry = lock.remove(&ufid_out).unwrap();
+            return Ok(TcpMaybeClosed::Closed {
+                ufid_inbound: entry.state().inbound_ufid.clone(),
+            });
+        }
+
+        Ok(TcpMaybeClosed::NewState(tcp_state))
     }
 
-    fn process_out(
+    fn process_out_miss(
         &self,
-        ifid: &InnerFlowId,
+        ufid_out: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         lmeta: &mut meta::Meta,
@@ -1380,122 +1361,43 @@ impl Port {
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::Out;
 
-        // There is no FlowId, thus there can be no use of the UFT.
-        if *ifid == FLOW_ID_DEFAULT {
-            let mut hts = Vec::new();
-            let res =
-                self.layers_process(Out, ifid, pkt, &mut hts, lmeta, rsrcs);
-
-            match res {
-                Ok(LayerResult::Allow) => {
-                    return Ok(ProcessResult::Modified);
-                }
-
-                Ok(LayerResult::Hairpin(hppkt)) => {
-                    return Ok(ProcessResult::Hairpin(hppkt));
-                }
-
-                Ok(LayerResult::Deny { name }) => {
-                    return Ok(ProcessResult::Drop {
-                        reason: DropReason::Layer { name },
-                    });
-                }
-
-                Err(e) => return Err(ProcessError::Layer(e)),
-            }
-        }
-
-        // Use the compiled UFT entry if one exists. Otherwise
-        // fallback to layer processing.
-        let mut invalidated = None;
-        match self.uft_out.lock().get_mut(ifid) {
-            Some(entry) if entry.state().epoch == epoch => {
-                entry.hit();
-
-                // For outbound traffic the TCP flow table must be
-                // checked _before_ processing take place.
-                if pkt.meta().is_inner_tcp() {
-                    match self.process_out_tcp_existing(&ifid, pkt.meta()) {
-                        Err(e) => {
-                            self.tcp_err(Out, e, pkt, &ifid);
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
-                        }
-
-                        // Drop any data that comes in after close.
-                        Ok(TcpState::Closed) => {
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpClosed,
-                            });
-                        }
-
-                        // Continue with processing.
-                        Ok(_) => (),
-                    }
-                }
-
-                for ht in &entry.state().hts {
-                    ht.run(pkt.meta_mut());
-                    let ifid_after = InnerFlowId::from(pkt.meta());
-                    ht_probe(
-                        &self.name_cstr,
-                        "UFT-out",
-                        Out,
-                        &ifid,
-                        &ifid_after,
-                    );
-                }
-
-                return Ok(ProcessResult::Modified);
-            }
-
-            // The entry is from a previous epoch; mark it for removal
-            // and proceed to rule processing.
-            Some(entry) => {
-                let ep = entry.state().epoch;
-                invalidated = Some(ep);
-            }
-
-            // There is no entry; proceed to layer processing.
-            None => (),
-        }
-
-        if let Some(ht_epoch) = invalidated {
-            self.uft_invalidate(Out, ifid, ht_epoch);
-        }
+        let mut tcp_closed = false;
 
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
         if pkt.meta().is_inner_tcp() {
-            match self.process_out_tcp_new(&ifid, pkt.meta()) {
-                Err(e) => {
-                    self.tcp_err(Out, e, pkt, &ifid);
-                    return Ok(ProcessResult::Drop {
-                        reason: DropReason::TcpErr,
-                    });
-                }
-
-                // Drop any data that comes in after close.
-                Ok(TcpState::Closed) => {
-                    return Ok(ProcessResult::Drop {
-                        reason: DropReason::TcpClosed,
-                    });
+            match self.process_out_tcp_new(ufid_out, pkt.meta()) {
+                Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
+                    tcp_closed = true;
+                    self.uft_tcp_closed(ufid_out, ufid_inbound.as_ref());
                 }
 
                 // Continue with processing.
                 Ok(_) => (),
+
+                Err(e) => {
+                    self.tcp_err(Out, e, pkt, ufid_out);
+                    return Ok(ProcessResult::Drop {
+                        reason: DropReason::TcpErr,
+                    });
+                }
             }
         }
 
         let mut hts = Vec::new();
-        let res = self.layers_process(Out, ifid, pkt, &mut hts, lmeta, rsrcs);
+        let res =
+            self.layers_process(Out, ufid_out, pkt, &mut hts, lmeta, rsrcs);
         let hte = HtEntry { hts, epoch };
 
         match res {
             Ok(LayerResult::Allow) => {
+                // If there is no Flow ID, then there is no UFT entry.
+                if *ufid_out == FLOW_ID_DEFAULT || tcp_closed {
+                    return Ok(ProcessResult::Modified);
+                }
+
                 // TODO kill unwrap
-                self.uft_out.lock().add(ifid.clone(), hte).unwrap();
+                self.uft_out.lock().add(ufid_out.clone(), hte).unwrap();
                 Ok(ProcessResult::Modified)
             }
 
@@ -1511,52 +1413,171 @@ impl Port {
         }
     }
 
-    fn uft_invalidate(&self, dir: Direction, ifid: &InnerFlowId, epoch: u64) {
+    fn process_out(
+        &self,
+        ufid_out: &InnerFlowId,
+        epoch: u64,
+        pkt: &mut Packet<Parsed>,
+        lmeta: &mut meta::Meta,
+        rsrcs: &resources::Resources,
+    ) -> result::Result<ProcessResult, ProcessError> {
+        use Direction::Out;
+
+        // Use the compiled UFT entry if one exists. Otherwise
+        // fallback to layer processing.
+        let mut lock = self.uft_out.lock();
+        match lock.get_mut(ufid_out) {
+            Some(entry) if entry.state().epoch == epoch => {
+                entry.hit();
+                let mut invalidated = false;
+                let mut ufid_in = None;
+
+                // For outbound traffic the TCP flow table must be
+                // checked _before_ processing take place.
+                if pkt.meta().is_inner_tcp() {
+                    match self.process_out_tcp_existing(ufid_out, pkt.meta()) {
+                        Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
+                            invalidated = true;
+                            ufid_in = ufid_inbound;
+                        }
+
+                        // Continue with processing.
+                        Ok(_) => (),
+
+                        Err(e) => {
+                            self.tcp_err(Out, e, pkt, ufid_out);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpErr,
+                            });
+                        }
+                    }
+                }
+
+                for ht in &entry.state().hts {
+                    ht.run(pkt.meta_mut());
+                    // Network-side flow id.
+                    let nfid_out = InnerFlowId::from(pkt.meta());
+                    ht_probe(
+                        &self.name_cstr,
+                        "UFT-out",
+                        Out,
+                        ufid_out,
+                        &nfid_out,
+                    );
+                }
+
+                drop(entry);
+                drop(lock);
+
+                if invalidated {
+                    self.uft_tcp_closed(ufid_out, ufid_in.as_ref());
+                }
+
+                return Ok(ProcessResult::Modified);
+            }
+
+            // The entry is from a previous epoch; mark it for removal
+            // and proceed to rule processing.
+            Some(entry) => {
+                let epoch = entry.state().epoch;
+                drop(entry);
+                drop(lock);
+                // Network-side flow id.
+                let nfid_out = InnerFlowId::from(pkt.meta());
+                let ufid_in = nfid_out.mirror();
+                self.uft_invalidate(ufid_out, &ufid_in, epoch);
+            }
+
+            // There is no entry; proceed to layer processing.
+            None => drop(lock),
+        }
+
+        self.process_out_miss(ufid_out, epoch, pkt, lmeta, rsrcs)
+    }
+
+    fn uft_invalidate(
+        &self,
+        ufid_out: &InnerFlowId,
+        ufid_in: &InnerFlowId,
+        epoch: u64,
+    ) {
         let mut uft_in = self.uft_in.lock();
         let mut uft_out = self.uft_out.lock();
-
-        // XXX Rather than mirroring we should really have these
-        // entries "paired" by way of their key because they could be
-        // asymmetric.
-        if dir == Direction::Out {
-            uft_in.remove(&ifid.clone().mirror());
-            uft_out.remove(ifid);
-        } else {
-            uft_in.remove(ifid);
-            uft_out.remove(&ifid.clone().mirror());
-        }
+        uft_in.remove(ufid_in);
+        uft_out.remove(ufid_out);
         drop(uft_out);
         drop(uft_in);
-        self.uft_invalidate_probe(Direction::In, ifid, epoch);
-        self.uft_invalidate_probe(Direction::Out, ifid, epoch);
+        self.uft_invalidate_probe(Direction::In, ufid_in, epoch);
+        self.uft_invalidate_probe(Direction::Out, ufid_out, epoch);
     }
 
     fn uft_invalidate_probe(
         &self,
         dir: Direction,
-        ifid: &InnerFlowId,
+        ufid: &InnerFlowId,
         epoch: u64,
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let ifid_arg = flow_id_sdt_arg::from(ifid);
+                let ufid_arg = flow_id_sdt_arg::from(ufid);
 
                 unsafe {
                     __dtrace_probe_uft__invalidate(
                         dir.cstr_raw() as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        &ufid_arg as *const flow_id_sdt_arg as uintptr_t,
                         epoch as uintptr_t,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.name_cstr.to_str().unwrap();
-                let ifid_s = ifid.to_string();
+                let ufid_s = ufid.to_string();
                 crate::opte_provider::uft__invalidate!(
-                    || (dir, port_s, ifid_s, epoch)
+                    || (dir, port_s, ufid_s, epoch)
                 );
             } else {
-                let (_, _, _) = (dir, ifid, epoch);
+                let (_, _, _) = (dir, ufid, epoch);
+            }
+        }
+    }
+
+    fn uft_tcp_closed(
+        &self,
+        ufid_out: &InnerFlowId,
+        ufid_in: Option<&InnerFlowId>,
+    ) {
+        let mut uft_in = self.uft_in.lock();
+        let mut uft_out = self.uft_out.lock();
+        if ufid_in.is_some() {
+            uft_in.remove(&ufid_in.unwrap());
+            self.uft_tcp_closed_probe(Direction::In, &ufid_in.unwrap());
+        }
+        uft_out.remove(ufid_out);
+        drop(uft_out);
+        drop(uft_in);
+        self.uft_tcp_closed_probe(Direction::Out, ufid_out);
+    }
+
+    fn uft_tcp_closed_probe(&self, dir: Direction, ufid: &InnerFlowId) {
+        cfg_if::cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let ufid_arg = flow_id_sdt_arg::from(ufid);
+
+                unsafe {
+                    __dtrace_probe_uft__tcp__closed(
+                        dir.cstr_raw() as uintptr_t,
+                        self.name_cstr.as_ptr() as uintptr_t,
+                        &ufid_arg as *const flow_id_sdt_arg as uintptr_t,
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                let port_s = self.name_cstr.to_str().unwrap();
+                let ufid_s = ufid.to_string();
+                crate::opte_provider::uft__tcp__closed!(
+                    || (dir, port_s, ifid_s)
+                );
+            } else {
+                let (_, _) = (dir, ufid);
             }
         }
     }
@@ -1641,6 +1662,7 @@ extern "C" {
         ifid: uintptr_t,
         epoch: uintptr_t,
         pkt: uintptr_t,
+        hp_pkt: uintptr_t,
         res: uintptr_t,
     );
     pub fn __dtrace_probe_tcp__err(
@@ -1655,6 +1677,11 @@ extern "C" {
         port: uintptr_t,
         ifid: uintptr_t,
         epoch: uintptr_t,
+    );
+    pub fn __dtrace_probe_uft__tcp__closed(
+        dir: uintptr_t,
+        port: uintptr_t,
+        ifid: uintptr_t,
     );
 }
 

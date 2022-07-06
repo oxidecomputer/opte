@@ -74,6 +74,7 @@ mod opte_provider {
     use crate::api::Direction;
 
     fn uft__invalidate(dir: Direction, port: &str, flow: &str, epoch: u64) {}
+    fn uft__tcp__closed(dir: Direction, port: &str, flow: &str) {}
     fn flow__expired(port: &str, ft_name: &str, flow: &str) {}
     fn gen__desc__fail(
         port: &str,

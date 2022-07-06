@@ -1207,12 +1207,6 @@ fn guest_loopback(
                 // have the overlay layer in place which would
                 // normally rewrite the dst MAC addr to that of the
                 // dest guest.
-                //
-                // XXX Sigh, this still needs more work because we
-                // really do need to rewirte the dst mac, but I'm in a
-                // rush trying to get things working for a demo and I
-                // have too many yaks in my office. Come back to this
-                // later.
                 if let Some(ip4) = ip_hdr.ip4() {
                     let res = devs.iter().find(|x| {
                         opte::engine::dbg(format!(
@@ -1969,16 +1963,8 @@ unsafe extern "C" fn xde_rx(
         dev
     } else {
         let et = hdrs.inner.ether.ether_type();
-
-        // Learn the MAC address.
-        // if et == EtherType::Ipv4 {
-        //     let ether_src = hdrs.inner.ether.src();
-        //     let ip4_src = hdrs.inner.ip.as_ref().unwrap().ip4().unwrap().src();
-        //     let state = get_xde_state();
-        //     state.arp.write().insert(ip4_src, ether_src);
-        // }
-
         let ether_dst = hdrs.inner.ether.dst();
+
         if ether_dst == EtherAddr::from(MacAddr::BROADCAST) {
             let rdr = PacketReader::new(&pkt, ());
             let bytes = rdr.copy_remaining();
@@ -2052,7 +2038,6 @@ unsafe extern "C" fn xde_rx(
     let mut meta = meta::Meta::new();
     let mut rsrcs = Resources::new();
     let _ = rsrcs.add(dev.port_v2p.clone());
-
     let et = hdrs.inner.ether.ether_type();
     if et == EtherType::Ipv4 {
         // XXX-EXT-IP This is a hack to allow NAT action to have

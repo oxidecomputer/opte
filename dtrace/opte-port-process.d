@@ -28,7 +28,9 @@ port-process-return {
 	this->flow = (flow_id_sdt_arg_t *)arg2;
 	this->epoch = arg3;
 	this->mp = (mblk_t *)arg4;
-	this->res = stringof(arg5);
+	/* If the result is a hairpin packet, then hp_mp is non-NULL. */
+	this->hp_mp = (mblk_t *)arg5;
+	this->res = stringof(arg6);
 
 	if (num >= 10) {
 		printf(HDR_FMT, "NAME", "DIR", "EPOCH", "FLOW", "LEN",

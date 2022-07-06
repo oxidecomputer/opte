@@ -34,7 +34,7 @@ use crate::CString;
 /// sure if a seq/ack number has actually been set.
 #[derive(Clone, Debug)]
 pub struct TcpFlowState {
-    port_c: CString,
+    port: CString,
     tcp_state: TcpState,
     guest_seq: Option<u32>,
     guest_ack: Option<u32>,
@@ -79,6 +79,30 @@ impl TcpFlowState {
         }
 
         match self.tcp_state {
+            Closed => {
+                // We have a new inbound SYN. We assume for now the
+                // guest is listening on the given port by moving to
+                // the LISTEN state.
+                if tcp.has_flag(TcpFlags::SYN) {
+                    return Some(Listen);
+                }
+
+                // We pontentially have a legitimate inbound data
+                // segment for an ESTABLISHED connection that
+                // previously expired in OPTE but is still active in
+                // the guest. We immeidately move this to the
+                // ESTABLISHED state even though that might be a lie.
+                // We rely on the fact that the guest will immediately
+                // respond with an ACK or RST. In the future we could
+                // instead keep this in some type of probationary
+                // state (or separate table).
+                if tcp.has_flag(TcpFlags::ACK) {
+                    return Some(Established);
+                }
+
+                return None;
+            }
+
             Listen => {
                 // If the guest doesn't respond to the first SYN, or
                 // the sender never sees the guest's ACK, then the
@@ -239,8 +263,6 @@ impl TcpFlowState {
 
                 return None;
             }
-
-            _ => return None,
         }
     }
 
@@ -256,12 +278,17 @@ impl TcpFlowState {
         }
 
         match self.tcp_state {
-            // This is our initial state for a potential active open.
-            // In this case the guest process is sending a connection
-            // request to a remote server.
             Closed => {
+                // The guest is trying to create a new outbound
+                // connection.
                 if tcp.has_flag(TcpFlags::SYN) {
                     return Some(SynSent);
+                }
+
+                // The guest is responding to a data segment,
+                // immediately move to established.
+                if tcp.has_flag(TcpFlags::ACK) {
+                    return Some(Established);
                 }
 
                 return None;
@@ -376,22 +403,13 @@ impl TcpFlowState {
         }
     }
 
-    pub fn get_tcp_state(&self) -> TcpState {
-        self.tcp_state
-    }
-
-    pub fn new(
-        port: &str,
-        start_state: TcpState,
-        guest_seq: Option<u32>,
-        remote_seq: Option<u32>,
-    ) -> Self {
+    pub fn new(port: CString) -> Self {
         Self {
-            port_c: CString::new(port).unwrap(),
-            tcp_state: start_state,
-            guest_seq,
+            port,
+            tcp_state: TcpState::Closed,
+            guest_seq: None,
             guest_ack: None,
-            remote_seq,
+            remote_seq: None,
             remote_ack: None,
         }
     }
@@ -410,8 +428,23 @@ impl TcpFlowState {
         // current state. A return value of `None` indicates an
         // unexpected transition.
         let res = match dir {
-            Direction::In => self.flow_in(tcp),
-            Direction::Out => self.flow_out(tcp),
+            Direction::In => {
+                let res = self.flow_in(tcp);
+                self.remote_seq = Some(tcp.seq);
+                if tcp.has_flag(TcpFlags::ACK) {
+                    self.remote_ack = Some(tcp.ack);
+                }
+                res
+            }
+
+            Direction::Out => {
+                let res = self.flow_out(tcp);
+                self.guest_seq = Some(tcp.seq);
+                if tcp.has_flag(TcpFlags::ACK) {
+                    self.guest_ack = Some(tcp.ack);
+                }
+                res
+            }
         };
 
         let new_state = match res {
@@ -425,9 +458,6 @@ impl TcpFlowState {
                 ));
             }
         };
-
-        self.guest_seq = Some(tcp.seq);
-        self.guest_ack = Some(tcp.ack);
 
         // Make sure to transition the state if it has changed and
         // fire the SDT probe.
@@ -444,7 +474,6 @@ impl TcpFlowState {
     pub fn tcp_flow_drop_probe(
         &self,
         flow_id: &InnerFlowId,
-        // state: &TcpFlowState,
         dir: Direction,
         flags: u8,
     ) {
@@ -455,7 +484,7 @@ impl TcpFlowState {
 
                 unsafe {
                     __dtrace_probe_tcp__flow__drop(
-                        self.port_c.as_ptr() as uintptr_t,
+                        self.port.as_ptr() as uintptr_t,
                         &flow_id as *const flow_id_sdt_arg as uintptr_t,
                         &state as *const tcp_flow_state_sdt_arg as uintptr_t,
                         dir as uintptr_t,
@@ -465,7 +494,7 @@ impl TcpFlowState {
             } else if #[cfg(feature = "usdt")] {
                 use std::string::ToString;
 
-                let port_s = self.port_c.to_str().unwrap();
+                let port_s = self.port.to_str().unwrap();
                 let flow_s = flow_id.to_string();
                 let state_s = self.to_string();
                 let dir_s = dir.to_string();
@@ -475,7 +504,7 @@ impl TcpFlowState {
                     || (port_s, flow_s, state_s, dir_s, flags_s)
                 );
             } else {
-                let (_, _, _, _) = (&self.port_c, flow_id, dir, flags);
+                let (_, _, _, _) = (&self.port, flow_id, dir, flags);
             }
         }
     }
@@ -487,7 +516,7 @@ impl TcpFlowState {
                 let flow_id = flow_id_sdt_arg::from(flow_id);
                 unsafe {
                     __dtrace_probe_tcp__flow__state(
-                        self.port_c.as_ptr() as uintptr_t,
+                        self.port.as_ptr() as uintptr_t,
                         &flow_id as *const flow_id_sdt_arg as uintptr_t,
                         self.tcp_state as uintptr_t,
                         new_state as uintptr_t,
@@ -496,7 +525,7 @@ impl TcpFlowState {
             } else if #[cfg(feature = "usdt")] {
                 use std::string::ToString;
 
-                let port_s = self.port_c.to_str().unwrap();
+                let port_s = self.port.to_str().unwrap();
                 let flow_s = flow_id.to_string();
                 let curr_s = self.tcp_state.to_string();
                 let new_s = new_state.to_string();
@@ -507,6 +536,10 @@ impl TcpFlowState {
                 let (_, _) = (flow_id, new_state);
             }
         }
+    }
+
+    pub fn tcp_state(&self) -> TcpState {
+        self.tcp_state
     }
 }
 

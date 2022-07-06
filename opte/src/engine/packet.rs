@@ -380,6 +380,22 @@ impl PacketMeta {
         PacketMeta::default()
     }
 
+    /// Return the inner Ether metadata.
+    ///
+    /// XXX Technically this should never be None, but the code needs
+    /// to change to enforce that at compile time.
+    pub fn inner_ether(&self) -> Option<&EtherMeta> {
+        self.inner.ether.as_ref()
+    }
+
+    /// Return the inner IPv4 metadata.
+    pub fn inner_ip4(&self) -> Option<&Ipv4Meta> {
+        match &self.inner.ip {
+            Some(IpMeta::Ip4(ip4_meta)) => Some(ip4_meta),
+            _ => None,
+        }
+    }
+
     /// Return the inner TCP metadata, if the inner ULP is TCP.
     /// Otherwise, return `None`.
     pub fn inner_tcp(&self) -> Option<&TcpMeta> {
