@@ -124,6 +124,7 @@ pub struct CreateXdeReq {
 pub struct SNatCfg {
     pub public_ip: Ipv4Addr,
     pub ports: core::ops::RangeInclusive<u16>,
+    pub phys_gw_mac: MacAddr,
 }
 
 /// Xde delete ioctl parameter data.

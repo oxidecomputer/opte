@@ -1146,7 +1146,33 @@ fn guest_loopback(
     let devs = unsafe { xde_devs.read() };
     let ether_dst = pkt.headers().inner.ether.dst();
 
-    match devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst) {
+    let maybe_dest_dev = if unsafe { xde_ext_ip_hack == 1 } {
+        let ip = pkt.headers().inner.ip.as_ref();
+        match ip {
+            None => None,
+            Some(ip_hdr) => {
+                // XXX Doing all these shenanigans because we don't
+                // have the overlay layer in place which would
+                // normally rewrite the dst MAC addr to that of the
+                // dest guest.
+                //
+                // XXX Sigh, this still needs more work because we
+                // really do need to rewirte the dst mac, but I'm in a
+                // rush trying to get things working for a demo and I
+                // have too many yaks in my office. Come back to this
+                // later.
+                if let Some(ip4) = ip_hdr.ip4() {
+                    devs.iter().find(|x| x.port_cfg.private_ip == ip4.dst())
+                } else {
+                    None
+                }
+            }
+        }
+    } else {
+        devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
+    };
+
+    match maybe_dest_dev {
         Some(dest_dev) => {
             // We have found a matching Port on this host; "loop back"
             // the packet into the inbound processing path of the
@@ -1298,12 +1324,29 @@ unsafe extern "C" fn xde_mc_tx(
     match res {
         Ok(ProcessResult::Modified) => {
             if xde_ext_ip_hack == 1 {
-                opte::engine::dbg(format!("[Tx] ext_ip_hack, bypass encap"));
-                // TODO need to special-case guest-loopback here as
-                // well if we want intra-guest comms to work when the
-                // ext_ip_hack is enabled.
-                mch.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
-                return ptr::null_mut();
+                use opte::oxide_vpc::engine::router::RouterTargetInternal;
+                // XXX This entry should always exist, but if it
+                // doesn't we fallback to the IG.
+                let tgt = meta
+                    .get::<RouterTargetInternal>()
+                    .unwrap_or(&RouterTargetInternal::InternetGateway);
+                opte::engine::dbg(format!("[Tx] ext_ip_hack: {:?}", tgt));
+                match tgt {
+                    RouterTargetInternal::InternetGateway => {
+                        mch.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+                        return ptr::null_mut();
+                    }
+
+                    // XXX This assumes VpcSubnet, an IP router target
+                    // will not work without our encap network.
+                    _ => {
+                        return guest_loopback(
+                            src_dev,
+                            pkt,
+                            Vni::new(7777u32).unwrap(),
+                        );
+                    }
+                }
             }
 
             // If the outer IPv6 destination is the same as the

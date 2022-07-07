@@ -31,11 +31,20 @@ use crate::api::{Direction, Ipv4Addr, MacAddr};
 pub struct Nat4 {
     priv_ip: Ipv4Addr,
     public_ip: Ipv4Addr,
+    phys_gw_mac: MacAddr,
 }
 
 impl Nat4 {
-    pub fn new(priv_ip: Ipv4Addr, public_ip: Ipv4Addr) -> Self {
-        Self { priv_ip: priv_ip.into(), public_ip: public_ip.into() }
+    pub fn new(
+        priv_ip: Ipv4Addr,
+        public_ip: Ipv4Addr,
+        phys_gw_mac: MacAddr,
+    ) -> Self {
+        Self {
+            priv_ip: priv_ip.into(),
+            public_ip: public_ip.into(),
+            phys_gw_mac,
+        }
     }
 }
 
@@ -51,15 +60,14 @@ impl StatefulAction for Nat4 {
         _flow_id: &InnerFlowId,
         meta: &mut Meta,
     ) -> rule::GenDescResult {
-        let mac_addr = meta.get::<MacAddr>();
         let desc = Nat4Desc {
             priv_ip: self.priv_ip,
             public_ip: self.public_ip,
-            // XXX-EXT-IP This is assuming ext_ip_hack and will only
-            // allow for inbound connections, this will not work for
-            // outbound. If we want that we'll want to actually query
-            // the native router/ARP table.
-            src_mac: mac_addr.cloned(),
+            // XXX-EXT-IP This is assuming ext_ip_hack. All packets
+            // outbound for IG will have their dest mac rewritten to
+            // go to physical gateway, which will then properly route
+            // the destination IP.
+            phys_gw_mac: self.phys_gw_mac.clone(),
         };
         Ok(AllowOrDeny::Allow(Arc::new(desc)))
     }
@@ -77,7 +85,7 @@ pub struct Nat4Desc {
     priv_ip: Ipv4Addr,
     public_ip: Ipv4Addr,
     // XXX-EXT-IP
-    src_mac: Option<MacAddr>,
+    phys_gw_mac: MacAddr,
 }
 
 pub const NAT4_NAME: &'static str = "NAT4";
@@ -97,11 +105,10 @@ impl ActionDesc for Nat4Desc {
                 };
 
                 // XXX-EXT-IP hack to rewrite destination MAC adress
-                // from virtual gateway addr to actual address that
-                // initiated connection.
-                if self.src_mac.is_some() {
-                    ht.inner_ether = EtherMeta::modify(None, self.src_mac);
-                }
+                // from virtual gateway addr to the real gateway addr
+                // on the same subnet as the external IP.
+                ht.inner_ether =
+                    EtherMeta::modify(None, Some(self.phys_gw_mac));
                 ht
             }
 
@@ -131,14 +138,15 @@ mod test {
         use crate::engine::packet::{MetaGroup, PacketMeta};
         use crate::engine::tcp::TcpMeta;
 
-        let priv_mac = MacAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
-        let dest_mac = MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
+        let priv_mac = MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x01]);
+        let dest_mac = MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]);
         let priv_ip = "10.0.0.220".parse().unwrap();
         let priv_port = "4999".parse().unwrap();
         let pub_ip = "52.10.128.69".parse().unwrap();
         let outside_ip = "76.76.21.21".parse().unwrap();
         let outside_port = 80;
-        let nat = Nat4::new(priv_ip, pub_ip);
+        let gw_mac = MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
+        let nat = Nat4::new(priv_ip, pub_ip, gw_mac);
         let mut port_meta = Meta::new();
 
         // ================================================================
@@ -189,7 +197,7 @@ mod test {
 
         let ether_meta = pmo.inner.ether.as_ref().unwrap();
         assert_eq!(ether_meta.src, priv_mac);
-        assert_eq!(ether_meta.dst, dest_mac);
+        assert_eq!(ether_meta.dst, gw_mac);
 
         let ip4_meta = match pmo.inner.ip.as_ref().unwrap() {
             IpMeta::Ip4(v) => v,

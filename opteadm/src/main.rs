@@ -144,6 +144,9 @@ enum Command {
         snat_end: Option<u16>,
 
         #[structopt(long)]
+        snat_gw_mac: Option<MacAddr>,
+
+        #[structopt(long)]
         passthrough: bool,
     },
 
@@ -498,6 +501,7 @@ fn main() {
             snat_ip,
             snat_start,
             snat_end,
+            snat_gw_mac,
             passthrough,
         } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
@@ -508,6 +512,7 @@ fn main() {
                         snat_start.unwrap(),
                         snat_end.unwrap(),
                     ),
+                    phys_gw_mac: snat_gw_mac.unwrap(),
                 }),
 
                 None => None,

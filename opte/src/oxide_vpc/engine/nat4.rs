@@ -35,7 +35,11 @@ pub fn setup(
     // XXX-EXT-IP This config should not some from SNAT. This is
     // currently a hack assuming its use is in service of the
     // ext_ip_hack flag.
-    let nat = Nat4::new(cfg.private_ip, cfg.snat.as_ref().unwrap().public_ip);
+    let nat = Nat4::new(
+        cfg.private_ip,
+        cfg.snat.as_ref().unwrap().public_ip,
+        cfg.snat.as_ref().unwrap().phys_gw_mac,
+    );
     let layer = Layer::new(
         NAT4_LAYER_NAME,
         pb.name(),

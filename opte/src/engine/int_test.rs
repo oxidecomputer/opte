@@ -107,6 +107,7 @@ fn lab_cfg() -> PortCfg {
         snat: Some(SNatCfg {
             public_ip: "76.76.21.21".parse().unwrap(),
             ports: 1025..=4096,
+            phys_gw_mac: MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
         }),
         gw_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x01]),
         gw_ip: "172.20.14.1".parse().unwrap(),
@@ -179,8 +180,9 @@ fn g1_cfg() -> PortCfg {
             // which the oxide Rack is simply a part of.
             public_ip: "10.77.77.13".parse().unwrap(),
             ports: 1025..=4096,
+            phys_gw_mac: MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
         }),
-        gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
+        gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
         gw_ip: "192.168.77.1".parse().unwrap(),
         vni: Vni::new(99u32).unwrap(),
         // Site 0xF7, Rack 1, Sled 1, Interface 1
@@ -202,7 +204,7 @@ fn g1_cfg() -> PortCfg {
 fn g2_cfg() -> PortCfg {
     PortCfg {
         private_ip: "192.168.77.102".parse().unwrap(),
-        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x66]),
+        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x66]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
         snat: Some(SNatCfg {
             // NOTE: This is not a routable IP, but remember that a
@@ -211,8 +213,9 @@ fn g2_cfg() -> PortCfg {
             // which the oxide Rack is simply a part of.
             public_ip: "10.77.77.23".parse().unwrap(),
             ports: 4097..=8192,
+            phys_gw_mac: MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
         }),
-        gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x1]),
+        gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
         gw_ip: "192.168.77.1".parse().unwrap(),
         vni: Vni::new(99u32).unwrap(),
         // Site 0xF7, Rack 1, Sled 22, Interface 1
