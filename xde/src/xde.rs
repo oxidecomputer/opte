@@ -937,6 +937,12 @@ unsafe extern "C" fn xde_detach(
     _cmd: ddi_detach_cmd_t,
 ) -> c_int {
     assert!(!xde_dip.is_null());
+
+    if xde_devs.read().len() > 0 {
+        warn!("failed to detach: outstanding ports");
+        return DDI_FAILURE;
+    }
+
     let rstate = ddi_get_driver_private(xde_dip);
     assert!(!rstate.is_null());
     let state = Box::from_raw(rstate as *mut XdeState);
@@ -944,6 +950,20 @@ unsafe extern "C" fn xde_detach(
 
     match underlay {
         Some(underlay) => {
+            // These next two checks shouldn't be necessary if the
+            // above check for zero Ports is cleared. However, we play
+            // it safe, making sure there is only 1 reference before
+            // attempting to unwrap the underlay from the Arc.
+            if Arc::strong_count(&underlay.u1) > 1 {
+                warn!("failed to deatch: underlay u1 has outstanding refs");
+                return DDI_FAILURE;
+            }
+
+            if Arc::strong_count(&underlay.u2) > 1 {
+                warn!("failed to deatch: underlay u2 has outstanding refs");
+                return DDI_FAILURE;
+            }
+
             let u1 = Arc::try_unwrap(underlay.u1).unwrap();
             let u2 = Arc::try_unwrap(underlay.u2).unwrap();
 
