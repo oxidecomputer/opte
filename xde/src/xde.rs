@@ -584,7 +584,8 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
 
     // destroy dls devnet device
     let ret = unsafe {
-        dls::dls_devnet_destroy(xde.mh, &mut xde.linkid, boolean_t::B_TRUE)
+        let mut tmpid = xde.linkid;
+        dls::dls_devnet_destroy(xde.mh, &mut tmpid, boolean_t::B_TRUE)
     };
 
     match ret {
@@ -601,6 +602,12 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     match unsafe { mac::mac_unregister(xde.mh) } {
         0 => {}
         err => {
+            match unsafe { dls::dls_devnet_create(xde.mh, xde.linkid, 0) } {
+                0 => {}
+                err => {
+                    warn!("failed to recreate DLS devnet entry: {}", err);
+                }
+            };
             return Err(OpteError::System {
                 errno: err,
                 msg: format!("failed to unregister mac: {}", err),
