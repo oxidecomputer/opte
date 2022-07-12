@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::encap::Vni;
+use super::mac::MacAddr;
 use super::API_VERSION;
 use illumos_sys_hdrs::{c_int, size_t};
 use serde::{Deserialize, Serialize};
@@ -146,6 +148,7 @@ pub enum OpteError {
     FlowExists(String),
     InvalidRouteDest(String),
     LayerNotFound(String),
+    MacExists { port: String, vni: Vni, mac: MacAddr },
     MaxCapacity(u64),
     PortExists(String),
     PortNotFound(String),
@@ -179,6 +182,7 @@ impl OpteError {
             Self::FlowExists(_) => EEXIST,
             Self::InvalidRouteDest(_) => EINVAL,
             Self::LayerNotFound(_) => ENOENT,
+            Self::MacExists { .. } => EEXIST,
             Self::MaxCapacity(_) => ENFILE,
             Self::PortExists(_) => EEXIST,
             Self::PortNotFound(_) => ENOENT,

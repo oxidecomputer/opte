@@ -4,7 +4,7 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use core::fmt::{self, Display};
+use core::fmt::{self, Debug, Display};
 
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +19,7 @@ cfg_if! {
 
 /// A Geneve Virtual Network Identifier (VNI).
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone, Copy, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct Vni {
     // A VNI is 24-bit. By storing it this way we don't have to check
@@ -50,6 +50,14 @@ impl FromStr for Vni {
 impl Display for Vni {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", u32::from(*self))
+    }
+}
+
+// There's no reason to view the VNI as its raw array, so just present
+// it in a human-friendly manner.
+impl Debug for Vni {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Vni {{ inner: {} }}", self)
     }
 }
 

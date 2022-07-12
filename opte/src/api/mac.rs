@@ -4,7 +4,7 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use core::fmt::{self, Display};
+use core::fmt::{self, Debug, Display};
 use serde::{Deserialize, Serialize};
 
 cfg_if! {
@@ -19,7 +19,7 @@ cfg_if! {
 
 /// A MAC address.
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone, Copy, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct MacAddr {
     inner: [u8; 6],
@@ -75,6 +75,14 @@ impl Display for MacAddr {
             self.inner[4],
             self.inner[5]
         )
+    }
+}
+
+// There's no reason to view the MAC address as its raw array, so just
+// present it in a human-friendly manner.
+impl Debug for MacAddr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "MacAddr {{ inner: {} }}", self)
     }
 }
 

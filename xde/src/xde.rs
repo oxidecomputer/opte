@@ -440,10 +440,23 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // This does mean that the current Rx path is blocked on device
     // creation, but that's a price we need to pay for the moment.
     let mut devs = unsafe { xde_devs.write() };
-    match devs.iter().position(|x| x.devname == req.xde_devname) {
+    match devs.iter().find(|x| x.devname == req.xde_devname) {
         Some(_) => return Err(OpteError::PortExists(req.xde_devname.clone())),
         None => (),
     };
+
+    match devs.iter().find(|x| {
+        x.vni == req.vpc_vni && x.port.mac_addr() == req.private_mac.into()
+    }) {
+        Some(_) => {
+            return Err(OpteError::MacExists {
+                port: req.xde_devname.clone(),
+                vni: req.vpc_vni,
+                mac: req.private_mac,
+            })
+        }
+        None => (),
+    }
 
     let (port, port_cfg) = new_port(
         req.xde_devname.clone(),
