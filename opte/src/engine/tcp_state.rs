@@ -109,6 +109,13 @@ impl TcpFlowState {
                     return Some(Established);
                 }
 
+                // In this case the client is retransmitting its SYN;
+                // probably because the guest's SYN+ACK reply got lost
+                // or stuck in a buffer somewhere.
+                if tcp.has_flag(TcpFlags::SYN) {
+                    return Some(SynRcvd);
+                }
+
                 // TODO I imagine we could see a retrans of the
                 // remote's SYN here.
                 return None;
