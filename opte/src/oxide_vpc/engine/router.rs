@@ -31,7 +31,7 @@ use crate::engine::rule::{
     self, Action, AllowOrDeny, MetaAction, ModMetaResult, Predicate, Rule,
 };
 use crate::oxide_vpc::api::RouterTarget;
-use crate::oxide_vpc::PortCfg;
+use crate::oxide_vpc::VpcCfg;
 
 pub const ROUTER_LAYER_NAME: &'static str = "router";
 
@@ -82,7 +82,7 @@ fn build_ip4_len_to_pri() -> [u16; 33] {
 
 pub fn setup(
     pb: &PortBuilder,
-    _cfg: &PortCfg,
+    _cfg: &VpcCfg,
     ft_limit: core::num::NonZeroU32,
 ) -> Result<(), OpteError> {
     let ig = Action::Meta(Arc::new(RouterAction::new(

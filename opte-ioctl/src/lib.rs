@@ -5,8 +5,8 @@
 // Copyright 2022 Oxide Computer Company
 
 use opte::api::{
-    CmdOk, Ipv4Cidr, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
-    SetXdeUnderlayReq, Vni, API_VERSION, XDE_DLD_OPTE_CMD,
+    CmdOk, Ipv4Addr, Ipv4Cidr, MacAddr, NoResp, OpteCmd, OpteCmdIoctl,
+    OpteError, SetXdeUnderlayReq, Vni, API_VERSION, XDE_DLD_OPTE_CMD,
 };
 use opte::oxide_vpc::api::{
     AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, ListPortsReq,
@@ -93,6 +93,7 @@ impl OpteHdl {
         vpc_vni: Vni,
         src_underlay_addr: std::net::Ipv6Addr,
         snat: Option<SNatCfg>,
+        external_ips_v4: Option<Ipv4Addr>,
         passthrough: bool,
     ) -> Result<NoResp, Error> {
         let linkid = libnet::link::create_link_id(
@@ -116,6 +117,7 @@ impl OpteHdl {
             vpc_vni,
             src_underlay_addr: src_underlay_addr.into(),
             snat,
+            external_ips_v4,
             passthrough,
         };
 

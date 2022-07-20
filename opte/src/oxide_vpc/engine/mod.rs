@@ -8,7 +8,6 @@ pub mod arp;
 pub mod dhcp4;
 pub mod firewall;
 pub mod icmp;
-pub mod nat4;
+pub mod nat;
 pub mod overlay;
 pub mod router;
-pub mod snat4;

@@ -17,11 +17,11 @@ use crate::engine::icmp::Icmp4EchoReply;
 use crate::engine::layer::Layer;
 use crate::engine::port::{PortBuilder, Pos};
 use crate::engine::rule::{Action, Rule};
-use crate::oxide_vpc::PortCfg;
+use crate::oxide_vpc::VpcCfg;
 
 pub fn setup(
     pb: &mut PortBuilder,
-    cfg: &PortCfg,
+    cfg: &VpcCfg,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     let reply = Action::Hairpin(Arc::new(Icmp4EchoReply {

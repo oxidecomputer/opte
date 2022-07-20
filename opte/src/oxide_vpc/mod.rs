@@ -34,20 +34,23 @@ cfg_if! {
 
         pub mod engine;
 
-        // TODO Rename to VpcCfg, tease out generic PortCfg.
+        // TODO Tease out generic PortCfg.
         #[derive(Clone, Debug)]
-        pub struct PortCfg {
+        pub struct VpcCfg {
             pub vpc_subnet: Ipv4Cidr,
             pub private_mac: MacAddr,
             pub private_ip: Ipv4Addr,
             pub gw_mac: MacAddr,
             pub gw_ip: Ipv4Addr,
+            // XXX For now we limit to one external IP.
+            pub external_ips_v4: Option<Ipv4Addr>,
             pub snat: Option<SNatCfg>,
             pub vni: Vni,
             pub phys_ip: Ipv6Addr,
             pub bsvc_addr: PhysNet,
-            // XXX-EXT-IP
+            // XXX-EXT-IP the follow two fields are for the external IP hack.
             pub proxy_arp_enable: bool,
+            pub phys_gw_mac: Option<MacAddr>,
         }
     }
 }

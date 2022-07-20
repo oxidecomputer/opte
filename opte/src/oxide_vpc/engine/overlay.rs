@@ -43,13 +43,13 @@ use crate::engine::rule::{
 use crate::engine::sync::{KMutex, KMutexType};
 use crate::engine::udp::UdpMeta;
 use crate::oxide_vpc::api::{GuestPhysAddr, PhysNet};
-use crate::oxide_vpc::PortCfg;
+use crate::oxide_vpc::VpcCfg;
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 
 pub fn setup(
     pb: &PortBuilder,
-    cfg: &PortCfg,
+    cfg: &VpcCfg,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0

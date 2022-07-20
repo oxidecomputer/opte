@@ -147,6 +147,9 @@ enum Command {
         snat_gw_mac: Option<MacAddr>,
 
         #[structopt(long)]
+        external_ipv4: Option<Ipv4Addr>,
+
+        #[structopt(long)]
         passthrough: bool,
     },
 
@@ -502,6 +505,7 @@ fn main() {
             snat_start,
             snat_end,
             snat_gw_mac,
+            external_ipv4,
             passthrough,
         } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
@@ -530,6 +534,7 @@ fn main() {
                 vpc_vni,
                 src_underlay_addr,
                 snat,
+                external_ipv4,
                 passthrough,
             )
             .unwrap_or_die();

@@ -10,7 +10,9 @@
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 
-use opte::api::{Ipv4Cidr, MacAddr, NoResp, OpteCmd, SetXdeUnderlayReq, Vni};
+use opte::api::{
+    Ipv4Addr, Ipv4Cidr, MacAddr, NoResp, OpteCmd, SetXdeUnderlayReq, Vni,
+};
 use opte::engine::ioctl::{self as api};
 use opte::oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
@@ -44,6 +46,7 @@ impl OpteAdm {
         vpc_vni: Vni,
         src_underlay_addr: std::net::Ipv6Addr,
         snat: Option<SNatCfg>,
+        external_ips_v4: Option<Ipv4Addr>,
         passthrough: bool,
     ) -> Result<NoResp, Error> {
         let linkid = libnet::link::create_link_id(
@@ -67,6 +70,7 @@ impl OpteAdm {
             vpc_vni,
             src_underlay_addr: src_underlay_addr.into(),
             snat,
+            external_ips_v4,
             passthrough,
         };
 

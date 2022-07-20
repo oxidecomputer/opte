@@ -32,11 +32,11 @@ use crate::engine::ip4::Ipv4Cidr;
 use crate::engine::layer::Layer;
 use crate::engine::port::{PortBuilder, Pos};
 use crate::engine::rule::{Action, Rule};
-use crate::oxide_vpc::PortCfg;
+use crate::oxide_vpc::VpcCfg;
 
 pub fn setup(
     pb: &mut PortBuilder,
-    cfg: &PortCfg,
+    cfg: &VpcCfg,
     ft_limit: core::num::NonZeroU32,
 ) -> Result<(), OpteError> {
     // All guest interfaces live on a `/32`-network in the Oxide VPC;

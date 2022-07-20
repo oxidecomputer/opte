@@ -30,14 +30,13 @@ use crate::ioctl::IoctlEnvelope;
 use crate::mac::{self, MacClient, MacOpenFlags, MacTxFlags};
 use crate::{dld, dls, ip, secpolicy, sys, warn};
 use opte::api::{
-    CmdOk, Direction, Ipv4Cidr, MacAddr, NoResp, OpteCmd, OpteCmdIoctl,
-    OpteError, SetXdeUnderlayReq,
+    CmdOk, Direction, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
+    SetXdeUnderlayReq,
 };
 use opte::engine::ether::{EtherAddr, EtherType};
 use opte::engine::geneve::Vni;
 use opte::engine::headers::{IpAddr, IpCidr};
 use opte::engine::ioctl::{self as api};
-use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::{
     Initialized, Packet, PacketRead, PacketReader, ParseError, Parsed,
@@ -50,13 +49,13 @@ use opte::engine::sync::{KRwLock, KRwLockType};
 use opte::engine::time::{Interval, Moment, Periodic};
 use opte::oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
-    ListPortsReq, ListPortsResp, PhysNet, PortInfo, RemFwRuleReq, SNatCfg,
+    ListPortsReq, ListPortsResp, PhysNet, PortInfo, RemFwRuleReq,
     SetFwRulesReq, SetVirt2PhysReq,
 };
 use opte::oxide_vpc::engine::{
-    arp, dhcp4, firewall, icmp, nat4, overlay, router, snat4,
+    arp, dhcp4, firewall, icmp, nat, overlay, router,
 };
-use opte::oxide_vpc::PortCfg;
+use opte::oxide_vpc::VpcCfg;
 use opte::{CStr, CString, ExecCtx};
 
 // Entry limits for the varous flow tables.
@@ -67,7 +66,6 @@ use opte::{CStr, CString, ExecCtx};
 // Unwrap: We know all of these are safe to unwrap().
 const FW_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
 const NAT_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
-const SNAT_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
 const FT_LIMIT_ONE: Option<NonZeroU32> = NonZeroU32::new(1);
 const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
 const TCP_STATE_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
@@ -215,7 +213,7 @@ struct XdeDev {
 
     // opte port associated with this xde device
     port: Arc<Port>,
-    port_cfg: PortCfg,
+    vpc_cfg: VpcCfg,
     port_periodic: Periodic<Arc<Port>>,
     port_v2p: Arc<overlay::Virt2Phys>,
 
@@ -458,20 +456,33 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         None => (),
     }
 
-    let (port, port_cfg) = new_port(
-        req.xde_devname.clone(),
-        req.private_ip,
-        req.vpc_subnet,
-        req.private_mac,
-        req.gw_mac,
-        req.gw_ip,
-        req.bsvc_addr,
-        req.bsvc_vni,
-        req.src_underlay_addr,
-        req.vpc_vni,
-        state.ectx.clone(),
-        req.snat.clone(),
-    )?;
+    // XXX-EXT-IP This is for the external IP hack.
+    let phys_gw_mac = if unsafe { xde_ext_ip_hack == 1 } && req.snat.is_some() {
+        Some(req.snat.as_ref().unwrap().phys_gw_mac)
+    } else {
+        None
+    };
+
+    let vpc_cfg = VpcCfg {
+        vpc_subnet: req.vpc_subnet,
+        private_mac: req.private_mac,
+        private_ip: req.private_ip,
+        gw_mac: req.gw_mac,
+        gw_ip: req.gw_ip,
+        external_ips_v4: req.external_ips_v4,
+        snat: req.snat.clone(),
+        vni: req.vpc_vni,
+        phys_ip: req.src_underlay_addr,
+        bsvc_addr: PhysNet {
+            ether: MacAddr::from([0; 6]), //XXX this should not be needed
+            ip: req.bsvc_addr,
+            vni: req.bsvc_vni,
+        },
+        proxy_arp_enable: unsafe { xde_ext_ip_hack == 1 },
+        phys_gw_mac,
+    };
+
+    let port = new_port(req.xde_devname.clone(), &vpc_cfg, state.ectx.clone())?;
 
     let port_periodic = Periodic::new(
         port.name_cstr().clone(),
@@ -499,7 +510,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         port,
         port_periodic,
         port_v2p,
-        port_cfg,
+        vpc_cfg,
         passthrough: req.passthrough,
         vni: req.vpc_vni.into(),
         u1: underlay.u1.clone(),
@@ -1202,7 +1213,7 @@ fn guest_loopback(
                 // have too many yaks in my office. Come back to this
                 // later.
                 if let Some(ip4) = ip_hdr.ip4() {
-                    devs.iter().find(|x| x.port_cfg.private_ip == ip4.dst())
+                    devs.iter().find(|x| x.vpc_cfg.private_ip == ip4.dst())
                 } else {
                     None
                 }
@@ -1822,69 +1833,33 @@ unsafe extern "C" fn xde_mc_propinfo(
 #[no_mangle]
 fn new_port(
     name: String,
-    private_ip: Ipv4Addr,
-    vpc_subnet: Ipv4Cidr,
-    private_mac: MacAddr,
-    gateway_mac: MacAddr,
-    gateway_ip: Ipv4Addr,
-    bsvc_ip: Ipv6Addr,
-    bsvc_vni: Vni,
-    src_underlay_addr: Ipv6Addr,
-    vpc_vni: Vni,
+    cfg: &VpcCfg,
     ectx: Arc<ExecCtx>,
-    snat: Option<SNatCfg>,
-) -> Result<(Arc<Port>, PortCfg), OpteError> {
+) -> Result<Arc<Port>, OpteError> {
     let name_cstr = match CString::new(name.clone()) {
         Ok(v) => v,
         Err(_) => return Err(OpteError::BadName),
     };
 
-    let port_cfg = PortCfg {
-        vpc_subnet,
-        private_mac,
-        private_ip: private_ip,
-        gw_mac: gateway_mac,
-        gw_ip: gateway_ip,
-        snat: snat.clone(),
-        vni: vpc_vni,
-        phys_ip: src_underlay_addr,
-        bsvc_addr: PhysNet {
-            ether: MacAddr::from([0; 6]), //XXX this should not be needed
-            ip: bsvc_ip,
-            vni: bsvc_vni,
-        },
-        proxy_arp_enable: unsafe { xde_ext_ip_hack == 1 },
-    };
-
-    let mut pb = PortBuilder::new(&name, name_cstr, private_mac.into(), ectx);
+    let mut pb =
+        PortBuilder::new(&name, name_cstr, cfg.private_mac.into(), ectx);
     firewall::setup(&mut pb, FW_FT_LIMIT.unwrap())?;
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    dhcp4::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
-    icmp::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
-    arp::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
-    router::setup(&mut pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
-    if snat.is_some() {
-        // XXX This is a hack to allow incoming connections to the
-        // guest. In this case we hijack SNAT configuration and treat
-        // it as a public IP; performing 1:1 NAT.
-        if unsafe { xde_ext_ip_hack == 1 } {
-            nat4::setup(&mut pb, &port_cfg, NAT_FT_LIMIT.unwrap())?;
-        } else {
-            snat4::setup(&mut pb, &port_cfg, SNAT_FT_LIMIT.unwrap())?;
-        }
-    }
+    dhcp4::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
+    icmp::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
+    arp::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
+    router::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
+    nat::setup(&mut pb, &cfg, NAT_FT_LIMIT.unwrap())?;
 
     if unsafe { xde_ext_ip_hack != 1 } {
         warn!("enabling overlay for port: {}", name);
-        overlay::setup(&pb, &port_cfg, FT_LIMIT_ONE.unwrap())?;
+        overlay::setup(&pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     } else {
         warn!("disabling overlay for port: {}", name);
     }
 
-    let port =
-        Arc::new(pb.create(UFT_LIMIT.unwrap(), TCP_STATE_LIMIT.unwrap()));
-    Ok((port, port_cfg))
+    Ok(Arc::new(pb.create(UFT_LIMIT.unwrap(), TCP_STATE_LIMIT.unwrap())))
 }
 
 #[no_mangle]
@@ -2236,7 +2211,7 @@ fn list_ports_hdlr(
         resp.ports.push(PortInfo {
             name: dev.port.name().to_string(),
             mac_addr: dev.port.mac_addr().into(),
-            ip4_addr: dev.port_cfg.private_ip,
+            ip4_addr: dev.vpc_cfg.private_ip,
             state: dev.port.state().to_string(),
         });
     }

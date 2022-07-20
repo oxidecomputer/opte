@@ -60,8 +60,8 @@ use crate::oxide_vpc::api::{
     AddFwRuleReq, GuestPhysAddr, PhysNet, RouterTarget, SNatCfg, SetFwRulesReq,
 };
 use crate::oxide_vpc::engine::overlay::{self, Virt2Phys};
-use crate::oxide_vpc::engine::{arp, firewall, icmp, router, snat4};
-use crate::oxide_vpc::PortCfg;
+use crate::oxide_vpc::engine::{arp, firewall, icmp, nat, router};
+use crate::oxide_vpc::VpcCfg;
 use crate::ExecCtx;
 
 use ProcessResult::*;
@@ -99,8 +99,8 @@ fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
     }
 }
 
-fn lab_cfg() -> PortCfg {
-    PortCfg {
+fn lab_cfg() -> VpcCfg {
+    VpcCfg {
         private_ip: "172.20.14.16".parse().unwrap(),
         private_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
@@ -109,6 +109,7 @@ fn lab_cfg() -> PortCfg {
             ports: 1025..=4096,
             phys_gw_mac: MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
         }),
+        external_ips_v4: None,
         gw_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x01]),
         gw_ip: "172.20.14.1".parse().unwrap(),
 
@@ -131,10 +132,11 @@ fn lab_cfg() -> PortCfg {
             vni: Vni::new(7777u32).unwrap(),
         },
         proxy_arp_enable: false,
+        phys_gw_mac: None,
     }
 }
 
-fn oxide_net_builder(name: &str, cfg: &PortCfg) -> PortBuilder {
+fn oxide_net_builder(name: &str, cfg: &VpcCfg) -> PortBuilder {
     let ectx = Arc::new(ExecCtx { log: Box::new(crate::PrintlnLog {}) });
     let name_cstr = crate::CString::new(name).unwrap();
     let mut pb =
@@ -148,7 +150,7 @@ fn oxide_net_builder(name: &str, cfg: &PortCfg) -> PortBuilder {
     icmp::setup(&mut pb, cfg, one_limit).expect("failed to add icmp layer");
     arp::setup(&mut pb, cfg, one_limit).expect("failed to add ARP layer");
     router::setup(&mut pb, cfg, one_limit).expect("failed to add router layer");
-    snat4::setup(&mut pb, cfg, snat_limit).expect("failed to add snat4 layer");
+    nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
     overlay::setup(&mut pb, cfg, one_limit)
         .expect("failed to add overlay layer");
 
@@ -161,15 +163,15 @@ fn oxide_net_builder(name: &str, cfg: &PortCfg) -> PortBuilder {
     pb
 }
 
-fn oxide_net_setup(name: &str, cfg: &PortCfg) -> Port {
+fn oxide_net_setup(name: &str, cfg: &VpcCfg) -> Port {
     oxide_net_builder(name, cfg).create(UFT_LIMIT.unwrap(), TCP_LIMIT.unwrap())
 }
 
 const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 const TCP_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 
-fn g1_cfg() -> PortCfg {
-    PortCfg {
+fn g1_cfg() -> VpcCfg {
+    VpcCfg {
         private_ip: "192.168.77.101".parse().unwrap(),
         private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
@@ -182,6 +184,7 @@ fn g1_cfg() -> PortCfg {
             ports: 1025..=4096,
             phys_gw_mac: MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
         }),
+        external_ips_v4: None,
         gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
         gw_ip: "192.168.77.1".parse().unwrap(),
         vni: Vni::new(99u32).unwrap(),
@@ -198,11 +201,12 @@ fn g1_cfg() -> PortCfg {
             vni: Vni::new(7777u32).unwrap(),
         },
         proxy_arp_enable: false,
+        phys_gw_mac: None,
     }
 }
 
-fn g2_cfg() -> PortCfg {
-    PortCfg {
+fn g2_cfg() -> VpcCfg {
+    VpcCfg {
         private_ip: "192.168.77.102".parse().unwrap(),
         private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x66]),
         vpc_subnet: "192.168.77.0/24".parse().unwrap(),
@@ -215,6 +219,7 @@ fn g2_cfg() -> PortCfg {
             ports: 4097..=8192,
             phys_gw_mac: MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
         }),
+        external_ips_v4: None,
         gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
         gw_ip: "192.168.77.1".parse().unwrap(),
         vni: Vni::new(99u32).unwrap(),
@@ -231,6 +236,7 @@ fn g2_cfg() -> PortCfg {
             vni: Vni::new(7777u32).unwrap(),
         },
         proxy_arp_enable: false,
+        phys_gw_mac: None,
     }
 }
 

@@ -31,14 +31,14 @@ use crate::api::{Direction, Ipv4Addr, MacAddr};
 pub struct Nat4 {
     priv_ip: Ipv4Addr,
     public_ip: Ipv4Addr,
-    phys_gw_mac: MacAddr,
+    phys_gw_mac: Option<MacAddr>,
 }
 
 impl Nat4 {
     pub fn new(
         priv_ip: Ipv4Addr,
         public_ip: Ipv4Addr,
-        phys_gw_mac: MacAddr,
+        phys_gw_mac: Option<MacAddr>,
     ) -> Self {
         Self {
             priv_ip: priv_ip.into(),
@@ -58,7 +58,7 @@ impl StatefulAction for Nat4 {
     fn gen_desc(
         &self,
         _flow_id: &InnerFlowId,
-        meta: &mut Meta,
+        _meta: &mut Meta,
     ) -> rule::GenDescResult {
         let desc = Nat4Desc {
             priv_ip: self.priv_ip,
@@ -85,7 +85,7 @@ pub struct Nat4Desc {
     priv_ip: Ipv4Addr,
     public_ip: Ipv4Addr,
     // XXX-EXT-IP
-    phys_gw_mac: MacAddr,
+    phys_gw_mac: Option<MacAddr>,
 }
 
 pub const NAT4_NAME: &'static str = "NAT4";
@@ -107,8 +107,13 @@ impl ActionDesc for Nat4Desc {
                 // XXX-EXT-IP hack to rewrite destination MAC adress
                 // from virtual gateway addr to the real gateway addr
                 // on the same subnet as the external IP.
-                ht.inner_ether =
-                    EtherMeta::modify(None, Some(self.phys_gw_mac));
+                if self.phys_gw_mac.is_some() {
+                    ht.inner_ether = EtherMeta::modify(
+                        None,
+                        Some(self.phys_gw_mac.unwrap()),
+                    );
+                }
+
                 ht
             }
 
@@ -146,7 +151,7 @@ mod test {
         let outside_ip = "76.76.21.21".parse().unwrap();
         let outside_port = 80;
         let gw_mac = MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
-        let nat = Nat4::new(priv_ip, pub_ip, gw_mac);
+        let nat = Nat4::new(priv_ip, pub_ip, Some(gw_mac));
         let mut port_meta = Meta::new();
 
         // ================================================================

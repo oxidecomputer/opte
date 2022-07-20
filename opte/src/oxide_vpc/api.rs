@@ -99,24 +99,71 @@ impl FromStr for RouterTarget {
 /// Xde create ioctl parameter data.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateXdeReq {
+    /// The link identifier of the guest, as provided by dlmgmtd.
     pub linkid: datalink_id_t,
     pub xde_devname: String,
 
+    /// The VPC IPv4 address of the guest.
     pub private_ip: Ipv4Addr,
+
+    /// The VPC subnet CIDR of the guest.
     pub vpc_subnet: Ipv4Cidr,
+
+    /// The VPC MAC address of the guest.
     pub private_mac: MacAddr,
+
+    /// The MAC address for the virtual gateway. The virtual gateway
+    /// is what the guest sees as it's gateway to all other networks,
+    /// including other VPC guests as well as external networks and
+    /// the internet. Essentially, this is the MAC address of OPTE
+    /// itself, which is acting as the gateway to the guest.
     pub gw_mac: MacAddr,
+
+    /// The IPv4 address for the virtual gateway. The virtual gateway
+    /// is what the guest sees as it's gateway to all other networks,
+    /// including other VPC guests as well as external networks and
+    /// the internet. Essentially, this is the IPv4 address of OPTE
+    /// itself, which is acting as the gateway to the guest.
     pub gw_ip: Ipv4Addr,
 
+    /// The Boundary Services IPv6 address. Boundary Services is used
+    /// to transit packets between VPC guests and external networks.
     pub bsvc_addr: Ipv6Addr,
+
+    /// The Boundary Services Virtual Network Identifier (VNI).
+    /// Boundary Services is used to transit packets between VPC
+    /// guests and external networks.
     pub bsvc_vni: Vni,
+
+    /// The host (sled) IPv6 address. All guests on the same sled are
+    /// sourced to a single IPv6 address.
     pub src_underlay_addr: Ipv6Addr,
+
+    /// The Virtual Network Identifier (VNI) of the VPC in which the
+    /// guest resides.
     pub vpc_vni: Vni,
 
-    // XXX Keep this optional for now until NAT'ing is more thoroughly
-    // implemented in Omicron.
+    /// The Source NAT configuration for this guest, consisting of an
+    /// IP + port range which may be used. This allows a guest to make
+    /// outbound connections to hosts on an external network when
+    /// there is no external IP address assigned to the guest itself.
+    ///
+    /// XXX Keep this optional for now until NAT'ing is more thoroughly
+    /// implemented in Omicron.
     pub snat: Option<SNatCfg>,
 
+    /// The external IPv4 address of the guest. This allows hosts on
+    /// the external network to make inbound connections to the guest.
+    /// Whe present, it is also used as 1:1 NAT for outbound
+    /// connections from the guest to an external network.
+    ///
+    /// XXX For now we only allow one external IP.
+    pub external_ips_v4: Option<Ipv4Addr>,
+
+    /// This is a development tool for completely bypassing OPTE processing.
+    ///
+    /// XXX Pretty sure we aren't making much use of this anymore, and
+    /// should go away before v1.
     pub passthrough: bool,
 }
 
