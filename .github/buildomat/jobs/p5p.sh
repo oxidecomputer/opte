@@ -5,7 +5,8 @@
 #: target = "helios"
 #: rust_toolchain = "nightly"
 #: output_rules = [
-#:   "/out/*",
+#:   "=/out/opte.p5p",
+#:   "=/out/opte.p5p.sha256",
 #: ]
 #:
 #: [[publish]]

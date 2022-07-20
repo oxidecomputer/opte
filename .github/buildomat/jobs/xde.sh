@@ -5,8 +5,10 @@
 #: target = "helios"
 #: rust_toolchain = "nightly"
 #: output_rules = [
-#:   "/work/debug/*",
-#:   "/work/release/*",
+#:   "=/work/debug/xde.dbg",
+#:   "=/work/debug/xde.dbg.sha256",
+#:   "=/work/release/xde",
+#:   "=/work/release/xde.sha256",
 #: ]
 #:
 
