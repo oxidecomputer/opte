@@ -1199,6 +1199,7 @@ fn guest_loopback(
 
     let maybe_dest_dev = if unsafe { xde_ext_ip_hack == 1 } {
         let ip = pkt.headers().inner.ip.as_ref();
+        opte::engine::dbg(format!("ext_ip_hack inner ip: {:?}", ip));
         match ip {
             None => None,
             Some(ip_hdr) => {
@@ -1213,7 +1214,24 @@ fn guest_loopback(
                 // have too many yaks in my office. Come back to this
                 // later.
                 if let Some(ip4) = ip_hdr.ip4() {
-                    devs.iter().find(|x| x.vpc_cfg.private_ip == ip4.dst())
+                    let res = devs.iter().find(|x| {
+                        opte::engine::dbg(format!(
+                            "dev ip: {} pkt dest: {}",
+                            x.vpc_cfg.private_ip,
+                            ip4.dst(),
+                        ));
+                        x.vpc_cfg.private_ip == ip4.dst()
+                    });
+
+                    if let Some(dev) = res {
+                        opte::engine::dbg(format!(
+                            "rewriting packet dst mac to: {}",
+                            dev.vpc_cfg.private_mac,
+                        ));
+                        pkt.write_dst_mac(dev.vpc_cfg.private_mac.into());
+                    }
+
+                    res
                 } else {
                     None
                 }
@@ -1375,28 +1393,38 @@ unsafe extern "C" fn xde_mc_tx(
     match res {
         Ok(ProcessResult::Modified) => {
             if xde_ext_ip_hack == 1 {
-                use opte::oxide_vpc::engine::router::RouterTargetInternal;
-                // XXX This entry should always exist, but if it
-                // doesn't we fallback to the IG.
-                let tgt = meta
-                    .get::<RouterTargetInternal>()
-                    .unwrap_or(&RouterTargetInternal::InternetGateway);
-                opte::engine::dbg(format!("[Tx] ext_ip_hack: {:?}", tgt));
-                match tgt {
-                    RouterTargetInternal::InternetGateway => {
-                        mch.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
-                        return ptr::null_mut();
-                    }
+                let mut local = false;
 
-                    // XXX This assumes VpcSubnet, an IP router target
-                    // will not work without our encap network.
-                    _ => {
-                        return guest_loopback(
-                            src_dev,
-                            pkt,
-                            Vni::new(7777u32).unwrap(),
-                        );
+                match pkt.headers().inner.ip.as_ref() {
+                    Some(ip_hdr) => {
+                        if let Some(ip4) = ip_hdr.ip4() {
+                            let devs = xde_devs.read();
+                            let res = devs
+                                .iter()
+                                .find(|x| x.vpc_cfg.private_ip == ip4.dst());
+
+                            if res.is_some() {
+                                local = true;
+                            }
+                        }
                     }
+                    None => (),
+                }
+
+                opte::engine::dbg(format!(
+                    "[Tx] ext_ip_hack local: {:?}",
+                    local
+                ));
+
+                if local {
+                    return guest_loopback(
+                        src_dev,
+                        pkt,
+                        Vni::new(7777u32).unwrap(),
+                    );
+                } else {
+                    mch.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+                    return ptr::null_mut();
                 }
             }
 

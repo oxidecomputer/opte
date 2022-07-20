@@ -1224,6 +1224,18 @@ impl Packet<Initialized> {
 }
 
 impl Packet<Parsed> {
+    /// XXX-EXT-IP This is here purely for the use by the external IP
+    /// hack.
+    pub fn write_dst_mac(&mut self, addr: super::ether::EtherAddr) {
+        self.state.meta.inner.ether.as_mut().unwrap().dst = addr.into();
+        self.state
+            .headers
+            .inner
+            .ether
+            .unify(self.state.meta.inner.ether.as_ref().unwrap());
+        self.segs[0].write(&addr.to_bytes(), WritePos::Modify(0)).unwrap();
+    }
+
     pub fn body_offset(&self) -> usize {
         self.state.body.pkt_offset
     }
