@@ -82,6 +82,7 @@ pub enum ProcessResult {
 pub enum DropReason {
     Layer { name: String },
     TcpClosed,
+    TcpErr,
 }
 
 pub struct PortBuilder {
@@ -503,17 +504,54 @@ impl Port {
     //
     // 4. Send an event to FMA that includes all the data in step (1).
     //
-    fn bad_packet_err(
+    fn tcp_err(
         &self,
+        dir: Direction,
         msg: String,
         pkt: &mut Packet<Parsed>,
         ifid: &InnerFlowId,
-    ) -> ! {
-        super::err(format!("mblk: {}", pkt.mblk_ptr_str()));
-        super::err(format!("ifid: {}", ifid));
-        // super::err(format!("meta: {:?}", meta));
-        super::err(format!("flows: {:?}", *self.tcp_flows.lock(),));
-        todo!("bad packet: {}", msg);
+    ) {
+        if unsafe { super::opte_panic_debug != 0 } {
+            super::err(format!("mblk: {}", pkt.mblk_ptr_str()));
+            super::err(format!("ifid: {}", ifid));
+            super::err(format!("meta: {:?}", pkt.meta()));
+            super::err(format!("flows: {:?}", *self.tcp_flows.lock(),));
+            todo!("bad packet: {}", msg);
+        } else {
+            self.tcp_err_probe(dir, ifid, pkt, msg)
+        }
+    }
+
+    fn tcp_err_probe(
+        &self,
+        dir: Direction,
+        ifid: &InnerFlowId,
+        pkt: &Packet<Parsed>,
+        msg: String,
+    ) {
+        cfg_if::cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let ifid_arg = flow_id_sdt_arg::from(ifid);
+                let msg_arg = CString::new(msg).unwrap();
+
+                unsafe {
+                    __dtrace_probe_tcp__err(
+                        dir.cstr_raw() as uintptr_t,
+                        self.name_cstr.as_ptr() as uintptr_t,
+                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        pkt.mblk_addr(),
+                        msg_arg.as_ptr() as uintptr_t,
+                    );
+                }
+            } else if #[cfg(feature = "usdt")] {
+                let ifid_s = ifid.to_string();
+                crate::opte_provider::tcp__err!(
+                    || (dir, &self.name, ifid_s, pkt.mblk_addr(), &msg)
+                );
+            } else {
+                let (_, _, _, _) = (dir, ifid, pkt, msg);
+            }
+        }
     }
 
     /// Dump the contents of the layer named `name`, if such a layer
@@ -1144,7 +1182,10 @@ impl Port {
                         }
 
                         Err(e) => {
-                            self.bad_packet_err(e, pkt, &ifid);
+                            self.tcp_err(In, e, pkt, &ifid);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpErr,
+                            });
                         }
                     }
                 }
@@ -1192,7 +1233,10 @@ impl Port {
                         }
 
                         Err(e) => {
-                            self.bad_packet_err(e, pkt, &ifid);
+                            self.tcp_err(In, e, pkt, &ifid);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpErr,
+                            });
                         }
                     }
                 }
@@ -1373,7 +1417,10 @@ impl Port {
                 if pkt.meta().is_inner_tcp() {
                     match self.process_out_tcp_existing(&ifid, pkt.meta()) {
                         Err(e) => {
-                            self.bad_packet_err(e, pkt, &ifid);
+                            self.tcp_err(Out, e, pkt, &ifid);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpErr,
+                            });
                         }
 
                         // Drop any data that comes in after close.
@@ -1423,7 +1470,10 @@ impl Port {
         if pkt.meta().is_inner_tcp() {
             match self.process_out_tcp_new(&ifid, pkt.meta()) {
                 Err(e) => {
-                    self.bad_packet_err(e, pkt, &ifid);
+                    self.tcp_err(Out, e, pkt, &ifid);
+                    return Ok(ProcessResult::Drop {
+                        reason: DropReason::TcpErr,
+                    });
                 }
 
                 // Drop any data that comes in after close.
@@ -1592,6 +1642,13 @@ extern "C" {
         epoch: uintptr_t,
         pkt: uintptr_t,
         res: uintptr_t,
+    );
+    pub fn __dtrace_probe_tcp__err(
+        dir: uintptr_t,
+        port: uintptr_t,
+        ifid: uintptr_t,
+        pkt: uintptr_t,
+        msg: uintptr_t,
     );
     pub fn __dtrace_probe_uft__invalidate(
         dir: uintptr_t,

@@ -133,11 +133,18 @@ impl From<String> for ParseErr {
     }
 }
 
+/// When set to 1 we will panic in some situations instead of just
+/// flagging in error. This can be useful for debugging certain
+/// scenarios in development.
+#[no_mangle]
+pub static mut opte_panic_debug: i32 = 0;
+
 cfg_if! {
     if #[cfg(not(feature = "std"))] {
         use alloc::vec::Vec;
         use illumos_ddi_dki as ddi;
 
+        /// When set to 1 enables debug messages.
         #[no_mangle]
         pub static mut opte_debug: i32 = 0;
 
