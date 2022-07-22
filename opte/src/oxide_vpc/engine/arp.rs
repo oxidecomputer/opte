@@ -32,17 +32,16 @@ pub fn setup(
         Action::Hairpin(Arc::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),
     ];
 
-    if let Some(snat) = &cfg.snat {
+    if let Some(ip) = cfg.external_ips_v4.as_ref() {
         if cfg.proxy_arp_enable {
             // XXX-EXT-IP Hack to get remote access to guest instance
-            // via SNAT (which is not what it's intended for, but I
-            // think it'll work).
+            // via Proxy ARP.
             //
             // Reuse the same MAC address for both IPs. This should be
             // fine as the VIP is contained solely to the guest
             // instance.
             actions.push(Action::Hairpin(Arc::new(ArpReply::new(
-                snat.public_ip,
+                *ip,
                 cfg.private_mac,
             ))));
         }
