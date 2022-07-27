@@ -49,7 +49,9 @@ impl OpteAdm {
         external_ips_v4: Option<Ipv4Addr>,
         passthrough: bool,
     ) -> Result<NoResp, Error> {
-        let linkid = libnet::link::create_link_id(
+        use libnet::link;
+
+        let linkid = link::create_link_id(
             name,
             libnet::LinkClass::Xde,
             libnet::LinkFlags::Active,
@@ -74,7 +76,13 @@ impl OpteAdm {
             passthrough,
         };
 
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+        let res = run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req);
+
+        if res.is_err() {
+            let _ = link::delete_link_id(linkid, libnet::LinkFlags::Active);
+        }
+
+        res
     }
 
     /// Delete xde device
