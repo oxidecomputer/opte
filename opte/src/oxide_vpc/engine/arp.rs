@@ -77,16 +77,14 @@ pub fn setup(
     arp.add_rule(Direction::Out, rule.finalize());
 
     // ================================================================
-    // Proxy ARP for any incoming requests for guest's SNAT IP
+    // Proxy ARP for any incoming requests for guest's external IP.
     //
     // XXX-EXT-IP This is a hack to get guest access working until we
     // have boundary services integrated.
     // ================================================================
-    if let Some(_) = &cfg.snat {
-        if cfg.proxy_arp_enable {
-            let rule = Rule::new(1, arp.action(1).unwrap().clone());
-            arp.add_rule(Direction::In, rule.finalize());
-        }
+    if cfg.external_ips_v4.is_some() && cfg.proxy_arp_enable {
+        let rule = Rule::new(1, arp.action(1).unwrap().clone());
+        arp.add_rule(Direction::In, rule.finalize());
     }
 
     // ================================================================
