@@ -28,9 +28,10 @@ use crate::engine::headers::{IpAddr, IpCidr};
 use crate::engine::layer::{InnerFlowId, Layer};
 use crate::engine::port::{meta::Meta, Port, PortBuilder, Pos};
 use crate::engine::rule::{
-    self, Action, AllowOrDeny, MetaAction, ModMetaResult, Predicate, Rule,
+    self, Action, AllowOrDeny, Finalized, MetaAction, ModMetaResult, Predicate,
+    Rule,
 };
-use crate::oxide_vpc::api::RouterTarget;
+use crate::oxide_vpc::api::{DelRouterEntryIpv4Resp, RouterTarget};
 use crate::oxide_vpc::VpcCfg;
 
 pub const ROUTER_LAYER_NAME: &'static str = "router";
@@ -100,11 +101,10 @@ pub fn setup(
     pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
 
-pub fn add_entry(
-    port: &Port,
+fn make_rule(
     dest: IpCidr,
     target: RouterTarget,
-) -> Result<NoResp, OpteError> {
+) -> Result<Rule<Finalized>, OpteError> {
     let pri_map4 = build_ip4_len_to_pri();
 
     match target {
@@ -117,12 +117,7 @@ pub fn add_entry(
                 rule.add_predicate(Predicate::InnerDstIp4(vec![
                     rule::Ipv4AddrMatch::Prefix(ip4),
                 ]));
-                port.add_rule(
-                    ROUTER_LAYER_NAME,
-                    Direction::Out,
-                    rule.finalize(),
-                )?;
-                Ok(NoResp::default())
+                Ok(rule.finalize())
             }
 
             IpCidr::Ip6(_) => todo!("IPv6 drop"),
@@ -144,12 +139,7 @@ pub fn add_entry(
                     rule.add_predicate(Predicate::InnerDstIp4(vec![
                         rule::Ipv4AddrMatch::Prefix(ip4),
                     ]));
-                    port.add_rule(
-                        ROUTER_LAYER_NAME,
-                        Direction::Out,
-                        rule.finalize(),
-                    )?;
-                    Ok(NoResp::default())
+                    Ok(rule.finalize())
                 }
 
                 IpCidr::Ip6(_) => todo!("IPv6 IG"),
@@ -167,12 +157,7 @@ pub fn add_entry(
                 rule.add_predicate(Predicate::InnerDstIp4(vec![
                     rule::Ipv4AddrMatch::Prefix(ip4),
                 ]));
-                port.add_rule(
-                    ROUTER_LAYER_NAME,
-                    Direction::Out,
-                    rule.finalize(),
-                )?;
-                Ok(NoResp::default())
+                Ok(rule.finalize())
             }
 
             IpCidr::Ip6(_) => todo!("IPv6 IP"),
@@ -189,17 +174,39 @@ pub fn add_entry(
                 rule.add_predicate(Predicate::InnerDstIp4(vec![
                     rule::Ipv4AddrMatch::Prefix(ip4),
                 ]));
-                port.add_rule(
-                    ROUTER_LAYER_NAME,
-                    Direction::Out,
-                    rule.finalize(),
-                )?;
-                Ok(NoResp::default())
+                Ok(rule.finalize())
             }
 
             IpCidr::Ip6(_) => todo!("IPv6 router entry"),
         },
     }
+}
+
+pub fn del_entry(
+    port: &Port,
+    dest: IpCidr,
+    target: RouterTarget,
+) -> Result<DelRouterEntryIpv4Resp, OpteError> {
+    let rule = make_rule(dest, target)?;
+    let maybe_id = port.find_rule(ROUTER_LAYER_NAME, Direction::Out, &rule)?;
+    match maybe_id {
+        Some(id) => {
+            port.remove_rule(ROUTER_LAYER_NAME, Direction::Out, id)?;
+            Ok(DelRouterEntryIpv4Resp::Ok)
+        }
+
+        None => Ok(DelRouterEntryIpv4Resp::NotFound),
+    }
+}
+
+pub fn add_entry(
+    port: &Port,
+    dest: IpCidr,
+    target: RouterTarget,
+) -> Result<NoResp, OpteError> {
+    let rule = make_rule(dest, target)?;
+    port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?;
+    Ok(NoResp::default())
 }
 
 // TODO For each router table entry we should mark whether it came

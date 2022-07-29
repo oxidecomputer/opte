@@ -413,7 +413,11 @@ const ONE_SECOND: Interval = Interval::from_duration(Duration::new(1, 0));
 
 #[no_mangle]
 fn expire_periodic(port: &mut Arc<Port>) {
-    port.expire_flows(Moment::now());
+    // XXX The call fails if the port is paused; in which case we
+    // ignore the error. Eventually xde will also have logic for
+    // moving a port to a paused state, and in that state the periodic
+    // should probably be canceled.
+    let _ = port.expire_flows(Moment::now());
 }
 
 #[no_mangle]
@@ -2163,7 +2167,7 @@ fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    dev.port.clear_uft();
+    dev.port.clear_uft()?;
     Ok(NoResp::default())
 }
 

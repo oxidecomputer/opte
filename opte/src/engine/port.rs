@@ -254,19 +254,28 @@ impl PortBuilder {
 
 /// The current state of the [`Port`].
 ///
+/// The sequence diagram below gives an overview of how the port
+/// transitions between states. A port is first either created or
+/// restored via the [`PortBuilder`] methods. At that point you have a
+/// [`Port`] which can then transition between various states via its
+/// own methods. The digram uses the template `<current_state> --
+/// <method> --> <new state>`.
+///
+///
 /// ```
-/// PortBuilder::create() -> Ready
-/// PortBuilder::restore() -> Restored
+/// PortBuilder::create() --> Ready
+/// PortBuilder::restore() --> Restored
 ///
-/// Ready -- mc_start() --> Running
+/// Ready -- Port::start() --> Running
+/// Ready -- Port::reset() --> Ready
 ///
-/// Restored -- mc_start() --> Running
+/// Restored -- Port::start() --> Running
 ///
-/// Running -- pause --> Paused
-/// Running -- mc_stop() --> Ready
+/// Running -- Port::pause() --> Paused
+/// Running -- Port::reset() --> Ready
 ///
-/// Paused -- unpause --> Running
-/// Paused -- mc_stop() --> Ready
+/// Paused -- Port::start() --> Running
+/// Paused -- Port::reset() --> Ready
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PortState {
@@ -278,7 +287,7 @@ pub enum PortState {
     ///
     /// * [`PortBuilder::create()`]
     /// * [`Self::Running`]: The transition wipes the flow state.
-    /// * [`Self::Stopped`]: The transition wipes the flow state.
+    /// * [`Self::Paused`]: The transition wipes the flow state.
     Ready,
 
     /// The port is running and packets are free to travel across the
@@ -287,17 +296,13 @@ pub enum PortState {
     /// This state may be entered from:
     ///
     /// * [`Self::Ready`]
-    /// * [`Self::Stopped`]
+    /// * [`Self::Paused`]
     /// * [`Self::Restored`]
     Running,
 
     /// The port is paused. The layers and rules are intact as well as
     /// the flow state. However, any inbound or outbound packets are
     /// dropped.
-    ///
-    /// XXX This state isn't used yet; and I don't actually quite yet
-    /// know how we want to do this. E.g., perhaps pause/resume should
-    /// really be a mac abstraction with defined callbacks?
     ///
     /// This state may be entered from:
     ///
@@ -389,7 +394,7 @@ pub struct Port {
 macro_rules! check_state {
     ( $sg:expr, [ $( $state:expr ),* ] ) => {
         if $( *$sg != $state )&&* {
-            Err(OpteError::BadState)
+            Err(OpteError::BadState(format!("{}", *$sg)))
         } else {
             Ok(())
         }
@@ -408,6 +413,23 @@ macro_rules! check_state {
 }
 
 impl Port {
+    /// Place the port in the [`PortState::Paused`] state.
+    ///
+    /// After completion the port can no longer process traffic or
+    /// modify state.
+    ///
+    /// # States
+    ///
+    /// This command is valid for the following states:
+    ///
+    /// * [`PortState::Running`]
+    pub fn pause(&self) -> Result<()> {
+        let mut state = self.state.lock();
+        check_state!(state, [PortState::Running])?;
+        *state = PortState::Paused;
+        Ok(())
+    }
+
     /// Place the port in the [`PortState::Running`] state.
     ///
     /// After completion the port can receive packets for processing.
@@ -426,6 +448,10 @@ impl Port {
     /// A reset wipes all accumulated Layer and Unified flow state
     /// tracking as well as TCP state tracking. But it leaves the
     /// configuration, i.e. the layers and rules, as they are.
+    ///
+    /// # States
+    ///
+    /// This command is valid for all states.
     pub fn reset(&self) {
         // It's imperative to hold the lock for the entire function so
         // that its side effects are atomic from the point of view of
@@ -438,7 +464,8 @@ impl Port {
             layer.clear_flows();
         }
 
-        self.clear_uft();
+        self.uft_in.lock().clear();
+        self.uft_out.lock().clear();
         self.tcp_flows.lock().clear();
     }
 
@@ -461,7 +488,6 @@ impl Port {
     ///
     /// This command is valid for the following states:
     ///
-    /// * [`PortState::Paused`]
     /// * [`PortState::Ready`]
     /// * [`PortState::Running`]
     pub fn add_rule(
@@ -471,10 +497,7 @@ impl Port {
         rule: Rule<Finalized>,
     ) -> Result<()> {
         let state = self.state.lock();
-        check_state!(
-            state,
-            [PortState::Ready, PortState::Running, PortState::Paused]
-        )?;
+        check_state!(state, [PortState::Ready, PortState::Running])?;
 
         for layer in &*self.layers {
             if layer.name() == layer_name {
@@ -561,12 +584,17 @@ impl Port {
     ///
     /// This command is valid for any [`PortState`].
     pub fn dump_layer(&self, name: &str) -> Result<ioctl::DumpLayerResp> {
+        let state = self.state.lock();
+
         for l in &*self.layers {
             if l.name() == name {
                 return Ok(l.dump());
             }
         }
 
+        // Ensure the state lock is held for the entirety of the
+        // operation so that it is atomic.
+        drop(state);
         Err(OpteError::LayerNotFound(name.to_string()))
     }
 
@@ -593,13 +621,15 @@ impl Port {
     ///
     /// # States
     ///
-    /// This command is valid for all states. In the case of
-    /// [`PortState::Ready`], there cannot possibly be any UFT entries
-    /// to clear; however, it causes no harm to allow calling this
-    /// function in said state in order to make the ergonomics better.
-    pub fn clear_uft(&self) {
+    /// This command is valid for the following states.
+    ///
+    /// * [`PortState::Running`]
+    pub fn clear_uft(&self) -> Result<()> {
+        let state = self.state.lock();
+        check_state!(state, [PortState::Running])?;
         self.uft_in.lock().clear();
         self.uft_out.lock().clear();
+        Ok(())
     }
 
     /// Dump the contents of the Unified Flow Table (UFT).
@@ -645,11 +675,13 @@ impl Port {
     ///
     /// # States
     ///
-    /// This command is valid for all states. In the case of
-    /// [`PortState::Ready`], there cannot possibly be any flows to
-    /// expire; however, it causes no harm to allow calling this
-    /// function in said state in order to make the ergonomics better.
-    pub fn expire_flows(&self, now: Moment) {
+    /// This command is valid for the following states.
+    ///
+    /// * [`PortState::Running`]
+    pub fn expire_flows(&self, now: Moment) -> Result<()> {
+        let state = self.state.lock();
+        check_state!(state, [PortState::Running])?;
+
         for l in &self.layers {
             l.expire_flows(now);
         }
@@ -657,6 +689,40 @@ impl Port {
             self.uft_in.lock().expire_flows(now, |_| FLOW_ID_DEFAULT.clone());
         let _ =
             self.uft_out.lock().expire_flows(now, |_| FLOW_ID_DEFAULT.clone());
+        Ok(())
+    }
+
+    /// Find a rule in the specified layer and return its id.
+    ///
+    /// Search for a matching rule in the specified layer that has the
+    /// same direction and predicates as the specified rule. If no
+    /// matching rule is found, then `None` is returned.
+    ///
+    /// # Errors
+    ///
+    /// If the layer does not exist, an error is returned.
+    ///
+    /// # States
+    ///
+    /// This command is valid for any [`PortState`].
+    pub fn find_rule(
+        &self,
+        layer_name: &str,
+        dir: Direction,
+        rule: &Rule<Finalized>,
+    ) -> Result<Option<RuleId>> {
+        let state = self.state.lock();
+
+        for layer in &self.layers {
+            if layer.name() == layer_name {
+                return Ok(layer.find_rule(dir, rule));
+            }
+        }
+
+        // Perhaps this is silly, but I want to make sure the state
+        // lock is held for the execution of this method.
+        drop(state);
+        Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
 
     /// Return a reference to the [`Action`] defined in the given
@@ -683,6 +749,7 @@ impl Port {
     /// This command is valid for any [`PortState`].
     pub fn list_layers(&self) -> ioctl::ListLayersResp {
         let mut tmp = vec![];
+        let state = self.state.lock();
 
         for layer in &*self.layers {
             tmp.push(ioctl::LayerDesc {
@@ -693,6 +760,9 @@ impl Port {
             });
         }
 
+        // Perhaps this is silly, but I want to make sure the state
+        // lock is held for the execution of this method.
+        drop(state);
         ioctl::ListLayersResp { layers: tmp }
     }
 
@@ -777,7 +847,6 @@ impl Port {
     ///
     /// This command is valid for the following states:
     ///
-    /// * [`PortState::Paused`]
     /// * [`PortState::Ready`]
     /// * [`PortState::Running`]
     pub fn remove_rule(
@@ -787,10 +856,7 @@ impl Port {
         id: RuleId,
     ) -> Result<()> {
         let state = self.state.lock();
-        check_state!(
-            state,
-            [PortState::Paused, PortState::Ready, PortState::Running]
-        )?;
+        check_state!(state, [PortState::Ready, PortState::Running])?;
 
         for layer in &self.layers {
             if layer.name() == layer_name {
@@ -832,7 +898,6 @@ impl Port {
     ///
     /// This command is valid for the following states:
     ///
-    /// * [`PortState::Paused`]
     /// * [`PortState::Ready`]
     /// * [`PortState::Running`]
     pub fn set_rules(
@@ -842,10 +907,7 @@ impl Port {
         out_rules: Vec<Rule<Finalized>>,
     ) -> Result<()> {
         let state = self.state.lock();
-        check_state!(
-            state,
-            [PortState::Paused, PortState::Ready, PortState::Running]
-        )?;
+        check_state!(state, [PortState::Ready, PortState::Running])?;
 
         for layer in &self.layers {
             if layer.name() == layer_name {
@@ -1577,7 +1639,7 @@ impl Port {
                 let port_s = self.name_cstr.to_str().unwrap();
                 let ufid_s = ufid.to_string();
                 crate::opte_provider::uft__tcp__closed!(
-                    || (dir, port_s, ifid_s)
+                    || (dir, port_s, ufid_s)
                 );
             } else {
                 let (_, _) = (dir, ufid);
@@ -1591,6 +1653,14 @@ impl Port {
 // testing, then add it to the impl block above.
 #[cfg(test)]
 impl Port {
+    pub fn epoch(&self) -> u64 {
+        self.epoch.load(SeqCst)
+    }
+
+    pub fn layers(&self) -> Vec<&str> {
+        self.layers.iter().map(Layer::name).collect()
+    }
+
     /// Get the number of flows currently in the layer and direction
     /// specified. The value `"uft"` can be used to get the number of
     /// UFT flows.

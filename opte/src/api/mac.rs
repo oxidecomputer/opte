@@ -94,4 +94,8 @@ impl MacAddr {
     pub fn bytes(&self) -> [u8; 6] {
         self.inner
     }
+
+    pub const fn from_const(bytes: [u8; 6]) -> Self {
+        Self { inner: bytes }
+    }
 }

@@ -23,6 +23,7 @@
 //! TODO This module belongs in oxide_vpc as it's testing VPC-specific
 //! configuration.
 use std::boxed::Box;
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::prelude::v1::*;
 use std::sync::Arc;
@@ -47,28 +48,30 @@ use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol, UlpCsumOpt};
 use super::ip6::Ipv6Addr;
 use super::packet::{
     Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
+    Parsed,
 };
 use super::port::meta::Meta;
 use super::port::resources::Resources;
-use super::port::{Port, PortBuilder, ProcessError, ProcessResult};
+use super::port::{Port, PortBuilder, PortState, ProcessError, ProcessResult};
 use super::rule::{self, MappingResource, Rule};
 use super::tcp::{TcpFlags, TcpHdr};
 use super::time::Moment;
 use super::udp::{UdpHdr, UdpMeta};
-use crate::api::{Direction::*, MacAddr};
+use crate::api::{Direction::*, MacAddr, OpteError};
 use crate::oxide_vpc::api::{
-    AddFwRuleReq, GuestPhysAddr, PhysNet, RouterTarget, SNatCfg, SetFwRulesReq,
+    AddFwRuleReq, FirewallRule, GuestPhysAddr, PhysNet, RouterTarget, SNatCfg,
+    SetFwRulesReq,
 };
 use crate::oxide_vpc::engine::overlay::{self, Virt2Phys};
-use crate::oxide_vpc::engine::{arp, firewall, icmp, nat, router};
+use crate::oxide_vpc::engine::{arp, dhcp4, firewall, icmp, nat, router};
 use crate::oxide_vpc::VpcCfg;
 use crate::ExecCtx;
 
 use ProcessResult::*;
 
-// I'm not sure if we've defined the MAC address OPTE uses to
-// masqurade as the guests gateway.
-pub const GW_MAC_ADDR: [u8; 6] = [0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77];
+// This is the MAC address that OPTE uses to act as the virtual gateway.
+pub const GW_MAC_ADDR: MacAddr =
+    MacAddr::from_const([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]);
 
 // If we are running `cargo test --feature=usdt`, then make sure to
 // register the USDT probes before running any tests.
@@ -97,6 +100,243 @@ fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
 
         Err(e) => panic!("failed to get next block: {:?}", e),
     }
+}
+
+// Used to track various bits of port state for the purpose of
+// validating the port as we send it various commands and traffic. It
+// is meant to be manipulated and checked by the macros that follow.
+struct VpcPortState {
+    counts: BTreeMap<String, u32>,
+    epoch: u64,
+    port_state: PortState,
+}
+
+impl VpcPortState {
+    fn new() -> Self {
+        Self {
+            counts: BTreeMap::from(
+                [
+                    ("arp.rules_in", 0),
+                    ("arp.rules_out", 0),
+                    ("fw.flows_in", 0),
+                    ("fw.flows_out", 0),
+                    ("fw.rules_in", 0),
+                    ("fw.rules_out", 0),
+                    ("icmp.rules_in", 0),
+                    ("icmp.rules_out", 0),
+                    ("nat.flows_in", 0),
+                    ("nat.flows_out", 0),
+                    ("nat.rules_in", 0),
+                    ("nat.rules_out", 0),
+                    ("router.rules_in", 0),
+                    ("router.rules_out", 0),
+                    ("uft.flows_in", 0),
+                    ("uft.flows_out", 0),
+                ]
+                .map(|(name, val)| (name.to_string(), val)),
+            ),
+            epoch: 1,
+            port_state: PortState::Ready,
+        }
+    }
+}
+
+// Assert that the port matches the expected port state.
+macro_rules! assert_port {
+    ($pav:expr) => {
+        for (field, expected_val) in $pav.vps.counts.iter() {
+            let actual_val = match field.as_str() {
+                "arp.rules_in" => $pav.port.num_rules("arp", In),
+                "arp.rules_out" => $pav.port.num_rules("arp", Out),
+                "fw.flows_in" => $pav.port.num_flows("firewall", In),
+                "fw.flows_out" => $pav.port.num_flows("firewall", Out),
+                "fw.rules_in" => $pav.port.num_rules("firewall", In),
+                "fw.rules_out" => $pav.port.num_rules("firewall", Out),
+                "icmp.rules_in" => $pav.port.num_rules("icmp", In),
+                "icmp.rules_out" => $pav.port.num_rules("icmp", Out),
+                "nat.flows_in" => $pav.port.num_flows("nat", In),
+                "nat.flows_out" => $pav.port.num_flows("nat", Out),
+                "nat.rules_in" => $pav.port.num_rules("nat", In),
+                "nat.rules_out" => $pav.port.num_rules("nat", Out),
+                "router.rules_in" => $pav.port.num_rules("router", In),
+                "router.rules_out" => $pav.port.num_rules("router", Out),
+                "uft.flows_in" => $pav.port.num_flows("uft", In),
+                "uft.flows_out" => $pav.port.num_flows("uft", Out),
+                f => todo!("implement check for field: {}", f),
+            };
+            assert!(
+                *expected_val == actual_val,
+                "field value mismatch: field: {}, expected: {}, actual: {}",
+                field,
+                expected_val,
+                actual_val,
+            );
+        }
+
+        {
+            let expected = $pav.vps.epoch;
+            let actual = $pav.port.epoch();
+            assert!(
+                expected == actual,
+                "epoch mismatch: expected: {}, actual: {}",
+                expected,
+                actual,
+            );
+        }
+
+        {
+            let expected = $pav.vps.port_state;
+            let actual = $pav.port.state();
+            assert!(
+                expected == actual,
+                "port state mismatch: expected: {}, actual: {}",
+                expected,
+                actual,
+            );
+        }
+    };
+}
+
+// Increment a given field.
+macro_rules! incr_field {
+    ($vps:expr, $field:expr) => {
+        match $vps.counts.get_mut($field) {
+            Some(v) => *v += 1,
+            None => assert!(false, "field does not exist: {}", $field),
+        }
+    };
+}
+
+// Decrement a given field.
+macro_rules! decr_field {
+    ($vps:expr, $field:expr) => {
+        match $vps.counts.get_mut($field) {
+            Some(v) => *v -= 1,
+            None => assert!(false, "field does not exist: {}", $field),
+        }
+    };
+}
+
+// Increment the list of fields.
+macro_rules! incr_na {
+    ($port_and_vps:expr, $fields:expr) => {
+        for f in $fields {
+            match f {
+                "epoch" => $port_and_vps.vps.epoch += 1,
+                _ => incr_field!($port_and_vps.vps, f),
+            }
+        }
+    };
+}
+
+// Increment the list of fields and assert the port state.
+macro_rules! incr {
+    ($port_and_vps:expr, $fields:expr) => {
+        incr_na!($port_and_vps, $fields);
+        assert_port!($port_and_vps);
+    };
+}
+
+// Drecrement the list of fields.
+macro_rules! decr_na {
+    ($port_and_vps:expr, $fields:expr) => {
+        for f in $fields {
+            match f {
+                // You can never decrement the epoch.
+                _ => decr_field!($port_and_vps.vps, f),
+            }
+        }
+    };
+}
+
+// Set the given field to the given value.
+macro_rules! set_field {
+    ($port_and_vps:expr, $field:expr, $val:expr) => {
+        match $port_and_vps.vps.counts.get_mut($field) {
+            Some(v) => *v = $val,
+            None => assert!(false, "field does not exist: {}", $field),
+        }
+    };
+}
+
+// Set a list of fields to the specific value.
+//
+// epcoh=M,fw.rules_in=N
+macro_rules! set_fields {
+    ($port_and_vps:expr, $fields:expr) => {
+        for f in $fields {
+            match f.split_once("=") {
+                Some(("epoch", val)) => {
+                    $port_and_vps.vps.epoch += val.parse::<u64>().unwrap();
+                }
+
+                Some((field, val)) => {
+                    set_field!($port_and_vps, field, val.parse().unwrap());
+                }
+
+                _ => panic!("malformed field expr: {}", f),
+            }
+        }
+    };
+}
+
+// Update the VpcPortState and assert.
+//
+// update!(g1, ["incr:epoch,fw.flows_out,fw.flows_in,uft.flows_out"])
+macro_rules! update {
+    ($port_and_vps:expr, $instructions:expr) => {
+        for inst in $instructions {
+            match inst.split_once(":") {
+                Some(("incr", fields)) => {
+                    // Convert "field1,field2,field3" to ["field1",
+                    // "field2, "field3"]
+                    let fields_arr: Vec<&str> = fields.split(",").collect();
+                    incr_na!($port_and_vps, fields_arr);
+                }
+
+                Some(("set", fields)) => {
+                    let fields_arr: Vec<&str> = fields.split(",").collect();
+                    set_fields!($port_and_vps, fields_arr);
+                }
+
+                Some(("decr", fields)) => {
+                    let fields_arr: Vec<&str> = fields.split(",").collect();
+                    decr_na!($port_and_vps, fields_arr);
+                }
+
+                Some((op, _)) => {
+                    panic!("unknown op: {} instruction: {}", op, inst);
+                }
+
+                _ => panic!("malformed instruction: {}", inst),
+            }
+        }
+
+        assert_port!($port_and_vps);
+    };
+}
+
+// Set all flow counts to zero.
+macro_rules! zero_flows {
+    ($port_and_vps:expr) => {
+        for (field, count) in $port_and_vps.vps.counts.iter_mut() {
+            match field.as_str() {
+                "fw.flows_in" | "fw.flows_out" => *count = 0,
+                "nat.flows_in" | "nat.flows_out" => *count = 0,
+                "router.flows_in" | "router.flows_out" => *count = 0,
+                "uft.flows_in" | "uft.flows_out" => *count = 0,
+                &_ => (),
+            }
+        }
+    };
+}
+
+// Set the expected PortState of the port.
+macro_rules! set_state {
+    ($port_and_vps:expr, $port_state:expr) => {
+        $port_and_vps.vps.port_state = $port_state;
+        assert_port!($port_and_vps);
+    };
 }
 
 fn lab_cfg() -> VpcCfg {
@@ -147,8 +387,9 @@ fn oxide_net_builder(name: &str, cfg: &VpcCfg) -> PortBuilder {
     let one_limit = NonZeroU32::new(1).unwrap();
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
+    dhcp4::setup(&mut pb, cfg, one_limit).expect("failed to add dhcp4 layer");
     icmp::setup(&mut pb, cfg, one_limit).expect("failed to add icmp layer");
-    arp::setup(&mut pb, cfg, one_limit).expect("failed to add ARP layer");
+    arp::setup(&mut pb, cfg, one_limit).expect("failed to add arp layer");
     router::setup(&mut pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
     overlay::setup(&mut pb, cfg, one_limit)
@@ -163,8 +404,31 @@ fn oxide_net_builder(name: &str, cfg: &VpcCfg) -> PortBuilder {
     pb
 }
 
-fn oxide_net_setup(name: &str, cfg: &VpcCfg) -> Port {
-    oxide_net_builder(name, cfg).create(UFT_LIMIT.unwrap(), TCP_LIMIT.unwrap())
+struct PortAndVps {
+    port: Port,
+    vps: VpcPortState,
+}
+
+fn oxide_net_setup(name: &str, cfg: &VpcCfg) -> PortAndVps {
+    let port = oxide_net_builder(name, cfg)
+        .create(UFT_LIMIT.unwrap(), TCP_LIMIT.unwrap());
+    assert_eq!(port.state(), PortState::Ready);
+    assert_eq!(port.epoch(), 1);
+    check_no_flows(&port);
+    let vps = VpcPortState::new();
+    let mut pav = PortAndVps { port, vps };
+    update!(
+        pav,
+        [
+            "set:arp.rules_in=1,arp.rules_out=2",
+            "set:icmp.rules_out=1",
+            "set:fw.rules_in=1,fw.rules_out=1",
+            "set:nat.rules_out=1",
+            "set:router.rules_out=1",
+        ]
+    );
+    assert_port!(pav);
+    pav
 }
 
 const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
@@ -172,9 +436,9 @@ const TCP_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 
 fn g1_cfg() -> VpcCfg {
     VpcCfg {
-        private_ip: "192.168.77.101".parse().unwrap(),
-        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF7, 0x00, 0x65]),
-        vpc_subnet: "192.168.77.0/24".parse().unwrap(),
+        private_ip: "172.30.0.5".parse().unwrap(),
+        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
+        vpc_subnet: "172.30.0.0/22".parse().unwrap(),
         snat: Some(SNatCfg {
             // NOTE: This is not a routable IP, but remember that a
             // "public IP" for an Oxide guest could either be a
@@ -186,8 +450,8 @@ fn g1_cfg() -> VpcCfg {
         }),
         external_ips_v4: None,
         gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
-        gw_ip: "192.168.77.1".parse().unwrap(),
-        vni: Vni::new(99u32).unwrap(),
+        gw_ip: "172.30.0.1".parse().unwrap(),
+        vni: Vni::new(1287581u32).unwrap(),
         // Site 0xF7, Rack 1, Sled 1, Interface 1
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
@@ -195,10 +459,10 @@ fn g1_cfg() -> VpcCfg {
         bsvc_addr: PhysNet {
             ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
             ip: Ipv6Addr::from([
-                0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
+                0xFD, 0x00, 0x99, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
             ]),
-            vni: Vni::new(7777u32).unwrap(),
+            vni: Vni::new(99u32).unwrap(),
         },
         proxy_arp_enable: false,
         phys_gw_mac: None,
@@ -207,9 +471,9 @@ fn g1_cfg() -> VpcCfg {
 
 fn g2_cfg() -> VpcCfg {
     VpcCfg {
-        private_ip: "192.168.77.102".parse().unwrap(),
+        private_ip: "172.30.0.6".parse().unwrap(),
         private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x66]),
-        vpc_subnet: "192.168.77.0/24".parse().unwrap(),
+        vpc_subnet: "172.30.0.0/22".parse().unwrap(),
         snat: Some(SNatCfg {
             // NOTE: This is not a routable IP, but remember that a
             // "public IP" for an Oxide guest could either be a
@@ -221,8 +485,8 @@ fn g2_cfg() -> VpcCfg {
         }),
         external_ips_v4: None,
         gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
-        gw_ip: "192.168.77.1".parse().unwrap(),
-        vni: Vni::new(99u32).unwrap(),
+        gw_ip: "172.30.0.1".parse().unwrap(),
+        vni: Vni::new(1287581u32).unwrap(),
         // Site 0xF7, Rack 1, Sled 22, Interface 1
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
@@ -233,92 +497,106 @@ fn g2_cfg() -> VpcCfg {
                 0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
             ]),
-            vni: Vni::new(7777u32).unwrap(),
+            vni: Vni::new(99u32).unwrap(),
         },
         proxy_arp_enable: false,
         phys_gw_mac: None,
     }
 }
 
-// Verify that two guests on the same VPC can communicate via overlay.
-// I.e., test routing + encap/decap.
-#[test]
-fn port_transitions() {
-    // ================================================================
-    // Configure ports for g1 and g2.
-    // ================================================================
-    let g1_cfg = g1_cfg();
-    let g2_cfg = g2_cfg();
-    let g2_phys =
-        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
+// Verify that no flows are present on the port.
+fn check_no_flows(port: &Port) {
+    for layer in port.layers() {
+        assert_eq!(port.num_flows(layer, Out), 0);
+        assert_eq!(port.num_flows(layer, In), 0);
+    }
 
-    // Add V2P mappings that allow guests to resolve each others
-    // physical addresses.
-    let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
-    let mut rsrcs = Resources::new();
-    rsrcs.add(v2p).unwrap();
-    let mut lmeta = Meta::new();
+    assert_eq!(port.num_flows("uft", Out), 0);
+    assert_eq!(port.num_flows("uft", In), 0);
+}
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    assert_eq!(g1_port.num_rules("firewall", Out), 1);
-
-    // Add router entry that allows Guest 1 to send to Guest 2.
-    router::add_entry(
-        &g1_port,
-        IpCidr::Ip4(g2_cfg.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet)),
-    )
-    .unwrap();
-
-    // ================================================================
-    // Generate a telnet SYN packet from g1 to g2.
-    // ================================================================
+// Generate a packet representing the start of a TCP handshake for a
+// telnet session from src to dst.
+fn tcp_telnet_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
     let body = vec![];
     let mut tcp = TcpHdr::new(7865, 23);
     tcp.set_flags(TcpFlags::SYN);
     tcp.set_seq(4224936861);
     let mut ip4 =
-        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
+        Ipv4Hdr::new_tcp(&mut tcp, &body, src.private_ip, dst.private_ip);
     ip4.compute_hdr_csum();
     let tcp_csum =
         ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
+    let eth = EtherHdr::new(EtherType::Ipv4, src.private_mac, src.gw_mac);
 
     let mut bytes = vec![];
     bytes.extend_from_slice(&eth.as_bytes());
     bytes.extend_from_slice(&ip4.as_bytes());
     bytes.extend_from_slice(&tcp.as_bytes());
     bytes.extend_from_slice(&body);
-    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
-
-    // ================================================================
-    // Try processing the packet while taking the port through a Ready
-    // -> Running -> Ready transition. Verify that flows are cleared
-    // but rules remain.
-    // ================================================================
-    let res = g1_port.process(Out, &mut g1_pkt, &mut lmeta, &mut rsrcs);
-    assert!(matches!(res, Err(ProcessError::BadState(_))));
-    g1_port.start();
-    assert_eq!(g1_port.num_rules("firewall", Out), 1);
-    let res = g1_port.process(Out, &mut g1_pkt, &mut lmeta, &mut rsrcs);
-    assert!(matches!(res, Ok(Modified)));
-    assert_eq!(g1_port.num_flows("firewall", Out), 1);
-    assert_eq!(g1_port.num_flows("uft", Out), 1);
-
-    g1_port.reset();
-    assert_eq!(g1_port.num_rules("firewall", Out), 1);
-    let res = g1_port.process(Out, &mut g1_pkt, &mut lmeta, &mut rsrcs);
-    assert!(matches!(res, Err(ProcessError::BadState(_))));
-    assert_eq!(g1_port.num_flows("firewall", Out), 0);
-    assert_eq!(g1_port.num_flows("uft", Out), 0);
+    Packet::copy(&bytes).parse().unwrap()
 }
 
-// Verify that the guest can ping the virtual gateway.
+// Generate a packet representing the start of a TCP handshake for an
+// HTTP request from src to dst.
+fn http_tcp_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
+    http_tcp_syn2(src.private_mac, src.private_ip, dst.private_ip)
+}
+
+// Generate a packet representing the start of a TCP handshake for an
+// HTTP request from src to dst.
+fn http_tcp_syn2(
+    eth_src: MacAddr,
+    ip_src: Ipv4Addr,
+    ip_dst: Ipv4Addr,
+) -> Packet<Parsed> {
+    let body = vec![];
+    let mut tcp = TcpHdr::new(44490, 80);
+    tcp.set_flags(TcpFlags::SYN);
+    tcp.set_seq(2382112979);
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    // Any packet from the guest is always addressed to the gateway.
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, GW_MAC_ADDR);
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&eth.as_bytes());
+    bytes.extend_from_slice(&ip4.as_bytes());
+    bytes.extend_from_slice(&tcp.as_bytes());
+    bytes.extend_from_slice(&body);
+    Packet::copy(&bytes).parse().unwrap()
+}
+
+// Generate a packet representing the SYN+ACK reply to `http_tcp_syn()`,
+// from g1 to g2.
+fn http_tcp_syn_ack(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
+    let body = vec![];
+    let mut tcp = TcpHdr::new(80, 44490);
+    tcp.set_flags(TcpFlags::SYN | TcpFlags::ACK);
+    tcp.set_seq(44161351);
+    tcp.set_ack(2382112980);
+    let mut ip4 =
+        Ipv4Hdr::new_tcp(&mut tcp, &body, src.private_ip, dst.private_ip);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, src.private_mac, src.gw_mac);
+
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&eth.as_bytes());
+    bytes.extend_from_slice(&ip4.as_bytes());
+    bytes.extend_from_slice(&tcp.as_bytes());
+    bytes.extend_from_slice(&body);
+    Packet::copy(&bytes).parse().unwrap()
+}
+
+// Verify Port transition from Ready -> Running.
 #[test]
-fn gateway_icmp4_ping() {
-    use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
+fn port_transition_running() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
     let g2_phys =
@@ -331,36 +609,284 @@ fn gateway_icmp4_ping() {
     let mut rsrcs = Resources::new();
     rsrcs.add(v2p).unwrap();
     let mut lmeta = Meta::new();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg);
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    g1_port.start();
-
-    let mut pcap = crate::test::PcapBuilder::new("gateway_icmpv4_ping.pcap");
+    // Add router entry that allows g1 to send to other guests on the
+    // same subnet.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4(g1_cfg.vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules_out"]);
 
     // ================================================================
-    // Generate an ICMP Echo Request from G1 to Virtual GW
+    // Try processing the packet while taking the port through a Ready
+    // -> Running.
     // ================================================================
-    let ident = 7;
-    let seq_no = 777;
-    let data = b"reunion\0";
+    let mut pkt1 = tcp_telnet_syn(&g1_cfg, &g2_cfg);
+    let res = g1.port.process(Out, &mut pkt1, &mut lmeta, &mut rsrcs);
+    assert!(matches!(res, Err(ProcessError::BadState(_))));
+    assert_port!(g1);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
+    let res = g1.port.process(Out, &mut pkt1, &mut lmeta, &mut rsrcs);
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["fw.flows_in", "fw.flows_out", "uft.flows_out"]);
+}
 
-    let req = Icmpv4Repr::EchoRequest { ident, seq_no, data: &data[..] };
+// Verify a Port reset transitions it to the Ready state and clears
+// all flow state.
+#[test]
+fn port_transition_reset() {
+    let g1_cfg = g1_cfg();
+    let g2_cfg = g2_cfg();
+    let g2_phys =
+        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
 
+    // Add V2P mappings that allow guests to resolve each others
+    // physical addresses.
+    let v2p = Arc::new(Virt2Phys::new());
+    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    let mut rsrcs = Resources::new();
+    rsrcs.add(v2p).unwrap();
+    let mut lmeta = Meta::new();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg);
+
+    // Add router entry that allows g1 to send to other guests on the
+    // same subnet.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4(g1_cfg.vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules_out"]);
+
+    // ================================================================
+    // Try processing the packet while taking the port through a Ready
+    // -> Running -> Ready transition. Verify that flows are cleared
+    // but rules remain.
+    // ================================================================
+    let mut pkt1 = tcp_telnet_syn(&g1_cfg, &g2_cfg);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
+    let res = g1.port.process(Out, &mut pkt1, &mut lmeta, &mut rsrcs);
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["fw.flows_in", "fw.flows_out", "uft.flows_out"]);
+    g1.port.reset();
+    zero_flows!(g1);
+    set_state!(g1, PortState::Ready);
+    let res = g1.port.process(Out, &mut pkt1, &mut lmeta, &mut rsrcs);
+    assert!(matches!(res, Err(ProcessError::BadState(_))));
+    assert_port!(g1);
+}
+
+// Verify that pausing a port:
+//
+// * Prevents any further traffic from being processed.
+// * Prevents modification of rules.
+// * Allows read-only introspection of state.
+#[test]
+fn port_transition_pause() {
+    let g1_cfg = g1_cfg();
+    let g1_phys =
+        GuestPhysAddr { ether: g1_cfg.private_mac.into(), ip: g1_cfg.phys_ip };
+    let g2_cfg = g2_cfg();
+    let g2_phys =
+        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
+
+    // Add V2P mappings that allow guests to resolve each others
+    // physical addresses.
+    let v2p = Arc::new(Virt2Phys::new());
+    v2p.set(IpAddr::Ip4(g1_cfg.private_ip), g1_phys);
+    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    let mut g1_rsrcs = Resources::new();
+    let mut g2_rsrcs = Resources::new();
+    g1_rsrcs.add(v2p.clone()).unwrap();
+    g2_rsrcs.add(v2p.clone()).unwrap();
+    let mut g1_lmeta = Meta::new();
+    let mut g2_lmeta = Meta::new();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg);
+    let mut g2 = oxide_net_setup("g2_port", &g2_cfg);
+
+    // Add router entry that allows g1 to send to other guests on same
+    // subnet.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4(g1_cfg.vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules_out"]);
+
+    // Allow incoming connections to port 80 on g1.
+    let fw_rule: FirewallRule =
+        "action=allow priority=10 dir=in protocol=tcp port=80".parse().unwrap();
+    firewall::add_fw_rule(
+        &g1.port,
+        &AddFwRuleReq {
+            port_name: g1.port.name().to_string(),
+            rule: fw_rule.clone(),
+        },
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "fw.rules_in"]);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
+
+    // Add router entry that allows g2 to send to other guests on same
+    // subnet.
+    router::add_entry(
+        &g2.port,
+        IpCidr::Ip4(g2_cfg.vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet)),
+    )
+    .unwrap();
+    incr!(g2, ["epoch", "router.rules_out"]);
+    g2.port.start();
+    set_state!(g2, PortState::Running);
+
+    // ================================================================
+    // Send the HTTP SYN.
+    // ================================================================
+    let mut pkt1 = http_tcp_syn(&g2_cfg, &g1_cfg);
+    let res = g2.port.process(Out, &mut pkt1, &mut g2_lmeta, &mut g2_rsrcs);
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g2, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
+
+    let res = g1.port.process(In, &mut pkt1, &mut g1_lmeta, &mut g1_rsrcs);
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["fw.flows_in", "fw.flows_out", "uft.flows_in"]);
+
+    // ================================================================
+    // Pause the port and verify the internal state. Make sure that
+    // introspective APIs are allowed.
+    // ================================================================
+    g2.port.pause().unwrap();
+    set_state!(g2, PortState::Paused);
+    let _ = g2.port.list_layers();
+    let _ = g2.port.dump_layer("firewall").unwrap();
+    let _ = g2.port.dump_tcp_flows().unwrap();
+    let _ = g2.port.dump_uft();
+
+    // ================================================================
+    // Verify that APIs which modify state are not allowed.
+    // ================================================================
+    assert!(matches!(g2.port.clear_uft(), Err(OpteError::BadState(_))));
+    assert!(matches!(
+        g2.port.expire_flows(Moment::now()),
+        Err(OpteError::BadState(_))
+    ));
+    // This exercises Port::remove_rule().
+    assert!(matches!(
+        router::del_entry(
+            &g2.port,
+            IpCidr::Ip4(g2_cfg.vpc_subnet),
+            RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet)),
+        ),
+        Err(OpteError::BadState(_))
+    ));
+    let res = g2.port.process(Out, &mut pkt1, &mut g2_lmeta, &mut g2_rsrcs);
+    assert!(matches!(res, Err(ProcessError::BadState(_))));
+    let fw_rule: FirewallRule =
+        "action=allow priority=10 dir=in protocol=tcp port=22".parse().unwrap();
+    // This exercises Port::add_rule().
+    let res = firewall::add_fw_rule(
+        &g2.port,
+        &AddFwRuleReq {
+            port_name: g2.port.name().to_string(),
+            rule: fw_rule.clone(),
+        },
+    );
+    assert!(matches!(res, Err(OpteError::BadState(_))));
+    let res = firewall::set_fw_rules(
+        &g2.port,
+        &SetFwRulesReq {
+            port_name: g2.port.name().to_string(),
+            rules: vec![fw_rule],
+        },
+    );
+    assert!(matches!(res, Err(OpteError::BadState(_))));
+
+    // ================================================================
+    // Verify that the port can move back to Running and process more
+    // traffic.
+    // ================================================================
+    g2.port.start();
+    set_state!(g2, PortState::Running);
+
+    let mut pkt2 = http_tcp_syn_ack(&g1_cfg, &g2_cfg);
+    g1_lmeta.clear();
+    let res = g1.port.process(Out, &mut pkt2, &mut g1_lmeta, &mut g2_rsrcs);
+    println!("res: {:?}", res);
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["uft.flows_out"]);
+
+    g2_lmeta.clear();
+    let res = g2.port.process(In, &mut pkt2, &mut g2_lmeta, &mut g2_rsrcs);
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g2, ["uft.flows_in"]);
+}
+
+#[test]
+fn add_remove_fw_rule() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
+
+    // Add a new inbound rule.
+    let rule = "dir=in action=allow priority=10 protocol=TCP";
+    firewall::add_fw_rule(
+        &g1.port,
+        &AddFwRuleReq {
+            port_name: g1.port.name().to_string(),
+            rule: rule.parse().unwrap(),
+        },
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "fw.rules_in"]);
+
+    // Remove the rule just added, by ID.
+    firewall::rem_fw_rule(
+        &g1.port,
+        &crate::oxide_vpc::api::RemFwRuleReq {
+            port_name: g1.port.name().to_string(),
+            dir: In,
+            id: 1,
+        },
+    )
+    .unwrap();
+    update!(g1, ["incr:epoch", "decr:fw.rules_in"]);
+}
+
+fn gen_icmp_echo_req(
+    eth_src: MacAddr,
+    eth_dst: MacAddr,
+    ip_src: Ipv4Addr,
+    ip_dst: Ipv4Addr,
+    ident: u16,
+    seq_no: u16,
+    data: &[u8],
+) -> Packet<Parsed> {
+    use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
+
+    let req = Icmpv4Repr::EchoRequest { ident, seq_no, data };
     let mut body_bytes = vec![0u8; req.buffer_len()];
     let mut req_pkt = Icmpv4Packet::new_unchecked(&mut body_bytes);
     let _ = req.emit(&mut req_pkt, &Default::default());
-
     let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
-        src: g1_cfg.private_ip,
-        dst: g1_cfg.gw_ip,
+        src: ip_src,
+        dst: ip_dst,
         proto: Protocol::ICMP,
     });
     ip4.set_total_len(ip4.hdr_len() as u16 + req.buffer_len() as u16);
     ip4.compute_hdr_csum();
-
     let eth = EtherHdr::from(&EtherMeta {
-        dst: g1_cfg.gw_mac,
-        src: g1_cfg.private_mac,
+        dst: eth_dst,
+        src: eth_src,
         ether_type: ETHER_TYPE_IPV4,
     });
 
@@ -369,19 +895,51 @@ fn gateway_icmp4_ping() {
     pkt_bytes.extend_from_slice(&eth.as_bytes());
     pkt_bytes.extend_from_slice(&ip4.as_bytes());
     pkt_bytes.extend_from_slice(&body_bytes);
-    let mut g1_pkt = Packet::copy(&pkt_bytes).parse().unwrap();
-    pcap.add_pkt(&g1_pkt);
+    Packet::copy(&pkt_bytes).parse().unwrap()
+}
+
+// Verify that the guest can ping the virtual gateway.
+#[test]
+fn gateway_icmp4_ping() {
+    use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
+    let g1_cfg = g1_cfg();
+    let v2p = Arc::new(Virt2Phys::new());
+    let mut rsrcs = Resources::new();
+    rsrcs.add(v2p.clone()).unwrap();
+    let mut lmeta = Meta::new();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
+    let mut pcap = crate::test::PcapBuilder::new("gateway_icmpv4_ping.pcap");
+    let ident = 7;
+    let seq_no = 777;
+    let data = b"reunion\0";
+
+    // ================================================================
+    // Generate an ICMP Echo Request from G1 to Virtual GW
+    // ================================================================
+    let mut pkt1 = gen_icmp_echo_req(
+        g1_cfg.private_mac,
+        g1_cfg.gw_mac,
+        g1_cfg.private_ip,
+        g1_cfg.gw_ip,
+        ident,
+        seq_no,
+        &data[..],
+    );
+    pcap.add_pkt(&pkt1);
 
     // ================================================================
     // Run the Echo Request through g1's port in the outbound
     // direction and verify it results in an Echo Reply Hairpin packet
     // back to guest.
     // ================================================================
-    let res = g1_port.process(Out, &mut g1_pkt, &mut lmeta, &mut rsrcs);
+    let res = g1.port.process(Out, &mut pkt1, &mut lmeta, &mut rsrcs);
     let hp = match res {
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {:?}", res),
     };
+    assert_port!(g1);
 
     let reply = hp.parse().unwrap();
     pcap.add_pkt(&reply);
@@ -419,9 +977,6 @@ fn gateway_icmp4_ping() {
     rdr.seek(14 + 20).unwrap();
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv4Packet::new_checked(&reply_body).unwrap();
-    // TODO The 2nd arguemnt is the checksum capab, while the default
-    // value should verify the checksums better to make this explicit
-    // so it's clear what is happening.
     let mut csum = CsumCapab::ignored();
     csum.ipv4 = smoltcp::phy::Checksum::Rx;
     csum.icmpv4 = smoltcp::phy::Checksum::Rx;
@@ -445,10 +1000,7 @@ fn gateway_icmp4_ping() {
 // case the guest has not route to the other guest, resulting in the
 // packet being dropped.
 #[test]
-fn overlay_guest_to_guest_no_route() {
-    // ================================================================
-    // Configure ports for g1 and g2.
-    // ================================================================
+fn guest_to_guest_no_route() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
     let g2_phys =
@@ -461,47 +1013,28 @@ fn overlay_guest_to_guest_no_route() {
     let mut rsrcs = Resources::new();
     rsrcs.add(v2p).unwrap();
     let mut lmeta = Meta::new();
-
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    g1_port.start();
-
-    // ================================================================
-    // Generate a telnet SYN packet from g1 to g2.
-    // ================================================================
-    let body = vec![];
-    let mut tcp = TcpHdr::new(7865, 23);
-    tcp.set_flags(TcpFlags::SYN);
-    tcp.set_seq(4224936861);
-    let mut ip4 =
-        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
-    ip4.compute_hdr_csum();
-    let tcp_csum =
-        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
-
-    let mut bytes = vec![];
-    bytes.extend_from_slice(&eth.as_bytes());
-    bytes.extend_from_slice(&ip4.as_bytes());
-    bytes.extend_from_slice(&tcp.as_bytes());
-    bytes.extend_from_slice(&body);
-    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
-
-    // ================================================================
-    // Run the telnet SYN packet through g1's port in the outbound
-    // direction and verify the resulting packet meets expectations.
-    // ================================================================
-    let res = g1_port.process(Out, &mut g1_pkt, &mut lmeta, &mut rsrcs);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
+    let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
+    let res = g1.port.process(Out, &mut pkt1, &mut lmeta, &mut rsrcs);
     assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
+    // XXX The firewall layer comes before the router layer (in the
+    // outbound direction). The firewall layer allows this traffic;
+    // and a flow is created, regardless of the fact that a later
+    // layer decides to drop the packet. This means that a flow could
+    // take up space in some of the layers even though no traffic can
+    // actually flow through it. In the future it would be better to
+    // have a way to send "simulated" flow through the layer pipeline
+    // for the effect of removing it from any flow tables in which it
+    // exists.
+    incr!(g1, ["fw.flows_out", "fw.flows_in"]);
+    assert_port!(g1);
 }
 
-// Verify that two guests on the same VPC can communicate via overlay.
-// I.e., test routing + encap/decap.
+// Verify that two guests on the same VPC can communicate.
 #[test]
-fn overlay_guest_to_guest() {
-    // ================================================================
-    // Configure ports for g1 and g2.
-    // ================================================================
+fn guest_to_guest() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
     let g2_phys =
@@ -515,19 +1048,22 @@ fn overlay_guest_to_guest() {
     rsrcs.add(v2p).unwrap();
     let mut lmeta = Meta::new();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    g1_port.start();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
 
     // Add router entry that allows Guest 1 to send to Guest 2.
     router::add_entry(
-        &g1_port,
+        &g1.port,
         IpCidr::Ip4(g2_cfg.vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet)),
     )
     .unwrap();
+    incr!(g1, ["epoch", "router.rules_out"]);
 
-    let g2_port = oxide_net_setup("g2_port", &g2_cfg);
-    g2_port.start();
+    let mut g2 = oxide_net_setup("g2_port", &g2_cfg);
+    g2.port.start();
+    set_state!(g2, PortState::Running);
 
     // Add router entry that allows Guest 2 to send to Guest 1.
     //
@@ -536,22 +1072,24 @@ fn overlay_guest_to_guest() {
     // way a new router entry that applies to many guests can placed
     // once instead of on each port individually.
     router::add_entry(
-        &g2_port,
+        &g2.port,
         IpCidr::Ip4(g1_cfg.vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
     )
     .unwrap();
+    incr!(g2, ["epoch", "router.rules_out"]);
 
     // Allow incoming TCP connection from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
     firewall::add_fw_rule(
-        &g2_port,
+        &g2.port,
         &AddFwRuleReq {
-            port_name: g2_port.name().to_string(),
+            port_name: g2.port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
     )
     .unwrap();
+    incr!(g2, ["epoch", "fw.rules_in"]);
 
     let mut pcap_guest1 =
         crate::test::PcapBuilder::new("overlay_guest_to_guest-guest-1.pcap");
@@ -563,42 +1101,23 @@ fn overlay_guest_to_guest() {
     let mut pcap_phys2 =
         crate::test::PcapBuilder::new("overlay_guest_to_guest-phys-2.pcap");
 
-    // ================================================================
-    // Generate a telnet SYN packet from g1 to g2.
-    // ================================================================
-    let body = vec![];
-    let mut tcp = TcpHdr::new(7865, 23);
-    tcp.set_flags(TcpFlags::SYN);
-    tcp.set_seq(4224936861);
-    let mut ip4 =
-        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
-    ip4.compute_hdr_csum();
-    let tcp_csum =
-        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
-
-    let mut bytes = vec![];
-    bytes.extend_from_slice(&eth.as_bytes());
-    bytes.extend_from_slice(&ip4.as_bytes());
-    bytes.extend_from_slice(&tcp.as_bytes());
-    bytes.extend_from_slice(&body);
-    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
-    pcap_guest1.add_pkt(&g1_pkt);
+    let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
+    pcap_guest1.add_pkt(&pkt1);
 
     // ================================================================
-    // Run the telnet SYN packet through g1's port in the outbound
-    // direction and verify the resulting packet meets expectations.
+    // Run the packet through g1's port in the outbound direction and
+    // verify the resulting packet meets expectations.
     // ================================================================
-    let res = g1_port.process(Out, &mut g1_pkt, &mut lmeta, &mut rsrcs);
-    pcap_phys1.add_pkt(&g1_pkt);
+    let res = g1.port.process(Out, &mut pkt1, &mut lmeta, &mut rsrcs);
+    pcap_phys1.add_pkt(&pkt1);
     assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
 
     // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
-    assert_eq!(g1_pkt.body_offset(), 14 + 40 + 8 + 8 + 14 + 20 + 20);
-    assert_eq!(g1_pkt.body_seg(), 1);
+    assert_eq!(pkt1.body_offset(), 14 + 40 + 8 + 8 + 14 + 20 + 20);
+    assert_eq!(pkt1.body_seg(), 1);
 
-    let meta = g1_pkt.meta();
+    let meta = pkt1.meta();
     match meta.outer.ether.as_ref() {
         Some(eth) => {
             assert_eq!(eth.src, MacAddr::ZERO);
@@ -628,7 +1147,7 @@ fn overlay_guest_to_guest() {
 
     match meta.outer.encap.as_ref() {
         Some(geneve) => {
-            assert_eq!(geneve.vni, Vni::new(99u32).unwrap());
+            assert_eq!(geneve.vni, Vni::new(g1_cfg.vni).unwrap());
         }
 
         None => panic!("expected outer Geneve metadata"),
@@ -656,8 +1175,8 @@ fn overlay_guest_to_guest() {
 
     match meta.inner.ulp.as_ref().unwrap() {
         UlpMeta::Tcp(tcp) => {
-            assert_eq!(tcp.src, 7865);
-            assert_eq!(tcp.dst, 23);
+            assert_eq!(tcp.src, 44490);
+            assert_eq!(tcp.dst, 80);
         }
 
         ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
@@ -669,20 +1188,21 @@ fn overlay_guest_to_guest() {
     // of the real process we first dump the raw bytes of g1's
     // outgoing packet and then reparse it.
     // ================================================================
-    let mblk = g1_pkt.unwrap();
-    let mut g2_pkt =
+    let mblk = pkt1.unwrap();
+    let mut pkt2 =
         unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
-    pcap_phys2.add_pkt(&g2_pkt);
+    pcap_phys2.add_pkt(&pkt2);
 
-    let res = g2_port.process(In, &mut g2_pkt, &mut lmeta, &mut rsrcs);
-    pcap_guest2.add_pkt(&g2_pkt);
+    let res = g2.port.process(In, &mut pkt2, &mut lmeta, &mut rsrcs);
+    pcap_guest2.add_pkt(&pkt2);
     assert!(matches!(res, Ok(Modified)));
+    incr!(g2, ["fw.flows_in", "fw.flows_out", "uft.flows_in"]);
 
     // Ether + IPv4 + TCP
-    assert_eq!(g2_pkt.body_offset(), 14 + 20 + 20);
-    assert_eq!(g2_pkt.body_seg(), 1);
+    assert_eq!(pkt2.body_offset(), 14 + 20 + 20);
+    assert_eq!(pkt2.body_seg(), 1);
 
-    let g2_meta = g2_pkt.meta();
+    let g2_meta = pkt2.meta();
     assert!(g2_meta.outer.ether.is_none());
     assert!(g2_meta.outer.ip.is_none());
     assert!(g2_meta.outer.ulp.is_none());
@@ -710,8 +1230,8 @@ fn overlay_guest_to_guest() {
 
     match g2_meta.inner.ulp.as_ref().unwrap() {
         UlpMeta::Tcp(tcp) => {
-            assert_eq!(tcp.src, 7865);
-            assert_eq!(tcp.dst, 23);
+            assert_eq!(tcp.src, 44490);
+            assert_eq!(tcp.dst, 80);
         }
 
         ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
@@ -742,8 +1262,9 @@ fn guest_to_guest_diff_vpc_no_peer() {
     rsrcs.add(v2p).unwrap();
     let mut lmeta = Meta::new();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    g1_port.start();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
 
     // Add router entry that allows g1 to talk to any other guest on
     // its VPC subnet.
@@ -752,14 +1273,16 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // is part of VNI 99, and g2 is part of VNI 100. Without a VPC
     // Peering Gateway they have no way to reach each other.
     router::add_entry(
-        &g1_port,
+        &g1.port,
         IpCidr::Ip4(g1_cfg.vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
     )
     .unwrap();
+    incr!(g1, ["epoch", "router.rules_out"]);
 
-    let g2_port = oxide_net_setup("g2_port", &g2_cfg);
-    g2_port.start();
+    let mut g2 = oxide_net_setup("g2_port", &g2_cfg);
+    g2.port.start();
+    set_state!(g2, PortState::Running);
 
     // Add router entry that allows Guest 2 to send to Guest 1.
     //
@@ -768,116 +1291,83 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // way a new router entry that applies to many guests can placed
     // once instead of on each port individually.
     router::add_entry(
-        &g2_port,
+        &g2.port,
         IpCidr::Ip4(g1_cfg.vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
     )
     .unwrap();
+    incr!(g2, ["epoch", "router.rules_out"]);
 
     // Allow incoming TCP connection from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
     firewall::add_fw_rule(
-        &g2_port,
+        &g2.port,
         &AddFwRuleReq {
-            port_name: g2_port.name().to_string(),
+            port_name: g2.port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
     )
     .unwrap();
+    incr!(g2, ["epoch", "fw.rules_in"]);
 
     // ================================================================
-    // Generate a telnet SYN packet from g1 to g2.
+    // Run the packet through g1's port in the outbound direction and
+    // verify the packet is dropped.
     // ================================================================
-    let body = vec![];
-    let mut tcp = TcpHdr::new(7865, 23);
-    tcp.set_flags(TcpFlags::SYN);
-    tcp.set_seq(4224936861);
-    let mut ip4 =
-        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
-    ip4.compute_hdr_csum();
-    let tcp_csum =
-        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
-
-    let mut bytes = vec![];
-    bytes.extend_from_slice(&eth.as_bytes());
-    bytes.extend_from_slice(&ip4.as_bytes());
-    bytes.extend_from_slice(&tcp.as_bytes());
-    bytes.extend_from_slice(&body);
-    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
-
-    // ================================================================
-    // Run the telnet SYN packet through g1's port in the outbound
-    // direction and verify the packet is dropped.
-    // ================================================================
-    let res = g1_port.process(Out, &mut g1_pkt, &mut lmeta, &mut rsrcs);
-    println!("=== res: {:?}", res);
+    let mut g1_pkt = http_tcp_syn(&g1_cfg, &g2_cfg);
+    let res = g1.port.process(Out, &mut g1_pkt, &mut lmeta, &mut rsrcs);
     assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
+    incr!(g1, ["fw.flows_in", "fw.flows_out"]);
 }
 
 // Verify that a guest can communicate with the internet.
 #[test]
-fn overlay_guest_to_internet() {
-    // ================================================================
-    // Configure g1 port.
-    // ================================================================
+fn guest_to_internet() {
     let g1_cfg = g1_cfg();
     let v2p = Arc::new(Virt2Phys::new());
     let mut rsrcs = Resources::new();
     rsrcs.add(v2p).unwrap();
     let mut lmeta = Meta::new();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    g1_port.start();
-
-    // Add router entry that allows Guest 1 to send to Guest 2.
+    // Add router entry that allows g1 to route to internet.
     router::add_entry(
-        &g1_port,
+        &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
     )
     .unwrap();
-
-    let dst_ip = "52.10.128.69".parse().unwrap();
+    incr!(g1, ["epoch", "router.rules_out"]);
 
     // ================================================================
     // Generate a TCP SYN packet from g1 to zinascii.com
     // ================================================================
-    let body = vec![];
-    let mut tcp = TcpHdr::new(54854, 443);
-    tcp.set_flags(TcpFlags::SYN);
-    tcp.set_seq(1741469041);
-    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, dst_ip);
-    ip4.compute_hdr_csum();
-    let tcp_csum =
-        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(
-        EtherType::Ipv4,
-        g1_cfg.private_mac,
-        MacAddr::from(GW_MAC_ADDR),
+    let dst_ip = "52.10.128.69".parse().unwrap();
+    let mut pkt1 = http_tcp_syn2(g1_cfg.private_mac, g1_cfg.private_ip, dst_ip);
+
+    // ================================================================
+    // Run the packet through g1's port in the outbound direction and
+    // verify the resulting packet meets expectations.
+    // ================================================================
+    let res = g1.port.process(Out, &mut pkt1, &mut lmeta, &mut rsrcs);
+    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+    incr!(
+        g1,
+        [
+            "fw.flows_out",
+            "fw.flows_in",
+            "nat.flows_out",
+            "nat.flows_in",
+            "uft.flows_out"
+        ]
     );
 
-    let mut bytes = vec![];
-    bytes.extend_from_slice(&eth.as_bytes());
-    bytes.extend_from_slice(&ip4.as_bytes());
-    bytes.extend_from_slice(&tcp.as_bytes());
-    bytes.extend_from_slice(&body);
-    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
-
-    // ================================================================
-    // Run the telnet SYN packet through g1's port in the outbound
-    // direction and verify the resulting packet meets expectations.
-    // ================================================================
-    let res = g1_port.process(Out, &mut g1_pkt, &mut lmeta, &mut rsrcs);
-    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-
     // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
-    assert_eq!(g1_pkt.body_offset(), 14 + 40 + 8 + 8 + 14 + 20 + 20);
-    assert_eq!(g1_pkt.body_seg(), 1);
-
-    let meta = g1_pkt.meta();
+    assert_eq!(pkt1.body_offset(), 14 + 40 + 8 + 8 + 14 + 20 + 20);
+    assert_eq!(pkt1.body_seg(), 1);
+    let meta = pkt1.meta();
     match meta.outer.ether.as_ref() {
         Some(eth) => {
             assert_eq!(eth.src, MacAddr::ZERO);
@@ -947,7 +1437,7 @@ fn overlay_guest_to_internet() {
                     .next()
                     .unwrap(),
             );
-            assert_eq!(tcp.dst, 443);
+            assert_eq!(tcp.dst, 80);
         }
 
         ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
@@ -1028,8 +1518,9 @@ fn arp_gateway() {
     let cfg = g1_cfg();
     let mut rsrcs = Resources::new();
     let mut lmeta = Meta::new();
-    let port = oxide_net_setup("arp_hairpin", &cfg);
-    port.start();
+    let mut g1 = oxide_net_setup("arp_hairpin", &cfg);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
     let reply_hdr_sz = ETHER_HDR_SZ + ARP_HDR_SZ;
 
     let pkt = Packet::alloc(42);
@@ -1060,7 +1551,7 @@ fn arp_gateway() {
     let _ = wtr.write(ArpEth4PayloadRaw::from(arp).as_bytes()).unwrap();
     let mut pkt = wtr.finish().parse().unwrap();
 
-    let res = port.process(Out, &mut pkt, &mut lmeta, &mut rsrcs);
+    let res = g1.port.process(Out, &mut pkt, &mut lmeta, &mut rsrcs);
     match res {
         Ok(Hairpin(hppkt)) => {
             let hppkt = hppkt.parse().unwrap();
@@ -1087,13 +1578,11 @@ fn arp_gateway() {
 
         res => panic!("expected a Hairpin, got {:?}", res),
     }
+    assert_port!(g1);
 }
 
 #[test]
 fn flow_expiration() {
-    // ================================================================
-    // Configure ports for g1 and g2.
-    // ================================================================
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
     let g2_phys =
@@ -1107,69 +1596,45 @@ fn flow_expiration() {
     rsrcs.add(v2p).unwrap();
     let mut lmeta = Meta::new();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    g1_port.start();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
     let now = Moment::now();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
     router::add_entry(
-        &g1_port,
+        &g1.port,
         IpCidr::Ip4(g2_cfg.vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet)),
     )
     .unwrap();
+    incr!(g1, ["epoch", "router.rules_out"]);
 
     // ================================================================
-    // Generate a telnet SYN packet from g1 to g2.
+    // Run the packet through g1's port in the outbound direction and
+    // verify the resulting packet meets expectations.
     // ================================================================
-    let body = vec![];
-    let mut tcp = TcpHdr::new(7865, 23);
-    tcp.set_flags(TcpFlags::SYN);
-    tcp.set_seq(4224936861);
-    let mut ip4 =
-        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
-    ip4.compute_hdr_csum();
-    let tcp_csum =
-        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
-
-    let mut bytes = vec![];
-    bytes.extend_from_slice(&eth.as_bytes());
-    bytes.extend_from_slice(&ip4.as_bytes());
-    bytes.extend_from_slice(&tcp.as_bytes());
-    bytes.extend_from_slice(&body);
-    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
-
-    // ================================================================
-    // Run the telnet SYN packet through g1's port in the outbound
-    // direction and verify the resulting packet meets expectations.
-    // ================================================================
-    let res = g1_port.process(Out, &mut g1_pkt, &mut lmeta, &mut rsrcs);
+    let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
+    let res = g1.port.process(Out, &mut pkt1, &mut lmeta, &mut rsrcs);
     assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
 
     // ================================================================
     // Verify expiration
     // ================================================================
-    g1_port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0));
-    assert_eq!(g1_port.num_flows("firewall", In), 1);
-    assert_eq!(g1_port.num_flows("firewall", Out), 1);
-    assert_eq!(g1_port.num_flows("uft", In), 0);
-    assert_eq!(g1_port.num_flows("uft", Out), 1);
+    g1.port
+        .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0))
+        .unwrap();
+    assert_port!(g1);
 
-    g1_port
-        .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64 + 1, 0));
-    assert_eq!(g1_port.num_flows("firewall", In), 0);
-    assert_eq!(g1_port.num_flows("firewall", Out), 0);
-    assert_eq!(g1_port.num_flows("uft", In), 0);
-    assert_eq!(g1_port.num_flows("uft", Out), 0);
+    g1.port
+        .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64 + 1, 0))
+        .unwrap();
+    zero_flows!(g1);
 }
 
 #[test]
 fn firewall_replace_rules() {
-    // ================================================================
-    // Configure ports for g1 and g2.
-    // ================================================================
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
     let g2_phys =
@@ -1183,59 +1648,43 @@ fn firewall_replace_rules() {
     rsrcs.add(v2p.clone()).unwrap();
     let mut lmeta = Meta::new();
 
-    let g1_port = oxide_net_setup("g1_port", &g1_cfg);
-    g1_port.start();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg);
+    g1.port.start();
+    set_state!(g1, PortState::Running);
 
     // Add router entry that allows Guest 1 to send to Guest 2.
     router::add_entry(
-        &g1_port,
+        &g1.port,
         IpCidr::Ip4(g2_cfg.vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet)),
     )
     .unwrap();
+    incr!(g1, ["epoch", "router.rules_out"]);
 
-    let g2_port = oxide_net_setup("g2_port", &g2_cfg);
-    g2_port.start();
+    let mut g2 = oxide_net_setup("g2_port", &g2_cfg);
+    g2.port.start();
+    set_state!(g2, PortState::Running);
 
     // Allow incoming TCP connection on g2 from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
     firewall::add_fw_rule(
-        &g2_port,
+        &g2.port,
         &AddFwRuleReq {
-            port_name: g2_port.name().to_string(),
+            port_name: g2.port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
     )
     .unwrap();
-
-    // ================================================================
-    // Generate a telnet SYN packet from g1 to g2.
-    // ================================================================
-    let body = vec![];
-    let mut tcp = TcpHdr::new(7865, 23);
-    tcp.set_flags(TcpFlags::SYN);
-    tcp.set_seq(4224936861);
-    let mut ip4 =
-        Ipv4Hdr::new_tcp(&mut tcp, &body, g1_cfg.private_ip, g2_cfg.private_ip);
-    ip4.compute_hdr_csum();
-    let tcp_csum =
-        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, g1_cfg.private_mac, g1_cfg.gw_mac);
-
-    let mut bytes = vec![];
-    bytes.extend_from_slice(&eth.as_bytes());
-    bytes.extend_from_slice(&ip4.as_bytes());
-    bytes.extend_from_slice(&tcp.as_bytes());
-    bytes.extend_from_slice(&body);
-    let mut g1_pkt = Packet::copy(&bytes).parse().unwrap();
+    incr!(g2, ["epoch", "fw.rules_in"]);
 
     // ================================================================
     // Run the telnet SYN packet through g1's port in the outbound
     // direction and verify if passes the firewall.
     // ================================================================
-    let res = g1_port.process(Out, &mut g1_pkt, &mut lmeta, &mut rsrcs);
+    let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
+    let res = g1.port.process(Out, &mut pkt1, &mut lmeta, &mut rsrcs);
     assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
 
     // ================================================================
     // Modify the outgoing ruleset, but still allow the traffic to
@@ -1248,18 +1697,26 @@ fn firewall_replace_rules() {
     let any_out = "dir=out action=deny priority=65535 protocol=any";
     let tcp_out = "dir=out action=allow priority=1000 protocol=TCP";
     firewall::set_fw_rules(
-        &g1_port,
+        &g1.port,
         &SetFwRulesReq {
-            port_name: g1_port.name().to_string(),
+            port_name: g1.port.name().to_string(),
             rules: vec![any_out.parse().unwrap(), tcp_out.parse().unwrap()],
         },
     )
     .unwrap();
+    update!(
+        g1,
+        [
+            "incr:epoch",
+            "set:fw.flows_in=0,fw.flows_out=0,fw.rules_out=2,fw.rules_in=0"
+        ]
+    );
     rsrcs.clear();
     rsrcs.add(v2p.clone()).unwrap();
-    let mut g1_pkt2 = Packet::copy(&bytes).parse().unwrap();
-    let res = g1_port.process(Out, &mut g1_pkt2, &mut lmeta, &mut rsrcs);
+    let mut pkt2 = http_tcp_syn(&g1_cfg, &g2_cfg);
+    let res = g1.port.process(Out, &mut pkt2, &mut lmeta, &mut rsrcs);
     assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["fw.flows_in", "fw.flows_out"]);
 
     // ================================================================
     // Now that the packet has been encap'd let's play the role of
@@ -1267,44 +1724,42 @@ fn firewall_replace_rules() {
     // of the real process we first dump the raw bytes of g1's
     // outgoing packet and then reparse it.
     // ================================================================
-    let mblk = g1_pkt.unwrap();
-    let mut g2_pkt =
+    let mblk = pkt2.unwrap();
+    let mut pkt3 =
         unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
+    let mut pkt3_copy =
+        Packet::<Initialized>::copy(&pkt3.all_bytes()).parse().unwrap();
     rsrcs.clear();
     rsrcs.add(v2p).unwrap();
-    let res = g2_port.process(In, &mut g2_pkt, &mut lmeta, &mut rsrcs);
+    let res = g2.port.process(In, &mut pkt3, &mut lmeta, &mut rsrcs);
     assert!(matches!(res, Ok(Modified)));
+    incr!(g2, ["fw.flows_in", "fw.flows_out", "uft.flows_in"]);
 
     // ================================================================
     // Replace g2's firewall rule set to deny all inbound TCP traffic.
     // Verify the rules have been replaced and retry processing of the
     // g2_pkt, but this time it should be dropped.
     // ================================================================
-    assert_eq!(g2_port.num_rules("firewall", In), 2);
-    assert_eq!(g2_port.num_flows("firewall", In), 1);
     let new_rule = "dir=in action=deny priority=1000 protocol=TCP";
     firewall::set_fw_rules(
-        &g2_port,
+        &g2.port,
         &SetFwRulesReq {
-            port_name: g2_port.name().to_string(),
+            port_name: g2.port.name().to_string(),
             rules: vec![new_rule.parse().unwrap()],
         },
     )
     .unwrap();
-    assert_eq!(g2_port.num_rules("firewall", In), 1);
-    assert_eq!(g2_port.num_flows("firewall", In), 0);
-
-    // Need to create a new g2_pkt by re-running the process.
-    let mut g1_pkt3 = Packet::copy(&bytes).parse().unwrap();
-    let res = g1_port.process(Out, &mut g1_pkt3, &mut lmeta, &mut rsrcs);
-    assert!(matches!(res, Ok(Modified)));
-    let mblk2 = g1_pkt3.unwrap();
-    let mut g2_pkt2 =
-        unsafe { Packet::<Initialized>::wrap(mblk2).parse().unwrap() };
+    update!(
+        g2,
+        [
+            "incr:epoch",
+            "set:fw.flows_in=0,fw.flows_out=0,fw.rules_in=1,fw.rules_out=0"
+        ]
+    );
 
     // Verify the packet is dropped and that the firewall flow table
     // entry (along with its dual) was invalidated.
-    let res = g2_port.process(In, &mut g2_pkt2, &mut lmeta, &mut rsrcs);
+    let res = g2.port.process(In, &mut pkt3_copy, &mut lmeta, &mut rsrcs);
     use super::port::DropReason;
     match res {
         Ok(ProcessResult::Drop { reason: DropReason::Layer { name } }) => {
@@ -1313,4 +1768,5 @@ fn firewall_replace_rules() {
 
         _ => panic!("expected drop but got: {:?}", res),
     }
+    update!(g2, ["set:uft.flows_in=0"]);
 }

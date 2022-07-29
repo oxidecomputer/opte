@@ -294,6 +294,10 @@ impl TcpHdr {
         usize::from(self.hdr_len_bytes) - TCP_HDR_SZ
     }
 
+    pub fn set_ack(&mut self, ack: u32) {
+        self.ack = ack;
+    }
+
     pub fn set_csum(&mut self, csum: [u8; 2]) {
         self.csum = csum;
     }

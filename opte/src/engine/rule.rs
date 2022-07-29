@@ -75,7 +75,7 @@ pub trait MatchRange<M: MatchRangeVal> {
     fn match_range(&self, start: &M, end: &M) -> bool;
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum EtherTypeMatch {
     Exact(u16),
 }
@@ -98,7 +98,7 @@ impl Display for EtherTypeMatch {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum EtherAddrMatch {
     Exact(MacAddr),
 }
@@ -121,7 +121,7 @@ impl Display for EtherAddrMatch {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ArpHtypeMatch {
     Exact(u16),
 }
@@ -144,7 +144,7 @@ impl Display for ArpHtypeMatch {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ArpPtypeMatch {
     Exact(u16),
 }
@@ -167,7 +167,7 @@ impl Display for ArpPtypeMatch {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ArpOpMatch {
     Exact(ArpOp),
 }
@@ -190,7 +190,7 @@ impl Display for ArpOpMatch {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Ipv4AddrMatch {
     Exact(Ipv4Addr),
     Prefix(Ipv4Cidr),
@@ -216,7 +216,7 @@ impl Display for Ipv4AddrMatch {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, Deserialize, PartialEq, Serialize)]
 pub enum IpProtoMatch {
     Exact(Protocol),
 }
@@ -247,7 +247,7 @@ impl MatchExact<u16> for u16 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum PortMatch {
     Exact(u16),
 }
@@ -286,6 +286,34 @@ pub enum Predicate {
     Not(Box<Predicate>),
     Meta(Box<dyn MetaPredicate>),
 }
+
+impl PartialEq for Predicate {
+    fn eq(&self, other: &Self) -> bool {
+        use Predicate::*;
+
+        match (self, other) {
+            (InnerEtherType(s), InnerEtherType(o)) => s == o,
+            (InnerEtherDst(s), InnerEtherDst(o)) => s == o,
+            (InnerEtherSrc(s), InnerEtherSrc(o)) => s == o,
+            (InnerArpHtype(s), InnerArpHtype(o)) => s == o,
+            (InnerArpPtype(s), InnerArpPtype(o)) => s == o,
+            (InnerArpOp(s), InnerArpOp(o)) => s == o,
+            (InnerSrcIp4(s), InnerSrcIp4(o)) => s == o,
+            (InnerDstIp4(s), InnerDstIp4(o)) => s == o,
+            (InnerIpProto(s), InnerIpProto(o)) => s == o,
+            (InnerSrcPort(s), InnerSrcPort(o)) => s == o,
+            (InnerDstPort(s), InnerDstPort(o)) => s == o,
+            (Not(s), Not(o)) => s == o,
+            (Meta(s), Self::Meta(o)) => {
+                // Avert your eyes!
+                s.to_string() == o.to_string()
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Predicate {}
 
 pub trait MetaPredicate: Debug + Display {
     fn is_match(&self, meta: &Meta) -> bool;
@@ -558,7 +586,7 @@ impl Predicate {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DataPredicate {
     Dhcp4MsgType(DhcpMessageType),
     Icmp4MsgType(Icmp4MessageType),
@@ -1216,6 +1244,36 @@ pub struct RulePredicates {
     data_preds: Vec<DataPredicate>,
 }
 
+impl PartialEq for RulePredicates {
+    /// Rule predicates are equal when both contain identical sets of
+    /// header and data predicates.
+    fn eq(&self, other: &Self) -> bool {
+        if self.hdr_preds.len() != other.hdr_preds.len() {
+            return false;
+        }
+
+        if self.data_preds.len() != other.data_preds.len() {
+            return false;
+        }
+
+        for hp in &self.hdr_preds {
+            if !other.hdr_preds.contains(hp) {
+                return false;
+            }
+        }
+
+        for dp in &self.data_preds {
+            if !other.data_preds.contains(dp) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+impl Eq for RulePredicates {}
+
 pub trait RuleState {}
 
 #[derive(Debug)]
@@ -1225,7 +1283,7 @@ pub struct Ready {
 }
 impl RuleState for Ready {}
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct Finalized {
     preds: Option<RulePredicates>,
 }
@@ -1237,6 +1295,14 @@ pub struct Rule<S: RuleState> {
     action: Action,
     priority: u16,
 }
+
+impl PartialEq for Rule<Finalized> {
+    fn eq(&self, other: &Self) -> bool {
+        self.state.preds == other.state.preds
+    }
+}
+
+impl Eq for Rule<Finalized> {}
 
 impl<S: RuleState> Rule<S> {
     pub fn action(&self) -> &Action {

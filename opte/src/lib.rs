@@ -144,6 +144,14 @@ mod opte_provider {
     ) {
     }
     fn rule__no__match(port: &str, layer: &str, dir: Direction, flow: &str) {}
+    fn tcp__err(
+        dir: Direction,
+        port: &str,
+        flow: &str,
+        pkt: &illumos_sys_hdrs::uintptr_t,
+        msg: &str,
+    ) {
+    }
     fn tcp__flow__state(
         port: &str,
         flow: &str,

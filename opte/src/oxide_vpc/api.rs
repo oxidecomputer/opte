@@ -217,6 +217,19 @@ pub struct AddRouterEntryIpv4Req {
     pub target: RouterTarget,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DelRouterEntryIpv4Req {
+    pub port_name: String,
+    pub dest: Ipv4Cidr,
+    pub target: RouterTarget,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum DelRouterEntryIpv4Resp {
+    Ok,
+    NotFound,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AddFwRuleReq {
     pub port_name: String,

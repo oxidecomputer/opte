@@ -1026,6 +1026,22 @@ impl Layer {
         }
     }
 
+    /// Fine a rule and return its id.
+    ///
+    /// Search for a matching rule that has the same direction and
+    /// predicates as the specified rule. If no matching rule is
+    /// found, then `None` is returned.
+    pub fn find_rule(
+        &self,
+        dir: Direction,
+        rule: &Rule<Finalized>,
+    ) -> Option<RuleId> {
+        match dir {
+            Direction::Out => self.rules_out.lock().find_rule(rule),
+            Direction::In => self.rules_in.lock().find_rule(rule),
+        }
+    }
+
     /// Set all rules at once, in an atomic manner.
     ///
     /// Updating the ruleset immediately invalidates all flows
@@ -1200,6 +1216,18 @@ impl<'a> RuleTable {
         }
 
         RulePlace::End
+    }
+
+    /// Find the rule and return its id.
+    ///
+    /// Search for a matching rule that has the same predicates as the
+    /// specified rule. If no matching rule is found, then `None` is
+    /// returned.
+    pub fn find_rule(&self, query_rule: &Rule<Finalized>) -> Option<RuleId> {
+        self.rules
+            .iter()
+            .find(|(_rule_id, rule)| rule == query_rule)
+            .map(|(rule_id, _)| *rule_id)
     }
 
     fn new(port: &str, layer: &str, dir: Direction) -> Self {
