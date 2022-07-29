@@ -794,17 +794,20 @@ impl Port {
 
         for layer in &self.layers {
             if layer.name() == layer_name {
-                if layer.remove_rule(dir, id).is_err() {
-                    return Err(OpteError::RuleNotFound(id));
+                match layer.remove_rule(dir, id) {
+                    Err(_) => return Err(OpteError::RuleNotFound(id)),
+                    Ok(()) => {
+                        // XXX There is a tiny window between the rule being
+                        // removed and the epoch incremented. For now we don't
+                        // worry about this as a few packets getting by with
+                        // the old rule set is not a major issue. But in the
+                        // future we could eliminate this window by passing a
+                        // reference to the epoch to `Layer::remove_rule()`
+                        // and let it perform the increment.
+                        self.epoch.fetch_add(1, SeqCst);
+                        return Ok(());
+                    }
                 }
-                // XXX There is a tiny window between the rule being
-                // removed and the epoch incremented. For now we don't
-                // worry about this as a few packets getting by with
-                // the old rule set is not a major issue. But in the
-                // future we could eliminate this window by passing a
-                // reference to the epoch to `Layer::remove_rule()`
-                // and let it perform the increment.
-                self.epoch.fetch_add(1, SeqCst);
             }
         }
 
