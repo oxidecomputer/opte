@@ -19,18 +19,18 @@ cfg_if! {
     }
 }
 
-use crate::api::{Direction, OpteError};
-use crate::engine::layer::{InnerFlowId, Layer};
-use crate::engine::port::meta::Meta;
-use crate::engine::port::{Port, PortBuilder, Pos};
-use crate::engine::rule::{
-    self, AllowOrDeny, DataPredicate, IdentityDesc, IpProtoMatch,
-    Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
-};
-pub use crate::oxide_vpc::api::ProtoFilter;
-use crate::oxide_vpc::api::{
+pub use crate::api::ProtoFilter;
+use crate::api::{
     Action, AddFwRuleReq, Address, FirewallRule, Ports, RemFwRuleReq,
     SetFwRulesReq,
+};
+use opte::api::{Direction, OpteError};
+use opte::engine::layer::{InnerFlowId, Layer};
+use opte::engine::port::meta::Meta;
+use opte::engine::port::{Port, PortBuilder, Pos};
+use opte::engine::rule::{
+    self, AllowOrDeny, DataPredicate, IdentityDesc, IpProtoMatch,
+    Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
 };
 
 pub const FW_LAYER_NAME: &'static str = "firewall";

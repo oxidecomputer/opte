@@ -7,18 +7,14 @@
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::result;
-
+use cstr_core::CString;
 use ddi::{c_int, c_void};
 use illumos_ddi_dki as ddi;
-
 use opte::api::{
     CmdOk, OpteCmd, OpteCmdIoctl, OpteError, API_VERSION,
     OPTE_CMD_RESP_COPY_OUT,
 };
-use opte::CString;
-
 use postcard;
-
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 

@@ -12,12 +12,12 @@ cfg_if! {
     }
 }
 
-use crate::api::{Direction, OpteError};
-use crate::engine::icmp::Icmp4EchoReply;
-use crate::engine::layer::Layer;
-use crate::engine::port::{PortBuilder, Pos};
-use crate::engine::rule::{Action, Rule};
-use crate::oxide_vpc::VpcCfg;
+use crate::VpcCfg;
+use opte::api::{Direction, OpteError};
+use opte::engine::icmp::Icmp4EchoReply;
+use opte::engine::layer::Layer;
+use opte::engine::port::{PortBuilder, Pos};
+use opte::engine::rule::{Action, Rule};
 
 pub fn setup(
     pb: &mut PortBuilder,

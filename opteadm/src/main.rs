@@ -20,13 +20,13 @@ use opte::engine::flow_table::FlowEntryDump;
 use opte::engine::ioctl as api;
 use opte::engine::layer::InnerFlowId;
 use opte::engine::rule::RuleDump;
-use opte::oxide_vpc::api::{
+use opteadm::OpteAdm;
+use oxide_vpc::api::{
     Action as FirewallAction, AddRouterEntryIpv4Req, Address,
     Filters as FirewallFilters, FirewallRule, GuestPhysAddr, PhysNet, PortInfo,
     Ports, ProtoFilter, RemFwRuleReq, RouterTarget, SNatCfg, SetVirt2PhysReq,
 };
-use opte::oxide_vpc::engine::overlay::DumpVirt2PhysResp;
-use opteadm::OpteAdm;
+use oxide_vpc::engine::overlay::DumpVirt2PhysResp;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, StructOpt)]

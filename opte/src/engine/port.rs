@@ -5,10 +5,25 @@
 // Copyright 2022 Oxide Computer Company
 
 /// A virtual switch port.
+use super::ether::EtherAddr;
+use super::flow_table::{FlowTable, StateSummary};
+use super::ioctl;
+use super::layer::{
+    InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT,
+};
+use super::packet::{Initialized, Packet, PacketMeta, PacketState, Parsed};
+use super::rule::{ht_probe, Action, Finalized, Rule, HT};
+use super::sync::{KMutex, KMutexType};
+use super::tcp::TcpState;
+use super::tcp_state::TcpFlowState;
+use super::time::Moment;
+use crate::api::{Direction, OpteError};
+use crate::ExecCtx;
 use core::fmt::{self, Display};
 use core::num::NonZeroU32;
 use core::result;
 use core::sync::atomic::{AtomicU64, Ordering::SeqCst};
+use cstr_core::CString;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -23,21 +38,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use super::ether::EtherAddr;
-use super::flow_table::{FlowTable, StateSummary};
-use super::ioctl;
-use super::layer::{
-    InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT,
-};
-use super::packet::{Initialized, Packet, PacketMeta, PacketState, Parsed};
-use super::rule::{ht_probe, Action, Finalized, Rule, HT};
-use super::sync::{KMutex, KMutexType};
-use super::tcp::TcpState;
-use super::tcp_state::TcpFlowState;
-use super::time::Moment;
-use crate::api::{Direction, OpteError};
-use crate::{CString, ExecCtx};
 
 pub type Result<T> = result::Result<T, OpteError>;
 
@@ -262,7 +262,7 @@ impl PortBuilder {
 /// <method> --> <new state>`.
 ///
 ///
-/// ```
+/// ```text
 /// PortBuilder::create() --> Ready
 /// PortBuilder::restore() --> Restored
 ///
@@ -791,7 +791,6 @@ impl Port {
         dir: Direction,
         pkt: &mut Packet<Parsed>,
         lmeta: &mut meta::Meta,
-        rsrcs: &resources::Resources,
     ) -> result::Result<ProcessResult, ProcessError> {
         // XXX Yes, we are holding this mutex on all admin calls as
         // well. This means admin and datapath block each other --
@@ -823,8 +822,8 @@ impl Port {
         let epoch = self.epoch.load(SeqCst);
         self.port_process_entry_probe(dir, &ifid, epoch, &pkt);
         let res = match dir {
-            Direction::Out => self.process_out(&ifid, epoch, pkt, lmeta, rsrcs),
-            Direction::In => self.process_in(&ifid, epoch, pkt, lmeta, rsrcs),
+            Direction::Out => self.process_out(&ifid, epoch, pkt, lmeta),
+            Direction::In => self.process_in(&ifid, epoch, pkt, lmeta),
         };
         self.port_process_return_probe(dir, &ifid, epoch, &pkt, &res);
         // XXX If this is a Hairpin result there is no need for this call.
@@ -948,13 +947,12 @@ impl Port {
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         lmeta: &mut meta::Meta,
-        rsrcs: &resources::Resources,
     ) -> result::Result<LayerResult, LayerError> {
         match dir {
             Direction::Out => {
                 for layer in &self.layers {
-                    let res = layer
-                        .process(&self.ectx, dir, ifid, pkt, hts, lmeta, rsrcs);
+                    let res =
+                        layer.process(&self.ectx, dir, ifid, pkt, hts, lmeta);
 
                     match res {
                         Ok(LayerResult::Allow) => (),
@@ -967,8 +965,8 @@ impl Port {
 
             Direction::In => {
                 for layer in self.layers.iter().rev() {
-                    let res = layer
-                        .process(&self.ectx, dir, ifid, pkt, hts, lmeta, rsrcs);
+                    let res =
+                        layer.process(&self.ectx, dir, ifid, pkt, hts, lmeta);
 
                     match res {
                         Ok(LayerResult::Allow) => (),
@@ -1196,12 +1194,11 @@ impl Port {
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         lmeta: &mut meta::Meta,
-        rsrcs: &resources::Resources,
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::In;
 
         let mut hts = Vec::new();
-        let res = self.layers_process(In, ufid_in, pkt, &mut hts, lmeta, rsrcs);
+        let res = self.layers_process(In, ufid_in, pkt, &mut hts, lmeta);
         match res {
             Ok(LayerResult::Allow) => {
                 // If there is no flow ID, then do not create a UFT
@@ -1263,7 +1260,6 @@ impl Port {
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         lmeta: &mut meta::Meta,
-        rsrcs: &resources::Resources,
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::In;
 
@@ -1318,7 +1314,7 @@ impl Port {
             None => drop(lock),
         };
 
-        self.process_in_miss(ufid_in, epoch, pkt, lmeta, rsrcs)
+        self.process_in_miss(ufid_in, epoch, pkt, lmeta)
     }
 
     // Process the TCP packet for the purposes of connection tracking
@@ -1422,7 +1418,6 @@ impl Port {
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         lmeta: &mut meta::Meta,
-        rsrcs: &resources::Resources,
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::Out;
 
@@ -1450,8 +1445,7 @@ impl Port {
         }
 
         let mut hts = Vec::new();
-        let res =
-            self.layers_process(Out, ufid_out, pkt, &mut hts, lmeta, rsrcs);
+        let res = self.layers_process(Out, ufid_out, pkt, &mut hts, lmeta);
         let hte = HtEntry { hts, epoch };
 
         match res {
@@ -1484,7 +1478,6 @@ impl Port {
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         lmeta: &mut meta::Meta,
-        rsrcs: &resources::Resources,
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::Out;
 
@@ -1557,7 +1550,7 @@ impl Port {
             None => drop(lock),
         }
 
-        self.process_out_miss(ufid_out, epoch, pkt, lmeta, rsrcs)
+        self.process_out_miss(ufid_out, epoch, pkt, lmeta)
     }
 
     fn uft_invalidate(
@@ -1651,7 +1644,10 @@ impl Port {
 // The follow functions are useful for validating state during
 // testing. If one of these functions becomes useful outside of
 // testing, then add it to the impl block above.
-#[cfg(test)]
+//
+// TODO Move these to main Port impl
+//
+// #[cfg(test)]
 impl Port {
     pub fn epoch(&self) -> u64 {
         self.epoch.load(SeqCst)
@@ -1834,65 +1830,6 @@ pub mod meta {
             V: 'static + Send + Sync,
         {
             self.inner.get_mut::<V>()
-        }
-    }
-}
-
-pub mod resources {
-    use crate::engine::rule::Resource;
-
-    #[derive(Debug)]
-    pub enum Error {
-        AlreadyExists,
-    }
-
-    /// A map of the available [`Resource`] types.
-    pub struct Resources {
-        inner: anymap::Map<dyn anymap::any::Any + Send + Sync>,
-    }
-
-    impl Resources {
-        pub fn new() -> Self {
-            Resources { inner: anymap::Map::new() }
-        }
-
-        /// Add a new [`Resource`].
-        ///
-        /// # Errors
-        ///
-        /// Return an error if a resource of this type already exists.
-        pub fn add<V>(&mut self, val: V) -> Result<(), Error>
-        where
-            V: 'static + Resource + Send + Sync,
-        {
-            if self.inner.contains::<V>() {
-                return Err(Error::AlreadyExists);
-            }
-
-            self.inner.insert(val);
-            Ok(())
-        }
-
-        /// Clear all entries.
-        #[cfg(test)]
-        pub fn clear(&mut self) {
-            self.inner.clear();
-        }
-
-        /// Remove the [`Resoruce`].
-        pub fn remove<V>(&mut self) -> Option<V>
-        where
-            V: 'static + Resource + Send + Sync,
-        {
-            self.inner.remove::<V>()
-        }
-
-        /// Get a shared reference to the [`Resource`].
-        pub fn get<V>(&self) -> Option<&V>
-        where
-            V: 'static + Resource + Send + Sync,
-        {
-            self.inner.get::<V>()
         }
     }
 }

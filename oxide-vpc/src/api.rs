@@ -18,7 +18,7 @@ cfg_if! {
     }
 }
 
-use crate::api::{
+use opte::api::{
     Direction, IpAddr, IpCidr, Ipv4Addr, Ipv4Cidr, Ipv6Addr, MacAddr, Protocol,
     Vni, DYNAMIC_PORT,
 };
@@ -200,7 +200,7 @@ pub struct ListPortsResp {
     pub ports: Vec<PortInfo>,
 }
 
-impl crate::api::cmd::CmdOk for ListPortsResp {}
+impl opte::api::cmd::CmdOk for ListPortsResp {}
 
 /// Set mapping from VPC IP to physical network destination.
 #[derive(Clone, Debug, Deserialize, Serialize)]

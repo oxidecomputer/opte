@@ -13,6 +13,7 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
 # place this feature flag will be replaced/removed.
 opte = { path = "../opte", features = ["engine"] }
 opte-ioctl = { path = "../opte-ioctl" }
+oxide-vpc = { path = "../oxide-vpc", features = ["api", "engine"] }
 postcard = "0.7.0"
 serde = "1.0"
 structopt = "0.3.23"

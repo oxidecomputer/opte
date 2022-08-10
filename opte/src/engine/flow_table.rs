@@ -4,8 +4,13 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::layer::InnerFlowId;
+use super::time::{Moment, MILLIS};
+use crate::api::OpteError;
 use core::fmt;
 use core::num::NonZeroU32;
+use cstr_core::CString;
+use serde::{Deserialize, Serialize};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -20,13 +25,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use serde::{Deserialize, Serialize};
-
-use super::layer::InnerFlowId;
-use super::time::{Moment, MILLIS};
-use crate::api::OpteError;
-use crate::CString;
 
 // XXX This really shouldn't be pub but for now we are leaking this
 // info for the purpose of testing until the Port API has support for

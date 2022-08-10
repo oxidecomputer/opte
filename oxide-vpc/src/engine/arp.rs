@@ -12,15 +12,15 @@ cfg_if! {
     }
 }
 
-use crate::api::{Direction, MacAddr, OpteError};
-use crate::engine::arp::ArpReply;
-use crate::engine::ether::ETHER_TYPE_ARP;
-use crate::engine::layer::Layer;
-use crate::engine::port::{PortBuilder, Pos};
-use crate::engine::rule::{
+use crate::VpcCfg;
+use opte::api::{Direction, MacAddr, OpteError};
+use opte::engine::arp::ArpReply;
+use opte::engine::ether::ETHER_TYPE_ARP;
+use opte::engine::layer::Layer;
+use opte::engine::port::{PortBuilder, Pos};
+use opte::engine::rule::{
     Action, EtherAddrMatch, EtherTypeMatch, Predicate, Rule,
 };
-use crate::oxide_vpc::VpcCfg;
 
 pub fn setup(
     pb: &mut PortBuilder,

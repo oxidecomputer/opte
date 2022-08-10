@@ -23,9 +23,12 @@ illumos-ddi-dki:: A raw interface to the illumos DDI/DKI APIs.
 illumos-sys-hdrs:: A raw interface to various illumos `uts/common/sys`
 headers.
 
-opte-ioctl:: The userland library used for interacting with OPTE.
+opte:: The implementation of the generic bits of OPTE. This acts as
+both a library and framework which is used as the basis for
+implementing some type of network. For example, the oxide-vpc crate
+uses the opte crate to implement the Oxide VPC network.
 
-opte-core:: The implementation of the *engine* in OPTE.
+opte-ioctl:: The userland library used for interacting with OPTE.
 
 opte-drv (obsolete):: A kernel module which hooks into the network
 path between viona (bhyve) and mac, feeding all packets into opte-core
@@ -34,6 +37,8 @@ it still remains until all features are transitioned over.
 
 opteadm:: The command line utility used to configure and inspect OPTE.
 This is meant to be used by an operator, not by a client program.
+
+oxide-vpc:: An implementation of the Oxide VPC network.
 
 pkg:: A script for generating an IPS package for the `xde` driver.
 

@@ -4,23 +4,6 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use core::fmt::{self, Debug, Display};
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::boxed::Box;
-        use alloc::string::{String, ToString};
-        use alloc::sync::Arc;
-        use alloc::vec::Vec;
-        use illumos_ddi_dki::uintptr_t;
-    } else {
-        use std::boxed::Box;
-        use std::string::{String, ToString};
-        use std::sync::Arc;
-        use std::vec::Vec;
-    }
-}
-
 use super::arp::{
     ArpEth4Payload, ArpEth4PayloadRaw, ArpMeta, ArpOp, ARP_HTYPE_ETHERNET,
 };
@@ -40,18 +23,30 @@ use super::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
 };
 use super::port::meta::Meta;
-use super::port::resources::Resources;
 use super::tcp::TcpMeta;
 use super::udp::UdpMeta;
 use crate::api::{Direction, MacAddr};
-use crate::CString;
-
+use core::fmt::{self, Debug, Display};
+use cstr_core::CString;
 use illumos_ddi_dki::c_char;
-
 use serde::{Deserialize, Serialize};
-
 use smoltcp::phy::ChecksumCapabilities as Csum;
 use smoltcp::wire::{DhcpPacket, DhcpRepr, Icmpv4Packet, Icmpv4Repr};
+
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::boxed::Box;
+        use alloc::string::{String, ToString};
+        use alloc::sync::Arc;
+        use alloc::vec::Vec;
+        use illumos_ddi_dki::uintptr_t;
+    } else {
+        use std::boxed::Box;
+        use std::string::{String, ToString};
+        use std::sync::Arc;
+        use std::vec::Vec;
+    }
+}
 
 // A marker trait for types which represent packet payloads. Examples
 // of payloads include an ARP request, ICMP body, or TCP body.
@@ -873,7 +868,6 @@ impl StaticAction for Identity {
         _dir: Direction,
         _flow_id: &InnerFlowId,
         _meta: &mut Meta,
-        _rsrcs: &Resources,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HT::identity(&self.name)))
     }
@@ -1075,7 +1069,6 @@ pub trait StaticAction: Display {
         dir: Direction,
         flow_id: &InnerFlowId,
         meta: &mut Meta,
-        rsrcs: &Resources,
     ) -> GenHtResult;
 
     /// Return the predicates implicit to this action.

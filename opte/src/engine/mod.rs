@@ -37,9 +37,6 @@ pub mod time;
 #[macro_use]
 pub mod udp;
 
-#[cfg(test)]
-mod int_test;
-
 pub use crate::api::Direction;
 use core::fmt::{self, Display};
 use ip4::IpError;
@@ -156,7 +153,7 @@ cfg_if! {
 
             unsafe {
                 if opte_debug != 0 {
-                    let cstr = crate::CString::new(msg).unwrap();
+                    let cstr = cstr_core::CString::new(msg).unwrap();
                     ddi::cmn_err(CE_NOTE, cstr.as_ptr());
                 }
             }
@@ -169,7 +166,7 @@ cfg_if! {
             use ddi::CE_WARN;
 
             unsafe {
-                let cstr = crate::CString::new(msg).unwrap();
+                let cstr = cstr_core::CString::new(msg).unwrap();
                 ddi::cmn_err(CE_WARN, cstr.as_ptr());
             }
         }

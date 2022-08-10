@@ -24,15 +24,15 @@ cfg_if! {
     }
 }
 
-use crate::api::{
+use crate::VpcCfg;
+use opte::api::{
     Dhcp4Action, Dhcp4ReplyType, Direction, Ipv4Addr, Ipv4PrefixLen, OpteError,
     SubnetRouterPair,
 };
-use crate::engine::ip4::Ipv4Cidr;
-use crate::engine::layer::Layer;
-use crate::engine::port::{PortBuilder, Pos};
-use crate::engine::rule::{Action, Rule};
-use crate::oxide_vpc::VpcCfg;
+use opte::engine::ip4::Ipv4Cidr;
+use opte::engine::layer::Layer;
+use opte::engine::port::{PortBuilder, Pos};
+use opte::engine::rule::{Action, Rule};
 
 pub fn setup(
     pb: &mut PortBuilder,

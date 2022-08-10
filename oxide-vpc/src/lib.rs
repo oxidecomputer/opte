@@ -24,13 +24,27 @@
 //!
 //! [rfd63]: [RFD 63 Network
 //! Architecture](https://rfd.shared.oxide.computer/rfd/0063)
+#![no_std]
+
+// NOTE: Things get weird if you move the extern crate into cfg_if!.
+#[cfg(any(feature = "std", test))]
+#[macro_use]
+extern crate std;
+
+#[cfg(all(not(feature = "std"), not(test)))]
+#[macro_use]
+extern crate alloc;
+
+#[macro_use]
+extern crate cfg_if;
+
 #[cfg(any(feature = "api", test))]
 pub mod api;
 
 cfg_if! {
     if #[cfg(any(feature = "engine", test))] {
-        use crate::api::{Ipv4Addr, Ipv4Cidr, Ipv6Addr, MacAddr, Vni};
-        use crate::oxide_vpc::api::{PhysNet, SNatCfg};
+        use opte::api::{Ipv4Addr, Ipv4Cidr, Ipv6Addr, MacAddr, Vni};
+        use crate::api::{PhysNet, SNatCfg};
 
         pub mod engine;
 

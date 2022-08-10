@@ -12,9 +12,9 @@ pub use super::mac_sys::*;
 use alloc::string::{String, ToString};
 use bitflags::bitflags;
 use core::ptr;
+use cstr_core::{CStr, CString};
 use illumos_ddi_dki::*;
 use opte::engine::packet::{Initialized, Packet, PacketState};
-use opte::{CStr, CString};
 
 /// A mac client
 #[derive(Clone, Debug)]

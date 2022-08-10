@@ -29,6 +29,7 @@ use illumos_ddi_dki::*;
 use crate::ioctl::IoctlEnvelope;
 use crate::mac::{self, MacClient, MacOpenFlags, MacTxFlags};
 use crate::{dld, dls, ip, secpolicy, sys, warn};
+use cstr_core::{CStr, CString};
 use opte::api::{
     CmdOk, Direction, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
     SetXdeUnderlayReq,
@@ -42,21 +43,18 @@ use opte::engine::packet::{
     Initialized, Packet, PacketRead, PacketReader, ParseError, Parsed,
 };
 use opte::engine::port::meta;
-use opte::engine::port::resources::Resources;
 use opte::engine::port::{Port, PortBuilder, ProcessResult};
 use opte::engine::sync::{KMutex, KMutexType};
 use opte::engine::sync::{KRwLock, KRwLockType};
 use opte::engine::time::{Interval, Moment, Periodic};
-use opte::oxide_vpc::api::{
+use opte::ExecCtx;
+use oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
     ListPortsReq, ListPortsResp, PhysNet, PortInfo, RemFwRuleReq,
     SetFwRulesReq, SetVirt2PhysReq,
 };
-use opte::oxide_vpc::engine::{
-    arp, dhcp4, firewall, icmp, nat, overlay, router,
-};
-use opte::oxide_vpc::VpcCfg;
-use opte::{CStr, CString, ExecCtx};
+use oxide_vpc::engine::{arp, dhcp4, firewall, icmp, nat, overlay, router};
+use oxide_vpc::VpcCfg;
 
 // Entry limits for the varous flow tables.
 //
@@ -486,15 +484,6 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         phys_gw_mac,
     };
 
-    let port = new_port(req.xde_devname.clone(), &vpc_cfg, state.ectx.clone())?;
-
-    let port_periodic = Periodic::new(
-        port.name_cstr().clone(),
-        expire_periodic,
-        Box::new(port.clone()),
-        ONE_SECOND,
-    );
-
     // If this is the first guest in this VPC, then create a new
     // mapping for said VPC. Otherwise, pull the existing one.
     let port_v2p = state.vpc_map.add(
@@ -504,6 +493,20 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             ip: req.src_underlay_addr,
             vni: req.vpc_vni,
         },
+    );
+
+    let port = new_port(
+        req.xde_devname.clone(),
+        &vpc_cfg,
+        port_v2p.clone(),
+        state.ectx.clone(),
+    )?;
+
+    let port_periodic = Periodic::new(
+        port.name_cstr().clone(),
+        expire_periodic,
+        Box::new(port.clone()),
+        ONE_SECOND,
     );
 
     let mut xde = Box::new(XdeDev {
@@ -1245,9 +1248,7 @@ fn guest_loopback(
             // the packet into the inbound processing path of the
             // destination Port.
             let mut meta = meta::Meta::new();
-            let mut rsrcs = Resources::new();
-            let _ = rsrcs.add(dest_dev.port_v2p.clone());
-            match dest_dev.port.process(In, &mut pkt, &mut meta, &rsrcs) {
+            match dest_dev.port.process(In, &mut pkt, &mut meta) {
                 Ok(ProcessResult::Modified) => {
                     guest_loopback_probe(&pkt, src_dev, dest_dev);
 
@@ -1385,9 +1386,7 @@ unsafe extern "C" fn xde_mc_tx(
     // action was taken -- there should be no need to add probes or
     // prints here.
     let mut meta = meta::Meta::new();
-    let mut rsrcs = Resources::new();
-    let _ = rsrcs.add(src_dev.port_v2p.clone());
-    let res = port.process(Direction::Out, &mut pkt, &mut meta, &rsrcs);
+    let res = port.process(Direction::Out, &mut pkt, &mut meta);
     match res {
         Ok(ProcessResult::Modified) => {
             if xde_ext_ip_hack == 1 {
@@ -1860,6 +1859,7 @@ unsafe extern "C" fn xde_mc_propinfo(
 fn new_port(
     name: String,
     cfg: &VpcCfg,
+    v2p: Arc<overlay::Virt2Phys>,
     ectx: Arc<ExecCtx>,
 ) -> Result<Arc<Port>, OpteError> {
     let name_cstr = match CString::new(name.clone()) {
@@ -1880,7 +1880,7 @@ fn new_port(
 
     if unsafe { xde_ext_ip_hack != 1 } {
         warn!("enabling overlay for port: {}", name);
-        overlay::setup(&pb, &cfg, FT_LIMIT_ONE.unwrap())?;
+        overlay::setup(&pb, &cfg, v2p, FT_LIMIT_ONE.unwrap())?;
     } else {
         warn!("disabling overlay for port: {}", name);
     }
@@ -1982,20 +1982,13 @@ unsafe extern "C" fn xde_rx(
 
                 let port = &(*dev).port;
                 let mut meta = meta::Meta::new();
-                let mut rsrcs = Resources::new();
-                let _ = rsrcs.add(dev.port_v2p.clone());
                 if et == EtherType::Ipv4 {
                     let ether_src = hdrs.inner.ether.src();
                     let _ = meta.replace(MacAddr::from(ether_src));
                 }
 
                 let mut pkt_copy = Packet::copy(&bytes).parse().unwrap();
-                let res = port.process(
-                    Direction::In,
-                    &mut pkt_copy,
-                    &mut meta,
-                    &rsrcs,
-                );
+                let res = port.process(Direction::In, &mut pkt_copy, &mut meta);
 
                 match res {
                     Ok(ProcessResult::Modified) => {
@@ -2040,8 +2033,6 @@ unsafe extern "C" fn xde_rx(
 
     let port = &(*dev).port;
     let mut meta = meta::Meta::new();
-    let mut rsrcs = Resources::new();
-    let _ = rsrcs.add(dev.port_v2p.clone());
     let et = hdrs.inner.ether.ether_type();
     if et == EtherType::Ipv4 {
         // XXX-EXT-IP This is a hack to allow NAT action to have
@@ -2050,7 +2041,7 @@ unsafe extern "C" fn xde_rx(
         let _ = meta.replace(MacAddr::from(ether_src));
     }
 
-    let res = port.process(Direction::In, &mut pkt, &mut meta, &rsrcs);
+    let res = port.process(Direction::In, &mut pkt, &mut meta);
     match res {
         Ok(ProcessResult::Modified) => {
             mac::mac_rx((*dev).mh, mrh, pkt.unwrap());

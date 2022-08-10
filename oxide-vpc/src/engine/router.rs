@@ -23,16 +23,16 @@ cfg_if! {
 }
 
 use super::firewall as fw;
-use crate::api::{Direction, NoResp, OpteError};
-use crate::engine::headers::{IpAddr, IpCidr};
-use crate::engine::layer::{InnerFlowId, Layer};
-use crate::engine::port::{meta::Meta, Port, PortBuilder, Pos};
-use crate::engine::rule::{
+use crate::api::{DelRouterEntryIpv4Resp, RouterTarget};
+use crate::VpcCfg;
+use opte::api::{Direction, NoResp, OpteError};
+use opte::engine::headers::{IpAddr, IpCidr};
+use opte::engine::layer::{InnerFlowId, Layer};
+use opte::engine::port::{meta::Meta, Port, PortBuilder, Pos};
+use opte::engine::rule::{
     self, Action, AllowOrDeny, Finalized, MetaAction, ModMetaResult, Predicate,
     Rule,
 };
-use crate::oxide_vpc::api::{DelRouterEntryIpv4Resp, RouterTarget};
-use crate::oxide_vpc::VpcCfg;
 
 pub const ROUTER_LAYER_NAME: &'static str = "router";
 
@@ -48,7 +48,7 @@ pub enum RouterTargetInternal {
     VpcSubnet(IpCidr),
 }
 
-impl crate::engine::rule::MetaPredicate for RouterTargetInternal {
+impl opte::engine::rule::MetaPredicate for RouterTargetInternal {
     fn is_match(&self, meta: &Meta) -> bool {
         if let Some(tgt) = meta.get::<Self>() {
             if self == tgt {

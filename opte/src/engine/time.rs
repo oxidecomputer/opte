@@ -13,7 +13,7 @@ cfg_if! {
 
         use alloc::boxed::Box;
         use illumos_ddi_dki as ddi;
-        use crate::CString;
+        use cstr_core::CString;
     } else {
         use std::time::Instant;
     }

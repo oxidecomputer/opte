@@ -4,7 +4,11 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::layer::InnerFlowId;
+use super::tcp::{TcpFlags, TcpMeta, TcpState};
+use crate::api::Direction;
 use core::fmt::{self, Display};
+use cstr_core::CString;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -15,11 +19,6 @@ cfg_if! {
         use std::string::String;
     }
 }
-
-use super::layer::InnerFlowId;
-use super::tcp::{TcpFlags, TcpMeta, TcpState};
-use crate::api::Direction;
-use crate::CString;
 
 /// Tracks TCP-specific flow state. Specifically it tracks which TCP
 /// state the flow is currently in as well as the seq/ack values in

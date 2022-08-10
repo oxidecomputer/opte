@@ -4,10 +4,27 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::flow_table::{FlowTable, FlowTableDump};
+use super::headers::{IpAddr, IpMeta, UlpMeta};
+use super::ioctl;
+use super::ip4::Protocol;
+use super::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
+use super::port::meta::Meta;
+use super::rule::{
+    self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, AllowOrDeny,
+    Finalized, Rule, RuleDump, HT,
+};
+use super::sync::{KMutex, KMutexType};
+use super::time::Moment;
+use crate::api::{Direction, Ipv4Addr};
+use crate::{ExecCtx, LogLevel};
 use core::fmt::{self, Display};
 use core::mem;
 use core::num::NonZeroU32;
 use core::result;
+use cstr_core::CString;
+use illumos_ddi_dki::c_char;
+use serde::{Deserialize, Serialize};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -21,26 +38,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use serde::{Deserialize, Serialize};
-
-use super::flow_table::{FlowTable, FlowTableDump};
-use super::headers::{IpAddr, IpMeta, UlpMeta};
-use super::ioctl;
-use super::ip4::Protocol;
-use super::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
-use super::port::meta::Meta;
-use super::port::resources::Resources;
-use super::rule::{
-    self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, AllowOrDeny,
-    Finalized, Rule, RuleDump, HT,
-};
-use super::sync::{KMutex, KMutexType};
-use super::time::Moment;
-use crate::api::{Direction, Ipv4Addr};
-use crate::{CString, ExecCtx, LogLevel};
-
-use illumos_ddi_dki::c_char;
 
 #[derive(Debug)]
 pub enum LayerError {
@@ -499,13 +496,12 @@ impl Layer {
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         lmeta: &mut Meta,
-        rsrcs: &Resources,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::*;
         self.layer_process_entry_probe(dir, &ifid);
         let res = match dir {
-            Out => self.process_out(ectx, pkt, &ifid, hts, lmeta, rsrcs),
-            In => self.process_in(ectx, pkt, &ifid, hts, lmeta, rsrcs),
+            Out => self.process_out(ectx, pkt, &ifid, hts, lmeta),
+            In => self.process_in(ectx, pkt, &ifid, hts, lmeta),
         };
         self.layer_process_return_probe(dir, &ifid, &res);
         res
@@ -518,11 +514,10 @@ impl Layer {
         ifid: &InnerFlowId,
         hts: &mut Vec<HT>,
         lmeta: &mut Meta,
-        rsrcs: &Resources,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
         if *ifid == FLOW_ID_DEFAULT {
-            return self.process_in_rules(ectx, ifid, pkt, hts, lmeta, rsrcs);
+            return self.process_in_rules(ectx, ifid, pkt, hts, lmeta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
@@ -550,7 +545,7 @@ impl Layer {
         // XXX Flow table miss stat
 
         // No FlowTable entry, perhaps there is a matching Rule?
-        self.process_in_rules(ectx, ifid, pkt, hts, lmeta, rsrcs)
+        self.process_in_rules(ectx, ifid, pkt, hts, lmeta)
     }
 
     fn process_in_rules(
@@ -560,7 +555,6 @@ impl Layer {
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         lmeta: &mut Meta,
-        rsrcs: &Resources,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::In;
         let lock = self.rules_in.lock();
@@ -602,7 +596,7 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(In, ifid, lmeta, rsrcs) {
+                let ht = match action.gen_ht(In, ifid, lmeta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
@@ -724,11 +718,10 @@ impl Layer {
         ifid: &InnerFlowId,
         hts: &mut Vec<HT>,
         lmeta: &mut Meta,
-        rsrcs: &Resources,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
         if *ifid == FLOW_ID_DEFAULT {
-            return self.process_out_rules(ectx, ifid, pkt, hts, lmeta, rsrcs);
+            return self.process_out_rules(ectx, ifid, pkt, hts, lmeta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
@@ -758,7 +751,7 @@ impl Layer {
         }
 
         // No FlowTable entry, perhaps there is matching Rule?
-        self.process_out_rules(ectx, &ifid, pkt, hts, lmeta, rsrcs)
+        self.process_out_rules(ectx, &ifid, pkt, hts, lmeta)
     }
 
     fn process_out_rules(
@@ -768,7 +761,6 @@ impl Layer {
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HT>,
         lmeta: &mut Meta,
-        rsrcs: &Resources,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::Out;
         let lock = self.rules_out.lock();
@@ -810,7 +802,7 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(Out, ifid, lmeta, rsrcs) {
+                let ht = match action.gen_ht(Out, ifid, lmeta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {

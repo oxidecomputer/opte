@@ -15,16 +15,16 @@ cfg_if! {
 }
 
 use super::router::{RouterTargetInternal, ROUTER_LAYER_NAME};
-use crate::api::{Direction, OpteError};
-use crate::engine::ether::ETHER_TYPE_IPV4;
-use crate::engine::layer::Layer;
-use crate::engine::nat::Nat4;
-use crate::engine::port::{PortBuilder, Pos};
-use crate::engine::rule::{
+use crate::VpcCfg;
+use opte::api::{Direction, OpteError};
+use opte::engine::ether::ETHER_TYPE_IPV4;
+use opte::engine::layer::Layer;
+use opte::engine::nat::Nat4;
+use opte::engine::port::{PortBuilder, Pos};
+use opte::engine::rule::{
     Action, EtherTypeMatch, Ipv4AddrMatch, Predicate, Rule,
 };
-use crate::engine::snat::{NatPool, SNat4};
-use crate::oxide_vpc::VpcCfg;
+use opte::engine::snat::{NatPool, SNat4};
 
 pub const NAT_LAYER_NAME: &'static str = "nat";
 

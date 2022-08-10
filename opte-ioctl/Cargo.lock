@@ -445,9 +445,23 @@ dependencies = [
  "libc",
  "libnet",
  "opte",
+ "oxide-vpc",
  "postcard",
  "serde",
  "thiserror",
+]
+
+[[package]]
+name = "oxide-vpc"
+version = "0.1.0"
+dependencies = [
+ "cfg-if 0.1.10",
+ "cstr_core",
+ "illumos-sys-hdrs",
+ "opte",
+ "serde",
+ "smoltcp",
+ "zerocopy",
 ]
 
 [[package]]

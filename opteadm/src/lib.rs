@@ -14,13 +14,13 @@ use opte::api::{
     Ipv4Addr, Ipv4Cidr, MacAddr, NoResp, OpteCmd, SetXdeUnderlayReq, Vni,
 };
 use opte::engine::ioctl::{self as api};
-use opte::oxide_vpc::api::{
+use opte_ioctl::{run_cmd_ioctl, Error};
+use oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
     FirewallRule, ListPortsReq, ListPortsResp, RemFwRuleReq, SNatCfg,
     SetFwRulesReq, SetVirt2PhysReq,
 };
-use opte::oxide_vpc::engine::overlay;
-use opte_ioctl::{run_cmd_ioctl, Error};
+use oxide_vpc::engine::overlay;
 
 /// The handle used to send administration commands to the OPTE
 /// control node.

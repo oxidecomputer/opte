@@ -5,11 +5,12 @@
 // Copyright 2022 Oxide Computer Company
 
 #![no_std]
-// XXX This allows me to run `cargo +nightly test` on a macOS system.
-// I'd prefer to run everything with
-// `--target=x86_64-unknown-illumos`, but the usdt crate doesn't
-// compile when I do that thanks to `asm!` shenanigans -- I don't have
-// time for that yak at this moment.
+// This allows one to run the tests on macOS with the usdt probes
+// enabled.
+//
+// ```
+// cargo test --features=usdt
+// ```
 #![cfg_attr(target_os = "macos", feature(asm_sym))]
 #![feature(extern_types)]
 #![feature(vec_into_raw_parts)]
@@ -41,17 +42,10 @@ cfg_if! {
     }
 }
 
-// TODO Not sure reexporting makes sense, but felt like trying it on
-// for size.
-pub use cstr_core::CStr;
-pub use cstr_core::CString;
-
 #[cfg(any(feature = "api", test))]
 pub mod api;
 #[cfg(any(feature = "engine", test))]
 pub mod engine;
-#[cfg(any(feature = "vpc", test))]
-pub mod oxide_vpc;
 
 /// Return value with `bit` set.
 ///
@@ -238,7 +232,7 @@ impl LogProvider for KernelLog {
         unsafe {
             ddi::cmn_err(
                 cmn_level,
-                CString::new(msg.to_string()).unwrap().as_ptr(),
+                cstr_core::CString::new(msg.to_string()).unwrap().as_ptr(),
             )
         }
     }
@@ -246,52 +240,4 @@ impl LogProvider for KernelLog {
 
 pub struct ExecCtx {
     pub log: Box<dyn LogProvider>,
-}
-
-#[cfg(test)]
-mod test {
-    use std::fs::File;
-    use std::io::Write;
-
-    use pcap_parser::pcap::LegacyPcapBlock;
-    use pcap_parser::{Linktype, PcapHeader, ToVec};
-
-    use crate::engine::packet::{Packet, PacketRead, PacketReader, Parsed};
-
-    pub struct PcapBuilder {
-        file: File,
-    }
-
-    impl PcapBuilder {
-        pub fn new(path: &str) -> Self {
-            let mut file = File::create(path).unwrap();
-
-            let mut hdr = PcapHeader {
-                magic_number: 0xa1b2c3d4,
-                version_major: 2,
-                version_minor: 4,
-                thiszone: 0,
-                sigfigs: 0,
-                snaplen: 1500,
-                network: Linktype::ETHERNET,
-            };
-
-            file.write_all(&hdr.to_vec().unwrap()).unwrap();
-
-            Self { file }
-        }
-
-        pub fn add_pkt(&mut self, pkt: &Packet<Parsed>) {
-            let pkt_bytes = PacketReader::new(&pkt, ()).copy_remaining();
-            let mut block = LegacyPcapBlock {
-                ts_sec: 7777,
-                ts_usec: 7777,
-                caplen: pkt_bytes.len() as u32,
-                origlen: pkt_bytes.len() as u32,
-                data: &pkt_bytes,
-            };
-
-            self.file.write_all(&block.to_vec().unwrap()).unwrap();
-        }
-    }
 }

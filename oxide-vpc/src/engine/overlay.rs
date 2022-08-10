@@ -26,30 +26,30 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 
 use super::router::RouterTargetInternal;
-use crate::api::{CmdOk, Direction, Ipv4Addr, MacAddr, OpteError};
-use crate::engine::ether::{EtherMeta, ETHER_TYPE_IPV6};
-use crate::engine::geneve::{GeneveMeta, Vni, GENEVE_PORT};
-use crate::engine::headers::{HeaderAction, IpAddr};
-use crate::engine::ip4::Protocol;
-use crate::engine::ip6::{Ipv6Addr, Ipv6Meta};
-use crate::engine::layer::{InnerFlowId, Layer};
-use crate::engine::port::meta::Meta;
-use crate::engine::port::resources::Resources;
-use crate::engine::port::{PortBuilder, Pos};
-use crate::engine::rule::{
+use crate::api::{GuestPhysAddr, PhysNet};
+use crate::VpcCfg;
+use opte::api::{CmdOk, Direction, Ipv4Addr, MacAddr, OpteError};
+use opte::engine::ether::{EtherMeta, ETHER_TYPE_IPV6};
+use opte::engine::geneve::{GeneveMeta, Vni, GENEVE_PORT};
+use opte::engine::headers::{HeaderAction, IpAddr};
+use opte::engine::ip4::Protocol;
+use opte::engine::ip6::{Ipv6Addr, Ipv6Meta};
+use opte::engine::layer::{InnerFlowId, Layer};
+use opte::engine::port::meta::Meta;
+use opte::engine::port::{PortBuilder, Pos};
+use opte::engine::rule::{
     self, Action, AllowOrDeny, DataPredicate, MappingResource, Predicate,
     Resource, ResourceEntry, Rule, StaticAction, HT,
 };
-use crate::engine::sync::{KMutex, KMutexType};
-use crate::engine::udp::UdpMeta;
-use crate::oxide_vpc::api::{GuestPhysAddr, PhysNet};
-use crate::oxide_vpc::VpcCfg;
+use opte::engine::sync::{KMutex, KMutexType};
+use opte::engine::udp::UdpMeta;
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 
 pub fn setup(
     pb: &PortBuilder,
     cfg: &VpcCfg,
+    v2p: Arc<Virt2Phys>,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
@@ -57,6 +57,7 @@ pub fn setup(
         cfg.bsvc_addr,
         cfg.phys_ip,
         cfg.vni,
+        v2p,
     )));
 
     // Action Index 1
@@ -144,11 +145,17 @@ pub struct EncapAction {
     // sending data.
     phys_ip_src: Ipv6Addr,
     vni: Vni,
+    v2p: Arc<Virt2Phys>,
 }
 
 impl EncapAction {
-    pub fn new(bsvc_addr: PhysNet, phys_ip_src: Ipv6Addr, vni: Vni) -> Self {
-        Self { bsvc_addr, phys_ip_src, vni }
+    pub fn new(
+        bsvc_addr: PhysNet,
+        phys_ip_src: Ipv6Addr,
+        vni: Vni,
+        v2p: Arc<Virt2Phys>,
+    ) -> Self {
+        Self { bsvc_addr, phys_ip_src, vni, v2p }
     }
 }
 
@@ -165,19 +172,7 @@ impl StaticAction for EncapAction {
         _dir: Direction,
         flow_id: &InnerFlowId,
         meta: &mut Meta,
-        rsrcs: &Resources,
     ) -> rule::GenHtResult {
-        let v2p = match rsrcs.get::<Arc<Virt2Phys>>() {
-            Some(v2p) => v2p,
-            // This should never happen. If it does, then the driver
-            // forgot to add the Virt2Phys metadata before processing.
-            None => {
-                return Err(rule::GenHtError::Unexpected {
-                    msg: format!("no Virt2Phys metadata entry found"),
-                })
-            }
-        };
-
         // The router layer determines a RouterTarget and stores it in
         // the meta map. We need to map this virtual target to a
         // physical one.
@@ -197,7 +192,7 @@ impl StaticAction for EncapAction {
         let phys_target = match target {
             RouterTargetInternal::InternetGateway => self.bsvc_addr,
 
-            RouterTargetInternal::Ip(virt_ip) => match v2p.get(&virt_ip) {
+            RouterTargetInternal::Ip(virt_ip) => match self.v2p.get(&virt_ip) {
                 Some(phys) => PhysNet {
                     ether: phys.ether.into(),
                     ip: phys.ip,
@@ -222,7 +217,7 @@ impl StaticAction for EncapAction {
             },
 
             RouterTargetInternal::VpcSubnet(_) => {
-                match v2p.get(&flow_id.dst_ip) {
+                match self.v2p.get(&flow_id.dst_ip) {
                     Some(phys) => PhysNet {
                         ether: phys.ether.into(),
                         ip: phys.ip,
@@ -314,7 +309,6 @@ impl StaticAction for DecapAction {
         _dir: Direction,
         _flow_id: &InnerFlowId,
         _meta: &mut Meta,
-        _rsrcs: &Resources,
     ) -> rule::GenHtResult {
         Ok(AllowOrDeny::Allow(HT {
             name: DECAP_NAME.to_string(),
@@ -420,7 +414,6 @@ impl Virt2Phys {
 }
 
 impl Resource for Virt2Phys {}
-impl Resource for Arc<Virt2Phys> {}
 impl ResourceEntry for GuestPhysAddr {}
 
 impl MappingResource for Virt2Phys {

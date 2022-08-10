@@ -8,7 +8,7 @@ use opte::api::{
     CmdOk, Ipv4Addr, Ipv4Cidr, MacAddr, NoResp, OpteCmd, OpteCmdIoctl,
     OpteError, SetXdeUnderlayReq, Vni, API_VERSION, XDE_DLD_OPTE_CMD,
 };
-use opte::oxide_vpc::api::{
+use oxide_vpc::api::{
     AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, ListPortsReq,
     ListPortsResp, SNatCfg, SetFwRulesReq, SetVirt2PhysReq,
 };

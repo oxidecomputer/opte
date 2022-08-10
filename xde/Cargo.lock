@@ -257,6 +257,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-vpc"
+version = "0.1.0"
+dependencies = [
+ "cfg-if 0.1.10",
+ "cstr_core",
+ "illumos-sys-hdrs",
+ "opte",
+ "serde",
+ "smoltcp",
+ "zerocopy",
+]
+
+[[package]]
 name = "postcard"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -445,6 +458,7 @@ dependencies = [
  "cstr_core",
  "illumos-ddi-dki",
  "opte",
+ "oxide-vpc",
  "postcard",
  "serde",
 ]
