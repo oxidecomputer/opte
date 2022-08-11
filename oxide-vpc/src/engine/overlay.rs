@@ -371,17 +371,16 @@ impl VpcMappings {
 
 /// A mapping from virtual IPs to physical location.
 pub struct Virt2Phys {
-    // XXX Wrapping these in a mutex is definitely a terrible idea (in
-    // terms of lock contention as this resource is actually shared by
-    // all ports); but for purposes of dev this is fine for now.
-    // However, before v1 we'll want something like a shadow copy and
-    // atomic pointer swap or perhaps some CoW/persistent data
-    // strcuture that can be efficiently and safely updated. However,
-    // there is another problem that needs to be solved here: when a
-    // mapping is **MODIFIED** we need to invalidate any UFT/LFT entry
-    // that makes use of this virtual destination (for all Ports).
-    // That means updating the generation number of all Ports anytme
-    // an entry is **MODIFIED**.
+    // XXX We need to implement some sort of invalidation mechanism
+    // for when a mapping is modified. The easiest way to do this is
+    // to bump the port's epoch whenever a write is made to the table,
+    // but that forces all ports to recompute all flows; it's the
+    // largest hammer we have in the toolbox. A better solution is to
+    // finally implement the "simulation" feature that VFP talks
+    // about; which they use both for flow pairing and for
+    // invalidation (they call it reconciliation).
+    //
+    // https://github.com/oxidecomputer/opte/issues/221
     ip4: KMutex<BTreeMap<Ipv4Addr, GuestPhysAddr>>,
     ip6: KMutex<BTreeMap<Ipv6Addr, GuestPhysAddr>>,
 }
