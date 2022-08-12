@@ -1748,18 +1748,21 @@ impl PacketSeg {
             WritePos::Append => {
                 unsafe {
                     let limit = (*self.dblk).db_lim;
-                    let start = (*self.mp).b_wptr;
-                    let end = start.add(src.len());
-                    if end > limit as *mut c_uchar {
+                    let write_start = (*self.mp).b_wptr;
+                    let write_end = write_start.add(src.len());
+
+                    if write_end > limit as *mut c_uchar {
                         return Err(WriteError::NotEnoughBytes {
-                            available: limit.offset_from(start) as usize,
+                            write_start,
+                            write_end,
+                            available: limit.offset_from(write_start) as usize,
                             needed: src.len(),
                         });
                     }
 
                     // Safety: We know add is safe in this case
                     // because we checked the bounds above.
-                    let dst = slice::from_raw_parts_mut(start, src.len());
+                    let dst = slice::from_raw_parts_mut(write_start, src.len());
                     let wptr = (*self.mp).b_wptr.add(src.len());
                     (dst, None, Some(wptr), self.len + src.len())
                 }
@@ -1767,58 +1770,29 @@ impl PacketSeg {
 
             WritePos::Modify(offset) => unsafe {
                 let wptr = (*self.mp).b_wptr;
-                let start = (*self.mp).b_rptr.add(offset as usize);
-                let end = start.add(src.len());
-                if start > wptr || end > wptr {
+                let write_start = (*self.mp).b_rptr.add(offset as usize);
+                let write_end = write_start.add(src.len());
+
+                if write_start > wptr {
+                    return Err(WriteError::OutOfRange {
+                        write_start,
+                        write_end,
+                        buf_end: wptr,
+                        delta: write_start.offset_from(wptr) as usize,
+                    });
+                }
+
+                if write_end > wptr {
                     return Err(WriteError::NotEnoughBytes {
-                        available: end.offset_from(start) as usize,
+                        write_start,
+                        write_end,
+                        available: wptr.offset_from(write_start) as usize,
                         needed: src.len(),
                     });
                 }
 
-                let dst = slice::from_raw_parts_mut(start, src.len());
+                let dst = slice::from_raw_parts_mut(write_start, src.len());
                 (dst, None, None, self.len)
-            },
-
-            // XXX Perhaps I should just get rid of these WritePos
-            // types that I'm not using?
-            WritePos::ModAppend(offset) => unsafe {
-                let wptr = (*self.mp).b_wptr;
-                let limit = (*self.dblk).db_lim;
-                let start = (*self.mp).b_rptr.add(offset as usize);
-                let end = start.add(src.len());
-                assert!(end >= (*self.mp).b_rptr);
-                if start > wptr {
-                    return Err(WriteError::OutOfRange);
-                }
-
-                if end > limit as *mut u8 {
-                    return Err(WriteError::NotEnoughBytes {
-                        available: limit.offset_from(start) as usize,
-                        needed: src.len(),
-                    });
-                }
-
-                let dst = slice::from_raw_parts_mut(start, src.len());
-                let new_wptr = end;
-                assert!(end.offset_from(wptr) >= 0);
-                (
-                    dst,
-                    None,
-                    Some(new_wptr),
-                    self.len + (end.offset_from(wptr) as usize),
-                )
-            },
-
-            WritePos::Prepend => unsafe {
-                let start = (*self.mp).b_rptr.sub(src.len());
-
-                if start < (*self.dblk).db_base as *mut c_uchar {
-                    return Err(WriteError::OutOfRange);
-                }
-
-                let dst = slice::from_raw_parts_mut(start, src.len());
-                (dst, Some(start), None, self.len + src.len())
             },
         };
 
@@ -1919,8 +1893,18 @@ pub enum ReadErr {
 pub enum WriteError {
     BadLayout,
     EndOfPacket,
-    NotEnoughBytes { available: usize, needed: usize },
-    OutOfRange,
+    NotEnoughBytes {
+        write_start: *const u8,
+        write_end: *const u8,
+        available: usize,
+        needed: usize,
+    },
+    OutOfRange {
+        write_start: *const u8,
+        write_end: *const u8,
+        buf_end: *const u8,
+        delta: usize,
+    },
     StraddledWrite,
 }
 
@@ -1979,21 +1963,9 @@ pub trait PacketRead<'a> {
 /// Modify(offset): Modify bytes starting at `offset` from the
 /// beginning of the segment or packet (`b_rptr`). The length of the
 /// write must fit within the end of the current segment (`b_wptr`).
-///
-/// ModAppend(offset): Modify bytes start at `offset` from the
-/// beginning of the segment or packet (`b_rptr`). The length of the
-/// write may extend the end of the current segment (`b_wptr`), but
-/// must fit within the total available bytes in the current segment
-/// (`db_lim`).
-///
-/// Prepend: Prepend bytes to the start of the segment or packet.
-/// There must be enough space available between `db_base` and
-/// `b_rptr`.
 pub enum WritePos {
     Append,
     Modify(u16),
-    ModAppend(u16),
-    Prepend,
 }
 
 pub struct PacketWriter {
@@ -2521,7 +2493,7 @@ mod test {
         assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_pos, 0);
     }
 
-    // Verify that we catch when a write require more bytes than are
+    // Verify that we catch when a write requires more bytes than are
     // available.
     #[test]
     fn not_enough_bytes() {
@@ -2550,7 +2522,40 @@ mod test {
         let tcp_bytes = tcp.as_bytes();
         assert!(matches!(
             wtr.write(&tcp_bytes[0..12]),
-            Err(WriteError::NotEnoughBytes { available: 8, needed: 12 })
+            Err(WriteError::NotEnoughBytes { available: 8, needed: 12, .. })
+        ));
+    }
+
+    // Verify that modification that starts past wptr produces an
+    // OutOfRange error.
+    #[test]
+    fn out_of_range() {
+        let mp1 = allocb(54);
+        let pkt = unsafe { Packet::<Uninitialized>::wrap(mp1) };
+        assert_eq!(pkt.num_segs(), 1);
+        assert_eq!(pkt.avail(), 54);
+
+        let body = vec![];
+        let mut tcp = TcpHdr::new(3839, 80);
+        tcp.set_seq(4224936861);
+        let ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, SRC_IP4, DST_IP4);
+        let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
+
+        let mut wtr = PacketWriter::new(pkt, None);
+        let _ = wtr.write(&eth.as_bytes()).unwrap();
+        assert_eq!(wtr.pos(), ETHER_HDR_SZ);
+        let _ = wtr.write(&ip4.as_bytes()).unwrap();
+        assert_eq!(wtr.pos(), ETHER_HDR_SZ + IPV4_HDR_SZ);
+        let tcp_bytes = tcp.as_bytes();
+        wtr.write(&tcp_bytes).unwrap();
+        assert_eq!(wtr.pos(), ETHER_HDR_SZ + IPV4_HDR_SZ + TCP_HDR_SZ);
+        let mut pkt = wtr.finish();
+
+        // Pretend to zero the checksum field but purposely use an
+        // offset 2 bytes past the end.
+        assert!(matches!(
+            pkt.segs[0].write(&[0; 2], WritePos::Modify(56)),
+            Err(WriteError::OutOfRange { delta: 2, .. })
         ));
     }
 
