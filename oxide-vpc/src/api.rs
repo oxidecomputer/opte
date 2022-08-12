@@ -7,6 +7,9 @@
 use core::fmt::{self, Display};
 use core::result;
 use core::str::FromStr;
+use illumos_sys_hdrs::datalink_id_t;
+pub use opte::api::*;
+use serde::{Deserialize, Serialize};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -17,15 +20,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use opte::api::{
-    Direction, IpAddr, IpCidr, Ipv4Addr, Ipv4Cidr, Ipv6Addr, MacAddr, Protocol,
-    Vni, DYNAMIC_PORT,
-};
-
-use illumos_sys_hdrs::datalink_id_t;
-
-use serde::{Deserialize, Serialize};
 
 /// A network destination on the Oxide Rack's physical network.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
