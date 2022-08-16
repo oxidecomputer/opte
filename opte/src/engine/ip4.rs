@@ -9,17 +9,6 @@ use core::fmt::{self, Debug, Display};
 use core::mem;
 use core::num::ParseIntError;
 use core::result;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-        use alloc::vec::Vec;
-    } else {
-        use std::string::String;
-        use std::vec::Vec;
-    }
-}
-
 // A fixed-size Vec.
 use heapless::Vec as FVec;
 use serde::{Deserialize, Serialize};
@@ -34,7 +23,17 @@ use super::packet::{PacketRead, ReadErr, WriteError};
 use super::rule::{
     MatchExact, MatchExactVal, MatchPrefix, MatchPrefixVal, MatchRangeVal,
 };
-pub use crate::api::{Ipv4Addr, Ipv4Cidr, Ipv4PrefixLen, Protocol};
+pub use opte_api::{Ipv4Addr, Ipv4Cidr, Ipv4PrefixLen, Protocol};
+
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::string::String;
+        use alloc::vec::Vec;
+    } else {
+        use std::string::String;
+        use std::vec::Vec;
+    }
+}
 
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
 pub const IPV4_HDR_VER_MASK: u8 = 0xF0;
@@ -111,34 +110,6 @@ impl From<IpError> for String {
 
 impl MatchPrefixVal for Ipv4Cidr {}
 
-impl Ipv4Cidr {
-    pub fn ip(&self) -> Ipv4Addr {
-        self.parts().0
-    }
-
-    /// Does this CIDR represent the default route subnet?
-    pub fn is_default(&self) -> bool {
-        let (ip, prefix_len) = self.parts();
-        ip == Ipv4Addr::ANY_ADDR && prefix_len.val() == 0
-    }
-
-    pub fn prefix_len(self) -> u8 {
-        self.parts().1.val()
-    }
-
-    /// Is this `ip` a member of the CIDR?
-    pub fn is_member(&self, ip: Ipv4Addr) -> bool {
-        ip.safe_mask(self.parts().1) == self.ip()
-    }
-
-    /// Convert the CIDR prefix length into a subnet mask.
-    pub fn to_mask(self) -> Ipv4Addr {
-        let mut bits = i32::MIN;
-        bits = bits >> (self.prefix_len() - 1);
-        Ipv4Addr::from(bits.to_be_bytes())
-    }
-}
-
 #[test]
 fn cidr_match() {
     let ip1 = "192.168.2.22".parse::<Ipv4Addr>().unwrap();
@@ -171,48 +142,6 @@ impl Ipv4CidrPrefix {
 
 impl MatchExactVal for Ipv4Addr {}
 impl MatchRangeVal for Ipv4Addr {}
-
-impl Ipv4Addr {
-    /// Produce a `u32` which itself is stored in memory in network
-    /// order. This is needed for passing this type up to DTrace so
-    /// its inet_ntoa() subroutine works.
-    pub fn to_be(self) -> u32 {
-        // First we create a native-endian u32 from the network-order
-        // bytes, then we convert that to an in-memroy network-order
-        // u32.
-        u32::from_be_bytes(self.bytes()).to_be()
-    }
-}
-
-pub type Ipv4AddrTuple = (u8, u8, u8, u8);
-
-impl From<Ipv4Addr> for Ipv4AddrTuple {
-    fn from(ip: Ipv4Addr) -> Ipv4AddrTuple {
-        let bytes = ip.bytes();
-        (bytes[0], bytes[1], bytes[2], bytes[3])
-    }
-}
-
-impl From<smoltcp::wire::Ipv4Address> for Ipv4Addr {
-    fn from(smolip4: smoltcp::wire::Ipv4Address) -> Self {
-        let bytes = smolip4.as_bytes();
-        Self::from([bytes[0], bytes[1], bytes[2], bytes[3]])
-    }
-}
-
-impl From<Ipv4Addr> for smoltcp::wire::Ipv4Address {
-    fn from(ip: Ipv4Addr) -> Self {
-        Self::from_bytes(&ip.bytes())
-    }
-}
-
-#[test]
-fn ip4_addr_to_tuple() {
-    assert_eq!(
-        Ipv4AddrTuple::from("44.241.36.226".parse::<Ipv4Addr>().unwrap()),
-        (44, 241, 36, 226)
-    );
-}
 
 impl MatchExact<Ipv4Addr> for Ipv4Addr {
     fn match_exact(&self, val: &Ipv4Addr) -> bool {

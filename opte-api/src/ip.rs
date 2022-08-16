@@ -141,8 +141,49 @@ pub struct SubnetRouterPair {
 }
 
 impl SubnetRouterPair {
+    pub fn encode_len(&self) -> u8 {
+        // One byte for the subnet mask width.
+        let mut entry_size = 1u8;
+
+        // Variable length for the subnet number. Only significant
+        // bytes are included.
+        entry_size += self.subnet_encode_len();
+
+        // Four bytes for the router's address.
+        entry_size += 4;
+        entry_size
+    }
+
+    pub fn encode(&self, bytes: &mut [u8]) {
+        let mut pos = 0;
+        bytes[pos] = self.subnet.prefix_len();
+        pos += 1;
+        let n = self.subnet_encode_len();
+        let subnet_bytes = self.subnet.ip().bytes();
+        for i in 0..n {
+            bytes[pos] = subnet_bytes[i as usize];
+            pos += 1;
+        }
+
+        for b in self.router.bytes() {
+            bytes[pos] = b;
+            pos += 1;
+        }
+    }
+
     pub fn new(subnet: Ipv4Cidr, router: Ipv4Addr) -> Self {
         Self { subnet, router }
+    }
+
+    fn subnet_encode_len(&self) -> u8 {
+        let prefix = self.subnet.prefix_len();
+
+        if prefix == 0 {
+            0
+        } else {
+            let round = if prefix % 8 != 0 { 1 } else { 0 };
+            (prefix / 8) + round
+        }
     }
 }
 
@@ -205,6 +246,21 @@ pub enum IpAddr {
     Ip6(Ipv6Addr),
 }
 
+impl Default for IpAddr {
+    fn default() -> Self {
+        IpAddr::Ip4(Default::default())
+    }
+}
+
+impl fmt::Display for IpAddr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            IpAddr::Ip4(ip4) => write!(f, "{}", ip4),
+            IpAddr::Ip6(ip6) => write!(f, "{}", ip6),
+        }
+    }
+}
+
 /// An IPv4 address.
 #[derive(
     Clone, Copy, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
@@ -213,10 +269,66 @@ pub struct Ipv4Addr {
     inner: [u8; 4],
 }
 
+impl Ipv4Addr {
+    pub const ANY_ADDR: Self = Self { inner: [0; 4] };
+    pub const LOCAL_BCAST: Self = Self { inner: [255; 4] };
+
+    /// Return the bytes of the address.
+    pub fn bytes(&self) -> [u8; 4] {
+        self.inner
+    }
+
+    /// Return the address after applying the network mask.
+    pub fn mask(mut self, mask: u8) -> Result<Self, String> {
+        if mask > 32 {
+            return Err(format!("bad mask: {}", mask));
+        }
+
+        if mask == 0 {
+            return Ok(Ipv4Addr::ANY_ADDR);
+        }
+
+        let mut n = u32::from_be_bytes(self.inner);
+
+        let mut bits = i32::MIN;
+        bits = bits >> (mask - 1);
+        n = n & bits as u32;
+        self.inner = n.to_be_bytes();
+        Ok(self)
+    }
+
+    pub fn safe_mask(self, prefix_len: Ipv4PrefixLen) -> Self {
+        self.mask(prefix_len.0).unwrap()
+    }
+
+    /// Produce a `u32` which itself is stored in memory in network
+    /// order. This is needed for passing this type up to DTrace so
+    /// its inet_ntoa() subroutine works.
+    pub fn to_be(self) -> u32 {
+        // First we create a native-endian u32 from the network-order
+        // bytes, then we convert that to an in-memory network-order
+        // u32.
+        u32::from_be_bytes(self.bytes()).to_be()
+    }
+}
+
 #[cfg(any(feature = "std", test))]
 impl From<std::net::Ipv4Addr> for Ipv4Addr {
     fn from(ip4: std::net::Ipv4Addr) -> Self {
         Self { inner: ip4.octets() }
+    }
+}
+
+impl From<smoltcp::wire::Ipv4Address> for Ipv4Addr {
+    fn from(smolip4: smoltcp::wire::Ipv4Address) -> Self {
+        let bytes = smolip4.as_bytes();
+        Self::from([bytes[0], bytes[1], bytes[2], bytes[3]])
+    }
+}
+
+impl From<Ipv4Addr> for smoltcp::wire::Ipv4Address {
+    fn from(ip: Ipv4Addr) -> Self {
+        Self::from_bytes(&ip.bytes())
     }
 }
 
@@ -276,88 +388,12 @@ impl Debug for Ipv4Addr {
     }
 }
 
-impl Ipv4Addr {
-    pub const ANY_ADDR: Self = Self { inner: [0; 4] };
-    pub const LOCAL_BCAST: Self = Self { inner: [255; 4] };
-
-    /// Return the bytes of the address.
-    pub fn bytes(&self) -> [u8; 4] {
-        self.inner
-    }
-
-    /// Return the address after applying the network mask.
-    pub fn mask(mut self, mask: u8) -> Result<Self, String> {
-        if mask > 32 {
-            return Err(format!("bad mask: {}", mask));
-        }
-
-        if mask == 0 {
-            return Ok(Ipv4Addr::ANY_ADDR);
-        }
-
-        let mut n = u32::from_be_bytes(self.inner);
-
-        let mut bits = i32::MIN;
-        bits = bits >> (mask - 1);
-        n = n & bits as u32;
-        self.inner = n.to_be_bytes();
-        Ok(self)
-    }
-
-    pub fn safe_mask(self, prefix_len: Ipv4PrefixLen) -> Self {
-        self.mask(prefix_len.0).unwrap()
-    }
-}
-
 /// An IPv6 address.
 #[derive(
     Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
 )]
 pub struct Ipv6Addr {
     inner: [u8; 16],
-}
-
-#[cfg(any(feature = "std", test))]
-impl From<std::net::Ipv6Addr> for Ipv6Addr {
-    fn from(ip6: std::net::Ipv6Addr) -> Self {
-        Self { inner: ip6.octets() }
-    }
-}
-
-impl From<&[u8; 16]> for Ipv6Addr {
-    fn from(bytes: &[u8; 16]) -> Ipv6Addr {
-        Ipv6Addr { inner: *bytes }
-    }
-}
-
-impl From<[u8; 16]> for Ipv6Addr {
-    fn from(bytes: [u8; 16]) -> Ipv6Addr {
-        Ipv6Addr { inner: bytes }
-    }
-}
-
-impl From<[u16; 8]> for Ipv6Addr {
-    fn from(bytes: [u16; 8]) -> Ipv6Addr {
-        let tmp = bytes.map(u16::to_be_bytes);
-        let mut addr = [0; 16];
-        for (i, pair) in tmp.iter().enumerate() {
-            addr[i * 2] = pair[0];
-            addr[(i * 2) + 1] = pair[1];
-        }
-
-        Ipv6Addr { inner: addr }
-    }
-}
-
-#[cfg(any(feature = "std", test))]
-impl FromStr for Ipv6Addr {
-    type Err = String;
-
-    fn from_str(val: &str) -> result::Result<Self, Self::Err> {
-        let ip =
-            val.parse::<std::net::Ipv6Addr>().map_err(|e| format!("{}", e))?;
-        Ok(ip.into())
-    }
 }
 
 impl Ipv6Addr {
@@ -409,11 +445,86 @@ impl Ipv6Addr {
     }
 }
 
+impl fmt::Display for Ipv6Addr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let sip6 = smoltcp::wire::Ipv6Address(self.bytes());
+        write!(f, "{}", sip6)
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl From<std::net::Ipv6Addr> for Ipv6Addr {
+    fn from(ip6: std::net::Ipv6Addr) -> Self {
+        Self { inner: ip6.octets() }
+    }
+}
+
+impl From<&[u8; 16]> for Ipv6Addr {
+    fn from(bytes: &[u8; 16]) -> Ipv6Addr {
+        Ipv6Addr { inner: *bytes }
+    }
+}
+
+impl From<[u8; 16]> for Ipv6Addr {
+    fn from(bytes: [u8; 16]) -> Ipv6Addr {
+        Ipv6Addr { inner: bytes }
+    }
+}
+
+impl From<[u16; 8]> for Ipv6Addr {
+    fn from(bytes: [u16; 8]) -> Ipv6Addr {
+        let tmp = bytes.map(u16::to_be_bytes);
+        let mut addr = [0; 16];
+        for (i, pair) in tmp.iter().enumerate() {
+            addr[i * 2] = pair[0];
+            addr[(i * 2) + 1] = pair[1];
+        }
+
+        Ipv6Addr { inner: addr }
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl FromStr for Ipv6Addr {
+    type Err = String;
+
+    fn from_str(val: &str) -> result::Result<Self, Self::Err> {
+        let ip =
+            val.parse::<std::net::Ipv6Addr>().map_err(|e| format!("{}", e))?;
+        Ok(ip.into())
+    }
+}
+
 /// An IPv4 or IPv6 CIDR.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum IpCidr {
     Ip4(Ipv4Cidr),
     Ip6(Ipv6Cidr),
+}
+
+impl IpCidr {
+    pub fn is_default(&self) -> bool {
+        match self {
+            Self::Ip4(ip4) => ip4.is_default(),
+            Self::Ip6(_) => todo!("IPv6 is_default"),
+        }
+    }
+
+    pub fn prefix_len(&self) -> usize {
+        match self {
+            Self::Ip4(ip4) => ip4.prefix_len() as usize,
+            Self::Ip6(_) => todo!("IPv6 prefix_len"),
+        }
+    }
+}
+
+impl fmt::Display for IpCidr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Ip4(ip4) => write!(f, "{}", ip4),
+            Self::Ip6(ip6) => write!(f, "{}", ip6),
+        }
+    }
 }
 
 /// A valid IPv4 prefix legnth.
@@ -485,6 +596,21 @@ impl Display for Ipv4Cidr {
 }
 
 impl Ipv4Cidr {
+    pub fn ip(&self) -> Ipv4Addr {
+        self.parts().0
+    }
+
+    /// Does this CIDR represent the default route subnet?
+    pub fn is_default(&self) -> bool {
+        let (ip, prefix_len) = self.parts();
+        ip == Ipv4Addr::ANY_ADDR && prefix_len.val() == 0
+    }
+
+    /// Is this `ip` a member of the CIDR?
+    pub fn is_member(&self, ip: Ipv4Addr) -> bool {
+        ip.safe_mask(self.parts().1) == self.ip()
+    }
+
     pub fn new(ip: Ipv4Addr, prefix_len: Ipv4PrefixLen) -> Self {
         let ip = ip.safe_mask(prefix_len);
         Ipv4Cidr { ip, prefix_len }
@@ -499,6 +625,17 @@ impl Ipv4Cidr {
     pub fn parts(&self) -> (Ipv4Addr, Ipv4PrefixLen) {
         (self.ip, self.prefix_len)
     }
+
+    pub fn prefix_len(self) -> u8 {
+        self.parts().1.val()
+    }
+
+    /// Convert the CIDR prefix length into a subnet mask.
+    pub fn to_mask(self) -> Ipv4Addr {
+        let mut bits = i32::MIN;
+        bits = bits >> (self.prefix_len() - 1);
+        Ipv4Addr::from(bits.to_be_bytes())
+    }
 }
 
 /// An IPv6 CIDR.
@@ -506,6 +643,13 @@ impl Ipv4Cidr {
 pub struct Ipv6Cidr {
     ip: Ipv6Addr,
     prefix_len: Ipv6PrefixLen,
+}
+
+impl fmt::Display for Ipv6Cidr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let (ip, prefix_len) = self.parts();
+        write!(f, "{}/{}", ip, prefix_len.val())
+    }
 }
 
 #[cfg(any(feature = "std", test))]

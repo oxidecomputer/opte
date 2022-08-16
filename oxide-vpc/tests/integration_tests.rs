@@ -22,19 +22,6 @@
 //!
 //! TODO This module belongs in oxide_vpc as it's testing VPC-specific
 //! configuration.
-use std::boxed::Box;
-use std::collections::BTreeMap;
-use std::num::NonZeroU32;
-use std::prelude::v1::*;
-use std::sync::Arc;
-use std::time::Duration;
-
-use pcap_parser::pcap::{self, LegacyPcapBlock, PcapHeader};
-
-use smoltcp::phy::ChecksumCapabilities as CsumCapab;
-
-use zerocopy::AsBytes;
-
 use opte::api::{Direction::*, MacAddr, OpteError};
 use opte::engine::arp::{
     ArpEth4Payload, ArpEth4PayloadRaw, ArpHdrRaw, ARP_HDR_SZ,
@@ -69,6 +56,15 @@ use oxide_vpc::api::{
 use oxide_vpc::engine::overlay::{self, Virt2Phys};
 use oxide_vpc::engine::{arp, dhcp4, firewall, icmp, nat, router};
 use oxide_vpc::VpcCfg;
+use pcap_parser::pcap::{self, LegacyPcapBlock, PcapHeader};
+use smoltcp::phy::ChecksumCapabilities as CsumCapab;
+use std::boxed::Box;
+use std::collections::BTreeMap;
+use std::num::NonZeroU32;
+use std::prelude::v1::*;
+use std::sync::Arc;
+use std::time::Duration;
+use zerocopy::AsBytes;
 
 use ProcessResult::*;
 

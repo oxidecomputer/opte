@@ -5,7 +5,19 @@
 // Copyright 2022 Oxide Computer Company
 
 //! ICMP headers.
+use super::ether::{self, EtherHdr, EtherMeta, ETHER_HDR_SZ};
+use super::ip4::{Ipv4Hdr, Ipv4Meta, IPV4_HDR_SZ};
+use super::packet::{Packet, PacketMeta, PacketRead, PacketReader, Parsed};
+use super::rule::{
+    AllowOrDeny, DataPredicate, EtherAddrMatch, GenErr, GenPacketResult,
+    HairpinAction, IpProtoMatch, Ipv4AddrMatch, Predicate,
+};
 use core::fmt::{self, Display};
+pub use opte_api::ip::{Icmp4EchoReply, Protocol};
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use smoltcp::phy::{Checksum, ChecksumCapabilities as Csum};
+use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -14,20 +26,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use serde::de::{self, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use smoltcp::phy::{Checksum, ChecksumCapabilities as Csum};
-use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
-
-use super::ether::{self, EtherHdr, EtherMeta, ETHER_HDR_SZ};
-use super::ip4::{Ipv4Hdr, Ipv4Meta, IPV4_HDR_SZ};
-use super::packet::{Packet, PacketMeta, PacketRead, PacketReader, Parsed};
-use super::rule::{
-    AllowOrDeny, DataPredicate, EtherAddrMatch, GenErr, GenPacketResult,
-    HairpinAction, IpProtoMatch, Ipv4AddrMatch, Predicate,
-};
-pub use crate::api::ip::{Icmp4EchoReply, Protocol};
 
 impl HairpinAction for Icmp4EchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {

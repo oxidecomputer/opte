@@ -25,6 +25,26 @@ pub struct MacAddr {
     inner: [u8; 6],
 }
 
+impl MacAddr {
+    pub const BROADCAST: Self = Self { inner: [0xFF; 6] };
+    pub const ZERO: Self = Self { inner: [0x00; 6] };
+
+    /// Return the bytes of the MAC address.
+    pub fn bytes(&self) -> [u8; 6] {
+        self.inner
+    }
+
+    pub const fn from_const(bytes: [u8; 6]) -> Self {
+        Self { inner: bytes }
+    }
+}
+
+impl From<MacAddr> for smoltcp::wire::EthernetAddress {
+    fn from(addr: MacAddr) -> Self {
+        Self(addr.bytes())
+    }
+}
+
 impl From<[u8; 6]> for MacAddr {
     fn from(bytes: [u8; 6]) -> Self {
         Self { inner: bytes }
@@ -83,19 +103,5 @@ impl Display for MacAddr {
 impl Debug for MacAddr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "MacAddr {{ inner: {} }}", self)
-    }
-}
-
-impl MacAddr {
-    pub const BROADCAST: Self = Self { inner: [0xFF; 6] };
-    pub const ZERO: Self = Self { inner: [0x00; 6] };
-
-    /// Return the bytes of the MAC address.
-    pub fn bytes(&self) -> [u8; 6] {
-        self.inner
-    }
-
-    pub const fn from_const(bytes: [u8; 6]) -> Self {
-        Self { inner: bytes }
     }
 }

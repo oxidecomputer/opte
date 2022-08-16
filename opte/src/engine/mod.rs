@@ -37,38 +37,9 @@ pub mod time;
 #[macro_use]
 pub mod udp;
 
-pub use crate::api::Direction;
-use core::fmt::{self, Display};
+use core::fmt;
 use ip4::IpError;
-
-impl Direction {
-    pub fn cstr_raw(&self) -> *const illumos_sys_hdrs::c_char {
-        match self {
-            Self::In => b"in\0".as_ptr() as *const illumos_sys_hdrs::c_char,
-            Self::Out => b"out\0".as_ptr() as *const illumos_sys_hdrs::c_char,
-        }
-    }
-}
-
-impl From<Direction> for illumos_sys_hdrs::uintptr_t {
-    fn from(dir: Direction) -> Self {
-        match dir {
-            Direction::In => 0,
-            Direction::Out => 1,
-        }
-    }
-}
-
-impl Display for Direction {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let dirstr = match self {
-            Direction::In => "IN",
-            Direction::Out => "OUT",
-        };
-
-        write!(f, "{}", dirstr)
-    }
-}
+pub use opte_api::Direction;
 
 use core::num::ParseIntError;
 
@@ -172,11 +143,11 @@ cfg_if! {
         }
 
     } else {
-        fn dbg<S: AsRef<str> + Display>(msg: S) {
+        fn dbg<S: AsRef<str> + fmt::Display>(msg: S) {
             println!("{}", msg);
         }
 
-        pub fn err<S: AsRef<str> + Display>(msg: S) {
+        pub fn err<S: AsRef<str> + fmt::Display>(msg: S) {
             println!("ERROR: {}", msg);
         }
     }

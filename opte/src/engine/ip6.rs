@@ -4,9 +4,18 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::checksum::Checksum;
+use super::headers::{
+    Header, HeaderAction, IpMeta, IpMetaOpt, ModActionArg, PushActionArg,
+    RawHeader,
+};
+use super::ip4::Protocol;
+use super::packet::{PacketRead, ReadErr, WriteError};
 use core::convert::TryFrom;
-use core::fmt;
 use core::mem::size_of;
+pub use opte_api::{Ipv6Addr, Ipv6Cidr};
+use serde::{Deserialize, Serialize};
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -16,36 +25,10 @@ cfg_if! {
     }
 }
 
-use serde::{Deserialize, Serialize};
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
-
-use super::checksum::Checksum;
-use super::headers::{
-    Header, HeaderAction, IpMeta, IpMetaOpt, ModActionArg, PushActionArg,
-    RawHeader,
-};
-use super::ip4::Protocol;
-use super::packet::{PacketRead, ReadErr, WriteError};
-pub use crate::api::{Ipv6Addr, Ipv6Cidr};
-
 pub const IPV6_HDR_VSN_MASK: u8 = 0xF0;
 pub const IPV6_HDR_VSN_SHIFT: u8 = 4;
 pub const IPV6_HDR_SZ: usize = size_of::<Ipv6HdrRaw>();
 pub const IPV6_VERSION: u8 = 6;
-
-impl fmt::Display for Ipv6Addr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let sip6 = smoltcp::wire::Ipv6Address(self.bytes());
-        write!(f, "{}", sip6)
-    }
-}
-
-impl fmt::Display for Ipv6Cidr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let (ip, prefix_len) = self.parts();
-        write!(f, "{}/{}", ip, prefix_len.val())
-    }
-}
 
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,

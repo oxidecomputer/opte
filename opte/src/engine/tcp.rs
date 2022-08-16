@@ -4,9 +4,18 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::checksum::{Checksum, HeaderChecksum};
+use super::headers::{
+    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
+    RawHeader, UlpHdr, UlpMetaModify,
+};
+use super::packet::{PacketRead, ReadErr, WriteError};
 use core::convert::TryFrom;
 use core::fmt::{self, Display};
 use core::mem;
+use opte_api::DYNAMIC_PORT;
+use serde::{Deserialize, Serialize};
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -15,17 +24,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use serde::{Deserialize, Serialize};
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
-
-use super::checksum::{Checksum, HeaderChecksum};
-use super::headers::{
-    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
-    RawHeader, UlpHdr, UlpMetaModify,
-};
-use super::packet::{PacketRead, ReadErr, WriteError};
-use crate::api::DYNAMIC_PORT;
 
 pub const TCP_HDR_CSUM_OFF: usize = 16;
 pub const TCP_HDR_OFFSET_MASK: u8 = 0xF0;

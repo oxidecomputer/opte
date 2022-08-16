@@ -43,7 +43,10 @@ cfg_if! {
 }
 
 #[cfg(any(feature = "api", test))]
-pub mod api;
+pub mod api {
+    pub use opte_api::*;
+}
+
 #[cfg(any(feature = "engine", test))]
 pub mod engine;
 
@@ -65,7 +68,7 @@ pub const fn bit_on(bit: u8) -> u8 {
 #[cfg(feature = "usdt")]
 #[usdt::provider]
 mod opte_provider {
-    use crate::api::Direction;
+    use opte_api::Direction;
 
     fn uft__invalidate(dir: Direction, port: &str, flow: &str, epoch: u64) {}
     fn uft__tcp__closed(dir: Direction, port: &str, flow: &str) {}

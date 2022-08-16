@@ -25,10 +25,10 @@ use super::packet::{
 use super::port::meta::Meta;
 use super::tcp::TcpMeta;
 use super::udp::UdpMeta;
-use crate::api::{Direction, MacAddr};
 use core::fmt::{self, Debug, Display};
 use cstr_core::CString;
 use illumos_ddi_dki::c_char;
+use opte_api::{Direction, MacAddr};
 use serde::{Deserialize, Serialize};
 use smoltcp::phy::ChecksumCapabilities as Csum;
 use smoltcp::wire::{DhcpPacket, DhcpRepr, Icmpv4Packet, Icmpv4Repr};

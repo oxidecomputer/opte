@@ -16,7 +16,6 @@ use super::rule::{
 };
 use super::sync::{KMutex, KMutexType};
 use super::time::Moment;
-use crate::api::{Direction, Ipv4Addr};
 use crate::{ExecCtx, LogLevel};
 use core::fmt::{self, Display};
 use core::mem;
@@ -24,6 +23,7 @@ use core::num::NonZeroU32;
 use core::result;
 use cstr_core::CString;
 use illumos_ddi_dki::c_char;
+use opte_api::{Direction, Ipv4Addr};
 use serde::{Deserialize, Serialize};
 
 cfg_if! {

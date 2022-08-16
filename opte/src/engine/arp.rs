@@ -11,22 +11,6 @@
 /// * RFD 9 -- NETWORKING CONSIDERATIONS
 /// ** §1.13 ARP
 /// * RFC 826 -- An Ethernet Address Resolution Protocol
-use core::convert::TryFrom;
-use core::fmt::{self, Display};
-use core::mem;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
-    } else {
-        use std::vec::Vec;
-    }
-}
-
-use serde::{Deserialize, Serialize};
-
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
-
 use super::ether::{
     EtherHdr, EtherMeta, ETHER_HDR_SZ, ETHER_TYPE_ARP, ETHER_TYPE_IPV4,
 };
@@ -40,7 +24,20 @@ use super::rule::{
     EtherAddrMatch, EtherTypeMatch, GenPacketResult, HairpinAction,
     Ipv4AddrMatch, Payload, Predicate,
 };
-use crate::api::{Ipv4Addr, MacAddr};
+use core::convert::TryFrom;
+use core::fmt::{self, Display};
+use core::mem;
+use opte_api::{Ipv4Addr, MacAddr};
+use serde::{Deserialize, Serialize};
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
+
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::vec::Vec;
+    } else {
+        use std::vec::Vec;
+    }
+}
 
 pub const ARP_HTYPE_ETHERNET: u16 = 1;
 

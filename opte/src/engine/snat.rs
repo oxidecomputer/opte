@@ -4,8 +4,18 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
+use super::ip4::Ipv4Meta;
+use super::layer::InnerFlowId;
+use super::port::meta::Meta;
+use super::rule::{
+    self, ActionDesc, AllowOrDeny, DataPredicate, FiniteResource, Predicate,
+    Resource, ResourceEntry, ResourceError, StatefulAction, HT,
+};
+use super::sync::{KMutex, KMutexType};
 use core::fmt;
 use core::ops::RangeInclusive;
+use opte_api::{Direction, Ipv4Addr};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -20,17 +30,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use super::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
-use super::ip4::Ipv4Meta;
-use super::layer::InnerFlowId;
-use super::port::meta::Meta;
-use super::rule::{
-    self, ActionDesc, AllowOrDeny, DataPredicate, FiniteResource, Predicate,
-    Resource, ResourceEntry, ResourceError, StatefulAction, HT,
-};
-use super::sync::{KMutex, KMutexType};
-use crate::api::{Direction, Ipv4Addr};
 
 #[derive(Clone, Copy)]
 pub struct NatPoolEntry {
@@ -255,12 +254,12 @@ mod test {
 
     #[test]
     fn snat4_desc_lifecycle() {
-        use crate::api::MacAddr;
         use crate::engine::ether::{EtherMeta, ETHER_TYPE_IPV4};
         use crate::engine::headers::{IpMeta, UlpMeta};
         use crate::engine::ip4::Protocol;
         use crate::engine::packet::{MetaGroup, PacketMeta};
         use crate::engine::tcp::TcpMeta;
+        use opte_api::MacAddr;
 
         let priv_mac = MacAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
         let dest_mac = MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);

@@ -432,10 +432,22 @@ dependencies = [
  "heapless",
  "illumos-ddi-dki",
  "illumos-sys-hdrs",
+ "opte-api",
  "postcard",
  "serde",
  "smoltcp",
  "zerocopy",
+]
+
+[[package]]
+name = "opte-api"
+version = "0.1.0"
+dependencies = [
+ "cfg-if 0.1.10",
+ "illumos-sys-hdrs",
+ "postcard",
+ "serde",
+ "smoltcp",
 ]
 
 [[package]]

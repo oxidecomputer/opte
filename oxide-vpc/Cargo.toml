@@ -25,7 +25,6 @@ cfg-if = "0.1"
 cstr_core = "0.2.3"
 illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
 opte = { path = "../opte", default-features = false }
-zerocopy = "0.6.1"
 #
 # XXX usdt is really a dev dependency, but when I move it there weird
 # stuff happens (TM). Maybe to do with feature flags?
@@ -36,6 +35,7 @@ zerocopy = "0.6.1"
 # cargo test --features=usdt
 #
 usdt = { version = "0.3.2", optional = true }
+zerocopy = "0.6.1"
 
 [dependencies.serde]
 version = "1.0"

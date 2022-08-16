@@ -4,11 +4,19 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::headers::{
+    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
+    RawHeader,
+};
+use super::packet::{PacketRead, ReadErr, WriteError};
 use core::convert::TryFrom;
 use core::fmt::{self, Debug, Display};
 use core::mem;
 use core::result;
 use core::str::FromStr;
+use opte_api::MacAddr;
+use serde::{Deserialize, Serialize};
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -19,16 +27,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use serde::{Deserialize, Serialize};
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
-
-use super::headers::{
-    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
-    RawHeader,
-};
-use super::packet::{PacketRead, ReadErr, WriteError};
-use crate::api::MacAddr;
 
 pub const ETHER_TYPE_ETHER: u16 = 0x6558;
 pub const ETHER_TYPE_IPV4: u16 = 0x0800;
@@ -150,12 +148,6 @@ impl FromStr for EtherAddr {
 impl From<EtherAddr> for smoltcp::wire::EthernetAddress {
     fn from(addr: EtherAddr) -> Self {
         Self(addr.bytes)
-    }
-}
-
-impl From<MacAddr> for smoltcp::wire::EthernetAddress {
-    fn from(addr: MacAddr) -> Self {
-        Self(addr.bytes())
     }
 }
 

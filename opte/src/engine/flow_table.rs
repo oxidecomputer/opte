@@ -6,10 +6,10 @@
 
 use super::layer::InnerFlowId;
 use super::time::{Moment, MILLIS};
-use crate::api::OpteError;
 use core::fmt;
 use core::num::NonZeroU32;
 use cstr_core::CString;
+use opte_api::OpteError;
 use serde::{Deserialize, Serialize};
 
 cfg_if! {

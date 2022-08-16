@@ -29,7 +29,7 @@ use super::rule::{
     IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate,
 };
 use super::udp::{UdpHdr, UdpMeta};
-use crate::api::{Dhcp4Action, Dhcp4ReplyType, MacAddr, SubnetRouterPair};
+use opte_api::{Dhcp4Action, Dhcp4ReplyType, MacAddr, SubnetRouterPair};
 
 /// The DHCP message type.
 ///
@@ -157,49 +157,6 @@ impl Display for MessageType {
 #[derive(Clone, Debug)]
 pub struct ClasslessStaticRouteOpt {
     routes: Vec<SubnetRouterPair>,
-}
-
-impl SubnetRouterPair {
-    fn encode_len(&self) -> u8 {
-        // One byte for the subnet mask width.
-        let mut entry_size = 1u8;
-
-        // Variable length for the subnet number. Only significant
-        // bytes are included.
-        entry_size += self.subnet_encode_len();
-
-        // Four bytes for the router's address.
-        entry_size += 4;
-        entry_size
-    }
-
-    fn encode(&self, bytes: &mut [u8]) {
-        let mut pos = 0;
-        bytes[pos] = self.subnet.prefix_len();
-        pos += 1;
-        let n = self.subnet_encode_len();
-        let subnet_bytes = self.subnet.ip().bytes();
-        for i in 0..n {
-            bytes[pos] = subnet_bytes[i as usize];
-            pos += 1;
-        }
-
-        for b in self.router.bytes() {
-            bytes[pos] = b;
-            pos += 1;
-        }
-    }
-
-    fn subnet_encode_len(&self) -> u8 {
-        let prefix = self.subnet.prefix_len();
-
-        if prefix == 0 {
-            0
-        } else {
-            let round = if prefix % 8 != 0 { 1 } else { 0 };
-            (prefix / 8) + round
-        }
-    }
 }
 
 impl ClasslessStaticRouteOpt {

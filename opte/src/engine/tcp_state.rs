@@ -6,9 +6,9 @@
 
 use super::layer::InnerFlowId;
 use super::tcp::{TcpFlags, TcpMeta, TcpState};
-use crate::api::Direction;
 use core::fmt::{self, Display};
 use cstr_core::CString;
+use opte_api::Direction;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

@@ -17,13 +17,13 @@ use super::sync::{KMutex, KMutexType};
 use super::tcp::TcpState;
 use super::tcp_state::TcpFlowState;
 use super::time::Moment;
-use crate::api::{Direction, OpteError};
 use crate::ExecCtx;
 use core::fmt::{self, Display};
 use core::num::NonZeroU32;
 use core::result;
 use core::sync::atomic::{AtomicU64, Ordering::SeqCst};
 use cstr_core::CString;
+use opte_api::{Direction, OpteError};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

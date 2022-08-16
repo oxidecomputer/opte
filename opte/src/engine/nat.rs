@@ -4,7 +4,15 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::ether::EtherMeta;
+use super::ip4::Ipv4Meta;
+use super::layer::InnerFlowId;
+use super::port::meta::Meta;
+use super::rule::{
+    self, ActionDesc, AllowOrDeny, DataPredicate, Predicate, StatefulAction, HT,
+};
 use core::fmt;
+use opte_api::{Direction, Ipv4Addr, MacAddr};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -17,15 +25,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use super::ether::EtherMeta;
-use super::ip4::Ipv4Meta;
-use super::layer::InnerFlowId;
-use super::port::meta::Meta;
-use super::rule::{
-    self, ActionDesc, AllowOrDeny, DataPredicate, Predicate, StatefulAction, HT,
-};
-use crate::api::{Direction, Ipv4Addr, MacAddr};
 
 #[derive(Clone)]
 pub struct Nat4 {
@@ -136,12 +135,12 @@ mod test {
 
     #[test]
     fn nat4_rewrite() {
-        use crate::api::MacAddr;
         use crate::engine::ether::{EtherMeta, ETHER_TYPE_IPV4};
         use crate::engine::headers::{IpMeta, UlpMeta};
         use crate::engine::ip4::Protocol;
         use crate::engine::packet::{MetaGroup, PacketMeta};
         use crate::engine::tcp::TcpMeta;
+        use opte_api::MacAddr;
 
         let priv_mac = MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x01]);
         let dest_mac = MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]);

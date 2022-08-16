@@ -1,0 +1,23 @@
+[package]
+name = "opte-api"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+cfg-if = "0.1"
+illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
+postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
+
+[dependencies.serde]
+version = "1.0"
+default-features = false
+features = ["alloc", "derive"]
+
+[dependencies.smoltcp]
+version = "0.8.0"
+default-features = false
+features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-ipv6", "proto-dhcpv4", "socket", "socket-raw"]

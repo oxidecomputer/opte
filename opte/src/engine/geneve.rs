@@ -4,8 +4,17 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::ether::{EtherType, ETHER_TYPE_ETHER};
+use super::headers::{
+    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
+    RawHeader,
+};
+use super::packet::{PacketRead, ReadErr, WriteError};
 use core::convert::TryFrom;
 use core::mem;
+pub use opte_api::Vni;
+use serde::{Deserialize, Serialize};
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -14,17 +23,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use serde::{Deserialize, Serialize};
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
-
-use super::ether::{EtherType, ETHER_TYPE_ETHER};
-use super::headers::{
-    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
-    RawHeader,
-};
-use super::packet::{PacketRead, ReadErr, WriteError};
-pub use crate::api::Vni;
 
 pub const GENEVE_VSN: u8 = 0;
 pub const GENEVE_VER_MASK: u8 = 0xC0;

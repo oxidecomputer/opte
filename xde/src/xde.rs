@@ -14,22 +14,19 @@
 // - ddm integration to choose correct underlay device (currently just using
 //   first device)
 
-use core::convert::TryInto;
-use core::num::NonZeroU32;
-use core::ptr;
-use core::time::Duration;
-
+use crate::ioctl::IoctlEnvelope;
+use crate::mac::{self, MacClient, MacOpenFlags, MacTxFlags};
+use crate::{dld, dls, ip, secpolicy, sys, warn};
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-
-use illumos_ddi_dki::*;
-
-use crate::ioctl::IoctlEnvelope;
-use crate::mac::{self, MacClient, MacOpenFlags, MacTxFlags};
-use crate::{dld, dls, ip, secpolicy, sys, warn};
+use core::convert::TryInto;
+use core::num::NonZeroU32;
+use core::ptr;
+use core::time::Duration;
 use cstr_core::{CStr, CString};
+use illumos_ddi_dki::*;
 use opte::api::{
     CmdOk, Direction, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
     SetXdeUnderlayReq,

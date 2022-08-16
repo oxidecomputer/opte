@@ -6,6 +6,16 @@
 
 use core::convert::TryFrom;
 use core::mem;
+use serde::{Deserialize, Serialize};
+use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
+
+use crate::engine::checksum::{Checksum, HeaderChecksum};
+use crate::engine::headers::{
+    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
+    RawHeader, UlpHdr, UlpMeta, UlpMetaModify, UlpMetaOpt,
+};
+use crate::engine::packet::{PacketRead, ReadErr, WriteError};
+use opte_api::DYNAMIC_PORT;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -14,17 +24,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use serde::{Deserialize, Serialize};
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
-
-use crate::api::DYNAMIC_PORT;
-use crate::engine::checksum::{Checksum, HeaderChecksum};
-use crate::engine::headers::{
-    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
-    RawHeader, UlpHdr, UlpMeta, UlpMetaModify, UlpMetaOpt,
-};
-use crate::engine::packet::{PacketRead, ReadErr, WriteError};
 
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,

@@ -5,7 +5,15 @@
 // Copyright 2022 Oxide Computer Company
 
 //! The ioctl interface.
+//!
+//! XXX This stuff needs to be moved to oxide-api.
+use super::flow_table::FlowEntryDump;
+use super::layer;
+use super::port::Port;
+use super::rule;
 use core::fmt::Debug;
+use opte_api::{CmdOk, OpteError};
+use serde::{Deserialize, Serialize};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -16,14 +24,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use serde::{Deserialize, Serialize};
-
-use super::flow_table::FlowEntryDump;
-use super::layer;
-use super::port::Port;
-use super::rule;
-use crate::api::{CmdOk, OpteError};
 
 /// Dump various information about a `Layer` for use in debugging or
 /// administrative purposes.

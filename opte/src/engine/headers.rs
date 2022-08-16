@@ -4,7 +4,16 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::checksum::Checksum;
+use super::ip4::{Ipv4Hdr, Ipv4Meta, Ipv4MetaOpt, IPV4_HDR_SZ};
+use super::ip6::{Ipv6Hdr, Ipv6Meta, Ipv6MetaOpt, IPV6_HDR_SZ};
+use super::packet::{PacketRead, ReadErr, WriteError};
+use super::tcp::{TcpHdr, TcpMeta, TcpMetaOpt};
+use super::udp::{UdpHdr, UdpMeta, UdpMetaOpt};
 use core::fmt;
+pub use opte_api::{IpAddr, IpCidr};
+use serde::{Deserialize, Serialize};
+use zerocopy::LayoutVerified;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -14,34 +23,8 @@ cfg_if! {
     }
 }
 
-use serde::{Deserialize, Serialize};
-use zerocopy::LayoutVerified;
-
-use super::checksum::Checksum;
-use super::ip4::{Ipv4Hdr, Ipv4Meta, Ipv4MetaOpt, IPV4_HDR_SZ};
-use super::ip6::{Ipv6Hdr, Ipv6Meta, Ipv6MetaOpt, IPV6_HDR_SZ};
-use super::packet::{PacketRead, ReadErr, WriteError};
-use super::tcp::{TcpHdr, TcpMeta, TcpMetaOpt};
-use super::udp::{UdpHdr, UdpMeta, UdpMetaOpt};
-pub use crate::api::{IpAddr, IpCidr};
-
 pub const AF_INET: i32 = 2;
 pub const AF_INET6: i32 = 26;
-
-impl Default for IpAddr {
-    fn default() -> Self {
-        IpAddr::Ip4(Default::default())
-    }
-}
-
-impl fmt::Display for IpAddr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            IpAddr::Ip4(ip4) => write!(f, "{}", ip4),
-            IpAddr::Ip6(ip6) => write!(f, "{}", ip6),
-        }
-    }
-}
 
 /// A raw header.
 ///
@@ -536,31 +519,6 @@ where
         match self {
             Self::Ignore => (),
             Self::Modify(arg) => meta.as_mut().unwrap().run_modify(arg),
-        }
-    }
-}
-
-impl IpCidr {
-    pub fn is_default(&self) -> bool {
-        match self {
-            Self::Ip4(ip4) => ip4.is_default(),
-            Self::Ip6(_) => todo!("IPv6 is_default"),
-        }
-    }
-
-    pub fn prefix_len(&self) -> usize {
-        match self {
-            Self::Ip4(ip4) => ip4.prefix_len() as usize,
-            Self::Ip6(_) => todo!("IPv6 prefix_len"),
-        }
-    }
-}
-
-impl fmt::Display for IpCidr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Ip4(ip4) => write!(f, "{}", ip4),
-            Self::Ip6(ip6) => write!(f, "{}", ip6),
         }
     }
 }
