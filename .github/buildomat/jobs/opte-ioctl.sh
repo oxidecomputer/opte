@@ -25,9 +25,3 @@ ptime -m cargo fmt -- --check
 
 header "analyze"
 ptime -m cargo check
-
-header "debug build"
-ptime -m cargo build
-
-header "release build"
-ptime -m cargo build --release

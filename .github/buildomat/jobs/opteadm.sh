@@ -28,9 +28,6 @@ cd opteadm
 header "check style"
 ptime -m cargo fmt -- --check
 
-header "analyze"
-ptime -m cargo check
-
 header "debug build"
 ptime -m cargo build
 

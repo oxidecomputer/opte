@@ -44,9 +44,6 @@ pushd xde
 header "check style"
 ptime -m cargo fmt -- --check
 
-header "analyze"
-ptime -m cargo check
-
 header "build xde (debug)"
 ptime -m ./build-debug.sh
 
