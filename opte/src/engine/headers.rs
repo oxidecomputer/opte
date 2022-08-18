@@ -78,7 +78,10 @@ pub trait Header {
 }
 
 pub trait PushActionArg {}
-pub trait ModActionArg {}
+
+/// A type that is meant to be used as an argument to a
+/// [`HeaderActionModify`] implementation.
+pub trait ModifyActionArg {}
 
 #[derive(Clone, Copy, Debug)]
 pub enum IpType {
@@ -242,7 +245,7 @@ pub enum IpMetaOpt {
 }
 
 impl PushActionArg for IpMeta {}
-impl ModActionArg for IpMetaOpt {}
+impl ModifyActionArg for IpMetaOpt {}
 
 impl From<Ipv4MetaOpt> for IpMetaOpt {
     fn from(ip4: Ipv4MetaOpt) -> Self {
@@ -366,7 +369,7 @@ pub enum UlpMetaOpt {
     Udp(UdpMetaOpt),
 }
 
-impl ModActionArg for UlpMetaOpt {}
+impl ModifyActionArg for UlpMetaOpt {}
 
 impl HeaderActionModify<UlpMetaOpt> for UlpMeta {
     fn run_modify(&mut self, spec: &UlpMetaOpt) {
@@ -422,7 +425,7 @@ impl HeaderActionModify<UlpMetaModify> for UlpMeta {
 pub enum HeaderAction<P, M>
 where
     P: PushActionArg + fmt::Debug,
-    M: ModActionArg + fmt::Debug,
+    M: ModifyActionArg + fmt::Debug,
 {
     Push(P),
     Pop,
@@ -433,7 +436,7 @@ where
 impl<P, M> Default for HeaderAction<P, M>
 where
     P: PushActionArg + fmt::Debug,
-    M: ModActionArg + fmt::Debug,
+    M: ModifyActionArg + fmt::Debug,
 {
     fn default() -> HeaderAction<P, M> {
         HeaderAction::Ignore
@@ -453,26 +456,40 @@ where
 impl<P, M> HeaderAction<P, M>
 where
     P: HeaderActionModify<M> + PushActionArg + Clone + fmt::Debug,
-    M: ModActionArg + fmt::Debug,
+    M: ModifyActionArg + fmt::Debug,
 {
-    pub fn run(&self, meta: &mut Option<P>) {
+    pub fn run(&self, meta: &mut Option<P>) -> Result<(), HeaderActionError> {
         match self {
             Self::Ignore => (),
 
-            Self::Modify(arg) => meta.as_mut().unwrap().run_modify(arg),
+            Self::Modify(arg) => match meta {
+                Some(meta) => meta.run_modify(arg),
+                None => return Err(HeaderActionError::MissingHeader),
+            },
 
             Self::Push(arg) => {
                 meta.replace(arg.clone());
             }
 
+            // A previous action may have already removed this meta,
+            // which is fine.
             Self::Pop => {
                 meta.take();
             }
         }
+
+        Ok(())
     }
 }
 
-pub trait HeaderActionModify<M: ModActionArg> {
+#[derive(Clone, Debug)]
+pub enum HeaderActionError {
+    MissingHeader,
+}
+
+/// A header type that allows itself to be modified via a
+/// [`ModifyActionArg`] specification.
+pub trait HeaderActionModify<M: ModifyActionArg> {
     fn run_modify(&mut self, mod_spec: &M);
 }
 
@@ -488,37 +505,33 @@ pub struct UlpMetaModify {
     pub tcp_flags: Option<u8>,
 }
 
-impl ModActionArg for UlpMetaModify {}
+impl ModifyActionArg for UlpMetaModify {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum UlpHeaderAction<M>
-where
-    M: ModActionArg + fmt::Debug,
-{
+pub enum UlpHeaderAction<M: ModifyActionArg> {
     Ignore,
     Modify(M),
 }
 
-impl<M> Default for UlpHeaderAction<M>
-where
-    M: ModActionArg + fmt::Debug,
-{
+impl<M: ModifyActionArg> Default for UlpHeaderAction<M> {
     fn default() -> UlpHeaderAction<M> {
         UlpHeaderAction::Ignore
     }
 }
 
-impl<M> UlpHeaderAction<M>
-where
-    M: ModActionArg + fmt::Debug,
-{
-    pub fn run<P>(&self, meta: &mut Option<P>)
+impl<M: ModifyActionArg> UlpHeaderAction<M> {
+    pub fn run<P>(&self, meta: &mut Option<P>) -> Result<(), HeaderActionError>
     where
-        P: HeaderActionModify<M> + fmt::Debug,
+        P: HeaderActionModify<M>,
     {
         match self {
             Self::Ignore => (),
-            Self::Modify(arg) => meta.as_mut().unwrap().run_modify(arg),
+            Self::Modify(arg) => match meta {
+                Some(meta) => meta.run_modify(arg),
+                None => return Err(HeaderActionError::MissingHeader),
+            },
         }
+
+        Ok(())
     }
 }

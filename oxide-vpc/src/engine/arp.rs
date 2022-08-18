@@ -47,7 +47,7 @@ pub fn setup(
         }
     }
 
-    let arp = Layer::new(
+    let mut arp = Layer::new(
         "arp",
         pb.name(),
         // vec![

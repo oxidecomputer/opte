@@ -9,7 +9,8 @@ use super::ip4::Ipv4Meta;
 use super::layer::InnerFlowId;
 use super::port::meta::Meta;
 use super::rule::{
-    self, ActionDesc, AllowOrDeny, DataPredicate, Predicate, StatefulAction, HT,
+    self, ActionDesc, AllowOrDeny, DataPredicate, HdrTransform, Predicate,
+    StatefulAction,
 };
 use core::fmt;
 use opte_api::{Direction, Ipv4Addr, MacAddr};
@@ -90,10 +91,10 @@ pub struct Nat4Desc {
 pub const NAT4_NAME: &'static str = "NAT4";
 
 impl ActionDesc for Nat4Desc {
-    fn gen_ht(&self, dir: Direction) -> HT {
+    fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             Direction::Out => {
-                let mut ht = HT {
+                let mut ht = HdrTransform {
                     name: NAT4_NAME.to_string(),
                     inner_ip: Ipv4Meta::modify(
                         Some(self.public_ip),
@@ -116,7 +117,7 @@ impl ActionDesc for Nat4Desc {
                 ht
             }
 
-            Direction::In => HT {
+            Direction::In => HdrTransform {
                 name: NAT4_NAME.to_string(),
                 inner_ip: Ipv4Meta::modify(None, Some(self.priv_ip), None),
                 ..Default::default()
@@ -197,7 +198,7 @@ mod test {
         // Verify outbound header transformation
         // ================================================================
         let out_ht = desc.gen_ht(Direction::Out);
-        out_ht.run(&mut pmo);
+        out_ht.run(&mut pmo).unwrap();
 
         let ether_meta = pmo.inner.ether.as_ref().unwrap();
         assert_eq!(ether_meta.src, priv_mac);
@@ -253,7 +254,7 @@ mod test {
         };
 
         let in_ht = desc.gen_ht(Direction::In);
-        in_ht.run(&mut pmi);
+        in_ht.run(&mut pmi).unwrap();
 
         let ether_meta = pmi.inner.ether.as_ref().unwrap();
         assert_eq!(ether_meta.src, dest_mac);

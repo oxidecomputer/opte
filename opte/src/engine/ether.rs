@@ -5,7 +5,7 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::headers::{
-    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
+    Header, HeaderAction, HeaderActionModify, ModifyActionArg, PushActionArg,
     RawHeader,
 };
 use super::packet::{PacketRead, ReadErr, WriteError};
@@ -213,7 +213,7 @@ pub struct EtherMetaOpt {
     dst: Option<MacAddr>,
 }
 
-impl ModActionArg for EtherMetaOpt {}
+impl ModifyActionArg for EtherMetaOpt {}
 
 impl EtherMeta {
     pub fn modify(

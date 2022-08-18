@@ -6,7 +6,7 @@
 
 use super::ether::{EtherType, ETHER_TYPE_ETHER};
 use super::headers::{
-    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
+    Header, HeaderAction, HeaderActionModify, ModifyActionArg, PushActionArg,
     RawHeader,
 };
 use super::packet::{PacketRead, ReadErr, WriteError};
@@ -45,7 +45,7 @@ pub struct GeneveMetaOpt {
     vni: Option<Vni>,
 }
 
-impl ModActionArg for GeneveMetaOpt {}
+impl ModifyActionArg for GeneveMetaOpt {}
 
 impl GeneveMeta {
     pub fn push(vni: Vni) -> HeaderAction<GeneveMeta, GeneveMetaOpt> {

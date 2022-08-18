@@ -1882,7 +1882,7 @@ fn new_port(
         warn!("disabling overlay for port: {}", name);
     }
 
-    Ok(Arc::new(pb.create(UFT_LIMIT.unwrap(), TCP_STATE_LIMIT.unwrap())))
+    Ok(Arc::new(pb.create(UFT_LIMIT.unwrap(), TCP_STATE_LIMIT.unwrap())?))
 }
 
 #[no_mangle]
@@ -2023,9 +2023,10 @@ unsafe extern "C" fn xde_rx(
         }
     };
 
-    // just go straight to overlay in passthrough mode
+    // We are in passthrough mode, skip OPTE processing.
     if (*dev).passthrough {
         mac::mac_rx((*dev).mh, mrh, mp_chain);
+        return;
     }
 
     let port = &(*dev).port;

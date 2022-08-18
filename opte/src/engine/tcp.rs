@@ -6,7 +6,7 @@
 
 use super::checksum::{Checksum, HeaderChecksum};
 use super::headers::{
-    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
+    Header, HeaderAction, HeaderActionModify, ModifyActionArg, PushActionArg,
     RawHeader, UlpHdr, UlpMetaModify,
 };
 use super::packet::{PacketRead, ReadErr, WriteError};
@@ -128,7 +128,7 @@ pub struct TcpMetaOpt {
     flags: Option<u8>,
 }
 
-impl ModActionArg for TcpMetaOpt {}
+impl ModifyActionArg for TcpMetaOpt {}
 
 impl HeaderActionModify<TcpMetaOpt> for TcpMeta {
     fn run_modify(&mut self, spec: &TcpMetaOpt) {

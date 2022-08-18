@@ -33,7 +33,7 @@ pub fn setup(
     cfg: &VpcCfg,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
-    let layer = Layer::new(NAT_LAYER_NAME, pb.name(), vec![], ft_limit);
+    let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), vec![], ft_limit);
 
     // When it comes to NAT we always prefer using 1:1 NAT of external
     // IP to SNAT. To achieve this we place the NAT rules at a lower

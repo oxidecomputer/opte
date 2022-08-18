@@ -38,8 +38,8 @@ use opte::engine::layer::{InnerFlowId, Layer};
 use opte::engine::port::meta::Meta;
 use opte::engine::port::{PortBuilder, Pos};
 use opte::engine::rule::{
-    self, Action, AllowOrDeny, DataPredicate, MappingResource, Predicate,
-    Resource, ResourceEntry, Rule, StaticAction, HT,
+    self, Action, AllowOrDeny, DataPredicate, HdrTransform, MappingResource,
+    Predicate, Resource, ResourceEntry, Rule, StaticAction,
 };
 use opte::engine::sync::{KMutex, KMutexType};
 use opte::engine::udp::UdpMeta;
@@ -63,7 +63,7 @@ pub fn setup(
     // Action Index 1
     let decap = Action::Static(Arc::new(DecapAction::new()));
 
-    let layer =
+    let mut layer =
         Layer::new(OVERLAY_LAYER_NAME, pb.name(), vec![encap, decap], ft_limit);
     let encap_rule = Rule::match_any(1, layer.action(0).unwrap().clone());
     layer.add_rule(Direction::Out, encap_rule);
@@ -245,7 +245,7 @@ impl StaticAction for EncapAction {
             }
         };
 
-        Ok(AllowOrDeny::Allow(HT {
+        Ok(AllowOrDeny::Allow(HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
             outer_ether: EtherMeta::push(
@@ -310,7 +310,7 @@ impl StaticAction for DecapAction {
         _flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> rule::GenHtResult {
-        Ok(AllowOrDeny::Allow(HT {
+        Ok(AllowOrDeny::Allow(HdrTransform {
             name: DECAP_NAME.to_string(),
             outer_ether: HeaderAction::Pop,
             outer_ip: HeaderAction::Pop,

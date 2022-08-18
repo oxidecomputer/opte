@@ -446,6 +446,23 @@ extern "C" {
     pub fn kmem_free(data: *mut c_void, size: size_t);
     pub fn kmem_zalloc(size: size_t, flag: c_int) -> *mut c_void;
 
+    pub fn kstat_create(
+        ks_module: *const c_char,
+        ks_instnace: c_int,
+        ks_name: *const c_char,
+        ks_class: *const c_char,
+        ks_type: c_uchar,
+        ks_ndata: c_ulong,
+        ks_flag: c_uchar,
+    ) -> *mut kstat_t;
+    pub fn kstat_delete(ksp: *const kstat_t);
+    pub fn kstat_install(ksp: *const kstat_t);
+    pub fn kstat_named_init(
+        knp: *const kstat_named_t,
+        name: *const c_char,
+        data_type: c_uchar,
+    );
+
     pub fn mod_install(linkage: *const modlinkage) -> c_int;
     pub fn mod_remove(linkage: *const modlinkage) -> c_int;
     pub fn mod_info(

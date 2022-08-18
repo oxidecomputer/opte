@@ -9,8 +9,8 @@ use super::ip4::Ipv4Meta;
 use super::layer::InnerFlowId;
 use super::port::meta::Meta;
 use super::rule::{
-    self, ActionDesc, AllowOrDeny, DataPredicate, FiniteResource, Predicate,
-    Resource, ResourceEntry, ResourceError, StatefulAction, HT,
+    self, ActionDesc, AllowOrDeny, DataPredicate, FiniteResource, HdrTransform,
+    Predicate, Resource, ResourceEntry, ResourceError, StatefulAction,
 };
 use super::sync::{KMutex, KMutexType};
 use core::fmt;
@@ -203,10 +203,10 @@ pub struct SNat4Desc {
 pub const SNAT4_NAME: &'static str = "SNAT4";
 
 impl ActionDesc for SNat4Desc {
-    fn gen_ht(&self, dir: Direction) -> HT {
+    fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             // Outbound traffic needs it's source IP and source port
-            Direction::Out => HT {
+            Direction::Out => HdrTransform {
                 name: SNAT4_NAME.to_string(),
                 inner_ip: Ipv4Meta::modify(Some(self.nat.ip), None, None),
                 inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
@@ -222,7 +222,7 @@ impl ActionDesc for SNat4Desc {
             // Inbound traffic needs its destination IP and
             // destination port mapped back to the private values that
             // the guest expects to see.
-            Direction::In => HT {
+            Direction::In => HdrTransform {
                 name: SNAT4_NAME.to_string(),
                 inner_ip: Ipv4Meta::modify(None, Some(self.priv_ip), None),
                 inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
@@ -321,7 +321,7 @@ mod test {
         // Verify outbound header transformation
         // ================================================================
         let out_ht = desc.gen_ht(Direction::Out);
-        out_ht.run(&mut pmo);
+        out_ht.run(&mut pmo).unwrap();
 
         let ether_meta = pmo.inner.ether.as_ref().unwrap();
         assert_eq!(ether_meta.src, priv_mac);
@@ -377,7 +377,7 @@ mod test {
         };
 
         let in_ht = desc.gen_ht(Direction::In);
-        in_ht.run(&mut pmi);
+        in_ht.run(&mut pmi).unwrap();
 
         let ether_meta = pmi.inner.ether.as_ref().unwrap();
         assert_eq!(ether_meta.src, dest_mac);

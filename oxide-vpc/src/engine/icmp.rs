@@ -32,7 +32,7 @@ pub fn setup(
         echo_dst_mac: cfg.gw_mac.into(),
         echo_dst_ip: cfg.gw_ip,
     }));
-    let icmp = Layer::new("icmp", pb.name(), vec![reply], ft_limit);
+    let mut icmp = Layer::new("icmp", pb.name(), vec![reply], ft_limit);
 
     // ================================================================
     // ICMPv4 Echo Reply

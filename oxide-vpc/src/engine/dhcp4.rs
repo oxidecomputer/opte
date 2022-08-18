@@ -113,7 +113,7 @@ pub fn setup(
     }));
     let ack_idx = 1;
 
-    let dhcp = Layer::new("dhcp4", pb.name(), vec![offer, ack], ft_limit);
+    let mut dhcp = Layer::new("dhcp4", pb.name(), vec![offer, ack], ft_limit);
 
     let discover_rule = Rule::new(1, dhcp.action(offer_idx).unwrap().clone());
     dhcp.add_rule(Direction::Out, discover_rule.finalize());

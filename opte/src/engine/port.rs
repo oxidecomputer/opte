@@ -12,17 +12,21 @@ use super::layer::{
     InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT,
 };
 use super::packet::{Initialized, Packet, PacketMeta, PacketState, Parsed};
-use super::rule::{ht_probe, Action, Finalized, Rule, HT};
+use super::rule::{
+    ht_probe, Action, Finalized, HdrTransform, HdrTransformError, Rule,
+};
 use super::sync::{KMutex, KMutexType};
 use super::tcp::TcpState;
 use super::tcp_state::TcpFlowState;
 use super::time::Moment;
+use crate::ddi::kstat::{self, KStatNamed, KStatProvider, KStatU64};
 use crate::ExecCtx;
 use core::fmt::{self, Display};
 use core::num::NonZeroU32;
 use core::result;
 use core::sync::atomic::{AtomicU64, Ordering::SeqCst};
 use cstr_core::CString;
+use kstat_macro::KStatProvider;
 use opte_api::{Direction, OpteError};
 
 cfg_if! {
@@ -45,12 +49,19 @@ pub type Result<T> = result::Result<T, OpteError>;
 pub enum ProcessError {
     BadState(PortState),
     Layer(LayerError),
+    HdrTransform(HdrTransformError),
     WriteError(super::packet::WriteError),
 }
 
 impl From<super::packet::WriteError> for ProcessError {
     fn from(e: super::packet::WriteError) -> Self {
         Self::WriteError(e)
+    }
+}
+
+impl From<HdrTransformError> for ProcessError {
+    fn from(e: HdrTransformError) -> Self {
+        Self::HdrTransform(e)
     }
 }
 
@@ -81,7 +92,6 @@ pub enum ProcessResult {
 #[derive(Clone, Debug)]
 pub enum DropReason {
     Layer { name: String },
-    TcpClosed,
     TcpErr,
 }
 
@@ -93,6 +103,31 @@ pub struct PortBuilder {
     name_cstr: CString,
     mac: EtherAddr,
     layers: KMutex<Vec<Layer>>,
+}
+
+#[derive(Clone, Debug)]
+pub enum PortCreateError {
+    InitStats(kstat::Error),
+}
+
+impl From<kstat::Error> for PortCreateError {
+    fn from(e: kstat::Error) -> Self {
+        Self::InitStats(e)
+    }
+}
+
+impl Display for PortCreateError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::InitStats(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl From<PortCreateError> for OpteError {
+    fn from(e: PortCreateError) -> Self {
+        Self::PortCreate(e.to_string())
+    }
 }
 
 impl PortBuilder {
@@ -152,7 +187,7 @@ impl PortBuilder {
         dir: Direction,
         rule: Rule<Finalized>,
     ) -> result::Result<(), OpteError> {
-        for layer in &*self.layers.lock() {
+        for layer in &mut *self.layers.lock() {
             if layer.name() == layer_name {
                 layer.add_rule(dir, rule);
                 return Ok(());
@@ -162,30 +197,30 @@ impl PortBuilder {
         Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
 
-    pub fn create(self, uft_limit: NonZeroU32, tcp_limit: NonZeroU32) -> Port {
-        Port {
+    pub fn create(
+        self,
+        uft_limit: NonZeroU32,
+        tcp_limit: NonZeroU32,
+    ) -> result::Result<Port, PortCreateError> {
+        let data = PortData {
+            state: PortState::Ready,
+            stats: KStatNamed::new("xde", &self.name, PortStats::new())?,
+            // At this point the layer pipeline is immutable, thus we
+            // move the layers out of the mutex.
+            layers: self.layers.into_inner(),
+            uft_in: FlowTable::new(&self.name, "uft_in", uft_limit, None),
+            uft_out: FlowTable::new(&self.name, "uft_out", uft_limit, None),
+            tcp_flows: FlowTable::new(&self.name, "tcp_flows", tcp_limit, None),
+        };
+
+        Ok(Port {
             name: self.name.clone(),
             name_cstr: self.name_cstr,
             mac: self.mac,
             ectx: self.ectx,
-            state: KMutex::new(PortState::Ready, KMutexType::Driver),
             epoch: AtomicU64::new(1),
-            // At this point the layer pipeline is immutable, thus we
-            // move the layers out of the mutex.
-            layers: self.layers.into_inner(),
-            uft_in: KMutex::new(
-                FlowTable::new(&self.name, "uft_in", uft_limit, None),
-                KMutexType::Driver,
-            ),
-            uft_out: KMutex::new(
-                FlowTable::new(&self.name, "uft_out", uft_limit, None),
-                KMutexType::Driver,
-            ),
-            tcp_flows: KMutex::new(
-                FlowTable::new(&self.name, "tcp_flows", tcp_limit, None),
-                KMutexType::Driver,
-            ),
-        }
+            data: KMutex::new(data, KMutexType::Driver),
+        })
     }
 
     /// Return a clone of the [`Action`] defined in the given
@@ -194,7 +229,7 @@ impl PortBuilder {
     pub fn layer_action(&self, layer: &str, idx: usize) -> Option<Action> {
         for l in &*self.layers.lock() {
             if l.name() == layer {
-                return l.action(idx).cloned();
+                return l.action(idx).clone();
             }
         }
 
@@ -341,7 +376,7 @@ pub enum DumpLayerError {
 
 #[derive(Clone, Debug)]
 pub struct HtEntry {
-    hts: Vec<HT>,
+    hts: Vec<HdrTransform>,
     // The port epoch upon which this entry was established. Used for
     // invalidation when the rule set is updated.
     epoch: u64,
@@ -357,8 +392,81 @@ impl StateSummary for HtEntry {
     }
 }
 
+/// Cumulative counters for a single [`Port`].
+#[derive(KStatProvider)]
+struct PortStats {
+    /// The number of inbound packets marked as
+    /// [`ProcessResult::Bypass`].
+    in_bypass: KStatU64,
+
+    /// The number of inbound packets dropped
+    /// ([`ProcessResult::Drop`]), for one reason or another.
+    in_drop: KStatU64,
+
+    /// The number of inbound packets dropped due to the decision of a
+    /// layer's rules. That is, a [`Rule`] was matched with an action
+    /// value of [`Action::Deny`].
+    in_drop_layer: KStatU64,
+
+    /// The number of inbound packets dropped due to an error in the
+    /// TCP state machine.
+    in_drop_tcp_err: KStatU64,
+
+    /// The number of inbound packets which generated a hairpin packet
+    /// in response.
+    in_hairpin: KStatU64,
+
+    /// The number of inbound packets processed and modified by the
+    /// port's pipeline.
+    in_modified: KStatU64,
+
+    /// The number of inbound packets which resulted in an error while
+    /// being processed.
+    in_process_err: KStatU64,
+
+    /// The number of outbound packets marked as
+    /// [`ProcessResult::Bypass`].
+    out_bypass: KStatU64,
+
+    /// The number of outbound packets dropped
+    /// ([`ProcessResult::Drop`]), for one reason or another.
+    out_drop: KStatU64,
+
+    /// The number of outbound packets dropped due to the decision of
+    /// a layer's rules. That is, a [`Rule`] was matched with an
+    /// action value of [`Action::Deny`].
+    out_drop_layer: KStatU64,
+
+    /// The number of outbound packets dropped due to an error in the
+    /// TCP state machine.
+    out_drop_tcp_err: KStatU64,
+
+    /// The number of outbound packets which generated a hairpin
+    /// packet in response.
+    out_hairpin: KStatU64,
+
+    /// The number of outbound packets processed and modified by the
+    /// port's pipeline.
+    out_modified: KStatU64,
+
+    /// The number of outbound packets which resulted in an error
+    /// while being processed.
+    out_process_err: KStatU64,
+}
+
+struct PortData {
+    state: PortState,
+    stats: KStatNamed<PortStats>,
+    layers: Vec<Layer>,
+    uft_in: FlowTable<HtEntry>,
+    uft_out: FlowTable<HtEntry>,
+    // We keep a record of the inbound UFID in the TCP flow table so
+    // that we know which inbound UFT/FT entries to retire upon
+    // connection termination.
+    tcp_flows: FlowTable<TcpFlowEntryState>,
+}
+
 pub struct Port {
-    state: KMutex<PortState>,
     epoch: AtomicU64,
     ectx: Arc<ExecCtx>,
     name: String,
@@ -366,13 +474,7 @@ pub struct Port {
     // probes.
     name_cstr: CString,
     mac: EtherAddr,
-    layers: Vec<Layer>,
-    uft_in: KMutex<FlowTable<HtEntry>>,
-    uft_out: KMutex<FlowTable<HtEntry>>,
-    // We keep a record of the inbound UFID in the TCP flow table so
-    // that we know which inbound UFT/FT entries to retire upon
-    // connection termination.
-    tcp_flows: KMutex<FlowTable<TcpFlowEntryState>>,
+    data: KMutex<PortData>,
 }
 
 // Convert:
@@ -393,8 +495,8 @@ pub struct Port {
 // ```
 macro_rules! check_state {
     ( $sg:expr, [ $( $state:expr ),* ] ) => {
-        if $( *$sg != $state )&&* {
-            Err(OpteError::BadState(format!("{}", *$sg)))
+        if $( $sg != $state )&&* {
+            Err(OpteError::BadState(format!("{}", $sg)))
         } else {
             Ok(())
         }
@@ -424,9 +526,9 @@ impl Port {
     ///
     /// * [`PortState::Running`]
     pub fn pause(&self) -> Result<()> {
-        let mut state = self.state.lock();
-        check_state!(state, [PortState::Running])?;
-        *state = PortState::Paused;
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Running])?;
+        data.state = PortState::Paused;
         Ok(())
     }
 
@@ -439,8 +541,7 @@ impl Port {
     /// This command is valid for all states. If the port is already
     /// in the running state, this is a no op.
     pub fn start(&self) {
-        let mut state = self.state.lock();
-        *state = PortState::Running;
+        self.data.lock().state = PortState::Running;
     }
 
     /// Reset the port.
@@ -456,22 +557,22 @@ impl Port {
         // It's imperative to hold the lock for the entire function so
         // that its side effects are atomic from the point of view of
         // other threads.
-        let mut state = self.state.lock();
-        *state = PortState::Ready;
+        let mut data = self.data.lock();
+        data.state = PortState::Ready;
 
         // Clear all dynamic state related to the creation of flows.
-        for layer in &*self.layers {
+        for layer in &mut data.layers {
             layer.clear_flows();
         }
 
-        self.uft_in.lock().clear();
-        self.uft_out.lock().clear();
-        self.tcp_flows.lock().clear();
+        data.uft_in.clear();
+        data.uft_out.clear();
+        data.tcp_flows.clear();
     }
 
     /// Get the current [`PortState`].
     pub fn state(&self) -> PortState {
-        *self.state.lock()
+        self.data.lock().state
     }
 
     /// Add a new `Rule` to the layer named by `layer`.
@@ -496,10 +597,10 @@ impl Port {
         dir: Direction,
         rule: Rule<Finalized>,
     ) -> Result<()> {
-        let state = self.state.lock();
-        check_state!(state, [PortState::Ready, PortState::Running])?;
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &*self.layers {
+        for layer in &mut data.layers {
             if layer.name() == layer_name {
                 self.epoch.fetch_add(1, SeqCst);
                 layer.add_rule(dir, rule);
@@ -529,6 +630,7 @@ impl Port {
     //
     fn tcp_err(
         &self,
+        data: &mut PortData,
         dir: Direction,
         msg: String,
         pkt: &mut Packet<Parsed>,
@@ -538,7 +640,7 @@ impl Port {
             super::err(format!("mblk: {}", pkt.mblk_ptr_str()));
             super::err(format!("ifid: {}", ifid));
             super::err(format!("meta: {:?}", pkt.meta()));
-            super::err(format!("flows: {:?}", *self.tcp_flows.lock(),));
+            super::err(format!("flows: {:?}", data.tcp_flows,));
             todo!("bad packet: {}", msg);
         } else {
             self.tcp_err_probe(dir, ifid, pkt, msg)
@@ -584,17 +686,14 @@ impl Port {
     ///
     /// This command is valid for any [`PortState`].
     pub fn dump_layer(&self, name: &str) -> Result<ioctl::DumpLayerResp> {
-        let state = self.state.lock();
+        let data = self.data.lock();
 
-        for l in &*self.layers {
+        for l in &data.layers {
             if l.name() == name {
                 return Ok(l.dump());
             }
         }
 
-        // Ensure the state lock is held for the entirety of the
-        // operation so that it is atomic.
-        drop(state);
         Err(OpteError::LayerNotFound(name.to_string()))
     }
 
@@ -608,13 +707,13 @@ impl Port {
     /// * [`PortState::Paused`]
     /// * [`PortState::Restored`]
     pub fn dump_tcp_flows(&self) -> Result<ioctl::DumpTcpFlowsResp> {
-        let state = self.state.lock();
+        let data = self.data.lock();
         check_state!(
-            state,
+            data.state,
             [PortState::Running, PortState::Paused, PortState::Restored]
         )?;
 
-        Ok(ioctl::DumpTcpFlowsResp { flows: self.tcp_flows.lock().dump() })
+        Ok(ioctl::DumpTcpFlowsResp { flows: data.tcp_flows.dump() })
     }
 
     /// Clear all entries from the Unified Flow Table (UFT).
@@ -625,10 +724,10 @@ impl Port {
     ///
     /// * [`PortState::Running`]
     pub fn clear_uft(&self) -> Result<()> {
-        let state = self.state.lock();
-        check_state!(state, [PortState::Running])?;
-        self.uft_in.lock().clear();
-        self.uft_out.lock().clear();
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Running])?;
+        data.uft_in.clear();
+        data.uft_out.clear();
         Ok(())
     }
 
@@ -642,24 +741,20 @@ impl Port {
     /// * [`PortState::Paused`]
     /// * [`PortState::Restored`]
     pub fn dump_uft(&self) -> Result<ioctl::DumpUftResp> {
-        let state = self.state.lock();
+        let data = self.data.lock();
 
         check_state!(
-            state,
+            data.state,
             [PortState::Running, PortState::Paused, PortState::Restored],
         )?;
 
-        let in_lock = self.uft_in.lock();
-        let uft_in_limit = in_lock.get_limit().get();
-        let uft_in_num_flows = in_lock.num_flows();
-        let uft_in = in_lock.dump();
-        drop(in_lock);
+        let uft_in_limit = data.uft_in.get_limit().get();
+        let uft_in_num_flows = data.uft_in.num_flows();
+        let uft_in = data.uft_in.dump();
 
-        let out_lock = self.uft_out.lock();
-        let uft_out_limit = out_lock.get_limit().get();
-        let uft_out_num_flows = out_lock.num_flows();
-        let uft_out = out_lock.dump();
-        drop(out_lock);
+        let uft_out_limit = data.uft_out.get_limit().get();
+        let uft_out_num_flows = data.uft_out.num_flows();
+        let uft_out = data.uft_out.dump();
 
         Ok(ioctl::DumpUftResp {
             uft_in_limit,
@@ -679,16 +774,14 @@ impl Port {
     ///
     /// * [`PortState::Running`]
     pub fn expire_flows(&self, now: Moment) -> Result<()> {
-        let state = self.state.lock();
-        check_state!(state, [PortState::Running])?;
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Running])?;
 
-        for l in &self.layers {
+        for l in &mut data.layers {
             l.expire_flows(now);
         }
-        let _ =
-            self.uft_in.lock().expire_flows(now, |_| FLOW_ID_DEFAULT.clone());
-        let _ =
-            self.uft_out.lock().expire_flows(now, |_| FLOW_ID_DEFAULT.clone());
+        let _ = data.uft_in.expire_flows(now, |_| FLOW_ID_DEFAULT.clone());
+        let _ = data.uft_out.expire_flows(now, |_| FLOW_ID_DEFAULT.clone());
         Ok(())
     }
 
@@ -711,17 +804,14 @@ impl Port {
         dir: Direction,
         rule: &Rule<Finalized>,
     ) -> Result<Option<RuleId>> {
-        let state = self.state.lock();
+        let data = self.data.lock();
 
-        for layer in &self.layers {
+        for layer in &data.layers {
             if layer.name() == layer_name {
                 return Ok(layer.find_rule(dir, rule));
             }
         }
 
-        // Perhaps this is silly, but I want to make sure the state
-        // lock is held for the execution of this method.
-        drop(state);
         Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
 
@@ -732,8 +822,9 @@ impl Port {
     /// # States
     ///
     /// This command is valid for any [`PortState`].
-    pub fn layer_action(&self, layer: &str, idx: usize) -> Option<&Action> {
-        for l in &*self.layers {
+    pub fn layer_action(&self, layer: &str, idx: usize) -> Option<Action> {
+        let data = self.data.lock();
+        for l in &data.layers {
             if l.name() == layer {
                 return l.action(idx);
             }
@@ -748,10 +839,10 @@ impl Port {
     ///
     /// This command is valid for any [`PortState`].
     pub fn list_layers(&self) -> ioctl::ListLayersResp {
+        let data = self.data.lock();
         let mut tmp = vec![];
-        let state = self.state.lock();
 
-        for layer in &*self.layers {
+        for layer in &data.layers {
             tmp.push(ioctl::LayerDesc {
                 name: layer.name().to_string(),
                 rules_in: layer.num_rules(Direction::In),
@@ -760,9 +851,6 @@ impl Port {
             });
         }
 
-        // Perhaps this is silly, but I want to make sure the state
-        // lock is held for the execution of this method.
-        drop(state);
         ioctl::ListLayersResp { layers: tmp }
     }
 
@@ -781,6 +869,70 @@ impl Port {
         &self.name_cstr
     }
 
+    fn update_stats_in(
+        stats: &mut PortStats,
+        res: &result::Result<ProcessResult, ProcessError>,
+    ) {
+        match res {
+            Ok(ProcessResult::Bypass) => stats.in_bypass += 1,
+
+            Ok(ProcessResult::Drop { reason }) => {
+                stats.in_drop += 1;
+
+                match reason {
+                    DropReason::Layer { name: _ } => stats.in_drop_layer += 1,
+                    DropReason::TcpErr => stats.in_drop_tcp_err += 1,
+                }
+            }
+
+            Ok(ProcessResult::Modified) => stats.in_modified += 1,
+
+            Ok(ProcessResult::Hairpin(_)) => stats.in_hairpin += 1,
+
+            // XXX We should split the different error types out into
+            // individual stats. However, I'm not sure exactly how I
+            // would like to to this just yet, and I don't want to
+            // hold up this stat work any longer -- better to improve
+            // upon stats in follow-up work. E.g., it might make sense
+            // to just have a top-level error counter in the
+            // PortStats, and then also publisher LayerStats for each
+            // layer along with the different error counts.
+            Err(_) => stats.in_process_err += 1,
+        }
+    }
+
+    fn update_stats_out(
+        stats: &mut PortStats,
+        res: &result::Result<ProcessResult, ProcessError>,
+    ) {
+        match res {
+            Ok(ProcessResult::Bypass) => stats.out_bypass += 1,
+
+            Ok(ProcessResult::Drop { reason }) => {
+                stats.out_drop += 1;
+
+                match reason {
+                    DropReason::Layer { name: _ } => stats.out_drop_layer += 1,
+                    DropReason::TcpErr => stats.out_drop_tcp_err += 1,
+                }
+            }
+
+            Ok(ProcessResult::Modified) => stats.out_modified += 1,
+
+            Ok(ProcessResult::Hairpin(_)) => stats.out_hairpin += 1,
+
+            // XXX We should split the different error types out into
+            // individual stats. However, I'm not sure exactly how I
+            // would like to to this just yet, and I don't want to
+            // hold up this stat work any longer -- better to improve
+            // upon stats in follow-up work. E.g., it might make sense
+            // to just have a top-level error counter in the
+            // PortStats, and then also publisher LayerStats for each
+            // layer along with the different error counts.
+            Err(_) => stats.out_process_err += 1,
+        }
+    }
+
     /// Process the packet.
     ///
     /// # States
@@ -792,39 +944,27 @@ impl Port {
         pkt: &mut Packet<Parsed>,
         lmeta: &mut meta::Meta,
     ) -> result::Result<ProcessResult, ProcessError> {
-        // XXX Yes, we are holding this mutex on all admin calls as
-        // well. This means admin and datapath block each other --
-        // this is not great. Given that we only have the `mc_start()`
-        // and `mc_stop()` transitions to worry about, we drop the lock
-        // directly after checking the state, as we know there is no
-        // chance for a state transition unless the client is closing
-        // its handle to us. However, this brings up a much larger
-        // area of concern that needs to be figured out: and that is
-        // how to perform serialization/synchronization between admin
-        // commands and datapath. E.g., mac deals with these concerns
-        // via the "mac perimeter" along with per-CPU reference
-        // counting and flags. Given that OPTE is currently meant to
-        // only run as part of a mac provider, it is already taking
-        // advantage of some of this synchronization implicitly.
-        // However, the admin ioctls (via DLD) are currently not
-        // holding the mac perimeter, and thus present an area for
-        // problems. Furthermore, how do we want to do pause/resume,
-        // save/restore? Should these be first class operations in the
-        // mac framework? If not, are there other mac APIs we need to
-        // properly support pause/resume in OPTE while still playing
-        // nicely with mac?
-        let state = self.state.lock();
-        check_state!(state, [PortState::Running])
-            .map_err(|_| ProcessError::BadState(*state))?;
-        drop(state);
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Running])
+            .map_err(|_| ProcessError::BadState(data.state))?;
 
         let ifid = InnerFlowId::from(pkt.meta());
         let epoch = self.epoch.load(SeqCst);
         self.port_process_entry_probe(dir, &ifid, epoch, &pkt);
         let res = match dir {
-            Direction::Out => self.process_out(&ifid, epoch, pkt, lmeta),
-            Direction::In => self.process_in(&ifid, epoch, pkt, lmeta),
+            Direction::Out => {
+                let res = self.process_out(&mut data, &ifid, epoch, pkt, lmeta);
+                Self::update_stats_out(&mut data.stats.vals, &res);
+                res
+            }
+
+            Direction::In => {
+                let res = self.process_in(&mut data, &ifid, epoch, pkt, lmeta);
+                Self::update_stats_in(&mut data.stats.vals, &res);
+                res
+            }
         };
+        drop(data);
         self.port_process_return_probe(dir, &ifid, epoch, &pkt, &res);
         // XXX If this is a Hairpin result there is no need for this call.
         pkt.emit_headers()?;
@@ -854,10 +994,10 @@ impl Port {
         dir: Direction,
         id: RuleId,
     ) -> Result<()> {
-        let state = self.state.lock();
-        check_state!(state, [PortState::Ready, PortState::Running])?;
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &self.layers {
+        for layer in &mut data.layers {
             if layer.name() == layer_name {
                 match layer.remove_rule(dir, id) {
                     Err(_) => return Err(OpteError::RuleNotFound(id)),
@@ -905,10 +1045,10 @@ impl Port {
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
     ) -> Result<()> {
-        let state = self.state.lock();
-        check_state!(state, [PortState::Ready, PortState::Running])?;
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &self.layers {
+        for layer in &mut data.layers {
             if layer.name() == layer_name {
                 self.epoch.fetch_add(1, SeqCst);
                 layer.set_rules(in_rules, out_rules);
@@ -930,7 +1070,8 @@ enum TcpMaybeClosed {
 impl Port {
     // Process the packet against each layer in turn. If `Allow` is
     // returned, then `meta` contains the updated metadata, and `hts`
-    // contains the list of HTs run against the metadata.
+    // contains the list of header transformations to run against the
+    // metadata.
     //
     // Processing may return early for several reasons.
     //
@@ -942,15 +1083,16 @@ impl Port {
     // * Error: An error has ocurred and processing cannot continue.
     fn layers_process(
         &self,
+        data: &mut PortData,
         dir: Direction,
         ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
-        hts: &mut Vec<HT>,
+        hts: &mut Vec<HdrTransform>,
         lmeta: &mut meta::Meta,
     ) -> result::Result<LayerResult, LayerError> {
         match dir {
             Direction::Out => {
-                for layer in &self.layers {
+                for layer in &mut data.layers {
                     let res =
                         layer.process(&self.ectx, dir, ifid, pkt, hts, lmeta);
 
@@ -964,7 +1106,7 @@ impl Port {
             }
 
             Direction::In => {
-                for layer in self.layers.iter().rev() {
+                for layer in data.layers.iter_mut().rev() {
                     let res =
                         layer.process(&self.ectx, dir, ifid, pkt, hts, lmeta);
 
@@ -1069,6 +1211,7 @@ impl Port {
     // when an inbound UFT entry exists.
     fn process_in_tcp_existing(
         &self,
+        data: &mut PortData,
         pmeta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
         use Direction::In;
@@ -1085,19 +1228,18 @@ impl Port {
         // we've implemented the notion of FlowSet and Packet is
         // generic on header group/flow type.
         let tcp = pmeta.inner_tcp().unwrap();
-        let mut lock = self.tcp_flows.lock();
+        let tcp_flows = &mut data.tcp_flows;
 
-        match lock.get_mut(&ufid_out) {
+        match tcp_flows.get_mut(&ufid_out) {
             Some(entry) => {
                 let tfes = entry.state_mut();
 
                 match tfes.tcp_state.process(In, &ufid_out, tcp) {
                     Ok(tcp_state) => {
                         if tcp_state == TcpState::Closed {
-                            let entry = lock.remove(&ufid_out).unwrap();
-                            drop(lock);
+                            let entry = tcp_flows.remove(&ufid_out).unwrap();
                             let ufid_in = entry.state().inbound_ufid.as_ref();
-                            self.uft_tcp_closed(&ufid_out, ufid_in);
+                            self.uft_tcp_closed(data, &ufid_out, ufid_in);
                         }
 
                         Ok(tcp_state)
@@ -1115,6 +1257,7 @@ impl Port {
     // when an inbound UFT entry was just created.
     fn process_in_tcp_new(
         &self,
+        data: &mut PortData,
         ufid_in: &InnerFlowId,
         pmeta: &PacketMeta,
     ) -> result::Result<TcpState, String> {
@@ -1132,21 +1275,20 @@ impl Port {
         // we've implemented the notion of FlowSet and Packet is
         // generic on header group/flow type.
         let tcp = pmeta.inner_tcp().unwrap();
-        let mut lock = self.tcp_flows.lock();
+        let tcp_flows = &mut data.tcp_flows;
 
-        match lock.get_mut(&ufid_out) {
+        match tcp_flows.get_mut(&ufid_out) {
             Some(entry) => {
                 let tfes = entry.state_mut();
 
                 let res = match tfes.tcp_state.process(In, &ufid_out, &tcp) {
                     Ok(tcp_state) => {
                         if tcp_state == TcpState::Closed {
-                            let entry = lock.remove(&ufid_out).unwrap();
-                            drop(lock);
+                            let entry = tcp_flows.remove(&ufid_out).unwrap();
                             // The inbound side of the UFT is based on
                             // the network-side of the flow (pre-processing).
                             let ufid_in = entry.state().inbound_ufid.as_ref();
-                            self.uft_tcp_closed(&ufid_out, ufid_in);
+                            self.uft_tcp_closed(data, &ufid_out, ufid_in);
                             return Ok(tcp_state);
                         }
 
@@ -1182,7 +1324,7 @@ impl Port {
                 };
 
                 // TODO kill unwrap
-                lock.add(ufid_out.clone(), tfes).unwrap();
+                tcp_flows.add(ufid_out.clone(), tfes).unwrap();
                 Ok(tcp_state)
             }
         }
@@ -1190,6 +1332,7 @@ impl Port {
 
     fn process_in_miss(
         &self,
+        data: &mut PortData,
         ufid_in: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
@@ -1198,7 +1341,7 @@ impl Port {
         use Direction::In;
 
         let mut hts = Vec::new();
-        let res = self.layers_process(In, ufid_in, pkt, &mut hts, lmeta);
+        let res = self.layers_process(data, In, ufid_in, pkt, &mut hts, lmeta);
         match res {
             Ok(LayerResult::Allow) => {
                 // If there is no flow ID, then do not create a UFT
@@ -1226,7 +1369,7 @@ impl Port {
         // For inbound traffic the TCP flow table must be
         // checked _after_ processing take place.
         if pkt.meta().is_inner_tcp() {
-            match self.process_in_tcp_new(ufid_in, pkt.meta()) {
+            match self.process_in_tcp_new(data, ufid_in, pkt.meta()) {
                 Ok(TcpState::Closed) => {
                     return Ok(ProcessResult::Modified);
                 }
@@ -1235,12 +1378,12 @@ impl Port {
                     // We have a good TCP flow, create a new UFT entry.
                     //
                     // TODO kill unwrap
-                    self.uft_in.lock().add(ufid_in.clone(), hte).unwrap();
+                    data.uft_in.add(ufid_in.clone(), hte).unwrap();
                     return Ok(ProcessResult::Modified);
                 }
 
                 Err(e) => {
-                    self.tcp_err(In, e, pkt, ufid_in);
+                    self.tcp_err(data, In, e, pkt, ufid_in);
                     return Ok(ProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
@@ -1248,7 +1391,7 @@ impl Port {
             }
         } else {
             // TODO kill unwrap
-            self.uft_in.lock().add(ufid_in.clone(), hte).unwrap();
+            data.uft_in.add(ufid_in.clone(), hte).unwrap();
         }
 
         Ok(ProcessResult::Modified)
@@ -1256,6 +1399,7 @@ impl Port {
 
     fn process_in(
         &self,
+        data: &mut PortData,
         ufid_in: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
@@ -1265,30 +1409,29 @@ impl Port {
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        let mut lock = self.uft_in.lock();
-        match lock.get_mut(ufid_in) {
+        match data.uft_in.get_mut(ufid_in) {
             Some(entry) if entry.state().epoch == epoch => {
                 // TODO At the moment I'm holding the UFT locks not
                 // just for lookup, but for the entire duration of
                 // processing. It might be better to ht.clone() or
-                // Arc<HT>; that way we only hold the lock for lookup.
+                // Arc<HdrTransform>; that way we only hold the lock
+                // for lookup.
                 entry.hit();
                 for ht in &entry.state().hts {
-                    ht.run(pkt.meta_mut());
+                    ht.run(pkt.meta_mut())?;
                     // Guest-side flow id.
                     let gfid_in = InnerFlowId::from(pkt.meta());
                     ht_probe(&self.name_cstr, "UFT-in", In, ufid_in, &gfid_in);
                 }
                 drop(entry);
-                drop(lock);
 
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
                 if pkt.meta().is_inner_tcp() {
-                    match self.process_in_tcp_existing(pkt.meta()) {
+                    match self.process_in_tcp_existing(data, pkt.meta()) {
                         Ok(_) => return Ok(ProcessResult::Modified),
                         Err(e) => {
-                            self.tcp_err(In, e, pkt, ufid_in);
+                            self.tcp_err(data, In, e, pkt, ufid_in);
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
@@ -1303,30 +1446,27 @@ impl Port {
             // and proceed to rule processing.
             Some(entry) => {
                 let epoch = entry.state().epoch;
-                drop(entry);
-                drop(lock);
                 let gfid_in = InnerFlowId::from(pkt.meta());
                 let ufid_out = gfid_in.mirror();
-                self.uft_invalidate(&ufid_out, ufid_in, epoch);
+                self.uft_invalidate(data, &ufid_out, ufid_in, epoch);
             }
 
             // There is no entry; proceed to rule processing;
-            None => drop(lock),
+            None => (),
         };
 
-        self.process_in_miss(ufid_in, epoch, pkt, lmeta)
+        self.process_in_miss(data, ufid_in, epoch, pkt, lmeta)
     }
 
     // Process the TCP packet for the purposes of connection tracking
     // when an outbound UFT entry exists.
     fn process_out_tcp_existing(
         &self,
+        tcp_flows: &mut FlowTable<TcpFlowEntryState>,
         ufid_out: &InnerFlowId,
         pmeta: &PacketMeta,
     ) -> result::Result<TcpMaybeClosed, String> {
-        let mut lock = self.tcp_flows.lock();
-
-        match lock.get_mut(ufid_out) {
+        match tcp_flows.get_mut(ufid_out) {
             Some(entry) => {
                 let tfes = entry.state_mut();
                 let tcp = pmeta.inner_tcp().unwrap();
@@ -1335,7 +1475,7 @@ impl Port {
                 match res {
                     Ok(tcp_state) => {
                         if tcp_state == TcpState::Closed {
-                            let entry = lock.remove(&ufid_out).unwrap();
+                            let entry = tcp_flows.remove(&ufid_out).unwrap();
                             return Ok(TcpMaybeClosed::Closed {
                                 ufid_inbound: entry
                                     .state()
@@ -1360,13 +1500,14 @@ impl Port {
     // when an outbound UFT entry was just created.
     fn process_out_tcp_new(
         &self,
+        data: &mut PortData,
         ufid_out: &InnerFlowId,
         pmeta: &PacketMeta,
     ) -> result::Result<TcpMaybeClosed, String> {
         let tcp = pmeta.inner_tcp().unwrap();
-        let mut lock = self.tcp_flows.lock();
+        let tcp_flows = &mut data.tcp_flows;
 
-        let tcp_state = match lock.get_mut(ufid_out) {
+        let tcp_state = match tcp_flows.get_mut(ufid_out) {
             // We may have already created a TCP flow entry
             // due to an inbound packet.
             Some(entry) => {
@@ -1397,13 +1538,13 @@ impl Port {
                     TcpFlowEntryState { inbound_ufid: None, tcp_state: tfs };
 
                 // TODO kill unwrap
-                lock.add(ufid_out.clone(), tfes).unwrap();
+                tcp_flows.add(ufid_out.clone(), tfes).unwrap();
                 tcp_state
             }
         };
 
         if tcp_state == TcpState::Closed {
-            let entry = lock.remove(&ufid_out).unwrap();
+            let entry = tcp_flows.remove(&ufid_out).unwrap();
             return Ok(TcpMaybeClosed::Closed {
                 ufid_inbound: entry.state().inbound_ufid.clone(),
             });
@@ -1414,6 +1555,7 @@ impl Port {
 
     fn process_out_miss(
         &self,
+        data: &mut PortData,
         ufid_out: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
@@ -1426,17 +1568,17 @@ impl Port {
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
         if pkt.meta().is_inner_tcp() {
-            match self.process_out_tcp_new(ufid_out, pkt.meta()) {
+            match self.process_out_tcp_new(data, ufid_out, pkt.meta()) {
                 Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
                     tcp_closed = true;
-                    self.uft_tcp_closed(ufid_out, ufid_inbound.as_ref());
+                    self.uft_tcp_closed(data, ufid_out, ufid_inbound.as_ref());
                 }
 
                 // Continue with processing.
                 Ok(_) => (),
 
                 Err(e) => {
-                    self.tcp_err(Out, e, pkt, ufid_out);
+                    self.tcp_err(data, Out, e, pkt, ufid_out);
                     return Ok(ProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
@@ -1445,7 +1587,8 @@ impl Port {
         }
 
         let mut hts = Vec::new();
-        let res = self.layers_process(Out, ufid_out, pkt, &mut hts, lmeta);
+        let res =
+            self.layers_process(data, Out, ufid_out, pkt, &mut hts, lmeta);
         let hte = HtEntry { hts, epoch };
 
         match res {
@@ -1456,7 +1599,7 @@ impl Port {
                 }
 
                 // TODO kill unwrap
-                self.uft_out.lock().add(ufid_out.clone(), hte).unwrap();
+                data.uft_out.add(ufid_out.clone(), hte).unwrap();
                 Ok(ProcessResult::Modified)
             }
 
@@ -1474,6 +1617,7 @@ impl Port {
 
     fn process_out(
         &self,
+        data: &mut PortData,
         ufid_out: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
@@ -1481,10 +1625,11 @@ impl Port {
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::Out;
 
+        let uft_out = &mut data.uft_out;
+
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        let mut lock = self.uft_out.lock();
-        match lock.get_mut(ufid_out) {
+        match uft_out.get_mut(ufid_out) {
             Some(entry) if entry.state().epoch == epoch => {
                 entry.hit();
                 let mut invalidated = false;
@@ -1493,7 +1638,11 @@ impl Port {
                 // For outbound traffic the TCP flow table must be
                 // checked _before_ processing take place.
                 if pkt.meta().is_inner_tcp() {
-                    match self.process_out_tcp_existing(ufid_out, pkt.meta()) {
+                    match self.process_out_tcp_existing(
+                        &mut data.tcp_flows,
+                        ufid_out,
+                        pkt.meta(),
+                    ) {
                         Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
                             invalidated = true;
                             ufid_in = ufid_inbound;
@@ -1503,7 +1652,7 @@ impl Port {
                         Ok(_) => (),
 
                         Err(e) => {
-                            self.tcp_err(Out, e, pkt, ufid_out);
+                            self.tcp_err(data, Out, e, pkt, ufid_out);
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
@@ -1512,7 +1661,7 @@ impl Port {
                 }
 
                 for ht in &entry.state().hts {
-                    ht.run(pkt.meta_mut());
+                    ht.run(pkt.meta_mut())?;
                     // Network-side flow id.
                     let nfid_out = InnerFlowId::from(pkt.meta());
                     ht_probe(
@@ -1525,10 +1674,9 @@ impl Port {
                 }
 
                 drop(entry);
-                drop(lock);
 
                 if invalidated {
-                    self.uft_tcp_closed(ufid_out, ufid_in.as_ref());
+                    self.uft_tcp_closed(data, ufid_out, ufid_in.as_ref());
                 }
 
                 return Ok(ProcessResult::Modified);
@@ -1539,32 +1687,28 @@ impl Port {
             Some(entry) => {
                 let epoch = entry.state().epoch;
                 drop(entry);
-                drop(lock);
                 // Network-side flow id.
                 let nfid_out = InnerFlowId::from(pkt.meta());
                 let ufid_in = nfid_out.mirror();
-                self.uft_invalidate(ufid_out, &ufid_in, epoch);
+                self.uft_invalidate(data, ufid_out, &ufid_in, epoch);
             }
 
             // There is no entry; proceed to layer processing.
-            None => drop(lock),
+            None => (),
         }
 
-        self.process_out_miss(ufid_out, epoch, pkt, lmeta)
+        self.process_out_miss(data, ufid_out, epoch, pkt, lmeta)
     }
 
     fn uft_invalidate(
         &self,
+        data: &mut PortData,
         ufid_out: &InnerFlowId,
         ufid_in: &InnerFlowId,
         epoch: u64,
     ) {
-        let mut uft_in = self.uft_in.lock();
-        let mut uft_out = self.uft_out.lock();
-        uft_in.remove(ufid_in);
-        uft_out.remove(ufid_out);
-        drop(uft_out);
-        drop(uft_in);
+        data.uft_in.remove(ufid_in);
+        data.uft_out.remove(ufid_out);
         self.uft_invalidate_probe(Direction::In, ufid_in, epoch);
         self.uft_invalidate_probe(Direction::Out, ufid_out, epoch);
     }
@@ -1601,18 +1745,15 @@ impl Port {
 
     fn uft_tcp_closed(
         &self,
+        data: &mut PortData,
         ufid_out: &InnerFlowId,
         ufid_in: Option<&InnerFlowId>,
     ) {
-        let mut uft_in = self.uft_in.lock();
-        let mut uft_out = self.uft_out.lock();
         if ufid_in.is_some() {
-            uft_in.remove(&ufid_in.unwrap());
+            data.uft_in.remove(&ufid_in.unwrap());
             self.uft_tcp_closed_probe(Direction::In, &ufid_in.unwrap());
         }
-        uft_out.remove(ufid_out);
-        drop(uft_out);
-        drop(uft_in);
+        data.uft_out.remove(ufid_out);
         self.uft_tcp_closed_probe(Direction::Out, ufid_out);
     }
 
@@ -1653,21 +1794,22 @@ impl Port {
         self.epoch.load(SeqCst)
     }
 
-    pub fn layers(&self) -> Vec<&str> {
-        self.layers.iter().map(Layer::name).collect()
+    pub fn layers(&self) -> Vec<String> {
+        self.data.lock().layers.iter().map(|l| l.name().to_string()).collect()
     }
 
     /// Get the number of flows currently in the layer and direction
     /// specified. The value `"uft"` can be used to get the number of
     /// UFT flows.
     pub fn num_flows(&self, layer: &str, dir: Direction) -> u32 {
+        let data = self.data.lock();
         use Direction::*;
 
         match (layer, dir) {
-            ("uft", In) => self.uft_in.lock().num_flows(),
-            ("uft", Out) => self.uft_out.lock().num_flows(),
+            ("uft", In) => data.uft_in.num_flows(),
+            ("uft", Out) => data.uft_out.num_flows(),
             (name, _dir) => {
-                for layer in &self.layers {
+                for layer in &data.layers {
                     if layer.name() == name {
                         return layer.num_flows();
                     }
@@ -1679,9 +1821,10 @@ impl Port {
     }
 
     pub fn num_rules(&self, layer: &str, dir: Direction) -> u32 {
+        let data = self.data.lock();
         match (layer, dir) {
             (name, dir) => {
-                for layer in &self.layers {
+                for layer in &data.layers {
                     if layer.name() == name {
                         return layer.num_rules(dir) as u32;
                     }

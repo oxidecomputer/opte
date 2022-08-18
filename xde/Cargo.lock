@@ -186,6 +186,14 @@ name = "illumos-sys-hdrs"
 version = "0.1.0"
 
 [[package]]
+name = "kstat-macro"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -242,6 +250,7 @@ dependencies = [
  "cstr_core",
  "heapless",
  "illumos-sys-hdrs",
+ "kstat-macro",
  "opte-api",
  "postcard",
  "serde",

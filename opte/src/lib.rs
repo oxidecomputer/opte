@@ -33,6 +33,10 @@ extern crate alloc;
 #[macro_use]
 extern crate cfg_if;
 
+// This is needed so that the kstat-macro (`#[derive(KStatProvider)]`)
+// can use fully-qualified type paths.
+extern crate self as opte;
+
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::boxed::Box;
@@ -46,6 +50,9 @@ cfg_if! {
 pub mod api {
     pub use opte_api::*;
 }
+
+#[cfg(any(feature = "engine", test))]
+pub mod ddi;
 
 #[cfg(any(feature = "engine", test))]
 pub mod engine;

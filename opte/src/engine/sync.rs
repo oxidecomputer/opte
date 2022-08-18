@@ -56,15 +56,6 @@ pub struct KMutex<T> {
     // The mutex(9F) structure.
     mutex: UnsafeCell<kmutex_t>,
 
-    // I'm not sure if an illumos kernel mutex needs to be pinned, but
-    // I've never seen any C code that "moves" a mutex. For now, we
-    // pin it. The `PhantomPinned` marker type precludes the auto
-    // implementation of the Unpin trait. That means that if you put
-    // KMutex inside a Pin, you can't get mutable access to the
-    // contents without going through an unsafe API like
-    // `get_unchecked_mut()`.
-    // _pin: PhantomPinned,
-
     // The data this mutex protects.
     data: UnsafeCell<T>,
 }

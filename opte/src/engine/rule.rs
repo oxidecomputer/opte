@@ -12,8 +12,8 @@ use super::ether::{EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
 use super::flow_table::StateSummary;
 use super::geneve::{GeneveMeta, GeneveMetaOpt};
 use super::headers::{
-    self, HeaderAction, IpAddr, IpMeta, IpMetaOpt, UlpHeaderAction, UlpMeta,
-    UlpMetaOpt,
+    self, HeaderAction, HeaderActionError, IpAddr, IpMeta, IpMetaOpt,
+    UlpHeaderAction, UlpMeta, UlpMetaOpt,
 };
 use super::icmp::MessageType as Icmp4MessageType;
 use super::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
@@ -773,12 +773,12 @@ pub trait FiniteResource: Resource {
     fn release(&self, key: &Self::Key, br: Self::Entry);
 }
 
-/// An Action Descriptor holds the information needed to create the HT
-/// which implements the desired action. An ActionDesc is created by
-/// an [`StatefulAction`] implementation.
+/// An Action Descriptor holds the information needed to create the
+/// [`HdrTransform`] which implements the desired action. An
+/// ActionDesc is created by a [`StatefulAction`] implementation.
 pub trait ActionDesc {
-    /// Generate the [`HT`] which implements this descriptor.
-    fn gen_ht(&self, dir: Direction) -> HT;
+    /// Generate the [`HdrTransform`] which implements this descriptor.
+    fn gen_ht(&self, dir: Direction) -> HdrTransform;
 
     fn name(&self) -> &str;
 }
@@ -836,7 +836,7 @@ impl IdentityDesc {
 }
 
 impl ActionDesc for IdentityDesc {
-    fn gen_ht(&self, _dir: Direction) -> HT {
+    fn gen_ht(&self, _dir: Direction) -> HdrTransform {
         Default::default()
     }
 
@@ -869,7 +869,7 @@ impl StaticAction for Identity {
         _flow_id: &InnerFlowId,
         _meta: &mut Meta,
     ) -> GenHtResult {
-        Ok(AllowOrDeny::Allow(HT::identity(&self.name)))
+        Ok(AllowOrDeny::Allow(HdrTransform::identity(&self.name)))
     }
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
@@ -877,8 +877,10 @@ impl StaticAction for Identity {
     }
 }
 
+/// A collection of header transformations to take on each part of the
+/// header stack.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct HT {
+pub struct HdrTransform {
     pub name: String,
     pub outer_ether: HeaderAction<EtherMeta, EtherMetaOpt>,
     pub outer_ip: HeaderAction<IpMeta, IpMetaOpt>,
@@ -890,13 +892,13 @@ pub struct HT {
     pub inner_ulp: UlpHeaderAction<super::headers::UlpMetaModify>,
 }
 
-impl StateSummary for Vec<HT> {
+impl StateSummary for Vec<HdrTransform> {
     fn summary(&self) -> String {
         self.iter().map(|ht| ht.to_string()).collect::<Vec<String>>().join(",")
     }
 }
 
-impl Display for HT {
+impl Display for HdrTransform {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.name)
     }
@@ -995,9 +997,9 @@ pub fn ht_probe(
     }
 }
 
-impl HT {
+impl HdrTransform {
     /// The "identity" header transformation; one which leaves the
-    /// header as-isl
+    /// header as-is.
     pub fn identity(name: &str) -> Self {
         Self {
             name: name.to_string(),
@@ -1011,15 +1013,54 @@ impl HT {
         }
     }
 
-    pub fn run(&self, meta: &mut PacketMeta) {
-        self.outer_ether.run(&mut meta.outer.ether);
-        self.outer_ip.run(&mut meta.outer.ip);
-        self.outer_ulp.run(&mut meta.outer.ulp);
-        self.outer_encap.run(&mut meta.outer.encap);
-        self.inner_ether.run(&mut meta.inner.ether);
-        self.inner_ip.run(&mut meta.inner.ip);
-        self.inner_ulp.run(&mut meta.inner.ulp);
+    /// Run this header transformation against the passed in
+    /// [`PacketMeta`], mutating it in place.
+    ///
+    /// # Errors
+    ///
+    /// If there is an [`HeaderAction::Modify`], but no metadata is
+    /// present for that particular header, then a
+    /// [`HdrTransformError::MissingHeader`] is returned.
+    pub fn run(&self, meta: &mut PacketMeta) -> Result<(), HdrTransformError> {
+        self.outer_ether
+            .run(&mut meta.outer.ether)
+            .map_err(Self::err_fn("outer ether"))?;
+        self.outer_ip
+            .run(&mut meta.outer.ip)
+            .map_err(Self::err_fn("outer IP"))?;
+        self.outer_ulp
+            .run(&mut meta.outer.ulp)
+            .map_err(Self::err_fn("outer ULP"))?;
+        self.outer_encap
+            .run(&mut meta.outer.encap)
+            .map_err(Self::err_fn("outer encap"))?;
+        self.inner_ether
+            .run(&mut meta.inner.ether)
+            .map_err(Self::err_fn("inner ether"))?;
+        self.inner_ip
+            .run(&mut meta.inner.ip)
+            .map_err(Self::err_fn("inner IP"))?;
+        self.inner_ulp
+            .run(&mut meta.inner.ulp)
+            .map_err(Self::err_fn("inner ULP"))
     }
+
+    fn err_fn(
+        header: &'static str,
+    ) -> impl FnOnce(HeaderActionError) -> HdrTransformError {
+        move |e| -> HdrTransformError {
+            match e {
+                HeaderActionError::MissingHeader => {
+                    HdrTransformError::MissingHeader(header)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum HdrTransformError {
+    MissingHeader(&'static str),
 }
 
 #[derive(Debug)]
@@ -1061,7 +1102,7 @@ pub enum GenHtError {
     Unexpected { msg: String },
 }
 
-pub type GenHtResult = ActionResult<HT, GenHtError>;
+pub type GenHtResult = ActionResult<HdrTransform, GenHtError>;
 
 pub trait StaticAction: Display {
     fn gen_ht(

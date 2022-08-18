@@ -58,6 +58,77 @@ pub const EPROTO: c_int = 71;
 pub const ENOBUFS: c_int = 132;
 
 // ======================================================================
+// uts/common/sys/kstat.h
+// ======================================================================
+pub type kid_t = c_int;
+
+pub const KSTAT_STRLEN: usize = 31;
+
+#[repr(C)]
+pub struct kstat_t {
+    _ks_crtime: hrtime_t,
+    _ks_next: *const kstat_t,
+    _ks_kid: kid_t,
+    _ks_module: [c_char; KSTAT_STRLEN],
+    _ks_resv: c_uchar,
+    _ks_instance: c_int,
+    _ks_name: [c_char; KSTAT_STRLEN],
+    _ks_type: c_uchar,
+    _ks_class: [c_char; KSTAT_STRLEN],
+    _ks_flags: c_uchar,
+    pub ks_data: *mut c_void,
+    _ks_ndata: c_uint,
+    _ks_data_size: size_t,
+    _ks_snaptime: hrtime_t,
+    _ks_update: *const c_void,
+    _ks_private: *const c_void,
+    _ks_snapshot: *const c_void,
+    pub ks_lock: *mut c_void,
+}
+
+#[repr(C)]
+pub struct kstat_named_t {
+    pub name: [c_char; KSTAT_STRLEN],
+    pub dtype: c_uchar,
+    pub value: KStatNamedValue,
+}
+
+impl kstat_named_t {
+    pub fn new() -> Self {
+        Self {
+            name: [0; KSTAT_STRLEN],
+            dtype: 0,
+            value: KStatNamedValue { _c: [0; 16] },
+        }
+    }
+}
+
+#[repr(C)]
+pub union KStatNamedValue {
+    _c: [c_char; 16],
+    _i32: i32,
+    _u32: u32,
+    _i64: i64,
+    _u64: u64,
+}
+
+impl core::ops::AddAssign<u64> for KStatNamedValue {
+    fn add_assign(&mut self, other: u64) {
+        unsafe { self._u64 += other };
+    }
+}
+
+pub const KSTAT_FLAG_VIRTUAL: c_int = 0x1;
+
+pub const KSTAT_TYPE_NAMED: c_int = 1;
+
+pub const KSTAT_DATA_CHAR: c_int = 0;
+pub const KSTAT_DATA_INT32: c_int = 1;
+pub const KSTAT_DATA_UINT32: c_int = 2;
+pub const KSTAT_DATA_INT64: c_int = 3;
+pub const KSTAT_DATA_UINT64: c_int = 4;
+
+// ======================================================================
 // uts/common/sys/param.h
 // ======================================================================
 pub const MAXLINKNAMELEN: c_int = 32;

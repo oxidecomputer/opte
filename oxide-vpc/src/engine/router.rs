@@ -93,7 +93,8 @@ pub fn setup(
     // Indexes:
     //
     // * 0: InternetGateway
-    let layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), vec![ig], ft_limit);
+    let mut layer =
+        Layer::new(ROUTER_LAYER_NAME, pb.name(), vec![ig], ft_limit);
 
     // If there is no matching router entry we drop the packet.
     let drop_rule = Rule::match_any(65535, rule::Action::Deny);

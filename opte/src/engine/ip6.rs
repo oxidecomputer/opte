@@ -6,7 +6,7 @@
 
 use super::checksum::Checksum;
 use super::headers::{
-    Header, HeaderAction, IpMeta, IpMetaOpt, ModActionArg, PushActionArg,
+    Header, HeaderAction, IpMeta, IpMetaOpt, ModifyActionArg, PushActionArg,
 };
 use super::ip4::Protocol;
 use super::packet::{PacketRead, ReadErr};
@@ -56,7 +56,7 @@ pub struct Ipv6MetaOpt {
     dst: Option<[u8; 16]>,
 }
 
-impl ModActionArg for Ipv6MetaOpt {}
+impl ModifyActionArg for Ipv6MetaOpt {}
 
 impl Ipv6Meta {
     pub fn push(

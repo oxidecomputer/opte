@@ -460,7 +460,8 @@ fn oxide_net_setup(
     v2p: Arc<Virt2Phys>,
 ) -> PortAndVps {
     let port = oxide_net_builder(name, cfg, v2p)
-        .create(UFT_LIMIT.unwrap(), TCP_LIMIT.unwrap());
+        .create(UFT_LIMIT.unwrap(), TCP_LIMIT.unwrap())
+        .unwrap();
     assert_eq!(port.state(), PortState::Ready);
     assert_eq!(port.epoch(), 1);
     check_no_flows(&port);
@@ -556,8 +557,8 @@ fn g2_cfg() -> VpcCfg {
 // Verify that no flows are present on the port.
 fn check_no_flows(port: &Port) {
     for layer in port.layers() {
-        assert_eq!(port.num_flows(layer, Out), 0);
-        assert_eq!(port.num_flows(layer, In), 0);
+        assert_eq!(port.num_flows(&layer, Out), 0);
+        assert_eq!(port.num_flows(&layer, In), 0);
     }
 
     assert_eq!(port.num_flows("uft", Out), 0);

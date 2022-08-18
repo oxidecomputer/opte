@@ -1,0 +1,94 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Copyright 2022 Oxide Computer Company
+
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::{
+    parse_macro_input, DeriveInput, Field, FieldsNamed, FieldsUnnamed, Ident,
+};
+
+/// Generate a [`opte::ddi::kstat::KStatProvider`] implementation
+/// given a struct of named fields of type
+/// [`opte::ddi::kstat::KStatU64`].
+///
+/// ```Rust
+/// #[derive(KStatProvider)]
+/// struct PortStats {
+///     in_pkts: KStatU64,
+///     out_pkts: KStatU64,
+/// }
+/// ```
+///
+/// This macro generates the following code based on the struct above.
+///
+/// ```Rust
+/// impl KStatProvider for PortStats {
+///     const NUM_FIELDS: u32 = 2;
+///
+///     fn init(&mut self) -> result::Result<(), kstat::Error> {
+///         self.in_pkts.init("in_pkts")?;
+///         self.in_drop.init("out_pkts")?;
+///         Ok(())
+///     }
+///
+///     fn new() -> Self {
+///         Self {
+///             in_pkts: KStatU64::new(),
+///             out_pkts: KStatU64::new(),
+///         }
+///     }
+/// }
+/// ````
+#[proc_macro_derive(KStatProvider)]
+pub fn derive_kstat_provider(input: TokenStream) -> TokenStream {
+    let DeriveInput { ident, data, .. } = parse_macro_input!(input);
+    let fields: Vec<Field> = match data {
+        syn::Data::Struct(s) => match s.fields {
+            syn::Fields::Named(FieldsNamed { named, .. }) => {
+                named.into_iter().collect()
+            }
+
+            syn::Fields::Unnamed(FieldsUnnamed { unnamed: _, .. }) => {
+                panic!("A KStatProvider cannot have unnamed fields");
+            }
+
+            syn::Fields::Unit => {
+                panic!("A unit struct cannot be a KStatProvider");
+            }
+        },
+
+        _ => panic!("Only a struct may be a KStatProvider"),
+    };
+
+    let num_fields = fields.len() as u32;
+    let fields_ident: Vec<Ident> =
+        fields.iter().map(|f| f.ident.clone().unwrap()).collect();
+    let fields_str: Vec<String> =
+        fields_ident.iter().map(|f| format!("{}", f)).collect();
+
+    let output = quote! {
+        impl KStatProvider for #ident {
+            const NUM_FIELDS: u32 = #num_fields;
+
+            fn init(
+                &mut self
+            ) -> core::result::Result<(), kstat::Error> {
+                #( self.#fields_ident.init(#fields_str)?; )*
+                Ok(())
+            }
+
+            fn new() -> Self {
+                use ::opte::ddi::kstat::KStatU64;
+
+                Self {
+                    #( #fields_ident: KStatU64::new(), )*
+                }
+            }
+        }
+    };
+
+    output.into()
+}

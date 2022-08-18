@@ -16,8 +16,8 @@ use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 use super::checksum::{Checksum, HeaderChecksum};
 use super::headers::{
-    Header, HeaderAction, HeaderActionModify, IpMeta, IpMetaOpt, ModActionArg,
-    RawHeader,
+    Header, HeaderAction, HeaderActionModify, IpMeta, IpMetaOpt,
+    ModifyActionArg, RawHeader,
 };
 use super::packet::{PacketRead, ReadErr, WriteError};
 use super::rule::{
@@ -203,7 +203,7 @@ pub struct Ipv4MetaOpt {
     proto: Option<Protocol>,
 }
 
-impl ModActionArg for Ipv4MetaOpt {}
+impl ModifyActionArg for Ipv4MetaOpt {}
 
 impl HeaderActionModify<Ipv4MetaOpt> for Ipv4Meta {
     fn run_modify(&mut self, spec: &Ipv4MetaOpt) {

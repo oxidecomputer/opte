@@ -11,7 +11,7 @@ use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
 
 use crate::engine::checksum::{Checksum, HeaderChecksum};
 use crate::engine::headers::{
-    Header, HeaderAction, HeaderActionModify, ModActionArg, PushActionArg,
+    Header, HeaderAction, HeaderActionModify, ModifyActionArg, PushActionArg,
     RawHeader, UlpHdr, UlpMeta, UlpMetaModify, UlpMetaOpt,
 };
 use crate::engine::packet::{PacketRead, ReadErr, WriteError};
@@ -60,7 +60,7 @@ pub struct UdpMetaOpt {
     dst: Option<u16>,
 }
 
-impl ModActionArg for UdpMetaOpt {}
+impl ModifyActionArg for UdpMetaOpt {}
 
 impl HeaderActionModify<UdpMetaOpt> for UdpMeta {
     fn run_modify(&mut self, spec: &UdpMetaOpt) {
