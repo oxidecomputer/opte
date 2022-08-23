@@ -42,7 +42,7 @@ pub use ip::*;
 pub use mac::*;
 pub use ulp::*;
 
-/// The overall version of the API. Anytmie an API is added, removed,
+/// The overall version of the API. Anytime an API is added, removed,
 /// or modified, this number should increment. Currently we attach no
 /// semantic meaning to the number other than as a means to verify
 /// that the user and kernel are compiled for the same API. A u64 is
@@ -50,7 +50,7 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 9;
+pub const API_VERSION: u64 = 10;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Direction {

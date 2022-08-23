@@ -142,10 +142,10 @@ impl IpHdr {
         }
     }
 
-    pub fn pay_len(&self) -> usize {
+    pub fn ulp_len(&self) -> usize {
         match self {
-            Self::Ip4(ip4) => ip4.pay_len(),
-            Self::Ip6(ip6) => ip6.pay_len(),
+            Self::Ip4(ip4) => ip4.ulp_len(),
+            Self::Ip6(ip6) => ip6.ulp_len(),
         }
     }
 

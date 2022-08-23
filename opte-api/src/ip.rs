@@ -237,6 +237,39 @@ impl TryFrom<u8> for Protocol {
     }
 }
 
+impl TryFrom<smoltcp::wire::IpProtocol> for Protocol {
+    type Error = String;
+
+    fn try_from(
+        proto: smoltcp::wire::IpProtocol,
+    ) -> core::result::Result<Self, Self::Error> {
+        use smoltcp::wire::IpProtocol::*;
+        match proto {
+            Icmp => Ok(Protocol::ICMP),
+            Igmp => Ok(Protocol::IGMP),
+            Tcp => Ok(Protocol::TCP),
+            Udp => Ok(Protocol::UDP),
+            Icmpv6 => Ok(Protocol::ICMPv6),
+            Unknown(x) if x == 0xFF => Ok(Protocol::Reserved),
+            _ => Err(format!("unhandled IP protocol: 0x{:X}", u8::from(proto))),
+        }
+    }
+}
+
+impl From<Protocol> for smoltcp::wire::IpProtocol {
+    fn from(proto: Protocol) -> smoltcp::wire::IpProtocol {
+        use smoltcp::wire::IpProtocol::*;
+        match proto {
+            Protocol::ICMP => Icmp,
+            Protocol::IGMP => Igmp,
+            Protocol::TCP => Tcp,
+            Protocol::UDP => Udp,
+            Protocol::ICMPv6 => Icmpv6,
+            Protocol::Reserved => Unknown(0xFF),
+        }
+    }
+}
+
 /// An IPv4 or IPv6 address.
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,

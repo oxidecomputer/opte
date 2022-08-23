@@ -386,8 +386,8 @@ impl Ipv4Hdr {
         }
     }
 
-    /// Return the length of the payload portion of the packet.
-    pub fn pay_len(&self) -> usize {
+    /// Return the length of the upper-layer protocol portion of the packet.
+    pub fn ulp_len(&self) -> usize {
         self.total_len as usize - self.hdr_len()
     }
 
@@ -401,7 +401,7 @@ impl Ipv4Hdr {
         let mut bytes = Vec::with_capacity(12);
         bytes.extend_from_slice(&self.src.bytes());
         bytes.extend_from_slice(&self.dst.bytes());
-        let len_bytes = (self.pay_len() as u16).to_be_bytes();
+        let len_bytes = (self.ulp_len() as u16).to_be_bytes();
         bytes.extend_from_slice(&[
             0u8,
             self.proto as u8,

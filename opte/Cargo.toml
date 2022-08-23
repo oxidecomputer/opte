@@ -65,3 +65,6 @@ default-features = false
 # TODO Would defmt be of any use?
 #
 features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-ipv6", "proto-dhcpv4", "socket", "socket-raw"]
+
+[dev-dependencies]
+itertools = "0.10"

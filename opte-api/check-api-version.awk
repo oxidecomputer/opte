@@ -4,11 +4,11 @@ BEGIN {
 }
 
 /^-pub const API_VERSION: u64 = [0-9]+/ {
-    old_vsn = $6;
+    old_vsn = ($6 + 0);
 }
 
 /^\+pub const API_VERSION: u64 = [0-9]+/ {
-    new_vsn = $6;
+    new_vsn = ($6 + 0);
 }
 
 END {

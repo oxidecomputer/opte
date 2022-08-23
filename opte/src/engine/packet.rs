@@ -42,7 +42,7 @@ use super::ether::{
 use super::geneve::{GeneveHdr, GeneveHdrError, GeneveMeta, GENEVE_HDR_SZ};
 use super::headers::{Header, IpHdr, IpMeta, UlpHdr, UlpMeta};
 use super::ip4::{Ipv4Hdr, Ipv4HdrError, Ipv4Meta, Protocol, IPV4_HDR_SZ};
-use super::ip6::{Ipv6Hdr, Ipv6HdrError, Ipv6Meta, IPV6_HDR_SZ};
+use super::ip6::{Ipv6Hdr, Ipv6HdrError, Ipv6Meta};
 use super::tcp::{TcpHdr, TcpHdrError, TcpMeta};
 use super::udp::{UdpHdr, UdpHdrError, UdpMeta};
 
@@ -248,7 +248,7 @@ impl HeaderGroup {
         self.encap = Some(GeneveHdr::from(genevem));
     }
 
-    fn ulp_len(&self) -> usize {
+    fn ulp_hdrs_len(&self) -> usize {
         let mut len = 0;
 
         if self.ulp.is_some() {
@@ -859,18 +859,15 @@ impl Packet<Initialized> {
         offsets: &mut HeaderGroupOffsets,
     ) -> Result<(), ParseError> {
         let ip6 = Ipv6Hdr::parse(rdr)?;
-
-        if ip6.next_hdr() != Protocol::TCP && ip6.next_hdr() != Protocol::UDP {
-            return Err(ParseError::UnsupportedProtocol(ip6.next_hdr()));
-        }
+        let hdr_len = ip6.hdr_len();
 
         let proto = ip6.proto();
         hg.ip = Some(IpHdr::from(ip6));
 
         offsets.ip = Some(HdrOffset {
-            pkt_pos: rdr.pkt_pos() - IPV6_HDR_SZ,
+            pkt_pos: rdr.pkt_pos() - hdr_len,
             seg_idx: rdr.seg_idx(),
-            seg_pos: rdr.seg_pos() - IPV6_HDR_SZ,
+            seg_pos: rdr.seg_pos() - hdr_len,
         });
 
         match proto {
@@ -996,7 +993,7 @@ impl Packet<Initialized> {
             EtherType::Ether => {
                 return Err(ParseError::BadHeader(format!(
                     "Unexpected EtherType 'Ether' ({}) found in frame (should \
-                     only be present in encap header",
+                     only be present in encap header)",
                     EtherType::Ether,
                 )))
             }
@@ -1074,52 +1071,47 @@ impl Packet<Initialized> {
         // If we have outer headers, we need to make sure that the
         // outer ULP/IP lengths account for the inner headers +
         // data.
-        if hdrs.outer.is_some() && hdrs.outer.as_ref().unwrap().is_ip() {
-            let ip = hdrs.outer.as_ref().unwrap().ip.as_ref().unwrap();
-            let actual = ip.pay_len();
-            let expected = hdrs.outer.as_ref().unwrap().ulp_len()
-                + hdrs.inner.len()
-                + body.len;
+        if let Some(outer) = hdrs.outer.as_ref() {
+            if let Some(ip) = outer.ip.as_ref() {
+                // Account for the headers
+                let actual = ip.ulp_len();
+                let expected =
+                    outer.ulp_hdrs_len() + hdrs.inner.len() + body.len;
 
-            if ip.pay_len() != expected {
-                return Err(ParseError::BadOuterIpLen { expected, actual });
-            }
-        }
+                if ip.ulp_len() != expected {
+                    return Err(ParseError::BadOuterIpLen { expected, actual });
+                }
 
-        if hdrs.outer.is_some()
-            && hdrs.outer.as_ref().unwrap().is_ip()
-            && hdrs.outer.as_ref().unwrap().ulp.is_some()
-        {
-            match hdrs.outer.as_ref().unwrap().ulp.as_ref().unwrap() {
-                // TCP does not specify a body length, rather it
-                // specifies a data offset (same as header length) and
-                // derives body length from the IP length.
-                UlpHdr::Tcp(_) => (),
+                // Account for the data / body length
+                match &outer.ulp {
+                    // TCP does not specify a body length, rather it
+                    // specifies a data offset (same as header length) and
+                    // derives body length from the IP length.
+                    None | Some(UlpHdr::Tcp(_)) => {}
 
-                // UDP defines a length which includes the fixed
-                // header size as well as the length of the body, in
-                // bytes.
-                UlpHdr::Udp(udp) => {
-                    let actual = udp.pay_len();
-                    let expected = hdrs.outer.as_ref().unwrap().encap_len()
-                        + hdrs.inner.len()
-                        + body.len;
+                    // UDP defines a length which includes the fixed
+                    // header size as well as the length of the body, in
+                    // bytes.
+                    Some(UlpHdr::Udp(udp)) => {
+                        let actual = udp.pay_len();
+                        let expected =
+                            outer.encap_len() + hdrs.inner.len() + body.len;
 
-                    if actual != expected {
-                        return Err(ParseError::BadOuterUlpLen {
-                            expected,
-                            actual,
-                        });
+                        if actual != expected {
+                            return Err(ParseError::BadOuterUlpLen {
+                                expected,
+                                actual,
+                            });
+                        }
                     }
                 }
             }
         }
 
         // Check the inner IP header length against payload.
-        if hdrs.inner.is_ip() {
-            let ip = hdrs.inner.ip.as_ref().unwrap();
-            let actual = ip.pay_len();
-            let expected = hdrs.inner.ulp_len() + body.len;
+        if let Some(ip) = hdrs.inner.ip.as_ref() {
+            let actual = ip.ulp_len();
+            let expected = hdrs.inner.ulp_hdrs_len() + body.len;
 
             if actual != expected {
                 return Err(ParseError::BadInnerIpLen { expected, actual });
@@ -2300,6 +2292,7 @@ mod test {
     use super::*;
 
     use crate::engine::ether::ETHER_TYPE_IPV4;
+    use crate::engine::ip6::IPV6_HDR_SZ;
     use crate::engine::tcp::{TcpFlags, TCP_HDR_SZ};
 
     const SRC_MAC: [u8; 6] = [0xa8, 0x40, 0x25, 0x00, 0x00, 0x63];
@@ -2307,6 +2300,11 @@ mod test {
 
     const SRC_IP4: [u8; 4] = [10, 0, 0, 99];
     const DST_IP4: [u8; 4] = [52, 10, 128, 69];
+
+    const SRC_IP6: [u8; 16] =
+        [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+    const DST_IP6: [u8; 16] =
+        [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
 
     // Verify uninitialized packet.
     #[test]
@@ -2621,5 +2619,93 @@ mod test {
         assert_eq!(pkt.len(), ETHER_HDR_SZ + IPV4_HDR_SZ + TCP_HDR_SZ);
         assert_eq!(pkt.num_segs(), 2);
         assert!(matches!(pkt.parse(), Err(ParseError::BadHeader(_))));
+    }
+
+    // Verify that we correctly parse an IPv6 packet with extension headers
+    #[test]
+    fn parse_ipv6_extension_headers_ok() {
+        use crate::engine::ip6::test::generate_test_packet;
+        use crate::engine::ip6::test::SUPPORTED_EXTENSIONS;
+        use itertools::Itertools;
+        use smoltcp::wire::IpProtocol;
+        for n_extensions in 0..SUPPORTED_EXTENSIONS.len() {
+            for extensions in
+                SUPPORTED_EXTENSIONS.into_iter().permutations(n_extensions)
+            {
+                // Generate a full IPv6 test packet, but pull out the extension
+                // headers as a byte array.
+                let (buf, ipv6_header_size) =
+                    generate_test_packet(extensions.as_slice());
+                let next_hdr =
+                    *(extensions.first().unwrap_or(&IpProtocol::Tcp));
+                let extension_headers = &buf[IPV6_HDR_SZ..ipv6_header_size];
+
+                // Append a TCP header
+                let body = vec![];
+                let mut tcp = TcpHdr::new(3839, 80);
+                tcp.set_seq(4224936861);
+                let ip6 = Ipv6Hdr::new_tcp(
+                    &tcp,
+                    &body,
+                    next_hdr,
+                    &extension_headers,
+                    SRC_IP6,
+                    DST_IP6,
+                );
+                let eth = EtherHdr::new(EtherType::Ipv6, SRC_MAC, DST_MAC);
+
+                let mut packet_buf = Vec::with_capacity(1024);
+                packet_buf.extend_from_slice(&eth.as_bytes());
+                packet_buf.extend_from_slice(&ip6.as_bytes());
+                packet_buf.extend_from_slice(&tcp.as_bytes());
+
+                let generated_packet = Packet::copy(&packet_buf);
+                let parsed = generated_packet.parse().unwrap();
+
+                // Assert that the computed offsets of the headers and payloads
+                // are accurate
+                let offsets = &parsed.state.hdr_offsets;
+                let ip = offsets
+                    .inner
+                    .ip
+                    .as_ref()
+                    .expect("Expected IP header offsets");
+                assert_eq!(
+                    ip.seg_idx, 0,
+                    "Expected IP headers to be in segment 0"
+                );
+                assert_eq!(
+                    ip.seg_pos, ETHER_HDR_SZ,
+                    "Expected the IP header to start immediately \
+                    after the Ethernet header"
+                );
+                assert_eq!(
+                    ip.pkt_pos, ETHER_HDR_SZ,
+                    "Expected the IP header to start immediately \
+                    after the Ethernet header"
+                );
+                let ulp = &offsets
+                    .inner
+                    .ulp
+                    .as_ref()
+                    .expect("Expected ULP header offsets");
+                assert_eq!(
+                    ulp.seg_idx, 0,
+                    "Expected the ULP header to be in segment 0"
+                );
+                assert_eq!(
+                    ulp.seg_pos,
+                    ETHER_HDR_SZ + ipv6_header_size,
+                    "Expected the ULP header to start immediately \
+                    after the IP header",
+                );
+                assert_eq!(
+                    ulp.pkt_pos,
+                    ETHER_HDR_SZ + ipv6_header_size,
+                    "Expected the ULP header to start immediately \
+                    after the IP header",
+                );
+            }
+        }
     }
 }
