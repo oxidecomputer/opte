@@ -5,10 +5,11 @@ authors = ["Ryan Zezeski <ryan@oxide.computer>"]
 edition = "2021"
 
 [dependencies]
+clap = { version = "3.2", features = [ "derive" ] }
 libc = "0.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
 opte = { path = "../opte", features = ["api", "engine"]}
-oxide-vpc = { path = "../oxide-vpc", features = ["api"] }
+oxide-vpc = { path = "../oxide-vpc", features = ["api", "engine"] }
 postcard = "0.7.0"
 serde = "1.0"
 thiserror = "1.0.28"

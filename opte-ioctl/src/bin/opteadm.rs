@@ -10,9 +10,7 @@ use std::fmt::Display;
 use std::io;
 use std::process::exit;
 use std::str::FromStr;
-
-use structopt::StructOpt;
-
+use clap::{Parser, Subcommand, Args};
 use opte::api::{
     Direction, IpAddr, Ipv4Addr, Ipv4Cidr, Ipv6Addr, MacAddr, Vni,
 };
@@ -20,49 +18,55 @@ use opte::engine::flow_table::FlowEntryDump;
 use opte::engine::ioctl as api;
 use opte::engine::layer::InnerFlowId;
 use opte::engine::rule::RuleDump;
-use opteadm::OpteAdm;
+use opte_ioctl::OpteHdl;
 use oxide_vpc::api::{
     Action as FirewallAction, AddRouterEntryIpv4Req, Address,
     Filters as FirewallFilters, FirewallRule, GuestPhysAddr, PhysNet, PortInfo,
     Ports, ProtoFilter, RemFwRuleReq, RouterTarget, SNatCfg, SetVirt2PhysReq,
 };
 use oxide_vpc::engine::overlay::DumpVirt2PhysResp;
-use oxide_vpc::engine::ioctl::ListLayersResp;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
+#[clap(author, version, about)]
+struct Opte {
+    #[clap(subcommand)]
+    cmd: Command,
+}
+
+#[derive(Debug, Subcommand)]
 enum Command {
     /// List all ports.
     ListPorts,
 
     /// List all layers under a given port.
     ListLayers {
-        #[structopt(short)]
+        #[clap(short)]
         port: String,
     },
 
     /// Dump the contents of the layer with the given name
     DumpLayer {
-        #[structopt(short)]
+        #[clap(short)]
         port: String,
         name: String,
     },
 
     /// Clear all entries from the Unified Flow Table
     ClearUft {
-        #[structopt(short)]
+        #[clap(short)]
         port: String,
     },
 
     /// Dump the Unified Flow Table
     DumpUft {
-        #[structopt(short)]
+        #[clap(short)]
         port: String,
     },
 
     /// Dump TCP flows
     DumpTcpFlows {
-        #[structopt(short)]
+        #[clap(short)]
         port: String,
     },
 
@@ -71,36 +75,38 @@ enum Command {
 
     /// Add a firewall rule
     AddFwRule {
-        #[structopt(short)]
+        #[clap(short)]
         port: String,
 
-        #[structopt(long = "dir")]
+        #[clap(long = "dir")]
         direction: Direction,
 
-        #[structopt(flatten)]
+        #[clap(flatten)]
         filters: Filters,
 
-        #[structopt(long)]
+        #[clap(long)]
         action: FirewallAction,
 
-        #[structopt(long)]
+        #[clap(long)]
         priority: u16,
     },
 
     /// Remove a firewall rule
     RmFwRule {
-        #[structopt(short)]
+        #[clap(short)]
         port: String,
 
-        #[structopt(long = "dir")]
+        #[clap(long = "dir")]
         direction: Direction,
 
         id: u64,
     },
 
-    /// Set/replace all firewall rules atomically
+    /// Set/replace all firewall rules atomically.
+    /// 
+    /// Rules are read from standard input, one per line.
     SetFwRules {
-        #[structopt(short)]
+        #[clap(short)]
         port: String,
     },
 
@@ -108,49 +114,49 @@ enum Command {
     CreateXde {
         name: String,
 
-        #[structopt(long)]
+        #[clap(long)]
         private_mac: MacAddr,
 
-        #[structopt(long)]
+        #[clap(long)]
         private_ip: std::net::Ipv4Addr,
 
-        #[structopt(long)]
+        #[clap(long)]
         vpc_subnet: Ipv4Cidr,
 
-        #[structopt(long)]
+        #[clap(long)]
         gateway_mac: MacAddr,
 
-        #[structopt(long)]
+        #[clap(long)]
         gateway_ip: std::net::Ipv4Addr,
 
-        #[structopt(long)]
+        #[clap(long)]
         bsvc_addr: std::net::Ipv6Addr,
 
-        #[structopt(long)]
+        #[clap(long)]
         bsvc_vni: Vni,
 
-        #[structopt(long)]
+        #[clap(long)]
         vpc_vni: Vni,
 
-        #[structopt(long)]
+        #[clap(long)]
         src_underlay_addr: std::net::Ipv6Addr,
 
-        #[structopt(long, requires_all(&["snat-start", "snat-end"]))]
+        #[clap(long, requires_all(&["snat-start", "snat-end"]))]
         snat_ip: Option<std::net::Ipv4Addr>,
 
-        #[structopt(long)]
+        #[clap(long)]
         snat_start: Option<u16>,
 
-        #[structopt(long)]
+        #[clap(long)]
         snat_end: Option<u16>,
 
-        #[structopt(long)]
+        #[clap(long)]
         snat_gw_mac: Option<MacAddr>,
 
-        #[structopt(long)]
+        #[clap(long)]
         external_ipv4: Option<Ipv4Addr>,
 
-        #[structopt(long)]
+        #[clap(long)]
         passthrough: bool,
     },
 
@@ -170,7 +176,7 @@ enum Command {
 
     /// Add a new IPv4 router entry
     AddRouterEntryIpv4 {
-        #[structopt(short)]
+        #[clap(short)]
         port: String,
 
         dest: opte::api::Ipv4Cidr,
@@ -179,18 +185,18 @@ enum Command {
     },
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 struct Filters {
     /// The host address or subnet to which the rule applies
-    #[structopt(long)]
+    #[clap(long)]
     hosts: Address,
 
     /// The protocol to which the rule applies
-    #[structopt(long)]
+    #[clap(long)]
     protocol: ProtoFilter,
 
     /// The port(s) to which the rule applies
-    #[structopt(long)]
+    #[clap(long)]
     ports: Ports,
 }
 
@@ -425,10 +431,10 @@ impl<T, E: Display> UnwrapOrDie<T, E> for Result<T, E> {
 }
 
 fn main() {
-    let cmd = Command::from_args();
-    match cmd {
+    let args = Opte::parse();
+    match args.cmd {
         Command::ListPorts => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap();
             print_port_header();
             for p in hdl.list_ports().unwrap().ports {
                 print_port(p);
@@ -436,27 +442,27 @@ fn main() {
         }
 
         Command::ListLayers { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             print_list_layers(&hdl.list_layers(&port).unwrap_or_die());
         }
 
         Command::DumpLayer { port, name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             print_layer(&hdl.get_layer_by_name(&port, &name).unwrap_or_die());
         }
 
         Command::ClearUft { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             hdl.clear_uft(&port).unwrap_or_die();
         }
 
         Command::DumpUft { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             print_uft(&hdl.dump_uft(&port).unwrap_or_die());
         }
 
         Command::DumpTcpFlows { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             let flows = hdl.dump_tcp_flows(&port).unwrap_or_die().flows;
             for (flow_id, entry) in flows {
                 println!("{} {:?}", flow_id, entry);
@@ -464,19 +470,8 @@ fn main() {
         }
 
         Command::DumpV2P => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             print_v2p(&hdl.dump_v2p().unwrap_or_die());
-        }
-
-        Command::AddFwRule { port, direction, filters, action, priority } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let rule = FirewallRule {
-                direction,
-                filters: filters.into(),
-                action,
-                priority,
-            };
-            hdl.add_firewall_rule(&port, &rule).unwrap_or_die();
         }
 
         Command::SetFwRules { port } => {
@@ -487,7 +482,7 @@ fn main() {
                 rules.push(r);
             }
 
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             hdl.set_firewall_rules(&port, rules).unwrap_or_die();
         }
 
@@ -509,7 +504,7 @@ fn main() {
             external_ipv4,
             passthrough,
         } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             let snat = match snat_ip {
                 Some(ip) => Some(SNatCfg {
                     public_ip: ip.into(),
@@ -542,23 +537,34 @@ fn main() {
         }
 
         Command::DeleteXde { name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             let _ = hdl.delete_xde(&name).unwrap_or_die();
         }
 
         Command::SetXdeUnderlay { u1, u2 } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             let _ = hdl.set_xde_underlay(&u1, &u2).unwrap_or_die();
         }
 
+        Command::AddFwRule { port, direction, filters, action, priority } => {
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
+            let rule = FirewallRule {
+                direction,
+                filters: filters.into(),
+                action,
+                priority,
+            };
+            hdl.add_firewall_rule(&port, &rule).unwrap_or_die();
+        }
+
         Command::RmFwRule { port, direction, id } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             let request = RemFwRuleReq { port_name: port, dir: direction, id };
             hdl.remove_firewall_rule(&request).unwrap_or_die();
         }
 
         Command::SetV2P { vpc_ip4, vpc_mac, underlay_ip, vni } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             let vip = opte::api::IpAddr::Ip4(vpc_ip4.into());
             let phys = PhysNet { ether: vpc_mac, ip: underlay_ip.into(), vni };
             let req = SetVirt2PhysReq { vip, phys };
@@ -566,7 +572,7 @@ fn main() {
         }
 
         Command::AddRouterEntryIpv4 { port, dest, target } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
+            let hdl = OpteHdl::open(OpteHdl::DLD_CTL).unwrap_or_die();
             let req = AddRouterEntryIpv4Req { port_name: port, dest, target };
             hdl.add_router_entry_ip4(&req).unwrap_or_die();
         }

@@ -10,11 +10,15 @@ use opte::api::{
 };
 use opte::engine::ioctl::{DumpLayerReq, DumpLayerResp};
 use opte::engine::ioctl::{ListLayersReq, ListLayersResp};
+use opte::engine::ioctl::{DumpUftReq, DumpUftResp};
+use opte::engine::ioctl::{DumpTcpFlowsReq, DumpTcpFlowsResp};
+use opte::engine::ioctl::ClearUftReq;
 use oxide_vpc::api::{
     AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, ListPortsReq,
-    ListPortsResp, SNatCfg, SetFwRulesReq, SetVirt2PhysReq,
-    DumpVirt2PhysReq, DumpVirt2PhysResp,
+    ListPortsResp, SNatCfg, SetFwRulesReq, SetVirt2PhysReq, FirewallRule,
+    AddFwRuleReq, RemFwRuleReq,
 };
+use oxide_vpc::engine::overlay::{DumpVirt2PhysReq, DumpVirt2PhysResp};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fs::{File, OpenOptions};
@@ -177,7 +181,7 @@ impl OpteHdl {
     }
 
     /// Dump the Virtual-to-Physical mappings.
-    pub fn dump_v2p(&self) -> Result<overlay::DumpVirt2PhysResp, Error> {
+    pub fn dump_v2p(&self) -> Result<DumpVirt2PhysResp, Error> {
         let req = DumpVirt2PhysReq { unused: 99 };
         let cmd = OpteCmd::DumpVirt2Phys;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
@@ -203,9 +207,38 @@ impl OpteHdl {
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 
-    /// Atomically set all firewall rules for the port.
-    pub fn set_fw_rules(&self, req: &SetFwRulesReq) -> Result<NoResp, Error> {
+    /// Add a firewall rule
+    pub fn add_firewall_rule(
+        &self,
+        port_name: &str,
+        rule: &FirewallRule,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::AddFwRule;
+        let req = AddFwRuleReq {
+            port_name: port_name.to_string(),
+            rule: rule.clone(),
+        };
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+    }
+
+    /// Remove a firewall rule.
+    pub fn remove_firewall_rule(
+        &self,
+        req: &RemFwRuleReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::RemFwRule;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, req)
+    }
+
+    /// Atomically set all firewall rules for the port
+    pub fn set_firewall_rules(
+        &self,
+        port_name: &str,
+        rules: Vec<FirewallRule>,
+    ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetFwRules;
+        let req =
+            SetFwRulesReq { port_name: port_name.to_string(), rules: rules };
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 
@@ -246,7 +279,7 @@ impl OpteHdl {
     }
 
     /// Return the Unified Flow Table (UFT).
-    pub fn dump_uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
+    pub fn dump_uft(&self, port_name: &str) -> Result<DumpUftResp, Error> {
         let cmd = OpteCmd::DumpUft;
         let req = DumpUftReq { port_name: port_name.to_string() };
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
