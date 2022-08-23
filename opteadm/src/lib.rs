@@ -33,6 +33,7 @@ impl OpteAdm {
     pub const DLD_CTL: &'static str = "/dev/dld";
 
     /// Add xde device
+    // XXX: Done
     pub fn create_xde(
         &self,
         name: &str,
@@ -86,6 +87,7 @@ impl OpteAdm {
     }
 
     /// Delete xde device
+    // XXX: Done
     pub fn delete_xde(&self, name: &str) -> Result<NoResp, Error> {
         let link_id = libnet::LinkHandle::Name(name.into()).id()?;
         let req = DeleteXdeReq { xde_devname: name.into() };
@@ -96,6 +98,7 @@ impl OpteAdm {
     }
 
     /// Set xde underlay devices
+    // XXX: Done
     pub fn set_xde_underlay(
         &self,
         u1: &str,
@@ -107,6 +110,7 @@ impl OpteAdm {
     }
 
     /// Add a firewall rule
+    // XXX: Done
     pub fn add_firewall_rule(
         &self,
         port_name: &str,
@@ -120,6 +124,7 @@ impl OpteAdm {
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 
+    // XXX: Done
     pub fn set_firewall_rules(
         &self,
         port_name: &str,
@@ -132,6 +137,7 @@ impl OpteAdm {
     }
 
     /// Return the contents of an OPTE layer.
+    // XXX: Done
     pub fn get_layer_by_name(
         &self,
         port_name: &str,
@@ -150,6 +156,7 @@ impl OpteAdm {
     }
 
     /// List all the ports.
+    // XXX: Done
     pub fn list_ports(&self) -> Result<ListPortsResp, Error> {
         let cmd = OpteCmd::ListPorts;
         run_cmd_ioctl::<ListPortsResp, _>(
@@ -159,6 +166,7 @@ impl OpteAdm {
         )
     }
 
+    // XXX: Done
     pub fn list_layers(
         &self,
         port: &str,
@@ -172,6 +180,7 @@ impl OpteAdm {
     }
 
     /// Create a new handle to the OPTE control node.
+    // XXX: Done
     pub fn open(what: &str) -> Result<Self, Error> {
         Ok(OpteAdm {
             device: OpenOptions::new().read(true).write(true).open(what)?,
@@ -179,6 +188,7 @@ impl OpteAdm {
     }
 
     /// Remove a firewall rule.
+    // XXX: Done (not needed)
     pub fn remove_firewall_rule(
         &self,
         req: &RemFwRuleReq,
@@ -188,6 +198,7 @@ impl OpteAdm {
     }
 
     /// Return the TCP flows.
+    // XXX: Done
     pub fn dump_tcp_flows(
         &self,
         port_name: &str,
@@ -201,6 +212,7 @@ impl OpteAdm {
     }
 
     /// Clear all entries from the Unified Flow Table (UFT).
+    // XXX: Done
     pub fn clear_uft(&self, port_name: &str) -> Result<NoResp, Error> {
         let cmd = OpteCmd::ClearUft;
         run_cmd_ioctl(
@@ -211,6 +223,7 @@ impl OpteAdm {
     }
 
     /// Return the Unified Flow Table (UFT).
+    // XXX: Done
     pub fn dump_uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
         let cmd = OpteCmd::DumpUft;
         run_cmd_ioctl::<api::DumpUftResp, _>(
@@ -220,6 +233,7 @@ impl OpteAdm {
         )
     }
 
+    // XXX: Done
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetVirt2Phys;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)

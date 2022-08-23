@@ -8,9 +8,12 @@ use opte::api::{
     CmdOk, Ipv4Addr, Ipv4Cidr, MacAddr, NoResp, OpteCmd, OpteCmdIoctl,
     OpteError, SetXdeUnderlayReq, Vni, API_VERSION, XDE_DLD_OPTE_CMD,
 };
+use opte::engine::ioctl::{DumpLayerReq, DumpLayerResp};
+use opte::engine::ioctl::{ListLayersReq, ListLayersResp};
 use oxide_vpc::api::{
     AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq, ListPortsReq,
     ListPortsResp, SNatCfg, SetFwRulesReq, SetVirt2PhysReq,
+    DumpVirt2PhysReq, DumpVirt2PhysResp,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -149,6 +152,16 @@ impl OpteHdl {
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 
+    /// List all the layers for a given OPTE port.
+    pub fn list_layers(
+        &self,
+        port: &str,
+    ) -> Result<ListLayersResp, Error> {
+        let req = ListLayersReq { port_name: port.to_string() };
+        let cmd = OpteCmd::ListLayers;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+    }
+
     /// Create a new handle to the OPTE control node.
     pub fn open(what: &str) -> Result<Self, Error> {
         Ok(OpteHdl {
@@ -156,8 +169,17 @@ impl OpteHdl {
         })
     }
 
+    /// Set the virtual-to-physical mapping, which correlates a virtual port
+    /// with its information on the physical / underlay network.
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetVirt2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+    }
+
+    /// Dump the Virtual-to-Physical mappings.
+    pub fn dump_v2p(&self) -> Result<overlay::DumpVirt2PhysResp, Error> {
+        let req = DumpVirt2PhysReq { unused: 99 };
+        let cmd = OpteCmd::DumpVirt2Phys;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 
@@ -172,6 +194,7 @@ impl OpteHdl {
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 
+    /// Add an IPv4 router entry to the port.
     pub fn add_router_entry_ip4(
         &self,
         req: &AddRouterEntryIpv4Req,
@@ -180,8 +203,52 @@ impl OpteHdl {
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 
+    /// Atomically set all firewall rules for the port.
     pub fn set_fw_rules(&self, req: &SetFwRulesReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetFwRules;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+    }
+
+    /// Return the contents of an OPTE layer.
+    pub fn get_layer_by_name(
+        &self,
+        port_name: &str,
+        name: &str,
+    ) -> Result<DumpLayerResp, Error> {
+        let cmd = OpteCmd::DumpLayer;
+        let req = DumpLayerReq {
+            port_name: port_name.to_string(),
+            name: name.to_string(),
+        };
+        run_cmd_ioctl::<DumpLayerResp, _>(
+            self.device.as_raw_fd(),
+            cmd,
+            &req,
+        )
+    }
+    /// Return the TCP flows.
+    pub fn dump_tcp_flows(
+        &self,
+        port_name: &str,
+    ) -> Result<DumpTcpFlowsResp, Error> {
+        let cmd = OpteCmd::DumpTcpFlows;
+        let req = DumpTcpFlowsReq {
+            port_name: port_name.to_string(),
+        };
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+    }
+
+    /// Clear all entries from the Unified Flow Table (UFT).
+    pub fn clear_uft(&self, port_name: &str) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearUft;
+        let req = ClearUftReq { port_name: port_name.to_string() };
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+    }
+
+    /// Return the Unified Flow Table (UFT).
+    pub fn dump_uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
+        let cmd = OpteCmd::DumpUft;
+        let req = DumpUftReq { port_name: port_name.to_string() };
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 }

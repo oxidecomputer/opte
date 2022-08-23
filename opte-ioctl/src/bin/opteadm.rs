@@ -27,6 +27,7 @@ use oxide_vpc::api::{
     Ports, ProtoFilter, RemFwRuleReq, RouterTarget, SNatCfg, SetVirt2PhysReq,
 };
 use oxide_vpc::engine::overlay::DumpVirt2PhysResp;
+use oxide_vpc::engine::ioctl::ListLayersResp;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, StructOpt)]
