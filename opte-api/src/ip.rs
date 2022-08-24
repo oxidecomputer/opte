@@ -397,6 +397,8 @@ pub struct Ipv6Addr {
 }
 
 impl Ipv6Addr {
+    pub const ANY_ADDR: [u8; 16] = [0; 16];
+
     /// Return the bytes of the address.
     pub fn bytes(&self) -> [u8; 16] {
         self.inner
@@ -413,9 +415,7 @@ impl Ipv6Addr {
         }
 
         if mask == 0 {
-            for byte in &mut self.inner[0..15] {
-                *byte = 0;
-            }
+            self.inner.fill(0);
             return Ok(self);
         }
 
@@ -432,10 +432,7 @@ impl Ipv6Addr {
             self.inner[byte_idx] = self.inner[byte_idx] & bits as u8;
             byte_idx += 1;
         }
-
-        for byte in &mut self.inner[byte_idx..16] {
-            *byte = 0;
-        }
+        self.inner[byte_idx..].fill(0);
 
         Ok(self)
     }
@@ -838,5 +835,8 @@ mod test {
         ip6 = "fd00:1122:3344:0201::".parse().unwrap();
         ip6_prefix = "fd00:1122:3344:0200::".parse().unwrap();
         assert_eq!(ip6.mask(56).unwrap(), ip6_prefix);
+
+        let ip6 = Ipv6Addr::from([1; 16]);
+        assert_eq!(ip6.mask(0).unwrap().bytes(), Ipv6Addr::ANY_ADDR);
     }
 }
