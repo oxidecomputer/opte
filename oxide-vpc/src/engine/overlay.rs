@@ -26,8 +26,7 @@ cfg_if! {
 use serde::{Deserialize, Serialize};
 
 use super::router::RouterTargetInternal;
-use crate::api::{GuestPhysAddr, PhysNet};
-use crate::VpcCfg;
+use crate::api::{BoundaryServices, GuestPhysAddr, PhysNet, VpcCfg};
 use opte::api::{CmdOk, Direction, Ipv4Addr, MacAddr, OpteError};
 use opte::ddi::sync::{KMutex, KMutexType};
 use opte::engine::ether::{EtherMeta, ETHER_TYPE_IPV6};
@@ -54,7 +53,7 @@ pub fn setup(
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
     let encap = Action::Static(Arc::new(EncapAction::new(
-        cfg.bsvc_addr,
+        cfg.boundary_services,
         cfg.phys_ip,
         cfg.vni,
         v2p,
@@ -140,7 +139,7 @@ pub const ENCAP_NAME: &'static str = "encap";
 /// The mapping itself is available through the port metadata passes
 /// as argument to the [`StaticAction`] callback.
 pub struct EncapAction {
-    bsvc_addr: PhysNet,
+    boundary_services: PhysNet,
     // The physical IPv6 ULA of the server that hosts this guest
     // sending data.
     phys_ip_src: Ipv6Addr,
@@ -150,12 +149,21 @@ pub struct EncapAction {
 
 impl EncapAction {
     pub fn new(
-        bsvc_addr: PhysNet,
+        boundary_services: BoundaryServices,
         phys_ip_src: Ipv6Addr,
         vni: Vni,
         v2p: Arc<Virt2Phys>,
     ) -> Self {
-        Self { bsvc_addr, phys_ip_src, vni, v2p }
+        Self {
+            boundary_services: PhysNet {
+                ether: boundary_services.mac,
+                ip: boundary_services.ip,
+                vni: boundary_services.vni,
+            },
+            phys_ip_src,
+            vni,
+            v2p,
+        }
     }
 }
 
@@ -202,7 +210,7 @@ impl StaticAction for EncapAction {
         };
 
         let phys_target = match target {
-            RouterTargetInternal::InternetGateway => self.bsvc_addr,
+            RouterTargetInternal::InternetGateway => self.boundary_services,
 
             RouterTargetInternal::Ip(virt_ip) => match self.v2p.get(&virt_ip) {
                 Some(phys) => PhysNet {

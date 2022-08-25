@@ -35,7 +35,7 @@ use opte::ddi::sync::{KMutex, KMutexType, KRwLock, KRwLockType};
 use opte::ddi::time::{Interval, Moment, Periodic};
 use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
-use opte::engine::headers::{IpAddr, IpCidr};
+use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::{
@@ -45,12 +45,13 @@ use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::{Port, PortBuilder, ProcessResult};
 use opte::ExecCtx;
 use oxide_vpc::api::{
-    AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
+    AddFwRuleReq, AddRouterEntryReq, CreateXdeReq, DeleteXdeReq, IpCfg,
     ListPortsReq, ListPortsResp, PhysNet, PortInfo, RemFwRuleReq,
-    SetFwRulesReq, SetVirt2PhysReq,
+    SetFwRulesReq, SetVirt2PhysReq, VpcCfg,
 };
-use oxide_vpc::engine::{arp, dhcp4, firewall, icmp, nat, overlay, router};
-use oxide_vpc::VpcCfg;
+use oxide_vpc::engine::{
+    arp, dhcp, firewall, icmp, icmpv6, nat, overlay, router,
+};
 
 // Entry limits for the varous flow tables.
 //
@@ -390,7 +391,7 @@ unsafe extern "C" fn xde_dld_ioc_opte_cmd(
             hdlr_resp(&mut env, resp)
         }
 
-        OpteCmd::AddRouterEntryIpv4 => {
+        OpteCmd::AddRouterEntry => {
             let resp = add_router_entry_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
@@ -402,7 +403,6 @@ unsafe extern "C" fn xde_dld_ioc_opte_cmd(
     }
 }
 
-const NANOS: i64 = 1_000_000_000;
 const ONE_SECOND: Interval = Interval::from_duration(Duration::new(1, 0));
 
 #[no_mangle]
@@ -441,55 +441,49 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         None => (),
     };
 
+    let cfg = &req.cfg;
     match devs.iter().find(|x| {
-        x.vni == req.vpc_vni && x.port.mac_addr() == req.private_mac.into()
+        x.vni == cfg.vni && x.port.mac_addr() == cfg.private_mac.into()
     }) {
         Some(_) => {
             return Err(OpteError::MacExists {
                 port: req.xde_devname.clone(),
-                vni: req.vpc_vni,
-                mac: req.private_mac,
+                vni: cfg.vni,
+                mac: cfg.private_mac,
             })
         }
         None => (),
     }
 
-    // XXX-EXT-IP This is for the external IP hack.
-    let phys_gw_mac = if unsafe { xde_ext_ip_hack == 1 } && req.snat.is_some() {
-        Some(req.snat.as_ref().unwrap().phys_gw_mac)
-    } else {
-        None
-    };
-
+    // XXX-EXT-IP Copy the configuration, modifying the external IP hack
+    // fields depending on the value of the `xde_ext_ip_hack` tunable.
+    let proxy_arp_enable = unsafe { xde_ext_ip_hack == 1 };
     let vpc_cfg = VpcCfg {
-        vpc_subnet: req.vpc_subnet,
-        private_mac: req.private_mac,
-        private_ip: req.private_ip,
-        gw_mac: req.gw_mac,
-        gw_ip: req.gw_ip,
-        external_ips_v4: req.external_ips_v4,
-        snat: req.snat.clone(),
-        vni: req.vpc_vni,
-        phys_ip: req.src_underlay_addr,
-        bsvc_addr: PhysNet {
-            ether: MacAddr::from([0; 6]), //XXX this should not be needed
-            ip: req.bsvc_addr,
-            vni: req.bsvc_vni,
-        },
-        proxy_arp_enable: unsafe { xde_ext_ip_hack == 1 },
-        phys_gw_mac,
+        proxy_arp_enable,
+        phys_gw_mac: if proxy_arp_enable { cfg.phys_gw_mac } else { None },
+        ..cfg.clone()
     };
 
     // If this is the first guest in this VPC, then create a new
     // mapping for said VPC. Otherwise, pull the existing one.
-    let port_v2p = state.vpc_map.add(
-        IpAddr::Ip4(req.private_ip),
-        PhysNet {
-            ether: req.private_mac,
-            ip: req.src_underlay_addr,
-            vni: req.vpc_vni,
-        },
-    );
+    //
+    // We need to insert mappings for both IPv4 and IPv6 addresses, should the
+    // guest have them. They should return the same `Virt2Phys` mapping, since
+    // they're mapping both IP addresses to the same host.
+    let phys_net =
+        PhysNet { ether: cfg.private_mac, ip: cfg.phys_ip, vni: cfg.vni };
+    let port_v2p = match vpc_cfg.ip_cfg {
+        IpCfg::Ipv4(ref ipv4) => {
+            state.vpc_map.add(IpAddr::Ip4(ipv4.private_ip), phys_net)
+        }
+        IpCfg::Ipv6(ref ipv6) => {
+            state.vpc_map.add(IpAddr::Ip6(ipv6.private_ip), phys_net)
+        }
+        IpCfg::DualStack { ref ipv4, ref ipv6 } => {
+            state.vpc_map.add(IpAddr::Ip4(ipv4.private_ip), phys_net);
+            state.vpc_map.add(IpAddr::Ip6(ipv6.private_ip), phys_net)
+        }
+    };
 
     let port = new_port(
         req.xde_devname.clone(),
@@ -515,7 +509,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         port_v2p,
         vpc_cfg,
         passthrough: req.passthrough,
-        vni: req.vpc_vni.into(),
+        vni: cfg.vni,
         u1: underlay.u1.clone(),
         u2: underlay.u2.clone(),
     });
@@ -1210,28 +1204,60 @@ fn guest_loopback(
                 // have the overlay layer in place which would
                 // normally rewrite the dst MAC addr to that of the
                 // dest guest.
-                if let Some(ip4) = ip_hdr.ip4() {
-                    let res = devs.iter().find(|x| {
-                        opte::engine::dbg(format!(
-                            "dev ip: {} pkt dest: {}",
-                            x.vpc_cfg.private_ip,
-                            ip4.dst(),
-                        ));
-                        x.vpc_cfg.private_ip == ip4.dst()
-                    });
 
-                    if let Some(dev) = res {
+                // Check the IP address against the guest's IPv4 and IPv6
+                // addresses, in that order. If either matches, we need to
+                // rewrite the destination MAC to that of the guest.
+                let maybe_dev = {
+                    if let Some(ip4) = ip_hdr.ip4() {
+                        // Find device with matching IPv4 address
+                        devs.iter().find(|x| {
+                            if let Some(cfg) = x.vpc_cfg.ipv4_cfg() {
+                                opte::engine::dbg(format!(
+                                    "dev ipv4: {} pkt dest: {}",
+                                    cfg.private_ip,
+                                    ip4.dst(),
+                                ));
+                                cfg.private_ip == ip4.dst()
+                            } else {
+                                false
+                            }
+                        })
+                    } else if let Some(ip6) = ip_hdr.ip6() {
+                        // Find device with matching IPv6 address
+                        devs.iter().find(|x| {
+                            if let Some(cfg) = x.vpc_cfg.ipv6_cfg() {
+                                opte::engine::dbg(format!(
+                                    "dev ipv6: {} pkt dest: {}",
+                                    cfg.private_ip,
+                                    ip6.dst(),
+                                ));
+                                cfg.private_ip == ip6.dst()
+                            } else {
+                                false
+                            }
+                        })
+                    } else {
+                        // This should be unreachable!(). We have an IP header,
+                        // but neither `ip4()` nor `ip6()` returned something.
                         opte::engine::dbg(format!(
-                            "rewriting packet dst mac to: {}",
-                            dev.vpc_cfg.private_mac,
+                            "Packet contains IP header, but neither `ip4()` \
+                            nor `ip6()` returned `Some`. IP header: {:?}",
+                            ip_hdr,
                         ));
-                        pkt.write_dst_mac(dev.vpc_cfg.private_mac.into());
+                        None
                     }
+                };
 
-                    res
-                } else {
-                    None
+                // If we found a guest with the dst address, rewrite the MAC
+                if let Some(dev) = maybe_dev {
+                    opte::engine::dbg(format!(
+                        "rewriting packet dst mac to: {}",
+                        dev.vpc_cfg.private_mac,
+                    ));
+                    pkt.write_dst_mac(dev.vpc_cfg.private_mac.into());
                 }
+                maybe_dev
             }
         }
     } else {
@@ -1386,23 +1412,41 @@ unsafe extern "C" fn xde_mc_tx(
     match res {
         Ok(ProcessResult::Modified) => {
             if xde_ext_ip_hack == 1 {
-                let mut local = false;
-
-                match pkt.headers().inner.ip.as_ref() {
-                    Some(ip_hdr) => {
+                let local =
+                    if let Some(ip_hdr) = pkt.headers().inner.ip.as_ref() {
                         if let Some(ip4) = ip_hdr.ip4() {
                             let devs = xde_devs.read();
-                            let res = devs
-                                .iter()
-                                .find(|x| x.vpc_cfg.private_ip == ip4.dst());
-
-                            if res.is_some() {
-                                local = true;
-                            }
+                            let res = devs.iter().find(|x| {
+                                if let Some(cfg) = x.vpc_cfg.ipv4_cfg() {
+                                    cfg.private_ip == ip4.dst()
+                                } else {
+                                    false
+                                }
+                            });
+                            res.is_some()
+                        } else if let Some(ip6) = ip_hdr.ip6() {
+                            let devs = xde_devs.read();
+                            let res = devs.iter().find(|x| {
+                                if let Some(cfg) = x.vpc_cfg.ipv6_cfg() {
+                                    cfg.private_ip == ip6.dst()
+                                } else {
+                                    false
+                                }
+                            });
+                            res.is_some()
+                        } else {
+                            // This should be unreachable!(). We have an IP header,
+                            // but neither `ip4()` nor `ip6()` returned something.
+                            opte::engine::dbg(format!(
+                            "Packet contains IP header, but neither `ip4()` \
+                            nor `ip6()` returned `Some`. IP header: {:?}",
+                            ip_hdr,
+                        ));
+                            false
                         }
-                    }
-                    None => (),
-                }
+                    } else {
+                        false
+                    };
 
                 opte::engine::dbg(format!(
                     "[Tx] ext_ip_hack local: {:?}",
@@ -1868,8 +1912,9 @@ fn new_port(
     firewall::setup(&mut pb, FW_FT_LIMIT.unwrap())?;
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    dhcp4::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
+    dhcp::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     icmp::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
+    icmpv6::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     arp::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     router::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     nat::setup(&mut pb, &cfg, NAT_FT_LIMIT.unwrap())?;
@@ -2042,7 +2087,7 @@ unsafe extern "C" fn xde_rx(
 
 #[no_mangle]
 fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: AddRouterEntryIpv4Req = env.copy_in_req()?;
+    let req: AddRouterEntryReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
@@ -2050,11 +2095,7 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    router::add_entry(
-        &dev.port,
-        IpCidr::Ip4(req.dest.into()),
-        req.target.into(),
-    )
+    router::add_entry(&dev.port, req.dest.into(), req.target.into())
 }
 
 #[no_mangle]
@@ -2202,7 +2243,18 @@ fn list_ports_hdlr(
         resp.ports.push(PortInfo {
             name: dev.port.name().to_string(),
             mac_addr: dev.port.mac_addr().into(),
-            ip4_addr: dev.vpc_cfg.private_ip,
+            ip4_addr: dev.vpc_cfg.ipv4_cfg().map(|cfg| cfg.private_ip),
+            external_ip4_addr: dev
+                .vpc_cfg
+                .ipv4_cfg()
+                .map(|cfg| cfg.external_ips)
+                .flatten(),
+            ip6_addr: dev.vpc_cfg.ipv6_cfg().map(|cfg| cfg.private_ip),
+            external_ip6_addr: dev
+                .vpc_cfg
+                .ipv6_cfg()
+                .map(|cfg| cfg.external_ips)
+                .flatten(),
             state: dev.port.state().to_string(),
         });
     }

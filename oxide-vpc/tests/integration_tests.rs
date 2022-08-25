@@ -30,13 +30,13 @@ use opte::engine::arp::{
 use opte::engine::checksum::HeaderChecksum;
 use opte::engine::ether::{
     EtherHdr, EtherHdrRaw, EtherMeta, EtherType, ETHER_HDR_SZ, ETHER_TYPE_ARP,
-    ETHER_TYPE_IPV4,
+    ETHER_TYPE_IPV4, ETHER_TYPE_IPV6,
 };
 use opte::engine::flow_table::FLOW_DEF_EXPIRE_SECS;
 use opte::engine::geneve::{self, Vni};
 use opte::engine::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
 use opte::engine::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol, UlpCsumOpt};
-use opte::engine::ip6::Ipv6Addr;
+use opte::engine::ip6::{Ipv6Addr, Ipv6Hdr, Ipv6Meta, IPV6_HDR_SZ};
 use opte::engine::packet::{
     Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
     Parsed,
@@ -50,12 +50,12 @@ use opte::engine::tcp::{TcpFlags, TcpHdr};
 use opte::engine::udp::{UdpHdr, UdpMeta};
 use opte::ExecCtx;
 use oxide_vpc::api::{
-    AddFwRuleReq, FirewallRule, GuestPhysAddr, PhysNet, RouterTarget, SNatCfg,
-    SetFwRulesReq,
+    AddFwRuleReq, FirewallRule, GuestPhysAddr, RouterTarget, SNat4Cfg,
+    SNat6Cfg, SetFwRulesReq,
 };
+use oxide_vpc::api::{BoundaryServices, IpCfg, Ipv4Cfg, Ipv6Cfg, VpcCfg};
 use oxide_vpc::engine::overlay::{self, Virt2Phys};
-use oxide_vpc::engine::{arp, dhcp4, firewall, icmp, nat, router};
-use oxide_vpc::VpcCfg;
+use oxide_vpc::engine::{arp, dhcp, firewall, icmp, icmpv6, nat, router};
 use pcap_parser::pcap::{self, LegacyPcapBlock, PcapHeader};
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use std::boxed::Box;
@@ -381,18 +381,20 @@ impl PcapBuilder {
 }
 
 fn lab_cfg() -> VpcCfg {
-    VpcCfg {
-        private_ip: "172.20.14.16".parse().unwrap(),
-        private_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
+    let ip_cfg = IpCfg::Ipv4(Ipv4Cfg {
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
-        snat: Some(SNatCfg {
+        private_ip: "172.20.14.16".parse().unwrap(),
+        gateway_ip: "172.20.14.1".parse().unwrap(),
+        snat_cfg: Some(SNat4Cfg {
             public_ip: "76.76.21.21".parse().unwrap(),
             ports: 1025..=4096,
-            phys_gw_mac: MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
         }),
-        external_ips_v4: None,
-        gw_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x01]),
-        gw_ip: "172.20.14.1".parse().unwrap(),
+        external_ips: None,
+    });
+    VpcCfg {
+        ip_cfg,
+        private_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
+        gateway_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x01]),
 
         // XXX These values don't really mean anything in this
         // context. This "lab cfg" was created during the early days
@@ -404,8 +406,8 @@ fn lab_cfg() -> VpcCfg {
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
-        bsvc_addr: PhysNet {
-            ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+        boundary_services: BoundaryServices {
+            mac: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
             ip: Ipv6Addr::from([
                 0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
@@ -413,7 +415,7 @@ fn lab_cfg() -> VpcCfg {
             vni: Vni::new(7777u32).unwrap(),
         },
         proxy_arp_enable: false,
-        phys_gw_mac: None,
+        phys_gw_mac: Some(MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d])),
     }
 }
 
@@ -432,8 +434,9 @@ fn oxide_net_builder(
     let one_limit = NonZeroU32::new(1).unwrap();
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    dhcp4::setup(&mut pb, cfg, one_limit).expect("failed to add dhcp4 layer");
+    dhcp::setup(&mut pb, cfg, one_limit).expect("failed to add dhcp4 layer");
     icmp::setup(&mut pb, cfg, one_limit).expect("failed to add icmp layer");
+    icmpv6::setup(&mut pb, cfg, one_limit).expect("failed to add icmpv6 layer");
     arp::setup(&mut pb, cfg, one_limit).expect("failed to add arp layer");
     router::setup(&mut pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
@@ -473,7 +476,7 @@ fn oxide_net_setup(
             "set:arp.rules_in=1,arp.rules_out=2",
             "set:icmp.rules_out=1",
             "set:fw.rules_in=1,fw.rules_out=1",
-            "set:nat.rules_out=1",
+            "set:nat.rules_out=2",
             "set:router.rules_out=1",
         ]
     );
@@ -485,29 +488,43 @@ const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 const TCP_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 
 fn g1_cfg() -> VpcCfg {
+    let ip_cfg = IpCfg::DualStack {
+        ipv4: Ipv4Cfg {
+            vpc_subnet: "172.30.0.0/22".parse().unwrap(),
+            private_ip: "172.30.0.5".parse().unwrap(),
+            gateway_ip: "172.30.0.1".parse().unwrap(),
+            snat_cfg: Some(SNat4Cfg {
+                // NOTE: This is not a routable IP, but remember that a
+                // "public IP" for an Oxide guest could either be a
+                // public, routable IP or simply an IP on their wider LAN
+                // which the oxide Rack is simply a part of.
+                public_ip: "10.77.77.13".parse().unwrap(),
+                ports: 1025..=4096,
+            }),
+            external_ips: None,
+        },
+        ipv6: Ipv6Cfg {
+            vpc_subnet: "fd00::/64".parse().unwrap(),
+            private_ip: "fd00::5".parse().unwrap(),
+            gateway_ip: "fd00::1".parse().unwrap(),
+            snat_cfg: Some(SNat6Cfg {
+                public_ip: "2001:db8::1".parse().unwrap(),
+                ports: 1025..=4096,
+            }),
+            external_ips: None,
+        },
+    };
     VpcCfg {
-        private_ip: "172.30.0.5".parse().unwrap(),
+        ip_cfg,
         private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
-        vpc_subnet: "172.30.0.0/22".parse().unwrap(),
-        snat: Some(SNatCfg {
-            // NOTE: This is not a routable IP, but remember that a
-            // "public IP" for an Oxide guest could either be a
-            // public, routable IP or simply an IP on their wider LAN
-            // which the oxide Rack is simply a part of.
-            public_ip: "10.77.77.13".parse().unwrap(),
-            ports: 1025..=4096,
-            phys_gw_mac: MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
-        }),
-        external_ips_v4: None,
-        gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
-        gw_ip: "172.30.0.1".parse().unwrap(),
+        gateway_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
         vni: Vni::new(1287581u32).unwrap(),
         // Site 0xF7, Rack 1, Sled 1, Interface 1
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
-        bsvc_addr: PhysNet {
-            ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+        boundary_services: BoundaryServices {
+            mac: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
             ip: Ipv6Addr::from([
                 0xFD, 0x00, 0x99, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
@@ -515,34 +532,48 @@ fn g1_cfg() -> VpcCfg {
             vni: Vni::new(99u32).unwrap(),
         },
         proxy_arp_enable: false,
-        phys_gw_mac: None,
+        phys_gw_mac: Some(MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d])),
     }
 }
 
 fn g2_cfg() -> VpcCfg {
+    let ip_cfg = IpCfg::DualStack {
+        ipv4: Ipv4Cfg {
+            vpc_subnet: "172.30.0.0/22".parse().unwrap(),
+            private_ip: "172.30.0.6".parse().unwrap(),
+            gateway_ip: "172.30.0.1".parse().unwrap(),
+            snat_cfg: Some(SNat4Cfg {
+                // NOTE: This is not a routable IP, but remember that a
+                // "public IP" for an Oxide guest could either be a
+                // public, routable IP or simply an IP on their wider LAN
+                // which the oxide Rack is simply a part of.
+                public_ip: "10.77.77.23".parse().unwrap(),
+                ports: 4096..=8192,
+            }),
+            external_ips: None,
+        },
+        ipv6: Ipv6Cfg {
+            vpc_subnet: "fd00::/64".parse().unwrap(),
+            private_ip: "fd00::5".parse().unwrap(),
+            gateway_ip: "fd00::1".parse().unwrap(),
+            snat_cfg: Some(SNat6Cfg {
+                public_ip: "2001:db8::1".parse().unwrap(),
+                ports: 1025..=4096,
+            }),
+            external_ips: None,
+        },
+    };
     VpcCfg {
-        private_ip: "172.30.0.6".parse().unwrap(),
-        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x66]),
-        vpc_subnet: "172.30.0.0/22".parse().unwrap(),
-        snat: Some(SNatCfg {
-            // NOTE: This is not a routable IP, but remember that a
-            // "public IP" for an Oxide guest could either be a
-            // public, routable IP or simply an IP on their wider LAN
-            // which the oxide Rack is simply a part of.
-            public_ip: "10.77.77.23".parse().unwrap(),
-            ports: 4097..=8192,
-            phys_gw_mac: MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]),
-        }),
-        external_ips_v4: None,
-        gw_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
-        gw_ip: "172.30.0.1".parse().unwrap(),
+        ip_cfg,
+        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
+        gateway_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
         vni: Vni::new(1287581u32).unwrap(),
         // Site 0xF7, Rack 1, Sled 22, Interface 1
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
-        bsvc_addr: PhysNet {
-            ether: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+        boundary_services: BoundaryServices {
+            mac: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
             ip: Ipv6Addr::from([
                 0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
@@ -550,7 +581,7 @@ fn g2_cfg() -> VpcCfg {
             vni: Vni::new(99u32).unwrap(),
         },
         proxy_arp_enable: false,
-        phys_gw_mac: None,
+        phys_gw_mac: Some(MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d])),
     }
 }
 
@@ -572,13 +603,17 @@ fn tcp_telnet_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
     let mut tcp = TcpHdr::new(7865, 23);
     tcp.set_flags(TcpFlags::SYN);
     tcp.set_seq(4224936861);
-    let mut ip4 =
-        Ipv4Hdr::new_tcp(&mut tcp, &body, src.private_ip, dst.private_ip);
+    let mut ip4 = Ipv4Hdr::new_tcp(
+        &mut tcp,
+        &body,
+        src.ipv4_cfg().unwrap().private_ip,
+        dst.ipv4_cfg().unwrap().private_ip,
+    );
     ip4.compute_hdr_csum();
     let tcp_csum =
         ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, src.private_mac, src.gw_mac);
+    let eth = EtherHdr::new(EtherType::Ipv4, src.private_mac, src.gateway_mac);
 
     let mut bytes = vec![];
     bytes.extend_from_slice(&eth.as_bytes());
@@ -591,7 +626,11 @@ fn tcp_telnet_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
 // Generate a packet representing the start of a TCP handshake for an
 // HTTP request from src to dst.
 fn http_tcp_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
-    http_tcp_syn2(src.private_mac, src.private_ip, dst.private_ip)
+    http_tcp_syn2(
+        src.private_mac,
+        src.ipv4_cfg().unwrap().private_ip,
+        dst.ipv4_cfg().unwrap().private_ip,
+    )
 }
 
 // Generate a packet representing the start of a TCP handshake for an
@@ -628,13 +667,17 @@ fn http_tcp_syn_ack(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
     tcp.set_flags(TcpFlags::SYN | TcpFlags::ACK);
     tcp.set_seq(44161351);
     tcp.set_ack(2382112980);
-    let mut ip4 =
-        Ipv4Hdr::new_tcp(&mut tcp, &body, src.private_ip, dst.private_ip);
+    let mut ip4 = Ipv4Hdr::new_tcp(
+        &mut tcp,
+        &body,
+        src.ipv4_cfg().unwrap().private_ip,
+        dst.ipv4_cfg().unwrap().private_ip,
+    );
     ip4.compute_hdr_csum();
     let tcp_csum =
         ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, src.private_mac, src.gw_mac);
+    let eth = EtherHdr::new(EtherType::Ipv4, src.private_mac, src.gateway_mac);
 
     let mut bytes = vec![];
     bytes.extend_from_slice(&eth.as_bytes());
@@ -655,7 +698,7 @@ fn port_transition_running() {
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
 
@@ -663,8 +706,10 @@ fn port_transition_running() {
     // same subnet.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4(g1_cfg.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
+        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(
+            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
+        )),
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules_out"]);
@@ -696,7 +741,7 @@ fn port_transition_reset() {
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
 
@@ -704,8 +749,10 @@ fn port_transition_reset() {
     // same subnet.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4(g1_cfg.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
+        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(
+            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
+        )),
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules_out"]);
@@ -746,8 +793,8 @@ fn port_transition_pause() {
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g1_cfg.private_ip), g1_phys);
-    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    v2p.set(IpAddr::Ip4(g1_cfg.ipv4_cfg().unwrap().private_ip), g1_phys);
+    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut g1_ameta = ActionMeta::new();
     let mut g2_ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
@@ -757,8 +804,10 @@ fn port_transition_pause() {
     // subnet.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4(g1_cfg.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
+        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(
+            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
+        )),
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules_out"]);
@@ -782,8 +831,10 @@ fn port_transition_pause() {
     // subnet.
     router::add_entry(
         &g2.port,
-        IpCidr::Ip4(g2_cfg.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet)),
+        IpCidr::Ip4(g2_cfg.ipv4_cfg().unwrap().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(
+            g2_cfg.ipv4_cfg().unwrap().vpc_subnet,
+        )),
     )
     .unwrap();
     incr!(g2, ["epoch", "router.rules_out"]);
@@ -825,8 +876,10 @@ fn port_transition_pause() {
     assert!(matches!(
         router::del_entry(
             &g2.port,
-            IpCidr::Ip4(g2_cfg.vpc_subnet),
-            RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet)),
+            IpCidr::Ip4(g2_cfg.ipv4_cfg().unwrap().vpc_subnet),
+            RouterTarget::VpcSubnet(IpCidr::Ip4(
+                g2_cfg.ipv4_cfg().unwrap().vpc_subnet
+            )),
         ),
         Err(OpteError::BadState(_))
     ));
@@ -907,6 +960,26 @@ fn add_remove_fw_rule() {
 fn gen_icmp_echo_req(
     eth_src: MacAddr,
     eth_dst: MacAddr,
+    ip_src: IpAddr,
+    ip_dst: IpAddr,
+    ident: u16,
+    seq_no: u16,
+    data: &[u8],
+) -> Packet<Parsed> {
+    match (ip_src, ip_dst) {
+        (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => {
+            gen_icmpv4_echo_req(eth_src, eth_dst, src, dst, ident, seq_no, data)
+        }
+        (IpAddr::Ip6(src), IpAddr::Ip6(dst)) => {
+            gen_icmpv6_echo_req(eth_src, eth_dst, src, dst, ident, seq_no, data)
+        }
+        (_, _) => panic!("IP src and dst versions must match"),
+    }
+}
+
+fn gen_icmpv4_echo_req(
+    eth_src: MacAddr,
+    eth_dst: MacAddr,
     ip_src: Ipv4Addr,
     ip_dst: Ipv4Addr,
     ident: u16,
@@ -940,6 +1013,46 @@ fn gen_icmp_echo_req(
     Packet::copy(&pkt_bytes).parse().unwrap()
 }
 
+fn gen_icmpv6_echo_req(
+    eth_src: MacAddr,
+    eth_dst: MacAddr,
+    ip_src: Ipv6Addr,
+    ip_dst: Ipv6Addr,
+    ident: u16,
+    seq_no: u16,
+    data: &[u8],
+) -> Packet<Parsed> {
+    use smoltcp::wire::{Icmpv6Packet, Icmpv6Repr, Ipv6Address};
+
+    let req = Icmpv6Repr::EchoRequest { ident, seq_no, data };
+    let mut body_bytes = vec![0u8; req.buffer_len()];
+    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body_bytes);
+    let _ = req.emit(
+        &Ipv6Address::from_bytes(ip_src.bytes().as_slice()).into(),
+        &Ipv6Address::from_bytes(ip_dst.bytes().as_slice()).into(),
+        &mut req_pkt,
+        &Default::default(),
+    );
+    let mut ip6 = Ipv6Hdr::from(&Ipv6Meta {
+        src: ip_src,
+        dst: ip_dst,
+        proto: Protocol::ICMPv6,
+    });
+    ip6.set_total_len(ip6.hdr_len() as u16 + req.buffer_len() as u16);
+    let eth = EtherHdr::from(&EtherMeta {
+        dst: eth_dst,
+        src: eth_src,
+        ether_type: ETHER_TYPE_IPV6,
+    });
+
+    let mut pkt_bytes =
+        Vec::with_capacity(ETHER_HDR_SZ + ip6.hdr_len() + req.buffer_len());
+    pkt_bytes.extend_from_slice(&eth.as_bytes());
+    pkt_bytes.extend_from_slice(&ip6.as_bytes());
+    pkt_bytes.extend_from_slice(&body_bytes);
+    Packet::copy(&pkt_bytes).parse().unwrap()
+}
+
 // Verify that the guest can ping the virtual gateway.
 #[test]
 fn gateway_icmp4_ping() {
@@ -960,9 +1073,9 @@ fn gateway_icmp4_ping() {
     // ================================================================
     let mut pkt1 = gen_icmp_echo_req(
         g1_cfg.private_mac,
-        g1_cfg.gw_mac,
-        g1_cfg.private_ip,
-        g1_cfg.gw_ip,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4_cfg().unwrap().private_ip.into(),
+        g1_cfg.ipv4_cfg().unwrap().gateway_ip.into(),
         ident,
         seq_no,
         &data[..],
@@ -995,7 +1108,7 @@ fn gateway_icmp4_ping() {
 
     match meta.inner.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.gw_mac);
+            assert_eq!(eth.src, g1_cfg.gateway_mac);
             assert_eq!(eth.dst, g1_cfg.private_mac);
         }
 
@@ -1004,12 +1117,12 @@ fn gateway_icmp4_ping() {
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
-            assert_eq!(ip4.src, g1_cfg.gw_ip);
-            assert_eq!(ip4.dst, g1_cfg.private_ip);
+            assert_eq!(ip4.src, g1_cfg.ipv4_cfg().unwrap().gateway_ip);
+            assert_eq!(ip4.dst, g1_cfg.ipv4_cfg().unwrap().private_ip);
             assert_eq!(ip4.proto, Protocol::ICMP);
         }
 
-        ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+        ip6 => panic!("expected inner IPv4 metadata, got IPv6: {:?}", ip6),
     }
 
     let mut rdr = PacketReader::new(&reply, ());
@@ -1049,7 +1162,7 @@ fn guest_to_guest_no_route() {
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
@@ -1081,7 +1194,7 @@ fn guest_to_guest() {
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
@@ -1091,8 +1204,10 @@ fn guest_to_guest() {
     // Add router entry that allows Guest 1 to send to Guest 2.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4(g2_cfg.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet)),
+        IpCidr::Ip4(g2_cfg.ipv4_cfg().unwrap().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(
+            g2_cfg.ipv4_cfg().unwrap().vpc_subnet,
+        )),
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules_out"]);
@@ -1109,8 +1224,10 @@ fn guest_to_guest() {
     // once instead of on each port individually.
     router::add_entry(
         &g2.port,
-        IpCidr::Ip4(g1_cfg.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
+        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(
+            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
+        )),
     )
     .unwrap();
     incr!(g2, ["epoch", "router.rules_out"]);
@@ -1199,8 +1316,8 @@ fn guest_to_guest() {
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
-            assert_eq!(ip4.src, g1_cfg.private_ip);
-            assert_eq!(ip4.dst, g2_cfg.private_ip);
+            assert_eq!(ip4.src, g1_cfg.ipv4_cfg().unwrap().private_ip);
+            assert_eq!(ip4.dst, g2_cfg.ipv4_cfg().unwrap().private_ip);
             assert_eq!(ip4.proto, Protocol::TCP);
         }
 
@@ -1254,8 +1371,8 @@ fn guest_to_guest() {
 
     match g2_meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
-            assert_eq!(ip4.src, g1_cfg.private_ip);
-            assert_eq!(ip4.dst, g2_cfg.private_ip);
+            assert_eq!(ip4.src, g1_cfg.ipv4_cfg().unwrap().private_ip);
+            assert_eq!(ip4.dst, g2_cfg.ipv4_cfg().unwrap().private_ip);
             assert_eq!(ip4.proto, Protocol::TCP);
         }
 
@@ -1291,7 +1408,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // physical addresses. In this case the only guest in VNI 99 is
     // g1.
     let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g1_cfg.private_ip), g1_phys);
+    v2p.set(IpAddr::Ip4(g1_cfg.ipv4_cfg().unwrap().private_ip), g1_phys);
     let mut ameta = ActionMeta::new();
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
@@ -1306,8 +1423,10 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // Peering Gateway they have no way to reach each other.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4(g1_cfg.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
+        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(
+            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
+        )),
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules_out"]);
@@ -1324,8 +1443,10 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // once instead of on each port individually.
     router::add_entry(
         &g2.port,
-        IpCidr::Ip4(g1_cfg.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.vpc_subnet)),
+        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(
+            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
+        )),
     )
     .unwrap();
     incr!(g2, ["epoch", "router.rules_out"]);
@@ -1375,7 +1496,11 @@ fn guest_to_internet() {
     // Generate a TCP SYN packet from g1 to zinascii.com
     // ================================================================
     let dst_ip = "52.10.128.69".parse().unwrap();
-    let mut pkt1 = http_tcp_syn2(g1_cfg.private_mac, g1_cfg.private_ip, dst_ip);
+    let mut pkt1 = http_tcp_syn2(
+        g1_cfg.private_mac,
+        g1_cfg.ipv4_cfg().unwrap().private_ip,
+        dst_ip,
+    );
 
     // ================================================================
     // Run the packet through g1's port in the outbound direction and
@@ -1410,7 +1535,7 @@ fn guest_to_internet() {
     match meta.outer.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
             assert_eq!(ip6.src, g1_cfg.phys_ip);
-            assert_eq!(ip6.dst, g1_cfg.bsvc_addr.ip);
+            assert_eq!(ip6.dst, g1_cfg.boundary_services.ip);
         }
 
         val => panic!("expected outer IPv6, got: {:?}", val),
@@ -1427,7 +1552,7 @@ fn guest_to_internet() {
 
     match meta.outer.encap.as_ref() {
         Some(geneve) => {
-            assert_eq!(geneve.vni, g1_cfg.bsvc_addr.vni);
+            assert_eq!(geneve.vni, g1_cfg.boundary_services.vni);
         }
 
         None => panic!("expected outer Geneve metadata"),
@@ -1436,7 +1561,7 @@ fn guest_to_internet() {
     match meta.inner.ether.as_ref() {
         Some(eth) => {
             assert_eq!(eth.src, g1_cfg.private_mac);
-            assert_eq!(eth.dst, g1_cfg.bsvc_addr.ether.into());
+            assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
 
@@ -1445,7 +1570,10 @@ fn guest_to_internet() {
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
-            assert_eq!(ip4.src, g1_cfg.snat.as_ref().unwrap().public_ip);
+            assert_eq!(
+                ip4.src,
+                g1_cfg.ipv4_cfg().unwrap().snat_cfg.as_ref().unwrap().public_ip
+            );
             assert_eq!(ip4.dst, dst_ip);
             assert_eq!(ip4.proto, Protocol::TCP);
         }
@@ -1458,7 +1586,9 @@ fn guest_to_internet() {
             assert_eq!(
                 tcp.src,
                 g1_cfg
-                    .snat
+                    .ipv4_cfg()
+                    .unwrap()
+                    .snat_cfg
                     .as_ref()
                     .unwrap()
                     .ports
@@ -1570,9 +1700,9 @@ fn arp_gateway() {
 
     let arp = ArpEth4Payload {
         sha: cfg.private_mac,
-        spa: cfg.private_ip,
+        spa: cfg.ipv4_cfg().unwrap().private_ip,
         tha: MacAddr::from([0x00; 6]),
-        tpa: cfg.gw_ip,
+        tpa: cfg.ipv4_cfg().unwrap().gateway_ip,
     };
 
     let mut wtr = PacketWriter::new(pkt, None);
@@ -1589,7 +1719,7 @@ fn arp_gateway() {
             let ethm = meta.inner.ether.as_ref().unwrap();
             let arpm = meta.inner.arp.as_ref().unwrap();
             assert_eq!(ethm.dst, cfg.private_mac);
-            assert_eq!(ethm.src, cfg.gw_mac);
+            assert_eq!(ethm.src, cfg.gateway_mac);
             assert_eq!(ethm.ether_type, ETHER_TYPE_ARP);
             assert_eq!(arpm.op, ArpOp::Reply);
             assert_eq!(arpm.ptype, ETHER_TYPE_IPV4);
@@ -1600,10 +1730,10 @@ fn arp_gateway() {
                 &ArpEth4PayloadRaw::parse(&mut rdr).unwrap(),
             );
 
-            assert_eq!(arp.sha, cfg.gw_mac);
-            assert_eq!(arp.spa, cfg.gw_ip);
+            assert_eq!(arp.sha, cfg.gateway_mac);
+            assert_eq!(arp.spa, cfg.ipv4_cfg().unwrap().gateway_ip);
             assert_eq!(arp.tha, cfg.private_mac);
-            assert_eq!(arp.tpa, cfg.private_ip);
+            assert_eq!(arp.tpa, cfg.ipv4_cfg().unwrap().private_ip);
         }
 
         res => panic!("expected a Hairpin, got {:?}", res),
@@ -1621,7 +1751,7 @@ fn flow_expiration() {
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
@@ -1632,8 +1762,10 @@ fn flow_expiration() {
     // Add router entry that allows Guest 1 to send to Guest 2.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4(g2_cfg.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet)),
+        IpCidr::Ip4(g2_cfg.ipv4_cfg().unwrap().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(
+            g2_cfg.ipv4_cfg().unwrap().vpc_subnet,
+        )),
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules_out"]);
@@ -1671,7 +1803,7 @@ fn firewall_replace_rules() {
     // Add V2P mappings that allow guests to resolve each others
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
+    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
@@ -1681,8 +1813,10 @@ fn firewall_replace_rules() {
     // Add router entry that allows Guest 1 to send to Guest 2.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4(g2_cfg.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g2_cfg.vpc_subnet)),
+        IpCidr::Ip4(g2_cfg.ipv4_cfg().unwrap().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(
+            g2_cfg.ipv4_cfg().unwrap().vpc_subnet,
+        )),
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules_out"]);
@@ -1791,4 +1925,104 @@ fn firewall_replace_rules() {
         _ => panic!("expected drop but got: {:?}", res),
     }
     update!(g2, ["set:uft.flows_in=0"]);
+}
+
+// Test that a guest can send an ICMPv6 echo request / reply to the gateway.
+#[test]
+fn gateway_icmpv6_ping() {
+    use smoltcp::wire::{Icmpv6Packet, Icmpv6Repr, Ipv6Address};
+
+    let g1_cfg = g1_cfg();
+    let v2p = Arc::new(Virt2Phys::new());
+    let mut ameta = ActionMeta::new();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    g1.port.start();
+    set_state!(g1, PortState::Running);
+    let mut pcap = PcapBuilder::new("gateway_icmpv6_ping.pcap");
+    let ident = 7;
+    let seq_no = 777;
+    let data = b"reunion\0";
+
+    // ================================================================
+    // Generate an ICMP Echo Request from G1 to Virtual GW
+    // ================================================================
+    let mut pkt1 = gen_icmp_echo_req(
+        g1_cfg.private_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv6_cfg().unwrap().private_ip.into(),
+        g1_cfg.ipv6_cfg().unwrap().gateway_ip.into(),
+        ident,
+        seq_no,
+        &data[..],
+    );
+    pcap.add_pkt(&pkt1);
+
+    // ================================================================
+    // Run the Echo Request through g1's port in the outbound
+    // direction and verify it results in an Echo Reply Hairpin packet
+    // back to guest.
+    // ================================================================
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let hp = match res {
+        Ok(Hairpin(hp)) => hp,
+        _ => panic!("expected Hairpin, got {:?}", res),
+    };
+    assert_port!(g1);
+
+    let reply = hp.parse().unwrap();
+    pcap.add_pkt(&reply);
+
+    // Ether + IPv6
+    assert_eq!(reply.body_offset(), ETHER_HDR_SZ + IPV6_HDR_SZ);
+    assert_eq!(reply.body_seg(), 0);
+
+    let meta = reply.meta();
+    assert!(meta.outer.ether.is_none());
+    assert!(meta.outer.ip.is_none());
+    assert!(meta.outer.ulp.is_none());
+
+    match meta.inner.ether.as_ref() {
+        Some(eth) => {
+            assert_eq!(eth.src, g1_cfg.gateway_mac);
+            assert_eq!(eth.dst, g1_cfg.private_mac);
+        }
+
+        None => panic!("no inner ether header"),
+    }
+
+    let (src, dst) = match meta.inner.ip.as_ref().unwrap() {
+        IpMeta::Ip6(ip6) => {
+            assert_eq!(ip6.src, g1_cfg.ipv6_cfg().unwrap().gateway_ip);
+            assert_eq!(ip6.dst, g1_cfg.ipv6_cfg().unwrap().private_ip);
+            assert_eq!(ip6.proto, Protocol::ICMPv6);
+            (
+                Ipv6Address::from_bytes(ip6.src.bytes().as_slice()),
+                Ipv6Address::from_bytes(ip6.dst.bytes().as_slice()),
+            )
+        }
+        ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
+    };
+
+    let mut rdr = PacketReader::new(&reply, ());
+    // Need to seek to body.
+    rdr.seek(ETHER_HDR_SZ + IPV6_HDR_SZ).unwrap();
+    let reply_body = rdr.copy_remaining();
+    let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
+    let mut csum = CsumCapab::ignored();
+    csum.icmpv6 = smoltcp::phy::Checksum::Rx;
+    let reply_icmp =
+        Icmpv6Repr::parse(&src.into(), &dst.into(), &reply_pkt, &csum).unwrap();
+    match reply_icmp {
+        Icmpv6Repr::EchoReply {
+            ident: r_ident,
+            seq_no: r_seq_no,
+            data: r_data,
+        } => {
+            assert_eq!(r_ident, ident);
+            assert_eq!(r_seq_no, seq_no);
+            assert_eq!(r_data, data);
+        }
+
+        _ => panic!("expected Echo Reply, got {:?}", reply_icmp),
+    }
 }

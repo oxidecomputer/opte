@@ -12,7 +12,7 @@ cfg_if! {
     }
 }
 
-use crate::VpcCfg;
+use crate::api::VpcCfg;
 use opte::api::{Direction, MacAddr, OpteError};
 use opte::engine::arp::ArpReply;
 use opte::engine::ether::ETHER_TYPE_ARP;
@@ -27,12 +27,21 @@ pub fn setup(
     cfg: &VpcCfg,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
+    // The ARP layer only contains meaningful actions if this port is configured
+    // to use IPv4.
+    let ip_cfg = match cfg.ipv4_cfg() {
+        None => return Ok(()),
+        Some(cfg) => cfg,
+    };
     let mut actions = vec![
-        // ARP Reply for gateway's IP.
-        Action::Hairpin(Arc::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),
+        // ARP Reply for gateway's IPv4 address.
+        Action::Hairpin(Arc::new(ArpReply::new(
+            ip_cfg.gateway_ip,
+            cfg.gateway_mac,
+        ))),
     ];
 
-    if let Some(ip) = cfg.external_ips_v4.as_ref() {
+    if let Some(ip) = ip_cfg.external_ips.as_ref() {
         if cfg.proxy_arp_enable {
             // XXX-EXT-IP Hack to get remote access to guest instance
             // via Proxy ARP.
@@ -82,7 +91,7 @@ pub fn setup(
     // XXX-EXT-IP This is a hack to get guest access working until we
     // have boundary services integrated.
     // ================================================================
-    if cfg.external_ips_v4.is_some() && cfg.proxy_arp_enable {
+    if ip_cfg.external_ips.is_some() && cfg.proxy_arp_enable {
         let rule = Rule::new(1, arp.action(1).unwrap().clone());
         arp.add_rule(Direction::In, rule.finalize());
     }

@@ -6,18 +6,11 @@
  * dtrace -L ./lib -I . -Cqs ./opte-flow-expire.d
  */
 #include "common.h"
+#include "protos.d"
 
 #define	HDR_FMT "%-24s %-18s %s\n"
 
 BEGIN {
-	/*
-	 * Use an associative array to stringify the protocol number.
-	 */
-	protos[1]= "ICMP";
-	protos[2] = "IGMP";
-	protos[6] = "TCP";
-	protos[17] = "UDP";
-
 	printf(HDR_FMT, "PORT", "FT NAME", "FLOW");
 	num = 0;
 }

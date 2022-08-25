@@ -1,21 +1,14 @@
 /*
- * Track Header Transpositions as they happen.
+ * Track Header Transformations as they happen.
  *
  * dtrace -L ./lib -I . -Cqs ./opte-ht.d
  */
 #include "common.h"
+#include "protos.d"
 
 #define	HDR_FMT "%-3s %-12s %-12s %-40s %-40s\n"
 
 BEGIN {
-	/*
-	 * Use an associative array to stringify the protocol number.
-	 */
-	protos[1]= "ICMP";
-	protos[2] = "IGMP";
-	protos[6] = "TCP";
-	protos[17] = "UDP";
-
 	printf(HDR_FMT, "DIR", "PORT", "LOCATION", "BEFORE", "AFTER");
 	num = 0;
 }

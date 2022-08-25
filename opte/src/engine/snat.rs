@@ -4,8 +4,11 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! Types for working with IP Source NAT, both IPv4 and IPv6.
+
 use super::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
 use super::ip4::Ipv4Meta;
+use super::ip6::Ipv6Meta;
 use super::layer::InnerFlowId;
 use super::port::meta::ActionMeta;
 use super::rule::{
@@ -15,7 +18,7 @@ use super::rule::{
 use crate::ddi::sync::{KMutex, KMutexType};
 use core::fmt;
 use core::ops::RangeInclusive;
-use opte_api::{Direction, Ipv4Addr};
+use opte_api::{Direction, IpAddr, Ipv4Addr, Ipv6Addr};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -31,75 +34,99 @@ cfg_if! {
     }
 }
 
+/// A single entry in the NAT pool, describing the public IP and port used to
+/// NAT a private address.
 #[derive(Clone, Copy)]
 pub struct NatPoolEntry {
-    ip: Ipv4Addr,
+    ip: IpAddr,
     port: u16,
+}
+
+// An entry in the internal free list of `NatPool`
+#[derive(Debug, Clone)]
+struct FreeListEntry {
+    // The public IP address to which a private IP is mapped
+    ip: IpAddr,
+    // The list of all possible ports available in the NAT pool
+    ports: RangeInclusive<u16>,
+    // The list of unused / free ports in the pool
+    free_ports: Vec<u16>,
 }
 
 impl ResourceEntry for NatPoolEntry {}
 
+/// A mapping from private IP addresses to a public IP and a port range used for
+/// NAT-ing connections.
 pub struct NatPool {
     // Map private IP to public IP + free list of ports
-    free_list:
-        KMutex<BTreeMap<Ipv4Addr, (Ipv4Addr, RangeInclusive<u16>, Vec<u16>)>>,
+    free_list: KMutex<BTreeMap<IpAddr, FreeListEntry>>,
 }
 
+mod private {
+    pub trait Ip: Into<super::IpAddr> {}
+    impl Ip for super::Ipv4Addr {}
+    impl Ip for super::Ipv6Addr {}
+}
+/// A marker trait for IP addresses of a concrete protocol version.
+///
+/// This can be used to constrain generic types to the same IP address version,
+/// but of either IPv4 or IPv6.
+pub trait ConcreteIpAddr: private::Ip {}
+impl<T> ConcreteIpAddr for T where T: private::Ip {}
+
 impl NatPool {
-    pub fn add(
+    /// Add a new mapping from private IP to public IP and ports.
+    pub fn add<T: ConcreteIpAddr>(
         &self,
-        priv_ip: Ipv4Addr,
-        pub_ip: Ipv4Addr,
+        priv_ip: T,
+        pub_ip: T,
         pub_ports: RangeInclusive<u16>,
     ) {
-        let free_list = pub_ports.clone().collect();
-        self.free_list.lock().insert(priv_ip, (pub_ip, pub_ports, free_list));
+        let free_ports = pub_ports.clone().collect();
+        let entry =
+            FreeListEntry { ip: pub_ip.into(), ports: pub_ports, free_ports };
+        self.free_list.lock().insert(priv_ip.into(), entry);
     }
 
-    pub fn num_avail(&self, priv_ip: Ipv4Addr) -> Result<usize, ResourceError> {
+    /// Return the number of available ports for a given private IP address.
+    pub fn num_avail(&self, priv_ip: IpAddr) -> Result<usize, ResourceError> {
         match self.free_list.lock().get(&priv_ip) {
-            Some((_, _, ports)) => Ok(ports.len()),
+            Some(FreeListEntry { free_ports, .. }) => Ok(free_ports.len()),
             _ => Err(ResourceError::NoMatch(priv_ip.to_string())),
         }
     }
 
+    /// Return the mapping from a private IP to the public IP and port range.
     pub fn mapping(
         &self,
-        priv_ip: Ipv4Addr,
-    ) -> Option<(Ipv4Addr, RangeInclusive<u16>)> {
+        priv_ip: IpAddr,
+    ) -> Option<(IpAddr, RangeInclusive<u16>)> {
         self.free_list
             .lock()
             .get(&priv_ip)
-            .map(|(pub_ip, range, _)| (pub_ip.clone(), range.clone()))
+            .map(|FreeListEntry { ip, ports, .. }| (ip.clone(), ports.clone()))
     }
 
+    /// Create a new NAT pool, with no entries.
     pub fn new() -> Self {
         NatPool { free_list: KMutex::new(BTreeMap::new(), KMutexType::Driver) }
     }
 
     // A helper function to verify correct operation during testing.
     #[cfg(test)]
-    fn verify_available(
+    fn verify_available<T: ConcreteIpAddr>(
         &self,
-        priv_ip: Ipv4Addr,
-        pub_ip: Ipv4Addr,
+        priv_ip: T,
+        pub_ip: T,
         pub_port: u16,
     ) -> bool {
-        match self.free_list.lock().get(&priv_ip) {
-            Some((pip, _, free_list)) => {
-                if pub_ip != *pip {
+        match self.free_list.lock().get(&priv_ip.into()) {
+            Some(FreeListEntry { ip, free_ports, .. }) => {
+                if pub_ip.into() != *ip {
                     return false;
                 }
-
-                for p in free_list {
-                    if pub_port == *p {
-                        return true;
-                    }
-                }
-
-                false
+                free_ports.contains(&pub_port)
             }
-
             None => false,
         }
     }
@@ -108,27 +135,27 @@ impl NatPool {
 impl Resource for NatPool {}
 
 impl FiniteResource for NatPool {
-    type Key = Ipv4Addr;
+    type Key = IpAddr;
     type Entry = NatPoolEntry;
 
-    fn obtain(&self, priv_ip: &Ipv4Addr) -> Result<Self::Entry, ResourceError> {
+    fn obtain(&self, priv_ip: &IpAddr) -> Result<Self::Entry, ResourceError> {
         match self.free_list.lock().get_mut(&priv_ip) {
-            Some((ip, _, ports)) => {
-                if ports.len() == 0 {
-                    return Err(ResourceError::Exhausted);
+            Some(FreeListEntry { ip, free_ports, .. }) => {
+                if let Some(port) = free_ports.pop() {
+                    Ok(Self::Entry { ip: *ip, port })
+                } else {
+                    Err(ResourceError::Exhausted)
                 }
-
-                Ok(Self::Entry { ip: *ip, port: ports.pop().unwrap() })
             }
 
             None => Err(ResourceError::NoMatch(priv_ip.to_string())),
         }
     }
 
-    fn release(&self, priv_ip: &Ipv4Addr, entry: Self::Entry) {
+    fn release(&self, priv_ip: &IpAddr, entry: Self::Entry) {
         match self.free_list.lock().get_mut(&priv_ip) {
-            Some((_ip, _, ports)) => {
-                ports.push(entry.port);
+            Some(FreeListEntry { free_ports, .. }) => {
+                free_ports.push(entry.port);
             }
 
             None => {
@@ -138,26 +165,34 @@ impl FiniteResource for NatPool {
     }
 }
 
+/// A NAT pool mapping provided for Source NAT (only outbound connections).
 #[derive(Clone)]
-pub struct SNat4 {
-    priv_ip: Ipv4Addr,
+pub struct SNat {
+    priv_ip: IpAddr,
     ip_pool: Arc<NatPool>,
 }
 
-impl SNat4 {
-    pub fn new(addr: Ipv4Addr, ip_pool: Arc<NatPool>) -> Self {
-        SNat4 { priv_ip: addr.into(), ip_pool }
+impl SNat {
+    pub fn new(addr: IpAddr, ip_pool: Arc<NatPool>) -> Self {
+        SNat { priv_ip: addr, ip_pool }
     }
 }
 
-impl fmt::Display for SNat4 {
+impl fmt::Display for SNat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (pub_ip, ports) = self.ip_pool.mapping(self.priv_ip).unwrap();
-        write!(f, "{}:{}-{}", pub_ip, ports.start(), ports.end())
+        match pub_ip {
+            IpAddr::Ip4(ip4) => {
+                write!(f, "{}:{}-{}", ip4, ports.start(), ports.end())
+            }
+            IpAddr::Ip6(ip6) => {
+                write!(f, "[{}]:{}-{}", ip6, ports.start(), ports.end())
+            }
+        }
     }
 }
 
-impl StatefulAction for SNat4 {
+impl StatefulAction for SNat {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
@@ -167,7 +202,7 @@ impl StatefulAction for SNat4 {
         let priv_port = flow_id.src_port;
         match pool.obtain(&self.priv_ip) {
             Ok(nat) => {
-                let desc = SNat4Desc {
+                let desc = SNatDesc {
                     pool: pool.clone(),
                     priv_ip: self.priv_ip,
                     priv_port: priv_port,
@@ -177,10 +212,17 @@ impl StatefulAction for SNat4 {
                 Ok(AllowOrDeny::Allow(Arc::new(desc)))
             }
 
-            // XXX This needs improving.
-            Err(_e) => Err(rule::GenDescError::ResourceExhausted {
-                name: "SNAT Pool".to_string(),
-            }),
+            // XXX This still needs improving.
+            Err(ResourceError::Exhausted) => {
+                Err(rule::GenDescError::ResourceExhausted {
+                    name: "SNAT Pool (exhausted)".to_string(),
+                })
+            }
+            Err(ResourceError::NoMatch(ip)) => {
+                Err(rule::GenDescError::ResourceExhausted {
+                    name: format!("SNAT pool (no match: {})", ip),
+                })
+            }
         }
     }
 
@@ -193,56 +235,68 @@ impl StatefulAction for SNat4 {
 }
 
 #[derive(Clone)]
-pub struct SNat4Desc {
+pub struct SNatDesc {
     pool: Arc<NatPool>,
     nat: NatPoolEntry,
-    priv_ip: Ipv4Addr,
+    priv_ip: IpAddr,
     priv_port: u16,
 }
 
-pub const SNAT4_NAME: &'static str = "SNAT4";
+pub const SNAT_NAME: &'static str = "SNAT";
 
-impl ActionDesc for SNat4Desc {
+impl ActionDesc for SNatDesc {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
-            // Outbound traffic needs it's source IP and source port
-            Direction::Out => HdrTransform {
-                name: SNAT4_NAME.to_string(),
-                inner_ip: Ipv4Meta::modify(Some(self.nat.ip), None, None),
-                inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
-                    generic: UlpGenericModify {
-                        src_port: Some(self.nat.port),
+            // Outbound traffic needs its source IP and source port
+            Direction::Out => {
+                let inner_ip = match self.nat.ip {
+                    IpAddr::Ip4(ip) => Ipv4Meta::modify(Some(ip), None, None),
+                    IpAddr::Ip6(ip) => Ipv6Meta::modify(Some(ip), None, None),
+                };
+                HdrTransform {
+                    name: SNAT_NAME.to_string(),
+                    inner_ip: inner_ip,
+                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
+                        generic: UlpGenericModify {
+                            src_port: Some(self.nat.port),
+                            ..Default::default()
+                        },
                         ..Default::default()
-                    },
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
+                }
+            }
 
             // Inbound traffic needs its destination IP and
             // destination port mapped back to the private values that
             // the guest expects to see.
-            Direction::In => HdrTransform {
-                name: SNAT4_NAME.to_string(),
-                inner_ip: Ipv4Meta::modify(None, Some(self.priv_ip), None),
-                inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
-                    generic: UlpGenericModify {
-                        dst_port: Some(self.priv_port),
+            Direction::In => {
+                let inner_ip = match self.priv_ip {
+                    IpAddr::Ip4(ip) => Ipv4Meta::modify(None, Some(ip), None),
+                    IpAddr::Ip6(ip) => Ipv6Meta::modify(None, Some(ip), None),
+                };
+                HdrTransform {
+                    name: SNAT_NAME.to_string(),
+                    inner_ip: inner_ip,
+                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
+                        generic: UlpGenericModify {
+                            dst_port: Some(self.priv_port),
+                            ..Default::default()
+                        },
                         ..Default::default()
-                    },
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
+                }
+            }
         }
     }
 
     fn name(&self) -> &str {
-        SNAT4_NAME
+        SNAT_NAME
     }
 }
 
-impl Drop for SNat4Desc {
+impl Drop for SNatDesc {
     fn drop(&mut self) {
         self.pool.release(&self.priv_ip, self.nat);
     }
@@ -253,28 +307,50 @@ mod test {
     use super::*;
 
     #[test]
+    fn test_nat_pool_different_ip_types() {
+        let pool = NatPool::new();
+
+        let ipv4: Ipv4Addr = "172.30.0.1".parse().unwrap();
+        let pub_ipv4 = "76.76.21.21".parse().unwrap();
+        let ipv6: Ipv6Addr = "fd00::1".parse().unwrap();
+        let pub_ipv6 = "2001:db8::1".parse().unwrap();
+
+        assert!(pool.mapping(ipv4.into()).is_none());
+        assert!(pool.mapping(ipv6.into()).is_none());
+
+        pool.add(ipv4, pub_ipv4, 0..=4096);
+        assert!(pool.mapping(ipv4.into()).is_some());
+        assert!(pool.mapping(ipv6.into()).is_none());
+
+        pool.add(ipv6, pub_ipv6, 0..=4096);
+        assert!(pool.mapping(ipv4.into()).is_some());
+        assert!(pool.mapping(ipv6.into()).is_some());
+    }
+
+    #[test]
     fn snat4_desc_lifecycle() {
         use crate::engine::ether::{EtherMeta, ETHER_TYPE_IPV4};
         use crate::engine::headers::{IpMeta, UlpMeta};
         use crate::engine::ip4::Protocol;
         use crate::engine::packet::{MetaGroup, PacketMeta};
         use crate::engine::tcp::TcpMeta;
-        use opte_api::MacAddr;
+        use opte_api::{Ipv4Addr, MacAddr};
 
         let priv_mac = MacAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
         let dest_mac = MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
-        let priv_ip = "10.0.0.220".parse().unwrap();
+        let priv_ipv4: Ipv4Addr = "10.0.0.220".parse().unwrap();
+        let priv_ip = IpAddr::from(priv_ipv4);
         let priv_port = "4999".parse().unwrap();
-        let pub_ip = "52.10.128.69".parse().unwrap();
+        let pub_ipv4: Ipv4Addr = "52.10.128.69".parse().unwrap();
         let pub_port = "8765".parse().unwrap();
-        let outside_ip = "76.76.21.21".parse().unwrap();
+        let outside_ipv4: Ipv4Addr = "76.76.21.21".parse().unwrap();
         let outside_port = 80;
 
         let pool = Arc::new(NatPool::new());
-        pool.add(priv_ip, pub_ip, 8765..=8765);
-        let snat = SNat4::new(priv_ip, pool.clone());
+        pool.add(priv_ipv4, pub_ipv4, 8765..=8765);
+        let snat = SNat::new(priv_ip, pool.clone());
         let mut action_meta = ActionMeta::new();
-        assert!(pool.verify_available(priv_ip, pub_ip, pub_port));
+        assert!(pool.verify_available(priv_ipv4, pub_ipv4, pub_port));
 
         // ================================================================
         // Build the packet metadata
@@ -285,8 +361,8 @@ mod test {
             ether_type: ETHER_TYPE_IPV4,
         };
         let ip = IpMeta::from(Ipv4Meta {
-            src: priv_ip,
-            dst: outside_ip,
+            src: priv_ipv4,
+            dst: outside_ipv4,
             proto: Protocol::TCP,
         });
         let ulp = UlpMeta::from(TcpMeta {
@@ -315,7 +391,7 @@ mod test {
             Ok(AllowOrDeny::Allow(desc)) => desc,
             _ => panic!("expected AllowOrDeny::Allow(desc) result"),
         };
-        assert!(!pool.verify_available(priv_ip, pub_ip, pub_port));
+        assert!(!pool.verify_available(priv_ipv4, pub_ipv4, pub_port));
 
         // ================================================================
         // Verify outbound header transformation
@@ -332,8 +408,8 @@ mod test {
             _ => panic!("expect Ipv4Meta"),
         };
 
-        assert_eq!(ip4_meta.src, pub_ip);
-        assert_eq!(ip4_meta.dst, outside_ip);
+        assert_eq!(ip4_meta.src, pub_ipv4);
+        assert_eq!(ip4_meta.dst, outside_ipv4);
         assert_eq!(ip4_meta.proto, Protocol::TCP);
 
         let tcp_meta = match pmo.inner.ulp.as_ref().unwrap() {
@@ -354,8 +430,8 @@ mod test {
             ether_type: ETHER_TYPE_IPV4,
         };
         let ip = IpMeta::from(Ipv4Meta {
-            src: outside_ip,
-            dst: pub_ip,
+            src: outside_ipv4,
+            dst: pub_ipv4,
             proto: Protocol::TCP,
         });
         let ulp = UlpMeta::from(TcpMeta {
@@ -388,8 +464,8 @@ mod test {
             _ => panic!("expect Ipv4Meta"),
         };
 
-        assert_eq!(ip4_meta.src, outside_ip);
-        assert_eq!(ip4_meta.dst, priv_ip);
+        assert_eq!(ip4_meta.src, outside_ipv4);
+        assert_eq!(ip4_meta.dst, priv_ipv4);
         assert_eq!(ip4_meta.proto, Protocol::TCP);
 
         let tcp_meta = match pmi.inner.ulp.as_ref().unwrap() {
@@ -406,18 +482,21 @@ mod test {
         // handed back to the pool.
         // ================================================================
         drop(desc);
-        assert!(pool.verify_available(priv_ip, pub_ip, pub_port));
+        assert!(pool.verify_available(priv_ipv4, pub_ipv4, pub_port));
     }
 
     #[test]
     fn nat_mappings() {
         let pool = NatPool::new();
-        let priv1 = "192.168.2.8".parse::<Ipv4Addr>().unwrap();
-        let priv2 = "192.168.2.33".parse::<Ipv4Addr>().unwrap();
-        let public = "52.10.128.69".parse().unwrap();
+        let priv1_ipv4 = "192.168.2.8".parse::<Ipv4Addr>().unwrap();
+        let priv1 = IpAddr::Ip4(priv1_ipv4);
+        let priv2_ipv4 = "192.168.2.33".parse::<Ipv4Addr>().unwrap();
+        let priv2 = IpAddr::Ip4(priv2_ipv4);
+        let public_ipv4 = "52.10.128.69".parse().unwrap();
+        let public = IpAddr::Ip4(public_ipv4);
 
-        pool.add(priv1, public, 1025..=4096);
-        pool.add(priv2, public, 4097..=8192);
+        pool.add(priv1_ipv4, public_ipv4, 1025..=4096);
+        pool.add(priv2_ipv4, public_ipv4, 4097..=8192);
 
         assert_eq!(pool.num_avail(priv1).unwrap(), 3072);
         let npe1 = match pool.obtain(&priv1) {

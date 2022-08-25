@@ -24,21 +24,21 @@ pub const XDE_DLD_OPTE_CMD: i32 = XDE_DLD_PREFIX | 7777;
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub enum OpteCmd {
-    ListPorts = 1,           // list all ports
-    AddFwRule = 20,          // add firewall rule
-    RemFwRule = 21,          // remove firewall rule
-    SetFwRules = 22,         // set/replace all firewall rules at once
-    DumpTcpFlows = 30,       // dump TCP flows
-    DumpLayer = 31,          // dump the specified Layer
-    DumpUft = 32,            // dump the Unified Flow Table
-    ListLayers = 33,         // list the layers on a given port
-    ClearUft = 40,           // clear the UFT
-    SetVirt2Phys = 50,       // set a v2p mapping
-    DumpVirt2Phys = 51,      // dump the v2p mappings
-    AddRouterEntryIpv4 = 60, // add a router entry for IPv4 dest
-    CreateXde = 70,          // create a new xde device
-    DeleteXde = 71,          // delete an xde device
-    SetXdeUnderlay = 72,     // set xde underlay devices
+    ListPorts = 1,       // list all ports
+    AddFwRule = 20,      // add firewall rule
+    RemFwRule = 21,      // remove firewall rule
+    SetFwRules = 22,     // set/replace all firewall rules at once
+    DumpTcpFlows = 30,   // dump TCP flows
+    DumpLayer = 31,      // dump the specified Layer
+    DumpUft = 32,        // dump the Unified Flow Table
+    ListLayers = 33,     // list the layers on a given port
+    ClearUft = 40,       // clear the UFT
+    SetVirt2Phys = 50,   // set a v2p mapping
+    DumpVirt2Phys = 51,  // dump the v2p mappings
+    AddRouterEntry = 60, // add a router entry for IP dest
+    CreateXde = 70,      // create a new xde device
+    DeleteXde = 71,      // delete an xde device
+    SetXdeUnderlay = 72, // set xde underlay devices
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -57,7 +57,7 @@ impl TryFrom<c_int> for OpteCmd {
             40 => Ok(Self::ClearUft),
             50 => Ok(Self::SetVirt2Phys),
             51 => Ok(Self::DumpVirt2Phys),
-            60 => Ok(Self::AddRouterEntryIpv4),
+            60 => Ok(Self::AddRouterEntry),
             70 => Ok(Self::CreateXde),
             71 => Ok(Self::DeleteXde),
             72 => Ok(Self::SetXdeUnderlay),

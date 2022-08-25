@@ -171,7 +171,7 @@ impl MatchExact<Protocol> for Protocol {
 }
 
 #[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, Copy,
 )]
 pub struct Ipv4Meta {
     pub src: Ipv4Addr,

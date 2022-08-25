@@ -27,13 +27,13 @@
 	*this->src_ip6 = fvar->src_ip6;				\
 	*this->dst_ip6 = fvar->dst_ip6;				\
 	svar = protos[fvar->proto];				\
-	svar = strjoin(svar, ",");				\
+	svar = strjoin(svar, ",[");				\
 	svar = strjoin(svar, inet_ntoa6(this->src_ip6));	\
-	svar = strjoin(svar, ":");				\
+	svar = strjoin(svar, "]:");				\
 	svar = strjoin(svar, lltostr(ntohs(fvar->src_port)));	\
-	svar = strjoin(svar, ",");				\
+	svar = strjoin(svar, ",[");				\
 	svar = strjoin(svar, inet_ntoa6(this->dst_ip6));	\
-	svar = strjoin(svar, ":");				\
+	svar = strjoin(svar, "]:");				\
 	svar = strjoin(svar, lltostr(ntohs(fvar->dst_port)));
 
 #define ETH_FMT(svar, evar)					\

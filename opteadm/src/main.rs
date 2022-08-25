@@ -14,7 +14,7 @@ use std::str::FromStr;
 use structopt::StructOpt;
 
 use opte::api::{
-    Direction, IpAddr, Ipv4Addr, Ipv4Cidr, Ipv6Addr, MacAddr, Vni,
+    Direction, IpCidr, Ipv4Addr, Ipv4Cidr, Ipv6Addr, MacAddr, Vni,
 };
 use opte::engine::flow_table::FlowEntryDump;
 use opte::engine::ioctl as api;
@@ -22,10 +22,11 @@ use opte::engine::layer::InnerFlowId;
 use opte::engine::rule::RuleDump;
 use opteadm::OpteAdm;
 use oxide_vpc::api::{
-    Action as FirewallAction, AddRouterEntryIpv4Req, Address,
+    Action as FirewallAction, AddRouterEntryReq, Address,
     Filters as FirewallFilters, FirewallRule, GuestPhysAddr, PhysNet, PortInfo,
-    Ports, ProtoFilter, RemFwRuleReq, RouterTarget, SNatCfg, SetVirt2PhysReq,
+    Ports, ProtoFilter, RemFwRuleReq, RouterTarget, SNat4Cfg, SetVirt2PhysReq,
 };
+use oxide_vpc::api::{BoundaryServices, IpCfg, Ipv4Cfg, VpcCfg};
 use oxide_vpc::engine::overlay::DumpVirt2PhysResp;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
@@ -128,6 +129,9 @@ enum Command {
         #[structopt(long)]
         bsvc_vni: Vni,
 
+        #[structopt(long, default_value = "00:00:00:00:00:00")]
+        bsvc_mac: MacAddr,
+
         #[structopt(long)]
         vpc_vni: Vni,
 
@@ -144,7 +148,7 @@ enum Command {
         snat_end: Option<u16>,
 
         #[structopt(long)]
-        snat_gw_mac: Option<MacAddr>,
+        phys_gw_mac: Option<MacAddr>,
 
         #[structopt(long)]
         external_ipv4: Option<Ipv4Addr>,
@@ -167,13 +171,14 @@ enum Command {
         vni: Vni,
     },
 
-    /// Add a new IPv4 router entry
-    AddRouterEntryIpv4 {
+    /// Add a new router entry, either IPv4 or IPv6.
+    AddRouterEntry {
+        /// The OPTE port to which the route is added
         #[structopt(short)]
         port: String,
-
-        dest: opte::api::Ipv4Cidr,
-
+        /// The network destination to which the route applies.
+        dest: IpCidr,
+        /// The location to which traffic matching the destination is sent.
         target: RouterTarget,
     },
 }
@@ -205,17 +210,31 @@ impl From<Filters> for FirewallFilters {
 
 fn print_port_header() {
     println!(
-        "{:<32} {:<24} {:<16} {:<8}",
-        "LINK", "MAC ADDRESS", "IPv4 ADDRESS", "STATE"
+        "{:<32} {:<24} {:<16} {:<16} {:<40} {:<40} {:<8}",
+        "LINK",
+        "MAC ADDRESS",
+        "IPv4 ADDRESS",
+        "EXTERNAL IPv4",
+        "IPv6 ADDRESS",
+        "EXTERNAL IPv6",
+        "STATE"
     );
 }
 
 fn print_port(pi: PortInfo) {
+    let none = String::from("None");
     println!(
-        "{:<32} {:<24} {:<16} {:<8}",
+        "{:<32} {:<24} {:<16} {:<16} {:<40} {:<40} {:<8}",
         pi.name,
         pi.mac_addr.to_string(),
-        pi.ip4_addr.to_string(),
+        pi.ip4_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
+        pi.external_ip4_addr
+            .map(|x| x.to_string())
+            .unwrap_or_else(|| none.clone()),
+        pi.ip6_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
+        pi.external_ip6_addr
+            .map(|x| x.to_string())
+            .unwrap_or_else(|| none.clone()),
         pi.state,
     );
 }
@@ -228,11 +247,6 @@ fn print_flow_header() {
 }
 
 fn print_flow(flow_id: &InnerFlowId, flow_entry: &FlowEntryDump) {
-    let (src_ip, dst_ip) = match (flow_id.src_ip, flow_id.dst_ip) {
-        (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => (src, dst),
-        _ => todo!("support for IPv6"),
-    };
-
     // For those types with custom Display implementations
     // we need to first format in into a String before
     // passing it to println in order for the format
@@ -240,9 +254,9 @@ fn print_flow(flow_id: &InnerFlowId, flow_entry: &FlowEntryDump) {
     println!(
         "{:<6} {:<16} {:<6} {:<16} {:<6} {:<8} {:<22}",
         flow_id.proto.to_string(),
-        src_ip.to_string(),
+        flow_id.src_ip.to_string(),
         flow_id.src_port,
-        dst_ip.to_string(),
+        flow_id.dst_ip.to_string(),
         flow_id.dst_port,
         flow_entry.hits,
         flow_entry.state_summary,
@@ -499,45 +513,54 @@ fn main() {
             gateway_ip,
             bsvc_addr,
             bsvc_vni,
+            bsvc_mac,
             vpc_vni,
             src_underlay_addr,
             snat_ip,
             snat_start,
             snat_end,
-            snat_gw_mac,
+            phys_gw_mac,
             external_ipv4,
             passthrough,
         } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
             let snat = match snat_ip {
-                Some(ip) => Some(SNatCfg {
+                Some(ip) => Some(SNat4Cfg {
                     public_ip: ip.into(),
                     ports: core::ops::RangeInclusive::new(
                         snat_start.unwrap(),
                         snat_end.unwrap(),
                     ),
-                    phys_gw_mac: snat_gw_mac.unwrap(),
                 }),
 
                 None => None,
             };
 
-            hdl.create_xde(
-                &name,
+            let cfg = VpcCfg {
+                ip_cfg: IpCfg::Ipv4(Ipv4Cfg {
+                    vpc_subnet,
+                    private_ip: private_ip.into(),
+                    gateway_ip: gateway_ip.into(),
+                    snat_cfg: snat,
+                    external_ips: external_ipv4,
+                }),
                 private_mac,
-                private_ip,
-                vpc_subnet,
                 gateway_mac,
-                gateway_ip,
-                bsvc_addr,
-                bsvc_vni,
-                vpc_vni,
-                src_underlay_addr,
-                snat,
-                external_ipv4,
-                passthrough,
-            )
-            .unwrap_or_die();
+                vni: vpc_vni,
+                phys_ip: src_underlay_addr.into(),
+                boundary_services: BoundaryServices {
+                    ip: bsvc_addr.into(),
+                    vni: bsvc_vni,
+                    mac: bsvc_mac,
+                },
+                // XXX-EXT-IP: This is part of the external IP hack. We're
+                // removing this shortly, and won't be supporting creating OPTE
+                // ports through `opteadm` that use the hack.
+                proxy_arp_enable: false,
+                phys_gw_mac,
+            };
+
+            hdl.create_xde(&name, cfg, passthrough).unwrap_or_die();
         }
 
         Command::DeleteXde { name } => {
@@ -564,10 +587,10 @@ fn main() {
             hdl.set_v2p(&req).unwrap_or_die();
         }
 
-        Command::AddRouterEntryIpv4 { port, dest, target } => {
+        Command::AddRouterEntry { port, dest, target } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let req = AddRouterEntryIpv4Req { port_name: port, dest, target };
-            hdl.add_router_entry_ip4(&req).unwrap_or_die();
+            let req = AddRouterEntryReq { port_name: port, dest, target };
+            hdl.add_router_entry(&req).unwrap_or_die();
         }
     }
 }

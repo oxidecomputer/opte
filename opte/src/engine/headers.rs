@@ -5,8 +5,8 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::checksum::Checksum;
-use super::ip4::{Ipv4Hdr, Ipv4Meta, Ipv4MetaOpt, IPV4_HDR_SZ};
-use super::ip6::{Ipv6Hdr, Ipv6Meta, Ipv6MetaOpt, IPV6_HDR_SZ};
+use super::ip4::{Ipv4Hdr, Ipv4Meta, Ipv4MetaOpt};
+use super::ip6::{Ipv6Hdr, Ipv6Meta, Ipv6MetaOpt};
 use super::packet::{PacketRead, ReadErr, WriteError};
 use super::tcp::{TcpHdr, TcpMeta, TcpMetaOpt};
 use super::udp::{UdpHdr, UdpMeta, UdpMetaOpt};
@@ -124,6 +124,9 @@ macro_rules! assert_ip {
 }
 
 impl IpHdr {
+    /// Return the total length of the header.
+    ///
+    /// In the case of IPv6, this includes any extension headers.
     pub fn hdr_len(&self) -> usize {
         match self {
             Self::Ip4(ip4) => ip4.hdr_len(),
@@ -131,6 +134,7 @@ impl IpHdr {
         }
     }
 
+    /// Return `Some` if this is an IPv4 header, or `None`.
     pub fn ip4(&self) -> Option<&Ipv4Hdr> {
         match self {
             Self::Ip4(ip4) => Some(ip4),
@@ -138,6 +142,7 @@ impl IpHdr {
         }
     }
 
+    /// Return `Some` if this is an IPv6 header, or `None`.
     pub fn ip6(&self) -> Option<&Ipv6Hdr> {
         match self {
             Self::Ip6(ip6) => Some(ip6),
@@ -145,6 +150,7 @@ impl IpHdr {
         }
     }
 
+    /// Return the length of the upper-layer protocol contents.
     pub fn ulp_len(&self) -> usize {
         match self {
             Self::Ip4(ip4) => ip4.ulp_len(),
@@ -166,6 +172,7 @@ impl IpHdr {
         }
     }
 
+    /// Set the total length of the packet, in octets.
     pub fn set_total_len(&mut self, len: usize) {
         match self {
             Self::Ip4(ip4) => ip4.set_total_len(len as u16),
@@ -173,17 +180,11 @@ impl IpHdr {
         }
     }
 
-    pub fn size(&self) -> usize {
-        match self {
-            Self::Ip4(_) => IPV4_HDR_SZ,
-            Self::Ip6(_) => IPV6_HDR_SZ,
-        }
-    }
-
+    /// Total length of the packet, including all headers and payload
     pub fn total_len(&self) -> u16 {
         match self {
             Self::Ip4(ip4) => ip4.total_len(),
-            Self::Ip6(_ip6) => todo!("implement"),
+            Self::Ip6(ip6) => ip6.total_len(),
         }
     }
 }
@@ -201,7 +202,7 @@ impl From<Ipv6Hdr> for IpHdr {
 }
 
 #[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, Copy,
 )]
 pub enum IpMeta {
     Ip4(Ipv4Meta),
@@ -212,6 +213,13 @@ impl IpMeta {
     pub fn ip4(&self) -> Option<&Ipv4Meta> {
         match self {
             Self::Ip4(meta) => Some(meta),
+            _ => None,
+        }
+    }
+
+    pub fn ip6(&self) -> Option<&Ipv6Meta> {
+        match self {
+            Self::Ip6(meta) => Some(meta),
             _ => None,
         }
     }
@@ -253,6 +261,12 @@ impl From<Ipv4MetaOpt> for IpMetaOpt {
     }
 }
 
+impl From<Ipv6MetaOpt> for IpMetaOpt {
+    fn from(ip6: Ipv6MetaOpt) -> Self {
+        IpMetaOpt::Ip6(ip6)
+    }
+}
+
 impl HeaderActionModify<IpMetaOpt> for IpMeta {
     fn run_modify(&mut self, spec: &IpMetaOpt) {
         match (self, spec) {
@@ -260,12 +274,15 @@ impl HeaderActionModify<IpMetaOpt> for IpMeta {
                 ip4_meta.run_modify(&ip4_spec);
             }
 
-            (IpMeta::Ip6(_ip6_meta), IpMetaOpt::Ip6(_ip6_spec)) => {
-                todo!("implement IPv6 run_modify()");
+            (IpMeta::Ip6(ip6_meta), IpMetaOpt::Ip6(ip6_spec)) => {
+                ip6_meta.run_modify(&ip6_spec);
             }
 
             (meta, spec) => {
-                panic!("differeing IP meta and spec: {:?} {:?}", meta, spec);
+                panic!(
+                    "Different IP versions for meta and spec: {:?} {:?}",
+                    meta, spec
+                );
             }
         }
     }

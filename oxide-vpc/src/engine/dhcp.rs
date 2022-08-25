@@ -24,9 +24,9 @@ cfg_if! {
     }
 }
 
-use crate::VpcCfg;
+use crate::api::VpcCfg;
 use opte::api::{
-    Dhcp4Action, Dhcp4ReplyType, Direction, Ipv4Addr, Ipv4PrefixLen, OpteError,
+    DhcpAction, DhcpReplyType, Direction, Ipv4Addr, Ipv4PrefixLen, OpteError,
     SubnetRouterPair,
 };
 use opte::engine::ip4::Ipv4Cidr;
@@ -39,6 +39,13 @@ pub fn setup(
     cfg: &VpcCfg,
     ft_limit: core::num::NonZeroU32,
 ) -> Result<(), OpteError> {
+    // The DHCP layer only contains meaningful actions if the port is configured
+    // to support IPv4.
+    let ip_cfg = match cfg.ipv4_cfg() {
+        None => return Ok(()),
+        Some(cfg) => cfg,
+    };
+
     // All guest interfaces live on a `/32`-network in the Oxide VPC;
     // restricting the L2 domain to two nodes: the guest NIC and the
     // OPTE Port. This allows OPTE to act as the gateway for which all
@@ -50,7 +57,7 @@ pub fn setup(
     // on the same link (L2 segment) to communicate with each other.
     // In our case we place the guest in a network of 1, meaning the
     // router itself must be on a different subnet. However, since the
-    // router, in this OPTE, is on the same link, we can use the local
+    // router, in this case OPTE, is on the same link, we can use the local
     // subnet route feature to deliver packets to the router.
     //
     // * `re1`: The local subnet router entry; mapping the gateway
@@ -68,20 +75,20 @@ pub fn setup(
     //
     // Furthermore, RFC 3442 goes on to say that a DHCP server
     // administrator should always set both to be on the safe side.
-    let gw_cidr = Ipv4Cidr::new(cfg.gw_ip, Ipv4PrefixLen::NETMASK_ALL);
+    let gw_cidr = Ipv4Cidr::new(ip_cfg.gateway_ip, Ipv4PrefixLen::NETMASK_ALL);
     let re1 = SubnetRouterPair::new(gw_cidr, Ipv4Addr::ANY_ADDR);
     let re2 = SubnetRouterPair::new(
         Ipv4Cidr::new(Ipv4Addr::ANY_ADDR, Ipv4PrefixLen::NETMASK_NONE),
-        cfg.gw_ip,
+        ip_cfg.gateway_ip,
     );
 
-    let offer = Action::Hairpin(Arc::new(Dhcp4Action {
+    let offer = Action::Hairpin(Arc::new(DhcpAction {
         client_mac: cfg.private_mac.into(),
-        client_ip: cfg.private_ip,
+        client_ip: ip_cfg.private_ip,
         subnet_prefix_len: Ipv4PrefixLen::NETMASK_ALL,
-        gw_mac: cfg.gw_mac.into(),
-        gw_ip: cfg.gw_ip,
-        reply_type: Dhcp4ReplyType::Offer,
+        gw_mac: cfg.gateway_mac.into(),
+        gw_ip: ip_cfg.gateway_ip,
+        reply_type: DhcpReplyType::Offer,
         re1,
         re2: Some(re2),
         re3: None,
@@ -94,13 +101,13 @@ pub fn setup(
     }));
     let offer_idx = 0;
 
-    let ack = Action::Hairpin(Arc::new(Dhcp4Action {
+    let ack = Action::Hairpin(Arc::new(DhcpAction {
         client_mac: cfg.private_mac.into(),
-        client_ip: cfg.private_ip,
+        client_ip: ip_cfg.private_ip,
         subnet_prefix_len: Ipv4PrefixLen::NETMASK_ALL,
-        gw_mac: cfg.gw_mac.into(),
-        gw_ip: cfg.gw_ip,
-        reply_type: Dhcp4ReplyType::Ack,
+        gw_mac: cfg.gateway_mac.into(),
+        gw_ip: ip_cfg.gateway_ip,
+        reply_type: DhcpReplyType::Ack,
         re1,
         re2: Some(re2),
         re3: None,
@@ -113,7 +120,7 @@ pub fn setup(
     }));
     let ack_idx = 1;
 
-    let mut dhcp = Layer::new("dhcp4", pb.name(), vec![offer, ack], ft_limit);
+    let mut dhcp = Layer::new("dhcp", pb.name(), vec![offer, ack], ft_limit);
 
     let discover_rule = Rule::new(1, dhcp.action(offer_idx).unwrap().clone());
     dhcp.add_rule(Direction::Out, discover_rule.finalize());

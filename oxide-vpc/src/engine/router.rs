@@ -23,9 +23,10 @@ cfg_if! {
 }
 
 use super::firewall as fw;
-use crate::api::{DelRouterEntryIpv4Resp, RouterTarget};
-use crate::VpcCfg;
-use opte::api::{Direction, Ipv4Addr, Ipv4Cidr, NoResp, OpteError};
+use crate::api::{DelRouterEntryResp, RouterTarget, VpcCfg};
+use opte::api::{
+    Direction, Ipv4Addr, Ipv4Cidr, Ipv6Addr, Ipv6Cidr, NoResp, OpteError,
+};
 use opte::engine::headers::{IpAddr, IpCidr};
 use opte::engine::layer::{InnerFlowId, Layer};
 use opte::engine::port::meta::{ActionMeta, ActionMetaValue};
@@ -56,39 +57,29 @@ impl ActionMetaValue for RouterTargetInternal {
         match s {
             "ig" => Ok(Self::InternetGateway),
 
-            _ => {
-                match s.split_once("=") {
-                    Some(("ip4", ip4_s)) => {
-                        let ip4 = ip4_s.parse::<Ipv4Addr>()?;
-                        Ok(Self::Ip(IpAddr::Ip4(ip4)))
-                    }
-
-                    Some(("ip6", _ip6_s)) => {
-                        todo!("implement IPv6 support");
-                        // XXX The parse impl only exists in std envs
-                        // at the moment.
-                        //
-                        // let ip6 = ip6_s.parse::<Ipv6Addr>()?;
-                        // Ok(Self::Ip(IpAddr::Ip6(ip6)))
-                    }
-
-                    Some(("sub4", cidr4_s)) => {
-                        let cidr4 = cidr4_s.parse::<Ipv4Cidr>()?;
-                        Ok(Self::VpcSubnet(IpCidr::Ip4(cidr4)))
-                    }
-
-                    Some(("sub6", _cidr6_s)) => {
-                        todo!("implement IPv6 subnet support");
-                        // XXX The parse impl only exists in std envs
-                        // at the moment.
-                        //
-                        // let cidr6 = cidr6_s.parse::<Ipv6Cidr>()?;
-                        // Ok(Self::VpcSubnet(IpCidr::Ip6(cidr6)))
-                    }
-
-                    _ => Err(format!("bad router target: {}", s)),
+            _ => match s.split_once("=") {
+                Some(("ip4", ip4_s)) => {
+                    let ip4 = ip4_s.parse::<Ipv4Addr>()?;
+                    Ok(Self::Ip(IpAddr::Ip4(ip4)))
                 }
-            }
+
+                Some(("ip6", ip6_s)) => {
+                    let ip6 = ip6_s.parse::<Ipv6Addr>()?;
+                    Ok(Self::Ip(IpAddr::Ip6(ip6)))
+                }
+
+                Some(("sub4", cidr4_s)) => {
+                    let cidr4 = cidr4_s.parse::<Ipv4Cidr>()?;
+                    Ok(Self::VpcSubnet(IpCidr::Ip4(cidr4)))
+                }
+
+                Some(("sub6", cidr6_s)) => {
+                    let cidr6 = cidr6_s.parse::<Ipv6Cidr>()?;
+                    Ok(Self::VpcSubnet(IpCidr::Ip6(cidr6)))
+                }
+
+                _ => Err(format!("bad router target: {}", s)),
+            },
         }
     }
 
@@ -114,14 +105,20 @@ impl fmt::Display for RouterTargetInternal {
     }
 }
 
-// The array index represents the subnet prefix length (thus the need
-// for 33 entries). The value represents the Rule priority.
-fn build_ip4_len_to_pri() -> [u16; 33] {
-    let mut v = [0; 33];
-    for (i, pri) in (0..33).rev().enumerate() {
-        v[i] = pri + 10;
-    }
-    v
+// Return a priority for an IP subnet, depending on its prefix length.
+//
+// The priority is computed as `max_prefix_len - prefix_len + 10`, where
+// `max_prefix_len` is the maximum prefix length for the CIDR block of each IP
+// version.
+fn prefix_len_to_priority(cidr: &IpCidr) -> u16 {
+    use opte::api::ip::IpCidr::*;
+    use opte::api::ip::Ipv4PrefixLen;
+    use opte::api::ip::Ipv6PrefixLen;
+    let (max_prefix_len, prefix_len) = match cidr {
+        Ip4(ipv4) => (Ipv4PrefixLen::NETMASK_ALL.val(), ipv4.prefix_len()),
+        Ip6(ipv6) => (Ipv6PrefixLen::NETMASK_ALL.val(), ipv6.prefix_len()),
+    };
+    (max_prefix_len - prefix_len) as u16 + 10
 }
 
 pub fn setup(
@@ -145,84 +142,117 @@ pub fn setup(
     pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
 
+fn valid_router_dest_target_pair(dest: &IpCidr, target: &RouterTarget) -> bool {
+    matches!(
+        (&dest, &target),
+        // Anything can go to the gateway or be dropped
+        (_, RouterTarget::Drop) |
+        (_, RouterTarget::InternetGateway) |
+        // IPv4 destination, IPv4 address
+        (IpCidr::Ip4(_), RouterTarget::Ip(IpAddr::Ip4(_))) |
+        // IPv4 destination, IPv4 subnet
+        (IpCidr::Ip4(_), RouterTarget::VpcSubnet(IpCidr::Ip4(_))) |
+        // IPv6 destination, IPv6 address
+        (IpCidr::Ip6(_), RouterTarget::Ip(IpAddr::Ip6(_))) |
+        // IPv6 destination, IPv6 subnet
+        (IpCidr::Ip6(_), RouterTarget::VpcSubnet(IpCidr::Ip6(_)))
+    )
+}
+
 fn make_rule(
     dest: IpCidr,
     target: RouterTarget,
 ) -> Result<Rule<Finalized>, OpteError> {
-    let pri_map4 = build_ip4_len_to_pri();
+    if !valid_router_dest_target_pair(&dest, &target) {
+        return Err(OpteError::InvalidRouteDest(String::from(
+            "Invalid destination/target pair for router. \
+            Routes must match in their IP protocol versions.",
+        )));
+    }
 
+    let priority = prefix_len_to_priority(&dest);
     match target {
-        RouterTarget::Drop => match dest {
-            IpCidr::Ip4(ip4) => {
-                let mut rule = Rule::new(
-                    pri_map4[ip4.prefix_len() as usize],
-                    Action::Deny,
-                );
-                rule.add_predicate(Predicate::InnerDstIp4(vec![
-                    rule::Ipv4AddrMatch::Prefix(ip4),
-                ]));
-                Ok(rule.finalize())
-            }
+        RouterTarget::Drop => {
+            let predicate =
+                match dest {
+                    IpCidr::Ip4(ip4) => Predicate::InnerDstIp4(vec![
+                        rule::Ipv4AddrMatch::Prefix(ip4),
+                    ]),
 
-            IpCidr::Ip6(_) => todo!("IPv6 drop"),
-        },
+                    IpCidr::Ip6(ip6) => Predicate::InnerDstIp6(vec![
+                        rule::Ipv6AddrMatch::Prefix(ip6),
+                    ]),
+                };
+            let mut rule = Rule::new(priority, Action::Deny);
+            rule.add_predicate(predicate);
+            Ok(rule.finalize())
+        }
 
         RouterTarget::InternetGateway => {
             if !dest.is_default() {
                 return Err(OpteError::InvalidRouteDest(dest.to_string()));
             }
-
-            match dest {
-                IpCidr::Ip4(ip4) => {
-                    let mut rule = Rule::new(
-                        pri_map4[dest.prefix_len()],
-                        Action::Meta(Arc::new(RouterAction::new(
-                            RouterTargetInternal::InternetGateway,
-                        ))),
-                    );
-                    rule.add_predicate(Predicate::InnerDstIp4(vec![
+            let predicate =
+                match dest {
+                    IpCidr::Ip4(ip4) => Predicate::InnerDstIp4(vec![
                         rule::Ipv4AddrMatch::Prefix(ip4),
-                    ]));
-                    Ok(rule.finalize())
-                }
+                    ]),
 
-                IpCidr::Ip6(_) => todo!("IPv6 IG"),
-            }
+                    IpCidr::Ip6(ip6) => Predicate::InnerDstIp6(vec![
+                        rule::Ipv6AddrMatch::Prefix(ip6),
+                    ]),
+                };
+            let mut rule = Rule::new(
+                priority,
+                Action::Meta(Arc::new(RouterAction::new(
+                    RouterTargetInternal::InternetGateway,
+                ))),
+            );
+            rule.add_predicate(predicate);
+            Ok(rule.finalize())
         }
 
-        RouterTarget::Ip(ip) => match dest {
-            IpCidr::Ip4(ip4) => {
-                let mut rule = Rule::new(
-                    pri_map4[ip4.prefix_len() as usize],
-                    Action::Meta(Arc::new(RouterAction::new(
-                        RouterTargetInternal::Ip(ip),
-                    ))),
-                );
-                rule.add_predicate(Predicate::InnerDstIp4(vec![
-                    rule::Ipv4AddrMatch::Prefix(ip4),
-                ]));
-                Ok(rule.finalize())
-            }
+        RouterTarget::Ip(ip) => {
+            let predicate =
+                match dest {
+                    IpCidr::Ip4(ip4) => Predicate::InnerDstIp4(vec![
+                        rule::Ipv4AddrMatch::Prefix(ip4),
+                    ]),
 
-            IpCidr::Ip6(_) => todo!("IPv6 IP"),
-        },
+                    IpCidr::Ip6(ip6) => Predicate::InnerDstIp6(vec![
+                        rule::Ipv6AddrMatch::Prefix(ip6),
+                    ]),
+                };
+            let mut rule = Rule::new(
+                priority,
+                Action::Meta(Arc::new(RouterAction::new(
+                    RouterTargetInternal::Ip(ip),
+                ))),
+            );
+            rule.add_predicate(predicate);
+            Ok(rule.finalize())
+        }
 
-        RouterTarget::VpcSubnet(vpc) => match dest {
-            IpCidr::Ip4(ip4) => {
-                let mut rule = Rule::new(
-                    pri_map4[ip4.prefix_len() as usize],
-                    Action::Meta(Arc::new(RouterAction::new(
-                        RouterTargetInternal::VpcSubnet(vpc),
-                    ))),
-                );
-                rule.add_predicate(Predicate::InnerDstIp4(vec![
-                    rule::Ipv4AddrMatch::Prefix(ip4),
-                ]));
-                Ok(rule.finalize())
-            }
+        RouterTarget::VpcSubnet(vpc) => {
+            let predicate =
+                match dest {
+                    IpCidr::Ip4(ip4) => Predicate::InnerDstIp4(vec![
+                        rule::Ipv4AddrMatch::Prefix(ip4),
+                    ]),
 
-            IpCidr::Ip6(_) => todo!("IPv6 router entry"),
-        },
+                    IpCidr::Ip6(ip6) => Predicate::InnerDstIp6(vec![
+                        rule::Ipv6AddrMatch::Prefix(ip6),
+                    ]),
+                };
+            let mut rule = Rule::new(
+                priority,
+                Action::Meta(Arc::new(RouterAction::new(
+                    RouterTargetInternal::VpcSubnet(vpc),
+                ))),
+            );
+            rule.add_predicate(predicate);
+            Ok(rule.finalize())
+        }
     }
 }
 
@@ -230,16 +260,16 @@ pub fn del_entry(
     port: &Port,
     dest: IpCidr,
     target: RouterTarget,
-) -> Result<DelRouterEntryIpv4Resp, OpteError> {
+) -> Result<DelRouterEntryResp, OpteError> {
     let rule = make_rule(dest, target)?;
     let maybe_id = port.find_rule(ROUTER_LAYER_NAME, Direction::Out, &rule)?;
     match maybe_id {
         Some(id) => {
             port.remove_rule(ROUTER_LAYER_NAME, Direction::Out, id)?;
-            Ok(DelRouterEntryIpv4Resp::Ok)
+            Ok(DelRouterEntryResp::Ok)
         }
 
-        None => Ok(DelRouterEntryIpv4Resp::NotFound),
+        None => Ok(DelRouterEntryResp::NotFound),
     }
 }
 

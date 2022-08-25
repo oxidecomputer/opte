@@ -13,11 +13,10 @@ use super::rule::{
     HairpinAction, IpProtoMatch, Ipv4AddrMatch, Predicate,
 };
 use core::fmt::{self, Display};
-pub use opte_api::ip::{Icmp4EchoReply, Protocol};
-use serde::de::{self, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+pub use opte_api::ip::{IcmpEchoReply, Protocol};
+use serde::{Deserialize, Serialize};
 use smoltcp::phy::{Checksum, ChecksumCapabilities as Csum};
-use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
+use smoltcp::wire::{self, Icmpv4Packet, Icmpv4Repr};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -27,7 +26,7 @@ cfg_if! {
     }
 }
 
-impl HairpinAction for Icmp4EchoReply {
+impl HairpinAction for IcmpEchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         let hdr_preds = vec![
             Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(
@@ -45,8 +44,8 @@ impl HairpinAction for Icmp4EchoReply {
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::ICMP)]),
         ];
 
-        let data_preds = vec![DataPredicate::Icmp4MsgType(MessageType::from(
-            smoltcp::wire::Icmpv4Message::EchoRequest,
+        let data_preds = vec![DataPredicate::IcmpMsgType(MessageType::from(
+            wire::Icmpv4Message::EchoRequest,
         ))];
 
         (hdr_preds, data_preds)
@@ -122,18 +121,19 @@ impl HairpinAction for Icmp4EchoReply {
 /// predicates. We call this "message type" instead of just "message"
 /// because that's what it is: the type field of the larger ICMP
 /// message.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(from = "u8", into = "u8")]
 pub struct MessageType {
-    inner: smoltcp::wire::Icmpv4Message,
+    inner: wire::Icmpv4Message,
 }
 
-impl From<smoltcp::wire::Icmpv4Message> for MessageType {
-    fn from(inner: smoltcp::wire::Icmpv4Message) -> Self {
+impl From<wire::Icmpv4Message> for MessageType {
+    fn from(inner: wire::Icmpv4Message) -> Self {
         Self { inner }
     }
 }
 
-impl From<MessageType> for smoltcp::wire::Icmpv4Message {
+impl From<MessageType> for wire::Icmpv4Message {
     fn from(mt: MessageType) -> Self {
         mt.inner
     }
@@ -147,42 +147,7 @@ impl From<MessageType> for u8 {
 
 impl From<u8> for MessageType {
     fn from(val: u8) -> Self {
-        Self { inner: smoltcp::wire::Icmpv4Message::from(val) }
-    }
-}
-
-struct MessageTypeVisitor;
-
-impl<'de> Visitor<'de> for MessageTypeVisitor {
-    type Value = MessageType;
-
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("an unsigned integer from 0 to 255")
-    }
-
-    fn visit_u8<E>(self, value: u8) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(MessageType::from(value))
-    }
-}
-
-impl<'de> Deserialize<'de> for MessageType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_u8(MessageTypeVisitor)
-    }
-}
-
-impl Serialize for MessageType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_u8(u8::from(*self))
+        Self { inner: wire::Icmpv4Message::from(val) }
     }
 }
 
