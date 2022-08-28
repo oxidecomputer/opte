@@ -12,7 +12,7 @@ cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
 
         use alloc::boxed::Box;
-        use illumos_ddi_dki as ddi;
+        use illumos_sys_hdrs as ddi;
         use cstr_core::CString;
     } else {
         use std::time::Instant;

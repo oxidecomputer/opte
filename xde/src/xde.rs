@@ -26,7 +26,7 @@ use core::num::NonZeroU32;
 use core::ptr;
 use core::time::Duration;
 use cstr_core::{CStr, CString};
-use illumos_ddi_dki::*;
+use illumos_sys_hdrs::*;
 use opte::api::{
     CmdOk, Direction, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
     SetXdeUnderlayReq,

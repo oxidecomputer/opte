@@ -24,7 +24,7 @@ cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::String;
         use alloc::vec::Vec;
-        use illumos_ddi_dki as ddi;
+        use illumos_sys_hdrs as ddi;
     } else {
         use std::boxed::Box;
         use std::string::String;
@@ -46,7 +46,7 @@ use super::ip6::{Ipv6Hdr, Ipv6HdrError, Ipv6Meta};
 use super::tcp::{TcpHdr, TcpHdrError, TcpMeta};
 use super::udp::{UdpHdr, UdpHdrError, UdpMeta};
 
-use illumos_ddi_dki::{c_uchar, dblk_t, mblk_t, uintptr_t};
+use illumos_sys_hdrs::{c_uchar, dblk_t, mblk_t, uintptr_t};
 
 pub static MBLK_MAX_SIZE: usize = u16::MAX as usize;
 

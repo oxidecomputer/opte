@@ -13,7 +13,7 @@ use alloc::string::{String, ToString};
 use bitflags::bitflags;
 use core::ptr;
 use cstr_core::{CStr, CString};
-use illumos_ddi_dki::*;
+use illumos_sys_hdrs::*;
 use opte::engine::packet::{Initialized, Packet, PacketState};
 
 /// A mac client

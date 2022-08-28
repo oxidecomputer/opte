@@ -4,19 +4,7 @@
 
 // Copyright 2022 Oxide Computer Company
 
-// This is a "sys" (raw interface) crate for the illumos DDI/DKI
-// interfaces. It contains definitions of C macros, opaque types, 9F
-// prototypes, and 9S structures which are required for proper use of
-// the DDI/DKI interface.
-//
-// TODO It might be better to break out the types + functions into
-// modules that map to their module/filename in illumos. But for now
-// we just use comments and group them accordingly.
-#![feature(extern_types)]
-#![allow(non_camel_case_types)]
-#![no_std]
-
-pub use illumos_sys_hdrs::*;
+use super::*;
 
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -46,22 +34,6 @@ pub enum ddi_detach_cmd_t {
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum ddi_reset_cmd_t {
     DDI_RESET_FORCE = 0,
-}
-
-#[repr(C)]
-pub enum kmutex_type_t {
-    MUTEX_ADAPTIVE = 0, // spin if owner is running, otherwise block
-    MUTEX_SPIN = 1,     // block interrupts and spin
-    MUTEX_DRIVER = 4,   // driver (DDI) mutex
-    MUTEX_DEFAULT = 6,  // kernel default mutex
-}
-
-// This type is opaque to us, we just need to define it here to make
-// sure it's a sized type, and that size should be 64-bit to match the
-// kernel.
-#[repr(C)]
-pub struct kmutex_t {
-    pub _opaque: u64,
 }
 
 // TODO Technically this is not a "raw" interface. This should live

@@ -31,7 +31,7 @@ cfg_if! {
         use alloc::sync::Arc;
         use alloc::vec::Vec;
         use super::rule::flow_id_sdt_arg;
-        use illumos_ddi_dki::uintptr_t;
+        use illumos_sys_hdrs::uintptr_t;
     } else {
         use std::string::{String, ToString};
         use std::sync::Arc;

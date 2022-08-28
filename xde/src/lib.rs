@@ -39,7 +39,7 @@ pub mod secpolicy;
 pub mod sys;
 pub mod xde;
 
-use illumos_ddi_dki::{
+use illumos_sys_hdrs::{
     c_void, cmn_err, kmem_alloc, kmem_free, panic, size_t, CE_WARN, KM_SLEEP,
 };
 

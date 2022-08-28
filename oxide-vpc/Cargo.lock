@@ -340,13 +340,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "illumos-ddi-dki"
-version = "0.1.0"
-dependencies = [
- "illumos-sys-hdrs",
-]
-
-[[package]]
 name = "illumos-sys-hdrs"
 version = "0.1.0"
 
@@ -445,7 +438,6 @@ dependencies = [
  "cfg-if 0.1.10",
  "cstr_core",
  "heapless",
- "illumos-ddi-dki",
  "illumos-sys-hdrs",
  "opte-api",
  "postcard",

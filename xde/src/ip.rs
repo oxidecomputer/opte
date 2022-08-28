@@ -3667,28 +3667,28 @@ pub const MAX_IRE_RECURSION: u32 = 4;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _label_t {
-    pub val: [illumos_ddi_dki::c_long; 8usize],
+    pub val: [illumos_sys_hdrs::c_long; 8usize],
 }
 pub type label_t = _label_t;
-pub type lock_t = illumos_ddi_dki::c_uchar;
+pub type lock_t = illumos_sys_hdrs::c_uchar;
 pub type intmax_t = i64;
 pub type uintmax_t = u64;
-pub type int_fast8_t = illumos_ddi_dki::c_char;
-pub type int_fast16_t = illumos_ddi_dki::c_int;
-pub type int_fast32_t = illumos_ddi_dki::c_int;
-pub type int_fast64_t = illumos_ddi_dki::c_long;
-pub type uint_fast8_t = illumos_ddi_dki::c_uchar;
-pub type uint_fast16_t = illumos_ddi_dki::c_uint;
-pub type uint_fast32_t = illumos_ddi_dki::c_uint;
-pub type uint_fast64_t = illumos_ddi_dki::c_ulong;
-pub type int_least8_t = illumos_ddi_dki::c_char;
-pub type int_least16_t = illumos_ddi_dki::c_short;
-pub type int_least32_t = illumos_ddi_dki::c_int;
-pub type int_least64_t = illumos_ddi_dki::c_long;
-pub type uint_least8_t = illumos_ddi_dki::c_uchar;
-pub type uint_least16_t = illumos_ddi_dki::c_ushort;
-pub type uint_least32_t = illumos_ddi_dki::c_uint;
-pub type uint_least64_t = illumos_ddi_dki::c_ulong;
+pub type int_fast8_t = illumos_sys_hdrs::c_char;
+pub type int_fast16_t = illumos_sys_hdrs::c_int;
+pub type int_fast32_t = illumos_sys_hdrs::c_int;
+pub type int_fast64_t = illumos_sys_hdrs::c_long;
+pub type uint_fast8_t = illumos_sys_hdrs::c_uchar;
+pub type uint_fast16_t = illumos_sys_hdrs::c_uint;
+pub type uint_fast32_t = illumos_sys_hdrs::c_uint;
+pub type uint_fast64_t = illumos_sys_hdrs::c_ulong;
+pub type int_least8_t = illumos_sys_hdrs::c_char;
+pub type int_least16_t = illumos_sys_hdrs::c_short;
+pub type int_least32_t = illumos_sys_hdrs::c_int;
+pub type int_least64_t = illumos_sys_hdrs::c_long;
+pub type uint_least8_t = illumos_sys_hdrs::c_uchar;
+pub type uint_least16_t = illumos_sys_hdrs::c_ushort;
+pub type uint_least32_t = illumos_sys_hdrs::c_uint;
+pub type uint_least64_t = illumos_sys_hdrs::c_ulong;
 pub type caddr32_t = u32;
 pub type daddr32_t = i32;
 pub type off32_t = i32;
@@ -3733,41 +3733,41 @@ pub struct itimerspec32 {
     pub it_value: timespec32,
 }
 pub type itimerspec32_t = itimerspec32;
-pub type longlong_t = illumos_ddi_dki::c_longlong;
-pub type u_longlong_t = illumos_ddi_dki::c_ulonglong;
+pub type longlong_t = illumos_sys_hdrs::c_longlong;
+pub type u_longlong_t = illumos_sys_hdrs::c_ulonglong;
 pub type t_scalar_t = i32;
 pub type t_uscalar_t = u32;
-pub type uchar_t = illumos_ddi_dki::c_uchar;
-pub type ushort_t = illumos_ddi_dki::c_ushort;
-pub type uint_t = illumos_ddi_dki::c_uint;
-pub type ulong_t = illumos_ddi_dki::c_ulong;
-pub type caddr_t = *mut illumos_ddi_dki::c_char;
-pub type daddr_t = illumos_ddi_dki::c_long;
-pub type cnt_t = illumos_ddi_dki::c_short;
+pub type uchar_t = illumos_sys_hdrs::c_uchar;
+pub type ushort_t = illumos_sys_hdrs::c_ushort;
+pub type uint_t = illumos_sys_hdrs::c_uint;
+pub type ulong_t = illumos_sys_hdrs::c_ulong;
+pub type caddr_t = *mut illumos_sys_hdrs::c_char;
+pub type daddr_t = illumos_sys_hdrs::c_long;
+pub type cnt_t = illumos_sys_hdrs::c_short;
 pub type pfn_t = ulong_t;
 pub type pgcnt_t = ulong_t;
-pub type spgcnt_t = illumos_ddi_dki::c_long;
+pub type spgcnt_t = illumos_sys_hdrs::c_long;
 pub type use_t = uchar_t;
-pub type sysid_t = illumos_ddi_dki::c_short;
-pub type index_t = illumos_ddi_dki::c_short;
-pub type timeout_id_t = *mut illumos_ddi_dki::c_void;
-pub type bufcall_id_t = *mut illumos_ddi_dki::c_void;
-pub type off_t = illumos_ddi_dki::c_long;
+pub type sysid_t = illumos_sys_hdrs::c_short;
+pub type index_t = illumos_sys_hdrs::c_short;
+pub type timeout_id_t = *mut illumos_sys_hdrs::c_void;
+pub type bufcall_id_t = *mut illumos_sys_hdrs::c_void;
+pub type off_t = illumos_sys_hdrs::c_long;
 pub type off64_t = off_t;
 pub type ino_t = ulong_t;
-pub type blkcnt_t = illumos_ddi_dki::c_long;
+pub type blkcnt_t = illumos_sys_hdrs::c_long;
 pub type fsblkcnt_t = ulong_t;
 pub type fsfilcnt_t = ulong_t;
 pub type ino64_t = ino_t;
 pub type blkcnt64_t = blkcnt_t;
 pub type fsblkcnt64_t = fsblkcnt_t;
 pub type fsfilcnt64_t = fsfilcnt_t;
-pub type blksize_t = illumos_ddi_dki::c_int;
+pub type blksize_t = illumos_sys_hdrs::c_int;
 pub const boolean_t_B_FALSE: boolean_t = 0;
 pub const boolean_t_B_TRUE: boolean_t = 1;
 pub const boolean_t__B_FALSE: boolean_t = 0;
 pub const boolean_t__B_TRUE: boolean_t = 1;
-pub type boolean_t = illumos_ddi_dki::c_uint;
+pub type boolean_t = illumos_sys_hdrs::c_uint;
 pub type pad64_t = i64;
 pub type upad64_t = u64;
 #[repr(C)]
@@ -3814,24 +3814,24 @@ pub struct lldaddr_t__bindgen_ty_1 {
     pub _u: i32,
 }
 pub type k_fltset_t = uint_t;
-pub type id_t = illumos_ddi_dki::c_int;
+pub type id_t = illumos_sys_hdrs::c_int;
 pub type lgrp_id_t = id_t;
 pub type useconds_t = uint_t;
-pub type suseconds_t = illumos_ddi_dki::c_long;
+pub type suseconds_t = illumos_sys_hdrs::c_long;
 pub type major_t = uint_t;
 pub type minor_t = uint_t;
-pub type pri_t = illumos_ddi_dki::c_short;
+pub type pri_t = illumos_sys_hdrs::c_short;
 pub type cpu_flag_t = ushort_t;
 pub type o_mode_t = ushort_t;
-pub type o_dev_t = illumos_ddi_dki::c_short;
+pub type o_dev_t = illumos_sys_hdrs::c_short;
 pub type o_uid_t = ushort_t;
 pub type o_gid_t = o_uid_t;
-pub type o_nlink_t = illumos_ddi_dki::c_short;
-pub type o_pid_t = illumos_ddi_dki::c_short;
+pub type o_nlink_t = illumos_sys_hdrs::c_short;
+pub type o_pid_t = illumos_sys_hdrs::c_short;
 pub type o_ino_t = ushort_t;
-pub type key_t = illumos_ddi_dki::c_int;
+pub type key_t = illumos_sys_hdrs::c_int;
 pub type mode_t = uint_t;
-pub type uid_t = illumos_ddi_dki::c_uint;
+pub type uid_t = illumos_sys_hdrs::c_uint;
 pub type gid_t = uid_t;
 pub type datalink_id_t = u32;
 pub type vrid_t = u32;
@@ -3916,19 +3916,19 @@ pub type pthread_spinlock_t = pthread_mutex_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _pthread_attr {
-    pub __pthread_attrp: *mut illumos_ddi_dki::c_void,
+    pub __pthread_attrp: *mut illumos_sys_hdrs::c_void,
 }
 pub type pthread_attr_t = _pthread_attr;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _pthread_mutexattr {
-    pub __pthread_mutexattrp: *mut illumos_ddi_dki::c_void,
+    pub __pthread_mutexattrp: *mut illumos_sys_hdrs::c_void,
 }
 pub type pthread_mutexattr_t = _pthread_mutexattr;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _pthread_condattr {
-    pub __pthread_condattrp: *mut illumos_ddi_dki::c_void,
+    pub __pthread_condattrp: *mut illumos_sys_hdrs::c_void,
 }
 pub type pthread_condattr_t = _pthread_condattr;
 #[repr(C)]
@@ -3940,49 +3940,49 @@ pub type pthread_once_t = _once;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _pthread_rwlockattr {
-    pub __pthread_rwlockattrp: *mut illumos_ddi_dki::c_void,
+    pub __pthread_rwlockattrp: *mut illumos_sys_hdrs::c_void,
 }
 pub type pthread_rwlockattr_t = _pthread_rwlockattr;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct pthread_barrierattr_t {
-    pub __pthread_barrierattrp: *mut illumos_ddi_dki::c_void,
+    pub __pthread_barrierattrp: *mut illumos_sys_hdrs::c_void,
 }
 pub type dev_t = ulong_t;
 pub type nlink_t = uint_t;
-pub type pid_t = illumos_ddi_dki::c_int;
+pub type pid_t = illumos_sys_hdrs::c_int;
 pub type size_t = ulong_t;
-pub type ssize_t = illumos_ddi_dki::c_long;
-pub type time_t = illumos_ddi_dki::c_long;
-pub type clock_t = illumos_ddi_dki::c_long;
-pub type clockid_t = illumos_ddi_dki::c_int;
-pub type timer_t = illumos_ddi_dki::c_int;
-pub type unchar = illumos_ddi_dki::c_uchar;
-pub type ushort = illumos_ddi_dki::c_ushort;
-pub type uint = illumos_ddi_dki::c_uint;
-pub type ulong = illumos_ddi_dki::c_ulong;
-pub type u_char = illumos_ddi_dki::c_uchar;
-pub type u_short = illumos_ddi_dki::c_ushort;
-pub type u_int = illumos_ddi_dki::c_uint;
-pub type u_long = illumos_ddi_dki::c_ulong;
+pub type ssize_t = illumos_sys_hdrs::c_long;
+pub type time_t = illumos_sys_hdrs::c_long;
+pub type clock_t = illumos_sys_hdrs::c_long;
+pub type clockid_t = illumos_sys_hdrs::c_int;
+pub type timer_t = illumos_sys_hdrs::c_int;
+pub type unchar = illumos_sys_hdrs::c_uchar;
+pub type ushort = illumos_sys_hdrs::c_ushort;
+pub type uint = illumos_sys_hdrs::c_uint;
+pub type ulong = illumos_sys_hdrs::c_ulong;
+pub type u_char = illumos_sys_hdrs::c_uchar;
+pub type u_short = illumos_sys_hdrs::c_ushort;
+pub type u_int = illumos_sys_hdrs::c_uint;
+pub type u_long = illumos_sys_hdrs::c_ulong;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _quad {
-    pub val: [illumos_ddi_dki::c_int; 2usize],
+    pub val: [illumos_sys_hdrs::c_int; 2usize],
 }
 pub type quad_t = _quad;
 pub type quad = quad_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct sigset_t {
-    pub __sigbits: [illumos_ddi_dki::c_uint; 4usize],
+    pub __sigbits: [illumos_sys_hdrs::c_uint; 4usize],
 }
-pub type fd_mask = illumos_ddi_dki::c_long;
-pub type fds_mask = illumos_ddi_dki::c_long;
+pub type fd_mask = illumos_sys_hdrs::c_long;
+pub type fds_mask = illumos_sys_hdrs::c_long;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct fd_set {
-    pub fds_bits: [illumos_ddi_dki::c_long; 1024usize],
+    pub fds_bits: [illumos_sys_hdrs::c_long; 1024usize],
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -3993,8 +3993,8 @@ pub struct timeval {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct timezone {
-    pub tz_minuteswest: illumos_ddi_dki::c_int,
-    pub tz_dsttime: illumos_ddi_dki::c_int,
+    pub tz_minuteswest: illumos_sys_hdrs::c_int,
+    pub tz_dsttime: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -4007,7 +4007,7 @@ pub type hrtime_t = longlong_t;
 #[derive(Debug, Copy, Clone)]
 pub struct timespec {
     pub tv_sec: time_t,
-    pub tv_nsec: illumos_ddi_dki::c_long,
+    pub tv_nsec: illumos_sys_hdrs::c_long,
 }
 pub type timespec_t = timespec;
 pub type timestruc_t = timespec;
@@ -4022,26 +4022,26 @@ pub const kmutex_type_t_MUTEX_ADAPTIVE: kmutex_type_t = 0;
 pub const kmutex_type_t_MUTEX_SPIN: kmutex_type_t = 1;
 pub const kmutex_type_t_MUTEX_DRIVER: kmutex_type_t = 4;
 pub const kmutex_type_t_MUTEX_DEFAULT: kmutex_type_t = 6;
-pub type kmutex_type_t = illumos_ddi_dki::c_uint;
+pub type kmutex_type_t = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct mutex {
-    pub _opaque: [*mut illumos_ddi_dki::c_void; 1usize],
+    pub _opaque: [*mut illumos_sys_hdrs::c_void; 1usize],
 }
 pub type kmutex_t = mutex;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct pad_mutex {
     pub pad_mutex: kmutex_t,
-    pub pad_pad: [illumos_ddi_dki::c_char; 56usize],
+    pub pad_pad: [illumos_sys_hdrs::c_char; 56usize],
 }
 pub type pad_mutex_t = pad_mutex;
 extern "C" {
     pub fn mutex_init(
         arg1: *mut kmutex_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: kmutex_type_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
@@ -4051,13 +4051,13 @@ extern "C" {
     pub fn mutex_enter(arg1: *mut kmutex_t);
 }
 extern "C" {
-    pub fn mutex_tryenter(arg1: *mut kmutex_t) -> illumos_ddi_dki::c_int;
+    pub fn mutex_tryenter(arg1: *mut kmutex_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mutex_exit(arg1: *mut kmutex_t);
 }
 extern "C" {
-    pub fn mutex_owned(arg1: *const kmutex_t) -> illumos_ddi_dki::c_int;
+    pub fn mutex_owned(arg1: *const kmutex_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mutex_owner(arg1: *const kmutex_t) -> *mut _kthread;
@@ -4098,37 +4098,37 @@ extern "C" {
     pub fn default_lock_backoff(arg1: uint_t) -> uint_t;
 }
 extern "C" {
-    pub static mut tick_per_msec: illumos_ddi_dki::c_int;
+    pub static mut tick_per_msec: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut msec_per_tick: illumos_ddi_dki::c_int;
+    pub static mut msec_per_tick: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut usec_per_tick: illumos_ddi_dki::c_int;
+    pub static mut usec_per_tick: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut nsec_per_tick: illumos_ddi_dki::c_int;
+    pub static mut nsec_per_tick: illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct todinfo {
-    pub tod_sec: illumos_ddi_dki::c_int,
-    pub tod_min: illumos_ddi_dki::c_int,
-    pub tod_hour: illumos_ddi_dki::c_int,
-    pub tod_dow: illumos_ddi_dki::c_int,
-    pub tod_day: illumos_ddi_dki::c_int,
-    pub tod_month: illumos_ddi_dki::c_int,
-    pub tod_year: illumos_ddi_dki::c_int,
+    pub tod_sec: illumos_sys_hdrs::c_int,
+    pub tod_min: illumos_sys_hdrs::c_int,
+    pub tod_hour: illumos_sys_hdrs::c_int,
+    pub tod_dow: illumos_sys_hdrs::c_int,
+    pub tod_day: illumos_sys_hdrs::c_int,
+    pub tod_month: illumos_sys_hdrs::c_int,
+    pub tod_year: illumos_sys_hdrs::c_int,
 }
 pub type todinfo_t = todinfo;
 extern "C" {
     pub static mut timedelta: i64;
 }
 extern "C" {
-    pub static mut timechanged: illumos_ddi_dki::c_int;
+    pub static mut timechanged: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut tod_needsync: illumos_ddi_dki::c_int;
+    pub static mut tod_needsync: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut tod_lock: kmutex_t;
@@ -4161,10 +4161,10 @@ extern "C" {
     pub fn tod_to_utc(arg1: todinfo_t) -> time_t;
 }
 extern "C" {
-    pub fn hr_clock_lock() -> illumos_ddi_dki::c_int;
+    pub fn hr_clock_lock() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn hr_clock_unlock(arg1: illumos_ddi_dki::c_int);
+    pub fn hr_clock_unlock(arg1: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn gethrtime() -> hrtime_t;
@@ -4208,14 +4208,14 @@ extern "C" {
 extern "C" {
     pub fn itimerfix(
         arg1: *mut timeval,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn itimerdecr(
         arg1: *mut itimerval,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn timevaladd(arg1: *mut timeval, arg2: *mut timeval);
@@ -4235,58 +4235,58 @@ extern "C" {
 extern "C" {
     pub fn ddi_get_lbolt64() -> i64;
 }
-pub type kid_t = illumos_ddi_dki::c_int;
+pub type kid_t = illumos_sys_hdrs::c_int;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct kstat {
     pub ks_crtime: hrtime_t,
     pub ks_next: *mut kstat,
     pub ks_kid: kid_t,
-    pub ks_module: [illumos_ddi_dki::c_char; 31usize],
+    pub ks_module: [illumos_sys_hdrs::c_char; 31usize],
     pub ks_resv: uchar_t,
-    pub ks_instance: illumos_ddi_dki::c_int,
-    pub ks_name: [illumos_ddi_dki::c_char; 31usize],
+    pub ks_instance: illumos_sys_hdrs::c_int,
+    pub ks_name: [illumos_sys_hdrs::c_char; 31usize],
     pub ks_type: uchar_t,
-    pub ks_class: [illumos_ddi_dki::c_char; 31usize],
+    pub ks_class: [illumos_sys_hdrs::c_char; 31usize],
     pub ks_flags: uchar_t,
-    pub ks_data: *mut illumos_ddi_dki::c_void,
+    pub ks_data: *mut illumos_sys_hdrs::c_void,
     pub ks_ndata: uint_t,
     pub ks_data_size: size_t,
     pub ks_snaptime: hrtime_t,
     pub ks_update: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut kstat,
-            arg2: illumos_ddi_dki::c_int,
-        ) -> illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
-    pub ks_private: *mut illumos_ddi_dki::c_void,
+    pub ks_private: *mut illumos_sys_hdrs::c_void,
     pub ks_snapshot: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut kstat,
-            arg2: *mut illumos_ddi_dki::c_void,
-            arg3: illumos_ddi_dki::c_int,
-        ) -> illumos_ddi_dki::c_int,
+            arg2: *mut illumos_sys_hdrs::c_void,
+            arg3: illumos_sys_hdrs::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
-    pub ks_lock: *mut illumos_ddi_dki::c_void,
+    pub ks_lock: *mut illumos_sys_hdrs::c_void,
 }
 pub type kstat_t = kstat;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct kstat_named {
-    pub name: [illumos_ddi_dki::c_char; 31usize],
+    pub name: [illumos_sys_hdrs::c_char; 31usize],
     pub data_type: uchar_t,
     pub value: kstat_named__bindgen_ty_1,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union kstat_named__bindgen_ty_1 {
-    pub c: [illumos_ddi_dki::c_char; 16usize],
+    pub c: [illumos_sys_hdrs::c_char; 16usize],
     pub i32_: i32,
     pub ui32: u32,
     pub str_: kstat_named__bindgen_ty_1__bindgen_ty_1,
     pub i64_: i64,
     pub ui64: u64,
-    pub l: illumos_ddi_dki::c_long,
+    pub l: illumos_sys_hdrs::c_long,
     pub ul: ulong_t,
     pub ll: longlong_t,
     pub ull: u_longlong_t,
@@ -4302,9 +4302,9 @@ pub struct kstat_named__bindgen_ty_1__bindgen_ty_1 {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union kstat_named__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1 {
-    pub ptr: *mut illumos_ddi_dki::c_char,
+    pub ptr: *mut illumos_sys_hdrs::c_char,
     pub ptr32: caddr32_t,
-    pub __pad: [illumos_ddi_dki::c_char; 8usize],
+    pub __pad: [illumos_sys_hdrs::c_char; 8usize],
 }
 pub type kstat_named_t = kstat_named;
 #[repr(C)]
@@ -4333,7 +4333,7 @@ pub type kstat_io_t = kstat_io;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct kstat_timer {
-    pub name: [illumos_ddi_dki::c_char; 31usize],
+    pub name: [illumos_sys_hdrs::c_char; 31usize],
     pub resv: uchar_t,
     pub num_events: u_longlong_t,
     pub elapsed_time: hrtime_t,
@@ -4347,13 +4347,13 @@ extern "C" {
     pub fn lock_set(lp: *mut lock_t);
 }
 extern "C" {
-    pub fn lock_try(lp: *mut lock_t) -> illumos_ddi_dki::c_int;
+    pub fn lock_try(lp: *mut lock_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn lock_spin_try(lp: *mut lock_t) -> illumos_ddi_dki::c_int;
+    pub fn lock_spin_try(lp: *mut lock_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn ulock_try(lp: *mut lock_t) -> illumos_ddi_dki::c_int;
+    pub fn ulock_try(lp: *mut lock_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn lock_clear(lp: *mut lock_t);
@@ -4364,12 +4364,12 @@ extern "C" {
 extern "C" {
     pub fn lock_set_spl(
         lp: *mut lock_t,
-        new_pil: illumos_ddi_dki::c_int,
+        new_pil: illumos_sys_hdrs::c_int,
         old_pil: *mut ushort_t,
     );
 }
 extern "C" {
-    pub fn lock_clear_splx(lp: *mut lock_t, s: illumos_ddi_dki::c_int);
+    pub fn lock_clear_splx(lp: *mut lock_t, s: illumos_sys_hdrs::c_int);
 }
 pub type disp_lock_t = lock_t;
 extern "C" {
@@ -4379,13 +4379,13 @@ extern "C" {
     pub static mut hrtime_base: hrtime_t;
 }
 extern "C" {
-    pub static mut clock_res: illumos_ddi_dki::c_int;
+    pub static mut clock_res: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn drv_usecwait(arg1: clock_t);
 }
 extern "C" {
-    pub static mut cpu_decay_factor: illumos_ddi_dki::c_int;
+    pub static mut cpu_decay_factor: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut maxpid: pid_t;
@@ -4403,78 +4403,78 @@ extern "C" {
     pub static mut _userlimit32: usize;
 }
 extern "C" {
-    pub static mut hz: illumos_ddi_dki::c_int;
+    pub static mut hz: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut snooping: illumos_ddi_dki::c_int;
+    pub static mut snooping: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut snoop_interval: uint_t;
 }
 extern "C" {
-    pub static _pagesize: illumos_ddi_dki::c_ulong;
+    pub static _pagesize: illumos_sys_hdrs::c_ulong;
 }
 extern "C" {
-    pub static _pageshift: illumos_ddi_dki::c_uint;
+    pub static _pageshift: illumos_sys_hdrs::c_uint;
 }
 extern "C" {
-    pub static _pageoffset: illumos_ddi_dki::c_ulong;
+    pub static _pageoffset: illumos_sys_hdrs::c_ulong;
 }
 extern "C" {
-    pub static _pagemask: illumos_ddi_dki::c_ulonglong;
+    pub static _pagemask: illumos_sys_hdrs::c_ulonglong;
 }
 extern "C" {
-    pub static _mmu_pagesize: illumos_ddi_dki::c_ulong;
+    pub static _mmu_pagesize: illumos_sys_hdrs::c_ulong;
 }
 extern "C" {
-    pub static _mmu_pageshift: illumos_ddi_dki::c_uint;
+    pub static _mmu_pageshift: illumos_sys_hdrs::c_uint;
 }
 extern "C" {
-    pub static _mmu_pageoffset: illumos_ddi_dki::c_ulong;
+    pub static _mmu_pageoffset: illumos_sys_hdrs::c_ulong;
 }
 extern "C" {
-    pub static _mmu_pagemask: illumos_ddi_dki::c_ulong;
+    pub static _mmu_pagemask: illumos_sys_hdrs::c_ulong;
 }
 extern "C" {
     pub static _argsbase: usize;
 }
 extern "C" {
-    pub static _defaultstksz: illumos_ddi_dki::c_ulong;
+    pub static _defaultstksz: illumos_sys_hdrs::c_ulong;
 }
 extern "C" {
-    pub static _nbpg: illumos_ddi_dki::c_uint;
+    pub static _nbpg: illumos_sys_hdrs::c_uint;
 }
 extern "C" {
-    pub static _ncpu: illumos_ddi_dki::c_int;
+    pub static _ncpu: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static _ncpu_log2: illumos_ddi_dki::c_int;
+    pub static _ncpu_log2: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static _ncpu_p2: illumos_ddi_dki::c_int;
+    pub static _ncpu_p2: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static _clsize: illumos_ddi_dki::c_int;
+    pub static _clsize: illumos_sys_hdrs::c_int;
 }
 pub const krw_type_t_RW_DRIVER: krw_type_t = 2;
 pub const krw_type_t_RW_DEFAULT: krw_type_t = 4;
-pub type krw_type_t = illumos_ddi_dki::c_uint;
+pub type krw_type_t = illumos_sys_hdrs::c_uint;
 pub const krw_t_RW_WRITER: krw_t = 0;
 pub const krw_t_RW_READER: krw_t = 1;
 pub const krw_t_RW_READER_STARVEWRITER: krw_t = 2;
-pub type krw_t = illumos_ddi_dki::c_uint;
+pub type krw_t = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _krwlock {
-    pub _opaque: [*mut illumos_ddi_dki::c_void; 1usize],
+    pub _opaque: [*mut illumos_sys_hdrs::c_void; 1usize],
 }
 pub type krwlock_t = _krwlock;
 extern "C" {
     pub fn rw_init(
         arg1: *mut krwlock_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: krw_type_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
@@ -4487,7 +4487,7 @@ extern "C" {
     pub fn rw_tryenter(
         arg1: *mut krwlock_t,
         arg2: krw_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rw_exit(arg1: *mut krwlock_t);
@@ -4496,22 +4496,22 @@ extern "C" {
     pub fn rw_downgrade(arg1: *mut krwlock_t);
 }
 extern "C" {
-    pub fn rw_tryupgrade(arg1: *mut krwlock_t) -> illumos_ddi_dki::c_int;
+    pub fn rw_tryupgrade(arg1: *mut krwlock_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn rw_read_held(arg1: *mut krwlock_t) -> illumos_ddi_dki::c_int;
+    pub fn rw_read_held(arg1: *mut krwlock_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn rw_write_held(arg1: *mut krwlock_t) -> illumos_ddi_dki::c_int;
+    pub fn rw_write_held(arg1: *mut krwlock_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn rw_lock_held(arg1: *mut krwlock_t) -> illumos_ddi_dki::c_int;
+    pub fn rw_lock_held(arg1: *mut krwlock_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn rw_read_locked(arg1: *mut krwlock_t) -> illumos_ddi_dki::c_int;
+    pub fn rw_read_locked(arg1: *mut krwlock_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn rw_iswriter(arg1: *mut krwlock_t) -> illumos_ddi_dki::c_int;
+    pub fn rw_iswriter(arg1: *mut krwlock_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rw_owner(arg1: *mut krwlock_t) -> *mut _kthread;
@@ -4532,23 +4532,23 @@ pub struct _kcondvar {
 pub type kcondvar_t = _kcondvar;
 pub const kcv_type_t_CV_DEFAULT: kcv_type_t = 0;
 pub const kcv_type_t_CV_DRIVER: kcv_type_t = 1;
-pub type kcv_type_t = illumos_ddi_dki::c_uint;
+pub type kcv_type_t = illumos_sys_hdrs::c_uint;
 pub const time_res_t_TR_NANOSEC: time_res_t = 0;
 pub const time_res_t_TR_MICROSEC: time_res_t = 1;
 pub const time_res_t_TR_MILLISEC: time_res_t = 2;
 pub const time_res_t_TR_SEC: time_res_t = 3;
 pub const time_res_t_TR_CLOCK_TICK: time_res_t = 4;
 pub const time_res_t_TR_COUNT: time_res_t = 5;
-pub type time_res_t = illumos_ddi_dki::c_uint;
+pub type time_res_t = illumos_sys_hdrs::c_uint;
 extern "C" {
     pub static mut time_res: [time_res_t; 0usize];
 }
 extern "C" {
     pub fn cv_init(
         arg1: *mut kcondvar_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: kcv_type_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
@@ -4561,7 +4561,7 @@ extern "C" {
     pub fn cv_wait_stop(
         arg1: *mut kcondvar_t,
         arg2: *mut kmutex_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
@@ -4577,7 +4577,7 @@ extern "C" {
         arg2: *mut kmutex_t,
         arg3: hrtime_t,
         arg4: hrtime_t,
-        arg5: illumos_ddi_dki::c_int,
+        arg5: illumos_sys_hdrs::c_int,
     ) -> clock_t;
 }
 extern "C" {
@@ -4592,7 +4592,7 @@ extern "C" {
     pub fn cv_wait_sig(
         arg1: *mut kcondvar_t,
         arg2: *mut kmutex_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn cv_timedwait_sig(
@@ -4606,7 +4606,7 @@ extern "C" {
         arg1: *mut kcondvar_t,
         arg2: *mut kmutex_t,
         arg3: hrtime_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn cv_reltimedwait_sig(
@@ -4620,14 +4620,14 @@ extern "C" {
     pub fn cv_wait_sig_swap(
         arg1: *mut kcondvar_t,
         arg2: *mut kmutex_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn cv_wait_sig_swap_core(
         arg1: *mut kcondvar_t,
         arg2: *mut kmutex_t,
-        arg3: *mut illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: *mut illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn cv_signal(arg1: *mut kcondvar_t);
@@ -4640,46 +4640,46 @@ extern "C" {
         arg1: *mut kcondvar_t,
         arg2: *mut kmutex_t,
         arg3: *mut timestruc_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn _sysconf(arg1: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_long;
+    pub fn _sysconf(arg1: illumos_sys_hdrs::c_int) -> illumos_sys_hdrs::c_long;
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union sigval {
-    pub sival_int: illumos_ddi_dki::c_int,
-    pub sival_ptr: *mut illumos_ddi_dki::c_void,
+    pub sival_int: illumos_sys_hdrs::c_int,
+    pub sival_ptr: *mut illumos_sys_hdrs::c_void,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct sigevent {
-    pub sigev_notify: illumos_ddi_dki::c_int,
-    pub sigev_signo: illumos_ddi_dki::c_int,
+    pub sigev_notify: illumos_sys_hdrs::c_int,
+    pub sigev_signo: illumos_sys_hdrs::c_int,
     pub sigev_value: sigval,
     pub sigev_notify_function:
         ::core::option::Option<unsafe extern "C" fn(arg1: sigval)>,
     pub sigev_notify_attributes: *mut pthread_attr_t,
-    pub __sigev_pad2: illumos_ddi_dki::c_int,
+    pub __sigev_pad2: illumos_sys_hdrs::c_int,
 }
-pub type faultcode_t = illumos_ddi_dki::c_int;
+pub type faultcode_t = illumos_sys_hdrs::c_int;
 extern "C" {
-    pub fn fc_decode(arg1: faultcode_t) -> illumos_ddi_dki::c_int;
+    pub fn fc_decode(arg1: faultcode_t) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct siginfo {
-    pub si_signo: illumos_ddi_dki::c_int,
-    pub si_code: illumos_ddi_dki::c_int,
-    pub si_errno: illumos_ddi_dki::c_int,
-    pub si_pad: illumos_ddi_dki::c_int,
+    pub si_signo: illumos_sys_hdrs::c_int,
+    pub si_code: illumos_sys_hdrs::c_int,
+    pub si_errno: illumos_sys_hdrs::c_int,
+    pub si_pad: illumos_sys_hdrs::c_int,
     pub __data: siginfo__bindgen_ty_1,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union siginfo__bindgen_ty_1 {
-    pub __pad: [illumos_ddi_dki::c_int; 60usize],
+    pub __pad: [illumos_sys_hdrs::c_int; 60usize],
     pub __proc: siginfo__bindgen_ty_1__bindgen_ty_1,
     pub __fault: siginfo__bindgen_ty_1__bindgen_ty_2,
     pub __file: siginfo__bindgen_ty_1__bindgen_ty_3,
@@ -4710,32 +4710,32 @@ pub struct siginfo__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1 {
 #[derive(Debug, Copy, Clone)]
 pub struct siginfo__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1__bindgen_ty_2 {
     pub __utime: clock_t,
-    pub __status: illumos_ddi_dki::c_int,
+    pub __status: illumos_sys_hdrs::c_int,
     pub __stime: clock_t,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct siginfo__bindgen_ty_1__bindgen_ty_2 {
-    pub __addr: *mut illumos_ddi_dki::c_void,
-    pub __trapno: illumos_ddi_dki::c_int,
+    pub __addr: *mut illumos_sys_hdrs::c_void,
+    pub __trapno: illumos_sys_hdrs::c_int,
     pub __pc: caddr_t,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct siginfo__bindgen_ty_1__bindgen_ty_3 {
-    pub __fd: illumos_ddi_dki::c_int,
-    pub __band: illumos_ddi_dki::c_long,
+    pub __fd: illumos_sys_hdrs::c_int,
+    pub __band: illumos_sys_hdrs::c_long,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct siginfo__bindgen_ty_1__bindgen_ty_4 {
     pub __faddr: caddr_t,
     pub __tstamp: timestruc_t,
-    pub __syscall: illumos_ddi_dki::c_short,
-    pub __nsysarg: illumos_ddi_dki::c_char,
-    pub __fault: illumos_ddi_dki::c_char,
-    pub __sysarg: [illumos_ddi_dki::c_long; 8usize],
-    pub __mstate: [illumos_ddi_dki::c_int; 10usize],
+    pub __syscall: illumos_sys_hdrs::c_short,
+    pub __nsysarg: illumos_sys_hdrs::c_char,
+    pub __fault: illumos_sys_hdrs::c_char,
+    pub __sysarg: [illumos_sys_hdrs::c_long; 8usize],
+    pub __mstate: [illumos_sys_hdrs::c_int; 10usize],
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -4746,10 +4746,10 @@ pub type siginfo_t = siginfo;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct k_siginfo {
-    pub si_signo: illumos_ddi_dki::c_int,
-    pub si_code: illumos_ddi_dki::c_int,
-    pub si_errno: illumos_ddi_dki::c_int,
-    pub si_pad: illumos_ddi_dki::c_int,
+    pub si_signo: illumos_sys_hdrs::c_int,
+    pub si_code: illumos_sys_hdrs::c_int,
+    pub si_errno: illumos_sys_hdrs::c_int,
+    pub si_pad: illumos_sys_hdrs::c_int,
     pub __data: k_siginfo__bindgen_ty_1,
 }
 #[repr(C)]
@@ -4787,30 +4787,30 @@ pub struct k_siginfo__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1 {
 #[derive(Debug, Copy, Clone)]
 pub struct k_siginfo__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1__bindgen_ty_2 {
     pub __utime: clock_t,
-    pub __status: illumos_ddi_dki::c_int,
+    pub __status: illumos_sys_hdrs::c_int,
     pub __stime: clock_t,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct k_siginfo__bindgen_ty_1__bindgen_ty_2 {
-    pub __addr: *mut illumos_ddi_dki::c_void,
-    pub __trapno: illumos_ddi_dki::c_int,
+    pub __addr: *mut illumos_sys_hdrs::c_void,
+    pub __trapno: illumos_sys_hdrs::c_int,
     pub __pc: caddr_t,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct k_siginfo__bindgen_ty_1__bindgen_ty_3 {
-    pub __fd: illumos_ddi_dki::c_int,
-    pub __band: illumos_ddi_dki::c_long,
+    pub __fd: illumos_sys_hdrs::c_int,
+    pub __band: illumos_sys_hdrs::c_long,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct k_siginfo__bindgen_ty_1__bindgen_ty_4 {
     pub __faddr: caddr_t,
     pub __tstamp: timestruc_t,
-    pub __syscall: illumos_ddi_dki::c_short,
-    pub __nsysarg: illumos_ddi_dki::c_char,
-    pub __fault: illumos_ddi_dki::c_char,
+    pub __syscall: illumos_sys_hdrs::c_short,
+    pub __nsysarg: illumos_sys_hdrs::c_char,
+    pub __fault: illumos_sys_hdrs::c_char,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -4825,19 +4825,19 @@ pub struct sigqueue {
     pub sq_info: k_siginfo_t,
     pub sq_func:
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut sigqueue)>,
-    pub sq_backptr: *mut illumos_ddi_dki::c_void,
-    pub sq_external: illumos_ddi_dki::c_int,
+    pub sq_backptr: *mut illumos_sys_hdrs::c_void,
+    pub sq_external: illumos_sys_hdrs::c_int,
 }
 pub type sigqueue_t = sigqueue;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct k_sigset_t {
-    pub __sigbits: [illumos_ddi_dki::c_uint; 3usize],
+    pub __sigbits: [illumos_sys_hdrs::c_uint; 3usize],
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct sigaction {
-    pub sa_flags: illumos_ddi_dki::c_int,
+    pub sa_flags: illumos_sys_hdrs::c_int,
     pub _funcptr: sigaction__bindgen_ty_1,
     pub sa_mask: sigset_t,
 }
@@ -4847,33 +4847,33 @@ pub union sigaction__bindgen_ty_1 {
     pub _handler: ::core::option::Option<unsafe extern "C" fn()>,
     pub _sigaction: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: illumos_ddi_dki::c_int,
+            arg1: illumos_sys_hdrs::c_int,
             arg2: *mut siginfo_t,
-            arg3: *mut illumos_ddi_dki::c_void,
+            arg3: *mut illumos_sys_hdrs::c_void,
         ),
     >,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct sigaltstack {
-    pub ss_sp: *mut illumos_ddi_dki::c_void,
+    pub ss_sp: *mut illumos_sys_hdrs::c_void,
     pub ss_size: size_t,
-    pub ss_flags: illumos_ddi_dki::c_int,
+    pub ss_flags: illumos_sys_hdrs::c_int,
 }
 pub type stack_t = sigaltstack;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct signotify_id {
     pub sn_pid: pid_t,
-    pub sn_index: illumos_ddi_dki::c_int,
-    pub sn_pad: illumos_ddi_dki::c_int,
+    pub sn_index: illumos_sys_hdrs::c_int,
+    pub sn_pad: illumos_sys_hdrs::c_int,
 }
 pub type signotify_id_t = signotify_id;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct sigstack {
-    pub ss_sp: *mut illumos_ddi_dki::c_void,
-    pub ss_onstack: illumos_ddi_dki::c_int,
+    pub ss_sp: *mut illumos_sys_hdrs::c_void,
+    pub ss_onstack: illumos_sys_hdrs::c_int,
 }
 extern "C" {
     pub static nullsmask: k_sigset_t;
@@ -4902,10 +4902,10 @@ extern "C" {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct sigsend_t {
-    pub sig: illumos_ddi_dki::c_int,
-    pub perm: illumos_ddi_dki::c_int,
-    pub checkperm: illumos_ddi_dki::c_int,
-    pub sicode: illumos_ddi_dki::c_int,
+    pub sig: illumos_sys_hdrs::c_int,
+    pub perm: illumos_sys_hdrs::c_int,
+    pub checkperm: illumos_sys_hdrs::c_int,
+    pub sicode: illumos_sys_hdrs::c_int,
     pub value: sigval,
 }
 #[repr(C)]
@@ -4918,7 +4918,7 @@ pub struct signotifyq_t {
 #[derive(Debug, Copy, Clone)]
 pub struct sigqhdr {
     pub sqb_free: *mut sigqueue_t,
-    pub sqb_count: illumos_ddi_dki::c_int,
+    pub sqb_count: illumos_sys_hdrs::c_int,
     pub sqb_maxcount: uint_t,
     pub sqb_size: size_t,
     pub sqb_pexited: uchar_t,
@@ -4929,12 +4929,12 @@ pub struct sigqhdr {
 pub type sigqhdr_t = sigqhdr;
 extern "C" {
     pub fn setsigact(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: ::core::option::Option<
-            unsafe extern "C" fn(arg1: illumos_ddi_dki::c_int),
+            unsafe extern "C" fn(arg1: illumos_sys_hdrs::c_int),
         >,
         arg3: *const k_sigset_t,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
@@ -4947,7 +4947,7 @@ extern "C" {
     pub fn sigdiffset(arg1: *mut k_sigset_t, arg2: *const k_sigset_t);
 }
 extern "C" {
-    pub fn sigintr(arg1: *mut k_sigset_t, arg2: illumos_ddi_dki::c_int);
+    pub fn sigintr(arg1: *mut k_sigset_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn sigunintr(arg1: *mut k_sigset_t);
@@ -4958,10 +4958,10 @@ extern "C" {
 extern "C" {
     pub fn kill(
         arg1: pid_t,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
-pub type greg_t = illumos_ddi_dki::c_long;
+pub type greg_t = illumos_sys_hdrs::c_long;
 pub type gregset_t = [greg_t; 28usize];
 #[repr(C)]
 #[repr(align(16))]
@@ -5013,7 +5013,7 @@ pub struct mcontext_t {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct dbregset {
-    pub debugreg: [illumos_ddi_dki::c_ulong; 16usize],
+    pub debugreg: [illumos_sys_hdrs::c_ulong; 16usize],
 }
 pub type dbregset_t = dbregset;
 #[repr(C, packed(4))]
@@ -5944,7 +5944,7 @@ extern "C" {
     pub fn set_usegd(
         arg1: *mut user_desc_t,
         arg2: uint_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: size_t,
         arg5: uint_t,
         arg6: uint_t,
@@ -5968,7 +5968,7 @@ extern "C" {
 extern "C" {
     pub fn set_syssegd(
         arg1: *mut system_desc_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
         arg4: uint_t,
         arg5: uint_t,
@@ -5977,7 +5977,7 @@ extern "C" {
 extern "C" {
     pub fn get_ssd_base(
         arg1: *mut system_desc_t,
-    ) -> *mut illumos_ddi_dki::c_void;
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn gdt_update_usegd(arg1: uint_t, arg2: *mut user_desc_t);
@@ -5986,7 +5986,7 @@ extern "C" {
     pub fn ldt_update_segd(
         arg1: *mut user_desc_t,
         arg2: *mut user_desc_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn init_boot_gdt(arg1: *mut user_desc_t);
@@ -6239,24 +6239,24 @@ pub struct kfpu_t {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union kfpu_t__kfpu_u {
-    pub kfpu_generic: *mut illumos_ddi_dki::c_void,
+    pub kfpu_generic: *mut illumos_sys_hdrs::c_void,
     pub kfpu_fx: *mut fxsave_state,
     pub kfpu_xs: *mut xsave_state,
 }
 extern "C" {
-    pub static mut fp_kind: illumos_ddi_dki::c_int;
+    pub static mut fp_kind: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut fp_save_mech: illumos_ddi_dki::c_int;
+    pub static mut fp_save_mech: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut fpu_exists: illumos_ddi_dki::c_int;
+    pub static mut fpu_exists: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut fpu_ignored: illumos_ddi_dki::c_int;
+    pub static mut fpu_ignored: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut fpu_pentium_fdivbug: illumos_ddi_dki::c_int;
+    pub static mut fpu_pentium_fdivbug: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut sse_mxcsr_mask: u32;
@@ -6268,32 +6268,32 @@ extern "C" {
     pub fn fpu_initial_probe() -> uint_t;
 }
 extern "C" {
-    pub fn fpu_auxv_info(arg1: *mut illumos_ddi_dki::c_int, arg2: *mut size_t);
+    pub fn fpu_auxv_info(arg1: *mut illumos_sys_hdrs::c_int, arg2: *mut size_t);
 }
 extern "C" {
-    pub fn fpnsave_ctxt(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn fpnsave_ctxt(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn fpxsave_ctxt(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn fpxsave_ctxt(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn xsave_ctxt(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn xsave_ctxt(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn xsaveopt_ctxt(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn xsaveopt_ctxt(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn fpxsave_excp_clr_ctxt(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn fpxsave_excp_clr_ctxt(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn xsave_excp_clr_ctxt(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn xsave_excp_clr_ctxt(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn xsaveopt_excp_clr_ctxt(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn xsaveopt_excp_clr_ctxt(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
     pub static mut fpsave_ctxt: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
     >;
 }
 extern "C" {
@@ -6302,14 +6302,14 @@ extern "C" {
     >;
 }
 extern "C" {
-    pub fn fpxrestore_ctxt(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn fpxrestore_ctxt(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn xrestore_ctxt(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn xrestore_ctxt(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
     pub static mut fprestore_ctxt: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
     >;
 }
 extern "C" {
@@ -6363,10 +6363,10 @@ pub struct regs {
     _unused: [u8; 0],
 }
 extern "C" {
-    pub fn fpexterrflt(arg1: *mut regs) -> illumos_ddi_dki::c_int;
+    pub fn fpexterrflt(arg1: *mut regs) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn fpsimderrflt(arg1: *mut regs) -> illumos_ddi_dki::c_int;
+    pub fn fpsimderrflt(arg1: *mut regs) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fpsetcw(arg1: u16, arg2: u32);
@@ -6406,8 +6406,8 @@ pub struct pcb {
     pub pcb_fpu: fpu_ctx_t,
     pub pcb_flags: uint_t,
     pub pcb_drstat: greg_t,
-    pub pcb_instr: illumos_ddi_dki::c_uchar,
-    pub pcb_rupdate: illumos_ddi_dki::c_uchar,
+    pub pcb_instr: illumos_sys_hdrs::c_uchar,
+    pub pcb_rupdate: illumos_sys_hdrs::c_uchar,
     pub pcb_fsbase: usize,
     pub pcb_gsbase: usize,
     pub pcb_ds: selector_t,
@@ -6423,13 +6423,13 @@ pub type ucontext_t = ucontext;
 #[repr(align(16))]
 #[derive(Copy, Clone)]
 pub struct ucontext {
-    pub uc_flags: illumos_ddi_dki::c_ulong,
+    pub uc_flags: illumos_sys_hdrs::c_ulong,
     pub uc_link: *mut ucontext_t,
     pub uc_sigmask: sigset_t,
     pub uc_stack: stack_t,
     pub __bindgen_padding_0: u64,
     pub uc_mcontext: mcontext_t,
-    pub uc_filler: [illumos_ddi_dki::c_long; 5usize],
+    pub uc_filler: [illumos_sys_hdrs::c_long; 5usize],
 }
 extern "C" {
     pub fn savecontext(arg1: *mut ucontext_t, arg2: *const k_sigset_t);
@@ -6524,7 +6524,7 @@ pub type lwp_rwlock_t = _lwp_rwlock;
 pub struct lwpinfo {
     pub lwp_utime: timestruc_t,
     pub lwp_stime: timestruc_t,
-    pub lwpinfo_pad: [illumos_ddi_dki::c_long; 64usize],
+    pub lwpinfo_pad: [illumos_sys_hdrs::c_long; 64usize],
 }
 pub type lwpid_t = uint_t;
 pub type ctevid_t = u64;
@@ -6532,12 +6532,12 @@ pub const ctstate_CTS_OWNED: ctstate = 0;
 pub const ctstate_CTS_INHERITED: ctstate = 1;
 pub const ctstate_CTS_ORPHAN: ctstate = 2;
 pub const ctstate_CTS_DEAD: ctstate = 3;
-pub type ctstate = illumos_ddi_dki::c_uint;
+pub type ctstate = illumos_sys_hdrs::c_uint;
 pub use self::ctstate as ctstate_t;
 pub const ct_typeid_CTT_PROCESS: ct_typeid = 0;
 pub const ct_typeid_CTT_DEVICE: ct_typeid = 1;
 pub const ct_typeid_CTT_MAXTYPE: ct_typeid = 2;
-pub type ct_typeid = illumos_ddi_dki::c_uint;
+pub type ct_typeid = illumos_sys_hdrs::c_uint;
 pub use self::ct_typeid as ct_typeid_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -6551,7 +6551,7 @@ pub struct ct_event {
     pub ctev_nbytes: u32,
     pub ctev_goffset: u32,
     pub ctev_pad2: u32,
-    pub ctev_buffer: *mut illumos_ddi_dki::c_char,
+    pub ctev_buffer: *mut illumos_sys_hdrs::c_char,
 }
 pub type ct_event_t = ct_event;
 #[repr(C)]
@@ -6562,16 +6562,16 @@ pub struct ct_status {
     pub ctst_type: ct_typeid_t,
     pub ctst_holder: pid_t,
     pub ctst_state: ctstate_t,
-    pub ctst_nevents: illumos_ddi_dki::c_int,
-    pub ctst_ntime: illumos_ddi_dki::c_int,
-    pub ctst_qtime: illumos_ddi_dki::c_int,
+    pub ctst_nevents: illumos_sys_hdrs::c_int,
+    pub ctst_ntime: illumos_sys_hdrs::c_int,
+    pub ctst_qtime: illumos_sys_hdrs::c_int,
     pub ctst_nevid: u64,
     pub ctst_detail: uint_t,
     pub ctst_nbytes: size_t,
     pub ctst_critical: uint_t,
     pub ctst_informative: uint_t,
     pub ctst_cookie: u64,
-    pub ctst_buffer: *mut illumos_ddi_dki::c_char,
+    pub ctst_buffer: *mut illumos_sys_hdrs::c_char,
 }
 pub type ct_status_t = ct_status;
 #[repr(C)]
@@ -6579,7 +6579,7 @@ pub type ct_status_t = ct_status;
 pub struct ct_param {
     pub ctpm_id: u32,
     pub ctpm_size: u32,
-    pub ctpm_value: *mut illumos_ddi_dki::c_void,
+    pub ctpm_value: *mut illumos_sys_hdrs::c_void,
 }
 pub type ct_param_t = ct_param;
 #[repr(C)]
@@ -6604,15 +6604,15 @@ pub type klwp_id_t = *mut _klwp;
 pub struct _klwp {
     pub lwp_pcb: pcb,
     pub lwp_oldcontext: usize,
-    pub lwp_ap: *mut illumos_ddi_dki::c_long,
-    pub lwp_errno: illumos_ddi_dki::c_int,
-    pub lwp_error: illumos_ddi_dki::c_char,
-    pub lwp_eosys: illumos_ddi_dki::c_char,
-    pub lwp_argsaved: illumos_ddi_dki::c_char,
-    pub lwp_watchtrap: illumos_ddi_dki::c_char,
-    pub lwp_arg: [illumos_ddi_dki::c_long; 8usize],
-    pub lwp_regs: *mut illumos_ddi_dki::c_void,
-    pub lwp_fpu: *mut illumos_ddi_dki::c_void,
+    pub lwp_ap: *mut illumos_sys_hdrs::c_long,
+    pub lwp_errno: illumos_sys_hdrs::c_int,
+    pub lwp_error: illumos_sys_hdrs::c_char,
+    pub lwp_eosys: illumos_sys_hdrs::c_char,
+    pub lwp_argsaved: illumos_sys_hdrs::c_char,
+    pub lwp_watchtrap: illumos_sys_hdrs::c_char,
+    pub lwp_arg: [illumos_sys_hdrs::c_long; 8usize],
+    pub lwp_regs: *mut illumos_sys_hdrs::c_void,
+    pub lwp_fpu: *mut illumos_sys_hdrs::c_void,
     pub lwp_qsav: label_t,
     pub lwp_cursig: uchar_t,
     pub lwp_curflt: uchar_t,
@@ -6627,14 +6627,14 @@ pub struct _klwp {
     pub lwp_oweupc: u32,
     pub lwp_mstate: _klwp_mstate,
     pub lwp_ru: lrusage,
-    pub lwp_lastfault: illumos_ddi_dki::c_int,
+    pub lwp_lastfault: illumos_sys_hdrs::c_int,
     pub lwp_lastfaddr: caddr_t,
     pub lwp_timer: [itimerval; 3usize],
-    pub lwp_unused: illumos_ddi_dki::c_char,
-    pub lwp_state: illumos_ddi_dki::c_char,
+    pub lwp_unused: illumos_sys_hdrs::c_char,
+    pub lwp_state: illumos_sys_hdrs::c_char,
     pub lwp_nostop: ushort_t,
     pub lwp_pad: ushort_t,
-    pub lwp_badpriv: illumos_ddi_dki::c_short,
+    pub lwp_badpriv: illumos_sys_hdrs::c_short,
     pub lwp_thread: *mut _kthread,
     pub lwp_procp: *mut proc_,
     pub lwp_childstksz: size_t,
@@ -6642,7 +6642,7 @@ pub struct _klwp {
     pub lwp_old_stk_ctl: size_t,
     pub lwp_ct_active: [*mut ct_template; 2usize],
     pub lwp_ct_latest: [*mut contract; 2usize],
-    pub lwp_brand: *mut illumos_ddi_dki::c_void,
+    pub lwp_brand: *mut illumos_sys_hdrs::c_void,
     pub lwp_spymaster: *mut psinfo,
 }
 #[repr(C)]
@@ -6650,14 +6650,14 @@ pub struct _klwp {
 pub struct _klwp_lwp_watch {
     pub wpaddr: caddr_t,
     pub wpsize: size_t,
-    pub wpcode: illumos_ddi_dki::c_int,
-    pub wpmapped: illumos_ddi_dki::c_int,
+    pub wpcode: illumos_sys_hdrs::c_int,
+    pub wpmapped: illumos_sys_hdrs::c_int,
     pub wppc: greg_t,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _klwp_mstate {
-    pub ms_prev: illumos_ddi_dki::c_int,
+    pub ms_prev: illumos_sys_hdrs::c_int,
     pub ms_start: hrtime_t,
     pub ms_term: hrtime_t,
     pub ms_state_start: hrtime_t,
@@ -6665,10 +6665,10 @@ pub struct _klwp_mstate {
 }
 pub type klwp_t = _klwp;
 extern "C" {
-    pub static mut lwp_default_stksize: illumos_ddi_dki::c_int;
+    pub static mut lwp_default_stksize: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut lwp_reapcnt: illumos_ddi_dki::c_int;
+    pub static mut lwp_reapcnt: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut lwp_deathrow: *mut _kthread;
@@ -6685,7 +6685,7 @@ extern "C" {
     pub static mut lwp_cache: *mut kmem_cache;
 }
 extern "C" {
-    pub static mut segkp_lwp: *mut illumos_ddi_dki::c_void;
+    pub static mut segkp_lwp: *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub static mut lwp0: klwp_t;
@@ -6696,13 +6696,13 @@ extern "C" {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct cpc_attr_t {
-    pub ca_name: *mut illumos_ddi_dki::c_char,
+    pub ca_name: *mut illumos_sys_hdrs::c_char,
     pub ca_val: u64,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _kcpc_attr {
-    pub ka_name: [illumos_ddi_dki::c_char; 32usize],
+    pub ka_name: [illumos_sys_hdrs::c_char; 32usize],
     pub ka_val: u64,
 }
 pub type kcpc_attr_t = _kcpc_attr;
@@ -6724,7 +6724,7 @@ pub struct _kcpc_ctx {
     pub kc_vtick: u64,
     pub kc_rawtick: u64,
     pub kc_thread: *mut _kthread,
-    pub kc_cpuid: illumos_ddi_dki::c_int,
+    pub kc_cpuid: illumos_sys_hdrs::c_int,
     pub kc_next: *mut kcpc_ctx_t,
     pub kc_lock: kmutex_t,
     pub kc_condv: kcondvar_t,
@@ -6732,9 +6732,9 @@ pub struct _kcpc_ctx {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct __cpc_args {
-    pub udata1: *mut illumos_ddi_dki::c_void,
-    pub udata2: *mut illumos_ddi_dki::c_void,
-    pub udata3: *mut illumos_ddi_dki::c_void,
+    pub udata1: *mut illumos_sys_hdrs::c_void,
+    pub udata2: *mut illumos_sys_hdrs::c_void,
+    pub udata3: *mut illumos_sys_hdrs::c_void,
 }
 pub type __cpc_args_t = __cpc_args;
 #[repr(C)]
@@ -6749,10 +6749,10 @@ pub const dcpc_intr_state_DCPC_INTR_INACTIVE: dcpc_intr_state = 0;
 pub const dcpc_intr_state_DCPC_INTR_FREE: dcpc_intr_state = 1;
 pub const dcpc_intr_state_DCPC_INTR_PROCESSING: dcpc_intr_state = 2;
 pub const dcpc_intr_state_DCPC_INTR_CONFIG: dcpc_intr_state = 3;
-pub type dcpc_intr_state = illumos_ddi_dki::c_uint;
+pub type dcpc_intr_state = illumos_sys_hdrs::c_uint;
 pub const dcpc_mask_attr_DCPC_UMASK: dcpc_mask_attr = 1;
 pub const dcpc_mask_attr_DCPC_EMASK: dcpc_mask_attr = 2;
-pub type dcpc_mask_attr = illumos_ddi_dki::c_uint;
+pub type dcpc_mask_attr = illumos_sys_hdrs::c_uint;
 extern "C" {
     pub fn tsc_read() -> hrtime_t;
 }
@@ -6768,7 +6768,7 @@ extern "C" {
     pub static mut kcpc_cpuctx_lock: krwlock_t;
 }
 extern "C" {
-    pub static mut kcpc_cpuctx: illumos_ddi_dki::c_int;
+    pub static mut kcpc_cpuctx: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_invalidate_all();
@@ -6781,11 +6781,11 @@ extern "C" {
 }
 extern "C" {
     pub fn kcpc_pcbe_tryload(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: uint_t,
         arg3: uint_t,
         arg4: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_cpu_program(arg1: *mut cpu, arg2: *mut kcpc_ctx_t);
@@ -6799,13 +6799,13 @@ extern "C" {
     pub fn kcpc_unregister_dcpc();
 }
 extern "C" {
-    pub fn kcpc_ctx_alloc(arg1: illumos_ddi_dki::c_int) -> *mut kcpc_ctx_t;
+    pub fn kcpc_ctx_alloc(arg1: illumos_sys_hdrs::c_int) -> *mut kcpc_ctx_t;
 }
 extern "C" {
     pub fn kcpc_assign_reqs(
         arg1: *mut _kcpc_set,
         arg2: *mut kcpc_ctx_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_ctx_free(arg1: *mut kcpc_ctx_t);
@@ -6814,8 +6814,8 @@ extern "C" {
     pub fn kcpc_configure_reqs(
         arg1: *mut kcpc_ctx_t,
         arg2: *mut _kcpc_set,
-        arg3: *mut illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: *mut illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_free_configs(arg1: *mut _kcpc_set);
@@ -6830,8 +6830,8 @@ pub struct __pcbe_ops {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _kcpc_set {
-    pub ks_flags: illumos_ddi_dki::c_int,
-    pub ks_nreqs: illumos_ddi_dki::c_int,
+    pub ks_flags: illumos_sys_hdrs::c_int,
+    pub ks_nreqs: illumos_sys_hdrs::c_int,
     pub ks_req: *mut kcpc_request_t,
     pub ks_data: *mut u64,
     pub ks_ctx: *mut kcpc_ctx_t,
@@ -6842,51 +6842,51 @@ pub struct _kcpc_set {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _kcpc_request {
-    pub kr_config: *mut illumos_ddi_dki::c_void,
-    pub kr_index: illumos_ddi_dki::c_int,
-    pub kr_picnum: illumos_ddi_dki::c_int,
+    pub kr_config: *mut illumos_sys_hdrs::c_void,
+    pub kr_index: illumos_sys_hdrs::c_int,
+    pub kr_picnum: illumos_sys_hdrs::c_int,
     pub kr_picp: *mut kcpc_pic_t,
     pub kr_data: *mut u64,
-    pub kr_event: [illumos_ddi_dki::c_char; 512usize],
+    pub kr_event: [illumos_sys_hdrs::c_char; 512usize],
     pub kr_preset: u64,
     pub kr_flags: uint_t,
     pub kr_nattrs: uint_t,
     pub kr_attr: *mut kcpc_attr_t,
-    pub kr_ptr: *mut illumos_ddi_dki::c_void,
+    pub kr_ptr: *mut illumos_sys_hdrs::c_void,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _kcpc_request_list {
     pub krl_list: *mut kcpc_request_t,
-    pub krl_cnt: illumos_ddi_dki::c_int,
-    pub krl_max: illumos_ddi_dki::c_int,
+    pub krl_cnt: illumos_sys_hdrs::c_int,
+    pub krl_max: illumos_sys_hdrs::c_int,
 }
 pub type kcpc_request_list_t = _kcpc_request_list;
 pub type kcpc_update_func_t = ::core::option::Option<
     unsafe extern "C" fn(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: u64,
-    ) -> illumos_ddi_dki::c_int,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 pub type kcpc_read_func_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: kcpc_update_func_t) -> illumos_ddi_dki::c_int,
+    unsafe extern "C" fn(arg1: kcpc_update_func_t) -> illumos_sys_hdrs::c_int,
 >;
 extern "C" {
-    pub fn kcpc_init() -> illumos_ddi_dki::c_int;
+    pub fn kcpc_init() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_bind_thread(
         set: *mut kcpc_set_t,
         t: *mut _kthread,
-        subcode: *mut illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        subcode: *mut illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_bind_cpu(
         set: *mut kcpc_set_t,
-        cpuid: illumos_ddi_dki::c_int,
-        subcode: *mut illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        cpuid: illumos_sys_hdrs::c_int,
+        subcode: *mut illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_sample(
@@ -6894,52 +6894,52 @@ extern "C" {
         buf: *mut u64,
         hrtime: *mut hrtime_t,
         tick: *mut u64,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_cpu_ctx_create(
         cp: *mut cpu,
         req_list: *mut kcpc_request_list_t,
-        kmem_flags: illumos_ddi_dki::c_int,
+        kmem_flags: illumos_sys_hdrs::c_int,
         ctx_ptr_array: *mut *mut *mut kcpc_ctx_t,
         ctx_ptr_array_sz: *mut size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_event_supported(
-        event: *mut illumos_ddi_dki::c_char,
+        event: *mut illumos_sys_hdrs::c_char,
     ) -> boolean_t;
 }
 extern "C" {
     pub fn kcpc_reqs_init(
-        nreqs: illumos_ddi_dki::c_int,
-        kmem_flags: illumos_ddi_dki::c_int,
+        nreqs: illumos_sys_hdrs::c_int,
+        kmem_flags: illumos_sys_hdrs::c_int,
     ) -> *mut kcpc_request_list_t;
 }
 extern "C" {
     pub fn kcpc_reqs_add(
         req_list: *mut kcpc_request_list_t,
-        event: *mut illumos_ddi_dki::c_char,
+        event: *mut illumos_sys_hdrs::c_char,
         preset: u64,
         flags: uint_t,
         nattrs: uint_t,
         attr: *mut kcpc_attr_t,
-        ptr: *mut illumos_ddi_dki::c_void,
-        kmem_flags: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        ptr: *mut illumos_sys_hdrs::c_void,
+        kmem_flags: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_reqs_reset(
         req_list: *mut kcpc_request_list_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_reqs_fini(
         req_list: *mut kcpc_request_list_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn kcpc_read(arg1: kcpc_update_func_t) -> illumos_ddi_dki::c_int;
+    pub fn kcpc_read(arg1: kcpc_update_func_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_program(
@@ -6952,42 +6952,42 @@ extern "C" {
     pub fn kcpc_unprogram(ctx: *mut kcpc_ctx_t, cu_interpose: boolean_t);
 }
 extern "C" {
-    pub fn kcpc_unbind(set: *mut kcpc_set_t) -> illumos_ddi_dki::c_int;
+    pub fn kcpc_unbind(set: *mut kcpc_set_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_preset(
         set: *mut kcpc_set_t,
-        index: illumos_ddi_dki::c_int,
+        index: illumos_sys_hdrs::c_int,
         preset: u64,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn kcpc_restart(set: *mut kcpc_set_t) -> illumos_ddi_dki::c_int;
+    pub fn kcpc_restart(set: *mut kcpc_set_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_enable(
         t: *mut _kthread,
-        cmd: illumos_ddi_dki::c_int,
-        enable: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        cmd: illumos_sys_hdrs::c_int,
+        enable: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_invalidate(t: *mut _kthread);
 }
 extern "C" {
-    pub fn kcpc_overflow_ast() -> illumos_ddi_dki::c_int;
+    pub fn kcpc_overflow_ast() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_hw_overflow_intr(arg1: caddr_t, arg2: caddr_t) -> uint_t;
 }
 extern "C" {
     pub fn kcpc_hw_cpu_hook(
-        cpuid: illumos_ddi_dki::c_int,
+        cpuid: illumos_sys_hdrs::c_int,
         kcpc_cpumap: *mut ulong_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn kcpc_hw_lwp_hook() -> illumos_ddi_dki::c_int;
+    pub fn kcpc_hw_lwp_hook() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_idle_ctxop_install(arg1: *mut _kthread, arg2: *mut cpu);
@@ -7007,30 +7007,30 @@ extern "C" {
 }
 extern "C" {
     pub fn kcpc_next_config(
-        token: *mut illumos_ddi_dki::c_void,
-        current: *mut illumos_ddi_dki::c_void,
+        token: *mut illumos_sys_hdrs::c_void,
+        current: *mut illumos_sys_hdrs::c_void,
         data: *mut *mut u64,
-    ) -> *mut illumos_ddi_dki::c_void;
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
-    pub fn kcpc_invalidate_config(token: *mut illumos_ddi_dki::c_void);
+    pub fn kcpc_invalidate_config(token: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn kcpc_list_attrs() -> *mut illumos_ddi_dki::c_char;
+    pub fn kcpc_list_attrs() -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
-    pub fn kcpc_list_events(pic: uint_t) -> *mut illumos_ddi_dki::c_char;
+    pub fn kcpc_list_events(pic: uint_t) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn kcpc_pcbe_capabilities() -> uint_t;
 }
 extern "C" {
-    pub fn kcpc_pcbe_loaded() -> illumos_ddi_dki::c_int;
+    pub fn kcpc_pcbe_loaded() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_allow_nonpriv(
-        token: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        token: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcpc_register_pcbe(arg1: *mut __pcbe_ops);
@@ -7039,33 +7039,33 @@ extern "C" {
 #[derive(Debug, Copy, Clone)]
 pub struct ctxop {
     pub save_op: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
     >,
     pub restore_op: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
     >,
     pub fork_op: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
-            arg2: *mut illumos_ddi_dki::c_void,
+            arg1: *mut illumos_sys_hdrs::c_void,
+            arg2: *mut illumos_sys_hdrs::c_void,
         ),
     >,
     pub lwp_create_op: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
-            arg2: *mut illumos_ddi_dki::c_void,
+            arg1: *mut illumos_sys_hdrs::c_void,
+            arg2: *mut illumos_sys_hdrs::c_void,
         ),
     >,
     pub exit_op: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
     >,
     pub free_op: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
-            arg2: illumos_ddi_dki::c_int,
+            arg1: *mut illumos_sys_hdrs::c_void,
+            arg2: illumos_sys_hdrs::c_int,
         ),
     >,
-    pub arg: *mut illumos_ddi_dki::c_void,
+    pub arg: *mut illumos_sys_hdrs::c_void,
     pub next: *mut ctxop,
     pub prev: *mut ctxop,
     pub save_ts: hrtime_t,
@@ -7076,10 +7076,10 @@ pub type ctxop_t = ctxop;
 #[derive(Debug, Copy, Clone)]
 pub struct afd_t {
     pub a_fdlock: kmutex_t,
-    pub a_fd: *mut illumos_ddi_dki::c_int,
-    pub a_nfd: illumos_ddi_dki::c_int,
-    pub a_stale: illumos_ddi_dki::c_int,
-    pub a_buf: [illumos_ddi_dki::c_int; 2usize],
+    pub a_fd: *mut illumos_sys_hdrs::c_int,
+    pub a_nfd: illumos_sys_hdrs::c_int,
+    pub a_stale: illumos_sys_hdrs::c_int,
+    pub a_buf: [illumos_sys_hdrs::c_int; 2usize],
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -7126,25 +7126,25 @@ pub struct _kthread {
     pub t_stk: caddr_t,
     pub t_startpc: ::core::option::Option<unsafe extern "C" fn()>,
     pub t_bound_cpu: *mut cpu,
-    pub t_affinitycnt: illumos_ddi_dki::c_short,
-    pub t_bind_cpu: illumos_ddi_dki::c_short,
+    pub t_affinitycnt: illumos_sys_hdrs::c_short,
+    pub t_bind_cpu: illumos_sys_hdrs::c_short,
     pub t_flag: uint_t,
     pub t_proc_flag: ushort_t,
     pub t_schedflag: ushort_t,
-    pub t_preempt: illumos_ddi_dki::c_char,
-    pub t_preempt_lk: illumos_ddi_dki::c_char,
+    pub t_preempt: illumos_sys_hdrs::c_char,
+    pub t_preempt_lk: illumos_sys_hdrs::c_char,
     pub t_state: uint_t,
     pub t_pri: pri_t,
     pub t_epri: pri_t,
     pub t_cpri: pri_t,
-    pub t_writer: illumos_ddi_dki::c_char,
+    pub t_writer: illumos_sys_hdrs::c_char,
     pub t_bindflag: uchar_t,
     pub t_pcb: label_t,
     pub t_lwpchan: lwpchan_t,
     pub t_sobj_ops: *mut _sobj_ops,
     pub t_cid: id_t,
     pub t_clfuncs: *mut thread_ops,
-    pub t_cldata: *mut illumos_ddi_dki::c_void,
+    pub t_cldata: *mut illumos_sys_hdrs::c_void,
     pub t_ctx: *mut ctxop_t,
     pub t_lofault: usize,
     pub t_onfault: *mut label_t,
@@ -7154,11 +7154,11 @@ pub struct _kthread {
     pub t_lockstat: u8,
     pub t_pil: u8,
     pub t_pi_lock: disp_lock_t,
-    pub t_nomigrate: illumos_ddi_dki::c_char,
+    pub t_nomigrate: illumos_sys_hdrs::c_char,
     pub t_cpu: *mut cpu,
     pub t_weakbound_cpu: *mut cpu,
     pub t_lpl: *mut lgrp_ld,
-    pub t_lgrp_reserv: [*mut illumos_ddi_dki::c_void; 2usize],
+    pub t_lgrp_reserv: [*mut illumos_sys_hdrs::c_void; 2usize],
     pub t_intr: *mut _kthread,
     pub t_intr_start: u64,
     pub t_did: kt_did_t,
@@ -7182,7 +7182,7 @@ pub struct _kthread {
     pub t_prev: *mut _kthread,
     pub t_whystop: ushort_t,
     pub t_whatstop: ushort_t,
-    pub t_dslot: illumos_ddi_dki::c_int,
+    pub t_dslot: illumos_sys_hdrs::c_int,
     pub t_pollstate: *mut pollstate,
     pub t_pollcache: *mut pollcache,
     pub t_cred: *mut cred,
@@ -7190,18 +7190,18 @@ pub struct _kthread {
     pub t_lbolt: clock_t,
     pub t_stoptime: hrtime_t,
     pub t_pctcpu: uint_t,
-    pub t_sysnum: illumos_ddi_dki::c_short,
+    pub t_sysnum: illumos_sys_hdrs::c_short,
     pub t_delay_cv: kcondvar_t,
     pub t_delay_lock: kmutex_t,
     pub t_lockp: *mut disp_lock_t,
     pub t_oldspl: ushort_t,
-    pub t_pre_sys: illumos_ddi_dki::c_char,
+    pub t_pre_sys: illumos_sys_hdrs::c_char,
     pub t_lock_flush: lock_t,
     pub t_disp_queue: *mut _disp,
     pub t_disp_time: clock_t,
     pub _tu: _kthread___tu,
     pub t_waitrq: hrtime_t,
-    pub t_mstate: illumos_ddi_dki::c_int,
+    pub t_mstate: illumos_sys_hdrs::c_int,
     pub t_rprof: *mut _kthread_rprof,
     pub t_prioinv: *mut turnstile,
     pub t_ts: *mut turnstile,
@@ -7212,7 +7212,7 @@ pub struct _kthread {
     pub t_schedctl: *mut sc_shared,
     pub t_sc_uaddr: usize,
     pub t_cpupart: *mut cpupart,
-    pub t_bind_pset: illumos_ddi_dki::c_int,
+    pub t_bind_pset: illumos_sys_hdrs::c_int,
     pub t_copyops: *mut copyops,
     pub t_stkbase: caddr_t,
     pub t_red_pp: *mut page,
@@ -7221,7 +7221,7 @@ pub struct _kthread {
     pub t_priback: *mut _kthread,
     pub t_sleepq: *mut sleepq,
     pub t_panic_trap: *mut panic_trap_info,
-    pub t_lgrp_affinity: *mut illumos_ddi_dki::c_int,
+    pub t_lgrp_affinity: *mut illumos_sys_hdrs::c_int,
     pub t_upimutex: *mut upimutex,
     pub t_nupinest: u32,
     pub t_proj: *mut kproject,
@@ -7230,9 +7230,9 @@ pub struct _kthread {
     pub t_hatdepth: u8,
     pub t_xpvcntr: u8,
     pub t_joincv: kcondvar_t,
-    pub t_taskq: *mut illumos_ddi_dki::c_void,
+    pub t_taskq: *mut illumos_sys_hdrs::c_void,
     pub t_anttime: hrtime_t,
-    pub t_pdmsg: *mut illumos_ddi_dki::c_char,
+    pub t_pdmsg: *mut illumos_sys_hdrs::c_char,
     pub t_predcache: uint_t,
     pub t_dtrace_vtime: hrtime_t,
     pub t_dtrace_start: hrtime_t,
@@ -7249,27 +7249,27 @@ pub struct _kthread {
     pub t_ctx_lock: kmutex_t,
     pub t_waitq: *mut waitq,
     pub t_wait_mutex: kmutex_t,
-    pub t_name: *mut illumos_ddi_dki::c_char,
+    pub t_name: *mut illumos_sys_hdrs::c_char,
     pub t_unsafe: u64,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union _kthread___tu {
     pub _ts: _kthread___tu___ts,
-    pub _t_post_sys_ast: illumos_ddi_dki::c_int,
+    pub _t_post_sys_ast: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _kthread___tu___ts {
-    pub _t_astflag: illumos_ddi_dki::c_char,
-    pub _t_sig_check: illumos_ddi_dki::c_char,
-    pub _t_post_sys: illumos_ddi_dki::c_char,
-    pub _t_trapret: illumos_ddi_dki::c_char,
+    pub _t_astflag: illumos_sys_hdrs::c_char,
+    pub _t_sig_check: illumos_sys_hdrs::c_char,
+    pub _t_post_sys: illumos_sys_hdrs::c_char,
+    pub _t_trapret: illumos_sys_hdrs::c_char,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _kthread_rprof {
-    pub rp_anystate: illumos_ddi_dki::c_int,
+    pub rp_anystate: illumos_sys_hdrs::c_int,
     pub rp_state: [uint_t; 10usize],
 }
 #[repr(C)]
@@ -7278,7 +7278,7 @@ pub struct _kthread_tsd_thread {
     pub ts_next: *mut _kthread_tsd_thread,
     pub ts_prev: *mut _kthread_tsd_thread,
     pub ts_nkeys: uint_t,
-    pub ts_value: *mut *mut illumos_ddi_dki::c_void,
+    pub ts_value: *mut *mut illumos_sys_hdrs::c_void,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -7322,8 +7322,8 @@ extern "C" {
     pub fn thread_change_pri(
         t: *mut kthread_t,
         disp_pri: pri_t,
-        front: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        front: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn thread_change_epri(t: *mut kthread_t, disp_pri: pri_t);
@@ -7355,21 +7355,21 @@ extern "C" {
 extern "C" {
     pub fn thread_setname(
         arg1: *mut kthread_t,
-        arg2: *const illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: *const illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn thread_vsetname(
         arg1: *mut kthread_t,
-        arg2: *const illumos_ddi_dki::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
         ...
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut default_binding_mode: illumos_ddi_dki::c_int;
+    pub static mut default_binding_mode: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut default_stksize: illumos_ddi_dki::c_int;
+    pub static mut default_stksize: illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -7380,25 +7380,25 @@ pub struct kmem_stkinfo {
     pub stksz: size_t,
     pub percent: size_t,
     pub t_tid: id_t,
-    pub cmd: [illumos_ddi_dki::c_char; 64usize],
+    pub cmd: [illumos_sys_hdrs::c_char; 64usize],
 }
 pub type kmem_stkinfo_t = kmem_stkinfo;
 pub const ksema_type_t_SEMA_DEFAULT: ksema_type_t = 0;
 pub const ksema_type_t_SEMA_DRIVER: ksema_type_t = 1;
-pub type ksema_type_t = illumos_ddi_dki::c_uint;
+pub type ksema_type_t = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _ksema {
-    pub _opaque: [*mut illumos_ddi_dki::c_void; 2usize],
+    pub _opaque: [*mut illumos_sys_hdrs::c_void; 2usize],
 }
 pub type ksema_t = _ksema;
 extern "C" {
     pub fn sema_init(
         arg1: *mut ksema_t,
         arg2: u32,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: ksema_type_t,
-        arg5: *mut illumos_ddi_dki::c_void,
+        arg5: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
@@ -7408,19 +7408,19 @@ extern "C" {
     pub fn sema_p(arg1: *mut ksema_t);
 }
 extern "C" {
-    pub fn sema_p_sig(arg1: *mut ksema_t) -> illumos_ddi_dki::c_int;
+    pub fn sema_p_sig(arg1: *mut ksema_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn sema_v(arg1: *mut ksema_t);
 }
 extern "C" {
-    pub fn sema_tryp(arg1: *mut ksema_t) -> illumos_ddi_dki::c_int;
+    pub fn sema_tryp(arg1: *mut ksema_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn sema_held(arg1: *mut ksema_t) -> illumos_ddi_dki::c_int;
+    pub fn sema_held(arg1: *mut ksema_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut ncpus: illumos_ddi_dki::c_int;
+    pub static mut ncpus: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn disp_lock_enter(arg1: *mut disp_lock_t);
@@ -7440,7 +7440,7 @@ extern "C" {
 extern "C" {
     pub fn disp_lock_init(
         lp: *mut disp_lock_t,
-        name: *mut illumos_ddi_dki::c_char,
+        name: *mut illumos_sys_hdrs::c_char,
     );
 }
 extern "C" {
@@ -7454,10 +7454,10 @@ extern "C" {
 }
 extern "C" {
     pub fn kstat_create(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: *const illumos_ddi_dki::c_char,
-        arg4: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: *const illumos_sys_hdrs::c_char,
+        arg4: *const illumos_sys_hdrs::c_char,
         arg5: uchar_t,
         arg6: uint_t,
         arg7: uchar_t,
@@ -7465,10 +7465,10 @@ extern "C" {
 }
 extern "C" {
     pub fn kstat_create_zone(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: *const illumos_ddi_dki::c_char,
-        arg4: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: *const illumos_sys_hdrs::c_char,
+        arg4: *const illumos_sys_hdrs::c_char,
         arg5: uchar_t,
         arg6: uint_t,
         arg7: uchar_t,
@@ -7484,41 +7484,41 @@ extern "C" {
 extern "C" {
     pub fn kstat_named_setstr(
         knp: *mut kstat_named_t,
-        src: *const illumos_ddi_dki::c_char,
+        src: *const illumos_sys_hdrs::c_char,
     );
 }
 extern "C" {
     pub fn kstat_set_string(
-        arg1: *mut illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
+        arg1: *mut illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
     );
 }
 extern "C" {
     pub fn kstat_delete_byname(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: *const illumos_sys_hdrs::c_char,
     );
 }
 extern "C" {
     pub fn kstat_delete_byname_zone(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: *const illumos_sys_hdrs::c_char,
         arg4: zoneid_t,
     );
 }
 extern "C" {
     pub fn kstat_named_init(
         arg1: *mut kstat_named_t,
-        arg2: *const illumos_ddi_dki::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
         arg3: uchar_t,
     );
 }
 extern "C" {
     pub fn kstat_timer_init(
         arg1: *mut kstat_timer_t,
-        arg2: *const illumos_ddi_dki::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
     );
 }
 extern "C" {
@@ -7555,16 +7555,16 @@ extern "C" {
     pub fn kstat_zone_find(
         arg1: *mut kstat_t,
         arg2: zoneid_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kstat_hold_bykid(kid: kid_t, arg1: zoneid_t) -> *mut kstat_t;
 }
 extern "C" {
     pub fn kstat_hold_byname(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: *const illumos_sys_hdrs::c_char,
         arg4: zoneid_t,
     ) -> *mut kstat_t;
 }
@@ -7603,7 +7603,7 @@ pub struct auditinfo_addr {
     _unused: [u8; 0],
 }
 extern "C" {
-    pub static mut ngroups_max: illumos_ddi_dki::c_int;
+    pub static mut ngroups_max: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut kcred: *mut cred;
@@ -7651,32 +7651,32 @@ extern "C" {
     pub fn groupmember(
         arg1: gid_t,
         arg2: *const cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn supgroupmember(
         arg1: gid_t,
         arg2: *const cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hasprocperm(
         arg1: *const cred_t,
         arg2: *const cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prochasprocperm(
         arg1: *mut proc_,
         arg2: *mut proc_,
         arg3: *const cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn crcmp(
         arg1: *const cred_t,
         arg2: *const cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn zone_kcred() -> *mut cred_t;
@@ -7724,7 +7724,7 @@ extern "C" {
     pub fn crgetggroups(arg1: *const credgrp) -> *const gid_t;
 }
 extern "C" {
-    pub fn crgetngroups(arg1: *const cred_t) -> illumos_ddi_dki::c_int;
+    pub fn crgetngroups(arg1: *const cred_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn crsetresuid(
@@ -7732,7 +7732,7 @@ extern "C" {
         arg2: uid_t,
         arg3: uid_t,
         arg4: uid_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn crsetresgid(
@@ -7740,25 +7740,25 @@ extern "C" {
         arg2: gid_t,
         arg3: gid_t,
         arg4: gid_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn crsetugid(
         arg1: *mut cred_t,
         arg2: uid_t,
         arg3: gid_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn crsetgroups(
         arg1: *mut cred_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut gid_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn crgrpcopyin(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: *mut gid_t,
     ) -> *mut credgrp;
 }
@@ -7803,24 +7803,24 @@ extern "C" {
 extern "C" {
     pub fn eph_uid_alloc(
         arg1: *mut zone,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut uid_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn eph_gid_alloc(
         arg1: *mut zone,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut gid_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn crsetsid(
         arg1: *mut cred_t,
         arg2: *mut ksid,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
@@ -7829,14 +7829,14 @@ extern "C" {
 extern "C" {
     pub fn crgetsid(
         arg1: *const cred_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
     ) -> *mut ksid;
 }
 extern "C" {
     pub fn crgetsidlist(arg1: *const cred_t) -> *mut ksidlist;
 }
 extern "C" {
-    pub fn crsetpriv(arg1: *mut cred_t, ...) -> illumos_ddi_dki::c_int;
+    pub fn crsetpriv(arg1: *mut cred_t, ...) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn crgetcrklpd(arg1: *const cred_t) -> *mut credklpd;
@@ -7859,15 +7859,15 @@ pub struct netstack {
     pub netstack_lock: kmutex_t,
     pub netstack_next: *mut netstack,
     pub netstack_stackid: netstackid_t,
-    pub netstack_numzones: illumos_ddi_dki::c_int,
-    pub netstack_refcnt: illumos_ddi_dki::c_int,
-    pub netstack_flags: illumos_ddi_dki::c_int,
+    pub netstack_numzones: illumos_sys_hdrs::c_int,
+    pub netstack_refcnt: illumos_sys_hdrs::c_int,
+    pub netstack_flags: illumos_sys_hdrs::c_int,
     pub netstack_cv: kcondvar_t,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union netstack__bindgen_ty_1 {
-    pub nu_modules: [*mut illumos_ddi_dki::c_void; 19usize],
+    pub nu_modules: [*mut illumos_sys_hdrs::c_void; 19usize],
     pub nu_s: netstack__bindgen_ty_1__bindgen_ty_1,
 }
 #[repr(C)]
@@ -7897,23 +7897,23 @@ pub type netstack_t = netstack;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct netstack_registry {
-    pub nr_flags: illumos_ddi_dki::c_int,
+    pub nr_flags: illumos_sys_hdrs::c_int,
     pub nr_create: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: netstackid_t,
             arg2: *mut netstack_t,
-        ) -> *mut illumos_ddi_dki::c_void,
+        ) -> *mut illumos_sys_hdrs::c_void,
     >,
     pub nr_shutdown: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: netstackid_t,
-            arg2: *mut illumos_ddi_dki::c_void,
+            arg2: *mut illumos_sys_hdrs::c_void,
         ),
     >,
     pub nr_destroy: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: netstackid_t,
-            arg2: *mut illumos_ddi_dki::c_void,
+            arg2: *mut illumos_sys_hdrs::c_void,
         ),
     >,
 }
@@ -7955,36 +7955,36 @@ extern "C" {
 }
 extern "C" {
     pub fn netstack_register(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: ::core::option::Option<
             unsafe extern "C" fn(
                 arg1: netstackid_t,
                 arg2: *mut netstack_t,
-            ) -> *mut illumos_ddi_dki::c_void,
+            ) -> *mut illumos_sys_hdrs::c_void,
         >,
         arg3: ::core::option::Option<
             unsafe extern "C" fn(
                 arg1: netstackid_t,
-                arg2: *mut illumos_ddi_dki::c_void,
+                arg2: *mut illumos_sys_hdrs::c_void,
             ),
         >,
         arg4: ::core::option::Option<
             unsafe extern "C" fn(
                 arg1: netstackid_t,
-                arg2: *mut illumos_ddi_dki::c_void,
+                arg2: *mut illumos_sys_hdrs::c_void,
             ),
         >,
     );
 }
 extern "C" {
-    pub fn netstack_unregister(arg1: illumos_ddi_dki::c_int);
+    pub fn netstack_unregister(arg1: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn kstat_create_netstack(
-        arg1: *mut illumos_ddi_dki::c_char,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: *mut illumos_ddi_dki::c_char,
-        arg4: *mut illumos_ddi_dki::c_char,
+        arg1: *mut illumos_sys_hdrs::c_char,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: *mut illumos_sys_hdrs::c_char,
+        arg4: *mut illumos_sys_hdrs::c_char,
         arg5: uchar_t,
         arg6: uint_t,
         arg7: uchar_t,
@@ -7994,7 +7994,7 @@ extern "C" {
 extern "C" {
     pub fn kstat_delete_netstack(arg1: *mut kstat_t, arg2: netstackid_t);
 }
-pub type netstack_handle_t = illumos_ddi_dki::c_int;
+pub type netstack_handle_t = illumos_sys_hdrs::c_int;
 extern "C" {
     pub fn netstack_next_init(arg1: *mut netstack_handle_t);
 }
@@ -8009,21 +8009,21 @@ pub type sa_family_t = u16;
 #[derive(Debug, Copy, Clone)]
 pub struct sockaddr {
     pub sa_family: sa_family_t,
-    pub sa_data: [illumos_ddi_dki::c_char; 14usize],
+    pub sa_data: [illumos_sys_hdrs::c_char; 14usize],
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct sockaddr_un {
     pub sun_family: sa_family_t,
-    pub sun_path: [illumos_ddi_dki::c_char; 108usize],
+    pub sun_path: [illumos_sys_hdrs::c_char; 108usize],
 }
 extern "C" {
     pub fn strlen(
-        arg1: *const illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_ulong;
+        arg1: *const illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_ulong;
 }
 extern "C" {
-    pub fn unp_discard() -> illumos_ddi_dki::c_int;
+    pub fn unp_discard() -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -8034,30 +8034,30 @@ pub struct sockaddr_dl {
     pub sdl_nlen: uchar_t,
     pub sdl_alen: uchar_t,
     pub sdl_slen: uchar_t,
-    pub sdl_data: [illumos_ddi_dki::c_char; 244usize],
+    pub sdl_data: [illumos_sys_hdrs::c_char; 244usize],
 }
 extern "C" {
     pub fn _link_ntoa(
-        arg1: *const illumos_ddi_dki::c_uchar,
-        arg2: *mut illumos_ddi_dki::c_char,
-        arg3: illumos_ddi_dki::c_int,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: *const illumos_sys_hdrs::c_uchar,
+        arg2: *mut illumos_sys_hdrs::c_char,
+        arg3: illumos_sys_hdrs::c_int,
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn _link_aton(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *mut illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_uchar;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *mut illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_uchar;
 }
 pub type sockaddr_maxalign_t = f64;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct sockaddr_storage {
     pub ss_family: sa_family_t,
-    pub _ss_pad1: [illumos_ddi_dki::c_char; 6usize],
+    pub _ss_pad1: [illumos_sys_hdrs::c_char; 6usize],
     pub _ss_align: sockaddr_maxalign_t,
-    pub _ss_pad2: [illumos_ddi_dki::c_char; 240usize],
+    pub _ss_pad2: [illumos_sys_hdrs::c_char; 240usize],
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -8071,7 +8071,7 @@ pub struct sockaddr_ll {
     pub sll_addr: [u8; 8usize],
 }
 pub type socklen_t = u32;
-pub type Psocklen_t = *mut illumos_ddi_dki::c_void;
+pub type Psocklen_t = *mut illumos_sys_hdrs::c_void;
 pub type in_port_t = u16;
 pub type in_addr_t = u32;
 extern "C" {
@@ -8139,7 +8139,7 @@ pub struct sockaddr_in {
     pub sin_family: sa_family_t,
     pub sin_port: in_port_t,
     pub sin_addr: in_addr,
-    pub sin_zero: [illumos_ddi_dki::c_char; 8usize],
+    pub sin_zero: [illumos_sys_hdrs::c_char; 8usize],
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -8179,7 +8179,7 @@ pub struct ip_mreq_source {
 #[derive(Copy, Clone)]
 pub struct ipv6_mreq {
     pub ipv6mr_multiaddr: in6_addr,
-    pub ipv6mr_interface: illumos_ddi_dki::c_uint,
+    pub ipv6mr_interface: illumos_sys_hdrs::c_uint,
 }
 #[repr(C, packed(4))]
 #[derive(Debug, Copy, Clone)]
@@ -8214,50 +8214,50 @@ pub struct ip_msfilter {
 }
 extern "C" {
     pub fn setsourcefilter(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: u32,
         arg3: *mut sockaddr,
         arg4: socklen_t,
         arg5: u32,
         arg6: uint_t,
         arg7: *mut sockaddr_storage,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn getsourcefilter(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: u32,
         arg3: *mut sockaddr,
         arg4: socklen_t,
         arg5: *mut u32,
         arg6: *mut uint_t,
         arg7: *mut sockaddr_storage,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn setipv4sourcefilter(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: in_addr,
         arg3: in_addr,
         arg4: u32,
         arg5: u32,
         arg6: *mut in_addr,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn getipv4sourcefilter(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: in_addr,
         arg3: in_addr,
         arg4: *mut u32,
         arg5: *mut u32,
         arg6: *mut in_addr,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct in_pktinfo {
-    pub ipi_ifindex: illumos_ddi_dki::c_uint,
+    pub ipi_ifindex: illumos_sys_hdrs::c_uint,
     pub ipi_spec_dst: in_addr,
     pub ipi_addr: in_addr,
 }
@@ -8266,7 +8266,7 @@ pub type in_pktinfo_t = in_pktinfo;
 #[derive(Copy, Clone)]
 pub struct in6_pktinfo {
     pub ipi6_addr: in6_addr,
-    pub ipi6_ifindex: illumos_ddi_dki::c_uint,
+    pub ipi6_ifindex: illumos_sys_hdrs::c_uint,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -8276,106 +8276,106 @@ pub struct ip6_mtuinfo {
 }
 extern "C" {
     pub fn inet6_rth_space(
-        type_: illumos_ddi_dki::c_int,
-        segments: illumos_ddi_dki::c_int,
+        type_: illumos_sys_hdrs::c_int,
+        segments: illumos_sys_hdrs::c_int,
     ) -> socklen_t;
 }
 extern "C" {
     pub fn inet6_rth_init(
-        bp: *mut illumos_ddi_dki::c_void,
+        bp: *mut illumos_sys_hdrs::c_void,
         bp_len: socklen_t,
-        type_: illumos_ddi_dki::c_int,
-        segments: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        type_: illumos_sys_hdrs::c_int,
+        segments: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn inet6_rth_add(
-        bp: *mut illumos_ddi_dki::c_void,
+        bp: *mut illumos_sys_hdrs::c_void,
         addr: *const in6_addr,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn inet6_rth_reverse(
-        in_: *const illumos_ddi_dki::c_void,
-        out: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        in_: *const illumos_sys_hdrs::c_void,
+        out: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn inet6_rth_segments(
-        bp: *const illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        bp: *const illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn inet6_rth_getaddr(
-        bp: *const illumos_ddi_dki::c_void,
-        index: illumos_ddi_dki::c_int,
+        bp: *const illumos_sys_hdrs::c_void,
+        index: illumos_sys_hdrs::c_int,
     ) -> *mut in6_addr;
 }
 extern "C" {
     pub fn inet6_opt_init(
-        extbuf: *mut illumos_ddi_dki::c_void,
+        extbuf: *mut illumos_sys_hdrs::c_void,
         extlen: socklen_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn inet6_opt_append(
-        extbuf: *mut illumos_ddi_dki::c_void,
+        extbuf: *mut illumos_sys_hdrs::c_void,
         extlen: socklen_t,
-        offset: illumos_ddi_dki::c_int,
+        offset: illumos_sys_hdrs::c_int,
         type_: u8,
         len: socklen_t,
         align: uint_t,
-        databufp: *mut *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        databufp: *mut *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn inet6_opt_finish(
-        extbuf: *mut illumos_ddi_dki::c_void,
+        extbuf: *mut illumos_sys_hdrs::c_void,
         extlen: socklen_t,
-        offset: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        offset: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn inet6_opt_set_val(
-        databuf: *mut illumos_ddi_dki::c_void,
-        offset: illumos_ddi_dki::c_int,
-        val: *mut illumos_ddi_dki::c_void,
+        databuf: *mut illumos_sys_hdrs::c_void,
+        offset: illumos_sys_hdrs::c_int,
+        val: *mut illumos_sys_hdrs::c_void,
         vallen: socklen_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn inet6_opt_next(
-        extbuf: *mut illumos_ddi_dki::c_void,
+        extbuf: *mut illumos_sys_hdrs::c_void,
         extlen: socklen_t,
-        offset: illumos_ddi_dki::c_int,
+        offset: illumos_sys_hdrs::c_int,
         typep: *mut u8,
         lenp: *mut socklen_t,
-        databufp: *mut *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        databufp: *mut *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn inet6_opt_find(
-        extbufp: *mut illumos_ddi_dki::c_void,
+        extbufp: *mut illumos_sys_hdrs::c_void,
         extlen: socklen_t,
-        offset: illumos_ddi_dki::c_int,
+        offset: illumos_sys_hdrs::c_int,
         type_: u8,
         lenp: *mut socklen_t,
-        databufp: *mut *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        databufp: *mut *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn inet6_opt_get_val(
-        databuf: *mut illumos_ddi_dki::c_void,
-        offset: illumos_ddi_dki::c_int,
-        val: *mut illumos_ddi_dki::c_void,
+        databuf: *mut illumos_sys_hdrs::c_void,
+        offset: illumos_sys_hdrs::c_int,
+        val: *mut illumos_sys_hdrs::c_void,
         vallen: socklen_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct in_prefix_t {
     pub in_prefix_addr: in_addr,
-    pub in_prefix_len: illumos_ddi_dki::c_uint,
+    pub in_prefix_len: illumos_sys_hdrs::c_uint,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -8520,7 +8520,7 @@ extern "C" {
     pub fn rwst_enter_sig(
         arg1: *mut rwstlock_t,
         arg2: krw_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rwst_exit(arg1: *mut rwstlock_t);
@@ -8528,9 +8528,9 @@ extern "C" {
 extern "C" {
     pub fn rwst_init(
         arg1: *mut rwstlock_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: krw_type_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
@@ -8540,13 +8540,13 @@ extern "C" {
     pub fn rwst_lock_held(
         arg1: *mut rwstlock_t,
         arg2: krw_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rwst_tryenter(
         arg1: *mut rwstlock_t,
         arg2: krw_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rwst_owner(arg1: *mut rwstlock_t) -> *mut _kthread;
@@ -8561,13 +8561,13 @@ pub type iovec_t = iovec;
 pub const uio_seg_UIO_USERSPACE: uio_seg = 0;
 pub const uio_seg_UIO_SYSSPACE: uio_seg = 1;
 pub const uio_seg_UIO_USERISPACE: uio_seg = 2;
-pub type uio_seg = illumos_ddi_dki::c_uint;
+pub type uio_seg = illumos_sys_hdrs::c_uint;
 pub use self::uio_seg as uio_seg_t;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct uio {
     pub uio_iov: *mut iovec_t,
-    pub uio_iovcnt: illumos_ddi_dki::c_int,
+    pub uio_iovcnt: illumos_sys_hdrs::c_int,
     pub _uio_offset: lloff_t,
     pub uio_segflg: uio_seg_t,
     pub uio_fmode: u16,
@@ -8579,8 +8579,8 @@ pub type uio_t = uio;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct uioa_page_s {
-    pub uioa_pfncnt: illumos_ddi_dki::c_int,
-    pub uioa_ppp: *mut *mut illumos_ddi_dki::c_void,
+    pub uioa_pfncnt: illumos_sys_hdrs::c_int,
+    pub uioa_ppp: *mut *mut illumos_sys_hdrs::c_void,
     pub uioa_base: caddr_t,
     pub uioa_len: size_t,
 }
@@ -8589,7 +8589,7 @@ pub type uioa_page_t = uioa_page_s;
 #[derive(Copy, Clone)]
 pub struct uioa_s {
     pub uio_iov: *mut iovec_t,
-    pub uio_iovcnt: illumos_ddi_dki::c_int,
+    pub uio_iovcnt: illumos_sys_hdrs::c_int,
     pub _uio_offset: lloff_t,
     pub uio_segflg: uio_seg_t,
     pub uio_fmode: u16,
@@ -8599,14 +8599,14 @@ pub struct uioa_s {
     pub uioa_state: u32,
     pub uioa_mbytes: ssize_t,
     pub uioa_lcur: *mut uioa_page_t,
-    pub uioa_lppp: *mut *mut illumos_ddi_dki::c_void,
-    pub uioa_hwst: [*mut illumos_ddi_dki::c_void; 4usize],
+    pub uioa_lppp: *mut *mut illumos_sys_hdrs::c_void,
+    pub uioa_hwst: [*mut illumos_sys_hdrs::c_void; 4usize],
     pub uioa_locked: [uioa_page_t; 16usize],
 }
 pub type uioa_t = uioa_s;
 pub const xuio_type_UIOTYPE_ASYNCIO: xuio_type = 0;
 pub const xuio_type_UIOTYPE_ZEROCOPY: xuio_type = 1;
-pub type xuio_type = illumos_ddi_dki::c_uint;
+pub type xuio_type = illumos_sys_hdrs::c_uint;
 pub use self::xuio_type as xuio_type_t;
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -8627,20 +8627,20 @@ pub struct xuio__bindgen_ty_1__bindgen_ty_1 {
     pub xu_a_state: u32,
     pub xu_a_mbytes: ssize_t,
     pub xu_a_lcur: *mut uioa_page_t,
-    pub xu_a_lppp: *mut *mut illumos_ddi_dki::c_void,
-    pub xu_a_hwst: [*mut illumos_ddi_dki::c_void; 4usize],
+    pub xu_a_lppp: *mut *mut illumos_sys_hdrs::c_void,
+    pub xu_a_hwst: [*mut illumos_sys_hdrs::c_void; 4usize],
     pub xu_a_locked: [uioa_page_t; 16usize],
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct xuio__bindgen_ty_1__bindgen_ty_2 {
-    pub xu_zc_rw: illumos_ddi_dki::c_int,
-    pub xu_zc_priv: *mut illumos_ddi_dki::c_void,
+    pub xu_zc_rw: illumos_sys_hdrs::c_int,
+    pub xu_zc_priv: *mut illumos_sys_hdrs::c_void,
 }
 pub type xuio_t = xuio;
 pub const uio_rw_UIO_READ: uio_rw = 0;
 pub const uio_rw_UIO_WRITE: uio_rw = 1;
-pub type uio_rw = illumos_ddi_dki::c_uint;
+pub type uio_rw = illumos_sys_hdrs::c_uint;
 pub use self::uio_rw as uio_rw_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -8651,32 +8651,32 @@ pub struct uioasync_s {
 pub type uioasync_t = uioasync_s;
 extern "C" {
     pub fn uiomove(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: size_t,
         arg3: uio_rw,
         arg4: *mut uio_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn uio_prefaultpages(arg1: ssize_t, arg2: *mut uio_t);
 }
 extern "C" {
     pub fn uiocopy(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: size_t,
         arg3: uio_rw,
         arg4: *mut uio_t,
         arg5: *mut size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ureadc(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: *mut uio_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn uwritec(arg1: *mut uio) -> illumos_ddi_dki::c_int;
+    pub fn uwritec(arg1: *mut uio) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn uioskip(arg1: *mut uio_t, arg2: size_t);
@@ -8686,33 +8686,33 @@ extern "C" {
         arg1: *mut uio_t,
         arg2: *mut uio_t,
         arg3: *mut iovec_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn uioamove(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: size_t,
         arg3: uio_rw,
         arg4: *mut uioa_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn uioainit(
         arg1: *mut uio_t,
         arg2: *mut uioa_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn uioafini(
         arg1: *mut uio_t,
         arg2: *mut uioa_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut uioasync: uioasync_t;
 }
-pub type rlim_t = illumos_ddi_dki::c_ulong;
+pub type rlim_t = illumos_sys_hdrs::c_ulong;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct rlimit {
@@ -8731,45 +8731,45 @@ pub struct rlimit64 {
 pub struct rusage {
     pub ru_utime: timeval,
     pub ru_stime: timeval,
-    pub ru_maxrss: illumos_ddi_dki::c_long,
-    pub ru_ixrss: illumos_ddi_dki::c_long,
-    pub ru_idrss: illumos_ddi_dki::c_long,
-    pub ru_isrss: illumos_ddi_dki::c_long,
-    pub ru_minflt: illumos_ddi_dki::c_long,
-    pub ru_majflt: illumos_ddi_dki::c_long,
-    pub ru_nswap: illumos_ddi_dki::c_long,
-    pub ru_inblock: illumos_ddi_dki::c_long,
-    pub ru_oublock: illumos_ddi_dki::c_long,
-    pub ru_msgsnd: illumos_ddi_dki::c_long,
-    pub ru_msgrcv: illumos_ddi_dki::c_long,
-    pub ru_nsignals: illumos_ddi_dki::c_long,
-    pub ru_nvcsw: illumos_ddi_dki::c_long,
-    pub ru_nivcsw: illumos_ddi_dki::c_long,
+    pub ru_maxrss: illumos_sys_hdrs::c_long,
+    pub ru_ixrss: illumos_sys_hdrs::c_long,
+    pub ru_idrss: illumos_sys_hdrs::c_long,
+    pub ru_isrss: illumos_sys_hdrs::c_long,
+    pub ru_minflt: illumos_sys_hdrs::c_long,
+    pub ru_majflt: illumos_sys_hdrs::c_long,
+    pub ru_nswap: illumos_sys_hdrs::c_long,
+    pub ru_inblock: illumos_sys_hdrs::c_long,
+    pub ru_oublock: illumos_sys_hdrs::c_long,
+    pub ru_msgsnd: illumos_sys_hdrs::c_long,
+    pub ru_msgrcv: illumos_sys_hdrs::c_long,
+    pub ru_nsignals: illumos_sys_hdrs::c_long,
+    pub ru_nvcsw: illumos_sys_hdrs::c_long,
+    pub ru_nivcsw: illumos_sys_hdrs::c_long,
 }
 extern "C" {
     pub fn assfail(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-        arg3: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+        arg3: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn assfail3(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: uintmax_t,
-        arg3: *const illumos_ddi_dki::c_char,
+        arg3: *const illumos_sys_hdrs::c_char,
         arg4: uintmax_t,
-        arg5: *const illumos_ddi_dki::c_char,
-        arg6: illumos_ddi_dki::c_int,
+        arg5: *const illumos_sys_hdrs::c_char,
+        arg6: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
-    pub fn abort_sequence_enter(arg1: *mut illumos_ddi_dki::c_char);
+    pub fn abort_sequence_enter(arg1: *mut illumos_sys_hdrs::c_char);
 }
 extern "C" {
-    pub fn debug_enter(arg1: *mut illumos_ddi_dki::c_char);
+    pub fn debug_enter(arg1: *mut illumos_sys_hdrs::c_char);
 }
-pub type model_t = illumos_ddi_dki::c_uint;
+pub type model_t = illumos_sys_hdrs::c_uint;
 extern "C" {
     pub fn lwp_getdatamodel(arg1: *mut _klwp) -> model_t;
 }
@@ -8780,19 +8780,19 @@ pub const fault_type_F_INVAL: fault_type = 0;
 pub const fault_type_F_PROT: fault_type = 1;
 pub const fault_type_F_SOFTLOCK: fault_type = 2;
 pub const fault_type_F_SOFTUNLOCK: fault_type = 3;
-pub type fault_type = illumos_ddi_dki::c_uint;
+pub type fault_type = illumos_sys_hdrs::c_uint;
 pub const lock_type_L_PAGELOCK: lock_type = 0;
 pub const lock_type_L_PAGEUNLOCK: lock_type = 1;
-pub type lock_type = illumos_ddi_dki::c_uint;
+pub type lock_type = illumos_sys_hdrs::c_uint;
 pub const seg_rw_S_OTHER: seg_rw = 0;
 pub const seg_rw_S_READ: seg_rw = 1;
 pub const seg_rw_S_WRITE: seg_rw = 2;
 pub const seg_rw_S_EXEC: seg_rw = 3;
 pub const seg_rw_S_CREATE: seg_rw = 4;
 pub const seg_rw_S_READ_NOCOW: seg_rw = 5;
-pub type seg_rw = illumos_ddi_dki::c_uint;
+pub type seg_rw = illumos_sys_hdrs::c_uint;
 pub const segcapability_t_S_CAPABILITY_NOMINFLT: segcapability_t = 0;
-pub type segcapability_t = illumos_ddi_dki::c_uint;
+pub type segcapability_t = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct vmem {
@@ -8803,13 +8803,13 @@ pub type vmem_alloc_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut vmem_t,
         arg2: size_t,
-        arg3: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void,
+        arg3: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void,
 >;
 pub type vmem_free_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut vmem_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
     ),
 >;
@@ -8818,13 +8818,13 @@ pub type vmem_ximport_t = ::core::option::Option<
         arg1: *mut vmem_t,
         arg2: *mut size_t,
         arg3: size_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void,
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void,
 >;
 extern "C" {
     pub fn vmem_init(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
         arg4: size_t,
         arg5: vmem_alloc_t,
@@ -8832,38 +8832,38 @@ extern "C" {
     ) -> *mut vmem_t;
 }
 extern "C" {
-    pub fn vmem_update(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn vmem_update(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn vmem_is_populator() -> illumos_ddi_dki::c_int;
+    pub fn vmem_is_populator() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut vmem_seg_size: size_t;
 }
 extern "C" {
     pub fn vmem_create(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
         arg4: size_t,
         arg5: vmem_alloc_t,
         arg6: vmem_free_t,
         arg7: *mut vmem_t,
         arg8: size_t,
-        arg9: illumos_ddi_dki::c_int,
+        arg9: illumos_sys_hdrs::c_int,
     ) -> *mut vmem_t;
 }
 extern "C" {
     pub fn vmem_xcreate(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
         arg4: size_t,
         arg5: vmem_ximport_t,
         arg6: vmem_free_t,
         arg7: *mut vmem_t,
         arg8: size_t,
-        arg9: illumos_ddi_dki::c_int,
+        arg9: illumos_sys_hdrs::c_int,
     ) -> *mut vmem_t;
 }
 extern "C" {
@@ -8873,8 +8873,8 @@ extern "C" {
     pub fn vmem_alloc(
         arg1: *mut vmem_t,
         arg2: size_t,
-        arg3: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg3: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn vmem_xalloc(
@@ -8883,57 +8883,59 @@ extern "C" {
         arg3: size_t,
         arg4: size_t,
         arg5: size_t,
-        arg6: *mut illumos_ddi_dki::c_void,
-        arg7: *mut illumos_ddi_dki::c_void,
-        arg8: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg6: *mut illumos_sys_hdrs::c_void,
+        arg7: *mut illumos_sys_hdrs::c_void,
+        arg8: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn vmem_free(
         arg1: *mut vmem_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
     );
 }
 extern "C" {
     pub fn vmem_xfree(
         arg1: *mut vmem_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
     );
 }
 extern "C" {
     pub fn vmem_add(
         arg1: *mut vmem_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn vmem_contains(
         arg1: *mut vmem_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vmem_walk(
         arg1: *mut vmem_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: ::core::option::Option<
             unsafe extern "C" fn(
-                arg1: *mut illumos_ddi_dki::c_void,
-                arg2: *mut illumos_ddi_dki::c_void,
+                arg1: *mut illumos_sys_hdrs::c_void,
+                arg2: *mut illumos_sys_hdrs::c_void,
                 arg3: size_t,
             ),
         >,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
-    pub fn vmem_size(arg1: *mut vmem_t, arg2: illumos_ddi_dki::c_int)
-        -> size_t;
+    pub fn vmem_size(
+        arg1: *mut vmem_t,
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> size_t;
 }
 extern "C" {
     pub fn vmem_qcache_reap(vmp: *mut vmem_t);
@@ -8941,24 +8943,24 @@ extern "C" {
 extern "C" {
     pub fn kmem_alloc(
         size: size_t,
-        kmflags: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        kmflags: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn kmem_zalloc(
         size: size_t,
-        kmflags: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        kmflags: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
-    pub fn kmem_free(buf: *mut illumos_ddi_dki::c_void, size: size_t);
+    pub fn kmem_free(buf: *mut illumos_sys_hdrs::c_void, size: size_t);
 }
 extern "C" {
     pub fn kmem_alloc_tryhard(
         size: size_t,
         alloc_size: *mut size_t,
-        kmflags: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        kmflags: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn kmem_dump_init(arg1: size_t);
@@ -8968,7 +8970,7 @@ extern "C" {
 }
 extern "C" {
     pub fn kmem_dump_finish(
-        buf: *mut illumos_ddi_dki::c_char,
+        buf: *mut illumos_sys_hdrs::c_char,
         size: size_t,
     ) -> size_t;
 }
@@ -8978,10 +8980,10 @@ pub const kmem_cbrc_KMEM_CBRC_NO: kmem_cbrc = 1;
 pub const kmem_cbrc_KMEM_CBRC_LATER: kmem_cbrc = 2;
 pub const kmem_cbrc_KMEM_CBRC_DONT_NEED: kmem_cbrc = 3;
 pub const kmem_cbrc_KMEM_CBRC_DONT_KNOW: kmem_cbrc = 4;
-pub type kmem_cbrc = illumos_ddi_dki::c_uint;
+pub type kmem_cbrc = illumos_sys_hdrs::c_uint;
 pub use self::kmem_cbrc as kmem_cbrc_t;
 extern "C" {
-    pub static mut kmem_ready: illumos_ddi_dki::c_int;
+    pub static mut kmem_ready: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut kmem_reapahead: pgcnt_t;
@@ -9005,7 +9007,7 @@ extern "C" {
     pub fn kmem_reap_idspace();
 }
 extern "C" {
-    pub fn kmem_debugging() -> illumos_ddi_dki::c_int;
+    pub fn kmem_debugging() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kmem_avail() -> size_t;
@@ -9015,28 +9017,28 @@ extern "C" {
 }
 extern "C" {
     pub fn kmem_cache_create(
-        arg1: *mut illumos_ddi_dki::c_char,
+        arg1: *mut illumos_sys_hdrs::c_char,
         arg2: size_t,
         arg3: size_t,
         arg4: ::core::option::Option<
             unsafe extern "C" fn(
-                arg1: *mut illumos_ddi_dki::c_void,
-                arg2: *mut illumos_ddi_dki::c_void,
-                arg3: illumos_ddi_dki::c_int,
-            ) -> illumos_ddi_dki::c_int,
+                arg1: *mut illumos_sys_hdrs::c_void,
+                arg2: *mut illumos_sys_hdrs::c_void,
+                arg3: illumos_sys_hdrs::c_int,
+            ) -> illumos_sys_hdrs::c_int,
         >,
         arg5: ::core::option::Option<
             unsafe extern "C" fn(
-                arg1: *mut illumos_ddi_dki::c_void,
-                arg2: *mut illumos_ddi_dki::c_void,
+                arg1: *mut illumos_sys_hdrs::c_void,
+                arg2: *mut illumos_sys_hdrs::c_void,
             ),
         >,
         arg6: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
-        arg7: *mut illumos_ddi_dki::c_void,
+        arg7: *mut illumos_sys_hdrs::c_void,
         arg8: *mut vmem_t,
-        arg9: illumos_ddi_dki::c_int,
+        arg9: illumos_sys_hdrs::c_int,
     ) -> *mut kmem_cache_t;
 }
 extern "C" {
@@ -9044,10 +9046,10 @@ extern "C" {
         arg1: *mut kmem_cache_t,
         arg2: ::core::option::Option<
             unsafe extern "C" fn(
-                arg1: *mut illumos_ddi_dki::c_void,
-                arg2: *mut illumos_ddi_dki::c_void,
+                arg1: *mut illumos_sys_hdrs::c_void,
+                arg2: *mut illumos_sys_hdrs::c_void,
                 arg3: size_t,
-                arg4: *mut illumos_ddi_dki::c_void,
+                arg4: *mut illumos_sys_hdrs::c_void,
             ) -> kmem_cbrc_t,
         >,
     );
@@ -9058,19 +9060,19 @@ extern "C" {
 extern "C" {
     pub fn kmem_cache_alloc(
         arg1: *mut kmem_cache_t,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn kmem_cache_free(
         arg1: *mut kmem_cache_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
     pub fn kmem_cache_stat(
         arg1: *mut kmem_cache_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
     ) -> u64;
 }
 extern "C" {
@@ -9082,7 +9084,7 @@ extern "C" {
 extern "C" {
     pub fn kmem_cache_move_notify(
         arg1: *mut kmem_cache_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     );
 }
 #[repr(C)]
@@ -9109,61 +9111,63 @@ extern "C" {
 extern "C" {
     pub fn list_insert_after(
         arg1: *mut list_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
     pub fn list_insert_before(
         arg1: *mut list_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
     pub fn list_insert_head(
         arg1: *mut list_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
     pub fn list_insert_tail(
         arg1: *mut list_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
-    pub fn list_remove(arg1: *mut list_t, arg2: *mut illumos_ddi_dki::c_void);
+    pub fn list_remove(arg1: *mut list_t, arg2: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn list_remove_head(arg1: *mut list_t) -> *mut illumos_ddi_dki::c_void;
+    pub fn list_remove_head(arg1: *mut list_t)
+        -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
-    pub fn list_remove_tail(arg1: *mut list_t) -> *mut illumos_ddi_dki::c_void;
+    pub fn list_remove_tail(arg1: *mut list_t)
+        -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn list_move_tail(arg1: *mut list_t, arg2: *mut list_t);
 }
 extern "C" {
-    pub fn list_head(arg1: *mut list_t) -> *mut illumos_ddi_dki::c_void;
+    pub fn list_head(arg1: *mut list_t) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
-    pub fn list_tail(arg1: *mut list_t) -> *mut illumos_ddi_dki::c_void;
+    pub fn list_tail(arg1: *mut list_t) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn list_next(
         arg1: *mut list_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg2: *mut illumos_sys_hdrs::c_void,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn list_prev(
         arg1: *mut list_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg2: *mut illumos_sys_hdrs::c_void,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
-    pub fn list_is_empty(arg1: *mut list_t) -> illumos_ddi_dki::c_int;
+    pub fn list_is_empty(arg1: *mut list_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn list_link_init(arg1: *mut list_node_t);
@@ -9172,12 +9176,12 @@ extern "C" {
     pub fn list_link_replace(arg1: *mut list_node_t, arg2: *mut list_node_t);
 }
 extern "C" {
-    pub fn list_link_active(arg1: *mut list_node_t) -> illumos_ddi_dki::c_int;
+    pub fn list_link_active(arg1: *mut list_node_t) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct buf {
-    pub b_flags: illumos_ddi_dki::c_int,
+    pub b_flags: illumos_sys_hdrs::c_int,
     pub b_forw: *mut buf,
     pub b_back: *mut buf,
     pub av_forw: *mut buf,
@@ -9186,7 +9190,7 @@ pub struct buf {
     pub b_bcount: size_t,
     pub b_un: buf__bindgen_ty_1,
     pub _b_blkno: lldaddr_t,
-    pub b_obs1: illumos_ddi_dki::c_char,
+    pub b_obs1: illumos_sys_hdrs::c_char,
     pub b_resid: size_t,
     pub b_start: clock_t,
     pub b_proc: *mut proc_,
@@ -9194,19 +9198,19 @@ pub struct buf {
     pub b_obs2: clock_t,
     pub b_bufsize: size_t,
     pub b_iodone: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut buf) -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn(arg1: *mut buf) -> illumos_sys_hdrs::c_int,
     >,
     pub b_vp: *mut vnode,
     pub b_chain: *mut buf,
-    pub b_obs3: illumos_ddi_dki::c_int,
-    pub b_error: illumos_ddi_dki::c_int,
-    pub b_private: *mut illumos_ddi_dki::c_void,
+    pub b_obs3: illumos_sys_hdrs::c_int,
+    pub b_error: illumos_sys_hdrs::c_int,
+    pub b_private: *mut illumos_sys_hdrs::c_void,
     pub b_edev: dev_t,
     pub b_sem: ksema_t,
     pub b_io: ksema_t,
     pub b_list: *mut buf,
     pub b_shadow: *mut *mut page,
-    pub b_dip: *mut illumos_ddi_dki::c_void,
+    pub b_dip: *mut illumos_sys_hdrs::c_void,
     pub b_file: *mut vnode,
     pub b_offset: offset_t,
 }
@@ -9223,7 +9227,7 @@ pub type buf_t = buf;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct diskhd {
-    pub b_flags: illumos_ddi_dki::c_int,
+    pub b_flags: illumos_sys_hdrs::c_int,
     pub b_forw: *mut buf,
     pub b_back: *mut buf,
     pub av_forw: *mut buf,
@@ -9244,18 +9248,18 @@ pub struct biostats {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct hbuf {
-    pub b_flags: illumos_ddi_dki::c_int,
+    pub b_flags: illumos_sys_hdrs::c_int,
     pub b_forw: *mut buf,
     pub b_back: *mut buf,
     pub av_forw: *mut buf,
     pub av_back: *mut buf,
-    pub b_length: illumos_ddi_dki::c_int,
+    pub b_length: illumos_sys_hdrs::c_int,
     pub b_lock: kmutex_t,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct dwbuf {
-    pub b_flags: illumos_ddi_dki::c_int,
+    pub b_flags: illumos_sys_hdrs::c_int,
     pub b_forw: *mut buf,
     pub b_back: *mut buf,
     pub av_forw: *mut buf,
@@ -9276,7 +9280,7 @@ extern "C" {
 extern "C" {
     pub static mut bio_lufs_strategy: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
+            arg1: *mut illumos_sys_hdrs::c_void,
             arg2: *mut buf_t,
         ),
     >;
@@ -9284,45 +9288,45 @@ extern "C" {
 extern "C" {
     pub static mut bio_snapshot_strategy: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
+            arg1: *mut illumos_sys_hdrs::c_void,
             arg2: *mut buf_t,
         ),
     >;
 }
 extern "C" {
-    pub fn bcheck(arg1: dev_t, arg2: *mut buf) -> illumos_ddi_dki::c_int;
+    pub fn bcheck(arg1: dev_t, arg2: *mut buf) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn iowait(arg1: *mut buf) -> illumos_ddi_dki::c_int;
+    pub fn iowait(arg1: *mut buf) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hash2ints(
-        x: illumos_ddi_dki::c_int,
-        y: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        x: illumos_sys_hdrs::c_int,
+        y: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn bio_busy(arg1: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn bio_busy(arg1: illumos_sys_hdrs::c_int) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn biowait(arg1: *mut buf) -> illumos_ddi_dki::c_int;
+    pub fn biowait(arg1: *mut buf) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn biomodified(arg1: *mut buf) -> illumos_ddi_dki::c_int;
+    pub fn biomodified(arg1: *mut buf) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn geterror(arg1: *mut buf) -> illumos_ddi_dki::c_int;
+    pub fn geterror(arg1: *mut buf) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn minphys(arg1: *mut buf);
 }
 extern "C" {
     pub fn bwrite_common(
-        ufsvfsp: *mut illumos_ddi_dki::c_void,
+        ufsvfsp: *mut illumos_sys_hdrs::c_void,
         arg1: *mut buf,
-        force_wait: illumos_ddi_dki::c_int,
-        do_relse: illumos_ddi_dki::c_int,
-        clear_flags: illumos_ddi_dki::c_int,
+        force_wait: illumos_sys_hdrs::c_int,
+        do_relse: illumos_sys_hdrs::c_int,
+        clear_flags: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
@@ -9358,8 +9362,8 @@ extern "C" {
 extern "C" {
     pub fn bfinval(
         arg1: dev_t,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn binit();
@@ -9379,8 +9383,8 @@ extern "C" {
 extern "C" {
     pub fn bp_mapin_common(
         arg1: *mut buf,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn bp_mapout(arg1: *mut buf);
@@ -9388,24 +9392,24 @@ extern "C" {
 extern "C" {
     pub fn bp_copyin(
         arg1: *mut buf,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: offset_t,
         arg4: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn bp_copyout(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: *mut buf,
         arg3: offset_t,
         arg4: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn bp_init(arg1: size_t, arg2: uint_t);
 }
 extern "C" {
-    pub fn bp_color(arg1: *mut buf) -> illumos_ddi_dki::c_int;
+    pub fn bp_color(arg1: *mut buf) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn pageio_done(arg1: *mut buf);
@@ -9414,15 +9418,15 @@ extern "C" {
     pub fn bread(
         arg1: dev_t,
         arg2: daddr_t,
-        arg3: illumos_ddi_dki::c_long,
+        arg3: illumos_sys_hdrs::c_long,
     ) -> *mut buf;
 }
 extern "C" {
     pub fn bread_common(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: dev_t,
         arg3: daddr_t,
-        arg4: illumos_ddi_dki::c_long,
+        arg4: illumos_sys_hdrs::c_long,
     ) -> *mut buf;
 }
 extern "C" {
@@ -9430,27 +9434,27 @@ extern "C" {
         arg1: dev_t,
         arg2: daddr_t,
         arg3: daddr_t,
-        arg4: illumos_ddi_dki::c_long,
+        arg4: illumos_sys_hdrs::c_long,
     ) -> *mut buf;
 }
 extern "C" {
     pub fn getblk(
         arg1: dev_t,
         arg2: daddr_t,
-        arg3: illumos_ddi_dki::c_long,
+        arg3: illumos_sys_hdrs::c_long,
     ) -> *mut buf;
 }
 extern "C" {
     pub fn getblk_common(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: dev_t,
         arg3: daddr_t,
-        arg4: illumos_ddi_dki::c_long,
-        arg5: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_long,
+        arg5: illumos_sys_hdrs::c_int,
     ) -> *mut buf;
 }
 extern "C" {
-    pub fn ngeteblk(arg1: illumos_ddi_dki::c_long) -> *mut buf;
+    pub fn ngeteblk(arg1: illumos_sys_hdrs::c_long) -> *mut buf;
 }
 extern "C" {
     pub fn geteblk() -> *mut buf;
@@ -9460,11 +9464,11 @@ extern "C" {
         arg1: *mut page,
         arg2: size_t,
         arg3: *mut vnode,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
     ) -> *mut buf;
 }
 extern "C" {
-    pub fn bioerror(bp: *mut buf, error: illumos_ddi_dki::c_int);
+    pub fn bioerror(bp: *mut buf, error: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn bioreset(bp: *mut buf);
@@ -9477,10 +9481,10 @@ extern "C" {
         arg4: dev_t,
         arg5: daddr_t,
         arg6: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut buf) -> illumos_ddi_dki::c_int,
+            unsafe extern "C" fn(arg1: *mut buf) -> illumos_sys_hdrs::c_int,
         >,
         arg7: *mut buf,
-        arg8: illumos_ddi_dki::c_int,
+        arg8: illumos_sys_hdrs::c_int,
     ) -> *mut buf;
 }
 extern "C" {
@@ -9490,13 +9494,13 @@ extern "C" {
     pub fn __dtrace_probe_set__error(arg1: usize);
 }
 extern "C" {
-    pub static mut sdt_prefix: *const illumos_ddi_dki::c_char;
+    pub static mut sdt_prefix: *const illumos_sys_hdrs::c_char;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct sdt_probedesc {
-    pub sdpd_name: *mut illumos_ddi_dki::c_char,
-    pub sdpd_offset: illumos_ddi_dki::c_ulong,
+    pub sdpd_name: *mut illumos_sys_hdrs::c_char,
+    pub sdpd_offset: illumos_sys_hdrs::c_ulong,
     pub sdpd_next: *mut sdt_probedesc,
 }
 pub type sdt_probedesc_t = sdt_probedesc;
@@ -9566,14 +9570,14 @@ pub const vtype_VPROC: vtype = 8;
 pub const vtype_VSOCK: vtype = 9;
 pub const vtype_VPORT: vtype = 10;
 pub const vtype_VBAD: vtype = 11;
-pub type vtype = illumos_ddi_dki::c_uint;
+pub type vtype = illumos_sys_hdrs::c_uint;
 pub use self::vtype as vtype_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct vsd_node {
     pub vs_nodes: list_node_t,
     pub vs_nkeys: uint_t,
-    pub vs_value: *mut *mut illumos_ddi_dki::c_void,
+    pub vs_value: *mut *mut illumos_sys_hdrs::c_void,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -9586,7 +9590,7 @@ pub struct vnode {
     pub v_lock: kmutex_t,
     pub v_flag: uint_t,
     pub v_count: uint_t,
-    pub v_data: *mut illumos_ddi_dki::c_void,
+    pub v_data: *mut illumos_sys_hdrs::c_void,
     pub v_vfsp: *mut vfs,
     pub v_stream: *mut stdata,
     pub v_type: vtype,
@@ -9598,16 +9602,16 @@ pub struct vnode {
     pub v_shrlocks: *mut shrlocklist,
     pub v_nbllock: krwlock_t,
     pub v_cv: kcondvar_t,
-    pub v_locality: *mut illumos_ddi_dki::c_void,
+    pub v_locality: *mut illumos_sys_hdrs::c_void,
     pub v_femhead: *mut fem_head,
-    pub v_path: *mut illumos_ddi_dki::c_char,
+    pub v_path: *mut illumos_sys_hdrs::c_char,
     pub v_path_stamp: hrtime_t,
     pub v_rdcnt: uint_t,
     pub v_wrcnt: uint_t,
     pub v_mmap_read: u_longlong_t,
     pub v_mmap_write: u_longlong_t,
-    pub v_mpssdata: *mut illumos_ddi_dki::c_void,
-    pub v_fopdata: *mut illumos_ddi_dki::c_void,
+    pub v_mpssdata: *mut illumos_sys_hdrs::c_void,
+    pub v_fopdata: *mut illumos_sys_hdrs::c_void,
     pub v_vsd_lock: kmutex_t,
     pub v_vsd: *mut vsd_node,
     pub v_xattrdir: *mut vnode,
@@ -9618,10 +9622,10 @@ pub type vnode_t = vnode;
 #[derive(Debug, Copy, Clone)]
 pub struct vn_vfslocks_entry {
     pub ve_lock: rwstlock_t,
-    pub ve_vpvfs: *mut illumos_ddi_dki::c_void,
+    pub ve_vpvfs: *mut illumos_sys_hdrs::c_void,
     pub ve_next: *mut vn_vfslocks_entry,
     pub ve_refcnt: u32,
-    pub pad: [illumos_ddi_dki::c_char; 20usize],
+    pub pad: [illumos_sys_hdrs::c_char; 20usize],
 }
 pub type vn_vfslocks_entry_t = vn_vfslocks_entry;
 #[repr(C)]
@@ -9684,17 +9688,17 @@ pub type xvattr_t = xvattr;
 pub type vattr32_t = vattr_t;
 pub const rm_RMFILE: rm = 0;
 pub const rm_RMDIRECTORY: rm = 1;
-pub type rm = illumos_ddi_dki::c_uint;
+pub type rm = illumos_sys_hdrs::c_uint;
 pub const symfollow_NO_FOLLOW: symfollow = 0;
 pub const symfollow_FOLLOW: symfollow = 1;
-pub type symfollow = illumos_ddi_dki::c_uint;
+pub type symfollow = illumos_sys_hdrs::c_uint;
 pub const vcexcl_NONEXCL: vcexcl = 0;
 pub const vcexcl_EXCL: vcexcl = 1;
-pub type vcexcl = illumos_ddi_dki::c_uint;
+pub type vcexcl = illumos_sys_hdrs::c_uint;
 pub const create_CRCREAT: create = 0;
 pub const create_CRMKNOD: create = 1;
 pub const create_CRMKDIR: create = 2;
-pub type create = illumos_ddi_dki::c_uint;
+pub type create = illumos_sys_hdrs::c_uint;
 pub use self::create as create_t;
 pub use self::rm as rm_t;
 pub use self::symfollow as symfollow_t;
@@ -9712,22 +9716,22 @@ pub const vnevent_VE_TRUNCATE: vnevent = 9;
 pub const vnevent_VE_PRE_RENAME_SRC: vnevent = 10;
 pub const vnevent_VE_PRE_RENAME_DEST: vnevent = 11;
 pub const vnevent_VE_PRE_RENAME_DEST_DIR: vnevent = 12;
-pub type vnevent = illumos_ddi_dki::c_uint;
+pub type vnevent = illumos_sys_hdrs::c_uint;
 pub use self::vnevent as vnevent_t;
 pub const v_mode_V_READ: v_mode = 0;
 pub const v_mode_V_WRITE: v_mode = 1;
 pub const v_mode_V_RDORWR: v_mode = 2;
 pub const v_mode_V_RDANDWR: v_mode = 3;
-pub type v_mode = illumos_ddi_dki::c_uint;
+pub type v_mode = illumos_sys_hdrs::c_uint;
 pub use self::v_mode as v_mode_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct vsecattr {
     pub vsa_mask: uint_t,
-    pub vsa_aclcnt: illumos_ddi_dki::c_int,
-    pub vsa_aclentp: *mut illumos_ddi_dki::c_void,
-    pub vsa_dfaclcnt: illumos_ddi_dki::c_int,
-    pub vsa_dfaclentp: *mut illumos_ddi_dki::c_void,
+    pub vsa_aclcnt: illumos_sys_hdrs::c_int,
+    pub vsa_aclentp: *mut illumos_sys_hdrs::c_void,
+    pub vsa_dfaclcnt: illumos_sys_hdrs::c_int,
+    pub vsa_dfaclentp: *mut illumos_sys_hdrs::c_void,
     pub vsa_aclentsz: size_t,
     pub vsa_aclflags: uint_t,
 }
@@ -9736,7 +9740,7 @@ pub type vsecattr_t = vsecattr;
 #[derive(Debug, Copy, Clone)]
 pub struct caller_context {
     pub cc_pid: pid_t,
-    pub cc_sysid: illumos_ddi_dki::c_int,
+    pub cc_sysid: illumos_sys_hdrs::c_int,
     pub cc_caller_id: u_longlong_t,
     pub cc_flags: ulong_t,
 }
@@ -9789,190 +9793,190 @@ pub struct taskq {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct vnodeops {
-    pub vnop_name: *const illumos_ddi_dki::c_char,
+    pub vnop_name: *const illumos_sys_hdrs::c_char,
     pub vop_open: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
             arg3: *mut cred_t,
             arg4: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_close: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
-            arg3: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
+            arg3: illumos_sys_hdrs::c_int,
             arg4: offset_t,
             arg5: *mut cred_t,
             arg6: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_read: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: *mut uio_t,
-            arg3: illumos_ddi_dki::c_int,
+            arg3: illumos_sys_hdrs::c_int,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_write: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: *mut uio_t,
-            arg3: illumos_ddi_dki::c_int,
+            arg3: illumos_sys_hdrs::c_int,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_ioctl: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
             arg3: isize,
-            arg4: illumos_ddi_dki::c_int,
+            arg4: illumos_sys_hdrs::c_int,
             arg5: *mut cred_t,
-            arg6: *mut illumos_ddi_dki::c_int,
+            arg6: *mut illumos_sys_hdrs::c_int,
             arg7: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_setfl: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
-            arg3: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
+            arg3: illumos_sys_hdrs::c_int,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_getattr: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: *mut vattr_t,
-            arg3: illumos_ddi_dki::c_int,
+            arg3: illumos_sys_hdrs::c_int,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_setattr: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: *mut vattr_t,
-            arg3: illumos_ddi_dki::c_int,
+            arg3: illumos_sys_hdrs::c_int,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_access: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
-            arg3: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
+            arg3: illumos_sys_hdrs::c_int,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_lookup: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: *mut illumos_ddi_dki::c_char,
+            arg2: *mut illumos_sys_hdrs::c_char,
             arg3: *mut *mut vnode_t,
             arg4: *mut pathname,
-            arg5: illumos_ddi_dki::c_int,
+            arg5: illumos_sys_hdrs::c_int,
             arg6: *mut vnode_t,
             arg7: *mut cred_t,
             arg8: *mut caller_context_t,
-            arg9: *mut illumos_ddi_dki::c_int,
+            arg9: *mut illumos_sys_hdrs::c_int,
             arg10: *mut pathname,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_create: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: *mut illumos_ddi_dki::c_char,
+            arg2: *mut illumos_sys_hdrs::c_char,
             arg3: *mut vattr_t,
             arg4: vcexcl_t,
-            arg5: illumos_ddi_dki::c_int,
+            arg5: illumos_sys_hdrs::c_int,
             arg6: *mut *mut vnode_t,
             arg7: *mut cred_t,
-            arg8: illumos_ddi_dki::c_int,
+            arg8: illumos_sys_hdrs::c_int,
             arg9: *mut caller_context_t,
             arg10: *mut vsecattr_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_remove: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: *mut illumos_ddi_dki::c_char,
+            arg2: *mut illumos_sys_hdrs::c_char,
             arg3: *mut cred_t,
             arg4: *mut caller_context_t,
-            arg5: illumos_ddi_dki::c_int,
-        ) -> illumos_ddi_dki::c_int,
+            arg5: illumos_sys_hdrs::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_link: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: *mut vnode_t,
-            arg3: *mut illumos_ddi_dki::c_char,
+            arg3: *mut illumos_sys_hdrs::c_char,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-            arg6: illumos_ddi_dki::c_int,
-        ) -> illumos_ddi_dki::c_int,
+            arg6: illumos_sys_hdrs::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_rename: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: *mut illumos_ddi_dki::c_char,
+            arg2: *mut illumos_sys_hdrs::c_char,
             arg3: *mut vnode_t,
-            arg4: *mut illumos_ddi_dki::c_char,
+            arg4: *mut illumos_sys_hdrs::c_char,
             arg5: *mut cred_t,
             arg6: *mut caller_context_t,
-            arg7: illumos_ddi_dki::c_int,
-        ) -> illumos_ddi_dki::c_int,
+            arg7: illumos_sys_hdrs::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_mkdir: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: *mut illumos_ddi_dki::c_char,
+            arg2: *mut illumos_sys_hdrs::c_char,
             arg3: *mut vattr_t,
             arg4: *mut *mut vnode_t,
             arg5: *mut cred_t,
             arg6: *mut caller_context_t,
-            arg7: illumos_ddi_dki::c_int,
+            arg7: illumos_sys_hdrs::c_int,
             arg8: *mut vsecattr_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_rmdir: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: *mut illumos_ddi_dki::c_char,
+            arg2: *mut illumos_sys_hdrs::c_char,
             arg3: *mut vnode_t,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-            arg6: illumos_ddi_dki::c_int,
-        ) -> illumos_ddi_dki::c_int,
+            arg6: illumos_sys_hdrs::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_readdir: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: *mut uio_t,
             arg3: *mut cred_t,
-            arg4: *mut illumos_ddi_dki::c_int,
+            arg4: *mut illumos_sys_hdrs::c_int,
             arg5: *mut caller_context_t,
-            arg6: illumos_ddi_dki::c_int,
-        ) -> illumos_ddi_dki::c_int,
+            arg6: illumos_sys_hdrs::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_symlink: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: *mut illumos_ddi_dki::c_char,
+            arg2: *mut illumos_sys_hdrs::c_char,
             arg3: *mut vattr_t,
-            arg4: *mut illumos_ddi_dki::c_char,
+            arg4: *mut illumos_sys_hdrs::c_char,
             arg5: *mut cred_t,
             arg6: *mut caller_context_t,
-            arg7: illumos_ddi_dki::c_int,
-        ) -> illumos_ddi_dki::c_int,
+            arg7: illumos_sys_hdrs::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_readlink: ::core::option::Option<
         unsafe extern "C" fn(
@@ -9980,15 +9984,15 @@ pub struct vnodeops {
             arg2: *mut uio_t,
             arg3: *mut cred_t,
             arg4: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_fsync: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
             arg3: *mut cred_t,
             arg4: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_inactive: ::core::option::Option<
         unsafe extern "C" fn(
@@ -10002,19 +10006,19 @@ pub struct vnodeops {
             arg1: *mut vnode_t,
             arg2: *mut fid,
             arg3: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_rwlock: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
             arg3: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_rwunlock: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
             arg3: *mut caller_context_t,
         ),
     >,
@@ -10024,44 +10028,44 @@ pub struct vnodeops {
             arg2: offset_t,
             arg3: *mut offset_t,
             arg4: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_cmp: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: *mut vnode_t,
             arg3: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_frlock: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
             arg3: *mut flock64,
-            arg4: illumos_ddi_dki::c_int,
+            arg4: illumos_sys_hdrs::c_int,
             arg5: offset_t,
             arg6: *mut flk_callback,
             arg7: *mut cred_t,
             arg8: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_space: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
             arg3: *mut flock64,
-            arg4: illumos_ddi_dki::c_int,
+            arg4: illumos_sys_hdrs::c_int,
             arg5: offset_t,
             arg6: *mut cred_t,
             arg7: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_realvp: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: *mut *mut vnode_t,
             arg3: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_getpage: ::core::option::Option<
         unsafe extern "C" fn(
@@ -10076,17 +10080,17 @@ pub struct vnodeops {
             arg9: seg_rw,
             arg10: *mut cred_t,
             arg11: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_putpage: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: offset_t,
             arg3: size_t,
-            arg4: illumos_ddi_dki::c_int,
+            arg4: illumos_sys_hdrs::c_int,
             arg5: *mut cred_t,
             arg6: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_map: ::core::option::Option<
         unsafe extern "C" fn(
@@ -10100,7 +10104,7 @@ pub struct vnodeops {
             arg8: uint_t,
             arg9: *mut cred_t,
             arg10: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_addmap: ::core::option::Option<
         unsafe extern "C" fn(
@@ -10114,7 +10118,7 @@ pub struct vnodeops {
             arg8: uint_t,
             arg9: *mut cred_t,
             arg10: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_delmap: ::core::option::Option<
         unsafe extern "C" fn(
@@ -10128,17 +10132,17 @@ pub struct vnodeops {
             arg8: uint_t,
             arg9: *mut cred_t,
             arg10: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_poll: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_short,
-            arg3: illumos_ddi_dki::c_int,
-            arg4: *mut illumos_ddi_dki::c_short,
+            arg2: illumos_sys_hdrs::c_short,
+            arg3: illumos_sys_hdrs::c_int,
+            arg4: *mut illumos_sys_hdrs::c_short,
             arg5: *mut *mut pollhead,
             arg6: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_dump: ::core::option::Option<
         unsafe extern "C" fn(
@@ -10147,16 +10151,16 @@ pub struct vnodeops {
             arg3: offset_t,
             arg4: offset_t,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_pathconf: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
             arg3: *mut ulong_t,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_pageio: ::core::option::Option<
         unsafe extern "C" fn(
@@ -10164,25 +10168,25 @@ pub struct vnodeops {
             arg2: *mut page,
             arg3: u_offset_t,
             arg4: size_t,
-            arg5: illumos_ddi_dki::c_int,
+            arg5: illumos_sys_hdrs::c_int,
             arg6: *mut cred_t,
             arg7: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_dumpctl: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
             arg3: *mut offset_t,
             arg4: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_dispose: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: *mut page,
-            arg3: illumos_ddi_dki::c_int,
-            arg4: illumos_ddi_dki::c_int,
+            arg3: illumos_sys_hdrs::c_int,
+            arg4: illumos_sys_hdrs::c_int,
             arg5: *mut cred_t,
             arg6: *mut caller_context_t,
         ),
@@ -10191,38 +10195,38 @@ pub struct vnodeops {
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: *mut vsecattr_t,
-            arg3: illumos_ddi_dki::c_int,
+            arg3: illumos_sys_hdrs::c_int,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_getsecattr: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: *mut vsecattr_t,
-            arg3: illumos_ddi_dki::c_int,
+            arg3: illumos_sys_hdrs::c_int,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_shrlock: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
-            arg2: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
             arg3: *mut shrlock,
-            arg4: illumos_ddi_dki::c_int,
+            arg4: illumos_sys_hdrs::c_int,
             arg5: *mut cred_t,
             arg6: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_vnevent: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut vnode_t,
             arg2: vnevent_t,
             arg3: *mut vnode_t,
-            arg4: *mut illumos_ddi_dki::c_char,
+            arg4: *mut illumos_sys_hdrs::c_char,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_reqzcbuf: ::core::option::Option<
         unsafe extern "C" fn(
@@ -10231,7 +10235,7 @@ pub struct vnodeops {
             arg3: *mut xuio_t,
             arg4: *mut cred_t,
             arg5: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub vop_retzcbuf: ::core::option::Option<
         unsafe extern "C" fn(
@@ -10239,195 +10243,195 @@ pub struct vnodeops {
             arg2: *mut xuio_t,
             arg3: *mut cred_t,
             arg4: *mut caller_context_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
 }
 pub type vnodeops_t = vnodeops;
 pub type fs_generic_func_p =
-    ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>;
+    ::core::option::Option<unsafe extern "C" fn() -> illumos_sys_hdrs::c_int>;
 extern "C" {
     pub fn fop_open(
         arg1: *mut *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut cred_t,
         arg4: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_close(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: offset_t,
         arg5: *mut cred_t,
         arg6: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_read(
         arg1: *mut vnode_t,
         arg2: *mut uio_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_write(
         arg1: *mut vnode_t,
         arg2: *mut uio_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_ioctl(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: isize,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: *mut cred_t,
-        arg6: *mut illumos_ddi_dki::c_int,
+        arg6: *mut illumos_sys_hdrs::c_int,
         arg7: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_setfl(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_getattr(
         arg1: *mut vnode_t,
         arg2: *mut vattr_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_setattr(
         arg1: *mut vnode_t,
         arg2: *mut vattr_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_access(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_lookup(
         arg1: *mut vnode_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: *mut *mut vnode_t,
         arg4: *mut pathname,
-        arg5: illumos_ddi_dki::c_int,
+        arg5: illumos_sys_hdrs::c_int,
         arg6: *mut vnode_t,
         arg7: *mut cred_t,
         arg8: *mut caller_context_t,
-        arg9: *mut illumos_ddi_dki::c_int,
+        arg9: *mut illumos_sys_hdrs::c_int,
         arg10: *mut pathname,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_create(
         arg1: *mut vnode_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: *mut vattr_t,
         arg4: vcexcl_t,
-        arg5: illumos_ddi_dki::c_int,
+        arg5: illumos_sys_hdrs::c_int,
         arg6: *mut *mut vnode_t,
         arg7: *mut cred_t,
-        arg8: illumos_ddi_dki::c_int,
+        arg8: illumos_sys_hdrs::c_int,
         arg9: *mut caller_context_t,
         arg10: *mut vsecattr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_remove(
         vp: *mut vnode_t,
-        arg1: *mut illumos_ddi_dki::c_char,
+        arg1: *mut illumos_sys_hdrs::c_char,
         arg2: *mut cred_t,
         arg3: *mut caller_context_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_link(
         arg1: *mut vnode_t,
         arg2: *mut vnode_t,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-        arg6: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg6: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_rename(
         arg1: *mut vnode_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: *mut vnode_t,
-        arg4: *mut illumos_ddi_dki::c_char,
+        arg4: *mut illumos_sys_hdrs::c_char,
         arg5: *mut cred_t,
         arg6: *mut caller_context_t,
-        arg7: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg7: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_mkdir(
         arg1: *mut vnode_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: *mut vattr_t,
         arg4: *mut *mut vnode_t,
         arg5: *mut cred_t,
         arg6: *mut caller_context_t,
-        arg7: illumos_ddi_dki::c_int,
+        arg7: illumos_sys_hdrs::c_int,
         arg8: *mut vsecattr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_rmdir(
         arg1: *mut vnode_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: *mut vnode_t,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-        arg6: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg6: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_readdir(
         arg1: *mut vnode_t,
         arg2: *mut uio_t,
         arg3: *mut cred_t,
-        arg4: *mut illumos_ddi_dki::c_int,
+        arg4: *mut illumos_sys_hdrs::c_int,
         arg5: *mut caller_context_t,
-        arg6: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg6: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_symlink(
         arg1: *mut vnode_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: *mut vattr_t,
-        arg4: *mut illumos_ddi_dki::c_char,
+        arg4: *mut illumos_sys_hdrs::c_char,
         arg5: *mut cred_t,
         arg6: *mut caller_context_t,
-        arg7: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg7: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_readlink(
@@ -10435,15 +10439,15 @@ extern "C" {
         arg2: *mut uio_t,
         arg3: *mut cred_t,
         arg4: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_fsync(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut cred_t,
         arg4: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_inactive(
@@ -10457,19 +10461,19 @@ extern "C" {
         arg1: *mut vnode_t,
         arg2: *mut fid,
         arg3: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_rwlock(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_rwunlock(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut caller_context_t,
     );
 }
@@ -10479,44 +10483,44 @@ extern "C" {
         arg2: offset_t,
         arg3: *mut offset_t,
         arg4: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_cmp(
         arg1: *mut vnode_t,
         arg2: *mut vnode_t,
         arg3: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_frlock(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut flock64,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: offset_t,
         arg6: *mut flk_callback,
         arg7: *mut cred_t,
         arg8: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_space(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut flock64,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: offset_t,
         arg6: *mut cred_t,
         arg7: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_realvp(
         arg1: *mut vnode_t,
         arg2: *mut *mut vnode_t,
         arg3: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_getpage(
@@ -10531,17 +10535,17 @@ extern "C" {
         arg9: seg_rw,
         arg10: *mut cred_t,
         arg11: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_putpage(
         arg1: *mut vnode_t,
         arg2: offset_t,
         arg3: size_t,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: *mut cred_t,
         arg6: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_map(
@@ -10555,7 +10559,7 @@ extern "C" {
         arg8: uint_t,
         cr: *mut cred_t,
         arg9: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_addmap(
@@ -10569,7 +10573,7 @@ extern "C" {
         arg8: uint_t,
         arg9: *mut cred_t,
         arg10: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_delmap(
@@ -10583,17 +10587,17 @@ extern "C" {
         arg8: uint_t,
         arg9: *mut cred_t,
         arg10: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_poll(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_short,
-        arg3: illumos_ddi_dki::c_int,
-        arg4: *mut illumos_ddi_dki::c_short,
+        arg2: illumos_sys_hdrs::c_short,
+        arg3: illumos_sys_hdrs::c_int,
+        arg4: *mut illumos_sys_hdrs::c_short,
         arg5: *mut *mut pollhead,
         arg6: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_dump(
@@ -10602,16 +10606,16 @@ extern "C" {
         arg3: offset_t,
         arg4: offset_t,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_pathconf(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut ulong_t,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_pageio(
@@ -10619,25 +10623,25 @@ extern "C" {
         arg2: *mut page,
         arg3: u_offset_t,
         arg4: size_t,
-        arg5: illumos_ddi_dki::c_int,
+        arg5: illumos_sys_hdrs::c_int,
         arg6: *mut cred_t,
         arg7: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_dumpctl(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut offset_t,
         arg4: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_dispose(
         arg1: *mut vnode_t,
         arg2: *mut page,
-        arg3: illumos_ddi_dki::c_int,
-        arg4: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: *mut cred_t,
         arg6: *mut caller_context_t,
     );
@@ -10646,38 +10650,38 @@ extern "C" {
     pub fn fop_setsecattr(
         arg1: *mut vnode_t,
         arg2: *mut vsecattr_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_getsecattr(
         arg1: *mut vnode_t,
         arg2: *mut vsecattr_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_shrlock(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut shrlock,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: *mut cred_t,
         arg6: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_vnevent(
         arg1: *mut vnode_t,
         arg2: vnevent_t,
         arg3: *mut vnode_t,
-        arg4: *mut illumos_ddi_dki::c_char,
+        arg4: *mut illumos_sys_hdrs::c_char,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_reqzcbuf(
@@ -10686,7 +10690,7 @@ extern "C" {
         arg3: *mut xuio_t,
         arg4: *mut cred_t,
         arg5: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fop_retzcbuf(
@@ -10694,10 +10698,10 @@ extern "C" {
         arg2: *mut xuio_t,
         arg3: *mut cred_t,
         arg4: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn vn_alloc(arg1: illumos_ddi_dki::c_int) -> *mut vnode_t;
+    pub fn vn_alloc(arg1: illumos_sys_hdrs::c_int) -> *mut vnode_t;
 }
 extern "C" {
     pub fn vn_reinit(arg1: *mut vnode_t);
@@ -10709,46 +10713,46 @@ extern "C" {
     pub fn vn_free(arg1: *mut vnode_t);
 }
 extern "C" {
-    pub fn vn_is_readonly(arg1: *mut vnode_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_is_readonly(arg1: *mut vnode_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_is_opened(
         arg1: *mut vnode_t,
         arg2: v_mode_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_is_mapped(
         arg1: *mut vnode_t,
         arg2: v_mode_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_has_other_opens(
         arg1: *mut vnode_t,
         arg2: v_mode_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn vn_open_upgrade(arg1: *mut vnode_t, arg2: illumos_ddi_dki::c_int);
+    pub fn vn_open_upgrade(arg1: *mut vnode_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
-    pub fn vn_open_downgrade(arg1: *mut vnode_t, arg2: illumos_ddi_dki::c_int);
+    pub fn vn_open_downgrade(arg1: *mut vnode_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
-    pub fn vn_can_change_zones(vp: *mut vnode_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_can_change_zones(vp: *mut vnode_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn vn_has_flocks(arg1: *mut vnode_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_has_flocks(arg1: *mut vnode_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_has_mandatory_locks(
         arg1: *mut vnode_t,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn vn_has_cached_data(arg1: *mut vnode_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_has_cached_data(arg1: *mut vnode_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_setops(arg1: *mut vnode_t, arg2: *mut vnodeops_t);
@@ -10760,23 +10764,23 @@ extern "C" {
     pub fn vn_matchops(
         arg1: *mut vnode_t,
         arg2: *mut vnodeops_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_matchopval(
         arg1: *mut vnode_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: fs_generic_func_p,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn vn_ismntpt(arg1: *mut vnode_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_ismntpt(arg1: *mut vnode_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_mountedvfs(arg1: *mut vnode_t) -> *mut vfs;
 }
 extern "C" {
-    pub fn vn_in_dnlc(arg1: *mut vnode_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_in_dnlc(arg1: *mut vnode_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_create_cache();
@@ -10789,54 +10793,54 @@ extern "C" {
 }
 extern "C" {
     pub fn vn_open(
-        pnamep: *mut illumos_ddi_dki::c_char,
+        pnamep: *mut illumos_sys_hdrs::c_char,
         seg: uio_seg,
-        filemode: illumos_ddi_dki::c_int,
-        createmode: illumos_ddi_dki::c_int,
+        filemode: illumos_sys_hdrs::c_int,
+        createmode: illumos_sys_hdrs::c_int,
         vpp: *mut *mut vnode,
         crwhy: create,
         umask: mode_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_openat(
-        pnamep: *mut illumos_ddi_dki::c_char,
+        pnamep: *mut illumos_sys_hdrs::c_char,
         seg: uio_seg,
-        filemode: illumos_ddi_dki::c_int,
-        createmode: illumos_ddi_dki::c_int,
+        filemode: illumos_sys_hdrs::c_int,
+        createmode: illumos_sys_hdrs::c_int,
         vpp: *mut *mut vnode,
         crwhy: create,
         umask: mode_t,
         startvp: *mut vnode,
-        fd: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        fd: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_create(
-        pnamep: *mut illumos_ddi_dki::c_char,
+        pnamep: *mut illumos_sys_hdrs::c_char,
         seg: uio_seg,
         vap: *mut vattr,
         excl: vcexcl,
-        mode: illumos_ddi_dki::c_int,
+        mode: illumos_sys_hdrs::c_int,
         vpp: *mut *mut vnode,
         why: create,
-        flag: illumos_ddi_dki::c_int,
+        flag: illumos_sys_hdrs::c_int,
         umask: mode_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_createat(
-        pnamep: *mut illumos_ddi_dki::c_char,
+        pnamep: *mut illumos_sys_hdrs::c_char,
         seg: uio_seg,
         vap: *mut vattr,
         excl: vcexcl,
-        mode: illumos_ddi_dki::c_int,
+        mode: illumos_sys_hdrs::c_int,
         vpp: *mut *mut vnode,
         why: create,
-        flag: illumos_ddi_dki::c_int,
+        flag: illumos_sys_hdrs::c_int,
         umask: mode_t,
         startvp: *mut vnode,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_rdwr(
@@ -10846,11 +10850,11 @@ extern "C" {
         len: ssize_t,
         offset: offset_t,
         seg: uio_seg,
-        ioflag: illumos_ddi_dki::c_int,
+        ioflag: illumos_sys_hdrs::c_int,
         ulimit: rlim64_t,
         cr: *mut cred_t,
         residp: *mut ssize_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_rele(vp: *mut vnode);
@@ -10866,75 +10870,75 @@ extern "C" {
 }
 extern "C" {
     pub fn vn_link(
-        from: *mut illumos_ddi_dki::c_char,
-        to: *mut illumos_ddi_dki::c_char,
+        from: *mut illumos_sys_hdrs::c_char,
+        to: *mut illumos_sys_hdrs::c_char,
         seg: uio_seg,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_linkat(
         fstartvp: *mut vnode_t,
-        from: *mut illumos_ddi_dki::c_char,
+        from: *mut illumos_sys_hdrs::c_char,
         follow: symfollow,
         tstartvp: *mut vnode_t,
-        to: *mut illumos_ddi_dki::c_char,
+        to: *mut illumos_sys_hdrs::c_char,
         seg: uio_seg,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_rename(
-        from: *mut illumos_ddi_dki::c_char,
-        to: *mut illumos_ddi_dki::c_char,
+        from: *mut illumos_sys_hdrs::c_char,
+        to: *mut illumos_sys_hdrs::c_char,
         seg: uio_seg,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_renameat(
         fdvp: *mut vnode_t,
-        fname: *mut illumos_ddi_dki::c_char,
+        fname: *mut illumos_sys_hdrs::c_char,
         tdvp: *mut vnode_t,
-        tname: *mut illumos_ddi_dki::c_char,
+        tname: *mut illumos_sys_hdrs::c_char,
         seg: uio_seg,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_remove(
-        fnamep: *mut illumos_ddi_dki::c_char,
+        fnamep: *mut illumos_sys_hdrs::c_char,
         seg: uio_seg,
         dirflag: rm,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_removeat(
         startvp: *mut vnode_t,
-        fnamep: *mut illumos_ddi_dki::c_char,
+        fnamep: *mut illumos_sys_hdrs::c_char,
         seg: uio_seg,
         dirflag: rm,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_compare(
         vp1: *mut vnode_t,
         vp2: *mut vnode_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn vn_vfswlock(vp: *mut vnode) -> illumos_ddi_dki::c_int;
+    pub fn vn_vfswlock(vp: *mut vnode) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn vn_vfswlock_wait(vp: *mut vnode) -> illumos_ddi_dki::c_int;
+    pub fn vn_vfswlock_wait(vp: *mut vnode) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn vn_vfsrlock(vp: *mut vnode) -> illumos_ddi_dki::c_int;
+    pub fn vn_vfsrlock(vp: *mut vnode) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn vn_vfsrlock_wait(vp: *mut vnode) -> illumos_ddi_dki::c_int;
+    pub fn vn_vfsrlock_wait(vp: *mut vnode) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vn_vfsunlock(vp: *mut vnode);
 }
 extern "C" {
-    pub fn vn_vfswlock_held(vp: *mut vnode) -> illumos_ddi_dki::c_int;
+    pub fn vn_vfswlock_held(vp: *mut vnode) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn specvp(
@@ -10949,7 +10953,7 @@ extern "C" {
 }
 extern "C" {
     pub fn vn_vfslocks_getlock(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
     ) -> *mut vn_vfslocks_entry_t;
 }
 extern "C" {
@@ -10968,7 +10972,7 @@ extern "C" {
 extern "C" {
     pub fn vn_setpath_str(
         vp: *mut vnode,
-        str_: *const illumos_ddi_dki::c_char,
+        str_: *const illumos_sys_hdrs::c_char,
         len: size_t,
     );
 }
@@ -10977,7 +10981,7 @@ extern "C" {
         rootvp: *mut vnode_t,
         startvp: *mut vnode,
         vp: *mut vnode,
-        path: *const illumos_ddi_dki::c_char,
+        path: *const illumos_sys_hdrs::c_char,
         plen: size_t,
     );
 }
@@ -10985,7 +10989,7 @@ extern "C" {
     pub fn vn_renamepath(
         dvp: *mut vnode_t,
         vp: *mut vnode_t,
-        nm: *const illumos_ddi_dki::c_char,
+        nm: *const illumos_sys_hdrs::c_char,
         len: size_t,
     );
 }
@@ -10996,14 +11000,14 @@ extern "C" {
     pub fn vn_updatepath(
         arg1: *mut vnode_t,
         arg2: *mut vnode_t,
-        arg3: *const illumos_ddi_dki::c_char,
+        arg3: *const illumos_sys_hdrs::c_char,
     );
 }
 extern "C" {
     pub fn vnevent_rename_src(
         arg1: *mut vnode_t,
         arg2: *mut vnode_t,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: *mut caller_context_t,
     );
 }
@@ -11011,7 +11015,7 @@ extern "C" {
     pub fn vnevent_rename_dest(
         arg1: *mut vnode_t,
         arg2: *mut vnode_t,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: *mut caller_context_t,
     );
 }
@@ -11019,7 +11023,7 @@ extern "C" {
     pub fn vnevent_remove(
         arg1: *mut vnode_t,
         arg2: *mut vnode_t,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: *mut caller_context_t,
     );
 }
@@ -11027,7 +11031,7 @@ extern "C" {
     pub fn vnevent_rmdir(
         arg1: *mut vnode_t,
         arg2: *mut vnode_t,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: *mut caller_context_t,
     );
 }
@@ -11053,13 +11057,13 @@ extern "C" {
     pub fn vnevent_support(
         arg1: *mut vnode_t,
         arg2: *mut caller_context_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vnevent_pre_rename_src(
         arg1: *mut vnode_t,
         arg2: *mut vnode_t,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: *mut caller_context_t,
     );
 }
@@ -11067,7 +11071,7 @@ extern "C" {
     pub fn vnevent_pre_rename_dest(
         arg1: *mut vnode_t,
         arg2: *mut vnode_t,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: *mut caller_context_t,
     );
 }
@@ -11075,7 +11079,7 @@ extern "C" {
     pub fn vnevent_pre_rename_dest_dir(
         arg1: *mut vnode_t,
         arg2: *mut vnode_t,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: *mut caller_context_t,
     );
 }
@@ -11083,7 +11087,7 @@ extern "C" {
     pub fn vsd_create(
         arg1: *mut uint_t,
         arg2: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
     );
 }
@@ -11094,14 +11098,14 @@ extern "C" {
     pub fn vsd_get(
         arg1: *mut vnode_t,
         arg2: uint_t,
-    ) -> *mut illumos_ddi_dki::c_void;
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn vsd_set(
         arg1: *mut vnode_t,
         arg2: uint_t,
-        arg3: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vsd_free(arg1: *mut vnode_t);
@@ -11119,9 +11123,9 @@ extern "C" {
     pub fn xattr_dir_lookup(
         arg1: *mut vnode_t,
         arg2: *mut *mut vnode_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn reparse_point_init();
@@ -11130,10 +11134,10 @@ extern "C" {
     pub fn fs_new_caller_id() -> u_longlong_t;
 }
 extern "C" {
-    pub fn vn_vmpss_usepageio(arg1: *mut vnode_t) -> illumos_ddi_dki::c_int;
+    pub fn vn_vmpss_usepageio(arg1: *mut vnode_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut vn_vpath_empty: *mut illumos_ddi_dki::c_char;
+    pub static mut vn_vpath_empty: *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub static mut pvn_vmodsort_supported: uint_t;
@@ -11145,7 +11149,7 @@ pub const kvps_index_t_KV_KVP: kvps_index_t = 0;
 pub const kvps_index_t_KV_ZVP: kvps_index_t = 1;
 pub const kvps_index_t_KV_VVP: kvps_index_t = 2;
 pub const kvps_index_t_KV_MAX: kvps_index_t = 3;
-pub type kvps_index_t = illumos_ddi_dki::c_uint;
+pub type kvps_index_t = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct async_reqs {
@@ -11153,7 +11157,7 @@ pub struct async_reqs {
     pub a_vp: *mut vnode,
     pub a_off: u_offset_t,
     pub a_len: uint_t,
-    pub a_flags: illumos_ddi_dki::c_int,
+    pub a_flags: illumos_sys_hdrs::c_int,
     pub a_cred: *mut cred,
     pub a_prealloced: ushort_t,
 }
@@ -11250,33 +11254,33 @@ pub struct tsol_mlp_s {
 pub type tsol_mlp_t = tsol_mlp_s;
 extern "C" {
     pub fn bltype(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: u8,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn blequal(
         arg1: *const m_label_t,
         arg2: *const m_label_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn bldominates(
         arg1: *const m_label_t,
         arg2: *const m_label_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn blstrictdom(
         arg1: *const m_label_t,
         arg2: *const m_label_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn blinrange(
         arg1: *const m_label_t,
         arg2: *const m_range_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn blmaximum(arg1: *mut m_label_t, arg2: *const m_label_t);
@@ -11303,10 +11307,10 @@ extern "C" {
     pub fn bclearundef(arg1: *mut m_label_t);
 }
 extern "C" {
-    pub fn setbltype(arg1: *mut illumos_ddi_dki::c_void, arg2: u8);
+    pub fn setbltype(arg1: *mut illumos_sys_hdrs::c_void, arg2: u8);
 }
 extern "C" {
-    pub fn bisinvalid(arg1: *const illumos_ddi_dki::c_void) -> boolean_t;
+    pub fn bisinvalid(arg1: *const illumos_sys_hdrs::c_void) -> boolean_t;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -11344,7 +11348,7 @@ extern "C" {
     pub static mut default_doi: u32;
 }
 extern "C" {
-    pub static mut sys_labeling: illumos_ddi_dki::c_int;
+    pub static mut sys_labeling: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn label_init();
@@ -11353,13 +11357,13 @@ extern "C" {
     pub fn labelalloc(
         arg1: *const m_label_t,
         arg2: u32,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     ) -> *mut ts_label_t;
 }
 extern "C" {
     pub fn labeldup(
         arg1: *const ts_label_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
     ) -> *mut ts_label_t;
 }
 extern "C" {
@@ -11384,7 +11388,7 @@ extern "C" {
     pub fn newcred_from_bslabel(
         arg1: *mut m_label_t,
         arg2: u32,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     ) -> *mut cred_t;
 }
 extern "C" {
@@ -11392,14 +11396,14 @@ extern "C" {
         arg1: *const cred_t,
         arg2: *mut m_label_t,
         arg3: u32,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
     ) -> *mut cred_t;
 }
 extern "C" {
     pub fn copycred_from_tslabel(
         arg1: *const cred_t,
         arg2: *mut ts_label_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     ) -> *mut cred_t;
 }
 extern "C" {
@@ -11407,45 +11411,45 @@ extern "C" {
 }
 extern "C" {
     pub fn getlabel(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: *mut m_label_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fgetlabel(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: *mut m_label_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn _blinrange(
         arg1: *const m_label_t,
         arg2: *const brange_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn blinlset(
         arg1: *const m_label_t,
         arg2: *mut _mac_label_impl_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn l_to_str_internal(
         arg1: *const m_label_t,
-        arg2: *mut *mut illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: *mut *mut illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hexstr_to_label(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: *mut m_label_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Octet_s {
-    pub o_length: illumos_ddi_dki::c_int,
-    pub o_bytes: [illumos_ddi_dki::c_char; 32usize],
+    pub o_length: illumos_sys_hdrs::c_int,
+    pub o_bytes: [illumos_sys_hdrs::c_char; 32usize],
 }
 pub type Octet_t = Octet_s;
 pub type Counter = u32;
@@ -11460,8 +11464,8 @@ pub type DeviceIndex = u32;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct mib2_ip {
-    pub ipForwarding: illumos_ddi_dki::c_int,
-    pub ipDefaultTTL: illumos_ddi_dki::c_int,
+    pub ipForwarding: illumos_sys_hdrs::c_int,
+    pub ipDefaultTTL: illumos_sys_hdrs::c_int,
     pub ipInReceives: Counter,
     pub ipInHdrErrors: Counter,
     pub ipInAddrErrors: Counter,
@@ -11472,16 +11476,16 @@ pub struct mib2_ip {
     pub ipOutRequests: Counter,
     pub ipOutDiscards: Counter,
     pub ipOutNoRoutes: Counter,
-    pub ipReasmTimeout: illumos_ddi_dki::c_int,
+    pub ipReasmTimeout: illumos_sys_hdrs::c_int,
     pub ipReasmReqds: Counter,
     pub ipReasmOKs: Counter,
     pub ipReasmFails: Counter,
     pub ipFragOKs: Counter,
     pub ipFragFails: Counter,
     pub ipFragCreates: Counter,
-    pub ipAddrEntrySize: illumos_ddi_dki::c_int,
-    pub ipRouteEntrySize: illumos_ddi_dki::c_int,
-    pub ipNetToMediaEntrySize: illumos_ddi_dki::c_int,
+    pub ipAddrEntrySize: illumos_sys_hdrs::c_int,
+    pub ipRouteEntrySize: illumos_sys_hdrs::c_int,
+    pub ipNetToMediaEntrySize: illumos_sys_hdrs::c_int,
     pub ipRoutingDiscards: Counter,
     pub tcpInErrs: Counter,
     pub udpNoPorts: Counter,
@@ -11494,28 +11498,28 @@ pub struct mib2_ip {
     pub rawipInOverflows: Counter,
     pub ipsecInSucceeded: Counter,
     pub ipsecInFailed: Counter,
-    pub ipMemberEntrySize: illumos_ddi_dki::c_int,
-    pub ipGroupSourceEntrySize: illumos_ddi_dki::c_int,
+    pub ipMemberEntrySize: illumos_sys_hdrs::c_int,
+    pub ipGroupSourceEntrySize: illumos_sys_hdrs::c_int,
     pub ipInIPv6: Counter,
     pub ipOutIPv6: Counter,
     pub ipOutSwitchIPv6: Counter,
-    pub ipRouteAttributeSize: illumos_ddi_dki::c_int,
-    pub transportMLPSize: illumos_ddi_dki::c_int,
-    pub ipDestEntrySize: illumos_ddi_dki::c_int,
+    pub ipRouteAttributeSize: illumos_sys_hdrs::c_int,
+    pub transportMLPSize: illumos_sys_hdrs::c_int,
+    pub ipDestEntrySize: illumos_sys_hdrs::c_int,
 }
 pub type mib2_ip_t = mib2_ip;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct mib2_ipv6IfStatsEntry {
     pub ipv6IfIndex: DeviceIndex,
-    pub ipv6Forwarding: illumos_ddi_dki::c_int,
-    pub ipv6DefaultHopLimit: illumos_ddi_dki::c_int,
-    pub ipv6IfStatsEntrySize: illumos_ddi_dki::c_int,
-    pub ipv6AddrEntrySize: illumos_ddi_dki::c_int,
-    pub ipv6RouteEntrySize: illumos_ddi_dki::c_int,
-    pub ipv6NetToMediaEntrySize: illumos_ddi_dki::c_int,
-    pub ipv6MemberEntrySize: illumos_ddi_dki::c_int,
-    pub ipv6GroupSourceEntrySize: illumos_ddi_dki::c_int,
+    pub ipv6Forwarding: illumos_sys_hdrs::c_int,
+    pub ipv6DefaultHopLimit: illumos_sys_hdrs::c_int,
+    pub ipv6IfStatsEntrySize: illumos_sys_hdrs::c_int,
+    pub ipv6AddrEntrySize: illumos_sys_hdrs::c_int,
+    pub ipv6RouteEntrySize: illumos_sys_hdrs::c_int,
+    pub ipv6NetToMediaEntrySize: illumos_sys_hdrs::c_int,
+    pub ipv6MemberEntrySize: illumos_sys_hdrs::c_int,
+    pub ipv6GroupSourceEntrySize: illumos_sys_hdrs::c_int,
     pub ipv6InReceives: Counter,
     pub ipv6InHdrErrors: Counter,
     pub ipv6InTooBigErrors: Counter,
@@ -11552,14 +11556,14 @@ pub type mib2_ipv6IfStatsEntry_t = mib2_ipv6IfStatsEntry;
 #[derive(Debug, Copy, Clone)]
 pub struct mib2_ipIfStatsEntry {
     pub ipIfStatsIfIndex: DeviceIndex,
-    pub ipIfStatsForwarding: illumos_ddi_dki::c_int,
-    pub ipIfStatsDefaultHopLimit: illumos_ddi_dki::c_int,
-    pub ipIfStatsEntrySize: illumos_ddi_dki::c_int,
-    pub ipIfStatsAddrEntrySize: illumos_ddi_dki::c_int,
-    pub ipIfStatsRouteEntrySize: illumos_ddi_dki::c_int,
-    pub ipIfStatsNetToMediaEntrySize: illumos_ddi_dki::c_int,
-    pub ipIfStatsMemberEntrySize: illumos_ddi_dki::c_int,
-    pub ipIfStatsGroupSourceEntrySize: illumos_ddi_dki::c_int,
+    pub ipIfStatsForwarding: illumos_sys_hdrs::c_int,
+    pub ipIfStatsDefaultHopLimit: illumos_sys_hdrs::c_int,
+    pub ipIfStatsEntrySize: illumos_sys_hdrs::c_int,
+    pub ipIfStatsAddrEntrySize: illumos_sys_hdrs::c_int,
+    pub ipIfStatsRouteEntrySize: illumos_sys_hdrs::c_int,
+    pub ipIfStatsNetToMediaEntrySize: illumos_sys_hdrs::c_int,
+    pub ipIfStatsMemberEntrySize: illumos_sys_hdrs::c_int,
+    pub ipIfStatsGroupSourceEntrySize: illumos_sys_hdrs::c_int,
     pub ipIfStatsInReceives: Counter,
     pub ipIfStatsInHdrErrors: Counter,
     pub ipIfStatsInTooBigErrors: Counter,
@@ -11590,7 +11594,7 @@ pub struct mib2_ipIfStatsEntry {
     pub ipIfStatsInWrongIPVersion: Counter,
     pub ipIfStatsOutWrongIPVersion: Counter,
     pub ipIfStatsOutSwitchIPVersion: Counter,
-    pub ipIfStatsIPVersion: illumos_ddi_dki::c_int,
+    pub ipIfStatsIPVersion: illumos_sys_hdrs::c_int,
     pub ipIfStatsHCInReceives: Counter64,
     pub ipIfStatsHCInOctets: Counter64,
     pub ipIfStatsHCInForwDatagrams: Counter64,
@@ -11619,8 +11623,8 @@ pub struct mib2_ipAddrEntry {
     pub ipAdEntAddr: IpAddress,
     pub ipAdEntIfIndex: DeviceName,
     pub ipAdEntNetMask: IpAddress,
-    pub ipAdEntBcastAddr: illumos_ddi_dki::c_int,
-    pub ipAdEntReasmMaxSize: illumos_ddi_dki::c_int,
+    pub ipAdEntBcastAddr: illumos_sys_hdrs::c_int,
+    pub ipAdEntReasmMaxSize: illumos_sys_hdrs::c_int,
     pub ipAdEntInfo: mib2_ipAddrEntry_ipAdEntInfo_s,
     pub ipAdEntRetransmitTime: u32,
 }
@@ -11628,15 +11632,15 @@ pub struct mib2_ipAddrEntry {
 #[derive(Debug, Copy, Clone)]
 pub struct mib2_ipAddrEntry_ipAdEntInfo_s {
     pub ae_mtu: Gauge,
-    pub ae_metric: illumos_ddi_dki::c_int,
+    pub ae_metric: illumos_sys_hdrs::c_int,
     pub ae_broadcast_addr: IpAddress,
     pub ae_pp_dst_addr: IpAddress,
-    pub ae_flags: illumos_ddi_dki::c_int,
+    pub ae_flags: illumos_sys_hdrs::c_int,
     pub ae_ibcnt: Counter,
     pub ae_obcnt: Counter,
     pub ae_focnt: Counter,
     pub ae_subnet: IpAddress,
-    pub ae_subnet_len: illumos_ddi_dki::c_int,
+    pub ae_subnet_len: illumos_sys_hdrs::c_int,
     pub ae_src_addr: IpAddress,
 }
 pub type mib2_ipAddrEntry_t = mib2_ipAddrEntry;
@@ -11660,14 +11664,14 @@ pub struct mib2_ipv6AddrEntry {
 #[derive(Copy, Clone)]
 pub struct mib2_ipv6AddrEntry_ipv6AddrInfo_s {
     pub ae_mtu: Gauge,
-    pub ae_metric: illumos_ddi_dki::c_int,
+    pub ae_metric: illumos_sys_hdrs::c_int,
     pub ae_pp_dst_addr: Ip6Address,
-    pub ae_flags: illumos_ddi_dki::c_int,
+    pub ae_flags: illumos_sys_hdrs::c_int,
     pub ae_ibcnt: Counter,
     pub ae_obcnt: Counter,
     pub ae_focnt: Counter,
     pub ae_subnet: Ip6Address,
-    pub ae_subnet_len: illumos_ddi_dki::c_int,
+    pub ae_subnet_len: illumos_sys_hdrs::c_int,
     pub ae_src_addr: Ip6Address,
 }
 pub type mib2_ipv6AddrEntry_t = mib2_ipv6AddrEntry;
@@ -11676,16 +11680,16 @@ pub type mib2_ipv6AddrEntry_t = mib2_ipv6AddrEntry;
 pub struct mib2_ipRouteEntry {
     pub ipRouteDest: IpAddress,
     pub ipRouteIfIndex: DeviceName,
-    pub ipRouteMetric1: illumos_ddi_dki::c_int,
-    pub ipRouteMetric2: illumos_ddi_dki::c_int,
-    pub ipRouteMetric3: illumos_ddi_dki::c_int,
-    pub ipRouteMetric4: illumos_ddi_dki::c_int,
+    pub ipRouteMetric1: illumos_sys_hdrs::c_int,
+    pub ipRouteMetric2: illumos_sys_hdrs::c_int,
+    pub ipRouteMetric3: illumos_sys_hdrs::c_int,
+    pub ipRouteMetric4: illumos_sys_hdrs::c_int,
     pub ipRouteNextHop: IpAddress,
-    pub ipRouteType: illumos_ddi_dki::c_int,
-    pub ipRouteProto: illumos_ddi_dki::c_int,
-    pub ipRouteAge: illumos_ddi_dki::c_int,
+    pub ipRouteType: illumos_sys_hdrs::c_int,
+    pub ipRouteProto: illumos_sys_hdrs::c_int,
+    pub ipRouteAge: illumos_sys_hdrs::c_int,
     pub ipRouteMask: IpAddress,
-    pub ipRouteMetric5: illumos_ddi_dki::c_int,
+    pub ipRouteMetric5: illumos_sys_hdrs::c_int,
     pub ipRouteInfo: mib2_ipRouteEntry_ipRouteInfo_s,
 }
 #[repr(C)]
@@ -11694,12 +11698,12 @@ pub struct mib2_ipRouteEntry_ipRouteInfo_s {
     pub re_max_frag: Gauge,
     pub re_rtt: Gauge,
     pub re_ref: Counter,
-    pub re_frag_flag: illumos_ddi_dki::c_int,
+    pub re_frag_flag: illumos_sys_hdrs::c_int,
     pub re_src_addr: IpAddress,
-    pub re_ire_type: illumos_ddi_dki::c_int,
+    pub re_ire_type: illumos_sys_hdrs::c_int,
     pub re_obpkt: Counter,
     pub re_ibpkt: Counter,
-    pub re_flags: illumos_ddi_dki::c_int,
+    pub re_flags: illumos_sys_hdrs::c_int,
     pub re_in_ill: DeviceName,
     pub re_in_src_addr: IpAddress,
 }
@@ -11708,17 +11712,17 @@ pub type mib2_ipRouteEntry_t = mib2_ipRouteEntry;
 #[derive(Copy, Clone)]
 pub struct mib2_ipv6RouteEntry {
     pub ipv6RouteDest: Ip6Address,
-    pub ipv6RoutePfxLength: illumos_ddi_dki::c_int,
-    pub ipv6RouteIndex: illumos_ddi_dki::c_uint,
+    pub ipv6RoutePfxLength: illumos_sys_hdrs::c_int,
+    pub ipv6RouteIndex: illumos_sys_hdrs::c_uint,
     pub ipv6RouteIfIndex: DeviceName,
     pub ipv6RouteNextHop: Ip6Address,
-    pub ipv6RouteType: illumos_ddi_dki::c_int,
-    pub ipv6RouteProtocol: illumos_ddi_dki::c_int,
-    pub ipv6RoutePolicy: illumos_ddi_dki::c_uint,
-    pub ipv6RouteAge: illumos_ddi_dki::c_int,
-    pub ipv6RouteNextHopRDI: illumos_ddi_dki::c_uint,
-    pub ipv6RouteMetric: illumos_ddi_dki::c_uint,
-    pub ipv6RouteWeight: illumos_ddi_dki::c_uint,
+    pub ipv6RouteType: illumos_sys_hdrs::c_int,
+    pub ipv6RouteProtocol: illumos_sys_hdrs::c_int,
+    pub ipv6RoutePolicy: illumos_sys_hdrs::c_uint,
+    pub ipv6RouteAge: illumos_sys_hdrs::c_int,
+    pub ipv6RouteNextHopRDI: illumos_sys_hdrs::c_uint,
+    pub ipv6RouteMetric: illumos_sys_hdrs::c_uint,
+    pub ipv6RouteWeight: illumos_sys_hdrs::c_uint,
     pub ipv6RouteInfo: mib2_ipv6RouteEntry_ipv6RouteInfo_s,
 }
 #[repr(C)]
@@ -11727,19 +11731,19 @@ pub struct mib2_ipv6RouteEntry_ipv6RouteInfo_s {
     pub re_max_frag: Gauge,
     pub re_rtt: Gauge,
     pub re_ref: Counter,
-    pub re_frag_flag: illumos_ddi_dki::c_int,
+    pub re_frag_flag: illumos_sys_hdrs::c_int,
     pub re_src_addr: Ip6Address,
-    pub re_ire_type: illumos_ddi_dki::c_int,
+    pub re_ire_type: illumos_sys_hdrs::c_int,
     pub re_obpkt: Counter,
     pub re_ibpkt: Counter,
-    pub re_flags: illumos_ddi_dki::c_int,
+    pub re_flags: illumos_sys_hdrs::c_int,
 }
 pub type mib2_ipv6RouteEntry_t = mib2_ipv6RouteEntry;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct mib2_ipAttributeEntry {
     pub iae_routeidx: uint_t,
-    pub iae_doi: illumos_ddi_dki::c_int,
+    pub iae_doi: illumos_sys_hdrs::c_int,
     pub iae_slrange: brange_t,
 }
 pub type mib2_ipAttributeEntry_t = mib2_ipAttributeEntry;
@@ -11749,14 +11753,14 @@ pub struct mib2_ipNetToMediaEntry {
     pub ipNetToMediaIfIndex: DeviceName,
     pub ipNetToMediaPhysAddress: PhysAddress,
     pub ipNetToMediaNetAddress: IpAddress,
-    pub ipNetToMediaType: illumos_ddi_dki::c_int,
+    pub ipNetToMediaType: illumos_sys_hdrs::c_int,
     pub ipNetToMediaInfo: mib2_ipNetToMediaEntry_ipNetToMediaInfo_s,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct mib2_ipNetToMediaEntry_ipNetToMediaInfo_s {
     pub ntm_mask: PhysAddress,
-    pub ntm_flags: illumos_ddi_dki::c_int,
+    pub ntm_flags: illumos_sys_hdrs::c_int,
 }
 pub type mib2_ipNetToMediaEntry_t = mib2_ipNetToMediaEntry;
 #[repr(C)]
@@ -11765,9 +11769,9 @@ pub struct mib2_ipv6NetToMediaEntry {
     pub ipv6NetToMediaIfIndex: DeviceIndex,
     pub ipv6NetToMediaNetAddress: Ip6Address,
     pub ipv6NetToMediaPhysAddress: PhysAddress,
-    pub ipv6NetToMediaType: illumos_ddi_dki::c_int,
-    pub ipv6NetToMediaState: illumos_ddi_dki::c_int,
-    pub ipv6NetToMediaLastUpdated: illumos_ddi_dki::c_int,
+    pub ipv6NetToMediaType: illumos_sys_hdrs::c_int,
+    pub ipv6NetToMediaState: illumos_sys_hdrs::c_int,
+    pub ipv6NetToMediaLastUpdated: illumos_sys_hdrs::c_int,
 }
 pub type mib2_ipv6NetToMediaEntry_t = mib2_ipv6NetToMediaEntry;
 #[repr(C)]
@@ -11776,7 +11780,7 @@ pub struct ip_member {
     pub ipGroupMemberIfIndex: DeviceName,
     pub ipGroupMemberAddress: IpAddress,
     pub ipGroupMemberRefCnt: Counter,
-    pub ipGroupMemberFilterMode: illumos_ddi_dki::c_int,
+    pub ipGroupMemberFilterMode: illumos_sys_hdrs::c_int,
 }
 pub type ip_member_t = ip_member;
 #[repr(C)]
@@ -11785,7 +11789,7 @@ pub struct ipv6_member {
     pub ipv6GroupMemberIfIndex: DeviceIndex,
     pub ipv6GroupMemberAddress: Ip6Address,
     pub ipv6GroupMemberRefCnt: Counter,
-    pub ipv6GroupMemberFilterMode: illumos_ddi_dki::c_int,
+    pub ipv6GroupMemberFilterMode: illumos_sys_hdrs::c_int,
 }
 pub type ipv6_member_t = ipv6_member;
 #[repr(C)]
@@ -11793,7 +11797,7 @@ pub type ipv6_member_t = ipv6_member;
 pub struct mib2_transportMLPEntry {
     pub tme_connidx: uint_t,
     pub tme_flags: uint_t,
-    pub tme_doi: illumos_ddi_dki::c_int,
+    pub tme_doi: illumos_sys_hdrs::c_int,
     pub tme_label: bslabel_t,
 }
 pub type mib2_transportMLPEntry_t = mib2_transportMLPEntry;
@@ -11876,7 +11880,7 @@ pub type mib2_icmp_t = mib2_icmp;
 #[derive(Debug, Copy, Clone)]
 pub struct mib2_ipv6IfIcmpEntry {
     pub ipv6IfIcmpIfIndex: DeviceIndex,
-    pub ipv6IfIcmpEntrySize: illumos_ddi_dki::c_int,
+    pub ipv6IfIcmpEntrySize: illumos_sys_hdrs::c_int,
     pub ipv6IfIcmpInMsgs: Counter32,
     pub ipv6IfIcmpInErrors: Counter32,
     pub ipv6IfIcmpInDestUnreachs: Counter32,
@@ -11925,10 +11929,10 @@ pub type mib2_ipv6IfIcmpEntry_t = mib2_ipv6IfIcmpEntry;
 #[repr(C, packed(4))]
 #[derive(Debug, Copy, Clone)]
 pub struct mib2_tcp {
-    pub tcpRtoAlgorithm: illumos_ddi_dki::c_int,
-    pub tcpRtoMin: illumos_ddi_dki::c_int,
-    pub tcpRtoMax: illumos_ddi_dki::c_int,
-    pub tcpMaxConn: illumos_ddi_dki::c_int,
+    pub tcpRtoAlgorithm: illumos_sys_hdrs::c_int,
+    pub tcpRtoMin: illumos_sys_hdrs::c_int,
+    pub tcpRtoMax: illumos_sys_hdrs::c_int,
+    pub tcpMaxConn: illumos_sys_hdrs::c_int,
     pub tcpActiveOpens: Counter,
     pub tcpPassiveOpens: Counter,
     pub tcpAttemptFails: Counter,
@@ -11937,7 +11941,7 @@ pub struct mib2_tcp {
     pub tcpInSegs: Counter,
     pub tcpOutSegs: Counter,
     pub tcpRetransSegs: Counter,
-    pub tcpConnTableSize: illumos_ddi_dki::c_int,
+    pub tcpConnTableSize: illumos_sys_hdrs::c_int,
     pub tcpOutRsts: Counter,
     pub tcpOutDataSegs: Counter,
     pub tcpOutDataBytes: Counter,
@@ -11977,7 +11981,7 @@ pub struct mib2_tcp {
     pub tcpListenDropQ0: Counter,
     pub tcpHalfOpenDrop: Counter,
     pub tcpOutSackRetransSegs: Counter,
-    pub tcp6ConnTableSize: illumos_ddi_dki::c_int,
+    pub tcp6ConnTableSize: illumos_sys_hdrs::c_int,
     pub tcpHCInSegs: Counter64,
     pub tcpHCOutSegs: Counter64,
 }
@@ -12008,17 +12012,17 @@ pub struct tcpConnEntryInfo_s {
     pub ce_rto: Gauge,
     pub ce_rtt_cnt: Gauge,
     pub ce_mss: Gauge,
-    pub ce_state: illumos_ddi_dki::c_int,
+    pub ce_state: illumos_sys_hdrs::c_int,
 }
 pub type tcpConnEntryInfo_t = tcpConnEntryInfo_s;
 #[repr(C, packed(4))]
 #[derive(Debug, Copy, Clone)]
 pub struct mib2_tcpConnEntry {
-    pub tcpConnState: illumos_ddi_dki::c_int,
+    pub tcpConnState: illumos_sys_hdrs::c_int,
     pub tcpConnLocalAddress: IpAddress,
-    pub tcpConnLocalPort: illumos_ddi_dki::c_int,
+    pub tcpConnLocalPort: illumos_sys_hdrs::c_int,
     pub tcpConnRemAddress: IpAddress,
-    pub tcpConnRemPort: illumos_ddi_dki::c_int,
+    pub tcpConnRemPort: illumos_sys_hdrs::c_int,
     pub tcpConnEntryInfo: tcpConnEntryInfo_t,
     pub tcpConnCreationProcess: u32,
     pub tcpConnCreationTime: u64,
@@ -12028,11 +12032,11 @@ pub type mib2_tcpConnEntry_t = mib2_tcpConnEntry;
 #[derive(Copy, Clone)]
 pub struct mib2_tcp6ConnEntry {
     pub tcp6ConnLocalAddress: Ip6Address,
-    pub tcp6ConnLocalPort: illumos_ddi_dki::c_int,
+    pub tcp6ConnLocalPort: illumos_sys_hdrs::c_int,
     pub tcp6ConnRemAddress: Ip6Address,
-    pub tcp6ConnRemPort: illumos_ddi_dki::c_int,
+    pub tcp6ConnRemPort: illumos_sys_hdrs::c_int,
     pub tcp6ConnIfIndex: DeviceIndex,
-    pub tcp6ConnState: illumos_ddi_dki::c_int,
+    pub tcp6ConnState: illumos_sys_hdrs::c_int,
     pub tcp6ConnEntryInfo: tcpConnEntryInfo_t,
     pub tcp6ConnCreationProcess: u32,
     pub tcp6ConnCreationTime: u64,
@@ -12044,8 +12048,8 @@ pub struct mib2_udp {
     pub udpInDatagrams: Counter,
     pub udpInErrors: Counter,
     pub udpOutDatagrams: Counter,
-    pub udpEntrySize: illumos_ddi_dki::c_int,
-    pub udp6EntrySize: illumos_ddi_dki::c_int,
+    pub udpEntrySize: illumos_sys_hdrs::c_int,
+    pub udp6EntrySize: illumos_sys_hdrs::c_int,
     pub udpOutErrors: Counter,
     pub udpHCInDatagrams: Counter64,
     pub udpHCOutDatagrams: Counter64,
@@ -12055,7 +12059,7 @@ pub type mib2_udp_t = mib2_udp;
 #[derive(Debug, Copy, Clone)]
 pub struct mib2_udpEntry {
     pub udpLocalAddress: IpAddress,
-    pub udpLocalPort: illumos_ddi_dki::c_int,
+    pub udpLocalPort: illumos_sys_hdrs::c_int,
     pub udpEntryInfo: mib2_udpEntry_udpEntryInfo_s,
     pub udpInstance: u32,
     pub udpCreationProcess: u32,
@@ -12064,16 +12068,16 @@ pub struct mib2_udpEntry {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct mib2_udpEntry_udpEntryInfo_s {
-    pub ue_state: illumos_ddi_dki::c_int,
+    pub ue_state: illumos_sys_hdrs::c_int,
     pub ue_RemoteAddress: IpAddress,
-    pub ue_RemotePort: illumos_ddi_dki::c_int,
+    pub ue_RemotePort: illumos_sys_hdrs::c_int,
 }
 pub type mib2_udpEntry_t = mib2_udpEntry;
 #[repr(C, packed(4))]
 #[derive(Copy, Clone)]
 pub struct mib2_udp6Entry {
     pub udp6LocalAddress: Ip6Address,
-    pub udp6LocalPort: illumos_ddi_dki::c_int,
+    pub udp6LocalPort: illumos_sys_hdrs::c_int,
     pub udp6IfIndex: DeviceIndex,
     pub udp6EntryInfo: mib2_udp6Entry_udp6EntryInfo_s,
     pub udp6Instance: u32,
@@ -12083,9 +12087,9 @@ pub struct mib2_udp6Entry {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct mib2_udp6Entry_udp6EntryInfo_s {
-    pub ue_state: illumos_ddi_dki::c_int,
+    pub ue_state: illumos_sys_hdrs::c_int,
     pub ue_RemoteAddress: Ip6Address,
-    pub ue_RemotePort: illumos_ddi_dki::c_int,
+    pub ue_RemotePort: illumos_sys_hdrs::c_int,
 }
 pub type mib2_udp6Entry_t = mib2_udp6Entry;
 #[repr(C)]
@@ -12105,11 +12109,11 @@ pub struct mib2_sctpConnEntry {
     pub sctpAssocRemHostName: Octet_t,
     pub sctpAssocLocalPort: u32,
     pub sctpAssocRemPort: u32,
-    pub sctpAssocRemPrimAddrType: illumos_ddi_dki::c_int,
+    pub sctpAssocRemPrimAddrType: illumos_sys_hdrs::c_int,
     pub sctpAssocRemPrimAddr: Ip6Address,
     pub sctpAssocLocPrimAddr: Ip6Address,
     pub sctpAssocHeartBeatInterval: u32,
-    pub sctpAssocState: illumos_ddi_dki::c_int,
+    pub sctpAssocState: illumos_sys_hdrs::c_int,
     pub sctpAssocInStreams: u32,
     pub sctpAssocOutStreams: u32,
     pub sctpAssocMaxRetr: u32,
@@ -12134,7 +12138,7 @@ pub type mib2_sctpConnEntry_t = mib2_sctpConnEntry;
 #[derive(Copy, Clone)]
 pub struct mib2_sctpConnLocalAddrEntry {
     pub sctpAssocId: u32,
-    pub sctpAssocLocalAddrType: illumos_ddi_dki::c_int,
+    pub sctpAssocLocalAddrType: illumos_sys_hdrs::c_int,
     pub sctpAssocLocalAddr: Ip6Address,
 }
 pub type mib2_sctpConnLocalEntry_t = mib2_sctpConnLocalAddrEntry;
@@ -12142,10 +12146,10 @@ pub type mib2_sctpConnLocalEntry_t = mib2_sctpConnLocalAddrEntry;
 #[derive(Copy, Clone)]
 pub struct mib2_sctpConnRemoteAddrEntry {
     pub sctpAssocId: u32,
-    pub sctpAssocRemAddrType: illumos_ddi_dki::c_int,
+    pub sctpAssocRemAddrType: illumos_sys_hdrs::c_int,
     pub sctpAssocRemAddr: Ip6Address,
-    pub sctpAssocRemAddrActive: illumos_ddi_dki::c_int,
-    pub sctpAssocRemAddrHBActive: illumos_ddi_dki::c_int,
+    pub sctpAssocRemAddrActive: illumos_sys_hdrs::c_int,
+    pub sctpAssocRemAddrHBActive: illumos_sys_hdrs::c_int,
     pub sctpAssocRemAddrRTO: u32,
     pub sctpAssocRemAddrMaxPathRtx: u32,
     pub sctpAssocRemAddrRtx: u32,
@@ -12154,7 +12158,7 @@ pub type mib2_sctpConnRemoteEntry_t = mib2_sctpConnRemoteAddrEntry;
 #[repr(C, packed(4))]
 #[derive(Debug, Copy, Clone)]
 pub struct mib2_sctp {
-    pub sctpRtoAlgorithm: illumos_ddi_dki::c_int,
+    pub sctpRtoAlgorithm: illumos_sys_hdrs::c_int,
     pub sctpRtoMin: u32,
     pub sctpRtoMax: u32,
     pub sctpRtoInitial: u32,
@@ -12194,31 +12198,31 @@ pub struct mib2_sctp {
     pub sctpTimHeartBeatDrop: Counter,
     pub sctpListenDrop: Counter,
     pub sctpInClosed: Counter,
-    pub sctpEntrySize: illumos_ddi_dki::c_int,
-    pub sctpLocalEntrySize: illumos_ddi_dki::c_int,
-    pub sctpRemoteEntrySize: illumos_ddi_dki::c_int,
+    pub sctpEntrySize: illumos_sys_hdrs::c_int,
+    pub sctpLocalEntrySize: illumos_sys_hdrs::c_int,
+    pub sctpRemoteEntrySize: illumos_sys_hdrs::c_int,
 }
 pub type mib2_sctp_t = mib2_sctp;
 extern "C" {
-    pub static mut byte_to_bcd: [illumos_ddi_dki::c_uchar; 256usize];
+    pub static mut byte_to_bcd: [illumos_sys_hdrs::c_uchar; 256usize];
 }
 extern "C" {
-    pub static mut bcd_to_byte: [illumos_ddi_dki::c_uchar; 256usize];
+    pub static mut bcd_to_byte: [illumos_sys_hdrs::c_uchar; 256usize];
 }
 pub type pfi_t =
-    ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>;
+    ::core::option::Option<unsafe extern "C" fn() -> illumos_sys_hdrs::c_int>;
 pub type pfv_t = ::core::option::Option<unsafe extern "C" fn()>;
-pub type IDP = *mut illumos_ddi_dki::c_char;
+pub type IDP = *mut illumos_sys_hdrs::c_char;
 pub type MBLKP = *mut msgb;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct pollfd {
-    pub fd: illumos_ddi_dki::c_int,
-    pub events: illumos_ddi_dki::c_short,
-    pub revents: illumos_ddi_dki::c_short,
+    pub fd: illumos_sys_hdrs::c_int,
+    pub events: illumos_sys_hdrs::c_short,
+    pub revents: illumos_sys_hdrs::c_short,
 }
 pub type pollfd_t = pollfd;
-pub type nfds_t = illumos_ddi_dki::c_ulong;
+pub type nfds_t = illumos_sys_hdrs::c_ulong;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct fpollinfo {
@@ -12228,26 +12232,26 @@ pub struct fpollinfo {
 #[derive(Debug, Copy, Clone)]
 pub struct pollhead {
     pub ph_list: *mut polldat,
-    pub ph_pad1: *mut illumos_ddi_dki::c_void,
-    pub ph_pad2: illumos_ddi_dki::c_short,
+    pub ph_pad1: *mut illumos_sys_hdrs::c_void,
+    pub ph_pad2: illumos_sys_hdrs::c_short,
 }
 pub type pollhead_t = pollhead;
 extern "C" {
-    pub fn pollwakeup(arg1: *mut pollhead_t, arg2: illumos_ddi_dki::c_short);
+    pub fn pollwakeup(arg1: *mut pollhead_t, arg2: illumos_sys_hdrs::c_short);
 }
 extern "C" {
     pub fn polllock(
         arg1: *mut pollhead_t,
         arg2: *mut kmutex_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn pollunlock(
-        arg1: *mut illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *mut illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn pollrelock(arg1: illumos_ddi_dki::c_int);
+    pub fn pollrelock(arg1: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn pollcleanup();
@@ -12256,7 +12260,7 @@ extern "C" {
     pub fn pollblockexit(arg1: *mut fpollinfo);
 }
 extern "C" {
-    pub fn pollcacheclean(arg1: *mut fpollinfo, arg2: illumos_ddi_dki::c_int);
+    pub fn pollcacheclean(arg1: *mut fpollinfo, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn pollhead_clean(arg1: *mut pollhead_t);
@@ -12269,7 +12273,7 @@ pub struct queue {
     pub q_last: *mut msgb,
     pub q_next: *mut queue,
     pub q_link: *mut queue,
-    pub q_ptr: *mut illumos_ddi_dki::c_void,
+    pub q_ptr: *mut illumos_sys_hdrs::c_void,
     pub q_count: size_t,
     pub q_flag: uint_t,
     pub q_minpsz: ssize_t,
@@ -12280,11 +12284,11 @@ pub struct queue {
     pub q_lock: kmutex_t,
     pub q_stream: *mut stdata,
     pub q_syncq: *mut syncq,
-    pub q_nband: illumos_ddi_dki::c_uchar,
+    pub q_nband: illumos_sys_hdrs::c_uchar,
     pub q_wait: kcondvar_t,
     pub q_nfsrv: *mut queue,
     pub q_draining: ushort_t,
-    pub q_struiot: illumos_ddi_dki::c_short,
+    pub q_struiot: illumos_sys_hdrs::c_short,
     pub q_qtstamp: clock_t,
     pub q_mblkcnt: size_t,
     pub q_syncqmsgs: uint_t,
@@ -12322,13 +12326,13 @@ pub const qfields_QLAST: qfields = 6;
 pub const qfields_QFLAG: qfields = 7;
 pub const qfields_QSTRUIOT: qfields = 8;
 pub const qfields_QBAD: qfields = 9;
-pub type qfields = illumos_ddi_dki::c_uint;
+pub type qfields = illumos_sys_hdrs::c_uint;
 pub use self::qfields as qfields_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct module_info {
     pub mi_idnum: ushort_t,
-    pub mi_idname: *mut illumos_ddi_dki::c_char,
+    pub mi_idname: *mut illumos_sys_hdrs::c_char,
     pub mi_minpsz: ssize_t,
     pub mi_maxpsz: ssize_t,
     pub mi_hiwat: size_t,
@@ -12341,40 +12345,40 @@ pub type qi_putp_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
-    ) -> illumos_ddi_dki::c_int,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 pub type qi_srvp_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut queue_t) -> illumos_ddi_dki::c_int,
+    unsafe extern "C" fn(arg1: *mut queue_t) -> illumos_sys_hdrs::c_int,
 >;
 pub type qi_qopen_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut queue_t,
         arg2: *mut dev_t,
-        arg3: illumos_ddi_dki::c_int,
-        arg4: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 pub type qi_qclose_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut queue_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 pub type qi_qadmin_t =
-    ::core::option::Option<unsafe extern "C" fn() -> illumos_ddi_dki::c_int>;
+    ::core::option::Option<unsafe extern "C" fn() -> illumos_sys_hdrs::c_int>;
 pub type qi_rwp_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut queue_t,
         arg2: *mut struiod_t,
-    ) -> illumos_ddi_dki::c_int,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 pub type qi_infop_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut queue_t,
         arg2: *mut infod_t,
-    ) -> illumos_ddi_dki::c_int,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -12388,7 +12392,7 @@ pub struct qinit {
     pub qi_mstat: *mut module_stat,
     pub qi_rwp: qi_rwp_t,
     pub qi_infop: qi_infop_t,
-    pub qi_struiot: illumos_ddi_dki::c_int,
+    pub qi_struiot: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -12403,7 +12407,7 @@ pub struct streamtab {
 pub struct linkblk {
     pub l_qtop: *mut queue_t,
     pub l_qbot: *mut queue_t,
-    pub l_index: illumos_ddi_dki::c_int,
+    pub l_index: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -12416,14 +12420,14 @@ pub type frtn_t = free_rtn;
 #[derive(Copy, Clone)]
 pub struct datab {
     pub db_frtnp: *mut frtn_t,
-    pub db_base: *mut illumos_ddi_dki::c_uchar,
-    pub db_lim: *mut illumos_ddi_dki::c_uchar,
-    pub db_ref: illumos_ddi_dki::c_uchar,
-    pub db_type: illumos_ddi_dki::c_uchar,
-    pub db_flags: illumos_ddi_dki::c_uchar,
-    pub db_struioflag: illumos_ddi_dki::c_uchar,
+    pub db_base: *mut illumos_sys_hdrs::c_uchar,
+    pub db_lim: *mut illumos_sys_hdrs::c_uchar,
+    pub db_ref: illumos_sys_hdrs::c_uchar,
+    pub db_type: illumos_sys_hdrs::c_uchar,
+    pub db_flags: illumos_sys_hdrs::c_uchar,
+    pub db_struioflag: illumos_sys_hdrs::c_uchar,
     pub db_cpid: pid_t,
-    pub db_cache: *mut illumos_ddi_dki::c_void,
+    pub db_cache: *mut illumos_sys_hdrs::c_void,
     pub db_mblk: *mut msgb,
     pub db_free: ::core::option::Option<
         unsafe extern "C" fn(arg1: *mut msgb, arg2: *mut datab),
@@ -12442,7 +12446,7 @@ pub struct datab {
 #[derive(Copy, Clone)]
 pub union datab__bindgen_ty_1 {
     pub enforce_alignment: f64,
-    pub data: [illumos_ddi_dki::c_uchar; 8usize],
+    pub data: [illumos_sys_hdrs::c_uchar; 8usize],
     pub cksum: datab__bindgen_ty_1__bindgen_ty_1,
 }
 #[repr(C)]
@@ -12465,12 +12469,12 @@ pub struct msgb {
     pub b_next: *mut msgb,
     pub b_prev: *mut msgb,
     pub b_cont: *mut msgb,
-    pub b_rptr: *mut illumos_ddi_dki::c_uchar,
-    pub b_wptr: *mut illumos_ddi_dki::c_uchar,
+    pub b_rptr: *mut illumos_sys_hdrs::c_uchar,
+    pub b_wptr: *mut illumos_sys_hdrs::c_uchar,
     pub b_datap: *mut datab,
-    pub b_band: illumos_ddi_dki::c_uchar,
-    pub b_tag: illumos_ddi_dki::c_uchar,
-    pub b_flag: illumos_ddi_dki::c_ushort,
+    pub b_band: illumos_sys_hdrs::c_uchar,
+    pub b_tag: illumos_sys_hdrs::c_uchar,
+    pub b_flag: illumos_sys_hdrs::c_ushort,
     pub b_queue: *mut queue_t,
 }
 #[repr(C)]
@@ -12479,8 +12483,8 @@ pub struct bcache {
     pub mutex: kmutex_t,
     pub buffer_cache: *mut kmem_cache,
     pub dblk_cache: *mut kmem_cache,
-    pub alloc: illumos_ddi_dki::c_int,
-    pub destroy: illumos_ddi_dki::c_int,
+    pub alloc: illumos_sys_hdrs::c_int,
+    pub destroy: illumos_sys_hdrs::c_int,
     pub size: size_t,
     pub align: uint_t,
 }
@@ -12488,19 +12492,19 @@ pub type bcache_t = bcache;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct iocblk {
-    pub ioc_cmd: illumos_ddi_dki::c_int,
+    pub ioc_cmd: illumos_sys_hdrs::c_int,
     pub ioc_cr: *mut cred_t,
     pub ioc_id: uint_t,
     pub ioc_flag: uint_t,
     pub ioc_count: size_t,
-    pub ioc_rval: illumos_ddi_dki::c_int,
-    pub ioc_error: illumos_ddi_dki::c_int,
+    pub ioc_rval: illumos_sys_hdrs::c_int,
+    pub ioc_error: illumos_sys_hdrs::c_int,
 }
 pub type IOCP = *mut iocblk;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct copyreq {
-    pub cq_cmd: illumos_ddi_dki::c_int,
+    pub cq_cmd: illumos_sys_hdrs::c_int,
     pub cq_cr: *mut cred_t,
     pub cq_id: uint_t,
     pub cq_flag: uint_t,
@@ -12511,7 +12515,7 @@ pub struct copyreq {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct copyresp {
-    pub cp_cmd: illumos_ddi_dki::c_int,
+    pub cp_cmd: illumos_sys_hdrs::c_int,
     pub cp_cr: *mut cred_t,
     pub cp_id: uint_t,
     pub cp_flag: uint_t,
@@ -12529,13 +12533,13 @@ pub union ioctypes {
 #[derive(Debug, Copy, Clone)]
 pub struct stroptions {
     pub so_flags: uint_t,
-    pub so_readopt: illumos_ddi_dki::c_short,
+    pub so_readopt: illumos_sys_hdrs::c_short,
     pub so_wroff: ushort_t,
     pub so_minpsz: ssize_t,
     pub so_maxpsz: ssize_t,
     pub so_hiwat: size_t,
     pub so_lowat: size_t,
-    pub so_band: illumos_ddi_dki::c_uchar,
+    pub so_band: illumos_sys_hdrs::c_uchar,
     pub so_erropt: ushort_t,
     pub so_maxblk: ssize_t,
     pub so_copyopt: ushort_t,
@@ -12551,19 +12555,19 @@ pub struct struiod {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct infod {
-    pub d_cmd: illumos_ddi_dki::c_uchar,
-    pub d_res: illumos_ddi_dki::c_uchar,
-    pub d_bytes: illumos_ddi_dki::c_int,
-    pub d_count: illumos_ddi_dki::c_int,
+    pub d_cmd: illumos_sys_hdrs::c_uchar,
+    pub d_res: illumos_sys_hdrs::c_uchar,
+    pub d_bytes: illumos_sys_hdrs::c_int,
+    pub d_count: illumos_sys_hdrs::c_int,
     pub d_uiop: *mut uio_t,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct cmdblk {
-    pub cb_cmd: illumos_ddi_dki::c_int,
+    pub cb_cmd: illumos_sys_hdrs::c_int,
     pub cb_cr: *mut cred_t,
     pub cb_len: uint_t,
-    pub cb_error: illumos_ddi_dki::c_int,
+    pub cb_error: illumos_sys_hdrs::c_int,
 }
 pub type cmdblk_t = cmdblk;
 extern "C" {
@@ -12571,7 +12575,7 @@ extern "C" {
 }
 extern "C" {
     pub fn desballoc(
-        arg1: *mut illumos_ddi_dki::c_uchar,
+        arg1: *mut illumos_sys_hdrs::c_uchar,
         arg2: size_t,
         arg3: uint_t,
         arg4: *mut frtn_t,
@@ -12579,7 +12583,7 @@ extern "C" {
 }
 extern "C" {
     pub fn esballoc(
-        arg1: *mut illumos_ddi_dki::c_uchar,
+        arg1: *mut illumos_sys_hdrs::c_uchar,
         arg2: size_t,
         arg3: uint_t,
         arg4: *mut frtn_t,
@@ -12587,7 +12591,7 @@ extern "C" {
 }
 extern "C" {
     pub fn bcache_create(
-        arg1: *mut illumos_ddi_dki::c_char,
+        arg1: *mut illumos_sys_hdrs::c_char,
         arg2: size_t,
         arg3: uint_t,
     ) -> *mut bcache_t;
@@ -12602,25 +12606,25 @@ extern "C" {
     pub fn mkiocb(arg1: uint_t) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn testb(arg1: size_t, arg2: uint_t) -> illumos_ddi_dki::c_int;
+    pub fn testb(arg1: size_t, arg2: uint_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn bufcall(
         arg1: size_t,
         arg2: uint_t,
         arg3: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
     ) -> bufcall_id_t;
 }
 extern "C" {
     pub fn esbbcall(
         arg1: uint_t,
         arg2: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
     ) -> bufcall_id_t;
 }
 extern "C" {
@@ -12661,13 +12665,14 @@ extern "C" {
     pub fn rmvb(arg1: *mut mblk_t, arg2: *mut mblk_t) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn pullupmsg(arg1: *mut msgb, arg2: ssize_t) -> illumos_ddi_dki::c_int;
+    pub fn pullupmsg(arg1: *mut msgb, arg2: ssize_t)
+        -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn msgpullup(arg1: *mut msgb, arg2: ssize_t) -> *mut mblk_t;
 }
 extern "C" {
-    pub fn adjmsg(arg1: *mut msgb, arg2: ssize_t) -> illumos_ddi_dki::c_int;
+    pub fn adjmsg(arg1: *mut msgb, arg2: ssize_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn msgdsize(arg1: *mut msgb) -> size_t;
@@ -12679,58 +12684,58 @@ extern "C" {
     pub fn rmvq(arg1: *mut queue_t, arg2: *mut mblk_t);
 }
 extern "C" {
-    pub fn flushq(arg1: *mut queue_t, arg2: illumos_ddi_dki::c_int);
+    pub fn flushq(arg1: *mut queue_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn flushq_common(
         arg1: *mut queue_t,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
     pub fn flushband(
         arg1: *mut queue_t,
-        arg2: illumos_ddi_dki::c_uchar,
-        arg3: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_uchar,
+        arg3: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
-    pub fn canput(arg1: *mut queue_t) -> illumos_ddi_dki::c_int;
+    pub fn canput(arg1: *mut queue_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn bcanput(
         arg1: *mut queue_t,
-        arg2: illumos_ddi_dki::c_uchar,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_uchar,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn canputnext(arg1: *mut queue_t) -> illumos_ddi_dki::c_int;
+    pub fn canputnext(arg1: *mut queue_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn bcanputnext(
         arg1: *mut queue_t,
-        arg2: illumos_ddi_dki::c_uchar,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_uchar,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn putq(
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn putbq(
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn insq(
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
         arg3: *mut mblk_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn put(arg1: *mut queue_t, arg2: *mut mblk_t);
@@ -12741,28 +12746,28 @@ extern "C" {
 extern "C" {
     pub fn putctl(
         arg1: *mut queue_t,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn putctl1(
         arg1: *mut queue_t,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn putnextctl(
         arg1: *mut queue_t,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn putnextctl1(
         arg1: *mut queue_t,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn backq(arg1: *mut queue_t) -> *mut queue_t;
@@ -12774,7 +12779,7 @@ extern "C" {
     pub fn qenable(arg1: *mut queue_t);
 }
 extern "C" {
-    pub fn qsize(arg1: *mut queue_t) -> illumos_ddi_dki::c_int;
+    pub fn qsize(arg1: *mut queue_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn noenable(arg1: *mut queue_t);
@@ -12786,17 +12791,17 @@ extern "C" {
     pub fn strqset(
         arg1: *mut queue_t,
         arg2: qfields_t,
-        arg3: illumos_ddi_dki::c_uchar,
+        arg3: illumos_sys_hdrs::c_uchar,
         arg4: isize,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn strqget(
         arg1: *mut queue_t,
         arg2: qfields_t,
-        arg3: illumos_ddi_dki::c_uchar,
-        arg4: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: illumos_sys_hdrs::c_uchar,
+        arg4: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn unbufcall(arg1: bufcall_id_t);
@@ -12817,7 +12822,7 @@ extern "C" {
     pub fn qwait(arg1: *mut queue_t);
 }
 extern "C" {
-    pub fn qwait_sig(arg1: *mut queue_t) -> illumos_ddi_dki::c_int;
+    pub fn qwait_sig(arg1: *mut queue_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn qwait_rw(arg1: *mut queue_t) -> boolean_t;
@@ -12827,16 +12832,16 @@ extern "C" {
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
         func: ::core::option::Option<unsafe extern "C" fn()>,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
     pub fn qtimeout(
         arg1: *mut queue_t,
         func: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: clock_t,
     ) -> timeout_id_t;
 }
@@ -12846,9 +12851,9 @@ extern "C" {
         arg2: size_t,
         arg3: uint_t,
         arg4: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
-        arg5: *mut illumos_ddi_dki::c_void,
+        arg5: *mut illumos_sys_hdrs::c_void,
     ) -> bufcall_id_t;
 }
 extern "C" {
@@ -12858,59 +12863,59 @@ extern "C" {
     pub fn qunbufcall(arg1: *mut queue_t, arg2: bufcall_id_t);
 }
 extern "C" {
-    pub fn strwakeq(arg1: *mut queue_t, arg2: illumos_ddi_dki::c_int);
+    pub fn strwakeq(arg1: *mut queue_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn struioget(
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
         arg3: *mut struiod_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rwnext(
         arg1: *mut queue_t,
         arg2: *mut struiod_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn infonext(
         arg1: *mut queue_t,
         arg2: *mut infod_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn isuioq(arg1: *mut queue_t) -> illumos_ddi_dki::c_int;
+    pub fn isuioq(arg1: *mut queue_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn create_putlocks(arg1: *mut queue_t, arg2: illumos_ddi_dki::c_int);
+    pub fn create_putlocks(arg1: *mut queue_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn mp_cont_len(
         arg1: *mut mblk_t,
-        arg2: *mut illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: *mut illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut nstrpush: illumos_ddi_dki::c_int;
+    pub static mut nstrpush: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn inet_minor_create(
-        arg1: *mut illumos_ddi_dki::c_char,
+        arg1: *mut illumos_sys_hdrs::c_char,
         arg2: dev_t,
         arg3: dev_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
-    pub fn inet_minor_destroy(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn inet_minor_destroy(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn inet_minor_alloc(arg1: *mut illumos_ddi_dki::c_void) -> dev_t;
+    pub fn inet_minor_alloc(arg1: *mut illumos_sys_hdrs::c_void) -> dev_t;
 }
 extern "C" {
-    pub fn inet_minor_free(arg1: *mut illumos_ddi_dki::c_void, arg2: dev_t);
+    pub fn inet_minor_free(arg1: *mut illumos_sys_hdrs::c_void, arg2: dev_t);
 }
 extern "C" {
     pub fn inet_freemsg(arg1: *mut mblk_t);
@@ -12921,21 +12926,21 @@ pub type ndgetf_t = ::core::option::Option<
         arg2: MBLKP,
         arg3: caddr_t,
         arg4: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 pub type ndsetf_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut queue_t,
         arg2: MBLKP,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: caddr_t,
         arg5: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct nde_s {
-    pub nde_name: *mut illumos_ddi_dki::c_char,
+    pub nde_name: *mut illumos_sys_hdrs::c_char,
     pub nde_get_pfi: pfi_t,
     pub nde_set_pfi: pfi_t,
     pub nde_data: caddr_t,
@@ -12944,22 +12949,22 @@ pub type NDE = nde_s;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct nd_s {
-    pub nd_free_count: illumos_ddi_dki::c_int,
-    pub nd_size: illumos_ddi_dki::c_int,
+    pub nd_free_count: illumos_sys_hdrs::c_int,
+    pub nd_size: illumos_sys_hdrs::c_int,
     pub nd_tbl: *mut NDE,
 }
 pub type ND = nd_s;
 extern "C" {
     pub fn nd_load(
         arg1: *mut caddr_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: ndgetf_t,
         arg4: ndsetf_t,
         arg5: caddr_t,
     ) -> boolean_t;
 }
 extern "C" {
-    pub fn nd_unload(arg1: *mut caddr_t, arg2: *mut illumos_ddi_dki::c_char);
+    pub fn nd_unload(arg1: *mut caddr_t, arg2: *mut illumos_sys_hdrs::c_char);
 }
 extern "C" {
     pub fn nd_free(arg1: *mut caddr_t);
@@ -12969,7 +12974,7 @@ extern "C" {
         arg1: *mut queue_t,
         arg2: caddr_t,
         arg3: MBLKP,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn nd_get_default(
@@ -12977,7 +12982,7 @@ extern "C" {
         arg2: MBLKP,
         arg3: caddr_t,
         arg4: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn nd_get_long(
@@ -12985,7 +12990,7 @@ extern "C" {
         arg2: MBLKP,
         arg3: caddr_t,
         arg4: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn nd_get_names(
@@ -12993,25 +12998,25 @@ extern "C" {
         arg2: MBLKP,
         arg3: caddr_t,
         arg4: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn nd_set_default(
         arg1: *mut queue_t,
         arg2: MBLKP,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: caddr_t,
         arg5: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn nd_set_long(
         arg1: *mut queue_t,
         arg2: MBLKP,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: caddr_t,
         arg5: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn atomic_inc_8(arg1: *mut u8);
@@ -13065,7 +13070,7 @@ extern "C" {
     pub fn atomic_add_8(arg1: *mut u8, arg2: i8);
 }
 extern "C" {
-    pub fn atomic_add_char(arg1: *mut uchar_t, arg2: illumos_ddi_dki::c_schar);
+    pub fn atomic_add_char(arg1: *mut uchar_t, arg2: illumos_sys_hdrs::c_schar);
 }
 extern "C" {
     pub fn atomic_add_16(arg1: *mut u16, arg2: i16);
@@ -13073,20 +13078,20 @@ extern "C" {
 extern "C" {
     pub fn atomic_add_short(
         arg1: *mut ushort_t,
-        arg2: illumos_ddi_dki::c_short,
+        arg2: illumos_sys_hdrs::c_short,
     );
 }
 extern "C" {
     pub fn atomic_add_32(arg1: *mut u32, arg2: i32);
 }
 extern "C" {
-    pub fn atomic_add_int(arg1: *mut uint_t, arg2: illumos_ddi_dki::c_int);
+    pub fn atomic_add_int(arg1: *mut uint_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
-    pub fn atomic_add_ptr(arg1: *mut illumos_ddi_dki::c_void, arg2: ssize_t);
+    pub fn atomic_add_ptr(arg1: *mut illumos_sys_hdrs::c_void, arg2: ssize_t);
 }
 extern "C" {
-    pub fn atomic_add_long(arg1: *mut ulong_t, arg2: illumos_ddi_dki::c_long);
+    pub fn atomic_add_long(arg1: *mut ulong_t, arg2: illumos_sys_hdrs::c_long);
 }
 extern "C" {
     pub fn atomic_add_64(arg1: *mut u64, arg2: i64);
@@ -13193,7 +13198,7 @@ extern "C" {
 extern "C" {
     pub fn atomic_add_char_nv(
         arg1: *mut uchar_t,
-        arg2: illumos_ddi_dki::c_schar,
+        arg2: illumos_sys_hdrs::c_schar,
     ) -> uchar_t;
 }
 extern "C" {
@@ -13202,7 +13207,7 @@ extern "C" {
 extern "C" {
     pub fn atomic_add_short_nv(
         arg1: *mut ushort_t,
-        arg2: illumos_ddi_dki::c_short,
+        arg2: illumos_sys_hdrs::c_short,
     ) -> ushort_t;
 }
 extern "C" {
@@ -13211,19 +13216,19 @@ extern "C" {
 extern "C" {
     pub fn atomic_add_int_nv(
         arg1: *mut uint_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
     ) -> uint_t;
 }
 extern "C" {
     pub fn atomic_add_ptr_nv(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: ssize_t,
-    ) -> *mut illumos_ddi_dki::c_void;
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn atomic_add_long_nv(
         arg1: *mut ulong_t,
-        arg2: illumos_ddi_dki::c_long,
+        arg2: illumos_sys_hdrs::c_long,
     ) -> ulong_t;
 }
 extern "C" {
@@ -13313,10 +13318,10 @@ extern "C" {
 }
 extern "C" {
     pub fn atomic_cas_ptr(
-        arg1: *mut illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
-        arg3: *mut illumos_ddi_dki::c_void,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg1: *mut illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn atomic_cas_ulong(
@@ -13348,9 +13353,9 @@ extern "C" {
 }
 extern "C" {
     pub fn atomic_swap_ptr(
-        arg1: *mut illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg1: *mut illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn atomic_swap_ulong(arg1: *mut ulong_t, arg2: ulong_t) -> ulong_t;
@@ -13362,13 +13367,13 @@ extern "C" {
     pub fn atomic_set_long_excl(
         arg1: *mut ulong_t,
         arg2: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn atomic_clear_long_excl(
         arg1: *mut ulong_t,
         arg2: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn membar_enter();
@@ -13393,87 +13398,87 @@ pub struct so_snd_bufinfo {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct fil_info {
-    pub fi_flags: illumos_ddi_dki::c_int,
-    pub fi_pos: illumos_ddi_dki::c_int,
-    pub fi_name: [illumos_ddi_dki::c_char; 32usize],
+    pub fi_flags: illumos_sys_hdrs::c_int,
+    pub fi_pos: illumos_sys_hdrs::c_int,
+    pub fi_name: [illumos_sys_hdrs::c_char; 32usize],
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct linger {
-    pub l_onoff: illumos_ddi_dki::c_int,
-    pub l_linger: illumos_ddi_dki::c_int,
+    pub l_onoff: illumos_sys_hdrs::c_int,
+    pub l_linger: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct msghdr {
-    pub msg_name: *mut illumos_ddi_dki::c_void,
+    pub msg_name: *mut illumos_sys_hdrs::c_void,
     pub msg_namelen: socklen_t,
     pub msg_iov: *mut iovec,
-    pub msg_iovlen: illumos_ddi_dki::c_int,
-    pub msg_control: *mut illumos_ddi_dki::c_void,
+    pub msg_iovlen: illumos_sys_hdrs::c_int,
+    pub msg_control: *mut illumos_sys_hdrs::c_void,
     pub msg_controllen: socklen_t,
-    pub msg_flags: illumos_ddi_dki::c_int,
+    pub msg_flags: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct omsghdr {
-    pub msg_name: *mut illumos_ddi_dki::c_void,
+    pub msg_name: *mut illumos_sys_hdrs::c_void,
     pub msg_namelen: socklen_t,
     pub msg_iov: *mut iovec,
-    pub msg_iovlen: illumos_ddi_dki::c_int,
+    pub msg_iovlen: illumos_sys_hdrs::c_int,
     pub msg_accrights: caddr_t,
-    pub msg_accrightslen: illumos_ddi_dki::c_int,
+    pub msg_accrightslen: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct cmsghdr {
     pub cmsg_len: socklen_t,
-    pub cmsg_level: illumos_ddi_dki::c_int,
-    pub cmsg_type: illumos_ddi_dki::c_int,
+    pub cmsg_level: illumos_sys_hdrs::c_int,
+    pub cmsg_type: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ifnet {
-    pub if_name: *mut illumos_ddi_dki::c_char,
-    pub if_unit: illumos_ddi_dki::c_short,
-    pub if_mtu: illumos_ddi_dki::c_short,
-    pub if_flags: illumos_ddi_dki::c_short,
-    pub if_timer: illumos_ddi_dki::c_short,
+    pub if_name: *mut illumos_sys_hdrs::c_char,
+    pub if_unit: illumos_sys_hdrs::c_short,
+    pub if_mtu: illumos_sys_hdrs::c_short,
+    pub if_flags: illumos_sys_hdrs::c_short,
+    pub if_timer: illumos_sys_hdrs::c_short,
     pub if_promisc: ushort_t,
-    pub if_metric: illumos_ddi_dki::c_int,
+    pub if_metric: illumos_sys_hdrs::c_int,
     pub if_addrlist: *mut ifaddr,
     pub if_snd: ifnet_ifqueue,
     pub if_init: ::core::option::Option<
-        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
     >,
     pub if_output: ::core::option::Option<
-        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
     >,
     pub if_ioctl: ::core::option::Option<
-        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
     >,
     pub if_reset: ::core::option::Option<
-        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
     >,
     pub if_watchdog: ::core::option::Option<
-        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
     >,
-    pub if_ipackets: illumos_ddi_dki::c_int,
-    pub if_ierrors: illumos_ddi_dki::c_int,
-    pub if_opackets: illumos_ddi_dki::c_int,
-    pub if_oerrors: illumos_ddi_dki::c_int,
-    pub if_collisions: illumos_ddi_dki::c_int,
+    pub if_ipackets: illumos_sys_hdrs::c_int,
+    pub if_ierrors: illumos_sys_hdrs::c_int,
+    pub if_opackets: illumos_sys_hdrs::c_int,
+    pub if_oerrors: illumos_sys_hdrs::c_int,
+    pub if_collisions: illumos_sys_hdrs::c_int,
     pub if_next: *mut ifnet,
     pub if_upper: *mut ifnet,
     pub if_lower: *mut ifnet,
     pub if_input: ::core::option::Option<
-        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
     >,
     pub if_ctlin: ::core::option::Option<
-        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
     >,
     pub if_ctlout: ::core::option::Option<
-        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
     >,
     pub if_memmap: *mut map,
 }
@@ -13482,9 +13487,9 @@ pub struct ifnet {
 pub struct ifnet_ifqueue {
     pub ifq_head: *mut mbuf,
     pub ifq_tail: *mut mbuf,
-    pub ifq_len: illumos_ddi_dki::c_int,
-    pub ifq_maxlen: illumos_ddi_dki::c_int,
-    pub ifq_drops: illumos_ddi_dki::c_int,
+    pub ifq_len: illumos_sys_hdrs::c_int,
+    pub ifq_maxlen: illumos_sys_hdrs::c_int,
+    pub ifq_drops: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -13507,10 +13512,10 @@ pub struct lif_nd_req {
     pub lnr_state_create: u8,
     pub lnr_state_same_lla: u8,
     pub lnr_state_diff_lla: u8,
-    pub lnr_hdw_len: illumos_ddi_dki::c_int,
-    pub lnr_flags: illumos_ddi_dki::c_int,
-    pub lnr_pad0: illumos_ddi_dki::c_int,
-    pub lnr_hdw_addr: [illumos_ddi_dki::c_char; 64usize],
+    pub lnr_hdw_len: illumos_sys_hdrs::c_int,
+    pub lnr_flags: illumos_sys_hdrs::c_int,
+    pub lnr_pad0: illumos_sys_hdrs::c_int,
+    pub lnr_hdw_addr: [illumos_sys_hdrs::c_char; 64usize],
 }
 pub type lif_nd_req_t = lif_nd_req;
 #[repr(C)]
@@ -13525,7 +13530,7 @@ pub type lif_ifinfo_req_t = lif_ifinfo_req;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct lifreq {
-    pub lifr_name: [illumos_ddi_dki::c_char; 32usize],
+    pub lifr_name: [illumos_sys_hdrs::c_char; 32usize],
     pub lifr_lifru1: lifreq__bindgen_ty_1,
     pub lifr_type: uint_t,
     pub lifr_lifru: lifreq__bindgen_ty_2,
@@ -13533,7 +13538,7 @@ pub struct lifreq {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union lifreq__bindgen_ty_1 {
-    pub lifru_addrlen: illumos_ddi_dki::c_int,
+    pub lifru_addrlen: illumos_sys_hdrs::c_int,
     pub lifru_ppa: uint_t,
 }
 #[repr(C)]
@@ -13544,15 +13549,15 @@ pub union lifreq__bindgen_ty_2 {
     pub lifru_broadaddr: sockaddr_storage,
     pub lifru_token: sockaddr_storage,
     pub lifru_subnet: sockaddr_storage,
-    pub lifru_index: illumos_ddi_dki::c_int,
+    pub lifru_index: illumos_sys_hdrs::c_int,
     pub lifru_flags: u64,
-    pub lifru_metric: illumos_ddi_dki::c_int,
+    pub lifru_metric: illumos_sys_hdrs::c_int,
     pub lifru_mtu: uint_t,
-    pub lif_muxid: [illumos_ddi_dki::c_int; 2usize],
+    pub lif_muxid: [illumos_sys_hdrs::c_int; 2usize],
     pub lifru_nd_req: lif_nd_req,
     pub lifru_ifinfo_req: lif_ifinfo_req,
-    pub lifru_groupname: [illumos_ddi_dki::c_char; 32usize],
-    pub lifru_binding: [illumos_ddi_dki::c_char; 32usize],
+    pub lifru_groupname: [illumos_sys_hdrs::c_char; 32usize],
+    pub lifru_binding: [illumos_sys_hdrs::c_char; 32usize],
     pub lifru_zoneid: zoneid_t,
     pub lifru_dadstate: uint_t,
 }
@@ -13560,8 +13565,8 @@ pub union lifreq__bindgen_ty_2 {
 #[derive(Debug, Copy, Clone)]
 pub struct sioc_addrreq {
     pub sa_addr: sockaddr_storage,
-    pub sa_res: illumos_ddi_dki::c_int,
-    pub sa_pad: illumos_ddi_dki::c_int,
+    pub sa_res: illumos_sys_hdrs::c_int,
+    pub sa_pad: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -13575,11 +13580,11 @@ pub struct sioc_lsg_req {
 }
 pub const glif_dad_state_t_DAD_IN_PROGRESS: glif_dad_state_t = 1;
 pub const glif_dad_state_t_DAD_DONE: glif_dad_state_t = 2;
-pub type glif_dad_state_t = illumos_ddi_dki::c_uint;
+pub type glif_dad_state_t = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct ifreq {
-    pub ifr_name: [illumos_ddi_dki::c_char; 16usize],
+    pub ifr_name: [illumos_sys_hdrs::c_char; 16usize],
     pub ifr_ifru: ifreq__bindgen_ty_1,
 }
 #[repr(C)]
@@ -13587,15 +13592,15 @@ pub struct ifreq {
 pub union ifreq__bindgen_ty_1 {
     pub ifru_addr: sockaddr,
     pub ifru_dstaddr: sockaddr,
-    pub ifru_oname: [illumos_ddi_dki::c_char; 16usize],
+    pub ifru_oname: [illumos_sys_hdrs::c_char; 16usize],
     pub ifru_broadaddr: sockaddr,
-    pub ifru_index: illumos_ddi_dki::c_int,
+    pub ifru_index: illumos_sys_hdrs::c_int,
     pub ifru_mtu: uint_t,
-    pub ifru_flags: illumos_ddi_dki::c_short,
-    pub ifru_metric: illumos_ddi_dki::c_int,
-    pub ifru_data: [illumos_ddi_dki::c_char; 1usize],
-    pub ifru_enaddr: [illumos_ddi_dki::c_char; 6usize],
-    pub if_muxid: [illumos_ddi_dki::c_int; 2usize],
+    pub ifru_flags: illumos_sys_hdrs::c_short,
+    pub ifru_metric: illumos_sys_hdrs::c_int,
+    pub ifru_data: [illumos_sys_hdrs::c_char; 1usize],
+    pub ifru_enaddr: [illumos_sys_hdrs::c_char; 6usize],
+    pub if_muxid: [illumos_sys_hdrs::c_int; 2usize],
     pub ifru_ppaflags: ifreq__bindgen_ty_1_ifr_ppaflags,
     pub ifru_dnld_req: ifreq__bindgen_ty_1_ifr_dnld_reqs,
     pub ifru_fddi_stat: ifreq__bindgen_ty_1_ifr_fddi_stats,
@@ -13605,8 +13610,8 @@ pub union ifreq__bindgen_ty_1 {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ifreq__bindgen_ty_1_ifr_ppaflags {
-    pub ifrup_flags: illumos_ddi_dki::c_short,
-    pub ifrup_filler: illumos_ddi_dki::c_short,
+    pub ifrup_flags: illumos_sys_hdrs::c_short,
+    pub ifrup_filler: illumos_sys_hdrs::c_short,
     pub ifrup_ppa: uint_t,
 }
 #[repr(C)]
@@ -13640,15 +13645,15 @@ pub struct ifreq__bindgen_ty_1_ifr_fddi_gen_struct {
 #[derive(Debug, Copy, Clone)]
 pub struct lifnum {
     pub lifn_family: sa_family_t,
-    pub lifn_flags: illumos_ddi_dki::c_int,
-    pub lifn_count: illumos_ddi_dki::c_int,
+    pub lifn_flags: illumos_sys_hdrs::c_int,
+    pub lifn_count: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct lifconf {
     pub lifc_family: sa_family_t,
-    pub lifc_flags: illumos_ddi_dki::c_int,
-    pub lifc_len: illumos_ddi_dki::c_int,
+    pub lifc_flags: illumos_sys_hdrs::c_int,
+    pub lifc_len: illumos_sys_hdrs::c_int,
     pub lifc_lifcu: lifconf__bindgen_ty_1,
 }
 #[repr(C)]
@@ -13674,11 +13679,11 @@ pub union lifsrcof__bindgen_ty_1 {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct lifgroupinfo {
-    pub gi_grname: [illumos_ddi_dki::c_char; 32usize],
-    pub gi_grifname: [illumos_ddi_dki::c_char; 32usize],
-    pub gi_m4ifname: [illumos_ddi_dki::c_char; 32usize],
-    pub gi_m6ifname: [illumos_ddi_dki::c_char; 32usize],
-    pub gi_bcifname: [illumos_ddi_dki::c_char; 32usize],
+    pub gi_grname: [illumos_sys_hdrs::c_char; 32usize],
+    pub gi_grifname: [illumos_sys_hdrs::c_char; 32usize],
+    pub gi_m4ifname: [illumos_sys_hdrs::c_char; 32usize],
+    pub gi_m6ifname: [illumos_sys_hdrs::c_char; 32usize],
+    pub gi_bcifname: [illumos_sys_hdrs::c_char; 32usize],
     pub gi_v4: boolean_t,
     pub gi_v6: boolean_t,
     pub gi_nv4: uint_t,
@@ -13689,7 +13694,7 @@ pub type lifgroupinfo_t = lifgroupinfo;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct ifconf {
-    pub ifc_len: illumos_ddi_dki::c_int,
+    pub ifc_len: illumos_sys_hdrs::c_int,
     pub ifc_ifcu: ifconf__bindgen_ty_1,
 }
 #[repr(C)]
@@ -13727,8 +13732,8 @@ pub struct if_msghdr {
     pub ifm_msglen: ushort_t,
     pub ifm_version: uchar_t,
     pub ifm_type: uchar_t,
-    pub ifm_addrs: illumos_ddi_dki::c_int,
-    pub ifm_flags: illumos_ddi_dki::c_int,
+    pub ifm_addrs: illumos_sys_hdrs::c_int,
+    pub ifm_flags: illumos_sys_hdrs::c_int,
     pub ifm_index: ushort_t,
     pub ifm_data: if_data,
 }
@@ -13739,28 +13744,28 @@ pub struct ifa_msghdr {
     pub ifam_msglen: ushort_t,
     pub ifam_version: uchar_t,
     pub ifam_type: uchar_t,
-    pub ifam_addrs: illumos_ddi_dki::c_int,
-    pub ifam_flags: illumos_ddi_dki::c_int,
+    pub ifam_addrs: illumos_sys_hdrs::c_int,
+    pub ifam_flags: illumos_sys_hdrs::c_int,
     pub ifam_index: ushort_t,
-    pub ifam_metric: illumos_ddi_dki::c_int,
+    pub ifam_metric: illumos_sys_hdrs::c_int,
 }
 pub type ifa_msghdr_t = ifa_msghdr;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct if_nameindex {
-    pub if_index: illumos_ddi_dki::c_uint,
-    pub if_name: *mut illumos_ddi_dki::c_char,
+    pub if_index: illumos_sys_hdrs::c_uint,
+    pub if_name: *mut illumos_sys_hdrs::c_char,
 }
 extern "C" {
     pub fn if_nametoindex(
-        arg1: *const illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_uint;
+        arg1: *const illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_uint;
 }
 extern "C" {
     pub fn if_indextoname(
-        arg1: illumos_ddi_dki::c_uint,
-        arg2: *mut illumos_ddi_dki::c_char,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: illumos_sys_hdrs::c_uint,
+        arg2: *mut illumos_sys_hdrs::c_char,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn if_nameindex() -> *mut if_nameindex;
@@ -13858,7 +13863,7 @@ pub const mcast_record_t_CHANGE_TO_INCLUDE: mcast_record_t = 3;
 pub const mcast_record_t_CHANGE_TO_EXCLUDE: mcast_record_t = 4;
 pub const mcast_record_t_ALLOW_NEW_SOURCES: mcast_record_t = 5;
 pub const mcast_record_t_BLOCK_OLD_SOURCES: mcast_record_t = 6;
-pub type mcast_record_t = illumos_ddi_dki::c_uint;
+pub type mcast_record_t = illumos_sys_hdrs::c_uint;
 pub type hook_data_t = usize;
 pub type hook_event_token_t = *mut hook_event_int;
 pub type hook_token_t = *mut hook_int;
@@ -13866,60 +13871,60 @@ pub type hook_func_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: hook_event_token_t,
         arg2: hook_data_t,
-        arg3: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int,
+        arg3: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 pub const hook_notify_cmd_e_HN_NONE: hook_notify_cmd_e = 0;
 pub const hook_notify_cmd_e_HN_REGISTER: hook_notify_cmd_e = 1;
 pub const hook_notify_cmd_e_HN_UNREGISTER: hook_notify_cmd_e = 2;
-pub type hook_notify_cmd_e = illumos_ddi_dki::c_uint;
+pub type hook_notify_cmd_e = illumos_sys_hdrs::c_uint;
 pub use self::hook_notify_cmd_e as hook_notify_cmd_t;
 pub const hook_hint_e_HH_NONE: hook_hint_e = 0;
 pub const hook_hint_e_HH_FIRST: hook_hint_e = 1;
 pub const hook_hint_e_HH_LAST: hook_hint_e = 2;
 pub const hook_hint_e_HH_BEFORE: hook_hint_e = 3;
 pub const hook_hint_e_HH_AFTER: hook_hint_e = 4;
-pub type hook_hint_e = illumos_ddi_dki::c_uint;
+pub type hook_hint_e = illumos_sys_hdrs::c_uint;
 pub use self::hook_hint_e as hook_hint_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct hook_s {
-    pub h_version: illumos_ddi_dki::c_int,
+    pub h_version: illumos_sys_hdrs::c_int,
     pub h_func: hook_func_t,
-    pub h_name: *mut illumos_ddi_dki::c_char,
+    pub h_name: *mut illumos_sys_hdrs::c_char,
     pub h_flags: uint_t,
     pub h_hint: hook_hint_t,
     pub h_hintvalue: usize,
-    pub h_arg: *mut illumos_ddi_dki::c_void,
+    pub h_arg: *mut illumos_sys_hdrs::c_void,
 }
 pub type hook_t = hook_s;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct hook_family_s {
-    pub hf_version: illumos_ddi_dki::c_int,
-    pub hf_name: *mut illumos_ddi_dki::c_char,
+    pub hf_version: illumos_sys_hdrs::c_int,
+    pub hf_name: *mut illumos_sys_hdrs::c_char,
 }
 pub type hook_family_t = hook_family_s;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct hook_event_s {
-    pub he_version: illumos_ddi_dki::c_int,
-    pub he_name: *mut illumos_ddi_dki::c_char,
-    pub he_flags: illumos_ddi_dki::c_int,
+    pub he_version: illumos_sys_hdrs::c_int,
+    pub he_name: *mut illumos_sys_hdrs::c_char,
+    pub he_flags: illumos_sys_hdrs::c_int,
     pub he_interested: boolean_t,
 }
 pub type hook_event_t = hook_event_s;
 pub type hook_notify_fn_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: hook_notify_cmd_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-        arg3: *const illumos_ddi_dki::c_char,
-        arg4: *const illumos_ddi_dki::c_char,
-        arg5: *const illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int,
+        arg2: *mut illumos_sys_hdrs::c_void,
+        arg3: *const illumos_sys_hdrs::c_char,
+        arg4: *const illumos_sys_hdrs::c_char,
+        arg5: *const illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 extern "C" {
-    pub fn hook_alloc(version: illumos_ddi_dki::c_int) -> *mut hook_t;
+    pub fn hook_alloc(version: illumos_sys_hdrs::c_int) -> *mut hook_t;
 }
 extern "C" {
     pub fn hook_free(arg1: *mut hook_t);
@@ -13935,7 +13940,7 @@ pub type condvar_impl_t = _condvar_impl;
 pub struct cvwaitlock_s {
     pub cvw_lock: kmutex_t,
     pub cvw_waiter: kcondvar_t,
-    pub cvw_refcnt: illumos_ddi_dki::c_int,
+    pub cvw_refcnt: illumos_sys_hdrs::c_int,
 }
 pub type cvwaitlock_t = cvwaitlock_s;
 pub const fwflag_e_FWF_NONE: fwflag_e = 0;
@@ -13946,7 +13951,7 @@ pub const fwflag_e_FWF_DESTROY_WANTED: fwflag_e = 16;
 pub const fwflag_e_FWF_ADD_WANTED: fwflag_e = 64;
 pub const fwflag_e_FWF_DEL_WANTED: fwflag_e = 128;
 pub const fwflag_e_FWF_NOT_READY: fwflag_e = 256;
-pub type fwflag_e = illumos_ddi_dki::c_uint;
+pub type fwflag_e = illumos_sys_hdrs::c_uint;
 pub use self::fwflag_e as fwflag_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -13975,7 +13980,7 @@ pub struct hook_int {
     pub hi_hook: hook_t,
     pub hi_kstats: hook_hook_kstat_t,
     pub hi_kstatp: *mut kstat_t,
-    pub hi_ksname: *mut illumos_ddi_dki::c_char,
+    pub hi_ksname: *mut illumos_sys_hdrs::c_char,
     pub hi_notify_lock: cvwaitlock_t,
 }
 #[repr(C)]
@@ -13997,7 +14002,7 @@ pub type hook_int_head_t = hook_int_head;
 pub struct hook_notify {
     pub hn_entry: hook_notify__bindgen_ty_1,
     pub hn_func: hook_notify_fn_t,
-    pub hn_arg: *mut illumos_ddi_dki::c_void,
+    pub hn_arg: *mut illumos_sys_hdrs::c_void,
     pub hn_flags: u32,
 }
 #[repr(C)]
@@ -14083,7 +14088,7 @@ pub struct hook_stack {
     pub hks_netstack: *mut netstack_t,
     pub hks_netstackid: netstackid_t,
     pub hks_nhead: hook_notify_head_t,
-    pub hks_shutdown: illumos_ddi_dki::c_int,
+    pub hks_shutdown: illumos_sys_hdrs::c_int,
     pub hks_waiter: flagwait_t,
 }
 #[repr(C)]
@@ -14103,21 +14108,21 @@ extern "C" {
         arg1: *mut hook_family_int_t,
         arg2: hook_event_token_t,
         arg3: hook_data_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_register(
         arg1: *mut hook_family_int_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: *mut hook_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_unregister(
         arg1: *mut hook_family_int_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: *mut hook_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_event_add(
@@ -14128,72 +14133,72 @@ extern "C" {
 extern "C" {
     pub fn hook_event_notify_register(
         arg1: *mut hook_family_int_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: hook_notify_fn_t,
-        arg4: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_event_notify_unregister(
         arg1: *mut hook_family_int_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: hook_notify_fn_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_event_remove(
         arg1: *mut hook_family_int_t,
         arg2: *mut hook_event_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_event_shutdown(
         arg1: *mut hook_family_int_t,
         arg2: *mut hook_event_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_family_add(
         arg1: *mut hook_family_t,
         arg2: *mut hook_stack_t,
-        arg3: *mut *mut illumos_ddi_dki::c_void,
+        arg3: *mut *mut illumos_sys_hdrs::c_void,
     ) -> *mut hook_family_int_t;
 }
 extern "C" {
     pub fn hook_family_notify_register(
         arg1: *mut hook_family_int_t,
         arg2: hook_notify_fn_t,
-        arg3: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_family_notify_unregister(
         arg1: *mut hook_family_int_t,
         arg2: hook_notify_fn_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_family_remove(
         arg1: *mut hook_family_int_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_family_shutdown(
         arg1: *mut hook_family_int_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_stack_notify_register(
         arg1: netstackid_t,
         arg2: hook_notify_fn_t,
-        arg3: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn hook_stack_notify_unregister(
         arg1: netstackid_t,
         arg2: hook_notify_fn_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 pub type phy_if_t = usize;
 pub type lif_if_t = isize;
@@ -14203,17 +14208,17 @@ pub const net_ifaddr_NA_ADDRESS: net_ifaddr = 1;
 pub const net_ifaddr_NA_PEER: net_ifaddr = 2;
 pub const net_ifaddr_NA_BROADCAST: net_ifaddr = 3;
 pub const net_ifaddr_NA_NETMASK: net_ifaddr = 4;
-pub type net_ifaddr = illumos_ddi_dki::c_uint;
+pub type net_ifaddr = illumos_sys_hdrs::c_uint;
 pub use self::net_ifaddr as net_ifaddr_t;
 pub const inject_NI_QUEUE_IN: inject = 1;
 pub const inject_NI_QUEUE_OUT: inject = 2;
 pub const inject_NI_DIRECT_OUT: inject = 3;
-pub type inject = illumos_ddi_dki::c_uint;
+pub type inject = illumos_sys_hdrs::c_uint;
 pub use self::inject as inject_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct net_inject {
-    pub ni_version: illumos_ddi_dki::c_int,
+    pub ni_version: illumos_sys_hdrs::c_int,
     pub ni_netid: netid_t,
     pub ni_packet: *mut msgb,
     pub ni_addr: sockaddr_storage,
@@ -14224,25 +14229,25 @@ pub type net_handle_t = *mut net_data;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct net_protocol_s {
-    pub netp_version: illumos_ddi_dki::c_int,
-    pub netp_name: *mut illumos_ddi_dki::c_char,
+    pub netp_version: illumos_sys_hdrs::c_int,
+    pub netp_name: *mut illumos_sys_hdrs::c_char,
     pub netp_getifname: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: net_handle_t,
             arg2: phy_if_t,
-            arg3: *mut illumos_ddi_dki::c_char,
+            arg3: *mut illumos_sys_hdrs::c_char,
             arg4: size_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub netp_getmtu: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: net_handle_t,
             arg2: phy_if_t,
             arg3: lif_if_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub netp_getpmtuenabled: ::core::option::Option<
-        unsafe extern "C" fn(arg1: net_handle_t) -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn(arg1: net_handle_t) -> illumos_sys_hdrs::c_int,
     >,
     pub netp_getlifaddr: ::core::option::Option<
         unsafe extern "C" fn(
@@ -14251,8 +14256,8 @@ pub struct net_protocol_s {
             arg3: lif_if_t,
             arg4: size_t,
             arg5: *mut net_ifaddr_t,
-            arg6: *mut illumos_ddi_dki::c_void,
-        ) -> illumos_ddi_dki::c_int,
+            arg6: *mut illumos_sys_hdrs::c_void,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub neti_getlifzone: ::core::option::Option<
         unsafe extern "C" fn(
@@ -14260,7 +14265,7 @@ pub struct net_protocol_s {
             arg2: phy_if_t,
             arg3: lif_if_t,
             arg4: *mut zoneid_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub neti_getlifflags: ::core::option::Option<
         unsafe extern "C" fn(
@@ -14268,7 +14273,7 @@ pub struct net_protocol_s {
             arg2: phy_if_t,
             arg3: lif_if_t,
             arg4: *mut u64,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub netp_phygetnext: ::core::option::Option<
         unsafe extern "C" fn(arg1: net_handle_t, arg2: phy_if_t) -> phy_if_t,
@@ -14276,7 +14281,7 @@ pub struct net_protocol_s {
     pub netp_phylookup: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: net_handle_t,
-            arg2: *const illumos_ddi_dki::c_char,
+            arg2: *const illumos_sys_hdrs::c_char,
         ) -> phy_if_t,
     >,
     pub netp_lifgetnext: ::core::option::Option<
@@ -14291,7 +14296,7 @@ pub struct net_protocol_s {
             arg1: net_handle_t,
             arg2: inject_t,
             arg3: *mut net_inject_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub netp_routeto: ::core::option::Option<
         unsafe extern "C" fn(
@@ -14304,13 +14309,13 @@ pub struct net_protocol_s {
         unsafe extern "C" fn(
             arg1: net_handle_t,
             arg2: *mut msgb,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub netp_isvalidchecksum: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: net_handle_t,
             arg2: *mut msgb,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
 }
 pub type net_protocol_t = net_protocol_s;
@@ -14319,10 +14324,10 @@ pub type net_protocol_t = net_protocol_s;
 pub struct net_data {
     pub netd_list: net_data__bindgen_ty_1,
     pub netd_info: net_protocol_t,
-    pub netd_refcnt: illumos_ddi_dki::c_int,
+    pub netd_refcnt: illumos_sys_hdrs::c_int,
     pub netd_hooks: *mut hook_family_int_t,
     pub netd_stack: *mut neti_stack_s,
-    pub netd_condemned: illumos_ddi_dki::c_int,
+    pub netd_condemned: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -14335,22 +14340,28 @@ pub struct net_data__bindgen_ty_1 {
 pub struct injection_s {
     pub inj_data: net_inject_t,
     pub inj_isv6: boolean_t,
-    pub inj_ptr: *mut illumos_ddi_dki::c_void,
+    pub inj_ptr: *mut illumos_sys_hdrs::c_void,
 }
 pub type injection_t = injection_s;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct net_instance_s {
-    pub nin_version: illumos_ddi_dki::c_int,
-    pub nin_name: *mut illumos_ddi_dki::c_char,
+    pub nin_version: illumos_sys_hdrs::c_int,
+    pub nin_name: *mut illumos_sys_hdrs::c_char,
     pub nin_create: ::core::option::Option<
-        unsafe extern "C" fn(arg1: netid_t) -> *mut illumos_ddi_dki::c_void,
+        unsafe extern "C" fn(arg1: netid_t) -> *mut illumos_sys_hdrs::c_void,
     >,
     pub nin_destroy: ::core::option::Option<
-        unsafe extern "C" fn(arg1: netid_t, arg2: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(
+            arg1: netid_t,
+            arg2: *mut illumos_sys_hdrs::c_void,
+        ),
     >,
     pub nin_shutdown: ::core::option::Option<
-        unsafe extern "C" fn(arg1: netid_t, arg2: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(
+            arg1: netid_t,
+            arg2: *mut illumos_sys_hdrs::c_void,
+        ),
     >,
 }
 pub type net_instance_t = net_instance_s;
@@ -14359,7 +14370,7 @@ pub type net_instance_t = net_instance_s;
 pub struct net_instance_int_s {
     pub nini_next: net_instance_int_s__bindgen_ty_1,
     pub nini_ref: uint_t,
-    pub nini_created: *mut illumos_ddi_dki::c_void,
+    pub nini_created: *mut illumos_sys_hdrs::c_void,
     pub nini_parent: *mut net_instance_int_s,
     pub nini_instance: *mut net_instance_t,
     pub nini_notify: hook_notify_t,
@@ -14443,77 +14454,78 @@ extern "C" {
     pub fn net_event_shutdown(
         arg1: net_handle_t,
         arg2: *mut hook_event_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_event_unregister(
         arg1: net_handle_t,
         arg2: *mut hook_event_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_event_notify_register(
         arg1: net_handle_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: hook_notify_fn_t,
-        arg4: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_event_notify_unregister(
         arg1: net_handle_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: hook_notify_fn_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_family_register(
         arg1: net_handle_t,
         arg2: *mut hook_family_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_family_shutdown(
         arg1: net_handle_t,
         arg2: *mut hook_family_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_family_unregister(
         arg1: net_handle_t,
         arg2: *mut hook_family_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_hook_register(
         arg1: net_handle_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: *mut hook_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_hook_unregister(
         arg1: net_handle_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: *mut hook_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_inject(
         arg1: net_handle_t,
         arg2: inject_t,
         arg3: *mut net_inject_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn net_inject_alloc(arg1: illumos_ddi_dki::c_int) -> *mut net_inject_t;
+    pub fn net_inject_alloc(arg1: illumos_sys_hdrs::c_int)
+        -> *mut net_inject_t;
 }
 extern "C" {
     pub fn net_inject_free(arg1: *mut net_inject_t);
 }
 extern "C" {
     pub fn net_instance_alloc(
-        version: illumos_ddi_dki::c_int,
+        version: illumos_sys_hdrs::c_int,
     ) -> *mut net_instance_t;
 }
 extern "C" {
@@ -14522,33 +14534,33 @@ extern "C" {
 extern "C" {
     pub fn net_instance_register(
         arg1: *mut net_instance_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_instance_unregister(
         arg1: *mut net_instance_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_instance_notify_register(
         arg1: netid_t,
         arg2: hook_notify_fn_t,
-        arg3: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_instance_notify_unregister(
         netid: netid_t,
         arg1: hook_notify_fn_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_kstat_create(
         arg1: netid_t,
-        arg2: *mut illumos_ddi_dki::c_char,
-        arg3: illumos_ddi_dki::c_int,
-        arg4: *mut illumos_ddi_dki::c_char,
-        arg5: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
+        arg3: illumos_sys_hdrs::c_int,
+        arg4: *mut illumos_sys_hdrs::c_char,
+        arg5: *mut illumos_sys_hdrs::c_char,
         arg6: uchar_t,
         arg7: ulong_t,
         arg8: uchar_t,
@@ -14560,7 +14572,7 @@ extern "C" {
 extern "C" {
     pub fn net_protocol_lookup(
         arg1: netid_t,
-        arg2: *const illumos_ddi_dki::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
     ) -> net_handle_t;
 }
 extern "C" {
@@ -14570,12 +14582,12 @@ extern "C" {
     ) -> net_handle_t;
 }
 extern "C" {
-    pub fn net_protocol_release(arg1: net_handle_t) -> illumos_ddi_dki::c_int;
+    pub fn net_protocol_release(arg1: net_handle_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_protocol_unregister(
         arg1: net_handle_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_protocol_walk(arg1: netid_t, arg2: net_handle_t)
@@ -14585,42 +14597,42 @@ extern "C" {
     pub fn net_protocol_notify_register(
         arg1: net_handle_t,
         arg2: hook_notify_fn_t,
-        arg3: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_protocol_notify_unregister(
         arg1: net_handle_t,
         arg2: hook_notify_fn_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_getifname(
         arg1: net_handle_t,
         arg2: phy_if_t,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_getmtu(
         arg1: net_handle_t,
         arg2: phy_if_t,
         arg3: lif_if_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn net_getpmtuenabled(arg1: net_handle_t) -> illumos_ddi_dki::c_int;
+    pub fn net_getpmtuenabled(arg1: net_handle_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_getlifaddr(
         arg1: net_handle_t,
         arg2: phy_if_t,
         arg3: lif_if_t,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: *mut net_ifaddr_t,
-        arg6: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg6: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_getlifzone(
@@ -14636,7 +14648,7 @@ extern "C" {
         arg2: phy_if_t,
         arg3: lif_if_t,
         arg4: *mut u64,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_phygetnext(arg1: net_handle_t, arg2: phy_if_t) -> phy_if_t;
@@ -14644,7 +14656,7 @@ extern "C" {
 extern "C" {
     pub fn net_phylookup(
         arg1: net_handle_t,
-        arg2: *const illumos_ddi_dki::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
     ) -> phy_if_t;
 }
 extern "C" {
@@ -14665,13 +14677,13 @@ extern "C" {
     pub fn net_ispartialchecksum(
         arg1: net_handle_t,
         arg2: *mut msgb,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn net_isvalidchecksum(
         arg1: net_handle_t,
         arg2: *mut msgb,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -14679,11 +14691,11 @@ pub struct hook_pkt_event {
     pub hpe_protocol: net_handle_t,
     pub hpe_ifp: phy_if_t,
     pub hpe_ofp: phy_if_t,
-    pub hpe_hdr: *mut illumos_ddi_dki::c_void,
+    pub hpe_hdr: *mut illumos_sys_hdrs::c_void,
     pub hpe_mp: *mut *mut msgb,
     pub hpe_mb: *mut msgb,
-    pub hpe_flags: illumos_ddi_dki::c_int,
-    pub hpe_reserved: [*mut illumos_ddi_dki::c_void; 2usize],
+    pub hpe_flags: illumos_sys_hdrs::c_int,
+    pub hpe_reserved: [*mut illumos_sys_hdrs::c_void; 2usize],
 }
 pub type hook_pkt_event_t = hook_pkt_event;
 pub const nic_event_NE_PLUMB: nic_event = 1;
@@ -14694,9 +14706,9 @@ pub const nic_event_NE_ADDRESS_CHANGE: nic_event = 5;
 pub const nic_event_NE_LIF_UP: nic_event = 6;
 pub const nic_event_NE_LIF_DOWN: nic_event = 7;
 pub const nic_event_NE_IFINDEX_CHANGE: nic_event = 8;
-pub type nic_event = illumos_ddi_dki::c_uint;
+pub type nic_event = illumos_sys_hdrs::c_uint;
 pub use self::nic_event as nic_event_t;
-pub type nic_event_data_t = *mut illumos_ddi_dki::c_void;
+pub type nic_event_data_t = *mut illumos_sys_hdrs::c_void;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct hook_nic_event {
@@ -14727,13 +14739,13 @@ pub struct hook_pkt_observe_s {
     pub hpo_zsrc: u32,
     pub hpo_zdst: u32,
     pub hpo_pkt: *mut msgb,
-    pub hpo_ctx: *mut illumos_ddi_dki::c_void,
+    pub hpo_ctx: *mut illumos_sys_hdrs::c_void,
 }
 pub type hook_pkt_observe_t = hook_pkt_observe_s;
 pub const ipobs_hook_type_IPOBS_HOOK_INBOUND: ipobs_hook_type = 0;
 pub const ipobs_hook_type_IPOBS_HOOK_OUTBOUND: ipobs_hook_type = 1;
 pub const ipobs_hook_type_IPOBS_HOOK_LOCAL: ipobs_hook_type = 2;
-pub type ipobs_hook_type = illumos_ddi_dki::c_uint;
+pub type ipobs_hook_type = illumos_sys_hdrs::c_uint;
 pub use self::ipobs_hook_type as ipobs_hook_type_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -14771,36 +14783,36 @@ extern "C" {
         arg1: *mut u8,
         arg2: size_t,
         arg3: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn random_get_bytes(
         arg1: *mut u8,
         arg2: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn random_get_blocking_bytes(
         arg1: *mut u8,
         arg2: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn random_get_pseudo_bytes(
         arg1: *mut u8,
         arg2: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn getrandom(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: size_t,
-        arg3: illumos_ddi_dki::c_uint,
+        arg3: illumos_sys_hdrs::c_uint,
     ) -> ssize_t;
 }
-pub type mod_hash_val_t = *mut illumos_ddi_dki::c_void;
-pub type mod_hash_key_t = *mut illumos_ddi_dki::c_void;
-pub type mod_hash_hndl_t = *mut illumos_ddi_dki::c_void;
+pub type mod_hash_val_t = *mut illumos_sys_hdrs::c_void;
+pub type mod_hash_key_t = *mut illumos_sys_hdrs::c_void;
+pub type mod_hash_hndl_t = *mut illumos_sys_hdrs::c_void;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct mod_hash {
@@ -14809,7 +14821,7 @@ pub struct mod_hash {
 pub type mod_hash_t = mod_hash;
 extern "C" {
     pub fn mod_hash_create_strhash(
-        arg1: *mut illumos_ddi_dki::c_char,
+        arg1: *mut illumos_sys_hdrs::c_char,
         arg2: size_t,
         arg3: ::core::option::Option<
             unsafe extern "C" fn(arg1: mod_hash_val_t),
@@ -14823,7 +14835,7 @@ extern "C" {
     pub fn mod_hash_strkey_cmp(
         arg1: mod_hash_key_t,
         arg2: mod_hash_key_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_strkey_dtor(arg1: mod_hash_key_t);
@@ -14833,13 +14845,13 @@ extern "C" {
 }
 extern "C" {
     pub fn mod_hash_bystr(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: mod_hash_key_t,
     ) -> uint_t;
 }
 extern "C" {
     pub fn mod_hash_create_ptrhash(
-        arg1: *mut illumos_ddi_dki::c_char,
+        arg1: *mut illumos_sys_hdrs::c_char,
         arg2: size_t,
         arg3: ::core::option::Option<
             unsafe extern "C" fn(arg1: mod_hash_val_t),
@@ -14854,17 +14866,17 @@ extern "C" {
     pub fn mod_hash_ptrkey_cmp(
         arg1: mod_hash_key_t,
         arg2: mod_hash_key_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_byptr(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: mod_hash_key_t,
     ) -> uint_t;
 }
 extern "C" {
     pub fn mod_hash_create_idhash(
-        arg1: *mut illumos_ddi_dki::c_char,
+        arg1: *mut illumos_sys_hdrs::c_char,
         arg2: size_t,
         arg3: ::core::option::Option<
             unsafe extern "C" fn(arg1: mod_hash_val_t),
@@ -14878,11 +14890,11 @@ extern "C" {
     pub fn mod_hash_idkey_cmp(
         arg1: mod_hash_key_t,
         arg2: mod_hash_key_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_byid(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: mod_hash_key_t,
     ) -> uint_t;
 }
@@ -14891,7 +14903,7 @@ extern "C" {
 }
 extern "C" {
     pub fn mod_hash_create_extended(
-        arg1: *mut illumos_ddi_dki::c_char,
+        arg1: *mut illumos_sys_hdrs::c_char,
         arg2: size_t,
         arg3: ::core::option::Option<
             unsafe extern "C" fn(arg1: mod_hash_key_t),
@@ -14901,18 +14913,18 @@ extern "C" {
         >,
         arg5: ::core::option::Option<
             unsafe extern "C" fn(
-                arg1: *mut illumos_ddi_dki::c_void,
+                arg1: *mut illumos_sys_hdrs::c_void,
                 arg2: mod_hash_key_t,
             ) -> uint_t,
         >,
-        arg6: *mut illumos_ddi_dki::c_void,
+        arg6: *mut illumos_sys_hdrs::c_void,
         arg7: ::core::option::Option<
             unsafe extern "C" fn(
                 arg1: mod_hash_key_t,
                 arg2: mod_hash_key_t,
-            ) -> illumos_ddi_dki::c_int,
+            ) -> illumos_sys_hdrs::c_int,
         >,
-        arg8: illumos_ddi_dki::c_int,
+        arg8: illumos_sys_hdrs::c_int,
     ) -> *mut mod_hash_t;
 }
 extern "C" {
@@ -14932,34 +14944,34 @@ extern "C" {
         arg1: *mut mod_hash_t,
         arg2: mod_hash_key_t,
         arg3: mod_hash_val_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_replace(
         arg1: *mut mod_hash_t,
         arg2: mod_hash_key_t,
         arg3: mod_hash_val_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_remove(
         arg1: *mut mod_hash_t,
         arg2: mod_hash_key_t,
         arg3: *mut mod_hash_val_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_destroy(
         arg1: *mut mod_hash_t,
         arg2: mod_hash_key_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_find(
         arg1: *mut mod_hash_t,
         arg2: mod_hash_key_t,
         arg3: *mut mod_hash_val_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_find_cb(
@@ -14969,7 +14981,7 @@ extern "C" {
         arg4: ::core::option::Option<
             unsafe extern "C" fn(arg1: mod_hash_key_t, arg2: mod_hash_val_t),
         >,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_find_cb_rval(
@@ -14980,10 +14992,10 @@ extern "C" {
             unsafe extern "C" fn(
                 arg1: mod_hash_key_t,
                 arg2: mod_hash_val_t,
-            ) -> illumos_ddi_dki::c_int,
+            ) -> illumos_sys_hdrs::c_int,
         >,
-        arg5: *mut illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg5: *mut illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_walk(
@@ -14992,23 +15004,23 @@ extern "C" {
             unsafe extern "C" fn(
                 arg1: mod_hash_key_t,
                 arg2: *mut mod_hash_val_t,
-                arg3: *mut illumos_ddi_dki::c_void,
+                arg3: *mut illumos_sys_hdrs::c_void,
             ) -> uint_t,
         >,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
     pub fn mod_hash_reserve(
         arg1: *mut mod_hash_t,
         arg2: *mut mod_hash_hndl_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_reserve_nosleep(
         arg1: *mut mod_hash_t,
         arg2: *mut mod_hash_hndl_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn mod_hash_cancel(arg1: *mut mod_hash_t, arg2: *mut mod_hash_hndl_t);
@@ -15019,7 +15031,7 @@ extern "C" {
         arg2: mod_hash_key_t,
         arg3: mod_hash_val_t,
         arg4: mod_hash_hndl_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -15152,16 +15164,16 @@ pub struct ip_stack {
     pub ips_ipcl_raw_fanout_size: uint_t,
     pub ips_ipcl_iptun_fanout_size: uint_t,
     pub ips_ipcl_globalhash_fanout: *mut connf_s,
-    pub ips_conn_g_index: illumos_ddi_dki::c_int,
-    pub ips_igmp_time_to_next: illumos_ddi_dki::c_int,
-    pub ips_igmp_timer_scheduled_last: illumos_ddi_dki::c_int,
-    pub ips_igmp_deferred_next: illumos_ddi_dki::c_int,
+    pub ips_conn_g_index: illumos_sys_hdrs::c_int,
+    pub ips_igmp_time_to_next: illumos_sys_hdrs::c_int,
+    pub ips_igmp_timer_scheduled_last: illumos_sys_hdrs::c_int,
+    pub ips_igmp_deferred_next: illumos_sys_hdrs::c_int,
     pub ips_igmp_timeout_id: timeout_id_t,
     pub ips_igmp_timer_setter_active: boolean_t,
     pub ips_igmp_timer_quiesce: boolean_t,
-    pub ips_mld_time_to_next: illumos_ddi_dki::c_int,
-    pub ips_mld_timer_scheduled_last: illumos_ddi_dki::c_int,
-    pub ips_mld_deferred_next: illumos_ddi_dki::c_int,
+    pub ips_mld_time_to_next: illumos_sys_hdrs::c_int,
+    pub ips_mld_timer_scheduled_last: illumos_sys_hdrs::c_int,
+    pub ips_mld_deferred_next: illumos_sys_hdrs::c_int,
     pub ips_mld_timeout_id: timeout_id_t,
     pub ips_mld_timer_setter_active: boolean_t,
     pub ips_mld_timer_quiesce: boolean_t,
@@ -15202,8 +15214,8 @@ pub struct ip_stack {
     pub ips_ip_g_mrouter: *mut conn_s,
     pub ips_icmp_pkt_err_last: clock_t,
     pub ips_icmp_pkt_err_sent: uint_t,
-    pub ips_ip_g_head: *mut illumos_ddi_dki::c_void,
-    pub ips_arp_g_head: *mut illumos_ddi_dki::c_void,
+    pub ips_ip_g_head: *mut illumos_sys_hdrs::c_void,
+    pub ips_arp_g_head: *mut illumos_sys_hdrs::c_void,
     pub ips_ip_multirt_log_interval: hrtime_t,
     pub ips_multirt_bad_mtu_last_time: hrtime_t,
     pub ips_ip_cgtp_filter_ops: *mut cgtp_filter_ops,
@@ -15215,7 +15227,7 @@ pub struct ip_stack {
     pub ips_ndp6: *mut ndp_g_s,
     pub ips_ip_g_mrouter_mutex: kmutex_t,
     pub ips_mrtstat: *mut mrtstat,
-    pub ips_saved_ip_forwarding: illumos_ddi_dki::c_int,
+    pub ips_saved_ip_forwarding: illumos_sys_hdrs::c_int,
     pub ips_numvifs: ushort_t,
     pub ips_numvifs_mutex: kmutex_t,
     pub ips_vifs: *mut vif,
@@ -15225,7 +15237,7 @@ pub struct ip_stack {
     pub ips_last_encap_vif: *mut vif,
     pub ips_last_encap_lock: kmutex_t,
     pub ips_reg_vif_num: ushort_t,
-    pub ips_pim_assert: illumos_ddi_dki::c_int,
+    pub ips_pim_assert: illumos_sys_hdrs::c_int,
     pub ips_ill_g_heads: *mut ill_g_head_u,
     pub ips_loopback_ksp: *mut kstat_t,
     pub ips_idl_tx_list: *mut idl_tx_list_s,
@@ -15435,9 +15447,9 @@ pub struct avl_tree {
     pub avl_root: *mut avl_node,
     pub avl_compar: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const illumos_ddi_dki::c_void,
-            arg2: *const illumos_ddi_dki::c_void,
-        ) -> illumos_ddi_dki::c_int,
+            arg1: *const illumos_sys_hdrs::c_void,
+            arg2: *const illumos_sys_hdrs::c_void,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub avl_offset: size_t,
     pub avl_numnodes: ulong_t,
@@ -15446,9 +15458,9 @@ pub struct avl_tree {
 extern "C" {
     pub fn avl_walk(
         arg1: *mut avl_tree,
-        arg2: *mut illumos_ddi_dki::c_void,
-        arg3: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg2: *mut illumos_sys_hdrs::c_void,
+        arg3: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 pub type avl_tree_t = avl_tree;
 pub type avl_node_t = avl_node;
@@ -15458,9 +15470,9 @@ extern "C" {
         tree: *mut avl_tree_t,
         compar: ::core::option::Option<
             unsafe extern "C" fn(
-                arg1: *const illumos_ddi_dki::c_void,
-                arg2: *const illumos_ddi_dki::c_void,
-            ) -> illumos_ddi_dki::c_int,
+                arg1: *const illumos_sys_hdrs::c_void,
+                arg2: *const illumos_sys_hdrs::c_void,
+            ) -> illumos_sys_hdrs::c_int,
         >,
         size: size_t,
         offset: size_t,
@@ -15469,63 +15481,63 @@ extern "C" {
 extern "C" {
     pub fn avl_find(
         tree: *mut avl_tree_t,
-        node: *const illumos_ddi_dki::c_void,
+        node: *const illumos_sys_hdrs::c_void,
         where_: *mut avl_index_t,
-    ) -> *mut illumos_ddi_dki::c_void;
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn avl_insert(
         tree: *mut avl_tree_t,
-        node: *mut illumos_ddi_dki::c_void,
+        node: *mut illumos_sys_hdrs::c_void,
         where_: avl_index_t,
     );
 }
 extern "C" {
     pub fn avl_insert_here(
         tree: *mut avl_tree_t,
-        new_data: *mut illumos_ddi_dki::c_void,
-        here: *mut illumos_ddi_dki::c_void,
-        direction: illumos_ddi_dki::c_int,
+        new_data: *mut illumos_sys_hdrs::c_void,
+        here: *mut illumos_sys_hdrs::c_void,
+        direction: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
-    pub fn avl_first(tree: *mut avl_tree_t) -> *mut illumos_ddi_dki::c_void;
+    pub fn avl_first(tree: *mut avl_tree_t) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
-    pub fn avl_last(tree: *mut avl_tree_t) -> *mut illumos_ddi_dki::c_void;
+    pub fn avl_last(tree: *mut avl_tree_t) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn avl_nearest(
         tree: *mut avl_tree_t,
         where_: avl_index_t,
-        direction: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_void;
+        direction: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
-    pub fn avl_add(tree: *mut avl_tree_t, node: *mut illumos_ddi_dki::c_void);
+    pub fn avl_add(tree: *mut avl_tree_t, node: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
     pub fn avl_remove(
         tree: *mut avl_tree_t,
-        node: *mut illumos_ddi_dki::c_void,
+        node: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
     pub fn avl_update(
         arg1: *mut avl_tree_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     ) -> boolean_t;
 }
 extern "C" {
     pub fn avl_update_lt(
         arg1: *mut avl_tree_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     ) -> boolean_t;
 }
 extern "C" {
     pub fn avl_update_gt(
         arg1: *mut avl_tree_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     ) -> boolean_t;
 }
 extern "C" {
@@ -15540,8 +15552,8 @@ extern "C" {
 extern "C" {
     pub fn avl_destroy_nodes(
         tree: *mut avl_tree_t,
-        cookie: *mut *mut illumos_ddi_dki::c_void,
-    ) -> *mut illumos_ddi_dki::c_void;
+        cookie: *mut *mut illumos_sys_hdrs::c_void,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn avl_destroy(tree: *mut avl_tree_t);
@@ -15562,13 +15574,13 @@ pub const idtype_P_ZONEID: idtype = 12;
 pub const idtype_P_CTID: idtype = 13;
 pub const idtype_P_CPUID: idtype = 14;
 pub const idtype_P_PSETID: idtype = 15;
-pub type idtype = illumos_ddi_dki::c_uint;
+pub type idtype = illumos_sys_hdrs::c_uint;
 pub use self::idtype as idtype_t;
 pub const idop_POP_DIFF: idop = 0;
 pub const idop_POP_AND: idop = 1;
 pub const idop_POP_OR: idop = 2;
 pub const idop_POP_XOR: idop = 3;
-pub type idop = illumos_ddi_dki::c_uint;
+pub type idop = illumos_sys_hdrs::c_uint;
 pub use self::idop as idop_t;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -15584,37 +15596,37 @@ extern "C" {
     pub fn dotoprocs(
         arg1: *mut procset_t,
         arg2: ::core::option::Option<
-            unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+            unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
         >,
-        arg3: *mut illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: *mut illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn dotolwp(
         arg1: *mut procset_t,
         arg2: ::core::option::Option<
-            unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+            unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
         >,
-        arg3: *mut illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: *mut illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn procinset(
         arg1: *mut proc_,
         arg2: *mut procset_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn sigsendproc(
         arg1: *mut proc_,
         arg2: *mut sigsend_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn sigsendset(
         arg1: *mut procset_t,
         arg2: *mut sigsend_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn cur_inset_only(arg1: *mut procset_t) -> boolean_t;
@@ -15623,29 +15635,29 @@ extern "C" {
     pub fn getmyid(arg1: idtype_t) -> id_t;
 }
 pub type lgrpid_t = u16;
-pub type processorid_t = illumos_ddi_dki::c_int;
-pub type chipid_t = illumos_ddi_dki::c_int;
+pub type processorid_t = illumos_sys_hdrs::c_int;
+pub type chipid_t = illumos_sys_hdrs::c_int;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct processor_info_t {
-    pub pi_state: illumos_ddi_dki::c_int,
-    pub pi_processor_type: [illumos_ddi_dki::c_char; 16usize],
-    pub pi_fputypes: [illumos_ddi_dki::c_char; 32usize],
-    pub pi_clock: illumos_ddi_dki::c_int,
+    pub pi_state: illumos_sys_hdrs::c_int,
+    pub pi_processor_type: [illumos_sys_hdrs::c_char; 16usize],
+    pub pi_fputypes: [illumos_sys_hdrs::c_char; 32usize],
+    pub pi_clock: illumos_sys_hdrs::c_int,
 }
 extern "C" {
     pub fn p_online_internal(
         arg1: processorid_t,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: *mut illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: *mut illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn p_online_internal_locked(
         arg1: processorid_t,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: *mut illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: *mut illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -15655,7 +15667,7 @@ pub struct squeue_s {
 pub type squeue_t = squeue_s;
 pub const sqprivate_t_SQPRIVATE_TCP: sqprivate_t = 0;
 pub const sqprivate_t_SQPRIVATE_MAX: sqprivate_t = 1;
-pub type sqprivate_t = illumos_ddi_dki::c_uint;
+pub type sqprivate_t = illumos_sys_hdrs::c_uint;
 extern "C" {
     pub fn squeue_init();
 }
@@ -15675,7 +15687,7 @@ extern "C" {
         arg3: *mut mblk_t,
         arg4: u32,
         arg5: *mut ip_recv_attr_s,
-        arg6: illumos_ddi_dki::c_int,
+        arg6: illumos_sys_hdrs::c_int,
         arg7: u8,
     );
 }
@@ -15694,10 +15706,10 @@ extern "C" {
     pub fn squeue_synch_enter(
         arg1: *mut conn_s,
         arg2: *mut mblk_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn squeue_synch_exit(arg1: *mut conn_s, arg2: illumos_ddi_dki::c_int);
+    pub fn squeue_synch_exit(arg1: *mut conn_s, arg2: illumos_sys_hdrs::c_int);
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -15726,18 +15738,18 @@ pub struct rtentry {
     pub rt_hash: uint_t,
     pub rt_dst: sockaddr,
     pub rt_gateway: sockaddr,
-    pub rt_flags: illumos_ddi_dki::c_short,
-    pub rt_refcnt: illumos_ddi_dki::c_short,
+    pub rt_flags: illumos_sys_hdrs::c_short,
+    pub rt_refcnt: illumos_sys_hdrs::c_short,
     pub rt_use: uint_t,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct rtstat {
-    pub rts_badredirect: illumos_ddi_dki::c_short,
-    pub rts_dynamic: illumos_ddi_dki::c_short,
-    pub rts_newgateway: illumos_ddi_dki::c_short,
-    pub rts_unreach: illumos_ddi_dki::c_short,
-    pub rts_wildcard: illumos_ddi_dki::c_short,
+    pub rts_badredirect: illumos_sys_hdrs::c_short,
+    pub rts_dynamic: illumos_sys_hdrs::c_short,
+    pub rts_newgateway: illumos_sys_hdrs::c_short,
+    pub rts_unreach: illumos_sys_hdrs::c_short,
+    pub rts_wildcard: illumos_sys_hdrs::c_short,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -15746,12 +15758,12 @@ pub struct rt_msghdr {
     pub rtm_version: uchar_t,
     pub rtm_type: uchar_t,
     pub rtm_index: ushort_t,
-    pub rtm_flags: illumos_ddi_dki::c_int,
-    pub rtm_addrs: illumos_ddi_dki::c_int,
+    pub rtm_flags: illumos_sys_hdrs::c_int,
+    pub rtm_addrs: illumos_sys_hdrs::c_int,
     pub rtm_pid: pid_t,
-    pub rtm_seq: illumos_ddi_dki::c_int,
-    pub rtm_errno: illumos_ddi_dki::c_int,
-    pub rtm_use: illumos_ddi_dki::c_int,
+    pub rtm_seq: illumos_sys_hdrs::c_int,
+    pub rtm_errno: illumos_sys_hdrs::c_int,
+    pub rtm_use: illumos_sys_hdrs::c_int,
     pub rtm_inits: uint_t,
     pub rtm_rmx: rt_metrics,
 }
@@ -15786,9 +15798,9 @@ pub struct exdata {
     pub ux_dsize: size_t,
     pub ux_bsize: size_t,
     pub ux_lsize: size_t,
-    pub ux_nshlibs: illumos_ddi_dki::c_long,
-    pub ux_mach: illumos_ddi_dki::c_short,
-    pub ux_mag: illumos_ddi_dki::c_short,
+    pub ux_nshlibs: illumos_sys_hdrs::c_long,
+    pub ux_mach: illumos_sys_hdrs::c_short,
+    pub ux_mag: illumos_sys_hdrs::c_short,
     pub ux_toffset: off_t,
     pub ux_doffset: off_t,
     pub ux_loffset: off_t,
@@ -15799,14 +15811,14 @@ pub struct exdata {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct auxv_t {
-    pub a_type: illumos_ddi_dki::c_int,
+    pub a_type: illumos_sys_hdrs::c_int,
     pub a_un: auxv_t__bindgen_ty_1,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union auxv_t__bindgen_ty_1 {
-    pub a_val: illumos_ddi_dki::c_long,
-    pub a_ptr: *mut illumos_ddi_dki::c_void,
+    pub a_val: illumos_sys_hdrs::c_long,
+    pub a_ptr: *mut illumos_sys_hdrs::c_void,
     pub a_fcn: ::core::option::Option<unsafe extern "C" fn()>,
 }
 extern "C" {
@@ -15822,10 +15834,12 @@ pub struct refstr {
 }
 pub type refstr_t = refstr;
 extern "C" {
-    pub fn refstr_alloc(arg1: *const illumos_ddi_dki::c_char) -> *mut refstr_t;
+    pub fn refstr_alloc(arg1: *const illumos_sys_hdrs::c_char)
+        -> *mut refstr_t;
 }
 extern "C" {
-    pub fn refstr_value(arg1: *mut refstr_t) -> *const illumos_ddi_dki::c_char;
+    pub fn refstr_value(arg1: *mut refstr_t)
+        -> *const illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn refstr_hold(arg1: *mut refstr_t);
@@ -15840,15 +15854,15 @@ pub struct uf_entry {
     pub uf_lock: kmutex_t,
     pub uf_file: *mut file,
     pub uf_fpollinfo: *mut fpollinfo,
-    pub uf_refcnt: illumos_ddi_dki::c_int,
-    pub uf_alloc: illumos_ddi_dki::c_int,
-    pub uf_flag: illumos_ddi_dki::c_short,
-    pub uf_busy: illumos_ddi_dki::c_short,
+    pub uf_refcnt: illumos_sys_hdrs::c_int,
+    pub uf_alloc: illumos_sys_hdrs::c_int,
+    pub uf_flag: illumos_sys_hdrs::c_short,
+    pub uf_busy: illumos_sys_hdrs::c_short,
     pub uf_wanted_cv: kcondvar_t,
     pub uf_closing_cv: kcondvar_t,
     pub uf_portfd: *mut portfd,
     pub uf_gen: uf_entry_gen_t,
-    pub uf_pad: [illumos_ddi_dki::c_char; 12usize],
+    pub uf_pad: [illumos_sys_hdrs::c_char; 12usize],
 }
 pub type uf_entry_t = uf_entry;
 #[repr(C)]
@@ -15856,16 +15870,16 @@ pub type uf_entry_t = uf_entry;
 pub struct uf_rlist {
     pub ur_next: *mut uf_rlist,
     pub ur_list: *mut uf_entry_t,
-    pub ur_nfiles: illumos_ddi_dki::c_int,
+    pub ur_nfiles: illumos_sys_hdrs::c_int,
 }
 pub type uf_rlist_t = uf_rlist;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct uf_info {
     pub fi_lock: kmutex_t,
-    pub fi_badfd: illumos_ddi_dki::c_int,
-    pub fi_action: illumos_ddi_dki::c_int,
-    pub fi_nfiles: illumos_ddi_dki::c_int,
+    pub fi_badfd: illumos_sys_hdrs::c_int,
+    pub fi_action: illumos_sys_hdrs::c_int,
+    pub fi_nfiles: illumos_sys_hdrs::c_int,
     pub fi_list: *mut uf_entry_t,
     pub fi_rlist: *mut uf_rlist_t,
 }
@@ -15887,9 +15901,9 @@ pub struct user {
     pub u_auxv: [auxv_t; 25usize],
     pub u_start: timestruc_t,
     pub u_ticks: clock_t,
-    pub u_comm: [illumos_ddi_dki::c_char; 17usize],
-    pub u_psargs: [illumos_ddi_dki::c_char; 80usize],
-    pub u_argc: illumos_ddi_dki::c_int,
+    pub u_comm: [illumos_sys_hdrs::c_char; 17usize],
+    pub u_psargs: [illumos_sys_hdrs::c_char; 80usize],
+    pub u_argc: illumos_sys_hdrs::c_int,
     pub u_argv: usize,
     pub u_envp: usize,
     pub u_commpagep: usize,
@@ -15898,8 +15912,8 @@ pub struct user {
     pub u_mem: u64,
     pub u_mem_max: size_t,
     pub u_cmask: mode_t,
-    pub u_acflag: illumos_ddi_dki::c_char,
-    pub u_systrap: illumos_ddi_dki::c_char,
+    pub u_acflag: illumos_sys_hdrs::c_char,
+    pub u_systrap: illumos_sys_hdrs::c_char,
     pub u_cwd: *mut refstr_t,
     pub u_entrymask: k_sysset_t,
     pub u_exitmask: k_sysset_t,
@@ -15917,145 +15931,145 @@ pub type user_t = user;
 #[derive(Debug, Copy, Clone)]
 pub struct aio_req {
     pub aio_uio: *mut uio,
-    pub aio_private: *mut illumos_ddi_dki::c_void,
+    pub aio_private: *mut illumos_sys_hdrs::c_void,
 }
 extern "C" {
     pub fn aphysio(
         arg1: ::core::option::Option<
-            unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+            unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
         >,
         arg2: ::core::option::Option<
-            unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+            unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
         >,
         arg3: dev_t,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: ::core::option::Option<unsafe extern "C" fn()>,
         arg6: *mut aio_req,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn anocancel(arg1: *mut buf) -> illumos_ddi_dki::c_int;
+    pub fn anocancel(arg1: *mut buf) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct copyops {
     pub cp_copyin: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const illumos_ddi_dki::c_void,
-            arg2: *mut illumos_ddi_dki::c_void,
+            arg1: *const illumos_sys_hdrs::c_void,
+            arg2: *mut illumos_sys_hdrs::c_void,
             arg3: size_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_xcopyin: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const illumos_ddi_dki::c_void,
-            arg2: *mut illumos_ddi_dki::c_void,
+            arg1: *const illumos_sys_hdrs::c_void,
+            arg2: *mut illumos_sys_hdrs::c_void,
             arg3: size_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_copyout: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const illumos_ddi_dki::c_void,
-            arg2: *mut illumos_ddi_dki::c_void,
+            arg1: *const illumos_sys_hdrs::c_void,
+            arg2: *mut illumos_sys_hdrs::c_void,
             arg3: size_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_xcopyout: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const illumos_ddi_dki::c_void,
-            arg2: *mut illumos_ddi_dki::c_void,
+            arg1: *const illumos_sys_hdrs::c_void,
+            arg2: *mut illumos_sys_hdrs::c_void,
             arg3: size_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_copyinstr: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const illumos_ddi_dki::c_char,
-            arg2: *mut illumos_ddi_dki::c_char,
+            arg1: *const illumos_sys_hdrs::c_char,
+            arg2: *mut illumos_sys_hdrs::c_char,
             arg3: size_t,
             arg4: *mut size_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_copyoutstr: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const illumos_ddi_dki::c_char,
-            arg2: *mut illumos_ddi_dki::c_char,
+            arg1: *const illumos_sys_hdrs::c_char,
+            arg2: *mut illumos_sys_hdrs::c_char,
             arg3: size_t,
             arg4: *mut size_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_fuword8: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const illumos_ddi_dki::c_void,
+            arg1: *const illumos_sys_hdrs::c_void,
             arg2: *mut u8,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_fuword16: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const illumos_ddi_dki::c_void,
+            arg1: *const illumos_sys_hdrs::c_void,
             arg2: *mut u16,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_fuword32: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const illumos_ddi_dki::c_void,
+            arg1: *const illumos_sys_hdrs::c_void,
             arg2: *mut u32,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_fuword64: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const illumos_ddi_dki::c_void,
+            arg1: *const illumos_sys_hdrs::c_void,
             arg2: *mut u64,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_suword8: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
+            arg1: *mut illumos_sys_hdrs::c_void,
             arg2: u8,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_suword16: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
+            arg1: *mut illumos_sys_hdrs::c_void,
             arg2: u16,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_suword32: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
+            arg1: *mut illumos_sys_hdrs::c_void,
             arg2: u32,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_suword64: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
+            arg1: *mut illumos_sys_hdrs::c_void,
             arg2: u64,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cp_physio: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: ::core::option::Option<
-                unsafe extern "C" fn(arg1: *mut buf) -> illumos_ddi_dki::c_int,
+                unsafe extern "C" fn(arg1: *mut buf) -> illumos_sys_hdrs::c_int,
             >,
             arg2: *mut buf,
             arg3: dev_t,
-            arg4: illumos_ddi_dki::c_int,
+            arg4: illumos_sys_hdrs::c_int,
             arg5: ::core::option::Option<unsafe extern "C" fn(arg1: *mut buf)>,
             arg6: *mut uio,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
 }
 pub type copyops_t = copyops;
 extern "C" {
     pub fn default_physio(
         arg1: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut buf) -> illumos_ddi_dki::c_int,
+            unsafe extern "C" fn(arg1: *mut buf) -> illumos_sys_hdrs::c_int,
         >,
         arg2: *mut buf,
         arg3: dev_t,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: ::core::option::Option<unsafe extern "C" fn(arg1: *mut buf)>,
         arg6: *mut uio,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn install_copyops(tp: kthread_id_t, cp: *mut copyops_t);
@@ -16064,7 +16078,7 @@ extern "C" {
     pub fn remove_copyops(tp: kthread_id_t);
 }
 extern "C" {
-    pub fn copyops_installed(tp: kthread_id_t) -> illumos_ddi_dki::c_int;
+    pub fn copyops_installed(tp: kthread_id_t) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -16086,59 +16100,59 @@ pub struct watched_page {
     pub wp_umap: [uchar_t; 3usize],
     pub wp_kmap: [uchar_t; 3usize],
     pub wp_flags: ushort_t,
-    pub wp_read: illumos_ddi_dki::c_short,
-    pub wp_write: illumos_ddi_dki::c_short,
-    pub wp_exec: illumos_ddi_dki::c_short,
+    pub wp_read: illumos_sys_hdrs::c_short,
+    pub wp_write: illumos_sys_hdrs::c_short,
+    pub wp_exec: illumos_sys_hdrs::c_short,
 }
 pub type watched_page_t = watched_page;
 extern "C" {
     pub fn copyin_nowatch(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn copyout_nowatch(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fuword32_nowatch(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn suword32_nowatch(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn suword64_nowatch(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: u64,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fuword64_nowatch(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: *mut u64,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn watch_disable_addr(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: size_t,
         arg3: seg_rw,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn watch_enable_addr(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: size_t,
         arg3: seg_rw,
     );
@@ -16156,47 +16170,47 @@ extern "C" {
     pub fn pr_is_watchpage(
         arg1: caddr_t,
         arg2: seg_rw,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn pr_is_watchpage_as(
         arg1: caddr_t,
         arg2: seg_rw,
         arg3: *mut as_,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn pr_is_watchpoint(
         arg1: *mut caddr_t,
-        arg2: *mut illumos_ddi_dki::c_int,
+        arg2: *mut illumos_sys_hdrs::c_int,
         arg3: size_t,
         arg4: *mut size_t,
         arg5: seg_rw,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn do_watch_step(
         arg1: caddr_t,
         arg2: size_t,
         arg3: seg_rw,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: greg_t,
     );
 }
 extern "C" {
-    pub fn undo_watch_step(arg1: *mut k_siginfo) -> illumos_ddi_dki::c_int;
+    pub fn undo_watch_step(arg1: *mut k_siginfo) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn wp_compare(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *const illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *const illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn wa_compare(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *const illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *const illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut watch_copyops: copyops;
@@ -16209,7 +16223,7 @@ extern "C" {
     ) -> *mut watched_area_t;
 }
 extern "C" {
-    pub static mut timer_max: illumos_ddi_dki::c_int;
+    pub static mut timer_max: illumos_sys_hdrs::c_int;
 }
 pub type itimer_t = itimer;
 #[repr(C)]
@@ -16219,26 +16233,26 @@ pub struct itimer {
     pub it_hrtime: hrtime_t,
     pub it_flags: ushort_t,
     pub it_lock: ushort_t,
-    pub it_arg: *mut illumos_ddi_dki::c_void,
+    pub it_arg: *mut illumos_sys_hdrs::c_void,
     pub it_proc: *mut proc_,
     pub __data: itimer__bindgen_ty_1,
     pub it_cv: kcondvar_t,
-    pub it_blockers: illumos_ddi_dki::c_int,
-    pub it_pending: illumos_ddi_dki::c_int,
-    pub it_overrun: illumos_ddi_dki::c_int,
+    pub it_blockers: illumos_sys_hdrs::c_int,
+    pub it_pending: illumos_sys_hdrs::c_int,
+    pub it_overrun: illumos_sys_hdrs::c_int,
     pub it_backend: *mut clock_backend,
     pub it_fire:
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut itimer_t)>,
     pub it_mutex: kmutex_t,
-    pub it_portev: *mut illumos_ddi_dki::c_void,
-    pub it_portsrc: *mut illumos_ddi_dki::c_void,
-    pub it_portfd: illumos_ddi_dki::c_int,
+    pub it_portev: *mut illumos_sys_hdrs::c_void,
+    pub it_portsrc: *mut illumos_sys_hdrs::c_void,
+    pub it_portfd: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union itimer__bindgen_ty_1 {
     pub __proc: itimer__bindgen_ty_1__bindgen_ty_1,
-    pub __it_frontend: *mut illumos_ddi_dki::c_void,
+    pub __it_frontend: *mut illumos_sys_hdrs::c_void,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -16251,13 +16265,13 @@ pub struct itimer__bindgen_ty_1__bindgen_ty_1 {
 pub struct clock_backend {
     pub clk_default: sigevent,
     pub clk_clock_settime: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut timespec_t) -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn(arg1: *mut timespec_t) -> illumos_sys_hdrs::c_int,
     >,
     pub clk_clock_gettime: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut timespec_t) -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn(arg1: *mut timespec_t) -> illumos_sys_hdrs::c_int,
     >,
     pub clk_clock_getres: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut timespec_t) -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn(arg1: *mut timespec_t) -> illumos_sys_hdrs::c_int,
     >,
     pub clk_timer_create: ::core::option::Option<
         unsafe extern "C" fn(
@@ -16265,23 +16279,23 @@ pub struct clock_backend {
             arg2: ::core::option::Option<
                 unsafe extern "C" fn(arg1: *mut itimer_t),
             >,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub clk_timer_settime: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut itimer_t,
-            arg2: illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
             arg3: *const itimerspec,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub clk_timer_gettime: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut itimer_t,
             arg2: *mut itimerspec,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub clk_timer_delete: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut itimer_t) -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn(arg1: *mut itimer_t) -> illumos_sys_hdrs::c_int,
     >,
     pub clk_timer_lwpbind:
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut itimer_t)>,
@@ -16315,7 +16329,7 @@ extern "C" {
     pub fn timespectohz64(arg1: *mut timespec_t) -> i64;
 }
 extern "C" {
-    pub fn itimerspecfix(arg1: *mut timespec_t) -> illumos_ddi_dki::c_int;
+    pub fn itimerspecfix(arg1: *mut timespec_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn timespecadd(arg1: *mut timespec_t, arg2: *mut timespec_t);
@@ -16330,15 +16344,15 @@ extern "C" {
     pub fn xgetitimer(
         arg1: uint_t,
         arg2: *mut itimerval,
-        arg3: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn xsetitimer(
         arg1: uint_t,
         arg2: *mut itimerval,
-        arg3: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn delete_itimer_realprof();
@@ -16346,21 +16360,21 @@ extern "C" {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct oldsigevent {
-    pub _notify: illumos_ddi_dki::c_int,
+    pub _notify: illumos_sys_hdrs::c_int,
     pub _un: oldsigevent__bindgen_ty_1,
     pub _value: sigval,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union oldsigevent__bindgen_ty_1 {
-    pub _signo: illumos_ddi_dki::c_int,
+    pub _signo: illumos_sys_hdrs::c_int,
     pub _notify_function:
         ::core::option::Option<unsafe extern "C" fn(arg1: sigval)>,
 }
-pub type utrap_entry_t = illumos_ddi_dki::c_int;
-pub type utrap_handler_t = *mut illumos_ddi_dki::c_void;
+pub type utrap_entry_t = illumos_sys_hdrs::c_int;
+pub type utrap_handler_t = *mut illumos_sys_hdrs::c_void;
 pub type rctl_qty_t = u_longlong_t;
-pub type rctl_priv_t = illumos_ddi_dki::c_int;
+pub type rctl_priv_t = illumos_sys_hdrs::c_int;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct rctlblk {
@@ -16369,25 +16383,25 @@ pub struct rctlblk {
 pub type rctlblk_t = rctlblk;
 extern "C" {
     pub fn setrctl(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: *mut rctlblk_t,
         arg3: *mut rctlblk_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn getrctl(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: *mut rctlblk_t,
         arg3: *mut rctlblk_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 pub const rctl_entity_t_RCENTITY_PROCESS: rctl_entity_t = 0;
 pub const rctl_entity_t_RCENTITY_TASK: rctl_entity_t = 1;
 pub const rctl_entity_t_RCENTITY_PROJECT: rctl_entity_t = 2;
 pub const rctl_entity_t_RCENTITY_ZONE: rctl_entity_t = 3;
-pub type rctl_entity_t = illumos_ddi_dki::c_uint;
+pub type rctl_entity_t = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct rctl_val {
@@ -16396,13 +16410,13 @@ pub struct rctl_val {
     pub rcv_privilege: rctl_priv_t,
     pub rcv_value: rctl_qty_t,
     pub rcv_flagaction: uint_t,
-    pub rcv_action_signal: illumos_ddi_dki::c_int,
+    pub rcv_action_signal: illumos_sys_hdrs::c_int,
     pub rcv_action_recipient: *mut proc_,
     pub rcv_action_recip_pid: id_t,
     pub rcv_firing_time: hrtime_t,
 }
 pub type rctl_val_t = rctl_val;
-pub type rctl_hndl_t = illumos_ddi_dki::c_int;
+pub type rctl_hndl_t = illumos_sys_hdrs::c_int;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct task {
@@ -16442,7 +16456,7 @@ pub struct rctl_ops {
             arg2: *mut proc_,
             arg3: *mut rctl_entity_p_t,
             arg4: rctl_qty_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub rco_test: ::core::option::Option<
         unsafe extern "C" fn(
@@ -16452,7 +16466,7 @@ pub struct rctl_ops {
             arg4: *mut rctl_val_t,
             arg5: rctl_qty_t,
             arg6: uint_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
 }
 pub type rctl_ops_t = rctl_ops;
@@ -16472,7 +16486,7 @@ extern "C" {
         arg2: *mut proc_,
         arg3: *mut rctl_entity_p_t,
         arg4: rctl_qty_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rcop_no_test(
@@ -16482,7 +16496,7 @@ extern "C" {
         arg4: *mut rctl_val,
         arg5: rctl_qty_t,
         arg6: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rcop_absolute_test(
@@ -16492,7 +16506,7 @@ extern "C" {
         arg4: *mut rctl_val,
         arg5: rctl_qty_t,
         arg6: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut rctl_default_ops: rctl_ops_t;
@@ -16523,14 +16537,14 @@ pub type rctl_set_t = rctl_set;
 #[derive(Debug, Copy, Clone)]
 pub struct rctl_dict_entry {
     pub rcd_next: *mut rctl_dict_entry,
-    pub rcd_name: *mut illumos_ddi_dki::c_char,
+    pub rcd_name: *mut illumos_sys_hdrs::c_char,
     pub rcd_default_value: *mut rctl_val_t,
     pub rcd_ops: *mut rctl_ops_t,
     pub rcd_id: rctl_hndl_t,
     pub rcd_entity: rctl_entity_t,
-    pub rcd_flagaction: illumos_ddi_dki::c_int,
-    pub rcd_syslog_level: illumos_ddi_dki::c_int,
-    pub rcd_strlog_flags: illumos_ddi_dki::c_int,
+    pub rcd_flagaction: illumos_sys_hdrs::c_int,
+    pub rcd_syslog_level: illumos_sys_hdrs::c_int,
+    pub rcd_strlog_flags: illumos_sys_hdrs::c_int,
     pub rcd_max_native: rctl_qty_t,
     pub rcd_max_ilp32: rctl_qty_t,
 }
@@ -16557,7 +16571,7 @@ extern "C" {
     pub static mut rctlproc_flags: [uint_t; 0usize];
 }
 extern "C" {
-    pub static mut rctlproc_signals: [illumos_ddi_dki::c_int; 0usize];
+    pub static mut rctlproc_signals: [illumos_sys_hdrs::c_int; 0usize];
 }
 extern "C" {
     pub fn rctl_init();
@@ -16570,9 +16584,9 @@ extern "C" {
 }
 extern "C" {
     pub fn rctl_register(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: rctl_entity_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: rctl_qty_t,
         arg5: rctl_qty_t,
         arg6: *mut rctl_ops_t,
@@ -16580,12 +16594,12 @@ extern "C" {
 }
 extern "C" {
     pub fn rctl_hndl_lookup(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
     ) -> rctl_hndl_t;
 }
 extern "C" {
     pub fn rctl_dict_lookup(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
     ) -> *mut rctl_dict_entry_t;
 }
 extern "C" {
@@ -16593,7 +16607,7 @@ extern "C" {
 }
 extern "C" {
     pub fn rctl_add_default_limit(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: rctl_qty_t,
         arg3: rctl_priv_t,
         arg4: uint_t,
@@ -16601,9 +16615,9 @@ extern "C" {
 }
 extern "C" {
     pub fn rctl_add_legacy_limit(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-        arg3: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+        arg3: *const illumos_sys_hdrs::c_char,
         arg4: rctl_qty_t,
         arg5: rctl_qty_t,
     );
@@ -16625,7 +16639,7 @@ extern "C" {
     pub fn rctl_invalid_value(
         arg1: *mut rctl_dict_entry_t,
         arg2: *mut rctl_val_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_enforced_value(
@@ -16641,7 +16655,7 @@ extern "C" {
         arg3: *mut proc_,
         arg4: rctl_qty_t,
         arg5: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_action(
@@ -16649,7 +16663,7 @@ extern "C" {
         arg2: *mut rctl_set_t,
         arg3: *mut proc_,
         arg4: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_test_entity(
@@ -16659,7 +16673,7 @@ extern "C" {
         arg4: *mut rctl_entity_p_t,
         arg5: rctl_qty_t,
         arg6: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_action_entity(
@@ -16668,20 +16682,20 @@ extern "C" {
         arg3: *mut proc_,
         arg4: *mut rctl_entity_p_t,
         arg5: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_val_cmp(
         arg1: *mut rctl_val_t,
         arg2: *mut rctl_val_t,
-        arg3: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_val_list_insert(
         arg1: *mut *mut rctl_val_t,
         arg2: *mut rctl_val_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_set_create() -> *mut rctl_set_t;
@@ -16712,7 +16726,7 @@ extern "C" {
     pub fn rctl_set_dup_ready(
         arg1: *mut rctl_set_t,
         arg2: *mut rctl_alloc_gp_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_set_dup(
@@ -16722,7 +16736,7 @@ extern "C" {
         arg4: *mut rctl_entity_p_t,
         arg5: *mut rctl_set_t,
         arg6: *mut rctl_alloc_gp_t,
-        arg7: illumos_ddi_dki::c_int,
+        arg7: illumos_sys_hdrs::c_int,
     ) -> *mut rctl_set_t;
 }
 extern "C" {
@@ -16740,7 +16754,7 @@ extern "C" {
         arg1: *mut rctl_set_t,
         arg2: rctl_hndl_t,
         arg3: *mut *mut rctl_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_set_free(arg1: *mut rctl_set_t);
@@ -16750,34 +16764,34 @@ extern "C" {
 }
 extern "C" {
     pub fn rctl_build_name_buf(
-        arg1: *mut *mut illumos_ddi_dki::c_char,
+        arg1: *mut *mut illumos_sys_hdrs::c_char,
     ) -> size_t;
 }
 extern "C" {
     pub fn rctl_global_get(
-        name: *const illumos_ddi_dki::c_char,
+        name: *const illumos_sys_hdrs::c_char,
         arg1: *mut rctl_dict_entry_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_global_set(
-        name: *const illumos_ddi_dki::c_char,
+        name: *const illumos_sys_hdrs::c_char,
         arg1: *mut rctl_dict_entry_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_local_delete(
         arg1: rctl_hndl_t,
         arg2: *mut rctl_val_t,
         p: *mut proc_,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_local_insert(
         arg1: rctl_hndl_t,
         arg2: *mut rctl_val_t,
         p: *mut proc_,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_local_insert_all(
@@ -16785,7 +16799,7 @@ extern "C" {
         arg2: *mut rctl_val_t,
         arg3: *mut rctl_val_t,
         p: *mut proc_,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_local_replace_all(
@@ -16793,7 +16807,7 @@ extern "C" {
         arg2: *mut rctl_val_t,
         arg3: *mut rctl_val_t,
         p: *mut proc_,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_local_get(
@@ -16801,7 +16815,7 @@ extern "C" {
         arg2: *mut rctl_val_t,
         arg3: *mut rctl_val_t,
         p: *mut proc_,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_local_replace(
@@ -16809,7 +16823,7 @@ extern "C" {
         arg2: *mut rctl_val_t,
         arg3: *mut rctl_val_t,
         p: *mut proc_,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -16825,32 +16839,32 @@ extern "C" {
         arg2: *mut proc_,
         arg3: *mut rlimit64,
         arg4: *mut rctl_alloc_gp_t,
-        arg5: illumos_ddi_dki::c_int,
-        arg6: illumos_ddi_dki::c_int,
+        arg5: illumos_sys_hdrs::c_int,
+        arg6: illumos_sys_hdrs::c_int,
         arg7: *const cred,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_rlimit_get(
         arg1: rctl_hndl_t,
         arg2: *mut proc_,
         arg3: *mut rlimit64,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_incr_locked_mem(
         arg1: *mut proc_,
         arg2: *mut kproject,
         arg3: rctl_qty_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_decr_locked_mem(
         arg1: *mut proc_,
         arg2: *mut kproject,
         arg3: rctl_qty_t,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
@@ -16858,7 +16872,7 @@ extern "C" {
         arg1: *mut proc_,
         arg2: *mut zone,
         arg3: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_decr_swap(arg1: *mut zone, arg2: size_t);
@@ -16868,7 +16882,7 @@ extern "C" {
         arg1: *mut proc_,
         arg2: *mut zone,
         arg3: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rctl_decr_lofi(arg1: *mut zone, arg2: size_t);
@@ -16876,7 +16890,7 @@ extern "C" {
 extern "C" {
     pub fn rctl_kstat_create_zone(
         arg1: *mut zone,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: uchar_t,
         arg4: uint_t,
         arg5: uchar_t,
@@ -16885,7 +16899,7 @@ extern "C" {
 extern "C" {
     pub fn rctl_kstat_create_project(
         arg1: *mut kproject,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: uchar_t,
         arg4: uint_t,
         arg5: uchar_t,
@@ -16894,7 +16908,7 @@ extern "C" {
 extern "C" {
     pub fn rctl_kstat_create_task(
         arg1: *mut task,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: uchar_t,
         arg4: uint_t,
         arg5: uchar_t,
@@ -16934,8 +16948,8 @@ pub type signalfd_siginfo_t = signalfd_siginfo;
 pub struct sigfd_proc_state {
     pub sigfd_pollwake_cb: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
-            arg2: illumos_ddi_dki::c_int,
+            arg1: *mut illumos_sys_hdrs::c_void,
+            arg2: illumos_sys_hdrs::c_int,
         ),
     >,
     pub sigfd_list: list_t,
@@ -16968,11 +16982,11 @@ pub const psecflagwhich_t_PSF_EFFECTIVE: psecflagwhich_t = 0;
 pub const psecflagwhich_t_PSF_INHERIT: psecflagwhich_t = 1;
 pub const psecflagwhich_t_PSF_LOWER: psecflagwhich_t = 2;
 pub const psecflagwhich_t_PSF_UPPER: psecflagwhich_t = 3;
-pub type psecflagwhich_t = illumos_ddi_dki::c_uint;
+pub type psecflagwhich_t = illumos_sys_hdrs::c_uint;
 pub const secflag_t_PROC_SEC_ASLR: secflag_t = 0;
 pub const secflag_t_PROC_SEC_FORBIDNULLMAP: secflag_t = 1;
 pub const secflag_t_PROC_SEC_NOEXECSTACK: secflag_t = 2;
-pub type secflag_t = illumos_ddi_dki::c_uint;
+pub type secflag_t = illumos_sys_hdrs::c_uint;
 extern "C" {
     pub fn secflag_to_bit(arg1: secflag_t) -> secflagset_t;
 }
@@ -17037,18 +17051,18 @@ extern "C" {
     pub fn psecflags_default(sf: *mut psecflags_t);
 }
 extern "C" {
-    pub fn secflag_to_str(arg1: secflag_t) -> *const illumos_ddi_dki::c_char;
+    pub fn secflag_to_str(arg1: secflag_t) -> *const illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn secflag_by_name(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: *mut secflag_t,
     ) -> boolean_t;
 }
 extern "C" {
     pub fn secflags_to_str(
         arg1: secflagset_t,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: size_t,
     );
 }
@@ -17067,11 +17081,11 @@ extern "C" {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct prof {
-    pub pr_base: *mut illumos_ddi_dki::c_void,
+    pub pr_base: *mut illumos_sys_hdrs::c_void,
     pub pr_off: usize,
     pub pr_size: size_t,
     pub pr_scale: u32,
-    pub pr_samples: illumos_ddi_dki::c_long,
+    pub pr_samples: illumos_sys_hdrs::c_long,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -17088,27 +17102,27 @@ pub type lwpent_t = lwpent;
 #[derive(Debug, Copy, Clone)]
 pub struct pctxop {
     pub save_op: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
     >,
     pub restore_op: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
     >,
     pub fork_op: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
-            arg2: *mut illumos_ddi_dki::c_void,
+            arg1: *mut illumos_sys_hdrs::c_void,
+            arg2: *mut illumos_sys_hdrs::c_void,
         ),
     >,
     pub exit_op: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
     >,
     pub free_op: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
-            arg2: illumos_ddi_dki::c_int,
+            arg1: *mut illumos_sys_hdrs::c_void,
+            arg2: illumos_sys_hdrs::c_int,
         ),
     >,
-    pub arg: *mut illumos_ddi_dki::c_void,
+    pub arg: *mut illumos_sys_hdrs::c_void,
     pub next: *mut pctxop,
 }
 pub type pctxop_t = pctxop;
@@ -17162,11 +17176,11 @@ pub struct proc_ {
     pub p_lockp: *mut plock,
     pub p_crlock: kmutex_t,
     pub p_cred: *mut cred,
-    pub p_swapcnt: illumos_ddi_dki::c_int,
-    pub p_stat: illumos_ddi_dki::c_char,
-    pub p_wcode: illumos_ddi_dki::c_char,
+    pub p_swapcnt: illumos_sys_hdrs::c_int,
+    pub p_stat: illumos_sys_hdrs::c_char,
+    pub p_wcode: illumos_sys_hdrs::c_char,
     pub p_pidflag: ushort_t,
-    pub p_wdata: illumos_ddi_dki::c_int,
+    pub p_wdata: illumos_sys_hdrs::c_int,
     pub p_ppid: pid_t,
     pub p_link: *mut proc_,
     pub p_parent: *mut proc_,
@@ -17205,19 +17219,19 @@ pub struct proc_ {
     pub p_extsig: k_sigset_t,
     pub p_ignore: k_sigset_t,
     pub p_siginfo: k_sigset_t,
-    pub p_sigfd: *mut illumos_ddi_dki::c_void,
+    pub p_sigfd: *mut illumos_sys_hdrs::c_void,
     pub p_sigqueue: *mut sigqueue,
     pub p_sigqhdr: *mut sigqhdr,
     pub p_signhdr: *mut sigqhdr,
     pub p_stopsig: uchar_t,
-    pub p_fixalignment: illumos_ddi_dki::c_char,
+    pub p_fixalignment: illumos_sys_hdrs::c_char,
     pub p_lwpid: id_t,
-    pub p_lwpcnt: illumos_ddi_dki::c_int,
-    pub p_lwprcnt: illumos_ddi_dki::c_int,
-    pub p_lwpdaemon: illumos_ddi_dki::c_int,
-    pub p_lwpwait: illumos_ddi_dki::c_int,
-    pub p_lwpdwait: illumos_ddi_dki::c_int,
-    pub p_zombcnt: illumos_ddi_dki::c_int,
+    pub p_lwpcnt: illumos_sys_hdrs::c_int,
+    pub p_lwprcnt: illumos_sys_hdrs::c_int,
+    pub p_lwpdaemon: illumos_sys_hdrs::c_int,
+    pub p_lwpwait: illumos_sys_hdrs::c_int,
+    pub p_lwpdwait: illumos_sys_hdrs::c_int,
+    pub p_zombcnt: illumos_sys_hdrs::c_int,
     pub p_tlist: *mut kthread_t,
     pub p_lwpdir: *mut lwpdir_t,
     pub p_lwpfree: *mut lwpdir_t,
@@ -17237,7 +17251,7 @@ pub struct proc_ {
     pub p_warea: avl_tree_t,
     pub p_wpage: avl_tree_t,
     pub p_wprot: *mut watched_page_t,
-    pub p_mapcnt: illumos_ddi_dki::c_int,
+    pub p_mapcnt: illumos_sys_hdrs::c_int,
     pub p_maplock: kmutex_t,
     pub p_rlink: *mut proc_,
     pub p_srwchan_cv: kcondvar_t,
@@ -17261,7 +17275,7 @@ pub struct proc_ {
     pub p_door_list: *mut door_node,
     pub p_unref_list: *mut door_node,
     pub p_unref_cv: kcondvar_t,
-    pub p_unref_thread: illumos_ddi_dki::c_char,
+    pub p_unref_thread: illumos_sys_hdrs::c_char,
     pub p_tnf_flags: uchar_t,
     pub p_audit_data: *mut p_audit_data,
     pub p_pctx: *mut pctxop_t,
@@ -17302,20 +17316,20 @@ pub struct proc_ {
     pub p_ct_process: *mut cont_process,
     pub p_ct_member: list_node_t,
     pub p_killsqp: *mut sigqueue_t,
-    pub p_dtrace_probes: illumos_ddi_dki::c_int,
+    pub p_dtrace_probes: illumos_sys_hdrs::c_int,
     pub p_dtrace_count: u64,
-    pub p_dtrace_helpers: *mut illumos_ddi_dki::c_void,
+    pub p_dtrace_helpers: *mut illumos_sys_hdrs::c_void,
     pub p_pool: *mut pool,
     pub p_poolcv: kcondvar_t,
     pub p_poolcnt: uint_t,
     pub p_poolflag: uint_t,
     pub p_upanicflag: uint_t,
-    pub p_upanic: *mut illumos_ddi_dki::c_void,
+    pub p_upanic: *mut illumos_sys_hdrs::c_void,
     pub p_portcnt: usize,
     pub p_zone: *mut zone,
     pub p_execdir: *mut vnode,
     pub p_brand: *mut brand,
-    pub p_brand_data: *mut illumos_ddi_dki::c_void,
+    pub p_brand_data: *mut illumos_sys_hdrs::c_void,
     pub p_secflags: psecflags_t,
     pub p_splock: kmutex_t,
     pub p_locked_mem: rctl_qty_t,
@@ -17360,52 +17374,52 @@ pub struct pid {
 }
 impl pid {
     #[inline]
-    pub fn pid_prinactive(&self) -> illumos_ddi_dki::c_uint {
+    pub fn pid_prinactive(&self) -> illumos_sys_hdrs::c_uint {
         unsafe {
             ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32)
         }
     }
     #[inline]
-    pub fn set_pid_prinactive(&mut self, val: illumos_ddi_dki::c_uint) {
+    pub fn set_pid_prinactive(&mut self, val: illumos_sys_hdrs::c_uint) {
         unsafe {
             let val: u32 = ::core::mem::transmute(val);
             self._bitfield_1.set(0usize, 1u8, val as u64)
         }
     }
     #[inline]
-    pub fn pid_pgorphaned(&self) -> illumos_ddi_dki::c_uint {
+    pub fn pid_pgorphaned(&self) -> illumos_sys_hdrs::c_uint {
         unsafe {
             ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u32)
         }
     }
     #[inline]
-    pub fn set_pid_pgorphaned(&mut self, val: illumos_ddi_dki::c_uint) {
+    pub fn set_pid_pgorphaned(&mut self, val: illumos_sys_hdrs::c_uint) {
         unsafe {
             let val: u32 = ::core::mem::transmute(val);
             self._bitfield_1.set(1usize, 1u8, val as u64)
         }
     }
     #[inline]
-    pub fn pid_padding(&self) -> illumos_ddi_dki::c_uint {
+    pub fn pid_padding(&self) -> illumos_sys_hdrs::c_uint {
         unsafe {
             ::core::mem::transmute(self._bitfield_1.get(2usize, 6u8) as u32)
         }
     }
     #[inline]
-    pub fn set_pid_padding(&mut self, val: illumos_ddi_dki::c_uint) {
+    pub fn set_pid_padding(&mut self, val: illumos_sys_hdrs::c_uint) {
         unsafe {
             let val: u32 = ::core::mem::transmute(val);
             self._bitfield_1.set(2usize, 6u8, val as u64)
         }
     }
     #[inline]
-    pub fn pid_prslot(&self) -> illumos_ddi_dki::c_uint {
+    pub fn pid_prslot(&self) -> illumos_sys_hdrs::c_uint {
         unsafe {
             ::core::mem::transmute(self._bitfield_1.get(8usize, 24u8) as u32)
         }
     }
     #[inline]
-    pub fn set_pid_prslot(&mut self, val: illumos_ddi_dki::c_uint) {
+    pub fn set_pid_prslot(&mut self, val: illumos_sys_hdrs::c_uint) {
         unsafe {
             let val: u32 = ::core::mem::transmute(val);
             self._bitfield_1.set(8usize, 24u8, val as u64)
@@ -17413,10 +17427,10 @@ impl pid {
     }
     #[inline]
     pub fn new_bitfield_1(
-        pid_prinactive: illumos_ddi_dki::c_uint,
-        pid_pgorphaned: illumos_ddi_dki::c_uint,
-        pid_padding: illumos_ddi_dki::c_uint,
-        pid_prslot: illumos_ddi_dki::c_uint,
+        pid_prinactive: illumos_sys_hdrs::c_uint,
+        pid_pgorphaned: illumos_sys_hdrs::c_uint,
+        pid_padding: illumos_sys_hdrs::c_uint,
+        pid_prslot: illumos_sys_hdrs::c_uint,
     ) -> __BindgenBitfieldUnit<[u8; 4usize]> {
         let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> =
             Default::default();
@@ -17460,7 +17474,7 @@ pub const lwp_stat_id_t_LWP_STAT_INBLK: lwp_stat_id_t = 0;
 pub const lwp_stat_id_t_LWP_STAT_OUBLK: lwp_stat_id_t = 1;
 pub const lwp_stat_id_t_LWP_STAT_MSGRCV: lwp_stat_id_t = 2;
 pub const lwp_stat_id_t_LWP_STAT_MSGSND: lwp_stat_id_t = 3;
-pub type lwp_stat_id_t = illumos_ddi_dki::c_uint;
+pub type lwp_stat_id_t = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct prkillinfo {
@@ -17477,10 +17491,10 @@ extern "C" {
         arg1: ::core::option::Option<unsafe extern "C" fn()>,
         arg2: caddr_t,
         arg3: id_t,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: *mut *mut contract,
         arg6: pid_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn vfwait(arg1: pid_t);
@@ -17498,13 +17512,13 @@ extern "C" {
     pub fn setrun_locked(arg1: *mut kthread_t);
 }
 extern "C" {
-    pub fn exit(arg1: illumos_ddi_dki::c_int, arg2: illumos_ddi_dki::c_int);
+    pub fn exit(arg1: illumos_sys_hdrs::c_int, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn proc_exit(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn proc_is_exiting(arg1: *mut proc_t);
@@ -17525,7 +17539,7 @@ extern "C" {
     pub fn upcount_dec(arg1: uid_t, arg2: zoneid_t);
 }
 extern "C" {
-    pub fn upcount_get(arg1: uid_t, arg2: zoneid_t) -> illumos_ddi_dki::c_int;
+    pub fn upcount_get(arg1: uid_t, arg2: zoneid_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn setup_thrptr(arg1: *mut proc_t, arg2: usize) -> selector_t;
@@ -17546,66 +17560,66 @@ extern "C" {
     pub fn fsig(
         arg1: *mut k_sigset_t,
         arg2: *mut kthread_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn psig();
 }
 extern "C" {
-    pub fn stop(arg1: illumos_ddi_dki::c_int, arg2: illumos_ddi_dki::c_int);
+    pub fn stop(arg1: illumos_sys_hdrs::c_int, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn stop_on_fault(
         arg1: uint_t,
         arg2: *mut k_siginfo_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn issig(arg1: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn issig(arg1: illumos_sys_hdrs::c_int) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn jobstopped(arg1: *mut proc_t) -> illumos_ddi_dki::c_int;
+    pub fn jobstopped(arg1: *mut proc_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn psignal(arg1: *mut proc_t, arg2: illumos_ddi_dki::c_int);
+    pub fn psignal(arg1: *mut proc_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
-    pub fn tsignal(arg1: *mut kthread_t, arg2: illumos_ddi_dki::c_int);
+    pub fn tsignal(arg1: *mut kthread_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn sigtoproc(
         arg1: *mut proc_t,
         arg2: *mut kthread_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
-    pub fn trapsig(arg1: *mut k_siginfo_t, arg2: illumos_ddi_dki::c_int);
+    pub fn trapsig(arg1: *mut k_siginfo_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn realsigprof(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
     pub fn eat_signal(
         arg1: *mut kthread_t,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn signal_is_blocked(
         arg1: *mut kthread_t,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn sigcheck(
         arg1: *mut proc_t,
         arg2: *mut kthread_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn sigdefault(arg1: *mut proc_t);
@@ -17617,11 +17631,11 @@ extern "C" {
     pub fn pid_allocate(
         arg1: *mut proc_t,
         arg2: pid_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     ) -> pid_t;
 }
 extern "C" {
-    pub fn pid_rele(arg1: *mut pid) -> illumos_ddi_dki::c_int;
+    pub fn pid_rele(arg1: *mut pid) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn pid_exit(arg1: *mut proc_t, arg2: *mut task);
@@ -17648,7 +17662,7 @@ extern "C" {
     pub fn sprlock_zone(arg1: pid_t, arg2: zoneid_t) -> *mut proc_t;
 }
 extern "C" {
-    pub fn sprtrylock_proc(arg1: *mut proc_t) -> illumos_ddi_dki::c_int;
+    pub fn sprtrylock_proc(arg1: *mut proc_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn sprwaitlock_proc(arg1: *mut proc_t);
@@ -17663,35 +17677,35 @@ extern "C" {
     pub fn pid_init();
 }
 extern "C" {
-    pub fn pid_entry(arg1: illumos_ddi_dki::c_int) -> *mut proc_t;
+    pub fn pid_entry(arg1: illumos_sys_hdrs::c_int) -> *mut proc_t;
 }
 extern "C" {
-    pub fn pid_slot(arg1: *mut proc_t) -> illumos_ddi_dki::c_int;
+    pub fn pid_slot(arg1: *mut proc_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn signal(arg1: pid_t, arg2: illumos_ddi_dki::c_int);
+    pub fn signal(arg1: pid_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
-    pub fn prsignal(arg1: *mut pid, arg2: illumos_ddi_dki::c_int);
+    pub fn prsignal(arg1: *mut pid, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn uread(
         arg1: *mut proc_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
         arg4: usize,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn uwrite(
         arg1: *mut proc_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
         arg4: usize,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn pgsignal(arg1: *mut pid, arg2: illumos_ddi_dki::c_int);
+    pub fn pgsignal(arg1: *mut pid, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn pgjoin(arg1: *mut proc_t, arg2: *mut pid);
@@ -17706,16 +17720,16 @@ extern "C" {
     pub fn pgdetach(arg1: *mut proc_t);
 }
 extern "C" {
-    pub fn pgmembers(arg1: pid_t) -> illumos_ddi_dki::c_int;
+    pub fn pgmembers(arg1: pid_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn init_mstate(arg1: *mut kthread_t, arg2: illumos_ddi_dki::c_int);
+    pub fn init_mstate(arg1: *mut kthread_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn new_mstate(
         arg1: *mut kthread_t,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn restore_mstate(arg1: *mut kthread_t);
@@ -17732,7 +17746,7 @@ extern "C" {
 extern "C" {
     pub fn mstate_aggr_state(
         arg1: *mut proc_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
     ) -> hrtime_t;
 }
 extern "C" {
@@ -17747,8 +17761,8 @@ extern "C" {
 }
 extern "C" {
     pub fn syscall_mstate(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
@@ -17777,10 +17791,10 @@ extern "C" {
         stk: caddr_t,
         stksize: size_t,
         proc_: ::core::option::Option<unsafe extern "C" fn()>,
-        arg: *mut illumos_ddi_dki::c_void,
+        arg: *mut illumos_sys_hdrs::c_void,
         len: size_t,
         pp: *mut proc_t,
-        state: illumos_ddi_dki::c_int,
+        state: illumos_sys_hdrs::c_int,
         pri: pri_t,
     ) -> *mut kthread_t;
 }
@@ -17797,7 +17811,7 @@ extern "C" {
     pub fn thread_join(arg1: kt_did_t);
 }
 extern "C" {
-    pub fn reaper() -> illumos_ddi_dki::c_int;
+    pub fn reaper() -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -17805,37 +17819,37 @@ pub struct ctxop_template {
     pub ct_rev: u32,
     pub ct_pad: u32,
     pub ct_save: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
     >,
     pub ct_restore: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
     >,
     pub ct_fork: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
-            arg2: *mut illumos_ddi_dki::c_void,
+            arg1: *mut illumos_sys_hdrs::c_void,
+            arg2: *mut illumos_sys_hdrs::c_void,
         ),
     >,
     pub ct_lwp_create: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
-            arg2: *mut illumos_ddi_dki::c_void,
+            arg1: *mut illumos_sys_hdrs::c_void,
+            arg2: *mut illumos_sys_hdrs::c_void,
         ),
     >,
     pub ct_exit: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+        unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
     >,
     pub ct_free: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *mut illumos_ddi_dki::c_void,
-            arg2: illumos_ddi_dki::c_int,
+            arg1: *mut illumos_sys_hdrs::c_void,
+            arg2: illumos_sys_hdrs::c_int,
         ),
     >,
 }
 extern "C" {
     pub fn ctxop_allocate(
         arg1: *const ctxop_template,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     ) -> *mut ctxop;
 }
 extern "C" {
@@ -17851,15 +17865,15 @@ extern "C" {
     pub fn ctxop_install(
         arg1: *mut kthread_t,
         arg2: *const ctxop_template,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
     pub fn ctxop_remove(
         arg1: *mut kthread_t,
         arg2: *const ctxop_template,
-        arg3: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn savectx(arg1: *mut kthread_t);
@@ -17877,12 +17891,12 @@ extern "C" {
     pub fn exitctx(arg1: *mut kthread_t);
 }
 extern "C" {
-    pub fn freectx(arg1: *mut kthread_t, arg2: illumos_ddi_dki::c_int);
+    pub fn freectx(arg1: *mut kthread_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn installpctx(
         arg1: *mut proc_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: ::core::option::Option<unsafe extern "C" fn()>,
         arg4: ::core::option::Option<unsafe extern "C" fn()>,
         arg5: ::core::option::Option<unsafe extern "C" fn()>,
@@ -17893,13 +17907,13 @@ extern "C" {
 extern "C" {
     pub fn removepctx(
         arg1: *mut proc_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: ::core::option::Option<unsafe extern "C" fn()>,
         arg4: ::core::option::Option<unsafe extern "C" fn()>,
         arg5: ::core::option::Option<unsafe extern "C" fn()>,
         arg6: ::core::option::Option<unsafe extern "C" fn()>,
         arg7: ::core::option::Option<unsafe extern "C" fn()>,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn savepctx(arg1: *mut proc_t);
@@ -17914,7 +17928,7 @@ extern "C" {
     pub fn exitpctx(arg1: *mut proc_t);
 }
 extern "C" {
-    pub fn freepctx(arg1: *mut proc_t, arg2: illumos_ddi_dki::c_int);
+    pub fn freepctx(arg1: *mut proc_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn thread_unpin() -> *mut kthread_t;
@@ -17934,7 +17948,7 @@ extern "C" {
     pub fn tsd_create(
         arg1: *mut uint_t,
         arg2: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
     );
 }
@@ -17945,21 +17959,21 @@ extern "C" {
     pub fn tsd_getcreate(
         arg1: *mut uint_t,
         arg2: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
         arg3: ::core::option::Option<
-            unsafe extern "C" fn() -> *mut illumos_ddi_dki::c_void,
+            unsafe extern "C" fn() -> *mut illumos_sys_hdrs::c_void,
         >,
-    ) -> *mut illumos_ddi_dki::c_void;
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
-    pub fn tsd_get(arg1: uint_t) -> *mut illumos_ddi_dki::c_void;
+    pub fn tsd_get(arg1: uint_t) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn tsd_set(
         arg1: uint_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn tsd_exit();
@@ -17968,21 +17982,21 @@ extern "C" {
     pub fn tsd_agent_get(
         arg1: *mut kthread_t,
         arg2: uint_t,
-    ) -> *mut illumos_ddi_dki::c_void;
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn tsd_agent_set(
         arg1: *mut kthread_t,
         arg2: uint_t,
-        arg3: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn lwp_kernel_create(
         arg1: *mut proc_t,
         arg2: ::core::option::Option<unsafe extern "C" fn()>,
-        arg3: *mut illumos_ddi_dki::c_void,
-        arg4: illumos_ddi_dki::c_int,
+        arg3: *mut illumos_sys_hdrs::c_void,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: pri_t,
     ) -> *mut kthread_t;
 }
@@ -17992,10 +18006,10 @@ extern "C" {
         arg: caddr_t,
         len: size_t,
         p: *mut proc_t,
-        state: illumos_ddi_dki::c_int,
-        pri: illumos_ddi_dki::c_int,
+        state: illumos_sys_hdrs::c_int,
+        pri: illumos_sys_hdrs::c_int,
         smask: *const k_sigset_t,
-        cid: illumos_ddi_dki::c_int,
+        cid: illumos_sys_hdrs::c_int,
         lwpid: id_t,
     ) -> *mut klwp_t;
 }
@@ -18008,7 +18022,7 @@ extern "C" {
         arg2: *mut lwpent_t,
         arg3: *mut tidhash_t,
         arg4: uint_t,
-        arg5: illumos_ddi_dki::c_int,
+        arg5: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
@@ -18037,7 +18051,7 @@ extern "C" {
     pub fn lwp_cleanup();
 }
 extern "C" {
-    pub fn lwp_suspend(arg1: *mut kthread_t) -> illumos_ddi_dki::c_int;
+    pub fn lwp_suspend(arg1: *mut kthread_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn lwp_continue(arg1: *mut kthread_t);
@@ -18049,10 +18063,10 @@ extern "C" {
     pub fn stoplwp();
 }
 extern "C" {
-    pub fn holdlwps(arg1: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn holdlwps(arg1: illumos_sys_hdrs::c_int) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn holdwatch() -> illumos_ddi_dki::c_int;
+    pub fn holdwatch() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn pokelwps(arg1: *mut proc_t);
@@ -18061,7 +18075,7 @@ extern "C" {
     pub fn continuelwps(arg1: *mut proc_t);
 }
 extern "C" {
-    pub fn exitlwps(arg1: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn exitlwps(arg1: illumos_sys_hdrs::c_int) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn lwp_ctmpl_copy(arg1: *mut klwp_t, arg2: *mut klwp_t);
@@ -18082,15 +18096,15 @@ extern "C" {
 extern "C" {
     pub fn lwp_setrval(
         arg1: *mut klwp_t,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
     pub fn lwp_forkregs(arg1: *mut klwp_t, arg2: *mut klwp_t);
 }
 extern "C" {
-    pub fn lwp_freeregs(arg1: *mut klwp_t, arg2: illumos_ddi_dki::c_int);
+    pub fn lwp_freeregs(arg1: *mut klwp_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn lwp_stk_init(arg1: *mut klwp_t, arg2: caddr_t) -> caddr_t;
@@ -18113,12 +18127,12 @@ extern "C" {
 extern "C" {
     pub fn lwp_setprivate(
         arg1: *mut klwp_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: usize,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn lwp_stat_update(arg1: lwp_stat_id_t, arg2: illumos_ddi_dki::c_long);
+    pub fn lwp_stat_update(arg1: lwp_stat_id_t, arg2: illumos_sys_hdrs::c_long);
 }
 extern "C" {
     pub fn lwp_attach_brand_hdlrs(arg1: *mut klwp_t);
@@ -18136,7 +18150,7 @@ extern "C" {
     pub fn sigdeq(
         arg1: *mut proc_t,
         arg2: *mut kthread_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
         arg4: *mut *mut sigqueue_t,
     );
 }
@@ -18144,7 +18158,7 @@ extern "C" {
     pub fn sigdelq(
         arg1: *mut proc_t,
         arg2: *mut kthread_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
@@ -18152,7 +18166,7 @@ extern "C" {
         arg1: *mut proc_t,
         arg2: *mut kthread_t,
         arg3: *mut k_siginfo_t,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
@@ -18164,7 +18178,7 @@ extern "C" {
 }
 extern "C" {
     pub fn sigqsend(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: *mut proc_t,
         arg3: *mut kthread_t,
         arg4: *mut sigqueue_t,
@@ -18175,9 +18189,9 @@ extern "C" {
 }
 extern "C" {
     pub fn sigwillqueue(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn sigqhdralloc(arg1: size_t, arg2: uint_t) -> *mut sigqhdr_t;
@@ -18208,21 +18222,21 @@ extern "C" {
     pub fn winfo(
         arg1: *mut proc_t,
         arg2: *mut k_siginfo_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
     pub fn wstat(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn sendsig(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: *mut k_siginfo_t,
         arg3: ::core::option::Option<unsafe extern "C" fn()>,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -18310,7 +18324,7 @@ pub struct __ddi_devid {
 }
 pub type ddi_devid_t = *mut __ddi_devid;
 pub const ddi_devmap_cmd_t_DDI_DEVMAP_VALIDATE: ddi_devmap_cmd_t = 0;
-pub type ddi_devmap_cmd_t = illumos_ddi_dki::c_uint;
+pub type ddi_devmap_cmd_t = illumos_sys_hdrs::c_uint;
 pub const ddi_node_state_t_DS_INVAL: ddi_node_state_t = -1;
 pub const ddi_node_state_t_DS_PROTO: ddi_node_state_t = 0;
 pub const ddi_node_state_t_DS_LINKED: ddi_node_state_t = 1;
@@ -18319,11 +18333,11 @@ pub const ddi_node_state_t_DS_INITIALIZED: ddi_node_state_t = 3;
 pub const ddi_node_state_t_DS_PROBED: ddi_node_state_t = 4;
 pub const ddi_node_state_t_DS_ATTACHED: ddi_node_state_t = 5;
 pub const ddi_node_state_t_DS_READY: ddi_node_state_t = 6;
-pub type ddi_node_state_t = illumos_ddi_dki::c_int;
+pub type ddi_node_state_t = illumos_sys_hdrs::c_int;
 pub const ddi_plevel_t_EPL_KERNEL: ddi_plevel_t = 0;
 pub const ddi_plevel_t_EPL_INTERRUPT: ddi_plevel_t = 1;
 pub const ddi_plevel_t_EPL_HIGHLEVEL: ddi_plevel_t = 2;
-pub type ddi_plevel_t = illumos_ddi_dki::c_uint;
+pub type ddi_plevel_t = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ddi_event_cookie {
@@ -18354,9 +18368,9 @@ pub type ddi_acc_handle_t = *mut __ddi_acc_handle;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ddi_acc_hdl {
-    pub ah_vers: illumos_ddi_dki::c_int,
-    pub ah_bus_private: *mut illumos_ddi_dki::c_void,
-    pub ah_platform_private: *mut illumos_ddi_dki::c_void,
+    pub ah_vers: illumos_sys_hdrs::c_int,
+    pub ah_bus_private: *mut illumos_sys_hdrs::c_void,
+    pub ah_platform_private: *mut illumos_sys_hdrs::c_void,
     pub ah_dip: *mut dev_info_t,
     pub ah_rnumber: uint_t,
     pub ah_addr: caddr_t,
@@ -18394,36 +18408,36 @@ extern "C" {
 }
 extern "C" {
     pub fn mdboot(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: boolean_t,
     );
 }
 extern "C" {
     pub fn mdpreboot(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: *mut illumos_sys_hdrs::c_char,
     );
 }
 extern "C" {
     pub fn kadmin(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn killall(arg1: zoneid_t);
 }
 extern "C" {
     pub fn uadmin(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: usize,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut rootdir: *mut vnode;
@@ -18432,19 +18446,19 @@ extern "C" {
     pub static mut devicesdir: *mut vnode;
 }
 extern "C" {
-    pub static mut interrupts_unleashed: illumos_ddi_dki::c_int;
+    pub static mut interrupts_unleashed: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut runin: illumos_ddi_dki::c_char;
+    pub static mut runin: illumos_sys_hdrs::c_char;
 }
 extern "C" {
-    pub static mut runout: illumos_ddi_dki::c_char;
+    pub static mut runout: illumos_sys_hdrs::c_char;
 }
 extern "C" {
-    pub static mut wake_sched: illumos_ddi_dki::c_char;
+    pub static mut wake_sched: illumos_sys_hdrs::c_char;
 }
 extern "C" {
-    pub static mut wake_sched_sec: illumos_ddi_dki::c_char;
+    pub static mut wake_sched_sec: illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub static mut maxmem: pgcnt_t;
@@ -18495,40 +18509,40 @@ extern "C" {
     pub static mut ramdisk_size: u32;
 }
 extern "C" {
-    pub static mut panicstr: *mut illumos_ddi_dki::c_char;
+    pub static mut panicstr: *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub static mut panicargs: va_list;
 }
 extern "C" {
-    pub static mut quiesce_active: illumos_ddi_dki::c_int;
+    pub static mut quiesce_active: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut rstchown: illumos_ddi_dki::c_int;
+    pub static mut rstchown: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut klustsize: illumos_ddi_dki::c_int;
+    pub static mut klustsize: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut abort_enable: illumos_ddi_dki::c_int;
+    pub static mut abort_enable: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut audit_active: illumos_ddi_dki::c_int;
+    pub static mut audit_active: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut avenrun: [illumos_ddi_dki::c_int; 0usize];
+    pub static mut avenrun: [illumos_sys_hdrs::c_int; 0usize];
 }
 extern "C" {
-    pub static mut isa_list: *mut illumos_ddi_dki::c_char;
+    pub static mut isa_list: *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
-    pub static mut noexec_user_stack: illumos_ddi_dki::c_int;
+    pub static mut noexec_user_stack: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut noexec_user_stack_log: illumos_ddi_dki::c_int;
+    pub static mut noexec_user_stack_log: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut nfs_global_client_only: illumos_ddi_dki::c_int;
+    pub static mut nfs_global_client_only: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn report_stack_exec(arg1: *mut proc_t, arg2: caddr_t);
@@ -18557,45 +18571,48 @@ pub const tod_fault_type_TOD_JUMPED: tod_fault_type = 2;
 pub const tod_fault_type_TOD_RATECHANGED: tod_fault_type = 3;
 pub const tod_fault_type_TOD_RDONLY: tod_fault_type = 4;
 pub const tod_fault_type_TOD_NOFAULT: tod_fault_type = 5;
-pub type tod_fault_type = illumos_ddi_dki::c_uint;
+pub type tod_fault_type = illumos_sys_hdrs::c_uint;
 extern "C" {
     pub fn tod_validate(arg1: time_t) -> time_t;
 }
 extern "C" {
-    pub fn tod_status_set(arg1: illumos_ddi_dki::c_int);
+    pub fn tod_status_set(arg1: illumos_sys_hdrs::c_int);
 }
 extern "C" {
-    pub fn tod_status_clear(arg1: illumos_ddi_dki::c_int);
+    pub fn tod_status_clear(arg1: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn plat_tod_fault(arg1: tod_fault_type);
 }
 extern "C" {
-    pub fn grow(arg1: caddr_t) -> illumos_ddi_dki::c_int;
+    pub fn grow(arg1: caddr_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn grow_internal(arg1: caddr_t, arg2: uint_t)
-        -> illumos_ddi_dki::c_int;
+    pub fn grow_internal(
+        arg1: caddr_t,
+        arg2: uint_t,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn brk_internal(arg1: caddr_t, arg2: uint_t) -> illumos_ddi_dki::c_int;
+    pub fn brk_internal(arg1: caddr_t, arg2: uint_t)
+        -> illumos_sys_hdrs::c_int;
 }
 pub type callout_id_t = u64;
 extern "C" {
     pub fn timeout(
         arg1: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: clock_t,
     ) -> timeout_id_t;
 }
 extern "C" {
     pub fn realtime_timeout(
         arg1: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: clock_t,
     ) -> timeout_id_t;
 }
@@ -18604,387 +18621,396 @@ extern "C" {
 }
 extern "C" {
     pub fn timeout_generic(
-        arg1: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
         arg2: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: hrtime_t,
         arg5: hrtime_t,
-        arg6: illumos_ddi_dki::c_int,
+        arg6: illumos_sys_hdrs::c_int,
     ) -> callout_id_t;
 }
 extern "C" {
     pub fn timeout_default(
         arg1: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: clock_t,
     ) -> callout_id_t;
 }
 extern "C" {
     pub fn realtime_timeout_default(
         arg1: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: clock_t,
     ) -> callout_id_t;
 }
 extern "C" {
     pub fn untimeout_generic(
         arg1: callout_id_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
     ) -> hrtime_t;
 }
 extern "C" {
     pub fn untimeout_default(
         arg1: callout_id_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
     ) -> clock_t;
 }
 extern "C" {
     pub fn delay(arg1: clock_t);
 }
 extern "C" {
-    pub fn delay_sig(arg1: clock_t) -> illumos_ddi_dki::c_int;
+    pub fn delay_sig(arg1: clock_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn delay_random(arg1: clock_t);
 }
 extern "C" {
-    pub fn nodev() -> illumos_ddi_dki::c_int;
+    pub fn nodev() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn nulldev() -> illumos_ddi_dki::c_int;
+    pub fn nulldev() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn getudev() -> major_t;
 }
 extern "C" {
-    pub fn cmpldev(arg1: *mut dev32_t, arg2: dev_t) -> illumos_ddi_dki::c_int;
+    pub fn cmpldev(arg1: *mut dev32_t, arg2: dev_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn expldev(arg1: dev32_t) -> dev_t;
 }
 extern "C" {
     pub fn bcmp(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *const illumos_ddi_dki::c_void,
-        arg3: illumos_ddi_dki::c_ulong,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *const illumos_sys_hdrs::c_void,
+        arg3: illumos_sys_hdrs::c_ulong,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn stoi(
-        arg1: *mut *mut illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *mut *mut illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn numtos(arg1: ulong_t, arg2: *mut illumos_ddi_dki::c_char);
+    pub fn numtos(arg1: ulong_t, arg2: *mut illumos_sys_hdrs::c_char);
 }
 extern "C" {
     pub fn kmem_asprintf(
-        fmt: *const illumos_ddi_dki::c_char,
+        fmt: *const illumos_sys_hdrs::c_char,
         ...
-    ) -> *mut illumos_ddi_dki::c_char;
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn strident_valid(
-        arg1: *const illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *const illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn strident_canon(arg1: *mut illumos_ddi_dki::c_char, arg2: size_t);
+    pub fn strident_canon(arg1: *mut illumos_sys_hdrs::c_char, arg2: size_t);
 }
 extern "C" {
     pub fn getsubopt(
-        optionsp: *mut *mut illumos_ddi_dki::c_char,
-        tokens: *const *mut illumos_ddi_dki::c_char,
-        valuep: *mut *mut illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        optionsp: *mut *mut illumos_sys_hdrs::c_char,
+        tokens: *const *mut illumos_sys_hdrs::c_char,
+        valuep: *mut *mut illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn append_subopt(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: size_t,
-        arg3: *mut illumos_ddi_dki::c_char,
-        arg4: *const illumos_ddi_dki::c_char,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg3: *mut illumos_sys_hdrs::c_char,
+        arg4: *const illumos_sys_hdrs::c_char,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
-    pub fn ffs(arg1: uintmax_t) -> illumos_ddi_dki::c_int;
+    pub fn ffs(arg1: uintmax_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn copyin(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn copyin_noerr(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
     );
 }
 extern "C" {
     pub fn xcopyin(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn xcopyin_nta(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn copyout(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn copyout_noerr(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
     );
 }
 extern "C" {
     pub fn xcopyout(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn xcopyout_nta(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn copyinstr(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: size_t,
         arg4: *mut size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn copyinstr_noerr(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: size_t,
         arg4: *mut size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn copyoutstr(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: size_t,
         arg4: *mut size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn copyoutstr_noerr(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: size_t,
         arg4: *mut size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn copystr(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: size_t,
         arg4: *mut size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ucopy(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
     );
 }
 extern "C" {
     pub fn ucopystr(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *mut illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *mut illumos_sys_hdrs::c_char,
         arg3: size_t,
         arg4: *mut size_t,
     );
 }
 extern "C" {
     pub fn pgcopy(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
     );
 }
 extern "C" {
     pub fn ovbcopy(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
     );
 }
 extern "C" {
-    pub fn uzero(arg1: *mut illumos_ddi_dki::c_void, arg2: size_t);
+    pub fn uzero(arg1: *mut illumos_sys_hdrs::c_void, arg2: size_t);
 }
 extern "C" {
     pub fn kcopy(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kcopy_nta(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn kzero(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fuword8(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: *mut u8,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fuword16(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: *mut u16,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fuword32(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn fulword(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: *mut ulong_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn fuword8_noerr(arg1: *const illumos_ddi_dki::c_void, arg2: *mut u8);
+    pub fn fuword8_noerr(arg1: *const illumos_sys_hdrs::c_void, arg2: *mut u8);
 }
 extern "C" {
-    pub fn fuword16_noerr(arg1: *const illumos_ddi_dki::c_void, arg2: *mut u16);
+    pub fn fuword16_noerr(
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut u16,
+    );
 }
 extern "C" {
-    pub fn fuword32_noerr(arg1: *const illumos_ddi_dki::c_void, arg2: *mut u32);
+    pub fn fuword32_noerr(
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut u32,
+    );
 }
 extern "C" {
     pub fn fulword_noerr(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: *mut ulong_t,
     );
 }
 extern "C" {
     pub fn fuword64(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: *mut u64,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn fuword64_noerr(arg1: *const illumos_ddi_dki::c_void, arg2: *mut u64);
+    pub fn fuword64_noerr(
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut u64,
+    );
 }
 extern "C" {
     pub fn subyte(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: u8,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn suword8(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: u8,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn suword16(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: u16,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn suword32(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn sulword(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: ulong_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn subyte_noerr(arg1: *mut illumos_ddi_dki::c_void, arg2: u8);
+    pub fn subyte_noerr(arg1: *mut illumos_sys_hdrs::c_void, arg2: u8);
 }
 extern "C" {
-    pub fn suword8_noerr(arg1: *mut illumos_ddi_dki::c_void, arg2: u8);
+    pub fn suword8_noerr(arg1: *mut illumos_sys_hdrs::c_void, arg2: u8);
 }
 extern "C" {
-    pub fn suword16_noerr(arg1: *mut illumos_ddi_dki::c_void, arg2: u16);
+    pub fn suword16_noerr(arg1: *mut illumos_sys_hdrs::c_void, arg2: u16);
 }
 extern "C" {
-    pub fn suword32_noerr(arg1: *mut illumos_ddi_dki::c_void, arg2: u32);
+    pub fn suword32_noerr(arg1: *mut illumos_sys_hdrs::c_void, arg2: u32);
 }
 extern "C" {
-    pub fn sulword_noerr(arg1: *mut illumos_ddi_dki::c_void, arg2: ulong_t);
+    pub fn sulword_noerr(arg1: *mut illumos_sys_hdrs::c_void, arg2: ulong_t);
 }
 extern "C" {
     pub fn suword64(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: u64,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn suword64_noerr(arg1: *mut illumos_ddi_dki::c_void, arg2: u64);
+    pub fn suword64_noerr(arg1: *mut illumos_sys_hdrs::c_void, arg2: u64);
 }
 extern "C" {
-    pub fn setjmp(arg1: *mut label_t) -> illumos_ddi_dki::c_int;
+    pub fn setjmp(arg1: *mut label_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn longjmp(arg1: *mut label_t);
 }
 extern "C" {
-    pub fn prefetch_read_once(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn prefetch_read_once(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn prefetch_write_once(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn prefetch_write_once(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn prefetch_read_many(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn prefetch_read_many(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn prefetch_write_many(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn prefetch_write_many(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
     pub fn caller() -> caddr_t;
@@ -18995,17 +19021,17 @@ extern "C" {
 extern "C" {
     pub fn getpcstack(
         arg1: *mut pc_t,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn on_fault(arg1: *mut label_t) -> illumos_ddi_dki::c_int;
+    pub fn on_fault(arg1: *mut label_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn no_fault();
 }
 extern "C" {
-    pub fn halt(arg1: *mut illumos_ddi_dki::c_char);
+    pub fn halt(arg1: *mut illumos_sys_hdrs::c_char);
 }
 extern "C" {
     pub fn scanc(
@@ -19013,7 +19039,7 @@ extern "C" {
         arg2: *mut uchar_t,
         arg3: *mut uchar_t,
         arg4: uchar_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn movtuc(
@@ -19021,43 +19047,44 @@ extern "C" {
         arg2: *mut uchar_t,
         arg3: *mut uchar_t,
         arg4: *mut uchar_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn splr(arg1: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn splr(arg1: illumos_sys_hdrs::c_int) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn splhigh() -> illumos_ddi_dki::c_int;
+    pub fn splhigh() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn splhi() -> illumos_ddi_dki::c_int;
+    pub fn splhi() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn splzs() -> illumos_ddi_dki::c_int;
+    pub fn splzs() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn spl0() -> illumos_ddi_dki::c_int;
+    pub fn spl0() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn spl6() -> illumos_ddi_dki::c_int;
+    pub fn spl6() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn spl7() -> illumos_ddi_dki::c_int;
+    pub fn spl7() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn spl8() -> illumos_ddi_dki::c_int;
+    pub fn spl8() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn splx(arg1: illumos_ddi_dki::c_int);
+    pub fn splx(arg1: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn set_base_spl();
 }
 extern "C" {
-    pub fn __ipltospl(arg1: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn __ipltospl(arg1: illumos_sys_hdrs::c_int)
+        -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn spl_xcall() -> illumos_ddi_dki::c_int;
+    pub fn spl_xcall() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn softcall_init();
@@ -19065,9 +19092,9 @@ extern "C" {
 extern "C" {
     pub fn softcall(
         arg1: ::core::option::Option<
-            unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void),
+            unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void),
         >,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
@@ -19101,16 +19128,16 @@ extern "C" {
     pub fn page_get_pagesize(n: uint_t) -> size_t;
 }
 extern "C" {
-    pub static mut maxusers: illumos_ddi_dki::c_int;
+    pub static mut maxusers: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut pidmax: illumos_ddi_dki::c_int;
+    pub static mut pidmax: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn param_preset();
 }
 extern "C" {
-    pub fn param_calc(arg1: illumos_ddi_dki::c_int);
+    pub fn param_calc(arg1: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn param_init();
@@ -19121,10 +19148,10 @@ extern "C" {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct sysent {
-    pub sy_narg: illumos_ddi_dki::c_char,
-    pub sy_flags: illumos_ddi_dki::c_ushort,
+    pub sy_narg: illumos_sys_hdrs::c_char,
+    pub sy_flags: illumos_sys_hdrs::c_ushort,
     pub sy_call: ::core::option::Option<
-        unsafe extern "C" fn() -> illumos_ddi_dki::c_int,
+        unsafe extern "C" fn() -> illumos_sys_hdrs::c_int,
     >,
     pub sy_lock: *mut krwlock_t,
     pub sy_callc: ::core::option::Option<unsafe extern "C" fn() -> i64>,
@@ -19147,21 +19174,21 @@ pub union rval {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct rval__bindgen_ty_1 {
-    pub r_v1: illumos_ddi_dki::c_int,
-    pub r_v2: illumos_ddi_dki::c_int,
+    pub r_v1: illumos_sys_hdrs::c_int,
+    pub r_v2: illumos_sys_hdrs::c_int,
 }
 pub type rval_t = rval;
 extern "C" {
     pub fn reset_syscall_args();
 }
 extern "C" {
-    pub fn save_syscall_args() -> illumos_ddi_dki::c_int;
+    pub fn save_syscall_args() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn get_syscall_args(
         lwp: *mut klwp_t,
-        argp: *mut illumos_ddi_dki::c_long,
-        nargsp: *mut illumos_ddi_dki::c_int,
+        argp: *mut illumos_sys_hdrs::c_long,
+        nargsp: *mut illumos_sys_hdrs::c_int,
     ) -> uint_t;
 }
 extern "C" {
@@ -19172,21 +19199,21 @@ extern "C" {
 }
 extern "C" {
     pub fn loadable_syscall(
-        arg1: illumos_ddi_dki::c_long,
-        arg2: illumos_ddi_dki::c_long,
-        arg3: illumos_ddi_dki::c_long,
-        arg4: illumos_ddi_dki::c_long,
-        arg5: illumos_ddi_dki::c_long,
-        arg6: illumos_ddi_dki::c_long,
-        arg7: illumos_ddi_dki::c_long,
-        arg8: illumos_ddi_dki::c_long,
+        arg1: illumos_sys_hdrs::c_long,
+        arg2: illumos_sys_hdrs::c_long,
+        arg3: illumos_sys_hdrs::c_long,
+        arg4: illumos_sys_hdrs::c_long,
+        arg5: illumos_sys_hdrs::c_long,
+        arg6: illumos_sys_hdrs::c_long,
+        arg7: illumos_sys_hdrs::c_long,
+        arg8: illumos_sys_hdrs::c_long,
     ) -> i64;
 }
 extern "C" {
     pub fn nosys() -> i64;
 }
 extern "C" {
-    pub fn nosys32() -> illumos_ddi_dki::c_int;
+    pub fn nosys32() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn swtch();
@@ -19195,185 +19222,185 @@ extern "C" {
     pub static mut kcpc_key: uint_t;
 }
 extern "C" {
-    pub static mut initname: [illumos_ddi_dki::c_char; 32usize];
+    pub static mut initname: [illumos_sys_hdrs::c_char; 32usize];
 }
 extern "C" {
-    pub static mut initargs: [illumos_ddi_dki::c_char; 256usize];
+    pub static mut initargs: [illumos_sys_hdrs::c_char; 256usize];
 }
 extern "C" {
     pub fn exec_init(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn start_init_common() -> illumos_ddi_dki::c_int;
+    pub fn start_init_common() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn strlcat(
-        arg1: *mut illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-        arg3: illumos_ddi_dki::c_ulong,
-    ) -> illumos_ddi_dki::c_ulong;
+        arg1: *mut illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+        arg3: illumos_sys_hdrs::c_ulong,
+    ) -> illumos_sys_hdrs::c_ulong;
 }
 extern "C" {
     pub fn strcat(
-        arg1: *mut illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: *mut illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn strncat(
-        arg1: *mut illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-        arg3: illumos_ddi_dki::c_ulong,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: *mut illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+        arg3: illumos_sys_hdrs::c_ulong,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn strcpy(
-        arg1: *mut illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: *mut illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn strncpy(
-        arg1: *mut illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-        arg3: illumos_ddi_dki::c_ulong,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: *mut illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+        arg3: illumos_sys_hdrs::c_ulong,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn strlcpy(
-        arg1: *mut illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-        arg3: illumos_ddi_dki::c_ulong,
-    ) -> illumos_ddi_dki::c_ulong;
+        arg1: *mut illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+        arg3: illumos_sys_hdrs::c_ulong,
+    ) -> illumos_sys_hdrs::c_ulong;
 }
 extern "C" {
     pub fn strspn(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_ulong;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_ulong;
 }
 extern "C" {
     pub fn strcspn(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_ulong;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_ulong;
 }
 extern "C" {
     pub fn strdup(
-        arg1: *const illumos_ddi_dki::c_char,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: *const illumos_sys_hdrs::c_char,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
-    pub fn strfree(arg1: *mut illumos_ddi_dki::c_char);
+    pub fn strfree(arg1: *mut illumos_sys_hdrs::c_char);
 }
 extern "C" {
     pub fn strchr(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn strrchr(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn strstr(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn strnrchr(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: illumos_ddi_dki::c_int,
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: size_t,
-    ) -> *mut illumos_ddi_dki::c_char;
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn strcmp(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn strncmp(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-        arg3: illumos_ddi_dki::c_ulong,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+        arg3: illumos_sys_hdrs::c_ulong,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn strcasecmp(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn strncasecmp(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-        arg3: illumos_ddi_dki::c_ulong,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+        arg3: illumos_sys_hdrs::c_ulong,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn strpbrk(
-        arg1: *const illumos_ddi_dki::c_char,
-        arg2: *const illumos_ddi_dki::c_char,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: *const illumos_sys_hdrs::c_char,
+        arg2: *const illumos_sys_hdrs::c_char,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn bcopy(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: size_t,
     );
 }
 extern "C" {
     pub fn bzero(
-        arg1: *mut illumos_ddi_dki::c_void,
-        arg2: illumos_ddi_dki::c_ulong,
+        arg1: *mut illumos_sys_hdrs::c_void,
+        arg2: illumos_sys_hdrs::c_ulong,
     );
 }
 extern "C" {
     pub fn memset(
-        arg1: *mut illumos_ddi_dki::c_void,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: illumos_ddi_dki::c_ulong,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg1: *mut illumos_sys_hdrs::c_void,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: illumos_sys_hdrs::c_ulong,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn memcpy(
-        arg1: *mut illumos_ddi_dki::c_void,
-        arg2: *const illumos_ddi_dki::c_void,
-        arg3: illumos_ddi_dki::c_ulong,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg1: *mut illumos_sys_hdrs::c_void,
+        arg2: *const illumos_sys_hdrs::c_void,
+        arg3: illumos_sys_hdrs::c_ulong,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn memmove(
-        arg1: *mut illumos_ddi_dki::c_void,
-        arg2: *const illumos_ddi_dki::c_void,
-        arg3: illumos_ddi_dki::c_ulong,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg1: *mut illumos_sys_hdrs::c_void,
+        arg2: *const illumos_sys_hdrs::c_void,
+        arg3: illumos_sys_hdrs::c_ulong,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn memcmp(
-        arg1: *const illumos_ddi_dki::c_void,
-        arg2: *const illumos_ddi_dki::c_void,
-        arg3: illumos_ddi_dki::c_ulong,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *const illumos_sys_hdrs::c_void,
+        arg2: *const illumos_sys_hdrs::c_void,
+        arg3: illumos_sys_hdrs::c_ulong,
+    ) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct radix_node {
     pub rn_mklist: *mut radix_mask,
     pub rn_parent: *mut radix_node,
-    pub rn_bit: illumos_ddi_dki::c_short,
-    pub rn_bmask: illumos_ddi_dki::c_char,
+    pub rn_bit: illumos_sys_hdrs::c_short,
+    pub rn_bmask: illumos_sys_hdrs::c_char,
     pub rn_flags: uchar_t,
     pub rn_u: radix_node__bindgen_ty_1,
 }
@@ -19393,19 +19420,19 @@ pub struct radix_node__bindgen_ty_1__bindgen_ty_1 {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct radix_node__bindgen_ty_1__bindgen_ty_2 {
-    pub rn_Off: illumos_ddi_dki::c_int,
+    pub rn_Off: illumos_sys_hdrs::c_int,
     pub rn_L: *mut radix_node,
     pub rn_R: *mut radix_node,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct radix_mask {
-    pub rm_bit: illumos_ddi_dki::c_short,
-    pub rm_unused: illumos_ddi_dki::c_char,
+    pub rm_bit: illumos_sys_hdrs::c_short,
+    pub rm_unused: illumos_sys_hdrs::c_char,
     pub rm_flags: uchar_t,
     pub rm_mklist: *mut radix_mask,
     pub rm_rmu: radix_mask__bindgen_ty_1,
-    pub rm_refs: illumos_ddi_dki::c_int,
+    pub rm_refs: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -19416,13 +19443,13 @@ pub union radix_mask__bindgen_ty_1 {
 pub type walktree_f_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut radix_node,
-        arg2: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int,
+        arg2: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 pub type match_leaf_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut radix_node,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     ) -> boolean_t,
 >;
 pub type lockf_t =
@@ -19431,62 +19458,62 @@ pub type lockf_t =
 #[derive(Copy, Clone)]
 pub struct radix_node_head {
     pub rnh_treetop: *mut radix_node,
-    pub rnh_addrsize: illumos_ddi_dki::c_int,
-    pub rnh_pktsize: illumos_ddi_dki::c_int,
+    pub rnh_addrsize: illumos_sys_hdrs::c_int,
+    pub rnh_pktsize: illumos_sys_hdrs::c_int,
     pub rnh_addaddr: ::core::option::Option<
         unsafe extern "C" fn(
-            v: *mut illumos_ddi_dki::c_void,
-            mask: *mut illumos_ddi_dki::c_void,
+            v: *mut illumos_sys_hdrs::c_void,
+            mask: *mut illumos_sys_hdrs::c_void,
             head: *mut radix_node_head,
             nodes: *mut radix_node,
         ) -> *mut radix_node,
     >,
     pub rnh_addpkt: ::core::option::Option<
         unsafe extern "C" fn(
-            v: *mut illumos_ddi_dki::c_void,
-            mask: *mut illumos_ddi_dki::c_void,
+            v: *mut illumos_sys_hdrs::c_void,
+            mask: *mut illumos_sys_hdrs::c_void,
             head: *mut radix_node_head,
             nodes: *mut radix_node,
         ) -> *mut radix_node,
     >,
     pub rnh_deladdr: ::core::option::Option<
         unsafe extern "C" fn(
-            v: *mut illumos_ddi_dki::c_void,
-            mask: *mut illumos_ddi_dki::c_void,
+            v: *mut illumos_sys_hdrs::c_void,
+            mask: *mut illumos_sys_hdrs::c_void,
             head: *mut radix_node_head,
         ) -> *mut radix_node,
     >,
     pub rnh_delpkt: ::core::option::Option<
         unsafe extern "C" fn(
-            v: *mut illumos_ddi_dki::c_void,
-            mask: *mut illumos_ddi_dki::c_void,
+            v: *mut illumos_sys_hdrs::c_void,
+            mask: *mut illumos_sys_hdrs::c_void,
             head: *mut radix_node_head,
         ) -> *mut radix_node,
     >,
     pub rnh_matchaddr: ::core::option::Option<
         unsafe extern "C" fn(
-            v: *mut illumos_ddi_dki::c_void,
+            v: *mut illumos_sys_hdrs::c_void,
             head: *mut radix_node_head,
         ) -> *mut radix_node,
     >,
     pub rnh_matchaddr_args: ::core::option::Option<
         unsafe extern "C" fn(
-            v: *mut illumos_ddi_dki::c_void,
+            v: *mut illumos_sys_hdrs::c_void,
             head: *mut radix_node_head,
             f: match_leaf_t,
-            w: *mut illumos_ddi_dki::c_void,
+            w: *mut illumos_sys_hdrs::c_void,
         ) -> *mut radix_node,
     >,
     pub rnh_lookup: ::core::option::Option<
         unsafe extern "C" fn(
-            v: *mut illumos_ddi_dki::c_void,
-            mask: *mut illumos_ddi_dki::c_void,
+            v: *mut illumos_sys_hdrs::c_void,
+            mask: *mut illumos_sys_hdrs::c_void,
             head: *mut radix_node_head,
         ) -> *mut radix_node,
     >,
     pub rnh_matchpkt: ::core::option::Option<
         unsafe extern "C" fn(
-            v: *mut illumos_ddi_dki::c_void,
+            v: *mut illumos_sys_hdrs::c_void,
             head: *mut radix_node_head,
         ) -> *mut radix_node,
     >,
@@ -19494,26 +19521,26 @@ pub struct radix_node_head {
         unsafe extern "C" fn(
             head: *mut radix_node_head,
             f: walktree_f_t,
-            w: *mut illumos_ddi_dki::c_void,
-        ) -> illumos_ddi_dki::c_int,
+            w: *mut illumos_sys_hdrs::c_void,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub rnh_walktree_mt: ::core::option::Option<
         unsafe extern "C" fn(
             head: *mut radix_node_head,
             f: walktree_f_t,
-            w: *mut illumos_ddi_dki::c_void,
+            w: *mut illumos_sys_hdrs::c_void,
             lockf: lockf_t,
             unlockf: lockf_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub rnh_walktree_from: ::core::option::Option<
         unsafe extern "C" fn(
             head: *mut radix_node_head,
-            a: *mut illumos_ddi_dki::c_void,
-            m: *mut illumos_ddi_dki::c_void,
+            a: *mut illumos_sys_hdrs::c_void,
+            m: *mut illumos_sys_hdrs::c_void,
             f: walktree_f_t,
-            w: *mut illumos_ddi_dki::c_void,
-        ) -> illumos_ddi_dki::c_int,
+            w: *mut illumos_sys_hdrs::c_void,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub rnh_close: ::core::option::Option<
         unsafe extern "C" fn(rn: *mut radix_node, head: *mut radix_node_head),
@@ -19528,7 +19555,7 @@ pub struct rt_sockaddr {
     pub rt_sin_family: u8,
     pub rt_sin_port: u16,
     pub rt_sin_addr: in_addr,
-    pub rt_sin_zero: [illumos_ddi_dki::c_char; 8usize],
+    pub rt_sin_zero: [illumos_sys_hdrs::c_char; 8usize],
 }
 pub type rn_t = radix_node;
 pub type rmsk_t = radix_mask;
@@ -19542,15 +19569,15 @@ extern "C" {
 }
 extern "C" {
     pub fn rn_inithead(
-        arg1: *mut *mut illumos_ddi_dki::c_void,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: *mut *mut illumos_sys_hdrs::c_void,
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rn_freenode(
         arg1: *mut radix_node,
-        arg2: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn rn_freehead(arg1: *mut radix_node_head);
@@ -19585,7 +19612,7 @@ pub struct ipoptp_s {
 }
 pub type ipoptp_t = ipoptp_s;
 extern "C" {
-    pub static mut ip_squeue_flag: illumos_ddi_dki::c_int;
+    pub static mut ip_squeue_flag: illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -19599,8 +19626,8 @@ pub struct ipf_s {
     pub ipf_timestamp: time_t,
     pub ipf_mp: *mut mblk_t,
     pub ipf_tail_mp: *mut mblk_t,
-    pub ipf_hole_cnt: illumos_ddi_dki::c_int,
-    pub ipf_end: illumos_ddi_dki::c_int,
+    pub ipf_hole_cnt: illumos_sys_hdrs::c_int,
+    pub ipf_end: illumos_sys_hdrs::c_int,
     pub ipf_gen: uint_t,
     pub ipf_count: size_t,
     pub ipf_nf_hdr_len: uint_t,
@@ -19717,7 +19744,7 @@ pub type ip_v4mapinfo_func_t = ::core::option::Option<
 #[derive(Debug, Copy, Clone)]
 pub struct ip_m_s {
     pub ip_m_mac_type: t_uscalar_t,
-    pub ip_m_type: illumos_ddi_dki::c_int,
+    pub ip_m_type: illumos_sys_hdrs::c_int,
     pub ip_m_ipv4sap: t_uscalar_t,
     pub ip_m_ipv6sap: t_uscalar_t,
     pub ip_m_v4mapping: ip_v4mapinfo_func_t,
@@ -19736,7 +19763,7 @@ extern "C" {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct slist_s {
-    pub sl_numsrc: illumos_ddi_dki::c_int,
+    pub sl_numsrc: illumos_sys_hdrs::c_int,
     pub sl_addr: [in6_addr_t; 64usize],
 }
 pub type slist_t = slist_s;
@@ -19744,8 +19771,8 @@ pub type slist_t = slist_s;
 #[derive(Debug, Copy, Clone)]
 pub struct rtx_state_s {
     pub rtx_timer: uint_t,
-    pub rtx_cnt: illumos_ddi_dki::c_int,
-    pub rtx_fmode_cnt: illumos_ddi_dki::c_int,
+    pub rtx_cnt: illumos_sys_hdrs::c_int,
+    pub rtx_fmode_cnt: illumos_sys_hdrs::c_int,
     pub rtx_allow: *mut slist_t,
     pub rtx_block: *mut slist_t,
 }
@@ -19781,13 +19808,13 @@ pub type ilg_t = ilg_s;
 #[derive(Copy, Clone)]
 pub struct ilm_s {
     pub ilm_v6addr: in6_addr_t,
-    pub ilm_refcnt: illumos_ddi_dki::c_int,
+    pub ilm_refcnt: illumos_sys_hdrs::c_int,
     pub ilm_timer: uint_t,
     pub ilm_next: *mut ilm_s,
     pub ilm_state: uint_t,
     pub ilm_ill: *mut ill_s,
     pub ilm_zoneid: zoneid_t,
-    pub ilm_no_ilg_cnt: illumos_ddi_dki::c_int,
+    pub ilm_no_ilg_cnt: illumos_sys_hdrs::c_int,
     pub ilm_fmode: mcast_record_t,
     pub ilm_filter: *mut slist_t,
     pub ilm_pendsrcs: *mut slist_t,
@@ -19817,26 +19844,26 @@ pub struct ipsec_latch_s {
 }
 impl ipsec_latch_s {
     #[inline]
-    pub fn ipl_ids_latched(&self) -> illumos_ddi_dki::c_uint {
+    pub fn ipl_ids_latched(&self) -> illumos_sys_hdrs::c_uint {
         unsafe {
             ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32)
         }
     }
     #[inline]
-    pub fn set_ipl_ids_latched(&mut self, val: illumos_ddi_dki::c_uint) {
+    pub fn set_ipl_ids_latched(&mut self, val: illumos_sys_hdrs::c_uint) {
         unsafe {
             let val: u32 = ::core::mem::transmute(val);
             self._bitfield_1.set(0usize, 1u8, val as u64)
         }
     }
     #[inline]
-    pub fn ipl_pad_to_bit_31(&self) -> illumos_ddi_dki::c_uint {
+    pub fn ipl_pad_to_bit_31(&self) -> illumos_sys_hdrs::c_uint {
         unsafe {
             ::core::mem::transmute(self._bitfield_1.get(1usize, 31u8) as u32)
         }
     }
     #[inline]
-    pub fn set_ipl_pad_to_bit_31(&mut self, val: illumos_ddi_dki::c_uint) {
+    pub fn set_ipl_pad_to_bit_31(&mut self, val: illumos_sys_hdrs::c_uint) {
         unsafe {
             let val: u32 = ::core::mem::transmute(val);
             self._bitfield_1.set(1usize, 31u8, val as u64)
@@ -19844,8 +19871,8 @@ impl ipsec_latch_s {
     }
     #[inline]
     pub fn new_bitfield_1(
-        ipl_ids_latched: illumos_ddi_dki::c_uint,
-        ipl_pad_to_bit_31: illumos_ddi_dki::c_uint,
+        ipl_ids_latched: illumos_sys_hdrs::c_uint,
+        ipl_pad_to_bit_31: illumos_sys_hdrs::c_uint,
     ) -> __BindgenBitfieldUnit<[u8; 4usize]> {
         let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> =
             Default::default();
@@ -20109,7 +20136,7 @@ pub struct idl_tx_list_s {
     pub txl_cookie: ip_mac_tx_cookie_t,
     pub txl_lock: kmutex_t,
     pub txl_drain_list: *mut idl_t,
-    pub txl_drain_index: illumos_ddi_dki::c_int,
+    pub txl_drain_index: illumos_sys_hdrs::c_int,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -20134,7 +20161,7 @@ pub type ifrt_t = ifrt_s;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct tr_buf_s {
-    pub tr_depth: illumos_ddi_dki::c_int,
+    pub tr_depth: illumos_sys_hdrs::c_int,
     pub tr_time: clock_t,
     pub tr_stack: [pc_t; 14usize],
 }
@@ -20142,7 +20169,7 @@ pub type tr_buf_t = tr_buf_s;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct th_trace_s {
-    pub th_refcnt: illumos_ddi_dki::c_int,
+    pub th_refcnt: illumos_sys_hdrs::c_int,
     pub th_trace_lastref: uint_t,
     pub th_id: *mut kthread_t,
     pub th_trbuf: [tr_buf_t; 38usize],
@@ -20161,7 +20188,7 @@ pub type th_hash_t = th_hash_s;
 pub struct ipif_s {
     pub ipif_next: *mut ipif_s,
     pub ipif_ill: *mut ill_s,
-    pub ipif_id: illumos_ddi_dki::c_int,
+    pub ipif_id: illumos_sys_hdrs::c_int,
     pub ipif_v6lcl_addr: in6_addr_t,
     pub ipif_v6subnet: in6_addr_t,
     pub ipif_v6net_mask: in6_addr_t,
@@ -20188,65 +20215,65 @@ pub struct ipif_s {
 }
 impl ipif_s {
     #[inline]
-    pub fn ipif_was_up(&self) -> illumos_ddi_dki::c_uint {
+    pub fn ipif_was_up(&self) -> illumos_sys_hdrs::c_uint {
         unsafe {
             ::core::mem::transmute(self._bitfield_1.get(0usize, 1u8) as u32)
         }
     }
     #[inline]
-    pub fn set_ipif_was_up(&mut self, val: illumos_ddi_dki::c_uint) {
+    pub fn set_ipif_was_up(&mut self, val: illumos_sys_hdrs::c_uint) {
         unsafe {
             let val: u32 = ::core::mem::transmute(val);
             self._bitfield_1.set(0usize, 1u8, val as u64)
         }
     }
     #[inline]
-    pub fn ipif_addr_ready(&self) -> illumos_ddi_dki::c_uint {
+    pub fn ipif_addr_ready(&self) -> illumos_sys_hdrs::c_uint {
         unsafe {
             ::core::mem::transmute(self._bitfield_1.get(1usize, 1u8) as u32)
         }
     }
     #[inline]
-    pub fn set_ipif_addr_ready(&mut self, val: illumos_ddi_dki::c_uint) {
+    pub fn set_ipif_addr_ready(&mut self, val: illumos_sys_hdrs::c_uint) {
         unsafe {
             let val: u32 = ::core::mem::transmute(val);
             self._bitfield_1.set(1usize, 1u8, val as u64)
         }
     }
     #[inline]
-    pub fn ipif_was_dup(&self) -> illumos_ddi_dki::c_uint {
+    pub fn ipif_was_dup(&self) -> illumos_sys_hdrs::c_uint {
         unsafe {
             ::core::mem::transmute(self._bitfield_1.get(2usize, 1u8) as u32)
         }
     }
     #[inline]
-    pub fn set_ipif_was_dup(&mut self, val: illumos_ddi_dki::c_uint) {
+    pub fn set_ipif_was_dup(&mut self, val: illumos_sys_hdrs::c_uint) {
         unsafe {
             let val: u32 = ::core::mem::transmute(val);
             self._bitfield_1.set(2usize, 1u8, val as u64)
         }
     }
     #[inline]
-    pub fn ipif_added_nce(&self) -> illumos_ddi_dki::c_uint {
+    pub fn ipif_added_nce(&self) -> illumos_sys_hdrs::c_uint {
         unsafe {
             ::core::mem::transmute(self._bitfield_1.get(3usize, 1u8) as u32)
         }
     }
     #[inline]
-    pub fn set_ipif_added_nce(&mut self, val: illumos_ddi_dki::c_uint) {
+    pub fn set_ipif_added_nce(&mut self, val: illumos_sys_hdrs::c_uint) {
         unsafe {
             let val: u32 = ::core::mem::transmute(val);
             self._bitfield_1.set(3usize, 1u8, val as u64)
         }
     }
     #[inline]
-    pub fn ipif_pad_to_31(&self) -> illumos_ddi_dki::c_uint {
+    pub fn ipif_pad_to_31(&self) -> illumos_sys_hdrs::c_uint {
         unsafe {
             ::core::mem::transmute(self._bitfield_1.get(4usize, 28u8) as u32)
         }
     }
     #[inline]
-    pub fn set_ipif_pad_to_31(&mut self, val: illumos_ddi_dki::c_uint) {
+    pub fn set_ipif_pad_to_31(&mut self, val: illumos_sys_hdrs::c_uint) {
         unsafe {
             let val: u32 = ::core::mem::transmute(val);
             self._bitfield_1.set(4usize, 28u8, val as u64)
@@ -20254,11 +20281,11 @@ impl ipif_s {
     }
     #[inline]
     pub fn new_bitfield_1(
-        ipif_was_up: illumos_ddi_dki::c_uint,
-        ipif_addr_ready: illumos_ddi_dki::c_uint,
-        ipif_was_dup: illumos_ddi_dki::c_uint,
-        ipif_added_nce: illumos_ddi_dki::c_uint,
-        ipif_pad_to_31: illumos_ddi_dki::c_uint,
+        ipif_was_up: illumos_sys_hdrs::c_uint,
+        ipif_addr_ready: illumos_sys_hdrs::c_uint,
+        ipif_was_dup: illumos_sys_hdrs::c_uint,
+        ipif_added_nce: illumos_sys_hdrs::c_uint,
+        ipif_pad_to_31: illumos_sys_hdrs::c_uint,
     ) -> __BindgenBitfieldUnit<[u8; 4usize]> {
         let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> =
             Default::default();
@@ -20296,7 +20323,7 @@ pub const ip_laddr_t_IPVL_UNICAST_DOWN: ip_laddr_t = 1;
 pub const ip_laddr_t_IPVL_MCAST: ip_laddr_t = 2;
 pub const ip_laddr_t_IPVL_BCAST: ip_laddr_t = 3;
 pub const ip_laddr_t_IPVL_BAD: ip_laddr_t = 4;
-pub type ip_laddr_t = illumos_ddi_dki::c_uint;
+pub type ip_laddr_t = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ipxop_s {
@@ -20306,10 +20333,10 @@ pub struct ipxop_s {
     pub ipx_mptail: *mut mblk_t,
     pub ipx_ipsq: *mut ipsq_s,
     pub ipx_ipsq_queued: boolean_t,
-    pub ipx_waitfor: illumos_ddi_dki::c_int,
-    pub ipx_reentry_cnt: illumos_ddi_dki::c_int,
+    pub ipx_waitfor: illumos_sys_hdrs::c_int,
+    pub ipx_reentry_cnt: illumos_sys_hdrs::c_int,
     pub ipx_current_done: boolean_t,
-    pub ipx_current_ioctl: illumos_ddi_dki::c_int,
+    pub ipx_current_ioctl: illumos_sys_hdrs::c_int,
     pub ipx_current_ipif: *mut ipif_t,
     pub ipx_pending_ipif: *mut ipif_t,
     pub ipx_pending_mp: *mut mblk_t,
@@ -20331,28 +20358,28 @@ pub struct ipsq_s {
     pub ipsq_ipst: *mut ip_stack_t,
 }
 pub type ipsq_t = ipsq_s;
-pub const IPIF_DOWN: illumos_ddi_dki::c_uint = 1;
-pub const ILL_DOWN: illumos_ddi_dki::c_uint = 2;
-pub const IPIF_FREE: illumos_ddi_dki::c_uint = 3;
-pub const ILL_FREE: illumos_ddi_dki::c_uint = 4;
-pub type _bindgen_ty_1 = illumos_ddi_dki::c_uint;
-pub const IPMP_KSTAT_OBYTES: illumos_ddi_dki::c_uint = 0;
-pub const IPMP_KSTAT_OBYTES64: illumos_ddi_dki::c_uint = 1;
-pub const IPMP_KSTAT_RBYTES: illumos_ddi_dki::c_uint = 2;
-pub const IPMP_KSTAT_RBYTES64: illumos_ddi_dki::c_uint = 3;
-pub const IPMP_KSTAT_OPACKETS: illumos_ddi_dki::c_uint = 4;
-pub const IPMP_KSTAT_OPACKETS64: illumos_ddi_dki::c_uint = 5;
-pub const IPMP_KSTAT_OERRORS: illumos_ddi_dki::c_uint = 6;
-pub const IPMP_KSTAT_IPACKETS: illumos_ddi_dki::c_uint = 7;
-pub const IPMP_KSTAT_IPACKETS64: illumos_ddi_dki::c_uint = 8;
-pub const IPMP_KSTAT_IERRORS: illumos_ddi_dki::c_uint = 9;
-pub const IPMP_KSTAT_MULTIRCV: illumos_ddi_dki::c_uint = 10;
-pub const IPMP_KSTAT_MULTIXMT: illumos_ddi_dki::c_uint = 11;
-pub const IPMP_KSTAT_BRDCSTRCV: illumos_ddi_dki::c_uint = 12;
-pub const IPMP_KSTAT_BRDCSTXMT: illumos_ddi_dki::c_uint = 13;
-pub const IPMP_KSTAT_LINK_UP: illumos_ddi_dki::c_uint = 14;
-pub const IPMP_KSTAT_MAX: illumos_ddi_dki::c_uint = 15;
-pub type _bindgen_ty_2 = illumos_ddi_dki::c_uint;
+pub const IPIF_DOWN: illumos_sys_hdrs::c_uint = 1;
+pub const ILL_DOWN: illumos_sys_hdrs::c_uint = 2;
+pub const IPIF_FREE: illumos_sys_hdrs::c_uint = 3;
+pub const ILL_FREE: illumos_sys_hdrs::c_uint = 4;
+pub type _bindgen_ty_1 = illumos_sys_hdrs::c_uint;
+pub const IPMP_KSTAT_OBYTES: illumos_sys_hdrs::c_uint = 0;
+pub const IPMP_KSTAT_OBYTES64: illumos_sys_hdrs::c_uint = 1;
+pub const IPMP_KSTAT_RBYTES: illumos_sys_hdrs::c_uint = 2;
+pub const IPMP_KSTAT_RBYTES64: illumos_sys_hdrs::c_uint = 3;
+pub const IPMP_KSTAT_OPACKETS: illumos_sys_hdrs::c_uint = 4;
+pub const IPMP_KSTAT_OPACKETS64: illumos_sys_hdrs::c_uint = 5;
+pub const IPMP_KSTAT_OERRORS: illumos_sys_hdrs::c_uint = 6;
+pub const IPMP_KSTAT_IPACKETS: illumos_sys_hdrs::c_uint = 7;
+pub const IPMP_KSTAT_IPACKETS64: illumos_sys_hdrs::c_uint = 8;
+pub const IPMP_KSTAT_IERRORS: illumos_sys_hdrs::c_uint = 9;
+pub const IPMP_KSTAT_MULTIRCV: illumos_sys_hdrs::c_uint = 10;
+pub const IPMP_KSTAT_MULTIXMT: illumos_sys_hdrs::c_uint = 11;
+pub const IPMP_KSTAT_BRDCSTRCV: illumos_sys_hdrs::c_uint = 12;
+pub const IPMP_KSTAT_BRDCSTXMT: illumos_sys_hdrs::c_uint = 13;
+pub const IPMP_KSTAT_LINK_UP: illumos_sys_hdrs::c_uint = 14;
+pub const IPMP_KSTAT_MAX: illumos_sys_hdrs::c_uint = 15;
+pub type _bindgen_ty_2 = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct phyint {
@@ -20365,7 +20392,7 @@ pub struct phyint {
     pub phyint_lock: kmutex_t,
     pub phyint_ipsq: *mut ipsq_s,
     pub phyint_grp: *mut ipmp_grp_s,
-    pub phyint_name: [illumos_ddi_dki::c_char; 32usize],
+    pub phyint_name: [illumos_sys_hdrs::c_char; 32usize],
     pub phyint_kstats0: [u64; 15usize],
 }
 pub type phyint_t = phyint;
@@ -20379,7 +20406,7 @@ pub struct _phyint_list_s_ {
 #[derive(Copy, Clone)]
 pub union phyint_list_u {
     pub phyint_list_s: _phyint_list_s_,
-    pub phyint_list_filler: [illumos_ddi_dki::c_char; 128usize],
+    pub phyint_list_filler: [illumos_sys_hdrs::c_char; 128usize],
 }
 pub type phyint_list_t = phyint_list_u;
 #[repr(C)]
@@ -20399,7 +20426,7 @@ pub struct irb {
     pub irb_refcnt: uint_t,
     pub irb_marks: uchar_t,
     pub irb_ire_cnt: uint_t,
-    pub irb_nire: illumos_ddi_dki::c_int,
+    pub irb_nire: illumos_sys_hdrs::c_int,
     pub irb_ipst: *mut ip_stack_t,
 }
 pub type irb_t = irb;
@@ -20407,8 +20434,8 @@ pub type irb_t = irb;
 #[derive(Debug, Copy, Clone)]
 pub struct multiphysaddr_s {
     pub mpa_next: *mut multiphysaddr_s,
-    pub mpa_addr: [illumos_ddi_dki::c_char; 40usize],
-    pub mpa_refcnt: illumos_ddi_dki::c_int,
+    pub mpa_addr: [illumos_sys_hdrs::c_char; 40usize],
+    pub mpa_refcnt: illumos_sys_hdrs::c_int,
 }
 pub type multiphysaddr_t = multiphysaddr_s;
 pub type dce_t = dce_s;
@@ -20429,8 +20456,8 @@ pub type iaflags_t = u64;
 pub type pfillinput_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut mblk_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
         arg5: *mut rtc_t,
     ),
@@ -20439,7 +20466,7 @@ pub type pfirerecv_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     ),
 >;
@@ -20447,10 +20474,10 @@ pub type pfiresend_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 pub type pfirepostfrag_t = ::core::option::Option<
     unsafe extern "C" fn(
@@ -20462,7 +20489,7 @@ pub type pfirepostfrag_t = ::core::option::Option<
         arg6: zoneid_t,
         arg7: zoneid_t,
         arg8: *mut usize,
-    ) -> illumos_ddi_dki::c_int,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -20473,21 +20500,21 @@ pub struct _ill_if_s_ {
     pub illif_ppa_arena: *mut vmem_t,
     pub illif_mcast_v1: u16,
     pub illif_mcast_v2: u16,
-    pub illif_name_len: illumos_ddi_dki::c_int,
-    pub illif_name: [illumos_ddi_dki::c_char; 32usize],
+    pub illif_name_len: illumos_sys_hdrs::c_int,
+    pub illif_name: [illumos_sys_hdrs::c_char; 32usize],
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union ill_if_u {
     pub ill_if_s: _ill_if_s_,
-    pub illif_filler: [illumos_ddi_dki::c_char; 128usize],
+    pub illif_filler: [illumos_sys_hdrs::c_char; 128usize],
 }
 pub type ill_if_t = ill_if_u;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ill_walk_context_s {
-    pub ctx_current_list: illumos_ddi_dki::c_int,
-    pub ctx_last_list: illumos_ddi_dki::c_int,
+    pub ctx_current_list: illumos_sys_hdrs::c_int,
+    pub ctx_last_list: illumos_sys_hdrs::c_int,
 }
 pub type ill_walk_context_t = ill_walk_context_s;
 #[repr(C)]
@@ -20500,7 +20527,7 @@ pub struct _ill_g_head_s_ {
 #[derive(Copy, Clone)]
 pub union ill_g_head_u {
     pub ill_g_head_s: _ill_g_head_s_,
-    pub ill_g_head_filler: [illumos_ddi_dki::c_char; 64usize],
+    pub ill_g_head_filler: [illumos_sys_hdrs::c_char; 64usize],
 }
 pub type ill_g_head_t = ill_g_head_u;
 pub type ill_hcksum_capab_t = ill_hcksum_capab_s;
@@ -20525,8 +20552,8 @@ pub type ipmp_illgrp_t = ipmp_illgrp_s;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ipmp_grp_s {
-    pub gr_name: [illumos_ddi_dki::c_char; 32usize],
-    pub gr_ifname: [illumos_ddi_dki::c_char; 32usize],
+    pub gr_name: [illumos_sys_hdrs::c_char; 32usize],
+    pub gr_ifname: [illumos_sys_hdrs::c_char; 32usize],
     pub gr_mactype: t_uscalar_t,
     pub gr_phyint: *mut phyint_t,
     pub gr_nif: uint_t,
@@ -20585,7 +20612,7 @@ pub struct ill_s {
     pub ill_ifptr: *mut ill_if_t,
     pub ill_rq: *mut queue_t,
     pub ill_wq: *mut queue_t,
-    pub ill_error: illumos_ddi_dki::c_int,
+    pub ill_error: illumos_sys_hdrs::c_int,
     pub ill_ipif: *mut ipif_t,
     pub ill_ipif_up_count: uint_t,
     pub ill_max_frag: uint_t,
@@ -20593,7 +20620,7 @@ pub struct ill_s {
     pub ill_mtu: uint_t,
     pub ill_mc_mtu: uint_t,
     pub ill_metric: uint_t,
-    pub ill_name: *mut illumos_ddi_dki::c_char,
+    pub ill_name: *mut illumos_sys_hdrs::c_char,
     pub ill_ipif_dup_count: uint_t,
     pub ill_name_length: uint_t,
     pub ill_net_type: uint_t,
@@ -20610,13 +20637,13 @@ pub struct ill_s {
     pub ill_mcast_serializer: kmutex_t,
     pub ill_ilm: *mut ilm_t,
     pub ill_global_timer: uint_t,
-    pub ill_mcast_type: illumos_ddi_dki::c_int,
+    pub ill_mcast_type: illumos_sys_hdrs::c_int,
     pub ill_mcast_v1_time: u16,
     pub ill_mcast_v2_time: u16,
     pub ill_mcast_v1_tset: u8,
     pub ill_mcast_v2_tset: u8,
     pub ill_mcast_rv: u8,
-    pub ill_mcast_qi: illumos_ddi_dki::c_int,
+    pub ill_mcast_qi: illumos_sys_hdrs::c_int,
     pub ill_bcast_mp: *mut mblk_t,
     pub ill_unbind_mp: *mut mblk_t,
     pub ill_promiscoff_mp: *mut mblk_t,
@@ -20631,12 +20658,12 @@ pub struct ill_s {
     pub ill_state_flags: uint_t,
     pub _bitfield_align_1: [u32; 0],
     pub _bitfield_1: __BindgenBitfieldUnit<[u8; 8usize]>,
-    pub ill_muxid: illumos_ddi_dki::c_int,
+    pub ill_muxid: illumos_sys_hdrs::c_int,
     pub ill_ipf_gen: uint_t,
     pub ill_frag_count: uint_t,
     pub ill_frag_free_num_pkts: uint_t,
     pub ill_last_frag_clean_time: clock_t,
-    pub ill_type: illumos_ddi_dki::c_int,
+    pub ill_type: illumos_sys_hdrs::c_int,
     pub ill_dlpi_multicast_state: uint_t,
     pub ill_dlpi_fastpath_state: uint_t,
     pub ill_dlpi_capab_state: uint_t,
@@ -20685,7 +20712,7 @@ pub struct ill_s {
     pub ill_zoneid: zoneid_t,
     pub ill_ipst: *mut ip_stack_t,
     pub ill_dhcpinit: u32,
-    pub ill_flownotify_mh: *mut illumos_ddi_dki::c_void,
+    pub ill_flownotify_mh: *mut illumos_sys_hdrs::c_void,
     pub ill_ilm_cnt: uint_t,
     pub ill_ipallmulti_cnt: uint_t,
     pub ill_ipallmulti_ilm: *mut ilm_t,
@@ -21162,13 +21189,13 @@ pub type ifunc_t = ::core::option::Option<
         arg3: *mut queue_t,
         arg4: *mut mblk_t,
         arg5: *mut ip_ioctl_cmd_s,
-        arg6: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int,
+        arg6: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ip_ioctl_cmd_s {
-    pub ipi_cmd: illumos_ddi_dki::c_int,
+    pub ipi_cmd: illumos_sys_hdrs::c_int,
     pub ipi_copyin_size: size_t,
     pub ipi_flags: uint_t,
     pub ipi_cmd_type: uint_t,
@@ -21176,13 +21203,13 @@ pub struct ip_ioctl_cmd_s {
     pub ipi_func_restart: ifunc_t,
 }
 pub type ip_ioctl_cmd_t = ip_ioctl_cmd_s;
-pub const IF_CMD: illumos_ddi_dki::c_uint = 1;
-pub const LIF_CMD: illumos_ddi_dki::c_uint = 2;
-pub const ARP_CMD: illumos_ddi_dki::c_uint = 3;
-pub const XARP_CMD: illumos_ddi_dki::c_uint = 4;
-pub const MSFILT_CMD: illumos_ddi_dki::c_uint = 5;
-pub const MISC_CMD: illumos_ddi_dki::c_uint = 6;
-pub type _bindgen_ty_3 = illumos_ddi_dki::c_uint;
+pub const IF_CMD: illumos_sys_hdrs::c_uint = 1;
+pub const LIF_CMD: illumos_sys_hdrs::c_uint = 2;
+pub const ARP_CMD: illumos_sys_hdrs::c_uint = 3;
+pub const XARP_CMD: illumos_sys_hdrs::c_uint = 4;
+pub const MSFILT_CMD: illumos_sys_hdrs::c_uint = 5;
+pub const MISC_CMD: illumos_sys_hdrs::c_uint = 6;
+pub type _bindgen_ty_3 = illumos_sys_hdrs::c_uint;
 extern "C" {
     pub static mut ip_ndx_ioctl_table: [ip_ioctl_cmd_t; 0usize];
 }
@@ -21190,16 +21217,16 @@ extern "C" {
     pub static mut ip_misc_ioctl_table: [ip_ioctl_cmd_t; 0usize];
 }
 extern "C" {
-    pub static mut ip_ndx_ioctl_count: illumos_ddi_dki::c_int;
+    pub static mut ip_ndx_ioctl_count: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut ip_misc_ioctl_count: illumos_ddi_dki::c_int;
+    pub static mut ip_misc_ioctl_count: illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[repr(align(4))]
 #[derive(Debug, Copy, Clone)]
 pub struct ipmx_s {
-    pub ipmx_name: [illumos_ddi_dki::c_char; 32usize],
+    pub ipmx_name: [illumos_sys_hdrs::c_char; 32usize],
     pub _bitfield_align_1: [u32; 0],
     pub _bitfield_1: __BindgenBitfieldUnit<[u8; 4usize]>,
 }
@@ -21251,30 +21278,30 @@ impl ipmx_s {
     }
 }
 pub type ipmx_t = ipmx_s;
-pub const IDCS_UNKNOWN: illumos_ddi_dki::c_uint = 0;
-pub const IDCS_PROBE_SENT: illumos_ddi_dki::c_uint = 1;
-pub const IDCS_OK: illumos_ddi_dki::c_uint = 2;
-pub const IDCS_RESET_SENT: illumos_ddi_dki::c_uint = 3;
-pub const IDCS_RENEG: illumos_ddi_dki::c_uint = 4;
-pub const IDCS_FAILED: illumos_ddi_dki::c_uint = 5;
-pub type _bindgen_ty_4 = illumos_ddi_dki::c_uint;
+pub const IDCS_UNKNOWN: illumos_sys_hdrs::c_uint = 0;
+pub const IDCS_PROBE_SENT: illumos_sys_hdrs::c_uint = 1;
+pub const IDCS_OK: illumos_sys_hdrs::c_uint = 2;
+pub const IDCS_RESET_SENT: illumos_sys_hdrs::c_uint = 3;
+pub const IDCS_RENEG: illumos_sys_hdrs::c_uint = 4;
+pub const IDCS_FAILED: illumos_sys_hdrs::c_uint = 5;
+pub type _bindgen_ty_4 = illumos_sys_hdrs::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ipndp_s {
     pub ip_ndp_getf: ndgetf_t,
     pub ip_ndp_setf: ndsetf_t,
     pub ip_ndp_data: caddr_t,
-    pub ip_ndp_name: *mut illumos_ddi_dki::c_char,
+    pub ip_ndp_name: *mut illumos_sys_hdrs::c_char,
 }
 pub type ipndp_t = ipndp_s;
 pub const ixa_notify_type_t_IXAN_LSO: ixa_notify_type_t = 0;
 pub const ixa_notify_type_t_IXAN_PMTU: ixa_notify_type_t = 1;
 pub const ixa_notify_type_t_IXAN_ZCOPY: ixa_notify_type_t = 2;
-pub type ixa_notify_type_t = illumos_ddi_dki::c_uint;
+pub type ixa_notify_type_t = illumos_sys_hdrs::c_uint;
 pub type ixa_notify_arg_t = uint_t;
 pub type ixa_notify_t = ::core::option::Option<
     unsafe extern "C" fn(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         ixa: *mut ip_xmit_attr_t,
         arg2: ixa_notify_type_t,
         arg3: ixa_notify_arg_t,
@@ -21307,7 +21334,7 @@ pub struct ip_xmit_attr_s {
     pub ixa_multicast_ttl: uint_t,
     pub ixa_multicast_ifindex: uint_t,
     pub ixa_multicast_ifaddr: ipaddr_t,
-    pub ixa_raw_cksum_offset: illumos_ddi_dki::c_int,
+    pub ixa_raw_cksum_offset: illumos_sys_hdrs::c_int,
     pub ixa_ident: u32,
     pub ixa_conn_id: u64,
     pub ixa_lso_capab: ill_lso_capab_t,
@@ -21339,7 +21366,7 @@ pub struct ip_xmit_attr_s {
     pub ixa_sqp: *mut squeue_t,
     pub ixa_cookie: usize,
     pub ixa_notify: ixa_notify_t,
-    pub ixa_notify_cookie: *mut illumos_ddi_dki::c_void,
+    pub ixa_notify_cookie: *mut illumos_sys_hdrs::c_void,
     pub ixa_tcpcleanup: uint_t,
 }
 #[repr(C)]
@@ -21421,7 +21448,7 @@ pub type tsol_gc_t = tsol_gc_s;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct tsol_gcgrp_addr_s {
-    pub ga_af: illumos_ddi_dki::c_int,
+    pub ga_af: illumos_sys_hdrs::c_int,
     pub ga_addr: in6_addr_t,
 }
 pub type tsol_gcgrp_addr_t = tsol_gcgrp_addr_s;
@@ -21530,7 +21557,7 @@ pub type sin6_t = sockaddr_in6;
 #[derive(Debug, Copy, Clone)]
 pub struct nv_s {
     pub nv_value: u64,
-    pub nv_name: *mut illumos_ddi_dki::c_char,
+    pub nv_name: *mut illumos_sys_hdrs::c_char,
 }
 pub type nv_t = nv_s;
 extern "C" {
@@ -21576,8 +21603,8 @@ extern "C" {
     pub fn ip_pkt_copy(
         arg1: *mut ip_pkt_t,
         arg2: *mut ip_pkt_t,
-        arg3: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_pkt_source_route_reverse_v4(arg1: *mut ip_pkt_t);
@@ -21623,10 +21650,10 @@ extern "C" {
     pub static mut ip_minor_arena_la: *mut vmem_t;
 }
 extern "C" {
-    pub static mut dohwcksum: illumos_ddi_dki::c_int;
+    pub static mut dohwcksum: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut ipif_loopback_name: [illumos_ddi_dki::c_char; 0usize];
+    pub static mut ipif_loopback_name: [illumos_sys_hdrs::c_char; 0usize];
 }
 extern "C" {
     pub static mut ire_nv_tbl: *mut nv_t;
@@ -21635,7 +21662,7 @@ extern "C" {
     pub static mut ip_mod_info: module_info;
 }
 extern "C" {
-    pub static mut ip_debug: illumos_ddi_dki::c_int;
+    pub static mut ip_debug: illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut ip_thread_data: uint_t;
@@ -21646,8 +21673,8 @@ extern "C" {
 extern "C" {
     pub static mut ip_thread_list: list_t;
 }
-pub type ihandle_t = illumos_ddi_dki::c_int;
-pub type phandle_t = illumos_ddi_dki::c_int;
+pub type ihandle_t = illumos_sys_hdrs::c_int;
+pub type phandle_t = illumos_sys_hdrs::c_int;
 pub type pnode_t = phandle_t;
 extern "C" {
     pub fn prom_map(
@@ -21661,7 +21688,7 @@ extern "C" {
     pub fn prom_alloc(
         virthint: caddr_t,
         size: uint_t,
-        align: illumos_ddi_dki::c_int,
+        align: illumos_sys_hdrs::c_int,
     ) -> caddr_t;
 }
 extern "C" {
@@ -21686,14 +21713,14 @@ extern "C" {
     pub fn prom_getproplen(
         nodeid: pnode_t,
         name: caddr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_getprop(
         nodeid: pnode_t,
         name: caddr_t,
         value: caddr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_nextprop(
@@ -21704,66 +21731,66 @@ extern "C" {
 }
 extern "C" {
     pub fn prom_decode_composite_string(
-        buf: *mut illumos_ddi_dki::c_void,
+        buf: *mut illumos_sys_hdrs::c_void,
         buflen: size_t,
-        prev: *mut illumos_ddi_dki::c_char,
-    ) -> *mut illumos_ddi_dki::c_char;
+        prev: *mut illumos_sys_hdrs::c_char,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
-    pub fn prom_finddevice(path: *mut illumos_ddi_dki::c_char) -> pnode_t;
+    pub fn prom_finddevice(path: *mut illumos_sys_hdrs::c_char) -> pnode_t;
 }
 extern "C" {
     pub fn prom_bounded_getprop(
         nodeid: pnode_t,
         name: caddr_t,
         buffer: caddr_t,
-        buflen: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        buflen: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_devname_from_pathname(
-        path: *mut illumos_ddi_dki::c_char,
-        buffer: *mut illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        path: *mut illumos_sys_hdrs::c_char,
+        buffer: *mut illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_path_gettoken(
-        from: *mut illumos_ddi_dki::c_char,
-        to: *mut illumos_ddi_dki::c_char,
-    ) -> *mut illumos_ddi_dki::c_char;
+        from: *mut illumos_sys_hdrs::c_char,
+        to: *mut illumos_sys_hdrs::c_char,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
-    pub fn prom_stdin_is_keyboard() -> illumos_ddi_dki::c_int;
+    pub fn prom_stdin_is_keyboard() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn prom_stdout_is_framebuffer() -> illumos_ddi_dki::c_int;
+    pub fn prom_stdout_is_framebuffer() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_framebuffer_getpos(
-        row: *mut illumos_ddi_dki::c_int,
-        col: *mut illumos_ddi_dki::c_int,
+        row: *mut illumos_sys_hdrs::c_int,
+        col: *mut illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
     pub fn prom_framebuffer_getcolors(
-        fg: *mut illumos_ddi_dki::c_int,
-        bg: *mut illumos_ddi_dki::c_int,
+        fg: *mut illumos_sys_hdrs::c_int,
+        bg: *mut illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
-    pub fn prom_stdinpath() -> *mut illumos_ddi_dki::c_char;
+    pub fn prom_stdinpath() -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
-    pub fn prom_stdoutpath() -> *mut illumos_ddi_dki::c_char;
+    pub fn prom_stdoutpath() -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn prom_strip_options(
-        from: *mut illumos_ddi_dki::c_char,
-        to: *mut illumos_ddi_dki::c_char,
+        from: *mut illumos_sys_hdrs::c_char,
+        to: *mut illumos_sys_hdrs::c_char,
     );
 }
 extern "C" {
-    pub fn prom_pathname(arg1: *mut illumos_ddi_dki::c_char);
+    pub fn prom_pathname(arg1: *mut illumos_sys_hdrs::c_char);
 }
 extern "C" {
     pub fn prom_enter_mon();
@@ -21772,39 +21799,39 @@ extern "C" {
     pub fn prom_exit_to_mon();
 }
 extern "C" {
-    pub fn prom_reboot(bootstr: *mut illumos_ddi_dki::c_char);
+    pub fn prom_reboot(bootstr: *mut illumos_sys_hdrs::c_char);
 }
 extern "C" {
-    pub fn prom_panic(string: *mut illumos_ddi_dki::c_char);
+    pub fn prom_panic(string: *mut illumos_sys_hdrs::c_char);
 }
 extern "C" {
-    pub fn prom_is_openprom() -> illumos_ddi_dki::c_int;
+    pub fn prom_is_openprom() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn prom_is_p1275() -> illumos_ddi_dki::c_int;
+    pub fn prom_is_p1275() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_version_name(
-        buf: *mut illumos_ddi_dki::c_char,
-        buflen: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        buf: *mut illumos_sys_hdrs::c_char,
+        buflen: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn prom_version_boot_syscalls() -> illumos_ddi_dki::c_int;
+    pub fn prom_version_boot_syscalls() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_gettime() -> uint_t;
 }
 extern "C" {
-    pub fn prom_bootpath() -> *mut illumos_ddi_dki::c_char;
+    pub fn prom_bootpath() -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
-    pub fn prom_bootargs() -> *mut illumos_ddi_dki::c_char;
+    pub fn prom_bootargs() -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn prom_init(
-        progname: *mut illumos_ddi_dki::c_char,
-        prom_cookie: *mut illumos_ddi_dki::c_void,
+        progname: *mut illumos_sys_hdrs::c_char,
+        prom_cookie: *mut illumos_sys_hdrs::c_void,
     );
 }
 pub type prom_generation_cookie_t = uint_t;
@@ -21812,88 +21839,88 @@ extern "C" {
     pub fn prom_getchar() -> uchar_t;
 }
 extern "C" {
-    pub fn prom_putchar(c: illumos_ddi_dki::c_char);
+    pub fn prom_putchar(c: illumos_sys_hdrs::c_char);
 }
 extern "C" {
-    pub fn prom_mayget() -> illumos_ddi_dki::c_int;
+    pub fn prom_mayget() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn prom_mayput(c: illumos_ddi_dki::c_char) -> illumos_ddi_dki::c_int;
+    pub fn prom_mayput(c: illumos_sys_hdrs::c_char) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_open(
-        name: *mut illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        name: *mut illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn prom_close(fd: illumos_ddi_dki::c_int) -> illumos_ddi_dki::c_int;
+    pub fn prom_close(fd: illumos_sys_hdrs::c_int) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_read(
-        fd: illumos_ddi_dki::c_int,
+        fd: illumos_sys_hdrs::c_int,
         buf: caddr_t,
         len: uint_t,
         startblk: uint_t,
-        type_: illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        type_: illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_write(
-        fd: illumos_ddi_dki::c_int,
+        fd: illumos_sys_hdrs::c_int,
         buf: caddr_t,
         len: uint_t,
         startblk: uint_t,
-        devtype: illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        devtype: illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_seek(
-        fd: illumos_ddi_dki::c_int,
-        offset: illumos_ddi_dki::c_ulonglong,
-    ) -> illumos_ddi_dki::c_int;
+        fd: illumos_sys_hdrs::c_int,
+        offset: illumos_sys_hdrs::c_ulonglong,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn prom_writestr(buf: *const illumos_ddi_dki::c_char, bufsize: size_t);
+    pub fn prom_writestr(buf: *const illumos_sys_hdrs::c_char, bufsize: size_t);
 }
 extern "C" {
-    pub fn prom_printf(fmt: *const illumos_ddi_dki::c_char, ...);
+    pub fn prom_printf(fmt: *const illumos_sys_hdrs::c_char, ...);
 }
 extern "C" {
     pub fn prom_vprintf(
-        fmt: *const illumos_ddi_dki::c_char,
+        fmt: *const illumos_sys_hdrs::c_char,
         adx: *mut __va_list_tag,
     );
 }
 extern "C" {
     pub fn prom_sprintf(
-        s: *mut illumos_ddi_dki::c_char,
-        fmt: *const illumos_ddi_dki::c_char,
+        s: *mut illumos_sys_hdrs::c_char,
+        fmt: *const illumos_sys_hdrs::c_char,
         ...
-    ) -> *mut illumos_ddi_dki::c_char;
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn prom_vsprintf(
-        s: *mut illumos_ddi_dki::c_char,
-        fmt: *const illumos_ddi_dki::c_char,
+        s: *mut illumos_sys_hdrs::c_char,
+        fmt: *const illumos_sys_hdrs::c_char,
         adx: *mut __va_list_tag,
-    ) -> *mut illumos_ddi_dki::c_char;
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn prom_findnode_byname(
         id: pnode_t,
-        name: *mut illumos_ddi_dki::c_char,
+        name: *mut illumos_sys_hdrs::c_char,
     ) -> pnode_t;
 }
 extern "C" {
-    pub fn prom_get_extend_name() -> *mut illumos_ddi_dki::c_char;
+    pub fn prom_get_extend_name() -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn prom_devreset(
-        arg1: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub static mut OpenCount: illumos_ddi_dki::c_int;
+    pub static mut OpenCount: illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -21918,21 +21945,21 @@ extern "C" {
 }
 extern "C" {
     pub fn prom_set_security_key(
-        keyname: *mut illumos_ddi_dki::c_char,
+        keyname: *mut illumos_sys_hdrs::c_char,
         buf: caddr_t,
-        buflen: illumos_ddi_dki::c_int,
-        reslen: *mut illumos_ddi_dki::c_int,
-        status: *mut illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        buflen: illumos_sys_hdrs::c_int,
+        reslen: *mut illumos_sys_hdrs::c_int,
+        status: *mut illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn prom_get_security_key(
-        keyname: *mut illumos_ddi_dki::c_char,
+        keyname: *mut illumos_sys_hdrs::c_char,
         buf: caddr_t,
-        buflen: illumos_ddi_dki::c_int,
-        keylen: *mut illumos_ddi_dki::c_int,
-        status: *mut illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        buflen: illumos_sys_hdrs::c_int,
+        keylen: *mut illumos_sys_hdrs::c_int,
+        status: *mut illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -21940,12 +21967,12 @@ pub struct mac_header_info_s {
     _unused: [u8; 0],
 }
 extern "C" {
-    pub fn ill_frag_timer(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn ill_frag_timer(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
     pub fn ill_first(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut ill_walk_context_t,
         arg4: *mut ip_stack_t,
     ) -> *mut ill_t;
@@ -21987,22 +22014,22 @@ extern "C" {
 extern "C" {
     pub fn ip_dot_addr(
         arg1: ipaddr_t,
-        arg2: *mut illumos_ddi_dki::c_char,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg2: *mut illumos_sys_hdrs::c_char,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn mac_colon_addr(
         arg1: *const u8,
         arg2: size_t,
-        arg3: *mut illumos_ddi_dki::c_char,
+        arg3: *mut illumos_sys_hdrs::c_char,
         arg4: size_t,
-    ) -> *const illumos_ddi_dki::c_char;
+    ) -> *const illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn ip_lwput(
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn icmp_err_rate_limit(arg1: *mut ip_stack_t) -> boolean_t;
@@ -22010,7 +22037,7 @@ extern "C" {
 extern "C" {
     pub fn icmp_frag_needed(
         arg1: *mut mblk_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut ip_recv_attr_t,
     );
 }
@@ -22046,7 +22073,7 @@ extern "C" {
         arg1: *mut mblk_t,
         arg2: ssize_t,
         arg3: *mut ip_recv_attr_t,
-    ) -> *mut illumos_ddi_dki::c_void;
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn ip_setl2src(
@@ -22090,16 +22117,16 @@ extern "C" {
 extern "C" {
     pub fn ip_cksum(
         arg1: *mut mblk_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: u32,
     ) -> uint_t;
 }
 extern "C" {
     pub fn ip_close(
         arg1: *mut queue_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_csum_hdr(arg1: *mut ipha_t) -> u16;
@@ -22135,7 +22162,7 @@ extern "C" {
         arg8: zoneid_t,
         postfragfn: pfirepostfrag_t,
         cookie: *mut usize,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_proto_not_sup(arg1: *mut mblk_t, arg2: *mut ip_recv_attr_t);
@@ -22163,19 +22190,19 @@ extern "C" {
     pub fn ip_openv4(
         q: *mut queue_t,
         devp: *mut dev_t,
-        flag: illumos_ddi_dki::c_int,
-        sflag: illumos_ddi_dki::c_int,
+        flag: illumos_sys_hdrs::c_int,
+        sflag: illumos_sys_hdrs::c_int,
         credp: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_openv6(
         q: *mut queue_t,
         devp: *mut dev_t,
-        flag: illumos_ddi_dki::c_int,
-        sflag: illumos_ddi_dki::c_int,
+        flag: illumos_sys_hdrs::c_int,
+        sflag: illumos_sys_hdrs::c_int,
         credp: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_reassemble(
@@ -22185,13 +22212,13 @@ extern "C" {
         arg4: boolean_t,
         arg5: *mut ill_t,
         arg6: size_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_rput(
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_input(
@@ -22234,8 +22261,8 @@ extern "C" {
 extern "C" {
     pub fn ill_input_full_v4(
         arg1: *mut mblk_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
         arg5: *mut rtc_t,
     );
@@ -22243,8 +22270,8 @@ extern "C" {
 extern "C" {
     pub fn ill_input_short_v4(
         arg1: *mut mblk_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
         arg5: *mut rtc_t,
     );
@@ -22252,8 +22279,8 @@ extern "C" {
 extern "C" {
     pub fn ill_input_full_v6(
         arg1: *mut mblk_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
         arg5: *mut rtc_t,
     );
@@ -22261,8 +22288,8 @@ extern "C" {
 extern "C" {
     pub fn ill_input_short_v6(
         arg1: *mut mblk_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
         arg5: *mut rtc_t,
     );
@@ -22273,7 +22300,7 @@ extern "C" {
         arg2: ipaddr_t,
         arg3: *mut mblk_t,
         arg4: *mut ip_recv_attr_t,
-        arg5: *mut illumos_ddi_dki::c_int,
+        arg5: *mut illumos_sys_hdrs::c_int,
     ) -> ipaddr_t;
 }
 extern "C" {
@@ -22377,12 +22404,12 @@ extern "C" {
         arg1: *mut ipha_t,
         arg2: *mut ip_pkt_t,
         arg3: boolean_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_total_hdrs_len_v4(
         arg1: *const ip_pkt_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_accept_tcp(
@@ -22417,12 +22444,12 @@ extern "C" {
         arg1: *mut ipsq_t,
         arg2: *mut queue_t,
         arg3: *mut mblk_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
     pub fn ip_check_multihome(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: *mut ire_t,
         arg3: *mut ill_t,
     ) -> *mut ire_t;
@@ -22444,7 +22471,7 @@ extern "C" {
         arg5: *mut iulp_t,
         arg6: u32,
         arg7: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_set_destination_v6(
@@ -22455,25 +22482,25 @@ extern "C" {
         arg5: *mut iulp_t,
         arg6: u32,
         arg7: uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_output_simple(
         arg1: *mut mblk_t,
         arg2: *mut ip_xmit_attr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_output_simple_v4(
         arg1: *mut mblk_t,
         arg2: *mut ip_xmit_attr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_output_simple_v6(
         arg1: *mut mblk_t,
         arg2: *mut ip_xmit_attr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_output_options(
@@ -22481,7 +22508,7 @@ extern "C" {
         arg2: *mut ipha_t,
         arg3: *mut ip_xmit_attr_t,
         arg4: *mut ill_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_output_local_options(arg1: *mut ipha_t, arg2: *mut ip_stack_t);
@@ -22555,7 +22582,7 @@ extern "C" {
     pub fn conn_ip_output(
         arg1: *mut mblk_t,
         arg2: *mut ip_xmit_attr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_output_verify_local(arg1: *mut ip_xmit_attr_t) -> boolean_t;
@@ -22575,7 +22602,7 @@ extern "C" {
         arg2: t_scalar_t,
         arg3: t_scalar_t,
         arg4: *mut uchar_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn conn_opt_set(
@@ -22586,7 +22613,7 @@ extern "C" {
         arg5: *mut uchar_t,
         arg6: boolean_t,
         arg7: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn conn_same_as_last_v4(
@@ -22606,7 +22633,7 @@ extern "C" {
         arg2: *const ip_xmit_attr_t,
         arg3: *const in6_addr_t,
         arg4: *mut ip_pkt_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_opt_set_multicast_group(
@@ -22615,7 +22642,7 @@ extern "C" {
         arg3: *mut uchar_t,
         arg4: boolean_t,
         arg5: boolean_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_opt_set_multicast_sources(
@@ -22624,21 +22651,21 @@ extern "C" {
         arg3: *mut uchar_t,
         arg4: boolean_t,
         arg5: boolean_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn conn_getsockname(
         arg1: *mut conn_t,
         arg2: *mut sockaddr,
         arg3: *mut uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn conn_getpeername(
         arg1: *mut conn_t,
         arg2: *mut sockaddr,
         arg3: *mut uint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn conn_build_hdr_template(
@@ -22648,7 +22675,7 @@ extern "C" {
         arg4: *const in6_addr_t,
         arg5: *const in6_addr_t,
         arg6: u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn conn_prepend_hdr(
@@ -22663,7 +22690,7 @@ extern "C" {
         arg9: uint_t,
         arg10: uint_t,
         arg11: *mut u32,
-        arg12: *mut illumos_ddi_dki::c_int,
+        arg12: *mut illumos_sys_hdrs::c_int,
     ) -> *mut mblk_t;
 }
 extern "C" {
@@ -22682,7 +22709,7 @@ extern "C" {
         arg1: *mut conn_t,
         arg2: *mut iulp_t,
         arg3: u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_attr_connect(
@@ -22695,18 +22722,18 @@ extern "C" {
         arg7: *mut in6_addr_t,
         arg8: *mut iulp_t,
         arg9: u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn conn_inherit_parent(
         arg1: *mut conn_t,
         arg2: *mut conn_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn conn_ixa_cleanup(
         connp: *mut conn_t,
-        arg: *mut illumos_ddi_dki::c_void,
+        arg: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
@@ -22727,16 +22754,16 @@ extern "C" {
     pub fn ip_wput_nondata(
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn ip_wsrv(arg1: *mut queue_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_wsrv(arg1: *mut queue_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_nv_lookup(
         arg1: *mut nv_t,
-        arg2: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg2: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn ip_local_addr_ok_v6(
@@ -22760,10 +22787,10 @@ extern "C" {
     pub fn ip_net_mask(arg1: ipaddr_t) -> ipaddr_t;
 }
 extern "C" {
-    pub fn arp_bringup_done(arg1: *mut ill_t, arg2: illumos_ddi_dki::c_int);
+    pub fn arp_bringup_done(arg1: *mut ill_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
-    pub fn arp_replumb_done(arg1: *mut ill_t, arg2: illumos_ddi_dki::c_int);
+    pub fn arp_replumb_done(arg1: *mut ill_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub static mut iprinitv6: qinit;
@@ -22776,7 +22803,7 @@ extern "C" {
 }
 extern "C" {
     pub fn ipmp_grp_create(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: *mut phyint_t,
     ) -> *mut ipmp_grp_t;
 }
@@ -22789,12 +22816,12 @@ extern "C" {
 extern "C" {
     pub fn ipmp_grp_rename(
         arg1: *mut ipmp_grp_t,
-        arg2: *const illumos_ddi_dki::c_char,
-    ) -> illumos_ddi_dki::c_int;
+        arg2: *const illumos_sys_hdrs::c_char,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ipmp_grp_lookup(
-        arg1: *const illumos_ddi_dki::c_char,
+        arg1: *const illumos_sys_hdrs::c_char,
         arg2: *mut ip_stack_t,
     ) -> *mut ipmp_grp_t;
 }
@@ -22802,7 +22829,7 @@ extern "C" {
     pub fn ipmp_grp_vet_phyint(
         arg1: *mut ipmp_grp_t,
         arg2: *mut phyint_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ipmp_illgrp_create(arg1: *mut ill_t) -> *mut ipmp_illgrp_t;
@@ -22881,7 +22908,7 @@ extern "C" {
 extern "C" {
     pub fn ipmp_illgrp_unlink_grp(
         arg1: *mut ipmp_illgrp_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ipmp_ill_get_ipmp_ifindex(arg1: *const ill_t) -> uint_t;
@@ -22950,7 +22977,7 @@ extern "C" {
     pub fn conn_clrqfull(arg1: *mut conn_t, arg2: *mut boolean_t);
 }
 extern "C" {
-    pub fn conn_ipsec_length(arg1: *mut conn_t) -> illumos_ddi_dki::c_int;
+    pub fn conn_ipsec_length(arg1: *mut conn_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_get_dst(arg1: *mut ipha_t) -> ipaddr_t;
@@ -22973,19 +23000,19 @@ extern "C" {
 extern "C" {
     pub fn ipsec_out_extra_length(
         arg1: *mut ip_xmit_attr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ipsec_out_process(
         arg1: *mut mblk_t,
         arg2: *mut ip_xmit_attr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_output_post_ipsec(
         arg1: *mut mblk_t,
         arg2: *mut ip_xmit_attr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ipsec_out_to_in(
@@ -23011,14 +23038,14 @@ extern "C" {
         arg1: *const in6_addr_t,
         arg2: zoneid_t,
         arg3: *mut ip_stack_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_srcid_remove(
         arg1: *const in6_addr_t,
         arg2: zoneid_t,
         arg3: *mut ip_stack_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_srcid_find_id(
@@ -23046,38 +23073,38 @@ extern "C" {
     pub fn ip_opt_get_user(
         arg1: *mut conn_t,
         arg2: *mut uchar_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ipsec_req_from_conn(
         arg1: *mut conn_t,
         arg2: *mut ipsec_req_t,
-        arg3: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg3: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_snmp_get(
         q: *mut queue_t,
         mctl: *mut mblk_t,
-        level: illumos_ddi_dki::c_int,
+        level: illumos_sys_hdrs::c_int,
         arg1: boolean_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_snmp_set(
         q: *mut queue_t,
-        arg1: illumos_ddi_dki::c_int,
-        arg2: illumos_ddi_dki::c_int,
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: *mut uchar_t,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> illumos_ddi_dki::c_int;
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_process_ioctl(
         arg1: *mut ipsq_t,
         arg2: *mut queue_t,
         arg3: *mut mblk_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
@@ -23088,42 +23115,42 @@ extern "C" {
         arg1: *mut ipsq_t,
         arg2: *mut queue_t,
         arg3: *mut mblk_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
     pub fn ip_ioctl_finish(
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
-        arg3: illumos_ddi_dki::c_int,
-        arg4: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: *mut ipsq_t,
     );
 }
 extern "C" {
     pub fn ip_cmpbuf(
-        arg1: *const illumos_ddi_dki::c_void,
+        arg1: *const illumos_sys_hdrs::c_void,
         arg2: uint_t,
         arg3: boolean_t,
-        arg4: *const illumos_ddi_dki::c_void,
+        arg4: *const illumos_sys_hdrs::c_void,
         arg5: uint_t,
     ) -> boolean_t;
 }
 extern "C" {
     pub fn ip_allocbuf(
-        arg1: *mut *mut illumos_ddi_dki::c_void,
+        arg1: *mut *mut illumos_sys_hdrs::c_void,
         arg2: *mut uint_t,
         arg3: boolean_t,
-        arg4: *const illumos_ddi_dki::c_void,
+        arg4: *const illumos_sys_hdrs::c_void,
         arg5: uint_t,
     ) -> boolean_t;
 }
 extern "C" {
     pub fn ip_savebuf(
-        arg1: *mut *mut illumos_ddi_dki::c_void,
+        arg1: *mut *mut illumos_sys_hdrs::c_void,
         arg2: *mut uint_t,
         arg3: boolean_t,
-        arg4: *const illumos_ddi_dki::c_void,
+        arg4: *const illumos_sys_hdrs::c_void,
         arg5: uint_t,
     );
 }
@@ -23152,8 +23179,8 @@ extern "C" {
             protocol: u8,
             addr_family: sa_family_t,
             laddrp: *mut u8,
-            args: *mut illumos_ddi_dki::c_void,
-        ) -> illumos_ddi_dki::c_int,
+            args: *mut illumos_sys_hdrs::c_void,
+        ) -> illumos_sys_hdrs::c_int,
     >;
 }
 extern "C" {
@@ -23164,7 +23191,7 @@ extern "C" {
             addr_family: sa_family_t,
             laddrp: *mut u8,
             faddrp: *mut u8,
-            args: *mut illumos_ddi_dki::c_void,
+            args: *mut illumos_sys_hdrs::c_void,
         ) -> u32,
     >;
 }
@@ -23179,8 +23206,8 @@ extern "C" {
             lport: in_port_t,
             faddrp: *mut u8,
             fport: in_port_t,
-            args: *mut illumos_ddi_dki::c_void,
-        ) -> illumos_ddi_dki::c_int,
+            args: *mut illumos_sys_hdrs::c_void,
+        ) -> illumos_sys_hdrs::c_int,
     >;
 }
 extern "C" {
@@ -23190,7 +23217,7 @@ extern "C" {
             arg2: u8,
             arg3: *mut u8,
             arg4: size_t,
-            arg5: *mut illumos_ddi_dki::c_void,
+            arg5: *mut illumos_sys_hdrs::c_void,
         ),
     >;
 }
@@ -23200,8 +23227,8 @@ extern "C" {
             stack_id: netstackid_t,
             protocol: u8,
             spi: u32,
-            args: *mut illumos_ddi_dki::c_void,
-        ) -> illumos_ddi_dki::c_int,
+            args: *mut illumos_sys_hdrs::c_void,
+        ) -> illumos_sys_hdrs::c_int,
     >;
 }
 extern "C" {
@@ -23210,7 +23237,7 @@ extern "C" {
             stack_id: netstackid_t,
             protocol: u8,
             spi: u32,
-            args: *mut illumos_ddi_dki::c_void,
+            args: *mut illumos_sys_hdrs::c_void,
         ),
     >;
 }
@@ -23223,19 +23250,19 @@ extern "C" {
             arg4: sa_family_t,
             arg5: in6_addr_t,
             arg6: in6_addr_t,
-            arg7: *mut illumos_ddi_dki::c_void,
+            arg7: *mut illumos_sys_hdrs::c_void,
         ),
     >;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct cgtp_filter_ops {
-    pub cfo_filter_rev: illumos_ddi_dki::c_int,
+    pub cfo_filter_rev: illumos_sys_hdrs::c_int,
     pub cfo_change_state: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: netstackid_t,
-            arg2: illumos_ddi_dki::c_int,
-        ) -> illumos_ddi_dki::c_int,
+            arg2: illumos_sys_hdrs::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cfo_add_dest_v4: ::core::option::Option<
         unsafe extern "C" fn(
@@ -23244,14 +23271,14 @@ pub struct cgtp_filter_ops {
             arg3: ipaddr_t,
             arg4: ipaddr_t,
             arg5: ipaddr_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cfo_del_dest_v4: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: netstackid_t,
             arg2: ipaddr_t,
             arg3: ipaddr_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cfo_add_dest_v6: ::core::option::Option<
         unsafe extern "C" fn(
@@ -23260,21 +23287,21 @@ pub struct cgtp_filter_ops {
             arg3: *mut in6_addr_t,
             arg4: *mut in6_addr_t,
             arg5: *mut in6_addr_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cfo_del_dest_v6: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: netstackid_t,
             arg2: *mut in6_addr_t,
             arg3: *mut in6_addr_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cfo_filter: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: netstackid_t,
             arg2: uint_t,
             arg3: *mut mblk_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
     pub cfo_filter_v6: ::core::option::Option<
         unsafe extern "C" fn(
@@ -23282,49 +23309,49 @@ pub struct cgtp_filter_ops {
             arg2: uint_t,
             arg3: *mut ip6_t,
             arg4: *mut ip6_frag_t,
-        ) -> illumos_ddi_dki::c_int,
+        ) -> illumos_sys_hdrs::c_int,
     >,
 }
 pub type cgtp_filter_ops_t = cgtp_filter_ops;
 extern "C" {
-    pub static mut ip_cgtp_filter_rev: illumos_ddi_dki::c_int;
+    pub static mut ip_cgtp_filter_rev: illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn ip_cgtp_filter_supported() -> illumos_ddi_dki::c_int;
+    pub fn ip_cgtp_filter_supported() -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_cgtp_filter_register(
         arg1: netstackid_t,
         arg2: *mut cgtp_filter_ops_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_cgtp_filter_unregister(
         arg1: netstackid_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_cgtp_filter_is_registered(
         arg1: netstackid_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 pub const ip_ring_state_t_RR_FREE: ip_ring_state_t = 0;
 pub const ip_ring_state_t_RR_SQUEUE_UNBOUND: ip_ring_state_t = 1;
 pub const ip_ring_state_t_RR_SQUEUE_BIND_INPROG: ip_ring_state_t = 2;
 pub const ip_ring_state_t_RR_SQUEUE_BOUND: ip_ring_state_t = 3;
 pub const ip_ring_state_t_RR_FREE_INPROG: ip_ring_state_t = 4;
-pub type ip_ring_state_t = illumos_ddi_dki::c_uint;
+pub type ip_ring_state_t = illumos_sys_hdrs::c_uint;
 pub type ip_mac_intr_disable_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut illumos_ddi_dki::c_void) -> boolean_t,
+    unsafe extern "C" fn(arg1: *mut illumos_sys_hdrs::c_void) -> boolean_t,
 >;
 pub type ip_mac_intr_enable_t = ::core::option::Option<
     unsafe extern "C" fn(
-        arg1: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int,
+        arg1: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 pub type ip_dld_tx_t = ::core::option::Option<
     unsafe extern "C" fn(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: *mut mblk_t,
         arg3: u64,
         arg4: u16,
@@ -23332,34 +23359,34 @@ pub type ip_dld_tx_t = ::core::option::Option<
 >;
 pub type ip_flow_enable_t = ::core::option::Option<
     unsafe extern "C" fn(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: ip_mac_tx_cookie_t,
     ),
 >;
 pub type ip_dld_callb_t = ::core::option::Option<
     unsafe extern "C" fn(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: ip_flow_enable_t,
-        arg3: *mut illumos_ddi_dki::c_void,
-    ) -> *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
+    ) -> *mut illumos_sys_hdrs::c_void,
 >;
 pub type ip_dld_fctl_t = ::core::option::Option<
     unsafe extern "C" fn(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: ip_mac_tx_cookie_t,
     ) -> boolean_t,
 >;
 pub type ip_capab_func_t = ::core::option::Option<
     unsafe extern "C" fn(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: uint_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: uint_t,
-    ) -> illumos_ddi_dki::c_int,
+    ) -> illumos_sys_hdrs::c_int,
 >;
 pub type ip_mac_rx_t = ::core::option::Option<
     unsafe extern "C" fn(
-        arg1: *mut illumos_ddi_dki::c_void,
+        arg1: *mut illumos_sys_hdrs::c_void,
         arg2: size_t,
     ) -> *mut mblk_t,
 >;
@@ -23378,10 +23405,10 @@ pub type ip_accept_t = ::core::option::Option<
 pub struct ill_rx_ring {
     pub rr_intr_disable: ip_mac_intr_disable_t,
     pub rr_intr_enable: ip_mac_intr_enable_t,
-    pub rr_intr_handle: *mut illumos_ddi_dki::c_void,
+    pub rr_intr_handle: *mut illumos_sys_hdrs::c_void,
     pub rr_rx: ip_mac_rx_t,
     pub rr_ip_accept: ip_accept_t,
-    pub rr_rx_handle: *mut illumos_ddi_dki::c_void,
+    pub rr_rx_handle: *mut illumos_sys_hdrs::c_void,
     pub rr_sqp: *mut squeue_t,
     pub rr_ill: *mut ill_t,
     pub rr_ring_state: ip_ring_state_t,
@@ -23390,11 +23417,11 @@ pub struct ill_rx_ring {
 #[derive(Debug, Copy, Clone)]
 pub struct ill_dld_direct_s {
     pub idd_tx_df: ip_dld_tx_t,
-    pub idd_tx_dh: *mut illumos_ddi_dki::c_void,
+    pub idd_tx_dh: *mut illumos_sys_hdrs::c_void,
     pub idd_tx_cb_df: ip_dld_callb_t,
-    pub idd_tx_cb_dh: *mut illumos_ddi_dki::c_void,
+    pub idd_tx_cb_dh: *mut illumos_sys_hdrs::c_void,
     pub idd_tx_fctl_df: ip_dld_fctl_t,
-    pub idd_tx_fctl_dh: *mut illumos_ddi_dki::c_void,
+    pub idd_tx_fctl_dh: *mut illumos_sys_hdrs::c_void,
 }
 pub type ill_dld_direct_t = ill_dld_direct_s;
 #[repr(C)]
@@ -23407,7 +23434,7 @@ pub type ill_dld_poll_t = ill_dld_poll_s;
 #[derive(Debug, Copy, Clone)]
 pub struct ill_dld_capab_s {
     pub idc_capab_df: ip_capab_func_t,
-    pub idc_capab_dh: *mut illumos_ddi_dki::c_void,
+    pub idc_capab_dh: *mut illumos_sys_hdrs::c_void,
     pub idc_direct: ill_dld_direct_t,
     pub idc_poll: ill_dld_poll_t,
 }
@@ -23432,13 +23459,13 @@ extern "C" {
     pub fn ip_squeue_cpu_move(
         arg1: *mut squeue_t,
         arg2: processorid_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_squeue_add_ring(
         arg1: *mut ill_t,
-        arg2: *mut illumos_ddi_dki::c_void,
-    ) -> *mut illumos_ddi_dki::c_void;
+        arg2: *mut illumos_sys_hdrs::c_void,
+    ) -> *mut illumos_sys_hdrs::c_void;
 }
 extern "C" {
     pub fn ip_squeue_bind_ring(
@@ -23469,14 +23496,14 @@ extern "C" {
     pub fn tcp_wput(
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_fill_mtuinfo(
         arg1: *mut conn_t,
         arg2: *mut ip_xmit_attr_t,
         arg3: *mut ip6_mtuinfo,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ipobs_register_hook(
@@ -23490,7 +23517,7 @@ extern "C" {
 extern "C" {
     pub fn ipobs_hook(
         arg1: *mut mblk_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
         arg3: zoneid_t,
         arg4: zoneid_t,
         arg5: *const ill_t,
@@ -23502,7 +23529,7 @@ pub type ipsq_func_t = ::core::option::Option<
         arg1: *mut ipsq_t,
         arg2: *mut queue_t,
         arg3: *mut mblk_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
     ),
 >;
 extern "C" {
@@ -23563,7 +23590,7 @@ extern "C" {
         arg1: ipaddr_t,
         arg2: *mut iulp_t,
         arg3: *mut ip_stack_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn dce_update_uinfo_v6(
@@ -23571,7 +23598,7 @@ extern "C" {
         arg2: uint_t,
         arg3: *mut iulp_t,
         arg4: *mut ip_stack_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn dce_update_uinfo(
@@ -23579,7 +23606,7 @@ extern "C" {
         arg2: uint_t,
         arg3: *mut iulp_t,
         arg4: *mut ip_stack_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn dce_increment_generation(arg1: *mut dce_t);
@@ -23627,7 +23654,8 @@ extern "C" {
     ) -> ip_laddr_t;
 }
 extern "C" {
-    pub fn ip_laddr_fanout_insert(arg1: *mut conn_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_laddr_fanout_insert(arg1: *mut conn_t)
+        -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_verify_src(
@@ -23640,7 +23668,7 @@ extern "C" {
     pub fn ip_verify_ire(
         arg1: *mut mblk_t,
         arg2: *mut ip_xmit_attr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_xmit_attr_to_mblk(arg1: *mut ip_xmit_attr_t) -> *mut mblk_t;
@@ -23671,18 +23699,18 @@ extern "C" {
 }
 extern "C" {
     pub fn inet_ntop(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: *const illumos_ddi_dki::c_void,
-        arg3: *mut illumos_ddi_dki::c_char,
-        arg4: illumos_ddi_dki::c_int,
-    ) -> *mut illumos_ddi_dki::c_char;
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: *const illumos_sys_hdrs::c_void,
+        arg3: *mut illumos_sys_hdrs::c_char,
+        arg4: illumos_sys_hdrs::c_int,
+    ) -> *mut illumos_sys_hdrs::c_char;
 }
 extern "C" {
     pub fn inet_pton(
-        arg1: illumos_ddi_dki::c_int,
-        arg2: *mut illumos_ddi_dki::c_char,
-        arg3: *mut illumos_ddi_dki::c_void,
-    ) -> illumos_ddi_dki::c_int;
+        arg1: illumos_sys_hdrs::c_int,
+        arg2: *mut illumos_sys_hdrs::c_char,
+        arg3: *mut illumos_sys_hdrs::c_void,
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub static mut sin_null: sin_t;
@@ -23870,11 +23898,11 @@ pub struct ip2mac {
     pub ip2mac_ifindex: uint_t,
 }
 pub type ip2mac_t = ip2mac;
-pub type ip2mac_id_t = *mut illumos_ddi_dki::c_void;
+pub type ip2mac_id_t = *mut illumos_sys_hdrs::c_void;
 pub type ip2mac_callback_t = ::core::option::Option<
     unsafe extern "C" fn(
         arg1: *mut ip2mac_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     ),
 >;
 extern "C" {
@@ -23882,7 +23910,7 @@ extern "C" {
         arg1: uint_t,
         arg2: *mut ip2mac_t,
         arg3: ip2mac_callback_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
         arg5: zoneid_t,
     ) -> ip2mac_id_t;
 }
@@ -23890,16 +23918,16 @@ extern "C" {
     pub fn ip2mac_cancel(
         arg1: ip2mac_id_t,
         arg2: zoneid_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ncec_cb_s {
     pub ncec_cb_node: list_node_t,
-    pub ncec_cb_id: *mut illumos_ddi_dki::c_void,
+    pub ncec_cb_id: *mut illumos_sys_hdrs::c_void,
     pub ncec_cb_flags: u32,
     pub ncec_cb_func: ip2mac_callback_t,
-    pub ncec_cb_arg: *mut illumos_ddi_dki::c_void,
+    pub ncec_cb_arg: *mut illumos_sys_hdrs::c_void,
 }
 pub type ncec_cb_t = ncec_cb_s;
 #[repr(C)]
@@ -23918,7 +23946,7 @@ pub struct ncec_s {
     pub ncec_last: u64,
     pub ncec_refcnt: u32,
     pub ncec_lock: kmutex_t,
-    pub ncec_unsolicit_count: illumos_ddi_dki::c_int,
+    pub ncec_unsolicit_count: illumos_sys_hdrs::c_int,
     pub ncec_timeout_id: timeout_id_t,
     pub ncec_ipversion: uchar_t,
     pub ncec_defense_count: uint_t,
@@ -23951,7 +23979,7 @@ pub struct nce_s {
 pub struct ndp_g_s {
     pub ndp_g_lock: kmutex_t,
     pub nce_hash_tbl: [*mut ncec_t; 256usize],
-    pub ndp_g_walker: illumos_ddi_dki::c_int,
+    pub ndp_g_walker: illumos_sys_hdrs::c_int,
     pub ndp_g_walker_cleanup: boolean_t,
 }
 pub type ndp_g_t = ndp_g_s;
@@ -23961,13 +23989,16 @@ pub struct nce_hw_map_t {
     pub hwm_addr: ipaddr_t,
     pub hwm_hwlen: uint_t,
     pub hwm_hwaddr: *mut uchar_t,
-    pub hwm_flags: illumos_ddi_dki::c_int,
+    pub hwm_flags: illumos_sys_hdrs::c_int,
 }
 pub type ncec_walk_cb_t = ::core::option::Option<
-    unsafe extern "C" fn(arg1: *mut ncec_t, arg2: *mut illumos_ddi_dki::c_void),
+    unsafe extern "C" fn(
+        arg1: *mut ncec_t,
+        arg2: *mut illumos_sys_hdrs::c_void,
+    ),
 >;
 extern "C" {
-    pub fn ip_nce_reclaim(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn ip_nce_reclaim(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
     pub fn ncec_delete(arg1: *mut ncec_t);
@@ -23975,7 +24006,7 @@ extern "C" {
 extern "C" {
     pub fn ncec_delete_per_ill(
         arg1: *mut ncec_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
@@ -23984,8 +24015,8 @@ extern "C" {
 extern "C" {
     pub fn ndp_get_option(
         arg1: *mut nd_opt_hdr_t,
-        arg2: illumos_ddi_dki::c_int,
-        arg3: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     ) -> *mut nd_opt_hdr_t;
 }
 extern "C" {
@@ -24034,7 +24065,7 @@ extern "C" {
     pub fn ndp_nce_init(
         arg1: *mut ill_t,
         arg2: *const in6_addr_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     ) -> *mut nce_t;
 }
 extern "C" {
@@ -24049,28 +24080,28 @@ extern "C" {
     pub fn ndp_query(
         arg1: *mut ill_t,
         arg2: *mut lif_nd_req_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ndp_sioc_update(
         arg1: *mut ill_t,
         arg2: *mut lif_nd_req_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ndp_verify_optlen(
         arg1: *mut nd_opt_hdr_t,
-        arg2: illumos_ddi_dki::c_int,
+        arg2: illumos_sys_hdrs::c_int,
     ) -> boolean_t;
 }
 extern "C" {
-    pub fn nce_timer(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn nce_timer(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
     pub fn ncec_walk(
         arg1: *mut ill_t,
         arg2: ncec_walk_cb_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_stack_t,
     );
 }
@@ -24079,7 +24110,7 @@ extern "C" {
         arg1: *mut ndp_g_t,
         arg2: *mut ill_t,
         arg3: ncec_walk_cb_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
         arg5: boolean_t,
     );
 }
@@ -24105,7 +24136,7 @@ extern "C" {
 extern "C" {
     pub fn nce_update_hw_changed(
         arg1: *mut ncec_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
@@ -24117,7 +24148,7 @@ extern "C" {
         arg5: u16,
         arg6: u16,
         arg7: *mut *mut nce_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn nce_lookup_then_add_v4(
@@ -24128,7 +24159,7 @@ extern "C" {
         arg5: u16,
         arg6: u16,
         arg7: *mut *mut nce_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn nce_cmp_ll_addr(
@@ -24187,8 +24218,8 @@ extern "C" {
         arg2: *mut ipif_t,
         arg3: *mut ip_stack_t,
         arg4: *mut uchar_t,
-        arg5: illumos_ddi_dki::c_int,
-        arg6: illumos_ddi_dki::c_int,
+        arg5: illumos_sys_hdrs::c_int,
+        arg6: illumos_sys_hdrs::c_int,
     );
 }
 extern "C" {
@@ -24207,7 +24238,7 @@ extern "C" {
     pub fn nce_walk(
         arg1: *mut ill_t,
         arg2: pfi_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
     );
 }
 extern "C" {
@@ -24218,7 +24249,7 @@ extern "C" {
         arg1: *mut ipsq_t,
         arg2: *mut queue_t,
         arg3: *mut mblk_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
     );
 }
 #[repr(C)]
@@ -24227,11 +24258,11 @@ pub struct ire_ftable_args_s {
     pub ift_addr_v6: in6_addr_t,
     pub ift_mask_v6: in6_addr_t,
     pub ift_gateway_v6: in6_addr_t,
-    pub ift_type: illumos_ddi_dki::c_int,
+    pub ift_type: illumos_sys_hdrs::c_int,
     pub ift_ill: *const ill_t,
     pub ift_zoneid: zoneid_t,
     pub ift_tsl: *const ts_label_t,
-    pub ift_flags: illumos_ddi_dki::c_int,
+    pub ift_flags: illumos_sys_hdrs::c_int,
     pub ift_best_ire: *mut ire_t,
 }
 pub type ire_ftable_args_t = ire_ftable_args_s;
@@ -24249,25 +24280,25 @@ extern "C" {
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
         arg3: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_ire_delete(
         arg1: *mut queue_t,
         arg2: *mut mblk_t,
         arg3: *mut cred_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
-    pub fn ip_ire_reclaim(arg1: *mut illumos_ddi_dki::c_void);
+    pub fn ip_ire_reclaim(arg1: *mut illumos_sys_hdrs::c_void);
 }
 extern "C" {
-    pub fn ip_mask_to_plen(arg1: ipaddr_t) -> illumos_ddi_dki::c_int;
+    pub fn ip_mask_to_plen(arg1: ipaddr_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_mask_to_plen_v6(
         arg1: *const in6_addr_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_add(arg1: *mut ire_t) -> *mut ire_t;
@@ -24279,7 +24310,7 @@ extern "C" {
     pub fn ire_atomic_start(
         irb_ptr: *mut irb_t,
         ire: *mut ire_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_atomic_end(irb_ptr: *mut irb_t, ire: *mut ire_t);
@@ -24331,7 +24362,7 @@ extern "C" {
         arg8: uint_t,
         arg9: *mut tsol_gc_t,
         arg10: *mut ip_stack_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_init_v6(
@@ -24345,7 +24376,7 @@ extern "C" {
         arg8: uint_t,
         arg9: *mut tsol_gc_t,
         arg10: *mut ip_stack_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_init_common(
@@ -24357,7 +24388,7 @@ extern "C" {
         arg6: uchar_t,
         arg7: *mut tsol_gc_t,
         arg8: *mut ip_stack_t,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_create_v6(
@@ -24407,21 +24438,21 @@ extern "C" {
     pub fn ire_determine_nce_capable(arg1: *mut ire_t) -> boolean_t;
 }
 extern "C" {
-    pub fn ire_flush_cache_v4(arg1: *mut ire_t, arg2: illumos_ddi_dki::c_int);
+    pub fn ire_flush_cache_v4(arg1: *mut ire_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
-    pub fn ire_flush_cache_v6(arg1: *mut ire_t, arg2: illumos_ddi_dki::c_int);
+    pub fn ire_flush_cache_v6(arg1: *mut ire_t, arg2: illumos_sys_hdrs::c_int);
 }
 extern "C" {
     pub fn ire_ftable_lookup_v4(
         arg1: ipaddr_t,
         arg2: ipaddr_t,
         arg3: ipaddr_t,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: *const ill_t,
         arg6: zoneid_t,
         arg7: *const ts_label_s,
-        arg8: illumos_ddi_dki::c_int,
+        arg8: illumos_sys_hdrs::c_int,
         arg9: u32,
         arg10: *mut ip_stack_t,
         arg11: *mut uint_t,
@@ -24432,11 +24463,11 @@ extern "C" {
         arg1: *const in6_addr_t,
         arg2: *const in6_addr_t,
         arg3: *const in6_addr_t,
-        arg4: illumos_ddi_dki::c_int,
+        arg4: illumos_sys_hdrs::c_int,
         arg5: *const ill_t,
         arg6: zoneid_t,
         arg7: *const ts_label_s,
-        arg8: illumos_ddi_dki::c_int,
+        arg8: illumos_sys_hdrs::c_int,
         arg9: u32,
         arg10: *mut ip_stack_t,
         arg11: *mut uint_t,
@@ -24527,7 +24558,7 @@ extern "C" {
     pub fn ire_recv_forward_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24535,7 +24566,7 @@ extern "C" {
     pub fn ire_recv_noroute_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24543,7 +24574,7 @@ extern "C" {
     pub fn ire_recv_broadcast_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24551,7 +24582,7 @@ extern "C" {
     pub fn ire_recv_multicast_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24559,7 +24590,7 @@ extern "C" {
     pub fn ire_recv_multirt_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24567,7 +24598,7 @@ extern "C" {
     pub fn ire_recv_loopback_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24575,7 +24606,7 @@ extern "C" {
     pub fn ire_recv_local_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24583,7 +24614,7 @@ extern "C" {
     pub fn ire_recv_noaccept_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24591,7 +24622,7 @@ extern "C" {
     pub fn ire_recv_forward_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24599,7 +24630,7 @@ extern "C" {
     pub fn ire_recv_noroute_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24607,7 +24638,7 @@ extern "C" {
     pub fn ire_recv_multicast_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24615,7 +24646,7 @@ extern "C" {
     pub fn ire_recv_multirt_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24623,7 +24654,7 @@ extern "C" {
     pub fn ire_recv_loopback_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24631,7 +24662,7 @@ extern "C" {
     pub fn ire_recv_local_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24639,7 +24670,7 @@ extern "C" {
     pub fn ire_recv_noaccept_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_recv_attr_t,
     );
 }
@@ -24780,100 +24811,100 @@ extern "C" {
     pub fn ire_send_local_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_send_multirt_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_send_noroute_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_send_multicast_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_send_broadcast_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_send_wire_v4(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_send_local_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_send_multirt_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_send_noroute_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_send_multicast_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_send_wire_v6(
         arg1: *mut ire_t,
         arg2: *mut mblk_t,
-        arg3: *mut illumos_ddi_dki::c_void,
+        arg3: *mut illumos_sys_hdrs::c_void,
         arg4: *mut ip_xmit_attr_t,
         arg5: *mut u32,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ire_to_nce_pkt(arg1: *mut ire_t, arg2: *mut mblk_t) -> *mut nce_t;
@@ -24895,7 +24926,7 @@ extern "C" {
         arg6: zoneid_t,
         arg7: zoneid_t,
         arg8: *mut usize,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_postfrag_loopcheck(
@@ -24907,7 +24938,7 @@ extern "C" {
         arg6: zoneid_t,
         arg7: zoneid_t,
         arg8: *mut usize,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_postfrag_multirt_v4(
@@ -24919,7 +24950,7 @@ extern "C" {
         arg6: zoneid_t,
         arg7: zoneid_t,
         arg8: *mut usize,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_postfrag_multirt_v6(
@@ -24931,7 +24962,7 @@ extern "C" {
         arg6: zoneid_t,
         arg7: zoneid_t,
         arg8: *mut usize,
-    ) -> illumos_ddi_dki::c_int;
+    ) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_postfrag_loopback(
@@ -24943,14 +24974,14 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn ire_revalidate_nce(arg1: *mut ire_t) -> illumos_ddi_dki::c_int;
+    pub fn ire_revalidate_nce(arg1: *mut ire_t) -> illumos_sys_hdrs::c_int;
 }
 extern "C" {
     pub fn ip_select_route_pkt(
         arg1: *mut mblk_t,
         arg2: *mut ip_xmit_attr_t,
         arg3: *mut uint_t,
-        arg4: *mut illumos_ddi_dki::c_int,
+        arg4: *mut illumos_sys_hdrs::c_int,
         arg5: *mut boolean_t,
     ) -> *mut ire_t;
 }
@@ -24961,7 +24992,7 @@ extern "C" {
         arg3: *mut ip_xmit_attr_t,
         arg4: *mut uint_t,
         arg5: *mut in6_addr_t,
-        arg6: *mut illumos_ddi_dki::c_int,
+        arg6: *mut illumos_sys_hdrs::c_int,
         arg7: *mut boolean_t,
     ) -> *mut ire_t;
 }
@@ -24972,7 +25003,7 @@ extern "C" {
         arg3: *mut ip_xmit_attr_t,
         arg4: *mut uint_t,
         arg5: *mut ipaddr_t,
-        arg6: *mut illumos_ddi_dki::c_int,
+        arg6: *mut illumos_sys_hdrs::c_int,
         arg7: *mut boolean_t,
     ) -> *mut ire_t;
 }
@@ -24983,14 +25014,14 @@ extern "C" {
         arg3: *mut ip_xmit_attr_t,
         arg4: *mut uint_t,
         arg5: *mut in6_addr_t,
-        arg6: *mut illumos_ddi_dki::c_int,
+        arg6: *mut illumos_sys_hdrs::c_int,
         arg7: *mut boolean_t,
     ) -> *mut ire_t;
 }
 extern "C" {
     pub fn ire_walk(
         arg1: pfv_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: *mut ip_stack_t,
     );
 }
@@ -24999,14 +25030,14 @@ extern "C" {
         arg1: uint_t,
         arg2: uint_t,
         arg3: pfv_t,
-        arg4: *mut illumos_ddi_dki::c_void,
+        arg4: *mut illumos_sys_hdrs::c_void,
         arg5: *mut ill_t,
     );
 }
 extern "C" {
     pub fn ire_walk_v4(
         arg1: pfv_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: zoneid_t,
         arg4: *mut ip_stack_t,
     );
@@ -25016,7 +25047,7 @@ extern "C" {
         match_flags: uint_t,
         ire_type: uint_t,
         func: pfv_t,
-        arg: *mut illumos_ddi_dki::c_void,
+        arg: *mut illumos_sys_hdrs::c_void,
         ftbl_sz: size_t,
         htbl_sz: size_t,
         ipftbl: *mut *mut irb_t,
@@ -25028,7 +25059,7 @@ extern "C" {
 extern "C" {
     pub fn ire_walk_v6(
         arg1: pfv_t,
-        arg2: *mut illumos_ddi_dki::c_void,
+        arg2: *mut illumos_sys_hdrs::c_void,
         arg3: zoneid_t,
         arg4: *mut ip_stack_t,
     );
@@ -25039,11 +25070,11 @@ extern "C" {
         arg2: ipaddr_t,
         arg3: ipaddr_t,
         arg4: ipaddr_t,
-        arg5: illumos_ddi_dki::c_int,
+        arg5: illumos_sys_hdrs::c_int,
         arg6: *const ill_t,
         arg7: zoneid_t,
         arg8: *const ts_label_s,
-        arg9: illumos_ddi_dki::c_int,
+        arg9: illumos_sys_hdrs::c_int,
     ) -> boolean_t;
 }
 extern "C" {
@@ -25052,18 +25083,18 @@ extern "C" {
         arg2: *const in6_addr_t,
         arg3: *const in6_addr_t,
         arg4: *const in6_addr_t,
-        arg5: illumos_ddi_dki::c_int,
+        arg5: illumos_sys_hdrs::c_int,
         arg6: *const ill_t,
         arg7: zoneid_t,
         arg8: *const ts_label_t,
-        arg9: illumos_ddi_dki::c_int,
+        arg9: illumos_sys_hdrs::c_int,
     ) -> boolean_t;
 }
 extern "C" {
     pub fn arp_nce_init(
         arg1: *mut ill_t,
         arg2: in_addr_t,
-        arg3: illumos_ddi_dki::c_int,
+        arg3: illumos_sys_hdrs::c_int,
     ) -> *mut nce_s;
 }
 extern "C" {
@@ -25415,10 +25446,10 @@ pub type __builtin_va_list = [__va_list_tag; 1usize];
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct __va_list_tag {
-    pub gp_offset: illumos_ddi_dki::c_uint,
-    pub fp_offset: illumos_ddi_dki::c_uint,
-    pub overflow_arg_area: *mut illumos_ddi_dki::c_void,
-    pub reg_save_area: *mut illumos_ddi_dki::c_void,
+    pub gp_offset: illumos_sys_hdrs::c_uint,
+    pub fp_offset: illumos_sys_hdrs::c_uint,
+    pub overflow_arg_area: *mut illumos_sys_hdrs::c_void,
+    pub reg_save_area: *mut illumos_sys_hdrs::c_void,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

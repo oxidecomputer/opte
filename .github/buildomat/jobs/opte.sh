@@ -26,8 +26,8 @@ ptime -m cargo fmt -- --check
 header "analyze std + api"
 ptime -m cargo check
 
-header "analyze no_std + engine"
-ptime -m cargo check --no-default-features --features engine
+header "analyze no_std + engine + kernel"
+ptime -m cargo check --no-default-features --features engine,kernel
 
 header "test"
 ptime -m cargo test

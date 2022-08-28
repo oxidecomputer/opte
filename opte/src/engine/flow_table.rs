@@ -17,7 +17,7 @@ cfg_if! {
         use alloc::collections::BTreeMap;
         use alloc::string::{String, ToString};
         use alloc::vec::Vec;
-        use illumos_ddi_dki::uintptr_t;
+        use illumos_sys_hdrs::uintptr_t;
         use super::rule::flow_id_sdt_arg;
     } else {
         use std::collections::BTreeMap;

@@ -22,7 +22,7 @@ use core::mem;
 use core::num::NonZeroU32;
 use core::result;
 use cstr_core::CString;
-use illumos_ddi_dki::c_char;
+use illumos_sys_hdrs::c_char;
 use opte_api::{Direction, Ipv4Addr};
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +31,7 @@ cfg_if! {
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
-        use illumos_ddi_dki::uintptr_t;
+        use illumos_sys_hdrs::uintptr_t;
     } else {
         use std::string::{String, ToString};
         use std::sync::Arc;

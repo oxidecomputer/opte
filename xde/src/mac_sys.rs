@@ -6,7 +6,7 @@
 
 // stuff we need from mac
 
-use illumos_ddi_dki::{
+use illumos_sys_hdrs::{
     boolean_t, c_char, c_int, c_uint, c_void, dev_info, dev_ops, mblk_t,
     queue_t, size_t, uintptr_t,
 };

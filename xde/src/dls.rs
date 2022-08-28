@@ -7,7 +7,7 @@
 // stuff we need from dls
 
 use crate::mac;
-use illumos_ddi_dki::{boolean_t, c_int, datalink_id_t, zoneid_t};
+use illumos_sys_hdrs::{boolean_t, c_int, datalink_id_t, zoneid_t};
 
 extern "C" {
     pub fn dls_devnet_create(

@@ -4,4 +4,6 @@ version = "0.1.0"
 authors = ["Ryan Zezeski <ryan@oxide.computer>"]
 edition = "2021"
 
-[dependencies]
+[features]
+default = []
+kernel = []

@@ -13,7 +13,7 @@ use opte_api::Direction;
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::String;
-        use illumos_ddi_dki::uintptr_t;
+        use illumos_sys_hdrs::uintptr_t;
         use super::rule::flow_id_sdt_arg;
     } else {
         use std::string::String;

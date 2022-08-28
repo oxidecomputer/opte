@@ -12,6 +12,7 @@ edition = "2021"
 default = ["api", "std"]
 api = ["opte/api"]
 engine = ["api", "opte/engine"]
+kernel = ["opte/kernel"]
 std = ["opte/std"]
 usdt = ["opte/usdt", "dep:usdt"]
 

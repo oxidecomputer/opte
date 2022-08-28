@@ -18,10 +18,8 @@ dtrace:: A collection of DTrace scripts for common tracing and
 diagnostic processes useful for understanding the runtime behavior of
 OPTE.
 
-illumos-ddi-dki:: A raw interface to the illumos DDI/DKI APIs.
-
-illumos-sys-hdrs:: A raw interface to various illumos `uts/common/sys`
-headers.
+illumos-sys-hdrs:: A raw interface to the types and function
+prototypes in the illumos `uts/common/sys` headers.
 
 opte:: The implementation of the generic bits of OPTE. This acts as
 both a library and framework which is used as the basis for

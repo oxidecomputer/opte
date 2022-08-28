@@ -27,7 +27,7 @@ use super::tcp::TcpMeta;
 use super::udp::UdpMeta;
 use core::fmt::{self, Debug, Display};
 use cstr_core::CString;
-use illumos_ddi_dki::c_char;
+use illumos_sys_hdrs::c_char;
 use opte_api::{Direction, MacAddr};
 use serde::{Deserialize, Serialize};
 use smoltcp::phy::ChecksumCapabilities as Csum;
@@ -39,7 +39,7 @@ cfg_if! {
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
-        use illumos_ddi_dki::uintptr_t;
+        use illumos_sys_hdrs::uintptr_t;
     } else {
         use std::boxed::Box;
         use std::string::{String, ToString};

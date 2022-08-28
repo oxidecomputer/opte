@@ -224,7 +224,7 @@ pub struct KernelLog {}
 #[cfg(all(not(feature = "std"), not(test)))]
 impl LogProvider for KernelLog {
     fn log(&self, level: LogLevel, msg: &str) {
-        use illumos_ddi_dki as ddi;
+        use illumos_sys_hdrs as ddi;
 
         let cmn_level = match level {
             LogLevel::Note => ddi::CE_NOTE,

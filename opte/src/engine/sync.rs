@@ -14,7 +14,7 @@ cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use core::cell::UnsafeCell;
         use core::ptr;
-        use illumos_ddi_dki::{
+        use illumos_sys_hdrs::{
             kmutex_t, krw_t, krw_type_t, krwlock_t, mutex_enter, mutex_exit,
             mutex_init, rw_enter, rw_exit, rw_init,
         };
@@ -23,7 +23,7 @@ cfg_if! {
     }
 }
 
-use illumos_ddi_dki::kmutex_type_t;
+use illumos_sys_hdrs::kmutex_type_t;
 
 /// Exposes the illumos mutex(9F) API in a safe manner. We name it
 /// `KMutex` (Kernel Mutex) on purpose. The API for a kernel mutex

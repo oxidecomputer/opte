@@ -8,6 +8,7 @@ edition = "2021"
 default = ["api", "std"]
 api = []
 engine = ["api"]
+kernel = ["illumos-sys-hdrs/kernel"]
 # This feature indicates that OPTE is being built with std. This is
 # mostly useful to consumers of the API, providing convenient methods
 # for working with the API types in a std context.
@@ -22,7 +23,6 @@ cfg-if = "0.1"
 #
 cstr_core = "0.2.3"
 heapless = "0.7.9"
-illumos-ddi-dki = { path = "../illumos-ddi-dki" }
 illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
 opte-api = { path = "../opte-api", default-features = false }
 postcard = { version = "0.7.0", features = ["alloc"], default-features = false }

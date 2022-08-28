@@ -3,9 +3,14 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Copyright 2022 Oxide Computer Company
-
+#![feature(extern_types)]
 #![allow(non_camel_case_types)]
 #![no_std]
+
+#[cfg(feature = "kernel")]
+pub mod kernel;
+#[cfg(feature = "kernel")]
+pub use kernel::*;
 
 use core::ptr;
 
@@ -57,6 +62,25 @@ pub const ENOBUFS: c_int = 132;
 // ======================================================================
 pub const MAXLINKNAMELEN: c_int = 32;
 pub const MAXNAMELEN: c_int = 256;
+
+// ======================================================================
+// uts/common/sys/mutex.h
+// ======================================================================
+#[repr(C)]
+pub enum kmutex_type_t {
+    MUTEX_ADAPTIVE = 0, // spin if owner is running, otherwise block
+    MUTEX_SPIN = 1,     // block interrupts and spin
+    MUTEX_DRIVER = 4,   // driver (DDI) mutex
+    MUTEX_DEFAULT = 6,  // kernel default mutex
+}
+
+// This type is opaque to us, we just need to define it here to make
+// sure it's a sized type, and that size should be 64-bit to match the
+// kernel.
+#[repr(C)]
+pub struct kmutex_t {
+    pub _opaque: u64,
+}
 
 // ======================================================================
 // uts/common/sys/stream.h
