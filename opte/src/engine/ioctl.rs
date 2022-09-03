@@ -9,6 +9,7 @@
 //! XXX This stuff needs to be moved to oxide-api.
 use super::flow_table::FlowEntryDump;
 use super::layer;
+use super::packet::InnerFlowId;
 use super::port::Port;
 use super::rule;
 use core::fmt::Debug;
@@ -45,8 +46,8 @@ pub struct DumpLayerResp {
     pub name: String,
     pub rules_in: Vec<(layer::RuleId, rule::RuleDump)>,
     pub rules_out: Vec<(layer::RuleId, rule::RuleDump)>,
-    pub ft_in: Vec<(layer::InnerFlowId, FlowEntryDump)>,
-    pub ft_out: Vec<(layer::InnerFlowId, FlowEntryDump)>,
+    pub ft_in: Vec<(InnerFlowId, FlowEntryDump)>,
+    pub ft_out: Vec<(InnerFlowId, FlowEntryDump)>,
 }
 
 impl CmdOk for DumpLayerResp {}
@@ -88,10 +89,10 @@ pub struct DumpUftReq {
 pub struct DumpUftResp {
     pub uft_in_limit: u32,
     pub uft_in_num_flows: u32,
-    pub uft_in: Vec<(layer::InnerFlowId, FlowEntryDump)>,
+    pub uft_in: Vec<(InnerFlowId, FlowEntryDump)>,
     pub uft_out_limit: u32,
     pub uft_out_num_flows: u32,
-    pub uft_out: Vec<(layer::InnerFlowId, FlowEntryDump)>,
+    pub uft_out: Vec<(InnerFlowId, FlowEntryDump)>,
 }
 
 impl CmdOk for DumpUftResp {}
@@ -103,7 +104,7 @@ pub struct DumpTcpFlowsReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpTcpFlowsResp {
-    pub flows: Vec<(layer::InnerFlowId, FlowEntryDump)>,
+    pub flows: Vec<(InnerFlowId, FlowEntryDump)>,
 }
 
 impl CmdOk for DumpTcpFlowsResp {}

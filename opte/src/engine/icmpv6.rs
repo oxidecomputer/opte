@@ -6,10 +6,9 @@
 
 //! Internet Control Message Protocol version 6
 
-use super::ether::{self, EtherHdr, EtherMeta, ETHER_HDR_SZ};
+use super::ether::{self, EtherHdr, EtherMeta};
 use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6Meta;
-use super::ip6::IPV6_HDR_SZ;
 use super::packet::{Packet, PacketMeta, PacketRead, PacketReader, Parsed};
 use super::rule::{
     AllowOrDeny, DataPredicate, EtherAddrMatch, GenErr, GenPacketResult,
@@ -165,7 +164,7 @@ impl HairpinAction for Icmpv6EchoReply {
         });
 
         let mut pkt_bytes =
-            Vec::with_capacity(ETHER_HDR_SZ + IPV6_HDR_SZ + reply_len);
+            Vec::with_capacity(EtherHdr::SIZE + Ipv6Hdr::SIZE + reply_len);
         pkt_bytes.extend_from_slice(&eth.as_bytes());
         pkt_bytes.extend_from_slice(&ip.as_bytes());
         pkt_bytes.extend_from_slice(&ulp_body);

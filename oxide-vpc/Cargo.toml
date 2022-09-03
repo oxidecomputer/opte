@@ -14,6 +14,16 @@ api = ["opte/api"]
 engine = ["api", "opte/engine"]
 kernel = ["opte/kernel"]
 std = ["opte/std"]
+#
+# XXX: This is a hack in order for integration tests to make use of
+# test-only methods.
+#
+# For a method/function to be used by both unit and integration tests
+# mark them with the following:
+#
+# #[cfg(any(feature = "test-help", test))]
+#
+test-help = []
 usdt = ["opte/usdt", "dep:usdt"]
 
 [dependencies]
@@ -61,5 +71,5 @@ ctor = "0.1.22"
 #
 # https://github.com/rust-lang/cargo/issues/2911
 #
-oxide-vpc = { path = ".", features = ["engine"] }
+oxide-vpc = { path = ".", features = ["engine", "test-help"] }
 pcap-parser = { version = "0.11.1", features = ["serialize"] }

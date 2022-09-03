@@ -34,7 +34,6 @@ cfg_if! {
 
 pub const IPV6_HDR_VSN_MASK: u8 = 0xF0;
 pub const IPV6_HDR_VSN_SHIFT: u8 = 4;
-pub const IPV6_HDR_SZ: usize = smoltcp::wire::IPV6_HEADER_LEN;
 pub const IPV6_VERSION: u8 = 6;
 pub const DDM_HEADER_ID: u8 = 0xFE;
 
@@ -157,6 +156,9 @@ macro_rules! assert_ip6 {
 }
 
 impl Ipv6Hdr {
+    // This is for the base header size only.
+    pub const SIZE: usize = smoltcp::wire::IPV6_HEADER_LEN;
+
     #[cfg(any(feature = "std", test))]
     pub fn new_tcp<A: Into<Ipv6Addr>>(
         tcp: &super::tcp::TcpHdr,
@@ -205,7 +207,7 @@ impl Ipv6Hdr {
     /// Return the length of the header portion of the packet, including
     /// extension headers
     pub fn hdr_len(&self) -> usize {
-        IPV6_HDR_SZ + self.ext_len()
+        Ipv6Hdr::SIZE + self.ext_len()
     }
 
     /// Return the first next header of the packet, which may be the upper-layer
@@ -265,7 +267,7 @@ impl Ipv6Hdr {
     /// Return the total length of the packet, including the base header, any
     /// extension headers, and the payload itself.
     pub fn total_len(&self) -> u16 {
-        self.payload_len + IPV6_HDR_SZ as u16
+        self.payload_len + Ipv6Hdr::SIZE as u16
     }
 
     /// Return the source IPv6 address
@@ -288,7 +290,7 @@ impl Header for Ipv6Hdr {
         R: PacketRead<'a>,
     {
         // Parse the base IPv6 header
-        let buf = rdr.slice(IPV6_HDR_SZ)?;
+        let buf = rdr.slice(Ipv6Hdr::SIZE)?;
         let base_header = Ipv6Packet::new_unchecked(buf);
         let vsn_class_flow = [buf[0], buf[1], buf[2], buf[3]];
         let payload_len = base_header.payload_len();
@@ -314,7 +316,8 @@ impl Header for Ipv6Hdr {
                     extension_headers.extend_from_slice(&buf[..n_bytes]);
                     next_header = header.next_header();
 
-                    // Put back any bytes in the segment not needed for this header.
+                    // Put back any bytes in the segment not needed
+                    // for this header.
                     rdr.seek_back(buf.len() - n_bytes)?;
                 }
                 IpProtocol::Ipv6Route => {
@@ -428,7 +431,6 @@ pub(crate) mod test {
     use super::Ipv6Cidr;
     use super::Ipv6Hdr;
     use super::DDM_HEADER_ID;
-    use super::IPV6_HDR_SZ;
     use crate::engine::headers::Header;
     use crate::engine::packet::Initialized;
     use crate::engine::packet::Packet;
@@ -450,7 +452,7 @@ pub(crate) mod test {
 
     // Test packet size and payload length
     const BUFFER_LEN: usize = 512;
-    const PAYLOAD_LEN: usize = 512 - IPV6_HDR_SZ;
+    const PAYLOAD_LEN: usize = 512 - Ipv6Hdr::SIZE;
     pub(crate) const SUPPORTED_EXTENSIONS: [IpProtocol; 4] = [
         IpProtocol::HopByHop,
         IpProtocol::Ipv6Route,
@@ -535,7 +537,7 @@ pub(crate) mod test {
         let mut data = vec![0; BUFFER_LEN];
         let mut header_start = 0;
         let mut next_header_pos = 6;
-        let mut header_end = IPV6_HDR_SZ;
+        let mut header_end = Ipv6Hdr::SIZE;
         let mut buf = &mut data[header_start..];
 
         // The base header. The payload length is always the same, but the base
@@ -546,7 +548,7 @@ pub(crate) mod test {
 
         if extensions.is_empty() {
             // No extensions at all, just base header with a TCP ULP
-            return (buf.to_vec(), IPV6_HDR_SZ);
+            return (buf.to_vec(), Ipv6Hdr::SIZE);
         }
 
         let mut it = extensions.iter();
@@ -656,7 +658,7 @@ pub(crate) mod test {
         );
         assert_eq!(
             header.ext_len(),
-            header_end - IPV6_HDR_SZ,
+            header_end - Ipv6Hdr::SIZE,
             "Extension header size is incorrect",
         );
         assert_eq!(
@@ -666,7 +668,7 @@ pub(crate) mod test {
         );
         assert_eq!(
             header.total_len(),
-            (PAYLOAD_LEN + IPV6_HDR_SZ) as u16,
+            (PAYLOAD_LEN + Ipv6Hdr::SIZE) as u16,
             "Total packet length is not correct",
         );
     }

@@ -4,7 +4,7 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use super::layer::InnerFlowId;
+use super::packet::InnerFlowId;
 use crate::ddi::time::{Moment, MILLIS};
 use core::fmt;
 use core::num::NonZeroU32;
@@ -296,7 +296,7 @@ mod test {
     use super::*;
     use crate::engine::headers::IpAddr;
     use crate::engine::ip4::Protocol;
-    use crate::engine::layer::FLOW_ID_DEFAULT;
+    use crate::engine::packet::FLOW_ID_DEFAULT;
     use core::time::Duration;
 
     pub const FT_SIZE: Option<NonZeroU32> = NonZeroU32::new(16);

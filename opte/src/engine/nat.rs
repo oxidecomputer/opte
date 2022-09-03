@@ -7,7 +7,7 @@
 use super::ether::EtherMeta;
 use super::ip4::Ipv4Meta;
 use super::ip6::Ipv6Meta;
-use super::layer::InnerFlowId;
+use super::packet::{InnerFlowId, Packet, Parsed};
 use super::port::meta::ActionMeta;
 use super::rule::{
     self, ActionDesc, AllowOrDeny, DataPredicate, HdrTransform, Predicate,
@@ -63,6 +63,7 @@ impl StatefulAction for Nat {
     fn gen_desc(
         &self,
         _flow_id: &InnerFlowId,
+        _pkt: &Packet<Parsed>,
         _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
         let desc = NatDesc {
@@ -156,11 +157,11 @@ mod test {
 
     #[test]
     fn nat4_rewrite() {
-        use crate::engine::ether::{EtherMeta, ETHER_TYPE_IPV4};
+        use crate::engine::checksum::HeaderChecksum;
+        use crate::engine::ether::{EtherHdr, EtherType};
         use crate::engine::headers::{IpMeta, UlpMeta};
-        use crate::engine::ip4::Protocol;
-        use crate::engine::packet::{MetaGroup, PacketMeta};
-        use crate::engine::tcp::TcpMeta;
+        use crate::engine::ip4::{Ipv4Hdr, Protocol, UlpCsumOpt};
+        use crate::engine::tcp::TcpHdr;
         use opte_api::MacAddr;
 
         let priv_mac = MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x01]);
@@ -177,39 +178,26 @@ mod test {
         // ================================================================
         // Build the packet metadata
         // ================================================================
-        let ether = EtherMeta {
-            src: priv_mac,
-            dst: dest_mac,
-            ether_type: ETHER_TYPE_IPV4,
-        };
-        let ip = IpMeta::from(Ipv4Meta {
-            src: priv_ip,
-            dst: outside_ip,
-            proto: Protocol::TCP,
-        });
-        let ulp = UlpMeta::from(TcpMeta {
-            src: priv_port,
-            dst: outside_port,
-            flags: 0,
-            seq: 0,
-            ack: 0,
-        });
-
-        let mut pmo = PacketMeta {
-            outer: Default::default(),
-            inner: MetaGroup {
-                ether: Some(ether),
-                ip: Some(ip),
-                ulp: Some(ulp),
-                ..Default::default()
-            },
-        };
+        let body = vec![];
+        let mut tcp = TcpHdr::new(priv_port, outside_port);
+        let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, priv_ip, outside_ip);
+        ip4.compute_hdr_csum();
+        let tcp_csum =
+            ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+        tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+        let eth = EtherHdr::new(EtherType::Ipv4, priv_mac, dest_mac);
+        let mut bytes = vec![];
+        bytes.extend_from_slice(&eth.as_bytes());
+        bytes.extend_from_slice(&ip4.as_bytes());
+        bytes.extend_from_slice(&tcp.as_bytes());
+        bytes.extend_from_slice(&body);
+        let mut pkt = Packet::copy(&bytes).parse().unwrap();
 
         // ================================================================
         // Verify descriptor generation.
         // ================================================================
-        let flow_out = InnerFlowId::from(&pmo);
-        let desc = match nat.gen_desc(&flow_out, &mut ameta) {
+        let flow_out = InnerFlowId::from(pkt.meta());
+        let desc = match nat.gen_desc(&flow_out, &pkt, &mut ameta) {
             Ok(AllowOrDeny::Allow(desc)) => desc,
             _ => panic!("expected AllowOrDeny::Allow(desc) result"),
         };
@@ -218,6 +206,7 @@ mod test {
         // Verify outbound header transformation
         // ================================================================
         let out_ht = desc.gen_ht(Direction::Out);
+        let mut pmo = pkt.meta_mut();
         out_ht.run(&mut pmo).unwrap();
 
         let ether_meta = pmo.inner.ether.as_ref().unwrap();
@@ -245,34 +234,22 @@ mod test {
         // ================================================================
         // Verify inbound header transformation.
         // ================================================================
-        let ether = EtherMeta {
-            src: dest_mac,
-            dst: priv_mac,
-            ether_type: ETHER_TYPE_IPV4,
-        };
-        let ip = IpMeta::from(Ipv4Meta {
-            src: outside_ip,
-            dst: pub_ip,
-            proto: Protocol::TCP,
-        });
-        let ulp = UlpMeta::from(TcpMeta {
-            src: outside_port,
-            dst: priv_port,
-            flags: 0,
-            seq: 0,
-            ack: 0,
-        });
+        let body = vec![];
+        let mut tcp = TcpHdr::new(outside_port, priv_port);
+        let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, outside_ip, priv_ip);
+        ip4.compute_hdr_csum();
+        let tcp_csum =
+            ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+        tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+        let eth = EtherHdr::new(EtherType::Ipv4, dest_mac, priv_mac);
+        let mut bytes = vec![];
+        bytes.extend_from_slice(&eth.as_bytes());
+        bytes.extend_from_slice(&ip4.as_bytes());
+        bytes.extend_from_slice(&tcp.as_bytes());
+        bytes.extend_from_slice(&body);
+        let mut pkt = Packet::copy(&bytes).parse().unwrap();
 
-        let mut pmi = PacketMeta {
-            outer: Default::default(),
-            inner: MetaGroup {
-                ether: Some(ether),
-                ip: Some(ip),
-                ulp: Some(ulp),
-                ..Default::default()
-            },
-        };
-
+        let mut pmi = pkt.meta_mut();
         let in_ht = desc.gen_ht(Direction::In);
         in_ht.run(&mut pmi).unwrap();
 

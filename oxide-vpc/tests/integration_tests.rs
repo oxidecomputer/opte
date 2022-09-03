@@ -29,14 +29,14 @@ use opte::engine::arp::{
 };
 use opte::engine::checksum::HeaderChecksum;
 use opte::engine::ether::{
-    EtherHdr, EtherHdrRaw, EtherMeta, EtherType, ETHER_HDR_SZ, ETHER_TYPE_ARP,
+    EtherHdr, EtherHdrRaw, EtherMeta, EtherType, ETHER_TYPE_ARP,
     ETHER_TYPE_IPV4, ETHER_TYPE_IPV6,
 };
 use opte::engine::flow_table::FLOW_DEF_EXPIRE_SECS;
-use opte::engine::geneve::{self, Vni};
+use opte::engine::geneve::{self, GeneveHdr, Vni};
 use opte::engine::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
 use opte::engine::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol, UlpCsumOpt};
-use opte::engine::ip6::{Ipv6Addr, Ipv6Hdr, Ipv6Meta, IPV6_HDR_SZ};
+use opte::engine::ip6::{Ipv6Addr, Ipv6Hdr, Ipv6Meta};
 use opte::engine::packet::{
     Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
     Parsed,
@@ -58,6 +58,7 @@ use oxide_vpc::engine::overlay::{self, Virt2Phys};
 use oxide_vpc::engine::{arp, dhcp, firewall, icmp, icmpv6, nat, router};
 use pcap_parser::pcap::{self, LegacyPcapBlock, PcapHeader};
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
+use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
 use std::boxed::Box;
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
@@ -71,6 +72,10 @@ use ProcessResult::*;
 // This is the MAC address that OPTE uses to act as the virtual gateway.
 pub const GW_MAC_ADDR: MacAddr =
     MacAddr::from_const([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]);
+
+const VPC_ENCAP_SZ: usize =
+    EtherHdr::SIZE + Ipv6Hdr::SIZE + UdpHdr::SIZE + GeneveHdr::SIZE;
+const IP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::SIZE;
 
 // If we are running `cargo test --feature=usdt`, then make sure to
 // register the USDT probes before running any tests.
@@ -385,7 +390,7 @@ fn lab_cfg() -> VpcCfg {
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
         private_ip: "172.20.14.16".parse().unwrap(),
         gateway_ip: "172.20.14.1".parse().unwrap(),
-        snat_cfg: Some(SNat4Cfg {
+        snat: Some(SNat4Cfg {
             external_ip: "76.76.21.21".parse().unwrap(),
             ports: 1025..=4096,
         }),
@@ -493,7 +498,7 @@ fn g1_cfg() -> VpcCfg {
             vpc_subnet: "172.30.0.0/22".parse().unwrap(),
             private_ip: "172.30.0.5".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
-            snat_cfg: Some(SNat4Cfg {
+            snat: Some(SNat4Cfg {
                 external_ip: "10.77.77.13".parse().unwrap(),
                 ports: 1025..=4096,
             }),
@@ -503,7 +508,7 @@ fn g1_cfg() -> VpcCfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
             private_ip: "fd00::5".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
-            snat_cfg: Some(SNat6Cfg {
+            snat: Some(SNat6Cfg {
                 external_ip: "2001:db8::1".parse().unwrap(),
                 ports: 1025..=4096,
             }),
@@ -538,7 +543,7 @@ fn g2_cfg() -> VpcCfg {
             vpc_subnet: "172.30.0.0/22".parse().unwrap(),
             private_ip: "172.30.0.6".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
-            snat_cfg: Some(SNat4Cfg {
+            snat: Some(SNat4Cfg {
                 external_ip: "10.77.77.23".parse().unwrap(),
                 ports: 4096..=8192,
             }),
@@ -548,7 +553,7 @@ fn g2_cfg() -> VpcCfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
             private_ip: "fd00::5".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
-            snat_cfg: Some(SNat6Cfg {
+            snat: Some(SNat6Cfg {
                 external_ip: "2001:db8::1".parse().unwrap(),
                 ports: 1025..=4096,
             }),
@@ -949,6 +954,11 @@ fn add_remove_fw_rule() {
     update!(g1, ["incr:epoch", "decr:fw.rules_in"]);
 }
 
+enum IcmpEchoType {
+    Req,
+    Reply,
+}
+
 fn gen_icmp_echo_req(
     eth_src: MacAddr,
     eth_dst: MacAddr,
@@ -978,18 +988,47 @@ fn gen_icmpv4_echo_req(
     seq_no: u16,
     data: &[u8],
 ) -> Packet<Parsed> {
-    use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
+    let etype = IcmpEchoType::Req;
+    gen_icmp_echo(etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data)
+}
 
-    let req = Icmpv4Repr::EchoRequest { ident, seq_no, data };
-    let mut body_bytes = vec![0u8; req.buffer_len()];
-    let mut req_pkt = Icmpv4Packet::new_unchecked(&mut body_bytes);
-    let _ = req.emit(&mut req_pkt, &Default::default());
+fn gen_icmp_echo_reply(
+    eth_src: MacAddr,
+    eth_dst: MacAddr,
+    ip_src: Ipv4Addr,
+    ip_dst: Ipv4Addr,
+    ident: u16,
+    seq_no: u16,
+    data: &[u8],
+) -> Packet<Parsed> {
+    let etype = IcmpEchoType::Reply;
+    gen_icmp_echo(etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data)
+}
+
+fn gen_icmp_echo(
+    etype: IcmpEchoType,
+    eth_src: MacAddr,
+    eth_dst: MacAddr,
+    ip_src: Ipv4Addr,
+    ip_dst: Ipv4Addr,
+    ident: u16,
+    seq_no: u16,
+    data: &[u8],
+) -> Packet<Parsed> {
+    let icmp = match etype {
+        IcmpEchoType::Req => Icmpv4Repr::EchoRequest { ident, seq_no, data },
+        IcmpEchoType::Reply => Icmpv4Repr::EchoReply { ident, seq_no, data },
+    };
+    let mut icmp_bytes = vec![0u8; icmp.buffer_len()];
+    let mut icmp_pkt = Icmpv4Packet::new_unchecked(&mut icmp_bytes);
+    let _ = icmp.emit(&mut icmp_pkt, &Default::default());
+
     let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
         src: ip_src,
         dst: ip_dst,
         proto: Protocol::ICMP,
     });
-    ip4.set_total_len(ip4.hdr_len() as u16 + req.buffer_len() as u16);
+    ip4.set_total_len(ip4.hdr_len() as u16 + icmp.buffer_len() as u16);
     ip4.compute_hdr_csum();
     let eth = EtherHdr::from(&EtherMeta {
         dst: eth_dst,
@@ -998,10 +1037,10 @@ fn gen_icmpv4_echo_req(
     });
 
     let mut pkt_bytes =
-        Vec::with_capacity(ETHER_HDR_SZ + ip4.hdr_len() + req.buffer_len());
+        Vec::with_capacity(EtherHdr::SIZE + ip4.hdr_len() + icmp.buffer_len());
     pkt_bytes.extend_from_slice(&eth.as_bytes());
     pkt_bytes.extend_from_slice(&ip4.as_bytes());
-    pkt_bytes.extend_from_slice(&body_bytes);
+    pkt_bytes.extend_from_slice(&icmp_bytes);
     Packet::copy(&pkt_bytes).parse().unwrap()
 }
 
@@ -1038,7 +1077,7 @@ fn gen_icmpv6_echo_req(
     });
 
     let mut pkt_bytes =
-        Vec::with_capacity(ETHER_HDR_SZ + ip6.hdr_len() + req.buffer_len());
+        Vec::with_capacity(EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len());
     pkt_bytes.extend_from_slice(&eth.as_bytes());
     pkt_bytes.extend_from_slice(&ip6.as_bytes());
     pkt_bytes.extend_from_slice(&body_bytes);
@@ -1048,7 +1087,6 @@ fn gen_icmpv6_echo_req(
 // Verify that the guest can ping the virtual gateway.
 #[test]
 fn gateway_icmp4_ping() {
-    use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
     let g1_cfg = g1_cfg();
     let v2p = Arc::new(Virt2Phys::new());
     let mut ameta = ActionMeta::new();
@@ -1562,16 +1600,7 @@ fn guest_to_internet() {
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
-            assert_eq!(
-                ip4.src,
-                g1_cfg
-                    .ipv4_cfg()
-                    .unwrap()
-                    .snat_cfg
-                    .as_ref()
-                    .unwrap()
-                    .external_ip
-            );
+            assert_eq!(ip4.src, g1_cfg.snat().external_ip);
             assert_eq!(ip4.dst, dst_ip);
             assert_eq!(ip4.proto, Protocol::TCP);
         }
@@ -1583,23 +1612,242 @@ fn guest_to_internet() {
         UlpMeta::Tcp(tcp) => {
             assert_eq!(
                 tcp.src,
-                g1_cfg
-                    .ipv4_cfg()
-                    .unwrap()
-                    .snat_cfg
-                    .as_ref()
-                    .unwrap()
-                    .ports
-                    .clone()
-                    .rev()
-                    .next()
-                    .unwrap(),
+                g1_cfg.snat().ports.clone().rev().next().unwrap(),
             );
             assert_eq!(tcp.dst, 80);
         }
 
         ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
     }
+}
+
+// Verify that an ICMP Echo request has its identifier rewritten by
+// SNAT.
+#[test]
+fn snat_icmp4_echo_rewrite() {
+    let g1_cfg = g1_cfg();
+    let v2p = Arc::new(Virt2Phys::new());
+    let mut ameta = ActionMeta::new();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    g1.port.start();
+    set_state!(g1, PortState::Running);
+    let dst_ip: Ipv4Addr = "45.55.45.205".parse().unwrap();
+    let ident = 7;
+    let mut seq_no = 777;
+    let data = b"reunion\0";
+
+    // Add router entry that allows g1 to route to internet.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules_out"]);
+    let mapped_port = g1_cfg.snat().ports.clone().rev().next().unwrap();
+
+    // ================================================================
+    // Verify echo request rewrite.
+    // ================================================================
+    let mut pkt1 = gen_icmp_echo_req(
+        g1_cfg.private_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip.into(),
+        dst_ip.into(),
+        ident,
+        seq_no,
+        &data[..],
+    );
+
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+    incr!(
+        g1,
+        [
+            "fw.flows_out",
+            "fw.flows_in",
+            "nat.flows_out",
+            "nat.flows_in",
+            "uft.flows_out"
+        ]
+    );
+
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + IP_SZ);
+    assert_eq!(pkt1.body_seg(), 1);
+    let meta = pkt1.meta();
+
+    match meta.inner.ether.as_ref() {
+        Some(eth) => {
+            assert_eq!(eth.src, g1_cfg.private_mac);
+            assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
+            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
+        }
+
+        None => panic!("expected inner Ether header"),
+    }
+
+    match meta.inner.ip.as_ref().unwrap() {
+        IpMeta::Ip4(ip4) => {
+            assert_eq!(ip4.src, g1_cfg.snat().external_ip);
+            assert_eq!(ip4.dst, dst_ip);
+            assert_eq!(ip4.proto, Protocol::ICMP);
+        }
+
+        ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+    }
+
+    let body = pkt1.body_segs().unwrap()[0];
+    let icmp = Icmpv4Packet::new_checked(body).unwrap();
+    assert!(icmp.verify_checksum());
+    assert_eq!(icmp.echo_ident(), mapped_port);
+    assert_eq!(icmp.echo_seq_no(), seq_no);
+
+    // ================================================================
+    // Verify echo reply rewrite.
+    // ================================================================
+    let mut pkt2 = gen_icmp_echo_reply(
+        g1_cfg.boundary_services.mac,
+        g1_cfg.private_mac,
+        dst_ip,
+        g1_cfg.snat().external_ip,
+        mapped_port,
+        seq_no,
+        &data[..],
+    );
+
+    let res = g1.port.process(In, &mut pkt2, &mut ameta);
+    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+    incr!(g1, ["uft.flows_in"]);
+    assert_eq!(pkt2.body_offset(), IP_SZ);
+    assert_eq!(pkt2.body_seg(), 1);
+    let meta = pkt2.meta();
+
+    match meta.inner.ether.as_ref() {
+        Some(eth) => {
+            assert_eq!(eth.src, g1_cfg.boundary_services.mac);
+            assert_eq!(eth.dst, g1_cfg.private_mac);
+            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
+        }
+
+        None => panic!("expected inner Ether header"),
+    }
+
+    match meta.inner.ip.as_ref().unwrap() {
+        IpMeta::Ip4(ip4) => {
+            assert_eq!(ip4.src, dst_ip);
+            assert_eq!(ip4.dst, g1_cfg.ipv4().private_ip);
+            assert_eq!(ip4.proto, Protocol::ICMP);
+        }
+
+        ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+    }
+
+    let body = pkt2.body_segs().unwrap()[0];
+    let icmp = Icmpv4Packet::new_checked(body).unwrap();
+    assert!(icmp.verify_checksum());
+    assert_eq!(icmp.echo_ident(), ident);
+    assert_eq!(icmp.echo_seq_no(), seq_no);
+
+    // ================================================================
+    // Send ICMP Echo Req a second time. We want to verify that a) the
+    // UFT entry is used and b) that it runs the attached body
+    // transformation.
+    // ================================================================
+    seq_no += 1;
+    let mut pkt3 = gen_icmp_echo_req(
+        g1_cfg.private_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip.into(),
+        dst_ip.into(),
+        ident,
+        seq_no,
+        &data[..],
+    );
+
+    assert_eq!(g1.port.stats_snap().out_uft_hit, 0);
+    let res = g1.port.process(Out, &mut pkt3, &mut ameta);
+    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+    assert_port!(g1);
+    assert_eq!(pkt3.body_offset(), VPC_ENCAP_SZ + IP_SZ);
+    assert_eq!(pkt3.body_seg(), 1);
+    let meta = pkt3.meta();
+
+    match meta.inner.ether.as_ref() {
+        Some(eth) => {
+            assert_eq!(eth.src, g1_cfg.private_mac);
+            assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
+            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
+        }
+
+        None => panic!("expected inner Ether header"),
+    }
+
+    match meta.inner.ip.as_ref().unwrap() {
+        IpMeta::Ip4(ip4) => {
+            assert_eq!(ip4.src, g1_cfg.snat().external_ip);
+            assert_eq!(ip4.dst, dst_ip);
+            assert_eq!(ip4.proto, Protocol::ICMP);
+        }
+
+        ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+    }
+
+    let body = pkt3.body_segs().unwrap()[0];
+    let icmp = Icmpv4Packet::new_checked(body).unwrap();
+    assert!(icmp.verify_checksum());
+    assert_eq!(icmp.echo_ident(), mapped_port);
+    assert_eq!(icmp.echo_seq_no(), seq_no);
+    assert_eq!(g1.port.stats_snap().out_uft_hit, 1);
+
+    // ================================================================
+    // Process ICMP Echo Reply a second time. Once again, this time we
+    // want to verify that the body transformation comes from the UFT
+    // entry.
+    // ================================================================
+    let mut pkt4 = gen_icmp_echo_reply(
+        g1_cfg.boundary_services.mac,
+        g1_cfg.private_mac,
+        dst_ip,
+        g1_cfg.snat().external_ip,
+        mapped_port,
+        seq_no,
+        &data[..],
+    );
+
+    assert_eq!(g1.port.stats_snap().in_uft_hit, 0);
+    let res = g1.port.process(In, &mut pkt4, &mut ameta);
+    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+    assert_port!(g1);
+    assert_eq!(pkt4.body_offset(), IP_SZ);
+    assert_eq!(pkt4.body_seg(), 1);
+    let meta = pkt4.meta();
+
+    match meta.inner.ether.as_ref() {
+        Some(eth) => {
+            assert_eq!(eth.src, g1_cfg.boundary_services.mac);
+            assert_eq!(eth.dst, g1_cfg.private_mac);
+            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
+        }
+
+        None => panic!("expected inner Ether header"),
+    }
+
+    match meta.inner.ip.as_ref().unwrap() {
+        IpMeta::Ip4(ip4) => {
+            assert_eq!(ip4.src, dst_ip);
+            assert_eq!(ip4.dst, g1_cfg.ipv4().private_ip);
+            assert_eq!(ip4.proto, Protocol::ICMP);
+        }
+
+        ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+    }
+
+    let body = pkt4.body_segs().unwrap()[0];
+    let icmp = Icmpv4Packet::new_checked(body).unwrap();
+    assert!(icmp.verify_checksum());
+    assert_eq!(icmp.echo_ident(), ident);
+    assert_eq!(icmp.echo_seq_no(), seq_no);
+    assert_eq!(g1.port.stats_snap().in_uft_hit, 1);
 }
 
 #[test]
@@ -1679,7 +1927,7 @@ fn arp_gateway() {
     let mut g1 = oxide_net_setup("arp_hairpin", &cfg, v2p.clone());
     g1.port.start();
     set_state!(g1, PortState::Running);
-    let reply_hdr_sz = ETHER_HDR_SZ + ARP_HDR_SZ;
+    let reply_hdr_sz = EtherHdr::SIZE + ARP_HDR_SZ;
 
     let pkt = Packet::alloc(42);
     let eth_hdr = EtherHdrRaw {
@@ -1971,7 +2219,7 @@ fn gateway_icmpv6_ping() {
     pcap.add_pkt(&reply);
 
     // Ether + IPv6
-    assert_eq!(reply.body_offset(), ETHER_HDR_SZ + IPV6_HDR_SZ);
+    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::SIZE);
     assert_eq!(reply.body_seg(), 0);
 
     let meta = reply.meta();
@@ -2003,7 +2251,7 @@ fn gateway_icmpv6_ping() {
 
     let mut rdr = PacketReader::new(&reply, ());
     // Need to seek to body.
-    rdr.seek(ETHER_HDR_SZ + IPV6_HDR_SZ).unwrap();
+    rdr.seek(EtherHdr::SIZE + Ipv6Hdr::SIZE).unwrap();
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();

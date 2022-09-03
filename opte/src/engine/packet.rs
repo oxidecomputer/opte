@@ -16,12 +16,15 @@
 //! * Add hardware offload information to [`Packet`].
 //!
 use core::convert::TryInto;
+use core::fmt::{self, Display};
 use core::ptr;
 use core::result;
 use core::slice;
+use dyn_clone::DynClone;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::boxed::Box;
         use alloc::string::String;
         use alloc::vec::Vec;
         use illumos_sys_hdrs as ddi;
@@ -36,19 +39,98 @@ use serde::{Deserialize, Serialize};
 
 use super::arp::{ArpHdr, ArpHdrError, ArpMeta, ARP_HDR_SZ};
 use super::checksum::{Checksum, HeaderChecksum};
-use super::ether::{
-    EtherHdr, EtherHdrError, EtherMeta, EtherType, ETHER_HDR_SZ,
-};
-use super::geneve::{GeneveHdr, GeneveHdrError, GeneveMeta, GENEVE_HDR_SZ};
-use super::headers::{Header, IpHdr, IpMeta, UlpHdr, UlpMeta};
-use super::ip4::{Ipv4Hdr, Ipv4HdrError, Ipv4Meta, Protocol, IPV4_HDR_SZ};
+use super::ether::{EtherHdr, EtherHdrError, EtherMeta, EtherType};
+use super::geneve::{GeneveHdr, GeneveHdrError, GeneveMeta};
+use super::headers::{Header, IpAddr, IpHdr, IpMeta, UlpHdr, UlpMeta};
+use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4HdrError, Ipv4Meta, Protocol};
 use super::ip6::{Ipv6Hdr, Ipv6HdrError, Ipv6Meta};
+// TODO should probably move these two into this module now.
+use super::rule::{HdrTransform, HdrTransformError};
 use super::tcp::{TcpHdr, TcpHdrError, TcpMeta};
 use super::udp::{UdpHdr, UdpHdrError, UdpMeta};
+use super::Direction;
 
 use illumos_sys_hdrs::{c_uchar, dblk_t, mblk_t, uintptr_t};
 
 pub static MBLK_MAX_SIZE: usize = u16::MAX as usize;
+
+pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
+    proto: Protocol::Reserved,
+    src_ip: IpAddr::Ip4(Ipv4Addr::ANY_ADDR),
+    src_port: 0,
+    dst_ip: IpAddr::Ip4(Ipv4Addr::ANY_ADDR),
+    dst_port: 0,
+};
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
+pub struct InnerFlowId {
+    pub proto: Protocol,
+    pub src_ip: IpAddr,
+    pub src_port: u16,
+    pub dst_ip: IpAddr,
+    pub dst_port: u16,
+}
+
+impl InnerFlowId {
+    /// Swap IP source and destination as well as ULP port source and
+    /// destination.
+    pub fn mirror(self) -> Self {
+        Self {
+            proto: self.proto,
+            src_ip: self.dst_ip,
+            src_port: self.dst_port,
+            dst_ip: self.src_ip,
+            dst_port: self.src_port,
+        }
+    }
+}
+
+impl Display for InnerFlowId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}:{}:{}",
+            self.proto, self.src_ip, self.src_port, self.dst_ip, self.dst_port,
+        )
+    }
+}
+
+impl From<&PacketMeta> for InnerFlowId {
+    fn from(meta: &PacketMeta) -> Self {
+        let (proto, src_ip, dst_ip) = match &meta.inner.ip {
+            Some(IpMeta::Ip4(ip4)) => {
+                (ip4.proto, IpAddr::Ip4(ip4.src), IpAddr::Ip4(ip4.dst))
+            }
+            Some(IpMeta::Ip6(ip6)) => {
+                (ip6.proto, IpAddr::Ip6(ip6.src), IpAddr::Ip6(ip6.dst))
+            }
+            None => (
+                Protocol::Reserved,
+                IpAddr::Ip4(Ipv4Addr::from([0; 4])),
+                IpAddr::Ip4(Ipv4Addr::from([0; 4])),
+            ),
+        };
+
+        let (src_port, dst_port) = match &meta.inner.ulp {
+            Some(UlpMeta::Tcp(tcp)) => (tcp.src, tcp.dst),
+            Some(UlpMeta::Udp(udp)) => (udp.src, udp.dst),
+            None => (0, 0),
+        };
+
+        InnerFlowId { proto, src_ip, src_port, dst_ip, dst_port }
+    }
+}
 
 #[derive(Debug)]
 pub struct HeaderGroup {
@@ -86,7 +168,7 @@ impl HeaderGroup {
     }
 
     fn len(&self) -> usize {
-        let mut len = ETHER_HDR_SZ;
+        let mut len = EtherHdr::SIZE;
 
         if self.arp.is_some() {
             len += ARP_HDR_SZ;
@@ -101,7 +183,7 @@ impl HeaderGroup {
         }
 
         if self.encap.is_some() {
-            len += GENEVE_HDR_SZ;
+            len += GeneveHdr::SIZE;
         }
 
         len
@@ -548,9 +630,11 @@ pub struct Parsed {
     len: usize,
     headers: PacketHeaders,
     meta: PacketMeta,
+    flow: InnerFlowId,
     hdr_offsets: HeaderOffsets,
     inner_ulp_payload_csum: Option<Checksum>,
     body: BodyInfo,
+    body_modified: bool,
 }
 
 pub trait PacketState {}
@@ -819,12 +903,12 @@ impl Packet<Initialized> {
         // XXX While IPv4 header options should be extremely rare we
         // still need to account for them as it changes the starting
         // position of the ULP.
-        if hdr_len > IPV4_HDR_SZ {
+        if hdr_len > Ipv4Hdr::SIZE {
             // NOTE(ry) this happens a few seconds after creating a vnic atop an
             // OPTE mac provider.
             //todo!("need to deal with IPv4 header options!!!");
             return Err(ParseError::BadOuterIpLen {
-                expected: IPV4_HDR_SZ,
+                expected: Ipv4Hdr::SIZE,
                 actual: hdr_len,
             });
         }
@@ -967,9 +1051,9 @@ impl Packet<Initialized> {
         hg.encap = Some(geneve);
 
         offsets.encap = Some(HdrOffset {
-            pkt_pos: rdr.pkt_pos() - (GENEVE_HDR_SZ + opts_len),
+            pkt_pos: rdr.pkt_pos() - (GeneveHdr::SIZE + opts_len),
             seg_idx: rdr.seg_idx(),
-            seg_pos: rdr.seg_pos() - (GENEVE_HDR_SZ + opts_len),
+            seg_pos: rdr.seg_pos() - (GeneveHdr::SIZE + opts_len),
         });
 
         Ok(())
@@ -988,9 +1072,9 @@ impl Packet<Initialized> {
         let mut hg = HeaderGroup::new(ether);
 
         offsets.ether = HdrOffset {
-            pkt_pos: rdr.pkt_pos() - ETHER_HDR_SZ,
+            pkt_pos: rdr.pkt_pos() - EtherHdr::SIZE,
             seg_idx: rdr.seg_idx(),
-            seg_pos: rdr.seg_pos() - ETHER_HDR_SZ,
+            seg_pos: rdr.seg_pos() - EtherHdr::SIZE,
         };
 
         match hg.ether.ether_type() {
@@ -1149,6 +1233,7 @@ impl Packet<Initialized> {
             }
         }
 
+        let flow = InnerFlowId::from(&meta);
         Ok(Packet {
             avail: self.avail,
             source: self.source,
@@ -1159,8 +1244,10 @@ impl Packet<Initialized> {
                 hdr_offsets,
                 headers: hdrs,
                 meta,
+                flow,
                 inner_ulp_payload_csum,
                 body,
+                body_modified: false,
             },
         })
     }
@@ -1241,6 +1328,47 @@ impl Packet<Initialized> {
     }
 }
 
+/// A packet body transformation.
+///
+/// A body transformation allows an action to modify zero, one, or
+/// more bytes of a packet's body. The body starts directly after the
+/// ULP header, and continues to the last byte of the packet. This
+/// transformation is currently limited to only modifying bytes; it
+/// does not allow adding or removing bytes (e.g. to encrypt the body).
+pub trait BodyTransform: fmt::Display + DynClone {
+    /// Execute the body transformation. The body segments include
+    /// **only** body data, starting directly after the end of the ULP
+    /// header.
+    ///
+    /// # Errors
+    ///
+    /// The transformation can choose to return a
+    /// [`BodyTransformError`] at any time if the body is not
+    /// acceptable. On error, none or some of the bytes may have been
+    /// modified.
+    fn run(
+        &self,
+        dir: Direction,
+        body_segs: &mut [&mut [u8]],
+    ) -> Result<(), BodyTransformError>;
+}
+
+dyn_clone::clone_trait_object!(BodyTransform);
+
+#[derive(Debug)]
+pub enum BodyTransformError {
+    NoPayload,
+    ParseFailure(String),
+    Todo(String),
+    UnexpectedBody(String),
+}
+
+impl From<smoltcp::Error> for BodyTransformError {
+    fn from(e: smoltcp::Error) -> Self {
+        Self::ParseFailure(format!("{}", e))
+    }
+}
+
 impl Packet<Parsed> {
     /// XXX-EXT-IP This is here purely for the use by the external IP
     /// hack.
@@ -1258,16 +1386,105 @@ impl Packet<Parsed> {
         self.state.body.pkt_offset
     }
 
+    /// Run the [`BodyTransform`] against this packet.
+    pub fn body_transform(
+        &mut self,
+        dir: Direction,
+        xform: &Box<dyn BodyTransform>,
+    ) -> Result<(), BodyTransformError> {
+        // We set the flag now with the assumption that the transform
+        // could fail after modifying part of the body. In the future
+        // we could have something more sophisticated that only sets
+        // the flag if at least one byte was modified, but for now
+        // this does the job as nothing that needs top performance
+        // should make use of body transformations.
+        self.state.body_modified = true;
+
+        match self.body_segs_mut() {
+            Some(mut body_segs) => xform.run(dir, &mut body_segs),
+
+            None => {
+                self.state.body_modified = false;
+                Err(BodyTransformError::NoPayload)
+            }
+        }
+    }
+
     pub fn body_seg(&self) -> usize {
         self.state.body.seg_index
+    }
+
+    /// Return a list of the body segments, or `None` if there is no
+    /// body.
+    pub fn body_segs(&self) -> Option<Vec<&[u8]>> {
+        if self.state.body.len == 0 {
+            return None;
+        }
+
+        let mut body_segs = vec![];
+        let body_seg = self.state.body.seg_index;
+
+        for (i, seg) in self.segs[body_seg..].iter().enumerate() {
+            if i == 0 {
+                // Panic: We are slicing with the parse data. If
+                // we parsed correctly, this should not panic.
+                body_segs.push(
+                    seg.slice_unchecked(self.state.body.seg_offset, None),
+                );
+            } else {
+                body_segs.push(seg.slice());
+            }
+        }
+
+        Some(body_segs)
+    }
+
+    /// Return a list of mutable body segments, or `None` if there is
+    /// no body.
+    pub fn body_segs_mut(&mut self) -> Option<Vec<&mut [u8]>> {
+        if self.state.body.len == 0 {
+            return None;
+        }
+
+        let mut body_segs = vec![];
+        let body_seg = self.state.body.seg_index;
+
+        for (i, seg) in self.segs[body_seg..].iter_mut().enumerate() {
+            if i == 0 {
+                // Panic: We are slicing with the parse data. If
+                // we parsed correctly, this should not panic.
+                body_segs.push(
+                    seg.slice_mut_unchecked(self.state.body.seg_offset, None),
+                );
+            } else {
+                body_segs.push(seg.slice_mut());
+            }
+        }
+
+        Some(body_segs)
     }
 
     pub fn hdr_offsets(&self) -> HeaderOffsets {
         self.state.hdr_offsets.clone()
     }
 
+    /// Run the [`HdrTransform`] against this packet.
+    pub fn hdr_transform(
+        &mut self,
+        xform: &HdrTransform,
+    ) -> Result<(), HdrTransformError> {
+        xform.run(&mut self.state.meta)?;
+        self.state.flow = InnerFlowId::from(&self.state.meta);
+        Ok(())
+    }
+
     pub fn headers(&self) -> &PacketHeaders {
         &self.state.headers
+    }
+
+    /// Return a reference to the flow ID of this packet.
+    pub fn flow(&self) -> &InnerFlowId {
+        &self.state.flow
     }
 
     pub fn get_body_rdr(&self) -> PacketReader<Parsed, ()> {
@@ -1433,9 +1650,13 @@ impl Packet<Parsed> {
                             .unwrap();
                         let pseudo_csum = ip.pseudo_csum();
                         csum += pseudo_csum;
-                        csum.add(
-                            self.segs[0].slice(tcp_off.seg_pos, tcp.hdr_len()),
-                        );
+                        // Panic: We are slicing with the parse data.
+                        // If we parsed correctly, this should not
+                        // panic.
+                        csum.add(self.segs[0].slice_unchecked(
+                            tcp_off.seg_pos,
+                            Some(tcp.hdr_len()),
+                        ));
                         let tcp_csum = HeaderChecksum::from(csum).bytes();
                         self.segs[0]
                             .write(&tcp_csum, WritePos::Modify(csum_off as u16))
@@ -1461,10 +1682,13 @@ impl Packet<Parsed> {
                                 .unwrap();
                             let pseudo_csum = ip.pseudo_csum();
                             csum += pseudo_csum;
-                            csum.add(
-                                self.segs[0]
-                                    .slice(udp_off.seg_pos, udp.hdr_len()),
-                            );
+                            // Panic: We are slicing with the parse
+                            // data. If we parsed correctly, this
+                            // should not panic.
+                            csum.add(self.segs[0].slice_unchecked(
+                                udp_off.seg_pos,
+                                Some(udp.hdr_len()),
+                            ));
                             let udp_csum = HeaderChecksum::from(csum).bytes();
                             self.segs[0]
                                 .write(
@@ -1493,7 +1717,7 @@ impl Packet<Parsed> {
             Some(eth) => {
                 let ether = EtherHdr::from(eth);
                 self.state.headers.outer = Some(HeaderGroup::new(ether));
-                pkt_offset += ETHER_HDR_SZ;
+                pkt_offset += EtherHdr::SIZE;
             }
 
             None => {
@@ -1575,7 +1799,7 @@ impl Packet<Parsed> {
 
         let eth = inmg.ether.as_ref().unwrap();
         inh.ether.unify(eth);
-        pkt_offset += ETHER_HDR_SZ;
+        pkt_offset += EtherHdr::SIZE;
 
         if inmg.arp.is_some() {
             inh.unify_arp(inmg.arp.as_ref().unwrap());
@@ -1707,11 +1931,117 @@ impl PacketSeg {
         self.len -= amount;
     }
 
-    fn slice(&mut self, off: usize, len: usize) -> &[u8] {
-        unsafe {
-            let start = (*self.mp).b_rptr.add(off);
-            slice::from_raw_parts(start, len)
+    /// Get a slice of the entire segment.
+    fn slice(&self) -> &[u8] {
+        // Panic: We are using the segment's own data to take a slice
+        // of the entire segment.
+        self.slice_unchecked(0, None)
+    }
+
+    /// Get a mutable slice of the entire segment.
+    fn slice_mut(&mut self) -> &mut [u8] {
+        // Panic: We are using the segment's own data to take a slice
+        // of the entire segment.
+        self.slice_mut_unchecked(0, None)
+    }
+
+    /// Get a slice of the segment.
+    ///
+    /// The slice starts at `offset` and consists of `len` bytes. If
+    /// the length is `None`, then the slice extends to the end of the
+    /// segment. This includes only the part of the dblk which has
+    /// been written, i.e. the bytes from `mblk.b_rptr` to
+    /// `mblk.b_wptr`.
+    ///
+    /// # Safety
+    ///
+    /// It is up to the caller to ensure that `offset` and `offset +
+    /// len` reside within the segment boundaries.
+    ///
+    /// # Panic
+    ///
+    /// The slice formed by the `offset` and `offset + len` MUST be
+    /// within the bounds of the segment, otherwise panic.
+    fn slice_unchecked(&self, offset: usize, len: Option<usize>) -> &[u8] {
+        if offset > self.len {
+            panic!(
+                "offset is outside the bounds of the mblk: \
+                    offset: {} len: {} mblk: {:p}",
+                offset, self.len, self.mp
+            );
         }
+
+        // Safety: This pointer was handed to us by the system.
+        let start = unsafe { (*self.mp).b_rptr.add(offset) };
+        let len = len.unwrap_or(self.len - offset);
+        // Safety: If this end is outside the bound of the segment we
+        // panic below.
+        let end = unsafe { start.add(len) };
+        // Safety: This pointer was handed to us by the system.
+        let b_wptr = unsafe { (*self.mp).b_wptr };
+        assert!(
+            end <= b_wptr,
+            "slice past end of segment: offset: {} len: {} end: {:p} \
+             mblk: {:p} b_wptr: {:p}",
+            offset,
+            len,
+            end,
+            self.mp,
+            b_wptr,
+        );
+
+        // Safety: We have verified that the slice is within the
+        // bounds of the segment.
+        unsafe { slice::from_raw_parts(start, len) }
+    }
+
+    /// Get a mutable slice of the segment.
+    ///
+    /// The slice starts at `offset` and consists of `len` bytes. If
+    /// the length is `None`, then the slice extends to the end of the
+    /// segment. This includes only the part of the dblk which has
+    /// been written, i.e. the bytes from `mblk.b_rptr` to
+    /// `mblk.b_wptr`.
+    ///
+    /// # Panic
+    ///
+    /// The slice formed by the `offset` and `offset + len` MUST be
+    /// within the bounds of the segment, otherwise panic.
+    fn slice_mut_unchecked(
+        &mut self,
+        offset: usize,
+        len: Option<usize>,
+    ) -> &mut [u8] {
+        if offset > self.len {
+            panic!(
+                "offset is outside the bounds of the mblk: \
+                    offset: {} len: {} mblk: {:p}",
+                offset, self.len, self.mp
+            );
+        }
+
+        // Safety: This pointer was handed to us by the system.
+        let start = unsafe { (*self.mp).b_rptr.add(offset) };
+        let len = len.unwrap_or(self.len - offset);
+        // Safety: If this end is outside the bound of the segment we
+        // panic below.
+        let end = unsafe { start.add(len) };
+        // Safety: This pointer was handed to us by the system.
+        let b_wptr = unsafe { (*self.mp).b_wptr };
+        assert!(
+            end <= b_wptr,
+            "slice past end of segment: offset: {} len: {} end: {:p} \
+             mblk: {:p} b_wptr: {:p}",
+            offset,
+            len,
+            end,
+            self.mp,
+            b_wptr,
+        );
+
+        // Safety: We have verified that the slice is within the
+        // bounds of the segment.
+        unsafe { slice::from_raw_parts_mut(start, len) }
     }
 
     /// Wrap an existing `mblk_t`.
@@ -2300,9 +2630,7 @@ fn mock_freeb(mp: *mut mblk_t) {
 #[cfg(test)]
 mod test {
     use super::*;
-
     use crate::engine::ether::ETHER_TYPE_IPV4;
-    use crate::engine::ip6::IPV6_HDR_SZ;
     use crate::engine::tcp::{TcpFlags, TCP_HDR_SZ};
 
     const SRC_MAC: [u8; 6] = [0xa8, 0x40, 0x25, 0x00, 0x00, 0x63];
@@ -2315,6 +2643,29 @@ mod test {
         [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
     const DST_IP6: [u8; 16] =
         [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+
+    const PKT_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::SIZE + TCP_HDR_SZ;
+
+    fn tcp_pkt(pkt: Packet<Uninitialized>) -> Packet<Initialized> {
+        let body = vec![];
+        let mut tcp = TcpHdr::new(3839, 80);
+        tcp.set_seq(4224936861);
+        tcp.set_flags(TcpFlags::SYN);
+        let ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, SRC_IP4, DST_IP4);
+        let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
+
+        let mut wtr = PacketWriter::new(pkt, None);
+        let _ = wtr.write(&eth.as_bytes()).unwrap();
+        assert_eq!(wtr.pos(), EtherHdr::SIZE);
+        let _ = wtr.write(&ip4.as_bytes()).unwrap();
+        assert_eq!(wtr.pos(), EtherHdr::SIZE + Ipv4Hdr::SIZE);
+        let _ = wtr.write(&tcp.as_bytes()).unwrap();
+        assert_eq!(wtr.pos(), EtherHdr::SIZE + Ipv4Hdr::SIZE + TCP_HDR_SZ);
+
+        let pkt = wtr.finish();
+        assert_eq!(pkt.len(), PKT_SZ);
+        pkt
+    }
 
     // Verify uninitialized packet.
     #[test]
@@ -2381,27 +2732,7 @@ mod test {
 
     #[test]
     fn write_and_read_single_segment() {
-        let pkt = Packet::alloc(ETHER_HDR_SZ + IPV4_HDR_SZ + TCP_HDR_SZ);
-        let body = vec![];
-        let mut tcp = TcpHdr::new(3839, 80);
-        tcp.set_seq(4224936861);
-        let ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, SRC_IP4, DST_IP4);
-        let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
-
-        let mut wtr = PacketWriter::new(pkt, None);
-        let _ = wtr.write(&eth.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ);
-        let _ = wtr.write(&ip4.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ + IPV4_HDR_SZ);
-        let _ = wtr.write(&tcp.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ + IPV4_HDR_SZ + TCP_HDR_SZ);
-
-        let pkt = wtr.finish();
-
-        assert_eq!(pkt.len(), ETHER_HDR_SZ + IPV4_HDR_SZ + TCP_HDR_SZ);
-        assert_eq!(pkt.num_segs(), 1);
-
-        let parsed = pkt.parse().unwrap();
+        let parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
         assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_idx, 0);
         assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_pos, 0);
 
@@ -2447,26 +2778,9 @@ mod test {
         let pkt = unsafe { Packet::<Uninitialized>::wrap(mp1) };
         assert_eq!(pkt.num_segs(), 2);
         assert_eq!(pkt.avail(), 54);
-
-        let body = vec![];
-        let mut tcp = TcpHdr::new(3839, 80);
-        tcp.set_seq(4224936861);
-        let ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, SRC_IP4, DST_IP4);
-        let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
-
-        let mut wtr = PacketWriter::new(pkt, None);
-        let _ = wtr.write(&eth.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ);
-        let _ = wtr.write(&ip4.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ + IPV4_HDR_SZ);
-        let _ = wtr.write(&tcp.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ + IPV4_HDR_SZ + TCP_HDR_SZ);
-
-        let pkt = wtr.finish();
-
-        assert_eq!(pkt.len(), ETHER_HDR_SZ + IPV4_HDR_SZ + TCP_HDR_SZ);
+        let pkt = tcp_pkt(pkt);
+        assert_eq!(pkt.len(), PKT_SZ);
         assert_eq!(pkt.num_segs(), 2);
-
         let parsed = pkt.parse().unwrap();
 
         let eth_meta = parsed.state.meta.inner.ether.as_ref().unwrap();
@@ -2524,9 +2838,9 @@ mod test {
 
         let mut wtr = PacketWriter::new(pkt, None);
         let _ = wtr.write(&eth.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ);
+        assert_eq!(wtr.pos(), EtherHdr::SIZE);
         let _ = wtr.write(&ip4.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ + IPV4_HDR_SZ);
+        assert_eq!(wtr.pos(), EtherHdr::SIZE + Ipv4Hdr::SIZE);
         let tcp_bytes = tcp.as_bytes();
         assert!(matches!(
             wtr.write(&tcp_bytes[0..12]),
@@ -2538,26 +2852,7 @@ mod test {
     // OutOfRange error.
     #[test]
     fn out_of_range() {
-        let mp1 = allocb(54);
-        let pkt = unsafe { Packet::<Uninitialized>::wrap(mp1) };
-        assert_eq!(pkt.num_segs(), 1);
-        assert_eq!(pkt.avail(), 54);
-
-        let body = vec![];
-        let mut tcp = TcpHdr::new(3839, 80);
-        tcp.set_seq(4224936861);
-        let ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, SRC_IP4, DST_IP4);
-        let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
-
-        let mut wtr = PacketWriter::new(pkt, None);
-        let _ = wtr.write(&eth.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ);
-        let _ = wtr.write(&ip4.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ + IPV4_HDR_SZ);
-        let tcp_bytes = tcp.as_bytes();
-        wtr.write(&tcp_bytes).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ + IPV4_HDR_SZ + TCP_HDR_SZ);
-        let mut pkt = wtr.finish();
+        let mut pkt = tcp_pkt(Packet::alloc(PKT_SZ));
 
         // Pretend to zero the checksum field but purposely use an
         // offset 2 bytes past the end.
@@ -2584,13 +2879,64 @@ mod test {
 
         let mut wtr = PacketWriter::new(pkt, None);
         let _ = wtr.write(&eth.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ);
+        assert_eq!(wtr.pos(), EtherHdr::SIZE);
         let _ = wtr.write(&ip4.as_bytes()[0..10]).unwrap();
 
         let pkt = wtr.finish();
         let mut rdr = PacketReader::new(&pkt, ());
-        let _ = rdr.slice(ETHER_HDR_SZ);
-        assert!(matches!(rdr.slice(IPV4_HDR_SZ), Err(ReadErr::NotEnoughBytes)));
+        let _ = rdr.slice(EtherHdr::SIZE);
+        assert!(matches!(
+            rdr.slice(Ipv4Hdr::SIZE),
+            Err(ReadErr::NotEnoughBytes)
+        ));
+    }
+
+    #[test]
+    #[should_panic]
+    fn slice_unchecked_bad_offset() {
+        let parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        // Offset past end of segment.
+        parsed.segs[0].slice_unchecked(99, None);
+    }
+
+    #[test]
+    #[should_panic]
+    fn slice_mut_unchecked_bad_offset() {
+        let mut parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        // Offset past end of segment.
+        parsed.segs[0].slice_mut_unchecked(99, None);
+    }
+
+    #[test]
+    #[should_panic]
+    fn slice_unchecked_bad_len() {
+        let parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        // Length past end of segment.
+        parsed.segs[0].slice_unchecked(0, Some(99));
+    }
+
+    #[test]
+    #[should_panic]
+    fn slice_mut_unchecked_bad_len() {
+        let mut parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        // Length past end of segment.
+        parsed.segs[0].slice_mut_unchecked(0, Some(99));
+    }
+
+    #[test]
+    fn slice_unchecked_zero() {
+        let parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        // Set offset to end of packet and slice the "rest" by
+        // passing None.
+        assert_eq!(parsed.segs[0].slice_unchecked(54, None).len(), 0);
+    }
+
+    #[test]
+    fn slice_mut_unchecked_zero() {
+        let mut parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        // Set offset to end of packet and slice the "rest" by
+        // passing None.
+        assert_eq!(parsed.segs[0].slice_mut_unchecked(54, None).len(), 0);
     }
 
     // Verify that if the TCP header straddles an mblk we return an
@@ -2616,17 +2962,17 @@ mod test {
 
         let mut wtr = PacketWriter::new(pkt, None);
         let _ = wtr.write(&eth.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ);
+        assert_eq!(wtr.pos(), EtherHdr::SIZE);
         let _ = wtr.write(&ip4.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ + IPV4_HDR_SZ);
+        assert_eq!(wtr.pos(), EtherHdr::SIZE + Ipv4Hdr::SIZE);
         let tcp_bytes = &tcp.as_bytes();
         let _ = wtr.write(&tcp_bytes[0..12]).unwrap();
         let _ = wtr.write(&tcp_bytes[12..]).unwrap();
-        assert_eq!(wtr.pos(), ETHER_HDR_SZ + IPV4_HDR_SZ + TCP_HDR_SZ);
+        assert_eq!(wtr.pos(), EtherHdr::SIZE + Ipv4Hdr::SIZE + TCP_HDR_SZ);
 
         let pkt = wtr.finish();
 
-        assert_eq!(pkt.len(), ETHER_HDR_SZ + IPV4_HDR_SZ + TCP_HDR_SZ);
+        assert_eq!(pkt.len(), EtherHdr::SIZE + Ipv4Hdr::SIZE + TCP_HDR_SZ);
         assert_eq!(pkt.num_segs(), 2);
         assert!(matches!(pkt.parse(), Err(ParseError::BadHeader(_))));
     }
@@ -2648,7 +2994,7 @@ mod test {
                     generate_test_packet(extensions.as_slice());
                 let next_hdr =
                     *(extensions.first().unwrap_or(&IpProtocol::Tcp));
-                let extension_headers = &buf[IPV6_HDR_SZ..ipv6_header_size];
+                let extension_headers = &buf[Ipv6Hdr::SIZE..ipv6_header_size];
 
                 // Append a TCP header
                 let body = vec![];
@@ -2685,12 +3031,14 @@ mod test {
                     "Expected IP headers to be in segment 0"
                 );
                 assert_eq!(
-                    ip.seg_pos, ETHER_HDR_SZ,
+                    ip.seg_pos,
+                    EtherHdr::SIZE,
                     "Expected the IP header to start immediately \
                     after the Ethernet header"
                 );
                 assert_eq!(
-                    ip.pkt_pos, ETHER_HDR_SZ,
+                    ip.pkt_pos,
+                    EtherHdr::SIZE,
                     "Expected the IP header to start immediately \
                     after the Ethernet header"
                 );
@@ -2705,13 +3053,13 @@ mod test {
                 );
                 assert_eq!(
                     ulp.seg_pos,
-                    ETHER_HDR_SZ + ipv6_header_size,
+                    EtherHdr::SIZE + ipv6_header_size,
                     "Expected the ULP header to start immediately \
                     after the IP header",
                 );
                 assert_eq!(
                     ulp.pkt_pos,
-                    ETHER_HDR_SZ + ipv6_header_size,
+                    EtherHdr::SIZE + ipv6_header_size,
                     "Expected the ULP header to start immediately \
                     after the IP header",
                 );

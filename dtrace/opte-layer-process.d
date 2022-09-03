@@ -9,10 +9,11 @@
 #include "common.h"
 #include "protos.d"
 
-#define	HDR_FMT		"%-16s %-16s %-3s %-48s %s\n"
+#define	HDR_FMT		"%-16s %-16s %-3s %-48s $-48s %s\n"
 
 BEGIN {
-	printf(HDR_FMT, "PORT", "LAYER", "DIR", "FLOW", "RES");
+	printf(HDR_FMT, "PORT", "LAYER", "DIR", "FLOW BEFORE", "FLOW AFTER",
+	    "RES");
 	num = 0;
 }
 
@@ -20,11 +21,13 @@ layer-process-return {
 	this->dir = stringof(arg0);
 	this->port = stringof(arg1);
 	this->layer = stringof(arg2);
-	this->flow = (flow_id_sdt_arg_t *)arg3;
-	this->res = stringof(arg4);
+	this->flow_before = (flow_id_sdt_arg_t *)arg3;
+	this->flow_after = (flow_id_sdt_arg_t *)arg4;
+	this->res = stringof(arg5);
 
 	if (num >= 10) {
-		printf(HDR_FMT, "PORT", "LAYER", "DIR", "FLOW", "RES");
+		printf(HDR_FMT, "PORT", "LAYER", "DIR", "FLOW BEFORE",
+		    "FLOW AFTER", "RES");
 		num = 0;
 	}
 
@@ -36,13 +39,17 @@ layer-process-return {
 }
 
 layer-process-return /this->af == AF_INET/ {
-	FLOW_FMT(this->s, this->flow);
-	printf(HDR_FMT, this->port, this->layer, this->dir, this->s, this->res);
+	FLOW_FMT(this->s_before, this->flow_before);
+	FLOW_FMT(this->s_after, this->flow_after);
+	printf(HDR_FMT, this->port, this->layer, this->dir, this->s_before,
+	    this->s_after, this->res);
 	num++;
 }
 
 layer-process-return /this->af == AF_INET6/ {
-	FLOW_FMT6(this->s, this->flow);
-	printf(HDR_FMT, this->port, this->layer, this->dir, this->s, this->res);
+	FLOW_FMT6(this->s_before, this->flow_before);
+	FLOW_FMT6(this->s_after, this->flow_after);
+	printf(HDR_FMT, this->port, this->layer, this->dir, this->s_before,
+	    this->s_after, this->res);
 	num++;
 }

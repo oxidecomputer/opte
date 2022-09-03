@@ -25,7 +25,8 @@ use crate::api::{
     SetFwRulesReq,
 };
 use opte::api::{Direction, OpteError};
-use opte::engine::layer::{InnerFlowId, Layer};
+use opte::engine::layer::Layer;
+use opte::engine::packet::{InnerFlowId, Packet, Parsed};
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::{Port, PortBuilder, Pos};
 use opte::engine::rule::{
@@ -133,6 +134,7 @@ impl StatefulAction for FwStatefulAction {
     fn gen_desc(
         &self,
         _flow_id: &InnerFlowId,
+        _pkt: &Packet<Parsed>,
         _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
         Ok(AllowOrDeny::Allow(Arc::new(IdentityDesc::new(self.name.clone()))))

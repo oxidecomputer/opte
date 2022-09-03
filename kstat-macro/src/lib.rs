@@ -5,7 +5,7 @@
 // Copyright 2022 Oxide Computer Company
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{
     parse_macro_input, DeriveInput, Field, FieldsNamed, FieldsUnnamed, Ident,
 };
@@ -66,17 +66,22 @@ pub fn derive_kstat_provider(input: TokenStream) -> TokenStream {
     let num_fields = fields.len() as u32;
     let fields_ident: Vec<Ident> =
         fields.iter().map(|f| f.ident.clone().unwrap()).collect();
-    let fields_str: Vec<String> =
-        fields_ident.iter().map(|f| format!("{}", f)).collect();
+    let ident_snap = format_ident!("{}Snap", ident);
 
     let output = quote! {
+        #[derive(Clone, Debug)]
+        pub struct #ident_snap {
+            #( pub #fields_ident: u64, )*
+        }
+
         impl KStatProvider for #ident {
             const NUM_FIELDS: u32 = #num_fields;
+            type Snap = #ident_snap;
 
             fn init(
                 &mut self
             ) -> core::result::Result<(), kstat::Error> {
-                #( self.#fields_ident.init(#fields_str)?; )*
+                #( self.#fields_ident.init(stringify!(#fields_ident))?; )*
                 Ok(())
             }
 
@@ -85,6 +90,12 @@ pub fn derive_kstat_provider(input: TokenStream) -> TokenStream {
 
                 Self {
                     #( #fields_ident: KStatU64::new(), )*
+                }
+            }
+
+            fn snapshot(&self) -> Self::Snap {
+                #ident_snap {
+                    #( #fields_ident: self.#fields_ident.val(), )*
                 }
             }
         }

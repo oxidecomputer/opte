@@ -101,6 +101,10 @@ impl kstat_named_t {
             value: KStatNamedValue { _c: [0; 16] },
         }
     }
+
+    pub fn val_u64(&self) -> u64 {
+        unsafe { self.value._u64 }
+    }
 }
 
 #[repr(C)]

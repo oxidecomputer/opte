@@ -19,9 +19,9 @@ use super::icmp::MessageType as IcmpMessageType;
 use super::icmpv6::MessageType as Icmpv6MessageType;
 use super::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
 use super::ip6::{Ipv6Addr, Ipv6Cidr, Ipv6Meta};
-use super::layer::InnerFlowId;
 use super::packet::{
-    Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
+    BodyTransform, Initialized, InnerFlowId, Packet, PacketMeta, PacketRead,
+    PacketReader, Parsed,
 };
 use super::port::meta::ActionMeta;
 use super::tcp::TcpMeta;
@@ -883,6 +883,19 @@ pub trait ActionDesc {
     /// Generate the [`HdrTransform`] which implements this descriptor.
     fn gen_ht(&self, dir: Direction) -> HdrTransform;
 
+    /// Generate a body transformation.
+    ///
+    /// An action may optionally generate a [`BodyTransform`] in
+    /// order to act on the body of the packet.
+    fn gen_bt(
+        &self,
+        _dir: Direction,
+        _meta: &PacketMeta,
+        _payload_segs: &[&[u8]],
+    ) -> Result<Option<Box<dyn BodyTransform>>, GenBtError> {
+        Ok(None)
+    }
+
     fn name(&self) -> &str;
 }
 
@@ -1175,7 +1188,6 @@ pub enum ResourceError {
 #[derive(Clone, Debug)]
 pub enum GenDescError {
     ResourceExhausted { name: String },
-
     Unexpected { msg: String },
 }
 
@@ -1196,6 +1208,7 @@ pub trait StatefulAction: Display {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
+        pkt: &Packet<Parsed>,
         meta: &mut ActionMeta,
     ) -> GenDescResult;
 
@@ -1275,6 +1288,18 @@ impl From<smoltcp::Error> for GenErr {
 }
 
 pub type GenPacketResult = ActionResult<Packet<Initialized>, GenErr>;
+
+/// An error while generating a [`BodyTransform`].
+#[derive(Clone, Debug)]
+pub enum GenBtError {
+    ParseBody(String),
+}
+
+impl From<smoltcp::Error> for GenBtError {
+    fn from(e: smoltcp::Error) -> Self {
+        Self::ParseBody(format!("{}", e))
+    }
+}
 
 /// A hairpin action is one that generates a new packet based on the
 /// current inbound/outbound packet, and then "hairpins" that new

@@ -1171,8 +1171,7 @@ unsafe extern "C" fn xde_mc_unicst(
 fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
     use opte::engine::rule::flow_id_sdt_arg;
 
-    let fid = opte::engine::layer::InnerFlowId::from(pkt.meta());
-    let fid_arg = flow_id_sdt_arg::from(&fid);
+    let fid_arg = flow_id_sdt_arg::from(pkt.flow());
 
     unsafe {
         __dtrace_probe_guest__loopback(

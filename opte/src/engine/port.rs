@@ -9,10 +9,11 @@ use self::meta::ActionMeta;
 use super::ether::EtherAddr;
 use super::flow_table::{FlowTable, StateSummary};
 use super::ioctl;
-use super::layer::{
-    InnerFlowId, Layer, LayerError, LayerResult, RuleId, FLOW_ID_DEFAULT,
+use super::layer::{Layer, LayerError, LayerResult, RuleId};
+use super::packet::{
+    BodyTransform, BodyTransformError, Initialized, InnerFlowId, Packet,
+    PacketMeta, Parsed, FLOW_ID_DEFAULT,
 };
-use super::packet::{Initialized, Packet, PacketMeta, PacketState, Parsed};
 use super::rule::{
     ht_probe, Action, Finalized, HdrTransform, HdrTransformError, Rule,
 };
@@ -32,12 +33,14 @@ use opte_api::{Direction, OpteError};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::boxed::Box;
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
         use super::rule::flow_id_sdt_arg;
         use illumos_sys_hdrs::uintptr_t;
     } else {
+        use std::boxed::Box;
         use std::string::{String, ToString};
         use std::sync::Arc;
         use std::vec::Vec;
@@ -49,6 +52,7 @@ pub type Result<T> = result::Result<T, OpteError>;
 #[derive(Debug)]
 pub enum ProcessError {
     BadState(PortState),
+    BodyTransform(BodyTransformError),
     Layer(LayerError),
     HdrTransform(HdrTransformError),
     WriteError(super::packet::WriteError),
@@ -57,6 +61,12 @@ pub enum ProcessError {
 impl From<super::packet::WriteError> for ProcessError {
     fn from(e: super::packet::WriteError) -> Self {
         Self::WriteError(e)
+    }
+}
+
+impl From<BodyTransformError> for ProcessError {
+    fn from(e: BodyTransformError) -> Self {
+        Self::BodyTransform(e)
     }
 }
 
@@ -377,7 +387,7 @@ pub enum DumpLayerError {
 
 #[derive(Clone, Debug)]
 pub struct HtEntry {
-    hts: Vec<HdrTransform>,
+    xforms: Transforms,
     // The port epoch upon which this entry was established. Used for
     // invalidation when the rule set is updated.
     epoch: u64,
@@ -385,11 +395,21 @@ pub struct HtEntry {
 
 impl StateSummary for HtEntry {
     fn summary(&self) -> String {
-        self.hts
+        let hdr = self
+            .xforms
+            .hdr
             .iter()
             .map(|ht| ht.to_string())
             .collect::<Vec<String>>()
-            .join(",")
+            .join(",");
+        let body = self
+            .xforms
+            .body
+            .iter()
+            .map(|bt| bt.to_string())
+            .collect::<Vec<String>>()
+            .join(",");
+        format!("hdr: {hdr}, body: {body}")
     }
 }
 
@@ -425,6 +445,9 @@ struct PortStats {
     /// being processed.
     in_process_err: KStatU64,
 
+    /// The number of inbound packets which matched a UFT entry.
+    in_uft_hit: KStatU64,
+
     /// The number of outbound packets marked as
     /// [`ProcessResult::Bypass`].
     out_bypass: KStatU64,
@@ -453,6 +476,9 @@ struct PortStats {
     /// The number of outbound packets which resulted in an error
     /// while being processed.
     out_process_err: KStatU64,
+
+    /// The number of outbound packets which matched a UFT entry.
+    out_uft_hit: KStatU64,
 }
 
 struct PortData {
@@ -635,47 +661,40 @@ impl Port {
         dir: Direction,
         msg: String,
         pkt: &mut Packet<Parsed>,
-        ifid: &InnerFlowId,
     ) {
         if unsafe { super::opte_panic_debug != 0 } {
             super::err(format!("mblk: {}", pkt.mblk_ptr_str()));
-            super::err(format!("ifid: {}", ifid));
+            super::err(format!("flow: {}", pkt.flow()));
             super::err(format!("meta: {:?}", pkt.meta()));
             super::err(format!("flows: {:?}", data.tcp_flows,));
             todo!("bad packet: {}", msg);
         } else {
-            self.tcp_err_probe(dir, ifid, pkt, msg)
+            self.tcp_err_probe(dir, pkt, msg)
         }
     }
 
-    fn tcp_err_probe(
-        &self,
-        dir: Direction,
-        ifid: &InnerFlowId,
-        pkt: &Packet<Parsed>,
-        msg: String,
-    ) {
+    fn tcp_err_probe(&self, dir: Direction, pkt: &Packet<Parsed>, msg: String) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let ifid_arg = flow_id_sdt_arg::from(ifid);
+                let flow_arg = flow_id_sdt_arg::from(pkt.flow());
                 let msg_arg = CString::new(msg).unwrap();
 
                 unsafe {
                     __dtrace_probe_tcp__err(
                         dir.cstr_raw() as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        &flow_arg as *const flow_id_sdt_arg as uintptr_t,
                         pkt.mblk_addr(),
                         msg_arg.as_ptr() as uintptr_t,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                let ifid_s = ifid.to_string();
+                let flow_s = pkt.flow().to_string();
                 crate::opte_provider::tcp__err!(
-                    || (dir, &self.name, ifid_s, pkt.mblk_addr(), &msg)
+                    || (dir, &self.name, flow_s, pkt.mblk_addr(), &msg)
                 );
             } else {
-                let (_, _, _, _) = (dir, ifid, pkt, msg);
+                let (..) = (dir, pkt, msg);
             }
         }
     }
@@ -870,70 +889,6 @@ impl Port {
         &self.name_cstr
     }
 
-    fn update_stats_in(
-        stats: &mut PortStats,
-        res: &result::Result<ProcessResult, ProcessError>,
-    ) {
-        match res {
-            Ok(ProcessResult::Bypass) => stats.in_bypass += 1,
-
-            Ok(ProcessResult::Drop { reason }) => {
-                stats.in_drop += 1;
-
-                match reason {
-                    DropReason::Layer { name: _ } => stats.in_drop_layer += 1,
-                    DropReason::TcpErr => stats.in_drop_tcp_err += 1,
-                }
-            }
-
-            Ok(ProcessResult::Modified) => stats.in_modified += 1,
-
-            Ok(ProcessResult::Hairpin(_)) => stats.in_hairpin += 1,
-
-            // XXX We should split the different error types out into
-            // individual stats. However, I'm not sure exactly how I
-            // would like to to this just yet, and I don't want to
-            // hold up this stat work any longer -- better to improve
-            // upon stats in follow-up work. E.g., it might make sense
-            // to just have a top-level error counter in the
-            // PortStats, and then also publisher LayerStats for each
-            // layer along with the different error counts.
-            Err(_) => stats.in_process_err += 1,
-        }
-    }
-
-    fn update_stats_out(
-        stats: &mut PortStats,
-        res: &result::Result<ProcessResult, ProcessError>,
-    ) {
-        match res {
-            Ok(ProcessResult::Bypass) => stats.out_bypass += 1,
-
-            Ok(ProcessResult::Drop { reason }) => {
-                stats.out_drop += 1;
-
-                match reason {
-                    DropReason::Layer { name: _ } => stats.out_drop_layer += 1,
-                    DropReason::TcpErr => stats.out_drop_tcp_err += 1,
-                }
-            }
-
-            Ok(ProcessResult::Modified) => stats.out_modified += 1,
-
-            Ok(ProcessResult::Hairpin(_)) => stats.out_hairpin += 1,
-
-            // XXX We should split the different error types out into
-            // individual stats. However, I'm not sure exactly how I
-            // would like to to this just yet, and I don't want to
-            // hold up this stat work any longer -- better to improve
-            // upon stats in follow-up work. E.g., it might make sense
-            // to just have a top-level error counter in the
-            // PortStats, and then also publisher LayerStats for each
-            // layer along with the different error counts.
-            Err(_) => stats.out_process_err += 1,
-        }
-    }
-
     /// Process the packet.
     ///
     /// # States
@@ -949,24 +904,24 @@ impl Port {
         check_state!(data.state, [PortState::Running])
             .map_err(|_| ProcessError::BadState(data.state))?;
 
-        let ifid = InnerFlowId::from(pkt.meta());
+        let flow_before = pkt.flow().clone();
         let epoch = self.epoch.load(SeqCst);
-        self.port_process_entry_probe(dir, &ifid, epoch, &pkt);
+        self.port_process_entry_probe(dir, epoch, &pkt);
         let res = match dir {
             Direction::Out => {
-                let res = self.process_out(&mut data, &ifid, epoch, pkt, ameta);
+                let res = self.process_out(&mut data, epoch, pkt, ameta);
                 Self::update_stats_out(&mut data.stats.vals, &res);
                 res
             }
 
             Direction::In => {
-                let res = self.process_in(&mut data, &ifid, epoch, pkt, ameta);
+                let res = self.process_in(&mut data, epoch, pkt, ameta);
                 Self::update_stats_in(&mut data.stats.vals, &res);
                 res
             }
         };
         drop(data);
-        self.port_process_return_probe(dir, &ifid, epoch, &pkt, &res);
+        self.port_process_return_probe(dir, &flow_before, epoch, &pkt, &res);
         // XXX If this is a Hairpin result there is no need for this call.
         pkt.emit_headers()?;
         res
@@ -1059,11 +1014,42 @@ impl Port {
 
         Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
+
+    /// Grab a snapshot of the port statistics.
+    pub fn stats_snap(&self) -> PortStatsSnap {
+        self.data.lock().stats.vals.snapshot()
+    }
 }
 
 enum TcpMaybeClosed {
     Closed { ufid_inbound: Option<InnerFlowId> },
     NewState(TcpState),
+}
+
+// This is a convenience wrapper for keeping the header and body
+// transformations under one structure, allowing them to be passes as
+// one argument.
+#[derive(Clone)]
+pub(crate) struct Transforms {
+    pub(crate) hdr: Vec<HdrTransform>,
+    pub(crate) body: Vec<Box<dyn BodyTransform>>,
+}
+
+impl Transforms {
+    fn new() -> Self {
+        Self { hdr: Vec::with_capacity(8), body: Vec::with_capacity(2) }
+    }
+}
+
+impl fmt::Debug for Transforms {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let body_strs =
+            self.body.iter().map(ToString::to_string).collect::<Vec<String>>();
+        f.debug_struct("Transforms")
+            .field("hdr", &self.hdr)
+            .field("body", &body_strs)
+            .finish()
+    }
 }
 
 // Keeping the private functions here just for the sake of code
@@ -1086,16 +1072,15 @@ impl Port {
         &self,
         data: &mut PortData,
         dir: Direction,
-        ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
-        hts: &mut Vec<HdrTransform>,
+        xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         match dir {
             Direction::Out => {
                 for layer in &mut data.layers {
                     let res =
-                        layer.process(&self.ectx, dir, ifid, pkt, hts, ameta);
+                        layer.process(&self.ectx, dir, pkt, xforms, ameta);
 
                     match res {
                         Ok(LayerResult::Allow) => (),
@@ -1109,7 +1094,7 @@ impl Port {
             Direction::In => {
                 for layer in data.layers.iter_mut().rev() {
                     let res =
-                        layer.process(&self.ectx, dir, ifid, pkt, hts, ameta);
+                        layer.process(&self.ectx, dir, pkt, xforms, ameta);
 
                     match res {
                         Ok(LayerResult::Allow) => (),
@@ -1127,30 +1112,30 @@ impl Port {
     fn port_process_entry_probe(
         &self,
         dir: Direction,
-        ifid: &InnerFlowId,
         epoch: u64,
-        pkt: &Packet<impl PacketState>,
+        pkt: &Packet<Parsed>,
     ) {
+        let flow = pkt.flow();
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let ifid_arg = flow_id_sdt_arg::from(ifid);
+                let flow_arg = flow_id_sdt_arg::from(flow);
 
                 unsafe {
                     __dtrace_probe_port__process__entry(
                         dir.cstr_raw() as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        &flow_arg as *const flow_id_sdt_arg as uintptr_t,
                         epoch as uintptr_t,
                         pkt.mblk_addr(),
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                let ifid_s = ifid.to_string();
+                let flow_s = flow.to_string();
                 crate::opte_provider::port__process__entry!(
-                    || (dir, &self.name, ifid_s, epoch, pkt.mblk_addr())
+                    || (dir, &self.name, flow_s, epoch, pkt.mblk_addr())
                 );
             } else {
-                let (_, _, _, _) = (dir, ifid, epoch, pkt);
+                let (..) = (dir, flow, epoch, pkt);
             }
         }
     }
@@ -1158,14 +1143,16 @@ impl Port {
     fn port_process_return_probe(
         &self,
         dir: Direction,
-        ifid: &InnerFlowId,
+        flow_before: &InnerFlowId,
         epoch: u64,
-        pkt: &Packet<impl PacketState>,
+        pkt: &Packet<Parsed>,
         res: &result::Result<ProcessResult, ProcessError>,
     ) {
+        let flow_after = pkt.flow();
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let ifid_arg = flow_id_sdt_arg::from(ifid);
+                let flow_b_arg = flow_id_sdt_arg::from(flow_before);
+                let flow_a_arg = flow_id_sdt_arg::from(flow_after);
                 // XXX This would probably be better as separate probes;
                 // for now this does the trick.
                 let res_str = match res {
@@ -1184,7 +1171,8 @@ impl Port {
                     __dtrace_probe_port__process__return(
                         dir.cstr_raw() as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        &flow_b_arg as *const flow_id_sdt_arg as uintptr_t,
+                        &flow_a_arg as *const flow_id_sdt_arg as uintptr_t,
                         epoch as uintptr_t,
                         pkt.mblk_addr(),
                         hp_pkt_ptr,
@@ -1193,17 +1181,24 @@ impl Port {
                 }
 
             } else if #[cfg(feature = "usdt")] {
-                let ifid_s = ifid.to_string();
+                let flow_b_s = flow_before.to_string();
+                let flow_a_s = flow_after.to_string();
                 let res_str = match res {
                     Ok(v) => format!("{:?}", v),
                     Err(e) => format!("ERROR: {:?}", e),
                 };
 
                 crate::opte_provider::port__process__return!(
-                    || (dir, &self.name, ifid_s, epoch, pkt.mblk_addr(), res_str)
+                    || (
+                        (dir, self.name.as_str()),
+                        (flow_b_s.as_ref(), flow_a_s.as_ref()),
+                        epoch,
+                        pkt.mblk_addr(),
+                        res_str
+                    )
                 );
             } else {
-                let (_, _, _, _, _) = (dir, ifid, epoch, pkt, res);
+                let (..) = (dir, flow_before, flow_after, epoch, pkt, res);
             }
         }
     }
@@ -1334,20 +1329,20 @@ impl Port {
     fn process_in_miss(
         &self,
         data: &mut PortData,
-        ufid_in: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         ameta: &mut ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::In;
 
-        let mut hts = Vec::new();
-        let res = self.layers_process(data, In, ufid_in, pkt, &mut hts, ameta);
+        let flow_before = pkt.flow().clone();
+        let mut xforms = Transforms::new();
+        let res = self.layers_process(data, In, pkt, &mut xforms, ameta);
         match res {
             Ok(LayerResult::Allow) => {
                 // If there is no flow ID, then do not create a UFT
                 // entry.
-                if *ufid_in == FLOW_ID_DEFAULT {
+                if flow_before == FLOW_ID_DEFAULT {
                     return Ok(ProcessResult::Modified);
                 }
             }
@@ -1365,12 +1360,12 @@ impl Port {
             Err(e) => return Err(ProcessError::Layer(e)),
         }
 
-        let hte = HtEntry { hts, epoch };
+        let hte = HtEntry { xforms, epoch };
 
         // For inbound traffic the TCP flow table must be
         // checked _after_ processing take place.
         if pkt.meta().is_inner_tcp() {
-            match self.process_in_tcp_new(data, ufid_in, pkt.meta()) {
+            match self.process_in_tcp_new(data, pkt.flow(), pkt.meta()) {
                 Ok(TcpState::Closed) => {
                     return Ok(ProcessResult::Modified);
                 }
@@ -1379,12 +1374,12 @@ impl Port {
                     // We have a good TCP flow, create a new UFT entry.
                     //
                     // TODO kill unwrap
-                    data.uft_in.add(ufid_in.clone(), hte).unwrap();
+                    data.uft_in.add(flow_before, hte).unwrap();
                     return Ok(ProcessResult::Modified);
                 }
 
                 Err(e) => {
-                    self.tcp_err(data, In, e, pkt, ufid_in);
+                    self.tcp_err(data, In, e, pkt);
                     return Ok(ProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
@@ -1392,7 +1387,7 @@ impl Port {
             }
         } else {
             // TODO kill unwrap
-            data.uft_in.add(ufid_in.clone(), hte).unwrap();
+            data.uft_in.add(flow_before, hte).unwrap();
         }
 
         Ok(ProcessResult::Modified)
@@ -1401,7 +1396,6 @@ impl Port {
     fn process_in(
         &self,
         data: &mut PortData,
-        ufid_in: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         ameta: &mut ActionMeta,
@@ -1410,7 +1404,7 @@ impl Port {
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        match data.uft_in.get_mut(ufid_in) {
+        match data.uft_in.get_mut(pkt.flow()) {
             Some(entry) if entry.state().epoch == epoch => {
                 // TODO At the moment I'm holding the UFT locks not
                 // just for lookup, but for the entire duration of
@@ -1418,12 +1412,27 @@ impl Port {
                 // Arc<HdrTransform>; that way we only hold the lock
                 // for lookup.
                 entry.hit();
-                for ht in &entry.state().hts {
-                    ht.run(pkt.meta_mut())?;
-                    // Guest-side flow id.
-                    let gfid_in = InnerFlowId::from(pkt.meta());
-                    ht_probe(&self.name_cstr, "UFT-in", In, ufid_in, &gfid_in);
+                data.stats.vals.in_uft_hit += 1;
+                // This is the flow as its ingressing onto the port.
+                let flow_before = pkt.flow().clone();
+                for ht in &entry.state().xforms.hdr {
+                    pkt.hdr_transform(&ht)?;
+                    // This is the flow after processing as its
+                    // ingressing into the guest.
+                    let flow_guest = pkt.flow();
+                    ht_probe(
+                        &self.name_cstr,
+                        "UFT-in",
+                        In,
+                        &flow_before,
+                        flow_guest,
+                    );
                 }
+
+                for bt in &entry.state().xforms.body {
+                    pkt.body_transform(In, bt)?;
+                }
+
                 drop(entry);
 
                 // For inbound traffic the TCP flow table must be
@@ -1432,7 +1441,7 @@ impl Port {
                     match self.process_in_tcp_existing(data, pkt.meta()) {
                         Ok(_) => return Ok(ProcessResult::Modified),
                         Err(e) => {
-                            self.tcp_err(data, In, e, pkt, ufid_in);
+                            self.tcp_err(data, In, e, pkt);
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
@@ -1447,16 +1456,26 @@ impl Port {
             // and proceed to rule processing.
             Some(entry) => {
                 let epoch = entry.state().epoch;
+                let flow_in = pkt.flow().clone();
+                // TODO This is incorrect. The outbound UFID (the
+                // guest side outbound) can only be determined by
+                // applying the HTs. Otherwise, something like NAT
+                // would not have a change to rewrite the flow.
+                //
+                // I need to write a test for this to verify it's
+                // broken and then fix it. Also check outbound and see
+                // if a similar problem exists.
                 let gfid_in = InnerFlowId::from(pkt.meta());
                 let ufid_out = gfid_in.mirror();
-                self.uft_invalidate(data, &ufid_out, ufid_in, epoch);
+                // rpz shit
+                self.uft_invalidate(data, &ufid_out, &flow_in, epoch);
             }
 
             // There is no entry; proceed to rule processing;
             None => (),
         };
 
-        self.process_in_miss(data, ufid_in, epoch, pkt, ameta)
+        self.process_in_miss(data, epoch, pkt, ameta)
     }
 
     // Process the TCP packet for the purposes of connection tracking
@@ -1557,7 +1576,6 @@ impl Port {
     fn process_out_miss(
         &self,
         data: &mut PortData,
-        ufid_out: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         ameta: &mut ActionMeta,
@@ -1569,17 +1587,21 @@ impl Port {
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
         if pkt.meta().is_inner_tcp() {
-            match self.process_out_tcp_new(data, ufid_out, pkt.meta()) {
+            match self.process_out_tcp_new(data, pkt.flow(), pkt.meta()) {
                 Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
                     tcp_closed = true;
-                    self.uft_tcp_closed(data, ufid_out, ufid_inbound.as_ref());
+                    self.uft_tcp_closed(
+                        data,
+                        pkt.flow(),
+                        ufid_inbound.as_ref(),
+                    );
                 }
 
                 // Continue with processing.
                 Ok(_) => (),
 
                 Err(e) => {
-                    self.tcp_err(data, Out, e, pkt, ufid_out);
+                    self.tcp_err(data, Out, e, pkt);
                     return Ok(ProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
@@ -1587,20 +1609,20 @@ impl Port {
             }
         }
 
-        let mut hts = Vec::new();
-        let res =
-            self.layers_process(data, Out, ufid_out, pkt, &mut hts, ameta);
-        let hte = HtEntry { hts, epoch };
+        let mut xforms = Transforms::new();
+        let flow_before = pkt.flow().clone();
+        let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
+        let hte = HtEntry { xforms, epoch };
 
         match res {
             Ok(LayerResult::Allow) => {
                 // If there is no Flow ID, then there is no UFT entry.
-                if *ufid_out == FLOW_ID_DEFAULT || tcp_closed {
+                if flow_before == FLOW_ID_DEFAULT || tcp_closed {
                     return Ok(ProcessResult::Modified);
                 }
 
                 // TODO kill unwrap
-                data.uft_out.add(ufid_out.clone(), hte).unwrap();
+                data.uft_out.add(flow_before, hte).unwrap();
                 Ok(ProcessResult::Modified)
             }
 
@@ -1619,7 +1641,6 @@ impl Port {
     fn process_out(
         &self,
         data: &mut PortData,
-        ufid_out: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         ameta: &mut ActionMeta,
@@ -1630,9 +1651,10 @@ impl Port {
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        match uft_out.get_mut(ufid_out) {
+        match uft_out.get_mut(pkt.flow()) {
             Some(entry) if entry.state().epoch == epoch => {
                 entry.hit();
+                data.stats.vals.out_uft_hit += 1;
                 let mut invalidated = false;
                 let mut ufid_in = None;
 
@@ -1641,7 +1663,7 @@ impl Port {
                 if pkt.meta().is_inner_tcp() {
                     match self.process_out_tcp_existing(
                         &mut data.tcp_flows,
-                        ufid_out,
+                        pkt.flow(),
                         pkt.meta(),
                     ) {
                         Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
@@ -1653,7 +1675,7 @@ impl Port {
                         Ok(_) => (),
 
                         Err(e) => {
-                            self.tcp_err(data, Out, e, pkt, ufid_out);
+                            self.tcp_err(data, Out, e, pkt);
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
@@ -1661,23 +1683,26 @@ impl Port {
                     }
                 }
 
-                for ht in &entry.state().hts {
-                    ht.run(pkt.meta_mut())?;
-                    // Network-side flow id.
-                    let nfid_out = InnerFlowId::from(pkt.meta());
+                let flow_before = pkt.flow().clone();
+                for ht in &entry.state().xforms.hdr {
+                    pkt.hdr_transform(&ht)?;
                     ht_probe(
                         &self.name_cstr,
                         "UFT-out",
                         Out,
-                        ufid_out,
-                        &nfid_out,
+                        &flow_before,
+                        pkt.flow(),
                     );
+                }
+
+                for bt in &entry.state().xforms.body {
+                    pkt.body_transform(Out, bt)?;
                 }
 
                 drop(entry);
 
                 if invalidated {
-                    self.uft_tcp_closed(data, ufid_out, ufid_in.as_ref());
+                    self.uft_tcp_closed(data, &flow_before, ufid_in.as_ref());
                 }
 
                 return Ok(ProcessResult::Modified);
@@ -1689,16 +1714,21 @@ impl Port {
                 let epoch = entry.state().epoch;
                 drop(entry);
                 // Network-side flow id.
+                //
+                // TODO This is not correct. We need to apply the HTs
+                // and mirror to get the UFID on the inbound side.
+                // Need to write a test to confirm this is busted and
+                // then fix.
                 let nfid_out = InnerFlowId::from(pkt.meta());
                 let ufid_in = nfid_out.mirror();
-                self.uft_invalidate(data, ufid_out, &ufid_in, epoch);
+                self.uft_invalidate(data, pkt.flow(), &ufid_in, epoch);
             }
 
             // There is no entry; proceed to layer processing.
             None => (),
         }
 
-        self.process_out_miss(data, ufid_out, epoch, pkt, ameta)
+        self.process_out_miss(data, epoch, pkt, ameta)
     }
 
     fn uft_invalidate(
@@ -1779,6 +1809,70 @@ impl Port {
             } else {
                 let (_, _) = (dir, ufid);
             }
+        }
+    }
+
+    fn update_stats_in(
+        stats: &mut PortStats,
+        res: &result::Result<ProcessResult, ProcessError>,
+    ) {
+        match res {
+            Ok(ProcessResult::Bypass) => stats.in_bypass += 1,
+
+            Ok(ProcessResult::Drop { reason }) => {
+                stats.in_drop += 1;
+
+                match reason {
+                    DropReason::Layer { name: _ } => stats.in_drop_layer += 1,
+                    DropReason::TcpErr => stats.in_drop_tcp_err += 1,
+                }
+            }
+
+            Ok(ProcessResult::Modified) => stats.in_modified += 1,
+
+            Ok(ProcessResult::Hairpin(_)) => stats.in_hairpin += 1,
+
+            // XXX We should split the different error types out into
+            // individual stats. However, I'm not sure exactly how I
+            // would like to to this just yet, and I don't want to
+            // hold up this stat work any longer -- better to improve
+            // upon stats in follow-up work. E.g., it might make sense
+            // to just have a top-level error counter in the
+            // PortStats, and then also publisher LayerStats for each
+            // layer along with the different error counts.
+            Err(_) => stats.in_process_err += 1,
+        }
+    }
+
+    fn update_stats_out(
+        stats: &mut PortStats,
+        res: &result::Result<ProcessResult, ProcessError>,
+    ) {
+        match res {
+            Ok(ProcessResult::Bypass) => stats.out_bypass += 1,
+
+            Ok(ProcessResult::Drop { reason }) => {
+                stats.out_drop += 1;
+
+                match reason {
+                    DropReason::Layer { name: _ } => stats.out_drop_layer += 1,
+                    DropReason::TcpErr => stats.out_drop_tcp_err += 1,
+                }
+            }
+
+            Ok(ProcessResult::Modified) => stats.out_modified += 1,
+
+            Ok(ProcessResult::Hairpin(_)) => stats.out_hairpin += 1,
+
+            // XXX We should split the different error types out into
+            // individual stats. However, I'm not sure exactly how I
+            // would like to to this just yet, and I don't want to
+            // hold up this stat work any longer -- better to improve
+            // upon stats in follow-up work. E.g., it might make sense
+            // to just have a top-level error counter in the
+            // PortStats, and then also publisher LayerStats for each
+            // layer along with the different error counts.
+            Err(_) => stats.out_process_err += 1,
         }
     }
 }
@@ -1872,7 +1966,8 @@ extern "C" {
     pub fn __dtrace_probe_port__process__return(
         dir: uintptr_t,
         port: uintptr_t,
-        ifid: uintptr_t,
+        flow_before: uintptr_t,
+        flow_after: uintptr_t,
         epoch: uintptr_t,
         pkt: uintptr_t,
         hp_pkt: uintptr_t,

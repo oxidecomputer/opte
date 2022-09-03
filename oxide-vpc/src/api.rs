@@ -47,7 +47,7 @@ pub struct BoundaryServices {
     pub mac: MacAddr,
 }
 
-/// The IPv4 configuration for an OPTE port.
+/// The IPv4 configuration of a VPC guest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ipv4Cfg {
     /// The private IP subnet of the VPC Subnet.
@@ -73,7 +73,7 @@ pub struct Ipv4Cfg {
     //
     // XXX Keep this optional for now until NAT'ing is more thoroughly
     // implemented in Omicron.
-    pub snat_cfg: Option<SNat4Cfg>,
+    pub snat: Option<SNat4Cfg>,
 
     /// Optional external IP addresses for this port.
     ///
@@ -85,7 +85,7 @@ pub struct Ipv4Cfg {
     pub external_ips: Option<Ipv4Addr>,
 }
 
-/// The IPv6 configuration for an OPTE port
+/// The IPv6 configuration of a VPC guest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ipv6Cfg {
     /// The private IP subnet of the VPC Subnet.
@@ -111,7 +111,7 @@ pub struct Ipv6Cfg {
     //
     // XXX Keep this optional for now until NAT'ing is more thoroughly
     // implemented in Omicron.
-    pub snat_cfg: Option<SNat6Cfg>,
+    pub snat: Option<SNat6Cfg>,
 
     /// Optional external IP addresses for this port.
     ///
@@ -123,7 +123,7 @@ pub struct Ipv6Cfg {
     pub external_ips: Option<Ipv6Addr>,
 }
 
-/// The IP configuration for a port.
+/// The IP configuration of a VPC guest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpCfg {
     Ipv4(Ipv4Cfg),
@@ -176,6 +176,15 @@ impl VpcCfg {
         }
     }
 
+    #[cfg(any(feature = "test-help", test))]
+    pub fn ipv4(&self) -> &Ipv4Cfg {
+        match &self.ip_cfg {
+            IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. } => ipv4,
+
+            _ => panic!("expected an IPv4 configuration"),
+        }
+    }
+
     /// Return the IPv6 configuration, if it exists, or None.
     pub fn ipv6_cfg(&self) -> Option<&Ipv6Cfg> {
         match self.ip_cfg {
@@ -183,6 +192,29 @@ impl VpcCfg {
                 Some(ipv6)
             }
             _ => None,
+        }
+    }
+
+    #[cfg(not(any(feature = "test-help", test)))]
+    /// Return the IPv4 SNAT config, if it exists.
+    pub fn snat(&self) -> Option<&SNat4Cfg> {
+        match &self.ip_cfg {
+            IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. } => {
+                ipv4.snat.as_ref()
+            }
+
+            _ => None,
+        }
+    }
+
+    #[cfg(any(feature = "test-help", test))]
+    pub fn snat(&self) -> &SNat4Cfg {
+        match &self.ip_cfg {
+            IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. } => {
+                ipv4.snat.as_ref().unwrap()
+            }
+
+            _ => panic!("expected an IPv4 SNAT configuration"),
         }
     }
 }

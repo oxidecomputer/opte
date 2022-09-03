@@ -18,7 +18,7 @@ use opte::api::{
 };
 use opte::engine::flow_table::FlowEntryDump;
 use opte::engine::ioctl as api;
-use opte::engine::layer::InnerFlowId;
+use opte::engine::packet::InnerFlowId;
 use opte::engine::rule::RuleDump;
 use opteadm::OpteAdm;
 use oxide_vpc::api::{
@@ -541,7 +541,7 @@ fn main() {
                     vpc_subnet,
                     private_ip: private_ip.into(),
                     gateway_ip: gateway_ip.into(),
-                    snat_cfg: snat,
+                    snat,
                     external_ips: external_ipv4,
                 }),
                 private_mac,

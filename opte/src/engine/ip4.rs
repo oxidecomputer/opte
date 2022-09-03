@@ -38,7 +38,6 @@ cfg_if! {
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
 pub const IPV4_HDR_VER_MASK: u8 = 0xF0;
 pub const IPV4_HDR_VER_SHIFT: u8 = 4;
-pub const IPV4_HDR_SZ: usize = mem::size_of::<Ipv4HdrRaw>();
 pub const IPV4_VERSION: u8 = 4;
 
 pub const DEF_ROUTE: &'static str = "0.0.0.0/0";
@@ -312,6 +311,8 @@ pub enum UlpCsumOpt {
 }
 
 impl Ipv4Hdr {
+    pub const SIZE: usize = mem::size_of::<Ipv4HdrRaw>();
+
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.hdr_len());
         let raw = Ipv4HdrRaw::from(self);
@@ -373,9 +374,9 @@ impl Ipv4Hdr {
         let data_len = tcp.hdr_len() as u16 + body.len() as u16;
 
         Self {
-            hdr_len_bytes: IPV4_HDR_SZ as u8,
+            hdr_len_bytes: Ipv4Hdr::SIZE as u8,
             dscp_ecn: 0,
-            total_len: IPV4_HDR_SZ as u16 + data_len,
+            total_len: Ipv4Hdr::SIZE as u16 + data_len,
             ident: 0,
             frag_and_flags: [0x40, 0x00],
             ttl: 255,

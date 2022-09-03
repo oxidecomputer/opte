@@ -29,7 +29,6 @@ pub const GENEVE_VER_MASK: u8 = 0xC0;
 pub const GENEVE_VER_SHIFT: u8 = 6;
 pub const GENEVE_OPT_LEN_MASK: u8 = 0x3F;
 pub const GENEVE_PORT: u16 = 6081;
-pub const GENEVE_HDR_SZ: usize = mem::size_of::<GeneveHdrRaw>();
 
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
@@ -89,6 +88,9 @@ pub struct GeneveHdr {
 }
 
 impl GeneveHdr {
+    // This is for the base header size only.
+    pub const SIZE: usize = mem::size_of::<GeneveHdrRaw>();
+
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.hdr_len());
         let raw = GeneveHdrRaw::from(self);
@@ -97,7 +99,7 @@ impl GeneveHdr {
     }
 
     pub fn hdr_len(&self) -> usize {
-        usize::from(self.opt_len_bytes) + GENEVE_HDR_SZ
+        usize::from(self.opt_len_bytes) + Self::SIZE
     }
 
     pub fn options_len_bytes(&self) -> usize {

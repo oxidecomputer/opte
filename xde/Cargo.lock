@@ -73,6 +73,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7313c0d620d0cb4dbd9d019e461a4beb501071ff46ec0ab933efb4daa76d73e3"
 
 [[package]]
+name = "dyn-clone"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f94fa09c2aeea5b8839e414b7b841bf429fd25b9c522116ac97ee87856d88b2"
+
+[[package]]
 name = "embedded-hal"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -157,6 +163,7 @@ version = "0.1.0"
 dependencies = [
  "cfg-if",
  "cstr_core",
+ "dyn-clone",
  "heapless",
  "illumos-sys-hdrs",
  "kstat-macro",

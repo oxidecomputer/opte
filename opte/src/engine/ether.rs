@@ -35,8 +35,6 @@ pub const ETHER_TYPE_IPV6: u16 = 0x86DD;
 
 pub const ETHER_ADDR_LEN: usize = 6;
 
-pub const ETHER_HDR_SZ: usize = mem::size_of::<EtherHdrRaw>();
-
 #[repr(u16)]
 #[derive(
     Clone, Copy, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
@@ -286,8 +284,11 @@ fn test_eth_macro() {
 }
 
 impl EtherHdr {
+    // This type is for non-VLAN ethernet headers only.
+    pub const SIZE: usize = mem::size_of::<EtherHdrRaw>();
+
     pub fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(ETHER_HDR_SZ);
+        let mut bytes = Vec::with_capacity(Self::SIZE);
         let raw = EtherHdrRaw::from(self);
         bytes.extend_from_slice(raw.as_bytes());
         bytes

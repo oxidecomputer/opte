@@ -246,8 +246,6 @@ impl TryFrom<&LayoutVerified<&[u8], UdpHdrRaw>> for UdpHdr {
     fn try_from(
         raw: &LayoutVerified<&[u8], UdpHdrRaw>,
     ) -> Result<Self, Self::Error> {
-        const UDP_HDR_MIN_SZ: u16 = 8;
-
         let src_port = u16::from_be_bytes(raw.src_port);
 
         if src_port == DYNAMIC_PORT {
@@ -262,7 +260,7 @@ impl TryFrom<&LayoutVerified<&[u8], UdpHdrRaw>> for UdpHdr {
 
         let length = u16::from_be_bytes(raw.length);
 
-        if length < UDP_HDR_MIN_SZ {
+        if length < UdpHdr::SIZE as u16 {
             return Err(UdpHdrError::BadLength { length });
         }
 

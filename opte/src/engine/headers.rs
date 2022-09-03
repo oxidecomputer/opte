@@ -11,7 +11,7 @@ use super::packet::{PacketRead, ReadErr, WriteError};
 use super::tcp::{TcpHdr, TcpMeta, TcpMetaOpt};
 use super::udp::{UdpHdr, UdpMeta, UdpMetaOpt};
 use core::fmt;
-pub use opte_api::{IpAddr, IpCidr};
+pub use opte_api::{IpAddr, IpCidr, Protocol};
 use serde::{Deserialize, Serialize};
 use zerocopy::LayoutVerified;
 
@@ -210,6 +210,7 @@ pub enum IpMeta {
 }
 
 impl IpMeta {
+    /// Get the [`Ipv4Meta`], if this is IPv4.
     pub fn ip4(&self) -> Option<&Ipv4Meta> {
         match self {
             Self::Ip4(meta) => Some(meta),
@@ -217,10 +218,19 @@ impl IpMeta {
         }
     }
 
+    /// Get the [`Ipv6Meta`], if this is IPv6.
     pub fn ip6(&self) -> Option<&Ipv6Meta> {
         match self {
             Self::Ip6(meta) => Some(meta),
             _ => None,
+        }
+    }
+
+    /// Get the [`Protocol`].
+    pub fn proto(&self) -> Protocol {
+        match self {
+            Self::Ip4(meta) => meta.proto,
+            Self::Ip6(meta) => meta.proto,
         }
     }
 }

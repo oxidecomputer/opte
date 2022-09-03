@@ -112,10 +112,10 @@ mod opte_provider {
     ) {
     }
     fn layer__process__return(
-        dir: Direction,
-        port: &str,
+        dir_port: (Direction, &str),
         name: &str,
-        flow: &str,
+        flow_before: &str,
+        flow_after: &str,
         res: &str,
     ) {
     }
@@ -127,14 +127,17 @@ mod opte_provider {
         pkt: &illumos_sys_hdrs::uintptr_t,
     ) {
     }
+    // XXX USDT (at least on mac/ARM) only allows up to 6 args.
+    // Furthemore, there is a bug on mac/ARM that causes arg5 to
+    // always come back NULL -- effectively limiting us to 5 args. For
+    // this reason we merge some of the arguments.
+    //
+    // https://github.com/oxidecomputer/usdt/issues/62
     pub fn port__process__return(
-        dir: Direction,
-        name: &str,
-        ifid: &str,
+        dir_port: (Direction, &str),
+        ifid_before_after: (&str, &str),
         epoch: u64,
         pkt: &illumos_sys_hdrs::uintptr_t,
-        // XXX there appears to be a bug for usdt on ARM macOS where
-        // arg5 always comes back NULL.
         res: &str,
     ) {
     }

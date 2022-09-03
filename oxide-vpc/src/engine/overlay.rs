@@ -34,7 +34,8 @@ use opte::engine::geneve::{GeneveMeta, Vni, GENEVE_PORT};
 use opte::engine::headers::{HeaderAction, IpAddr};
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::{Ipv6Addr, Ipv6Meta};
-use opte::engine::layer::{InnerFlowId, Layer};
+use opte::engine::layer::Layer;
+use opte::engine::packet::InnerFlowId;
 use opte::engine::port::meta::{ActionMeta, ActionMetaValue};
 use opte::engine::port::{PortBuilder, Pos};
 use opte::engine::rule::{

@@ -35,36 +35,16 @@ pub fn setup(
     // Regardless of which IP version the guest is configured to use, we need to
     // drop any other ARP request, inbound or outbound.
     let mut arp = if let Some(ip_cfg) = cfg.ipv4_cfg() {
-        let mut actions = vec![
-            // ARP Reply for gateway's IPv4 address.
-            Action::Hairpin(Arc::new(ArpReply::new(
-                ip_cfg.gateway_ip,
-                cfg.gateway_mac,
-            ))),
-        ];
-
-        if let Some(ip) = ip_cfg.external_ips.as_ref() {
-            if cfg.proxy_arp_enable {
-                // XXX-EXT-IP Hack to get remote access to guest instance
-                // via Proxy ARP.
-                //
-                // Reuse the same MAC address for both IPs. This should be
-                // fine as the VIP is contained solely to the guest
-                // instance.
-                actions.push(Action::Hairpin(Arc::new(ArpReply::new(
-                    *ip,
-                    cfg.private_mac,
-                ))));
-            }
-        }
         let mut arp = Layer::new(
             "arp",
             pb.name(),
-            // vec![
-            //     // ARP Reply for gateway's IP.
-            //     Action::Hairpin(Arc::new(ArpReply::new(cfg.gw_ip, cfg.gw_mac))),
-            // ],
-            actions,
+            vec![
+                // ARP Reply for gateway's IP.
+                Action::Hairpin(Arc::new(ArpReply::new(
+                    ip_cfg.gateway_ip,
+                    cfg.gateway_mac,
+                ))),
+            ],
             ft_limit,
         );
 
@@ -83,9 +63,26 @@ pub fn setup(
         // XXX-EXT-IP This is a hack to get guest access working until we
         // have boundary services integrated.
         // ================================================================
-        if ip_cfg.external_ips.is_some() && cfg.proxy_arp_enable {
-            let rule = Rule::new(1, arp.action(1).unwrap().clone());
-            arp.add_rule(Direction::In, rule.finalize());
+        if let Some(ip) = ip_cfg.external_ips.as_ref() {
+            if cfg.proxy_arp_enable {
+                let action = Action::Hairpin(Arc::new(ArpReply::new(
+                    *ip,
+                    cfg.private_mac,
+                )));
+                let rule = Rule::new(1, action);
+                arp.add_rule(Direction::In, rule.finalize());
+            }
+        }
+
+        if let Some(snat) = ip_cfg.snat.as_ref() {
+            if cfg.proxy_arp_enable {
+                let action = Action::Hairpin(Arc::new(ArpReply::new(
+                    snat.external_ip,
+                    cfg.private_mac,
+                )));
+                let rule = Rule::new(1, action);
+                arp.add_rule(Direction::In, rule.finalize());
+            }
         }
 
         arp

@@ -5,8 +5,8 @@
 // Copyright 2022 Oxide Computer Company
 
 //! ICMP headers.
-use super::ether::{self, EtherHdr, EtherMeta, ETHER_HDR_SZ};
-use super::ip4::{Ipv4Hdr, Ipv4Meta, IPV4_HDR_SZ};
+use super::ether::{self, EtherHdr, EtherMeta};
+use super::ip4::{Ipv4Hdr, Ipv4Meta};
 use super::packet::{Packet, PacketMeta, PacketRead, PacketReader, Parsed};
 use super::rule::{
     AllowOrDeny, DataPredicate, EtherAddrMatch, GenErr, GenPacketResult,
@@ -106,7 +106,7 @@ impl HairpinAction for IcmpEchoReply {
         });
 
         let mut pkt_bytes =
-            Vec::with_capacity(ETHER_HDR_SZ + IPV4_HDR_SZ + reply_len);
+            Vec::with_capacity(EtherHdr::SIZE + Ipv4Hdr::SIZE + reply_len);
         pkt_bytes.extend_from_slice(&eth.as_bytes());
         pkt_bytes.extend_from_slice(&ip4.as_bytes());
         pkt_bytes.extend_from_slice(&tmp);

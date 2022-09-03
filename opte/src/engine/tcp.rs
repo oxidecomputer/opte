@@ -278,7 +278,7 @@ impl TcpHdr {
             seq: 0,
             ack: 0,
             hdr_len_bytes: 20,
-            flags: 0x02,
+            flags: 0x00,
             win: 0,
             csum: [0; 2],
             csum_minus_hdr: Checksum::from(0),

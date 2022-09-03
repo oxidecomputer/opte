@@ -4,7 +4,19 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::ether::{self, EtherHdr, EtherMeta};
+use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol};
+use super::packet::{Packet, PacketMeta, PacketRead, PacketReader, Parsed};
+use super::rule::{
+    AllowOrDeny, DataPredicate, EtherAddrMatch, GenPacketResult, HairpinAction,
+    IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate,
+};
+use super::udp::{UdpHdr, UdpMeta};
 use core::fmt::{self, Display};
+use opte_api::{DhcpAction, DhcpReplyType, MacAddr, SubnetRouterPair};
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use smoltcp::wire::{DhcpPacket, DhcpRepr};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -15,21 +27,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-use smoltcp::wire::{DhcpPacket, DhcpRepr};
-
-use serde::de::{self, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-use super::ether::{self, EtherHdr, EtherMeta, ETHER_HDR_SZ};
-use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol, IPV4_HDR_SZ};
-use super::packet::{Packet, PacketMeta, PacketRead, PacketReader, Parsed};
-use super::rule::{
-    AllowOrDeny, DataPredicate, EtherAddrMatch, GenPacketResult, HairpinAction,
-    IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate,
-};
-use super::udp::{UdpHdr, UdpMeta};
-use opte_api::{DhcpAction, DhcpReplyType, MacAddr, SubnetRouterPair};
 
 /// The DHCP message type.
 ///
@@ -356,7 +353,7 @@ impl HairpinAction for DhcpAction {
         });
 
         let mut pkt_bytes = Vec::with_capacity(
-            ETHER_HDR_SZ + IPV4_HDR_SZ + UdpHdr::SIZE + tmp.len(),
+            EtherHdr::SIZE + Ipv4Hdr::SIZE + UdpHdr::SIZE + tmp.len(),
         );
         pkt_bytes.extend_from_slice(&eth.as_bytes());
         pkt_bytes.extend_from_slice(&ip.as_bytes());

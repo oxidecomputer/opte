@@ -11,9 +11,7 @@
 /// * RFD 9 -- NETWORKING CONSIDERATIONS
 /// ** §1.13 ARP
 /// * RFC 826 -- An Ethernet Address Resolution Protocol
-use super::ether::{
-    EtherHdr, EtherMeta, ETHER_HDR_SZ, ETHER_TYPE_ARP, ETHER_TYPE_IPV4,
-};
+use super::ether::{EtherHdr, EtherMeta, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
 use super::headers::{Header, RawHeader};
 use super::packet::{
     Packet, PacketMeta, PacketRead, PacketReader, PacketWriter, Parsed,
@@ -384,7 +382,7 @@ impl HairpinAction for ArpReply {
         // TODO Add 2 bytes to alloc and push b_rptr/b_wptr to make
         // sure IP header is properly aligned.
         let pkt =
-            Packet::alloc(ETHER_HDR_SZ + ARP_HDR_SZ + ARP_ETH4_PAYLOAD_SZ);
+            Packet::alloc(EtherHdr::SIZE + ARP_HDR_SZ + ARP_ETH4_PAYLOAD_SZ);
         let mut wtr = PacketWriter::new(pkt, None);
 
         let ethm = &meta.inner.ether.as_ref().unwrap();

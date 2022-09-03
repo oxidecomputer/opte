@@ -28,7 +28,8 @@ use opte::api::{
     Direction, Ipv4Addr, Ipv4Cidr, Ipv6Addr, Ipv6Cidr, NoResp, OpteError,
 };
 use opte::engine::headers::{IpAddr, IpCidr};
-use opte::engine::layer::{InnerFlowId, Layer};
+use opte::engine::layer::Layer;
+use opte::engine::packet::InnerFlowId;
 use opte::engine::port::meta::{ActionMeta, ActionMetaValue};
 use opte::engine::port::{Port, PortBuilder, Pos};
 use opte::engine::rule::{

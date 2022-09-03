@@ -27,7 +27,7 @@ use opte::engine::port::{PortBuilder, Pos};
 use opte::engine::rule::{
     Action, EtherTypeMatch, Ipv4AddrMatch, Ipv6AddrMatch, Predicate, Rule,
 };
-use opte::engine::snat::{NatPool, SNat};
+use opte::engine::snat::{NatPool, SNat, SNat6};
 
 pub const NAT_LAYER_NAME: &'static str = "nat";
 const ONE_TO_ONE_NAT_PRIORITY: u16 = 10;
@@ -81,14 +81,14 @@ fn setup_ipv4_nat(
         layer.add_rule(Direction::In, in_nat.finalize());
     }
 
-    if let Some(snat_cfg) = &ip_cfg.snat_cfg {
+    if let Some(snat_cfg) = &ip_cfg.snat {
         let pool = NatPool::new();
         pool.add(
             ip_cfg.private_ip,
             snat_cfg.external_ip,
             snat_cfg.ports.clone(),
         );
-        let snat = SNat::new(ip_cfg.private_ip.into(), Arc::new(pool));
+        let snat = SNat::new(ip_cfg.private_ip, Arc::new(pool), phys_gw_mac);
         let mut rule =
             Rule::new(SNAT_PRIORITY, Action::Stateful(Arc::new(snat)));
 
@@ -137,14 +137,14 @@ fn setup_ipv6_nat(
         layer.add_rule(Direction::In, in_nat.finalize());
     }
 
-    if let Some(ref snat_cfg) = ip_cfg.snat_cfg {
+    if let Some(ref snat_cfg) = ip_cfg.snat {
         let pool = NatPool::new();
         pool.add(
             ip_cfg.private_ip,
             snat_cfg.external_ip,
             snat_cfg.ports.clone(),
         );
-        let snat = SNat::new(ip_cfg.private_ip.into(), Arc::new(pool));
+        let snat = SNat6::new(ip_cfg.private_ip, Arc::new(pool), phys_gw_mac);
         let mut rule =
             Rule::new(SNAT_PRIORITY, Action::Stateful(Arc::new(snat)));
 

@@ -58,6 +58,7 @@ cfg_if! {
 /// To register a provider see [`KStatNamed`].
 pub trait KStatProvider {
     const NUM_FIELDS: u32;
+    type Snap;
 
     fn init(&mut self) -> Result<(), Error>;
 
@@ -66,6 +67,10 @@ pub trait KStatProvider {
     fn num_fields(&self) -> u32 {
         Self::NUM_FIELDS
     }
+
+    /// Return a snapshot of the stats. This is how you obtain a copy,
+    /// as opposed to the traditional clone().
+    fn snapshot(&self) -> Self::Snap;
 }
 
 /// Initialize and register a [`KStatProvider`].
@@ -209,6 +214,10 @@ impl KStatU64 {
     pub fn new() -> Self {
         Self { inner: kstat_named_t::new() }
     }
+
+    pub fn val(&self) -> u64 {
+        self.inner.val_u64()
+    }
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -231,6 +240,10 @@ impl KStatU64 {
 
     pub fn new() -> Self {
         Self { value: 0 }
+    }
+
+    pub fn val(&self) -> u64 {
+        self.value
     }
 }
 

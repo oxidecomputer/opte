@@ -5,25 +5,25 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::flow_table::{FlowTable, FlowTableDump};
-use super::headers::{IpAddr, IpMeta, UlpMeta};
 use super::ioctl;
-use super::ip4::Protocol;
-use super::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
+use super::packet::{
+    BodyTransformError, Initialized, InnerFlowId, Packet, PacketMeta,
+    PacketRead, Parsed, FLOW_ID_DEFAULT,
+};
 use super::port::meta::ActionMeta;
+use super::port::Transforms;
 use super::rule::{
     self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, AllowOrDeny,
-    Finalized, HdrTransform, HdrTransformError, Rule, RuleDump,
+    Finalized, GenBtError, HdrTransformError, Rule, RuleDump,
 };
 use crate::ddi::time::Moment;
 use crate::{ExecCtx, LogLevel};
 use core::fmt::{self, Display};
-use core::mem;
 use core::num::NonZeroU32;
 use core::result;
 use cstr_core::CString;
 use illumos_sys_hdrs::c_char;
-use opte_api::{Direction, Ipv4Addr};
-use serde::{Deserialize, Serialize};
+use opte_api::Direction;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -40,17 +40,31 @@ cfg_if! {
 
 #[derive(Debug)]
 pub enum LayerError {
+    BodyTransform(BodyTransformError),
     FlowTableFull { layer: String, dir: Direction },
     GenDesc(rule::GenDescError),
-    GenHt(rule::GenHtError),
+    GenBodyTransform(GenBtError),
+    GenHdrTransform(rule::GenHtError),
     GenPacket(rule::GenErr),
     HeaderTransform(HdrTransformError),
     ModMeta(String),
 }
 
+impl From<GenBtError> for LayerError {
+    fn from(e: GenBtError) -> Self {
+        Self::GenBodyTransform(e)
+    }
+}
+
 impl From<HdrTransformError> for LayerError {
     fn from(e: HdrTransformError) -> Self {
         Self::HeaderTransform(e)
+    }
+}
+
+impl From<BodyTransformError> for LayerError {
+    fn from(e: BodyTransformError) -> Self {
+        Self::BodyTransform(e)
     }
 }
 
@@ -231,11 +245,13 @@ impl Layer {
     }
 
     /// Clear all flows from the layer's flow tables.
-    pub fn clear_flows(&mut self) {
+    pub(crate) fn clear_flows(&mut self) {
         self.ft.clear();
     }
 
-    pub fn dump(&self) -> ioctl::DumpLayerResp {
+    /// Dump the contents of this layer. This is used for presenting
+    /// the layer state in a human-friendly manner.
+    pub(crate) fn dump(&self) -> ioctl::DumpLayerResp {
         let rules_in = self.rules_in.dump();
         let rules_out = self.rules_out.dump();
         let ftd = self.ft.dump();
@@ -251,12 +267,12 @@ impl Layer {
     fn gen_desc_fail_probe(
         &self,
         dir: Direction,
-        ifid: &InnerFlowId,
+        flow: &InnerFlowId,
         err: &rule::GenDescError,
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_id = flow_id_sdt_arg::from(ifid);
+                let flow_arg = flow_id_sdt_arg::from(flow);
                 let dir_c = CString::new(format!("{}", dir)).unwrap();
                 let msg_c = CString::new(format!("{:?}", err)).unwrap();
 
@@ -265,22 +281,21 @@ impl Layer {
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
                         dir_c.as_ptr() as uintptr_t,
-                        &flow_id as *const flow_id_sdt_arg as uintptr_t,
+                        &flow_arg as *const flow_id_sdt_arg as uintptr_t,
                         msg_c.as_ptr() as uintptr_t,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
                 let name_s = self.name_c.to_str().unwrap();
-                let flow_s = ifid.to_string();
+                let flow_s = flow.to_string();
                 let msg_s = format!("{:?}", err);
 
                 crate::opte_provider::gen__desc__fail!(
                     || (port_s, name_s, dir, flow_s, msg_s)
                 );
             } else {
-                let (_, _, _, _, _) =
-                    (&self.port_c, &self.name_c, dir, ifid, err);
+                let (..) = (&self.port_c, &self.name_c, dir, flow, err);
             }
         }
     }
@@ -288,12 +303,12 @@ impl Layer {
     fn gen_ht_fail_probe(
         &self,
         dir: Direction,
-        ifid: &InnerFlowId,
+        flow: &InnerFlowId,
         err: &rule::GenHtError,
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_id = flow_id_sdt_arg::from(ifid);
+                let flow_arg = flow_id_sdt_arg::from(flow);
                 let dir_c = CString::new(format!("{}", dir)).unwrap();
                 let msg_c = CString::new(format!("{:?}", err)).unwrap();
 
@@ -302,29 +317,31 @@ impl Layer {
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
                         dir_c.as_ptr() as uintptr_t,
-                        &flow_id as *const flow_id_sdt_arg as uintptr_t,
+                        &flow_arg as *const flow_id_sdt_arg as uintptr_t,
                         msg_c.as_ptr() as uintptr_t,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
-                let flow_s = ifid.to_string();
+                let flow_s = flow.to_string();
                 let err_s = format!("{:?}", err);
 
                 crate::opte_provider::gen__ht__fail!(
                     || (port_s, &self.name, dir, flow_s, err_s)
                 );
             } else {
-                let (_, _, _) = (dir, ifid, err);
+                let (..) = (dir, flow, err);
             }
         }
     }
 
-    pub fn expire_flows(&mut self, now: Moment) {
+    /// Expire all flows whose TTL has been reached based on the
+    /// passed in moment.
+    pub(crate) fn expire_flows(&mut self, now: Moment) {
         self.ft.expire_flows(now);
     }
 
-    pub fn layer_process_entry_probe(
+    pub(crate) fn layer_process_entry_probe(
         &self,
         dir: Direction,
         ifid: &InnerFlowId,
@@ -358,7 +375,8 @@ impl Layer {
     fn layer_process_return_probe(
         &self,
         dir: Direction,
-        ifid: &InnerFlowId,
+        flow_before: &InnerFlowId,
+        flow_after: &InnerFlowId,
         res: &result::Result<LayerResult, LayerError>,
     ) {
         cfg_if! {
@@ -369,21 +387,25 @@ impl Layer {
                     Ok(v) => format!("{}", v),
                     Err(e) => format!("ERROR: {:?}", e),
                 };
-                let ifid_arg = flow_id_sdt_arg::from(ifid);
+                let flow_b_arg = flow_id_sdt_arg::from(flow_before);
+                let flow_a_arg = flow_id_sdt_arg::from(flow_after);
                 let res_c = CString::new(res_str).unwrap();
+
 
                 unsafe {
                     __dtrace_probe_layer__process__return(
                         dir.cstr_raw() as uintptr_t,
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
-                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        &flow_b_arg as *const flow_id_sdt_arg as uintptr_t,
+                        &flow_a_arg as *const flow_id_sdt_arg as uintptr_t,
                         res_c.as_ptr() as uintptr_t,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
-                let ifid_s = ifid.to_string();
+                let flow_b_s = flow_before.to_string();
+                let flow_a_s = flow_after.to_string();
                 // XXX This would probably be better as separate probes;
                 // for now this does the trick.
                 let res_s = match res {
@@ -391,10 +413,10 @@ impl Layer {
                     Err(e) => format!("ERROR: {:?}", e),
                 };
                 crate::opte_provider::layer__process__return!(
-                    || (dir, port_s, &self.name, ifid_s, &res_s)
+                    || ((dir, port_s), &self.name, ifid_b_s, ifid_a_s, &res_s)
                 );
             } else {
-                let (_, _, _) = (dir, ifid, res);
+                let (_, _, _, _) = (dir, flow_before, flow_after, res);
             }
         }
     }
@@ -424,33 +446,36 @@ impl Layer {
         }
     }
 
-    pub fn num_flows(&self) -> u32 {
+    /// Return the number of active flows.
+    pub(crate) fn num_flows(&self) -> u32 {
         self.ft.num_flows()
     }
 
-    pub fn num_rules(&self, dir: Direction) -> usize {
+    /// Return the number of rules defined in this layer in the given
+    /// direction.
+    pub(crate) fn num_rules(&self, dir: Direction) -> usize {
         match dir {
             Direction::Out => self.rules_out.num_rules(),
             Direction::In => self.rules_in.num_rules(),
         }
     }
 
-    pub fn process(
+    pub(crate) fn process(
         &mut self,
         ectx: &ExecCtx,
         dir: Direction,
-        ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
-        hts: &mut Vec<HdrTransform>,
+        xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::*;
-        self.layer_process_entry_probe(dir, &ifid);
+        let flow_before = pkt.flow().clone();
+        self.layer_process_entry_probe(dir, pkt.flow());
         let res = match dir {
-            Out => self.process_out(ectx, pkt, &ifid, hts, ameta),
-            In => self.process_in(ectx, pkt, &ifid, hts, ameta),
+            Out => self.process_out(ectx, pkt, xforms, ameta),
+            In => self.process_in(ectx, pkt, xforms, ameta),
         };
-        self.layer_process_return_probe(dir, &ifid, &res);
+        self.layer_process_return_probe(dir, &flow_before, pkt.flow(), &res);
         res
     }
 
@@ -458,33 +483,36 @@ impl Layer {
         &mut self,
         ectx: &ExecCtx,
         pkt: &mut Packet<Parsed>,
-        ifid: &InnerFlowId,
-        hts: &mut Vec<HdrTransform>,
+        xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
-        if *ifid == FLOW_ID_DEFAULT {
-            return self.process_in_rules(ectx, ifid, pkt, hts, ameta);
+        if *pkt.flow() == FLOW_ID_DEFAULT {
+            return self.process_in_rules(ectx, pkt, xforms, ameta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        if let Some(desc) = self.ft.get_in(&ifid) {
+        if let Some(desc) = self.ft.get_in(pkt.flow()) {
+            let flow_before = *pkt.flow();
             let ht = desc.gen_ht(Direction::In);
-            hts.push(ht.clone());
-            ht.run(pkt.meta_mut())?;
-            let ifid_after = InnerFlowId::from(pkt.meta());
+            pkt.hdr_transform(&ht)?;
+            xforms.hdr.push(ht);
             ht_probe(
                 &self.port_c,
                 &format!("{}-ft", self.name),
                 Direction::In,
-                &ifid,
-                &ifid_after,
+                &flow_before,
+                &pkt.flow(),
             );
 
-            // if let Some(ctx) = state.ra.ctx {
-            //     ctx.exec(pkt.meta(), &mut [0; 0])
-            //         .expect("failed action context exec()");
-            // };
+            if let Some(body_segs) = pkt.body_segs() {
+                if let Some(bt) =
+                    desc.gen_bt(Direction::In, pkt.meta(), &body_segs)?
+                {
+                    pkt.body_transform(Direction::In, &bt)?;
+                    xforms.body.push(bt);
+                }
+            }
 
             return Ok(LayerResult::Allow);
         }
@@ -492,20 +520,20 @@ impl Layer {
         // XXX Flow table miss stat
 
         // No FlowTable entry, perhaps there is a matching Rule?
-        self.process_in_rules(ectx, ifid, pkt, hts, ameta)
+        self.process_in_rules(ectx, pkt, xforms, ameta)
     }
 
     fn process_in_rules(
         &mut self,
         ectx: &ExecCtx,
-        ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
-        hts: &mut Vec<HdrTransform>,
+        xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::In;
         let mut rdr = pkt.get_body_rdr();
-        let rule = self.rules_in.find_match(ifid, pkt.meta(), ameta, &mut rdr);
+        let rule =
+            self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta, &mut rdr);
         let _ = rdr.finish();
 
         if rule.is_none() {
@@ -523,11 +551,11 @@ impl Layer {
 
         match rule.unwrap().action() {
             Action::Deny => {
-                self.rule_deny_probe(In, ifid);
+                self.rule_deny_probe(In, pkt.flow());
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            Action::Meta(action) => match action.mod_meta(ifid, ameta) {
+            Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
                 Ok(res) => match res {
                     AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
 
@@ -542,7 +570,7 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(In, ifid, ameta) {
+                let ht = match action.gen_ht(In, pkt.flow(), ameta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
@@ -553,20 +581,20 @@ impl Layer {
                     },
 
                     Err(e) => {
-                        self.record_gen_ht_failure(&ectx, In, &ifid, &e);
-                        return Err(LayerError::GenHt(e));
+                        self.record_gen_ht_failure(&ectx, In, pkt.flow(), &e);
+                        return Err(LayerError::GenHdrTransform(e));
                     }
                 };
 
-                hts.push(ht.clone());
-                ht.run(pkt.meta_mut())?;
-                let ifid_after = InnerFlowId::from(pkt.meta());
+                let flow_before = pkt.flow().clone();
+                pkt.hdr_transform(&ht)?;
+                xforms.hdr.push(ht);
                 ht_probe(
                     &self.port_c,
                     &format!("{}-rt", self.name),
                     In,
-                    &ifid,
-                    &ifid_after,
+                    &flow_before,
+                    pkt.flow(),
                 );
 
                 return Ok(LayerResult::Allow);
@@ -580,7 +608,7 @@ impl Layer {
                     });
                 }
 
-                let desc = match action.gen_desc(&ifid, ameta) {
+                let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(desc) => desc,
 
@@ -592,16 +620,31 @@ impl Layer {
                     },
 
                     Err(e) => {
-                        self.record_gen_desc_failure(&ectx, In, &ifid, &e);
+                        self.record_gen_desc_failure(&ectx, In, pkt.flow(), &e);
                         return Err(LayerError::GenDesc(e));
                     }
                 };
 
+                let flow_before = *pkt.flow();
                 let ht_in = desc.gen_ht(In);
-                hts.push(ht_in.clone());
-                ht_in.run(pkt.meta_mut())?;
-                let ifid_after = InnerFlowId::from(pkt.meta());
-                // The outbound FlowId must be calculated _after_ the
+                pkt.hdr_transform(&ht_in)?;
+                xforms.hdr.push(ht_in);
+                ht_probe(
+                    &self.port_c,
+                    &format!("{}-rt", self.name),
+                    Direction::In,
+                    &flow_before,
+                    pkt.flow(),
+                );
+
+                if let Some(body_segs) = pkt.body_segs() {
+                    if let Some(bt) = desc.gen_bt(In, pkt.meta(), &body_segs)? {
+                        pkt.body_transform(In, &bt)?;
+                        xforms.body.push(bt);
+                    }
+                }
+
+                // The outbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top" of layer
                 // represents how the client sees the traffic, and the
                 // "bottom" of the layer represents how the network
@@ -609,21 +652,8 @@ impl Layer {
                 // how the cilent sees the traffic. The final step is
                 // to mirror the IPs and ports to reflect the traffic
                 // direction change.
-                let out_ifid = ifid_after.clone().mirror();
-                ht_probe(
-                    &self.port_c,
-                    &format!("{}-rt", self.name),
-                    Direction::In,
-                    &ifid,
-                    &ifid_after,
-                );
-
-                self.ft.add_pair(desc, ifid.clone(), out_ifid);
-
-                // if let Some(ctx) = ra_in.ctx {
-                //     ctx.exec(flow_id, &mut [0; 0]);
-                // }
-
+                let flow_out = pkt.flow().mirror();
+                self.ft.add_pair(desc, flow_before, flow_out);
                 return Ok(LayerResult::Allow);
             }
 
@@ -657,57 +687,55 @@ impl Layer {
         &mut self,
         ectx: &ExecCtx,
         pkt: &mut Packet<Parsed>,
-        ifid: &InnerFlowId,
-        hts: &mut Vec<HdrTransform>,
+        xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
-        if *ifid == FLOW_ID_DEFAULT {
-            return self.process_out_rules(ectx, ifid, pkt, hts, ameta);
+        if *pkt.flow() == FLOW_ID_DEFAULT {
+            return self.process_out_rules(ectx, pkt, xforms, ameta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        if let Some(desc) = self.ft.get_out(&ifid) {
+        if let Some(desc) = self.ft.get_out(pkt.flow()) {
+            let flow_before = pkt.flow().clone();
             let ht = desc.gen_ht(Direction::Out);
-            hts.push(ht.clone());
-            ht.run(pkt.meta_mut())?;
-            let ifid_after = InnerFlowId::from(pkt.meta());
+            pkt.hdr_transform(&ht)?;
+            xforms.hdr.push(ht);
             ht_probe(
                 &self.port_c,
                 &format!("{}-ft", self.name),
                 Direction::Out,
-                &ifid,
-                &ifid_after,
+                &flow_before,
+                pkt.flow(),
             );
 
-            // XXX I believe the `ra` field is from when a rule's
-            // state consisted of a RuleAction, but I changed it
-            // to be an action descriptor quite a ways back.
-            //
-            // if let Some(ctx) = state.ra.ctx {
-            //     ctx.exec(flow_id, &mut [0; 0])
-            //         .expect("failed action context exec()");
-            // };
+            if let Some(body_segs) = pkt.body_segs() {
+                if let Some(bt) =
+                    desc.gen_bt(Direction::Out, pkt.meta(), &body_segs)?
+                {
+                    pkt.body_transform(Direction::Out, &bt)?;
+                    xforms.body.push(bt);
+                }
+            }
 
             return Ok(LayerResult::Allow);
         }
 
         // No FlowTable entry, perhaps there is matching Rule?
-        self.process_out_rules(ectx, &ifid, pkt, hts, ameta)
+        self.process_out_rules(ectx, pkt, xforms, ameta)
     }
 
     fn process_out_rules(
         &mut self,
         ectx: &ExecCtx,
-        ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
-        hts: &mut Vec<HdrTransform>,
+        xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::Out;
         let mut rdr = pkt.get_body_rdr();
         let rule =
-            self.rules_out.find_match(ifid, pkt.meta(), &ameta, &mut rdr);
+            self.rules_out.find_match(pkt.flow(), pkt.meta(), &ameta, &mut rdr);
         let _ = rdr.finish();
 
         if rule.is_none() {
@@ -725,11 +753,11 @@ impl Layer {
 
         match rule.unwrap().action() {
             Action::Deny => {
-                self.rule_deny_probe(Out, ifid);
+                self.rule_deny_probe(Out, pkt.flow());
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            Action::Meta(action) => match action.mod_meta(ifid, ameta) {
+            Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
                 Ok(res) => match res {
                     AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
 
@@ -744,7 +772,7 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(Out, ifid, ameta) {
+                let ht = match action.gen_ht(Out, pkt.flow(), ameta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
@@ -755,20 +783,20 @@ impl Layer {
                     },
 
                     Err(e) => {
-                        self.record_gen_ht_failure(&ectx, Out, &ifid, &e);
-                        return Err(LayerError::GenHt(e));
+                        self.record_gen_ht_failure(&ectx, Out, pkt.flow(), &e);
+                        return Err(LayerError::GenHdrTransform(e));
                     }
                 };
 
-                hts.push(ht.clone());
-                ht.run(pkt.meta_mut())?;
-                let ifid_after = InnerFlowId::from(pkt.meta());
+                let flow_before = pkt.flow().clone();
+                pkt.hdr_transform(&ht)?;
+                xforms.hdr.push(ht);
                 ht_probe(
                     &self.port_c,
                     &format!("{}-rt", self.name),
                     Out,
-                    &ifid,
-                    &ifid_after,
+                    &flow_before,
+                    pkt.flow(),
                 );
 
                 return Ok(LayerResult::Allow);
@@ -811,7 +839,7 @@ impl Layer {
                     });
                 }
 
-                let desc = match action.gen_desc(&ifid, ameta) {
+                let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(desc) => desc,
 
@@ -823,16 +851,38 @@ impl Layer {
                     },
 
                     Err(e) => {
-                        self.record_gen_desc_failure(&ectx, Out, &ifid, &e);
+                        self.record_gen_desc_failure(
+                            &ectx,
+                            Out,
+                            pkt.flow(),
+                            &e,
+                        );
                         return Err(LayerError::GenDesc(e));
                     }
                 };
 
+                let flow_before = pkt.flow().clone();
                 let ht_out = desc.gen_ht(Out);
-                hts.push(ht_out.clone());
-                ht_out.run(pkt.meta_mut())?;
-                let ifid_after = InnerFlowId::from(pkt.meta());
-                // The inbound FlowId must be calculated _after_ the
+                pkt.hdr_transform(&ht_out)?;
+                xforms.hdr.push(ht_out);
+                ht_probe(
+                    &self.port_c,
+                    &format!("{}-rt", self.name),
+                    Out,
+                    &flow_before,
+                    pkt.flow(),
+                );
+
+                if let Some(body_segs) = pkt.body_segs() {
+                    if let Some(bt) =
+                        desc.gen_bt(Out, pkt.meta(), &body_segs)?
+                    {
+                        pkt.body_transform(Out, &bt)?;
+                        xforms.body.push(bt);
+                    }
+                }
+
+                // The inbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top" of layer
                 // represents how the client sees the traffic, and the
                 // "bottom" of the layer represents how the network
@@ -840,21 +890,8 @@ impl Layer {
                 // how the network sees the traffic. The final step is
                 // to mirror the IPs and ports to reflect the traffic
                 // direction change.
-                let in_ifid = ifid_after.clone().mirror();
-                ht_probe(
-                    &self.port_c,
-                    &format!("{}-rt", self.name),
-                    Out,
-                    &ifid,
-                    &ifid_after,
-                );
-
-                self.ft.add_pair(desc, in_ifid, ifid.clone());
-
-                // if let Some(ctx) = ra_out2.ctx {
-                //     ctx.exec(flow_id, &mut [0; 0]);
-                // }
-
+                let flow_in = pkt.flow().mirror();
+                self.ft.add_pair(desc, flow_in, flow_before);
                 return Ok(LayerResult::Allow);
             }
 
@@ -888,7 +925,7 @@ impl Layer {
         &self,
         ectx: &ExecCtx,
         dir: Direction,
-        ifid: &InnerFlowId,
+        flow: &InnerFlowId,
         err: &rule::GenDescError,
     ) {
         // XXX increment stat
@@ -896,17 +933,17 @@ impl Layer {
             LogLevel::Error,
             &format!(
                 "failed to generate descriptor for stateful action: {} {:?}",
-                ifid, err
+                flow, err
             ),
         );
-        self.gen_desc_fail_probe(dir, ifid, err);
+        self.gen_desc_fail_probe(dir, flow, err);
     }
 
     fn record_gen_ht_failure(
         &self,
         ectx: &ExecCtx,
         dir: Direction,
-        ifid: &InnerFlowId,
+        flow: &InnerFlowId,
         err: &rule::GenHtError,
     ) {
         // XXX increment stat
@@ -914,20 +951,30 @@ impl Layer {
             LogLevel::Error,
             &format!(
                 "failed to generate HdrTransform for static action: {} {:?}",
-                ifid, err
+                flow, err
             ),
         );
-        self.gen_ht_fail_probe(dir, ifid, err);
+        self.gen_ht_fail_probe(dir, flow, err);
     }
 
-    pub fn remove_rule(&mut self, dir: Direction, id: RuleId) -> Result<()> {
+    /// Remove the rule with the specified direction and ID, if such a
+    /// rule exists.
+    pub(crate) fn remove_rule(
+        &mut self,
+        dir: Direction,
+        id: RuleId,
+    ) -> Result<()> {
         match dir {
             Direction::In => self.rules_in.remove(id),
             Direction::Out => self.rules_out.remove(id),
         }
     }
 
-    pub fn rule_deny_probe(&self, dir: Direction, flow_id: &InnerFlowId) {
+    pub(crate) fn rule_deny_probe(
+        &self,
+        dir: Direction,
+        flow_id: &InnerFlowId,
+    ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 let flow_arg = flow_id_sdt_arg::from(flow_id);
@@ -953,12 +1000,12 @@ impl Layer {
         }
     }
 
-    /// Fine a rule and return its id.
+    /// Find a rule and return its [`RuleId`].
     ///
     /// Search for a matching rule that has the same direction and
     /// predicates as the specified rule. If no matching rule is
     /// found, then `None` is returned.
-    pub fn find_rule(
+    pub(crate) fn find_rule(
         &self,
         dir: Direction,
         rule: &Rule<Finalized>,
@@ -973,7 +1020,7 @@ impl Layer {
     ///
     /// Updating the ruleset immediately invalidates all flows
     /// established in the Flow Table.
-    pub fn set_rules(
+    pub(crate) fn set_rules(
         &mut self,
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
@@ -981,79 +1028,6 @@ impl Layer {
         self.ft.clear();
         self.rules_in.set_rules(in_rules);
         self.rules_out.set_rules(out_rules);
-    }
-}
-
-pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
-    proto: Protocol::Reserved,
-    src_ip: IpAddr::Ip4(Ipv4Addr::ANY_ADDR),
-    src_port: 0,
-    dst_ip: IpAddr::Ip4(Ipv4Addr::ANY_ADDR),
-    dst_port: 0,
-};
-
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    Deserialize,
-    Eq,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-)]
-pub struct InnerFlowId {
-    pub proto: Protocol,
-    pub src_ip: IpAddr,
-    pub src_port: u16,
-    pub dst_ip: IpAddr,
-    pub dst_port: u16,
-}
-
-impl InnerFlowId {
-    /// Swap IP source and destination as well as ULP port source and
-    /// destination.
-    pub fn mirror(mut self) -> Self {
-        mem::swap(&mut self.src_ip, &mut self.dst_ip);
-        mem::swap(&mut self.src_port, &mut self.dst_port);
-        self
-    }
-}
-
-impl Display for InnerFlowId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}:{}:{}:{}:{}",
-            self.proto, self.src_ip, self.src_port, self.dst_ip, self.dst_port,
-        )
-    }
-}
-
-impl From<&PacketMeta> for InnerFlowId {
-    fn from(meta: &PacketMeta) -> Self {
-        let (proto, src_ip, dst_ip) = match &meta.inner.ip {
-            Some(IpMeta::Ip4(ip4)) => {
-                (ip4.proto, IpAddr::Ip4(ip4.src), IpAddr::Ip4(ip4.dst))
-            }
-            Some(IpMeta::Ip6(ip6)) => {
-                (ip6.proto, IpAddr::Ip6(ip6.src), IpAddr::Ip6(ip6.dst))
-            }
-            None => (
-                Protocol::Reserved,
-                IpAddr::Ip4(Ipv4Addr::from([0; 4])),
-                IpAddr::Ip4(Ipv4Addr::from([0; 4])),
-            ),
-        };
-
-        let (src_port, dst_port) = match &meta.inner.ulp {
-            Some(UlpMeta::Tcp(tcp)) => (tcp.src, tcp.dst),
-            Some(UlpMeta::Udp(udp)) => (udp.src, udp.dst),
-            None => (0, 0),
-        };
-
-        InnerFlowId { proto, src_ip, src_port, dst_ip, dst_port }
     }
 }
 
@@ -1282,7 +1256,8 @@ extern "C" {
         dir: uintptr_t,
         port: uintptr_t,
         name: uintptr_t,
-        ifid: uintptr_t,
+        flow_before: uintptr_t,
+        flow_after: uintptr_t,
         res: uintptr_t,
     );
 
@@ -1321,7 +1296,7 @@ mod test {
     #[test]
     fn find_rule() {
         use crate::engine::headers::{IpMeta, UlpMeta};
-        use crate::engine::ip4::Ipv4Meta;
+        use crate::engine::ip4::{Ipv4Meta, Protocol};
         use crate::engine::packet::{MetaGroup, PacketReader};
         use crate::engine::rule::{self, Ipv4AddrMatch, Predicate};
         use crate::engine::tcp::TcpMeta;

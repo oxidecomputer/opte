@@ -4,7 +4,7 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use super::layer::InnerFlowId;
+use super::packet::InnerFlowId;
 use super::tcp::{TcpFlags, TcpMeta, TcpState};
 use core::fmt::{self, Display};
 use cstr_core::CString;
