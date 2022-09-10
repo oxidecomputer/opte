@@ -29,6 +29,7 @@ use super::router::RouterTargetInternal;
 use crate::api::{GuestPhysAddr, PhysNet};
 use crate::VpcCfg;
 use opte::api::{CmdOk, Direction, Ipv4Addr, MacAddr, OpteError};
+use opte::ddi::sync::{KMutex, KMutexType};
 use opte::engine::ether::{EtherMeta, ETHER_TYPE_IPV6};
 use opte::engine::geneve::{GeneveMeta, Vni, GENEVE_PORT};
 use opte::engine::headers::{HeaderAction, IpAddr};
@@ -41,7 +42,6 @@ use opte::engine::rule::{
     self, Action, AllowOrDeny, DataPredicate, HdrTransform, MappingResource,
     Predicate, Resource, ResourceEntry, Rule, StaticAction,
 };
-use opte::engine::sync::{KMutex, KMutexType};
 use opte::engine::udp::UdpMeta;
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";

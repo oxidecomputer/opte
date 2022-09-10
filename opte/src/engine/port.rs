@@ -15,11 +15,11 @@ use super::packet::{Initialized, Packet, PacketMeta, PacketState, Parsed};
 use super::rule::{
     ht_probe, Action, Finalized, HdrTransform, HdrTransformError, Rule,
 };
-use super::sync::{KMutex, KMutexType};
 use super::tcp::TcpState;
 use super::tcp_state::TcpFlowState;
-use super::time::Moment;
 use crate::ddi::kstat::{self, KStatNamed, KStatProvider, KStatU64};
+use crate::ddi::sync::{KMutex, KMutexType};
+use crate::ddi::time::Moment;
 use crate::ExecCtx;
 use core::fmt::{self, Display};
 use core::num::NonZeroU32;

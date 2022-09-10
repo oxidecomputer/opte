@@ -4,5 +4,7 @@
 
 // Copyright 2022 Oxide Computer Company
 
-//! Various abstractions out the illumos DDI/DKI.
+//! Various abstractions for using the illumos DDI/DKI.
 pub mod kstat;
+pub mod sync;
+pub mod time;

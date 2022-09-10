@@ -5,7 +5,7 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::layer::InnerFlowId;
-use super::time::{Moment, MILLIS};
+use crate::ddi::time::{Moment, MILLIS};
 use core::fmt;
 use core::num::NonZeroU32;
 use cstr_core::CString;

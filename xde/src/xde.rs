@@ -31,6 +31,8 @@ use opte::api::{
     CmdOk, Direction, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
     SetXdeUnderlayReq,
 };
+use opte::ddi::sync::{KMutex, KMutexType, KRwLock, KRwLockType};
+use opte::ddi::time::{Interval, Moment, Periodic};
 use opte::engine::ether::{EtherAddr, EtherType};
 use opte::engine::geneve::Vni;
 use opte::engine::headers::{IpAddr, IpCidr};
@@ -41,9 +43,6 @@ use opte::engine::packet::{
 };
 use opte::engine::port::meta;
 use opte::engine::port::{Port, PortBuilder, ProcessResult};
-use opte::engine::sync::{KMutex, KMutexType};
-use opte::engine::sync::{KRwLock, KRwLockType};
-use opte::engine::time::{Interval, Moment, Periodic};
 use opte::ExecCtx;
 use oxide_vpc::api::{
     AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,

@@ -23,6 +23,7 @@
 //! TODO This module belongs in oxide_vpc as it's testing VPC-specific
 //! configuration.
 use opte::api::{Direction::*, MacAddr, OpteError};
+use opte::ddi::time::Moment;
 use opte::engine::arp::{
     ArpEth4Payload, ArpEth4PayloadRaw, ArpHdrRaw, ARP_HDR_SZ,
 };
@@ -46,7 +47,6 @@ use opte::engine::port::{
 };
 use opte::engine::rule::{self, MappingResource, Rule};
 use opte::engine::tcp::{TcpFlags, TcpHdr};
-use opte::engine::time::Moment;
 use opte::engine::udp::{UdpHdr, UdpMeta};
 use opte::ExecCtx;
 use oxide_vpc::api::{

@@ -12,7 +12,7 @@ use super::rule::{
     self, ActionDesc, AllowOrDeny, DataPredicate, FiniteResource, HdrTransform,
     Predicate, Resource, ResourceEntry, ResourceError, StatefulAction,
 };
-use super::sync::{KMutex, KMutexType};
+use crate::ddi::sync::{KMutex, KMutexType};
 use core::fmt;
 use core::ops::RangeInclusive;
 use opte_api::{Direction, Ipv4Addr};

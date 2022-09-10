@@ -29,11 +29,9 @@ pub mod packet;
 pub mod port;
 pub mod rule;
 pub mod snat;
-pub mod sync;
 #[macro_use]
 pub mod tcp;
 pub mod tcp_state;
-pub mod time;
 #[macro_use]
 pub mod udp;
 

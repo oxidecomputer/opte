@@ -14,7 +14,7 @@ use super::rule::{
     self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, AllowOrDeny,
     Finalized, HdrTransform, HdrTransformError, Rule, RuleDump,
 };
-use super::time::Moment;
+use crate::ddi::time::Moment;
 use crate::{ExecCtx, LogLevel};
 use core::fmt::{self, Display};
 use core::mem;
