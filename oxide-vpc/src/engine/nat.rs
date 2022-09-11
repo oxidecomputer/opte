@@ -6,10 +6,10 @@
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::boxed::Box;
+        use alloc::string::ToString;
         use alloc::sync::Arc;
     } else {
-        use std::boxed::Box;
+        use std::string::ToString;
         use std::sync::Arc;
     }
 }
@@ -20,6 +20,7 @@ use opte::api::{Direction, OpteError};
 use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::layer::Layer;
 use opte::engine::nat::Nat4;
+use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::port::{PortBuilder, Pos};
 use opte::engine::rule::{
     Action, EtherTypeMatch, Ipv4AddrMatch, Predicate, Rule,
@@ -46,9 +47,10 @@ pub fn setup(
         out_nat.add_predicate(Predicate::InnerEtherType(vec![
             EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
         ]));
-        out_nat.add_predicate(Predicate::Meta(Box::new(
-            RouterTargetInternal::InternetGateway,
-        )));
+        out_nat.add_predicate(Predicate::Meta(
+            RouterTargetInternal::KEY.to_string(),
+            RouterTargetInternal::InternetGateway.as_meta(),
+        ));
         layer.add_rule(Direction::Out, out_nat.finalize());
 
         // 1:1 NAT inbound packets destined for external IP.
@@ -72,9 +74,10 @@ pub fn setup(
         rule.add_predicate(Predicate::InnerEtherType(vec![
             EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
         ]));
-        rule.add_predicate(Predicate::Meta(Box::new(
-            RouterTargetInternal::InternetGateway,
-        )));
+        rule.add_predicate(Predicate::Meta(
+            RouterTargetInternal::KEY.to_string(),
+            RouterTargetInternal::InternetGateway.as_meta(),
+        ));
         layer.add_rule(Direction::Out, rule.finalize());
     }
 

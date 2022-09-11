@@ -41,7 +41,7 @@ use opte::engine::packet::{
     Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
     Parsed,
 };
-use opte::engine::port::meta::Meta;
+use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::{
     Port, PortBuilder, PortState, ProcessError, ProcessResult,
 };
@@ -656,7 +656,7 @@ fn port_transition_running() {
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
     v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
-    let mut lmeta = Meta::new();
+    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
 
     // Add router entry that allows g1 to send to other guests on the
@@ -674,12 +674,12 @@ fn port_transition_running() {
     // -> Running.
     // ================================================================
     let mut pkt1 = tcp_telnet_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt1, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Err(ProcessError::BadState(_))));
     assert_port!(g1);
     g1.port.start();
     set_state!(g1, PortState::Running);
-    let res = g1.port.process(Out, &mut pkt1, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["fw.flows_in", "fw.flows_out", "uft.flows_out"]);
 }
@@ -697,7 +697,7 @@ fn port_transition_reset() {
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
     v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
-    let mut lmeta = Meta::new();
+    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
 
     // Add router entry that allows g1 to send to other guests on the
@@ -718,13 +718,13 @@ fn port_transition_reset() {
     let mut pkt1 = tcp_telnet_syn(&g1_cfg, &g2_cfg);
     g1.port.start();
     set_state!(g1, PortState::Running);
-    let res = g1.port.process(Out, &mut pkt1, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["fw.flows_in", "fw.flows_out", "uft.flows_out"]);
     g1.port.reset();
     zero_flows!(g1);
     set_state!(g1, PortState::Ready);
-    let res = g1.port.process(Out, &mut pkt1, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Err(ProcessError::BadState(_))));
     assert_port!(g1);
 }
@@ -748,8 +748,8 @@ fn port_transition_pause() {
     let v2p = Arc::new(Virt2Phys::new());
     v2p.set(IpAddr::Ip4(g1_cfg.private_ip), g1_phys);
     v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
-    let mut g1_lmeta = Meta::new();
-    let mut g2_lmeta = Meta::new();
+    let mut g1_ameta = ActionMeta::new();
+    let mut g2_ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     let mut g2 = oxide_net_setup("g2_port", &g2_cfg, v2p.clone());
 
@@ -794,11 +794,11 @@ fn port_transition_pause() {
     // Send the HTTP SYN.
     // ================================================================
     let mut pkt1 = http_tcp_syn(&g2_cfg, &g1_cfg);
-    let res = g2.port.process(Out, &mut pkt1, &mut g2_lmeta);
+    let res = g2.port.process(Out, &mut pkt1, &mut g2_ameta);
     assert!(matches!(res, Ok(Modified)));
     incr!(g2, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
 
-    let res = g1.port.process(In, &mut pkt1, &mut g1_lmeta);
+    let res = g1.port.process(In, &mut pkt1, &mut g1_ameta);
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["fw.flows_in", "fw.flows_out", "uft.flows_in"]);
 
@@ -830,7 +830,7 @@ fn port_transition_pause() {
         ),
         Err(OpteError::BadState(_))
     ));
-    let res = g2.port.process(Out, &mut pkt1, &mut g2_lmeta);
+    let res = g2.port.process(Out, &mut pkt1, &mut g2_ameta);
     assert!(matches!(res, Err(ProcessError::BadState(_))));
     let fw_rule: FirewallRule =
         "action=allow priority=10 dir=in protocol=tcp port=22".parse().unwrap();
@@ -860,13 +860,13 @@ fn port_transition_pause() {
     set_state!(g2, PortState::Running);
 
     let mut pkt2 = http_tcp_syn_ack(&g1_cfg, &g2_cfg);
-    g1_lmeta.clear();
-    let res = g1.port.process(Out, &mut pkt2, &mut g1_lmeta);
+    g1_ameta.clear();
+    let res = g1.port.process(Out, &mut pkt2, &mut g1_ameta);
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["uft.flows_out"]);
 
-    g2_lmeta.clear();
-    let res = g2.port.process(In, &mut pkt2, &mut g2_lmeta);
+    g2_ameta.clear();
+    let res = g2.port.process(In, &mut pkt2, &mut g2_ameta);
     assert!(matches!(res, Ok(Modified)));
     incr!(g2, ["uft.flows_in"]);
 }
@@ -946,7 +946,7 @@ fn gateway_icmp4_ping() {
     use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
     let g1_cfg = g1_cfg();
     let v2p = Arc::new(Virt2Phys::new());
-    let mut lmeta = Meta::new();
+    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
     set_state!(g1, PortState::Running);
@@ -974,7 +974,7 @@ fn gateway_icmp4_ping() {
     // direction and verify it results in an Echo Reply Hairpin packet
     // back to guest.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     let hp = match res {
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {:?}", res),
@@ -1050,12 +1050,12 @@ fn guest_to_guest_no_route() {
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
     v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
-    let mut lmeta = Meta::new();
+    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
     set_state!(g1, PortState::Running);
     let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt1, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
     // XXX The firewall layer comes before the router layer (in the
     // outbound direction). The firewall layer allows this traffic;
@@ -1082,7 +1082,7 @@ fn guest_to_guest() {
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
     v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
-    let mut lmeta = Meta::new();
+    let mut ameta = ActionMeta::new();
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
@@ -1142,7 +1142,7 @@ fn guest_to_guest() {
     // Run the packet through g1's port in the outbound direction and
     // verify the resulting packet meets expectations.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     pcap_phys1.add_pkt(&pkt1);
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
@@ -1227,7 +1227,7 @@ fn guest_to_guest() {
         unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
     pcap_phys2.add_pkt(&pkt2);
 
-    let res = g2.port.process(In, &mut pkt2, &mut lmeta);
+    let res = g2.port.process(In, &mut pkt2, &mut ameta);
     pcap_guest2.add_pkt(&pkt2);
     assert!(matches!(res, Ok(Modified)));
     incr!(g2, ["fw.flows_in", "fw.flows_out", "uft.flows_in"]);
@@ -1292,7 +1292,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // g1.
     let v2p = Arc::new(Virt2Phys::new());
     v2p.set(IpAddr::Ip4(g1_cfg.private_ip), g1_phys);
-    let mut lmeta = Meta::new();
+    let mut ameta = ActionMeta::new();
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
@@ -1347,7 +1347,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // verify the packet is dropped.
     // ================================================================
     let mut g1_pkt = http_tcp_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut g1_pkt, &mut lmeta);
+    let res = g1.port.process(Out, &mut g1_pkt, &mut ameta);
     assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
     incr!(g1, ["fw.flows_in", "fw.flows_out"]);
 }
@@ -1357,7 +1357,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
 fn guest_to_internet() {
     let g1_cfg = g1_cfg();
     let v2p = Arc::new(Virt2Phys::new());
-    let mut lmeta = Meta::new();
+    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
     set_state!(g1, PortState::Running);
@@ -1381,7 +1381,7 @@ fn guest_to_internet() {
     // Run the packet through g1's port in the outbound direction and
     // verify the resulting packet meets expectations.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(
         g1,
@@ -1546,7 +1546,7 @@ fn arp_gateway() {
     use opte::engine::ether::ETHER_TYPE_IPV4;
 
     let cfg = g1_cfg();
-    let mut lmeta = Meta::new();
+    let mut ameta = ActionMeta::new();
     let v2p = Arc::new(Virt2Phys::new());
     let mut g1 = oxide_net_setup("arp_hairpin", &cfg, v2p.clone());
     g1.port.start();
@@ -1581,7 +1581,7 @@ fn arp_gateway() {
     let _ = wtr.write(ArpEth4PayloadRaw::from(arp).as_bytes()).unwrap();
     let mut pkt = wtr.finish().parse().unwrap();
 
-    let res = g1.port.process(Out, &mut pkt, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt, &mut ameta);
     match res {
         Ok(Hairpin(hppkt)) => {
             let hppkt = hppkt.parse().unwrap();
@@ -1622,7 +1622,7 @@ fn flow_expiration() {
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
     v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
-    let mut lmeta = Meta::new();
+    let mut ameta = ActionMeta::new();
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
@@ -1643,7 +1643,7 @@ fn flow_expiration() {
     // verify the resulting packet meets expectations.
     // ================================================================
     let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt1, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
 
@@ -1672,7 +1672,7 @@ fn firewall_replace_rules() {
     // physical addresses.
     let v2p = Arc::new(Virt2Phys::new());
     v2p.set(IpAddr::Ip4(g2_cfg.private_ip), g2_phys);
-    let mut lmeta = Meta::new();
+    let mut ameta = ActionMeta::new();
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
@@ -1708,7 +1708,7 @@ fn firewall_replace_rules() {
     // direction and verify if passes the firewall.
     // ================================================================
     let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt1, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
 
@@ -1738,7 +1738,7 @@ fn firewall_replace_rules() {
         ]
     );
     let mut pkt2 = http_tcp_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt2, &mut lmeta);
+    let res = g1.port.process(Out, &mut pkt2, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["fw.flows_in", "fw.flows_out"]);
 
@@ -1753,7 +1753,7 @@ fn firewall_replace_rules() {
         unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
     let mut pkt3_copy =
         Packet::<Initialized>::copy(&pkt3.all_bytes()).parse().unwrap();
-    let res = g2.port.process(In, &mut pkt3, &mut lmeta);
+    let res = g2.port.process(In, &mut pkt3, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
     incr!(g2, ["fw.flows_in", "fw.flows_out", "uft.flows_in"]);
 
@@ -1781,7 +1781,7 @@ fn firewall_replace_rules() {
 
     // Verify the packet is dropped and that the firewall flow table
     // entry (along with its dual) was invalidated.
-    let res = g2.port.process(In, &mut pkt3_copy, &mut lmeta);
+    let res = g2.port.process(In, &mut pkt3_copy, &mut ameta);
     use opte::engine::port::DropReason;
     match res {
         Ok(ProcessResult::Drop { reason: DropReason::Layer { name } }) => {

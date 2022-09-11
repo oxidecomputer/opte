@@ -22,7 +22,7 @@ use super::layer::InnerFlowId;
 use super::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
 };
-use super::port::meta::Meta;
+use super::port::meta::ActionMeta;
 use super::tcp::TcpMeta;
 use super::udp::UdpMeta;
 use core::fmt::{self, Debug, Display};
@@ -265,7 +265,7 @@ impl Display for PortMatch {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum Predicate {
     InnerEtherType(Vec<EtherTypeMatch>),
     InnerEtherDst(Vec<EtherAddrMatch>),
@@ -279,39 +279,7 @@ pub enum Predicate {
     InnerSrcPort(Vec<PortMatch>),
     InnerDstPort(Vec<PortMatch>),
     Not(Box<Predicate>),
-    Meta(Box<dyn MetaPredicate>),
-}
-
-impl PartialEq for Predicate {
-    fn eq(&self, other: &Self) -> bool {
-        use Predicate::*;
-
-        match (self, other) {
-            (InnerEtherType(s), InnerEtherType(o)) => s == o,
-            (InnerEtherDst(s), InnerEtherDst(o)) => s == o,
-            (InnerEtherSrc(s), InnerEtherSrc(o)) => s == o,
-            (InnerArpHtype(s), InnerArpHtype(o)) => s == o,
-            (InnerArpPtype(s), InnerArpPtype(o)) => s == o,
-            (InnerArpOp(s), InnerArpOp(o)) => s == o,
-            (InnerSrcIp4(s), InnerSrcIp4(o)) => s == o,
-            (InnerDstIp4(s), InnerDstIp4(o)) => s == o,
-            (InnerIpProto(s), InnerIpProto(o)) => s == o,
-            (InnerSrcPort(s), InnerSrcPort(o)) => s == o,
-            (InnerDstPort(s), InnerDstPort(o)) => s == o,
-            (Not(s), Not(o)) => s == o,
-            (Meta(s), Self::Meta(o)) => {
-                // Avert your eyes!
-                s.to_string() == o.to_string()
-            }
-            _ => false,
-        }
-    }
-}
-
-impl Eq for Predicate {}
-
-pub trait MetaPredicate: Debug + Display {
-    fn is_match(&self, meta: &Meta) -> bool;
+    Meta(String, String),
 }
 
 impl Display for Predicate {
@@ -403,8 +371,8 @@ impl Display for Predicate {
                 write!(f, "inner.ulp.dst={}", s)
             }
 
-            Meta(pred) => {
-                write!(f, "meta={}", pred)
+            Meta(key, val) => {
+                write!(f, "meta: {}={}", key, val)
             }
 
             Not(pred) => {
@@ -416,11 +384,17 @@ impl Display for Predicate {
 }
 
 impl Predicate {
-    fn is_match(&self, meta: &PacketMeta, layer_meta: &Meta) -> bool {
+    fn is_match(&self, meta: &PacketMeta, action_meta: &ActionMeta) -> bool {
         match self {
-            Self::Meta(pred) => return pred.is_match(layer_meta),
+            Self::Meta(key, pred_val) => {
+                if let Some(meta_val) = action_meta.get(key) {
+                    return pred_val == meta_val;
+                }
 
-            Self::Not(pred) => return !pred.is_match(meta, layer_meta),
+                return false;
+            }
+
+            Self::Not(pred) => return !pred.is_match(meta, action_meta),
 
             Self::InnerEtherType(list) => match meta.inner.ether {
                 None => return false,
@@ -867,7 +841,7 @@ impl StaticAction for Identity {
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _meta: &mut Meta,
+        _meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform::identity(&self.name)))
     }
@@ -1080,8 +1054,8 @@ pub type GenDescResult = ActionResult<Arc<dyn ActionDesc>, GenDescError>;
 
 pub trait StatefulAction: Display {
     /// Generate a an [`ActionDesc`] based on the [`InnerFlowId`] and
-    /// [`Meta`]. This action may also add, remove, or modify metadata
-    /// to communicate data to downstream actions.
+    /// [`ActionMeta`]. This action may also add, remove, or modify
+    /// metadata to communicate data to downstream actions.
     ///
     /// # Errors
     ///
@@ -1090,8 +1064,11 @@ pub trait StatefulAction: Display {
     ///
     /// * [`GenDescError::Unexpected`]: This action encountered an
     /// unexpected error while trying to generate a descriptor.
-    fn gen_desc(&self, flow_id: &InnerFlowId, meta: &mut Meta)
-        -> GenDescResult;
+    fn gen_desc(
+        &self,
+        flow_id: &InnerFlowId,
+        meta: &mut ActionMeta,
+    ) -> GenDescResult;
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 }
@@ -1109,7 +1086,7 @@ pub trait StaticAction: Display {
         &self,
         dir: Direction,
         flow_id: &InnerFlowId,
-        meta: &mut Meta,
+        meta: &mut ActionMeta,
     ) -> GenHtResult;
 
     /// Return the predicates implicit to this action.
@@ -1122,7 +1099,7 @@ pub trait StaticAction: Display {
 
 pub type ModMetaResult = ActionResult<(), String>;
 
-/// A meta action is one that's only goal is to modify the processing
+/// A meta action is one that's only goal is to modify the action
 /// metadata in some way. That is, it has no transformation to make on
 /// the packet, only add/modify/remove metadata for use by later
 /// layers.
@@ -1134,8 +1111,11 @@ pub trait MetaAction: Display {
     /// implies there are no implicit predicates of that type.
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
 
-    fn mod_meta(&self, flow_id: &InnerFlowId, meta: &mut Meta)
-        -> ModMetaResult;
+    fn mod_meta(
+        &self,
+        flow_id: &InnerFlowId,
+        meta: &mut ActionMeta,
+    ) -> ModMetaResult;
 }
 
 #[derive(Debug)]
@@ -1418,7 +1398,7 @@ impl<'a> Rule<Finalized> {
     pub fn is_match<'b, R>(
         &self,
         meta: &PacketMeta,
-        layer_meta: &Meta,
+        action_meta: &ActionMeta,
         rdr: &'b mut R,
     ) -> bool
     where
@@ -1442,7 +1422,7 @@ impl<'a> Rule<Finalized> {
 
             Some(preds) => {
                 for p in &preds.hdr_preds {
-                    if !p.is_match(meta, layer_meta) {
+                    if !p.is_match(meta, action_meta) {
                         return false;
                     }
                 }
@@ -1529,8 +1509,8 @@ fn rule_matching() {
     )]));
     let r1 = r1.finalize();
 
-    let port_meta = Meta::new();
-    assert!(r1.is_match(&meta, &port_meta, &mut rdr));
+    let ameta = ActionMeta::new();
+    assert!(r1.is_match(&meta, &ameta, &mut rdr));
 
     let new_src_ip = "10.11.11.99".parse().unwrap();
 
@@ -1552,5 +1532,5 @@ fn rule_matching() {
         inner: MetaGroup { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
     };
 
-    assert!(!r1.is_match(&meta, &port_meta, &mut rdr));
+    assert!(!r1.is_match(&meta, &ameta, &mut rdr));
 }

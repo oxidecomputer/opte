@@ -7,7 +7,7 @@
 use super::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
 use super::ip4::Ipv4Meta;
 use super::layer::InnerFlowId;
-use super::port::meta::Meta;
+use super::port::meta::ActionMeta;
 use super::rule::{
     self, ActionDesc, AllowOrDeny, DataPredicate, FiniteResource, HdrTransform,
     Predicate, Resource, ResourceEntry, ResourceError, StatefulAction,
@@ -161,7 +161,7 @@ impl StatefulAction for SNat4 {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        _meta: &mut Meta,
+        _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
         let pool = &self.ip_pool;
         let priv_port = flow_id.src_port;
@@ -273,7 +273,7 @@ mod test {
         let pool = Arc::new(NatPool::new());
         pool.add(priv_ip, pub_ip, 8765..=8765);
         let snat = SNat4::new(priv_ip, pool.clone());
-        let mut port_meta = Meta::new();
+        let mut action_meta = ActionMeta::new();
         assert!(pool.verify_available(priv_ip, pub_ip, pub_port));
 
         // ================================================================
@@ -311,7 +311,7 @@ mod test {
         // Verify descriptor generation.
         // ================================================================
         let flow_out = InnerFlowId::from(&pmo);
-        let desc = match snat.gen_desc(&flow_out, &mut port_meta) {
+        let desc = match snat.gen_desc(&flow_out, &mut action_meta) {
             Ok(AllowOrDeny::Allow(desc)) => desc,
             _ => panic!("expected AllowOrDeny::Allow(desc) result"),
         };

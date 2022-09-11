@@ -9,7 +9,7 @@ use super::headers::{IpAddr, IpMeta, UlpMeta};
 use super::ioctl;
 use super::ip4::Protocol;
 use super::packet::{Initialized, Packet, PacketMeta, PacketRead, Parsed};
-use super::port::meta::Meta;
+use super::port::meta::ActionMeta;
 use super::rule::{
     self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, AllowOrDeny,
     Finalized, HdrTransform, HdrTransformError, Rule, RuleDump,
@@ -442,13 +442,13 @@ impl Layer {
         ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HdrTransform>,
-        lmeta: &mut Meta,
+        ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::*;
         self.layer_process_entry_probe(dir, &ifid);
         let res = match dir {
-            Out => self.process_out(ectx, pkt, &ifid, hts, lmeta),
-            In => self.process_in(ectx, pkt, &ifid, hts, lmeta),
+            Out => self.process_out(ectx, pkt, &ifid, hts, ameta),
+            In => self.process_in(ectx, pkt, &ifid, hts, ameta),
         };
         self.layer_process_return_probe(dir, &ifid, &res);
         res
@@ -460,11 +460,11 @@ impl Layer {
         pkt: &mut Packet<Parsed>,
         ifid: &InnerFlowId,
         hts: &mut Vec<HdrTransform>,
-        lmeta: &mut Meta,
+        ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
         if *ifid == FLOW_ID_DEFAULT {
-            return self.process_in_rules(ectx, ifid, pkt, hts, lmeta);
+            return self.process_in_rules(ectx, ifid, pkt, hts, ameta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
@@ -492,7 +492,7 @@ impl Layer {
         // XXX Flow table miss stat
 
         // No FlowTable entry, perhaps there is a matching Rule?
-        self.process_in_rules(ectx, ifid, pkt, hts, lmeta)
+        self.process_in_rules(ectx, ifid, pkt, hts, ameta)
     }
 
     fn process_in_rules(
@@ -501,11 +501,11 @@ impl Layer {
         ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HdrTransform>,
-        lmeta: &mut Meta,
+        ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::In;
         let mut rdr = pkt.get_body_rdr();
-        let rule = self.rules_in.find_match(ifid, pkt.meta(), lmeta, &mut rdr);
+        let rule = self.rules_in.find_match(ifid, pkt.meta(), ameta, &mut rdr);
         let _ = rdr.finish();
 
         if rule.is_none() {
@@ -527,7 +527,7 @@ impl Layer {
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            Action::Meta(action) => match action.mod_meta(ifid, lmeta) {
+            Action::Meta(action) => match action.mod_meta(ifid, ameta) {
                 Ok(res) => match res {
                     AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
 
@@ -542,7 +542,7 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(In, ifid, lmeta) {
+                let ht = match action.gen_ht(In, ifid, ameta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
@@ -580,7 +580,7 @@ impl Layer {
                     });
                 }
 
-                let desc = match action.gen_desc(&ifid, lmeta) {
+                let desc = match action.gen_desc(&ifid, ameta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(desc) => desc,
 
@@ -659,11 +659,11 @@ impl Layer {
         pkt: &mut Packet<Parsed>,
         ifid: &InnerFlowId,
         hts: &mut Vec<HdrTransform>,
-        lmeta: &mut Meta,
+        ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
         if *ifid == FLOW_ID_DEFAULT {
-            return self.process_out_rules(ectx, ifid, pkt, hts, lmeta);
+            return self.process_out_rules(ectx, ifid, pkt, hts, ameta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
@@ -693,7 +693,7 @@ impl Layer {
         }
 
         // No FlowTable entry, perhaps there is matching Rule?
-        self.process_out_rules(ectx, &ifid, pkt, hts, lmeta)
+        self.process_out_rules(ectx, &ifid, pkt, hts, ameta)
     }
 
     fn process_out_rules(
@@ -702,12 +702,12 @@ impl Layer {
         ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HdrTransform>,
-        lmeta: &mut Meta,
+        ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::Out;
         let mut rdr = pkt.get_body_rdr();
         let rule =
-            self.rules_out.find_match(ifid, pkt.meta(), &lmeta, &mut rdr);
+            self.rules_out.find_match(ifid, pkt.meta(), &ameta, &mut rdr);
         let _ = rdr.finish();
 
         if rule.is_none() {
@@ -729,7 +729,7 @@ impl Layer {
                 return Ok(LayerResult::Deny { name: self.name.clone() });
             }
 
-            Action::Meta(action) => match action.mod_meta(ifid, lmeta) {
+            Action::Meta(action) => match action.mod_meta(ifid, ameta) {
                 Ok(res) => match res {
                     AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
 
@@ -744,7 +744,7 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(Out, ifid, lmeta) {
+                let ht = match action.gen_ht(Out, ifid, ameta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
@@ -811,7 +811,7 @@ impl Layer {
                     });
                 }
 
-                let desc = match action.gen_desc(&ifid, lmeta) {
+                let desc = match action.gen_desc(&ifid, ameta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(desc) => desc,
 
@@ -1101,14 +1101,14 @@ impl<'a> RuleTable {
         &self,
         ifid: &InnerFlowId,
         pmeta: &PacketMeta,
-        lmeta: &Meta,
+        ameta: &ActionMeta,
         rdr: &'b mut R,
     ) -> Option<&Rule<rule::Finalized>>
     where
         R: PacketRead<'a>,
     {
         for (_, r) in &self.rules {
-            if r.is_match(pmeta, lmeta, rdr) {
+            if r.is_match(pmeta, ameta, rdr) {
                 self.rule_match_probe(ifid, &r);
                 return Some(r);
             }
@@ -1363,10 +1363,10 @@ mod test {
         // The pkt/rdr aren't actually used in this case.
         let pkt = Packet::copy(&[0xA]);
         let mut rdr = PacketReader::new(&pkt, ());
-        let lmeta = Meta::new();
+        let ameta = ActionMeta::new();
         let ifid = InnerFlowId::from(&pmeta);
         assert!(rule_table
-            .find_match(&ifid, &pmeta, &lmeta, &mut rdr)
+            .find_match(&ifid, &pmeta, &ameta, &mut rdr)
             .is_some());
     }
 }

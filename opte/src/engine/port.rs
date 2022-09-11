@@ -5,6 +5,7 @@
 // Copyright 2022 Oxide Computer Company
 
 /// A virtual switch port.
+use self::meta::ActionMeta;
 use super::ether::EtherAddr;
 use super::flow_table::{FlowTable, StateSummary};
 use super::ioctl;
@@ -942,7 +943,7 @@ impl Port {
         &self,
         dir: Direction,
         pkt: &mut Packet<Parsed>,
-        lmeta: &mut meta::Meta,
+        ameta: &mut ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
         let mut data = self.data.lock();
         check_state!(data.state, [PortState::Running])
@@ -953,13 +954,13 @@ impl Port {
         self.port_process_entry_probe(dir, &ifid, epoch, &pkt);
         let res = match dir {
             Direction::Out => {
-                let res = self.process_out(&mut data, &ifid, epoch, pkt, lmeta);
+                let res = self.process_out(&mut data, &ifid, epoch, pkt, ameta);
                 Self::update_stats_out(&mut data.stats.vals, &res);
                 res
             }
 
             Direction::In => {
-                let res = self.process_in(&mut data, &ifid, epoch, pkt, lmeta);
+                let res = self.process_in(&mut data, &ifid, epoch, pkt, ameta);
                 Self::update_stats_in(&mut data.stats.vals, &res);
                 res
             }
@@ -1088,13 +1089,13 @@ impl Port {
         ifid: &InnerFlowId,
         pkt: &mut Packet<Parsed>,
         hts: &mut Vec<HdrTransform>,
-        lmeta: &mut meta::Meta,
+        ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         match dir {
             Direction::Out => {
                 for layer in &mut data.layers {
                     let res =
-                        layer.process(&self.ectx, dir, ifid, pkt, hts, lmeta);
+                        layer.process(&self.ectx, dir, ifid, pkt, hts, ameta);
 
                     match res {
                         Ok(LayerResult::Allow) => (),
@@ -1108,7 +1109,7 @@ impl Port {
             Direction::In => {
                 for layer in data.layers.iter_mut().rev() {
                     let res =
-                        layer.process(&self.ectx, dir, ifid, pkt, hts, lmeta);
+                        layer.process(&self.ectx, dir, ifid, pkt, hts, ameta);
 
                     match res {
                         Ok(LayerResult::Allow) => (),
@@ -1336,12 +1337,12 @@ impl Port {
         ufid_in: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
-        lmeta: &mut meta::Meta,
+        ameta: &mut ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::In;
 
         let mut hts = Vec::new();
-        let res = self.layers_process(data, In, ufid_in, pkt, &mut hts, lmeta);
+        let res = self.layers_process(data, In, ufid_in, pkt, &mut hts, ameta);
         match res {
             Ok(LayerResult::Allow) => {
                 // If there is no flow ID, then do not create a UFT
@@ -1403,7 +1404,7 @@ impl Port {
         ufid_in: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
-        lmeta: &mut meta::Meta,
+        ameta: &mut ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::In;
 
@@ -1455,7 +1456,7 @@ impl Port {
             None => (),
         };
 
-        self.process_in_miss(data, ufid_in, epoch, pkt, lmeta)
+        self.process_in_miss(data, ufid_in, epoch, pkt, ameta)
     }
 
     // Process the TCP packet for the purposes of connection tracking
@@ -1559,7 +1560,7 @@ impl Port {
         ufid_out: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
-        lmeta: &mut meta::Meta,
+        ameta: &mut ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::Out;
 
@@ -1588,7 +1589,7 @@ impl Port {
 
         let mut hts = Vec::new();
         let res =
-            self.layers_process(data, Out, ufid_out, pkt, &mut hts, lmeta);
+            self.layers_process(data, Out, ufid_out, pkt, &mut hts, ameta);
         let hte = HtEntry { hts, epoch };
 
         match res {
@@ -1621,7 +1622,7 @@ impl Port {
         ufid_out: &InnerFlowId,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
-        lmeta: &mut meta::Meta,
+        ameta: &mut ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::Out;
 
@@ -1697,7 +1698,7 @@ impl Port {
             None => (),
         }
 
-        self.process_out_miss(data, ufid_out, epoch, pkt, lmeta)
+        self.process_out_miss(data, ufid_out, epoch, pkt, ameta)
     }
 
     fn uft_invalidate(
@@ -1897,43 +1898,62 @@ extern "C" {
     );
 }
 
-/// Metadata which may be accessed and modified by any [`Action`][a]
-/// as a method of inter-action communication.
-///
-/// This metadata is a heterogeneous map of values, keyed by their
-/// type.
-///
-/// [a]: crate::rule::Action
+/// Metadata for inter-action communication.
 pub mod meta {
-    #[derive(Debug)]
-    pub enum Error {
-        AlreadyExists,
+    cfg_if! {
+        if #[cfg(all(not(feature = "std"), not(test)))] {
+            use alloc::collections::BTreeMap;
+            use alloc::string::{String, ToString};
+        } else {
+            use std::collections::BTreeMap;
+            use std::string::{String, ToString};
+        }
     }
 
-    pub struct Meta {
-        inner: anymap::Map<dyn anymap::any::Any + Send + Sync>,
-    }
+    /// A value meant to be used in the [`ActionMeta`] map.
+    ///
+    /// The purpose of this trait is to define the value's key as well
+    /// as serialization to/from strings. These are like Display and
+    /// FromStr; but here their focus is on unambiguous parsing. That
+    /// is, we can't necessarily rely on a type's Display impl being
+    /// good for serializing to a metadata string, but at the same
+    /// time we don't want to force its Display to have to work in
+    /// this constraint.
+    ///
+    /// A value doesn't have to implement this type; there is nothing
+    /// that enforces the strings stored in [`ActionMeta`] are strings
+    /// generated by this trait impl. It's just a convenient way to
+    /// mark and implement values meant to be used as action metadata.
+    pub trait ActionMetaValue: Sized {
+        const KEY: &'static str;
 
-    impl Meta {
-        pub fn new() -> Self {
-            Meta { inner: anymap::Map::new() }
+        fn key(&self) -> String {
+            Self::KEY.to_string()
         }
 
-        /// Add a new value to the metadata.
-        ///
-        /// # Errors
-        ///
-        /// Return an error if a value of this type already exists.
-        pub fn add<V>(&mut self, val: V) -> Result<(), Error>
-        where
-            V: 'static + Send + Sync,
-        {
-            if self.inner.contains::<V>() {
-                return Err(Error::AlreadyExists);
-            }
+        /// Create a representation of the value to be used in
+        /// [`ActionMeta`].
+        fn as_meta(&self) -> String;
 
-            self.inner.insert(val);
-            Ok(())
+        /// Attempt to create a value assuming that `s` was created
+        /// with [`Self::as_meta()`].
+        fn from_meta(s: &str) -> Result<Self, String>;
+    }
+
+    /// The action metadata map.
+    ///
+    /// This metadata is accessible by all actions during layer
+    /// processing and acts as a form of inter-action communication.
+    /// The action metadata is nothing more than a map of string keys
+    /// to string values -- their meaning is opaque to OPTE itself. It
+    /// is up to the actions to decide what these strings mean.
+    pub struct ActionMeta {
+        inner: BTreeMap<String, String>,
+    }
+
+    impl ActionMeta {
+        pub fn new() -> Self {
+            Self { inner: BTreeMap::new() }
         }
 
         /// Clear all entries.
@@ -1941,38 +1961,23 @@ pub mod meta {
             self.inner.clear();
         }
 
-        /// Add the value to the map, replacing any existing value.
-        /// Return the current value, if one exists.
-        pub fn replace<V>(&mut self, val: V) -> Option<V>
-        where
-            V: 'static + Send + Sync,
-        {
-            self.inner.insert(val)
+        /// Insert the key-value pair into the map, replacing any
+        /// existing key-value pair. Return the value being replaced,
+        /// or `None`.
+        pub fn insert(&mut self, key: String, val: String) -> Option<String> {
+            self.inner.insert(key, val)
         }
 
-        /// Remove the value with the specified type.
-        pub fn remove<V>(&mut self) -> Option<V>
-        where
-            V: 'static + Send + Sync,
-        {
-            self.inner.remove::<V>()
+        /// Remove the key-value pair with the specified key. Return
+        /// the value, or `None` if no such entry exists.
+        pub fn remove(&mut self, key: &str) -> Option<String> {
+            self.inner.remove(key)
         }
 
-        /// Get a shared reference to the value with the specified
-        /// type.
-        pub fn get<V>(&self) -> Option<&V>
-        where
-            V: 'static + Send + Sync,
-        {
-            self.inner.get::<V>()
-        }
-
-        /// Get a unique reference to the value with specified type.
-        pub fn get_mut<V>(&mut self) -> Option<&mut V>
-        where
-            V: 'static + Send + Sync,
-        {
-            self.inner.get_mut::<V>()
+        /// Get a reference to the value with the given key, or `None`
+        /// if no such entry exists.
+        pub fn get(&self, key: &str) -> Option<&String> {
+            self.inner.get(key)
         }
     }
 }

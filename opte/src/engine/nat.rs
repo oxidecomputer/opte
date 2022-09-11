@@ -7,7 +7,7 @@
 use super::ether::EtherMeta;
 use super::ip4::Ipv4Meta;
 use super::layer::InnerFlowId;
-use super::port::meta::Meta;
+use super::port::meta::ActionMeta;
 use super::rule::{
     self, ActionDesc, AllowOrDeny, DataPredicate, HdrTransform, Predicate,
     StatefulAction,
@@ -58,7 +58,7 @@ impl StatefulAction for Nat4 {
     fn gen_desc(
         &self,
         _flow_id: &InnerFlowId,
-        _meta: &mut Meta,
+        _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
         let desc = Nat4Desc {
             priv_ip: self.priv_ip,
@@ -152,7 +152,7 @@ mod test {
         let outside_port = 80;
         let gw_mac = MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
         let nat = Nat4::new(priv_ip, pub_ip, Some(gw_mac));
-        let mut port_meta = Meta::new();
+        let mut ameta = ActionMeta::new();
 
         // ================================================================
         // Build the packet metadata
@@ -189,7 +189,7 @@ mod test {
         // Verify descriptor generation.
         // ================================================================
         let flow_out = InnerFlowId::from(&pmo);
-        let desc = match nat.gen_desc(&flow_out, &mut port_meta) {
+        let desc = match nat.gen_desc(&flow_out, &mut ameta) {
             Ok(AllowOrDeny::Allow(desc)) => desc,
             _ => panic!("expected AllowOrDeny::Allow(desc) result"),
         };

@@ -36,7 +36,7 @@ use opte::engine::headers::{HeaderAction, IpAddr};
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::{Ipv6Addr, Ipv6Meta};
 use opte::engine::layer::{InnerFlowId, Layer};
-use opte::engine::port::meta::Meta;
+use opte::engine::port::meta::{ActionMeta, ActionMetaValue};
 use opte::engine::port::{PortBuilder, Pos};
 use opte::engine::rule::{
     self, Action, AllowOrDeny, DataPredicate, HdrTransform, MappingResource,
@@ -171,12 +171,12 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        meta: &mut Meta,
+        meta: &mut ActionMeta,
     ) -> rule::GenHtResult {
         // The router layer determines a RouterTarget and stores it in
         // the meta map. We need to map this virtual target to a
         // physical one.
-        let target = match meta.get::<RouterTargetInternal>() {
+        let target_str = match meta.get(RouterTargetInternal::KEY) {
             Some(val) => val,
             None => {
                 // This should never happen. The router should always
@@ -185,6 +185,18 @@ impl StaticAction for EncapAction {
                 // account for this situation.
                 return Err(rule::GenHtError::Unexpected {
                     msg: format!("no RouterTarget metadata entry found"),
+                });
+            }
+        };
+
+        let target = match RouterTargetInternal::from_meta(target_str) {
+            Ok(val) => val,
+            Err(e) => {
+                return Err(rule::GenHtError::Unexpected {
+                    msg: format!(
+                        "failed to parse metadata entry '{}': {}",
+                        target_str, e
+                    ),
                 });
             }
         };
@@ -308,7 +320,7 @@ impl StaticAction for DecapAction {
         // The decap action is only used for ingoing.
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _meta: &mut Meta,
+        _meta: &mut ActionMeta,
     ) -> rule::GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform {
             name: DECAP_NAME.to_string(),

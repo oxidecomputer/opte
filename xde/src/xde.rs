@@ -33,7 +33,7 @@ use opte::api::{
 };
 use opte::ddi::sync::{KMutex, KMutexType, KRwLock, KRwLockType};
 use opte::ddi::time::{Interval, Moment, Periodic};
-use opte::engine::ether::{EtherAddr, EtherType};
+use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::{IpAddr, IpCidr};
 use opte::engine::ioctl::{self as api};
@@ -41,7 +41,7 @@ use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::{
     Initialized, Packet, PacketRead, PacketReader, ParseError, Parsed,
 };
-use opte::engine::port::meta;
+use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::{Port, PortBuilder, ProcessResult};
 use opte::ExecCtx;
 use oxide_vpc::api::{
@@ -1243,7 +1243,7 @@ fn guest_loopback(
             // We have found a matching Port on this host; "loop back"
             // the packet into the inbound processing path of the
             // destination Port.
-            let mut meta = meta::Meta::new();
+            let mut meta = ActionMeta::new();
             match dest_dev.port.process(In, &mut pkt, &mut meta) {
                 Ok(ProcessResult::Modified) => {
                     guest_loopback_probe(&pkt, src_dev, dest_dev);
@@ -1381,7 +1381,7 @@ unsafe extern "C" fn xde_mc_tx(
     // The port processing code will fire a probe that describes what
     // action was taken -- there should be no need to add probes or
     // prints here.
-    let mut meta = meta::Meta::new();
+    let mut meta = ActionMeta::new();
     let res = port.process(Direction::Out, &mut pkt, &mut meta);
     match res {
         Ok(ProcessResult::Modified) => {
@@ -1962,7 +1962,6 @@ unsafe extern "C" fn xde_rx(
         };
         dev
     } else {
-        let et = hdrs.inner.ether.ether_type();
         let ether_dst = hdrs.inner.ether.dst();
 
         if ether_dst == EtherAddr::from(MacAddr::BROADCAST) {
@@ -1977,12 +1976,7 @@ unsafe extern "C" fn xde_rx(
                 }
 
                 let port = &(*dev).port;
-                let mut meta = meta::Meta::new();
-                if et == EtherType::Ipv4 {
-                    let ether_src = hdrs.inner.ether.src();
-                    let _ = meta.replace(MacAddr::from(ether_src));
-                }
-
+                let mut meta = ActionMeta::new();
                 let mut pkt_copy = Packet::copy(&bytes).parse().unwrap();
                 let res = port.process(Direction::In, &mut pkt_copy, &mut meta);
 
@@ -2029,15 +2023,7 @@ unsafe extern "C" fn xde_rx(
     }
 
     let port = &(*dev).port;
-    let mut meta = meta::Meta::new();
-    let et = hdrs.inner.ether.ether_type();
-    if et == EtherType::Ipv4 {
-        // XXX-EXT-IP This is a hack to allow NAT action to have
-        // access to the source MAC address.
-        let ether_src = hdrs.inner.ether.src();
-        let _ = meta.replace(MacAddr::from(ether_src));
-    }
-
+    let mut meta = ActionMeta::new();
     let res = port.process(Direction::In, &mut pkt, &mut meta);
     match res {
         Ok(ProcessResult::Modified) => {

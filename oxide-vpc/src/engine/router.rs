@@ -12,11 +12,11 @@ use core::fmt;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::ToString;
+        use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
     } else {
-        use std::string::ToString;
+        use std::string::{String, ToString};
         use std::sync::Arc;
         use std::vec::Vec;
     }
@@ -25,10 +25,11 @@ cfg_if! {
 use super::firewall as fw;
 use crate::api::{DelRouterEntryIpv4Resp, RouterTarget};
 use crate::VpcCfg;
-use opte::api::{Direction, NoResp, OpteError};
+use opte::api::{Direction, Ipv4Addr, Ipv4Cidr, NoResp, OpteError};
 use opte::engine::headers::{IpAddr, IpCidr};
 use opte::engine::layer::{InnerFlowId, Layer};
-use opte::engine::port::{meta::Meta, Port, PortBuilder, Pos};
+use opte::engine::port::meta::{ActionMeta, ActionMetaValue};
+use opte::engine::port::{Port, PortBuilder, Pos};
 use opte::engine::rule::{
     self, Action, AllowOrDeny, Finalized, MetaAction, ModMetaResult, Predicate,
     Rule,
@@ -48,15 +49,57 @@ pub enum RouterTargetInternal {
     VpcSubnet(IpCidr),
 }
 
-impl opte::engine::rule::MetaPredicate for RouterTargetInternal {
-    fn is_match(&self, meta: &Meta) -> bool {
-        if let Some(tgt) = meta.get::<Self>() {
-            if self == tgt {
-                return true;
+impl ActionMetaValue for RouterTargetInternal {
+    const KEY: &'static str = "router-target";
+
+    fn from_meta(s: &str) -> Result<Self, String> {
+        match s {
+            "ig" => Ok(Self::InternetGateway),
+
+            _ => {
+                match s.split_once("=") {
+                    Some(("ip4", ip4_s)) => {
+                        let ip4 = ip4_s.parse::<Ipv4Addr>()?;
+                        Ok(Self::Ip(IpAddr::Ip4(ip4)))
+                    }
+
+                    Some(("ip6", _ip6_s)) => {
+                        todo!("implement IPv6 support");
+                        // XXX The parse impl only exists in std envs
+                        // at the moment.
+                        //
+                        // let ip6 = ip6_s.parse::<Ipv6Addr>()?;
+                        // Ok(Self::Ip(IpAddr::Ip6(ip6)))
+                    }
+
+                    Some(("sub4", cidr4_s)) => {
+                        let cidr4 = cidr4_s.parse::<Ipv4Cidr>()?;
+                        Ok(Self::VpcSubnet(IpCidr::Ip4(cidr4)))
+                    }
+
+                    Some(("sub6", _cidr6_s)) => {
+                        todo!("implement IPv6 subnet support");
+                        // XXX The parse impl only exists in std envs
+                        // at the moment.
+                        //
+                        // let cidr6 = cidr6_s.parse::<Ipv6Cidr>()?;
+                        // Ok(Self::VpcSubnet(IpCidr::Ip6(cidr6)))
+                    }
+
+                    _ => Err(format!("bad router target: {}", s)),
+                }
             }
         }
+    }
 
-        false
+    fn as_meta(&self) -> String {
+        match self {
+            Self::InternetGateway => "ig".to_string(),
+            Self::Ip(IpAddr::Ip4(ip4)) => format!("ip4={}", ip4),
+            Self::Ip(IpAddr::Ip6(ip6)) => format!("ip6={}", ip6),
+            Self::VpcSubnet(IpCidr::Ip4(cidr4)) => format!("sub4={}", cidr4),
+            Self::VpcSubnet(IpCidr::Ip6(cidr6)) => format!("sub6={}", cidr6),
+        }
     }
 }
 
@@ -251,15 +294,13 @@ impl MetaAction for RouterAction {
     fn mod_meta(
         &self,
         _flow_id: &InnerFlowId,
-        meta: &mut Meta,
+        meta: &mut ActionMeta,
     ) -> ModMetaResult {
         // No target entry should currently exist in the metadata; it
         // would be a bug. However, because of the dynamic nature of
         // metadata we don't have an easy way to enforce this
-        // constraint in the type system. Rather than use the
-        // `Meta::add()` method and pollute the code with unwrap, we
-        // instead choose to use the `Meta::replace()` API.
-        meta.replace(self.target);
+        // constraint in the type system.
+        meta.insert(self.target.key(), self.target.as_meta());
         Ok(AllowOrDeny::Allow(()))
     }
 }
