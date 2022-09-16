@@ -28,11 +28,6 @@ uses the opte crate to implement the Oxide VPC network.
 
 opte-ioctl:: The userland library used for interacting with OPTE.
 
-opte-drv (obsolete):: A kernel module which hooks into the network
-path between viona (bhyve) and mac, feeding all packets into opte-core
-for processing. This module has been rendered obsolete by `xde`, but
-it still remains until all features are transitioned over.
-
 opteadm:: The command line utility used to configure and inspect OPTE.
 This is meant to be used by an operator, not by a client program.
 

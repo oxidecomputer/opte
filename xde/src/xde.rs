@@ -4,11 +4,11 @@
 
 // Copyright 2022 Oxide Computer Company
 
-//! XDE - A MAC provider for OPTE
+//! xde - A mac provider for OPTE.
 //!
-//! This is an illumos kernel driver that provides MAC devices hooked up to
-//! OPTE. At the time of writing this driver is being developed in a parallel
-//! crate to opte-drv. It's expected that this driver will merge into opte-drv.
+//! An illumos kernel driver that implements the mac provider
+//! interface, allowing one to run network implementations written in
+//! the OPTE framework.
 
 // TODO
 // - ddm integration to choose correct underlay device (currently just using
