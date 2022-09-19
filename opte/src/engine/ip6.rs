@@ -54,7 +54,7 @@ impl MatchPrefix<Ipv6Cidr> for Ipv6Addr {
 }
 
 #[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, Copy,
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct Ipv6Meta {
     pub src: Ipv6Addr,

@@ -83,7 +83,11 @@ fn setup_ipv4_nat(
 
     if let Some(snat_cfg) = &ip_cfg.snat_cfg {
         let pool = NatPool::new();
-        pool.add(ip_cfg.private_ip, snat_cfg.public_ip, snat_cfg.ports.clone());
+        pool.add(
+            ip_cfg.private_ip,
+            snat_cfg.external_ip,
+            snat_cfg.ports.clone(),
+        );
         let snat = SNat::new(ip_cfg.private_ip.into(), Arc::new(pool));
         let mut rule =
             Rule::new(SNAT_PRIORITY, Action::Stateful(Arc::new(snat)));
@@ -135,7 +139,11 @@ fn setup_ipv6_nat(
 
     if let Some(ref snat_cfg) = ip_cfg.snat_cfg {
         let pool = NatPool::new();
-        pool.add(ip_cfg.private_ip, snat_cfg.public_ip, snat_cfg.ports.clone());
+        pool.add(
+            ip_cfg.private_ip,
+            snat_cfg.external_ip,
+            snat_cfg.ports.clone(),
+        );
         let snat = SNat::new(ip_cfg.private_ip.into(), Arc::new(pool));
         let mut rule =
             Rule::new(SNAT_PRIORITY, Action::Stateful(Arc::new(snat)));

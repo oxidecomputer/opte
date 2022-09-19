@@ -386,7 +386,7 @@ fn lab_cfg() -> VpcCfg {
         private_ip: "172.20.14.16".parse().unwrap(),
         gateway_ip: "172.20.14.1".parse().unwrap(),
         snat_cfg: Some(SNat4Cfg {
-            public_ip: "76.76.21.21".parse().unwrap(),
+            external_ip: "76.76.21.21".parse().unwrap(),
             ports: 1025..=4096,
         }),
         external_ips: None,
@@ -494,7 +494,7 @@ fn g1_cfg() -> VpcCfg {
             private_ip: "172.30.0.5".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
             snat_cfg: Some(SNat4Cfg {
-                public_ip: "10.77.77.13".parse().unwrap(),
+                external_ip: "10.77.77.13".parse().unwrap(),
                 ports: 1025..=4096,
             }),
             external_ips: None,
@@ -504,7 +504,7 @@ fn g1_cfg() -> VpcCfg {
             private_ip: "fd00::5".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
             snat_cfg: Some(SNat6Cfg {
-                public_ip: "2001:db8::1".parse().unwrap(),
+                external_ip: "2001:db8::1".parse().unwrap(),
                 ports: 1025..=4096,
             }),
             external_ips: None,
@@ -539,7 +539,7 @@ fn g2_cfg() -> VpcCfg {
             private_ip: "172.30.0.6".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
             snat_cfg: Some(SNat4Cfg {
-                public_ip: "10.77.77.23".parse().unwrap(),
+                external_ip: "10.77.77.23".parse().unwrap(),
                 ports: 4096..=8192,
             }),
             external_ips: None,
@@ -549,7 +549,7 @@ fn g2_cfg() -> VpcCfg {
             private_ip: "fd00::5".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
             snat_cfg: Some(SNat6Cfg {
-                public_ip: "2001:db8::1".parse().unwrap(),
+                external_ip: "2001:db8::1".parse().unwrap(),
                 ports: 1025..=4096,
             }),
             external_ips: None,
@@ -1564,7 +1564,13 @@ fn guest_to_internet() {
         IpMeta::Ip4(ip4) => {
             assert_eq!(
                 ip4.src,
-                g1_cfg.ipv4_cfg().unwrap().snat_cfg.as_ref().unwrap().public_ip
+                g1_cfg
+                    .ipv4_cfg()
+                    .unwrap()
+                    .snat_cfg
+                    .as_ref()
+                    .unwrap()
+                    .external_ip
             );
             assert_eq!(ip4.dst, dst_ip);
             assert_eq!(ip4.proto, Protocol::TCP);

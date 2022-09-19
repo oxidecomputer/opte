@@ -300,18 +300,18 @@ pub struct CreateXdeReq {
 }
 
 /// Configuration of source NAT for a port, describing how a private IP
-/// address is mapped to a public IP and port range for outbound connections.
+/// address is mapped to an external IP and port range for outbound connections.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SNat4Cfg {
-    pub public_ip: Ipv4Addr,
+    pub external_ip: Ipv4Addr,
     pub ports: core::ops::RangeInclusive<u16>,
 }
 
 /// Configuration of source NAT for a port, describing how a private IP
-/// address is mapped to a public IP and port range for outbound connections.
+/// address is mapped to an external IP and port range for outbound connections.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SNat6Cfg {
-    pub public_ip: Ipv6Addr,
+    pub external_ip: Ipv6Addr,
     pub ports: core::ops::RangeInclusive<u16>,
 }
 

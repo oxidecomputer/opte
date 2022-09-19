@@ -29,11 +29,11 @@ cfg_if! {
     }
 }
 
-/// A mapping from a private to public IP address for NAT.
+/// A mapping from a private to external IP address for NAT.
 #[derive(Debug, Clone, Copy)]
 pub struct Nat {
     priv_ip: IpAddr,
-    public_ip: IpAddr,
+    external_ip: IpAddr,
     // XXX-EXT-IP Remove
     phys_gw_mac: Option<MacAddr>,
 }
@@ -42,12 +42,12 @@ impl Nat {
     /// Create a new NAT mapping from a private to public IP address.
     pub fn new<T: ConcreteIpAddr>(
         priv_ip: T,
-        public_ip: T,
+        external_ip: T,
         phys_gw_mac: Option<MacAddr>,
     ) -> Self {
         Self {
             priv_ip: priv_ip.into(),
-            public_ip: public_ip.into(),
+            external_ip: external_ip.into(),
             phys_gw_mac,
         }
     }
@@ -55,7 +55,7 @@ impl Nat {
 
 impl fmt::Display for Nat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} <=> {}", self.priv_ip, self.public_ip)
+        write!(f, "{} <=> {}", self.priv_ip, self.external_ip)
     }
 }
 
@@ -67,7 +67,7 @@ impl StatefulAction for Nat {
     ) -> rule::GenDescResult {
         let desc = NatDesc {
             priv_ip: self.priv_ip,
-            public_ip: self.public_ip,
+            external_ip: self.external_ip,
             // XXX-EXT-IP This is assuming ext_ip_hack. All packets
             // outbound for IG will have their dest mac rewritten to
             // go to physical gateway, which will then properly route
@@ -89,7 +89,7 @@ impl StatefulAction for Nat {
 #[derive(Debug, Clone, Copy)]
 pub struct NatDesc {
     priv_ip: IpAddr,
-    public_ip: IpAddr,
+    external_ip: IpAddr,
     // XXX-EXT-IP
     phys_gw_mac: Option<MacAddr>,
 }
@@ -100,7 +100,7 @@ impl ActionDesc for NatDesc {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             Direction::Out => {
-                let inner_ip = match self.public_ip {
+                let inner_ip = match self.external_ip {
                     IpAddr::Ip4(ipv4) => {
                         Ipv4Meta::modify(Some(ipv4), None, None)
                     }
@@ -165,13 +165,13 @@ mod test {
 
         let priv_mac = MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x01]);
         let dest_mac = MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]);
-        let priv_ipv4 = "10.0.0.220".parse().unwrap();
+        let priv_ip = "10.0.0.220".parse().unwrap();
         let priv_port = "4999".parse().unwrap();
-        let pub_ipv4 = "52.10.128.69".parse().unwrap();
-        let outside_ipv4 = "76.76.21.21".parse().unwrap();
+        let pub_ip = "52.10.128.69".parse().unwrap();
+        let outside_ip = "76.76.21.21".parse().unwrap();
         let outside_port = 80;
         let gw_mac = MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
-        let nat = Nat::new(priv_ipv4, pub_ipv4, Some(gw_mac));
+        let nat = Nat::new(priv_ip, pub_ip, Some(gw_mac));
         let mut ameta = ActionMeta::new();
 
         // ================================================================
@@ -183,8 +183,8 @@ mod test {
             ether_type: ETHER_TYPE_IPV4,
         };
         let ip = IpMeta::from(Ipv4Meta {
-            src: priv_ipv4,
-            dst: outside_ipv4,
+            src: priv_ip,
+            dst: outside_ip,
             proto: Protocol::TCP,
         });
         let ulp = UlpMeta::from(TcpMeta {
@@ -229,8 +229,8 @@ mod test {
             _ => panic!("expect Ipv4Meta"),
         };
 
-        assert_eq!(ip4_meta.src, pub_ipv4);
-        assert_eq!(ip4_meta.dst, outside_ipv4);
+        assert_eq!(ip4_meta.src, pub_ip);
+        assert_eq!(ip4_meta.dst, outside_ip);
         assert_eq!(ip4_meta.proto, Protocol::TCP);
 
         let tcp_meta = match pmo.inner.ulp.as_ref().unwrap() {
@@ -251,8 +251,8 @@ mod test {
             ether_type: ETHER_TYPE_IPV4,
         };
         let ip = IpMeta::from(Ipv4Meta {
-            src: outside_ipv4,
-            dst: pub_ipv4,
+            src: outside_ip,
+            dst: pub_ip,
             proto: Protocol::TCP,
         });
         let ulp = UlpMeta::from(TcpMeta {
@@ -285,8 +285,8 @@ mod test {
             _ => panic!("expect Ipv4Meta"),
         };
 
-        assert_eq!(ip4_meta.src, outside_ipv4);
-        assert_eq!(ip4_meta.dst, priv_ipv4);
+        assert_eq!(ip4_meta.src, outside_ip);
+        assert_eq!(ip4_meta.dst, priv_ip);
         assert_eq!(ip4_meta.proto, Protocol::TCP);
 
         let tcp_meta = match pmi.inner.ulp.as_ref().unwrap() {

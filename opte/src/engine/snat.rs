@@ -491,11 +491,11 @@ mod test {
         let priv1 = IpAddr::Ip4(priv1_ip);
         let priv2_ip = "192.168.2.33".parse::<Ipv4Addr>().unwrap();
         let priv2 = IpAddr::Ip4(priv2_ip);
-        let public_ip = "52.10.128.69".parse().unwrap();
-        let public = IpAddr::Ip4(public_ip);
+        let external_ip = "52.10.128.69".parse().unwrap();
+        let public = IpAddr::Ip4(external_ip);
 
-        pool.add(priv1_ip, public_ip, 1025..=4096);
-        pool.add(priv2_ip, public_ip, 4097..=8192);
+        pool.add(priv1_ip, external_ip, 1025..=4096);
+        pool.add(priv2_ip, external_ip, 4097..=8192);
 
         assert_eq!(pool.num_avail(priv1).unwrap(), 3072);
         let npe1 = match pool.obtain(&priv1) {

@@ -526,7 +526,7 @@ fn main() {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
             let snat = match snat_ip {
                 Some(ip) => Some(SNat4Cfg {
-                    public_ip: ip.into(),
+                    external_ip: ip.into(),
                     ports: core::ops::RangeInclusive::new(
                         snat_start.unwrap(),
                         snat_end.unwrap(),
