@@ -22,18 +22,19 @@ cfg_if! {
 }
 
 /// Description of Boundary Services, the endpoint used to route traffic
-/// to networks outside of an Oxide rack.
+/// to external networks.
+//
 // NOTE: This is identical to the `PhysNet` type below, but serves a different
 // purpose, to identify Boundary Services itself, not a generic physical network
 // endpoint in an Oxide rack.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct BoundaryServices {
-    /// IPv6 address of the switch running Boundary Services
+    /// IPv6 address of the switch running Boundary Services.
     pub ip: Ipv6Addr,
-    /// Dedicated Geneve VNI for Boundary Services traffic
+    /// Dedicated Geneve VNI for Boundary Services traffic.
     pub vni: Vni,
     /// A MAC address identifying Boundary Services as a logical next
-    /// hop
+    /// hop.
     // This value is effectively arbitrary. It's never used to filter or
     // direct traffic by the Oxide VPC. It is used to rewrite the
     // destination MAC address of the _inner_ guest Ethernet frame, from
@@ -46,47 +47,83 @@ pub struct BoundaryServices {
     pub mac: MacAddr,
 }
 
-/// The IPv4 configuration for an OPTE port
+/// The IPv4 configuration for an OPTE port.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ipv4Cfg {
-    /// The private IP subnet of the VPC Subnet
+    /// The private IP subnet of the VPC Subnet.
     pub vpc_subnet: Ipv4Cidr,
 
-    /// The port's private IP address in the VPC Subnet
+    /// The guest's private IP address in the VPC Subnet.
     pub private_ip: Ipv4Addr,
 
-    /// The IP address of the port's gateway
+    /// The IPv4 address for the virtual gateway.
+    ///
+    /// The virtual gateway is what the guest sees as its gateway to all other
+    /// networks, including other VPC guests as well as external networks and
+    /// the internet. Essentially, this is the IPv4 address of OPTE itself,
+    /// which is acting as the gateway to the guest.
     pub gateway_ip: Ipv4Addr,
 
     /// The source NAT configuration for making outbound connections
     /// from the private network.
+    ///
+    /// This allows a guest to make outbound connections to hosts on an external
+    /// network when there is no external IP address assigned to the guest
+    /// itself.
+    //
+    // XXX Keep this optional for now until NAT'ing is more thoroughly
+    // implemented in Omicron.
     pub snat_cfg: Option<SNat4Cfg>,
 
-    /// Optional external IP addresses for this port
+    /// Optional external IP addresses for this port.
+    ///
+    /// This allows hosts on the external network to make inbound connections to
+    /// the guest. When present, it is also used as 1:1 NAT for outbound
+    /// connections from the guest to an external network.
+    //
+    // XXX For now we only allow one external IP.
     pub external_ips: Option<Ipv4Addr>,
 }
 
 /// The IPv6 configuration for an OPTE port
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ipv6Cfg {
-    /// The private IP subnet of the VPC Subnet
+    /// The private IP subnet of the VPC Subnet.
     pub vpc_subnet: Ipv6Cidr,
 
-    /// The port's private IP address in the VPC Subnet
+    /// The guest's private IP address in the VPC Subnet.
     pub private_ip: Ipv6Addr,
 
-    /// The IP address of the port's gateway
+    /// The IPv6 address for the virtual gateway.
+    ///
+    /// The virtual gateway is what the guest sees as its gateway to all other
+    /// networks, including other VPC guests as well as external networks and
+    /// the internet. Essentially, this is the IPv6 address of OPTE itself,
+    /// which is acting as the gateway to the guest.
     pub gateway_ip: Ipv6Addr,
 
     /// The source NAT configuration for making outbound connections
     /// from the private network.
+    ///
+    /// This allows a guest to make outbound connections to hosts on an external
+    /// network when there is no external IP address assigned to the guest
+    /// itself.
+    //
+    // XXX Keep this optional for now until NAT'ing is more thoroughly
+    // implemented in Omicron.
     pub snat_cfg: Option<SNat6Cfg>,
 
-    /// Optional external IP addresses for this port
+    /// Optional external IP addresses for this port.
+    ///
+    /// This allows hosts on the external network to make inbound connections to
+    /// the guest. When present, it is also used as 1:1 NAT for outbound
+    /// connections from the guest to an external network.
+    //
+    // XXX For now we only allow one external IP.
     pub external_ips: Option<Ipv6Addr>,
 }
 
-/// The IP configuration for a port
+/// The IP configuration for a port.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpCfg {
     Ipv4(Ipv4Cfg),
@@ -94,26 +131,33 @@ pub enum IpCfg {
     DualStack { ipv4: Ipv4Cfg, ipv6: Ipv6Cfg },
 }
 
-/// The overall configuration for an OPTE port
+/// The overall configuration for an OPTE port.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VpcCfg {
-    /// IP address configuration
+    /// IP address configuration.
     pub ip_cfg: IpCfg,
 
-    /// The private MAC address of the port
+    /// The VPC-private MAC address of the guest.
     pub private_mac: MacAddr,
 
-    /// The MAC address of the virtual gateway, OPTE.
+    /// The MAC address for the virtual gateway.
+    ///
+    /// The virtual gateway is what the guest sees as its gateway to all other
+    /// networks, including other VPC guests as well as external networks and
+    /// the internet. Essentially, this is the MAC address of OPTE itself,
+    /// which is acting as the gateway to the guest.
     pub gateway_mac: MacAddr,
 
-    /// The Geneve Virtual Network Identifier for this VPC
+    /// The Geneve Virtual Network Identifier for this VPC in which the guest
+    /// resides.
     pub vni: Vni,
 
-    /// The IP address of the hosting sled
+    /// The host (sled) IPv6 address. All guests on the same sled are
+    /// sourced to a single IPv6 address.
     pub phys_ip: Ipv6Addr,
 
     /// Information for reaching Boundary Services, for traffic destined
-    /// for off-rack networks.
+    /// for external networks.
     pub boundary_services: BoundaryServices,
 
     // XXX-EXT-IP the following two fields are for the external IP hack.
@@ -220,6 +264,19 @@ impl FromStr for RouterTarget {
     }
 }
 
+impl Display for RouterTarget {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Drop => write!(f, "Drop"),
+            Self::InternetGateway => write!(f, "IG"),
+            Self::Ip(IpAddr::Ip4(ip4)) => write!(f, "ip4={}", ip4),
+            Self::Ip(IpAddr::Ip6(ip6)) => write!(f, "ip6={}", ip6),
+            Self::VpcSubnet(IpCidr::Ip4(sub4)) => write!(f, "sub4={}", sub4),
+            Self::VpcSubnet(IpCidr::Ip6(sub6)) => write!(f, "sub6={}", sub6),
+        }
+    }
+}
+
 /// Xde create ioctl parameter data.
 ///
 /// The bulk of the information is provided via [`VpcCfg`].
@@ -241,66 +298,6 @@ pub struct CreateXdeReq {
     /// should go away before v1.
     pub passthrough: bool,
 }
-
-/*
-    /// The VPC IPv4 address of the guest.
-    pub private_ip: Ipv4Addr,
-
-    /// The VPC subnet CIDR of the guest.
-    pub vpc_subnet: Ipv4Cidr,
-
-    /// The VPC MAC address of the guest.
-    pub private_mac: MacAddr,
-
-    /// The MAC address for the virtual gateway. The virtual gateway
-    /// is what the guest sees as its gateway to all other networks,
-    /// including other VPC guests as well as external networks and
-    /// the internet. Essentially, this is the MAC address of OPTE
-    /// itself, which is acting as the gateway to the guest.
-    pub gw_mac: MacAddr,
-
-    /// The IPv4 address for the virtual gateway. The virtual gateway
-    /// is what the guest sees as it's gateway to all other networks,
-    /// including other VPC guests as well as external networks and
-    /// the internet. Essentially, this is the IPv4 address of OPTE
-    /// itself, which is acting as the gateway to the guest.
-    pub gw_ip: Ipv4Addr,
-
-    /// The Boundary Services IPv6 address. Boundary Services is used
-    /// to transit packets between VPC guests and external networks.
-    pub bsvc_addr: Ipv6Addr,
-
-    /// The Boundary Services Virtual Network Identifier (VNI).
-    /// Boundary Services is used to transit packets between VPC
-    /// guests and external networks.
-    pub bsvc_vni: Vni,
-
-    /// The host (sled) IPv6 address. All guests on the same sled are
-    /// sourced to a single IPv6 address.
-    pub src_underlay_addr: Ipv6Addr,
-
-    /// The Virtual Network Identifier (VNI) of the VPC in which the
-    /// guest resides.
-    pub vpc_vni: Vni,
-
-    /// The Source NAT configuration for this guest, consisting of an
-    /// IP + port range which may be used. This allows a guest to make
-    /// outbound connections to hosts on an external network when
-    /// there is no external IP address assigned to the guest itself.
-    ///
-    /// XXX Keep this optional for now until NAT'ing is more thoroughly
-    /// implemented in Omicron.
-    pub snat: Option<SNat4Cfg>,
-
-    /// The external IPv4 address of the guest. This allows hosts on
-    /// the external network to make inbound connections to the guest.
-    /// When present, it is also used as 1:1 NAT for outbound
-    /// connections from the guest to an external network.
-    ///
-    /// XXX For now we only allow one external IP.
-    pub external_ips_v4: Option<Ipv4Addr>,
-}
-*/
 
 /// Configuration of source NAT for a port, describing how a private IP
 /// address is mapped to a public IP and port range for outbound connections.

@@ -434,7 +434,7 @@ fn oxide_net_builder(
     let one_limit = NonZeroU32::new(1).unwrap();
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    dhcp::setup(&mut pb, cfg, one_limit).expect("failed to add dhcp4 layer");
+    dhcp::setup(&mut pb, cfg, one_limit).expect("failed to add dhcp layer");
     icmp::setup(&mut pb, cfg, one_limit).expect("failed to add icmp layer");
     icmpv6::setup(&mut pb, cfg, one_limit).expect("failed to add icmpv6 layer");
     arp::setup(&mut pb, cfg, one_limit).expect("failed to add arp layer");
@@ -494,10 +494,6 @@ fn g1_cfg() -> VpcCfg {
             private_ip: "172.30.0.5".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
             snat_cfg: Some(SNat4Cfg {
-                // NOTE: This is not a routable IP, but remember that a
-                // "public IP" for an Oxide guest could either be a
-                // public, routable IP or simply an IP on their wider LAN
-                // which the oxide Rack is simply a part of.
                 public_ip: "10.77.77.13".parse().unwrap(),
                 ports: 1025..=4096,
             }),
@@ -543,10 +539,6 @@ fn g2_cfg() -> VpcCfg {
             private_ip: "172.30.0.6".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
             snat_cfg: Some(SNat4Cfg {
-                // NOTE: This is not a routable IP, but remember that a
-                // "public IP" for an Oxide guest could either be a
-                // public, routable IP or simply an IP on their wider LAN
-                // which the oxide Rack is simply a part of.
                 public_ip: "10.77.77.23".parse().unwrap(),
                 ports: 4096..=8192,
             }),
@@ -565,7 +557,7 @@ fn g2_cfg() -> VpcCfg {
     };
     VpcCfg {
         ip_cfg,
-        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
+        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x66]),
         gateway_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
         vni: Vni::new(1287581u32).unwrap(),
         // Site 0xF7, Rack 1, Sled 22, Interface 1

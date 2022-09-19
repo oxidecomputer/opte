@@ -338,7 +338,9 @@ impl FromStr for IpAddr {
         if let Ok(ipv4) = val.parse::<Ipv4Addr>() {
             Ok(ipv4.into())
         } else {
-            val.parse::<Ipv6Addr>().map(IpAddr::Ip6)
+            val.parse::<Ipv6Addr>()
+                .map(IpAddr::Ip6)
+                .map_err(|_| String::from("Invalid IP address"))
         }
     }
 }
@@ -634,7 +636,10 @@ impl FromStr for IpCidr {
     fn from_str(val: &str) -> result::Result<Self, Self::Err> {
         match val.parse::<Ipv4Cidr>() {
             Ok(ip4) => Ok(IpCidr::Ip4(ip4)),
-            Err(_) => val.parse::<Ipv6Cidr>().map(IpCidr::Ip6),
+            Err(_) => val
+                .parse::<Ipv6Cidr>()
+                .map(IpCidr::Ip6)
+                .map_err(|_| String::from("Invalid IP CIDR")),
         }
     }
 }
@@ -784,7 +789,9 @@ impl FromStr for Ipv6Cidr {
 
         let ip = match ip_s.parse::<smoltcp::wire::Ipv6Address>() {
             Ok(v) => v.into(),
-            Err(_) => return Err(String::from("Bad IP address component")),
+            Err(_) => {
+                return Err(format!("Bad IP address component: '{}'", ip_s))
+            }
         };
 
         let prefix_len = match prefix_s.parse::<u8>() {

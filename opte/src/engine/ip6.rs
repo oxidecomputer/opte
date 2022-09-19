@@ -262,8 +262,8 @@ impl Ipv6Hdr {
         self.payload_len = len - self.hdr_len() as u16;
     }
 
-    /// Return the total length of the packet, including extension headers and
-    /// payload.
+    /// Return the total length of the packet, including the base header, any
+    /// extension headers, and the payload itself.
     pub fn total_len(&self) -> u16 {
         self.payload_len + IPV6_HDR_SZ as u16
     }

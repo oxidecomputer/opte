@@ -5,6 +5,7 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::encap::Vni;
+use super::ip::IpCidr;
 use super::mac::MacAddr;
 use super::API_VERSION;
 use illumos_sys_hdrs::{c_int, size_t};
@@ -146,7 +147,7 @@ pub enum OpteError {
     DeserCmdErr(String),
     DeserCmdReq(String),
     FlowExists(String),
-    InvalidRouteDest(String),
+    InvalidRouterEntry { dest: IpCidr, target: String },
     LayerNotFound(String),
     MacExists { port: String, vni: Vni, mac: MacAddr },
     MaxCapacity(u64),
@@ -181,7 +182,7 @@ impl OpteError {
             Self::DeserCmdErr(_) => ENOMSG,
             Self::DeserCmdReq(_) => ENOMSG,
             Self::FlowExists(_) => EEXIST,
-            Self::InvalidRouteDest(_) => EINVAL,
+            Self::InvalidRouterEntry { .. } => EINVAL,
             Self::LayerNotFound(_) => ENOENT,
             Self::MacExists { .. } => EEXIST,
             Self::MaxCapacity(_) => ENFILE,

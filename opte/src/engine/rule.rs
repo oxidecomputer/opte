@@ -66,7 +66,7 @@ pub trait MatchExact<M: MatchExactVal + Eq + PartialEq> {
     fn match_exact(&self, val: &M) -> bool;
 }
 
-/// A marker trait for types that can be match up to a prefix.
+/// A marker trait for types that can be match by prefix.
 pub trait MatchPrefixVal {}
 
 /// A trait describing how to match data by prefix.

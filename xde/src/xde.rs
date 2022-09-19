@@ -1438,10 +1438,11 @@ unsafe extern "C" fn xde_mc_tx(
                             // This should be unreachable!(). We have an IP header,
                             // but neither `ip4()` nor `ip6()` returned something.
                             opte::engine::dbg(format!(
-                            "Packet contains IP header, but neither `ip4()` \
-                            nor `ip6()` returned `Some`. IP header: {:?}",
-                            ip_hdr,
-                        ));
+                                "Packet contains IP header, but neither \
+                                `ip4()` nor `ip6()` returned `Some`. \
+                                IP header: {:?}",
+                                ip_hdr,
+                            ));
                             false
                         }
                     } else {

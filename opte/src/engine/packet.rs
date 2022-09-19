@@ -881,7 +881,7 @@ impl Packet<Initialized> {
         match proto {
             Protocol::TCP => Self::parse_hg_tcp(rdr, hg, offsets)?,
             Protocol::UDP => Self::parse_hg_udp(rdr, hg, offsets)?,
-            // See comment above about treating ICMPv6 as a header.
+            // See comment above about treating ICMP as a header.
             Protocol::ICMPv6 => (),
             _ => return Err(ParseError::UnsupportedProtocol(proto)),
         }

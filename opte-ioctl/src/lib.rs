@@ -4,7 +4,6 @@
 
 // Copyright 2022 Oxide Computer Company
 
-// Copyright 2022 Oxide Computer Company
 pub use opte::api::OpteError;
 use opte::api::{
     CmdOk, NoResp, OpteCmd, OpteCmdIoctl, SetXdeUnderlayReq, API_VERSION,
