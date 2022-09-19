@@ -4,17 +4,11 @@
  * dtrace -L ./lib -I . -Cqs ./opte-tcp-flow-state.d
  */
 #include "common.h"
+#include "protos.d"
 
 #define	FMT	"%-16s %-12s %-12s %s\n"
 
 BEGIN {
-	/*
-	 * Use an associative array to stringify the protocol number.
-	 * It's always going to be TCP but we need this declared so
-	 * the FLOW_FMT macros work.
-	 */
-	protos[6] = "TCP";
-
 	/*
 	 * Use an associative array to stringify the TCP state
 	 * values.

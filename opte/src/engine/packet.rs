@@ -396,6 +396,14 @@ impl PacketMeta {
         }
     }
 
+    /// Return the inner IPv6 metadata.
+    pub fn inner_ip6(&self) -> Option<&Ipv6Meta> {
+        match &self.inner.ip {
+            Some(IpMeta::Ip6(x)) => Some(x),
+            _ => None,
+        }
+    }
+
     /// Return the inner TCP metadata, if the inner ULP is TCP.
     /// Otherwise, return `None`.
     pub fn inner_tcp(&self) -> Option<&TcpMeta> {
@@ -873,6 +881,8 @@ impl Packet<Initialized> {
         match proto {
             Protocol::TCP => Self::parse_hg_tcp(rdr, hg, offsets)?,
             Protocol::UDP => Self::parse_hg_udp(rdr, hg, offsets)?,
+            // See comment above about treating ICMP as a header.
+            Protocol::ICMPv6 => (),
             _ => return Err(ParseError::UnsupportedProtocol(proto)),
         }
 

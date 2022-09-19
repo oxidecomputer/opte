@@ -5,9 +5,10 @@
 // Copyright 2022 Oxide Computer Company
 
 pub mod arp;
-pub mod dhcp4;
+pub mod dhcp;
 pub mod firewall;
 pub mod icmp;
+pub mod icmpv6;
 pub mod nat;
 pub mod overlay;
 pub mod router;

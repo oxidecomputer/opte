@@ -15,9 +15,10 @@ use super::headers::{
     self, HeaderAction, HeaderActionError, IpAddr, IpMeta, IpMetaOpt,
     UlpHeaderAction, UlpMeta, UlpMetaOpt,
 };
-use super::icmp::MessageType as Icmp4MessageType;
+use super::icmp::MessageType as IcmpMessageType;
+use super::icmpv6::MessageType as Icmpv6MessageType;
 use super::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
-use super::ip6::Ipv6Meta;
+use super::ip6::{Ipv6Addr, Ipv6Cidr, Ipv6Meta};
 use super::layer::InnerFlowId;
 use super::packet::{
     Initialized, Packet, PacketMeta, PacketRead, PacketReader, Parsed,
@@ -31,7 +32,10 @@ use illumos_sys_hdrs::c_char;
 use opte_api::{Direction, MacAddr};
 use serde::{Deserialize, Serialize};
 use smoltcp::phy::ChecksumCapabilities as Csum;
-use smoltcp::wire::{DhcpPacket, DhcpRepr, Icmpv4Packet, Icmpv4Repr};
+use smoltcp::wire::{
+    self, DhcpPacket, DhcpRepr, Icmpv4Packet, Icmpv4Repr, Icmpv6Packet,
+    Icmpv6Repr,
+};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -52,20 +56,28 @@ cfg_if! {
 // of payloads include an ARP request, ICMP body, or TCP body.
 pub trait Payload {}
 
+/// A marker trait for types that can be matched exactly, usually by direct
+/// equality comparison.
 pub trait MatchExactVal {}
 
+/// Trait support matching a value exactly, usually by direct equality
+/// comparison.
 pub trait MatchExact<M: MatchExactVal + Eq + PartialEq> {
     fn match_exact(&self, val: &M) -> bool;
 }
 
+/// A marker trait for types that can be match by prefix.
 pub trait MatchPrefixVal {}
 
+/// A trait describing how to match data by prefix.
 pub trait MatchPrefix<M: MatchPrefixVal> {
     fn match_prefix(&self, prefix: &M) -> bool;
 }
 
+/// A marker trait for types that can match a range of values.
 pub trait MatchRangeVal {}
 
+/// A trait describing how to match data over a range of values.
 pub trait MatchRange<M: MatchRangeVal> {
     fn match_range(&self, start: &M, end: &M) -> bool;
 }
@@ -185,9 +197,12 @@ impl Display for ArpOpMatch {
     }
 }
 
+/// Describe how to match an IPv4 address
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Ipv4AddrMatch {
+    /// Match an exact address
     Exact(Ipv4Addr),
+    /// Match an address in the same CIDR block
     Prefix(Ipv4Cidr),
 }
 
@@ -203,6 +218,35 @@ impl Ipv4AddrMatch {
 impl Display for Ipv4AddrMatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use Ipv4AddrMatch::*;
+
+        match self {
+            Exact(ip) => write!(f, "{}", ip),
+            Prefix(cidr) => write!(f, "{}", cidr),
+        }
+    }
+}
+
+/// Describe how to match an IPv6 address
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum Ipv6AddrMatch {
+    /// Match an exact address
+    Exact(Ipv6Addr),
+    /// Match an address in the same CIDR block
+    Prefix(Ipv6Cidr),
+}
+
+impl Ipv6AddrMatch {
+    fn matches(&self, flow_ip: Ipv6Addr) -> bool {
+        match self {
+            Self::Exact(ip) => flow_ip.match_exact(ip),
+            Self::Prefix(cidr) => flow_ip.match_prefix(cidr),
+        }
+    }
+}
+
+impl Display for Ipv6AddrMatch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use Ipv6AddrMatch::*;
 
         match self {
             Exact(ip) => write!(f, "{}", ip),
@@ -275,6 +319,8 @@ pub enum Predicate {
     InnerArpOp(ArpOpMatch),
     InnerSrcIp4(Vec<Ipv4AddrMatch>),
     InnerDstIp4(Vec<Ipv4AddrMatch>),
+    InnerSrcIp6(Vec<Ipv6AddrMatch>),
+    InnerDstIp6(Vec<Ipv6AddrMatch>),
     InnerIpProto(Vec<IpProtoMatch>),
     InnerSrcPort(Vec<PortMatch>),
     InnerDstPort(Vec<PortMatch>),
@@ -351,6 +397,24 @@ impl Display for Predicate {
                     .collect::<Vec<String>>()
                     .join(",");
                 write!(f, "inner.ip.dst={}", s)
+            }
+
+            InnerSrcIp6(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.ip6.src={}", s)
+            }
+
+            InnerDstIp6(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.ip6.dst={}", s)
             }
 
             InnerSrcPort(list) => {
@@ -510,6 +574,28 @@ impl Predicate {
                 _ => return false,
             },
 
+            Self::InnerSrcIp6(list) => match meta.inner.ip {
+                Some(IpMeta::Ip6(Ipv6Meta { src: ip, .. })) => {
+                    for m in list {
+                        if m.matches(ip) {
+                            return true;
+                        }
+                    }
+                }
+                _ => return false,
+            },
+
+            Self::InnerDstIp6(list) => match meta.inner.ip {
+                Some(IpMeta::Ip6(Ipv6Meta { dst: ip, .. })) => {
+                    for m in list {
+                        if m.matches(ip) {
+                            return true;
+                        }
+                    }
+                }
+                _ => return false,
+            },
+
             Self::InnerSrcPort(list) => match meta.inner.ulp {
                 None => return false,
 
@@ -557,8 +643,9 @@ impl Predicate {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DataPredicate {
-    Dhcp4MsgType(DhcpMessageType),
-    Icmp4MsgType(Icmp4MessageType),
+    DhcpMsgType(DhcpMessageType),
+    IcmpMsgType(IcmpMessageType),
+    Icmpv6MsgType(Icmpv6MessageType),
     InnerArpTpa(Vec<Ipv4AddrMatch>),
     Not(Box<DataPredicate>),
 }
@@ -568,12 +655,16 @@ impl Display for DataPredicate {
         use DataPredicate::*;
 
         match self {
-            Dhcp4MsgType(mt) => {
-                write!(f, "dhcp4.msg_type={}", mt)
+            DhcpMsgType(mt) => {
+                write!(f, "dhcp.msg_type={}", mt)
             }
 
-            Icmp4MsgType(mt) => {
+            IcmpMsgType(mt) => {
                 write!(f, "icmp.msg_type={}", mt)
+            }
+
+            Icmpv6MsgType(mt) => {
+                write!(f, "icmpv6.msg_type={}", mt)
             }
 
             InnerArpTpa(list) => {
@@ -605,7 +696,7 @@ impl DataPredicate {
         match self {
             Self::Not(pred) => return !pred.is_match(meta, rdr),
 
-            Self::Dhcp4MsgType(mt) => {
+            Self::DhcpMsgType(mt) => {
                 let bytes = rdr.copy_remaining();
                 let pkt = match DhcpPacket::new_checked(&bytes) {
                     Ok(v) => v,
@@ -633,7 +724,7 @@ impl DataPredicate {
                 return res;
             }
 
-            Self::Icmp4MsgType(mt) => {
+            Self::IcmpMsgType(mt) => {
                 let bytes = rdr.copy_remaining();
                 let pkt = match Icmpv4Packet::new_checked(&bytes) {
                     Ok(v) => v,
@@ -656,7 +747,45 @@ impl DataPredicate {
                     }
                 };
 
-                return Icmp4MessageType::from(pkt.msg_type()) == *mt;
+                return IcmpMessageType::from(pkt.msg_type()) == *mt;
+            }
+
+            Self::Icmpv6MsgType(mt) => {
+                // Pull out the IPv6 source / destination addresses. This checks
+                // that this is actually an IPv6 packet, and these are needed
+                // for the `smoltcp` packet parsing / validation.
+                let (src, dst) = if let Some(metadata) = meta.inner_ip6() {
+                    (
+                        wire::IpAddress::Ipv6(wire::Ipv6Address(
+                            metadata.src.bytes(),
+                        )),
+                        wire::IpAddress::Ipv6(wire::Ipv6Address(
+                            metadata.dst.bytes(),
+                        )),
+                    )
+                } else {
+                    // This isn't an IPv6 packet at all
+                    return false;
+                };
+
+                let bytes = rdr.copy_remaining();
+                let pkt = match Icmpv6Packet::new_checked(&bytes) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        super::err(format!(
+                            "Icmpv6Packet::new_checked() failed: {:?}",
+                            e
+                        ));
+                        return false;
+                    }
+                };
+                if let Err(e) =
+                    Icmpv6Repr::parse(&src, &dst, &pkt, &Csum::ignored())
+                {
+                    super::err(format!("Icmpv6Repr::parse() failed: {:?}", e,));
+                    return false;
+                }
+                return Icmpv6MessageType::from(pkt.msg_type()) == *mt;
             }
 
             Self::InnerArpTpa(list) => match meta.inner.arp {

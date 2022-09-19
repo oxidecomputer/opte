@@ -4,19 +4,11 @@
  * dtrace -L ./lib -I . -Cqs ./opte-guest-loopback.d
  */
 #include "common.h"
+#include "protos.d"
 
 #define	HDR_FMT		"%-43s %-12s %-12s\n"
 
 BEGIN {
-	/*
-	 * Use an associative array to stringify the protocol number.
-	 */
-	protos[1] = "ICMP";
-	protos[2] = "IGMP";
-	protos[6] = "TCP";
-	protos[17] = "UDP";
-	protos[255] = "XXX";
-
 	printf(HDR_FMT, "FLOW", "SRC PORT", "DST PORT");
 	num = 0;
 }

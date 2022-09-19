@@ -41,30 +41,5 @@ extern crate cfg_if;
 #[cfg(any(feature = "api", test))]
 pub mod api;
 
-cfg_if! {
-    if #[cfg(any(feature = "engine", test))] {
-        use opte::api::{Ipv4Addr, Ipv4Cidr, Ipv6Addr, MacAddr, Vni};
-        use crate::api::{PhysNet, SNatCfg};
-
-        pub mod engine;
-
-        // TODO Tease out generic PortCfg.
-        #[derive(Clone, Debug)]
-        pub struct VpcCfg {
-            pub vpc_subnet: Ipv4Cidr,
-            pub private_mac: MacAddr,
-            pub private_ip: Ipv4Addr,
-            pub gw_mac: MacAddr,
-            pub gw_ip: Ipv4Addr,
-            // XXX For now we limit to one external IP.
-            pub external_ips_v4: Option<Ipv4Addr>,
-            pub snat: Option<SNatCfg>,
-            pub vni: Vni,
-            pub phys_ip: Ipv6Addr,
-            pub bsvc_addr: PhysNet,
-            // XXX-EXT-IP the follow two fields are for the external IP hack.
-            pub proxy_arp_enable: bool,
-            pub phys_gw_mac: Option<MacAddr>,
-        }
-    }
-}
+#[cfg(any(feature = "engine", test))]
+pub mod engine;

@@ -6,14 +6,16 @@
 
 use super::ether::EtherMeta;
 use super::ip4::Ipv4Meta;
+use super::ip6::Ipv6Meta;
 use super::layer::InnerFlowId;
 use super::port::meta::ActionMeta;
 use super::rule::{
     self, ActionDesc, AllowOrDeny, DataPredicate, HdrTransform, Predicate,
     StatefulAction,
 };
+use crate::engine::snat::ConcreteIpAddr;
 use core::fmt;
-use opte_api::{Direction, Ipv4Addr, MacAddr};
+use opte_api::{Direction, IpAddr, MacAddr};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -27,42 +29,45 @@ cfg_if! {
     }
 }
 
-#[derive(Clone)]
-pub struct Nat4 {
-    priv_ip: Ipv4Addr,
-    public_ip: Ipv4Addr,
+/// A mapping from a private to external IP address for NAT.
+#[derive(Debug, Clone, Copy)]
+pub struct Nat {
+    priv_ip: IpAddr,
+    external_ip: IpAddr,
+    // XXX-EXT-IP Remove
     phys_gw_mac: Option<MacAddr>,
 }
 
-impl Nat4 {
-    pub fn new(
-        priv_ip: Ipv4Addr,
-        public_ip: Ipv4Addr,
+impl Nat {
+    /// Create a new NAT mapping from a private to public IP address.
+    pub fn new<T: ConcreteIpAddr>(
+        priv_ip: T,
+        external_ip: T,
         phys_gw_mac: Option<MacAddr>,
     ) -> Self {
         Self {
             priv_ip: priv_ip.into(),
-            public_ip: public_ip.into(),
+            external_ip: external_ip.into(),
             phys_gw_mac,
         }
     }
 }
 
-impl fmt::Display for Nat4 {
+impl fmt::Display for Nat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} <=> {}", self.priv_ip, self.public_ip)
+        write!(f, "{} <=> {}", self.priv_ip, self.external_ip)
     }
 }
 
-impl StatefulAction for Nat4 {
+impl StatefulAction for Nat {
     fn gen_desc(
         &self,
         _flow_id: &InnerFlowId,
         _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
-        let desc = Nat4Desc {
+        let desc = NatDesc {
             priv_ip: self.priv_ip,
-            public_ip: self.public_ip,
+            external_ip: self.external_ip,
             // XXX-EXT-IP This is assuming ext_ip_hack. All packets
             // outbound for IG will have their dest mac rewritten to
             // go to physical gateway, which will then properly route
@@ -80,27 +85,32 @@ impl StatefulAction for Nat4 {
     }
 }
 
-#[derive(Clone)]
-pub struct Nat4Desc {
-    priv_ip: Ipv4Addr,
-    public_ip: Ipv4Addr,
+/// An action descriptor for a NAT action.
+#[derive(Debug, Clone, Copy)]
+pub struct NatDesc {
+    priv_ip: IpAddr,
+    external_ip: IpAddr,
     // XXX-EXT-IP
     phys_gw_mac: Option<MacAddr>,
 }
 
-pub const NAT4_NAME: &'static str = "NAT4";
+pub const NAT_NAME: &'static str = "NAT";
 
-impl ActionDesc for Nat4Desc {
+impl ActionDesc for NatDesc {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             Direction::Out => {
+                let inner_ip = match self.external_ip {
+                    IpAddr::Ip4(ipv4) => {
+                        Ipv4Meta::modify(Some(ipv4), None, None)
+                    }
+                    IpAddr::Ip6(ipv6) => {
+                        Ipv6Meta::modify(Some(ipv6), None, None)
+                    }
+                };
                 let mut ht = HdrTransform {
-                    name: NAT4_NAME.to_string(),
-                    inner_ip: Ipv4Meta::modify(
-                        Some(self.public_ip),
-                        None,
-                        None,
-                    ),
+                    name: NAT_NAME.to_string(),
+                    inner_ip,
                     ..Default::default()
                 };
 
@@ -117,16 +127,26 @@ impl ActionDesc for Nat4Desc {
                 ht
             }
 
-            Direction::In => HdrTransform {
-                name: NAT4_NAME.to_string(),
-                inner_ip: Ipv4Meta::modify(None, Some(self.priv_ip), None),
-                ..Default::default()
-            },
+            Direction::In => {
+                let inner_ip = match self.priv_ip {
+                    IpAddr::Ip4(ipv4) => {
+                        Ipv4Meta::modify(None, Some(ipv4), None)
+                    }
+                    IpAddr::Ip6(ipv6) => {
+                        Ipv6Meta::modify(None, Some(ipv6), None)
+                    }
+                };
+                HdrTransform {
+                    name: NAT_NAME.to_string(),
+                    inner_ip,
+                    ..Default::default()
+                }
+            }
         }
     }
 
     fn name(&self) -> &str {
-        NAT4_NAME
+        NAT_NAME
     }
 }
 
@@ -151,7 +171,7 @@ mod test {
         let outside_ip = "76.76.21.21".parse().unwrap();
         let outside_port = 80;
         let gw_mac = MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
-        let nat = Nat4::new(priv_ip, pub_ip, Some(gw_mac));
+        let nat = Nat::new(priv_ip, pub_ip, Some(gw_mac));
         let mut ameta = ActionMeta::new();
 
         // ================================================================

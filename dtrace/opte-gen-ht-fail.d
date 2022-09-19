@@ -4,17 +4,11 @@
  * dtrace -L ./lib -I . -Cqs ./opte-gen-desc-fail.d
  */
 #include "common.h"
+#include "protos.d"
 
 #define HDR_FMT	"%-12s %-12s %-4s %-48s %s\n"
 
 BEGIN {
-	/*
-	 * Use an associative array to stringify the protocol number.
-	 */
-	protos[1] = "ICMP";
-	protos[2] = "IGMP";
-	protos[6] = "TCP";
-	protos[17] = "UDP";
 
 	printf(HDR_FMT, "PORT", "LAYER", "DIR", "FLOW", "MSG");
 	num = 0;

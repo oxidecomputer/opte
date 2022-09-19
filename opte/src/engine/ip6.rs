@@ -6,10 +6,15 @@
 
 use super::checksum::Checksum;
 use super::headers::{
-    Header, HeaderAction, IpMeta, IpMetaOpt, ModifyActionArg, PushActionArg,
+    Header, HeaderAction, HeaderActionModify, IpMeta, IpMetaOpt,
+    ModifyActionArg, PushActionArg,
 };
 use super::ip4::Protocol;
 use super::packet::{PacketRead, ReadErr};
+use crate::engine::rule::MatchExact;
+use crate::engine::rule::MatchExactVal;
+use crate::engine::rule::MatchPrefix;
+use crate::engine::rule::MatchPrefixVal;
 use core::convert::TryFrom;
 pub use opte_api::{Ipv6Addr, Ipv6Cidr};
 use serde::{Deserialize, Serialize};
@@ -33,13 +38,39 @@ pub const IPV6_HDR_SZ: usize = smoltcp::wire::IPV6_HEADER_LEN;
 pub const IPV6_VERSION: u8 = 6;
 pub const DDM_HEADER_ID: u8 = 0xFE;
 
+impl MatchExactVal for Ipv6Addr {}
+impl MatchPrefixVal for Ipv6Cidr {}
+
+impl MatchExact<Ipv6Addr> for Ipv6Addr {
+    fn match_exact(&self, val: &Ipv6Addr) -> bool {
+        *self == *val
+    }
+}
+
+impl MatchPrefix<Ipv6Cidr> for Ipv6Addr {
+    fn match_prefix(&self, prefix: &Ipv6Cidr) -> bool {
+        prefix.is_member(*self)
+    }
+}
+
 #[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct Ipv6Meta {
     pub src: Ipv6Addr,
     pub dst: Ipv6Addr,
     pub proto: Protocol,
+}
+
+impl Ipv6Meta {
+    // XXX check that at least one field was specified.
+    pub fn modify(
+        src: Option<Ipv6Addr>,
+        dst: Option<Ipv6Addr>,
+        proto: Option<Protocol>,
+    ) -> HeaderAction<IpMeta, IpMetaOpt> {
+        HeaderAction::Modify(Ipv6MetaOpt { src, dst, proto }.into())
+    }
 }
 
 impl PushActionArg for Ipv6Meta {}
@@ -52,8 +83,9 @@ impl From<&Ipv6Hdr> for Ipv6Meta {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Ipv6MetaOpt {
-    src: Option<[u8; 16]>,
-    dst: Option<[u8; 16]>,
+    src: Option<Ipv6Addr>,
+    dst: Option<Ipv6Addr>,
+    proto: Option<Protocol>,
 }
 
 impl ModifyActionArg for Ipv6MetaOpt {}
@@ -65,6 +97,20 @@ impl Ipv6Meta {
         proto: Protocol,
     ) -> HeaderAction<IpMeta, IpMetaOpt> {
         HeaderAction::Push(IpMeta::Ip6(Ipv6Meta { src, dst, proto }))
+    }
+}
+
+impl HeaderActionModify<Ipv6MetaOpt> for Ipv6Meta {
+    fn run_modify(&mut self, spec: &Ipv6MetaOpt) {
+        if let Some(src) = spec.src {
+            self.src = src;
+        }
+        if let Some(dst) = spec.dst {
+            self.dst = dst;
+        }
+        if let Some(proto) = spec.proto {
+            self.proto = proto;
+        }
     }
 }
 
@@ -179,6 +225,12 @@ impl Ipv6Hdr {
         usize::from(self.payload_len)
     }
 
+    /// Set the payload length of the contained packet, including any extension
+    /// headers.
+    pub fn set_pay_len(&mut self, len: u16) {
+        self.payload_len = len;
+    }
+
     /// Return the length of the upper-layer protocol payload.
     pub fn ulp_len(&self) -> usize {
         self.pay_len() - self.ext_len()
@@ -208,6 +260,12 @@ impl Ipv6Hdr {
     /// Set the total length of the packet
     pub fn set_total_len(&mut self, len: u16) {
         self.payload_len = len - self.hdr_len() as u16;
+    }
+
+    /// Return the total length of the packet, including the base header, any
+    /// extension headers, and the payload itself.
+    pub fn total_len(&self) -> u16 {
+        self.payload_len + IPV6_HDR_SZ as u16
     }
 
     /// Return the source IPv6 address
@@ -366,6 +424,8 @@ impl From<&Ipv6Meta> for Ipv6Hdr {
 
 #[cfg(test)]
 pub(crate) mod test {
+    use super::Ipv6Addr;
+    use super::Ipv6Cidr;
     use super::Ipv6Hdr;
     use super::DDM_HEADER_ID;
     use super::IPV6_HDR_SZ;
@@ -373,6 +433,8 @@ pub(crate) mod test {
     use crate::engine::packet::Initialized;
     use crate::engine::packet::Packet;
     use crate::engine::packet::PacketReader;
+    use crate::engine::rule::MatchExact;
+    use crate::engine::rule::MatchPrefix;
     use itertools::Itertools;
     use smoltcp::wire::IpProtocol;
     use smoltcp::wire::Ipv6Address;
@@ -602,5 +664,33 @@ pub(crate) mod test {
             PAYLOAD_LEN - header.ext_len(),
             "ULP length is not correct"
         );
+        assert_eq!(
+            header.total_len(),
+            (PAYLOAD_LEN + IPV6_HDR_SZ) as u16,
+            "Total packet length is not correct",
+        );
+    }
+
+    #[test]
+    fn test_ipv6_addr_match_exact() {
+        let addr: Ipv6Addr = "fd00::1".parse().unwrap();
+        assert!(addr.match_exact(&addr));
+        assert!(!addr.match_exact(&("fd00::2".parse().unwrap())));
+    }
+
+    #[test]
+    fn test_ipv6_cidr_match_prefix() {
+        let cidr: Ipv6Cidr = "fd00::1/16".parse().unwrap();
+        let addr: Ipv6Addr = "fd00::1".parse().unwrap();
+        assert!(addr.match_prefix(&cidr));
+
+        let addr: Ipv6Addr = "fd00::2".parse().unwrap();
+        assert!(addr.match_prefix(&cidr));
+
+        let addr: Ipv6Addr = "fd01::1".parse().unwrap();
+        assert!(!addr.match_prefix(&cidr));
+
+        let addr: Ipv6Addr = "fd01::2".parse().unwrap();
+        assert!(!addr.match_prefix(&cidr));
     }
 }

@@ -20,13 +20,39 @@ cfg_if! {
     }
 }
 
+/// Generate an ICMPv6 Echo Reply message.
+#[derive(Debug, Clone, Copy)]
+pub struct Icmpv6EchoReply {
+    /// The MAC address of the Echo Request source.
+    pub src_mac: MacAddr,
+
+    /// The IP address of the Echo Request source.
+    pub src_ip: Ipv6Addr,
+
+    /// The MAC address of the Echo Request destination.
+    pub dst_mac: MacAddr,
+
+    /// The IP address of the Echo source destination.
+    pub dst_ip: Ipv6Addr,
+}
+
+impl Display for Icmpv6EchoReply {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "ICMPv6 Echo Reply ({},{}) => ({},{})",
+            self.dst_mac, self.dst_ip, self.src_mac, self.src_ip,
+        )
+    }
+}
+
 /// Generate an ICMPv4 Echo Reply message.
 ///
 /// Map an ICMPv4 Echo Message (Type=8, Code=0) from `src` to `dst`
 /// into an ICMPv4 Echo Reply Message (Type=0, Code=0) from `dst` to
 /// `src`.
 #[derive(Clone, Debug)]
-pub struct Icmp4EchoReply {
+pub struct IcmpEchoReply {
     /// The MAC address of the sender of the Echo message. The
     /// destination MAC address of the Echo Reply.
     pub echo_src_mac: MacAddr,
@@ -44,7 +70,7 @@ pub struct Icmp4EchoReply {
     pub echo_dst_ip: Ipv4Addr,
 }
 
-impl Display for Icmp4EchoReply {
+impl Display for IcmpEchoReply {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -66,7 +92,7 @@ impl Display for Icmp4EchoReply {
 /// specifies in the parameter request list. This has worked thus far,
 /// but we should come back to this and comb over RFC 2131 more
 /// carefully -- particularly §4.3.1 and §4.3.2.
-pub struct Dhcp4Action {
+pub struct DhcpAction {
     /// The client's MAC address.
     pub client_mac: MacAddr,
 
@@ -96,7 +122,7 @@ pub struct Dhcp4Action {
 
     /// The value of the `DHCP Message Type Option (code 53)`. This
     /// action supports only the Offer and Ack messages.
-    pub reply_type: Dhcp4ReplyType,
+    pub reply_type: DhcpReplyType,
 
     /// A static route entry, sent to the client via the `Classless
     /// Static Route Option (code 131)`.
@@ -112,19 +138,19 @@ pub struct Dhcp4Action {
     pub dns_servers: Option<[Option<Ipv4Addr>; 3]>,
 }
 
-impl Display for Dhcp4Action {
+impl Display for DhcpAction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "DHCPv4 {}: {}", self.reply_type, self.client_ip)
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum Dhcp4ReplyType {
+pub enum DhcpReplyType {
     Offer,
     Ack,
 }
 
-impl Display for Dhcp4ReplyType {
+impl Display for DhcpReplyType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Offer => write!(f, "OFFER"),
@@ -279,6 +305,18 @@ pub enum IpAddr {
     Ip6(Ipv6Addr),
 }
 
+impl From<Ipv4Addr> for IpAddr {
+    fn from(ipv4: Ipv4Addr) -> Self {
+        IpAddr::Ip4(ipv4)
+    }
+}
+
+impl From<Ipv6Addr> for IpAddr {
+    fn from(ipv6: Ipv6Addr) -> Self {
+        IpAddr::Ip6(ipv6)
+    }
+}
+
 impl Default for IpAddr {
     fn default() -> Self {
         IpAddr::Ip4(Default::default())
@@ -290,6 +328,19 @@ impl fmt::Display for IpAddr {
         match self {
             IpAddr::Ip4(ip4) => write!(f, "{}", ip4),
             IpAddr::Ip6(ip6) => write!(f, "{}", ip6),
+        }
+    }
+}
+
+impl FromStr for IpAddr {
+    type Err = String;
+    fn from_str(val: &str) -> result::Result<Self, Self::Err> {
+        if let Ok(ipv4) = val.parse::<Ipv4Addr>() {
+            Ok(ipv4.into())
+        } else {
+            val.parse::<Ipv6Addr>()
+                .map(IpAddr::Ip6)
+                .map_err(|_| String::from("Invalid IP address"))
         }
     }
 }
@@ -430,7 +481,7 @@ pub struct Ipv6Addr {
 }
 
 impl Ipv6Addr {
-    pub const ANY_ADDR: [u8; 16] = [0; 16];
+    pub const ANY_ADDR: Self = Self { inner: [0; 16] };
 
     /// Return the bytes of the address.
     pub fn bytes(&self) -> [u8; 16] {
@@ -489,6 +540,15 @@ impl From<std::net::Ipv6Addr> for Ipv6Addr {
     }
 }
 
+impl From<smoltcp::wire::Ipv6Address> for Ipv6Addr {
+    fn from(ip: smoltcp::wire::Ipv6Address) -> Self {
+        // Safety: We assume the `smoltcp` type is well-formed, with at least 16
+        // octets in the correct order.
+        let bytes: [u8; 16] = ip.as_bytes().try_into().unwrap();
+        Self::from(bytes)
+    }
+}
+
 impl From<&[u8; 16]> for Ipv6Addr {
     fn from(bytes: &[u8; 16]) -> Ipv6Addr {
         Ipv6Addr { inner: *bytes }
@@ -514,13 +574,13 @@ impl From<[u16; 8]> for Ipv6Addr {
     }
 }
 
-#[cfg(any(feature = "std", test))]
 impl FromStr for Ipv6Addr {
     type Err = String;
 
     fn from_str(val: &str) -> result::Result<Self, Self::Err> {
-        let ip =
-            val.parse::<std::net::Ipv6Addr>().map_err(|e| format!("{}", e))?;
+        let ip = val
+            .parse::<smoltcp::wire::Ipv6Address>()
+            .map_err(|_| String::from("Invalid IPv6 address"))?;
         Ok(ip.into())
     }
 }
@@ -532,18 +592,30 @@ pub enum IpCidr {
     Ip6(Ipv6Cidr),
 }
 
+impl From<Ipv4Cidr> for IpCidr {
+    fn from(cidr: Ipv4Cidr) -> Self {
+        IpCidr::Ip4(cidr)
+    }
+}
+
+impl From<Ipv6Cidr> for IpCidr {
+    fn from(cidr: Ipv6Cidr) -> Self {
+        IpCidr::Ip6(cidr)
+    }
+}
+
 impl IpCidr {
     pub fn is_default(&self) -> bool {
         match self {
             Self::Ip4(ip4) => ip4.is_default(),
-            Self::Ip6(_) => todo!("IPv6 is_default"),
+            Self::Ip6(ip6) => ip6.is_default(),
         }
     }
 
     pub fn prefix_len(&self) -> usize {
         match self {
             Self::Ip4(ip4) => ip4.prefix_len() as usize,
-            Self::Ip6(_) => todo!("IPv6 prefix_len"),
+            Self::Ip6(ip6) => ip6.prefix_len() as usize,
         }
     }
 }
@@ -557,9 +629,32 @@ impl fmt::Display for IpCidr {
     }
 }
 
+impl FromStr for IpCidr {
+    type Err = String;
+
+    /// Convert a string like "192.168.2.0/24" into an `IpCidr`.
+    fn from_str(val: &str) -> result::Result<Self, Self::Err> {
+        match val.parse::<Ipv4Cidr>() {
+            Ok(ip4) => Ok(IpCidr::Ip4(ip4)),
+            Err(_) => val
+                .parse::<Ipv6Cidr>()
+                .map(IpCidr::Ip6)
+                .map_err(|_| String::from("Invalid IP CIDR")),
+        }
+    }
+}
+
 /// A valid IPv4 prefix legnth.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ipv4PrefixLen(u8);
+
+impl TryFrom<u8> for Ipv4PrefixLen {
+    type Error = String;
+
+    fn try_from(p: u8) -> Result<Self, Self::Error> {
+        Self::new(p)
+    }
+}
 
 impl Ipv4PrefixLen {
     pub const NETMASK_NONE: Self = Self(0);
@@ -682,7 +777,6 @@ impl fmt::Display for Ipv6Cidr {
     }
 }
 
-#[cfg(any(feature = "std", test))]
 impl FromStr for Ipv6Cidr {
     type Err = String;
 
@@ -693,9 +787,11 @@ impl FromStr for Ipv6Cidr {
             None => return Err(format!("no '/' found")),
         };
 
-        let ip = match ip_s.parse::<std::net::Ipv6Addr>() {
+        let ip = match ip_s.parse::<smoltcp::wire::Ipv6Address>() {
             Ok(v) => v.into(),
-            Err(e) => return Err(format!("bad IP: {}", e)),
+            Err(_) => {
+                return Err(format!("Bad IP address component: '{}'", ip_s))
+            }
         };
 
         let prefix_len = match prefix_s.parse::<u8>() {
@@ -713,7 +809,18 @@ impl FromStr for Ipv6Cidr {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ipv6PrefixLen(u8);
 
+impl TryFrom<u8> for Ipv6PrefixLen {
+    type Error = String;
+
+    fn try_from(p: u8) -> Result<Self, Self::Error> {
+        Self::new(p)
+    }
+}
+
 impl Ipv6PrefixLen {
+    pub const NETMASK_NONE: Self = Self(0);
+    pub const NETMASK_ALL: Self = Self(128);
+
     pub fn new(prefix_len: u8) -> result::Result<Self, String> {
         if prefix_len > 128 {
             return Err(format!("bad IPv6 prefix length: {}", prefix_len));
@@ -728,6 +835,11 @@ impl Ipv6PrefixLen {
 }
 
 impl Ipv6Cidr {
+    pub fn new(ip: Ipv6Addr, prefix_len: Ipv6PrefixLen) -> Self {
+        let ip = ip.safe_mask(prefix_len);
+        Ipv6Cidr { ip, prefix_len }
+    }
+
     pub fn new_checked(
         ip: Ipv6Addr,
         prefix_len: u8,
@@ -739,6 +851,27 @@ impl Ipv6Cidr {
 
     pub fn parts(&self) -> (Ipv6Addr, Ipv6PrefixLen) {
         (self.ip, self.prefix_len)
+    }
+
+    /// Return `true` if this is the default route subnet
+    pub fn is_default(&self) -> bool {
+        let (ip, prefix_len) = self.parts();
+        ip == Ipv6Addr::ANY_ADDR && prefix_len.val() == 0
+    }
+
+    /// Return the prefix length (netmask).
+    pub fn prefix_len(self) -> u8 {
+        self.prefix_len.0
+    }
+
+    /// Return the network address of this CIDR.
+    pub fn ip(&self) -> Ipv6Addr {
+        self.ip
+    }
+
+    /// Is this `ip` a member of the CIDR?
+    pub fn is_member(&self, ip: Ipv6Addr) -> bool {
+        ip.safe_mask(self.prefix_len) == self.ip
     }
 }
 
@@ -870,6 +1003,76 @@ mod test {
         assert_eq!(ip6.mask(56).unwrap(), ip6_prefix);
 
         let ip6 = Ipv6Addr::from([1; 16]);
-        assert_eq!(ip6.mask(0).unwrap().bytes(), Ipv6Addr::ANY_ADDR);
+        assert_eq!(ip6.mask(0).unwrap(), Ipv6Addr::ANY_ADDR);
+    }
+
+    #[test]
+    fn ipv6_is_default() {
+        let cidr = Ipv6Cidr::new_checked(Ipv6Addr::from([1; 16]), 1).unwrap();
+        assert!(!cidr.is_default());
+        let cidr = Ipv6Cidr::new_checked(Ipv6Addr::from([0; 16]), 1).unwrap();
+        assert!(!cidr.is_default());
+
+        let cidr = Ipv6Cidr::new_checked(Ipv6Addr::from([1; 16]), 0).unwrap();
+        assert!(cidr.is_default());
+        let cidr = Ipv6Cidr::new_checked(Ipv6Addr::from([0; 16]), 0).unwrap();
+        assert!(cidr.is_default());
+    }
+
+    #[test]
+    fn ipv6_prefix_len() {
+        for i in 0u8..=128 {
+            let len = Ipv6Cidr::new_checked(Ipv6Addr::from([1; 16]), i)
+                .unwrap()
+                .prefix_len();
+            assert_eq!(i, len);
+        }
+        assert!(Ipv6Cidr::new_checked(Ipv6Addr::from([1; 16]), 129).is_err());
+    }
+
+    #[test]
+    fn ipv6_cidr_is_member() {
+        let cidr: Ipv6Cidr = "fd00:1::1/16".parse().unwrap();
+        assert!(cidr.is_member("fd00:1::1".parse().unwrap()));
+        assert!(cidr.is_member("fd00:1::10".parse().unwrap()));
+        assert!(cidr.is_member("fd00:2::1".parse().unwrap()));
+
+        assert!(!cidr.is_member("fd01:1::1".parse().unwrap()));
+        assert!(!cidr.is_member("fd01:1::10".parse().unwrap()));
+        assert!(!cidr.is_member("fd01:2::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_ip_addr_from_str() {
+        assert_eq!(
+            IpAddr::Ip4(Ipv4Addr::from([172, 30, 0, 1])),
+            "172.30.0.1".parse().unwrap()
+        );
+        let bytes = [0xfd00, 0, 0, 0, 0, 0, 0, 1];
+        assert_eq!(
+            IpAddr::Ip6(Ipv6Addr::from(bytes)),
+            "fd00::1".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_ip_cidr_from_str() {
+        assert_eq!(
+            IpCidr::Ip4(
+                Ipv4Cidr::new_checked(Ipv4Addr::from([10, 0, 0, 0]), 24)
+                    .unwrap()
+            ),
+            "10.0.0.0/24".parse().unwrap(),
+        );
+        assert_eq!(
+            IpCidr::Ip6(
+                Ipv6Cidr::new_checked(
+                    Ipv6Addr::from([0xfd00, 0, 0, 0, 0, 0, 0, 1]),
+                    64
+                )
+                .unwrap()
+            ),
+            "fd00::1/64".parse().unwrap(),
+        );
     }
 }

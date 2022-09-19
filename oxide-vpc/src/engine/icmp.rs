@@ -12,9 +12,9 @@ cfg_if! {
     }
 }
 
-use crate::VpcCfg;
+use crate::api::VpcCfg;
 use opte::api::{Direction, OpteError};
-use opte::engine::icmp::Icmp4EchoReply;
+use opte::engine::icmp::IcmpEchoReply;
 use opte::engine::layer::Layer;
 use opte::engine::port::{PortBuilder, Pos};
 use opte::engine::rule::{Action, Rule};
@@ -24,13 +24,20 @@ pub fn setup(
     cfg: &VpcCfg,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
-    let reply = Action::Hairpin(Arc::new(Icmp4EchoReply {
+    // The ICMP layer only contains meaningful actions if the port is configured
+    // to support IPv4.
+    let ip_cfg = match cfg.ipv4_cfg() {
+        None => return Ok(()),
+        Some(cfg) => cfg,
+    };
+
+    let reply = Action::Hairpin(Arc::new(IcmpEchoReply {
         // Map an Echo from guest (src) -> gateway (dst) to an Echo
         // Reply from gateway (dst) -> guest (src).
         echo_src_mac: cfg.private_mac.into(),
-        echo_src_ip: cfg.private_ip,
-        echo_dst_mac: cfg.gw_mac.into(),
-        echo_dst_ip: cfg.gw_ip,
+        echo_src_ip: ip_cfg.private_ip,
+        echo_dst_mac: cfg.gateway_mac.into(),
+        echo_dst_ip: ip_cfg.gateway_ip,
     }));
     let mut icmp = Layer::new("icmp", pb.name(), vec![reply], ft_limit);
 

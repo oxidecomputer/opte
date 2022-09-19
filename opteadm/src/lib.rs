@@ -10,15 +10,13 @@
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 
-use opte::api::{
-    Ipv4Addr, Ipv4Cidr, MacAddr, NoResp, OpteCmd, SetXdeUnderlayReq, Vni,
-};
+use opte::api::{NoResp, OpteCmd, SetXdeUnderlayReq};
 use opte::engine::ioctl::{self as api};
 use opte_ioctl::{run_cmd_ioctl, Error};
 use oxide_vpc::api::{
-    AddFwRuleReq, AddRouterEntryIpv4Req, CreateXdeReq, DeleteXdeReq,
-    FirewallRule, ListPortsReq, ListPortsResp, RemFwRuleReq, SNatCfg,
-    SetFwRulesReq, SetVirt2PhysReq,
+    AddFwRuleReq, AddRouterEntryReq, CreateXdeReq, DeleteXdeReq, FirewallRule,
+    ListPortsReq, ListPortsResp, RemFwRuleReq, SetFwRulesReq, SetVirt2PhysReq,
+    VpcCfg,
 };
 use oxide_vpc::engine::overlay;
 
@@ -36,17 +34,7 @@ impl OpteAdm {
     pub fn create_xde(
         &self,
         name: &str,
-        private_mac: MacAddr,
-        private_ip: std::net::Ipv4Addr,
-        vpc_subnet: Ipv4Cidr,
-        gw_mac: MacAddr,
-        gw_ip: std::net::Ipv4Addr,
-        bsvc_addr: std::net::Ipv6Addr,
-        bsvc_vni: Vni,
-        vpc_vni: Vni,
-        src_underlay_addr: std::net::Ipv6Addr,
-        snat: Option<SNatCfg>,
-        external_ips_v4: Option<Ipv4Addr>,
+        cfg: VpcCfg,
         passthrough: bool,
     ) -> Result<NoResp, Error> {
         use libnet::link;
@@ -59,22 +47,7 @@ impl OpteAdm {
 
         let xde_devname = name.into();
         let cmd = OpteCmd::CreateXde;
-        let req = CreateXdeReq {
-            xde_devname,
-            linkid,
-            private_mac,
-            private_ip: private_ip.into(),
-            vpc_subnet,
-            gw_mac,
-            gw_ip: gw_ip.into(),
-            bsvc_addr: bsvc_addr.into(),
-            bsvc_vni,
-            vpc_vni,
-            src_underlay_addr: src_underlay_addr.into(),
-            snat,
-            external_ips_v4,
-            passthrough,
-        };
+        let req = CreateXdeReq { xde_devname, linkid, cfg, passthrough };
 
         let res = run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req);
 
@@ -235,11 +208,11 @@ impl OpteAdm {
         )
     }
 
-    pub fn add_router_entry_ip4(
+    pub fn add_router_entry(
         &self,
-        req: &AddRouterEntryIpv4Req,
+        req: &AddRouterEntryReq,
     ) -> Result<NoResp, Error> {
-        let cmd = OpteCmd::AddRouterEntryIpv4;
+        let cmd = OpteCmd::AddRouterEntry;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
     }
 }

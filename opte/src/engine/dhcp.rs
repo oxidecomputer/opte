@@ -29,7 +29,7 @@ use super::rule::{
     IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate,
 };
 use super::udp::{UdpHdr, UdpMeta};
-use opte_api::{Dhcp4Action, Dhcp4ReplyType, MacAddr, SubnetRouterPair};
+use opte_api::{DhcpAction, DhcpReplyType, MacAddr, SubnetRouterPair};
 
 /// The DHCP message type.
 ///
@@ -55,13 +55,13 @@ impl From<MessageType> for smoltcp::wire::DhcpMessageType {
     }
 }
 
-impl From<Dhcp4ReplyType> for MessageType {
-    fn from(rt: Dhcp4ReplyType) -> Self {
+impl From<DhcpReplyType> for MessageType {
+    fn from(rt: DhcpReplyType) -> Self {
         use smoltcp::wire::DhcpMessageType as SmolDMT;
 
         match rt {
-            Dhcp4ReplyType::Offer => Self::from(SmolDMT::Offer),
-            Dhcp4ReplyType::Ack => Self::from(SmolDMT::Ack),
+            DhcpReplyType::Offer => Self::from(SmolDMT::Offer),
+            DhcpReplyType::Ack => Self::from(SmolDMT::Ack),
         }
     }
 }
@@ -224,8 +224,8 @@ impl ClasslessStaticRouteOpt {
 // client/server and those might be unicast, at which point these
 // preds need to include that possibility. Though it may also require
 // a whole separate action (and this should perhaps be named the
-// Dhcp4LeaseAction).
-impl HairpinAction for Dhcp4Action {
+// DhcpLeaseAction).
+impl HairpinAction for DhcpAction {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         use smoltcp::wire::DhcpMessageType as SmolDMT;
 
@@ -248,14 +248,14 @@ impl HairpinAction for Dhcp4Action {
         ];
 
         let data_preds = match self.reply_type {
-            Dhcp4ReplyType::Offer => {
-                vec![DataPredicate::Dhcp4MsgType(MessageType::from(
+            DhcpReplyType::Offer => {
+                vec![DataPredicate::DhcpMsgType(MessageType::from(
                     SmolDMT::Discover,
                 ))]
             }
 
-            Dhcp4ReplyType::Ack => {
-                vec![DataPredicate::Dhcp4MsgType(MessageType::from(
+            DhcpReplyType::Ack => {
+                vec![DataPredicate::DhcpMsgType(MessageType::from(
                     SmolDMT::Request,
                 ))]
             }
