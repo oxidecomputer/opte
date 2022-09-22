@@ -58,6 +58,14 @@ use oxide_vpc::engine::overlay::{self, Virt2Phys};
 use oxide_vpc::engine::{arp, dhcp, firewall, icmp, icmpv6, nat, router};
 use pcap_parser::pcap::{self, LegacyPcapBlock, PcapHeader};
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
+use smoltcp::wire::Icmpv6Packet;
+use smoltcp::wire::Icmpv6Repr;
+use smoltcp::wire::IpAddress;
+use smoltcp::wire::Ipv6Address;
+use smoltcp::wire::NdiscNeighborFlags;
+use smoltcp::wire::NdiscRepr;
+use smoltcp::wire::NdiscRouterFlags;
+use smoltcp::wire::RawHardwareAddress;
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
 use std::boxed::Box;
 use std::collections::BTreeMap;
@@ -66,7 +74,6 @@ use std::prelude::v1::*;
 use std::sync::Arc;
 use std::time::Duration;
 use zerocopy::AsBytes;
-
 use ProcessResult::*;
 
 // This is the MAC address that OPTE uses to act as the virtual gateway.
@@ -1053,8 +1060,6 @@ fn gen_icmpv6_echo_req(
     seq_no: u16,
     data: &[u8],
 ) -> Packet<Parsed> {
-    use smoltcp::wire::{Icmpv6Packet, Icmpv6Repr, Ipv6Address};
-
     let req = Icmpv6Repr::EchoRequest { ident, seq_no, data };
     let mut body_bytes = vec![0u8; req.buffer_len()];
     let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body_bytes);
@@ -1155,9 +1160,7 @@ fn gateway_icmp4_ping() {
         ip6 => panic!("expected inner IPv4 metadata, got IPv6: {:?}", ip6),
     }
 
-    let mut rdr = PacketReader::new(&reply, ());
-    // Need to seek to body.
-    rdr.seek(14 + 20).unwrap();
+    let rdr = reply.get_body_rdr();
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv4Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();
@@ -2174,10 +2177,10 @@ fn firewall_replace_rules() {
 }
 
 // Test that a guest can send an ICMPv6 echo request / reply to the gateway.
+// This tests both link-local and VPC-private IPv6 source addresses, and the
+// only supported destination, OPTE's IPv6 link-local derived from its MAC.
 #[test]
 fn gateway_icmpv6_ping() {
-    use smoltcp::wire::{Icmpv6Packet, Icmpv6Repr, Ipv6Address};
-
     let g1_cfg = g1_cfg();
     let v2p = Arc::new(Virt2Phys::new());
     let mut ameta = ActionMeta::new();
@@ -2185,6 +2188,27 @@ fn gateway_icmpv6_ping() {
     g1.port.start();
     set_state!(g1, PortState::Running);
     let mut pcap = PcapBuilder::new("gateway_icmpv6_ping.pcap");
+
+    let src_ips = [
+        Ipv6Addr::from_eui64(&g1_cfg.private_mac),
+        g1_cfg.ipv6_cfg().unwrap().private_ip,
+    ];
+    let dst_ip = Ipv6Addr::from_eui64(&g1_cfg.gateway_mac);
+    for src_ip in src_ips.iter().copied() {
+        test_guest_to_gateway_icmpv6_ping(
+            &g1, &mut ameta, &g1_cfg, &mut pcap, src_ip, dst_ip,
+        );
+    }
+}
+
+fn test_guest_to_gateway_icmpv6_ping(
+    g1: &PortAndVps,
+    ameta: &mut ActionMeta,
+    g1_cfg: &VpcCfg,
+    pcap: &mut PcapBuilder,
+    src_ip: Ipv6Addr,
+    dst_ip: Ipv6Addr,
+) {
     let ident = 7;
     let seq_no = 777;
     let data = b"reunion\0";
@@ -2195,8 +2219,8 @@ fn gateway_icmpv6_ping() {
     let mut pkt1 = gen_icmp_echo_req(
         g1_cfg.private_mac,
         g1_cfg.gateway_mac,
-        g1_cfg.ipv6_cfg().unwrap().private_ip.into(),
-        g1_cfg.ipv6_cfg().unwrap().gateway_ip.into(),
+        src_ip.into(),
+        dst_ip.into(),
         ident,
         seq_no,
         &data[..],
@@ -2208,7 +2232,7 @@ fn gateway_icmpv6_ping() {
     // direction and verify it results in an Echo Reply Hairpin packet
     // back to guest.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ameta);
     let hp = match res {
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {:?}", res),
@@ -2238,8 +2262,8 @@ fn gateway_icmpv6_ping() {
 
     let (src, dst) = match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
-            assert_eq!(ip6.src, g1_cfg.ipv6_cfg().unwrap().gateway_ip);
-            assert_eq!(ip6.dst, g1_cfg.ipv6_cfg().unwrap().private_ip);
+            assert_eq!(ip6.src, dst_ip);
+            assert_eq!(ip6.dst, src_ip);
             assert_eq!(ip6.proto, Protocol::ICMPv6);
             (
                 Ipv6Address::from_bytes(ip6.src.bytes().as_slice()),
@@ -2249,9 +2273,7 @@ fn gateway_icmpv6_ping() {
         ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
     };
 
-    let mut rdr = PacketReader::new(&reply, ());
-    // Need to seek to body.
-    rdr.seek(EtherHdr::SIZE + Ipv6Hdr::SIZE).unwrap();
+    let rdr = reply.get_body_rdr();
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();
@@ -2270,5 +2292,533 @@ fn gateway_icmpv6_ping() {
         }
 
         _ => panic!("expected Echo Reply, got {:?}", reply_icmp),
+    }
+}
+
+// Generate a packet containing an NDP Router Solicitation.
+//
+// The source MAC is used to generate the source IPv6 address, using the EUI-64
+// transform. The resulting packet has a multicast MAC address, and the
+// All-Routers destination IPv6 address.
+fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
+    // The source IPv6 address is the EUI-64 transform of the source MAC.
+    let src_ip = Ipv6Addr::from_eui64(src_mac);
+
+    // Must be destined for the All-Routers IPv6 address, and the corresponding
+    // multicast Ethernet address.
+    let dst_ip: Ipv6Addr = Ipv6Addr::ALL_ROUTERS;
+    let dst_mac = dst_ip.multicast_mac().unwrap();
+
+    let solicit = NdiscRepr::RouterSolicit {
+        lladdr: Some(RawHardwareAddress::from_bytes(&src_mac.bytes())),
+    };
+    let req = Icmpv6Repr::Ndisc(solicit);
+    let mut body_bytes = vec![0u8; req.buffer_len()];
+    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body_bytes);
+    let mut csum = CsumCapab::ignored();
+    csum.icmpv6 = smoltcp::phy::Checksum::Tx;
+    let _ = req.emit(
+        &IpAddress::Ipv6(src_ip.into()),
+        &IpAddress::Ipv6(dst_ip.into()),
+        &mut req_pkt,
+        &csum,
+    );
+    let mut ip6 = Ipv6Hdr::from(&Ipv6Meta {
+        src: src_ip,
+        dst: dst_ip,
+        proto: Protocol::ICMPv6,
+    });
+    ip6.set_total_len(ip6.hdr_len() as u16 + req.buffer_len() as u16);
+    let eth = EtherHdr::from(&EtherMeta {
+        dst: dst_mac,
+        src: *src_mac,
+        ether_type: ETHER_TYPE_IPV6,
+    });
+
+    let mut pkt_bytes =
+        Vec::with_capacity(EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len());
+    pkt_bytes.extend_from_slice(&eth.as_bytes());
+    pkt_bytes.extend_from_slice(&ip6.as_bytes());
+    pkt_bytes.extend_from_slice(&body_bytes);
+    Packet::copy(&pkt_bytes).parse().unwrap()
+}
+
+// Verify that a Router Solicitation emitted from the guest results in a Router
+// Advertisement from the gateway. This tests both a solicitation sent to the
+// router's unicast address, or its solicited-node multicast address.
+#[test]
+fn gateway_router_advert_reply() {
+    use smoltcp::time::Duration;
+
+    let g1_cfg = g1_cfg();
+    let v2p = Arc::new(Virt2Phys::new());
+    let mut ameta = ActionMeta::new();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    g1.port.start();
+    set_state!(g1, PortState::Running);
+    let mut pcap = PcapBuilder::new("gateway_router_advert_reply.pcap");
+
+    // ====================================================
+    // Generate a Router Solicitation from G1 to Virtual GW
+    // ====================================================
+    let mut pkt1 = gen_router_solicitation(&g1_cfg.private_mac);
+    pcap.add_pkt(&pkt1);
+
+    // ================================================================
+    // Run the Solicitation through g1's port in the outbound
+    // direction and verify it results in an Router Advertisement
+    // hairpin back to guest.
+    // ================================================================
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let hp = match res {
+        Ok(Hairpin(hp)) => hp,
+        _ => panic!("expected Hairpin, got {:?}", res),
+    };
+    assert_port!(g1);
+
+    let reply = hp.parse().unwrap();
+    pcap.add_pkt(&reply);
+
+    // Ether + IPv6
+    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::SIZE);
+    assert_eq!(reply.body_seg(), 0);
+
+    let meta = reply.meta();
+    assert!(meta.outer.ether.is_none());
+    assert!(meta.outer.ip.is_none());
+    assert!(meta.outer.ulp.is_none());
+
+    match meta.inner.ether.as_ref() {
+        Some(eth) => {
+            assert_eq!(
+                eth.src, g1_cfg.gateway_mac,
+                "Router advertisement should come from the gateway's MAC"
+            );
+            assert_eq!(
+                eth.dst, g1_cfg.private_mac,
+                "Router advertisement should be destined for the guest's MAC"
+            );
+        }
+
+        None => panic!("no inner ether header"),
+    }
+
+    let (src, dst) = match meta.inner.ip.as_ref().unwrap() {
+        IpMeta::Ip6(ip6) => {
+            assert_eq!(
+                ip6.src,
+                Ipv6Addr::from_eui64(&g1_cfg.gateway_mac),
+                "Router advertisement should come from the \
+                gateway's link-local IPv6 address, generated \
+                from the EUI-64 transform of its MAC",
+            );
+            let expected_dst = Ipv6Addr::from_eui64(&g1_cfg.private_mac);
+            assert_eq!(
+                ip6.dst, expected_dst,
+                "Router advertisement should be destined for \
+                the guest's Link-Local IPv6 address, generated from \
+                the EUI-64 transform of its MAC"
+            );
+            assert_eq!(ip6.proto, Protocol::ICMPv6);
+            (
+                Ipv6Address::from_bytes(ip6.src.bytes().as_slice()),
+                Ipv6Address::from_bytes(expected_dst.bytes().as_slice()),
+            )
+        }
+        ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
+    };
+
+    let rdr = reply.get_body_rdr();
+    let reply_body = rdr.copy_remaining();
+    let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
+    let mut csum = CsumCapab::ignored();
+    csum.icmpv6 = smoltcp::phy::Checksum::Rx;
+    let reply_icmp =
+        Icmpv6Repr::parse(&src.into(), &dst.into(), &reply_pkt, &csum).unwrap();
+    match reply_icmp {
+        Icmpv6Repr::Ndisc(NdiscRepr::RouterAdvert {
+            hop_limit,
+            flags,
+            router_lifetime,
+            reachable_time,
+            retrans_time,
+            lladdr,
+            mtu,
+            prefix_info,
+        }) => {
+            assert_eq!(hop_limit, u8::MAX);
+            assert_eq!(flags, NdiscRouterFlags::MANAGED);
+            assert_eq!(router_lifetime, Duration::from_secs(9_000));
+            assert_eq!(reachable_time, Duration::from_millis(0));
+            assert_eq!(retrans_time, Duration::from_millis(0));
+            assert_eq!(
+                lladdr.expect("Expected a Link-Layer Address option"),
+                RawHardwareAddress::from_bytes(&g1_cfg.gateway_mac.bytes())
+            );
+            assert_eq!(mtu, Some(1500));
+            assert!(prefix_info.is_none());
+        }
+        other => {
+            panic!(
+                "Expected an ICMPv6 Router Advertisement, found {:?}",
+                other
+            );
+        }
+    };
+}
+
+// Create a Neighbor Solicitation.
+fn generate_neighbor_solicitation(info: &SolicitInfo) -> Packet<Parsed> {
+    let solicit = NdiscRepr::NeighborSolicit {
+        target_addr: Ipv6Address::from(info.target_addr),
+        lladdr: info.lladdr.map(|x| RawHardwareAddress::from_bytes(&x.bytes())),
+    };
+    let req = Icmpv6Repr::Ndisc(solicit);
+    let mut body = vec![0u8; req.buffer_len()];
+    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body);
+    let mut csum = CsumCapab::ignored();
+    csum.icmpv6 = smoltcp::phy::Checksum::Tx;
+    let _ = req.emit(
+        &IpAddress::Ipv6(info.src_ip.into()),
+        &IpAddress::Ipv6(info.dst_ip.into()),
+        &mut req_pkt,
+        &csum,
+    );
+    let mut ip6 = Ipv6Hdr::from(&Ipv6Meta {
+        src: info.src_ip,
+        dst: info.dst_ip,
+        proto: Protocol::ICMPv6,
+    });
+    ip6.set_total_len(ip6.hdr_len() as u16 + req.buffer_len() as u16);
+    let eth = EtherHdr::from(&EtherMeta {
+        dst: info.dst_mac,
+        src: info.src_mac,
+        ether_type: ETHER_TYPE_IPV6,
+    });
+
+    let mut pkt_bytes =
+        Vec::with_capacity(EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len());
+    pkt_bytes.extend_from_slice(&eth.as_bytes());
+    pkt_bytes.extend_from_slice(&ip6.as_bytes());
+    pkt_bytes.extend_from_slice(&body);
+    Packet::copy(&pkt_bytes).parse().unwrap()
+}
+
+// Helper type describing a Neighbor Solicitation
+#[derive(Clone, Copy, Debug)]
+struct SolicitInfo {
+    src_mac: MacAddr,
+    dst_mac: MacAddr,
+    src_ip: Ipv6Addr,
+    dst_ip: Ipv6Addr,
+    target_addr: Ipv6Addr,
+    lladdr: Option<MacAddr>,
+}
+
+impl std::fmt::Display for SolicitInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let lladdr = match self.lladdr {
+            None => "None".to_string(),
+            Some(x) => x.to_string(),
+        };
+        f.debug_struct("SolicitInfo")
+            .field("src_mac", &self.src_mac.to_string())
+            .field("dst_mac", &self.dst_mac.to_string())
+            .field("src_ip", &self.src_ip.to_string())
+            .field("dst_ip", &self.dst_ip.to_string())
+            .field("target_addr", &self.target_addr.to_string())
+            .field("lladdr", &lladdr)
+            .finish()
+    }
+}
+
+// Helper type describing a Neighbor Advertisement
+#[derive(Clone, Copy, Debug)]
+struct AdvertInfo {
+    src_mac: MacAddr,
+    dst_mac: MacAddr,
+    src_ip: Ipv6Addr,
+    dst_ip: Ipv6Addr,
+    target_addr: Ipv6Addr,
+    lladdr: Option<MacAddr>,
+    flags: NdiscNeighborFlags,
+}
+
+impl std::fmt::Display for AdvertInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let lladdr = match self.lladdr {
+            None => "None".to_string(),
+            Some(x) => x.to_string(),
+        };
+        f.debug_struct("AdvertInfo")
+            .field("src_mac", &self.src_mac.to_string())
+            .field("dst_mac", &self.dst_mac.to_string())
+            .field("src_ip", &self.src_ip.to_string())
+            .field("dst_ip", &self.dst_ip.to_string())
+            .field("target_addr", &self.target_addr.to_string())
+            .field("lladdr", &lladdr)
+            .field("flags", &self.flags)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SolicitTestData {
+    ns: SolicitInfo,
+    na: Option<AdvertInfo>,
+}
+
+// Generate the set of Neighbor Solicitations and their corresponding Neighbor
+// Advertisements (if they exist) that we expect to see for conforming clients.
+//
+// RFC 4861 describes the general expectations about the IP addresses (and MACs)
+// that should be included in solicitations and advertisements in most cases.
+// These are summarized in section 4.3 and 4.4, though there is also detail
+// about validation of solicitations in section 7.1.1 and how to construct the
+// corresponding advertisements in 7.2.4.
+//
+// There are a few key cases to consider:
+//
+// 1. A guest starts up, and performs Duplicate Address Detection (DAD). This is
+//    done by sending an NS from the unspecified IP address, to the
+//    solicited-node multicast IP/MAC address, with a target address of the
+//    desired IP address.
+//
+// 2. A guest starts up, and happens to perform DAD for the exact address we
+//    want to reserve for OPTE.
+//
+// 3. The guest has already assigned their link-local address, and they're
+//    trying to verify reachability of the gateway neighbor.
+//
+// 4. The guest is trying to resolve any other link-local IP address.
+//
+// Here is the summary of our responses. See the implementation of this method
+// for more details on exactly what data we expect in the NS and NA, and why.
+//
+// 1. Drop the packet, since we need the guest to be able to self-assign this
+//    address.
+// 2. Send an NA, since we _cannot_ let the guest assign this address.
+// 3. Send an NA right back to the guest, confirming reachability.
+// 4. Drop the packet. We are not providing any L2 emulation, and so the gateway
+//    and the guest need to appear to be on an isolated L2 segment. Nothing else
+//    should resolve.
+fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
+    vec![
+        // When the client first initializes its IPv6 interface, it can give
+        // itself a tentative address. This is usually generated from the EUI-64
+        // transform of its MAC, but not always. However it derives it, the
+        // client first performs Duplicate Address Detection (DAD). This NS is
+        // sent from the unspecified IP address, to the solicited-node multicast
+        // group for the tentative address. Note that the client is not supposed
+        // to set the Link-Layer address option when sending from the
+        // unspecified IP address, though we have no way of discriminating that
+        // cause for a drop from the fact that the address is not a duplicate.
+        //
+        // In this case, the guest is using the EUI-64 transform for this
+        // tentative address. We should not send an NA, since they must be
+        // allowed to self-assign that address.
+        SolicitTestData {
+            ns: SolicitInfo {
+                src_mac: cfg.private_mac,
+                dst_mac: Ipv6Addr::from_eui64(&cfg.private_mac)
+                    .solicited_node_multicast()
+                    .unchecked_multicast_mac(),
+                src_ip: Ipv6Addr::ANY_ADDR,
+                dst_ip: Ipv6Addr::from_eui64(&cfg.private_mac)
+                    .solicited_node_multicast(),
+                target_addr: Ipv6Addr::from_eui64(&cfg.private_mac),
+                lladdr: None,
+            },
+            na: None,
+        },
+        // In this case, the client happens to pick our gateway's EUI-64
+        // link-local address. We _must_ send back an NA, so that they configure
+        // to use a different address. Note that the client is not supposed to
+        // set the Link-Layer address option.
+        //
+        // Since the source IP was unspecified, we are required to send the NA
+        // to the All-Nodes multicast group. Note that we also must not set the
+        // SOLICITED flag, since the response is multicast.
+        SolicitTestData {
+            ns: SolicitInfo {
+                src_mac: cfg.private_mac,
+                dst_mac: Ipv6Addr::from_eui64(&cfg.gateway_mac)
+                    .solicited_node_multicast()
+                    .unchecked_multicast_mac(),
+                src_ip: Ipv6Addr::ANY_ADDR,
+                dst_ip: Ipv6Addr::from_eui64(&cfg.gateway_mac)
+                    .solicited_node_multicast(),
+                target_addr: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                lladdr: None,
+            },
+            na: Some(AdvertInfo {
+                src_mac: cfg.gateway_mac,
+                dst_mac: Ipv6Addr::ALL_NODES.unchecked_multicast_mac(),
+                src_ip: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                dst_ip: Ipv6Addr::ALL_NODES,
+                target_addr: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                lladdr: Some(cfg.gateway_mac),
+                flags: NdiscNeighborFlags::ROUTER
+                    | NdiscNeighborFlags::OVERRIDE,
+            }),
+        },
+        // In this case, the client is checking reachability of the gateway's IP
+        // address. The packet is expected to be unicast to that address, and we
+        // need to respond with an NA unicast back to them, so that they can
+        // maintain reachability information.
+        //
+        // Note that here we set the SOLICITED flag.
+        SolicitTestData {
+            ns: SolicitInfo {
+                src_mac: cfg.private_mac,
+                dst_mac: cfg.gateway_mac,
+                src_ip: Ipv6Addr::from_eui64(&cfg.private_mac),
+                dst_ip: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                target_addr: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                lladdr: Some(cfg.private_mac),
+            },
+            na: Some(AdvertInfo {
+                src_mac: cfg.gateway_mac,
+                dst_mac: cfg.private_mac,
+                src_ip: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                dst_ip: Ipv6Addr::from_eui64(&cfg.private_mac),
+                target_addr: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                lladdr: Some(cfg.gateway_mac),
+                flags: NdiscNeighborFlags::ROUTER
+                    | NdiscNeighborFlags::SOLICITED
+                    | NdiscNeighborFlags::OVERRIDE,
+            }),
+        },
+        // In our last case, the guest is doing resolution for _any_ old
+        // link-local IPv6 address (other than the gateway's, which is tested in
+        // case (2)). Since this is resolution, the address should be sent to
+        // the solicited-node multicast group. But since the guest already has
+        // an assigned IP, the source is _not_ UNSPEC, but that actual IP.
+        //
+        // We need to drop the packet, since there is nothing else on this L2
+        // segment.
+        SolicitTestData {
+            ns: SolicitInfo {
+                src_mac: cfg.private_mac,
+                dst_mac: Ipv6Addr::from_const([0xfe80, 0, 0, 0, 1, 1, 1, 1])
+                    .solicited_node_multicast()
+                    .unchecked_multicast_mac(),
+                src_ip: Ipv6Addr::from_eui64(&cfg.private_mac),
+                dst_ip: Ipv6Addr::from_const([0xfe80, 0, 0, 0, 1, 1, 1, 1]),
+                target_addr: Ipv6Addr::from_const([
+                    0xfe80, 0, 0, 0, 1, 1, 1, 1,
+                ]),
+                lladdr: None,
+            },
+            na: None,
+        },
+    ]
+}
+
+// Assert that the Neighbor Advertisement in `hp` matches the expectations in
+// `na`.
+fn validate_hairpin_advert(
+    pcap: &mut PcapBuilder,
+    hp: Packet<Initialized>,
+    na: AdvertInfo,
+) {
+    let reply = hp.parse().unwrap();
+    pcap.add_pkt(&reply);
+
+    // Verify Ethernet and IPv6 header basics.
+    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::SIZE);
+    assert_eq!(reply.body_seg(), 0);
+    let meta = reply.meta();
+    assert!(meta.outer.ether.is_none());
+    assert!(meta.outer.ip.is_none());
+    assert!(meta.outer.ulp.is_none());
+
+    // Check that the inner MACs are what we expect.
+    let eth = meta.inner.ether.as_ref().expect("No inner Ethernet header");
+    assert_eq!(eth.src, na.src_mac);
+    assert_eq!(eth.dst, na.dst_mac);
+
+    // Check that the inner IPs are what we expect.
+    let ip6 = if let IpMeta::Ip6(ip6) =
+        meta.inner.ip.as_ref().expect("No inner IP header")
+    {
+        ip6
+    } else {
+        panic!("Inner IP header is not IPv6");
+    };
+    assert_eq!(ip6.src, na.src_ip);
+    assert_eq!(ip6.dst, na.dst_ip);
+    assert_eq!(ip6.proto, Protocol::ICMPv6);
+
+    // Validate the details of the Neighbor Advertisement itself.
+    let rdr = reply.get_body_rdr();
+    let reply_body = rdr.copy_remaining();
+    let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
+    let mut csum = CsumCapab::ignored();
+    csum.icmpv6 = smoltcp::phy::Checksum::Rx;
+    let reply_icmp = Icmpv6Repr::parse(
+        &IpAddress::Ipv6(ip6.src.into()),
+        &IpAddress::Ipv6(ip6.dst.into()),
+        &reply_pkt,
+        &csum,
+    )
+    .unwrap();
+    if let Icmpv6Repr::Ndisc(NdiscRepr::NeighborAdvert {
+        flags,
+        target_addr,
+        lladdr,
+    }) = reply_icmp
+    {
+        assert_eq!(flags, na.flags);
+        assert_eq!(target_addr, na.target_addr.into());
+        assert_eq!(
+            lladdr,
+            na.lladdr.map(|x| RawHardwareAddress::from_bytes(&x.bytes()))
+        );
+    } else {
+        panic!(
+            "Expected an ICMPv6 Neighbor Advertisement, found {:?}",
+            reply_icmp
+        );
+    }
+}
+
+// Ensure that we either Drop a Neighbor Solicitation, or generate a Neighbor
+// Advertisement with the right data, based on our defined test cases.
+#[test]
+fn test_gateway_neighbor_advert_reply() {
+    let g1_cfg = g1_cfg();
+    let v2p = Arc::new(Virt2Phys::new());
+    let mut ameta = ActionMeta::new();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    g1.port.start();
+    set_state!(g1, PortState::Running);
+    let mut pcap = PcapBuilder::new("gateway_neighbor_advert_reply.pcap");
+
+    let data = generate_solicit_test_data(&g1_cfg);
+    for d in data.into_iter() {
+        let mut pkt = generate_neighbor_solicitation(&d.ns);
+        pcap.add_pkt(&pkt);
+        let res = g1.port.process(Out, &mut pkt, &mut ameta);
+        match (res, d.na) {
+            (Ok(ProcessResult::Drop { .. }), None) => {
+                // Dropped the packet, as we expected
+                continue;
+            }
+            (Ok(Hairpin(hp)), Some(na)) => {
+                assert_port!(g1);
+                validate_hairpin_advert(&mut pcap, hp, na);
+            }
+            (res, _) => {
+                let na =
+                    d.na.map(|na| na.to_string())
+                        .unwrap_or_else(|| String::from("Drop"));
+                panic!(
+                    "Generated unexpected packet from NS: {}\n\
+                    Result: {:?}\nExpected: {}",
+                    d.ns, res, na,
+                );
+            }
+        };
     }
 }

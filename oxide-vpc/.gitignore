@@ -1,4 +1,5 @@
 gateway_icmpv[46]_ping.pcap
+gateway_*_advert_reply.pcap
 overlay_guest_to_guest-guest-1.pcap
 overlay_guest_to_guest-guest-2.pcap
 overlay_guest_to_guest-phys-1.pcap
