@@ -7,15 +7,16 @@
 use super::packet::InnerFlowId;
 use super::tcp::{TcpFlags, TcpMeta, TcpState};
 use core::fmt::{self, Display};
-use cstr_core::CString;
 use opte_api::Direction;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::ffi::CString;
         use alloc::string::String;
         use illumos_sys_hdrs::uintptr_t;
         use super::rule::flow_id_sdt_arg;
     } else {
+        use std::ffi::CString;
         use std::string::String;
     }
 }

@@ -29,12 +29,18 @@ mod ioctl;
 #[macro_use]
 extern crate alloc;
 
-use core::{
-    alloc::{GlobalAlloc, Layout},
-    panic::PanicInfo,
-};
-
-use cstr_core::CString;
+use alloc::ffi::CString;
+use core::alloc::GlobalAlloc;
+use core::alloc::Layout;
+use core::panic::PanicInfo;
+use illumos_sys_hdrs::c_void;
+use illumos_sys_hdrs::cmn_err;
+use illumos_sys_hdrs::kmem_alloc;
+use illumos_sys_hdrs::kmem_free;
+use illumos_sys_hdrs::panic;
+use illumos_sys_hdrs::size_t;
+use illumos_sys_hdrs::CE_WARN;
+use illumos_sys_hdrs::KM_SLEEP;
 
 pub mod dld;
 pub mod dls;
@@ -44,10 +50,6 @@ mod mac_sys;
 pub mod secpolicy;
 pub mod sys;
 pub mod xde;
-
-use illumos_sys_hdrs::{
-    c_void, cmn_err, kmem_alloc, kmem_free, panic, size_t, CE_WARN, KM_SLEEP,
-};
 
 // On alignment, `kmem_alloc(9F)` has this of offer:
 //

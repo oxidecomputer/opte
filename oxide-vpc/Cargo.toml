@@ -28,12 +28,6 @@ usdt = ["opte/usdt", "dep:usdt"]
 
 [dependencies]
 cfg-if = "0.1"
-#
-# XXX It looks like alloc::ffi::CString might be a thing soon.
-#
-# https://github.com/rust-lang/rust/pull/94079
-#
-cstr_core = "0.2.3"
 illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
 opte = { path = "../opte", default-features = false }
 #

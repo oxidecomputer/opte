@@ -331,6 +331,27 @@ pub const MAC_PLUGIN_IDENT_ETHER: *const c_char =
 
 pub type periodic_cb = unsafe extern "C" fn(arg: *mut c_void);
 
+// XXX Define this so mod_ops has a known size to rustc. I had to do
+// this to avoid an ICE (Internal Compiler Error) when updating to
+// a newer toolchain. Otherwise, rustc would crash with the following:
+//
+// ```
+// thread 'rustc' panicked at 'assertion failed: !layout.is_unsized()',
+// compiler/rustc_const_eval/src/interpret/memory.rs:686:17
+//
+// query stack during panic:
+// #0 [eval_to_allocation_raw] const-evaluating + checking `xde::xde_modldrv`
+// #1 [eval_to_allocation_raw] const-evaluating + checking `xde::xde_modldrv`
+// #2 [lint_mod] linting module `xde`
+// #3 [analysis] running analysis passes on this crate
+// ```
+#[repr(C)]
+pub struct mod_ops {
+    modm_install: unsafe extern "C" fn() -> c_int,
+    modm_remove: unsafe extern "C" fn() -> c_int,
+    modm_info: unsafe extern "C" fn() -> c_int,
+}
+
 extern "C" {
     // DDI/DKI types
     pub type bus_ops;
@@ -342,7 +363,6 @@ extern "C" {
 
     pub type id_space_t;
 
-    pub type mod_ops;
     pub type modinfo;
 
     pub type queue_t; // Definitely not using STREAMS.

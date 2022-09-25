@@ -8,19 +8,20 @@ use super::packet::InnerFlowId;
 use crate::ddi::time::{Moment, MILLIS};
 use core::fmt;
 use core::num::NonZeroU32;
-use cstr_core::CString;
 use opte_api::OpteError;
 use serde::{Deserialize, Serialize};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::collections::BTreeMap;
+        use alloc::ffi::CString;
         use alloc::string::{String, ToString};
         use alloc::vec::Vec;
         use illumos_sys_hdrs::uintptr_t;
         use super::rule::flow_id_sdt_arg;
     } else {
         use std::collections::BTreeMap;
+        use std::ffi::CString;
         use std::string::{String, ToString};
         use std::vec::Vec;
     }

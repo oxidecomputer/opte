@@ -16,12 +16,6 @@ std = ["opte-api/std"]
 
 [dependencies]
 cfg-if = "0.1"
-#
-# XXX It looks like alloc::ffi::CString might be a thing soon.
-#
-# https://github.com/rust-lang/rust/pull/94079
-#
-cstr_core = "0.2.3"
 dyn-clone = "1.0.9"
 heapless = "0.7.9"
 illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }

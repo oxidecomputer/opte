@@ -21,17 +21,18 @@ use crate::{ExecCtx, LogLevel};
 use core::fmt::{self, Display};
 use core::num::NonZeroU32;
 use core::result;
-use cstr_core::CString;
 use illumos_sys_hdrs::c_char;
 use opte_api::Direction;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::ffi::CString;
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
         use illumos_sys_hdrs::uintptr_t;
     } else {
+        use std::ffi::CString;
         use std::string::{String, ToString};
         use std::sync::Arc;
         use std::vec::Vec;

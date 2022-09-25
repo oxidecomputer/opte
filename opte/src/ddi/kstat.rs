@@ -12,8 +12,8 @@ use core::fmt::{self, Display};
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::boxed::Box;
+        use alloc::ffi::CString;
         use alloc::string::{String, ToString};
-        use cstr_core::CString;
         use illumos_sys_hdrs::{
             c_void, kstat_t, kstat_create, kstat_delete, kstat_install,
             kstat_named_init, kstat_named_t, KSTAT_STRLEN, KSTAT_TYPE_NAMED,
@@ -274,8 +274,8 @@ impl Display for Error {
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
-impl From<cstr_core::NulError> for Error {
-    fn from(_e: cstr_core::NulError) -> Self {
+impl From<alloc::ffi::NulError> for Error {
+    fn from(_e: alloc::ffi::NulError) -> Self {
         Self::NulChar
     }
 }

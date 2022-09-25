@@ -9,10 +9,11 @@
 //! NOTE: This module is re-exporting all of the sys definitions at
 //! the moment out of laziness.
 pub use super::mac_sys::*;
+use alloc::ffi::CString;
 use alloc::string::{String, ToString};
 use bitflags::bitflags;
+use core::ffi::CStr;
 use core::ptr;
-use cstr_core::{CStr, CString};
 use illumos_sys_hdrs::*;
 use opte::engine::packet::{Initialized, Packet, PacketState};
 

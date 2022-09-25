@@ -27,7 +27,6 @@ use super::port::meta::ActionMeta;
 use super::tcp::TcpMeta;
 use super::udp::UdpMeta;
 use core::fmt::{self, Debug, Display};
-use cstr_core::CString;
 use illumos_sys_hdrs::c_char;
 use opte_api::{Direction, MacAddr};
 use serde::{Deserialize, Serialize};
@@ -40,12 +39,14 @@ use smoltcp::wire::{
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::boxed::Box;
+        use alloc::ffi::CString;
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
         use illumos_sys_hdrs::uintptr_t;
     } else {
         use std::boxed::Box;
+        use std::ffi::CString;
         use std::string::{String, ToString};
         use std::sync::Arc;
         use std::vec::Vec;

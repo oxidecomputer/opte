@@ -10,10 +10,9 @@ use core::time::Duration;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-
         use alloc::boxed::Box;
+        use alloc::ffi::CString;
         use illumos_sys_hdrs as ddi;
-        use cstr_core::CString;
     } else {
         use std::time::Instant;
     }

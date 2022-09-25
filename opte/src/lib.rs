@@ -40,7 +40,6 @@ extern crate self as opte;
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::boxed::Box;
-        use alloc::string::ToString;
     } else {
         use std::boxed::Box;
     }
@@ -242,12 +241,8 @@ impl LogProvider for KernelLog {
             LogLevel::Error => ddi::CE_WARN,
         };
 
-        unsafe {
-            ddi::cmn_err(
-                cmn_level,
-                cstr_core::CString::new(msg.to_string()).unwrap().as_ptr(),
-            )
-        }
+        let msg_arg = alloc::ffi::CString::new(msg).unwrap();
+        unsafe { ddi::cmn_err(cmn_level, msg_arg.as_ptr()) }
     }
 }
 

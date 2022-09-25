@@ -18,14 +18,15 @@ use crate::ioctl::IoctlEnvelope;
 use crate::mac::{self, MacClient, MacOpenFlags, MacTxFlags};
 use crate::{dld, dls, ip, secpolicy, sys, warn};
 use alloc::boxed::Box;
+use alloc::ffi::CString;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::convert::TryInto;
+use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::ptr;
 use core::time::Duration;
-use cstr_core::{CStr, CString};
 use illumos_sys_hdrs::*;
 use opte::api::{
     CmdOk, Direction, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,

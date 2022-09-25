@@ -430,7 +430,7 @@ fn oxide_net_builder(
     v2p: Arc<Virt2Phys>,
 ) -> PortBuilder {
     let ectx = Arc::new(ExecCtx { log: Box::new(opte::PrintlnLog {}) });
-    let name_cstr = cstr_core::CString::new(name).unwrap();
+    let name_cstr = std::ffi::CString::new(name).unwrap();
     let mut pb =
         PortBuilder::new(name, name_cstr, cfg.private_mac.into(), ectx.clone());
 

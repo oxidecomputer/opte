@@ -108,6 +108,7 @@ pub static mut opte_panic_debug: i32 = 0;
 
 cfg_if! {
     if #[cfg(not(feature = "std"))] {
+        use alloc::ffi::CString;
         use alloc::vec::Vec;
         use illumos_sys_hdrs as ddi;
 
@@ -123,7 +124,7 @@ cfg_if! {
 
             unsafe {
                 if opte_debug != 0 {
-                    let cstr = cstr_core::CString::new(msg).unwrap();
+                    let cstr = CString::new(msg).unwrap();
                     ddi::cmn_err(CE_NOTE, cstr.as_ptr());
                 }
             }
@@ -136,7 +137,7 @@ cfg_if! {
             use ddi::CE_WARN;
 
             unsafe {
-                let cstr = cstr_core::CString::new(msg).unwrap();
+                let cstr = CString::new(msg).unwrap();
                 ddi::cmn_err(CE_WARN, cstr.as_ptr());
             }
         }

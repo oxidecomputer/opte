@@ -27,13 +27,13 @@ use core::fmt::{self, Display};
 use core::num::NonZeroU32;
 use core::result;
 use core::sync::atomic::{AtomicU64, Ordering::SeqCst};
-use cstr_core::CString;
 use kstat_macro::KStatProvider;
 use opte_api::{Direction, OpteError};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::boxed::Box;
+        use alloc::ffi::CString;
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
@@ -41,6 +41,7 @@ cfg_if! {
         use illumos_sys_hdrs::uintptr_t;
     } else {
         use std::boxed::Box;
+        use std::ffi::CString;
         use std::string::{String, ToString};
         use std::sync::Arc;
         use std::vec::Vec;
@@ -1159,7 +1160,7 @@ impl Port {
                     Ok(v) => format!("{:?}", v),
                     Err(e) => format!("ERROR: {:?}", e),
                 };
-                let res_arg = cstr_core::CString::new(res_str).unwrap();
+                let res_arg = CString::new(res_str).unwrap();
                 let hp_pkt_ptr = match res {
                     Ok(ProcessResult::Hairpin(hp)) => {
                         hp.mblk_addr()

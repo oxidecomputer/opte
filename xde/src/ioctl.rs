@@ -4,10 +4,10 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use alloc::ffi::CString;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::result;
-use cstr_core::CString;
 use ddi::{c_int, c_void};
 use illumos_sys_hdrs as ddi;
 use opte::api::{
