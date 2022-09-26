@@ -32,7 +32,7 @@ port-process-return {
 		num = 0;
 	}
 
-	this->af = this->flow->af;
+	this->af = this->flow_before->af;
 
 	if (this->af != AF_INET && this->af != AF_INET6) {
 		printf("BAD ADDRESS FAMILY: %d\n", this->af);

@@ -33,6 +33,7 @@ cfg_if! {
 }
 
 pub mod cmd;
+pub mod dhcpv6;
 pub mod encap;
 pub mod ip;
 pub mod mac;
@@ -40,6 +41,7 @@ pub mod ndp;
 pub mod ulp;
 
 pub use cmd::*;
+pub use dhcpv6::*;
 pub use encap::*;
 pub use ip::*;
 pub use mac::*;
@@ -54,7 +56,7 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 15;
+pub const API_VERSION: u64 = 16;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Direction {

@@ -13,6 +13,7 @@ use super::headers::IpMetaOpt;
 use super::headers::ModifyActionArg;
 use super::headers::PushActionArg;
 use super::ip4::Protocol;
+pub use super::ip4::UlpCsumOpt;
 use super::packet::PacketRead;
 use super::packet::ReadErr;
 use crate::engine::rule::MatchExact;
@@ -194,8 +195,8 @@ impl Ipv6Hdr {
         bytes.extend_from_slice(&self.vsn_class_flow);
         bytes.extend_from_slice(&self.payload_len.to_be_bytes());
         bytes.extend_from_slice(&[u8::from(self.next_hdr), self.hop_limit]);
-        bytes.extend_from_slice(&self.src.bytes());
-        bytes.extend_from_slice(&self.dst.bytes());
+        bytes.extend_from_slice(&self.src);
+        bytes.extend_from_slice(&self.dst);
         bytes.extend_from_slice(&self.extension_headers);
         bytes
     }
@@ -249,11 +250,32 @@ impl Ipv6Hdr {
         self.proto
     }
 
+    /// Compute the [`Checksum`] of the contained ULP datagram.
+    ///
+    /// This computes the checksum of the pseudo-header, and adds to it the sum
+    /// of the ULP header and body.
+    pub fn compute_ulp_csum(
+        &self,
+        opt: UlpCsumOpt,
+        ulp_hdr: &[u8],
+        body: &[u8],
+    ) -> Checksum {
+        match opt {
+            UlpCsumOpt::Partial => todo!("implement partial csum"),
+            UlpCsumOpt::Full => {
+                let mut csum = self.pseudo_csum();
+                csum.add(ulp_hdr);
+                csum.add(body);
+                csum
+            }
+        }
+    }
+
     /// Return the pseudo header bytes.
     pub fn pseudo_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(40);
-        bytes.extend_from_slice(&self.src.bytes());
-        bytes.extend_from_slice(&self.dst.bytes());
+        bytes.extend_from_slice(&self.src);
+        bytes.extend_from_slice(&self.dst);
         bytes.extend_from_slice(&(self.pay_len() as u32).to_be_bytes());
         bytes.extend_from_slice(&[0u8, 0u8, 0u8, u8::from(self.next_hdr)]);
         assert_eq!(bytes.len(), 40);

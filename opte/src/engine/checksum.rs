@@ -59,8 +59,30 @@ impl Checksum {
             self.inner = (self.inner >> 16) + (self.inner & 0xFFFF);
         }
 
-        ((self.inner & 0xFFFF) as u16).to_ne_bytes()
+        let sum = (self.inner & 0xFFFF) as u16;
+        if sum == 0 {
+            [0xFF, 0xFF]
+        } else {
+            sum.to_ne_bytes()
+        }
     }
+}
+
+// Small test to ensure we return all ones when the computed checksum is
+// actually zero.
+//
+// The values of 0 and all ones (0xFFFF) are equivalent in one's-complement
+// arithmetic. The UDP specification indicates that the former of these two is
+// reserved for cases where the checksum is either not computed or irrelevant.
+// If the _computed_ checksum happens to be all zeros, we should instead
+// transmit all ones.
+//
+// See https://www.rfc-editor.org/rfc/rfc768.html.
+#[cfg(test)]
+#[test]
+fn test_zero_computed_cksum_is_all_ones() {
+    const BUF: [u8; 4] = [0u8; 4];
+    assert_eq!(Checksum::compute(&BUF).finalize(), [0xFF, 0xFF]);
 }
 
 impl From<HeaderChecksum> for Checksum {

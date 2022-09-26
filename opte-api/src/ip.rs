@@ -5,9 +5,11 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::mac::MacAddr;
+use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
+use core::ops::Deref;
 use core::result;
 use core::str::FromStr;
 use serde::Deserialize;
@@ -191,7 +193,7 @@ impl SubnetRouterPair {
         bytes[pos] = self.subnet.prefix_len();
         pos += 1;
         let n = self.subnet_encode_len();
-        let subnet_bytes = self.subnet.ip().bytes();
+        let subnet_bytes = &self.subnet.ip();
         for i in 0..n {
             bytes[pos] = subnet_bytes[i as usize];
             pos += 1;
@@ -418,7 +420,7 @@ impl From<smoltcp::wire::Ipv4Address> for Ipv4Addr {
 
 impl From<Ipv4Addr> for smoltcp::wire::Ipv4Address {
     fn from(ip: Ipv4Addr) -> Self {
-        Self::from_bytes(&ip.bytes())
+        Self::from_bytes(&ip)
     }
 }
 
@@ -475,6 +477,19 @@ impl Display for Ipv4Addr {
 impl Debug for Ipv4Addr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Ipv4Addr {{ inner: {} }}", self)
+    }
+}
+
+impl AsRef<[u8]> for Ipv4Addr {
+    fn as_ref(&self) -> &[u8] {
+        &self.inner
+    }
+}
+
+impl Deref for Ipv4Addr {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 
@@ -647,7 +662,7 @@ impl From<smoltcp::wire::Ipv6Address> for Ipv6Addr {
 impl From<Ipv6Addr> for smoltcp::wire::Ipv6Address {
     fn from(ip: Ipv6Addr) -> Self {
         // Safety: This panics, but we know bytes is exactly 16 octets.
-        Self::from_bytes(&ip.bytes())
+        Self::from_bytes(&ip)
     }
 }
 
@@ -684,6 +699,19 @@ impl FromStr for Ipv6Addr {
             .parse::<smoltcp::wire::Ipv6Address>()
             .map_err(|_| String::from("Invalid IPv6 address"))?;
         Ok(ip.into())
+    }
+}
+
+impl AsRef<[u8]> for Ipv6Addr {
+    fn as_ref(&self) -> &[u8] {
+        &self.inner
+    }
+}
+
+impl Deref for Ipv6Addr {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 

@@ -529,6 +529,15 @@ impl PacketMeta {
     pub fn is_inner_tcp(&self) -> bool {
         self.inner.is_tcp()
     }
+
+    /// Return the inner UDP metadata, if the inner ULP is UDP.
+    /// Otherwise return `None`.
+    pub fn inner_udp(&self) -> Option<&UdpMeta> {
+        match &self.inner.ulp {
+            Some(UlpMeta::Udp(udp)) => Some(udp),
+            _ => None,
+        }
+    }
 }
 
 /// A network packet.

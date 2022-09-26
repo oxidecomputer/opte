@@ -316,7 +316,7 @@ impl HairpinAction for RouterAdvertisement {
             // that for themselves at this point.
             reachable_time: ZERO_DURATION,
             retrans_time: ZERO_DURATION,
-            lladdr: Some(RawHardwareAddress::from_bytes(&self.mac.bytes())),
+            lladdr: Some(RawHardwareAddress::from_bytes(&self.mac)),
             // TODO-completeness: Don't hardcode this.
             //
             // See https://github.com/oxidecomputer/opte/issues/263.
@@ -480,7 +480,7 @@ fn construct_neighbor_advert<'a>(
             flags,
             target_addr: Ipv6Address::from(*target_addr),
             // Always include the Link-Layer address option.
-            lladdr: Some(RawHardwareAddress::from_bytes(&na.mac.bytes())),
+            lladdr: Some(RawHardwareAddress::from_bytes(&na.mac)),
         },
     ))
 }

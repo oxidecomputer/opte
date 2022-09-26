@@ -10,6 +10,7 @@ use super::arp::ArpMeta;
 use super::arp::ArpOp;
 use super::arp::ARP_HTYPE_ETHERNET;
 use super::dhcp::MessageType as DhcpMessageType;
+use super::dhcpv6::MessageType as Dhcpv6MessageType;
 use super::ether::EtherMeta;
 use super::ether::EtherMetaOpt;
 use super::ether::ETHER_TYPE_IPV4;
@@ -475,7 +476,11 @@ impl Display for Predicate {
 }
 
 impl Predicate {
-    fn is_match(&self, meta: &PacketMeta, action_meta: &ActionMeta) -> bool {
+    pub(crate) fn is_match(
+        &self,
+        meta: &PacketMeta,
+        action_meta: &ActionMeta,
+    ) -> bool {
         match self {
             Self::Meta(key, pred_val) => {
                 if let Some(meta_val) = action_meta.get(key) {
@@ -673,6 +678,7 @@ pub enum DataPredicate {
     DhcpMsgType(DhcpMessageType),
     IcmpMsgType(IcmpMessageType),
     Icmpv6MsgType(Icmpv6MessageType),
+    Dhcpv6MsgType(Dhcpv6MessageType),
     InnerArpTpa(Vec<Ipv4AddrMatch>),
     Not(Box<DataPredicate>),
 }
@@ -692,6 +698,10 @@ impl Display for DataPredicate {
 
             Icmpv6MsgType(mt) => {
                 write!(f, "icmpv6.msg_type={}", mt)
+            }
+
+            Dhcpv6MsgType(mt) => {
+                write!(f, "dhcpv6.msg_type={}", mt)
             }
 
             InnerArpTpa(list) => {
@@ -716,7 +726,11 @@ impl DataPredicate {
     // use `PacketMeta` to determine if there is a suitable payload to
     // be inspected. That is, if there is no metadata for a given
     // header, there is certainly no payload.
-    fn is_match<'a, 'b, R>(&self, meta: &PacketMeta, rdr: &'b mut R) -> bool
+    pub(crate) fn is_match<'a, 'b, R>(
+        &self,
+        meta: &PacketMeta,
+        rdr: &'b mut R,
+    ) -> bool
     where
         R: PacketRead<'a>,
     {
@@ -813,6 +827,18 @@ impl DataPredicate {
                     return false;
                 }
                 return Icmpv6MessageType::from(pkt.msg_type()) == *mt;
+            }
+
+            Self::Dhcpv6MsgType(mt) => {
+                if let Ok(buf) = rdr.slice(1) {
+                    rdr.seek_back(1).expect("Failed to seek back");
+                    return buf[0] == u8::from(*mt);
+                } else {
+                    super::err(String::from(
+                        "Failed to read DHCPv6 message type from packet",
+                    ));
+                    return false;
+                }
             }
 
             Self::InnerArpTpa(list) => match meta.inner.arp {

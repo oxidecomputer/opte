@@ -82,6 +82,7 @@ use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::arp;
 use oxide_vpc::engine::dhcp;
+use oxide_vpc::engine::dhcpv6;
 use oxide_vpc::engine::firewall;
 use oxide_vpc::engine::icmp;
 use oxide_vpc::engine::icmpv6;
@@ -1951,6 +1952,7 @@ fn new_port(
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
     dhcp::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
+    dhcpv6::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     icmp::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     icmpv6::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     arp::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;

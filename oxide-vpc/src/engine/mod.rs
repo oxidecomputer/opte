@@ -6,6 +6,7 @@
 
 pub mod arp;
 pub mod dhcp;
+pub mod dhcpv6;
 pub mod firewall;
 pub mod icmp;
 pub mod icmpv6;
