@@ -6,7 +6,8 @@
 
 // stuff we need from secpolicy
 
-use illumos_sys_hdrs::{c_int, cred_t};
+use illumos_sys_hdrs::c_int;
+use illumos_sys_hdrs::cred_t;
 
 extern "C" {
     pub fn secpolicy_dl_config(cr: *const cred_t) -> c_int;

@@ -19,8 +19,10 @@ extern crate alloc;
 #[macro_use]
 extern crate cfg_if;
 
-use core::fmt::{self, Display};
-use serde::{Deserialize, Serialize};
+use core::fmt;
+use core::fmt::Display;
+use serde::Deserialize;
+use serde::Serialize;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -52,7 +54,7 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 13;
+pub const API_VERSION: u64 = 14;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Direction {

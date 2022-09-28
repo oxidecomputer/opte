@@ -8,8 +8,10 @@ use super::encap::Vni;
 use super::ip::IpCidr;
 use super::mac::MacAddr;
 use super::API_VERSION;
-use illumos_sys_hdrs::{c_int, size_t};
-use serde::{Deserialize, Serialize};
+use illumos_sys_hdrs::c_int;
+use illumos_sys_hdrs::size_t;
+use serde::Deserialize;
+use serde::Serialize;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

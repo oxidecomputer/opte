@@ -6,27 +6,46 @@
 
 //! Internet Control Message Protocol version 6
 
-use super::ether::{self, EtherHdr, EtherMeta};
+use super::ether;
+use super::ether::EtherHdr;
+use super::ether::EtherMeta;
 use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6Meta;
-use super::packet::{Packet, PacketMeta, PacketRead, PacketReader, Parsed};
-use super::rule::{
-    AllowOrDeny, DataPredicate, EtherAddrMatch, GenErr, GenPacketResult,
-    HairpinAction, IpProtoMatch, Ipv6AddrMatch, Predicate,
-};
-use core::fmt::{self, Display};
+use super::packet::Packet;
+use super::packet::PacketMeta;
+use super::packet::PacketRead;
+use super::packet::PacketReader;
+use super::packet::Parsed;
+use super::rule::AllowOrDeny;
+use super::rule::DataPredicate;
+use super::rule::EtherAddrMatch;
+use super::rule::GenErr;
+use super::rule::GenPacketResult;
+use super::rule::HairpinAction;
+use super::rule::IpProtoMatch;
+use super::rule::Ipv6AddrMatch;
+use super::rule::Predicate;
+use core::fmt;
+use core::fmt::Display;
+pub use opte_api::ip::Icmpv6EchoReply;
+pub use opte_api::ip::Ipv6Addr;
 pub use opte_api::ip::Ipv6Cidr;
-pub use opte_api::ip::{Icmpv6EchoReply, Ipv6Addr, Protocol};
+pub use opte_api::ip::Protocol;
 use opte_api::mac::MacAddr;
 pub use opte_api::ndp::NeighborAdvertisement;
 pub use opte_api::ndp::RouterAdvertisement;
-use serde::{Deserialize, Serialize};
-use smoltcp::phy::{Checksum, ChecksumCapabilities as Csum};
+use serde::Deserialize;
+use serde::Serialize;
+use smoltcp::phy::Checksum;
+use smoltcp::phy::ChecksumCapabilities as Csum;
+use smoltcp::wire::Icmpv6Message;
+use smoltcp::wire::Icmpv6Packet;
+use smoltcp::wire::Icmpv6Repr;
+use smoltcp::wire::IpAddress;
+use smoltcp::wire::Ipv6Address;
 use smoltcp::wire::NdiscNeighborFlags;
+use smoltcp::wire::NdiscRepr;
 use smoltcp::wire::RawHardwareAddress;
-use smoltcp::wire::{
-    Icmpv6Message, Icmpv6Packet, Icmpv6Repr, IpAddress, Ipv6Address, NdiscRepr,
-};
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

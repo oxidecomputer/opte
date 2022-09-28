@@ -10,12 +10,15 @@
 //! the moment out of laziness.
 pub use super::mac_sys::*;
 use alloc::ffi::CString;
-use alloc::string::{String, ToString};
+use alloc::string::String;
+use alloc::string::ToString;
 use bitflags::bitflags;
 use core::ffi::CStr;
 use core::ptr;
 use illumos_sys_hdrs::*;
-use opte::engine::packet::{Initialized, Packet, PacketState};
+use opte::engine::packet::Initialized;
+use opte::engine::packet::Packet;
+use opte::engine::packet::PacketState;
 
 /// A mac client
 #[derive(Clone, Debug)]

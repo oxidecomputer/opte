@@ -23,25 +23,48 @@ cfg_if! {
     }
 }
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use super::router::RouterTargetInternal;
-use crate::api::{BoundaryServices, GuestPhysAddr, PhysNet, VpcCfg};
-use opte::api::{CmdOk, Direction, Ipv4Addr, MacAddr, OpteError};
-use opte::ddi::sync::{KMutex, KMutexType};
-use opte::engine::ether::{EtherMeta, ETHER_TYPE_IPV6};
-use opte::engine::geneve::{GeneveMeta, Vni, GENEVE_PORT};
-use opte::engine::headers::{HeaderAction, IpAddr};
+use crate::api::BoundaryServices;
+use crate::api::GuestPhysAddr;
+use crate::api::PhysNet;
+use crate::api::VpcCfg;
+use opte::api::CmdOk;
+use opte::api::Direction;
+use opte::api::Ipv4Addr;
+use opte::api::MacAddr;
+use opte::api::OpteError;
+use opte::ddi::sync::KMutex;
+use opte::ddi::sync::KMutexType;
+use opte::engine::ether::EtherMeta;
+use opte::engine::ether::ETHER_TYPE_IPV6;
+use opte::engine::geneve::GeneveMeta;
+use opte::engine::geneve::Vni;
+use opte::engine::geneve::GENEVE_PORT;
+use opte::engine::headers::HeaderAction;
+use opte::engine::headers::IpAddr;
 use opte::engine::ip4::Protocol;
-use opte::engine::ip6::{Ipv6Addr, Ipv6Meta};
+use opte::engine::ip6::Ipv6Addr;
+use opte::engine::ip6::Ipv6Meta;
 use opte::engine::layer::Layer;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::port::meta::{ActionMeta, ActionMetaValue};
-use opte::engine::port::{PortBuilder, Pos};
-use opte::engine::rule::{
-    self, Action, AllowOrDeny, DataPredicate, HdrTransform, MappingResource,
-    Predicate, Resource, ResourceEntry, Rule, StaticAction,
-};
+use opte::engine::port::meta::ActionMeta;
+use opte::engine::port::meta::ActionMetaValue;
+use opte::engine::port::PortBuilder;
+use opte::engine::port::Pos;
+use opte::engine::rule;
+use opte::engine::rule::Action;
+use opte::engine::rule::AllowOrDeny;
+use opte::engine::rule::DataPredicate;
+use opte::engine::rule::HdrTransform;
+use opte::engine::rule::MappingResource;
+use opte::engine::rule::Predicate;
+use opte::engine::rule::Resource;
+use opte::engine::rule::ResourceEntry;
+use opte::engine::rule::Rule;
+use opte::engine::rule::StaticAction;
 use opte::engine::udp::UdpMeta;
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";

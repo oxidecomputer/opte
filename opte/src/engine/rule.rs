@@ -4,37 +4,63 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use super::arp::{
-    ArpEth4Payload, ArpEth4PayloadRaw, ArpMeta, ArpOp, ARP_HTYPE_ETHERNET,
-};
+use super::arp::ArpEth4Payload;
+use super::arp::ArpEth4PayloadRaw;
+use super::arp::ArpMeta;
+use super::arp::ArpOp;
+use super::arp::ARP_HTYPE_ETHERNET;
 use super::dhcp::MessageType as DhcpMessageType;
-use super::ether::{EtherMeta, EtherMetaOpt, ETHER_TYPE_IPV4};
+use super::ether::EtherMeta;
+use super::ether::EtherMetaOpt;
+use super::ether::ETHER_TYPE_IPV4;
 use super::flow_table::StateSummary;
-use super::geneve::{GeneveMeta, GeneveMetaOpt};
-use super::headers::{
-    self, HeaderAction, HeaderActionError, IpAddr, IpMeta, IpMetaOpt,
-    UlpHeaderAction, UlpMeta, UlpMetaOpt,
-};
+use super::geneve::GeneveMeta;
+use super::geneve::GeneveMetaOpt;
+use super::headers;
+use super::headers::HeaderAction;
+use super::headers::HeaderActionError;
+use super::headers::IpAddr;
+use super::headers::IpMeta;
+use super::headers::IpMetaOpt;
+use super::headers::UlpHeaderAction;
+use super::headers::UlpMeta;
+use super::headers::UlpMetaOpt;
 use super::icmp::MessageType as IcmpMessageType;
 use super::icmpv6::MessageType as Icmpv6MessageType;
-use super::ip4::{Ipv4Addr, Ipv4Cidr, Ipv4Meta, Protocol};
-use super::ip6::{Ipv6Addr, Ipv6Cidr, Ipv6Meta};
-use super::packet::{
-    BodyTransform, Initialized, InnerFlowId, Packet, PacketMeta, PacketRead,
-    PacketReader, Parsed,
-};
+use super::ip4::Ipv4Addr;
+use super::ip4::Ipv4Cidr;
+use super::ip4::Ipv4Meta;
+use super::ip4::Protocol;
+use super::ip6::Ipv6Addr;
+use super::ip6::Ipv6Cidr;
+use super::ip6::Ipv6Meta;
+use super::packet::BodyTransform;
+use super::packet::Initialized;
+use super::packet::InnerFlowId;
+use super::packet::Packet;
+use super::packet::PacketMeta;
+use super::packet::PacketRead;
+use super::packet::PacketReader;
+use super::packet::Parsed;
 use super::port::meta::ActionMeta;
 use super::tcp::TcpMeta;
 use super::udp::UdpMeta;
-use core::fmt::{self, Debug, Display};
+use core::fmt;
+use core::fmt::Debug;
+use core::fmt::Display;
 use illumos_sys_hdrs::c_char;
-use opte_api::{Direction, MacAddr};
-use serde::{Deserialize, Serialize};
+use opte_api::Direction;
+use opte_api::MacAddr;
+use serde::Deserialize;
+use serde::Serialize;
 use smoltcp::phy::ChecksumCapabilities as Csum;
-use smoltcp::wire::{
-    self, DhcpPacket, DhcpRepr, Icmpv4Packet, Icmpv4Repr, Icmpv6Packet,
-    Icmpv6Repr,
-};
+use smoltcp::wire;
+use smoltcp::wire::DhcpPacket;
+use smoltcp::wire::DhcpRepr;
+use smoltcp::wire::Icmpv4Packet;
+use smoltcp::wire::Icmpv4Repr;
+use smoltcp::wire::Icmpv6Packet;
+use smoltcp::wire::Icmpv6Repr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

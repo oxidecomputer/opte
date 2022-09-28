@@ -5,8 +5,11 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::packet::InnerFlowId;
-use super::tcp::{TcpFlags, TcpMeta, TcpState};
-use core::fmt::{self, Display};
+use super::tcp::TcpFlags;
+use super::tcp::TcpMeta;
+use super::tcp::TcpState;
+use core::fmt;
+use core::fmt::Display;
 use opte_api::Direction;
 
 cfg_if! {

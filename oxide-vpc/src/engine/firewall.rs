@@ -19,20 +19,34 @@ cfg_if! {
     }
 }
 
+use crate::api::Action;
+use crate::api::AddFwRuleReq;
+use crate::api::Address;
+use crate::api::FirewallRule;
+use crate::api::Ports;
 pub use crate::api::ProtoFilter;
-use crate::api::{
-    Action, AddFwRuleReq, Address, FirewallRule, Ports, RemFwRuleReq,
-    SetFwRulesReq,
-};
-use opte::api::{Direction, OpteError};
+use crate::api::RemFwRuleReq;
+use crate::api::SetFwRulesReq;
+use opte::api::Direction;
+use opte::api::OpteError;
 use opte::engine::layer::Layer;
-use opte::engine::packet::{InnerFlowId, Packet, Parsed};
+use opte::engine::packet::InnerFlowId;
+use opte::engine::packet::Packet;
+use opte::engine::packet::Parsed;
 use opte::engine::port::meta::ActionMeta;
-use opte::engine::port::{Port, PortBuilder, Pos};
-use opte::engine::rule::{
-    self, AllowOrDeny, DataPredicate, IdentityDesc, IpProtoMatch,
-    Ipv4AddrMatch, PortMatch, Predicate, Rule, StatefulAction,
-};
+use opte::engine::port::Port;
+use opte::engine::port::PortBuilder;
+use opte::engine::port::Pos;
+use opte::engine::rule;
+use opte::engine::rule::AllowOrDeny;
+use opte::engine::rule::DataPredicate;
+use opte::engine::rule::IdentityDesc;
+use opte::engine::rule::IpProtoMatch;
+use opte::engine::rule::Ipv4AddrMatch;
+use opte::engine::rule::PortMatch;
+use opte::engine::rule::Predicate;
+use opte::engine::rule::Rule;
+use opte::engine::rule::StatefulAction;
 
 pub const FW_LAYER_NAME: &'static str = "firewall";
 

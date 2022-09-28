@@ -5,11 +5,13 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::packet::InnerFlowId;
-use crate::ddi::time::{Moment, MILLIS};
+use crate::ddi::time::Moment;
+use crate::ddi::time::MILLIS;
 use core::fmt;
 use core::num::NonZeroU32;
 use opte_api::OpteError;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

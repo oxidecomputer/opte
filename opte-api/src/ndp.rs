@@ -8,7 +8,9 @@
 
 use super::Ipv6Addr;
 use super::MacAddr;
-use core::fmt::{self, Debug, Display};
+use core::fmt;
+use core::fmt::Debug;
+use core::fmt::Display;
 
 /// A Neighbor Discovery Protocol Router Advertisement, generated in response to
 /// a Router Solicitation.

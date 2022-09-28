@@ -4,18 +4,30 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use super::checksum::{Checksum, HeaderChecksum};
-use super::headers::{
-    Header, HeaderAction, HeaderActionModify, ModifyActionArg, PushActionArg,
-    RawHeader, UlpHdr, UlpMetaModify,
-};
-use super::packet::{PacketRead, ReadErr, WriteError};
+use super::checksum::Checksum;
+use super::checksum::HeaderChecksum;
+use super::headers::Header;
+use super::headers::HeaderAction;
+use super::headers::HeaderActionModify;
+use super::headers::ModifyActionArg;
+use super::headers::PushActionArg;
+use super::headers::RawHeader;
+use super::headers::UlpHdr;
+use super::headers::UlpMetaModify;
+use super::packet::PacketRead;
+use super::packet::ReadErr;
+use super::packet::WriteError;
 use core::convert::TryFrom;
-use core::fmt::{self, Display};
+use core::fmt;
+use core::fmt::Display;
 use core::mem;
 use opte_api::DYNAMIC_PORT;
-use serde::{Deserialize, Serialize};
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
+use serde::Deserialize;
+use serde::Serialize;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
+use zerocopy::LayoutVerified;
+use zerocopy::Unaligned;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

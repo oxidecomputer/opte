@@ -11,23 +11,44 @@
 /// * RFD 9 -- NETWORKING CONSIDERATIONS
 /// ** §1.13 ARP
 /// * RFC 826 -- An Ethernet Address Resolution Protocol
-use super::ether::{EtherHdr, EtherMeta, ETHER_TYPE_ARP, ETHER_TYPE_IPV4};
-use super::headers::{Header, RawHeader};
-use super::packet::{
-    Packet, PacketMeta, PacketRead, PacketReader, PacketWriter, Parsed,
-    ReadErr, WriteError,
-};
-use super::rule::{
-    AllowOrDeny, ArpHtypeMatch, ArpOpMatch, ArpPtypeMatch, DataPredicate,
-    EtherAddrMatch, EtherTypeMatch, GenPacketResult, HairpinAction,
-    Ipv4AddrMatch, Payload, Predicate,
-};
+use super::ether::EtherHdr;
+use super::ether::EtherMeta;
+use super::ether::ETHER_TYPE_ARP;
+use super::ether::ETHER_TYPE_IPV4;
+use super::headers::Header;
+use super::headers::RawHeader;
+use super::packet::Packet;
+use super::packet::PacketMeta;
+use super::packet::PacketRead;
+use super::packet::PacketReader;
+use super::packet::PacketWriter;
+use super::packet::Parsed;
+use super::packet::ReadErr;
+use super::packet::WriteError;
+use super::rule::AllowOrDeny;
+use super::rule::ArpHtypeMatch;
+use super::rule::ArpOpMatch;
+use super::rule::ArpPtypeMatch;
+use super::rule::DataPredicate;
+use super::rule::EtherAddrMatch;
+use super::rule::EtherTypeMatch;
+use super::rule::GenPacketResult;
+use super::rule::HairpinAction;
+use super::rule::Ipv4AddrMatch;
+use super::rule::Payload;
+use super::rule::Predicate;
 use core::convert::TryFrom;
-use core::fmt::{self, Display};
+use core::fmt;
+use core::fmt::Display;
 use core::mem;
-use opte_api::{Ipv4Addr, MacAddr};
-use serde::{Deserialize, Serialize};
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
+use opte_api::Ipv4Addr;
+use opte_api::MacAddr;
+use serde::Deserialize;
+use serde::Serialize;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
+use zerocopy::LayoutVerified;
+use zerocopy::Unaligned;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

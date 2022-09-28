@@ -4,19 +4,43 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use super::ether::{self, EtherHdr, EtherMeta};
-use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol};
-use super::packet::{Packet, PacketMeta, PacketRead, PacketReader, Parsed};
-use super::rule::{
-    AllowOrDeny, DataPredicate, EtherAddrMatch, GenPacketResult, HairpinAction,
-    IpProtoMatch, Ipv4AddrMatch, PortMatch, Predicate,
-};
-use super::udp::{UdpHdr, UdpMeta};
-use core::fmt::{self, Display};
-use opte_api::{DhcpAction, DhcpReplyType, MacAddr, SubnetRouterPair};
-use serde::de::{self, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use smoltcp::wire::{DhcpPacket, DhcpRepr};
+use super::ether;
+use super::ether::EtherHdr;
+use super::ether::EtherMeta;
+use super::ip4::Ipv4Addr;
+use super::ip4::Ipv4Hdr;
+use super::ip4::Ipv4Meta;
+use super::ip4::Protocol;
+use super::packet::Packet;
+use super::packet::PacketMeta;
+use super::packet::PacketRead;
+use super::packet::PacketReader;
+use super::packet::Parsed;
+use super::rule::AllowOrDeny;
+use super::rule::DataPredicate;
+use super::rule::EtherAddrMatch;
+use super::rule::GenPacketResult;
+use super::rule::HairpinAction;
+use super::rule::IpProtoMatch;
+use super::rule::Ipv4AddrMatch;
+use super::rule::PortMatch;
+use super::rule::Predicate;
+use super::udp::UdpHdr;
+use super::udp::UdpMeta;
+use core::fmt;
+use core::fmt::Display;
+use opte_api::DhcpAction;
+use opte_api::DhcpReplyType;
+use opte_api::MacAddr;
+use opte_api::SubnetRouterPair;
+use serde::de;
+use serde::de::Visitor;
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::Serialize;
+use serde::Serializer;
+use smoltcp::wire::DhcpPacket;
+use smoltcp::wire::DhcpRepr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -366,7 +390,8 @@ impl HairpinAction for DhcpAction {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::engine::ip4::{Ipv4Addr, Ipv4Cidr};
+    use crate::engine::ip4::Ipv4Addr;
+    use crate::engine::ip4::Ipv4Cidr;
 
     #[test]
     fn offlink_encode() {

@@ -4,21 +4,35 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use super::flow_table::{FlowTable, FlowTableDump};
+use super::flow_table::FlowTable;
+use super::flow_table::FlowTableDump;
 use super::ioctl;
-use super::packet::{
-    BodyTransformError, Initialized, InnerFlowId, Packet, PacketMeta,
-    PacketRead, Parsed, FLOW_ID_DEFAULT,
-};
+use super::packet::BodyTransformError;
+use super::packet::Initialized;
+use super::packet::InnerFlowId;
+use super::packet::Packet;
+use super::packet::PacketMeta;
+use super::packet::PacketRead;
+use super::packet::Parsed;
+use super::packet::FLOW_ID_DEFAULT;
 use super::port::meta::ActionMeta;
 use super::port::Transforms;
-use super::rule::{
-    self, flow_id_sdt_arg, ht_probe, Action, ActionDesc, AllowOrDeny,
-    Finalized, GenBtError, HdrTransformError, Rule, RuleDump,
-};
+use super::rule;
+use super::rule::flow_id_sdt_arg;
+use super::rule::ht_probe;
+use super::rule::Action;
+use super::rule::ActionDesc;
+use super::rule::AllowOrDeny;
+use super::rule::Finalized;
+use super::rule::GenBtError;
+use super::rule::HdrTransformError;
+use super::rule::Rule;
+use super::rule::RuleDump;
 use crate::ddi::time::Moment;
-use crate::{ExecCtx, LogLevel};
-use core::fmt::{self, Display};
+use crate::ExecCtx;
+use crate::LogLevel;
+use core::fmt;
+use core::fmt::Display;
 use core::num::NonZeroU32;
 use core::result;
 use illumos_sys_hdrs::c_char;
@@ -1296,10 +1310,15 @@ mod test {
 
     #[test]
     fn find_rule() {
-        use crate::engine::headers::{IpMeta, UlpMeta};
-        use crate::engine::ip4::{Ipv4Meta, Protocol};
-        use crate::engine::packet::{MetaGroup, PacketReader};
-        use crate::engine::rule::{self, Ipv4AddrMatch, Predicate};
+        use crate::engine::headers::IpMeta;
+        use crate::engine::headers::UlpMeta;
+        use crate::engine::ip4::Ipv4Meta;
+        use crate::engine::ip4::Protocol;
+        use crate::engine::packet::MetaGroup;
+        use crate::engine::packet::PacketReader;
+        use crate::engine::rule;
+        use crate::engine::rule::Ipv4AddrMatch;
+        use crate::engine::rule::Predicate;
         use crate::engine::tcp::TcpMeta;
 
         let mut rule_table = RuleTable::new("port", "test", Direction::Out);

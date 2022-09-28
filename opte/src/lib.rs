@@ -19,7 +19,8 @@
 #![deny(unreachable_patterns)]
 #![deny(unused_must_use)]
 
-use core::fmt::{self, Display};
+use core::fmt;
+use core::fmt::Display;
 
 // NOTE: Things get weird if you move the extern crate into cfg_if!.
 #[cfg(any(feature = "std", test))]

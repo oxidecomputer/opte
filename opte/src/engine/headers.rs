@@ -5,14 +5,27 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::checksum::Checksum;
-use super::ip4::{Ipv4Hdr, Ipv4Meta, Ipv4MetaOpt};
-use super::ip6::{Ipv6Hdr, Ipv6Meta, Ipv6MetaOpt};
-use super::packet::{PacketRead, ReadErr, WriteError};
-use super::tcp::{TcpHdr, TcpMeta, TcpMetaOpt};
-use super::udp::{UdpHdr, UdpMeta, UdpMetaOpt};
+use super::ip4::Ipv4Hdr;
+use super::ip4::Ipv4Meta;
+use super::ip4::Ipv4MetaOpt;
+use super::ip6::Ipv6Hdr;
+use super::ip6::Ipv6Meta;
+use super::ip6::Ipv6MetaOpt;
+use super::packet::PacketRead;
+use super::packet::ReadErr;
+use super::packet::WriteError;
+use super::tcp::TcpHdr;
+use super::tcp::TcpMeta;
+use super::tcp::TcpMetaOpt;
+use super::udp::UdpHdr;
+use super::udp::UdpMeta;
+use super::udp::UdpMetaOpt;
 use core::fmt;
-pub use opte_api::{IpAddr, IpCidr, Protocol};
-use serde::{Deserialize, Serialize};
+pub use opte_api::IpAddr;
+pub use opte_api::IpCidr;
+pub use opte_api::Protocol;
+use serde::Deserialize;
+use serde::Serialize;
 use zerocopy::LayoutVerified;
 
 cfg_if! {

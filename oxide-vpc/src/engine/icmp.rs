@@ -13,11 +13,14 @@ cfg_if! {
 }
 
 use crate::api::VpcCfg;
-use opte::api::{Direction, OpteError};
+use opte::api::Direction;
+use opte::api::OpteError;
 use opte::engine::icmp::IcmpEchoReply;
 use opte::engine::layer::Layer;
-use opte::engine::port::{PortBuilder, Pos};
-use opte::engine::rule::{Action, Rule};
+use opte::engine::port::PortBuilder;
+use opte::engine::port::Pos;
+use opte::engine::rule::Action;
+use opte::engine::rule::Rule;
 
 pub fn setup(
     pb: &mut PortBuilder,

@@ -4,8 +4,11 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use core::fmt::{self, Debug, Display};
-use serde::{Deserialize, Serialize};
+use core::fmt;
+use core::fmt::Debug;
+use core::fmt::Display;
+use serde::Deserialize;
+use serde::Serialize;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
