@@ -5,18 +5,36 @@
 // Copyright 2022 Oxide Computer Company
 
 //! ICMP headers.
-use super::ether::{self, EtherHdr, EtherMeta};
-use super::ip4::{Ipv4Hdr, Ipv4Meta};
-use super::packet::{Packet, PacketMeta, PacketRead, PacketReader, Parsed};
-use super::rule::{
-    AllowOrDeny, DataPredicate, EtherAddrMatch, GenErr, GenPacketResult,
-    HairpinAction, IpProtoMatch, Ipv4AddrMatch, Predicate,
-};
-use core::fmt::{self, Display};
-pub use opte_api::ip::{IcmpEchoReply, Protocol};
-use serde::{Deserialize, Serialize};
-use smoltcp::phy::{Checksum, ChecksumCapabilities as Csum};
-use smoltcp::wire::{self, Icmpv4Packet, Icmpv4Repr};
+use super::ether;
+use super::ether::EtherHdr;
+use super::ether::EtherMeta;
+use super::ip4::Ipv4Hdr;
+use super::ip4::Ipv4Meta;
+use super::packet::Packet;
+use super::packet::PacketMeta;
+use super::packet::PacketRead;
+use super::packet::PacketReader;
+use super::packet::Parsed;
+use super::rule::AllowOrDeny;
+use super::rule::DataPredicate;
+use super::rule::EtherAddrMatch;
+use super::rule::GenErr;
+use super::rule::GenPacketResult;
+use super::rule::HairpinAction;
+use super::rule::IpProtoMatch;
+use super::rule::Ipv4AddrMatch;
+use super::rule::Predicate;
+use core::fmt;
+use core::fmt::Display;
+pub use opte_api::ip::IcmpEchoReply;
+pub use opte_api::ip::Protocol;
+use serde::Deserialize;
+use serde::Serialize;
+use smoltcp::phy::Checksum;
+use smoltcp::phy::ChecksumCapabilities as Csum;
+use smoltcp::wire;
+use smoltcp::wire::Icmpv4Packet;
+use smoltcp::wire::Icmpv4Repr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

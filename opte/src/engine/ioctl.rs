@@ -13,8 +13,10 @@ use super::packet::InnerFlowId;
 use super::port::Port;
 use super::rule;
 use core::fmt::Debug;
-use opte_api::{CmdOk, OpteError};
-use serde::{Deserialize, Serialize};
+use opte_api::CmdOk;
+use opte_api::OpteError;
+use serde::Deserialize;
+use serde::Serialize;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

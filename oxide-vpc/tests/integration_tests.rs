@@ -22,42 +22,86 @@
 //!
 //! TODO This module belongs in oxide_vpc as it's testing VPC-specific
 //! configuration.
-use opte::api::{Direction::*, MacAddr, OpteError};
+use opte::api::Direction::*;
+use opte::api::MacAddr;
+use opte::api::OpteError;
 use opte::ddi::time::Moment;
-use opte::engine::arp::{
-    ArpEth4Payload, ArpEth4PayloadRaw, ArpHdrRaw, ARP_HDR_SZ,
-};
+use opte::engine::arp::ArpEth4Payload;
+use opte::engine::arp::ArpEth4PayloadRaw;
+use opte::engine::arp::ArpHdrRaw;
+use opte::engine::arp::ARP_HDR_SZ;
 use opte::engine::checksum::HeaderChecksum;
-use opte::engine::ether::{
-    EtherHdr, EtherHdrRaw, EtherMeta, EtherType, ETHER_TYPE_ARP,
-    ETHER_TYPE_IPV4, ETHER_TYPE_IPV6,
-};
+use opte::engine::ether::EtherHdr;
+use opte::engine::ether::EtherHdrRaw;
+use opte::engine::ether::EtherMeta;
+use opte::engine::ether::EtherType;
+use opte::engine::ether::ETHER_TYPE_ARP;
+use opte::engine::ether::ETHER_TYPE_IPV4;
+use opte::engine::ether::ETHER_TYPE_IPV6;
 use opte::engine::flow_table::FLOW_DEF_EXPIRE_SECS;
-use opte::engine::geneve::{self, GeneveHdr, Vni};
-use opte::engine::headers::{IpAddr, IpCidr, IpMeta, UlpMeta};
-use opte::engine::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4Meta, Protocol, UlpCsumOpt};
-use opte::engine::ip6::{Ipv6Addr, Ipv6Hdr, Ipv6Meta};
-use opte::engine::packet::{
-    Initialized, Packet, PacketRead, PacketReader, PacketWriter, ParseError,
-    Parsed,
-};
+use opte::engine::geneve;
+use opte::engine::geneve::GeneveHdr;
+use opte::engine::geneve::Vni;
+use opte::engine::headers::IpAddr;
+use opte::engine::headers::IpCidr;
+use opte::engine::headers::IpMeta;
+use opte::engine::headers::UlpMeta;
+use opte::engine::ip4::Ipv4Addr;
+use opte::engine::ip4::Ipv4Hdr;
+use opte::engine::ip4::Ipv4Meta;
+use opte::engine::ip4::Protocol;
+use opte::engine::ip4::UlpCsumOpt;
+use opte::engine::ip6::Ipv6Addr;
+use opte::engine::ip6::Ipv6Hdr;
+use opte::engine::ip6::Ipv6Meta;
+use opte::engine::packet::Initialized;
+use opte::engine::packet::Packet;
+use opte::engine::packet::PacketRead;
+use opte::engine::packet::PacketReader;
+use opte::engine::packet::PacketWriter;
+use opte::engine::packet::ParseError;
+use opte::engine::packet::Parsed;
 use opte::engine::port::meta::ActionMeta;
-use opte::engine::port::{
-    Port, PortBuilder, PortState, ProcessError, ProcessResult,
-};
-use opte::engine::rule::{self, MappingResource, Rule};
-use opte::engine::tcp::{TcpFlags, TcpHdr};
-use opte::engine::udp::{UdpHdr, UdpMeta};
+use opte::engine::port::Port;
+use opte::engine::port::PortBuilder;
+use opte::engine::port::PortState;
+use opte::engine::port::ProcessError;
+use opte::engine::port::ProcessResult;
+use opte::engine::rule;
+use opte::engine::rule::MappingResource;
+use opte::engine::rule::Rule;
+use opte::engine::tcp::TcpFlags;
+use opte::engine::tcp::TcpHdr;
+use opte::engine::udp::UdpHdr;
+use opte::engine::udp::UdpMeta;
 use opte::ExecCtx;
-use oxide_vpc::api::{
-    AddFwRuleReq, FirewallRule, GuestPhysAddr, RouterTarget, SNat4Cfg,
-    SNat6Cfg, SetFwRulesReq,
-};
-use oxide_vpc::api::{BoundaryServices, IpCfg, Ipv4Cfg, Ipv6Cfg, VpcCfg};
-use oxide_vpc::engine::overlay::{self, Virt2Phys};
-use oxide_vpc::engine::{arp, dhcp, firewall, icmp, icmpv6, nat, router};
-use pcap_parser::pcap::{self, LegacyPcapBlock, PcapHeader};
+use oxide_vpc::api::AddFwRuleReq;
+use oxide_vpc::api::BoundaryServices;
+use oxide_vpc::api::FirewallRule;
+use oxide_vpc::api::GuestPhysAddr;
+use oxide_vpc::api::IpCfg;
+use oxide_vpc::api::Ipv4Cfg;
+use oxide_vpc::api::Ipv6Cfg;
+use oxide_vpc::api::RouterTarget;
+use oxide_vpc::api::SNat4Cfg;
+use oxide_vpc::api::SNat6Cfg;
+use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::VpcCfg;
+use oxide_vpc::engine::arp;
+use oxide_vpc::engine::dhcp;
+use oxide_vpc::engine::firewall;
+use oxide_vpc::engine::icmp;
+use oxide_vpc::engine::icmpv6;
+use oxide_vpc::engine::nat;
+use oxide_vpc::engine::overlay;
+use oxide_vpc::engine::overlay::Virt2Phys;
+use oxide_vpc::engine::router;
+use pcap_parser::pcap;
+use pcap_parser::pcap::LegacyPcapBlock;
+use pcap_parser::pcap::PcapHeader;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
+use smoltcp::wire::Icmpv4Packet;
+use smoltcp::wire::Icmpv4Repr;
 use smoltcp::wire::Icmpv6Packet;
 use smoltcp::wire::Icmpv6Repr;
 use smoltcp::wire::IpAddress;
@@ -66,7 +110,6 @@ use smoltcp::wire::NdiscNeighborFlags;
 use smoltcp::wire::NdiscRepr;
 use smoltcp::wire::NdiscRouterFlags;
 use smoltcp::wire::RawHardwareAddress;
-use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
 use std::boxed::Box;
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
@@ -351,7 +394,8 @@ macro_rules! set_state {
 }
 
 // TODO move PcapBuilder stuff to common file
-use pcap_parser::{Linktype, ToVec};
+use pcap_parser::Linktype;
+use pcap_parser::ToVec;
 use std::fs::File;
 use std::io::Write;
 

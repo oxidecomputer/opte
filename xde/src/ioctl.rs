@@ -8,12 +8,15 @@ use alloc::ffi::CString;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::result;
-use ddi::{c_int, c_void};
+use ddi::c_int;
+use ddi::c_void;
 use illumos_sys_hdrs as ddi;
-use opte::api::{
-    CmdOk, OpteCmd, OpteCmdIoctl, OpteError, API_VERSION,
-    OPTE_CMD_RESP_COPY_OUT,
-};
+use opte::api::CmdOk;
+use opte::api::OpteCmd;
+use opte::api::OpteCmdIoctl;
+use opte::api::OpteError;
+use opte::api::API_VERSION;
+use opte::api::OPTE_CMD_RESP_COPY_OUT;
 use postcard;
 use serde::de::DeserializeOwned;
 use serde::Serialize;

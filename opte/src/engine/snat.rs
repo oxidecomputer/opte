@@ -7,23 +7,44 @@
 //! Types for working with IP Source NAT, both IPv4 and IPv6.
 
 use super::ether::EtherMeta;
-use super::headers::{UlpGenericModify, UlpHeaderAction, UlpMetaModify};
+use super::headers::UlpGenericModify;
+use super::headers::UlpHeaderAction;
+use super::headers::UlpMetaModify;
 use super::ip4::Ipv4Meta;
 use super::ip6::Ipv6Meta;
-use super::packet::{
-    BodyTransform, BodyTransformError, InnerFlowId, Packet, PacketMeta, Parsed,
-};
+use super::packet::BodyTransform;
+use super::packet::BodyTransformError;
+use super::packet::InnerFlowId;
+use super::packet::Packet;
+use super::packet::PacketMeta;
+use super::packet::Parsed;
 use super::port::meta::ActionMeta;
-use super::rule::{
-    ActionDesc, AllowOrDeny, DataPredicate, FiniteResource, GenBtError,
-    GenDescError, GenDescResult, HdrTransform, Predicate, Resource,
-    ResourceEntry, ResourceError, StatefulAction,
-};
-use crate::ddi::sync::{KMutex, KMutexType};
-use core::fmt::{self, Display};
+use super::rule::ActionDesc;
+use super::rule::AllowOrDeny;
+use super::rule::DataPredicate;
+use super::rule::FiniteResource;
+use super::rule::GenBtError;
+use super::rule::GenDescError;
+use super::rule::GenDescResult;
+use super::rule::HdrTransform;
+use super::rule::Predicate;
+use super::rule::Resource;
+use super::rule::ResourceEntry;
+use super::rule::ResourceError;
+use super::rule::StatefulAction;
+use crate::ddi::sync::KMutex;
+use crate::ddi::sync::KMutexType;
+use core::fmt;
+use core::fmt::Display;
 use core::ops::RangeInclusive;
-use opte_api::{Direction, IpAddr, Ipv4Addr, Ipv6Addr, MacAddr, Protocol};
-use smoltcp::wire::{Icmpv4Message, Icmpv4Packet};
+use opte_api::Direction;
+use opte_api::IpAddr;
+use opte_api::Ipv4Addr;
+use opte_api::Ipv6Addr;
+use opte_api::MacAddr;
+use opte_api::Protocol;
+use smoltcp::wire::Icmpv4Message;
+use smoltcp::wire::Icmpv4Packet;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -558,7 +579,8 @@ impl BodyTransform for SNatIcmpEchoBt {
         dir: Direction,
         body: &mut [&mut [u8]],
     ) -> Result<(), BodyTransformError> {
-        use Icmpv4Message::{EchoReply, EchoRequest};
+        use Icmpv4Message::EchoReply;
+        use Icmpv4Message::EchoRequest;
 
         let mut icmp = Icmpv4Packet::new_checked(&mut *body[0])?;
 
@@ -621,11 +643,16 @@ mod test {
     #[test]
     fn snat4_desc_lifecycle() {
         use crate::engine::checksum::HeaderChecksum;
-        use crate::engine::ether::{EtherHdr, EtherType};
-        use crate::engine::headers::{IpMeta, UlpMeta};
-        use crate::engine::ip4::{Ipv4Hdr, Protocol, UlpCsumOpt};
+        use crate::engine::ether::EtherHdr;
+        use crate::engine::ether::EtherType;
+        use crate::engine::headers::IpMeta;
+        use crate::engine::headers::UlpMeta;
+        use crate::engine::ip4::Ipv4Hdr;
+        use crate::engine::ip4::Protocol;
+        use crate::engine::ip4::UlpCsumOpt;
         use crate::engine::tcp::TcpHdr;
-        use opte_api::{Ipv4Addr, MacAddr};
+        use opte_api::Ipv4Addr;
+        use opte_api::MacAddr;
 
         let priv_mac = MacAddr::from([0x02, 0x08, 0x20, 0xd8, 0x35, 0xcf]);
         let dest_mac = MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);

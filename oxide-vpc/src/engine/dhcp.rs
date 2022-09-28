@@ -25,14 +25,19 @@ cfg_if! {
 }
 
 use crate::api::VpcCfg;
-use opte::api::{
-    DhcpAction, DhcpReplyType, Direction, Ipv4Addr, Ipv4PrefixLen, OpteError,
-    SubnetRouterPair,
-};
+use opte::api::DhcpAction;
+use opte::api::DhcpReplyType;
+use opte::api::Direction;
+use opte::api::Ipv4Addr;
+use opte::api::Ipv4PrefixLen;
+use opte::api::OpteError;
+use opte::api::SubnetRouterPair;
 use opte::engine::ip4::Ipv4Cidr;
 use opte::engine::layer::Layer;
-use opte::engine::port::{PortBuilder, Pos};
-use opte::engine::rule::{Action, Rule};
+use opte::engine::port::PortBuilder;
+use opte::engine::port::Pos;
+use opte::engine::rule::Action;
+use opte::engine::rule::Rule;
 
 pub fn setup(
     pb: &mut PortBuilder,

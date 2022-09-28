@@ -5,19 +5,25 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::checksum::Checksum;
-use super::headers::{
-    Header, HeaderAction, HeaderActionModify, IpMeta, IpMetaOpt,
-    ModifyActionArg, PushActionArg,
-};
+use super::headers::Header;
+use super::headers::HeaderAction;
+use super::headers::HeaderActionModify;
+use super::headers::IpMeta;
+use super::headers::IpMetaOpt;
+use super::headers::ModifyActionArg;
+use super::headers::PushActionArg;
 use super::ip4::Protocol;
-use super::packet::{PacketRead, ReadErr};
+use super::packet::PacketRead;
+use super::packet::ReadErr;
 use crate::engine::rule::MatchExact;
 use crate::engine::rule::MatchExactVal;
 use crate::engine::rule::MatchPrefix;
 use crate::engine::rule::MatchPrefixVal;
 use core::convert::TryFrom;
-pub use opte_api::{Ipv6Addr, Ipv6Cidr};
-use serde::{Deserialize, Serialize};
+pub use opte_api::Ipv6Addr;
+pub use opte_api::Ipv6Cidr;
+use serde::Deserialize;
+use serde::Serialize;
 use smoltcp::wire::IpProtocol;
 use smoltcp::wire::Ipv6FragmentHeader;
 use smoltcp::wire::Ipv6HopByHopHeader;

@@ -6,7 +6,12 @@
 
 // stuff we need from dld
 
-use illumos_sys_hdrs::{c_int, c_uint, c_void, cred_t, intptr_t, size_t};
+use illumos_sys_hdrs::c_int;
+use illumos_sys_hdrs::c_uint;
+use illumos_sys_hdrs::c_void;
+use illumos_sys_hdrs::cred_t;
+use illumos_sys_hdrs::intptr_t;
+use illumos_sys_hdrs::size_t;
 
 pub const XDE_IOC: u16 = 0xde00;
 

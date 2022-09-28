@@ -16,7 +16,8 @@
 //! * Add hardware offload information to [`Packet`].
 //!
 use core::convert::TryInto;
-use core::fmt::{self, Display};
+use core::fmt;
+use core::fmt::Display;
 use core::ptr;
 use core::result;
 use core::slice;
@@ -35,22 +36,51 @@ cfg_if! {
     }
 }
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use super::arp::{ArpHdr, ArpHdrError, ArpMeta, ARP_HDR_SZ};
-use super::checksum::{Checksum, HeaderChecksum};
-use super::ether::{EtherHdr, EtherHdrError, EtherMeta, EtherType};
-use super::geneve::{GeneveHdr, GeneveHdrError, GeneveMeta};
-use super::headers::{Header, IpAddr, IpHdr, IpMeta, UlpHdr, UlpMeta};
-use super::ip4::{Ipv4Addr, Ipv4Hdr, Ipv4HdrError, Ipv4Meta, Protocol};
-use super::ip6::{Ipv6Hdr, Ipv6HdrError, Ipv6Meta};
+use super::arp::ArpHdr;
+use super::arp::ArpHdrError;
+use super::arp::ArpMeta;
+use super::arp::ARP_HDR_SZ;
+use super::checksum::Checksum;
+use super::checksum::HeaderChecksum;
+use super::ether::EtherHdr;
+use super::ether::EtherHdrError;
+use super::ether::EtherMeta;
+use super::ether::EtherType;
+use super::geneve::GeneveHdr;
+use super::geneve::GeneveHdrError;
+use super::geneve::GeneveMeta;
+use super::headers::Header;
+use super::headers::IpAddr;
+use super::headers::IpHdr;
+use super::headers::IpMeta;
+use super::headers::UlpHdr;
+use super::headers::UlpMeta;
+use super::ip4::Ipv4Addr;
+use super::ip4::Ipv4Hdr;
+use super::ip4::Ipv4HdrError;
+use super::ip4::Ipv4Meta;
+use super::ip4::Protocol;
+use super::ip6::Ipv6Hdr;
+use super::ip6::Ipv6HdrError;
+use super::ip6::Ipv6Meta;
 // TODO should probably move these two into this module now.
-use super::rule::{HdrTransform, HdrTransformError};
-use super::tcp::{TcpHdr, TcpHdrError, TcpMeta};
-use super::udp::{UdpHdr, UdpHdrError, UdpMeta};
+use super::rule::HdrTransform;
+use super::rule::HdrTransformError;
+use super::tcp::TcpHdr;
+use super::tcp::TcpHdrError;
+use super::tcp::TcpMeta;
+use super::udp::UdpHdr;
+use super::udp::UdpHdrError;
+use super::udp::UdpMeta;
 use super::Direction;
 
-use illumos_sys_hdrs::{c_uchar, dblk_t, mblk_t, uintptr_t};
+use illumos_sys_hdrs::c_uchar;
+use illumos_sys_hdrs::dblk_t;
+use illumos_sys_hdrs::mblk_t;
+use illumos_sys_hdrs::uintptr_t;
 
 pub static MBLK_MAX_SIZE: usize = u16::MAX as usize;
 
@@ -2631,7 +2661,8 @@ fn mock_freeb(mp: *mut mblk_t) {
 mod test {
     use super::*;
     use crate::engine::ether::ETHER_TYPE_IPV4;
-    use crate::engine::tcp::{TcpFlags, TCP_HDR_SZ};
+    use crate::engine::tcp::TcpFlags;
+    use crate::engine::tcp::TCP_HDR_SZ;
 
     const SRC_MAC: [u8; 6] = [0xa8, 0x40, 0x25, 0x00, 0x00, 0x63];
     const DST_MAC: [u8; 6] = [0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d];

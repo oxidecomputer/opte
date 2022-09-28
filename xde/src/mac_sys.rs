@@ -6,10 +6,17 @@
 
 // stuff we need from mac
 
-use illumos_sys_hdrs::{
-    boolean_t, c_char, c_int, c_uint, c_void, dev_info, dev_ops, mblk_t,
-    queue_t, size_t, uintptr_t,
-};
+use illumos_sys_hdrs::boolean_t;
+use illumos_sys_hdrs::c_char;
+use illumos_sys_hdrs::c_int;
+use illumos_sys_hdrs::c_uint;
+use illumos_sys_hdrs::c_void;
+use illumos_sys_hdrs::dev_info;
+use illumos_sys_hdrs::dev_ops;
+use illumos_sys_hdrs::mblk_t;
+use illumos_sys_hdrs::queue_t;
+use illumos_sys_hdrs::size_t;
+use illumos_sys_hdrs::uintptr_t;
 
 pub const MAC_DROP_ON_NO_DESC: u16 = 0x01;
 pub const MAC_TX_NO_ENQUEUE: u16 = 0x02;

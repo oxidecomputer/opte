@@ -4,18 +4,26 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use opte::api::CmdOk;
+use opte::api::NoResp;
+use opte::api::OpteCmd;
+use opte::api::OpteCmdIoctl;
 pub use opte::api::OpteError;
-use opte::api::{
-    CmdOk, NoResp, OpteCmd, OpteCmdIoctl, SetXdeUnderlayReq, API_VERSION,
-    XDE_DLD_OPTE_CMD,
-};
-use oxide_vpc::api::{
-    AddRouterEntryReq, CreateXdeReq, DeleteXdeReq, ListPortsReq, ListPortsResp,
-    SetFwRulesReq, SetVirt2PhysReq, VpcCfg,
-};
+use opte::api::SetXdeUnderlayReq;
+use opte::api::API_VERSION;
+use opte::api::XDE_DLD_OPTE_CMD;
+use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::CreateXdeReq;
+use oxide_vpc::api::DeleteXdeReq;
+use oxide_vpc::api::ListPortsReq;
+use oxide_vpc::api::ListPortsResp;
+use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::VpcCfg;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
 use thiserror::Error;
 

@@ -7,28 +7,46 @@
 /// A virtual switch port.
 use self::meta::ActionMeta;
 use super::ether::EtherAddr;
-use super::flow_table::{FlowTable, StateSummary};
+use super::flow_table::FlowTable;
+use super::flow_table::StateSummary;
 use super::ioctl;
-use super::layer::{Layer, LayerError, LayerResult, RuleId};
-use super::packet::{
-    BodyTransform, BodyTransformError, Initialized, InnerFlowId, Packet,
-    PacketMeta, Parsed, FLOW_ID_DEFAULT,
-};
-use super::rule::{
-    ht_probe, Action, Finalized, HdrTransform, HdrTransformError, Rule,
-};
+use super::layer::Layer;
+use super::layer::LayerError;
+use super::layer::LayerResult;
+use super::layer::RuleId;
+use super::packet::BodyTransform;
+use super::packet::BodyTransformError;
+use super::packet::Initialized;
+use super::packet::InnerFlowId;
+use super::packet::Packet;
+use super::packet::PacketMeta;
+use super::packet::Parsed;
+use super::packet::FLOW_ID_DEFAULT;
+use super::rule::ht_probe;
+use super::rule::Action;
+use super::rule::Finalized;
+use super::rule::HdrTransform;
+use super::rule::HdrTransformError;
+use super::rule::Rule;
 use super::tcp::TcpState;
 use super::tcp_state::TcpFlowState;
-use crate::ddi::kstat::{self, KStatNamed, KStatProvider, KStatU64};
-use crate::ddi::sync::{KMutex, KMutexType};
+use crate::ddi::kstat;
+use crate::ddi::kstat::KStatNamed;
+use crate::ddi::kstat::KStatProvider;
+use crate::ddi::kstat::KStatU64;
+use crate::ddi::sync::KMutex;
+use crate::ddi::sync::KMutexType;
 use crate::ddi::time::Moment;
 use crate::ExecCtx;
-use core::fmt::{self, Display};
+use core::fmt;
+use core::fmt::Display;
 use core::num::NonZeroU32;
 use core::result;
-use core::sync::atomic::{AtomicU64, Ordering::SeqCst};
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering::SeqCst;
 use kstat_macro::KStatProvider;
-use opte_api::{Direction, OpteError};
+use opte_api::Direction;
+use opte_api::OpteError;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

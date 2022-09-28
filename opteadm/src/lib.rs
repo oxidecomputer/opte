@@ -7,17 +7,27 @@
 //! OPTE driver administration library
 // Copyright 2021 Oxide Computer Company
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
 
-use opte::api::{NoResp, OpteCmd, SetXdeUnderlayReq};
+use opte::api::NoResp;
+use opte::api::OpteCmd;
+use opte::api::SetXdeUnderlayReq;
 use opte::engine::ioctl::{self as api};
-use opte_ioctl::{run_cmd_ioctl, Error};
-use oxide_vpc::api::{
-    AddFwRuleReq, AddRouterEntryReq, CreateXdeReq, DeleteXdeReq, FirewallRule,
-    ListPortsReq, ListPortsResp, RemFwRuleReq, SetFwRulesReq, SetVirt2PhysReq,
-    VpcCfg,
-};
+use opte_ioctl::run_cmd_ioctl;
+use opte_ioctl::Error;
+use oxide_vpc::api::AddFwRuleReq;
+use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::CreateXdeReq;
+use oxide_vpc::api::DeleteXdeReq;
+use oxide_vpc::api::FirewallRule;
+use oxide_vpc::api::ListPortsReq;
+use oxide_vpc::api::ListPortsResp;
+use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::overlay;
 
 /// The handle used to send administration commands to the OPTE

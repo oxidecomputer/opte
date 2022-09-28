@@ -14,12 +14,21 @@
 // - ddm integration to choose correct underlay device (currently just using
 //   first device)
 
+use crate::dld;
+use crate::dls;
 use crate::ioctl::IoctlEnvelope;
-use crate::mac::{self, MacClient, MacOpenFlags, MacTxFlags};
-use crate::{dld, dls, ip, secpolicy, sys, warn};
+use crate::ip;
+use crate::mac;
+use crate::mac::MacClient;
+use crate::mac::MacOpenFlags;
+use crate::mac::MacTxFlags;
+use crate::secpolicy;
+use crate::sys;
+use crate::warn;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
-use alloc::string::{String, ToString};
+use alloc::string::String;
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::convert::TryInto;
@@ -28,31 +37,58 @@ use core::num::NonZeroU32;
 use core::ptr;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
-use opte::api::{
-    CmdOk, Direction, MacAddr, NoResp, OpteCmd, OpteCmdIoctl, OpteError,
-    SetXdeUnderlayReq,
-};
-use opte::ddi::sync::{KMutex, KMutexType, KRwLock, KRwLockType};
-use opte::ddi::time::{Interval, Moment, Periodic};
+use opte::api::CmdOk;
+use opte::api::Direction;
+use opte::api::MacAddr;
+use opte::api::NoResp;
+use opte::api::OpteCmd;
+use opte::api::OpteCmdIoctl;
+use opte::api::OpteError;
+use opte::api::SetXdeUnderlayReq;
+use opte::ddi::sync::KMutex;
+use opte::ddi::sync::KMutexType;
+use opte::ddi::sync::KRwLock;
+use opte::ddi::sync::KRwLockType;
+use opte::ddi::time::Interval;
+use opte::ddi::time::Moment;
+use opte::ddi::time::Periodic;
 use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
-use opte::engine::packet::{
-    Initialized, Packet, PacketRead, PacketReader, ParseError, Parsed,
-};
+use opte::engine::packet::Initialized;
+use opte::engine::packet::Packet;
+use opte::engine::packet::PacketRead;
+use opte::engine::packet::PacketReader;
+use opte::engine::packet::ParseError;
+use opte::engine::packet::Parsed;
 use opte::engine::port::meta::ActionMeta;
-use opte::engine::port::{Port, PortBuilder, ProcessResult};
+use opte::engine::port::Port;
+use opte::engine::port::PortBuilder;
+use opte::engine::port::ProcessResult;
 use opte::ExecCtx;
-use oxide_vpc::api::{
-    AddFwRuleReq, AddRouterEntryReq, CreateXdeReq, DeleteXdeReq, IpCfg,
-    ListPortsReq, ListPortsResp, PhysNet, PortInfo, RemFwRuleReq,
-    SetFwRulesReq, SetVirt2PhysReq, VpcCfg,
-};
-use oxide_vpc::engine::{
-    arp, dhcp, firewall, icmp, icmpv6, nat, overlay, router,
-};
+use oxide_vpc::api::AddFwRuleReq;
+use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::CreateXdeReq;
+use oxide_vpc::api::DeleteXdeReq;
+use oxide_vpc::api::IpCfg;
+use oxide_vpc::api::ListPortsReq;
+use oxide_vpc::api::ListPortsResp;
+use oxide_vpc::api::PhysNet;
+use oxide_vpc::api::PortInfo;
+use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::VpcCfg;
+use oxide_vpc::engine::arp;
+use oxide_vpc::engine::dhcp;
+use oxide_vpc::engine::firewall;
+use oxide_vpc::engine::icmp;
+use oxide_vpc::engine::icmpv6;
+use oxide_vpc::engine::nat;
+use oxide_vpc::engine::overlay;
+use oxide_vpc::engine::router;
 
 // Entry limits for the varous flow tables.
 //

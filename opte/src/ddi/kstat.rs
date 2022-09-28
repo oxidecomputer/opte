@@ -7,7 +7,8 @@
 //! Export Rust structs as illumos kstats.
 //!
 //! See `kstat_create(9F)`.
-use core::fmt::{self, Display};
+use core::fmt;
+use core::fmt::Display;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

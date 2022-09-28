@@ -8,7 +8,8 @@
 //!
 //! TODO: This should be in its own crate, wrapping the illumos-ddi-dki
 //! crate. But for now just let it live here.
-use core::ops::{Deref, DerefMut};
+use core::ops::Deref;
+use core::ops::DerefMut;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

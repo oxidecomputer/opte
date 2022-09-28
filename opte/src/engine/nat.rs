@@ -7,15 +7,22 @@
 use super::ether::EtherMeta;
 use super::ip4::Ipv4Meta;
 use super::ip6::Ipv6Meta;
-use super::packet::{InnerFlowId, Packet, Parsed};
+use super::packet::InnerFlowId;
+use super::packet::Packet;
+use super::packet::Parsed;
 use super::port::meta::ActionMeta;
-use super::rule::{
-    self, ActionDesc, AllowOrDeny, DataPredicate, HdrTransform, Predicate,
-    StatefulAction,
-};
+use super::rule;
+use super::rule::ActionDesc;
+use super::rule::AllowOrDeny;
+use super::rule::DataPredicate;
+use super::rule::HdrTransform;
+use super::rule::Predicate;
+use super::rule::StatefulAction;
 use crate::engine::snat::ConcreteIpAddr;
 use core::fmt;
-use opte_api::{Direction, IpAddr, MacAddr};
+use opte_api::Direction;
+use opte_api::IpAddr;
+use opte_api::MacAddr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -158,9 +165,13 @@ mod test {
     #[test]
     fn nat4_rewrite() {
         use crate::engine::checksum::HeaderChecksum;
-        use crate::engine::ether::{EtherHdr, EtherType};
-        use crate::engine::headers::{IpMeta, UlpMeta};
-        use crate::engine::ip4::{Ipv4Hdr, Protocol, UlpCsumOpt};
+        use crate::engine::ether::EtherHdr;
+        use crate::engine::ether::EtherType;
+        use crate::engine::headers::IpMeta;
+        use crate::engine::headers::UlpMeta;
+        use crate::engine::ip4::Ipv4Hdr;
+        use crate::engine::ip4::Protocol;
+        use crate::engine::ip4::UlpCsumOpt;
         use crate::engine::tcp::TcpHdr;
         use opte_api::MacAddr;
 

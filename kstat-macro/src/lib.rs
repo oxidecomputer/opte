@@ -5,10 +5,14 @@
 // Copyright 2022 Oxide Computer Company
 
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
-use syn::{
-    parse_macro_input, DeriveInput, Field, FieldsNamed, FieldsUnnamed, Ident,
-};
+use quote::format_ident;
+use quote::quote;
+use syn::parse_macro_input;
+use syn::DeriveInput;
+use syn::Field;
+use syn::FieldsNamed;
+use syn::FieldsUnnamed;
+use syn::Ident;
 
 /// Generate a [`opte::ddi::kstat::KStatProvider`] implementation
 /// given a struct of named fields of type

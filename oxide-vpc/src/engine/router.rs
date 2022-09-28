@@ -23,19 +23,33 @@ cfg_if! {
 }
 
 use super::firewall as fw;
-use crate::api::{DelRouterEntryResp, RouterTarget, VpcCfg};
-use opte::api::{
-    Direction, Ipv4Addr, Ipv4Cidr, Ipv6Addr, Ipv6Cidr, NoResp, OpteError,
-};
-use opte::engine::headers::{IpAddr, IpCidr};
+use crate::api::DelRouterEntryResp;
+use crate::api::RouterTarget;
+use crate::api::VpcCfg;
+use opte::api::Direction;
+use opte::api::Ipv4Addr;
+use opte::api::Ipv4Cidr;
+use opte::api::Ipv6Addr;
+use opte::api::Ipv6Cidr;
+use opte::api::NoResp;
+use opte::api::OpteError;
+use opte::engine::headers::IpAddr;
+use opte::engine::headers::IpCidr;
 use opte::engine::layer::Layer;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::port::meta::{ActionMeta, ActionMetaValue};
-use opte::engine::port::{Port, PortBuilder, Pos};
-use opte::engine::rule::{
-    self, Action, AllowOrDeny, Finalized, MetaAction, ModMetaResult, Predicate,
-    Rule,
-};
+use opte::engine::port::meta::ActionMeta;
+use opte::engine::port::meta::ActionMetaValue;
+use opte::engine::port::Port;
+use opte::engine::port::PortBuilder;
+use opte::engine::port::Pos;
+use opte::engine::rule;
+use opte::engine::rule::Action;
+use opte::engine::rule::AllowOrDeny;
+use opte::engine::rule::Finalized;
+use opte::engine::rule::MetaAction;
+use opte::engine::rule::ModMetaResult;
+use opte::engine::rule::Predicate;
+use opte::engine::rule::Rule;
 
 pub const ROUTER_LAYER_NAME: &'static str = "router";
 

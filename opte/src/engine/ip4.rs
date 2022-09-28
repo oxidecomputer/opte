@@ -5,25 +5,42 @@
 // Copyright 2022 Oxide Computer Company
 
 use core::convert::TryFrom;
-use core::fmt::{self, Debug, Display};
+use core::fmt;
+use core::fmt::Debug;
+use core::fmt::Display;
 use core::mem;
 use core::num::ParseIntError;
 use core::result;
 // A fixed-size Vec.
 use heapless::Vec as FVec;
-use serde::{Deserialize, Serialize};
-use zerocopy::{AsBytes, FromBytes, LayoutVerified, Unaligned};
+use serde::Deserialize;
+use serde::Serialize;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
+use zerocopy::LayoutVerified;
+use zerocopy::Unaligned;
 
-use super::checksum::{Checksum, HeaderChecksum};
-use super::headers::{
-    Header, HeaderAction, HeaderActionModify, IpMeta, IpMetaOpt,
-    ModifyActionArg, RawHeader,
-};
-use super::packet::{PacketRead, ReadErr, WriteError};
-use super::rule::{
-    MatchExact, MatchExactVal, MatchPrefix, MatchPrefixVal, MatchRangeVal,
-};
-pub use opte_api::{Ipv4Addr, Ipv4Cidr, Ipv4PrefixLen, Protocol};
+use super::checksum::Checksum;
+use super::checksum::HeaderChecksum;
+use super::headers::Header;
+use super::headers::HeaderAction;
+use super::headers::HeaderActionModify;
+use super::headers::IpMeta;
+use super::headers::IpMetaOpt;
+use super::headers::ModifyActionArg;
+use super::headers::RawHeader;
+use super::packet::PacketRead;
+use super::packet::ReadErr;
+use super::packet::WriteError;
+use super::rule::MatchExact;
+use super::rule::MatchExactVal;
+use super::rule::MatchPrefix;
+use super::rule::MatchPrefixVal;
+use super::rule::MatchRangeVal;
+pub use opte_api::Ipv4Addr;
+pub use opte_api::Ipv4Cidr;
+pub use opte_api::Ipv4PrefixLen;
+pub use opte_api::Protocol;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

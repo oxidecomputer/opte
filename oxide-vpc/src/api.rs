@@ -4,12 +4,14 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use core::fmt::{self, Display};
+use core::fmt;
+use core::fmt::Display;
 use core::result;
 use core::str::FromStr;
 use illumos_sys_hdrs::datalink_id_t;
 pub use opte::api::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {

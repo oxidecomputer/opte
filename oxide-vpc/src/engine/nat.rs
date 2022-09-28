@@ -14,20 +14,32 @@ cfg_if! {
     }
 }
 
-use super::router::{RouterTargetInternal, ROUTER_LAYER_NAME};
-use crate::api::{Ipv4Cfg, Ipv6Cfg, MacAddr, VpcCfg};
+use super::router::RouterTargetInternal;
+use super::router::ROUTER_LAYER_NAME;
+use crate::api::Ipv4Cfg;
+use crate::api::Ipv6Cfg;
+use crate::api::MacAddr;
+use crate::api::VpcCfg;
 use core::num::NonZeroU32;
 use core::result::Result;
-use opte::api::{Direction, OpteError};
-use opte::engine::ether::{ETHER_TYPE_IPV4, ETHER_TYPE_IPV6};
+use opte::api::Direction;
+use opte::api::OpteError;
+use opte::engine::ether::ETHER_TYPE_IPV4;
+use opte::engine::ether::ETHER_TYPE_IPV6;
 use opte::engine::layer::Layer;
 use opte::engine::nat::Nat;
 use opte::engine::port::meta::ActionMetaValue;
-use opte::engine::port::{PortBuilder, Pos};
-use opte::engine::rule::{
-    Action, EtherTypeMatch, Ipv4AddrMatch, Ipv6AddrMatch, Predicate, Rule,
-};
-use opte::engine::snat::{NatPool, SNat, SNat6};
+use opte::engine::port::PortBuilder;
+use opte::engine::port::Pos;
+use opte::engine::rule::Action;
+use opte::engine::rule::EtherTypeMatch;
+use opte::engine::rule::Ipv4AddrMatch;
+use opte::engine::rule::Ipv6AddrMatch;
+use opte::engine::rule::Predicate;
+use opte::engine::rule::Rule;
+use opte::engine::snat::NatPool;
+use opte::engine::snat::SNat;
+use opte::engine::snat::SNat6;
 
 pub const NAT_LAYER_NAME: &'static str = "nat";
 const ONE_TO_ONE_NAT_PRIORITY: u16 = 10;

@@ -13,20 +13,36 @@ use std::str::FromStr;
 
 use structopt::StructOpt;
 
-use opte::api::{
-    Direction, IpCidr, Ipv4Addr, Ipv4Cidr, Ipv6Addr, MacAddr, Vni,
-};
+use opte::api::Direction;
+use opte::api::IpCidr;
+use opte::api::Ipv4Addr;
+use opte::api::Ipv4Cidr;
+use opte::api::Ipv6Addr;
+use opte::api::MacAddr;
+use opte::api::Vni;
 use opte::engine::flow_table::FlowEntryDump;
 use opte::engine::ioctl as api;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::rule::RuleDump;
 use opteadm::OpteAdm;
-use oxide_vpc::api::{
-    Action as FirewallAction, AddRouterEntryReq, Address,
-    Filters as FirewallFilters, FirewallRule, GuestPhysAddr, PhysNet, PortInfo,
-    Ports, ProtoFilter, RemFwRuleReq, RouterTarget, SNat4Cfg, SetVirt2PhysReq,
-};
-use oxide_vpc::api::{BoundaryServices, IpCfg, Ipv4Cfg, VpcCfg};
+use oxide_vpc::api::Action as FirewallAction;
+use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::Address;
+use oxide_vpc::api::BoundaryServices;
+use oxide_vpc::api::Filters as FirewallFilters;
+use oxide_vpc::api::FirewallRule;
+use oxide_vpc::api::GuestPhysAddr;
+use oxide_vpc::api::IpCfg;
+use oxide_vpc::api::Ipv4Cfg;
+use oxide_vpc::api::PhysNet;
+use oxide_vpc::api::PortInfo;
+use oxide_vpc::api::Ports;
+use oxide_vpc::api::ProtoFilter;
+use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::RouterTarget;
+use oxide_vpc::api::SNat4Cfg;
+use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::overlay::DumpVirt2PhysResp;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)

@@ -5,10 +5,13 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::mac::MacAddr;
-use core::fmt::{self, Debug, Display};
+use core::fmt;
+use core::fmt::Debug;
+use core::fmt::Display;
 use core::result;
 use core::str::FromStr;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
