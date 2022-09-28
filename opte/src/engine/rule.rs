@@ -310,7 +310,7 @@ impl Display for PortMatch {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Predicate {
     InnerEtherType(Vec<EtherTypeMatch>),
     InnerEtherDst(Vec<EtherAddrMatch>),
@@ -1407,7 +1407,7 @@ impl fmt::Debug for Action {
 }
 
 // TODO Use const generics to make this array?
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RulePredicates {
     hdr_preds: Vec<Predicate>,
     data_preds: Vec<DataPredicate>,
@@ -1445,14 +1445,14 @@ impl Eq for RulePredicates {}
 
 pub trait RuleState {}
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Ready {
     hdr_preds: Vec<Predicate>,
     data_preds: Vec<DataPredicate>,
 }
 impl RuleState for Ready {}
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Finalized {
     preds: Option<RulePredicates>,
 }

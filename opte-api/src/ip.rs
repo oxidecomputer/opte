@@ -21,6 +21,9 @@ cfg_if! {
 }
 
 /// Generate an ICMPv6 Echo Reply message.
+///
+/// This maps an ICMPv6 Echo Request message from `src` to `dst` into an ICMPv6
+/// Echo Reply message from `dst` to `src`.
 #[derive(Debug, Clone, Copy)]
 pub struct Icmpv6EchoReply {
     /// The MAC address of the Echo Request source.
@@ -32,7 +35,7 @@ pub struct Icmpv6EchoReply {
     /// The MAC address of the Echo Request destination.
     pub dst_mac: MacAddr,
 
-    /// The IP address of the Echo source destination.
+    /// The IP address of the Echo Request destination.
     pub dst_ip: Ipv6Addr,
 }
 
@@ -481,7 +484,79 @@ pub struct Ipv6Addr {
 }
 
 impl Ipv6Addr {
+    /// The unspecified IPv6 address, i.e., `::` or all zeros.
     pub const ANY_ADDR: Self = Self { inner: [0; 16] };
+
+    /// The All-Routers multicast address, used in the Neighbor Discovery
+    /// Protocol.
+    pub const ALL_ROUTERS: Self =
+        Self::from_const([0xff02, 0, 0, 0, 0, 0, 0, 2]);
+
+    /// The All-Nodes multicast address, used in the Neighbor Discovery
+    /// Protocol.
+    pub const ALL_NODES: Self = Self::from_const([0xff02, 0, 0, 0, 0, 0, 0, 1]);
+
+    /// Generate an IPv6 address via an EUI-64 transform, from a MAC address.
+    /// The generated address has link-local scope.
+    ///
+    /// See https://www.rfc-editor.org/rfc/rfc4291#page-20 for details of the
+    /// transformation applied.
+    pub fn from_eui64(mac: &MacAddr) -> Self {
+        let mac = mac.bytes();
+        // Invert the locally-administered bit in the first octet of the MAC
+        let mac0 = mac[0] ^ 0b10;
+        let bytes: [u8; 16] = [
+            0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, mac0, mac[1],
+            mac[2], 0xff, 0xfe, mac[3], mac[4], mac[5],
+        ];
+        Self::from(bytes)
+    }
+
+    /// Return the multicast MAC address associated with this multicast IPv6
+    /// address. If the IPv6 address is not multicast, None will be returned.
+    ///
+    /// See https://www.rfc-editor.org/rfc/rfc2464, section 7 for details.
+    pub const fn multicast_mac(&self) -> Option<MacAddr> {
+        if self.is_multicast() {
+            Some(self.unchecked_multicast_mac())
+        } else {
+            None
+        }
+    }
+
+    /// Return the multicast MAC address associated with this multicast IPv6
+    /// address, without checking if this IP address is a multicast address.
+    ///
+    /// See https://www.rfc-editor.org/rfc/rfc2464, section 7 for details.
+    pub const fn unchecked_multicast_mac(&self) -> MacAddr {
+        let bytes = &self.inner;
+        MacAddr::from_const([
+            0x33, 0x33, bytes[12], bytes[13], bytes[14], bytes[15],
+        ])
+    }
+
+    /// Return the solicited-node multicast IPv6 address corresponding to
+    /// `self`.
+    ///
+    /// See https://www.rfc-editor.org/rfc/rfc4291#section-2.7.1 for details.
+    pub const fn solicited_node_multicast(&self) -> Ipv6Addr {
+        let bytes = &self.inner;
+        let w0 = u16::from_be_bytes([0xff, bytes[13]]);
+        let w1 = u16::from_be_bytes([bytes[14], bytes[15]]);
+        Self::from_const([0xff02, 0, 0, 0, 0, 1, w0, w1])
+    }
+
+    /// Return `true` if this is a solicited node multicast address.
+    pub fn is_solicited_node_multicast(&self) -> bool {
+        const EXPECTED: &[u8] =
+            &[0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0xff];
+        &self.inner[..EXPECTED.len()] == EXPECTED
+    }
+
+    /// Return `true` if this is a multicast IPv6 address, and `false` otherwise
+    pub const fn is_multicast(&self) -> bool {
+        self.inner[0] == 0xFF
+    }
 
     /// Return the bytes of the address.
     pub fn bytes(&self) -> [u8; 16] {
@@ -524,6 +599,23 @@ impl Ipv6Addr {
     pub fn safe_mask(self, mask: Ipv6PrefixLen) -> Self {
         self.mask(mask.val()).unwrap()
     }
+
+    pub const fn from_const(words: [u16; 8]) -> Self {
+        let w0 = words[0].to_be_bytes();
+        let w1 = words[1].to_be_bytes();
+        let w2 = words[2].to_be_bytes();
+        let w3 = words[3].to_be_bytes();
+        let w4 = words[4].to_be_bytes();
+        let w5 = words[5].to_be_bytes();
+        let w6 = words[6].to_be_bytes();
+        let w7 = words[7].to_be_bytes();
+        Self {
+            inner: [
+                w0[0], w0[1], w1[0], w1[1], w2[0], w2[1], w3[0], w3[1], w4[0],
+                w4[1], w5[0], w5[1], w6[0], w6[1], w7[0], w7[1],
+            ],
+        }
+    }
 }
 
 impl fmt::Display for Ipv6Addr {
@@ -546,6 +638,13 @@ impl From<smoltcp::wire::Ipv6Address> for Ipv6Addr {
         // octets in the correct order.
         let bytes: [u8; 16] = ip.as_bytes().try_into().unwrap();
         Self::from(bytes)
+    }
+}
+
+impl From<Ipv6Addr> for smoltcp::wire::Ipv6Address {
+    fn from(ip: Ipv6Addr) -> Self {
+        // Safety: This panics, but we know bytes is exactly 16 octets.
+        Self::from_bytes(&ip.bytes())
     }
 }
 
@@ -835,6 +934,12 @@ impl Ipv6PrefixLen {
 }
 
 impl Ipv6Cidr {
+    /// The IPv6 link-local prefix, `fe80::/64`.
+    pub const LINK_LOCAL: Self = Self {
+        ip: Ipv6Addr::from_const([0xfe80, 0, 0, 0, 0, 0, 0, 0]),
+        prefix_len: Ipv6PrefixLen(64),
+    };
+
     pub fn new(ip: Ipv6Addr, prefix_len: Ipv6PrefixLen) -> Self {
         let ip = ip.safe_mask(prefix_len);
         Ipv6Cidr { ip, prefix_len }
@@ -1074,5 +1179,50 @@ mod test {
             ),
             "fd00::1/64".parse().unwrap(),
         );
+    }
+
+    #[test]
+    fn test_ipv6_from_eui64() {
+        let mac = MacAddr::from_const([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+        let actual = Ipv6Addr::from_eui64(&mac);
+        // The locally-administered bit should be set, but otherwise the MAC is
+        // just transcribed.
+        assert_eq!(actual, "fe80::0302:03ff:fe04:0506".parse().unwrap());
+    }
+
+    #[test]
+    fn test_ipv6_from_const() {
+        assert_eq!(
+            Ipv6Addr {
+                inner: [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            },
+            Ipv6Addr::from_const([0xfe80, 0, 0, 0, 0, 0, 0, 0]),
+        );
+    }
+
+    fn to_ipv6(s: &str) -> Ipv6Addr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn test_ipv6_is_multicast() {
+        assert!(!to_ipv6("fd00::1").is_multicast());
+        assert!(to_ipv6("ff00::1").is_multicast());
+    }
+
+    #[test]
+    fn test_ipv6_multicast_mac() {
+        assert!(to_ipv6("fd00::1").multicast_mac().is_none());
+        assert_eq!(
+            to_ipv6("ff00::0001:0203").multicast_mac().unwrap(),
+            MacAddr::from([0x33, 0x33, 0, 1, 2, 3]),
+        );
+    }
+
+    #[test]
+    fn test_ipv6_solicited_node_multicast() {
+        let addr = to_ipv6("fd00:abcd:abcd:abcd:abcd:abcd:abcd:abcd");
+        let expected = to_ipv6("ff02::1:ffcd:abcd");
+        assert_eq!(addr.solicited_node_multicast(), expected);
     }
 }

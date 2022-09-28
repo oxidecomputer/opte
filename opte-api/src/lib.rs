@@ -34,12 +34,14 @@ pub mod cmd;
 pub mod encap;
 pub mod ip;
 pub mod mac;
+pub mod ndp;
 pub mod ulp;
 
 pub use cmd::*;
 pub use encap::*;
 pub use ip::*;
 pub use mac::*;
+pub use ndp::*;
 pub use ulp::*;
 
 /// The overall version of the API. Anytime an API is added, removed,
@@ -50,7 +52,7 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 12;
+pub const API_VERSION: u64 = 13;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Direction {
