@@ -355,12 +355,6 @@ pub struct DeleteXdeReq {
     pub xde_devname: String,
 }
 
-/// List existing xde ports.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ListPortsReq {
-    pub unused: (),
-}
-
 /// Information about a single existing xde port
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PortInfo {

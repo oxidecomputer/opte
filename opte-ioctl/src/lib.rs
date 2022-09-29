@@ -15,7 +15,6 @@ use opte::api::XDE_DLD_OPTE_CMD;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
-use oxide_vpc::api::ListPortsReq;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2PhysReq;
@@ -107,7 +106,7 @@ impl OpteHdl {
         let cmd = OpteCmd::CreateXde;
         let req = CreateXdeReq { xde_devname, linkid, cfg, passthrough };
 
-        let res = run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req);
+        let res = run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req));
 
         if res.is_err() {
             let _ = link::delete_link_id(linkid, libnet::LinkFlags::Active);
@@ -121,16 +120,14 @@ impl OpteHdl {
         let link_id = libnet::LinkHandle::Name(name.into()).id()?;
         let req = DeleteXdeReq { xde_devname: name.into() };
         let cmd = OpteCmd::DeleteXde;
-        let resp = run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)?;
+        let resp = run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))?;
         libnet::link::delete_link_id(link_id, libnet::LinkFlags::Active)?;
         Ok(resp)
     }
 
     /// List the extant OPTE ports.
     pub fn list_ports(&self) -> Result<ListPortsResp, Error> {
-        let req = ListPortsReq { unused: () };
-        let cmd = OpteCmd::ListPorts;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+        run_cmd_ioctl(self.device.as_raw_fd(), OpteCmd::ListPorts, None::<&()>)
     }
 
     /// Create a new handle to the OPTE control node.
@@ -142,7 +139,7 @@ impl OpteHdl {
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetVirt2Phys;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
     /// Set xde underlay devices.
@@ -153,7 +150,7 @@ impl OpteHdl {
     ) -> Result<NoResp, Error> {
         let req = SetXdeUnderlayReq { u1: u1.into(), u2: u2.into() };
         let cmd = OpteCmd::SetXdeUnderlay;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
     pub fn add_router_entry(
@@ -161,12 +158,12 @@ impl OpteHdl {
         req: &AddRouterEntryReq,
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::AddRouterEntry;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
     pub fn set_fw_rules(&self, req: &SetFwRulesReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetFwRules;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 }
 
@@ -174,14 +171,30 @@ impl OpteHdl {
 pub fn run_cmd_ioctl<T, R>(
     dev: libc::c_int,
     cmd: OpteCmd,
-    req: &R,
+    req: Option<&R>,
 ) -> Result<T, Error>
 where
     T: CmdOk + DeserializeOwned,
     R: Serialize,
 {
-    let req_bytes =
-        postcard::to_allocvec(req).map_err(|e| Error::ReqSer(cmd, e))?;
+    let (req_bytes_ptr, req_len) = match req {
+        Some(req) => {
+            let bytes = postcard::to_allocvec(req)
+                .map_err(|e| Error::ReqSer(cmd, e))?;
+            let len = bytes.len();
+            // This is here to catch the case where you, the
+            // developer, have accidentally used a ZST as a request
+            // type. I would have added a compile-time check but as
+            // far as I can tell there is no way to use size_of with a
+            // generic type. This check is sufficient, and is just a
+            // means to save you hours of heartache if you were to
+            // accidentally create a ZST request type.
+            assert!(len > 0, "cannot use ZST for request type");
+            (bytes.as_ptr(), len)
+        }
+
+        None => (core::ptr::null(), 0),
+    };
 
     // It would be a shame if the command failed and we didn't have
     // enough bytes to serialize the error response, so we set this to
@@ -192,8 +205,8 @@ where
         cmd,
         flags: 0,
         reserved1: 0,
-        req_bytes: req_bytes.as_ptr(),
-        req_len: req_bytes.len(),
+        req_bytes: req_bytes_ptr,
+        req_len,
         resp_bytes: resp_buf.as_mut_ptr(),
         resp_len: resp_buf.len(),
         resp_len_actual: 0,

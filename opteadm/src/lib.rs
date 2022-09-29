@@ -22,7 +22,6 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::FirewallRule;
-use oxide_vpc::api::ListPortsReq;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::SetFwRulesReq;
@@ -58,8 +57,7 @@ impl OpteAdm {
         let xde_devname = name.into();
         let cmd = OpteCmd::CreateXde;
         let req = CreateXdeReq { xde_devname, linkid, cfg, passthrough };
-
-        let res = run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req);
+        let res = run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req));
 
         if res.is_err() {
             let _ = link::delete_link_id(linkid, libnet::LinkFlags::Active);
@@ -73,7 +71,7 @@ impl OpteAdm {
         let link_id = libnet::LinkHandle::Name(name.into()).id()?;
         let req = DeleteXdeReq { xde_devname: name.into() };
         let cmd = OpteCmd::DeleteXde;
-        let resp = run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)?;
+        let resp = run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))?;
         libnet::link::delete_link_id(link_id, libnet::LinkFlags::Active)?;
         Ok(resp)
     }
@@ -86,7 +84,7 @@ impl OpteAdm {
     ) -> Result<NoResp, Error> {
         let req = SetXdeUnderlayReq { u1: u1.into(), u2: u2.into() };
         let cmd = OpteCmd::SetXdeUnderlay;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
     /// Add a firewall rule
@@ -100,7 +98,7 @@ impl OpteAdm {
             port_name: port_name.to_string(),
             rule: rule.clone(),
         };
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
     pub fn set_firewall_rules(
@@ -111,7 +109,7 @@ impl OpteAdm {
         let cmd = OpteCmd::SetFwRules;
         let req =
             SetFwRulesReq { port_name: port_name.to_string(), rules: rules };
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
     /// Return the contents of an OPTE layer.
@@ -125,21 +123,12 @@ impl OpteAdm {
             port_name: port_name.to_string(),
             name: name.to_string(),
         };
-        run_cmd_ioctl::<api::DumpLayerResp, _>(
-            self.device.as_raw_fd(),
-            cmd,
-            &req,
-        )
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
     /// List all the ports.
     pub fn list_ports(&self) -> Result<ListPortsResp, Error> {
-        let cmd = OpteCmd::ListPorts;
-        run_cmd_ioctl::<ListPortsResp, _>(
-            self.device.as_raw_fd(),
-            cmd,
-            &ListPortsReq { unused: () },
-        )
+        run_cmd_ioctl(self.device.as_raw_fd(), OpteCmd::ListPorts, None::<&()>)
     }
 
     pub fn list_layers(
@@ -150,7 +139,7 @@ impl OpteAdm {
         run_cmd_ioctl::<api::ListLayersResp, _>(
             self.device.as_raw_fd(),
             cmd,
-            &api::ListLayersReq { port_name: port.to_string() },
+            Some(&api::ListLayersReq { port_name: port.to_string() }),
         )
     }
 
@@ -167,7 +156,7 @@ impl OpteAdm {
         req: &RemFwRuleReq,
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::RemFwRule;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, req)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(req))
     }
 
     /// Return the TCP flows.
@@ -179,7 +168,7 @@ impl OpteAdm {
         run_cmd_ioctl::<api::DumpTcpFlowsResp, _>(
             self.device.as_raw_fd(),
             cmd,
-            &api::DumpTcpFlowsReq { port_name: port_name.to_string() },
+            Some(&api::DumpTcpFlowsReq { port_name: port_name.to_string() }),
         )
     }
 
@@ -189,7 +178,7 @@ impl OpteAdm {
         run_cmd_ioctl(
             self.device.as_raw_fd(),
             cmd,
-            &api::ClearUftReq { port_name: port_name.to_string() },
+            Some(&api::ClearUftReq { port_name: port_name.to_string() }),
         )
     }
 
@@ -199,22 +188,22 @@ impl OpteAdm {
         run_cmd_ioctl::<api::DumpUftResp, _>(
             self.device.as_raw_fd(),
             cmd,
-            &api::DumpUftReq { port_name: port_name.to_string() },
+            Some(&api::DumpUftReq { port_name: port_name.to_string() }),
         )
     }
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetVirt2Phys;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
     /// Dump the Virtual-to-Physical mappings.
     pub fn dump_v2p(&self) -> Result<overlay::DumpVirt2PhysResp, Error> {
         let cmd = OpteCmd::DumpVirt2Phys;
-        run_cmd_ioctl::<overlay::DumpVirt2PhysResp, _>(
+        run_cmd_ioctl(
             self.device.as_raw_fd(),
             cmd,
-            &overlay::DumpVirt2PhysReq { unused: 99 },
+            Some(&overlay::DumpVirt2PhysReq { unused: 99 }),
         )
     }
 
@@ -223,6 +212,6 @@ impl OpteAdm {
         req: &AddRouterEntryReq,
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::AddRouterEntry;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, &req)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 }

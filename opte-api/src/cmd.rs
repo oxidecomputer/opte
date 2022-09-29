@@ -140,8 +140,14 @@ impl OpteCmdIoctl {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum OpteError {
-    BadApiVersion { user: u64, kernel: u64 },
-    BadLayerPos { layer: String, pos: String },
+    BadApiVersion {
+        user: u64,
+        kernel: u64,
+    },
+    BadLayerPos {
+        layer: String,
+        pos: String,
+    },
     BadName,
     BadState(String),
     CopyinReq,
@@ -149,18 +155,37 @@ pub enum OpteError {
     DeserCmdErr(String),
     DeserCmdReq(String),
     FlowExists(String),
-    InvalidRouterEntry { dest: IpCidr, target: String },
+    InvalidRouterEntry {
+        dest: IpCidr,
+        target: String,
+    },
     LayerNotFound(String),
-    MacExists { port: String, vni: Vni, mac: MacAddr },
+    MacExists {
+        port: String,
+        vni: Vni,
+        mac: MacAddr,
+    },
     MaxCapacity(u64),
+
+    /// The OpteCmdIoctl has `req_len == 0` but the specified `cmd`
+    /// types expects a request body. This can happen either by
+    /// developer error or a hand-rolled, negligent/malicious ioctl.
+    NoRequestBody,
+
     PortCreate(String),
     PortExists(String),
     PortNotFound(String),
-    RespTooLarge { needed: usize, given: usize },
+    RespTooLarge {
+        needed: usize,
+        given: usize,
+    },
     RuleNotFound(u64),
     SerCmdErr(String),
     SerCmdResp(String),
-    System { errno: c_int, msg: String },
+    System {
+        errno: c_int,
+        msg: String,
+    },
 }
 
 impl OpteError {
@@ -188,6 +213,7 @@ impl OpteError {
             Self::LayerNotFound(_) => ENOENT,
             Self::MacExists { .. } => EEXIST,
             Self::MaxCapacity(_) => ENFILE,
+            Self::NoRequestBody => EINVAL,
             Self::PortCreate(_) => EINVAL,
             Self::PortExists(_) => EEXIST,
             Self::PortNotFound(_) => ENOENT,

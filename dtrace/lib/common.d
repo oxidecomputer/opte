@@ -34,3 +34,15 @@ typedef struct ht_run_sdt_arg {
 	flow_id_sdt_arg_t	*flow_before;
 	flow_id_sdt_arg_t	*flow_after;
 } ht_run_sdt_arg_t;
+
+typedef struct opte_cmd_ioctl {
+	uint64_t		api_version;
+	int			cmd;
+	uint64_t		flags;
+	uint64_t		reserved;
+	char			*req_bytes;
+	size_t			req_len;
+	char			*resp_bytes;
+	size_t			resp_len;
+	size_t			resp_len_actual;
+} opte_cmd_ioctl_t;

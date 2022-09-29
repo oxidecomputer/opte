@@ -73,7 +73,6 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::IpCfg;
-use oxide_vpc::api::ListPortsReq;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
@@ -359,7 +358,9 @@ unsafe extern "C" fn xde_dld_ioc_opte_cmd(
 
     match env.ioctl_cmd() {
         OpteCmd::ListPorts => {
-            let resp = list_ports_hdlr(&mut env);
+            // The list-ports command has no request body, so there is
+            // no need to pass the envelope.
+            let resp = list_ports_hdlr();
             hdlr_resp(&mut env, resp)
         }
 
@@ -2269,12 +2270,8 @@ fn dump_tcp_flows_hdlr(
 }
 
 #[no_mangle]
-fn list_ports_hdlr(
-    env: &mut IoctlEnvelope,
-) -> Result<ListPortsResp, OpteError> {
-    let _req: ListPortsReq = env.copy_in_req()?;
+fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
     let mut resp = ListPortsResp { ports: vec![] };
-
     let devs = unsafe { xde_devs.read() };
     for dev in devs.iter() {
         resp.ports.push(PortInfo {

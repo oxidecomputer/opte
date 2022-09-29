@@ -69,10 +69,17 @@ impl<'a> IoctlEnvelope<'a> {
         Ok(Self { ioctl, mode })
     }
 
-    /// Given `self`, return the deserialized ioctl request.
+    /// Given `self`, return the deserialized ioctl request. If the
+    /// command has no request body, None is returned.
     pub fn copy_in_req<T: DeserializeOwned>(
         &mut self,
     ) -> result::Result<T, OpteError> {
+        // It's imperative that we only create a buffer and copy the
+        // request if and only if there is a request payload to copy.
+        if self.ioctl.req_len == 0 {
+            return Err(OpteError::NoRequestBody);
+        }
+
         // TODO place upper limit on req_len to prevent
         // malicious/malformed requests from allocating large amounts
         // of kmem.
