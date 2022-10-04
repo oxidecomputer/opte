@@ -3078,6 +3078,16 @@ fn test_reply_to_dhcpv6_solicit_or_reply() {
                     );
                 }
 
+                // In the case of Solicit + Rapid Commit, we are required to
+                // send the Rapid Commit option back in our reply.
+                if has_rapid_commit
+                    && msg_type == dhcpv6::protocol::MessageType::Solicit
+                {
+                    assert!(
+                        reply.has_option(dhcpv6::options::Code::RapidCommit)
+                    );
+                }
+
                 // Regardless of the message type, we are supposed to include
                 // answers for each Option the client requested (and that we
                 // support). That's mostly just the actual VPC-private IPv6 address.

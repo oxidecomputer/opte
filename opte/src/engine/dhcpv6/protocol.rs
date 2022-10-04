@@ -197,6 +197,9 @@ impl<'a> Message<'a> {
 
     /// Return the _first_ contained option of the provided type, or `None` if
     /// the message does not contain such an option.
+    ///
+    /// Note that this does not "recurse" into container options, such as the
+    /// Option Request option. It only finds options at the top-level.
     pub fn find_option(&self, code: OptionCode) -> Option<&Dhcpv6Option<'a>> {
         self.options.iter().find(|opt| opt.code() == code)
     }
@@ -207,6 +210,21 @@ impl<'a> Message<'a> {
         code: OptionCode,
     ) -> impl Iterator<Item = &Dhcpv6Option<'a>> {
         self.options.iter().filter(move |opt| opt.code() == code)
+    }
+
+    /// Return `true` if this contains the Rapid Commit option, either at the
+    /// top-level, or inside the Option Request container option.
+    pub fn has_rapid_commit(&self) -> bool {
+        // Look for top-level option.
+        self.has_option(OptionCode::RapidCommit) || {
+            if let Some(Dhcpv6Option::OptionRequest(opts)) =
+                self.find_option(OptionCode::OptionRequest)
+            {
+                opts.contains(OptionCode::RapidCommit)
+            } else {
+                false
+            }
+        }
     }
 
     fn option_len(&self) -> usize {
@@ -330,31 +348,70 @@ fn generate_reply_options<'a>(
     options
 }
 
-// Handle a Solicit or Request message.
+// Handle a Solicit message, possibly with the Rapid Commit option.
 //
 // This results in a Reply message or and Advertise, depending on the message
 // type and its options:
 //
-// - Solicit -> Reply
-// - Advertise + Rapid Commit -> Reply
+// - Solicit -> Advertise
+// - Solicit + Rapid Commit -> Reply
 //
 // A reply to be sent back to the client is returned in `Some(_)`. If the
 // message should be dropped, `None` is returned instead.
-fn process_solicit_or_request_message<'a>(
+fn process_solicit_message<'a>(
     action: &'a Dhcpv6Action,
     client_msg: &'a Message<'a>,
 ) -> Option<Message<'a>> {
-    // Solicit messages must not have a Server ID, while Request messages _must_
-    // have a Server ID that matches our own.
-    let maybe_server_id = client_msg.server_duid();
-    match (client_msg.typ, maybe_server_id) {
-        (MessageType::Solicit, Some(_)) => return None,
-        (MessageType::Request, None) => return None,
-        (MessageType::Request, Some(server_id))
-            if !server_id.is_duid_ll_mac(&action.server_mac) =>
-        {
-            return None
-        }
+    // Solicit messages must not have a Server ID.
+    if client_msg.has_option(OptionCode::ServerId) {
+        return None;
+    }
+
+    // Must include an Elapsed Time option.
+    if !client_msg.has_option(OptionCode::ElapsedTime) {
+        return None;
+    }
+
+    // Must have a Client ID option.
+    if !client_msg.has_option(OptionCode::ClientId) {
+        return None;
+    }
+
+    // Generate all the options we'll send back to the client.
+    let mut options = generate_reply_options(action, &client_msg);
+
+    // Set the message type.
+    //
+    // If the client sends a Solicit with Rapid Commit, we have to send back a
+    // Reply. Otherwise we send an Advertise message, but it still contains all
+    // the data we _would_ lease to the client.
+    //
+    // Note that if the message included the Rapid Commit option, we're also
+    // required to send that back to the client as well. See
+    // https://www.rfc-editor.org/rfc/rfc8415.html#section-21.14 for details.
+    let reply_type = if client_msg.has_rapid_commit() {
+        options.push(Dhcpv6Option::RapidCommit);
+        MessageType::Reply
+    } else {
+        MessageType::Advertise
+    };
+    Some(Message { typ: reply_type, xid: client_msg.xid.clone(), options })
+}
+
+// Handle a Request message.
+//
+// This always results in a Reply message.
+//
+// A reply to be sent back to the client is returned in `Some(_)`. If the
+// message should be dropped, `None` is returned instead.
+fn process_request_message<'a>(
+    action: &'a Dhcpv6Action,
+    client_msg: &'a Message<'a>,
+) -> Option<Message<'a>> {
+    // Request messages must contain a Server ID, that matches our own.
+    match client_msg.server_duid() {
+        None => return None,
+        Some(id) if !id.is_duid_ll_mac(&action.server_mac) => return None,
         _ => {}
     }
 
@@ -371,20 +428,8 @@ fn process_solicit_or_request_message<'a>(
     // Generate all the options we'll send back to the client.
     let options = generate_reply_options(action, &client_msg);
 
-    // Set the message type.
-    //
-    // If the client sends a Solicit with Rapid Commit, we have to send back a
-    // Reply. Otherwise we send an Advertise message, but it still contains all
-    // the data we _would_ lease to the client.
-    let reply_type = if client_msg.typ == MessageType::Request
-        || (client_msg.typ == MessageType::Solicit
-            && client_msg.has_option(OptionCode::RapidCommit))
-    {
-        MessageType::Reply
-    } else {
-        MessageType::Advertise
-    };
-    Some(Message { typ: reply_type, xid: client_msg.xid.clone(), options })
+    let typ = MessageType::Reply;
+    Some(Message { typ, xid: client_msg.xid.clone(), options })
 }
 
 // Return the server's DUID itself.
@@ -504,9 +549,8 @@ fn process_client_message<'a>(
     client_msg: &'a Message<'a>,
 ) -> Option<Message<'a>> {
     match client_msg.typ {
-        MessageType::Solicit | MessageType::Request => {
-            process_solicit_or_request_message(action, &client_msg)
-        }
+        MessageType::Solicit => process_solicit_message(action, &client_msg),
+        MessageType::Request => process_request_message(action, &client_msg),
         MessageType::Confirm => process_confirm_message(action, &client_msg),
         // TODO-completeness: Handle other message types.
         //
