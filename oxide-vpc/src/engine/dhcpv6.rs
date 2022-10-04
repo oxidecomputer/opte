@@ -59,7 +59,7 @@ fn drop_all_dhcpv6(
     // Predicates identifying any traffic destined for a DHCPv6 server.
     let predicates = vec![
         // Destined for the server multicast IP address.
-        Predicate::InnerSrcIp6(vec![
+        Predicate::InnerDstIp6(vec![
             Ipv6AddrMatch::Exact(ALL_RELAYS_AND_SERVERS),
             Ipv6AddrMatch::Exact(ALL_SERVERS),
         ]),
