@@ -68,7 +68,7 @@
 //! These are unique, opaque byte arrays that identify peers, both clients and
 //! servers. They are formed from information such as MAC addresses, timestamps,
 //! or UUIDs, though they're really just used for comparison, to uniquely ID a
-//! peer. This is the contents of a Client ID or Server ID option.
+//! peer. This is the content of a Client ID or Server ID option.
 
 pub mod options;
 pub mod protocol;

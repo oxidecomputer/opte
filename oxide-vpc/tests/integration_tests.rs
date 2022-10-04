@@ -2998,7 +2998,7 @@ fn verify_dhcpv6_essentials<'a>(
 // could use the data from more than one server to decide which one to actually
 // make a subsequent Request to.)
 #[test]
-fn test_reply_to_dhcpv6_solicit_or_reply() {
+fn test_reply_to_dhcpv6_solicit_or_request() {
     let g1_cfg = g1_cfg();
     let v2p = Arc::new(Virt2Phys::new());
     let mut ameta = ActionMeta::new();

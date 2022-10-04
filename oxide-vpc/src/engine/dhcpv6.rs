@@ -6,19 +6,29 @@
 
 //! Implements DHCPv6 as supported in the Oxide VPC environment.
 
+use crate::api::Ipv6Cfg;
 use crate::api::VpcCfg;
 use core::num::NonZeroU32;
 use opte::api::Direction;
 use opte::api::Ipv6Addr;
 use opte::api::OpteError;
+use opte::api::Protocol;
 use opte::engine::dhcpv6::AddressInfo;
 use opte::engine::dhcpv6::Dhcpv6Action;
 use opte::engine::dhcpv6::LeasedAddress;
+use opte::engine::dhcpv6::ALL_RELAYS_AND_SERVERS;
+use opte::engine::dhcpv6::ALL_SERVERS;
+use opte::engine::dhcpv6::CLIENT_PORT;
+use opte::engine::dhcpv6::SERVER_PORT;
 use opte::engine::layer::Layer;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::rule::Action;
 use opte::engine::rule::HairpinAction;
+use opte::engine::rule::IpProtoMatch;
+use opte::engine::rule::Ipv6AddrMatch;
+use opte::engine::rule::PortMatch;
+use opte::engine::rule::Predicate;
 use opte::engine::rule::Rule;
 
 cfg_if! {
@@ -34,13 +44,46 @@ pub fn setup(
     cfg: &VpcCfg,
     ft_limit: NonZeroU32,
 ) -> Result<(), OpteError> {
-    // This layer contains no actions if the client has not been configured with
-    // IPv6 support.
-    let ip_cfg = match cfg.ipv6_cfg() {
-        None => return Ok(()),
-        Some(c) => c,
-    };
+    match cfg.ipv6_cfg() {
+        None => drop_all_dhcpv6(pb, ft_limit),
+        Some(ip_cfg) => add_dhcpv6_rules(pb, cfg, ip_cfg, ft_limit),
+    }
+}
 
+const LAYER_NAME: &'static str = "dhcpv6";
+
+fn drop_all_dhcpv6(
+    pb: &mut PortBuilder,
+    ft_limit: NonZeroU32,
+) -> Result<(), OpteError> {
+    // Predicates identifying any traffic destined for a DHCPv6 server.
+    let predicates = vec![
+        // Destined for the server multicast IP address.
+        Predicate::InnerSrcIp6(vec![
+            Ipv6AddrMatch::Exact(ALL_RELAYS_AND_SERVERS),
+            Ipv6AddrMatch::Exact(ALL_SERVERS),
+        ]),
+        // DHCPv6 runs over UDP.
+        Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::UDP)]),
+        // From the client source port.
+        Predicate::InnerSrcPort(vec![PortMatch::Exact(CLIENT_PORT)]),
+        // To the server destination port.
+        Predicate::InnerDstPort(vec![PortMatch::Exact(SERVER_PORT)]),
+    ];
+    let mut rule = Rule::new(u16::MAX, Action::Deny);
+    rule.add_predicates(predicates);
+    let mut layer = Layer::new(LAYER_NAME, pb.name(), vec![], ft_limit);
+    layer.add_rule(Direction::In, rule.clone().finalize());
+    layer.add_rule(Direction::Out, rule.clone().finalize());
+    pb.add_layer(layer, Pos::Before("firewall"))
+}
+
+fn add_dhcpv6_rules(
+    pb: &mut PortBuilder,
+    cfg: &VpcCfg,
+    ip_cfg: &Ipv6Cfg,
+    ft_limit: NonZeroU32,
+) -> Result<(), OpteError> {
     // The main DHCPv6 server action, which currently just leases the
     // VPC-private IP addresses to the client.
     let addrs = AddressInfo {
@@ -67,7 +110,7 @@ pub fn setup(
     let is_dhcp = action.implicit_preds().0.clone();
 
     let server = Action::Hairpin(Arc::new(action));
-    let mut dhcp = Layer::new("dhcpv6", pb.name(), vec![server], ft_limit);
+    let mut dhcp = Layer::new(LAYER_NAME, pb.name(), vec![server], ft_limit);
     let rule = Rule::new(1, dhcp.action(0).unwrap().clone());
     dhcp.add_rule(Direction::Out, rule.finalize());
 

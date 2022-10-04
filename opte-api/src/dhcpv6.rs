@@ -87,7 +87,7 @@ impl LeasedAddress {
     ) -> Result<Self, String> {
         if valid < preferred {
             return Err(String::from(
-                "Preferred lifetime must be >= valid lifetime",
+                "Preferred lifetime must be <= valid lifetime",
             ));
         }
         Ok(Self { addr, preferred, valid })

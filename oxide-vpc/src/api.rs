@@ -102,6 +102,7 @@ pub struct Ipv6Cfg {
     /// networks, including other VPC guests as well as external networks and
     /// the internet. Essentially, this is the IPv6 address of OPTE itself,
     /// which is acting as the gateway to the guest.
+    //
     // TODO-remove: The current plan is to use only the link-local address for
     // OPTE as the virtual gateway, populated by NDP. Assuming we move forward
     // with that, this should be removed.

@@ -330,7 +330,8 @@ pub enum UlpCsumOpt {
     /// This is intended in situations in which computing the checksum of the
     /// body itself can be offloaded to hardware.
     Partial,
-    /// Compute the full checksum, including the pseudo-header and body.
+    /// Compute the full checksum, including the pseudo-header, ULP header and
+    /// the ULP body.
     Full,
 }
 
