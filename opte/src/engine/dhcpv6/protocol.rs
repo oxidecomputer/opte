@@ -215,15 +215,19 @@ impl<'a> Message<'a> {
     /// Return `true` if this contains the Rapid Commit option, either at the
     /// top-level, or inside the Option Request container option.
     pub fn has_rapid_commit(&self) -> bool {
-        // Look for top-level option.
-        self.has_option(OptionCode::RapidCommit) || {
-            if let Some(Dhcpv6Option::OptionRequest(opts)) =
-                self.find_option(OptionCode::OptionRequest)
-            {
-                opts.contains(OptionCode::RapidCommit)
-            } else {
-                false
-            }
+        // Look for top-level option first.
+        if self.has_option(OptionCode::RapidCommit) {
+            return true;
+        }
+
+        // Look for the Rapid Commit option contained in the Option Request
+        // option.
+        if let Some(Dhcpv6Option::OptionRequest(opts)) =
+            self.find_option(OptionCode::OptionRequest)
+        {
+            opts.contains(OptionCode::RapidCommit)
+        } else {
+            false
         }
     }
 
