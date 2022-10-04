@@ -322,8 +322,16 @@ macro_rules! assert_ip4 {
     };
 }
 
+/// Options for computing a ULP checksum.
+#[derive(Clone, Copy, Debug)]
 pub enum UlpCsumOpt {
+    /// Compute a partial checksum, using only the pseudo-header.
+    ///
+    /// This is intended in situations in which computing the checksum of the
+    /// body itself can be offloaded to hardware.
     Partial,
+    /// Compute the full checksum, including the pseudo-header, ULP header and
+    /// the ULP body.
     Full,
 }
 
@@ -335,10 +343,6 @@ impl Ipv4Hdr {
         let raw = Ipv4HdrRaw::from(self);
         bytes.extend_from_slice(raw.as_bytes());
         bytes
-    }
-
-    fn compute_pseudo_csum(&self) -> Checksum {
-        Checksum::compute(&self.pseudo_bytes())
     }
 
     pub fn compute_hdr_csum(&mut self) {
@@ -356,7 +360,7 @@ impl Ipv4Hdr {
         match opt {
             UlpCsumOpt::Partial => todo!("implement partial csum"),
             UlpCsumOpt::Full => {
-                let mut csum = self.compute_pseudo_csum();
+                let mut csum = self.pseudo_csum();
                 csum.add(ulp_hdr);
                 csum.add(body);
                 csum
@@ -417,8 +421,8 @@ impl Ipv4Hdr {
     /// Return the pseudo header bytes.
     pub fn pseudo_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(12);
-        bytes.extend_from_slice(&self.src.bytes());
-        bytes.extend_from_slice(&self.dst.bytes());
+        bytes.extend_from_slice(&self.src);
+        bytes.extend_from_slice(&self.dst);
         let len_bytes = (self.ulp_len() as u16).to_be_bytes();
         bytes.extend_from_slice(&[
             0u8,
@@ -457,16 +461,16 @@ impl Ipv4Hdr {
         // XXX Might be nice to have Checksum work on iterator of u8
         // instead, then we could chain slice iterators together.
         let mut old: FVec<u8, 10> = FVec::new();
-        old.extend_from_slice(&self.src.bytes()).unwrap();
-        old.extend_from_slice(&self.dst.bytes()).unwrap();
+        old.extend_from_slice(&self.src).unwrap();
+        old.extend_from_slice(&self.dst).unwrap();
         old.extend_from_slice(&[0, self.proto as u8]).unwrap();
         csum.sub(&old);
         let _ = csum.finalize();
 
         // Add new bytes.
         let mut new: FVec<u8, 10> = FVec::new();
-        new.extend_from_slice(&meta.src.bytes()).unwrap();
-        new.extend_from_slice(&meta.dst.bytes()).unwrap();
+        new.extend_from_slice(&meta.src).unwrap();
+        new.extend_from_slice(&meta.dst).unwrap();
         new.extend_from_slice(&[0, meta.proto as u8]).unwrap();
         csum.add(&new);
 

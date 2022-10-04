@@ -4,9 +4,11 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
+use core::ops::Deref;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -57,6 +59,19 @@ impl From<[u8; 6]> for MacAddr {
 impl From<&[u8; 6]> for MacAddr {
     fn from(bytes: &[u8; 6]) -> Self {
         Self { inner: bytes.clone() }
+    }
+}
+
+impl AsRef<[u8]> for MacAddr {
+    fn as_ref(&self) -> &[u8] {
+        &self.inner
+    }
+}
+
+impl Deref for MacAddr {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 

@@ -31,6 +31,7 @@ use opte::engine::arp::ArpEth4PayloadRaw;
 use opte::engine::arp::ArpHdrRaw;
 use opte::engine::arp::ARP_HDR_SZ;
 use opte::engine::checksum::HeaderChecksum;
+use opte::engine::dhcpv6;
 use opte::engine::ether::EtherHdr;
 use opte::engine::ether::EtherHdrRaw;
 use opte::engine::ether::EtherMeta;
@@ -491,6 +492,8 @@ fn oxide_net_builder(
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
     dhcp::setup(&mut pb, cfg, one_limit).expect("failed to add dhcp layer");
+    oxide_vpc::engine::dhcpv6::setup(&mut pb, cfg, one_limit)
+        .expect("failed to add dhcpv6 layer");
     icmp::setup(&mut pb, cfg, one_limit).expect("failed to add icmp layer");
     icmpv6::setup(&mut pb, cfg, one_limit).expect("failed to add icmpv6 layer");
     arp::setup(&mut pb, cfg, one_limit).expect("failed to add arp layer");
@@ -1108,8 +1111,8 @@ fn gen_icmpv6_echo_req(
     let mut body_bytes = vec![0u8; req.buffer_len()];
     let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body_bytes);
     let _ = req.emit(
-        &Ipv6Address::from_bytes(ip_src.bytes().as_slice()).into(),
-        &Ipv6Address::from_bytes(ip_dst.bytes().as_slice()).into(),
+        &Ipv6Address::from_bytes(&ip_src).into(),
+        &Ipv6Address::from_bytes(&ip_dst).into(),
         &mut req_pkt,
         &Default::default(),
     );
@@ -2310,8 +2313,8 @@ fn test_guest_to_gateway_icmpv6_ping(
             assert_eq!(ip6.dst, src_ip);
             assert_eq!(ip6.proto, Protocol::ICMPv6);
             (
-                Ipv6Address::from_bytes(ip6.src.bytes().as_slice()),
-                Ipv6Address::from_bytes(ip6.dst.bytes().as_slice()),
+                Ipv6Address::from_bytes(&ip6.src),
+                Ipv6Address::from_bytes(&ip6.dst),
             )
         }
         ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
@@ -2354,7 +2357,7 @@ fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
     let dst_mac = dst_ip.multicast_mac().unwrap();
 
     let solicit = NdiscRepr::RouterSolicit {
-        lladdr: Some(RawHardwareAddress::from_bytes(&src_mac.bytes())),
+        lladdr: Some(RawHardwareAddress::from_bytes(&src_mac)),
     };
     let req = Icmpv6Repr::Ndisc(solicit);
     let mut body_bytes = vec![0u8; req.buffer_len()];
@@ -2465,8 +2468,8 @@ fn gateway_router_advert_reply() {
             );
             assert_eq!(ip6.proto, Protocol::ICMPv6);
             (
-                Ipv6Address::from_bytes(ip6.src.bytes().as_slice()),
-                Ipv6Address::from_bytes(expected_dst.bytes().as_slice()),
+                Ipv6Address::from_bytes(&ip6.src),
+                Ipv6Address::from_bytes(&expected_dst),
             )
         }
         ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
@@ -2497,7 +2500,7 @@ fn gateway_router_advert_reply() {
             assert_eq!(retrans_time, Duration::from_millis(0));
             assert_eq!(
                 lladdr.expect("Expected a Link-Layer Address option"),
-                RawHardwareAddress::from_bytes(&g1_cfg.gateway_mac.bytes())
+                RawHardwareAddress::from_bytes(&g1_cfg.gateway_mac)
             );
             assert_eq!(mtu, Some(1500));
             assert!(prefix_info.is_none());
@@ -2515,7 +2518,7 @@ fn gateway_router_advert_reply() {
 fn generate_neighbor_solicitation(info: &SolicitInfo) -> Packet<Parsed> {
     let solicit = NdiscRepr::NeighborSolicit {
         target_addr: Ipv6Address::from(info.target_addr),
-        lladdr: info.lladdr.map(|x| RawHardwareAddress::from_bytes(&x.bytes())),
+        lladdr: info.lladdr.map(|x| RawHardwareAddress::from_bytes(&x)),
     };
     let req = Icmpv6Repr::Ndisc(solicit);
     let mut body = vec![0u8; req.buffer_len()];
@@ -2817,7 +2820,7 @@ fn validate_hairpin_advert(
         assert_eq!(target_addr, na.target_addr.into());
         assert_eq!(
             lladdr,
-            na.lladdr.map(|x| RawHardwareAddress::from_bytes(&x.bytes()))
+            na.lladdr.map(|x| RawHardwareAddress::from_bytes(&x))
         );
     } else {
         panic!(
@@ -2864,5 +2867,272 @@ fn test_gateway_neighbor_advert_reply() {
                 );
             }
         };
+    }
+}
+
+// Build a packet from a DHCPv6 message, from a client to server.
+fn packet_from_client_dhcpv6_message<'a>(
+    cfg: &VpcCfg,
+    msg: &dhcpv6::protocol::Message<'a>,
+) -> Packet<Parsed> {
+    let eth = EtherHdr::from(&EtherMeta {
+        dst: dhcpv6::ALL_RELAYS_AND_SERVERS.multicast_mac().unwrap(),
+        src: cfg.private_mac,
+        ether_type: ETHER_TYPE_IPV6,
+    });
+
+    let mut ip = Ipv6Hdr::from(&Ipv6Meta {
+        src: Ipv6Addr::from_eui64(&cfg.private_mac),
+        dst: dhcpv6::ALL_RELAYS_AND_SERVERS,
+        proto: Protocol::UDP,
+    });
+    ip.set_pay_len((msg.buffer_len() + UdpHdr::SIZE) as u16);
+
+    let mut udp = UdpHdr::from(&UdpMeta {
+        src: dhcpv6::CLIENT_PORT,
+        dst: dhcpv6::SERVER_PORT,
+    });
+    udp.set_pay_len(msg.buffer_len() as u16);
+
+    write_dhcpv6_packet(eth, ip, udp, msg)
+}
+
+fn write_dhcpv6_packet<'a>(
+    eth: EtherHdr,
+    ip: Ipv6Hdr,
+    udp: UdpHdr,
+    msg: &dhcpv6::protocol::Message<'a>,
+) -> Packet<Parsed> {
+    // Allocate a buffer into which we'll copy the packet.
+    let reply_len =
+        msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::SIZE + EtherHdr::SIZE;
+    let mut buf = vec![0; reply_len];
+
+    // Copy the Ethernet header.
+    let mut start = 0;
+    let mut end = EtherHdr::SIZE;
+    buf[start..end].copy_from_slice(&eth.as_bytes());
+
+    // Copy the IPv6 header.
+    start = end;
+    end += Ipv6Hdr::SIZE;
+    buf[start..end].copy_from_slice(&ip.as_bytes());
+
+    // Copy the UDP header.
+    start = end;
+    end += UdpHdr::SIZE;
+    buf[start..end].copy_from_slice(&udp.as_bytes());
+
+    // Copy in the remainder, which is the DHCPv6 message itself.
+    start = end;
+    msg.copy_into(&mut buf[start..]).unwrap();
+
+    // Make a packet
+    Packet::copy(&buf).parse().unwrap()
+}
+
+// Assert the essential details of a DHCPv6 exchange. The client request is in
+// `request_pkt`, and the server reply in `reply_pkt`.
+//
+// This asserts that the Ethernet, IPv6, and UDP metadata correct. It also
+// verifies the basics of any DHCPv6 exchange:
+//
+// - The server must copy the client's Transaction ID verbatim.
+// - The server must copy the client's ID option verbatim.
+// - The server must include its own Server ID option.
+fn verify_dhcpv6_essentials<'a>(
+    cfg: &VpcCfg,
+    request_pkt: &Packet<Parsed>,
+    request: &dhcpv6::protocol::Message<'a>,
+    reply_pkt: &Packet<Parsed>,
+    reply: &dhcpv6::protocol::Message<'a>,
+) {
+    let request_meta = request_pkt.meta();
+    let reply_meta = reply_pkt.meta();
+    let request_ether = request_meta.inner_ether().unwrap();
+    let reply_ether = reply_meta.inner_ether().unwrap();
+    assert_eq!(
+        request_ether.dst,
+        dhcpv6::ALL_RELAYS_AND_SERVERS.multicast_mac().unwrap()
+    );
+    assert_eq!(request_ether.src, reply_ether.dst);
+
+    let request_ip = request_meta.inner_ip6().unwrap();
+    let reply_ip = reply_meta.inner_ip6().unwrap();
+    assert_eq!(request_ip.src, Ipv6Addr::from_eui64(&cfg.private_mac));
+    assert_eq!(request_ip.dst, dhcpv6::ALL_RELAYS_AND_SERVERS);
+    assert_eq!(request_ip.proto, Protocol::UDP);
+    assert_eq!(reply_ip.dst, request_ip.src);
+    assert_eq!(reply_ip.src, Ipv6Addr::from_eui64(&cfg.gateway_mac));
+    assert_eq!(reply_ip.proto, Protocol::UDP);
+
+    let request_udp = request_meta.inner_udp().unwrap();
+    let reply_udp = reply_meta.inner_udp().unwrap();
+    assert_eq!(request_udp.src, dhcpv6::CLIENT_PORT);
+    assert_eq!(request_udp.dst, dhcpv6::SERVER_PORT);
+    assert_eq!(reply_udp.dst, dhcpv6::CLIENT_PORT);
+    assert_eq!(reply_udp.src, dhcpv6::SERVER_PORT);
+
+    // Verify the details of the DHCPv6 exchange itself.
+    assert_eq!(reply.xid, request.xid);
+    assert!(reply.has_option(dhcpv6::options::Code::ServerId));
+    let client_id =
+        request.find_option(dhcpv6::options::Code::ClientId).unwrap();
+    assert_eq!(
+        client_id,
+        reply.find_option(dhcpv6::options::Code::ClientId).unwrap()
+    );
+}
+
+// Test that we reply to a DHCPv6 Solicit or Request message with the right
+// reply.
+//
+// A Request should result in a Reply message with all the data the client
+// requested (that the server supports).
+//
+// A Solicit message normally generates an Advertise message. But if the Solicit
+// message also contains the Rapid Commit option, the server is supposed to
+// respond with a Reply instead.
+//
+// In both cases, the contained data is the same. (That's so that the client
+// could use the data from more than one server to decide which one to actually
+// make a subsequent Request to.)
+#[test]
+fn test_reply_to_dhcpv6_solicit_or_request() {
+    let g1_cfg = g1_cfg();
+    let v2p = Arc::new(Virt2Phys::new());
+    let mut ameta = ActionMeta::new();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    g1.port.start();
+    set_state!(g1, PortState::Running);
+    let mut pcap = PcapBuilder::new("dhcpv6_solicit_reply.pcap");
+
+    let requested_iana = dhcpv6::options::IaNa {
+        id: dhcpv6::options::IaId(0xff7),
+        t1: dhcpv6::Lifetime(3600),
+        t2: dhcpv6::Lifetime(6200),
+        options: vec![],
+    };
+    let base_options = vec![
+        dhcpv6::options::Option::ClientId(dhcpv6::Duid::from(
+            &g1_cfg.private_mac,
+        )),
+        dhcpv6::options::Option::ElapsedTime(dhcpv6::options::ElapsedTime(10)),
+        dhcpv6::options::Option::IaNa(requested_iana.clone()),
+    ];
+
+    for msg_type in [
+        dhcpv6::protocol::MessageType::Solicit,
+        dhcpv6::protocol::MessageType::Request,
+    ] {
+        for has_rapid_commit in [false, true] {
+            let mut options = base_options.clone();
+            if has_rapid_commit {
+                options.push(dhcpv6::options::Option::RapidCommit);
+            }
+            // Request messages must include the Server ID we're making the
+            // request to.
+            if msg_type == dhcpv6::protocol::MessageType::Request {
+                options.push(dhcpv6::options::Option::ServerId(
+                    dhcpv6::Duid::from(&g1_cfg.gateway_mac),
+                ));
+            }
+            let request = dhcpv6::protocol::Message {
+                typ: msg_type,
+                xid: dhcpv6::TransactionId::from(&[0u8, 1, 2]),
+                options,
+            };
+            let mut request_pkt =
+                packet_from_client_dhcpv6_message(&g1_cfg, &request);
+            pcap.add_pkt(&request_pkt);
+            let res =
+                g1.port.process(Out, &mut request_pkt, &mut ameta).unwrap();
+            if let Hairpin(hp) = res {
+                let reply_pkt = hp.parse().unwrap();
+                pcap.add_pkt(&reply_pkt);
+
+                let body = reply_pkt.get_body_rdr().copy_remaining();
+                let reply =
+                    dhcpv6::protocol::Message::from_bytes(&body).unwrap();
+                verify_dhcpv6_essentials(
+                    &g1_cfg,
+                    &request_pkt,
+                    &request,
+                    &reply_pkt,
+                    &reply,
+                );
+
+                // Verify the message type of the reply:
+                //
+                // Solicit - Rapid Commit -> Advertise
+                // Solicit + Rapid Commit -> Reply
+                // Request + either -> Reply
+                if has_rapid_commit
+                    || msg_type == dhcpv6::protocol::MessageType::Request
+                {
+                    assert_eq!(reply.typ, dhcpv6::protocol::MessageType::Reply);
+                } else {
+                    assert_eq!(
+                        reply.typ,
+                        dhcpv6::protocol::MessageType::Advertise
+                    );
+                }
+
+                // In the case of Solicit + Rapid Commit, we are required to
+                // send the Rapid Commit option back in our reply.
+                if has_rapid_commit
+                    && msg_type == dhcpv6::protocol::MessageType::Solicit
+                {
+                    assert!(
+                        reply.has_option(dhcpv6::options::Code::RapidCommit)
+                    );
+                }
+
+                // Regardless of the message type, we are supposed to include
+                // answers for each Option the client requested (and that we
+                // support). That's mostly just the actual VPC-private IPv6 address.
+                let iana =
+                    reply.find_option(dhcpv6::options::Code::IaNa).unwrap();
+                if let dhcpv6::options::Option::IaNa(dhcpv6::options::IaNa {
+                    id,
+                    t1,
+                    t2,
+                    options,
+                }) = iana
+                {
+                    assert_eq!(id, &requested_iana.id);
+                    assert!(t1.is_infinite());
+                    assert!(t2.is_infinite());
+                    assert!(!options.is_empty());
+
+                    if let Some(dhcpv6::options::Option::IaAddr(
+                        dhcpv6::options::IaAddr {
+                            addr,
+                            valid,
+                            preferred,
+                            options: opts,
+                        },
+                    )) = options.first()
+                    {
+                        assert_eq!(
+                            addr,
+                            &g1_cfg.ipv6_cfg().unwrap().private_ip
+                        );
+                        assert!(valid.is_infinite());
+                        assert!(preferred.is_infinite());
+                        assert!(opts.is_empty());
+                    } else {
+                        panic!(
+                            "Expected an IA Addr option, found {:#?}",
+                            options
+                        );
+                    }
+                } else {
+                    panic!("Expected an IANA option, found {:?}", iana);
+                }
+            } else {
+                panic!("Expected a Hairpin, found {:?}", res);
+            }
+        }
     }
 }
