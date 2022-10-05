@@ -212,7 +212,7 @@ impl<T: 'static> Drop for Periodic<T> {
 // they are using an internval that cannot be met by the system.
 const SYSTEM_PERIODIC_RESOLUTION_IN_NANOS: u64 = 10_000_000;
 
-/// An interval designed specifically for a [`Periodic`].
+/// An interval designed specifically for a `Periodic`.
 ///
 /// Ensures that an interval value is always a multiple of 10ms as
 /// dictated by the `ddi_periodic_add(9F)` API this abstraction is

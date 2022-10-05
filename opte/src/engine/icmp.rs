@@ -135,7 +135,7 @@ impl HairpinAction for IcmpEchoReply {
 /// The ICMPv4 message type.
 ///
 /// We wrap smoltcp's Icmpv4Message type so that we may provide a
-/// serde implementation; allowing this value to be used in [`Rule`]
+/// serde implementation; allowing this value to be used in `Rule`
 /// predicates. We call this "message type" instead of just "message"
 /// because that's what it is: the type field of the larger ICMP
 /// message.

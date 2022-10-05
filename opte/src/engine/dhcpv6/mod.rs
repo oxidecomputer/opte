@@ -107,8 +107,9 @@ pub const CLIENT_PORT: u16 = 546;
 /// An identifier for a single transaction, a request-reply pair in the DHCPv6
 /// protocol.
 ///
-/// See https://www.rfc-editor.org/rfc/rfc8415.html#section-8 for details, but
-/// this is just an opaque 3-octet ID.
+/// See [RFC 8415 §8] for details, but this is just an opaque 3-octet ID.
+///
+/// [RFC 8415 §8]: https://www.rfc-editor.org/rfc/rfc8415.html#section-8
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransactionId<'a>(pub Cow<'a, [u8]>);
 

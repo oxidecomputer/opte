@@ -9,7 +9,8 @@
 //! The majority of data transferred in DHCPv6 is done so via Options. They have
 //! a simple format:
 //!
-//! 0                   1                   2                   3
+//! ```
+//!  0                   1                   2                   3
 //!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //! |          option-code          |           option-len          |
@@ -17,6 +18,7 @@
 //! |                          option-data                          |
 //! |                      (option-len octets)                      |
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! ```
 //!
 //! The option-code defines the interpretation of option-data. For example, if
 //! option-code is `OPTION_CLIENTID`, numeric value 1, then option-data is a
@@ -64,10 +66,12 @@ use opte_api::Ipv6Addr;
 
 /// A DHCPv6 Option code.
 ///
-/// Note that we don't support every option (there are a lot), and unsupported
-/// options are captured in the `Other` variant. See
-/// https://www.iana.org/assignments/dhcpv6-parameters/dhcpv6-parameters.xhtml#dhcpv6-parameters-2
-/// for a complete list of option codes.
+/// Note that we don't support every option (there are a lot), and
+/// unsupported options are captured in the `Other` variant. See [IANA
+/// DHCPv6 Parameters] for a complete list of option codes.
+///
+/// [IANA DHCPv6 Parameters]:
+/// https://www.iana.org/assignments/dhcpv6-parameters/dhcpv6-parameters.xhtml
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Code {
     /// The option contains a client DUID.
@@ -87,10 +91,12 @@ pub enum Code {
     /// The option contains the elapsed time since a client began its current
     /// transaction, in 10ms increments.
     ElapsedTime,
-    /// The option contains a status code and message referring to the current
-    /// message or option in which it appears. See
-    /// https://www.rfc-editor.org/rfc/rfc8415.html#section-21.13 for a list of
-    /// the codes and messages.
+    /// The option contains a status code and message referring to the
+    /// current message or option in which it appears. See [RFC 8415
+    /// §21.13] for a list of the codes and messages.
+    ///
+    /// [RFC 8415 §21.13]:
+    /// https://www.rfc-editor.org/rfc/rfc8415.html#section-21.13
     StatusCode,
     /// An option indicating that the client would like data to be committed
     /// immediately, bypassing the normal acknowledgement message sequence.
@@ -531,8 +537,10 @@ impl<'a> IaNa<'a> {
 
 /// An Identity Association for a Temporary Address.
 ///
-/// Temporary addresses are part of SLAAC, see
-/// https://www.rfc-editor.org/rfc/rfc4941 for more details.
+/// Temporary addresses are part of SLAAC, see [RFC 4941] for more
+/// details.
+///
+/// [RFC 4941]: https://www.rfc-editor.org/rfc/rfc4941
 #[derive(Clone, Debug, PartialEq)]
 pub struct IaTa<'a> {
     pub id: IaId,
@@ -601,9 +609,10 @@ impl<'a> IaTa<'a> {
 /// For others, such as DNS serves, clients request that but including its
 /// option-code in an Option Request option.
 ///
-/// See Table 4, here https://www.rfc-editor.org/rfc/rfc8415.html#section-24,
-/// for the list of options that must or must not be included in an
-/// OptionRequest.
+/// See [RFC 8415 Table 4] for the list of options that must or must
+/// not be included in an OptionRequest.
+///
+/// [RFC 8415 Table 4]: https://www.rfc-editor.org/rfc/rfc8415.html#section-24
 #[derive(Clone, Debug, PartialEq)]
 pub struct OptionRequest<'a>(pub Cow<'a, [Code]>);
 

@@ -14,9 +14,8 @@ use syn::FieldsNamed;
 use syn::FieldsUnnamed;
 use syn::Ident;
 
-/// Generate a [`opte::ddi::kstat::KStatProvider`] implementation
-/// given a struct of named fields of type
-/// [`opte::ddi::kstat::KStatU64`].
+/// Generate a `KStatProvider` implementation given a struct of named
+/// fields of type `KStatU64`.
 ///
 /// ```Rust
 /// #[derive(KStatProvider)]

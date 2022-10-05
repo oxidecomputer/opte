@@ -517,8 +517,9 @@ impl Ipv6Addr {
     /// Generate an IPv6 address via an EUI-64 transform, from a MAC address.
     /// The generated address has link-local scope.
     ///
-    /// See https://www.rfc-editor.org/rfc/rfc4291#page-20 for details of the
-    /// transformation applied.
+    /// See [RFC 4291] for details of the transformation applied.
+    ///
+    /// [RFC 4291]: https://www.rfc-editor.org/rfc/rfc4291#page-20
     pub fn from_eui64(mac: &MacAddr) -> Self {
         let mac = mac.bytes();
         // Invert the locally-administered bit in the first octet of the MAC
@@ -533,7 +534,9 @@ impl Ipv6Addr {
     /// Return the multicast MAC address associated with this multicast IPv6
     /// address. If the IPv6 address is not multicast, None will be returned.
     ///
-    /// See https://www.rfc-editor.org/rfc/rfc2464, section 7 for details.
+    /// See [RFC 2464 §7] for details.
+    ///
+    /// [RFC 2464 §7]: https://www.rfc-editor.org/rfc/rfc2464
     pub const fn multicast_mac(&self) -> Option<MacAddr> {
         if self.is_multicast() {
             Some(self.unchecked_multicast_mac())
@@ -545,7 +548,9 @@ impl Ipv6Addr {
     /// Return the multicast MAC address associated with this multicast IPv6
     /// address, without checking if this IP address is a multicast address.
     ///
-    /// See https://www.rfc-editor.org/rfc/rfc2464, section 7 for details.
+    /// See [RFC 2464 §7] for details.
+    ///
+    /// [RFC 2464 §7]: https://www.rfc-editor.org/rfc/rfc2464
     pub const fn unchecked_multicast_mac(&self) -> MacAddr {
         let bytes = &self.inner;
         MacAddr::from_const([
@@ -556,7 +561,9 @@ impl Ipv6Addr {
     /// Return the solicited-node multicast IPv6 address corresponding to
     /// `self`.
     ///
-    /// See https://www.rfc-editor.org/rfc/rfc4291#section-2.7.1 for details.
+    /// See [RFC 4291 §2.7.1] for details.
+    ///
+    /// [RFC 4291 §2.7.1]: https://www.rfc-editor.org/rfc/rfc4291#section-2.7.1
     pub const fn solicited_node_multicast(&self) -> Ipv6Addr {
         let bytes = &self.inner;
         let w0 = u16::from_be_bytes([0xff, bytes[13]]);

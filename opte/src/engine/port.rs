@@ -345,8 +345,8 @@ impl PortBuilder {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PortState {
     /// The port is configured with layers and rules, but has no flow
-    /// state. It is ready to enter the [`Running`] state to start
-    /// handling traffic.
+    /// state. It is ready to enter the [`Self::Running`] state to
+    /// start handling traffic.
     ///
     /// This state may be entered from:
     ///
@@ -381,7 +381,10 @@ pub enum PortState {
     ///
     /// This state may be entered from:
     ///
-    /// * [`PortBuilder::restore()`]
+    /// XXX This interface doesn't exist yet, use doc syntax to link
+    /// to it once it does.
+    ///
+    /// * PortBuilder::restore()
     Restored,
 }
 

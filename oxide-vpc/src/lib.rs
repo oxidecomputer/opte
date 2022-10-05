@@ -13,17 +13,12 @@
 //! primitve building blocks for implementing network functions, like
 //! rules and header transpositions, it does not dictate a specific
 //! network configuration. This module configures OPTE in a manner
-//! consistent with the definition of The Oxide VPC Network [^rfd21]
-//! [^rfd63].
+//! consistent with the definition of The Oxide VPC Network in [RFD
+//! 21] (User Networking API) and [RFD 63] (Network Architecture).
 //!
-//! This should probably be in its own crate, separate from OPTE
-//! itself. For now keeping it here is convenient.
+//! [rfd21]: https://rfd.shared.oxide.computer/rfd/0021
 //!
-//! [rfd21]: [RFD 21 User Networking
-//! API](https://rfd.shared.oxide.computer/rfd/0063)
-//!
-//! [rfd63]: [RFD 63 Network
-//! Architecture](https://rfd.shared.oxide.computer/rfd/0063)
+//! [rfd63]: https://rfd.shared.oxide.computer/rfd/0063
 #![no_std]
 
 // NOTE: Things get weird if you move the extern crate into cfg_if!.

@@ -28,27 +28,28 @@ cfg_if! {
     }
 }
 
-/// Dump various information about a `Layer` for use in debugging or
+/// Dump various information about a layer, for use in debugging or
 /// administrative purposes.
-///
-/// * The Layer name.
-/// * The inbound and outbound rule tables.
-/// * The inbound and outbound flow tables.
-///
-/// *port_name*: The name of the port.
-/// *name*: The name of the [`Layer`] to dump.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpLayerReq {
+    /// The name of the port whose layer you want to dump.
     pub port_name: String,
+    /// The name of the layer to dump.
     pub name: String,
 }
 
+/// The response to a [`DumpLayerReq`].
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpLayerResp {
+    /// The name of the layer.
     pub name: String,
+    /// The inbound rules.
     pub rules_in: Vec<(layer::RuleId, rule::RuleDump)>,
+    /// The outbound rules.
     pub rules_out: Vec<(layer::RuleId, rule::RuleDump)>,
+    /// The inbound flow table.
     pub ft_in: Vec<(InnerFlowId, FlowEntryDump)>,
+    /// The outbound flow table.
     pub ft_out: Vec<(InnerFlowId, FlowEntryDump)>,
 }
 

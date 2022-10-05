@@ -59,7 +59,7 @@
 //! > of the underlaying hardware. For example, assume a "little-
 //! > endian" machine summing data that is stored in memory in
 //! > network ("big-endian") order. Fetching each 16-bit word will
-//! > swap bytes, resulting in the sum [4]; however, storing the
+//! > swap bytes, resulting in the sum \[4\]; however, storing the
 //! > result back into memory will swap the sum back into network
 //! > byte order.
 //!

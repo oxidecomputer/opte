@@ -2301,7 +2301,7 @@ pub trait PacketRead<'a> {
     /// # Errors
     ///
     /// If the seek would move beyond the end of the packet, then a
-    /// [`EndOfPacket`] is returned.
+    /// [`ReadErr::EndOfPacket`] is returned.
     fn seek(&mut self, amount: usize) -> ReadResult<()>;
 
     /// Seek backwards from the current position by `amount`.

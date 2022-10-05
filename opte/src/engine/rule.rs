@@ -894,14 +894,14 @@ pub trait MappingResource: Resource {
     type Key: Clone;
     type Entry: ResourceEntry;
 
-    /// Get the [`ResourceEntry`] with the given key, if one exists.
+    /// Get the entry with the given key, if one exists.
     fn get(&self, key: &Self::Key) -> Option<Self::Entry>;
 
-    /// Remove the [`ResourceEntry`] with the given key, if one exists.
+    /// Remove the entry with the given key, if one exists.
     fn remove(&self, key: &Self::Key) -> Option<Self::Entry>;
 
-    /// Set the [`ResoruceEntry`] with the given key. Return the
-    /// current entry, if one exists.
+    /// Set the entry with the given key. Return the current entry, if
+    /// one exists.
     fn set(&self, key: Self::Key, entry: Self::Entry) -> Option<Self::Entry>;
 }
 
@@ -917,7 +917,7 @@ pub trait FiniteResource: Resource {
     type Key: Clone;
     type Entry: ResourceEntry;
 
-    /// Obtain a new [`ResourceEntry`] given the key.
+    /// Obtain a new entry given the key.
     ///
     /// # Errors
     ///
@@ -925,7 +925,7 @@ pub trait FiniteResource: Resource {
     /// the resource is exhausted.
     fn obtain(&self, key: &Self::Key) -> Result<Self::Entry, ResourceError>;
 
-    /// Release the [`ResourceEntry`] back to the available resources.
+    /// Release the entry back to the available resources.
     fn release(&self, key: &Self::Key, br: Self::Entry);
 }
 

@@ -47,7 +47,7 @@ pub const AF_INET6: i32 = 26;
 /// fields. A raw header represents only the base header, eschewing
 /// any options or extensions.
 pub trait RawHeader<'a> {
-    /// Read a zerocopy version of the raw header from the [`Packet`]
+    /// Read a zerocopy version of the raw header from the `Packet`
     /// backing `rdr`.
     fn raw_zc<'b, R: PacketRead<'a>>(
         rdr: &'b mut R,
