@@ -6,73 +6,73 @@
 
 //! Routines for verifying various Port state.
 
+use super::*;
 use opte::engine::port::PortState;
 use std::collections::BTreeMap;
 
-/// Track various bits of Port state for the purpose of verifying
+/// Track various bits of port state for the purpose of verifying
 /// certain events occur when traffic crosses the port or an
-/// administration command is procssed. This type should be
+/// administration command is processed. This type should be
 /// manipulated by the macros that follow.
 ///
-/// # Counts
+/// The various port state is manipulated via "fields", which are just
+/// period-delimited strings. A field is any string with zero-or-more
+/// periods. The period is used to denote some type of hierarchy to
+/// make it easier to map these fields to some type of state in the
+/// port. It's best not to overthink this, but instead look at some
+/// examples.
 ///
-/// Each entry in the `counts` map represents some type of particular
-/// port state which has a count associated with it. When a port's
-/// overall state is asserted we make sure that its internal state
-/// matches these counts.
+/// ```
+/// firewall.rules.in => number of inbound rules in the 'firewall' layer
+/// uft.out => number of outbound UFT entries
+/// epoch => the Port's epoch
+/// port_state => the Port's PortState value
+/// ```
 ///
-/// `<layer>.rules_{in,out}`: The expected number of rules in a given
-/// direction in a given layer. This does not apply to the UFT, as
-/// it's just a flow table, there are no rules.
-///
-/// `<layer>.flows_{in,out}`: The expected number of entries in the
-/// flow table in a given direction in a given layer. The number of
-/// UFT flows is stored under `uft.flows_{in,out}`.
-///
-/// # Epoch
-///
-/// Tracks the current `epoch` value of the port.
-///
-/// # Port State
-///
-/// This tracks the current `PortState` value of the port.
-///
-/// NOTE: This word state is a bit overloaded here. The purpose of
-/// VpcPortState is to track the overall state of the Port, where
-/// `PortState` is just one piece of that overall state.
+/// How a given field maps to this structure is at the discretion of
+/// the supporting macros. But the basic idea is to split the field
+/// name, creating a `SplitField` value, and match against that in
+/// order to determine the action to be taken.
 pub struct VpcPortState {
-    pub counts: BTreeMap<String, u32>,
-    pub epoch: u64,
+    /// Any field that is a counter can be stored here.
+    pub counts: BTreeMap<String, u64>,
+    /// The Port's `PortState`.
     pub port_state: PortState,
 }
 
 impl VpcPortState {
     pub fn new() -> Self {
-        Self {
-            counts: BTreeMap::from(
-                [
-                    ("arp.rules_in", 0),
-                    ("arp.rules_out", 0),
-                    ("fw.flows_in", 0),
-                    ("fw.flows_out", 0),
-                    ("fw.rules_in", 0),
-                    ("fw.rules_out", 0),
-                    ("icmp.rules_in", 0),
-                    ("icmp.rules_out", 0),
-                    ("nat.flows_in", 0),
-                    ("nat.flows_out", 0),
-                    ("nat.rules_in", 0),
-                    ("nat.rules_out", 0),
-                    ("router.rules_in", 0),
-                    ("router.rules_out", 0),
-                    ("uft.flows_in", 0),
-                    ("uft.flows_out", 0),
-                ]
-                .map(|(name, val)| (name.to_string(), val)),
-            ),
-            epoch: 1,
-            port_state: PortState::Ready,
+        let mut counts = BTreeMap::new();
+        for layer in &VPC_LAYERS {
+            counts.insert(format!("{layer}.rules.in"), 0);
+            counts.insert(format!("{layer}.rules.out"), 0);
+            counts.insert(format!("{layer}.flows.in"), 0);
+            counts.insert(format!("{layer}.flows.out"), 0);
         }
+
+        counts.insert("uft.in".to_string(), 0);
+        counts.insert("uft.out".to_string(), 0);
+        counts.insert("epoch".to_string(), 0);
+
+        Self { counts, port_state: PortState::Ready }
+    }
+}
+
+pub enum SplitField<'a> {
+    One(&'a str),
+    Two(&'a str, &'a str),
+    Three(&'a str, &'a str, &'a str),
+    Other(&'a str),
+}
+
+pub fn split_field(s: &str) -> SplitField {
+    let split: Vec<&str> = s.split(".").collect();
+
+    match split.len() {
+        1 => SplitField::One(split[0]),
+        2 => SplitField::Two(split[0], split[1]),
+        3 => SplitField::Three(split[0], split[1], split[2]),
+        _ => SplitField::Other(s),
     }
 }
 
@@ -82,42 +82,30 @@ impl VpcPortState {
 macro_rules! assert_port {
     ($pav:expr) => {
         for (field, expected_val) in $pav.vps.counts.iter() {
-            let actual_val = match field.as_str() {
-                "arp.rules_in" => $pav.port.num_rules("arp", In),
-                "arp.rules_out" => $pav.port.num_rules("arp", Out),
-                "fw.flows_in" => $pav.port.num_flows("firewall", In),
-                "fw.flows_out" => $pav.port.num_flows("firewall", Out),
-                "fw.rules_in" => $pav.port.num_rules("firewall", In),
-                "fw.rules_out" => $pav.port.num_rules("firewall", Out),
-                "icmp.rules_in" => $pav.port.num_rules("icmp", In),
-                "icmp.rules_out" => $pav.port.num_rules("icmp", Out),
-                "nat.flows_in" => $pav.port.num_flows("nat", In),
-                "nat.flows_out" => $pav.port.num_flows("nat", Out),
-                "nat.rules_in" => $pav.port.num_rules("nat", In),
-                "nat.rules_out" => $pav.port.num_rules("nat", Out),
-                "router.rules_in" => $pav.port.num_rules("router", In),
-                "router.rules_out" => $pav.port.num_rules("router", Out),
-                "uft.flows_in" => $pav.port.num_flows("uft", In),
-                "uft.flows_out" => $pav.port.num_flows("uft", Out),
-                f => todo!("implement check for field: {}", f),
+            let val = match split_field(field) {
+                SplitField::One("epoch") => $pav.port.epoch(),
+
+                SplitField::Two("uft", dir) => {
+                    $pav.port.num_flows("uft", dir.parse().unwrap()) as u64
+                }
+
+                SplitField::Three(layer, "flows", dir) => {
+                    $pav.port.num_flows(layer, dir.parse().unwrap()) as u64
+                }
+
+                SplitField::Three(layer, "rules", dir) => {
+                    $pav.port.num_rules(layer, dir.parse().unwrap()) as u64
+                }
+
+                _ => todo!("impl check for: {field}"),
             };
+
             assert!(
-                *expected_val == actual_val,
+                *expected_val == val,
                 "field value mismatch: field: {}, expected: {}, actual: {}",
                 field,
                 expected_val,
-                actual_val,
-            );
-        }
-
-        {
-            let expected = $pav.vps.epoch;
-            let actual = $pav.port.epoch();
-            assert!(
-                expected == actual,
-                "epoch mismatch: expected: {}, actual: {}",
-                expected,
-                actual,
+                val,
             );
         }
 
@@ -136,22 +124,11 @@ macro_rules! assert_port {
 
 /// Increment a field in the `VpcPortState.counts` map.
 #[macro_export]
-macro_rules! incr_field {
+macro_rules! incr_field_na {
     ($vps:expr, $field:expr) => {
         match $vps.counts.get_mut($field) {
             Some(v) => *v += 1,
-            None => assert!(false, "field does not exist: {}", $field),
-        }
-    };
-}
-
-/// Decrement a field in the `VpcPortState.counts` map.
-#[macro_export]
-macro_rules! decr_field {
-    ($vps:expr, $field:expr) => {
-        match $vps.counts.get_mut($field) {
-            Some(v) => *v -= 1,
-            None => assert!(false, "field does not exist: {}", $field),
+            None => panic!("field is not a counter: '{}'", $field),
         }
     };
 }
@@ -159,12 +136,10 @@ macro_rules! decr_field {
 /// Increment a list of fields in the `VpcPortState.counts` map.
 #[macro_export]
 macro_rules! incr_na {
-    ($port_and_vps:expr, $fields:expr) => {
-        for f in $fields {
-            match f {
-                "epoch" => $port_and_vps.vps.epoch += 1,
-                _ => incr_field!($port_and_vps.vps, f),
-            }
+    ($pav:expr, $fields:expr) => {
+        let fields_v: Vec<&str> = $fields.split(", ").collect();
+        for f in fields_v {
+            incr_field_na!($pav.vps, f);
         }
     };
 }
@@ -173,120 +148,144 @@ macro_rules! incr_na {
 /// assert the port state.
 #[macro_export]
 macro_rules! incr {
-    ($port_and_vps:expr, $fields:expr) => {
-        incr_na!($port_and_vps, $fields);
-        assert_port!($port_and_vps);
+    ($pav:expr, $fields:expr) => {
+        incr_na!($pav, $fields);
+        assert_port!($pav);
+    };
+}
+
+/// Decrement a field in the `VpcPortState.counts` map.
+#[macro_export]
+macro_rules! decr_field_na {
+    ($vps:expr, $field:expr) => {
+        match $vps.counts.get_mut($field) {
+            Some(v) => *v -= 1,
+            None => panic!("field is not a counter: '{}'", $field),
+        }
     };
 }
 
 /// Decrement a list of fields in the `VpcPortState.counts` map.
 #[macro_export]
 macro_rules! decr_na {
-    ($port_and_vps:expr, $fields:expr) => {
-        for f in $fields {
-            match f {
-                // You can never decrement the epoch.
-                _ => decr_field!($port_and_vps.vps, f),
-            }
+    ($pav:expr, $fields:expr) => {
+        let fields_v: Vec<&str> = $fields.split(", ").collect();
+        for f in fields_v {
+            decr_field_na!($pav.vps, f);
         }
     };
 }
 
-/// Set the value of a field in the `VpcPortState.counts` map.
+/// Decrement a list of fields in the `VpcPortState.counts` map and
+/// assert the port state.
 #[macro_export]
-macro_rules! set_field {
-    ($port_and_vps:expr, $field:expr, $val:expr) => {
-        match $port_and_vps.vps.counts.get_mut($field) {
-            Some(v) => *v = $val,
-            None => assert!(false, "field does not exist: {}", $field),
+macro_rules! decr {
+    ($pav:expr, $fields:expr) => {
+        decr_na!($pav, $fields);
+        assert_port!($pav);
+    };
+}
+
+/// Set the value of a field.
+#[macro_export]
+macro_rules! set_field_na {
+    ($pav:expr, $field:expr) => {
+        match $field.split_once("=") {
+            Some(("port_state", val)) => {
+                $pav.vps.port_state = val.parse().unwrap();
+            }
+
+            Some((field, val)) => match $pav.vps.counts.get_mut(field) {
+                Some(v) => match val.parse() {
+                    Ok(val) => *v = val,
+                    Err(_) => {
+                        panic!(
+                            "not a number: field: '{field}' val: '{val}'"
+                        );
+                    }
+                },
+
+                None => panic!("field is not a counter: '{}'", field),
+            },
+
+            _ => panic!("malformed set expr: '{}'", $field),
         }
     };
 }
 
-/// Set multiple fields at once.
+/// Set the values of a list of fields.
+#[macro_export]
+macro_rules! set_na {
+    ($pav:expr, $fields:expr) => {
+        let fields_v: Vec<&str> = $fields.split(", ").collect();
+        for f in fields_v {
+            set_field_na!($pav, f);
+        }
+    };
+}
+
+/// Set the values of a list of fields and assert.
 ///
 /// ```
-/// set_fields!(pav, "epcoh=M,fw.rules_in=N");
+/// set_fields!(pav, "port_state=running, epoch=4, firewall.rules.in=6");
 /// ```
 #[macro_export]
-macro_rules! set_fields {
-    ($port_and_vps:expr, $fields:expr) => {
-        for f in $fields {
-            match f.split_once("=") {
-                Some(("epoch", val)) => {
-                    $port_and_vps.vps.epoch += val.parse::<u64>().unwrap();
-                }
-
-                Some((field, val)) => {
-                    set_field!($port_and_vps, field, val.parse().unwrap());
-                }
-
-                _ => panic!("malformed field expr: {}", f),
-            }
-        }
+macro_rules! set {
+    ($pav:expr, $fields:expr) => {
+        set_na!($pav, $fields);
+        assert_port!($pav);
     };
 }
 
-/// Update the `VpcPortState` and assert.
+/// Update the `VpcPortState` and assert. This macro allows one to use
+/// the `set!`, `incr!`, and `decr!` in one atomic check. This takes
+/// the form of an array of strings with the format `<instr>:<fields
+/// list>` where `<instr>` is one of `set`, `incr`, or `decr`, and
+/// `<fields list>` is a `, ` separated list of strings appropriate
+/// for the given instruction.
 ///
 /// ```
-/// update!(g1, ["incr:epoch,fw.flows_out,fw.flows_in,uft.flows_out"])
+/// update!(g1, ["incr:epoch, firewall.flows.out", "set:port_state=running"])
 /// ```
 #[macro_export]
 macro_rules! update {
-    ($port_and_vps:expr, $instructions:expr) => {
+    ($pav:expr, $instructions:expr) => {
         for inst in $instructions {
             match inst.split_once(":") {
                 Some(("incr", fields)) => {
-                    // Convert "field1,field2,field3" to ["field1",
-                    // "field2, "field3"]
-                    let fields_arr: Vec<&str> = fields.split(",").collect();
-                    incr_na!($port_and_vps, fields_arr);
+                    incr_na!($pav, fields);
                 }
 
                 Some(("set", fields)) => {
-                    let fields_arr: Vec<&str> = fields.split(",").collect();
-                    set_fields!($port_and_vps, fields_arr);
+                    set_na!($pav, fields);
                 }
 
                 Some(("decr", fields)) => {
-                    let fields_arr: Vec<&str> = fields.split(",").collect();
-                    decr_na!($port_and_vps, fields_arr);
+                    decr_na!($pav, fields);
                 }
 
                 Some((op, _)) => {
-                    panic!("unknown op: {} instruction: {}", op, inst);
+                    panic!("unknown op: '{}' instruction: '{}'", op, inst);
                 }
 
-                _ => panic!("malformed instruction: {}", inst),
+                _ => panic!("malformed instruction: '{}'", inst),
             }
         }
 
-        assert_port!($port_and_vps);
+        assert_port!($pav);
     };
 }
 
 /// Set all flow counts to zero.
 #[macro_export]
 macro_rules! zero_flows {
-    ($port_and_vps:expr) => {
-        for (field, count) in $port_and_vps.vps.counts.iter_mut() {
-            match field.as_str() {
-                "fw.flows_in" | "fw.flows_out" => *count = 0,
-                "nat.flows_in" | "nat.flows_out" => *count = 0,
-                "router.flows_in" | "router.flows_out" => *count = 0,
-                "uft.flows_in" | "uft.flows_out" => *count = 0,
-                &_ => (),
-            }
+    ($pav:expr) => {
+        for layer in &VPC_LAYERS {
+            $pav.vps.counts.insert(format!("{layer}.flows.in"), 0);
+            $pav.vps.counts.insert(format!("{layer}.flows.out"), 0);
         }
-    };
-}
 
-/// Set the expected PortState of the port and assert.
-#[macro_export]
-macro_rules! set_state {
-    ($port_and_vps:expr, $port_state:expr) => {
-        $port_and_vps.vps.port_state = $port_state;
-        assert_port!($port_and_vps);
+        $pav.vps.counts.insert("uft.out".to_string(), 0);
+        $pav.vps.counts.insert("uft.in".to_string(), 0);
     };
 }

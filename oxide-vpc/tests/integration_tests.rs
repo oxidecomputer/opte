@@ -222,11 +222,16 @@ fn oxide_net_setup(
     update!(
         pav,
         [
-            "set:arp.rules_in=1,arp.rules_out=2",
-            "set:icmp.rules_out=1",
-            "set:fw.rules_in=1,fw.rules_out=1",
-            "set:nat.rules_out=2",
-            "set:router.rules_out=1",
+            "set:epoch=1",
+            "set:dhcp.rules.out=2",
+            "set:dhcpv6.rules.in=1, dhcpv6.rules.out=1",
+            "set:arp.rules.in=1, arp.rules.out=2",
+            "set:icmp.rules.out=1",
+            "set:icmpv6.rules.in=2, icmpv6.rules.out=6",
+            "set:firewall.rules.in=1, firewall.rules.out=1",
+            "set:nat.rules.out=2",
+            "set:router.rules.out=1",
+            "set:overlay.rules.in=1, overlay.rules.out=1",
         ]
     );
     assert_port!(pav);
@@ -337,6 +342,16 @@ fn check_no_flows(port: &Port) {
     assert_eq!(port.num_flows("uft", In), 0);
 }
 
+// Verify that the list of layers is what we expect.
+#[test]
+fn check_layers() {
+    let g1_cfg = g1_cfg();
+    let v2p = Arc::new(Virt2Phys::new());
+    let g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let port_layers = g1.port.layers();
+    assert_eq!(&VPC_LAYERS[..], &port_layers);
+}
+
 // Verify Port transition from Ready -> Running.
 #[test]
 fn port_transition_running() {
@@ -362,7 +377,7 @@ fn port_transition_running() {
         )),
     )
     .unwrap();
-    incr!(g1, ["epoch", "router.rules_out"]);
+    incr!(g1, "epoch, router.rules.out");
 
     // ================================================================
     // Try processing the packet while taking the port through a Ready
@@ -373,10 +388,10 @@ fn port_transition_running() {
     assert!(matches!(res, Err(ProcessError::BadState(_))));
     assert_port!(g1);
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["fw.flows_in", "fw.flows_out", "uft.flows_out"]);
+    incr!(g1, "firewall.flows.in, firewall.flows.out, uft.out");
 }
 
 // Verify a Port reset transitions it to the Ready state and clears
@@ -405,7 +420,7 @@ fn port_transition_reset() {
         )),
     )
     .unwrap();
-    incr!(g1, ["epoch", "router.rules_out"]);
+    incr!(g1, "epoch, router.rules.out");
 
     // ================================================================
     // Try processing the packet while taking the port through a Ready
@@ -414,13 +429,13 @@ fn port_transition_reset() {
     // ================================================================
     let mut pkt1 = tcp_telnet_syn(&g1_cfg, &g2_cfg);
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["fw.flows_in", "fw.flows_out", "uft.flows_out"]);
+    incr!(g1, "firewall.flows.in, firewall.flows.out, uft.out");
     g1.port.reset();
     zero_flows!(g1);
-    set_state!(g1, PortState::Ready);
+    set!(g1, "port_state=ready");
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Err(ProcessError::BadState(_))));
     assert_port!(g1);
@@ -460,7 +475,7 @@ fn port_transition_pause() {
         )),
     )
     .unwrap();
-    incr!(g1, ["epoch", "router.rules_out"]);
+    incr!(g1, "epoch, router.rules.out");
 
     // Allow incoming connections to port 80 on g1.
     let fw_rule: FirewallRule =
@@ -473,9 +488,9 @@ fn port_transition_pause() {
         },
     )
     .unwrap();
-    incr!(g1, ["epoch", "fw.rules_in"]);
+    incr!(g1, "epoch, firewall.rules.in");
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
 
     // Add router entry that allows g2 to send to other guests on same
     // subnet.
@@ -487,9 +502,9 @@ fn port_transition_pause() {
         )),
     )
     .unwrap();
-    incr!(g2, ["epoch", "router.rules_out"]);
+    incr!(g2, "epoch, router.rules.out");
     g2.port.start();
-    set_state!(g2, PortState::Running);
+    set!(g2, "port_state=running");
 
     // ================================================================
     // Send the HTTP SYN.
@@ -497,18 +512,18 @@ fn port_transition_pause() {
     let mut pkt1 = http_tcp_syn(&g2_cfg, &g1_cfg);
     let res = g2.port.process(Out, &mut pkt1, &mut g2_ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g2, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
+    incr!(g2, "firewall.flows.out, firewall.flows.in, uft.out");
 
     let res = g1.port.process(In, &mut pkt1, &mut g1_ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["fw.flows_in", "fw.flows_out", "uft.flows_in"]);
+    incr!(g1, "firewall.flows.in, firewall.flows.out, uft.in");
 
     // ================================================================
     // Pause the port and verify the internal state. Make sure that
     // introspective APIs are allowed.
     // ================================================================
     g2.port.pause().unwrap();
-    set_state!(g2, PortState::Paused);
+    set!(g2, "port_state=paused");
     let _ = g2.port.list_layers();
     let _ = g2.port.dump_layer("firewall").unwrap();
     let _ = g2.port.dump_tcp_flows().unwrap();
@@ -560,18 +575,18 @@ fn port_transition_pause() {
     // traffic.
     // ================================================================
     g2.port.start();
-    set_state!(g2, PortState::Running);
+    set!(g2, "port_state=running");
 
     let mut pkt2 = http_tcp_syn_ack(&g1_cfg, &g2_cfg);
     g1_ameta.clear();
     let res = g1.port.process(Out, &mut pkt2, &mut g1_ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["uft.flows_out"]);
+    incr!(g1, "uft.out");
 
     g2_ameta.clear();
     let res = g2.port.process(In, &mut pkt2, &mut g2_ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g2, ["uft.flows_in"]);
+    incr!(g2, "uft.in");
 }
 
 #[test]
@@ -580,7 +595,7 @@ fn add_remove_fw_rule() {
     let v2p = Arc::new(Virt2Phys::new());
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
 
     // Add a new inbound rule.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
@@ -592,7 +607,7 @@ fn add_remove_fw_rule() {
         },
     )
     .unwrap();
-    incr!(g1, ["epoch", "fw.rules_in"]);
+    incr!(g1, "epoch, firewall.rules.in");
 
     // Remove the rule just added, by ID.
     firewall::rem_fw_rule(
@@ -604,7 +619,7 @@ fn add_remove_fw_rule() {
         },
     )
     .unwrap();
-    update!(g1, ["incr:epoch", "decr:fw.rules_in"]);
+    update!(g1, ["incr:epoch", "decr:firewall.rules.in"]);
 }
 
 // Verify that the guest can ping the virtual gateway.
@@ -615,7 +630,7 @@ fn gateway_icmp4_ping() {
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_icmpv4_ping.pcap");
     let ident = 7;
     let seq_no = 777;
@@ -717,7 +732,7 @@ fn guest_to_guest_no_route() {
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
     let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
@@ -730,7 +745,7 @@ fn guest_to_guest_no_route() {
     // have a way to send "simulated" flow through the layer pipeline
     // for the effect of removing it from any flow tables in which it
     // exists.
-    incr!(g1, ["fw.flows_out", "fw.flows_in"]);
+    incr!(g1, "firewall.flows.out, firewall.flows.in");
     assert_port!(g1);
 }
 
@@ -750,7 +765,7 @@ fn guest_to_guest() {
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
 
     // Add router entry that allows Guest 1 to send to Guest 2.
     router::add_entry(
@@ -761,11 +776,11 @@ fn guest_to_guest() {
         )),
     )
     .unwrap();
-    incr!(g1, ["epoch", "router.rules_out"]);
+    incr!(g1, "epoch, router.rules.out");
 
     let mut g2 = oxide_net_setup("g2_port", &g2_cfg, v2p.clone());
     g2.port.start();
-    set_state!(g2, PortState::Running);
+    set!(g2, "port_state=running");
 
     // Add router entry that allows Guest 2 to send to Guest 1.
     //
@@ -781,7 +796,7 @@ fn guest_to_guest() {
         )),
     )
     .unwrap();
-    incr!(g2, ["epoch", "router.rules_out"]);
+    incr!(g2, "epoch, router.rules.out");
 
     // Allow incoming TCP connection from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
@@ -793,7 +808,7 @@ fn guest_to_guest() {
         },
     )
     .unwrap();
-    incr!(g2, ["epoch", "fw.rules_in"]);
+    incr!(g2, "epoch, firewall.rules.in");
 
     let mut pcap_guest1 =
         PcapBuilder::new("overlay_guest_to_guest-guest-1.pcap");
@@ -813,7 +828,7 @@ fn guest_to_guest() {
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     pcap_phys1.add_pkt(&pkt1);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
+    incr!(g1, "firewall.flows.out, firewall.flows.in, uft.out");
 
     // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
     assert_eq!(pkt1.body_offset(), 14 + 40 + 8 + 8 + 14 + 20 + 20);
@@ -898,7 +913,7 @@ fn guest_to_guest() {
     let res = g2.port.process(In, &mut pkt2, &mut ameta);
     pcap_guest2.add_pkt(&pkt2);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g2, ["fw.flows_in", "fw.flows_out", "uft.flows_in"]);
+    incr!(g2, "firewall.flows.in, firewall.flows.out, uft.in");
 
     // Ether + IPv4 + TCP
     assert_eq!(pkt2.body_offset(), 14 + 20 + 20);
@@ -964,7 +979,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
 
     // Add router entry that allows g1 to talk to any other guest on
     // its VPC subnet.
@@ -980,11 +995,11 @@ fn guest_to_guest_diff_vpc_no_peer() {
         )),
     )
     .unwrap();
-    incr!(g1, ["epoch", "router.rules_out"]);
+    incr!(g1, "epoch, router.rules.out");
 
     let mut g2 = oxide_net_setup("g2_port", &g2_cfg, v2p.clone());
     g2.port.start();
-    set_state!(g2, PortState::Running);
+    set!(g2, "port_state=running");
 
     // Add router entry that allows Guest 2 to send to Guest 1.
     //
@@ -1000,7 +1015,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
         )),
     )
     .unwrap();
-    incr!(g2, ["epoch", "router.rules_out"]);
+    incr!(g2, "epoch, router.rules.out");
 
     // Allow incoming TCP connection from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
@@ -1012,7 +1027,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
         },
     )
     .unwrap();
-    incr!(g2, ["epoch", "fw.rules_in"]);
+    incr!(g2, "epoch, firewall.rules.in");
 
     // ================================================================
     // Run the packet through g1's port in the outbound direction and
@@ -1021,7 +1036,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
     let mut g1_pkt = http_tcp_syn(&g1_cfg, &g2_cfg);
     let res = g1.port.process(Out, &mut g1_pkt, &mut ameta);
     assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
-    incr!(g1, ["fw.flows_in", "fw.flows_out"]);
+    incr!(g1, "firewall.flows.in, firewall.flows.out");
 }
 
 // Verify that a guest can communicate with the internet.
@@ -1032,7 +1047,7 @@ fn guest_to_internet() {
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
 
     // Add router entry that allows g1 to route to internet.
     router::add_entry(
@@ -1041,7 +1056,7 @@ fn guest_to_internet() {
         RouterTarget::InternetGateway,
     )
     .unwrap();
-    incr!(g1, ["epoch", "router.rules_out"]);
+    incr!(g1, "epoch, router.rules.out");
 
     // ================================================================
     // Generate a TCP SYN packet from g1 to zinascii.com
@@ -1061,13 +1076,9 @@ fn guest_to_internet() {
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(
         g1,
-        [
-            "fw.flows_out",
-            "fw.flows_in",
-            "nat.flows_out",
-            "nat.flows_in",
-            "uft.flows_out"
-        ]
+        "firewall.flows.out, firewall.flows.in, \
+         nat.flows.out, nat.flows.in, \
+         uft.out"
     );
 
     // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
@@ -1151,7 +1162,7 @@ fn snat_icmp4_echo_rewrite() {
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
     let dst_ip: Ipv4Addr = "45.55.45.205".parse().unwrap();
     let ident = 7;
     let mut seq_no = 777;
@@ -1164,7 +1175,7 @@ fn snat_icmp4_echo_rewrite() {
         RouterTarget::InternetGateway,
     )
     .unwrap();
-    incr!(g1, ["epoch", "router.rules_out"]);
+    incr!(g1, "epoch, router.rules.out");
     let mapped_port = g1_cfg.snat().ports.clone().rev().next().unwrap();
 
     // ================================================================
@@ -1184,13 +1195,9 @@ fn snat_icmp4_echo_rewrite() {
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(
         g1,
-        [
-            "fw.flows_out",
-            "fw.flows_in",
-            "nat.flows_out",
-            "nat.flows_in",
-            "uft.flows_out"
-        ]
+        "firewall.flows.out, firewall.flows.in, \
+         nat.flows.out, nat.flows.in, \
+         uft.out"
     );
 
     assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + IP_SZ);
@@ -1238,7 +1245,7 @@ fn snat_icmp4_echo_rewrite() {
 
     let res = g1.port.process(In, &mut pkt2, &mut ameta);
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    incr!(g1, ["uft.flows_in"]);
+    incr!(g1, "uft.in");
     assert_eq!(pkt2.body_offset(), IP_SZ);
     assert_eq!(pkt2.body_seg(), 1);
     let meta = pkt2.meta();
@@ -1447,7 +1454,7 @@ fn arp_gateway() {
     let v2p = Arc::new(Virt2Phys::new());
     let mut g1 = oxide_net_setup("arp_hairpin", &cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
     let reply_hdr_sz = EtherHdr::SIZE + ARP_HDR_SZ;
 
     let pkt = Packet::alloc(42);
@@ -1523,7 +1530,7 @@ fn flow_expiration() {
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
     let now = Moment::now();
 
     // Add router entry that allows Guest 1 to send to Guest 2.
@@ -1535,7 +1542,7 @@ fn flow_expiration() {
         )),
     )
     .unwrap();
-    incr!(g1, ["epoch", "router.rules_out"]);
+    incr!(g1, "epoch, router.rules.out");
 
     // ================================================================
     // Run the packet through g1's port in the outbound direction and
@@ -1544,7 +1551,7 @@ fn flow_expiration() {
     let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
+    incr!(g1, "firewall.flows.out, firewall.flows.in, uft.out");
 
     // ================================================================
     // Verify expiration
@@ -1575,7 +1582,7 @@ fn firewall_replace_rules() {
 
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
 
     // Add router entry that allows Guest 1 to send to Guest 2.
     router::add_entry(
@@ -1586,11 +1593,11 @@ fn firewall_replace_rules() {
         )),
     )
     .unwrap();
-    incr!(g1, ["epoch", "router.rules_out"]);
+    incr!(g1, "epoch, router.rules.out");
 
     let mut g2 = oxide_net_setup("g2_port", &g2_cfg, v2p.clone());
     g2.port.start();
-    set_state!(g2, PortState::Running);
+    set!(g2, "port_state=running");
 
     // Allow incoming TCP connection on g2 from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
@@ -1602,7 +1609,7 @@ fn firewall_replace_rules() {
         },
     )
     .unwrap();
-    incr!(g2, ["epoch", "fw.rules_in"]);
+    incr!(g2, "epoch, firewall.rules.in");
 
     // ================================================================
     // Run the telnet SYN packet through g1's port in the outbound
@@ -1611,7 +1618,7 @@ fn firewall_replace_rules() {
     let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["fw.flows_out", "fw.flows_in", "uft.flows_out"]);
+    incr!(g1, "firewall.flows.out, firewall.flows.in, uft.out");
 
     // ================================================================
     // Modify the outgoing ruleset, but still allow the traffic to
@@ -1635,13 +1642,15 @@ fn firewall_replace_rules() {
         g1,
         [
             "incr:epoch",
-            "set:fw.flows_in=0,fw.flows_out=0,fw.rules_out=2,fw.rules_in=0"
+            "set:firewall.flows.in=0, firewall.flows.out=0",
+            "set:firewall.rules.out=2, firewall.rules.in=0",
         ]
     );
+
     let mut pkt2 = http_tcp_syn(&g1_cfg, &g2_cfg);
     let res = g1.port.process(Out, &mut pkt2, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["fw.flows_in", "fw.flows_out"]);
+    incr!(g1, "firewall.flows.in, firewall.flows.out");
 
     // ================================================================
     // Now that the packet has been encap'd let's play the role of
@@ -1656,7 +1665,7 @@ fn firewall_replace_rules() {
         Packet::<Initialized>::copy(&pkt3.all_bytes()).parse().unwrap();
     let res = g2.port.process(In, &mut pkt3, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g2, ["fw.flows_in", "fw.flows_out", "uft.flows_in"]);
+    incr!(g2, "firewall.flows.in, firewall.flows.out, uft.in");
 
     // ================================================================
     // Replace g2's firewall rule set to deny all inbound TCP traffic.
@@ -1676,7 +1685,8 @@ fn firewall_replace_rules() {
         g2,
         [
             "incr:epoch",
-            "set:fw.flows_in=0,fw.flows_out=0,fw.rules_in=1,fw.rules_out=0"
+            "set:firewall.flows.in=0, firewall.flows.out=0",
+            "set:firewall.rules.in=1, firewall.rules.out=0",
         ]
     );
 
@@ -1691,7 +1701,7 @@ fn firewall_replace_rules() {
 
         _ => panic!("expected drop but got: {:?}", res),
     }
-    update!(g2, ["set:uft.flows_in=0"]);
+    update!(g2, ["set:uft.in=0"]);
 }
 
 // Test that a guest can send an ICMPv6 echo request / reply to the gateway.
@@ -1704,7 +1714,7 @@ fn gateway_icmpv6_ping() {
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_icmpv6_ping.pcap");
 
     let src_ips = [
@@ -1873,7 +1883,7 @@ fn gateway_router_advert_reply() {
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_router_advert_reply.pcap");
 
     // ====================================================
@@ -2310,7 +2320,7 @@ fn test_gateway_neighbor_advert_reply() {
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_neighbor_advert_reply.pcap");
 
     let data = generate_solicit_test_data(&g1_cfg);
@@ -2475,7 +2485,7 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
     g1.port.start();
-    set_state!(g1, PortState::Running);
+    set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("dhcpv6_solicit_reply.pcap");
 
     let requested_iana = dhcpv6::options::IaNa {
@@ -2559,9 +2569,10 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                     );
                 }
 
-                // Regardless of the message type, we are supposed to include
-                // answers for each Option the client requested (and that we
-                // support). That's mostly just the actual VPC-private IPv6 address.
+                // Regardless of the message type, we are supposed to
+                // include answers for each Option the client
+                // requested (and that we support). That's mostly just
+                // the actual VPC-private IPv6 address.
                 let iana =
                     reply.find_option(dhcpv6::options::Code::IaNa).unwrap();
                 if let dhcpv6::options::Option::IaNa(dhcpv6::options::IaNa {

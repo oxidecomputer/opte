@@ -42,6 +42,7 @@ use core::fmt;
 use core::fmt::Display;
 use core::num::NonZeroU32;
 use core::result;
+use core::str::FromStr;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::SeqCst;
 use kstat_macro::KStatProvider;
@@ -399,6 +400,20 @@ impl Display for PortState {
             Restored => "restored",
         };
         write!(f, "{}", s)
+    }
+}
+
+impl FromStr for PortState {
+    type Err = String;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        match s {
+            "ready" => Ok(Self::Ready),
+            "running" => Ok(Self::Running),
+            "paused" => Ok(Self::Paused),
+            "restored" => Ok(Self::Restored),
+            _ => Err(format!("Bad PortState string: {s}")),
+        }
     }
 }
 
