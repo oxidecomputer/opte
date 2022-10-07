@@ -137,6 +137,14 @@ macro_rules! assert_ip {
 }
 
 impl IpHdr {
+    /// Return the bytes of the header.
+    pub fn as_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Ip4(ip4) => ip4.as_bytes(),
+            Self::Ip6(ip6) => ip6.as_bytes(),
+        }
+    }
+
     /// Return the total length of the header.
     ///
     /// In the case of IPv6, this includes any extension headers.

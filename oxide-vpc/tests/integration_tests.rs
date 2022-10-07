@@ -19,9 +19,13 @@
 //! verify it's blocked by firewall, add a new rule to allow incoming
 //! on 80/443, verify the next request passes, remove the rules,
 //! verify it once again is denied, etc.
-//!
-//! TODO This module belongs in oxide_vpc as it's testing VPC-specific
-//! configuration.
+
+mod common;
+
+use common::icmp::*;
+use common::pcap::*;
+use common::port_state::*;
+use common::*;
 use opte::api::Direction::*;
 use opte::api::MacAddr;
 use opte::api::OpteError;
@@ -30,12 +34,10 @@ use opte::engine::arp::ArpEth4Payload;
 use opte::engine::arp::ArpEth4PayloadRaw;
 use opte::engine::arp::ArpHdrRaw;
 use opte::engine::arp::ARP_HDR_SZ;
-use opte::engine::checksum::HeaderChecksum;
 use opte::engine::dhcpv6;
 use opte::engine::ether::EtherHdr;
 use opte::engine::ether::EtherHdrRaw;
 use opte::engine::ether::EtherMeta;
-use opte::engine::ether::EtherType;
 use opte::engine::ether::ETHER_TYPE_ARP;
 use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::ether::ETHER_TYPE_IPV6;
@@ -51,7 +53,6 @@ use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip4::Ipv4Hdr;
 use opte::engine::ip4::Ipv4Meta;
 use opte::engine::ip4::Protocol;
-use opte::engine::ip4::UlpCsumOpt;
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::ip6::Ipv6Hdr;
 use opte::engine::ip6::Ipv6Meta;
@@ -71,8 +72,6 @@ use opte::engine::port::ProcessResult;
 use opte::engine::rule;
 use opte::engine::rule::MappingResource;
 use opte::engine::rule::Rule;
-use opte::engine::tcp::TcpFlags;
-use opte::engine::tcp::TcpHdr;
 use opte::engine::udp::UdpHdr;
 use opte::engine::udp::UdpMeta;
 use opte::ExecCtx;
@@ -97,9 +96,6 @@ use oxide_vpc::engine::nat;
 use oxide_vpc::engine::overlay;
 use oxide_vpc::engine::overlay::Virt2Phys;
 use oxide_vpc::engine::router;
-use pcap_parser::pcap;
-use pcap_parser::pcap::LegacyPcapBlock;
-use pcap_parser::pcap::PcapHeader;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
@@ -112,17 +108,12 @@ use smoltcp::wire::NdiscRepr;
 use smoltcp::wire::NdiscRouterFlags;
 use smoltcp::wire::RawHardwareAddress;
 use std::boxed::Box;
-use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::prelude::v1::*;
 use std::sync::Arc;
 use std::time::Duration;
 use zerocopy::AsBytes;
 use ProcessResult::*;
-
-// This is the MAC address that OPTE uses to act as the virtual gateway.
-pub const GW_MAC_ADDR: MacAddr =
-    MacAddr::from_const([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]);
 
 const VPC_ENCAP_SZ: usize =
     EtherHdr::SIZE + Ipv6Hdr::SIZE + UdpHdr::SIZE + GeneveHdr::SIZE;
@@ -134,307 +125,6 @@ const IP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::SIZE;
 #[ctor::ctor]
 fn register_usdt() {
     usdt::register_probes().unwrap();
-}
-
-#[allow(dead_code)]
-fn get_header(offset: &[u8]) -> (&[u8], PcapHeader) {
-    match pcap::parse_pcap_header(offset) {
-        Ok((new_offset, header)) => (new_offset, header),
-        Err(e) => panic!("failed to get header: {:?}", e),
-    }
-}
-
-#[allow(dead_code)]
-fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
-    match pcap::parse_pcap_frame(offset) {
-        Ok((new_offset, block)) => {
-            // We always want access to the entire packet.
-            assert_eq!(block.origlen, block.caplen);
-            (new_offset, block)
-        }
-
-        Err(e) => panic!("failed to get next block: {:?}", e),
-    }
-}
-
-// Used to track various bits of port state for the purpose of
-// validating the port as we send it various commands and traffic. It
-// is meant to be manipulated and checked by the macros that follow.
-struct VpcPortState {
-    counts: BTreeMap<String, u32>,
-    epoch: u64,
-    port_state: PortState,
-}
-
-impl VpcPortState {
-    fn new() -> Self {
-        Self {
-            counts: BTreeMap::from(
-                [
-                    ("arp.rules_in", 0),
-                    ("arp.rules_out", 0),
-                    ("fw.flows_in", 0),
-                    ("fw.flows_out", 0),
-                    ("fw.rules_in", 0),
-                    ("fw.rules_out", 0),
-                    ("icmp.rules_in", 0),
-                    ("icmp.rules_out", 0),
-                    ("nat.flows_in", 0),
-                    ("nat.flows_out", 0),
-                    ("nat.rules_in", 0),
-                    ("nat.rules_out", 0),
-                    ("router.rules_in", 0),
-                    ("router.rules_out", 0),
-                    ("uft.flows_in", 0),
-                    ("uft.flows_out", 0),
-                ]
-                .map(|(name, val)| (name.to_string(), val)),
-            ),
-            epoch: 1,
-            port_state: PortState::Ready,
-        }
-    }
-}
-
-// Assert that the port matches the expected port state.
-macro_rules! assert_port {
-    ($pav:expr) => {
-        for (field, expected_val) in $pav.vps.counts.iter() {
-            let actual_val = match field.as_str() {
-                "arp.rules_in" => $pav.port.num_rules("arp", In),
-                "arp.rules_out" => $pav.port.num_rules("arp", Out),
-                "fw.flows_in" => $pav.port.num_flows("firewall", In),
-                "fw.flows_out" => $pav.port.num_flows("firewall", Out),
-                "fw.rules_in" => $pav.port.num_rules("firewall", In),
-                "fw.rules_out" => $pav.port.num_rules("firewall", Out),
-                "icmp.rules_in" => $pav.port.num_rules("icmp", In),
-                "icmp.rules_out" => $pav.port.num_rules("icmp", Out),
-                "nat.flows_in" => $pav.port.num_flows("nat", In),
-                "nat.flows_out" => $pav.port.num_flows("nat", Out),
-                "nat.rules_in" => $pav.port.num_rules("nat", In),
-                "nat.rules_out" => $pav.port.num_rules("nat", Out),
-                "router.rules_in" => $pav.port.num_rules("router", In),
-                "router.rules_out" => $pav.port.num_rules("router", Out),
-                "uft.flows_in" => $pav.port.num_flows("uft", In),
-                "uft.flows_out" => $pav.port.num_flows("uft", Out),
-                f => todo!("implement check for field: {}", f),
-            };
-            assert!(
-                *expected_val == actual_val,
-                "field value mismatch: field: {}, expected: {}, actual: {}",
-                field,
-                expected_val,
-                actual_val,
-            );
-        }
-
-        {
-            let expected = $pav.vps.epoch;
-            let actual = $pav.port.epoch();
-            assert!(
-                expected == actual,
-                "epoch mismatch: expected: {}, actual: {}",
-                expected,
-                actual,
-            );
-        }
-
-        {
-            let expected = $pav.vps.port_state;
-            let actual = $pav.port.state();
-            assert!(
-                expected == actual,
-                "port state mismatch: expected: {}, actual: {}",
-                expected,
-                actual,
-            );
-        }
-    };
-}
-
-// Increment a given field.
-macro_rules! incr_field {
-    ($vps:expr, $field:expr) => {
-        match $vps.counts.get_mut($field) {
-            Some(v) => *v += 1,
-            None => assert!(false, "field does not exist: {}", $field),
-        }
-    };
-}
-
-// Decrement a given field.
-macro_rules! decr_field {
-    ($vps:expr, $field:expr) => {
-        match $vps.counts.get_mut($field) {
-            Some(v) => *v -= 1,
-            None => assert!(false, "field does not exist: {}", $field),
-        }
-    };
-}
-
-// Increment the list of fields.
-macro_rules! incr_na {
-    ($port_and_vps:expr, $fields:expr) => {
-        for f in $fields {
-            match f {
-                "epoch" => $port_and_vps.vps.epoch += 1,
-                _ => incr_field!($port_and_vps.vps, f),
-            }
-        }
-    };
-}
-
-// Increment the list of fields and assert the port state.
-macro_rules! incr {
-    ($port_and_vps:expr, $fields:expr) => {
-        incr_na!($port_and_vps, $fields);
-        assert_port!($port_and_vps);
-    };
-}
-
-// Drecrement the list of fields.
-macro_rules! decr_na {
-    ($port_and_vps:expr, $fields:expr) => {
-        for f in $fields {
-            match f {
-                // You can never decrement the epoch.
-                _ => decr_field!($port_and_vps.vps, f),
-            }
-        }
-    };
-}
-
-// Set the given field to the given value.
-macro_rules! set_field {
-    ($port_and_vps:expr, $field:expr, $val:expr) => {
-        match $port_and_vps.vps.counts.get_mut($field) {
-            Some(v) => *v = $val,
-            None => assert!(false, "field does not exist: {}", $field),
-        }
-    };
-}
-
-// Set a list of fields to the specific value.
-//
-// epcoh=M,fw.rules_in=N
-macro_rules! set_fields {
-    ($port_and_vps:expr, $fields:expr) => {
-        for f in $fields {
-            match f.split_once("=") {
-                Some(("epoch", val)) => {
-                    $port_and_vps.vps.epoch += val.parse::<u64>().unwrap();
-                }
-
-                Some((field, val)) => {
-                    set_field!($port_and_vps, field, val.parse().unwrap());
-                }
-
-                _ => panic!("malformed field expr: {}", f),
-            }
-        }
-    };
-}
-
-// Update the VpcPortState and assert.
-//
-// update!(g1, ["incr:epoch,fw.flows_out,fw.flows_in,uft.flows_out"])
-macro_rules! update {
-    ($port_and_vps:expr, $instructions:expr) => {
-        for inst in $instructions {
-            match inst.split_once(":") {
-                Some(("incr", fields)) => {
-                    // Convert "field1,field2,field3" to ["field1",
-                    // "field2, "field3"]
-                    let fields_arr: Vec<&str> = fields.split(",").collect();
-                    incr_na!($port_and_vps, fields_arr);
-                }
-
-                Some(("set", fields)) => {
-                    let fields_arr: Vec<&str> = fields.split(",").collect();
-                    set_fields!($port_and_vps, fields_arr);
-                }
-
-                Some(("decr", fields)) => {
-                    let fields_arr: Vec<&str> = fields.split(",").collect();
-                    decr_na!($port_and_vps, fields_arr);
-                }
-
-                Some((op, _)) => {
-                    panic!("unknown op: {} instruction: {}", op, inst);
-                }
-
-                _ => panic!("malformed instruction: {}", inst),
-            }
-        }
-
-        assert_port!($port_and_vps);
-    };
-}
-
-// Set all flow counts to zero.
-macro_rules! zero_flows {
-    ($port_and_vps:expr) => {
-        for (field, count) in $port_and_vps.vps.counts.iter_mut() {
-            match field.as_str() {
-                "fw.flows_in" | "fw.flows_out" => *count = 0,
-                "nat.flows_in" | "nat.flows_out" => *count = 0,
-                "router.flows_in" | "router.flows_out" => *count = 0,
-                "uft.flows_in" | "uft.flows_out" => *count = 0,
-                &_ => (),
-            }
-        }
-    };
-}
-
-// Set the expected PortState of the port.
-macro_rules! set_state {
-    ($port_and_vps:expr, $port_state:expr) => {
-        $port_and_vps.vps.port_state = $port_state;
-        assert_port!($port_and_vps);
-    };
-}
-
-// TODO move PcapBuilder stuff to common file
-use pcap_parser::Linktype;
-use pcap_parser::ToVec;
-use std::fs::File;
-use std::io::Write;
-
-pub struct PcapBuilder {
-    file: File,
-}
-
-impl PcapBuilder {
-    pub fn new(path: &str) -> Self {
-        let mut file = File::create(path).unwrap();
-
-        let mut hdr = PcapHeader {
-            magic_number: 0xa1b2c3d4,
-            version_major: 2,
-            version_minor: 4,
-            thiszone: 0,
-            sigfigs: 0,
-            snaplen: 1500,
-            network: Linktype::ETHERNET,
-        };
-
-        file.write_all(&hdr.to_vec().unwrap()).unwrap();
-
-        Self { file }
-    }
-
-    pub fn add_pkt(&mut self, pkt: &Packet<Parsed>) {
-        let pkt_bytes = PacketReader::new(&pkt, ()).copy_remaining();
-        let mut block = LegacyPcapBlock {
-            ts_sec: 7777,
-            ts_usec: 7777,
-            caplen: pkt_bytes.len() as u32,
-            origlen: pkt_bytes.len() as u32,
-            data: &pkt_bytes,
-        };
-
-        self.file.write_all(&block.to_vec().unwrap()).unwrap();
-    }
 }
 
 fn lab_cfg() -> VpcCfg {
@@ -645,97 +335,6 @@ fn check_no_flows(port: &Port) {
 
     assert_eq!(port.num_flows("uft", Out), 0);
     assert_eq!(port.num_flows("uft", In), 0);
-}
-
-// Generate a packet representing the start of a TCP handshake for a
-// telnet session from src to dst.
-fn tcp_telnet_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
-    let body = vec![];
-    let mut tcp = TcpHdr::new(7865, 23);
-    tcp.set_flags(TcpFlags::SYN);
-    tcp.set_seq(4224936861);
-    let mut ip4 = Ipv4Hdr::new_tcp(
-        &mut tcp,
-        &body,
-        src.ipv4_cfg().unwrap().private_ip,
-        dst.ipv4_cfg().unwrap().private_ip,
-    );
-    ip4.compute_hdr_csum();
-    let tcp_csum =
-        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, src.private_mac, src.gateway_mac);
-
-    let mut bytes = vec![];
-    bytes.extend_from_slice(&eth.as_bytes());
-    bytes.extend_from_slice(&ip4.as_bytes());
-    bytes.extend_from_slice(&tcp.as_bytes());
-    bytes.extend_from_slice(&body);
-    Packet::copy(&bytes).parse().unwrap()
-}
-
-// Generate a packet representing the start of a TCP handshake for an
-// HTTP request from src to dst.
-fn http_tcp_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
-    http_tcp_syn2(
-        src.private_mac,
-        src.ipv4_cfg().unwrap().private_ip,
-        dst.ipv4_cfg().unwrap().private_ip,
-    )
-}
-
-// Generate a packet representing the start of a TCP handshake for an
-// HTTP request from src to dst.
-fn http_tcp_syn2(
-    eth_src: MacAddr,
-    ip_src: Ipv4Addr,
-    ip_dst: Ipv4Addr,
-) -> Packet<Parsed> {
-    let body = vec![];
-    let mut tcp = TcpHdr::new(44490, 80);
-    tcp.set_flags(TcpFlags::SYN);
-    tcp.set_seq(2382112979);
-    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
-    ip4.compute_hdr_csum();
-    let tcp_csum =
-        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    // Any packet from the guest is always addressed to the gateway.
-    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, GW_MAC_ADDR);
-    let mut bytes = vec![];
-    bytes.extend_from_slice(&eth.as_bytes());
-    bytes.extend_from_slice(&ip4.as_bytes());
-    bytes.extend_from_slice(&tcp.as_bytes());
-    bytes.extend_from_slice(&body);
-    Packet::copy(&bytes).parse().unwrap()
-}
-
-// Generate a packet representing the SYN+ACK reply to `http_tcp_syn()`,
-// from g1 to g2.
-fn http_tcp_syn_ack(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
-    let body = vec![];
-    let mut tcp = TcpHdr::new(80, 44490);
-    tcp.set_flags(TcpFlags::SYN | TcpFlags::ACK);
-    tcp.set_seq(44161351);
-    tcp.set_ack(2382112980);
-    let mut ip4 = Ipv4Hdr::new_tcp(
-        &mut tcp,
-        &body,
-        src.ipv4_cfg().unwrap().private_ip,
-        dst.ipv4_cfg().unwrap().private_ip,
-    );
-    ip4.compute_hdr_csum();
-    let tcp_csum =
-        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, src.private_mac, src.gateway_mac);
-
-    let mut bytes = vec![];
-    bytes.extend_from_slice(&eth.as_bytes());
-    bytes.extend_from_slice(&ip4.as_bytes());
-    bytes.extend_from_slice(&tcp.as_bytes());
-    bytes.extend_from_slice(&body);
-    Packet::copy(&bytes).parse().unwrap()
 }
 
 // Verify Port transition from Ready -> Running.
@@ -1006,134 +605,6 @@ fn add_remove_fw_rule() {
     )
     .unwrap();
     update!(g1, ["incr:epoch", "decr:fw.rules_in"]);
-}
-
-enum IcmpEchoType {
-    Req,
-    Reply,
-}
-
-fn gen_icmp_echo_req(
-    eth_src: MacAddr,
-    eth_dst: MacAddr,
-    ip_src: IpAddr,
-    ip_dst: IpAddr,
-    ident: u16,
-    seq_no: u16,
-    data: &[u8],
-) -> Packet<Parsed> {
-    match (ip_src, ip_dst) {
-        (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => {
-            gen_icmpv4_echo_req(eth_src, eth_dst, src, dst, ident, seq_no, data)
-        }
-        (IpAddr::Ip6(src), IpAddr::Ip6(dst)) => {
-            gen_icmpv6_echo_req(eth_src, eth_dst, src, dst, ident, seq_no, data)
-        }
-        (_, _) => panic!("IP src and dst versions must match"),
-    }
-}
-
-fn gen_icmpv4_echo_req(
-    eth_src: MacAddr,
-    eth_dst: MacAddr,
-    ip_src: Ipv4Addr,
-    ip_dst: Ipv4Addr,
-    ident: u16,
-    seq_no: u16,
-    data: &[u8],
-) -> Packet<Parsed> {
-    let etype = IcmpEchoType::Req;
-    gen_icmp_echo(etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data)
-}
-
-fn gen_icmp_echo_reply(
-    eth_src: MacAddr,
-    eth_dst: MacAddr,
-    ip_src: Ipv4Addr,
-    ip_dst: Ipv4Addr,
-    ident: u16,
-    seq_no: u16,
-    data: &[u8],
-) -> Packet<Parsed> {
-    let etype = IcmpEchoType::Reply;
-    gen_icmp_echo(etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data)
-}
-
-fn gen_icmp_echo(
-    etype: IcmpEchoType,
-    eth_src: MacAddr,
-    eth_dst: MacAddr,
-    ip_src: Ipv4Addr,
-    ip_dst: Ipv4Addr,
-    ident: u16,
-    seq_no: u16,
-    data: &[u8],
-) -> Packet<Parsed> {
-    let icmp = match etype {
-        IcmpEchoType::Req => Icmpv4Repr::EchoRequest { ident, seq_no, data },
-        IcmpEchoType::Reply => Icmpv4Repr::EchoReply { ident, seq_no, data },
-    };
-    let mut icmp_bytes = vec![0u8; icmp.buffer_len()];
-    let mut icmp_pkt = Icmpv4Packet::new_unchecked(&mut icmp_bytes);
-    let _ = icmp.emit(&mut icmp_pkt, &Default::default());
-
-    let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
-        src: ip_src,
-        dst: ip_dst,
-        proto: Protocol::ICMP,
-    });
-    ip4.set_total_len(ip4.hdr_len() as u16 + icmp.buffer_len() as u16);
-    ip4.compute_hdr_csum();
-    let eth = EtherHdr::from(&EtherMeta {
-        dst: eth_dst,
-        src: eth_src,
-        ether_type: ETHER_TYPE_IPV4,
-    });
-
-    let mut pkt_bytes =
-        Vec::with_capacity(EtherHdr::SIZE + ip4.hdr_len() + icmp.buffer_len());
-    pkt_bytes.extend_from_slice(&eth.as_bytes());
-    pkt_bytes.extend_from_slice(&ip4.as_bytes());
-    pkt_bytes.extend_from_slice(&icmp_bytes);
-    Packet::copy(&pkt_bytes).parse().unwrap()
-}
-
-fn gen_icmpv6_echo_req(
-    eth_src: MacAddr,
-    eth_dst: MacAddr,
-    ip_src: Ipv6Addr,
-    ip_dst: Ipv6Addr,
-    ident: u16,
-    seq_no: u16,
-    data: &[u8],
-) -> Packet<Parsed> {
-    let req = Icmpv6Repr::EchoRequest { ident, seq_no, data };
-    let mut body_bytes = vec![0u8; req.buffer_len()];
-    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body_bytes);
-    let _ = req.emit(
-        &Ipv6Address::from_bytes(&ip_src).into(),
-        &Ipv6Address::from_bytes(&ip_dst).into(),
-        &mut req_pkt,
-        &Default::default(),
-    );
-    let mut ip6 = Ipv6Hdr::from(&Ipv6Meta {
-        src: ip_src,
-        dst: ip_dst,
-        proto: Protocol::ICMPv6,
-    });
-    ip6.set_total_len(ip6.hdr_len() as u16 + req.buffer_len() as u16);
-    let eth = EtherHdr::from(&EtherMeta {
-        dst: eth_dst,
-        src: eth_src,
-        ether_type: ETHER_TYPE_IPV6,
-    });
-
-    let mut pkt_bytes =
-        Vec::with_capacity(EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len());
-    pkt_bytes.extend_from_slice(&eth.as_bytes());
-    pkt_bytes.extend_from_slice(&ip6.as_bytes());
-    pkt_bytes.extend_from_slice(&body_bytes);
-    Packet::copy(&pkt_bytes).parse().unwrap()
 }
 
 // Verify that the guest can ping the virtual gateway.
