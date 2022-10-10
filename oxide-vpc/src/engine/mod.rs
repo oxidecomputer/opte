@@ -12,4 +12,6 @@ pub mod icmp;
 pub mod icmpv6;
 pub mod nat;
 pub mod overlay;
+#[cfg(any(feature = "std", test))]
+pub mod print;
 pub mod router;

@@ -201,6 +201,12 @@ impl VpcCfg {
         }
     }
 
+    #[cfg(any(feature = "test-help", test))]
+    /// Return the physical address of the guest.
+    pub fn phys_addr(&self) -> PhysNet {
+        PhysNet { ether: self.private_mac, ip: self.phys_ip, vni: self.vni }
+    }
+
     #[cfg(not(any(feature = "test-help", test)))]
     /// Return the IPv4 SNAT config, if it exists.
     pub fn snat(&self) -> Option<&SNat4Cfg> {

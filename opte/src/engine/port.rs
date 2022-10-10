@@ -805,21 +805,21 @@ impl Port {
             [PortState::Running, PortState::Paused, PortState::Restored],
         )?;
 
-        let uft_in_limit = data.uft_in.get_limit().get();
-        let uft_in_num_flows = data.uft_in.num_flows();
-        let uft_in = data.uft_in.dump();
+        let in_limit = data.uft_in.get_limit().get();
+        let in_num_flows = data.uft_in.num_flows();
+        let in_flows = data.uft_in.dump();
 
-        let uft_out_limit = data.uft_out.get_limit().get();
-        let uft_out_num_flows = data.uft_out.num_flows();
-        let uft_out = data.uft_out.dump();
+        let out_limit = data.uft_out.get_limit().get();
+        let out_num_flows = data.uft_out.num_flows();
+        let out_flows = data.uft_out.dump();
 
         Ok(ioctl::DumpUftResp {
-            uft_in_limit,
-            uft_in_num_flows,
-            uft_in,
-            uft_out_limit,
-            uft_out_num_flows,
-            uft_out,
+            in_limit,
+            in_num_flows,
+            in_flows,
+            out_limit,
+            out_num_flows,
+            out_flows,
         })
     }
 

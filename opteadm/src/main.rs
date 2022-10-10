@@ -17,13 +17,11 @@ use opte::api::Direction;
 use opte::api::IpCidr;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv4Cidr;
-use opte::api::Ipv6Addr;
 use opte::api::MacAddr;
 use opte::api::Vni;
-use opte::engine::flow_table::FlowEntryDump;
-use opte::engine::ioctl as api;
-use opte::engine::packet::InnerFlowId;
-use opte::engine::rule::RuleDump;
+use opte::engine::print::print_layer;
+use opte::engine::print::print_list_layers;
+use opte::engine::print::print_uft;
 use opteadm::OpteAdm;
 use oxide_vpc::api::Action as FirewallAction;
 use oxide_vpc::api::AddRouterEntryReq;
@@ -31,7 +29,6 @@ use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
 use oxide_vpc::api::Filters as FirewallFilters;
 use oxide_vpc::api::FirewallRule;
-use oxide_vpc::api::GuestPhysAddr;
 use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::Ipv4Cfg;
 use oxide_vpc::api::PhysNet;
@@ -43,7 +40,7 @@ use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
-use oxide_vpc::engine::overlay::DumpVirt2PhysResp;
+use oxide_vpc::engine::print::print_v2p;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, StructOpt)]
@@ -253,186 +250,6 @@ fn print_port(pi: PortInfo) {
             .unwrap_or_else(|| none.clone()),
         pi.state,
     );
-}
-
-fn print_flow_header() {
-    println!(
-        "{:<6} {:<16} {:<6} {:<16} {:<6} {:<8} {:<22}",
-        "PROTO", "SRC IP", "SPORT", "DST IP", "DPORT", "HITS", "ACTION"
-    );
-}
-
-fn print_flow(flow_id: &InnerFlowId, flow_entry: &FlowEntryDump) {
-    // For those types with custom Display implementations
-    // we need to first format in into a String before
-    // passing it to println in order for the format
-    // specification to be honored.
-    println!(
-        "{:<6} {:<16} {:<6} {:<16} {:<6} {:<8} {:<22}",
-        flow_id.proto.to_string(),
-        flow_id.src_ip.to_string(),
-        flow_id.src_port,
-        flow_id.dst_ip.to_string(),
-        flow_id.dst_port,
-        flow_entry.hits,
-        flow_entry.state_summary,
-    );
-}
-
-fn print_rule_header() {
-    println!("{:<8} {:<6} {:<48} {:<18}", "ID", "PRI", "PREDICATES", "ACTION");
-}
-
-fn print_rule(id: u64, rule: &RuleDump) {
-    let hdr_preds = rule
-        .predicates
-        .iter()
-        .map(|p| p.to_string())
-        .collect::<Vec<String>>()
-        .join(" ");
-
-    let data_preds = rule
-        .data_predicates
-        .iter()
-        .map(|p| p.to_string())
-        .collect::<Vec<String>>()
-        .join(" ");
-
-    let mut preds = format!("{} {}", hdr_preds, data_preds);
-
-    if preds == "" {
-        preds = "*".to_string();
-    }
-
-    println!("{:<8} {:<6} {:<48} {:<?}", id, rule.priority, preds, rule.action);
-}
-
-fn print_hrb() {
-    println!("{:=<70}", "=");
-}
-
-fn print_hr() {
-    println!("{:-<70}", "-");
-}
-
-fn print_list_layers(resp: &api::ListLayersResp) {
-    println!(
-        "{:<12} {:<10} {:<10} {:<10}",
-        "NAME", "RULES IN", "RULES OUT", "FLOWS",
-    );
-
-    for desc in &resp.layers {
-        println!(
-            "{:<12} {:<10} {:<10} {:<10}",
-            desc.name, desc.rules_in, desc.rules_out, desc.flows,
-        );
-    }
-}
-
-fn print_v2p_header() {
-    println!("{:<24} {:<17} {}", "VPC IP", "VPC MAC ADDR", "UNDERLAY IP");
-}
-
-fn print_v2p_ip4((src, phys): &(Ipv4Addr, GuestPhysAddr)) {
-    let eth = format!("{}", phys.ether);
-    println!(
-        "{:<24} {:<17} {}",
-        std::net::Ipv4Addr::from(src.bytes()),
-        eth,
-        std::net::Ipv6Addr::from(phys.ip.bytes()),
-    );
-}
-
-fn print_v2p_ip6((src, phys): &(Ipv6Addr, GuestPhysAddr)) {
-    let eth = format!("{}", phys.ether);
-    println!(
-        "{:<24} {:<17} {}",
-        std::net::Ipv6Addr::from(src.bytes()),
-        eth,
-        std::net::Ipv6Addr::from(phys.ip.bytes()),
-    );
-}
-
-fn print_v2p(resp: &DumpVirt2PhysResp) {
-    println!("Virtual to Physical Mappings");
-    print_hrb();
-    for vpc in &resp.mappings {
-        println!("");
-        println!("VPC {}", vpc.vni);
-        print_hr();
-        println!("");
-        println!("IPv4 mappings");
-        print_hr();
-        print_v2p_header();
-        for pair in &vpc.ip4 {
-            print_v2p_ip4(pair);
-        }
-
-        println!("");
-        println!("IPv6 mappings");
-        print_hr();
-        print_v2p_header();
-        for pair in &vpc.ip6 {
-            print_v2p_ip6(pair);
-        }
-    }
-}
-
-fn print_layer(resp: &api::DumpLayerResp) {
-    println!("Layer {}", resp.name);
-    print_hrb();
-    println!("Inbound Flows");
-    print_hr();
-    print_flow_header();
-    for (flow_id, flow_state) in &resp.ft_in {
-        print_flow(flow_id, flow_state);
-    }
-
-    println!("\nOutbound Flows");
-    print_hr();
-    print_flow_header();
-    for (flow_id, flow_state) in &resp.ft_out {
-        print_flow(flow_id, flow_state);
-    }
-
-    println!("\nInbound Rules");
-    print_hr();
-    print_rule_header();
-    for (id, rule) in &resp.rules_in {
-        print_rule(*id, rule);
-    }
-
-    println!("\nOutbound Rules");
-    print_hr();
-    print_rule_header();
-    for (id, rule) in &resp.rules_out {
-        print_rule(*id, rule);
-    }
-
-    println!("");
-}
-
-fn print_uft(resp: &api::DumpUftResp) {
-    println!("Unified Flow Table");
-    print_hrb();
-    println!("Inbound Flows [{}/{}]", resp.uft_in_num_flows, resp.uft_in_limit);
-    print_hr();
-    print_flow_header();
-    for (flow_id, flow_state) in &resp.uft_in {
-        print_flow(flow_id, flow_state);
-    }
-
-    println!(
-        "\nOutbound Flows [{}/{}]",
-        resp.uft_out_num_flows, resp.uft_out_limit
-    );
-    print_hr();
-    print_flow_header();
-    for (flow_id, flow_state) in &resp.uft_out {
-        print_flow(flow_id, flow_state);
-    }
-
-    println!("");
 }
 
 fn die<E: Display>(error: E) -> ! {

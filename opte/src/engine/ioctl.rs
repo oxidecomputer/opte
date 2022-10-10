@@ -90,12 +90,12 @@ pub struct DumpUftReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpUftResp {
-    pub uft_in_limit: u32,
-    pub uft_in_num_flows: u32,
-    pub uft_in: Vec<(InnerFlowId, FlowEntryDump)>,
-    pub uft_out_limit: u32,
-    pub uft_out_num_flows: u32,
-    pub uft_out: Vec<(InnerFlowId, FlowEntryDump)>,
+    pub in_limit: u32,
+    pub in_num_flows: u32,
+    pub in_flows: Vec<(InnerFlowId, FlowEntryDump)>,
+    pub out_limit: u32,
+    pub out_num_flows: u32,
+    pub out_flows: Vec<(InnerFlowId, FlowEntryDump)>,
 }
 
 impl CmdOk for DumpUftResp {}

@@ -7,8 +7,46 @@
 //! Routines for verifying various Port state.
 
 use super::*;
-use opte::engine::port::PortState;
+use opte::engine::port::*;
+use opte::engine::print::*;
+use oxide_vpc::engine::overlay::VpcMappings;
+use oxide_vpc::engine::print::*;
 use std::collections::BTreeMap;
+
+/// Print various port state in a human-friendly manner when a test
+/// assertion fails.
+pub fn print_port(port: &Port, vpc_map: &VpcMappings) {
+    print_v2p(&vpc_map.dump());
+    println!("");
+
+    println!("Port: {} [{}]", port.name(), port.state());
+    print_hrb();
+
+    println!("");
+    println!("Layers");
+    print_hr();
+    let list_layers = port.list_layers();
+    print_list_layers(&list_layers);
+
+    // Only some states will report a UFT.
+    if let Ok(uft) = port.dump_uft() {
+        print_uft(&uft);
+    }
+
+    println!("");
+
+    for layer in &list_layers.layers {
+        print_layer(&port.dump_layer(&layer.name).unwrap());
+    }
+
+    println!("");
+    println!("Port Stats");
+    print_hr();
+    println!("{:#?}", port.stats_snap());
+
+    print_hrb();
+    println!("");
+}
 
 /// Track various bits of port state for the purpose of verifying
 /// certain events occur when traffic crosses the port or an
@@ -100,24 +138,25 @@ macro_rules! assert_port {
                 _ => todo!("impl check for: {field}"),
             };
 
-            assert!(
-                *expected_val == val,
-                "field value mismatch: field: {}, expected: {}, actual: {}",
-                field,
-                expected_val,
-                val,
-            );
+            if *expected_val != val {
+                print_port(&$pav.port, &$pav.vpc_map);
+                panic!(
+                    "field value mismatch: field: {field}, \
+                     expected: {expected_val}, actual: {val}"
+                );
+            }
         }
 
         {
             let expected = $pav.vps.port_state;
             let actual = $pav.port.state();
-            assert!(
-                expected == actual,
-                "port state mismatch: expected: {}, actual: {}",
-                expected,
-                actual,
-            );
+            if expected != actual {
+                print_port(&$pav.port, &$pav.vpc_map);
+                panic!(
+                    "port_state mismatch: expected: {expected}, \
+                     actual: {actual}"
+                );
+            }
         }
     };
 }

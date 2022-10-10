@@ -70,7 +70,6 @@ use opte::engine::port::PortState;
 use opte::engine::port::ProcessError;
 use opte::engine::port::ProcessResult;
 use opte::engine::rule;
-use opte::engine::rule::MappingResource;
 use opte::engine::rule::Rule;
 use opte::engine::udp::UdpHdr;
 use opte::engine::udp::UdpMeta;
@@ -78,10 +77,10 @@ use opte::ExecCtx;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::BoundaryServices;
 use oxide_vpc::api::FirewallRule;
-use oxide_vpc::api::GuestPhysAddr;
 use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::Ipv4Cfg;
 use oxide_vpc::api::Ipv6Cfg;
+use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
@@ -95,6 +94,7 @@ use oxide_vpc::engine::icmpv6;
 use oxide_vpc::engine::nat;
 use oxide_vpc::engine::overlay;
 use oxide_vpc::engine::overlay::Virt2Phys;
+use oxide_vpc::engine::overlay::VpcMappings;
 use oxide_vpc::engine::router;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use smoltcp::wire::Icmpv4Packet;
@@ -204,21 +204,69 @@ fn oxide_net_builder(
 struct PortAndVps {
     port: Port,
     vps: VpcPortState,
+    vpc_map: Arc<VpcMappings>,
 }
 
 fn oxide_net_setup(
     name: &str,
     cfg: &VpcCfg,
-    v2p: Arc<Virt2Phys>,
+    vpc_map: Option<Arc<VpcMappings>>,
 ) -> PortAndVps {
-    let port = oxide_net_builder(name, cfg, v2p)
+    // We have to setup the global VPC mapping state just like xde
+    // would do. Ideally, xde would not concern itself with any
+    // VPC-specific concerns. Ideally, xde would be a generic driver
+    // for interfacing with one of more OPTE virtual switches. Inside
+    // each OPTE virtual switch would be a given type of
+    // implementation, like the oxide-vpc implementation. This
+    // implementation would have a way to register itself with the
+    // virtual switch, somewhat like how a mac-provider registers
+    // itself with the mac framework. This mechanism would also
+    // provide some way for the implementation to provide
+    // switch-global state, and this is where oxide-vpc could place
+    // the VPC mappings (so that they can be shared across all ports).
+    //
+    // However, for the time being, this oxide-vpc global state is
+    // hard-coded directly in xde, and therefore we need to mimic that
+    // here in the integration test.
+    //
+    // The interface for `oxide_net_setup()` is arguably a bit odd and
+    // looks different from how xde works. Instead of requiring every
+    // test to manually allocate a VpcMapping and passing it to this
+    // setup function, we allow the test to pass `None` and have this
+    // function create a new VpcMapping value on our behalf. If the
+    // test involves more than one port, you can pass the existing
+    // VpcMaping as argument making sure that each port sees each
+    // other in the V2P state.
+    let vpc_map = if vpc_map.is_none() {
+        Arc::new(VpcMappings::new())
+    } else {
+        vpc_map.unwrap()
+    };
+
+    let phys_net =
+        PhysNet { ether: cfg.private_mac, ip: cfg.phys_ip, vni: cfg.vni };
+    let port_v2p = match &cfg.ip_cfg {
+        IpCfg::Ipv4(ipv4) => {
+            vpc_map.add(IpAddr::Ip4(ipv4.private_ip), phys_net)
+        }
+        IpCfg::Ipv6(ipv6) => {
+            vpc_map.add(IpAddr::Ip6(ipv6.private_ip), phys_net)
+        }
+        IpCfg::DualStack { ref ipv4, ref ipv6 } => {
+            vpc_map.add(IpAddr::Ip4(ipv4.private_ip), phys_net);
+            vpc_map.add(IpAddr::Ip6(ipv6.private_ip), phys_net)
+        }
+    };
+
+    let port = oxide_net_builder(name, cfg, port_v2p)
         .create(UFT_LIMIT.unwrap(), TCP_LIMIT.unwrap())
         .unwrap();
     assert_eq!(port.state(), PortState::Ready);
     assert_eq!(port.epoch(), 1);
     check_no_flows(&port);
     let vps = VpcPortState::new();
-    let mut pav = PortAndVps { port, vps };
+
+    let mut pav = PortAndVps { port, vps, vpc_map };
     update!(
         pav,
         [
@@ -346,8 +394,7 @@ fn check_no_flows(port: &Port) {
 #[test]
 fn check_layers() {
     let g1_cfg = g1_cfg();
-    let v2p = Arc::new(Virt2Phys::new());
-    let g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     let port_layers = g1.port.layers();
     assert_eq!(&VPC_LAYERS[..], &port_layers);
 }
@@ -357,15 +404,9 @@ fn check_layers() {
 fn port_transition_running() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let g2_phys =
-        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
-
-    // Add V2P mappings that allow guests to resolve each others
-    // physical addresses.
-    let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
 
     // Add router entry that allows g1 to send to other guests on the
     // same subnet.
@@ -400,15 +441,9 @@ fn port_transition_running() {
 fn port_transition_reset() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let g2_phys =
-        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
-
-    // Add V2P mappings that allow guests to resolve each others
-    // physical addresses.
-    let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
 
     // Add router entry that allows g1 to send to other guests on the
     // same subnet.
@@ -449,21 +484,11 @@ fn port_transition_reset() {
 #[test]
 fn port_transition_pause() {
     let g1_cfg = g1_cfg();
-    let g1_phys =
-        GuestPhysAddr { ether: g1_cfg.private_mac.into(), ip: g1_cfg.phys_ip };
     let g2_cfg = g2_cfg();
-    let g2_phys =
-        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
-
-    // Add V2P mappings that allow guests to resolve each others
-    // physical addresses.
-    let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g1_cfg.ipv4_cfg().unwrap().private_ip), g1_phys);
-    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut g1_ameta = ActionMeta::new();
     let mut g2_ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
-    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
 
     // Add router entry that allows g1 to send to other guests on same
     // subnet.
@@ -592,8 +617,7 @@ fn port_transition_pause() {
 #[test]
 fn add_remove_fw_rule() {
     let g1_cfg = g1_cfg();
-    let v2p = Arc::new(Virt2Phys::new());
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -626,9 +650,8 @@ fn add_remove_fw_rule() {
 #[test]
 fn gateway_icmp4_ping() {
     let g1_cfg = g1_cfg();
-    let v2p = Arc::new(Virt2Phys::new());
     let mut ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_icmpv4_ping.pcap");
@@ -722,15 +745,9 @@ fn gateway_icmp4_ping() {
 fn guest_to_guest_no_route() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let g2_phys =
-        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
-
-    // Add V2P mappings that allow guests to resolve each others
-    // physical addresses.
-    let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
     set!(g1, "port_state=running");
     let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
@@ -754,16 +771,9 @@ fn guest_to_guest_no_route() {
 fn guest_to_guest() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let g2_phys =
-        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
-
-    // Add V2P mappings that allow guests to resolve each others
-    // physical addresses.
-    let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
-
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -778,7 +788,7 @@ fn guest_to_guest() {
     .unwrap();
     incr!(g1, "epoch, router.rules.out");
 
-    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, v2p.clone());
+    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
     g2.port.start();
     set!(g2, "port_state=running");
 
@@ -966,18 +976,8 @@ fn guest_to_guest_diff_vpc_no_peer() {
     let g1_cfg = g1_cfg();
     let mut g2_cfg = g2_cfg();
     g2_cfg.vni = Vni::new(100u32).unwrap();
-
-    let g1_phys =
-        GuestPhysAddr { ether: g1_cfg.private_mac.into(), ip: g1_cfg.phys_ip };
-
-    // Add V2P mappings that allow guests to resolve each others
-    // physical addresses. In this case the only guest in VNI 99 is
-    // g1.
-    let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g1_cfg.ipv4_cfg().unwrap().private_ip), g1_phys);
     let mut ameta = ActionMeta::new();
-
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -997,7 +997,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
     .unwrap();
     incr!(g1, "epoch, router.rules.out");
 
-    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, v2p.clone());
+    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
     g2.port.start();
     set!(g2, "port_state=running");
 
@@ -1043,9 +1043,8 @@ fn guest_to_guest_diff_vpc_no_peer() {
 #[test]
 fn guest_to_internet() {
     let g1_cfg = g1_cfg();
-    let v2p = Arc::new(Virt2Phys::new());
     let mut ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -1158,9 +1157,8 @@ fn guest_to_internet() {
 #[test]
 fn snat_icmp4_echo_rewrite() {
     let g1_cfg = g1_cfg();
-    let v2p = Arc::new(Virt2Phys::new());
     let mut ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let dst_ip: Ipv4Addr = "45.55.45.205".parse().unwrap();
@@ -1451,8 +1449,7 @@ fn arp_gateway() {
 
     let cfg = g1_cfg();
     let mut ameta = ActionMeta::new();
-    let v2p = Arc::new(Virt2Phys::new());
-    let mut g1 = oxide_net_setup("arp_hairpin", &cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("arp_hairpin", &cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let reply_hdr_sz = EtherHdr::SIZE + ARP_HDR_SZ;
@@ -1519,16 +1516,9 @@ fn arp_gateway() {
 fn flow_expiration() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let g2_phys =
-        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
-
-    // Add V2P mappings that allow guests to resolve each others
-    // physical addresses.
-    let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
-
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
     set!(g1, "port_state=running");
     let now = Moment::now();
@@ -1571,16 +1561,8 @@ fn flow_expiration() {
 fn firewall_replace_rules() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let g2_phys =
-        GuestPhysAddr { ether: g2_cfg.private_mac.into(), ip: g2_cfg.phys_ip };
-
-    // Add V2P mappings that allow guests to resolve each others
-    // physical addresses.
-    let v2p = Arc::new(Virt2Phys::new());
-    v2p.set(IpAddr::Ip4(g2_cfg.ipv4_cfg().unwrap().private_ip), g2_phys);
     let mut ameta = ActionMeta::new();
-
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -1595,7 +1577,7 @@ fn firewall_replace_rules() {
     .unwrap();
     incr!(g1, "epoch, router.rules.out");
 
-    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, v2p.clone());
+    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
     g2.port.start();
     set!(g2, "port_state=running");
 
@@ -1710,9 +1692,8 @@ fn firewall_replace_rules() {
 #[test]
 fn gateway_icmpv6_ping() {
     let g1_cfg = g1_cfg();
-    let v2p = Arc::new(Virt2Phys::new());
     let mut ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_icmpv6_ping.pcap");
@@ -1879,9 +1860,9 @@ fn gateway_router_advert_reply() {
     use smoltcp::time::Duration;
 
     let g1_cfg = g1_cfg();
-    let v2p = Arc::new(Virt2Phys::new());
+    // TODO think I need to fix use of meta in ipv6 tests
     let mut ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_router_advert_reply.pcap");
@@ -2316,9 +2297,8 @@ fn validate_hairpin_advert(
 #[test]
 fn test_gateway_neighbor_advert_reply() {
     let g1_cfg = g1_cfg();
-    let v2p = Arc::new(Virt2Phys::new());
     let mut ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_neighbor_advert_reply.pcap");
@@ -2481,9 +2461,8 @@ fn verify_dhcpv6_essentials<'a>(
 #[test]
 fn test_reply_to_dhcpv6_solicit_or_request() {
     let g1_cfg = g1_cfg();
-    let v2p = Arc::new(Virt2Phys::new());
     let mut ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, v2p.clone());
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("dhcpv6_solicit_reply.pcap");
