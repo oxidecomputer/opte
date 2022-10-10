@@ -66,7 +66,6 @@ use opte::engine::packet::Parsed;
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
-use opte::engine::port::PortState;
 use opte::engine::port::ProcessError;
 use opte::engine::port::ProcessResult;
 use opte::engine::rule;
@@ -261,16 +260,22 @@ fn oxide_net_setup(
     let port = oxide_net_builder(name, cfg, port_v2p)
         .create(UFT_LIMIT.unwrap(), TCP_LIMIT.unwrap())
         .unwrap();
-    assert_eq!(port.state(), PortState::Ready);
-    assert_eq!(port.epoch(), 1);
-    check_no_flows(&port);
-    let vps = VpcPortState::new();
 
+    // Add router entry that allows the guest to send to other guests
+    // on same subnet.
+    router::add_entry(
+        &port,
+        IpCidr::Ip4(cfg.ipv4().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(cfg.ipv4().vpc_subnet)),
+    )
+    .unwrap();
+
+    let vps = VpcPortState::new();
     let mut pav = PortAndVps { port, vps, vpc_map };
     update!(
         pav,
         [
-            "set:epoch=1",
+            "set:epoch=2",
             "set:dhcp.rules.out=2",
             "set:dhcpv6.rules.in=1, dhcpv6.rules.out=1",
             "set:arp.rules.in=1, arp.rules.out=2",
@@ -278,7 +283,7 @@ fn oxide_net_setup(
             "set:icmpv6.rules.in=2, icmpv6.rules.out=6",
             "set:firewall.rules.in=1, firewall.rules.out=1",
             "set:nat.rules.out=2",
-            "set:router.rules.out=1",
+            "set:router.rules.out=2",
             "set:overlay.rules.in=1, overlay.rules.out=1",
         ]
     );
@@ -379,17 +384,6 @@ fn g2_cfg() -> VpcCfg {
     }
 }
 
-// Verify that no flows are present on the port.
-fn check_no_flows(port: &Port) {
-    for layer in port.layers() {
-        assert_eq!(port.num_flows(&layer, Out), 0);
-        assert_eq!(port.num_flows(&layer, In), 0);
-    }
-
-    assert_eq!(port.num_flows("uft", Out), 0);
-    assert_eq!(port.num_flows("uft", In), 0);
-}
-
 // Verify that the list of layers is what we expect.
 #[test]
 fn check_layers() {
@@ -407,18 +401,6 @@ fn port_transition_running() {
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
-
-    // Add router entry that allows g1 to send to other guests on the
-    // same subnet.
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(
-            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
-        )),
-    )
-    .unwrap();
-    incr!(g1, "epoch, router.rules.out");
 
     // ================================================================
     // Try processing the packet while taking the port through a Ready
@@ -444,18 +426,6 @@ fn port_transition_reset() {
     let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
-
-    // Add router entry that allows g1 to send to other guests on the
-    // same subnet.
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(
-            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
-        )),
-    )
-    .unwrap();
-    incr!(g1, "epoch, router.rules.out");
 
     // ================================================================
     // Try processing the packet while taking the port through a Ready
@@ -490,18 +460,6 @@ fn port_transition_pause() {
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
 
-    // Add router entry that allows g1 to send to other guests on same
-    // subnet.
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(
-            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
-        )),
-    )
-    .unwrap();
-    incr!(g1, "epoch, router.rules.out");
-
     // Allow incoming connections to port 80 on g1.
     let fw_rule: FirewallRule =
         "action=allow priority=10 dir=in protocol=tcp port=80".parse().unwrap();
@@ -516,18 +474,6 @@ fn port_transition_pause() {
     incr!(g1, "epoch, firewall.rules.in");
     g1.port.start();
     set!(g1, "port_state=running");
-
-    // Add router entry that allows g2 to send to other guests on same
-    // subnet.
-    router::add_entry(
-        &g2.port,
-        IpCidr::Ip4(g2_cfg.ipv4_cfg().unwrap().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(
-            g2_cfg.ipv4_cfg().unwrap().vpc_subnet,
-        )),
-    )
-    .unwrap();
-    incr!(g2, "epoch, router.rules.out");
     g2.port.start();
     set!(g2, "port_state=running");
 
@@ -750,9 +696,16 @@ fn guest_to_guest_no_route() {
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
     set!(g1, "port_state=running");
+    // Make sure the router is configured to drop all packets.
+    router::replace(
+        &g1.port,
+        vec![(IpCidr::Ip4("0.0.0.0/0".parse().unwrap()), RouterTarget::Drop)],
+    )
+    .unwrap();
+    update!(g1, ["incr:epoch", "set:router.rules.out=1"]);
     let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
-    assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
+    chk!(g1, matches!(res, Ok(ProcessResult::Drop { .. })));
     // XXX The firewall layer comes before the router layer (in the
     // outbound direction). The firewall layer allows this traffic;
     // and a flow is created, regardless of the fact that a later
@@ -763,7 +716,6 @@ fn guest_to_guest_no_route() {
     // for the effect of removing it from any flow tables in which it
     // exists.
     incr!(g1, "firewall.flows.out, firewall.flows.in");
-    assert_port!(g1);
 }
 
 // Verify that two guests on the same VPC can communicate.
@@ -776,37 +728,9 @@ fn guest_to_guest() {
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
     set!(g1, "port_state=running");
-
-    // Add router entry that allows Guest 1 to send to Guest 2.
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip4(g2_cfg.ipv4_cfg().unwrap().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(
-            g2_cfg.ipv4_cfg().unwrap().vpc_subnet,
-        )),
-    )
-    .unwrap();
-    incr!(g1, "epoch, router.rules.out");
-
     let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
     g2.port.start();
     set!(g2, "port_state=running");
-
-    // Add router entry that allows Guest 2 to send to Guest 1.
-    //
-    // XXX I just realized that it might make sense to move the router
-    // tables up to a global level like the Virt2Phys mappings. This
-    // way a new router entry that applies to many guests can placed
-    // once instead of on each port individually.
-    router::add_entry(
-        &g2.port,
-        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(
-            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
-        )),
-    )
-    .unwrap();
-    incr!(g2, "epoch, router.rules.out");
 
     // Allow incoming TCP connection from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
@@ -980,42 +904,9 @@ fn guest_to_guest_diff_vpc_no_peer() {
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
-
-    // Add router entry that allows g1 to talk to any other guest on
-    // its VPC subnet.
-    //
-    // In this case both g1 and g2 have the same subnet. However, g1
-    // is part of VNI 99, and g2 is part of VNI 100. Without a VPC
-    // Peering Gateway they have no way to reach each other.
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(
-            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
-        )),
-    )
-    .unwrap();
-    incr!(g1, "epoch, router.rules.out");
-
     let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
     g2.port.start();
     set!(g2, "port_state=running");
-
-    // Add router entry that allows Guest 2 to send to Guest 1.
-    //
-    // XXX I just realized that it might make sense to move the router
-    // tables up to a global level like the Virt2Phys mappings. This
-    // way a new router entry that applies to many guests can placed
-    // once instead of on each port individually.
-    router::add_entry(
-        &g2.port,
-        IpCidr::Ip4(g1_cfg.ipv4_cfg().unwrap().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(
-            g1_cfg.ipv4_cfg().unwrap().vpc_subnet,
-        )),
-    )
-    .unwrap();
-    incr!(g2, "epoch, router.rules.out");
 
     // Allow incoming TCP connection from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
@@ -1523,17 +1414,6 @@ fn flow_expiration() {
     set!(g1, "port_state=running");
     let now = Moment::now();
 
-    // Add router entry that allows Guest 1 to send to Guest 2.
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip4(g2_cfg.ipv4_cfg().unwrap().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(
-            g2_cfg.ipv4_cfg().unwrap().vpc_subnet,
-        )),
-    )
-    .unwrap();
-    incr!(g1, "epoch, router.rules.out");
-
     // ================================================================
     // Run the packet through g1's port in the outbound direction and
     // verify the resulting packet meets expectations.
@@ -1565,17 +1445,6 @@ fn firewall_replace_rules() {
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
-
-    // Add router entry that allows Guest 1 to send to Guest 2.
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip4(g2_cfg.ipv4_cfg().unwrap().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(
-            g2_cfg.ipv4_cfg().unwrap().vpc_subnet,
-        )),
-    )
-    .unwrap();
-    incr!(g1, "epoch, router.rules.out");
 
     let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
     g2.port.start();

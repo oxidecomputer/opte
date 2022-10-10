@@ -124,3 +124,15 @@ pub fn http_tcp_syn_ack(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
     let eth = EtherHdr::new(EtherType::Ipv4, src.private_mac, src.gateway_mac);
     ulp_pkt(eth, ip4, tcp, &body)
 }
+
+/// Like `assert!`, except you also pass in the `PortAndVps` so that
+/// the port state is printed on failure.
+#[macro_export]
+macro_rules! chk {
+    ($pav:expr, $check:expr) => {
+        if !$check {
+            print_port(&$pav.port, &$pav.vpc_map);
+            panic!("assertion failed: {}", stringify!($check));
+        }
+    };
+}

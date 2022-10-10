@@ -19,7 +19,12 @@ pub fn print_port(port: &Port, vpc_map: &VpcMappings) {
     print_v2p(&vpc_map.dump());
     println!("");
 
-    println!("Port: {} [{}]", port.name(), port.state());
+    println!(
+        "Port: {} [state: {}, epoch: {}]",
+        port.name(),
+        port.state(),
+        port.epoch()
+    );
     print_hrb();
 
     println!("");

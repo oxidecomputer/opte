@@ -257,6 +257,10 @@ fn make_rule(
     Ok(rule.finalize())
 }
 
+/// Delete a router entry.
+///
+/// For the entry to be deleted it must match exactly for the
+/// destination [`IpCidr`] as well as its paired [`RouterTarget`].
 pub fn del_entry(
     port: &Port,
     dest: IpCidr,
@@ -274,6 +278,9 @@ pub fn del_entry(
     }
 }
 
+/// Add a router entry.
+///
+/// Route the [`IpCidr`] to the specified [`RouterTarget`].
 pub fn add_entry(
     port: &Port,
     dest: IpCidr,
@@ -281,6 +288,20 @@ pub fn add_entry(
 ) -> Result<NoResp, OpteError> {
     let rule = make_rule(dest, target)?;
     port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?;
+    Ok(NoResp::default())
+}
+
+/// Replace the current set of router entries with the set passed in.
+pub fn replace(
+    port: &Port,
+    entries: Vec<(IpCidr, RouterTarget)>,
+) -> Result<NoResp, OpteError> {
+    let mut out_rules = Vec::with_capacity(entries.len());
+    for (cidr, target) in entries {
+        out_rules.push(make_rule(cidr, target)?);
+    }
+
+    port.set_rules(ROUTER_LAYER_NAME, vec![], out_rules)?;
     Ok(NoResp::default())
 }
 
