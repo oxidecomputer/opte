@@ -29,7 +29,9 @@ use opte::engine::icmpv6::Icmpv6EchoReply;
 use opte::engine::icmpv6::MessageType;
 use opte::engine::icmpv6::NeighborAdvertisement;
 use opte::engine::icmpv6::RouterAdvertisement;
+use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
+use opte::engine::layer::LayerActions;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::rule::Action;
@@ -69,7 +71,20 @@ fn drop_all_icmpv6(
     )]));
     let rule = rule.finalize();
 
-    let mut icmp = Layer::new("icmpv6", pb.name(), vec![], ft_limit);
+    // We use an explicit rule to drop ICMPv6 traffic, and let the
+    // rest pass through.
+    //
+    // XXX This is going away fairly soon when we move to a "gateway"
+    // layer that brings all these gateway-related rules together in
+    // one place and will allow us to more easily enforce an allowed
+    // list of traffic based on the VpcCfg.
+    let actions = LayerActions {
+        actions: vec![],
+        default_in: DefaultAction::Allow,
+        default_out: DefaultAction::Allow,
+    };
+
+    let mut icmp = Layer::new("icmpv6", pb.name(), actions, ft_limit);
     icmp.add_rule(Direction::In, rule.clone());
     icmp.add_rule(Direction::Out, rule.clone());
     pb.add_layer(icmp, Pos::Before("firewall"))
@@ -103,7 +118,7 @@ fn add_icmpv6_rules(
     let src_ips = [ip_cfg.private_ip, Ipv6Addr::from_eui64(&cfg.private_mac)];
     let dst_ip = Ipv6Addr::from_eui64(&cfg.gateway_mac);
     let n_pings = src_ips.len();
-    let mut actions = Vec::with_capacity(n_pings + 2);
+    let mut rule_actions = Vec::with_capacity(n_pings + 2);
     for src_ip in src_ips.iter().copied() {
         let echo = Action::Hairpin(Arc::new(Icmpv6EchoReply {
             src_mac: cfg.private_mac,
@@ -111,7 +126,7 @@ fn add_icmpv6_rules(
             dst_mac: cfg.gateway_mac,
             dst_ip,
         }));
-        actions.push(echo);
+        rule_actions.push(echo);
     }
 
     // Map an NDP Router Solicitation from the guest to a Router Advertisement
@@ -125,7 +140,7 @@ fn add_icmpv6_rules(
         // acquire an IPv6 address.
         true,
     )));
-    actions.push(router_advert);
+    rule_actions.push(router_advert);
 
     // Map an NDP Neighbor Solicitation from the guest to a neighbor
     // advertisement from the OPTE virtual gateway. Note that this is required
@@ -141,13 +156,27 @@ fn add_icmpv6_rules(
             // Respond to solicitations from `::`
             true,
         )));
-    actions.push(neighbor_advert);
+    rule_actions.push(neighbor_advert);
 
-    let n_actions = actions.len();
+    let n_rule_actions = rule_actions.len();
+
+    // We use an explicit rule to drop ICMPv6 traffic, and let the
+    // rest pass through.
+    //
+    // XXX This is going away fairly soon when we move to a "gateway"
+    // layer that brings all these gateway-related rules together in
+    // one place and will allow us to more easily enforce an allowed
+    // list of traffic based on the VpcCfg.
+    let actions = LayerActions {
+        actions: rule_actions,
+        default_in: DefaultAction::Allow,
+        default_out: DefaultAction::Allow,
+    };
+
     let mut icmp = Layer::new("icmpv6", pb.name(), actions, ft_limit);
 
     // Add rules for the above actions.
-    for i in 0..n_actions {
+    for i in 0..n_rule_actions {
         let priority = u16::try_from(i + 1).unwrap();
         let rule = Rule::new(priority, icmp.action(i).unwrap().clone());
         icmp.add_rule(Direction::Out, rule.finalize());
@@ -165,7 +194,7 @@ fn add_icmpv6_rules(
     // These will not be matched by the ping rules above, meaning they're
     // destined for somewhere else. We can add more exceptions to the Deny above
     // as needed.
-    let priority = u16::try_from(n_actions + 1).unwrap();
+    let priority = u16::try_from(n_rule_actions + 1).unwrap();
 
     // Outbound echo messages.
     let mut rule = Rule::new(

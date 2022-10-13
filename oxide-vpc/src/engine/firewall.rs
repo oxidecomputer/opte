@@ -29,7 +29,9 @@ use crate::api::RemFwRuleReq;
 use crate::api::SetFwRulesReq;
 use opte::api::Direction;
 use opte::api::OpteError;
+use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
+use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::Parsed;
@@ -168,7 +170,15 @@ impl Firewall {
             "fw".to_string(),
         )));
 
-        Layer::new(FW_LAYER_NAME, port_name, vec![allow], ft_limit)
+        // The firewall layer is meant as a filtering layer, and thus
+        // denies all traffic by default.
+        let actions = LayerActions {
+            actions: vec![allow],
+            default_in: DefaultAction::Deny,
+            default_out: DefaultAction::Deny,
+        };
+
+        Layer::new(FW_LAYER_NAME, port_name, actions, ft_limit)
     }
 }
 

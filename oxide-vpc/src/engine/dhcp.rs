@@ -33,7 +33,9 @@ use opte::api::Ipv4PrefixLen;
 use opte::api::OpteError;
 use opte::api::SubnetRouterPair;
 use opte::engine::ip4::Ipv4Cidr;
+use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
+use opte::engine::layer::LayerActions;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::rule::Action;
@@ -125,7 +127,20 @@ pub fn setup(
     }));
     let ack_idx = 1;
 
-    let mut dhcp = Layer::new("dhcp", pb.name(), vec![offer, ack], ft_limit);
+    // This layer is only for intercepting DHCP traffic, and thus
+    // allows all other traffic to pass by default.
+    //
+    // XXX This is going away fairly soon when we move to a "gateway"
+    // layer that brings all these gateway-related rules together in
+    // one place and will allow us to more easily enforce an allowed
+    // list of traffic based on the VpcCfg.
+    let actions = LayerActions {
+        actions: vec![offer, ack],
+        default_in: DefaultAction::Allow,
+        default_out: DefaultAction::Allow,
+    };
+
+    let mut dhcp = Layer::new("dhcp", pb.name(), actions, ft_limit);
 
     let discover_rule = Rule::new(1, dhcp.action(offer_idx).unwrap().clone());
     dhcp.add_rule(Direction::Out, discover_rule.finalize());

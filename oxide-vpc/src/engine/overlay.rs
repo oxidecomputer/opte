@@ -48,7 +48,9 @@ use opte::engine::headers::IpAddr;
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::ip6::Ipv6Meta;
+use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
+use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::meta::ActionMetaValue;
@@ -86,8 +88,14 @@ pub fn setup(
     // Action Index 1
     let decap = Action::Static(Arc::new(DecapAction::new()));
 
+    let actions = LayerActions {
+        actions: vec![encap, decap],
+        default_in: DefaultAction::Deny,
+        default_out: DefaultAction::Deny,
+    };
+
     let mut layer =
-        Layer::new(OVERLAY_LAYER_NAME, pb.name(), vec![encap, decap], ft_limit);
+        Layer::new(OVERLAY_LAYER_NAME, pb.name(), actions, ft_limit);
     let encap_rule = Rule::match_any(1, layer.action(0).unwrap().clone());
     layer.add_rule(Direction::Out, encap_rule);
     let decap_rule = Rule::match_any(1, layer.action(1).unwrap().clone());

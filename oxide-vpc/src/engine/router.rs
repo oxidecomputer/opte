@@ -35,7 +35,9 @@ use opte::api::NoResp;
 use opte::api::OpteError;
 use opte::engine::headers::IpAddr;
 use opte::engine::headers::IpCidr;
+use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
+use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::meta::ActionMetaValue;
@@ -120,11 +122,46 @@ impl fmt::Display for RouterTargetInternal {
     }
 }
 
-// Return a priority for an IP subnet, depending on its prefix length.
+// Return the priority for a given IP subnet. The priority is based on
+// the subnet's prefix length. Specifically, it is given the following
+// value.
 //
-// The priority is computed as `max_prefix_len - prefix_len + 10`, where
-// `max_prefix_len` is the maximum prefix length for the CIDR block of each IP
-// version.
+// ```
+// priroity = max_prefix_len - prefix len + 10
+// ```
+//
+// `max_prefix_len` is the maximum prefix length for a given IP
+// CIDR type: `32` for IPv4, `128` for IPv6.
+//
+// `prefix_len` comes from the passed in `cidr` argument.
+//
+// The constant `10` displaces these rules so they start at a priority
+// of `10`. This allows placing higher priority rules (lower number)
+// to override them, if needed.
+//
+// # IPv4
+//
+// ```
+// |Prefix Len |Priority            |
+// |-----------|--------------------|
+// |32         |10 = 32 - 32  10    |
+// |31         |11 = 32 - 31  10    |
+// |30         |12 = 32 - 30  10    |
+// |...        |...                 |
+// |0          |42 = 32 - 0  10     |
+// ```
+//
+// # IPv6
+//
+// ```
+// |Prefix Len |Priority            |
+// |-----------|--------------------|
+// |128        |10 = 128 - 128  10  |
+// |127        |11 = 128 - 127  10  |
+// |126        |12 = 128 - 126  10  |
+// |...        |...                 |
+// |0          |138 = 128 - 0  10   |
+// ```
 fn prefix_len_to_priority(cidr: &IpCidr) -> u16 {
     use opte::api::ip::IpCidr::*;
     use opte::api::ip::Ipv4PrefixLen;
@@ -141,19 +178,18 @@ pub fn setup(
     _cfg: &VpcCfg,
     ft_limit: core::num::NonZeroU32,
 ) -> Result<(), OpteError> {
-    let ig = Action::Meta(Arc::new(RouterAction::new(
-        RouterTargetInternal::InternetGateway,
-    )));
-
-    // Indexes:
+    // Inbound: The router assumes that if the packet made it here,
+    // then it had a route to get here.
     //
-    // * 0: InternetGateway
-    let mut layer =
-        Layer::new(ROUTER_LAYER_NAME, pb.name(), vec![ig], ft_limit);
+    // Outbound: If there is no matching route, then the packet should
+    // make it no further.
+    let actions = LayerActions {
+        actions: vec![],
+        default_in: DefaultAction::Allow,
+        default_out: DefaultAction::Deny,
+    };
 
-    // If there is no matching router entry we drop the packet.
-    let drop_rule = Rule::match_any(65535, rule::Action::Deny);
-    layer.add_rule(Direction::Out, drop_rule);
+    let layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
     pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
 

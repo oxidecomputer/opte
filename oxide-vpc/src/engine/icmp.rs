@@ -16,7 +16,9 @@ use crate::api::VpcCfg;
 use opte::api::Direction;
 use opte::api::OpteError;
 use opte::engine::icmp::IcmpEchoReply;
+use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
+use opte::engine::layer::LayerActions;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::rule::Action;
@@ -42,7 +44,20 @@ pub fn setup(
         echo_dst_mac: cfg.gateway_mac.into(),
         echo_dst_ip: ip_cfg.gateway_ip,
     }));
-    let mut icmp = Layer::new("icmp", pb.name(), vec![reply], ft_limit);
+
+    // This layer is only mean to intercept ICMP traffic.
+    //
+    // XXX This is going away fairly soon when we move to a "gateway"
+    // layer that brings all these gateway-related rules together in
+    // one place and will allow us to more easily enforce an allowed
+    // list of traffic based on the VpcCfg.
+    let actions = LayerActions {
+        actions: vec![reply],
+        default_in: DefaultAction::Allow,
+        default_out: DefaultAction::Allow,
+    };
+
+    let mut icmp = Layer::new("icmp", pb.name(), actions, ft_limit);
 
     // ================================================================
     // ICMPv4 Echo Reply

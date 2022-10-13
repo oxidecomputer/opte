@@ -18,7 +18,9 @@ use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::engine::arp::ArpReply;
 use opte::engine::ether::ETHER_TYPE_ARP;
+use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
+use opte::engine::layer::LayerActions;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::rule::Action;
@@ -40,18 +42,26 @@ pub fn setup(
     // Regardless of which IP version the guest is configured to use, we need to
     // drop any other ARP request, inbound or outbound.
     let mut arp = if let Some(ip_cfg) = cfg.ipv4_cfg() {
-        let mut arp = Layer::new(
-            "arp",
-            pb.name(),
-            vec![
+        // This layer is meant only to intercept ARP traffic, and thus
+        // it allows all other traffic to pass by default.
+        //
+        // XXX This is going away fairly soon when we move to a
+        // "gateway" layer that brings all these gateway-related rules
+        // together in one place and will allow us to more easily
+        // enforce an allowed list of traffic based on the VpcCfg.
+        let actions = LayerActions {
+            actions: vec![
                 // ARP Reply for gateway's IP.
                 Action::Hairpin(Arc::new(ArpReply::new(
                     ip_cfg.gateway_ip,
                     cfg.gateway_mac,
                 ))),
             ],
-            ft_limit,
-        );
+            default_in: DefaultAction::Allow,
+            default_out: DefaultAction::Allow,
+        };
+
+        let mut arp = Layer::new("arp", pb.name(), actions, ft_limit);
 
         // ================================================================
         // Outbound ARP Request for Gateway, from Guest
@@ -92,7 +102,20 @@ pub fn setup(
 
         arp
     } else {
-        Layer::new("arp", pb.name(), vec![], ft_limit)
+        // This layer is meant only to intercept ARP traffic, and thus
+        // it allows all other traffic to pass by default.
+        //
+        // XXX This is going away fairly soon when we move to a
+        // "gateway" layer that brings all these gateway-related rules
+        // together in one place and will allow us to more easily
+        // enforce an allowed list of traffic based on the VpcCfg.
+        let actions = LayerActions {
+            actions: vec![],
+            default_in: DefaultAction::Allow,
+            default_out: DefaultAction::Allow,
+        };
+
+        Layer::new("arp", pb.name(), actions, ft_limit)
     };
 
     // ================================================================

@@ -56,6 +56,7 @@ use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::ip6::Ipv6Hdr;
 use opte::engine::ip6::Ipv6Meta;
+use opte::engine::layer::DenyReason;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketRead;
@@ -283,7 +284,7 @@ fn oxide_net_setup(
             "set:icmpv6.rules.in=2, icmpv6.rules.out=6",
             "set:firewall.rules.in=1, firewall.rules.out=1",
             "set:nat.rules.out=2",
-            "set:router.rules.out=2",
+            "set:router.rules.out=1",
             "set:overlay.rules.in=1, overlay.rules.out=1",
         ]
     );
@@ -1546,11 +1547,14 @@ fn firewall_replace_rules() {
     let res = g2.port.process(In, &mut pkt3_copy, &mut ameta);
     use opte::engine::port::DropReason;
     match res {
-        Ok(ProcessResult::Drop { reason: DropReason::Layer { name } }) => {
+        Ok(ProcessResult::Drop {
+            reason: DropReason::Layer { name, reason: lreason },
+        }) => {
             assert_eq!("firewall", name);
+            assert_eq!(DenyReason::Rule, lreason);
         }
 
-        _ => panic!("expected drop but got: {:?}", res),
+        _ => panic!("expected layer drop but got: {:?}", res),
     }
     update!(g2, ["set:uft.in=0"]);
 }

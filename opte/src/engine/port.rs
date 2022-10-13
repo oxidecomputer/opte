@@ -10,6 +10,7 @@ use super::ether::EtherAddr;
 use super::flow_table::FlowTable;
 use super::flow_table::StateSummary;
 use super::ioctl;
+use super::layer;
 use super::layer::Layer;
 use super::layer::LayerError;
 use super::layer::LayerResult;
@@ -122,7 +123,7 @@ pub enum ProcessResult {
 /// The reason for a packet being dropped.
 #[derive(Clone, Debug)]
 pub enum DropReason {
-    Layer { name: String },
+    Layer { name: String, reason: layer::DenyReason },
     TcpErr,
 }
 
@@ -1384,9 +1385,9 @@ impl Port {
                 }
             }
 
-            Ok(LayerResult::Deny { name }) => {
+            Ok(LayerResult::Deny { name, reason }) => {
                 return Ok(ProcessResult::Drop {
-                    reason: DropReason::Layer { name },
+                    reason: DropReason::Layer { name, reason },
                 })
             }
 
@@ -1667,9 +1668,9 @@ impl Port {
                 Ok(ProcessResult::Hairpin(hppkt))
             }
 
-            Ok(LayerResult::Deny { name }) => {
-                Ok(ProcessResult::Drop { reason: DropReason::Layer { name } })
-            }
+            Ok(LayerResult::Deny { name, reason }) => Ok(ProcessResult::Drop {
+                reason: DropReason::Layer { name, reason },
+            }),
 
             Err(e) => Err(ProcessError::Layer(e)),
         }
@@ -1860,7 +1861,7 @@ impl Port {
                 stats.in_drop += 1;
 
                 match reason {
-                    DropReason::Layer { name: _ } => stats.in_drop_layer += 1,
+                    DropReason::Layer { .. } => stats.in_drop_layer += 1,
                     DropReason::TcpErr => stats.in_drop_tcp_err += 1,
                 }
             }
@@ -1892,7 +1893,7 @@ impl Port {
                 stats.out_drop += 1;
 
                 match reason {
-                    DropReason::Layer { name: _ } => stats.out_drop_layer += 1,
+                    DropReason::Layer { .. } => stats.out_drop_layer += 1,
                     DropReason::TcpErr => stats.out_drop_tcp_err += 1,
                 }
             }

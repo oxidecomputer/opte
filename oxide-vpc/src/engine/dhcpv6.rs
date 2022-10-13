@@ -20,7 +20,9 @@ use opte::engine::dhcpv6::ALL_RELAYS_AND_SERVERS;
 use opte::engine::dhcpv6::ALL_SERVERS;
 use opte::engine::dhcpv6::CLIENT_PORT;
 use opte::engine::dhcpv6::SERVER_PORT;
+use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
+use opte::engine::layer::LayerActions;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::rule::Action;
@@ -72,7 +74,21 @@ fn drop_all_dhcpv6(
     ];
     let mut rule = Rule::new(u16::MAX, Action::Deny);
     rule.add_predicates(predicates);
-    let mut layer = Layer::new(LAYER_NAME, pb.name(), vec![], ft_limit);
+
+    // The DHCPv6 layer is only meant to intercept DHCPv6 traffic, and
+    // therefore it allows all other traffic to pass by default.
+    //
+    // XXX This is going away fairly soon when we move to a "gateway"
+    // layer that brings all these gateway-related rules together in
+    // one place and will allow us to more easily enforce an allowed
+    // list of traffic based on the VpcCfg.
+    let actions = LayerActions {
+        actions: vec![],
+        default_in: DefaultAction::Allow,
+        default_out: DefaultAction::Allow,
+    };
+
+    let mut layer = Layer::new(LAYER_NAME, pb.name(), actions, ft_limit);
     layer.add_rule(Direction::In, rule.clone().finalize());
     layer.add_rule(Direction::Out, rule.clone().finalize());
     pb.add_layer(layer, Pos::Before("firewall"))
@@ -110,7 +126,21 @@ fn add_dhcpv6_rules(
     let is_dhcp = action.implicit_preds().0.clone();
 
     let server = Action::Hairpin(Arc::new(action));
-    let mut dhcp = Layer::new(LAYER_NAME, pb.name(), vec![server], ft_limit);
+
+    // The DHCPv6 layer is only meant to intercept DHCPv6 traffic, and
+    // therefore it allows all other traffic to pass by default.
+    //
+    // XXX This is going away fairly soon when we move to a "gateway"
+    // layer that brings all these gateway-related rules together in
+    // one place and will allow us to more easily enforce an allowed
+    // list of traffic based on the VpcCfg.
+    let actions = LayerActions {
+        actions: vec![server],
+        default_in: DefaultAction::Allow,
+        default_out: DefaultAction::Allow,
+    };
+
+    let mut dhcp = Layer::new(LAYER_NAME, pb.name(), actions, ft_limit);
     let rule = Rule::new(1, dhcp.action(0).unwrap().clone());
     dhcp.add_rule(Direction::Out, rule.finalize());
 

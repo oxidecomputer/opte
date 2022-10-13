@@ -26,7 +26,9 @@ use opte::api::Direction;
 use opte::api::OpteError;
 use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::ether::ETHER_TYPE_IPV6;
+use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
+use opte::engine::layer::LayerActions;
 use opte::engine::nat::Nat;
 use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::port::PortBuilder;
@@ -50,7 +52,15 @@ pub fn setup(
     cfg: &VpcCfg,
     ft_limit: NonZeroU32,
 ) -> Result<(), OpteError> {
-    let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), vec![], ft_limit);
+    // The NAT layer is rewrite layer and not a filtering one. Any
+    // packets that don't match should be allowed to pass through to
+    // the next layer.
+    let actions = LayerActions {
+        actions: vec![],
+        default_in: DefaultAction::Allow,
+        default_out: DefaultAction::Allow,
+    };
+    let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), actions, ft_limit);
     if let Some(ipv4_cfg) = cfg.ipv4_cfg() {
         setup_ipv4_nat(&mut layer, ipv4_cfg, cfg.phys_gw_mac)?;
     }

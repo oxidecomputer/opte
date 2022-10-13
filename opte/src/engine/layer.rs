@@ -83,23 +83,54 @@ impl From<BodyTransformError> for LayerError {
     }
 }
 
+/// Why a given packet was denied.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DenyReason {
+    /// The packet was denied by the action itself.
+    ///
+    /// For example, a hairpin action might decide it can't parse the
+    /// body of the packet it's attempting to respond to.
+    Action,
+
+    /// The packet was denied by the default action.
+    ///
+    /// In this case the packet matched no rules and the
+    /// [`DefaultAction`] was taken for the given direction.
+    Default,
+
+    /// The packet was denied by a rule.
+    ///
+    /// The packet matched a [`Rule`] and that rule's action was
+    /// [`Action::Deny`].
+    Rule,
+}
+
+impl Display for DenyReason {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Action => write!(f, "action"),
+            Self::Default => write!(f, "default"),
+            Self::Rule => write!(f, "rule"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum LayerResult {
     Allow,
-    Deny { name: String },
+    Deny { name: String, reason: DenyReason },
     Hairpin(Packet<Initialized>),
 }
 
 impl Display for LayerResult {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use LayerResult::*;
-
-        let rstr = match self {
-            Allow => "Allow".to_string(),
-            Deny { name } => format!("Deny: {}", name),
-            Hairpin(_) => "Hairpin".to_string(),
-        };
-        write!(f, "{}", &rstr)
+        match self {
+            Self::Allow => write!(f, "Allow"),
+            Self::Deny { name, reason } => {
+                write!(f, "Deny: layer: {}, reason: {}", name, reason)
+            }
+            Self::Hairpin(_) => write!(f, "Hairpin"),
+        }
     }
 }
 
@@ -237,11 +268,47 @@ impl LayerFlowTable {
     }
 }
 
+/// The default action of a layer.
+///
+/// At the moment this can only be allow or deny. That should cover
+/// all use cases for the time being. However, it's probably
+/// reasonable to open this up to be any [`Action`], if such a use
+/// case were to present itself. For now, we stay conservative, and
+/// supply only what the current consumers need.
+#[derive(Copy, Clone, Debug)]
+pub enum DefaultAction {
+    Allow,
+    Deny,
+}
+
+/// The actions of a layer.
+///
+/// This describes the actions a layer's rules can take as well as the
+/// [`DefaultAction`] to take when a rule doesn't match.
+#[derive(Debug)]
+pub struct LayerActions {
+    /// The list of actions shared among the layer's rules. An action
+    /// doesn't have to be shared, each rule is free to create its
+    /// own, but sharing is a way to use less memory if many rules
+    /// share the same action.
+    pub actions: Vec<Action>,
+
+    /// The default action to take if no rule matches in the inbound
+    /// direction.
+    pub default_in: DefaultAction,
+
+    /// The default action to take if no rule matches in the outbound
+    /// direction.
+    pub default_out: DefaultAction,
+}
+
 pub struct Layer {
     port_c: CString,
     name: String,
     name_c: CString,
     actions: Vec<Action>,
+    default_in: DefaultAction,
+    default_out: DefaultAction,
     ft: LayerFlowTable,
     rules_in: RuleTable,
     rules_out: RuleTable,
@@ -444,14 +511,16 @@ impl Layer {
     pub fn new(
         name: &str,
         port: &str,
-        actions: Vec<Action>,
+        actions: LayerActions,
         ft_limit: NonZeroU32,
     ) -> Self {
         let port_c = CString::new(port).unwrap();
         let name_c = CString::new(name).unwrap();
 
         Layer {
-            actions,
+            actions: actions.actions,
+            default_in: actions.default_in,
+            default_out: actions.default_out,
             name: name.to_string(),
             name_c,
             port_c: port_c.clone(),
@@ -552,22 +621,25 @@ impl Layer {
         let _ = rdr.finish();
 
         if rule.is_none() {
-            // Currently a `Layer` is not expected to define a total
-            // function over the set of all possible input. Rather it
-            // can define rules over a subset of the input and
-            // anything that doesn't match will be allowed implicitly.
-            // We could `Deny` by default, but it will require that
-            // these types of layers define a final rule which matches
-            // all packets and returns `Allow`. We could also set a
-            // flag at Layer creation to determines if it
-            // allows/denies by default.
-            return Ok(LayerResult::Allow);
+            match self.default_in {
+                DefaultAction::Deny => {
+                    return Ok(LayerResult::Deny {
+                        name: self.name.clone(),
+                        reason: DenyReason::Default,
+                    });
+                }
+
+                DefaultAction::Allow => return Ok(LayerResult::Allow),
+            }
         }
 
         match rule.unwrap().action() {
             Action::Deny => {
                 self.rule_deny_probe(In, pkt.flow());
-                return Ok(LayerResult::Deny { name: self.name.clone() });
+                return Ok(LayerResult::Deny {
+                    name: self.name.clone(),
+                    reason: DenyReason::Rule,
+                });
             }
 
             Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
@@ -577,6 +649,7 @@ impl Layer {
                     AllowOrDeny::Deny => {
                         return Ok(LayerResult::Deny {
                             name: self.name.clone(),
+                            reason: DenyReason::Action,
                         })
                     }
                 },
@@ -591,6 +664,7 @@ impl Layer {
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
                                 name: self.name.clone(),
+                                reason: DenyReason::Action,
                             });
                         }
                     },
@@ -630,6 +704,7 @@ impl Layer {
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
                                 name: self.name.clone(),
+                                reason: DenyReason::Action,
                             });
                         }
                     },
@@ -684,6 +759,7 @@ impl Layer {
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
                                 name: self.name.clone(),
+                                reason: DenyReason::Action,
                             });
                         }
                     },
@@ -754,22 +830,25 @@ impl Layer {
         let _ = rdr.finish();
 
         if rule.is_none() {
-            // Currently `Layer` is not expected to define a total
-            // function over the set of all possible input. Rather it
-            // can define rules over a subset of the input and
-            // anything that doesn't match will be allowed implicitly.
-            // We could `Deny` by default, but it will require that
-            // these types of layers define a final rule which matches
-            // all packets and returns `Allow`. We could also set a
-            // flag at Layer creation to determines if it
-            // allows/denies by default.
-            return Ok(LayerResult::Allow);
+            match self.default_out {
+                DefaultAction::Deny => {
+                    return Ok(LayerResult::Deny {
+                        name: self.name.clone(),
+                        reason: DenyReason::Default,
+                    });
+                }
+
+                DefaultAction::Allow => return Ok(LayerResult::Allow),
+            }
         }
 
         match rule.unwrap().action() {
             Action::Deny => {
                 self.rule_deny_probe(Out, pkt.flow());
-                return Ok(LayerResult::Deny { name: self.name.clone() });
+                return Ok(LayerResult::Deny {
+                    name: self.name.clone(),
+                    reason: DenyReason::Rule,
+                });
             }
 
             Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
@@ -779,6 +858,7 @@ impl Layer {
                     AllowOrDeny::Deny => {
                         return Ok(LayerResult::Deny {
                             name: self.name.clone(),
+                            reason: DenyReason::Action,
                         })
                     }
                 },
@@ -793,6 +873,7 @@ impl Layer {
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
                                 name: self.name.clone(),
+                                reason: DenyReason::Action,
                             });
                         }
                     },
@@ -861,6 +942,7 @@ impl Layer {
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
                                 name: self.name.clone(),
+                                reason: DenyReason::Action,
                             });
                         }
                     },
@@ -922,6 +1004,7 @@ impl Layer {
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
                                 name: self.name.clone(),
+                                reason: DenyReason::Action,
                             });
                         }
                     },
