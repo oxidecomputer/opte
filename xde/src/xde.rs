@@ -80,12 +80,8 @@ use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
-use oxide_vpc::engine::arp;
-use oxide_vpc::engine::dhcp;
-use oxide_vpc::engine::dhcpv6;
 use oxide_vpc::engine::firewall;
-use oxide_vpc::engine::icmp;
-use oxide_vpc::engine::icmpv6;
+use oxide_vpc::engine::gateway;
 use oxide_vpc::engine::nat;
 use oxide_vpc::engine::overlay;
 use oxide_vpc::engine::router;
@@ -1951,11 +1947,7 @@ fn new_port(
     firewall::setup(&mut pb, FW_FT_LIMIT.unwrap())?;
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    dhcp::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
-    dhcpv6::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
-    icmp::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
-    icmpv6::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
-    arp::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
+    gateway::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     router::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     nat::setup(&mut pb, &cfg, NAT_FT_LIMIT.unwrap())?;
 

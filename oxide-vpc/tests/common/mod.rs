@@ -28,10 +28,8 @@ use oxide_vpc::api::VpcCfg;
 // It's imperative that this list stays in sync with the layers that
 // makeup the VPC implementation. We verify this in the `check_layers`
 // test.
-pub const VPC_LAYERS: [&str; 9] = [
-    "dhcp", "dhcpv6", "icmp", "icmpv6", "arp", "firewall", "router", "nat",
-    "overlay",
-];
+pub const VPC_LAYERS: [&str; 5] =
+    ["gateway", "firewall", "router", "nat", "overlay"];
 
 // This is the MAC address that OPTE uses to act as the virtual gateway.
 pub const GW_MAC_ADDR: MacAddr =

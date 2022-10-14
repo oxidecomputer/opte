@@ -6,6 +6,7 @@
 
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
+use super::flow_table::StateSummary;
 use super::ioctl;
 use super::packet::BodyTransformError;
 use super::packet::Initialized;
@@ -150,7 +151,7 @@ pub enum LftError {
 #[derive(Clone, Debug)]
 struct LftOutEntry {
     in_flow_pair: InnerFlowId,
-    action_desc: Arc<dyn ActionDesc>,
+    action_desc: ActionDescEntry,
 }
 
 impl LftOutEntry {
@@ -159,7 +160,7 @@ impl LftOutEntry {
     }
 }
 
-impl super::flow_table::StateSummary for LftOutEntry {
+impl StateSummary for LftOutEntry {
     fn summary(&self) -> String {
         self.action_desc.summary()
     }
@@ -168,7 +169,7 @@ impl super::flow_table::StateSummary for LftOutEntry {
 struct LayerFlowTable {
     limit: NonZeroU32,
     count: u32,
-    ft_in: FlowTable<Arc<dyn ActionDesc>>,
+    ft_in: FlowTable<ActionDescEntry>,
     ft_out: FlowTable<LftOutEntry>,
 }
 
@@ -181,7 +182,7 @@ pub struct LftDump {
 impl LayerFlowTable {
     fn add_pair(
         &mut self,
-        action_desc: Arc<dyn ActionDesc>,
+        action_desc: ActionDescEntry,
         in_flow: InnerFlowId,
         out_flow: InnerFlowId,
     ) {
@@ -227,7 +228,7 @@ impl LayerFlowTable {
         self.count = self.ft_out.num_flows();
     }
 
-    fn get_in(&mut self, flow: &InnerFlowId) -> Option<Arc<dyn ActionDesc>> {
+    fn get_in(&mut self, flow: &InnerFlowId) -> Option<ActionDescEntry> {
         match self.ft_in.get_mut(flow) {
             Some(entry) => {
                 entry.hit();
@@ -238,7 +239,7 @@ impl LayerFlowTable {
         }
     }
 
-    fn get_out(&mut self, flow: &InnerFlowId) -> Option<Arc<dyn ActionDesc>> {
+    fn get_out(&mut self, flow: &InnerFlowId) -> Option<ActionDescEntry> {
         match self.ft_out.get_mut(flow) {
             Some(entry) => {
                 entry.hit();
@@ -278,7 +279,33 @@ impl LayerFlowTable {
 #[derive(Copy, Clone, Debug)]
 pub enum DefaultAction {
     Allow,
+    StatefulAllow,
     Deny,
+}
+
+impl Display for DefaultAction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Allow => write!(f, "allow"),
+            Self::StatefulAllow => write!(f, "stateful allow"),
+            Self::Deny => write!(f, "deny"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ActionDescEntry {
+    NoOp,
+    Desc(Arc<dyn ActionDesc>),
+}
+
+impl StateSummary for ActionDescEntry {
+    fn summary(&self) -> String {
+        match self {
+            Self::NoOp => "no-op".to_string(),
+            Self::Desc(desc) => desc.summary(),
+        }
+    }
 }
 
 /// The actions of a layer.
@@ -331,6 +358,13 @@ impl Layer {
         self.ft.clear();
     }
 
+    pub(crate) fn default_action(&self, dir: Direction) -> DefaultAction {
+        match dir {
+            Direction::In => self.default_in,
+            Direction::Out => self.default_out,
+        }
+    }
+
     /// Dump the contents of this layer. This is used for presenting
     /// the layer state in a human-friendly manner.
     pub(crate) fn dump(&self) -> ioctl::DumpLayerResp {
@@ -343,6 +377,8 @@ impl Layer {
             ft_out: ftd.ft_out,
             rules_in,
             rules_out,
+            default_in: self.default_in.to_string(),
+            default_out: self.default_out.to_string(),
         }
     }
 
@@ -576,35 +612,43 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        if let Some(desc) = self.ft.get_in(pkt.flow()) {
-            let flow_before = *pkt.flow();
-            let ht = desc.gen_ht(Direction::In);
-            pkt.hdr_transform(&ht)?;
-            xforms.hdr.push(ht);
-            ht_probe(
-                &self.port_c,
-                &format!("{}-ft", self.name),
-                Direction::In,
-                &flow_before,
-                &pkt.flow(),
-            );
-
-            if let Some(body_segs) = pkt.body_segs() {
-                if let Some(bt) =
-                    desc.gen_bt(Direction::In, pkt.meta(), &body_segs)?
-                {
-                    pkt.body_transform(Direction::In, &bt)?;
-                    xforms.body.push(bt);
-                }
+        match self.ft.get_in(pkt.flow()) {
+            Some(ActionDescEntry::NoOp) => {
+                return Ok(LayerResult::Allow);
             }
 
-            return Ok(LayerResult::Allow);
+            Some(ActionDescEntry::Desc(desc)) => {
+                let flow_before = *pkt.flow();
+                let ht = desc.gen_ht(Direction::In);
+                pkt.hdr_transform(&ht)?;
+                xforms.hdr.push(ht);
+                ht_probe(
+                    &self.port_c,
+                    &format!("{}-ft", self.name),
+                    Direction::In,
+                    &flow_before,
+                    &pkt.flow(),
+                );
+
+                if let Some(body_segs) = pkt.body_segs() {
+                    if let Some(bt) =
+                        desc.gen_bt(Direction::In, pkt.meta(), &body_segs)?
+                    {
+                        pkt.body_transform(Direction::In, &bt)?;
+                        xforms.body.push(bt);
+                    }
+                }
+
+                return Ok(LayerResult::Allow);
+            }
+
+            None => {
+                // XXX Flow table miss stat
+
+                // No FlowTable entry, perhaps there is a matching Rule?
+                self.process_in_rules(ectx, pkt, xforms, ameta)
+            }
         }
-
-        // XXX Flow table miss stat
-
-        // No FlowTable entry, perhaps there is a matching Rule?
-        self.process_in_rules(ectx, pkt, xforms, ameta)
     }
 
     fn process_in_rules(
@@ -620,7 +664,7 @@ impl Layer {
             self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta, &mut rdr);
         let _ = rdr.finish();
 
-        if rule.is_none() {
+        let action = if rule.is_none() {
             match self.default_in {
                 DefaultAction::Deny => {
                     return Ok(LayerResult::Deny {
@@ -629,11 +673,36 @@ impl Layer {
                     });
                 }
 
-                DefaultAction::Allow => return Ok(LayerResult::Allow),
+                DefaultAction::Allow => &Action::Allow,
+                DefaultAction::StatefulAllow => &Action::StatefulAllow,
             }
-        }
+        } else {
+            rule.unwrap().action()
+        };
 
-        match rule.unwrap().action() {
+        match action {
+            Action::Allow => {
+                return Ok(LayerResult::Allow);
+            }
+
+            Action::StatefulAllow => {
+                if self.ft.count == self.ft.limit.get() {
+                    return Err(LayerError::FlowTableFull {
+                        layer: self.name.clone(),
+                        dir: In,
+                    });
+                }
+
+                // The outbound flow ID mirrors the inbound. Remember,
+                // the "top" of layer represents how the client sees
+                // the traffic, and the "bottom" of the layer
+                // represents how the network sees the traffic.
+                let flow_out = pkt.flow().mirror();
+                let desc = ActionDescEntry::NoOp;
+                self.ft.add_pair(desc, pkt.flow().clone(), flow_out);
+                return Ok(LayerResult::Allow);
+            }
+
             Action::Deny => {
                 self.rule_deny_probe(In, pkt.flow());
                 return Ok(LayerResult::Deny {
@@ -690,6 +759,35 @@ impl Layer {
             }
 
             Action::Stateful(action) => {
+                // A stateful action requires a flow entry in both
+                // directions: inbound and outbound. This entry holds
+                // an implementation of ActionDesc, which has two
+                // responsibilities:
+                //
+                // 1) To provide the means of generating a header
+                //    transformation for that given flow,
+                //
+                // 2) To track any resources obtained as part of
+                //    providing this header transformation, so that
+                //    they may be released when the flow expires.
+                //
+                // If we cannot obtain a flow entry, there is no sense
+                // in generating an action descriptor.
+                //
+                // You might think that a stateful action without a
+                // resource requirement can get by without an FT
+                // entry; i.e., that you could just generate the
+                // desc/header transformation from scratch for each
+                // packet until an FT entry becomes available. This is
+                // not correct. For example, in the case of
+                // implementing a stateful firewall, you want outbound
+                // connection attempts to create dynamic inbound rules
+                // to allow the handshake from the remote; an entry on
+                // the other side is required.
+                //
+                // In general, the semantic of a StatefulAction is
+                // that it gets an FT entry. If there are no slots
+                // available, then we must fail until one opens up.
                 if self.ft.count == self.ft.limit.get() {
                     return Err(LayerError::FlowTableFull {
                         layer: self.name.clone(),
@@ -735,15 +833,18 @@ impl Layer {
                 }
 
                 // The outbound flow ID must be calculated _after_ the
-                // header transformation. Remember, the "top" of layer
-                // represents how the client sees the traffic, and the
-                // "bottom" of the layer represents how the network
-                // sees the traffic. The `ifid_after` value represents
-                // how the cilent sees the traffic. The final step is
-                // to mirror the IPs and ports to reflect the traffic
-                // direction change.
+                // header transformation. Remember, the "top"
+                // (outbound) of layer represents how the client sees
+                // the traffic, and the "bottom" (inbound) of the
+                // layer represents how the network sees the traffic.
+                // The final step is to mirror the IPs and ports to
+                // reflect the traffic direction change.
                 let flow_out = pkt.flow().mirror();
-                self.ft.add_pair(desc, flow_before, flow_out);
+                self.ft.add_pair(
+                    ActionDescEntry::Desc(desc),
+                    flow_before,
+                    flow_out,
+                );
                 return Ok(LayerResult::Allow);
             }
 
@@ -787,33 +888,43 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        if let Some(desc) = self.ft.get_out(pkt.flow()) {
-            let flow_before = pkt.flow().clone();
-            let ht = desc.gen_ht(Direction::Out);
-            pkt.hdr_transform(&ht)?;
-            xforms.hdr.push(ht);
-            ht_probe(
-                &self.port_c,
-                &format!("{}-ft", self.name),
-                Direction::Out,
-                &flow_before,
-                pkt.flow(),
-            );
-
-            if let Some(body_segs) = pkt.body_segs() {
-                if let Some(bt) =
-                    desc.gen_bt(Direction::Out, pkt.meta(), &body_segs)?
-                {
-                    pkt.body_transform(Direction::Out, &bt)?;
-                    xforms.body.push(bt);
-                }
+        match self.ft.get_out(pkt.flow()) {
+            Some(ActionDescEntry::NoOp) => {
+                return Ok(LayerResult::Allow);
             }
 
-            return Ok(LayerResult::Allow);
-        }
+            Some(ActionDescEntry::Desc(desc)) => {
+                let flow_before = pkt.flow().clone();
+                let ht = desc.gen_ht(Direction::Out);
+                pkt.hdr_transform(&ht)?;
+                xforms.hdr.push(ht);
+                ht_probe(
+                    &self.port_c,
+                    &format!("{}-ft", self.name),
+                    Direction::Out,
+                    &flow_before,
+                    pkt.flow(),
+                );
 
-        // No FlowTable entry, perhaps there is matching Rule?
-        self.process_out_rules(ectx, pkt, xforms, ameta)
+                if let Some(body_segs) = pkt.body_segs() {
+                    if let Some(bt) =
+                        desc.gen_bt(Direction::Out, pkt.meta(), &body_segs)?
+                    {
+                        pkt.body_transform(Direction::Out, &bt)?;
+                        xforms.body.push(bt);
+                    }
+                }
+
+                return Ok(LayerResult::Allow);
+            }
+
+            None => {
+                // XXX Flow table miss stat
+
+                // No FlowTable entry, perhaps there is matching Rule?
+                self.process_out_rules(ectx, pkt, xforms, ameta)
+            }
+        }
     }
 
     fn process_out_rules(
@@ -829,7 +940,7 @@ impl Layer {
             self.rules_out.find_match(pkt.flow(), pkt.meta(), &ameta, &mut rdr);
         let _ = rdr.finish();
 
-        if rule.is_none() {
+        let action = if rule.is_none() {
             match self.default_out {
                 DefaultAction::Deny => {
                     return Ok(LayerResult::Deny {
@@ -838,11 +949,42 @@ impl Layer {
                     });
                 }
 
-                DefaultAction::Allow => return Ok(LayerResult::Allow),
+                DefaultAction::Allow => &Action::Allow,
+                DefaultAction::StatefulAllow => &Action::StatefulAllow,
             }
-        }
+        } else {
+            rule.unwrap().action()
+        };
 
-        match rule.unwrap().action() {
+        match action {
+            Action::Allow => {
+                return Ok(LayerResult::Allow);
+            }
+
+            Action::StatefulAllow => {
+                if self.ft.count == self.ft.limit.get() {
+                    return Err(LayerError::FlowTableFull {
+                        layer: self.name.clone(),
+                        dir: Out,
+                    });
+                }
+
+                // The inbound flow ID must be calculated _after_ the
+                // header transformation. Remember, the "top"
+                // (outbound) of layer represents how the client sees
+                // the traffic, and the "bottom" (inbound) of the
+                // layer represents how the network sees the traffic.
+                // The final step is to mirror the IPs and ports to
+                // reflect the traffic direction change.
+                let flow_in = pkt.flow().mirror();
+                self.ft.add_pair(
+                    ActionDescEntry::NoOp,
+                    flow_in,
+                    pkt.flow().clone(),
+                );
+                return Ok(LayerResult::Allow);
+            }
+
             Action::Deny => {
                 self.rule_deny_probe(Out, pkt.flow());
                 return Ok(LayerResult::Deny {
@@ -988,7 +1130,11 @@ impl Layer {
                 // to mirror the IPs and ports to reflect the traffic
                 // direction change.
                 let flow_in = pkt.flow().mirror();
-                self.ft.add_pair(desc, flow_in, flow_before);
+                self.ft.add_pair(
+                    ActionDescEntry::Desc(desc),
+                    flow_in,
+                    flow_before,
+                );
                 return Ok(LayerResult::Allow);
             }
 

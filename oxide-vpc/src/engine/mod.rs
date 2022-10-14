@@ -4,12 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
-pub mod arp;
-pub mod dhcp;
-pub mod dhcpv6;
 pub mod firewall;
-pub mod icmp;
-pub mod icmpv6;
+pub mod gateway;
 pub mod nat;
 pub mod overlay;
 #[cfg(any(feature = "std", test))]

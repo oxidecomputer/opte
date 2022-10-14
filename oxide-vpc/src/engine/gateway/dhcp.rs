@@ -4,17 +4,7 @@
 
 // Copyright 2022 Oxide Computer Company
 
-//! Oxide Network DHCPv4
-//!
-//! This implements DHCPv4 support allowing OPTE act as the gateway
-//! for the guest without the need for static configuration.
-//!
-//! XXX rename layer to "gateway" for Virtual Gateway and move ARP and
-//! ICMP code in here too. Then add high-value priority rule to drop
-//! all traffic destined for gateway that doesn't match lower-value
-//! priority rule; keeping gateway-bound packets from ending up on the
-//! underlay.
-use core::result::Result;
+//! The DHCP implementation of the Virtual Gateway.
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -24,7 +14,9 @@ cfg_if! {
     }
 }
 
+use crate::api::Ipv4Cfg;
 use crate::api::VpcCfg;
+use core::result::Result;
 use opte::api::DhcpAction;
 use opte::api::DhcpReplyType;
 use opte::api::Direction;
@@ -33,26 +25,15 @@ use opte::api::Ipv4PrefixLen;
 use opte::api::OpteError;
 use opte::api::SubnetRouterPair;
 use opte::engine::ip4::Ipv4Cidr;
-use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
-use opte::engine::layer::LayerActions;
-use opte::engine::port::PortBuilder;
-use opte::engine::port::Pos;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
 
 pub fn setup(
-    pb: &mut PortBuilder,
+    layer: &mut Layer,
     cfg: &VpcCfg,
-    ft_limit: core::num::NonZeroU32,
+    ip_cfg: &Ipv4Cfg,
 ) -> Result<(), OpteError> {
-    // The DHCP layer only contains meaningful actions if the port is configured
-    // to support IPv4.
-    let ip_cfg = match cfg.ipv4_cfg() {
-        None => return Ok(()),
-        Some(cfg) => cfg,
-    };
-
     // All guest interfaces live on a `/32`-network in the Oxide VPC;
     // restricting the L2 domain to two nodes: the guest NIC and the
     // OPTE Port. This allows OPTE to act as the gateway for which all
@@ -106,7 +87,6 @@ pub fn setup(
             None,
         ]),
     }));
-    let offer_idx = 0;
 
     let ack = Action::Hairpin(Arc::new(DhcpAction {
         client_mac: cfg.private_mac.into(),
@@ -125,28 +105,11 @@ pub fn setup(
             None,
         ]),
     }));
-    let ack_idx = 1;
 
-    // This layer is only for intercepting DHCP traffic, and thus
-    // allows all other traffic to pass by default.
-    //
-    // XXX This is going away fairly soon when we move to a "gateway"
-    // layer that brings all these gateway-related rules together in
-    // one place and will allow us to more easily enforce an allowed
-    // list of traffic based on the VpcCfg.
-    let actions = LayerActions {
-        actions: vec![offer, ack],
-        default_in: DefaultAction::Allow,
-        default_out: DefaultAction::Allow,
-    };
+    let discover_rule = Rule::new(1, offer);
+    layer.add_rule(Direction::Out, discover_rule.finalize());
 
-    let mut dhcp = Layer::new("dhcp", pb.name(), actions, ft_limit);
-
-    let discover_rule = Rule::new(1, dhcp.action(offer_idx).unwrap().clone());
-    dhcp.add_rule(Direction::Out, discover_rule.finalize());
-
-    let request_rule = Rule::new(1, dhcp.action(ack_idx).unwrap().clone());
-    dhcp.add_rule(Direction::Out, request_rule.finalize());
-
-    pb.add_layer(dhcp, Pos::Before("firewall"))
+    let request_rule = Rule::new(1, ack);
+    layer.add_rule(Direction::Out, request_rule.finalize());
+    Ok(())
 }

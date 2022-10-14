@@ -9,7 +9,7 @@
 #include "common.h"
 #include "protos.d"
 
-#define	HDR_FMT		"%-16s %-16s %-3s %-48s $-48s %s\n"
+#define	HDR_FMT		"%-16s %-16s %-3s %-48s %-48s %s\n"
 
 BEGIN {
 	printf(HDR_FMT, "PORT", "LAYER", "DIR", "FLOW BEFORE", "FLOW AFTER",
@@ -31,7 +31,7 @@ layer-process-return {
 		num = 0;
 	}
 
-	this->af = this->flow->af;
+	this->af = this->flow_before->af;
 
 	if (this->af != AF_INET && this->af != AF_INET6) {
 		printf("BAD ADDRESS FAMILY: %d\n", this->af);

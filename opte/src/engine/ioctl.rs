@@ -47,6 +47,10 @@ pub struct DumpLayerResp {
     pub rules_in: Vec<(layer::RuleId, rule::RuleDump)>,
     /// The outbound rules.
     pub rules_out: Vec<(layer::RuleId, rule::RuleDump)>,
+    /// The default inbound action.
+    pub default_in: String,
+    /// The default outbound action.
+    pub default_out: String,
     /// The inbound flow table.
     pub ft_in: Vec<(InnerFlowId, FlowEntryDump)>,
     /// The outbound flow table.
@@ -62,12 +66,17 @@ pub struct ListLayersReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct LayerDesc {
-    // Name of the layer.
+    /// Name of the layer.
     pub name: String,
-    // Number of rules in/out.
+    /// Number of rules inbound.
     pub rules_in: usize,
+    /// Number of rules outbound.
     pub rules_out: usize,
-    // Number of flows.
+    /// Default action inbound.
+    pub default_in: String,
+    /// Default action outbound.
+    pub default_out: String,
+    /// Number of active flows.
     pub flows: u32,
 }
 

@@ -278,6 +278,8 @@ impl PortBuilder {
                 name: layer.name().to_string(),
                 rules_in: layer.num_rules(Direction::In),
                 rules_out: layer.num_rules(Direction::Out),
+                default_in: layer.default_action(Direction::In).to_string(),
+                default_out: layer.default_action(Direction::Out).to_string(),
                 flows: layer.num_flows(),
             });
         }
@@ -905,6 +907,8 @@ impl Port {
                 name: layer.name().to_string(),
                 rules_in: layer.num_rules(Direction::In),
                 rules_out: layer.num_rules(Direction::Out),
+                default_in: layer.default_action(Direction::In).to_string(),
+                default_out: layer.default_action(Direction::Out).to_string(),
                 flows: layer.num_flows(),
             });
         }

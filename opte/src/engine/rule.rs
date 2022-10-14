@@ -1390,16 +1390,43 @@ pub type ActionResult<T, E> = Result<AllowOrDeny<T>, E>;
 
 #[derive(Clone)]
 pub enum Action {
+    /// Allow the packet to pass.
+    ///
+    /// This is equivalent to a [`Self::Static`] action using [`Identity`].
+    Allow,
+
+    /// Allow the packet to pass, creating a pair of flow table entries.
+    ///
+    /// This is a more efficient alternative to a [`Self::Stateful`]
+    /// action using [`Identity`].
+    StatefulAllow,
+
+    /// Deny the packet, causing it to be dropped.
     Deny,
+
+    /// This action manipulates the action metadata in some way.
     Meta(Arc<dyn MetaAction>),
+
+    /// A static action is used to perform transformations without the
+    /// need for holding a resource descriptor or creating a pair of
+    /// flow table entries.
     Static(Arc<dyn StaticAction>),
+
+    /// A stateful action is used when a hold needs to be made against
+    /// a resource or a pair of flow table entries are needed (or
+    /// both). E.g., a flow that needs to acquire a port for SNAT.
     Stateful(Arc<dyn StatefulAction>),
+
+    /// A hairpin action generates a response packet and "hairpins" it
+    /// back to the source.
     Hairpin(Arc<dyn HairpinAction>),
 }
 
 impl Action {
     pub fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         match self {
+            Self::Allow => (vec![], vec![]),
+            Self::StatefulAllow => (vec![], vec![]),
             // The entire point of a Deny action is for the consumer
             // to specify which types of packets it wants to deny,
             // which means the predicates are always purely explicit.
@@ -1421,6 +1448,8 @@ impl Action {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub enum ActionDump {
+    Allow,
+    StatefulAllow,
     Deny,
     Meta(String),
     Static(String),
@@ -1431,6 +1460,8 @@ pub enum ActionDump {
 impl From<&Action> for ActionDump {
     fn from(action: &Action) -> Self {
         match action {
+            Action::Allow => Self::Allow,
+            Action::StatefulAllow => Self::StatefulAllow,
             Action::Deny => Self::Deny,
             Action::Meta(ma) => Self::Meta(ma.to_string()),
             Action::Static(sa) => Self::Static(sa.to_string()),
@@ -1443,11 +1474,13 @@ impl From<&Action> for ActionDump {
 impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Deny => write!(f, "DENY"),
-            Self::Meta(a) => write!(f, "META: {}", a),
-            Self::Static(a) => write!(f, "STATIC: {}", a),
-            Self::Stateful(a) => write!(f, "STATEFUL: {}", a),
-            Self::Hairpin(a) => write!(f, "HAIRPIN: {}", a),
+            Self::Allow => write!(f, "Allow"),
+            Self::StatefulAllow => write!(f, "Stateful Allow"),
+            Self::Deny => write!(f, "Deny"),
+            Self::Meta(a) => write!(f, "Meta: {}", a),
+            Self::Static(a) => write!(f, "Static: {}", a),
+            Self::Stateful(a) => write!(f, "Stateful: {}", a),
+            Self::Hairpin(a) => write!(f, "Hairpin: {}", a),
         }
     }
 }

@@ -69,8 +69,6 @@ use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessError;
 use opte::engine::port::ProcessResult;
-use opte::engine::rule;
-use opte::engine::rule::Rule;
 use opte::engine::udp::UdpHdr;
 use opte::engine::udp::UdpMeta;
 use opte::ExecCtx;
@@ -86,11 +84,8 @@ use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::VpcCfg;
-use oxide_vpc::engine::arp;
-use oxide_vpc::engine::dhcp;
 use oxide_vpc::engine::firewall;
-use oxide_vpc::engine::icmp;
-use oxide_vpc::engine::icmpv6;
+use oxide_vpc::engine::gateway;
 use oxide_vpc::engine::nat;
 use oxide_vpc::engine::overlay;
 use oxide_vpc::engine::overlay::Virt2Phys;
@@ -181,24 +176,39 @@ fn oxide_net_builder(
     let one_limit = NonZeroU32::new(1).unwrap();
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    dhcp::setup(&mut pb, cfg, one_limit).expect("failed to add dhcp layer");
-    oxide_vpc::engine::dhcpv6::setup(&mut pb, cfg, one_limit)
-        .expect("failed to add dhcpv6 layer");
-    icmp::setup(&mut pb, cfg, one_limit).expect("failed to add icmp layer");
-    icmpv6::setup(&mut pb, cfg, one_limit).expect("failed to add icmpv6 layer");
-    arp::setup(&mut pb, cfg, one_limit).expect("failed to add arp layer");
+    gateway::setup(&mut pb, cfg, fw_limit)
+        .expect("failed to setup gateway layer");
     router::setup(&mut pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
     overlay::setup(&mut pb, cfg, v2p, one_limit)
         .expect("failed to add overlay layer");
-
-    // Deny all inbound packets by default.
-    pb.add_rule("firewall", In, Rule::match_any(65535, rule::Action::Deny))
-        .unwrap();
-    // Allow all outbound by default.
-    let act = pb.layer_action("firewall", 0).unwrap();
-    pb.add_rule("firewall", Out, Rule::match_any(65535, act)).unwrap();
     pb
+}
+
+// Set the default firewall rules as described in RFD 63 §2.8.1. The
+// implied rules are handled by the default actions of the firewall
+// layer. The inbound RDP rule has since been removed from the
+// defaults (we need to update the RFD to reflect this).
+fn set_default_fw_rules(pav: &mut PortAndVps, cfg: &VpcCfg) {
+    let vpc_in = format!(
+        "dir=in action=allow priority=65534 hosts=subnet={}",
+        cfg.ipv4().vpc_subnet
+    );
+    let ssh_in = "dir=in action=allow priority=65534 protocol=TCP port=22";
+    let icmp_in = "dir=in action=allow priority=65534 protocol=ICMP";
+    firewall::set_fw_rules(
+        &pav.port,
+        &SetFwRulesReq {
+            port_name: pav.port.name().to_string(),
+            rules: vec![
+                vpc_in.parse().unwrap(),
+                ssh_in.parse().unwrap(),
+                icmp_in.parse().unwrap(),
+            ],
+        },
+    )
+    .unwrap();
+    update!(pav, ["set:epoch=3", "set:firewall.rules.in=3"]);
 }
 
 struct PortAndVps {
@@ -276,19 +286,43 @@ fn oxide_net_setup(
     update!(
         pav,
         [
+            // * Epoch starts at 1, adding router entry bumps it to 2.
             "set:epoch=2",
-            "set:dhcp.rules.out=2",
-            "set:dhcpv6.rules.in=1, dhcpv6.rules.out=1",
-            "set:arp.rules.in=1, arp.rules.out=2",
-            "set:icmp.rules.out=1",
-            "set:icmpv6.rules.in=2, icmpv6.rules.out=6",
-            "set:firewall.rules.in=1, firewall.rules.out=1",
+            // * Allow inbound IPv6 traffic for guest.
+            // * Allow inbound IPv4 traffic for guest.
+            "set:gateway.rules.in=2",
+            // IPv4
+            // ----
+            //
+            // * ARP Gateway MAC addr
+            // * ICMP Echo Reply for Gateway
+            // * DHCP Offer
+            // * DHCP Ack
+            // * Outbound traffic from Guest IP + MAC address
+            //
+            // IPv6
+            // ----
+            //
+            // * NDP NA for Gateway
+            // * NDP RA for Gateway
+            // * ICMPv6 Echo Reply for Gateway from Guest Link-Local
+            // * ICMPv6 Echo Reply for Gateway from Guest VPC ULA
+            // * DHCPv6
+            // * Outbound traffic from Guest IPv6 + MAC Address
+            "set:gateway.rules.out=11",
+            // * Allow all outbound traffic
+            "set:firewall.rules.out=0",
+            // * Outbound IPv4 SNAT
+            // * Outbound IPv6 SNAT
             "set:nat.rules.out=2",
+            // * Allow guest to route to own subnet
             "set:router.rules.out=1",
+            // * Outbound encap
+            // * Inbound decap
             "set:overlay.rules.in=1, overlay.rules.out=1",
         ]
     );
-    assert_port!(pav);
+    set_default_fw_rules(&mut pav, cfg);
     pav
 }
 
@@ -586,7 +620,7 @@ fn add_remove_fw_rule() {
         &oxide_vpc::api::RemFwRuleReq {
             port_name: g1.port.name().to_string(),
             dir: In,
-            id: 1,
+            id: 0,
         },
     )
     .unwrap();

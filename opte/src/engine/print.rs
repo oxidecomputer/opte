@@ -15,9 +15,9 @@ use super::ioctl::DumpUftResp;
 use super::ioctl::ListLayersResp;
 use super::packet::InnerFlowId;
 use opte::engine::rule::RuleDump;
+use std::collections::VecDeque;
 use std::string::String;
 use std::string::ToString;
-use std::vec::Vec;
 
 /// Print a [`DumpLayerResp`].
 pub fn print_layer(resp: &DumpLayerResp) {
@@ -37,14 +37,14 @@ pub fn print_layer(resp: &DumpLayerResp) {
         print_flow(flow_id, flow_state);
     }
 
-    println!("\nInbound Rules");
+    println!("\nInbound Rules [Default: {}]", resp.default_in);
     print_hr();
     print_rule_header();
     for (id, rule) in &resp.rules_in {
         print_rule(*id, rule);
     }
 
-    println!("\nOutbound Rules");
+    println!("\nOutbound Rules [Default: {}]", resp.default_out);
     print_hr();
     print_rule_header();
     for (id, rule) in &resp.rules_out {
@@ -57,14 +57,19 @@ pub fn print_layer(resp: &DumpLayerResp) {
 /// Print a [`ListLayersResp`].
 pub fn print_list_layers(resp: &ListLayersResp) {
     println!(
-        "{:<12} {:<10} {:<10} {:<10}",
-        "NAME", "RULES IN", "RULES OUT", "FLOWS",
+        "{:<12} {:<10} {:<10} {:<8} {:<8} {:<10}",
+        "NAME", "RULES IN", "RULES OUT", "DEF IN", "DEF OUT", "FLOWS",
     );
 
     for desc in &resp.layers {
         println!(
-            "{:<12} {:<10} {:<10} {:<10}",
-            desc.name, desc.rules_in, desc.rules_out, desc.flows,
+            "{:<12} {:<10} {:<10} {:<8} {:<8} {:<10}",
+            desc.name,
+            desc.rules_in,
+            desc.rules_out,
+            desc.default_in,
+            desc.default_out,
+            desc.flows,
         );
     }
 }
@@ -94,27 +99,36 @@ pub fn print_rule_header() {
 
 /// Print a [`RuleDump`].
 pub fn print_rule(id: u64, rule: &RuleDump) {
-    let hdr_preds = rule
+    let mut preds = rule
         .predicates
         .iter()
-        .map(|p| p.to_string())
-        .collect::<Vec<String>>()
-        .join(" ");
+        .map(ToString::to_string)
+        .chain(rule.data_predicates.iter().map(ToString::to_string))
+        .collect::<VecDeque<String>>();
 
-    let data_preds = rule
-        .data_predicates
-        .iter()
-        .map(|p| p.to_string())
-        .collect::<Vec<String>>()
-        .join(" ");
+    let first_pred = if preds.len() == 0 {
+        "*".to_string()
+    } else {
+        preds.pop_front().unwrap()
+    };
 
-    let mut preds = format!("{} {}", hdr_preds, data_preds);
+    println!(
+        "{:<8} {:<6} {:<48} {:<?}",
+        id, rule.priority, first_pred, rule.action
+    );
 
-    if preds == "" {
-        preds = "*".to_string();
+    let mut multi_preds = false;
+    while let Some(pred) = preds.pop_front() {
+        println!("{:<8} {:<6} {:<48}", "", "", pred);
+        multi_preds = true;
     }
 
-    println!("{:<8} {:<6} {:<48} {:<?}", id, rule.priority, preds, rule.action);
+    // If a rule has multiple predicates, add a blank line to get some
+    // separation so it's easier to discern where one rule ends and
+    // another begins.
+    if multi_preds {
+        println!("");
+    }
 }
 
 /// Print the header for the [`print_flow()`] output.

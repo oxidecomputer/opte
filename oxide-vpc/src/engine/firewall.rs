@@ -4,20 +4,10 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use core::fmt;
-use core::num::NonZeroU32;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::{String, ToString};
-        use alloc::sync::Arc;
-        use alloc::vec::Vec;
-    } else {
-        use std::string::{String, ToString};
-        use std::sync::Arc;
-        use std::vec::Vec;
-    }
-}
+//! The Oxide VPC firewall.
+//!
+//! This layer is responsible for implementing the VPC firewall as
+//! described in RFD 21 §2.8.
 
 use crate::api::Action;
 use crate::api::AddFwRuleReq;
@@ -27,28 +17,21 @@ use crate::api::Ports;
 pub use crate::api::ProtoFilter;
 use crate::api::RemFwRuleReq;
 use crate::api::SetFwRulesReq;
+use core::num::NonZeroU32;
 use opte::api::Direction;
 use opte::api::OpteError;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
-use opte::engine::packet::InnerFlowId;
-use opte::engine::packet::Packet;
-use opte::engine::packet::Parsed;
-use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::rule;
-use opte::engine::rule::AllowOrDeny;
-use opte::engine::rule::DataPredicate;
-use opte::engine::rule::IdentityDesc;
 use opte::engine::rule::IpProtoMatch;
 use opte::engine::rule::Ipv4AddrMatch;
 use opte::engine::rule::PortMatch;
 use opte::engine::rule::Predicate;
 use opte::engine::rule::Rule;
-use opte::engine::rule::StatefulAction;
 
 pub const FW_LAYER_NAME: &'static str = "firewall";
 
@@ -62,8 +45,7 @@ pub fn setup(
 
 pub fn add_fw_rule(port: &Port, req: &AddFwRuleReq) -> Result<(), OpteError> {
     let action = match req.rule.action {
-        Action::Allow => port.layer_action(FW_LAYER_NAME, 0).unwrap().clone(),
-
+        Action::Allow => rule::Action::StatefulAllow,
         Action::Deny => rule::Action::Deny,
     };
 
@@ -81,10 +63,7 @@ pub fn set_fw_rules(port: &Port, req: &SetFwRulesReq) -> Result<(), OpteError> {
 
     for fwr in &req.rules {
         let action = match fwr.action {
-            Action::Allow => {
-                port.layer_action(FW_LAYER_NAME, 0).unwrap().clone()
-            }
-
+            Action::Allow => rule::Action::StatefulAllow,
             Action::Deny => rule::Action::Deny,
         };
 
@@ -130,52 +109,22 @@ pub fn from_fw_rule(
     rule.finalize()
 }
 
-pub struct FwStatefulAction {
-    name: String,
-}
-
-impl FwStatefulAction {
-    fn new(name: String) -> Self {
-        FwStatefulAction { name }
-    }
-}
-
-impl fmt::Display for FwStatefulAction {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Firewall")
-    }
-}
-
-impl StatefulAction for FwStatefulAction {
-    fn gen_desc(
-        &self,
-        _flow_id: &InnerFlowId,
-        _pkt: &Packet<Parsed>,
-        _meta: &mut ActionMeta,
-    ) -> rule::GenDescResult {
-        Ok(AllowOrDeny::Allow(Arc::new(IdentityDesc::new(self.name.clone()))))
-    }
-
-    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
-        (vec![], vec![])
-    }
-}
-
 impl Firewall {
     pub fn create_layer(port_name: &str, ft_limit: NonZeroU32) -> Layer {
-        // The allow action is currently stateful, causing an entry to
-        // be created in the flow table for each flow allowed by the
-        // firewall.
-        let allow = rule::Action::Stateful(Arc::new(FwStatefulAction::new(
-            "fw".to_string(),
-        )));
-
-        // The firewall layer is meant as a filtering layer, and thus
-        // denies all traffic by default.
+        // The inbound side of the firewall is a filtering layer, only
+        // traffic explicitly allowed should pass. By setting the
+        // default inbound action to deny we effectively implement the
+        // implied "implied deny inbound" rule as speficied in RFD 63
+        // §2.8.1.
+        //
+        // RFD 63 §2.8.1 also states that all outbond traffic should
+        // be allowed by default, aka the "implied allow outbound"
+        // rule. Therefore, we set the default outbound action to
+        // allow.
         let actions = LayerActions {
-            actions: vec![allow],
+            actions: vec![],
             default_in: DefaultAction::Deny,
-            default_out: DefaultAction::Deny,
+            default_out: DefaultAction::StatefulAllow,
         };
 
         Layer::new(FW_LAYER_NAME, port_name, actions, ft_limit)
