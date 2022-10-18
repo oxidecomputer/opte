@@ -52,14 +52,16 @@ use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
+use opte::engine::packet::PacketMeta;
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
-use opte::engine::rule;
 use opte::engine::rule::Action;
 use opte::engine::rule::AllowOrDeny;
 use opte::engine::rule::DataPredicate;
+use opte::engine::rule::GenHtError;
+use opte::engine::rule::GenHtResult;
 use opte::engine::rule::HdrTransform;
 use opte::engine::rule::MappingResource;
 use opte::engine::rule::Predicate;
@@ -211,19 +213,20 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        meta: &mut ActionMeta,
-    ) -> rule::GenHtResult {
+        _pkt_meta: &PacketMeta,
+        action_meta: &mut ActionMeta,
+    ) -> GenHtResult {
         // The router layer determines a RouterTarget and stores it in
         // the meta map. We need to map this virtual target to a
         // physical one.
-        let target_str = match meta.get(RouterTargetInternal::KEY) {
+        let target_str = match action_meta.get(RouterTargetInternal::KEY) {
             Some(val) => val,
             None => {
                 // This should never happen. The router should always
                 // write an entry. However, we currently have no way
                 // to enforce this in the type system, and thus must
                 // account for this situation.
-                return Err(rule::GenHtError::Unexpected {
+                return Err(GenHtError::Unexpected {
                     msg: format!("no RouterTarget metadata entry found"),
                 });
             }
@@ -232,7 +235,7 @@ impl StaticAction for EncapAction {
         let target = match RouterTargetInternal::from_meta(target_str) {
             Ok(val) => val,
             Err(e) => {
-                return Err(rule::GenHtError::Unexpected {
+                return Err(GenHtError::Unexpected {
                     msg: format!(
                         "failed to parse metadata entry '{}': {}",
                         target_str, e
@@ -354,14 +357,36 @@ impl fmt::Display for DecapAction {
     }
 }
 
+pub const ACTION_META_VNI: &str = "vni";
+
 impl StaticAction for DecapAction {
     fn gen_ht(
         &self,
-        // The decap action is only used for ingoing.
+        // The decap action is only used for inbound.
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _meta: &mut ActionMeta,
-    ) -> rule::GenHtResult {
+        pkt_meta: &PacketMeta,
+        action_meta: &mut ActionMeta,
+    ) -> GenHtResult {
+        match &pkt_meta.outer.encap {
+            Some(geneve) => {
+                action_meta.insert(
+                    ACTION_META_VNI.to_string(),
+                    geneve.vni.to_string(),
+                );
+            }
+
+            // This should be impossible. Non-encapsulated traffic
+            // should never make it here if the mac flow subsystem is
+            // doing its job. However, we take a defensive approach
+            // instead of risking panic.
+            None => {
+                return Err(GenHtError::Unexpected {
+                    msg: "no encap header found".to_string(),
+                });
+            }
+        }
+
         Ok(AllowOrDeny::Allow(HdrTransform {
             name: DECAP_NAME.to_string(),
             outer_ether: HeaderAction::Pop,
@@ -382,6 +407,8 @@ pub struct VpcMappings {
 }
 
 impl VpcMappings {
+    /// Add a new mapping from VIP to [`PhysNet`], returning a pointer
+    /// to the [`Virt2Phys`] this mapping belongs to.
     pub fn add(&self, vip: IpAddr, phys: PhysNet) -> Arc<Virt2Phys> {
         let guest_phys = GuestPhysAddr { ether: phys.ether, ip: phys.ip };
         let mut lock = self.inner.lock();
@@ -401,6 +428,7 @@ impl VpcMappings {
         }
     }
 
+    /// Iterate all VPC mappings and produce a [`DumpVirt2PhysResp`].
     pub fn dump(&self) -> DumpVirt2PhysResp {
         let mut mappings = Vec::new();
         let lock = self.inner.lock();
@@ -414,6 +442,22 @@ impl VpcMappings {
         }
 
         DumpVirt2PhysResp { mappings }
+    }
+
+    /// Map a given VIP to its VNI.
+    ///
+    /// This assumes a given VIP can only live in one of the VNIs
+    /// visible to this particular guest interface (port). This
+    /// assumption is enforced by the control plane; making sure that
+    /// peered VPCs do not overlap their VIP ranges.
+    pub fn ip_to_vni(&self, vip: &IpAddr) -> Option<Vni> {
+        for (vni, v2p) in self.inner.lock().iter() {
+            if v2p.get(vip).is_some() {
+                return Some(*vni);
+            }
+        }
+
+        None
     }
 
     pub fn new() -> Self {

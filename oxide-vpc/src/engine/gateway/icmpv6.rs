@@ -49,13 +49,13 @@ pub fn setup(
 ) -> Result<(), OpteError> {
     // We need to hairpin echo requests from either the VPC-private or
     // link-local address of the guest, to OPTE's link-local.
-    let src_ips = [ip_cfg.private_ip, Ipv6Addr::from_eui64(&cfg.private_mac)];
+    let src_ips = [ip_cfg.private_ip, Ipv6Addr::from_eui64(&cfg.guest_mac)];
     let dst_ip = Ipv6Addr::from_eui64(&cfg.gateway_mac);
     let n_pings = src_ips.len();
     let mut rule_actions = Vec::with_capacity(n_pings + 2);
     for src_ip in src_ips.iter().copied() {
         let echo = Action::Hairpin(Arc::new(Icmpv6EchoReply {
-            src_mac: cfg.private_mac,
+            src_mac: cfg.guest_mac,
             src_ip,
             dst_mac: cfg.gateway_mac,
             dst_ip,
@@ -66,8 +66,8 @@ pub fn setup(
     // Map an NDP Router Solicitation from the guest to a Router Advertisement
     // from the OPTE virtual gateway's link-local IPv6 address.
     let router_advert = Action::Hairpin(Arc::new(RouterAdvertisement::new(
-        // From the guest's private MAC.
-        cfg.private_mac,
+        // From the guest's VPC MAC.
+        cfg.guest_mac,
         // The MAC from which we respond, i.e., OPTE's MAC.
         cfg.gateway_mac,
         // "Managed Configuration", indicating the guest needs to use DHCPv6 to
@@ -81,8 +81,8 @@ pub fn setup(
     // per RFC 4861 so that the guest does not mark the neighbor failed.
     let neighbor_advert =
         Action::Hairpin(Arc::new(NeighborAdvertisement::new(
-            // From the guest's private MAC.
-            cfg.private_mac,
+            // From the guest's VPC MAC.
+            cfg.guest_mac,
             // To OPTE's MAC.
             cfg.gateway_mac,
             // Set the ROUTER flag to true.

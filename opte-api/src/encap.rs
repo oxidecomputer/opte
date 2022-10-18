@@ -7,15 +7,15 @@
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
+use core::str::FromStr;
 
 use serde::Deserialize;
 use serde::Serialize;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
+        use alloc::string::{String, ToString};
     } else {
-        use std::str::FromStr;
         use std::string::{String, ToString};
     }
 }
@@ -40,7 +40,6 @@ impl From<Vni> for u32 {
     }
 }
 
-#[cfg(any(feature = "std", test))]
 impl FromStr for Vni {
     type Err = String;
 

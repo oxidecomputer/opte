@@ -23,10 +23,7 @@
 mod common;
 
 use common::icmp::*;
-use common::pcap::*;
-use common::port_state::*;
 use common::*;
-use opte::api::Direction::*;
 use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::ddi::time::Moment;
@@ -43,54 +40,24 @@ use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::ether::ETHER_TYPE_IPV6;
 use opte::engine::flow_table::FLOW_DEF_EXPIRE_SECS;
 use opte::engine::geneve;
-use opte::engine::geneve::GeneveHdr;
 use opte::engine::geneve::Vni;
-use opte::engine::headers::IpAddr;
-use opte::engine::headers::IpCidr;
 use opte::engine::headers::IpMeta;
 use opte::engine::headers::UlpMeta;
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip4::Ipv4Hdr;
 use opte::engine::ip4::Ipv4Meta;
 use opte::engine::ip4::Protocol;
-use opte::engine::ip6::Ipv6Addr;
-use opte::engine::ip6::Ipv6Hdr;
 use opte::engine::ip6::Ipv6Meta;
-use opte::engine::layer::DenyReason;
-use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketRead;
 use opte::engine::packet::PacketReader;
 use opte::engine::packet::PacketWriter;
 use opte::engine::packet::ParseError;
 use opte::engine::packet::Parsed;
-use opte::engine::port::meta::ActionMeta;
-use opte::engine::port::Port;
-use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessError;
-use opte::engine::port::ProcessResult;
-use opte::engine::udp::UdpHdr;
 use opte::engine::udp::UdpMeta;
-use opte::ExecCtx;
-use oxide_vpc::api::AddFwRuleReq;
-use oxide_vpc::api::BoundaryServices;
 use oxide_vpc::api::FirewallRule;
-use oxide_vpc::api::IpCfg;
-use oxide_vpc::api::Ipv4Cfg;
-use oxide_vpc::api::Ipv6Cfg;
-use oxide_vpc::api::PhysNet;
-use oxide_vpc::api::RouterTarget;
-use oxide_vpc::api::SNat4Cfg;
-use oxide_vpc::api::SNat6Cfg;
-use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::VpcCfg;
-use oxide_vpc::engine::firewall;
-use oxide_vpc::engine::gateway;
-use oxide_vpc::engine::nat;
-use oxide_vpc::engine::overlay;
-use oxide_vpc::engine::overlay::Virt2Phys;
-use oxide_vpc::engine::overlay::VpcMappings;
-use oxide_vpc::engine::router;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
@@ -102,13 +69,9 @@ use smoltcp::wire::NdiscNeighborFlags;
 use smoltcp::wire::NdiscRepr;
 use smoltcp::wire::NdiscRouterFlags;
 use smoltcp::wire::RawHardwareAddress;
-use std::boxed::Box;
-use std::num::NonZeroU32;
 use std::prelude::v1::*;
-use std::sync::Arc;
 use std::time::Duration;
 use zerocopy::AsBytes;
-use ProcessResult::*;
 
 const VPC_ENCAP_SZ: usize =
     EtherHdr::SIZE + Ipv6Hdr::SIZE + UdpHdr::SIZE + GeneveHdr::SIZE;
@@ -135,7 +98,7 @@ fn lab_cfg() -> VpcCfg {
     });
     VpcCfg {
         ip_cfg,
-        private_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
+        guest_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x10]),
         gateway_mac: MacAddr::from([0xAA, 0x00, 0x04, 0x00, 0xFF, 0x01]),
 
         // XXX These values don't really mean anything in this
@@ -147,264 +110,6 @@ fn lab_cfg() -> VpcCfg {
         // Site 0xF7, Rack 1, Sled 1, Interface 1
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-        boundary_services: BoundaryServices {
-            mac: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-            ip: Ipv6Addr::from([
-                0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
-            ]),
-            vni: Vni::new(7777u32).unwrap(),
-        },
-        proxy_arp_enable: false,
-        phys_gw_mac: Some(MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d])),
-    }
-}
-
-fn oxide_net_builder(
-    name: &str,
-    cfg: &VpcCfg,
-    v2p: Arc<Virt2Phys>,
-) -> PortBuilder {
-    let ectx = Arc::new(ExecCtx { log: Box::new(opte::PrintlnLog {}) });
-    let name_cstr = std::ffi::CString::new(name).unwrap();
-    let mut pb =
-        PortBuilder::new(name, name_cstr, cfg.private_mac.into(), ectx.clone());
-
-    let fw_limit = NonZeroU32::new(8096).unwrap();
-    let snat_limit = NonZeroU32::new(8096).unwrap();
-    let one_limit = NonZeroU32::new(1).unwrap();
-
-    firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    gateway::setup(&mut pb, cfg, fw_limit)
-        .expect("failed to setup gateway layer");
-    router::setup(&mut pb, cfg, one_limit).expect("failed to add router layer");
-    nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&mut pb, cfg, v2p, one_limit)
-        .expect("failed to add overlay layer");
-    pb
-}
-
-// Set the default firewall rules as described in RFD 63 §2.8.1. The
-// implied rules are handled by the default actions of the firewall
-// layer. The inbound RDP rule has since been removed from the
-// defaults (we need to update the RFD to reflect this).
-fn set_default_fw_rules(pav: &mut PortAndVps, cfg: &VpcCfg) {
-    let vpc_in = format!(
-        "dir=in action=allow priority=65534 hosts=subnet={}",
-        cfg.ipv4().vpc_subnet
-    );
-    let ssh_in = "dir=in action=allow priority=65534 protocol=TCP port=22";
-    let icmp_in = "dir=in action=allow priority=65534 protocol=ICMP";
-    firewall::set_fw_rules(
-        &pav.port,
-        &SetFwRulesReq {
-            port_name: pav.port.name().to_string(),
-            rules: vec![
-                vpc_in.parse().unwrap(),
-                ssh_in.parse().unwrap(),
-                icmp_in.parse().unwrap(),
-            ],
-        },
-    )
-    .unwrap();
-    update!(pav, ["set:epoch=3", "set:firewall.rules.in=3"]);
-}
-
-struct PortAndVps {
-    port: Port,
-    vps: VpcPortState,
-    vpc_map: Arc<VpcMappings>,
-}
-
-fn oxide_net_setup(
-    name: &str,
-    cfg: &VpcCfg,
-    vpc_map: Option<Arc<VpcMappings>>,
-) -> PortAndVps {
-    // We have to setup the global VPC mapping state just like xde
-    // would do. Ideally, xde would not concern itself with any
-    // VPC-specific concerns. Ideally, xde would be a generic driver
-    // for interfacing with one of more OPTE virtual switches. Inside
-    // each OPTE virtual switch would be a given type of
-    // implementation, like the oxide-vpc implementation. This
-    // implementation would have a way to register itself with the
-    // virtual switch, somewhat like how a mac-provider registers
-    // itself with the mac framework. This mechanism would also
-    // provide some way for the implementation to provide
-    // switch-global state, and this is where oxide-vpc could place
-    // the VPC mappings (so that they can be shared across all ports).
-    //
-    // However, for the time being, this oxide-vpc global state is
-    // hard-coded directly in xde, and therefore we need to mimic that
-    // here in the integration test.
-    //
-    // The interface for `oxide_net_setup()` is arguably a bit odd and
-    // looks different from how xde works. Instead of requiring every
-    // test to manually allocate a VpcMapping and passing it to this
-    // setup function, we allow the test to pass `None` and have this
-    // function create a new VpcMapping value on our behalf. If the
-    // test involves more than one port, you can pass the existing
-    // VpcMaping as argument making sure that each port sees each
-    // other in the V2P state.
-    let vpc_map = if vpc_map.is_none() {
-        Arc::new(VpcMappings::new())
-    } else {
-        vpc_map.unwrap()
-    };
-
-    let phys_net =
-        PhysNet { ether: cfg.private_mac, ip: cfg.phys_ip, vni: cfg.vni };
-    let port_v2p = match &cfg.ip_cfg {
-        IpCfg::Ipv4(ipv4) => {
-            vpc_map.add(IpAddr::Ip4(ipv4.private_ip), phys_net)
-        }
-        IpCfg::Ipv6(ipv6) => {
-            vpc_map.add(IpAddr::Ip6(ipv6.private_ip), phys_net)
-        }
-        IpCfg::DualStack { ref ipv4, ref ipv6 } => {
-            vpc_map.add(IpAddr::Ip4(ipv4.private_ip), phys_net);
-            vpc_map.add(IpAddr::Ip6(ipv6.private_ip), phys_net)
-        }
-    };
-
-    let port = oxide_net_builder(name, cfg, port_v2p)
-        .create(UFT_LIMIT.unwrap(), TCP_LIMIT.unwrap())
-        .unwrap();
-
-    // Add router entry that allows the guest to send to other guests
-    // on same subnet.
-    router::add_entry(
-        &port,
-        IpCidr::Ip4(cfg.ipv4().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(cfg.ipv4().vpc_subnet)),
-    )
-    .unwrap();
-
-    let vps = VpcPortState::new();
-    let mut pav = PortAndVps { port, vps, vpc_map };
-    update!(
-        pav,
-        [
-            // * Epoch starts at 1, adding router entry bumps it to 2.
-            "set:epoch=2",
-            // * Allow inbound IPv6 traffic for guest.
-            // * Allow inbound IPv4 traffic for guest.
-            "set:gateway.rules.in=2",
-            // IPv4
-            // ----
-            //
-            // * ARP Gateway MAC addr
-            // * ICMP Echo Reply for Gateway
-            // * DHCP Offer
-            // * DHCP Ack
-            // * Outbound traffic from Guest IP + MAC address
-            //
-            // IPv6
-            // ----
-            //
-            // * NDP NA for Gateway
-            // * NDP RA for Gateway
-            // * ICMPv6 Echo Reply for Gateway from Guest Link-Local
-            // * ICMPv6 Echo Reply for Gateway from Guest VPC ULA
-            // * DHCPv6
-            // * Outbound traffic from Guest IPv6 + MAC Address
-            "set:gateway.rules.out=11",
-            // * Allow all outbound traffic
-            "set:firewall.rules.out=0",
-            // * Outbound IPv4 SNAT
-            // * Outbound IPv6 SNAT
-            "set:nat.rules.out=2",
-            // * Allow guest to route to own subnet
-            "set:router.rules.out=1",
-            // * Outbound encap
-            // * Inbound decap
-            "set:overlay.rules.in=1, overlay.rules.out=1",
-        ]
-    );
-    set_default_fw_rules(&mut pav, cfg);
-    pav
-}
-
-const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
-const TCP_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
-
-fn g1_cfg() -> VpcCfg {
-    let ip_cfg = IpCfg::DualStack {
-        ipv4: Ipv4Cfg {
-            vpc_subnet: "172.30.0.0/22".parse().unwrap(),
-            private_ip: "172.30.0.5".parse().unwrap(),
-            gateway_ip: "172.30.0.1".parse().unwrap(),
-            snat: Some(SNat4Cfg {
-                external_ip: "10.77.77.13".parse().unwrap(),
-                ports: 1025..=4096,
-            }),
-            external_ips: None,
-        },
-        ipv6: Ipv6Cfg {
-            vpc_subnet: "fd00::/64".parse().unwrap(),
-            private_ip: "fd00::5".parse().unwrap(),
-            gateway_ip: "fd00::1".parse().unwrap(),
-            snat: Some(SNat6Cfg {
-                external_ip: "2001:db8::1".parse().unwrap(),
-                ports: 1025..=4096,
-            }),
-            external_ips: None,
-        },
-    };
-    VpcCfg {
-        ip_cfg,
-        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
-        gateway_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
-        vni: Vni::new(1287581u32).unwrap(),
-        // Site 0xF7, Rack 1, Sled 1, Interface 1
-        phys_ip: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-        boundary_services: BoundaryServices {
-            mac: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-            ip: Ipv6Addr::from([
-                0xFD, 0x00, 0x99, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-            ]),
-            vni: Vni::new(99u32).unwrap(),
-        },
-        proxy_arp_enable: false,
-        phys_gw_mac: Some(MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d])),
-    }
-}
-
-fn g2_cfg() -> VpcCfg {
-    let ip_cfg = IpCfg::DualStack {
-        ipv4: Ipv4Cfg {
-            vpc_subnet: "172.30.0.0/22".parse().unwrap(),
-            private_ip: "172.30.0.6".parse().unwrap(),
-            gateway_ip: "172.30.0.1".parse().unwrap(),
-            snat: Some(SNat4Cfg {
-                external_ip: "10.77.77.23".parse().unwrap(),
-                ports: 4096..=8192,
-            }),
-            external_ips: None,
-        },
-        ipv6: Ipv6Cfg {
-            vpc_subnet: "fd00::/64".parse().unwrap(),
-            private_ip: "fd00::5".parse().unwrap(),
-            gateway_ip: "fd00::1".parse().unwrap(),
-            snat: Some(SNat6Cfg {
-                external_ip: "2001:db8::1".parse().unwrap(),
-                ports: 1025..=4096,
-            }),
-            external_ips: None,
-        },
-    };
-    VpcCfg {
-        ip_cfg,
-        private_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x66]),
-        gateway_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
-        vni: Vni::new(1287581u32).unwrap(),
-        // Site 0xF7, Rack 1, Sled 22, Interface 1
-        phys_ip: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
         boundary_services: BoundaryServices {
             mac: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
@@ -644,7 +349,7 @@ fn gateway_icmp4_ping() {
     // Generate an ICMP Echo Request from G1 to Virtual GW
     // ================================================================
     let mut pkt1 = gen_icmp_echo_req(
-        g1_cfg.private_mac,
+        g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
         g1_cfg.ipv4_cfg().unwrap().private_ip.into(),
         g1_cfg.ipv4_cfg().unwrap().gateway_ip.into(),
@@ -681,7 +386,7 @@ fn gateway_icmp4_ping() {
     match meta.inner.ether.as_ref() {
         Some(eth) => {
             assert_eq!(eth.src, g1_cfg.gateway_mac);
-            assert_eq!(eth.dst, g1_cfg.private_mac);
+            assert_eq!(eth.dst, g1_cfg.guest_mac);
         }
 
         None => panic!("no inner ether header"),
@@ -841,8 +546,8 @@ fn guest_to_guest() {
 
     match meta.inner.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.private_mac);
-            assert_eq!(eth.dst, g2_cfg.private_mac);
+            assert_eq!(eth.src, g1_cfg.guest_mac);
+            assert_eq!(eth.dst, g2_cfg.guest_mac);
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
 
@@ -896,8 +601,8 @@ fn guest_to_guest() {
 
     match g2_meta.inner.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.private_mac);
-            assert_eq!(eth.dst, g2_cfg.private_mac);
+            assert_eq!(eth.src, g1_cfg.guest_mac);
+            assert_eq!(eth.dst, g2_cfg.guest_mac);
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
 
@@ -988,8 +693,9 @@ fn guest_to_internet() {
     // ================================================================
     let dst_ip = "52.10.128.69".parse().unwrap();
     let mut pkt1 = http_tcp_syn2(
-        g1_cfg.private_mac,
+        g1_cfg.guest_mac,
         g1_cfg.ipv4_cfg().unwrap().private_ip,
+        GW_MAC_ADDR,
         dst_ip,
     );
 
@@ -1047,7 +753,7 @@ fn guest_to_internet() {
 
     match meta.inner.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.private_mac);
+            assert_eq!(eth.src, g1_cfg.guest_mac);
             assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
@@ -1106,7 +812,7 @@ fn snat_icmp4_echo_rewrite() {
     // Verify echo request rewrite.
     // ================================================================
     let mut pkt1 = gen_icmp_echo_req(
-        g1_cfg.private_mac,
+        g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
         g1_cfg.ipv4().private_ip.into(),
         dst_ip.into(),
@@ -1130,7 +836,7 @@ fn snat_icmp4_echo_rewrite() {
 
     match meta.inner.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.private_mac);
+            assert_eq!(eth.src, g1_cfg.guest_mac);
             assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
@@ -1159,13 +865,19 @@ fn snat_icmp4_echo_rewrite() {
     // ================================================================
     let mut pkt2 = gen_icmp_echo_reply(
         g1_cfg.boundary_services.mac,
-        g1_cfg.private_mac,
+        g1_cfg.guest_mac,
         dst_ip,
         g1_cfg.snat().external_ip,
         mapped_port,
         seq_no,
         &data[..],
     );
+    let bsvc_phys = TestIpPhys {
+        ip: g1_cfg.boundary_services.ip,
+        mac: g1_cfg.boundary_services.mac,
+    };
+    let g1_phys = TestIpPhys { ip: g1_cfg.phys_ip, mac: g1_cfg.guest_mac };
+    pkt2 = encap(pkt2, bsvc_phys, g1_phys, g1_cfg.vni);
 
     let res = g1.port.process(In, &mut pkt2, &mut ameta);
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
@@ -1177,7 +889,7 @@ fn snat_icmp4_echo_rewrite() {
     match meta.inner.ether.as_ref() {
         Some(eth) => {
             assert_eq!(eth.src, g1_cfg.boundary_services.mac);
-            assert_eq!(eth.dst, g1_cfg.private_mac);
+            assert_eq!(eth.dst, g1_cfg.guest_mac);
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
 
@@ -1207,7 +919,7 @@ fn snat_icmp4_echo_rewrite() {
     // ================================================================
     seq_no += 1;
     let mut pkt3 = gen_icmp_echo_req(
-        g1_cfg.private_mac,
+        g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
         g1_cfg.ipv4().private_ip.into(),
         dst_ip.into(),
@@ -1226,7 +938,7 @@ fn snat_icmp4_echo_rewrite() {
 
     match meta.inner.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.private_mac);
+            assert_eq!(eth.src, g1_cfg.guest_mac);
             assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
@@ -1258,7 +970,7 @@ fn snat_icmp4_echo_rewrite() {
     // ================================================================
     let mut pkt4 = gen_icmp_echo_reply(
         g1_cfg.boundary_services.mac,
-        g1_cfg.private_mac,
+        g1_cfg.guest_mac,
         dst_ip,
         g1_cfg.snat().external_ip,
         mapped_port,
@@ -1277,7 +989,7 @@ fn snat_icmp4_echo_rewrite() {
     match meta.inner.ether.as_ref() {
         Some(eth) => {
             assert_eq!(eth.src, g1_cfg.boundary_services.mac);
-            assert_eq!(eth.dst, g1_cfg.private_mac);
+            assert_eq!(eth.dst, g1_cfg.guest_mac);
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
 
@@ -1308,7 +1020,7 @@ fn bad_ip_len() {
     let pkt = Packet::alloc(42);
 
     let ether = EtherHdr::from(&EtherMeta {
-        src: cfg.private_mac,
+        src: cfg.guest_mac,
         dst: MacAddr::BROADCAST,
         ether_type: ETHER_TYPE_IPV4,
     });
@@ -1338,7 +1050,7 @@ fn bad_ip_len() {
     let pkt = Packet::alloc(42);
 
     let ether = EtherHdr::from(&EtherMeta {
-        src: cfg.private_mac,
+        src: cfg.guest_mac,
         dst: MacAddr::BROADCAST,
         ether_type: ETHER_TYPE_IPV4,
     });
@@ -1383,7 +1095,7 @@ fn arp_gateway() {
     let pkt = Packet::alloc(42);
     let eth_hdr = EtherHdrRaw {
         dst: [0xff; 6],
-        src: cfg.private_mac.bytes(),
+        src: cfg.guest_mac.bytes(),
         ether_type: [0x08, 0x06],
     };
 
@@ -1396,7 +1108,7 @@ fn arp_gateway() {
     };
 
     let arp = ArpEth4Payload {
-        sha: cfg.private_mac,
+        sha: cfg.guest_mac,
         spa: cfg.ipv4_cfg().unwrap().private_ip,
         tha: MacAddr::from([0x00; 6]),
         tpa: cfg.ipv4_cfg().unwrap().gateway_ip,
@@ -1415,7 +1127,7 @@ fn arp_gateway() {
             let meta = hppkt.meta();
             let ethm = meta.inner.ether.as_ref().unwrap();
             let arpm = meta.inner.arp.as_ref().unwrap();
-            assert_eq!(ethm.dst, cfg.private_mac);
+            assert_eq!(ethm.dst, cfg.guest_mac);
             assert_eq!(ethm.src, cfg.gateway_mac);
             assert_eq!(ethm.ether_type, ETHER_TYPE_ARP);
             assert_eq!(arpm.op, ArpOp::Reply);
@@ -1429,7 +1141,7 @@ fn arp_gateway() {
 
             assert_eq!(arp.sha, cfg.gateway_mac);
             assert_eq!(arp.spa, cfg.ipv4_cfg().unwrap().gateway_ip);
-            assert_eq!(arp.tha, cfg.private_mac);
+            assert_eq!(arp.tha, cfg.guest_mac);
             assert_eq!(arp.tpa, cfg.ipv4_cfg().unwrap().private_ip);
         }
 
@@ -1472,127 +1184,6 @@ fn flow_expiration() {
     zero_flows!(g1);
 }
 
-#[test]
-fn firewall_replace_rules() {
-    let g1_cfg = g1_cfg();
-    let g2_cfg = g2_cfg();
-    let mut ameta = ActionMeta::new();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
-    g1.port.start();
-    set!(g1, "port_state=running");
-
-    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
-    g2.port.start();
-    set!(g2, "port_state=running");
-
-    // Allow incoming TCP connection on g2 from anyone.
-    let rule = "dir=in action=allow priority=10 protocol=TCP";
-    firewall::add_fw_rule(
-        &g2.port,
-        &AddFwRuleReq {
-            port_name: g2.port.name().to_string(),
-            rule: rule.parse().unwrap(),
-        },
-    )
-    .unwrap();
-    incr!(g2, "epoch, firewall.rules.in");
-
-    // ================================================================
-    // Run the telnet SYN packet through g1's port in the outbound
-    // direction and verify if passes the firewall.
-    // ================================================================
-    let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
-    assert!(matches!(res, Ok(Modified)));
-    incr!(g1, "firewall.flows.out, firewall.flows.in, uft.out");
-
-    // ================================================================
-    // Modify the outgoing ruleset, but still allow the traffic to
-    // pass. This test makes sure that flow table entries are updated
-    // without issue and everything still works.
-    //
-    // XXX It would be nice if tests could verify that a probe fires
-    // (in this case uft-invalidated) without using dtrace.
-    // ================================================================
-    let any_out = "dir=out action=deny priority=65535 protocol=any";
-    let tcp_out = "dir=out action=allow priority=1000 protocol=TCP";
-    firewall::set_fw_rules(
-        &g1.port,
-        &SetFwRulesReq {
-            port_name: g1.port.name().to_string(),
-            rules: vec![any_out.parse().unwrap(), tcp_out.parse().unwrap()],
-        },
-    )
-    .unwrap();
-    update!(
-        g1,
-        [
-            "incr:epoch",
-            "set:firewall.flows.in=0, firewall.flows.out=0",
-            "set:firewall.rules.out=2, firewall.rules.in=0",
-        ]
-    );
-
-    let mut pkt2 = http_tcp_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt2, &mut ameta);
-    assert!(matches!(res, Ok(Modified)));
-    incr!(g1, "firewall.flows.in, firewall.flows.out");
-
-    // ================================================================
-    // Now that the packet has been encap'd let's play the role of
-    // router and send this inbound to g2's port. For maximum fidelity
-    // of the real process we first dump the raw bytes of g1's
-    // outgoing packet and then reparse it.
-    // ================================================================
-    let mblk = pkt2.unwrap();
-    let mut pkt3 =
-        unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
-    let mut pkt3_copy =
-        Packet::<Initialized>::copy(&pkt3.all_bytes()).parse().unwrap();
-    let res = g2.port.process(In, &mut pkt3, &mut ameta);
-    assert!(matches!(res, Ok(Modified)));
-    incr!(g2, "firewall.flows.in, firewall.flows.out, uft.in");
-
-    // ================================================================
-    // Replace g2's firewall rule set to deny all inbound TCP traffic.
-    // Verify the rules have been replaced and retry processing of the
-    // g2_pkt, but this time it should be dropped.
-    // ================================================================
-    let new_rule = "dir=in action=deny priority=1000 protocol=TCP";
-    firewall::set_fw_rules(
-        &g2.port,
-        &SetFwRulesReq {
-            port_name: g2.port.name().to_string(),
-            rules: vec![new_rule.parse().unwrap()],
-        },
-    )
-    .unwrap();
-    update!(
-        g2,
-        [
-            "incr:epoch",
-            "set:firewall.flows.in=0, firewall.flows.out=0",
-            "set:firewall.rules.in=1, firewall.rules.out=0",
-        ]
-    );
-
-    // Verify the packet is dropped and that the firewall flow table
-    // entry (along with its dual) was invalidated.
-    let res = g2.port.process(In, &mut pkt3_copy, &mut ameta);
-    use opte::engine::port::DropReason;
-    match res {
-        Ok(ProcessResult::Drop {
-            reason: DropReason::Layer { name, reason: lreason },
-        }) => {
-            assert_eq!("firewall", name);
-            assert_eq!(DenyReason::Rule, lreason);
-        }
-
-        _ => panic!("expected layer drop but got: {:?}", res),
-    }
-    update!(g2, ["set:uft.in=0"]);
-}
-
 // Test that a guest can send an ICMPv6 echo request / reply to the gateway.
 // This tests both link-local and VPC-private IPv6 source addresses, and the
 // only supported destination, OPTE's IPv6 link-local derived from its MAC.
@@ -1606,7 +1197,7 @@ fn gateway_icmpv6_ping() {
     let mut pcap = PcapBuilder::new("gateway_icmpv6_ping.pcap");
 
     let src_ips = [
-        Ipv6Addr::from_eui64(&g1_cfg.private_mac),
+        Ipv6Addr::from_eui64(&g1_cfg.guest_mac),
         g1_cfg.ipv6_cfg().unwrap().private_ip,
     ];
     let dst_ip = Ipv6Addr::from_eui64(&g1_cfg.gateway_mac);
@@ -1633,7 +1224,7 @@ fn test_guest_to_gateway_icmpv6_ping(
     // Generate an ICMP Echo Request from G1 to Virtual GW
     // ================================================================
     let mut pkt1 = gen_icmp_echo_req(
-        g1_cfg.private_mac,
+        g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
         src_ip.into(),
         dst_ip.into(),
@@ -1670,7 +1261,7 @@ fn test_guest_to_gateway_icmpv6_ping(
     match meta.inner.ether.as_ref() {
         Some(eth) => {
             assert_eq!(eth.src, g1_cfg.gateway_mac);
-            assert_eq!(eth.dst, g1_cfg.private_mac);
+            assert_eq!(eth.dst, g1_cfg.guest_mac);
         }
 
         None => panic!("no inner ether header"),
@@ -1777,7 +1368,7 @@ fn gateway_router_advert_reply() {
     // ====================================================
     // Generate a Router Solicitation from G1 to Virtual GW
     // ====================================================
-    let mut pkt1 = gen_router_solicitation(&g1_cfg.private_mac);
+    let mut pkt1 = gen_router_solicitation(&g1_cfg.guest_mac);
     pcap.add_pkt(&pkt1);
 
     // ================================================================
@@ -1811,7 +1402,7 @@ fn gateway_router_advert_reply() {
                 "Router advertisement should come from the gateway's MAC"
             );
             assert_eq!(
-                eth.dst, g1_cfg.private_mac,
+                eth.dst, g1_cfg.guest_mac,
                 "Router advertisement should be destined for the guest's MAC"
             );
         }
@@ -1828,7 +1419,7 @@ fn gateway_router_advert_reply() {
                 gateway's link-local IPv6 address, generated \
                 from the EUI-64 transform of its MAC",
             );
-            let expected_dst = Ipv6Addr::from_eui64(&g1_cfg.private_mac);
+            let expected_dst = Ipv6Addr::from_eui64(&g1_cfg.guest_mac);
             assert_eq!(
                 ip6.dst, expected_dst,
                 "Router advertisement should be destined for \
@@ -2035,14 +1626,14 @@ fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
         // allowed to self-assign that address.
         SolicitTestData {
             ns: SolicitInfo {
-                src_mac: cfg.private_mac,
-                dst_mac: Ipv6Addr::from_eui64(&cfg.private_mac)
+                src_mac: cfg.guest_mac,
+                dst_mac: Ipv6Addr::from_eui64(&cfg.guest_mac)
                     .solicited_node_multicast()
                     .unchecked_multicast_mac(),
                 src_ip: Ipv6Addr::ANY_ADDR,
-                dst_ip: Ipv6Addr::from_eui64(&cfg.private_mac)
+                dst_ip: Ipv6Addr::from_eui64(&cfg.guest_mac)
                     .solicited_node_multicast(),
-                target_addr: Ipv6Addr::from_eui64(&cfg.private_mac),
+                target_addr: Ipv6Addr::from_eui64(&cfg.guest_mac),
                 lladdr: None,
             },
             na: None,
@@ -2057,7 +1648,7 @@ fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
         // SOLICITED flag, since the response is multicast.
         SolicitTestData {
             ns: SolicitInfo {
-                src_mac: cfg.private_mac,
+                src_mac: cfg.guest_mac,
                 dst_mac: Ipv6Addr::from_eui64(&cfg.gateway_mac)
                     .solicited_node_multicast()
                     .unchecked_multicast_mac(),
@@ -2086,18 +1677,18 @@ fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
         // Note that here we set the SOLICITED flag.
         SolicitTestData {
             ns: SolicitInfo {
-                src_mac: cfg.private_mac,
+                src_mac: cfg.guest_mac,
                 dst_mac: cfg.gateway_mac,
-                src_ip: Ipv6Addr::from_eui64(&cfg.private_mac),
+                src_ip: Ipv6Addr::from_eui64(&cfg.guest_mac),
                 dst_ip: Ipv6Addr::from_eui64(&cfg.gateway_mac),
                 target_addr: Ipv6Addr::from_eui64(&cfg.gateway_mac),
-                lladdr: Some(cfg.private_mac),
+                lladdr: Some(cfg.guest_mac),
             },
             na: Some(AdvertInfo {
                 src_mac: cfg.gateway_mac,
-                dst_mac: cfg.private_mac,
+                dst_mac: cfg.guest_mac,
                 src_ip: Ipv6Addr::from_eui64(&cfg.gateway_mac),
-                dst_ip: Ipv6Addr::from_eui64(&cfg.private_mac),
+                dst_ip: Ipv6Addr::from_eui64(&cfg.guest_mac),
                 target_addr: Ipv6Addr::from_eui64(&cfg.gateway_mac),
                 lladdr: Some(cfg.gateway_mac),
                 flags: NdiscNeighborFlags::ROUTER
@@ -2115,11 +1706,11 @@ fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
         // segment.
         SolicitTestData {
             ns: SolicitInfo {
-                src_mac: cfg.private_mac,
+                src_mac: cfg.guest_mac,
                 dst_mac: Ipv6Addr::from_const([0xfe80, 0, 0, 0, 1, 1, 1, 1])
                     .solicited_node_multicast()
                     .unchecked_multicast_mac(),
-                src_ip: Ipv6Addr::from_eui64(&cfg.private_mac),
+                src_ip: Ipv6Addr::from_eui64(&cfg.guest_mac),
                 dst_ip: Ipv6Addr::from_const([0xfe80, 0, 0, 0, 1, 1, 1, 1]),
                 target_addr: Ipv6Addr::from_const([
                     0xfe80, 0, 0, 0, 1, 1, 1, 1,
@@ -2245,12 +1836,12 @@ fn packet_from_client_dhcpv6_message<'a>(
 ) -> Packet<Parsed> {
     let eth = EtherHdr::from(&EtherMeta {
         dst: dhcpv6::ALL_RELAYS_AND_SERVERS.multicast_mac().unwrap(),
-        src: cfg.private_mac,
+        src: cfg.guest_mac,
         ether_type: ETHER_TYPE_IPV6,
     });
 
     let mut ip = Ipv6Hdr::from(&Ipv6Meta {
-        src: Ipv6Addr::from_eui64(&cfg.private_mac),
+        src: Ipv6Addr::from_eui64(&cfg.guest_mac),
         dst: dhcpv6::ALL_RELAYS_AND_SERVERS,
         proto: Protocol::UDP,
     });
@@ -2327,7 +1918,7 @@ fn verify_dhcpv6_essentials<'a>(
 
     let request_ip = request_meta.inner_ip6().unwrap();
     let reply_ip = reply_meta.inner_ip6().unwrap();
-    assert_eq!(request_ip.src, Ipv6Addr::from_eui64(&cfg.private_mac));
+    assert_eq!(request_ip.src, Ipv6Addr::from_eui64(&cfg.guest_mac));
     assert_eq!(request_ip.dst, dhcpv6::ALL_RELAYS_AND_SERVERS);
     assert_eq!(request_ip.proto, Protocol::UDP);
     assert_eq!(reply_ip.dst, request_ip.src);
@@ -2382,7 +1973,7 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
     };
     let base_options = vec![
         dhcpv6::options::Option::ClientId(dhcpv6::Duid::from(
-            &g1_cfg.private_mac,
+            &g1_cfg.guest_mac,
         )),
         dhcpv6::options::Option::ElapsedTime(dhcpv6::options::ElapsedTime(10)),
         dhcpv6::options::Option::IaNa(requested_iana.clone()),

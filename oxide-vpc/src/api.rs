@@ -137,14 +137,41 @@ pub enum IpCfg {
     DualStack { ipv4: Ipv4Cfg, ipv6: Ipv6Cfg },
 }
 
+impl IpCfg {
+    #[cfg(any(feature = "test-help", test))]
+    pub fn ext_ipv4(&self) -> Ipv4Addr {
+        match self {
+            Self::Ipv4(ipv4) | Self::DualStack { ipv4, .. } => {
+                ipv4.external_ips.unwrap()
+            }
+
+            _ => panic!("set IPv4 external IP on IPv6-only config"),
+        }
+    }
+
+    #[cfg(any(feature = "test-help", test))]
+    pub fn set_ext_ipv4(&mut self, ip: Ipv4Addr) {
+        match self {
+            Self::Ipv4(ipv4) | Self::DualStack { ipv4, .. } => {
+                if let Some(snat) = &ipv4.snat {
+                    assert_ne!(snat.external_ip, ip);
+                }
+                ipv4.external_ips = Some(ip);
+            }
+
+            _ => panic!("set IPv4 external IP on IPv6-only config"),
+        }
+    }
+}
+
 /// The overall configuration for an OPTE port.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VpcCfg {
     /// IP address configuration.
     pub ip_cfg: IpCfg,
 
-    /// The VPC-private MAC address of the guest.
-    pub private_mac: MacAddr,
+    /// The VPC MAC address of the guest.
+    pub guest_mac: MacAddr,
 
     /// The MAC address for the virtual gateway.
     ///
@@ -191,6 +218,16 @@ impl VpcCfg {
         }
     }
 
+    #[cfg(any(feature = "test-help", test))]
+    pub fn ext_ipv4(&self) -> Ipv4Addr {
+        self.ip_cfg.ext_ipv4()
+    }
+
+    #[cfg(any(feature = "test-help", test))]
+    pub fn set_ext_ipv4(&mut self, ip: Ipv4Addr) {
+        self.ip_cfg.set_ext_ipv4(ip);
+    }
+
     /// Return the IPv6 configuration, if it exists, or None.
     pub fn ipv6_cfg(&self) -> Option<&Ipv6Cfg> {
         match self.ip_cfg {
@@ -204,7 +241,7 @@ impl VpcCfg {
     #[cfg(any(feature = "test-help", test))]
     /// Return the physical address of the guest.
     pub fn phys_addr(&self) -> PhysNet {
-        PhysNet { ether: self.private_mac, ip: self.phys_ip, vni: self.vni }
+        PhysNet { ether: self.guest_mac, ip: self.phys_ip, vni: self.vni }
     }
 
     #[cfg(not(any(feature = "test-help", test)))]
@@ -436,7 +473,7 @@ pub struct RemFwRuleReq {
 pub struct FirewallRule {
     pub direction: Direction,
     pub filters: Filters,
-    pub action: Action,
+    pub action: FirewallAction,
     pub priority: u16,
 }
 
@@ -462,7 +499,7 @@ impl FromStr for FirewallRule {
                 }
 
                 Some(("action", val)) => {
-                    action = Some(val.parse::<Action>()?);
+                    action = Some(val.parse::<FirewallAction>()?);
                 }
 
                 Some(("priority", val)) => {
@@ -519,20 +556,19 @@ impl FromStr for FirewallRule {
     }
 }
 
-// TODO rename FirewallAction
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum Action {
+pub enum FirewallAction {
     Allow,
     Deny,
 }
 
-impl FromStr for Action {
+impl FromStr for FirewallAction {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "allow" => Ok(Action::Allow),
-            "deny" => Ok(Action::Deny),
+            "allow" => Ok(FirewallAction::Allow),
+            "deny" => Ok(FirewallAction::Deny),
             _ => Err(format!("invalid action: {} ('allow' or 'deny')", s)),
         }
     }
@@ -604,11 +640,20 @@ impl Filters {
     }
 }
 
+/// Filter traffic by address.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Address {
+    /// Match traffic from any address.
     Any,
+
+    /// Match traffic from the given subnet CIDR.
     Subnet(Ipv4Cidr),
+
+    /// Match traffic from the given IP address.
     Ip(Ipv4Addr),
+
+    /// Match traffic from the given VNI.
+    Vni(Vni),
 }
 
 impl FromStr for Address {
@@ -625,6 +670,7 @@ impl FromStr for Address {
                 )),
                 Some(("ip", val)) => Ok(Address::Ip(val.parse()?)),
                 Some(("subnet", val)) => Ok(Address::Subnet(val.parse()?)),
+                Some(("vni", val)) => Ok(Address::Vni(val.parse()?)),
                 Some((key, _)) => Err(format!("invalid address type: {}", key)),
             },
         }
@@ -637,6 +683,10 @@ fn parse_good_address() {
     assert_eq!(
         "ip=192.168.2.1".parse::<Address>(),
         Ok(Address::Ip("192.168.2.1".parse().unwrap()))
+    );
+    assert_eq!(
+        "vni=7777".parse(),
+        Ok(Address::Vni(Vni::new(7777u32).unwrap()))
     );
 }
 
@@ -652,14 +702,9 @@ impl Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Address::Any => write!(f, "ANY"),
-
-            Address::Ip(val) => {
-                write!(f, "{},", val)
-            }
-
-            Address::Subnet(val) => {
-                write!(f, "{},", val)
-            }
+            Address::Ip(val) => write!(f, "{},", val),
+            Address::Subnet(val) => write!(f, "{},", val),
+            Address::Vni(val) => write!(f, "{}", val),
         }
     }
 }

@@ -173,6 +173,16 @@ impl UdpHdr {
         Self::SIZE
     }
 
+    pub fn new(src_port: u16, dst_port: u16, len: u16) -> Self {
+        Self {
+            src_port,
+            dst_port,
+            length: Self::SIZE as u16 + len,
+            csum: [0; 2],
+            csum_minus_hdr: Checksum::from(0),
+        }
+    }
+
     /// Return the payload length, in bytes.
     pub fn pay_len(&self) -> usize {
         usize::from(self.length) - Self::SIZE

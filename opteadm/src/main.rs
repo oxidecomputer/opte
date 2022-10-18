@@ -23,11 +23,11 @@ use opte::engine::print::print_layer;
 use opte::engine::print::print_list_layers;
 use opte::engine::print::print_uft;
 use opteadm::OpteAdm;
-use oxide_vpc::api::Action as FirewallAction;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
 use oxide_vpc::api::Filters as FirewallFilters;
+use oxide_vpc::api::FirewallAction;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::Ipv4Cfg;
@@ -122,7 +122,7 @@ enum Command {
         name: String,
 
         #[structopt(long)]
-        private_mac: MacAddr,
+        guest_mac: MacAddr,
 
         #[structopt(long)]
         private_ip: std::net::Ipv4Addr,
@@ -339,7 +339,7 @@ fn main() {
 
         Command::CreateXde {
             name,
-            private_mac,
+            guest_mac,
             private_ip,
             vpc_subnet,
             gateway_mac,
@@ -377,7 +377,7 @@ fn main() {
                     snat,
                     external_ips: external_ipv4,
                 }),
-                private_mac,
+                guest_mac,
                 gateway_mac,
                 vni: vpc_vni,
                 phys_ip: src_underlay_addr.into(),

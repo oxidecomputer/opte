@@ -35,7 +35,7 @@ pub fn setup(
     let reply = Action::Hairpin(Arc::new(IcmpEchoReply {
         // Map an Echo from guest (src) -> gateway (dst) to an Echo
         // Reply from gateway (dst) -> guest (src).
-        echo_src_mac: cfg.private_mac.into(),
+        echo_src_mac: cfg.guest_mac.into(),
         echo_src_ip: ip_cfg.private_ip,
         echo_dst_mac: cfg.gateway_mac.into(),
         echo_dst_ip: ip_cfg.gateway_ip,

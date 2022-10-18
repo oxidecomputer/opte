@@ -9,14 +9,15 @@
 //! This layer is responsible for implementing the VPC firewall as
 //! described in RFD 21 §2.8.
 
-use crate::api::Action;
 use crate::api::AddFwRuleReq;
 use crate::api::Address;
+use crate::api::FirewallAction;
 use crate::api::FirewallRule;
 use crate::api::Ports;
 pub use crate::api::ProtoFilter;
 use crate::api::RemFwRuleReq;
 use crate::api::SetFwRulesReq;
+use crate::engine::overlay::ACTION_META_VNI;
 use core::num::NonZeroU32;
 use opte::api::Direction;
 use opte::api::OpteError;
@@ -26,12 +27,21 @@ use opte::engine::layer::LayerActions;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
-use opte::engine::rule;
+use opte::engine::rule::Action;
+use opte::engine::rule::Finalized;
 use opte::engine::rule::IpProtoMatch;
 use opte::engine::rule::Ipv4AddrMatch;
 use opte::engine::rule::PortMatch;
 use opte::engine::rule::Predicate;
 use opte::engine::rule::Rule;
+
+cfg_if! {
+    if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::string::ToString;
+    } else {
+        use std::string::ToString;
+    }
+}
 
 pub const FW_LAYER_NAME: &'static str = "firewall";
 
@@ -45,8 +55,8 @@ pub fn setup(
 
 pub fn add_fw_rule(port: &Port, req: &AddFwRuleReq) -> Result<(), OpteError> {
     let action = match req.rule.action {
-        Action::Allow => rule::Action::StatefulAllow,
-        Action::Deny => rule::Action::Deny,
+        FirewallAction::Allow => Action::StatefulAllow,
+        FirewallAction::Deny => Action::Deny,
     };
 
     let rule = from_fw_rule(req.rule.clone(), action);
@@ -63,8 +73,8 @@ pub fn set_fw_rules(port: &Port, req: &SetFwRulesReq) -> Result<(), OpteError> {
 
     for fwr in &req.rules {
         let action = match fwr.action {
-            Action::Allow => rule::Action::StatefulAllow,
-            Action::Deny => rule::Action::Deny,
+            FirewallAction::Allow => Action::StatefulAllow,
+            FirewallAction::Deny => Action::Deny,
         };
 
         let rule = from_fw_rule(fwr.clone(), action);
@@ -80,10 +90,7 @@ pub fn set_fw_rules(port: &Port, req: &SetFwRulesReq) -> Result<(), OpteError> {
 
 pub struct Firewall {}
 
-pub fn from_fw_rule(
-    fw_rule: FirewallRule,
-    action: rule::Action,
-) -> Rule<rule::Finalized> {
+pub fn from_fw_rule(fw_rule: FirewallRule, action: Action) -> Rule<Finalized> {
     let addr_pred = fw_rule.filters.hosts().into_predicate(fw_rule.direction);
     let proto_pred = fw_rule.filters.protocol().into_predicate();
     let port_pred = fw_rule.filters.ports().into_predicate();
@@ -163,6 +170,11 @@ impl Address {
             (Direction::In, Address::Subnet(ip4_sub)) => Some(
                 Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Prefix(ip4_sub)]),
             ),
+
+            (_, Address::Vni(vni)) => Some(Predicate::Meta(
+                ACTION_META_VNI.to_string(),
+                vni.to_string(),
+            )),
         }
     }
 }

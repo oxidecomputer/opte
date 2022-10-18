@@ -111,6 +111,10 @@ impl GeneveHdr {
         usize::from(self.opt_len_bytes) + Self::SIZE
     }
 
+    pub fn new(proto: EtherType, vni: Vni) -> Self {
+        Self { opt_len_bytes: 0, flags: 0, proto, vni }
+    }
+
     pub fn options_len_bytes(&self) -> usize {
         usize::from(self.opt_len_bytes)
     }

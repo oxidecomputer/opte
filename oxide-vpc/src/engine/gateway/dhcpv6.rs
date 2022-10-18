@@ -38,7 +38,7 @@ pub fn setup(layer: &mut Layer, cfg: &VpcCfg) -> Result<(), OpteError> {
         renew: u32::MAX,
     };
     let action = Dhcpv6Action {
-        client_mac: cfg.private_mac,
+        client_mac: cfg.guest_mac,
         server_mac: cfg.gateway_mac,
         addrs,
         dns_servers: vec![

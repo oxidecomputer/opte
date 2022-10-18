@@ -189,6 +189,25 @@ impl Ipv6Hdr {
             extension_headers: extension_headers.to_vec(),
         }
     }
+
+    #[cfg(any(feature = "std", test))]
+    pub fn new_udp<A: Into<Ipv6Addr>>(
+        udp: &super::udp::UdpHdr,
+        src: A,
+        dst: A,
+    ) -> Self {
+        Self {
+            vsn_class_flow: [IPV6_VERSION, 0, 0, 0],
+            payload_len: (udp.total_len()) as u16,
+            next_hdr: IpProtocol::Udp,
+            proto: Protocol::UDP,
+            hop_limit: 255,
+            src: src.into(),
+            dst: dst.into(),
+            extension_headers: vec![],
+        }
+    }
+
     /// Return the bytes of the header, including the base and any extensions
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(self.hdr_len());

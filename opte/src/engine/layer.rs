@@ -727,7 +727,8 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(In, pkt.flow(), ameta) {
+                let ht = match action.gen_ht(In, pkt.flow(), pkt.meta(), ameta)
+                {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
@@ -1009,7 +1010,8 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(Out, pkt.flow(), ameta) {
+                let ht = match action.gen_ht(Out, pkt.flow(), pkt.meta(), ameta)
+                {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {

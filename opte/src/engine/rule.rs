@@ -976,13 +976,6 @@ impl fmt::Debug for dyn StaticAction {
     }
 }
 
-pub trait ActionContext {
-    // The `payload` is the mutable bytes of the packet payload (after
-    // the headers parsed for FlowId).
-    fn exec(&self, meta: &PacketMeta, payload: &mut [u8])
-        -> Result<(), String>;
-}
-
 impl fmt::Debug for dyn StatefulAction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "dyn StatefulAction")
@@ -1036,7 +1029,8 @@ impl StaticAction for Identity {
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _meta: &mut ActionMeta,
+        _pkt_meta: &PacketMeta,
+        _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform::identity(&self.name)))
     }
@@ -1281,7 +1275,8 @@ pub trait StaticAction: Display {
         &self,
         dir: Direction,
         flow_id: &InnerFlowId,
-        meta: &mut ActionMeta,
+        packet_meta: &PacketMeta,
+        action_meta: &mut ActionMeta,
     ) -> GenHtResult;
 
     /// Return the predicates implicit to this action.

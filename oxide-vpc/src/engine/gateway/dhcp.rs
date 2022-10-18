@@ -71,7 +71,7 @@ pub fn setup(
     );
 
     let offer = Action::Hairpin(Arc::new(DhcpAction {
-        client_mac: cfg.private_mac.into(),
+        client_mac: cfg.guest_mac.into(),
         client_ip: ip_cfg.private_ip,
         subnet_prefix_len: Ipv4PrefixLen::NETMASK_ALL,
         gw_mac: cfg.gateway_mac.into(),
@@ -89,7 +89,7 @@ pub fn setup(
     }));
 
     let ack = Action::Hairpin(Arc::new(DhcpAction {
-        client_mac: cfg.private_mac.into(),
+        client_mac: cfg.guest_mac.into(),
         client_ip: ip_cfg.private_ip,
         subnet_prefix_len: Ipv4PrefixLen::NETMASK_ALL,
         gw_mac: cfg.gateway_mac.into(),

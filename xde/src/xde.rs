@@ -199,7 +199,7 @@ struct xde_underlay_port {
 
 struct XdeState {
     ectx: Arc<ExecCtx>,
-    vpc_map: overlay::VpcMappings,
+    vpc_map: Arc<overlay::VpcMappings>,
     underlay: KMutex<Option<UnderlayState>>,
 }
 
@@ -226,7 +226,7 @@ impl XdeState {
         XdeState {
             underlay: KMutex::new(None, KMutexType::Driver),
             ectx,
-            vpc_map: overlay::VpcMappings::new(),
+            vpc_map: Arc::new(overlay::VpcMappings::new()),
         }
     }
 }
@@ -477,14 +477,15 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     };
 
     let cfg = &req.cfg;
-    match devs.iter().find(|x| {
-        x.vni == cfg.vni && x.port.mac_addr() == cfg.private_mac.into()
-    }) {
+    match devs
+        .iter()
+        .find(|x| x.vni == cfg.vni && x.port.mac_addr() == cfg.guest_mac.into())
+    {
         Some(_) => {
             return Err(OpteError::MacExists {
                 port: req.xde_devname.clone(),
                 vni: cfg.vni,
-                mac: cfg.private_mac,
+                mac: cfg.guest_mac,
             })
         }
         None => (),
@@ -506,7 +507,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // guest have them. They should return the same `Virt2Phys` mapping, since
     // they're mapping both IP addresses to the same host.
     let phys_net =
-        PhysNet { ether: cfg.private_mac, ip: cfg.phys_ip, vni: cfg.vni };
+        PhysNet { ether: cfg.guest_mac, ip: cfg.phys_ip, vni: cfg.vni };
     let port_v2p = match vpc_cfg.ip_cfg {
         IpCfg::Ipv4(ref ipv4) => {
             state.vpc_map.add(IpAddr::Ip4(ipv4.private_ip), phys_net)
@@ -523,6 +524,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     let port = new_port(
         req.xde_devname.clone(),
         &vpc_cfg,
+        state.vpc_map.clone(),
         port_v2p.clone(),
         state.ectx.clone(),
     )?;
@@ -1287,9 +1289,9 @@ fn guest_loopback(
                 if let Some(dev) = maybe_dev {
                     opte::engine::dbg(format!(
                         "rewriting packet dst mac to: {}",
-                        dev.vpc_cfg.private_mac,
+                        dev.vpc_cfg.guest_mac,
                     ));
-                    pkt.write_dst_mac(dev.vpc_cfg.private_mac.into());
+                    pkt.write_dst_mac(dev.vpc_cfg.guest_mac.into());
                 }
                 maybe_dev
             }
@@ -1934,6 +1936,7 @@ unsafe extern "C" fn xde_mc_propinfo(
 fn new_port(
     name: String,
     cfg: &VpcCfg,
+    vpc_map: Arc<overlay::VpcMappings>,
     v2p: Arc<overlay::Virt2Phys>,
     ectx: Arc<ExecCtx>,
 ) -> Result<Arc<Port>, OpteError> {
@@ -1942,12 +1945,11 @@ fn new_port(
         Err(_) => return Err(OpteError::BadName),
     };
 
-    let mut pb =
-        PortBuilder::new(&name, name_cstr, cfg.private_mac.into(), ectx);
+    let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac.into(), ectx);
     firewall::setup(&mut pb, FW_FT_LIMIT.unwrap())?;
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
+    gateway::setup(&mut pb, &cfg, vpc_map, FT_LIMIT_ONE.unwrap())?;
     router::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     nat::setup(&mut pb, &cfg, NAT_FT_LIMIT.unwrap())?;
 

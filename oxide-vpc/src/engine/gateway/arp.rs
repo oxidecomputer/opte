@@ -46,7 +46,7 @@ pub fn setup(
     )));
     let mut rule = Rule::new(1, reply);
     rule.add_predicate(Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(
-        MacAddr::from(cfg.private_mac),
+        MacAddr::from(cfg.guest_mac),
     )]));
     layer.add_rule(Direction::Out, rule.finalize());
 
@@ -59,7 +59,7 @@ pub fn setup(
     if let Some(ip) = ip_cfg.external_ips.as_ref() {
         if cfg.proxy_arp_enable {
             let action =
-                Action::Hairpin(Arc::new(ArpReply::new(*ip, cfg.private_mac)));
+                Action::Hairpin(Arc::new(ArpReply::new(*ip, cfg.guest_mac)));
             let rule = Rule::new(1, action);
             layer.add_rule(Direction::In, rule.finalize());
         }
@@ -79,7 +79,7 @@ pub fn setup(
         if cfg.proxy_arp_enable {
             let action = Action::Hairpin(Arc::new(ArpReply::new(
                 snat.external_ip,
-                cfg.private_mac,
+                cfg.guest_mac,
             )));
             let rule = Rule::new(1, action);
             layer.add_rule(Direction::In, rule.finalize());
