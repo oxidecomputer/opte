@@ -57,15 +57,15 @@ use opte::engine::packet::InnerFlowId;
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
+use opte::engine::predicate::DataPredicate;
+use opte::engine::predicate::EtherAddrMatch;
+use opte::engine::predicate::Ipv4AddrMatch;
+use opte::engine::predicate::Ipv6AddrMatch;
+use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::AllowOrDeny;
-use opte::engine::rule::DataPredicate;
-use opte::engine::rule::EtherAddrMatch;
-use opte::engine::rule::Ipv4AddrMatch;
-use opte::engine::rule::Ipv6AddrMatch;
 use opte::engine::rule::MetaAction;
 use opte::engine::rule::ModMetaResult;
-use opte::engine::rule::Predicate;
 use opte::engine::rule::Rule;
 
 cfg_if! {

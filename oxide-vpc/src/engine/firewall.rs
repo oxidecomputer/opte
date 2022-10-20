@@ -27,12 +27,12 @@ use opte::engine::layer::LayerActions;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
+use opte::engine::predicate::IpProtoMatch;
+use opte::engine::predicate::Ipv4AddrMatch;
+use opte::engine::predicate::PortMatch;
+use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Finalized;
-use opte::engine::rule::IpProtoMatch;
-use opte::engine::rule::Ipv4AddrMatch;
-use opte::engine::rule::PortMatch;
-use opte::engine::rule::Predicate;
 use opte::engine::rule::Rule;
 
 cfg_if! {

@@ -1547,9 +1547,9 @@ mod test {
         use crate::engine::ip4::Protocol;
         use crate::engine::packet::MetaGroup;
         use crate::engine::packet::PacketReader;
+        use crate::engine::predicate::Ipv4AddrMatch;
+        use crate::engine::predicate::Predicate;
         use crate::engine::rule;
-        use crate::engine::rule::Ipv4AddrMatch;
-        use crate::engine::rule::Predicate;
         use crate::engine::tcp::TcpMeta;
 
         let mut rule_table = RuleTable::new("port", "test", Direction::Out);

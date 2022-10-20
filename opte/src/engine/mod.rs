@@ -29,6 +29,7 @@ pub mod nat;
 #[macro_use]
 pub mod packet;
 pub mod port;
+pub mod predicate;
 #[cfg(any(feature = "std", test))]
 pub mod print;
 pub mod rule;

@@ -16,10 +16,10 @@ use super::ip4::Protocol;
 pub use super::ip4::UlpCsumOpt;
 use super::packet::PacketRead;
 use super::packet::ReadErr;
-use crate::engine::rule::MatchExact;
-use crate::engine::rule::MatchExactVal;
-use crate::engine::rule::MatchPrefix;
-use crate::engine::rule::MatchPrefixVal;
+use crate::engine::predicate::MatchExact;
+use crate::engine::predicate::MatchExactVal;
+use crate::engine::predicate::MatchPrefix;
+use crate::engine::predicate::MatchPrefixVal;
 use core::convert::TryFrom;
 pub use opte_api::Ipv6Addr;
 pub use opte_api::Ipv6Cidr;
@@ -474,16 +474,11 @@ impl From<&Ipv6Meta> for Ipv6Hdr {
 
 #[cfg(test)]
 pub(crate) mod test {
-    use super::Ipv6Addr;
-    use super::Ipv6Cidr;
-    use super::Ipv6Hdr;
-    use super::DDM_HEADER_ID;
+    use super::*;
     use crate::engine::headers::Header;
     use crate::engine::packet::Initialized;
     use crate::engine::packet::Packet;
     use crate::engine::packet::PacketReader;
-    use crate::engine::rule::MatchExact;
-    use crate::engine::rule::MatchPrefix;
     use itertools::Itertools;
     use smoltcp::wire::IpProtocol;
     use smoltcp::wire::Ipv6Address;

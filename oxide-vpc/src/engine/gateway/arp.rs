@@ -22,9 +22,9 @@ use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::engine::arp::ArpReply;
 use opte::engine::layer::Layer;
+use opte::engine::predicate::EtherAddrMatch;
+use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
-use opte::engine::rule::EtherAddrMatch;
-use opte::engine::rule::Predicate;
 use opte::engine::rule::Rule;
 
 pub fn setup(
