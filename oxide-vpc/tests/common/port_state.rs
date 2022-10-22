@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 /// Print various port state in a human-friendly manner when a test
 /// assertion fails.
 pub fn print_port(port: &Port, vpc_map: &VpcMappings) {
+    // ================================================================
+    // Print VPC mappings.
+    // ================================================================
     print_v2p(&vpc_map.dump());
     println!("");
 
@@ -27,23 +30,35 @@ pub fn print_port(port: &Port, vpc_map: &VpcMappings) {
     );
     print_hrb();
 
+    // ================================================================
+    // Print overall layer information.
+    // ================================================================
     println!("");
     println!("Layers");
     print_hr();
     let list_layers = port.list_layers();
     print_list_layers(&list_layers);
 
+    // ================================================================
+    // Print UFT.
+    // ================================================================
+    println!("");
     // Only some states will report a UFT.
     if let Ok(uft) = port.dump_uft() {
         print_uft(&uft);
     }
 
+    // ================================================================
+    // Print information about each layer.
+    // ================================================================
     println!("");
-
     for layer in &list_layers.layers {
         print_layer(&port.dump_layer(&layer.name).unwrap());
     }
 
+    // ================================================================
+    // Print the PortStats.
+    // ================================================================
     println!("");
     println!("Port Stats");
     print_hr();
@@ -97,6 +112,20 @@ impl VpcPortState {
         counts.insert("uft.out".to_string(), 0);
         counts.insert("epoch".to_string(), 0);
 
+        // For now add only the stats we care to verify. It might be
+        // nice to modify the macro to generate a function to get a
+        // list of stringified stat names so that we can easily add
+        // them to the counts map and make sure we are always
+        // verifying all stats.
+        //
+        // stats.port => PortStats
+        counts.insert("stats.port.in_modified".to_string(), 0);
+        counts.insert("stats.port.in_drop".to_string(), 0);
+        counts.insert("stats.port.in_drop_layer".to_string(), 0);
+        counts.insert("stats.port.out_drop".to_string(), 0);
+        counts.insert("stats.port.out_drop_layer".to_string(), 0);
+        counts.insert("stats.port.out_modified".to_string(), 0);
+
         Self { counts, port_state: PortState::Ready }
     }
 }
@@ -119,6 +148,18 @@ pub fn split_field(s: &str) -> SplitField {
     }
 }
 
+pub fn port_stats_val(stats: PortStatsSnap, stat: &str) -> u64 {
+    match stat {
+        "in_drop" => stats.in_drop,
+        "in_drop_layer" => stats.in_drop_layer,
+        "in_modified" => stats.in_modified,
+        "out_drop" => stats.out_drop,
+        "out_drop_layer" => stats.out_drop_layer,
+        "out_modified" => stats.out_modified,
+        _ => todo!("add {stat} to port_stat_val()"),
+    }
+}
+
 /// Assert that the port's current overall state matches the expected
 /// state stored in the VpcPortState.
 #[macro_export]
@@ -130,6 +171,14 @@ macro_rules! assert_port {
 
                 SplitField::Two("uft", dir) => {
                     $pav.port.num_flows("uft", dir.parse().unwrap()) as u64
+                }
+
+                SplitField::Three("stats", "port", stat) => {
+                    // It would be nice to modify the KStatProvider
+                    // macro to generate a method on PortStatsSnap
+                    // that allows one to pass a string and get the
+                    // stat value back.
+                    port_stats_val($pav.port.stats_snap(), stat)
                 }
 
                 SplitField::Three(layer, "flows", dir) => {
@@ -192,8 +241,10 @@ macro_rules! incr_na {
 /// assert the port state.
 #[macro_export]
 macro_rules! incr {
-    ($pav:expr, $fields:expr) => {
-        incr_na!($pav, $fields);
+    ($pav:expr, $fields_slice:expr) => {
+        for fields_str in &$fields_slice {
+            incr_na!($pav, fields_str);
+        }
         assert_port!($pav);
     };
 }
@@ -281,6 +332,29 @@ macro_rules! set {
     };
 }
 
+/// Set all flow counts to zero.
+#[macro_export]
+macro_rules! zero_flows_na {
+    ($pav:expr) => {
+        for layer in &VPC_LAYERS {
+            $pav.vps.counts.insert(format!("{layer}.flows.in"), 0);
+            $pav.vps.counts.insert(format!("{layer}.flows.out"), 0);
+        }
+
+        $pav.vps.counts.insert("uft.out".to_string(), 0);
+        $pav.vps.counts.insert("uft.in".to_string(), 0);
+    };
+}
+
+// Set all flow counts to zero and assert the port state.
+#[macro_export]
+macro_rules! zero_flows {
+    ($pav:expr) => {
+        zero_flows_na!($pav);
+        assert_port!($pav);
+    };
+}
+
 /// Update the `VpcPortState` and assert. This macro allows one to use
 /// the `set!`, `incr!`, and `decr!` in one atomic check. This takes
 /// the form of an array of strings with the format `<instr>:<fields
@@ -312,24 +386,15 @@ macro_rules! update {
                     panic!("unknown op: '{}' instruction: '{}'", op, inst);
                 }
 
-                _ => panic!("malformed instruction: '{}'", inst),
+                None => match inst {
+                    "zero_flows" => {
+                        zero_flows_na!($pav);
+                    }
+                    _ => panic!("malformed instruction: '{}'", inst),
+                },
             }
         }
 
         assert_port!($pav);
-    };
-}
-
-/// Set all flow counts to zero.
-#[macro_export]
-macro_rules! zero_flows {
-    ($pav:expr) => {
-        for layer in &VPC_LAYERS {
-            $pav.vps.counts.insert(format!("{layer}.flows.in"), 0);
-            $pav.vps.counts.insert(format!("{layer}.flows.out"), 0);
-        }
-
-        $pav.vps.counts.insert("uft.out".to_string(), 0);
-        $pav.vps.counts.insert("uft.in".to_string(), 0);
     };
 }

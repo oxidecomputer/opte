@@ -1,8 +1,6 @@
 mod common;
 
 use common::*;
-use opte::engine::layer::DenyReason;
-use opte::engine::port::DropReason;
 
 #[test]
 fn firewall_replace_rules() {
@@ -27,16 +25,24 @@ fn firewall_replace_rules() {
         },
     )
     .unwrap();
-    incr!(g2, "epoch, firewall.rules.in");
+    incr!(g2, ["epoch", "firewall.rules.in"]);
 
     // ================================================================
-    // Run the telnet SYN packet through g1's port in the outbound
-    // direction and verify if passes the firewall.
+    // Run the SYN packet through g1's port in the outbound direction
+    // and verify if passes the firewall.
     // ================================================================
-    let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
+    let mut pkt1 = http_syn(&g1_cfg, &g2_cfg);
+    ameta.clear();
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, "firewall.flows.out, firewall.flows.in, uft.out");
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "uft.out",
+            "stats.port.out_modified"
+        ]
+    );
 
     // ================================================================
     // Modify the outgoing ruleset, but still allow the traffic to
@@ -65,10 +71,14 @@ fn firewall_replace_rules() {
         ]
     );
 
-    let mut pkt2 = http_tcp_syn(&g1_cfg, &g2_cfg);
+    let mut pkt2 = http_syn(&g1_cfg, &g2_cfg);
+    ameta.clear();
     let res = g1.port.process(Out, &mut pkt2, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, "firewall.flows.in, firewall.flows.out");
+    incr!(
+        g1,
+        ["firewall.flows.in, firewall.flows.out", "stats.port.out_modified",]
+    );
 
     // ================================================================
     // Now that the packet has been encap'd let's play the role of
@@ -81,9 +91,17 @@ fn firewall_replace_rules() {
         unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
     let mut pkt3_copy =
         Packet::<Initialized>::copy(&pkt3.all_bytes()).parse().unwrap();
+    ameta.clear();
     let res = g2.port.process(In, &mut pkt3, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g2, "firewall.flows.in, firewall.flows.out, uft.in");
+    incr!(
+        g2,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "uft.in",
+            "stats.port.in_modified"
+        ]
+    );
 
     // ================================================================
     // Replace g2's firewall rule set to deny all inbound TCP traffic.
@@ -110,6 +128,7 @@ fn firewall_replace_rules() {
 
     // Verify the packet is dropped and that the firewall flow table
     // entry (along with its dual) was invalidated.
+    ameta.clear();
     let res = g2.port.process(In, &mut pkt3_copy, &mut ameta);
     match res {
         Ok(ProcessResult::Drop {
@@ -121,7 +140,10 @@ fn firewall_replace_rules() {
 
         _ => panic!("expected layer drop but got: {:?}", res),
     }
-    update!(g2, ["set:uft.in=0"]);
+    update!(
+        g2,
+        ["set:uft.in=0", "incr:stats.port.in_drop, stats.port.in_drop_layer",]
+    );
 }
 
 // Verify that the VNI host filter works for the inbound direction.
@@ -152,7 +174,7 @@ fn firewall_vni_inbound() {
     // ================================================================
     let phys_src = TestIpPhys { ip: g2_cfg.phys_ip, mac: g2_cfg.guest_mac };
     let phys_dst = TestIpPhys { ip: g1_cfg.phys_ip, mac: g1_cfg.guest_mac };
-    let mut pkt1 = http_tcp_syn2(
+    let mut pkt1 = http_syn2(
         g2_cfg.guest_mac,
         g2_cfg.ipv4().private_ip,
         g1_cfg.guest_mac,
@@ -176,6 +198,7 @@ fn firewall_vni_inbound() {
 
         _ => panic!("expected layer drop but got: {:?}", res),
     }
+    incr!(g1, ["stats.port.in_drop, stats.port.in_drop_layer"]);
 
     // ================================================================
     // Setup g2 as normal and process the packet again. This time it should
@@ -184,7 +207,7 @@ fn firewall_vni_inbound() {
     let g2_cfg = common::g2_cfg();
     let phys_src = TestIpPhys { ip: g2_cfg.phys_ip, mac: g2_cfg.guest_mac };
     let phys_dst = TestIpPhys { ip: g1_cfg.phys_ip, mac: g1_cfg.guest_mac };
-    let mut pkt2 = http_tcp_syn2(
+    let mut pkt2 = http_syn2(
         g2_cfg.guest_mac,
         g2_cfg.ipv4().private_ip,
         g1_cfg.guest_mac,
@@ -194,7 +217,14 @@ fn firewall_vni_inbound() {
     ameta.clear();
     let res = g1.port.process(In, &mut pkt2, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, "firewall.flows.in, firewall.flows.out, uft.in");
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "uft.in",
+            "stats.port.in_modified"
+        ]
+    );
 }
 
 // Verify the VNI address filter works for the outbound direction.
@@ -242,7 +272,7 @@ fn firewall_vni_outbound() {
     // ================================================================
     let phys_src = TestIpPhys { ip: g1_cfg.phys_ip, mac: g1_cfg.guest_mac };
     let phys_dst = TestIpPhys { ip: g2_cfg.phys_ip, mac: g2_cfg.guest_mac };
-    let mut pkt1 = http_tcp_syn2(
+    let mut pkt1 = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         g1_cfg.guest_mac,
@@ -264,5 +294,5 @@ fn firewall_vni_outbound() {
 
         _ => panic!("expected layer drop but got: {:?}", res),
     }
-    assert_port!(g1);
+    incr!(g1, ["stats.port.out_drop, stats.port.out_drop_layer"]);
 }

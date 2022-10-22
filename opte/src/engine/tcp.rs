@@ -40,7 +40,6 @@ cfg_if! {
 pub const TCP_HDR_CSUM_OFF: usize = 16;
 pub const TCP_HDR_OFFSET_MASK: u8 = 0xF0;
 pub const TCP_HDR_OFFSET_SHIFT: u8 = 4;
-pub const TCP_HDR_SZ: usize = mem::size_of::<TcpHdrRaw>();
 
 pub const TCP_PORT_RDP: u16 = 3389;
 pub const TCP_PORT_SSH: u16 = 22;
@@ -94,7 +93,7 @@ impl Display for TcpState {
 }
 
 #[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct TcpMeta {
     pub src: u16,
@@ -249,6 +248,8 @@ macro_rules! assert_tcp {
 }
 
 impl TcpHdr {
+    pub const BASE_SIZE: usize = mem::size_of::<TcpHdrRaw>();
+
     pub fn ack(&self) -> u32 {
         self.ack
     }
@@ -289,7 +290,7 @@ impl TcpHdr {
             dst_port,
             seq: 0,
             ack: 0,
-            hdr_len_bytes: 20,
+            hdr_len_bytes: Self::BASE_SIZE as u8,
             flags: 0x00,
             win: 0,
             csum: [0; 2],
@@ -301,7 +302,7 @@ impl TcpHdr {
 
     /// Return the length of the options portion of the header, in bytes.
     pub fn options_len(&self) -> usize {
-        usize::from(self.hdr_len_bytes) - TCP_HDR_SZ
+        usize::from(self.hdr_len_bytes) - Self::BASE_SIZE
     }
 
     pub fn set_ack(&mut self, ack: u32) {
@@ -374,7 +375,7 @@ impl From<&TcpMeta> for TcpHdr {
             dst_port: meta.dst,
             seq: meta.seq,
             ack: meta.ack,
-            hdr_len_bytes: TCP_HDR_SZ as u8,
+            hdr_len_bytes: Self::BASE_SIZE as u8,
             flags: meta.flags,
             win: 0,
             csum: [0; 2],
@@ -423,14 +424,14 @@ impl TryFrom<&LayoutVerified<&[u8], TcpHdrRaw>> for TcpHdr {
         let offset = raw.get_offset();
         let hdr_len_bytes = offset * 4;
 
-        if hdr_len_bytes < 20 {
+        if hdr_len_bytes < Self::BASE_SIZE as u8 {
             return Err(TcpHdrError::BadOffset {
                 offset,
                 len_in_bytes: hdr_len_bytes,
             });
         }
 
-        let options_len = hdr_len_bytes as usize - TCP_HDR_SZ;
+        let options_len = hdr_len_bytes as usize - Self::BASE_SIZE;
         let options_raw = Vec::with_capacity(options_len);
 
         Ok(TcpHdr {

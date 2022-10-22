@@ -39,7 +39,7 @@ cfg_if! {
 }
 
 #[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct UdpMeta {
     pub src: u16,

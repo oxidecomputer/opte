@@ -402,11 +402,29 @@ impl UlpHdr {
 }
 
 #[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub enum UlpMeta {
     Tcp(TcpMeta),
     Udp(UdpMeta),
+}
+
+impl UlpMeta {
+    /// Return the destination port.
+    pub fn dst_port(&self) -> u16 {
+        match self {
+            Self::Tcp(tcp) => tcp.dst,
+            Self::Udp(udp) => udp.dst,
+        }
+    }
+
+    /// Return the source port.
+    pub fn src_port(&self) -> u16 {
+        match self {
+            Self::Tcp(tcp) => tcp.src,
+            Self::Udp(udp) => udp.src,
+        }
+    }
 }
 
 impl PushActionArg for UlpMeta {}

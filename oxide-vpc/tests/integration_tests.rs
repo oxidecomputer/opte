@@ -154,7 +154,14 @@ fn port_transition_running() {
     set!(g1, "port_state=running");
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, "firewall.flows.in, firewall.flows.out, uft.out");
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "uft.out",
+            "stats.port.out_modified"
+        ]
+    );
 }
 
 // Verify a Port reset transitions it to the Ready state and clears
@@ -177,10 +184,16 @@ fn port_transition_reset() {
     set!(g1, "port_state=running");
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, "firewall.flows.in, firewall.flows.out, uft.out");
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "uft.out",
+            "stats.port.out_modified"
+        ]
+    );
     g1.port.reset();
-    zero_flows!(g1);
-    set!(g1, "port_state=ready");
+    update!(g1, ["set:port_state=ready", "zero_flows"]);
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Err(ProcessError::BadState(_))));
     assert_port!(g1);
@@ -211,7 +224,7 @@ fn port_transition_pause() {
         },
     )
     .unwrap();
-    incr!(g1, "epoch, firewall.rules.in");
+    incr!(g1, ["epoch", "firewall.rules.in"]);
     g1.port.start();
     set!(g1, "port_state=running");
     g2.port.start();
@@ -220,14 +233,28 @@ fn port_transition_pause() {
     // ================================================================
     // Send the HTTP SYN.
     // ================================================================
-    let mut pkt1 = http_tcp_syn(&g2_cfg, &g1_cfg);
+    let mut pkt1 = http_syn(&g2_cfg, &g1_cfg);
     let res = g2.port.process(Out, &mut pkt1, &mut g2_ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g2, "firewall.flows.out, firewall.flows.in, uft.out");
+    incr!(
+        g2,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "uft.out",
+            "stats.port.out_modified"
+        ]
+    );
 
     let res = g1.port.process(In, &mut pkt1, &mut g1_ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, "firewall.flows.in, firewall.flows.out, uft.in");
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "uft.in",
+            "stats.port.in_modified"
+        ]
+    );
 
     // ================================================================
     // Pause the port and verify the internal state. Make sure that
@@ -288,16 +315,16 @@ fn port_transition_pause() {
     g2.port.start();
     set!(g2, "port_state=running");
 
-    let mut pkt2 = http_tcp_syn_ack(&g1_cfg, &g2_cfg);
+    let mut pkt2 = http_syn_ack(&g1_cfg, &g2_cfg);
     g1_ameta.clear();
     let res = g1.port.process(Out, &mut pkt2, &mut g1_ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, "uft.out");
+    incr!(g1, ["uft.out", "stats.port.out_modified"]);
 
     g2_ameta.clear();
     let res = g2.port.process(In, &mut pkt2, &mut g2_ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g2, "uft.in");
+    incr!(g2, ["uft.in", "stats.port.in_modified"]);
 }
 
 #[test]
@@ -317,7 +344,7 @@ fn add_remove_fw_rule() {
         },
     )
     .unwrap();
-    incr!(g1, "epoch, firewall.rules.in");
+    incr!(g1, ["epoch", "firewall.rules.in"]);
 
     // Remove the rule just added, by ID.
     firewall::rem_fw_rule(
@@ -443,7 +470,7 @@ fn guest_to_guest_no_route() {
     )
     .unwrap();
     update!(g1, ["incr:epoch", "set:router.rules.out=1"]);
-    let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
+    let mut pkt1 = http_syn(&g1_cfg, &g2_cfg);
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     chk!(g1, matches!(res, Ok(ProcessResult::Drop { .. })));
     // XXX The firewall layer comes before the router layer (in the
@@ -455,7 +482,13 @@ fn guest_to_guest_no_route() {
     // have a way to send "simulated" flow through the layer pipeline
     // for the effect of removing it from any flow tables in which it
     // exists.
-    incr!(g1, "firewall.flows.out, firewall.flows.in");
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "stats.port.out_drop, stats.port.out_drop_layer",
+        ]
+    );
 }
 
 // Verify that two guests on the same VPC can communicate.
@@ -482,7 +515,7 @@ fn guest_to_guest() {
         },
     )
     .unwrap();
-    incr!(g2, "epoch, firewall.rules.in");
+    incr!(g2, ["epoch", "firewall.rules.in"]);
 
     let mut pcap_guest1 =
         PcapBuilder::new("overlay_guest_to_guest-guest-1.pcap");
@@ -492,7 +525,7 @@ fn guest_to_guest() {
         PcapBuilder::new("overlay_guest_to_guest-guest-2.pcap");
     let mut pcap_phys2 = PcapBuilder::new("overlay_guest_to_guest-phys-2.pcap");
 
-    let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
+    let mut pkt1 = http_syn(&g1_cfg, &g2_cfg);
     pcap_guest1.add_pkt(&pkt1);
 
     // ================================================================
@@ -502,7 +535,14 @@ fn guest_to_guest() {
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     pcap_phys1.add_pkt(&pkt1);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, "firewall.flows.out, firewall.flows.in, uft.out");
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "uft.out",
+            "stats.port.out_modified",
+        ]
+    );
 
     // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
     assert_eq!(pkt1.body_offset(), 14 + 40 + 8 + 8 + 14 + 20 + 20);
@@ -587,7 +627,14 @@ fn guest_to_guest() {
     let res = g2.port.process(In, &mut pkt2, &mut ameta);
     pcap_guest2.add_pkt(&pkt2);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g2, "firewall.flows.in, firewall.flows.out, uft.in");
+    incr!(
+        g2,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "uft.in",
+            "stats.port.in_modified",
+        ]
+    );
 
     // Ether + IPv4 + TCP
     assert_eq!(pkt2.body_offset(), 14 + 20 + 20);
@@ -658,16 +705,22 @@ fn guest_to_guest_diff_vpc_no_peer() {
         },
     )
     .unwrap();
-    incr!(g2, "epoch, firewall.rules.in");
+    incr!(g2, ["epoch", "firewall.rules.in"]);
 
     // ================================================================
     // Run the packet through g1's port in the outbound direction and
     // verify the packet is dropped.
     // ================================================================
-    let mut g1_pkt = http_tcp_syn(&g1_cfg, &g2_cfg);
+    let mut g1_pkt = http_syn(&g1_cfg, &g2_cfg);
     let res = g1.port.process(Out, &mut g1_pkt, &mut ameta);
     assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
-    incr!(g1, "firewall.flows.in, firewall.flows.out");
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.out_drop, stats.port.out_drop_layer",
+        ]
+    );
 }
 
 // Verify that a guest can communicate with the internet.
@@ -686,13 +739,13 @@ fn guest_to_internet() {
         RouterTarget::InternetGateway,
     )
     .unwrap();
-    incr!(g1, "epoch, router.rules.out");
+    incr!(g1, ["epoch", "router.rules.out"]);
 
     // ================================================================
     // Generate a TCP SYN packet from g1 to zinascii.com
     // ================================================================
     let dst_ip = "52.10.128.69".parse().unwrap();
-    let mut pkt1 = http_tcp_syn2(
+    let mut pkt1 = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4_cfg().unwrap().private_ip,
         GW_MAC_ADDR,
@@ -707,9 +760,12 @@ fn guest_to_internet() {
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(
         g1,
-        "firewall.flows.out, firewall.flows.in, \
-         nat.flows.out, nat.flows.in, \
-         uft.out"
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.out, nat.flows.in",
+            "uft.out",
+            "stats.port.out_modified",
+        ]
     );
 
     // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
@@ -805,7 +861,7 @@ fn snat_icmp4_echo_rewrite() {
         RouterTarget::InternetGateway,
     )
     .unwrap();
-    incr!(g1, "epoch, router.rules.out");
+    incr!(g1, ["epoch", "router.rules.out"]);
     let mapped_port = g1_cfg.snat().ports.clone().rev().next().unwrap();
 
     // ================================================================
@@ -825,9 +881,12 @@ fn snat_icmp4_echo_rewrite() {
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(
         g1,
-        "firewall.flows.out, firewall.flows.in, \
-         nat.flows.out, nat.flows.in, \
-         uft.out"
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.out, nat.flows.in",
+            "uft.out",
+            "stats.port.out_modified",
+        ]
     );
 
     assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + IP_SZ);
@@ -881,7 +940,7 @@ fn snat_icmp4_echo_rewrite() {
 
     let res = g1.port.process(In, &mut pkt2, &mut ameta);
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    incr!(g1, "uft.in");
+    incr!(g1, ["uft.in", "stats.port.in_modified"]);
     assert_eq!(pkt2.body_offset(), IP_SZ);
     assert_eq!(pkt2.body_seg(), 1);
     let meta = pkt2.meta();
@@ -931,7 +990,7 @@ fn snat_icmp4_echo_rewrite() {
     assert_eq!(g1.port.stats_snap().out_uft_hit, 0);
     let res = g1.port.process(Out, &mut pkt3, &mut ameta);
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    assert_port!(g1);
+    incr!(g1, ["stats.port.out_modified"]);
     assert_eq!(pkt3.body_offset(), VPC_ENCAP_SZ + IP_SZ);
     assert_eq!(pkt3.body_seg(), 1);
     let meta = pkt3.meta();
@@ -981,7 +1040,7 @@ fn snat_icmp4_echo_rewrite() {
     assert_eq!(g1.port.stats_snap().in_uft_hit, 0);
     let res = g1.port.process(In, &mut pkt4, &mut ameta);
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    assert_port!(g1);
+    incr!(g1, ["stats.port.in_modified"]);
     assert_eq!(pkt4.body_offset(), IP_SZ);
     assert_eq!(pkt4.body_seg(), 1);
     let meta = pkt4.meta();
@@ -1165,10 +1224,17 @@ fn flow_expiration() {
     // Run the packet through g1's port in the outbound direction and
     // verify the resulting packet meets expectations.
     // ================================================================
-    let mut pkt1 = http_tcp_syn(&g1_cfg, &g2_cfg);
+    let mut pkt1 = http_syn(&g1_cfg, &g2_cfg);
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, "firewall.flows.out, firewall.flows.in, uft.out");
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "uft.out",
+            "stats.port.out_modified",
+        ]
+    );
 
     // ================================================================
     // Verify expiration
@@ -1809,6 +1875,7 @@ fn test_gateway_neighbor_advert_reply() {
         match (res, d.na) {
             (Ok(ProcessResult::Drop { .. }), None) => {
                 // Dropped the packet, as we expected
+                incr!(g1, ["stats.port.out_drop, stats.port.out_drop_layer"]);
                 continue;
             }
             (Ok(Hairpin(hp)), Some(na)) => {
@@ -2094,4 +2161,307 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
             }
         }
     }
+}
+
+fn establish_http_conn(
+    g1_cfg: &VpcCfg,
+    g1: &mut PortAndVps,
+    dst_ip: Ipv4Addr,
+) -> u16 {
+    // ================================================================
+    // Step 1
+    //
+    // Run the SYN packet through g1's port in the outbound direction
+    // and verify it is accepted.
+    // ================================================================
+    let mut pkt1 = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+    let mut ameta = ActionMeta::new();
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    assert!(matches!(res, Ok(Modified)));
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.in, nat.flows.out",
+            "uft.out",
+            "stats.port.out_modified",
+        ]
+    );
+    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port();
+
+    // ================================================================
+    // Step 2
+    //
+    // Run the SYN+ACK packet through g1's port in the inbound
+    // direction and verify it is accepted.
+    // ================================================================
+    let mut pkt2 = http_syn_ack2(
+        g1_cfg.boundary_services.mac,
+        dst_ip,
+        g1_cfg.guest_mac,
+        g1_cfg.snat().external_ip,
+        snat_port,
+    );
+    let bs_phys = TestIpPhys {
+        ip: g1_cfg.boundary_services.ip,
+        mac: g1_cfg.boundary_services.mac,
+    };
+    let g1_phys = TestIpPhys { ip: g1_cfg.phys_ip, mac: g1_cfg.guest_mac };
+    pkt2 = encap(pkt2, bs_phys, g1_phys, g1_cfg.vni);
+    ameta.clear();
+    let res = g1.port.process(In, &mut pkt2, &mut ameta);
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["uft.in", "stats.port.in_modified"]);
+
+    // ================================================================
+    // Step 3
+    //
+    // Send ACK to establish connection.
+    // ================================================================
+    let mut pkt3 =
+        http_ack2(g1_cfg.guest_mac, g1_cfg.ipv4().private_ip, dst_ip);
+    ameta.clear();
+    let res = g1.port.process(Out, &mut pkt3, &mut ameta);
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.out_modified"]);
+    snat_port
+}
+
+// Verify that changing rules causes invalidation of UFT and LFT
+// entries. This variant verifies that the first outbound packet after
+// the rule change causes the UFT invalidation.
+//
+// 1. Setup g1 as client to external HTTP server (ability to send TCP
+// outbound and SNAT configured).
+//
+// 2. Establish an HTTP connection between g1 and the server.
+//
+// 3. Set firewall rules on g1 to deny all outbound/inbound traffic.
+// Verify that the firewall layer's LFT entries are removed.
+//
+// 4. Try to send the HTTP GET. Verify the packet is denied and that
+// the UFT entries for the flow are removed.
+#[test]
+fn uft_lft_invalidation_out() {
+    // ================================================================
+    // Step 1
+    // ================================================================
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Add VPC route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet)),
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // Add default route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // ================================================================
+    // Step 2
+    // ================================================================
+    let dst_ip = "52.10.128.69".parse().unwrap();
+    let mut ameta = ActionMeta::new();
+    let _snat_port = establish_http_conn(&g1_cfg, &mut g1, dst_ip);
+
+    // ================================================================
+    // Step 3
+    // ================================================================
+    let any_out = "dir=out action=deny priority=65535 protocol=any";
+    firewall::set_fw_rules(
+        &g1.port,
+        &SetFwRulesReq {
+            port_name: g1.port.name().to_string(),
+            rules: vec![any_out.parse().unwrap()],
+        },
+    )
+    .unwrap();
+    update!(
+        g1,
+        [
+            "incr:epoch",
+            "set:firewall.flows.in=0, firewall.flows.out=0",
+            "set:firewall.rules.out=1, firewall.rules.in=0",
+        ]
+    );
+
+    // ================================================================
+    // Step 4
+    // ================================================================
+    let mut pkt4 = http_get2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+    ameta.clear();
+    let res = g1.port.process(Out, &mut pkt4, &mut ameta);
+    match res {
+        Ok(ProcessResult::Drop {
+            reason: DropReason::Layer { name, reason: lreason },
+        }) => {
+            assert_eq!("firewall", name);
+            assert_eq!(DenyReason::Rule, lreason);
+        }
+
+        _ => panic!("expected drop but got: {:?}", res),
+    }
+    update!(
+        g1,
+        [
+            "set:firewall.flows.out=0, firewall.flows.in=0",
+            "set:uft.in=0, uft.out=0",
+            "set:stats.port.out_drop=1, stats.port.out_drop_layer=1",
+        ]
+    );
+}
+
+// Verify that changing rules causes invalidation of UFT and LFT
+// entries. This variant verifies that the first inbound packet after
+// the firewall rule change causes UFT invalidation.
+//
+// 1. Setup g1 as client to external HTTP server: (ability to send TCP
+// outbound and SNAT configured).
+//
+// 2. Establish an HTTP connection between g1 and the server. Send GET
+// and receive ACK for GET.
+//
+// 3. Set firewall rules on g1 to deny all outbound/inbound traffic.
+// Verify that the firewall layer's LFT entries are removed.
+//
+// 4. Send 301 reply from server to guest. Verify the packet is
+// denied and that the UFT entries are removed.
+#[test]
+fn uft_lft_invalidation_in() {
+    // ================================================================
+    // Step 1
+    // ================================================================
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Add VPC route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet)),
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // Add default route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // ================================================================
+    // Step 2
+    // ================================================================
+    let dst_ip = "52.10.128.69".parse().unwrap();
+    let mut ameta = ActionMeta::new();
+    let bs_phys = TestIpPhys {
+        ip: g1_cfg.boundary_services.ip,
+        mac: g1_cfg.boundary_services.mac,
+    };
+    let g1_phys = TestIpPhys { ip: g1_cfg.phys_ip, mac: g1_cfg.guest_mac };
+    let snat_port = establish_http_conn(&g1_cfg, &mut g1, dst_ip);
+
+    let mut pkt1 = http_get2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+    ameta.clear();
+    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.out_modified"]);
+
+    let mut pkt2 = http_get_ack2(
+        g1_cfg.boundary_services.mac,
+        dst_ip,
+        g1_cfg.guest_mac,
+        g1_cfg.snat().external_ip,
+        snat_port,
+    );
+    pkt2 = encap(pkt2, bs_phys, g1_phys, g1_cfg.vni);
+    ameta.clear();
+    let res = g1.port.process(In, &mut pkt2, &mut ameta);
+    incr!(g1, ["stats.port.in_modified"]);
+    assert!(matches!(res, Ok(Modified)));
+
+    // ================================================================
+    // Step 3
+    // ================================================================
+    let any_out = "dir=out action=deny priority=65535 protocol=any";
+    firewall::set_fw_rules(
+        &g1.port,
+        &SetFwRulesReq {
+            port_name: g1.port.name().to_string(),
+            rules: vec![any_out.parse().unwrap()],
+        },
+    )
+    .unwrap();
+    update!(
+        g1,
+        [
+            "incr:epoch",
+            "set:firewall.flows.in=0, firewall.flows.out=0",
+            "set:firewall.rules.out=1, firewall.rules.in=0",
+        ]
+    );
+
+    // ================================================================
+    // Step 4
+    // ================================================================
+    let mut pkt3 = http_301_reply(
+        g1_cfg.boundary_services.mac,
+        dst_ip,
+        g1_cfg.guest_mac,
+        g1_cfg.snat().external_ip,
+        snat_port,
+    );
+    pkt3 = encap(pkt3, bs_phys, g1_phys, g1_cfg.vni);
+    ameta.clear();
+    let res = g1.port.process(In, &mut pkt3, &mut ameta);
+    match res {
+        Ok(ProcessResult::Drop {
+            reason: DropReason::Layer { name, reason: lreason },
+        }) => {
+            assert_eq!("firewall", name);
+            assert_eq!(DenyReason::Default, lreason);
+        }
+
+        _ => panic!("expected drop but got: {:?}", res),
+    }
+    update!(
+        g1,
+        [
+            "set:nat.flows.in=1, nat.flows.out=1",
+            "set:uft.in=0, uft.out=0",
+            "incr:stats.port.in_drop, stats.port.in_drop_layer",
+        ]
+    );
 }

@@ -32,10 +32,12 @@ pub use opte::engine::ip4::Ipv4Hdr;
 pub use opte::engine::ip4::UlpCsumOpt;
 pub use opte::engine::ip6::Ipv6Addr;
 pub use opte::engine::ip6::Ipv6Hdr;
+pub use opte::engine::layer::DenyReason;
 pub use opte::engine::packet::Initialized;
 pub use opte::engine::packet::Packet;
 pub use opte::engine::packet::Parsed;
 pub use opte::engine::port::meta::ActionMeta;
+pub use opte::engine::port::DropReason;
 pub use opte::engine::port::Port;
 pub use opte::engine::port::PortBuilder;
 pub use opte::engine::port::ProcessResult;
@@ -317,7 +319,7 @@ pub fn oxide_net_setup2(
         updates.extend_from_slice(&val);
     }
 
-    update!(pav, &updates);
+    update!(pav, updates);
     set_default_fw_rules(&mut pav, cfg);
     pav
 }
@@ -383,8 +385,8 @@ pub fn tcp_telnet_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
 
 // Generate a packet representing the start of a TCP handshake for an
 // HTTP request from src to dst.
-pub fn http_tcp_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
-    http_tcp_syn2(
+pub fn http_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
+    http_syn2(
         src.guest_mac,
         src.ipv4_cfg().unwrap().private_ip,
         dst.guest_mac,
@@ -394,7 +396,7 @@ pub fn http_tcp_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
 
 // Generate a packet representing the start of a TCP handshake for an
 // HTTP request from src to dst.
-pub fn http_tcp_syn2(
+pub fn http_syn2(
     eth_src: MacAddr,
     ip_src: Ipv4Addr,
     eth_dst: MacAddr,
@@ -416,28 +418,127 @@ pub fn http_tcp_syn2(
 
 // Generate a packet representing the SYN+ACK reply to `http_tcp_syn()`,
 // from g1 to g2.
-pub fn http_tcp_syn_ack(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
+pub fn http_syn_ack(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
+    http_syn_ack2(
+        src.guest_mac,
+        src.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst.ipv4().private_ip,
+        // This function assumes guest-to-guest, and thus no SNATing
+        // of port.
+        44490,
+    )
+}
+
+pub fn http_syn_ack2(
+    eth_src: MacAddr,
+    ip_src: Ipv4Addr,
+    eth_dst: MacAddr,
+    ip_dst: Ipv4Addr,
+    dport: u16,
+) -> Packet<Parsed> {
     let body = vec![];
-    let mut tcp = TcpHdr::new(80, 44490);
+    let mut tcp = TcpHdr::new(80, dport);
     tcp.set_flags(TcpFlags::SYN | TcpFlags::ACK);
     tcp.set_seq(44161351);
     tcp.set_ack(2382112980);
-    let mut ip4 = Ipv4Hdr::new_tcp(
-        &mut tcp,
-        &body,
-        src.ipv4_cfg().unwrap().private_ip,
-        dst.ipv4_cfg().unwrap().private_ip,
-    );
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
     ip4.compute_hdr_csum();
     let tcp_csum =
         ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, src.guest_mac, src.gateway_mac);
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, eth_dst);
+    ulp_pkt(eth, ip4, tcp, &body)
+}
+
+pub fn http_ack2(
+    eth_src: MacAddr,
+    ip_src: Ipv4Addr,
+    ip_dst: Ipv4Addr,
+) -> Packet<Parsed> {
+    let body = vec![];
+    let mut tcp = TcpHdr::new(44490, 80);
+    tcp.set_flags(TcpFlags::ACK);
+    tcp.set_seq(2382112980);
+    tcp.set_ack(44161352);
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, GW_MAC_ADDR);
+    ulp_pkt(eth, ip4, tcp, &body)
+}
+
+pub fn http_get2(
+    eth_src: MacAddr,
+    ip_src: Ipv4Addr,
+    eth_dst: MacAddr,
+    ip_dst: Ipv4Addr,
+) -> Packet<Parsed> {
+    // The details of the HTTP body are irrelevant to our testing. You
+    // only need know it's 18 characters for the purposes of seq/ack.
+    let body = "GET / HTTP/1.1\r\n\r\n".as_bytes();
+    let mut tcp = TcpHdr::new(44490, 80);
+    tcp.set_flags(TcpFlags::PSH | TcpFlags::ACK);
+    tcp.set_seq(2382112980);
+    tcp.set_ack(44161352);
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, eth_dst);
+    ulp_pkt(eth, ip4, tcp, &body)
+}
+
+pub fn http_get_ack2(
+    eth_src: MacAddr,
+    ip_src: Ipv4Addr,
+    eth_dst: MacAddr,
+    ip_dst: Ipv4Addr,
+    dst_port: u16,
+) -> Packet<Parsed> {
+    let body = vec![];
+    let mut tcp = TcpHdr::new(80, dst_port);
+    tcp.set_flags(TcpFlags::ACK);
+    tcp.set_seq(44161353);
+    tcp.set_ack(2382112998);
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, eth_dst);
+    ulp_pkt(eth, ip4, tcp, &body)
+}
+
+pub fn http_301_reply(
+    eth_src: MacAddr,
+    ip_src: Ipv4Addr,
+    eth_dst: MacAddr,
+    ip_dst: Ipv4Addr,
+    dst_port: u16,
+) -> Packet<Parsed> {
+    // The details of the HTTP body are irrelevant to our testing. You
+    // only need know it's 34 characters for the purposes of seq/ack.
+    let body = "HTTP/1.1 301 Moved Permanently\r\n\r\n".as_bytes();
+    let mut tcp = TcpHdr::new(80, dst_port);
+    tcp.set_flags(TcpFlags::PSH | TcpFlags::ACK);
+    tcp.set_seq(44161353);
+    tcp.set_ack(2382112998);
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, eth_dst);
     ulp_pkt(eth, ip4, tcp, &body)
 }
 
 /// A more conveinent way to pass along physical network information
 /// inside the tests.
+#[derive(Clone, Copy, Debug)]
 pub struct TestIpPhys {
     pub ip: Ipv6Addr,
     pub mac: MacAddr,

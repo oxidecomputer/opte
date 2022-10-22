@@ -2671,7 +2671,6 @@ mod test {
     use super::*;
     use crate::engine::ether::ETHER_TYPE_IPV4;
     use crate::engine::tcp::TcpFlags;
-    use crate::engine::tcp::TCP_HDR_SZ;
 
     const SRC_MAC: [u8; 6] = [0xa8, 0x40, 0x25, 0x00, 0x00, 0x63];
     const DST_MAC: [u8; 6] = [0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d];
@@ -2684,7 +2683,7 @@ mod test {
     const DST_IP6: [u8; 16] =
         [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
 
-    const PKT_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::SIZE + TCP_HDR_SZ;
+    const PKT_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::SIZE + TcpHdr::BASE_SIZE;
 
     fn tcp_pkt(pkt: Packet<Uninitialized>) -> Packet<Initialized> {
         let body = vec![];
@@ -2700,7 +2699,10 @@ mod test {
         let _ = wtr.write(&ip4.as_bytes()).unwrap();
         assert_eq!(wtr.pos(), EtherHdr::SIZE + Ipv4Hdr::SIZE);
         let _ = wtr.write(&tcp.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), EtherHdr::SIZE + Ipv4Hdr::SIZE + TCP_HDR_SZ);
+        assert_eq!(
+            wtr.pos(),
+            EtherHdr::SIZE + Ipv4Hdr::SIZE + TcpHdr::BASE_SIZE
+        );
 
         let pkt = wtr.finish();
         assert_eq!(pkt.len(), PKT_SZ);
@@ -3008,11 +3010,17 @@ mod test {
         let tcp_bytes = &tcp.as_bytes();
         let _ = wtr.write(&tcp_bytes[0..12]).unwrap();
         let _ = wtr.write(&tcp_bytes[12..]).unwrap();
-        assert_eq!(wtr.pos(), EtherHdr::SIZE + Ipv4Hdr::SIZE + TCP_HDR_SZ);
+        assert_eq!(
+            wtr.pos(),
+            EtherHdr::SIZE + Ipv4Hdr::SIZE + TcpHdr::BASE_SIZE
+        );
 
         let pkt = wtr.finish();
 
-        assert_eq!(pkt.len(), EtherHdr::SIZE + Ipv4Hdr::SIZE + TCP_HDR_SZ);
+        assert_eq!(
+            pkt.len(),
+            EtherHdr::SIZE + Ipv4Hdr::SIZE + TcpHdr::BASE_SIZE
+        );
         assert_eq!(pkt.num_segs(), 2);
         assert!(matches!(pkt.parse(), Err(ParseError::BadHeader(_))));
     }

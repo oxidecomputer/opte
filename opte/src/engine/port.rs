@@ -426,14 +426,19 @@ pub enum DumpLayerError {
 }
 
 #[derive(Clone, Debug)]
-pub struct HtEntry {
+pub struct UftEntry<Id> {
+    /// The flow ID for the other side.
+    pair: Option<Id>,
+
+    /// The transformations to perform.
     xforms: Transforms,
-    // The port epoch upon which this entry was established. Used for
-    // invalidation when the rule set is updated.
+
+    /// The port epoch upon which this entry was established. Used for
+    /// invalidation when the rule set is updated.
     epoch: u64,
 }
 
-impl StateSummary for HtEntry {
+impl<Id> StateSummary for UftEntry<Id> {
     fn summary(&self) -> String {
         let hdr = self
             .xforms
@@ -525,8 +530,8 @@ struct PortData {
     state: PortState,
     stats: KStatNamed<PortStats>,
     layers: Vec<Layer>,
-    uft_in: FlowTable<HtEntry>,
-    uft_out: FlowTable<HtEntry>,
+    uft_in: FlowTable<UftEntry<InnerFlowId>>,
+    uft_out: FlowTable<UftEntry<InnerFlowId>>,
     // We keep a record of the inbound UFID in the TCP flow table so
     // that we know which inbound UFT/FT entries to retire upon
     // connection termination.
@@ -1402,7 +1407,28 @@ impl Port {
             Err(e) => return Err(ProcessError::Layer(e)),
         }
 
-        let hte = HtEntry { xforms, epoch };
+        let ufid_out = pkt.flow().mirror();
+        let hte = UftEntry { pair: Some(ufid_out), xforms, epoch };
+        match data.uft_out.get_mut(&ufid_out) {
+            // If an outbound packet has already created an outbound
+            // UFT entry, make sure to pair it to this inbound entry.
+            Some(out_entry) => {
+                // Remember, the inbound UFID is the flow as seen by
+                // the network, before any processing is done by OPTE.
+                out_entry.state_mut().pair = Some(flow_before.clone());
+            }
+
+            // Ideally we would simulate the outbound flow if no
+            // outbound UFT entry existed at this point as per VFP
+            // §6.4.1. However, the act of "simulating" a flow hasn't
+            // been implemented yet. For now we only lazily create UFT
+            // outbound entries, which also means that their `pair`
+            // value will be `None` in the case where the inbound
+            // packet is the first one for a given flow (because OPTE
+            // cannot assume symmetric UFIDs between inbound and
+            // outbound).
+            None => (),
+        }
 
         // For inbound traffic the TCP flow table must be
         // checked _after_ processing take place.
@@ -1494,23 +1520,13 @@ impl Port {
                 }
             }
 
-            // The entry is from a previous epoch; mark it for removal
-            // and proceed to rule processing.
+            // The entry is from a previous epoch; invalidate its UFT
+            // entries and proceed to rule processing.
             Some(entry) => {
                 let epoch = entry.state().epoch;
-                let flow_in = pkt.flow().clone();
-                // TODO This is incorrect. The outbound UFID (the
-                // guest side outbound) can only be determined by
-                // applying the HTs. Otherwise, something like NAT
-                // would not have a change to rewrite the flow.
-                //
-                // I need to write a test for this to verify it's
-                // broken and then fix it. Also check outbound and see
-                // if a similar problem exists.
-                let gfid_in = InnerFlowId::from(pkt.meta());
-                let ufid_out = gfid_in.mirror();
-                // rpz shit
-                self.uft_invalidate(data, &ufid_out, &flow_in, epoch);
+                let ufid_in = Some(pkt.flow());
+                let ufid_out = entry.state().pair.clone();
+                self.uft_invalidate(data, ufid_out.as_ref(), ufid_in, epoch);
             }
 
             // There is no entry; proceed to rule processing;
@@ -1654,7 +1670,7 @@ impl Port {
         let mut xforms = Transforms::new();
         let flow_before = pkt.flow().clone();
         let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
-        let hte = HtEntry { xforms, epoch };
+        let hte = UftEntry { pair: None, xforms, epoch };
 
         match res {
             Ok(LayerResult::Allow) => {
@@ -1750,20 +1766,13 @@ impl Port {
                 return Ok(ProcessResult::Modified);
             }
 
-            // The entry is from a previous epoch; mark it for removal
-            // and proceed to rule processing.
+            // The entry is from a previous epoch; invalidate its UFT
+            // entries and proceed to rule processing.
             Some(entry) => {
                 let epoch = entry.state().epoch;
-                drop(entry);
-                // Network-side flow id.
-                //
-                // TODO This is not correct. We need to apply the HTs
-                // and mirror to get the UFID on the inbound side.
-                // Need to write a test to confirm this is busted and
-                // then fix.
-                let nfid_out = InnerFlowId::from(pkt.meta());
-                let ufid_in = nfid_out.mirror();
-                self.uft_invalidate(data, pkt.flow(), &ufid_in, epoch);
+                let ufid_out = Some(pkt.flow());
+                let ufid_in = entry.state().pair.clone();
+                self.uft_invalidate(data, ufid_out, ufid_in.as_ref(), epoch);
             }
 
             // There is no entry; proceed to layer processing.
@@ -1776,14 +1785,19 @@ impl Port {
     fn uft_invalidate(
         &self,
         data: &mut PortData,
-        ufid_out: &InnerFlowId,
-        ufid_in: &InnerFlowId,
+        ufid_out: Option<&InnerFlowId>,
+        ufid_in: Option<&InnerFlowId>,
         epoch: u64,
     ) {
-        data.uft_in.remove(ufid_in);
-        data.uft_out.remove(ufid_out);
-        self.uft_invalidate_probe(Direction::In, ufid_in, epoch);
-        self.uft_invalidate_probe(Direction::Out, ufid_out, epoch);
+        if let Some(ufid_in) = ufid_in {
+            data.uft_in.remove(ufid_in);
+            self.uft_invalidate_probe(Direction::In, ufid_in, epoch);
+        }
+
+        if let Some(ufid_out) = ufid_out {
+            data.uft_out.remove(ufid_out);
+            self.uft_invalidate_probe(Direction::Out, ufid_out, epoch);
+        }
     }
 
     fn uft_invalidate_probe(
