@@ -76,6 +76,7 @@ use zerocopy::AsBytes;
 const VPC_ENCAP_SZ: usize =
     EtherHdr::SIZE + Ipv6Hdr::SIZE + UdpHdr::SIZE + GeneveHdr::SIZE;
 const IP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::SIZE;
+const TCP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::SIZE + TcpHdr::BASE_SIZE;
 
 // If we are running `cargo test --feature=usdt`, then make sure to
 // register the USDT probes before running any tests.
@@ -397,14 +398,10 @@ fn gateway_icmp4_ping() {
         _ => panic!("expected Hairpin, got {:?}", res),
     };
     assert_port!(g1);
-
     let reply = hp.parse().unwrap();
     pcap.add_pkt(&reply);
-
-    // Ether + IPv4
-    assert_eq!(reply.body_offset(), 14 + 20);
+    assert_eq!(reply.body_offset(), IP_SZ);
     assert_eq!(reply.body_seg(), 0);
-
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());
     assert!(meta.outer.ip.is_none());
@@ -543,9 +540,7 @@ fn guest_to_guest() {
             "stats.port.out_modified",
         ]
     );
-
-    // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
-    assert_eq!(pkt1.body_offset(), 14 + 40 + 8 + 8 + 14 + 20 + 20);
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ);
     assert_eq!(pkt1.body_seg(), 1);
 
     let meta = pkt1.meta();
@@ -635,9 +630,7 @@ fn guest_to_guest() {
             "stats.port.in_modified",
         ]
     );
-
-    // Ether + IPv4 + TCP
-    assert_eq!(pkt2.body_offset(), 14 + 20 + 20);
+    assert_eq!(pkt2.body_offset(), TCP_SZ);
     assert_eq!(pkt2.body_seg(), 1);
 
     let g2_meta = pkt2.meta();
@@ -767,9 +760,7 @@ fn guest_to_internet() {
             "stats.port.out_modified",
         ]
     );
-
-    // Ether + IPv6 + UDP + Geneve + Ether + IPv4 + TCP
-    assert_eq!(pkt1.body_offset(), 14 + 40 + 8 + 8 + 14 + 20 + 20);
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ);
     assert_eq!(pkt1.body_seg(), 1);
     let meta = pkt1.meta();
     match meta.outer.ether.as_ref() {
