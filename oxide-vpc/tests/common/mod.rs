@@ -454,6 +454,7 @@ pub fn http_syn_ack2(
 pub fn http_ack2(
     eth_src: MacAddr,
     ip_src: Ipv4Addr,
+    eth_dst: MacAddr,
     ip_dst: Ipv4Addr,
 ) -> Packet<Parsed> {
     let body = vec![];
@@ -466,7 +467,7 @@ pub fn http_ack2(
     let tcp_csum =
         ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
     tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, GW_MAC_ADDR);
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, eth_dst);
     ulp_pkt(eth, ip4, tcp, &body)
 }
 
@@ -513,7 +514,7 @@ pub fn http_get_ack2(
     ulp_pkt(eth, ip4, tcp, &body)
 }
 
-pub fn http_301_reply(
+pub fn http_301_reply2(
     eth_src: MacAddr,
     ip_src: Ipv4Addr,
     eth_dst: MacAddr,
@@ -536,23 +537,128 @@ pub fn http_301_reply(
     ulp_pkt(eth, ip4, tcp, &body)
 }
 
+pub fn http_301_ack2(
+    eth_src: MacAddr,
+    ip_src: Ipv4Addr,
+    eth_dst: MacAddr,
+    ip_dst: Ipv4Addr,
+) -> Packet<Parsed> {
+    let body = vec![];
+    let mut tcp = TcpHdr::new(44490, 80);
+    tcp.set_flags(TcpFlags::ACK);
+    tcp.set_seq(2382112998);
+    tcp.set_ack(44161353 + 34);
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, eth_dst);
+    ulp_pkt(eth, ip4, tcp, &body)
+}
+
+pub fn http_guest_fin2(
+    eth_src: MacAddr,
+    ip_src: Ipv4Addr,
+    eth_dst: MacAddr,
+    ip_dst: Ipv4Addr,
+) -> Packet<Parsed> {
+    let body = vec![];
+    let mut tcp = TcpHdr::new(44490, 80);
+    tcp.set_flags(TcpFlags::ACK | TcpFlags::FIN);
+    tcp.set_seq(2382112998);
+    tcp.set_ack(44161353 + 34);
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, eth_dst);
+    ulp_pkt(eth, ip4, tcp, &body)
+}
+
+pub fn http_server_ack_fin2(
+    eth_src: MacAddr,
+    ip_src: Ipv4Addr,
+    eth_dst: MacAddr,
+    ip_dst: Ipv4Addr,
+    dst_port: u16,
+) -> Packet<Parsed> {
+    let body = vec![];
+    let mut tcp = TcpHdr::new(80, dst_port);
+    tcp.set_flags(TcpFlags::ACK);
+    tcp.set_seq(44161353 + 34);
+    // We are ACKing the FIN, which counts as 1 byte.
+    tcp.set_ack(2382112998 + 1);
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, eth_dst);
+    ulp_pkt(eth, ip4, tcp, &body)
+}
+
+pub fn http_server_fin2(
+    eth_src: MacAddr,
+    ip_src: Ipv4Addr,
+    eth_dst: MacAddr,
+    ip_dst: Ipv4Addr,
+    dst_port: u16,
+) -> Packet<Parsed> {
+    let body = vec![];
+    let mut tcp = TcpHdr::new(80, dst_port);
+    tcp.set_flags(TcpFlags::ACK | TcpFlags::FIN);
+    tcp.set_seq(44161353 + 34);
+    tcp.set_ack(2382112998 + 1);
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, eth_dst);
+    ulp_pkt(eth, ip4, tcp, &body)
+}
+
+pub fn http_guest_ack_fin2(
+    eth_src: MacAddr,
+    ip_src: Ipv4Addr,
+    eth_dst: MacAddr,
+    ip_dst: Ipv4Addr,
+) -> Packet<Parsed> {
+    let body = vec![];
+    let mut tcp = TcpHdr::new(44490, 80);
+    tcp.set_flags(TcpFlags::ACK);
+    tcp.set_seq(2382112998);
+    // We are ACKing the FIN, which counts as 1 bytes.
+    tcp.set_ack(44161353 + 34 + 1);
+    let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, ip_src, ip_dst);
+    ip4.compute_hdr_csum();
+    let tcp_csum =
+        ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
+    tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
+    let eth = EtherHdr::new(EtherType::Ipv4, eth_src, eth_dst);
+    ulp_pkt(eth, ip4, tcp, &body)
+}
+
 /// A more conveinent way to pass along physical network information
 /// inside the tests.
 #[derive(Clone, Copy, Debug)]
 pub struct TestIpPhys {
     pub ip: Ipv6Addr,
     pub mac: MacAddr,
+    pub vni: Vni,
 }
 
 /// Encapsulate a guest packet.
+#[must_use]
 pub fn encap(
     pkt: Packet<Parsed>,
     src: TestIpPhys,
     dst: TestIpPhys,
-    vni: Vni,
 ) -> Packet<Parsed> {
     let inner_len = pkt.len();
-    let geneve = GeneveHdr::new(EtherType::Ether, vni);
+    let geneve = GeneveHdr::new(EtherType::Ether, dst.vni);
     let udp =
         UdpHdr::new(99, GENEVE_PORT, (geneve.hdr_len() + inner_len) as u16);
     let ip = Ipv6Hdr::new_udp(&udp, src.ip, dst.ip);

@@ -9,10 +9,13 @@
 //! This is mostly just a place to hang printing routines so that they
 //! can be used by both opteadm and integration tests.
 
-use super::flow_table::FlowEntryDump;
+use super::ioctl::ActionDescEntryDump;
 use super::ioctl::DumpLayerResp;
+use super::ioctl::DumpTcpFlowsResp;
 use super::ioctl::DumpUftResp;
 use super::ioctl::ListLayersResp;
+use super::ioctl::TcpFlowEntryDump;
+use super::ioctl::UftEntryDump;
 use super::packet::InnerFlowId;
 use opte::engine::rule::RuleDump;
 use std::collections::VecDeque;
@@ -25,16 +28,16 @@ pub fn print_layer(resp: &DumpLayerResp) {
     print_hrb();
     println!("Inbound Flows");
     print_hr();
-    print_flow_header();
+    print_lft_flow_header();
     for (flow_id, flow_state) in &resp.ft_in {
-        print_flow(flow_id, flow_state);
+        print_lft_flow(flow_id, flow_state);
     }
 
     println!("\nOutbound Flows");
     print_hr();
-    print_flow_header();
+    print_lft_flow_header();
     for (flow_id, flow_state) in &resp.ft_out {
-        print_flow(flow_id, flow_state);
+        print_lft_flow(flow_id, flow_state);
     }
 
     println!("\nInbound Rules [Default: {}]", resp.default_in);
@@ -78,17 +81,17 @@ pub fn print_list_layers(resp: &ListLayersResp) {
 pub fn print_uft(uft: &DumpUftResp) {
     println!("UFT Inbound: {}/{}", uft.in_num_flows, uft.in_limit);
     print_hr();
-    print_flow_header();
+    print_uft_flow_header();
     for (flow_id, flow_state) in &uft.in_flows {
-        print_flow(flow_id, flow_state);
+        print_uft_flow(flow_id, flow_state);
     }
 
     println!("");
     println!("UFT Outbound: {}/{}", uft.out_num_flows, uft.out_limit);
     print_hr();
-    print_flow_header();
+    print_uft_flow_header();
     for (flow_id, flow_state) in &uft.out_flows {
-        print_flow(flow_id, flow_state);
+        print_uft_flow(flow_id, flow_state);
     }
 }
 
@@ -131,20 +134,19 @@ pub fn print_rule(id: u64, rule: &RuleDump) {
     }
 }
 
-/// Print the header for the [`print_flow()`] output.
-pub fn print_flow_header() {
+/// Print the header for the [`print_lft_flow()`] output.
+pub fn print_lft_flow_header() {
     println!(
         "{:<6} {:<16} {:<6} {:<16} {:<6} {:<8} {:<22}",
         "PROTO", "SRC IP", "SPORT", "DST IP", "DPORT", "HITS", "ACTION"
     );
 }
 
-/// Print information about a flow.
-pub fn print_flow(flow_id: &InnerFlowId, flow_entry: &FlowEntryDump) {
-    // For those types with custom Display implementations
-    // we need to first format in into a String before
-    // passing it to println in order for the format
-    // specification to be honored.
+/// Print information about a layer flow.
+pub fn print_lft_flow(flow_id: &InnerFlowId, flow_entry: &ActionDescEntryDump) {
+    // For those types with custom Display implementations we need to
+    // first format in into a String before passing it to println in
+    // order for the format specification to be honored.
     println!(
         "{:<6} {:<16} {:<6} {:<16} {:<6} {:<8} {:<22}",
         flow_id.proto.to_string(),
@@ -153,7 +155,48 @@ pub fn print_flow(flow_id: &InnerFlowId, flow_entry: &FlowEntryDump) {
         flow_id.dst_ip.to_string(),
         flow_id.dst_port,
         flow_entry.hits,
-        flow_entry.state_summary,
+        flow_entry.summary,
+    );
+}
+
+/// Print the header for the [`print_uft_flow()`] output.
+pub fn print_uft_flow_header() {
+    println!(
+        "{:<6} {:<16} {:<6} {:<16} {:<6} {:<8} {:<22}",
+        "PROTO", "SRC IP", "SPORT", "DST IP", "DPORT", "HITS", "XFORMS"
+    );
+}
+
+/// Print information about a UFT entry.
+pub fn print_uft_flow(flow_id: &InnerFlowId, flow_entry: &UftEntryDump) {
+    // For those types with custom Display implementations we need to
+    // first format in into a String before passing it to println in
+    // order for the format specification to be honored.
+    println!(
+        "{:<6} {:<16} {:<6} {:<16} {:<6} {:<8} {:<22}",
+        flow_id.proto.to_string(),
+        flow_id.src_ip.to_string(),
+        flow_id.src_port,
+        flow_id.dst_ip.to_string(),
+        flow_id.dst_port,
+        flow_entry.hits,
+        flow_entry.summary,
+    );
+}
+
+pub fn print_tcp_flows(flows: &DumpTcpFlowsResp) {
+    println!("{:<48} {:<12} {:<8}", "FLOW", "STATE", "HITS");
+    for (flow_id, entry) in &flows.flows {
+        print_tcp_flow(flow_id, entry);
+    }
+}
+
+fn print_tcp_flow(id: &InnerFlowId, entry: &TcpFlowEntryDump) {
+    println!(
+        "{:<48} {:<12} {:<8}",
+        format!("{id}"),
+        entry.tcp_state.tcp_state.to_string(),
+        entry.hits
     );
 }
 

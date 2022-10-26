@@ -8,18 +8,17 @@ use super::packet::InnerFlowId;
 use super::tcp::TcpFlags;
 use super::tcp::TcpMeta;
 use super::tcp::TcpState;
+use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
 use opte_api::Direction;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::ffi::CString;
         use alloc::string::String;
         use illumos_sys_hdrs::uintptr_t;
         use super::rule::flow_id_sdt_arg;
     } else {
-        use std::ffi::CString;
         use std::string::String;
     }
 }
@@ -35,14 +34,25 @@ cfg_if! {
 /// as a sentinel value, and that would probably be fine, but 0 is
 /// also a valid sequence number. Using `Option` means we know for
 /// sure if a seq/ack number has actually been set.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct TcpFlowState {
-    port: CString,
     tcp_state: TcpState,
     guest_seq: Option<u32>,
     guest_ack: Option<u32>,
     remote_seq: Option<u32>,
     remote_ack: Option<u32>,
+}
+
+impl From<TcpFlowState> for super::ioctl::TcpFlowStateDump {
+    fn from(tfs: TcpFlowState) -> Self {
+        Self {
+            tcp_state: tfs.tcp_state,
+            guest_seq: tfs.guest_seq,
+            guest_ack: tfs.guest_ack,
+            remote_seq: tfs.remote_seq,
+            remote_ack: tfs.remote_ack,
+        }
+    }
 }
 
 impl Display for TcpFlowState {
@@ -406,9 +416,8 @@ impl TcpFlowState {
         }
     }
 
-    pub fn new(port: CString) -> Self {
+    pub fn new() -> Self {
         Self {
-            port,
             tcp_state: TcpState::Closed,
             guest_seq: None,
             guest_ack: None,
@@ -419,6 +428,7 @@ impl TcpFlowState {
 
     pub fn process(
         &mut self,
+        port: &CStr,
         dir: Direction,
         flow_id: &InnerFlowId,
         tcp: &TcpMeta,
@@ -453,7 +463,7 @@ impl TcpFlowState {
         let new_state = match res {
             Some(new_state) => new_state,
             None => {
-                self.tcp_flow_drop_probe(&flow_id, dir, tcp.flags);
+                self.tcp_flow_drop_probe(port, &flow_id, dir, tcp.flags);
                 return Err(format!(
                     "unexpected TCP segment dir: {}, flow: {}, state: {}, \
                      flags: 0x{:x}",
@@ -465,7 +475,7 @@ impl TcpFlowState {
         // Make sure to transition the state if it has changed and
         // fire the SDT probe.
         if new_state != curr_state {
-            self.tcp_flow_state_probe(&flow_id, new_state);
+            self.tcp_flow_state_probe(port, &flow_id, new_state);
             self.tcp_state = new_state;
         }
 
@@ -476,6 +486,7 @@ impl TcpFlowState {
     // packet should be dropped.
     pub fn tcp_flow_drop_probe(
         &self,
+        port: &CStr,
         flow_id: &InnerFlowId,
         dir: Direction,
         flags: u8,
@@ -487,7 +498,7 @@ impl TcpFlowState {
 
                 unsafe {
                     __dtrace_probe_tcp__flow__drop(
-                        self.port.as_ptr() as uintptr_t,
+                        port.as_ptr() as uintptr_t,
                         &flow_id as *const flow_id_sdt_arg as uintptr_t,
                         &state as *const tcp_flow_state_sdt_arg as uintptr_t,
                         dir as uintptr_t,
@@ -497,7 +508,7 @@ impl TcpFlowState {
             } else if #[cfg(feature = "usdt")] {
                 use std::string::ToString;
 
-                let port_s = self.port.to_str().unwrap();
+                let port_s = port.to_str().unwrap();
                 let flow_s = flow_id.to_string();
                 let state_s = self.to_string();
                 let dir_s = dir.to_string();
@@ -507,19 +518,24 @@ impl TcpFlowState {
                     || (port_s, flow_s, state_s, dir_s, flags_s)
                 );
             } else {
-                let (_, _, _, _) = (&self.port, flow_id, dir, flags);
+                let (..) = (port, flow_id, dir, flags);
             }
         }
     }
 
     // This probe fires anytime the TCP flow changes state.
-    fn tcp_flow_state_probe(&self, flow_id: &InnerFlowId, new_state: TcpState) {
+    fn tcp_flow_state_probe(
+        &self,
+        port: &CStr,
+        flow_id: &InnerFlowId,
+        new_state: TcpState,
+    ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 let flow_id = flow_id_sdt_arg::from(flow_id);
                 unsafe {
                     __dtrace_probe_tcp__flow__state(
-                        self.port.as_ptr() as uintptr_t,
+                        port.as_ptr() as uintptr_t,
                         &flow_id as *const flow_id_sdt_arg as uintptr_t,
                         self.tcp_state as uintptr_t,
                         new_state as uintptr_t,
@@ -528,7 +544,7 @@ impl TcpFlowState {
             } else if #[cfg(feature = "usdt")] {
                 use std::string::ToString;
 
-                let port_s = self.port.to_str().unwrap();
+                let port_s = port.to_str().unwrap();
                 let flow_s = flow_id.to_string();
                 let curr_s = self.tcp_state.to_string();
                 let new_s = new_state.to_string();
@@ -536,7 +552,7 @@ impl TcpFlowState {
                     || (port_s, flow_s, curr_s, new_s)
                 );
             } else {
-                let (_, _) = (flow_id, new_state);
+                let (..) = (port, flow_id, new_state);
             }
         }
     }

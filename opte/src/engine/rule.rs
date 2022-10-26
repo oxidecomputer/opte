@@ -132,13 +132,13 @@ pub trait ActionDesc {
 
 impl fmt::Debug for dyn ActionDesc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "dyn ActionDesc")
+        write!(f, "dyn ActionDesc {}", self.name())
     }
 }
 
-impl StateSummary for Arc<dyn ActionDesc> {
-    fn summary(&self) -> String {
-        self.name().to_string()
+impl Display for dyn ActionDesc {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.name())
     }
 }
 

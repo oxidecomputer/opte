@@ -7,9 +7,12 @@
 /// A virtual switch port.
 use self::meta::ActionMeta;
 use super::ether::EtherAddr;
+use super::flow_table::Dump;
 use super::flow_table::FlowTable;
-use super::flow_table::StateSummary;
 use super::ioctl;
+use super::ioctl::TcpFlowEntryDump;
+use super::ioctl::TcpFlowStateDump;
+use super::ioctl::UftEntryDump;
 use super::layer;
 use super::layer::Layer;
 use super::layer::LayerError;
@@ -438,8 +441,16 @@ pub struct UftEntry<Id> {
     epoch: u64,
 }
 
-impl<Id> StateSummary for UftEntry<Id> {
-    fn summary(&self) -> String {
+impl<Id> Dump for UftEntry<Id> {
+    type DumpVal = UftEntryDump;
+
+    fn dump(&self, hits: u64) -> Self::DumpVal {
+        UftEntryDump { hits: hits, summary: self.to_string() }
+    }
+}
+
+impl<Id> Display for UftEntry<Id> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let hdr = self
             .xforms
             .hdr
@@ -454,7 +465,7 @@ impl<Id> StateSummary for UftEntry<Id> {
             .map(|bt| bt.to_string())
             .collect::<Vec<String>>()
             .join(",");
-        format!("hdr: {hdr}, body: {body}")
+        write!(f, "hdr: {hdr}, body: {body}")
     }
 }
 
@@ -1066,6 +1077,18 @@ impl Port {
     pub fn stats_snap(&self) -> PortStatsSnap {
         self.data.lock().stats.vals.snapshot()
     }
+
+    /// Return the [`TcpState`] of a given flow.
+    pub fn tcp_state(&self, flow: &InnerFlowId) -> TcpState {
+        self.data
+            .lock()
+            .tcp_flows
+            .get(flow)
+            .unwrap()
+            .state()
+            .tcp_state
+            .tcp_state()
+    }
 }
 
 enum TcpMaybeClosed {
@@ -1277,7 +1300,12 @@ impl Port {
             Some(entry) => {
                 let tfes = entry.state_mut();
 
-                match tfes.tcp_state.process(In, &ufid_out, tcp) {
+                match tfes.tcp_state.process(
+                    self.name_cstr.as_c_str(),
+                    In,
+                    &ufid_out,
+                    tcp,
+                ) {
                     Ok(tcp_state) => {
                         if tcp_state == TcpState::Closed {
                             let entry = tcp_flows.remove(&ufid_out).unwrap();
@@ -1324,7 +1352,12 @@ impl Port {
             Some(entry) => {
                 let tfes = entry.state_mut();
 
-                let res = match tfes.tcp_state.process(In, &ufid_out, &tcp) {
+                let res = match tfes.tcp_state.process(
+                    self.name_cstr.as_c_str(),
+                    In,
+                    &ufid_out,
+                    &tcp,
+                ) {
                     Ok(tcp_state) => {
                         if tcp_state == TcpState::Closed {
                             let entry = tcp_flows.remove(&ufid_out).unwrap();
@@ -1350,8 +1383,13 @@ impl Port {
             }
 
             None => {
-                let mut tfs = TcpFlowState::new(self.name_cstr.clone());
-                let res = tfs.process(Direction::In, &ufid_out, &tcp);
+                let mut tfs = TcpFlowState::new();
+                let res = tfs.process(
+                    self.name_cstr.as_c_str(),
+                    Direction::In,
+                    &ufid_out,
+                    &tcp,
+                );
 
                 let tcp_state = match res {
                     Ok(TcpState::Closed) => return Ok(TcpState::Closed),
@@ -1548,7 +1586,12 @@ impl Port {
             Some(entry) => {
                 let tfes = entry.state_mut();
                 let tcp = pmeta.inner_tcp().unwrap();
-                let res = tfes.tcp_state.process(Direction::Out, ufid_out, tcp);
+                let res = tfes.tcp_state.process(
+                    self.name_cstr.as_c_str(),
+                    Direction::Out,
+                    ufid_out,
+                    tcp,
+                );
 
                 match res {
                     Ok(tcp_state) => {
@@ -1590,8 +1633,12 @@ impl Port {
             // due to an inbound packet.
             Some(entry) => {
                 let tfes = entry.state_mut();
-                let res =
-                    tfes.tcp_state.process(Direction::Out, &ufid_out, &tcp);
+                let res = tfes.tcp_state.process(
+                    self.name_cstr.as_c_str(),
+                    Direction::Out,
+                    &ufid_out,
+                    &tcp,
+                );
 
                 match res {
                     Ok(tcp_state) => tcp_state,
@@ -1603,13 +1650,17 @@ impl Port {
                 // Create a new entry and find its current state. In
                 // this case it should always be `SynSent` as a flow
                 // would have already existed in the `SynRcvd` case.
-                let mut tfs = TcpFlowState::new(self.name_cstr.clone());
+                let mut tfs = TcpFlowState::new();
 
-                let tcp_state =
-                    match tfs.process(Direction::Out, &ufid_out, &tcp) {
-                        Ok(tcp_state) => tcp_state,
-                        Err(e) => return Err(e),
-                    };
+                let tcp_state = match tfs.process(
+                    self.name_cstr.as_c_str(),
+                    Direction::Out,
+                    &ufid_out,
+                    &tcp,
+                ) {
+                    Ok(tcp_state) => tcp_state,
+                    Err(e) => return Err(e),
+                };
 
                 // The inbound UFID is determined on the inbound side.
                 let tfes =
@@ -1997,15 +2048,27 @@ pub enum Pos {
 
 #[derive(Clone, Debug)]
 pub struct TcpFlowEntryState {
-    inbound_ufid: Option<InnerFlowId>,
-    tcp_state: TcpFlowState,
+    pub inbound_ufid: Option<InnerFlowId>,
+    pub tcp_state: TcpFlowState,
 }
 
-impl StateSummary for TcpFlowEntryState {
-    fn summary(&self) -> String {
+impl Display for TcpFlowEntryState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.inbound_ufid {
-            None => format!("None {}", self.tcp_state),
-            Some(ufid) => format!("{} {}", ufid, self.tcp_state),
+            None => write!(f, "None {}", self.tcp_state),
+            Some(ufid) => write!(f, "{} {}", ufid, self.tcp_state),
+        }
+    }
+}
+
+impl Dump for TcpFlowEntryState {
+    type DumpVal = TcpFlowEntryDump;
+
+    fn dump(&self, hits: u64) -> TcpFlowEntryDump {
+        TcpFlowEntryDump {
+            hits,
+            inbound_ufid: self.inbound_ufid,
+            tcp_state: TcpFlowStateDump::from(self.tcp_state),
         }
     }
 }

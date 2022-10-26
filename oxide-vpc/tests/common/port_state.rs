@@ -49,6 +49,14 @@ pub fn print_port(port: &Port, vpc_map: &VpcMappings) {
     }
 
     // ================================================================
+    // Print TCP flows.
+    // ================================================================
+    println!("");
+    println!("TCP Flows (keyed on outbound)");
+    print_hr();
+    print_tcp_flows(&port.dump_tcp_flows().unwrap());
+
+    // ================================================================
     // Print information about each layer.
     // ================================================================
     println!("");

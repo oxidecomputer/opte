@@ -4,10 +4,11 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use super::flow_table::Dump;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
-use super::flow_table::StateSummary;
 use super::ioctl;
+use super::ioctl::ActionDescEntryDump;
 use super::packet::BodyTransformError;
 use super::packet::Initialized;
 use super::packet::InnerFlowId;
@@ -160,9 +161,17 @@ impl LftOutEntry {
     }
 }
 
-impl StateSummary for LftOutEntry {
-    fn summary(&self) -> String {
-        self.action_desc.summary()
+impl Display for LftOutEntry {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.action_desc)
+    }
+}
+
+impl Dump for LftOutEntry {
+    type DumpVal = ActionDescEntryDump;
+
+    fn dump(&self, hits: u64) -> ActionDescEntryDump {
+        ActionDescEntryDump { hits, summary: self.to_string() }
     }
 }
 
@@ -175,8 +184,8 @@ struct LayerFlowTable {
 
 #[derive(Debug)]
 pub struct LftDump {
-    ft_in: FlowTableDump,
-    ft_out: FlowTableDump,
+    ft_in: FlowTableDump<ActionDescEntryDump>,
+    ft_out: FlowTableDump<ActionDescEntryDump>,
 }
 
 impl LayerFlowTable {
@@ -299,11 +308,19 @@ pub enum ActionDescEntry {
     Desc(Arc<dyn ActionDesc>),
 }
 
-impl StateSummary for ActionDescEntry {
-    fn summary(&self) -> String {
+impl Dump for ActionDescEntry {
+    type DumpVal = ActionDescEntryDump;
+
+    fn dump(&self, hits: u64) -> Self::DumpVal {
+        ActionDescEntryDump { hits, summary: self.to_string() }
+    }
+}
+
+impl Display for ActionDescEntry {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::NoOp => "no-op".to_string(),
-            Self::Desc(desc) => desc.summary(),
+            Self::NoOp => write!(f, "no-op"),
+            Self::Desc(desc) => write!(f, "{}", desc),
         }
     }
 }

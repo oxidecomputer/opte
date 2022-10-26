@@ -7,11 +7,11 @@
 //! The ioctl interface.
 //!
 //! XXX This stuff needs to be moved to oxide-api.
-use super::flow_table::FlowEntryDump;
 use super::layer;
 use super::packet::InnerFlowId;
 use super::port::Port;
 use super::rule;
+use super::tcp::TcpState;
 use core::fmt::Debug;
 use opte_api::CmdOk;
 use opte_api::OpteError;
@@ -52,9 +52,9 @@ pub struct DumpLayerResp {
     /// The default outbound action.
     pub default_out: String,
     /// The inbound flow table.
-    pub ft_in: Vec<(InnerFlowId, FlowEntryDump)>,
+    pub ft_in: Vec<(InnerFlowId, ActionDescEntryDump)>,
     /// The outbound flow table.
-    pub ft_out: Vec<(InnerFlowId, FlowEntryDump)>,
+    pub ft_out: Vec<(InnerFlowId, ActionDescEntryDump)>,
 }
 
 impl CmdOk for DumpLayerResp {}
@@ -101,13 +101,19 @@ pub struct DumpUftReq {
 pub struct DumpUftResp {
     pub in_limit: u32,
     pub in_num_flows: u32,
-    pub in_flows: Vec<(InnerFlowId, FlowEntryDump)>,
+    pub in_flows: Vec<(InnerFlowId, UftEntryDump)>,
     pub out_limit: u32,
     pub out_num_flows: u32,
-    pub out_flows: Vec<(InnerFlowId, FlowEntryDump)>,
+    pub out_flows: Vec<(InnerFlowId, UftEntryDump)>,
 }
 
 impl CmdOk for DumpUftResp {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct UftEntryDump {
+    pub hits: u64,
+    pub summary: String,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpTcpFlowsReq {
@@ -116,10 +122,32 @@ pub struct DumpTcpFlowsReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpTcpFlowsResp {
-    pub flows: Vec<(InnerFlowId, FlowEntryDump)>,
+    pub flows: Vec<(InnerFlowId, TcpFlowEntryDump)>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TcpFlowEntryDump {
+    pub hits: u64,
+    pub inbound_ufid: Option<InnerFlowId>,
+    pub tcp_state: TcpFlowStateDump,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TcpFlowStateDump {
+    pub tcp_state: TcpState,
+    pub guest_seq: Option<u32>,
+    pub guest_ack: Option<u32>,
+    pub remote_seq: Option<u32>,
+    pub remote_ack: Option<u32>,
 }
 
 impl CmdOk for DumpTcpFlowsResp {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ActionDescEntryDump {
+    pub hits: u64,
+    pub summary: String,
+}
 
 pub fn dump_layer(
     port: &Port,

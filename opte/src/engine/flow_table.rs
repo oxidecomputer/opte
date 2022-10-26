@@ -10,21 +10,21 @@ use crate::ddi::time::MILLIS;
 use core::fmt;
 use core::num::NonZeroU32;
 use opte_api::OpteError;
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::collections::BTreeMap;
         use alloc::ffi::CString;
-        use alloc::string::{String, ToString};
+        use alloc::string::String;
         use alloc::vec::Vec;
         use illumos_sys_hdrs::uintptr_t;
         use super::rule::flow_id_sdt_arg;
     } else {
         use std::collections::BTreeMap;
         use std::ffi::CString;
-        use std::string::{String, ToString};
+        use std::string::String;
         use std::vec::Vec;
     }
 }
@@ -63,10 +63,10 @@ impl Ttl {
     }
 }
 
-pub type FlowTableDump = Vec<(InnerFlowId, FlowEntryDump)>;
+pub type FlowTableDump<T> = Vec<(InnerFlowId, T)>;
 
 #[derive(Debug)]
-pub struct FlowTable<S> {
+pub struct FlowTable<S: Dump> {
     port_c: CString,
     name_c: CString,
     limit: NonZeroU32,
@@ -76,7 +76,7 @@ pub struct FlowTable<S> {
 
 impl<S> FlowTable<S>
 where
-    S: Clone + fmt::Debug + StateSummary,
+    S: Clone + fmt::Debug + Dump,
 {
     /// Add a new entry to the flow table.
     ///
@@ -109,10 +109,10 @@ where
         self.map.clear()
     }
 
-    pub fn dump(&self) -> FlowTableDump {
+    pub fn dump(&self) -> FlowTableDump<S::DumpVal> {
         let mut flows = Vec::with_capacity(self.map.len());
         for (flow_id, entry) in &self.map {
-            flows.push((flow_id.clone(), FlowEntryDump::from(entry)));
+            flows.push((flow_id.clone(), entry.dump()));
         }
         flows
     }
@@ -149,6 +149,14 @@ where
         self.limit
     }
 
+    /// Get a reference to the flow entry for a given flow, if one
+    /// exists.
+    pub fn get(&mut self, flow_id: &InnerFlowId) -> Option<&FlowEntry<S>> {
+        self.map.get(flow_id)
+    }
+
+    /// Get a mutable reference to the flow entry for a given flow, if
+    /// one exists.
     pub fn get_mut(
         &mut self,
         flow_id: &InnerFlowId,
@@ -211,20 +219,31 @@ fn flow_expired_probe(port: &CString, name: &CString, flowid: &InnerFlowId) {
     }
 }
 
+/// A type that can be "dumped" for the purposes of presenting an
+/// external view into internal state of the [`FlowEntry<T>`].
+pub trait Dump {
+    type DumpVal: DeserializeOwned + Serialize;
+
+    fn dump(&self, hits: u64) -> Self::DumpVal;
+}
+
 /// The FlowEntry holds any arbitrary state type `S`.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct FlowEntry<S> {
+#[derive(Clone, Debug)]
+pub struct FlowEntry<S: Dump> {
     state: S,
 
     // Number of times this flow has been matched.
     hits: u64,
 
     // This tracks the last time the flow was matched.
-    #[serde(skip)]
     last_hit: Moment,
 }
 
-impl<S> FlowEntry<S> {
+impl<S: Dump> FlowEntry<S> {
+    fn dump(&self) -> S::DumpVal {
+        self.state.dump(self.hits)
+    }
+
     pub fn state_mut(&mut self) -> &mut S {
         &mut self.state
     }
@@ -255,20 +274,8 @@ impl<S> FlowEntry<S> {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct FlowEntryDump {
-    pub hits: u64,
-    pub state_summary: String,
-}
-
 pub trait StateSummary {
     fn summary(&self) -> String;
-}
-
-impl<S: StateSummary> From<&FlowEntry<S>> for FlowEntryDump {
-    fn from(entry: &FlowEntry<S>) -> Self {
-        FlowEntryDump { hits: entry.hits, state_summary: entry.state.summary() }
-    }
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -288,9 +295,11 @@ extern "C" {
     );
 }
 
-impl StateSummary for () {
-    fn summary(&self) -> String {
-        "()".to_string()
+impl Dump for () {
+    type DumpVal = ();
+
+    fn dump(&self, _hits: u64) -> () {
+        ()
     }
 }
 

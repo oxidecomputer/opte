@@ -172,15 +172,23 @@ fn firewall_vni_inbound() {
     // ================================================================
     // Create a packet that is leaving g2 with g1 as its destination.
     // ================================================================
-    let phys_src = TestIpPhys { ip: g2_cfg.phys_ip, mac: g2_cfg.guest_mac };
-    let phys_dst = TestIpPhys { ip: g1_cfg.phys_ip, mac: g1_cfg.guest_mac };
+    let phys_src = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+    let phys_dst = TestIpPhys {
+        ip: g2_cfg.phys_ip,
+        mac: g2_cfg.guest_mac,
+        vni: g2_cfg.vni,
+    };
     let mut pkt1 = http_syn2(
         g2_cfg.guest_mac,
         g2_cfg.ipv4().private_ip,
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
     );
-    pkt1 = encap(pkt1, phys_src, phys_dst, g2_cfg.vni);
+    pkt1 = encap(pkt1, phys_src, phys_dst);
 
     // ================================================================
     // Verify that g1's firewall rejects this packet, as the default
@@ -205,15 +213,23 @@ fn firewall_vni_inbound() {
     // pass.
     // ================================================================
     let g2_cfg = common::g2_cfg();
-    let phys_src = TestIpPhys { ip: g2_cfg.phys_ip, mac: g2_cfg.guest_mac };
-    let phys_dst = TestIpPhys { ip: g1_cfg.phys_ip, mac: g1_cfg.guest_mac };
+    let phys_src = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+    let phys_dst = TestIpPhys {
+        ip: g2_cfg.phys_ip,
+        mac: g2_cfg.guest_mac,
+        vni: g2_cfg.vni,
+    };
     let mut pkt2 = http_syn2(
         g2_cfg.guest_mac,
         g2_cfg.ipv4().private_ip,
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
     );
-    pkt2 = encap(pkt2, phys_src, phys_dst, g2_cfg.vni);
+    pkt2 = encap(pkt2, phys_src, phys_dst);
     ameta.clear();
     let res = g1.port.process(In, &mut pkt2, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
@@ -270,15 +286,23 @@ fn firewall_vni_outbound() {
     // ================================================================
     // Create a packet that is leaving g1 with g2 as its destination.
     // ================================================================
-    let phys_src = TestIpPhys { ip: g1_cfg.phys_ip, mac: g1_cfg.guest_mac };
-    let phys_dst = TestIpPhys { ip: g2_cfg.phys_ip, mac: g2_cfg.guest_mac };
+    let phys_src = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+    let phys_dst = TestIpPhys {
+        ip: g2_cfg.phys_ip,
+        mac: g2_cfg.guest_mac,
+        vni: g2_cfg.vni,
+    };
     let mut pkt1 = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         g1_cfg.guest_mac,
         g2_cfg.ipv4().private_ip,
     );
-    pkt1 = encap(pkt1, phys_src, phys_dst, g2_cfg.vni);
+    pkt1 = encap(pkt1, phys_src, phys_dst);
 
     // ================================================================
     // Try to send the packet and verify the firewall does not allow it.
