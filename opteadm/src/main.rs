@@ -21,6 +21,7 @@ use opte::api::MacAddr;
 use opte::api::Vni;
 use opte::engine::print::print_layer;
 use opte::engine::print::print_list_layers;
+use opte::engine::print::print_tcp_flows;
 use opte::engine::print::print_uft;
 use opteadm::OpteAdm;
 use oxide_vpc::api::AddRouterEntryReq;
@@ -303,10 +304,7 @@ fn main() {
 
         Command::DumpTcpFlows { port } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL).unwrap_or_die();
-            let flows = hdl.dump_tcp_flows(&port).unwrap_or_die().flows;
-            for (flow_id, entry) in flows {
-                println!("{} {:?}", flow_id, entry);
-            }
+            print_tcp_flows(&hdl.dump_tcp_flows(&port).unwrap_or_die());
         }
 
         Command::DumpV2P => {

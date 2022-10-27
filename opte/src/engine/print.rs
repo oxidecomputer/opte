@@ -184,6 +184,7 @@ pub fn print_uft_flow(flow_id: &InnerFlowId, flow_entry: &UftEntryDump) {
     );
 }
 
+/// Print a [`DumpTcpFlowsResp`].
 pub fn print_tcp_flows(flows: &DumpTcpFlowsResp) {
     println!("{:<48} {:<12} {:<8}", "FLOW", "STATE", "HITS");
     for (flow_id, entry) in &flows.flows {
