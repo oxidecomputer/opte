@@ -186,7 +186,10 @@ pub fn print_uft_flow(flow_id: &InnerFlowId, flow_entry: &UftEntryDump) {
 
 /// Print a [`DumpTcpFlowsResp`].
 pub fn print_tcp_flows(flows: &DumpTcpFlowsResp) {
-    println!("{:<48} {:<12} {:<8}", "FLOW", "STATE", "HITS");
+    println!(
+        "{:<48} {:<12} {:<8} {:<8} {:<8} {:<10} {:<10}",
+        "FLOW", "STATE", "HITS", "SEGS IN", "SEGS OUT", "BYTES IN", "BYTES OUT"
+    );
     for (flow_id, entry) in &flows.flows {
         print_tcp_flow(flow_id, entry);
     }
@@ -194,10 +197,14 @@ pub fn print_tcp_flows(flows: &DumpTcpFlowsResp) {
 
 fn print_tcp_flow(id: &InnerFlowId, entry: &TcpFlowEntryDump) {
     println!(
-        "{:<48} {:<12} {:<8}",
+        "{:<48} {:<12} {:<8} {:<8} {:<8} {:<10} {:<10}",
         format!("{id}"),
         entry.tcp_state.tcp_state.to_string(),
-        entry.hits
+        entry.hits,
+        entry.segs_in,
+        entry.segs_out,
+        entry.bytes_in,
+        entry.bytes_out,
     );
 }
 

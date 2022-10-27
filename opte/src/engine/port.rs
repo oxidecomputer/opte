@@ -1279,6 +1279,7 @@ impl Port {
         &self,
         data: &mut PortData,
         pmeta: &PacketMeta,
+        pkt_len: u64,
     ) -> result::Result<TcpState, String> {
         use Direction::In;
 
@@ -1298,7 +1299,10 @@ impl Port {
 
         match tcp_flows.get_mut(&ufid_out) {
             Some(entry) => {
+                entry.hit();
                 let tfes = entry.state_mut();
+                tfes.segs_in += 1;
+                tfes.bytes_in += pkt_len;
 
                 match tfes.tcp_state.process(
                     self.name_cstr.as_c_str(),
@@ -1331,6 +1335,7 @@ impl Port {
         data: &mut PortData,
         ufid_in: &InnerFlowId,
         pmeta: &PacketMeta,
+        pkt_len: u64,
     ) -> result::Result<TcpState, String> {
         use Direction::In;
 
@@ -1350,7 +1355,10 @@ impl Port {
 
         match tcp_flows.get_mut(&ufid_out) {
             Some(entry) => {
+                entry.hit();
                 let tfes = entry.state_mut();
+                tfes.segs_in += 1;
+                tfes.bytes_in += pkt_len;
 
                 let res = match tfes.tcp_state.process(
                     self.name_cstr.as_c_str(),
@@ -1397,13 +1405,11 @@ impl Port {
                     Err(e) => return Err(e),
                 };
 
-                let tfes = TcpFlowEntryState {
-                    // This must be the UFID of inbound traffic _as it
-                    // arrives_, not after it's processed.
-                    inbound_ufid: Some(ufid_in.clone()),
-                    tcp_state: tfs,
-                };
-
+                let tfes = TcpFlowEntryState::new_inbound(
+                    ufid_in.clone(),
+                    tfs,
+                    pkt_len,
+                );
                 // TODO kill unwrap
                 tcp_flows.add(ufid_out.clone(), tfes).unwrap();
                 Ok(tcp_state)
@@ -1471,7 +1477,12 @@ impl Port {
         // For inbound traffic the TCP flow table must be
         // checked _after_ processing take place.
         if pkt.meta().is_inner_tcp() {
-            match self.process_in_tcp_new(data, pkt.flow(), pkt.meta()) {
+            match self.process_in_tcp_new(
+                data,
+                pkt.flow(),
+                pkt.meta(),
+                pkt.len() as u64,
+            ) {
                 Ok(TcpState::Closed) => {
                     return Ok(ProcessResult::Modified);
                 }
@@ -1544,7 +1555,11 @@ impl Port {
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
                 if pkt.meta().is_inner_tcp() {
-                    match self.process_in_tcp_existing(data, pkt.meta()) {
+                    match self.process_in_tcp_existing(
+                        data,
+                        pkt.meta(),
+                        pkt.len() as u64,
+                    ) {
                         Ok(_) => return Ok(ProcessResult::Modified),
                         Err(e) => {
                             self.tcp_err(data, In, e, pkt);
@@ -1581,10 +1596,14 @@ impl Port {
         tcp_flows: &mut FlowTable<TcpFlowEntryState>,
         ufid_out: &InnerFlowId,
         pmeta: &PacketMeta,
+        pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, String> {
         match tcp_flows.get_mut(ufid_out) {
             Some(entry) => {
+                entry.hit();
                 let tfes = entry.state_mut();
+                tfes.segs_out += 1;
+                tfes.bytes_out += pkt_len;
                 let tcp = pmeta.inner_tcp().unwrap();
                 let res = tfes.tcp_state.process(
                     self.name_cstr.as_c_str(),
@@ -1624,6 +1643,7 @@ impl Port {
         data: &mut PortData,
         ufid_out: &InnerFlowId,
         pmeta: &PacketMeta,
+        pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, String> {
         let tcp = pmeta.inner_tcp().unwrap();
         let tcp_flows = &mut data.tcp_flows;
@@ -1632,7 +1652,10 @@ impl Port {
             // We may have already created a TCP flow entry
             // due to an inbound packet.
             Some(entry) => {
+                entry.hit();
                 let tfes = entry.state_mut();
+                tfes.segs_out += 1;
+                tfes.bytes_out += pkt_len;
                 let res = tfes.tcp_state.process(
                     self.name_cstr.as_c_str(),
                     Direction::Out,
@@ -1663,9 +1686,7 @@ impl Port {
                 };
 
                 // The inbound UFID is determined on the inbound side.
-                let tfes =
-                    TcpFlowEntryState { inbound_ufid: None, tcp_state: tfs };
-
+                let tfes = TcpFlowEntryState::new_outbound(tfs, pkt_len as u64);
                 // TODO kill unwrap
                 tcp_flows.add(ufid_out.clone(), tfes).unwrap();
                 tcp_state
@@ -1696,7 +1717,12 @@ impl Port {
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
         if pkt.meta().is_inner_tcp() {
-            match self.process_out_tcp_new(data, pkt.flow(), pkt.meta()) {
+            match self.process_out_tcp_new(
+                data,
+                pkt.flow(),
+                pkt.meta(),
+                pkt.len() as u64,
+            ) {
                 Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
                     tcp_closed = true;
                     self.uft_tcp_closed(
@@ -1774,6 +1800,7 @@ impl Port {
                         &mut data.tcp_flows,
                         pkt.flow(),
                         pkt.meta(),
+                        pkt.len() as u64,
                     ) {
                         Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
                             invalidated = true;
@@ -2048,8 +2075,42 @@ pub enum Pos {
 
 #[derive(Clone, Debug)]
 pub struct TcpFlowEntryState {
-    pub inbound_ufid: Option<InnerFlowId>,
-    pub tcp_state: TcpFlowState,
+    // This must be the UFID of inbound traffic _as it arrives_ from
+    // the network, not after it's processed.
+    inbound_ufid: Option<InnerFlowId>,
+    tcp_state: TcpFlowState,
+    segs_in: u64,
+    segs_out: u64,
+    bytes_in: u64,
+    bytes_out: u64,
+}
+
+impl TcpFlowEntryState {
+    fn new_inbound(
+        inbound_ufid: InnerFlowId,
+        tcp_state: TcpFlowState,
+        bytes_in: u64,
+    ) -> Self {
+        Self {
+            inbound_ufid: Some(inbound_ufid),
+            tcp_state,
+            segs_in: 1,
+            segs_out: 0,
+            bytes_in,
+            bytes_out: 0,
+        }
+    }
+
+    fn new_outbound(tcp_state: TcpFlowState, bytes_out: u64) -> Self {
+        Self {
+            inbound_ufid: None,
+            tcp_state,
+            segs_in: 0,
+            segs_out: 1,
+            bytes_in: 0,
+            bytes_out,
+        }
+    }
 }
 
 impl Display for TcpFlowEntryState {
@@ -2069,6 +2130,10 @@ impl Dump for TcpFlowEntryState {
             hits,
             inbound_ufid: self.inbound_ufid,
             tcp_state: TcpFlowStateDump::from(self.tcp_state),
+            segs_in: self.segs_in,
+            segs_out: self.segs_out,
+            bytes_in: self.bytes_in,
+            bytes_out: self.bytes_out,
         }
     }
 }
