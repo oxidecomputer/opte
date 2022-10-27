@@ -40,7 +40,7 @@ fn firewall_replace_rules() {
         [
             "firewall.flows.out, firewall.flows.in",
             "uft.out",
-            "stats.port.out_modified"
+            "stats.port.out_modified, stats.port.out_uft_miss"
         ]
     );
 
@@ -77,7 +77,10 @@ fn firewall_replace_rules() {
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g1,
-        ["firewall.flows.in, firewall.flows.out", "stats.port.out_modified",]
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.out_modified, stats.port.out_uft_miss",
+        ]
     );
 
     // ================================================================
@@ -99,7 +102,7 @@ fn firewall_replace_rules() {
         [
             "firewall.flows.in, firewall.flows.out",
             "uft.in",
-            "stats.port.in_modified"
+            "stats.port.in_modified, stats.port.in_uft_miss"
         ]
     );
 
@@ -142,7 +145,7 @@ fn firewall_replace_rules() {
     }
     update!(
         g2,
-        ["set:uft.in=0", "incr:stats.port.in_drop, stats.port.in_drop_layer",]
+        ["set:uft.in=0", "incr:stats.port.in_drop, stats.port.in_drop_layer, stats.port.in_uft_miss",]
     );
 }
 
@@ -206,7 +209,7 @@ fn firewall_vni_inbound() {
 
         _ => panic!("expected layer drop but got: {:?}", res),
     }
-    incr!(g1, ["stats.port.in_drop, stats.port.in_drop_layer"]);
+    incr!(g1, ["stats.port.in_drop, stats.port.in_drop_layer, stats.port.in_uft_miss"]);
 
     // ================================================================
     // Setup g2 as normal and process the packet again. This time it should
@@ -238,7 +241,7 @@ fn firewall_vni_inbound() {
         [
             "firewall.flows.in, firewall.flows.out",
             "uft.in",
-            "stats.port.in_modified"
+            "stats.port.in_modified, stats.port.in_uft_miss"
         ]
     );
 }
@@ -318,5 +321,5 @@ fn firewall_vni_outbound() {
 
         _ => panic!("expected layer drop but got: {:?}", res),
     }
-    incr!(g1, ["stats.port.out_drop, stats.port.out_drop_layer"]);
+    incr!(g1, ["stats.port.out_drop, stats.port.out_drop_layer, stats.port.out_uft_miss"]);
 }

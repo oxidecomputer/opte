@@ -161,7 +161,7 @@ fn port_transition_running() {
         [
             "firewall.flows.in, firewall.flows.out",
             "uft.out",
-            "stats.port.out_modified"
+            "stats.port.out_modified, stats.port.out_uft_miss"
         ]
     );
 }
@@ -191,7 +191,7 @@ fn port_transition_reset() {
         [
             "firewall.flows.in, firewall.flows.out",
             "uft.out",
-            "stats.port.out_modified"
+            "stats.port.out_modified, stats.port.out_uft_miss"
         ]
     );
     g1.port.reset();
@@ -243,7 +243,7 @@ fn port_transition_pause() {
         [
             "firewall.flows.out, firewall.flows.in",
             "uft.out",
-            "stats.port.out_modified"
+            "stats.port.out_modified, stats.port.out_uft_miss"
         ]
     );
 
@@ -254,7 +254,7 @@ fn port_transition_pause() {
         [
             "firewall.flows.in, firewall.flows.out",
             "uft.in",
-            "stats.port.in_modified"
+            "stats.port.in_modified, stats.port.in_uft_miss"
         ]
     );
 
@@ -321,12 +321,12 @@ fn port_transition_pause() {
     g1_ameta.clear();
     let res = g1.port.process(Out, &mut pkt2, &mut g1_ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["uft.out", "stats.port.out_modified"]);
+    incr!(g1, ["uft.out", "stats.port.out_modified, stats.port.out_uft_miss"]);
 
     g2_ameta.clear();
     let res = g2.port.process(In, &mut pkt2, &mut g2_ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g2, ["uft.in", "stats.port.in_modified"]);
+    incr!(g2, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
 }
 
 #[test]
@@ -398,7 +398,7 @@ fn gateway_icmp4_ping() {
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {:?}", res),
     };
-    assert_port!(g1);
+    incr!(g1, ["stats.port.out_uft_miss"]);
     let reply = hp.parse().unwrap();
     pcap.add_pkt(&reply);
     assert_eq!(reply.body_offset(), IP_SZ);
@@ -485,6 +485,7 @@ fn guest_to_guest_no_route() {
         [
             "firewall.flows.out, firewall.flows.in",
             "stats.port.out_drop, stats.port.out_drop_layer",
+            "stats.port.out_uft_miss",
         ]
     );
 }
@@ -538,7 +539,7 @@ fn guest_to_guest() {
         [
             "firewall.flows.out, firewall.flows.in",
             "uft.out",
-            "stats.port.out_modified",
+            "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
     assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ);
@@ -628,7 +629,7 @@ fn guest_to_guest() {
         [
             "firewall.flows.in, firewall.flows.out",
             "uft.in",
-            "stats.port.in_modified",
+            "stats.port.in_modified, stats.port.in_uft_miss",
         ]
     );
     assert_eq!(pkt2.body_offset(), TCP_SZ);
@@ -713,6 +714,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
         [
             "firewall.flows.in, firewall.flows.out",
             "stats.port.out_drop, stats.port.out_drop_layer",
+            "stats.port.out_uft_miss",
         ]
     );
 }
@@ -758,7 +760,7 @@ fn guest_to_internet() {
             "firewall.flows.out, firewall.flows.in",
             "nat.flows.out, nat.flows.in",
             "uft.out",
-            "stats.port.out_modified",
+            "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
     assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ);
@@ -877,7 +879,7 @@ fn snat_icmp4_echo_rewrite() {
             "firewall.flows.out, firewall.flows.in",
             "nat.flows.out, nat.flows.in",
             "uft.out",
-            "stats.port.out_modified",
+            "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
 
@@ -937,7 +939,7 @@ fn snat_icmp4_echo_rewrite() {
 
     let res = g1.port.process(In, &mut pkt2, &mut ameta);
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    incr!(g1, ["uft.in", "stats.port.in_modified"]);
+    incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
     assert_eq!(pkt2.body_offset(), IP_SZ);
     assert_eq!(pkt2.body_seg(), 1);
     let meta = pkt2.meta();
@@ -987,7 +989,7 @@ fn snat_icmp4_echo_rewrite() {
     assert_eq!(g1.port.stats_snap().out_uft_hit, 0);
     let res = g1.port.process(Out, &mut pkt3, &mut ameta);
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    incr!(g1, ["stats.port.out_modified"]);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(pkt3.body_offset(), VPC_ENCAP_SZ + IP_SZ);
     assert_eq!(pkt3.body_seg(), 1);
     let meta = pkt3.meta();
@@ -1037,7 +1039,7 @@ fn snat_icmp4_echo_rewrite() {
     assert_eq!(g1.port.stats_snap().in_uft_hit, 0);
     let res = g1.port.process(In, &mut pkt4, &mut ameta);
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    incr!(g1, ["stats.port.in_modified"]);
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(pkt4.body_offset(), IP_SZ);
     assert_eq!(pkt4.body_seg(), 1);
     let meta = pkt4.meta();
@@ -1203,7 +1205,7 @@ fn arp_gateway() {
 
         res => panic!("expected a Hairpin, got {:?}", res),
     }
-    assert_port!(g1);
+    incr!(g1, ["stats.port.out_uft_miss"]);
 }
 
 #[test]
@@ -1229,7 +1231,7 @@ fn flow_expiration() {
         [
             "firewall.flows.out, firewall.flows.in",
             "uft.out",
-            "stats.port.out_modified",
+            "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
 
@@ -1266,13 +1268,13 @@ fn gateway_icmpv6_ping() {
     let dst_ip = Ipv6Addr::from_eui64(&g1_cfg.gateway_mac);
     for src_ip in src_ips.iter().copied() {
         test_guest_to_gateway_icmpv6_ping(
-            &g1, &mut ameta, &g1_cfg, &mut pcap, src_ip, dst_ip,
+            &mut g1, &mut ameta, &g1_cfg, &mut pcap, src_ip, dst_ip,
         );
     }
 }
 
 fn test_guest_to_gateway_icmpv6_ping(
-    g1: &PortAndVps,
+    g1: &mut PortAndVps,
     ameta: &mut ActionMeta,
     g1_cfg: &VpcCfg,
     pcap: &mut PcapBuilder,
@@ -1307,7 +1309,7 @@ fn test_guest_to_gateway_icmpv6_ping(
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {:?}", res),
     };
-    assert_port!(g1);
+    incr!(g1, ["stats.port.out_uft_miss"]);
 
     let reply = hp.parse().unwrap();
     pcap.add_pkt(&reply);
@@ -1444,7 +1446,7 @@ fn gateway_router_advert_reply() {
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {:?}", res),
     };
-    assert_port!(g1);
+    incr!(g1, ["stats.port.out_uft_miss"]);
 
     let reply = hp.parse().unwrap();
     pcap.add_pkt(&reply);
@@ -1872,10 +1874,17 @@ fn test_gateway_neighbor_advert_reply() {
         match (res, d.na) {
             (Ok(ProcessResult::Drop { .. }), None) => {
                 // Dropped the packet, as we expected
-                incr!(g1, ["stats.port.out_drop, stats.port.out_drop_layer"]);
+                incr!(
+                    g1,
+                    [
+                        "stats.port.out_drop, stats.port.out_drop_layer",
+                        "stats.port.out_uft_miss"
+                    ]
+                );
                 continue;
             }
             (Ok(Hairpin(hp)), Some(na)) => {
+                incr!(g1, ["stats.port.out_uft_miss"]);
                 assert_port!(g1);
                 validate_hairpin_advert(&mut pcap, hp, na);
             }
@@ -2186,7 +2195,7 @@ fn establish_http_conn(
             "firewall.flows.out, firewall.flows.in",
             "nat.flows.in, nat.flows.out",
             "uft.out",
-            "stats.port.out_modified",
+            "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
     let snat_port = pkt1.meta().inner.ulp.unwrap().src_port();
@@ -2218,7 +2227,7 @@ fn establish_http_conn(
     ameta.clear();
     let res = g1.port.process(In, &mut pkt2, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["uft.in", "stats.port.in_modified"]);
+    incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
 
     // ================================================================
     // Step 3
@@ -2234,7 +2243,7 @@ fn establish_http_conn(
     ameta.clear();
     let res = g1.port.process(Out, &mut pkt3, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["stats.port.out_modified"]);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     snat_port
 }
 
@@ -2325,7 +2334,8 @@ fn uft_lft_invalidation_out() {
         [
             "set:firewall.flows.out=0, firewall.flows.in=0",
             "set:uft.in=0, uft.out=0",
-            "set:stats.port.out_drop=1, stats.port.out_drop_layer=1",
+            "incr:stats.port.out_drop, stats.port.out_drop_layer",
+            "incr:stats.port.out_uft_miss",
         ]
     );
 }
@@ -2390,7 +2400,7 @@ fn uft_lft_invalidation_in() {
     ameta.clear();
     let res = g1.port.process(Out, &mut pkt1, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["stats.port.out_modified"]);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
 
     let mut pkt2 = http_get_ack2(
         g1_cfg.boundary_services.mac,
@@ -2402,7 +2412,7 @@ fn uft_lft_invalidation_in() {
     pkt2 = encap(pkt2, bs_phys, g1_phys);
     ameta.clear();
     let res = g1.port.process(In, &mut pkt2, &mut ameta);
-    incr!(g1, ["stats.port.in_modified"]);
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert!(matches!(res, Ok(Modified)));
 
     // ================================================================
@@ -2455,6 +2465,7 @@ fn uft_lft_invalidation_in() {
             "set:nat.flows.in=1, nat.flows.out=1",
             "set:uft.in=0, uft.out=0",
             "incr:stats.port.in_drop, stats.port.in_drop_layer",
+            "incr:stats.port.in_uft_miss",
         ]
     );
 }
@@ -2512,7 +2523,7 @@ fn tcp_outbound() {
             "firewall.flows.out, firewall.flows.in",
             "nat.flows.in, nat.flows.out",
             "uft.out",
-            "stats.port.out_modified",
+            "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
     let snat_port = pkt1.meta().inner.ulp.unwrap().src_port();
@@ -2533,7 +2544,7 @@ fn tcp_outbound() {
     ameta.clear();
     let res = g1.port.process(In, &mut pkt2, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["uft.in", "stats.port.in_modified"]);
+    incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
 
     // ================================================================
@@ -2548,7 +2559,7 @@ fn tcp_outbound() {
     let mut ameta = ActionMeta::new();
     let res = g1.port.process(Out, &mut pkt3, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["stats.port.out_modified"]);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
 
     // ================================================================
@@ -2563,7 +2574,7 @@ fn tcp_outbound() {
     let mut ameta = ActionMeta::new();
     let res = g1.port.process(Out, &mut pkt4, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["stats.port.out_modified"]);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
 
     // ================================================================
@@ -2580,7 +2591,7 @@ fn tcp_outbound() {
     ameta.clear();
     let res = g1.port.process(In, &mut pkt5, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["stats.port.in_modified"]);
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
 
     // ================================================================
@@ -2597,7 +2608,7 @@ fn tcp_outbound() {
     ameta.clear();
     let res = g1.port.process(In, &mut pkt6, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["stats.port.in_modified"]);
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
 
     // ================================================================
@@ -2612,7 +2623,7 @@ fn tcp_outbound() {
     let mut ameta = ActionMeta::new();
     let res = g1.port.process(Out, &mut pkt7, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["stats.port.out_modified"]);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
 
     // ================================================================
@@ -2627,7 +2638,7 @@ fn tcp_outbound() {
     let mut ameta = ActionMeta::new();
     let res = g1.port.process(Out, &mut pkt8, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["stats.port.out_modified"]);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::FinWait1, g1.port.tcp_state(&flow));
 
     // ================================================================
@@ -2644,7 +2655,7 @@ fn tcp_outbound() {
     ameta.clear();
     let res = g1.port.process(In, &mut pkt9, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["stats.port.in_modified"]);
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::FinWait2, g1.port.tcp_state(&flow));
 
     // ================================================================
@@ -2661,7 +2672,7 @@ fn tcp_outbound() {
     ameta.clear();
     let res = g1.port.process(In, &mut pkt10, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["stats.port.in_modified"]);
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow));
 
     // ================================================================
@@ -2676,7 +2687,7 @@ fn tcp_outbound() {
     let mut ameta = ActionMeta::new();
     let res = g1.port.process(Out, &mut pkt11, &mut ameta);
     assert!(matches!(res, Ok(Modified)));
-    incr!(g1, ["stats.port.out_modified"]);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow));
 
     // TODO uncomment in follow up commit and make sure to expire TCP flows.

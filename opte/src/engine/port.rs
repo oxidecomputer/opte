@@ -504,6 +504,10 @@ struct PortStats {
     /// The number of inbound packets which matched a UFT entry.
     in_uft_hit: KStatU64,
 
+    /// The number of inbound packets which did not match a UFT entry
+    /// and resulted in rule processing.
+    in_uft_miss: KStatU64,
+
     /// The number of outbound packets marked as
     /// [`ProcessResult::Bypass`].
     out_bypass: KStatU64,
@@ -535,6 +539,10 @@ struct PortStats {
 
     /// The number of outbound packets which matched a UFT entry.
     out_uft_hit: KStatU64,
+
+    /// The number of outbound packets which did not match a UFT entry
+    /// and resulted in rule processing.
+    out_uft_miss: KStatU64,
 }
 
 struct PortData {
@@ -1426,6 +1434,7 @@ impl Port {
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::In;
 
+        data.stats.vals.in_uft_miss += 1;
         let flow_before = pkt.flow().clone();
         let mut xforms = Transforms::new();
         let res = self.layers_process(data, In, pkt, &mut xforms, ameta);
@@ -1712,6 +1721,7 @@ impl Port {
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::Out;
 
+        data.stats.vals.out_uft_miss += 1;
         let mut tcp_closed = false;
 
         // For outbound traffic the TCP flow table must be checked

@@ -130,9 +130,13 @@ impl VpcPortState {
         counts.insert("stats.port.in_modified".to_string(), 0);
         counts.insert("stats.port.in_drop".to_string(), 0);
         counts.insert("stats.port.in_drop_layer".to_string(), 0);
+        counts.insert("stats.port.in_uft_hit".to_string(), 0);
+        counts.insert("stats.port.in_uft_miss".to_string(), 0);
         counts.insert("stats.port.out_drop".to_string(), 0);
         counts.insert("stats.port.out_drop_layer".to_string(), 0);
         counts.insert("stats.port.out_modified".to_string(), 0);
+        counts.insert("stats.port.out_uft_hit".to_string(), 0);
+        counts.insert("stats.port.out_uft_miss".to_string(), 0);
 
         Self { counts, port_state: PortState::Ready }
     }
@@ -161,9 +165,13 @@ pub fn port_stats_val(stats: PortStatsSnap, stat: &str) -> u64 {
         "in_drop" => stats.in_drop,
         "in_drop_layer" => stats.in_drop_layer,
         "in_modified" => stats.in_modified,
+        "in_uft_hit" => stats.in_uft_hit,
+        "in_uft_miss" => stats.in_uft_miss,
         "out_drop" => stats.out_drop,
         "out_drop_layer" => stats.out_drop_layer,
         "out_modified" => stats.out_modified,
+        "out_uft_hit" => stats.out_uft_hit,
+        "out_uft_miss" => stats.out_uft_miss,
         _ => todo!("add {stat} to port_stat_val()"),
     }
 }
