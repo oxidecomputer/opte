@@ -633,6 +633,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
 #[no_mangle]
 fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
+    let state = get_xde_state();
     let mut devs = unsafe { xde_devs.write() };
     let index = match devs.iter().position(|x| x.devname == req.xde_devname) {
         Some(index) => index,
@@ -640,7 +641,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     };
     let xde = &mut devs[index];
 
-    // destroy dls devnet device
+    // Destroy DLS devnet device.
     let ret = unsafe {
         let mut tmpid = xde.linkid;
         dls::dls_devnet_destroy(xde.mh, &mut tmpid, boolean_t::B_TRUE)
@@ -656,7 +657,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
         }
     }
 
-    // unregister xde mac handle
+    // Unregister this xde's mac handle.
     match unsafe { mac::mac_unregister(xde.mh) } {
         0 => {}
         err => {
@@ -673,7 +674,24 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
         }
     }
 
-    // remove xde
+    // Remove the VPC mappings for this port.
+    let cfg = &xde.vpc_cfg;
+    let phys_net =
+        PhysNet { ether: cfg.guest_mac, ip: cfg.phys_ip, vni: cfg.vni };
+    match cfg.ip_cfg {
+        IpCfg::Ipv4(ref ipv4) => {
+            state.vpc_map.del(&IpAddr::Ip4(ipv4.private_ip), &phys_net)
+        }
+        IpCfg::Ipv6(ref ipv6) => {
+            state.vpc_map.del(&IpAddr::Ip6(ipv6.private_ip), &phys_net)
+        }
+        IpCfg::DualStack { ref ipv4, ref ipv6 } => {
+            state.vpc_map.del(&IpAddr::Ip4(ipv4.private_ip), &phys_net);
+            state.vpc_map.del(&IpAddr::Ip6(ipv6.private_ip), &phys_net)
+        }
+    };
+
+    // Remove the xde device entry.
     devs.remove(index);
     Ok(NoResp::default())
 }

@@ -276,11 +276,20 @@ pub struct PhysNet {
     pub vni: Vni,
 }
 
-/// The physical address for a guest.
+/// The physical address for a guest, minus the VNI.
+///
+/// We save space in the VPC mappings by grouping guest
+/// Virtual-to-Physical mappings by VNI.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct GuestPhysAddr {
     pub ether: MacAddr,
     pub ip: Ipv6Addr,
+}
+
+impl From<PhysNet> for GuestPhysAddr {
+    fn from(phys: PhysNet) -> Self {
+        Self { ether: phys.ether, ip: phys.ip }
+    }
 }
 
 /// The target for a given router entry.

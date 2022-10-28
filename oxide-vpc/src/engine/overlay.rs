@@ -410,7 +410,9 @@ impl VpcMappings {
     /// Add a new mapping from VIP to [`PhysNet`], returning a pointer
     /// to the [`Virt2Phys`] this mapping belongs to.
     pub fn add(&self, vip: IpAddr, phys: PhysNet) -> Arc<Virt2Phys> {
-        let guest_phys = GuestPhysAddr { ether: phys.ether, ip: phys.ip };
+        // We convert to GuestPhysAddr because it saves us from
+        // redundant storage of the VNI.
+        let guest_phys = GuestPhysAddr::from(phys);
         let mut lock = self.inner.lock();
 
         match lock.get(&phys.vni) {
@@ -425,6 +427,25 @@ impl VpcMappings {
                 lock.insert(phys.vni, v2p.clone());
                 v2p
             }
+        }
+    }
+
+    /// Delete the mapping for the given VIP in the given VNI.
+    ///
+    /// Return the existing entry, if there is one.
+    pub fn del(&self, vip: &IpAddr, phys: &PhysNet) -> Option<PhysNet> {
+        match self.inner.lock().get(&phys.vni) {
+            Some(v2p) => match v2p.remove(vip) {
+                Some(guest_phys) => Some(PhysNet {
+                    ether: guest_phys.ether,
+                    ip: guest_phys.ip,
+                    vni: phys.vni,
+                }),
+
+                None => None,
+            },
+
+            None => None,
         }
     }
 
