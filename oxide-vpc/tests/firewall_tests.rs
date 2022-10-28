@@ -6,7 +6,6 @@ use common::*;
 fn firewall_replace_rules() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
@@ -32,8 +31,7 @@ fn firewall_replace_rules() {
     // and verify if passes the firewall.
     // ================================================================
     let mut pkt1 = http_syn(&g1_cfg, &g2_cfg);
-    ameta.clear();
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g1,
@@ -72,8 +70,7 @@ fn firewall_replace_rules() {
     );
 
     let mut pkt2 = http_syn(&g1_cfg, &g2_cfg);
-    ameta.clear();
-    let res = g1.port.process(Out, &mut pkt2, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g1,
@@ -94,8 +91,7 @@ fn firewall_replace_rules() {
         unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
     let mut pkt3_copy =
         Packet::<Initialized>::copy(&pkt3.all_bytes()).parse().unwrap();
-    ameta.clear();
-    let res = g2.port.process(In, &mut pkt3, &mut ameta);
+    let res = g2.port.process(In, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g2,
@@ -131,8 +127,7 @@ fn firewall_replace_rules() {
 
     // Verify the packet is dropped and that the firewall flow table
     // entry (along with its dual) was invalidated.
-    ameta.clear();
-    let res = g2.port.process(In, &mut pkt3_copy, &mut ameta);
+    let res = g2.port.process(In, &mut pkt3_copy, ActionMeta::new());
     match res {
         Ok(ProcessResult::Drop {
             reason: DropReason::Layer { name, reason: lreason },
@@ -160,7 +155,6 @@ fn firewall_vni_inbound() {
     // could prove useful in other tests.
     let g1_ext_ip = "10.77.78.9".parse().unwrap();
     g1_cfg.set_ext_ipv4(g1_ext_ip);
-    let mut ameta = ActionMeta::new();
     let custom = ["set:nat.rules.in=1", "set:nat.rules.out=3"];
     let mut g1 = oxide_net_setup2("g1_port", &g1_cfg, None, Some(&custom));
     g1.port.start();
@@ -198,7 +192,7 @@ fn firewall_vni_inbound() {
     // VPC firewall rules dictate that only inbound traffic from the
     // same VPC should be allowed.
     // ================================================================
-    let res = g1.port.process(In, &mut pkt1, &mut ameta);
+    let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
     match res {
         Ok(ProcessResult::Drop {
             reason: DropReason::Layer { name, reason: lreason },
@@ -233,8 +227,7 @@ fn firewall_vni_inbound() {
         g1_cfg.ipv4().private_ip,
     );
     pkt2 = encap(pkt2, phys_src, phys_dst);
-    ameta.clear();
-    let res = g1.port.process(In, &mut pkt2, &mut ameta);
+    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g1,
@@ -254,7 +247,6 @@ fn firewall_vni_outbound() {
     // ================================================================
     let g1_cfg = g1_cfg();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
-    let mut ameta = ActionMeta::new();
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -310,7 +302,7 @@ fn firewall_vni_outbound() {
     // ================================================================
     // Try to send the packet and verify the firewall does not allow it.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     match res {
         Ok(ProcessResult::Drop {
             reason: DropReason::Layer { name, reason: lreason },

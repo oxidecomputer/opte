@@ -964,7 +964,7 @@ impl Port {
         &self,
         dir: Direction,
         pkt: &mut Packet<Parsed>,
-        ameta: &mut ActionMeta,
+        mut ameta: ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
         let mut data = self.data.lock();
         check_state!(data.state, [PortState::Running])
@@ -975,13 +975,13 @@ impl Port {
         self.port_process_entry_probe(dir, epoch, &pkt);
         let res = match dir {
             Direction::Out => {
-                let res = self.process_out(&mut data, epoch, pkt, ameta);
+                let res = self.process_out(&mut data, epoch, pkt, &mut ameta);
                 Self::update_stats_out(&mut data.stats.vals, &res);
                 res
             }
 
             Direction::In => {
-                let res = self.process_in(&mut data, epoch, pkt, ameta);
+                let res = self.process_in(&mut data, epoch, pkt, &mut ameta);
                 Self::update_stats_in(&mut data.stats.vals, &res);
                 res
             }

@@ -1305,8 +1305,7 @@ fn guest_loopback(
             // We have found a matching Port on this host; "loop back"
             // the packet into the inbound processing path of the
             // destination Port.
-            let mut meta = ActionMeta::new();
-            match dest_dev.port.process(In, &mut pkt, &mut meta) {
+            match dest_dev.port.process(In, &mut pkt, ActionMeta::new()) {
                 Ok(ProcessResult::Modified) => {
                     guest_loopback_probe(&pkt, src_dev, dest_dev);
 
@@ -1443,8 +1442,7 @@ unsafe extern "C" fn xde_mc_tx(
     // The port processing code will fire a probe that describes what
     // action was taken -- there should be no need to add probes or
     // prints here.
-    let mut meta = ActionMeta::new();
-    let res = port.process(Direction::Out, &mut pkt, &mut meta);
+    let res = port.process(Direction::Out, &mut pkt, ActionMeta::new());
     match res {
         Ok(ProcessResult::Modified) => {
             if xde_ext_ip_hack == 1 {
@@ -2055,9 +2053,12 @@ unsafe extern "C" fn xde_rx(
                 }
 
                 let port = &(*dev).port;
-                let mut meta = ActionMeta::new();
                 let mut pkt_copy = Packet::copy(&bytes).parse().unwrap();
-                let res = port.process(Direction::In, &mut pkt_copy, &mut meta);
+                let res = port.process(
+                    Direction::In,
+                    &mut pkt_copy,
+                    ActionMeta::new(),
+                );
 
                 match res {
                     Ok(ProcessResult::Modified) => {
@@ -2102,8 +2103,7 @@ unsafe extern "C" fn xde_rx(
     }
 
     let port = &(*dev).port;
-    let mut meta = ActionMeta::new();
-    let res = port.process(Direction::In, &mut pkt, &mut meta);
+    let res = port.process(Direction::In, &mut pkt, ActionMeta::new());
     match res {
         Ok(ProcessResult::Modified) => {
             mac::mac_rx((*dev).mh, mrh, pkt.unwrap());

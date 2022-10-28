@@ -140,7 +140,6 @@ fn check_layers() {
 fn port_transition_running() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
 
@@ -149,12 +148,12 @@ fn port_transition_running() {
     // -> Running.
     // ================================================================
     let mut pkt1 = tcp_telnet_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Err(ProcessError::BadState(_))));
     assert_port!(g1);
     g1.port.start();
     set!(g1, "port_state=running");
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g1,
@@ -172,7 +171,6 @@ fn port_transition_running() {
 fn port_transition_reset() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
 
@@ -184,7 +182,7 @@ fn port_transition_reset() {
     let mut pkt1 = tcp_telnet_syn(&g1_cfg, &g2_cfg);
     g1.port.start();
     set!(g1, "port_state=running");
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g1,
@@ -196,7 +194,7 @@ fn port_transition_reset() {
     );
     g1.port.reset();
     update!(g1, ["set:port_state=ready", "zero_flows"]);
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Err(ProcessError::BadState(_))));
     assert_port!(g1);
 }
@@ -210,8 +208,6 @@ fn port_transition_reset() {
 fn port_transition_pause() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut g1_ameta = ActionMeta::new();
-    let mut g2_ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
 
@@ -236,7 +232,7 @@ fn port_transition_pause() {
     // Send the HTTP SYN.
     // ================================================================
     let mut pkt1 = http_syn(&g2_cfg, &g1_cfg);
-    let res = g2.port.process(Out, &mut pkt1, &mut g2_ameta);
+    let res = g2.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g2,
@@ -247,7 +243,7 @@ fn port_transition_pause() {
         ]
     );
 
-    let res = g1.port.process(In, &mut pkt1, &mut g1_ameta);
+    let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g1,
@@ -288,7 +284,7 @@ fn port_transition_pause() {
         ),
         Err(OpteError::BadState(_))
     ));
-    let res = g2.port.process(Out, &mut pkt1, &mut g2_ameta);
+    let res = g2.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Err(ProcessError::BadState(_))));
     let fw_rule: FirewallRule =
         "action=allow priority=10 dir=in protocol=tcp port=22".parse().unwrap();
@@ -318,13 +314,11 @@ fn port_transition_pause() {
     set!(g2, "port_state=running");
 
     let mut pkt2 = http_syn_ack(&g1_cfg, &g2_cfg);
-    g1_ameta.clear();
-    let res = g1.port.process(Out, &mut pkt2, &mut g1_ameta);
+    let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["uft.out", "stats.port.out_modified, stats.port.out_uft_miss"]);
 
-    g2_ameta.clear();
-    let res = g2.port.process(In, &mut pkt2, &mut g2_ameta);
+    let res = g2.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g2, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
 }
@@ -365,7 +359,6 @@ fn add_remove_fw_rule() {
 #[test]
 fn gateway_icmp4_ping() {
     let g1_cfg = g1_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
@@ -393,7 +386,7 @@ fn gateway_icmp4_ping() {
     // direction and verify it results in an Echo Reply Hairpin packet
     // back to guest.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     let hp = match res {
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {:?}", res),
@@ -456,7 +449,6 @@ fn gateway_icmp4_ping() {
 fn guest_to_guest_no_route() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
@@ -469,7 +461,7 @@ fn guest_to_guest_no_route() {
     .unwrap();
     update!(g1, ["incr:epoch", "set:router.rules.out=1"]);
     let mut pkt1 = http_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     chk!(g1, matches!(res, Ok(ProcessResult::Drop { .. })));
     // XXX The firewall layer comes before the router layer (in the
     // outbound direction). The firewall layer allows this traffic;
@@ -495,7 +487,6 @@ fn guest_to_guest_no_route() {
 fn guest_to_guest() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
@@ -531,7 +522,7 @@ fn guest_to_guest() {
     // Run the packet through g1's port in the outbound direction and
     // verify the resulting packet meets expectations.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     pcap_phys1.add_pkt(&pkt1);
     assert!(matches!(res, Ok(Modified)));
     incr!(
@@ -621,7 +612,7 @@ fn guest_to_guest() {
         unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
     pcap_phys2.add_pkt(&pkt2);
 
-    let res = g2.port.process(In, &mut pkt2, &mut ameta);
+    let res = g2.port.process(In, &mut pkt2, ActionMeta::new());
     pcap_guest2.add_pkt(&pkt2);
     assert!(matches!(res, Ok(Modified)));
     incr!(
@@ -682,7 +673,6 @@ fn guest_to_guest_diff_vpc_no_peer() {
     let g1_cfg = g1_cfg();
     let mut g2_cfg = g2_cfg();
     g2_cfg.vni = Vni::new(100u32).unwrap();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
@@ -707,7 +697,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // verify the packet is dropped.
     // ================================================================
     let mut g1_pkt = http_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut g1_pkt, &mut ameta);
+    let res = g1.port.process(Out, &mut g1_pkt, ActionMeta::new());
     assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
     incr!(
         g1,
@@ -723,7 +713,6 @@ fn guest_to_guest_diff_vpc_no_peer() {
 #[test]
 fn guest_to_internet() {
     let g1_cfg = g1_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
@@ -752,7 +741,7 @@ fn guest_to_internet() {
     // Run the packet through g1's port in the outbound direction and
     // verify the resulting packet meets expectations.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(
         g1,
@@ -839,7 +828,6 @@ fn guest_to_internet() {
 #[test]
 fn snat_icmp4_echo_rewrite() {
     let g1_cfg = g1_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
@@ -871,7 +859,7 @@ fn snat_icmp4_echo_rewrite() {
         &data[..],
     );
 
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(
         g1,
@@ -937,7 +925,7 @@ fn snat_icmp4_echo_rewrite() {
     };
     pkt2 = encap(pkt2, bsvc_phys, g1_phys);
 
-    let res = g1.port.process(In, &mut pkt2, &mut ameta);
+    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
     assert_eq!(pkt2.body_offset(), IP_SZ);
@@ -987,7 +975,7 @@ fn snat_icmp4_echo_rewrite() {
     );
 
     assert_eq!(g1.port.stats_snap().out_uft_hit, 0);
-    let res = g1.port.process(Out, &mut pkt3, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(pkt3.body_offset(), VPC_ENCAP_SZ + IP_SZ);
@@ -1037,7 +1025,7 @@ fn snat_icmp4_echo_rewrite() {
     );
 
     assert_eq!(g1.port.stats_snap().in_uft_hit, 0);
-    let res = g1.port.process(In, &mut pkt4, &mut ameta);
+    let res = g1.port.process(In, &mut pkt4, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(pkt4.body_offset(), IP_SZ);
@@ -1144,7 +1132,6 @@ fn arp_gateway() {
     use opte::engine::ether::ETHER_TYPE_IPV4;
 
     let cfg = g1_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("arp_hairpin", &cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
@@ -1178,7 +1165,7 @@ fn arp_gateway() {
     let _ = wtr.write(ArpEth4PayloadRaw::from(arp).as_bytes()).unwrap();
     let mut pkt = wtr.finish().parse().unwrap();
 
-    let res = g1.port.process(Out, &mut pkt, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt, ActionMeta::new());
     match res {
         Ok(Hairpin(hppkt)) => {
             let hppkt = hppkt.parse().unwrap();
@@ -1212,7 +1199,6 @@ fn arp_gateway() {
 fn flow_expiration() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
@@ -1224,7 +1210,7 @@ fn flow_expiration() {
     // verify the resulting packet meets expectations.
     // ================================================================
     let mut pkt1 = http_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g1,
@@ -1255,7 +1241,6 @@ fn flow_expiration() {
 #[test]
 fn gateway_icmpv6_ping() {
     let g1_cfg = g1_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
@@ -1268,14 +1253,13 @@ fn gateway_icmpv6_ping() {
     let dst_ip = Ipv6Addr::from_eui64(&g1_cfg.gateway_mac);
     for src_ip in src_ips.iter().copied() {
         test_guest_to_gateway_icmpv6_ping(
-            &mut g1, &mut ameta, &g1_cfg, &mut pcap, src_ip, dst_ip,
+            &mut g1, &g1_cfg, &mut pcap, src_ip, dst_ip,
         );
     }
 }
 
 fn test_guest_to_gateway_icmpv6_ping(
     g1: &mut PortAndVps,
-    ameta: &mut ActionMeta,
     g1_cfg: &VpcCfg,
     pcap: &mut PcapBuilder,
     src_ip: Ipv6Addr,
@@ -1304,7 +1288,7 @@ fn test_guest_to_gateway_icmpv6_ping(
     // direction and verify it results in an Echo Reply Hairpin packet
     // back to guest.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     let hp = match res {
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {:?}", res),
@@ -1423,8 +1407,6 @@ fn gateway_router_advert_reply() {
     use smoltcp::time::Duration;
 
     let g1_cfg = g1_cfg();
-    // TODO think I need to fix use of meta in ipv6 tests
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
@@ -1441,7 +1423,7 @@ fn gateway_router_advert_reply() {
     // direction and verify it results in an Router Advertisement
     // hairpin back to guest.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     let hp = match res {
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {:?}", res),
@@ -1860,7 +1842,6 @@ fn validate_hairpin_advert(
 #[test]
 fn test_gateway_neighbor_advert_reply() {
     let g1_cfg = g1_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
@@ -1870,7 +1851,7 @@ fn test_gateway_neighbor_advert_reply() {
     for d in data.into_iter() {
         let mut pkt = generate_neighbor_solicitation(&d.ns);
         pcap.add_pkt(&pkt);
-        let res = g1.port.process(Out, &mut pkt, &mut ameta);
+        let res = g1.port.process(Out, &mut pkt, ActionMeta::new());
         match (res, d.na) {
             (Ok(ProcessResult::Drop { .. }), None) => {
                 // Dropped the packet, as we expected
@@ -2032,7 +2013,6 @@ fn verify_dhcpv6_essentials<'a>(
 #[test]
 fn test_reply_to_dhcpv6_solicit_or_request() {
     let g1_cfg = g1_cfg();
-    let mut ameta = ActionMeta::new();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
@@ -2076,8 +2056,10 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
             let mut request_pkt =
                 packet_from_client_dhcpv6_message(&g1_cfg, &request);
             pcap.add_pkt(&request_pkt);
-            let res =
-                g1.port.process(Out, &mut request_pkt, &mut ameta).unwrap();
+            let res = g1
+                .port
+                .process(Out, &mut request_pkt, ActionMeta::new())
+                .unwrap();
             if let Hairpin(hp) = res {
                 let reply_pkt = hp.parse().unwrap();
                 pcap.add_pkt(&reply_pkt);
@@ -2186,8 +2168,7 @@ fn establish_http_conn(
         GW_MAC_ADDR,
         dst_ip,
     );
-    let mut ameta = ActionMeta::new();
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g1,
@@ -2224,8 +2205,7 @@ fn establish_http_conn(
         vni: g1_cfg.vni,
     };
     pkt2 = encap(pkt2, bs_phys, g1_phys);
-    ameta.clear();
-    let res = g1.port.process(In, &mut pkt2, &mut ameta);
+    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
 
@@ -2240,8 +2220,7 @@ fn establish_http_conn(
         GW_MAC_ADDR,
         dst_ip,
     );
-    ameta.clear();
-    let res = g1.port.process(Out, &mut pkt3, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     snat_port
@@ -2284,7 +2263,6 @@ fn uft_lft_invalidation_out() {
     // Step 2
     // ================================================================
     let dst_ip = "52.10.128.69".parse().unwrap();
-    let mut ameta = ActionMeta::new();
     let _snat_port = establish_http_conn(&g1_cfg, &mut g1, dst_ip);
 
     // ================================================================
@@ -2317,8 +2295,7 @@ fn uft_lft_invalidation_out() {
         GW_MAC_ADDR,
         dst_ip,
     );
-    ameta.clear();
-    let res = g1.port.process(Out, &mut pkt4, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt4, ActionMeta::new());
     match res {
         Ok(ProcessResult::Drop {
             reason: DropReason::Layer { name, reason: lreason },
@@ -2378,7 +2355,6 @@ fn uft_lft_invalidation_in() {
     // Step 2
     // ================================================================
     let dst_ip = "52.10.128.69".parse().unwrap();
-    let mut ameta = ActionMeta::new();
     let bs_phys = TestIpPhys {
         ip: g1_cfg.boundary_services.ip,
         mac: g1_cfg.boundary_services.mac,
@@ -2397,8 +2373,7 @@ fn uft_lft_invalidation_in() {
         GW_MAC_ADDR,
         dst_ip,
     );
-    ameta.clear();
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
 
@@ -2410,8 +2385,7 @@ fn uft_lft_invalidation_in() {
         snat_port,
     );
     pkt2 = encap(pkt2, bs_phys, g1_phys);
-    ameta.clear();
-    let res = g1.port.process(In, &mut pkt2, &mut ameta);
+    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert!(matches!(res, Ok(Modified)));
 
@@ -2447,8 +2421,7 @@ fn uft_lft_invalidation_in() {
         snat_port,
     );
     pkt3 = encap(pkt3, bs_phys, g1_phys);
-    ameta.clear();
-    let res = g1.port.process(In, &mut pkt3, &mut ameta);
+    let res = g1.port.process(In, &mut pkt3, ActionMeta::new());
     match res {
         Ok(ProcessResult::Drop {
             reason: DropReason::Layer { name, reason: lreason },
@@ -2514,8 +2487,7 @@ fn tcp_outbound() {
         dst_ip,
     );
     let flow = pkt1.flow().clone();
-    let mut ameta = ActionMeta::new();
-    let res = g1.port.process(Out, &mut pkt1, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
         g1,
@@ -2541,8 +2513,7 @@ fn tcp_outbound() {
         snat_port,
     );
     pkt2 = encap(pkt2, bs_phys, g1_phys);
-    ameta.clear();
-    let res = g1.port.process(In, &mut pkt2, &mut ameta);
+    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
@@ -2556,8 +2527,7 @@ fn tcp_outbound() {
         GW_MAC_ADDR,
         dst_ip,
     );
-    let mut ameta = ActionMeta::new();
-    let res = g1.port.process(Out, &mut pkt3, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
@@ -2571,8 +2541,7 @@ fn tcp_outbound() {
         GW_MAC_ADDR,
         dst_ip,
     );
-    let mut ameta = ActionMeta::new();
-    let res = g1.port.process(Out, &mut pkt4, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt4, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
@@ -2588,8 +2557,7 @@ fn tcp_outbound() {
         snat_port,
     );
     pkt5 = encap(pkt5, bs_phys, g1_phys);
-    ameta.clear();
-    let res = g1.port.process(In, &mut pkt5, &mut ameta);
+    let res = g1.port.process(In, &mut pkt5, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
@@ -2605,8 +2573,7 @@ fn tcp_outbound() {
         snat_port,
     );
     pkt6 = encap(pkt6, bs_phys, g1_phys);
-    ameta.clear();
-    let res = g1.port.process(In, &mut pkt6, &mut ameta);
+    let res = g1.port.process(In, &mut pkt6, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
@@ -2620,8 +2587,7 @@ fn tcp_outbound() {
         GW_MAC_ADDR,
         dst_ip,
     );
-    let mut ameta = ActionMeta::new();
-    let res = g1.port.process(Out, &mut pkt7, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt7, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
@@ -2635,8 +2601,7 @@ fn tcp_outbound() {
         GW_MAC_ADDR,
         dst_ip,
     );
-    let mut ameta = ActionMeta::new();
-    let res = g1.port.process(Out, &mut pkt8, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt8, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::FinWait1, g1.port.tcp_state(&flow));
@@ -2652,8 +2617,7 @@ fn tcp_outbound() {
         snat_port,
     );
     pkt9 = encap(pkt9, bs_phys, g1_phys);
-    ameta.clear();
-    let res = g1.port.process(In, &mut pkt9, &mut ameta);
+    let res = g1.port.process(In, &mut pkt9, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::FinWait2, g1.port.tcp_state(&flow));
@@ -2669,8 +2633,7 @@ fn tcp_outbound() {
         snat_port,
     );
     pkt10 = encap(pkt10, bs_phys, g1_phys);
-    ameta.clear();
-    let res = g1.port.process(In, &mut pkt10, &mut ameta);
+    let res = g1.port.process(In, &mut pkt10, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow));
@@ -2684,8 +2647,7 @@ fn tcp_outbound() {
         GW_MAC_ADDR,
         dst_ip,
     );
-    let mut ameta = ActionMeta::new();
-    let res = g1.port.process(Out, &mut pkt11, &mut ameta);
+    let res = g1.port.process(Out, &mut pkt11, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow));
