@@ -454,15 +454,23 @@ fn guest_to_guest_no_route() {
     g1.port.start();
     set!(g1, "port_state=running");
     // Make sure the router is configured to drop all packets.
-    router::replace(
+    router::del_entry(
         &g1.port,
-        vec![(IpCidr::Ip4("0.0.0.0/0".parse().unwrap()), RouterTarget::Drop)],
+        IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet)),
     )
     .unwrap();
-    update!(g1, ["incr:epoch", "set:router.rules.out=1"]);
+    update!(g1, ["incr:epoch", "set:router.rules.out=0"]);
     let mut pkt1 = http_syn(&g1_cfg, &g2_cfg);
     let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    chk!(g1, matches!(res, Ok(ProcessResult::Drop { .. })));
+    assert_drop!(
+        res,
+        DropReason::Layer {
+            name: "router".to_string(),
+            reason: DenyReason::Default,
+        }
+    );
+
     // XXX The firewall layer comes before the router layer (in the
     // outbound direction). The firewall layer allows this traffic;
     // and a flow is created, regardless of the fact that a later
@@ -698,7 +706,13 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // ================================================================
     let mut g1_pkt = http_syn(&g1_cfg, &g2_cfg);
     let res = g1.port.process(Out, &mut g1_pkt, ActionMeta::new());
-    assert!(matches!(res, Ok(ProcessResult::Drop { .. })));
+    assert_drop!(
+        res,
+        DropReason::Layer {
+            name: "overlay".to_string(),
+            reason: DenyReason::Action,
+        }
+    );
     incr!(
         g1,
         [
@@ -2296,16 +2310,13 @@ fn uft_lft_invalidation_out() {
         dst_ip,
     );
     let res = g1.port.process(Out, &mut pkt4, ActionMeta::new());
-    match res {
-        Ok(ProcessResult::Drop {
-            reason: DropReason::Layer { name, reason: lreason },
-        }) => {
-            assert_eq!("firewall", name);
-            assert_eq!(DenyReason::Rule, lreason);
+    assert_drop!(
+        res,
+        DropReason::Layer {
+            name: "firewall".to_string(),
+            reason: DenyReason::Rule,
         }
-
-        _ => panic!("expected drop but got: {:?}", res),
-    }
+    );
     update!(
         g1,
         [
@@ -2422,16 +2433,13 @@ fn uft_lft_invalidation_in() {
     );
     pkt3 = encap(pkt3, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt3, ActionMeta::new());
-    match res {
-        Ok(ProcessResult::Drop {
-            reason: DropReason::Layer { name, reason: lreason },
-        }) => {
-            assert_eq!("firewall", name);
-            assert_eq!(DenyReason::Default, lreason);
+    assert_drop!(
+        res,
+        DropReason::Layer {
+            name: "firewall".to_string(),
+            reason: DenyReason::Default,
         }
-
-        _ => panic!("expected drop but got: {:?}", res),
-    }
+    );
     update!(
         g1,
         [

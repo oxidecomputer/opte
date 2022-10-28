@@ -128,19 +128,20 @@ fn firewall_replace_rules() {
     // Verify the packet is dropped and that the firewall flow table
     // entry (along with its dual) was invalidated.
     let res = g2.port.process(In, &mut pkt3_copy, ActionMeta::new());
-    match res {
-        Ok(ProcessResult::Drop {
-            reason: DropReason::Layer { name, reason: lreason },
-        }) => {
-            assert_eq!("firewall", name);
-            assert_eq!(DenyReason::Rule, lreason);
+    assert_drop!(
+        res,
+        DropReason::Layer {
+            name: "firewall".to_string(),
+            reason: DenyReason::Rule
         }
-
-        _ => panic!("expected layer drop but got: {:?}", res),
-    }
+    );
     update!(
         g2,
-        ["set:uft.in=0", "incr:stats.port.in_drop, stats.port.in_drop_layer, stats.port.in_uft_miss",]
+        [
+            "set:uft.in=0",
+            "incr:stats.port.in_drop, stats.port.in_drop_layer",
+            "incr:stats.port.in_uft_miss",
+        ]
     );
 }
 
@@ -193,17 +194,20 @@ fn firewall_vni_inbound() {
     // same VPC should be allowed.
     // ================================================================
     let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
-    match res {
-        Ok(ProcessResult::Drop {
-            reason: DropReason::Layer { name, reason: lreason },
-        }) => {
-            assert_eq!("firewall", name);
-            assert_eq!(DenyReason::Default, lreason);
+    assert_drop!(
+        res,
+        DropReason::Layer {
+            name: "firewall".to_string(),
+            reason: DenyReason::Default,
         }
-
-        _ => panic!("expected layer drop but got: {:?}", res),
-    }
-    incr!(g1, ["stats.port.in_drop, stats.port.in_drop_layer, stats.port.in_uft_miss"]);
+    );
+    incr!(
+        g1,
+        [
+            "stats.port.in_drop, stats.port.in_drop_layer",
+            "stats.port.in_uft_miss"
+        ]
+    );
 
     // ================================================================
     // Setup g2 as normal and process the packet again. This time it should
@@ -303,15 +307,18 @@ fn firewall_vni_outbound() {
     // Try to send the packet and verify the firewall does not allow it.
     // ================================================================
     let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    match res {
-        Ok(ProcessResult::Drop {
-            reason: DropReason::Layer { name, reason: lreason },
-        }) => {
-            assert_eq!("firewall", name);
-            assert_eq!(DenyReason::Rule, lreason);
+    assert_drop!(
+        res,
+        DropReason::Layer {
+            name: "firewall".to_string(),
+            reason: DenyReason::Rule,
         }
-
-        _ => panic!("expected layer drop but got: {:?}", res),
-    }
-    incr!(g1, ["stats.port.out_drop, stats.port.out_drop_layer, stats.port.out_uft_miss"]);
+    );
+    incr!(
+        g1,
+        [
+            "stats.port.out_drop, stats.port.out_drop_layer",
+            "stats.port.out_uft_miss"
+        ]
+    );
 }

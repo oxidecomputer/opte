@@ -679,3 +679,31 @@ macro_rules! chk {
         }
     };
 }
+
+#[macro_export]
+macro_rules! assert_drop {
+    ($res:expr, $expected:expr) => {
+        match &$res {
+            Ok(ProcessResult::Drop { reason }) => match (reason, &$expected) {
+                (
+                    DropReason::Layer { name: res_name, reason: res_reason },
+                    DropReason::Layer { name: exp_name, reason: exp_reason },
+                ) => {
+                    assert_eq!(res_name, exp_name);
+                    assert_eq!(res_reason, exp_reason);
+                }
+
+                (DropReason::TcpErr, DropReason::TcpErr) => (),
+
+                (_, _) => {
+                    panic!(
+                        "expected drop type: {:?}, but got: {:?}",
+                        $expected, $res,
+                    );
+                }
+            },
+
+            _ => panic!("execpted drop, but got: {:?}", $res),
+        }
+    };
+}
