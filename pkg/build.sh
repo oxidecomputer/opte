@@ -16,9 +16,12 @@ cp ../opteadm/target/release/opteadm proto/opt/oxide/opte/bin/
 cp ../xde/target/x86_64-unknown-unknown/release/xde proto/kernel/drv/amd64/xde
 cp ../xde/xde.conf proto/kernel/drv/
 
+API_VSN=$(./print-api-version.sh)
+
 # create the package
 sed -e "s/%PUBLISHER%/$PUBLISHER/g" \
     -e "s/%COMMIT_COUNT%/$COMMIT_COUNT/g" \
+    -e "s/%API_VSN%/$API_VSN/g" \
     opte.template.p5m | pkgmogrify -v -O opte.base.p5m
 
 pkgdepend generate -d proto opte.base.p5m > opte.generate.p5m
@@ -32,4 +35,5 @@ pkgrepo create $REPO
 pkgrepo add-publisher -s $REPO $PUBLISHER
 
 pkgsend publish -d proto -s $REPO opte.final.p5m
-pkgrecv -a -d packages/repo/opte-0.1.$COMMIT_COUNT.p5p -s $REPO -v -m latest '*'
+pkgrecv -a -d packages/repo/opte-0.$API_VSN.$COMMIT_COUNT.p5p -s $REPO \
+	-v -m latest '*'
