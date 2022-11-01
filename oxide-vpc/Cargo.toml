@@ -23,7 +23,7 @@ std = ["opte/std"]
 #
 # #[cfg(any(feature = "test-help", test))]
 #
-test-help = []
+test-help = ["opte/test-help"]
 usdt = ["opte/usdt", "dep:usdt"]
 
 [dependencies]

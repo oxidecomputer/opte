@@ -1087,15 +1087,12 @@ impl Port {
     }
 
     /// Return the [`TcpState`] of a given flow.
-    pub fn tcp_state(&self, flow: &InnerFlowId) -> TcpState {
-        self.data
-            .lock()
-            .tcp_flows
-            .get(flow)
-            .unwrap()
-            .state()
-            .tcp_state
-            .tcp_state()
+    #[cfg(any(feature = "test-help", test))]
+    pub fn tcp_state(&self, flow: &InnerFlowId) -> Option<TcpState> {
+        match self.data.lock().tcp_flows.get(flow) {
+            Some(entry) => Some(entry.state().tcp_state.tcp_state()),
+            None => None,
+        }
     }
 }
 

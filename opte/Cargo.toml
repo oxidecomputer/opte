@@ -13,6 +13,10 @@ kernel = ["illumos-sys-hdrs/kernel"]
 # mostly useful to consumers of the API, providing convenient methods
 # for working with the API types in a std context.
 std = ["opte-api/std"]
+#
+# Used for declaring methods which are useful for integration testing.
+#
+test-help = []
 
 [dependencies]
 cfg-if = "0.1"

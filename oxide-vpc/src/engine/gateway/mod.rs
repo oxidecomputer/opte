@@ -42,6 +42,7 @@
 
 use crate::api::Ipv4Cfg;
 use crate::api::Ipv6Cfg;
+use crate::api::MacAddr;
 use crate::api::Vni;
 use crate::api::VpcCfg;
 use crate::engine::overlay::VpcMappings;
@@ -50,10 +51,12 @@ use core::fmt;
 use core::fmt::Display;
 use opte::api::Direction;
 use opte::api::OpteError;
+use opte::engine::ether::EtherMeta;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
+use opte::engine::packet::PacketMeta;
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
@@ -64,9 +67,12 @@ use opte::engine::predicate::Ipv6AddrMatch;
 use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::AllowOrDeny;
+use opte::engine::rule::GenHtResult;
+use opte::engine::rule::HdrTransform;
 use opte::engine::rule::MetaAction;
 use opte::engine::rule::ModMetaResult;
 use opte::engine::rule::Rule;
+use opte::engine::rule::StaticAction;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -99,6 +105,9 @@ pub fn setup(
     // traffic meant for the guest interface. Remember, there could
     // also be some process in the guest trying to spoof traffic for a
     // different IP than it was assigned.
+    //
+    // Since we are acting as a gateway we also rewrite the source MAC address
+    // for inbound traffic to be that of the gateway.
     let actions = LayerActions {
         actions: vec![],
         default_in: DefaultAction::Deny,
@@ -116,6 +125,35 @@ pub fn setup(
     }
 
     pb.add_layer(layer, Pos::Before("firewall"))
+}
+
+struct RewriteSrcMac {
+    gateway_mac: MacAddr,
+}
+
+impl fmt::Display for RewriteSrcMac {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ether.src={}", self.gateway_mac)
+    }
+}
+
+impl StaticAction for RewriteSrcMac {
+    fn gen_ht(
+        &self,
+        _dir: Direction,
+        _flow_id: &InnerFlowId,
+        _packet_meta: &PacketMeta,
+        _action_meta: &mut ActionMeta,
+    ) -> GenHtResult {
+        Ok(AllowOrDeny::Allow(HdrTransform {
+            inner_ether: EtherMeta::modify(Some(self.gateway_mac), None),
+            ..Default::default()
+        }))
+    }
+
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
+    }
 }
 
 fn setup_ipv4(
@@ -140,7 +178,12 @@ fn setup_ipv4(
     ]));
     layer.add_rule(Direction::Out, nospoof_out.finalize());
 
-    let mut unicast_in = Rule::new(1000, Action::Allow);
+    let mut unicast_in = Rule::new(
+        1000,
+        Action::Static(Arc::new(RewriteSrcMac {
+            gateway_mac: cfg.gateway_mac,
+        })),
+    );
     unicast_in.add_predicate(Predicate::InnerDstIp4(vec![
         Ipv4AddrMatch::Exact(ip_cfg.private_ip),
     ]));
@@ -171,7 +214,12 @@ fn setup_ipv6(
     ]));
     layer.add_rule(Direction::Out, nospoof_out.finalize());
 
-    let mut unicast_in = Rule::new(1000, Action::Allow);
+    let mut unicast_in = Rule::new(
+        1000,
+        Action::Static(Arc::new(RewriteSrcMac {
+            gateway_mac: cfg.gateway_mac,
+        })),
+    );
     unicast_in.add_predicate(Predicate::InnerDstIp6(vec![
         Ipv6AddrMatch::Exact(ip_cfg.private_ip),
     ]));

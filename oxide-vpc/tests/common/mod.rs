@@ -127,6 +127,29 @@ pub fn g1_cfg() -> VpcCfg {
     }
 }
 
+pub fn g1_cfg2(ip_cfg: IpCfg) -> VpcCfg {
+    VpcCfg {
+        ip_cfg,
+        guest_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
+        gateway_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
+        vni: Vni::new(1287581u32).unwrap(),
+        // Site 0xF7, Rack 1, Sled 1, Interface 1
+        phys_ip: Ipv6Addr::from([
+            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
+        ]),
+        boundary_services: BoundaryServices {
+            mac: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
+            ip: Ipv6Addr::from([
+                0xFD, 0x00, 0x99, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            ]),
+            vni: Vni::new(99u32).unwrap(),
+        },
+        proxy_arp_enable: false,
+        phys_gw_mac: Some(MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d])),
+    }
+}
+
 pub fn g2_cfg() -> VpcCfg {
     let ip_cfg = IpCfg::DualStack {
         ipv4: Ipv4Cfg {
@@ -278,6 +301,12 @@ pub fn oxide_net_setup2(
 
     let vps = VpcPortState::new();
     let mut pav = PortAndVps { port, vps, vpc_map };
+
+    let nat_rules = match cfg.ipv4().external_ips {
+        Some(_) => "incr:nat.rules.in, nat.rules.out",
+        _ => "",
+    };
+
     let mut updates = vec![
         // * Epoch starts at 1, adding router entry bumps it to 2.
         "set:epoch=2",
@@ -308,6 +337,7 @@ pub fn oxide_net_setup2(
         // * Outbound IPv4 SNAT
         // * Outbound IPv6 SNAT
         "set:nat.rules.out=2",
+        nat_rules,
         // * Allow guest to route to own subnet
         "set:router.rules.out=1",
         // * Outbound encap

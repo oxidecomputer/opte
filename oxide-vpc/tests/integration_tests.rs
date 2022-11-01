@@ -642,7 +642,7 @@ fn guest_to_guest() {
 
     match g2_meta.inner.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.guest_mac);
+            assert_eq!(eth.src, g1_cfg.gateway_mac);
             assert_eq!(eth.dst, g2_cfg.guest_mac);
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
@@ -948,7 +948,7 @@ fn snat_icmp4_echo_rewrite() {
 
     match meta.inner.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.boundary_services.mac);
+            assert_eq!(eth.src, g1_cfg.gateway_mac);
             assert_eq!(eth.dst, g1_cfg.guest_mac);
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
@@ -1048,7 +1048,7 @@ fn snat_icmp4_echo_rewrite() {
 
     match meta.inner.ether.as_ref() {
         Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.boundary_services.mac);
+            assert_eq!(eth.src, g1_cfg.gateway_mac);
             assert_eq!(eth.dst, g1_cfg.guest_mac);
             assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
         }
@@ -2451,10 +2451,9 @@ fn uft_lft_invalidation_in() {
     );
 }
 
-// Verify that the TCP state machine properly tracks a connection
-// through its various states. This verifies the state machine in
-// relation to a connection originating from the guest g1, in which
-// case it's acting as the "client" aka the "active open".
+// Verify TCP state transitions in relation to an outbound connection
+// (the "active open"). In this case the guest is the client, the
+// server is an external IP.
 #[test]
 fn tcp_outbound() {
     let g1_cfg = g1_cfg();
@@ -2484,8 +2483,7 @@ fn tcp_outbound() {
     };
 
     // ================================================================
-    // Guest: Run the SYN packet through g1's port in the outbound
-    // direction and verify it is accepted.
+    // SYN: Client -> Server
     // ================================================================
     let dst_ip = "52.10.128.69".parse().unwrap();
     let mut pkt1 = http_syn2(
@@ -2507,11 +2505,10 @@ fn tcp_outbound() {
         ]
     );
     let snat_port = pkt1.meta().inner.ulp.unwrap().src_port();
-    assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow));
+    assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
-    // Server: Run the SYN+ACK packet through g1's port in the inbound
-    // direction and verify it is accepted.
+    // SYN+ACK: Server -> Client
     // ================================================================
     let mut pkt2 = http_syn_ack2(
         g1_cfg.boundary_services.mac,
@@ -2524,10 +2521,10 @@ fn tcp_outbound() {
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
-    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
-    // Guest: Send ACK to establish connection.
+    // ACK: Client -> Server
     // ================================================================
     let mut pkt3 = http_ack2(
         g1_cfg.guest_mac,
@@ -2538,10 +2535,10 @@ fn tcp_outbound() {
     let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
-    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
-    // Guest: Send HTTP GET.
+    // HTTP GET: Client -> Server
     // ================================================================
     let mut pkt4 = http_get2(
         g1_cfg.guest_mac,
@@ -2552,10 +2549,10 @@ fn tcp_outbound() {
     let res = g1.port.process(Out, &mut pkt4, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
-    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
-    // Server: Send HTTP GET ACK.
+    // ACK HTTP GET: Server -> Client
     // ================================================================
     let mut pkt5 = http_get_ack2(
         g1_cfg.boundary_services.mac,
@@ -2568,10 +2565,10 @@ fn tcp_outbound() {
     let res = g1.port.process(In, &mut pkt5, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
-    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
-    // Server: Send HTTP 301 Reply.
+    // HTTP 301 Reply: Server -> Client
     // ================================================================
     let mut pkt6 = http_301_reply2(
         g1_cfg.boundary_services.mac,
@@ -2584,10 +2581,10 @@ fn tcp_outbound() {
     let res = g1.port.process(In, &mut pkt6, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
-    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
-    // Guest: Ack HTTP 301.
+    // ACK HTTP 301: Client -> Server
     // ================================================================
     let mut pkt7 = http_301_ack2(
         g1_cfg.guest_mac,
@@ -2598,10 +2595,10 @@ fn tcp_outbound() {
     let res = g1.port.process(Out, &mut pkt7, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
-    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow));
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
-    // Guest: Send FIN.
+    // FIN: Client -> Server
     // ================================================================
     let mut pkt8 = http_guest_fin2(
         g1_cfg.guest_mac,
@@ -2612,10 +2609,10 @@ fn tcp_outbound() {
     let res = g1.port.process(Out, &mut pkt8, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
-    assert_eq!(TcpState::FinWait1, g1.port.tcp_state(&flow));
+    assert_eq!(TcpState::FinWait1, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
-    // Server: Send ACK to FIN.
+    // ACK FIN: Server -> Client
     // ================================================================
     let mut pkt9 = http_server_ack_fin2(
         g1_cfg.boundary_services.mac,
@@ -2628,10 +2625,10 @@ fn tcp_outbound() {
     let res = g1.port.process(In, &mut pkt9, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
-    assert_eq!(TcpState::FinWait2, g1.port.tcp_state(&flow));
+    assert_eq!(TcpState::FinWait2, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
-    // Server: Send FIN to guest.
+    // FIN: Server -> Client
     // ================================================================
     let mut pkt10 = http_server_fin2(
         g1_cfg.boundary_services.mac,
@@ -2644,10 +2641,10 @@ fn tcp_outbound() {
     let res = g1.port.process(In, &mut pkt10, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
-    assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow));
+    assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
-    // Guest: ACK the server's FIN.
+    // ACK Server FIN: Client -> Server
     // ================================================================
     let mut pkt11 = http_guest_ack_fin2(
         g1_cfg.guest_mac,
@@ -2658,7 +2655,7 @@ fn tcp_outbound() {
     let res = g1.port.process(Out, &mut pkt11, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
-    assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow));
+    assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow).unwrap());
 
     // TODO uncomment in follow up commit and make sure to expire TCP flows.
     //
@@ -2666,4 +2663,223 @@ fn tcp_outbound() {
     //     .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64 + 1, 0))
     //     .unwrap();
     // zero_flows!(g1);
+}
+
+// Verify TCP state transitions in relation to an inbound connection
+// (the "passive open"). In this case the client is external, and the
+// guest is the server.
+#[test]
+fn tcp_inbound() {
+    // ================================================================
+    // In order for a guest to receive external connections, it must
+    // have an external IP.
+    // ================================================================
+    let ip_cfg = IpCfg::DualStack {
+        ipv4: Ipv4Cfg {
+            vpc_subnet: "172.30.0.0/22".parse().unwrap(),
+            private_ip: "172.30.0.5".parse().unwrap(),
+            gateway_ip: "172.30.0.1".parse().unwrap(),
+            snat: Some(SNat4Cfg {
+                external_ip: "10.77.77.13".parse().unwrap(),
+                ports: 1025..=4096,
+            }),
+            external_ips: Some("10.60.1.20".parse().unwrap()),
+        },
+        ipv6: Ipv6Cfg {
+            vpc_subnet: "fd00::/64".parse().unwrap(),
+            private_ip: "fd00::5".parse().unwrap(),
+            gateway_ip: "fd00::1".parse().unwrap(),
+            snat: Some(SNat6Cfg {
+                external_ip: "2001:db8::1".parse().unwrap(),
+                ports: 1025..=4096,
+            }),
+            external_ips: None,
+        },
+    };
+
+    let g1_cfg = g1_cfg2(ip_cfg);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Add default route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    let client_ip = "52.10.128.69".parse().unwrap();
+    let bs_mac = g1_cfg.boundary_services.mac;
+    let serv_mac = g1_cfg.guest_mac;
+    let serv_ext_ip = g1_cfg.ipv4().external_ips.unwrap();
+    let bs_phys = TestIpPhys {
+        ip: g1_cfg.boundary_services.ip,
+        mac: g1_cfg.boundary_services.mac,
+        vni: g1_cfg.boundary_services.vni,
+    };
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    // ================================================================
+    // SYN: Client -> Server
+    // ================================================================
+    let mut pkt1 = http_syn2(bs_mac, client_ip, serv_mac, serv_ext_ip);
+    pkt1 = encap(pkt1, bs_phys, g1_phys);
+    let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
+    let flow = pkt1.flow().mirror();
+    assert!(matches!(res, Ok(Modified)));
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.in, nat.flows.out",
+            "uft.in",
+            "stats.port.in_modified, stats.port.in_uft_miss",
+        ]
+    );
+    let sport = pkt1.meta().inner.ulp.unwrap().src_port();
+    assert_eq!(TcpState::Listen, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // SYN+ACK: Server -> Client
+    // ================================================================
+    let mut pkt2 = http_syn_ack2(
+        serv_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        client_ip,
+        sport,
+    );
+    let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)), "expected Modified, got {:?}", res);
+    incr!(g1, ["uft.out, stats.port.out_modified, stats.port.out_uft_miss"]);
+    assert_eq!(TcpState::SynRcvd, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // ACK: Client -> Server
+    // ================================================================
+    let mut pkt3 = http_ack2(
+        g1_cfg.boundary_services.mac,
+        client_ip,
+        serv_mac,
+        serv_ext_ip,
+    );
+    pkt3 = encap(pkt3, bs_phys, g1_phys);
+    let res = g1.port.process(In, &mut pkt3, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // HTTP GET: Client -> Server
+    // ================================================================
+    let mut pkt4 = http_get2(bs_mac, client_ip, serv_mac, serv_ext_ip);
+    pkt4 = encap(pkt4, bs_phys, g1_phys);
+    let res = g1.port.process(In, &mut pkt4, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // ACK HTTP GET: Server -> Client
+    // ================================================================
+    let mut pkt5 = http_get_ack2(
+        serv_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        client_ip,
+        sport,
+    );
+    let res = g1.port.process(Out, &mut pkt5, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // HTTP 301 Reply: Server -> Client
+    // ================================================================
+    let mut pkt6 = http_301_reply2(
+        serv_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        client_ip,
+        sport,
+    );
+    let res = g1.port.process(Out, &mut pkt6, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // ACK HTTP 301: Client -> Server
+    // ================================================================
+    let mut pkt7 = http_301_ack2(bs_mac, client_ip, serv_mac, serv_ext_ip);
+    pkt7 = encap(pkt7, bs_phys, g1_phys);
+    let res = g1.port.process(In, &mut pkt7, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // FIN: Client -> Server
+    // ================================================================
+    let mut pkt8 = http_guest_fin2(bs_mac, client_ip, serv_mac, serv_ext_ip);
+    pkt8 = encap(pkt8, bs_phys, g1_phys);
+    let res = g1.port.process(In, &mut pkt8, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
+    assert_eq!(TcpState::CloseWait, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // ACK Client FIN: Server -> Client
+    // ================================================================
+    let mut pkt9 = http_server_ack_fin2(
+        serv_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        client_ip,
+        sport,
+    );
+    let res = g1.port.process(Out, &mut pkt9, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
+    assert_eq!(TcpState::CloseWait, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // FIN: Server -> Client
+    // ================================================================
+    let mut pkt10 = http_server_fin2(
+        serv_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        client_ip,
+        sport,
+    );
+    let res = g1.port.process(Out, &mut pkt10, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
+    assert_eq!(TcpState::LastAck, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // ACK Server FIN: Client -> Server
+    // ================================================================
+    let mut pkt11 =
+        http_guest_ack_fin2(bs_mac, client_ip, serv_mac, serv_ext_ip);
+    pkt11 = encap(pkt11, bs_phys, g1_phys);
+    let res = g1.port.process(In, &mut pkt11, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    update!(
+        g1,
+        [
+            "incr:stats.port.in_modified, stats.port.in_uft_hit",
+            "set:uft.in=1, uft.out=0",
+        ]
+    );
+    assert_eq!(None, g1.port.tcp_state(&flow));
 }
