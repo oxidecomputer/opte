@@ -856,15 +856,7 @@ impl<'a> Rule<Finalized> {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct RuleDump {
-    pub priority: u16,
-    pub predicates: Vec<String>,
-    pub data_predicates: Vec<DataPredicate>,
-    pub action: String,
-}
-
-impl From<&Rule<Finalized>> for RuleDump {
+impl From<&Rule<Finalized>> for super::ioctl::RuleDump {
     fn from(rule: &Rule<Finalized>) -> Self {
         let predicates = rule.state.preds.as_ref().map_or(vec![], |rp| {
             rp.hdr_preds.iter().map(ToString::to_string).collect()
@@ -875,7 +867,7 @@ impl From<&Rule<Finalized>> for RuleDump {
             .as_ref()
             .map_or(vec![], |rp| rp.data_preds.clone());
 
-        RuleDump {
+        super::ioctl::RuleDump {
             priority: rule.priority,
             predicates,
             data_predicates,

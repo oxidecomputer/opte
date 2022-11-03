@@ -7,10 +7,10 @@
 //! The ioctl interface.
 //!
 //! XXX This stuff needs to be moved to oxide-api.
-use super::layer;
+use super::layer::RuleId;
 use super::packet::InnerFlowId;
 use super::port::Port;
-use super::rule;
+use super::predicate::DataPredicate;
 use super::tcp::TcpState;
 use core::fmt::Debug;
 use opte_api::CmdOk;
@@ -44,13 +44,17 @@ pub struct DumpLayerResp {
     /// The name of the layer.
     pub name: String,
     /// The inbound rules.
-    pub rules_in: Vec<(layer::RuleId, rule::RuleDump)>,
+    pub rules_in: Vec<RuleTableEntryDump>,
     /// The outbound rules.
-    pub rules_out: Vec<(layer::RuleId, rule::RuleDump)>,
+    pub rules_out: Vec<RuleTableEntryDump>,
     /// The default inbound action.
     pub default_in: String,
+    /// The number of times the default inbound action was matched.
+    pub default_in_hits: u64,
     /// The default outbound action.
     pub default_out: String,
+    /// The number of times the default outbound action was matched.
+    pub default_out_hits: u64,
     /// The inbound flow table.
     pub ft_in: Vec<(InnerFlowId, ActionDescEntryDump)>,
     /// The outbound flow table.
@@ -151,6 +155,21 @@ impl CmdOk for DumpTcpFlowsResp {}
 pub struct ActionDescEntryDump {
     pub hits: u64,
     pub summary: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RuleTableEntryDump {
+    pub id: RuleId,
+    pub hits: u64,
+    pub rule: super::ioctl::RuleDump,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RuleDump {
+    pub priority: u16,
+    pub predicates: Vec<String>,
+    pub data_predicates: Vec<DataPredicate>,
+    pub action: String,
 }
 
 pub fn dump_layer(

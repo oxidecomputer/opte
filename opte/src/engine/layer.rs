@@ -29,7 +29,6 @@ use super::rule::Finalized;
 use super::rule::GenBtError;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
-use super::rule::RuleDump;
 use crate::ddi::time::Moment;
 use crate::ExecCtx;
 use crate::LogLevel;
@@ -46,8 +45,10 @@ cfg_if! {
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
+        use core::ffi::CStr;
         use illumos_sys_hdrs::uintptr_t;
     } else {
+        use core::ffi::CStr;
         use std::ffi::CString;
         use std::string::{String, ToString};
         use std::sync::Arc;
@@ -352,7 +353,9 @@ pub struct Layer {
     name_c: CString,
     actions: Vec<Action>,
     default_in: DefaultAction,
+    default_in_hits: u64,
     default_out: DefaultAction,
+    default_out_hits: u64,
     ft: LayerFlowTable,
     rules_in: RuleTable,
     rules_out: RuleTable,
@@ -395,7 +398,9 @@ impl Layer {
             rules_in,
             rules_out,
             default_in: self.default_in.to_string(),
+            default_in_hits: self.default_in_hits,
             default_out: self.default_out.to_string(),
+            default_out_hits: self.default_out_hits,
         }
     }
 
@@ -573,7 +578,9 @@ impl Layer {
         Layer {
             actions: actions.actions,
             default_in: actions.default_in,
+            default_in_hits: 0,
             default_out: actions.default_out,
+            default_out_hits: 0,
             name: name.to_string(),
             name_c,
             port_c: port_c.clone(),
@@ -682,6 +689,7 @@ impl Layer {
         let _ = rdr.finish();
 
         let action = if rule.is_none() {
+            self.default_in_hits += 1;
             match self.default_in {
                 DefaultAction::Deny => {
                     return Ok(LayerResult::Deny {
@@ -959,6 +967,7 @@ impl Layer {
         let _ = rdr.finish();
 
         let action = if rule.is_none() {
+            self.default_out_hits += 1;
             match self.default_out {
                 DefaultAction::Deny => {
                     return Ok(LayerResult::Deny {
@@ -1295,11 +1304,28 @@ impl Layer {
 }
 
 #[derive(Debug)]
+struct RuleTableEntry {
+    id: RuleId,
+    hits: u64,
+    rule: Rule<rule::Finalized>,
+}
+
+impl From<&RuleTableEntry> for ioctl::RuleTableEntryDump {
+    fn from(rte: &RuleTableEntry) -> Self {
+        Self {
+            id: rte.id,
+            hits: rte.hits,
+            rule: super::ioctl::RuleDump::from(&rte.rule),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct RuleTable {
     port_c: CString,
     layer_c: CString,
     dir: Direction,
-    rules: Vec<(RuleId, Rule<rule::Finalized>)>,
+    rules: Vec<RuleTableEntry>,
     next_id: RuleId,
 }
 
@@ -1315,27 +1341,31 @@ pub enum RuleRemoveErr {
 }
 
 impl<'a> RuleTable {
-    // TODO Add SDT probe for rule add.
     fn add(&mut self, rule: Rule<rule::Finalized>) {
         match self.find_pos(&rule) {
-            RulePlace::End => self.rules.push((self.next_id, rule)),
+            RulePlace::End => {
+                let rte = RuleTableEntry { id: self.next_id, hits: 0, rule };
+                self.rules.push(rte);
+            }
+
             RulePlace::Insert(idx) => {
-                self.rules.insert(idx, (self.next_id, rule))
+                let rte = RuleTableEntry { id: self.next_id, hits: 0, rule };
+                self.rules.insert(idx, rte);
             }
         }
         self.next_id += 1;
     }
 
-    fn dump(&self) -> Vec<(RuleId, RuleDump)> {
+    fn dump(&self) -> Vec<ioctl::RuleTableEntryDump> {
         let mut dump = Vec::new();
-        for (id, r) in &self.rules {
-            dump.push((*id, RuleDump::from(r)));
+        for rte in &self.rules {
+            dump.push(ioctl::RuleTableEntryDump::from(rte));
         }
         dump
     }
 
     fn find_match<'b, R>(
-        &self,
+        &mut self,
         ifid: &InnerFlowId,
         pmeta: &PacketMeta,
         ameta: &ActionMeta,
@@ -1344,21 +1374,33 @@ impl<'a> RuleTable {
     where
         R: PacketRead<'a>,
     {
-        for (_, r) in &self.rules {
-            if r.is_match(pmeta, ameta, rdr) {
-                self.rule_match_probe(ifid, &r);
-                return Some(r);
+        for rte in self.rules.iter_mut() {
+            if rte.rule.is_match(pmeta, ameta, rdr) {
+                rte.hits += 1;
+                Self::rule_match_probe(
+                    self.port_c.as_c_str(),
+                    self.layer_c.as_c_str(),
+                    self.dir,
+                    ifid,
+                    &rte.rule,
+                );
+                return Some(&rte.rule);
             }
         }
 
-        self.rule_no_match_probe(self.dir, ifid);
+        Self::rule_no_match_probe(
+            self.port_c.as_c_str(),
+            self.layer_c.as_c_str(),
+            self.dir,
+            ifid,
+        );
         None
     }
 
     // Find the position in which to insert this rule.
     fn find_pos(&self, rule: &Rule<rule::Finalized>) -> RulePlace {
-        for (i, (_, r)) in self.rules.iter().enumerate() {
-            if rule.priority() < r.priority() {
+        for (i, rte) in self.rules.iter().enumerate() {
+            if rule.priority() < rte.rule.priority() {
                 return RulePlace::Insert(i);
             }
 
@@ -1367,8 +1409,8 @@ impl<'a> RuleTable {
             // exist, the new rule is added in the front. The same
             // goes for multiple non-deny entries at the same
             // priority.
-            if rule.priority() == r.priority() {
-                if rule.action().is_deny() || !r.action().is_deny() {
+            if rule.priority() == rte.rule.priority() {
+                if rule.action().is_deny() || !rte.rule.action().is_deny() {
                     return RulePlace::Insert(i);
                 }
             }
@@ -1383,10 +1425,7 @@ impl<'a> RuleTable {
     /// specified rule. If no matching rule is found, then `None` is
     /// returned.
     pub fn find_rule(&self, query_rule: &Rule<Finalized>) -> Option<RuleId> {
-        self.rules
-            .iter()
-            .find(|(_rule_id, rule)| rule == query_rule)
-            .map(|(rule_id, _)| *rule_id)
+        self.rules.iter().find(|rte| rte.rule == *query_rule).map(|rte| rte.id)
     }
 
     fn new(port: &str, layer: &str, dir: Direction) -> Self {
@@ -1405,8 +1444,8 @@ impl<'a> RuleTable {
 
     // Remove the rule with the given `id`. Otherwise, return not found.
     fn remove(&mut self, id: RuleId) -> Result<()> {
-        for (rule_idx, (rule_id, _)) in self.rules.iter().enumerate() {
-            if id == *rule_id {
+        for (rule_idx, rte) in self.rules.iter().enumerate() {
+            if id == rte.id {
                 let _ = self.rules.remove(rule_idx);
                 return Ok(());
             }
@@ -1415,14 +1454,19 @@ impl<'a> RuleTable {
         Err(Error::RuleNotFound { id })
     }
 
-    pub fn rule_no_match_probe(&self, dir: Direction, flow_id: &InnerFlowId) {
+    pub fn rule_no_match_probe(
+        port: &CStr,
+        layer: &CStr,
+        dir: Direction,
+        flow_id: &InnerFlowId,
+    ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 let flow_id = flow_id_sdt_arg::from(flow_id);
 
                 let arg = rule_no_match_sdt_arg {
-                    port: self.port_c.as_ptr(),
-                    layer: self.layer_c.as_ptr(),
+                    port: port.as_ptr(),
+                    layer: layer.as_ptr(),
                     dir: dir.cstr_raw(),
                     flow_id: &flow_id,
                 };
@@ -1433,20 +1477,22 @@ impl<'a> RuleTable {
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
-                let layer_s = self.layer_c.to_str().unwrap();
+                let port_s = port.to_str().unwrap();
+                let layer_s = layer.to_str().unwrap();
 
                 crate::opte_provider::rule__no__match!(
                     || (port_s, layer_s, dir, flow_id.to_string())
                 );
             } else {
-                let (_, _, _, _) = (&self.port_c, &self.layer_c, dir, flow_id);
+                let (..) = (port, layer, dir, flow_id);
             }
         }
     }
 
     fn rule_match_probe(
-        &self,
+        port: &CStr,
+        layer: &CStr,
+        dir: Direction,
         flow_id: &InnerFlowId,
         rule: &Rule<rule::Finalized>,
     ) {
@@ -1456,9 +1502,9 @@ impl<'a> RuleTable {
                 let flow_id = flow_id_sdt_arg::from(flow_id);
                 let action_str_c = CString::new(action_str).unwrap();
                 let arg = rule_match_sdt_arg {
-                    port: self.port_c.as_ptr(),
-                    layer: self.layer_c.as_ptr(),
-                    dir: self.dir.cstr_raw(),
+                    port: port.as_ptr(),
+                    layer: layer.as_ptr(),
+                    dir: dir.cstr_raw(),
                     flow_id: &flow_id,
                     rule_type: action_str_c.as_ptr(),
                 };
@@ -1469,8 +1515,8 @@ impl<'a> RuleTable {
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
-                let layer_s = self.layer_c.to_str().unwrap();
+                let port_s = port.to_str().unwrap();
+                let layer_s = layer.to_str().unwrap();
                 let action_s = rule.action().to_string();
 
                 crate::opte_provider::rule__match!(
@@ -1478,7 +1524,7 @@ impl<'a> RuleTable {
                         action_s)
                 );
             } else {
-                let (_, _) = (flow_id, rule);
+                let (..) = (port, layer, dir, flow_id, rule);
             }
         }
     }

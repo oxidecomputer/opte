@@ -14,10 +14,10 @@ use super::ioctl::DumpLayerResp;
 use super::ioctl::DumpTcpFlowsResp;
 use super::ioctl::DumpUftResp;
 use super::ioctl::ListLayersResp;
+use super::ioctl::RuleDump;
 use super::ioctl::TcpFlowEntryDump;
 use super::ioctl::UftEntryDump;
 use super::packet::InnerFlowId;
-use opte::engine::rule::RuleDump;
 use std::collections::VecDeque;
 use std::string::String;
 use std::string::ToString;
@@ -40,19 +40,21 @@ pub fn print_layer(resp: &DumpLayerResp) {
         print_lft_flow(flow_id, flow_state);
     }
 
-    println!("\nInbound Rules [Default: {}]", resp.default_in);
+    println!("\nInbound Rules");
     print_hr();
     print_rule_header();
-    for (id, rule) in &resp.rules_in {
-        print_rule(*id, rule);
+    for rte in &resp.rules_in {
+        print_rule(rte.id, rte.hits, &rte.rule);
     }
+    print_def_rule(resp.default_in_hits, &resp.default_in);
 
-    println!("\nOutbound Rules [Default: {}]", resp.default_out);
+    println!("\nOutbound Rules");
     print_hr();
     print_rule_header();
-    for (id, rule) in &resp.rules_out {
-        print_rule(*id, rule);
+    for rte in &resp.rules_out {
+        print_rule(rte.id, rte.hits, &rte.rule);
     }
+    print_def_rule(resp.default_out_hits, &resp.default_out);
 
     println!("");
 }
@@ -97,11 +99,18 @@ pub fn print_uft(uft: &DumpUftResp) {
 
 /// Print the header for the [`print_rule()`] output.
 pub fn print_rule_header() {
-    println!("{:<8} {:<6} {:<48} {:<18}", "ID", "PRI", "PREDICATES", "ACTION");
+    println!(
+        "{:<6} {:<6} {:<6} {:<38} {:<18}",
+        "ID", "PRI", "HITS", "PREDICATES", "ACTION"
+    );
+}
+
+pub fn print_def_rule(hits: u64, action: &str) {
+    println!("{:<6} {:<6} {:<6} {:<38} {:<?}", "DEF", "--", hits, "--", action);
 }
 
 /// Print a [`RuleDump`].
-pub fn print_rule(id: u64, rule: &RuleDump) {
+pub fn print_rule(id: u64, hits: u64, rule: &RuleDump) {
     let mut preds = rule
         .predicates
         .iter()
@@ -116,13 +125,13 @@ pub fn print_rule(id: u64, rule: &RuleDump) {
     };
 
     println!(
-        "{:<8} {:<6} {:<48} {:<?}",
-        id, rule.priority, first_pred, rule.action
+        "{:<6} {:<6} {:<6} {:<38} {:<?}",
+        id, rule.priority, hits, first_pred, rule.action
     );
 
     let mut multi_preds = false;
     while let Some(pred) = preds.pop_front() {
-        println!("{:<8} {:<6} {:<48}", "", "", pred);
+        println!("{:<6} {:<6} {:<6} {:<38}", "", "", "", pred);
         multi_preds = true;
     }
 
