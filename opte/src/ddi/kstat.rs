@@ -216,6 +216,10 @@ impl KStatU64 {
         Self { inner: kstat_named_t::new() }
     }
 
+    pub fn set(&mut self, val: u64) {
+        self.inner.value.set_u64(val);
+    }
+
     pub fn val(&self) -> u64 {
         self.inner.val_u64()
     }
@@ -225,6 +229,13 @@ impl KStatU64 {
 impl core::ops::AddAssign<u64> for KStatU64 {
     fn add_assign(&mut self, other: u64) {
         self.inner.value += other;
+    }
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl core::ops::SubAssign<u64> for KStatU64 {
+    fn sub_assign(&mut self, other: u64) {
+        self.inner.value -= other;
     }
 }
 
@@ -243,6 +254,10 @@ impl KStatU64 {
         Self { value: 0 }
     }
 
+    pub fn set(&mut self, val: u64) {
+        self.value = val;
+    }
+
     pub fn val(&self) -> u64 {
         self.value
     }
@@ -252,6 +267,13 @@ impl KStatU64 {
 impl core::ops::AddAssign<u64> for KStatU64 {
     fn add_assign(&mut self, other: u64) {
         self.value += other;
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl core::ops::SubAssign<u64> for KStatU64 {
+    fn sub_assign(&mut self, other: u64) {
+        self.value -= other;
     }
 }
 

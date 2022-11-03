@@ -17,6 +17,7 @@ use super::layer;
 use super::layer::Layer;
 use super::layer::LayerError;
 use super::layer::LayerResult;
+use super::layer::LayerStatsSnap;
 use super::layer::RuleId;
 use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
@@ -911,6 +912,23 @@ impl Port {
         for l in &data.layers {
             if l.name() == layer {
                 return l.action(idx);
+            }
+        }
+
+        None
+    }
+
+    /// Return a snapshot of the layer-level statistics.
+    ///
+    /// # States
+    ///
+    /// This command is valid for any [`PortState`].
+    pub fn layer_stats_snap(&self, layer: &str) -> Option<LayerStatsSnap> {
+        let data = self.data.lock();
+
+        for l in &data.layers {
+            if l.name() == layer {
+                return Some(l.stats_snap());
             }
         }
 

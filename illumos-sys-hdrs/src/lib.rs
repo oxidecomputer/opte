@@ -122,6 +122,18 @@ impl core::ops::AddAssign<u64> for KStatNamedValue {
     }
 }
 
+impl core::ops::SubAssign<u64> for KStatNamedValue {
+    fn sub_assign(&mut self, other: u64) {
+        unsafe { self._u64 -= other };
+    }
+}
+
+impl KStatNamedValue {
+    pub fn set_u64(&mut self, val: u64) {
+        self._u64 = val;
+    }
+}
+
 pub const KSTAT_FLAG_VIRTUAL: c_int = 0x1;
 
 pub const KSTAT_TYPE_NAMED: c_int = 1;

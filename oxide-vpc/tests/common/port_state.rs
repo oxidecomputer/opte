@@ -64,6 +64,9 @@ pub fn print_port(port: &Port, vpc_map: &VpcMappings) {
     println!("");
     for layer in &list_layers.layers {
         print_layer(&port.dump_layer(&layer.name).unwrap());
+        println!("");
+        println!("{:#?}", port.layer_stats_snap(&layer.name).unwrap());
+        println!("");
     }
 
     // ================================================================

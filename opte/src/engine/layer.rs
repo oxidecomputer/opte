@@ -29,6 +29,10 @@ use super::rule::Finalized;
 use super::rule::GenBtError;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
+use crate::ddi::kstat;
+use crate::ddi::kstat::KStatNamed;
+use crate::ddi::kstat::KStatProvider;
+use crate::ddi::kstat::KStatU64;
 use crate::ddi::time::Moment;
 use crate::ExecCtx;
 use crate::LogLevel;
@@ -37,6 +41,7 @@ use core::fmt::Display;
 use core::num::NonZeroU32;
 use core::result;
 use illumos_sys_hdrs::c_char;
+use kstat_macro::KStatProvider;
 use opte_api::Direction;
 
 cfg_if! {
@@ -347,6 +352,60 @@ pub struct LayerActions {
     pub default_out: DefaultAction,
 }
 
+#[derive(KStatProvider)]
+struct LayerStats {
+    /// The number of inbound packets that matched an LFT entry.
+    in_lft_hit: KStatU64,
+
+    /// The number of inbound packets dropped because there was no
+    /// space in the LFT.
+    in_lft_full: KStatU64,
+
+    /// The number of inbound packets that did not match an LFT entry
+    /// and required rule processing.
+    in_lft_miss: KStatU64,
+
+    /// The number of inbound packets that matched a rule.
+    in_rule_match: KStatU64,
+
+    /// The number of inbound packets that did not match a rule,
+    /// resulting in the default action being applied.
+    in_rule_nomatch: KStatU64,
+
+    /// The current number of inbound rules.
+    in_rules: KStatU64,
+
+    /// The number of outbound packets that matched an LFT entry.
+    out_lft_hit: KStatU64,
+
+    /// The number of outbound packets dropped because there was no
+    /// space in the LFT.
+    out_lft_full: KStatU64,
+
+    /// The number of outbound packets that did not match an LFT entry
+    /// and required rule processing.
+    out_lft_miss: KStatU64,
+
+    /// The number of outbound packets that matched a rule.
+    out_rule_match: KStatU64,
+
+    /// The number of outbound packets that did not match a rule,
+    /// resulting in the default action being applied.
+    out_rule_nomatch: KStatU64,
+
+    /// The current number of outbound rules.
+    out_rules: KStatU64,
+
+    /// The number of times add_rule() has been called.
+    add_rule_called: KStatU64,
+
+    /// The number of times remove_rule() has been called.
+    remove_rule_called: KStatU64,
+
+    /// The number of times set_rules() has been called.
+    set_rules_called: KStatU64,
+}
+
 pub struct Layer {
     port_c: CString,
     name: String,
@@ -359,6 +418,7 @@ pub struct Layer {
     ft: LayerFlowTable,
     rules_in: RuleTable,
     rules_out: RuleTable,
+    stats: KStatNamed<LayerStats>,
 }
 
 impl Layer {
@@ -368,9 +428,18 @@ impl Layer {
 
     pub fn add_rule(&mut self, dir: Direction, rule: Rule<Finalized>) {
         match dir {
-            Direction::Out => self.rules_out.add(rule),
-            Direction::In => self.rules_in.add(rule),
+            Direction::Out => {
+                self.rules_out.add(rule);
+                self.stats.vals.out_rules += 1;
+            }
+
+            Direction::In => {
+                self.rules_in.add(rule);
+                self.stats.vals.in_rules += 1;
+            }
         }
+
+        self.stats.vals.add_rule_called += 1;
     }
 
     /// Clear all flows from the layer's flow tables.
@@ -575,6 +644,10 @@ impl Layer {
         let port_c = CString::new(port).unwrap();
         let name_c = CString::new(name).unwrap();
 
+        // Unwrap: We know this is fine because the stat names are
+        // generated from the LayerStats structure.
+        let stats = KStatNamed::new("xde", name, LayerStats::new()).unwrap();
+
         Layer {
             actions: actions.actions,
             default_in: actions.default_in,
@@ -587,6 +660,7 @@ impl Layer {
             ft: LayerFlowTable::new(port, name, ft_limit),
             rules_in: RuleTable::new(port, name, Direction::In),
             rules_out: RuleTable::new(port, name, Direction::Out),
+            stats,
         }
     }
 
@@ -638,10 +712,12 @@ impl Layer {
         // Do we have a FlowTable entry? If so, use it.
         match self.ft.get_in(pkt.flow()) {
             Some(ActionDescEntry::NoOp) => {
+                self.stats.vals.in_lft_hit += 1;
                 return Ok(LayerResult::Allow);
             }
 
             Some(ActionDescEntry::Desc(desc)) => {
+                self.stats.vals.in_lft_hit += 1;
                 let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::In);
                 pkt.hdr_transform(&ht)?;
@@ -667,8 +743,6 @@ impl Layer {
             }
 
             None => {
-                // XXX Flow table miss stat
-
                 // No FlowTable entry, perhaps there is a matching Rule?
                 self.process_in_rules(ectx, pkt, xforms, ameta)
             }
@@ -683,13 +757,17 @@ impl Layer {
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::In;
+
+        self.stats.vals.in_lft_miss += 1;
         let mut rdr = pkt.get_body_rdr();
         let rule =
             self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta, &mut rdr);
         let _ = rdr.finish();
 
         let action = if rule.is_none() {
+            self.stats.vals.in_rule_nomatch += 1;
             self.default_in_hits += 1;
+
             match self.default_in {
                 DefaultAction::Deny => {
                     return Ok(LayerResult::Deny {
@@ -702,6 +780,7 @@ impl Layer {
                 DefaultAction::StatefulAllow => &Action::StatefulAllow,
             }
         } else {
+            self.stats.vals.in_rule_match += 1;
             rule.unwrap().action()
         };
 
@@ -712,6 +791,7 @@ impl Layer {
 
             Action::StatefulAllow => {
                 if self.ft.count == self.ft.limit.get() {
+                    self.stats.vals.in_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
                         layer: self.name.clone(),
                         dir: In,
@@ -815,6 +895,7 @@ impl Layer {
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
                 if self.ft.count == self.ft.limit.get() {
+                    self.stats.vals.in_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
                         layer: self.name.clone(),
                         dir: In,
@@ -916,10 +997,12 @@ impl Layer {
         // Do we have a FlowTable entry? If so, use it.
         match self.ft.get_out(pkt.flow()) {
             Some(ActionDescEntry::NoOp) => {
+                self.stats.vals.out_lft_hit += 1;
                 return Ok(LayerResult::Allow);
             }
 
             Some(ActionDescEntry::Desc(desc)) => {
+                self.stats.vals.out_lft_hit += 1;
                 let flow_before = pkt.flow().clone();
                 let ht = desc.gen_ht(Direction::Out);
                 pkt.hdr_transform(&ht)?;
@@ -945,8 +1028,6 @@ impl Layer {
             }
 
             None => {
-                // XXX Flow table miss stat
-
                 // No FlowTable entry, perhaps there is matching Rule?
                 self.process_out_rules(ectx, pkt, xforms, ameta)
             }
@@ -961,13 +1042,17 @@ impl Layer {
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::Out;
+
+        self.stats.vals.out_lft_miss += 1;
         let mut rdr = pkt.get_body_rdr();
         let rule =
             self.rules_out.find_match(pkt.flow(), pkt.meta(), &ameta, &mut rdr);
         let _ = rdr.finish();
 
         let action = if rule.is_none() {
+            self.stats.vals.out_rule_nomatch += 1;
             self.default_out_hits += 1;
+
             match self.default_out {
                 DefaultAction::Deny => {
                     return Ok(LayerResult::Deny {
@@ -980,6 +1065,7 @@ impl Layer {
                 DefaultAction::StatefulAllow => &Action::StatefulAllow,
             }
         } else {
+            self.stats.vals.out_rule_match += 1;
             rule.unwrap().action()
         };
 
@@ -990,6 +1076,7 @@ impl Layer {
 
             Action::StatefulAllow => {
                 if self.ft.count == self.ft.limit.get() {
+                    self.stats.vals.out_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
                         layer: self.name.clone(),
                         dir: Out,
@@ -1099,6 +1186,7 @@ impl Layer {
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
                 if self.ft.count == self.ft.limit.get() {
+                    self.stats.vals.out_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
                         layer: self.name.clone(),
                         dir: Out,
@@ -1237,9 +1325,19 @@ impl Layer {
         id: RuleId,
     ) -> Result<()> {
         match dir {
-            Direction::In => self.rules_in.remove(id),
-            Direction::Out => self.rules_out.remove(id),
+            Direction::In => {
+                self.rules_in.remove(id)?;
+                self.stats.vals.in_rules -= 1;
+            }
+
+            Direction::Out => {
+                self.rules_out.remove(id)?;
+                self.stats.vals.out_rules -= 1;
+            }
         }
+
+        self.stats.vals.remove_rule_called += 1;
+        Ok(())
     }
 
     pub(crate) fn rule_deny_probe(
@@ -1300,6 +1398,13 @@ impl Layer {
         self.ft.clear();
         self.rules_in.set_rules(in_rules);
         self.rules_out.set_rules(out_rules);
+        self.stats.vals.set_rules_called += 1;
+        self.stats.vals.in_rules.set(self.rules_in.num_rules() as u64);
+        self.stats.vals.out_rules.set(self.rules_out.num_rules() as u64);
+    }
+
+    pub fn stats_snap(&self) -> LayerStatsSnap {
+        self.stats.vals.snapshot()
     }
 }
 
