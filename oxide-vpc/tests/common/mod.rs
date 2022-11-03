@@ -82,6 +82,10 @@ pub const GW_MAC_ADDR: MacAddr =
 const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 const TCP_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 
+pub fn ox_vpc_mac(id: [u8; 3]) -> MacAddr {
+    MacAddr::from([0xA8, 0x40, 0x25, 0xF0 | id[0], id[1], id[2]])
+}
+
 pub fn g1_cfg() -> VpcCfg {
     let ip_cfg = IpCfg::DualStack {
         ipv4: Ipv4Cfg {
@@ -105,32 +109,13 @@ pub fn g1_cfg() -> VpcCfg {
             external_ips: None,
         },
     };
-    VpcCfg {
-        ip_cfg,
-        guest_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
-        gateway_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
-        vni: Vni::new(1287581u32).unwrap(),
-        // Site 0xF7, Rack 1, Sled 1, Interface 1
-        phys_ip: Ipv6Addr::from([
-            0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
-        ]),
-        boundary_services: BoundaryServices {
-            mac: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-            ip: Ipv6Addr::from([
-                0xFD, 0x00, 0x99, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-            ]),
-            vni: Vni::new(99u32).unwrap(),
-        },
-        proxy_arp_enable: false,
-        phys_gw_mac: Some(MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d])),
-    }
+    g1_cfg2(ip_cfg)
 }
 
 pub fn g1_cfg2(ip_cfg: IpCfg) -> VpcCfg {
     VpcCfg {
         ip_cfg,
-        guest_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
+        guest_mac: ox_vpc_mac([0xFA, 0xFA, 0x37]),
         gateway_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
         vni: Vni::new(1287581u32).unwrap(),
         // Site 0xF7, Rack 1, Sled 1, Interface 1
@@ -175,7 +160,7 @@ pub fn g2_cfg() -> VpcCfg {
     };
     VpcCfg {
         ip_cfg,
-        guest_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x66]),
+        guest_mac: ox_vpc_mac([0xF0, 0x00, 0x66]),
         gateway_mac: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
         vni: Vni::new(1287581u32).unwrap(),
         // Site 0xF7, Rack 1, Sled 22, Interface 1

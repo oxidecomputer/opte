@@ -2883,3 +2883,88 @@ fn tcp_inbound() {
     );
     assert_eq!(None, g1.port.tcp_state(&flow));
 }
+
+// Verify that the guest cannot spoof outbound packets.
+#[test]
+fn anti_spoof() {
+    let g1_cfg = g1_cfg();
+    let g2_cfg = g2_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    let src_ip = "172.30.0.240".parse().unwrap();
+    assert_ne!(src_ip, g1_cfg.ipv4().private_ip);
+    let src_mac = ox_vpc_mac([0x0, 0x11, 0x22]);
+    assert_ne!(src_mac, g1_cfg.guest_mac);
+
+    // ================================================================
+    // Try to send an outbound packet with a spoofed IP.
+    // ================================================================
+    let mut pkt1 = http_syn2(
+        g1_cfg.guest_mac,
+        src_ip,
+        GW_MAC_ADDR,
+        g2_cfg.ipv4().private_ip,
+    );
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert_drop!(
+        res,
+        DropReason::Layer {
+            name: "gateway".to_string(),
+            reason: DenyReason::Default,
+        }
+    );
+    incr!(
+        g1,
+        [
+            "stats.port.out_drop, stats.port.out_drop_layer",
+            "stats.port.out_uft_miss",
+        ]
+    );
+
+    // ================================================================
+    // Try to send an outbound packet with a spoofed MAC address.
+    // ================================================================
+    pkt1 = http_syn2(
+        src_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        g2_cfg.ipv4().private_ip,
+    );
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert_drop!(
+        res,
+        DropReason::Layer {
+            name: "gateway".to_string(),
+            reason: DenyReason::Default,
+        }
+    );
+    incr!(
+        g1,
+        [
+            "stats.port.out_drop, stats.port.out_drop_layer",
+            "stats.port.out_uft_miss",
+        ]
+    );
+
+    // ================================================================
+    // Try to send an outbound packet with a spoofed MAC address and IP.
+    // ================================================================
+    pkt1 = http_syn2(src_mac, src_ip, GW_MAC_ADDR, g2_cfg.ipv4().private_ip);
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert_drop!(
+        res,
+        DropReason::Layer {
+            name: "gateway".to_string(),
+            reason: DenyReason::Default,
+        }
+    );
+    incr!(
+        g1,
+        [
+            "stats.port.out_drop, stats.port.out_drop_layer",
+            "stats.port.out_uft_miss",
+        ]
+    );
+}
