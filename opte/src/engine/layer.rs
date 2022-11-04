@@ -7,6 +7,7 @@
 use super::flow_table::Dump;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
+use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::ioctl;
 use super::ioctl::ActionDescEntryDump;
 use super::packet::BodyTransformError;
@@ -396,6 +397,16 @@ struct LayerStats {
     /// The current number of outbound rules.
     out_rules: KStatU64,
 
+    /// The maximum number of active flows that the LFT can hold.
+    lft_capacity: KStatU64,
+
+    /// The current number of flows (entries in LFT).
+    flows: KStatU64,
+
+    /// The Time To Live for all flows, in seconds. When a flow is
+    /// inactive for longer than the TTL, it is considered expired.
+    flow_ttl: KStatU64,
+
     /// The number of times add_rule() has been called.
     add_rule_called: KStatU64,
 
@@ -445,6 +456,7 @@ impl Layer {
     /// Clear all flows from the layer's flow tables.
     pub(crate) fn clear_flows(&mut self) {
         self.ft.clear();
+        self.stats.vals.flows.set(0);
     }
 
     pub(crate) fn default_action(&self, dir: Direction) -> DefaultAction {
@@ -548,6 +560,7 @@ impl Layer {
     /// passed in moment.
     pub(crate) fn expire_flows(&mut self, now: Moment) {
         self.ft.expire_flows(now);
+        self.stats.vals.flows.set(self.ft.num_flows() as u64);
     }
 
     pub(crate) fn layer_process_entry_probe(
@@ -646,7 +659,14 @@ impl Layer {
 
         // Unwrap: We know this is fine because the stat names are
         // generated from the LayerStats structure.
-        let stats = KStatNamed::new("xde", name, LayerStats::new()).unwrap();
+        let mut stats = KStatNamed::new(
+            "xde",
+            &format!("{}_{}", port, name),
+            LayerStats::new(),
+        )
+        .unwrap();
+        stats.vals.lft_capacity.set(ft_limit.get() as u64);
+        stats.vals.flow_ttl.set(FLOW_DEF_EXPIRE_SECS);
 
         Layer {
             actions: actions.actions,
@@ -805,6 +825,7 @@ impl Layer {
                 let flow_out = pkt.flow().mirror();
                 let desc = ActionDescEntry::NoOp;
                 self.ft.add_pair(desc, pkt.flow().clone(), flow_out);
+                self.stats.vals.flows += 1;
                 return Ok(LayerResult::Allow);
             }
 
@@ -952,6 +973,7 @@ impl Layer {
                     flow_before,
                     flow_out,
                 );
+                self.stats.vals.flows += 1;
                 return Ok(LayerResult::Allow);
             }
 
@@ -1096,6 +1118,7 @@ impl Layer {
                     flow_in,
                     pkt.flow().clone(),
                 );
+                self.stats.vals.flows += 1;
                 return Ok(LayerResult::Allow);
             }
 
@@ -1251,6 +1274,7 @@ impl Layer {
                     flow_in,
                     flow_before,
                 );
+                self.stats.vals.flows += 1;
                 return Ok(LayerResult::Allow);
             }
 
