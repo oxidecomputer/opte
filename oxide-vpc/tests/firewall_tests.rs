@@ -86,11 +86,9 @@ fn firewall_replace_rules() {
     // of the real process we first dump the raw bytes of g1's
     // outgoing packet and then reparse it.
     // ================================================================
-    let mblk = pkt2.unwrap();
-    let mut pkt3 =
-        unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
-    let mut pkt3_copy =
-        Packet::<Initialized>::copy(&pkt3.all_bytes()).parse().unwrap();
+    let mblk = pkt2.unwrap_mblk();
+    let mut pkt3 = unsafe { Packet::wrap_mblk_and_parse(mblk).unwrap() };
+    let mut pkt3_copy = Packet::copy(&pkt3.all_bytes()).parse().unwrap();
     let res = g2.port.process(In, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(

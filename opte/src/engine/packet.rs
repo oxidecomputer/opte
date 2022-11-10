@@ -553,9 +553,9 @@ impl PacketMeta {
 /// The `no_std` implementation is used when running in-kernel. The
 /// main difference is the `mblk_t` and `dblk_t` structures are coming
 /// from viona (outbound/Tx) and mac (inbound/Rx), and we consume them
-/// via [`Packet::<Initialized>::wrap()`]. In reality this is
-/// typically holding an Ethernet _frame_, but we prefer to use the
-/// colloquial nomenclature of "packet".
+/// via [`Packet::wrap_mblk()`]. In reality this is typically holding
+/// an Ethernet _frame_, but we prefer to use the colloquial
+/// nomenclature of "packet".
 ///
 /// A [`Packet`] is made up of one or more segments ([`PacketSeg`]).
 /// Any given header is *always* contained in a single segment, i.e. a
@@ -588,7 +588,7 @@ impl PacketMeta {
 /// contract (for example a function that expects a single packet but
 /// is being fed a packet chain).
 ///
-/// TODO
+/// TODOx
 ///
 /// * Document the various type states, their purpose, their data, and
 /// how the [`Packet`] generally transitions between them.
@@ -609,11 +609,6 @@ enum PacketSource {
     Allocated,
     Wrapped,
 }
-
-use PacketSource::*;
-
-#[derive(Debug)]
-pub struct Uninitialized {}
 
 #[derive(Debug)]
 pub struct Initialized {
@@ -682,7 +677,6 @@ pub trait CanRead {
     fn len(&self) -> usize;
 }
 
-impl PacketState for Uninitialized {}
 impl PacketState for Initialized {}
 impl PacketState for Parsed {}
 
@@ -699,6 +693,7 @@ impl CanRead for Parsed {
 }
 
 impl<S: PacketState> Packet<S> {
+    /// Return the amount of buffer space available to this packet.
     pub fn avail(&self) -> usize {
         self.avail
     }
@@ -723,7 +718,7 @@ impl<S: PacketState> Packet<S> {
     /// Return the head of the underlying `mblk_t` segment chain and
     /// consume `self`. The caller of this function now owns the
     /// `mblk_t` segment chain.
-    pub fn unwrap(mut self) -> *mut mblk_t {
+    pub fn unwrap_mblk(mut self) -> *mut mblk_t {
         let mp_head = self.segs[0].mp;
         // We need to make sure to NULL out the mp pointer or else
         // `drop()` will `freemsg(9F)` even though ownership of the
@@ -765,170 +760,52 @@ impl<S: PacketState> Drop for Packet<S> {
     }
 }
 
-impl Packet<Uninitialized> {
-    /// Allocate a new [`Packet`] containing `size` bytes. The
-    /// returned packet consists of exactly one [`PacketSeg`]. The
-    /// metadata is initialized as `None`.
+impl Packet<Initialized> {
+    /// Allocate a new [`Packet`] containing a data buffer of `size`
+    /// bytes.
+    ///
+    /// The returned packet consists of exactly one [`PacketSeg`].
     ///
     /// In the kernel environment this uses `allocb(9F)` and
-    /// `freemsg(9F)` under the hood. However, in the kernel we are
-    /// often wrapping mblks which are handed to us by mac or viona,
-    /// in which case the [`Packet::<Initialized>::wrap()`] API is
-    /// used.
+    /// `freemsg(9F)` under the hood.
     ///
     /// In the `std` environment this uses a mock implementation of
-    /// `allocb(9F)` and `freeb(9F)` which contains enough scaffolding
+    /// `allocb(9F)` and `freeb(9F)`, which contains enough scaffolding
     /// to satisfy OPTE's use of the underlying `mblk_t` and `dblk_t`
     /// structures.
     pub fn alloc(size: usize) -> Self {
         let mp = allocb(size);
 
-        // Safety: We know `wrap()` is safe because we just built the
-        // `mp` in a safe manner.
-        Packet::<Uninitialized>::new(vec![unsafe { PacketSeg::wrap(mp) }])
+        // Safety: We know this is safe because we just built the `mp`
+        // in a safe manner.
+        Packet::new(vec![unsafe { PacketSeg::wrap_mblk(mp) }])
     }
 
-    /// Create a new packet from the specified `segs`.
-    pub fn new(segs: Vec<PacketSeg>) -> Self {
-        for seg in &segs {
-            if seg.len > 0 {
-                // We are expecting to have segments with no data in
-                // them.
-                panic!("cannot create an uninitialized packet from bytes");
-            }
-        }
-
-        let avail: usize = segs.iter().map(|s| s.avail).sum();
-
-        Packet {
-            avail: avail.try_into().unwrap(),
-            source: Allocated,
-            segs,
-            state: Uninitialized {},
-        }
-    }
-
-    /// Wrap the `mblk_t` packet in a [`Packet`], taking ownership of
-    /// the `mblk_t` packet as a result. An `mblk_t` packet consists
-    /// of one or more `mblk_t` segments chained together via
-    /// `b_cont`. As a result, this [`Packet`] may consist of *one or
-    /// more* [`PacketSeg`]s. When the [`Packet`] is dropped, the
-    /// underlying `mblk_t` segment chain is freed. If you wish to
-    /// pass on ownership you must call the [`Packet::unwrap()`]
-    /// function.
-    ///
-    /// # Safety
-    ///
-    /// The `mp` pointer must point to an `mblk_t` allocated by
-    /// `allocb(9F)` or provided by some kernel API which itself used
-    /// one of the DDI/DKI APIs to allocate it. That said, this
-    /// function assumes that no packet spans across more than 1024
-    /// segments. If such a packet is encountered it panics under the
-    /// assumption that something has gone wrong vis-à-vis corruption
-    /// or malicious behavior.
-    ///
-    /// # Panic
-    ///
-    /// * The `mp` value is `NULL`.
-    ///
-    /// * The packet spans more than 1024 segments.
-    ///
-    /// * The packet contains 1 or more initialized bytes.
-    ///
-    /// TODO: This last point is kind of odd and something that might
-    /// change. Basically, we allow wrapping an existing mblk segment
-    /// chain with zero bytes written (i.e. all `b_rptr == b_wptr`) as
-    /// well as wrapping an existing mblk segment chain with one or
-    /// more bytes. The former is this function, returning a
-    /// [`Packet<Uninitialized>`]. The later is
-    /// [`Packet::<Initialized>::wrap()`], returning a
-    /// [`Packet<Initialized>`].
-    ///
-    pub unsafe fn wrap(mp: *mut mblk_t) -> Self {
-        if mp.is_null() {
-            panic!("NULL pointer passed to wrap()");
-        }
-
-        let mut len = 0;
-        let mut avail = 0;
-        let mut count = 0;
-        let mut segs = Vec::with_capacity(4);
-        let mut next_seg = (*mp).b_cont;
-
-        let mut seg = PacketSeg::wrap(mp);
-        avail += seg.avail;
-        len += seg.len;
-        segs.push(seg);
-
-        while next_seg != ptr::null_mut() {
-            let tmp = (*next_seg).b_cont;
-            count += 1;
-            seg = PacketSeg::wrap(next_seg);
-            avail += seg.avail;
-            len += seg.len;
-            segs.push(seg);
-            next_seg = tmp;
-
-            // We are chasing a linked list, guard against corruption
-            // or someone playing games. You might find a panic harsh
-            // here, but harsher still is passing this to freemsg(9F),
-            // which if being fed a corrupted mblk may end up doing
-            // god knows what.
-            if count == 1024 {
-                panic!("circular/corrupted mblk_t chain encountered")
-            }
-        }
-
-        if len != 0 {
-            // An uninitialized packet must have zero bytes written.
-            panic!("bytes found");
-        }
-
-        Packet {
-            avail: avail.try_into().unwrap(),
-            source: Wrapped,
-            segs,
-            state: Uninitialized {},
-        }
-    }
-}
-
-impl Packet<Initialized> {
     /// Create a [`Packet<Initialized>`] value from the passed in
-    /// `bytes`. The returned packet consists of exactly one
-    /// [`PacketSeg`] with exactly enough space to hold `bytes.len()`.
-    #[cfg(any(feature = "std", test))]
-    pub fn copy(bytes: &[u8]) -> Self {
-        let mut buf = Vec::with_capacity(bytes.len());
-        buf.extend_from_slice(bytes);
-        let mp = mock_desballoc(buf);
-        unsafe { Packet::<Initialized>::wrap(mp) }
-    }
-
-    /// Create a [`Packet<Initialized>`] from the passed in `bytes`.
+    /// `bytes`.
+    ///
     /// The returned packet consists of exactly one [`PacketSeg`] with
-    /// exactly enough space to hold `bytes.len()`.
-    #[cfg(all(not(feature = "std"), not(test)))]
+    /// enough space to hold `bytes.len()`.
     pub fn copy(bytes: &[u8]) -> Self {
-        if bytes.len() == 0 {
-            panic!("attempt to initialize packet from zero bytes");
-        }
-        let mut wtr = PacketWriter::new(Packet::alloc(bytes.len()), None);
-        wtr.write(bytes).expect("impossible");
-        wtr.finish()
+        let mut pkt = Packet::alloc(bytes.len());
+        // Unwrap: We know there cannot be a WriteError because we
+        // allocate a packet large enough to hold all bytes.
+        pkt.segs[0].write(bytes, WritePos::Append).unwrap();
+        pkt.state.len = bytes.len();
+        pkt
     }
 
     /// Create a new packet from the specified `segs`.
     pub fn new(segs: Vec<PacketSeg>) -> Self {
         let len: usize = segs.iter().map(|s| s.len).sum();
-        if len == 0 {
-            // An "initialized" Packet must have at least one byte.
-            panic!("no bytes found");
-        }
-
         let avail: usize = segs.iter().map(|s| s.avail).sum();
 
-        Packet { avail, source: Allocated, segs, state: Initialized { len } }
+        Packet {
+            avail,
+            source: PacketSource::Allocated,
+            segs,
+            state: Initialized { len },
+        }
     }
 
     fn parse_hg_ipv4<'a>(
@@ -1297,73 +1174,58 @@ impl Packet<Initialized> {
     /// `b_cont`. As a result, this [`Packet`] may consist of *one or
     /// more* [`PacketSeg`]s. When the [`Packet`] is dropped, the
     /// underlying `mblk_t` segment chain is freed. If you wish to
-    /// pass on ownership you must call the [`Packet::unwrap()`]
+    /// pass on ownership you must call the [`Packet::unwrap_mblk()`]
     /// function.
     ///
     /// # Safety
     ///
     /// The `mp` pointer must point to an `mblk_t` allocated by
     /// `allocb(9F)` or provided by some kernel API which itself used
-    /// one of the DDI/DKI APIs to allocate it. That said, this
-    /// function assumes that no packet spans across more than 1024
-    /// segments. If such a packet is encountered it panics under the
-    /// assumption that something has gone wrong vis-à-vis corruption
-    /// or malicious behavior.
+    /// one of the DDI/DKI APIs to allocate it.
     ///
-    /// # Panic
+    /// # Errors
     ///
-    /// * The `mp` value is `NULL`.
-    ///
-    /// * The packet spans more than 1024 segments.
-    ///
-    /// * The packet DOES NOT contain as least 1 initialized byte.
-    ///
-    pub unsafe fn wrap(mp: *mut mblk_t) -> Self {
+    /// * Return [`WrapError::NullPtr`] is `mp` is `NULL`.
+    pub unsafe fn wrap_mblk(mp: *mut mblk_t) -> Result<Self, WrapError> {
         if mp.is_null() {
-            panic!("NULL pointer passed to wrap()");
+            return Err(WrapError::NullPtr);
         }
 
         let mut len = 0;
         let mut avail = 0;
-        let mut count = 0;
         let mut segs = Vec::with_capacity(4);
         let mut next_seg = (*mp).b_cont;
-
-        let mut seg = PacketSeg::wrap(mp);
+        let mut seg = PacketSeg::wrap_mblk(mp);
         avail += seg.avail;
         len += seg.len;
         segs.push(seg);
 
         while next_seg != ptr::null_mut() {
             let tmp = (*next_seg).b_cont;
-            count += 1;
-            seg = PacketSeg::wrap(next_seg);
+            seg = PacketSeg::wrap_mblk(next_seg);
             avail += seg.avail;
             len += seg.len;
             segs.push(seg);
             next_seg = tmp;
-
-            // We are chasing a linked list, guard against corruption
-            // or someone playing games. You might find a panic harsh
-            // here, but harsher still is passing this to freemsg(9F),
-            // which if being fed a corrupted mblk may end up doing
-            // god knows what.
-            if count == 1024 {
-                panic!("circular/corrupted mblk_t chain encountered")
-            }
         }
 
-        if len == 0 {
-            // An initialized packet must have at least one byte.
-            panic!("no bytes found");
-        }
-
-        Packet {
+        Ok(Packet {
             avail: avail.try_into().unwrap(),
-            source: Wrapped,
+            source: PacketSource::Wrapped,
             segs,
             state: Initialized { len },
-        }
+        })
+    }
+
+    /// A combination of [`Self::wrap_mblk()`] followed by [`Self::parse()`].
+    ///
+    /// This is a bit more convenient than dealing with the possible
+    /// error from each separately.
+    pub unsafe fn wrap_mblk_and_parse(
+        mp: *mut mblk_t,
+    ) -> Result<Packet<Parsed>, PacketError> {
+        let pkt = Self::wrap_mblk(mp)?;
+        pkt.parse().map_err(|e| PacketError::from(e))
     }
 }
 
@@ -1637,7 +1499,7 @@ impl Packet<Parsed> {
             total_sz += self.state.headers.outer.as_ref().unwrap().len();
         }
 
-        let mut hdr_seg = unsafe { PacketSeg::wrap(allocb(total_sz)) };
+        let mut hdr_seg = unsafe { PacketSeg::wrap_mblk(allocb(total_sz)) };
 
         // Emit each raw header in turn to new segment.
         if self.state.headers.outer.is_some() {
@@ -1909,11 +1771,13 @@ impl<S: CanRead + PacketState> Packet<S> {
         bytes
     }
 
-    /// Return the length of the entire packet.
+    /// Return the length of the packet.
     ///
     /// NOTE: This length only includes the _initialized_ bytes of the
     /// packet. Each [`PacketSeg`] may contain _uninitialized_ bytes
     /// at the head or tail (or both) of the segment.
+    ///
+    /// This is equivalent to the `msgsize(9F)` function in illumos.
     pub fn len(&self) -> usize {
         self.state.len()
     }
@@ -1945,9 +1809,9 @@ impl PacketSeg {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 // Safety: We know the mblk wrapped by PacketSeg is legit
                 // and came from the system's allocb(9F).
-                unsafe { ddi::freeb(self.unwrap()) };
+                unsafe { ddi::freeb(self.unwrap_mblk()) };
             } else {
-                mock_freeb(self.unwrap());
+                mock_freeb(self.unwrap_mblk());
             }
         }
     }
@@ -2083,18 +1947,26 @@ impl PacketSeg {
         unsafe { slice::from_raw_parts_mut(start, len) }
     }
 
-    /// Wrap an existing `mblk_t`.
+    /// Wrap an existing `mblk_t`, taking ownership of it.
     ///
-    /// Safety: The `mp` passed must be a pointer to an existing `mblk_t`.
-    pub unsafe fn wrap(mp: *mut mblk_t) -> Self {
+    /// # Safety
+    ///
+    /// The `mp` passed must be a non-NULL pointer to an `mblk_t`
+    /// created by one of the `allocb(9F)` family of calls.
+    ///
+    /// After calling this function, the original mp pointer should
+    /// not be dereferenced.
+    pub unsafe fn wrap_mblk(mp: *mut mblk_t) -> Self {
         let dblk = (*mp).b_datap as *mut dblk_t;
         let len = (*mp).b_wptr.offset_from((*mp).b_rptr) as usize;
         let avail = (*dblk).db_lim.offset_from((*dblk).db_base) as usize;
-
-        PacketSeg { mp, dblk, avail, len } // phantom: PhantomData }
+        PacketSeg { mp, dblk, avail, len }
     }
 
-    pub fn unwrap(self) -> *mut mblk_t {
+    /// The opposite of [`Self::wrap_mblk()`].
+    ///
+    /// This gives ownership of the `mblk_t` to the caller.
+    pub fn unwrap_mblk(self) -> *mut mblk_t {
         self.mp
     }
 
@@ -2187,6 +2059,31 @@ impl PacketSeg {
 
         self.len = new_len;
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum WrapError {
+    /// We tried to wrap a NULL pointer.
+    NullPtr,
+}
+
+/// Some functions may return multiple types of errors.
+#[derive(Clone, Debug)]
+pub enum PacketError {
+    Parse(ParseError),
+    Wrap(WrapError),
+}
+
+impl From<ParseError> for PacketError {
+    fn from(e: ParseError) -> Self {
+        Self::Parse(e)
+    }
+}
+
+impl From<WrapError> for PacketError {
+    fn from(e: WrapError) -> Self {
+        Self::Wrap(e)
     }
 }
 
@@ -2337,66 +2234,6 @@ pub trait PacketRead<'a> {
 pub enum WritePos {
     Append,
     Modify(u16),
-}
-
-pub struct PacketWriter {
-    pkt: Packet<Uninitialized>,
-    pkt_len: usize,
-    pkt_pos: usize,
-    seg_idx: usize,
-    seg_pos: usize,
-}
-
-impl PacketWriter {
-    pub fn finish(mut self) -> Packet<Initialized> {
-        Packet {
-            avail: self.pkt.avail,
-            source: self.pkt.source,
-            // The new Packet is taking ownership of the segments.
-            segs: core::mem::take(&mut self.pkt.segs),
-            state: Initialized { len: self.pkt_len },
-        }
-    }
-
-    pub fn new(pkt: Packet<Uninitialized>, margin: Option<usize>) -> Self {
-        // TODO This is temporary just to get things working. There's
-        // no real reason margin can't span past the first segment.
-        // Though, really, it probably shouldn't be a thing.
-        if margin.unwrap_or(0) >= pkt.segs[0].avail {
-            panic!("margin must fit in first segment");
-        }
-
-        PacketWriter {
-            pkt,
-            pkt_len: 0,
-            pkt_pos: margin.unwrap_or(0),
-            seg_idx: 0,
-            seg_pos: margin.unwrap_or(0),
-        }
-    }
-
-    pub fn pos(&self) -> usize {
-        self.pkt_pos
-    }
-
-    pub fn write(&mut self, bytes: &[u8]) -> WriteResult<()> {
-        let mut seg = &mut self.pkt.segs[self.seg_idx];
-
-        if self.seg_pos == seg.avail {
-            if (self.seg_idx + 1) == self.pkt.num_segs() {
-                return Err(WriteError::EndOfPacket);
-            }
-
-            self.seg_idx += 1;
-            seg = &mut self.pkt.segs[self.seg_idx];
-        }
-
-        seg.write(bytes, WritePos::Append)?;
-        self.pkt_len += bytes.len();
-        self.pkt_pos += bytes.len();
-        self.seg_pos += bytes.len();
-        Ok(())
-    }
 }
 
 // The `S` type is any arbitrary state the caller of [`PacketReader`]
@@ -2571,6 +2408,9 @@ pub fn allocb(size: usize) -> *mut mblk_t {
 
 #[cfg(any(feature = "std", test))]
 pub fn mock_allocb(size: usize) -> *mut mblk_t {
+    // If the requested size is 0 we mimic allocb(9F) and allocate 16
+    // bytes. See `uts/common/io/stream.c`.
+    let size = if size == 0 { 16 } else { size };
     let buf = Vec::with_capacity(size);
     mock_desballoc(buf)
 }
@@ -2685,7 +2525,9 @@ mod test {
 
     const PKT_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::SIZE + TcpHdr::BASE_SIZE;
 
-    fn tcp_pkt(pkt: Packet<Uninitialized>) -> Packet<Initialized> {
+    fn tcp_pkt() -> Packet<Initialized> {
+        let mut bytes = vec![];
+
         let body = vec![];
         let mut tcp = TcpHdr::new(3839, 80);
         tcp.set_seq(4224936861);
@@ -2693,20 +2535,41 @@ mod test {
         let ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, SRC_IP4, DST_IP4);
         let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
 
-        let mut wtr = PacketWriter::new(pkt, None);
-        let _ = wtr.write(&eth.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), EtherHdr::SIZE);
-        let _ = wtr.write(&ip4.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), EtherHdr::SIZE + Ipv4Hdr::SIZE);
-        let _ = wtr.write(&tcp.as_bytes()).unwrap();
-        assert_eq!(
-            wtr.pos(),
-            EtherHdr::SIZE + Ipv4Hdr::SIZE + TcpHdr::BASE_SIZE
-        );
-
-        let pkt = wtr.finish();
+        bytes.extend_from_slice(&eth.as_bytes());
+        bytes.extend_from_slice(&ip4.as_bytes());
+        bytes.extend_from_slice(&tcp.as_bytes());
+        let pkt = Packet::copy(&bytes);
         assert_eq!(pkt.len(), PKT_SZ);
         pkt
+    }
+
+    #[test]
+    fn zero_byte_packet() {
+        let pkt = Packet::alloc(0);
+        assert_eq!(pkt.len(), 0);
+        assert_eq!(pkt.num_segs(), 1);
+        assert_eq!(pkt.avail(), 16);
+        let res = pkt.parse();
+        match res {
+            Err(ParseError::BadHeader(msg)) => {
+                assert_eq!(msg, "read error: EndOfPacket");
+            }
+
+            _ => panic!("expected read error, got: {:?}", res),
+        }
+
+        let pkt2 = Packet::copy(&vec![]);
+        assert_eq!(pkt2.len(), 0);
+        assert_eq!(pkt2.num_segs(), 1);
+        assert_eq!(pkt2.avail(), 16);
+        let res = pkt2.parse();
+        match res {
+            Err(ParseError::BadHeader(msg)) => {
+                assert_eq!(msg, "read error: EndOfPacket");
+            }
+
+            _ => panic!("expected read error, got: {:?}", res),
+        }
     }
 
     // Verify uninitialized packet.
@@ -2729,7 +2592,7 @@ mod test {
             (*mp1).b_cont = mp2;
         }
 
-        let pkt = unsafe { Packet::<Initialized>::wrap(mp1) };
+        let pkt = unsafe { Packet::wrap_mblk(mp1).unwrap() };
         assert_eq!(pkt.len(), 6);
         assert_eq!(pkt.num_segs(), 2);
         assert_eq!(pkt.seg_bytes(0), &[0x1, 0x2, 0x3, 0x4]);
@@ -2749,32 +2612,15 @@ mod test {
             (*mp1).b_cont = mp2;
         }
 
-        let pkt = unsafe { Packet::<Initialized>::wrap(mp1) };
+        let pkt = unsafe { Packet::wrap_mblk(mp1).unwrap() };
         assert_eq!(pkt.num_segs(), 2);
         assert_eq!(pkt.avail(), 22);
         assert_eq!(pkt.len(), 6);
     }
 
     #[test]
-    #[should_panic]
-    fn wrap_circular() {
-        let buf1 = vec![0x1, 0x2, 0x3, 0x4];
-        let buf2 = vec![0x5, 0x6];
-        let mp1 = mock_desballoc(buf1);
-        let mp2 = mock_desballoc(buf2);
-
-        // Make a circular reference.
-        unsafe {
-            (*mp1).b_cont = mp2;
-            (*mp2).b_cont = mp1;
-        }
-
-        let _pkt = unsafe { Packet::<Initialized>::wrap(mp1) };
-    }
-
-    #[test]
-    fn write_and_read_single_segment() {
-        let parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+    fn read_single_segment() {
+        let parsed = tcp_pkt().parse().unwrap();
         assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_idx, 0);
         assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_pos, 0);
 
@@ -2817,12 +2663,20 @@ mod test {
             (*mp1).b_cont = mp2;
         }
 
-        let pkt = unsafe { Packet::<Uninitialized>::wrap(mp1) };
-        assert_eq!(pkt.num_segs(), 2);
-        assert_eq!(pkt.avail(), 54);
-        let pkt = tcp_pkt(pkt);
-        assert_eq!(pkt.len(), PKT_SZ);
-        assert_eq!(pkt.num_segs(), 2);
+        let mut seg1 = unsafe { PacketSeg::wrap_mblk(mp1) };
+        let mut seg2 = unsafe { PacketSeg::wrap_mblk(mp2) };
+
+        let body = vec![];
+        let mut tcp = TcpHdr::new(3839, 80);
+        tcp.set_seq(4224936861);
+        tcp.set_flags(TcpFlags::SYN);
+        let ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, SRC_IP4, DST_IP4);
+        let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
+
+        seg1.write(&eth.as_bytes(), WritePos::Append).unwrap();
+        seg1.write(&ip4.as_bytes(), WritePos::Append).unwrap();
+        seg2.write(&tcp.as_bytes(), WritePos::Append).unwrap();
+        let pkt = Packet::new(vec![seg1, seg2]);
         let parsed = pkt.parse().unwrap();
 
         let eth_meta = parsed.state.meta.inner.ether.as_ref().unwrap();
@@ -2857,44 +2711,11 @@ mod test {
         assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_pos, 0);
     }
 
-    // Verify that we catch when a write requires more bytes than are
-    // available.
-    #[test]
-    fn not_enough_bytes() {
-        let mp1 = allocb(42);
-        let mp2 = allocb(12);
-
-        unsafe {
-            (*mp1).b_cont = mp2;
-        }
-
-        let pkt = unsafe { Packet::<Uninitialized>::wrap(mp1) };
-        assert_eq!(pkt.num_segs(), 2);
-        assert_eq!(pkt.avail(), 54);
-
-        let body = vec![];
-        let mut tcp = TcpHdr::new(3839, 80);
-        tcp.set_seq(4224936861);
-        let ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, SRC_IP4, DST_IP4);
-        let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
-
-        let mut wtr = PacketWriter::new(pkt, None);
-        let _ = wtr.write(&eth.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), EtherHdr::SIZE);
-        let _ = wtr.write(&ip4.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), EtherHdr::SIZE + Ipv4Hdr::SIZE);
-        let tcp_bytes = tcp.as_bytes();
-        assert!(matches!(
-            wtr.write(&tcp_bytes[0..12]),
-            Err(WriteError::NotEnoughBytes { available: 8, needed: 12, .. })
-        ));
-    }
-
     // Verify that modification that starts past wptr produces an
     // OutOfRange error.
     #[test]
     fn out_of_range() {
-        let mut pkt = tcp_pkt(Packet::alloc(PKT_SZ));
+        let mut pkt = tcp_pkt();
 
         // Pretend to zero the checksum field but purposely use an
         // offset 2 bytes past the end.
@@ -2908,23 +2729,17 @@ mod test {
     // available.
     #[test]
     fn not_enough_bytes_read() {
-        let mp1 = allocb(24);
-        let pkt = unsafe { Packet::<Uninitialized>::wrap(mp1) };
-        assert_eq!(pkt.num_segs(), 1);
-        assert_eq!(pkt.avail(), 24);
-
+        let mut bytes = vec![];
         let body = vec![];
         let mut tcp = TcpHdr::new(3839, 80);
         tcp.set_seq(4224936861);
         let ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, SRC_IP4, DST_IP4);
         let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
-
-        let mut wtr = PacketWriter::new(pkt, None);
-        let _ = wtr.write(&eth.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), EtherHdr::SIZE);
-        let _ = wtr.write(&ip4.as_bytes()[0..10]).unwrap();
-
-        let pkt = wtr.finish();
+        bytes.extend_from_slice(&eth.as_bytes());
+        bytes.extend_from_slice(&ip4.as_bytes()[0..10]);
+        let pkt = Packet::copy(&bytes);
+        assert_eq!(pkt.num_segs(), 1);
+        assert_eq!(pkt.avail(), 24);
         let mut rdr = PacketReader::new(&pkt, ());
         let _ = rdr.slice(EtherHdr::SIZE);
         assert!(matches!(
@@ -2936,7 +2751,7 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_unchecked_bad_offset() {
-        let parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        let parsed = tcp_pkt().parse().unwrap();
         // Offset past end of segment.
         parsed.segs[0].slice_unchecked(99, None);
     }
@@ -2944,7 +2759,7 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_mut_unchecked_bad_offset() {
-        let mut parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        let mut parsed = tcp_pkt().parse().unwrap();
         // Offset past end of segment.
         parsed.segs[0].slice_mut_unchecked(99, None);
     }
@@ -2952,7 +2767,7 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_unchecked_bad_len() {
-        let parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        let parsed = tcp_pkt().parse().unwrap();
         // Length past end of segment.
         parsed.segs[0].slice_unchecked(0, Some(99));
     }
@@ -2960,14 +2775,14 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_mut_unchecked_bad_len() {
-        let mut parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        let mut parsed = tcp_pkt().parse().unwrap();
         // Length past end of segment.
         parsed.segs[0].slice_mut_unchecked(0, Some(99));
     }
 
     #[test]
     fn slice_unchecked_zero() {
-        let parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        let parsed = tcp_pkt().parse().unwrap();
         // Set offset to end of packet and slice the "rest" by
         // passing None.
         assert_eq!(parsed.segs[0].slice_unchecked(54, None).len(), 0);
@@ -2975,7 +2790,7 @@ mod test {
 
     #[test]
     fn slice_mut_unchecked_zero() {
-        let mut parsed = tcp_pkt(Packet::alloc(PKT_SZ)).parse().unwrap();
+        let mut parsed = tcp_pkt().parse().unwrap();
         // Set offset to end of packet and slice the "rest" by
         // passing None.
         assert_eq!(parsed.segs[0].slice_mut_unchecked(54, None).len(), 0);
@@ -2992,36 +2807,25 @@ mod test {
             (*mp1).b_cont = mp2;
         }
 
-        let pkt = unsafe { Packet::<Uninitialized>::wrap(mp1) };
-        assert_eq!(pkt.num_segs(), 2);
-        assert_eq!(pkt.avail(), 54);
+        let mut seg1 = unsafe { PacketSeg::wrap_mblk(mp1) };
+        let mut seg2 = unsafe { PacketSeg::wrap_mblk(mp2) };
 
         let body = vec![];
         let mut tcp = TcpHdr::new(3839, 80);
         tcp.set_seq(4224936861);
         let ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, SRC_IP4, DST_IP4);
         let eth = EtherHdr::new(EtherType::Ipv4, SRC_MAC, DST_MAC);
-
-        let mut wtr = PacketWriter::new(pkt, None);
-        let _ = wtr.write(&eth.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), EtherHdr::SIZE);
-        let _ = wtr.write(&ip4.as_bytes()).unwrap();
-        assert_eq!(wtr.pos(), EtherHdr::SIZE + Ipv4Hdr::SIZE);
+        seg1.write(&eth.as_bytes(), WritePos::Append).unwrap();
+        seg1.write(&ip4.as_bytes(), WritePos::Append).unwrap();
         let tcp_bytes = &tcp.as_bytes();
-        let _ = wtr.write(&tcp_bytes[0..12]).unwrap();
-        let _ = wtr.write(&tcp_bytes[12..]).unwrap();
-        assert_eq!(
-            wtr.pos(),
-            EtherHdr::SIZE + Ipv4Hdr::SIZE + TcpHdr::BASE_SIZE
-        );
-
-        let pkt = wtr.finish();
-
+        seg1.write(&tcp_bytes[0..12], WritePos::Append).unwrap();
+        seg2.write(&tcp_bytes[12..], WritePos::Append).unwrap();
+        let pkt = Packet::new(vec![seg1, seg2]);
+        assert_eq!(pkt.num_segs(), 2);
         assert_eq!(
             pkt.len(),
             EtherHdr::SIZE + Ipv4Hdr::SIZE + TcpHdr::BASE_SIZE
         );
-        assert_eq!(pkt.num_segs(), 2);
         assert!(matches!(pkt.parse(), Err(ParseError::BadHeader(_))));
     }
 
@@ -3062,9 +2866,7 @@ mod test {
                 packet_buf.extend_from_slice(&eth.as_bytes());
                 packet_buf.extend_from_slice(&ip6.as_bytes());
                 packet_buf.extend_from_slice(&tcp.as_bytes());
-
-                let generated_packet = Packet::copy(&packet_buf);
-                let parsed = generated_packet.parse().unwrap();
+                let parsed = Packet::copy(&packet_buf).parse().unwrap();
 
                 // Assert that the computed offsets of the headers and payloads
                 // are accurate

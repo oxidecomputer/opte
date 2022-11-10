@@ -476,7 +476,6 @@ impl From<&Ipv6Meta> for Ipv6Hdr {
 pub(crate) mod test {
     use super::*;
     use crate::engine::headers::Header;
-    use crate::engine::packet::Initialized;
     use crate::engine::packet::Packet;
     use crate::engine::packet::PacketReader;
     use itertools::Itertools;
@@ -673,7 +672,7 @@ pub(crate) mod test {
                 SUPPORTED_EXTENSIONS.into_iter().permutations(n_extensions)
             {
                 let (buf, pos) = generate_test_packet(extensions.as_slice());
-                let bytes = Packet::<Initialized>::copy(&buf);
+                let bytes = Packet::copy(&buf);
                 let mut reader = PacketReader::new(&bytes, ());
                 let header = Ipv6Hdr::parse(&mut reader).unwrap();
                 assert_all_lengths_ok(&header, pos);

@@ -21,7 +21,6 @@ use super::packet::Packet;
 use super::packet::PacketMeta;
 use super::packet::PacketRead;
 use super::packet::PacketReader;
-use super::packet::PacketWriter;
 use super::packet::Parsed;
 use super::packet::ReadErr;
 use super::packet::WriteError;
@@ -402,9 +401,9 @@ impl HairpinAction for ArpReply {
     ) -> GenPacketResult {
         // TODO Add 2 bytes to alloc and push b_rptr/b_wptr to make
         // sure IP header is properly aligned.
-        let pkt =
-            Packet::alloc(EtherHdr::SIZE + ARP_HDR_SZ + ARP_ETH4_PAYLOAD_SZ);
-        let mut wtr = PacketWriter::new(pkt, None);
+        let mut bytes = Vec::with_capacity(
+            EtherHdr::SIZE + ARP_HDR_SZ + ARP_ETH4_PAYLOAD_SZ,
+        );
 
         let ethm = &meta.inner.ether.as_ref().unwrap();
         let req_raw = ArpEth4PayloadRaw::parse(rdr)?;
@@ -416,7 +415,7 @@ impl HairpinAction for ArpReply {
             ether_type: ETHER_TYPE_ARP,
         });
 
-        let _ = wtr.write(&eth_hdr.as_bytes()).unwrap();
+        bytes.extend_from_slice(&eth_hdr.as_bytes());
 
         let arp_hdr = ArpHdrRaw::from(&ArpMeta {
             htype: ARP_HTYPE_ETHERNET,
@@ -426,7 +425,7 @@ impl HairpinAction for ArpReply {
             op: ArpOp::Reply,
         });
 
-        let _ = wtr.write(arp_hdr.as_bytes()).unwrap();
+        bytes.extend_from_slice(&arp_hdr.as_bytes());
 
         let payload = ArpEth4PayloadRaw::from(ArpEth4Payload {
             sha: self.tha,
@@ -435,8 +434,8 @@ impl HairpinAction for ArpReply {
             tpa: req.spa,
         });
 
-        let _ = wtr.write(payload.as_bytes()).unwrap();
-        let pkt = wtr.finish();
+        bytes.extend_from_slice(&payload.as_bytes());
+        let pkt = Packet::copy(&bytes);
         Ok(AllowOrDeny::Allow(pkt))
     }
 }

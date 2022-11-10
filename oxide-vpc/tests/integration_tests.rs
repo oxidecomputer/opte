@@ -51,7 +51,6 @@ use opte::engine::ip6::Ipv6Meta;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketRead;
 use opte::engine::packet::PacketReader;
-use opte::engine::packet::PacketWriter;
 use opte::engine::packet::ParseError;
 use opte::engine::packet::Parsed;
 use opte::engine::port::ProcessError;
@@ -615,9 +614,8 @@ fn guest_to_guest() {
     // of the real process we first dump the raw bytes of g1's
     // outgoing packet and then reparse it.
     // ================================================================
-    let mblk = pkt1.unwrap();
-    let mut pkt2 =
-        unsafe { Packet::<Initialized>::wrap(mblk).parse().unwrap() };
+    let mblk = pkt1.unwrap_mblk();
+    let mut pkt2 = unsafe { Packet::wrap_mblk_and_parse(mblk).unwrap() };
     pcap_phys2.add_pkt(&pkt2);
 
     let res = g2.port.process(In, &mut pkt2, ActionMeta::new());
@@ -1077,7 +1075,6 @@ fn snat_icmp4_echo_rewrite() {
 #[test]
 fn bad_ip_len() {
     let cfg = lab_cfg();
-    let pkt = Packet::alloc(42);
 
     let ether = EtherHdr::from(&EtherMeta {
         src: cfg.guest_mac,
@@ -1097,17 +1094,15 @@ fn bad_ip_len() {
 
     let udp = UdpHdr::from(&UdpMeta { src: 68, dst: 67 });
 
-    let mut wtr = PacketWriter::new(pkt, None);
-    let _ = wtr.write(&ether.as_bytes()).unwrap();
-    let _ = wtr.write(&ip.as_bytes()).unwrap();
-    let _ = wtr.write(&udp.as_bytes()).unwrap();
-    let res = wtr.finish().parse();
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&ether.as_bytes());
+    bytes.extend_from_slice(&ip.as_bytes());
+    bytes.extend_from_slice(&udp.as_bytes());
+    let res = Packet::copy(&bytes).parse();
     assert_eq!(
         res.err().unwrap(),
         ParseError::BadHeader("IPv4: BadTotalLen { total_len: 4 }".to_string())
     );
-
-    let pkt = Packet::alloc(42);
 
     let ether = EtherHdr::from(&EtherMeta {
         src: cfg.guest_mac,
@@ -1127,11 +1122,11 @@ fn bad_ip_len() {
 
     let udp = UdpHdr::from(&UdpMeta { src: 68, dst: 67 });
 
-    let mut wtr = PacketWriter::new(pkt, None);
-    let _ = wtr.write(&ether.as_bytes()).unwrap();
-    let _ = wtr.write(&ip.as_bytes()).unwrap();
-    let _ = wtr.write(&udp.as_bytes()).unwrap();
-    let res = wtr.finish().parse();
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&ether.as_bytes());
+    bytes.extend_from_slice(&ip.as_bytes());
+    bytes.extend_from_slice(&udp.as_bytes());
+    let res = Packet::copy(&bytes).parse();
     assert_eq!(
         res.err().unwrap(),
         ParseError::BadInnerIpLen { expected: 8, actual: 20 }
@@ -1151,7 +1146,6 @@ fn arp_gateway() {
     set!(g1, "port_state=running");
     let reply_hdr_sz = EtherHdr::SIZE + ARP_HDR_SZ;
 
-    let pkt = Packet::alloc(42);
     let eth_hdr = EtherHdrRaw {
         dst: [0xff; 6],
         src: cfg.guest_mac.bytes(),
@@ -1173,11 +1167,11 @@ fn arp_gateway() {
         tpa: cfg.ipv4_cfg().unwrap().gateway_ip,
     };
 
-    let mut wtr = PacketWriter::new(pkt, None);
-    let _ = wtr.write(eth_hdr.as_bytes()).unwrap();
-    let _ = wtr.write(arp_hdr.as_bytes()).unwrap();
-    let _ = wtr.write(ArpEth4PayloadRaw::from(arp).as_bytes()).unwrap();
-    let mut pkt = wtr.finish().parse().unwrap();
+    let mut bytes = vec![];
+    bytes.extend_from_slice(&eth_hdr.as_bytes());
+    bytes.extend_from_slice(&arp_hdr.as_bytes());
+    bytes.extend_from_slice(ArpEth4PayloadRaw::from(arp).as_bytes());
+    let mut pkt = Packet::copy(&bytes).parse().unwrap();
 
     let res = g1.port.process(Out, &mut pkt, ActionMeta::new());
     match res {

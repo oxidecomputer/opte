@@ -364,8 +364,8 @@ impl Display for EtherHdrError {
                 write!(f, "Unsupported Ether Type: 0x{:04X}", ether_type)
             }
 
-            err => {
-                write!(f, "{:?}", err)
+            Self::ReadError { error } => {
+                write!(f, "read error: {:?}", error)
             }
         }
     }

@@ -153,19 +153,18 @@ impl MacClient {
         // function along with `pkt`.
         let mut ret_mp = ptr::null_mut();
         unsafe {
-            mac_tx(self.mch, pkt.unwrap(), hint, flags.bits(), &mut ret_mp)
+            mac_tx(self.mch, pkt.unwrap_mblk(), hint, flags.bits(), &mut ret_mp)
         };
         if ret_mp != ptr::null_mut() {
-            // Safety: We know the ret_mp is valid because we gave
-            // mac_tx() a valid mp_chain (pkt.unwrap()); and mac_tx()
-            // will give us either that exact pointer back (via
-            // ret_mp) or the portion of the packet chain it could not
-            // queue.
+            // Unwrap: We know the ret_mp is valid because we gave
+            // mac_tx() a valid mp_chain; and mac_tx() will give us
+            // either that exact pointer back (via ret_mp) or the
+            // portion of the packet chain it could not queue.
             //
             // XXX Technically we are still only passing single
             // packets, but eventually we will pass packet chains and
             // the sentence above will hold.
-            Some(unsafe { Packet::<Initialized>::wrap(ret_mp) })
+            Some(unsafe { Packet::wrap_mblk(ret_mp).unwrap() })
         } else {
             None
         }
@@ -190,7 +189,9 @@ impl MacClient {
         let mut raw_flags = flags.bits();
         raw_flags |= MAC_DROP_ON_NO_DESC;
         let mut ret_mp = ptr::null_mut();
-        unsafe { mac_tx(self.mch, pkt.unwrap(), hint, raw_flags, &mut ret_mp) };
+        unsafe {
+            mac_tx(self.mch, pkt.unwrap_mblk(), hint, raw_flags, &mut ret_mp)
+        };
         debug_assert_eq!(ret_mp, ptr::null_mut());
     }
 }

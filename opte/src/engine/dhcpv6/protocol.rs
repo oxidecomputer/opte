@@ -627,7 +627,6 @@ fn generate_packet<'a>(
     start = end;
     end += UdpHdr::SIZE;
     buf[start..end].copy_from_slice(&udp.as_bytes());
-
     Ok(AllowOrDeny::Allow(Packet::copy(&buf)))
 }
 

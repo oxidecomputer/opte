@@ -59,9 +59,9 @@ use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
+use opte::engine::packet::PacketError;
 use opte::engine::packet::PacketRead;
 use opte::engine::packet::PacketReader;
-use opte::engine::packet::ParseError;
 use opte::engine::packet::Parsed;
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::Port;
@@ -141,7 +141,7 @@ fn bad_packet_parse_probe(
     port: Option<&CString>,
     dir: Direction,
     mp: *mut mblk_t,
-    err: &ParseError,
+    err: &PacketError,
 ) {
     let msg = format!("{:?}", err);
     bad_packet_probe(port, dir, mp, &msg);
@@ -1331,7 +1331,7 @@ fn guest_loopback(
                         mac::mac_rx(
                             (*dest_dev).mh,
                             0 as *mut mac::mac_resource_handle,
-                            pkt.unwrap(),
+                            pkt.unwrap_mblk(),
                         )
                     };
                     return ptr::null_mut();
@@ -1361,7 +1361,7 @@ fn guest_loopback(
                         mac::mac_rx(
                             (*dest_dev).mh,
                             0 as *mut mac::mac_resource_handle,
-                            pkt.unwrap(),
+                            pkt.unwrap_mblk(),
                         )
                     };
                     return ptr::null_mut();
@@ -1410,8 +1410,7 @@ unsafe extern "C" fn xde_mc_tx(
     // mp_chain after this point. They should only be calls that read,
     // nothing that writes or frees. But really you should think of
     // mp_chain as &mut and avoid any reference to it past this point.
-    // If needed, owernship can be taken back by calling
-    // Packet::unwrap().
+    // Owernship is taken back by calling Packet::unwrap_mblk().
     //
     // XXX Make this fool proof by converting the mblk_t pointer to an
     // &mut or some smart pointer type that can be truly owned by the
@@ -1419,7 +1418,7 @@ unsafe extern "C" fn xde_mc_tx(
     // instead of my code comments. But that work is more involved
     // than the immediate fix that needs to happen.
     // ================================================================
-    let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
+    let mut pkt = match Packet::wrap_mblk_and_parse(mp_chain) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.
@@ -1575,11 +1574,13 @@ unsafe extern "C" fn xde_mc_tx(
             // Get a pointer to the beginning of the outer frame and
             // fill in the dst/src addresses before sending out the
             // device.
-            let mblk = pkt.unwrap();
+            let mblk = pkt.unwrap_mblk();
             let rptr = (*mblk).b_rptr as *mut u8;
             ptr::copy(dst.as_ptr(), rptr, 6);
             ptr::copy(src.as_ptr(), rptr.add(6), 6);
-            let new_pkt = Packet::<Initialized>::wrap(mblk);
+            // Unwrap: We know the packet is good because we just
+            // unwrapped it above.
+            let new_pkt = Packet::<Initialized>::wrap_mblk(mblk).unwrap();
             mch.tx_drop_on_no_desc(new_pkt, hint, MacTxFlags::empty());
         }
 
@@ -1591,7 +1592,7 @@ unsafe extern "C" fn xde_mc_tx(
             mac::mac_rx(
                 src_dev.mh,
                 0 as *mut mac::mac_resource_handle,
-                hpkt.unwrap(),
+                hpkt.unwrap_mblk(),
             );
         }
 
@@ -1995,7 +1996,7 @@ unsafe extern "C" fn xde_rx(
     __dtrace_probe_rx(mp_chain as uintptr_t);
 
     // first parse the packet so we can get at the geneve header
-    let mut pkt = match Packet::<Initialized>::wrap(mp_chain).parse() {
+    let mut pkt = match Packet::wrap_mblk_and_parse(mp_chain) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.
@@ -2071,6 +2072,8 @@ unsafe extern "C" fn xde_rx(
                 }
 
                 let port = &(*dev).port;
+                // Unwrap: We are copying bytes from a packet that we
+                // previously parsed; we know it's good.
                 let mut pkt_copy = Packet::copy(&bytes).parse().unwrap();
                 let res = port.process(
                     Direction::In,
@@ -2080,7 +2083,7 @@ unsafe extern "C" fn xde_rx(
 
                 match res {
                     Ok(ProcessResult::Modified) => {
-                        mac::mac_rx((*dev).mh, mrh, pkt_copy.unwrap());
+                        mac::mac_rx((*dev).mh, mrh, pkt_copy.unwrap_mblk());
                     }
                     Ok(ProcessResult::Hairpin(hppkt)) => {
                         // TODO assuming underlay device 1
@@ -2124,7 +2127,7 @@ unsafe extern "C" fn xde_rx(
     let res = port.process(Direction::In, &mut pkt, ActionMeta::new());
     match res {
         Ok(ProcessResult::Modified) => {
-            mac::mac_rx((*dev).mh, mrh, pkt.unwrap());
+            mac::mac_rx((*dev).mh, mrh, pkt.unwrap_mblk());
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
             // TODO assuming underlay device 1
