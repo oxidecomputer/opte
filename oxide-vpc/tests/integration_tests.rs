@@ -12,13 +12,6 @@
 //! side of OPTE. These captures are then used to regression test an
 //! OPTE pipeline by single-stepping the packets in each capture and
 //! verifying that OPTE processing produces the expected bytes.
-//!
-//! TODO: We should also write tests which programmatically build
-//! packets in order to better test more interesting scenarios. For
-//! example, attempt an inbound connect to the guest's HTTP server,
-//! verify it's blocked by firewall, add a new rule to allow incoming
-//! on 80/443, verify the next request passes, remove the rules,
-//! verify it once again is denied, etc.
 
 mod common;
 
@@ -27,30 +20,25 @@ use common::*;
 use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::ddi::time::Moment;
-use opte::engine::arp::ArpEth4Payload;
-use opte::engine::arp::ArpEth4PayloadRaw;
-use opte::engine::arp::ArpHdrRaw;
-use opte::engine::arp::ARP_HDR_SZ;
+use opte::engine::arp::ArpEthIpv4;
+use opte::engine::arp::ArpEthIpv4Raw;
 use opte::engine::dhcpv6;
 use opte::engine::ether::EtherHdr;
 use opte::engine::ether::EtherHdrRaw;
 use opte::engine::ether::EtherMeta;
-use opte::engine::ether::ETHER_TYPE_ARP;
-use opte::engine::ether::ETHER_TYPE_IPV4;
-use opte::engine::ether::ETHER_TYPE_IPV6;
 use opte::engine::flow_table::FLOW_DEF_EXPIRE_SECS;
-use opte::engine::geneve;
 use opte::engine::geneve::Vni;
+use opte::engine::headers::EncapMeta;
 use opte::engine::headers::IpMeta;
 use opte::engine::headers::UlpMeta;
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip4::Ipv4Hdr;
 use opte::engine::ip4::Ipv4Meta;
 use opte::engine::ip4::Protocol;
+use opte::engine::ip6::Ipv6Hdr;
 use opte::engine::ip6::Ipv6Meta;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketRead;
-use opte::engine::packet::PacketReader;
 use opte::engine::packet::ParseError;
 use opte::engine::packet::Parsed;
 use opte::engine::port::ProcessError;
@@ -73,10 +61,11 @@ use std::prelude::v1::*;
 use std::time::Duration;
 use zerocopy::AsBytes;
 
+// The GeneveHdr includes the UDP header.
 const VPC_ENCAP_SZ: usize =
-    EtherHdr::SIZE + Ipv6Hdr::SIZE + UdpHdr::SIZE + GeneveHdr::SIZE;
-const IP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::SIZE;
-const TCP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::SIZE + TcpHdr::BASE_SIZE;
+    EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE + GeneveHdr::BASE_SIZE;
+const IP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE;
+const TCP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + TcpHdr::BASE_SIZE;
 
 // If we are running `cargo test --feature=usdt`, then make sure to
 // register the USDT probes before running any tests.
@@ -391,23 +380,21 @@ fn gateway_icmp4_ping() {
         _ => panic!("expected Hairpin, got {:?}", res),
     };
     incr!(g1, ["stats.port.out_uft_miss"]);
-    let reply = hp.parse().unwrap();
+    // In this case we are parsing a hairpin reply, so we can't use
+    // the VpcParser since it would expect any inbound packet to be
+    // encapsulated.
+    let reply = hp.parse(In, GenericUlp {}).unwrap();
     pcap.add_pkt(&reply);
     assert_eq!(reply.body_offset(), IP_SZ);
     assert_eq!(reply.body_seg(), 0);
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());
     assert!(meta.outer.ip.is_none());
-    assert!(meta.outer.ulp.is_none());
+    assert!(meta.outer.encap.is_none());
 
-    match meta.inner.ether.as_ref() {
-        Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.gateway_mac);
-            assert_eq!(eth.dst, g1_cfg.guest_mac);
-        }
-
-        None => panic!("no inner ether header"),
-    }
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, g1_cfg.gateway_mac);
+    assert_eq!(eth.dst, g1_cfg.guest_mac);
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
@@ -464,10 +451,7 @@ fn guest_to_guest_no_route() {
     let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert_drop!(
         res,
-        DropReason::Layer {
-            name: "router".to_string(),
-            reason: DenyReason::Default,
-        }
+        DropReason::Layer { name: "router", reason: DenyReason::Default }
     );
 
     // XXX The firewall layer comes before the router layer (in the
@@ -524,6 +508,8 @@ fn guest_to_guest() {
 
     let mut pkt1 = http_syn(&g1_cfg, &g2_cfg);
     pcap_guest1.add_pkt(&pkt1);
+    let ulp_csum_b4 = pkt1.meta().inner.ulp.unwrap().csum();
+    let ip_csum_b4 = pkt1.meta().inner.ip.unwrap().csum();
 
     // ================================================================
     // Run the packet through g1's port in the outbound direction and
@@ -540,8 +526,13 @@ fn guest_to_guest() {
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
-    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ);
+
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt1.body_seg(), 1);
+    let ulp_csum_after = pkt1.meta().inner.ulp.unwrap().csum();
+    let ip_csum_after = pkt1.meta().inner.ip.unwrap().csum();
+    assert_eq!(ulp_csum_after, ulp_csum_b4);
+    assert_eq!(ip_csum_after, ip_csum_b4);
 
     let meta = pkt1.meta();
     match meta.outer.ether.as_ref() {
@@ -562,32 +553,19 @@ fn guest_to_guest() {
         val => panic!("expected outer IPv6, got: {:?}", val),
     }
 
-    match meta.outer.ulp.as_ref().unwrap() {
-        UlpMeta::Udp(udp) => {
-            assert_eq!(udp.src, 7777);
-            assert_eq!(udp.dst, geneve::GENEVE_PORT);
-        }
-
-        ulp => panic!("expected outer UDP metadata, got: {:?}", ulp),
-    }
-
     match meta.outer.encap.as_ref() {
-        Some(geneve) => {
+        Some(EncapMeta::Geneve(geneve)) => {
+            assert_eq!(geneve.entropy, 7777);
             assert_eq!(geneve.vni, Vni::new(g1_cfg.vni).unwrap());
         }
 
         None => panic!("expected outer Geneve metadata"),
     }
 
-    match meta.inner.ether.as_ref() {
-        Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.guest_mac);
-            assert_eq!(eth.dst, g2_cfg.guest_mac);
-            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
-        }
-
-        None => panic!("expected inner Ether header"),
-    }
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, g1_cfg.guest_mac);
+    assert_eq!(eth.dst, g2_cfg.guest_mac);
+    assert_eq!(eth.ether_type, EtherType::Ipv4);
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
@@ -615,7 +593,9 @@ fn guest_to_guest() {
     // outgoing packet and then reparse it.
     // ================================================================
     let mblk = pkt1.unwrap_mblk();
-    let mut pkt2 = unsafe { Packet::wrap_mblk_and_parse(mblk).unwrap() };
+    let mut pkt2 = unsafe {
+        Packet::wrap_mblk_and_parse(mblk, In, VpcParser::new()).unwrap()
+    };
     pcap_phys2.add_pkt(&pkt2);
 
     let res = g2.port.process(In, &mut pkt2, ActionMeta::new());
@@ -629,24 +609,18 @@ fn guest_to_guest() {
             "stats.port.in_modified, stats.port.in_uft_miss",
         ]
     );
-    assert_eq!(pkt2.body_offset(), TCP_SZ);
+    assert_eq!(pkt2.body_offset(), TCP_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt2.body_seg(), 1);
 
     let g2_meta = pkt2.meta();
     assert!(g2_meta.outer.ether.is_none());
     assert!(g2_meta.outer.ip.is_none());
-    assert!(g2_meta.outer.ulp.is_none());
     assert!(g2_meta.outer.encap.is_none());
 
-    match g2_meta.inner.ether.as_ref() {
-        Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.gateway_mac);
-            assert_eq!(eth.dst, g2_cfg.guest_mac);
-            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
-        }
-
-        None => panic!("expected inner Ether header"),
-    }
+    let g2_eth = g2_meta.inner.ether;
+    assert_eq!(g2_eth.src, g1_cfg.gateway_mac);
+    assert_eq!(g2_eth.dst, g2_cfg.guest_mac);
+    assert_eq!(g2_eth.ether_type, EtherType::Ipv4);
 
     match g2_meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
@@ -706,10 +680,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
     let res = g1.port.process(Out, &mut g1_pkt, ActionMeta::new());
     assert_drop!(
         res,
-        DropReason::Layer {
-            name: "overlay".to_string(),
-            reason: DenyReason::Action,
-        }
+        DropReason::Layer { name: "overlay", reason: DenyReason::Action }
     );
     incr!(
         g1,
@@ -764,7 +735,7 @@ fn guest_to_internet() {
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
-    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ);
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt1.body_seg(), 1);
     let meta = pkt1.meta();
     match meta.outer.ether.as_ref() {
@@ -785,32 +756,19 @@ fn guest_to_internet() {
         val => panic!("expected outer IPv6, got: {:?}", val),
     }
 
-    match meta.outer.ulp.as_ref().unwrap() {
-        UlpMeta::Udp(udp) => {
-            assert_eq!(udp.src, 7777);
-            assert_eq!(udp.dst, geneve::GENEVE_PORT);
-        }
-
-        ulp => panic!("expected outer UDP metadata, got: {:?}", ulp),
-    }
-
     match meta.outer.encap.as_ref() {
-        Some(geneve) => {
+        Some(EncapMeta::Geneve(geneve)) => {
+            assert_eq!(geneve.entropy, 7777);
             assert_eq!(geneve.vni, g1_cfg.boundary_services.vni);
         }
 
         None => panic!("expected outer Geneve metadata"),
     }
 
-    match meta.inner.ether.as_ref() {
-        Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.guest_mac);
-            assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
-            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
-        }
-
-        None => panic!("expected inner Ether header"),
-    }
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, g1_cfg.guest_mac);
+    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
+    assert_eq!(eth.ether_type, EtherType::Ipv4);
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
@@ -887,15 +845,10 @@ fn snat_icmp4_echo_rewrite() {
     assert_eq!(pkt1.body_seg(), 1);
     let meta = pkt1.meta();
 
-    match meta.inner.ether.as_ref() {
-        Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.guest_mac);
-            assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
-            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
-        }
-
-        None => panic!("expected inner Ether header"),
-    }
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, g1_cfg.guest_mac);
+    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
+    assert_eq!(eth.ether_type, EtherType::Ipv4);
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
@@ -941,18 +894,13 @@ fn snat_icmp4_echo_rewrite() {
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
     assert_eq!(pkt2.body_offset(), IP_SZ);
-    assert_eq!(pkt2.body_seg(), 1);
+    assert_eq!(pkt2.body_seg(), 0);
     let meta = pkt2.meta();
 
-    match meta.inner.ether.as_ref() {
-        Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.gateway_mac);
-            assert_eq!(eth.dst, g1_cfg.guest_mac);
-            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
-        }
-
-        None => panic!("expected inner Ether header"),
-    }
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, g1_cfg.gateway_mac);
+    assert_eq!(eth.dst, g1_cfg.guest_mac);
+    assert_eq!(eth.ether_type, EtherType::Ipv4);
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
@@ -994,15 +942,10 @@ fn snat_icmp4_echo_rewrite() {
     assert_eq!(pkt3.body_seg(), 1);
     let meta = pkt3.meta();
 
-    match meta.inner.ether.as_ref() {
-        Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.guest_mac);
-            assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
-            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
-        }
-
-        None => panic!("expected inner Ether header"),
-    }
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, g1_cfg.guest_mac);
+    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
+    assert_eq!(eth.ether_type, EtherType::Ipv4);
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
@@ -1041,18 +984,13 @@ fn snat_icmp4_echo_rewrite() {
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(pkt4.body_offset(), IP_SZ);
-    assert_eq!(pkt4.body_seg(), 1);
+    assert_eq!(pkt4.body_seg(), 0);
     let meta = pkt4.meta();
 
-    match meta.inner.ether.as_ref() {
-        Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.gateway_mac);
-            assert_eq!(eth.dst, g1_cfg.guest_mac);
-            assert_eq!(eth.ether_type, ETHER_TYPE_IPV4);
-        }
-
-        None => panic!("expected inner Ether header"),
-    }
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, g1_cfg.gateway_mac);
+    assert_eq!(eth.dst, g1_cfg.guest_mac);
+    assert_eq!(eth.ether_type, EtherType::Ipv4);
 
     match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip4(ip4) => {
@@ -1076,60 +1014,37 @@ fn snat_icmp4_echo_rewrite() {
 fn bad_ip_len() {
     let cfg = lab_cfg();
 
-    let ether = EtherHdr::from(&EtherMeta {
+    let eth = EtherMeta {
         src: cfg.guest_mac,
         dst: MacAddr::BROADCAST,
-        ether_type: ETHER_TYPE_IPV4,
-    });
+        ether_type: EtherType::Ipv4,
+    };
 
-    let mut ip = Ipv4Hdr::from(&Ipv4Meta {
+    let ip = Ipv4Meta {
         src: "0.0.0.0".parse().unwrap(),
         dst: Ipv4Addr::LOCAL_BCAST,
         proto: Protocol::UDP,
-    });
+        ttl: 64,
+        ident: 1,
+        hdr_len: 20,
+        // We write a total legnth of 4 bytes, which is completely
+        // bogus for an IP header and should return an error during
+        // processing.
+        total_len: 4,
+        ..Default::default()
+    };
 
-    // We write a total legnth of 4 bytes, which is completely bogus
-    // for an IP header and should return an error during processing.
-    ip.set_total_len(4);
-
-    let udp = UdpHdr::from(&UdpMeta { src: 68, dst: 67 });
-
-    let mut bytes = vec![];
-    bytes.extend_from_slice(&ether.as_bytes());
-    bytes.extend_from_slice(&ip.as_bytes());
-    bytes.extend_from_slice(&udp.as_bytes());
-    let res = Packet::copy(&bytes).parse();
+    let udp = UdpMeta { src: 68, dst: 67, ..Default::default() };
+    let total_len = EtherHdr::SIZE + usize::from(ip.hdr_len) + udp.hdr_len();
+    let mut pkt = Packet::alloc_and_expand(total_len);
+    let mut wtr = pkt.seg0_wtr();
+    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+    ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+    udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
+    let res = pkt.parse(Out, VpcParser::new());
     assert_eq!(
         res.err().unwrap(),
         ParseError::BadHeader("IPv4: BadTotalLen { total_len: 4 }".to_string())
-    );
-
-    let ether = EtherHdr::from(&EtherMeta {
-        src: cfg.guest_mac,
-        dst: MacAddr::BROADCAST,
-        ether_type: ETHER_TYPE_IPV4,
-    });
-
-    let mut ip = Ipv4Hdr::from(&Ipv4Meta {
-        src: "0.0.0.0".parse().unwrap(),
-        dst: Ipv4Addr::LOCAL_BCAST,
-        proto: Protocol::UDP,
-    });
-
-    // We write an incorrect total legnth of 40 bytes, but the real
-    // total length should only be 28 bytes.
-    ip.set_total_len(40);
-
-    let udp = UdpHdr::from(&UdpMeta { src: 68, dst: 67 });
-
-    let mut bytes = vec![];
-    bytes.extend_from_slice(&ether.as_bytes());
-    bytes.extend_from_slice(&ip.as_bytes());
-    bytes.extend_from_slice(&udp.as_bytes());
-    let res = Packet::copy(&bytes).parse();
-    assert_eq!(
-        res.err().unwrap(),
-        ParseError::BadInnerIpLen { expected: 8, actual: 20 }
     );
 }
 
@@ -1138,13 +1053,11 @@ fn bad_ip_len() {
 #[test]
 fn arp_gateway() {
     use opte::engine::arp::ArpOp;
-    use opte::engine::ether::ETHER_TYPE_IPV4;
 
     let cfg = g1_cfg();
     let mut g1 = oxide_net_setup("arp_hairpin", &cfg, None);
     g1.port.start();
     set!(g1, "port_state=running");
-    let reply_hdr_sz = EtherHdr::SIZE + ARP_HDR_SZ;
 
     let eth_hdr = EtherHdrRaw {
         dst: [0xff; 6],
@@ -1152,15 +1065,12 @@ fn arp_gateway() {
         ether_type: [0x08, 0x06],
     };
 
-    let arp_hdr = ArpHdrRaw {
-        htype: [0x00, 0x01],
-        ptype: [0x08, 0x00],
-        hlen: 0x06,
-        plen: 0x04,
-        op: [0x00, 0x01],
-    };
-
-    let arp = ArpEth4Payload {
+    let arp = ArpEthIpv4 {
+        htype: 1,
+        ptype: u16::from(EtherType::Ipv4),
+        hlen: 6,
+        plen: 4,
+        op: ArpOp::Request,
         sha: cfg.guest_mac,
         spa: cfg.ipv4_cfg().unwrap().private_ip,
         tha: MacAddr::from([0x00; 6]),
@@ -1169,29 +1079,29 @@ fn arp_gateway() {
 
     let mut bytes = vec![];
     bytes.extend_from_slice(&eth_hdr.as_bytes());
-    bytes.extend_from_slice(&arp_hdr.as_bytes());
-    bytes.extend_from_slice(ArpEth4PayloadRaw::from(arp).as_bytes());
-    let mut pkt = Packet::copy(&bytes).parse().unwrap();
+    bytes.extend_from_slice(ArpEthIpv4Raw::from(&arp).as_bytes());
+    let mut pkt = Packet::copy(&bytes).parse(Out, VpcParser::new()).unwrap();
+    print_port(&g1.port, &g1.vpc_map);
 
     let res = g1.port.process(Out, &mut pkt, ActionMeta::new());
     match res {
         Ok(Hairpin(hppkt)) => {
-            let hppkt = hppkt.parse().unwrap();
+            // In this case we are parsing a hairpin reply, so we
+            // can't use the VpcParser since it would expect any
+            // inbound packet to be encapsulated.
+            let mut hppkt = hppkt.parse(In, GenericUlp {}).unwrap();
             let meta = hppkt.meta();
-            let ethm = meta.inner.ether.as_ref().unwrap();
-            let arpm = meta.inner.arp.as_ref().unwrap();
+            let ethm = meta.inner.ether;
             assert_eq!(ethm.dst, cfg.guest_mac);
             assert_eq!(ethm.src, cfg.gateway_mac);
-            assert_eq!(ethm.ether_type, ETHER_TYPE_ARP);
-            assert_eq!(arpm.op, ArpOp::Reply);
-            assert_eq!(arpm.ptype, ETHER_TYPE_IPV4);
+            assert_eq!(ethm.ether_type, EtherType::Arp);
+            let eth_len = hppkt.hdr_offsets().inner.ether.hdr_len;
 
-            let mut rdr = PacketReader::new(&hppkt, ());
-            assert!(rdr.seek(reply_hdr_sz).is_ok());
-            let arp = ArpEth4Payload::from(
-                &ArpEth4PayloadRaw::parse(&mut rdr).unwrap(),
-            );
-
+            let mut rdr = hppkt.get_rdr_mut();
+            assert!(rdr.seek(eth_len).is_ok());
+            let arp = ArpEthIpv4::parse(&mut rdr).unwrap();
+            assert_eq!(arp.op, ArpOp::Reply);
+            assert_eq!(arp.ptype, u16::from(EtherType::Ipv4));
             assert_eq!(arp.sha, cfg.gateway_mac);
             assert_eq!(arp.spa, cfg.ipv4_cfg().unwrap().gateway_ip);
             assert_eq!(arp.tha, cfg.guest_mac);
@@ -1303,26 +1213,24 @@ fn test_guest_to_gateway_icmpv6_ping(
     };
     incr!(g1, ["stats.port.out_uft_miss"]);
 
-    let reply = hp.parse().unwrap();
+    // In this case we are parsing a hairpin reply, so we can't use
+    // the VpcParser since it would expect any inbound packet to be
+    // encapsulated.
+    let reply = hp.parse(In, GenericUlp {}).unwrap();
     pcap.add_pkt(&reply);
 
     // Ether + IPv6
-    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::SIZE);
+    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE);
     assert_eq!(reply.body_seg(), 0);
 
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());
     assert!(meta.outer.ip.is_none());
-    assert!(meta.outer.ulp.is_none());
+    assert!(meta.outer.encap.is_none());
 
-    match meta.inner.ether.as_ref() {
-        Some(eth) => {
-            assert_eq!(eth.src, g1_cfg.gateway_mac);
-            assert_eq!(eth.dst, g1_cfg.guest_mac);
-        }
-
-        None => panic!("no inner ether header"),
-    }
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, g1_cfg.gateway_mac);
+    assert_eq!(eth.dst, g1_cfg.guest_mac);
 
     let (src, dst) = match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
@@ -1387,24 +1295,24 @@ fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
         &mut req_pkt,
         &csum,
     );
-    let mut ip6 = Ipv6Hdr::from(&Ipv6Meta {
+    let ip6 = Ipv6Meta {
         src: src_ip,
         dst: dst_ip,
         proto: Protocol::ICMPv6,
-    });
-    ip6.set_total_len(ip6.hdr_len() as u16 + req.buffer_len() as u16);
-    let eth = EtherHdr::from(&EtherMeta {
-        dst: dst_mac,
-        src: *src_mac,
-        ether_type: ETHER_TYPE_IPV6,
-    });
+        next_hdr: IpProtocol::Icmpv6,
+        pay_len: req.buffer_len() as u16,
+        ..Default::default()
+    };
+    let eth =
+        EtherMeta { dst: dst_mac, src: *src_mac, ether_type: EtherType::Ipv6 };
 
-    let mut pkt_bytes =
-        Vec::with_capacity(EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len());
-    pkt_bytes.extend_from_slice(&eth.as_bytes());
-    pkt_bytes.extend_from_slice(&ip6.as_bytes());
-    pkt_bytes.extend_from_slice(&body_bytes);
-    Packet::copy(&pkt_bytes).parse().unwrap()
+    let total_len = EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len();
+    let mut pkt = Packet::alloc_and_expand(total_len);
+    let mut wtr = pkt.seg0_wtr();
+    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+    ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
+    wtr.write(&body_bytes).unwrap();
+    pkt.parse(Out, VpcParser::new()).unwrap()
 }
 
 // Verify that a Router Solicitation emitted from the guest results in a Router
@@ -1438,32 +1346,30 @@ fn gateway_router_advert_reply() {
     };
     incr!(g1, ["stats.port.out_uft_miss"]);
 
-    let reply = hp.parse().unwrap();
+    // In this case we are parsing a hairpin reply, so we can't use
+    // the VpcParser since it would expect any inbound packet to be
+    // encapsulated.
+    let reply = hp.parse(In, GenericUlp {}).unwrap();
     pcap.add_pkt(&reply);
 
     // Ether + IPv6
-    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::SIZE);
+    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE);
     assert_eq!(reply.body_seg(), 0);
 
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());
     assert!(meta.outer.ip.is_none());
-    assert!(meta.outer.ulp.is_none());
+    assert!(meta.outer.encap.is_none());
 
-    match meta.inner.ether.as_ref() {
-        Some(eth) => {
-            assert_eq!(
-                eth.src, g1_cfg.gateway_mac,
-                "Router advertisement should come from the gateway's MAC"
-            );
-            assert_eq!(
-                eth.dst, g1_cfg.guest_mac,
-                "Router advertisement should be destined for the guest's MAC"
-            );
-        }
-
-        None => panic!("no inner ether header"),
-    }
+    let eth = meta.inner.ether;
+    assert_eq!(
+        eth.src, g1_cfg.gateway_mac,
+        "Router advertisement should come from the gateway's MAC"
+    );
+    assert_eq!(
+        eth.dst, g1_cfg.guest_mac,
+        "Router advertisement should be destined for the guest's MAC"
+    );
 
     let (src, dst) = match meta.inner.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
@@ -1546,24 +1452,27 @@ fn generate_neighbor_solicitation(info: &SolicitInfo) -> Packet<Parsed> {
         &mut req_pkt,
         &csum,
     );
-    let mut ip6 = Ipv6Hdr::from(&Ipv6Meta {
+    let ip6 = Ipv6Meta {
         src: info.src_ip,
         dst: info.dst_ip,
         proto: Protocol::ICMPv6,
-    });
-    ip6.set_total_len(ip6.hdr_len() as u16 + req.buffer_len() as u16);
-    let eth = EtherHdr::from(&EtherMeta {
+        next_hdr: IpProtocol::Icmpv6,
+        pay_len: req.buffer_len() as u16,
+        ..Default::default()
+    };
+    let eth = EtherMeta {
         dst: info.dst_mac,
         src: info.src_mac,
-        ether_type: ETHER_TYPE_IPV6,
-    });
+        ether_type: EtherType::Ipv6,
+    };
 
-    let mut pkt_bytes =
-        Vec::with_capacity(EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len());
-    pkt_bytes.extend_from_slice(&eth.as_bytes());
-    pkt_bytes.extend_from_slice(&ip6.as_bytes());
-    pkt_bytes.extend_from_slice(&body);
-    Packet::copy(&pkt_bytes).parse().unwrap()
+    let total_len = EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len();
+    let mut pkt = Packet::alloc_and_expand(total_len);
+    let mut wtr = pkt.seg0_wtr();
+    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+    ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
+    wtr.write(&body).unwrap();
+    pkt.parse(Out, VpcParser::new()).unwrap()
 }
 
 // Helper type describing a Neighbor Solicitation
@@ -1784,19 +1693,22 @@ fn validate_hairpin_advert(
     hp: Packet<Initialized>,
     na: AdvertInfo,
 ) {
-    let reply = hp.parse().unwrap();
+    // In this case we are parsing a hairpin reply, so we can't use
+    // the VpcParser since it would expect any inbound packet to be
+    // encapsulated.
+    let reply = hp.parse(In, GenericUlp {}).unwrap();
     pcap.add_pkt(&reply);
 
     // Verify Ethernet and IPv6 header basics.
-    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::SIZE);
+    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE);
     assert_eq!(reply.body_seg(), 0);
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());
     assert!(meta.outer.ip.is_none());
-    assert!(meta.outer.ulp.is_none());
+    assert!(meta.outer.encap.is_none());
 
     // Check that the inner MACs are what we expect.
-    let eth = meta.inner.ether.as_ref().expect("No inner Ethernet header");
+    let eth = meta.inner.ether;
     assert_eq!(eth.src, na.src_mac);
     assert_eq!(eth.dst, na.dst_mac);
 
@@ -1896,60 +1808,48 @@ fn packet_from_client_dhcpv6_message<'a>(
     cfg: &VpcCfg,
     msg: &dhcpv6::protocol::Message<'a>,
 ) -> Packet<Parsed> {
-    let eth = EtherHdr::from(&EtherMeta {
+    let eth = EtherMeta {
         dst: dhcpv6::ALL_RELAYS_AND_SERVERS.multicast_mac().unwrap(),
         src: cfg.guest_mac,
-        ether_type: ETHER_TYPE_IPV6,
-    });
+        ether_type: EtherType::Ipv6,
+    };
 
-    let mut ip = Ipv6Hdr::from(&Ipv6Meta {
+    let ip = Ipv6Meta {
         src: Ipv6Addr::from_eui64(&cfg.guest_mac),
         dst: dhcpv6::ALL_RELAYS_AND_SERVERS,
         proto: Protocol::UDP,
-    });
-    ip.set_pay_len((msg.buffer_len() + UdpHdr::SIZE) as u16);
+        next_hdr: IpProtocol::Udp,
+        pay_len: (msg.buffer_len() + UdpHdr::SIZE) as u16,
+        ..Default::default()
+    };
 
-    let mut udp = UdpHdr::from(&UdpMeta {
+    let udp = UdpMeta {
         src: dhcpv6::CLIENT_PORT,
         dst: dhcpv6::SERVER_PORT,
-    });
-    udp.set_pay_len(msg.buffer_len() as u16);
+        len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
+        ..Default::default()
+    };
 
     write_dhcpv6_packet(eth, ip, udp, msg)
 }
 
 fn write_dhcpv6_packet<'a>(
-    eth: EtherHdr,
-    ip: Ipv6Hdr,
-    udp: UdpHdr,
+    eth: EtherMeta,
+    ip: Ipv6Meta,
+    udp: UdpMeta,
     msg: &dhcpv6::protocol::Message<'a>,
 ) -> Packet<Parsed> {
-    // Allocate a buffer into which we'll copy the packet.
     let reply_len =
-        msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::SIZE + EtherHdr::SIZE;
-    let mut buf = vec![0; reply_len];
-
-    // Copy the Ethernet header.
-    let mut start = 0;
-    let mut end = EtherHdr::SIZE;
-    buf[start..end].copy_from_slice(&eth.as_bytes());
-
-    // Copy the IPv6 header.
-    start = end;
-    end += Ipv6Hdr::SIZE;
-    buf[start..end].copy_from_slice(&ip.as_bytes());
-
-    // Copy the UDP header.
-    start = end;
-    end += UdpHdr::SIZE;
-    buf[start..end].copy_from_slice(&udp.as_bytes());
-
-    // Copy in the remainder, which is the DHCPv6 message itself.
-    start = end;
-    msg.copy_into(&mut buf[start..]).unwrap();
-
-    // Make a packet
-    Packet::copy(&buf).parse().unwrap()
+        msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::BASE_SIZE + EtherHdr::SIZE;
+    let mut pkt = Packet::alloc_and_expand(reply_len);
+    let mut wtr = pkt.seg0_wtr();
+    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+    ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+    udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
+    let mut msg_buf = vec![0; msg.buffer_len()];
+    msg.copy_into(&mut msg_buf).unwrap();
+    wtr.write(&msg_buf).unwrap();
+    pkt.parse(Out, GenericUlp {}).unwrap()
 }
 
 // Assert the essential details of a DHCPv6 exchange. The client request is in
@@ -1970,8 +1870,8 @@ fn verify_dhcpv6_essentials<'a>(
 ) {
     let request_meta = request_pkt.meta();
     let reply_meta = reply_pkt.meta();
-    let request_ether = request_meta.inner_ether().unwrap();
-    let reply_ether = reply_meta.inner_ether().unwrap();
+    let request_ether = request_meta.inner_ether();
+    let reply_ether = reply_meta.inner_ether();
     assert_eq!(
         request_ether.dst,
         dhcpv6::ALL_RELAYS_AND_SERVERS.multicast_mac().unwrap()
@@ -2069,7 +1969,10 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                 .process(Out, &mut request_pkt, ActionMeta::new())
                 .unwrap();
             if let Hairpin(hp) = res {
-                let reply_pkt = hp.parse().unwrap();
+                // In this case we are parsing a hairpin reply, so we
+                // can't use the VpcParser since it would expect any
+                // inbound packet to be encapsulated.
+                let reply_pkt = hp.parse(In, GenericUlp {}).unwrap();
                 pcap.add_pkt(&reply_pkt);
 
                 let body = reply_pkt.get_body_rdr().copy_remaining();
@@ -2306,10 +2209,7 @@ fn uft_lft_invalidation_out() {
     let res = g1.port.process(Out, &mut pkt4, ActionMeta::new());
     assert_drop!(
         res,
-        DropReason::Layer {
-            name: "firewall".to_string(),
-            reason: DenyReason::Rule,
-        }
+        DropReason::Layer { name: "firewall", reason: DenyReason::Rule }
     );
     update!(
         g1,
@@ -2429,10 +2329,7 @@ fn uft_lft_invalidation_in() {
     let res = g1.port.process(In, &mut pkt3, ActionMeta::new());
     assert_drop!(
         res,
-        DropReason::Layer {
-            name: "firewall".to_string(),
-            reason: DenyReason::Default,
-        }
+        DropReason::Layer { name: "firewall", reason: DenyReason::Default }
     );
     update!(
         g1,
@@ -2904,10 +2801,7 @@ fn anti_spoof() {
     let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert_drop!(
         res,
-        DropReason::Layer {
-            name: "gateway".to_string(),
-            reason: DenyReason::Default,
-        }
+        DropReason::Layer { name: "gateway", reason: DenyReason::Default }
     );
     incr!(
         g1,
@@ -2929,10 +2823,7 @@ fn anti_spoof() {
     let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert_drop!(
         res,
-        DropReason::Layer {
-            name: "gateway".to_string(),
-            reason: DenyReason::Default,
-        }
+        DropReason::Layer { name: "gateway", reason: DenyReason::Default }
     );
     incr!(
         g1,
@@ -2949,10 +2840,7 @@ fn anti_spoof() {
     let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert_drop!(
         res,
-        DropReason::Layer {
-            name: "gateway".to_string(),
-            reason: DenyReason::Default,
-        }
+        DropReason::Layer { name: "gateway", reason: DenyReason::Default }
     );
     incr!(
         g1,

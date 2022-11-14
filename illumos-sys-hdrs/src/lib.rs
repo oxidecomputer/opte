@@ -117,12 +117,14 @@ pub union KStatNamedValue {
 }
 
 impl core::ops::AddAssign<u64> for KStatNamedValue {
+    #[inline]
     fn add_assign(&mut self, other: u64) {
         unsafe { self._u64 += other };
     }
 }
 
 impl core::ops::SubAssign<u64> for KStatNamedValue {
+    #[inline]
     fn sub_assign(&mut self, other: u64) {
         unsafe { self._u64 -= other };
     }
@@ -179,8 +181,8 @@ pub struct kmutex_t {
 #[derive(Debug)]
 pub struct dblk_t {
     pub db_frtnp: *const c_void, // imprecise
-    pub db_base: *const c_uchar,
-    pub db_lim: *const c_uchar,
+    pub db_base: *mut c_uchar,
+    pub db_lim: *mut c_uchar,
     pub db_ref: c_uchar,
     pub db_type: c_uchar,
     pub db_flags: c_uchar,
@@ -202,8 +204,8 @@ impl Default for dblk_t {
     fn default() -> Self {
         dblk_t {
             db_frtnp: ptr::null(),
-            db_base: ptr::null(),
-            db_lim: ptr::null(),
+            db_base: ptr::null_mut(),
+            db_lim: ptr::null_mut(),
             db_ref: 0,
             db_type: 0,
             db_flags: 0,

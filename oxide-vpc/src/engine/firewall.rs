@@ -9,6 +9,7 @@
 //! This layer is responsible for implementing the VPC firewall as
 //! described in RFD 21 §2.8.
 
+use super::VpcNetwork;
 use crate::api::AddFwRuleReq;
 use crate::api::Address;
 use crate::api::FirewallAction;
@@ -53,7 +54,10 @@ pub fn setup(
     pb.add_layer(fw_layer, Pos::First)
 }
 
-pub fn add_fw_rule(port: &Port, req: &AddFwRuleReq) -> Result<(), OpteError> {
+pub fn add_fw_rule(
+    port: &Port<VpcNetwork>,
+    req: &AddFwRuleReq,
+) -> Result<(), OpteError> {
     let action = match req.rule.action {
         FirewallAction::Allow => Action::StatefulAllow,
         FirewallAction::Deny => Action::Deny,
@@ -63,11 +67,17 @@ pub fn add_fw_rule(port: &Port, req: &AddFwRuleReq) -> Result<(), OpteError> {
     port.add_rule(FW_LAYER_NAME, req.rule.direction, rule)
 }
 
-pub fn rem_fw_rule(port: &Port, req: &RemFwRuleReq) -> Result<(), OpteError> {
+pub fn rem_fw_rule(
+    port: &Port<VpcNetwork>,
+    req: &RemFwRuleReq,
+) -> Result<(), OpteError> {
     port.remove_rule(FW_LAYER_NAME, req.dir, req.id)
 }
 
-pub fn set_fw_rules(port: &Port, req: &SetFwRulesReq) -> Result<(), OpteError> {
+pub fn set_fw_rules(
+    port: &Port<VpcNetwork>,
+    req: &SetFwRulesReq,
+) -> Result<(), OpteError> {
     let mut in_rules = vec![];
     let mut out_rules = vec![];
 

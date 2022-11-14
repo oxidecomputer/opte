@@ -1,6 +1,10 @@
 /*
  * Track Header Transformations as they happen.
  *
+ * This only applies to header transformations which occur as part of
+ * layer/rule processing. If you are interested in flow modification
+ * in the hot path, see the opte-port-process script.
+ *
  * dtrace -L ./lib -I . -Cqs ./opte-ht.d
  */
 #include "common.h"
@@ -15,7 +19,7 @@ BEGIN {
 
 ht-run {
 	this->ht = (ht_run_sdt_arg_t*)arg0;
-	this->dir = stringof(this->ht->dir);
+	this->dir = DIR_STR(this->ht->dir);
 	this->port = stringof(this->ht->port);
 	this->loc = stringof(this->ht->loc);
 	this->before = this->ht->flow_before;

@@ -4,18 +4,19 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use super::ether;
+use super::checksum::HeaderChecksum;
 use super::ether::EtherHdr;
 use super::ether::EtherMeta;
+use super::ether::EtherType;
 use super::ip4::Ipv4Addr;
 use super::ip4::Ipv4Hdr;
 use super::ip4::Ipv4Meta;
 use super::ip4::Protocol;
+use super::ip6::UlpCsumOpt;
 use super::packet::Packet;
 use super::packet::PacketMeta;
 use super::packet::PacketRead;
 use super::packet::PacketReader;
-use super::packet::Parsed;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;
@@ -288,7 +289,7 @@ impl HairpinAction for DhcpAction {
     fn gen_packet(
         &self,
         _meta: &PacketMeta,
-        rdr: &mut PacketReader<Parsed, ()>,
+        rdr: &mut PacketReader,
     ) -> GenPacketResult {
         let body = rdr.copy_remaining();
         let client_pkt = DhcpPacket::new_checked(&body)?;
@@ -347,8 +348,12 @@ impl HairpinAction for DhcpAction {
         tmp.push(255);
         assert_eq!(tmp.len(), reply_len + csr_opt.encode_len() as usize);
 
-        let mut udp = UdpHdr::from(&UdpMeta { src: 67, dst: 68 });
-        udp.set_pay_len(tmp.len() as u16);
+        let mut udp = UdpMeta {
+            src: 67,
+            dst: 68,
+            len: (UdpHdr::SIZE + tmp.len()) as u16,
+            ..Default::default()
+        };
 
         let ip_dst = if client_dhcp.broadcast {
             Ipv4Addr::LOCAL_BCAST
@@ -356,12 +361,13 @@ impl HairpinAction for DhcpAction {
             self.client_ip.into()
         };
 
-        let mut ip = Ipv4Hdr::from(&Ipv4Meta {
+        let mut ip = Ipv4Meta {
             src: self.gw_ip,
             dst: ip_dst,
             proto: Protocol::UDP,
-        });
-        ip.set_total_len(ip.hdr_len() as u16 + udp.total_len());
+            total_len: Ipv4Hdr::BASE_SIZE as u16 + udp.len,
+            ..Default::default()
+        };
         ip.compute_hdr_csum();
 
         let eth_dst = if client_dhcp.broadcast {
@@ -370,20 +376,25 @@ impl HairpinAction for DhcpAction {
             self.client_mac.into()
         };
 
-        let eth = EtherHdr::from(&EtherMeta {
+        let eth = EtherMeta {
             dst: eth_dst,
-            src: self.gw_mac.into(),
-            ether_type: ether::ETHER_TYPE_IPV4,
-        });
+            src: self.gw_mac,
+            ether_type: EtherType::Ipv4,
+        };
 
-        let mut pkt_bytes = Vec::with_capacity(
-            EtherHdr::SIZE + Ipv4Hdr::SIZE + UdpHdr::SIZE + tmp.len(),
-        );
-        pkt_bytes.extend_from_slice(&eth.as_bytes());
-        pkt_bytes.extend_from_slice(&ip.as_bytes());
-        pkt_bytes.extend_from_slice(&udp.as_bytes());
-        pkt_bytes.extend_from_slice(&tmp);
-        Ok(AllowOrDeny::Allow(Packet::copy(&pkt_bytes)))
+        let total_len =
+            EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + UdpHdr::SIZE + tmp.len();
+        let mut pkt = Packet::alloc_and_expand(total_len);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+        let mut udp_buf = [0u8; UdpHdr::SIZE];
+        udp.emit(&mut udp_buf);
+        let csum = ip.compute_ulp_csum(UlpCsumOpt::Full, &udp_buf, &tmp);
+        udp.csum = HeaderChecksum::from(csum).bytes();
+        udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
+        wtr.write(&tmp).unwrap();
+        Ok(AllowOrDeny::Allow(pkt))
     }
 }
 

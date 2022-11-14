@@ -15,7 +15,7 @@ BEGIN {
 
 bad-packet {
 	this->port = stringof(arg0);
-	this->dir = stringof(arg1);
+	this->dir = DIR_STR(arg1);
 	this->mblk = arg2;
 	this->msg = stringof(arg3);
 

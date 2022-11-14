@@ -23,7 +23,7 @@ use crate::engine::dhcpv6::CLIENT_PORT;
 use crate::engine::dhcpv6::SERVER_PORT;
 use crate::engine::ether::EtherHdr;
 use crate::engine::ether::EtherMeta;
-use crate::engine::ether::ETHER_TYPE_IPV6;
+use crate::engine::ether::EtherType;
 use crate::engine::ip6::Ipv6Hdr;
 use crate::engine::ip6::Ipv6Meta;
 use crate::engine::ip6::UlpCsumOpt;
@@ -31,7 +31,6 @@ use crate::engine::packet::Packet;
 use crate::engine::packet::PacketMeta;
 use crate::engine::packet::PacketRead;
 use crate::engine::packet::PacketReader;
-use crate::engine::packet::Parsed;
 use crate::engine::predicate::DataPredicate;
 use crate::engine::predicate::EtherAddrMatch;
 use crate::engine::predicate::IpProtoMatch;
@@ -52,6 +51,7 @@ use opte_api::MacAddr;
 use opte_api::Protocol;
 use serde::Deserialize;
 use serde::Serialize;
+use smoltcp::wire::IpProtocol;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -574,60 +574,53 @@ fn generate_packet<'a>(
     meta: &PacketMeta,
     msg: &'a Message<'a>,
 ) -> GenPacketResult {
-    let eth = EtherHdr::from(&EtherMeta {
+    let eth = EtherMeta {
         dst: action.client_mac,
         src: action.server_mac,
-        ether_type: ETHER_TYPE_IPV6,
-    });
+        ether_type: EtherType::Ipv6,
+    };
 
-    let mut ip = Ipv6Hdr::from(&Ipv6Meta {
+    let ip = Ipv6Meta {
         src: Ipv6Addr::from_eui64(&action.server_mac),
         // Safety: We're only here if the predicates match, one of which is
         // IPv6.
         dst: meta.inner_ip6().unwrap().src,
         proto: Protocol::UDP,
-    });
-    ip.set_pay_len((msg.buffer_len() + UdpHdr::SIZE) as u16);
+        next_hdr: IpProtocol::Udp,
+        pay_len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
+        ..Default::default()
+    };
 
-    let mut udp = UdpHdr::from(&UdpMeta { src: SERVER_PORT, dst: CLIENT_PORT });
-    udp.set_pay_len(msg.buffer_len() as u16);
+    let mut udp = UdpMeta {
+        src: SERVER_PORT,
+        dst: CLIENT_PORT,
+        len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
+        ..Default::default()
+    };
 
-    // Allocate a buffer into which we'll copy the packet.
+    // Allocate a segment into which we'll write the packet.
     let reply_len =
-        msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::SIZE + EtherHdr::SIZE;
-    let mut buf = vec![0; reply_len];
+        msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::BASE_SIZE + EtherHdr::SIZE;
+    let mut pkt = Packet::alloc_and_expand(reply_len);
+    let mut wtr = pkt.seg0_wtr();
 
-    // Copy the Ethernet header.
-    let mut start = 0;
-    let mut end = EtherHdr::SIZE;
-    buf[start..end].copy_from_slice(&eth.as_bytes());
+    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+    ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
 
-    // Copy the IPv6 header.
-    start = end;
-    end += Ipv6Hdr::SIZE;
-    buf[start..end].copy_from_slice(&ip.as_bytes());
+    // Create the buffer to contain the DHCP message so that we may
+    // compute the UDP checksum.
+    let mut msg_buf = vec![0; msg.buffer_len()];
+    msg.copy_into(&mut msg_buf).unwrap();
 
-    // Copy in the DHCP message itself.
-    //
-    // We do this first for the checksum computation. The message can be written
-    // into a buffer, which we already have in `buf`. Do that first, then use
-    // that buffer for the checksum computation, and _then_ write in the UDP
-    // header which includes that checksum.
-    let dhcp_start = end + UdpHdr::SIZE;
-    msg.copy_into(&mut buf[dhcp_start..]).unwrap();
-
-    // Compute the UDP checksum, and write in the resulting header that includes
-    // it.
-    let cksum = ip.compute_ulp_csum(
-        UlpCsumOpt::Full,
-        &udp.as_bytes(),
-        &buf[dhcp_start..],
-    );
-    udp.set_csum(HeaderChecksum::from(cksum).bytes());
-    start = end;
-    end += UdpHdr::SIZE;
-    buf[start..end].copy_from_slice(&udp.as_bytes());
-    Ok(AllowOrDeny::Allow(Packet::copy(&buf)))
+    // Compute the UDP checksum. Write the UDP header and DHCP message
+    // to the segment.
+    let mut udp_buf = [0u8; UdpHdr::SIZE];
+    udp.emit(&mut udp_buf);
+    let csum = ip.compute_ulp_csum(UlpCsumOpt::Full, &udp_buf, &msg_buf);
+    udp.csum = HeaderChecksum::from(csum).bytes();
+    udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
+    wtr.write(&msg_buf).unwrap();
+    Ok(AllowOrDeny::Allow(pkt))
 }
 
 impl HairpinAction for Dhcpv6Action {
@@ -652,7 +645,7 @@ impl HairpinAction for Dhcpv6Action {
     fn gen_packet(
         &self,
         meta: &PacketMeta,
-        rdr: &mut PacketReader<Parsed, ()>,
+        rdr: &mut PacketReader,
     ) -> GenPacketResult {
         let body = rdr.copy_remaining();
         if let Some(client_msg) = Message::from_bytes(&body) {
@@ -679,6 +672,8 @@ mod test {
     use super::Packet;
     use crate::engine::dhcpv6::test_data;
     use crate::engine::port::meta::ActionMeta;
+    use crate::engine::GenericUlp;
+    use opte_api::Direction::*;
 
     // Test that we correctly parse out the entire Solicit message from a
     // snooped packet.
@@ -707,7 +702,9 @@ mod test {
 
     #[test]
     fn test_predicates_match_snooped_solicit_message() {
-        let pkt = Packet::copy(test_data::TEST_SOLICIT_PACKET).parse().unwrap();
+        let pkt = Packet::copy(test_data::TEST_SOLICIT_PACKET)
+            .parse(Out, GenericUlp {})
+            .unwrap();
         let pmeta = pkt.meta();
         let ameta = ActionMeta::new();
         let client_mac =

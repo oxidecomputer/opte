@@ -87,8 +87,11 @@ fn firewall_replace_rules() {
     // outgoing packet and then reparse it.
     // ================================================================
     let mblk = pkt2.unwrap_mblk();
-    let mut pkt3 = unsafe { Packet::wrap_mblk_and_parse(mblk).unwrap() };
-    let mut pkt3_copy = Packet::copy(&pkt3.all_bytes()).parse().unwrap();
+    let mut pkt3 = unsafe {
+        Packet::wrap_mblk_and_parse(mblk, In, VpcParser::new()).unwrap()
+    };
+    let mut pkt3_copy =
+        Packet::copy(&pkt3.all_bytes()).parse(In, VpcParser::new()).unwrap();
     let res = g2.port.process(In, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(
@@ -128,10 +131,7 @@ fn firewall_replace_rules() {
     let res = g2.port.process(In, &mut pkt3_copy, ActionMeta::new());
     assert_drop!(
         res,
-        DropReason::Layer {
-            name: "firewall".to_string(),
-            reason: DenyReason::Rule
-        }
+        DropReason::Layer { name: "firewall", reason: DenyReason::Rule }
     );
     update!(
         g2,
@@ -194,10 +194,7 @@ fn firewall_vni_inbound() {
     let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
     assert_drop!(
         res,
-        DropReason::Layer {
-            name: "firewall".to_string(),
-            reason: DenyReason::Default,
-        }
+        DropReason::Layer { name: "firewall", reason: DenyReason::Default }
     );
     incr!(
         g1,
@@ -307,10 +304,7 @@ fn firewall_vni_outbound() {
     let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert_drop!(
         res,
-        DropReason::Layer {
-            name: "firewall".to_string(),
-            reason: DenyReason::Rule,
-        }
+        DropReason::Layer { name: "firewall", reason: DenyReason::Rule }
     );
     incr!(
         g1,

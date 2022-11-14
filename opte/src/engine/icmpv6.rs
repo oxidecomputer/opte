@@ -6,16 +6,15 @@
 
 //! Internet Control Message Protocol version 6
 
-use super::ether;
 use super::ether::EtherHdr;
 use super::ether::EtherMeta;
+use super::ether::EtherType;
 use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6Meta;
 use super::packet::Packet;
 use super::packet::PacketMeta;
 use super::packet::PacketRead;
 use super::packet::PacketReader;
-use super::packet::Parsed;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;
@@ -42,6 +41,7 @@ use smoltcp::wire::Icmpv6Message;
 use smoltcp::wire::Icmpv6Packet;
 use smoltcp::wire::Icmpv6Repr;
 use smoltcp::wire::IpAddress;
+use smoltcp::wire::IpProtocol;
 use smoltcp::wire::Ipv6Address;
 use smoltcp::wire::NdiscNeighborFlags;
 use smoltcp::wire::NdiscRepr;
@@ -120,7 +120,7 @@ impl HairpinAction for Icmpv6EchoReply {
     fn gen_packet(
         &self,
         meta: &PacketMeta,
-        rdr: &mut PacketReader<Parsed, ()>,
+        rdr: &mut PacketReader,
     ) -> GenPacketResult {
         // Collect the src / dst IP addresses, which are needed to emit the
         // resulting ICMPv6 echo reply.
@@ -175,27 +175,30 @@ impl HairpinAction for Icmpv6EchoReply {
         csum.icmpv6 = Checksum::Tx;
         reply.emit(&dst_ip, &src_ip, &mut icmp_reply, &csum);
 
-        let mut ip = Ipv6Hdr::from(&Ipv6Meta {
+        let ip = Ipv6Meta {
             src: self.dst_ip,
             dst: self.src_ip,
             proto: Protocol::ICMPv6,
-        });
+            next_hdr: IpProtocol::Icmpv6,
+            // There are no extension headers. The ULP is the only
+            // content.
+            pay_len: reply_len as u16,
+            ..Default::default()
+        };
 
-        // There are no extension headers, so the ULP is the only content.
-        ip.set_pay_len(reply_len as u16);
+        let eth = EtherMeta {
+            ether_type: EtherType::Ipv6,
+            dst: self.src_mac,
+            src: self.dst_mac,
+        };
 
-        let eth = EtherHdr::from(&EtherMeta {
-            dst: self.src_mac.into(),
-            src: self.dst_mac.into(),
-            ether_type: ether::ETHER_TYPE_IPV6,
-        });
-
-        let mut pkt_bytes =
-            Vec::with_capacity(EtherHdr::SIZE + Ipv6Hdr::SIZE + reply_len);
-        pkt_bytes.extend_from_slice(&eth.as_bytes());
-        pkt_bytes.extend_from_slice(&ip.as_bytes());
-        pkt_bytes.extend_from_slice(&ulp_body);
-        Ok(AllowOrDeny::Allow(Packet::copy(&pkt_bytes)))
+        let total_len = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE + reply_len;
+        let mut pkt = Packet::alloc_and_expand(total_len);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+        wtr.write(&ulp_body).unwrap();
+        Ok(AllowOrDeny::Allow(pkt))
     }
 }
 
@@ -242,7 +245,7 @@ impl HairpinAction for RouterAdvertisement {
     fn gen_packet(
         &self,
         meta: &PacketMeta,
-        rdr: &mut PacketReader<Parsed, ()>,
+        rdr: &mut PacketReader,
     ) -> GenPacketResult {
         use smoltcp::time::Duration;
         use smoltcp::wire::NdiscRouterFlags;
@@ -340,30 +343,33 @@ impl HairpinAction for RouterAdvertisement {
             &mut csum,
         );
 
-        let mut ip = Ipv6Hdr::from(&Ipv6Meta {
+        let ip = Ipv6Meta {
             src: *self.ip(),
             // Safety: We match on this being Some(_) above, so unwrap is safe.
             dst: meta.inner_ip6().unwrap().src,
             proto: Protocol::ICMPv6,
-        });
-
-        // There are no extension headers, so the ULP is the only content.
-        ip.set_pay_len(reply_len as u16);
+            next_hdr: IpProtocol::Icmpv6,
+            // There are no extension headers; the ULP is the only
+            // content.
+            pay_len: reply_len as u16,
+            ..Default::default()
+        };
 
         // The Ethernet frame should come from OPTE's virtual gateway MAC, and
         // be destined for the client which sent us the packet.
-        let eth = EtherHdr::from(&EtherMeta {
-            dst: self.src_mac.into(),
-            src: self.mac.into(),
-            ether_type: ether::ETHER_TYPE_IPV6,
-        });
+        let eth = EtherMeta {
+            ether_type: EtherType::Ipv6,
+            dst: self.src_mac,
+            src: self.mac,
+        };
 
-        let mut pkt_bytes =
-            Vec::with_capacity(EtherHdr::SIZE + Ipv6Hdr::SIZE + reply_len);
-        pkt_bytes.extend_from_slice(&eth.as_bytes());
-        pkt_bytes.extend_from_slice(&ip.as_bytes());
-        pkt_bytes.extend_from_slice(&ulp_body);
-        Ok(AllowOrDeny::Allow(Packet::copy(&pkt_bytes)))
+        let total_len = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE + reply_len;
+        let mut pkt = Packet::alloc_and_expand(total_len);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+        wtr.write(&ulp_body).unwrap();
+        Ok(AllowOrDeny::Allow(pkt))
     }
 }
 
@@ -374,7 +380,7 @@ impl HairpinAction for RouterAdvertisement {
 //
 // Return the target address from the Neighbor Solicitation.
 fn validate_neighbor_solicitation(
-    rdr: &mut PacketReader<Parsed, ()>,
+    rdr: &mut PacketReader,
     metadata: &Ipv6Meta,
 ) -> Result<Ipv6Addr, GenErr> {
     // First, check if this is in fact a NS message.
@@ -541,7 +547,7 @@ impl HairpinAction for NeighborAdvertisement {
     fn gen_packet(
         &self,
         meta: &PacketMeta,
-        rdr: &mut PacketReader<Parsed, ()>,
+        rdr: &mut PacketReader,
     ) -> GenPacketResult {
         // Sanity check that this is actually in IPv6 packet.
         let metadata = meta.inner_ip6().ok_or_else(|| {
@@ -585,14 +591,16 @@ impl HairpinAction for NeighborAdvertisement {
             &mut csum,
         );
 
-        let mut ip = Ipv6Hdr::from(&Ipv6Meta {
+        let ip = Ipv6Meta {
             src: *self.ip(),
             dst: dst_ip,
             proto: Protocol::ICMPv6,
-        });
-
-        // There are no extension headers, so the ULP is the only content.
-        ip.set_pay_len(reply_len as u16);
+            next_hdr: IpProtocol::Icmpv6,
+            // There are no extension headers; the ULP is the only
+            // content.
+            pay_len: reply_len as u16,
+            ..Default::default()
+        };
 
         // While the frame must always be sent from the gateway, who the frame
         // is addressed to depends on whether we should multicast the packet.
@@ -600,17 +608,18 @@ impl HairpinAction for NeighborAdvertisement {
 
         // The Ethernet frame should come from OPTE's virtual gateway MAC, and
         // be destined for the client which sent us the packet.
-        let eth = EtherHdr::from(&EtherMeta {
+        let eth = EtherMeta {
+            ether_type: EtherType::Ipv6,
             dst: dst_mac,
             src: self.mac,
-            ether_type: ether::ETHER_TYPE_IPV6,
-        });
+        };
 
-        let mut pkt_bytes =
-            Vec::with_capacity(EtherHdr::SIZE + Ipv6Hdr::SIZE + reply_len);
-        pkt_bytes.extend_from_slice(&eth.as_bytes());
-        pkt_bytes.extend_from_slice(&ip.as_bytes());
-        pkt_bytes.extend_from_slice(&ulp_body);
-        Ok(AllowOrDeny::Allow(Packet::copy(&pkt_bytes)))
+        let len = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE + reply_len;
+        let mut pkt = Packet::alloc_and_expand(len);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+        wtr.write(&ulp_body).unwrap();
+        Ok(AllowOrDeny::Allow(pkt))
     }
 }

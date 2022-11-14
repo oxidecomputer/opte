@@ -5,16 +5,15 @@
 // Copyright 2022 Oxide Computer Company
 
 //! ICMP headers.
-use super::ether;
 use super::ether::EtherHdr;
 use super::ether::EtherMeta;
+use super::ether::EtherType;
 use super::ip4::Ipv4Hdr;
 use super::ip4::Ipv4Meta;
 use super::packet::Packet;
 use super::packet::PacketMeta;
 use super::packet::PacketRead;
 use super::packet::PacketReader;
-use super::packet::Parsed;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;
@@ -72,7 +71,7 @@ impl HairpinAction for IcmpEchoReply {
     fn gen_packet(
         &self,
         _meta: &PacketMeta,
-        rdr: &mut PacketReader<Parsed, ()>,
+        rdr: &mut PacketReader,
     ) -> GenPacketResult {
         let body = rdr.copy_remaining();
         let src_pkt = Icmpv4Packet::new_checked(&body)?;
@@ -109,26 +108,28 @@ impl HairpinAction for IcmpEchoReply {
         csum.icmpv4 = Checksum::Tx;
         let _ = reply.emit(&mut icmp_reply, &csum);
 
-        let mut ip4 = Ipv4Hdr::from(&Ipv4Meta {
+        let mut ip4 = Ipv4Meta {
             src: self.echo_dst_ip,
             dst: self.echo_src_ip,
             proto: Protocol::ICMP,
-        });
-        ip4.set_total_len(ip4.hdr_len() as u16 + reply_len as u16);
+            total_len: (Ipv4Hdr::BASE_SIZE + reply_len) as u16,
+            ..Default::default()
+        };
         ip4.compute_hdr_csum();
 
-        let eth = EtherHdr::from(&EtherMeta {
-            dst: self.echo_src_mac.into(),
-            src: self.echo_dst_mac.into(),
-            ether_type: ether::ETHER_TYPE_IPV4,
-        });
+        let eth = EtherMeta {
+            dst: self.echo_src_mac,
+            src: self.echo_dst_mac,
+            ether_type: EtherType::Ipv4,
+        };
 
-        let mut pkt_bytes =
-            Vec::with_capacity(EtherHdr::SIZE + Ipv4Hdr::SIZE + reply_len);
-        pkt_bytes.extend_from_slice(&eth.as_bytes());
-        pkt_bytes.extend_from_slice(&ip4.as_bytes());
-        pkt_bytes.extend_from_slice(&tmp);
-        Ok(AllowOrDeny::Allow(Packet::copy(&pkt_bytes)))
+        let total_len = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + reply_len;
+        let mut pkt = Packet::alloc_and_expand(total_len);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+        ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
+        wtr.write(&tmp).unwrap();
+        Ok(AllowOrDeny::Allow(pkt))
     }
 }
 

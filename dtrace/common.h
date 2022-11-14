@@ -48,3 +48,10 @@
 	svar = strjoin(svar, substr(lltostr(evar[4], 16), 2));	\
 	svar = strjoin(svar, ":");				\
 	svar = strjoin(svar, substr(lltostr(evar[5], 16), 2));
+
+/* Direction
+ *
+ * 1 = Inbound
+ * 2 = Outbound
+ */
+#define DIR_STR(dir)	((dir) == 1 ? "IN" : "OUT")

@@ -16,7 +16,7 @@ BEGIN {
 gen-desc-fail {
 	this->port = stringof(arg0);
 	this->layer = stringof(arg1);
-	this->dir = stringof(arg2);
+	this->dir = DIR_STR(arg2);
 	this->flow = (flow_id_sdt_arg_t *)arg3;
 	this->msg = stringof(arg4);
 	this->af = this->flow->af;

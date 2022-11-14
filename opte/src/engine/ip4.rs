@@ -4,15 +4,11 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use core::convert::TryFrom;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
-use core::mem;
 use core::num::ParseIntError;
 use core::result;
-// A fixed-size Vec.
-use heapless::Vec as FVec;
 use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::AsBytes;
@@ -22,16 +18,11 @@ use zerocopy::Unaligned;
 
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
-use super::headers::Header;
-use super::headers::HeaderAction;
-use super::headers::HeaderActionModify;
-use super::headers::IpMeta;
-use super::headers::IpMetaOpt;
-use super::headers::ModifyActionArg;
+use super::headers::ModifyAction;
+use super::headers::PushAction;
 use super::headers::RawHeader;
-use super::packet::PacketRead;
+use super::packet::PacketReadMut;
 use super::packet::ReadErr;
-use super::packet::WriteError;
 use super::predicate::MatchExact;
 use super::predicate::MatchExactVal;
 use super::predicate::MatchPrefix;
@@ -45,10 +36,8 @@ pub use opte_api::Protocol;
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::String;
-        use alloc::vec::Vec;
     } else {
         use std::string::String;
-        use std::vec::Vec;
     }
 }
 
@@ -186,140 +175,274 @@ impl MatchExact<Protocol> for Protocol {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Ipv4Meta {
+    pub src: Ipv4Addr,
+    pub dst: Ipv4Addr,
+    pub proto: Protocol,
+    pub ttl: u8,
+    pub ident: u16,
+    pub hdr_len: u16,
+    pub total_len: u16,
+    pub csum: [u8; 2],
+}
+
+impl Default for Ipv4Meta {
+    fn default() -> Self {
+        Self {
+            src: Ipv4Addr::ANY_ADDR,
+            dst: Ipv4Addr::ANY_ADDR,
+            proto: Protocol::Unknown(255),
+            ttl: 64,
+            ident: 0,
+            hdr_len: Ipv4Hdr::BASE_SIZE as u16,
+            total_len: 0,
+            csum: [0; 2],
+        }
+    }
+}
+
+impl Ipv4Meta {
+    pub fn compute_hdr_csum(&mut self) {
+        let mut hdr = [0; 20];
+        self.csum = [0; 2];
+        self.emit(&mut hdr);
+        let csum = Checksum::compute(&hdr);
+        self.csum = HeaderChecksum::from(csum).bytes();
+    }
+
+    pub fn compute_ulp_csum(
+        &self,
+        opt: UlpCsumOpt,
+        ulp_hdr: &[u8],
+        body: &[u8],
+    ) -> Checksum {
+        match opt {
+            UlpCsumOpt::Partial => todo!("implement partial csum"),
+            UlpCsumOpt::Full => {
+                let mut csum = self.pseudo_csum();
+                csum.add_bytes(ulp_hdr);
+                csum.add_bytes(body);
+                csum
+            }
+        }
+    }
+
+    #[inline]
+    pub fn emit(&self, dst: &mut [u8]) {
+        // The raw header relies on the slice being the exactly length.
+        debug_assert_eq!(dst.len(), Ipv4Hdr::BASE_SIZE);
+        let mut raw = Ipv4HdrRaw::new_mut(dst).unwrap();
+        raw.write(Ipv4HdrRaw::from(self));
+    }
+
+    /// Return the length of the header needed to emit the metadata.
+    pub fn hdr_len(&self) -> usize {
+        Ipv4Hdr::BASE_SIZE
+    }
+
+    /// Populate `bytes` with the pseudo header bytes.
+    pub fn pseudo_bytes(&self, bytes: &mut [u8; 12]) {
+        bytes[0..4].copy_from_slice(&self.src.bytes());
+        bytes[4..8].copy_from_slice(&self.dst.bytes());
+        let ulp_len = self.total_len - self.hdr_len;
+        let len_bytes = ulp_len.to_be_bytes();
+        bytes[8..12].copy_from_slice(&[
+            0,
+            u8::from(self.proto),
+            len_bytes[0],
+            len_bytes[1],
+        ]);
+    }
+
+    /// Return a [`Checksum`] of the pseudo header.
+    pub fn pseudo_csum(&self) -> Checksum {
+        let mut pseudo_bytes = [0u8; 12];
+        self.pseudo_bytes(&mut pseudo_bytes);
+        Checksum::compute(&pseudo_bytes)
+    }
+}
+
+impl<'a> From<&Ipv4Hdr<'a>> for Ipv4Meta {
+    fn from(ip4: &Ipv4Hdr) -> Self {
+        let raw = ip4.bytes.read();
+
+        let hdr_len =
+            u16::from(u8::from(raw.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4);
+
+        Self {
+            src: Ipv4Addr::from(raw.src),
+            dst: Ipv4Addr::from(raw.dst),
+            proto: Protocol::from(raw.proto),
+            ttl: raw.ttl,
+            ident: u16::from_be_bytes(raw.ident),
+            hdr_len: hdr_len,
+            total_len: u16::from_be_bytes(raw.total_len),
+            csum: raw.csum,
+        }
+    }
+}
+
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
-pub struct Ipv4Meta {
+pub struct Ipv4Push {
     pub src: Ipv4Addr,
     pub dst: Ipv4Addr,
     pub proto: Protocol,
 }
 
-impl Ipv4Meta {
-    // XXX check that at least one field was specified.
-    pub fn modify(
-        src: Option<Ipv4Addr>,
-        dst: Option<Ipv4Addr>,
-        proto: Option<Protocol>,
-    ) -> HeaderAction<IpMeta, IpMetaOpt> {
-        HeaderAction::Modify(Ipv4MetaOpt { src, dst, proto }.into())
+impl PushAction<Ipv4Meta> for Ipv4Push {
+    fn push(&self) -> Ipv4Meta {
+        let mut ip4 = Ipv4Meta::default();
+        ip4.src = self.src;
+        ip4.dst = self.dst;
+        ip4.proto = self.proto;
+        ip4
     }
 }
 
-impl From<&Ipv4Hdr> for Ipv4Meta {
-    fn from(ip4: &Ipv4Hdr) -> Self {
-        Ipv4Meta { src: ip4.src, dst: ip4.dst, proto: ip4.proto }
-    }
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Ipv4Mod {
+    pub src: Option<Ipv4Addr>,
+    pub dst: Option<Ipv4Addr>,
+    pub proto: Option<Protocol>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Ipv4MetaOpt {
-    src: Option<Ipv4Addr>,
-    dst: Option<Ipv4Addr>,
-    proto: Option<Protocol>,
-}
-
-impl ModifyActionArg for Ipv4MetaOpt {}
-
-impl HeaderActionModify<Ipv4MetaOpt> for Ipv4Meta {
-    fn run_modify(&mut self, spec: &Ipv4MetaOpt) {
-        if spec.src.is_some() {
-            self.src = spec.src.unwrap()
+impl ModifyAction<Ipv4Meta> for Ipv4Mod {
+    fn modify(&self, meta: &mut Ipv4Meta) {
+        if let Some(src) = self.src {
+            meta.src = src;
         }
 
-        if spec.dst.is_some() {
-            self.dst = spec.dst.unwrap()
+        if let Some(dst) = self.dst {
+            meta.dst = dst;
         }
 
-        if spec.proto.is_some() {
-            self.proto = spec.proto.unwrap()
+        if let Some(proto) = self.proto {
+            meta.proto = proto;
         }
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Ipv4Hdr {
-    // Don't need version as it's implicit
-    hdr_len_bytes: u8,
-    dscp_ecn: u8,
-    total_len: u16,
-    ident: u16,
-    frag_and_flags: [u8; 2],
-    ttl: u8,
-    proto: Protocol,
-    // XXX The checksum type could tell us if this was HW or SW
-    // validated, and would have routines for performing incremental
-    // update. csum: Checksum,
-    csum: [u8; 2],
-    src: Ipv4Addr,
-    dst: Ipv4Addr,
-    // XXX We could have a Vec, array, anymap of header options here.
+#[derive(Debug)]
+pub struct Ipv4Hdr<'a> {
+    bytes: LayoutVerified<&'a mut [u8], Ipv4HdrRaw>,
 }
 
-#[macro_export]
-macro_rules! assert_ip4 {
-    ($left:expr, $right:expr) => {
-        assert!(
-            $left.hdr_len() == $right.hdr_len(),
-            "IPv4 hdr len mismatch: {} != {}",
-            $left.hdr_len(),
-            $right.hdr_len(),
-        );
+impl<'a> Ipv4Hdr<'a> {
+    pub const BASE_SIZE: usize = Ipv4HdrRaw::SIZE;
+    pub const CSUM_BEGIN: usize = 10;
+    pub const CSUM_END: usize = 12;
 
-        assert!(
-            $left.total_len() == $right.total_len(),
-            "IPv4 total len mismatch: {} != {}",
-            $left.total_len(),
-            $right.total_len(),
-        );
+    #[inline]
+    pub fn csum(&self) -> [u8; 2] {
+        self.bytes.csum
+    }
 
-        assert!(
-            $left.ident() == $right.ident(),
-            "IPv4 ident mistmach: {} != {}",
-            $left.ident(),
-            $right.ident(),
-        );
+    #[inline]
+    pub fn dst(&self) -> Ipv4Addr {
+        Ipv4Addr::from(self.bytes.dst)
+    }
 
-        assert!(
-            $left.ttl() == $right.ttl(),
-            "IPv4 ttl mismatch: {} != {}",
-            $left.ttl(),
-            $right.ttl(),
-        );
+    /// Return the header length, in bytes.
+    #[inline]
+    pub fn hdr_len(&self) -> u16 {
+        u16::from(u8::from(self.bytes.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4)
+    }
 
-        assert!(
-            $left.proto() == $right.proto(),
-            "IPv4 protocol mismatch: {} != {}",
-            $left.proto(),
-            $right.proto(),
-        );
+    #[inline]
+    pub fn ident(&self) -> u16 {
+        u16::from_be_bytes(self.bytes.ident)
+    }
 
-        let lcsum = $left.csum();
-        let rcsum = $right.csum();
+    pub fn parse<'b, R>(rdr: &'b mut R) -> Result<Self, Ipv4HdrError>
+    where
+        R: PacketReadMut<'a>,
+    {
+        let src = rdr.slice_mut(Ipv4HdrRaw::SIZE)?;
+        let ip = Self { bytes: Ipv4HdrRaw::new_mut(src)? };
 
-        assert!(
-            lcsum == rcsum,
-            "IPv4 csum mismatch: 0x{:02X}{:02X} != 0x{:02X}{:02X}",
-            lcsum[0],
-            lcsum[1],
-            rcsum[0],
-            rcsum[1],
-        );
+        if ip.hdr_len() < 20 {
+            return Err(Ipv4HdrError::HeaderTruncated {
+                hdr_len: ip.hdr_len(),
+            });
+        }
 
-        assert!(
-            $left.src() == $right.src(),
-            "IPv4 src mismatch: {} != {}",
-            $left.src(),
-            $right.src(),
-        );
+        if ip.total_len() < ip.hdr_len() {
+            return Err(Ipv4HdrError::BadTotalLen {
+                total_len: ip.total_len(),
+            });
+        }
 
-        assert!(
-            $left.dst() == $right.dst(),
-            "IPv4 dst mismatch: {} != {}",
-            $left.dst(),
-            $right.dst(),
-        );
-    };
+        let _proto = Protocol::try_from(ip.bytes.proto).map_err(|_s| {
+            Ipv4HdrError::UnexpectedProtocol { protocol: ip.bytes.proto }
+        })?;
+
+        Ok(ip)
+    }
+
+    /// Return the [`Protocol`].
+    #[inline]
+    pub fn proto(&self) -> Protocol {
+        // Unwrap: We verified the proto is good upon parsing.
+        Protocol::try_from(self.bytes.proto).unwrap()
+    }
+
+    /// Populate `bytes` with the pseudo header bytes.
+    pub fn pseudo_bytes(&self, bytes: &mut [u8; 12]) {
+        bytes[0..4].copy_from_slice(&self.bytes.src);
+        bytes[4..8].copy_from_slice(&self.bytes.dst);
+        let len_bytes = (self.ulp_len() as u16).to_be_bytes();
+        bytes[8..12].copy_from_slice(&[
+            0,
+            self.bytes.proto,
+            len_bytes[0],
+            len_bytes[1],
+        ]);
+    }
+
+    /// Return a [`Checksum`] of the pseudo header.
+    pub fn pseudo_csum(&self) -> Checksum {
+        let mut pseudo_bytes = [0u8; 12];
+        self.pseudo_bytes(&mut pseudo_bytes);
+        Checksum::compute(&pseudo_bytes)
+    }
+
+    #[inline]
+    pub fn set_csum(&mut self, csum: [u8; 2]) {
+        self.bytes.csum = csum;
+    }
+
+    /// Set the `Total Length` field.
+    #[inline]
+    pub fn set_total_len(&mut self, len: u16) {
+        self.bytes.total_len = len.to_be_bytes()
+    }
+
+    /// Return the source address.
+    #[inline]
+    pub fn src(&self) -> Ipv4Addr {
+        Ipv4Addr::from(self.bytes.src)
+    }
+
+    /// Return the value of the `Total Length` field.
+    #[inline]
+    pub fn total_len(&self) -> u16 {
+        u16::from_be_bytes(self.bytes.total_len)
+    }
+
+    #[inline]
+    pub fn ttl(&self) -> u8 {
+        self.bytes.ttl
+    }
+
+    /// Return the length of the Upper Layer Protocol (ULP) portion of
+    /// the packet.
+    #[inline]
+    pub fn ulp_len(&self) -> u16 {
+        self.total_len() - self.hdr_len() as u16
+    }
 }
 
 /// Options for computing a ULP checksum.
@@ -335,168 +458,11 @@ pub enum UlpCsumOpt {
     Full,
 }
 
-impl Ipv4Hdr {
-    pub const SIZE: usize = mem::size_of::<Ipv4HdrRaw>();
-
-    pub fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.hdr_len());
-        let raw = Ipv4HdrRaw::from(self);
-        bytes.extend_from_slice(raw.as_bytes());
-        bytes
-    }
-
-    pub fn compute_hdr_csum(&mut self) {
-        self.csum = [0; 2];
-        self.csum =
-            HeaderChecksum::from(Checksum::compute(&self.as_bytes())).bytes();
-    }
-
-    pub fn compute_ulp_csum(
-        &self,
-        opt: UlpCsumOpt,
-        ulp_hdr: &[u8],
-        body: &[u8],
-    ) -> Checksum {
-        match opt {
-            UlpCsumOpt::Partial => todo!("implement partial csum"),
-            UlpCsumOpt::Full => {
-                let mut csum = self.pseudo_csum();
-                csum.add(ulp_hdr);
-                csum.add(body);
-                csum
-            }
-        }
-    }
-
-    pub fn csum(&self) -> [u8; 2] {
-        self.csum
-    }
-
-    pub fn dst(&self) -> Ipv4Addr {
-        self.dst
-    }
-
-    /// Return the length of the header porition of the packet, in bytes.
-    pub fn hdr_len(&self) -> usize {
-        self.hdr_len_bytes as usize
-    }
-
-    pub fn ident(&self) -> u16 {
-        self.ident
-    }
-
-    #[cfg(any(feature = "std", test))]
-    pub fn new_tcp<A: Into<Ipv4Addr>>(
-        tcp: &mut super::tcp::TcpHdr,
-        body: &[u8],
-        src: A,
-        dst: A,
-    ) -> Self {
-        let data_len = tcp.hdr_len() as u16 + body.len() as u16;
-
-        Self {
-            hdr_len_bytes: Ipv4Hdr::SIZE as u8,
-            dscp_ecn: 0,
-            total_len: Ipv4Hdr::SIZE as u16 + data_len,
-            ident: 0,
-            frag_and_flags: [0x40, 0x00],
-            ttl: 255,
-            proto: Protocol::TCP,
-            csum: [0; 2],
-            src: src.into(),
-            dst: dst.into(),
-        }
-    }
-
-    /// Return the length of the upper-layer protocol portion of the packet.
-    pub fn ulp_len(&self) -> usize {
-        self.total_len as usize - self.hdr_len()
-    }
-
-    /// Return the [`Protocol`] of the packet.
-    pub fn proto(&self) -> Protocol {
-        self.proto
-    }
-
-    /// Return the pseudo header bytes.
-    pub fn pseudo_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(12);
-        bytes.extend_from_slice(&self.src);
-        bytes.extend_from_slice(&self.dst);
-        let len_bytes = (self.ulp_len() as u16).to_be_bytes();
-        bytes.extend_from_slice(&[
-            0u8,
-            self.proto as u8,
-            len_bytes[0],
-            len_bytes[1],
-        ]);
-        bytes
-    }
-
-    /// Return a [`Checksum`] of the pseudo header.
-    pub fn pseudo_csum(&self) -> Checksum {
-        Checksum::compute(&self.pseudo_bytes())
-    }
-
-    pub fn set_total_len(&mut self, len: u16) {
-        self.total_len = len
-    }
-
-    pub fn src(&self) -> Ipv4Addr {
-        self.src
-    }
-
-    pub fn total_len(&self) -> u16 {
-        self.total_len
-    }
-
-    pub fn ttl(&self) -> u8 {
-        self.ttl
-    }
-
-    pub fn unify(&mut self, meta: &Ipv4Meta) {
-        let mut csum = Checksum::from(HeaderChecksum::wrap(self.csum));
-        // Subtract old bytes.
-        //
-        // XXX Might be nice to have Checksum work on iterator of u8
-        // instead, then we could chain slice iterators together.
-        let mut old: FVec<u8, 10> = FVec::new();
-        old.extend_from_slice(&self.src).unwrap();
-        old.extend_from_slice(&self.dst).unwrap();
-        old.extend_from_slice(&[0, self.proto as u8]).unwrap();
-        csum.sub(&old);
-        let _ = csum.finalize();
-
-        // Add new bytes.
-        let mut new: FVec<u8, 10> = FVec::new();
-        new.extend_from_slice(&meta.src).unwrap();
-        new.extend_from_slice(&meta.dst).unwrap();
-        new.extend_from_slice(&[0, meta.proto as u8]).unwrap();
-        csum.add(&new);
-
-        self.src = meta.src;
-        self.dst = meta.dst;
-        self.proto = meta.proto;
-        self.csum = HeaderChecksum::from(csum).bytes();
-    }
-}
-
-impl Header for Ipv4Hdr {
-    type Error = Ipv4HdrError;
-
-    fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Ipv4HdrError>
-    where
-        R: PacketRead<'a>,
-    {
-        Ipv4Hdr::try_from(&Ipv4HdrRaw::raw_zc(rdr)?)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ipv4HdrError {
     BadTotalLen { total_len: u16 },
     BadVersion { vsn: u8 },
-    HeaderTruncated { hdr_len_bytes: u8 },
+    HeaderTruncated { hdr_len: u16 },
     ReadError { error: ReadErr },
     UnexpectedProtocol { protocol: u8 },
 }
@@ -504,75 +470,6 @@ pub enum Ipv4HdrError {
 impl From<ReadErr> for Ipv4HdrError {
     fn from(error: ReadErr) -> Self {
         Ipv4HdrError::ReadError { error }
-    }
-}
-
-impl TryFrom<&LayoutVerified<&[u8], Ipv4HdrRaw>> for Ipv4Hdr {
-    type Error = Ipv4HdrError;
-
-    fn try_from(
-        raw: &LayoutVerified<&[u8], Ipv4HdrRaw>,
-    ) -> Result<Self, Self::Error> {
-        let vsn = (raw.ver_hdr_len & IPV4_HDR_VER_MASK) >> IPV4_HDR_VER_SHIFT;
-
-        if vsn != IPV4_VERSION {
-            return Err(Ipv4HdrError::BadVersion { vsn });
-        }
-
-        let hdr_len_bytes = u8::from(raw.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4;
-
-        if hdr_len_bytes < 20 {
-            return Err(Ipv4HdrError::HeaderTruncated { hdr_len_bytes });
-        }
-
-        let total_len = u16::from_be_bytes(raw.total_len);
-
-        // In realiy we also want to check that the total length
-        // matches up with the protocol and the remaining bytes in the
-        // packet; however, we delay that check until later in the
-        // main parsing code, at which time we have more information
-        // to work with. For this check we only want to make sure the
-        // total length is at least as large as the header length.
-        if total_len < hdr_len_bytes as u16 {
-            return Err(Ipv4HdrError::BadTotalLen { total_len });
-        }
-
-        let proto = Protocol::try_from(raw.proto).map_err(|_s| {
-            Ipv4HdrError::UnexpectedProtocol { protocol: raw.proto }
-        })?;
-
-        let src = Ipv4Addr::from(u32::from_be_bytes(raw.src));
-        let dst = Ipv4Addr::from(u32::from_be_bytes(raw.dst));
-
-        Ok(Ipv4Hdr {
-            hdr_len_bytes,
-            dscp_ecn: raw.dscp_ecn,
-            total_len,
-            ident: u16::from_be_bytes(raw.ident),
-            frag_and_flags: raw.frag_and_flags,
-            ttl: raw.ttl,
-            proto,
-            csum: raw.csum,
-            src,
-            dst,
-        })
-    }
-}
-
-impl From<&Ipv4Meta> for Ipv4Hdr {
-    fn from(meta: &Ipv4Meta) -> Self {
-        Ipv4Hdr {
-            hdr_len_bytes: 20,
-            dscp_ecn: 0,
-            total_len: 20,
-            ident: 0,
-            frag_and_flags: [0x40, 0x0],
-            ttl: 64,
-            proto: meta.proto,
-            csum: [0; 2],
-            src: meta.src,
-            dst: meta.dst,
-        }
     }
 }
 
@@ -593,23 +490,14 @@ pub struct Ipv4HdrRaw {
 }
 
 impl<'a> RawHeader<'a> for Ipv4HdrRaw {
-    fn raw_zc<'b, R: PacketRead<'a>>(
-        rdr: &'b mut R,
-    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(mem::size_of::<Self>())?;
-        let hdr = match LayoutVerified::new(slice) {
-            Some(bytes) => bytes,
-            None => return Err(ReadErr::BadLayout),
-        };
-        Ok(hdr)
-    }
-
-    fn raw_mut_zc(
+    #[inline]
+    fn new_mut(
         src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteError> {
+    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+        debug_assert_eq!(src.len(), Self::SIZE);
         let hdr = match LayoutVerified::new(src) {
-            Some(bytes) => bytes,
-            None => return Err(WriteError::BadLayout),
+            Some(hdr) => hdr,
+            None => return Err(ReadErr::BadLayout),
         };
         Ok(hdr)
     }
@@ -624,7 +512,7 @@ impl Default for Ipv4HdrRaw {
             ident: [0x0; 2],
             frag_and_flags: [0x40, 0x0],
             ttl: 64,
-            proto: Protocol::Reserved as u8,
+            proto: u8::from(Protocol::Unknown(255)),
             csum: [0x0; 2],
             src: [0x0; 4],
             dst: [0x0; 4],
@@ -632,32 +520,73 @@ impl Default for Ipv4HdrRaw {
     }
 }
 
-impl From<&Ipv4Hdr> for Ipv4HdrRaw {
-    fn from(ip4: &Ipv4Hdr) -> Self {
-        let hdr_len = ip4.hdr_len_bytes / 4;
-
+impl From<&Ipv4Meta> for Ipv4HdrRaw {
+    #[inline]
+    fn from(meta: &Ipv4Meta) -> Self {
         Ipv4HdrRaw {
-            ver_hdr_len: 0x40 | hdr_len,
-            dscp_ecn: ip4.dscp_ecn,
-            total_len: ip4.total_len.to_be_bytes(),
-            ident: ip4.ident.to_be_bytes(),
-            frag_and_flags: ip4.frag_and_flags,
-            ttl: ip4.ttl,
-            proto: ip4.proto as u8,
-            csum: ip4.csum,
-            src: ip4.src.bytes(),
-            dst: ip4.dst.bytes(),
+            ver_hdr_len: 0x45,
+            dscp_ecn: 0x0,
+            total_len: meta.total_len.to_be_bytes(),
+            ident: meta.ident.to_be_bytes(),
+            frag_and_flags: [0x40, 0x0],
+            ttl: meta.ttl,
+            proto: u8::from(meta.proto),
+            csum: meta.csum,
+            src: meta.src.bytes(),
+            dst: meta.dst.bytes(),
         }
     }
 }
 
-impl From<&Ipv4Meta> for Ipv4HdrRaw {
-    fn from(meta: &Ipv4Meta) -> Self {
-        Ipv4HdrRaw {
-            src: meta.src.bytes(),
-            dst: meta.dst.bytes(),
-            proto: meta.proto as u8,
-            ..Default::default()
-        }
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::engine::packet::Packet;
+
+    #[test]
+    fn emit() {
+        let ip = Ipv4Meta {
+            src: Ipv4Addr::from([10, 0, 0, 54]),
+            dst: Ipv4Addr::from([52, 10, 128, 69]),
+            proto: Protocol::TCP,
+            ttl: 64,
+            ident: 2662,
+            hdr_len: 20,
+            total_len: 60,
+            csum: [0; 2],
+        };
+
+        let len = ip.hdr_len();
+        assert_eq!(20, len);
+
+        let mut pkt = Packet::alloc_and_expand(usize::from(len));
+        let mut wtr = pkt.seg0_wtr();
+        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+        assert_eq!(usize::from(len), pkt.len());
+
+        #[rustfmt::skip]
+        let expected_bytes = vec![
+            // version + IHL
+            0x45,
+            // DSCP + ECN
+            0x00,
+            // total length
+            0x00, 0x3C,
+            // ident
+            0x0A, 0x66,
+            // flags + frag offset
+            0x40, 0x00,
+            // TTL
+            0x40,
+            // protocol
+            0x06,
+            // checksum
+            0x00, 0x00,
+            // source
+            0x0A, 0x00, 0x00, 0x36,
+            // dest
+            0x34, 0x0A, 0x80, 0x45,
+        ];
+        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
     }
 }

@@ -125,7 +125,7 @@ impl Checksum {
     ///
     /// This is useful for incrementally updating an existing checksum
     /// where only a portion of the bytes are being rewritten.
-    pub fn add(&mut self, bytes: &[u8]) {
+    pub fn add_bytes(&mut self, bytes: &[u8]) {
         self.inner = csum_add(self.inner, bytes);
     }
 
@@ -139,7 +139,7 @@ impl Checksum {
     ///
     /// This is useful for incrementally updating an existing checksum
     /// where only a portion of the bytes are being rewritten.
-    pub fn sub(&mut self, bytes: &[u8]) {
+    pub fn sub_bytes(&mut self, bytes: &[u8]) {
         self.inner = csum_sub(self.inner, bytes);
     }
 
@@ -180,6 +180,13 @@ impl core::ops::Add for Checksum {
 impl core::ops::AddAssign for Checksum {
     fn add_assign(&mut self, other: Self) {
         self.inner += other.inner
+    }
+}
+
+impl core::ops::SubAssign for Checksum {
+    fn sub_assign(&mut self, other: Self) {
+        let other_bytes = other.clone().finalize().to_ne_bytes();
+        self.sub_bytes(&other_bytes);
     }
 }
 

@@ -222,71 +222,73 @@ impl SubnetRouterPair {
 }
 
 /// An IP protocol value.
-///
-/// TODO repr(u8)?
-#[repr(C)]
+#[repr(u8)]
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub enum Protocol {
-    ICMP = 0x1,
-    IGMP = 0x2,
-    TCP = 0x6,
-    UDP = 0x11,
-    ICMPv6 = 0x3A,
-    Reserved = 0xFF,
+    ICMP,
+    IGMP,
+    TCP,
+    UDP,
+    ICMPv6,
+    Unknown(u8),
 }
+
+pub const PROTO_ICMP: u8 = 0x1;
+pub const PROTO_IGMP: u8 = 0x2;
+pub const PROTO_TCP: u8 = 0x6;
+pub const PROTO_UDP: u8 = 0x11;
+pub const PROTO_ICMPV6: u8 = 0x3A;
 
 impl Default for Protocol {
     fn default() -> Self {
-        Protocol::Reserved
+        Self::Unknown(255)
     }
 }
 
 impl Display for Protocol {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Protocol::ICMP => write!(f, "ICMP"),
-            Protocol::IGMP => write!(f, "IGMP"),
-            Protocol::TCP => write!(f, "TCP"),
-            Protocol::UDP => write!(f, "UDP"),
-            Protocol::ICMPv6 => write!(f, "ICMPv6"),
-            Protocol::Reserved => write!(f, "Reserved"),
+            Self::ICMP => write!(f, "ICMP"),
+            Self::IGMP => write!(f, "IGMP"),
+            Self::TCP => write!(f, "TCP"),
+            Self::UDP => write!(f, "UDP"),
+            Self::ICMPv6 => write!(f, "ICMPv6"),
+            Self::Unknown(_) => write!(f, "Unknown"),
         }
     }
 }
 
-impl TryFrom<u8> for Protocol {
-    type Error = String;
-
-    fn try_from(proto: u8) -> core::result::Result<Self, Self::Error> {
+impl From<u8> for Protocol {
+    fn from(proto: u8) -> Self {
         match proto {
-            0x1 => Ok(Protocol::ICMP),
-            0x2 => Ok(Protocol::IGMP),
-            0x6 => Ok(Protocol::TCP),
-            0x11 => Ok(Protocol::UDP),
-            0x3A => Ok(Protocol::ICMPv6),
-            proto => Err(format!("unhandled IP protocol: 0x{:X}", proto)),
+            PROTO_ICMP => Self::ICMP,
+            PROTO_IGMP => Self::IGMP,
+            PROTO_TCP => Self::TCP,
+            PROTO_UDP => Self::UDP,
+            PROTO_ICMPV6 => Self::ICMPv6,
+            _ => Self::Unknown(proto),
         }
     }
 }
 
-impl TryFrom<smoltcp::wire::IpProtocol> for Protocol {
-    type Error = String;
-
-    fn try_from(
-        proto: smoltcp::wire::IpProtocol,
-    ) -> core::result::Result<Self, Self::Error> {
-        use smoltcp::wire::IpProtocol::*;
+impl From<Protocol> for u8 {
+    fn from(proto: Protocol) -> u8 {
         match proto {
-            Icmp => Ok(Protocol::ICMP),
-            Igmp => Ok(Protocol::IGMP),
-            Tcp => Ok(Protocol::TCP),
-            Udp => Ok(Protocol::UDP),
-            Icmpv6 => Ok(Protocol::ICMPv6),
-            Unknown(x) if x == 0xFF => Ok(Protocol::Reserved),
-            _ => Err(format!("unhandled IP protocol: 0x{:X}", u8::from(proto))),
+            Protocol::ICMP => PROTO_ICMP,
+            Protocol::IGMP => PROTO_IGMP,
+            Protocol::TCP => PROTO_TCP,
+            Protocol::UDP => PROTO_UDP,
+            Protocol::ICMPv6 => PROTO_ICMPV6,
+            Protocol::Unknown(v) => v,
         }
+    }
+}
+
+impl From<smoltcp::wire::IpProtocol> for Protocol {
+    fn from(proto: smoltcp::wire::IpProtocol) -> Self {
+        Self::from(u8::from(proto))
     }
 }
 
@@ -299,7 +301,7 @@ impl From<Protocol> for smoltcp::wire::IpProtocol {
             Protocol::TCP => Tcp,
             Protocol::UDP => Udp,
             Protocol::ICMPv6 => Icmpv6,
-            Protocol::Reserved => Unknown(0xFF),
+            Protocol::Unknown(proto) => Unknown(proto),
         }
     }
 }
@@ -366,8 +368,13 @@ impl Ipv4Addr {
     pub const LOCAL_BCAST: Self = Self { inner: [255; 4] };
 
     /// Return the bytes of the address.
+    #[inline]
     pub fn bytes(&self) -> [u8; 4] {
         self.inner
+    }
+
+    pub const fn from_const(bytes: [u8; 4]) -> Self {
+        Self { inner: bytes }
     }
 
     /// Return the address after applying the network mask.
@@ -486,6 +493,18 @@ impl AsRef<[u8]> for Ipv4Addr {
     }
 }
 
+impl AsRef<[u8; 4]> for Ipv4Addr {
+    fn as_ref(&self) -> &[u8; 4] {
+        &self.inner
+    }
+}
+
+impl From<Ipv4Addr> for [u8; 4] {
+    fn from(ip: Ipv4Addr) -> [u8; 4] {
+        ip.inner
+    }
+}
+
 impl Deref for Ipv4Addr {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
@@ -495,7 +514,16 @@ impl Deref for Ipv4Addr {
 
 /// An IPv6 address.
 #[derive(
-    Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Deserialize,
 )]
 pub struct Ipv6Addr {
     inner: [u8; 16],

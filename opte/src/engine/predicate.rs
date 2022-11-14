@@ -6,15 +6,9 @@
 
 //! Predicates used for `Rule` matching.
 
-use super::arp::ArpEth4Payload;
-use super::arp::ArpEth4PayloadRaw;
-use super::arp::ArpMeta;
-use super::arp::ArpOp;
-use super::arp::ARP_HTYPE_ETHERNET;
 use super::dhcp::MessageType as DhcpMessageType;
 use super::dhcpv6::MessageType as Dhcpv6MessageType;
-use super::ether::EtherMeta;
-use super::ether::ETHER_TYPE_IPV4;
+use super::ether::EtherType;
 use super::headers::IpMeta;
 use super::headers::UlpMeta;
 use super::icmp::MessageType as IcmpMessageType;
@@ -89,9 +83,9 @@ pub enum EtherTypeMatch {
 }
 
 impl EtherTypeMatch {
-    fn matches(&self, flow_et: u16) -> bool {
+    fn matches(&self, flow_et: EtherType) -> bool {
         match self {
-            EtherTypeMatch::Exact(et) => flow_et == *et,
+            EtherTypeMatch::Exact(et) => u16::from(flow_et) == *et,
         }
     }
 }
@@ -125,75 +119,6 @@ impl Display for EtherAddrMatch {
 
         match self {
             Exact(addr) => write!(f, "{}", addr),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ArpHtypeMatch {
-    Exact(u16),
-}
-
-impl ArpHtypeMatch {
-    fn matches(&self, flow_htype: u16) -> bool {
-        match self {
-            ArpHtypeMatch::Exact(htype) => flow_htype == *htype,
-        }
-    }
-}
-
-impl Display for ArpHtypeMatch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use ArpHtypeMatch::*;
-
-        match self {
-            Exact(htype) => write!(f, "{}", htype),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ArpPtypeMatch {
-    Exact(u16),
-}
-
-impl ArpPtypeMatch {
-    fn matches(&self, flow_ptype: u16) -> bool {
-        match self {
-            ArpPtypeMatch::Exact(ptype) => flow_ptype == *ptype,
-        }
-    }
-}
-
-impl Display for ArpPtypeMatch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use ArpPtypeMatch::*;
-
-        match self {
-            Exact(ptype) => write!(f, "0x{:4X}", ptype),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ArpOpMatch {
-    Exact(ArpOp),
-}
-
-impl ArpOpMatch {
-    fn matches(&self, flow_op: ArpOp) -> bool {
-        match self {
-            ArpOpMatch::Exact(op) => flow_op == *op,
-        }
-    }
-}
-
-impl Display for ArpOpMatch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use ArpOpMatch::*;
-
-        match self {
-            Exact(op) => write!(f, "{}", op),
         }
     }
 }
@@ -315,9 +240,6 @@ pub enum Predicate {
     InnerEtherType(Vec<EtherTypeMatch>),
     InnerEtherDst(Vec<EtherAddrMatch>),
     InnerEtherSrc(Vec<EtherAddrMatch>),
-    InnerArpHtype(ArpHtypeMatch),
-    InnerArpPtype(ArpPtypeMatch),
-    InnerArpOp(ArpOpMatch),
     InnerSrcIp4(Vec<Ipv4AddrMatch>),
     InnerDstIp4(Vec<Ipv4AddrMatch>),
     InnerSrcIp6(Vec<Ipv6AddrMatch>),
@@ -359,18 +281,6 @@ impl Display for Predicate {
                     .collect::<Vec<String>>()
                     .join(",");
                 write!(f, "inner.ether.src={}", s)
-            }
-
-            InnerArpHtype(ArpHtypeMatch::Exact(htype)) => {
-                write!(f, "inner.arp.htype={}", htype)
-            }
-
-            InnerArpPtype(ArpPtypeMatch::Exact(ptype)) => {
-                write!(f, "inner.arp.ptype={}", ptype)
-            }
-
-            InnerArpOp(ArpOpMatch::Exact(op)) => {
-                write!(f, "inner.arp.op={}", op)
             }
 
             InnerIpProto(list) => {
@@ -465,71 +375,29 @@ impl Predicate {
 
             Self::Not(pred) => return !pred.is_match(meta, action_meta),
 
-            Self::InnerEtherType(list) => match meta.inner.ether {
-                None => return false,
-
-                Some(EtherMeta { ether_type, .. }) => {
-                    for m in list {
-                        if m.matches(ether_type) {
-                            return true;
-                        }
-                    }
-                }
-            },
-
-            Self::InnerEtherDst(list) => match meta.inner.ether {
-                None => return false,
-
-                Some(EtherMeta { dst, .. }) => {
-                    for m in list {
-                        if m.matches(dst) {
-                            return true;
-                        }
-                    }
-                }
-            },
-
-            Self::InnerEtherSrc(list) => match meta.inner.ether {
-                None => return false,
-
-                Some(EtherMeta { src, .. }) => {
-                    for m in list {
-                        if m.matches(src) {
-                            return true;
-                        }
-                    }
-                }
-            },
-
-            Self::InnerArpHtype(m) => match meta.inner.arp {
-                None => return false,
-
-                Some(ArpMeta { htype, .. }) => {
-                    if m.matches(htype) {
+            Self::InnerEtherType(list) => {
+                for m in list {
+                    if m.matches(meta.inner.ether.ether_type) {
                         return true;
                     }
                 }
-            },
+            }
 
-            Self::InnerArpPtype(m) => match meta.inner.arp {
-                None => return false,
-
-                Some(ArpMeta { ptype, .. }) => {
-                    if m.matches(ptype) {
+            Self::InnerEtherDst(list) => {
+                for m in list {
+                    if m.matches(meta.inner.ether.dst) {
                         return true;
                     }
                 }
-            },
+            }
 
-            Self::InnerArpOp(m) => match meta.inner.arp {
-                None => return false,
-
-                Some(ArpMeta { op, .. }) => {
-                    if m.matches(op) {
+            Self::InnerEtherSrc(list) => {
+                for m in list {
+                    if m.matches(meta.inner.ether.src) {
                         return true;
                     }
                 }
-            },
+            }
 
             Self::InnerIpProto(list) => match meta.inner.ip {
                 None => return false,
@@ -652,7 +520,6 @@ pub enum DataPredicate {
     IcmpMsgType(IcmpMessageType),
     Icmpv6MsgType(Icmpv6MessageType),
     Dhcpv6MsgType(Dhcpv6MessageType),
-    InnerArpTpa(Vec<Ipv4AddrMatch>),
     Not(Box<DataPredicate>),
 }
 
@@ -675,15 +542,6 @@ impl Display for DataPredicate {
 
             Dhcpv6MsgType(mt) => {
                 write!(f, "dhcpv6.msg_type={}", mt)
-            }
-
-            InnerArpTpa(list) => {
-                let s = list
-                    .iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<String>>()
-                    .join(",");
-                write!(f, "inner.arp.data.tpa={}", s)
             }
 
             Not(pred) => {
@@ -813,42 +671,6 @@ impl DataPredicate {
                     return false;
                 }
             }
-
-            Self::InnerArpTpa(list) => match meta.inner.arp {
-                None => return false,
-
-                Some(ArpMeta { htype, ptype, .. }) => {
-                    if htype != ARP_HTYPE_ETHERNET || ptype != ETHER_TYPE_IPV4 {
-                        return false;
-                    }
-
-                    let raw = match ArpEth4PayloadRaw::parse(rdr) {
-                        Ok(raw) => raw,
-                        Err(_) => return false,
-                    };
-
-                    let arp = ArpEth4Payload::from(&raw);
-                    // TODO It would be nice to add some type of undo
-                    // method to the reader interface, allowing you to
-                    // track back to the cursor position before the
-                    // last read. Or, even better, have the ability to
-                    // get a new type from the PacketReader, like
-                    // TempPacketRead (or something) that undoes the
-                    // most recent read in its Drop implementation.
-                    // That way there is no chance to forget to undo
-                    // the read.
-                    rdr.seek_back(super::arp::ARP_ETH4_PAYLOAD_SZ)
-                        .expect("failed to seek back");
-
-                    for m in list {
-                        if m.matches(arp.tpa) {
-                            return true;
-                        }
-                    }
-                }
-            },
         }
-
-        false
     }
 }

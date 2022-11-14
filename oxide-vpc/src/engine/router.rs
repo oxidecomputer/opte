@@ -23,6 +23,7 @@ cfg_if! {
 }
 
 use super::firewall as fw;
+use super::VpcNetwork;
 use crate::api::DelRouterEntryResp;
 use crate::api::RouterTarget;
 use crate::api::VpcCfg;
@@ -299,7 +300,7 @@ fn make_rule(
 /// For the entry to be deleted it must match exactly for the
 /// destination [`IpCidr`] as well as its paired [`RouterTarget`].
 pub fn del_entry(
-    port: &Port,
+    port: &Port<VpcNetwork>,
     dest: IpCidr,
     target: RouterTarget,
 ) -> Result<DelRouterEntryResp, OpteError> {
@@ -319,7 +320,7 @@ pub fn del_entry(
 ///
 /// Route the [`IpCidr`] to the specified [`RouterTarget`].
 pub fn add_entry(
-    port: &Port,
+    port: &Port<VpcNetwork>,
     dest: IpCidr,
     target: RouterTarget,
 ) -> Result<NoResp, OpteError> {
@@ -330,7 +331,7 @@ pub fn add_entry(
 
 /// Replace the current set of router entries with the set passed in.
 pub fn replace(
-    port: &Port,
+    port: &Port<VpcNetwork>,
     entries: Vec<(IpCidr, RouterTarget)>,
 ) -> Result<NoResp, OpteError> {
     let mut out_rules = Vec::with_capacity(entries.len());

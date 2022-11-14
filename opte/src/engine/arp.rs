@@ -13,33 +13,15 @@
 /// * RFC 826 -- An Ethernet Address Resolution Protocol
 use super::ether::EtherHdr;
 use super::ether::EtherMeta;
-use super::ether::ETHER_TYPE_ARP;
-use super::ether::ETHER_TYPE_IPV4;
-use super::headers::Header;
+use super::ether::EtherType;
 use super::headers::RawHeader;
+use super::packet::Initialized;
 use super::packet::Packet;
-use super::packet::PacketMeta;
-use super::packet::PacketRead;
-use super::packet::PacketReader;
-use super::packet::Parsed;
+use super::packet::PacketReadMut;
 use super::packet::ReadErr;
-use super::packet::WriteError;
-use super::predicate::ArpHtypeMatch;
-use super::predicate::ArpOpMatch;
-use super::predicate::ArpPtypeMatch;
-use super::predicate::DataPredicate;
-use super::predicate::EtherAddrMatch;
-use super::predicate::EtherTypeMatch;
-use super::predicate::Ipv4AddrMatch;
-use super::predicate::Predicate;
-use super::rule::AllowOrDeny;
-use super::rule::GenPacketResult;
-use super::rule::HairpinAction;
-use super::rule::Payload;
 use core::convert::TryFrom;
 use core::fmt;
 use core::fmt::Display;
-use core::mem;
 use opte_api::Ipv4Addr;
 use opte_api::MacAddr;
 use serde::Deserialize;
@@ -49,28 +31,7 @@ use zerocopy::FromBytes;
 use zerocopy::LayoutVerified;
 use zerocopy::Unaligned;
 
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
-    } else {
-        use std::vec::Vec;
-    }
-}
-
 pub const ARP_HTYPE_ETHERNET: u16 = 1;
-
-pub const ARP_HDR_SZ: usize = mem::size_of::<ArpHdrRaw>();
-pub const ARP_ETH4_PAYLOAD_SZ: usize = mem::size_of::<ArpEth4PayloadRaw>();
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ArpHardware {
-    Ethernet(u8),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ArpProtocol {
-    Ip4(u8),
-}
 
 #[repr(u16)]
 #[derive(
@@ -112,66 +73,6 @@ impl Display for ArpOp {
     }
 }
 
-#[derive(
-    Clone, Debug, Eq, Deserialize, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub struct ArpMeta {
-    pub htype: u16,
-    pub ptype: u16,
-    pub hlen: u8,
-    pub plen: u8,
-    pub op: ArpOp,
-}
-
-impl From<&ArpHdr> for ArpMeta {
-    fn from(arp: &ArpHdr) -> Self {
-        Self {
-            htype: arp.htype,
-            ptype: arp.ptype,
-            hlen: arp.hlen,
-            plen: arp.plen,
-            op: arp.op,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ArpHdr {
-    htype: u16,
-    ptype: u16,
-    hlen: u8,
-    plen: u8,
-    op: ArpOp,
-}
-
-impl ArpHdr {
-    pub fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(ARP_HDR_SZ);
-        let raw = ArpHdrRaw::from(self);
-        bytes.extend_from_slice(raw.as_bytes());
-        bytes
-    }
-
-    pub fn unify(&mut self, meta: &ArpMeta) {
-        self.htype = meta.htype;
-        self.ptype = meta.ptype;
-        self.hlen = meta.hlen;
-        self.plen = meta.plen;
-        self.op = meta.op;
-    }
-}
-
-impl Header for ArpHdr {
-    type Error = ArpHdrError;
-
-    fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Self::Error>
-    where
-        R: PacketRead<'a>,
-    {
-        Self::try_from(&ArpHdrRaw::raw_zc(rdr)?)
-    }
-}
-
 #[derive(Debug)]
 pub enum ArpHdrError {
     BadOp { op: u16 },
@@ -188,12 +89,73 @@ impl From<ReadErr> for ArpHdrError {
     }
 }
 
-impl TryFrom<&LayoutVerified<&[u8], ArpHdrRaw>> for ArpHdr {
+/// Generate an ARP reply from SHA/SPA to THA/TPA.
+pub fn gen_arp_reply(
+    sha: MacAddr,
+    spa: Ipv4Addr,
+    tha: MacAddr,
+    tpa: Ipv4Addr,
+) -> Packet<Initialized> {
+    let len = EtherHdr::SIZE + ArpEthIpv4Raw::SIZE;
+    let mut pkt = Packet::alloc_and_expand(len);
+    let mut wtr = pkt.seg0_wtr();
+
+    let eth = EtherMeta { dst: tha, src: sha, ether_type: EtherType::Arp };
+
+    let arp = ArpEthIpv4 {
+        htype: ARP_HTYPE_ETHERNET,
+        ptype: u16::from(EtherType::Ipv4),
+        hlen: 6,
+        plen: 4,
+        op: ArpOp::Reply,
+        sha,
+        spa,
+        tha,
+        tpa,
+    };
+
+    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+    arp.emit(wtr.slice_mut(ArpEthIpv4::SIZE).unwrap());
+    pkt
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ArpEthIpv4 {
+    pub htype: u16,
+    pub ptype: u16,
+    pub hlen: u8,
+    pub plen: u8,
+    pub op: ArpOp,
+    pub sha: MacAddr,
+    pub spa: Ipv4Addr,
+    pub tha: MacAddr,
+    pub tpa: Ipv4Addr,
+}
+
+impl ArpEthIpv4 {
+    pub const SIZE: usize = ArpEthIpv4Raw::SIZE;
+
+    pub fn emit(&self, dst: &mut [u8]) {
+        debug_assert_eq!(dst.len(), ArpEthIpv4Raw::SIZE);
+        let mut raw = ArpEthIpv4Raw::new_mut(dst).unwrap();
+        raw.write(ArpEthIpv4Raw::from(self));
+    }
+
+    pub fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, ArpHdrError>
+    where
+        R: PacketReadMut<'a>,
+    {
+        let src = rdr.slice_mut(ArpEthIpv4Raw::SIZE)?;
+        Self::try_from(&ArpEthIpv4Raw::new_mut(src)?)
+    }
+}
+
+impl TryFrom<&LayoutVerified<&mut [u8], ArpEthIpv4Raw>> for ArpEthIpv4 {
     type Error = ArpHdrError;
 
     // NOTE: This only accepts IPv4/Ethernet ARP.
     fn try_from(
-        raw: &LayoutVerified<&[u8], ArpHdrRaw>,
+        raw: &LayoutVerified<&mut [u8], ArpEthIpv4Raw>,
     ) -> Result<Self, Self::Error> {
         let htype = u16::from_be_bytes(raw.htype);
 
@@ -221,125 +183,28 @@ impl TryFrom<&LayoutVerified<&[u8], ArpHdrRaw>> for ArpHdr {
 
         let op = ArpOp::try_from(u16::from_be_bytes(raw.op))?;
 
-        Ok(Self { htype, ptype, hlen, plen, op })
+        Ok(Self {
+            htype,
+            ptype,
+            hlen,
+            plen,
+            op,
+            sha: MacAddr::from(raw.sha),
+            spa: Ipv4Addr::from(u32::from_be_bytes(raw.spa)),
+            tha: MacAddr::from(raw.tha),
+            tpa: Ipv4Addr::from(u32::from_be_bytes(raw.tpa)),
+        })
     }
 }
 
-impl From<&ArpMeta> for ArpHdr {
-    fn from(meta: &ArpMeta) -> Self {
-        Self {
-            htype: meta.htype,
-            ptype: meta.ptype,
-            hlen: meta.hlen,
-            plen: meta.plen,
-            op: meta.op,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
-pub struct ArpHdrRaw {
-    pub htype: [u8; 2],
-    pub ptype: [u8; 2],
-    pub hlen: u8,
-    pub plen: u8,
-    pub op: [u8; 2],
-}
-
-impl<'a> RawHeader<'a> for ArpHdrRaw {
-    fn raw_zc<'b, R: PacketRead<'a>>(
-        rdr: &'b mut R,
-    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(mem::size_of::<Self>())?;
-        let hdr = match LayoutVerified::new(slice) {
-            Some(bytes) => bytes,
-            None => return Err(ReadErr::BadLayout),
-        };
-        Ok(hdr)
-    }
-
-    fn raw_mut_zc(
-        dst: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteError> {
-        let hdr = match LayoutVerified::new(dst) {
-            Some(bytes) => bytes,
-            None => return Err(WriteError::BadLayout),
-        };
-        Ok(hdr)
-    }
-}
-
-impl From<&ArpHdr> for ArpHdrRaw {
-    fn from(arp: &ArpHdr) -> Self {
+impl From<&ArpEthIpv4> for ArpEthIpv4Raw {
+    fn from(arp: &ArpEthIpv4) -> Self {
         Self {
             htype: arp.htype.to_be_bytes(),
             ptype: arp.ptype.to_be_bytes(),
             hlen: arp.hlen,
             plen: arp.plen,
             op: arp.op.to_be_bytes(),
-        }
-    }
-}
-
-impl From<&ArpMeta> for ArpHdrRaw {
-    fn from(meta: &ArpMeta) -> Self {
-        Self {
-            htype: meta.htype.to_be_bytes(),
-            ptype: meta.ptype.to_be_bytes(),
-            hlen: meta.hlen,
-            plen: meta.plen,
-            op: meta.op.to_be_bytes(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ArpEth4Payload {
-    pub sha: MacAddr,
-    pub spa: Ipv4Addr,
-    pub tha: MacAddr,
-    pub tpa: Ipv4Addr,
-}
-
-impl Payload for ArpEth4Payload {}
-
-impl From<&LayoutVerified<&[u8], ArpEth4PayloadRaw>> for ArpEth4Payload {
-    fn from(raw: &LayoutVerified<&[u8], ArpEth4PayloadRaw>) -> Self {
-        ArpEth4Payload {
-            sha: MacAddr::from(raw.sha),
-            spa: Ipv4Addr::from(u32::from_be_bytes(raw.spa)),
-            tha: MacAddr::from(raw.tha),
-            tpa: Ipv4Addr::from(u32::from_be_bytes(raw.tpa)),
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(AsBytes, Clone, Debug, FromBytes, Unaligned)]
-pub struct ArpEth4PayloadRaw {
-    sha: [u8; 6],
-    spa: [u8; 4],
-    tha: [u8; 6],
-    tpa: [u8; 4],
-}
-
-impl<'a> ArpEth4PayloadRaw {
-    pub fn parse<'b, R: PacketRead<'a>>(
-        rdr: &'b mut R,
-    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(mem::size_of::<Self>())?;
-        let hdr = match LayoutVerified::new(slice) {
-            Some(bytes) => bytes,
-            None => return Err(ReadErr::BadLayout),
-        };
-        Ok(hdr)
-    }
-}
-
-impl From<ArpEth4Payload> for ArpEth4PayloadRaw {
-    fn from(arp: ArpEth4Payload) -> Self {
-        ArpEth4PayloadRaw {
             sha: arp.sha.bytes(),
             spa: arp.spa.bytes(),
             tha: arp.tha.bytes(),
@@ -348,94 +213,30 @@ impl From<ArpEth4Payload> for ArpEth4PayloadRaw {
     }
 }
 
-impl ArpEth4PayloadRaw {
-    pub fn from_bytes(bytes: &[u8]) -> Option<LayoutVerified<&[u8], Self>> {
-        LayoutVerified::new_unaligned(bytes)
-    }
+#[repr(C)]
+#[derive(AsBytes, Clone, Debug, FromBytes, Unaligned)]
+pub struct ArpEthIpv4Raw {
+    pub htype: [u8; 2],
+    pub ptype: [u8; 2],
+    pub hlen: u8,
+    pub plen: u8,
+    pub op: [u8; 2],
+    pub sha: [u8; 6],
+    pub spa: [u8; 4],
+    pub tha: [u8; 6],
+    pub tpa: [u8; 4],
 }
 
-/// Generate an ARP Reply mapping the TPA to the THA.
-pub struct ArpReply {
-    tpa: Ipv4Addr,
-    tha: MacAddr,
-}
-
-impl ArpReply {
-    pub fn new(tpa: Ipv4Addr, tha: MacAddr) -> Self {
-        ArpReply { tpa, tha }
-    }
-}
-
-impl fmt::Display for ArpReply {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ArpReply {} => {}", self.tpa, self.tha)
-    }
-}
-
-impl HairpinAction for ArpReply {
-    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
-        let hdr_preds = vec![
-            Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-                ETHER_TYPE_ARP,
-            )]),
-            Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-                MacAddr::BROADCAST,
-            )]),
-            Predicate::InnerArpHtype(ArpHtypeMatch::Exact(1)),
-            Predicate::InnerArpPtype(ArpPtypeMatch::Exact(ETHER_TYPE_IPV4)),
-            Predicate::InnerArpOp(ArpOpMatch::Exact(ArpOp::Request)),
-        ];
-
-        let data_preds =
-            vec![DataPredicate::InnerArpTpa(vec![Ipv4AddrMatch::Exact(
-                self.tpa,
-            )])];
-
-        (hdr_preds, data_preds)
-    }
-
-    fn gen_packet(
-        &self,
-        meta: &PacketMeta,
-        rdr: &mut PacketReader<Parsed, ()>,
-    ) -> GenPacketResult {
-        // TODO Add 2 bytes to alloc and push b_rptr/b_wptr to make
-        // sure IP header is properly aligned.
-        let mut bytes = Vec::with_capacity(
-            EtherHdr::SIZE + ARP_HDR_SZ + ARP_ETH4_PAYLOAD_SZ,
-        );
-
-        let ethm = &meta.inner.ether.as_ref().unwrap();
-        let req_raw = ArpEth4PayloadRaw::parse(rdr)?;
-        let req = ArpEth4Payload::from(&req_raw);
-
-        let eth_hdr = EtherHdr::from(&EtherMeta {
-            dst: ethm.src,
-            src: self.tha.into(),
-            ether_type: ETHER_TYPE_ARP,
-        });
-
-        bytes.extend_from_slice(&eth_hdr.as_bytes());
-
-        let arp_hdr = ArpHdrRaw::from(&ArpMeta {
-            htype: ARP_HTYPE_ETHERNET,
-            ptype: ETHER_TYPE_IPV4,
-            hlen: 6,
-            plen: 4,
-            op: ArpOp::Reply,
-        });
-
-        bytes.extend_from_slice(&arp_hdr.as_bytes());
-
-        let payload = ArpEth4PayloadRaw::from(ArpEth4Payload {
-            sha: self.tha,
-            spa: self.tpa,
-            tha: req.sha,
-            tpa: req.spa,
-        });
-
-        bytes.extend_from_slice(&payload.as_bytes());
-        let pkt = Packet::copy(&bytes);
-        Ok(AllowOrDeny::Allow(pkt))
+impl<'a> RawHeader<'a> for ArpEthIpv4Raw {
+    #[inline]
+    fn new_mut(
+        src: &mut [u8],
+    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+        debug_assert_eq!(src.len(), Self::SIZE);
+        let hdr = match LayoutVerified::new(src) {
+            Some(hdr) => hdr,
+            None => return Err(ReadErr::BadLayout),
+        };
+        Ok(hdr)
     }
 }

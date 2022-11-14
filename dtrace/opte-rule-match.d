@@ -18,7 +18,7 @@ rule-match {
 	this->port = stringof(this->match->port);
 	this->layer = stringof(this->match->layer);
 	this->flow = this->match->flow;
-	this->dir = stringof(this->match->dir);
+	this->dir = DIR_STR(this->match->dir);
 	this->af = this->flow->af;
 	num++;
 
@@ -44,7 +44,7 @@ rule-match /this->af == AF_INET6/ {
 rule-no-match {
 	this->no_match = (rule_no_match_sdt_arg_t *)arg0;
 	this->flow = this->no_match->flow;
-	this->dir = stringof(this->no_match->dir);
+	this->dir = DIR_STR(this->no_match->dir);
 	this->layer = stringof(this->no_match->layer);
 	this->af = this->flow->af;
 	num++;

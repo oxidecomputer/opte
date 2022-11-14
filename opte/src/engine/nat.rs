@@ -4,9 +4,11 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use super::ether::EtherMeta;
-use super::ip4::Ipv4Meta;
-use super::ip6::Ipv6Meta;
+use super::ether::EtherMod;
+use super::headers::HeaderAction;
+use super::headers::IpMod;
+use super::ip4::Ipv4Mod;
+use super::ip6::Ipv6Mod;
 use super::packet::InnerFlowId;
 use super::packet::Packet;
 use super::packet::Parsed;
@@ -20,6 +22,7 @@ use super::rule::HdrTransform;
 use super::rule::StatefulAction;
 use crate::engine::snat::ConcreteIpAddr;
 use core::fmt;
+use core::marker::PhantomData;
 use opte_api::Direction;
 use opte_api::IpAddr;
 use opte_api::MacAddr;
@@ -108,17 +111,19 @@ impl ActionDesc for NatDesc {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             Direction::Out => {
-                let inner_ip = match self.external_ip {
-                    IpAddr::Ip4(ipv4) => {
-                        Ipv4Meta::modify(Some(ipv4), None, None)
-                    }
-                    IpAddr::Ip6(ipv6) => {
-                        Ipv6Meta::modify(Some(ipv6), None, None)
-                    }
+                let ip = match self.external_ip {
+                    IpAddr::Ip4(ipv4) => IpMod::from(Ipv4Mod {
+                        src: Some(ipv4),
+                        ..Default::default()
+                    }),
+                    IpAddr::Ip6(ipv6) => IpMod::from(Ipv6Mod {
+                        src: Some(ipv6),
+                        ..Default::default()
+                    }),
                 };
                 let mut ht = HdrTransform {
                     name: NAT_NAME.to_string(),
-                    inner_ip,
+                    inner_ip: HeaderAction::Modify(ip, PhantomData),
                     ..Default::default()
                 };
 
@@ -126,27 +131,32 @@ impl ActionDesc for NatDesc {
                 // from virtual gateway addr to the real gateway addr
                 // on the same subnet as the external IP.
                 if self.phys_gw_mac.is_some() {
-                    ht.inner_ether = EtherMeta::modify(
-                        None,
-                        Some(self.phys_gw_mac.unwrap()),
-                    );
+                    ht.inner_ether = HeaderAction::Modify(
+                        EtherMod {
+                            dst: Some(self.phys_gw_mac.unwrap()),
+                            ..Default::default()
+                        },
+                        core::marker::PhantomData,
+                    )
                 }
 
                 ht
             }
 
             Direction::In => {
-                let inner_ip = match self.priv_ip {
-                    IpAddr::Ip4(ipv4) => {
-                        Ipv4Meta::modify(None, Some(ipv4), None)
-                    }
-                    IpAddr::Ip6(ipv6) => {
-                        Ipv6Meta::modify(None, Some(ipv6), None)
-                    }
+                let ip = match self.priv_ip {
+                    IpAddr::Ip4(ipv4) => IpMod::from(Ipv4Mod {
+                        dst: Some(ipv4),
+                        ..Default::default()
+                    }),
+                    IpAddr::Ip6(ipv6) => IpMod::from(Ipv6Mod {
+                        dst: Some(ipv6),
+                        ..Default::default()
+                    }),
                 };
                 HdrTransform {
                     name: NAT_NAME.to_string(),
-                    inner_ip,
+                    inner_ip: HeaderAction::Modify(ip, PhantomData),
                     ..Default::default()
                 }
             }
@@ -161,18 +171,20 @@ impl ActionDesc for NatDesc {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::engine::ether::EtherMeta;
+    use crate::engine::GenericUlp;
+    use opte_api::Direction::*;
 
     #[test]
     fn nat4_rewrite() {
-        use crate::engine::checksum::HeaderChecksum;
         use crate::engine::ether::EtherHdr;
         use crate::engine::ether::EtherType;
         use crate::engine::headers::IpMeta;
         use crate::engine::headers::UlpMeta;
         use crate::engine::ip4::Ipv4Hdr;
+        use crate::engine::ip4::Ipv4Meta;
         use crate::engine::ip4::Protocol;
-        use crate::engine::ip4::UlpCsumOpt;
-        use crate::engine::tcp::TcpHdr;
+        use crate::engine::tcp::TcpMeta;
         use opte_api::MacAddr;
 
         let priv_mac = MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x01]);
@@ -190,19 +202,28 @@ mod test {
         // Build the packet metadata
         // ================================================================
         let body = vec![];
-        let mut tcp = TcpHdr::new(priv_port, outside_port);
-        let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, priv_ip, outside_ip);
+        let tcp =
+            TcpMeta { src: priv_port, dst: outside_port, ..Default::default() };
+        let mut ip4 = Ipv4Meta {
+            src: priv_ip,
+            dst: outside_ip,
+            proto: Protocol::TCP,
+            total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len()) as u16,
+            ..Default::default()
+        };
         ip4.compute_hdr_csum();
-        let tcp_csum =
-            ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-        tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-        let eth = EtherHdr::new(EtherType::Ipv4, priv_mac, dest_mac);
-        let mut bytes = vec![];
-        bytes.extend_from_slice(&eth.as_bytes());
-        bytes.extend_from_slice(&ip4.as_bytes());
-        bytes.extend_from_slice(&tcp.as_bytes());
-        bytes.extend_from_slice(&body);
-        let mut pkt = Packet::copy(&bytes).parse().unwrap();
+        let eth = EtherMeta {
+            ether_type: EtherType::Ipv4,
+            src: priv_mac,
+            dst: dest_mac,
+        };
+        let mut pkt = Packet::alloc_and_expand(128);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+        ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
+        tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
+        wtr.write(&body).unwrap();
+        let mut pkt = pkt.parse(Out, GenericUlp {}).unwrap();
 
         // ================================================================
         // Verify descriptor generation.
@@ -220,7 +241,7 @@ mod test {
         let mut pmo = pkt.meta_mut();
         out_ht.run(&mut pmo).unwrap();
 
-        let ether_meta = pmo.inner.ether.as_ref().unwrap();
+        let ether_meta = pmo.inner.ether;
         assert_eq!(ether_meta.src, priv_mac);
         assert_eq!(ether_meta.dst, gw_mac);
 
@@ -246,25 +267,34 @@ mod test {
         // Verify inbound header transformation.
         // ================================================================
         let body = vec![];
-        let mut tcp = TcpHdr::new(outside_port, priv_port);
-        let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, outside_ip, priv_ip);
+        let tcp =
+            TcpMeta { src: outside_port, dst: priv_port, ..Default::default() };
+        let mut ip4 = Ipv4Meta {
+            src: outside_ip,
+            dst: priv_ip,
+            proto: Protocol::TCP,
+            total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len()) as u16,
+            ..Default::default()
+        };
         ip4.compute_hdr_csum();
-        let tcp_csum =
-            ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-        tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-        let eth = EtherHdr::new(EtherType::Ipv4, dest_mac, priv_mac);
-        let mut bytes = vec![];
-        bytes.extend_from_slice(&eth.as_bytes());
-        bytes.extend_from_slice(&ip4.as_bytes());
-        bytes.extend_from_slice(&tcp.as_bytes());
-        bytes.extend_from_slice(&body);
-        let mut pkt = Packet::copy(&bytes).parse().unwrap();
+        let eth = EtherMeta {
+            dst: priv_mac,
+            src: dest_mac,
+            ether_type: EtherType::Ipv4,
+        };
+        let mut pkt = Packet::alloc_and_expand(128);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+        ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
+        tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
+        wtr.write(&body).unwrap();
+        let mut pkt = pkt.parse(Out, GenericUlp {}).unwrap();
 
         let mut pmi = pkt.meta_mut();
         let in_ht = desc.gen_ht(Direction::In);
         in_ht.run(&mut pmi).unwrap();
 
-        let ether_meta = pmi.inner.ether.as_ref().unwrap();
+        let ether_meta = pmi.inner.ether;
         assert_eq!(ether_meta.src, dest_mac);
         assert_eq!(ether_meta.dst, priv_mac);
 

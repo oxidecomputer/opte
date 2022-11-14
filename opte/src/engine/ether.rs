@@ -4,20 +4,14 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use super::headers::Header;
-use super::headers::HeaderAction;
-use super::headers::HeaderActionModify;
-use super::headers::ModifyActionArg;
-use super::headers::PushActionArg;
+use super::headers::ModifyAction;
+use super::headers::PushAction;
 use super::headers::RawHeader;
-use super::packet::PacketRead;
+use super::packet::PacketReadMut;
 use super::packet::ReadErr;
-use super::packet::WriteError;
-use core::convert::TryFrom;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
-use core::mem;
 use core::result;
 use core::str::FromStr;
 use opte_api::MacAddr;
@@ -50,36 +44,48 @@ pub const ETHER_ADDR_LEN: usize = 6;
     Clone, Copy, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub enum EtherType {
-    Ether = 0x6558,
-    Ipv4 = 0x0800,
-    Arp = 0x0806,
-    Ipv6 = 0x86DD,
+    Ether,
+    Ipv4,
+    Arp,
+    Ipv6,
+    Unknown(u16),
 }
 
-impl TryFrom<u16> for EtherType {
-    type Error = EtherHdrError;
-
-    fn try_from(raw: u16) -> Result<Self, Self::Error> {
-        let val = match raw {
+impl From<u16> for EtherType {
+    fn from(raw: u16) -> Self {
+        match raw {
             ETHER_TYPE_ETHER => Self::Ether,
             ETHER_TYPE_ARP => Self::Arp,
             ETHER_TYPE_IPV4 => Self::Ipv4,
             ETHER_TYPE_IPV6 => Self::Ipv6,
+            _ => Self::Unknown(raw),
+        }
+    }
+}
 
-            _ => {
-                return Err(EtherHdrError::UnsupportedEtherType {
-                    ether_type: raw,
-                })
-            }
-        };
+impl From<EtherType> for u16 {
+    fn from(et: EtherType) -> Self {
+        use EtherType::*;
 
-        Ok(val)
+        match et {
+            Ether => ETHER_TYPE_ETHER,
+            Ipv4 => ETHER_TYPE_IPV4,
+            Arp => ETHER_TYPE_ARP,
+            Ipv6 => ETHER_TYPE_IPV6,
+            Unknown(val) => val,
+        }
+    }
+}
+
+impl Default for EtherType {
+    fn default() -> Self {
+        EtherType::Unknown(0x7777)
     }
 }
 
 impl Display for EtherType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:04X}", *self as u16)
+        write!(f, "{:04X}", u16::from(*self))
     }
 }
 
@@ -183,169 +189,115 @@ impl Debug for EtherAddr {
 }
 
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
 )]
 pub struct EtherMeta {
     pub dst: MacAddr,
     pub src: MacAddr,
-    pub ether_type: u16,
+    pub ether_type: EtherType,
 }
 
-impl PushActionArg for EtherMeta {}
+impl PushAction<EtherMeta> for EtherMeta {
+    fn push(&self) -> EtherMeta {
+        EtherMeta { dst: self.dst, src: self.src, ether_type: self.ether_type }
+    }
+}
 
-impl From<&EtherHdr> for EtherMeta {
+impl<'a> From<&EtherHdr<'a>> for EtherMeta {
     fn from(eth: &EtherHdr) -> Self {
         EtherMeta {
-            src: eth.src.into(),
-            dst: eth.dst.into(),
-            ether_type: eth.ether_type as u16,
+            src: eth.src(),
+            dst: eth.dst(),
+            ether_type: eth.ether_type(),
         }
     }
 }
 
-impl HeaderActionModify<EtherMetaOpt> for EtherMeta {
-    fn run_modify(&mut self, spec: &EtherMetaOpt) {
-        if spec.src.is_some() {
-            self.src = spec.src.unwrap()
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct EtherMod {
+    pub src: Option<MacAddr>,
+    pub dst: Option<MacAddr>,
+}
+
+impl ModifyAction<EtherMeta> for EtherMod {
+    fn modify(&self, meta: &mut EtherMeta) {
+        if let Some(src) = self.src {
+            meta.src = src;
         }
 
-        if spec.dst.is_some() {
-            self.dst = spec.dst.unwrap()
+        if let Some(dst) = self.dst {
+            meta.dst = dst
         }
     }
 }
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct EtherMetaOpt {
-    src: Option<MacAddr>,
-    dst: Option<MacAddr>,
-}
-
-impl ModifyActionArg for EtherMetaOpt {}
 
 impl EtherMeta {
-    pub fn modify(
-        src: Option<MacAddr>,
-        dst: Option<MacAddr>,
-    ) -> HeaderAction<EtherMeta, EtherMetaOpt> {
-        HeaderAction::Modify(EtherMetaOpt { src, dst })
+    #[inline]
+    pub fn emit(&self, dst: &mut [u8]) {
+        debug_assert_eq!(dst.len(), EtherHdrRaw::SIZE);
+        let mut raw = EtherHdrRaw::new_mut(dst).unwrap();
+        raw.write(EtherHdrRaw::from(self));
     }
 
-    // XXX We could probably infer the various bits of pushed headers.
-    // E.g., given a fully specified Header Transposition, we could
-    // infer things like Ether Type and IP Protocol. However,
-    // refactoring the code to make that work feels like it could be a
-    // bit of a time suck at the moment. For now we set these values
-    // explicitly, but it would be nice to eventually have the API
-    // changed to infer these values, leaving one less bug that the
-    // developer can introduce into the code.
-    pub fn push(
-        src: MacAddr,
-        dst: MacAddr,
-        ether_type: u16,
-    ) -> HeaderAction<EtherMeta, EtherMetaOpt> {
-        HeaderAction::Push(EtherMeta { dst, src, ether_type })
+    #[inline]
+    pub fn hdr_len(&self) -> usize {
+        EtherHdr::SIZE
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct EtherHdr {
-    dst: EtherAddr,
-    src: EtherAddr,
-    ether_type: EtherType,
+#[derive(Debug)]
+pub struct EtherHdr<'a> {
+    bytes: LayoutVerified<&'a mut [u8], EtherHdrRaw>,
 }
 
-#[macro_export]
-macro_rules! assert_eth {
-    ($left:expr, $right:expr) => {
-        assert!(
-            $left.dst() == $right.dst(),
-            "ether dst mismatch: {} != {}",
-            $left.dst(),
-            $right.dst(),
-        );
-        assert!(
-            $left.src() == $right.src(),
-            "ether src mismatch: {} != {}",
-            $left.src(),
-            $right.src(),
-        );
-        assert!(
-            $left.ether_type() == $right.ether_type(),
-            "ether type mismatch: {} != {}",
-            $left.ether_type(),
-            $right.ether_type(),
-        );
-    };
-}
+impl<'a> EtherHdr<'a> {
+    // For the moment, this type is for non-VLAN ethernet headers
+    // only.
+    pub const SIZE: usize = EtherHdrRaw::SIZE;
 
-#[test]
-#[should_panic]
-fn test_eth_macro() {
-    let eth1 = EtherHdr {
-        ether_type: EtherType::Ipv4,
-        dst: EtherAddr::from([0; 6]),
-        src: EtherAddr::from([1; 6]),
-    };
-
-    let mut eth2 = eth1.clone();
-    eth2.dst = EtherAddr::from([0xa; 6]);
-    assert_eth!(eth1, eth2);
-}
-
-impl EtherHdr {
-    // This type is for non-VLAN ethernet headers only.
-    pub const SIZE: usize = mem::size_of::<EtherHdrRaw>();
-
-    pub fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(Self::SIZE);
-        let raw = EtherHdrRaw::from(self);
-        bytes.extend_from_slice(raw.as_bytes());
-        bytes
+    pub fn as_bytes(&self) -> &[u8] {
+        self.bytes.bytes()
     }
 
-    /// Get the frame's destination address.
-    pub fn dst(&self) -> EtherAddr {
-        self.dst
-    }
-
-    /// Get the frame's Ether Type.
     pub fn ether_type(&self) -> EtherType {
-        self.ether_type
+        EtherType::from(u16::from_be_bytes(self.bytes.ether_type))
     }
 
-    pub fn new<A: Into<EtherAddr>>(
-        ether_type: EtherType,
-        src: A,
-        dst: A,
-    ) -> Self {
-        Self { dst: dst.into(), src: src.into(), ether_type }
+    pub fn hdr_len(&self) -> usize {
+        Self::SIZE
     }
 
-    /// Get the frame's source address.
-    pub fn src(&self) -> EtherAddr {
-        self.src
+    pub fn src(&self) -> MacAddr {
+        MacAddr::from(self.bytes.src)
     }
 
-    /// Unify the header with the metadata.
-    pub fn unify(&mut self, meta: &EtherMeta) {
-        self.dst = meta.dst.into();
-        self.src = meta.src.into();
-        self.ether_type = EtherType::try_from(meta.ether_type).unwrap();
+    pub fn dst(&self) -> MacAddr {
+        MacAddr::from(self.bytes.dst)
     }
-}
 
-impl Header for EtherHdr {
-    type Error = EtherHdrError;
+    pub fn set_dst(&mut self, dst: MacAddr) {
+        self.bytes.dst = dst.bytes();
+    }
 
-    fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, EtherHdrError>
+    pub fn parse<'b, R>(rdr: &'b mut R) -> Result<Self, EtherHdrError>
     where
-        R: PacketRead<'a>,
+        R: PacketReadMut<'a>,
     {
-        EtherHdr::try_from(&EtherHdrRaw::raw_zc(rdr)?)
+        let src = rdr.slice_mut(EtherHdrRaw::SIZE)?;
+        Ok(Self { bytes: EtherHdrRaw::new_mut(src)? })
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub enum EtherHdrError {
     ReadError { error: ReadErr },
     UnsupportedEtherType { ether_type: u16 },
@@ -377,30 +329,12 @@ impl Debug for EtherHdrError {
     }
 }
 
-impl TryFrom<&LayoutVerified<&[u8], EtherHdrRaw>> for EtherHdr {
-    type Error = EtherHdrError;
-
-    fn try_from(
-        raw: &LayoutVerified<&[u8], EtherHdrRaw>,
-    ) -> Result<Self, Self::Error> {
-        let ether_type =
-            EtherType::try_from(u16::from_be_bytes(raw.ether_type))?;
-
-        Ok(Self {
-            dst: EtherAddr::from(raw.dst),
-            src: EtherAddr::from(raw.src),
-            ether_type,
-        })
-    }
-}
-
-impl From<&EtherMeta> for EtherHdr {
+impl From<&EtherMeta> for EtherHdrRaw {
     fn from(meta: &EtherMeta) -> Self {
-        EtherHdr {
-            dst: meta.dst.into(),
-            src: meta.src.into(),
-            // XXX: Temporary until I change EtherMeta to use EtherType
-            ether_type: EtherType::try_from(meta.ether_type).unwrap(),
+        Self {
+            dst: meta.dst.bytes(),
+            src: meta.src.bytes(),
+            ether_type: u16::from(meta.ether_type).to_be_bytes(),
         }
     }
 }
@@ -415,44 +349,51 @@ pub struct EtherHdrRaw {
 }
 
 impl<'a> RawHeader<'a> for EtherHdrRaw {
-    fn raw_zc<'b, R: PacketRead<'a>>(
-        rdr: &'b mut R,
-    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(mem::size_of::<Self>())?;
-        let hdr = match LayoutVerified::new(slice) {
-            Some(bytes) => bytes,
+    #[inline]
+    fn new_mut(
+        src: &mut [u8],
+    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+        debug_assert_eq!(src.len(), Self::SIZE);
+        let hdr = match LayoutVerified::new(src) {
+            Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
         Ok(hdr)
     }
+}
 
-    fn raw_mut_zc(
-        dst: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteError> {
-        let hdr = match LayoutVerified::new(dst) {
-            Some(bytes) => bytes,
-            None => return Err(WriteError::BadLayout),
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::engine::packet::Packet;
+
+    #[test]
+    fn emit() {
+        let eth = EtherMeta {
+            dst: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
+            src: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
+            ether_type: EtherType::Ipv4,
         };
-        Ok(hdr)
-    }
-}
 
-impl From<&EtherHdr> for EtherHdrRaw {
-    fn from(eth: &EtherHdr) -> Self {
-        EtherHdrRaw {
-            dst: eth.dst.to_bytes(),
-            src: eth.src.to_bytes(),
-            ether_type: (eth.ether_type() as u16).to_be_bytes(),
-        }
-    }
-}
+        // Verify bytes are written and segment length is correct.
+        let mut pkt = Packet::alloc_and_expand(14);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+        assert_eq!(pkt.len(), 14);
+        #[rustfmt::skip]
+        let expected_bytes = vec![
+            // destination
+            0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77,
+            // source
+            0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37,
+            // ether type
+            0x08, 0x00,
+        ];
+        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
 
-impl From<&EtherMeta> for EtherHdrRaw {
-    fn from(meta: &EtherMeta) -> Self {
-        EtherHdrRaw {
-            dst: meta.dst.bytes(),
-            src: meta.src.bytes(),
-            ether_type: meta.ether_type.to_be_bytes(),
-        }
+        // Verify error when the mblk is not large enough.
+        let mut pkt = Packet::alloc_and_expand(10);
+        let mut wtr = pkt.seg0_wtr();
+        assert!(matches!(wtr.slice_mut(EtherHdr::SIZE), Err(_)));
     }
 }

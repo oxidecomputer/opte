@@ -173,14 +173,14 @@ pub struct RuleDump {
 }
 
 pub fn dump_layer(
-    port: &Port,
+    port: &Port<impl crate::engine::NetworkImpl>,
     req: &DumpLayerReq,
 ) -> Result<DumpLayerResp, OpteError> {
     port.dump_layer(&req.name)
 }
 
 pub fn dump_tcp_flows(
-    port: &Port,
+    port: &Port<impl crate::engine::NetworkImpl>,
     _req: &DumpTcpFlowsReq,
 ) -> Result<DumpTcpFlowsResp, OpteError> {
     port.dump_tcp_flows()

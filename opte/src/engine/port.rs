@@ -6,7 +6,6 @@
 
 /// A virtual switch port.
 use self::meta::ActionMeta;
-use super::ether::EtherAddr;
 use super::flow_table::Dump;
 use super::flow_table::FlowTable;
 use super::ioctl;
@@ -27,7 +26,6 @@ use super::packet::Packet;
 use super::packet::PacketMeta;
 use super::packet::Parsed;
 use super::packet::FLOW_ID_DEFAULT;
-use super::rule::ht_probe;
 use super::rule::Action;
 use super::rule::Finalized;
 use super::rule::HdrTransform;
@@ -35,6 +33,8 @@ use super::rule::HdrTransformError;
 use super::rule::Rule;
 use super::tcp::TcpState;
 use super::tcp_state::TcpFlowState;
+use super::HdlPktAction;
+use super::NetworkImpl;
 use crate::ddi::kstat;
 use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
@@ -52,6 +52,7 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::SeqCst;
 use kstat_macro::KStatProvider;
 use opte_api::Direction;
+use opte_api::MacAddr;
 use opte_api::OpteError;
 
 cfg_if! {
@@ -79,8 +80,15 @@ pub enum ProcessError {
     BadState(PortState),
     BodyTransform(BodyTransformError),
     Layer(LayerError),
+    HandlePkt(&'static str),
     HdrTransform(HdrTransformError),
     WriteError(super::packet::WriteError),
+}
+
+impl From<super::HdlPktError> for ProcessError {
+    fn from(e: super::HdlPktError) -> Self {
+        Self::HandlePkt(e.0)
+    }
 }
 
 impl From<super::packet::WriteError> for ProcessError {
@@ -124,10 +132,21 @@ pub enum ProcessResult {
     Hairpin(Packet<Initialized>),
 }
 
+impl From<HdlPktAction> for ProcessResult {
+    fn from(hpa: HdlPktAction) -> Self {
+        match hpa {
+            HdlPktAction::Allow => Self::Modified,
+            HdlPktAction::Deny => Self::Drop { reason: DropReason::HandlePkt },
+            HdlPktAction::Hairpin(pkt) => Self::Hairpin(pkt),
+        }
+    }
+}
+
 /// The reason for a packet being dropped.
 #[derive(Clone, Debug)]
 pub enum DropReason {
-    Layer { name: String, reason: layer::DenyReason },
+    HandlePkt,
+    Layer { name: &'static str, reason: layer::DenyReason },
     TcpErr,
 }
 
@@ -137,7 +156,7 @@ pub struct PortBuilder {
     // Cache the CString version of the name for use with DTrace
     // probes.
     name_cstr: CString,
-    mac: EtherAddr,
+    mac: MacAddr,
     layers: KMutex<Vec<Layer>>,
 }
 
@@ -233,11 +252,12 @@ impl PortBuilder {
         Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
 
-    pub fn create(
+    pub fn create<N: NetworkImpl>(
         self,
+        net: N,
         uft_limit: NonZeroU32,
         tcp_limit: NonZeroU32,
-    ) -> result::Result<Port, PortCreateError> {
+    ) -> result::Result<Port<N>, PortCreateError> {
         let data = PortData {
             state: PortState::Ready,
             stats: KStatNamed::new("xde", &self.name, PortStats::new())?,
@@ -255,6 +275,7 @@ impl PortBuilder {
             mac: self.mac,
             ectx: self.ectx,
             epoch: AtomicU64::new(1),
+            net,
             data: KMutex::new(data, KMutexType::Driver),
         })
     }
@@ -299,7 +320,7 @@ impl PortBuilder {
     pub fn new(
         name: &str,
         name_cstr: CString,
-        mac: EtherAddr,
+        mac: MacAddr,
         ectx: Arc<ExecCtx>,
     ) -> Self {
         PortBuilder {
@@ -481,6 +502,10 @@ struct PortStats {
     /// ([`ProcessResult::Drop`]), for one reason or another.
     in_drop: KStatU64,
 
+    /// The number of inbound packets dropped due to the decision of
+    /// the network's `handle_pkt()` callback.
+    in_drop_handle_pkt: KStatU64,
+
     /// The number of inbound packets dropped due to the decision of a
     /// layer's rules. That is, a [`Rule`] was matched with an action
     /// value of [`Action::Deny`].
@@ -516,6 +541,10 @@ struct PortStats {
     /// The number of outbound packets dropped
     /// ([`ProcessResult::Drop`]), for one reason or another.
     out_drop: KStatU64,
+
+    /// The number of outbound packets dropped due to the decision of
+    /// the network's `handle_pkt()` callback.
+    out_drop_handle_pkt: KStatU64,
 
     /// The number of outbound packets dropped due to the decision of
     /// a layer's rules. That is, a [`Rule`] was matched with an
@@ -558,14 +587,15 @@ struct PortData {
     tcp_flows: FlowTable<TcpFlowEntryState>,
 }
 
-pub struct Port {
+pub struct Port<N: crate::engine::NetworkImpl> {
     epoch: AtomicU64,
     ectx: Arc<ExecCtx>,
     name: String,
     // Cache the CString version of the name for use with DTrace
     // probes.
     name_cstr: CString,
-    mac: EtherAddr,
+    mac: MacAddr,
+    net: N,
     data: KMutex<PortData>,
 }
 
@@ -606,7 +636,11 @@ macro_rules! check_state {
     };
 }
 
-impl Port {
+impl<N: NetworkImpl> Port<N> {
+    pub fn network(&self) -> &dyn NetworkImpl<Parser = N::Parser> {
+        &self.net
+    }
+
     /// Place the port in the [`PortState::Paused`] state.
     ///
     /// After completion the port can no longer process traffic or
@@ -746,7 +780,7 @@ impl Port {
 
                 unsafe {
                     __dtrace_probe_tcp__err(
-                        dir.cstr_raw() as uintptr_t,
+                        dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
                         &flow_arg as *const flow_id_sdt_arg as uintptr_t,
                         pkt.mblk_addr(),
@@ -959,7 +993,7 @@ impl Port {
     }
 
     /// Return the MAC address of this port.
-    pub fn mac_addr(&self) -> EtherAddr {
+    pub fn mac_addr(&self) -> MacAddr {
         self.mac
     }
 
@@ -984,13 +1018,13 @@ impl Port {
         pkt: &mut Packet<Parsed>,
         mut ameta: ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
+        let flow_before = pkt.flow().clone();
+        let epoch = self.epoch.load(SeqCst);
         let mut data = self.data.lock();
         check_state!(data.state, [PortState::Running])
             .map_err(|_| ProcessError::BadState(data.state))?;
 
-        let flow_before = pkt.flow().clone();
-        let epoch = self.epoch.load(SeqCst);
-        self.port_process_entry_probe(dir, epoch, &pkt);
+        self.port_process_entry_probe(dir, &flow_before, epoch, &pkt);
         let res = match dir {
             Direction::Out => {
                 let res = self.process_out(&mut data, epoch, pkt, &mut ameta);
@@ -1005,9 +1039,14 @@ impl Port {
             }
         };
         drop(data);
+
+        // Emit the updated headers if the packet was modified as part
+        // of processing.
+        if let Ok(ProcessResult::Modified) = res {
+            pkt.emit_new_headers()?;
+        }
+
         self.port_process_return_probe(dir, &flow_before, epoch, &pkt, &res);
-        // XXX If this is a Hairpin result there is no need for this call.
-        pkt.emit_headers()?;
         res
     }
 
@@ -1147,7 +1186,7 @@ impl fmt::Debug for Transforms {
 
 // Keeping the private functions here just for the sake of code
 // organization.
-impl Port {
+impl<N: NetworkImpl> Port<N> {
     // Process the packet against each layer in turn. If `Allow` is
     // returned, then `meta` contains the updated metadata, and `hts`
     // contains the list of header transformations to run against the
@@ -1179,6 +1218,7 @@ impl Port {
                         Ok(LayerResult::Allow) => (),
                         ret @ Ok(LayerResult::Deny { .. }) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
+                        ret @ Ok(LayerResult::HandlePkt) => return ret,
                         ret @ Err(_) => return ret,
                     }
                 }
@@ -1193,6 +1233,7 @@ impl Port {
                         Ok(LayerResult::Allow) => (),
                         ret @ Ok(LayerResult::Deny { .. }) => return ret,
                         ret @ Ok(LayerResult::Hairpin(_)) => return ret,
+                        ret @ Ok(LayerResult::HandlePkt) => return ret,
                         ret @ Err(_) => return ret,
                     }
                 }
@@ -1205,17 +1246,17 @@ impl Port {
     fn port_process_entry_probe(
         &self,
         dir: Direction,
+        flow: &InnerFlowId,
         epoch: u64,
         pkt: &Packet<Parsed>,
     ) {
-        let flow = pkt.flow();
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 let flow_arg = flow_id_sdt_arg::from(flow);
 
                 unsafe {
                     __dtrace_probe_port__process__entry(
-                        dir.cstr_raw() as uintptr_t,
+                        dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
                         &flow_arg as *const flow_id_sdt_arg as uintptr_t,
                         epoch as uintptr_t,
@@ -1262,7 +1303,7 @@ impl Port {
 
                 unsafe {
                     __dtrace_probe_port__process__return(
-                        dir.cstr_raw() as uintptr_t,
+                        dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
                         &flow_b_arg as *const flow_id_sdt_arg as uintptr_t,
                         &flow_a_arg as *const flow_id_sdt_arg as uintptr_t,
@@ -1472,6 +1513,15 @@ impl Port {
                 return Ok(ProcessResult::Hairpin(hppkt))
             }
 
+            Ok(LayerResult::HandlePkt) => {
+                return Ok(ProcessResult::from(self.net.handle_pkt(
+                    In,
+                    pkt,
+                    &data.uft_in,
+                    &data.uft_out,
+                )?));
+            }
+
             Err(e) => return Err(ProcessError::Layer(e)),
         }
 
@@ -1554,20 +1604,9 @@ impl Port {
                 // for lookup.
                 entry.hit();
                 data.stats.vals.in_uft_hit += 1;
-                // This is the flow as its ingressing onto the port.
-                let flow_before = pkt.flow().clone();
+
                 for ht in &entry.state().xforms.hdr {
                     pkt.hdr_transform(&ht)?;
-                    // This is the flow after processing as its
-                    // ingressing into the guest.
-                    let flow_guest = pkt.flow();
-                    ht_probe(
-                        &self.name_cstr,
-                        "UFT-in",
-                        In,
-                        &flow_before,
-                        flow_guest,
-                    );
                 }
 
                 for bt in &entry.state().xforms.body {
@@ -1794,6 +1833,15 @@ impl Port {
                 reason: DropReason::Layer { name, reason },
             }),
 
+            Ok(LayerResult::HandlePkt) => {
+                return Ok(ProcessResult::from(self.net.handle_pkt(
+                    Out,
+                    pkt,
+                    &data.uft_in,
+                    &data.uft_out,
+                )?));
+            }
+
             Err(e) => Err(ProcessError::Layer(e)),
         }
     }
@@ -1827,13 +1875,13 @@ impl Port {
                         pkt.meta(),
                         pkt.len() as u64,
                     ) {
+                        // Continue with processing.
+                        Ok(TcpMaybeClosed::NewState(_)) => (),
+
                         Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
                             invalidated = true;
                             ufid_in = ufid_inbound;
                         }
-
-                        // Continue with processing.
-                        Ok(_) => (),
 
                         Err(e) => {
                             self.tcp_err(data, Out, e, pkt);
@@ -1845,15 +1893,9 @@ impl Port {
                 }
 
                 let flow_before = pkt.flow().clone();
+
                 for ht in &entry.state().xforms.hdr {
                     pkt.hdr_transform(&ht)?;
-                    ht_probe(
-                        &self.name_cstr,
-                        "UFT-out",
-                        Out,
-                        &flow_before,
-                        pkt.flow(),
-                    );
                 }
 
                 for bt in &entry.state().xforms.body {
@@ -1915,7 +1957,7 @@ impl Port {
 
                 unsafe {
                     __dtrace_probe_uft__invalidate(
-                        dir.cstr_raw() as uintptr_t,
+                        dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
                         &ufid_arg as *const flow_id_sdt_arg as uintptr_t,
                         epoch as uintptr_t,
@@ -1954,7 +1996,7 @@ impl Port {
 
                 unsafe {
                     __dtrace_probe_uft__tcp__closed(
-                        dir.cstr_raw() as uintptr_t,
+                        dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
                         &ufid_arg as *const flow_id_sdt_arg as uintptr_t,
                     );
@@ -1982,6 +2024,7 @@ impl Port {
                 stats.in_drop += 1;
 
                 match reason {
+                    DropReason::HandlePkt => stats.in_drop_handle_pkt += 1,
                     DropReason::Layer { .. } => stats.in_drop_layer += 1,
                     DropReason::TcpErr => stats.in_drop_tcp_err += 1,
                 }
@@ -2014,6 +2057,7 @@ impl Port {
                 stats.out_drop += 1;
 
                 match reason {
+                    DropReason::HandlePkt => stats.out_drop_handle_pkt += 1,
                     DropReason::Layer { .. } => stats.out_drop_layer += 1,
                     DropReason::TcpErr => stats.out_drop_tcp_err += 1,
                 }
@@ -2043,7 +2087,7 @@ impl Port {
 // TODO Move these to main Port impl
 //
 // #[cfg(test)]
-impl Port {
+impl<N: NetworkImpl> Port<N> {
     pub fn epoch(&self) -> u64 {
         self.epoch.load(SeqCst)
     }

@@ -227,6 +227,7 @@ impl KStatU64 {
 
 #[cfg(all(not(feature = "std"), not(test)))]
 impl core::ops::AddAssign<u64> for KStatU64 {
+    #[inline]
     fn add_assign(&mut self, other: u64) {
         self.inner.value += other;
     }
@@ -234,6 +235,7 @@ impl core::ops::AddAssign<u64> for KStatU64 {
 
 #[cfg(all(not(feature = "std"), not(test)))]
 impl core::ops::SubAssign<u64> for KStatU64 {
+    #[inline]
     fn sub_assign(&mut self, other: u64) {
         self.inner.value -= other;
     }

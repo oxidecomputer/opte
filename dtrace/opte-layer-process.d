@@ -18,7 +18,7 @@ BEGIN {
 }
 
 layer-process-return {
-	this->dir = stringof(arg0);
+	this->dir = DIR_STR(arg0);
 	this->port = stringof(arg1);
 	this->layer = stringof(arg2);
 	this->flow_before = (flow_id_sdt_arg_t *)arg3;

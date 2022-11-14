@@ -15,7 +15,7 @@ typedef struct flow_id_sdt_arg {
 typedef struct rule_match_sdt_arg {
 	char			*port;
 	char			*layer;
-	char			*dir;
+	uintptr_t		dir;
 	flow_id_sdt_arg_t	*flow;
 	char			*rule_type;
 } rule_match_sdt_arg_t;
@@ -23,14 +23,14 @@ typedef struct rule_match_sdt_arg {
 typedef struct rule_no_match_sdt_arg {
 	char			*port;
 	char			*layer;
-	char			*dir;
+	uintptr_t		dir;
 	flow_id_sdt_arg_t	*flow;
 } rule_no_match_sdt_arg_t;
 
 typedef struct ht_run_sdt_arg {
 	char			*port;
 	char			*loc;
-	char			*dir;
+	uintptr_t		dir;
 	flow_id_sdt_arg_t	*flow_before;
 	flow_id_sdt_arg_t	*flow_after;
 } ht_run_sdt_arg_t;

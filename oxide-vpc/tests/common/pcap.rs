@@ -63,7 +63,7 @@ impl PcapBuilder {
 
     /// Add a packet to the capture.
     pub fn add_pkt(&mut self, pkt: &Packet<Parsed>) {
-        let pkt_bytes = PacketReader::new(&pkt, ()).copy_remaining();
+        let pkt_bytes = pkt.get_rdr().copy_remaining();
         let mut block = LegacyPcapBlock {
             ts_sec: 7777,
             ts_usec: 7777,

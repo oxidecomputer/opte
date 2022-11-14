@@ -33,6 +33,12 @@ pub struct Vni {
     inner: [u8; 3],
 }
 
+impl Default for Vni {
+    fn default() -> Self {
+        Vni::new(0u32).unwrap()
+    }
+}
+
 impl From<Vni> for u32 {
     fn from(vni: Vni) -> u32 {
         let bytes = vni.inner;

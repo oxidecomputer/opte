@@ -4,7 +4,6 @@
 
 // Copyright 2022 Oxide Computer Company
 
-use core::convert::TryFrom;
 use core::mem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -15,74 +14,90 @@ use zerocopy::Unaligned;
 
 use crate::engine::checksum::Checksum;
 use crate::engine::checksum::HeaderChecksum;
-use crate::engine::headers::Header;
-use crate::engine::headers::HeaderAction;
 use crate::engine::headers::HeaderActionModify;
-use crate::engine::headers::ModifyActionArg;
-use crate::engine::headers::PushActionArg;
+use crate::engine::headers::ModifyAction;
+use crate::engine::headers::PushAction;
 use crate::engine::headers::RawHeader;
-use crate::engine::headers::UlpHdr;
-use crate::engine::headers::UlpMeta;
 use crate::engine::headers::UlpMetaModify;
-use crate::engine::headers::UlpMetaOpt;
-use crate::engine::packet::PacketRead;
+use crate::engine::packet::PacketReadMut;
 use crate::engine::packet::ReadErr;
-use crate::engine::packet::WriteError;
 use opte_api::DYNAMIC_PORT;
 
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
-    } else {
-        use std::vec::Vec;
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct UdpMeta {
+    pub src: u16,
+    pub dst: u16,
+    pub len: u16,
+    pub csum: [u8; 2],
+}
+
+impl UdpMeta {
+    // This assumes the dst is large enough.
+    #[inline]
+    pub fn emit(&self, dst: &mut [u8]) {
+        debug_assert!(dst.len() >= UdpHdr::SIZE);
+        dst[0..2].copy_from_slice(&self.src.to_be_bytes());
+        dst[2..4].copy_from_slice(&self.dst.to_be_bytes());
+        dst[4..6].copy_from_slice(&self.len.to_be_bytes());
+        dst[6..8].copy_from_slice(&self.csum);
+    }
+
+    pub fn hdr_len(&self) -> usize {
+        UdpHdr::SIZE
+    }
+}
+
+impl<'a> From<&UdpHdr<'a>> for UdpMeta {
+    fn from(udp: &UdpHdr) -> Self {
+        UdpMeta {
+            src: udp.src_port(),
+            dst: udp.dst_port(),
+            len: udp.len(),
+            csum: udp.csum_bytes(),
+        }
     }
 }
 
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
 )]
-pub struct UdpMeta {
+pub struct UdpPush {
     pub src: u16,
     pub dst: u16,
 }
 
-impl UdpMeta {
-    pub fn modify(
-        src: Option<u16>,
-        dst: Option<u16>,
-    ) -> HeaderAction<UdpMeta, UdpMetaOpt> {
-        HeaderAction::Modify(UdpMetaOpt { src, dst }.into())
-    }
-
-    pub fn push(src: u16, dst: u16) -> HeaderAction<UlpMeta, UlpMetaOpt> {
-        HeaderAction::Push(UlpMeta::from(UdpMeta { src, dst }))
-    }
-}
-
-impl PushActionArg for UdpMeta {}
-
-impl From<&UdpHdr> for UdpMeta {
-    fn from(udp: &UdpHdr) -> Self {
-        UdpMeta { src: udp.src_port, dst: udp.dst_port }
+impl PushAction<UdpMeta> for UdpPush {
+    fn push(&self) -> UdpMeta {
+        let mut udp = UdpMeta::default();
+        udp.src = self.src;
+        udp.dst = self.dst;
+        udp
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct UdpMetaOpt {
+pub struct UdpMod {
     src: Option<u16>,
     dst: Option<u16>,
 }
 
-impl ModifyActionArg for UdpMetaOpt {}
-
-impl HeaderActionModify<UdpMetaOpt> for UdpMeta {
-    fn run_modify(&mut self, spec: &UdpMetaOpt) {
-        if spec.src.is_some() {
-            self.src = spec.src.unwrap()
+impl ModifyAction<UdpMeta> for UdpMod {
+    fn modify(&self, meta: &mut UdpMeta) {
+        if let Some(src) = self.src {
+            meta.src = src;
         }
 
-        if spec.dst.is_some() {
-            self.dst = spec.dst.unwrap()
+        if let Some(dst) = self.dst {
+            meta.dst = dst;
         }
     }
 }
@@ -100,156 +115,91 @@ impl HeaderActionModify<UlpMetaModify> for UdpMeta {
 }
 
 #[derive(Debug)]
-pub struct UdpHdr {
-    pub src_port: u16,
-    pub dst_port: u16,
-    pub length: u16,
-    pub csum: [u8; 2],
-    pub csum_minus_hdr: Checksum,
+pub struct UdpHdr<'a> {
+    base: LayoutVerified<&'a mut [u8], UdpHdrRaw>,
 }
 
-#[macro_export]
-macro_rules! assert_udp {
-    ($left:expr, $right:expr) => {
-        let lcsum = $left.csum();
-        let rcsum = $right.csum();
+impl<'a> UdpHdr<'a> {
+    pub const SIZE: usize = UdpHdrRaw::SIZE;
+    pub const CSUM_BEGIN_OFFSET: usize = 6;
+    pub const CSUM_END_OFFSET: usize = 8;
 
-        assert!(
-            $left.src_port() == $right.src_port(),
-            "UDP src port mismatch: {} != {}",
-            $left.src_port(),
-            $right.src_port(),
-        );
-
-        assert!(
-            $left.dst_port() == $right.dst_port(),
-            "UDP dst port mismatch: {} != {}",
-            $left.dst_port(),
-            $right.dst_port(),
-        );
-
-        assert!(
-            $left.total_len() == $right.total_len(),
-            "UDP length mismatch: {} != {}",
-            $left.total_len(),
-            $right.total_len(),
-        );
-
-        assert!(
-            lcsum == rcsum,
-            "UDP csum mismatch: 0x{:02X}{:02X} != 0x{:02X}{:02X}",
-            lcsum[0],
-            lcsum[1],
-            rcsum[0],
-            rcsum[1],
-        );
-    };
-}
-
-impl UdpHdr {
-    pub const CSUM_OFFSET: usize = 6;
-    pub const SIZE: usize = mem::size_of::<UdpHdrRaw>();
-
-    pub fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.hdr_len());
-        let raw = UdpHdrRaw::from(self);
-        bytes.extend_from_slice(raw.as_bytes());
-        bytes
+    pub fn bytes(&self) -> &[u8] {
+        self.base.bytes()
     }
 
-    pub fn csum(&self) -> [u8; 2] {
-        self.csum
+    pub fn csum_bytes(&self) -> [u8; 2] {
+        self.base.csum
     }
 
-    pub fn csum_minus_hdr(&self) -> Checksum {
-        self.csum_minus_hdr
+    pub fn csum_minus_hdr(&self) -> Option<Checksum> {
+        if self.base.csum != [0; 2] {
+            let mut csum = Checksum::from(HeaderChecksum::wrap(self.base.csum));
+            csum.sub_bytes(&self.base.bytes()[0..Self::CSUM_BEGIN_OFFSET]);
+            Some(csum)
+        } else {
+            None
+        }
     }
 
     pub fn dst_port(&self) -> u16 {
-        self.dst_port
+        u16::from_be_bytes(self.base.dst_port)
     }
 
+    /// Return the header length, in bytes.
     pub fn hdr_len(&self) -> usize {
         Self::SIZE
     }
 
-    pub fn new(src_port: u16, dst_port: u16, len: u16) -> Self {
-        Self {
-            src_port,
-            dst_port,
-            length: Self::SIZE as u16 + len,
-            csum: [0; 2],
-            csum_minus_hdr: Checksum::from(0),
+    pub fn parse<'b>(
+        rdr: &'b mut impl PacketReadMut<'a>,
+    ) -> Result<Self, UdpHdrError> {
+        let src = rdr.slice_mut(UdpHdrRaw::SIZE)?;
+        let udp = Self { base: UdpHdrRaw::new_mut(src)? };
+
+        let src_port = udp.src_port();
+        if src_port == DYNAMIC_PORT {
+            return Err(UdpHdrError::BadSrcPort { src_port });
         }
-    }
 
-    /// Return the payload length, in bytes.
-    pub fn pay_len(&self) -> usize {
-        usize::from(self.length) - Self::SIZE
-    }
+        let dst_port = udp.dst_port();
+        if dst_port == DYNAMIC_PORT {
+            return Err(UdpHdrError::BadDstPort { dst_port });
+        }
 
-    pub fn set_csum(&mut self, csum: [u8; 2]) {
-        self.csum = csum;
-    }
-
-    pub fn set_pay_len(&mut self, len: u16) {
-        self.length = Self::SIZE as u16 + len;
-    }
-
-    pub fn set_total_len(&mut self, len: u16) {
-        self.length = len;
-    }
-
-    pub fn src_port(&self) -> u16 {
-        self.src_port
-    }
-
-    pub fn total_len(&self) -> u16 {
-        self.length
-    }
-
-    pub fn unify(&mut self, meta: &UdpMeta) {
-        self.src_port = meta.src;
-        self.dst_port = meta.dst;
-    }
-}
-
-impl Header for UdpHdr {
-    type Error = UdpHdrError;
-
-    fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Self::Error>
-    where
-        R: PacketRead<'a>,
-    {
-        let raw = UdpHdrRaw::raw_zc(rdr)?;
-        let mut udp = UdpHdr::try_from(&raw)?;
-
-        if udp.csum != [0; 2] {
-            let mut raw_clone = raw.clone();
-            raw_clone.csum = [0; 2];
-            let hc = HeaderChecksum::wrap(udp.csum);
-            let mut csum_mh = Checksum::from(hc);
-            csum_mh.sub(&raw_clone.as_bytes());
-            udp.csum_minus_hdr = csum_mh;
+        let length = udp.len();
+        if length < Self::SIZE as u16 {
+            return Err(UdpHdrError::BadLength { length });
         }
 
         Ok(udp)
     }
-}
 
-impl From<&UdpMeta> for UdpHdr {
-    fn from(meta: &UdpMeta) -> Self {
-        UdpHdr {
-            src_port: meta.src,
-            dst_port: meta.dst,
-            length: Self::SIZE as u16,
-            csum: [0; 2],
-            csum_minus_hdr: Checksum::from(0),
-        }
+    pub fn set_csum(&mut self, csum: [u8; 2]) {
+        self.base.csum = csum;
+    }
+
+    pub fn len(&self) -> u16 {
+        u16::from_be_bytes(self.base.length)
+    }
+
+    /// Set the length, in bytes.
+    ///
+    /// The UDP length field includes both header and payload.
+    pub fn set_len(&mut self, len: u16) {
+        self.base.length = len.to_be_bytes();
+    }
+
+    pub fn set_pay_len(&mut self, len: u16) {
+        self.base.length = (Self::SIZE as u16 + len).to_be_bytes();
+    }
+
+    pub fn src_port(&self) -> u16 {
+        u16::from_be_bytes(self.base.src_port)
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UdpHdrError {
     BadDstPort { dst_port: u16 },
     BadLength { length: u16 },
@@ -263,46 +213,6 @@ impl From<ReadErr> for UdpHdrError {
     }
 }
 
-impl TryFrom<&LayoutVerified<&[u8], UdpHdrRaw>> for UdpHdr {
-    type Error = UdpHdrError;
-
-    fn try_from(
-        raw: &LayoutVerified<&[u8], UdpHdrRaw>,
-    ) -> Result<Self, Self::Error> {
-        let src_port = u16::from_be_bytes(raw.src_port);
-
-        if src_port == DYNAMIC_PORT {
-            return Err(UdpHdrError::BadSrcPort { src_port });
-        }
-
-        let dst_port = u16::from_be_bytes(raw.dst_port);
-
-        if dst_port == DYNAMIC_PORT {
-            return Err(UdpHdrError::BadDstPort { dst_port });
-        }
-
-        let length = u16::from_be_bytes(raw.length);
-
-        if length < UdpHdr::SIZE as u16 {
-            return Err(UdpHdrError::BadLength { length });
-        }
-
-        Ok(UdpHdr {
-            src_port,
-            dst_port,
-            length,
-            csum: raw.csum,
-            csum_minus_hdr: Checksum::from(0),
-        })
-    }
-}
-
-impl From<UdpHdr> for UlpHdr {
-    fn from(udp: UdpHdr) -> Self {
-        UlpHdr::Udp(udp)
-    }
-}
-
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
 #[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
@@ -313,57 +223,45 @@ pub struct UdpHdrRaw {
     pub csum: [u8; 2],
 }
 
+impl UdpHdrRaw {
+    pub const SIZE: usize = mem::size_of::<Self>();
+}
+
 impl<'a> RawHeader<'a> for UdpHdrRaw {
-    fn raw_zc<'b, R: PacketRead<'a>>(
-        rdr: &'b mut R,
-    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(mem::size_of::<Self>())?;
-        let hdr = match LayoutVerified::new(slice) {
-            Some(bytes) => bytes,
+    #[inline]
+    fn new_mut(
+        src: &mut [u8],
+    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+        debug_assert_eq!(src.len(), Self::SIZE);
+        let hdr = match LayoutVerified::new(src) {
+            Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
         Ok(hdr)
     }
-
-    fn raw_mut_zc(
-        dst: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteError> {
-        let hdr = match LayoutVerified::new(dst) {
-            Some(bytes) => bytes,
-            None => return Err(WriteError::BadLayout),
-        };
-        Ok(hdr)
-    }
 }
 
-impl Default for UdpHdrRaw {
-    fn default() -> Self {
-        UdpHdrRaw {
-            src_port: [0x0; 2],
-            dst_port: [0x0; 2],
-            length: [0x0; 2],
-            csum: [0x0; 2],
-        }
-    }
-}
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::engine::packet::Packet;
 
-impl From<&UdpHdr> for UdpHdrRaw {
-    fn from(udp: &UdpHdr) -> Self {
-        UdpHdrRaw {
-            src_port: udp.src_port.to_be_bytes(),
-            dst_port: udp.dst_port.to_be_bytes(),
-            length: udp.length.to_be_bytes(),
-            csum: udp.csum,
-        }
-    }
-}
+    #[test]
+    fn emit() {
+        let udp = UdpMeta { src: 5353, dst: 5353, len: 142, csum: [0; 2] };
+        let len = udp.hdr_len();
+        let mut pkt = Packet::alloc_and_expand(len);
+        let mut wtr = pkt.seg0_wtr();
+        udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
+        assert_eq!(len, pkt.len());
 
-impl From<&UdpMeta> for UdpHdrRaw {
-    fn from(meta: &UdpMeta) -> Self {
-        UdpHdrRaw {
-            src_port: meta.src.to_be_bytes(),
-            dst_port: meta.dst.to_be_bytes(),
-            ..Default::default()
-        }
+        #[rustfmt::skip]
+        let expected_bytes = [
+            // source port + dest port
+            0x14, 0xE9, 0x14, 0xE9,
+            // length + checksum
+            0x00, 0x8E, 0x00, 0x00,
+        ];
+        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
     }
 }

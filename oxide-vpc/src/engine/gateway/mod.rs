@@ -49,9 +49,11 @@ use crate::engine::overlay::VpcMappings;
 use crate::engine::overlay::ACTION_META_VNI;
 use core::fmt;
 use core::fmt::Display;
+use core::marker::PhantomData;
 use opte::api::Direction;
 use opte::api::OpteError;
-use opte::engine::ether::EtherMeta;
+use opte::engine::ether::EtherMod;
+use opte::engine::headers::HeaderAction;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
@@ -146,7 +148,10 @@ impl StaticAction for RewriteSrcMac {
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform {
-            inner_ether: EtherMeta::modify(Some(self.gateway_mac), None),
+            inner_ether: HeaderAction::Modify(
+                EtherMod { src: Some(self.gateway_mac), ..Default::default() },
+                PhantomData,
+            ),
             ..Default::default()
         }))
     }

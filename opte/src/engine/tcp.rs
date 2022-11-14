@@ -6,21 +6,15 @@
 
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
-use super::headers::Header;
-use super::headers::HeaderAction;
 use super::headers::HeaderActionModify;
-use super::headers::ModifyActionArg;
-use super::headers::PushActionArg;
+use super::headers::ModifyAction;
+use super::headers::PushAction;
 use super::headers::RawHeader;
-use super::headers::UlpHdr;
 use super::headers::UlpMetaModify;
-use super::packet::PacketRead;
+use super::packet::PacketReadMut;
 use super::packet::ReadErr;
-use super::packet::WriteError;
-use core::convert::TryFrom;
 use core::fmt;
 use core::fmt::Display;
-use core::mem;
 use opte_api::DYNAMIC_PORT;
 use serde::Deserialize;
 use serde::Serialize;
@@ -29,15 +23,6 @@ use zerocopy::FromBytes;
 use zerocopy::LayoutVerified;
 use zerocopy::Unaligned;
 
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
-    } else {
-        use std::vec::Vec;
-    }
-}
-
-pub const TCP_HDR_CSUM_OFF: usize = 16;
 pub const TCP_HDR_OFFSET_MASK: u8 = 0xF0;
 pub const TCP_HDR_OFFSET_SHIFT: u8 = 4;
 
@@ -92,67 +77,112 @@ impl Display for TcpState {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TcpMeta {
     pub src: u16,
     pub dst: u16,
     pub flags: u8,
     pub seq: u32,
     pub ack: u32,
+    pub window_size: u16,
+    pub csum: [u8; 2],
+    // Fow now we keep options as raw bytes, allowing up to 32 bytes
+    // of options.
+    pub options_bytes: Option<[u8; 32]>,
+    pub options_len: usize,
 }
 
 impl TcpMeta {
+    // This assumes the slice is large enough to hold the header.
+    #[inline]
+    pub fn emit(&self, dst: &mut [u8]) {
+        debug_assert_eq!(dst.len(), self.hdr_len());
+        let base = &mut dst[0..TcpHdrRaw::SIZE];
+        let mut raw = TcpHdrRaw::new_mut(base).unwrap();
+        raw.write(TcpHdrRaw::from(self));
+        if let Some(bytes) = self.options_bytes {
+            dst[TcpHdr::BASE_SIZE..]
+                .copy_from_slice(&bytes[0..self.options_len]);
+        }
+    }
+
+    #[inline]
     pub fn has_flag(&self, flag: u8) -> bool {
         (self.flags & flag) != 0
     }
 
-    // XXX check that at least one field was specified.
-    pub fn modify(
-        src: Option<u16>,
-        dst: Option<u16>,
-        flags: Option<u8>,
-    ) -> HeaderAction<TcpMeta, TcpMetaOpt> {
-        HeaderAction::Modify(TcpMetaOpt { src, dst, flags }.into())
+    #[inline]
+    pub fn hdr_len(&self) -> usize {
+        TcpHdr::BASE_SIZE + self.options_len
     }
 }
 
-impl PushActionArg for TcpMeta {}
-
-impl From<&TcpHdr> for TcpMeta {
+impl<'a> From<&TcpHdr<'a>> for TcpMeta {
     fn from(tcp: &TcpHdr) -> Self {
-        TcpMeta {
-            src: tcp.src_port,
-            dst: tcp.dst_port,
-            flags: tcp.flags,
-            seq: tcp.seq,
-            ack: tcp.ack,
+        let (options_bytes, options_len) = match tcp.options_raw() {
+            None => (None, 0),
+            Some(src) => {
+                let mut dst = [0; 32];
+                dst[0..src.len()].copy_from_slice(src);
+                (Some(dst), src.len())
+            }
+        };
+
+        let raw = tcp.base.read();
+        Self {
+            src: u16::from_be_bytes(raw.src_port),
+            dst: u16::from_be_bytes(raw.dst_port),
+            flags: raw.flags,
+            seq: u32::from_be_bytes(raw.seq),
+            ack: u32::from_be_bytes(raw.ack),
+            window_size: u16::from_be_bytes(raw.window_size),
+            csum: raw.csum,
+            options_bytes,
+            options_len,
         }
+    }
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
+pub struct TcpPush {
+    pub src: u16,
+    pub dst: u16,
+}
+
+impl PushAction<TcpMeta> for TcpPush {
+    fn push(&self) -> TcpMeta {
+        let mut tcp = TcpMeta::default();
+        tcp.src = self.src;
+        tcp.dst = self.dst;
+        tcp
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct TcpMetaOpt {
+pub struct TcpMod {
     src: Option<u16>,
     dst: Option<u16>,
-    flags: Option<u8>,
 }
 
-impl ModifyActionArg for TcpMetaOpt {}
-
-impl HeaderActionModify<TcpMetaOpt> for TcpMeta {
-    fn run_modify(&mut self, spec: &TcpMetaOpt) {
-        if spec.src.is_some() {
-            self.src = spec.src.unwrap()
+impl ModifyAction<TcpMeta> for TcpMod {
+    fn modify(&self, meta: &mut TcpMeta) {
+        if let Some(src) = self.src {
+            meta.src = src;
         }
 
-        if spec.dst.is_some() {
-            self.dst = spec.dst.unwrap()
-        }
-
-        if spec.flags.is_some() {
-            self.flags = spec.flags.unwrap()
+        if let Some(dst) = self.dst {
+            meta.dst = dst;
         }
     }
 }
@@ -174,281 +204,153 @@ impl HeaderActionModify<UlpMetaModify> for TcpMeta {
 }
 
 #[derive(Debug)]
-pub struct TcpHdr {
-    src_port: u16,
-    dst_port: u16,
-    seq: u32,
-    ack: u32,
-    hdr_len_bytes: u8,
-    flags: u8,
-    win: u16,
-    csum: [u8; 2],
-    csum_minus_hdr: Checksum,
-    urg: [u8; 2],
-    options_raw: Vec<u8>,
+pub struct TcpHdr<'a> {
+    base: LayoutVerified<&'a mut [u8], TcpHdrRaw>,
+    options: Option<&'a mut [u8]>,
 }
 
-#[macro_export]
-macro_rules! assert_tcp {
-    ($left:expr, $right:expr) => {
-        assert!(
-            $left.src_port() == $right.src_port(),
-            "TCP src port mismatch: {} != {}",
-            $left.src_port(),
-            $right.src_port(),
-        );
+impl<'a> TcpHdr<'a> {
+    pub const BASE_SIZE: usize = TcpHdrRaw::SIZE;
+    pub const CSUM_BEGIN_OFFSET: usize = 16;
+    pub const CSUM_END_OFFSET: usize = 18;
 
-        assert!(
-            $left.dst_port() == $right.dst_port(),
-            "TCP dst port mismatch: {} != {}",
-            $left.dst_port(),
-            $right.dst_port(),
-        );
-
-        assert!(
-            $left.seq() == $right.seq(),
-            "TCP seq mismatch: {} != {}",
-            $left.seq(),
-            $right.seq(),
-        );
-
-        assert!(
-            $left.ack() == $right.ack(),
-            "TCP ack mismatch: {} != {}",
-            $left.ack(),
-            $right.ack(),
-        );
-
-        assert!(
-            $left.hdr_len() == $right.hdr_len(),
-            "TCP hdr len mismatch: {} != {}",
-            $left.hdr_len(),
-            $right.hdr_len(),
-        );
-
-        assert!(
-            $left.flags() == $right.flags(),
-            "TCP flags mismatch: 0x{:02X} != 0x{:02X}",
-            $left.flags(),
-            $right.flags(),
-        );
-
-        let lcsum = $left.csum();
-        let rcsum = $right.csum();
-
-        assert!(
-            lcsum == rcsum,
-            "TCP csum mismatch: 0x{:02X}{:02X} != 0x{:02X}{:02X}",
-            lcsum[0],
-            lcsum[1],
-            rcsum[0],
-            rcsum[1],
-        );
-    };
-}
-
-impl TcpHdr {
-    pub const BASE_SIZE: usize = mem::size_of::<TcpHdrRaw>();
-
+    /// Return the acknowledgement number.
     pub fn ack(&self) -> u32 {
-        self.ack
-    }
-
-    pub fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.hdr_len());
-        let base = TcpHdrRaw::from(self);
-        bytes.extend_from_slice(base.as_bytes());
-        bytes.extend_from_slice(&self.options_raw);
-        bytes
+        u32::from_be_bytes(self.base.ack)
     }
 
     pub fn csum(&self) -> [u8; 2] {
-        self.csum
+        self.base.csum
     }
 
-    pub fn csum_minus_hdr(&self) -> Checksum {
-        self.csum_minus_hdr
+    pub fn base_bytes(&self) -> &[u8] {
+        self.base.bytes()
     }
 
-    pub fn dst_port(&self) -> u16 {
-        self.dst_port
-    }
-
-    pub fn flags(&self) -> u8 {
-        self.flags
-    }
-
-    /// Return the length of the header porition of the segment, in bytes.
-    pub fn hdr_len(&self) -> usize {
-        usize::from(self.hdr_len_bytes)
-    }
-
-    #[cfg(any(feature = "std", test))]
-    pub fn new(src_port: u16, dst_port: u16) -> Self {
-        Self {
-            src_port,
-            dst_port,
-            seq: 0,
-            ack: 0,
-            hdr_len_bytes: Self::BASE_SIZE as u8,
-            flags: 0x00,
-            win: 0,
-            csum: [0; 2],
-            csum_minus_hdr: Checksum::from(0),
-            urg: [0; 2],
-            options_raw: vec![],
+    pub fn options_bytes(&self) -> Option<&[u8]> {
+        match &self.options {
+            None => None,
+            Some(options) => Some(&*options),
         }
     }
 
-    /// Return the length of the options portion of the header, in bytes.
-    pub fn options_len(&self) -> usize {
-        usize::from(self.hdr_len_bytes) - Self::BASE_SIZE
+    /// Return the checksum value minus header TCP header bytes,
+    /// producing the checksum value of the body.
+    pub fn csum_minus_hdr(&self) -> Option<Checksum> {
+        // There was no checksum to begin with.
+        if self.base.csum == [0; 2] {
+            return None;
+        }
+
+        let mut csum = Checksum::from(HeaderChecksum::wrap(self.base.csum));
+        // When a checksum is calculated you treat the checksum field
+        // bytes themselves as zero; therefore its imperative we do
+        // not include the checksum field bytes when subtracting from
+        // the checksum value.
+        csum.sub_bytes(&self.base.bytes()[0..Self::CSUM_BEGIN_OFFSET]);
+        csum.sub_bytes(&self.base.bytes()[Self::CSUM_END_OFFSET..]);
+
+        if let Some(options) = self.options.as_ref() {
+            csum.sub_bytes(options);
+        }
+        Some(csum)
     }
 
-    pub fn set_ack(&mut self, ack: u32) {
-        self.ack = ack;
+    /// Return destination port.
+    pub fn dst_port(&self) -> u16 {
+        u16::from_be_bytes(self.base.dst_port)
     }
 
-    pub fn set_csum(&mut self, csum: [u8; 2]) {
-        self.csum = csum;
+    /// Return the TCP flags.
+    pub fn flags(&self) -> u8 {
+        self.base.flags
     }
 
-    pub fn set_flags(&mut self, flags: u8) {
-        self.flags = flags;
+    /// Return the leangth of the TCP header, in bytes.
+    ///
+    /// This length includes the TCP options.
+    pub fn hdr_len(&self) -> usize {
+        usize::from(self.base.offset()) * 4
     }
 
-    pub fn set_seq(&mut self, seq: u32) {
-        self.seq = seq;
+    /// Return a reference to the options data.
+    pub fn options_raw(&self) -> Option<&[u8]> {
+        match &self.options {
+            None => None,
+            Some(options) => Some(&*options),
+        }
     }
 
-    pub fn seq(&self) -> u32 {
-        self.seq
-    }
+    pub fn parse<'b>(
+        rdr: &'b mut impl PacketReadMut<'a>,
+    ) -> Result<Self, TcpHdrError> {
+        let src = rdr.slice_mut(TcpHdrRaw::SIZE)?;
+        let mut hdr = Self { base: TcpHdrRaw::new_mut(src)?, options: None };
 
-    pub fn src_port(&self) -> u16 {
-        self.src_port
-    }
+        if hdr.src_port() == DYNAMIC_PORT {
+            return Err(TcpHdrError::BadSrcPort { src_port: hdr.src_port() });
+        }
 
-    pub fn unify(&mut self, meta: &TcpMeta) {
-        self.src_port = meta.src;
-        self.dst_port = meta.dst;
-        self.flags = meta.flags;
-    }
-}
+        if hdr.dst_port() == DYNAMIC_PORT {
+            return Err(TcpHdrError::BadDstPort { dst_port: hdr.dst_port() });
+        }
 
-impl Header for TcpHdr {
-    type Error = TcpHdrError;
+        let hdr_len = hdr.hdr_len();
 
-    fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Self::Error>
-    where
-        R: PacketRead<'a>,
-    {
-        let raw = TcpHdrRaw::raw_zc(rdr)?;
-        let mut tcp = TcpHdr::try_from(&raw)?;
+        if hdr_len < Self::BASE_SIZE {
+            return Err(TcpHdrError::TruncatedHdr {
+                hdr_len_bytes: hdr.hdr_len(),
+            });
+        }
 
-        // Try to read all options as raw byte sequence in its network-order.
-        let opts_len = tcp.options_len();
-        if opts_len > 0 {
-            match rdr.slice(opts_len) {
-                Ok(opts) => tcp.options_raw.extend_from_slice(opts),
+        if hdr_len > Self::BASE_SIZE {
+            let opts_len = hdr.hdr_len() - Self::BASE_SIZE;
+            match rdr.slice_mut(opts_len) {
+                Ok(opts) => hdr.options = Some(opts),
                 Err(e) => {
                     return Err(TcpHdrError::TruncatedOptions { error: e });
                 }
             }
         }
 
-        let mut raw_clone = raw.clone();
-        raw_clone.csum = [0; 2];
-        let hc = HeaderChecksum::wrap(tcp.csum);
-        let mut csum_mh = Checksum::from(hc);
-        csum_mh.sub(&raw_clone.as_bytes());
-        csum_mh.sub(&tcp.options_raw);
-        tcp.csum_minus_hdr = csum_mh;
-        Ok(tcp)
+        Ok(hdr)
+    }
+
+    /// Return the sequence number.
+    pub fn seq(&self) -> u32 {
+        u32::from_be_bytes(self.base.seq)
+    }
+
+    /// Set the checksum value.
+    pub fn set_csum(&mut self, csum: [u8; 2]) {
+        self.base.csum = csum
+    }
+
+    /// Return the source port.
+    pub fn src_port(&self) -> u16 {
+        u16::from_be_bytes(self.base.src_port)
+    }
+
+    /// Return the window size value.
+    pub fn window_size(&self) -> u16 {
+        u16::from_be_bytes(self.base.window_size)
     }
 }
 
-impl From<&TcpMeta> for TcpHdr {
-    fn from(meta: &TcpMeta) -> Self {
-        TcpHdr {
-            src_port: meta.src,
-            dst_port: meta.dst,
-            seq: meta.seq,
-            ack: meta.ack,
-            hdr_len_bytes: Self::BASE_SIZE as u8,
-            flags: meta.flags,
-            win: 0,
-            csum: [0; 2],
-            csum_minus_hdr: Checksum::from(0),
-            urg: [0; 2],
-            // For now we simply store the raw options bytes.
-            options_raw: vec![],
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TcpHdrError {
     BadDstPort { dst_port: u16 },
     BadOffset { offset: u8, len_in_bytes: u8 },
     BadSrcPort { src_port: u16 },
     ReadError { error: ReadErr },
     Straddled,
+    TruncatedHdr { hdr_len_bytes: usize },
     TruncatedOptions { error: ReadErr },
 }
 
 impl From<ReadErr> for TcpHdrError {
     fn from(error: ReadErr) -> Self {
         TcpHdrError::ReadError { error }
-    }
-}
-
-impl TryFrom<&LayoutVerified<&[u8], TcpHdrRaw>> for TcpHdr {
-    type Error = TcpHdrError;
-
-    fn try_from(
-        raw: &LayoutVerified<&[u8], TcpHdrRaw>,
-    ) -> Result<Self, Self::Error> {
-        let src_port = u16::from_be_bytes(raw.src_port);
-
-        if src_port == DYNAMIC_PORT {
-            return Err(TcpHdrError::BadSrcPort { src_port });
-        }
-
-        let dst_port = u16::from_be_bytes(raw.dst_port);
-
-        if dst_port == DYNAMIC_PORT {
-            return Err(TcpHdrError::BadDstPort { dst_port });
-        }
-
-        let offset = raw.get_offset();
-        let hdr_len_bytes = offset * 4;
-
-        if hdr_len_bytes < Self::BASE_SIZE as u8 {
-            return Err(TcpHdrError::BadOffset {
-                offset,
-                len_in_bytes: hdr_len_bytes,
-            });
-        }
-
-        let options_len = hdr_len_bytes as usize - Self::BASE_SIZE;
-        let options_raw = Vec::with_capacity(options_len);
-
-        Ok(TcpHdr {
-            src_port,
-            dst_port,
-            seq: u32::from_be_bytes(raw.seq),
-            ack: u32::from_be_bytes(raw.ack),
-            hdr_len_bytes,
-            // XXX Could probably validate bad combos of flags and
-            // convert to TcpFlags.
-            flags: raw.flags,
-            win: u16::from_be_bytes(raw.win),
-            csum: raw.csum,
-            csum_minus_hdr: Checksum::from(0),
-            urg: raw.urg,
-            options_raw,
-        })
     }
 }
 
@@ -462,74 +364,152 @@ pub struct TcpHdrRaw {
     pub ack: [u8; 4],
     pub offset: u8,
     pub flags: u8,
-    pub win: [u8; 2],
+    pub window_size: [u8; 2],
     pub csum: [u8; 2],
     pub urg: [u8; 2],
 }
 
 impl<'a> TcpHdrRaw {
-    fn get_offset(&self) -> u8 {
+    fn offset(&self) -> u8 {
         (self.offset & TCP_HDR_OFFSET_MASK) >> TCP_HDR_OFFSET_SHIFT
     }
 }
 
 impl<'a> RawHeader<'a> for TcpHdrRaw {
-    fn raw_zc<'b, R: PacketRead<'a>>(
-        rdr: &'b mut R,
-    ) -> Result<LayoutVerified<&'a [u8], Self>, ReadErr> {
-        let slice = rdr.slice(mem::size_of::<Self>())?;
-        let hdr = match LayoutVerified::new(slice) {
-            Some(bytes) => bytes,
+    #[inline]
+    fn new_mut(
+        src: &mut [u8],
+    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+        debug_assert_eq!(src.len(), Self::SIZE);
+        let hdr = match LayoutVerified::new(src) {
+            Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
         Ok(hdr)
     }
-
-    fn raw_mut_zc(
-        dst: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, WriteError> {
-        let hdr = match LayoutVerified::new(dst) {
-            Some(bytes) => bytes,
-            None => return Err(WriteError::BadLayout),
-        };
-        Ok(hdr)
-    }
-}
-
-impl From<TcpHdr> for UlpHdr {
-    fn from(tcp: TcpHdr) -> Self {
-        UlpHdr::Tcp(tcp)
-    }
-}
-
-impl From<&TcpHdr> for TcpHdrRaw {
-    fn from(tcp: &TcpHdr) -> Self {
-        TcpHdrRaw {
-            src_port: tcp.src_port.to_be_bytes(),
-            dst_port: tcp.dst_port.to_be_bytes(),
-            seq: tcp.seq.to_be_bytes(),
-            ack: tcp.ack.to_be_bytes(),
-            offset: (tcp.hdr_len_bytes / 4) << TCP_HDR_OFFSET_SHIFT,
-            flags: tcp.flags,
-            win: tcp.win.to_be_bytes(),
-            csum: tcp.csum,
-            urg: tcp.urg,
-        }
-    }
 }
 
 impl From<&TcpMeta> for TcpHdrRaw {
+    #[inline]
     fn from(meta: &TcpMeta) -> Self {
-        TcpHdrRaw {
+        Self {
             src_port: meta.src.to_be_bytes(),
             dst_port: meta.dst.to_be_bytes(),
             seq: meta.seq.to_be_bytes(),
             ack: meta.ack.to_be_bytes(),
-            offset: 0,
+            offset: ((meta.hdr_len() as u8 / 4) & 0x0F) << 4,
             flags: meta.flags,
-            win: [0; 2],
-            csum: [0; 2],
+            window_size: meta.window_size.to_be_bytes(),
+            csum: meta.csum,
             urg: [0; 2],
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::engine::packet::Packet;
+
+    #[test]
+    fn emit_no_opts() {
+        let tcp = TcpMeta {
+            src: 49154,
+            dst: 80,
+            seq: 2511121667,
+            ack: 754208397,
+            flags: TcpFlags::ACK,
+            window_size: 64436,
+            options_bytes: None,
+            options_len: 0,
+            csum: [0; 2],
+        };
+
+        let len = tcp.hdr_len();
+        let mut pkt = Packet::alloc_and_expand(len);
+        let mut wtr = pkt.seg0_wtr();
+        tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
+        assert_eq!(len, pkt.len());
+        #[rustfmt::skip]
+        let expected_bytes = vec![
+            // source
+            0xC0, 0x02,
+            // dest
+            0x00, 0x50,
+            // seq
+            0x95, 0xAC, 0xAD, 0x03,
+            // ack
+            0x2C, 0xF4, 0x4E, 0x8D,
+            // offset + flags
+            0x50, 0x10,
+            // window
+            0xFB, 0xB4,
+            // checksum
+            0x00, 0x00,
+            // URG pointer
+            0x00, 0x00,
+        ];
+        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
+    }
+
+    #[test]
+    fn emit_opts() {
+        let mut opts = [0x00; 32];
+        let bytes = [
+            0x02, 0x04, 0x05, 0xB4, 0x04, 0x02, 0x08, 0x0A, 0x09, 0xB4, 0x2A,
+            0xA9, 0x00, 0x00, 0x00, 0x00, 0x01, 0x03, 0x03, 0x01,
+        ];
+        opts[0..bytes.len()].copy_from_slice(&bytes);
+
+        let tcp = TcpMeta {
+            src: 49154,
+            dst: 80,
+            seq: 2511121590,
+            ack: 0,
+            flags: TcpFlags::SYN,
+            window_size: 64240,
+            options_bytes: Some(opts),
+            options_len: bytes.len(),
+            csum: [0; 2],
+        };
+
+        let len = tcp.hdr_len();
+        assert_eq!(40, len);
+        let mut pkt = Packet::alloc_and_expand(len);
+        let mut wtr = pkt.seg0_wtr();
+        tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
+        assert_eq!(len, pkt.len());
+
+        #[rustfmt::skip]
+        let expected_bytes = vec![
+            // source
+            0xC0, 0x02,
+            // dest
+            0x00, 0x50,
+            // seq
+            0x95, 0xAC, 0xAC, 0xB6,
+            // ack
+            0x00, 0x00, 0x00, 0x00,
+            // offset + flags
+            0xA0, 0x02,
+            // window
+            0xFA, 0xF0,
+            // checksum
+            0x00, 0x00,
+            // URG pointer
+            0x00, 0x00,
+            // MSS
+            0x02, 0x04, 0x05, 0xB4,
+            // SACK permitted
+            0x04, 0x02,
+            // Timestamps
+            0x08, 0x0A, 0x09, 0xB4, 0x2A, 0xA9, 0x00, 0x00, 0x00, 0x00,
+            // No-op
+            0x01,
+            // Window Scale
+            0x03, 0x03, 0x01,
+
+        ];
+        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
     }
 }

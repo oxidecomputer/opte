@@ -42,6 +42,7 @@ use core::fmt::Display;
 use core::num::NonZeroU32;
 use core::result;
 use illumos_sys_hdrs::c_char;
+use illumos_sys_hdrs::uintptr_t;
 use kstat_macro::KStatProvider;
 use opte_api::Direction;
 
@@ -52,7 +53,6 @@ cfg_if! {
         use alloc::sync::Arc;
         use alloc::vec::Vec;
         use core::ffi::CStr;
-        use illumos_sys_hdrs::uintptr_t;
     } else {
         use core::ffi::CStr;
         use std::ffi::CString;
@@ -65,10 +65,10 @@ cfg_if! {
 #[derive(Debug)]
 pub enum LayerError {
     BodyTransform(BodyTransformError),
-    FlowTableFull { layer: String, dir: Direction },
+    FlowTableFull { layer: &'static str, dir: Direction },
     GenDesc(rule::GenDescError),
     GenBodyTransform(GenBtError),
-    GenHdrTransform(rule::GenHtError),
+    GenHdrTransform { layer: &'static str, err: rule::GenHtError },
     GenPacket(rule::GenErr),
     HeaderTransform(HdrTransformError),
     ModMeta(String),
@@ -127,14 +127,16 @@ impl Display for DenyReason {
 #[derive(Debug)]
 pub enum LayerResult {
     Allow,
-    Deny { name: String, reason: DenyReason },
+    Deny { name: &'static str, reason: DenyReason },
     Hairpin(Packet<Initialized>),
+    HandlePkt,
 }
 
 impl Display for LayerResult {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Allow => write!(f, "Allow"),
+            Self::HandlePkt => write!(f, "Handle Packet"),
             Self::Deny { name, reason } => {
                 write!(f, "Deny: layer: {}, reason: {}", name, reason)
             }
@@ -419,7 +421,7 @@ struct LayerStats {
 
 pub struct Layer {
     port_c: CString,
-    name: String,
+    name: &'static str,
     name_c: CString,
     actions: Vec<Action>,
     default_in: DefaultAction,
@@ -427,8 +429,10 @@ pub struct Layer {
     default_out: DefaultAction,
     default_out_hits: u64,
     ft: LayerFlowTable,
+    ft_cstr: CString,
     rules_in: RuleTable,
     rules_out: RuleTable,
+    rt_cstr: CString,
     stats: KStatNamed<LayerStats>,
 }
 
@@ -473,7 +477,7 @@ impl Layer {
         let rules_out = self.rules_out.dump();
         let ftd = self.ft.dump();
         ioctl::DumpLayerResp {
-            name: self.name.clone(),
+            name: self.name.to_string(),
             ft_in: ftd.ft_in,
             ft_out: ftd.ft_out,
             rules_in,
@@ -616,7 +620,7 @@ impl Layer {
 
                 unsafe {
                     __dtrace_probe_layer__process__return(
-                        dir.cstr_raw() as uintptr_t,
+                        dir as uintptr_t,
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
                         &flow_b_arg as *const flow_id_sdt_arg as uintptr_t,
@@ -649,7 +653,7 @@ impl Layer {
     }
 
     pub fn new(
-        name: &str,
+        name: &'static str,
         port: &str,
         actions: LayerActions,
         ft_limit: NonZeroU32,
@@ -674,12 +678,14 @@ impl Layer {
             default_in_hits: 0,
             default_out: actions.default_out,
             default_out_hits: 0,
-            name: name.to_string(),
+            name,
             name_c,
             port_c: port_c.clone(),
             ft: LayerFlowTable::new(port, name, ft_limit),
+            ft_cstr: CString::new(format!("ft-{}", name)).unwrap(),
             rules_in: RuleTable::new(port, name, Direction::In),
             rules_out: RuleTable::new(port, name, Direction::Out),
+            rt_cstr: CString::new(format!("rt-{}", name)).unwrap(),
             stats,
         }
     }
@@ -744,7 +750,7 @@ impl Layer {
                 xforms.hdr.push(ht);
                 ht_probe(
                     &self.port_c,
-                    &format!("{}-ft", self.name),
+                    self.ft_cstr.as_c_str(),
                     Direction::In,
                     &flow_before,
                     &pkt.flow(),
@@ -867,7 +873,10 @@ impl Layer {
 
                     Err(e) => {
                         self.record_gen_ht_failure(&ectx, In, pkt.flow(), &e);
-                        return Err(LayerError::GenHdrTransform(e));
+                        return Err(LayerError::GenHdrTransform {
+                            layer: self.name,
+                            err: e,
+                        });
                     }
                 };
 
@@ -876,7 +885,7 @@ impl Layer {
                 xforms.hdr.push(ht);
                 ht_probe(
                     &self.port_c,
-                    &format!("{}-rt", self.name),
+                    self.rt_cstr.as_c_str(),
                     In,
                     &flow_before,
                     pkt.flow(),
@@ -947,7 +956,7 @@ impl Layer {
                 xforms.hdr.push(ht_in);
                 ht_probe(
                     &self.port_c,
-                    &format!("{}-rt", self.name),
+                    self.rt_cstr.as_c_str(),
                     Direction::In,
                     &flow_before,
                     pkt.flow(),
@@ -1001,6 +1010,10 @@ impl Layer {
                     }
                 }
             }
+
+            Action::HandlePacket => {
+                return Ok(LayerResult::HandlePkt);
+            }
         }
     }
 
@@ -1031,7 +1044,7 @@ impl Layer {
                 xforms.hdr.push(ht);
                 ht_probe(
                     &self.port_c,
-                    &format!("{}-ft", self.name),
+                    self.ft_cstr.as_c_str(),
                     Direction::Out,
                     &flow_before,
                     pkt.flow(),
@@ -1160,7 +1173,10 @@ impl Layer {
 
                     Err(e) => {
                         self.record_gen_ht_failure(&ectx, Out, pkt.flow(), &e);
-                        return Err(LayerError::GenHdrTransform(e));
+                        return Err(LayerError::GenHdrTransform {
+                            layer: self.name,
+                            err: e,
+                        });
                     }
                 };
 
@@ -1169,7 +1185,7 @@ impl Layer {
                 xforms.hdr.push(ht);
                 ht_probe(
                     &self.port_c,
-                    &format!("{}-rt", self.name),
+                    self.rt_cstr.as_c_str(),
                     Out,
                     &flow_before,
                     pkt.flow(),
@@ -1211,7 +1227,7 @@ impl Layer {
                 if self.ft.count == self.ft.limit.get() {
                     self.stats.vals.out_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
-                        layer: self.name.clone(),
+                        layer: self.name,
                         dir: Out,
                     });
                 }
@@ -1245,7 +1261,7 @@ impl Layer {
                 xforms.hdr.push(ht_out);
                 ht_probe(
                     &self.port_c,
-                    &format!("{}-rt", self.name),
+                    self.rt_cstr.as_c_str(),
                     Out,
                     &flow_before,
                     pkt.flow(),
@@ -1289,7 +1305,7 @@ impl Layer {
 
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
-                                name: self.name.clone(),
+                                name: self.name,
                                 reason: DenyReason::Action,
                             });
                         }
@@ -1301,6 +1317,10 @@ impl Layer {
                         return Err(LayerError::GenPacket(e));
                     }
                 }
+            }
+
+            Action::HandlePacket => {
+                return Ok(LayerResult::HandlePkt);
             }
         }
     }
@@ -1377,7 +1397,7 @@ impl Layer {
                     __dtrace_probe_rule__deny(
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
-                        dir.cstr_raw() as uintptr_t,
+                        dir as uintptr_t,
                         &flow_arg as *const flow_id_sdt_arg as uintptr_t,
                     );
                 }
@@ -1596,7 +1616,7 @@ impl<'a> RuleTable {
                 let arg = rule_no_match_sdt_arg {
                     port: port.as_ptr(),
                     layer: layer.as_ptr(),
-                    dir: dir.cstr_raw(),
+                    dir: dir as uintptr_t,
                     flow_id: &flow_id,
                 };
 
@@ -1633,7 +1653,7 @@ impl<'a> RuleTable {
                 let arg = rule_match_sdt_arg {
                     port: port.as_ptr(),
                     layer: layer.as_ptr(),
-                    dir: dir.cstr_raw(),
+                    dir: dir as uintptr_t,
                     flow_id: &flow_id,
                     rule_type: action_str_c.as_ptr(),
                 };
@@ -1714,7 +1734,7 @@ extern "C" {
 pub struct rule_match_sdt_arg {
     pub port: *const c_char,
     pub layer: *const c_char,
-    pub dir: *const c_char,
+    pub dir: uintptr_t,
     pub flow_id: *const flow_id_sdt_arg,
     pub rule_type: *const c_char,
 }
@@ -1723,7 +1743,7 @@ pub struct rule_match_sdt_arg {
 pub struct rule_no_match_sdt_arg {
     pub port: *const c_char,
     pub layer: *const c_char,
-    pub dir: *const c_char,
+    pub dir: uintptr_t,
     pub flow_id: *const flow_id_sdt_arg,
 }
 
@@ -1737,8 +1757,7 @@ mod test {
         use crate::engine::headers::UlpMeta;
         use crate::engine::ip4::Ipv4Meta;
         use crate::engine::ip4::Protocol;
-        use crate::engine::packet::MetaGroup;
-        use crate::engine::packet::PacketReader;
+        use crate::engine::packet::InnerMeta;
         use crate::engine::predicate::Ipv4AddrMatch;
         use crate::engine::predicate::Predicate;
         use crate::engine::rule;
@@ -1760,6 +1779,11 @@ mod test {
             src: "10.0.0.77".parse().unwrap(),
             dst: "52.10.128.69".parse().unwrap(),
             proto: Protocol::TCP,
+            ttl: 64,
+            ident: 1,
+            hdr_len: 20,
+            total_len: 40,
+            csum: [0; 2],
         });
         let ulp = UlpMeta::from(TcpMeta {
             src: 5555,
@@ -1767,11 +1791,15 @@ mod test {
             flags: 0,
             seq: 0,
             ack: 0,
+            window_size: 64240,
+            options_bytes: None,
+            options_len: 0,
+            ..Default::default()
         });
 
         let pmeta = PacketMeta {
             outer: Default::default(),
-            inner: MetaGroup {
+            inner: InnerMeta {
                 ip: Some(ip),
                 ulp: Some(ulp),
                 ..Default::default()
@@ -1780,7 +1808,7 @@ mod test {
 
         // The pkt/rdr aren't actually used in this case.
         let pkt = Packet::copy(&[0xA]);
-        let mut rdr = PacketReader::new(&pkt, ());
+        let mut rdr = pkt.get_rdr();
         let ameta = ActionMeta::new();
         let ifid = InnerFlowId::from(&pmeta);
         assert!(rule_table

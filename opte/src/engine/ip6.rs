@@ -5,22 +5,16 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::checksum::Checksum;
-use super::headers::Header;
-use super::headers::HeaderAction;
-use super::headers::HeaderActionModify;
-use super::headers::IpMeta;
-use super::headers::IpMetaOpt;
-use super::headers::ModifyActionArg;
-use super::headers::PushActionArg;
+use super::headers::ModifyAction;
+use super::headers::PushAction;
 use super::ip4::Protocol;
 pub use super::ip4::UlpCsumOpt;
-use super::packet::PacketRead;
+use super::packet::PacketReadMut;
 use super::packet::ReadErr;
 use crate::engine::predicate::MatchExact;
 use crate::engine::predicate::MatchExactVal;
 use crate::engine::predicate::MatchPrefix;
 use crate::engine::predicate::MatchPrefixVal;
-use core::convert::TryFrom;
 pub use opte_api::Ipv6Addr;
 pub use opte_api::Ipv6Cidr;
 use serde::Deserialize;
@@ -30,14 +24,6 @@ use smoltcp::wire::Ipv6FragmentHeader;
 use smoltcp::wire::Ipv6HopByHopHeader;
 use smoltcp::wire::Ipv6Packet;
 use smoltcp::wire::Ipv6RoutingHeader;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
-    } else {
-        use std::vec::Vec;
-    }
-}
 
 pub const IPV6_HDR_VSN_MASK: u8 = 0xF0;
 pub const IPV6_HDR_VSN_SHIFT: u8 = 4;
@@ -59,216 +45,45 @@ impl MatchPrefix<Ipv6Cidr> for Ipv6Addr {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Ipv6Meta {
     pub src: Ipv6Addr,
     pub dst: Ipv6Addr,
+    pub next_hdr: IpProtocol,
     pub proto: Protocol,
+    pub hop_limit: u8,
+    pub pay_len: u16,
+
+    // For now we hold extensions as raw bytes. Ideally, each extension
+    // we support should get its own meta-like type and be declared
+    // optional.
+    //
+    // ```
+    // pub hbh: Option<HopByHop>,
+    // pub routing: Option<Routing>,
+    // pub frag: Option<Fragment>,
+    // ...
+    // ```
+    pub ext: Option<[u8; 64]>,
+    pub ext_len: usize,
+}
+
+impl Default for Ipv6Meta {
+    fn default() -> Self {
+        Self {
+            src: Ipv6Addr::from([0; 16]),
+            dst: Ipv6Addr::from([0; 16]),
+            next_hdr: IpProtocol::Unknown(255),
+            proto: Protocol::Unknown(255),
+            hop_limit: 128,
+            pay_len: 0,
+            ext: None,
+            ext_len: 0,
+        }
+    }
 }
 
 impl Ipv6Meta {
-    // XXX check that at least one field was specified.
-    pub fn modify(
-        src: Option<Ipv6Addr>,
-        dst: Option<Ipv6Addr>,
-        proto: Option<Protocol>,
-    ) -> HeaderAction<IpMeta, IpMetaOpt> {
-        HeaderAction::Modify(Ipv6MetaOpt { src, dst, proto }.into())
-    }
-}
-
-impl PushActionArg for Ipv6Meta {}
-
-impl From<&Ipv6Hdr> for Ipv6Meta {
-    fn from(ip6: &Ipv6Hdr) -> Self {
-        Ipv6Meta { src: ip6.src, dst: ip6.dst, proto: ip6.proto }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Ipv6MetaOpt {
-    src: Option<Ipv6Addr>,
-    dst: Option<Ipv6Addr>,
-    proto: Option<Protocol>,
-}
-
-impl ModifyActionArg for Ipv6MetaOpt {}
-
-impl Ipv6Meta {
-    pub fn push(
-        src: Ipv6Addr,
-        dst: Ipv6Addr,
-        proto: Protocol,
-    ) -> HeaderAction<IpMeta, IpMetaOpt> {
-        HeaderAction::Push(IpMeta::Ip6(Ipv6Meta { src, dst, proto }))
-    }
-}
-
-impl HeaderActionModify<Ipv6MetaOpt> for Ipv6Meta {
-    fn run_modify(&mut self, spec: &Ipv6MetaOpt) {
-        if let Some(src) = spec.src {
-            self.src = src;
-        }
-        if let Some(dst) = spec.dst {
-            self.dst = dst;
-        }
-        if let Some(proto) = spec.proto {
-            self.proto = proto;
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Ipv6Hdr {
-    vsn_class_flow: [u8; 4],
-    // Length of payload, including extension headers
-    payload_len: u16,
-    // Protocol of the next header, which may be an extension or the upper-layer
-    // protocol.
-    next_hdr: IpProtocol,
-    // The upper-layer protocol
-    proto: Protocol,
-    hop_limit: u8,
-    src: Ipv6Addr,
-    dst: Ipv6Addr,
-    extension_headers: Vec<u8>,
-}
-
-#[macro_export]
-macro_rules! assert_ip6 {
-    ($left:expr, $right:expr) => {
-        assert!(
-            $left.pay_len() == $right.pay_len(),
-            "ip6 payload len mismatch: {} != {}",
-            $left.pay_len(),
-            $right.pay_len(),
-        );
-
-        assert!(
-            $left.src() == $right.src(),
-            "ip6 src mismatch: {} != {}",
-            $left.src(),
-            $right.src(),
-        );
-
-        assert!(
-            $left.dst() == $right.dst(),
-            "ip6 dst mismatch: {} != {}",
-            $left.dst(),
-            $right.dst(),
-        );
-    };
-}
-
-impl Ipv6Hdr {
-    // This is for the base header size only.
-    pub const SIZE: usize = smoltcp::wire::IPV6_HEADER_LEN;
-
-    #[cfg(any(feature = "std", test))]
-    pub fn new_tcp<A: Into<Ipv6Addr>>(
-        tcp: &super::tcp::TcpHdr,
-        body: &[u8],
-        next_hdr: IpProtocol,
-        extension_headers: &[u8],
-        src: A,
-        dst: A,
-    ) -> Self {
-        let payload_len =
-            (tcp.hdr_len() + body.len() + extension_headers.len()) as u16;
-
-        Self {
-            vsn_class_flow: [IPV6_VERSION, 0, 0, 0],
-            payload_len,
-            next_hdr,
-            proto: Protocol::TCP,
-            hop_limit: 255,
-            src: src.into(),
-            dst: dst.into(),
-            extension_headers: extension_headers.to_vec(),
-        }
-    }
-
-    #[cfg(any(feature = "std", test))]
-    pub fn new_udp<A: Into<Ipv6Addr>>(
-        udp: &super::udp::UdpHdr,
-        src: A,
-        dst: A,
-    ) -> Self {
-        Self {
-            vsn_class_flow: [IPV6_VERSION, 0, 0, 0],
-            payload_len: (udp.total_len()) as u16,
-            next_hdr: IpProtocol::Udp,
-            proto: Protocol::UDP,
-            hop_limit: 255,
-            src: src.into(),
-            dst: dst.into(),
-            extension_headers: vec![],
-        }
-    }
-
-    /// Return the bytes of the header, including the base and any extensions
-    pub fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.hdr_len());
-        bytes.extend_from_slice(&self.vsn_class_flow);
-        bytes.extend_from_slice(&self.payload_len.to_be_bytes());
-        bytes.extend_from_slice(&[u8::from(self.next_hdr), self.hop_limit]);
-        bytes.extend_from_slice(&self.src);
-        bytes.extend_from_slice(&self.dst);
-        bytes.extend_from_slice(&self.extension_headers);
-        bytes
-    }
-
-    /// Return the destination IPv6 address
-    pub fn dst(&self) -> Ipv6Addr {
-        self.dst
-    }
-
-    /// The length of the extension headers, if any.
-    pub fn ext_len(&self) -> usize {
-        self.extension_headers.len()
-    }
-
-    /// Return the length of the header portion of the packet, including
-    /// extension headers
-    pub fn hdr_len(&self) -> usize {
-        Ipv6Hdr::SIZE + self.ext_len()
-    }
-
-    /// Return the first next header of the packet, which may be the upper-layer
-    /// protocol, or the protocol of an extension header.
-    pub fn next_hdr(&self) -> IpProtocol {
-        self.next_hdr
-    }
-
-    /// Return the length of the payload portion of the packet, including any
-    /// extension headers.
-    ///
-    /// NOTE: This currently does not entertain Jumbograms.
-    ///
-    /// XXX We should probably check for the Jumbogram extension
-    /// header and drop any packets with it.
-    pub fn pay_len(&self) -> usize {
-        usize::from(self.payload_len)
-    }
-
-    /// Set the payload length of the contained packet, including any extension
-    /// headers.
-    pub fn set_pay_len(&mut self, len: u16) {
-        self.payload_len = len;
-    }
-
-    /// Return the length of the upper-layer protocol payload.
-    pub fn ulp_len(&self) -> usize {
-        self.pay_len() - self.ext_len()
-    }
-
-    /// Return the upper-layer [`Protocol`] of the packet.
-    pub fn proto(&self) -> Protocol {
-        self.proto
-    }
-
     /// Compute the [`Checksum`] of the contained ULP datagram.
     ///
     /// This computes the checksum of the pseudo-header, and adds to it the sum
@@ -283,68 +98,179 @@ impl Ipv6Hdr {
             UlpCsumOpt::Partial => todo!("implement partial csum"),
             UlpCsumOpt::Full => {
                 let mut csum = self.pseudo_csum();
-                csum.add(ulp_hdr);
-                csum.add(body);
+                csum.add_bytes(ulp_hdr);
+                csum.add_bytes(body);
                 csum
             }
         }
     }
 
+    #[inline]
+    pub fn emit(&self, dst: &mut [u8]) {
+        debug_assert_eq!(dst.len(), self.hdr_len());
+        let base = &mut dst[0..Ipv6Hdr::BASE_SIZE];
+        let mut pkt = Ipv6Packet::new_unchecked(base);
+        pkt.set_version(6);
+        // For now assume no traffic class or flow label.
+        pkt.set_traffic_class(0);
+        pkt.set_flow_label(0);
+        pkt.set_payload_len(self.pay_len);
+        pkt.set_next_header(self.next_hdr);
+        pkt.set_hop_limit(self.hop_limit);
+        pkt.set_src_addr(self.src.into());
+        pkt.set_dst_addr(self.dst.into());
+
+        if let Some(ext_bytes) = self.ext {
+            dst[Ipv6Hdr::BASE_SIZE..]
+                .copy_from_slice(&ext_bytes[0..self.ext_len]);
+        }
+    }
+
+    pub fn hdr_len(&self) -> usize {
+        Ipv6Hdr::BASE_SIZE + self.ext_len
+    }
+
     /// Return the pseudo header bytes.
-    pub fn pseudo_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(40);
-        bytes.extend_from_slice(&self.src);
-        bytes.extend_from_slice(&self.dst);
-        bytes.extend_from_slice(&(self.pay_len() as u32).to_be_bytes());
-        bytes.extend_from_slice(&[0u8, 0u8, 0u8, u8::from(self.next_hdr)]);
-        assert_eq!(bytes.len(), 40);
-        bytes
+    pub fn pseudo_bytes(&self, bytes: &mut [u8; 40]) {
+        bytes[0..16].copy_from_slice(&self.src.bytes());
+        bytes[16..32].copy_from_slice(&self.dst.bytes());
+        bytes[32..36].copy_from_slice(&((self.pay_len as u32).to_be_bytes()));
+        bytes[36..40].copy_from_slice(&[0u8, 0u8, 0u8, u8::from(self.proto)]);
     }
 
     /// Return a [`Checksum`] of the pseudo header.
     pub fn pseudo_csum(&self) -> Checksum {
-        Checksum::compute(&self.pseudo_bytes())
-    }
-
-    /// Set the total length of the packet
-    pub fn set_total_len(&mut self, len: u16) {
-        self.payload_len = len - self.hdr_len() as u16;
+        let mut bytes = [0u8; 40];
+        self.pseudo_bytes(&mut bytes);
+        Checksum::compute(&bytes)
     }
 
     /// Return the total length of the packet, including the base header, any
     /// extension headers, and the payload itself.
     pub fn total_len(&self) -> u16 {
-        self.payload_len + Ipv6Hdr::SIZE as u16
-    }
-
-    /// Return the source IPv6 address
-    pub fn src(&self) -> Ipv6Addr {
-        self.src
-    }
-
-    pub fn unify(&mut self, meta: &Ipv6Meta) {
-        self.proto = meta.proto;
-        self.src = meta.src;
-        self.dst = meta.dst;
+        self.pay_len + Ipv6Hdr::BASE_SIZE as u16
     }
 }
 
-impl Header for Ipv6Hdr {
-    type Error = Ipv6HdrError;
+impl<'a> From<&Ipv6Hdr<'a>> for Ipv6Meta {
+    fn from(ip6: &Ipv6Hdr) -> Self {
+        let (ext, ext_len) = if let Some((ext_bytes, _proto_off)) = &ip6.ext {
+            let ext_len = ext_bytes.len();
+            assert!(ext_len <= 64);
+            let mut ext = [0; 64];
+            ext[0..ext_len].copy_from_slice(&ext_bytes);
+            (Some(ext), ext_len)
+        } else {
+            (None, 0)
+        };
 
-    fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, Self::Error>
-    where
-        R: PacketRead<'a>,
-    {
-        // Parse the base IPv6 header
-        let buf = rdr.slice(Ipv6Hdr::SIZE)?;
-        let base_header = Ipv6Packet::new_unchecked(buf);
-        let vsn_class_flow = [buf[0], buf[1], buf[2], buf[3]];
-        let payload_len = base_header.payload_len();
-        let next_hdr = base_header.next_header();
-        let hop_limit = base_header.hop_limit();
-        let src = Ipv6Addr::from(base_header.src_addr().0);
-        let dst = Ipv6Addr::from(base_header.dst_addr().0);
+        Ipv6Meta {
+            src: ip6.src(),
+            dst: ip6.dst(),
+            proto: ip6.proto(),
+            next_hdr: ip6.next_hdr(),
+            hop_limit: ip6.hop_limit(),
+            pay_len: ip6.pay_len() as u16,
+            ext,
+            ext_len: ext_len,
+        }
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub struct Ipv6Push {
+    pub src: Ipv6Addr,
+    pub dst: Ipv6Addr,
+    pub proto: Protocol,
+}
+
+impl PushAction<Ipv6Meta> for Ipv6Push {
+    fn push(&self) -> Ipv6Meta {
+        let mut ip6 = Ipv6Meta::default();
+        ip6.src = self.src;
+        ip6.dst = self.dst;
+        ip6.proto = self.proto;
+        // For now you cannot push extension headers.
+        ip6.next_hdr = IpProtocol::from(self.proto);
+        ip6
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Ipv6Mod {
+    pub src: Option<Ipv6Addr>,
+    pub dst: Option<Ipv6Addr>,
+    pub proto: Option<Protocol>,
+}
+
+impl ModifyAction<Ipv6Meta> for Ipv6Mod {
+    fn modify(&self, meta: &mut Ipv6Meta) {
+        if let Some(src) = self.src {
+            meta.src = src;
+        }
+        if let Some(dst) = self.dst {
+            meta.dst = dst;
+        }
+        if let Some(proto) = self.proto {
+            meta.proto = proto;
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Ipv6Hdr<'a> {
+    base: Ipv6Packet<&'a mut [u8]>,
+    // The proto reference points to the last next_header value (aka
+    // the upper-layer protocol number).
+    // proto: &'a mut u8,
+
+    // (extensions bytes, protocol field offset)
+    ext: Option<(&'a mut [u8], usize)>,
+}
+
+impl<'a> Ipv6Hdr<'a> {
+    pub const BASE_SIZE: usize = 40;
+
+    /// The offset of the Protocol (Next Header) field in the base header.
+    pub const BASE_HDR_PROTO_OFFSET: usize = 6;
+
+    /// Return the destination address.
+    pub fn dst(&self) -> Ipv6Addr {
+        Ipv6Addr::from(self.base.dst_addr())
+    }
+
+    /// Return the length of the extensions headers, or 0 if there are
+    /// none.
+    fn ext_len(&self) -> usize {
+        match &self.ext {
+            None => 0,
+            Some((ext_bytes, _)) => ext_bytes.len(),
+        }
+    }
+
+    /// Return the length of the header portion of the packet, including
+    /// extension headers
+    pub fn hdr_len(&self) -> usize {
+        Self::BASE_SIZE + self.ext_len()
+    }
+
+    /// Return the hop limit value.
+    pub fn hop_limit(&self) -> u8 {
+        self.base.hop_limit()
+    }
+
+    fn next_hdr(&self) -> IpProtocol {
+        self.base.next_header()
+    }
+
+    pub fn parse<'b>(
+        rdr: &'b mut impl PacketReadMut<'a>,
+    ) -> Result<Self, Ipv6HdrError> {
+        // Parse the base IPv6 header.
+        let buf = rdr.slice_mut(usize::from(Self::BASE_SIZE))?;
+        let base = Ipv6Packet::new_unchecked(buf);
 
         // Parse any extension headers.
         //
@@ -352,29 +278,49 @@ impl Header for Ipv6Hdr {
         // than their length (to determine the boundary with the ULP). We'll
         // verify that the headers are supported, but otherwise maintain only a
         // byte array with their contents.
-        let mut extension_headers = vec![];
-        let mut next_header = next_hdr;
+        let mut ext_len = 0;
+        let mut next_header = base.next_header();
+
+        // Either we have no extensions or we are parsing zero'd
+        // header data for the purpose of emitting.
+        if is_ulp_protocol(next_header) {
+            return Ok(Self { base, ext: None });
+        }
+
+        let mut proto_offset: usize = 0;
         while !is_ulp_protocol(next_header) {
             match next_header {
                 IpProtocol::HopByHop => {
-                    let buf = rdr.slice(rdr.seg_left())?;
+                    let buf = rdr.slice_mut(rdr.seg_left())?;
                     let header = Ipv6HopByHopHeader::new_checked(buf)?;
                     let n_bytes = 8 * (usize::from(header.header_len()) + 1);
-                    extension_headers.extend_from_slice(&buf[..n_bytes]);
                     next_header = header.next_header();
+                    let buf = header.into_inner();
+                    ext_len += n_bytes;
 
                     // Put back any bytes in the segment not needed
                     // for this header.
                     rdr.seek_back(buf.len() - n_bytes)?;
+
+                    if !is_ulp_protocol(next_header) {
+                        proto_offset += n_bytes;
+                    }
                 }
+
                 IpProtocol::Ipv6Route => {
-                    let buf = rdr.slice(rdr.seg_left())?;
+                    let buf = rdr.slice_mut(rdr.seg_left())?;
                     let header = Ipv6RoutingHeader::new_checked(buf)?;
                     let n_bytes = 8 * (usize::from(header.header_len()) + 1);
-                    extension_headers.extend_from_slice(&buf[..n_bytes]);
                     next_header = header.next_header();
+                    let buf = header.into_inner();
+                    ext_len += n_bytes;
                     rdr.seek_back(buf.len() - n_bytes)?;
+
+                    if !is_ulp_protocol(next_header) {
+                        proto_offset += n_bytes;
+                    }
                 }
+
                 IpProtocol::Ipv6Frag => {
                     // This header's length is fixed.
                     //
@@ -382,23 +328,37 @@ impl Header for Ipv6Hdr {
                     // that is not `repr(packed)`, so we'd possibly count
                     // padding.
                     const FRAGMENT_HDR_SIZE: usize = 8;
-                    let buf = rdr.slice(FRAGMENT_HDR_SIZE)?;
+                    let buf = rdr.slice_mut(FRAGMENT_HDR_SIZE)?;
+                    ext_len += buf.len();
                     let header = Ipv6FragmentHeader::new_checked(buf)?;
-                    extension_headers.extend_from_slice(buf);
                     next_header = header.next_header();
+
+                    if !is_ulp_protocol(next_header) {
+                        proto_offset += FRAGMENT_HDR_SIZE;
+                    }
                 }
+
                 IpProtocol::Unknown(x) if x == DDM_HEADER_ID => {
                     // The DDM header packet begins with next_header and the
                     // length, which describes the entire header excluding
                     // next_header.
                     const FIXED_LEN: usize = 2;
-                    let fixed_buf = rdr.slice(FIXED_LEN)?;
+                    let fixed_buf = rdr.slice_mut(FIXED_LEN)?;
                     next_header = IpProtocol::from(fixed_buf[0]);
-                    let total_length = usize::from(fixed_buf[1]) + 1;
-                    let remainder = rdr.slice(total_length - FIXED_LEN)?;
-                    extension_headers.extend_from_slice(fixed_buf);
-                    extension_headers.extend_from_slice(remainder);
+                    // We add one to account for the next_header byte,
+                    // as the DDM length does not include it.
+                    let total_len = usize::from(fixed_buf[1]) + 1;
+                    // We need to read remainder so that the reader is
+                    // in the correct place for the proto_offset to be
+                    // calculated correctly.
+                    let _remainder = rdr.slice_mut(total_len - FIXED_LEN);
+                    ext_len += total_len;
+
+                    if !is_ulp_protocol(next_header) {
+                        proto_offset += total_len;
+                    }
                 }
+
                 x => {
                     return Err(Ipv6HdrError::UnexpectedNextHeader {
                         next_header: x.into(),
@@ -406,21 +366,79 @@ impl Header for Ipv6Hdr {
                 }
             }
         }
+
         // Panic: The protocol is the last value of next header, and since
         // we've matched on everything we support in the `try_from` impl, this
         // unwrap can't panic.
-        let proto = Protocol::try_from(next_header).unwrap();
+        let _protocol = Protocol::try_from(next_header).unwrap();
 
-        Ok(Ipv6Hdr {
-            vsn_class_flow,
-            payload_len,
-            next_hdr,
-            proto,
-            hop_limit,
-            src,
-            dst,
-            extension_headers,
-        })
+        // Seek back to the start of the extensions, then take a slice of
+        // all the ptions.
+        rdr.seek_back(ext_len)?;
+        let ext = Some((rdr.slice_mut(ext_len)?, proto_offset));
+        Ok(Self { base, ext })
+    }
+
+    /// Return the payload length.
+    ///
+    /// This length includes any extension headers along with the
+    /// body.
+    pub fn pay_len(&self) -> usize {
+        usize::from(self.base.payload_len())
+    }
+
+    /// Return the Upper Layer Protocol in use.
+    ///
+    /// Even when extension headers are in play, this call always
+    /// returns the ULP. In other words, it always returns the final
+    /// "Next Header" value at the end of the extension header chain.
+    pub fn proto(&self) -> Protocol {
+        // Unwrap: We verified the proto is good upon parsing.
+        if let Some((bytes, proto_offset)) = &self.ext {
+            Protocol::try_from(bytes[*proto_offset]).unwrap()
+        } else {
+            Protocol::try_from(self.base.next_header()).unwrap()
+        }
+    }
+
+    /// Populate `bytes` with the pseudo header bytes.
+    pub fn pseudo_bytes(&self, bytes: &mut [u8; 40]) {
+        bytes[0..16].copy_from_slice(&self.base.src_addr().as_bytes());
+        bytes[16..32].copy_from_slice(&self.base.dst_addr().as_bytes());
+        bytes[32..36].copy_from_slice(&(self.pay_len() as u32).to_be_bytes());
+        bytes[36..40].copy_from_slice(&[0u8, 0u8, 0u8, u8::from(self.proto())]);
+    }
+
+    /// Return a [`Checksum`] of the pseudo header.
+    pub fn pseudo_csum(&self) -> Checksum {
+        let mut pseudo_bytes = [0u8; 40];
+        self.pseudo_bytes(&mut pseudo_bytes);
+        Checksum::compute(&pseudo_bytes)
+    }
+
+    /// Set the total length of the packet.
+    ///
+    /// There is no "total length" for IPv6; it keeps a payload
+    /// length. However, this API is useful for having a consistent
+    /// method for setting lengths when emitting headers.
+    pub fn set_total_len(&mut self, len: u16) {
+        self.base.set_payload_len(len - self.hdr_len() as u16);
+    }
+
+    /// Return the source address.
+    pub fn src(&self) -> Ipv6Addr {
+        Ipv6Addr::from(self.base.src_addr())
+    }
+
+    /// Return the total length of the packet, including the base header, any
+    /// extension headers, and the payload itself.
+    pub fn total_len(&self) -> usize {
+        usize::from(self.base.payload_len()) + Self::BASE_SIZE
+    }
+
+    /// Return the length of the upper-layer protocol payload.
+    pub fn ulp_len(&self) -> usize {
+        self.pay_len() - self.ext_len()
     }
 }
 
@@ -429,7 +447,7 @@ fn is_ulp_protocol(proto: IpProtocol) -> bool {
     matches!(proto, Icmp | Igmp | Tcp | Udp | Icmpv6)
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ipv6HdrError {
     BadVersion { vsn: u8 },
     ReadError { error: ReadErr },
@@ -455,29 +473,10 @@ impl From<ReadErr> for Ipv6HdrError {
     }
 }
 
-impl From<&Ipv6Meta> for Ipv6Hdr {
-    fn from(meta: &Ipv6Meta) -> Self {
-        Ipv6Hdr {
-            vsn_class_flow: [0x60, 0x00, 0x00, 0x00],
-            payload_len: 0,
-            // The next_hdr is the first Next Header value. The proto is the
-            // actual upper layer protocol.
-            next_hdr: meta.proto.into(),
-            proto: meta.proto,
-            hop_limit: 255,
-            src: meta.src,
-            dst: meta.dst,
-            extension_headers: vec![],
-        }
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::engine::headers::Header;
     use crate::engine::packet::Packet;
-    use crate::engine::packet::PacketReader;
     use itertools::Itertools;
     use smoltcp::wire::IpProtocol;
     use smoltcp::wire::Ipv6Address;
@@ -493,7 +492,7 @@ pub(crate) mod test {
 
     // Test packet size and payload length
     const BUFFER_LEN: usize = 512;
-    const PAYLOAD_LEN: usize = 512 - Ipv6Hdr::SIZE;
+    const PAYLOAD_LEN: usize = 512 - Ipv6Hdr::BASE_SIZE;
     pub(crate) const SUPPORTED_EXTENSIONS: [IpProtocol; 4] = [
         IpProtocol::HopByHop,
         IpProtocol::Ipv6Route,
@@ -578,7 +577,7 @@ pub(crate) mod test {
         let mut data = vec![0; BUFFER_LEN];
         let mut header_start = 0;
         let mut next_header_pos = 6;
-        let mut header_end = Ipv6Hdr::SIZE;
+        let mut header_end = Ipv6Hdr::BASE_SIZE;
         let mut buf = &mut data[header_start..];
 
         // The base header. The payload length is always the same, but the base
@@ -589,7 +588,7 @@ pub(crate) mod test {
 
         if extensions.is_empty() {
             // No extensions at all, just base header with a TCP ULP
-            return (buf.to_vec(), Ipv6Hdr::SIZE);
+            return (buf.to_vec(), Ipv6Hdr::BASE_SIZE);
         }
 
         let mut it = extensions.iter();
@@ -672,8 +671,8 @@ pub(crate) mod test {
                 SUPPORTED_EXTENSIONS.into_iter().permutations(n_extensions)
             {
                 let (buf, pos) = generate_test_packet(extensions.as_slice());
-                let bytes = Packet::copy(&buf);
-                let mut reader = PacketReader::new(&bytes, ());
+                let mut pkt = Packet::copy(&buf);
+                let mut reader = pkt.get_rdr_mut();
                 let header = Ipv6Hdr::parse(&mut reader).unwrap();
                 assert_all_lengths_ok(&header, pos);
             }
@@ -681,12 +680,6 @@ pub(crate) mod test {
     }
 
     fn assert_all_lengths_ok(header: &Ipv6Hdr, header_end: usize) {
-        assert_eq!(
-            header.as_bytes().len(),
-            header.hdr_len(),
-            "Header length does not match the octet count of the \
-            header bytes themselves"
-        );
         assert_eq!(
             header.hdr_len(),
             header_end,
@@ -699,7 +692,7 @@ pub(crate) mod test {
         );
         assert_eq!(
             header.ext_len(),
-            header_end - Ipv6Hdr::SIZE,
+            header_end - Ipv6Hdr::BASE_SIZE,
             "Extension header size is incorrect",
         );
         assert_eq!(
@@ -709,7 +702,7 @@ pub(crate) mod test {
         );
         assert_eq!(
             header.total_len(),
-            (PAYLOAD_LEN + Ipv6Hdr::SIZE) as u16,
+            PAYLOAD_LEN + Ipv6Hdr::BASE_SIZE,
             "Total packet length is not correct",
         );
     }
@@ -735,5 +728,46 @@ pub(crate) mod test {
 
         let addr: Ipv6Addr = "fd01::2".parse().unwrap();
         assert!(!addr.match_prefix(&cidr));
+    }
+
+    #[test]
+    fn emit() {
+        let ip = Ipv6Meta {
+            src: Ipv6Addr::from_const([
+                0xFE80, 0x0000, 0x0000, 0x0000, 0xBAF8, 0x53FF, 0xFEAF, 0x537D,
+            ]),
+            dst: Ipv6Addr::from_const([
+                0xFE80, 0x000, 0x0000, 0x0000, 0x56BE, 0xF7FF, 0xFE0B, 0x09EC,
+            ]),
+            proto: Protocol::ICMPv6,
+            next_hdr: IpProtocol::Icmpv6,
+            hop_limit: 255,
+            pay_len: 32,
+            ext: None,
+            ext_len: 0,
+        };
+
+        let len = usize::from(ip.hdr_len());
+        let mut pkt = Packet::alloc_and_expand(len);
+        let mut wtr = pkt.seg0_wtr();
+        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+        assert_eq!(len, pkt.len());
+
+        #[rustfmt::skip]
+        let expected_bytes = [
+            // version + class + label
+            0x60, 0x00, 0x00, 0x00,
+            // payload len
+            0x00, 0x20,
+            // next header + hop limit
+            0x3A, 0xFF,
+            // source address
+            0xFE, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0xBA, 0xF8, 0x53, 0xFF, 0xFE, 0xAF, 0x53, 0x7D,
+            // dest address
+            0xFE, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x56, 0xBE, 0xF7, 0xFF, 0xFE, 0x0B, 0x09, 0xEC,
+        ];
+        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
     }
 }

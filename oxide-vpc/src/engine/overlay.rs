@@ -31,6 +31,7 @@ use crate::api::BoundaryServices;
 use crate::api::GuestPhysAddr;
 use crate::api::PhysNet;
 use crate::api::VpcCfg;
+use core::marker::PhantomData;
 use opte::api::CmdOk;
 use opte::api::Direction;
 use opte::api::Ipv4Addr;
@@ -39,15 +40,18 @@ use opte::api::OpteError;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexType;
 use opte::engine::ether::EtherMeta;
-use opte::engine::ether::ETHER_TYPE_IPV6;
-use opte::engine::geneve::GeneveMeta;
+use opte::engine::ether::EtherMod;
+use opte::engine::ether::EtherType;
+use opte::engine::geneve::GenevePush;
 use opte::engine::geneve::Vni;
-use opte::engine::geneve::GENEVE_PORT;
+use opte::engine::headers::EncapMeta;
+use opte::engine::headers::EncapPush;
 use opte::engine::headers::HeaderAction;
 use opte::engine::headers::IpAddr;
+use opte::engine::headers::IpPush;
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Addr;
-use opte::engine::ip6::Ipv6Meta;
+use opte::engine::ip6::Ipv6Push;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
@@ -69,7 +73,6 @@ use opte::engine::rule::Resource;
 use opte::engine::rule::ResourceEntry;
 use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
-use opte::engine::udp::UdpMeta;
 
 pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
 
@@ -303,34 +306,45 @@ impl StaticAction for EncapAction {
         Ok(AllowOrDeny::Allow(HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
-            outer_ether: EtherMeta::push(
-                MacAddr::ZERO,
-                MacAddr::ZERO,
-                ETHER_TYPE_IPV6,
+            outer_ether: HeaderAction::Push(
+                EtherMeta {
+                    src: MacAddr::ZERO,
+                    dst: MacAddr::ZERO,
+                    ether_type: EtherType::Ipv6,
+                },
+                PhantomData,
             ),
-            outer_ip: Ipv6Meta::push(
-                self.phys_ip_src,
-                phys_target.ip.into(),
-                Protocol::UDP,
+            outer_ip: HeaderAction::Push(
+                IpPush::from(Ipv6Push {
+                    src: self.phys_ip_src,
+                    dst: phys_target.ip.into(),
+                    proto: Protocol::UDP,
+                }),
+                PhantomData,
             ),
-            outer_ulp: UdpMeta::push(
-                // XXX Geneve uses the UDP source port as a
-                // flow label value for the purposes of ECMP
-                // -- a hash of the 5-tuple. However, when
-                // using Geneve in IPv6 one could also choose
-                // to use the IPv6 Flow Label field, which has
-                // 4 more bits of entropy and could be argued
-                // to be more fit for this purpose. As we know
-                // that our physical network is always IPv6,
-                // perhaps we should just use that? For now I
-                // defer the choice and leave this hard-coded.
-                7777,
-                GENEVE_PORT,
+            // XXX Geneve uses the UDP source port as a flow label
+            // value for the purposes of ECMP -- a hash of the
+            // 5-tuple. However, when using Geneve in IPv6 one could
+            // also choose to use the IPv6 Flow Label field, which has
+            // 4 more bits of entropy and could be argued to be more
+            // fit for this purpose. As we know that our physical
+            // network is always IPv6, perhaps we should just use
+            // that? For now I defer the choice and leave this
+            // hard-coded.
+            outer_encap: HeaderAction::Push(
+                EncapPush::from(GenevePush {
+                    vni: phys_target.vni.into(),
+                    entropy: 7777,
+                    ..Default::default()
+                }),
+                PhantomData,
             ),
-            outer_encap: GeneveMeta::push(phys_target.vni.into()),
-            inner_ether: EtherMeta::modify(
-                None,
-                Some(phys_target.ether.into()),
+            inner_ether: HeaderAction::Modify(
+                EtherMod {
+                    dst: Some(phys_target.ether.into()),
+                    ..Default::default()
+                },
+                PhantomData,
             ),
             ..Default::default()
         }))
@@ -369,7 +383,7 @@ impl StaticAction for DecapAction {
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         match &pkt_meta.outer.encap {
-            Some(geneve) => {
+            Some(EncapMeta::Geneve(geneve)) => {
                 action_meta.insert(
                     ACTION_META_VNI.to_string(),
                     geneve.vni.to_string(),
@@ -391,7 +405,6 @@ impl StaticAction for DecapAction {
             name: DECAP_NAME.to_string(),
             outer_ether: HeaderAction::Pop,
             outer_ip: HeaderAction::Pop,
-            outer_ulp: HeaderAction::Pop,
             outer_encap: HeaderAction::Pop,
             ..Default::default()
         }))

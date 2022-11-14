@@ -5,19 +5,19 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::ether::EtherMeta;
-use super::ether::EtherMetaOpt;
+use super::ether::EtherMod;
 use super::flow_table::StateSummary;
-use super::geneve::GeneveMeta;
-use super::geneve::GeneveMetaOpt;
 use super::headers;
+use super::headers::EncapMeta;
+use super::headers::EncapMod;
+use super::headers::EncapPush;
 use super::headers::HeaderAction;
 use super::headers::HeaderActionError;
 use super::headers::IpAddr;
 use super::headers::IpMeta;
-use super::headers::IpMetaOpt;
+use super::headers::IpMod;
+use super::headers::IpPush;
 use super::headers::UlpHeaderAction;
-use super::headers::UlpMeta;
-use super::headers::UlpMetaOpt;
 use super::packet::BodyTransform;
 use super::packet::Initialized;
 use super::packet::InnerFlowId;
@@ -29,10 +29,12 @@ use super::packet::Parsed;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
+use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
 use illumos_sys_hdrs::c_char;
+use illumos_sys_hdrs::uintptr_t;
 use opte_api::Direction;
 use serde::Deserialize;
 use serde::Serialize;
@@ -44,7 +46,6 @@ cfg_if! {
         use alloc::string::{String, ToString};
         use alloc::sync::Arc;
         use alloc::vec::Vec;
-        use illumos_sys_hdrs::uintptr_t;
     } else {
         use std::boxed::Box;
         use std::ffi::CString;
@@ -53,10 +54,6 @@ cfg_if! {
         use std::vec::Vec;
     }
 }
-
-// A marker trait for types which represent packet payloads. Examples
-// of payloads include an ARP request, ICMP body, or TCP body.
-pub trait Payload {}
 
 /// A marker trait indicating a type is an entry acuired from a [`Resource`].
 pub trait ResourceEntry {}
@@ -218,17 +215,26 @@ impl StaticAction for Identity {
     }
 }
 
+pub enum PushAction<T> {
+    Ignore,
+    Push(T),
+}
+
+pub enum ModifyAction<T> {
+    Ignore,
+    Modify(T),
+}
+
 /// A collection of header transformations to take on each part of the
 /// header stack.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct HdrTransform {
     pub name: String,
-    pub outer_ether: HeaderAction<EtherMeta, EtherMetaOpt>,
-    pub outer_ip: HeaderAction<IpMeta, IpMetaOpt>,
-    pub outer_ulp: HeaderAction<UlpMeta, UlpMetaOpt>,
-    pub outer_encap: HeaderAction<GeneveMeta, GeneveMetaOpt>,
-    pub inner_ether: HeaderAction<EtherMeta, EtherMetaOpt>,
-    pub inner_ip: HeaderAction<IpMeta, IpMetaOpt>,
+    pub outer_ether: HeaderAction<EtherMeta, EtherMeta, EtherMod>,
+    pub outer_ip: HeaderAction<IpMeta, IpPush, IpMod>,
+    pub outer_encap: HeaderAction<EncapMeta, EncapPush, EncapMod>,
+    pub inner_ether: HeaderAction<EtherMeta, EtherMeta, EtherMod>,
+    pub inner_ip: HeaderAction<IpMeta, IpPush, IpMod>,
     // We don't support push/pop for inner_ulp.
     pub inner_ulp: UlpHeaderAction<super::headers::UlpMetaModify>,
 }
@@ -284,7 +290,7 @@ impl From<&InnerFlowId> for flow_id_sdt_arg {
             dst_ip6,
             src_port: ifid.src_port.to_be(),
             dst_port: ifid.dst_port.to_be(),
-            proto: ifid.proto as u8,
+            proto: u8::from(ifid.proto),
         }
     }
 }
@@ -293,28 +299,27 @@ impl From<&InnerFlowId> for flow_id_sdt_arg {
 pub struct ht_run_sdt_arg {
     pub port: *const c_char,
     pub loc: *const c_char,
-    pub dir: *const c_char,
+    pub dir: uintptr_t,
     pub flow_id_before: *const flow_id_sdt_arg,
     pub flow_id_after: *const flow_id_sdt_arg,
 }
 
 pub fn ht_probe(
     port: &CString,
-    loc: &str,
+    loc: &CStr,
     dir: Direction,
     before: &InnerFlowId,
     after: &InnerFlowId,
 ) {
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
-            let loc_c = CString::new(loc).unwrap();
             let flow_id_before = flow_id_sdt_arg::from(before);
             let flow_id_after = flow_id_sdt_arg::from(after);
 
             let arg = ht_run_sdt_arg {
                 port: port.as_ptr(),
-                loc: loc_c.as_ptr(),
-                dir: dir.cstr_raw(),
+                loc: loc.as_ptr(),
+                dir: dir as uintptr_t,
                 flow_id_before: &flow_id_before,
                 flow_id_after: &flow_id_after,
             };
@@ -326,6 +331,7 @@ pub fn ht_probe(
             }
         } else if #[cfg(feature = "usdt")] {
             let port_s = port.to_str().unwrap();
+            let loc_c = loc.to_str().unwrap();
             let before_s = before.to_string();
             let after_s = after.to_string();
 
@@ -333,7 +339,7 @@ pub fn ht_probe(
                 || (port_s, loc, dir, before_s, after_s)
             );
         } else {
-            let (_, _, _, _, _) = (port, loc, dir, before, after);
+            let (..) = (port, loc, dir, before, after);
         }
     }
 }
@@ -346,7 +352,6 @@ impl HdrTransform {
             name: name.to_string(),
             outer_ether: HeaderAction::Ignore,
             outer_ip: HeaderAction::Ignore,
-            outer_ulp: HeaderAction::Ignore,
             outer_encap: HeaderAction::Ignore,
             inner_ether: HeaderAction::Ignore,
             inner_ip: HeaderAction::Ignore,
@@ -369,15 +374,14 @@ impl HdrTransform {
         self.outer_ip
             .run(&mut meta.outer.ip)
             .map_err(Self::err_fn("outer IP"))?;
-        self.outer_ulp
-            .run(&mut meta.outer.ulp)
-            .map_err(Self::err_fn("outer ULP"))?;
         self.outer_encap
             .run(&mut meta.outer.encap)
             .map_err(Self::err_fn("outer encap"))?;
-        self.inner_ether
-            .run(&mut meta.inner.ether)
-            .map_err(Self::err_fn("inner ether"))?;
+        // XXX A hack so that inner ethernet can meet the interface of
+        // `HeaderAction::run().`
+        let mut tmp = Some(meta.inner.ether);
+        self.inner_ether.run(&mut tmp).map_err(Self::err_fn("inner ether"))?;
+        meta.inner.ether = tmp.unwrap();
         self.inner_ip
             .run(&mut meta.inner.ip)
             .map_err(Self::err_fn("inner IP"))?;
@@ -542,7 +546,7 @@ pub trait HairpinAction: Display {
     fn gen_packet(
         &self,
         meta: &PacketMeta,
-        rdr: &mut PacketReader<Parsed, ()>,
+        rdr: &mut PacketReader,
     ) -> GenPacketResult;
 
     /// Return the predicates implicit to this action.
@@ -567,6 +571,17 @@ pub enum Action {
     ///
     /// This is equivalent to a [`Self::Static`] action using [`Identity`].
     Allow,
+
+    /// Handle the packet on an individual level, outside of the usual
+    /// flow processing. This results in a call to the
+    /// [`super::NetworkImpl::handle_pkt()`] callback.
+    ///
+    /// In this case we do not treat the packet as part of a flow, but
+    /// rather handle it on an individual basis. This action is
+    /// terminal; upon execution there is no return to rule
+    /// processing. It's at the sole discretion of the handler as to
+    /// what response is taken to the matched packet.
+    HandlePacket,
 
     /// Allow the packet to pass, creating a pair of flow table entries.
     ///
@@ -604,6 +619,7 @@ impl Action {
             // to specify which types of packets it wants to deny,
             // which means the predicates are always purely explicit.
             Self::Deny => (vec![], vec![]),
+            Self::HandlePacket => (vec![], vec![]),
             Self::Meta(act) => act.implicit_preds(),
             Self::Static(act) => act.implicit_preds(),
             Self::Stateful(act) => act.implicit_preds(),
@@ -624,6 +640,7 @@ pub enum ActionDump {
     Allow,
     StatefulAllow,
     Deny,
+    HandlePacket,
     Meta(String),
     Static(String),
     Stateful(String),
@@ -636,6 +653,7 @@ impl From<&Action> for ActionDump {
             Action::Allow => Self::Allow,
             Action::StatefulAllow => Self::StatefulAllow,
             Action::Deny => Self::Deny,
+            Action::HandlePacket => Self::HandlePacket,
             Action::Meta(ma) => Self::Meta(ma.to_string()),
             Action::Static(sa) => Self::Static(sa.to_string()),
             Action::Stateful(sa) => Self::Stateful(sa.to_string()),
@@ -650,6 +668,7 @@ impl fmt::Display for Action {
             Self::Allow => write!(f, "Allow"),
             Self::StatefulAllow => write!(f, "Stateful Allow"),
             Self::Deny => write!(f, "Deny"),
+            Self::HandlePacket => write!(f, "Handle Packet"),
             Self::Meta(a) => write!(f, "Meta: {}", a),
             Self::Static(a) => write!(f, "Static: {}", a),
             Self::Stateful(a) => write!(f, "Stateful: {}", a),
@@ -879,8 +898,9 @@ impl From<&Rule<Finalized>> for super::ioctl::RuleDump {
 #[test]
 fn rule_matching() {
     use super::ip4::Protocol;
+    use crate::engine::headers::UlpMeta;
     use crate::engine::ip4::Ipv4Meta;
-    use crate::engine::packet::MetaGroup;
+    use crate::engine::packet::InnerMeta;
     use crate::engine::predicate::Ipv4AddrMatch;
     use crate::engine::predicate::Predicate;
     use crate::engine::tcp::TcpMeta;
@@ -894,12 +914,17 @@ fn rule_matching() {
     // There is no DataPredicate usage in this test, so this pkt/rdr
     // can be bogus.
     let pkt = Packet::copy(&[0xA]);
-    let mut rdr = PacketReader::new(&pkt, ());
+    let mut rdr = pkt.get_rdr();
 
     let ip = IpMeta::from(Ipv4Meta {
         src: src_ip,
         dst: dst_ip,
         proto: Protocol::TCP,
+        ttl: 64,
+        ident: 1,
+        hdr_len: 20,
+        total_len: 40,
+        csum: [0; 2],
     });
     let ulp = UlpMeta::from(TcpMeta {
         src: src_port,
@@ -907,11 +932,15 @@ fn rule_matching() {
         flags: 0,
         seq: 0,
         ack: 0,
+        options_bytes: None,
+        options_len: 0,
+        window_size: 64240,
+        ..Default::default()
     });
 
     let meta = PacketMeta {
         outer: Default::default(),
-        inner: MetaGroup { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
+        inner: InnerMeta { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
     };
 
     r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
@@ -928,6 +957,11 @@ fn rule_matching() {
         src: new_src_ip,
         dst: dst_ip,
         proto: Protocol::TCP,
+        ttl: 64,
+        ident: 1,
+        hdr_len: 20,
+        total_len: 40,
+        csum: [0; 2],
     });
     let ulp = UlpMeta::from(TcpMeta {
         src: src_port,
@@ -935,11 +969,15 @@ fn rule_matching() {
         flags: 0,
         seq: 0,
         ack: 0,
+        options_bytes: None,
+        options_len: 0,
+        window_size: 64240,
+        ..Default::default()
     });
 
     let meta = PacketMeta {
         outer: Default::default(),
-        inner: MetaGroup { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
+        inner: InnerMeta { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
     };
 
     assert!(!r1.is_match(&meta, &ameta, &mut rdr));

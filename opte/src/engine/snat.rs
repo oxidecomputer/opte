@@ -6,12 +6,14 @@
 
 //! Types for working with IP Source NAT, both IPv4 and IPv6.
 
-use super::ether::EtherMeta;
+use super::ether::EtherMod;
+use super::headers::HeaderAction;
+use super::headers::IpMod;
 use super::headers::UlpGenericModify;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
-use super::ip4::Ipv4Meta;
-use super::ip6::Ipv6Meta;
+use super::ip4::Ipv4Mod;
+use super::ip6::Ipv6Mod;
 use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
 use super::packet::InnerFlowId;
@@ -36,6 +38,7 @@ use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KMutexType;
 use core::fmt;
 use core::fmt::Display;
+use core::marker::PhantomData;
 use core::ops::RangeInclusive;
 use opte_api::Direction;
 use opte_api::IpAddr;
@@ -381,9 +384,14 @@ impl ActionDesc for SNatDesc<Ipv4Addr> {
         match dir {
             // Outbound traffic needs its source IP and source port
             Direction::Out => {
+                let ip = IpMod::from(Ipv4Mod {
+                    src: Some(self.nat.ip),
+                    ..Default::default()
+                });
+
                 let mut ht = HdrTransform {
                     name: SNAT_NAME.to_string(),
-                    inner_ip: Ipv4Meta::modify(Some(self.nat.ip), None, None),
+                    inner_ip: HeaderAction::Modify(ip, PhantomData),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                         generic: UlpGenericModify {
                             src_port: Some(self.nat.port),
@@ -398,9 +406,12 @@ impl ActionDesc for SNatDesc<Ipv4Addr> {
                 // from virtual gateway addr to the real gateway addr
                 // on the same subnet as the external IP.
                 if self.phys_gw_mac.is_some() {
-                    ht.inner_ether = EtherMeta::modify(
-                        None,
-                        Some(self.phys_gw_mac.unwrap()),
+                    ht.inner_ether = HeaderAction::Modify(
+                        EtherMod {
+                            dst: Some(self.phys_gw_mac.unwrap()),
+                            ..Default::default()
+                        },
+                        PhantomData,
                     );
                 }
 
@@ -410,18 +421,24 @@ impl ActionDesc for SNatDesc<Ipv4Addr> {
             // Inbound traffic needs its destination IP and
             // destination port mapped back to the private values that
             // the guest expects to see.
-            Direction::In => HdrTransform {
-                name: SNAT_NAME.to_string(),
-                inner_ip: Ipv4Meta::modify(None, Some(self.priv_ip), None),
-                inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
-                    generic: UlpGenericModify {
-                        dst_port: Some(self.priv_port),
-                        ..Default::default()
-                    },
+            Direction::In => {
+                let ip = IpMod::from(Ipv4Mod {
+                    dst: Some(self.priv_ip),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
+                });
+                HdrTransform {
+                    name: SNAT_NAME.to_string(),
+                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
+                        generic: UlpGenericModify {
+                            dst_port: Some(self.priv_port),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }
+            }
         }
     }
 
@@ -435,9 +452,13 @@ impl ActionDesc for SNatDesc<Ipv6Addr> {
         match dir {
             // Outbound traffic needs its source IP and source port
             Direction::Out => {
+                let ip = IpMod::from(Ipv6Mod {
+                    src: Some(self.nat.ip),
+                    ..Default::default()
+                });
                 let mut ht = HdrTransform {
                     name: SNAT_NAME.to_string(),
-                    inner_ip: Ipv6Meta::modify(Some(self.nat.ip), None, None),
+                    inner_ip: HeaderAction::Modify(ip, PhantomData),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                         generic: UlpGenericModify {
                             src_port: Some(self.nat.port),
@@ -452,9 +473,12 @@ impl ActionDesc for SNatDesc<Ipv6Addr> {
                 // from virtual gateway addr to the real gateway addr
                 // on the same subnet as the external IP.
                 if self.phys_gw_mac.is_some() {
-                    ht.inner_ether = EtherMeta::modify(
-                        None,
-                        Some(self.phys_gw_mac.unwrap()),
+                    ht.inner_ether = HeaderAction::Modify(
+                        EtherMod {
+                            dst: Some(self.phys_gw_mac.unwrap()),
+                            ..Default::default()
+                        },
+                        PhantomData,
                     );
                 }
 
@@ -464,18 +488,24 @@ impl ActionDesc for SNatDesc<Ipv6Addr> {
             // Inbound traffic needs its destination IP and
             // destination port mapped back to the private values that
             // the guest expects to see.
-            Direction::In => HdrTransform {
-                name: SNAT_NAME.to_string(),
-                inner_ip: Ipv6Meta::modify(None, Some(self.priv_ip), None),
-                inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
-                    generic: UlpGenericModify {
-                        dst_port: Some(self.priv_port),
-                        ..Default::default()
-                    },
+            Direction::In => {
+                let ip = IpMod::from(Ipv6Mod {
+                    dst: Some(self.priv_ip),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
+                });
+                HdrTransform {
+                    name: SNAT_NAME.to_string(),
+                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
+                        generic: UlpGenericModify {
+                            dst_port: Some(self.priv_port),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }
+            }
         }
     }
 
@@ -507,9 +537,13 @@ impl ActionDesc for SNatIcmpEchoDesc {
         match dir {
             // Outbound traffic needs its source IP and source port
             Direction::Out => {
+                let ip = IpMod::from(Ipv4Mod {
+                    src: Some(self.nat.ip),
+                    ..Default::default()
+                });
                 let mut ht = HdrTransform {
                     name: SNAT_NAME.to_string(),
-                    inner_ip: Ipv4Meta::modify(Some(self.nat.ip), None, None),
+                    inner_ip: HeaderAction::Modify(ip, PhantomData),
                     ..Default::default()
                 };
 
@@ -517,9 +551,12 @@ impl ActionDesc for SNatIcmpEchoDesc {
                 // from virtual gateway addr to the real gateway addr
                 // on the same subnet as the external IP.
                 if self.phys_gw_mac.is_some() {
-                    ht.inner_ether = EtherMeta::modify(
-                        None,
-                        Some(self.phys_gw_mac.unwrap()),
+                    ht.inner_ether = HeaderAction::Modify(
+                        EtherMod {
+                            dst: Some(self.phys_gw_mac.unwrap()),
+                            ..Default::default()
+                        },
+                        PhantomData,
                     );
                 }
 
@@ -529,11 +566,17 @@ impl ActionDesc for SNatIcmpEchoDesc {
             // Inbound traffic needs its destination IP and
             // destination port mapped back to the private values that
             // the guest expects to see.
-            Direction::In => HdrTransform {
-                name: SNAT_NAME.to_string(),
-                inner_ip: Ipv4Meta::modify(None, Some(self.priv_ip), None),
-                ..Default::default()
-            },
+            Direction::In => {
+                let ip = IpMod::from(Ipv4Mod {
+                    dst: Some(self.priv_ip),
+                    ..Default::default()
+                });
+                HdrTransform {
+                    name: SNAT_NAME.to_string(),
+                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    ..Default::default()
+                }
+            }
         }
     }
 
@@ -642,15 +685,16 @@ mod test {
 
     #[test]
     fn snat4_desc_lifecycle() {
-        use crate::engine::checksum::HeaderChecksum;
         use crate::engine::ether::EtherHdr;
+        use crate::engine::ether::EtherMeta;
         use crate::engine::ether::EtherType;
         use crate::engine::headers::IpMeta;
         use crate::engine::headers::UlpMeta;
         use crate::engine::ip4::Ipv4Hdr;
+        use crate::engine::ip4::Ipv4Meta;
         use crate::engine::ip4::Protocol;
-        use crate::engine::ip4::UlpCsumOpt;
-        use crate::engine::tcp::TcpHdr;
+        use crate::engine::tcp::TcpMeta;
+        use crate::engine::GenericUlp;
         use opte_api::Ipv4Addr;
         use opte_api::MacAddr;
 
@@ -673,19 +717,29 @@ mod test {
         // Build the packet
         // ================================================================
         let body = vec![];
-        let mut tcp = TcpHdr::new(priv_port, outside_port);
-        let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, priv_ip, outside_ip);
-        ip4.compute_hdr_csum();
-        let tcp_csum =
-            ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-        tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-        let eth = EtherHdr::new(EtherType::Ipv4, priv_mac, dest_mac);
-        let mut bytes = vec![];
-        bytes.extend_from_slice(&eth.as_bytes());
-        bytes.extend_from_slice(&ip4.as_bytes());
-        bytes.extend_from_slice(&tcp.as_bytes());
-        bytes.extend_from_slice(&body);
-        let mut pkt = Packet::copy(&bytes).parse().unwrap();
+        let tcp =
+            TcpMeta { src: priv_port, dst: outside_port, ..Default::default() };
+        let ip4 = Ipv4Meta {
+            src: priv_ip,
+            dst: outside_ip,
+            proto: Protocol::TCP,
+            total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len()) as u16,
+            ..Default::default()
+        };
+        let eth = EtherMeta {
+            ether_type: EtherType::Ipv4,
+            src: priv_mac,
+            dst: dest_mac,
+        };
+        let pkt_len = EtherHdr::SIZE + usize::from(ip4.total_len);
+        let mut pkt = Packet::alloc_and_expand(pkt_len);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+        ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
+        tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
+        wtr.write(&body).unwrap();
+        let mut pkt = pkt.parse(Direction::Out, GenericUlp {}).unwrap();
+        pkt.compute_checksums();
 
         // ================================================================
         // Verify descriptor generation.
@@ -704,7 +758,7 @@ mod test {
         out_ht.run(pkt.meta_mut()).unwrap();
 
         let pmo = pkt.meta();
-        let ether_meta = pmo.inner.ether.as_ref().unwrap();
+        let ether_meta = pmo.inner.ether;
         assert_eq!(ether_meta.src, priv_mac);
         assert_eq!(ether_meta.dst, dest_mac);
 
@@ -730,25 +784,35 @@ mod test {
         // Verify inbound header transformation.
         // ================================================================
         let body = vec![];
-        let mut tcp = TcpHdr::new(outside_port, priv_port);
-        let mut ip4 = Ipv4Hdr::new_tcp(&mut tcp, &body, outside_ip, priv_ip);
-        ip4.compute_hdr_csum();
-        let tcp_csum =
-            ip4.compute_ulp_csum(UlpCsumOpt::Full, &tcp.as_bytes(), &body);
-        tcp.set_csum(HeaderChecksum::from(tcp_csum).bytes());
-        let eth = EtherHdr::new(EtherType::Ipv4, dest_mac, priv_mac);
-        let mut bytes = vec![];
-        bytes.extend_from_slice(&eth.as_bytes());
-        bytes.extend_from_slice(&ip4.as_bytes());
-        bytes.extend_from_slice(&tcp.as_bytes());
-        bytes.extend_from_slice(&body);
-        let mut pkt = Packet::copy(&bytes).parse().unwrap();
+        let tcp =
+            TcpMeta { src: outside_port, dst: priv_port, ..Default::default() };
+        let ip4 = Ipv4Meta {
+            src: outside_ip,
+            dst: priv_ip,
+            proto: Protocol::TCP,
+            total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len()) as u16,
+            ..Default::default()
+        };
+        let eth = EtherMeta {
+            ether_type: EtherType::Ipv4,
+            src: dest_mac,
+            dst: priv_mac,
+        };
+        let pkt_len = EtherHdr::SIZE + usize::from(ip4.total_len);
+        let mut pkt = Packet::alloc_and_expand(pkt_len);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+        ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
+        tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
+        wtr.write(&body).unwrap();
+        let mut pkt = pkt.parse(Direction::In, GenericUlp {}).unwrap();
+        pkt.compute_checksums();
 
         let in_ht = desc.gen_ht(Direction::In);
         in_ht.run(pkt.meta_mut()).unwrap();
 
         let pmi = pkt.meta();
-        let ether_meta = pmi.inner.ether.as_ref().unwrap();
+        let ether_meta = pmi.inner.ether;
         assert_eq!(ether_meta.src, dest_mac);
         assert_eq!(ether_meta.dst, priv_mac);
 

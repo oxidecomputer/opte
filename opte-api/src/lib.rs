@@ -56,12 +56,12 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 18;
+pub const API_VERSION: u64 = 19;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Direction {
-    In,
-    Out,
+    In = 1,
+    Out = 2,
 }
 
 impl core::str::FromStr for Direction {
@@ -84,24 +84,6 @@ impl Display for Direction {
         };
 
         write!(f, "{}", dirstr)
-    }
-}
-
-impl From<Direction> for illumos_sys_hdrs::uintptr_t {
-    fn from(dir: Direction) -> Self {
-        match dir {
-            Direction::In => 0,
-            Direction::Out => 1,
-        }
-    }
-}
-
-impl Direction {
-    pub fn cstr_raw(&self) -> *const illumos_sys_hdrs::c_char {
-        match self {
-            Self::In => b"in\0".as_ptr() as *const illumos_sys_hdrs::c_char,
-            Self::Out => b"out\0".as_ptr() as *const illumos_sys_hdrs::c_char,
-        }
     }
 }
 
