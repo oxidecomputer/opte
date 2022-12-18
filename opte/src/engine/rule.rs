@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! Rules and actions.
+
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
 use super::flow_table::StateSummary;

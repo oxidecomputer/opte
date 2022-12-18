@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! Basic TCP state machine.
+
 use super::packet::InnerFlowId;
 use super::tcp::TcpFlags;
 use super::tcp::TcpMeta;

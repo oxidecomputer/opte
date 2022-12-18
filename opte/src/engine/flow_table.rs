@@ -4,6 +4,11 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! The flow table implementation.
+//!
+//! This provides the underlying implementation for the various flow
+//! tables: UFT, LFT, and the TCP Flow Table.
+
 use super::packet::InnerFlowId;
 use crate::ddi::time::Moment;
 use crate::ddi::time::MILLIS;

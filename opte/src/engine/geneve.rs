@@ -4,6 +4,10 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! Geneve headers and their related actions.
+//!
+//! RFC 8926 Geneve: Generic Network Virtualization Encapsulation
+
 use super::ether::ETHER_TYPE_ETHER;
 use super::headers::ModifyAction;
 use super::headers::PushAction;

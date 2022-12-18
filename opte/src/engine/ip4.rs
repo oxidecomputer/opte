@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! IPv4 headers.
+
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;

@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! IPv6 headers.
+
 use super::checksum::Checksum;
 use super::headers::ModifyAction;
 use super::headers::PushAction;

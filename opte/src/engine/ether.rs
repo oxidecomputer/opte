@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! Ethernet frames.
+
 use super::headers::ModifyAction;
 use super::headers::PushAction;
 use super::headers::RawHeader;

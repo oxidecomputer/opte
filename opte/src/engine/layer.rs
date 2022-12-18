@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! A layer in a port.
+
 use super::flow_table::Dump;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;

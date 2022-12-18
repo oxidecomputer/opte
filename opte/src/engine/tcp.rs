@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! TCP headers.
+
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
 use super::headers::HeaderActionModify;

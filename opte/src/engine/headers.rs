@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! Header metadata combinations for IP, ULP, and Encap.
+
 use super::checksum::Checksum;
 use super::geneve::GeneveHdr;
 use super::geneve::GeneveMeta;

@@ -88,6 +88,14 @@ pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     dst_port: 0,
 };
 
+/// The flow identifier.
+///
+/// In this case the flow identifier is the 5-tuple of the inner IP
+/// packet.
+///
+/// NOTE: This should not be defined in `opte`. Rather, the engine
+/// should be generic in regards to the flow identifier, and it should
+/// be up to the `NetowrkImpl` to define it.
 #[derive(
     Clone,
     Copy,
@@ -158,6 +166,9 @@ impl From<&PacketMeta> for InnerFlowId {
     }
 }
 
+/// The outer header metadata.
+///
+/// All outer headers are always optional.
 #[derive(Debug, Default)]
 pub struct OuterMeta {
     pub ether: Option<EtherMeta>,
@@ -185,6 +196,9 @@ impl OuterMeta {
     }
 }
 
+/// The inner header metadata.
+///
+/// There is always an Ethernet frame.
 #[derive(Debug, Default)]
 pub struct InnerMeta {
     pub ether: EtherMeta,
@@ -230,6 +244,10 @@ impl InnerMeta {
     }
 }
 
+/// The various metadata of a packet.
+///
+/// The packet metadata is a logical representation of the header data
+/// that is relevant to processing.
 #[derive(Debug, Default)]
 pub struct PacketMeta {
     pub outer: OuterMeta,
@@ -366,6 +384,7 @@ pub struct Initialized {
     len: usize,
 }
 
+/// The offset and length of a header.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct HdrOffset {
     /// The header's offset from start of packet, in bytes.
@@ -394,6 +413,9 @@ impl HdrOffset {
     }
 }
 
+/// Bytes offsets for the outer headers.
+///
+/// All outer headers are optional.
 #[derive(Clone, Debug, Default)]
 pub struct OuterHeaderOffsets {
     pub ether: Option<HdrOffset>,
@@ -401,6 +423,9 @@ pub struct OuterHeaderOffsets {
     pub encap: Option<HdrOffset>,
 }
 
+/// Byte offsets for the inner headers.
+///
+/// The inner headers must consist of at least an Ethernet header.
 #[derive(Clone, Debug, Default)]
 pub struct InnerHeaderOffsets {
     pub ether: HdrOffset,
@@ -408,6 +433,7 @@ pub struct InnerHeaderOffsets {
     pub ulp: Option<HdrOffset>,
 }
 
+/// Byte offsets for all headers.
 #[derive(Clone, Debug, Default)]
 pub struct HeaderOffsets {
     pub outer: OuterHeaderOffsets,
@@ -440,6 +466,7 @@ pub struct PacketInfo {
     pub body_csum: Option<Checksum>,
 }
 
+/// Body offset and length information.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BodyInfo {
     pub pkt_offset: usize,
@@ -448,6 +475,11 @@ pub struct BodyInfo {
     pub len: usize,
 }
 
+/// The type state of a parsed packet.
+///
+/// The parsed type state represents that a packet has been
+/// successfully parsed and contains all pertinent information derived
+/// from parsing.
 #[derive(Debug)]
 pub struct Parsed {
     len: usize,

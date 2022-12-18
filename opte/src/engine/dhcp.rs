@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! DHCP headers, data, and actions.
+
 use super::checksum::HeaderChecksum;
 use super::ether::EtherHdr;
 use super::ether::EtherMeta;

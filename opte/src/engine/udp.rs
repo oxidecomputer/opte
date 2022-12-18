@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! UDP headers.
+
 use core::mem;
 use serde::Deserialize;
 use serde::Serialize;

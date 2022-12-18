@@ -4,7 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
-/// A virtual switch port.
+//! A virtual switch port.
+
 use self::meta::ActionMeta;
 use super::flow_table::Dump;
 use super::flow_table::FlowTable;
@@ -150,6 +151,15 @@ pub enum DropReason {
     TcpErr,
 }
 
+/// Used to build a [`Port`].
+///
+/// The only way to create a [`Port`] is by way of the port builder.
+/// The initial configuration of layers, rules, and actions is done
+/// via the port builder. Once the configuration is complete the
+/// [`Port`] is obtained by calling [`PortBuilder::create()`].
+///
+/// Only the port builder may add or remove layers. Once you have a
+/// [`Port`] the list of layers is immutable.
 pub struct PortBuilder {
     ectx: Arc<ExecCtx>,
     name: String,
@@ -450,6 +460,7 @@ pub enum DumpLayerError {
     LayerNotFound,
 }
 
+/// An entry in the Unified Flow Table.
 #[derive(Clone, Debug)]
 pub struct UftEntry<Id> {
     /// The flow ID for the other side.
@@ -587,7 +598,61 @@ struct PortData {
     tcp_flows: FlowTable<TcpFlowEntryState>,
 }
 
-pub struct Port<N: crate::engine::NetworkImpl> {
+/// A virtual switch port.
+///
+/// The method by which links are created and traffic is processed. It
+/// represents a port on a virtual switch. A port is created and
+/// programmed with the intention of handling all traffic for a single
+/// client on a single network. It has a name by which it is
+/// identified and a single MAC address.
+///
+/// ### Network Implementation
+///
+/// The port itself has no network definition, with the exception of
+/// its MAC address. It is the role of the `NetworkImpl` to define the
+/// network.
+///
+/// ### Unified Flow Table (UFT)
+///
+/// The UFT is the cornerstone of OPTE. It is the primary method by
+/// which flows are defined and tracked, and presents the most
+/// efficient datapath possible for a given packet. The goal of OPTE
+/// is to treat packets as stateful flows, not individual packets; and
+/// the UFT is how it achieves that goal.
+///
+/// As new packets come in, the layers, rules, and actions programmed
+/// by the network implementation combine to create entries in the
+/// UFT. These entries map a flow ID (currently hard-coded to
+/// [`InnerFlowId`]) to a set of header transformations. The idea is
+/// to pay the cost of rule processing once, and then run the cached
+/// header transformations against all future packets of the same
+/// flow -- based on the flow ID and traffic direction.
+///
+/// ### TCP Flow Table
+///
+/// While the port does not provide a network implementation, it does
+/// provide a built-in TCP flow table. This table is responsible for
+/// tracking TCP flows as they transition through their states and
+/// remove UFT entries as they are closed or reset.
+///
+/// This table is not meant to track TCP state as rigorously as an
+/// operating system's TCP stack does. Ultimately, it is up to the
+/// client of this port to determine what is and isn't a valid
+/// segment. Rather, it's purpose is simply to keep the UFT as
+/// efficient as possible by reclaiming slots immediately.
+///
+/// ### Epoch
+///
+/// Each port has an epoch, representing the number of times a rule
+/// has been added, removed, or modified on any of its layers. This
+/// number is how the port determines when a UFT/LFT entry is based on
+/// an outdated rule set and should be invalidated and recomputed.
+///
+/// ### Execution Context
+///
+/// The `ExecCtx` provides implementations of specific features that
+/// are valid for the given context the port is running in.
+pub struct Port<N: NetworkImpl> {
     epoch: AtomicU64,
     ectx: Arc<ExecCtx>,
     name: String,
@@ -637,6 +702,7 @@ macro_rules! check_state {
 }
 
 impl<N: NetworkImpl> Port<N> {
+    /// Return the [`NetworkImpl`] associated with this port.
     pub fn network(&self) -> &dyn NetworkImpl<Parser = N::Parser> {
         &self.net
     }
@@ -2088,10 +2154,12 @@ impl<N: NetworkImpl> Port<N> {
 //
 // #[cfg(test)]
 impl<N: NetworkImpl> Port<N> {
+    /// Return the current epoch.
     pub fn epoch(&self) -> u64 {
         self.epoch.load(SeqCst)
     }
 
+    /// Return the list of layer names.
     pub fn layers(&self) -> Vec<String> {
         self.data.lock().layers.iter().map(|l| l.name().to_string()).collect()
     }
@@ -2118,6 +2186,8 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
+    /// Return the number of rules registered for the given layer in
+    /// the given direction.
     pub fn num_rules(&self, layer: &str, dir: Direction) -> u32 {
         let data = self.data.lock();
         match (layer, dir) {
@@ -2142,6 +2212,7 @@ pub enum Pos {
     After(&'static str),
 }
 
+/// An entry in the TCP flow table.
 #[derive(Clone, Debug)]
 pub struct TcpFlowEntryState {
     // This must be the UFID of inbound traffic _as it arrives_ from

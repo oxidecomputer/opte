@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+//! 1:1 NAT.
+
 use super::ether::EtherMod;
 use super::headers::HeaderAction;
 use super::headers::IpMod;

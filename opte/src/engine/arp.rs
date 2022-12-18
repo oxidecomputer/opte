@@ -4,13 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
-/// Address Resolution Protocol
-///
-/// Relevant Docs
-///
-/// * RFD 9 -- NETWORKING CONSIDERATIONS
-/// ** §1.13 ARP
-/// * RFC 826 -- An Ethernet Address Resolution Protocol
+//! ARP headers and data.
+
 use super::ether::EtherHdr;
 use super::ether::EtherMeta;
 use super::ether::EtherType;
