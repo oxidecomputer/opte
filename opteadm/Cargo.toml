@@ -5,6 +5,7 @@ authors = ["Ryan Zezeski <ryan@oxide.computer>"]
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0"
 cfg-if = "0.1"
 libc = "0.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
