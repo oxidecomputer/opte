@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Copyright 2022 Oxide Computer Company
-#![feature(extern_types)]
+#![cfg_attr(feature = "kernel", feature(extern_types))]
 #![allow(non_camel_case_types)]
 #![no_std]
 
