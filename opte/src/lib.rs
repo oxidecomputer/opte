@@ -12,8 +12,6 @@
 // cargo test --features=usdt
 // ```
 #![cfg_attr(target_os = "macos", feature(asm_sym))]
-#![feature(extern_types)]
-#![feature(vec_into_raw_parts)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![deny(unreachable_patterns)]
