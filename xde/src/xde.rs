@@ -1205,7 +1205,6 @@ unsafe extern "C" fn xde_mc_setpromisc(
     _arg: *mut c_void,
     _val: boolean_t,
 ) -> c_int {
-    // TODO ... something?
     0
 }
 
@@ -1833,7 +1832,6 @@ unsafe extern "C" fn xde_mc_getcapab(
     _cap: mac::mac_capab_t,
     _capb_data: *mut c_void,
 ) -> boolean_t {
-    //TODO
     boolean_t::B_FALSE
 }
 
@@ -1850,7 +1848,6 @@ unsafe extern "C" fn xde_mc_setprop(
     _prop_val_size: c_uint,
     _prop_val: *const c_void,
 ) -> c_int {
-    //TODO
     ENOTSUP
 }
 
@@ -1862,7 +1859,6 @@ unsafe extern "C" fn xde_mc_getprop(
     _prop_val_size: c_uint,
     _prop_val: *mut c_void,
 ) -> c_int {
-    //TODO
     ENOTSUP
 }
 
@@ -1873,7 +1869,6 @@ unsafe extern "C" fn xde_mc_propinfo(
     _prop_num: mac::mac_prop_id_t,
     _prh: *mut mac::mac_prop_info_handle,
 ) {
-    //TODO
 }
 
 #[no_mangle]
