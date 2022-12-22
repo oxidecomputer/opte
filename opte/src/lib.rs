@@ -5,17 +5,14 @@
 // Copyright 2022 Oxide Computer Company
 
 #![no_std]
-// This allows one to run the tests on macOS with the usdt probes
-// enabled.
-//
-// ```
-// cargo test --features=usdt
-// ```
-#![cfg_attr(target_os = "macos", feature(asm_sym))]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![deny(unreachable_patterns)]
 #![deny(unused_must_use)]
+
+// Enable features needed for USDT, if needed.
+#![cfg_attr(all(usdt, not(usdt_stable_asm)), feature(asm))]
+#![cfg_attr(all(usdt, target_os = "macos", not(usdt_stable_asm_sym)), feature(asm_sym))]
 
 use core::fmt;
 use core::fmt::Display;

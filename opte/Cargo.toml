@@ -17,6 +17,7 @@ std = ["opte-api/std"]
 # Used for declaring methods which are useful for integration testing.
 #
 test-help = []
+usdt = ["std", "dep:usdt"]
 
 [dependencies]
 cfg-if = "0.1"
@@ -26,17 +27,8 @@ illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
 kstat-macro = { path = "../kstat-macro" }
 opte-api = { path = "../opte-api", default-features = false }
 postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
-#
-# XXX usdt is really a dev dependency, but when I move it there weird
-# stuff happens (TM). Maybe to do with feature flags?
-#
-# At the moment the only purpose of the usdt feature is to enable the
-# USDT probes when running the tests.
-#
-# cargo test --features=usdt
-#
-usdt = { version = "0.3.2", optional = true }
 zerocopy = "0.6.1"
+usdt = { version = "0.3.5", optional = true }
 
 [dependencies.serde]
 version = "1.0"
@@ -51,5 +43,10 @@ default-features = false
 #
 features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-ipv6", "proto-dhcpv4", "socket", "socket-raw"]
 
+[build-dependencies]
+version_check = "0.9.4"
+
 [dev-dependencies]
+# Enable usdt probes for testing.
+opte = { path = ".", features = ["usdt"] }
 itertools = "0.10"
