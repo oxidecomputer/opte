@@ -167,7 +167,7 @@ fn setup_ipv4(
     ip_cfg: &Ipv4Cfg,
     vpc_mappings: Arc<VpcMappings>,
 ) -> Result<(), OpteError> {
-    arp::setup(layer, cfg, ip_cfg)?;
+    arp::setup(layer, cfg)?;
     dhcp::setup(layer, cfg, ip_cfg)?;
     icmp::setup(layer, cfg, ip_cfg)?;
 

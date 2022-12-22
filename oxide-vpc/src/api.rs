@@ -198,10 +198,6 @@ pub struct VpcCfg {
     /// Resolvers will use the provided list when resolving relative domain
     /// names.
     pub domain_list: Vec<DomainName>,
-
-    // XXX-EXT-IP the following two fields are for the external IP hack.
-    pub proxy_arp_enable: bool,
-    pub phys_gw_mac: Option<MacAddr>,
 }
 
 impl VpcCfg {

@@ -40,14 +40,11 @@ use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::ip4::Ipv4Addr;
 
 #[derive(Clone, Copy, Debug)]
-pub struct VpcParser {
-    // XXX-EXT-IP hack
-    pub proxy_arp_enable: bool,
-}
+pub struct VpcParser {}
 
 impl VpcParser {
     pub fn new() -> Self {
-        Self { proxy_arp_enable: false }
+        Self {}
     }
 }
 
@@ -96,62 +93,6 @@ impl VpcNetwork {
 
         Ok(HdlPktAction::Deny)
     }
-
-    fn handle_arp_in(
-        &self,
-        pkt: &mut Packet<Parsed>,
-    ) -> Result<HdlPktAction, HdlPktError> {
-        let arp_start = pkt.hdr_offsets().inner.ether.hdr_len;
-        let mut rdr = pkt.get_rdr_mut();
-        rdr.seek(arp_start).unwrap();
-        let arp = ArpEthIpv4::parse(&mut rdr)
-            .map_err(|_| HdlPktError("inbound ARP"))?;
-        let proxy_arp = self.cfg.proxy_arp_enable;
-        let guest_mac = self.cfg.guest_mac;
-        let ip_cfg = self.cfg.ipv4_cfg().unwrap();
-
-        // ================================================================
-        // Proxy ARP for any incoming requests for guest's external IP.
-        //
-        // XXX-EXT-IP This is a hack to get guest access working until
-        // we have boundary services integrated.
-        // ================================================================
-        if let Some(external_ip) = ip_cfg.external_ips {
-            if proxy_arp && is_arp_req_for_tpa(external_ip, &arp) {
-                let hp = arp::gen_arp_reply(
-                    guest_mac,
-                    external_ip,
-                    arp.sha,
-                    arp.spa,
-                );
-                return Ok(HdlPktAction::Hairpin(hp));
-            }
-        }
-
-        // ================================================================
-        // Proxy ARP for any incoming requests for guest's SNAT IP.
-        //
-        // This is not great because once you have more than one guest
-        // it means there is an ARP battle for the same SNAT IP. One
-        // more rason why this hack needs to go away.
-        //
-        // XXX-EXT-IP This is a hack to get guest access working until
-        // we have boundary services integrated.
-        // ================================================================
-        if let Some(snat) = ip_cfg.snat.as_ref() {
-            if proxy_arp && is_arp_req_for_tpa(snat.external_ip, &arp) {
-                let hp = arp::gen_arp_reply(
-                    guest_mac,
-                    snat.external_ip,
-                    arp.sha,
-                    arp.spa,
-                );
-                return Ok(HdlPktAction::Hairpin(hp));
-            }
-        }
-
-        Ok(HdlPktAction::Deny)
-    }
 }
 
 impl NetworkImpl for VpcNetwork {
@@ -167,15 +108,12 @@ impl NetworkImpl for VpcNetwork {
         match (dir, pkt.meta().inner.ether.ether_type) {
             (Direction::Out, EtherType::Arp) => self.handle_arp_out(pkt),
 
-            // XXX-EXT-IP This is only need for the hack.
-            (Direction::In, EtherType::Arp) => self.handle_arp_in(pkt),
-
             _ => Ok(HdlPktAction::Deny),
         }
     }
 
     fn parser(&self) -> Self::Parser {
-        VpcParser { proxy_arp_enable: self.cfg.proxy_arp_enable }
+        VpcParser {}
     }
 }
 
@@ -270,33 +208,29 @@ impl NetworkParser for VpcParser {
         let mut meta = PacketMeta::default();
         let mut offsets = HeaderOffsets::default();
 
-        // XXX-EXT-IP If proxy ARP is enabled, then we are not on the
-        // Oxide Rack Network and have no encap.
-        if !self.proxy_arp_enable {
-            let (outer_ether_hi, _hdr) = Packet::parse_ether(rdr)?;
-            meta.outer.ether = Some(outer_ether_hi.meta);
-            offsets.outer.ether = Some(outer_ether_hi.offset);
-            let outer_et = outer_ether_hi.meta.ether_type;
+        let (outer_ether_hi, _hdr) = Packet::parse_ether(rdr)?;
+        meta.outer.ether = Some(outer_ether_hi.meta);
+        offsets.outer.ether = Some(outer_ether_hi.offset);
+        let outer_et = outer_ether_hi.meta.ether_type;
 
-            // VPC traffic is delivered exclusively on an IPv6 +
-            // Geneve underlay.
-            let outer_ip_hi = match outer_et {
-                EtherType::Ipv6 => Packet::parse_ip6(rdr)?.0,
+        // VPC traffic is delivered exclusively on an IPv6 +
+        // Geneve underlay.
+        let outer_ip_hi = match outer_et {
+            EtherType::Ipv6 => Packet::parse_ip6(rdr)?.0,
 
-                _ => return Err(ParseError::UnexpectedEtherType(outer_et)),
-            };
+            _ => return Err(ParseError::UnexpectedEtherType(outer_et)),
+        };
 
-            meta.outer.ip = Some(outer_ip_hi.meta);
-            offsets.outer.ip = Some(outer_ip_hi.offset);
+        meta.outer.ip = Some(outer_ip_hi.meta);
+        offsets.outer.ip = Some(outer_ip_hi.offset);
 
-            let (geneve_hi, _geneve_hdr) = match outer_ip_hi.meta.proto() {
-                Protocol::UDP => Packet::parse_geneve(rdr)?,
-                proto => return Err(ParseError::UnexpectedProtocol(proto)),
-            };
+        let (geneve_hi, _geneve_hdr) = match outer_ip_hi.meta.proto() {
+            Protocol::UDP => Packet::parse_geneve(rdr)?,
+            proto => return Err(ParseError::UnexpectedProtocol(proto)),
+        };
 
-            meta.outer.encap = Some(EncapMeta::from(geneve_hi.meta));
-            offsets.outer.encap = Some(geneve_hi.offset);
-        }
+        meta.outer.encap = Some(EncapMeta::from(geneve_hi.meta));
+        offsets.outer.encap = Some(geneve_hi.offset);
 
         let (inner_ether_hi, _) = Packet::parse_ether(rdr)?;
         meta.inner.ether = inner_ether_hi.meta;
@@ -312,21 +246,6 @@ impl NetworkParser for VpcParser {
             EtherType::Ipv6 => {
                 let (ip_hi, hdr) = Packet::parse_ip6(rdr)?;
                 (ip_hi, hdr.pseudo_csum())
-            }
-
-            EtherType::Arp => {
-                // XXX-EXT-IP Need to allow inbound ARP for proxy ARP
-                // to work.
-                if self.proxy_arp_enable {
-                    return Ok(PacketInfo {
-                        meta,
-                        offsets,
-                        body_csum: None,
-                        extra_hdr_space: None,
-                    });
-                } else {
-                    return Err(ParseError::UnexpectedEtherType(inner_et));
-                }
             }
 
             _ => return Err(ParseError::UnexpectedEtherType(inner_et)),

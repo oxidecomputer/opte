@@ -43,7 +43,6 @@ use core::time::Duration;
 use illumos_sys_hdrs::*;
 use opte::api::CmdOk;
 use opte::api::Direction;
-use opte::api::MacAddr;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -61,13 +60,11 @@ use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::EncapMeta;
 use opte::engine::headers::IpAddr;
-use opte::engine::headers::IpMeta;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketError;
-use opte::engine::packet::PacketRead;
 use opte::engine::packet::Parsed;
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::Port;
@@ -119,10 +116,6 @@ static mut xde_devs: KRwLock<Vec<Box<XdeDev>>> = KRwLock::new(Vec::new());
 
 /// DDI dev info pointer to the attached xde device.
 static mut xde_dip: *mut dev_info = 0 as *mut dev_info;
-
-// XXX-EXT-IP
-#[no_mangle]
-pub static mut xde_ext_ip_hack: i32 = 0;
 
 // This block is purely for SDT probes.
 extern "C" {
@@ -601,15 +594,6 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         None => (),
     }
 
-    // XXX-EXT-IP Copy the configuration, modifying the external IP hack
-    // fields depending on the value of the `xde_ext_ip_hack` tunable.
-    let proxy_arp_enable = unsafe { xde_ext_ip_hack == 1 };
-    let vpc_cfg = VpcCfg {
-        proxy_arp_enable,
-        phys_gw_mac: if proxy_arp_enable { cfg.phys_gw_mac } else { None },
-        ..cfg.clone()
-    };
-
     // If this is the first guest in this VPC, then create a new
     // mapping for said VPC. Otherwise, pull the existing one.
     //
@@ -618,7 +602,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // they're mapping both IP addresses to the same host.
     let phys_net =
         PhysNet { ether: cfg.guest_mac, ip: cfg.phys_ip, vni: cfg.vni };
-    let port_v2p = match vpc_cfg.ip_cfg {
+    let port_v2p = match cfg.ip_cfg {
         IpCfg::Ipv4(ref ipv4) => {
             state.vpc_map.add(IpAddr::Ip4(ipv4.private_ip), phys_net)
         }
@@ -633,7 +617,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     let port = new_port(
         req.xde_devname.clone(),
-        &vpc_cfg,
+        &cfg,
         state.vpc_map.clone(),
         port_v2p.clone(),
         state.ectx.clone(),
@@ -654,7 +638,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         port,
         port_periodic,
         port_v2p,
-        vpc_cfg,
+        vpc_cfg: cfg.clone(),
         passthrough: req.passthrough,
         vni: cfg.vni,
         u1: underlay.u1.clone(),
@@ -882,29 +866,6 @@ unsafe extern "C" fn xde_attach(
     }
 
     assert!(xde_dip.is_null());
-
-    // XXX-EXT-IP
-    if !driver_prop_exists(dip, "ext_ip_hack") {
-        warn!("failed to find 'ext_ip_hack' property in xde.conf");
-        return DDI_FAILURE;
-    }
-
-    match get_driver_prop_bool(dip, "ext_ip_hack") {
-        Some(true) => {
-            warn!("ext_ip_hack enabled: traffic will NOT be encapsulated");
-            xde_ext_ip_hack = 1;
-        }
-
-        Some(_) => {
-            warn!("ext_ip_hack disabled: traffic will be encapsulated");
-            xde_ext_ip_hack = 0;
-        }
-
-        None => {
-            warn!("failed to read 'ext_ip_hack' from xde.conf, disabled");
-            xde_ext_ip_hack = 0;
-        }
-    };
 
     // We need to share the minor number space with the GLDv3 framework.
     // We'll use the first private minor number for our control device.
@@ -1486,53 +1447,6 @@ unsafe extern "C" fn xde_mc_tx(
     let res = port.process(Direction::Out, &mut pkt, ActionMeta::new());
     match res {
         Ok(ProcessResult::Modified) => {
-            // XXX-EXT-IP
-            //
-            // XXX Doing all these shenanigans because we don't
-            // have the overlay layer in place which would
-            // normally rewrite the dst MAC addr to that of the
-            // dest guest.
-            if xde_ext_ip_hack == 1 {
-                match pkt.meta().inner.ip {
-                    Some(IpMeta::Ip4(ip4)) => {
-                        let devs = xde_devs.read();
-                        for d in devs.iter() {
-                            if let Some(cfg) = d.vpc_cfg.ipv4_cfg() {
-                                if cfg.private_ip == ip4.dst {
-                                    pkt.write_dst_mac(d.vpc_cfg.guest_mac);
-                                    return guest_loopback(
-                                        src_dev,
-                                        pkt,
-                                        d.vpc_cfg.vni,
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    Some(IpMeta::Ip6(ip6)) => {
-                        let devs = xde_devs.read();
-                        for d in devs.iter() {
-                            if let Some(cfg) = d.vpc_cfg.ipv6_cfg() {
-                                if cfg.private_ip == ip6.dst {
-                                    pkt.write_dst_mac(d.vpc_cfg.guest_mac);
-                                    return guest_loopback(
-                                        src_dev,
-                                        pkt,
-                                        d.vpc_cfg.vni,
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    None => (),
-                }
-
-                mch.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
-                return ptr::null_mut();
-            }
-
             let meta = pkt.meta();
 
             // If the outer IPv6 destination is the same as the
@@ -1995,14 +1909,7 @@ fn new_port(
     gateway::setup(&mut pb, &cfg, vpc_map, FT_LIMIT_ONE.unwrap())?;
     router::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
     nat::setup(&mut pb, &cfg, NAT_FT_LIMIT.unwrap())?;
-
-    // XXX-EXT-IP
-    if unsafe { xde_ext_ip_hack != 1 } {
-        warn!("enabling overlay for port: {}", name);
-        overlay::setup(&pb, &cfg, v2p, FT_LIMIT_ONE.unwrap())?;
-    } else {
-        warn!("disabling overlay for port: {}", name);
-    }
+    overlay::setup(&pb, &cfg, v2p, FT_LIMIT_ONE.unwrap())?;
 
     // Set the UFT and TCP flow table limits based on the guest's IP
     // configuration.
@@ -2071,8 +1978,7 @@ unsafe extern "C" fn xde_rx(
 
     // We must first parse the packet in order to determine where it
     // is to be delivered.
-    let parser =
-        VpcParser { proxy_arp_enable: unsafe { xde_ext_ip_hack == 1 } };
+    let parser = VpcParser {};
     let mut pkt =
         match Packet::wrap_mblk_and_parse(mp_chain, Direction::In, parser) {
             Ok(pkt) => pkt,
@@ -2093,91 +1999,34 @@ unsafe extern "C" fn xde_rx(
     let meta = pkt.meta();
     let devs = xde_devs.read();
 
-    let dev = if xde_ext_ip_hack == 0 {
-        // Determine where to send packet based on Geneve VNI and
-        // destination MAC address.
-        let geneve = match meta.outer.encap {
-            Some(EncapMeta::Geneve(geneve)) => geneve,
-            None => {
-                // TODO add stat
-                let msg = "no geneve header, dropping";
-                bad_packet_probe(None, Direction::In, mp_chain, msg);
-                opte::engine::dbg(format!("{}", msg));
-                return;
-            }
-        };
-
-        let vni = geneve.vni;
-        let ether_dst = meta.inner.ether.dst;
-        let dev = match devs
-            .iter()
-            .find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
-        {
-            Some(dev) => dev,
-            None => {
-                // TODO add SDT probe
-                // TODO add stat
-                opte::engine::dbg(format!(
-                    "[encap] no device found for vni: {} mac: {}",
-                    vni, ether_dst
-                ));
-                return;
-            }
-        };
-        dev
-    } else {
-        // XXX-EXT-IP
-        let ether_dst = meta.inner.ether.dst;
-
-        if ether_dst == MacAddr::from(MacAddr::BROADCAST) {
-            let bytes = pkt.get_rdr().copy_remaining();
-
-            for dev in devs.iter() {
-                // just go straight to overlay in passthrough mode
-                if (*dev).passthrough {
-                    mac::mac_rx((*dev).mh, mrh, mp_chain);
-                }
-
-                let port = &(*dev).port;
-                let parser = port.network().parser();
-                // Unwrap: We are copying bytes from a packet that we
-                // previously parsed; we know it's good.
-                let mut pkt_copy =
-                    Packet::copy(&bytes).parse(Direction::In, parser).unwrap();
-                let res = port.process(
-                    Direction::In,
-                    &mut pkt_copy,
-                    ActionMeta::new(),
-                );
-
-                match res {
-                    Ok(ProcessResult::Modified) => {
-                        mac::mac_rx((*dev).mh, mrh, pkt_copy.unwrap_mblk());
-                    }
-                    Ok(ProcessResult::Hairpin(hppkt)) => {
-                        mch.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
-                    }
-                    Ok(ProcessResult::Bypass) => {
-                        mac::mac_rx((*dev).mh, mrh, mp_chain);
-                    }
-                    _ => {}
-                }
-            }
-
+    // Determine where to send packet based on Geneve VNI and
+    // destination MAC address.
+    let geneve = match meta.outer.encap {
+        Some(EncapMeta::Geneve(geneve)) => geneve,
+        None => {
+            // TODO add stat
+            let msg = "no geneve header, dropping";
+            bad_packet_probe(None, Direction::In, mp_chain, msg);
+            opte::engine::dbg(format!("{}", msg));
             return;
-        } else {
-            match devs.iter().find(|x| x.port.mac_addr() == ether_dst) {
-                Some(dev) => dev,
-                None => {
-                    // TODO add SDT probe
-                    // TODO add stat
-                    opte::engine::dbg(format!(
-                        "[ext_ip_hack] no device found for mac: {}",
-                        ether_dst
-                    ));
-                    return;
-                }
-            }
+        }
+    };
+
+    let vni = geneve.vni;
+    let ether_dst = meta.inner.ether.dst;
+    let dev = match devs
+        .iter()
+        .find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
+    {
+        Some(dev) => dev,
+        None => {
+            // TODO add SDT probe
+            // TODO add stat
+            opte::engine::dbg(format!(
+                "[encap] no device found for vni: {} mac: {}",
+                vni, ether_dst
+            ));
+            return;
         }
     };
 
