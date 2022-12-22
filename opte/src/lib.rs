@@ -10,9 +10,9 @@
 #![deny(unreachable_patterns)]
 #![deny(unused_must_use)]
 // Enable features needed for USDT, if needed.
-#![cfg_attr(all(usdt, not(usdt_stable_asm)), feature(asm))]
+#![cfg_attr(all(feature = "usdt", not(usdt_stable_asm)), feature(asm))]
 #![cfg_attr(
-    all(usdt, target_os = "macos", not(usdt_stable_asm_sym)),
+    all(feature = "usdt", target_os = "macos", not(usdt_stable_asm_sym)),
     feature(asm_sym)
 )]
 
