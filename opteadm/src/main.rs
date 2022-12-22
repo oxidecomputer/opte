@@ -4,8 +4,6 @@
 
 // Copyright 2022 Oxide Computer Company
 
-#![feature(extern_types)]
-
 use std::io;
 use std::str::FromStr;
 
