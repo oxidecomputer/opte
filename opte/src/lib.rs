@@ -4,7 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
+
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![deny(unreachable_patterns)]
@@ -14,16 +15,14 @@
 #![cfg_attr(all(usdt, not(usdt_stable_asm)), feature(asm))]
 #![cfg_attr(all(usdt, target_os = "macos", not(usdt_stable_asm_sym)), feature(asm_sym))]
 
+#[cfg(all(feature = "std", feature = "kernel"))]
+compile_error!("Cannot enable both `std` and `kernel` features");
+
 use core::fmt;
 use core::fmt::Display;
 
-// NOTE: Things get weird if you move the extern crate into cfg_if!.
-#[cfg(any(feature = "std", test))]
-#[macro_use]
-extern crate std;
-
 #[cfg(all(not(feature = "std"), not(test)))]
-#[macro_use]
+#[cfg_attr(feature = "engine", macro_use)]
 extern crate alloc;
 
 #[macro_use]
@@ -223,10 +222,10 @@ impl LogProvider for PrintlnLog {
     }
 }
 
-#[cfg(all(not(feature = "std"), not(test)))]
+#[cfg(all(feature = "kernel", not(test)))]
 pub struct KernelLog {}
 
-#[cfg(all(not(feature = "std"), not(test)))]
+#[cfg(all(feature = "kernel", not(test)))]
 impl LogProvider for KernelLog {
     fn log(&self, level: LogLevel, msg: &str) {
         use illumos_sys_hdrs as ddi;

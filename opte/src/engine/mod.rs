@@ -111,7 +111,7 @@ impl From<String> for ParseErr {
 pub static mut opte_panic_debug: i32 = 0;
 
 cfg_if! {
-    if #[cfg(not(feature = "std"))] {
+    if #[cfg(feature = "kernel")] {
         use alloc::ffi::CString;
         use alloc::vec::Vec;
         use illumos_sys_hdrs as ddi;
@@ -146,8 +146,8 @@ cfg_if! {
             }
         }
 
-    } else {
-        fn dbg<S: AsRef<str> + fmt::Display>(msg: S) {
+    } else if #[cfg(feature = "std")] {
+        pub fn dbg<S: AsRef<str> + fmt::Display>(msg: S) {
             println!("{}", msg);
         }
 
