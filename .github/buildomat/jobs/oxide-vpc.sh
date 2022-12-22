@@ -21,7 +21,7 @@ rustc --version
 cd oxide-vpc
 
 header "check style"
-ptime -m cargo fmt -- --check
+ptime -m cargo +nightly fmt -- --check
 
 header "check docs"
 #

@@ -24,7 +24,7 @@ header "check API_VERSION"
 ./check-api-version.sh
 
 header "check style"
-ptime -m cargo fmt -- --check
+ptime -m cargo +nightly fmt -- --check
 
 header "analyze std"
 ptime -m cargo check

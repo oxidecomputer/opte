@@ -26,7 +26,7 @@ rustc --version
 cd opteadm
 
 header "check style"
-ptime -m cargo fmt -- --check
+ptime -m cargo +nightly fmt -- --check
 
 header "debug build"
 ptime -m cargo build

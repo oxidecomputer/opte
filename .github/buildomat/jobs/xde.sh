@@ -42,7 +42,7 @@ rustc --version
 pushd xde
 
 header "check style"
-ptime -m cargo fmt -- --check
+ptime -m cargo +nightly fmt -- --check
 
 header "build xde (debug)"
 ptime -m ./build-debug.sh

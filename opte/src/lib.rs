@@ -5,15 +5,16 @@
 // Copyright 2022 Oxide Computer Company
 
 #![cfg_attr(not(feature = "std"), no_std)]
-
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![deny(unreachable_patterns)]
 #![deny(unused_must_use)]
-
 // Enable features needed for USDT, if needed.
 #![cfg_attr(all(usdt, not(usdt_stable_asm)), feature(asm))]
-#![cfg_attr(all(usdt, target_os = "macos", not(usdt_stable_asm_sym)), feature(asm_sym))]
+#![cfg_attr(
+    all(usdt, target_os = "macos", not(usdt_stable_asm_sym)),
+    feature(asm_sym)
+)]
 
 #[cfg(all(feature = "std", feature = "kernel"))]
 compile_error!("Cannot enable both `std` and `kernel` features");
