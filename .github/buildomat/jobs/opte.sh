@@ -30,7 +30,7 @@ header "check docs"
 #
 # Use nightly which is needed for the `kernel` feature.
 RUSTDOCFLAGS="-D warnings" ptime -m \
-	    cargo +nightly doc --no-default-features --features=api,engine,kernel
+	    cargo +nightly doc --no-default-features --features=api,std,engine,kernel
 
 header "analyze std + api"
 ptime -m cargo check

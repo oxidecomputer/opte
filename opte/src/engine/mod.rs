@@ -111,7 +111,15 @@ impl From<String> for ParseErr {
 pub static mut opte_panic_debug: i32 = 0;
 
 cfg_if! {
-    if #[cfg(feature = "kernel")] {
+    if #[cfg(feature = "std")] {
+        pub fn dbg<S: AsRef<str>>(msg: S) {
+            println!("{}", msg.as_ref());
+        }
+
+        pub fn err<S: AsRef<str>>(msg: S) {
+            println!("ERROR: {}", msg.as_ref());
+        }
+    } else if #[cfg(feature = "kernel")] {
         use alloc::ffi::CString;
         use illumos_sys_hdrs as ddi;
 
@@ -139,14 +147,6 @@ cfg_if! {
             }
         }
 
-    } else if #[cfg(feature = "std")] {
-        pub fn dbg<S: AsRef<str>>(msg: S) {
-            println!("{}", msg.as_ref());
-        }
-
-        pub fn err<S: AsRef<str>>(msg: S) {
-            println!("ERROR: {}", msg.as_ref());
-        }
     }
 }
 

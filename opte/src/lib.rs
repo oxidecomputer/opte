@@ -16,9 +16,6 @@
     feature(asm_sym)
 )]
 
-#[cfg(all(feature = "std", feature = "kernel"))]
-compile_error!("Cannot enable both `std` and `kernel` features");
-
 use core::fmt;
 use core::fmt::Display;
 
@@ -223,10 +220,10 @@ impl LogProvider for PrintlnLog {
     }
 }
 
-#[cfg(all(feature = "kernel", not(test)))]
+#[cfg(all(feature = "kernel", not(feature = "std"), not(test)))]
 pub struct KernelLog {}
 
-#[cfg(all(feature = "kernel", not(test)))]
+#[cfg(all(feature = "kernel", not(feature = "std"), not(test)))]
 impl LogProvider for KernelLog {
     fn log(&self, level: LogLevel, msg: &str) {
         use illumos_sys_hdrs as ddi;
