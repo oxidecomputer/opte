@@ -6,9 +6,11 @@ edition = "2021"
 
 [dependencies]
 libc = "0.2"
-libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
-opte = { path = "../opte", features = ["api"]}
-oxide-vpc = { path = "../oxide-vpc", features = ["api"] }
+opte = { path = "../opte", default-features = false, features = ["api"]}
+oxide-vpc = { path = "../oxide-vpc", default-features = false, features = ["api"] }
 postcard = "0.7.0"
 serde = "1.0"
 thiserror = "1.0.28"
+
+[target.'cfg(target_os = "illumos")'.dependencies]
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }

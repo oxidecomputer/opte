@@ -21,21 +21,22 @@ rustc --version
 cd opte
 
 header "check style"
-ptime -m cargo fmt -- --check
+ptime -m cargo +nightly fmt -- --check
 
 header "check docs"
 #
 # I believe this means any doc warnings in deps will cause this to
 # fail. Using a more targeted approach in the future might be nice.
 #
+# Use nightly which is needed for the `kernel` feature.
 RUSTDOCFLAGS="-D warnings" ptime -m \
-	    cargo doc --no-default-features --features=api,engine,kernel
+	    cargo +nightly doc --no-default-features --features=api,std,engine,kernel
 
 header "analyze std + api"
 ptime -m cargo check
 
 header "analyze no_std + engine + kernel"
-ptime -m cargo check --no-default-features --features engine,kernel
+ptime -m cargo +nightly check --no-default-features --features engine,kernel
 
 header "test"
 ptime -m cargo test

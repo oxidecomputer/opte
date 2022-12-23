@@ -111,49 +111,42 @@ impl From<String> for ParseErr {
 pub static mut opte_panic_debug: i32 = 0;
 
 cfg_if! {
-    if #[cfg(not(feature = "std"))] {
+    if #[cfg(feature = "std")] {
+        pub fn dbg<S: AsRef<str>>(msg: S) {
+            println!("{}", msg.as_ref());
+        }
+
+        pub fn err<S: AsRef<str>>(msg: S) {
+            println!("ERROR: {}", msg.as_ref());
+        }
+    } else if #[cfg(feature = "kernel")] {
         use alloc::ffi::CString;
-        use alloc::vec::Vec;
         use illumos_sys_hdrs as ddi;
 
         /// When set to 1 enables debug messages.
         #[no_mangle]
         pub static mut opte_debug: i32 = 0;
 
-        pub fn dbg<S: AsRef<str>>(msg: S)
-        where
-            Vec<u8>: From<S>,
-        {
+        pub fn dbg<S: AsRef<str>>(msg: S) {
             use ddi::CE_NOTE;
 
             unsafe {
                 if opte_debug != 0 {
-                    let cstr = CString::new(msg).unwrap();
+                    let cstr = CString::new(msg.as_ref()).unwrap();
                     ddi::cmn_err(CE_NOTE, cstr.as_ptr());
                 }
             }
         }
 
-        pub fn err<S: AsRef<str>>(msg: S)
-        where
-            Vec<u8>: From<S>,
-        {
+        pub fn err<S: AsRef<str>>(msg: S) {
             use ddi::CE_WARN;
 
             unsafe {
-                let cstr = CString::new(msg).unwrap();
+                let cstr = CString::new(msg.as_ref()).unwrap();
                 ddi::cmn_err(CE_WARN, cstr.as_ptr());
             }
         }
 
-    } else {
-        fn dbg<S: AsRef<str> + fmt::Display>(msg: S) {
-            println!("{}", msg);
-        }
-
-        pub fn err<S: AsRef<str> + fmt::Display>(msg: S) {
-            println!("ERROR: {}", msg);
-        }
     }
 }
 

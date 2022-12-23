@@ -208,6 +208,7 @@ fn flow_expired_probe(port: &CString, name: &CString, flowid: &InnerFlowId) {
                 );
             }
         } else if #[cfg(feature = "usdt")] {
+            use std::string::ToString;
             let port_s = port.to_str().unwrap();
             let name_s = name.to_str().unwrap();
             crate::opte_provider::flow__expired!(

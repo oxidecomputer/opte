@@ -24,22 +24,12 @@ std = ["opte/std"]
 # #[cfg(any(feature = "test-help", test))]
 #
 test-help = ["opte/test-help"]
-usdt = ["opte/usdt", "dep:usdt"]
+usdt = ["opte/usdt"]
 
 [dependencies]
 cfg-if = "0.1"
 illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
 opte = { path = "../opte", default-features = false }
-#
-# XXX usdt is really a dev dependency, but when I move it there weird
-# stuff happens (TM). Maybe to do with feature flags?
-#
-# At the moment the only purpose of the usdt feature is to enable the
-# USDT probes when running the tests.
-#
-# cargo test --features=usdt
-#
-usdt = { version = "0.3.2", optional = true }
 zerocopy = "0.6.1"
 
 [dependencies.serde]
@@ -65,5 +55,6 @@ ctor = "0.1.22"
 #
 # https://github.com/rust-lang/cargo/issues/2911
 #
-oxide-vpc = { path = ".", features = ["engine", "test-help"] }
+oxide-vpc = { path = ".", features = ["engine", "test-help", "usdt"] }
 pcap-parser = { version = "0.11.1", features = ["serialize"] }
+usdt = "0.3.5"

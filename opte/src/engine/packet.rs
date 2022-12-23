@@ -2488,7 +2488,10 @@ pub fn mock_allocb(size: usize) -> *mut mblk_t {
 
 #[cfg(any(feature = "std", test))]
 pub fn mock_desballoc(buf: Vec<u8>) -> *mut mblk_t {
-    let (ptr, len, avail) = buf.into_raw_parts();
+    let mut buf = std::mem::ManuallyDrop::new(buf);
+    let ptr = buf.as_mut_ptr();
+    let len = buf.len();
+    let avail = buf.capacity();
 
     // For the purposes of mocking in std the only fields that
     // matter here are the ones relating to the data buffer:

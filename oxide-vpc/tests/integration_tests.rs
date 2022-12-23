@@ -67,9 +67,9 @@ const VPC_ENCAP_SZ: usize =
 const IP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE;
 const TCP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + TcpHdr::BASE_SIZE;
 
-// If we are running `cargo test --feature=usdt`, then make sure to
+// If we are running `cargo test`, then make sure to
 // register the USDT probes before running any tests.
-#[cfg(all(test, feature = "usdt"))]
+#[cfg(test)]
 #[ctor::ctor]
 fn register_usdt() {
     usdt::register_probes().unwrap();

@@ -137,9 +137,9 @@ dependencies = [
 
 [[package]]
 name = "dtrace-parser"
-version = "0.1.12"
+version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bbb93fb1a0c517bf20f37caaf5d1f7d20f144c6c35a7d751ecad077b6c042e8"
+checksum = "bed110893a7f9f4ceb072e166354a09f6cb4cc416eec5b5e5e8ee367442d434b"
 dependencies = [
  "pest",
  "pest_derive",
@@ -282,6 +282,7 @@ dependencies = [
  "serde",
  "smoltcp",
  "usdt",
+ "version_check",
  "zerocopy 0.6.1",
 ]
 
@@ -624,11 +625,10 @@ checksum = "957e51f3646910546462e67d5f7599b9e4fb8acdd304b087a6494730f9eebf04"
 
 [[package]]
 name = "usdt"
-version = "0.3.2"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5409e16f35fdba646ff4290e6f96f0bb958b43e0bd09d790c3714456a76c11ac"
+checksum = "2b4c48f9e522b977bbe938a0d7c4d36633d267ba0155aaa253fb57d0531be0fb"
 dependencies = [
- "dof",
  "dtrace-parser",
  "serde",
  "usdt-attr-macro",
@@ -638,9 +638,9 @@ dependencies = [
 
 [[package]]
 name = "usdt-attr-macro"
-version = "0.3.2"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d203cad87b8424e1fbd0fef29b6df2113e68be5dd75f4043427eb0ce6601041f"
+checksum = "80e6ae4f982ae74dcbaa8eb17baf36ca0d464a3abc8a7172b3bd74c73e9505d6"
 dependencies = [
  "dtrace-parser",
  "proc-macro2",
@@ -652,9 +652,9 @@ dependencies = [
 
 [[package]]
 name = "usdt-impl"
-version = "0.3.2"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c146394183fcea90d93e2d4602e1a7eb6cab8e807b58f99d4f343720d4e9d69"
+checksum = "f53b4ca0b33aae466dc47b30b98adc4f88454928837af8010b6ed02d18474cb1"
 dependencies = [
  "byteorder",
  "dof",
@@ -672,9 +672,9 @@ dependencies = [
 
 [[package]]
 name = "usdt-macro"
-version = "0.3.2"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dddab3586eaf539e2daddc425261daef6a6d2f85131bac7345caa8e6a423b27"
+checksum = "7cb093f9653dc91632621c754f9ed4ee25d14e46e0239b6ccaf74a6c0c2788bd"
 dependencies = [
  "dtrace-parser",
  "proc-macro2",

@@ -21,7 +21,7 @@ rustc --version
 cd opte-ioctl
 
 header "check style"
-ptime -m cargo fmt -- --check
+ptime -m cargo +nightly fmt -- --check
 
 header "analyze"
 ptime -m cargo check

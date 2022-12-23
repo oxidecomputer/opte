@@ -4,31 +4,23 @@
 
 // Copyright 2022 Oxide Computer Company
 
-#![no_std]
-// This allows one to run the tests on macOS with the usdt probes
-// enabled.
-//
-// ```
-// cargo test --features=usdt
-// ```
-#![cfg_attr(target_os = "macos", feature(asm_sym))]
-#![feature(extern_types)]
-#![feature(vec_into_raw_parts)]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![deny(unreachable_patterns)]
 #![deny(unused_must_use)]
+// Enable features needed for USDT, if needed.
+#![cfg_attr(all(feature = "usdt", not(usdt_stable_asm)), feature(asm))]
+#![cfg_attr(
+    all(feature = "usdt", target_os = "macos", not(usdt_stable_asm_sym)),
+    feature(asm_sym)
+)]
 
 use core::fmt;
 use core::fmt::Display;
 
-// NOTE: Things get weird if you move the extern crate into cfg_if!.
-#[cfg(any(feature = "std", test))]
-#[macro_use]
-extern crate std;
-
 #[cfg(all(not(feature = "std"), not(test)))]
-#[macro_use]
+#[cfg_attr(feature = "engine", macro_use)]
 extern crate alloc;
 
 #[macro_use]
@@ -228,10 +220,10 @@ impl LogProvider for PrintlnLog {
     }
 }
 
-#[cfg(all(not(feature = "std"), not(test)))]
+#[cfg(all(feature = "kernel", not(feature = "std"), not(test)))]
 pub struct KernelLog {}
 
-#[cfg(all(not(feature = "std"), not(test)))]
+#[cfg(all(feature = "kernel", not(feature = "std"), not(test)))]
 impl LogProvider for KernelLog {
     fn log(&self, level: LogLevel, msg: &str) {
         use illumos_sys_hdrs as ddi;

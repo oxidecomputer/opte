@@ -336,7 +336,7 @@ pub fn ht_probe(
             let after_s = after.to_string();
 
             crate::opte_provider::ht__run!(
-                || (port_s, loc, dir, before_s, after_s)
+                || (port_s, loc_c, dir, before_s, after_s)
             );
         } else {
             let (..) = (port, loc, dir, before, after);

@@ -639,7 +639,7 @@ impl Layer {
                     Err(e) => format!("ERROR: {:?}", e),
                 };
                 crate::opte_provider::layer__process__return!(
-                    || ((dir, port_s), &self.name, ifid_b_s, ifid_a_s, &res_s)
+                    || ((dir, port_s), &self.name, &flow_b_s, &flow_a_s, &res_s)
                 );
             } else {
                 let (_, _, _, _) = (dir, flow_before, flow_after, res);
@@ -1669,7 +1669,7 @@ impl<'a> RuleTable {
                 let action_s = rule.action().to_string();
 
                 crate::opte_provider::rule__match!(
-                    || (port_s, layer_s, self.dir, flow_id.to_string(),
+                    || (port_s, layer_s, dir, flow_id.to_string(),
                         action_s)
                 );
             } else {
