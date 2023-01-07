@@ -721,6 +721,7 @@ impl Display for Address {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProtoFilter {
     Any,
+    Arp,
     Proto(Protocol),
 }
 
@@ -730,6 +731,7 @@ impl FromStr for ProtoFilter {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "any" => Ok(ProtoFilter::Any),
+            "arp" => Ok(ProtoFilter::Arp),
             "icmp" => Ok(ProtoFilter::Proto(Protocol::ICMP)),
             "tcp" => Ok(ProtoFilter::Proto(Protocol::TCP)),
             "udp" => Ok(ProtoFilter::Proto(Protocol::UDP)),
@@ -758,6 +760,7 @@ impl Display for ProtoFilter {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ProtoFilter::Any => write!(f, "ANY"),
+            ProtoFilter::Arp => write!(f, "ARP"),
             ProtoFilter::Proto(proto) => write!(f, "{},", proto),
         }
     }
