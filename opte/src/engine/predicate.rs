@@ -92,9 +92,16 @@ impl EtherTypeMatch {
 
 impl Display for EtherTypeMatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use crate::engine::ether::*;
         use EtherTypeMatch::*;
 
         match self {
+            // Print known EtherTypes by name
+            Exact(et) if *et == ETHER_TYPE_ARP => write!(f, "ARP"),
+            Exact(et) if *et == ETHER_TYPE_ETHER => write!(f, "ETHER"),
+            Exact(et) if *et == ETHER_TYPE_IPV4 => write!(f, "IPv4"),
+            Exact(et) if *et == ETHER_TYPE_IPV6 => write!(f, "IPv6"),
+
             Exact(et) => write!(f, "0x{:X}", et),
         }
     }

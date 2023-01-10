@@ -22,12 +22,14 @@ use crate::engine::overlay::ACTION_META_VNI;
 use core::num::NonZeroU32;
 use opte::api::Direction;
 use opte::api::OpteError;
+use opte::engine::ether::ETHER_TYPE_ARP;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
+use opte::engine::predicate::EtherTypeMatch;
 use opte::engine::predicate::IpProtoMatch;
 use opte::engine::predicate::Ipv4AddrMatch;
 use opte::engine::predicate::PortMatch;
@@ -152,6 +154,12 @@ impl ProtoFilter {
     pub fn into_predicate(self) -> Option<Predicate> {
         match self {
             ProtoFilter::Any => None,
+
+            ProtoFilter::Arp => {
+                Some(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+                    ETHER_TYPE_ARP,
+                )]))
+            }
 
             ProtoFilter::Proto(p) => {
                 Some(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(p)]))
