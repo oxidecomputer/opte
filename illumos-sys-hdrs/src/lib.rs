@@ -44,6 +44,7 @@ pub type ssize_t = isize;
 // uts/common/sys/errno.h
 // ======================================================================
 pub const ENOENT: c_int = 2;
+pub const ENXIO: c_int = 6;
 pub const EAGAIN: c_int = 11;
 pub const ENOMEM: c_int = 12;
 pub const EFAULT: c_int = 14;
@@ -56,6 +57,11 @@ pub const ENOMSG: c_int = 35;
 pub const ENOTSUP: c_int = 48;
 pub const EPROTO: c_int = 71;
 pub const ENOBUFS: c_int = 132;
+
+// ======================================================================
+// uts/common/sys/open.h
+// ======================================================================
+pub const OTYP_CHR: c_int = 2;
 
 // ======================================================================
 // uts/common/sys/kstat.h
@@ -272,6 +278,7 @@ pub type hrtime_t = c_longlong;
 pub type datalink_id_t = uint32_t;
 pub type dev_t = c_ulong;
 pub type id_t = c_int;
+pub type major_t = c_uint;
 pub type minor_t = c_uint;
 pub type offset_t = c_longlong;
 pub type pid_t = c_int;

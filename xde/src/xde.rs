@@ -104,6 +104,12 @@ const TCP_STATE_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
 /// The name of this driver.
 const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
 
+/// Name of the control device.
+const XDE_CTL_STR: *const c_char = b"ctl\0".as_ptr() as *const c_char;
+
+/// Minor number for the control device.
+const XDE_CTL_MINOR: minor_t = 0;
+
 /// A list of xde devices instantiated through xde_ioc_create.
 static mut xde_devs: KRwLock<Vec<Box<XdeDev>>> = KRwLock::new(Vec::new());
 
@@ -295,6 +301,52 @@ unsafe extern "C" fn _fini() -> c_int {
             err
         }
     }
+}
+
+#[no_mangle]
+unsafe extern "C" fn xde_open(
+    devp: *mut dev_t,
+    _flag: c_int,
+    otyp: c_int,
+    _credp: *mut cred_t,
+) -> c_int {
+    assert!(!xde_dip.is_null());
+
+    if otyp != OTYP_CHR {
+        return EINVAL;
+    }
+
+    let minor = getminor(*devp);
+    if minor != XDE_CTL_MINOR {
+        warn!("invalid minor number for open: {minor}");
+        return ENXIO;
+    }
+
+    *devp = makedevice(getmajor(*devp), minor);
+
+    0
+}
+
+#[no_mangle]
+unsafe extern "C" fn xde_close(
+    dev: dev_t,
+    _flag: c_int,
+    otyp: c_int,
+    _credp: *mut cred_t,
+) -> c_int {
+    assert!(!xde_dip.is_null());
+
+    if otyp != OTYP_CHR {
+        return EINVAL;
+    }
+
+    let minor = getminor(dev);
+    if minor != XDE_CTL_MINOR {
+        warn!("invalid minor number for close: {minor}");
+        return ENXIO;
+    }
+
+    0
 }
 
 #[no_mangle]
@@ -767,6 +819,22 @@ unsafe extern "C" fn xde_attach(
         }
     };
 
+    // Create xde control device
+    match ddi_create_minor_node(
+        xde_dip,
+        XDE_CTL_STR,
+        S_IFCHR,
+        XDE_CTL_MINOR,
+        DDI_PSEUDO,
+        0,
+    ) {
+        0 => {}
+        err => {
+            warn!("failed to create xde control device: {err}");
+            return DDI_FAILURE;
+        }
+    }
+
     let state = Box::new(XdeState::new());
     ddi_set_driver_private(xde_dip, Box::into_raw(state) as *mut c_void);
     opte::engine::dbg(format!("dld_ioc_add: {:#?}", xde_ioc_list));
@@ -1081,14 +1149,18 @@ unsafe extern "C" fn xde_detach(
     };
 
     dld::dld_ioc_unregister(dld::XDE_IOC);
+
+    // Remove control device
+    ddi_remove_minor_node(xde_dip, XDE_STR);
+
     xde_dip = ptr::null_mut::<c_void>() as *mut dev_info;
     DDI_SUCCESS
 }
 
 #[no_mangle]
 static mut xde_cb_ops: cb_ops = cb_ops {
-    cb_open: nulldev_open,
-    cb_close: nulldev_close,
+    cb_open: xde_open,
+    cb_close: xde_close,
     cb_strategy: nodev,
     cb_print: nodev,
     cb_dump: nodev,

@@ -451,7 +451,10 @@ extern "C" {
     pub fn freemsg(mp: *mut mblk_t);
 
     pub fn gethrtime() -> hrtime_t;
+
+    pub fn getmajor(dev: dev_t) -> major_t;
     pub fn getminor(dev: dev_t) -> minor_t;
+    pub fn makedevice(major: major_t, minor: minor_t) -> dev_t;
 
     pub fn id_alloc_nosleep(idspace: *const id_space_t) -> id_t;
     pub fn id_free(idspace: *const id_space_t, id: id_t);
