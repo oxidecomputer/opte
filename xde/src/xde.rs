@@ -217,7 +217,7 @@ struct UnderlayState {
 fn get_xde_state() -> &'static mut XdeState {
     // Safety: The opte_dip pointer is write-once and is a valid
     // pointer passed to attach(9E). The returned pointer is valid as
-    // it was derived from Box::into_raw() during set_xde_underlay.
+    // it was derived from Box::into_raw() during `xde_attach`.
     unsafe {
         let p = ddi_get_driver_private(xde_dip);
         &mut *(p as *mut XdeState)
