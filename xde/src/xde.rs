@@ -18,6 +18,7 @@ use crate::dls;
 use crate::ioctl::IoctlEnvelope;
 use crate::ip;
 use crate::mac;
+use crate::mac::dld_getinfo;
 use crate::mac::mac_private_minor;
 use crate::mac::MacClient;
 use crate::mac::MacOpenFlags;
@@ -811,6 +812,43 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
 const IOCTL_SZ: usize = core::mem::size_of::<OpteCmdIoctl>();
 
 #[no_mangle]
+unsafe extern "C" fn xde_getinfo(
+    dip: *mut dev_info,
+    cmd: ddi_info_cmd_t,
+    arg: *mut c_void,
+    resultp: *mut *mut c_void,
+) -> c_int {
+    if xde_dip.is_null() {
+        return DDI_FAILURE;
+    }
+
+    // If this isn't one of our private minors,
+    // let the GLDv3 framework handle it.
+    let minor = getminor(*arg as dev_t);
+    if minor < mac_private_minor() {
+        return dld_getinfo(dip, cmd, arg, resultp);
+    }
+
+    // We currently only expose a single minor node,
+    // bail on anything else.
+    if minor != XDE_CTL_MINOR {
+        warn!("unexpected minor number {minor}");
+        return DDI_FAILURE;
+    }
+
+    match cmd {
+        ddi_info_cmd_t::DDI_INFO_DEVT2DEVINFO => {
+            *resultp = xde_dip.cast();
+            DDI_SUCCESS
+        }
+        ddi_info_cmd_t::DDI_INFO_DEVT2INSTANCE => {
+            *resultp = ddi_get_instance(xde_dip) as _;
+            DDI_SUCCESS
+        }
+    }
+}
+
+#[no_mangle]
 unsafe extern "C" fn xde_attach(
     dip: *mut dev_info,
     cmd: ddi_attach_cmd_t,
@@ -1199,7 +1237,7 @@ static mut xde_cb_ops: cb_ops = cb_ops {
 static mut xde_devops: dev_ops = dev_ops {
     devo_rev: DEVO_REV,
     devo_refcnt: 0,
-    devo_getinfo: nodev_getinfo,
+    devo_getinfo: xde_getinfo,
     devo_identify: nulldev_identify,
     devo_probe: nulldev_probe,
     devo_attach: xde_attach,

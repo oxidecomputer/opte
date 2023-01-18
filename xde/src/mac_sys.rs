@@ -11,6 +11,7 @@ use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::c_uint;
 use illumos_sys_hdrs::c_void;
+use illumos_sys_hdrs::ddi_info_cmd_t;
 use illumos_sys_hdrs::dev_info;
 use illumos_sys_hdrs::dev_ops;
 use illumos_sys_hdrs::mblk_t;
@@ -78,6 +79,16 @@ extern "C" {
     pub type mac_promisc_handle;
     pub type mac_resource_handle;
     pub type mac_prop_info_handle;
+
+    // TODO: The comment on `dld_getinfo` (uts/common/io/dld/dld_str.c)
+    // mentions a provider can call it via `mac_getinfo` but that doesn't
+    // exist?
+    pub fn dld_getinfo(
+        dip: *mut dev_info,
+        cmd: ddi_info_cmd_t,
+        arg: *mut c_void,
+        result: *mut *mut c_void,
+    ) -> c_int;
 
     pub fn mac_client_open(
         mh: *const mac_handle,
