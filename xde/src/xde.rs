@@ -14,7 +14,6 @@
 // - ddm integration to choose correct underlay device (currently just using
 //   first device)
 
-use crate::dld;
 use crate::dls;
 use crate::ioctl::IoctlEnvelope;
 use crate::ip;
@@ -45,6 +44,7 @@ use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
+use opte::api::XDE_IOC_OPTE_CMD;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
@@ -351,15 +351,48 @@ unsafe extern "C" fn xde_close(
 
 #[no_mangle]
 unsafe extern "C" fn xde_ioctl(
-    _dev: dev_t,
-    _cmd: c_int,
-    _arg: intptr_t,
-    _mode: c_int,
-    _credp: *mut cred_t,
-    _rvalp: *mut c_int,
+    dev: dev_t,
+    cmd: c_int,
+    arg: intptr_t,
+    mode: c_int,
+    credp: *mut cred_t,
+    rvalp: *mut c_int,
 ) -> c_int {
-    warn!("xde_ioctl not supported, use dld_ioc");
-    ENOTSUP
+    assert!(!xde_dip.is_null());
+
+    let minor = getminor(dev);
+    if minor != XDE_CTL_MINOR {
+        warn!("invalid minor number for ioctl: {minor}");
+        return EINVAL;
+    }
+
+    if cmd != XDE_IOC_OPTE_CMD {
+        warn!("invalid ioctl command: {cmd}");
+        return EINVAL;
+    }
+
+    match secpolicy::secpolicy_dl_config(credp) {
+        0 => {}
+        err => {
+            warn!("secpolicy_dl_config failed: {err}");
+            return err;
+        }
+    }
+
+    // TODO: this is using KM_SLEEP, is that ok?
+    let mut buf = Vec::<u8>::with_capacity(IOCTL_SZ);
+    if ddi_copyin(arg as _, buf.as_mut_ptr() as _, IOCTL_SZ, mode) != 0 {
+        return EFAULT;
+    }
+
+    let err = xde_ioc_opte_cmd(buf.as_mut_ptr() as _, arg, mode, credp, rvalp);
+
+    if ddi_copyout(buf.as_ptr() as _, arg as _, IOCTL_SZ, mode) != 0 && err == 0
+    {
+        return EFAULT;
+    }
+
+    err
 }
 
 fn dtrace_probe_hdlr_resp<T>(resp: &Result<T, OpteError>)
@@ -400,7 +433,7 @@ fn set_xde_underlay_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 // This is the entry point for all OPTE commands. It verifies the API
 // version and then multiplexes the command to its appropriate handler.
 #[no_mangle]
-unsafe extern "C" fn xde_dld_ioc_opte_cmd(
+unsafe extern "C" fn xde_ioc_opte_cmd(
     karg: *mut c_void,
     _arg: intptr_t,
     mode: c_int,
@@ -775,14 +808,6 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
 
 const IOCTL_SZ: usize = core::mem::size_of::<OpteCmdIoctl>();
 
-static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [dld::dld_ioc_info_t {
-    di_cmd: opte::api::XDE_DLD_OPTE_CMD as u32,
-    di_flags: dld::DLDCOPYINOUT,
-    di_argsize: IOCTL_SZ,
-    di_func: xde_dld_ioc_opte_cmd,
-    di_priv_func: secpolicy::secpolicy_dl_config,
-}];
-
 #[no_mangle]
 unsafe extern "C" fn xde_attach(
     dip: *mut dev_info,
@@ -837,19 +862,6 @@ unsafe extern "C" fn xde_attach(
 
     let state = Box::new(XdeState::new());
     ddi_set_driver_private(xde_dip, Box::into_raw(state) as *mut c_void);
-    opte::engine::dbg(format!("dld_ioc_add: {:#?}", xde_ioc_list));
-
-    match dld::dld_ioc_register(
-        dld::XDE_IOC,
-        xde_ioc_list.as_ptr(),
-        xde_ioc_list.len() as u32,
-    ) {
-        0 => {}
-        err => {
-            warn!("dld_ioc_register failed: {}", err);
-            return DDI_FAILURE;
-        }
-    }
 
     return DDI_SUCCESS;
 }
@@ -1147,8 +1159,6 @@ unsafe extern "C" fn xde_detach(
         }
         None => {}
     };
-
-    dld::dld_ioc_unregister(dld::XDE_IOC);
 
     // Remove control device
     ddi_remove_minor_node(xde_dip, XDE_STR);
