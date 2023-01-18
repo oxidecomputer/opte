@@ -14,6 +14,7 @@ use illumos_sys_hdrs::c_void;
 use illumos_sys_hdrs::dev_info;
 use illumos_sys_hdrs::dev_ops;
 use illumos_sys_hdrs::mblk_t;
+use illumos_sys_hdrs::minor_t;
 use illumos_sys_hdrs::queue_t;
 use illumos_sys_hdrs::size_t;
 use illumos_sys_hdrs::uintptr_t;
@@ -146,7 +147,7 @@ extern "C" {
         mrh: *mut mac_resource_handle,
         mp_chain: *mut mblk_t,
     );
-
+    pub fn mac_private_minor() -> minor_t;
 }
 
 #[repr(C)]

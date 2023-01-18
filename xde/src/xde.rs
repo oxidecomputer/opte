@@ -18,6 +18,7 @@ use crate::dls;
 use crate::ioctl::IoctlEnvelope;
 use crate::ip;
 use crate::mac;
+use crate::mac::mac_private_minor;
 use crate::mac::MacClient;
 use crate::mac::MacOpenFlags;
 use crate::mac::MacTxFlags;
@@ -108,7 +109,8 @@ const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
 const XDE_CTL_STR: *const c_char = b"ctl\0".as_ptr() as *const c_char;
 
 /// Minor number for the control device.
-const XDE_CTL_MINOR: minor_t = 0;
+// Set once in `xde_attach`.
+static mut XDE_CTL_MINOR: minor_t = 0;
 
 /// A list of xde devices instantiated through xde_ioc_create.
 static mut xde_devs: KRwLock<Vec<Box<XdeDev>>> = KRwLock::new(Vec::new());
@@ -843,6 +845,10 @@ unsafe extern "C" fn xde_attach(
             xde_ext_ip_hack = 0;
         }
     };
+
+    // We need to share the minor number space with the GLDv3 framework.
+    // We'll use the first private minor number for our control device.
+    XDE_CTL_MINOR = mac_private_minor();
 
     // Create xde control device
     match ddi_create_minor_node(
