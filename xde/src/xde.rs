@@ -902,15 +902,15 @@ unsafe extern "C" fn xde_attach(
         ddi_attach_cmd_t::DDI_ATTACH => {}
     }
 
-    xde_dip = dip;
+    assert!(xde_dip.is_null());
 
     // XXX-EXT-IP
-    if !driver_prop_exists("ext_ip_hack") {
+    if !driver_prop_exists(dip, "ext_ip_hack") {
         warn!("failed to find 'ext_ip_hack' property in xde.conf");
         return DDI_FAILURE;
     }
 
-    match get_driver_prop_bool("ext_ip_hack") {
+    match get_driver_prop_bool(dip, "ext_ip_hack") {
         Some(true) => {
             warn!("ext_ip_hack enabled: traffic will NOT be encapsulated");
             xde_ext_ip_hack = 1;
@@ -933,7 +933,7 @@ unsafe extern "C" fn xde_attach(
 
     // Create xde control device
     match ddi_create_minor_node(
-        xde_dip,
+        dip,
         XDE_CTL_STR,
         S_IFCHR,
         XDE_CTL_MINOR,
@@ -947,8 +947,12 @@ unsafe extern "C" fn xde_attach(
         }
     }
 
+    xde_dip = dip;
+
     let state = Box::new(XdeState::new());
     ddi_set_driver_private(xde_dip, Box::into_raw(state) as *mut c_void);
+
+    ddi_report_dev(xde_dip);
 
     return DDI_SUCCESS;
 }
@@ -1101,7 +1105,7 @@ unsafe fn init_underlay_ingress_handlers(
 }
 
 #[no_mangle]
-unsafe fn driver_prop_exists(pname: &str) -> bool {
+unsafe fn driver_prop_exists(dip: *mut dev_info, pname: &str) -> bool {
     let name = match CString::new(pname) {
         Ok(s) => s,
         Err(e) => {
@@ -1112,7 +1116,7 @@ unsafe fn driver_prop_exists(pname: &str) -> bool {
 
     let ret = ddi_prop_exists(
         DDI_DEV_T_ANY,
-        xde_dip,
+        dip,
         DDI_PROP_DONTPASS,
         name.as_ptr() as *const c_char,
     );
@@ -1121,7 +1125,10 @@ unsafe fn driver_prop_exists(pname: &str) -> bool {
 }
 
 #[no_mangle]
-unsafe fn get_driver_prop_bool(pname: &str) -> Option<bool> {
+unsafe fn get_driver_prop_bool(
+    dip: *mut dev_info,
+    pname: &str,
+) -> Option<bool> {
     let name = match CString::new(pname) {
         Ok(s) => s,
         Err(e) => {
@@ -1132,7 +1139,7 @@ unsafe fn get_driver_prop_bool(pname: &str) -> Option<bool> {
 
     let ret = ddi_prop_get_int(
         DDI_DEV_T_ANY,
-        xde_dip,
+        dip,
         DDI_PROP_DONTPASS,
         name.as_ptr() as *const c_char,
         99,
@@ -1155,7 +1162,10 @@ unsafe fn get_driver_prop_bool(pname: &str) -> Option<bool> {
 }
 
 #[no_mangle]
-unsafe fn get_driver_prop_string(pname: &str) -> Option<String> {
+unsafe fn get_driver_prop_string(
+    dip: *mut dev_info,
+    pname: &str,
+) -> Option<String> {
     let name = match CString::new(pname) {
         Ok(s) => s,
         Err(e) => {
@@ -1167,7 +1177,7 @@ unsafe fn get_driver_prop_string(pname: &str) -> Option<String> {
     let mut value: *const c_char = ptr::null();
     let ret = ddi_prop_lookup_string(
         DDI_DEV_T_ANY,
-        xde_dip,
+        dip,
         DDI_PROP_DONTPASS,
         name.as_ptr() as *const c_char,
         &mut value,
