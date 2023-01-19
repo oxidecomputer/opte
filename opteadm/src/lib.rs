@@ -50,7 +50,7 @@ impl OpteAdm {
 
         let linkid = link::create_link_id(
             name,
-            libnet::LinkClass::Xde,
+            libnet::LinkClass::Xde, // TODO: change to misc once available
             libnet::LinkFlags::Active,
         )?;
 
