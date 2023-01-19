@@ -55,6 +55,7 @@ pub const ENFILE: c_int = 23;
 pub const EPIPE: c_int = 32;
 pub const ENOMSG: c_int = 35;
 pub const ENOTSUP: c_int = 48;
+pub const ENOSTR: c_int = 60;
 pub const EPROTO: c_int = 71;
 pub const ENOBUFS: c_int = 132;
 

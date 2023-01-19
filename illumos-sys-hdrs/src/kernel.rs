@@ -67,6 +67,53 @@ pub enum krw_t {
     RW_READER_STARVEWRITER,
 }
 
+extern "C" {
+    type module_info;
+    type module_stat;
+    type struiod_t;
+    type infod_t;
+}
+
+// See qinit(9S) for more information.
+//
+// uts/common/sys/stream.h
+#[repr(C)]
+pub struct qinit {
+    pub qi_putp:
+        unsafe extern "C" fn(q: *mut queue_t, mp: *mut mblk_t) -> c_int,
+    pub qi_srvp: unsafe extern "C" fn(q: *mut queue_t) -> c_int,
+    pub qi_qopen: unsafe extern "C" fn(
+        q: *mut queue_t,
+        devp: *mut dev_t,
+        oflag: c_int,
+        sflag: c_int,
+        credp: *mut cred_t,
+    ) -> c_int,
+    pub qi_qclose: unsafe extern "C" fn(
+        q: *mut queue_t,
+        flag: c_int,
+        credp: *mut cred_t,
+    ) -> c_int,
+    pub qi_qadmin: unsafe extern "C" fn() -> c_int,
+
+    qi_minfo: *mut module_info,
+    qi_mstat: *mut module_stat,
+    qi_rwp: unsafe extern "C" fn(q: *mut queue_t, _: *mut struiod_t) -> c_int,
+    qi_infop: unsafe extern "C" fn(q: *mut queue_t, _: *mut infod_t) -> c_int,
+    qi_struiot: c_int,
+}
+
+// See streamtab(9S) for more information.
+//
+// uts/common/sys/stream.h
+#[repr(C)]
+pub struct streamtab {
+    pub st_rdinit: *mut qinit,
+    pub st_wrinit: *mut qinit,
+    pub st_muxrinit: *mut qinit,
+    pub st_muxwinit: *mut qinit,
+}
+
 // Not all of these callback signatures are filled out completely, the
 // unused ones leave out the function parameters.
 //
@@ -366,8 +413,6 @@ extern "C" {
     pub type modinfo;
 
     pub type queue_t; // Definitely not using STREAMS.
-
-    pub type streamtab;
 
     // DDI/DKI 9F
     pub fn allocb(size: size_t, pri: c_uint) -> *mut mblk_t;

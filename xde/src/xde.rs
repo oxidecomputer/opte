@@ -277,6 +277,25 @@ struct XdeDev {
 unsafe extern "C" fn _init() -> c_int {
     xde_devs.init(KRwLockType::Driver);
     mac::mac_init_ops(&mut xde_devops, XDE_STR);
+
+    // By virtue of being a MAC provider, we're a STREAMS driver as
+    // `dld_init_ops` (via `mac_init_ops`) fills in `xde_cb_ops.cb_str`.
+    // So `open(9e)` won't go through `cb_open` but via the STREAMS
+    // equivalent. However, we want to treat our control device (created
+    // in `xde_attach`) as a normal character device, so we must override
+    // the STREAMS open routine to return `ENOSTR`. This will make specfs
+    // try our `cb_open` routine instead.
+
+    // The read queue is the only one that contains the `open` routine
+    // whereas the field on the write queue is unused. We take advantage
+    // of that to store the original `open` routine so we can call it
+    // from our patched `qi_qopen` routine.
+
+    // Safety: `cb_str` and inner pointers are initialized by `mac_init_ops`.
+    let orig_open = (*(*xde_cb_ops.cb_str).st_rdinit).qi_qopen;
+    (*(*xde_cb_ops.cb_str).st_rdinit).qi_qopen = xde_qopen;
+    (*(*xde_cb_ops.cb_str).st_wrinit).qi_qopen = orig_open;
+
     match mod_install(&xde_linkage) {
         0 => 0,
         err => {
@@ -307,6 +326,27 @@ unsafe extern "C" fn _fini() -> c_int {
 }
 
 #[no_mangle]
+unsafe extern "C" fn xde_qopen(
+    q: *mut queue_t,
+    devp: *mut dev_t,
+    oflag: c_int,
+    sflag: c_int,
+    credp: *mut cred_t,
+) -> c_int {
+    assert!(!xde_dip.is_null());
+
+    // open called on a non-MAC managed minor, treat as character device.
+    // See comment in `_init`.
+    if getminor(*devp) >= mac_private_minor() {
+        return ENOSTR;
+    }
+
+    // Safety: initialized in `_init`.
+    let orig_open = (*(*xde_cb_ops.cb_str).st_wrinit).qi_qopen;
+    orig_open(q, devp, oflag, sflag, credp)
+}
+
+#[no_mangle]
 unsafe extern "C" fn xde_open(
     devp: *mut dev_t,
     _flag: c_int,
@@ -325,6 +365,9 @@ unsafe extern "C" fn xde_open(
         return ENXIO;
     }
 
+    // TODO: check flags
+
+    // TODO: device cloning needed?
     *devp = makedevice(getmajor(*devp), minor);
 
     0
