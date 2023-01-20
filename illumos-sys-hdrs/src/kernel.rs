@@ -531,6 +531,13 @@ extern "C" {
         data_type: c_uchar,
     );
 
+    pub fn miocnak(
+        wq: *mut queue_t,
+        mp: *mut mblk_t,
+        count: c_int,
+        error: c_int,
+    );
+
     pub fn mod_install(linkage: *const modlinkage) -> c_int;
     pub fn mod_remove(linkage: *const modlinkage) -> c_int;
     pub fn mod_info(

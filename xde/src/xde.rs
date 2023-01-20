@@ -1999,10 +1999,11 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
 #[no_mangle]
 unsafe extern "C" fn xde_mc_ioctl(
     _arg: *mut c_void,
-    _queue: *mut queue_t,
-    _mp: *mut mblk_t,
+    queue: *mut queue_t,
+    mp: *mut mblk_t,
 ) {
     warn!("call to unimplemented xde_mc_ioctl");
+    miocnak(queue, mp, 0, ENOTSUP);
 }
 
 #[no_mangle]
