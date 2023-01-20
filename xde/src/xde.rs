@@ -867,7 +867,7 @@ unsafe extern "C" fn xde_getinfo(
 
     // If this isn't one of our private minors,
     // let the GLDv3 framework handle it.
-    let minor = getminor(*arg as dev_t);
+    let minor = getminor(arg as dev_t);
     if minor < mac_private_minor() {
         return dld_getinfo(dip, cmd, arg, resultp);
     }
