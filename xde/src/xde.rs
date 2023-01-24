@@ -865,9 +865,17 @@ unsafe extern "C" fn xde_getinfo(
         return DDI_FAILURE;
     }
 
+    let minor = match cmd {
+        ddi_info_cmd_t::DDI_INFO_DEVT2DEVINFO
+        | ddi_info_cmd_t::DDI_INFO_DEVT2INSTANCE => getminor(arg as dev_t),
+        // We call into `dld_getinfo` here rather than just fail
+        // with `DDI_FAILURE` to let it handle if ever there's a new
+        // `ddi_info_cmd_t` variant.
+        _ => return dld_getinfo(dip, cmd, arg, resultp),
+    };
+
     // If this isn't one of our private minors,
     // let the GLDv3 framework handle it.
-    let minor = getminor(arg as dev_t);
     if minor < mac_private_minor() {
         return dld_getinfo(dip, cmd, arg, resultp);
     }
@@ -875,7 +883,6 @@ unsafe extern "C" fn xde_getinfo(
     // We currently only expose a single minor node,
     // bail on anything else.
     if minor != XDE_CTL_MINOR {
-        warn!("unexpected minor number {minor}");
         return DDI_FAILURE;
     }
 
