@@ -1333,26 +1333,22 @@ static xde_linkage: modlinkage = modlinkage {
 
 #[no_mangle]
 static mut xde_mac_callbacks: mac::mac_callbacks_t = mac::mac_callbacks_t {
-    mc_callbacks: (mac::MC_IOCTL
-        | mac::MC_GETCAPAB
-        | mac::MC_SETPROP
-        | mac::MC_GETPROP
-        | mac::MC_PROPINFO) as u32,
+    mc_callbacks: (mac::MC_GETCAPAB | mac::MC_PROPERTIES) as c_uint,
     mc_reserved: core::ptr::null_mut(),
     mc_getstat: xde_mc_getstat,
     mc_start: xde_mc_start,
     mc_stop: xde_mc_stop,
     mc_setpromisc: xde_mc_setpromisc,
     mc_multicst: xde_mc_multicst,
-    mc_unicst: xde_mc_unicst,
-    mc_tx: xde_mc_tx,
-    mc_ioctl: xde_mc_ioctl,
-    mc_getcapab: xde_mc_getcapab,
-    mc_open: xde_mc_open,
-    mc_close: xde_mc_close,
-    mc_getprop: xde_mc_getprop,
-    mc_setprop: xde_mc_setprop,
-    mc_propinfo: xde_mc_propinfo,
+    mc_unicst: Some(xde_mc_unicst),
+    mc_tx: Some(xde_mc_tx),
+    mc_ioctl: None,
+    mc_getcapab: Some(xde_mc_getcapab),
+    mc_open: None,
+    mc_close: None,
+    mc_getprop: Some(xde_mc_getprop),
+    mc_setprop: Some(xde_mc_setprop),
+    mc_propinfo: Some(xde_mc_propinfo),
 };
 
 #[no_mangle]
@@ -2000,16 +1996,6 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
 }
 
 #[no_mangle]
-unsafe extern "C" fn xde_mc_ioctl(
-    _arg: *mut c_void,
-    queue: *mut queue_t,
-    mp: *mut mblk_t,
-) {
-    warn!("call to unimplemented xde_mc_ioctl");
-    miocnak(queue, mp, 0, ENOTSUP);
-}
-
-#[no_mangle]
 unsafe extern "C" fn xde_mc_getcapab(
     _arg: *mut c_void,
     _cap: mac::mac_capab_t,
@@ -2017,11 +2003,6 @@ unsafe extern "C" fn xde_mc_getcapab(
 ) -> boolean_t {
     boolean_t::B_FALSE
 }
-
-unsafe extern "C" fn xde_mc_open(_arg: *mut c_void) -> c_int {
-    0
-}
-unsafe extern "C" fn xde_mc_close(_arg: *mut c_void) {}
 
 #[no_mangle]
 unsafe extern "C" fn xde_mc_setprop(
