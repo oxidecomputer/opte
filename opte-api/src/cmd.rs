@@ -21,7 +21,7 @@ cfg_if! {
     }
 }
 
-pub const XDE_IOC: u16 = 0xde00;
+pub const XDE_IOC: u32 = 0xde777700;
 pub const XDE_IOC_OPTE_CMD: i32 = XDE_IOC as i32 | 0x01;
 
 #[derive(Clone, Copy, Debug)]
