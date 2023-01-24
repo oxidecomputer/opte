@@ -14,3 +14,9 @@ ld -ztype=kmod \
    -N"misc/dld" \
    -z allextract $DBG_DIR/xde.a \
    -o $DBG_DIR/xde.dbg
+
+# Also build devfsadm plugin
+cargo -v build \
+    --manifest-path xde-link/Cargo.toml \
+    -Z build-std=core \
+    --target xde-link/i686-unknown-illumos.json

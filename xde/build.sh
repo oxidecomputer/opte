@@ -15,3 +15,10 @@ ld -ztype=kmod \
    -N"misc/dld" \
    -z allextract $REL_DIR/xde.a \
    -o $REL_DIR/xde
+
+# Also build devfsadm plugin
+cargo -v build \
+    --release \
+    --manifest-path xde-link/Cargo.toml \
+    -Z build-std=core \
+    --target xde-link/i686-unknown-illumos.json
