@@ -888,6 +888,7 @@ unsafe extern "C" fn xde_getinfo(
             *resultp = ddi_get_instance(xde_dip) as _;
             DDI_SUCCESS
         }
+        _ => DDI_FAILURE,
     }
 }
 
@@ -898,8 +899,8 @@ unsafe extern "C" fn xde_attach(
 ) -> c_int {
     match cmd {
         ddi_attach_cmd_t::DDI_RESUME => return DDI_SUCCESS,
-        ddi_attach_cmd_t::DDI_PM_RESUME => return DDI_SUCCESS,
         ddi_attach_cmd_t::DDI_ATTACH => {}
+        _ => return DDI_FAILURE,
     }
 
     assert!(xde_dip.is_null());
@@ -1203,9 +1204,14 @@ unsafe fn get_driver_prop_string(
 #[no_mangle]
 unsafe extern "C" fn xde_detach(
     _dip: *mut dev_info,
-    _cmd: ddi_detach_cmd_t,
+    cmd: ddi_detach_cmd_t,
 ) -> c_int {
     assert!(!xde_dip.is_null());
+
+    match cmd {
+        ddi_detach_cmd_t::DDI_DETACH => {}
+        _ => return DDI_FAILURE,
+    }
 
     if xde_devs.read().len() > 0 {
         warn!("failed to detach: outstanding ports");

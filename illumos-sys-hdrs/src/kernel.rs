@@ -6,34 +6,46 @@
 
 use super::*;
 
-#[repr(C)]
+/// Command argument passed to `getinfo(9E)`.
+#[repr(transparent)]
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub enum ddi_info_cmd_t {
-    DDI_INFO_DEVT2DEVINFO = 0, // Convert a dev_t to a dev_info_t
-    DDI_INFO_DEVT2INSTANCE = 1, // Convert a dev_t to an instance #
+pub struct ddi_info_cmd_t(pub c_int);
+impl ddi_info_cmd_t {
+    /// Convert a `dev_t` to a `dev_info_t`.
+    pub const DDI_INFO_DEVT2DEVINFO: Self = Self(0);
+    /// Convert a `dev_t` to an instance number.
+    pub const DDI_INFO_DEVT2INSTANCE: Self = Self(1);
 }
 
-#[repr(C)]
+/// Attach command type passed to `attach(9E)`.
+#[repr(transparent)]
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub enum ddi_attach_cmd_t {
-    DDI_ATTACH = 0,
-    DDI_RESUME = 1,
-    DDI_PM_RESUME = 2,
+pub struct ddi_attach_cmd_t(pub c_int);
+impl ddi_attach_cmd_t {
+    /// Initialize a given device instance.
+    pub const DDI_ATTACH: Self = Self(0);
+    /// Resume a previously suspended device.
+    pub const DDI_RESUME: Self = Self(1);
 }
 
-#[repr(C)]
+/// Detach command type passed to `detach(9E)`.
+#[repr(transparent)]
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub enum ddi_detach_cmd_t {
-    DDI_DETACH = 0,
-    DDI_SUSPEND = 1,
-    DDI_PM_SUSPEND = 2,
-    DDI_HOTPLUG_DETACH = 3,
+pub struct ddi_detach_cmd_t(pub c_int);
+impl ddi_detach_cmd_t {
+    /// Remove state associated with given device instance.
+    pub const DDI_DETACH: Self = Self(0);
+    /// Suspend a given device instance.
+    pub const DDI_SUSPEND: Self = Self(1);
 }
 
-#[repr(C)]
+/// Reset type passed to driver's `devo_reset` routine.
+#[repr(transparent)]
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub enum ddi_reset_cmd_t {
-    DDI_RESET_FORCE = 0,
+pub struct ddi_reset_cmd_t(pub c_int);
+impl ddi_reset_cmd_t {
+    /// Force a reset of the device.
+    pub const DDI_RESET_FORCE: Self = Self(0);
 }
 
 // TODO Technically this is not a "raw" interface. This should live
@@ -54,17 +66,28 @@ pub struct krwlock_t {
     pub _opaque: u64,
 }
 
-#[repr(C)]
-pub enum krw_type_t {
-    RW_DRIVER = 2,  /* driver (DDI) rwlock */
-    RW_DEFAULT = 4, /* kernel default rwlock */
+/// `krwlock_t` type passed to `rw_init(9F)`.
+#[repr(transparent)]
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct krw_type_t(pub c_int);
+impl krw_type_t {
+    /// Lock for use by (DDI) drivers.
+    pub const RW_DRIVER: Self = Self(2);
+    /// Kernel default lock.
+    pub const RW_DEFAULT: Self = Self(4);
 }
 
-#[repr(C)]
-pub enum krw_t {
-    RW_WRITER,
-    RW_READER,
-    RW_READER_STARVEWRITER,
+/// Lock acquisition type passed to `rw_[try]enter(9F)`.
+#[repr(transparent)]
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct krw_t(pub c_int);
+impl krw_t {
+    /// Acquire lock exclusively.
+    pub const RW_WRITER: Self = Self(0);
+    /// Acquire lock non-exclusively.
+    pub const RW_READER: Self = Self(1);
+    /// Acquire lock non-exclusively, ignoring waiting writers.
+    pub const RW_READER_STARVEWRITER: Self = Self(2);
 }
 
 extern "C" {
