@@ -52,12 +52,21 @@ pub const EBUSY: c_int = 16;
 pub const EEXIST: c_int = 17;
 pub const EINVAL: c_int = 22;
 pub const ENFILE: c_int = 23;
+pub const ENOTTY: c_int = 25;
 pub const EPIPE: c_int = 32;
 pub const ENOMSG: c_int = 35;
 pub const ENOTSUP: c_int = 48;
 pub const ENOSTR: c_int = 60;
 pub const EPROTO: c_int = 71;
 pub const ENOBUFS: c_int = 132;
+
+// ======================================================================
+// uts/common/sys/file.h
+// ======================================================================
+pub const FREAD: c_int = 0x1;
+pub const FWRITE: c_int = 0x2;
+pub const FOFFMAX: c_int = 0x2000;
+pub const FCLOEXEC: c_int = 0x800000;
 
 // ======================================================================
 // uts/common/sys/open.h

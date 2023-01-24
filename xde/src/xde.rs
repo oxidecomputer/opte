@@ -349,9 +349,9 @@ unsafe extern "C" fn xde_qopen(
 #[no_mangle]
 unsafe extern "C" fn xde_open(
     devp: *mut dev_t,
-    _flag: c_int,
+    flag: c_int,
     otyp: c_int,
-    _credp: *mut cred_t,
+    credp: *mut cred_t,
 ) -> c_int {
     assert!(!xde_dip.is_null());
 
@@ -361,14 +361,21 @@ unsafe extern "C" fn xde_open(
 
     let minor = getminor(*devp);
     if minor != XDE_CTL_MINOR {
-        warn!("invalid minor number for open: {minor}");
         return ENXIO;
     }
 
-    // TODO: check flags
+    match secpolicy::secpolicy_dl_config(credp) {
+        0 => {}
+        err => {
+            warn!("secpolicy_dl_config failed: {err}");
+            return err;
+        }
+    }
 
-    // TODO: device cloning needed?
-    *devp = makedevice(getmajor(*devp), minor);
+    let flag = flag & !(FCLOEXEC | FOFFMAX);
+    if flag != (FREAD | FWRITE) {
+        return EINVAL;
+    }
 
     0
 }
@@ -388,7 +395,6 @@ unsafe extern "C" fn xde_close(
 
     let minor = getminor(dev);
     if minor != XDE_CTL_MINOR {
-        warn!("invalid minor number for close: {minor}");
         return ENXIO;
     }
 
@@ -401,28 +407,18 @@ unsafe extern "C" fn xde_ioctl(
     cmd: c_int,
     arg: intptr_t,
     mode: c_int,
-    credp: *mut cred_t,
-    rvalp: *mut c_int,
+    _credp: *mut cred_t,
+    _rvalp: *mut c_int,
 ) -> c_int {
     assert!(!xde_dip.is_null());
 
     let minor = getminor(dev);
     if minor != XDE_CTL_MINOR {
-        warn!("invalid minor number for ioctl: {minor}");
-        return EINVAL;
+        return ENXIO;
     }
 
     if cmd != XDE_IOC_OPTE_CMD {
-        warn!("invalid ioctl command: {cmd}");
-        return EINVAL;
-    }
-
-    match secpolicy::secpolicy_dl_config(credp) {
-        0 => {}
-        err => {
-            warn!("secpolicy_dl_config failed: {err}");
-            return err;
-        }
+        return ENOTTY;
     }
 
     // TODO: this is using KM_SLEEP, is that ok?
@@ -431,7 +427,7 @@ unsafe extern "C" fn xde_ioctl(
         return EFAULT;
     }
 
-    let err = xde_ioc_opte_cmd(buf.as_mut_ptr() as _, arg, mode, credp, rvalp);
+    let err = xde_ioc_opte_cmd(buf.as_mut_ptr() as _, mode);
 
     if ddi_copyout(buf.as_ptr() as _, arg as _, IOCTL_SZ, mode) != 0 && err == 0
     {
@@ -479,13 +475,7 @@ fn set_xde_underlay_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 // This is the entry point for all OPTE commands. It verifies the API
 // version and then multiplexes the command to its appropriate handler.
 #[no_mangle]
-unsafe extern "C" fn xde_ioc_opte_cmd(
-    karg: *mut c_void,
-    _arg: intptr_t,
-    mode: c_int,
-    _cred: *mut cred_t,
-    _rvalp: *mut c_int,
-) -> c_int {
+unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
     let ioctl: &mut OpteCmdIoctl = &mut *(karg as *mut OpteCmdIoctl);
     let mut env = match IoctlEnvelope::wrap(ioctl, mode) {
         Ok(v) => v,
