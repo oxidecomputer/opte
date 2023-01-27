@@ -5,6 +5,7 @@
 // Copyright 2022 Oxide Computer Company
 
 use super::mac::MacAddr;
+use crate::DomainName;
 use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Debug;
@@ -144,6 +145,10 @@ pub struct DhcpAction {
 
     /// An optional list of 1-3 DNS servers.
     pub dns_servers: Option<[Option<Ipv4Addr>; 3]>,
+
+    /// An optional list of domain names used when resolving relative names via
+    /// DNS.
+    pub domain_list: Option<Vec<DomainName>>,
 }
 
 impl Display for DhcpAction {

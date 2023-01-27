@@ -10,6 +10,7 @@ use std::str::FromStr;
 use structopt::StructOpt;
 
 use opte::api::Direction;
+use opte::api::DomainName;
 use opte::api::IpCidr;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv4Cidr;
@@ -116,46 +117,73 @@ enum Command {
 
     /// Create an xde device
     CreateXde {
+        /// The name for the `xde` device.
         name: String,
 
+        /// The private MAC address for the guest.
         #[structopt(long)]
         guest_mac: MacAddr,
 
+        /// The private IPv4 address for the guest.
         #[structopt(long)]
         private_ip: std::net::Ipv4Addr,
 
+        /// The private IP subnet to which the guest belongs.
         #[structopt(long)]
         vpc_subnet: Ipv4Cidr,
 
+        /// The MAC address to use as the virtual gateway.
+        ///
+        /// This is the MAC OPTE itself uses when responding directly to the
+        /// client, for example, to DHCP requests.
         #[structopt(long)]
         gateway_mac: MacAddr,
 
+        /// The IP address to use as the virtual gateway.
+        ///
+        /// This is the IP OPTE itself uses when responding directly to the
+        /// client, for example, to DHCP requests.
         #[structopt(long)]
         gateway_ip: std::net::Ipv4Addr,
 
+        /// The IP addreess for Boundary Services, where packets destined to
+        /// off-rack networks are sent.
         #[structopt(long)]
         bsvc_addr: std::net::Ipv6Addr,
 
+        /// The VNI used for Boundary Services.
         #[structopt(long)]
         bsvc_vni: Vni,
 
+        /// The MAC address for Boundary Services.
         #[structopt(long, default_value = "00:00:00:00:00:00")]
         bsvc_mac: MacAddr,
 
+        /// The VNI for the VPC to which the guest belongs.
         #[structopt(long)]
         vpc_vni: Vni,
 
+        /// The IP address of the hosting sled, on the underlay / physical
+        /// network.
         #[structopt(long)]
         src_underlay_addr: std::net::Ipv6Addr,
 
+        /// The external IP address used for source NAT for the guest.
         #[structopt(long, requires_all(&["snat-start", "snat-end"]))]
         snat_ip: Option<std::net::Ipv4Addr>,
 
+        /// The starting L4 port used for source NAT for the guest.
         #[structopt(long)]
         snat_start: Option<u16>,
 
+        /// The ending L4 port used for source NAT for the guest.
         #[structopt(long)]
         snat_end: Option<u16>,
+
+        /// A list of domain names provided to the guest, used when resolving
+        /// hostnames.
+        #[structopt(long, parse(try_from_str))]
+        domain_list: Option<Vec<DomainName>>,
 
         #[structopt(long)]
         phys_gw_mac: Option<MacAddr>,
@@ -329,6 +357,7 @@ fn main() -> anyhow::Result<()> {
             snat_ip,
             snat_start,
             snat_end,
+            domain_list,
             phys_gw_mac,
             external_ipv4,
             passthrough,
@@ -363,6 +392,7 @@ fn main() -> anyhow::Result<()> {
                     vni: bsvc_vni,
                     mac: bsvc_mac,
                 },
+                domain_list,
                 // XXX-EXT-IP: This is part of the external IP hack. We're
                 // removing this shortly, and won't be supporting creating OPTE
                 // ports through `opteadm` that use the hack.

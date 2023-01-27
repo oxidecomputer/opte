@@ -6,6 +6,7 @@
 
 //! Types for working with the DHCPv6
 
+use crate::DomainName;
 use crate::Ipv6Addr;
 use crate::MacAddr;
 use core::fmt;
@@ -38,6 +39,9 @@ pub struct Dhcpv6Action {
 
     /// SNTP servers the client should use.
     pub sntp_servers: Vec<Ipv6Addr>,
+
+    /// An optional list of domain names used during DNS resolution.
+    pub domain_list: Option<Vec<DomainName>>,
 }
 
 impl Dhcpv6Action {

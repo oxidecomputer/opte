@@ -146,6 +146,7 @@ pub fn g1_cfg2(ip_cfg: IpCfg) -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
+        domain_list: Some(vec!["oxide.computer".parse().unwrap()]),
         proxy_arp_enable: false,
         phys_gw_mac: Some(MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d])),
     }
@@ -191,6 +192,7 @@ pub fn g2_cfg() -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
+        domain_list: Some(vec!["oxide.computer".parse().unwrap()]),
         proxy_arp_enable: false,
         phys_gw_mac: Some(MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d])),
     }

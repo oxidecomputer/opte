@@ -62,6 +62,7 @@ use super::Error;
 use super::Lifetime;
 use core::mem::size_of;
 use core::ops::Range;
+use opte_api::DomainName;
 use opte_api::Ipv6Addr;
 
 /// A DHCPv6 Option code.
@@ -307,7 +308,7 @@ impl<'a> Option<'a> {
             Option::RapidCommit => unreachable!(),
             Option::DnsServers(inner) => inner.copy_into(data),
             Option::DomainList(inner) => {
-                data.copy_from_slice(inner);
+                data[..inner.len()].copy_from_slice(inner);
                 Ok(())
             }
             Option::SntpServers(inner) => inner.copy_into(data),
@@ -369,6 +370,17 @@ impl<'a> Option<'a> {
                 Ok(Option::Other { code, data: RawOption(data.into()) })
             }
         }
+    }
+}
+
+// Build a DomainList option from a list of `DomainName`s.
+impl<'a> From<&'a [DomainName]> for Option<'a> {
+    fn from(list: &'a [DomainName]) -> Self {
+        let mut bytes = Vec::new();
+        for name in list.iter() {
+            bytes.extend_from_slice(name.encode());
+        }
+        Option::DomainList(Cow::from(bytes))
     }
 }
 
@@ -832,6 +844,7 @@ impl<'a> IpList<'a> {
 #[cfg(test)]
 mod test {
     use super::Code;
+    use super::DomainName;
     use super::Duid;
     use super::ElapsedTime;
     use super::IaNa;
@@ -1069,5 +1082,29 @@ mod test {
         } else {
             panic!("Expected a Client ID");
         }
+    }
+
+    #[test]
+    fn test_domain_list_from_slice() {
+        let list = [
+            "foo.bar.com".parse::<DomainName>().unwrap(),
+            "something".parse::<DomainName>().unwrap(),
+            "another.fqdn.".parse::<DomainName>().unwrap(),
+        ];
+        let opt = Option::from(list.as_slice());
+        let Option::DomainList(bytes) = &opt else {
+            panic!("Expected a DomainList");
+        };
+        let mut index = 0;
+        for name in list.iter() {
+            let enc = name.encode();
+            assert_eq!(enc, &bytes[index..][..enc.len()]);
+            index += enc.len();
+        }
+
+        let expected_len: usize =
+            list.iter().map(|name| name.encode().len()).sum();
+        assert_eq!(opt.data_len(), expected_len);
+        assert_eq!(opt.buffer_len(), expected_len + 4); // Option code and len
     }
 }

@@ -50,6 +50,7 @@ pub fn setup(layer: &mut Layer, cfg: &VpcCfg) -> Result<(), OpteError> {
             Ipv6Addr::from_const([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8844]),
         ],
         sntp_servers: vec![],
+        domain_list: cfg.domain_list.clone(),
     };
 
     let server = Action::Hairpin(Arc::new(action));

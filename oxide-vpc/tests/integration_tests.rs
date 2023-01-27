@@ -109,6 +109,7 @@ fn lab_cfg() -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
+        domain_list: Some(vec!["oxide.computer".parse().unwrap()]),
         proxy_arp_enable: false,
         phys_gw_mac: Some(MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d])),
     }
@@ -1932,12 +1933,18 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
         t2: dhcpv6::Lifetime(6200),
         options: vec![],
     };
+    // Also request the DNS server list and Domain Search List, via the Option
+    // Request option.
+    let extra_options =
+        &[dhcpv6::options::Code::DnsServers, dhcpv6::options::Code::DomainList];
+    let oro = dhcpv6::options::OptionRequest(extra_options.as_slice().into());
     let base_options = vec![
         dhcpv6::options::Option::ClientId(dhcpv6::Duid::from(
             &g1_cfg.guest_mac,
         )),
         dhcpv6::options::Option::ElapsedTime(dhcpv6::options::ElapsedTime(10)),
         dhcpv6::options::Option::IaNa(requested_iana.clone()),
+        dhcpv6::options::Option::OptionRequest(oro),
     ];
 
     for msg_type in [
@@ -2015,7 +2022,8 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                 // Regardless of the message type, we are supposed to
                 // include answers for each Option the client
                 // requested (and that we support). That's mostly just
-                // the actual VPC-private IPv6 address.
+                // the actual VPC-private IPv6 address, but we also check the
+                // Domain Search List option.
                 let iana =
                     reply.find_option(dhcpv6::options::Code::IaNa).unwrap();
                 if let dhcpv6::options::Option::IaNa(dhcpv6::options::IaNa {
@@ -2055,6 +2063,21 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                 } else {
                     panic!("Expected an IANA option, found {:?}", iana);
                 }
+
+                let domain_list = reply
+                    .find_option(dhcpv6::options::Code::DomainList)
+                    .expect("Expected a Domain Search List option");
+                let dhcpv6::options::Option::DomainList(bytes) = domain_list else {
+                    panic!("Expected an Option::DomainList");
+                };
+                let mut expected_bytes = Vec::new();
+                for name in g1_cfg.domain_list.as_ref().unwrap().iter() {
+                    expected_bytes.extend_from_slice(name.encode());
+                }
+                assert_eq!(
+                    *bytes, expected_bytes,
+                    "Domain Search List option not correctly encoded"
+                );
             } else {
                 panic!("Expected a Hairpin, found {:?}", res);
             }

@@ -193,6 +193,12 @@ pub struct VpcCfg {
     /// for external networks.
     pub boundary_services: BoundaryServices,
 
+    /// An optional list of domain names used during DNS resolution.
+    ///
+    /// Resolvers will use the provided list when resolving relative domain
+    /// names.
+    pub domain_list: Option<Vec<DomainName>>,
+
     // XXX-EXT-IP the following two fields are for the external IP hack.
     pub proxy_arp_enable: bool,
     pub phys_gw_mac: Option<MacAddr>,

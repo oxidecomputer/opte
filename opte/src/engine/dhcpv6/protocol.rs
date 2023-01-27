@@ -195,6 +195,18 @@ impl<'a> Message<'a> {
         self.find_option(code).is_some()
     }
 
+    /// Return `true` if the message has an Option Request option, which
+    /// contains the provided type.
+    pub fn has_option_request_with(&self, code: OptionCode) -> bool {
+        if let Some(Dhcpv6Option::OptionRequest(opts)) =
+            self.find_option(OptionCode::OptionRequest)
+        {
+            opts.contains(code)
+        } else {
+            false
+        }
+    }
+
     /// Return the _first_ contained option of the provided type, or `None` if
     /// the message does not contain such an option.
     ///
@@ -222,13 +234,7 @@ impl<'a> Message<'a> {
 
         // Look for the Rapid Commit option contained in the Option Request
         // option.
-        if let Some(Dhcpv6Option::OptionRequest(opts)) =
-            self.find_option(OptionCode::OptionRequest)
-        {
-            opts.contains(OptionCode::RapidCommit)
-        } else {
-            false
-        }
+        self.has_option_request_with(OptionCode::RapidCommit)
     }
 
     fn option_len(&self) -> usize {
@@ -308,15 +314,11 @@ fn generate_reply_options<'a>(
     ];
 
     // If requested, provide the list of DNS servers.
-    if let Some(Dhcpv6Option::OptionRequest(oro)) =
-        msg.find_option(OptionCode::OptionRequest)
-    {
-        if oro.contains(OptionCode::DnsServers) {
-            let opt = Dhcpv6Option::DnsServers(IpList::from(
-                action.dns_servers.as_slice(),
-            ));
-            options.push(opt);
-        }
+    if msg.has_option_request_with(OptionCode::DnsServers) {
+        let opt = Dhcpv6Option::DnsServers(IpList::from(
+            action.dns_servers.as_slice(),
+        ));
+        options.push(opt);
     }
 
     // Add the leased address(es), if they were requested, along with the IAID
@@ -349,6 +351,18 @@ fn generate_reply_options<'a>(
         options.push(Dhcpv6Option::IaNa(iana));
     }
 
+    // If requested, provide the Domain Search List option.
+    //
+    // This is a list of domain names appended to hostnames before trying to
+    // resolve them.
+    if msg.has_option(OptionCode::DomainList)
+        || msg.has_option_request_with(OptionCode::DomainList)
+    {
+        if let Some(list) = &action.domain_list {
+            let opt = Dhcpv6Option::from(list.as_slice());
+            options.push(opt);
+        }
+    }
     options
 }
 

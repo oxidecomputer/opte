@@ -86,6 +86,7 @@ pub fn setup(
             None,
             None,
         ]),
+        domain_list: cfg.domain_list.clone(),
     }));
 
     let ack = Action::Hairpin(Arc::new(DhcpAction {
@@ -104,6 +105,7 @@ pub fn setup(
             None,
             None,
         ]),
+        domain_list: cfg.domain_list.clone(),
     }));
 
     let discover_rule = Rule::new(1, offer);
