@@ -656,10 +656,10 @@ pub enum Address {
     Any,
 
     /// Match traffic from the given subnet CIDR.
-    Subnet(Ipv4Cidr),
+    Subnet(IpCidr),
 
     /// Match traffic from the given IP address.
-    Ip(Ipv4Addr),
+    Ip(IpAddr),
 
     /// Match traffic from the given VNI.
     Vni(Vni),
@@ -684,27 +684,6 @@ impl FromStr for Address {
             },
         }
     }
-}
-
-#[test]
-fn parse_good_address() {
-    assert_eq!("any".parse::<Address>(), Ok(Address::Any));
-    assert_eq!(
-        "ip=192.168.2.1".parse::<Address>(),
-        Ok(Address::Ip("192.168.2.1".parse().unwrap()))
-    );
-    assert_eq!(
-        "vni=7777".parse(),
-        Ok(Address::Vni(Vni::new(7777u32).unwrap()))
-    );
-}
-
-#[test]
-fn parse_bad_address() {
-    assert!("ip:192.168.2.1".parse::<Address>().is_err());
-    assert!("ip=192.168.2".parse::<Address>().is_err());
-    assert!("ip=192.168.O.1".parse::<Address>().is_err());
-    assert!("addr=192.168.2.1".parse::<Address>().is_err());
 }
 
 impl Display for Address {
@@ -738,22 +717,6 @@ impl FromStr for ProtoFilter {
             _ => Err(format!("unknown protocol: {}", s)),
         }
     }
-}
-
-#[test]
-fn parse_good_proto_filter() {
-    assert_eq!("aNy".parse::<ProtoFilter>().unwrap(), ProtoFilter::Any);
-    assert_eq!(
-        "TCp".parse::<ProtoFilter>().unwrap(),
-        ProtoFilter::Proto(Protocol::TCP)
-    );
-}
-
-#[test]
-fn parse_bad_proto_filter() {
-    assert!("foo".parse::<ProtoFilter>().is_err());
-    assert!("TCP,".parse::<ProtoFilter>().is_err());
-    assert!("6".parse::<ProtoFilter>().is_err());
 }
 
 impl Display for ProtoFilter {
@@ -801,28 +764,6 @@ impl FromStr for Ports {
     }
 }
 
-#[test]
-fn ports_from_str_good() {
-    assert_eq!("AnY".parse::<Ports>(), Ok(Ports::Any));
-    assert_eq!("any,".parse::<Ports>(), Ok(Ports::Any));
-    assert_eq!("22".parse::<Ports>().unwrap(), Ports::PortList(vec![22]));
-    assert_eq!(
-        "22,443".parse::<Ports>().unwrap(),
-        Ports::PortList(vec![22, 443])
-    );
-}
-
-#[test]
-fn ports_from_str_bad() {
-    assert!("".parse::<Ports>().is_err());
-    assert!("0".parse::<Ports>().is_err());
-    assert!("rpz".parse::<Ports>().is_err());
-    assert!("rpz,0".parse::<Ports>().is_err());
-    assert!("rpz,22".parse::<Ports>().is_err());
-    assert!("22,rpz".parse::<Ports>().is_err());
-    assert!("any,rpz".parse::<Ports>().is_err());
-}
-
 impl Display for Ports {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -832,5 +773,83 @@ impl Display for Ports {
                 write!(f, "{}", plist[0])
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Address;
+    use super::IpAddr;
+    use super::IpCidr;
+    use super::Ports;
+    use super::ProtoFilter;
+    use super::Protocol;
+    use super::Vni;
+
+    #[test]
+    fn ports_from_str_good() {
+        assert_eq!("AnY".parse::<Ports>(), Ok(Ports::Any));
+        assert_eq!("any,".parse::<Ports>(), Ok(Ports::Any));
+        assert_eq!("22".parse::<Ports>().unwrap(), Ports::PortList(vec![22]));
+        assert_eq!(
+            "22,443".parse::<Ports>().unwrap(),
+            Ports::PortList(vec![22, 443])
+        );
+    }
+
+    #[test]
+    fn ports_from_str_bad() {
+        assert!("".parse::<Ports>().is_err());
+        assert!("0".parse::<Ports>().is_err());
+        assert!("rpz".parse::<Ports>().is_err());
+        assert!("rpz,0".parse::<Ports>().is_err());
+        assert!("rpz,22".parse::<Ports>().is_err());
+        assert!("22,rpz".parse::<Ports>().is_err());
+        assert!("any,rpz".parse::<Ports>().is_err());
+    }
+
+    #[test]
+    fn parse_good_address() {
+        assert_eq!("any".parse::<Address>(), Ok(Address::Any));
+        assert_eq!(
+            "ip=192.168.2.1".parse::<Address>(),
+            Ok(Address::Ip("192.168.2.1".parse().unwrap()))
+        );
+        assert_eq!(
+            "vni=7777".parse(),
+            Ok(Address::Vni(Vni::new(7777u32).unwrap()))
+        );
+        assert_eq!(
+            "ip=fd00::1".parse::<Address>().unwrap(),
+            Address::Ip(IpAddr::Ip6("fd00::1".parse().unwrap()))
+        );
+        assert_eq!(
+            "subnet=fd00::0/64".parse::<Address>().unwrap(),
+            Address::Subnet(IpCidr::Ip6("fd00::0/64".parse().unwrap()))
+        );
+    }
+
+    #[test]
+    fn parse_bad_address() {
+        assert!("ip:192.168.2.1".parse::<Address>().is_err());
+        assert!("ip=192.168.2".parse::<Address>().is_err());
+        assert!("ip=192.168.O.1".parse::<Address>().is_err());
+        assert!("addr=192.168.2.1".parse::<Address>().is_err());
+    }
+
+    #[test]
+    fn parse_good_proto_filter() {
+        assert_eq!("aNy".parse::<ProtoFilter>().unwrap(), ProtoFilter::Any);
+        assert_eq!(
+            "TCp".parse::<ProtoFilter>().unwrap(),
+            ProtoFilter::Proto(Protocol::TCP)
+        );
+    }
+
+    #[test]
+    fn parse_bad_proto_filter() {
+        assert!("foo".parse::<ProtoFilter>().is_err());
+        assert!("TCP,".parse::<ProtoFilter>().is_err());
+        assert!("6".parse::<ProtoFilter>().is_err());
     }
 }
