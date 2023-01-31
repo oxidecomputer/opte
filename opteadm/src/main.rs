@@ -146,7 +146,7 @@ enum Command {
         #[structopt(long)]
         gateway_ip: std::net::Ipv4Addr,
 
-        /// The IP addreess for Boundary Services, where packets destined to
+        /// The IP address for Boundary Services, where packets destined to
         /// off-rack networks are sent.
         #[structopt(long)]
         bsvc_addr: std::net::Ipv6Addr,

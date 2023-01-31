@@ -261,7 +261,20 @@ fn encode_domain_search_option(names: &[DomainName]) -> Vec<u8> {
         all_names.extend_from_slice(name.encode());
     }
 
-    let mut out = Vec::with_capacity(all_names.len());
+    // Reserve space for the actual name options, plus all option code octets as
+    // well.
+    //
+    // Compute the number of full options. Including the option code, this is
+    // the number of 256-byte chunks. Then compute the length needed for any
+    // partial chunk. This also needs its own option code, which we only
+    // allocate space for if we have anything in the partial chunk.
+    let n_full = all_names.len() / MAX_OPTION_LEN;
+    let n_left = all_names.len() % MAX_OPTION_LEN;
+    let len =
+        n_full * (MAX_OPTION_LEN + 1) + if n_left > 0 { n_left + 1 } else { 0 };
+
+    // Join all cunks, prefixed by the option code.
+    let mut out = Vec::with_capacity(len);
     for chunk in all_names.chunks(MAX_OPTION_LEN) {
         out.push(DOMAIN_SEARCH_OPTION_OPTION_CODE);
         out.push(

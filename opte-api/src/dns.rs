@@ -69,8 +69,7 @@ cfg_if! {
 ///
 /// Technically, labels can contain any octets. However, DNS servers are
 /// required to compare labels without considering case, assuming ASCII with
-/// zero parity. (See RFC 1035 section 3.1, final paragraph.) We enforce this
-/// restriction here.
+/// zero parity. (See RFC 1035 section 3.1, final paragraph.)
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DomainName {
     // The original, parsed string.
@@ -119,7 +118,9 @@ impl TryFrom<&[u8]> for DomainName {
         let mut start: u8 = 0;
         let mut name = String::new();
         loop {
-            let len = buf[usize::from(start)];
+            let Some(&len) = buf.get(usize::from(start)) else {
+                return Err("Invalid label length");
+            };
 
             // Root label has zero length.
             if len == 0 {
@@ -147,9 +148,19 @@ impl TryFrom<&[u8]> for DomainName {
             start += len;
         }
 
+        // Take an owned copy of the prefix of `buf` that we've decoded.
+        //
+        // We break the above loop when `len == 0`, at which point `start`
+        // points to the root label's length octet of zero. So we clone from the
+        // beginning to that `start` offset, _inclusive_.
+        //
+        // Safety: This can't panic because we only break the above loop if we
+        // can successfully index at `buf[start]`.
+        let encoded = buf[..=usize::from(start)].to_vec();
+
         // We've already pushed the root label separator, since we push `'.'`
         // after each label, including the last, before breaking.
-        Ok(Self { encoded: buf.to_vec(), name })
+        Ok(Self { encoded, name })
     }
 }
 
@@ -165,11 +176,16 @@ impl FromStr for DomainName {
         }
 
         // Pull out a possible `.` at the very end, and handle that separately.
-        let is_fqdn = s.ends_with('.');
-        let relative_name = if is_fqdn { &s[..s.len() - 1] } else { s };
+        let relative_name = s.trim_end_matches('.');
 
         // Split out each label, and create the encoded form.
-        let mut encoded = Vec::with_capacity(s.len());
+        //
+        // The length of the encoded form is the length of `s`, plus 1 for the
+        // length octet for the first label, plus 1 if the domain name is
+        // fully-qualified and 0 otherwise (since the last `.` is _replaced_
+        // with the root label length of 0).
+        let encoded_len = s.len() + 1 + if s.ends_with('.') { 0 } else { 1 };
+        let mut encoded = Vec::with_capacity(encoded_len);
         for label in relative_name.split('.') {
             if label.is_empty() || label.len() > Self::MAX_LABEL_LEN {
                 return Err("Label empty or too long");
@@ -219,5 +235,11 @@ mod tests {
         assert!(".foo.bar".parse::<DomainName>().is_err());
         assert!("foo..bar".parse::<DomainName>().is_err());
         assert!(DomainName::try_from(b"\xffnonono".as_slice()).is_err());
+
+        // Check that we only take a prefix, if a larger slice is provided.
+        let encoded = b"\x03foo\x03bar\x03com\x00someextrabytes";
+        let prefix_name = DomainName::try_from(encoded.as_slice()).unwrap();
+        assert_eq!(prefix_name.name(), format!("{orig}."));
+        assert_eq!(prefix_name.encode(), &encoded[..(3 + 1) * 3 + 1]);
     }
 }
