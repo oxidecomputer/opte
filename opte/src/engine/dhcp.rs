@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! DHCP headers, data, and actions.
 
@@ -273,7 +273,7 @@ fn encode_domain_search_option(names: &[DomainName]) -> Vec<u8> {
     let len =
         n_full * (MAX_OPTION_LEN + 1) + if n_left > 0 { n_left + 1 } else { 0 };
 
-    // Join all cunks, prefixed by the option code.
+    // Join all chunks, prefixed by the option code.
     let mut out = Vec::with_capacity(len);
     for chunk in all_names.chunks(MAX_OPTION_LEN) {
         out.push(DOMAIN_SEARCH_OPTION_OPTION_CODE);
@@ -391,8 +391,8 @@ impl HairpinAction for DhcpAction {
         // the new End Option marker.
         assert_eq!(tmp.pop(), Some(255));
         tmp.extend_from_slice(&csr_opt.encode());
-        let dso_encode_len = if let Some(domain_list) = &self.domain_list {
-            let encoded = encode_domain_search_option(domain_list);
+        let dso_encode_len = if !self.domain_list.is_empty() {
+            let encoded = encode_domain_search_option(&self.domain_list);
             tmp.extend_from_slice(&encoded);
             encoded.len()
         } else {

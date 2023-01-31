@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 use core::fmt;
 use core::fmt::Display;
@@ -193,11 +193,11 @@ pub struct VpcCfg {
     /// for external networks.
     pub boundary_services: BoundaryServices,
 
-    /// An optional list of domain names used during DNS resolution.
+    /// A list of domain names used during DNS resolution.
     ///
     /// Resolvers will use the provided list when resolving relative domain
     /// names.
-    pub domain_list: Option<Vec<DomainName>>,
+    pub domain_list: Vec<DomainName>,
 
     // XXX-EXT-IP the following two fields are for the external IP hack.
     pub proxy_arp_enable: bool,

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Integration tests.
 //!
@@ -109,7 +109,7 @@ fn lab_cfg() -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
-        domain_list: Some(vec!["oxide.computer".parse().unwrap()]),
+        domain_list: vec!["oxide.computer".parse().unwrap()],
         proxy_arp_enable: false,
         phys_gw_mac: Some(MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d])),
     }
@@ -2071,7 +2071,7 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                     panic!("Expected an Option::DomainList");
                 };
                 let mut expected_bytes = Vec::new();
-                for name in g1_cfg.domain_list.as_ref().unwrap().iter() {
+                for name in g1_cfg.domain_list.iter() {
                     expected_bytes.extend_from_slice(name.encode());
                 }
                 assert_eq!(

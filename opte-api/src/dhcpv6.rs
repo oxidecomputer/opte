@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Types for working with the DHCPv6
 
@@ -40,8 +40,8 @@ pub struct Dhcpv6Action {
     /// SNTP servers the client should use.
     pub sntp_servers: Vec<Ipv6Addr>,
 
-    /// An optional list of domain names used during DNS resolution.
-    pub domain_list: Option<Vec<DomainName>>,
+    /// A list of domain names used during DNS resolution.
+    pub domain_list: Vec<DomainName>,
 }
 
 impl Dhcpv6Action {

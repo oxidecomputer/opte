@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Implementation of the main message types for DHCPv6.
 
@@ -358,8 +358,8 @@ fn generate_reply_options<'a>(
     if msg.has_option(OptionCode::DomainList)
         || msg.has_option_request_with(OptionCode::DomainList)
     {
-        if let Some(list) = &action.domain_list {
-            let opt = Dhcpv6Option::from(list.as_slice());
+        if !action.domain_list.is_empty() {
+            let opt = Dhcpv6Option::from(action.domain_list.as_slice());
             options.push(opt);
         }
     }

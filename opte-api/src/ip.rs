@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 use super::mac::MacAddr;
 use crate::DomainName;
@@ -146,9 +146,9 @@ pub struct DhcpAction {
     /// An optional list of 1-3 DNS servers.
     pub dns_servers: Option<[Option<Ipv4Addr>; 3]>,
 
-    /// An optional list of domain names used when resolving relative names via
+    /// A list of domain names used when resolving relative names via
     /// DNS.
-    pub domain_list: Option<Vec<DomainName>>,
+    pub domain_list: Vec<DomainName>,
 }
 
 impl Display for DhcpAction {

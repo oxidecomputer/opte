@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 use std::io;
 use std::str::FromStr;
@@ -183,7 +183,7 @@ enum Command {
         /// A list of domain names provided to the guest, used when resolving
         /// hostnames.
         #[structopt(long, parse(try_from_str))]
-        domain_list: Option<Vec<DomainName>>,
+        domain_list: Vec<DomainName>,
 
         #[structopt(long)]
         phys_gw_mac: Option<MacAddr>,
