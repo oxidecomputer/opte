@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The DHCPv6 implementation of the Virtual Gateway.
 
@@ -50,6 +50,7 @@ pub fn setup(layer: &mut Layer, cfg: &VpcCfg) -> Result<(), OpteError> {
             Ipv6Addr::from_const([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8844]),
         ],
         sntp_servers: vec![],
+        domain_list: cfg.domain_list.clone(),
     };
 
     let server = Action::Hairpin(Arc::new(action));

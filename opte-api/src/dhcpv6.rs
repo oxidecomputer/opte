@@ -2,10 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Types for working with the DHCPv6
 
+use crate::DomainName;
 use crate::Ipv6Addr;
 use crate::MacAddr;
 use core::fmt;
@@ -38,6 +39,9 @@ pub struct Dhcpv6Action {
 
     /// SNTP servers the client should use.
     pub sntp_servers: Vec<Ipv6Addr>,
+
+    /// A list of domain names used during DNS resolution.
+    pub domain_list: Vec<DomainName>,
 }
 
 impl Dhcpv6Action {

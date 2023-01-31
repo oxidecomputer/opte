@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The DHCP implementation of the Virtual Gateway.
 
@@ -86,6 +86,7 @@ pub fn setup(
             None,
             None,
         ]),
+        domain_list: cfg.domain_list.clone(),
     }));
 
     let ack = Action::Hairpin(Arc::new(DhcpAction {
@@ -104,6 +105,7 @@ pub fn setup(
             None,
             None,
         ]),
+        domain_list: cfg.domain_list.clone(),
     }));
 
     let discover_rule = Rule::new(1, offer);

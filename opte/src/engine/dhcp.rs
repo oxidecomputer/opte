@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! DHCP headers, data, and actions.
 
@@ -34,6 +34,7 @@ use core::fmt;
 use core::fmt::Display;
 use opte_api::DhcpAction;
 use opte_api::DhcpReplyType;
+use opte_api::DomainName;
 use opte_api::MacAddr;
 use opte_api::SubnetRouterPair;
 use serde::de;
@@ -243,6 +244,48 @@ impl ClasslessStaticRouteOpt {
     }
 }
 
+const DOMAIN_SEARCH_OPTION_OPTION_CODE: u8 = 119;
+const MAX_OPTION_LEN: usize = 255;
+
+// Encoded a list of Domain Names into a Domain Search Option, in accordance
+// with RFC 3397.
+//
+// Note that this may return more than one actual DHCP option. Those are
+// limited to 255 octets. However, domain names can be long, and we don't
+// want to artificially constrain the number of names that can be sent in a
+// DHCP Lease. Thus we allow any number, and encode them into as many
+// underlying options as required.
+fn encode_domain_search_option(names: &[DomainName]) -> Vec<u8> {
+    let mut all_names = Vec::new();
+    for name in names {
+        all_names.extend_from_slice(name.encode());
+    }
+
+    // Reserve space for the actual name options, plus all option code octets as
+    // well.
+    //
+    // Compute the number of full options. Including the option code, this is
+    // the number of 256-byte chunks. Then compute the length needed for any
+    // partial chunk. This also needs its own option code, which we only
+    // allocate space for if we have anything in the partial chunk.
+    let n_full = all_names.len() / MAX_OPTION_LEN;
+    let n_left = all_names.len() % MAX_OPTION_LEN;
+    let len =
+        n_full * (MAX_OPTION_LEN + 1) + if n_left > 0 { n_left + 1 } else { 0 };
+
+    // Join all chunks, prefixed by the option code.
+    let mut out = Vec::with_capacity(len);
+    for chunk in all_names.chunks(MAX_OPTION_LEN) {
+        out.push(DOMAIN_SEARCH_OPTION_OPTION_CODE);
+        out.push(
+            u8::try_from(chunk.len()).expect("Chunk length checked above"),
+        );
+        out.extend_from_slice(chunk);
+    }
+
+    out
+}
+
 // XXX I read up just enough on DHCP to get initial lease working.
 // However, I imagine there could be post-lease messages between
 // client/server and those might be unicast, at which point these
@@ -344,11 +387,21 @@ impl HairpinAction for DhcpAction {
         let _ = reply.emit(&mut dhcp).unwrap();
 
         // Need to overwrite the End Option with Classless Static
-        // Route Option and then write new End Option marker.
+        // Route Option, and possibly the Domain Search Option, and then write
+        // the new End Option marker.
         assert_eq!(tmp.pop(), Some(255));
         tmp.extend_from_slice(&csr_opt.encode());
+        let dso_encode_len = if !self.domain_list.is_empty() {
+            let encoded = encode_domain_search_option(&self.domain_list);
+            tmp.extend_from_slice(&encoded);
+            encoded.len()
+        } else {
+            0
+        };
         tmp.push(255);
-        assert_eq!(tmp.len(), reply_len + csr_opt.encode_len() as usize);
+        let expected_len =
+            reply_len + csr_opt.encode_len() as usize + dso_encode_len;
+        assert_eq!(tmp.len(), expected_len);
 
         let mut udp = UdpMeta {
             src: 67,
@@ -556,5 +609,49 @@ mod test {
                 47, 10, 0, 0, 1, 15, 10, 16, 10, 0, 0, 1
             ]
         );
+    }
+
+    #[test]
+    fn domain_search_option_encode() {
+        let names = vec![
+            "foo.bar.com".parse::<DomainName>().unwrap(),
+            "something.that.is.very.long.so.we.need.to.split.the.option"
+                .parse::<DomainName>()
+                .unwrap(),
+            "something.that.is.very.long.so.we.need.to.split.the.option"
+                .parse::<DomainName>()
+                .unwrap(),
+            "something.that.is.very.long.so.we.need.to.split.the.option"
+                .parse::<DomainName>()
+                .unwrap(),
+            "something.that.is.very.long.so.we.need.to.split.the.option"
+                .parse::<DomainName>()
+                .unwrap(),
+            "something.that.is.very.long.so.we.need.to.split.the.option"
+                .parse::<DomainName>()
+                .unwrap(),
+            "oxide.computer".parse::<DomainName>().unwrap(),
+        ];
+        let buf = encode_domain_search_option(&names);
+        let mut option_bytes = Vec::new();
+        for name in &names {
+            option_bytes.extend_from_slice(name.encode());
+        }
+        // There should be two actual options in the output, check the option
+        // code and option lengths are inserted correctly.
+        assert_eq!(buf[0], DOMAIN_SEARCH_OPTION_OPTION_CODE);
+        assert_eq!(buf[1], u8::try_from(MAX_OPTION_LEN).unwrap());
+        assert_eq!(buf[MAX_OPTION_LEN + 2], DOMAIN_SEARCH_OPTION_OPTION_CODE);
+        assert_eq!(
+            buf[MAX_OPTION_LEN + 3],
+            u8::try_from(option_bytes.len() - MAX_OPTION_LEN).unwrap()
+        );
+
+        // Check the actual bytes.
+        assert_eq!(
+            &buf[2..MAX_OPTION_LEN + 2],
+            &option_bytes[..MAX_OPTION_LEN]
+        );
+        assert_eq!(&buf[MAX_OPTION_LEN + 4..], &option_bytes[MAX_OPTION_LEN..]);
     }
 }
