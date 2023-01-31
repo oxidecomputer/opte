@@ -18,7 +18,7 @@ use crate::dls;
 use crate::ioctl::IoctlEnvelope;
 use crate::ip;
 use crate::mac;
-use crate::mac::dld_getinfo;
+use crate::mac::mac_getinfo;
 use crate::mac::mac_private_minor;
 use crate::mac::MacClient;
 use crate::mac::MacOpenFlags;
@@ -858,16 +858,16 @@ unsafe extern "C" fn xde_getinfo(
     let minor = match cmd {
         ddi_info_cmd_t::DDI_INFO_DEVT2DEVINFO
         | ddi_info_cmd_t::DDI_INFO_DEVT2INSTANCE => getminor(arg as dev_t),
-        // We call into `dld_getinfo` here rather than just fail
+        // We call into `mac_getinfo` here rather than just fail
         // with `DDI_FAILURE` to let it handle if ever there's a new
         // `ddi_info_cmd_t` variant.
-        _ => return dld_getinfo(dip, cmd, arg, resultp),
+        _ => return mac_getinfo(dip, cmd, arg, resultp),
     };
 
     // If this isn't one of our private minors,
     // let the GLDv3 framework handle it.
     if minor < mac_private_minor() {
-        return dld_getinfo(dip, cmd, arg, resultp);
+        return mac_getinfo(dip, cmd, arg, resultp);
     }
 
     // We currently only expose a single minor node,

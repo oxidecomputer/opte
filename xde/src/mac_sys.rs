@@ -80,10 +80,7 @@ extern "C" {
     pub type mac_resource_handle;
     pub type mac_prop_info_handle;
 
-    // TODO: The comment on `dld_getinfo` (uts/common/io/dld/dld_str.c)
-    // mentions a provider can call it via `mac_getinfo` but that doesn't
-    // exist?
-    pub fn dld_getinfo(
+    pub fn mac_getinfo(
         dip: *mut dev_info,
         cmd: ddi_info_cmd_t,
         arg: *mut c_void,
