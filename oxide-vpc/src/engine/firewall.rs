@@ -21,6 +21,8 @@ use crate::api::SetFwRulesReq;
 use crate::engine::overlay::ACTION_META_VNI;
 use core::num::NonZeroU32;
 use opte::api::Direction;
+use opte::api::IpAddr;
+use opte::api::IpCidr;
 use opte::api::OpteError;
 use opte::engine::ether::ETHER_TYPE_ARP;
 use opte::engine::layer::DefaultAction;
@@ -32,6 +34,7 @@ use opte::engine::port::Pos;
 use opte::engine::predicate::EtherTypeMatch;
 use opte::engine::predicate::IpProtoMatch;
 use opte::engine::predicate::Ipv4AddrMatch;
+use opte::engine::predicate::Ipv6AddrMatch;
 use opte::engine::predicate::PortMatch;
 use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
@@ -173,20 +176,36 @@ impl Address {
         match (dir, self) {
             (_, Address::Any) => None,
 
-            (Direction::Out, Address::Ip(ip4)) => {
+            (Direction::Out, Address::Ip(IpAddr::Ip4(ip4))) => {
                 Some(Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Exact(ip4)]))
             }
 
-            (Direction::In, Address::Ip(ip4)) => {
+            (Direction::Out, Address::Ip(IpAddr::Ip6(ip6))) => {
+                Some(Predicate::InnerDstIp6(vec![Ipv6AddrMatch::Exact(ip6)]))
+            }
+
+            (Direction::In, Address::Ip(IpAddr::Ip4(ip4))) => {
                 Some(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(ip4)]))
             }
 
-            (Direction::Out, Address::Subnet(ip4_sub)) => Some(
+            (Direction::In, Address::Ip(IpAddr::Ip6(ip6))) => {
+                Some(Predicate::InnerSrcIp6(vec![Ipv6AddrMatch::Exact(ip6)]))
+            }
+
+            (Direction::Out, Address::Subnet(IpCidr::Ip4(ip4_sub))) => Some(
                 Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(ip4_sub)]),
             ),
 
-            (Direction::In, Address::Subnet(ip4_sub)) => Some(
+            (Direction::Out, Address::Subnet(IpCidr::Ip6(ip6_sub))) => Some(
+                Predicate::InnerDstIp6(vec![Ipv6AddrMatch::Prefix(ip6_sub)]),
+            ),
+
+            (Direction::In, Address::Subnet(IpCidr::Ip4(ip4_sub))) => Some(
                 Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Prefix(ip4_sub)]),
+            ),
+
+            (Direction::In, Address::Subnet(IpCidr::Ip6(ip6_sub))) => Some(
+                Predicate::InnerSrcIp6(vec![Ipv6AddrMatch::Prefix(ip6_sub)]),
             ),
 
             (_, Address::Vni(vni)) => Some(Predicate::Meta(
