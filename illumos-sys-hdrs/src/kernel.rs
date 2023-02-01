@@ -151,12 +151,12 @@ unsafe impl Sync for cb_ops {}
 pub struct dev_ops {
     pub devo_rev: c_int,
     pub devo_refcnt: c_int,
-    pub devo_getinfo: unsafe extern "C" fn(
+    pub devo_getinfo: Option<unsafe extern "C" fn(
         dip: *mut dev_info,
         infocmd: ddi_info_cmd_t,
         arg: *mut c_void,
         result: *mut *mut c_void,
-    ) -> c_int,
+    ) -> c_int>,
     pub devo_identify: unsafe extern "C" fn(dip: *mut dev_info) -> c_int,
     pub devo_probe: unsafe extern "C" fn(dip: *mut dev_info) -> c_int,
     pub devo_attach:
@@ -209,16 +209,6 @@ pub unsafe extern "C" fn nulldev_close(
     _credp: *mut cred_t,
 ) -> c_int {
     nulldev()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn nodev_getinfo(
-    _dip: *mut dev_info,
-    _infocmd: ddi_info_cmd_t,
-    _arg: *mut c_void,
-    _result: *mut *mut c_void,
-) -> c_int {
-    nodev()
 }
 
 #[no_mangle]
