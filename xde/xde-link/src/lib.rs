@@ -130,7 +130,6 @@ struct devfsadm_create_t {
     callback_fcn:
         unsafe extern "C" fn(*const di_minor, *const di_node) -> c_int,
 }
-unsafe impl Sync for devfsadm_create_t {}
 
 /// devfsadm plugin link creation registration information
 #[repr(C)]
@@ -142,6 +141,8 @@ pub struct _devfsadm_create_reg_t {
     /// Table of link creation entries
     tblp: *const devfsadm_create_t,
 }
+// SAFETY: Sync is required to stick this in a static.
+//         The only non-Sync field is `tblp` which is never modified.
 unsafe impl Sync for _devfsadm_create_reg_t {}
 
 /// Predicates used to match a device and how to remove its /dev link
@@ -158,7 +159,6 @@ struct devfsadm_remove_t {
     /// Callback to remove /dev/ links
     callback_fcn: unsafe extern "C" fn(*const c_char),
 }
-// unsafe impl Sync for devfsadm_remove_t {}
 
 /// devfsadm plugin link deletion registration information
 #[repr(C)]
@@ -170,4 +170,6 @@ pub struct _devfsadm_remove_reg_t {
     /// Table of link removal entries
     tblp: *const devfsadm_remove_t,
 }
+// SAFETY: Sync is required to stick this in a static.
+//         The only non-Sync field is `tblp` which is never modified.
 unsafe impl Sync for _devfsadm_remove_reg_t {}
