@@ -65,6 +65,9 @@ pub const ENOBUFS: c_int = 132;
 // ======================================================================
 pub const FREAD: c_int = 0x1;
 pub const FWRITE: c_int = 0x2;
+pub const FNDELAY: c_int = 0x4;
+pub const FNONBLOCK: c_int = 0x80;
+pub const FEXCL: c_int = 0x400;
 pub const FOFFMAX: c_int = 0x2000;
 pub const FCLOEXEC: c_int = 0x800000;
 

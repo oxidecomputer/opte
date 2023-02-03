@@ -320,7 +320,7 @@ unsafe extern "C" fn _fini() -> c_int {
 #[no_mangle]
 unsafe extern "C" fn xde_open(
     devp: *mut dev_t,
-    flag: c_int,
+    flags: c_int,
     otyp: c_int,
     credp: *mut cred_t,
 ) -> c_int {
@@ -343,8 +343,7 @@ unsafe extern "C" fn xde_open(
         }
     }
 
-    let flag = flag & !(FCLOEXEC | FOFFMAX);
-    if flag != (FREAD | FWRITE) {
+    if (flags & (FEXCL | FNDELAY | FNONBLOCK)) != 0 {
         return EINVAL;
     }
 
