@@ -11,7 +11,7 @@ use opte::api::OpteCmdIoctl;
 pub use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::API_VERSION;
-use opte::api::XDE_DLD_OPTE_CMD;
+use opte::api::XDE_IOC_OPTE_CMD;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
@@ -85,7 +85,7 @@ pub struct OpteHdl {
 
 #[cfg(target_os = "illumos")]
 impl OpteHdl {
-    pub const DLD_CTL: &'static str = "/dev/dld";
+    pub const XDE_CTL: &'static str = "/dev/xde";
 
     /// Add xde device
     pub fn create_xde(
@@ -98,7 +98,7 @@ impl OpteHdl {
 
         let linkid = link::create_link_id(
             name,
-            libnet::LinkClass::Xde,
+            libnet::LinkClass::Misc,
             libnet::LinkFlags::Active,
         )?;
 
@@ -215,7 +215,7 @@ where
     const MAX_ITERATIONS: u8 = 3;
     for _ in 0..MAX_ITERATIONS {
         let ret = unsafe {
-            libc::ioctl(dev, XDE_DLD_OPTE_CMD as libc::c_int, &rioctl)
+            libc::ioctl(dev, XDE_IOC_OPTE_CMD as libc::c_int, &rioctl)
         };
 
         // The ioctl(2) failed for a reason other than the response

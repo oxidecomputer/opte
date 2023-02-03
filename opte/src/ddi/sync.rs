@@ -208,8 +208,8 @@ pub struct KRwLock<T> {
 
 #[cfg(all(not(feature = "std"), not(test)))]
 pub enum KRwLockType {
-    Driver = krw_type_t::RW_DRIVER as isize,
-    Default = krw_type_t::RW_DEFAULT as isize,
+    Driver = krw_type_t::RW_DRIVER.0 as isize,
+    Default = krw_type_t::RW_DEFAULT.0 as isize,
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -224,9 +224,9 @@ impl From<KRwLockType> for krw_type_t {
 
 #[cfg(all(not(feature = "std"), not(test)))]
 pub enum KRwEnterType {
-    Writer = krw_t::RW_WRITER as isize,
-    Reader = krw_t::RW_READER as isize,
-    ReaderStarveWriter = krw_t::RW_READER_STARVEWRITER as isize,
+    Writer = krw_t::RW_WRITER.0 as isize,
+    Reader = krw_t::RW_READER.0 as isize,
+    ReaderStarveWriter = krw_t::RW_READER_STARVEWRITER.0 as isize,
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]

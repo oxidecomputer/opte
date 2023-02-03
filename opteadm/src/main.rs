@@ -281,7 +281,7 @@ fn main() -> anyhow::Result<()> {
     let cmd = Command::from_args();
     match cmd {
         Command::ListPorts => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_port_header();
             for p in hdl.list_ports()?.ports {
                 print_port(p);
@@ -289,37 +289,37 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::ListLayers { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_list_layers(&hdl.list_layers(&port)?);
         }
 
         Command::DumpLayer { port, name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_layer(&hdl.get_layer_by_name(&port, &name)?);
         }
 
         Command::ClearUft { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             hdl.clear_uft(&port)?;
         }
 
         Command::DumpUft { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_uft(&hdl.dump_uft(&port)?);
         }
 
         Command::DumpTcpFlows { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_tcp_flows(&hdl.dump_tcp_flows(&port)?);
         }
 
         Command::DumpV2P => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_v2p(&hdl.dump_v2p()?);
         }
 
         Command::AddFwRule { port, direction, filters, action, priority } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let rule = FirewallRule {
                 direction,
                 filters: filters.into(),
@@ -338,7 +338,7 @@ fn main() -> anyhow::Result<()> {
                 rules.push(r);
             }
 
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             hdl.set_firewall_rules(&port, rules)?;
         }
 
@@ -362,7 +362,7 @@ fn main() -> anyhow::Result<()> {
             external_ipv4,
             passthrough,
         } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let snat = match snat_ip {
                 Some(ip) => Some(SNat4Cfg {
                     external_ip: ip.into(),
@@ -404,23 +404,23 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::DeleteXde { name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let _ = hdl.delete_xde(&name)?;
         }
 
         Command::SetXdeUnderlay { u1, u2 } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let _ = hdl.set_xde_underlay(&u1, &u2)?;
         }
 
         Command::RmFwRule { port, direction, id } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let request = RemFwRuleReq { port_name: port, dir: direction, id };
             hdl.remove_firewall_rule(&request)?;
         }
 
         Command::SetV2P { vpc_ip4, vpc_mac, underlay_ip, vni } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let vip = opte::api::IpAddr::Ip4(vpc_ip4.into());
             let phys = PhysNet { ether: vpc_mac, ip: underlay_ip.into(), vni };
             let req = SetVirt2PhysReq { vip, phys };
@@ -428,7 +428,7 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::AddRouterEntry { port, dest, target } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::DLD_CTL)?;
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let req = AddRouterEntryReq { port_name: port, dest, target };
             hdl.add_router_entry(&req)?;
         }

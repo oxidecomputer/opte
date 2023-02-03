@@ -14,6 +14,9 @@ file path=opt/oxide/opte/bin/opteadm owner=root group=bin mode=0755
 dir path=kernel owner=root group=sys mode=0755
 dir path=kernel/drv owner=root group=sys mode=0755
 file path=kernel/drv/xde.conf owner=root group=sys mode=0644 preserve=renamenew
+dir path=usr/lib/devfsadm owner=root group=sys mode=0755
+dir path=usr/lib/devfsadm/linkmod owner=root group=sys mode=0755
+file path=usr/lib/devfsadm/linkmod/SUNW_xde_link.so owner=root group=sys mode=0755
 
 # XXX the bypasses below are a hack, but idk what the right thing to do is.
 # Without the bypass this happens

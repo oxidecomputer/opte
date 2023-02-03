@@ -7,8 +7,12 @@
 #: output_rules = [
 #:   "=/work/debug/xde.dbg",
 #:   "=/work/debug/xde.dbg.sha256",
+#:   "=/work/debug/xde_link.dbg.so",
+#:   "=/work/debug/xde_link.dbg.so.sha256",
 #:   "=/work/release/xde",
 #:   "=/work/release/xde.sha256",
+#:   "=/work/release/xde_link.so",
+#:   "=/work/release/xde_link.so.sha256",
 #: ]
 #:
 
@@ -25,9 +29,11 @@ set -o xtrace
 TGT_BASE=${TGT_BASE:=/work}
 
 DBG_SRC=target/x86_64-unknown-unknown/debug
+DBG_LINK_SRC=xde-link/target/i686-unknown-illumos/debug
 DBG_TGT=$TGT_BASE/debug
 
 REL_SRC=target/x86_64-unknown-unknown/release
+REL_LINK_SRC=xde-link/target/i686-unknown-illumos/release
 REL_TGT=$TGT_BASE/release
 
 mkdir -p $DBG_TGT $REL_TGT
@@ -67,5 +73,11 @@ fi
 cp $DBG_SRC/xde.dbg $DBG_TGT/
 sha256sum $DBG_TGT/xde.dbg > $DBG_TGT/xde.dbg.sha256
 
+cp $DBG_LINK_SRC/libxde_link.so $DBG_TGT/xde_link.dbg.so
+sha256sum $DBG_TGT/xde_link.dbg.so > $DBG_TGT/xde_link.dbg.so.sha256
+
 cp $REL_SRC/xde $REL_TGT/
 sha256sum $REL_TGT/xde > $REL_TGT/xde.sha256
+
+cp $REL_LINK_SRC/libxde_link.so $REL_TGT/xde_link.so
+sha256sum $REL_TGT/xde_link.so > $REL_TGT/xde_link.so.sha256

@@ -1,0 +1,36 @@
+{
+  "arch": "x86",
+  "cpu": "pentium4",
+  "data-layout": "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-f64:32:64-f80:32-n8:16:32-S128",
+  "dynamic-linking": true,
+  "eh-frame-header": false,
+  "frame-pointer": "always",
+  "has-rpath": true,
+  "is-like-solaris": true,
+  "late-link-args": {
+    "gcc": [
+      "-lc",
+      "-lssp"
+    ]
+  },
+  "limit-rdylib-exports": false,
+  "linker-is-gnu": false,
+  "llvm-target": "i686-pc-solaris",
+  "max-atomic-width": 64,
+  "os": "illumos",
+  "pre-link-args": {
+    "gcc": [
+      "-m32",
+      "-std=c99",
+      "-Wl,-z,ignore"
+    ]
+  },
+  "supported-sanitizers": [
+    "address",
+    "cfi"
+  ],
+  "target-family": [
+    "unix"
+  ],
+  "target-pointer-width": "32"
+}

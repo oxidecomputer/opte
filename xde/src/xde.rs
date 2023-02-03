@@ -14,11 +14,12 @@
 // - ddm integration to choose correct underlay device (currently just using
 //   first device)
 
-use crate::dld;
 use crate::dls;
 use crate::ioctl::IoctlEnvelope;
 use crate::ip;
 use crate::mac;
+use crate::mac::mac_getinfo;
+use crate::mac::mac_private_minor;
 use crate::mac::MacClient;
 use crate::mac::MacOpenFlags;
 use crate::mac::MacTxFlags;
@@ -45,6 +46,7 @@ use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
+use opte::api::XDE_IOC_OPTE_CMD;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
@@ -103,6 +105,13 @@ const TCP_STATE_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
 
 /// The name of this driver.
 const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
+
+/// Name of the control device.
+const XDE_CTL_STR: *const c_char = b"ctl\0".as_ptr() as *const c_char;
+
+/// Minor number for the control device.
+// Set once in `xde_attach`.
+static mut XDE_CTL_MINOR: minor_t = 0;
 
 /// A list of xde devices instantiated through xde_ioc_create.
 static mut xde_devs: KRwLock<Vec<Box<XdeDev>>> = KRwLock::new(Vec::new());
@@ -217,7 +226,7 @@ struct UnderlayState {
 fn get_xde_state() -> &'static mut XdeState {
     // Safety: The opte_dip pointer is write-once and is a valid
     // pointer passed to attach(9E). The returned pointer is valid as
-    // it was derived from Box::into_raw() during set_xde_underlay.
+    // it was derived from Box::into_raw() during `xde_attach`.
     unsafe {
         let p = ddi_get_driver_private(xde_dip);
         &mut *(p as *mut XdeState)
@@ -268,6 +277,7 @@ struct XdeDev {
 unsafe extern "C" fn _init() -> c_int {
     xde_devs.init(KRwLockType::Driver);
     mac::mac_init_ops(&mut xde_devops, XDE_STR);
+
     match mod_install(&xde_linkage) {
         0 => 0,
         err => {
@@ -297,17 +307,104 @@ unsafe extern "C" fn _fini() -> c_int {
     }
 }
 
+/// Handle `open(9E)` for non-MAC managed devices.
+///
+/// MAC providers are STREAMS drivers and thus use the `str_ops` entrypoints,
+/// leaving `cb_open` and others typically set to `nodev`. However, the MAC
+/// framework does allow drivers to provide its own set of minor nodes as
+/// regular char/block devices. We create one such device (/dev/xde) in
+/// `xde_attach`. See also `xde_getinfo`.
+/// MAC will return `ENOSTR` from its STREAMS-based `open(9E)` routine if
+/// passed a minor node reserved for driver private use. In that case,
+/// the system will retry the open with the driver's `cb_open` routine.
+#[no_mangle]
+unsafe extern "C" fn xde_open(
+    devp: *mut dev_t,
+    flags: c_int,
+    otyp: c_int,
+    credp: *mut cred_t,
+) -> c_int {
+    assert!(!xde_dip.is_null());
+
+    if otyp != OTYP_CHR {
+        return EINVAL;
+    }
+
+    let minor = getminor(*devp);
+    if minor != XDE_CTL_MINOR {
+        return ENXIO;
+    }
+
+    match secpolicy::secpolicy_dl_config(credp) {
+        0 => {}
+        err => {
+            warn!("secpolicy_dl_config failed: {err}");
+            return err;
+        }
+    }
+
+    if (flags & (FEXCL | FNDELAY | FNONBLOCK)) != 0 {
+        return EINVAL;
+    }
+
+    0
+}
+
+#[no_mangle]
+unsafe extern "C" fn xde_close(
+    dev: dev_t,
+    _flag: c_int,
+    otyp: c_int,
+    _credp: *mut cred_t,
+) -> c_int {
+    assert!(!xde_dip.is_null());
+
+    if otyp != OTYP_CHR {
+        return EINVAL;
+    }
+
+    let minor = getminor(dev);
+    if minor != XDE_CTL_MINOR {
+        return ENXIO;
+    }
+
+    0
+}
+
 #[no_mangle]
 unsafe extern "C" fn xde_ioctl(
-    _dev: dev_t,
-    _cmd: c_int,
-    _arg: intptr_t,
-    _mode: c_int,
+    dev: dev_t,
+    cmd: c_int,
+    arg: intptr_t,
+    mode: c_int,
     _credp: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-    warn!("xde_ioctl not supported, use dld_ioc");
-    ENOTSUP
+    assert!(!xde_dip.is_null());
+
+    let minor = getminor(dev);
+    if minor != XDE_CTL_MINOR {
+        return ENXIO;
+    }
+
+    if cmd != XDE_IOC_OPTE_CMD {
+        return ENOTTY;
+    }
+
+    // TODO: this is using KM_SLEEP, is that ok?
+    let mut buf = Vec::<u8>::with_capacity(IOCTL_SZ);
+    if ddi_copyin(arg as _, buf.as_mut_ptr() as _, IOCTL_SZ, mode) != 0 {
+        return EFAULT;
+    }
+
+    let err = xde_ioc_opte_cmd(buf.as_mut_ptr() as _, mode);
+
+    if ddi_copyout(buf.as_ptr() as _, arg as _, IOCTL_SZ, mode) != 0 && err == 0
+    {
+        return EFAULT;
+    }
+
+    err
 }
 
 fn dtrace_probe_hdlr_resp<T>(resp: &Result<T, OpteError>)
@@ -348,13 +445,7 @@ fn set_xde_underlay_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 // This is the entry point for all OPTE commands. It verifies the API
 // version and then multiplexes the command to its appropriate handler.
 #[no_mangle]
-unsafe extern "C" fn xde_dld_ioc_opte_cmd(
-    karg: *mut c_void,
-    _arg: intptr_t,
-    mode: c_int,
-    _cred: *mut cred_t,
-    _rvalp: *mut c_int,
-) -> c_int {
+unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
     let ioctl: &mut OpteCmdIoctl = &mut *(karg as *mut OpteCmdIoctl);
     let mut env = match IoctlEnvelope::wrap(ioctl, mode) {
         Ok(v) => v,
@@ -723,13 +814,50 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
 
 const IOCTL_SZ: usize = core::mem::size_of::<OpteCmdIoctl>();
 
-static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [dld::dld_ioc_info_t {
-    di_cmd: opte::api::XDE_DLD_OPTE_CMD as u32,
-    di_flags: dld::DLDCOPYINOUT,
-    di_argsize: IOCTL_SZ,
-    di_func: xde_dld_ioc_opte_cmd,
-    di_priv_func: secpolicy::secpolicy_dl_config,
-}];
+#[no_mangle]
+unsafe extern "C" fn xde_getinfo(
+    dip: *mut dev_info,
+    cmd: ddi_info_cmd_t,
+    arg: *mut c_void,
+    resultp: *mut *mut c_void,
+) -> c_int {
+    if xde_dip.is_null() {
+        return DDI_FAILURE;
+    }
+
+    let minor = match cmd {
+        ddi_info_cmd_t::DDI_INFO_DEVT2DEVINFO
+        | ddi_info_cmd_t::DDI_INFO_DEVT2INSTANCE => getminor(arg as dev_t),
+        // We call into `mac_getinfo` here rather than just fail
+        // with `DDI_FAILURE` to let it handle if ever there's a new
+        // `ddi_info_cmd_t` variant.
+        _ => return mac_getinfo(dip, cmd, arg, resultp),
+    };
+
+    // If this isn't one of our private minors,
+    // let the GLDv3 framework handle it.
+    if minor < mac_private_minor() {
+        return mac_getinfo(dip, cmd, arg, resultp);
+    }
+
+    // We currently only expose a single minor node,
+    // bail on anything else.
+    if minor != XDE_CTL_MINOR {
+        return DDI_FAILURE;
+    }
+
+    match cmd {
+        ddi_info_cmd_t::DDI_INFO_DEVT2DEVINFO => {
+            *resultp = xde_dip.cast();
+            DDI_SUCCESS
+        }
+        ddi_info_cmd_t::DDI_INFO_DEVT2INSTANCE => {
+            *resultp = ddi_get_instance(xde_dip) as _;
+            DDI_SUCCESS
+        }
+        _ => DDI_FAILURE,
+    }
+}
 
 #[no_mangle]
 unsafe extern "C" fn xde_attach(
@@ -738,19 +866,19 @@ unsafe extern "C" fn xde_attach(
 ) -> c_int {
     match cmd {
         ddi_attach_cmd_t::DDI_RESUME => return DDI_SUCCESS,
-        ddi_attach_cmd_t::DDI_PM_RESUME => return DDI_SUCCESS,
         ddi_attach_cmd_t::DDI_ATTACH => {}
+        _ => return DDI_FAILURE,
     }
 
-    xde_dip = dip;
+    assert!(xde_dip.is_null());
 
     // XXX-EXT-IP
-    if !driver_prop_exists("ext_ip_hack") {
+    if !driver_prop_exists(dip, "ext_ip_hack") {
         warn!("failed to find 'ext_ip_hack' property in xde.conf");
         return DDI_FAILURE;
     }
 
-    match get_driver_prop_bool("ext_ip_hack") {
+    match get_driver_prop_bool(dip, "ext_ip_hack") {
         Some(true) => {
             warn!("ext_ip_hack enabled: traffic will NOT be encapsulated");
             xde_ext_ip_hack = 1;
@@ -767,21 +895,32 @@ unsafe extern "C" fn xde_attach(
         }
     };
 
-    let state = Box::new(XdeState::new());
-    ddi_set_driver_private(xde_dip, Box::into_raw(state) as *mut c_void);
-    opte::engine::dbg(format!("dld_ioc_add: {:#?}", xde_ioc_list));
+    // We need to share the minor number space with the GLDv3 framework.
+    // We'll use the first private minor number for our control device.
+    XDE_CTL_MINOR = mac_private_minor();
 
-    match dld::dld_ioc_register(
-        dld::XDE_IOC,
-        xde_ioc_list.as_ptr(),
-        xde_ioc_list.len() as u32,
+    // Create xde control device
+    match ddi_create_minor_node(
+        dip,
+        XDE_CTL_STR,
+        S_IFCHR,
+        XDE_CTL_MINOR,
+        DDI_PSEUDO,
+        0,
     ) {
         0 => {}
         err => {
-            warn!("dld_ioc_register failed: {}", err);
+            warn!("failed to create xde control device: {err}");
             return DDI_FAILURE;
         }
     }
+
+    xde_dip = dip;
+
+    let state = Box::new(XdeState::new());
+    ddi_set_driver_private(xde_dip, Box::into_raw(state) as *mut c_void);
+
+    ddi_report_dev(xde_dip);
 
     return DDI_SUCCESS;
 }
@@ -934,7 +1073,7 @@ unsafe fn init_underlay_ingress_handlers(
 }
 
 #[no_mangle]
-unsafe fn driver_prop_exists(pname: &str) -> bool {
+unsafe fn driver_prop_exists(dip: *mut dev_info, pname: &str) -> bool {
     let name = match CString::new(pname) {
         Ok(s) => s,
         Err(e) => {
@@ -945,7 +1084,7 @@ unsafe fn driver_prop_exists(pname: &str) -> bool {
 
     let ret = ddi_prop_exists(
         DDI_DEV_T_ANY,
-        xde_dip,
+        dip,
         DDI_PROP_DONTPASS,
         name.as_ptr() as *const c_char,
     );
@@ -954,7 +1093,10 @@ unsafe fn driver_prop_exists(pname: &str) -> bool {
 }
 
 #[no_mangle]
-unsafe fn get_driver_prop_bool(pname: &str) -> Option<bool> {
+unsafe fn get_driver_prop_bool(
+    dip: *mut dev_info,
+    pname: &str,
+) -> Option<bool> {
     let name = match CString::new(pname) {
         Ok(s) => s,
         Err(e) => {
@@ -965,7 +1107,7 @@ unsafe fn get_driver_prop_bool(pname: &str) -> Option<bool> {
 
     let ret = ddi_prop_get_int(
         DDI_DEV_T_ANY,
-        xde_dip,
+        dip,
         DDI_PROP_DONTPASS,
         name.as_ptr() as *const c_char,
         99,
@@ -988,7 +1130,10 @@ unsafe fn get_driver_prop_bool(pname: &str) -> Option<bool> {
 }
 
 #[no_mangle]
-unsafe fn get_driver_prop_string(pname: &str) -> Option<String> {
+unsafe fn get_driver_prop_string(
+    dip: *mut dev_info,
+    pname: &str,
+) -> Option<String> {
     let name = match CString::new(pname) {
         Ok(s) => s,
         Err(e) => {
@@ -1000,7 +1145,7 @@ unsafe fn get_driver_prop_string(pname: &str) -> Option<String> {
     let mut value: *const c_char = ptr::null();
     let ret = ddi_prop_lookup_string(
         DDI_DEV_T_ANY,
-        xde_dip,
+        dip,
         DDI_PROP_DONTPASS,
         name.as_ptr() as *const c_char,
         &mut value,
@@ -1026,9 +1171,14 @@ unsafe fn get_driver_prop_string(pname: &str) -> Option<String> {
 #[no_mangle]
 unsafe extern "C" fn xde_detach(
     _dip: *mut dev_info,
-    _cmd: ddi_detach_cmd_t,
+    cmd: ddi_detach_cmd_t,
 ) -> c_int {
     assert!(!xde_dip.is_null());
+
+    match cmd {
+        ddi_detach_cmd_t::DDI_DETACH => {}
+        _ => return DDI_FAILURE,
+    }
 
     if xde_devs.read().len() > 0 {
         warn!("failed to detach: outstanding ports");
@@ -1080,15 +1230,17 @@ unsafe extern "C" fn xde_detach(
         None => {}
     };
 
-    dld::dld_ioc_unregister(dld::XDE_IOC);
+    // Remove control device
+    ddi_remove_minor_node(xde_dip, XDE_STR);
+
     xde_dip = ptr::null_mut::<c_void>() as *mut dev_info;
     DDI_SUCCESS
 }
 
 #[no_mangle]
 static mut xde_cb_ops: cb_ops = cb_ops {
-    cb_open: nulldev_open,
-    cb_close: nulldev_close,
+    cb_open: xde_open,
+    cb_close: xde_close,
     cb_strategy: nodev,
     cb_print: nodev,
     cb_dump: nodev,
@@ -1111,7 +1263,7 @@ static mut xde_cb_ops: cb_ops = cb_ops {
 static mut xde_devops: dev_ops = dev_ops {
     devo_rev: DEVO_REV,
     devo_refcnt: 0,
-    devo_getinfo: nodev_getinfo,
+    devo_getinfo: xde_getinfo,
     devo_identify: nulldev_identify,
     devo_probe: nulldev_probe,
     devo_attach: xde_attach,
@@ -1151,26 +1303,22 @@ static xde_linkage: modlinkage = modlinkage {
 
 #[no_mangle]
 static mut xde_mac_callbacks: mac::mac_callbacks_t = mac::mac_callbacks_t {
-    mc_callbacks: (mac::MC_IOCTL
-        | mac::MC_GETCAPAB
-        | mac::MC_SETPROP
-        | mac::MC_GETPROP
-        | mac::MC_PROPINFO) as u32,
+    mc_callbacks: (mac::MC_GETCAPAB | mac::MC_PROPERTIES) as c_uint,
     mc_reserved: core::ptr::null_mut(),
     mc_getstat: xde_mc_getstat,
     mc_start: xde_mc_start,
     mc_stop: xde_mc_stop,
     mc_setpromisc: xde_mc_setpromisc,
     mc_multicst: xde_mc_multicst,
-    mc_unicst: xde_mc_unicst,
-    mc_tx: xde_mc_tx,
-    mc_ioctl: xde_mc_ioctl,
-    mc_getcapab: xde_mc_getcapab,
-    mc_open: xde_mc_open,
-    mc_close: xde_mc_close,
-    mc_getprop: xde_mc_getprop,
-    mc_setprop: xde_mc_setprop,
-    mc_propinfo: xde_mc_propinfo,
+    mc_unicst: Some(xde_mc_unicst),
+    mc_tx: Some(xde_mc_tx),
+    mc_ioctl: None,
+    mc_getcapab: Some(xde_mc_getcapab),
+    mc_open: None,
+    mc_close: None,
+    mc_getprop: Some(xde_mc_getprop),
+    mc_setprop: Some(xde_mc_setprop),
+    mc_propinfo: Some(xde_mc_propinfo),
 };
 
 #[no_mangle]
@@ -1818,15 +1966,6 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
 }
 
 #[no_mangle]
-unsafe extern "C" fn xde_mc_ioctl(
-    _arg: *mut c_void,
-    _queue: *mut queue_t,
-    _mp: *mut mblk_t,
-) {
-    warn!("call to unimplemented xde_mc_ioctl");
-}
-
-#[no_mangle]
 unsafe extern "C" fn xde_mc_getcapab(
     _arg: *mut c_void,
     _cap: mac::mac_capab_t,
@@ -1834,11 +1973,6 @@ unsafe extern "C" fn xde_mc_getcapab(
 ) -> boolean_t {
     boolean_t::B_FALSE
 }
-
-unsafe extern "C" fn xde_mc_open(_arg: *mut c_void) -> c_int {
-    0
-}
-unsafe extern "C" fn xde_mc_close(_arg: *mut c_void) {}
 
 #[no_mangle]
 unsafe extern "C" fn xde_mc_setprop(

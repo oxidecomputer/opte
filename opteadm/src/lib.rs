@@ -37,7 +37,7 @@ pub struct OpteAdm {
 }
 
 impl OpteAdm {
-    pub const DLD_CTL: &'static str = "/dev/dld";
+    pub const XDE_CTL: &'static str = "/dev/xde";
 
     /// Add xde device
     pub fn create_xde(
@@ -50,7 +50,7 @@ impl OpteAdm {
 
         let linkid = link::create_link_id(
             name,
-            libnet::LinkClass::Xde,
+            libnet::LinkClass::Misc,
             libnet::LinkFlags::Active,
         )?;
 
