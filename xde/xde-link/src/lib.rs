@@ -1,9 +1,14 @@
 #![allow(non_camel_case_types)]
 #![no_std]
 
-// Nothing in this crate should panic and this crate lets us detect
-// that by failing at compile time if any such code is added.
-extern crate no_panics_whatsoever;
+#[panic_handler]
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    #[link(name = "c")]
+    extern "C" {
+        fn abort() -> !;
+    }
+    unsafe { abort() }
+}
 
 // devfsadm expects 2 symbols to be exported:
 // - _devfsadm_create_reg: link creation registration

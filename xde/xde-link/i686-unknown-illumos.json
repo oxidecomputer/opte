@@ -21,7 +21,8 @@
   "pre-link-args": {
     "gcc": [
       "-m32",
-      "-std=c99"
+      "-std=c99",
+      "-Wl,-z,ignore"
     ]
   },
   "supported-sanitizers": [

@@ -22,3 +22,11 @@ cargo -v build \
     --manifest-path xde-link/Cargo.toml \
     -Z build-std=core \
     --target xde-link/i686-unknown-illumos.json
+
+# We don't want to panic in the devfsadm plugin but enforcing that
+# is a bit tricky.  For now, just manually verify w/ nm:
+nm xde-link/target/i686-unknown-illumos/release/libxde_link.so | grep rust_begin_unwind
+if [ $? -eq 0 ]; then
+    echo "ERROR: devfsadm plugin may panic!"
+    exit 1
+fi

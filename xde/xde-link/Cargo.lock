@@ -3,14 +3,5 @@
 version = 3
 
 [[package]]
-name = "no-panics-whatsoever"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dbfcdf2ff238d5921f7ee5b319d65f9d5a4341ec07d648236abe820ed5fdc16"
-
-[[package]]
 name = "xde-link"
 version = "0.1.0"
-dependencies = [
- "no-panics-whatsoever",
-]
