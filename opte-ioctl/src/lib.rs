@@ -98,7 +98,7 @@ impl OpteHdl {
 
         let linkid = link::create_link_id(
             name,
-            libnet::LinkClass::Xde,
+            libnet::LinkClass::Misc,
             libnet::LinkFlags::Active,
         )?;
 
