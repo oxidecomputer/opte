@@ -45,6 +45,8 @@ pub const MAC_OPEN_FLAGS_USE_DATALINK_NAME: u16 = 0x0010;
 pub const MAC_OPEN_FLAGS_MULTI_PRIMARY: u16 = 0x0020;
 pub const MAC_OPEN_FLAGS_NO_UNICAST_ADDR: u16 = 0x0040;
 
+pub const MAC_PROMISC_FLAGS_NO_TX_LOOP: u16 = 0x0001;
+
 #[allow(dead_code)]
 #[repr(C)]
 pub enum mac_client_promisc_type_t {

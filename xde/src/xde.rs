@@ -1020,7 +1020,7 @@ unsafe fn init_underlay_ingress_handlers(
         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
         xde_rx,
         ptr::null_mut(),
-        0,
+        mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
     ) {
         Ok(mph) => mph,
         Err(e) => {
@@ -1039,7 +1039,7 @@ unsafe fn init_underlay_ingress_handlers(
         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
         xde_rx,
         ptr::null_mut(),
-        0,
+        mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
     ) {
         Ok(mph) => mph,
         Err(e) => {
