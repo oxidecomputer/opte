@@ -1997,7 +1997,7 @@ fn new_port(
 
 #[no_mangle]
 unsafe extern "C" fn xde_rx(
-    _arg: *mut c_void,
+    arg: *mut c_void,
     mrh: *mut mac::mac_resource_handle,
     mp_chain: *mut mblk_t,
     _is_loopback: boolean_t,
@@ -2009,6 +2009,12 @@ unsafe extern "C" fn xde_rx(
         __dtrace_probe_rx__chain__todo(mp_chain as uintptr_t);
     }
     __dtrace_probe_rx(mp_chain as uintptr_t);
+
+    // Safety: This arg comes from `Arc::into_raw()` on the `MacClientHandle`
+    // corresponding to the underlay port we're receiving on.
+    let mch_ptr = arg as *const MacClientHandle;
+    Arc::increment_strong_count(mch_ptr);
+    let mch = Arc::from_raw(mch_ptr);
 
     // We must first parse the packet in order to determine where it
     // is to be delivered.
@@ -2096,12 +2102,7 @@ unsafe extern "C" fn xde_rx(
                         mac::mac_rx((*dev).mh, mrh, pkt_copy.unwrap_mblk());
                     }
                     Ok(ProcessResult::Hairpin(hppkt)) => {
-                        // TODO assuming underlay device 1
-                        (*dev).u1.mch.tx_drop_on_no_desc(
-                            hppkt,
-                            0,
-                            MacTxFlags::empty(),
-                        );
+                        mch.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
                     }
                     Ok(ProcessResult::Bypass) => {
                         mac::mac_rx((*dev).mh, mrh, mp_chain);
@@ -2140,8 +2141,7 @@ unsafe extern "C" fn xde_rx(
             mac::mac_rx((*dev).mh, mrh, pkt.unwrap_mblk());
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
-            // TODO assuming underlay device 1
-            (*dev).u1.mch.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
+            mch.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
         }
         Ok(ProcessResult::Bypass) => {
             mac::mac_rx((*dev).mh, mrh, mp_chain);
