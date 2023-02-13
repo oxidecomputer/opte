@@ -15,11 +15,32 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use bitflags::bitflags;
 use core::ffi::CStr;
+use core::fmt;
 use core::ptr;
 use illumos_sys_hdrs::*;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
+
+/// Errors while opening a MAC handle.
+#[derive(Debug)]
+pub enum MacOpenError<'a> {
+    InvalidLinkName(&'a str),
+    OpenFailed(&'a str, i32),
+}
+
+impl fmt::Display for MacOpenError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MacOpenError::InvalidLinkName(link) => {
+                write!(f, "invalid link name: {link}")
+            }
+            MacOpenError::OpenFailed(link, err) => {
+                write!(f, "mac_open_by_linkname failed for {link}: {err}")
+            }
+        }
+    }
+}
 
 /// Safe wrapper around a `mac_handle_t`.
 #[derive(Debug)]
@@ -27,20 +48,14 @@ pub struct MacHandle(*mut mac_handle);
 
 impl MacHandle {
     /// Grab a handle to the mac provider for the given link.
-    ///
-    /// TODO: errors
-    pub fn open_by_link_name(link: &str) -> Result<Self, String> {
-        let name = match CString::new(link) {
-            Ok(cstr) => cstr,
-            Err(err) => return Err(format!("invalid link name: {err}")),
-        };
+    pub fn open_by_link_name(link: &str) -> Result<Self, MacOpenError> {
+        let name = CString::new(link)
+            .map_err(|_| MacOpenError::InvalidLinkName(link))?;
 
         let mut mh = ptr::null_mut();
         let ret = unsafe { mac_open_by_linkname(name.as_ptr(), &mut mh) };
         if ret != 0 {
-            return Err(format!(
-                "mac_open_by_linkname failed for link {link}: {ret}"
-            ));
+            return Err(MacOpenError::OpenFailed(link, ret));
         }
 
         Ok(Self(mh))
