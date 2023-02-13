@@ -20,8 +20,10 @@ use crate::ip;
 use crate::mac;
 use crate::mac::mac_getinfo;
 use crate::mac::mac_private_minor;
-use crate::mac::MacClient;
+use crate::mac::MacClientHandle;
+use crate::mac::MacHandle;
 use crate::mac::MacOpenFlags;
+use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
 use crate::secpolicy;
 use crate::sys;
@@ -201,13 +203,20 @@ fn next_hop_probe(
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Debug)]
+/// Underlay port state.
+#[derive(Debug)]
 struct xde_underlay_port {
+    /// Name of the link being used for this underlay port.
     name: String,
-    mh: *mut mac::mac_handle,
-    mch: MacClient,
-    mph: *mut mac::mac_promisc_handle,
+
+    /// MAC handle to the underlay link.
+    mh: Arc<MacHandle>,
+
+    /// MAC client handle for tx/rx on the underlay link.
+    mch: Arc<MacClientHandle>,
+
+    /// MAC promiscuous handle for receiving packets on the underlay link.
+    mph: MacPromiscHandle,
 }
 
 struct XdeState {
@@ -927,144 +936,78 @@ unsafe extern "C" fn xde_attach(
 
 #[no_mangle]
 unsafe fn init_underlay_ingress_handlers(
-    u1: String,
-    u2: String,
+    u1_name: String,
+    u2_name: String,
 ) -> Result<UnderlayState, OpteError> {
-    let u1_name = match CString::new(u1.as_str()) {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(OpteError::System {
-                errno: EINVAL,
-                msg: format!("bad u1 dev name: {:?}", e),
-            });
-        }
-    };
-
-    let u2_name = match CString::new(u2.as_str()) {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(OpteError::System {
-                errno: EINVAL,
-                msg: format!("bad u2 dev name: {:?}", e),
-            });
-        }
-    };
-
-    let mut u1_mh = ptr::null_mut() as *mut c_void as *mut mac::mac_handle;
-
     // get mac handles for underlay ports
-    match mac::mac_open_by_linkname(
-        u1_name.as_ptr() as *const c_char,
-        &mut u1_mh,
-    ) {
-        0 => {}
-        err => {
-            let p = CStr::from_ptr(u1_name.as_ptr() as *const c_char);
-            return Err(OpteError::System {
-                errno: EFAULT,
-                msg: format!(
-                    "failed to open underlay port 1: {:?}: {}",
-                    p, err
-                ),
-            });
-        }
-    }
 
-    let mut u2_mh = ptr::null_mut() as *mut c_void as *mut mac::mac_handle;
-
-    match mac::mac_open_by_linkname(
-        u2_name.as_ptr() as *const c_char,
-        &mut u2_mh,
-    ) {
-        0 => {}
-        err => {
-            let p = CStr::from_ptr(u2_name.as_ptr() as *const c_char);
-            return Err(OpteError::System {
+    let u1_mh =
+        MacHandle::open_by_link_name(&u1_name).map(Arc::new).map_err(|e| {
+            OpteError::System {
                 errno: EFAULT,
-                msg: format!(
-                    "failed to open underlay port 2: {:?}: {}",
-                    p, err
-                ),
-            });
-        }
-    }
+                msg: format!("failed to open underlay port 1: {e}"),
+            }
+        })?;
+
+    let u2_mh =
+        MacHandle::open_by_link_name(&u2_name).map(Arc::new).map_err(|e| {
+            OpteError::System {
+                errno: EFAULT,
+                msg: format!("failed to open underlay port 2: {e}"),
+            }
+        })?;
 
     // Open clients for the upstream ports.
     let oflags = MacOpenFlags::NO_UNICAST_ADDR;
-    let u1_mch = match MacClient::open(u1_mh, Some("xdeu0"), oflags, 0) {
-        Ok(mch) => mch,
-        Err(e) => {
-            mac::mac_close(u2_mh);
-            mac::mac_close(u1_mh);
-            return Err(OpteError::System {
-                errno: EFAULT,
-                msg: format!("mac_client_open failed for {}: {}", u1, e),
-            });
-        }
-    };
 
-    let u2_mch = match MacClient::open(u2_mh, Some("xdeu1"), oflags, 0) {
-        Ok(mch) => mch,
-        Err(e) => {
-            mac::mac_close(u2_mh);
-            mac::mac_close(u1_mh);
-            return Err(OpteError::System {
-                errno: EFAULT,
-                msg: format!("mac_client_open failed for {}: {}", u2, e),
-            });
-        }
-    };
+    let u1_mch = MacClientHandle::open(&u1_mh, Some("xdeu0"), oflags, 0)
+        .map(Arc::new)
+        .map_err(|e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("mac_client_open failed for {u1_name}: {e}"),
+        })?;
+
+    let u2_mch = MacClientHandle::open(&u2_mh, Some("xdeu1"), oflags, 0)
+        .map(Arc::new)
+        .map_err(|e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("mac_client_open failed for {u2_name}: {e}"),
+        })?;
 
     // set up promisc rx handlers for underlay devices
-    let u1_mph = match u1_mch.add_promisc(
-        mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-        xde_rx,
-        ptr::null_mut(),
-        mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
-    ) {
-        Ok(mph) => mph,
-        Err(e) => {
-            drop(u2_mch);
-            drop(u1_mch);
-            mac::mac_close(u2_mh);
-            mac::mac_close(u1_mh);
-            return Err(OpteError::System {
-                errno: EFAULT,
-                msg: format!("mac_promisc_add failed for {}: {}", u1, e),
-            });
-        }
-    };
 
-    let u2_mph = match u2_mch.add_promisc(
-        mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-        xde_rx,
-        ptr::null_mut(),
-        mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
-    ) {
-        Ok(mph) => mph,
-        Err(e) => {
-            u1_mch.rem_promisc(u1_mph);
-            drop(u2_mch);
-            drop(u1_mch);
-            mac::mac_close(u2_mh);
-            mac::mac_close(u1_mh);
-            return Err(OpteError::System {
-                errno: EFAULT,
-                msg: format!("mac_promisc_add failed for {}: {}", u2, e),
-            });
-        }
-    };
+    let u1_mph = u1_mch
+        .add_promisc(
+            mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
+            xde_rx,
+            mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
+        )
+        .map_err(|e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("mac_promisc_add failed for {u1_name}: {e}"),
+        })?;
+
+    let u2_mph = u2_mch
+        .add_promisc(
+            mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
+            xde_rx,
+            mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
+        )
+        .map_err(|e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("mac_promisc_add failed for {u2_name}: {e}"),
+        })?;
 
     Ok(UnderlayState {
         u1: Arc::new(xde_underlay_port {
-            name: u1,
+            name: u1_name,
             mh: u1_mh,
             mch: u1_mch,
             mph: u1_mph,
         }),
 
         u2: Arc::new(xde_underlay_port {
-            name: u2,
+            name: u2_name,
             mh: u2_mh,
             mch: u2_mch,
             mph: u2_mph,
@@ -1192,40 +1135,50 @@ unsafe extern "C" fn xde_detach(
 
     match underlay {
         Some(underlay) => {
-            // These next two checks shouldn't be necessary if the
-            // above check for zero Ports is cleared. However, we play
-            // it safe, making sure there is only 1 reference before
-            // attempting to unwrap the underlay from the Arc.
-            if Arc::strong_count(&underlay.u1) > 1 {
-                warn!("failed to deatch: underlay u1 has outstanding refs");
+            // There shouldn't be anymore refs to the underlay given we checked for
+            // 0 ports above.
+            let Ok(u1) = Arc::try_unwrap(underlay.u1) else {
+                warn!("failed to detach: underlay u1 has outstanding refs");
                 return DDI_FAILURE;
-            }
-
-            if Arc::strong_count(&underlay.u2) > 1 {
-                warn!("failed to deatch: underlay u2 has outstanding refs");
+            };
+            let Ok(u2) = Arc::try_unwrap(underlay.u2) else {
+                warn!("failed to detach: underlay u2 has outstanding refs");
                 return DDI_FAILURE;
+            };
+
+            for u in [u1, u2] {
+                // Clear all Rx paths
+                u.mch.clear_rx();
+
+                // We have a chain of refs here:
+                //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
+                //  2. `MacClientHandle` holds a ref to `MacHandle`.
+                // We explicitly drop them in order here to ensure there are no
+                // outstanding refs.
+
+                // 1. Remove promisc callback
+                drop(u.mph);
+
+                // 2. Remove MAC client handle
+                if Arc::strong_count(&u.mch) > 1 {
+                    warn!(
+                        "underlay {} has outstanding mac client handle refs",
+                        u.name
+                    );
+                    return DDI_FAILURE;
+                }
+                drop(u.mch);
+
+                // Finally, we can cleanup the MAC handle for this underlay
+                if Arc::strong_count(&u.mh) > 1 {
+                    warn!(
+                        "underlay {} has outstanding mac handle refs",
+                        u.name
+                    );
+                    return DDI_FAILURE;
+                }
+                drop(u.mh);
             }
-
-            let u1 = Arc::try_unwrap(underlay.u1).unwrap();
-            let u2 = Arc::try_unwrap(underlay.u2).unwrap();
-
-            // Clear all Rx paths.
-            u1.mch.clear_rx();
-            u2.mch.clear_rx();
-            u1.mch.rem_promisc(u1.mph);
-            u2.mch.rem_promisc(u2.mph);
-
-            // It's imperative we drop the MacClient now, before
-            // attempting to close the underlying mac handle (as
-            // that's predicated on no outstanding clients). We
-            // wouldn't need the manual drop if the mac handle had a
-            // safe abstraction; but it does not at this time.
-            drop(u1.mch);
-            drop(u2.mch);
-
-            // Close mac handle for underlay devices.
-            mac::mac_close(u1.mh);
-            mac::mac_close(u2.mh);
         }
         None => {}
     };
