@@ -177,17 +177,18 @@ impl MacClientHandle {
     ) -> Result<MacPromiscHandle, c_int> {
         let mut mph = 0 as *mut mac_promisc_handle;
 
-        // This extra ref is cleaned up in `MacPromiscHandle::drop()`
-        let arg = Arc::into_raw(self.clone()) as *mut c_void;
+        // `MacPromiscHandle` keeps a reference to this `MacClientHandle`
+        // until it is removed and so we can safely access it from the
+        // callback via the `arg` pointer.
+        let mch = self.clone();
+        let arg = Arc::as_ptr(&mch) as *mut c_void;
         let ret = unsafe {
             mac_promisc_add(self.mch, ptype, promisc_fn, arg, &mut mph, flags)
         };
 
         if ret == 0 {
-            Ok(MacPromiscHandle { mph, mch: self.clone() })
+            Ok(MacPromiscHandle { mph, _mch: mch })
         } else {
-            // Safety: `arg` came from `Arc::into_raw()` above.
-            unsafe { Arc::from_raw(arg as *const MacClientHandle) };
             Err(ret)
         }
     }
@@ -270,7 +271,7 @@ pub struct MacPromiscHandle {
     mph: *mut mac_promisc_handle,
 
     /// The `MacClientHandle` used to create this promiscuous callback.
-    mch: Arc<MacClientHandle>,
+    _mch: Arc<MacClientHandle>,
 }
 
 impl Drop for MacPromiscHandle {
@@ -279,10 +280,5 @@ impl Drop for MacPromiscHandle {
         // mac promisc handle was successfully obtained, and thus `mph`
         // is valid.
         unsafe { mac_promisc_remove(self.mph) };
-
-        // Cleanup extra ref to `MacClientHandle` from `MacClient::add_promisc()`.
-        // Safety: we don't have the original pointer returned by `Arc::into_raw()`
-        // but we know that the pointer returned by `Arc::as_ptr()` is the same.
-        unsafe { Arc::from_raw(Arc::as_ptr(&self.mch)) };
     }
 }

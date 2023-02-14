@@ -1982,8 +1982,10 @@ unsafe extern "C" fn xde_rx(
     }
     __dtrace_probe_rx(mp_chain as uintptr_t);
 
-    // Safety: This arg comes from `Arc::into_raw()` on the `MacClientHandle`
-    // corresponding to the underlay port we're receiving on.
+    // Safety: This arg comes from `Arc::as_ptr()` on the `MacClientHandle`
+    // corresponding to the underlay port we're receiving on. Being
+    // here in the callback means the `MacPromiscHandle` hasn't been
+    // dropped yet and thus our `MacClientHandle` is also still valid.
     let mch_ptr = arg as *const MacClientHandle;
     Arc::increment_strong_count(mch_ptr);
     let mch = Arc::from_raw(mch_ptr);
