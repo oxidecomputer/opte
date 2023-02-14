@@ -934,85 +934,57 @@ unsafe extern "C" fn xde_attach(
     return DDI_SUCCESS;
 }
 
+/// Setup underlay port atop the given link.
+fn create_underlay_port(
+    link_name: String,
+    mc_name: &str,
+) -> Result<xde_underlay_port, OpteError> {
+    // Grab mac handle for underlying link
+    let mh = MacHandle::open_by_link_name(&link_name).map(Arc::new).map_err(
+        |e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("failed to open link {link_name} for underlay: {e}"),
+        },
+    )?;
+
+    // Get a mac client handle as well.
+    //
+    // We specify `NO_UNICAST_ADDR` here to request a minimal datapath setup.
+    // Any specific unicast addresses will be associated with the OPTE ports themselves.
+    let oflags = MacOpenFlags::NO_UNICAST_ADDR;
+    let mch = MacClientHandle::open(&mh, Some(mc_name), oflags, 0)
+        .map(Arc::new)
+        .map_err(|e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("mac_client_open failed for {link_name}: {e}"),
+        })?;
+
+    // Setup promiscuous callback to receive all packets on this link.
+    //
+    // We specify `MAC_PROMISC_FLAGS_NO_TX_LOOP` here to skip receiving copies
+    // of outgoing packets we sent ourselves.
+    let mph = mch
+        .add_promisc(
+            mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
+            xde_rx,
+            mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
+        )
+        .map_err(|e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("mac_promisc_add failed for {link_name}: {e}"),
+        })?;
+
+    Ok(xde_underlay_port { name: link_name, mh, mch, mph })
+}
+
 #[no_mangle]
 unsafe fn init_underlay_ingress_handlers(
     u1_name: String,
     u2_name: String,
 ) -> Result<UnderlayState, OpteError> {
-    // get mac handles for underlay ports
-
-    let u1_mh =
-        MacHandle::open_by_link_name(&u1_name).map(Arc::new).map_err(|e| {
-            OpteError::System {
-                errno: EFAULT,
-                msg: format!("failed to open underlay port 1: {e}"),
-            }
-        })?;
-
-    let u2_mh =
-        MacHandle::open_by_link_name(&u2_name).map(Arc::new).map_err(|e| {
-            OpteError::System {
-                errno: EFAULT,
-                msg: format!("failed to open underlay port 2: {e}"),
-            }
-        })?;
-
-    // Open clients for the upstream ports.
-    let oflags = MacOpenFlags::NO_UNICAST_ADDR;
-
-    let u1_mch = MacClientHandle::open(&u1_mh, Some("xdeu0"), oflags, 0)
-        .map(Arc::new)
-        .map_err(|e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("mac_client_open failed for {u1_name}: {e}"),
-        })?;
-
-    let u2_mch = MacClientHandle::open(&u2_mh, Some("xdeu1"), oflags, 0)
-        .map(Arc::new)
-        .map_err(|e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("mac_client_open failed for {u2_name}: {e}"),
-        })?;
-
-    // set up promisc rx handlers for underlay devices
-
-    let u1_mph = u1_mch
-        .add_promisc(
-            mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-            xde_rx,
-            mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
-        )
-        .map_err(|e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("mac_promisc_add failed for {u1_name}: {e}"),
-        })?;
-
-    let u2_mph = u2_mch
-        .add_promisc(
-            mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-            xde_rx,
-            mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
-        )
-        .map_err(|e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("mac_promisc_add failed for {u2_name}: {e}"),
-        })?;
-
-    Ok(UnderlayState {
-        u1: Arc::new(xde_underlay_port {
-            name: u1_name,
-            mh: u1_mh,
-            mch: u1_mch,
-            mph: u1_mph,
-        }),
-
-        u2: Arc::new(xde_underlay_port {
-            name: u2_name,
-            mh: u2_mh,
-            mch: u2_mch,
-            mph: u2_mph,
-        }),
-    })
+    let u1 = Arc::new(create_underlay_port(u1_name, "xdeu0")?);
+    let u2 = Arc::new(create_underlay_port(u2_name, "xdeu1")?);
+    Ok(UnderlayState { u1, u2 })
 }
 
 #[no_mangle]
