@@ -46,7 +46,6 @@ use core::ptr;
 use core::result;
 use core::slice;
 use dyn_clone::DynClone;
-use heapless::Vec as HVec;
 use serde::Deserialize;
 use serde::Serialize;
 // TODO should probably move these two into this module now.
@@ -366,7 +365,7 @@ impl PacketMeta {
 pub struct Packet<S: PacketState> {
     avail: usize,
     source: PacketSource,
-    segs: HVec<PacketSeg, 4>,
+    segs: Vec<PacketSeg>,
     state: S,
 }
 
@@ -376,6 +375,8 @@ enum PacketSource {
     Wrapped,
 }
 
+/// The type state of a packet that has been initialized and allocated, but
+/// about which nothing else is known besides the length.
 #[derive(Debug)]
 pub struct Initialized {
     // Total length of packet, in bytes. This is equal to the sum of
@@ -625,8 +626,7 @@ impl Packet<Initialized> {
 
     /// Create a new packet from `seg0`.
     fn new(seg0: PacketSeg) -> Self {
-        let mut segs = HVec::new();
-        segs.push(seg0).unwrap();
+        let segs = vec![seg0];
         let len: usize = segs.iter().map(|s| s.len).sum();
         let avail: usize = segs.iter().map(|s| s.avail).sum();
 
@@ -640,9 +640,7 @@ impl Packet<Initialized> {
 
     #[cfg(test)]
     fn new2(seg0: PacketSeg, seg1: PacketSeg) -> Self {
-        let mut segs = HVec::new();
-        segs.push(seg0).unwrap();
-        segs.push(seg1).unwrap();
+        let segs = vec![seg0, seg1];
         let len: usize = segs.iter().map(|s| s.len).sum();
         let avail: usize = segs.iter().map(|s| s.avail).sum();
 
@@ -783,22 +781,42 @@ impl Packet<Initialized> {
             return Err(WrapError::NullPtr);
         }
 
+        // Compute the number of `mblk_t`s in this segment chain.
+        //
+        // We are currently forced to take at least one memory allocation.
+        // That's because we're wrapping each `mblk_t` in a segment chain (the
+        // `b_cont` items) in a `PacketSeg`, and then storing all those in
+        // `self`. We previously had a statically-sized array here, of length 4,
+        // to avoid those allocs. However, that obviously assumes we never have
+        // chains of more than 4 elements, which we've now hit.
+        //
+        // We pass over the linked-list twice here: once to compute the length,
+        // so that we can allocate exactly once, and once to actually wrap
+        // everything.
+        let mut n_segments = 1;
+        let mut next_seg = (*mp).b_cont;
+        while next_seg != ptr::null_mut() {
+            n_segments += 1;
+            next_seg = (*next_seg).b_cont;
+        }
+        let mut segs = Vec::with_capacity(n_segments);
+
+        // Restore `next_seg`, since we iterate over the list another time to
+        // actually wrap the `mblk_t`s.
+        let mut next_seg = (*mp).b_cont;
         let mut len = 0;
         let mut avail = 0;
-        let mut segs = HVec::new();
-        let mut next_seg = (*mp).b_cont;
         let mut seg = PacketSeg::wrap_mblk(mp);
         avail += seg.avail;
         len += seg.len;
-        segs.push(seg).unwrap();
+        segs.push(seg);
 
         while next_seg != ptr::null_mut() {
             let tmp = (*next_seg).b_cont;
             seg = PacketSeg::wrap_mblk(next_seg);
             avail += seg.avail;
             len += seg.len;
-            // XXX This assumes there is room.
-            segs.push(seg).unwrap();
+            segs.push(seg);
             next_seg = tmp;
         }
 
@@ -1196,7 +1214,7 @@ impl Packet<Parsed> {
     // of the new header. If it does not, then insert a new segment to
     // the front.
     fn hdr_seg(
-        segs: &mut HVec<PacketSeg, 4>,
+        segs: &mut Vec<PacketSeg>,
         new_hdr_len: usize,
         body: &mut BodyInfo,
     ) {
@@ -1264,10 +1282,12 @@ impl Packet<Parsed> {
                     assert_eq!(body.seg_offset - old_hdr_len, 0);
                     body.seg_offset = 0;
                 }
-
                 seg.link(&segs[0]);
-                // XXX This assumes there is room.
-                segs.insert(0, seg).unwrap();
+
+                // TODO-performance: This may necessitate another allocation. We
+                // will want to measure how often we hit this branch, and the
+                // impact of the allocation.
+                segs.insert(0, seg);
 
                 // We've added a segment to the front of the list; the
                 // body segment moves over by one.
@@ -2142,7 +2162,7 @@ pub enum WritePos {
 
 #[derive(Debug)]
 pub struct PacketReader<'a> {
-    pkt_segs: &'a HVec<PacketSeg, 4>,
+    pkt_segs: &'a [PacketSeg],
     pkt_pos: usize,
     seg_idx: usize,
     seg_pos: usize,
@@ -2155,7 +2175,7 @@ impl<'a> PacketReader<'a> {
         (self.pkt_pos, self.seg_idx, self.seg_pos, end_of_seg)
     }
 
-    pub fn new(pkt_segs: &'a HVec<PacketSeg, 4>) -> Self {
+    pub fn new(pkt_segs: &'a [PacketSeg]) -> Self {
         let seg_len = pkt_segs[0].len;
 
         PacketReader { pkt_segs, pkt_pos: 0, seg_idx: 0, seg_pos: 0, seg_len }
@@ -3127,7 +3147,7 @@ mod test {
     }
 
     #[test]
-    fn expand_and_srhink() {
+    fn expand_and_shrink() {
         let mut seg = PacketSeg::alloc(18);
         assert_eq!(seg.len(), 0);
         seg.expand_end(18).unwrap();
@@ -3151,5 +3171,37 @@ mod test {
         assert_eq!(seg.prefix_len(), 4);
         seg.expand_start(4).unwrap();
         assert_eq!(seg.prefix_len(), 0);
+    }
+
+    // Verify that we do not panic when we get long chains of mblks linked by
+    // `b_cont`. This is a regression test for
+    // https://github.com/oxidecomputer/opte/issues/335
+    #[test]
+    fn test_long_packet_continuation() {
+        const N_SEGMENTS: usize = 8;
+        let mut blocks: Vec<*mut mblk_t> = Vec::with_capacity(N_SEGMENTS);
+        for i in 0..N_SEGMENTS {
+            let mp = allocb(32);
+
+            // Link previous block to this one.
+            if i > 0 {
+                let mut prev = blocks[i - 1];
+                unsafe {
+                    (*prev).b_cont = mp;
+                }
+            }
+            blocks.push(mp);
+        }
+
+        // Wrap the first mblk in a Packet, and check that we still have a
+        // reference to everything.
+        let packet = unsafe { Packet::wrap_mblk(blocks[0]) }
+            .expect("Failed to wrap mblk chain with many segments");
+
+        assert_eq!(packet.segs.len(), N_SEGMENTS);
+        assert_eq!(packet.segs.len(), blocks.len());
+        for (seg, mblk) in packet.segs.iter().zip(blocks) {
+            assert_eq!(seg.mp, mblk);
+        }
     }
 }

@@ -22,7 +22,6 @@ usdt = ["std", "dep:usdt"]
 [dependencies]
 cfg-if = "0.1"
 dyn-clone = "1.0.9"
-heapless = "0.7.16"
 illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
 kstat-macro = { path = "../kstat-macro" }
 opte-api = { path = "../opte-api", default-features = false }
