@@ -802,7 +802,7 @@ fn guest_to_internet() {
         ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
     }
 
-    let mut pcap_guest = PcapBuilder::new("guest-to-internet.pcap");
+    let mut pcap_guest = PcapBuilder::new("guest_to_internet.pcap");
     pcap_guest.add_pkt(&pkt1);
 }
 
