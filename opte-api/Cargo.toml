@@ -5,12 +5,13 @@ edition = "2021"
 
 [features]
 default = ["std"]
-std = []
+std = ["ipnetwork"]
 
 [dependencies]
 cfg-if = "0.1"
 illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
 postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
+ipnetwork = { version = "0.20.0", default-features = false, optional = true }
 
 [dependencies.serde]
 version = "1.0"

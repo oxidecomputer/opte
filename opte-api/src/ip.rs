@@ -332,6 +332,26 @@ impl From<Ipv6Addr> for IpAddr {
     }
 }
 
+#[cfg(any(feature = "std", test))]
+impl From<std::net::IpAddr> for IpAddr {
+    fn from(ip: std::net::IpAddr) -> Self {
+        match ip {
+            std::net::IpAddr::V4(ipv4) => Self::Ip4(ipv4.into()),
+            std::net::IpAddr::V6(ipv6) => Self::Ip6(ipv6.into()),
+        }
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl From<IpAddr> for std::net::IpAddr {
+    fn from(ip: IpAddr) -> Self {
+        match ip {
+            IpAddr::Ip4(ipv4) => Self::V4(ipv4.into()),
+            IpAddr::Ip6(ipv6) => Self::V6(ipv6.into()),
+        }
+    }
+}
+
 impl Default for IpAddr {
     fn default() -> Self {
         IpAddr::Ip4(Default::default())
@@ -420,6 +440,13 @@ impl Ipv4Addr {
 impl From<std::net::Ipv4Addr> for Ipv4Addr {
     fn from(ip4: std::net::Ipv4Addr) -> Self {
         Self { inner: ip4.octets() }
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl From<Ipv4Addr> for std::net::Ipv4Addr {
+    fn from(ip4: Ipv4Addr) -> Self {
+        Self::from(ip4.inner)
     }
 }
 
@@ -690,6 +717,13 @@ impl From<std::net::Ipv6Addr> for Ipv6Addr {
     }
 }
 
+#[cfg(any(feature = "std", test))]
+impl From<Ipv6Addr> for std::net::Ipv6Addr {
+    fn from(ip6: Ipv6Addr) -> Self {
+        Self::from(ip6.inner)
+    }
+}
+
 impl From<smoltcp::wire::Ipv6Address> for Ipv6Addr {
     fn from(ip: smoltcp::wire::Ipv6Address) -> Self {
         // Safety: We assume the `smoltcp` type is well-formed, with at least 16
@@ -782,10 +816,17 @@ impl IpCidr {
         }
     }
 
-    pub fn prefix_len(&self) -> usize {
+    pub fn ip(&self) -> IpAddr {
         match self {
-            Self::Ip4(ip4) => ip4.prefix_len() as usize,
-            Self::Ip6(ip6) => ip6.prefix_len() as usize,
+            Self::Ip4(ip4) => IpAddr::Ip4(ip4.ip()),
+            Self::Ip6(ip6) => IpAddr::Ip6(ip6.ip()),
+        }
+    }
+
+    pub fn prefix_len(&self) -> u8 {
+        match self {
+            Self::Ip4(ip4) => ip4.prefix_len(),
+            Self::Ip6(ip6) => ip6.prefix_len(),
         }
     }
 }
@@ -810,6 +851,26 @@ impl FromStr for IpCidr {
                 .parse::<Ipv6Cidr>()
                 .map(IpCidr::Ip6)
                 .map_err(|_| String::from("Invalid IP CIDR")),
+        }
+    }
+}
+
+#[cfg(feature = "ipnetwork")]
+impl From<ipnetwork::IpNetwork> for IpCidr {
+    fn from(ip: ipnetwork::IpNetwork) -> Self {
+        match ip {
+            ipnetwork::IpNetwork::V4(ip4) => Self::Ip4(ip4.into()),
+            ipnetwork::IpNetwork::V6(ip6) => Self::Ip6(ip6.into()),
+        }
+    }
+}
+
+#[cfg(feature = "ipnetwork")]
+impl From<IpCidr> for ipnetwork::IpNetwork {
+    fn from(ip: IpCidr) -> Self {
+        match ip {
+            IpCidr::Ip4(ip4) => Self::V4(ip4.into()),
+            IpCidr::Ip6(ip6) => Self::V6(ip6.into()),
         }
     }
 }
@@ -933,6 +994,25 @@ impl Ipv4Cidr {
     }
 }
 
+#[cfg(feature = "ipnetwork")]
+impl From<ipnetwork::Ipv4Network> for Ipv4Cidr {
+    fn from(n: ipnetwork::Ipv4Network) -> Self {
+        let ip = n.ip().into();
+        // A valid `Ipv4Network` necessarily has a valid prefix so fine to unwrap.
+        let prefix = Ipv4PrefixLen::new(n.prefix()).unwrap();
+        Ipv4Cidr::new(ip, prefix)
+    }
+}
+
+#[cfg(feature = "ipnetwork")]
+impl From<Ipv4Cidr> for ipnetwork::Ipv4Network {
+    fn from(c: Ipv4Cidr) -> Self {
+        let (ip, prefix) = c.parts();
+        // A valid `Ipv4Cidr` necessarily has a valid prefix so fine to unwrap.
+        ipnetwork::Ipv4Network::new(ip.into(), prefix.val()).unwrap()
+    }
+}
+
 /// An IPv6 CIDR.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ipv6Cidr {
@@ -1048,6 +1128,25 @@ impl Ipv6Cidr {
     /// Is this `ip` a member of the CIDR?
     pub fn is_member(&self, ip: Ipv6Addr) -> bool {
         ip.safe_mask(self.prefix_len) == self.ip
+    }
+}
+
+#[cfg(feature = "ipnetwork")]
+impl From<ipnetwork::Ipv6Network> for Ipv6Cidr {
+    fn from(n: ipnetwork::Ipv6Network) -> Self {
+        let ip = n.ip().into();
+        // A valid `Ipv6Network` necessarily has a valid prefix so fine to unwrap.
+        let prefix = Ipv6PrefixLen::new(n.prefix()).unwrap();
+        Ipv6Cidr::new(ip, prefix)
+    }
+}
+
+#[cfg(feature = "ipnetwork")]
+impl From<Ipv6Cidr> for ipnetwork::Ipv6Network {
+    fn from(c: Ipv6Cidr) -> Self {
+        let (ip, prefix) = c.parts();
+        // A valid `Ipv6Cidr` necessarily has a valid prefix so fine to unwrap.
+        ipnetwork::Ipv6Network::new(ip.into(), prefix.val()).unwrap()
     }
 }
 
