@@ -752,6 +752,15 @@ fn guest_to_internet() {
         IpMeta::Ip6(ip6) => {
             assert_eq!(ip6.src, g1_cfg.phys_ip);
             assert_eq!(ip6.dst, g1_cfg.boundary_services.ip);
+
+            // Check that the encoded payload length in the outer header is
+            // correct, and matches the actual number of bytes in the rest of
+            // the packet.
+            let bytes = pkt1.get_rdr().copy_remaining();
+            assert_eq!(
+                ip6.pay_len as usize,
+                bytes.len() - EtherHdr::SIZE - Ipv6Hdr::BASE_SIZE
+            );
         }
 
         val => panic!("expected outer IPv6, got: {:?}", val),
@@ -792,6 +801,9 @@ fn guest_to_internet() {
 
         ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
     }
+
+    let mut pcap_guest = PcapBuilder::new("guest-to-internet.pcap");
+    pcap_guest.add_pkt(&pkt1);
 }
 
 // Verify that an ICMP Echo request has its identifier rewritten by

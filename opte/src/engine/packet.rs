@@ -1396,7 +1396,19 @@ impl Packet<Parsed> {
             }
 
             Some(IpMeta::Ip6(ip6)) => {
-                ip6.pay_len = (new_pkt_len - pkt_offset) as u16;
+                // IPv6 Payload Length field is defined in RFC 2640 section 3
+                // as:
+                //
+                // > Length of the IPv6 payloaed, i.e., the rest of the packet
+                // > following this IPv6 header, in octets. (Note that any
+                // > extension headers [section 4] present are considered part
+                // > of the payload, i.e., included in the length count.)
+                //
+                // So we need to remove the size of the fixed header (40
+                // octets), which is included in the total new packet length,
+                // when setting the payload length.
+                ip6.pay_len =
+                    (new_pkt_len - pkt_offset - Ipv6Hdr::BASE_SIZE) as u16;
                 ip6.emit(wtr.slice_mut(ip6.hdr_len())?);
                 offsets.ip = Some(HdrOffset {
                     pkt_pos: pkt_offset,
