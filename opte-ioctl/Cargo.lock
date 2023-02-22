@@ -320,7 +320,6 @@ version = "0.1.0"
 dependencies = [
  "cfg-if 0.1.10",
  "dyn-clone",
- "heapless",
  "illumos-sys-hdrs",
  "kstat-macro",
  "opte-api",

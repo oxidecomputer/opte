@@ -216,6 +216,12 @@ name = "illumos-sys-hdrs"
 version = "0.1.0"
 
 [[package]]
+name = "ipnetwork"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf466541e9d546596ee94f9f69590f89473455f88372423e0008fc1a7daf100e"
+
+[[package]]
 name = "kstat-macro"
 version = "0.1.0"
 dependencies = [
@@ -353,7 +359,6 @@ version = "0.1.0"
 dependencies = [
  "cfg-if 0.1.10",
  "dyn-clone",
- "heapless",
  "illumos-sys-hdrs",
  "kstat-macro",
  "opte-api",
@@ -370,6 +375,7 @@ version = "0.1.0"
 dependencies = [
  "cfg-if 0.1.10",
  "illumos-sys-hdrs",
+ "ipnetwork",
  "postcard",
  "serde",
  "smoltcp",
