@@ -88,9 +88,9 @@ pub struct TcpMeta {
     pub ack: u32,
     pub window_size: u16,
     pub csum: [u8; 2],
-    // Fow now we keep options as raw bytes, allowing up to 32 bytes
+    // Fow now we keep options as raw bytes, allowing up to 40 bytes
     // of options.
-    pub options_bytes: Option<[u8; 32]>,
+    pub options_bytes: Option<[u8; 40]>,
     pub options_len: usize,
 }
 
@@ -124,7 +124,8 @@ impl<'a> From<&TcpHdr<'a>> for TcpMeta {
         let (options_bytes, options_len) = match tcp.options_raw() {
             None => (None, 0),
             Some(src) => {
-                let mut dst = [0; 32];
+                // 40 = Max TCP header size (60) - Fixed TCP header size (20)
+                let mut dst = [0; 40];
                 dst[0..src.len()].copy_from_slice(src);
                 (Some(dst), src.len())
             }
