@@ -1399,7 +1399,7 @@ impl Packet<Parsed> {
                 // IPv6 Payload Length field is defined in RFC 2640 section 3
                 // as:
                 //
-                // > Length of the IPv6 payloaed, i.e., the rest of the packet
+                // > Length of the IPv6 payload, i.e., the rest of the packet
                 // > following this IPv6 header, in octets. (Note that any
                 // > extension headers [section 4] present are considered part
                 // > of the payload, i.e., included in the length count.)
