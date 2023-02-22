@@ -67,6 +67,7 @@ pub struct Ipv6Meta {
     // ...
     // ```
     pub ext: Option<[u8; 64]>,
+    // NOTE: We need `ext_len` explicitly, because `ext` is a fixed-size array.
     pub ext_len: usize,
 }
 
@@ -128,6 +129,8 @@ impl Ipv6Meta {
         }
     }
 
+    /// Return the length of the IPv6 header, including the base header and
+    /// extension headers.
     pub fn hdr_len(&self) -> usize {
         Ipv6Hdr::BASE_SIZE + self.ext_len
     }
@@ -150,7 +153,7 @@ impl Ipv6Meta {
     /// Return the total length of the packet, including the base header, any
     /// extension headers, and the payload itself.
     pub fn total_len(&self) -> u16 {
-        self.pay_len + Ipv6Hdr::BASE_SIZE as u16
+        Ipv6Hdr::BASE_SIZE as u16 + self.pay_len
     }
 }
 
@@ -221,6 +224,7 @@ impl ModifyAction<Ipv6Meta> for Ipv6Mod {
     }
 }
 
+/// An IPv6 packet header.
 #[derive(Debug)]
 pub struct Ipv6Hdr<'a> {
     base: Ipv6Packet<&'a mut [u8]>,
@@ -233,6 +237,11 @@ pub struct Ipv6Hdr<'a> {
 }
 
 impl<'a> Ipv6Hdr<'a> {
+    /// The size of the fixed IPv6 header.
+    ///
+    /// IPv6 headers are variable length, including a fixed, 40-byte portion as
+    /// well as a variable number of extension headers, each with potentially
+    /// different sizes. This size describes the fixed portion.
     pub const BASE_SIZE: usize = 40;
 
     /// The offset of the Protocol (Next Header) field in the base header.
@@ -267,6 +276,7 @@ impl<'a> Ipv6Hdr<'a> {
         self.base.next_header()
     }
 
+    /// Parse an IPv6 packet out of a reader, if possible.
     pub fn parse<'b>(
         rdr: &'b mut impl PacketReadMut<'a>,
     ) -> Result<Self, Ipv6HdrError> {
@@ -375,7 +385,7 @@ impl<'a> Ipv6Hdr<'a> {
         let _protocol = Protocol::try_from(next_header).unwrap();
 
         // Seek back to the start of the extensions, then take a slice of
-        // all the ptions.
+        // all the options.
         rdr.seek_back(ext_len)?;
         let ext = Some((rdr.slice_mut(ext_len)?, proto_offset));
         Ok(Self { base, ext })
@@ -424,7 +434,9 @@ impl<'a> Ipv6Hdr<'a> {
     /// length. However, this API is useful for having a consistent
     /// method for setting lengths when emitting headers.
     pub fn set_total_len(&mut self, len: u16) {
-        self.base.set_payload_len(len - self.hdr_len() as u16);
+        // The Payload Length field of the IPv6 header includes the ULP payload
+        // _and_ the length of any extension headers.
+        self.base.set_payload_len(len - Self::BASE_SIZE as u16);
     }
 
     /// Return the source address.
@@ -435,7 +447,7 @@ impl<'a> Ipv6Hdr<'a> {
     /// Return the total length of the packet, including the base header, any
     /// extension headers, and the payload itself.
     pub fn total_len(&self) -> usize {
-        usize::from(self.base.payload_len()) + Self::BASE_SIZE
+        self.pay_len() + Self::BASE_SIZE
     }
 
     /// Return the length of the upper-layer protocol payload.
@@ -771,5 +783,45 @@ pub(crate) mod test {
             0x56, 0xBE, 0xF7, 0xFF, 0xFE, 0x0B, 0x09, 0xEC,
         ];
         assert_eq!(&expected_bytes, pkt.seg_bytes(0));
+    }
+
+    #[test]
+    fn test_set_total_len() {
+        // Create a packet with one extension header.
+        let (buf, _) = generate_test_packet(&[IpProtocol::Ipv6Frag]);
+        let mut pkt = Packet::copy(&buf);
+        let mut reader = pkt.get_rdr_mut();
+        let mut header = Ipv6Hdr::parse(&mut reader).unwrap();
+
+        // Set the total length to 128.
+        //
+        // The Payload Length field contains the length of both the extension
+        // headers and the actual ULP. Because we have the Fragmentation header,
+        // which is a fixed 8-octet thing, this should result in a Payload
+        // Length of 128 - Ipv6Hdr::BASE_SIZE = 78.
+        const NEW_SIZE: usize = 128;
+        header.set_total_len(NEW_SIZE as _);
+        assert_eq!(header.total_len(), NEW_SIZE);
+        assert_eq!(header.hdr_len(), Ipv6Hdr::BASE_SIZE + 8);
+        assert_eq!(header.pay_len(), NEW_SIZE - Ipv6Hdr::BASE_SIZE);
+    }
+
+    #[test]
+    fn test_ip6_meta_total_len() {
+        // Create a packet with one extension header.
+        let (buf, _) = generate_test_packet(&[IpProtocol::Ipv6Frag]);
+        let mut pkt = Packet::copy(&buf);
+        let mut reader = pkt.get_rdr_mut();
+        let header = Ipv6Hdr::parse(&mut reader).unwrap();
+
+        // Previously, the `Ipv6Meta::total_len` method double-counted the
+        // extension header length. Assert we don't do that here.
+        let meta = Ipv6Meta::from(&header);
+        assert!(meta.ext.is_some());
+        assert_eq!(meta.ext_len, 8); // Fixed size
+        assert_eq!(
+            meta.total_len() as usize,
+            header.hdr_len() + header.ulp_len()
+        );
     }
 }
