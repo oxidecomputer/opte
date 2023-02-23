@@ -503,7 +503,7 @@ pub fn http_syn2(
     ip_dst: Ipv4Addr,
 ) -> Packet<Parsed> {
     let body = vec![];
-    let mut options = [0x00; 32];
+    let mut options = [0x00; TcpHdr::MAX_OPTION_SIZE];
     #[rustfmt::skip]
     let bytes = [
         // MSS
