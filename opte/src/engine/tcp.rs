@@ -524,4 +524,156 @@ mod test {
         ];
         assert_eq!(&expected_bytes, pkt.seg_bytes(0));
     }
+
+    #[test]
+    fn parse_no_opts() {
+        let hdr_len = TcpHdr::BASE_SIZE;
+        #[rustfmt::skip]
+        let base_bytes = vec![
+            // source
+            0xC0, 0x02,
+            // dest
+            0x00, 0x50,
+            // seq
+            0x95, 0xAC, 0xAC, 0xB6,
+            // ack
+            0x00, 0x00, 0x00, 0x00,
+            // offset
+            ((hdr_len / 4) as u8) << TCP_HDR_OFFSET_SHIFT,
+            // flags
+            0x02,
+            // window
+            0xFA, 0xF0,
+            // checksum
+            0x00, 0x00,
+            // URG pointer
+            0x00, 0x00,
+        ];
+        assert_eq!(base_bytes.len(), TcpHdr::BASE_SIZE);
+
+        let mut pkt = Packet::copy(&base_bytes);
+        let mut rdr = pkt.get_rdr_mut();
+        let tcp_hdr = TcpHdr::parse(&mut rdr).unwrap();
+
+        assert_eq!(tcp_hdr.base_bytes(), &base_bytes);
+        assert_eq!(tcp_hdr.options_bytes(), None);
+    }
+
+    #[test]
+    fn parse_max_opts() {
+        #[rustfmt::skip]
+        let option_bytes = [
+            // MSS
+            0x02, 0x04, 0x05, 0xB4,
+            // SACK permitted
+            0x04, 0x02,
+            // Timestamps
+            0x08, 0x0A, 0x09, 0xB4, 0x2A, 0xA9, 0x00, 0x00, 0x00, 0x00,
+            // No-op
+            0x01,
+            // Window Scale
+            0x03, 0x03, 0x01,
+            // No-ops
+            0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+            0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+        ];
+
+        let hdr_len = TcpHdr::BASE_SIZE + option_bytes.len();
+        #[rustfmt::skip]
+        let base_bytes = [
+            // source
+            0xC0, 0x02,
+            // dest
+            0x00, 0x50,
+            // seq
+            0x95, 0xAC, 0xAC, 0xB6,
+            // ack
+            0x00, 0x00, 0x00, 0x00,
+            // offset
+            ((hdr_len / 4) as u8) << TCP_HDR_OFFSET_SHIFT,
+            // flags
+            0x02,
+            // window
+            0xFA, 0xF0,
+            // checksum
+            0x00, 0x00,
+            // URG pointer
+            0x00, 0x00,
+        ];
+        assert_eq!(base_bytes.len(), TcpHdr::BASE_SIZE);
+
+        let pkt_bytes = base_bytes
+            .iter()
+            .copied()
+            .chain(option_bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        let mut pkt = Packet::copy(&pkt_bytes);
+        let mut rdr = pkt.get_rdr_mut();
+        let tcp_hdr = TcpHdr::parse(&mut rdr).unwrap();
+
+        assert_eq!(tcp_hdr.base_bytes(), &base_bytes);
+        assert_eq!(tcp_hdr.options_bytes(), Some(&option_bytes[..]));
+    }
+
+    #[test]
+    fn parse_opts_truncated() {
+        #[rustfmt::skip]
+        let option_bytes = [
+            // MSS
+            0x02, 0x04, 0x05, 0xB4,
+            // SACK permitted
+            0x04, 0x02,
+            // Timestamps
+            0x08, 0x0A, 0x09, 0xB4, 0x2A, 0xA9, 0x00, 0x00, 0x00, 0x00,
+            // No-op
+            0x01,
+            // Window Scale
+            0x03, 0x03, 0x01,
+        ];
+
+        let hdr_len = TcpHdr::BASE_SIZE
+            + option_bytes.len()
+            // Indicate there's an extra 32-bit word of options
+            + 4;
+
+        #[rustfmt::skip]
+        let base_bytes = [
+            // source
+            0xC0, 0x02,
+            // dest
+            0x00, 0x50,
+            // seq
+            0x95, 0xAC, 0xAC, 0xB6,
+            // ack
+            0x00, 0x00, 0x00, 0x00,
+            // offset
+            ((hdr_len / 4) as u8) << TCP_HDR_OFFSET_SHIFT,
+            // flags
+            0x02,
+            // window
+            0xFA, 0xF0,
+            // checksum
+            0x00, 0x00,
+            // URG pointer
+            0x00, 0x00,
+        ];
+        assert_eq!(base_bytes.len(), TcpHdr::BASE_SIZE);
+
+        let pkt_bytes = base_bytes
+            .iter()
+            .copied()
+            .chain(option_bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        let mut pkt = Packet::copy(&pkt_bytes);
+        let mut rdr = pkt.get_rdr_mut();
+        let tcp_hdr_err = TcpHdr::parse(&mut rdr)
+            .expect_err("expected to fail parsing malformed TCP header");
+
+        assert_eq!(
+            tcp_hdr_err,
+            TcpHdrError::TruncatedOptions { error: ReadErr::NotEnoughBytes }
+        );
+    }
 }
