@@ -90,7 +90,7 @@ pub struct TcpMeta {
     pub csum: [u8; 2],
     // Fow now we keep options as raw bytes, allowing up to 40 bytes
     // of options.
-    pub options_bytes: Option<[u8; 40]>,
+    pub options_bytes: Option<[u8; TcpHdr::MAX_OPTION_SIZE]>,
     pub options_len: usize,
 }
 
@@ -124,8 +124,7 @@ impl<'a> From<&TcpHdr<'a>> for TcpMeta {
         let (options_bytes, options_len) = match tcp.options_raw() {
             None => (None, 0),
             Some(src) => {
-                // 40 = Max TCP header size (60) - Fixed TCP header size (20)
-                let mut dst = [0; 40];
+                let mut dst = [0; TcpHdr::MAX_OPTION_SIZE];
                 dst[0..src.len()].copy_from_slice(src);
                 (Some(dst), src.len())
             }
@@ -216,6 +215,16 @@ impl<'a> TcpHdr<'a> {
     pub const BASE_SIZE: usize = TcpHdrRaw::SIZE;
     pub const CSUM_BEGIN_OFFSET: usize = 16;
     pub const CSUM_END_OFFSET: usize = 18;
+
+    /// The maximum size of a TCP header.
+    ///
+    /// The header length is derived from the data offset field.
+    /// Given it is a 4-bit field and specifies the size in 32-bit words,
+    /// the maximum header size is therefore (2^4 - 1) * 4 = 60 bytes.
+    pub const MAX_SIZE: usize = 60;
+
+    /// The maximum size of any TCP options in a TCP header.
+    pub const MAX_OPTION_SIZE: usize = Self::MAX_SIZE - Self::BASE_SIZE;
 
     /// Return the acknowledgement number.
     pub fn ack(&self) -> u32 {
@@ -457,7 +466,7 @@ mod test {
 
     #[test]
     fn emit_opts() {
-        let mut opts = [0x00; 32];
+        let mut opts = [0x00; TcpHdr::MAX_OPTION_SIZE];
         let bytes = [
             0x02, 0x04, 0x05, 0xB4, 0x04, 0x02, 0x08, 0x0A, 0x09, 0xB4, 0x2A,
             0xA9, 0x00, 0x00, 0x00, 0x00, 0x01, 0x03, 0x03, 0x01,
