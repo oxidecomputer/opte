@@ -17,11 +17,41 @@ use opte_api::Direction;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
         use illumos_sys_hdrs::uintptr_t;
         use super::rule::flow_id_sdt_arg;
-    } else {
-        use std::string::String;
+    }
+}
+
+/// An error processing a TCP flow.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TcpFlowStateError {
+    /// Encountered an unexpected TCP segment.
+    UnexpectedSegment {
+        direction: Direction,
+        flow_id: InnerFlowId,
+        state: TcpState,
+        flags: u8,
+    },
+}
+
+impl fmt::Display for TcpFlowStateError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TcpFlowStateError::UnexpectedSegment {
+                direction,
+                flow_id,
+                state,
+                flags,
+            } => {
+                write!(
+                    f,
+                    "Unexpected TCP segment, \
+                    direction: {}, flow: {}, state: {}, \
+                    flags: 0x{:x}",
+                    direction, flow_id, state, flags,
+                )
+            }
+        }
     }
 }
 
@@ -434,7 +464,7 @@ impl TcpFlowState {
         dir: Direction,
         flow_id: &InnerFlowId,
         tcp: &TcpMeta,
-    ) -> Result<TcpState, String> {
+    ) -> Result<TcpState, TcpFlowStateError> {
         let curr_state = self.tcp_state;
 
         // Run the segment through the corresponding side of the TCP
@@ -466,11 +496,12 @@ impl TcpFlowState {
             Some(new_state) => new_state,
             None => {
                 self.tcp_flow_drop_probe(port, &flow_id, dir, tcp.flags);
-                return Err(format!(
-                    "unexpected TCP segment dir: {}, flow: {}, state: {}, \
-                     flags: 0x{:x}",
-                    dir, flow_id, curr_state, tcp.flags,
-                ));
+                return Err(TcpFlowStateError::UnexpectedSegment {
+                    direction: dir,
+                    flow_id: *flow_id,
+                    state: curr_state,
+                    flags: tcp.flags,
+                });
             }
         };
 

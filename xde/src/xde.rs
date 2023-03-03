@@ -34,6 +34,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::convert::TryFrom;
 use core::convert::TryInto;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
@@ -93,7 +94,7 @@ use oxide_vpc::engine::router;
 use oxide_vpc::engine::VpcNetwork;
 use oxide_vpc::engine::VpcParser;
 
-// Entry limits for the varous flow tables.
+// Entry limits for the various flow tables.
 //
 // XXX It would be nice to use const unwrap() but that's gated on the
 // `const_option` feature.
@@ -102,8 +103,6 @@ use oxide_vpc::engine::VpcParser;
 const FW_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
 const NAT_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
 const FT_LIMIT_ONE: Option<NonZeroU32> = NonZeroU32::new(1);
-const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
-const TCP_STATE_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
 
 /// The name of this driver.
 const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
@@ -1959,12 +1958,46 @@ fn new_port(
         warn!("disabling overlay for port: {}", name);
     }
 
+    // Set the UFT and TCP flow table limits based on the guest's IP
+    // configuration.
+    //
+    // Guests may have either an SNAT IP address, which is currently limited to
+    // a subset of all ports, or an external IP that uses all ports. In the
+    // latter case, the SNAT address is not used, even though it may be reserved
+    // for the guest. We'll use the external IP if it exists, otherwise the
+    // SNAT. This is true for both IPv6 and IPv4, and we take the sum of these
+    // to support _all_ possible ports the guest could use.
+    let ipv4_limit = match &cfg.ip_cfg {
+        IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. } => ipv4
+            .external_ips
+            .map(|_| u32::from(u16::MAX))
+            .or_else(|| {
+                ipv4.snat
+                    .as_ref()
+                    .map(|snat| u32::try_from(snat.ports.len()).unwrap())
+            })
+            .unwrap_or(0),
+        _ => 0,
+    };
+    let ipv6_limit = match &cfg.ip_cfg {
+        IpCfg::Ipv6(ipv6) | IpCfg::DualStack { ipv6, .. } => ipv6
+            .external_ips
+            .map(|_| u32::from(u16::MAX))
+            .or_else(|| {
+                ipv6.snat
+                    .as_ref()
+                    .map(|snat| u32::try_from(snat.ports.len()).unwrap())
+            })
+            .unwrap_or(0),
+        _ => 0,
+    };
+
+    // Safety: These are port ranges, and so each is no more than `u16::MAX`.
+    // Twice that fits in 17 bits, so a `u32` is safe.
+    let limit = NonZeroU32::new(ipv4_limit + ipv6_limit).unwrap();
+
     let net = VpcNetwork { cfg: cfg.clone() };
-    Ok(Arc::new(pb.create(
-        net,
-        UFT_LIMIT.unwrap(),
-        TCP_STATE_LIMIT.unwrap(),
-    )?))
+    Ok(Arc::new(pb.create(net, limit, limit)?))
 }
 
 #[no_mangle]
