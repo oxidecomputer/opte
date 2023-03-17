@@ -11,9 +11,9 @@ use structopt::StructOpt;
 
 use opte::api::Direction;
 use opte::api::DomainName;
+use opte::api::IpAddr;
 use opte::api::IpCidr;
-use opte::api::Ipv4Addr;
-use opte::api::Ipv4Cidr;
+use opte::api::Ipv6Addr;
 use opte::api::MacAddr;
 use opte::api::Vni;
 use opte::engine::print::print_layer;
@@ -29,6 +29,7 @@ use oxide_vpc::api::FirewallAction;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::Ipv4Cfg;
+use oxide_vpc::api::Ipv6Cfg;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::Ports;
@@ -36,6 +37,7 @@ use oxide_vpc::api::ProtoFilter;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
+use oxide_vpc::api::SNat6Cfg;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::print::print_v2p;
@@ -124,13 +126,13 @@ enum Command {
         #[structopt(long)]
         guest_mac: MacAddr,
 
-        /// The private IPv4 address for the guest.
+        /// The private IP address for the guest.
         #[structopt(long)]
-        private_ip: std::net::Ipv4Addr,
+        private_ip: IpAddr,
 
         /// The private IP subnet to which the guest belongs.
         #[structopt(long)]
-        vpc_subnet: Ipv4Cidr,
+        vpc_subnet: IpCidr,
 
         /// The MAC address to use as the virtual gateway.
         ///
@@ -144,12 +146,12 @@ enum Command {
         /// This is the IP OPTE itself uses when responding directly to the
         /// client, for example, to DHCP requests.
         #[structopt(long)]
-        gateway_ip: std::net::Ipv4Addr,
+        gateway_ip: IpAddr,
 
         /// The IP address for Boundary Services, where packets destined to
         /// off-rack networks are sent.
         #[structopt(long)]
-        bsvc_addr: std::net::Ipv6Addr,
+        bsvc_addr: Ipv6Addr,
 
         /// The VNI used for Boundary Services.
         #[structopt(long)]
@@ -166,11 +168,11 @@ enum Command {
         /// The IP address of the hosting sled, on the underlay / physical
         /// network.
         #[structopt(long)]
-        src_underlay_addr: std::net::Ipv6Addr,
+        src_underlay_addr: Ipv6Addr,
 
         /// The external IP address used for source NAT for the guest.
         #[structopt(long, requires_all(&["snat-start", "snat-end"]))]
-        snat_ip: Option<std::net::Ipv4Addr>,
+        snat_ip: Option<IpAddr>,
 
         /// The starting L4 port used for source NAT for the guest.
         #[structopt(long)]
@@ -189,7 +191,7 @@ enum Command {
         phys_gw_mac: Option<MacAddr>,
 
         #[structopt(long)]
-        external_ipv4: Option<Ipv4Addr>,
+        external_ip: Option<IpAddr>,
 
         #[structopt(long)]
         passthrough: bool,
@@ -202,12 +204,7 @@ enum Command {
     SetXdeUnderlay { u1: String, u2: String },
 
     /// Set a virtual-to-physical mapping
-    SetV2P {
-        vpc_ip4: std::net::Ipv4Addr,
-        vpc_mac: MacAddr,
-        underlay_ip: std::net::Ipv6Addr,
-        vni: Vni,
-    },
+    SetV2P { vpc_ip: IpAddr, vpc_mac: MacAddr, underlay_ip: Ipv6Addr, vni: Vni },
 
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
@@ -359,36 +356,100 @@ fn main() -> anyhow::Result<()> {
             snat_end,
             domain_list,
             phys_gw_mac,
-            external_ipv4,
+            external_ip,
             passthrough,
         } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
-            let snat = match snat_ip {
-                Some(ip) => Some(SNat4Cfg {
-                    external_ip: ip.into(),
-                    ports: core::ops::RangeInclusive::new(
-                        snat_start.unwrap(),
-                        snat_end.unwrap(),
-                    ),
-                }),
 
-                None => None,
+            let ip_cfg = match private_ip {
+                IpAddr::Ip4(private_ip) => {
+                    let IpCidr::Ip4(vpc_subnet) = vpc_subnet else {
+                        anyhow::bail!("expected IPv4 VPC subnet");
+                    };
+
+                    let IpAddr::Ip4(gateway_ip) = gateway_ip else {
+                        anyhow::bail!("expected IPv4 gateway IP");
+                    };
+
+                    let snat = match snat_ip {
+                        Some(IpAddr::Ip4(ip)) => Some(SNat4Cfg {
+                            external_ip: ip,
+                            ports: core::ops::RangeInclusive::new(
+                                snat_start.unwrap(),
+                                snat_end.unwrap(),
+                            ),
+                        }),
+                        Some(IpAddr::Ip6(_)) => {
+                            anyhow::bail!("expected IPv4 SNAT IP");
+                        }
+                        None => None,
+                    };
+
+                    let external_ip = match external_ip {
+                        Some(IpAddr::Ip4(ip)) => Some(ip),
+                        Some(IpAddr::Ip6(_)) => {
+                            anyhow::bail!("expected IPv4 external IP");
+                        }
+                        None => None,
+                    };
+
+                    IpCfg::Ipv4(Ipv4Cfg {
+                        vpc_subnet,
+                        private_ip,
+                        gateway_ip,
+                        snat,
+                        external_ips: external_ip,
+                    })
+                }
+                IpAddr::Ip6(private_ip) => {
+                    let IpCidr::Ip6(vpc_subnet) = vpc_subnet else {
+                        anyhow::bail!("expected IPv6 VPC subnet");
+                    };
+
+                    let IpAddr::Ip6(gateway_ip) = gateway_ip else {
+                        anyhow::bail!("expected IPv6 gateway IP");
+                    };
+
+                    let snat = match snat_ip {
+                        Some(IpAddr::Ip4(_)) => {
+                            anyhow::bail!("expected IPv6 SNAT IP");
+                        }
+                        Some(IpAddr::Ip6(ip)) => Some(SNat6Cfg {
+                            external_ip: ip,
+                            ports: core::ops::RangeInclusive::new(
+                                snat_start.unwrap(),
+                                snat_end.unwrap(),
+                            ),
+                        }),
+                        None => None,
+                    };
+
+                    let external_ip = match external_ip {
+                        Some(IpAddr::Ip4(_)) => {
+                            anyhow::bail!("expected IPv6 external IP");
+                        }
+                        Some(IpAddr::Ip6(ip)) => Some(ip),
+                        None => None,
+                    };
+
+                    IpCfg::Ipv6(Ipv6Cfg {
+                        vpc_subnet,
+                        private_ip,
+                        gateway_ip,
+                        snat,
+                        external_ips: external_ip,
+                    })
+                }
             };
 
             let cfg = VpcCfg {
-                ip_cfg: IpCfg::Ipv4(Ipv4Cfg {
-                    vpc_subnet,
-                    private_ip: private_ip.into(),
-                    gateway_ip: gateway_ip.into(),
-                    snat,
-                    external_ips: external_ipv4,
-                }),
+                ip_cfg,
                 guest_mac,
                 gateway_mac,
                 vni: vpc_vni,
-                phys_ip: src_underlay_addr.into(),
+                phys_ip: src_underlay_addr,
                 boundary_services: BoundaryServices {
-                    ip: bsvc_addr.into(),
+                    ip: bsvc_addr,
                     vni: bsvc_vni,
                     mac: bsvc_mac,
                 },
@@ -419,11 +480,10 @@ fn main() -> anyhow::Result<()> {
             hdl.remove_firewall_rule(&request)?;
         }
 
-        Command::SetV2P { vpc_ip4, vpc_mac, underlay_ip, vni } => {
+        Command::SetV2P { vpc_ip, vpc_mac, underlay_ip, vni } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
-            let vip = opte::api::IpAddr::Ip4(vpc_ip4.into());
-            let phys = PhysNet { ether: vpc_mac, ip: underlay_ip.into(), vni };
-            let req = SetVirt2PhysReq { vip, phys };
+            let phys = PhysNet { ether: vpc_mac, ip: underlay_ip, vni };
+            let req = SetVirt2PhysReq { vip: vpc_ip, phys };
             hdl.set_v2p(&req)?;
         }
 
