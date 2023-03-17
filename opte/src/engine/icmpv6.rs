@@ -349,6 +349,8 @@ impl HairpinAction for RouterAdvertisement {
             dst: meta.inner_ip6().unwrap().src,
             proto: Protocol::ICMPv6,
             next_hdr: IpProtocol::Icmpv6,
+            // RFC 4861 7.1.2 requires that the hop limit be 255 in an RA.
+            hop_limit: 255,
             // There are no extension headers; the ULP is the only
             // content.
             pay_len: reply_len as u16,
