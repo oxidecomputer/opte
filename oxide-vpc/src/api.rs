@@ -718,6 +718,7 @@ impl FromStr for ProtoFilter {
             "any" => Ok(ProtoFilter::Any),
             "arp" => Ok(ProtoFilter::Arp),
             "icmp" => Ok(ProtoFilter::Proto(Protocol::ICMP)),
+            "icmp6" => Ok(ProtoFilter::Proto(Protocol::ICMPv6)),
             "tcp" => Ok(ProtoFilter::Proto(Protocol::TCP)),
             "udp" => Ok(ProtoFilter::Proto(Protocol::UDP)),
             _ => Err(format!("unknown protocol: {}", s)),
