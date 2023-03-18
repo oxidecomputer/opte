@@ -2125,7 +2125,7 @@ fn establish_http_conn(
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
-    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port();
+    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
 
     // ================================================================
     // Step 2
@@ -2430,7 +2430,7 @@ fn tcp_outbound() {
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
-    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port();
+    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
@@ -2669,7 +2669,7 @@ fn tcp_inbound() {
             "stats.port.in_modified, stats.port.in_uft_miss",
         ]
     );
-    let sport = pkt1.meta().inner.ulp.unwrap().src_port();
+    let sport = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
     assert_eq!(TcpState::Listen, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================

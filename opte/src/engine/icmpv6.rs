@@ -6,15 +6,20 @@
 
 //! Internet Control Message Protocol version 6
 
+use super::checksum::Checksum;
+use super::checksum::HeaderChecksum;
 use super::ether::EtherHdr;
 use super::ether::EtherMeta;
 use super::ether::EtherType;
+use super::headers::RawHeader;
 use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6Meta;
 use super::packet::Packet;
 use super::packet::PacketMeta;
 use super::packet::PacketRead;
+use super::packet::PacketReadMut;
 use super::packet::PacketReader;
+use super::packet::ReadErr;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;
@@ -35,7 +40,6 @@ pub use opte_api::ndp::NeighborAdvertisement;
 pub use opte_api::ndp::RouterAdvertisement;
 use serde::Deserialize;
 use serde::Serialize;
-use smoltcp::phy::Checksum;
 use smoltcp::phy::ChecksumCapabilities as Csum;
 use smoltcp::wire::Icmpv6Message;
 use smoltcp::wire::Icmpv6Packet;
@@ -46,6 +50,10 @@ use smoltcp::wire::Ipv6Address;
 use smoltcp::wire::NdiscNeighborFlags;
 use smoltcp::wire::NdiscRepr;
 use smoltcp::wire::RawHardwareAddress;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
+use zerocopy::LayoutVerified;
+use zerocopy::Unaligned;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -54,6 +62,116 @@ cfg_if! {
     } else {
         use std::vec::Vec;
         use std::string::String;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Icmpv6Meta {
+    pub msg_type: u8,
+    pub msg_code: u8,
+    pub csum: [u8; 2],
+}
+
+impl Icmpv6Meta {
+    // This assumes the dst is large enough.
+    #[inline]
+    pub fn emit(&self, dst: &mut [u8]) {
+        debug_assert!(dst.len() >= Icmpv6Hdr::SIZE);
+        dst[0] = self.msg_type;
+        dst[1] = self.msg_code;
+        dst[2..4].copy_from_slice(&self.csum);
+    }
+
+    #[inline]
+    pub fn hdr_len(&self) -> usize {
+        Icmpv6Hdr::SIZE
+    }
+}
+
+impl<'a> From<&Icmpv6Hdr<'a>> for Icmpv6Meta {
+    fn from(hdr: &Icmpv6Hdr<'a>) -> Self {
+        Self {
+            msg_type: hdr.base.msg_type,
+            msg_code: hdr.base.msg_code,
+            csum: hdr.base.csum,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Icmpv6HdrError {
+    ReadError { error: ReadErr },
+}
+
+impl From<ReadErr> for Icmpv6HdrError {
+    fn from(error: ReadErr) -> Self {
+        Icmpv6HdrError::ReadError { error }
+    }
+}
+
+#[derive(Debug)]
+pub struct Icmpv6Hdr<'a> {
+    base: LayoutVerified<&'a mut [u8], Icmpv6HdrRaw>,
+}
+
+impl<'a> Icmpv6Hdr<'a> {
+    pub const SIZE: usize = Icmpv6HdrRaw::SIZE;
+
+    /// Offset to the start of the ICMPv6 checksum field.
+    pub const CSUM_BEGIN_OFFSET: usize = 2;
+
+    /// Offset to the end of the ICMPv6 checksum field.
+    pub const CSUM_END_OFFSET: usize = 4;
+
+    pub fn csum_minus_hdr(&self) -> Option<Checksum> {
+        if self.base.csum != [0; 2] {
+            let mut csum = Checksum::from(HeaderChecksum::wrap(self.base.csum));
+            csum.sub_bytes(&self.base.bytes()[0..Self::CSUM_BEGIN_OFFSET]);
+            Some(csum)
+        } else {
+            None
+        }
+    }
+
+    /// Return the header length, in bytes.
+    pub fn hdr_len(&self) -> usize {
+        Self::SIZE
+    }
+
+    pub fn parse<'b>(
+        rdr: &'b mut impl PacketReadMut<'a>,
+    ) -> Result<Self, Icmpv6HdrError> {
+        let src = rdr.slice_mut(Icmpv6Hdr::SIZE)?;
+        let icmp6 = Self { base: Icmpv6HdrRaw::new_mut(src)? };
+        Ok(icmp6)
+    }
+}
+
+/// Note: For now we keep this unaligned to be safe.
+#[repr(C)]
+#[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
+pub struct Icmpv6HdrRaw {
+    pub msg_type: u8,
+    pub msg_code: u8,
+    pub csum: [u8; 2],
+}
+
+impl Icmpv6HdrRaw {
+    /// An ICMPv6 header is always 4 bytes.
+    pub const SIZE: usize = 4;
+}
+
+impl<'a> RawHeader<'a> for Icmpv6HdrRaw {
+    #[inline]
+    fn new_mut(
+        src: &mut [u8],
+    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+        debug_assert_eq!(src.len(), Self::SIZE);
+        let hdr = match LayoutVerified::new(src) {
+            Some(hdr) => hdr,
+            None => return Err(ReadErr::BadLayout),
+        };
+        Ok(hdr)
     }
 }
 
@@ -122,6 +240,8 @@ impl HairpinAction for Icmpv6EchoReply {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
+        use smoltcp::phy::Checksum;
+
         // Collect the src / dst IP addresses, which are needed to emit the
         // resulting ICMPv6 echo reply.
         let (src_ip, dst_ip) = if let Some(metadata) = meta.inner_ip6() {
@@ -247,6 +367,7 @@ impl HairpinAction for RouterAdvertisement {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
+        use smoltcp::phy::Checksum;
         use smoltcp::time::Duration;
         use smoltcp::wire::NdiscRouterFlags;
 
@@ -551,6 +672,8 @@ impl HairpinAction for NeighborAdvertisement {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
+        use smoltcp::phy::Checksum;
+
         // Sanity check that this is actually in IPv6 packet.
         let metadata = meta.inner_ip6().ok_or_else(|| {
             // Getting here implies the predicate matched, but that the

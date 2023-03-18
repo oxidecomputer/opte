@@ -10,7 +10,6 @@ use super::dhcp::MessageType as DhcpMessageType;
 use super::dhcpv6::MessageType as Dhcpv6MessageType;
 use super::ether::EtherType;
 use super::headers::IpMeta;
-use super::headers::UlpMeta;
 use super::icmp::MessageType as IcmpMessageType;
 use super::icmpv6::MessageType as Icmpv6MessageType;
 use super::ip4::Ipv4Addr;
@@ -23,8 +22,6 @@ use super::ip6::Ipv6Meta;
 use super::packet::PacketMeta;
 use super::packet::PacketRead;
 use super::port::meta::ActionMeta;
-use super::tcp::TcpMeta;
-use super::udp::UdpMeta;
 use core::fmt;
 use core::fmt::Display;
 use opte_api::MacAddr;
@@ -476,45 +473,35 @@ impl Predicate {
                 _ => return false,
             },
 
-            Self::InnerSrcPort(list) => match meta.inner.ulp {
-                None => return false,
+            Self::InnerSrcPort(list) => {
+                match meta.inner.ulp.map(|m| m.src_port()) {
+                    // No ULP metadata or no source port (e.g. ICMPv6).
+                    None | Some(None) => return false,
 
-                Some(UlpMeta::Tcp(TcpMeta { src: port, .. })) => {
-                    for m in list {
-                        if m.matches(port) {
-                            return true;
+                    Some(Some(port)) => {
+                        for m in list {
+                            if m.matches(port) {
+                                return true;
+                            }
                         }
                     }
                 }
+            }
 
-                Some(UlpMeta::Udp(UdpMeta { src: port, .. })) => {
-                    for m in list {
-                        if m.matches(port) {
-                            return true;
+            Self::InnerDstPort(list) => {
+                match meta.inner.ulp.map(|m| m.dst_port()) {
+                    // No ULP metadata or no destination port (e.g. ICMPv6).
+                    None | Some(None) => return false,
+
+                    Some(Some(port)) => {
+                        for m in list {
+                            if m.matches(port) {
+                                return true;
+                            }
                         }
                     }
                 }
-            },
-
-            Self::InnerDstPort(list) => match meta.inner.ulp {
-                None => return false,
-
-                Some(UlpMeta::Tcp(TcpMeta { dst: port, .. })) => {
-                    for m in list {
-                        if m.matches(port) {
-                            return true;
-                        }
-                    }
-                }
-
-                Some(UlpMeta::Udp(UdpMeta { dst: port, .. })) => {
-                    for m in list {
-                        if m.matches(port) {
-                            return true;
-                        }
-                    }
-                }
-            },
+            }
         }
 
         false
