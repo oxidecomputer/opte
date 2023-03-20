@@ -750,7 +750,7 @@ fn guest_to_internet_ipv4() {
         None => panic!("no outer ether header"),
     }
 
-    match meta.outer.ip.as_ref().unwrap() {
+    let inner_bytes = match meta.outer.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
             assert_eq!(ip6.src, g1_cfg.phys_ip);
             assert_eq!(ip6.dst, g1_cfg.boundary_services.ip);
@@ -758,15 +758,19 @@ fn guest_to_internet_ipv4() {
             // Check that the encoded payload length in the outer header is
             // correct, and matches the actual number of bytes in the rest of
             // the packet.
-            let bytes = pkt1.get_rdr().copy_remaining();
+            let mut bytes = pkt1.get_rdr().copy_remaining();
             assert_eq!(
                 ip6.pay_len as usize,
                 bytes.len() - EtherHdr::SIZE - Ipv6Hdr::BASE_SIZE
             );
+
+            // Strip off the encapsulation headers
+            bytes.drain(..VPC_ENCAP_SZ);
+            bytes
         }
 
         val => panic!("expected outer IPv6, got: {:?}", val),
-    }
+    };
 
     match meta.outer.encap.as_ref() {
         Some(EncapMeta::Geneve(geneve)) => {
@@ -787,6 +791,15 @@ fn guest_to_internet_ipv4() {
             assert_eq!(ip4.src, g1_cfg.snat().external_ip);
             assert_eq!(ip4.dst, dst_ip);
             assert_eq!(ip4.proto, Protocol::TCP);
+
+            // Check that the encoded payload length in the inner header is
+            // correct, and matches the actual number of bytes in the rest of
+            // the packet.
+            // IPv4 total length _DOES_ include the IPv4 header.
+            assert_eq!(
+                ip4.total_len as usize,
+                inner_bytes.len() - EtherHdr::SIZE,
+            );
         }
 
         ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
@@ -863,7 +876,7 @@ fn guest_to_internet_ipv6() {
         None => panic!("no outer ether header"),
     }
 
-    match meta.outer.ip.as_ref().unwrap() {
+    let inner_bytes = match meta.outer.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
             assert_eq!(ip6.src, g1_cfg.phys_ip);
             assert_eq!(ip6.dst, g1_cfg.boundary_services.ip);
@@ -871,15 +884,19 @@ fn guest_to_internet_ipv6() {
             // Check that the encoded payload length in the outer header is
             // correct, and matches the actual number of bytes in the rest of
             // the packet.
-            let bytes = pkt1.get_rdr().copy_remaining();
+            let mut bytes = pkt1.get_rdr().copy_remaining();
             assert_eq!(
                 ip6.pay_len as usize,
                 bytes.len() - EtherHdr::SIZE - Ipv6Hdr::BASE_SIZE
             );
+
+            // Strip off the encapsulation headers
+            bytes.drain(..VPC_ENCAP_SZ);
+            bytes
         }
 
         val => panic!("expected outer IPv6, got: {:?}", val),
-    }
+    };
 
     match meta.outer.encap.as_ref() {
         Some(EncapMeta::Geneve(geneve)) => {
@@ -901,6 +918,15 @@ fn guest_to_internet_ipv6() {
             assert_eq!(ip6.dst, dst_ip);
             assert_eq!(ip6.proto, Protocol::TCP);
             assert_eq!(ip6.next_hdr, IpProtocol::Tcp);
+
+            // Check that the encoded payload length in the inner header is
+            // correct, and matches the actual number of bytes in the rest of
+            // the packet.
+            // IPv6 payload length _DOES NOT_ include the IPv6 header.
+            assert_eq!(
+                ip6.pay_len as usize,
+                inner_bytes.len() - EtherHdr::SIZE - Ipv6Hdr::BASE_SIZE
+            );
         }
 
         ip4 => panic!("execpted inner IPv6 metadata, got IPv4: {:?}", ip4),
