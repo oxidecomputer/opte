@@ -373,12 +373,7 @@ impl HairpinAction for RouterAdvertisement {
 
         // Collect the src / dst IP addresses, which are needed to emit the
         // resulting ICMPv6 packet using `smoltcp`.
-        let (src_ip, dst_ip) = if let Some(metadata) = meta.inner_ip6() {
-            (
-                IpAddress::Ipv6(Ipv6Address(metadata.src.bytes())),
-                IpAddress::Ipv6(Ipv6Address(metadata.dst.bytes())),
-            )
-        } else {
+        let Some(ip6) = meta.inner_ip6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an IPv6 packet. That
             // should be impossible, but we avoid panicking given the kernel
@@ -388,10 +383,14 @@ impl HairpinAction for RouterAdvertisement {
                 meta
             )));
         };
+        let src_ip = IpAddress::Ipv6(Ipv6Address(ip6.src.bytes()));
+        let dst_ip = IpAddress::Ipv6(Ipv6Address(ip6.dst.bytes()));
+
         let body = rdr.copy_remaining();
         let src_pkt = Icmpv6Packet::new_checked(&body)?;
-        let src_ndisc =
-            Icmpv6Repr::parse(&src_ip, &dst_ip, &src_pkt, &Csum::ignored())?;
+        let mut csum = Csum::ignored();
+        csum.icmpv6 = Checksum::Rx;
+        let src_ndisc = Icmpv6Repr::parse(&src_ip, &dst_ip, &src_pkt, &csum)?;
 
         if !matches!(
             src_ndisc,
@@ -410,19 +409,26 @@ impl HairpinAction for RouterAdvertisement {
 
         // RFC 4861 6.1.1 describes a number of validation steps routers are
         // required to perform.
-        if src_pkt.msg_code() != 0 {
-            return Ok(AllowOrDeny::Deny);
-        }
-        if !src_pkt.verify_checksum(&src_ip, &dst_ip) {
-            return Ok(AllowOrDeny::Deny);
-        }
+        //
+        // `Icmpv6Packet::new_checked` and `Icmpv6Repr::parse` above guarantee:
+        //  - Checksum is valid
+        //  - ICMP code is correct (0)
+        //  - ICMP length is at least 8 octets
+        //  - Any included options have a non-zero length
+        //
         // NOTE: The router is required to check that there is no Link-Layer
         // Address Option, if the solicitation is sent from the unspecified
         // address. However, from the associated predicates, we know that this
         // is only called if the source IPv6 address is a link-local address,
         // and thus _not_ UNSPEC, so we skip that checking here.
         //
-        // TODO-completeness: Check IP Hop Limit and ICMP length / option length
+        // This leaves the hop limit as the only validity check.
+        if ip6.hop_limit != 255 {
+            return Err(GenErr::Unexpected(format!(
+                "Received RS with invalid hop limit ({}).",
+                ip6.hop_limit
+            )));
+        }
 
         let flags = if self.managed_cfg {
             NdiscRouterFlags::MANAGED
@@ -506,13 +512,29 @@ fn validate_neighbor_solicitation(
     rdr: &mut PacketReader,
     metadata: &Ipv6Meta,
 ) -> Result<Ipv6Addr, GenErr> {
+    use smoltcp::phy::Checksum;
+
     // First, check if this is in fact a NS message.
     let smol_src = IpAddress::Ipv6(metadata.src.into());
     let smol_dst = IpAddress::Ipv6(metadata.dst.into());
     let body = rdr.copy_remaining();
     let src_pkt = Icmpv6Packet::new_checked(&body)?;
-    let icmp =
-        Icmpv6Repr::parse(&smol_src, &smol_dst, &src_pkt, &Csum::ignored())?;
+    let mut csum = Csum::ignored();
+    csum.icmpv6 = Checksum::Rx;
+    let icmp = Icmpv6Repr::parse(&smol_src, &smol_dst, &src_pkt, &csum)?;
+
+    // `Icmpv6Packet::new_checked` and `Icmpv6Repr::parse` above guarantee:
+    //  - Checksum is valid
+    //  - ICMP code is correct (0)
+    //  - ICMP length is at least 24 octets
+    //  - Any included options have a non-zero length
+
+    if metadata.hop_limit != 255 {
+        return Err(GenErr::Unexpected(format!(
+            "Received NS with invalid hop limit ({}).",
+            metadata.hop_limit
+        )));
+    }
 
     let (target_addr, has_ll_option) = match icmp {
         Icmpv6Repr::Ndisc(NdiscRepr::NeighborSolicit {
