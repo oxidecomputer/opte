@@ -1302,7 +1302,7 @@ fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
     let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body_bytes);
     let mut csum = CsumCapab::ignored();
     csum.icmpv6 = smoltcp::phy::Checksum::Tx;
-    let _ = req.emit(
+    req.emit(
         &IpAddress::Ipv6(src_ip.into()),
         &IpAddress::Ipv6(dst_ip.into()),
         &mut req_pkt,
@@ -1314,6 +1314,7 @@ fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
         proto: Protocol::ICMPv6,
         next_hdr: IpProtocol::Icmpv6,
         pay_len: req.buffer_len() as u16,
+        hop_limit: 255,
         ..Default::default()
     };
     let eth =
@@ -1384,38 +1385,41 @@ fn gateway_router_advert_reply() {
         "Router advertisement should be destined for the guest's MAC"
     );
 
-    let (src, dst) = match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip6(ip6) => {
-            assert_eq!(
-                ip6.src,
-                Ipv6Addr::from_eui64(&g1_cfg.gateway_mac),
-                "Router advertisement should come from the \
-                gateway's link-local IPv6 address, generated \
-                from the EUI-64 transform of its MAC",
-            );
-            let expected_dst = Ipv6Addr::from_eui64(&g1_cfg.guest_mac);
-            assert_eq!(
-                ip6.dst, expected_dst,
-                "Router advertisement should be destined for \
-                the guest's Link-Local IPv6 address, generated from \
-                the EUI-64 transform of its MAC"
-            );
-            assert_eq!(ip6.proto, Protocol::ICMPv6);
-            (
-                Ipv6Address::from_bytes(&ip6.src),
-                Ipv6Address::from_bytes(&expected_dst),
-            )
-        }
-        ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
+    let IpMeta::Ip6(ip6) = meta.inner.ip.as_ref().expect("No inner IP header") else {
+        panic!("Inner IP header is not IPv6");
     };
+
+    assert_eq!(
+        ip6.src,
+        Ipv6Addr::from_eui64(&g1_cfg.gateway_mac),
+        "Router advertisement should come from the \
+        gateway's link-local IPv6 address, generated \
+        from the EUI-64 transform of its MAC",
+    );
+    let expected_dst = Ipv6Addr::from_eui64(&g1_cfg.guest_mac);
+    assert_eq!(
+        ip6.dst, expected_dst,
+        "Router advertisement should be destined for \
+        the guest's Link-Local IPv6 address, generated from \
+        the EUI-64 transform of its MAC"
+    );
+    assert_eq!(ip6.proto, Protocol::ICMPv6);
+
+    // RFC 4861 6.1.2 requires that the hop limit be 255 in an RA.
+    assert_eq!(ip6.hop_limit, 255);
 
     let rdr = reply.get_body_rdr();
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();
     csum.icmpv6 = smoltcp::phy::Checksum::Rx;
-    let reply_icmp =
-        Icmpv6Repr::parse(&src.into(), &dst.into(), &reply_pkt, &csum).unwrap();
+    let reply_icmp = Icmpv6Repr::parse(
+        &IpAddress::Ipv6(ip6.src.into()),
+        &IpAddress::Ipv6(ip6.dst.into()),
+        &reply_pkt,
+        &csum,
+    )
+    .unwrap();
     match reply_icmp {
         Icmpv6Repr::Ndisc(NdiscRepr::RouterAdvert {
             hop_limit,
@@ -1459,7 +1463,7 @@ fn generate_neighbor_solicitation(info: &SolicitInfo) -> Packet<Parsed> {
     let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body);
     let mut csum = CsumCapab::ignored();
     csum.icmpv6 = smoltcp::phy::Checksum::Tx;
-    let _ = req.emit(
+    req.emit(
         &IpAddress::Ipv6(info.src_ip.into()),
         &IpAddress::Ipv6(info.dst_ip.into()),
         &mut req_pkt,
@@ -1470,6 +1474,7 @@ fn generate_neighbor_solicitation(info: &SolicitInfo) -> Packet<Parsed> {
         dst: info.dst_ip,
         proto: Protocol::ICMPv6,
         next_hdr: IpProtocol::Icmpv6,
+        hop_limit: 255,
         pay_len: req.buffer_len() as u16,
         ..Default::default()
     };
@@ -1736,6 +1741,9 @@ fn validate_hairpin_advert(
     assert_eq!(ip6.src, na.src_ip);
     assert_eq!(ip6.dst, na.dst_ip);
     assert_eq!(ip6.proto, Protocol::ICMPv6);
+
+    // RFC 4861 7.1.2 requires that the hop limit be 255 in an NA.
+    assert_eq!(ip6.hop_limit, 255);
 
     // Validate the details of the Neighbor Advertisement itself.
     let rdr = reply.get_body_rdr();
