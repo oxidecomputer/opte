@@ -61,11 +61,13 @@ use std::prelude::v1::*;
 use std::time::Duration;
 use zerocopy::AsBytes;
 
+const IP4_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE;
+const IP6_SZ: usize = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE;
+const TCP4_SZ: usize = IP4_SZ + TcpHdr::BASE_SIZE;
+const TCP6_SZ: usize = IP6_SZ + TcpHdr::BASE_SIZE;
+
 // The GeneveHdr includes the UDP header.
-const VPC_ENCAP_SZ: usize =
-    EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE + GeneveHdr::BASE_SIZE;
-const IP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE;
-const TCP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + TcpHdr::BASE_SIZE;
+const VPC_ENCAP_SZ: usize = IP6_SZ + GeneveHdr::BASE_SIZE;
 
 // If we are running `cargo test`, then make sure to
 // register the USDT probes before running any tests.
@@ -386,7 +388,7 @@ fn gateway_icmp4_ping() {
     // encapsulated.
     let reply = hp.parse(In, GenericUlp {}).unwrap();
     pcap.add_pkt(&reply);
-    assert_eq!(reply.body_offset(), IP_SZ);
+    assert_eq!(reply.body_offset(), IP4_SZ);
     assert_eq!(reply.body_seg(), 0);
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());
@@ -528,7 +530,7 @@ fn guest_to_guest() {
         ]
     );
 
-    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ + HTTP_SYN_OPTS_LEN);
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP4_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt1.body_seg(), 1);
     let ulp_csum_after = pkt1.meta().inner.ulp.unwrap().csum();
     let ip_csum_after = pkt1.meta().inner.ip.unwrap().csum();
@@ -610,7 +612,7 @@ fn guest_to_guest() {
             "stats.port.in_modified, stats.port.in_uft_miss",
         ]
     );
-    assert_eq!(pkt2.body_offset(), TCP_SZ + HTTP_SYN_OPTS_LEN);
+    assert_eq!(pkt2.body_offset(), TCP4_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt2.body_seg(), 1);
 
     let g2_meta = pkt2.meta();
@@ -693,9 +695,9 @@ fn guest_to_guest_diff_vpc_no_peer() {
     );
 }
 
-// Verify that a guest can communicate with the internet.
+// Verify that a guest can communicate with the internet over IPv4.
 #[test]
-fn guest_to_internet() {
+fn guest_to_internet_ipv4() {
     let g1_cfg = g1_cfg();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
@@ -736,7 +738,7 @@ fn guest_to_internet() {
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
-    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ + HTTP_SYN_OPTS_LEN);
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP4_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt1.body_seg(), 1);
     let meta = pkt1.meta();
     match meta.outer.ether.as_ref() {
@@ -802,7 +804,121 @@ fn guest_to_internet() {
         ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
     }
 
-    let mut pcap_guest = PcapBuilder::new("guest_to_internet.pcap");
+    let mut pcap_guest = PcapBuilder::new("guest_to_internet_ipv4.pcap");
+    pcap_guest.add_pkt(&pkt1);
+}
+
+// Verify that a guest can communicate with the internet over IPv6.
+#[test]
+fn guest_to_internet_ipv6() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Add router entry that allows g1 to route to internet.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip6("::/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // ================================================================
+    // Generate a TCP SYN packet from g1 to example.com
+    // ================================================================
+    let dst_ip = "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap();
+    let mut pkt1 = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv6_cfg().unwrap().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+
+    // ================================================================
+    // Run the packet through g1's port in the outbound direction and
+    // verify the resulting packet meets expectations.
+    // ================================================================
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.out, nat.flows.in",
+            "uft.out",
+            "stats.port.out_modified, stats.port.out_uft_miss",
+        ]
+    );
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP6_SZ + HTTP_SYN_OPTS_LEN);
+    assert_eq!(pkt1.body_seg(), 1);
+    let meta = pkt1.meta();
+    match meta.outer.ether.as_ref() {
+        Some(eth) => {
+            assert_eq!(eth.src, MacAddr::ZERO);
+            assert_eq!(eth.dst, MacAddr::ZERO);
+        }
+
+        None => panic!("no outer ether header"),
+    }
+
+    match meta.outer.ip.as_ref().unwrap() {
+        IpMeta::Ip6(ip6) => {
+            assert_eq!(ip6.src, g1_cfg.phys_ip);
+            assert_eq!(ip6.dst, g1_cfg.boundary_services.ip);
+
+            // Check that the encoded payload length in the outer header is
+            // correct, and matches the actual number of bytes in the rest of
+            // the packet.
+            let bytes = pkt1.get_rdr().copy_remaining();
+            assert_eq!(
+                ip6.pay_len as usize,
+                bytes.len() - EtherHdr::SIZE - Ipv6Hdr::BASE_SIZE
+            );
+        }
+
+        val => panic!("expected outer IPv6, got: {:?}", val),
+    }
+
+    match meta.outer.encap.as_ref() {
+        Some(EncapMeta::Geneve(geneve)) => {
+            assert_eq!(geneve.entropy, 7777);
+            assert_eq!(geneve.vni, g1_cfg.boundary_services.vni);
+        }
+
+        None => panic!("expected outer Geneve metadata"),
+    }
+
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, g1_cfg.guest_mac);
+    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
+    assert_eq!(eth.ether_type, EtherType::Ipv6);
+
+    match meta.inner.ip.as_ref().unwrap() {
+        IpMeta::Ip6(ip6) => {
+            assert_eq!(ip6.src, g1_cfg.snat6().external_ip);
+            assert_eq!(ip6.dst, dst_ip);
+            assert_eq!(ip6.proto, Protocol::TCP);
+            assert_eq!(ip6.next_hdr, IpProtocol::Tcp);
+        }
+
+        ip4 => panic!("execpted inner IPv6 metadata, got IPv4: {:?}", ip4),
+    }
+
+    match meta.inner.ulp.as_ref().unwrap() {
+        UlpMeta::Tcp(tcp) => {
+            assert_eq!(
+                tcp.src,
+                g1_cfg.snat6().ports.clone().rev().next().unwrap(),
+            );
+            assert_eq!(tcp.dst, 80);
+        }
+
+        ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
+    }
+
+    let mut pcap_guest = PcapBuilder::new("guest_to_internet_ipv6.pcap");
     pcap_guest.add_pkt(&pkt1);
 }
 
@@ -854,7 +970,7 @@ fn snat_icmp4_echo_rewrite() {
         ]
     );
 
-    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + IP_SZ);
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + IP4_SZ);
     assert_eq!(pkt1.body_seg(), 1);
     let meta = pkt1.meta();
 
@@ -906,7 +1022,7 @@ fn snat_icmp4_echo_rewrite() {
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
-    assert_eq!(pkt2.body_offset(), IP_SZ);
+    assert_eq!(pkt2.body_offset(), IP4_SZ);
     assert_eq!(pkt2.body_seg(), 0);
     let meta = pkt2.meta();
 
@@ -951,7 +1067,7 @@ fn snat_icmp4_echo_rewrite() {
     let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
-    assert_eq!(pkt3.body_offset(), VPC_ENCAP_SZ + IP_SZ);
+    assert_eq!(pkt3.body_offset(), VPC_ENCAP_SZ + IP4_SZ);
     assert_eq!(pkt3.body_seg(), 1);
     let meta = pkt3.meta();
 
@@ -996,7 +1112,7 @@ fn snat_icmp4_echo_rewrite() {
     let res = g1.port.process(In, &mut pkt4, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
-    assert_eq!(pkt4.body_offset(), IP_SZ);
+    assert_eq!(pkt4.body_offset(), IP4_SZ);
     assert_eq!(pkt4.body_seg(), 0);
     let meta = pkt4.meta();
 
@@ -1233,7 +1349,7 @@ fn test_guest_to_gateway_icmpv6_ping(
     pcap.add_pkt(&reply);
 
     // Ether + IPv6
-    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE);
+    assert_eq!(reply.body_offset(), IP6_SZ);
     assert_eq!(reply.body_seg(), 0);
 
     let meta = reply.meta();
@@ -1367,7 +1483,7 @@ fn gateway_router_advert_reply() {
     pcap.add_pkt(&reply);
 
     // Ether + IPv6
-    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE);
+    assert_eq!(reply.body_offset(), IP6_SZ);
     assert_eq!(reply.body_seg(), 0);
 
     let meta = reply.meta();
@@ -1718,7 +1834,7 @@ fn validate_hairpin_advert(
     pcap.add_pkt(&reply);
 
     // Verify Ethernet and IPv6 header basics.
-    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE);
+    assert_eq!(reply.body_offset(), IP6_SZ);
     assert_eq!(reply.body_seg(), 0);
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());
@@ -2827,7 +2943,7 @@ fn anti_spoof() {
     g1.port.start();
     set!(g1, "port_state=running");
 
-    let src_ip = "172.30.0.240".parse().unwrap();
+    let src_ip = "172.30.0.240".parse::<Ipv4Addr>().unwrap();
     assert_ne!(src_ip, g1_cfg.ipv4().private_ip);
     let src_mac = ox_vpc_mac([0x0, 0x11, 0x22]);
     assert_ne!(src_mac, g1_cfg.guest_mac);

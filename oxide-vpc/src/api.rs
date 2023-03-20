@@ -272,6 +272,17 @@ impl VpcCfg {
             _ => panic!("expected an IPv4 SNAT configuration"),
         }
     }
+
+    #[cfg(any(feature = "test-help", test))]
+    pub fn snat6(&self) -> &SNat6Cfg {
+        match &self.ip_cfg {
+            IpCfg::Ipv6(ipv6) | IpCfg::DualStack { ipv6, .. } => {
+                ipv6.snat.as_ref().unwrap()
+            }
+
+            _ => panic!("expected an IPv6 SNAT configuration"),
+        }
+    }
 }
 
 /// A network destination on the Oxide Rack's physical network.
