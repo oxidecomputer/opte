@@ -286,6 +286,14 @@ impl PacketMeta {
         }
     }
 
+    /// Return the inner ICMPv6 metadata, if the inner ULP is ICMPv6.
+    pub fn inner_icmp6(&self) -> Option<&Icmpv6Meta> {
+        match &self.inner.ulp {
+            Some(UlpMeta::Icmpv6(icmp6)) => Some(icmp6),
+            _ => None,
+        }
+    }
+
     /// Return the inner TCP metadata, if the inner ULP is TCP.
     /// Otherwise, return `None`.
     pub fn inner_tcp(&self) -> Option<&TcpMeta> {

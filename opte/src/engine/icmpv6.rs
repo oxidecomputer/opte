@@ -67,7 +67,7 @@ cfg_if! {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Icmpv6Meta {
-    pub msg_type: u8,
+    pub msg_type: MessageType,
     pub msg_code: u8,
     pub csum: [u8; 2],
 }
@@ -77,7 +77,7 @@ impl Icmpv6Meta {
     #[inline]
     pub fn emit(&self, dst: &mut [u8]) {
         debug_assert!(dst.len() >= Icmpv6Hdr::SIZE);
-        dst[0] = self.msg_type;
+        dst[0] = self.msg_type.into();
         dst[1] = self.msg_code;
         dst[2..4].copy_from_slice(&self.csum);
     }
@@ -91,7 +91,7 @@ impl Icmpv6Meta {
 impl<'a> From<&Icmpv6Hdr<'a>> for Icmpv6Meta {
     fn from(hdr: &Icmpv6Hdr<'a>) -> Self {
         Self {
-            msg_type: hdr.base.msg_type,
+            msg_type: hdr.base.msg_type.into(),
             msg_code: hdr.base.msg_code,
             csum: hdr.base.csum,
         }
@@ -176,7 +176,9 @@ impl<'a> RawHeader<'a> for Icmpv6HdrRaw {
 }
 
 /// An ICMPv6 message type
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
 #[serde(from = "u8", into = "u8")]
 pub struct MessageType {
     inner: Icmpv6Message,
@@ -242,6 +244,17 @@ impl HairpinAction for Icmpv6EchoReply {
     ) -> GenPacketResult {
         use smoltcp::phy::Checksum;
 
+        let Some(icmp6) = meta.inner_icmp6() else {
+            // Getting here implies the predicate matched, but that the
+            // extracted metadata indicates this isn't an ICMPv6 packet. That
+            // should be impossible, but we avoid panicking given the kernel
+            // context.
+            return Err(GenErr::Unexpected(format!(
+                "Expected ICMPv6 packet metadata, but found: {:?}",
+                meta
+            )));
+        };
+
         // Collect the src / dst IP addresses, which are needed to emit the
         // resulting ICMPv6 echo reply.
         let (src_ip, dst_ip) = if let Some(metadata) = meta.inner_ip6() {
@@ -250,15 +263,17 @@ impl HairpinAction for Icmpv6EchoReply {
                 IpAddress::Ipv6(Ipv6Address(metadata.dst.bytes())),
             )
         } else {
-            // Getting here implies the predicate matched, but that the
-            // extracted metadata indicates this isn't an IPv6 packet. That
-            // should be impossible, but we avoid panicking given the kernel
-            // context.
+            // We got the ICMPv6 metadata above but no IPv6 somehow?
             return Err(GenErr::Unexpected(format!(
                 "Expected IPv6 packet metadata, but found: {:?}",
                 meta
             )));
         };
+
+        // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+        // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+        rdr.seek_back(icmp6.hdr_len())?;
+
         let body = rdr.copy_remaining();
         let src_pkt = Icmpv6Packet::new_checked(&body)?;
         let src_icmp =
@@ -371,13 +386,21 @@ impl HairpinAction for RouterAdvertisement {
         use smoltcp::time::Duration;
         use smoltcp::wire::NdiscRouterFlags;
 
+        let Some(icmp6) = meta.inner_icmp6() else {
+            // Getting here implies the predicate matched, but that the
+            // extracted metadata indicates this isn't an ICMPv6 packet. That
+            // should be impossible, but we avoid panicking given the kernel
+            // context.
+            return Err(GenErr::Unexpected(format!(
+                "Expected ICMPv6 packet metadata, but found: {:?}",
+                meta
+            )));
+        };
+
         // Collect the src / dst IP addresses, which are needed to emit the
         // resulting ICMPv6 packet using `smoltcp`.
         let Some(ip6) = meta.inner_ip6() else {
-            // Getting here implies the predicate matched, but that the
-            // extracted metadata indicates this isn't an IPv6 packet. That
-            // should be impossible, but we avoid panicking given the kernel
-            // context.
+            // We got the ICMPv6 metadata above but no IPv6 somehow?
             return Err(GenErr::Unexpected(format!(
                 "Expected IPv6 packet metadata, but found: {:?}",
                 meta
@@ -385,6 +408,10 @@ impl HairpinAction for RouterAdvertisement {
         };
         let src_ip = IpAddress::Ipv6(Ipv6Address(ip6.src.bytes()));
         let dst_ip = IpAddress::Ipv6(Ipv6Address(ip6.dst.bytes()));
+
+        // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+        // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+        rdr.seek_back(icmp6.hdr_len())?;
 
         let body = rdr.copy_remaining();
         let src_pkt = Icmpv6Packet::new_checked(&body)?;
@@ -696,17 +723,29 @@ impl HairpinAction for NeighborAdvertisement {
     ) -> GenPacketResult {
         use smoltcp::phy::Checksum;
 
-        // Sanity check that this is actually in IPv6 packet.
-        let metadata = meta.inner_ip6().ok_or_else(|| {
+        let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
-            // extracted metadata indicates this isn't an IPv6 packet. That
+            // extracted metadata indicates this isn't an ICMPv6 packet. That
             // should be impossible, but we avoid panicking given the kernel
             // context.
+            return Err(GenErr::Unexpected(format!(
+                "Expected ICMPv6 packet metadata, but found: {:?}",
+                meta
+            )));
+        };
+
+        // Sanity check that this is actually in IPv6 packet.
+        let metadata = meta.inner_ip6().ok_or_else(|| {
+            // We got the ICMPv6 metadata above but no IPv6 somehow?
             GenErr::Unexpected(format!(
                 "Expected IPv6 packet metadata, but found: {:?}",
                 meta
             ))
         })?;
+
+        // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+        // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+        rdr.seek_back(icmp6.hdr_len())?;
 
         // Validate the ICMPv6 packet is actually a Neighbor Solicitation, and
         // that its data is appopriate.

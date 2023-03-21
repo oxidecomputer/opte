@@ -31,6 +31,7 @@ use opte::engine::geneve::Vni;
 use opte::engine::headers::EncapMeta;
 use opte::engine::headers::IpMeta;
 use opte::engine::headers::UlpMeta;
+use opte::engine::icmpv6::Icmpv6Hdr;
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip4::Ipv4Hdr;
 use opte::engine::ip4::Ipv4Meta;
@@ -1374,8 +1375,8 @@ fn test_guest_to_gateway_icmpv6_ping(
     let reply = hp.parse(In, GenericUlp {}).unwrap();
     pcap.add_pkt(&reply);
 
-    // Ether + IPv6
-    assert_eq!(reply.body_offset(), IP6_SZ);
+    // Ether + IPv6 + ICMPv6
+    assert_eq!(reply.body_offset(), IP6_SZ + Icmpv6Hdr::SIZE);
     assert_eq!(reply.body_seg(), 0);
 
     let meta = reply.meta();
@@ -1400,9 +1401,22 @@ fn test_guest_to_gateway_icmpv6_ping(
         ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
     };
 
-    let rdr = reply.get_body_rdr();
+    let Some(icmp6) = meta.inner_icmp6() else {
+        panic!("expected inner ICMPv6 metadata");
+    };
+
+    // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+    // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+    let mut rdr = reply.get_body_rdr();
+    rdr.seek_back(icmp6.hdr_len()).unwrap();
+
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
+
+    // Verify the parsed metadata matches the packet
+    assert_eq!(icmp6.msg_code, reply_pkt.msg_code());
+    assert_eq!(icmp6.msg_type, reply_pkt.msg_type().into());
+
     let mut csum = CsumCapab::ignored();
     csum.icmpv6 = smoltcp::phy::Checksum::Rx;
     let reply_icmp =
@@ -1508,8 +1522,8 @@ fn gateway_router_advert_reply() {
     let reply = hp.parse(In, GenericUlp {}).unwrap();
     pcap.add_pkt(&reply);
 
-    // Ether + IPv6
-    assert_eq!(reply.body_offset(), IP6_SZ);
+    // Ether + IPv6 + ICMPv6
+    assert_eq!(reply.body_offset(), IP6_SZ + Icmpv6Hdr::SIZE);
     assert_eq!(reply.body_seg(), 0);
 
     let meta = reply.meta();
@@ -1550,7 +1564,15 @@ fn gateway_router_advert_reply() {
     // RFC 4861 6.1.2 requires that the hop limit be 255 in an RA.
     assert_eq!(ip6.hop_limit, 255);
 
-    let rdr = reply.get_body_rdr();
+    let Some(icmp6) = meta.inner_icmp6() else {
+        panic!("expected inner ICMPv6 metadata");
+    };
+
+    // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+    // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+    let mut rdr = reply.get_body_rdr();
+    rdr.seek_back(icmp6.hdr_len()).unwrap();
+
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();
@@ -1595,7 +1617,10 @@ fn gateway_router_advert_reply() {
 }
 
 // Create a Neighbor Solicitation.
-fn generate_neighbor_solicitation(info: &SolicitInfo) -> Packet<Parsed> {
+fn generate_neighbor_solicitation(
+    info: &SolicitInfo,
+    with_checksum: bool,
+) -> Packet<Parsed> {
     let solicit = NdiscRepr::NeighborSolicit {
         target_addr: Ipv6Address::from(info.target_addr),
         lladdr: info.lladdr.map(|x| RawHardwareAddress::from_bytes(&x)),
@@ -1604,7 +1629,9 @@ fn generate_neighbor_solicitation(info: &SolicitInfo) -> Packet<Parsed> {
     let mut body = vec![0u8; req.buffer_len()];
     let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body);
     let mut csum = CsumCapab::ignored();
-    csum.icmpv6 = smoltcp::phy::Checksum::Tx;
+    if with_checksum {
+        csum.icmpv6 = smoltcp::phy::Checksum::Tx;
+    }
     req.emit(
         &IpAddress::Ipv6(info.src_ip.into()),
         &IpAddress::Ipv6(info.dst_ip.into()),
@@ -1860,7 +1887,7 @@ fn validate_hairpin_advert(
     pcap.add_pkt(&reply);
 
     // Verify Ethernet and IPv6 header basics.
-    assert_eq!(reply.body_offset(), IP6_SZ);
+    assert_eq!(reply.body_offset(), IP6_SZ + Icmpv6Hdr::SIZE);
     assert_eq!(reply.body_seg(), 0);
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());
@@ -1887,8 +1914,16 @@ fn validate_hairpin_advert(
     // RFC 4861 7.1.2 requires that the hop limit be 255 in an NA.
     assert_eq!(ip6.hop_limit, 255);
 
+    let Some(icmp6) = meta.inner_icmp6() else {
+        panic!("expected inner ICMPv6 metadata");
+    };
+
+    // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+    // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+    let mut rdr = reply.get_body_rdr();
+    rdr.seek_back(icmp6.hdr_len()).unwrap();
+
     // Validate the details of the Neighbor Advertisement itself.
-    let rdr = reply.get_body_rdr();
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();
@@ -1930,9 +1965,16 @@ fn test_gateway_neighbor_advert_reply() {
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_neighbor_advert_reply.pcap");
 
+    let mut with_checksum = false;
     let data = generate_solicit_test_data(&g1_cfg);
-    for d in data.into_iter() {
-        let mut pkt = generate_neighbor_solicitation(&d.ns);
+    for d in data {
+        let mut pkt = generate_neighbor_solicitation(&d.ns, with_checksum);
+        // Alternate between using smoltcp or our `compute_checksums` method
+        // to compute the checksums.
+        if !with_checksum {
+            pkt.compute_checksums();
+        }
+        with_checksum = !with_checksum;
         pcap.add_pkt(&pkt);
         let res = g1.port.process(Out, &mut pkt, ActionMeta::new());
         match (res, d.na) {
