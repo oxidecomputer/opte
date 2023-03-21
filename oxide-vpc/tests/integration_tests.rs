@@ -31,6 +31,7 @@ use opte::engine::geneve::Vni;
 use opte::engine::headers::EncapMeta;
 use opte::engine::headers::IpMeta;
 use opte::engine::headers::UlpMeta;
+use opte::engine::icmpv6::Icmpv6Hdr;
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip4::Ipv4Hdr;
 use opte::engine::ip4::Ipv4Meta;
@@ -61,11 +62,13 @@ use std::prelude::v1::*;
 use std::time::Duration;
 use zerocopy::AsBytes;
 
+const IP4_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE;
+const IP6_SZ: usize = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE;
+const TCP4_SZ: usize = IP4_SZ + TcpHdr::BASE_SIZE;
+const TCP6_SZ: usize = IP6_SZ + TcpHdr::BASE_SIZE;
+
 // The GeneveHdr includes the UDP header.
-const VPC_ENCAP_SZ: usize =
-    EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE + GeneveHdr::BASE_SIZE;
-const IP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE;
-const TCP_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + TcpHdr::BASE_SIZE;
+const VPC_ENCAP_SZ: usize = IP6_SZ + GeneveHdr::BASE_SIZE;
 
 // If we are running `cargo test`, then make sure to
 // register the USDT probes before running any tests.
@@ -386,7 +389,7 @@ fn gateway_icmp4_ping() {
     // encapsulated.
     let reply = hp.parse(In, GenericUlp {}).unwrap();
     pcap.add_pkt(&reply);
-    assert_eq!(reply.body_offset(), IP_SZ);
+    assert_eq!(reply.body_offset(), IP4_SZ);
     assert_eq!(reply.body_seg(), 0);
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());
@@ -528,7 +531,7 @@ fn guest_to_guest() {
         ]
     );
 
-    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ + HTTP_SYN_OPTS_LEN);
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP4_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt1.body_seg(), 1);
     let ulp_csum_after = pkt1.meta().inner.ulp.unwrap().csum();
     let ip_csum_after = pkt1.meta().inner.ip.unwrap().csum();
@@ -610,7 +613,7 @@ fn guest_to_guest() {
             "stats.port.in_modified, stats.port.in_uft_miss",
         ]
     );
-    assert_eq!(pkt2.body_offset(), TCP_SZ + HTTP_SYN_OPTS_LEN);
+    assert_eq!(pkt2.body_offset(), TCP4_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt2.body_seg(), 1);
 
     let g2_meta = pkt2.meta();
@@ -693,9 +696,9 @@ fn guest_to_guest_diff_vpc_no_peer() {
     );
 }
 
-// Verify that a guest can communicate with the internet.
+// Verify that a guest can communicate with the internet over IPv4.
 #[test]
-fn guest_to_internet() {
+fn guest_to_internet_ipv4() {
     let g1_cfg = g1_cfg();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
     g1.port.start();
@@ -736,7 +739,7 @@ fn guest_to_internet() {
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
-    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP_SZ + HTTP_SYN_OPTS_LEN);
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP4_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt1.body_seg(), 1);
     let meta = pkt1.meta();
     match meta.outer.ether.as_ref() {
@@ -748,7 +751,7 @@ fn guest_to_internet() {
         None => panic!("no outer ether header"),
     }
 
-    match meta.outer.ip.as_ref().unwrap() {
+    let inner_bytes = match meta.outer.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
             assert_eq!(ip6.src, g1_cfg.phys_ip);
             assert_eq!(ip6.dst, g1_cfg.boundary_services.ip);
@@ -756,15 +759,19 @@ fn guest_to_internet() {
             // Check that the encoded payload length in the outer header is
             // correct, and matches the actual number of bytes in the rest of
             // the packet.
-            let bytes = pkt1.get_rdr().copy_remaining();
+            let mut bytes = pkt1.get_rdr().copy_remaining();
             assert_eq!(
                 ip6.pay_len as usize,
                 bytes.len() - EtherHdr::SIZE - Ipv6Hdr::BASE_SIZE
             );
+
+            // Strip off the encapsulation headers
+            bytes.drain(..VPC_ENCAP_SZ);
+            bytes
         }
 
         val => panic!("expected outer IPv6, got: {:?}", val),
-    }
+    };
 
     match meta.outer.encap.as_ref() {
         Some(EncapMeta::Geneve(geneve)) => {
@@ -785,6 +792,15 @@ fn guest_to_internet() {
             assert_eq!(ip4.src, g1_cfg.snat().external_ip);
             assert_eq!(ip4.dst, dst_ip);
             assert_eq!(ip4.proto, Protocol::TCP);
+
+            // Check that the encoded payload length in the inner header is
+            // correct, and matches the actual number of bytes in the rest of
+            // the packet.
+            // IPv4 total length _DOES_ include the IPv4 header.
+            assert_eq!(
+                ip4.total_len as usize,
+                inner_bytes.len() - EtherHdr::SIZE,
+            );
         }
 
         ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
@@ -802,7 +818,134 @@ fn guest_to_internet() {
         ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
     }
 
-    let mut pcap_guest = PcapBuilder::new("guest_to_internet.pcap");
+    let mut pcap_guest = PcapBuilder::new("guest_to_internet_ipv4.pcap");
+    pcap_guest.add_pkt(&pkt1);
+}
+
+// Verify that a guest can communicate with the internet over IPv6.
+#[test]
+fn guest_to_internet_ipv6() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Add router entry that allows g1 to route to internet.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip6("::/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // ================================================================
+    // Generate a TCP SYN packet from g1 to example.com
+    // ================================================================
+    let dst_ip = "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap();
+    let mut pkt1 = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv6_cfg().unwrap().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+
+    // ================================================================
+    // Run the packet through g1's port in the outbound direction and
+    // verify the resulting packet meets expectations.
+    // ================================================================
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.out, nat.flows.in",
+            "uft.out",
+            "stats.port.out_modified, stats.port.out_uft_miss",
+        ]
+    );
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP6_SZ + HTTP_SYN_OPTS_LEN);
+    assert_eq!(pkt1.body_seg(), 1);
+    let meta = pkt1.meta();
+    match meta.outer.ether.as_ref() {
+        Some(eth) => {
+            assert_eq!(eth.src, MacAddr::ZERO);
+            assert_eq!(eth.dst, MacAddr::ZERO);
+        }
+
+        None => panic!("no outer ether header"),
+    }
+
+    let inner_bytes = match meta.outer.ip.as_ref().unwrap() {
+        IpMeta::Ip6(ip6) => {
+            assert_eq!(ip6.src, g1_cfg.phys_ip);
+            assert_eq!(ip6.dst, g1_cfg.boundary_services.ip);
+
+            // Check that the encoded payload length in the outer header is
+            // correct, and matches the actual number of bytes in the rest of
+            // the packet.
+            let mut bytes = pkt1.get_rdr().copy_remaining();
+            assert_eq!(
+                ip6.pay_len as usize,
+                bytes.len() - EtherHdr::SIZE - Ipv6Hdr::BASE_SIZE
+            );
+
+            // Strip off the encapsulation headers
+            bytes.drain(..VPC_ENCAP_SZ);
+            bytes
+        }
+
+        val => panic!("expected outer IPv6, got: {:?}", val),
+    };
+
+    match meta.outer.encap.as_ref() {
+        Some(EncapMeta::Geneve(geneve)) => {
+            assert_eq!(geneve.entropy, 7777);
+            assert_eq!(geneve.vni, g1_cfg.boundary_services.vni);
+        }
+
+        None => panic!("expected outer Geneve metadata"),
+    }
+
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, g1_cfg.guest_mac);
+    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
+    assert_eq!(eth.ether_type, EtherType::Ipv6);
+
+    match meta.inner.ip.as_ref().unwrap() {
+        IpMeta::Ip6(ip6) => {
+            assert_eq!(ip6.src, g1_cfg.snat6().external_ip);
+            assert_eq!(ip6.dst, dst_ip);
+            assert_eq!(ip6.proto, Protocol::TCP);
+            assert_eq!(ip6.next_hdr, IpProtocol::Tcp);
+
+            // Check that the encoded payload length in the inner header is
+            // correct, and matches the actual number of bytes in the rest of
+            // the packet.
+            // IPv6 payload length _DOES NOT_ include the IPv6 header.
+            assert_eq!(
+                ip6.pay_len as usize,
+                inner_bytes.len() - EtherHdr::SIZE - Ipv6Hdr::BASE_SIZE
+            );
+        }
+
+        ip4 => panic!("execpted inner IPv6 metadata, got IPv4: {:?}", ip4),
+    }
+
+    match meta.inner.ulp.as_ref().unwrap() {
+        UlpMeta::Tcp(tcp) => {
+            assert_eq!(
+                tcp.src,
+                g1_cfg.snat6().ports.clone().rev().next().unwrap(),
+            );
+            assert_eq!(tcp.dst, 80);
+        }
+
+        ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
+    }
+
+    let mut pcap_guest = PcapBuilder::new("guest_to_internet_ipv6.pcap");
     pcap_guest.add_pkt(&pkt1);
 }
 
@@ -854,7 +997,7 @@ fn snat_icmp4_echo_rewrite() {
         ]
     );
 
-    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + IP_SZ);
+    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + IP4_SZ);
     assert_eq!(pkt1.body_seg(), 1);
     let meta = pkt1.meta();
 
@@ -906,7 +1049,7 @@ fn snat_icmp4_echo_rewrite() {
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
-    assert_eq!(pkt2.body_offset(), IP_SZ);
+    assert_eq!(pkt2.body_offset(), IP4_SZ);
     assert_eq!(pkt2.body_seg(), 0);
     let meta = pkt2.meta();
 
@@ -951,7 +1094,7 @@ fn snat_icmp4_echo_rewrite() {
     let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
-    assert_eq!(pkt3.body_offset(), VPC_ENCAP_SZ + IP_SZ);
+    assert_eq!(pkt3.body_offset(), VPC_ENCAP_SZ + IP4_SZ);
     assert_eq!(pkt3.body_seg(), 1);
     let meta = pkt3.meta();
 
@@ -996,7 +1139,7 @@ fn snat_icmp4_echo_rewrite() {
     let res = g1.port.process(In, &mut pkt4, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
-    assert_eq!(pkt4.body_offset(), IP_SZ);
+    assert_eq!(pkt4.body_offset(), IP4_SZ);
     assert_eq!(pkt4.body_seg(), 0);
     let meta = pkt4.meta();
 
@@ -1232,8 +1375,8 @@ fn test_guest_to_gateway_icmpv6_ping(
     let reply = hp.parse(In, GenericUlp {}).unwrap();
     pcap.add_pkt(&reply);
 
-    // Ether + IPv6
-    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE);
+    // Ether + IPv6 + ICMPv6
+    assert_eq!(reply.body_offset(), IP6_SZ + Icmpv6Hdr::SIZE);
     assert_eq!(reply.body_seg(), 0);
 
     let meta = reply.meta();
@@ -1258,9 +1401,22 @@ fn test_guest_to_gateway_icmpv6_ping(
         ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
     };
 
-    let rdr = reply.get_body_rdr();
+    let Some(icmp6) = meta.inner_icmp6() else {
+        panic!("expected inner ICMPv6 metadata");
+    };
+
+    // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+    // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+    let mut rdr = reply.get_body_rdr();
+    rdr.seek_back(icmp6.hdr_len()).unwrap();
+
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
+
+    // Verify the parsed metadata matches the packet
+    assert_eq!(icmp6.msg_code, reply_pkt.msg_code());
+    assert_eq!(icmp6.msg_type, reply_pkt.msg_type().into());
+
     let mut csum = CsumCapab::ignored();
     csum.icmpv6 = smoltcp::phy::Checksum::Rx;
     let reply_icmp =
@@ -1302,7 +1458,7 @@ fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
     let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body_bytes);
     let mut csum = CsumCapab::ignored();
     csum.icmpv6 = smoltcp::phy::Checksum::Tx;
-    let _ = req.emit(
+    req.emit(
         &IpAddress::Ipv6(src_ip.into()),
         &IpAddress::Ipv6(dst_ip.into()),
         &mut req_pkt,
@@ -1314,6 +1470,7 @@ fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
         proto: Protocol::ICMPv6,
         next_hdr: IpProtocol::Icmpv6,
         pay_len: req.buffer_len() as u16,
+        hop_limit: 255,
         ..Default::default()
     };
     let eth =
@@ -1365,8 +1522,8 @@ fn gateway_router_advert_reply() {
     let reply = hp.parse(In, GenericUlp {}).unwrap();
     pcap.add_pkt(&reply);
 
-    // Ether + IPv6
-    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE);
+    // Ether + IPv6 + ICMPv6
+    assert_eq!(reply.body_offset(), IP6_SZ + Icmpv6Hdr::SIZE);
     assert_eq!(reply.body_seg(), 0);
 
     let meta = reply.meta();
@@ -1384,38 +1541,49 @@ fn gateway_router_advert_reply() {
         "Router advertisement should be destined for the guest's MAC"
     );
 
-    let (src, dst) = match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip6(ip6) => {
-            assert_eq!(
-                ip6.src,
-                Ipv6Addr::from_eui64(&g1_cfg.gateway_mac),
-                "Router advertisement should come from the \
-                gateway's link-local IPv6 address, generated \
-                from the EUI-64 transform of its MAC",
-            );
-            let expected_dst = Ipv6Addr::from_eui64(&g1_cfg.guest_mac);
-            assert_eq!(
-                ip6.dst, expected_dst,
-                "Router advertisement should be destined for \
-                the guest's Link-Local IPv6 address, generated from \
-                the EUI-64 transform of its MAC"
-            );
-            assert_eq!(ip6.proto, Protocol::ICMPv6);
-            (
-                Ipv6Address::from_bytes(&ip6.src),
-                Ipv6Address::from_bytes(&expected_dst),
-            )
-        }
-        ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
+    let IpMeta::Ip6(ip6) = meta.inner.ip.as_ref().expect("No inner IP header") else {
+        panic!("Inner IP header is not IPv6");
     };
 
-    let rdr = reply.get_body_rdr();
+    assert_eq!(
+        ip6.src,
+        Ipv6Addr::from_eui64(&g1_cfg.gateway_mac),
+        "Router advertisement should come from the \
+        gateway's link-local IPv6 address, generated \
+        from the EUI-64 transform of its MAC",
+    );
+    let expected_dst = Ipv6Addr::from_eui64(&g1_cfg.guest_mac);
+    assert_eq!(
+        ip6.dst, expected_dst,
+        "Router advertisement should be destined for \
+        the guest's Link-Local IPv6 address, generated from \
+        the EUI-64 transform of its MAC"
+    );
+    assert_eq!(ip6.proto, Protocol::ICMPv6);
+
+    // RFC 4861 6.1.2 requires that the hop limit be 255 in an RA.
+    assert_eq!(ip6.hop_limit, 255);
+
+    let Some(icmp6) = meta.inner_icmp6() else {
+        panic!("expected inner ICMPv6 metadata");
+    };
+
+    // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+    // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+    let mut rdr = reply.get_body_rdr();
+    rdr.seek_back(icmp6.hdr_len()).unwrap();
+
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();
     csum.icmpv6 = smoltcp::phy::Checksum::Rx;
-    let reply_icmp =
-        Icmpv6Repr::parse(&src.into(), &dst.into(), &reply_pkt, &csum).unwrap();
+    let reply_icmp = Icmpv6Repr::parse(
+        &IpAddress::Ipv6(ip6.src.into()),
+        &IpAddress::Ipv6(ip6.dst.into()),
+        &reply_pkt,
+        &csum,
+    )
+    .unwrap();
     match reply_icmp {
         Icmpv6Repr::Ndisc(NdiscRepr::RouterAdvert {
             hop_limit,
@@ -1449,7 +1617,10 @@ fn gateway_router_advert_reply() {
 }
 
 // Create a Neighbor Solicitation.
-fn generate_neighbor_solicitation(info: &SolicitInfo) -> Packet<Parsed> {
+fn generate_neighbor_solicitation(
+    info: &SolicitInfo,
+    with_checksum: bool,
+) -> Packet<Parsed> {
     let solicit = NdiscRepr::NeighborSolicit {
         target_addr: Ipv6Address::from(info.target_addr),
         lladdr: info.lladdr.map(|x| RawHardwareAddress::from_bytes(&x)),
@@ -1458,8 +1629,10 @@ fn generate_neighbor_solicitation(info: &SolicitInfo) -> Packet<Parsed> {
     let mut body = vec![0u8; req.buffer_len()];
     let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body);
     let mut csum = CsumCapab::ignored();
-    csum.icmpv6 = smoltcp::phy::Checksum::Tx;
-    let _ = req.emit(
+    if with_checksum {
+        csum.icmpv6 = smoltcp::phy::Checksum::Tx;
+    }
+    req.emit(
         &IpAddress::Ipv6(info.src_ip.into()),
         &IpAddress::Ipv6(info.dst_ip.into()),
         &mut req_pkt,
@@ -1470,6 +1643,7 @@ fn generate_neighbor_solicitation(info: &SolicitInfo) -> Packet<Parsed> {
         dst: info.dst_ip,
         proto: Protocol::ICMPv6,
         next_hdr: IpProtocol::Icmpv6,
+        hop_limit: 255,
         pay_len: req.buffer_len() as u16,
         ..Default::default()
     };
@@ -1713,7 +1887,7 @@ fn validate_hairpin_advert(
     pcap.add_pkt(&reply);
 
     // Verify Ethernet and IPv6 header basics.
-    assert_eq!(reply.body_offset(), EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE);
+    assert_eq!(reply.body_offset(), IP6_SZ + Icmpv6Hdr::SIZE);
     assert_eq!(reply.body_seg(), 0);
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());
@@ -1737,8 +1911,19 @@ fn validate_hairpin_advert(
     assert_eq!(ip6.dst, na.dst_ip);
     assert_eq!(ip6.proto, Protocol::ICMPv6);
 
+    // RFC 4861 7.1.2 requires that the hop limit be 255 in an NA.
+    assert_eq!(ip6.hop_limit, 255);
+
+    let Some(icmp6) = meta.inner_icmp6() else {
+        panic!("expected inner ICMPv6 metadata");
+    };
+
+    // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+    // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+    let mut rdr = reply.get_body_rdr();
+    rdr.seek_back(icmp6.hdr_len()).unwrap();
+
     // Validate the details of the Neighbor Advertisement itself.
-    let rdr = reply.get_body_rdr();
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();
@@ -1780,9 +1965,16 @@ fn test_gateway_neighbor_advert_reply() {
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_neighbor_advert_reply.pcap");
 
+    let mut with_checksum = false;
     let data = generate_solicit_test_data(&g1_cfg);
-    for d in data.into_iter() {
-        let mut pkt = generate_neighbor_solicitation(&d.ns);
+    for d in data {
+        let mut pkt = generate_neighbor_solicitation(&d.ns, with_checksum);
+        // Alternate between using smoltcp or our `compute_checksums` method
+        // to compute the checksums.
+        if !with_checksum {
+            pkt.compute_checksums();
+        }
+        with_checksum = !with_checksum;
         pcap.add_pkt(&pkt);
         let res = g1.port.process(Out, &mut pkt, ActionMeta::new());
         match (res, d.na) {
@@ -2125,7 +2317,7 @@ fn establish_http_conn(
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
-    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port();
+    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
 
     // ================================================================
     // Step 2
@@ -2430,7 +2622,7 @@ fn tcp_outbound() {
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
-    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port();
+    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
@@ -2669,7 +2861,7 @@ fn tcp_inbound() {
             "stats.port.in_modified, stats.port.in_uft_miss",
         ]
     );
-    let sport = pkt1.meta().inner.ulp.unwrap().src_port();
+    let sport = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
     assert_eq!(TcpState::Listen, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
@@ -2819,7 +3011,7 @@ fn anti_spoof() {
     g1.port.start();
     set!(g1, "port_state=running");
 
-    let src_ip = "172.30.0.240".parse().unwrap();
+    let src_ip = "172.30.0.240".parse::<Ipv4Addr>().unwrap();
     assert_ne!(src_ip, g1_cfg.ipv4().private_ip);
     let src_mac = ox_vpc_mac([0x0, 0x11, 0x22]);
     assert_ne!(src_mac, g1_cfg.guest_mac);

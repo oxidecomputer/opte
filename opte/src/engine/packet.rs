@@ -30,6 +30,9 @@ use super::headers::IpAddr;
 use super::headers::IpMeta;
 use super::headers::UlpHdr;
 use super::headers::UlpMeta;
+use super::icmpv6::Icmpv6Hdr;
+use super::icmpv6::Icmpv6HdrError;
+use super::icmpv6::Icmpv6Meta;
 use super::ip4::Ipv4Addr;
 use super::ip4::Ipv4Hdr;
 use super::ip4::Ipv4HdrError;
@@ -155,11 +158,13 @@ impl From<&PacketMeta> for InnerFlowId {
             ),
         };
 
-        let (src_port, dst_port) = match &meta.inner.ulp {
-            Some(UlpMeta::Tcp(tcp)) => (tcp.src, tcp.dst),
-            Some(UlpMeta::Udp(udp)) => (udp.src, udp.dst),
-            None => (0, 0),
-        };
+        let (src_port, dst_port) = meta
+            .inner
+            .ulp
+            .map(|ulp| {
+                (ulp.src_port().unwrap_or(0), ulp.dst_port().unwrap_or(0))
+            })
+            .unwrap_or((0, 0));
 
         InnerFlowId { proto, src_ip, src_port, dst_ip, dst_port }
     }
@@ -277,6 +282,14 @@ impl PacketMeta {
     pub fn inner_ip6(&self) -> Option<&Ipv6Meta> {
         match &self.inner.ip {
             Some(IpMeta::Ip6(x)) => Some(x),
+            _ => None,
+        }
+    }
+
+    /// Return the inner ICMPv6 metadata, if the inner ULP is ICMPv6.
+    pub fn inner_icmp6(&self) -> Option<&Icmpv6Meta> {
+        match &self.inner.ulp {
+            Some(UlpMeta::Icmpv6(icmp6)) => Some(icmp6),
             _ => None,
         }
     }
@@ -679,6 +692,15 @@ impl Packet<Initialized> {
         Ok((HdrInfo { meta, offset }, ip))
     }
 
+    pub fn parse_icmp6<'a, 'b>(
+        rdr: &'b mut PacketReaderMut<'a>,
+    ) -> Result<(HdrInfo<UlpMeta>, UlpHdr<'a>), ParseError> {
+        let icmp6 = Icmpv6Hdr::parse(rdr)?;
+        let offset = HdrOffset::new(rdr.offset(), icmp6.hdr_len());
+        let meta = UlpMeta::from(Icmpv6Meta::from(&icmp6));
+        Ok((HdrInfo { meta, offset }, UlpHdr::from(icmp6)))
+    }
+
     pub fn parse_tcp<'a, 'b>(
         rdr: &'b mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<UlpMeta>, UlpHdr<'a>), ParseError> {
@@ -1019,6 +1041,10 @@ impl Packet<Parsed> {
                 let ulp = &mut seg0_bytes[ulp_start..ulp_end];
 
                 match self.state.meta.inner.ulp.as_mut().unwrap() {
+                    UlpMeta::Icmpv6(icmp6) => {
+                        Self::update_icmpv6_csum(icmp6, csum, ulp);
+                    }
+
                     UlpMeta::Tcp(tcp) => {
                         Self::update_tcp_csum(tcp, csum, ulp);
                     }
@@ -1051,6 +1077,26 @@ impl Packet<Parsed> {
             let csum_end = ip_start + Ipv4Hdr::CSUM_END;
             all_hdr_bytes[csum_begin..csum_end].copy_from_slice(&csum[..]);
         }
+    }
+
+    fn update_icmpv6_csum(
+        icmp6: &mut Icmpv6Meta,
+        mut csum: Checksum,
+        ulp: &mut [u8],
+    ) {
+        let csum_start = Icmpv6Hdr::CSUM_BEGIN_OFFSET;
+        let csum_end = Icmpv6Hdr::CSUM_END_OFFSET;
+
+        // First we must zero the existing checksum.
+        ulp[csum_start..csum_end].copy_from_slice(&[0; 2]);
+        // Then we can add the ULP header bytes to the checksum.
+        csum.add_bytes(ulp);
+        // Convert the checksum to its final form.
+        let ulp_csum = HeaderChecksum::from(csum).bytes();
+        // Update the ICMPv6 metadata.
+        icmp6.csum = ulp_csum;
+        // Update the ICMPv6 header bytes.
+        ulp[csum_start..csum_end].copy_from_slice(&ulp_csum);
     }
 
     fn update_tcp_csum(tcp: &mut TcpMeta, mut csum: Checksum, ulp: &mut [u8]) {
@@ -1110,6 +1156,10 @@ impl Packet<Parsed> {
                 let ulp = &mut all_hdr_bytes[ulp_start..ulp_end];
 
                 match self.state.meta.inner.ulp.as_mut().unwrap() {
+                    UlpMeta::Icmpv6(icmp6) => {
+                        Self::update_icmpv6_csum(icmp6, csum, ulp);
+                    }
+
                     UlpMeta::Tcp(tcp) => {
                         Self::update_tcp_csum(tcp, csum, ulp);
                     }
@@ -1498,7 +1548,19 @@ impl Packet<Parsed> {
             }
 
             Some(IpMeta::Ip6(ip6)) => {
-                ip6.pay_len = (new_pkt_len - pkt_offset) as u16;
+                // IPv6 Payload Length field is defined in RFC 2640 section 3
+                // as:
+                //
+                // > Length of the IPv6 payload, i.e., the rest of the packet
+                // > following this IPv6 header, in octets. (Note that any
+                // > extension headers [section 4] present are considered part
+                // > of the payload, i.e., included in the length count.)
+                //
+                // So we need to remove the size of the fixed header (40
+                // octets), which is included in the total new packet length,
+                // when setting the payload length.
+                ip6.pay_len =
+                    (new_pkt_len - pkt_offset - Ipv6Hdr::BASE_SIZE) as u16;
                 ip6.emit(wtr.slice_mut(ip6.hdr_len())?);
                 offsets.ip = Some(HdrOffset {
                     pkt_pos: pkt_offset,
@@ -1516,6 +1578,16 @@ impl Packet<Parsed> {
         // ULP
         // ================================================================
         match meta.ulp.as_mut() {
+            Some(UlpMeta::Icmpv6(icmp6)) => {
+                icmp6.emit(wtr.slice_mut(icmp6.hdr_len())?);
+                offsets.ulp = Some(HdrOffset {
+                    pkt_pos: pkt_offset,
+                    seg_idx: 0,
+                    seg_pos: pkt_offset,
+                    hdr_len: usize::from(icmp6.hdr_len()),
+                });
+            }
+
             Some(UlpMeta::Udp(udp)) => {
                 udp.len = (new_pkt_len - pkt_offset) as u16;
                 udp.emit(wtr.slice_mut(udp.hdr_len())?);
@@ -2025,6 +2097,12 @@ impl From<Ipv4HdrError> for ParseError {
 impl From<Ipv6HdrError> for ParseError {
     fn from(err: Ipv6HdrError) -> Self {
         Self::BadHeader(format!("IPv6: {:?}", err))
+    }
+}
+
+impl From<Icmpv6HdrError> for ParseError {
+    fn from(err: Icmpv6HdrError) -> Self {
+        Self::BadHeader(format!("ICMPv6: {:?}", err))
     }
 }
 

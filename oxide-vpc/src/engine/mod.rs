@@ -219,10 +219,7 @@ impl NetworkParser for VpcParser {
                 // pkt.parse_icmp()?,
             }
 
-            Protocol::ICMPv6 => {
-                return Ok(PacketInfo { meta, offsets, body_csum: None });
-            }
-
+            Protocol::ICMPv6 => Packet::parse_icmp6(rdr)?,
             Protocol::TCP => Packet::parse_tcp(rdr)?,
             Protocol::UDP => Packet::parse_udp(rdr)?,
             proto => return Err(ParseError::UnexpectedProtocol(proto)),
@@ -315,10 +312,7 @@ impl NetworkParser for VpcParser {
                 // pkt.parse_icmp()?,
             }
 
-            Protocol::ICMPv6 => {
-                return Ok(PacketInfo { meta, offsets, body_csum: None });
-            }
-
+            Protocol::ICMPv6 => Packet::parse_icmp6(rdr)?,
             Protocol::TCP => Packet::parse_tcp(rdr)?,
             Protocol::UDP => Packet::parse_udp(rdr)?,
             proto => return Err(ParseError::UnexpectedProtocol(proto)),

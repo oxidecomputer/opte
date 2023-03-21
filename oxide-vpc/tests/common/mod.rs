@@ -120,7 +120,7 @@ pub fn g1_cfg() -> VpcCfg {
             gateway_ip: "fd00::1".parse().unwrap(),
             snat: Some(SNat6Cfg {
                 external_ip: "2001:db8::1".parse().unwrap(),
-                ports: 1025..=4096,
+                ports: 4097..=8192,
             }),
             external_ips: None,
         },
@@ -160,7 +160,7 @@ pub fn g2_cfg() -> VpcCfg {
             gateway_ip: "172.30.0.1".parse().unwrap(),
             snat: Some(SNat4Cfg {
                 external_ip: "10.77.77.23".parse().unwrap(),
-                ports: 4096..=8192,
+                ports: 4097..=8192,
             }),
             external_ips: None,
         },
@@ -498,9 +498,9 @@ pub fn http_syn(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
 // HTTP request from src to dst.
 pub fn http_syn2(
     eth_src: MacAddr,
-    ip_src: Ipv4Addr,
+    ip_src: impl Into<IpAddr>,
     eth_dst: MacAddr,
-    ip_dst: Ipv4Addr,
+    ip_dst: impl Into<IpAddr>,
 ) -> Packet<Parsed> {
     let body = vec![];
     let mut options = [0x00; TcpHdr::MAX_OPTION_SIZE];
@@ -531,19 +531,38 @@ pub fn http_syn2(
         options_len,
         csum: [0; 2],
     };
-    let ip4 = Ipv4Meta {
-        src: ip_src,
-        dst: ip_dst,
-        proto: Protocol::TCP,
-        total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len()) as u16,
-        ttl: 64,
-        ident: 2662,
-        ..Default::default()
+    let (ether_type, ip): (_, IpMeta) = match (ip_src.into(), ip_dst.into()) {
+        (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => (
+            EtherType::Ipv4,
+            Ipv4Meta {
+                src,
+                dst,
+                proto: Protocol::TCP,
+                total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len())
+                    as u16,
+                ttl: 64,
+                ident: 2662,
+                ..Default::default()
+            }
+            .into(),
+        ),
+        (IpAddr::Ip6(src), IpAddr::Ip6(dst)) => (
+            EtherType::Ipv6,
+            Ipv6Meta {
+                src,
+                dst,
+                proto: Protocol::TCP,
+                next_hdr: IpProtocol::Tcp,
+                pay_len: (tcp.hdr_len() + body.len()) as u16,
+                ..Default::default()
+            }
+            .into(),
+        ),
+        _ => panic!("source and destination must be the same IP version"),
     };
     // Any packet from the guest is always addressed to the gateway.
-    let eth =
-        EtherMeta { ether_type: EtherType::Ipv4, src: eth_src, dst: eth_dst };
-    ulp_pkt(eth, ip4, tcp, &body)
+    let eth = EtherMeta { ether_type, src: eth_src, dst: eth_dst };
+    ulp_pkt(eth, ip, tcp, &body)
 }
 
 // Generate a packet representing the SYN+ACK reply to `http_tcp_syn()`,

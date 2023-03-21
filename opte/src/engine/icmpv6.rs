@@ -6,15 +6,20 @@
 
 //! Internet Control Message Protocol version 6
 
+use super::checksum::Checksum;
+use super::checksum::HeaderChecksum;
 use super::ether::EtherHdr;
 use super::ether::EtherMeta;
 use super::ether::EtherType;
+use super::headers::RawHeader;
 use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6Meta;
 use super::packet::Packet;
 use super::packet::PacketMeta;
 use super::packet::PacketRead;
+use super::packet::PacketReadMut;
 use super::packet::PacketReader;
+use super::packet::ReadErr;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;
@@ -35,7 +40,6 @@ pub use opte_api::ndp::NeighborAdvertisement;
 pub use opte_api::ndp::RouterAdvertisement;
 use serde::Deserialize;
 use serde::Serialize;
-use smoltcp::phy::Checksum;
 use smoltcp::phy::ChecksumCapabilities as Csum;
 use smoltcp::wire::Icmpv6Message;
 use smoltcp::wire::Icmpv6Packet;
@@ -46,6 +50,10 @@ use smoltcp::wire::Ipv6Address;
 use smoltcp::wire::NdiscNeighborFlags;
 use smoltcp::wire::NdiscRepr;
 use smoltcp::wire::RawHardwareAddress;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
+use zerocopy::LayoutVerified;
+use zerocopy::Unaligned;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -57,8 +65,120 @@ cfg_if! {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Icmpv6Meta {
+    pub msg_type: MessageType,
+    pub msg_code: u8,
+    pub csum: [u8; 2],
+}
+
+impl Icmpv6Meta {
+    // This assumes the dst is large enough.
+    #[inline]
+    pub fn emit(&self, dst: &mut [u8]) {
+        debug_assert!(dst.len() >= Icmpv6Hdr::SIZE);
+        dst[0] = self.msg_type.into();
+        dst[1] = self.msg_code;
+        dst[2..4].copy_from_slice(&self.csum);
+    }
+
+    #[inline]
+    pub fn hdr_len(&self) -> usize {
+        Icmpv6Hdr::SIZE
+    }
+}
+
+impl<'a> From<&Icmpv6Hdr<'a>> for Icmpv6Meta {
+    fn from(hdr: &Icmpv6Hdr<'a>) -> Self {
+        Self {
+            msg_type: hdr.base.msg_type.into(),
+            msg_code: hdr.base.msg_code,
+            csum: hdr.base.csum,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Icmpv6HdrError {
+    ReadError { error: ReadErr },
+}
+
+impl From<ReadErr> for Icmpv6HdrError {
+    fn from(error: ReadErr) -> Self {
+        Icmpv6HdrError::ReadError { error }
+    }
+}
+
+#[derive(Debug)]
+pub struct Icmpv6Hdr<'a> {
+    base: LayoutVerified<&'a mut [u8], Icmpv6HdrRaw>,
+}
+
+impl<'a> Icmpv6Hdr<'a> {
+    pub const SIZE: usize = Icmpv6HdrRaw::SIZE;
+
+    /// Offset to the start of the ICMPv6 checksum field.
+    pub const CSUM_BEGIN_OFFSET: usize = 2;
+
+    /// Offset to the end of the ICMPv6 checksum field.
+    pub const CSUM_END_OFFSET: usize = 4;
+
+    pub fn csum_minus_hdr(&self) -> Option<Checksum> {
+        if self.base.csum != [0; 2] {
+            let mut csum = Checksum::from(HeaderChecksum::wrap(self.base.csum));
+            csum.sub_bytes(&self.base.bytes()[0..Self::CSUM_BEGIN_OFFSET]);
+            Some(csum)
+        } else {
+            None
+        }
+    }
+
+    /// Return the header length, in bytes.
+    pub fn hdr_len(&self) -> usize {
+        Self::SIZE
+    }
+
+    pub fn parse<'b>(
+        rdr: &'b mut impl PacketReadMut<'a>,
+    ) -> Result<Self, Icmpv6HdrError> {
+        let src = rdr.slice_mut(Icmpv6Hdr::SIZE)?;
+        let icmp6 = Self { base: Icmpv6HdrRaw::new_mut(src)? };
+        Ok(icmp6)
+    }
+}
+
+/// Note: For now we keep this unaligned to be safe.
+#[repr(C)]
+#[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
+pub struct Icmpv6HdrRaw {
+    pub msg_type: u8,
+    pub msg_code: u8,
+    pub csum: [u8; 2],
+}
+
+impl Icmpv6HdrRaw {
+    /// An ICMPv6 header is always 4 bytes.
+    pub const SIZE: usize = 4;
+}
+
+impl<'a> RawHeader<'a> for Icmpv6HdrRaw {
+    #[inline]
+    fn new_mut(
+        src: &mut [u8],
+    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+        debug_assert_eq!(src.len(), Self::SIZE);
+        let hdr = match LayoutVerified::new(src) {
+            Some(hdr) => hdr,
+            None => return Err(ReadErr::BadLayout),
+        };
+        Ok(hdr)
+    }
+}
+
 /// An ICMPv6 message type
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
 #[serde(from = "u8", into = "u8")]
 pub struct MessageType {
     inner: Icmpv6Message,
@@ -122,6 +242,19 @@ impl HairpinAction for Icmpv6EchoReply {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
+        use smoltcp::phy::Checksum;
+
+        let Some(icmp6) = meta.inner_icmp6() else {
+            // Getting here implies the predicate matched, but that the
+            // extracted metadata indicates this isn't an ICMPv6 packet. That
+            // should be impossible, but we avoid panicking given the kernel
+            // context.
+            return Err(GenErr::Unexpected(format!(
+                "Expected ICMPv6 packet metadata, but found: {:?}",
+                meta
+            )));
+        };
+
         // Collect the src / dst IP addresses, which are needed to emit the
         // resulting ICMPv6 echo reply.
         let (src_ip, dst_ip) = if let Some(metadata) = meta.inner_ip6() {
@@ -130,15 +263,17 @@ impl HairpinAction for Icmpv6EchoReply {
                 IpAddress::Ipv6(Ipv6Address(metadata.dst.bytes())),
             )
         } else {
-            // Getting here implies the predicate matched, but that the
-            // extracted metadata indicates this isn't an IPv6 packet. That
-            // should be impossible, but we avoid panicking given the kernel
-            // context.
+            // We got the ICMPv6 metadata above but no IPv6 somehow?
             return Err(GenErr::Unexpected(format!(
                 "Expected IPv6 packet metadata, but found: {:?}",
                 meta
             )));
         };
+
+        // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+        // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+        rdr.seek_back(icmp6.hdr_len())?;
+
         let body = rdr.copy_remaining();
         let src_pkt = Icmpv6Packet::new_checked(&body)?;
         let src_icmp =
@@ -247,30 +382,42 @@ impl HairpinAction for RouterAdvertisement {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
+        use smoltcp::phy::Checksum;
         use smoltcp::time::Duration;
         use smoltcp::wire::NdiscRouterFlags;
 
-        // Collect the src / dst IP addresses, which are needed to emit the
-        // resulting ICMPv6 packet using `smoltcp`.
-        let (src_ip, dst_ip) = if let Some(metadata) = meta.inner_ip6() {
-            (
-                IpAddress::Ipv6(Ipv6Address(metadata.src.bytes())),
-                IpAddress::Ipv6(Ipv6Address(metadata.dst.bytes())),
-            )
-        } else {
+        let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
-            // extracted metadata indicates this isn't an IPv6 packet. That
+            // extracted metadata indicates this isn't an ICMPv6 packet. That
             // should be impossible, but we avoid panicking given the kernel
             // context.
+            return Err(GenErr::Unexpected(format!(
+                "Expected ICMPv6 packet metadata, but found: {:?}",
+                meta
+            )));
+        };
+
+        // Collect the src / dst IP addresses, which are needed to emit the
+        // resulting ICMPv6 packet using `smoltcp`.
+        let Some(ip6) = meta.inner_ip6() else {
+            // We got the ICMPv6 metadata above but no IPv6 somehow?
             return Err(GenErr::Unexpected(format!(
                 "Expected IPv6 packet metadata, but found: {:?}",
                 meta
             )));
         };
+        let src_ip = IpAddress::Ipv6(Ipv6Address(ip6.src.bytes()));
+        let dst_ip = IpAddress::Ipv6(Ipv6Address(ip6.dst.bytes()));
+
+        // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+        // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+        rdr.seek_back(icmp6.hdr_len())?;
+
         let body = rdr.copy_remaining();
         let src_pkt = Icmpv6Packet::new_checked(&body)?;
-        let src_ndisc =
-            Icmpv6Repr::parse(&src_ip, &dst_ip, &src_pkt, &Csum::ignored())?;
+        let mut csum = Csum::ignored();
+        csum.icmpv6 = Checksum::Rx;
+        let src_ndisc = Icmpv6Repr::parse(&src_ip, &dst_ip, &src_pkt, &csum)?;
 
         if !matches!(
             src_ndisc,
@@ -289,19 +436,26 @@ impl HairpinAction for RouterAdvertisement {
 
         // RFC 4861 6.1.1 describes a number of validation steps routers are
         // required to perform.
-        if src_pkt.msg_code() != 0 {
-            return Ok(AllowOrDeny::Deny);
-        }
-        if !src_pkt.verify_checksum(&src_ip, &dst_ip) {
-            return Ok(AllowOrDeny::Deny);
-        }
+        //
+        // `Icmpv6Packet::new_checked` and `Icmpv6Repr::parse` above guarantee:
+        //  - Checksum is valid
+        //  - ICMP code is correct (0)
+        //  - ICMP length is at least 8 octets
+        //  - Any included options have a non-zero length
+        //
         // NOTE: The router is required to check that there is no Link-Layer
         // Address Option, if the solicitation is sent from the unspecified
         // address. However, from the associated predicates, we know that this
         // is only called if the source IPv6 address is a link-local address,
         // and thus _not_ UNSPEC, so we skip that checking here.
         //
-        // TODO-completeness: Check IP Hop Limit and ICMP length / option length
+        // This leaves the hop limit as the only validity check.
+        if ip6.hop_limit != 255 {
+            return Err(GenErr::Unexpected(format!(
+                "Received RS with invalid hop limit ({}).",
+                ip6.hop_limit
+            )));
+        }
 
         let flags = if self.managed_cfg {
             NdiscRouterFlags::MANAGED
@@ -349,6 +503,8 @@ impl HairpinAction for RouterAdvertisement {
             dst: meta.inner_ip6().unwrap().src,
             proto: Protocol::ICMPv6,
             next_hdr: IpProtocol::Icmpv6,
+            // RFC 4861 6.1.2 requires that the hop limit be 255 in an RA.
+            hop_limit: 255,
             // There are no extension headers; the ULP is the only
             // content.
             pay_len: reply_len as u16,
@@ -383,13 +539,29 @@ fn validate_neighbor_solicitation(
     rdr: &mut PacketReader,
     metadata: &Ipv6Meta,
 ) -> Result<Ipv6Addr, GenErr> {
+    use smoltcp::phy::Checksum;
+
     // First, check if this is in fact a NS message.
     let smol_src = IpAddress::Ipv6(metadata.src.into());
     let smol_dst = IpAddress::Ipv6(metadata.dst.into());
     let body = rdr.copy_remaining();
     let src_pkt = Icmpv6Packet::new_checked(&body)?;
-    let icmp =
-        Icmpv6Repr::parse(&smol_src, &smol_dst, &src_pkt, &Csum::ignored())?;
+    let mut csum = Csum::ignored();
+    csum.icmpv6 = Checksum::Rx;
+    let icmp = Icmpv6Repr::parse(&smol_src, &smol_dst, &src_pkt, &csum)?;
+
+    // `Icmpv6Packet::new_checked` and `Icmpv6Repr::parse` above guarantee:
+    //  - Checksum is valid
+    //  - ICMP code is correct (0)
+    //  - ICMP length is at least 24 octets
+    //  - Any included options have a non-zero length
+
+    if metadata.hop_limit != 255 {
+        return Err(GenErr::Unexpected(format!(
+            "Received NS with invalid hop limit ({}).",
+            metadata.hop_limit
+        )));
+    }
 
     let (target_addr, has_ll_option) = match icmp {
         Icmpv6Repr::Ndisc(NdiscRepr::NeighborSolicit {
@@ -549,17 +721,31 @@ impl HairpinAction for NeighborAdvertisement {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
-        // Sanity check that this is actually in IPv6 packet.
-        let metadata = meta.inner_ip6().ok_or_else(|| {
+        use smoltcp::phy::Checksum;
+
+        let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
-            // extracted metadata indicates this isn't an IPv6 packet. That
+            // extracted metadata indicates this isn't an ICMPv6 packet. That
             // should be impossible, but we avoid panicking given the kernel
             // context.
+            return Err(GenErr::Unexpected(format!(
+                "Expected ICMPv6 packet metadata, but found: {:?}",
+                meta
+            )));
+        };
+
+        // Sanity check that this is actually in IPv6 packet.
+        let metadata = meta.inner_ip6().ok_or_else(|| {
+            // We got the ICMPv6 metadata above but no IPv6 somehow?
             GenErr::Unexpected(format!(
                 "Expected IPv6 packet metadata, but found: {:?}",
                 meta
             ))
         })?;
+
+        // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
+        // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
+        rdr.seek_back(icmp6.hdr_len())?;
 
         // Validate the ICMPv6 packet is actually a Neighbor Solicitation, and
         // that its data is appopriate.
@@ -596,6 +782,8 @@ impl HairpinAction for NeighborAdvertisement {
             dst: dst_ip,
             proto: Protocol::ICMPv6,
             next_hdr: IpProtocol::Icmpv6,
+            // RFC 4861 7.1.2 requires that the hop limit be 255 in an NA.
+            hop_limit: 255,
             // There are no extension headers; the ULP is the only
             // content.
             pay_len: reply_len as u16,

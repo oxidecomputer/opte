@@ -10,7 +10,6 @@ use super::dhcp::MessageType as DhcpMessageType;
 use super::dhcpv6::MessageType as Dhcpv6MessageType;
 use super::ether::EtherType;
 use super::headers::IpMeta;
-use super::headers::UlpMeta;
 use super::icmp::MessageType as IcmpMessageType;
 use super::icmpv6::MessageType as Icmpv6MessageType;
 use super::ip4::Ipv4Addr;
@@ -23,21 +22,16 @@ use super::ip6::Ipv6Meta;
 use super::packet::PacketMeta;
 use super::packet::PacketRead;
 use super::port::meta::ActionMeta;
-use super::tcp::TcpMeta;
-use super::udp::UdpMeta;
 use core::fmt;
 use core::fmt::Display;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
 use smoltcp::phy::ChecksumCapabilities as Csum;
-use smoltcp::wire;
 use smoltcp::wire::DhcpPacket;
 use smoltcp::wire::DhcpRepr;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
-use smoltcp::wire::Icmpv6Packet;
-use smoltcp::wire::Icmpv6Repr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -476,45 +470,35 @@ impl Predicate {
                 _ => return false,
             },
 
-            Self::InnerSrcPort(list) => match meta.inner.ulp {
-                None => return false,
+            Self::InnerSrcPort(list) => {
+                match meta.inner.ulp.map(|m| m.src_port()) {
+                    // No ULP metadata or no source port (e.g. ICMPv6).
+                    None | Some(None) => return false,
 
-                Some(UlpMeta::Tcp(TcpMeta { src: port, .. })) => {
-                    for m in list {
-                        if m.matches(port) {
-                            return true;
+                    Some(Some(port)) => {
+                        for m in list {
+                            if m.matches(port) {
+                                return true;
+                            }
                         }
                     }
                 }
+            }
 
-                Some(UlpMeta::Udp(UdpMeta { src: port, .. })) => {
-                    for m in list {
-                        if m.matches(port) {
-                            return true;
+            Self::InnerDstPort(list) => {
+                match meta.inner.ulp.map(|m| m.dst_port()) {
+                    // No ULP metadata or no destination port (e.g. ICMPv6).
+                    None | Some(None) => return false,
+
+                    Some(Some(port)) => {
+                        for m in list {
+                            if m.matches(port) {
+                                return true;
+                            }
                         }
                     }
                 }
-            },
-
-            Self::InnerDstPort(list) => match meta.inner.ulp {
-                None => return false,
-
-                Some(UlpMeta::Tcp(TcpMeta { dst: port, .. })) => {
-                    for m in list {
-                        if m.matches(port) {
-                            return true;
-                        }
-                    }
-                }
-
-                Some(UlpMeta::Udp(UdpMeta { dst: port, .. })) => {
-                    for m in list {
-                        if m.matches(port) {
-                            return true;
-                        }
-                    }
-                }
-            },
+            }
         }
 
         false
@@ -630,41 +614,12 @@ impl DataPredicate {
             }
 
             Self::Icmpv6MsgType(mt) => {
-                // Pull out the IPv6 source / destination addresses. This checks
-                // that this is actually an IPv6 packet, and these are needed
-                // for the `smoltcp` packet parsing / validation.
-                let (src, dst) = if let Some(metadata) = meta.inner_ip6() {
-                    (
-                        wire::IpAddress::Ipv6(wire::Ipv6Address(
-                            metadata.src.bytes(),
-                        )),
-                        wire::IpAddress::Ipv6(wire::Ipv6Address(
-                            metadata.dst.bytes(),
-                        )),
-                    )
-                } else {
-                    // This isn't an IPv6 packet at all
+                let Some(icmp6) = meta.inner_icmp6() else {
+                    // This isn't an ICMPv6 packet at all
                     return false;
                 };
 
-                let bytes = rdr.copy_remaining();
-                let pkt = match Icmpv6Packet::new_checked(&bytes) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        super::err(format!(
-                            "Icmpv6Packet::new_checked() failed: {:?}",
-                            e
-                        ));
-                        return false;
-                    }
-                };
-                if let Err(e) =
-                    Icmpv6Repr::parse(&src, &dst, &pkt, &Csum::ignored())
-                {
-                    super::err(format!("Icmpv6Repr::parse() failed: {:?}", e,));
-                    return false;
-                }
-                return Icmpv6MessageType::from(pkt.msg_type()) == *mt;
+                return icmp6.msg_type == *mt;
             }
 
             Self::Dhcpv6MsgType(mt) => {

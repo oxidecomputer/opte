@@ -11,6 +11,8 @@ use super::geneve::GeneveHdr;
 use super::geneve::GeneveMeta;
 use super::geneve::GeneveMod;
 use super::geneve::GenevePush;
+use super::icmpv6::Icmpv6Hdr;
+use super::icmpv6::Icmpv6Meta;
 use super::ip4::Ipv4Hdr;
 use super::ip4::Ipv4Meta;
 use super::ip4::Ipv4Mod;
@@ -316,6 +318,7 @@ impl EncapMeta {
 
 #[derive(Debug)]
 pub enum UlpHdr<'a> {
+    Icmpv6(Icmpv6Hdr<'a>),
     Tcp(TcpHdr<'a>),
     Udp(UdpHdr<'a>),
 }
@@ -323,6 +326,7 @@ pub enum UlpHdr<'a> {
 impl<'a> UlpHdr<'a> {
     pub fn csum_minus_hdr(&self) -> Option<Checksum> {
         match self {
+            Self::Icmpv6(icmp6) => icmp6.csum_minus_hdr(),
             Self::Tcp(tcp) => tcp.csum_minus_hdr(),
             Self::Udp(udp) => udp.csum_minus_hdr(),
         }
@@ -330,6 +334,7 @@ impl<'a> UlpHdr<'a> {
 
     pub fn hdr_len(&self) -> usize {
         match self {
+            Self::Icmpv6(icmp6) => icmp6.hdr_len(),
             Self::Tcp(tcp) => tcp.hdr_len(),
             Self::Udp(udp) => udp.hdr_len(),
         }
@@ -337,8 +342,9 @@ impl<'a> UlpHdr<'a> {
 
     pub fn set_pay_len(&mut self, len: usize) {
         match self {
-            // Nothing to do for TCP as it determines payload len from
-            // IP header.
+            // Nothing to do for ICMPv6 or TCP which determine payload len
+            // from IP header.
+            Self::Icmpv6(_icmp6) => (),
             Self::Tcp(_tcp) => (),
             Self::Udp(udp) => udp.set_pay_len(len as u16),
         }
@@ -346,8 +352,9 @@ impl<'a> UlpHdr<'a> {
 
     pub fn set_total_len(&mut self, len: usize) {
         match self {
-            // Nothing to do for TCP as it determines payload len from
-            // IP header.
+            // Nothing to do for ICMPv6 or TCP which determine payload len
+            // from IP header.
+            Self::Icmpv6(_icmp6) => (),
             Self::Tcp(_tcp) => (),
             Self::Udp(udp) => udp.set_len(len as u16),
         }
@@ -358,6 +365,12 @@ impl<'a> UlpHdr<'a> {
             Self::Udp(udp) => Some(udp),
             _ => None,
         }
+    }
+}
+
+impl<'a> From<Icmpv6Hdr<'a>> for UlpHdr<'a> {
+    fn from(icmp6: Icmpv6Hdr<'a>) -> Self {
+        Self::Icmpv6(icmp6)
     }
 }
 
@@ -375,6 +388,7 @@ impl<'a> From<UdpHdr<'a>> for UlpHdr<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum UlpMeta {
+    Icmpv6(Icmpv6Meta),
     Tcp(TcpMeta),
     Udp(UdpMeta),
 }
@@ -383,6 +397,7 @@ impl UlpMeta {
     /// Return the checksum value.
     pub fn csum(&self) -> [u8; 2] {
         match self {
+            Self::Icmpv6(icmp6) => icmp6.csum,
             Self::Tcp(tcp) => tcp.csum,
             Self::Udp(udp) => udp.csum,
         }
@@ -390,36 +405,41 @@ impl UlpMeta {
 
     pub fn has_csum(&self) -> bool {
         match self {
+            Self::Icmpv6(icmp6) => icmp6.csum != [0; 2],
             Self::Tcp(tcp) => tcp.csum != [0; 2],
             Self::Udp(udp) => udp.csum != [0; 2],
         }
     }
 
-    /// Return the destination port.
-    pub fn dst_port(&self) -> u16 {
+    /// Return the destination port, if any.
+    pub fn dst_port(&self) -> Option<u16> {
         match self {
-            Self::Tcp(tcp) => tcp.dst,
-            Self::Udp(udp) => udp.dst,
+            Self::Icmpv6(_) => None,
+            Self::Tcp(tcp) => Some(tcp.dst),
+            Self::Udp(udp) => Some(udp.dst),
         }
     }
 
     pub fn hdr_len(&self) -> usize {
         match self {
+            Self::Icmpv6(icmp) => icmp.hdr_len(),
             Self::Tcp(tcp) => tcp.hdr_len(),
             Self::Udp(udp) => udp.hdr_len(),
         }
     }
 
-    /// Return the source port.
-    pub fn src_port(&self) -> u16 {
+    /// Return the source port, if any.
+    pub fn src_port(&self) -> Option<u16> {
         match self {
-            Self::Tcp(tcp) => tcp.src,
-            Self::Udp(udp) => udp.src,
+            Self::Icmpv6(_) => None,
+            Self::Tcp(tcp) => Some(tcp.src),
+            Self::Udp(udp) => Some(udp.src),
         }
     }
 
     pub fn emit(&self, dst: &mut [u8]) {
         match self {
+            Self::Icmpv6(icmp) => icmp.emit(dst),
             Self::Tcp(tcp) => tcp.emit(dst),
             Self::Udp(udp) => udp.emit(dst),
         }
@@ -492,6 +512,12 @@ impl From<UdpMod> for UlpMod {
     }
 }
 
+impl From<Icmpv6Meta> for UlpMeta {
+    fn from(icmp6: Icmpv6Meta) -> Self {
+        UlpMeta::Icmpv6(icmp6)
+    }
+}
+
 impl From<TcpMeta> for UlpMeta {
     fn from(tcp: TcpMeta) -> Self {
         UlpMeta::Tcp(tcp)
@@ -507,6 +533,7 @@ impl From<UdpMeta> for UlpMeta {
 impl<'a> From<&UlpHdr<'a>> for UlpMeta {
     fn from(ulp: &UlpHdr) -> Self {
         match ulp {
+            UlpHdr::Icmpv6(icmp6) => UlpMeta::Icmpv6(Icmpv6Meta::from(icmp6)),
             UlpHdr::Tcp(tcp) => UlpMeta::Tcp(TcpMeta::from(tcp)),
             UlpHdr::Udp(udp) => UlpMeta::Udp(UdpMeta::from(udp)),
         }
@@ -516,6 +543,7 @@ impl<'a> From<&UlpHdr<'a>> for UlpMeta {
 impl HeaderActionModify<UlpMetaModify> for UlpMeta {
     fn run_modify(&mut self, spec: &UlpMetaModify) {
         match self {
+            UlpMeta::Icmpv6(_) => {}
             UlpMeta::Tcp(tcp_meta) => tcp_meta.run_modify(spec),
             UlpMeta::Udp(udp_meta) => udp_meta.run_modify(spec),
         }
