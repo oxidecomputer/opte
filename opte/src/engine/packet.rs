@@ -780,7 +780,7 @@ impl Packet<Initialized> {
             (n, 0) => n - 1,
 
             // The body starts at a non-zero offset in segment n. This means we
-            // need to squasy all segments up to and including n.
+            // need to squash all segments up to and including n.
             (n, _) => n,
         };
 
@@ -863,9 +863,9 @@ impl Packet<Initialized> {
         self.segs[i].get_writer()
     }
 
-    pub fn add_seg(&mut self, size: usize) -> usize {
+    pub fn add_seg(&mut self, size: usize) -> Result<usize, SegAdjustError> {
         let mut seg = PacketSeg::alloc(size);
-        seg.expand_end(size).unwrap();
+        seg.expand_end(size)?;
         let len = self.segs.len();
         if len > 0 {
             let last_seg = &mut self.segs[len - 1];
@@ -873,7 +873,7 @@ impl Packet<Initialized> {
         }
         self.segs.push(seg);
         self.state.len += size;
-        len
+        Ok(len)
     }
 
     /// Wrap the `mblk_t` packet in a [`Packet`], taking ownership of

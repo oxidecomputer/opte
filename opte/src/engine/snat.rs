@@ -220,9 +220,8 @@ impl SNat {
             if icmp.msg_type() != Icmpv4Message::EchoRequest {
                 return Err(GenDescError::Unexpected {
                     msg: format!(
-                        "Expected ICMP Echo Request, found: {} \n{:x?}",
+                        "Expected ICMP Echo Request, found: {}",
                         icmp.msg_type(),
-                        body_segs,
                     ),
                 });
             }

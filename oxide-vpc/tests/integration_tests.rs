@@ -1359,7 +1359,7 @@ fn test_guest_to_gateway_icmpv6_ping(
         ident,
         seq_no,
         &data[..],
-        false,
+        true,
     );
     pcap.add_pkt(&pkt1);
 
