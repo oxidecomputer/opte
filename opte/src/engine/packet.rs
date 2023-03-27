@@ -753,7 +753,7 @@ impl Packet<Initialized> {
 
         assert!(
             self.state.len >= pkt_offset,
-            "{} > {}",
+            "{} >= {}",
             self.state.len,
             pkt_offset,
         );
@@ -784,7 +784,7 @@ impl Packet<Initialized> {
             (n, _) => n,
         };
 
-        // If the squash bound is zero, there is notthing left to do here, just
+        // If the squash bound is zero, there is nothing left to do here, just
         // return.
         if squash_to == 0 {
             return Ok(Packet {
@@ -805,8 +805,10 @@ impl Packet<Initialized> {
         }
 
         // Calculate the body offset within the new squashed segment
-        for s in &self.segs[..squash_to] {
-            body.seg_offset += s.len;
+        if body.seg_offset != 0 {
+            for s in &self.segs[..squash_to] {
+                body.seg_offset += s.len;
+            }
         }
         body.seg_index -= squash_to;
 
@@ -817,8 +819,16 @@ impl Packet<Initialized> {
             new_seg_size += s.len;
         }
 
-        // Allocate a message block and copy in the squashed data.
-        let mut mp = allocb(new_seg_size);
+        // Allocate a message block and copy in the squashed data. Provide
+        // enough extra space for genve encapsulation to not require an extra
+        // allocation later on. 128 is based on
+        // - 18 byte ethernet header (vlan space)
+        // - 40 byte ipv6 header
+        // - 8 byte udp header
+        // - 8 byte geneve header
+        // - space for geneve options
+        const EXTRA_SPACE: usize = 128;
+        let mut mp = allocb(new_seg_size + EXTRA_SPACE);
         unsafe {
             for s in &self.segs[..squash_to + 1] {
                 core::ptr::copy_nonoverlapping(
@@ -837,6 +847,10 @@ impl Packet<Initialized> {
         if squash_to + 1 < orig_segs.len() {
             segs[0].link(&orig_segs[squash_to + 1]);
             segs.extend_from_slice(&orig_segs[squash_to + 1..]);
+            #[cfg(any(feature = "std", test))]
+            for s in &orig_segs[..squash_to + 1] {
+                mock_freeb(s.mp);
+            }
         }
 
         Ok(Packet {

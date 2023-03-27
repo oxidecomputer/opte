@@ -121,22 +121,6 @@ pub fn gen_icmp_echo(
         let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
         let mut wtr = pkt.seg_wtr(0);
         eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-
-        /*
-         * TODO
-         * It seems like this should also work, but it does not. Leaving this as
-         * a todo, as I've not actually seen packets like this in the wild yet.
-         *
-         *   let i = pkt.add_seg(ip4.hdr_len()).unwrap();
-         *   let mut wtr = pkt.seg_wtr(i);
-         *   ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-         *
-         *   let i = pkt.add_seg(icmp_bytes.len()).unwrap();
-         *   let mut wtr = pkt.seg_wtr(i);
-         *   wtr.write(&icmp_bytes).unwrap();
-         *
-         */
-
         let i = pkt.add_seg(ip4.hdr_len() + icmp_bytes.len()).unwrap();
         let mut wtr = pkt.seg_wtr(i);
         ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
@@ -170,7 +154,7 @@ pub fn gen_icmpv6_echo_req(
         proto: Protocol::ICMPv6,
         next_hdr: IpProtocol::Icmpv6,
         hop_limit: 64,
-        pay_len: (Ipv6Hdr::BASE_SIZE + req.buffer_len()) as u16,
+        pay_len: req.buffer_len() as u16,
         ..Default::default()
     };
     let eth =
