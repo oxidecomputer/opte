@@ -843,10 +843,10 @@ impl Packet<Initialized> {
         if squash_to + 1 < orig_segs.len() {
             segs[0].link(&orig_segs[squash_to + 1]);
             segs.extend_from_slice(&orig_segs[squash_to + 1..]);
-            #[cfg(any(feature = "std", test))]
-            for s in &orig_segs[..squash_to + 1] {
-                mock_freeb(s.mp);
-            }
+        }
+        #[cfg(any(feature = "std", test))]
+        for s in &orig_segs[..squash_to + 1] {
+            mock_freemsg(s.mp);
         }
 
         // Recompute info after squash.
