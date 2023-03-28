@@ -377,15 +377,8 @@ impl PacketMeta {
 #[derive(Debug)]
 pub struct Packet<S: PacketState> {
     avail: usize,
-    source: PacketSource,
     segs: Vec<PacketSeg>,
     state: S,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum PacketSource {
-    Allocated,
-    Wrapped,
 }
 
 /// The type state of a packet that has been initialized and allocated, but
@@ -645,12 +638,7 @@ impl Packet<Initialized> {
         let len: usize = segs.iter().map(|s| s.len).sum();
         let avail: usize = segs.iter().map(|s| s.avail).sum();
 
-        Packet {
-            avail,
-            source: PacketSource::Allocated,
-            segs,
-            state: Initialized { len },
-        }
+        Packet { avail, segs, state: Initialized { len } }
     }
 
     #[cfg(test)]
@@ -659,12 +647,7 @@ impl Packet<Initialized> {
         let len: usize = segs.iter().map(|s| s.len).sum();
         let avail: usize = segs.iter().map(|s| s.avail).sum();
 
-        Packet {
-            avail,
-            source: PacketSource::Allocated,
-            segs,
-            state: Initialized { len },
-        }
+        Packet { avail, segs, state: Initialized { len } }
     }
 
     pub fn parse_ether<'a, 'b>(
@@ -791,7 +774,6 @@ impl Packet<Initialized> {
         if squash_to == 0 {
             return Ok(Packet {
                 avail: self.avail,
-                source: self.source,
                 // The new packet is taking ownership of the segments.
                 segs: core::mem::take(&mut self.segs),
                 state: Parsed {
@@ -871,7 +853,6 @@ impl Packet<Initialized> {
 
         Ok(Packet {
             avail: self.avail,
-            source: self.source,
             segs,
             state: Parsed {
                 len: self.state.len,
@@ -970,7 +951,6 @@ impl Packet<Initialized> {
 
         Ok(Packet {
             avail: avail.try_into().unwrap(),
-            source: PacketSource::Wrapped,
             segs,
             state: Initialized { len },
         })
