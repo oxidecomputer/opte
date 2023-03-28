@@ -478,6 +478,8 @@ pub struct PacketInfo {
     // This value may also be none if the packet has no notion of a
     // ULP checksum; e.g., ARP.
     pub body_csum: Option<Checksum>,
+    // Extra header space to avoid multiple alloctions during encapsulation.
+    pub extra_hdr_space: Option<usize>,
 }
 
 /// Body offset and length information.
@@ -819,17 +821,11 @@ impl Packet<Initialized> {
             new_seg_size += s.len;
         }
 
-        // Allocate a message block and copy in the squashed data. Provide
-        // enough extra space for genve encapsulation to not require an extra
-        // allocation later on. 128 is based on
-        // - 18 byte ethernet header (vlan space)
-        // - 40 byte ipv6 header
-        // - 8 byte udp header
-        // - 8 byte geneve header
-        // - space for geneve options
-        const EXTRA_SPACE: usize = 128;
-        let mut mp = allocb(new_seg_size + EXTRA_SPACE);
+        let extra_space = info.extra_hdr_space.unwrap_or(0);
+        let mut mp = allocb(new_seg_size + extra_space);
         unsafe {
+            (*mp).b_wptr = (*mp).b_wptr.add(extra_space);
+            (*mp).b_rptr = (*mp).b_rptr.add(extra_space);
             for s in &self.segs[..squash_to + 1] {
                 core::ptr::copy_nonoverlapping(
                     (*s.mp).b_rptr,
@@ -852,6 +848,15 @@ impl Packet<Initialized> {
                 mock_freeb(s.mp);
             }
         }
+
+        // Recompute info after squash.
+        self.segs = core::mem::take(&mut segs);
+        let mut rdr = self.get_rdr_mut();
+        let info = match dir {
+            Direction::Out => net.parse_outbound(&mut rdr)?,
+            Direction::In => net.parse_inbound(&mut rdr)?,
+        };
+        let segs = core::mem::take(&mut self.segs);
 
         Ok(Packet {
             avail: self.avail,
@@ -3068,8 +3073,8 @@ mod test {
         assert_eq!(tcp_parsed.flags, TcpFlags::SYN);
         assert_eq!(tcp_parsed.seq, 4224936861);
         assert_eq!(tcp_parsed.ack, 0);
-        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_idx, 1);
-        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_pos, 0);
+        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_idx, 0);
+        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_pos, 34);
     }
 
     // Verify that we catch when a read requires more bytes than are

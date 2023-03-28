@@ -1000,7 +1000,7 @@ fn snat_icmp4_echo_rewrite() {
     );
 
     assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + IP4_SZ);
-    assert_eq!(pkt1.body_seg(), 1);
+    assert_eq!(pkt1.body_seg(), 0);
     let meta = pkt1.meta();
 
     let eth = meta.inner.ether;
