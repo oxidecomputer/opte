@@ -846,7 +846,7 @@ impl Packet<Initialized> {
         }
         #[cfg(any(feature = "std", test))]
         for s in &orig_segs[..squash_to + 1] {
-            mock_freemsg(s.mp);
+            mock_freeb(s.mp);
         }
 
         // Recompute info after squash.
