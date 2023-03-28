@@ -191,13 +191,23 @@ impl NetworkParser for VpcParser {
         offsets.inner.ether = ether_hi.offset;
         let ether_type = ether_hi.meta.ether_type;
 
+        // Allocate a message block and copy in the squashed data. Provide
+        // enough extra space for genve encapsulation to not require an extra
+        // allocation later on. 128 is based on
+        // - 18 byte ethernet header (vlan space)
+        // - 40 byte ipv6 header
+        // - 8 byte udp header
+        // - 8 byte geneve header
+        // - space for geneve options
+        const EXTRA_SPACE: Option<usize> = Some(128);
+
         let (ip_hi, pseudo_csum) = match ether_type {
             EtherType::Arp => {
                 return Ok(PacketInfo {
                     meta,
                     offsets,
                     body_csum: None,
-                    extra_hdr_space: None,
+                    extra_hdr_space: EXTRA_SPACE,
                 });
             }
 
@@ -216,16 +226,6 @@ impl NetworkParser for VpcParser {
 
         meta.inner.ip = Some(ip_hi.meta);
         offsets.inner.ip = Some(ip_hi.offset);
-
-        // Allocate a message block and copy in the squashed data. Provide
-        // enough extra space for genve encapsulation to not require an extra
-        // allocation later on. 128 is based on
-        // - 18 byte ethernet header (vlan space)
-        // - 40 byte ipv6 header
-        // - 8 byte udp header
-        // - 8 byte geneve header
-        // - space for geneve options
-        const EXTRA_SPACE: Option<usize> = Some(128);
 
         let (ulp_hi, ulp_hdr) = match ip_hi.meta.proto() {
             Protocol::ICMP => {

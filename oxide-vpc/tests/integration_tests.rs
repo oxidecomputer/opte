@@ -370,7 +370,7 @@ fn gateway_icmp4_ping() {
         ident,
         seq_no,
         &data[..],
-        false,
+        1,
     );
     pcap.add_pkt(&pkt1);
 
@@ -984,7 +984,7 @@ fn snat_icmp4_echo_rewrite() {
         ident,
         seq_no,
         &data[..],
-        true,
+        2,
     );
 
     let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
@@ -1035,7 +1035,7 @@ fn snat_icmp4_echo_rewrite() {
         mapped_port,
         seq_no,
         &data[..],
-        false,
+        3,
     );
     let bsvc_phys = TestIpPhys {
         ip: g1_cfg.boundary_services.ip,
@@ -1091,7 +1091,7 @@ fn snat_icmp4_echo_rewrite() {
         ident,
         seq_no,
         &data[..],
-        false,
+        1,
     );
 
     assert_eq!(g1.port.stats_snap().out_uft_hit, 0);
@@ -1137,7 +1137,7 @@ fn snat_icmp4_echo_rewrite() {
         mapped_port,
         seq_no,
         &data[..],
-        false,
+        2,
     );
 
     assert_eq!(g1.port.stats_snap().in_uft_hit, 0);
@@ -1359,7 +1359,7 @@ fn test_guest_to_gateway_icmpv6_ping(
         ident,
         seq_no,
         &data[..],
-        true,
+        3,
     );
     pcap.add_pkt(&pkt1);
 

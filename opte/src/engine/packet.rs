@@ -737,7 +737,7 @@ impl Packet<Initialized> {
     ) -> Result<Packet<Parsed>, ParseError> {
         let mut rdr = self.get_rdr_mut();
 
-        let info = match dir {
+        let mut info = match dir {
             Direction::Out => net.parse_outbound(&mut rdr)?,
             Direction::In => net.parse_inbound(&mut rdr)?,
         };
@@ -849,14 +849,25 @@ impl Packet<Initialized> {
             mock_freeb(s.mp);
         }
 
-        // Recompute info after squash.
-        self.segs = core::mem::take(&mut segs);
-        let mut rdr = self.get_rdr_mut();
-        let info = match dir {
-            Direction::Out => net.parse_outbound(&mut rdr)?,
-            Direction::In => net.parse_inbound(&mut rdr)?,
-        };
-        let segs = core::mem::take(&mut self.segs);
+        let mut off = 0;
+        info.offsets.inner.ether.pkt_pos = 0;
+        info.offsets.inner.ether.seg_idx = 0;
+        info.offsets.inner.ether.seg_pos = 0;
+        off += info.offsets.inner.ether.hdr_len;
+
+        if let Some(ref mut ip) = info.offsets.inner.ip {
+            ip.pkt_pos = off;
+            ip.seg_idx = 0;
+            ip.seg_pos = off;
+            off += ip.hdr_len;
+        }
+        if let Some(ref mut ulp) = info.offsets.inner.ulp {
+            if body.seg_offset > 0 {
+                ulp.pkt_pos = off;
+                ulp.seg_idx = 0;
+                ulp.seg_pos = off;
+            }
+        }
 
         Ok(Packet {
             avail: self.avail,

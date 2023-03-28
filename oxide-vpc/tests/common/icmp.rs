@@ -33,14 +33,14 @@ pub fn gen_icmp_echo_req(
     ident: u16,
     seq_no: u16,
     data: &[u8],
-    multi_seg: bool,
+    segments: usize,
 ) -> Packet<Parsed> {
     match (ip_src, ip_dst) {
         (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => gen_icmpv4_echo_req(
-            eth_src, eth_dst, src, dst, ident, seq_no, data, multi_seg,
+            eth_src, eth_dst, src, dst, ident, seq_no, data, segments,
         ),
         (IpAddr::Ip6(src), IpAddr::Ip6(dst)) => gen_icmpv6_echo_req(
-            eth_src, eth_dst, src, dst, ident, seq_no, data, multi_seg,
+            eth_src, eth_dst, src, dst, ident, seq_no, data, segments,
         ),
         (_, _) => panic!("IP src and dst versions must match"),
     }
@@ -54,11 +54,11 @@ pub fn gen_icmpv4_echo_req(
     ident: u16,
     seq_no: u16,
     data: &[u8],
-    multi_seg: bool,
+    segments: usize,
 ) -> Packet<Parsed> {
     let etype = IcmpEchoType::Req;
     gen_icmp_echo(
-        etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data, multi_seg,
+        etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data, segments,
     )
 }
 
@@ -70,11 +70,11 @@ pub fn gen_icmp_echo_reply(
     ident: u16,
     seq_no: u16,
     data: &[u8],
-    multi_seg: bool,
+    segments: usize,
 ) -> Packet<Parsed> {
     let etype = IcmpEchoType::Reply;
     gen_icmp_echo(
-        etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data, multi_seg,
+        etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data, segments,
     )
 }
 
@@ -87,7 +87,7 @@ pub fn gen_icmp_echo(
     ident: u16,
     seq_no: u16,
     data: &[u8],
-    multi_seg: bool,
+    segments: usize,
 ) -> Packet<Parsed> {
     let icmp = match etype {
         IcmpEchoType::Req => Icmpv4Repr::EchoRequest { ident, seq_no, data },
@@ -110,22 +110,40 @@ pub fn gen_icmp_echo(
 
     let total_len = EtherHdr::SIZE + ip4.hdr_len() + icmp.buffer_len();
 
-    if !multi_seg {
-        let mut pkt = Packet::alloc_and_expand(total_len);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-        wtr.write(&icmp_bytes).unwrap();
-        pkt.parse(Out, VpcParser::new()).unwrap()
-    } else {
-        let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
-        let mut wtr = pkt.seg_wtr(0);
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        let i = pkt.add_seg(ip4.hdr_len() + icmp_bytes.len()).unwrap();
-        let mut wtr = pkt.seg_wtr(i);
-        ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-        wtr.write(&icmp_bytes).unwrap();
-        pkt.parse(Out, VpcParser::new()).unwrap()
+    match segments {
+        1 => {
+            let mut pkt = Packet::alloc_and_expand(total_len);
+            let mut wtr = pkt.seg0_wtr();
+            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
+            wtr.write(&icmp_bytes).unwrap();
+            pkt.parse(Out, VpcParser::new()).unwrap()
+        }
+        2 => {
+            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
+            let mut wtr = pkt.seg_wtr(0);
+            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+            let i = pkt.add_seg(ip4.hdr_len() + icmp_bytes.len()).unwrap();
+            let mut wtr = pkt.seg_wtr(i);
+            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
+            wtr.write(&icmp_bytes).unwrap();
+            pkt.parse(Out, VpcParser::new()).unwrap()
+        }
+        3 => {
+            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
+            let mut wtr = pkt.seg_wtr(0);
+            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+            let i = pkt.add_seg(ip4.hdr_len()).unwrap();
+            let mut wtr = pkt.seg_wtr(i);
+            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
+            let i = pkt.add_seg(icmp_bytes.len()).unwrap();
+            let mut wtr = pkt.seg_wtr(i);
+            wtr.write(&icmp_bytes).unwrap();
+            pkt.parse(Out, VpcParser::new()).unwrap()
+        }
+        _ => {
+            panic!("only 1 2 or 3 segments allowed")
+        }
     }
 }
 
@@ -137,7 +155,7 @@ pub fn gen_icmpv6_echo_req(
     ident: u16,
     seq_no: u16,
     data: &[u8],
-    multi_seg: bool,
+    segments: usize,
 ) -> Packet<Parsed> {
     let req = Icmpv6Repr::EchoRequest { ident, seq_no, data };
     let mut body_bytes = vec![0u8; req.buffer_len()];
@@ -162,21 +180,39 @@ pub fn gen_icmpv6_echo_req(
 
     let total_len = EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len();
 
-    if !multi_seg {
-        let mut pkt = Packet::alloc_and_expand(total_len);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-        wtr.write(&body_bytes).unwrap();
-        pkt.parse(Out, VpcParser::new()).unwrap()
-    } else {
-        let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
-        let mut wtr = pkt.seg_wtr(0);
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        let i = pkt.add_seg(ip6.hdr_len() + body_bytes.len()).unwrap();
-        let mut wtr = pkt.seg_wtr(i);
-        ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-        wtr.write(&body_bytes).unwrap();
-        pkt.parse(Out, VpcParser::new()).unwrap()
+    match segments {
+        1 => {
+            let mut pkt = Packet::alloc_and_expand(total_len);
+            let mut wtr = pkt.seg0_wtr();
+            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+            ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
+            wtr.write(&body_bytes).unwrap();
+            pkt.parse(Out, VpcParser::new()).unwrap()
+        }
+        2 => {
+            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
+            let mut wtr = pkt.seg_wtr(0);
+            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+            let i = pkt.add_seg(ip6.hdr_len() + body_bytes.len()).unwrap();
+            let mut wtr = pkt.seg_wtr(i);
+            ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
+            wtr.write(&body_bytes).unwrap();
+            pkt.parse(Out, VpcParser::new()).unwrap()
+        }
+        3 => {
+            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
+            let mut wtr = pkt.seg_wtr(0);
+            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+            let i = pkt.add_seg(ip6.hdr_len()).unwrap();
+            let mut wtr = pkt.seg_wtr(i);
+            ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
+            let i = pkt.add_seg(body_bytes.len()).unwrap();
+            let mut wtr = pkt.seg_wtr(i);
+            wtr.write(&body_bytes).unwrap();
+            pkt.parse(Out, VpcParser::new()).unwrap()
+        }
+        _ => {
+            panic!("only 1 2 or 3 segments allowed")
+        }
     }
 }
