@@ -771,7 +771,7 @@ impl Packet<Initialized> {
 
         // If the squash bound is zero, there is nothing left to do here, just
         // return.
-        if squash_to == 0 || dir == Direction::In {
+        if squash_to == 0 {
             return Ok(Packet {
                 avail: self.avail,
                 // The new packet is taking ownership of the segments.
@@ -832,22 +832,19 @@ impl Packet<Initialized> {
         }
 
         let mut off = 0;
-        info.offsets.inner.ether.pkt_pos = 0;
-        info.offsets.inner.ether.seg_idx = 0;
-        info.offsets.inner.ether.seg_pos = 0;
-        off += info.offsets.inner.ether.hdr_len;
-
-        if let Some(ref mut ip) = info.offsets.inner.ip {
-            ip.pkt_pos = off;
-            ip.seg_idx = 0;
-            ip.seg_pos = off;
-            off += ip.hdr_len;
-        }
-        if let Some(ref mut ulp) = info.offsets.inner.ulp {
-            if body.seg_offset > 0 {
-                ulp.pkt_pos = off;
-                ulp.seg_idx = 0;
-                ulp.seg_pos = off;
+        for header_offsets in [
+            info.offsets.outer.ether.as_mut(),
+            info.offsets.outer.ip.as_mut(),
+            info.offsets.outer.encap.as_mut(),
+            Some(&mut info.offsets.inner.ether),
+            info.offsets.inner.ip.as_mut(),
+            info.offsets.inner.ulp.as_mut(),
+        ] {
+            if let Some(h) = header_offsets {
+                h.pkt_pos = off;
+                h.seg_idx = 0;
+                h.seg_pos = off;
+                off += h.hdr_len;
             }
         }
 
