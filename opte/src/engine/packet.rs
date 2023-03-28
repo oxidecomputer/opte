@@ -771,7 +771,7 @@ impl Packet<Initialized> {
 
         // If the squash bound is zero, there is nothing left to do here, just
         // return.
-        if squash_to == 0 {
+        if squash_to == 0 || dir == Direction::In {
             return Ok(Packet {
                 avail: self.avail,
                 // The new packet is taking ownership of the segments.
