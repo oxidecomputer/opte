@@ -1769,6 +1769,18 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
             );
             return (EtherAddr::zero(), EtherAddr::zero());
         }
+        let ill = (*ire).ire_ill;
+        if ill.is_null() {
+            opte::engine::dbg(format!("gateway ILL is NULL for {:?}", ip6_dst));
+            next_hop_probe(
+                ip6_dst,
+                Some(&ip6_dst),
+                EtherAddr::zero(),
+                EtherAddr::zero(),
+                b"destination ILL is NULL\0",
+            );
+            return (EtherAddr::zero(), EtherAddr::zero());
+        }
 
         // Step (2): Lookup the IRE for the gateway's link-local
         // address. This is going to return one of the `fe80::/10`
@@ -1776,9 +1788,25 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
         let ireu = (*ire).ire_u;
         let gw = ireu.ire6_u.ire6_gateway_addr;
         let gw_ip6 = Ipv6Addr::from(&ireu.ire6_u.ire6_gateway_addr);
-        let gw_ire = ip::ire_ftable_lookup_simple_v6(
+
+        // NOTE: specifying the ill is important here, because the gateway
+        // address is going to be of the form fe80::<interface-id>. This means a
+        // simple query that does not specify an ill could come back with any
+        // route matching fe80::/10 over any interface. Since all interfaces
+        // that have an IPv6 link-local address assigned have an associated
+        // fe80::/10 route, we must restrict our search to the interface that
+        // actually has a route to the desired (non-link-local) destination.
+        let flags = (ip::MATCH_IRE_DSTONLY | ip::MATCH_IRE_ILL) as i32;
+        let gw_ire = ip::ire_ftable_lookup_v6(
             &gw,
-            xmit_hint,
+            ptr::null(),
+            ptr::null(),
+            0,
+            ill,
+            sys::ALL_ZONES,
+            ptr::null(),
+            flags,
+            0,
             ipst,
             &mut generation_op as *mut ip::uint_t,
         );
@@ -1798,19 +1826,6 @@ fn next_hop(ip6_dst: &Ipv6Addr) -> (EtherAddr, EtherAddr) {
         // Step (3): Determine the source address of the outer frame
         // from the physical address of the IP Lower Layer object
         // member or the internet routing entry.
-        let ill = (*gw_ire).ire_ill;
-        if ill.is_null() {
-            opte::engine::dbg(format!("gateway ILL is NULL for {:?}", gw_ip6));
-            next_hop_probe(
-                ip6_dst,
-                Some(&gw_ip6),
-                EtherAddr::zero(),
-                EtherAddr::zero(),
-                b"gateway ILL is NULL\0",
-            );
-            return (EtherAddr::zero(), EtherAddr::zero());
-        }
-
         let src = (*ill).ill_phys_addr;
         if src.is_null() {
             opte::engine::dbg(format!(
