@@ -221,7 +221,7 @@ impl SNat {
                 return Err(GenDescError::Unexpected {
                     msg: format!(
                         "Expected ICMP Echo Request, found: {}",
-                        icmp.msg_type()
+                        icmp.msg_type(),
                     ),
                 });
             }

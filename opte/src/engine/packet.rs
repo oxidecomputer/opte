@@ -377,15 +377,8 @@ impl PacketMeta {
 #[derive(Debug)]
 pub struct Packet<S: PacketState> {
     avail: usize,
-    source: PacketSource,
     segs: Vec<PacketSeg>,
     state: S,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum PacketSource {
-    Allocated,
-    Wrapped,
 }
 
 /// The type state of a packet that has been initialized and allocated, but
@@ -478,6 +471,8 @@ pub struct PacketInfo {
     // This value may also be none if the packet has no notion of a
     // ULP checksum; e.g., ARP.
     pub body_csum: Option<Checksum>,
+    // Extra header space to avoid multiple allocations during encapsulation.
+    pub extra_hdr_space: Option<usize>,
 }
 
 /// Body offset and length information.
@@ -643,12 +638,7 @@ impl Packet<Initialized> {
         let len: usize = segs.iter().map(|s| s.len).sum();
         let avail: usize = segs.iter().map(|s| s.avail).sum();
 
-        Packet {
-            avail,
-            source: PacketSource::Allocated,
-            segs,
-            state: Initialized { len },
-        }
+        Packet { avail, segs, state: Initialized { len } }
     }
 
     #[cfg(test)]
@@ -657,12 +647,7 @@ impl Packet<Initialized> {
         let len: usize = segs.iter().map(|s| s.len).sum();
         let avail: usize = segs.iter().map(|s| s.avail).sum();
 
-        Packet {
-            avail,
-            source: PacketSource::Allocated,
-            segs,
-            state: Initialized { len },
-        }
+        Packet { avail, segs, state: Initialized { len } }
     }
 
     pub fn parse_ether<'a, 'b>(
@@ -735,7 +720,7 @@ impl Packet<Initialized> {
     ) -> Result<Packet<Parsed>, ParseError> {
         let mut rdr = self.get_rdr_mut();
 
-        let info = match dir {
+        let mut info = match dir {
             Direction::Out => net.parse_outbound(&mut rdr)?,
             Direction::In => net.parse_inbound(&mut rdr)?,
         };
@@ -751,19 +736,121 @@ impl Packet<Initialized> {
             seg_offset = 0;
         }
 
-        let body = BodyInfo {
+        assert!(
+            self.state.len >= pkt_offset,
+            "{} >= {}",
+            self.state.len,
+            pkt_offset,
+        );
+
+        let mut body = BodyInfo {
             pkt_offset,
             seg_index,
             seg_offset,
             len: self.state.len - pkt_offset,
         };
-
         let flow = InnerFlowId::from(&info.meta);
+
+        // Packet processing logic requires all headers to be in the leading
+        // segment. Detect if this is not the case and squash segments
+        // containing headers into one segment. This value represents the
+        // inclusive upper bound of the squash.
+        let squash_to = match (body.seg_index, body.seg_offset) {
+            // The body is in the first segment meaning all headers are also in
+            // the first segment. No squashing needed.
+            (0, _) => 0,
+
+            // The body starts at a zero offset in segment n. This means we need
+            // to squash all segments prior to n.
+            (n, 0) => n - 1,
+
+            // The body starts at a non-zero offset in segment n. This means we
+            // need to squash all segments up to and including n.
+            (n, _) => n,
+        };
+
+        // If the squash bound is zero, there is nothing left to do here, just
+        // return.
+        if squash_to == 0 {
+            return Ok(Packet {
+                avail: self.avail,
+                // The new packet is taking ownership of the segments.
+                segs: core::mem::take(&mut self.segs),
+                state: Parsed {
+                    len: self.state.len,
+                    hdr_offsets: info.offsets,
+                    meta: info.meta,
+                    flow,
+                    body_csum: info.body_csum,
+                    body,
+                    body_modified: false,
+                },
+            });
+        }
+
+        // Calculate the body offset within the new squashed segment
+        if body.seg_offset != 0 {
+            for s in &self.segs[..squash_to] {
+                body.seg_offset += s.len;
+            }
+        }
+        body.seg_index -= squash_to;
+
+        // Determine how big the message block for the squashed segment needs to
+        // be.
+        let mut new_seg_size = 0;
+        for s in &self.segs[..squash_to + 1] {
+            new_seg_size += s.len;
+        }
+
+        let extra_space = info.extra_hdr_space.unwrap_or(0);
+        let mut mp = allocb(new_seg_size + extra_space);
+        unsafe {
+            (*mp).b_wptr = (*mp).b_wptr.add(extra_space);
+            (*mp).b_rptr = (*mp).b_rptr.add(extra_space);
+            for s in &self.segs[..squash_to + 1] {
+                core::ptr::copy_nonoverlapping(
+                    (*s.mp).b_rptr,
+                    (*mp).b_wptr,
+                    s.len,
+                );
+                (*mp).b_wptr = (*mp).b_wptr.add(s.len);
+            }
+        }
+
+        // Construct a new segment vector, tacking on any remaining segments
+        // after the header segments.
+        let orig_segs = core::mem::take(&mut self.segs);
+        let mut segs = vec![unsafe { PacketSeg::wrap_mblk(mp) }];
+        if squash_to + 1 < orig_segs.len() {
+            segs[0].link(&orig_segs[squash_to + 1]);
+            segs.extend_from_slice(&orig_segs[squash_to + 1..]);
+        }
+        #[cfg(any(feature = "std", test))]
+        for s in &orig_segs[..squash_to + 1] {
+            mock_freeb(s.mp);
+        }
+
+        let mut off = 0;
+        for header_offsets in [
+            info.offsets.outer.ether.as_mut(),
+            info.offsets.outer.ip.as_mut(),
+            info.offsets.outer.encap.as_mut(),
+            Some(&mut info.offsets.inner.ether),
+            info.offsets.inner.ip.as_mut(),
+            info.offsets.inner.ulp.as_mut(),
+        ] {
+            if let Some(h) = header_offsets {
+                h.pkt_pos = off;
+                h.seg_idx = 0;
+                h.seg_pos = off;
+                off += h.hdr_len;
+            }
+        }
+
         Ok(Packet {
             avail: self.avail,
-            source: self.source,
-            // The new packet is taking ownership of the segments.
-            segs: core::mem::take(&mut self.segs),
+            segs,
             state: Parsed {
                 len: self.state.len,
                 hdr_offsets: info.offsets,
@@ -778,6 +865,23 @@ impl Packet<Initialized> {
 
     pub fn seg0_wtr(&mut self) -> PacketSegWriter {
         self.segs[0].get_writer()
+    }
+
+    pub fn seg_wtr(&mut self, i: usize) -> PacketSegWriter {
+        self.segs[i].get_writer()
+    }
+
+    pub fn add_seg(&mut self, size: usize) -> Result<usize, SegAdjustError> {
+        let mut seg = PacketSeg::alloc(size);
+        seg.expand_end(size)?;
+        let len = self.segs.len();
+        if len > 0 {
+            let last_seg = &mut self.segs[len - 1];
+            last_seg.link(&seg);
+        }
+        self.segs.push(seg);
+        self.state.len += size;
+        Ok(len)
     }
 
     /// Wrap the `mblk_t` packet in a [`Packet`], taking ownership of
@@ -844,7 +948,6 @@ impl Packet<Initialized> {
 
         Ok(Packet {
             avail: avail.try_into().unwrap(),
-            source: PacketSource::Wrapped,
             segs,
             state: Initialized { len },
         })
@@ -1289,22 +1392,10 @@ impl Packet<Parsed> {
                 // In this case we need to "erase" the old headers and
                 // allocate an mblk to hold the new headers.
                 //
-                // XXX This assumes that the headers all reside in the
-                // first segment. For any typical implementation, this
-                // should be true (it's better for performance, and
-                // just makes the most sense). However, if that
-                // invariant doesn't hold true, this method of erasing
-                // the original header data is incomplete. It will
-                // only partially erase the data, leading to confusion
-                // downstream somewhere. The best solution is to check
-                // for this during parsing. If the header straddles
-                // segments, then just copy all header data into a new
-                // segment, and replace the old header data with that
-                // one segment. This means a hit on performance, but
-                // it also means sanity for all downstream code.
-                // Besides, any network stack that cares about
-                // performance will already make sure to place the
-                // headers in a single buffer.
+                // This assumes that the headers all reside in the
+                // first segment. This is checked for in parsing and if the
+                // headers are not all in the first segment, the leading
+                // segments are squashed into one until this becomes true.
                 segs[0].shrink_start(old_hdr_len).unwrap();
 
                 // Create the new segment for holding the new headers.
@@ -2970,8 +3061,8 @@ mod test {
         assert_eq!(tcp_parsed.flags, TcpFlags::SYN);
         assert_eq!(tcp_parsed.seq, 4224936861);
         assert_eq!(tcp_parsed.ack, 0);
-        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_idx, 1);
-        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_pos, 0);
+        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_idx, 0);
+        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_pos, 34);
     }
 
     // Verify that we catch when a read requires more bytes than are

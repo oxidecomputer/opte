@@ -300,7 +300,12 @@ impl GenericUlp {
 
         let (ip_hi, pseudo_csum) = match ether_type {
             EtherType::Arp => {
-                return Ok(PacketInfo { meta, offsets, body_csum: None });
+                return Ok(PacketInfo {
+                    meta,
+                    offsets,
+                    body_csum: None,
+                    extra_hdr_space: None,
+                });
             }
 
             EtherType::Ipv4 => {
@@ -321,7 +326,12 @@ impl GenericUlp {
 
         let (ulp_hi, ulp_hdr) = match ip_hi.meta.proto() {
             Protocol::ICMP => {
-                return Ok(PacketInfo { meta, offsets, body_csum: None });
+                return Ok(PacketInfo {
+                    meta,
+                    offsets,
+                    body_csum: None,
+                    extra_hdr_space: None,
+                });
 
                 // todo!("need to reintrodouce ICMP as pseudo-ULP header");
                 // pkt.parse_icmp()?,
@@ -342,7 +352,7 @@ impl GenericUlp {
             None
         };
 
-        Ok(PacketInfo { meta, offsets, body_csum })
+        Ok(PacketInfo { meta, offsets, body_csum, extra_hdr_space: None })
     }
 }
 

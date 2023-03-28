@@ -191,9 +191,24 @@ impl NetworkParser for VpcParser {
         offsets.inner.ether = ether_hi.offset;
         let ether_type = ether_hi.meta.ether_type;
 
+        // Allocate a message block and copy in the squashed data. Provide
+        // enough extra space for geneve encapsulation to not require an extra
+        // allocation later on. 128 is based on
+        // - 18 byte ethernet header (vlan space)
+        // - 40 byte ipv6 header
+        // - 8 byte udp header
+        // - 8 byte geneve header
+        // - space for geneve options
+        const EXTRA_SPACE: Option<usize> = Some(128);
+
         let (ip_hi, pseudo_csum) = match ether_type {
             EtherType::Arp => {
-                return Ok(PacketInfo { meta, offsets, body_csum: None });
+                return Ok(PacketInfo {
+                    meta,
+                    offsets,
+                    body_csum: None,
+                    extra_hdr_space: EXTRA_SPACE,
+                });
             }
 
             EtherType::Ipv4 => {
@@ -214,7 +229,12 @@ impl NetworkParser for VpcParser {
 
         let (ulp_hi, ulp_hdr) = match ip_hi.meta.proto() {
             Protocol::ICMP => {
-                return Ok(PacketInfo { meta, offsets, body_csum: None });
+                return Ok(PacketInfo {
+                    meta,
+                    offsets,
+                    body_csum: None,
+                    extra_hdr_space: EXTRA_SPACE,
+                });
                 // todo!("need to reintrodouce ICMP as pseudo-ULP header");
                 // pkt.parse_icmp()?,
             }
@@ -235,7 +255,12 @@ impl NetworkParser for VpcParser {
             None
         };
 
-        Ok(PacketInfo { meta, offsets, body_csum })
+        Ok(PacketInfo {
+            meta,
+            offsets,
+            body_csum,
+            extra_hdr_space: EXTRA_SPACE,
+        })
     }
 
     fn parse_inbound(
@@ -293,7 +318,12 @@ impl NetworkParser for VpcParser {
                 // XXX-EXT-IP Need to allow inbound ARP for proxy ARP
                 // to work.
                 if self.proxy_arp_enable {
-                    return Ok(PacketInfo { meta, offsets, body_csum: None });
+                    return Ok(PacketInfo {
+                        meta,
+                        offsets,
+                        body_csum: None,
+                        extra_hdr_space: None,
+                    });
                 } else {
                     return Err(ParseError::UnexpectedEtherType(inner_et));
                 }
@@ -307,7 +337,12 @@ impl NetworkParser for VpcParser {
 
         let (inner_ulp_hi, inner_ulp_hdr) = match inner_ip_hi.meta.proto() {
             Protocol::ICMP => {
-                return Ok(PacketInfo { meta, offsets, body_csum: None });
+                return Ok(PacketInfo {
+                    meta,
+                    offsets,
+                    body_csum: None,
+                    extra_hdr_space: None,
+                });
                 // todo!("need to reintrodouce ICMP as pseudo-ULP header");
                 // pkt.parse_icmp()?,
             }
@@ -327,6 +362,6 @@ impl NetworkParser for VpcParser {
             None
         };
 
-        Ok(PacketInfo { meta, offsets, body_csum })
+        Ok(PacketInfo { meta, offsets, body_csum, extra_hdr_space: None })
     }
 }
