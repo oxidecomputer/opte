@@ -471,7 +471,7 @@ pub struct PacketInfo {
     // This value may also be none if the packet has no notion of a
     // ULP checksum; e.g., ARP.
     pub body_csum: Option<Checksum>,
-    // Extra header space to avoid multiple alloctions during encapsulation.
+    // Extra header space to avoid multiple allocations during encapsulation.
     pub extra_hdr_space: Option<usize>,
 }
 

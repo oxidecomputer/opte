@@ -192,7 +192,7 @@ impl NetworkParser for VpcParser {
         let ether_type = ether_hi.meta.ether_type;
 
         // Allocate a message block and copy in the squashed data. Provide
-        // enough extra space for genve encapsulation to not require an extra
+        // enough extra space for geneve encapsulation to not require an extra
         // allocation later on. 128 is based on
         // - 18 byte ethernet header (vlan space)
         // - 40 byte ipv6 header
