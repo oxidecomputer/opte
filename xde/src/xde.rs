@@ -209,6 +209,7 @@ struct xde_underlay_port {
     /// Name of the link being used for this underlay port.
     name: String,
 
+    /// The MAC address associated with this underlay port.
     mac: [u8; 6],
 
     /// MAC handle to the underlay link.
@@ -1576,8 +1577,9 @@ unsafe extern "C" fn xde_mc_tx(
             // destination and source zero'd. Ask IRE for the route
             // associated with the underlay destination. Then ask NCE
             // for the mac associated with the IRE nexthop to fill in
-            // the outer frame of the packet.
-            let (src, dst, u) = next_hop(&ip6.dst, src_dev);
+            // the outer frame of the packet. Also return the underlay
+            // device associated with the nexthop
+            let (src, dst, underlay_dev) = next_hop(&ip6.dst, src_dev);
 
             // Get a pointer to the beginning of the outer frame and
             // fill in the dst/src addresses before sending out the
@@ -1589,7 +1591,11 @@ unsafe extern "C" fn xde_mc_tx(
             // Unwrap: We know the packet is good because we just
             // unwrapped it above.
             let new_pkt = Packet::<Initialized>::wrap_mblk(mblk).unwrap();
-            u.mch.tx_drop_on_no_desc(new_pkt, hint, MacTxFlags::empty());
+            underlay_dev.mch.tx_drop_on_no_desc(
+                new_pkt,
+                hint,
+                MacTxFlags::empty(),
+            );
         }
 
         Ok(ProcessResult::Drop { .. }) => {
@@ -1740,7 +1746,7 @@ unsafe extern "C" fn xde_mc_tx(
 fn next_hop<'a>(
     ip6_dst: &Ipv6Addr,
     ustate: &'a XdeDev,
-) -> (EtherAddr, EtherAddr, &'a Arc<xde_underlay_port>) {
+) -> (EtherAddr, EtherAddr, &'a xde_underlay_port) {
     unsafe {
         // Use the GZ's routing table.
         let netstack = ip::netstack_find_by_zoneid(0);
@@ -1754,7 +1760,7 @@ fn next_hop<'a>(
         let xmit_hint = 0;
         let mut generation_op = 0u32;
 
-        let mut underlay_port = &ustate.u1;
+        let mut underlay_port = &*ustate.u1;
 
         // Step (1): Lookup the IRE for the destination. This is going
         // to return one of the default gateway entries.
@@ -1785,10 +1791,13 @@ fn next_hop<'a>(
         }
         let ill = (*ire).ire_ill;
         if ill.is_null() {
-            opte::engine::dbg(format!("gateway ILL is NULL for {:?}", ip6_dst));
+            opte::engine::dbg(format!(
+                "destination ILL is NULL for {:?}",
+                ip6_dst
+            ));
             next_hop_probe(
                 ip6_dst,
-                Some(&ip6_dst),
+                None,
                 EtherAddr::zero(),
                 EtherAddr::zero(),
                 b"destination ILL is NULL\0",
@@ -1810,7 +1819,7 @@ fn next_hop<'a>(
         // that have an IPv6 link-local address assigned have an associated
         // fe80::/10 route, we must restrict our search to the interface that
         // actually has a route to the desired (non-link-local) destination.
-        let flags = (ip::MATCH_IRE_DSTONLY | ip::MATCH_IRE_ILL) as i32;
+        let flags = ip::MATCH_IRE_ILL as i32;
         let gw_ire = ip::ire_ftable_lookup_v6(
             &gw,
             ptr::null(),
@@ -1820,7 +1829,7 @@ fn next_hop<'a>(
             sys::ALL_ZONES,
             ptr::null(),
             flags,
-            0,
+            xmit_hint,
             ipst,
             &mut generation_op as *mut ip::uint_t,
         );
@@ -1878,7 +1887,7 @@ fn next_hop<'a>(
                 ip6_dst,
                 Some(&gw_ip6),
                 EtherAddr::zero(),
-                EtherAddr::zero(),
+                src,
                 b"no NCE for gateway\0",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
@@ -1893,7 +1902,7 @@ fn next_hop<'a>(
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
-                EtherAddr::zero(),
+                src,
                 EtherAddr::zero(),
                 b"no NCE common for gateway\0",
             );
@@ -1906,7 +1915,7 @@ fn next_hop<'a>(
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
-                EtherAddr::zero(),
+                src,
                 EtherAddr::zero(),
                 b"NCE MAC address if NULL for gateway\0",
             );
