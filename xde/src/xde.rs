@@ -1886,8 +1886,8 @@ fn next_hop<'a>(
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
-                EtherAddr::zero(),
                 src,
+                EtherAddr::zero(),
                 b"no NCE for gateway\0",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
