@@ -60,6 +60,14 @@ impl MacHandle {
 
         Ok(Self(mh))
     }
+
+    pub fn get_mac_addr(&self) -> [u8; 6] {
+        let mut mac = [0u8; 6];
+        unsafe {
+            mac_unicast_primary_get(self.0, &mut mac);
+        }
+        mac
+    }
 }
 
 impl Drop for MacHandle {

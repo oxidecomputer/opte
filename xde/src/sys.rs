@@ -7,3 +7,4 @@
 // stuff we need from common/sys
 
 pub const VLAN_TAGSZ: u32 = 4;
+pub const ALL_ZONES: i32 = -1;
