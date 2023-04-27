@@ -122,7 +122,7 @@ fn lab_cfg() -> VpcCfg {
 #[test]
 fn check_layers() {
     let g1_cfg = g1_cfg();
-    let g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     let port_layers = g1.port.layers();
     assert_eq!(&VPC_LAYERS[..], &port_layers);
 }
@@ -132,7 +132,7 @@ fn check_layers() {
 fn port_transition_running() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
 
     // ================================================================
@@ -163,7 +163,7 @@ fn port_transition_running() {
 fn port_transition_reset() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
 
     // ================================================================
@@ -200,8 +200,9 @@ fn port_transition_reset() {
 fn port_transition_pause() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
-    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    let mut g2 =
+        oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()), None);
 
     // Allow incoming connections to port 80 on g1.
     let fw_rule: FirewallRule =
@@ -318,7 +319,7 @@ fn port_transition_pause() {
 #[test]
 fn add_remove_fw_rule() {
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -351,7 +352,7 @@ fn add_remove_fw_rule() {
 #[test]
 fn gateway_icmp4_ping() {
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_icmpv4_ping.pcap");
@@ -440,7 +441,7 @@ fn gateway_icmp4_ping() {
 fn guest_to_guest_no_route() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
     set!(g1, "port_state=running");
@@ -483,11 +484,12 @@ fn guest_to_guest_no_route() {
 fn guest_to_guest() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
     set!(g1, "port_state=running");
-    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
+    let mut g2 =
+        oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()), None);
     g2.port.start();
     set!(g2, "port_state=running");
 
@@ -658,10 +660,11 @@ fn guest_to_guest_diff_vpc_no_peer() {
     let g1_cfg = g1_cfg();
     let mut g2_cfg = g2_cfg();
     g2_cfg.vni = Vni::new(100u32).unwrap();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
-    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
+    let mut g2 =
+        oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()), None);
     g2.port.start();
     set!(g2, "port_state=running");
 
@@ -701,7 +704,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
 #[test]
 fn guest_to_internet_ipv4() {
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -955,7 +958,7 @@ fn guest_to_internet_ipv6() {
 #[test]
 fn snat_icmp4_echo_rewrite() {
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let dst_ip: Ipv4Addr = "45.55.45.205".parse().unwrap();
@@ -1216,7 +1219,7 @@ fn arp_gateway() {
     use opte::engine::arp::ArpOp;
 
     let cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("arp_hairpin", &cfg, None);
+    let mut g1 = oxide_net_setup("arp_hairpin", &cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -1278,7 +1281,7 @@ fn arp_gateway() {
 fn flow_expiration() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
     set!(g1, "port_state=running");
@@ -1320,7 +1323,7 @@ fn flow_expiration() {
 #[test]
 fn gateway_icmpv6_ping() {
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_icmpv6_ping.pcap");
@@ -1499,7 +1502,7 @@ fn gateway_router_advert_reply() {
     use smoltcp::time::Duration;
 
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_router_advert_reply.pcap");
@@ -1966,7 +1969,7 @@ fn validate_hairpin_advert(
 #[test]
 fn test_gateway_neighbor_advert_reply() {
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("gateway_neighbor_advert_reply.pcap");
@@ -2132,7 +2135,7 @@ fn verify_dhcpv6_essentials<'a>(
 #[test]
 fn test_reply_to_dhcpv6_solicit_or_request() {
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
     let mut pcap = PcapBuilder::new("dhcpv6_solicit_reply.pcap");
@@ -2390,7 +2393,7 @@ fn uft_lft_invalidation_out() {
     // Step 1
     // ================================================================
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -2476,7 +2479,7 @@ fn uft_lft_invalidation_in() {
     // Step 1
     // ================================================================
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -2581,7 +2584,7 @@ fn uft_lft_invalidation_in() {
 #[test]
 fn tcp_outbound() {
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
     // let now = Moment::now();
@@ -2822,7 +2825,7 @@ fn tcp_inbound() {
     };
 
     let g1_cfg = g1_cfg2(ip_cfg);
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -3013,7 +3016,7 @@ fn tcp_inbound() {
 fn anti_spoof() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -3082,4 +3085,54 @@ fn anti_spoof() {
             "stats.port.out_uft_miss",
         ]
     );
+}
+
+// Ensure that we do _not_ panic when trying to create more TCP flows the limit
+// applied to the flow table.
+#[test]
+fn no_panic_on_flow_table_full() {
+    let g1_cfg = g1_cfg();
+    // Let's limit to one connection, and try to establish two.
+    let flow_table_limit = NonZeroU32::new(1).unwrap();
+    let mut g1 =
+        oxide_net_setup("g1_port", &g1_cfg, None, Some(flow_table_limit));
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Add router entry that allows g1 to route to internet.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // Send one TCP packet to `zinascii.com`.
+    let dst_ip = "52.10.128.69".parse().unwrap();
+    let mut pkt1 = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4_cfg().unwrap().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+
+    // Process the packet through our port. We don't actually care about the
+    // contents here, we just want to make sure that the packet can be _sent at
+    // all_.
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert!(res.is_ok());
+
+    // Send another one, which should exhaust the TCP flow table limit we
+    // severely truncated above. Note we need to send to a different IP address.
+    // Let's use google.com.
+    let dst_ip = "142.251.46.238".parse().unwrap();
+    let mut pkt2 = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4_cfg().unwrap().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+    let res2 = g1.port.process(Out, &mut pkt2, ActionMeta::new());
+    assert_drop!(res2, DropReason::TcpErr);
 }

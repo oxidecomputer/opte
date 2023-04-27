@@ -233,14 +233,16 @@ pub fn oxide_net_setup(
     name: &str,
     cfg: &VpcCfg,
     vpc_map: Option<Arc<VpcMappings>>,
+    flow_table_limits: Option<NonZeroU32>,
 ) -> PortAndVps {
-    oxide_net_setup2(name, cfg, vpc_map, None)
+    oxide_net_setup2(name, cfg, vpc_map, flow_table_limits, None)
 }
 
 pub fn oxide_net_setup2(
     name: &str,
     cfg: &VpcCfg,
     vpc_map: Option<Arc<VpcMappings>>,
+    flow_table_limits: Option<NonZeroU32>,
     custom_updates: Option<&[&str]>,
 ) -> PortAndVps {
     // We have to setup the global VPC mapping state just like xde
@@ -290,8 +292,10 @@ pub fn oxide_net_setup2(
     };
 
     let vpc_net = VpcNetwork { cfg: cfg.clone() };
+    let uft_limit = flow_table_limits.unwrap_or(UFT_LIMIT.unwrap());
+    let tcp_limit = flow_table_limits.unwrap_or(TCP_LIMIT.unwrap());
     let port = oxide_net_builder(name, cfg, vpc_map.clone(), port_v2p)
-        .create(vpc_net, UFT_LIMIT.unwrap(), TCP_LIMIT.unwrap())
+        .create(vpc_net, uft_limit, tcp_limit)
         .unwrap();
 
     // Add router entry that allows the guest to send to other guests

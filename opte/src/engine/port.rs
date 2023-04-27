@@ -34,6 +34,7 @@ use super::rule::HdrTransformError;
 use super::rule::Rule;
 use super::tcp::TcpState;
 use super::tcp_state::TcpFlowState;
+use super::tcp_state::TcpFlowStateError;
 use super::HdlPktAction;
 use super::NetworkImpl;
 use crate::ddi::kstat;
@@ -84,6 +85,9 @@ pub enum ProcessError {
     HandlePkt(&'static str),
     HdrTransform(HdrTransformError),
     WriteError(super::packet::WriteError),
+    MissingFlow(InnerFlowId),
+    TcpFlow(TcpFlowStateError),
+    FlowTableFull { kind: &'static str, limit: u64 },
 }
 
 impl From<super::HdlPktError> for ProcessError {
@@ -1219,6 +1223,7 @@ impl<N: NetworkImpl> Port<N> {
     }
 }
 
+#[derive(Debug)]
 enum TcpMaybeClosed {
     Closed { ufid_inbound: Option<InnerFlowId> },
     NewState(TcpState),
@@ -1410,7 +1415,7 @@ impl<N: NetworkImpl> Port<N> {
         data: &mut PortData,
         pmeta: &PacketMeta,
         pkt_len: u64,
-    ) -> result::Result<TcpState, String> {
+    ) -> result::Result<TcpState, ProcessError> {
         use Direction::In;
 
         // All TCP flows are keyed with respect to the outbound Flow
@@ -1450,11 +1455,11 @@ impl<N: NetworkImpl> Port<N> {
                         Ok(tcp_state)
                     }
 
-                    Err(e) => Err(e),
+                    Err(e) => Err(ProcessError::TcpFlow(e)),
                 }
             }
 
-            None => Err(format!("TCP flow missing: {}", ufid_out)),
+            None => Err(ProcessError::MissingFlow(ufid_out)),
         }
     }
 
@@ -1466,7 +1471,7 @@ impl<N: NetworkImpl> Port<N> {
         ufid_in: &InnerFlowId,
         pmeta: &PacketMeta,
         pkt_len: u64,
-    ) -> result::Result<TcpState, String> {
+    ) -> result::Result<TcpState, ProcessError> {
         use Direction::In;
 
         // All TCP flows are keyed with respect to the outbound Flow
@@ -1509,7 +1514,7 @@ impl<N: NetworkImpl> Port<N> {
                         Ok(tcp_state)
                     }
 
-                    Err(e) => Err(e),
+                    Err(e) => Err(ProcessError::TcpFlow(e)),
                 };
 
                 // We need to store the UFID of the inbound packet
@@ -1532,7 +1537,7 @@ impl<N: NetworkImpl> Port<N> {
                 let tcp_state = match res {
                     Ok(TcpState::Closed) => return Ok(TcpState::Closed),
                     Ok(tcp_state) => tcp_state,
-                    Err(e) => return Err(e),
+                    Err(e) => return Err(ProcessError::TcpFlow(e)),
                 };
 
                 let tfes = TcpFlowEntryState::new_inbound(
@@ -1540,9 +1545,15 @@ impl<N: NetworkImpl> Port<N> {
                     tfs,
                     pkt_len,
                 );
-                // TODO kill unwrap
-                tcp_flows.add(ufid_out.clone(), tfes).unwrap();
-                Ok(tcp_state)
+                match tcp_flows.add(ufid_out.clone(), tfes) {
+                    Ok(_) => Ok(tcp_state),
+                    Err(OpteError::MaxCapacity(limit)) => {
+                        Err(ProcessError::FlowTableFull { kind: "TCP", limit })
+                    }
+                    Err(_) => unreachable!(
+                        "Cannot return other errors from FlowTable::add"
+                    ),
+                }
             }
         }
     }
@@ -1629,25 +1640,51 @@ impl<N: NetworkImpl> Port<N> {
 
                 Ok(_) => {
                     // We have a good TCP flow, create a new UFT entry.
-                    //
-                    // TODO kill unwrap
-                    data.uft_in.add(flow_before, hte).unwrap();
-                    return Ok(ProcessResult::Modified);
+                    match data.uft_in.add(flow_before, hte) {
+                        Ok(_) => Ok(ProcessResult::Modified),
+                        Err(OpteError::MaxCapacity(limit)) => {
+                            Err(ProcessError::FlowTableFull {
+                                kind: "UFT",
+                                limit,
+                            })
+                        }
+                        Err(_) => unreachable!(
+                            "Cannot return other errors from FlowTable::add"
+                        ),
+                    }
                 }
 
-                Err(e) => {
-                    self.tcp_err(data, In, e, pkt);
-                    return Ok(ProcessResult::Drop {
-                        reason: DropReason::TcpErr,
-                    });
+                Err(ProcessError::TcpFlow(err)) => {
+                    let e = format!("{err}");
+                    self.tcp_err(data, Direction::In, e, pkt);
+                    Ok(ProcessResult::Drop { reason: DropReason::TcpErr })
                 }
+                Err(ProcessError::MissingFlow(flow_id)) => {
+                    let e = format!("Missing TCP flow ID: {flow_id}");
+                    self.tcp_err(data, Direction::In, e, pkt);
+                    Ok(ProcessResult::Drop { reason: DropReason::TcpErr })
+                }
+                Err(ProcessError::FlowTableFull { kind, limit }) => {
+                    let e = format!("{kind} flow table full ({limit} entries)");
+                    self.tcp_err(data, Direction::In, e, pkt);
+                    Ok(ProcessResult::Drop { reason: DropReason::TcpErr })
+                }
+                res => unreachable!(
+                    "Cannot return other errors from \
+                    process_in_tcp_new, returned: {res:?}"
+                ),
             }
         } else {
-            // TODO kill unwrap
-            data.uft_in.add(flow_before, hte).unwrap();
+            match data.uft_in.add(flow_before, hte) {
+                Ok(_) => Ok(ProcessResult::Modified),
+                Err(OpteError::MaxCapacity(limit)) => {
+                    Err(ProcessError::FlowTableFull { kind: "UFT", limit })
+                }
+                Err(_) => unreachable!(
+                    "Cannot return other errors from FlowTable::add"
+                ),
+            }
         }
-
-        Ok(ProcessResult::Modified)
     }
 
     fn process_in(
@@ -1690,12 +1727,32 @@ impl<N: NetworkImpl> Port<N> {
                         pkt.len() as u64,
                     ) {
                         Ok(_) => return Ok(ProcessResult::Modified),
-                        Err(e) => {
+                        Err(ProcessError::TcpFlow(err)) => {
+                            let e = format!("{err}");
                             self.tcp_err(data, In, e, pkt);
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
                         }
+                        Err(ProcessError::MissingFlow(flow_id)) => {
+                            let e = format!("Missing TCP flow ID: {flow_id}");
+                            self.tcp_err(data, Direction::In, e, pkt);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpErr,
+                            });
+                        }
+                        Err(ProcessError::FlowTableFull { kind, limit }) => {
+                            let e = format!(
+                                "{kind} flow table full ({limit} entries)"
+                            );
+                            self.tcp_err(data, Direction::In, e, pkt);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpErr,
+                            });
+                        }
+                        _ => unreachable!(
+                            "Cannot return other errors from process_in_tcp_new"
+                        ),
                     }
                 } else {
                     return Ok(ProcessResult::Modified);
@@ -1726,7 +1783,7 @@ impl<N: NetworkImpl> Port<N> {
         ufid_out: &InnerFlowId,
         pmeta: &PacketMeta,
         pkt_len: u64,
-    ) -> result::Result<TcpMaybeClosed, String> {
+    ) -> result::Result<TcpMaybeClosed, ProcessError> {
         match tcp_flows.get_mut(ufid_out) {
             Some(entry) => {
                 entry.hit();
@@ -1757,11 +1814,11 @@ impl<N: NetworkImpl> Port<N> {
                     }
 
                     // TODO SDT probe for rejected packet.
-                    Err(e) => Err(e),
+                    Err(e) => Err(ProcessError::TcpFlow(e)),
                 }
             }
 
-            None => Err(format!("TCP flow missing: {}", ufid_out)),
+            None => Err(ProcessError::MissingFlow(*ufid_out)),
         }
     }
 
@@ -1773,7 +1830,7 @@ impl<N: NetworkImpl> Port<N> {
         ufid_out: &InnerFlowId,
         pmeta: &PacketMeta,
         pkt_len: u64,
-    ) -> result::Result<TcpMaybeClosed, String> {
+    ) -> result::Result<TcpMaybeClosed, ProcessError> {
         let tcp = pmeta.inner_tcp().unwrap();
         let tcp_flows = &mut data.tcp_flows;
 
@@ -1794,7 +1851,7 @@ impl<N: NetworkImpl> Port<N> {
 
                 match res {
                     Ok(tcp_state) => tcp_state,
-                    Err(e) => return Err(e),
+                    Err(e) => return Err(ProcessError::TcpFlow(e)),
                 }
             }
 
@@ -1811,13 +1868,23 @@ impl<N: NetworkImpl> Port<N> {
                     &tcp,
                 ) {
                     Ok(tcp_state) => tcp_state,
-                    Err(e) => return Err(e),
+                    Err(e) => return Err(ProcessError::TcpFlow(e)),
                 };
 
                 // The inbound UFID is determined on the inbound side.
                 let tfes = TcpFlowEntryState::new_outbound(tfs, pkt_len as u64);
-                // TODO kill unwrap
-                tcp_flows.add(ufid_out.clone(), tfes).unwrap();
+                match tcp_flows.add(ufid_out.clone(), tfes) {
+                    Ok(_) => {}
+                    Err(OpteError::MaxCapacity(limit)) => {
+                        return Err(ProcessError::FlowTableFull {
+                            kind: "TCP",
+                            limit,
+                        });
+                    }
+                    Err(_) => unreachable!(
+                        "Cannot return other errors from FlowTable::add"
+                    ),
+                };
                 tcp_state
             }
         };
@@ -1865,12 +1932,30 @@ impl<N: NetworkImpl> Port<N> {
                 // Continue with processing.
                 Ok(_) => (),
 
-                Err(e) => {
+                Err(ProcessError::TcpFlow(err)) => {
+                    let e = format!("{err}");
                     self.tcp_err(data, Out, e, pkt);
                     return Ok(ProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
                 }
+                Err(ProcessError::MissingFlow(flow_id)) => {
+                    let e = format!("Missing TCP flow ID: {flow_id}");
+                    self.tcp_err(data, Direction::In, e, pkt);
+                    return Ok(ProcessResult::Drop {
+                        reason: DropReason::TcpErr,
+                    });
+                }
+                Err(ProcessError::FlowTableFull { kind, limit }) => {
+                    let e = format!("{kind} flow table full ({limit} entries)");
+                    self.tcp_err(data, Direction::In, e, pkt);
+                    return Ok(ProcessResult::Drop {
+                        reason: DropReason::TcpErr,
+                    });
+                }
+                res => unreachable!(
+                    "Cannot return other errors from process_in_tcp_new, returned: {res:?}"
+                ),
             }
         }
 
@@ -1885,10 +1970,15 @@ impl<N: NetworkImpl> Port<N> {
                 if flow_before == FLOW_ID_DEFAULT || tcp_closed {
                     return Ok(ProcessResult::Modified);
                 }
-
-                // TODO kill unwrap
-                data.uft_out.add(flow_before, hte).unwrap();
-                Ok(ProcessResult::Modified)
+                match data.uft_out.add(flow_before, hte) {
+                    Ok(_) => Ok(ProcessResult::Modified),
+                    Err(OpteError::MaxCapacity(limit)) => {
+                        Err(ProcessError::FlowTableFull { kind: "UFT", limit })
+                    }
+                    Err(_) => unreachable!(
+                        "Cannot return other errors from FlowTable::add"
+                    ),
+                }
             }
 
             Ok(LayerResult::Hairpin(hppkt)) => {
@@ -1949,12 +2039,23 @@ impl<N: NetworkImpl> Port<N> {
                             ufid_in = ufid_inbound;
                         }
 
-                        Err(e) => {
+                        Err(ProcessError::TcpFlow(err)) => {
+                            let e = format!("{err}");
                             self.tcp_err(data, Out, e, pkt);
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
                         }
+                        Err(ProcessError::MissingFlow(flow_id)) => {
+                            let e = format!("Missing TCP flow ID: {flow_id}");
+                            self.tcp_err(data, Direction::In, e, pkt);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpErr,
+                            });
+                        }
+                        _ => unreachable!(
+                            "Cannot return other errors from process_in_tcp_new"
+                        ),
                     }
                 }
 

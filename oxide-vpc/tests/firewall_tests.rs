@@ -6,11 +6,12 @@ use common::*;
 fn firewall_replace_rules() {
     let g1_cfg = g1_cfg();
     let g2_cfg = g2_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
-    let mut g2 = oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()));
+    let mut g2 =
+        oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()), None);
     g2.port.start();
     set!(g2, "port_state=running");
 
@@ -155,7 +156,8 @@ fn firewall_vni_inbound() {
     let g1_ext_ip = "10.77.78.9".parse().unwrap();
     g1_cfg.set_ext_ipv4(g1_ext_ip);
     let custom = ["set:nat.rules.in=1", "set:nat.rules.out=3"];
-    let mut g1 = oxide_net_setup2("g1_port", &g1_cfg, None, Some(&custom));
+    let mut g1 =
+        oxide_net_setup2("g1_port", &g1_cfg, None, None, Some(&custom));
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -245,7 +247,7 @@ fn firewall_vni_outbound() {
     // Setup g1 as usual.
     // ================================================================
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
