@@ -615,7 +615,7 @@ fn guest_to_guest() {
         ]
     );
     assert_eq!(pkt2.body_offset(), TCP4_SZ + HTTP_SYN_OPTS_LEN);
-    assert_eq!(pkt2.body_seg(), 1);
+    assert_eq!(pkt2.body_seg(), 0);
 
     let g2_meta = pkt2.meta();
     assert!(g2_meta.outer.ether.is_none());
