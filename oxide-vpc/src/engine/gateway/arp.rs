@@ -6,7 +6,6 @@
 
 //! The ARP implementation of the Virtual Gateway.
 
-use crate::api::Ipv4Cfg;
 use crate::api::VpcCfg;
 use core::result::Result;
 use opte::api::Direction;
@@ -20,11 +19,7 @@ use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
 
-pub fn setup(
-    layer: &mut Layer,
-    cfg: &VpcCfg,
-    ip_cfg: &Ipv4Cfg,
-) -> Result<(), OpteError> {
+pub fn setup(layer: &mut Layer, cfg: &VpcCfg) -> Result<(), OpteError> {
     // ================================================================
     // Outbound ARP Request for Gateway, from Guest
     //
@@ -42,29 +37,6 @@ pub fn setup(
         ))]),
     ]);
     layer.add_rule(Direction::Out, rule.finalize());
-
-    // ================================================================
-    // Proxy ARP for any incoming requests for guest's externally
-    // visible IPs.
-    //
-    // XXX-EXT-IP This is a hack to get guest access working until we
-    // have boundary services integrated.
-    // ================================================================
-    if ip_cfg.external_ips.as_ref().is_some() || ip_cfg.snat.is_some() {
-        if cfg.proxy_arp_enable {
-            let mut rule = Rule::new(1, Action::HandlePacket);
-            rule.add_predicates(vec![
-                Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
-                    ETHER_TYPE_ARP,
-                )]),
-                Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-                    MacAddr::BROADCAST,
-                )]),
-            ]);
-
-            layer.add_rule(Direction::In, rule.finalize());
-        }
-    }
 
     Ok(())
 }

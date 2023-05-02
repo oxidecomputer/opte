@@ -188,9 +188,6 @@ enum Command {
         domain_list: Vec<DomainName>,
 
         #[structopt(long)]
-        phys_gw_mac: Option<MacAddr>,
-
-        #[structopt(long)]
         external_ip: Option<IpAddr>,
 
         #[structopt(long)]
@@ -355,7 +352,6 @@ fn main() -> anyhow::Result<()> {
             snat_start,
             snat_end,
             domain_list,
-            phys_gw_mac,
             external_ip,
             passthrough,
         } => {
@@ -454,11 +450,6 @@ fn main() -> anyhow::Result<()> {
                     mac: bsvc_mac,
                 },
                 domain_list,
-                // XXX-EXT-IP: This is part of the external IP hack. We're
-                // removing this shortly, and won't be supporting creating OPTE
-                // ports through `opteadm` that use the hack.
-                proxy_arp_enable: false,
-                phys_gw_mac,
             };
 
             hdl.create_xde(&name, cfg, passthrough)?;

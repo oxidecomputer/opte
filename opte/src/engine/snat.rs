@@ -6,7 +6,6 @@
 
 //! Types for working with IP Source NAT, both IPv4 and IPv6.
 
-use super::ether::EtherMod;
 use super::headers::HeaderAction;
 use super::headers::IpMod;
 use super::headers::UlpGenericModify;
@@ -44,7 +43,6 @@ use opte_api::Direction;
 use opte_api::IpAddr;
 use opte_api::Ipv4Addr;
 use opte_api::Ipv6Addr;
-use opte_api::MacAddr;
 use opte_api::Protocol;
 use smoltcp::wire::Icmpv4Message;
 use smoltcp::wire::Icmpv4Packet;
@@ -188,17 +186,11 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
 pub struct SNat {
     priv_ip: Ipv4Addr,
     ip_pool: Arc<NatPool<Ipv4Addr>>,
-    // XXX-EXT-IP
-    phys_gw_mac: Option<MacAddr>,
 }
 
 impl SNat {
-    pub fn new(
-        addr: Ipv4Addr,
-        ip_pool: Arc<NatPool<Ipv4Addr>>,
-        phys_gw_mac: Option<MacAddr>,
-    ) -> Self {
-        SNat { priv_ip: addr, ip_pool, phys_gw_mac }
+    pub fn new(addr: Ipv4Addr, ip_pool: Arc<NatPool<Ipv4Addr>>) -> Self {
+        SNat { priv_ip: addr, ip_pool }
     }
 
     // A helper method for generating an SNAT + ICMP action descriptor.
@@ -233,7 +225,6 @@ impl SNat {
                 // Panic: We know this is safe because we make it here
                 // only if this ICMP message is an Echo Request.
                 echo_ident: icmp.echo_ident(),
-                phys_gw_mac: self.phys_gw_mac,
             };
 
             Ok(AllowOrDeny::Allow(Arc::new(desc)))
@@ -268,7 +259,6 @@ impl StatefulAction for SNat {
                         pool: pool.clone(),
                         priv_ip: self.priv_ip.into(),
                         priv_port: priv_port,
-                        phys_gw_mac: self.phys_gw_mac,
                         nat,
                     };
 
@@ -302,17 +292,11 @@ impl StatefulAction for SNat {
 pub struct SNat6 {
     priv_ip: Ipv6Addr,
     ip_pool: Arc<NatPool<Ipv6Addr>>,
-    // XXX-EXT-IP
-    phys_gw_mac: Option<MacAddr>,
 }
 
 impl SNat6 {
-    pub fn new(
-        addr: Ipv6Addr,
-        ip_pool: Arc<NatPool<Ipv6Addr>>,
-        phys_gw_mac: Option<MacAddr>,
-    ) -> Self {
-        SNat6 { priv_ip: addr, ip_pool, phys_gw_mac }
+    pub fn new(addr: Ipv6Addr, ip_pool: Arc<NatPool<Ipv6Addr>>) -> Self {
+        SNat6 { priv_ip: addr, ip_pool }
     }
 }
 
@@ -331,7 +315,6 @@ impl StatefulAction for SNat6 {
                     pool: pool.clone(),
                     priv_ip: self.priv_ip.into(),
                     priv_port: priv_port,
-                    phys_gw_mac: self.phys_gw_mac,
                     nat,
                 };
 
@@ -373,8 +356,6 @@ pub struct SNatDesc<T: ConcreteIpAddr> {
     nat: NatPoolEntry<T>,
     priv_ip: T,
     priv_port: u16,
-    // XXX-EXT-IP
-    phys_gw_mac: Option<MacAddr>,
 }
 
 pub const SNAT_NAME: &'static str = "SNAT";
@@ -389,7 +370,7 @@ impl ActionDesc for SNatDesc<Ipv4Addr> {
                     ..Default::default()
                 });
 
-                let mut ht = HdrTransform {
+                HdrTransform {
                     name: SNAT_NAME.to_string(),
                     inner_ip: HeaderAction::Modify(ip, PhantomData),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
@@ -400,22 +381,7 @@ impl ActionDesc for SNatDesc<Ipv4Addr> {
                         ..Default::default()
                     }),
                     ..Default::default()
-                };
-
-                // XXX-EXT-IP hack to rewrite destination MAC adress
-                // from virtual gateway addr to the real gateway addr
-                // on the same subnet as the external IP.
-                if self.phys_gw_mac.is_some() {
-                    ht.inner_ether = HeaderAction::Modify(
-                        EtherMod {
-                            dst: Some(self.phys_gw_mac.unwrap()),
-                            ..Default::default()
-                        },
-                        PhantomData,
-                    );
                 }
-
-                ht
             }
 
             // Inbound traffic needs its destination IP and
@@ -456,7 +422,8 @@ impl ActionDesc for SNatDesc<Ipv6Addr> {
                     src: Some(self.nat.ip),
                     ..Default::default()
                 });
-                let mut ht = HdrTransform {
+
+                HdrTransform {
                     name: SNAT_NAME.to_string(),
                     inner_ip: HeaderAction::Modify(ip, PhantomData),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
@@ -467,22 +434,7 @@ impl ActionDesc for SNatDesc<Ipv6Addr> {
                         ..Default::default()
                     }),
                     ..Default::default()
-                };
-
-                // XXX-EXT-IP hack to rewrite destination MAC adress
-                // from virtual gateway addr to the real gateway addr
-                // on the same subnet as the external IP.
-                if self.phys_gw_mac.is_some() {
-                    ht.inner_ether = HeaderAction::Modify(
-                        EtherMod {
-                            dst: Some(self.phys_gw_mac.unwrap()),
-                            ..Default::default()
-                        },
-                        PhantomData,
-                    );
                 }
-
-                ht
             }
 
             // Inbound traffic needs its destination IP and
@@ -526,8 +478,6 @@ pub struct SNatIcmpEchoDesc {
     nat: NatPoolEntry<Ipv4Addr>,
     priv_ip: Ipv4Addr,
     echo_ident: u16,
-    // XXX-EXT-IP
-    phys_gw_mac: Option<MacAddr>,
 }
 
 pub const SNAT_ICMP_ECHO_NAME: &'static str = "SNAT_ICMP_ECHO";
@@ -541,26 +491,12 @@ impl ActionDesc for SNatIcmpEchoDesc {
                     src: Some(self.nat.ip),
                     ..Default::default()
                 });
-                let mut ht = HdrTransform {
+
+                HdrTransform {
                     name: SNAT_NAME.to_string(),
                     inner_ip: HeaderAction::Modify(ip, PhantomData),
                     ..Default::default()
-                };
-
-                // XXX-EXT-IP hack to rewrite destination MAC adress
-                // from virtual gateway addr to the real gateway addr
-                // on the same subnet as the external IP.
-                if self.phys_gw_mac.is_some() {
-                    ht.inner_ether = HeaderAction::Modify(
-                        EtherMod {
-                            dst: Some(self.phys_gw_mac.unwrap()),
-                            ..Default::default()
-                        },
-                        PhantomData,
-                    );
                 }
-
-                ht
             }
 
             // Inbound traffic needs its destination IP and
@@ -709,7 +645,7 @@ mod test {
 
         let pool = Arc::new(NatPool::new());
         pool.add(priv_ip, pub_ip, 8765..=8765);
-        let snat = SNat::new(priv_ip, pool.clone(), None);
+        let snat = SNat::new(priv_ip, pool.clone());
         let mut action_meta = ActionMeta::new();
         assert!(pool.verify_available(priv_ip, pub_ip, pub_port));
 

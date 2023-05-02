@@ -18,7 +18,6 @@ use super::router::RouterTargetInternal;
 use super::router::ROUTER_LAYER_NAME;
 use crate::api::Ipv4Cfg;
 use crate::api::Ipv6Cfg;
-use crate::api::MacAddr;
 use crate::api::VpcCfg;
 use core::num::NonZeroU32;
 use core::result::Result;
@@ -62,10 +61,10 @@ pub fn setup(
     };
     let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), actions, ft_limit);
     if let Some(ipv4_cfg) = cfg.ipv4_cfg() {
-        setup_ipv4_nat(&mut layer, ipv4_cfg, cfg.phys_gw_mac)?;
+        setup_ipv4_nat(&mut layer, ipv4_cfg)?;
     }
     if let Some(ipv6_cfg) = cfg.ipv6_cfg() {
-        setup_ipv6_nat(&mut layer, ipv6_cfg, cfg.phys_gw_mac)?;
+        setup_ipv6_nat(&mut layer, ipv6_cfg)?;
     }
     pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))
 }
@@ -73,14 +72,12 @@ pub fn setup(
 fn setup_ipv4_nat(
     layer: &mut Layer,
     ip_cfg: &Ipv4Cfg,
-    // XXX-EXT-IP Remove
-    phys_gw_mac: Option<MacAddr>,
 ) -> Result<(), OpteError> {
     // When it comes to NAT we always prefer using 1:1 NAT of external
     // IP to SNAT. To achieve this we place the NAT rules at a lower
     // priority than SNAT.
     if let Some(ip4) = ip_cfg.external_ips {
-        let nat = Arc::new(Nat::new(ip_cfg.private_ip, ip4, phys_gw_mac));
+        let nat = Arc::new(Nat::new(ip_cfg.private_ip, ip4));
 
         // 1:1 NAT outbound packets destined for internet gateway.
         let mut out_nat =
@@ -110,7 +107,7 @@ fn setup_ipv4_nat(
             snat_cfg.external_ip,
             snat_cfg.ports.clone(),
         );
-        let snat = SNat::new(ip_cfg.private_ip, Arc::new(pool), phys_gw_mac);
+        let snat = SNat::new(ip_cfg.private_ip, Arc::new(pool));
         let mut rule =
             Rule::new(SNAT_PRIORITY, Action::Stateful(Arc::new(snat)));
 
@@ -129,14 +126,12 @@ fn setup_ipv4_nat(
 fn setup_ipv6_nat(
     layer: &mut Layer,
     ip_cfg: &Ipv6Cfg,
-    // XXX-EXT-IP Remove
-    phys_gw_mac: Option<MacAddr>,
 ) -> Result<(), OpteError> {
     // When it comes to NAT we always prefer using 1:1 NAT of external
     // IP to SNAT. To achieve this we place the NAT rules at a lower
     // priority than SNAT.
     if let Some(ip6) = ip_cfg.external_ips {
-        let nat = Arc::new(Nat::new(ip_cfg.private_ip, ip6, phys_gw_mac));
+        let nat = Arc::new(Nat::new(ip_cfg.private_ip, ip6));
 
         // 1:1 NAT outbound packets destined for internet gateway.
         let mut out_nat =
@@ -166,7 +161,7 @@ fn setup_ipv6_nat(
             snat_cfg.external_ip,
             snat_cfg.ports.clone(),
         );
-        let snat = SNat6::new(ip_cfg.private_ip, Arc::new(pool), phys_gw_mac);
+        let snat = SNat6::new(ip_cfg.private_ip, Arc::new(pool));
         let mut rule =
             Rule::new(SNAT_PRIORITY, Action::Stateful(Arc::new(snat)));
 

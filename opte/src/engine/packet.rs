@@ -64,7 +64,6 @@ use super::Direction;
 use illumos_sys_hdrs::dblk_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
-use opte_api::MacAddr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -1009,19 +1008,6 @@ impl From<smoltcp::Error> for BodyTransformError {
 }
 
 impl Packet<Parsed> {
-    /// XXX-EXT-IP This is here purely for the use by the external IP
-    /// hack.
-    pub fn write_dst_mac(&mut self, addr: MacAddr) {
-        self.state.meta.inner.ether.dst = addr.into();
-        let off = self.state.hdr_offsets.inner.ether.seg_pos;
-        let mut rdr = PacketReaderMut::new(&mut self.segs[0..1]);
-        // Unwrap: Assuming we didn't mess up calculating the offsets,
-        // we know we can seek forward by this amount.
-        rdr.seek(off).unwrap();
-        let mut ether = EtherHdr::parse(&mut rdr).unwrap();
-        ether.set_dst(addr);
-    }
-
     pub fn body_csum(&self) -> Option<Checksum> {
         self.state.body_csum
     }

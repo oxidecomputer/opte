@@ -6,7 +6,6 @@
 
 //! 1:1 NAT.
 
-use super::ether::EtherMod;
 use super::headers::HeaderAction;
 use super::headers::IpMod;
 use super::ip4::Ipv4Mod;
@@ -27,7 +26,6 @@ use core::fmt;
 use core::marker::PhantomData;
 use opte_api::Direction;
 use opte_api::IpAddr;
-use opte_api::MacAddr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -46,22 +44,12 @@ cfg_if! {
 pub struct Nat {
     priv_ip: IpAddr,
     external_ip: IpAddr,
-    // XXX-EXT-IP Remove
-    phys_gw_mac: Option<MacAddr>,
 }
 
 impl Nat {
     /// Create a new NAT mapping from a private to public IP address.
-    pub fn new<T: ConcreteIpAddr>(
-        priv_ip: T,
-        external_ip: T,
-        phys_gw_mac: Option<MacAddr>,
-    ) -> Self {
-        Self {
-            priv_ip: priv_ip.into(),
-            external_ip: external_ip.into(),
-            phys_gw_mac,
-        }
+    pub fn new<T: ConcreteIpAddr>(priv_ip: T, external_ip: T) -> Self {
+        Self { priv_ip: priv_ip.into(), external_ip: external_ip.into() }
     }
 }
 
@@ -78,15 +66,8 @@ impl StatefulAction for Nat {
         _pkt: &Packet<Parsed>,
         _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
-        let desc = NatDesc {
-            priv_ip: self.priv_ip,
-            external_ip: self.external_ip,
-            // XXX-EXT-IP This is assuming ext_ip_hack. All packets
-            // outbound for IG will have their dest mac rewritten to
-            // go to physical gateway, which will then properly route
-            // the destination IP.
-            phys_gw_mac: self.phys_gw_mac.clone(),
-        };
+        let desc =
+            NatDesc { priv_ip: self.priv_ip, external_ip: self.external_ip };
         Ok(AllowOrDeny::Allow(Arc::new(desc)))
     }
 
@@ -103,8 +84,6 @@ impl StatefulAction for Nat {
 pub struct NatDesc {
     priv_ip: IpAddr,
     external_ip: IpAddr,
-    // XXX-EXT-IP
-    phys_gw_mac: Option<MacAddr>,
 }
 
 pub const NAT_NAME: &'static str = "NAT";
@@ -123,26 +102,12 @@ impl ActionDesc for NatDesc {
                         ..Default::default()
                     }),
                 };
-                let mut ht = HdrTransform {
+
+                HdrTransform {
                     name: NAT_NAME.to_string(),
                     inner_ip: HeaderAction::Modify(ip, PhantomData),
                     ..Default::default()
-                };
-
-                // XXX-EXT-IP hack to rewrite destination MAC adress
-                // from virtual gateway addr to the real gateway addr
-                // on the same subnet as the external IP.
-                if self.phys_gw_mac.is_some() {
-                    ht.inner_ether = HeaderAction::Modify(
-                        EtherMod {
-                            dst: Some(self.phys_gw_mac.unwrap()),
-                            ..Default::default()
-                        },
-                        core::marker::PhantomData,
-                    )
                 }
-
-                ht
             }
 
             Direction::In => {
@@ -196,8 +161,7 @@ mod test {
         let pub_ip = "52.10.128.69".parse().unwrap();
         let outside_ip = "76.76.21.21".parse().unwrap();
         let outside_port = 80;
-        let gw_mac = MacAddr::from([0x78, 0x23, 0xae, 0x5d, 0x4f, 0x0d]);
-        let nat = Nat::new(priv_ip, pub_ip, Some(gw_mac));
+        let nat = Nat::new(priv_ip, pub_ip);
         let mut ameta = ActionMeta::new();
 
         // ================================================================
@@ -245,7 +209,7 @@ mod test {
 
         let ether_meta = pmo.inner.ether;
         assert_eq!(ether_meta.src, priv_mac);
-        assert_eq!(ether_meta.dst, gw_mac);
+        assert_eq!(ether_meta.dst, dest_mac);
 
         let ip4_meta = match pmo.inner.ip.as_ref().unwrap() {
             IpMeta::Ip4(v) => v,
