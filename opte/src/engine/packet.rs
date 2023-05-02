@@ -1892,10 +1892,10 @@ impl PacketSeg {
             // sized blocks. This is not a generally expected thing and has
             // caused NIC hardware to stop working. Stopping short of a
             // production panic, but this should fail any tests.
-            #[cfg(any(feature = "std", test))]
-            if (*seg.mp).b_wptr == (*seg.mp).b_rptr {
-                panic!("zero-length continuation");
-            }
+            debug_assert!(
+                (*seg.mp).b_wptr != (*seg.mp).b_rptr,
+                "zero-length continuation",
+            );
             (*self.mp).b_cont = seg.mp
         };
     }
