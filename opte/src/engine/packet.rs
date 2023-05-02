@@ -1409,12 +1409,24 @@ impl Packet<Parsed> {
                     assert_eq!(body.seg_offset - old_hdr_len, 0);
                     body.seg_offset = 0;
                 }
-                seg.link(&segs[0]);
-
-                // TODO-performance: This may necessitate another allocation. We
-                // will want to measure how often we hit this branch, and the
-                // impact of the allocation.
-                segs.insert(0, seg);
+                if segs[0].len() > 0 {
+                    seg.link(&segs[0]);
+                    // TODO-performance: This may necessitate another allocation. We
+                    // will want to measure how often we hit this branch, and the
+                    // impact of the allocation.
+                    segs.insert(0, seg);
+                } else {
+                    // If we shrunk the segment to nothing, do not link a zero
+                    // sized segment as a continuation block. This is not a
+                    // generally expected thing and has caused NIC hardware to
+                    // stop working.
+                    if segs.len() > 1 {
+                        seg.link(&segs[1]);
+                    }
+                    let mut zero_sized = core::mem::replace(&mut segs[0], seg);
+                    zero_sized.unlink();
+                    zero_sized.free();
+                }
 
                 // We've added a segment to the front of the list; the
                 // body segment moves over by one.
@@ -1772,6 +1784,16 @@ impl PacketSeg {
         unsafe { PacketSeg::wrap_mblk(allocb(len)) }
     }
 
+    fn free(&mut self) {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                unsafe { ddi::freemsg(self.mp) };
+            } else {
+                mock_freemsg(self.mp);
+            }
+        }
+    }
+
     /// Return the bytes of the packet.
     ///
     /// This is useful for testing.
@@ -1865,7 +1887,23 @@ impl PacketSeg {
     }
 
     fn link(&mut self, seg: &PacketSeg) {
-        unsafe { (*self.mp).b_cont = seg.mp };
+        unsafe {
+            // We should not be creating message block continuations to zero
+            // sized blocks. This is not a generally expected thing and has
+            // caused NIC hardware to stop working. Stopping short of a
+            // production panic, but this should fail any tests.
+            #[cfg(any(feature = "std", test))]
+            if (*seg.mp).b_wptr == (*seg.mp).b_rptr {
+                panic!("zero-length continuation");
+            }
+            (*self.mp).b_cont = seg.mp
+        };
+    }
+
+    fn unlink(&mut self) {
+        unsafe {
+            (*self.mp).b_cont = ptr::null_mut();
+        }
     }
 
     // The amount of space available between the data buffer's base
