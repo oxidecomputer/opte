@@ -830,7 +830,7 @@ fn guest_to_internet_ipv4() {
 #[test]
 fn guest_to_internet_ipv6() {
     let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
 
@@ -3109,7 +3109,7 @@ fn no_panic_on_flow_table_full() {
     incr!(g1, ["epoch", "router.rules.out"]);
 
     // Send one TCP packet to `zinascii.com`.
-    let dst_ip = "52.10.128.69".parse().unwrap();
+    let dst_ip: Ipv4Addr = "52.10.128.69".parse().unwrap();
     let mut pkt1 = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4_cfg().unwrap().private_ip,
@@ -3126,7 +3126,7 @@ fn no_panic_on_flow_table_full() {
     // Send another one, which should exhaust the TCP flow table limit we
     // severely truncated above. Note we need to send to a different IP address.
     // Let's use google.com.
-    let dst_ip = "142.251.46.238".parse().unwrap();
+    let dst_ip: Ipv4Addr = "142.251.46.238".parse().unwrap();
     let mut pkt2 = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4_cfg().unwrap().private_ip,
