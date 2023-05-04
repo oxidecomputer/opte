@@ -1704,6 +1704,7 @@ fn next_hop<'a>(
         }
         let ill = (*ire).ire_ill;
         if ill.is_null() {
+            ip::ire_refrele(ire);
             opte::engine::dbg(format!(
                 "destination ILL is NULL for {:?}",
                 ip6_dst
@@ -1722,6 +1723,7 @@ fn next_hop<'a>(
         // address. This is going to return one of the `fe80::/10`
         // entries.
         let ireu = (*ire).ire_u;
+        ip::ire_refrele(ire);
         let gw = ireu.ire6_u.ire6_gateway_addr;
         let gw_ip6 = Ipv6Addr::from(&ireu.ire6_u.ire6_gateway_addr);
 
@@ -1758,6 +1760,7 @@ fn next_hop<'a>(
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
+        ip::ire_refrele(gw_ire);
 
         // Step (3): Determine the source address of the outer frame
         // from the physical address of the IP Lower Layer object
