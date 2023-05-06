@@ -25,6 +25,7 @@ use crate::mac::MacHandle;
 use crate::mac::MacOpenFlags;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
+use crate::mac::MacUnicastHandle;
 use crate::secpolicy;
 use crate::sys;
 use crate::warn;
@@ -205,6 +206,9 @@ struct xde_underlay_port {
 
     /// MAC client handle for tx/rx on the underlay link.
     mch: Arc<MacClientHandle>,
+
+    /// MAC client handle for tx/rx on the underlay link.
+    muh: MacUnicastHandle,
 
     /// MAC promiscuous handle for receiving packets on the underlay link.
     mph: MacPromiscHandle,
@@ -910,9 +914,7 @@ fn create_underlay_port(
 
     // Get a mac client handle as well.
     //
-    // We specify `NO_UNICAST_ADDR` here to request a minimal datapath setup.
-    // Any specific unicast addresses will be associated with the OPTE ports themselves.
-    let oflags = MacOpenFlags::NO_UNICAST_ADDR;
+    let oflags = MacOpenFlags::NONE;
     let mch = MacClientHandle::open(&mh, Some(mc_name), oflags, 0)
         .map(Arc::new)
         .map_err(|e| OpteError::System {
@@ -935,12 +937,19 @@ fn create_underlay_port(
             msg: format!("mac_promisc_add failed for {link_name}: {e}"),
         })?;
 
+    let mac = EtherAddr::from([0xa8, 0x40, 0x25, 0xff, 0x00, 0x00]);
+    let muh = mch.add_unicast(mac).map_err(|e| OpteError::System {
+        errno: EFAULT,
+        msg: format!("mac_unicast_add failed for {link_name}: {e}"),
+    })?;
+
     Ok(xde_underlay_port {
         name: link_name,
         mac: mh.get_mac_addr(),
         mh,
         mch,
         mph,
+        muh,
     })
 }
 
@@ -1095,8 +1104,9 @@ unsafe extern "C" fn xde_detach(
                 // We explicitly drop them in order here to ensure there are no
                 // outstanding refs.
 
-                // 1. Remove promisc callback
+                // 1. Remove promisc and unicast callbacks
                 drop(u.mph);
+                drop(u.muh);
 
                 // 2. Remove MAC client handle
                 if Arc::strong_count(&u.mch) > 1 {
@@ -1533,6 +1543,49 @@ unsafe extern "C" fn xde_mc_tx(
     ptr::null_mut()
 }
 
+struct DropRef<DropFn, Arg>
+where
+    DropFn: Fn(*mut Arg) -> (),
+{
+    func: DropFn,
+    arg: *mut Arg,
+}
+
+impl<DropFn, Arg> DropRef<DropFn, Arg>
+where
+    DropFn: Fn(*mut Arg) -> (),
+{
+    fn new(func: DropFn, arg: *mut Arg) -> Self {
+        Self { func, arg }
+    }
+    fn inner(&self) -> *mut Arg {
+        self.arg
+    }
+}
+
+impl<DropFn, Arg> Drop for DropRef<DropFn, Arg>
+where
+    DropFn: Fn(*mut Arg) -> (),
+{
+    fn drop(&mut self) {
+        if !self.arg.is_null() {
+            (self.func)(self.arg);
+        }
+    }
+}
+
+fn ire_refrele(ire: *mut ip::ire_t) {
+    unsafe { ip::ire_refrele(ire) }
+}
+
+fn nce_refrele(ire: *mut ip::nce_t) {
+    unsafe { ip::nce_refrele(ire) }
+}
+
+fn netstack_rele(ns: *mut ip::netstack_t) {
+    unsafe { ip::netstack_rele(ns) }
+}
+
 // At this point the core engine of OPTE has delivered a Geneve
 // encapsulated guest Ethernet Frame (also simply referred to as "the
 // packet") to xde to be sent to the specific outer IPv6 destination
@@ -1660,9 +1713,10 @@ fn next_hop<'a>(
 ) -> (EtherAddr, EtherAddr, &'a xde_underlay_port) {
     unsafe {
         // Use the GZ's routing table.
-        let netstack = ip::netstack_find_by_zoneid(0);
-        assert!(!netstack.is_null());
-        let ipst = (*netstack).netstack_u.nu_s.nu_ip;
+        let netstack =
+            DropRef::new(netstack_rele, ip::netstack_find_by_zoneid(0));
+        assert!(!netstack.inner().is_null());
+        let ipst = (*netstack.inner()).netstack_u.nu_s.nu_ip;
         assert!(!ipst.is_null());
 
         let addr = ip::in6_addr_t {
@@ -1675,11 +1729,14 @@ fn next_hop<'a>(
 
         // Step (1): Lookup the IRE for the destination. This is going
         // to return one of the default gateway entries.
-        let ire = ip::ire_ftable_lookup_simple_v6(
-            &addr,
-            xmit_hint,
-            ipst,
-            &mut generation_op as *mut ip::uint_t,
+        let ire = DropRef::new(
+            ire_refrele,
+            ip::ire_ftable_lookup_simple_v6(
+                &addr,
+                xmit_hint,
+                ipst,
+                &mut generation_op as *mut ip::uint_t,
+            ),
         );
 
         // TODO If there is no entry should we return host
@@ -1689,7 +1746,7 @@ fn next_hop<'a>(
         // routing table is misconfigured, but in reality it would be
         // an underlay network issue. How do we convey this situation
         // to the user/operator?
-        if ire.is_null() {
+        if ire.inner().is_null() {
             opte::engine::dbg(format!("no IRE for destination {:?}", ip6_dst));
             next_hop_probe(
                 ip6_dst,
@@ -1700,9 +1757,8 @@ fn next_hop<'a>(
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
-        let ill = (*ire).ire_ill;
+        let ill = (*ire.inner()).ire_ill;
         if ill.is_null() {
-            ip::ire_refrele(ire);
             opte::engine::dbg(format!(
                 "destination ILL is NULL for {:?}",
                 ip6_dst
@@ -1718,10 +1774,9 @@ fn next_hop<'a>(
         }
 
         // Step (2): Lookup the IRE for the gateway's link-local
-        // address. This is going to return one of the `fe80::/10`
+        // address. This is geing to return one of the `fe80::/10`
         // entries.
-        let ireu = (*ire).ire_u;
-        ip::ire_refrele(ire);
+        let ireu = (*ire.inner()).ire_u;
         let gw = ireu.ire6_u.ire6_gateway_addr;
         let gw_ip6 = Ipv6Addr::from(&ireu.ire6_u.ire6_gateway_addr);
 
@@ -1733,21 +1788,24 @@ fn next_hop<'a>(
         // fe80::/10 route, we must restrict our search to the interface that
         // actually has a route to the desired (non-link-local) destination.
         let flags = ip::MATCH_IRE_ILL as i32;
-        let gw_ire = ip::ire_ftable_lookup_v6(
-            &gw,
-            ptr::null(),
-            ptr::null(),
-            0,
-            ill,
-            sys::ALL_ZONES,
-            ptr::null(),
-            flags,
-            xmit_hint,
-            ipst,
-            &mut generation_op as *mut ip::uint_t,
+        let gw_ire = DropRef::new(
+            ire_refrele,
+            ip::ire_ftable_lookup_v6(
+                &gw,
+                ptr::null(),
+                ptr::null(),
+                0,
+                ill,
+                sys::ALL_ZONES,
+                ptr::null(),
+                flags,
+                xmit_hint,
+                ipst,
+                &mut generation_op as *mut ip::uint_t,
+            ),
         );
 
-        if gw_ire.is_null() {
+        if gw_ire.inner().is_null() {
             opte::engine::dbg(format!("no IRE for gateway {:?}", gw_ip6));
             next_hop_probe(
                 ip6_dst,
@@ -1758,7 +1816,6 @@ fn next_hop<'a>(
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
-        ip::ire_refrele(gw_ire);
 
         // Step (3): Determine the source address of the outer frame
         // from the physical address of the IP Lower Layer object
@@ -1794,8 +1851,8 @@ fn next_hop<'a>(
         // Step (4): Determine the destination address of the outer
         // frame by retrieving the NCE entry for the gateway's
         // link-local address.
-        let nce = ip::nce_lookup_v6(ill, &gw);
-        if nce.is_null() {
+        let nce = DropRef::new(nce_refrele, ip::nce_lookup_v6(ill, &gw));
+        if nce.inner().is_null() {
             opte::engine::dbg(format!("no NCE for gateway {:?}", gw_ip6));
             next_hop_probe(
                 ip6_dst,
@@ -1807,7 +1864,7 @@ fn next_hop<'a>(
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
 
-        let nce_common = (*nce).nce_common;
+        let nce_common = (*nce.inner()).nce_common;
         if nce_common.is_null() {
             opte::engine::dbg(format!(
                 "no NCE common for gateway {:?}",
