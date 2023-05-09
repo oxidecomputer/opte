@@ -107,8 +107,7 @@ impl OpteAdm {
         rules: Vec<FirewallRule>,
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetFwRules;
-        let req =
-            SetFwRulesReq { port_name: port_name.to_string(), rules: rules };
+        let req = SetFwRulesReq { port_name: port_name.to_string(), rules };
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
