@@ -5,6 +5,8 @@ use oxide_vpc::api::{
     FirewallAction, FirewallRule, IpCfg, IpCidr, Ipv4Cfg, PhysNet, Ports,
     RouterTarget, SNat4Cfg, SetVirt2PhysReq, Vni, VpcCfg,
 };
+use std::process::Command;
+use std::env;
 use ztest::*;
 
 struct OpteZone<'a> {
@@ -13,8 +15,13 @@ struct OpteZone<'a> {
 }
 
 impl<'a> OpteZone<'a> {
+
     fn new(name: &str, zfs: &'a Zfs, ifx: &[&'a str]) -> Result<Self> {
-        let zone = Zone::new(name, zfs, ifx)?;
+        let brand = match env::var("BUILDOMAT_JOB_ID") {
+            Ok(_) => "omicron1",
+            _ => "sparse",
+        };
+        let zone = Zone::new(name, brand, zfs, ifx)?;
         Ok(Self { _zfs: zfs, zone })
     }
 
@@ -144,6 +151,17 @@ impl Drop for OpteDev {
     }
 }
 
+struct Xde {}
+impl Drop for Xde {
+    fn drop(&mut self) {
+        let mut cmd = Command::new("pfexec");
+        cmd.args(["rem_drv", "xde"]);
+        if let Err(e) = cmd.output() {
+            eprintln!("failed to remove xde driver: {}", e);
+        }
+    }
+}
+
 #[test]
 fn test_xde_loopback() -> Result<()> {
     // This is an xde loopback topology. There are two zones, each with a vnic
@@ -184,6 +202,11 @@ fn test_xde_loopback() -> Result<()> {
     let ll1 = LinkLocal::new(&sim.end_b, "ll")?;
 
     OpteDev::set_xde_underlay(&sim.end_a, &sim.end_b)?;
+    // TODO this is a sort of force unset underlay until we have an unset
+    // underlay command. When this object drops it will remove the xde driver.
+    // If we do not do this, xde will hold references to the simnet devices
+    // preventing us from cleaning them up after this test.
+    let _xde = Xde {};
 
     OpteDev::set_v2p("10.0.0.1", "a8:40:25:ff:00:01", "fd47::1")?;
     OpteDev::set_v2p("10.0.0.2", "a8:40:25:ff:00:02", "fd74::1")?;

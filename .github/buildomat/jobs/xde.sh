@@ -13,6 +13,8 @@
 #:   "=/work/release/xde.sha256",
 #:   "=/work/release/xde_link.so",
 #:   "=/work/release/xde_link.so.sha256",
+#:   "=/work/test/loopback",
+#:   "=/work/xde.conf",
 #: ]
 #:
 
@@ -46,6 +48,8 @@ cargo --version
 rustc --version
 
 pushd xde
+
+cp xde.conf /work/xde.conf
 
 header "check style"
 ptime -m cargo +nightly fmt -- --check
@@ -81,3 +85,10 @@ sha256sum $REL_TGT/xde > $REL_TGT/xde.sha256
 
 cp $REL_LINK_SRC/libxde_link.so $REL_TGT/xde_link.so
 sha256sum $REL_TGT/xde_link.so > $REL_TGT/xde_link.so.sha256
+
+popd
+pushd tests
+cargo build --test loopback
+loopback_test=`find target/debug/deps -regex '.*loopback-[0-9a-f]*'`
+mkdir -p /work/test
+cp $loopback_test /work/test/loopback
