@@ -937,6 +937,12 @@ fn create_underlay_port(
             msg: format!("mac_promisc_add failed for {link_name}: {e}"),
         })?;
 
+    // Set up a unicast callback. The MAC address here is a sentinel value with
+    // nothing real behind it. This is why we picked the zero value in the Oxide
+    // OUI space for virtual MACs. The reason this is being done is that illumos
+    // requires that if there is a single mac client on a link, that client must
+    // have an L2 address. This was not caught until recently, because this is
+    // only enforced as a debug assert in the kernel.
     let mac = EtherAddr::from([0xa8, 0x40, 0x25, 0xff, 0x00, 0x00]);
     let muh = mch.add_unicast(mac).map_err(|e| OpteError::System {
         errno: EFAULT,
@@ -1543,11 +1549,15 @@ unsafe extern "C" fn xde_mc_tx(
     ptr::null_mut()
 }
 
+/// This is a generic wrapper for references that should be dropped once not in
+/// use.
 struct DropRef<DropFn, Arg>
 where
     DropFn: Fn(*mut Arg) -> (),
 {
+    /// A function to drop the reference.
     func: DropFn,
+    /// The reference pointer.
     arg: *mut Arg,
 }
 
@@ -1555,9 +1565,13 @@ impl<DropFn, Arg> DropRef<DropFn, Arg>
 where
     DropFn: Fn(*mut Arg) -> (),
 {
+    /// Create a new `DropRef` for the provided reference argument. When this
+    /// object is dropped, the provided `func` will be called.
     fn new(func: DropFn, arg: *mut Arg) -> Self {
         Self { func, arg }
     }
+
+    /// Return a pointer to the underlying reference.
     fn inner(&self) -> *mut Arg {
         self.arg
     }
@@ -1567,12 +1581,15 @@ impl<DropFn, Arg> Drop for DropRef<DropFn, Arg>
 where
     DropFn: Fn(*mut Arg) -> (),
 {
+    /// Call the cleanup function on the reference argument when we are dropped.
     fn drop(&mut self) {
         if !self.arg.is_null() {
             (self.func)(self.arg);
         }
     }
 }
+
+// The following are wrappers for reference drop functions used in XDE.
 
 fn ire_refrele(ire: *mut ip::ire_t) {
     unsafe { ip::ire_refrele(ire) }
