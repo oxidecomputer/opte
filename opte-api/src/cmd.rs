@@ -186,6 +186,8 @@ pub enum OpteError {
         errno: c_int,
         msg: String,
     },
+    /// The provided `IpCfg` is not valid, such as an empty port range.
+    InvalidIpCfg,
 }
 
 impl OpteError {
@@ -222,6 +224,7 @@ impl OpteError {
             Self::SerCmdErr(_) => ENOMSG,
             Self::SerCmdResp(_) => ENOMSG,
             Self::System { errno, .. } => *errno,
+            Self::InvalidIpCfg => EINVAL,
         }
     }
 }
