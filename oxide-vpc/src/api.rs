@@ -215,9 +215,8 @@ impl VpcCfg {
     /// or None.
     pub fn ipv4_cfg_mut(&mut self) -> Option<&mut Ipv4Cfg> {
         match self.ip_cfg {
-            IpCfg::Ipv4(ref mut ipv4) | IpCfg::DualStack { ref mut ipv4, .. } => {
-                Some(ipv4)
-            }
+            IpCfg::Ipv4(ref mut ipv4)
+            | IpCfg::DualStack { ref mut ipv4, .. } => Some(ipv4),
             _ => None,
         }
     }
@@ -255,9 +254,8 @@ impl VpcCfg {
     /// or None.
     pub fn ipv6_cfg_mut(&mut self) -> Option<&mut Ipv6Cfg> {
         match self.ip_cfg {
-            IpCfg::Ipv6(ref mut ipv6) | IpCfg::DualStack { ref mut ipv6, .. } => {
-                Some(ipv6)
-            }
+            IpCfg::Ipv6(ref mut ipv6)
+            | IpCfg::DualStack { ref mut ipv6, .. } => Some(ipv6),
             _ => None,
         }
     }
@@ -334,7 +332,7 @@ impl VpcCfg {
                         // length is <= `u16::MAX` and fits in a `u32`.
                         let n_ports = u32::try_from(snat.ports.len()).unwrap();
                         Some(n_ports)
-                    },
+                    }
                     (None, None) => None,
                 }
             }
@@ -349,7 +347,7 @@ impl VpcCfg {
                         // length is <= `u16::MAX` and fits in a `u32`.
                         let n_ports = u32::try_from(snat.ports.len()).unwrap();
                         Some(n_ports)
-                    },
+                    }
                     (None, None) => None,
                 }
             }
@@ -874,20 +872,20 @@ impl Display for Ports {
 #[cfg(test)]
 mod tests {
     use super::Address;
+    use super::BoundaryServices;
     use super::IpAddr;
+    use super::IpCfg;
     use super::IpCidr;
+    use super::Ipv4Cfg;
+    use super::Ipv6Cfg;
+    use super::MacAddr;
     use super::Ports;
     use super::ProtoFilter;
     use super::Protocol;
-    use super::Vni;
-    use super::VpcCfg;
-    use super::Ipv4Cfg;
-    use super::Ipv6Cfg;
-    use super::IpCfg;
     use super::SNat4Cfg;
     use super::SNat6Cfg;
-    use super::MacAddr;
-    use super::BoundaryServices;
+    use super::Vni;
+    use super::VpcCfg;
 
     #[test]
     fn ports_from_str_good() {
