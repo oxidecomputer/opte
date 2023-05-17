@@ -34,7 +34,6 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::convert::TryFrom;
 use core::convert::TryInto;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
@@ -1929,7 +1928,8 @@ fn new_port(
     // Safety: We're extracting the contained value in a `NonZeroU32` to
     // construct a new one, so the unwrap is safe.
     let limit =
-        NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
+        NonZeroU32::new(FW_FT_LIMIT.unwrap().get().max(nat_ft_limit.get()))
+            .unwrap();
     let net = VpcNetwork { cfg: cfg.clone() };
     Ok(Arc::new(pb.create(net, limit, limit)?))
 }
