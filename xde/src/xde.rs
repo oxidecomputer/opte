@@ -92,12 +92,10 @@ use oxide_vpc::engine::VpcParser;
 
 // Entry limits for the various flow tables.
 //
-// XXX It would be nice to use const unwrap() but that's gated on the
-// `const_option` feature.
-//
-// Unwrap: We know all of these are safe to unwrap().
-const FW_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
-const FT_LIMIT_ONE: Option<NonZeroU32> = NonZeroU32::new(1);
+// Safety: Despite the name of `new_unchecked`, there actually is a compile-time
+// check that these values are non-zero.
+const FW_FT_LIMIT: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(8096) };
+const FT_LIMIT_ONE: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(1) };
 
 /// The name of this driver.
 const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
@@ -1906,19 +1904,19 @@ fn new_port(
     };
 
     let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac.into(), ectx);
-    firewall::setup(&mut pb, FW_FT_LIMIT.unwrap())?;
+    firewall::setup(&mut pb, FW_FT_LIMIT)?;
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&mut pb, &cfg, vpc_map, FT_LIMIT_ONE.unwrap())?;
-    router::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
+    gateway::setup(&mut pb, &cfg, vpc_map, FT_LIMIT_ONE)?;
+    router::setup(&mut pb, &cfg, FT_LIMIT_ONE)?;
     let nat_ft_limit = match cfg.n_external_ports() {
-        None => FT_LIMIT_ONE.unwrap(),
+        None => FT_LIMIT_ONE,
         Some(0) => return Err(OpteError::InvalidIpCfg),
         Some(n) => NonZeroU32::new(n).unwrap(),
     };
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, FT_LIMIT_ONE.unwrap())?;
+    overlay::setup(&pb, &cfg, v2p, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -1928,8 +1926,7 @@ fn new_port(
     // Safety: We're extracting the contained value in a `NonZeroU32` to
     // construct a new one, so the unwrap is safe.
     let limit =
-        NonZeroU32::new(FW_FT_LIMIT.unwrap().get().max(nat_ft_limit.get()))
-            .unwrap();
+        NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
     let net = VpcNetwork { cfg: cfg.clone() };
     Ok(Arc::new(pb.create(net, limit, limit)?))
 }
