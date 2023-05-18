@@ -34,7 +34,6 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::convert::TryFrom;
 use core::convert::TryInto;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
@@ -93,13 +92,10 @@ use oxide_vpc::engine::VpcParser;
 
 // Entry limits for the various flow tables.
 //
-// XXX It would be nice to use const unwrap() but that's gated on the
-// `const_option` feature.
-//
-// Unwrap: We know all of these are safe to unwrap().
-const FW_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
-const NAT_FT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(8096);
-const FT_LIMIT_ONE: Option<NonZeroU32> = NonZeroU32::new(1);
+// Safety: Despite the name of `new_unchecked`, there actually is a compile-time
+// check that these values are non-zero.
+const FW_FT_LIMIT: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(8096) };
+const FT_LIMIT_ONE: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(1) };
 
 /// The name of this driver.
 const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
@@ -277,6 +273,7 @@ struct XdeDev {
     u2: Arc<xde_underlay_port>,
 }
 
+#[cfg(not(test))]
 #[no_mangle]
 unsafe extern "C" fn _init() -> c_int {
     xde_devs.init(KRwLockType::Driver);
@@ -297,6 +294,7 @@ unsafe extern "C" fn _info(modinfop: *mut modinfo) -> c_int {
     mod_info(&xde_linkage, modinfop)
 }
 
+#[cfg(not(test))]
 #[no_mangle]
 unsafe extern "C" fn _fini() -> c_int {
     match mod_remove(&xde_linkage) {
@@ -1906,52 +1904,29 @@ fn new_port(
     };
 
     let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac.into(), ectx);
-    firewall::setup(&mut pb, FW_FT_LIMIT.unwrap())?;
+    firewall::setup(&mut pb, FW_FT_LIMIT)?;
+
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&mut pb, &cfg, vpc_map, FT_LIMIT_ONE.unwrap())?;
-    router::setup(&mut pb, &cfg, FT_LIMIT_ONE.unwrap())?;
-    nat::setup(&mut pb, &cfg, NAT_FT_LIMIT.unwrap())?;
-    overlay::setup(&pb, &cfg, v2p, FT_LIMIT_ONE.unwrap())?;
+    gateway::setup(&mut pb, &cfg, vpc_map, FT_LIMIT_ONE)?;
+    router::setup(&mut pb, &cfg, FT_LIMIT_ONE)?;
+    let nat_ft_limit = match cfg.n_external_ports() {
+        None => FT_LIMIT_ONE,
+        Some(0) => return Err(OpteError::InvalidIpCfg),
+        Some(n) => NonZeroU32::new(n).unwrap(),
+    };
+    nat::setup(&mut pb, &cfg, nat_ft_limit)?;
+    overlay::setup(&pb, &cfg, v2p, FT_LIMIT_ONE)?;
 
-    // Set the UFT and TCP flow table limits based on the guest's IP
-    // configuration.
+    // Set the overall unified flow and TCP flow table limits based on the total
+    // configuration above, by taking the maximum of size of the individual
+    // layer tables. Only the firewall and NAT layers are relevant here, since
+    // the others have a size of at most 1 now.
     //
-    // Guests may have either an SNAT IP address, which is currently limited to
-    // a subset of all ports, or an external IP that uses all ports. In the
-    // latter case, the SNAT address is not used, even though it may be reserved
-    // for the guest. We'll use the external IP if it exists, otherwise the
-    // SNAT. This is true for both IPv6 and IPv4, and we take the sum of these
-    // to support _all_ possible ports the guest could use.
-    let ipv4_limit = match &cfg.ip_cfg {
-        IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. } => ipv4
-            .external_ips
-            .map(|_| u32::from(u16::MAX))
-            .or_else(|| {
-                ipv4.snat
-                    .as_ref()
-                    .map(|snat| u32::try_from(snat.ports.len()).unwrap())
-            })
-            .unwrap_or(0),
-        _ => 0,
-    };
-    let ipv6_limit = match &cfg.ip_cfg {
-        IpCfg::Ipv6(ipv6) | IpCfg::DualStack { ipv6, .. } => ipv6
-            .external_ips
-            .map(|_| u32::from(u16::MAX))
-            .or_else(|| {
-                ipv6.snat
-                    .as_ref()
-                    .map(|snat| u32::try_from(snat.ports.len()).unwrap())
-            })
-            .unwrap_or(0),
-        _ => 0,
-    };
-
-    // Safety: These are port ranges, and so each is no more than `u16::MAX`.
-    // Twice that fits in 17 bits, so a `u32` is safe.
-    let limit = NonZeroU32::new(ipv4_limit + ipv6_limit).unwrap();
-
+    // Safety: We're extracting the contained value in a `NonZeroU32` to
+    // construct a new one, so the unwrap is safe.
+    let limit =
+        NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
     let net = VpcNetwork { cfg: cfg.clone() };
     Ok(Arc::new(pb.create(net, limit, limit)?))
 }
