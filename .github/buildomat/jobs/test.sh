@@ -13,12 +13,27 @@
 #: job = "opte-xde"
 #:
 
-function cleanup {
-    pfexec chown -R `id -un`:`id -gn` .
-}
-trap cleanup EXIT
+#### >>>>>>>>>>>>>>>>>>>>>>>>>>>> Local Usage >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+####
+#### If you are running this locally, you must run the xde.sh job first to have
+#### the artifacts at the expected spot.
+####
+#### <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 set -o xtrace
+
+if [[ -z $BUILDOMAT_JOB_ID ]]; then
+    pfexec mkdir -p /input/xde
+    pfexec ln -s /work /input/xde/work
+fi
+
+function cleanup {
+    pfexec chown -R `id -un`:`id -gn` .
+    if [[ -z $BUILDOMAT_JOB_ID ]]; then
+        pfexec rm -rf /input/xde
+    fi
+}
+trap cleanup EXIT
 
 uname -a
 cat /etc/versions/build

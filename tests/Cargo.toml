@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 zone = { git = "https://github.com/oxidecomputer/zone" }
-ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "ztest" }
+ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 slog = { version = "2.7.0", features = ["max_level_trace", "release_max_level_trace"] }
 slog-term = "2.9.0"
 slog-envlogger = "2.2.0"

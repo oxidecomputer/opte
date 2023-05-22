@@ -1,13 +1,30 @@
 use anyhow::Result;
 use opteadm::OpteAdm;
-use oxide_vpc::api::{
-    AddRouterEntryReq, Address, BoundaryServices, Direction, Filters,
-    FirewallAction, FirewallRule, IpCfg, IpCidr, Ipv4Cfg, PhysNet, Ports,
-    RouterTarget, SNat4Cfg, SetVirt2PhysReq, Vni, VpcCfg,
-};
+use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::Address;
+use oxide_vpc::api::BoundaryServices;
+use oxide_vpc::api::Direction;
+use oxide_vpc::api::Filters;
+use oxide_vpc::api::FirewallAction;
+use oxide_vpc::api::FirewallRule;
+use oxide_vpc::api::IpCfg;
+use oxide_vpc::api::IpCidr;
+use oxide_vpc::api::Ipv4Cfg;
+use oxide_vpc::api::PhysNet;
+use oxide_vpc::api::Ports;
+use oxide_vpc::api::RouterTarget;
+use oxide_vpc::api::SNat4Cfg;
+use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::Vni;
+use oxide_vpc::api::VpcCfg;
 use std::env;
 use std::process::Command;
 use ztest::*;
+
+/// The overlay network used in all tests.
+const OVERLAY_NET: &str = "10.0.0.0/24";
+/// The overlay OPTE gateway used in all tests.
+const OVERLAY_GW: &str = "10.0.0.254";
 
 /// This is a wrapper around the ztest::Zone object that encapsulates common
 /// logic needed for running the OPTE tests zones used in this test suite.
@@ -37,8 +54,10 @@ impl<'a> OpteZone<'a> {
         self.zone.wait_for_network()?;
         self.zone
             .zexec(&format!("ipadm create-addr -t -T dhcp {}/test", devname))?;
-        self.zone.zexec(&format!("route add -iface 10.0.0.254 {}", addr))?;
-        self.zone.zexec("route add 10.0.0.0/24 10.0.0.254")?;
+        self.zone
+            .zexec(&format!("route add -iface {} {}", OVERLAY_GW, addr))?;
+        self.zone
+            .zexec(&format!("route add {} {}", OVERLAY_NET, OVERLAY_GW))?;
         Ok(())
     }
 }
@@ -64,9 +83,9 @@ impl OptePort {
     ) -> Result<Self> {
         let cfg = VpcCfg {
             ip_cfg: IpCfg::Ipv4(Ipv4Cfg {
-                vpc_subnet: "10.0.0.0/24".parse().unwrap(),
+                vpc_subnet: OVERLAY_NET.parse().unwrap(),
                 private_ip: private_ip.parse().unwrap(),
-                gateway_ip: "10.0.0.254".parse().unwrap(),
+                gateway_ip: OVERLAY_GW.parse().unwrap(),
                 snat: Some(SNat4Cfg {
                     external_ip: "1.2.3.4".parse().unwrap(),
                     ports: 1000..=2000,
@@ -214,8 +233,8 @@ impl Drop for Xde {
 ///
 /// The following system of overlay/underlay routes is set up
 ///
-/// 10.0.0.1 -> fd47::/74 via sim1
-/// 10.0.0.2 -> fd74::/74 via sim0
+/// 10.0.0.1 -> fd44::/64 via sim1
+/// 10.0.0.2 -> fd77::/64 via sim0
 ///
 /// Zone a has an overlay address of 10.0.0.1 and zone b has an overlay
 /// address of 10.0.0.2. This means that OPTE will encap/decap packets to
@@ -245,12 +264,12 @@ fn test_xde_loopback() -> Result<()> {
     let _xde = Xde {};
 
     // Set up the virtual to physical mapptings for this test run.
-    Xde::set_v2p("10.0.0.1", "a8:40:25:ff:00:01", "fd47::1")?;
-    Xde::set_v2p("10.0.0.2", "a8:40:25:ff:00:02", "fd74::1")?;
+    Xde::set_v2p("10.0.0.1", "a8:40:25:ff:00:01", "fd44::1")?;
+    Xde::set_v2p("10.0.0.2", "a8:40:25:ff:00:02", "fd77::1")?;
 
     // Create the first OPTE port with the provided overlay/underlay parameters.
     let opte0 =
-        OptePort::new("opte0", "10.0.0.1", "a8:40:25:ff:00:01", "fd47::1")?;
+        OptePort::new("opte0", "10.0.0.1", "a8:40:25:ff:00:01", "fd44::1")?;
     opte0.add_router_entry("10.0.0.2")?;
     opte0.fw_allow_all()?;
 
@@ -258,7 +277,7 @@ fn test_xde_loopback() -> Result<()> {
     // address of sim0 as a nexthop through sim1. This is facilitating the flow
     // of traffic from opte1 to opte0. When a packet enters opte1 (from vopte1)
     // destined for 10.0.0.1, opte will look up the v2p mapping which points to
-    // fd47::1. That is the underlay address of opte0. The route below says:
+    // fd44::1. That is the underlay address of opte0. The route below says:
     // that address is reachable through the sim1 interface, with a nexthop of
     // the sim0 interface. In the diagram above, that is the "upward" direction
     // of our simnet underlay loopback. The xde device uses the kernel's routing
@@ -270,7 +289,7 @@ fn test_xde_loopback() -> Result<()> {
 
     // Create the second OPTE port with the provided overlay/underlay parameters.
     let opte1 =
-        OptePort::new("opte1", "10.0.0.2", "a8:40:25:ff:00:02", "fd74::1")?;
+        OptePort::new("opte1", "10.0.0.2", "a8:40:25:ff:00:02", "fd77::1")?;
     opte1.add_router_entry("10.0.0.1")?;
     opte1.fw_allow_all()?;
 

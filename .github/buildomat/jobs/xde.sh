@@ -87,7 +87,11 @@ cp $REL_LINK_SRC/libxde_link.so $REL_TGT/xde_link.so
 sha256sum $REL_TGT/xde_link.so > $REL_TGT/xde_link.so.sha256
 
 popd
+
+header "build xde integration tests"
 pushd tests
+cargo +nightly fmt -- --check
+cargo clippy --all-targets
 cargo build --test loopback
 loopback_test=`find target/debug/deps -regex '.*loopback-[0-9a-f]*'`
 mkdir -p /work/test

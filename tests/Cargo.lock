@@ -1369,7 +1369,7 @@ dependencies = [
 [[package]]
 name = "ztest"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=ztest#6fa33dc38119e23f5da91fd0a1b4c4dac24b78e8"
+source = "git+https://github.com/oxidecomputer/falcon?branch=main#ec54d06f5497770457387a53c22de839de701d7c"
 dependencies = [
  "anyhow",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",

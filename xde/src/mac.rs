@@ -178,6 +178,7 @@ impl MacClientHandle {
         unsafe { mac_rx_set(self.mch, rx_fn, arg) };
     }
 
+    /// Calls `mac_unicast_add` on the underlying system.
     pub fn add_unicast(
         self: &Arc<Self>,
         mac: EtherAddr,
