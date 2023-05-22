@@ -37,7 +37,7 @@ impl<'a> OpteZone<'a> {
     /// Create a new zone with the given name, underlying zfs instance and set
     /// of interfaces. In illumos parlance, the interfaces are data link
     /// devices.
-    fn new(name: &str, zfs: &'a Zfs, ifx: &[&'a str]) -> Result<Self> {
+    fn new(name: &str, zfs: &'a Zfs, ifx: &[&str]) -> Result<Self> {
         // If we're running in CI, use the omicron1 zone, because that's whats
         // there. If this is running locally, use a sparse zone which is much
         // easier to set up on a regular Helios dev box.
@@ -252,7 +252,7 @@ fn test_xde_loopback() -> Result<()> {
     // underlay by opte0, sent to sim0 (more on the routing that makes that
     // happen later), is forwarded to sim1, is decapsulated by opte1 and then
     // sent to vopte1.
-    let sim = SimnetLink::new("sim0", "sim1")?;
+    let sim = SimnetLink::new("xde_test_sim0", "xde_test_sim1")?;
     let ll0 = LinkLocal::new(&sim.end_a, "ll")?;
     let ll1 = LinkLocal::new(&sim.end_b, "ll")?;
 

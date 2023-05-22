@@ -185,7 +185,7 @@ impl MacClientHandle {
     ) -> Result<MacUnicastHandle, c_int> {
         let mut diag = mac_diag::MAC_DIAG_NONE;
         let mut ether = mac.to_bytes();
-        let mut muh = 0 as *mut mac_unicast_handle;
+        let mut muh = ptr::null_mut();
         unsafe {
             match mac_unicast_add(
                 self.mch,

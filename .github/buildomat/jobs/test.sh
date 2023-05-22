@@ -23,6 +23,8 @@
 set -o xtrace
 
 if [[ -z $BUILDOMAT_JOB_ID ]]; then
+    echo Note: if you are running this locally, you must run the xde.sh job first
+    echo to have the artifacts at the expected spot.
     pfexec mkdir -p /input/xde
     pfexec ln -s /work /input/xde/work
 fi

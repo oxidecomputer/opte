@@ -44,8 +44,22 @@ function header {
 	echo "# ==== $* ==== #"
 }
 
+function install_pkg {
+    set +o errexit
+    pfexec pkg install $1
+    exit_code=$?
+    # 4 is the exit code returned from pkg when the package is already installed
+    if [[ $exit_code -ne 0 ]] && [[ $exit_code -ne 4 ]]; then
+        echo "package install failed for $1"
+        exit 1
+    fi
+    set -o errexit
+}
+
 cargo --version
 rustc --version
+
+install_pkg jq
 
 pushd xde
 
@@ -93,6 +107,9 @@ pushd tests
 cargo +nightly fmt -- --check
 cargo clippy --all-targets
 cargo build --test loopback
-loopback_test=`find target/debug/deps -regex '.*loopback-[0-9a-f]*'`
+loopback_test=$(
+    cargo build --test loopback --message-format=json |\
+    jq -r "select(.profile.test == true) | .filenames[]"
+)
 mkdir -p /work/test
 cp $loopback_test /work/test/loopback

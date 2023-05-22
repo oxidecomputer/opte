@@ -1106,7 +1106,8 @@ unsafe extern "C" fn xde_detach(
 
                 // We have a chain of refs here:
                 //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
-                //  2. `MacClientHandle` holds a ref to `MacHandle`.
+                //  2. `MacUnicastHandle` holds a ref to `MacClientHandle`, and
+                //  3. `MacClientHandle` holds a ref to `MacHandle`.
                 // We explicitly drop them in order here to ensure there are no
                 // outstanding refs.
 
@@ -1791,7 +1792,7 @@ fn next_hop<'a>(
         }
 
         // Step (2): Lookup the IRE for the gateway's link-local
-        // address. This is geing to return one of the `fe80::/10`
+        // address. This is going to return one of the `fe80::/10`
         // entries.
         let ireu = (*ire.inner()).ire_u;
         let gw = ireu.ire6_u.ire6_gateway_addr;
