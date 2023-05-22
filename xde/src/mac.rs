@@ -18,6 +18,7 @@ use core::ffi::CStr;
 use core::fmt;
 use core::ptr;
 use illumos_sys_hdrs::*;
+use opte::engine::ether::EtherAddr;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
@@ -103,6 +104,7 @@ bitflags! {
     //
     // For now we only include flags currently used by consumers.
     pub struct MacOpenFlags: u16 {
+        const NONE = 0;
         const NO_UNICAST_ADDR = MAC_OPEN_FLAGS_NO_UNICAST_ADDR;
     }
 }
@@ -174,6 +176,29 @@ impl MacClientHandle {
     /// Set the Rx callback handler.
     pub fn set_rx(&self, rx_fn: mac_rx_fn, arg: *mut c_void) {
         unsafe { mac_rx_set(self.mch, rx_fn, arg) };
+    }
+
+    /// Calls `mac_unicast_add` on the underlying system.
+    pub fn add_unicast(
+        self: &Arc<Self>,
+        mac: EtherAddr,
+    ) -> Result<MacUnicastHandle, c_int> {
+        let mut diag = mac_diag::MAC_DIAG_NONE;
+        let mut ether = mac.to_bytes();
+        let mut muh = ptr::null_mut();
+        unsafe {
+            match mac_unicast_add(
+                self.mch,
+                ether.as_mut_ptr(),
+                0,
+                &mut muh,
+                0,
+                &mut diag,
+            ) {
+                0 => Ok(MacUnicastHandle { muh, mch: self.clone() }),
+                err => Err(err),
+            }
+        }
     }
 
     /// Register promiscuous callback to receive packets on the underlying MAC.
@@ -288,5 +313,24 @@ impl Drop for MacPromiscHandle {
         // mac promisc handle was successfully obtained, and thus `mph`
         // is valid.
         unsafe { mac_promisc_remove(self.mph) };
+    }
+}
+
+/// Safe wrapper around a `mac_unicast_handle_t`.
+#[derive(Debug)]
+pub struct MacUnicastHandle {
+    /// The underlying `mac_unicast_handle_t`.
+    muh: *mut mac_unicast_handle,
+
+    /// The `MacClientHandle` used to create this unicast callback.
+    mch: Arc<MacClientHandle>,
+}
+
+impl Drop for MacUnicastHandle {
+    fn drop(&mut self) {
+        // Safety: We know that a `MacUnicastHandle` can only exist if a
+        // mac unicast handle was successfully obtained, and thus `muh`
+        // is valid.
+        unsafe { mac_unicast_remove(self.mch.mch, self.muh) };
     }
 }
