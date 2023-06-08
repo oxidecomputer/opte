@@ -1,0 +1,22 @@
+[package]
+name = "opteadm"
+version = "0.2.0"
+authors = ["Ryan Zezeski <ryan@oxide.computer>"]
+edition = "2021"
+
+[dependencies]
+# XXX For the time being opteadm needs to set the engine feature to
+# get all the types. Once there types are move to their appropriate
+# place this feature flag will be replaced/removed.
+opte = { workspace = true, features = ["api", "engine", "std"] }
+opte-ioctl.workspace = true
+oxide-vpc = { workspace = true, features = ["api", "engine", "std"] }
+
+anyhow.workspace = true
+cfg-if.workspace = true
+libc.workspace = true
+libnet.workspace = true
+postcard.workspace = true
+serde.workspace = true
+structopt.workspace = true
+thiserror.workspace = true

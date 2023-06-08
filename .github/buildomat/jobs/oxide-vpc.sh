@@ -18,7 +18,7 @@ function header {
 cargo --version
 rustc --version
 
-cd oxide-vpc
+cd lib/oxide-vpc
 
 header "check style"
 ptime -m cargo +nightly fmt -- --check

@@ -20,22 +20,19 @@ test-help = []
 usdt = ["std", "dep:usdt"]
 
 [dependencies]
-cfg-if = "0.1"
-dyn-clone = "1.0.9"
-illumos-sys-hdrs = { path = "../illumos-sys-hdrs" }
-kstat-macro = { path = "../kstat-macro" }
-opte-api = { path = "../opte-api", default-features = false }
-postcard = { version = "0.7.0", features = ["alloc"], default-features = false }
-usdt = { version = "0.3.5", optional = true }
-zerocopy = "0.6.1"
+illumos-sys-hdrs.workspace = true
+kstat-macro.workspace = true
+opte-api.workspace = true
 
-[dependencies.serde]
-version = "1.0"
-default-features = false
-features = ["alloc", "derive"]
+cfg-if.workspace = true
+dyn-clone.workspace = true
+postcard.workspace = true
+serde.workspace = true
+usdt = { workspace = true, optional = true }
+zerocopy.workspace = true
 
 [dependencies.smoltcp]
-version = "0.8.0"
+workspace = true
 default-features = false
 #
 # TODO Would defmt be of any use?
@@ -43,9 +40,10 @@ default-features = false
 features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-ipv6", "proto-dhcpv4", "socket", "socket-raw"]
 
 [build-dependencies]
-version_check = "0.9.4"
+version_check.workspace = true
 
 [dev-dependencies]
 # Enable usdt probes for testing.
-opte = { path = ".", features = ["usdt"] }
-itertools = "0.10"
+opte = { workspace = true, features = ["usdt"] }
+
+itertools.workspace = true

@@ -18,7 +18,7 @@ function header {
 cargo --version
 rustc --version
 
-cd opte-api
+cd crates/opte-api
 
 header "check API_VERSION"
 ./check-api-version.sh

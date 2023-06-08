@@ -47,6 +47,7 @@ rustc --version
 pushd xde
 header "build xde (release)"
 ptime -m ./build.sh
+popd
 
 #
 # Inspect the kernel module for bad relocations in case the old
@@ -56,9 +57,8 @@ if elfdump $REL_SRC/xde | grep GOTPCREL; then
 	echo "found GOTPCREL relocation in release build"
 	exit 1
 fi
-popd
 
-pushd opteadm
+pushd bin/opteadm
 cargo build --release
 popd
 
