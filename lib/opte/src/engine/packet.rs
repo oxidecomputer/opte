@@ -565,7 +565,7 @@ impl<S: PacketState> Drop for Packet<S> {
         // This guarantees that we only free the segment chain once.
         if self.segs.len() != 0 {
             let head_mp = self.segs[0].mp;
-            drop(&mut self.segs);
+            drop(core::mem::take(&mut self.segs));
             cfg_if! {
                 if #[cfg(all(not(feature = "std"), not(test)))] {
                     // Safety: This is safe as long as the original
@@ -1504,7 +1504,6 @@ impl Packet<Parsed> {
             &mut self.state.meta.inner,
             new_pkt_len,
         )?;
-        drop(wtr);
 
         // Update the header offsets.
         self.state.hdr_offsets = new_offsets;

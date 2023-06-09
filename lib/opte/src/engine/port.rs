@@ -1716,8 +1716,6 @@ impl<N: NetworkImpl> Port<N> {
                     pkt.body_transform(In, bt)?;
                 }
 
-                drop(entry);
-
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
                 if pkt.meta().is_inner_tcp() {
@@ -2068,8 +2066,6 @@ impl<N: NetworkImpl> Port<N> {
                 for bt in &entry.state().xforms.body {
                     pkt.body_transform(Out, bt)?;
                 }
-
-                drop(entry);
 
                 if invalidated {
                     self.uft_tcp_closed(data, &flow_before, ufid_in.as_ref());
