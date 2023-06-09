@@ -18,6 +18,7 @@
   "llvm-target": "i686-pc-solaris",
   "max-atomic-width": 64,
   "os": "illumos",
+  "panic-strategy": "abort",
   "pre-link-args": {
     "gcc": [
       "-m32",

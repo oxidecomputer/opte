@@ -1,0 +1,21 @@
+[package]
+name = "opte-api"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["std"]
+std = ["ipnetwork"]
+
+[dependencies]
+illumos-sys-hdrs.workspace = true
+
+cfg-if.workspace = true
+ipnetwork = { workspace = true, optional = true }
+postcard.workspace = true
+serde.workspace = true
+
+[dependencies.smoltcp]
+workspace = true
+default-features = false
+features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-ipv6", "proto-dhcpv4", "socket", "socket-raw"]

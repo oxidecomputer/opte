@@ -31,11 +31,11 @@ set -o xtrace
 TGT_BASE=${TGT_BASE:=/work}
 
 DBG_SRC=target/x86_64-unknown-unknown/debug
-DBG_LINK_SRC=xde-link/target/i686-unknown-illumos/debug
+DBG_LINK_SRC=target/i686-unknown-illumos/debug
 DBG_TGT=$TGT_BASE/debug
 
 REL_SRC=target/x86_64-unknown-unknown/release
-REL_LINK_SRC=xde-link/target/i686-unknown-illumos/release
+REL_LINK_SRC=target/i686-unknown-illumos/release
 REL_TGT=$TGT_BASE/release
 
 mkdir -p $DBG_TGT $REL_TGT
@@ -74,6 +74,8 @@ ptime -m ./build-debug.sh
 header "build xde (release)"
 ptime -m ./build.sh
 
+popd
+
 #
 # Inspect the kernel module for bad relocations in case the old
 # codegen issue ever shows its face again.
@@ -100,15 +102,14 @@ sha256sum $REL_TGT/xde > $REL_TGT/xde.sha256
 cp $REL_LINK_SRC/libxde_link.so $REL_TGT/xde_link.so
 sha256sum $REL_TGT/xde_link.so > $REL_TGT/xde_link.so.sha256
 
-popd
 
 header "build xde integration tests"
 pushd tests
 cargo +nightly fmt -- --check
-cargo clippy --all-targets
+cargo clippy --all-targets -- --no-deps
 cargo build --test loopback
 loopback_test=$(
-    cargo build --test loopback --message-format=json |\
+    cargo build -q --test loopback --message-format=json |\
     jq -r "select(.profile.test == true) | .filenames[]"
 )
 mkdir -p /work/test

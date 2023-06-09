@@ -1,8 +1,9 @@
 #!/bin/bash
 
-DBG_DIR=target/x86_64-unknown-unknown/debug/
+DBG_DIR=../target/x86_64-unknown-unknown/debug/
 
 cargo -v rustc \
+      --manifest-path Cargo.toml \
       -Z build-std=core,alloc \
       --target x86_64-unknown-unknown.json
 

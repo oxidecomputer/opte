@@ -27,7 +27,10 @@ fn main() {
     // via a mapfile (map.devfsadm-externs).
     //
     // See usr/src/cmd/devfsadm/mapfile-vers
-    println!("cargo:rustc-cdylib-link-arg=-Wl,-Mmap.devfsadm-externs");
+    println!(
+        "cargo:rustc-cdylib-link-arg=-Wl,-M{}/map.devfsadm-externs",
+        env!("CARGO_MANIFEST_DIR"),
+    );
 
     // $(MAPFILE.PGA) $(MAPFILE.NED)
     println!("cargo:rustc-cdylib-link-arg=-Wl,-M/usr/lib/ld/map.pagealign");

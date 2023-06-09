@@ -18,7 +18,7 @@ function header {
 cargo --version
 rustc --version
 
-cd opte-ioctl
+cd lib/opte-ioctl
 
 header "check style"
 ptime -m cargo +nightly fmt -- --check

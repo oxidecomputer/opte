@@ -1,0 +1,3 @@
+= Public OPTE libs
+
+This folder contains the public API crates for interacting with OPTE.

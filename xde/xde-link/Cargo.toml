@@ -10,8 +10,3 @@ crate-type = ["cdylib"]
 
 [dependencies]
 
-[profile.dev]
-panic = 'abort'
-
-[profile.release]
-panic = 'abort'

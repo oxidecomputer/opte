@@ -23,7 +23,7 @@ function header {
 cargo --version
 rustc --version
 
-cd opteadm
+pushd bin/opteadm
 
 header "check style"
 ptime -m cargo +nightly fmt -- --check
@@ -34,8 +34,7 @@ ptime -m cargo build
 header "release build"
 ptime -m cargo build --release
 
-header "test"
-ptime -m cargo test
+popd
 
 for x in debug release
 do
