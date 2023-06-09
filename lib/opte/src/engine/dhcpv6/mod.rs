@@ -237,7 +237,7 @@ pub mod test_data {
     //
     // This is an Ethernet frame, IPv6 header with no extension headers, UDP
     // header, and a Solicit message contained.
-    pub const TEST_SOLICIT_PACKET: &'static [u8] =
+    pub const TEST_SOLICIT_PACKET: &[u8] =
         b"\x33\x33\x00\x01\x00\x02\xa8\x40\x25\xfa\xdd\x0b\x86\xdd\x60\x0a\
         \xea\xa7\x00\x40\x11\x01\xfe\x80\x00\x00\x00\x00\x00\x00\xaa\x40\
         \x25\xff\xfe\xfa\xdd\x0b\xff\x02\x00\x00\x00\x00\x00\x00\x00\x00\

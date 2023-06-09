@@ -4,6 +4,8 @@
 
 // Copyright 2022 Oxide Computer Company
 
+#![allow(clippy::missing_safety_doc)]
+
 use super::*;
 
 /// Command argument passed to `getinfo(9E)`.

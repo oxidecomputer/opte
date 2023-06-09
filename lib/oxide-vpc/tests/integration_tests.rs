@@ -207,10 +207,7 @@ fn port_transition_pause() {
         "action=allow priority=10 dir=in protocol=tcp port=80".parse().unwrap();
     firewall::add_fw_rule(
         &g1.port,
-        &AddFwRuleReq {
-            port_name: g1.port.name().to_string(),
-            rule: fw_rule.clone(),
-        },
+        &AddFwRuleReq { port_name: g1.port.name().to_string(), rule: fw_rule },
     )
     .unwrap();
     incr!(g1, ["epoch", "firewall.rules.in"]);
@@ -812,7 +809,7 @@ fn guest_to_internet_ipv4() {
         UlpMeta::Tcp(tcp) => {
             assert_eq!(
                 tcp.src,
-                g1_cfg.snat().ports.clone().rev().next().unwrap(),
+                g1_cfg.snat().ports.clone().next_back().unwrap(),
             );
             assert_eq!(tcp.dst, 80);
         }
@@ -939,7 +936,7 @@ fn guest_to_internet_ipv6() {
         UlpMeta::Tcp(tcp) => {
             assert_eq!(
                 tcp.src,
-                g1_cfg.snat6().ports.clone().rev().next().unwrap(),
+                g1_cfg.snat6().ports.clone().next_back().unwrap(),
             );
             assert_eq!(tcp.dst, 80);
         }
@@ -972,7 +969,7 @@ fn snat_icmp4_echo_rewrite() {
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
-    let mapped_port = g1_cfg.snat().ports.clone().rev().next().unwrap();
+    let mapped_port = g1_cfg.snat().ports.clone().next_back().unwrap();
 
     // ================================================================
     // Verify echo request rewrite.
@@ -1240,7 +1237,7 @@ fn arp_gateway() {
     };
 
     let mut bytes = vec![];
-    bytes.extend_from_slice(&eth_hdr.as_bytes());
+    bytes.extend_from_slice(eth_hdr.as_bytes());
     bytes.extend_from_slice(ArpEthIpv4Raw::from(&arp).as_bytes());
     let mut pkt = Packet::copy(&bytes).parse(Out, VpcParser::new()).unwrap();
     print_port(&g1.port, &g1.vpc_map);
@@ -1304,13 +1301,11 @@ fn flow_expiration() {
     // ================================================================
     // Verify expiration
     // ================================================================
-    g1.port
-        .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0))
-        .unwrap();
+    g1.port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0)).unwrap();
     assert_port!(g1);
 
     g1.port
-        .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64 + 1, 0))
+        .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0))
         .unwrap();
     zero_flows!(g1);
 }
@@ -1458,7 +1453,7 @@ fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
     let dst_mac = dst_ip.multicast_mac().unwrap();
 
     let solicit = NdiscRepr::RouterSolicit {
-        lladdr: Some(RawHardwareAddress::from_bytes(&src_mac)),
+        lladdr: Some(RawHardwareAddress::from_bytes(src_mac)),
     };
     let req = Icmpv6Repr::Ndisc(solicit);
     let mut body_bytes = vec![0u8; req.buffer_len()];
@@ -2016,9 +2011,9 @@ fn test_gateway_neighbor_advert_reply() {
 }
 
 // Build a packet from a DHCPv6 message, from a client to server.
-fn packet_from_client_dhcpv6_message<'a>(
+fn packet_from_client_dhcpv6_message(
     cfg: &VpcCfg,
-    msg: &dhcpv6::protocol::Message<'a>,
+    msg: &dhcpv6::protocol::Message<'_>,
 ) -> Packet<Parsed> {
     let eth = EtherMeta {
         dst: dhcpv6::ALL_RELAYS_AND_SERVERS.multicast_mac().unwrap(),
@@ -2045,11 +2040,11 @@ fn packet_from_client_dhcpv6_message<'a>(
     write_dhcpv6_packet(eth, ip, udp, msg)
 }
 
-fn write_dhcpv6_packet<'a>(
+fn write_dhcpv6_packet(
     eth: EtherMeta,
     ip: Ipv6Meta,
     udp: UdpMeta,
-    msg: &dhcpv6::protocol::Message<'a>,
+    msg: &dhcpv6::protocol::Message<'_>,
 ) -> Packet<Parsed> {
     let reply_len =
         msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::BASE_SIZE + EtherHdr::SIZE;
@@ -2617,7 +2612,7 @@ fn tcp_outbound() {
         GW_MAC_ADDR,
         dst_ip,
     );
-    let flow = pkt1.flow().clone();
+    let flow = *pkt1.flow();
     let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(

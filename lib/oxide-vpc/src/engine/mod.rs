@@ -39,12 +39,12 @@ use opte::engine::arp::ArpOp;
 use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::ip4::Ipv4Addr;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct VpcParser {}
 
 impl VpcParser {
     pub fn new() -> Self {
-        Self {}
+        Self::default()
     }
 }
 
@@ -63,13 +63,7 @@ fn is_arp_req(arp: &ArpEthIpv4) -> bool {
 }
 
 fn is_arp_req_for_tpa(tpa: Ipv4Addr, arp: &ArpEthIpv4) -> bool {
-    if is_arp_req(&arp) {
-        if arp.tpa == tpa {
-            return true;
-        }
-    }
-
-    false
+    is_arp_req(arp) && arp.tpa == tpa
 }
 
 impl VpcNetwork {

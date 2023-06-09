@@ -48,7 +48,7 @@ pub const IPV4_HDR_VER_MASK: u8 = 0xF0;
 pub const IPV4_HDR_VER_SHIFT: u8 = 4;
 pub const IPV4_VERSION: u8 = 4;
 
-pub const DEF_ROUTE: &'static str = "0.0.0.0/0";
+pub const DEF_ROUTE: &str = "0.0.0.0/0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IpError {
@@ -269,8 +269,7 @@ impl<'a> From<&Ipv4Hdr<'a>> for Ipv4Meta {
     fn from(ip4: &Ipv4Hdr) -> Self {
         let raw = ip4.bytes.read();
 
-        let hdr_len =
-            u16::from(u8::from(raw.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4);
+        let hdr_len = u16::from((raw.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4);
 
         Self {
             src: Ipv4Addr::from(raw.src),
@@ -278,7 +277,7 @@ impl<'a> From<&Ipv4Hdr<'a>> for Ipv4Meta {
             proto: Protocol::from(raw.proto),
             ttl: raw.ttl,
             ident: u16::from_be_bytes(raw.ident),
-            hdr_len: hdr_len,
+            hdr_len,
             total_len: u16::from_be_bytes(raw.total_len),
             csum: raw.csum,
         }
@@ -296,11 +295,12 @@ pub struct Ipv4Push {
 
 impl PushAction<Ipv4Meta> for Ipv4Push {
     fn push(&self) -> Ipv4Meta {
-        let mut ip4 = Ipv4Meta::default();
-        ip4.src = self.src;
-        ip4.dst = self.dst;
-        ip4.proto = self.proto;
-        ip4
+        Ipv4Meta {
+            src: self.src,
+            dst: self.dst,
+            proto: self.proto,
+            ..Default::default()
+        }
     }
 }
 
@@ -350,7 +350,7 @@ impl<'a> Ipv4Hdr<'a> {
     /// Return the header length, in bytes.
     #[inline]
     pub fn hdr_len(&self) -> u16 {
-        u16::from(u8::from(self.bytes.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4)
+        u16::from((self.bytes.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4)
     }
 
     #[inline]
@@ -395,7 +395,7 @@ impl<'a> Ipv4Hdr<'a> {
     pub fn pseudo_bytes(&self, bytes: &mut [u8; 12]) {
         bytes[0..4].copy_from_slice(&self.bytes.src);
         bytes[4..8].copy_from_slice(&self.bytes.dst);
-        let len_bytes = (self.ulp_len() as u16).to_be_bytes();
+        let len_bytes = self.ulp_len().to_be_bytes();
         bytes[8..12].copy_from_slice(&[
             0,
             self.bytes.proto,
@@ -443,7 +443,7 @@ impl<'a> Ipv4Hdr<'a> {
     /// the packet.
     #[inline]
     pub fn ulp_len(&self) -> u16 {
-        self.total_len() - self.hdr_len() as u16
+        self.total_len() - self.hdr_len()
     }
 }
 
@@ -561,10 +561,10 @@ mod test {
         let len = ip.hdr_len();
         assert_eq!(20, len);
 
-        let mut pkt = Packet::alloc_and_expand(usize::from(len));
+        let mut pkt = Packet::alloc_and_expand(len);
         let mut wtr = pkt.seg0_wtr();
         ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-        assert_eq!(usize::from(len), pkt.len());
+        assert_eq!(len, pkt.len());
 
         #[rustfmt::skip]
         let expected_bytes = vec![

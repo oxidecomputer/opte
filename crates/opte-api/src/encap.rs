@@ -79,7 +79,7 @@ impl Vni {
     /// Return the bytes that represent this VNI. The bytes are in
     /// network order.
     pub fn bytes(&self) -> [u8; 3] {
-        return self.inner;
+        self.inner
     }
 
     /// Attempt to create a new VNI from any value which can be

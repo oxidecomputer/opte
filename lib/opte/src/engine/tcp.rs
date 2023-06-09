@@ -164,10 +164,7 @@ pub struct TcpPush {
 
 impl PushAction<TcpMeta> for TcpPush {
     fn push(&self) -> TcpMeta {
-        let mut tcp = TcpMeta::default();
-        tcp.src = self.src;
-        tcp.dst = self.dst;
-        tcp
+        TcpMeta { src: self.src, dst: self.dst, ..Default::default() }
     }
 }
 
@@ -242,7 +239,7 @@ impl<'a> TcpHdr<'a> {
     pub fn options_bytes(&self) -> Option<&[u8]> {
         match &self.options {
             None => None,
-            Some(options) => Some(&*options),
+            Some(options) => Some(*options),
         }
     }
 
@@ -289,7 +286,7 @@ impl<'a> TcpHdr<'a> {
     pub fn options_raw(&self) -> Option<&[u8]> {
         match &self.options {
             None => None,
-            Some(options) => Some(&*options),
+            Some(options) => Some(*options),
         }
     }
 
@@ -381,7 +378,7 @@ pub struct TcpHdrRaw {
     pub urg: [u8; 2],
 }
 
-impl<'a> TcpHdrRaw {
+impl TcpHdrRaw {
     fn offset(&self) -> u8 {
         (self.offset & TCP_HDR_OFFSET_MASK) >> TCP_HDR_OFFSET_SHIFT
     }

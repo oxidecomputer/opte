@@ -92,6 +92,12 @@ pub struct NatPool<T: ConcreteIpAddr> {
     free_list: KMutex<BTreeMap<T, PortList<T>>>,
 }
 
+impl<T: ConcreteIpAddr> Default for NatPool<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 mod private {
     pub trait Ip: Into<super::IpAddr> {}
     impl Ip for super::Ipv4Addr {}
@@ -125,7 +131,7 @@ impl<T: ConcreteIpAddr> NatPool<T> {
         self.free_list
             .lock()
             .get(&priv_ip)
-            .map(|PortList { ip, ports, .. }| (ip.clone(), ports.clone()))
+            .map(|PortList { ip, ports, .. }| (*ip, ports.clone()))
     }
 
     /// Create a new NAT pool, with no entries.
@@ -155,7 +161,7 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
     type Entry = NatPoolEntry<T>;
 
     fn obtain(&self, priv_ip: &T) -> Result<Self::Entry, ResourceError> {
-        match self.free_list.lock().get_mut(&priv_ip) {
+        match self.free_list.lock().get_mut(priv_ip) {
             Some(PortList { ip, free_ports, .. }) => {
                 if let Some(port) = free_ports.pop() {
                     Ok(Self::Entry { ip: *ip, port })
@@ -169,7 +175,7 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
     }
 
     fn release(&self, priv_ip: &T, entry: Self::Entry) {
-        match self.free_list.lock().get_mut(&priv_ip) {
+        match self.free_list.lock().get_mut(priv_ip) {
             Some(PortList { free_ports, .. }) => {
                 free_ports.push(entry.port);
             }
@@ -229,7 +235,9 @@ impl SNat {
 
             Ok(AllowOrDeny::Allow(Arc::new(desc)))
         } else {
-            Err(GenDescError::Unexpected { msg: format!("No ICMP body found") })
+            Err(GenDescError::Unexpected {
+                msg: "No ICMP body found".to_string(),
+            })
         }
     }
 }
@@ -250,15 +258,15 @@ impl StatefulAction for SNat {
     ) -> GenDescResult {
         let pool = &self.ip_pool;
         let priv_port = flow_id.src_port;
-        match pool.obtain(&self.priv_ip.into()) {
+        match pool.obtain(&self.priv_ip) {
             Ok(nat) => match flow_id.proto {
                 Protocol::ICMP => self.gen_icmp_desc(nat, pkt),
 
                 _ => {
                     let desc = SNatDesc {
                         pool: pool.clone(),
-                        priv_ip: self.priv_ip.into(),
-                        priv_port: priv_port,
+                        priv_ip: self.priv_ip,
+                        priv_port,
                         nat,
                     };
 
@@ -267,16 +275,14 @@ impl StatefulAction for SNat {
             },
 
             Err(ResourceError::Exhausted) => {
-                return Err(GenDescError::ResourceExhausted {
+                Err(GenDescError::ResourceExhausted {
                     name: "SNAT Pool (exhausted)".to_string(),
-                });
+                })
             }
 
-            Err(ResourceError::NoMatch(ip)) => {
-                return Err(GenDescError::Unexpected {
-                    msg: format!("SNAT pool (no match: {})", ip),
-                });
-            }
+            Err(ResourceError::NoMatch(ip)) => Err(GenDescError::Unexpected {
+                msg: format!("SNAT pool (no match: {})", ip),
+            }),
         }
     }
 
@@ -313,8 +319,8 @@ impl StatefulAction for SNat6 {
             Ok(nat) => {
                 let desc = SNatDesc {
                     pool: pool.clone(),
-                    priv_ip: self.priv_ip.into(),
-                    priv_port: priv_port,
+                    priv_ip: self.priv_ip,
+                    priv_port,
                     nat,
                 };
 
@@ -322,16 +328,14 @@ impl StatefulAction for SNat6 {
             }
 
             Err(ResourceError::Exhausted) => {
-                return Err(GenDescError::ResourceExhausted {
+                Err(GenDescError::ResourceExhausted {
                     name: "SNAT Pool (exhausted)".to_string(),
-                });
+                })
             }
 
-            Err(ResourceError::NoMatch(ip)) => {
-                return Err(GenDescError::Unexpected {
-                    msg: format!("SNAT pool (no match: {})", ip),
-                });
-            }
+            Err(ResourceError::NoMatch(ip)) => Err(GenDescError::Unexpected {
+                msg: format!("SNAT pool (no match: {})", ip),
+            }),
         }
     }
 
@@ -358,7 +362,7 @@ pub struct SNatDesc<T: ConcreteIpAddr> {
     priv_port: u16,
 }
 
-pub const SNAT_NAME: &'static str = "SNAT";
+pub const SNAT_NAME: &str = "SNAT";
 
 impl ActionDesc for SNatDesc<Ipv4Addr> {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
@@ -480,7 +484,7 @@ pub struct SNatIcmpEchoDesc {
     echo_ident: u16,
 }
 
-pub const SNAT_ICMP_ECHO_NAME: &'static str = "SNAT_ICMP_ECHO";
+pub const SNAT_ICMP_ECHO_NAME: &str = "SNAT_ICMP_ECHO";
 
 impl ActionDesc for SNatIcmpEchoDesc {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
@@ -534,7 +538,7 @@ impl ActionDesc for SNatIcmpEchoDesc {
 
 impl Drop for SNatIcmpEchoDesc {
     fn drop(&mut self) {
-        self.pool.release(&self.priv_ip.into(), self.nat);
+        self.pool.release(&self.priv_ip, self.nat);
     }
 }
 

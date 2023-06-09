@@ -25,6 +25,7 @@ pub enum IcmpEchoType {
     Reply,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn gen_icmp_echo_req(
     eth_src: MacAddr,
     eth_dst: MacAddr,
@@ -46,6 +47,7 @@ pub fn gen_icmp_echo_req(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn gen_icmpv4_echo_req(
     eth_src: MacAddr,
     eth_dst: MacAddr,
@@ -62,6 +64,7 @@ pub fn gen_icmpv4_echo_req(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn gen_icmp_echo_reply(
     eth_src: MacAddr,
     eth_dst: MacAddr,
@@ -78,6 +81,7 @@ pub fn gen_icmp_echo_reply(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn gen_icmp_echo(
     etype: IcmpEchoType,
     eth_src: MacAddr,
@@ -95,7 +99,7 @@ pub fn gen_icmp_echo(
     };
     let mut icmp_bytes = vec![0u8; icmp.buffer_len()];
     let mut icmp_pkt = Icmpv4Packet::new_unchecked(&mut icmp_bytes);
-    let _ = icmp.emit(&mut icmp_pkt, &Default::default());
+    icmp.emit(&mut icmp_pkt, &Default::default());
 
     let mut ip4 = Ipv4Meta {
         src: ip_src,
@@ -147,6 +151,7 @@ pub fn gen_icmp_echo(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn gen_icmpv6_echo_req(
     eth_src: MacAddr,
     eth_dst: MacAddr,
@@ -160,7 +165,7 @@ pub fn gen_icmpv6_echo_req(
     let req = Icmpv6Repr::EchoRequest { ident, seq_no, data };
     let mut body_bytes = vec![0u8; req.buffer_len()];
     let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body_bytes);
-    let _ = req.emit(
+    req.emit(
         &Ipv6Address::from_bytes(&ip_src).into(),
         &Ipv6Address::from_bytes(&ip_dst).into(),
         &mut req_pkt,

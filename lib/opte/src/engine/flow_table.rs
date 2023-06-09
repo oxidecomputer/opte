@@ -97,7 +97,7 @@ where
         }
 
         let entry = FlowEntry::new(state);
-        self.map.insert(flow_id.clone(), entry);
+        self.map.insert(flow_id, entry);
         Ok(())
     }
 
@@ -106,7 +106,7 @@ where
     /// This is meant for table implementations that enforce their own limit.
     pub fn add_unchecked(&mut self, flow_id: InnerFlowId, state: S) {
         let entry = FlowEntry::new(state);
-        self.map.insert(flow_id.clone(), entry);
+        self.map.insert(flow_id, entry);
     }
 
     // Clear all entries from the flow table.
@@ -117,7 +117,7 @@ where
     pub fn dump(&self) -> FlowTableDump<S::DumpVal> {
         let mut flows = Vec::with_capacity(self.map.len());
         for (flow_id, entry) in &self.map {
-            flows.push((flow_id.clone(), entry.dump()));
+            flows.push((*flow_id, entry.dump()));
         }
         flows
     }
@@ -139,7 +139,7 @@ where
         self.map.retain(|flowid, entry| {
             if entry.is_expired(now, ttl) {
                 flow_expired_probe(port_c, name_c, flowid);
-                expired.push(f(&entry.state()));
+                expired.push(f(entry.state()));
                 return false;
             }
 
@@ -304,9 +304,7 @@ extern "C" {
 impl Dump for () {
     type DumpVal = ();
 
-    fn dump(&self, _hits: u64) -> () {
-        ()
-    }
+    fn dump(&self, _hits: u64) {}
 }
 
 #[cfg(test)]
@@ -335,12 +333,11 @@ mod test {
         ft.add(flowid, ()).unwrap();
         let now = Moment::now();
         assert_eq!(ft.num_flows(), 1);
-        ft.expire_flows(now, |_| FLOW_ID_DEFAULT.clone());
+        ft.expire_flows(now, |_| FLOW_ID_DEFAULT);
         assert_eq!(ft.num_flows(), 1);
-        ft.expire_flows(
-            now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64, 0),
-            |_| FLOW_ID_DEFAULT.clone(),
-        );
+        ft.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0), |_| {
+            FLOW_ID_DEFAULT
+        });
         assert_eq!(ft.num_flows(), 0);
     }
 

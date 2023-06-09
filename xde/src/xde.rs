@@ -109,10 +109,11 @@ const XDE_CTL_STR: *const c_char = b"ctl\0".as_ptr() as *const c_char;
 static mut XDE_CTL_MINOR: minor_t = 0;
 
 /// A list of xde devices instantiated through xde_ioc_create.
+#[allow(clippy::vec_box)]
 static mut xde_devs: KRwLock<Vec<Box<XdeDev>>> = KRwLock::new(Vec::new());
 
 /// DDI dev info pointer to the attached xde device.
-static mut xde_dip: *mut dev_info = 0 as *mut dev_info;
+static mut xde_dip: *mut dev_info = ptr::null_mut();
 
 // This block is purely for SDT probes.
 extern "C" {
@@ -576,24 +577,20 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // This does mean that the current Rx path is blocked on device
     // creation, but that's a price we need to pay for the moment.
     let mut devs = unsafe { xde_devs.write() };
-    match devs.iter().find(|x| x.devname == req.xde_devname) {
-        Some(_) => return Err(OpteError::PortExists(req.xde_devname.clone())),
-        None => (),
-    };
+    if devs.iter().any(|x| x.devname == req.xde_devname) {
+        return Err(OpteError::PortExists(req.xde_devname.clone()));
+    }
 
     let cfg = &req.cfg;
-    match devs
+    if devs
         .iter()
-        .find(|x| x.vni == cfg.vni && x.port.mac_addr() == cfg.guest_mac.into())
+        .any(|x| x.vni == cfg.vni && x.port.mac_addr() == cfg.guest_mac)
     {
-        Some(_) => {
-            return Err(OpteError::MacExists {
-                port: req.xde_devname.clone(),
-                vni: cfg.vni,
-                mac: cfg.guest_mac,
-            })
-        }
-        None => (),
+        return Err(OpteError::MacExists {
+            port: req.xde_devname.clone(),
+            vni: cfg.vni,
+            mac: cfg.guest_mac,
+        });
     }
 
     // If this is the first guest in this VPC, then create a new
@@ -619,7 +616,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     let port = new_port(
         req.xde_devname.clone(),
-        &cfg,
+        cfg,
         state.vpc_map.clone(),
         port_v2p.clone(),
         state.ectx.clone(),
@@ -635,7 +632,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     let mut xde = Box::new(XdeDev {
         devname: req.xde_devname.clone(),
         linkid: req.linkid,
-        mh: 0 as *mut mac::mac_handle,
+        mh: ptr::null_mut(),
         link_state: mac::link_state_t::Down,
         port,
         port_periodic,
@@ -649,14 +646,13 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     drop(underlay_);
 
     // set up upper mac
-    let mreg = match unsafe { mac::mac_alloc(MAC_VERSION as u32).as_mut() } {
-        Some(x) => x,
-        None => {
-            return Err(OpteError::System {
-                errno: ENOMEM,
-                msg: "failed to alloc mac".to_string(),
-            })
-        }
+    let Some(mreg) = (unsafe {
+        mac::mac_alloc(MAC_VERSION as u32).as_mut()
+    }) else {
+        return Err(OpteError::System {
+            errno: ENOMEM,
+            msg: "failed to alloc mac".to_string(),
+        })
     };
 
     mreg.m_type_ident = MAC_PLUGIN_IDENT_ETHER;
@@ -896,7 +892,7 @@ unsafe extern "C" fn xde_attach(
 
     ddi_report_dev(xde_dip);
 
-    return DDI_SUCCESS;
+    DDI_SUCCESS
 }
 
 /// Setup underlay port atop the given link.
@@ -1087,62 +1083,56 @@ unsafe extern "C" fn xde_detach(
     let state = Box::from_raw(rstate as *mut XdeState);
     let underlay = state.underlay.into_inner();
 
-    match underlay {
-        Some(underlay) => {
-            // There shouldn't be anymore refs to the underlay given we checked for
-            // 0 ports above.
-            let Ok(u1) = Arc::try_unwrap(underlay.u1) else {
-                warn!("failed to detach: underlay u1 has outstanding refs");
+    if let Some(underlay) = underlay {
+        // There shouldn't be anymore refs to the underlay given we checked for
+        // 0 ports above.
+        let Ok(u1) = Arc::try_unwrap(underlay.u1) else {
+            warn!("failed to detach: underlay u1 has outstanding refs");
+            return DDI_FAILURE;
+        };
+        let Ok(u2) = Arc::try_unwrap(underlay.u2) else {
+            warn!("failed to detach: underlay u2 has outstanding refs");
+            return DDI_FAILURE;
+        };
+
+        for u in [u1, u2] {
+            // Clear all Rx paths
+            u.mch.clear_rx();
+
+            // We have a chain of refs here:
+            //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
+            //  2. `MacUnicastHandle` holds a ref to `MacClientHandle`, and
+            //  3. `MacClientHandle` holds a ref to `MacHandle`.
+            // We explicitly drop them in order here to ensure there are no
+            // outstanding refs.
+
+            // 1. Remove promisc and unicast callbacks
+            drop(u.mph);
+            drop(u.muh);
+
+            // 2. Remove MAC client handle
+            if Arc::strong_count(&u.mch) > 1 {
+                warn!(
+                    "underlay {} has outstanding mac client handle refs",
+                    u.name
+                );
                 return DDI_FAILURE;
-            };
-            let Ok(u2) = Arc::try_unwrap(underlay.u2) else {
-                warn!("failed to detach: underlay u2 has outstanding refs");
-                return DDI_FAILURE;
-            };
-
-            for u in [u1, u2] {
-                // Clear all Rx paths
-                u.mch.clear_rx();
-
-                // We have a chain of refs here:
-                //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
-                //  2. `MacUnicastHandle` holds a ref to `MacClientHandle`, and
-                //  3. `MacClientHandle` holds a ref to `MacHandle`.
-                // We explicitly drop them in order here to ensure there are no
-                // outstanding refs.
-
-                // 1. Remove promisc and unicast callbacks
-                drop(u.mph);
-                drop(u.muh);
-
-                // 2. Remove MAC client handle
-                if Arc::strong_count(&u.mch) > 1 {
-                    warn!(
-                        "underlay {} has outstanding mac client handle refs",
-                        u.name
-                    );
-                    return DDI_FAILURE;
-                }
-                drop(u.mch);
-
-                // Finally, we can cleanup the MAC handle for this underlay
-                if Arc::strong_count(&u.mh) > 1 {
-                    warn!(
-                        "underlay {} has outstanding mac handle refs",
-                        u.name
-                    );
-                    return DDI_FAILURE;
-                }
-                drop(u.mh);
             }
+            drop(u.mch);
+
+            // Finally, we can cleanup the MAC handle for this underlay
+            if Arc::strong_count(&u.mh) > 1 {
+                warn!("underlay {} has outstanding mac handle refs", u.name);
+                return DDI_FAILURE;
+            }
+            drop(u.mh);
         }
-        None => {}
-    };
+    }
 
     // Remove control device
     ddi_remove_minor_node(xde_dip, XDE_STR);
 
-    xde_dip = ptr::null_mut::<c_void>() as *mut dev_info;
+    xde_dip = ptr::null_mut();
     DDI_SUCCESS
 }
 
@@ -1326,12 +1316,11 @@ fn guest_loopback(
                 Ok(ProcessResult::Modified) => {
                     unsafe {
                         mac::mac_rx(
-                            (*dest_dev).mh,
-                            0 as *mut mac::mac_resource_handle,
+                            dest_dev.mh,
+                            ptr::null_mut(),
                             pkt.unwrap_mblk(),
                         )
                     };
-                    return ptr::null_mut();
                 }
 
                 Ok(ProcessResult::Drop { reason }) => {
@@ -1339,29 +1328,24 @@ fn guest_loopback(
                         "loopback rx drop: {:?}",
                         reason
                     ));
-                    return ptr::null_mut();
                 }
 
                 Ok(ProcessResult::Hairpin(_hppkt)) => {
                     // There should be no reason for an loopback
                     // inbound packet to generate a hairpin response
                     // from the destination port.
-                    opte::engine::dbg(format!(
-                        "unexpected loopback rx hairpin"
-                    ));
-                    return ptr::null_mut();
+                    opte::engine::dbg("unexpected loopback rx hairpin");
                 }
 
                 Ok(ProcessResult::Bypass) => {
-                    opte::engine::dbg(format!("loopback rx bypass"));
+                    opte::engine::dbg("loopback rx bypass");
                     unsafe {
                         mac::mac_rx(
-                            (*dest_dev).mh,
-                            0 as *mut mac::mac_resource_handle,
+                            dest_dev.mh,
+                            ptr::null_mut(),
                             pkt.unwrap_mblk(),
                         )
                     };
-                    return ptr::null_mut();
                 }
 
                 Err(e) => {
@@ -1371,7 +1355,6 @@ fn guest_loopback(
                         dest_dev.port.name(),
                         e
                     ));
-                    return ptr::null_mut();
                 }
             }
         }
@@ -1383,9 +1366,10 @@ fn guest_loopback(
                 vni.as_u32(),
                 ether_dst
             ));
-            return ptr::null_mut();
         }
     }
+
+    ptr::null_mut()
 }
 
 #[no_mangle]
@@ -1398,7 +1382,7 @@ unsafe extern "C" fn xde_mc_tx(
 
     // TODO I haven't dealt with chains, though I'm pretty sure it's
     // always just one.
-    assert!((*mp_chain).b_next == ptr::null_mut());
+    assert!((*mp_chain).b_next.is_null());
     __dtrace_probe_tx(mp_chain as uintptr_t);
 
     // ================================================================
@@ -1472,7 +1456,7 @@ unsafe extern "C" fn xde_mc_tx(
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
-                    opte::engine::dbg(format!("no outer ip header, dropping"));
+                    opte::engine::dbg("no outer ip header, dropping");
                     return ptr::null_mut();
                 }
             };
@@ -1480,9 +1464,7 @@ unsafe extern "C" fn xde_mc_tx(
             let ip6 = match ip.ip6() {
                 Some(v) => v,
                 None => {
-                    opte::engine::dbg(format!(
-                        "outer IP header is not v6, dropping"
-                    ));
+                    opte::engine::dbg("outer IP header is not v6, dropping");
                     return ptr::null_mut();
                 }
             };
@@ -1492,7 +1474,7 @@ unsafe extern "C" fn xde_mc_tx(
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
-                    opte::engine::dbg(format!("no geneve header, dropping"));
+                    opte::engine::dbg("no geneve header, dropping");
                     return ptr::null_mut();
                 }
             };
@@ -1531,11 +1513,7 @@ unsafe extern "C" fn xde_mc_tx(
         }
 
         Ok(ProcessResult::Hairpin(hpkt)) => {
-            mac::mac_rx(
-                src_dev.mh,
-                0 as *mut mac::mac_resource_handle,
-                hpkt.unwrap_mblk(),
-            );
+            mac::mac_rx(src_dev.mh, ptr::null_mut(), hpkt.unwrap_mblk());
         }
 
         Ok(ProcessResult::Bypass) => {
@@ -1554,7 +1532,7 @@ unsafe extern "C" fn xde_mc_tx(
 /// use.
 struct DropRef<DropFn, Arg>
 where
-    DropFn: Fn(*mut Arg) -> (),
+    DropFn: Fn(*mut Arg),
 {
     /// A function to drop the reference.
     func: DropFn,
@@ -1564,7 +1542,7 @@ where
 
 impl<DropFn, Arg> DropRef<DropFn, Arg>
 where
-    DropFn: Fn(*mut Arg) -> (),
+    DropFn: Fn(*mut Arg),
 {
     /// Create a new `DropRef` for the provided reference argument. When this
     /// object is dropped, the provided `func` will be called.
@@ -1580,7 +1558,7 @@ where
 
 impl<DropFn, Arg> Drop for DropRef<DropFn, Arg>
 where
-    DropFn: Fn(*mut Arg) -> (),
+    DropFn: Fn(*mut Arg),
 {
     /// Call the cleanup function on the reference argument when we are dropped.
     fn drop(&mut self) {
@@ -1978,20 +1956,20 @@ fn new_port(
         Err(_) => return Err(OpteError::BadName),
     };
 
-    let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac.into(), ectx);
+    let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac, ectx);
     firewall::setup(&mut pb, FW_FT_LIMIT)?;
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&mut pb, &cfg, vpc_map, FT_LIMIT_ONE)?;
-    router::setup(&mut pb, &cfg, FT_LIMIT_ONE)?;
+    gateway::setup(&pb, cfg, vpc_map, FT_LIMIT_ONE)?;
+    router::setup(&pb, cfg, FT_LIMIT_ONE)?;
     let nat_ft_limit = match cfg.n_external_ports() {
         None => FT_LIMIT_ONE,
         Some(0) => return Err(OpteError::InvalidIpCfg),
         Some(n) => NonZeroU32::new(n).unwrap(),
     };
-    nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, FT_LIMIT_ONE)?;
+    nat::setup(&mut pb, cfg, nat_ft_limit)?;
+    overlay::setup(&pb, cfg, v2p, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -2060,46 +2038,43 @@ unsafe extern "C" fn xde_rx(
             // TODO add stat
             let msg = "no geneve header, dropping";
             bad_packet_probe(None, Direction::In, mp_chain, msg);
-            opte::engine::dbg(format!("{}", msg));
+            opte::engine::dbg(msg);
             return;
         }
     };
 
     let vni = geneve.vni;
     let ether_dst = meta.inner.ether.dst;
-    let dev = match devs
+    let Some(dev) = devs
         .iter()
         .find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
-    {
-        Some(dev) => dev,
-        None => {
-            // TODO add SDT probe
-            // TODO add stat
-            opte::engine::dbg(format!(
-                "[encap] no device found for vni: {} mac: {}",
-                vni, ether_dst
-            ));
-            return;
-        }
+    else {
+        // TODO add SDT probe
+        // TODO add stat
+        opte::engine::dbg(format!(
+            "[encap] no device found for vni: {} mac: {}",
+            vni, ether_dst
+        ));
+        return;
     };
 
     // We are in passthrough mode, skip OPTE processing.
-    if (*dev).passthrough {
-        mac::mac_rx((*dev).mh, mrh, mp_chain);
+    if dev.passthrough {
+        mac::mac_rx(dev.mh, mrh, mp_chain);
         return;
     }
 
-    let port = &(*dev).port;
+    let port = &dev.port;
     let res = port.process(Direction::In, &mut pkt, ActionMeta::new());
     match res {
         Ok(ProcessResult::Modified) => {
-            mac::mac_rx((*dev).mh, mrh, pkt.unwrap_mblk());
+            mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
             mch.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
         }
         Ok(ProcessResult::Bypass) => {
-            mac::mac_rx((*dev).mh, mrh, mp_chain);
+            mac::mac_rx(dev.mh, mrh, mp_chain);
         }
         _ => {}
     }
@@ -2115,7 +2090,7 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    router::add_entry(&dev.port, req.dest.into(), req.target.into())
+    router::add_entry(&dev.port, req.dest, req.target)
 }
 
 #[no_mangle]
@@ -2258,19 +2233,17 @@ fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
     for dev in devs.iter() {
         resp.ports.push(PortInfo {
             name: dev.port.name().to_string(),
-            mac_addr: dev.port.mac_addr().into(),
+            mac_addr: dev.port.mac_addr(),
             ip4_addr: dev.vpc_cfg.ipv4_cfg().map(|cfg| cfg.private_ip),
             external_ip4_addr: dev
                 .vpc_cfg
                 .ipv4_cfg()
-                .map(|cfg| cfg.external_ips)
-                .flatten(),
+                .and_then(|cfg| cfg.external_ips),
             ip6_addr: dev.vpc_cfg.ipv6_cfg().map(|cfg| cfg.private_ip),
             external_ip6_addr: dev
                 .vpc_cfg
                 .ipv6_cfg()
-                .map(|cfg| cfg.external_ips)
-                .flatten(),
+                .and_then(|cfg| cfg.external_ips),
             state: dev.port.state().to_string(),
         });
     }

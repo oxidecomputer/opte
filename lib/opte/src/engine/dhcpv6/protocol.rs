@@ -355,13 +355,12 @@ fn generate_reply_options<'a>(
     //
     // This is a list of domain names appended to hostnames before trying to
     // resolve them.
-    if msg.has_option(OptionCode::DomainList)
-        || msg.has_option_request_with(OptionCode::DomainList)
+    if (msg.has_option(OptionCode::DomainList)
+        || msg.has_option_request_with(OptionCode::DomainList))
+        && !action.domain_list.is_empty()
     {
-        if !action.domain_list.is_empty() {
-            let opt = Dhcpv6Option::from(action.domain_list.as_slice());
-            options.push(opt);
-        }
+        let opt = Dhcpv6Option::from(action.domain_list.as_slice());
+        options.push(opt);
     }
     options
 }
@@ -396,7 +395,7 @@ fn process_solicit_message<'a>(
     }
 
     // Generate all the options we'll send back to the client.
-    let mut options = generate_reply_options(action, &client_msg);
+    let mut options = generate_reply_options(action, client_msg);
 
     // Set the message type.
     //
@@ -444,19 +443,19 @@ fn process_request_message<'a>(
     }
 
     // Generate all the options we'll send back to the client.
-    let options = generate_reply_options(action, &client_msg);
+    let options = generate_reply_options(action, client_msg);
 
     let typ = MessageType::Reply;
     Some(Message { typ, xid: client_msg.xid.clone(), options })
 }
 
 // Return the server's DUID itself.
-fn server_duid<'a>(action: &'a Dhcpv6Action) -> Duid<'a> {
+fn server_duid(action: &Dhcpv6Action) -> Duid<'_> {
     Duid::from(&action.server_mac)
 }
 
 // Return the DHCPv6 Option containing the server's DUID.
-fn server_id<'a>(action: &'a Dhcpv6Action) -> Dhcpv6Option<'a> {
+fn server_id(action: &Dhcpv6Action) -> Dhcpv6Option<'_> {
     Dhcpv6Option::ServerId(server_duid(action))
 }
 
@@ -567,9 +566,9 @@ fn process_client_message<'a>(
     client_msg: &'a Message<'a>,
 ) -> Option<Message<'a>> {
     match client_msg.typ {
-        MessageType::Solicit => process_solicit_message(action, &client_msg),
-        MessageType::Request => process_request_message(action, &client_msg),
-        MessageType::Confirm => process_confirm_message(action, &client_msg),
+        MessageType::Solicit => process_solicit_message(action, client_msg),
+        MessageType::Request => process_request_message(action, client_msg),
+        MessageType::Confirm => process_confirm_message(action, client_msg),
         // TODO-completeness: Handle other message types.
         //
         // This is pretty low-priority right now. Conforming clients must use
@@ -725,7 +724,7 @@ mod test {
             MacAddr::from_const([0xa8, 0x40, 0x25, 0xfa, 0xdd, 0x0b]);
         for pred in dhcpv6_server_predicates(&client_mac) {
             assert!(
-                pred.is_match(&pmeta, &ameta),
+                pred.is_match(pmeta, &ameta),
                 "Expected predicate to match snooped Solicit test packet: {}",
                 pred
             );

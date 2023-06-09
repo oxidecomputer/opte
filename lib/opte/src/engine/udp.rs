@@ -79,10 +79,7 @@ pub struct UdpPush {
 
 impl PushAction<UdpMeta> for UdpPush {
     fn push(&self) -> UdpMeta {
-        let mut udp = UdpMeta::default();
-        udp.src = self.src;
-        udp.dst = self.dst;
-        udp
+        UdpMeta { src: self.src, dst: self.dst, ..Default::default() }
     }
 }
 

@@ -71,40 +71,32 @@ pub fn setup(
     );
 
     let offer = Action::Hairpin(Arc::new(DhcpAction {
-        client_mac: cfg.guest_mac.into(),
+        client_mac: cfg.guest_mac,
         client_ip: ip_cfg.private_ip,
         subnet_prefix_len: Ipv4PrefixLen::NETMASK_ALL,
-        gw_mac: cfg.gateway_mac.into(),
+        gw_mac: cfg.gateway_mac,
         gw_ip: ip_cfg.gateway_ip,
         reply_type: DhcpReplyType::Offer,
         re1,
         re2: Some(re2),
         re3: None,
         // XXX For now at least resolve the internet.
-        dns_servers: Some([
-            Some(Ipv4Addr::from([8, 8, 8, 8]).into()),
-            None,
-            None,
-        ]),
+        dns_servers: Some([Some(Ipv4Addr::from([8, 8, 8, 8])), None, None]),
         domain_list: cfg.domain_list.clone(),
     }));
 
     let ack = Action::Hairpin(Arc::new(DhcpAction {
-        client_mac: cfg.guest_mac.into(),
+        client_mac: cfg.guest_mac,
         client_ip: ip_cfg.private_ip,
         subnet_prefix_len: Ipv4PrefixLen::NETMASK_ALL,
-        gw_mac: cfg.gateway_mac.into(),
+        gw_mac: cfg.gateway_mac,
         gw_ip: ip_cfg.gateway_ip,
         reply_type: DhcpReplyType::Ack,
         re1,
         re2: Some(re2),
         re3: None,
         // XXX For now at least resolve the internet.
-        dns_servers: Some([
-            Some(Ipv4Addr::from([8, 8, 8, 8]).into()),
-            None,
-            None,
-        ]),
+        dns_servers: Some([Some(Ipv4Addr::from([8, 8, 8, 8])), None, None]),
         domain_list: cfg.domain_list.clone(),
     }));
 

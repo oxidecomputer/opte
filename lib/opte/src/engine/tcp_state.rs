@@ -101,6 +101,12 @@ impl Display for TcpFlowState {
     }
 }
 
+impl Default for TcpFlowState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // impl TcpStateM<Next = TcpState::CloseWait> for TcpFlow<tcp_state = TcpState::Established> {
 //     type Next = TcpState::CloseWait;
 //     fn next_state(self, dir: Direction, flags: u8, guest_seq: u32, guest_ack: u32, remote_seq: u32, remote_ack: u32) -> Self<Self::Next> {
@@ -145,7 +151,7 @@ impl TcpFlowState {
                     return Some(Established);
                 }
 
-                return None;
+                None
             }
 
             Listen => {
@@ -156,18 +162,18 @@ impl TcpFlowState {
                     return Some(Listen);
                 }
 
-                return None;
+                None
             }
 
             // The guest is in active open and waiting for the
             // remote's SYN+ACK.
             SynSent => {
                 if tcp.has_flag(TcpFlags::SYN) && tcp.has_flag(TcpFlags::ACK) {
-                    return Some(Established);
+                    Some(Established)
                 } else {
                     // Could be simultaneous open, but not worrying
                     // about that for now.
-                    return None;
+                    None
                 }
             }
 
@@ -187,7 +193,7 @@ impl TcpFlowState {
 
                 // TODO I imagine we could see a retrans of the
                 // remote's SYN here.
-                return None;
+                None
             }
 
             Established => {
@@ -198,7 +204,7 @@ impl TcpFlowState {
                 }
 
                 // Normal traffic on an ESTABLISHED connection.
-                return Some(Established);
+                Some(Established)
             }
 
             // The guest is in passive close.
@@ -214,7 +220,7 @@ impl TcpFlowState {
                     return Some(CloseWait);
                 }
 
-                return None;
+                None
             }
 
             // The guest is in passive close.
@@ -237,7 +243,7 @@ impl TcpFlowState {
                     return Some(LastAck);
                 }
 
-                return None;
+                None
             }
 
             // The guest is in active close.
@@ -267,7 +273,7 @@ impl TcpFlowState {
                 }
 
                 // TODO This could be a simultaneous close.
-                return None;
+                None
             }
 
             // The guest is in active close.
@@ -287,7 +293,7 @@ impl TcpFlowState {
                     return Some(FinWait2);
                 }
 
-                return None;
+                None
             }
 
             // The guest is in active close.
@@ -306,7 +312,7 @@ impl TcpFlowState {
                     return Some(TimeWait);
                 }
 
-                return None;
+                None
             }
         }
     }
@@ -336,7 +342,7 @@ impl TcpFlowState {
                     return Some(Established);
                 }
 
-                return None;
+                None
             }
 
             // This is our initial state for a potential passive open.
@@ -347,7 +353,7 @@ impl TcpFlowState {
                     return Some(SynRcvd);
                 }
 
-                return None;
+                None
             }
 
             SynSent => {
@@ -356,7 +362,7 @@ impl TcpFlowState {
                     return Some(SynSent);
                 }
 
-                return None;
+                None
             }
 
             SynRcvd => {
@@ -366,7 +372,7 @@ impl TcpFlowState {
                     return Some(SynRcvd);
                 }
 
-                return None;
+                None
             }
 
             // TODO passive close
@@ -375,7 +381,7 @@ impl TcpFlowState {
                     return Some(FinWait1);
                 }
 
-                return Some(Established);
+                Some(Established)
             }
 
             // The guest is in active close.
@@ -390,7 +396,7 @@ impl TcpFlowState {
                     return Some(FinWait1);
                 }
 
-                return None;
+                None
             }
 
             // The guest in in active close.
@@ -402,7 +408,7 @@ impl TcpFlowState {
                     return Some(FinWait2);
                 }
 
-                return None;
+                None
             }
 
             // The guest is in active close.
@@ -417,7 +423,7 @@ impl TcpFlowState {
                     return Some(TimeWait);
                 }
 
-                return None;
+                None
             }
 
             // The guest is in a passive close state.
@@ -432,7 +438,7 @@ impl TcpFlowState {
                 // it finishes up its half of the connection. I'm not
                 // sure there's anything else to really check for
                 // explicitly.
-                return Some(CloseWait);
+                Some(CloseWait)
             }
 
             // The guest is in a passive close state.
@@ -443,7 +449,7 @@ impl TcpFlowState {
                     return Some(LastAck);
                 }
 
-                return None;
+                None
             }
         }
     }
@@ -495,7 +501,7 @@ impl TcpFlowState {
         let new_state = match res {
             Some(new_state) => new_state,
             None => {
-                self.tcp_flow_drop_probe(port, &flow_id, dir, tcp.flags);
+                self.tcp_flow_drop_probe(port, flow_id, dir, tcp.flags);
                 return Err(TcpFlowStateError::UnexpectedSegment {
                     direction: dir,
                     flow_id: *flow_id,
@@ -508,7 +514,7 @@ impl TcpFlowState {
         // Make sure to transition the state if it has changed and
         // fire the SDT probe.
         if new_state != curr_state {
-            self.tcp_flow_state_probe(port, &flow_id, new_state);
+            self.tcp_flow_state_probe(port, flow_id, new_state);
             self.tcp_state = new_state;
         }
 

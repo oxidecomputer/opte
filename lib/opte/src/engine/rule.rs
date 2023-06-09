@@ -630,10 +630,7 @@ impl Action {
     }
 
     pub fn is_deny(&self) -> bool {
-        match self {
-            Self::Deny => true,
-            _ => false,
-        }
+        matches!(self, Self::Deny)
     }
 }
 
@@ -809,8 +806,8 @@ impl Rule<Ready> {
 
     /// Finalize the rule; locking all predicates in stone.
     pub fn finalize(self) -> Rule<Finalized> {
-        let preds = if self.state.hdr_preds.len() == 0
-            && self.state.data_preds.len() == 0
+        let preds = if self.state.hdr_preds.is_empty()
+            && self.state.data_preds.is_empty()
         {
             None
         } else {

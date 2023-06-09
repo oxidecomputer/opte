@@ -419,7 +419,7 @@ impl FromStr for RouterTarget {
         match s.to_ascii_lowercase().as_str() {
             "drop" => Ok(Self::Drop),
             "ig" => Ok(Self::InternetGateway),
-            lower => match lower.split_once("=") {
+            lower => match lower.split_once('=') {
                 Some(("ip4", ip4s)) => {
                     let ip4 = ip4s
                         .parse::<std::net::Ipv4Addr>()
@@ -589,8 +589,8 @@ impl FromStr for FirewallRule {
         let mut protocol = None;
         let mut ports = None;
 
-        for token in s.to_ascii_lowercase().split(" ") {
-            match token.split_once("=") {
+        for token in s.to_ascii_lowercase().split(' ') {
+            match token.split_once('=') {
                 None => {
                     return Err(format!("bad token: {}", token));
                 }
@@ -605,7 +605,7 @@ impl FromStr for FirewallRule {
 
                 Some(("priority", val)) => {
                     priority = Some(val.parse::<u16>().map_err(|e| {
-                        format!("bad priroity: '{}' {}", val, e.to_string())
+                        format!("bad priroity: '{}' {}", val, e)
                     })?);
                 }
 
@@ -630,15 +630,15 @@ impl FromStr for FirewallRule {
         }
 
         if action.is_none() {
-            return Err(format!("missing 'action' key"));
+            return Err("missing 'action' key".to_string());
         }
 
         if direction.is_none() {
-            return Err(format!("missing direction ('dir') key"));
+            return Err("missing direction ('dir') key".to_string());
         }
 
         if priority.is_none() {
-            return Err(format!("missing 'priority' key"));
+            return Err("missing 'priority' key".to_string());
         }
 
         let mut filters = Filters::new();
@@ -675,7 +675,7 @@ impl FromStr for FirewallAction {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Filters {
     hosts: Address,
     protocol: ProtoFilter,
@@ -742,9 +742,12 @@ impl Filters {
 }
 
 /// Filter traffic by address.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize,
+)]
 pub enum Address {
     /// Match traffic from any address.
+    #[default]
     Any,
 
     /// Match traffic from the given subnet CIDR.
@@ -764,7 +767,7 @@ impl FromStr for Address {
         match s.to_ascii_lowercase().as_str() {
             "any" => Ok(Address::Any),
 
-            addrstr => match addrstr.split_once("=") {
+            addrstr => match addrstr.split_once('=') {
                 None => Err(format!(
                     "malformed address specification: {}",
                     addrstr,
@@ -789,8 +792,11 @@ impl Display for Address {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize,
+)]
 pub enum ProtoFilter {
+    #[default]
     Any,
     Arp,
     Proto(Protocol),
@@ -822,8 +828,9 @@ impl Display for ProtoFilter {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Ports {
+    #[default]
     Any,
     PortList(Vec<u16>),
 }
@@ -838,11 +845,11 @@ impl FromStr for Ports {
 
             _ => {
                 let ports: Vec<u16> = s
-                    .split(",")
+                    .split(',')
                     .map(|ps| ps.parse::<u16>().map_err(|e| e.to_string()))
                     .collect::<result::Result<Vec<u16>, _>>()?;
 
-                if ports.len() == 0 {
+                if ports.is_empty() {
                     return Err(format!("malformed ports spec: {}", s));
                 }
 
@@ -1053,6 +1060,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::reversed_empty_ranges)]
     fn test_n_external_ports_bad_snat_range() {
         let mut cfg = test_vpc_cfg();
         let ipv4 = cfg.ipv4_cfg_mut().unwrap();

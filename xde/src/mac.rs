@@ -173,11 +173,6 @@ impl MacClientHandle {
         unsafe { mac_rx_clear(self.mch) };
     }
 
-    /// Set the Rx callback handler.
-    pub fn set_rx(&self, rx_fn: mac_rx_fn, arg: *mut c_void) {
-        unsafe { mac_rx_set(self.mch, rx_fn, arg) };
-    }
-
     /// Calls `mac_unicast_add` on the underlying system.
     pub fn add_unicast(
         self: &Arc<Self>,
@@ -208,7 +203,7 @@ impl MacClientHandle {
         promisc_fn: mac_rx_fn,
         flags: u16,
     ) -> Result<MacPromiscHandle, c_int> {
-        let mut mph = 0 as *mut mac_promisc_handle;
+        let mut mph = ptr::null_mut();
 
         // `MacPromiscHandle` keeps a reference to this `MacClientHandle`
         // until it is removed and so we can safely access it from the
@@ -247,7 +242,7 @@ impl MacClientHandle {
         unsafe {
             mac_tx(self.mch, pkt.unwrap_mblk(), hint, flags.bits(), &mut ret_mp)
         };
-        if ret_mp != ptr::null_mut() {
+        if !ret_mp.is_null() {
             // Unwrap: We know the ret_mp is valid because we gave
             // mac_tx() a valid mp_chain; and mac_tx() will give us
             // either that exact pointer back (via ret_mp) or the
