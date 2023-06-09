@@ -1973,7 +1973,7 @@ fn new_port(
     v2p: Arc<overlay::Virt2Phys>,
     ectx: Arc<ExecCtx>,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
-    let name_cstr = match CString::new(name.clone()) {
+    let name_cstr = match CString::new(name.as_str()) {
         Ok(v) => v,
         Err(_) => return Err(OpteError::BadName),
     };
