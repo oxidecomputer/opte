@@ -1,7 +1,10 @@
 [package]
 name = "oxide-vpc"
 version = "0.1.0"
-edition = "2021"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 # The api feature is used by consumers of the Oxide VPC
 # implementation, namely Omicron.

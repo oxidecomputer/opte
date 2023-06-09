@@ -1,8 +1,10 @@
 [package]
 name = "opteadm"
 version = "0.2.0"
-authors = ["Ryan Zezeski <ryan@oxide.computer>"]
-edition = "2021"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 # XXX For the time being opteadm needs to set the engine feature to

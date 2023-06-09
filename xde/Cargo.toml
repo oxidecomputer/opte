@@ -1,12 +1,10 @@
 [package]
 name = "xde"
 version = "0.1.0"
-authors = [
-    "Ryan Goodfellow <ryan.goodfellow@oxide.computer>",
-    "Ryan Zezeski <ryan@oxide.computer>"
-]
-# XXX convert to 2021
-edition = "2018"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 illumos-sys-hdrs = { workspace = true, features = ["kernel"] }

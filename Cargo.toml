@@ -14,6 +14,11 @@ default-members = [
 ]
 resolver = "2"
 
+[workspace.package]
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/oxidecomputer/opte"
+
 [workspace.dependencies]
 # Internal crates
 illumos-sys-hdrs = { path = "crates/illumos-sys-hdrs" }
