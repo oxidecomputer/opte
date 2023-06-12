@@ -104,7 +104,7 @@ sha256sum $REL_TGT/xde_link.so > $REL_TGT/xde_link.so.sha256
 
 
 header "build xde integration tests"
-pushd tests
+pushd xde-tests
 cargo +nightly fmt -- --check
 cargo clippy --all-targets -- --no-deps
 cargo build --test loopback

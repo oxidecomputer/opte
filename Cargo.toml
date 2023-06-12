@@ -3,14 +3,15 @@ members = [
   "bin/*",
   "crates/*",
   "lib/*",
-  "tests",
   "xde",
   "xde/xde-link",
+  "xde-tests",
 ]
 default-members = [
   "bin/*",
   "crates/*",
   "lib/*",
+  "xde-tests",
 ]
 resolver = "2"
 
