@@ -2276,12 +2276,12 @@ impl<N: NetworkImpl> Port<N> {
 
     /// Return the number of rules registered for the given layer in
     /// the given direction.
-    pub fn num_rules(&self, layer_name: &str, dir: Direction) -> u32 {
+    pub fn num_rules(&self, layer_name: &str, dir: Direction) -> usize {
         let data = self.data.lock();
         data.layers
             .iter()
             .find(|layer| layer.name() == layer_name)
-            .map(|layer| layer.num_rules(dir) as u32)
+            .map(|layer| layer.num_rules(dir))
             .unwrap_or_else(|| panic!("layer not found: {}", layer_name))
     }
 }
