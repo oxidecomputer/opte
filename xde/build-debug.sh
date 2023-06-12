@@ -2,10 +2,7 @@
 
 DBG_DIR=../target/x86_64-unknown-unknown/debug/
 
-cargo -v rustc \
-      --manifest-path Cargo.toml \
-      -Z build-std=core,alloc \
-      --target x86_64-unknown-unknown.json
+cargo -v build
 
 ld -ztype=kmod \
    -N"drv/mac" \
@@ -17,7 +14,5 @@ ld -ztype=kmod \
    -o $DBG_DIR/xde.dbg
 
 # Also build devfsadm plugin
-cargo -v build \
-    --manifest-path xde-link/Cargo.toml \
-    -Z build-std=core \
-    --target xde-link/i686-unknown-illumos.json
+pushd xde-link
+cargo -v build
