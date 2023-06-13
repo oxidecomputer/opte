@@ -833,7 +833,7 @@ impl<'a> IpList<'a> {
         let mut start = 0;
         let mut end = SIZE;
         for addr in self.0.iter() {
-            buf[start..end].copy_from_slice(&addr);
+            buf[start..end].copy_from_slice(addr);
             start = end;
             end += SIZE;
         }

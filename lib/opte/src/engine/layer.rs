@@ -168,7 +168,7 @@ struct LftOutEntry {
 
 impl LftOutEntry {
     fn extract_pair(&self) -> InnerFlowId {
-        self.in_flow_pair.clone()
+        self.in_flow_pair
     }
 }
 
@@ -208,11 +208,8 @@ impl LayerFlowTable {
     ) {
         // We add unchekced because the limit is now enforced by
         // LayerFlowTable, not the individual flow tables.
-        self.ft_in.add_unchecked(in_flow.clone(), action_desc.clone());
-        let out_entry = LftOutEntry {
-            in_flow_pair: in_flow,
-            action_desc: action_desc.clone(),
-        };
+        self.ft_in.add_unchecked(in_flow, action_desc.clone());
+        let out_entry = LftOutEntry { in_flow_pair: in_flow, action_desc };
         self.ft_out.add_unchecked(out_flow, out_entry);
         self.count += 1;
     }
@@ -651,7 +648,7 @@ impl Layer {
 
     /// Return the name of the layer.
     pub fn name(&self) -> &str {
-        &self.name
+        self.name
     }
 
     pub fn new(
@@ -682,7 +679,7 @@ impl Layer {
             default_out_hits: 0,
             name,
             name_c,
-            port_c: port_c.clone(),
+            port_c,
             ft: LayerFlowTable::new(port, name, ft_limit),
             ft_cstr: CString::new(format!("ft-{}", name)).unwrap(),
             rules_in: RuleTable::new(port, name, Direction::In),
@@ -715,7 +712,7 @@ impl Layer {
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::*;
-        let flow_before = pkt.flow().clone();
+        let flow_before = *pkt.flow();
         self.layer_process_entry_probe(dir, pkt.flow());
         let res = match dir {
             Out => self.process_out(ectx, pkt, xforms, ameta),
@@ -741,7 +738,7 @@ impl Layer {
         match self.ft.get_in(pkt.flow()) {
             Some(ActionDescEntry::NoOp) => {
                 self.stats.vals.in_lft_hit += 1;
-                return Ok(LayerResult::Allow);
+                Ok(LayerResult::Allow)
             }
 
             Some(ActionDescEntry::Desc(desc)) => {
@@ -755,19 +752,19 @@ impl Layer {
                     self.ft_cstr.as_c_str(),
                     Direction::In,
                     &flow_before,
-                    &pkt.flow(),
+                    pkt.flow(),
                 );
 
                 if let Some(body_segs) = pkt.body_segs() {
                     if let Some(bt) =
                         desc.gen_bt(Direction::In, pkt.meta(), &body_segs)?
                     {
-                        pkt.body_transform(Direction::In, &bt)?;
+                        pkt.body_transform(Direction::In, &*bt)?;
                         xforms.body.push(bt);
                     }
                 }
 
-                return Ok(LayerResult::Allow);
+                Ok(LayerResult::Allow)
             }
 
             None => {
@@ -792,14 +789,17 @@ impl Layer {
             self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta, &mut rdr);
         let _ = rdr.finish();
 
-        let action = if rule.is_none() {
+        let action = if let Some(rule) = rule {
+            self.stats.vals.in_rule_match += 1;
+            rule.action()
+        } else {
             self.stats.vals.in_rule_nomatch += 1;
             self.default_in_hits += 1;
 
             match self.default_in {
                 DefaultAction::Deny => {
                     return Ok(LayerResult::Deny {
-                        name: self.name.clone(),
+                        name: self.name,
                         reason: DenyReason::Default,
                     });
                 }
@@ -807,21 +807,16 @@ impl Layer {
                 DefaultAction::Allow => &Action::Allow,
                 DefaultAction::StatefulAllow => &Action::StatefulAllow,
             }
-        } else {
-            self.stats.vals.in_rule_match += 1;
-            rule.unwrap().action()
         };
 
         match action {
-            Action::Allow => {
-                return Ok(LayerResult::Allow);
-            }
+            Action::Allow => Ok(LayerResult::Allow),
 
             Action::StatefulAllow => {
                 if self.ft.count == self.ft.limit.get() {
                     self.stats.vals.in_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
-                        layer: self.name.clone(),
+                        layer: self.name,
                         dir: In,
                     });
                 }
@@ -832,32 +827,30 @@ impl Layer {
                 // represents how the network sees the traffic.
                 let flow_out = pkt.flow().mirror();
                 let desc = ActionDescEntry::NoOp;
-                self.ft.add_pair(desc, pkt.flow().clone(), flow_out);
+                self.ft.add_pair(desc, *pkt.flow(), flow_out);
                 self.stats.vals.flows += 1;
-                return Ok(LayerResult::Allow);
+                Ok(LayerResult::Allow)
             }
 
             Action::Deny => {
                 self.rule_deny_probe(In, pkt.flow());
-                return Ok(LayerResult::Deny {
-                    name: self.name.clone(),
+                Ok(LayerResult::Deny {
+                    name: self.name,
                     reason: DenyReason::Rule,
-                });
+                })
             }
 
             Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
                 Ok(res) => match res {
-                    AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
+                    AllowOrDeny::Allow(_) => Ok(LayerResult::Allow),
 
-                    AllowOrDeny::Deny => {
-                        return Ok(LayerResult::Deny {
-                            name: self.name.clone(),
-                            reason: DenyReason::Action,
-                        })
-                    }
+                    AllowOrDeny::Deny => Ok(LayerResult::Deny {
+                        name: self.name,
+                        reason: DenyReason::Action,
+                    }),
                 },
 
-                Err(msg) => return Err(LayerError::ModMeta(msg)),
+                Err(msg) => Err(LayerError::ModMeta(msg)),
             },
 
             Action::Static(action) => {
@@ -867,14 +860,14 @@ impl Layer {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
-                                name: self.name.clone(),
+                                name: self.name,
                                 reason: DenyReason::Action,
                             });
                         }
                     },
 
                     Err(e) => {
-                        self.record_gen_ht_failure(&ectx, In, pkt.flow(), &e);
+                        self.record_gen_ht_failure(ectx, In, pkt.flow(), &e);
                         return Err(LayerError::GenHdrTransform {
                             layer: self.name,
                             err: e,
@@ -882,7 +875,7 @@ impl Layer {
                     }
                 };
 
-                let flow_before = pkt.flow().clone();
+                let flow_before = *pkt.flow();
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
@@ -893,7 +886,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                return Ok(LayerResult::Allow);
+                Ok(LayerResult::Allow)
             }
 
             Action::Stateful(action) => {
@@ -929,7 +922,7 @@ impl Layer {
                 if self.ft.count == self.ft.limit.get() {
                     self.stats.vals.in_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
-                        layer: self.name.clone(),
+                        layer: self.name,
                         dir: In,
                     });
                 }
@@ -940,14 +933,14 @@ impl Layer {
 
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
-                                name: self.name.clone(),
+                                name: self.name,
                                 reason: DenyReason::Action,
                             });
                         }
                     },
 
                     Err(e) => {
-                        self.record_gen_desc_failure(&ectx, In, pkt.flow(), &e);
+                        self.record_gen_desc_failure(ectx, In, pkt.flow(), &e);
                         return Err(LayerError::GenDesc(e));
                     }
                 };
@@ -966,7 +959,7 @@ impl Layer {
 
                 if let Some(body_segs) = pkt.body_segs() {
                     if let Some(bt) = desc.gen_bt(In, pkt.meta(), &body_segs)? {
-                        pkt.body_transform(In, &bt)?;
+                        pkt.body_transform(In, &*bt)?;
                         xforms.body.push(bt);
                     }
                 }
@@ -985,7 +978,7 @@ impl Layer {
                     flow_out,
                 );
                 self.stats.vals.flows += 1;
-                return Ok(LayerResult::Allow);
+                Ok(LayerResult::Allow)
             }
 
             Action::Hairpin(action) => {
@@ -994,28 +987,24 @@ impl Layer {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(pkt) => {
                             let _ = rdr.finish();
-                            return Ok(LayerResult::Hairpin(pkt));
+                            Ok(LayerResult::Hairpin(pkt))
                         }
 
-                        AllowOrDeny::Deny => {
-                            return Ok(LayerResult::Deny {
-                                name: self.name.clone(),
-                                reason: DenyReason::Action,
-                            });
-                        }
+                        AllowOrDeny::Deny => Ok(LayerResult::Deny {
+                            name: self.name,
+                            reason: DenyReason::Action,
+                        }),
                     },
 
                     Err(e) => {
                         // XXX SDT probe, error stat, log
                         let _ = rdr.finish();
-                        return Err(LayerError::GenPacket(e));
+                        Err(LayerError::GenPacket(e))
                     }
                 }
             }
 
-            Action::HandlePacket => {
-                return Ok(LayerResult::HandlePkt);
-            }
+            Action::HandlePacket => Ok(LayerResult::HandlePkt),
         }
     }
 
@@ -1035,12 +1024,12 @@ impl Layer {
         match self.ft.get_out(pkt.flow()) {
             Some(ActionDescEntry::NoOp) => {
                 self.stats.vals.out_lft_hit += 1;
-                return Ok(LayerResult::Allow);
+                Ok(LayerResult::Allow)
             }
 
             Some(ActionDescEntry::Desc(desc)) => {
                 self.stats.vals.out_lft_hit += 1;
-                let flow_before = pkt.flow().clone();
+                let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::Out);
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
@@ -1056,12 +1045,12 @@ impl Layer {
                     if let Some(bt) =
                         desc.gen_bt(Direction::Out, pkt.meta(), &body_segs)?
                     {
-                        pkt.body_transform(Direction::Out, &bt)?;
+                        pkt.body_transform(Direction::Out, &*bt)?;
                         xforms.body.push(bt);
                     }
                 }
 
-                return Ok(LayerResult::Allow);
+                Ok(LayerResult::Allow)
             }
 
             None => {
@@ -1083,17 +1072,20 @@ impl Layer {
         self.stats.vals.out_lft_miss += 1;
         let mut rdr = pkt.get_body_rdr();
         let rule =
-            self.rules_out.find_match(pkt.flow(), pkt.meta(), &ameta, &mut rdr);
+            self.rules_out.find_match(pkt.flow(), pkt.meta(), ameta, &mut rdr);
         let _ = rdr.finish();
 
-        let action = if rule.is_none() {
+        let action = if let Some(rule) = rule {
+            self.stats.vals.out_rule_match += 1;
+            rule.action()
+        } else {
             self.stats.vals.out_rule_nomatch += 1;
             self.default_out_hits += 1;
 
             match self.default_out {
                 DefaultAction::Deny => {
                     return Ok(LayerResult::Deny {
-                        name: self.name.clone(),
+                        name: self.name,
                         reason: DenyReason::Default,
                     });
                 }
@@ -1101,21 +1093,16 @@ impl Layer {
                 DefaultAction::Allow => &Action::Allow,
                 DefaultAction::StatefulAllow => &Action::StatefulAllow,
             }
-        } else {
-            self.stats.vals.out_rule_match += 1;
-            rule.unwrap().action()
         };
 
         match action {
-            Action::Allow => {
-                return Ok(LayerResult::Allow);
-            }
+            Action::Allow => Ok(LayerResult::Allow),
 
             Action::StatefulAllow => {
                 if self.ft.count == self.ft.limit.get() {
                     self.stats.vals.out_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
-                        layer: self.name.clone(),
+                        layer: self.name,
                         dir: Out,
                     });
                 }
@@ -1128,36 +1115,30 @@ impl Layer {
                 // The final step is to mirror the IPs and ports to
                 // reflect the traffic direction change.
                 let flow_in = pkt.flow().mirror();
-                self.ft.add_pair(
-                    ActionDescEntry::NoOp,
-                    flow_in,
-                    pkt.flow().clone(),
-                );
+                self.ft.add_pair(ActionDescEntry::NoOp, flow_in, *pkt.flow());
                 self.stats.vals.flows += 1;
-                return Ok(LayerResult::Allow);
+                Ok(LayerResult::Allow)
             }
 
             Action::Deny => {
                 self.rule_deny_probe(Out, pkt.flow());
-                return Ok(LayerResult::Deny {
-                    name: self.name.clone(),
+                Ok(LayerResult::Deny {
+                    name: self.name,
                     reason: DenyReason::Rule,
-                });
+                })
             }
 
             Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
                 Ok(res) => match res {
-                    AllowOrDeny::Allow(_) => return Ok(LayerResult::Allow),
+                    AllowOrDeny::Allow(_) => Ok(LayerResult::Allow),
 
-                    AllowOrDeny::Deny => {
-                        return Ok(LayerResult::Deny {
-                            name: self.name.clone(),
-                            reason: DenyReason::Action,
-                        })
-                    }
+                    AllowOrDeny::Deny => Ok(LayerResult::Deny {
+                        name: self.name,
+                        reason: DenyReason::Action,
+                    }),
                 },
 
-                Err(msg) => return Err(LayerError::ModMeta(msg)),
+                Err(msg) => Err(LayerError::ModMeta(msg)),
             },
 
             Action::Static(action) => {
@@ -1167,14 +1148,14 @@ impl Layer {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
-                                name: self.name.clone(),
+                                name: self.name,
                                 reason: DenyReason::Action,
                             });
                         }
                     },
 
                     Err(e) => {
-                        self.record_gen_ht_failure(&ectx, Out, pkt.flow(), &e);
+                        self.record_gen_ht_failure(ectx, Out, pkt.flow(), &e);
                         return Err(LayerError::GenHdrTransform {
                             layer: self.name,
                             err: e,
@@ -1182,7 +1163,7 @@ impl Layer {
                     }
                 };
 
-                let flow_before = pkt.flow().clone();
+                let flow_before = *pkt.flow();
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
@@ -1193,7 +1174,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                return Ok(LayerResult::Allow);
+                Ok(LayerResult::Allow)
             }
 
             Action::Stateful(action) => {
@@ -1240,24 +1221,19 @@ impl Layer {
 
                         AllowOrDeny::Deny => {
                             return Ok(LayerResult::Deny {
-                                name: self.name.clone(),
+                                name: self.name,
                                 reason: DenyReason::Action,
                             });
                         }
                     },
 
                     Err(e) => {
-                        self.record_gen_desc_failure(
-                            &ectx,
-                            Out,
-                            pkt.flow(),
-                            &e,
-                        );
+                        self.record_gen_desc_failure(ectx, Out, pkt.flow(), &e);
                         return Err(LayerError::GenDesc(e));
                     }
                 };
 
-                let flow_before = pkt.flow().clone();
+                let flow_before = *pkt.flow();
                 let ht_out = desc.gen_ht(Out);
                 pkt.hdr_transform(&ht_out)?;
                 xforms.hdr.push(ht_out);
@@ -1273,7 +1249,7 @@ impl Layer {
                     if let Some(bt) =
                         desc.gen_bt(Out, pkt.meta(), &body_segs)?
                     {
-                        pkt.body_transform(Out, &bt)?;
+                        pkt.body_transform(Out, &*bt)?;
                         xforms.body.push(bt);
                     }
                 }
@@ -1293,7 +1269,7 @@ impl Layer {
                     flow_before,
                 );
                 self.stats.vals.flows += 1;
-                return Ok(LayerResult::Allow);
+                Ok(LayerResult::Allow)
             }
 
             Action::Hairpin(action) => {
@@ -1302,28 +1278,24 @@ impl Layer {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(pkt) => {
                             let _ = rdr.finish();
-                            return Ok(LayerResult::Hairpin(pkt));
+                            Ok(LayerResult::Hairpin(pkt))
                         }
 
-                        AllowOrDeny::Deny => {
-                            return Ok(LayerResult::Deny {
-                                name: self.name,
-                                reason: DenyReason::Action,
-                            });
-                        }
+                        AllowOrDeny::Deny => Ok(LayerResult::Deny {
+                            name: self.name,
+                            reason: DenyReason::Action,
+                        }),
                     },
 
                     Err(e) => {
                         // XXX SDT probe, error stat, log
                         let _ = rdr.finish();
-                        return Err(LayerError::GenPacket(e));
+                        Err(LayerError::GenPacket(e))
                     }
                 }
             }
 
-            Action::HandlePacket => {
-                return Ok(LayerResult::HandlePkt);
-            }
+            Action::HandlePacket => Ok(LayerResult::HandlePkt),
         }
     }
 
@@ -1560,10 +1532,10 @@ impl<'a> RuleTable {
             // exist, the new rule is added in the front. The same
             // goes for multiple non-deny entries at the same
             // priority.
-            if rule.priority() == rte.rule.priority() {
-                if rule.action().is_deny() || !rte.rule.action().is_deny() {
-                    return RulePlace::Insert(i);
-                }
+            if rule.priority() == rte.rule.priority()
+                && (rule.action().is_deny() || !rte.rule.action().is_deny())
+            {
+                return RulePlace::Insert(i);
             }
         }
 

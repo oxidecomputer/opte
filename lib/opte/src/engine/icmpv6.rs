@@ -217,12 +217,8 @@ impl Display for MessageType {
 impl HairpinAction for Icmpv6EchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         let hdr_preds = vec![
-            Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(
-                self.src_mac.into(),
-            )]),
-            Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-                self.dst_mac.into(),
-            )]),
+            Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(self.src_mac)]),
+            Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(self.dst_mac)]),
             Predicate::InnerSrcIp6(vec![Ipv6AddrMatch::Exact(self.src_ip)]),
             Predicate::InnerDstIp6(vec![Ipv6AddrMatch::Exact(self.dst_ip)]),
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
@@ -343,9 +339,7 @@ impl HairpinAction for RouterAdvertisement {
             Ipv6Addr::ALL_ROUTERS.unchecked_multicast_mac();
         let hdr_preds = vec![
             // We expect that the source MAC is the MAC provided to the client.
-            Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(
-                self.src_mac.into(),
-            )]),
+            Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(self.src_mac)]),
             // It's directed to the multicast MAC address derived from the
             // All-Routers multicast IPv6 address.
             Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
@@ -494,7 +488,7 @@ impl HairpinAction for RouterAdvertisement {
             &IpAddress::Ipv6((*self.ip()).into()),
             &src_ip,
             &mut advert_reply,
-            &mut csum,
+            &csum,
         );
 
         let ip = Ipv6Meta {
@@ -774,7 +768,7 @@ impl HairpinAction for NeighborAdvertisement {
             &IpAddress::Ipv6((*self.ip()).into()),
             &IpAddress::Ipv6(dst_ip.into()),
             &mut advert_reply,
-            &mut csum,
+            &csum,
         );
 
         let ip = Ipv6Meta {

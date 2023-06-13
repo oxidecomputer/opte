@@ -184,7 +184,7 @@ impl FromStr for DomainName {
         // length octet for the first label, plus 1 if the domain name is
         // fully-qualified and 0 otherwise (since the last `.` is _replaced_
         // with the root label length of 0).
-        let encoded_len = s.len() + 1 + if s.ends_with('.') { 0 } else { 1 };
+        let encoded_len = s.len() + 1 + usize::from(!s.ends_with('.'));
         let mut encoded = Vec::with_capacity(encoded_len);
         for label in relative_name.split('.') {
             if label.is_empty() || label.len() > Self::MAX_LABEL_LEN {

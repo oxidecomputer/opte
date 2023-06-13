@@ -202,19 +202,18 @@ fn oxide_net_builder(
 ) -> PortBuilder {
     let ectx = Arc::new(ExecCtx { log: Box::new(opte::PrintlnLog {}) });
     let name_cstr = std::ffi::CString::new(name).unwrap();
-    let mut pb =
-        PortBuilder::new(name, name_cstr, cfg.guest_mac.into(), ectx.clone());
+    let mut pb = PortBuilder::new(name, name_cstr, cfg.guest_mac, ectx);
 
     let fw_limit = NonZeroU32::new(8096).unwrap();
     let snat_limit = NonZeroU32::new(8096).unwrap();
     let one_limit = NonZeroU32::new(1).unwrap();
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    gateway::setup(&mut pb, cfg, vpc_map, fw_limit)
+    gateway::setup(&pb, cfg, vpc_map, fw_limit)
         .expect("failed to setup gateway layer");
-    router::setup(&mut pb, cfg, one_limit).expect("failed to add router layer");
+    router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&mut pb, cfg, v2p, one_limit)
+    overlay::setup(&pb, cfg, v2p, one_limit)
         .expect("failed to add overlay layer");
     pb
 }
@@ -266,11 +265,7 @@ pub fn oxide_net_setup2(
     // test involves more than one port, you can pass the existing
     // VpcMaping as argument making sure that each port sees each
     // other in the V2P state.
-    let vpc_map = if vpc_map.is_none() {
-        Arc::new(VpcMappings::new())
-    } else {
-        vpc_map.unwrap()
-    };
+    let vpc_map = vpc_map.unwrap_or_default();
 
     let phys_net =
         PhysNet { ether: cfg.guest_mac, ip: cfg.phys_ip, vni: cfg.vni };
@@ -350,7 +345,7 @@ pub fn oxide_net_setup2(
     ];
 
     if let Some(val) = custom_updates {
-        updates.extend_from_slice(&val);
+        updates.extend_from_slice(val);
     }
 
     update!(pav, updates);
@@ -431,7 +426,7 @@ fn verify_ulp_pkt_offsets(
     );
 }
 
-pub fn ulp_pkt<'a, I: Into<IpMeta>, U: Into<UlpMeta>>(
+pub fn ulp_pkt<I: Into<IpMeta>, U: Into<UlpMeta>>(
     eth: EtherMeta,
     ip: I,
     ulp: U,
@@ -439,14 +434,13 @@ pub fn ulp_pkt<'a, I: Into<IpMeta>, U: Into<UlpMeta>>(
 ) -> Packet<Parsed> {
     let ip = ip.into();
     let ulp = ulp.into();
-    let total_len =
-        EtherHdr::SIZE + usize::from(ip.hdr_len()) + ulp.hdr_len() + body.len();
+    let total_len = EtherHdr::SIZE + ip.hdr_len() + ulp.hdr_len() + body.len();
     let mut pkt = Packet::alloc_and_expand(total_len);
     let mut wtr = pkt.seg0_wtr();
     eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
     ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
     ulp.emit(wtr.slice_mut(ulp.hdr_len()).unwrap());
-    wtr.write(&body).unwrap();
+    wtr.write(body).unwrap();
     let mut pkt = pkt.parse(Out, GenericUlp {}).unwrap();
     pkt.compute_checksums();
     assert!(pkt.body_csum().is_some());
@@ -660,7 +654,7 @@ pub fn http_get2(
     };
     let eth =
         EtherMeta { ether_type: EtherType::Ipv4, src: eth_src, dst: eth_dst };
-    ulp_pkt(eth, ip4, tcp, &body)
+    ulp_pkt(eth, ip4, tcp, body)
 }
 
 pub fn http_get_ack2(
@@ -718,7 +712,7 @@ pub fn http_301_reply2(
     };
     let eth =
         EtherMeta { ether_type: EtherType::Ipv4, src: eth_src, dst: eth_dst };
-    ulp_pkt(eth, ip4, tcp, &body)
+    ulp_pkt(eth, ip4, tcp, body)
 }
 
 pub fn http_301_ack2(
@@ -876,15 +870,10 @@ pub fn encap(
     src: TestIpPhys,
     dst: TestIpPhys,
 ) -> Packet<Parsed> {
-    let inner_ip_len = match inner_pkt.hdr_offsets().inner.ip {
-        Some(off) => Some(off.hdr_len),
-        None => None,
-    };
+    let inner_ip_len = inner_pkt.hdr_offsets().inner.ip.map(|off| off.hdr_len);
 
-    let inner_ulp_len = match inner_pkt.hdr_offsets().inner.ulp {
-        Some(off) => Some(off.hdr_len),
-        None => None,
-    };
+    let inner_ulp_len =
+        inner_pkt.hdr_offsets().inner.ulp.map(|off| off.hdr_len);
 
     let inner_len = inner_pkt.len();
 

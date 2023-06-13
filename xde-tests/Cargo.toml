@@ -1,7 +1,10 @@
 [package]
-name = "opte-tests"
+name = "xde-tests"
 version = "0.1.0"
-edition = "2021"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 opteadm.workspace = true

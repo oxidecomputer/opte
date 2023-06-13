@@ -296,7 +296,7 @@ impl GenericUlp {
         let (ether_hi, _ether_hdr) = Packet::parse_ether(rdr)?;
         meta.inner.ether = ether_hi.meta;
         offsets.inner.ether = ether_hi.offset;
-        let ether_type = EtherType::from(ether_hi.meta.ether_type);
+        let ether_type = ether_hi.meta.ether_type;
 
         let (ip_hi, pseudo_csum) = match ether_type {
             EtherType::Arp => {

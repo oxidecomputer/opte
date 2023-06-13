@@ -32,9 +32,7 @@ pub fn setup(layer: &mut Layer, cfg: &VpcCfg) -> Result<(), OpteError> {
         Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
             MacAddr::BROADCAST,
         )]),
-        Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(MacAddr::from(
-            cfg.guest_mac,
-        ))]),
+        Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(cfg.guest_mac)]),
     ]);
     layer.add_rule(Direction::Out, rule.finalize());
 

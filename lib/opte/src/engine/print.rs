@@ -56,7 +56,7 @@ pub fn print_layer(resp: &DumpLayerResp) {
     }
     print_def_rule(resp.default_out_hits, &resp.default_out);
 
-    println!("");
+    println!();
 }
 
 /// Print a [`ListLayersResp`].
@@ -88,7 +88,7 @@ pub fn print_uft(uft: &DumpUftResp) {
         print_uft_flow(flow_id, flow_state);
     }
 
-    println!("");
+    println!();
     println!("UFT Outbound: {}/{}", uft.out_num_flows, uft.out_limit);
     print_hr();
     print_uft_flow_header();
@@ -118,7 +118,7 @@ pub fn print_rule(id: u64, hits: u64, rule: &RuleDump) {
         .chain(rule.data_predicates.iter().map(ToString::to_string))
         .collect::<VecDeque<String>>();
 
-    let first_pred = if preds.len() == 0 {
+    let first_pred = if preds.is_empty() {
         "*".to_string()
     } else {
         preds.pop_front().unwrap()
@@ -139,7 +139,7 @@ pub fn print_rule(id: u64, hits: u64, rule: &RuleDump) {
     // separation so it's easier to discern where one rule ends and
     // another begins.
     if multi_preds {
-        println!("");
+        println!();
     }
 }
 

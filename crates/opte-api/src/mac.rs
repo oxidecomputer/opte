@@ -59,7 +59,7 @@ impl From<[u8; 6]> for MacAddr {
 
 impl From<&[u8; 6]> for MacAddr {
     fn from(bytes: &[u8; 6]) -> Self {
-        Self { inner: bytes.clone() }
+        Self { inner: *bytes }
     }
 }
 
@@ -82,9 +82,10 @@ impl FromStr for MacAddr {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let octets: Vec<u8> = s
-            .split(":")
+            .split(':')
             .map(|s| {
-                u8::from_str_radix(s, 16).or(Err(format!("bad octet: {}", s)))
+                u8::from_str_radix(s, 16)
+                    .map_err(|_| format!("bad octet: {}", s))
             })
             .collect::<result::Result<Vec<u8>, _>>()?;
 

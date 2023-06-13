@@ -114,15 +114,21 @@ pub struct kstat_named_t {
 
 impl kstat_named_t {
     pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn val_u64(&self) -> u64 {
+        unsafe { self.value._u64 }
+    }
+}
+
+impl Default for kstat_named_t {
+    fn default() -> Self {
         Self {
             name: [0; KSTAT_STRLEN],
             dtype: 0,
             value: KStatNamedValue { _c: [0; 16] },
         }
-    }
-
-    pub fn val_u64(&self) -> u64 {
-        unsafe { self.value._u64 }
     }
 }
 

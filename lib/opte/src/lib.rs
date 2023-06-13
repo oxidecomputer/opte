@@ -5,6 +5,7 @@
 // Copyright 2022 Oxide Computer Company
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(clippy::len_without_is_empty)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![deny(unreachable_patterns)]

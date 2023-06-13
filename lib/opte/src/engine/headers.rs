@@ -551,7 +551,7 @@ impl HeaderActionModify<UlpMetaModify> for UlpMeta {
 }
 
 /// The action to take for a particular header transposition.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub enum HeaderAction<H, P, M>
 where
     P: PushAction<H> + fmt::Debug,
@@ -560,17 +560,8 @@ where
     Push(P, core::marker::PhantomData<H>),
     Pop,
     Modify(M, core::marker::PhantomData<H>),
+    #[default]
     Ignore,
-}
-
-impl<H, P, M> Default for HeaderAction<H, P, M>
-where
-    P: PushAction<H> + fmt::Debug,
-    M: ModifyAction<H> + fmt::Debug,
-{
-    fn default() -> HeaderAction<H, P, M> {
-        HeaderAction::Ignore
-    }
 }
 
 impl<H, P, M> HeaderAction<H, P, M>
@@ -629,16 +620,11 @@ pub struct UlpMetaModify {
 
 impl ModifyActionArg for UlpMetaModify {}
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub enum UlpHeaderAction<M: ModifyActionArg> {
+    #[default]
     Ignore,
     Modify(M),
-}
-
-impl<M: ModifyActionArg> Default for UlpHeaderAction<M> {
-    fn default() -> UlpHeaderAction<M> {
-        UlpHeaderAction::Ignore
-    }
 }
 
 impl<M: ModifyActionArg> UlpHeaderAction<M> {

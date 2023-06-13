@@ -42,7 +42,6 @@ use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6HdrError;
 use super::ip6::Ipv6Meta;
 use super::NetworkParser;
-use core::convert::TryInto;
 use core::fmt;
 use core::fmt::Display;
 use core::ptr;
@@ -67,7 +66,6 @@ use illumos_sys_hdrs::uintptr_t;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::boxed::Box;
         use alloc::string::String;
         use alloc::vec::Vec;
         use illumos_sys_hdrs as ddi;
@@ -184,11 +182,11 @@ impl OuterMeta {
         let mut hdr_len = 0;
 
         if let Some(ether) = self.ether {
-            hdr_len += usize::from(ether.hdr_len());
+            hdr_len += ether.hdr_len();
         }
 
         if let Some(ip) = self.ip {
-            hdr_len += usize::from(ip.hdr_len());
+            hdr_len += ip.hdr_len();
         }
 
         if let Some(encap) = self.encap {
@@ -228,11 +226,11 @@ impl InnerMeta {
         let mut hdr_len = self.ether.hdr_len();
 
         if let Some(ip) = self.ip {
-            hdr_len += usize::from(ip.hdr_len());
+            hdr_len += ip.hdr_len();
         }
 
         if let Some(ulp) = self.ulp {
-            hdr_len += usize::from(ulp.hdr_len());
+            hdr_len += ulp.hdr_len();
         }
 
         hdr_len
@@ -563,9 +561,9 @@ impl<S: PacketState> Drop for Packet<S> {
         // happens when a Packet transitions from one type-state to
         // another, and the segments are passed onto the new Packet.
         // This guarantees that we only free the segment chain once.
-        if self.segs.len() != 0 {
+        if !self.segs.is_empty() {
             let head_mp = self.segs[0].mp;
-            drop(&mut self.segs);
+            drop(core::mem::take(&mut self.segs));
             cfg_if! {
                 if #[cfg(all(not(feature = "std"), not(test)))] {
                     // Safety: This is safe as long as the original
@@ -649,8 +647,8 @@ impl Packet<Initialized> {
         Packet { avail, segs, state: Initialized { len } }
     }
 
-    pub fn parse_ether<'a, 'b>(
-        rdr: &'b mut PacketReaderMut<'a>,
+    pub fn parse_ether<'a>(
+        rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<EtherMeta>, EtherHdr<'a>), ParseError> {
         let ether = EtherHdr::parse(rdr)?;
         let offset = HdrOffset::new(rdr.offset(), ether.hdr_len());
@@ -658,8 +656,8 @@ impl Packet<Initialized> {
         Ok((HdrInfo { meta, offset }, ether))
     }
 
-    pub fn parse_ip4<'a, 'b>(
-        rdr: &'b mut PacketReaderMut<'a>,
+    pub fn parse_ip4<'a>(
+        rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<IpMeta>, Ipv4Hdr<'a>), ParseError> {
         let ip = Ipv4Hdr::parse(rdr)?;
         let offset = HdrOffset::new(rdr.offset(), usize::from(ip.hdr_len()));
@@ -667,17 +665,17 @@ impl Packet<Initialized> {
         Ok((HdrInfo { meta, offset }, ip))
     }
 
-    pub fn parse_ip6<'a, 'b>(
-        rdr: &'b mut PacketReaderMut<'a>,
+    pub fn parse_ip6<'a>(
+        rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<IpMeta>, Ipv6Hdr<'a>), ParseError> {
         let ip = Ipv6Hdr::parse(rdr)?;
-        let offset = HdrOffset::new(rdr.offset(), usize::from(ip.hdr_len()));
+        let offset = HdrOffset::new(rdr.offset(), ip.hdr_len());
         let meta = IpMeta::from(Ipv6Meta::from(&ip));
         Ok((HdrInfo { meta, offset }, ip))
     }
 
-    pub fn parse_icmp6<'a, 'b>(
-        rdr: &'b mut PacketReaderMut<'a>,
+    pub fn parse_icmp6<'a>(
+        rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<UlpMeta>, UlpHdr<'a>), ParseError> {
         let icmp6 = Icmpv6Hdr::parse(rdr)?;
         let offset = HdrOffset::new(rdr.offset(), icmp6.hdr_len());
@@ -685,8 +683,8 @@ impl Packet<Initialized> {
         Ok((HdrInfo { meta, offset }, UlpHdr::from(icmp6)))
     }
 
-    pub fn parse_tcp<'a, 'b>(
-        rdr: &'b mut PacketReaderMut<'a>,
+    pub fn parse_tcp<'a>(
+        rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<UlpMeta>, UlpHdr<'a>), ParseError> {
         let tcp = TcpHdr::parse(rdr)?;
         let offset = HdrOffset::new(rdr.offset(), tcp.hdr_len());
@@ -694,8 +692,8 @@ impl Packet<Initialized> {
         Ok((HdrInfo { meta, offset }, UlpHdr::from(tcp)))
     }
 
-    pub fn parse_udp<'a, 'b>(
-        rdr: &'b mut PacketReaderMut<'a>,
+    pub fn parse_udp<'a>(
+        rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<UlpMeta>, UlpHdr<'a>), ParseError> {
         let udp = UdpHdr::parse(rdr)?;
         let offset = HdrOffset::new(rdr.offset(), udp.hdr_len());
@@ -703,8 +701,8 @@ impl Packet<Initialized> {
         Ok((HdrInfo { meta, offset }, UlpHdr::from(udp)))
     }
 
-    pub fn parse_geneve<'a, 'b>(
-        rdr: &'b mut PacketReaderMut<'a>,
+    pub fn parse_geneve<'a>(
+        rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<GeneveMeta>, GeneveHdr<'a>), ParseError> {
         let geneve = GeneveHdr::parse(rdr)?;
         let offset = HdrOffset::new(rdr.offset(), geneve.hdr_len());
@@ -803,7 +801,7 @@ impl Packet<Initialized> {
         }
 
         let extra_space = info.extra_hdr_space.unwrap_or(0);
-        let mut mp = allocb(new_seg_size + extra_space);
+        let mp = allocb(new_seg_size + extra_space);
         unsafe {
             (*mp).b_wptr = (*mp).b_wptr.add(extra_space);
             (*mp).b_rptr = (*mp).b_rptr.add(extra_space);
@@ -838,13 +836,14 @@ impl Packet<Initialized> {
             Some(&mut info.offsets.inner.ether),
             info.offsets.inner.ip.as_mut(),
             info.offsets.inner.ulp.as_mut(),
-        ] {
-            if let Some(h) = header_offsets {
-                h.pkt_pos = off;
-                h.seg_idx = 0;
-                h.seg_pos = off;
-                off += h.hdr_len;
-            }
+        ]
+        .into_iter()
+        .flatten()
+        {
+            header_offsets.pkt_pos = off;
+            header_offsets.seg_idx = 0;
+            header_offsets.seg_pos = off;
+            off += header_offsets.hdr_len;
         }
 
         Ok(Packet {
@@ -920,7 +919,7 @@ impl Packet<Initialized> {
         // everything.
         let mut n_segments = 1;
         let mut next_seg = (*mp).b_cont;
-        while next_seg != ptr::null_mut() {
+        while !next_seg.is_null() {
             n_segments += 1;
             next_seg = (*next_seg).b_cont;
         }
@@ -936,7 +935,7 @@ impl Packet<Initialized> {
         len += seg.len;
         segs.push(seg);
 
-        while next_seg != ptr::null_mut() {
+        while !next_seg.is_null() {
             let tmp = (*next_seg).b_cont;
             seg = PacketSeg::wrap_mblk(next_seg);
             avail += seg.avail;
@@ -945,24 +944,24 @@ impl Packet<Initialized> {
             next_seg = tmp;
         }
 
-        Ok(Packet {
-            avail: avail.try_into().unwrap(),
-            segs,
-            state: Initialized { len },
-        })
+        Ok(Packet { avail, segs, state: Initialized { len } })
     }
 
     /// A combination of [`Self::wrap_mblk()`] followed by [`Self::parse()`].
     ///
     /// This is a bit more convenient than dealing with the possible
     /// error from each separately.
+    ///
+    /// # Safety
+    ///
+    /// See [`Self::wrap_mblk()`].
     pub unsafe fn wrap_mblk_and_parse<N: NetworkParser>(
         mp: *mut mblk_t,
         dir: Direction,
         net: N,
     ) -> Result<Packet<Parsed>, PacketError> {
         let pkt = Self::wrap_mblk(mp)?;
-        pkt.parse(dir, net).map_err(|e| PacketError::from(e))
+        pkt.parse(dir, net).map_err(PacketError::from)
     }
 }
 
@@ -1024,7 +1023,7 @@ impl Packet<Parsed> {
     pub fn body_transform(
         &mut self,
         dir: Direction,
-        xform: &Box<dyn BodyTransform>,
+        xform: &dyn BodyTransform,
     ) -> Result<(), BodyTransformError> {
         // We set the flag now with the assumption that the transform
         // could fail after modifying part of the body. In the future
@@ -1102,49 +1101,45 @@ impl Packet<Parsed> {
     ///
     /// This should really only be used for testing.
     pub fn compute_checksums(&mut self) {
-        match self.state.hdr_offsets.inner.ulp {
-            Some(ulp_off) => {
-                let mut body_rdr = self.get_body_rdr();
-                let mut csum = Checksum::from(0u32);
-                loop {
-                    let len = body_rdr.seg_left();
-                    match body_rdr.slice(len) {
-                        Ok(seg_bytes) => csum.add_bytes(&seg_bytes),
-                        _ => break,
-                    }
-                }
-
-                self.state.body_csum = Some(csum);
-
-                // Unwrap: Can't have a ULP without an IP.
-                let ip = self.meta().inner.ip.unwrap();
-                // Add pseudo header checksum.
-                let pseudo_csum = ip.pseudo_csum();
-                csum += pseudo_csum;
-                // All headers must reside in the first segment.
-                let seg0_bytes = self.segs[0].slice_mut();
-                // Determine ULP slice and add its bytes to the
-                // checksum.
-                let ulp_start = ulp_off.seg_pos;
-                let ulp_end = ulp_start + ulp_off.hdr_len;
-                let ulp = &mut seg0_bytes[ulp_start..ulp_end];
-
-                match self.state.meta.inner.ulp.as_mut().unwrap() {
-                    UlpMeta::Icmpv6(icmp6) => {
-                        Self::update_icmpv6_csum(icmp6, csum, ulp);
-                    }
-
-                    UlpMeta::Tcp(tcp) => {
-                        Self::update_tcp_csum(tcp, csum, ulp);
-                    }
-
-                    UlpMeta::Udp(udp) => {
-                        Self::update_udp_csum(udp, csum, ulp);
-                    }
+        if let Some(ulp_off) = self.state.hdr_offsets.inner.ulp {
+            let mut body_rdr = self.get_body_rdr();
+            let mut csum = Checksum::from(0u32);
+            loop {
+                let len = body_rdr.seg_left();
+                match body_rdr.slice(len) {
+                    Ok(seg_bytes) => csum.add_bytes(seg_bytes),
+                    _ => break,
                 }
             }
 
-            None => (),
+            self.state.body_csum = Some(csum);
+
+            // Unwrap: Can't have a ULP without an IP.
+            let ip = self.meta().inner.ip.unwrap();
+            // Add pseudo header checksum.
+            let pseudo_csum = ip.pseudo_csum();
+            csum += pseudo_csum;
+            // All headers must reside in the first segment.
+            let seg0_bytes = self.segs[0].slice_mut();
+            // Determine ULP slice and add its bytes to the
+            // checksum.
+            let ulp_start = ulp_off.seg_pos;
+            let ulp_end = ulp_start + ulp_off.hdr_len;
+            let ulp = &mut seg0_bytes[ulp_start..ulp_end];
+
+            match self.state.meta.inner.ulp.as_mut().unwrap() {
+                UlpMeta::Icmpv6(icmp6) => {
+                    Self::update_icmpv6_csum(icmp6, csum, ulp);
+                }
+
+                UlpMeta::Tcp(tcp) => {
+                    Self::update_tcp_csum(tcp, csum, ulp);
+                }
+
+                UlpMeta::Udp(udp) => {
+                    Self::update_udp_csum(udp, csum, ulp);
+                }
+            }
         }
 
         // Compute and fill in the IPv4 header checksum.
@@ -1227,63 +1222,59 @@ impl Packet<Parsed> {
     /// case where checksums are **not** being offloaded to the hardware.
     fn update_checksums(&mut self, update_ip: bool, update_ulp: bool) {
         // If a ULP exists, then compute and set its checksum.
-        match (update_ulp, self.state.hdr_offsets.inner.ulp) {
-            (true, Some(ulp_off)) => {
-                // Start by reusing the known checksum of the body.
-                let mut csum = self.state.body_csum.unwrap();
-                // Unwrap: Can't have a ULP without an IP.
-                let ip = self.meta().inner.ip.unwrap();
-                // Add pseudo header checksum.
-                let pseudo_csum = ip.pseudo_csum();
-                csum += pseudo_csum;
-                // All headers must reside in the first segment.
-                let all_hdr_bytes = self.segs[0].slice_mut();
-                // Determine ULP slice and add its bytes to the
-                // checksum.
-                let ulp_start = ulp_off.seg_pos;
-                let ulp_end = ulp_start + ulp_off.hdr_len;
-                let ulp = &mut all_hdr_bytes[ulp_start..ulp_end];
+        if let (true, Some(ulp_off)) =
+            (update_ulp, self.state.hdr_offsets.inner.ulp)
+        {
+            // Start by reusing the known checksum of the body.
+            let mut csum = self.state.body_csum.unwrap();
+            // Unwrap: Can't have a ULP without an IP.
+            let ip = self.meta().inner.ip.unwrap();
+            // Add pseudo header checksum.
+            let pseudo_csum = ip.pseudo_csum();
+            csum += pseudo_csum;
+            // All headers must reside in the first segment.
+            let all_hdr_bytes = self.segs[0].slice_mut();
+            // Determine ULP slice and add its bytes to the
+            // checksum.
+            let ulp_start = ulp_off.seg_pos;
+            let ulp_end = ulp_start + ulp_off.hdr_len;
+            let ulp = &mut all_hdr_bytes[ulp_start..ulp_end];
 
-                match self.state.meta.inner.ulp.as_mut().unwrap() {
-                    UlpMeta::Icmpv6(icmp6) => {
-                        Self::update_icmpv6_csum(icmp6, csum, ulp);
-                    }
+            match self.state.meta.inner.ulp.as_mut().unwrap() {
+                UlpMeta::Icmpv6(icmp6) => {
+                    Self::update_icmpv6_csum(icmp6, csum, ulp);
+                }
 
-                    UlpMeta::Tcp(tcp) => {
-                        Self::update_tcp_csum(tcp, csum, ulp);
-                    }
+                UlpMeta::Tcp(tcp) => {
+                    Self::update_tcp_csum(tcp, csum, ulp);
+                }
 
-                    UlpMeta::Udp(udp) => {
-                        Self::update_udp_csum(udp, csum, ulp);
-                    }
+                UlpMeta::Udp(udp) => {
+                    Self::update_udp_csum(udp, csum, ulp);
                 }
             }
-
-            _ => (),
         }
 
         // Compute and fill in the IPv4 header checksum.
-        match (update_ip, self.state.meta.inner.ip.as_mut()) {
-            (true, Some(IpMeta::Ip4(ip))) => {
-                let ip_off = self.state.hdr_offsets.inner.ip.unwrap();
-                let all_hdr_bytes = self.segs[0].slice_mut();
-                let ip_start = ip_off.seg_pos;
-                let ip_end = ip_start + ip_off.hdr_len;
-                let ip_bytes = &mut all_hdr_bytes[ip_start..ip_end];
-                let csum_start = Ipv4Hdr::CSUM_BEGIN;
-                let csum_end = Ipv4Hdr::CSUM_END;
-                ip_bytes[csum_start..csum_end].copy_from_slice(&[0; 2]);
-                let csum =
-                    HeaderChecksum::from(Checksum::compute(&ip_bytes)).bytes();
+        if let (true, Some(IpMeta::Ip4(ip))) =
+            (update_ip, self.state.meta.inner.ip.as_mut())
+        {
+            let ip_off = self.state.hdr_offsets.inner.ip.unwrap();
+            let all_hdr_bytes = self.segs[0].slice_mut();
+            let ip_start = ip_off.seg_pos;
+            let ip_end = ip_start + ip_off.hdr_len;
+            let ip_bytes = &mut all_hdr_bytes[ip_start..ip_end];
+            let csum_start = Ipv4Hdr::CSUM_BEGIN;
+            let csum_end = Ipv4Hdr::CSUM_END;
+            ip_bytes[csum_start..csum_end].copy_from_slice(&[0; 2]);
+            let csum =
+                HeaderChecksum::from(Checksum::compute(ip_bytes)).bytes();
 
-                // Update the metadata.
-                ip.csum = csum;
+            // Update the metadata.
+            ip.csum = csum;
 
-                // Update the header bytes.
-                ip_bytes[csum_start..csum_end].copy_from_slice(&csum[..]);
-            }
-
-            _ => (),
+            // Update the header bytes.
+            ip_bytes[csum_start..csum_end].copy_from_slice(&csum[..]);
         }
     }
 
@@ -1362,6 +1353,7 @@ impl Packet<Parsed> {
         // equivalent to where the body starts.
         let old_hdr_len = body.pkt_offset;
 
+        #[allow(clippy::comparison_chain)]
         if new_hdr_len > old_hdr_len {
             if prefix_len + old_hdr_len >= new_hdr_len {
                 // In this case we can fix the new headers in the existing
@@ -1483,7 +1475,7 @@ impl Packet<Parsed> {
         // The total length of the new packet, including headers and
         // body. This is used to determine the offset/length values of
         // the new headers.
-        let new_pkt_len = usize::from(new_hdr_len) + self.state.body.len;
+        let new_pkt_len = new_hdr_len + self.state.body.len;
 
         // Given the new header length requirement, determine if it
         // can be met with the current segment buffers, or if a new
@@ -1504,7 +1496,6 @@ impl Packet<Parsed> {
             &mut self.state.meta.inner,
             new_pkt_len,
         )?;
-        drop(wtr);
 
         // Update the header offsets.
         self.state.hdr_offsets = new_offsets;
@@ -1516,7 +1507,7 @@ impl Packet<Parsed> {
         Ok(())
     }
 
-    fn emit_outer_headers<'a>(
+    fn emit_outer_headers(
         wtr: &mut PacketSegWriter,
         meta: &mut OuterMeta,
         new_pkt_len: usize,
@@ -1549,9 +1540,9 @@ impl Packet<Parsed> {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
                     seg_pos: pkt_offset,
-                    hdr_len: ip4.hdr_len() as usize,
+                    hdr_len: ip4.hdr_len(),
                 });
-                pkt_offset += usize::from(ip4.hdr_len());
+                pkt_offset += ip4.hdr_len();
             }
 
             Some(IpMeta::Ip6(ip6)) => {
@@ -1573,9 +1564,9 @@ impl Packet<Parsed> {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
                     seg_pos: pkt_offset,
-                    hdr_len: ip6.hdr_len() as usize,
+                    hdr_len: ip6.hdr_len(),
                 });
-                pkt_offset += usize::from(ip6.hdr_len());
+                pkt_offset += ip6.hdr_len();
             }
 
             None => return Ok((pkt_offset, offsets)),
@@ -1600,7 +1591,7 @@ impl Packet<Parsed> {
         Ok((pkt_offset, offsets))
     }
 
-    fn emit_inner_headers<'a>(
+    fn emit_inner_headers(
         wtr: &mut PacketSegWriter,
         meta: &mut InnerMeta,
         mut pkt_offset: usize,
@@ -1631,7 +1622,7 @@ impl Packet<Parsed> {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
                     seg_pos: pkt_offset,
-                    hdr_len: ip4.hdr_len() as usize,
+                    hdr_len: ip4.hdr_len(),
                 });
                 pkt_offset += ip4.hdr_len();
             }
@@ -1655,9 +1646,9 @@ impl Packet<Parsed> {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
                     seg_pos: pkt_offset,
-                    hdr_len: ip6.hdr_len() as usize,
+                    hdr_len: ip6.hdr_len(),
                 });
-                pkt_offset += usize::from(ip6.hdr_len());
+                pkt_offset += ip6.hdr_len();
             }
 
             None => return Ok(offsets),
@@ -1673,7 +1664,7 @@ impl Packet<Parsed> {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
                     seg_pos: pkt_offset,
-                    hdr_len: usize::from(icmp6.hdr_len()),
+                    hdr_len: icmp6.hdr_len(),
                 });
             }
 
@@ -1684,7 +1675,7 @@ impl Packet<Parsed> {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
                     seg_pos: pkt_offset,
-                    hdr_len: usize::from(udp.hdr_len()),
+                    hdr_len: udp.hdr_len(),
                 });
             }
 
@@ -1694,7 +1685,7 @@ impl Packet<Parsed> {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
                     seg_pos: pkt_offset,
-                    hdr_len: usize::from(tcp.hdr_len()),
+                    hdr_len: tcp.hdr_len(),
                 });
             }
 
@@ -1706,8 +1697,8 @@ impl Packet<Parsed> {
 
     /// Emit header bytes to the given writer based on the passed-in
     /// metadata.
-    fn emit_headers<'a>(
-        wtr: &mut PacketSegWriter<'a>,
+    fn emit_headers(
+        wtr: &mut PacketSegWriter<'_>,
         outer_meta: &mut OuterMeta,
         inner_meta: &mut InnerMeta,
         new_pkt_len: usize,
@@ -1799,7 +1790,7 @@ impl PacketSeg {
     /// This is useful for testing.
     #[cfg(test)]
     pub fn bytes(&self) -> &[u8] {
-        unsafe { &slice::from_raw_parts((*self.mp).b_rptr, self.len) }
+        unsafe { slice::from_raw_parts((*self.mp).b_rptr, self.len) }
     }
 
     /// Expand the writable/readable area by pushing `b_wptr` out by
@@ -2076,7 +2067,7 @@ impl<'a> PacketSegWriter<'a> {
     ///
     /// `ModifierCreateError::EndOutOfRange`: The `b_rptr + offset +
     /// len` has gone beyond `b_wptr`.
-    fn new<'b>(
+    fn new(
         seg: &'a mut PacketSeg,
         offset: usize,
         len: usize,
@@ -2393,7 +2384,7 @@ impl<'a> PacketReader<'a> {
 
 impl<'a> PacketRead<'a> for PacketReader<'a> {
     fn pos(&self) -> usize {
-        self.pkt_pos as usize
+        self.pkt_pos
     }
 
     fn seek(&mut self, mut amount: usize) -> ReadResult<()> {
@@ -2561,7 +2552,7 @@ pub struct ReaderOffset {
 
 impl<'a> PacketRead<'a> for PacketReaderMut<'a> {
     fn pos(&self) -> usize {
-        self.pkt_pos as usize
+        self.pkt_pos
     }
 
     fn seek(&mut self, mut amount: usize) -> ReadResult<()> {
@@ -2806,7 +2797,7 @@ pub fn mock_desballoc(buf: Vec<u8>) -> *mut mblk_t {
 // The std equivalent to `freemsg(9F)`.
 #[cfg(any(feature = "std", test))]
 fn mock_freemsg(mut mp: *mut mblk_t) {
-    while mp != ptr::null_mut() {
+    while !mp.is_null() {
         let cont = unsafe { (*mp).b_cont };
         mock_freeb(mp);
         mp = cont;
@@ -2919,7 +2910,7 @@ mod test {
             _ => panic!("expected read error, got: {:?}", res),
         }
 
-        let pkt2 = Packet::copy(&vec![]);
+        let pkt2 = Packet::copy(&[]);
         assert_eq!(pkt2.len(), 0);
         assert_eq!(pkt2.num_segs(), 1);
         assert_eq!(pkt2.avail(), 16);
@@ -2996,8 +2987,8 @@ mod test {
             IpMeta::Ip4(v) => v,
             _ => panic!("expected IPv4"),
         };
-        assert_eq!(ip4_meta.src, SRC_IP4.into());
-        assert_eq!(ip4_meta.dst, DST_IP4.into());
+        assert_eq!(ip4_meta.src, SRC_IP4);
+        assert_eq!(ip4_meta.dst, DST_IP4);
         assert_eq!(ip4_meta.proto, Protocol::TCP);
         assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_idx, 0);
         assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_pos, 14);
@@ -3070,8 +3061,8 @@ mod test {
             IpMeta::Ip4(v) => v,
             _ => panic!("expected IPv4"),
         };
-        assert_eq!(ip4_parsed.src, SRC_IP4.into());
-        assert_eq!(ip4_parsed.dst, DST_IP4.into());
+        assert_eq!(ip4_parsed.src, SRC_IP4);
+        assert_eq!(ip4_parsed.dst, DST_IP4);
         assert_eq!(ip4_parsed.proto, Protocol::TCP);
         assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_idx, 0);
         assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_pos, 14);
@@ -3250,14 +3241,14 @@ mod test {
 
                 let pay_len = tcp.hdr_len() + ext_len;
                 let ip6 = Ipv6Meta {
-                    src: Ipv6Addr::from(SRC_IP6),
+                    src: SRC_IP6,
                     dst: DST_IP6,
                     proto: Protocol::TCP,
-                    next_hdr: next_hdr,
+                    next_hdr,
                     hop_limit: 255,
                     pay_len: pay_len as u16,
                     ext: Some(ext_bytes),
-                    ext_len: ext_len,
+                    ext_len,
                 };
                 let eth = EtherMeta {
                     ether_type: EtherType::Ipv6,
@@ -3361,9 +3352,9 @@ mod test {
         assert_eq!(seg.len(), 14);
         seg.expand_start(4).unwrap();
         assert_eq!(seg.len(), 18);
-        assert!(matches!(seg.expand_end(20), Err(_)));
-        assert!(matches!(seg.shrink_start(20), Err(_)));
-        assert!(matches!(seg.expand_start(4), Err(_)));
+        assert!(seg.expand_end(20).is_err());
+        assert!(seg.shrink_start(20).is_err());
+        assert!(seg.expand_start(4).is_err());
     }
 
     #[test]
@@ -3390,7 +3381,7 @@ mod test {
 
             // Link previous block to this one.
             if i > 0 {
-                let mut prev = blocks[i - 1];
+                let prev = blocks[i - 1];
                 unsafe {
                     (*prev).b_cont = mp;
                 }

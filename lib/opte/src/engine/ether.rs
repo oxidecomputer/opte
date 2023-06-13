@@ -141,9 +141,10 @@ impl FromStr for EtherAddr {
 
     fn from_str(val: &str) -> Result<Self, Self::Err> {
         let octets: Vec<u8> = val
-            .split(":")
+            .split(':')
             .map(|s| {
-                u8::from_str_radix(s, 16).or(Err(format!("bad octet: {}", s)))
+                u8::from_str_radix(s, 16)
+                    .map_err(|_| format!("bad octet: {}", s))
             })
             .collect::<result::Result<Vec<u8>, _>>()?;
 
@@ -396,6 +397,6 @@ mod test {
         // Verify error when the mblk is not large enough.
         let mut pkt = Packet::alloc_and_expand(10);
         let mut wtr = pkt.seg0_wtr();
-        assert!(matches!(wtr.slice_mut(EtherHdr::SIZE), Err(_)));
+        assert!(wtr.slice_mut(EtherHdr::SIZE).is_err());
     }
 }

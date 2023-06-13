@@ -86,7 +86,7 @@ pub struct NatDesc {
     external_ip: IpAddr,
 }
 
-pub const NAT_NAME: &'static str = "NAT";
+pub const NAT_NAME: &str = "NAT";
 
 impl ActionDesc for NatDesc {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
@@ -204,8 +204,8 @@ mod test {
         // Verify outbound header transformation
         // ================================================================
         let out_ht = desc.gen_ht(Direction::Out);
-        let mut pmo = pkt.meta_mut();
-        out_ht.run(&mut pmo).unwrap();
+        let pmo = pkt.meta_mut();
+        out_ht.run(pmo).unwrap();
 
         let ether_meta = pmo.inner.ether;
         assert_eq!(ether_meta.src, priv_mac);
@@ -256,9 +256,9 @@ mod test {
         wtr.write(&body).unwrap();
         let mut pkt = pkt.parse(Out, GenericUlp {}).unwrap();
 
-        let mut pmi = pkt.meta_mut();
+        let pmi = pkt.meta_mut();
         let in_ht = desc.gen_ht(Direction::In);
-        in_ht.run(&mut pmi).unwrap();
+        in_ht.run(pmi).unwrap();
 
         let ether_meta = pmi.inner.ether;
         assert_eq!(ether_meta.src, dest_mac);

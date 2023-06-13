@@ -17,7 +17,7 @@ use opte::engine::print::*;
 
 /// Print the header for the [`print_v2p()`] output.
 fn print_v2p_header() {
-    println!("{:<24} {:<17} {}", "VPC IP", "VPC MAC ADDR", "UNDERLAY IP");
+    println!("{:<24} {:<17} UNDERLAY IP", "VPC IP", "VPC MAC ADDR");
 }
 
 /// Print a [`DumpVirt2PhysResp`].
@@ -25,10 +25,10 @@ pub fn print_v2p(resp: &DumpVirt2PhysResp) {
     println!("Virtual to Physical Mappings");
     print_hrb();
     for vpc in &resp.mappings {
-        println!("");
+        println!();
         println!("VPC {}", vpc.vni);
         print_hr();
-        println!("");
+        println!();
         println!("IPv4 mappings");
         print_hr();
         print_v2p_header();
@@ -36,7 +36,7 @@ pub fn print_v2p(resp: &DumpVirt2PhysResp) {
             print_v2p_ip4(pair);
         }
 
-        println!("");
+        println!();
         println!("IPv6 mappings");
         print_hr();
         print_v2p_header();

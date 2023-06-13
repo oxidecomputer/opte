@@ -557,7 +557,7 @@ impl DataPredicate {
         R: PacketRead<'a>,
     {
         match self {
-            Self::Not(pred) => return !pred.is_match(meta, rdr),
+            Self::Not(pred) => !pred.is_match(meta, rdr),
 
             Self::DhcpMsgType(mt) => {
                 let bytes = rdr.copy_remaining();
@@ -583,8 +583,7 @@ impl DataPredicate {
                     }
                 };
 
-                let res = DhcpMessageType::from(dhcp.message_type) == *mt;
-                return res;
+                DhcpMessageType::from(dhcp.message_type) == *mt
             }
 
             Self::IcmpMsgType(mt) => {
@@ -610,7 +609,7 @@ impl DataPredicate {
                     }
                 };
 
-                return IcmpMessageType::from(pkt.msg_type()) == *mt;
+                IcmpMessageType::from(pkt.msg_type()) == *mt
             }
 
             Self::Icmpv6MsgType(mt) => {
@@ -619,18 +618,18 @@ impl DataPredicate {
                     return false;
                 };
 
-                return icmp6.msg_type == *mt;
+                icmp6.msg_type == *mt
             }
 
             Self::Dhcpv6MsgType(mt) => {
                 if let Ok(buf) = rdr.slice(1) {
                     rdr.seek_back(1).expect("Failed to seek back");
-                    return buf[0] == u8::from(*mt);
+                    buf[0] == u8::from(*mt)
                 } else {
                     super::err(String::from(
                         "Failed to read DHCPv6 message type from packet",
                     ));
-                    return false;
+                    false
                 }
             }
         }

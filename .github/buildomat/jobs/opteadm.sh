@@ -28,6 +28,9 @@ pushd bin/opteadm
 header "check style"
 ptime -m cargo +nightly fmt -- --check
 
+header "analyze"
+ptime -m cargo clippy --all-targets
+
 header "debug build"
 ptime -m cargo build
 

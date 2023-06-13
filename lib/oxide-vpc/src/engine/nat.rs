@@ -42,7 +42,7 @@ use opte::engine::snat::NatPool;
 use opte::engine::snat::SNat;
 use opte::engine::snat::SNat6;
 
-pub const NAT_LAYER_NAME: &'static str = "nat";
+pub const NAT_LAYER_NAME: &str = "nat";
 const ONE_TO_ONE_NAT_PRIORITY: u16 = 10;
 const SNAT_PRIORITY: u16 = 100;
 

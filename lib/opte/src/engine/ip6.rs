@@ -163,7 +163,7 @@ impl<'a> From<&Ipv6Hdr<'a>> for Ipv6Meta {
             let ext_len = ext_bytes.len();
             assert!(ext_len <= 64);
             let mut ext = [0; 64];
-            ext[0..ext_len].copy_from_slice(&ext_bytes);
+            ext[0..ext_len].copy_from_slice(ext_bytes);
             (Some(ext), ext_len)
         } else {
             (None, 0)
@@ -177,7 +177,7 @@ impl<'a> From<&Ipv6Hdr<'a>> for Ipv6Meta {
             hop_limit: ip6.hop_limit(),
             pay_len: ip6.pay_len() as u16,
             ext,
-            ext_len: ext_len,
+            ext_len,
         }
     }
 }
@@ -193,13 +193,14 @@ pub struct Ipv6Push {
 
 impl PushAction<Ipv6Meta> for Ipv6Push {
     fn push(&self) -> Ipv6Meta {
-        let mut ip6 = Ipv6Meta::default();
-        ip6.src = self.src;
-        ip6.dst = self.dst;
-        ip6.proto = self.proto;
-        // For now you cannot push extension headers.
-        ip6.next_hdr = IpProtocol::from(self.proto);
-        ip6
+        Ipv6Meta {
+            src: self.src,
+            dst: self.dst,
+            proto: self.proto,
+            // For now you cannot push extension headers.
+            next_hdr: IpProtocol::from(self.proto),
+            ..Default::default()
+        }
     }
 }
 
@@ -281,7 +282,7 @@ impl<'a> Ipv6Hdr<'a> {
         rdr: &'b mut impl PacketReadMut<'a>,
     ) -> Result<Self, Ipv6HdrError> {
         // Parse the base IPv6 header.
-        let buf = rdr.slice_mut(usize::from(Self::BASE_SIZE))?;
+        let buf = rdr.slice_mut(Self::BASE_SIZE)?;
         let base = Ipv6Packet::new_unchecked(buf);
 
         // Parse any extension headers.
@@ -415,8 +416,8 @@ impl<'a> Ipv6Hdr<'a> {
 
     /// Populate `bytes` with the pseudo header bytes.
     pub fn pseudo_bytes(&self, bytes: &mut [u8; 40]) {
-        bytes[0..16].copy_from_slice(&self.base.src_addr().as_bytes());
-        bytes[16..32].copy_from_slice(&self.base.dst_addr().as_bytes());
+        bytes[0..16].copy_from_slice(self.base.src_addr().as_bytes());
+        bytes[16..32].copy_from_slice(self.base.dst_addr().as_bytes());
         bytes[32..36].copy_from_slice(&(self.pay_len() as u32).to_be_bytes());
         bytes[36..40].copy_from_slice(&[0u8, 0u8, 0u8, u8::from(self.proto())]);
     }
@@ -605,8 +606,7 @@ pub(crate) mod test {
             return (buf.to_vec(), Ipv6Hdr::BASE_SIZE);
         }
 
-        let mut it = extensions.iter();
-        while let Some(extension) = it.next() {
+        for extension in extensions {
             // First, update the _previous_ next_header with the type of this
             // extension header. They form a linked-list. We do this first, so
             // that in the case of the first extension header, we're rewriting
@@ -761,7 +761,7 @@ pub(crate) mod test {
             ext_len: 0,
         };
 
-        let len = usize::from(ip.hdr_len());
+        let len = ip.hdr_len();
         let mut pkt = Packet::alloc_and_expand(len);
         let mut wtr = pkt.seg0_wtr();
         ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());

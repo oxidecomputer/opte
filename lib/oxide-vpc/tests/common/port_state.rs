@@ -21,7 +21,7 @@ pub fn print_port(port: &Port<VpcNetwork>, vpc_map: &VpcMappings) {
     // Print VPC mappings.
     // ================================================================
     print_v2p(&vpc_map.dump());
-    println!("");
+    println!();
 
     println!(
         "Port: {} [state: {}, epoch: {}]",
@@ -34,7 +34,7 @@ pub fn print_port(port: &Port<VpcNetwork>, vpc_map: &VpcMappings) {
     // ================================================================
     // Print overall layer information.
     // ================================================================
-    println!("");
+    println!();
     println!("Layers");
     print_hr();
     let list_layers = port.list_layers();
@@ -43,7 +43,7 @@ pub fn print_port(port: &Port<VpcNetwork>, vpc_map: &VpcMappings) {
     // ================================================================
     // Print UFT.
     // ================================================================
-    println!("");
+    println!();
     // Only some states will report a UFT.
     if let Ok(uft) = port.dump_uft() {
         print_uft(&uft);
@@ -53,7 +53,7 @@ pub fn print_port(port: &Port<VpcNetwork>, vpc_map: &VpcMappings) {
     // Print TCP flows.
     // ================================================================
     if port.state() == PortState::Running {
-        println!("");
+        println!();
         println!("TCP Flows (keyed on outbound)");
         print_hr();
         print_tcp_flows(&port.dump_tcp_flows().unwrap());
@@ -62,24 +62,24 @@ pub fn print_port(port: &Port<VpcNetwork>, vpc_map: &VpcMappings) {
     // ================================================================
     // Print information about each layer.
     // ================================================================
-    println!("");
+    println!();
     for layer in &list_layers.layers {
         print_layer(&port.dump_layer(&layer.name).unwrap());
-        println!("");
+        println!();
         println!("{:#?}", port.layer_stats_snap(&layer.name).unwrap());
-        println!("");
+        println!();
     }
 
     // ================================================================
     // Print the PortStats.
     // ================================================================
-    println!("");
+    println!();
     println!("Port Stats");
     print_hr();
     println!("{:#?}", port.stats_snap());
 
     print_hrb();
-    println!("");
+    println!();
 }
 
 /// Track various bits of port state for the purpose of verifying
@@ -156,7 +156,7 @@ pub enum SplitField<'a> {
 }
 
 pub fn split_field(s: &str) -> SplitField {
-    let split: Vec<&str> = s.split(".").collect();
+    let split: Vec<&str> = s.split('.').collect();
 
     match split.len() {
         1 => SplitField::One(split[0]),

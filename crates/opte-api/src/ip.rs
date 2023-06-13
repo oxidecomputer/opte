@@ -19,9 +19,11 @@ use serde::Serialize;
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::String;
+        use alloc::string::ToString;
         use alloc::vec::Vec;
     } else {
         use std::string::String;
+        use std::string::ToString;
         use std::vec::Vec;
     }
 }
@@ -220,7 +222,7 @@ impl SubnetRouterPair {
         if prefix == 0 {
             0
         } else {
-            let round = if prefix % 8 != 0 { 1 } else { 0 };
+            let round = u8::from(prefix % 8 != 0);
             (prefix / 8) + round
         }
     }
@@ -415,8 +417,8 @@ impl Ipv4Addr {
         let mut n = u32::from_be_bytes(self.inner);
 
         let mut bits = i32::MIN;
-        bits = bits >> (mask - 1);
-        n = n & bits as u32;
+        bits >>= mask - 1;
+        n &= bits as u32;
         self.inner = n.to_be_bytes();
         Ok(self)
     }
@@ -486,7 +488,7 @@ impl FromStr for Ipv4Addr {
 
     fn from_str(val: &str) -> result::Result<Self, Self::Err> {
         let octets: Vec<u8> = val
-            .split(".")
+            .split('.')
             .map(|s| s.parse().map_err(|e| format!("{}", e)))
             .collect::<result::Result<Vec<u8>, _>>()?;
 
@@ -673,7 +675,7 @@ impl Ipv6Addr {
 
         if partial > 0 {
             let bits = i8::MIN >> (partial - 1);
-            self.inner[byte_idx] = self.inner[byte_idx] & bits as u8;
+            self.inner[byte_idx] &= bits as u8;
             byte_idx += 1;
         }
         self.inner[byte_idx..].fill(0);
@@ -902,7 +904,7 @@ impl Ipv4PrefixLen {
     /// Convert the prefix length into a subnet mask.
     pub fn to_netmask(self) -> Ipv4Addr {
         let mut bits = i32::MIN;
-        bits = bits >> (self.0 - 1);
+        bits >>= self.0 - 1;
         Ipv4Addr::from(bits.to_be_bytes())
     }
 
@@ -923,9 +925,9 @@ impl FromStr for Ipv4Cidr {
 
     /// Convert a string like "192.168.2.0/24" into an `Ipv4Cidr`.
     fn from_str(val: &str) -> result::Result<Self, Self::Err> {
-        let (ip_s, prefix_s) = match val.split_once("/") {
+        let (ip_s, prefix_s) = match val.split_once('/') {
             Some(v) => v,
-            None => return Err(format!("no '/' found")),
+            None => return Err("no '/' found".to_string()),
         };
 
         let ip = match ip_s.parse() {
@@ -989,7 +991,7 @@ impl Ipv4Cidr {
     /// Convert the CIDR prefix length into a subnet mask.
     pub fn to_mask(self) -> Ipv4Addr {
         let mut bits = i32::MIN;
-        bits = bits >> (self.prefix_len() - 1);
+        bits >>= self.prefix_len() - 1;
         Ipv4Addr::from(bits.to_be_bytes())
     }
 }
@@ -1032,9 +1034,9 @@ impl FromStr for Ipv6Cidr {
 
     /// Convert a string like "fd00:dead:beef:cafe::/64" into an [`Ipv6Cidr`].
     fn from_str(val: &str) -> result::Result<Self, Self::Err> {
-        let (ip_s, prefix_s) = match val.split_once("/") {
+        let (ip_s, prefix_s) = match val.split_once('/') {
             Some(v) => v,
-            None => return Err(format!("no '/' found")),
+            None => return Err("no '/' found".to_string()),
         };
 
         let ip = match ip_s.parse::<smoltcp::wire::Ipv6Address>() {
@@ -1170,10 +1172,7 @@ mod test {
         let ip6 = "fd01:dead:beef::1".parse().unwrap();
         assert_eq!(Ipv6Cidr::new_checked(ip6, 129), Err(msg.clone()));
 
-        assert_eq!(
-            "fd01:dead:beef::1/129".parse::<Ipv6Cidr>(),
-            Err(msg.clone())
-        )
+        assert_eq!("fd01:dead:beef::1/129".parse::<Ipv6Cidr>(), Err(msg))
     }
 
     #[test]

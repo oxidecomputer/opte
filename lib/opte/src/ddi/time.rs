@@ -144,8 +144,11 @@ impl<T: 'static> PeriodicCtx<T> {
     }
 }
 
-// Safety: We know the arg is non-null because the periodic ctor
-// always builds a PeriodicCtx to pas to this callback.
+/// Periodic callback
+///
+/// # Safety
+/// We know the arg is non-null because the periodic ctor
+/// always builds a PeriodicCtx to pas to this callback.
 #[cfg(all(not(feature = "std"), not(test)))]
 pub unsafe extern "C" fn _periodic_cb<T: 'static>(arg: *mut ddi::c_void) {
     assert!(!arg.is_null());
@@ -244,7 +247,7 @@ mod test {
     #[test]
     #[should_panic]
     fn bad_interval() {
-        let ms1 = 1 * NANOS_TO_MILLIS as u32;
+        let ms1 = NANOS_TO_MILLIS as u32;
         let ms9 = 9 * NANOS_TO_MILLIS as u32;
         let ms99 = 99 * NANOS_TO_MILLIS as u32;
         let ms101 = 101 * NANOS_TO_MILLIS as u32;

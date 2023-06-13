@@ -74,7 +74,7 @@ use opte::engine::rule::ResourceEntry;
 use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
 
-pub const OVERLAY_LAYER_NAME: &'static str = "overlay";
+pub const OVERLAY_LAYER_NAME: &str = "overlay";
 
 pub fn setup(
     pb: &PortBuilder,
@@ -101,17 +101,17 @@ pub fn setup(
 
     let mut layer =
         Layer::new(OVERLAY_LAYER_NAME, pb.name(), actions, ft_limit);
-    let encap_rule = Rule::match_any(1, layer.action(0).unwrap().clone());
+    let encap_rule = Rule::match_any(1, layer.action(0).unwrap());
     layer.add_rule(Direction::Out, encap_rule);
-    let decap_rule = Rule::match_any(1, layer.action(1).unwrap().clone());
+    let decap_rule = Rule::match_any(1, layer.action(1).unwrap());
     layer.add_rule(Direction::In, decap_rule);
     // NOTE The First/Last positions cannot fail; perhaps I should
     // improve the API to avoid the unwrap().
     pb.add_layer(layer, Pos::Last)
 }
 
-pub const DECAP_NAME: &'static str = "decap";
-pub const ENCAP_NAME: &'static str = "encap";
+pub const DECAP_NAME: &str = "decap";
+pub const ENCAP_NAME: &str = "encap";
 
 /// A [`StaticAction`] to encapsulate a packet for the purpose of
 /// implementing the Oxide VPC overlay network.
@@ -230,7 +230,7 @@ impl StaticAction for EncapAction {
                 // to enforce this in the type system, and thus must
                 // account for this situation.
                 return Err(GenHtError::Unexpected {
-                    msg: format!("no RouterTarget metadata entry found"),
+                    msg: "no RouterTarget metadata entry found".to_string(),
                 });
             }
         };
@@ -251,11 +251,9 @@ impl StaticAction for EncapAction {
             RouterTargetInternal::InternetGateway => self.boundary_services,
 
             RouterTargetInternal::Ip(virt_ip) => match self.v2p.get(&virt_ip) {
-                Some(phys) => PhysNet {
-                    ether: phys.ether.into(),
-                    ip: phys.ip,
-                    vni: self.vni,
-                },
+                Some(phys) => {
+                    PhysNet { ether: phys.ether, ip: phys.ip, vni: self.vni }
+                }
 
                 // The router target has specified a VPC IP we do not
                 // currently know about; this could be for two
@@ -277,7 +275,7 @@ impl StaticAction for EncapAction {
             RouterTargetInternal::VpcSubnet(_) => {
                 match self.v2p.get(&flow_id.dst_ip) {
                     Some(phys) => PhysNet {
-                        ether: phys.ether.into(),
+                        ether: phys.ether,
                         ip: phys.ip,
                         vni: self.vni,
                     },
@@ -317,7 +315,7 @@ impl StaticAction for EncapAction {
             outer_ip: HeaderAction::Push(
                 IpPush::from(Ipv6Push {
                     src: self.phys_ip_src,
-                    dst: phys_target.ip.into(),
+                    dst: phys_target.ip,
                     proto: Protocol::UDP,
                 }),
                 PhantomData,
@@ -333,17 +331,13 @@ impl StaticAction for EncapAction {
             // hard-coded.
             outer_encap: HeaderAction::Push(
                 EncapPush::from(GenevePush {
-                    vni: phys_target.vni.into(),
+                    vni: phys_target.vni,
                     entropy: 7777,
-                    ..Default::default()
                 }),
                 PhantomData,
             ),
             inner_ether: HeaderAction::Modify(
-                EtherMod {
-                    dst: Some(phys_target.ether.into()),
-                    ..Default::default()
-                },
+                EtherMod { dst: Some(phys_target.ether), ..Default::default() },
                 PhantomData,
             ),
             ..Default::default()
@@ -355,6 +349,7 @@ impl StaticAction for EncapAction {
     }
 }
 
+#[derive(Default)]
 pub struct DecapAction {}
 
 /// A [`StaticAction`] representing the act of decapsulating a packet
@@ -448,15 +443,11 @@ impl VpcMappings {
     /// Return the existing entry, if there is one.
     pub fn del(&self, vip: &IpAddr, phys: &PhysNet) -> Option<PhysNet> {
         match self.inner.lock().get(&phys.vni) {
-            Some(v2p) => match v2p.remove(vip) {
-                Some(guest_phys) => Some(PhysNet {
-                    ether: guest_phys.ether,
-                    ip: guest_phys.ip,
-                    vni: phys.vni,
-                }),
-
-                None => None,
-            },
+            Some(v2p) => v2p.remove(vip).map(|guest_phys| PhysNet {
+                ether: guest_phys.ether,
+                ip: guest_phys.ip,
+                vni: phys.vni,
+            }),
 
             None => None,
         }
@@ -499,6 +490,12 @@ impl VpcMappings {
     }
 }
 
+impl Default for VpcMappings {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A mapping from virtual IPs to physical location.
 pub struct Virt2Phys {
     // XXX We need to implement some sort of invalidation mechanism
@@ -515,7 +512,7 @@ pub struct Virt2Phys {
     ip6: KMutex<BTreeMap<Ipv6Addr, GuestPhysAddr>>,
 }
 
-pub const VIRT_2_PHYS_NAME: &'static str = "Virt2Phys";
+pub const VIRT_2_PHYS_NAME: &str = "Virt2Phys";
 
 impl Virt2Phys {
     pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, GuestPhysAddr)> {
@@ -539,6 +536,12 @@ impl Virt2Phys {
             ip4: KMutex::new(BTreeMap::new(), KMutexType::Driver),
             ip6: KMutex::new(BTreeMap::new(), KMutexType::Driver),
         }
+    }
+}
+
+impl Default for Virt2Phys {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

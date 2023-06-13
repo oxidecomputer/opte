@@ -196,12 +196,12 @@ impl ClasslessStaticRouteOpt {
     ) -> Self {
         let mut routes = vec![r1];
 
-        if r2.is_some() {
-            routes.push(r2.unwrap());
+        if let Some(r2) = r2 {
+            routes.push(r2);
         }
 
-        if r3.is_some() {
-            routes.push(r3.unwrap());
+        if let Some(r3) = r3 {
+            routes.push(r3);
         }
 
         Self { routes }
@@ -301,7 +301,7 @@ impl HairpinAction for DhcpAction {
                 MacAddr::BROADCAST,
             )]),
             Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(
-                self.client_mac.into(),
+                self.client_mac,
             )]),
             Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
                 Ipv4Addr::ANY_ADDR,
@@ -384,7 +384,7 @@ impl HairpinAction for DhcpAction {
         // that emit() should not fail.
         let mut tmp = vec![0u8; reply_len];
         let mut dhcp = DhcpPacket::new_unchecked(&mut tmp);
-        let _ = reply.emit(&mut dhcp).unwrap();
+        reply.emit(&mut dhcp).unwrap();
 
         // Need to overwrite the End Option with Classless Static
         // Route Option, and possibly the Domain Search Option, and then write
@@ -413,7 +413,7 @@ impl HairpinAction for DhcpAction {
         let ip_dst = if client_dhcp.broadcast {
             Ipv4Addr::LOCAL_BCAST
         } else {
-            self.client_ip.into()
+            self.client_ip
         };
 
         let mut ip = Ipv4Meta {
@@ -428,7 +428,7 @@ impl HairpinAction for DhcpAction {
         let eth_dst = if client_dhcp.broadcast {
             MacAddr::BROADCAST
         } else {
-            self.client_mac.into()
+            self.client_mac
         };
 
         let eth = EtherMeta {
@@ -473,8 +473,7 @@ mod test {
             router: Ipv4Addr::from([172, 30, 4, 1]),
         };
 
-        let opt =
-            ClasslessStaticRouteOpt::new(if_ip.clone(), Some(gw.clone()), None);
+        let opt = ClasslessStaticRouteOpt::new(if_ip, Some(gw), None);
         assert_eq!(
             opt.encode(),
             vec![121, 14, 32, 172, 30, 7, 77, 0, 0, 0, 0, 0, 172, 30, 4, 1]
@@ -539,21 +538,16 @@ mod test {
             router,
         };
 
-        let opt = ClasslessStaticRouteOpt::new(p1.clone(), None, None);
+        let opt = ClasslessStaticRouteOpt::new(p1, None, None);
         assert_eq!(opt.encode(), vec![121, 5, 0, 10, 0, 0, 1]);
 
-        let opt =
-            ClasslessStaticRouteOpt::new(p1.clone(), Some(p2.clone()), None);
+        let opt = ClasslessStaticRouteOpt::new(p1, Some(p2), None);
         assert_eq!(
             opt.encode(),
             vec![121, 11, 0, 10, 0, 0, 1, 8, 10, 10, 0, 0, 1]
         );
 
-        let opt = ClasslessStaticRouteOpt::new(
-            p1.clone(),
-            Some(p2.clone()),
-            Some(p3.clone()),
-        );
+        let opt = ClasslessStaticRouteOpt::new(p1, Some(p2), Some(p3));
         assert_eq!(
             opt.encode(),
             vec![
@@ -562,11 +556,10 @@ mod test {
             ]
         );
 
-        let opt = ClasslessStaticRouteOpt::new(p4.clone(), None, None);
+        let opt = ClasslessStaticRouteOpt::new(p4, None, None);
         assert_eq!(opt.encode(), vec![121, 7, 16, 10, 17, 10, 0, 0, 1],);
 
-        let opt =
-            ClasslessStaticRouteOpt::new(p4.clone(), Some(p5.clone()), None);
+        let opt = ClasslessStaticRouteOpt::new(p4, Some(p5), None);
         assert_eq!(
             opt.encode(),
             vec![
@@ -574,11 +567,7 @@ mod test {
             ],
         );
 
-        let opt = ClasslessStaticRouteOpt::new(
-            p4.clone(),
-            Some(p5.clone()),
-            Some(p6.clone()),
-        );
+        let opt = ClasslessStaticRouteOpt::new(p4, Some(p5), Some(p6));
         assert_eq!(
             opt.encode(),
             vec![
@@ -587,8 +576,7 @@ mod test {
             ],
         );
 
-        let opt =
-            ClasslessStaticRouteOpt::new(p6.clone(), Some(p7.clone()), None);
+        let opt = ClasslessStaticRouteOpt::new(p6, Some(p7), None);
         assert_eq!(
             opt.encode(),
             vec![
@@ -597,11 +585,7 @@ mod test {
             ]
         );
 
-        let opt = ClasslessStaticRouteOpt::new(
-            p6.clone(),
-            Some(p7.clone()),
-            Some(p8.clone()),
-        );
+        let opt = ClasslessStaticRouteOpt::new(p6, Some(p7), Some(p8));
         assert_eq!(
             opt.encode(),
             vec![

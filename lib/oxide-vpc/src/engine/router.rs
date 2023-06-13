@@ -56,7 +56,7 @@ use opte::engine::rule::MetaAction;
 use opte::engine::rule::ModMetaResult;
 use opte::engine::rule::Rule;
 
-pub const ROUTER_LAYER_NAME: &'static str = "router";
+pub const ROUTER_LAYER_NAME: &str = "router";
 
 // The control plane wants to define "no destination" as a router
 // target. This routing layer implementation converts said target to a
@@ -77,7 +77,7 @@ impl ActionMetaValue for RouterTargetInternal {
         match s {
             "ig" => Ok(Self::InternetGateway),
 
-            _ => match s.split_once("=") {
+            _ => match s.split_once('=') {
                 Some(("ip4", ip4_s)) => {
                     let ip4 = ip4_s.parse::<Ipv4Addr>()?;
                     Ok(Self::Ip(IpAddr::Ip4(ip4)))

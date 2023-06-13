@@ -55,10 +55,11 @@ pub struct GenevePush {
 
 impl PushAction<GeneveMeta> for GenevePush {
     fn push(&self) -> GeneveMeta {
-        let mut geneve = GeneveMeta::default();
-        geneve.entropy = self.entropy;
-        geneve.vni = self.vni;
-        geneve
+        GeneveMeta {
+            entropy: self.entropy,
+            vni: self.vni,
+            ..Default::default()
+        }
     }
 }
 
@@ -185,7 +186,7 @@ pub struct GeneveHdrRaw {
     reserved: u8,
 }
 
-impl<'a> GeneveHdrRaw {
+impl GeneveHdrRaw {
     // Return the length of the Geneve options.
     //
     // NOTE: The Geneve header specifies options length in 4-byte units.

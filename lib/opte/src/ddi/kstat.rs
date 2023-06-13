@@ -184,6 +184,7 @@ impl<T: KStatProvider> KStatNamed<T> {
 /// * `kstat_named(9S)`
 #[cfg(all(not(feature = "std"), not(test)))]
 #[repr(transparent)]
+#[derive(Default)]
 pub struct KStatU64 {
     inner: kstat_named_t,
 }
@@ -242,6 +243,7 @@ impl core::ops::SubAssign<u64> for KStatU64 {
 }
 
 #[cfg(any(feature = "std", test))]
+#[derive(Default)]
 pub struct KStatU64 {
     value: u64,
 }
@@ -253,7 +255,7 @@ impl KStatU64 {
     }
 
     pub fn new() -> Self {
-        Self { value: 0 }
+        Self::default()
     }
 
     pub fn set(&mut self, val: u64) {

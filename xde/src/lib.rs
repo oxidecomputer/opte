@@ -118,31 +118,25 @@ fn _Unwind_Resume() -> ! {
 #[macro_export]
 macro_rules! warn {
     ($format:expr) => {
-        let msg = format!($format);
+        let msg = CString::new(format!($format)).unwrap();
         #[allow(unused_unsafe)]
-        unsafe { cmn_err(CE_WARN, CString::new(msg).unwrap().as_ptr()) };
+        unsafe { cmn_err(CE_WARN, msg.as_ptr()) };
     };
     ($format:expr, $($args:expr),*) => {
-        let msg = format!($format, $($args),*);
+        let msg = CString::new(format!($format, $($args),*)).unwrap();
         #[allow(unused_unsafe)]
-        unsafe { cmn_err(CE_WARN, CString::new(msg).unwrap().as_ptr()) };
+        unsafe { cmn_err(CE_WARN, msg.as_ptr()) };
     };
 }
 
 #[macro_export]
 macro_rules! note {
     ($format:expr) => {
-        let msg = format!($format);
-        cmn_err(
-            CE_NOTE,
-            CString::new(msg).unwrap().as_ptr(),
-        );
+        let msg = CString::new(format!($format));
+        cmn_err(CE_NOTE, msg.as_ptr());
     };
     ($format:expr, $($args:expr),*) => {
-        let msg = format!($format, $($args),*);
-        cmn_err(
-            CE_NOTE,
-            CString::new(msg).unwrap().as_ptr(),
-        );
+        let msg = CString::new(format!($format, $($args),*));
+        cmn_err(CE_NOTE, msg.as_ptr());
     };
 }

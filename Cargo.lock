@@ -641,22 +641,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "opte-tests"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
- "opteadm",
- "oxide-vpc",
- "slog",
- "slog-async",
- "slog-envlogger",
- "slog-term",
- "zone",
- "ztest",
-]
-
-[[package]]
 name = "opteadm"
 version = "0.2.0"
 dependencies = [
@@ -1586,6 +1570,22 @@ dependencies = [
 [[package]]
 name = "xde-link"
 version = "0.1.0"
+
+[[package]]
+name = "xde-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
+ "opteadm",
+ "oxide-vpc",
+ "slog",
+ "slog-async",
+ "slog-envlogger",
+ "slog-term",
+ "zone",
+ "ztest",
+]
 
 [[package]]
 name = "zerocopy"

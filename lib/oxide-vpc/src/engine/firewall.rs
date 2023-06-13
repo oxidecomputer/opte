@@ -49,7 +49,7 @@ cfg_if! {
     }
 }
 
-pub const FW_LAYER_NAME: &'static str = "firewall";
+pub const FW_LAYER_NAME: &str = "firewall";
 
 pub fn setup(
     pb: &mut PortBuilder,
@@ -116,16 +116,16 @@ pub fn from_fw_rule(fw_rule: FirewallRule, action: Action) -> Rule<Finalized> {
 
     let mut rule = Rule::new(fw_rule.priority, action);
 
-    if proto_pred.is_some() {
-        rule.add_predicate(proto_pred.unwrap());
+    if let Some(proto_pred) = proto_pred {
+        rule.add_predicate(proto_pred);
     }
 
-    if port_pred.is_some() {
-        rule.add_predicate(port_pred.unwrap());
+    if let Some(port_pred) = port_pred {
+        rule.add_predicate(port_pred);
     }
 
-    if addr_pred.is_some() {
-        rule.add_predicate(addr_pred.unwrap());
+    if let Some(addr_pred) = addr_pred {
+        rule.add_predicate(addr_pred);
     }
 
     rule.finalize()

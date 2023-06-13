@@ -47,10 +47,10 @@ impl HairpinAction for IcmpEchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         let hdr_preds = vec![
             Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(
-                self.echo_src_mac.into(),
+                self.echo_src_mac,
             )]),
             Predicate::InnerEtherDst(vec![EtherAddrMatch::Exact(
-                self.echo_dst_mac.into(),
+                self.echo_dst_mac,
             )]),
             Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
                 self.echo_src_ip,
@@ -106,7 +106,7 @@ impl HairpinAction for IcmpEchoReply {
         let mut icmp_reply = Icmpv4Packet::new_unchecked(&mut tmp);
         let mut csum = Csum::ignored();
         csum.icmpv4 = Checksum::Tx;
-        let _ = reply.emit(&mut icmp_reply, &csum);
+        reply.emit(&mut icmp_reply, &csum);
 
         let mut ip4 = Ipv4Meta {
             src: self.echo_dst_ip,
