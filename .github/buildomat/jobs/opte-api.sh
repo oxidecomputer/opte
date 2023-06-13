@@ -27,10 +27,10 @@ header "check style"
 ptime -m cargo +nightly fmt -- --check
 
 header "analyze std"
-ptime -m cargo check
+ptime -m cargo clippy --all-targets
 
 header "analyze no_std"
-ptime -m cargo check --no-default-features
+ptime -m cargo clippy --no-default-features --all-targets
 
 header "test"
 ptime -m cargo test

@@ -24,4 +24,4 @@ header "check style"
 ptime -m cargo +nightly fmt -- --check
 
 header "analyze"
-ptime -m cargo check
+ptime -m cargo clippy --all-targets

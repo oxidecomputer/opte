@@ -66,7 +66,14 @@ pushd xde
 cp xde.conf /work/xde.conf
 
 header "check style"
-ptime -m cargo +nightly fmt -- --check
+ptime -m cargo +nightly fmt -p xde -p xde-link -- --check
+
+header "analyze"
+ptime -m cargo clippy -- --allow clippy::uninlined-format-args
+
+pushd xde-link
+ptime -m cargo clippy -- --allow clippy::uninlined-format-args
+popd
 
 header "build xde (debug)"
 ptime -m ./build-debug.sh
@@ -106,7 +113,7 @@ sha256sum $REL_TGT/xde_link.so > $REL_TGT/xde_link.so.sha256
 header "build xde integration tests"
 pushd xde-tests
 cargo +nightly fmt -- --check
-cargo clippy --all-targets -- --no-deps
+cargo clippy --all-targets
 cargo build --test loopback
 loopback_test=$(
     cargo build -q --test loopback --message-format=json |\
