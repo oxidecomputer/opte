@@ -2859,10 +2859,7 @@ mod test {
     const DST_IP6: Ipv6Addr =
         Ipv6Addr::from_const([0xFD00, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2]);
 
-    const PKT_SZ: usize =
-        EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + TcpHdr::BASE_SIZE;
-
-    fn tcp_pkt() -> Packet<Initialized> {
+    fn tcp_pkt(body: &[u8]) -> Packet<Initialized> {
         let tcp = TcpMeta {
             src: 3839,
             dst: 80,
@@ -2871,14 +2868,15 @@ mod test {
             ..Default::default()
         };
 
+        let ip4_total_len = Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len();
         let ip4 = Ipv4Meta {
             src: SRC_IP4,
             dst: DST_IP4,
             proto: Protocol::TCP,
             ttl: 64,
             ident: 99,
-            hdr_len: 20,
-            total_len: 40,
+            hdr_len: Ipv4Hdr::BASE_SIZE.try_into().unwrap(),
+            total_len: ip4_total_len.try_into().unwrap(),
             csum: [0; 2],
         };
 
@@ -2888,14 +2886,16 @@ mod test {
             dst: DST_MAC,
         };
 
-        let mut seg = PacketSeg::alloc(PKT_SZ);
-        seg.expand_end(PKT_SZ).unwrap();
+        let pkt_sz = EtherHdr::SIZE + ip4_total_len;
+        let mut seg = PacketSeg::alloc(pkt_sz);
+        seg.expand_end(pkt_sz).unwrap();
         let mut wtr = seg.get_writer();
         eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
         ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
         tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
+        wtr.write(body).unwrap();
         let pkt = Packet::new(seg);
-        assert_eq!(pkt.len(), PKT_SZ);
+        assert_eq!(pkt.len(), pkt_sz);
         pkt
     }
 
@@ -2976,7 +2976,7 @@ mod test {
 
     #[test]
     fn read_single_segment() {
-        let parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_idx, 0);
         assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_pos, 0);
 
@@ -3116,7 +3116,7 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_unchecked_bad_offset() {
-        let parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Offset past end of segment.
         parsed.segs[0].slice_unchecked(99, None);
     }
@@ -3124,7 +3124,7 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_mut_unchecked_bad_offset() {
-        let mut parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Offset past end of segment.
         parsed.segs[0].slice_mut_unchecked(99, None);
     }
@@ -3132,7 +3132,7 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_unchecked_bad_len() {
-        let parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Length past end of segment.
         parsed.segs[0].slice_unchecked(0, Some(99));
     }
@@ -3140,14 +3140,14 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_mut_unchecked_bad_len() {
-        let mut parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Length past end of segment.
         parsed.segs[0].slice_mut_unchecked(0, Some(99));
     }
 
     #[test]
     fn slice_unchecked_zero() {
-        let parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Set offset to end of packet and slice the "rest" by
         // passing None.
         assert_eq!(parsed.segs[0].slice_unchecked(54, None).len(), 0);
@@ -3155,7 +3155,7 @@ mod test {
 
     #[test]
     fn slice_mut_unchecked_zero() {
-        let mut parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Set offset to end of packet and slice the "rest" by
         // passing None.
         assert_eq!(parsed.segs[0].slice_mut_unchecked(54, None).len(), 0);
