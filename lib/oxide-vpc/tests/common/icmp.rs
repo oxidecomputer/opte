@@ -127,8 +127,8 @@ pub fn gen_icmp_echo(
             let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
             let mut wtr = pkt.seg_wtr(0);
             eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            let i = pkt.add_seg(ip4.hdr_len() + icmp_bytes.len()).unwrap();
-            let mut wtr = pkt.seg_wtr(i);
+            let mut wtr =
+                pkt.add_seg(ip4.hdr_len() + icmp_bytes.len()).unwrap();
             ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
             wtr.write(&icmp_bytes).unwrap();
             pkt.parse(Out, VpcParser::new()).unwrap()
@@ -137,11 +137,9 @@ pub fn gen_icmp_echo(
             let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
             let mut wtr = pkt.seg_wtr(0);
             eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            let i = pkt.add_seg(ip4.hdr_len()).unwrap();
-            let mut wtr = pkt.seg_wtr(i);
+            let mut wtr = pkt.add_seg(ip4.hdr_len()).unwrap();
             ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-            let i = pkt.add_seg(icmp_bytes.len()).unwrap();
-            let mut wtr = pkt.seg_wtr(i);
+            let mut wtr = pkt.add_seg(icmp_bytes.len()).unwrap();
             wtr.write(&icmp_bytes).unwrap();
             pkt.parse(Out, VpcParser::new()).unwrap()
         }
@@ -198,8 +196,8 @@ pub fn gen_icmpv6_echo_req(
             let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
             let mut wtr = pkt.seg_wtr(0);
             eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            let i = pkt.add_seg(ip6.hdr_len() + body_bytes.len()).unwrap();
-            let mut wtr = pkt.seg_wtr(i);
+            let mut wtr =
+                pkt.add_seg(ip6.hdr_len() + body_bytes.len()).unwrap();
             ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
             wtr.write(&body_bytes).unwrap();
             pkt.parse(Out, VpcParser::new()).unwrap()
@@ -208,11 +206,9 @@ pub fn gen_icmpv6_echo_req(
             let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
             let mut wtr = pkt.seg_wtr(0);
             eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            let i = pkt.add_seg(ip6.hdr_len()).unwrap();
-            let mut wtr = pkt.seg_wtr(i);
+            let mut wtr = pkt.add_seg(ip6.hdr_len()).unwrap();
             ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-            let i = pkt.add_seg(body_bytes.len()).unwrap();
-            let mut wtr = pkt.seg_wtr(i);
+            let mut wtr = pkt.add_seg(body_bytes.len()).unwrap();
             wtr.write(&body_bytes).unwrap();
             pkt.parse(Out, VpcParser::new()).unwrap()
         }

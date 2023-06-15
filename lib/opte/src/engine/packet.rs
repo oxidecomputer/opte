@@ -869,7 +869,10 @@ impl Packet<Initialized> {
         self.segs[i].get_writer()
     }
 
-    pub fn add_seg(&mut self, size: usize) -> Result<usize, SegAdjustError> {
+    pub fn add_seg(
+        &mut self,
+        size: usize,
+    ) -> Result<PacketSegWriter, SegAdjustError> {
         let mut seg = PacketSeg::alloc(size);
         seg.expand_end(size)?;
         let len = self.segs.len();
@@ -879,7 +882,8 @@ impl Packet<Initialized> {
         }
         self.segs.push(seg);
         self.state.len += size;
-        Ok(len)
+
+        Ok(self.seg_wtr(len))
     }
 
     /// Wrap the `mblk_t` packet in a [`Packet`], taking ownership of
