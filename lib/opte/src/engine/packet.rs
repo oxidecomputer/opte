@@ -3404,4 +3404,69 @@ mod test {
             assert_eq!(seg.mp, mblk);
         }
     }
+
+    #[test]
+    fn small_packet_with_padding() {
+        const MINIMUM_ETH_FRAME_SZ: usize = 64;
+        const FRAME_CHECK_SEQ_SZ: usize = 4;
+
+        // Start with a test packet that's smaller than the minimum
+        // ethernet frame size (64).
+        let body = [];
+        let mut pkt = tcp_pkt(&body);
+        assert!(pkt.len() < MINIMUM_ETH_FRAME_SZ);
+
+        // Many (most?) NICs will pad out any such frames so that
+        // the total size is 64.
+        let padding_len = MINIMUM_ETH_FRAME_SZ
+            - pkt.len()
+            // Discount the 4 bytes for the Frame Check Sequence (FCS)
+            // which is usually not visible to upstack software.
+            - FRAME_CHECK_SEQ_SZ;
+
+        // Tack on a new segment filled with zero to pad the packet so that
+        // it meets the minimum frame size.
+        // Note that we do NOT update any of the packet headers themselves
+        // as this padding process should be transparent to the upper
+        // layers.
+        let mut padding_seg_wtr = pkt.add_seg(padding_len).unwrap();
+        padding_seg_wtr.write(&vec![0; padding_len]).unwrap();
+        assert_eq!(pkt.len(), MINIMUM_ETH_FRAME_SZ - FRAME_CHECK_SEQ_SZ);
+
+        // Generate the metadata by parsing the packet
+        let mut pkt = pkt.parse(Direction::In, GenericUlp {}).unwrap();
+
+        // Grab parsed metadata
+        let ip4_meta = pkt.meta().inner_ip4().cloned().unwrap();
+        let tcp_meta = pkt.meta().inner_tcp().cloned().unwrap();
+
+        // Length in packet headers shouldn't reflect include padding
+        assert_eq!(
+            usize::from(ip4_meta.total_len),
+            ip4_meta.hdr_len() + tcp_meta.hdr_len() + body.len(),
+        );
+
+        // The computed body length also shouldn't include the padding
+        // XXX: This is not true right now
+        assert_eq!(pkt.state.body.len, body.len());
+
+        // Pretend some processing happened...
+        // And now we need to update the packet headers based on the
+        // modified packet metadata.
+        pkt.emit_new_headers().unwrap();
+
+        // Grab the actual packet headers
+        let ip4_off = pkt.hdr_offsets().inner.ip.unwrap().pkt_pos;
+        let mut rdr = pkt.get_rdr_mut();
+        rdr.seek(ip4_off).unwrap();
+        let ip4_hdr = Ipv4Hdr::parse(&mut rdr).unwrap();
+        let tcp_hdr = TcpHdr::parse(&mut rdr).unwrap();
+
+        // And make sure they don't include the padding bytes
+        // XXX: This is not true right now
+        assert_eq!(
+            usize::from(ip4_hdr.total_len()),
+            usize::from(ip4_hdr.hdr_len()) + tcp_hdr.hdr_len() + body.len()
+        );
+    }
 }
