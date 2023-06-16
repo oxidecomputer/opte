@@ -660,7 +660,7 @@ impl Packet<Initialized> {
         rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<IpMeta>, Ipv4Hdr<'a>), ParseError> {
         let ip = Ipv4Hdr::parse(rdr)?;
-        let offset = HdrOffset::new(rdr.offset(), usize::from(ip.hdr_len()));
+        let offset = HdrOffset::new(rdr.offset(), ip.hdr_len());
         let meta = IpMeta::from(Ipv4Meta::from(&ip));
         Ok((HdrInfo { meta, offset }, ip))
     }
@@ -2885,9 +2885,10 @@ mod test {
             proto: Protocol::TCP,
             ttl: 64,
             ident: 99,
-            hdr_len: Ipv4Hdr::BASE_SIZE.try_into().unwrap(),
             total_len: ip4_total_len.try_into().unwrap(),
             csum: [0; 2],
+            options_bytes: None,
+            options_len: 0,
         };
 
         let eth = EtherMeta {
