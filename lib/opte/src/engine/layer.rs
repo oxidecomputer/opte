@@ -1755,9 +1755,10 @@ mod test {
             proto: Protocol::TCP,
             ttl: 64,
             ident: 1,
-            hdr_len: 20,
             total_len: 40,
             csum: [0; 2],
+            options_bytes: None,
+            options_len: 0,
         });
         let ulp = UlpMeta::from(TcpMeta {
             src: 5555,

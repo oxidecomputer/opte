@@ -1185,8 +1185,7 @@ fn bad_ip_len() {
         proto: Protocol::UDP,
         ttl: 64,
         ident: 1,
-        hdr_len: 20,
-        // We write a total legnth of 4 bytes, which is completely
+        // We write a total length of 4 bytes, which is completely
         // bogus for an IP header and should return an error during
         // processing.
         total_len: 4,
@@ -1194,7 +1193,7 @@ fn bad_ip_len() {
     };
 
     let udp = UdpMeta { src: 68, dst: 67, ..Default::default() };
-    let total_len = EtherHdr::SIZE + usize::from(ip.hdr_len) + udp.hdr_len();
+    let total_len = EtherHdr::SIZE + ip.hdr_len() + udp.hdr_len();
     let mut pkt = Packet::alloc_and_expand(total_len);
     let mut wtr = pkt.seg0_wtr();
     eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());

@@ -184,9 +184,11 @@ pub struct Ipv4Meta {
     pub proto: Protocol,
     pub ttl: u8,
     pub ident: u16,
-    pub hdr_len: u16,
     pub total_len: u16,
     pub csum: [u8; 2],
+    // We keep the options as raw bytes and don't parse them out.
+    pub options_bytes: Option<[u8; Ipv4Hdr::MAX_OPTION_SIZE]>,
+    pub options_len: usize,
 }
 
 impl Default for Ipv4Meta {
@@ -197,18 +199,19 @@ impl Default for Ipv4Meta {
             proto: Protocol::Unknown(255),
             ttl: 64,
             ident: 0,
-            hdr_len: Ipv4Hdr::BASE_SIZE as u16,
             total_len: 0,
             csum: [0; 2],
+            options_bytes: None,
+            options_len: 0,
         }
     }
 }
 
 impl Ipv4Meta {
     pub fn compute_hdr_csum(&mut self) {
-        let mut hdr = [0; 20];
+        let mut hdr = [0; Ipv4Hdr::MAX_SIZE];
         self.csum = [0; 2];
-        self.emit(&mut hdr);
+        self.emit(&mut hdr[..self.hdr_len()]);
         let csum = Checksum::compute(&hdr);
         self.csum = HeaderChecksum::from(csum).bytes();
     }
@@ -232,22 +235,30 @@ impl Ipv4Meta {
 
     #[inline]
     pub fn emit(&self, dst: &mut [u8]) {
-        // The raw header relies on the slice being the exactly length.
-        debug_assert_eq!(dst.len(), Ipv4Hdr::BASE_SIZE);
-        let mut raw = Ipv4HdrRaw::new_mut(dst).unwrap();
+        debug_assert_eq!(dst.len(), self.hdr_len());
+        // The header must be an integral number of 32-bit words
+        debug_assert_eq!(self.hdr_len() % 4, 0);
+        let base = &mut dst[..Ipv4HdrRaw::SIZE];
+        let mut raw = Ipv4HdrRaw::new_mut(base).unwrap();
         raw.write(Ipv4HdrRaw::from(self));
+        if let Some(bytes) = self.options_bytes {
+            dst[Ipv4Hdr::BASE_SIZE..]
+                .copy_from_slice(&bytes[..self.options_len]);
+        }
     }
 
     /// Return the length of the header needed to emit the metadata.
     pub fn hdr_len(&self) -> usize {
-        Ipv4Hdr::BASE_SIZE
+        Ipv4Hdr::BASE_SIZE + self.options_len
     }
 
     /// Populate `bytes` with the pseudo header bytes.
     pub fn pseudo_bytes(&self, bytes: &mut [u8; 12]) {
         bytes[0..4].copy_from_slice(&self.src.bytes());
         bytes[4..8].copy_from_slice(&self.dst.bytes());
-        let ulp_len = self.total_len - self.hdr_len;
+        // `self` is a valid `Ipv4Meta` so we know `hdr_len` fits in a `u16`.
+        let hdr_len = u16::try_from(self.hdr_len()).unwrap();
+        let ulp_len = self.total_len - hdr_len;
         let len_bytes = ulp_len.to_be_bytes();
         bytes[8..12].copy_from_slice(&[
             0,
@@ -267,19 +278,25 @@ impl Ipv4Meta {
 
 impl<'a> From<&Ipv4Hdr<'a>> for Ipv4Meta {
     fn from(ip4: &Ipv4Hdr) -> Self {
+        let (options_bytes, options_len) = ip4
+            .options_raw()
+            .map(|opts| {
+                let mut dst = [0; Ipv4Hdr::MAX_OPTION_SIZE];
+                dst[..opts.len()].copy_from_slice(opts);
+                (Some(dst), opts.len())
+            })
+            .unwrap_or_default();
         let raw = ip4.bytes.read();
-
-        let hdr_len = u16::from((raw.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4);
-
         Self {
             src: Ipv4Addr::from(raw.src),
             dst: Ipv4Addr::from(raw.dst),
             proto: Protocol::from(raw.proto),
             ttl: raw.ttl,
             ident: u16::from_be_bytes(raw.ident),
-            hdr_len,
             total_len: u16::from_be_bytes(raw.total_len),
             csum: raw.csum,
+            options_bytes,
+            options_len,
         }
     }
 }
@@ -330,10 +347,26 @@ impl ModifyAction<Ipv4Meta> for Ipv4Mod {
 #[derive(Debug)]
 pub struct Ipv4Hdr<'a> {
     bytes: LayoutVerified<&'a mut [u8], Ipv4HdrRaw>,
+    options: Option<&'a mut [u8]>,
 }
 
 impl<'a> Ipv4Hdr<'a> {
+    /// The size of the fixed IPv4 header.
+    ///
+    /// IPv4 headers are variable length, including a fixed, 20-byte portion as
+    /// well as a variable number of options, each with potentially different
+    /// sizes. This size describes the fixed portion.
     pub const BASE_SIZE: usize = Ipv4HdrRaw::SIZE;
+
+    /// The maximum size of an IPv4 header.
+    ///
+    /// The header length is a 4-bit field (IHL) which gives the size in 32-bit
+    /// words; the maximum header size is therefore (2^4 - 1) * 4 = 60 bytes.
+    pub const MAX_SIZE: usize = 60;
+
+    /// The maximum size of any options in an IPv4 header.
+    pub const MAX_OPTION_SIZE: usize = Self::MAX_SIZE - Self::BASE_SIZE;
+
     pub const CSUM_BEGIN: usize = 10;
     pub const CSUM_END: usize = 12;
 
@@ -347,10 +380,15 @@ impl<'a> Ipv4Hdr<'a> {
         Ipv4Addr::from(self.bytes.dst)
     }
 
-    /// Return the header length, in bytes.
+    /// Return the header length (including options), in bytes.
     #[inline]
-    pub fn hdr_len(&self) -> u16 {
-        u16::from((self.bytes.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4)
+    pub fn hdr_len(&self) -> usize {
+        usize::from((self.bytes.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4)
+    }
+
+    /// Return the options bytes, if any.
+    pub fn options_raw(&self) -> Option<&[u8]> {
+        self.options.as_deref()
     }
 
     #[inline]
@@ -363,18 +401,25 @@ impl<'a> Ipv4Hdr<'a> {
         R: PacketReadMut<'a>,
     {
         let src = rdr.slice_mut(Ipv4HdrRaw::SIZE)?;
-        let ip = Self { bytes: Ipv4HdrRaw::new_mut(src)? };
+        let mut ip = Self { bytes: Ipv4HdrRaw::new_mut(src)?, options: None };
 
-        if ip.hdr_len() < 20 {
-            return Err(Ipv4HdrError::HeaderTruncated {
-                hdr_len: ip.hdr_len(),
-            });
+        let hdr_len = ip.hdr_len();
+
+        if hdr_len < Self::BASE_SIZE {
+            return Err(Ipv4HdrError::HeaderTruncated { hdr_len });
         }
 
-        if ip.total_len() < ip.hdr_len() {
-            return Err(Ipv4HdrError::BadTotalLen {
-                total_len: ip.total_len(),
-            });
+        if hdr_len > Self::BASE_SIZE {
+            let opts_len = hdr_len - Self::BASE_SIZE;
+            ip.options = rdr
+                .slice_mut(opts_len)
+                .map(Some)
+                .map_err(|error| Ipv4HdrError::OptionsTruncated { error })?;
+        }
+
+        let total_len = ip.total_len();
+        if total_len < hdr_len {
+            return Err(Ipv4HdrError::BadTotalLen { total_len });
         }
 
         let _proto = Protocol::try_from(ip.bytes.proto).map_err(|_s| {
@@ -430,8 +475,8 @@ impl<'a> Ipv4Hdr<'a> {
 
     /// Return the value of the `Total Length` field.
     #[inline]
-    pub fn total_len(&self) -> u16 {
-        u16::from_be_bytes(self.bytes.total_len)
+    pub fn total_len(&self) -> usize {
+        usize::from(u16::from_be_bytes(self.bytes.total_len))
     }
 
     #[inline]
@@ -442,7 +487,7 @@ impl<'a> Ipv4Hdr<'a> {
     /// Return the length of the Upper Layer Protocol (ULP) portion of
     /// the packet.
     #[inline]
-    pub fn ulp_len(&self) -> u16 {
+    pub fn ulp_len(&self) -> usize {
         self.total_len() - self.hdr_len()
     }
 }
@@ -462,9 +507,10 @@ pub enum UlpCsumOpt {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ipv4HdrError {
-    BadTotalLen { total_len: u16 },
+    BadTotalLen { total_len: usize },
     BadVersion { vsn: u8 },
-    HeaderTruncated { hdr_len: u16 },
+    HeaderTruncated { hdr_len: usize },
+    OptionsTruncated { error: ReadErr },
     ReadError { error: ReadErr },
     UnexpectedProtocol { protocol: u8 },
 }
@@ -508,7 +554,8 @@ impl<'a> RawHeader<'a> for Ipv4HdrRaw {
 impl Default for Ipv4HdrRaw {
     fn default() -> Self {
         Ipv4HdrRaw {
-            ver_hdr_len: 0x45,
+            ver_hdr_len: (IPV4_VERSION << IPV4_HDR_VER_SHIFT)
+                | u8::try_from(Ipv4Hdr::BASE_SIZE / 4).unwrap(),
             dscp_ecn: 0x0,
             total_len: [0x0; 2],
             ident: [0x0; 2],
@@ -526,7 +573,8 @@ impl From<&Ipv4Meta> for Ipv4HdrRaw {
     #[inline]
     fn from(meta: &Ipv4Meta) -> Self {
         Ipv4HdrRaw {
-            ver_hdr_len: 0x45,
+            ver_hdr_len: (IPV4_VERSION << IPV4_HDR_VER_SHIFT)
+                | u8::try_from(meta.hdr_len() / 4).unwrap(),
             dscp_ecn: 0x0,
             total_len: meta.total_len.to_be_bytes(),
             ident: meta.ident.to_be_bytes(),
@@ -546,20 +594,23 @@ mod test {
     use crate::engine::packet::Packet;
 
     #[test]
-    fn emit() {
+    fn emit_no_options() {
         let ip = Ipv4Meta {
             src: Ipv4Addr::from([10, 0, 0, 54]),
             dst: Ipv4Addr::from([52, 10, 128, 69]),
             proto: Protocol::TCP,
             ttl: 64,
             ident: 2662,
-            hdr_len: 20,
             total_len: 60,
             csum: [0; 2],
+            options_bytes: None,
+            options_len: 0,
         };
 
+        // No IPv4 options included, so length
+        // should be just the base header length
         let len = ip.hdr_len();
-        assert_eq!(20, len);
+        assert_eq!(len, Ipv4Hdr::BASE_SIZE);
 
         let mut pkt = Packet::alloc_and_expand(len);
         let mut wtr = pkt.seg0_wtr();
@@ -568,7 +619,7 @@ mod test {
 
         #[rustfmt::skip]
         let expected_bytes = vec![
-            // version + IHL
+            // version + IHL (5 => 5*4 = 20 bytes of header)
             0x45,
             // DSCP + ECN
             0x00,
@@ -590,5 +641,122 @@ mod test {
             0x34, 0x0A, 0x80, 0x45,
         ];
         assert_eq!(&expected_bytes, pkt.seg_bytes(0));
+    }
+
+    #[test]
+    fn emit_with_options() {
+        let mut options_bytes = [0x00; Ipv4Hdr::MAX_OPTION_SIZE];
+        #[rustfmt::skip]
+        let options = [
+            // NOPs
+            0x01, 0x01, 0x01,
+            // EOOL (End of Options List)
+            0x00,
+        ];
+        options_bytes[..options.len()].copy_from_slice(&options);
+
+        let ip = Ipv4Meta {
+            src: Ipv4Addr::from([10, 0, 0, 54]),
+            dst: Ipv4Addr::from([52, 10, 128, 69]),
+            proto: Protocol::TCP,
+            ttl: 64,
+            ident: 2662,
+            total_len: 60,
+            csum: [0; 2],
+            options_bytes: Some(options_bytes),
+            options_len: options.len(),
+        };
+
+        // Header length should include options
+        let len = ip.hdr_len();
+        assert_eq!(len, Ipv4Hdr::BASE_SIZE + options.len());
+
+        let mut pkt = Packet::alloc_and_expand(len);
+        let mut wtr = pkt.seg0_wtr();
+        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+        assert_eq!(len, pkt.len());
+
+        #[rustfmt::skip]
+        let mut expected_bytes = vec![
+            // version + IHL (6 => 6*4=20 bytes base header + 4 bytes options)
+            0x46,
+            // DSCP + ECN
+            0x00,
+            // total length
+            0x00, 0x3C,
+            // ident
+            0x0A, 0x66,
+            // flags + frag offset
+            0x40, 0x00,
+            // TTL
+            0x40,
+            // protocol
+            0x06,
+            // checksum
+            0x00, 0x00,
+            // source
+            0x0A, 0x00, 0x00, 0x36,
+            // dest
+            0x34, 0x0A, 0x80, 0x45,
+        ];
+        expected_bytes.extend(options);
+        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
+    }
+
+    #[test]
+    fn parse_options_truncated() {
+        #[rustfmt::skip]
+        let option_bytes = [
+            // NOPs
+            0x01, 0x01, 0x01,
+            // EOOL (End of Options List)
+            0x00,
+        ];
+
+        let hdr_len = Ipv4Hdr::BASE_SIZE
+            + option_bytes.len()
+            // Indicate there's an extra 32-bit word of options
+            + 4;
+
+        #[rustfmt::skip]
+        let base_bytes = vec![
+            // version + IHL
+            0x40 | ((hdr_len / 4) as u8),
+            // DSCP + ECN
+            0x00,
+            // total length
+            0x00, 0x3C,
+            // ident
+            0x0A, 0x66,
+            // flags + frag offset
+            0x40, 0x00,
+            // TTL
+            0x40,
+            // protocol
+            0x06,
+            // checksum
+            0x00, 0x00,
+            // source
+            0x0A, 0x00, 0x00, 0x36,
+            // dest
+            0x34, 0x0A, 0x80, 0x45,
+        ];
+        assert_eq!(base_bytes.len(), Ipv4Hdr::BASE_SIZE);
+
+        let pkt_bytes = base_bytes
+            .iter()
+            .copied()
+            .chain(option_bytes.iter().copied())
+            .collect::<Vec<_>>();
+
+        let mut pkt = Packet::copy(&pkt_bytes);
+        let mut rdr = pkt.get_rdr_mut();
+        let ip4_hdr_err = Ipv4Hdr::parse(&mut rdr)
+            .expect_err("expected to fail parsing malformed IPv4 header");
+
+        assert_eq!(
+            ip4_hdr_err,
+            Ipv4HdrError::OptionsTruncated { error: ReadErr::NotEnoughBytes }
+        );
     }
 }
