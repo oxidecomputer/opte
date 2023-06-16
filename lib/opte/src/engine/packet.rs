@@ -740,12 +740,22 @@ impl Packet<Initialized> {
             pkt_offset,
         );
 
-        let mut body = BodyInfo {
-            pkt_offset,
-            seg_index,
-            seg_offset,
-            len: self.state.len - pkt_offset,
+        let ulp_hdr_len = info.meta.inner.ulp.map(|u| u.hdr_len()).unwrap_or(0);
+        let body_len = match info.meta.inner.ip {
+            // If we have IP and ULP metadata, we can use those to compute
+            // the payload length.
+            // If there's no ULP, just return the L3 payload length.
+            Some(IpMeta::Ip4(ip4)) => {
+                usize::from(ip4.total_len) - ip4.hdr_len() - ulp_hdr_len
+            }
+            Some(IpMeta::Ip6(ip6)) => usize::from(ip6.pay_len) - ulp_hdr_len,
+
+            // If there's no IP metadata, we fallback to considering any
+            // remaining bytes in the packet buffer to be the body.
+            None => self.state.len - pkt_offset,
         };
+        let mut body =
+            BodyInfo { pkt_offset, seg_index, seg_offset, len: body_len };
         let flow = InnerFlowId::from(&info.meta);
 
         // Packet processing logic requires all headers to be in the leading
@@ -869,7 +879,10 @@ impl Packet<Initialized> {
         self.segs[i].get_writer()
     }
 
-    pub fn add_seg(&mut self, size: usize) -> Result<usize, SegAdjustError> {
+    pub fn add_seg(
+        &mut self,
+        size: usize,
+    ) -> Result<PacketSegWriter, SegAdjustError> {
         let mut seg = PacketSeg::alloc(size);
         seg.expand_end(size)?;
         let len = self.segs.len();
@@ -879,7 +892,8 @@ impl Packet<Initialized> {
         }
         self.segs.push(seg);
         self.state.len += size;
-        Ok(len)
+
+        Ok(self.seg_wtr(len))
     }
 
     /// Wrap the `mblk_t` packet in a [`Packet`], taking ownership of
@@ -2855,10 +2869,7 @@ mod test {
     const DST_IP6: Ipv6Addr =
         Ipv6Addr::from_const([0xFD00, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2]);
 
-    const PKT_SZ: usize =
-        EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + TcpHdr::BASE_SIZE;
-
-    fn tcp_pkt() -> Packet<Initialized> {
+    fn tcp_pkt(body: &[u8]) -> Packet<Initialized> {
         let tcp = TcpMeta {
             src: 3839,
             dst: 80,
@@ -2867,14 +2878,15 @@ mod test {
             ..Default::default()
         };
 
+        let ip4_total_len = Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len();
         let ip4 = Ipv4Meta {
             src: SRC_IP4,
             dst: DST_IP4,
             proto: Protocol::TCP,
             ttl: 64,
             ident: 99,
-            hdr_len: 20,
-            total_len: 40,
+            hdr_len: Ipv4Hdr::BASE_SIZE.try_into().unwrap(),
+            total_len: ip4_total_len.try_into().unwrap(),
             csum: [0; 2],
         };
 
@@ -2884,14 +2896,16 @@ mod test {
             dst: DST_MAC,
         };
 
-        let mut seg = PacketSeg::alloc(PKT_SZ);
-        seg.expand_end(PKT_SZ).unwrap();
+        let pkt_sz = EtherHdr::SIZE + ip4_total_len;
+        let mut seg = PacketSeg::alloc(pkt_sz);
+        seg.expand_end(pkt_sz).unwrap();
         let mut wtr = seg.get_writer();
         eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
         ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
         tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
+        wtr.write(body).unwrap();
         let pkt = Packet::new(seg);
-        assert_eq!(pkt.len(), PKT_SZ);
+        assert_eq!(pkt.len(), pkt_sz);
         pkt
     }
 
@@ -2972,7 +2986,7 @@ mod test {
 
     #[test]
     fn read_single_segment() {
-        let parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_idx, 0);
         assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_pos, 0);
 
@@ -3112,7 +3126,7 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_unchecked_bad_offset() {
-        let parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Offset past end of segment.
         parsed.segs[0].slice_unchecked(99, None);
     }
@@ -3120,7 +3134,7 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_mut_unchecked_bad_offset() {
-        let mut parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Offset past end of segment.
         parsed.segs[0].slice_mut_unchecked(99, None);
     }
@@ -3128,7 +3142,7 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_unchecked_bad_len() {
-        let parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Length past end of segment.
         parsed.segs[0].slice_unchecked(0, Some(99));
     }
@@ -3136,14 +3150,14 @@ mod test {
     #[test]
     #[should_panic]
     fn slice_mut_unchecked_bad_len() {
-        let mut parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Length past end of segment.
         parsed.segs[0].slice_mut_unchecked(0, Some(99));
     }
 
     #[test]
     fn slice_unchecked_zero() {
-        let parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Set offset to end of packet and slice the "rest" by
         // passing None.
         assert_eq!(parsed.segs[0].slice_unchecked(54, None).len(), 0);
@@ -3151,7 +3165,7 @@ mod test {
 
     #[test]
     fn slice_mut_unchecked_zero() {
-        let mut parsed = tcp_pkt().parse(Out, GenericUlp {}).unwrap();
+        let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
         // Set offset to end of packet and slice the "rest" by
         // passing None.
         assert_eq!(parsed.segs[0].slice_mut_unchecked(54, None).len(), 0);
@@ -3399,5 +3413,142 @@ mod test {
         for (seg, mblk) in packet.segs.iter().zip(blocks) {
             assert_eq!(seg.mp, mblk);
         }
+    }
+
+    #[test]
+    fn small_packet_with_padding() {
+        const MINIMUM_ETH_FRAME_SZ: usize = 64;
+        const FRAME_CHECK_SEQ_SZ: usize = 4;
+
+        // Start with a test packet that's smaller than the minimum
+        // ethernet frame size (64).
+        let body = [];
+        let mut pkt = tcp_pkt(&body);
+        assert!(pkt.len() < MINIMUM_ETH_FRAME_SZ);
+
+        // Many (most?) NICs will pad out any such frames so that
+        // the total size is 64.
+        let padding_len = MINIMUM_ETH_FRAME_SZ
+            - pkt.len()
+            // Discount the 4 bytes for the Frame Check Sequence (FCS)
+            // which is usually not visible to upstack software.
+            - FRAME_CHECK_SEQ_SZ;
+
+        // Tack on a new segment filled with zero to pad the packet so that
+        // it meets the minimum frame size.
+        // Note that we do NOT update any of the packet headers themselves
+        // as this padding process should be transparent to the upper
+        // layers.
+        let mut padding_seg_wtr = pkt.add_seg(padding_len).unwrap();
+        padding_seg_wtr.write(&vec![0; padding_len]).unwrap();
+        assert_eq!(pkt.len(), MINIMUM_ETH_FRAME_SZ - FRAME_CHECK_SEQ_SZ);
+
+        // Generate the metadata by parsing the packet
+        let mut pkt = pkt.parse(Direction::In, GenericUlp {}).unwrap();
+
+        // Grab parsed metadata
+        let ip4_meta = pkt.meta().inner_ip4().cloned().unwrap();
+        let tcp_meta = pkt.meta().inner_tcp().cloned().unwrap();
+
+        // Length in packet headers shouldn't reflect include padding
+        assert_eq!(
+            usize::from(ip4_meta.total_len),
+            ip4_meta.hdr_len() + tcp_meta.hdr_len() + body.len(),
+        );
+
+        // The computed body length also shouldn't include the padding
+        assert_eq!(pkt.state.body.len, body.len());
+
+        // Pretend some processing happened...
+        // And now we need to update the packet headers based on the
+        // modified packet metadata.
+        pkt.emit_new_headers().unwrap();
+
+        // Grab the actual packet headers
+        let ip4_off = pkt.hdr_offsets().inner.ip.unwrap().pkt_pos;
+        let mut rdr = pkt.get_rdr_mut();
+        rdr.seek(ip4_off).unwrap();
+        let ip4_hdr = Ipv4Hdr::parse(&mut rdr).unwrap();
+        let tcp_hdr = TcpHdr::parse(&mut rdr).unwrap();
+
+        // And make sure they don't include the padding bytes
+        assert_eq!(
+            usize::from(ip4_hdr.total_len()),
+            usize::from(ip4_hdr.hdr_len()) + tcp_hdr.hdr_len() + body.len()
+        );
+    }
+
+    #[test]
+    fn udp6_packet_with_padding() {
+        let body = [1, 2, 3, 4];
+        let udp = UdpMeta {
+            src: 124,
+            dst: 5673,
+            len: u16::try_from(UdpHdr::SIZE + body.len()).unwrap(),
+            ..Default::default()
+        };
+        let ip6 = Ipv6Meta {
+            src: SRC_IP6,
+            dst: DST_IP6,
+            proto: Protocol::UDP,
+            next_hdr: smoltcp::wire::IpProtocol::Udp,
+            hop_limit: 255,
+            pay_len: udp.len,
+            ext: None,
+            ext_len: 0,
+        };
+        let eth = EtherMeta {
+            ether_type: EtherType::Ipv6,
+            src: SRC_MAC,
+            dst: DST_MAC,
+        };
+
+        let pkt_sz = eth.hdr_len() + ip6.hdr_len() + usize::from(ip6.pay_len);
+        let mut pkt = Packet::alloc_and_expand(pkt_sz);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(eth.hdr_len()).unwrap());
+        ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
+        udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
+        wtr.write(&body).unwrap();
+        assert_eq!(pkt.len(), pkt_sz);
+
+        // Tack on a new segment filled zero padding at
+        // the end that's not part of the payload as indicated
+        // by the packet headers.
+        let padding_len = 8;
+        let mut padding_seg_wtr = pkt.add_seg(padding_len).unwrap();
+        padding_seg_wtr.write(&vec![0; padding_len]).unwrap();
+        assert_eq!(pkt.len(), pkt_sz + padding_len);
+
+        // Generate the metadata by parsing the packet
+        let mut pkt = pkt.parse(Direction::In, GenericUlp {}).unwrap();
+
+        // Grab parsed metadata
+        let ip6_meta = pkt.meta().inner_ip6().cloned().unwrap();
+        let udp_meta = pkt.meta().inner_udp().cloned().unwrap();
+
+        // Length in packet headers shouldn't reflect include padding
+        assert_eq!(
+            usize::from(ip6_meta.pay_len),
+            udp_meta.hdr_len() + body.len(),
+        );
+
+        // The computed body length also shouldn't include the padding
+        assert_eq!(pkt.state.body.len, body.len());
+
+        // Pretend some processing happened...
+        // And now we need to update the packet headers based on the
+        // modified packet metadata.
+        pkt.emit_new_headers().unwrap();
+
+        // Grab the actual packet headers
+        let ip6_off = pkt.hdr_offsets().inner.ip.unwrap().pkt_pos;
+        let mut rdr = pkt.get_rdr_mut();
+        rdr.seek(ip6_off).unwrap();
+        let ip6_hdr = Ipv6Hdr::parse(&mut rdr).unwrap();
+        let udp_hdr = UdpHdr::parse(&mut rdr).unwrap();
+
+        // And make sure they don't include the padding bytes
+        assert_eq!(ip6_hdr.pay_len(), udp_hdr.hdr_len() + body.len());
     }
 }
