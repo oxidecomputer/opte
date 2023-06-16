@@ -3477,4 +3477,78 @@ mod test {
             usize::from(ip4_hdr.hdr_len()) + tcp_hdr.hdr_len() + body.len()
         );
     }
+
+    #[test]
+    fn udp6_packet_with_padding() {
+        let body = [1, 2, 3, 4];
+        let udp = UdpMeta {
+            src: 124,
+            dst: 5673,
+            len: u16::try_from(UdpHdr::SIZE + body.len()).unwrap(),
+            ..Default::default()
+        };
+        let ip6 = Ipv6Meta {
+            src: SRC_IP6,
+            dst: DST_IP6,
+            proto: Protocol::UDP,
+            next_hdr: smoltcp::wire::IpProtocol::Udp,
+            hop_limit: 255,
+            pay_len: udp.len,
+            ext: None,
+            ext_len: 0,
+        };
+        let eth = EtherMeta {
+            ether_type: EtherType::Ipv6,
+            src: SRC_MAC,
+            dst: DST_MAC,
+        };
+
+        let pkt_sz = eth.hdr_len() + ip6.hdr_len() + usize::from(ip6.pay_len);
+        let mut pkt = Packet::alloc_and_expand(pkt_sz);
+        let mut wtr = pkt.seg0_wtr();
+        eth.emit(wtr.slice_mut(eth.hdr_len()).unwrap());
+        ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
+        udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
+        wtr.write(&body).unwrap();
+        assert_eq!(pkt.len(), pkt_sz);
+
+        // Tack on a new segment filled zero padding at
+        // the end that's not part of the payload as indicated
+        // by the packet headers.
+        let padding_len = 8;
+        let mut padding_seg_wtr = pkt.add_seg(padding_len).unwrap();
+        padding_seg_wtr.write(&vec![0; padding_len]).unwrap();
+        assert_eq!(pkt.len(), pkt_sz + padding_len);
+
+        // Generate the metadata by parsing the packet
+        let mut pkt = pkt.parse(Direction::In, GenericUlp {}).unwrap();
+
+        // Grab parsed metadata
+        let ip6_meta = pkt.meta().inner_ip6().cloned().unwrap();
+        let udp_meta = pkt.meta().inner_udp().cloned().unwrap();
+
+        // Length in packet headers shouldn't reflect include padding
+        assert_eq!(
+            usize::from(ip6_meta.pay_len),
+            udp_meta.hdr_len() + body.len(),
+        );
+
+        // The computed body length also shouldn't include the padding
+        assert_eq!(pkt.state.body.len, body.len());
+
+        // Pretend some processing happened...
+        // And now we need to update the packet headers based on the
+        // modified packet metadata.
+        pkt.emit_new_headers().unwrap();
+
+        // Grab the actual packet headers
+        let ip6_off = pkt.hdr_offsets().inner.ip.unwrap().pkt_pos;
+        let mut rdr = pkt.get_rdr_mut();
+        rdr.seek(ip6_off).unwrap();
+        let ip6_hdr = Ipv6Hdr::parse(&mut rdr).unwrap();
+        let udp_hdr = UdpHdr::parse(&mut rdr).unwrap();
+
+        // And make sure they don't include the padding bytes
+        assert_eq!(ip6_hdr.pay_len(), udp_hdr.hdr_len() + body.len());
+    }
 }
