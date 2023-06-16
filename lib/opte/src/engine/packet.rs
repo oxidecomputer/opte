@@ -740,12 +740,22 @@ impl Packet<Initialized> {
             pkt_offset,
         );
 
-        let mut body = BodyInfo {
-            pkt_offset,
-            seg_index,
-            seg_offset,
-            len: self.state.len - pkt_offset,
+        let ulp_hdr_len = info.meta.inner.ulp.map(|u| u.hdr_len()).unwrap_or(0);
+        let body_len = match info.meta.inner.ip {
+            // If we have IP and ULP metadata, we can use those to compute
+            // the payload length.
+            // If there's no ULP, just return the L3 payload length.
+            Some(IpMeta::Ip4(ip4)) => {
+                usize::from(ip4.total_len) - ip4.hdr_len() - ulp_hdr_len
+            }
+            Some(IpMeta::Ip6(ip6)) => usize::from(ip6.pay_len) - ulp_hdr_len,
+
+            // If there's no IP metadata, we fallback to considering any
+            // remaining bytes in the packet buffer to be the body.
+            None => self.state.len - pkt_offset,
         };
+        let mut body =
+            BodyInfo { pkt_offset, seg_index, seg_offset, len: body_len };
         let flow = InnerFlowId::from(&info.meta);
 
         // Packet processing logic requires all headers to be in the leading
@@ -3447,7 +3457,6 @@ mod test {
         );
 
         // The computed body length also shouldn't include the padding
-        // XXX: This is not true right now
         assert_eq!(pkt.state.body.len, body.len());
 
         // Pretend some processing happened...
@@ -3463,7 +3472,6 @@ mod test {
         let tcp_hdr = TcpHdr::parse(&mut rdr).unwrap();
 
         // And make sure they don't include the padding bytes
-        // XXX: This is not true right now
         assert_eq!(
             usize::from(ip4_hdr.total_len()),
             usize::from(ip4_hdr.hdr_len()) + tcp_hdr.hdr_len() + body.len()
