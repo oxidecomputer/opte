@@ -17,6 +17,15 @@
 #:   "=/work/xde.conf",
 #: ]
 #:
+#: [[publish]]
+#: series = "module"
+#: name = "xde"
+#: from_output = "/work/release/xde"
+#
+#: [[publish]]
+#: series = "module"
+#: name = "xde.sha256"
+#: from_output = "/work/release/xde.sha256"
 
 set -o errexit
 set -o pipefail
@@ -69,10 +78,12 @@ header "check style"
 ptime -m cargo +nightly-2023-10-23 fmt -p xde -p xde-link -- --check
 
 header "analyze"
-ptime -m cargo clippy -- --allow clippy::uninlined-format-args
+ptime -m cargo clippy -- \
+    --allow clippy::uninlined-format-args --allow clippy::bad_bit_mask
 
 pushd xde-link
-ptime -m cargo clippy -- --allow clippy::uninlined-format-args
+ptime -m cargo clippy -- \
+    --allow clippy::uninlined-format-args --allow clippy::bad_bit_mask
 popd
 
 header "build xde (debug)"

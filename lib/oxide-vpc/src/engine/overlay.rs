@@ -8,11 +8,12 @@
 //!
 //! This implements the Oxide Network VPC Overlay.
 use super::router::RouterTargetInternal;
-use crate::api::BoundaryServices;
 use crate::api::GuestPhysAddr;
 use crate::api::PhysNet;
+use crate::api::TunnelEndpoint;
 use crate::cfg::VpcCfg;
 use alloc::collections::btree_map::BTreeMap;
+use alloc::collections::BTreeSet;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -21,10 +22,14 @@ use core::marker::PhantomData;
 use opte::api::CmdOk;
 use opte::api::Direction;
 use opte::api::Ipv4Addr;
+use opte::api::Ipv4Cidr;
 use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::ddi::sync::KMutex;
+use opte::ddi::sync::KMutexGuard;
 use opte::ddi::sync::KMutexType;
+use opte::ddi::sync::KRwLock;
+use opte::ddi::sync::KRwLockType;
 use opte::engine::ether::EtherMeta;
 use opte::engine::ether::EtherMod;
 use opte::engine::ether::EtherType;
@@ -34,9 +39,11 @@ use opte::engine::headers::EncapMeta;
 use opte::engine::headers::EncapPush;
 use opte::engine::headers::HeaderAction;
 use opte::engine::headers::IpAddr;
+use opte::engine::headers::IpCidr;
 use opte::engine::headers::IpPush;
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Addr;
+use opte::engine::ip6::Ipv6Cidr;
 use opte::engine::ip6::Ipv6Push;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
@@ -59,6 +66,7 @@ use opte::engine::rule::Resource;
 use opte::engine::rule::ResourceEntry;
 use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
+use poptrie::Poptrie;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -68,14 +76,15 @@ pub fn setup(
     pb: &PortBuilder,
     cfg: &VpcCfg,
     v2p: Arc<Virt2Phys>,
+    v2b: Arc<Virt2Boundary>,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
     let encap = Action::Static(Arc::new(EncapAction::new(
-        cfg.boundary_services,
         cfg.phys_ip,
         cfg.vni,
         v2p,
+        v2b,
     )));
 
     // Action Index 1
@@ -164,31 +173,22 @@ pub const ENCAP_NAME: &str = "encap";
 /// The mapping itself is available through the port metadata passes
 /// as argument to the [`StaticAction`] callback.
 pub struct EncapAction {
-    boundary_services: PhysNet,
     // The physical IPv6 ULA of the server that hosts this guest
     // sending data.
     phys_ip_src: Ipv6Addr,
     vni: Vni,
     v2p: Arc<Virt2Phys>,
+    v2b: Arc<Virt2Boundary>,
 }
 
 impl EncapAction {
     pub fn new(
-        boundary_services: BoundaryServices,
         phys_ip_src: Ipv6Addr,
         vni: Vni,
         v2p: Arc<Virt2Phys>,
+        v2b: Arc<Virt2Boundary>,
     ) -> Self {
-        Self {
-            boundary_services: PhysNet {
-                ether: boundary_services.mac,
-                ip: boundary_services.ip,
-                vni: boundary_services.vni,
-            },
-            phys_ip_src,
-            vni,
-            v2p,
-        }
+        Self { phys_ip_src, vni, v2p, v2b }
     }
 }
 
@@ -204,7 +204,7 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        _pkt_meta: &PacketMeta,
+        pkt_meta: &PacketMeta,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         // The router layer determines a RouterTarget and stores it in
@@ -236,7 +236,35 @@ impl StaticAction for EncapAction {
         };
 
         let phys_target = match target {
-            RouterTargetInternal::InternetGateway => self.boundary_services,
+            RouterTargetInternal::InternetGateway => {
+                match self.v2b.get(&flow_id.dst_ip) {
+                    Some(phys) => {
+                        // Hash the packet onto a route target. This is a very
+                        // rudimentary mechanism. Should level-up to an ECMP
+                        // algorithm with well known statistical properties.
+                        let hash = match pkt_meta.l4_hash() {
+                            Some(h) => h,
+                            None => {
+                                return Err(GenHtError::Unexpected {
+                                    msg: "could not compute l4 hash for packet"
+                                        .to_string(),
+                                });
+                            }
+                        };
+                        let hash = hash as usize;
+                        let target = match phys.iter().nth(hash % phys.len()) {
+                            Some(target) => target,
+                            None => return Ok(AllowOrDeny::Deny),
+                        };
+                        PhysNet {
+                            ether: MacAddr::from(TUNNEL_ENDPOINT_MAC),
+                            ip: target.ip,
+                            vni: target.vni,
+                        }
+                    }
+                    None => return Ok(AllowOrDeny::Deny),
+                }
+            }
 
             RouterTargetInternal::Ip(virt_ip) => match self.v2p.get(&virt_ip) {
                 Some(phys) => {
@@ -508,6 +536,195 @@ pub struct Virt2Phys {
     ip6: KMutex<BTreeMap<Ipv6Addr, GuestPhysAddr>>,
 }
 
+/// A mapping from virtual IPs to boundary services addresses.
+pub struct Virt2Boundary {
+    // The BTreeMap-based representation of the v2b table is a representation
+    // that is easily updated.
+    ip4: KMutex<BTreeMap<Ipv4Cidr, BTreeSet<TunnelEndpoint>>>,
+    ip6: KMutex<BTreeMap<Ipv6Cidr, BTreeSet<TunnelEndpoint>>>,
+
+    // The Poptrie-based representation of the v2b table is a data structure
+    // optimized for fast query times. It's not easily updated in-place. It's
+    // rebuilt each time an update is made. The heuristic being applied here is
+    // we expect table churn to be highly-infrequent compared to lookups.
+    // Lookups may happen millions of times per second and and we want those to
+    // be as fast as possible. At the time of writing, poptrie is the fastest
+    // LPM lookup data structure known to the author.
+    //
+    // The poptrie is under an read-write lock to allow multiple concurrent
+    // readers. When we update we hold the lock just long enough to do a swap
+    // with a poptrie that was pre-built out of band.
+    pt4: KRwLock<Poptrie<BTreeSet<TunnelEndpoint>>>,
+    pt6: KRwLock<Poptrie<BTreeSet<TunnelEndpoint>>>,
+}
+
+pub const BOUNDARY_SERVICES_VNI: u32 = 99u32;
+pub const TUNNEL_ENDPOINT_MAC: [u8; 6] = [0xA8, 0x40, 0x25, 0x77, 0x77, 0x77];
+
+impl Virt2Boundary {
+    pub fn dump_ip4(&self) -> Vec<(Ipv4Cidr, BTreeSet<TunnelEndpoint>)> {
+        self.ip4
+            .lock()
+            .iter()
+            .map(|(vip, baddr)| (*vip, baddr.clone()))
+            .collect()
+    }
+
+    pub fn dump_ip6(&self) -> Vec<(Ipv6Cidr, BTreeSet<TunnelEndpoint>)> {
+        self.ip6
+            .lock()
+            .iter()
+            .map(|(vip, baddr)| (*vip, baddr.clone()))
+            .collect()
+    }
+
+    pub fn dump(&self) -> DumpVirt2BoundaryResp {
+        DumpVirt2BoundaryResp {
+            mappings: V2bMapResp { ip4: self.dump_ip4(), ip6: self.dump_ip6() },
+        }
+    }
+
+    pub fn new() -> Self {
+        let mut pt4 = KRwLock::new(Poptrie::default());
+        pt4.init(KRwLockType::Driver);
+        let mut pt6 = KRwLock::new(Poptrie::default());
+        pt6.init(KRwLockType::Driver);
+
+        Virt2Boundary {
+            ip4: KMutex::new(BTreeMap::new(), KMutexType::Driver),
+            ip6: KMutex::new(BTreeMap::new(), KMutexType::Driver),
+            pt4,
+            pt6,
+        }
+    }
+}
+
+impl Default for Virt2Boundary {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Resource for Virt2Boundary {}
+impl ResourceEntry for PhysNet {}
+
+// NOTE: this is almost but not quite a MappingResource. Here the keys are of a
+// different type than the query argument. Keys are prefixes and query arguments
+// are IPs. The mapping resource trait requires that the keys and query
+// arguments be of the same type.
+impl Virt2Boundary {
+    pub fn get(&self, vip: &IpAddr) -> Option<BTreeSet<TunnelEndpoint>> {
+        match vip {
+            IpAddr::Ip4(ip4) => self.pt4.read().match_v4(u32::from(*ip4)),
+            IpAddr::Ip6(ip6) => self.pt6.read().match_v6(u128::from(*ip6)),
+        }
+    }
+
+    pub fn remove<I: IntoIterator<Item = TunnelEndpoint>>(
+        &self,
+        vip: IpCidr,
+        tep: I,
+    ) -> Option<BTreeSet<TunnelEndpoint>> {
+        match vip {
+            IpCidr::Ip4(ip4) => {
+                let mut tbl = self.ip4.lock();
+                let (clear, orig) = match tbl.get_mut(&ip4) {
+                    Some(entry) => {
+                        let orig = entry.clone();
+                        for t in tep.into_iter() {
+                            entry.remove(&t);
+                        }
+                        (entry.is_empty(), Some(orig))
+                    }
+                    None => (false, None),
+                };
+                if clear {
+                    tbl.remove(&ip4);
+                }
+                self.update_poptrie_v4(&tbl);
+                orig
+            }
+            IpCidr::Ip6(ip6) => {
+                let mut tbl = self.ip6.lock();
+                let (clear, orig) = match tbl.get_mut(&ip6) {
+                    Some(entry) => {
+                        let orig = entry.clone();
+                        for t in tep.into_iter() {
+                            entry.remove(&t);
+                        }
+                        (entry.is_empty(), Some(orig))
+                    }
+                    None => (false, None),
+                };
+                if clear {
+                    tbl.remove(&ip6);
+                }
+                self.update_poptrie_v6(&tbl);
+                orig
+            }
+        }
+    }
+
+    pub fn set<I: IntoIterator<Item = TunnelEndpoint>>(
+        &self,
+        vip: IpCidr,
+        tep: I,
+    ) -> Option<BTreeSet<TunnelEndpoint>> {
+        match vip {
+            IpCidr::Ip4(ip4) => {
+                let mut tbl = self.ip4.lock();
+                let result = match tbl.get_mut(&ip4) {
+                    Some(entry) => {
+                        let orig = entry.clone();
+                        entry.extend(tep);
+                        Some(orig)
+                    }
+                    None => tbl.insert(ip4, tep.into_iter().collect()),
+                };
+                self.update_poptrie_v4(&tbl);
+                result
+            }
+            IpCidr::Ip6(ip6) => {
+                let mut tbl = self.ip6.lock();
+                let result = match tbl.get_mut(&ip6) {
+                    Some(entry) => {
+                        let orig = entry.clone();
+                        entry.extend(tep);
+                        Some(orig)
+                    }
+                    None => tbl.insert(ip6, tep.into_iter().collect()),
+                };
+                self.update_poptrie_v6(&tbl);
+                result
+            }
+        }
+    }
+
+    fn update_poptrie_v4(
+        &self,
+        tree: &KMutexGuard<BTreeMap<Ipv4Cidr, BTreeSet<TunnelEndpoint>>>,
+    ) {
+        let table = poptrie::Ipv4RoutingTable(
+            tree.iter()
+                .map(|(k, v)| ((u32::from(k.ip()), k.prefix_len()), v.clone()))
+                .collect(),
+        );
+        *self.pt4.write() = poptrie::Poptrie::from(table);
+    }
+
+    fn update_poptrie_v6(
+        &self,
+        tree: &KMutexGuard<BTreeMap<Ipv6Cidr, BTreeSet<TunnelEndpoint>>>,
+    ) {
+        let table = poptrie::Ipv6RoutingTable(
+            tree.iter()
+                .map(|(k, v)| ((u128::from(k.ip()), k.prefix_len()), v.clone()))
+                .collect(),
+        );
+        *self.pt6.write() = poptrie::Poptrie::from(table);
+    }
+}
+
 pub const VIRT_2_PHYS_NAME: &str = "Virt2Phys";
 
 impl Virt2Phys {
@@ -583,9 +800,28 @@ pub struct VpcMapResp {
     pub ip6: Vec<(Ipv6Addr, GuestPhysAddr)>,
 }
 
+#[repr(C)]
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpVirt2BoundaryReq {
+    pub unused: u64,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpVirt2PhysResp {
     pub mappings: Vec<VpcMapResp>,
 }
 
 impl CmdOk for DumpVirt2PhysResp {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct V2bMapResp {
+    pub ip4: Vec<(Ipv4Cidr, BTreeSet<TunnelEndpoint>)>,
+    pub ip6: Vec<(Ipv6Cidr, BTreeSet<TunnelEndpoint>)>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpVirt2BoundaryResp {
+    pub mappings: V2bMapResp,
+}
+
+impl CmdOk for DumpVirt2BoundaryResp {}

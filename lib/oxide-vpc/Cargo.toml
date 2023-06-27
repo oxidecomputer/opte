@@ -36,6 +36,8 @@ opte.workspace = true
 serde.workspace = true
 smoltcp.workspace = true
 zerocopy.workspace = true
+poptrie.workspace = true
+cfg-if.workspace = true
 
 [dev-dependencies]
 #

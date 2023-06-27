@@ -67,7 +67,6 @@ impl ActionMetaValue for RouterTargetInternal {
     fn from_meta(s: &str) -> Result<Self, String> {
         match s {
             "ig" => Ok(Self::InternetGateway),
-
             _ => match s.split_once('=') {
                 Some(("ip4", ip4_s)) => {
                     let ip4 = ip4_s.parse::<Ipv4Addr>()?;
@@ -199,11 +198,12 @@ fn valid_router_dest_target_pair(dest: &IpCidr, target: &RouterTarget) -> bool {
         // IPv6 destination, IPv6 address
         (IpCidr::Ip6(_), RouterTarget::Ip(IpAddr::Ip6(_))) |
         // IPv6 destination, IPv6 subnet
-        (IpCidr::Ip6(_), RouterTarget::VpcSubnet(IpCidr::Ip6(_)))
-    ) ||
-    // Only the default IP addresses are currently allowed to be directed to
-    // the gateway
-    (matches!(target, RouterTarget::InternetGateway) && dest.is_default())
+        (IpCidr::Ip6(_), RouterTarget::VpcSubnet(IpCidr::Ip6(_))) |
+        // IPv4 destination, IPv4 Internet Gateway
+        (IpCidr::Ip4(_), RouterTarget::InternetGateway) |
+        // IPv6 destination, IPv6 Internet Gateway
+        (IpCidr::Ip6(_), RouterTarget::InternetGateway)
+    )
 }
 
 fn make_rule(
