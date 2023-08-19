@@ -881,6 +881,8 @@ pub fn encap(
         entropy: 99,
         vni: dst.vni,
         len: (UdpHdr::SIZE + GeneveHdr::BASE_SIZE + inner_len) as u16,
+
+        ..Default::default()
     };
 
     let ip = Ipv6Meta {

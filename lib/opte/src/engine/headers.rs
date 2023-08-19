@@ -57,6 +57,12 @@ pub trait RawHeader<'a>: Sized {
     fn new_mut(
         src: &mut [u8],
     ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr>;
+
+    /// Create an immutable, zerocopy version of the raw header from the
+    /// src.
+    fn new(_src: &[u8]) -> Result<LayoutVerified<&[u8], Self>, ReadErr> {
+        Err(ReadErr::NotImplemented)
+    }
 }
 
 pub trait PushAction<HdrM> {
