@@ -113,7 +113,7 @@ impl<'a> From<&GeneveHdr<'a>> for GeneveMeta {
             //      in same way as Parsing?
             // Unwrap safety: Invalid options will have been caught in
             // GeneveHdr::parse.
-            GeneveOption::parse_all(&opts, Some(&mut out)).unwrap();
+            GeneveOption::parse_all(opts, Some(&mut out)).unwrap();
         }
 
         out
@@ -156,7 +156,7 @@ impl<'a> GeneveHdr<'a> {
             // Check for malformed options.
             // XXX: Can we use this to elide some checks when building GeneveMeta?
             //      Otherwise, currently repeated to filter packets at parse time.
-            GeneveOption::parse_all(&opts_body, None)?;
+            GeneveOption::parse_all(opts_body, None)?;
 
             Some(opts_body)
         } else {
@@ -287,12 +287,18 @@ impl From<&GeneveMeta> for GeneveHdrRaw {
     }
 }
 
+/// Parsed form of an individual Geneve option TLV.
+///
+/// These are grouped by the vendor `class`es understood by OPTE.
 #[non_exhaustive]
 pub enum GeneveOption {
     Oxide(OxideOption),
 }
 
 impl GeneveOption {
+    /// Parse and check validity for all options attached to a Geneve
+    /// header, recording known extensions in a [`GeneveMeta`] if
+    /// given.
     pub fn parse_all(
         mut src: &[u8],
         mut meta: Option<&mut GeneveMeta>,
@@ -300,6 +306,7 @@ impl GeneveOption {
         while !src.is_empty() {
             let option = GeneveOption::parse(&mut src)?;
             if let Some(ref mut meta) = meta {
+                #[allow(clippy::single_match)]
                 match option {
                     Some(GeneveOption::Oxide(OxideOption::External)) => {
                         meta.oxide_external_pkt = true
@@ -312,17 +319,21 @@ impl GeneveOption {
         Ok(())
     }
 
+    /// Parse an individual Geneve option from a byte slice, advancing the
+    /// read location.
     pub fn parse(src: &mut &[u8]) -> Result<Option<Self>, GeneveHdrError> {
         let (head, tail) = src.split_at(GeneveOptHdrRaw::SIZE);
         let opt_header = GeneveOptHdrRaw::new(head)?;
         let needed_bytes = opt_header.options_len_bytes() as usize;
-        if tail.len() < needed_bytes.into() {
+        if tail.len() < needed_bytes {
             return Err(GeneveHdrError::BadLength { len: needed_bytes as u16 });
         }
+
         let class = u16::from_be_bytes(opt_header.option_class);
         let opt_type = opt_header.option_type();
 
         // We don't yet have any options which need body parsing.
+        // This will skip over them regardless.
         let (_body, tail) = tail.split_at(needed_bytes);
         *src = tail;
 
@@ -349,14 +360,17 @@ impl GeneveOption {
     }
 }
 
+/// Geneve options defined by Oxide, [`GENEVE_OPT_CLASS_OXIDE`].
 #[non_exhaustive]
 pub enum OxideOption {
     /// A tag indicating that this packet originated from outside the VPC.
+    ///
+    /// Option Type `0`. Currently includes no body.
     External,
 }
 
 impl OxideOption {
-    /// Return the wire-length of this option in bytes, excluding headers.
+    /// Return the wire-length of this option's body in bytes, excluding headers.
     pub fn len(&self) -> usize {
         match self {
             OxideOption::External => 0,
