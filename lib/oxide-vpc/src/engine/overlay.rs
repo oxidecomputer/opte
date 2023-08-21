@@ -379,10 +379,16 @@ impl StaticAction for DecapAction {
     ) -> GenHtResult {
         match &pkt_meta.outer.encap {
             Some(EncapMeta::Geneve(geneve)) => {
-                action_meta.insert(
-                    ACTION_META_VNI.to_string(),
-                    geneve.vni.to_string(),
-                );
+                // XXX: This is now slightly overloaded to mean "packet
+                //      originated from the VPC which has this VNI".
+                //      Unsure if we want to have sled agent add a
+                //      VNI && (not external) predicate.
+                if !geneve.oxide_external_pkt {
+                    action_meta.insert(
+                        ACTION_META_VNI.to_string(),
+                        geneve.vni.to_string(),
+                    );
+                }
             }
 
             // This should be impossible. Non-encapsulated traffic

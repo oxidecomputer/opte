@@ -89,13 +89,28 @@ impl GeneveMeta {
     #[inline]
     pub fn emit(&self, dst: &mut [u8]) {
         debug_assert_eq!(dst.len(), self.hdr_len());
-        let base = &mut dst[0..GeneveHdrRaw::SIZE];
+        let (base, remainder) = dst.split_at_mut(GeneveHdrRaw::SIZE);
         let mut raw = GeneveHdrRaw::new_mut(base).unwrap();
         raw.write(GeneveHdrRaw::from(self));
+
+        raw.ver_opt_len = if self.oxide_external_pkt {
+            GeneveOption::Oxide(OxideOption::External).emit(remainder) as u8
+        } else {
+            raw.ver_opt_len
+        };
     }
 
     pub fn hdr_len(&self) -> usize {
-        GeneveHdr::BASE_SIZE
+        GeneveHdr::BASE_SIZE + self.options_len()
+    }
+
+    pub fn options_len(&self) -> usize {
+        // XXX: This is a very special-cased just to enable testing.
+        if self.oxide_external_pkt {
+            GeneveOptHdrRaw::SIZE
+        } else {
+            0
+        }
     }
 }
 
@@ -278,7 +293,8 @@ impl From<&GeneveMeta> for GeneveHdrRaw {
             dst_port: GENEVE_PORT.to_be_bytes(),
             length: meta.len.to_be_bytes(),
             csum: [0; 2],
-            ver_opt_len: 0x0,
+            ver_opt_len: (meta.options_len() >> GENEVE_OPT_LEN_SCALE_SHIFT)
+                as u8,
             flags: 0x0,
             proto: ETHER_TYPE_ETHER.to_be_bytes(),
             vni: meta.vni.bytes(),
@@ -358,6 +374,24 @@ impl GeneveOption {
             GeneveOption::Oxide(o) => o.len(),
         }
     }
+
+    /// Emit an option, returning the number of 4-byte chunks written.
+    pub fn emit(&self, dst: &mut [u8]) -> usize {
+        let mut raw = GeneveOptHdrRaw::new_mut(dst).unwrap();
+
+        let (class, opt_type, len) = match self {
+            Self::Oxide(o) => (
+                GENEVE_OPT_CLASS_OXIDE,
+                o.opt_type(),
+                o.len() >> GENEVE_OPT_LEN_SCALE_SHIFT,
+            ),
+        };
+        raw.option_class = class.to_be_bytes();
+        raw.crit_type = opt_type;
+        raw.reserved_len = len as u8;
+
+        len + 1
+    }
 }
 
 /// Geneve options defined by Oxide, [`GENEVE_OPT_CLASS_OXIDE`].
@@ -372,6 +406,13 @@ pub enum OxideOption {
 impl OxideOption {
     /// Return the wire-length of this option's body in bytes, excluding headers.
     pub fn len(&self) -> usize {
+        match self {
+            OxideOption::External => 0,
+        }
+    }
+
+    /// Return the option type number.
+    pub fn opt_type(&self) -> u8 {
         match self {
             OxideOption::External => 0,
         }
@@ -477,6 +518,52 @@ mod test {
             0x65, 0x58,
             // vni + reserved
             0x00, 0x04, 0xD2, 0x00
+        ];
+        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
+    }
+
+    #[test]
+    fn emit_external_opt() {
+        let geneve = GeneveMeta {
+            entropy: 7777,
+            vni: Vni::new(1234u32).unwrap(),
+            len: (GeneveHdr::BASE_SIZE + GeneveOptHdrRaw::SIZE) as u16,
+            oxide_external_pkt: true,
+
+            ..Default::default()
+        };
+
+        let len = geneve.hdr_len();
+        let mut pkt = Packet::alloc_and_expand(len);
+        let mut wtr = pkt.seg0_wtr();
+        // geneve.emit(&mut wtr).unwrap();
+        geneve.emit(wtr.slice_mut(len).unwrap());
+        assert_eq!(len, pkt.len());
+        #[rustfmt::skip]
+        let expected_bytes = vec![
+            // source
+            0x1E, 0x61,
+            // dest
+            0x17, 0xC1,
+            // length
+            0x00, 0x14,
+            // csum
+            0x00, 0x00,
+            // ver + opt len
+            0x01,
+            // flags
+            0x00,
+            // proto
+            0x65, 0x58,
+            // vni + reserved
+            0x00, 0x04, 0xD2, 0x00,
+
+            // option class
+            0x01, 0x29,
+            // crt + type
+            0x00,
+            // rsvd + len
+            0x00,
         ];
         assert_eq!(&expected_bytes, pkt.seg_bytes(0));
     }
