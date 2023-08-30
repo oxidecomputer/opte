@@ -379,10 +379,12 @@ impl StaticAction for DecapAction {
     ) -> GenHtResult {
         match &pkt_meta.outer.encap {
             Some(EncapMeta::Geneve(geneve)) => {
-                // XXX: This is now slightly overloaded to mean "packet
-                //      originated from the VPC which has this VNI".
-                //      Unsure if we want to have sled agent add a
-                //      VNI && (not external) predicate.
+                // We only conditionally add this metadata because the
+                // `Address::VNI` filter uses it to select VPC-originated
+                // traffic.
+                // External packets carry an extra Geneve tag from the
+                // switch during NAT -- if found, `oxide_external_packet`
+                // is filled.
                 if !geneve.oxide_external_pkt {
                     action_meta.insert(
                         ACTION_META_VNI.to_string(),
