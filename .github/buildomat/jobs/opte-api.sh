@@ -2,7 +2,7 @@
 #:
 #: name = "opte-api"
 #: variety = "basic"
-#: target = "helios"
+#: target = "helios-2.0"
 #: rust_toolchain = "nightly"
 #: output_rules = []
 #:

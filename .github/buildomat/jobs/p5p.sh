@@ -2,7 +2,7 @@
 #:
 #: name = "opte-p5p"
 #: variety = "basic"
-#: target = "helios"
+#: target = "helios-2.0"
 #: rust_toolchain = "nightly"
 #: output_rules = [
 #:   "=/out/opte.p5p",

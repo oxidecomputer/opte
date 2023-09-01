@@ -2,7 +2,7 @@
 #:
 #: name = "test"
 #: variety = "basic"
-#: target = "lab-opte-0.22"
+#: target = "lab-2.0-opte-0.23"
 #: rust_toolchain = "stable"
 #: output_rules = [
 #:   "/work/*.log",

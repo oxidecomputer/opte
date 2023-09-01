@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export PUBLISHER=helios-netdev
+export PUBLISHER=helios-dev
 export COMMIT_COUNT=`git rev-list --count HEAD`
 export REPO=packages/repo
 
