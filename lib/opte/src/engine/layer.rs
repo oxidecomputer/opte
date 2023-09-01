@@ -310,6 +310,16 @@ impl Display for DefaultAction {
     }
 }
 
+impl From<DefaultAction> for &Action {
+    fn from(value: DefaultAction) -> Self {
+        match value {
+            DefaultAction::Allow => &Action::Allow,
+            DefaultAction::StatefulAllow => &Action::StatefulAllow,
+            DefaultAction::Deny => &Action::Deny,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ActionDescEntry {
     NoOp,
@@ -374,6 +384,10 @@ struct LayerStats {
     /// resulting in the default action being applied.
     in_rule_nomatch: KStatU64,
 
+    /// The number of inbound packets denied by this layer,
+    /// either explicitly or due to the default action.
+    in_deny: KStatU64,
+
     /// The current number of inbound rules.
     in_rules: KStatU64,
 
@@ -394,6 +408,10 @@ struct LayerStats {
     /// The number of outbound packets that did not match a rule,
     /// resulting in the default action being applied.
     out_rule_nomatch: KStatU64,
+
+    /// The number of outbound packets denied by this layer,
+    /// either explicitly or due to the default action.
+    out_deny: KStatU64,
 
     /// The current number of outbound rules.
     out_rules: KStatU64,
@@ -795,18 +813,7 @@ impl Layer {
         } else {
             self.stats.vals.in_rule_nomatch += 1;
             self.default_in_hits += 1;
-
-            match self.default_in {
-                DefaultAction::Deny => {
-                    return Ok(LayerResult::Deny {
-                        name: self.name,
-                        reason: DenyReason::Default,
-                    });
-                }
-
-                DefaultAction::Allow => &Action::Allow,
-                DefaultAction::StatefulAllow => &Action::StatefulAllow,
-            }
+            self.default_in.into()
         };
 
         match action {
@@ -833,11 +840,15 @@ impl Layer {
             }
 
             Action::Deny => {
-                self.rule_deny_probe(In, pkt.flow());
-                Ok(LayerResult::Deny {
-                    name: self.name,
-                    reason: DenyReason::Rule,
-                })
+                self.stats.vals.in_deny += 1;
+                let reason = if rule.is_some() {
+                    self.rule_deny_probe(In, pkt.flow());
+                    DenyReason::Rule
+                } else {
+                    DenyReason::Default
+                };
+
+                Ok(LayerResult::Deny { name: self.name, reason })
             }
 
             Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
@@ -1081,18 +1092,7 @@ impl Layer {
         } else {
             self.stats.vals.out_rule_nomatch += 1;
             self.default_out_hits += 1;
-
-            match self.default_out {
-                DefaultAction::Deny => {
-                    return Ok(LayerResult::Deny {
-                        name: self.name,
-                        reason: DenyReason::Default,
-                    });
-                }
-
-                DefaultAction::Allow => &Action::Allow,
-                DefaultAction::StatefulAllow => &Action::StatefulAllow,
-            }
+            self.default_out.into()
         };
 
         match action {
@@ -1121,11 +1121,15 @@ impl Layer {
             }
 
             Action::Deny => {
-                self.rule_deny_probe(Out, pkt.flow());
-                Ok(LayerResult::Deny {
-                    name: self.name,
-                    reason: DenyReason::Rule,
-                })
+                self.stats.vals.out_deny += 1;
+                let reason = if rule.is_some() {
+                    self.rule_deny_probe(Out, pkt.flow());
+                    DenyReason::Rule
+                } else {
+                    DenyReason::Default
+                };
+
+                Ok(LayerResult::Deny { name: self.name, reason })
             }
 
             Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
