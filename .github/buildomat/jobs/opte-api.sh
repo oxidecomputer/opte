@@ -24,7 +24,7 @@ header "check API_VERSION"
 ./check-api-version.sh
 
 header "check style"
-ptime -m cargo +nightly fmt -- --check
+ptime -m cargo +nightly-2023-01-12 fmt -- --check
 
 header "analyze std"
 ptime -m cargo clippy --all-targets
