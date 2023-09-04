@@ -7,7 +7,9 @@
 use std::io;
 use std::str::FromStr;
 
-use structopt::StructOpt;
+// use structopt::StructOpt;
+
+use clap::Parser;
 
 use opte::api::Direction;
 use opte::api::DomainName;
@@ -43,39 +45,40 @@ use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::print::print_v2p;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
+#[command(version)]
 enum Command {
     /// List all ports.
     ListPorts,
 
     /// List all layers under a given port.
     ListLayers {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
     },
 
-    /// Dump the contents of the layer with the given name
+    /// Dump the contents of the layer with the given name.
     DumpLayer {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
         name: String,
     },
 
-    /// Clear all entries from the Unified Flow Table
+    /// Clear all entries from the Unified Flow Table.
     ClearUft {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
     },
 
-    /// Dump the Unified Flow Table
+    /// Dump the Unified Flow Table.
     DumpUft {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
     },
 
     /// Dump TCP flows
     DumpTcpFlows {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
     },
 
@@ -84,36 +87,36 @@ enum Command {
 
     /// Add a firewall rule
     AddFwRule {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
 
-        #[structopt(long = "dir")]
+        #[arg(long = "dir")]
         direction: Direction,
 
-        #[structopt(flatten)]
+        #[command(flatten)]
         filters: Filters,
 
-        #[structopt(long)]
+        #[arg(long)]
         action: FirewallAction,
 
-        #[structopt(long)]
+        #[arg(long)]
         priority: u16,
     },
 
-    /// Remove a firewall rule
+    /// Remove a firewall rule.
     RmFwRule {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
 
-        #[structopt(long = "dir")]
+        #[arg(long = "dir")]
         direction: Direction,
 
         id: u64,
     },
 
-    /// Set/replace all firewall rules atomically
+    /// Set/replace all firewall rules atomically.
     SetFwRules {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
     },
 
@@ -123,74 +126,74 @@ enum Command {
         name: String,
 
         /// The private MAC address for the guest.
-        #[structopt(long)]
+        #[arg(long)]
         guest_mac: MacAddr,
 
         /// The private IP address for the guest.
-        #[structopt(long)]
+        #[arg(long)]
         private_ip: IpAddr,
 
         /// The private IP subnet to which the guest belongs.
-        #[structopt(long)]
+        #[arg(long)]
         vpc_subnet: IpCidr,
 
         /// The MAC address to use as the virtual gateway.
         ///
         /// This is the MAC OPTE itself uses when responding directly to the
         /// client, for example, to DHCP requests.
-        #[structopt(long)]
+        #[arg(long)]
         gateway_mac: MacAddr,
 
         /// The IP address to use as the virtual gateway.
         ///
         /// This is the IP OPTE itself uses when responding directly to the
         /// client, for example, to DHCP requests.
-        #[structopt(long)]
+        #[arg(long)]
         gateway_ip: IpAddr,
 
         /// The IP address for Boundary Services, where packets destined to
         /// off-rack networks are sent.
-        #[structopt(long)]
+        #[arg(long)]
         bsvc_addr: Ipv6Addr,
 
         /// The VNI used for Boundary Services.
-        #[structopt(long)]
+        #[arg(long)]
         bsvc_vni: Vni,
 
         /// The MAC address for Boundary Services.
-        #[structopt(long, default_value = "00:00:00:00:00:00")]
+        #[arg(long, default_value = "00:00:00:00:00:00")]
         bsvc_mac: MacAddr,
 
         /// The VNI for the VPC to which the guest belongs.
-        #[structopt(long)]
+        #[arg(long)]
         vpc_vni: Vni,
 
         /// The IP address of the hosting sled, on the underlay / physical
         /// network.
-        #[structopt(long)]
+        #[arg(long)]
         src_underlay_addr: Ipv6Addr,
 
         /// The external IP address used for source NAT for the guest.
-        #[structopt(long, requires_all(&["snat-start", "snat-end"]))]
+        #[arg(long, requires_all(&["snat-start", "snat-end"]))]
         snat_ip: Option<IpAddr>,
 
         /// The starting L4 port used for source NAT for the guest.
-        #[structopt(long)]
+        #[arg(long)]
         snat_start: Option<u16>,
 
         /// The ending L4 port used for source NAT for the guest.
-        #[structopt(long)]
+        #[arg(long)]
         snat_end: Option<u16>,
 
         /// A list of domain names provided to the guest, used when resolving
         /// hostnames.
-        #[structopt(long, parse(try_from_str))]
+        #[arg(long)]
         domain_list: Vec<DomainName>,
 
-        #[structopt(long)]
+        #[arg(long)]
         external_ip: Option<IpAddr>,
 
-        #[structopt(long)]
+        #[arg(long)]
         passthrough: bool,
     },
 
@@ -206,7 +209,7 @@ enum Command {
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
         /// The OPTE port to which the route is added
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
         /// The network destination to which the route applies.
         dest: IpCidr,
@@ -215,18 +218,18 @@ enum Command {
     },
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 struct Filters {
     /// The host address or subnet to which the rule applies
-    #[structopt(long)]
+    #[arg(long)]
     hosts: Address,
 
     /// The protocol to which the rule applies
-    #[structopt(long)]
+    #[arg(long)]
     protocol: ProtoFilter,
 
     /// The port(s) to which the rule applies
-    #[structopt(long)]
+    #[arg(long)]
     ports: Ports,
 }
 
@@ -272,7 +275,7 @@ fn print_port(pi: PortInfo) {
 }
 
 fn main() -> anyhow::Result<()> {
-    let cmd = Command::from_args();
+    let cmd = Command::parse();
     match cmd {
         Command::ListPorts => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
