@@ -19,11 +19,13 @@ use opte::api::IpCidr;
 use opte::api::Ipv6Addr;
 use opte::api::MacAddr;
 use opte::api::Vni;
+use opte::api::API_VERSION;
 use opte::engine::print::print_layer;
 use opte::engine::print::print_list_layers;
 use opte::engine::print::print_tcp_flows;
 use opte::engine::print::print_uft;
 use opteadm::OpteAdm;
+use opteadm::COMMIT_COUNT;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
@@ -47,7 +49,7 @@ use oxide_vpc::engine::print::print_v2p;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, Parser)]
-#[command(version)]
+#[command(version=opte_pkg_version())]
 enum Command {
     /// List all ports.
     ListPorts,
@@ -249,6 +251,10 @@ struct SnatConfig {
     /// The ending L4 port used for source NAT for the guest.
     #[arg(long)]
     snat_end: Option<u16>,
+}
+
+fn opte_pkg_version() -> String {
+    format!("0.{API_VERSION}.{COMMIT_COUNT}")
 }
 
 fn print_port_header() {

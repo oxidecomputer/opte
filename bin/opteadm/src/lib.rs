@@ -7,6 +7,9 @@
 //! OPTE driver administration library
 // Copyright 2021 Oxide Computer Company
 
+mod gen;
+pub use gen::*;
+
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
