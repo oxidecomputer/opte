@@ -9,6 +9,7 @@ use std::str::FromStr;
 
 // use structopt::StructOpt;
 
+use clap::Args;
 use clap::Parser;
 
 use opte::api::Direction;
@@ -173,17 +174,8 @@ enum Command {
         #[arg(long)]
         src_underlay_addr: Ipv6Addr,
 
-        /// The external IP address used for source NAT for the guest.
-        #[arg(long, requires_all(&["snat-start", "snat-end"]))]
-        snat_ip: Option<IpAddr>,
-
-        /// The starting L4 port used for source NAT for the guest.
-        #[arg(long)]
-        snat_start: Option<u16>,
-
-        /// The ending L4 port used for source NAT for the guest.
-        #[arg(long)]
-        snat_end: Option<u16>,
+        #[command(flatten)]
+        snat: SnatConfig,
 
         /// A list of domain names provided to the guest, used when resolving
         /// hostnames.
@@ -241,6 +233,22 @@ impl From<Filters> for FirewallFilters {
             .set_ports(f.ports)
             .clone()
     }
+}
+
+#[derive(Args, Debug)]
+#[group(requires_all = ["snat_ip", "snat_start", "snat_end"], multiple = true)]
+struct SnatConfig {
+    /// The external IP address used for source NAT for the guest.
+    #[arg(long, requires("snat-start"))]
+    snat_ip: Option<IpAddr>,
+
+    /// The starting L4 port used for source NAT for the guest.
+    #[arg(long)]
+    snat_start: Option<u16>,
+
+    /// The ending L4 port used for source NAT for the guest.
+    #[arg(long)]
+    snat_end: Option<u16>,
 }
 
 fn print_port_header() {
@@ -351,9 +359,7 @@ fn main() -> anyhow::Result<()> {
             bsvc_mac,
             vpc_vni,
             src_underlay_addr,
-            snat_ip,
-            snat_start,
-            snat_end,
+            snat,
             domain_list,
             external_ip,
             passthrough,
@@ -370,12 +376,12 @@ fn main() -> anyhow::Result<()> {
                         anyhow::bail!("expected IPv4 gateway IP");
                     };
 
-                    let snat = match snat_ip {
+                    let snat = match snat.snat_ip {
                         Some(IpAddr::Ip4(ip)) => Some(SNat4Cfg {
                             external_ip: ip,
                             ports: core::ops::RangeInclusive::new(
-                                snat_start.unwrap(),
-                                snat_end.unwrap(),
+                                snat.snat_start.unwrap(),
+                                snat.snat_end.unwrap(),
                             ),
                         }),
                         Some(IpAddr::Ip6(_)) => {
@@ -409,15 +415,15 @@ fn main() -> anyhow::Result<()> {
                         anyhow::bail!("expected IPv6 gateway IP");
                     };
 
-                    let snat = match snat_ip {
+                    let snat = match snat.snat_ip {
                         Some(IpAddr::Ip4(_)) => {
                             anyhow::bail!("expected IPv6 SNAT IP");
                         }
                         Some(IpAddr::Ip6(ip)) => Some(SNat6Cfg {
                             external_ip: ip,
                             ports: core::ops::RangeInclusive::new(
-                                snat_start.unwrap(),
-                                snat_end.unwrap(),
+                                snat.snat_start.unwrap(),
+                                snat.snat_end.unwrap(),
                             ),
                         }),
                         None => None,
