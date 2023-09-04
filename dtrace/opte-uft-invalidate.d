@@ -18,7 +18,7 @@ BEGIN {
 	num = 0;
 }
 
-flow-entry-invalidated {
+uft-invalidate {
 	this->dir = DIR_STR(arg0);
 	this->port = stringof(arg1);
 	this->flow = (flow_id_sdt_arg_t *)arg2;
@@ -35,15 +35,15 @@ flow-entry-invalidated {
 	}
 }
 
-ft-entry-invliadated /this->af == AF_INET/ {
+uft-invalidate /this->af == AF_INET/ {
 	FLOW_FMT(this->s, this->flow);
-	printf(LINE_FMT, this->dir, this->port, this->s, this->epoch);
+	printf(LINE_FMT, this->port, this->dir, this->s, this->epoch);
 	num++;
 }
 
-ft-entry-invliadated /this->af == AF_INET6/ {
+uft-invalidate /this->af == AF_INET6/ {
 	FLOW_FMT6(this->s, this->flow);
-	printf(LINE_FMT, this->dir, this->port, this->s, this->epoch);
+	printf(LINE_FMT, this->port, this->dir, this->s, this->epoch);
 	num++;
 }
 
