@@ -9,7 +9,7 @@
 //! The majority of data transferred in DHCPv6 is done so via Options. They have
 //! a simple format:
 //!
-//! ```
+//! ```text
 //!  0                   1                   2                   3
 //!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+

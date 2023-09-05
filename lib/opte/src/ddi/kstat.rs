@@ -41,6 +41,9 @@ cfg_if! {
 /// fields with type [`KStatU64`] and derive [`KStatProvider`].
 ///
 /// ```
+/// use opte::ddi::kstat::{self, KStatProvider, KStatU64};
+/// use kstat_macro::KStatProvider;
+///
 /// #[derive(KStatProvider)]
 /// struct SomeStats {
 ///     bytes_out: KStatU64,
@@ -52,7 +55,7 @@ cfg_if! {
 ///
 /// To update the values use the `+=` operator.
 ///
-/// ```
+/// ```ignore
 /// some_val.stats.bytes_out += 54;
 /// ```
 ///
@@ -82,8 +85,11 @@ pub trait KStatProvider {
 /// the provider is unregistered from the kstats list.
 ///
 /// ```
+/// use opte::ddi::kstat::{self, KStatNamed, KStatProvider, KStatU64};
+/// use kstat_macro::KStatProvider;
+///
 /// #[derive(KStatProvider)]
-/// pub StatProvider {
+/// pub struct StatProvider {
 ///     my_counter: KStatU64,
 /// }
 ///
