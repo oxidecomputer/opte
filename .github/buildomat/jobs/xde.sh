@@ -2,8 +2,8 @@
 #:
 #: name = "opte-xde"
 #: variety = "basic"
-#: target = "helios"
-#: rust_toolchain = "nightly"
+#: target = "helios-2.0"
+#: rust_toolchain = "nightly-2023-01-12"
 #: output_rules = [
 #:   "=/work/debug/xde.dbg",
 #:   "=/work/debug/xde.dbg.sha256",
@@ -66,7 +66,7 @@ pushd xde
 cp xde.conf /work/xde.conf
 
 header "check style"
-ptime -m cargo +nightly fmt -p xde -p xde-link -- --check
+ptime -m cargo +nightly-2023-01-12 fmt -p xde -p xde-link -- --check
 
 header "analyze"
 ptime -m cargo clippy -- --allow clippy::uninlined-format-args
@@ -112,7 +112,7 @@ sha256sum $REL_TGT/xde_link.so > $REL_TGT/xde_link.so.sha256
 
 header "build xde integration tests"
 pushd xde-tests
-cargo +nightly fmt -- --check
+cargo +nightly-2023-01-12 fmt -- --check
 cargo clippy --all-targets
 cargo build --test loopback
 loopback_test=$(

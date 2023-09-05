@@ -2,8 +2,8 @@
 #:
 #: name = "opte-api"
 #: variety = "basic"
-#: target = "helios"
-#: rust_toolchain = "nightly"
+#: target = "helios-2.0"
+#: rust_toolchain = "nightly-2023-01-12"
 #: output_rules = []
 #:
 
@@ -24,7 +24,7 @@ header "check API_VERSION"
 ./check-api-version.sh
 
 header "check style"
-ptime -m cargo +nightly fmt -- --check
+ptime -m cargo +nightly-2023-01-12 fmt -- --check
 
 header "analyze std"
 ptime -m cargo clippy --all-targets
