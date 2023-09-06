@@ -241,7 +241,7 @@ impl From<Filters> for FirewallFilters {
 #[group(requires_all = ["snat_ip", "snat_start", "snat_end"], multiple = true)]
 struct SnatConfig {
     /// The external IP address used for source NAT for the guest.
-    #[arg(long, requires("snat-start"))]
+    #[arg(long)]
     snat_ip: Option<IpAddr>,
 
     /// The starting L4 port used for source NAT for the guest.
