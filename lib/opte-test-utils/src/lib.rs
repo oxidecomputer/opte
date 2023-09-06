@@ -9,6 +9,7 @@
 // This type of pedantry is more trouble than its worth here.
 #![allow(dead_code)]
 
+pub mod dhcp;
 pub mod icmp;
 pub mod pcap;
 #[macro_use]

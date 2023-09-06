@@ -13,7 +13,7 @@
 //! OPTE pipeline by single-stepping the packets in each capture and
 //! verifying that OPTE processing produces the expected bytes.
 
-mod common;
+use opte_test_utils as common;
 
 use common::icmp::*;
 use common::*;

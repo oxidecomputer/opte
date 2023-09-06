@@ -39,20 +39,12 @@ smoltcp.workspace = true
 zerocopy.workspace = true
 
 [dev-dependencies]
-#
-# XXX: This is a hack in order for the integration tests to run. The
-# integration tests concern themselves with the behavior of the engine
-# code, and we would like to enable that feature without requiring the
-# developer to always pass `--features=engine` explicitly.
-#
-# You might think it would be nice if one could somehow specify that a
-# given integration test relies on a given feature, and you would not
-# be alone, as there is an open issue for just such a feature:
-#
-# https://github.com/rust-lang/cargo/issues/2911
-#
-oxide-vpc = { workspace = true, features = ["engine", "test-help", "usdt"] }
-
+criterion.workspace = true
 ctor.workspace = true
+opte-test-utils.workspace = true
 pcap-parser = { workspace = true, features = ["serialize"] }
 usdt.workspace = true
+
+[[bench]]
+name = "userland"
+harness = false
