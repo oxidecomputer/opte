@@ -7,8 +7,6 @@
 use std::io;
 use std::str::FromStr;
 
-// use structopt::StructOpt;
-
 use clap::Args;
 use clap::Parser;
 
@@ -26,6 +24,7 @@ use opte::engine::print::print_tcp_flows;
 use opte::engine::print::print_uft;
 use opteadm::OpteAdm;
 use opteadm::COMMIT_COUNT;
+use opteadm::MAJOR_VERSION;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
@@ -177,11 +176,11 @@ enum Command {
         src_underlay_addr: Ipv6Addr,
 
         #[command(flatten)]
-        snat: SnatConfig,
+        snat: Option<SnatConfig>,
 
-        /// A list of domain names provided to the guest, used when resolving
-        /// hostnames.
-        #[arg(long)]
+        /// A comma-separated list of domain names provided to the guest,
+        /// used when resolving hostnames.
+        #[arg(long, value_delimiter = ',')]
         domain_list: Vec<DomainName>,
 
         #[arg(long)]
@@ -241,20 +240,44 @@ impl From<Filters> for FirewallFilters {
 #[group(requires_all = ["snat_ip", "snat_start", "snat_end"], multiple = true)]
 struct SnatConfig {
     /// The external IP address used for source NAT for the guest.
-    #[arg(long)]
-    snat_ip: Option<IpAddr>,
+    #[arg(long, required = false)]
+    snat_ip: IpAddr,
 
     /// The starting L4 port used for source NAT for the guest.
-    #[arg(long)]
-    snat_start: Option<u16>,
+    #[arg(long, required = false)]
+    snat_start: u16,
 
     /// The ending L4 port used for source NAT for the guest.
-    #[arg(long)]
-    snat_end: Option<u16>,
+    #[arg(long, required = false)]
+    snat_end: u16,
+}
+
+impl TryFrom<SnatConfig> for SNat4Cfg {
+    type Error = anyhow::Error;
+
+    fn try_from(value: SnatConfig) -> Result<Self, Self::Error> {
+        let IpAddr::Ip4(external_ip) = value.snat_ip else {
+            anyhow::bail!("expected IPv4 SNAT IP");
+        };
+
+        Ok(SNat4Cfg { external_ip, ports: value.snat_start..=value.snat_end })
+    }
+}
+
+impl TryFrom<SnatConfig> for SNat6Cfg {
+    type Error = anyhow::Error;
+
+    fn try_from(value: SnatConfig) -> Result<Self, Self::Error> {
+        let IpAddr::Ip6(external_ip) = value.snat_ip else {
+            anyhow::bail!("expected IPv6 SNAT IP");
+        };
+
+        Ok(SNat6Cfg { external_ip, ports: value.snat_start..=value.snat_end })
+    }
 }
 
 fn opte_pkg_version() -> String {
-    format!("0.{API_VERSION}.{COMMIT_COUNT}")
+    format!("{MAJOR_VERSION}.{API_VERSION}.{COMMIT_COUNT}")
 }
 
 fn print_port_header() {
@@ -382,19 +405,7 @@ fn main() -> anyhow::Result<()> {
                         anyhow::bail!("expected IPv4 gateway IP");
                     };
 
-                    let snat = match snat.snat_ip {
-                        Some(IpAddr::Ip4(ip)) => Some(SNat4Cfg {
-                            external_ip: ip,
-                            ports: core::ops::RangeInclusive::new(
-                                snat.snat_start.unwrap(),
-                                snat.snat_end.unwrap(),
-                            ),
-                        }),
-                        Some(IpAddr::Ip6(_)) => {
-                            anyhow::bail!("expected IPv4 SNAT IP");
-                        }
-                        None => None,
-                    };
+                    let snat = snat.map(SNat4Cfg::try_from).transpose()?;
 
                     let external_ip = match external_ip {
                         Some(IpAddr::Ip4(ip)) => Some(ip),
@@ -421,19 +432,7 @@ fn main() -> anyhow::Result<()> {
                         anyhow::bail!("expected IPv6 gateway IP");
                     };
 
-                    let snat = match snat.snat_ip {
-                        Some(IpAddr::Ip4(_)) => {
-                            anyhow::bail!("expected IPv6 SNAT IP");
-                        }
-                        Some(IpAddr::Ip6(ip)) => Some(SNat6Cfg {
-                            external_ip: ip,
-                            ports: core::ops::RangeInclusive::new(
-                                snat.snat_start.unwrap(),
-                                snat.snat_end.unwrap(),
-                            ),
-                        }),
-                        None => None,
-                    };
+                    let snat = snat.map(SNat6Cfg::try_from).transpose()?;
 
                     let external_ip = match external_ip {
                         Some(IpAddr::Ip4(_)) => {
