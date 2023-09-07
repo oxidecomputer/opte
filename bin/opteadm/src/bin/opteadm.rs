@@ -7,7 +7,8 @@
 use std::io;
 use std::str::FromStr;
 
-use structopt::StructOpt;
+use clap::Args;
+use clap::Parser;
 
 use opte::api::Direction;
 use opte::api::DomainName;
@@ -16,11 +17,14 @@ use opte::api::IpCidr;
 use opte::api::Ipv6Addr;
 use opte::api::MacAddr;
 use opte::api::Vni;
+use opte::api::API_VERSION;
 use opte::engine::print::print_layer;
 use opte::engine::print::print_list_layers;
 use opte::engine::print::print_tcp_flows;
 use opte::engine::print::print_uft;
 use opteadm::OpteAdm;
+use opteadm::COMMIT_COUNT;
+use opteadm::MAJOR_VERSION;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
@@ -43,39 +47,40 @@ use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::print::print_v2p;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
+#[command(version=opte_pkg_version())]
 enum Command {
     /// List all ports.
     ListPorts,
 
     /// List all layers under a given port.
     ListLayers {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
     },
 
-    /// Dump the contents of the layer with the given name
+    /// Dump the contents of the layer with the given name.
     DumpLayer {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
         name: String,
     },
 
-    /// Clear all entries from the Unified Flow Table
+    /// Clear all entries from the Unified Flow Table.
     ClearUft {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
     },
 
-    /// Dump the Unified Flow Table
+    /// Dump the Unified Flow Table.
     DumpUft {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
     },
 
     /// Dump TCP flows
     DumpTcpFlows {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
     },
 
@@ -84,36 +89,36 @@ enum Command {
 
     /// Add a firewall rule
     AddFwRule {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
 
-        #[structopt(long = "dir")]
+        #[arg(long = "dir")]
         direction: Direction,
 
-        #[structopt(flatten)]
+        #[command(flatten)]
         filters: Filters,
 
-        #[structopt(long)]
+        #[arg(long)]
         action: FirewallAction,
 
-        #[structopt(long)]
+        #[arg(long)]
         priority: u16,
     },
 
-    /// Remove a firewall rule
+    /// Remove a firewall rule.
     RmFwRule {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
 
-        #[structopt(long = "dir")]
+        #[arg(long = "dir")]
         direction: Direction,
 
         id: u64,
     },
 
-    /// Set/replace all firewall rules atomically
+    /// Set/replace all firewall rules atomically.
     SetFwRules {
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
     },
 
@@ -123,74 +128,65 @@ enum Command {
         name: String,
 
         /// The private MAC address for the guest.
-        #[structopt(long)]
+        #[arg(long)]
         guest_mac: MacAddr,
 
         /// The private IP address for the guest.
-        #[structopt(long)]
+        #[arg(long)]
         private_ip: IpAddr,
 
         /// The private IP subnet to which the guest belongs.
-        #[structopt(long)]
+        #[arg(long)]
         vpc_subnet: IpCidr,
 
         /// The MAC address to use as the virtual gateway.
         ///
         /// This is the MAC OPTE itself uses when responding directly to the
         /// client, for example, to DHCP requests.
-        #[structopt(long)]
+        #[arg(long)]
         gateway_mac: MacAddr,
 
         /// The IP address to use as the virtual gateway.
         ///
         /// This is the IP OPTE itself uses when responding directly to the
         /// client, for example, to DHCP requests.
-        #[structopt(long)]
+        #[arg(long)]
         gateway_ip: IpAddr,
 
         /// The IP address for Boundary Services, where packets destined to
         /// off-rack networks are sent.
-        #[structopt(long)]
+        #[arg(long)]
         bsvc_addr: Ipv6Addr,
 
         /// The VNI used for Boundary Services.
-        #[structopt(long)]
+        #[arg(long)]
         bsvc_vni: Vni,
 
         /// The MAC address for Boundary Services.
-        #[structopt(long, default_value = "00:00:00:00:00:00")]
+        #[arg(long, default_value = "00:00:00:00:00:00")]
         bsvc_mac: MacAddr,
 
         /// The VNI for the VPC to which the guest belongs.
-        #[structopt(long)]
+        #[arg(long)]
         vpc_vni: Vni,
 
         /// The IP address of the hosting sled, on the underlay / physical
         /// network.
-        #[structopt(long)]
+        #[arg(long)]
         src_underlay_addr: Ipv6Addr,
 
-        /// The external IP address used for source NAT for the guest.
-        #[structopt(long, requires_all(&["snat-start", "snat-end"]))]
-        snat_ip: Option<IpAddr>,
+        #[command(flatten)]
+        snat: Option<SnatConfig>,
 
-        /// The starting L4 port used for source NAT for the guest.
-        #[structopt(long)]
-        snat_start: Option<u16>,
-
-        /// The ending L4 port used for source NAT for the guest.
-        #[structopt(long)]
-        snat_end: Option<u16>,
-
-        /// A list of domain names provided to the guest, used when resolving
-        /// hostnames.
-        #[structopt(long, parse(try_from_str))]
+        /// A comma-separated list of domain names provided to the guest,
+        /// used when resolving hostnames.
+        #[arg(long, value_delimiter = ',')]
         domain_list: Vec<DomainName>,
 
-        #[structopt(long)]
+        #[arg(long)]
         external_ip: Option<IpAddr>,
 
-        #[structopt(long)]
+        #[arg(long)]
         passthrough: bool,
     },
 
@@ -206,7 +202,7 @@ enum Command {
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
         /// The OPTE port to which the route is added
-        #[structopt(short)]
+        #[arg(short)]
         port: String,
         /// The network destination to which the route applies.
         dest: IpCidr,
@@ -215,18 +211,18 @@ enum Command {
     },
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 struct Filters {
     /// The host address or subnet to which the rule applies
-    #[structopt(long)]
+    #[arg(long)]
     hosts: Address,
 
     /// The protocol to which the rule applies
-    #[structopt(long)]
+    #[arg(long)]
     protocol: ProtoFilter,
 
     /// The port(s) to which the rule applies
-    #[structopt(long)]
+    #[arg(long)]
     ports: Ports,
 }
 
@@ -238,6 +234,50 @@ impl From<Filters> for FirewallFilters {
             .set_ports(f.ports)
             .clone()
     }
+}
+
+#[derive(Args, Debug)]
+#[group(requires_all = ["snat_ip", "snat_start", "snat_end"], multiple = true)]
+struct SnatConfig {
+    /// The external IP address used for source NAT for the guest.
+    #[arg(long, required = false)]
+    snat_ip: IpAddr,
+
+    /// The starting L4 port used for source NAT for the guest.
+    #[arg(long, required = false)]
+    snat_start: u16,
+
+    /// The ending L4 port used for source NAT for the guest.
+    #[arg(long, required = false)]
+    snat_end: u16,
+}
+
+impl TryFrom<SnatConfig> for SNat4Cfg {
+    type Error = anyhow::Error;
+
+    fn try_from(value: SnatConfig) -> Result<Self, Self::Error> {
+        let IpAddr::Ip4(external_ip) = value.snat_ip else {
+            anyhow::bail!("expected IPv4 SNAT IP");
+        };
+
+        Ok(SNat4Cfg { external_ip, ports: value.snat_start..=value.snat_end })
+    }
+}
+
+impl TryFrom<SnatConfig> for SNat6Cfg {
+    type Error = anyhow::Error;
+
+    fn try_from(value: SnatConfig) -> Result<Self, Self::Error> {
+        let IpAddr::Ip6(external_ip) = value.snat_ip else {
+            anyhow::bail!("expected IPv6 SNAT IP");
+        };
+
+        Ok(SNat6Cfg { external_ip, ports: value.snat_start..=value.snat_end })
+    }
+}
+
+fn opte_pkg_version() -> String {
+    format!("{MAJOR_VERSION}.{API_VERSION}.{COMMIT_COUNT}")
 }
 
 fn print_port_header() {
@@ -272,7 +312,7 @@ fn print_port(pi: PortInfo) {
 }
 
 fn main() -> anyhow::Result<()> {
-    let cmd = Command::from_args();
+    let cmd = Command::parse();
     match cmd {
         Command::ListPorts => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
@@ -348,9 +388,7 @@ fn main() -> anyhow::Result<()> {
             bsvc_mac,
             vpc_vni,
             src_underlay_addr,
-            snat_ip,
-            snat_start,
-            snat_end,
+            snat,
             domain_list,
             external_ip,
             passthrough,
@@ -367,19 +405,7 @@ fn main() -> anyhow::Result<()> {
                         anyhow::bail!("expected IPv4 gateway IP");
                     };
 
-                    let snat = match snat_ip {
-                        Some(IpAddr::Ip4(ip)) => Some(SNat4Cfg {
-                            external_ip: ip,
-                            ports: core::ops::RangeInclusive::new(
-                                snat_start.unwrap(),
-                                snat_end.unwrap(),
-                            ),
-                        }),
-                        Some(IpAddr::Ip6(_)) => {
-                            anyhow::bail!("expected IPv4 SNAT IP");
-                        }
-                        None => None,
-                    };
+                    let snat = snat.map(SNat4Cfg::try_from).transpose()?;
 
                     let external_ip = match external_ip {
                         Some(IpAddr::Ip4(ip)) => Some(ip),
@@ -406,19 +432,7 @@ fn main() -> anyhow::Result<()> {
                         anyhow::bail!("expected IPv6 gateway IP");
                     };
 
-                    let snat = match snat_ip {
-                        Some(IpAddr::Ip4(_)) => {
-                            anyhow::bail!("expected IPv6 SNAT IP");
-                        }
-                        Some(IpAddr::Ip6(ip)) => Some(SNat6Cfg {
-                            external_ip: ip,
-                            ports: core::ops::RangeInclusive::new(
-                                snat_start.unwrap(),
-                                snat_end.unwrap(),
-                            ),
-                        }),
-                        None => None,
-                    };
+                    let snat = snat.map(SNat6Cfg::try_from).transpose()?;
 
                     let external_ip = match external_ip {
                         Some(IpAddr::Ip4(_)) => {

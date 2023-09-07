@@ -2,10 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! OPTE driver administration library
-// Copyright 2021 Oxide Computer Company
 
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -28,6 +27,13 @@ use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::overlay;
+
+include!(concat!(env!("OUT_DIR"), "/gen.rs"));
+
+// XX: This should live in opte-api, but doing so would bump the API
+//     version inappropriately. Move me alongside another change?
+/// Major version of the OPTE package.
+pub const MAJOR_VERSION: u64 = 0;
 
 /// The handle used to send administration commands to the OPTE
 /// control node.
