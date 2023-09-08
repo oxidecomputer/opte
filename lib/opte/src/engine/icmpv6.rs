@@ -226,9 +226,9 @@ impl HairpinAction for Icmpv6EchoReply {
             )]),
         ];
 
-        let data_preds = vec![DataPredicate::Icmpv6MsgType(MessageType::from(
-            Icmpv6Message::EchoRequest,
-        ))];
+        let data_preds = vec![DataPredicate::Icmpv6MsgType(
+            MessageType::from(Icmpv6Message::EchoRequest).into(),
+        )];
 
         (hdr_preds, data_preds)
     }
@@ -363,9 +363,9 @@ impl HairpinAction for RouterAdvertisement {
 
         let data_preds = vec![
             // This must be a Router Solicitation message.
-            DataPredicate::Icmpv6MsgType(MessageType::from(
-                Icmpv6Message::RouterSolicit,
-            )),
+            DataPredicate::Icmpv6MsgType(
+                MessageType::from(Icmpv6Message::RouterSolicit).into(),
+            ),
         ];
 
         (hdr_preds, data_preds)
@@ -702,9 +702,9 @@ impl HairpinAction for NeighborAdvertisement {
 
         let data_preds = vec![
             // This must be an actual Neighbor Solicitation message
-            DataPredicate::Icmpv6MsgType(MessageType::from(
-                Icmpv6Message::NeighborSolicit,
-            )),
+            DataPredicate::Icmpv6MsgType(
+                MessageType::from(Icmpv6Message::NeighborSolicit).into(),
+            ),
         ];
 
         (hdr_preds, data_preds)

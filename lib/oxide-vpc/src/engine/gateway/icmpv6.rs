@@ -26,8 +26,10 @@ use opte::engine::icmpv6::Icmpv6EchoReply;
 use opte::engine::icmpv6::NeighborAdvertisement;
 use opte::engine::icmpv6::RouterAdvertisement;
 use opte::engine::layer::Layer;
+use opte::engine::predicate::DataPredicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
+use smoltcp::wire::Icmpv6Message;
 
 // Add support for ICMPv6:
 //
@@ -100,6 +102,22 @@ pub fn setup(
         let rule = Rule::new(priority, rule_actions.remove(0));
         layer.add_rule(Direction::Out, rule.finalize());
     }
+
+    // Filter any uncaught in/out-bound NDP traffic.
+    let pred = DataPredicate::Icmpv6MsgType(
+        (Icmpv6Message::RouterSolicit.into()..=Icmpv6Message::Redirect.into())
+            .into(),
+    );
+    let in_pred = pred.clone();
+
+    let mut ndp_filter =
+        Rule::new(u16::try_from(n_rule_actions + 1).unwrap(), Action::Deny);
+    ndp_filter.add_data_predicate(pred);
+    layer.add_rule(Direction::Out, ndp_filter.finalize());
+
+    let mut ndp_filter = Rule::new(1, Action::Deny);
+    ndp_filter.add_data_predicate(in_pred);
+    layer.add_rule(Direction::In, ndp_filter.finalize());
 
     Ok(())
 }
