@@ -1438,55 +1438,6 @@ fn test_guest_to_gateway_icmpv6_ping(
     }
 }
 
-// Generate a packet containing an NDP Router Solicitation.
-//
-// The source MAC is used to generate the source IPv6 address, using the EUI-64
-// transform. The resulting packet has a multicast MAC address, and the
-// All-Routers destination IPv6 address.
-fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
-    // The source IPv6 address is the EUI-64 transform of the source MAC.
-    let src_ip = Ipv6Addr::from_eui64(src_mac);
-
-    // Must be destined for the All-Routers IPv6 address, and the corresponding
-    // multicast Ethernet address.
-    let dst_ip: Ipv6Addr = Ipv6Addr::ALL_ROUTERS;
-    let dst_mac = dst_ip.multicast_mac().unwrap();
-
-    let solicit = NdiscRepr::RouterSolicit {
-        lladdr: Some(RawHardwareAddress::from_bytes(src_mac)),
-    };
-    let req = Icmpv6Repr::Ndisc(solicit);
-    let mut body_bytes = vec![0u8; req.buffer_len()];
-    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body_bytes);
-    let mut csum = CsumCapab::ignored();
-    csum.icmpv6 = smoltcp::phy::Checksum::Tx;
-    req.emit(
-        &IpAddress::Ipv6(src_ip.into()),
-        &IpAddress::Ipv6(dst_ip.into()),
-        &mut req_pkt,
-        &csum,
-    );
-    let ip6 = Ipv6Meta {
-        src: src_ip,
-        dst: dst_ip,
-        proto: Protocol::ICMPv6,
-        next_hdr: IpProtocol::Icmpv6,
-        pay_len: req.buffer_len() as u16,
-        hop_limit: 255,
-        ..Default::default()
-    };
-    let eth =
-        EtherMeta { dst: dst_mac, src: *src_mac, ether_type: EtherType::Ipv6 };
-
-    let total_len = EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len();
-    let mut pkt = Packet::alloc_and_expand(total_len);
-    let mut wtr = pkt.seg0_wtr();
-    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-    ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-    wtr.write(&body_bytes).unwrap();
-    pkt.parse(Out, VpcParser::new()).unwrap()
-}
-
 // Verify that a Router Solicitation emitted from the guest results in a Router
 // Advertisement from the gateway. This tests both a solicitation sent to the
 // router's unicast address, or its solicited-node multicast address.
@@ -1619,6 +1570,73 @@ fn gateway_router_advert_reply() {
     };
 }
 
+/// Generate an NDP packet given an inner `repr`.
+fn generate_ndisc(
+    repr: NdiscRepr,
+    src_mac: MacAddr,
+    dst_mac: MacAddr,
+    src_ip: Ipv6Addr,
+    dst_ip: Ipv6Addr,
+    with_checksum: bool,
+) -> Packet<Parsed> {
+    let req = Icmpv6Repr::Ndisc(repr);
+    let mut body = vec![0u8; req.buffer_len()];
+    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body);
+    let mut csum = CsumCapab::ignored();
+    if with_checksum {
+        csum.icmpv6 = smoltcp::phy::Checksum::Tx;
+    }
+    req.emit(
+        &IpAddress::Ipv6(src_ip.into()),
+        &IpAddress::Ipv6(dst_ip.into()),
+        &mut req_pkt,
+        &csum,
+    );
+    let ip6 = Ipv6Meta {
+        src: src_ip,
+        dst: dst_ip,
+        proto: Protocol::ICMPv6,
+        next_hdr: IpProtocol::Icmpv6,
+        hop_limit: 255,
+        pay_len: req.buffer_len() as u16,
+        ..Default::default()
+    };
+    let eth =
+        EtherMeta { dst: dst_mac, src: src_mac, ether_type: EtherType::Ipv6 };
+
+    let total_len = EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len();
+    let mut pkt = Packet::alloc_and_expand(total_len);
+    let mut wtr = pkt.seg0_wtr();
+    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+    ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
+    wtr.write(&body).unwrap();
+    pkt.parse(Out, VpcParser::new()).unwrap()
+}
+
+// Generate a packet containing an NDP Router Solicitation.
+//
+// The source MAC is used to generate the source IPv6 address, using the EUI-64
+// transform. The resulting packet has a multicast MAC address, and the
+// All-Routers destination IPv6 address.
+fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
+    let solicit = NdiscRepr::RouterSolicit {
+        lladdr: Some(RawHardwareAddress::from_bytes(src_mac)),
+    };
+    let dst_ip = Ipv6Addr::ALL_ROUTERS;
+
+    generate_ndisc(
+        solicit,
+        *src_mac,
+        // Must be destined for the All-Routers IPv6 address, and the corresponding
+        // multicast Ethernet address.
+        dst_ip.multicast_mac().unwrap(),
+        // The source IPv6 address is the EUI-64 transform of the source MAC.
+        Ipv6Addr::from_eui64(src_mac),
+        dst_ip,
+        true,
+    )
+}
+
 // Create a Neighbor Solicitation.
 fn generate_neighbor_solicitation(
     info: &SolicitInfo,
@@ -1628,41 +1646,14 @@ fn generate_neighbor_solicitation(
         target_addr: Ipv6Address::from(info.target_addr),
         lladdr: info.lladdr.map(|x| RawHardwareAddress::from_bytes(&x)),
     };
-    let req = Icmpv6Repr::Ndisc(solicit);
-    let mut body = vec![0u8; req.buffer_len()];
-    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body);
-    let mut csum = CsumCapab::ignored();
-    if with_checksum {
-        csum.icmpv6 = smoltcp::phy::Checksum::Tx;
-    }
-    req.emit(
-        &IpAddress::Ipv6(info.src_ip.into()),
-        &IpAddress::Ipv6(info.dst_ip.into()),
-        &mut req_pkt,
-        &csum,
-    );
-    let ip6 = Ipv6Meta {
-        src: info.src_ip,
-        dst: info.dst_ip,
-        proto: Protocol::ICMPv6,
-        next_hdr: IpProtocol::Icmpv6,
-        hop_limit: 255,
-        pay_len: req.buffer_len() as u16,
-        ..Default::default()
-    };
-    let eth = EtherMeta {
-        dst: info.dst_mac,
-        src: info.src_mac,
-        ether_type: EtherType::Ipv6,
-    };
-
-    let total_len = EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len();
-    let mut pkt = Packet::alloc_and_expand(total_len);
-    let mut wtr = pkt.seg0_wtr();
-    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-    ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-    wtr.write(&body).unwrap();
-    pkt.parse(Out, VpcParser::new()).unwrap()
+    generate_ndisc(
+        solicit,
+        info.src_mac,
+        info.dst_mac,
+        info.src_ip,
+        info.dst_ip,
+        with_checksum,
+    )
 }
 
 // Helper type describing a Neighbor Solicitation
@@ -1703,41 +1694,15 @@ fn generate_neighbor_advertisement(
         target_addr: info.target_addr.into(),
         lladdr: info.lladdr.map(|x| RawHardwareAddress::from_bytes(&x)),
     };
-    let req = Icmpv6Repr::Ndisc(advert);
-    let mut body = vec![0u8; req.buffer_len()];
-    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body);
-    let mut csum = CsumCapab::ignored();
-    if with_checksum {
-        csum.icmpv6 = smoltcp::phy::Checksum::Tx;
-    }
-    req.emit(
-        &IpAddress::Ipv6(info.src_ip.into()),
-        &IpAddress::Ipv6(info.dst_ip.into()),
-        &mut req_pkt,
-        &csum,
-    );
-    let ip6 = Ipv6Meta {
-        src: info.src_ip,
-        dst: info.dst_ip,
-        proto: Protocol::ICMPv6,
-        next_hdr: IpProtocol::Icmpv6,
-        hop_limit: 255,
-        pay_len: req.buffer_len() as u16,
-        ..Default::default()
-    };
-    let eth = EtherMeta {
-        dst: info.dst_mac,
-        src: info.src_mac,
-        ether_type: EtherType::Ipv6,
-    };
 
-    let total_len = EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len();
-    let mut pkt = Packet::alloc_and_expand(total_len);
-    let mut wtr = pkt.seg0_wtr();
-    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-    ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-    wtr.write(&body).unwrap();
-    pkt.parse(Out, VpcParser::new()).unwrap()
+    generate_ndisc(
+        advert,
+        info.src_mac,
+        info.dst_mac,
+        info.src_ip,
+        info.dst_ip,
+        with_checksum,
+    )
 }
 
 // Helper type describing a Neighbor Advertisement
