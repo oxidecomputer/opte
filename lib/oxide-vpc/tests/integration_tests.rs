@@ -1543,7 +1543,8 @@ fn gateway_router_advert_reply() {
         "Router advertisement should be destined for the guest's MAC"
     );
 
-    let IpMeta::Ip6(ip6) = meta.inner.ip.as_ref().expect("No inner IP header") else {
+    let IpMeta::Ip6(ip6) = meta.inner.ip.as_ref().expect("No inner IP header")
+    else {
         panic!("Inner IP header is not IPv6");
     };
 
@@ -1690,6 +1691,53 @@ impl std::fmt::Display for SolicitInfo {
             .field("lladdr", &lladdr)
             .finish()
     }
+}
+
+// Create a Neighbor Advertisement.
+fn generate_neighbor_advertisement(
+    info: &AdvertInfo,
+    with_checksum: bool,
+) -> Packet<Parsed> {
+    let advert = NdiscRepr::NeighborAdvert {
+        flags: info.flags,
+        target_addr: info.target_addr.into(),
+        lladdr: info.lladdr.map(|x| RawHardwareAddress::from_bytes(&x)),
+    };
+    let req = Icmpv6Repr::Ndisc(advert);
+    let mut body = vec![0u8; req.buffer_len()];
+    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body);
+    let mut csum = CsumCapab::ignored();
+    if with_checksum {
+        csum.icmpv6 = smoltcp::phy::Checksum::Tx;
+    }
+    req.emit(
+        &IpAddress::Ipv6(info.src_ip.into()),
+        &IpAddress::Ipv6(info.dst_ip.into()),
+        &mut req_pkt,
+        &csum,
+    );
+    let ip6 = Ipv6Meta {
+        src: info.src_ip,
+        dst: info.dst_ip,
+        proto: Protocol::ICMPv6,
+        next_hdr: IpProtocol::Icmpv6,
+        hop_limit: 255,
+        pay_len: req.buffer_len() as u16,
+        ..Default::default()
+    };
+    let eth = EtherMeta {
+        dst: info.dst_mac,
+        src: info.src_mac,
+        ether_type: EtherType::Ipv6,
+    };
+
+    let total_len = EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len();
+    let mut pkt = Packet::alloc_and_expand(total_len);
+    let mut wtr = pkt.seg0_wtr();
+    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+    ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
+    wtr.write(&body).unwrap();
+    pkt.parse(Out, VpcParser::new()).unwrap()
 }
 
 // Helper type describing a Neighbor Advertisement
@@ -1989,7 +2037,6 @@ fn test_gateway_neighbor_advert_reply() {
                         "stats.port.out_uft_miss"
                     ]
                 );
-                continue;
             }
             (Ok(Hairpin(hp)), Some(na)) => {
                 incr!(g1, ["stats.port.out_uft_miss"]);
@@ -2007,6 +2054,132 @@ fn test_gateway_neighbor_advert_reply() {
                 );
             }
         };
+    }
+}
+
+// Neighbor advertisements (and any other NDP not targeted *at* the gateway)
+// are to be explicitly dropped.
+#[test]
+fn outbound_ndp_dropped() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    let IpCfg::DualStack { ipv4: _, ipv6 } = g1_cfg.ip_cfg else {
+        panic!("Host should be configured v6 or dual stack.");
+    };
+
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip6(ipv6.vpc_subnet),
+        RouterTarget::VpcSubnet(IpCidr::Ip6(ipv6.vpc_subnet)),
+    )
+    .unwrap();
+    incr!(g1, ["router.rules.out", "epoch"]);
+
+    // Add router entry that allows g1 to route to internet.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip6("::/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["router.rules.out", "epoch"]);
+
+    // Test case from Omicron #2857.
+    let outbound_na = AdvertInfo {
+        src_mac: g1_cfg.guest_mac,
+        dst_mac: MacAddr::BROADCAST,
+        src_ip: ipv6.private_ip,
+        dst_ip: Ipv6Addr::ALL_NODES,
+        target_addr: Ipv6Addr::from_const([
+            0xfd77, 0xe9d2, 0x9cd9, 0x2000, 0, 0, 0, 6,
+        ]),
+        lladdr: Some(g1_cfg.guest_mac),
+        flags: NdiscNeighborFlags::OVERRIDE,
+    };
+
+    let mut pkt = generate_neighbor_advertisement(&outbound_na, true);
+
+    let res = g1.port.process(Out, &mut pkt, ActionMeta::new()).unwrap();
+    match res {
+        ProcessResult::Drop { .. } => {
+            incr!(
+                g1,
+                [
+                    "stats.port.out_drop, stats.port.out_drop_layer",
+                    "stats.port.out_uft_miss"
+                ]
+            );
+        }
+        a => panic!(
+            "unexpected respondse for outbound NA. Got {a:?}, expected Drop."
+        ),
+    }
+}
+
+// All encapsulated NDP traffic received from elsewhere must be dropped --
+// all zones/VMs are technically on their own segment with the gateway.
+#[test]
+fn inbound_ndp_dropped_at_gateway() {
+    let g1_cfg = g1_cfg();
+    let g2_cfg = g2_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    let g2_phys = TestIpPhys {
+        ip: g2_cfg.phys_ip,
+        mac: g2_cfg.gateway_mac,
+        vni: g2_cfg.vni,
+    };
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.gateway_mac,
+        vni: g1_cfg.vni,
+    };
+
+    let IpCfg::DualStack { ipv4: _, ipv6: g1_v6 } = g1_cfg.ip_cfg else {
+        panic!("Host should be configured v6 or dual stack.");
+    };
+    let IpCfg::DualStack { ipv4: _, ipv6: g2_v6 } = g2_cfg.ip_cfg else {
+        panic!("Host should be configured v6 or dual stack.");
+    };
+
+    // Assume we have received an NS from another node: set up as two VMs
+    // here, but equally valid if rack-external on same subnet.
+    let ns = SolicitInfo {
+        src_mac: g2_cfg.guest_mac,
+        dst_mac: g2_cfg.gateway_mac,
+        src_ip: g2_v6.private_ip,
+        dst_ip: g1_v6.private_ip,
+        target_addr: g1_v6.private_ip,
+        lladdr: Some(g1_cfg.guest_mac),
+    };
+
+    let pkt = generate_neighbor_solicitation(&ns, true);
+    let mut pkt = encap(pkt, g2_phys, g1_phys);
+    let res = g1.port.process(In, &mut pkt, ActionMeta::new()).unwrap();
+    println!("{res:?}");
+    match res {
+        ProcessResult::Drop { .. } => {
+            incr!(
+                g1,
+                [
+                    "stats.port.in_drop, stats.port.in_drop_layer",
+                    "stats.port.in_uft_miss",
+                    // The firewall increments its flow count because
+                    // these two hosts *are allowed to talk to one
+                    // another* -- just not on this protocol!
+                    "firewall.flows.in",
+                    "firewall.flows.out"
+                ]
+            );
+        }
+        a => panic!(
+            "unexpected response for inbound NS. Got {a:?}, expected Drop."
+        ),
     }
 }
 
@@ -2273,7 +2446,8 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                 let domain_list = reply
                     .find_option(dhcpv6::options::Code::DomainList)
                     .expect("Expected a Domain Search List option");
-                let dhcpv6::options::Option::DomainList(bytes) = domain_list else {
+                let dhcpv6::options::Option::DomainList(bytes) = domain_list
+                else {
                     panic!("Expected an Option::DomainList");
                 };
                 let mut expected_bytes = Vec::new();

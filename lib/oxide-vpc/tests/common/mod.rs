@@ -164,7 +164,7 @@ pub fn g2_cfg() -> VpcCfg {
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
-            private_ip: "fd00::5".parse().unwrap(),
+            private_ip: "fd00::6".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
             snat: Some(SNat6Cfg {
                 external_ip: "2001:db8::1".parse().unwrap(),
@@ -311,7 +311,8 @@ pub fn oxide_net_setup2(
         "set:epoch=2",
         // * Allow inbound IPv6 traffic for guest.
         // * Allow inbound IPv4 traffic for guest.
-        "set:gateway.rules.in=2",
+        // * Deny inbound NDP for guest.
+        "set:gateway.rules.in=3",
         // IPv4
         // ----
         //
@@ -326,11 +327,12 @@ pub fn oxide_net_setup2(
         //
         // * NDP NA for Gateway
         // * NDP RA for Gateway
+        // * Deny all other NDP
         // * ICMPv6 Echo Reply for Gateway from Guest Link-Local
         // * ICMPv6 Echo Reply for Gateway from Guest VPC ULA
         // * DHCPv6
         // * Outbound traffic from Guest IPv6 + MAC Address
-        "set:gateway.rules.out=11",
+        "set:gateway.rules.out=12",
         // * Allow all outbound traffic
         "set:firewall.rules.out=0",
         // * Outbound IPv4 SNAT
