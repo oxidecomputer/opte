@@ -2136,7 +2136,7 @@ fn inbound_ndp_dropped_at_gateway() {
                     "stats.port.in_uft_miss",
                     // The firewall increments its flow count because
                     // these two hosts *are allowed to talk to one
-                    // another* -- just not on this protocol!
+                    // another* -- just not on this *subset* of ICMPv6!
                     "firewall.flows.in",
                     "firewall.flows.out"
                 ]
