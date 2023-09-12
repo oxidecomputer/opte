@@ -2832,7 +2832,7 @@ fn mock_freeb(mp: *mut mblk_t) {
         let bmblk = Box::from_raw(mp);
         let bdblk = Box::from_raw(bmblk.b_datap as *mut dblk_t);
         let buffer = Vec::from_raw_parts(
-            bdblk.db_base as *mut u8,
+            bdblk.db_base,
             bmblk.b_wptr.offset_from(bmblk.b_rptr) as usize,
             bdblk.db_lim.offset_from(bdblk.db_base) as usize,
         );
