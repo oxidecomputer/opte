@@ -61,9 +61,9 @@ impl HairpinAction for IcmpEchoReply {
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::ICMP)]),
         ];
 
-        let data_preds = vec![DataPredicate::IcmpMsgType(MessageType::from(
-            wire::Icmpv4Message::EchoRequest,
-        ))];
+        let data_preds = vec![DataPredicate::IcmpMsgType(
+            MessageType::from(wire::Icmpv4Message::EchoRequest).into(),
+        )];
 
         (hdr_preds, data_preds)
     }
@@ -140,7 +140,9 @@ impl HairpinAction for IcmpEchoReply {
 /// predicates. We call this "message type" instead of just "message"
 /// because that's what it is: the type field of the larger ICMP
 /// message.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 #[serde(from = "u8", into = "u8")]
 pub struct MessageType {
     inner: wire::Icmpv4Message,

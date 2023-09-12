@@ -63,7 +63,7 @@ cfg_if! {
 /// therefore it must be serializable. There are ways to get around
 /// this without creating a new type; the author prefers this way as
 /// it's less "magic".
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd)]
 pub struct MessageType {
     inner: smoltcp::wire::DhcpMessageType,
 }
@@ -316,15 +316,15 @@ impl HairpinAction for DhcpAction {
 
         let data_preds = match self.reply_type {
             DhcpReplyType::Offer => {
-                vec![DataPredicate::DhcpMsgType(MessageType::from(
-                    SmolDMT::Discover,
-                ))]
+                vec![DataPredicate::DhcpMsgType(
+                    MessageType::from(SmolDMT::Discover).into(),
+                )]
             }
 
             DhcpReplyType::Ack => {
-                vec![DataPredicate::DhcpMsgType(MessageType::from(
-                    SmolDMT::Request,
-                ))]
+                vec![DataPredicate::DhcpMsgType(
+                    MessageType::from(SmolDMT::Request).into(),
+                )]
             }
         };
 

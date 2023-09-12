@@ -507,12 +507,12 @@ impl Predicate {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum TypeMatch<T> {
+pub enum Match<T> {
     Exact(T),
     Range(RangeInclusive<T>),
 }
 
-impl<T> TypeMatch<T>
+impl<T> Match<T>
 where
     T: PartialEq + PartialOrd,
 {
@@ -524,35 +524,35 @@ where
     }
 }
 
-impl<T: Display> Display for TypeMatch<T> {
+impl<T: Display> Display for Match<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Exact(target) => write!(f, "={target}"),
             Self::Range(range) => {
-                write!(f, "∈{}..={}", range.start(), range.end())
+                write!(f, "∈({}..={})", range.start(), range.end())
             }
         }
     }
 }
 
-impl<T> From<T> for TypeMatch<T> {
+impl<T> From<T> for Match<T> {
     fn from(value: T) -> Self {
-        TypeMatch::Exact(value)
+        Match::Exact(value)
     }
 }
 
-impl<T> From<RangeInclusive<T>> for TypeMatch<T> {
+impl<T> From<RangeInclusive<T>> for Match<T> {
     fn from(value: RangeInclusive<T>) -> Self {
-        TypeMatch::Range(value)
+        Match::Range(value)
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DataPredicate {
-    DhcpMsgType(DhcpMessageType),
-    IcmpMsgType(IcmpMessageType),
-    Icmpv6MsgType(TypeMatch<Icmpv6MessageType>),
-    Dhcpv6MsgType(Dhcpv6MessageType),
+    DhcpMsgType(Match<DhcpMessageType>),
+    IcmpMsgType(Match<IcmpMessageType>),
+    Icmpv6MsgType(Match<Icmpv6MessageType>),
+    Dhcpv6MsgType(Match<Dhcpv6MessageType>),
     Not(Box<DataPredicate>),
 }
 
@@ -562,11 +562,11 @@ impl Display for DataPredicate {
 
         match self {
             DhcpMsgType(mt) => {
-                write!(f, "dhcp.msg_type={mt}")
+                write!(f, "dhcp.msg_type{mt}")
             }
 
             IcmpMsgType(mt) => {
-                write!(f, "icmp.msg_type={mt}")
+                write!(f, "icmp.msg_type{mt}")
             }
 
             Icmpv6MsgType(mt) => {
@@ -574,7 +574,7 @@ impl Display for DataPredicate {
             }
 
             Dhcpv6MsgType(mt) => {
-                write!(f, "dhcpv6.msg_type={mt}")
+                write!(f, "dhcpv6.msg_type{mt}")
             }
 
             Not(pred) => {
@@ -625,7 +625,7 @@ impl DataPredicate {
                     }
                 };
 
-                DhcpMessageType::from(dhcp.message_type) == *mt
+                mt.is_match(&DhcpMessageType::from(dhcp.message_type))
             }
 
             Self::IcmpMsgType(mt) => {
@@ -651,7 +651,7 @@ impl DataPredicate {
                     }
                 };
 
-                IcmpMessageType::from(pkt.msg_type()) == *mt
+                mt.is_match(&IcmpMessageType::from(pkt.msg_type()))
             }
 
             Self::Icmpv6MsgType(mt) => {
@@ -666,7 +666,7 @@ impl DataPredicate {
             Self::Dhcpv6MsgType(mt) => {
                 if let Ok(buf) = rdr.slice(1) {
                     rdr.seek_back(1).expect("Failed to seek back");
-                    buf[0] == u8::from(*mt)
+                    mt.is_match(&buf[0].into())
                 } else {
                     super::err(String::from(
                         "Failed to read DHCPv6 message type from packet",
