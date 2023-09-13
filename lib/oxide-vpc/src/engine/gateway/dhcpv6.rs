@@ -8,7 +8,6 @@
 
 use crate::api::VpcCfg;
 use opte::api::Direction;
-use opte::api::Ipv6Addr;
 use opte::api::OpteError;
 use opte::engine::dhcpv6::AddressInfo;
 use opte::engine::dhcpv6::Dhcpv6Action;
@@ -41,14 +40,7 @@ pub fn setup(layer: &mut Layer, cfg: &VpcCfg) -> Result<(), OpteError> {
         client_mac: cfg.guest_mac,
         server_mac: cfg.gateway_mac,
         addrs,
-        dns_servers: vec![
-            // CloudFlare
-            Ipv6Addr::from_const([0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111]),
-            Ipv6Addr::from_const([0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1001]),
-            // Google
-            Ipv6Addr::from_const([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888]),
-            Ipv6Addr::from_const([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8844]),
-        ],
+        dns_servers: ip_cfg.dhcp.dns_servers.clone(),
         sntp_servers: vec![],
         domain_list: cfg.domain_list.clone(),
     };

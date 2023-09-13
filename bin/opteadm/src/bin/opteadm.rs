@@ -14,6 +14,7 @@ use opte::api::Direction;
 use opte::api::DomainName;
 use opte::api::IpAddr;
 use opte::api::IpCidr;
+use opte::api::Ipv4Addr;
 use opte::api::Ipv6Addr;
 use opte::api::MacAddr;
 use opte::api::Vni;
@@ -28,6 +29,7 @@ use opteadm::MAJOR_VERSION;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
+use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
 use oxide_vpc::api::FirewallAction;
 use oxide_vpc::api::FirewallRule;
@@ -47,6 +49,7 @@ use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::print::print_v2p;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Parser)]
 #[command(version=opte_pkg_version())]
 enum Command {
@@ -178,6 +181,9 @@ enum Command {
         #[command(flatten)]
         snat: Option<SnatConfig>,
 
+        #[command(flatten)]
+        dhcp: DhcpConfig,
+
         /// A comma-separated list of domain names provided to the guest,
         /// used when resolving hostnames.
         #[arg(long, value_delimiter = ',')]
@@ -273,6 +279,73 @@ impl TryFrom<SnatConfig> for SNat6Cfg {
         };
 
         Ok(SNat6Cfg { external_ip, ports: value.snat_start..=value.snat_end })
+    }
+}
+
+#[derive(Args, Debug)]
+struct DhcpConfig {
+    /// The hostname a connected guest should be provided via DHCP.
+    #[arg(long)]
+    hostname: Option<DomainName>,
+
+    /// The domain used by a guest to contruct its FQDN, provided via DHCP.
+    #[arg(long)]
+    host_domain: Option<DomainName>,
+
+    /// A comma-delimited list of DNS server IP addresses to provide over DHCP.
+    ///
+    /// These must match the IP version the port is configured for.
+    #[arg(long, value_delimiter = ',')]
+    dns_servers: Vec<IpAddr>,
+}
+
+impl TryFrom<DhcpConfig> for DhcpCfg<Ipv4Addr> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: DhcpConfig) -> Result<Self, Self::Error> {
+        let dns_servers = value
+            .dns_servers
+            .into_iter()
+            .enumerate()
+            .map(|(idx, ip)| {
+                if let IpAddr::Ip4(ip) = ip {
+                    Ok(ip)
+                } else {
+                    anyhow::bail!("DNS server #{idx}: expected Ipv4")
+                }
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self {
+            hostname: value.hostname,
+            host_domain: value.host_domain,
+            dns_servers,
+        })
+    }
+}
+
+impl TryFrom<DhcpConfig> for DhcpCfg<Ipv6Addr> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: DhcpConfig) -> Result<Self, Self::Error> {
+        let dns_servers = value
+            .dns_servers
+            .into_iter()
+            .enumerate()
+            .map(|(idx, ip)| {
+                if let IpAddr::Ip6(ip) = ip {
+                    Ok(ip)
+                } else {
+                    anyhow::bail!("DNS server #{idx}: expected Ipv6")
+                }
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self {
+            hostname: value.hostname,
+            host_domain: value.host_domain,
+            dns_servers,
+        })
     }
 }
 
@@ -389,6 +462,7 @@ fn main() -> anyhow::Result<()> {
             vpc_vni,
             src_underlay_addr,
             snat,
+            dhcp,
             domain_list,
             external_ip,
             passthrough,
@@ -407,6 +481,8 @@ fn main() -> anyhow::Result<()> {
 
                     let snat = snat.map(SNat4Cfg::try_from).transpose()?;
 
+                    let dhcp = dhcp.try_into()?;
+
                     let external_ip = match external_ip {
                         Some(IpAddr::Ip4(ip)) => Some(ip),
                         Some(IpAddr::Ip6(_)) => {
@@ -421,6 +497,7 @@ fn main() -> anyhow::Result<()> {
                         gateway_ip,
                         snat,
                         external_ips: external_ip,
+                        dhcp,
                     })
                 }
                 IpAddr::Ip6(private_ip) => {
@@ -433,6 +510,8 @@ fn main() -> anyhow::Result<()> {
                     };
 
                     let snat = snat.map(SNat6Cfg::try_from).transpose()?;
+
+                    let dhcp = dhcp.try_into()?;
 
                     let external_ip = match external_ip {
                         Some(IpAddr::Ip4(_)) => {
@@ -448,6 +527,7 @@ fn main() -> anyhow::Result<()> {
                         gateway_ip,
                         snat,
                         external_ips: external_ip,
+                        dhcp,
                     })
                 }
             };

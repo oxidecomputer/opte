@@ -70,6 +70,17 @@ pub fn setup(
         ip_cfg.gateway_ip,
     );
 
+    let mut dns_space = [None; 3];
+    let dns_servers = if ip_cfg.dhcp.dns_servers.is_empty() {
+        None
+    } else {
+        for (slot, server) in dns_space.iter_mut().zip(&ip_cfg.dhcp.dns_servers)
+        {
+            *slot = Some(*server);
+        }
+        Some(dns_space)
+    };
+
     let offer = Action::Hairpin(Arc::new(DhcpAction {
         client_mac: cfg.guest_mac,
         client_ip: ip_cfg.private_ip,
@@ -80,9 +91,10 @@ pub fn setup(
         re1,
         re2: Some(re2),
         re3: None,
-        // XXX For now at least resolve the internet.
-        dns_servers: Some([Some(Ipv4Addr::from([8, 8, 8, 8])), None, None]),
+        dns_servers,
         domain_list: cfg.domain_list.clone(),
+        hostname: ip_cfg.dhcp.hostname.clone(),
+        domain_name: ip_cfg.dhcp.host_domain.clone(),
     }));
 
     let ack = Action::Hairpin(Arc::new(DhcpAction {
@@ -95,9 +107,10 @@ pub fn setup(
         re1,
         re2: Some(re2),
         re3: None,
-        // XXX For now at least resolve the internet.
-        dns_servers: Some([Some(Ipv4Addr::from([8, 8, 8, 8])), None, None]),
+        dns_servers,
         domain_list: cfg.domain_list.clone(),
+        hostname: ip_cfg.dhcp.hostname.clone(),
+        domain_name: ip_cfg.dhcp.host_domain.clone(),
     }));
 
     let discover_rule = Rule::new(1, offer);

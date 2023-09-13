@@ -151,6 +151,12 @@ pub struct DhcpAction {
     /// A list of domain names used when resolving relative names via
     /// DNS.
     pub domain_list: Vec<DomainName>,
+
+    /// The host name a client should use.
+    pub hostname: Option<DomainName>,
+
+    /// The domain name a client should use as part of its FQDN.
+    pub domain_name: Option<DomainName>,
 }
 
 impl Display for DhcpAction {

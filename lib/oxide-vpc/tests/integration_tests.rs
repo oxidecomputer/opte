@@ -88,6 +88,7 @@ fn lab_cfg() -> VpcCfg {
             ports: 1025..=4096,
         }),
         external_ips: None,
+        dhcp: Default::default(),
     });
     VpcCfg {
         ip_cfg,
@@ -2943,6 +2944,7 @@ fn tcp_inbound() {
                 ports: 1025..=4096,
             }),
             external_ips: Some("10.60.1.20".parse().unwrap()),
+            dhcp: Default::default(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -2953,6 +2955,7 @@ fn tcp_inbound() {
                 ports: 1025..=4096,
             }),
             external_ips: None,
+            dhcp: Default::default(),
         },
     };
 

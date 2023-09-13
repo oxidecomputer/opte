@@ -115,6 +115,7 @@ pub fn g1_cfg() -> VpcCfg {
                 ports: 1025..=4096,
             }),
             external_ips: None,
+            dhcp: Default::default(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -125,6 +126,7 @@ pub fn g1_cfg() -> VpcCfg {
                 ports: 4097..=8192,
             }),
             external_ips: None,
+            dhcp: Default::default(),
         },
     };
     g1_cfg2(ip_cfg)
@@ -163,6 +165,7 @@ pub fn g2_cfg() -> VpcCfg {
                 ports: 4097..=8192,
             }),
             external_ips: None,
+            dhcp: Default::default(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -173,6 +176,7 @@ pub fn g2_cfg() -> VpcCfg {
                 ports: 1025..=4096,
             }),
             external_ips: None,
+            dhcp: Default::default(),
         },
     };
     VpcCfg {

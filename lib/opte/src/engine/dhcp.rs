@@ -180,6 +180,55 @@ impl Display for MessageType {
     }
 }
 
+#[allow(unused)]
+#[repr(u8)]
+enum CustomDhcpOptionType {
+    Pad = 0,
+    HostName = 12,
+    DomainName = 15,
+    DomainSearch = 119,
+    ClasslessRoute = 121,
+    End = u8::MAX,
+}
+
+const MAX_OPTION_LEN: usize = 255;
+
+// XXX: support long options such as domain search list.
+trait DhcpOption {
+    /// The option code associated with this DHCP option.
+    const OPTION_CODE: CustomDhcpOptionType;
+
+    /// Emit the body of a DHCP option.
+    ///
+    /// This method is used by `emit` to produce a complete packet.
+    fn write_body(&self, buf: &mut Vec<u8>);
+
+    /// Provide a number of additional bytes to allocate for this option.
+    fn body_len_estimate(&self) -> Option<u8> {
+        None
+    }
+
+    /// Emit a complete DHCP option into a packet buffer.
+    fn emit(&self, buf: &mut Vec<u8>) {
+        let start = buf.len();
+        match Self::OPTION_CODE {
+            CustomDhcpOptionType::Pad | CustomDhcpOptionType::End => {
+                buf.extend_from_slice(&[Self::OPTION_CODE as u8]);
+            }
+            _ => {
+                let extra_bytes =
+                    self.body_len_estimate().unwrap_or_default() as usize + 2;
+                buf.reserve(extra_bytes);
+                buf.extend_from_slice(&[Self::OPTION_CODE as u8, 0]);
+                self.write_body(buf);
+                let end = buf.len();
+                buf[start + 1] =
+                    u8::try_from(end - 2 - start).unwrap_or(u8::MAX);
+            }
+        }
+    }
+}
+
 /// A Classes Static Route Option (121).
 ///
 /// We must implement this type ourselves as smoltcp does not provide
@@ -212,46 +261,64 @@ impl ClasslessStaticRouteOpt {
 
         Self { routes }
     }
+}
 
-    /// The length needed to encode this value into a series of bytes
-    /// as described in RFC 3442.
-    ///
-    /// XXX Do we need to pad to 4-byte boundary?
-    pub fn encode_len(&self) -> u8 {
-        // * One byte to specify option code.
-        // * One byte to speicfy length of option value.
-        let mut total = 2u8;
+impl DhcpOption for ClasslessStaticRouteOpt {
+    const OPTION_CODE: CustomDhcpOptionType =
+        CustomDhcpOptionType::ClasslessRoute;
 
+    fn write_body(&self, buf: &mut Vec<u8>) {
         for r in &self.routes {
-            total += r.encode_len();
+            let cur = buf.len();
+            buf.resize(cur + (r.encode_len() as usize), 0);
+            r.encode(&mut buf[cur..]);
         }
-
-        total
     }
 
-    /// Encode the value to a series of bytes as described in RFC 3442.
-    pub fn encode(&self) -> Vec<u8> {
-        let len = self.encode_len();
-        assert!(len < 255);
-        let mut bytes = vec![0u8; len as usize];
-        bytes[0] = 121;
-        // The length byte indicates the length of the encoded subnet
-        // and router pairs; it does not include the option code or
-        // itself.
-        bytes[1] = len - 2;
-        let mut pos = 2;
-
-        for r in &self.routes {
-            r.encode(&mut bytes[pos..]);
-            pos += r.encode_len() as usize;
-        }
-
-        bytes
+    fn body_len_estimate(&self) -> Option<u8> {
+        Some(self.routes.iter().map(|el| el.encode_len()).sum())
     }
 }
 
-const DOMAIN_SEARCH_OPTION_OPTION_CODE: u8 = 119;
-const MAX_OPTION_LEN: usize = 255;
+/// A Host Name Option (12).
+///
+/// xxx: RFC2132
+#[derive(Debug)]
+struct HostNameOpt<'a> {
+    name: &'a DomainName,
+}
+
+impl DhcpOption for HostNameOpt<'_> {
+    const OPTION_CODE: CustomDhcpOptionType = CustomDhcpOptionType::HostName;
+
+    fn write_body(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(self.name.encode());
+    }
+
+    fn body_len_estimate(&self) -> Option<u8> {
+        self.name.encode().len().try_into().ok()
+    }
+}
+
+/// A Domain Name Option (15).
+///
+/// xxx: RFC2132
+#[derive(Clone, Debug)]
+struct DomainNameOpt<'a> {
+    name: &'a DomainName,
+}
+
+impl DhcpOption for DomainNameOpt<'_> {
+    const OPTION_CODE: CustomDhcpOptionType = CustomDhcpOptionType::DomainName;
+
+    fn write_body(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(self.name.encode());
+    }
+
+    fn body_len_estimate(&self) -> Option<u8> {
+        self.name.encode().len().try_into().ok()
+    }
+}
 
 // Encoded a list of Domain Names into a Domain Search Option, in accordance
 // with RFC 3397.
@@ -282,7 +349,7 @@ fn encode_domain_search_option(names: &[DomainName]) -> Vec<u8> {
     // Join all chunks, prefixed by the option code.
     let mut out = Vec::with_capacity(len);
     for chunk in all_names.chunks(MAX_OPTION_LEN) {
-        out.push(DOMAIN_SEARCH_OPTION_OPTION_CODE);
+        out.push(CustomDhcpOptionType::DomainSearch as u8);
         out.push(
             u8::try_from(chunk.len()).expect("Chunk length checked above"),
         );
@@ -392,22 +459,34 @@ impl HairpinAction for DhcpAction {
         let mut dhcp = DhcpPacket::new_unchecked(&mut tmp);
         reply.emit(&mut dhcp).unwrap();
 
+        // XXX: smoltcp v0.9+ allow `additional_options` in `Repr`.
+        //      This will prevent us from having to perform packet
+        //      surgery like this.
+
         // Need to overwrite the End Option with Classless Static
         // Route Option, and possibly the Domain Search Option, and then write
         // the new End Option marker.
         assert_eq!(tmp.pop(), Some(255));
-        tmp.extend_from_slice(&csr_opt.encode());
-        let dso_encode_len = if !self.domain_list.is_empty() {
+
+        // XXX: Again, we want to integrate this with smoltcp somehow.
+        //      We probably want to iterate and prealloc in one shot,
+        //      or  prebuild to suit its API.
+        csr_opt.emit(&mut tmp);
+
+        if let Some(name) = &self.hostname {
+            HostNameOpt { name }.emit(&mut tmp)
+        }
+
+        if let Some(name) = &self.domain_name {
+            DomainNameOpt { name }.emit(&mut tmp)
+        }
+
+        if !self.domain_list.is_empty() {
             let encoded = encode_domain_search_option(&self.domain_list);
             tmp.extend_from_slice(&encoded);
-            encoded.len()
-        } else {
-            0
-        };
+        }
+
         tmp.push(255);
-        let expected_len =
-            reply_len + csr_opt.encode_len() as usize + dso_encode_len;
-        assert_eq!(tmp.len(), expected_len);
 
         let mut udp = UdpMeta {
             src: 67,
@@ -443,6 +522,8 @@ impl HairpinAction for DhcpAction {
             ether_type: EtherType::Ipv4,
         };
 
+        // XXX: Would be preferable to write in here directly rather than
+        //      allocing tmp.
         let total_len =
             EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + UdpHdr::SIZE + tmp.len();
         let mut pkt = Packet::alloc_and_expand(total_len);
@@ -480,8 +561,10 @@ mod test {
         };
 
         let opt = ClasslessStaticRouteOpt::new(if_ip, Some(gw), None);
+        let mut buf = vec![];
+        opt.emit(&mut buf);
         assert_eq!(
-            opt.encode(),
+            buf,
             vec![121, 14, 32, 172, 30, 7, 77, 0, 0, 0, 0, 0, 172, 30, 4, 1]
         );
     }
@@ -545,17 +628,20 @@ mod test {
         };
 
         let opt = ClasslessStaticRouteOpt::new(p1, None, None);
-        assert_eq!(opt.encode(), vec![121, 5, 0, 10, 0, 0, 1]);
+        let mut buf = vec![];
+        opt.emit(&mut buf);
+        assert_eq!(buf, vec![121, 5, 0, 10, 0, 0, 1]);
 
         let opt = ClasslessStaticRouteOpt::new(p1, Some(p2), None);
-        assert_eq!(
-            opt.encode(),
-            vec![121, 11, 0, 10, 0, 0, 1, 8, 10, 10, 0, 0, 1]
-        );
+        let mut buf = vec![];
+        opt.emit(&mut buf);
+        assert_eq!(buf, vec![121, 11, 0, 10, 0, 0, 1, 8, 10, 10, 0, 0, 1]);
 
         let opt = ClasslessStaticRouteOpt::new(p1, Some(p2), Some(p3));
+        let mut buf = vec![];
+        opt.emit(&mut buf);
         assert_eq!(
-            opt.encode(),
+            buf,
             vec![
                 121, 19, 0, 10, 0, 0, 1, 8, 10, 10, 0, 0, 1, 24, 10, 0, 0, 10,
                 0, 0, 1
@@ -563,19 +649,25 @@ mod test {
         );
 
         let opt = ClasslessStaticRouteOpt::new(p4, None, None);
-        assert_eq!(opt.encode(), vec![121, 7, 16, 10, 17, 10, 0, 0, 1],);
+        let mut buf = vec![];
+        opt.emit(&mut buf);
+        assert_eq!(buf, vec![121, 7, 16, 10, 17, 10, 0, 0, 1],);
 
         let opt = ClasslessStaticRouteOpt::new(p4, Some(p5), None);
+        let mut buf = vec![];
+        opt.emit(&mut buf);
         assert_eq!(
-            opt.encode(),
+            buf,
             vec![
                 121, 15, 16, 10, 17, 10, 0, 0, 1, 24, 10, 27, 129, 10, 0, 0, 1
             ],
         );
 
         let opt = ClasslessStaticRouteOpt::new(p4, Some(p5), Some(p6));
+        let mut buf = vec![];
+        opt.emit(&mut buf);
         assert_eq!(
-            opt.encode(),
+            buf,
             vec![
                 121, 24, 16, 10, 17, 10, 0, 0, 1, 24, 10, 27, 129, 10, 0, 0, 1,
                 25, 10, 229, 0, 128, 10, 0, 0, 1
@@ -583,8 +675,10 @@ mod test {
         );
 
         let opt = ClasslessStaticRouteOpt::new(p6, Some(p7), None);
+        let mut buf = vec![];
+        opt.emit(&mut buf);
         assert_eq!(
-            opt.encode(),
+            buf,
             vec![
                 121, 18, 25, 10, 229, 0, 128, 10, 0, 0, 1, 32, 10, 198, 122,
                 47, 10, 0, 0, 1
@@ -592,8 +686,10 @@ mod test {
         );
 
         let opt = ClasslessStaticRouteOpt::new(p6, Some(p7), Some(p8));
+        let mut buf = vec![];
+        opt.emit(&mut buf);
         assert_eq!(
-            opt.encode(),
+            buf,
             vec![
                 121, 25, 25, 10, 229, 0, 128, 10, 0, 0, 1, 32, 10, 198, 122,
                 47, 10, 0, 0, 1, 15, 10, 16, 10, 0, 0, 1
@@ -629,9 +725,12 @@ mod test {
         }
         // There should be two actual options in the output, check the option
         // code and option lengths are inserted correctly.
-        assert_eq!(buf[0], DOMAIN_SEARCH_OPTION_OPTION_CODE);
+        assert_eq!(buf[0], CustomDhcpOptionType::DomainSearch as u8);
         assert_eq!(buf[1], u8::try_from(MAX_OPTION_LEN).unwrap());
-        assert_eq!(buf[MAX_OPTION_LEN + 2], DOMAIN_SEARCH_OPTION_OPTION_CODE);
+        assert_eq!(
+            buf[MAX_OPTION_LEN + 2],
+            CustomDhcpOptionType::DomainSearch as u8
+        );
         assert_eq!(
             buf[MAX_OPTION_LEN + 3],
             u8::try_from(option_bytes.len() - MAX_OPTION_LEN).unwrap()
