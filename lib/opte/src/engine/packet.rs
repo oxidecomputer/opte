@@ -2251,6 +2251,7 @@ pub enum ReadErr {
     NotEnoughBytes,
     OutOfRange,
     StraddledRead,
+    NotImplemented,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

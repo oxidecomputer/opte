@@ -379,10 +379,18 @@ impl StaticAction for DecapAction {
     ) -> GenHtResult {
         match &pkt_meta.outer.encap {
             Some(EncapMeta::Geneve(geneve)) => {
-                action_meta.insert(
-                    ACTION_META_VNI.to_string(),
-                    geneve.vni.to_string(),
-                );
+                // We only conditionally add this metadata because the
+                // `Address::VNI` filter uses it to select VPC-originated
+                // traffic.
+                // External packets carry an extra Geneve tag from the
+                // switch during NAT -- if found, `oxide_external_packet`
+                // is filled.
+                if !geneve.oxide_external_pkt {
+                    action_meta.insert(
+                        ACTION_META_VNI.to_string(),
+                        geneve.vni.to_string(),
+                    );
+                }
             }
 
             // This should be impossible. Non-encapsulated traffic

@@ -23,6 +23,8 @@ pub use opte::engine::ether::EtherMeta;
 pub use opte::engine::ether::EtherType;
 pub use opte::engine::geneve::GeneveHdr;
 pub use opte::engine::geneve::GeneveMeta;
+pub use opte::engine::geneve::GeneveOption;
+pub use opte::engine::geneve::OxideOption;
 pub use opte::engine::geneve::Vni;
 pub use opte::engine::geneve::GENEVE_PORT;
 pub use opte::engine::headers::IpAddr;
@@ -863,12 +865,34 @@ pub struct TestIpPhys {
     pub vni: Vni,
 }
 
+/// Encapsulate a guest packet, marking that it has arrived from beyond
+/// the rack.
+#[must_use]
+pub fn encap_external(
+    inner_pkt: Packet<Parsed>,
+    src: TestIpPhys,
+    dst: TestIpPhys,
+) -> Packet<Parsed> {
+    _encap(inner_pkt, src, dst, true)
+}
+
 /// Encapsulate a guest packet.
 #[must_use]
 pub fn encap(
     inner_pkt: Packet<Parsed>,
     src: TestIpPhys,
     dst: TestIpPhys,
+) -> Packet<Parsed> {
+    _encap(inner_pkt, src, dst, false)
+}
+
+/// Encapsulate a guest packet.
+#[must_use]
+fn _encap(
+    inner_pkt: Packet<Parsed>,
+    src: TestIpPhys,
+    dst: TestIpPhys,
+    external_snat: bool,
 ) -> Packet<Parsed> {
     let inner_ip_len = inner_pkt.hdr_offsets().inner.ip.map(|off| off.hdr_len);
 
@@ -877,10 +901,19 @@ pub fn encap(
 
     let inner_len = inner_pkt.len();
 
+    let opt_len = if external_snat {
+        GeneveOption::Oxide(OxideOption::External).len()
+    } else {
+        0
+    };
+
     let geneve = GeneveMeta {
         entropy: 99,
         vni: dst.vni,
-        len: (UdpHdr::SIZE + GeneveHdr::BASE_SIZE + inner_len) as u16,
+        len: (UdpHdr::SIZE + GeneveHdr::BASE_SIZE + opt_len + inner_len) as u16,
+        oxide_external_pkt: external_snat,
+
+        ..Default::default()
     };
 
     let ip = Ipv6Meta {

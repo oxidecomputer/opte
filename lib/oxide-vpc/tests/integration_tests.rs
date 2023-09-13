@@ -1045,7 +1045,7 @@ fn snat_icmp4_echo_rewrite() {
         mac: g1_cfg.guest_mac,
         vni: g1_cfg.vni,
     };
-    pkt2 = encap(pkt2, bsvc_phys, g1_phys);
+    pkt2 = encap_external(pkt2, bsvc_phys, g1_phys);
 
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
@@ -2344,7 +2344,7 @@ fn establish_http_conn(
         mac: g1_cfg.guest_mac,
         vni: g1_cfg.vni,
     };
-    pkt2 = encap(pkt2, bs_phys, g1_phys);
+    pkt2 = encap_external(pkt2, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
@@ -2518,7 +2518,7 @@ fn uft_lft_invalidation_in() {
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    pkt2 = encap(pkt2, bs_phys, g1_phys);
+    pkt2 = encap_external(pkt2, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert!(matches!(res, Ok(Modified)));
@@ -2554,7 +2554,7 @@ fn uft_lft_invalidation_in() {
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    pkt3 = encap(pkt3, bs_phys, g1_phys);
+    pkt3 = encap_external(pkt3, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt3, ActionMeta::new());
     assert_drop!(
         res,
@@ -2637,7 +2637,7 @@ fn tcp_outbound() {
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    pkt2 = encap(pkt2, bs_phys, g1_phys);
+    pkt2 = encap_external(pkt2, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
@@ -2681,7 +2681,7 @@ fn tcp_outbound() {
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    pkt5 = encap(pkt5, bs_phys, g1_phys);
+    pkt5 = encap_external(pkt5, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt5, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
@@ -2697,7 +2697,7 @@ fn tcp_outbound() {
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    pkt6 = encap(pkt6, bs_phys, g1_phys);
+    pkt6 = encap_external(pkt6, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt6, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
@@ -2741,7 +2741,7 @@ fn tcp_outbound() {
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    pkt9 = encap(pkt9, bs_phys, g1_phys);
+    pkt9 = encap_external(pkt9, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt9, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
@@ -2757,7 +2757,7 @@ fn tcp_outbound() {
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    pkt10 = encap(pkt10, bs_phys, g1_phys);
+    pkt10 = encap_external(pkt10, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt10, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);

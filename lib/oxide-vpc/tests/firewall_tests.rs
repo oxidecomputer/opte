@@ -316,3 +316,68 @@ fn firewall_vni_outbound() {
         ]
     );
 }
+
+// Inbound traffic from the Internet/customer network will have the same
+// VNI as its intended recipient. The default rules should prevent
+// such traffic from reaching the VM on a flow miss -- we check for the
+// presence of an 'External' Geneve option.
+// Verify that this traffic is filtered out if there is not already a
+// flowtable entry created
+#[test]
+fn firewall_external_inbound() {
+    // ================================================================
+    // Setup g1 as usual.
+    // ================================================================
+    let mut g1_cfg = g1_cfg();
+    let g1_ext_ip = "10.77.78.9".parse().unwrap();
+    g1_cfg.set_ext_ipv4(g1_ext_ip);
+    let custom = ["set:nat.rules.in=1", "set:nat.rules.out=3"];
+    let mut g1 =
+        oxide_net_setup2("g1_port", &g1_cfg, None, None, Some(&custom));
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // ================================================================
+    // Create a packet which has been appropriately NAT'd (i.e., IP
+    // dest on internal packet matches guest) and encapped by boundary
+    // services.
+    //
+    // This will appear on the same VNI as guest.
+    // ================================================================
+    let bsvc_phys = TestIpPhys {
+        ip: g1_cfg.boundary_services.ip,
+        mac: g1_cfg.boundary_services.mac,
+        vni: g1_cfg.vni,
+    };
+    let guest_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    let mut pkt1 = http_syn2(
+        g1_cfg.boundary_services.mac,
+        std::net::IpAddr::from([1, 1, 1, 1]),
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+    );
+    pkt1 = encap_external(pkt1, bsvc_phys, guest_phys);
+
+    // ================================================================
+    // Verify that g1's firewall rejects this packet, as the default
+    // VPC firewall rules dictate that only inbound traffic from the
+    // same VPC should be allowed.
+    // ================================================================
+    let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
+    assert_drop!(
+        res,
+        DropReason::Layer { name: "firewall", reason: DenyReason::Default }
+    );
+    incr!(
+        g1,
+        [
+            "stats.port.in_drop, stats.port.in_drop_layer",
+            "stats.port.in_uft_miss"
+        ]
+    );
+}
