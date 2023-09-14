@@ -677,3 +677,39 @@ impl DataPredicate {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use smoltcp::wire::DhcpMessageType as SmolDhcpType;
+    use smoltcp::wire::Icmpv4Message;
+    use smoltcp::wire::Icmpv6Message;
+
+    // Some 'enum with unknown' ways of encoding message types
+    // can have some unexpected behaviour with PartialOrd -- we
+    // need to sort on the underlying representation for range
+    // matches to be sensible.
+    #[test]
+    fn data_predicate_ranges_handle_unknown() {
+        let dhcp_range: Match<DhcpMessageType> = (SmolDhcpType::Discover.into()
+            ..=SmolDhcpType::Decline.into())
+            .into();
+        let icmp_range: Match<IcmpMessageType> =
+            (Icmpv4Message::EchoReply.into()..=Icmpv4Message::Redirect.into())
+                .into();
+        let dhcp6_range: Match<Dhcpv6MessageType> =
+            (Dhcpv6MessageType::Renew..=Dhcpv6MessageType::Reply).into();
+
+        let icmp6_range: Match<Icmpv6MessageType> =
+            (Icmpv6Message::RouterSolicit.into()
+                ..=Icmpv6Message::Redirect.into())
+                .into();
+
+        // The `Unknown` cases here are artificial (i.e., the opcode is understood)
+        // in case the underlying repr adds support for a test opcode.
+        assert!(dhcp_range.is_match(&SmolDhcpType::Unknown(2).into()));
+        assert!(icmp_range.is_match(&Icmpv4Message::Unknown(3).into()));
+        assert!(dhcp6_range.is_match(&Dhcpv6MessageType::Other(6).into()));
+        assert!(icmp6_range.is_match(&Icmpv6Message::Unknown(0x86).into()));
+    }
+}

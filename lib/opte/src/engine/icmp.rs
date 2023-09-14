@@ -140,12 +140,16 @@ impl HairpinAction for IcmpEchoReply {
 /// predicates. We call this "message type" instead of just "message"
 /// because that's what it is: the type field of the larger ICMP
 /// message.
-#[derive(
-    Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(from = "u8", into = "u8")]
 pub struct MessageType {
     inner: wire::Icmpv4Message,
+}
+
+impl PartialOrd for MessageType {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        u8::from(*self).partial_cmp(&u8::from(*other))
+    }
 }
 
 impl From<wire::Icmpv4Message> for MessageType {
