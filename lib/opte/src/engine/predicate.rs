@@ -709,7 +709,7 @@ mod tests {
         // in case the underlying repr adds support for a test opcode.
         assert!(dhcp_range.is_match(&SmolDhcpType::Unknown(2).into()));
         assert!(icmp_range.is_match(&Icmpv4Message::Unknown(3).into()));
-        assert!(dhcp6_range.is_match(&Dhcpv6MessageType::Other(6).into()));
+        assert!(dhcp6_range.is_match(&Dhcpv6MessageType::Other(6)));
         assert!(icmp6_range.is_match(&Icmpv6Message::Unknown(0x86).into()));
     }
 }
