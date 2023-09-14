@@ -176,12 +176,22 @@ impl<'a> RawHeader<'a> for Icmpv6HdrRaw {
 }
 
 /// An ICMPv6 message type
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(from = "u8", into = "u8")]
 pub struct MessageType {
     inner: Icmpv6Message,
+}
+
+impl PartialOrd for MessageType {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MessageType {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        u8::from(*self).cmp(&u8::from(*other))
+    }
 }
 
 impl From<Icmpv6Message> for MessageType {
@@ -226,9 +236,9 @@ impl HairpinAction for Icmpv6EchoReply {
             )]),
         ];
 
-        let data_preds = vec![DataPredicate::Icmpv6MsgType(MessageType::from(
-            Icmpv6Message::EchoRequest,
-        ))];
+        let data_preds = vec![DataPredicate::Icmpv6MsgType(
+            MessageType::from(Icmpv6Message::EchoRequest).into(),
+        )];
 
         (hdr_preds, data_preds)
     }
@@ -363,9 +373,9 @@ impl HairpinAction for RouterAdvertisement {
 
         let data_preds = vec![
             // This must be a Router Solicitation message.
-            DataPredicate::Icmpv6MsgType(MessageType::from(
-                Icmpv6Message::RouterSolicit,
-            )),
+            DataPredicate::Icmpv6MsgType(
+                MessageType::from(Icmpv6Message::RouterSolicit).into(),
+            ),
         ];
 
         (hdr_preds, data_preds)
@@ -702,9 +712,9 @@ impl HairpinAction for NeighborAdvertisement {
 
         let data_preds = vec![
             // This must be an actual Neighbor Solicitation message
-            DataPredicate::Icmpv6MsgType(MessageType::from(
-                Icmpv6Message::NeighborSolicit,
-            )),
+            DataPredicate::Icmpv6MsgType(
+                MessageType::from(Icmpv6Message::NeighborSolicit).into(),
+            ),
         ];
 
         (hdr_preds, data_preds)

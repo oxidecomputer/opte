@@ -24,6 +24,7 @@ use super::packet::PacketRead;
 use super::port::meta::ActionMeta;
 use core::fmt;
 use core::fmt::Display;
+use core::ops::RangeInclusive;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
@@ -506,11 +507,52 @@ impl Predicate {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum Match<T> {
+    Exact(T),
+    Range(RangeInclusive<T>),
+}
+
+impl<T> Match<T>
+where
+    T: PartialEq + PartialOrd,
+{
+    pub(crate) fn is_match(&self, val: &T) -> bool {
+        match self {
+            Self::Exact(target) => val == target,
+            Self::Range(range) => range.contains(val),
+        }
+    }
+}
+
+impl<T: Display> Display for Match<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exact(target) => write!(f, "={target}"),
+            Self::Range(range) => {
+                write!(f, "∈({}..={})", range.start(), range.end())
+            }
+        }
+    }
+}
+
+impl<T> From<T> for Match<T> {
+    fn from(value: T) -> Self {
+        Match::Exact(value)
+    }
+}
+
+impl<T> From<RangeInclusive<T>> for Match<T> {
+    fn from(value: RangeInclusive<T>) -> Self {
+        Match::Range(value)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DataPredicate {
-    DhcpMsgType(DhcpMessageType),
-    IcmpMsgType(IcmpMessageType),
-    Icmpv6MsgType(Icmpv6MessageType),
-    Dhcpv6MsgType(Dhcpv6MessageType),
+    DhcpMsgType(Match<DhcpMessageType>),
+    IcmpMsgType(Match<IcmpMessageType>),
+    Icmpv6MsgType(Match<Icmpv6MessageType>),
+    Dhcpv6MsgType(Match<Dhcpv6MessageType>),
     Not(Box<DataPredicate>),
 }
 
@@ -520,19 +562,19 @@ impl Display for DataPredicate {
 
         match self {
             DhcpMsgType(mt) => {
-                write!(f, "dhcp.msg_type={}", mt)
+                write!(f, "dhcp.msg_type{mt}")
             }
 
             IcmpMsgType(mt) => {
-                write!(f, "icmp.msg_type={}", mt)
+                write!(f, "icmp.msg_type{mt}")
             }
 
             Icmpv6MsgType(mt) => {
-                write!(f, "icmpv6.msg_type={}", mt)
+                write!(f, "icmpv6.msg_type{mt}")
             }
 
             Dhcpv6MsgType(mt) => {
-                write!(f, "dhcpv6.msg_type={}", mt)
+                write!(f, "dhcpv6.msg_type{mt}")
             }
 
             Not(pred) => {
@@ -583,7 +625,7 @@ impl DataPredicate {
                     }
                 };
 
-                DhcpMessageType::from(dhcp.message_type) == *mt
+                mt.is_match(&DhcpMessageType::from(dhcp.message_type))
             }
 
             Self::IcmpMsgType(mt) => {
@@ -609,7 +651,7 @@ impl DataPredicate {
                     }
                 };
 
-                IcmpMessageType::from(pkt.msg_type()) == *mt
+                mt.is_match(&IcmpMessageType::from(pkt.msg_type()))
             }
 
             Self::Icmpv6MsgType(mt) => {
@@ -618,13 +660,13 @@ impl DataPredicate {
                     return false;
                 };
 
-                icmp6.msg_type == *mt
+                mt.is_match(&icmp6.msg_type)
             }
 
             Self::Dhcpv6MsgType(mt) => {
                 if let Ok(buf) = rdr.slice(1) {
                     rdr.seek_back(1).expect("Failed to seek back");
-                    buf[0] == u8::from(*mt)
+                    mt.is_match(&buf[0].into())
                 } else {
                     super::err(String::from(
                         "Failed to read DHCPv6 message type from packet",
@@ -633,5 +675,41 @@ impl DataPredicate {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use smoltcp::wire::DhcpMessageType as SmolDhcpType;
+    use smoltcp::wire::Icmpv4Message;
+    use smoltcp::wire::Icmpv6Message;
+
+    // Some 'enum with unknown' ways of encoding message types
+    // can have some unexpected behaviour with PartialOrd -- we
+    // need to sort on the underlying representation for range
+    // matches to be sensible.
+    #[test]
+    fn data_predicate_ranges_handle_unknown() {
+        let dhcp_range: Match<DhcpMessageType> = (SmolDhcpType::Discover.into()
+            ..=SmolDhcpType::Decline.into())
+            .into();
+        let icmp_range: Match<IcmpMessageType> =
+            (Icmpv4Message::EchoReply.into()..=Icmpv4Message::Redirect.into())
+                .into();
+        let dhcp6_range: Match<Dhcpv6MessageType> =
+            (Dhcpv6MessageType::Renew..=Dhcpv6MessageType::Reply).into();
+
+        let icmp6_range: Match<Icmpv6MessageType> =
+            (Icmpv6Message::RouterSolicit.into()
+                ..=Icmpv6Message::Redirect.into())
+                .into();
+
+        // The `Unknown` cases here are artificial (i.e., the opcode is understood)
+        // in case the underlying repr adds support for a test opcode.
+        assert!(dhcp_range.is_match(&SmolDhcpType::Unknown(2).into()));
+        assert!(icmp_range.is_match(&Icmpv4Message::Unknown(3).into()));
+        assert!(dhcp6_range.is_match(&Dhcpv6MessageType::Other(6)));
+        assert!(icmp6_range.is_match(&Icmpv6Message::Unknown(0x86).into()));
     }
 }

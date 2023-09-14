@@ -9,10 +9,8 @@
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::sync::Arc;
-        use alloc::vec::Vec;
     } else {
         use std::sync::Arc;
-        use std::vec::Vec;
     }
 }
 
@@ -26,8 +24,10 @@ use opte::engine::icmpv6::Icmpv6EchoReply;
 use opte::engine::icmpv6::NeighborAdvertisement;
 use opte::engine::icmpv6::RouterAdvertisement;
 use opte::engine::layer::Layer;
+use opte::engine::predicate::DataPredicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
+use smoltcp::wire::Icmpv6Message;
 
 // Add support for ICMPv6:
 //
@@ -47,39 +47,36 @@ pub fn setup(
     cfg: &VpcCfg,
     ip_cfg: &Ipv6Cfg,
 ) -> Result<(), OpteError> {
-    // We need to hairpin echo requests from either the VPC-private or
-    // link-local address of the guest, to OPTE's link-local.
-    let src_ips = [ip_cfg.private_ip, Ipv6Addr::from_eui64(&cfg.guest_mac)];
     let dst_ip = Ipv6Addr::from_eui64(&cfg.gateway_mac);
-    let n_pings = src_ips.len();
-    let mut rule_actions = Vec::with_capacity(n_pings + 2);
-    for src_ip in src_ips.iter().copied() {
-        let echo = Action::Hairpin(Arc::new(Icmpv6EchoReply {
+    let hairpins = [
+        // We need to hairpin echo requests from either the VPC-private or
+        // link-local address of the guest, to OPTE's link-local.
+        Action::Hairpin(Arc::new(Icmpv6EchoReply {
             src_mac: cfg.guest_mac,
-            src_ip,
+            src_ip: ip_cfg.private_ip,
             dst_mac: cfg.gateway_mac,
             dst_ip,
-        }));
-        rule_actions.push(echo);
-    }
-
-    // Map an NDP Router Solicitation from the guest to a Router Advertisement
-    // from the OPTE virtual gateway's link-local IPv6 address.
-    let router_advert = Action::Hairpin(Arc::new(RouterAdvertisement::new(
-        // From the guest's VPC MAC.
-        cfg.guest_mac,
-        // The MAC from which we respond, i.e., OPTE's MAC.
-        cfg.gateway_mac,
-        // "Managed Configuration", indicating the guest needs to use DHCPv6 to
-        // acquire an IPv6 address.
-        true,
-    )));
-    rule_actions.push(router_advert);
-
-    // Map an NDP Neighbor Solicitation from the guest to a neighbor
-    // advertisement from the OPTE virtual gateway. Note that this is required
-    // per RFC 4861 so that the guest does not mark the neighbor failed.
-    let neighbor_advert =
+        })),
+        Action::Hairpin(Arc::new(Icmpv6EchoReply {
+            src_mac: cfg.guest_mac,
+            src_ip: Ipv6Addr::from_eui64(&cfg.guest_mac),
+            dst_mac: cfg.gateway_mac,
+            dst_ip,
+        })),
+        // Map an NDP Router Solicitation from the guest to a Router Advertisement
+        // from the OPTE virtual gateway's link-local IPv6 address.
+        Action::Hairpin(Arc::new(RouterAdvertisement::new(
+            // From the guest's VPC MAC.
+            cfg.guest_mac,
+            // The MAC from which we respond, i.e., OPTE's MAC.
+            cfg.gateway_mac,
+            // "Managed Configuration", indicating the guest needs to use DHCPv6 to
+            // acquire an IPv6 address.
+            true,
+        ))),
+        // Map an NDP Neighbor Solicitation from the guest to a neighbor
+        // advertisement from the OPTE virtual gateway. Note that this is required
+        // per RFC 4861 so that the guest does not mark the neighbor failed.
         Action::Hairpin(Arc::new(NeighborAdvertisement::new(
             // From the guest's VPC MAC.
             cfg.guest_mac,
@@ -89,17 +86,32 @@ pub fn setup(
             true,
             // Respond to solicitations from `::`
             true,
-        )));
-    rule_actions.push(neighbor_advert);
+        ))),
+    ];
 
-    let n_rule_actions = rule_actions.len();
-
+    // UNWRAP SAFETY: There are far fewer than 65535 rules inserted here.
+    let next_out_prio = u16::try_from(hairpins.len() + 1).unwrap();
     // Add rules for the above actions.
-    for i in 0..n_rule_actions {
+    hairpins.into_iter().enumerate().for_each(|(i, action)| {
         let priority = u16::try_from(i + 1).unwrap();
-        let rule = Rule::new(priority, rule_actions.remove(0));
+        let rule = Rule::new(priority, action);
         layer.add_rule(Direction::Out, rule.finalize());
-    }
+    });
+
+    // Filter any uncaught in/out-bound NDP traffic.
+    let pred = DataPredicate::Icmpv6MsgType(
+        (Icmpv6Message::RouterSolicit.into()..=Icmpv6Message::Redirect.into())
+            .into(),
+    );
+    let in_pred = pred.clone();
+
+    let mut ndp_filter = Rule::new(next_out_prio, Action::Deny);
+    ndp_filter.add_data_predicate(pred);
+    layer.add_rule(Direction::Out, ndp_filter.finalize());
+
+    let mut ndp_filter = Rule::new(1, Action::Deny);
+    ndp_filter.add_data_predicate(in_pred);
+    layer.add_rule(Direction::In, ndp_filter.finalize());
 
     Ok(())
 }

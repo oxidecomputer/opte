@@ -61,9 +61,9 @@ impl HairpinAction for IcmpEchoReply {
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::ICMP)]),
         ];
 
-        let data_preds = vec![DataPredicate::IcmpMsgType(MessageType::from(
-            wire::Icmpv4Message::EchoRequest,
-        ))];
+        let data_preds = vec![DataPredicate::IcmpMsgType(
+            MessageType::from(wire::Icmpv4Message::EchoRequest).into(),
+        )];
 
         (hdr_preds, data_preds)
     }
@@ -144,6 +144,12 @@ impl HairpinAction for IcmpEchoReply {
 #[serde(from = "u8", into = "u8")]
 pub struct MessageType {
     inner: wire::Icmpv4Message,
+}
+
+impl PartialOrd for MessageType {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        u8::from(*self).partial_cmp(&u8::from(*other))
+    }
 }
 
 impl From<wire::Icmpv4Message> for MessageType {

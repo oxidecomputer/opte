@@ -128,6 +128,12 @@ impl From<MessageType> for u8 {
     }
 }
 
+impl PartialOrd for MessageType {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        u8::from(*self).partial_cmp(&u8::from(*other))
+    }
+}
+
 /// A DHCPv6 message.
 ///
 /// All DHCPv6 transactions occur through this type. Clients send messages,

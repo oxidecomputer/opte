@@ -68,6 +68,12 @@ pub struct MessageType {
     inner: smoltcp::wire::DhcpMessageType,
 }
 
+impl PartialOrd for MessageType {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        u8::from(*self).partial_cmp(&u8::from(*other))
+    }
+}
+
 impl From<smoltcp::wire::DhcpMessageType> for MessageType {
     fn from(inner: smoltcp::wire::DhcpMessageType) -> Self {
         Self { inner }
@@ -316,15 +322,15 @@ impl HairpinAction for DhcpAction {
 
         let data_preds = match self.reply_type {
             DhcpReplyType::Offer => {
-                vec![DataPredicate::DhcpMsgType(MessageType::from(
-                    SmolDMT::Discover,
-                ))]
+                vec![DataPredicate::DhcpMsgType(
+                    MessageType::from(SmolDMT::Discover).into(),
+                )]
             }
 
             DhcpReplyType::Ack => {
-                vec![DataPredicate::DhcpMsgType(MessageType::from(
-                    SmolDMT::Request,
-                ))]
+                vec![DataPredicate::DhcpMsgType(
+                    MessageType::from(SmolDMT::Request).into(),
+                )]
             }
         };
 
