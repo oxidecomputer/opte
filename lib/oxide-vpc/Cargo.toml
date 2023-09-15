@@ -39,12 +39,7 @@ smoltcp.workspace = true
 zerocopy.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 ctor.workspace = true
 opte-test-utils.workspace = true
 pcap-parser = { workspace = true, features = ["serialize"] }
 usdt.workspace = true
-
-[[bench]]
-name = "userland"
-harness = false

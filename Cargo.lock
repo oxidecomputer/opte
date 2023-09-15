@@ -892,6 +892,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "opte-bench"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "ctor",
+ "opte",
+ "opte-test-utils",
+ "oxide-vpc",
+ "smoltcp",
+]
+
+[[package]]
 name = "opte-ioctl"
 version = "0.1.0"
 dependencies = [
@@ -936,7 +948,6 @@ name = "oxide-vpc"
 version = "0.1.0"
 dependencies = [
  "cfg-if 0.1.10",
- "criterion",
  "ctor",
  "illumos-sys-hdrs",
  "opte",

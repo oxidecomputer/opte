@@ -1,0 +1,26 @@
+[package]
+name = "opte-bench"
+version = "0.1.0"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+
+[features]
+default = ["alloc"]
+alloc = []
+
+[dependencies]
+criterion.workspace = true
+
+[dev-dependencies]
+ctor.workspace = true
+opte.workspace = true
+opte-test-utils.workspace = true
+oxide-vpc.workspace = true
+smoltcp.workspace = true
+
+[[bench]]
+name = "userland"
+harness = false
