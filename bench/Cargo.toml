@@ -13,12 +13,12 @@ alloc = []
 
 [dependencies]
 criterion.workspace = true
-
-[dev-dependencies]
-ctor.workspace = true
 opte.workspace = true
 opte-test-utils.workspace = true
 oxide-vpc.workspace = true
+
+[dev-dependencies]
+ctor.workspace = true
 smoltcp.workspace = true
 
 [[bench]]

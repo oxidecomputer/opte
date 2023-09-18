@@ -221,5 +221,6 @@ pub fn new_crit<T: MemMeasure>(val: T) -> Criterion<Local<T>> {
         .measurement_time(Duration::from_micros(10))
         .nresamples(1)
         // There seems to be a bug when all samples have the same value.
+        // Equally, all t_tests are getting bogged down between calls...
         .without_plots()
 }
