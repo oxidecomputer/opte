@@ -150,6 +150,77 @@ pub fn gen_icmp_echo(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn gen_icmp_echo_unparsed(
+    etype: IcmpEchoType,
+    eth_src: MacAddr,
+    eth_dst: MacAddr,
+    ip_src: Ipv4Addr,
+    ip_dst: Ipv4Addr,
+    ident: u16,
+    seq_no: u16,
+    data: &[u8],
+    segments: usize,
+) -> Packet<Initialized> {
+    let icmp = match etype {
+        IcmpEchoType::Req => Icmpv4Repr::EchoRequest { ident, seq_no, data },
+        IcmpEchoType::Reply => Icmpv4Repr::EchoReply { ident, seq_no, data },
+    };
+    let mut icmp_bytes = vec![0u8; icmp.buffer_len()];
+    let mut icmp_pkt = Icmpv4Packet::new_unchecked(&mut icmp_bytes);
+    icmp.emit(&mut icmp_pkt, &Default::default());
+
+    let mut ip4 = Ipv4Meta {
+        src: ip_src,
+        dst: ip_dst,
+        proto: Protocol::ICMP,
+        total_len: (Ipv4Hdr::BASE_SIZE + icmp.buffer_len()) as u16,
+        ..Default::default()
+    };
+    ip4.compute_hdr_csum();
+    let eth =
+        &EtherMeta { dst: eth_dst, src: eth_src, ether_type: EtherType::Ipv4 };
+
+    let total_len = EtherHdr::SIZE + ip4.hdr_len() + icmp.buffer_len();
+
+    match segments {
+        1 => {
+            let mut pkt = Packet::alloc_and_expand(total_len);
+            let mut wtr = pkt.seg0_wtr();
+            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
+            wtr.write(&icmp_bytes).unwrap();
+
+            pkt
+        }
+        2 => {
+            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
+            let mut wtr = pkt.seg_wtr(0);
+            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+            let mut wtr =
+                pkt.add_seg(ip4.hdr_len() + icmp_bytes.len()).unwrap();
+            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
+            wtr.write(&icmp_bytes).unwrap();
+
+            pkt
+        }
+        3 => {
+            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
+            let mut wtr = pkt.seg_wtr(0);
+            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+            let mut wtr = pkt.add_seg(ip4.hdr_len()).unwrap();
+            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
+            let mut wtr = pkt.add_seg(icmp_bytes.len()).unwrap();
+            wtr.write(&icmp_bytes).unwrap();
+
+            pkt
+        }
+        _ => {
+            panic!("only 1 2 or 3 segments allowed")
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn gen_icmpv6_echo_req(
     eth_src: MacAddr,
     eth_dst: MacAddr,

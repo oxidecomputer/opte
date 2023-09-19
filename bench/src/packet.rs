@@ -1,25 +1,15 @@
+use opte::engine::dhcpv6::MessageType;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
 use opte::engine::Direction;
-
-use opte::engine::dhcpv6::MessageType;
-
-use super::alloc::*;
-use super::MeasurementInfo;
-use criterion::criterion_group;
-use criterion::criterion_main;
-use criterion::Criterion;
 use opte_test_utils::dhcp::dhcpv6_with_reasonable_defaults;
 use opte_test_utils::dhcp::packet_from_client_dhcpv6_message_unparsed;
-use opte_test_utils::icmp::gen_icmp_echo_req;
+use opte_test_utils::icmp::gen_icmp_echo_unparsed;
 use opte_test_utils::*;
-use std::fmt::Debug;
-use std::hint::black_box;
-use std::vec;
 
 // XXX: elements to keep in mind -- pkt dir, client config (may live in PARAMETER?)
 
-///
+/// A family of related parse/process testcases to benchmark.
 pub trait BenchPacket {
     /// Label the output packet type in a human-friendly manner.
     fn packet_label(&self) -> String;
@@ -28,12 +18,29 @@ pub trait BenchPacket {
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>>;
 }
 
+/// An individual packet to time the parse/process timing of.
 pub trait BenchPacketInstance {
-    /// Label the experiment instance à la Bencher.
+    /// Label for the experiment instance via BencherId.
     fn instance_name(&self) -> String;
 
-    /// Generate a single test packet according to `params`.
+    // XXX: We probably want this to take the cfg of one or more nodes
+    /// Generate a single test packet.
     fn generate(&self) -> (Packet<Initialized>, Direction);
+}
+
+pub struct Dhcp6 {}
+
+impl BenchPacket for Dhcp6 {
+    fn packet_label(&self) -> String {
+        "DHCPv6".into()
+    }
+
+    fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
+        [Dhcp6Instance::Solicit, Dhcp6Instance::Request]
+            .into_iter()
+            .map(|v| Box::new(v) as Box<dyn BenchPacketInstance>)
+            .collect()
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -62,11 +69,11 @@ impl BenchPacketInstance for Dhcp6Instance {
     }
 }
 
-pub struct Dhcp6 {}
+pub struct Icmp4 {}
 
-impl BenchPacket for Dhcp6 {
+impl BenchPacket for Icmp4 {
     fn packet_label(&self) -> String {
-        "DHCPv6".into()
+        "ICMPv4".into()
     }
 
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
@@ -74,5 +81,32 @@ impl BenchPacket for Dhcp6 {
             .into_iter()
             .map(|v| Box::new(v) as Box<dyn BenchPacketInstance>)
             .collect()
+    }
+}
+
+impl BenchPacketInstance for Icmp4 {
+    fn instance_name(&self) -> String {
+        "EchoRequest".into()
+    }
+
+    fn generate(&self) -> (Packet<Initialized>, Direction) {
+        let cfg = g1_cfg();
+        let ident = 7;
+        let seq_no = 777;
+        let data = b"reunion\0";
+
+        let pkt = gen_icmp_echo_unparsed(
+            icmp::IcmpEchoType::Req,
+            cfg.guest_mac,
+            cfg.gateway_mac,
+            cfg.ipv4_cfg().unwrap().private_ip.into(),
+            cfg.ipv4_cfg().unwrap().gateway_ip.into(),
+            ident,
+            seq_no,
+            &data[..],
+            1,
+        );
+
+        (pkt, Direction::Out)
     }
 }
