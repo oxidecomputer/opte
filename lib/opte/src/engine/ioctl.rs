@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The ioctl interface.
 //!
@@ -180,6 +180,13 @@ pub fn dump_layer(
 }
 
 pub fn dump_tcp_flows(
+    port: &Port<impl crate::engine::NetworkImpl>,
+    _req: &DumpTcpFlowsReq,
+) -> Result<DumpTcpFlowsResp, OpteError> {
+    port.dump_tcp_flows()
+}
+
+pub fn dump_dhcp_params(
     port: &Port<impl crate::engine::NetworkImpl>,
     _req: &DumpTcpFlowsReq,
 ) -> Result<DumpTcpFlowsResp, OpteError> {

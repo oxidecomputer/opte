@@ -541,6 +541,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             let resp = dump_tcp_flows_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
+        OpteCmd::SetDhcpParams => todo!(),
+        OpteCmd::DumpDhcpParams => {
+            let resp = dump_dhcp_params_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
     }
 }
 
@@ -2224,6 +2229,35 @@ fn dump_tcp_flows_hdlr(
     };
 
     api::dump_tcp_flows(&dev.port, &req)
+}
+
+#[no_mangle]
+fn set_dhcp_params_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: api::SetDhcpParamsReq = env.copy_in_req()?;
+    let devs = unsafe { xde_devs.read() };
+    let mut iter = devs.iter();
+    let dev = match iter.find(|x| x.devname == req.port_name) {
+        Some(dev) => dev,
+        None => return Err(OpteError::PortNotFound(req.port_name)),
+    };
+
+    &dev.port.cfg.dhcp = req.dhcp;
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
+fn dump_dhcp_params_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<api::DumpDhcpParamsResp, OpteError> {
+    let req: api::DumpDhcpParamsReq = env.copy_in_req()?;
+    let devs = unsafe { xde_devs.read() };
+    let mut iter = devs.iter();
+    let dev = match iter.find(|x| x.devname == req.port_name) {
+        Some(dev) => dev,
+        None => return Err(OpteError::PortNotFound(req.port_name)),
+    };
+
+    Ok(api::DumpDhcpParamsResp { dhcp: &dev.port.cfg.dhcp.clone() })
 }
 
 #[no_mangle]

@@ -85,9 +85,6 @@ pub struct Ipv4Cfg {
     //
     // XXX For now we only allow one external IP.
     pub external_ips: Option<Ipv4Addr>,
-
-    /// TODO.
-    pub dhcp: DhcpCfg<Ipv4Addr>,
 }
 
 /// The IPv6 configuration of a VPC guest.
@@ -130,22 +127,31 @@ pub struct Ipv6Cfg {
     //
     // XXX For now we only allow one external IP.
     pub external_ips: Option<Ipv6Addr>,
-
-    /// TODO.
-    pub dhcp: DhcpCfg<Ipv6Addr>,
 }
 
 /// TODO.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct DhcpCfg<Ip> {
-    /// TODO.
+pub struct DhcpCfg {
+    /// Hostname to assign connected guests over DHCP.
     pub hostname: Option<DomainName>,
 
-    /// TODO.
+    /// Local domain of connected guests over DHCP.
     pub host_domain: Option<DomainName>,
 
+    /// A list of domain names used during DNS resolution.
+    ///
+    /// Resolvers will use the provided list when resolving relative domain
+    /// names.
+    pub domain_search_list: Vec<DomainName>,
+
+    // Why are these both here? We can verify this in the VpcCfg case,
+    // we can filter in opteadm or error
+    // Alterative whould be to have a {v4, v6, dual} set of Vecs.
     /// TODO.
-    pub dns_servers: Vec<Ip>,
+    pub dns4_servers: Vec<Ipv4Addr>,
+
+    /// TODO
+    pub dns6_servers: Vec<Ipv6Addr>,
 }
 
 /// The IP configuration of a VPC guest.
@@ -212,11 +218,8 @@ pub struct VpcCfg {
     /// for external networks.
     pub boundary_services: BoundaryServices,
 
-    /// A list of domain names used during DNS resolution.
-    ///
-    /// Resolvers will use the provided list when resolving relative domain
-    /// names.
-    pub domain_list: Vec<DomainName>,
+    /// TODO.
+    pub dhcp: DhcpCfg,
 }
 
 impl VpcCfg {
@@ -588,6 +591,24 @@ pub struct RemFwRuleReq {
     pub dir: Direction,
     pub id: u64,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SetDhcpParamsReq {
+    pub port: String,
+    pub data: DhcpCfg,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpDhcpParamsReq {
+    pub port: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpDhcpParamsResp {
+    pub data: DhcpCfg,
+}
+
+impl CmdOk for DumpDhcpParamsResp {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FirewallRule {
@@ -987,7 +1008,6 @@ mod tests {
                 mac: MacAddr::from([0xa8, 0x40, 0x25, 0x00, 0x00, 0x99]),
                 vni: Vni::new(99u32).unwrap(),
             },
-            domain_list: vec![],
             gateway_mac: MacAddr::from([0xa8, 0x40, 0x25, 0x00, 0x00, 0x01]),
             guest_mac: MacAddr::from([0xa8, 0x40, 0x25, 0xff, 0xff, 0x01]),
             phys_ip: "fd00::1".parse().unwrap(),
@@ -1001,7 +1021,6 @@ mod tests {
                         ports: 0..=8095,
                     }),
                     vpc_subnet: "10.0.0.0/24".parse().unwrap(),
-                    dhcp: Default::default(),
                 },
                 ipv6: Ipv6Cfg {
                     private_ip: "fd00::5".parse().unwrap(),
@@ -1012,10 +1031,10 @@ mod tests {
                         ports: 0..=8095,
                     }),
                     vpc_subnet: "fd00::/64".parse().unwrap(),
-                    dhcp: Default::default(),
                 },
             },
             vni: Vni::new(100u32).unwrap(),
+            dhcp: Default::default(),
         }
     }
 

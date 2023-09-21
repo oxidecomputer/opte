@@ -88,7 +88,6 @@ fn lab_cfg() -> VpcCfg {
             ports: 1025..=4096,
         }),
         external_ips: None,
-        dhcp: Default::default(),
     });
     VpcCfg {
         ip_cfg,
@@ -113,7 +112,7 @@ fn lab_cfg() -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
-        domain_list: vec!["oxide.computer".parse().unwrap()],
+        dhcp: base_dhcp_config(),
     }
 }
 
@@ -2417,7 +2416,7 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                     panic!("Expected an Option::DomainList");
                 };
                 let mut expected_bytes = Vec::new();
-                for name in g1_cfg.domain_list.iter() {
+                for name in g1_cfg.dhcp.domain_search_list.iter() {
                     expected_bytes.extend_from_slice(name.encode());
                 }
                 assert_eq!(
@@ -2944,7 +2943,6 @@ fn tcp_inbound() {
                 ports: 1025..=4096,
             }),
             external_ips: Some("10.60.1.20".parse().unwrap()),
-            dhcp: Default::default(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -2955,7 +2953,6 @@ fn tcp_inbound() {
                 ports: 1025..=4096,
             }),
             external_ips: None,
-            dhcp: Default::default(),
         },
     };
 

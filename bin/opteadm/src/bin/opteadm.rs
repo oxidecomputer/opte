@@ -184,11 +184,6 @@ enum Command {
         #[command(flatten)]
         dhcp: DhcpConfig,
 
-        /// A comma-separated list of domain names provided to the guest,
-        /// used when resolving hostnames.
-        #[arg(long, value_delimiter = ',')]
-        domain_list: Vec<DomainName>,
-
         #[arg(long)]
         external_ip: Option<IpAddr>,
 
@@ -197,13 +192,23 @@ enum Command {
     },
 
     /// Delete an xde device
-    DeleteXde { name: String },
+    DeleteXde {
+        name: String,
+    },
 
     /// Set up xde underlay devices
-    SetXdeUnderlay { u1: String, u2: String },
+    SetXdeUnderlay {
+        u1: String,
+        u2: String,
+    },
 
     /// Set a virtual-to-physical mapping
-    SetV2P { vpc_ip: IpAddr, vpc_mac: MacAddr, underlay_ip: Ipv6Addr, vni: Vni },
+    SetV2P {
+        vpc_ip: IpAddr,
+        vpc_mac: MacAddr,
+        underlay_ip: Ipv6Addr,
+        vni: Vni,
+    },
 
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
@@ -215,6 +220,16 @@ enum Command {
         /// The location to which traffic matching the destination is sent.
         target: RouterTarget,
     },
+
+    SetDhcpParams {
+        #[arg(short)]
+        port: String,
+
+        #[command(flatten)]
+        dhcp: DhcpConfig,
+    },
+
+    DumpDhcpParams,
 }
 
 #[derive(Debug, Parser)]
@@ -293,59 +308,37 @@ struct DhcpConfig {
     host_domain: Option<DomainName>,
 
     /// A comma-delimited list of DNS server IP addresses to provide over DHCP.
-    ///
-    /// These must match the IP version the port is configured for.
     #[arg(long, value_delimiter = ',')]
     dns_servers: Vec<IpAddr>,
+
+    /// A comma-separated list of domain names provided to the guest,
+    /// used when resolving hostnames.
+    #[arg(long, value_delimiter = ',')]
+    domain_search_list: Vec<DomainName>,
 }
 
-impl TryFrom<DhcpConfig> for DhcpCfg<Ipv4Addr> {
-    type Error = anyhow::Error;
-
-    fn try_from(value: DhcpConfig) -> Result<Self, Self::Error> {
-        let dns_servers = value
+impl From<DhcpConfig> for DhcpCfg {
+    fn from(value: DhcpConfig) -> Self {
+        let mut dns4_servers = vec![];
+        let dns6_servers = value
             .dns_servers
             .into_iter()
-            .enumerate()
-            .map(|(idx, ip)| {
-                if let IpAddr::Ip4(ip) = ip {
-                    Ok(ip)
-                } else {
-                    anyhow::bail!("DNS server #{idx}: expected Ipv4")
+            .filter_map(|ip| match ip {
+                IpAddr::Ip4(ip) => {
+                    dns4_servers.push(ip);
+                    None
                 }
+                IpAddr::Ip6(ip) => Some(ip),
             })
-            .collect::<Result<_, _>>()?;
+            .collect();
 
-        Ok(Self {
+        Self {
             hostname: value.hostname,
             host_domain: value.host_domain,
-            dns_servers,
-        })
-    }
-}
-
-impl TryFrom<DhcpConfig> for DhcpCfg<Ipv6Addr> {
-    type Error = anyhow::Error;
-
-    fn try_from(value: DhcpConfig) -> Result<Self, Self::Error> {
-        let dns_servers = value
-            .dns_servers
-            .into_iter()
-            .enumerate()
-            .map(|(idx, ip)| {
-                if let IpAddr::Ip6(ip) = ip {
-                    Ok(ip)
-                } else {
-                    anyhow::bail!("DNS server #{idx}: expected Ipv6")
-                }
-            })
-            .collect::<Result<_, _>>()?;
-
-        Ok(Self {
-            hostname: value.hostname,
-            host_domain: value.host_domain,
-            dns_servers,
-        })
+            domain_search_list: value.domain_search_list,
+            dns4_servers: vec![],
+            dns6_servers: vec![],
+        }
     }
 }
 
@@ -386,9 +379,10 @@ fn print_port(pi: PortInfo) {
 
 fn main() -> anyhow::Result<()> {
     let cmd = Command::parse();
+    let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+
     match cmd {
         Command::ListPorts => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_port_header();
             for p in hdl.list_ports()?.ports {
                 print_port(p);
@@ -396,37 +390,30 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::ListLayers { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_list_layers(&hdl.list_layers(&port)?);
         }
 
         Command::DumpLayer { port, name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_layer(&hdl.get_layer_by_name(&port, &name)?);
         }
 
         Command::ClearUft { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             hdl.clear_uft(&port)?;
         }
 
         Command::DumpUft { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_uft(&hdl.dump_uft(&port)?);
         }
 
         Command::DumpTcpFlows { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_tcp_flows(&hdl.dump_tcp_flows(&port)?);
         }
 
         Command::DumpV2P => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_v2p(&hdl.dump_v2p()?);
         }
 
         Command::AddFwRule { port, direction, filters, action, priority } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let rule = FirewallRule {
                 direction,
                 filters: filters.into(),
@@ -467,8 +454,6 @@ fn main() -> anyhow::Result<()> {
             external_ip,
             passthrough,
         } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
-
             let ip_cfg = match private_ip {
                 IpAddr::Ip4(private_ip) => {
                     let IpCidr::Ip4(vpc_subnet) = vpc_subnet else {
@@ -480,8 +465,6 @@ fn main() -> anyhow::Result<()> {
                     };
 
                     let snat = snat.map(SNat4Cfg::try_from).transpose()?;
-
-                    let dhcp = dhcp.try_into()?;
 
                     let external_ip = match external_ip {
                         Some(IpAddr::Ip4(ip)) => Some(ip),
@@ -497,7 +480,6 @@ fn main() -> anyhow::Result<()> {
                         gateway_ip,
                         snat,
                         external_ips: external_ip,
-                        dhcp,
                     })
                 }
                 IpAddr::Ip6(private_ip) => {
@@ -510,8 +492,6 @@ fn main() -> anyhow::Result<()> {
                     };
 
                     let snat = snat.map(SNat6Cfg::try_from).transpose()?;
-
-                    let dhcp = dhcp.try_into()?;
 
                     let external_ip = match external_ip {
                         Some(IpAddr::Ip4(_)) => {
@@ -527,7 +507,6 @@ fn main() -> anyhow::Result<()> {
                         gateway_ip,
                         snat,
                         external_ips: external_ip,
-                        dhcp,
                     })
                 }
             };
@@ -543,39 +522,43 @@ fn main() -> anyhow::Result<()> {
                     vni: bsvc_vni,
                     mac: bsvc_mac,
                 },
-                domain_list,
+                dhcp: dhcp.into(),
             };
 
             hdl.create_xde(&name, cfg, passthrough)?;
         }
 
         Command::DeleteXde { name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let _ = hdl.delete_xde(&name)?;
         }
 
         Command::SetXdeUnderlay { u1, u2 } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let _ = hdl.set_xde_underlay(&u1, &u2)?;
         }
 
         Command::RmFwRule { port, direction, id } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let request = RemFwRuleReq { port_name: port, dir: direction, id };
             hdl.remove_firewall_rule(&request)?;
         }
 
         Command::SetV2P { vpc_ip, vpc_mac, underlay_ip, vni } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let phys = PhysNet { ether: vpc_mac, ip: underlay_ip, vni };
             let req = SetVirt2PhysReq { vip: vpc_ip, phys };
             hdl.set_v2p(&req)?;
         }
 
         Command::AddRouterEntry { port, dest, target } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let req = AddRouterEntryReq { port_name: port, dest, target };
             hdl.add_router_entry(&req)?;
+        }
+
+        Command::SetDhcpParams { port, dhcp } => {
+            let req = SetDhcpParams { port_name: port, dhcp };
+            hdl.set_dhcp_params(&req)?;
+        }
+
+        Command::DumpDhcpParams { port } => {
+            let req = DumpDhcpParams { port_name: port };
         }
     }
 

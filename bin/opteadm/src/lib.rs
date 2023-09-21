@@ -219,4 +219,20 @@ impl OpteAdm {
         let cmd = OpteCmd::AddRouterEntry;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
+
+    pub fn set_dhcp_params(
+        &self,
+        req: &SetDhcpParamsReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetDhcpParams;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn dump_dhcp_params(
+        &self,
+        req: &DumpDhcpParamsReq,
+    ) -> Result<api::DumpDhcpParamsResp, Error> {
+        let cmd = OpteCmd::SetDhcpParams;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
 }

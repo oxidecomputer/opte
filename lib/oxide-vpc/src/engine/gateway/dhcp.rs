@@ -71,11 +71,10 @@ pub fn setup(
     );
 
     let mut dns_space = [None; 3];
-    let dns_servers = if ip_cfg.dhcp.dns_servers.is_empty() {
+    let dns_servers = if cfg.dhcp.dns4_servers.is_empty() {
         None
     } else {
-        for (slot, server) in dns_space.iter_mut().zip(&ip_cfg.dhcp.dns_servers)
-        {
+        for (slot, server) in dns_space.iter_mut().zip(&cfg.dhcp.dns4_servers) {
             *slot = Some(*server);
         }
         Some(dns_space)
@@ -92,9 +91,9 @@ pub fn setup(
         re2: Some(re2),
         re3: None,
         dns_servers,
-        domain_list: cfg.domain_list.clone(),
-        hostname: ip_cfg.dhcp.hostname.clone(),
-        domain_name: ip_cfg.dhcp.host_domain.clone(),
+        domain_list: cfg.dhcp.domain_search_list.clone(),
+        hostname: cfg.dhcp.hostname.clone(),
+        domain_name: cfg.dhcp.host_domain.clone(),
     }));
 
     let ack = Action::Hairpin(Arc::new(DhcpAction {
@@ -108,9 +107,9 @@ pub fn setup(
         re2: Some(re2),
         re3: None,
         dns_servers,
-        domain_list: cfg.domain_list.clone(),
-        hostname: ip_cfg.dhcp.hostname.clone(),
-        domain_name: ip_cfg.dhcp.host_domain.clone(),
+        domain_list: cfg.dhcp.domain_search_list.clone(),
+        hostname: cfg.dhcp.hostname.clone(),
+        domain_name: cfg.dhcp.host_domain.clone(),
     }));
 
     let discover_rule = Rule::new(1, offer);

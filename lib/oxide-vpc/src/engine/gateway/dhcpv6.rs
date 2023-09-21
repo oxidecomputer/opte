@@ -40,9 +40,9 @@ pub fn setup(layer: &mut Layer, cfg: &VpcCfg) -> Result<(), OpteError> {
         client_mac: cfg.guest_mac,
         server_mac: cfg.gateway_mac,
         addrs,
-        dns_servers: ip_cfg.dhcp.dns_servers.clone(),
+        dns_servers: cfg.dhcp.dns6_servers.clone(),
         sntp_servers: vec![],
-        domain_list: cfg.domain_list.clone(),
+        domain_list: cfg.dhcp.domain_search_list.clone(),
     };
 
     let server = Action::Hairpin(Arc::new(action));

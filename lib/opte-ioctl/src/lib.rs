@@ -16,6 +16,7 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::ListPortsResp;
+use oxide_vpc::api::SetDhcpParamsReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
@@ -163,6 +164,14 @@ impl OpteHdl {
 
     pub fn set_fw_rules(&self, req: &SetFwRulesReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetFwRules;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn set_dhcp_params(
+        &self,
+        req: &SetDhcpParamsReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetDhcpParams;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 }

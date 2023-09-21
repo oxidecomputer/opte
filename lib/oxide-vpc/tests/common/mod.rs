@@ -63,6 +63,7 @@ pub use opte::engine::GenericUlp;
 pub use opte::ExecCtx;
 pub use oxide_vpc::api::AddFwRuleReq;
 pub use oxide_vpc::api::BoundaryServices;
+use oxide_vpc::api::DhcpCfg;
 pub use oxide_vpc::api::IpCfg;
 pub use oxide_vpc::api::Ipv4Cfg;
 pub use oxide_vpc::api::Ipv6Cfg;
@@ -104,6 +105,22 @@ pub fn ox_vpc_mac(id: [u8; 3]) -> MacAddr {
     MacAddr::from([0xA8, 0x40, 0x25, 0xF0 | id[0], id[1], id[2]])
 }
 
+pub fn base_dhcp_config() -> DhcpCfg {
+    DhcpCfg {
+        domain_search_list: vec!["oxide.computer".parse().unwrap()],
+        dns4_servers: vec![Ipv4Addr::from([8, 8, 8, 8])],
+        dns6_servers: vec![
+            // CloudFlare
+            Ipv6Addr::from_const([0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111]),
+            Ipv6Addr::from_const([0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1001]),
+            // Google
+            Ipv6Addr::from_const([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888]),
+            Ipv6Addr::from_const([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8844]),
+        ],
+        ..Default::default()
+    }
+}
+
 pub fn g1_cfg() -> VpcCfg {
     let ip_cfg = IpCfg::DualStack {
         ipv4: Ipv4Cfg {
@@ -115,7 +132,6 @@ pub fn g1_cfg() -> VpcCfg {
                 ports: 1025..=4096,
             }),
             external_ips: None,
-            dhcp: Default::default(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -126,7 +142,6 @@ pub fn g1_cfg() -> VpcCfg {
                 ports: 4097..=8192,
             }),
             external_ips: None,
-            dhcp: Default::default(),
         },
     };
     g1_cfg2(ip_cfg)
@@ -150,7 +165,7 @@ pub fn g1_cfg2(ip_cfg: IpCfg) -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
-        domain_list: vec!["oxide.computer".parse().unwrap()],
+        dhcp: base_dhcp_config(),
     }
 }
 
@@ -165,7 +180,6 @@ pub fn g2_cfg() -> VpcCfg {
                 ports: 4097..=8192,
             }),
             external_ips: None,
-            dhcp: Default::default(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -176,7 +190,6 @@ pub fn g2_cfg() -> VpcCfg {
                 ports: 1025..=4096,
             }),
             external_ips: None,
-            dhcp: Default::default(),
         },
     };
     VpcCfg {
@@ -196,7 +209,7 @@ pub fn g2_cfg() -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
-        domain_list: vec!["oxide.computer".parse().unwrap()],
+        dhcp: base_dhcp_config(),
     }
 }
 
