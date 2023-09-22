@@ -108,16 +108,7 @@ pub fn ox_vpc_mac(id: [u8; 3]) -> MacAddr {
 pub fn base_dhcp_config() -> DhcpCfg {
     DhcpCfg {
         domain_search_list: vec!["oxide.computer".parse().unwrap()],
-        dns4_servers: vec![Ipv4Addr::from([8, 8, 8, 8])],
-        dns6_servers: vec![
-            // CloudFlare
-            Ipv6Addr::from_const([0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111]),
-            Ipv6Addr::from_const([0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1001]),
-            // Google
-            Ipv6Addr::from_const([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888]),
-            Ipv6Addr::from_const([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8844]),
-        ],
-        ..Default::default()
+        ..DhcpCfg::base_reachable()
     }
 }
 

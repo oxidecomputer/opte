@@ -30,11 +30,13 @@ use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
 use super::udp::UdpHdr;
 use super::udp::UdpMeta;
+use crate::ddi::sync::KRwLock;
 use core::fmt;
 use core::fmt::Display;
-use opte_api::DhcpAction;
+use opte_api::DhcpCfg;
 use opte_api::DhcpReplyType;
 use opte_api::DomainName;
+use opte_api::Ipv4PrefixLen;
 use opte_api::MacAddr;
 use opte_api::SubnetRouterPair;
 use serde::de;
@@ -49,9 +51,11 @@ use smoltcp::wire::DhcpRepr;
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::ToString;
+        use alloc::sync::Arc;
         use alloc::vec::Vec;
     } else {
         use std::string::ToString;
+        use std::sync::Arc;
         use std::vec::Vec;
     }
 }
@@ -359,6 +363,67 @@ fn encode_domain_search_option(names: &[DomainName]) -> Vec<u8> {
     out
 }
 
+/// Generate DHCPv4 Offer+Ack.
+///
+/// Respond to a cilent's Discover and Request messages with Offer+Ack
+/// replies based on the information contained in this struct.
+///
+/// XXX Currently we return the same options no matter what the client
+/// specifies in the parameter request list. This has worked thus far,
+/// but we should come back to this and comb over RFC 2131 more
+/// carefully -- particularly §4.3.1 and §4.3.2.
+pub struct DhcpAction {
+    /// The client's MAC address.
+    pub client_mac: MacAddr,
+
+    /// The client's IPv4 address. Used to fill in the `yiaddr` field.
+    pub client_ip: Ipv4Addr,
+
+    /// The client's subnet mask specified as a prefix length. Used as
+    /// the value of `Subnet Mask Option (code 1)`.
+    pub subnet_prefix_len: Ipv4PrefixLen,
+
+    /// The gateway MAC address. The use of this action assumes that
+    /// the OPTE port is acting as gateway; this MAC address is what
+    /// the port will use when acting as a gateway to the client. This
+    /// is used as the Ethernet header's source address.
+    pub gw_mac: MacAddr,
+
+    /// The gateway IPv4 address. This is used for several purposes:
+    ///
+    /// * As the IP header's source address.
+    ///
+    /// * As the value of the `siaddr` field.
+    ///
+    /// * As the value of the `Router Option (code 3)`.
+    ///
+    /// * As the value of the `Server Identifier Option (code 54)`.
+    pub gw_ip: Ipv4Addr,
+
+    /// The value of the `DHCP Message Type Option (code 53)`. This
+    /// action supports only the Offer and Ack messages.
+    pub reply_type: DhcpReplyType,
+
+    /// A static route entry, sent to the client via the `Classless
+    /// Static Route Option (code 131)`.
+    pub re1: SubnetRouterPair,
+
+    /// An optional second entry (see `re1`).
+    pub re2: Option<SubnetRouterPair>,
+
+    /// An optional third entry (see `re1`).
+    pub re3: Option<SubnetRouterPair>,
+
+    /// Runtime-reconfigurable DHCP options (DNS, search lists, etc.).
+    pub dhcp_cfg: Arc<KRwLock<DhcpCfg>>,
+}
+
+impl Display for DhcpAction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "DHCPv4 {}: {}", self.reply_type, self.client_ip)
+    }
+}
+
 // XXX I read up just enough on DHCP to get initial lease working.
 // However, I imagine there could be post-lease messages between
 // client/server and those might be unicast, at which point these
@@ -413,9 +478,23 @@ impl HairpinAction for DhcpAction {
         let client_pkt = DhcpPacket::new_checked(&body)?;
         let client_dhcp = DhcpRepr::parse(&client_pkt)?;
         let mt = MessageType::from(self.reply_type);
-        // Forgive me.
-        let dns_servers =
-            self.dns_servers.map(|ips| ips.map(|mip| mip.map(|ip| ip.into())));
+
+        let dhcp_state_lock = self.dhcp_cfg.read();
+
+        let mut dns_space = [None; 3];
+        let dns_servers = if dhcp_state_lock.dns4_servers.is_empty() {
+            None
+        } else {
+            for (slot, server) in
+                dns_space.iter_mut().zip(&dhcp_state_lock.dns4_servers)
+            {
+                *slot = Some(smoltcp::wire::Ipv4Address::from(*server));
+            }
+            Some(dns_space)
+        };
+
+        // let dns_servers =
+        //     dhcp_state_lock.dns4_servers.map(|ips| ips.map(|mip| mip.map(|ip| ip.into())));
 
         let reply = DhcpRepr {
             message_type: mt.into(),
@@ -473,16 +552,18 @@ impl HairpinAction for DhcpAction {
         //      or  prebuild to suit its API.
         csr_opt.emit(&mut tmp);
 
-        if let Some(name) = &self.hostname {
+        if let Some(name) = &dhcp_state_lock.hostname {
             HostNameOpt { name }.emit(&mut tmp)
         }
 
-        if let Some(name) = &self.domain_name {
+        if let Some(name) = &dhcp_state_lock.host_domain {
             DomainNameOpt { name }.emit(&mut tmp)
         }
 
-        if !self.domain_list.is_empty() {
-            let encoded = encode_domain_search_option(&self.domain_list);
+        if !dhcp_state_lock.domain_search_list.is_empty() {
+            let encoded = encode_domain_search_option(
+                &dhcp_state_lock.domain_search_list,
+            );
             tmp.extend_from_slice(&encoded);
         }
 

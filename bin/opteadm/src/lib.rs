@@ -20,9 +20,12 @@ use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
+use oxide_vpc::api::DumpDhcpParamsReq;
+use oxide_vpc::api::DumpDhcpParamsResp;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::SetDhcpParamsReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
@@ -231,8 +234,8 @@ impl OpteAdm {
     pub fn dump_dhcp_params(
         &self,
         req: &DumpDhcpParamsReq,
-    ) -> Result<api::DumpDhcpParamsResp, Error> {
-        let cmd = OpteCmd::SetDhcpParams;
+    ) -> Result<DumpDhcpParamsResp, Error> {
+        let cmd = OpteCmd::DumpDhcpParams;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 }

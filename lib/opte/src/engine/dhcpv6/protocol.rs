@@ -6,6 +6,7 @@
 
 //! Implementation of the main message types for DHCPv6.
 
+use super::Dhcpv6Action;
 use super::TransactionId;
 use crate::engine::checksum::HeaderChecksum;
 use crate::engine::dhcpv6::options::Code as OptionCode;
@@ -44,7 +45,6 @@ use crate::engine::udp::UdpHdr;
 use crate::engine::udp::UdpMeta;
 use core::fmt;
 use core::ops::Range;
-use opte_api::dhcpv6::Dhcpv6Action;
 use opte_api::Ipv6Addr;
 use opte_api::Ipv6Cidr;
 use opte_api::MacAddr;
@@ -55,8 +55,10 @@ use smoltcp::wire::IpProtocol;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::borrow::Cow;
         use alloc::vec::Vec;
     } else {
+        use std::borrow::Cow;
         use std::vec::Vec;
     }
 }
@@ -319,11 +321,16 @@ fn generate_reply_options<'a>(
         msg.find_option(OptionCode::ClientId).unwrap().clone(),
     ];
 
+    // XXX: I'd like for these types to go back to being borrowed,
+    //      which might take a little more consideration. We've lost
+    //      that for now to get configurability.
+    let dhcp_state_lock = action.dhcp_cfg.read();
+    let dhcp_state = &*dhcp_state_lock;
+
     // If requested, provide the list of DNS servers.
     if msg.has_option_request_with(OptionCode::DnsServers) {
-        let opt = Dhcpv6Option::DnsServers(IpList::from(
-            action.dns_servers.as_slice(),
-        ));
+        let ip_list = IpList(Cow::Owned(dhcp_state.dns6_servers.clone()));
+        let opt = Dhcpv6Option::DnsServers(ip_list);
         options.push(opt);
     }
 
@@ -363,10 +370,17 @@ fn generate_reply_options<'a>(
     // resolve them.
     if (msg.has_option(OptionCode::DomainList)
         || msg.has_option_request_with(OptionCode::DomainList))
-        && !action.domain_list.is_empty()
+        && !dhcp_state.domain_search_list.is_empty()
     {
-        let opt = Dhcpv6Option::from(action.domain_list.as_slice());
-        options.push(opt);
+        // let opt = Dhcpv6Option::DomainList(dhcp_state.domain_search_list.clone().into());
+        let opt = Dhcpv6Option::from(dhcp_state.domain_search_list.as_slice());
+
+        // Slightly hacky assertion that the contents are owned.
+        let Dhcpv6Option::DomainList(Cow::Owned(raw_list)) = opt else {
+            panic!("DHCPv6 DomainList creation allocs into new vec -- not found?")
+        };
+
+        options.push(Dhcpv6Option::DomainList(Cow::Owned(raw_list)));
     }
     options
 }

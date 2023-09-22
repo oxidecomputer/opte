@@ -74,19 +74,26 @@ pub mod options;
 pub mod protocol;
 pub use protocol::MessageType;
 
+use crate::ddi::sync::KRwLock;
 use core::convert::AsRef;
+use core::fmt;
+use core::fmt::Display;
 use core::ops::Deref;
 pub use opte_api::dhcpv6::AddressInfo;
-pub use opte_api::dhcpv6::Dhcpv6Action;
 pub use opte_api::dhcpv6::LeasedAddress;
+use opte_api::DhcpCfg;
 use opte_api::Ipv6Addr;
 use opte_api::MacAddr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
+        use alloc::sync::Arc;
         use alloc::borrow::Cow;
+        use alloc::vec::Vec;
     } else {
         use std::borrow::Cow;
+        use std::sync::Arc;
+        use std::vec::Vec;
     }
 }
 
@@ -133,6 +140,43 @@ impl<'a> AsRef<[u8]> for TransactionId<'a> {
 impl<'a> From<&'a [u8; 3]> for TransactionId<'a> {
     fn from(buf: &'a [u8; 3]) -> Self {
         Self(Cow::from(buf.as_slice()))
+    }
+}
+
+/// An action for acting as a DHCPv6 server, leasing IPv6 addresses.
+#[derive(Clone)]
+pub struct Dhcpv6Action {
+    /// Expected MAC address of the client.
+    pub client_mac: MacAddr,
+
+    /// MAC address we advertise as the DHCP server.
+    pub server_mac: MacAddr,
+
+    /// IPv6 addresses leased to the client.
+    pub addrs: AddressInfo,
+
+    /// SNTP servers the client should use.
+    pub sntp_servers: Vec<Ipv6Addr>,
+
+    /// Runtime-reconfigurable DHCP options (DNS, search lists, etc.).
+    pub dhcp_cfg: Arc<KRwLock<DhcpCfg>>,
+}
+
+impl Dhcpv6Action {
+    /// Return an iterator over the actual leased IPv6 addresses.
+    pub fn addresses(&self) -> impl Iterator<Item = Ipv6Addr> + '_ {
+        self.addrs.addrs.iter().map(|lease| lease.addr)
+    }
+}
+
+impl Display for Dhcpv6Action {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let addr_list = self
+            .addresses()
+            .map(|addr| format!("{}", addr))
+            .collect::<Vec<_>>()
+            .join(",");
+        write!(f, "DHCPv6 IA Addrs: [{}]", addr_list)
     }
 }
 

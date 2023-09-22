@@ -129,31 +129,6 @@ pub struct Ipv6Cfg {
     pub external_ips: Option<Ipv6Addr>,
 }
 
-/// TODO.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct DhcpCfg {
-    /// Hostname to assign connected guests over DHCP.
-    pub hostname: Option<DomainName>,
-
-    /// Local domain of connected guests over DHCP.
-    pub host_domain: Option<DomainName>,
-
-    /// A list of domain names used during DNS resolution.
-    ///
-    /// Resolvers will use the provided list when resolving relative domain
-    /// names.
-    pub domain_search_list: Vec<DomainName>,
-
-    // Why are these both here? We can verify this in the VpcCfg case,
-    // we can filter in opteadm or error
-    // Alterative whould be to have a {v4, v6, dual} set of Vecs.
-    /// TODO.
-    pub dns4_servers: Vec<Ipv4Addr>,
-
-    /// TODO
-    pub dns6_servers: Vec<Ipv6Addr>,
-}
-
 /// The IP configuration of a VPC guest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpCfg {
@@ -217,9 +192,6 @@ pub struct VpcCfg {
     /// Information for reaching Boundary Services, for traffic destined
     /// for external networks.
     pub boundary_services: BoundaryServices,
-
-    /// TODO.
-    pub dhcp: DhcpCfg,
 }
 
 impl VpcCfg {
@@ -594,13 +566,13 @@ pub struct RemFwRuleReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SetDhcpParamsReq {
-    pub port: String,
+    pub port_name: String,
     pub data: DhcpCfg,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpDhcpParamsReq {
-    pub port: String,
+    pub port_name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

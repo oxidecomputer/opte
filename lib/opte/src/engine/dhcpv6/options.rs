@@ -47,13 +47,13 @@
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
         use alloc::borrow::Cow;
         use alloc::str::from_utf8;
+        use alloc::vec::Vec;
     } else {
-        use std::vec::Vec;
-        use std::str::from_utf8;
         use std::borrow::Cow;
+        use std::str::from_utf8;
+        use std::vec::Vec;
     }
 }
 
@@ -839,6 +839,10 @@ impl<'a> IpList<'a> {
         }
         Ok(())
     }
+
+    // pub fn to_owned(&self) -> IpList<'static> {
+    //     Self(self.0.to_owned())
+    // }
 }
 
 #[cfg(test)]

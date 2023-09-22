@@ -7,8 +7,10 @@
 //! The DHCPv6 implementation of the Virtual Gateway.
 
 use crate::api::VpcCfg;
+use opte::api::DhcpCfg;
 use opte::api::Direction;
 use opte::api::OpteError;
+use opte::ddi::sync::KRwLock;
 use opte::engine::dhcpv6::AddressInfo;
 use opte::engine::dhcpv6::Dhcpv6Action;
 use opte::engine::dhcpv6::LeasedAddress;
@@ -24,7 +26,11 @@ cfg_if! {
     }
 }
 
-pub fn setup(layer: &mut Layer, cfg: &VpcCfg) -> Result<(), OpteError> {
+pub fn setup(
+    layer: &mut Layer,
+    cfg: &VpcCfg,
+    dhcp_cfg: Arc<KRwLock<DhcpCfg>>,
+) -> Result<(), OpteError> {
     let ip_cfg = match cfg.ipv6_cfg() {
         None => return Ok(()),
         Some(ip_cfg) => ip_cfg,
@@ -40,9 +46,8 @@ pub fn setup(layer: &mut Layer, cfg: &VpcCfg) -> Result<(), OpteError> {
         client_mac: cfg.guest_mac,
         server_mac: cfg.gateway_mac,
         addrs,
-        dns_servers: cfg.dhcp.dns6_servers.clone(),
         sntp_servers: vec![],
-        domain_list: cfg.dhcp.domain_search_list.clone(),
+        dhcp_cfg,
     };
 
     let server = Action::Hairpin(Arc::new(action));

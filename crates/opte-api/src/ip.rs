@@ -94,74 +94,54 @@ impl Display for IcmpEchoReply {
     }
 }
 
-/// Generate DHCPv4 Offer+Ack.
-///
-/// Respond to a cilent's Discover and Request messages with Offer+Ack
-/// replies based on the information contained in this struct.
-///
-/// XXX Currently we return the same options no matter what the client
-/// specifies in the parameter request list. This has worked thus far,
-/// but we should come back to this and comb over RFC 2131 more
-/// carefully -- particularly §4.3.1 and §4.3.2.
-pub struct DhcpAction {
-    /// The client's MAC address.
-    pub client_mac: MacAddr,
-
-    /// The client's IPv4 address. Used to fill in the `yiaddr` field.
-    pub client_ip: Ipv4Addr,
-
-    /// The client's subnet mask specified as a prefix length. Used as
-    /// the value of `Subnet Mask Option (code 1)`.
-    pub subnet_prefix_len: Ipv4PrefixLen,
-
-    /// The gateway MAC address. The use of this action assumes that
-    /// the OPTE port is acting as gateway; this MAC address is what
-    /// the port will use when acting as a gateway to the client. This
-    /// is used as the Ethernet header's source address.
-    pub gw_mac: MacAddr,
-
-    /// The gateway IPv4 address. This is used for several purposes:
-    ///
-    /// * As the IP header's source address.
-    ///
-    /// * As the value of the `siaddr` field.
-    ///
-    /// * As the value of the `Router Option (code 3)`.
-    ///
-    /// * As the value of the `Server Identifier Option (code 54)`.
-    pub gw_ip: Ipv4Addr,
-
-    /// The value of the `DHCP Message Type Option (code 53)`. This
-    /// action supports only the Offer and Ack messages.
-    pub reply_type: DhcpReplyType,
-
-    /// A static route entry, sent to the client via the `Classless
-    /// Static Route Option (code 131)`.
-    pub re1: SubnetRouterPair,
-
-    /// An optional second entry (see `re1`).
-    pub re2: Option<SubnetRouterPair>,
-
-    /// An optional third entry (see `re1`).
-    pub re3: Option<SubnetRouterPair>,
-
-    /// An optional list of 1-3 DNS servers.
-    pub dns_servers: Option<[Option<Ipv4Addr>; 3]>,
-
-    /// A list of domain names used when resolving relative names via
-    /// DNS.
-    pub domain_list: Vec<DomainName>,
-
-    /// The host name a client should use.
+/// TODO.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct DhcpCfg {
+    /// Hostname to assign connected guests over DHCP.
     pub hostname: Option<DomainName>,
 
-    /// The domain name a client should use as part of its FQDN.
-    pub domain_name: Option<DomainName>,
+    /// Local domain of connected guests over DHCP.
+    pub host_domain: Option<DomainName>,
+
+    /// A list of domain names used during DNS resolution.
+    ///
+    /// Resolvers will use the provided list when resolving relative domain
+    /// names.
+    pub domain_search_list: Vec<DomainName>,
+
+    // Why are these both here? We can verify this in the VpcCfg case,
+    // we can filter in opteadm or error
+    // Alterative whould be to have a {v4, v6, dual} set of Vecs.
+    /// TODO.
+    pub dns4_servers: Vec<Ipv4Addr>,
+
+    /// TODO
+    pub dns6_servers: Vec<Ipv6Addr>,
 }
 
-impl Display for DhcpAction {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DHCPv4 {}: {}", self.reply_type, self.client_ip)
+impl DhcpCfg {
+    /// Provide DHCP servers which allow basic name resolution via CloudFlare/Google.
+    pub fn base_reachable() -> DhcpCfg {
+        DhcpCfg {
+            dns4_servers: vec![Ipv4Addr::from([8, 8, 8, 8])],
+            dns6_servers: vec![
+                // CloudFlare
+                Ipv6Addr::from_const([
+                    0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111,
+                ]),
+                Ipv6Addr::from_const([
+                    0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1001,
+                ]),
+                // Google
+                Ipv6Addr::from_const([
+                    0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888,
+                ]),
+                Ipv6Addr::from_const([
+                    0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8844,
+                ]),
+            ],
+            ..Default::default()
+        }
     }
 }
 

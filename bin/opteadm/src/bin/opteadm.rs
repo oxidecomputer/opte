@@ -14,7 +14,6 @@ use opte::api::Direction;
 use opte::api::DomainName;
 use opte::api::IpAddr;
 use opte::api::IpCidr;
-use opte::api::Ipv4Addr;
 use opte::api::Ipv6Addr;
 use opte::api::MacAddr;
 use opte::api::Vni;
@@ -30,6 +29,7 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpDhcpParamsReq;
 use oxide_vpc::api::Filters as FirewallFilters;
 use oxide_vpc::api::FirewallAction;
 use oxide_vpc::api::FirewallRule;
@@ -44,6 +44,7 @@ use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
+use oxide_vpc::api::SetDhcpParamsReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::print::print_v2p;
@@ -181,9 +182,8 @@ enum Command {
         #[command(flatten)]
         snat: Option<SnatConfig>,
 
-        #[command(flatten)]
-        dhcp: DhcpConfig,
-
+        // #[command(flatten)]
+        // dhcp: DhcpConfig,
         #[arg(long)]
         external_ip: Option<IpAddr>,
 
@@ -192,23 +192,13 @@ enum Command {
     },
 
     /// Delete an xde device
-    DeleteXde {
-        name: String,
-    },
+    DeleteXde { name: String },
 
     /// Set up xde underlay devices
-    SetXdeUnderlay {
-        u1: String,
-        u2: String,
-    },
+    SetXdeUnderlay { u1: String, u2: String },
 
     /// Set a virtual-to-physical mapping
-    SetV2P {
-        vpc_ip: IpAddr,
-        vpc_mac: MacAddr,
-        underlay_ip: Ipv6Addr,
-        vni: Vni,
-    },
+    SetV2P { vpc_ip: IpAddr, vpc_mac: MacAddr, underlay_ip: Ipv6Addr, vni: Vni },
 
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
@@ -229,7 +219,10 @@ enum Command {
         dhcp: DhcpConfig,
     },
 
-    DumpDhcpParams,
+    DumpDhcpParams {
+        #[arg(short)]
+        port: String,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -336,8 +329,8 @@ impl From<DhcpConfig> for DhcpCfg {
             hostname: value.hostname,
             host_domain: value.host_domain,
             domain_search_list: value.domain_search_list,
-            dns4_servers: vec![],
-            dns6_servers: vec![],
+            dns4_servers,
+            dns6_servers,
         }
     }
 }
@@ -449,8 +442,7 @@ fn main() -> anyhow::Result<()> {
             vpc_vni,
             src_underlay_addr,
             snat,
-            dhcp,
-            domain_list,
+            // dhcp,
             external_ip,
             passthrough,
         } => {
@@ -522,7 +514,7 @@ fn main() -> anyhow::Result<()> {
                     vni: bsvc_vni,
                     mac: bsvc_mac,
                 },
-                dhcp: dhcp.into(),
+                // dhcp: dhcp.into(),
             };
 
             hdl.create_xde(&name, cfg, passthrough)?;
@@ -553,12 +545,13 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::SetDhcpParams { port, dhcp } => {
-            let req = SetDhcpParams { port_name: port, dhcp };
+            let req = SetDhcpParamsReq { port_name: port, data: dhcp.into() };
             hdl.set_dhcp_params(&req)?;
         }
 
         Command::DumpDhcpParams { port } => {
-            let req = DumpDhcpParams { port_name: port };
+            let req = DumpDhcpParamsReq { port_name: port };
+            hdl.dump_dhcp_params(&req)?;
         }
     }
 

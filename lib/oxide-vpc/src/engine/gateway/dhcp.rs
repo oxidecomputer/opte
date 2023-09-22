@@ -17,13 +17,15 @@ cfg_if! {
 use crate::api::Ipv4Cfg;
 use crate::api::VpcCfg;
 use core::result::Result;
-use opte::api::DhcpAction;
+use opte::api::DhcpCfg;
 use opte::api::DhcpReplyType;
 use opte::api::Direction;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv4PrefixLen;
 use opte::api::OpteError;
 use opte::api::SubnetRouterPair;
+use opte::ddi::sync::KRwLock;
+use opte::engine::dhcp::DhcpAction;
 use opte::engine::ip4::Ipv4Cidr;
 use opte::engine::layer::Layer;
 use opte::engine::rule::Action;
@@ -33,6 +35,7 @@ pub fn setup(
     layer: &mut Layer,
     cfg: &VpcCfg,
     ip_cfg: &Ipv4Cfg,
+    dhcp_cfg: Arc<KRwLock<DhcpCfg>>,
 ) -> Result<(), OpteError> {
     // All guest interfaces live on a `/32`-network in the Oxide VPC;
     // restricting the L2 domain to two nodes: the guest NIC and the
@@ -70,16 +73,6 @@ pub fn setup(
         ip_cfg.gateway_ip,
     );
 
-    let mut dns_space = [None; 3];
-    let dns_servers = if cfg.dhcp.dns4_servers.is_empty() {
-        None
-    } else {
-        for (slot, server) in dns_space.iter_mut().zip(&cfg.dhcp.dns4_servers) {
-            *slot = Some(*server);
-        }
-        Some(dns_space)
-    };
-
     let offer = Action::Hairpin(Arc::new(DhcpAction {
         client_mac: cfg.guest_mac,
         client_ip: ip_cfg.private_ip,
@@ -90,10 +83,7 @@ pub fn setup(
         re1,
         re2: Some(re2),
         re3: None,
-        dns_servers,
-        domain_list: cfg.dhcp.domain_search_list.clone(),
-        hostname: cfg.dhcp.hostname.clone(),
-        domain_name: cfg.dhcp.host_domain.clone(),
+        dhcp_cfg: dhcp_cfg.clone(),
     }));
 
     let ack = Action::Hairpin(Arc::new(DhcpAction {
@@ -106,10 +96,7 @@ pub fn setup(
         re1,
         re2: Some(re2),
         re3: None,
-        dns_servers,
-        domain_list: cfg.dhcp.domain_search_list.clone(),
-        hostname: cfg.dhcp.hostname.clone(),
-        domain_name: cfg.dhcp.host_domain.clone(),
+        dhcp_cfg,
     }));
 
     let discover_rule = Rule::new(1, offer);

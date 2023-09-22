@@ -30,6 +30,7 @@ use crate::secpolicy;
 use crate::sys;
 use crate::warn;
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -75,11 +76,15 @@ use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
+use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpDhcpParamsReq;
+use oxide_vpc::api::DumpDhcpParamsResp;
 use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::SetDhcpParamsReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
@@ -219,6 +224,7 @@ struct XdeState {
     ectx: Arc<ExecCtx>,
     vpc_map: Arc<overlay::VpcMappings>,
     underlay: KMutex<Option<UnderlayState>>,
+    dhcp_map: KRwLock<BTreeMap<Vni, Arc<KRwLock<DhcpCfg>>>>,
 }
 
 struct UnderlayState {
@@ -241,10 +247,13 @@ fn get_xde_state() -> &'static mut XdeState {
 impl XdeState {
     fn new() -> Self {
         let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
+        let mut dhcp_map = KRwLock::new(BTreeMap::new());
+        dhcp_map.init(KRwLockType::Driver);
         XdeState {
             underlay: KMutex::new(None, KMutexType::Driver),
             ectx,
             vpc_map: Arc::new(overlay::VpcMappings::new()),
+            dhcp_map,
         }
     }
 }
@@ -575,6 +584,14 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         }
     };
 
+    // XXX: Take optional from CreateXdeReq?
+    let mut dhcp = KRwLock::new(DhcpCfg::base_reachable());
+    dhcp.init(KRwLockType::Driver);
+    let dhcp = Arc::new(dhcp);
+
+    let mut dhcp_lock = state.dhcp_map.write();
+    dhcp_lock.insert(req.cfg.vni, dhcp.clone());
+
     // It's imperative to take the devices write lock early. We want
     // to hold it for the rest of this function in order for device
     // creation to be atomic with regard to other threads.
@@ -625,6 +642,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         state.vpc_map.clone(),
         port_v2p.clone(),
         state.ectx.clone(),
+        &dhcp,
     )?;
 
     let port_periodic = Periodic::new(
@@ -1955,6 +1973,7 @@ fn new_port(
     vpc_map: Arc<overlay::VpcMappings>,
     v2p: Arc<overlay::Virt2Phys>,
     ectx: Arc<ExecCtx>,
+    dhcp_cfg: &Arc<KRwLock<DhcpCfg>>,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
     let name_cstr = match CString::new(name.as_str()) {
         Ok(v) => v,
@@ -1966,7 +1985,7 @@ fn new_port(
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, cfg, vpc_map, FT_LIMIT_ONE)?;
+    gateway::setup(&pb, cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
     router::setup(&pb, cfg, FT_LIMIT_ONE)?;
     let nat_ft_limit = match cfg.n_external_ports() {
         None => FT_LIMIT_ONE,
@@ -2233,7 +2252,8 @@ fn dump_tcp_flows_hdlr(
 
 #[no_mangle]
 fn set_dhcp_params_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: api::SetDhcpParamsReq = env.copy_in_req()?;
+    // XXX: should work, but horrifyingly ugly. Return later...
+    let req: SetDhcpParamsReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
@@ -2241,15 +2261,26 @@ fn set_dhcp_params_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    &dev.port.cfg.dhcp = req.dhcp;
+    let state = get_xde_state();
+    let dhcp_cfg = {
+        let map_locked = state.dhcp_map.read();
+        if let Some(dhcp) = map_locked.get(&dev.vni) {
+            dhcp.clone()
+        } else {
+            return Err(OpteError::PortNotFound(req.port_name));
+        }
+    };
+    let mut dhcp_locked = dhcp_cfg.write();
+    *dhcp_locked = req.data;
+
     Ok(NoResp::default())
 }
 
 #[no_mangle]
 fn dump_dhcp_params_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<api::DumpDhcpParamsResp, OpteError> {
-    let req: api::DumpDhcpParamsReq = env.copy_in_req()?;
+) -> Result<DumpDhcpParamsResp, OpteError> {
+    let req: DumpDhcpParamsReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
@@ -2257,7 +2288,19 @@ fn dump_dhcp_params_hdlr(
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    Ok(api::DumpDhcpParamsResp { dhcp: &dev.port.cfg.dhcp.clone() })
+    let state = get_xde_state();
+    let dhcp_cfg = {
+        let map_locked = state.dhcp_map.read();
+        if let Some(dhcp) = map_locked.get(&dev.vni) {
+            dhcp.clone()
+        } else {
+            return Err(OpteError::PortNotFound(req.port_name));
+        }
+    };
+    let dhcp_locked = dhcp_cfg.read();
+    let data = dhcp_locked.clone();
+
+    Ok(DumpDhcpParamsResp { data })
 }
 
 #[no_mangle]
