@@ -1006,7 +1006,6 @@ mod tests {
                 },
             },
             vni: Vni::new(100u32).unwrap(),
-            dhcp: Default::default(),
         }
     }
 

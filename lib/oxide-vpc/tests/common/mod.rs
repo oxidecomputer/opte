@@ -17,6 +17,7 @@ pub mod port_state;
 // Let's make our lives easier and pub use a bunch of stuff.
 pub use opte::api::Direction::*;
 pub use opte::api::MacAddr;
+pub use opte::ddi::sync::KRwLock;
 pub use opte::engine::checksum::HeaderChecksum;
 pub use opte::engine::ether::EtherHdr;
 pub use opte::engine::ether::EtherMeta;
@@ -156,7 +157,6 @@ pub fn g1_cfg2(ip_cfg: IpCfg) -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
-        dhcp: base_dhcp_config(),
     }
 }
 
@@ -200,7 +200,6 @@ pub fn g2_cfg() -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
-        dhcp: base_dhcp_config(),
     }
 }
 
@@ -218,8 +217,10 @@ fn oxide_net_builder(
     let snat_limit = NonZeroU32::new(8096).unwrap();
     let one_limit = NonZeroU32::new(1).unwrap();
 
+    let dhcp = Arc::new(KRwLock::into_driver(base_dhcp_config()));
+
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    gateway::setup(&pb, cfg, vpc_map, fw_limit)
+    gateway::setup(&pb, cfg, vpc_map, fw_limit, &dhcp)
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");

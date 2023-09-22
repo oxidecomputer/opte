@@ -16,7 +16,7 @@ cfg_if! {
         use core::cell::UnsafeCell;
         use core::ptr;
         use illumos_sys_hdrs::{
-            kmutex_t, krw_t, krw_type_t, krwlock_t, mutex_enter, mutex_exit,
+            kmutex_t, krw_t, krwlock_t, mutex_enter, mutex_exit,
             mutex_init, rw_enter, rw_exit, rw_init,
         };
     } else {
@@ -25,6 +25,7 @@ cfg_if! {
 }
 
 use illumos_sys_hdrs::kmutex_type_t;
+use illumos_sys_hdrs::krw_type_t;
 
 /// Exposes the illumos mutex(9F) API in a safe manner. We name it
 /// `KMutex` (Kernel Mutex) on purpose. The API for a kernel mutex
@@ -206,10 +207,17 @@ pub struct KRwLock<T> {
     data: UnsafeCell<T>,
 }
 
-#[cfg(all(not(feature = "std"), not(test)))]
+impl<T> KRwLock<T> {
+    pub fn into_driver(val: T) -> Self {
+        let mut out = Self::new(val);
+        out.init(KRwLockType::Driver);
+        out
+    }
+}
+
 pub enum KRwLockType {
-    Driver = krw_type_t::RW_DRIVER.0 as isize,
-    Default = krw_type_t::RW_DEFAULT.0 as isize,
+    Driver = krw_type_t::RW_DRIVER as isize,
+    Default = krw_type_t::RW_DEFAULT as isize,
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -313,5 +321,72 @@ impl<T> DerefMut for KRwLockWriteGuard<'_, T> {
 impl<T> Drop for KRwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
         unsafe { rw_exit(self.lock.rwl.get()) };
+    }
+}
+
+// In a std environment we just wrap `RwLock`.
+#[cfg(any(feature = "std", test))]
+pub struct KRwLock<T> {
+    inner: std::sync::RwLock<T>,
+}
+
+#[cfg(any(feature = "std", test))]
+pub struct KRwLockReadGuard<'a, T: 'a> {
+    guard: std::sync::RwLockReadGuard<'a, T>,
+}
+
+#[cfg(any(feature = "std", test))]
+pub struct KRwLockWriteGuard<'a, T: 'a> {
+    guard: std::sync::RwLockWriteGuard<'a, T>,
+}
+
+#[cfg(any(feature = "std", test))]
+impl<T> Deref for KRwLockReadGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.guard.deref()
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl<T> Deref for KRwLockWriteGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        self.guard.deref()
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl<T> DerefMut for KRwLockWriteGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.guard.deref_mut()
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl<T> KRwLock<T> {
+    pub fn into_inner(self) -> T
+    where
+        T: Sized,
+    {
+        self.inner.into_inner().unwrap()
+    }
+
+    pub fn new(val: T) -> Self {
+        KRwLock { inner: std::sync::RwLock::new(val) }
+    }
+
+    pub fn init(&mut self, _typ: KRwLockType) {}
+
+    pub fn read(&self) -> KRwLockReadGuard<T> {
+        let guard = self.inner.read().unwrap();
+        KRwLockReadGuard { guard }
+    }
+
+    pub fn write(&self) -> KRwLockWriteGuard<T> {
+        let guard = self.inner.write().unwrap();
+        KRwLockWriteGuard { guard }
     }
 }

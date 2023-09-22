@@ -112,7 +112,6 @@ fn lab_cfg() -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
-        dhcp: base_dhcp_config(),
     }
 }
 
@@ -2408,6 +2407,8 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                     panic!("Expected an IANA option, found {:?}", iana);
                 }
 
+                let used_dhcp = base_dhcp_config();
+
                 let domain_list = reply
                     .find_option(dhcpv6::options::Code::DomainList)
                     .expect("Expected a Domain Search List option");
@@ -2416,7 +2417,7 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                     panic!("Expected an Option::DomainList");
                 };
                 let mut expected_bytes = Vec::new();
-                for name in g1_cfg.dhcp.domain_search_list.iter() {
+                for name in used_dhcp.domain_search_list.iter() {
                     expected_bytes.extend_from_slice(name.encode());
                 }
                 assert_eq!(
