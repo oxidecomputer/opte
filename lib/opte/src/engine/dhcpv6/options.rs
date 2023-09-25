@@ -316,12 +316,11 @@ impl<'a> Option<'a> {
             Option::Status(inner) => inner.copy_into(data),
             Option::RapidCommit => unreachable!(),
             Option::DnsServers(inner) => inner.copy_into(data),
-            Option::DomainList(inner) => {
+            Option::DomainList(inner) | Option::Fqdn(inner) => {
                 data[..inner.len()].copy_from_slice(inner);
                 Ok(())
             }
             Option::SntpServers(inner) => inner.copy_into(data),
-            Option::Fqdn(inner) => inner.copy_into(data),
             Option::Other { data: d, .. } => d.copy_into(data),
         }
     }
