@@ -47,6 +47,7 @@ use oxide_vpc::api::SNat6Cfg;
 use oxide_vpc::api::SetDhcpParamsReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::engine::print::print_dhcp_params;
 use oxide_vpc::engine::print::print_v2p;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
@@ -211,7 +212,9 @@ enum Command {
         target: RouterTarget,
     },
 
+    /// Set DHCP parameters (DNS servers, hostname, domain)
     SetDhcpParams {
+        /// The OPTE port to configure.
         #[arg(short)]
         port: String,
 
@@ -219,7 +222,9 @@ enum Command {
         dhcp: DhcpConfig,
     },
 
+    /// Retreive DHCP parameters on a given port
     DumpDhcpParams {
+        /// The OPTE port to query.
         #[arg(short)]
         port: String,
     },
@@ -514,7 +519,6 @@ fn main() -> anyhow::Result<()> {
                     vni: bsvc_vni,
                     mac: bsvc_mac,
                 },
-                // dhcp: dhcp.into(),
             };
 
             hdl.create_xde(&name, cfg, passthrough)?;
@@ -551,7 +555,7 @@ fn main() -> anyhow::Result<()> {
 
         Command::DumpDhcpParams { port } => {
             let req = DumpDhcpParamsReq { port_name: port };
-            hdl.dump_dhcp_params(&req)?;
+            print_dhcp_params(&hdl.dump_dhcp_params(&req)?);
         }
     }
 

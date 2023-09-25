@@ -849,10 +849,6 @@ impl<'a> IpList<'a> {
         }
         Ok(())
     }
-
-    // pub fn to_owned(&self) -> IpList<'static> {
-    //     Self(self.0.to_owned())
-    // }
 }
 
 #[cfg(test)]
@@ -1080,7 +1076,7 @@ mod test {
             assert!(inner.contains(Code::DnsServers));
             assert!(inner.contains(Code::DomainList));
             assert!(inner.contains(Code::SntpServers));
-            assert!(inner.contains(Code::Other(0x27)));
+            assert!(inner.contains(Code::Fqdn));
         } else {
             panic!("Expected an Option Request");
         }

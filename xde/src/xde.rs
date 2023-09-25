@@ -550,7 +550,10 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             let resp = dump_tcp_flows_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
-        OpteCmd::SetDhcpParams => todo!(),
+        OpteCmd::SetDhcpParams => {
+            let resp = set_dhcp_params_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
         OpteCmd::DumpDhcpParams => {
             let resp = dump_dhcp_params_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
