@@ -94,13 +94,13 @@ impl Display for IcmpEchoReply {
     }
 }
 
-/// TODO.
+/// Per-guest DHCP options.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DhcpCfg {
-    /// Hostname to assign connected guests over DHCP.
+    /// Hostname to assign connected guest over DHCP.
     pub hostname: Option<DomainName>,
 
-    /// Local domain of connected guests over DHCP.
+    /// Local domain of connected guest over DHCP.
     pub host_domain: Option<DomainName>,
 
     /// A list of domain names used during DNS resolution.
@@ -109,13 +109,10 @@ pub struct DhcpCfg {
     /// names.
     pub domain_search_list: Vec<DomainName>,
 
-    // Why are these both here? We can verify this in the VpcCfg case,
-    // we can filter in opteadm or error
-    // Alterative whould be to have a {v4, v6, dual} set of Vecs.
-    /// TODO.
+    /// IPv4 external DNS servers provided to a guest.
     pub dns4_servers: Vec<Ipv4Addr>,
 
-    /// TODO
+    /// IPv6 external DNS servers provided to a guest.
     pub dns6_servers: Vec<Ipv6Addr>,
 }
 
@@ -123,7 +120,12 @@ impl DhcpCfg {
     /// Provide DHCP servers which allow basic name resolution via CloudFlare/Google.
     pub fn base_reachable() -> DhcpCfg {
         DhcpCfg {
-            dns4_servers: vec![Ipv4Addr::from([8, 8, 8, 8])],
+            dns4_servers: vec![
+                // Google
+                Ipv4Addr::from([8, 8, 8, 8]),
+                // Cloudflare
+                Ipv4Addr::from([1, 1, 1, 1]),
+            ],
             dns6_servers: vec![
                 // CloudFlare
                 Ipv6Addr::from_const([
@@ -141,6 +143,21 @@ impl DhcpCfg {
                 ]),
             ],
             ..Default::default()
+        }
+    }
+
+    /// Combine `hostname` and `host_domain` into a single FQDN
+    /// in a target buffer.
+    pub fn push_fqdn(&self, buf: &mut Vec<u8>) {
+        let Some(hostname) = &self.hostname else {return;};
+        buf.extend_from_slice(hostname.encode());
+        if let Some(domain_name) = &self.host_domain {
+            // Need to overwrite trailing terminator of hostname.
+            // Saturate is not strictly necessary: DomainNames can
+            // only be parsed rather than constructed, but safer
+            // to be conservative here.
+            buf.truncate(buf.len().saturating_sub(1));
+            buf.extend_from_slice(domain_name.encode());
         }
     }
 }
@@ -1379,5 +1396,36 @@ mod test {
         let addr = to_ipv6("fd00:abcd:abcd:abcd:abcd:abcd:abcd:abcd");
         let expected = to_ipv6("ff02::1:ffcd:abcd");
         assert_eq!(addr.solicited_node_multicast(), expected);
+    }
+
+    #[test]
+    fn dhcp_fqdn() {
+        let no_host = DhcpCfg { hostname: None, ..Default::default() };
+        let only_host =
+            DhcpCfg { hostname: "mybox".parse().ok(), ..Default::default() };
+        let with_domain = DhcpCfg {
+            host_domain: "oxide.computer".parse().ok(),
+            ..only_host.clone()
+        };
+        let domain_no_host = DhcpCfg {
+            host_domain: "oxide.computer".parse().ok(),
+            ..no_host.clone()
+        };
+
+        let mut space = vec![];
+
+        no_host.push_fqdn(&mut space);
+        assert!(space.is_empty());
+
+        only_host.push_fqdn(&mut space);
+        assert_eq!(&space, "\x05mybox\x00".as_bytes());
+
+        space.truncate(0);
+        with_domain.push_fqdn(&mut space);
+        assert_eq!(&space, "\x05mybox\x05oxide\x08computer\x00".as_bytes());
+
+        space.truncate(0);
+        domain_no_host.push_fqdn(&mut space);
+        assert!(space.is_empty());
     }
 }

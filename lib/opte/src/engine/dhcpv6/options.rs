@@ -117,6 +117,10 @@ pub enum Code {
     ///
     /// This option is specified in RFC 4075.
     SntpServers,
+    ///
+    ///
+    /// This option is specified in RFC 4704
+    Fqdn,
     /// Any other option, which is unsupported and uninterpreted.
     Other(u16),
 }
@@ -141,6 +145,7 @@ impl From<Code> for u16 {
             DnsServers => 23,
             DomainList => 24,
             SntpServers => 31,
+            Fqdn => 39,
             Other(x) => x,
         }
     }
@@ -162,6 +167,7 @@ impl From<u16> for Code {
             23 => DnsServers,
             24 => DomainList,
             31 => SntpServers,
+            39 => Fqdn,
             x => Other(x),
         }
     }
@@ -225,6 +231,7 @@ pub enum Option<'a> {
     DnsServers(IpList<'a>),
     DomainList(Cow<'a, [u8]>),
     SntpServers(IpList<'a>),
+    Fqdn(Cow<'a, [u8]>),
     Other { code: Code, data: RawOption<'a> },
 }
 
@@ -248,6 +255,7 @@ impl<'a> Option<'a> {
             Option::DnsServers(_) => Code::DnsServers,
             Option::DomainList(_) => Code::DomainList,
             Option::SntpServers(_) => Code::SntpServers,
+            Option::Fqdn(_) => Code::Fqdn,
             Option::Other { code, .. } => *code,
         }
     }
@@ -266,6 +274,7 @@ impl<'a> Option<'a> {
             Option::DnsServers(inner) => inner.buffer_len(),
             Option::DomainList(inner) => inner.len(),
             Option::SntpServers(inner) => inner.buffer_len(),
+            Option::Fqdn(inner) => inner.len(),
             Option::Other { data, .. } => data.buffer_len(),
         }
     }
@@ -312,6 +321,7 @@ impl<'a> Option<'a> {
                 Ok(())
             }
             Option::SntpServers(inner) => inner.copy_into(data),
+            Option::Fqdn(inner) => inner.copy_into(data),
             Option::Other { data: d, .. } => d.copy_into(data),
         }
     }
@@ -366,6 +376,7 @@ impl<'a> Option<'a> {
             Code::SntpServers => {
                 IpList::from_bytes(data).map(Option::SntpServers)
             }
+            Code::Fqdn => Ok(Option::Fqdn(data.into())),
             Code::Other(_) => {
                 Ok(Option::Other { code, data: RawOption(data.into()) })
             }

@@ -382,6 +382,19 @@ fn generate_reply_options<'a>(
 
         options.push(Dhcpv6Option::DomainList(Cow::Owned(raw_list)));
     }
+
+    if msg.has_option(OptionCode::Fqdn)
+        || msg.has_option_request_with(OptionCode::Fqdn)
+    {
+        // XXX: We should verify customer flow here -- correct
+        //      for internal DNS, maybe not external?
+        // Flags: we are (O)verriding client preference, and (S)erver is
+        // responsible for installing DNS records.
+        //                   xxxx_xNOS
+        let mut buf = vec![0b0000_0011u8];
+        dhcp_state.push_fqdn(&mut buf);
+        options.push(Dhcpv6Option::Fqdn(Cow::Owned(buf)));
+    }
     options
 }
 
