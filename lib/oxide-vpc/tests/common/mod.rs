@@ -109,6 +109,8 @@ pub fn ox_vpc_mac(id: [u8; 3]) -> MacAddr {
 pub fn base_dhcp_config() -> DhcpCfg {
     DhcpCfg {
         domain_search_list: vec!["oxide.computer".parse().unwrap()],
+        hostname: "testbox".parse().ok(),
+        host_domain: "test.oxide.computer".parse().ok(),
         ..DhcpCfg::base_reachable()
     }
 }

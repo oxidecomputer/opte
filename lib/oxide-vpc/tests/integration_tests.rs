@@ -2247,6 +2247,17 @@ fn verify_dhcpv6_essentials<'a>(
         client_id,
         reply.find_option(dhcpv6::options::Code::ClientId).unwrap()
     );
+
+    // Assert FQDN is correctly constructed.
+    assert!(reply.has_option(dhcpv6::options::Code::Fqdn));
+    let fqdn = reply.find_option(dhcpv6::options::Code::Fqdn).unwrap();
+    let dhcpv6::options::Option::Fqdn(fqdn) = fqdn else {
+        panic!("Found option from FQDN lookup was not FQDN.");
+    };
+    assert_eq!(
+        &fqdn[1..],
+        "\x07testbox\x04test\x05oxide\x08computer\x00".as_bytes()
+    );
 }
 
 // Test that we reply to a DHCPv6 Solicit or Request message with the right
@@ -2278,8 +2289,11 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
     };
     // Also request the DNS server list and Domain Search List, via the Option
     // Request option.
-    let extra_options =
-        &[dhcpv6::options::Code::DnsServers, dhcpv6::options::Code::DomainList];
+    let extra_options = &[
+        dhcpv6::options::Code::DnsServers,
+        dhcpv6::options::Code::DomainList,
+        dhcpv6::options::Code::Fqdn,
+    ];
     let oro = dhcpv6::options::OptionRequest(extra_options.as_slice().into());
     let base_options = vec![
         dhcpv6::options::Option::ClientId(dhcpv6::Duid::from(
