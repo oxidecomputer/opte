@@ -51,7 +51,6 @@ use oxide_vpc::engine::print::print_dhcp_params;
 use oxide_vpc::engine::print::print_v2p;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Parser)]
 #[command(version=opte_pkg_version())]
 enum Command {
@@ -183,8 +182,6 @@ enum Command {
         #[command(flatten)]
         snat: Option<SnatConfig>,
 
-        // #[command(flatten)]
-        // dhcp: DhcpConfig,
         #[arg(long)]
         external_ip: Option<IpAddr>,
 
@@ -447,7 +444,6 @@ fn main() -> anyhow::Result<()> {
             vpc_vni,
             src_underlay_addr,
             snat,
-            // dhcp,
             external_ip,
             passthrough,
         } => {

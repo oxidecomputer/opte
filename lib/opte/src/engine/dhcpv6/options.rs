@@ -117,7 +117,9 @@ pub enum Code {
     ///
     /// This option is specified in RFC 4075.
     SntpServers,
-    ///
+    /// The option contains a fully-qualified domain name, used by the client to
+    /// request a given IP address or by the server to supply a host with its
+    /// intended hostname and domain.
     ///
     /// This option is specified in RFC 4704
     Fqdn,

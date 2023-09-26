@@ -117,7 +117,7 @@ pub struct DhcpCfg {
 }
 
 impl DhcpCfg {
-    /// Provide DHCP servers which allow basic name resolution via CloudFlare/Google.
+    /// Provide DNS servers which allow basic name resolution via CloudFlare/Google.
     pub fn base_reachable() -> DhcpCfg {
         DhcpCfg {
             dns4_servers: vec![

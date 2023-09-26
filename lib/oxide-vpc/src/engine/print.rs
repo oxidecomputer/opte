@@ -68,7 +68,7 @@ fn print_v2p_ip6((src, phys): &(Ipv6Addr, GuestPhysAddr)) {
     );
 }
 
-/// Print a [`DumpVirt2PhysResp`].
+/// Print a [`DumpDhcpParamsResp`].
 pub fn print_dhcp_params(resp: &DumpDhcpParamsResp) {
     println!("DHCP Configuration");
     print_hrb();

@@ -64,7 +64,7 @@ pub use opte::engine::GenericUlp;
 pub use opte::ExecCtx;
 pub use oxide_vpc::api::AddFwRuleReq;
 pub use oxide_vpc::api::BoundaryServices;
-use oxide_vpc::api::DhcpCfg;
+pub use oxide_vpc::api::DhcpCfg;
 pub use oxide_vpc::api::IpCfg;
 pub use oxide_vpc::api::Ipv4Cfg;
 pub use oxide_vpc::api::Ipv6Cfg;

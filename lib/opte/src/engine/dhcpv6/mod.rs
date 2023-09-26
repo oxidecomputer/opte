@@ -87,8 +87,8 @@ use opte_api::MacAddr;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::sync::Arc;
         use alloc::borrow::Cow;
+        use alloc::sync::Arc;
         use alloc::vec::Vec;
     } else {
         use std::borrow::Cow;

@@ -47,6 +47,7 @@ use serde::Serialize;
 use serde::Serializer;
 use smoltcp::wire::DhcpPacket;
 use smoltcp::wire::DhcpRepr;
+use smoltcp::wire::Ipv4Address;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -485,16 +486,11 @@ impl HairpinAction for DhcpAction {
         let dns_servers = if dhcp_state_lock.dns4_servers.is_empty() {
             None
         } else {
-            for (slot, server) in
-                dns_space.iter_mut().zip(&dhcp_state_lock.dns4_servers)
-            {
-                *slot = Some(smoltcp::wire::Ipv4Address::from(*server));
-            }
+            dns_space.iter_mut().zip(&dhcp_state_lock.dns4_servers).for_each(
+                |(slot, server)| *slot = Some(Ipv4Address::from(*server)),
+            );
             Some(dns_space)
         };
-
-        // let dns_servers =
-        //     dhcp_state_lock.dns4_servers.map(|ips| ips.map(|mip| mip.map(|ip| ip.into())));
 
         let reply = DhcpRepr {
             message_type: mt.into(),
@@ -538,7 +534,7 @@ impl HairpinAction for DhcpAction {
         let mut dhcp = DhcpPacket::new_unchecked(&mut tmp);
         reply.emit(&mut dhcp).unwrap();
 
-        // XXX: smoltcp v0.9+ allow `additional_options` in `Repr`.
+        // XXX: smoltcp v0.9+ allows `additional_options` in `Repr`.
         //      This will prevent us from having to perform packet
         //      surgery like this.
 

@@ -101,7 +101,6 @@ impl OptePort {
                 vni: Vni::new(99u32).unwrap(),
                 mac: "00:00:00:00:00:00".parse().unwrap(),
             },
-            domain_list: Vec::new(),
         };
         let adm = OpteAdm::open(OpteAdm::XDE_CTL)?;
         adm.create_xde(name, cfg.clone(), false)?;

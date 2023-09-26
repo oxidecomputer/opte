@@ -2255,7 +2255,6 @@ fn dump_tcp_flows_hdlr(
 
 #[no_mangle]
 fn set_dhcp_params_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    // XXX: should work, but horrifyingly ugly. Return later...
     let req: SetDhcpParamsReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();

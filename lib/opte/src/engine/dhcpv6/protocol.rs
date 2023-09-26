@@ -393,7 +393,12 @@ fn generate_reply_options<'a>(
         //                   xxxx_xNOS
         let mut buf = vec![0b0000_0011u8];
         dhcp_state.push_fqdn(&mut buf);
-        options.push(Dhcpv6Option::Fqdn(Cow::Owned(buf)));
+
+        // XXX: May want to reflect client's hostname request if
+        //      we have no override.
+        if buf.len() != 1 {
+            options.push(Dhcpv6Option::Fqdn(Cow::Owned(buf)));
+        }
     }
     options
 }
