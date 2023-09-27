@@ -18,9 +18,19 @@ opte-test-utils.workspace = true
 oxide-vpc.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
+clap.workspace = true
 ctor.workspace = true
 smoltcp.workspace = true
 
+[target.'cfg(target_os = "illumos")'.dev-dependencies]
+xde-tests = { path = "../xde-tests" }
+ztest.workspace = true
+
 [[bench]]
 name = "userland"
+harness = false
+
+[[bench]]
+name = "xde"
 harness = false

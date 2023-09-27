@@ -895,12 +895,16 @@ dependencies = [
 name = "opte-bench"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "clap",
  "criterion",
  "ctor",
  "opte",
  "opte-test-utils",
  "oxide-vpc",
  "smoltcp",
+ "xde-tests",
+ "ztest",
 ]
 
 [[package]]
