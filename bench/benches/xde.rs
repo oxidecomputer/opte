@@ -100,6 +100,36 @@ fn elevate() -> anyhow::Result<()> {
     }
 }
 
+fn print_banner(text: &str) {
+    let max_len = text.lines().map(str::len).max().unwrap_or_default();
+
+    println!("###{:->max_len$}###", "");
+    for line in text.lines() {
+        println!(":::{line:^max_len$}:::");
+    }
+    println!("###{:->max_len$}###", "");
+}
+
+#[cfg(target_os = "illumos")]
+fn zone_to_zone() -> anyhow::Result<()> {
+    // TODO: forcibly load xde here if possible.
+
+    print_banner("Building test topology... please wait! (120s)");
+    let topol = xde_tests::two_node_topology()?;
+    print_banner("Topology built!");
+
+    // TODO: start expts in here.
+    // WANT: json output, parsing, etc.
+    //       begin dtrace in local, iperf -c in host 0.
+    //       Probably want to cat all stack traces together, same for histos.
+    //       RW distinction doesn't mean much here: we'll be seeing both anyhow.
+    for node in &topol.nodes {
+        node.zone.zone.zexec(&format!("which iperf"))?;
+    }
+
+    Ok(())
+}
+
 #[cfg(target_os = "illumos")]
 fn main() -> anyhow::Result<()> {
     elevate()?;
@@ -108,8 +138,8 @@ fn main() -> anyhow::Result<()> {
 
     match cfg.command {
         Experiment::SingleZone { iperf_server: _server, .. } => todo!(),
-        Experiment::ZoneToZone { .. } => {}
+        Experiment::ZoneToZone { .. } => {
+            zone_to_zone()
+        }
     }
-
-    Ok(())
 }
