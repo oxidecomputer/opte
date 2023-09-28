@@ -17,12 +17,12 @@ xde_rx:entry {
 }
 
 xde_mc_tx:return /self->ts/ {
-	@time["tx"] = lquantize((vtimestamp - self->ts), 1024, 65536, 1024);
+	@time["tx"] = lquantize((vtimestamp - self->ts), 256, 32768, 256);
 	self->ts = 0;
 }
 
 xde_rx:return /self->ts/ {
-	@time["rx"] = lquantize((vtimestamp - self->ts), 1024, 65536, 1024);
+	@time["rx"] = lquantize((vtimestamp - self->ts), 256, 32768, 256);
 	self->ts = 0;
 }
 

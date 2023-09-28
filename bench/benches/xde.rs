@@ -16,6 +16,7 @@ use clap::Args;
 use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
+use opte_bench::iperf::Output;
 use serde::Deserialize;
 use std::fs;
 use std::fs::File;
@@ -196,15 +197,16 @@ struct DtraceOutput {
 
 fn run_local_dtraces(out_dir: PathBuf) -> Result<(Vec<Child>, DtraceOutput)> {
     fs::create_dir_all(&out_dir)?;
-
     let dtraces = ws_root().join("dtrace");
+
+    // Default dtrace behaviour here is to append; which we don't want.
     let histo_path = out_dir.join("histos.out");
+    if let Err(e) = fs::remove_file(&histo_path) {
+        eprintln!("Failed to remove {histo_path:?}: {e}");
+    }
     let Some(histo_path_str) = histo_path.to_str() else {
         anyhow::bail!("Illegal utf8 in histogram path.")
     };
-    // dtrace -L $MYDIR/lib -I $MYDIR -Cqs $MYDIR/${script}.d
-    // let histo = Command::new("./opte-trace")
-    //     .args(["opte-count-cycles.d", "-o", histo_path_str])
     let histo = Command::new("dtrace")
         .args([
             "-L",
@@ -219,8 +221,11 @@ fn run_local_dtraces(out_dir: PathBuf) -> Result<(Vec<Child>, DtraceOutput)> {
         .current_dir(dtraces)
         .spawn()?;
 
-    // pfexec dtrace -x stackframes=100 -n 'profile-201us /arg0/ { @[stack()] = count(); } tick-120s { exit(0); }' -o out.stacks
+    // Ditto for stack tracing.
     let stack_path = out_dir.join("raw.stacks");
+    if let Err(e) = fs::remove_file(&stack_path) {
+        eprintln!("Failed to remove {stack_path:?}: {e}");
+    }
     let Some(stack_path_str) = stack_path.to_str() else {
         anyhow::bail!("Illegal utf8 in histogram path.")
     };
@@ -251,9 +256,8 @@ fn spawn_local_dtraces(
             Ok((children, result)) => {
                 let _ = kill_rx.recv();
 
+                // Need to manually ctrl-c and await EACH process.
                 for mut child in children {
-                    // child.kill();
-                    println!("Interrupting...");
                     let upgrade = nix::sys::signal::kill(
                         nix::unistd::Pid::from_raw(child.id() as i32),
                         nix::sys::signal::Signal::SIGINT,
@@ -277,38 +281,54 @@ fn spawn_local_dtraces(
 
 #[cfg(target_os = "illumos")]
 fn zone_to_zone() -> Result<()> {
+    // add_drv xde.
     ensure_xde()?;
 
-    print_banner("Building test topology... please wait! (120s)");
+    print_banner("Building test topology... (120s)");
     let topol = xde_tests::two_node_topology()?;
     print_banner("Topology built!");
 
+    // Create iPerf server on one zone.
     let iperf_sess = topol.nodes[1].command("iperf -s").spawn()?;
     let target_ip = topol.nodes[1].port.ip();
 
-    // TEST FOR NOW
-    let (kill, done) = spawn_local_dtraces("testtest");
-
+    print_banner("iPerf spawned!\nWaiting... (10s)");
     std::thread::sleep(Duration::from_secs(10));
+    print_banner("Go!");
 
+    // Ping for good luck / to verify reachability.
     &topol.nodes[0]
         .zone
         .zone
         .zexec(&format!("ping {}", &topol.nodes[1].port.ip()))?;
 
-    // TODO: start expts in here.
-    // WANT: json output, parsing, etc.
-    //       begin dtrace in local, iperf -c in host 0.
-    //       Probably want to cat all stack traces together, same for histos.
-    //       RW distinction doesn't mean much here: we'll be seeing both anyhow.
-    // for node in &topol.nodes {
-    //     node.zone.zone.zexec(&format!("which iperf"))?;
-    // }
-    // let iperf_out = topol.nodes[0].zone.zone.zexec(&format!("iperf -c {target_ip} -J"))?;
-    print_banner("iPerf done...\nAwating out files...");
+    // Begin dtrace sessions in global zone.
+    let (kill, done) = spawn_local_dtraces("iperf-tcp");
+
+    // Begin a handful of iPerf client sessions, dtrace will cat
+    // all stack traces/times together.
+    let mut outputs = vec![];
+    let max = 3;
+    for i in 0..3 {
+        // XXX: Want to run one of the dtraces at a time?
+        //      Looks like histo-timing has a noticeable cost on BW.
+        print!("Run {i}/{max}...");
+        let iperf_done = topol.nodes[0]
+            .command(&format!("iperf -c {target_ip} -J"))
+            .output()?;
+        let iperf_out = std::str::from_utf8(&iperf_done.stdout)?;
+        let parsed_out: Output = serde_json::from_str(&iperf_out)?;
+        println!("{}Mbps", parsed_out.end.sum_sent.bits_per_second / 1e6);
+        outputs.push(parsed_out);
+    }
+
+    // Close dtrace.
+    print_banner("iPerf done...\nAwaiting out files...");
     let _ = kill.send(());
     println!("got: {:?}", done.recv());
     print_banner("done!");
+
+    // XXX: parse out files, hack into criterion.
 
     Ok(())
 }

@@ -27,11 +27,11 @@ pub struct StartSession {
     pub connecting_to: Host,
     pub cookie: String,
     pub tcp_mss_default: Option<u64>,
-    pub target_bitrate: u64,
-    pub fq_rate: u64,
-    pub sock_bufsize: u64,
-    pub sndbuf_actual: u64,
-    pub rcvbuf_actual: u64,
+    pub target_bitrate: Option<u64>,
+    pub fq_rate: Option<u64>,
+    pub sock_bufsize: Option<u64>,
+    pub sndbuf_actual: Option<u64>,
+    pub rcvbuf_actual: Option<u64>,
     pub test_start: TestStart,
 }
 
@@ -66,10 +66,10 @@ pub struct TestStart {
     pub bytes: u64,
     pub blocks: u64,
     pub reverse: u64,
-    pub tos: u64,
-    pub target_bitrate: u64,
-    pub bidir: u64,
-    pub fqrate: u64,
+    pub tos: Option<u64>,
+    pub target_bitrate: Option<u64>,
+    pub bidir: Option<u64>,
+    pub fqrate: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -106,7 +106,7 @@ pub struct Stat {
     pub lost_percent: Option<f64>,
     #[serde(default)]
     pub omitted: bool,
-    pub sender: bool,
+    pub sender: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
