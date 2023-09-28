@@ -17,11 +17,13 @@
 
 */
 
+use anyhow::Result;
 use clap::Args;
 use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
 use std::net::IpAddr;
+use std::process::Command;
 #[cfg(target_os = "illumos")]
 use ztest::*;
 
@@ -71,7 +73,7 @@ struct IgnoredExtras {
 }
 
 #[cfg(not(target_os = "illumos"))]
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<()> {
     // Parse args etc. so that we can verify command-line functionality
     // on non-illumos hosts if needed.
     let _cfg = ConfigInput::parse();
@@ -80,8 +82,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 // Needed for us to just `cargo bench` easily.
-fn elevate() -> anyhow::Result<()> {
-    let curr_user_run = std::process::Command::new("whoami").output()?;
+fn elevate() -> Result<()> {
+    let curr_user_run = Command::new("whoami").output()?;
     if !curr_user_run.status.success() {
         let as_utf = std::str::from_utf8(&curr_user_run.stderr);
         anyhow::bail!("Failed to get current user: {:?}", as_utf);
@@ -91,8 +93,7 @@ fn elevate() -> anyhow::Result<()> {
         Ok("root\n") => Ok(()),
         Ok(_) => {
             let my_args = std::env::args();
-            let mut elevated =
-                std::process::Command::new("pfexec").args(my_args).spawn()?;
+            let mut elevated = Command::new("pfexec").args(my_args).spawn()?;
             let exit_code = elevated.wait()?;
             std::process::exit(exit_code.code().unwrap_or(1))
         }
@@ -110,9 +111,27 @@ fn print_banner(text: &str) {
     println!("###{:->max_len$}###", "");
 }
 
+/// Ensure that the XDE kernel module is present.
+fn ensure_xde() -> Result<()> {
+    let run = Command::new("add_drv").arg("xde").output()?;
+
+    if run.status.success() {
+        Ok(())
+    } else {
+        let out_msg = std::str::from_utf8(&run.stderr)
+            .map_err(|_| anyhow::anyhow!("Failed to parse add_drv output."))?;
+
+        if out_msg.contains("is already installed") {
+            Ok(())
+        } else {
+            anyhow::bail!("`add_drv xde` failed: {out_msg}")
+        }
+    }
+}
+
 #[cfg(target_os = "illumos")]
-fn zone_to_zone() -> anyhow::Result<()> {
-    // TODO: forcibly load xde here if possible.
+fn zone_to_zone() -> Result<()> {
+    ensure_xde()?;
 
     print_banner("Building test topology... please wait! (120s)");
     let topol = xde_tests::two_node_topology()?;
@@ -131,15 +150,13 @@ fn zone_to_zone() -> anyhow::Result<()> {
 }
 
 #[cfg(target_os = "illumos")]
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<()> {
     elevate()?;
 
     let cfg = ConfigInput::parse();
 
     match cfg.command {
         Experiment::SingleZone { iperf_server: _server, .. } => todo!(),
-        Experiment::ZoneToZone { .. } => {
-            zone_to_zone()
-        }
+        Experiment::ZoneToZone { .. } => zone_to_zone(),
     }
 }
