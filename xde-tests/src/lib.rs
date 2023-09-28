@@ -21,6 +21,7 @@ use std::env;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
+use zone::Zlogin;
 use ztest::*;
 
 /// The overlay network used in all tests.
@@ -220,6 +221,14 @@ pub struct TestNode {
     pub port: OptePort,
 }
 
+impl TestNode {
+    /// Return an executable command targeting this zone.
+    pub fn command(&self, cmd: &str) -> Command {
+        let z = Zlogin::new(&self.zone.zone.name);
+        z.as_command(cmd)
+    }
+}
+
 pub struct Topology {
     pub nodes: Vec<TestNode>,
     pub v6_routes: Vec<RouteV6>,
@@ -323,8 +332,6 @@ pub fn two_node_topology() -> Result<Topology> {
 
     // Set up a zfs pool for our test zones.
     let zfs = Arc::new(Zfs::new("opte2node")?);
-
-    std::thread::sleep(Duration::from_secs(1));
 
     // Create a pair of zones to simulate our VM instances.
     println!("start zone a");

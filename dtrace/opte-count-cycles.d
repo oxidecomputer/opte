@@ -26,8 +26,6 @@ xde_rx:return /self->ts/ {
 	self->ts = 0;
 }
 
-tick-120s { exit(0); }
-
 END {
 
 }

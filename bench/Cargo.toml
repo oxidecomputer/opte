@@ -13,6 +13,7 @@ alloc = []
 
 [dependencies]
 criterion.workspace = true
+nix.workspace = true
 opte.workspace = true
 opte-test-utils.workspace = true
 oxide-vpc.workspace = true

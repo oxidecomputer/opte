@@ -670,9 +670,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.146"
+version = "0.2.148"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f92be4933c13fd498862a9e02a3055f8a8d9c039ce33db97306fd5a6caa7f29b"
+checksum = "9cdc71e17332e86d2e1d38c1f99edcb6288ee11b815fb1a4b049eaa2114d369b"
 
 [[package]]
 name = "libdlpi-sys"
@@ -769,6 +769,17 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys",
+]
+
+[[package]]
+name = "nix"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
+dependencies = [
+ "bitflags 2.4.0",
+ "cfg-if 1.0.0",
+ "libc",
 ]
 
 [[package]]
@@ -899,6 +910,7 @@ dependencies = [
  "clap",
  "criterion",
  "ctor",
+ "nix",
  "opte",
  "opte-test-utils",
  "oxide-vpc",
@@ -2055,8 +2067,8 @@ dependencies = [
 
 [[package]]
 name = "zone"
-version = "0.2.0"
-source = "git+https://github.com/oxidecomputer/zone#ffd07a02ca838dddc2fdaae845d6c16831a39e12"
+version = "0.3.0"
+source = "git+https://github.com/oxidecomputer/zone#5503b472dd87a3e6443624e1b42844882d6f769c"
 dependencies = [
  "itertools",
  "thiserror",
@@ -2065,8 +2077,8 @@ dependencies = [
 
 [[package]]
 name = "zone_cfg_derive"
-version = "0.2.0"
-source = "git+https://github.com/oxidecomputer/zone#ffd07a02ca838dddc2fdaae845d6c16831a39e12"
+version = "0.3.0"
+source = "git+https://github.com/oxidecomputer/zone#5503b472dd87a3e6443624e1b42844882d6f769c"
 dependencies = [
  "heck",
  "proc-macro-error",
