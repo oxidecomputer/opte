@@ -9,7 +9,7 @@ use criterion::measurement::WallTime;
 
 #[cfg(feature = "alloc")]
 pub mod alloc;
-
+pub mod iperf;
 pub mod packet;
 
 /// Additional labelling information for [`Measurement`]s for

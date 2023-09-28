@@ -902,6 +902,8 @@ dependencies = [
  "opte",
  "opte-test-utils",
  "oxide-vpc",
+ "serde",
+ "serde_json",
  "smoltcp",
  "xde-tests",
  "ztest",
