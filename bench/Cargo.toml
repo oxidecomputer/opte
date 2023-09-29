@@ -12,6 +12,7 @@ default = ["alloc"]
 alloc = []
 
 [dependencies]
+anyhow.workspace = true
 criterion.workspace = true
 nix.workspace = true
 opte.workspace = true
@@ -21,7 +22,6 @@ serde = { default_features = true, workspace = true }
 serde_json.workspace = true
 
 [dev-dependencies]
-anyhow.workspace = true
 clap.workspace = true
 ctor.workspace = true
 smoltcp.workspace = true

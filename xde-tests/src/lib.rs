@@ -20,7 +20,6 @@ use oxide_vpc::api::VpcCfg;
 use std::env;
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
 use zone::Zlogin;
 use ztest::*;
 
