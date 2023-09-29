@@ -18,13 +18,17 @@ use clap::Subcommand;
 use clap::ValueEnum;
 use opte_bench::iperf::Output;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
+use std::io::Stdin;
+use std::io::Stdout;
 use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
@@ -32,6 +36,15 @@ use std::sync::OnceLock;
 use std::time::Duration;
 #[cfg(target_os = "illumos")]
 use ztest::*;
+
+#[cfg(not(target_os = "illumos"))]
+fn main() -> Result<()> {
+    // Parse args etc. so that we can verify command-line functionality
+    // on non-illumos hosts if needed.
+    let _cfg = ConfigInput::parse();
+
+    anyhow::bail!("This benchmark must be run on Helios!")
+}
 
 // XXX: lifted verbatim from criterion
 /// Returns the Cargo target directory, possibly calling `cargo metadata` to
@@ -132,15 +145,6 @@ struct IgnoredExtras {
     bench: bool,
 }
 
-#[cfg(not(target_os = "illumos"))]
-fn main() -> Result<()> {
-    // Parse args etc. so that we can verify command-line functionality
-    // on non-illumos hosts if needed.
-    let _cfg = ConfigInput::parse();
-
-    anyhow::bail!("This benchmark must be run on Helios!")
-}
-
 // Needed for us to just `cargo bench` easily.
 fn elevate() -> Result<()> {
     let curr_user_run = Command::new("whoami").output()?;
@@ -186,6 +190,41 @@ fn ensure_xde() -> Result<()> {
         } else {
             anyhow::bail!("`add_drv xde` failed: {out_msg}")
         }
+    }
+}
+
+fn check_deps() -> Result<()> {
+    let dep_map = [
+        ("iperf", "iperf"),
+        ("stackcollapse.pl", "flamegraph"),
+        ("flamegraph.pl", "flamegraph"),
+    ];
+
+    let mut missing_progs = vec![];
+    let mut missing_pkgs = HashSet::new();
+
+    for (prog, pkg) in dep_map {
+        if Command::new("which")
+            .arg(prog)
+            .output()
+            .map_err(|e| ())
+            .and_then(|out| if out.status.success() { Ok(()) } else { Err(()) })
+            .is_err()
+        {
+            missing_progs.push(prog);
+            missing_pkgs.insert(pkg);
+        }
+    }
+
+    if missing_progs.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "Could not find program(s) [{}]: \
+            check path, or 'pfexec pkg install {}'",
+            missing_progs.join(", "),
+            missing_pkgs.into_iter().collect::<Vec<_>>().join(" "),
+        )
     }
 }
 
@@ -279,56 +318,113 @@ fn spawn_local_dtraces(
     (kill_tx, out_rx)
 }
 
-#[cfg(target_os = "illumos")]
-fn zone_to_zone() -> Result<()> {
-    // add_drv xde.
-    ensure_xde()?;
+fn build_flamegraph(
+    stack_file: impl AsRef<Path>,
+    out_dir: impl AsRef<Path>,
+    rx_name: Option<&str>,
+    tx_name: Option<&str>,
+) -> Result<()> {
+    let fold_path = out_dir.as_ref().join("stacks.folded");
+    let fold_space = File::create(&fold_path)?;
 
-    print_banner("Building test topology... (120s)");
-    let topol = xde_tests::two_node_topology()?;
-    print_banner("Topology built!");
-
-    // Create iPerf server on one zone.
-    let iperf_sess = topol.nodes[1].command("iperf -s").spawn()?;
-    let target_ip = topol.nodes[1].port.ip();
-
-    print_banner("iPerf spawned!\nWaiting... (10s)");
-    std::thread::sleep(Duration::from_secs(10));
-    print_banner("Go!");
-
-    // Ping for good luck / to verify reachability.
-    &topol.nodes[0]
-        .zone
-        .zone
-        .zexec(&format!("ping {}", &topol.nodes[1].port.ip()))?;
-
-    // Begin dtrace sessions in global zone.
-    let (kill, done) = spawn_local_dtraces("iperf-tcp");
-
-    // Begin a handful of iPerf client sessions, dtrace will cat
-    // all stack traces/times together.
-    let mut outputs = vec![];
-    let max = 3;
-    for i in 0..3 {
-        // XXX: Want to run one of the dtraces at a time?
-        //      Looks like histo-timing has a noticeable cost on BW.
-        print!("Run {i}/{max}...");
-        let iperf_done = topol.nodes[0]
-            .command(&format!("iperf -c {target_ip} -J"))
-            .output()?;
-        let iperf_out = std::str::from_utf8(&iperf_done.stdout)?;
-        let parsed_out: Output = serde_json::from_str(&iperf_out)?;
-        println!("{}Mbps", parsed_out.end.sum_sent.bits_per_second / 1e6);
-        outputs.push(parsed_out);
+    let stack_status = Command::new("stackcollapse.pl")
+        .arg(stack_file.as_ref().as_os_str())
+        .stdout(Stdio::from(fold_space))
+        .status()?;
+    if !stack_status.success() {
+        anyhow::bail!("Failed to collapse stack traces.")
     }
 
-    // Close dtrace.
-    print_banner("iPerf done...\nAwaiting out files...");
-    let _ = kill.send(());
-    println!("got: {:?}", done.recv());
-    print_banner("done!");
+    let terms = [
+        ("xde_rx", rx_name.unwrap_or("rx")),
+        ("xde_mc_tx", tx_name.unwrap_or("tx")),
+    ];
+
+    for (tracked_fn, out_name) in terms {
+        let grepped_name = out_dir.as_ref().join(format!("{out_name}.folded"));
+        let grepped = File::create(&grepped_name)?;
+        let grep_status = Command::new("grep")
+            .arg(tracked_fn)
+            .arg(fold_path.as_os_str())
+            .stdout(Stdio::from(grepped))
+            .status()?;
+        if !grep_status.success() {
+            anyhow::bail!("Failed to grep stack trace for {tracked_fn}.")
+        }
+
+        let flame_name = out_dir.as_ref().join(format!("{out_name}.svg"));
+        let flame_file = File::create(&flame_name)?;
+        let flame_status = Command::new("flamegraph.pl")
+            .arg(grepped_name.as_os_str())
+            .stdout(Stdio::from(flame_file))
+            .status()?;
+        if !flame_status.success() {
+            anyhow::bail!("Failed to create flamegraph for {tracked_fn}.")
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "illumos")]
+fn zone_to_zone() -> Result<()> {
+    // // add_drv xde.
+    // ensure_xde()?;
+
+    // print_banner("Building test topology... (120s)");
+    // let topol = xde_tests::two_node_topology()?;
+    // print_banner("Topology built!");
+
+    // // Create iPerf server on one zone.
+    // let iperf_sess = topol.nodes[1].command("iperf -s").spawn()?;
+    // let target_ip = topol.nodes[1].port.ip();
+
+    // print_banner("iPerf spawned!\nWaiting... (10s)");
+    // std::thread::sleep(Duration::from_secs(10));
+    // print_banner("Go!");
+
+    // // Ping for good luck / to verify reachability.
+    // &topol.nodes[0]
+    //     .zone
+    //     .zone
+    //     .zexec(&format!("ping {}", &topol.nodes[1].port.ip()))?;
+
+    // // Begin dtrace sessions in global zone.
+    // let (kill, done) = spawn_local_dtraces("iperf-tcp");
+
+    // // Begin a handful of iPerf client sessions, dtrace will cat
+    // // all stack traces/times together.
+    // let mut outputs = vec![];
+    // let max = 3;
+    // for i in 0..3 {
+    //     // XXX: Want to run one of the dtraces at a time?
+    //     //      Looks like histo-timing has a noticeable cost on BW.
+    //     print!("Run {i}/{max}...");
+    //     let iperf_done = topol.nodes[0]
+    //         .command(&format!("iperf -c {target_ip} -J"))
+    //         .output()?;
+    //     let iperf_out = std::str::from_utf8(&iperf_done.stdout)?;
+    //     let parsed_out: Output = serde_json::from_str(&iperf_out)?;
+    //     println!("{}Mbps", parsed_out.end.sum_sent.bits_per_second / 1e6);
+    //     outputs.push(parsed_out);
+    // }
+
+    // // Close dtrace.
+    // print_banner("iPerf done...\nAwaiting out files...");
+    // let _ = kill.send(());
+    // println!("got: {:?}", done.recv());
+    // print_banner("done!");
 
     // XXX: parse out files, hack into criterion.
+
+    let out_dir = output_base_dir().join("iperf-tcp");
+    let histo_path = out_dir.join("histos.out");
+    let stack_path = out_dir.join("raw.stacks");
+    let outdata = DtraceOutput { histo_path, stack_path };
+
+    println!("{outdata:?}",);
+
+    build_flamegraph(outdata.stack_path, &out_dir, None, None)?;
 
     Ok(())
 }
@@ -336,6 +432,7 @@ fn zone_to_zone() -> Result<()> {
 #[cfg(target_os = "illumos")]
 fn main() -> Result<()> {
     elevate()?;
+    check_deps()?;
 
     let cfg = ConfigInput::parse();
 
