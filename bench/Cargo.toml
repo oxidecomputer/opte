@@ -15,6 +15,7 @@ alloc = []
 anyhow.workspace = true
 criterion.workspace = true
 nix.workspace = true
+rand.workspace = true
 opte.workspace = true
 opte-test-utils.workspace = true
 oxide-vpc.workspace = true

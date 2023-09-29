@@ -10,8 +10,11 @@ use super::MeasurementInfo;
 use criterion::measurement::Measurement;
 use criterion::measurement::ValueFormatter;
 use criterion::measurement::WallTime;
+use rand::distributions::WeightedIndex;
+use rand::prelude::*;
 use std::path::Path;
 use std::time::Duration;
+use std::time::Instant;
 
 pub struct DTraceHisto {
     pub label: Option<String>,
@@ -33,7 +36,6 @@ impl DTraceHisto {
         data: &str,
         bucket_width: u64,
     ) -> anyhow::Result<Vec<Self>> {
-        //format: n* blank
         let mut out = vec![];
         let mut current_state = ParseState::NotBuilding;
 
@@ -63,7 +65,7 @@ impl DTraceHisto {
     }
 }
 
-pub enum ParseState {
+enum ParseState {
     NotBuilding,
     FoundName(String),
     Progress(DTraceHisto),
@@ -71,7 +73,6 @@ pub enum ParseState {
 
 impl ParseState {
     fn blank_line(self) -> anyhow::Result<(ParseState, Option<DTraceHisto>)> {
-        println!("blank!");
         Ok(match self {
             Self::NotBuilding => (Self::NotBuilding, None),
             Self::FoundName(n) => {
@@ -82,7 +83,6 @@ impl ParseState {
     }
 
     fn header(self, bucket_width: u64) -> anyhow::Result<ParseState> {
-        println!("header!");
         Ok(match self {
             Self::NotBuilding => Self::Progress(DTraceHisto {
                 label: None,
@@ -106,7 +106,6 @@ impl ParseState {
         line: &str,
         bucket_width: u64,
     ) -> anyhow::Result<ParseState> {
-        println!("data! {line}");
         let trimmed = line.trim();
         Ok(match self {
             Self::NotBuilding => Self::FoundName(trimmed.to_string()),
@@ -154,9 +153,19 @@ impl Measurement for DTraceHisto {
     }
 
     fn end(&self, _i: Self::Intermediate) -> Self::Value {
-        // todo: weighted random select.
-        // T::read() - i
-        Duration::from_nanos(200)
+        // XXX: I think we *really* want to precache the WeightedIndex.
+        let mut rng = thread_rng();
+        let idx = WeightedIndex::new(self.buckets.iter().map(|x| x.1)).unwrap();
+
+        let chosen_bucket = idx.sample(&mut rng);
+        let sample = self.buckets[chosen_bucket].0;
+        let out = Duration::from_nanos(sample);
+
+        // Forgive me.
+        let t = Instant::now();
+        while t.elapsed() < out {}
+
+        out
     }
 
     fn add(&self, v1: &Self::Value, v2: &Self::Value) -> Self::Value {

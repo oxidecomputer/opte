@@ -12,17 +12,20 @@
 // - Export iPerf run stats, collect.
 
 use anyhow::Result;
-use clap::Args;
 use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
+use criterion::Criterion;
+use opte_bench::dtrace::DTraceHisto;
 use opte_bench::iperf::Output;
+use rand::distributions::Distribution;
+use rand::distributions::WeightedIndex;
+use rand::thread_rng;
+use rand::Rng;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
-use std::io::Stdin;
-use std::io::Stdout;
 use std::net::IpAddr;
 use std::path::Path;
 use std::path::PathBuf;
@@ -34,8 +37,6 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::sync::OnceLock;
 use std::time::Duration;
-#[cfg(target_os = "illumos")]
-use ztest::*;
 
 #[cfg(not(target_os = "illumos"))]
 fn main() -> Result<()> {
@@ -114,6 +115,10 @@ enum Experiment {
     /// illustrative of how packet handling times fit in relative to
     /// other mac costs.
     Local {
+        /// Only run end-of-benchmark processing.
+        #[arg(short, long)]
+        no_bench: bool,
+
         #[command(flatten)]
         _waste: IgnoredExtras,
     },
@@ -207,7 +212,7 @@ fn check_deps() -> Result<()> {
         if Command::new("which")
             .arg(prog)
             .output()
-            .map_err(|e| ())
+            .map_err(|_| ())
             .and_then(|out| if out.status.success() { Ok(()) } else { Err(()) })
             .is_err()
         {
@@ -232,6 +237,7 @@ fn check_deps() -> Result<()> {
 struct DtraceOutput {
     pub stack_path: PathBuf,
     pub histo_path: PathBuf,
+    pub out_dir: PathBuf,
 }
 
 fn run_local_dtraces(out_dir: PathBuf) -> Result<(Vec<Child>, DtraceOutput)> {
@@ -277,7 +283,7 @@ fn run_local_dtraces(out_dir: PathBuf) -> Result<(Vec<Child>, DtraceOutput)> {
         ])
         .spawn()?;
 
-    Ok((vec![histo, stack], DtraceOutput { histo_path, stack_path }))
+    Ok((vec![histo, stack], DtraceOutput { histo_path, stack_path, out_dir }))
 }
 
 fn spawn_local_dtraces(
@@ -291,7 +297,7 @@ fn spawn_local_dtraces(
     std::thread::spawn(move || {
         let out_dir = output_base_dir().join(expt_location);
 
-        out_tx.send(match run_local_dtraces(out_dir) {
+        let _ = out_tx.send(match run_local_dtraces(out_dir) {
             Ok((children, result)) => {
                 let _ = kill_rx.recv();
 
@@ -304,9 +310,9 @@ fn spawn_local_dtraces(
                     .is_err();
                     if upgrade {
                         println!("...killing...");
-                        child.kill();
+                        let _ = child.kill();
                     }
-                    child.wait();
+                    let _ = child.wait();
                 }
 
                 Ok(result)
@@ -368,63 +374,97 @@ fn build_flamegraph(
 
 #[cfg(target_os = "illumos")]
 fn zone_to_zone() -> Result<()> {
-    // // add_drv xde.
-    // ensure_xde()?;
+    // add_drv xde.
+    ensure_xde()?;
 
-    // print_banner("Building test topology... (120s)");
-    // let topol = xde_tests::two_node_topology()?;
-    // print_banner("Topology built!");
+    print_banner("Building test topology... (120s)");
+    let topol = xde_tests::two_node_topology()?;
+    print_banner("Topology built!");
 
-    // // Create iPerf server on one zone.
-    // let iperf_sess = topol.nodes[1].command("iperf -s").spawn()?;
-    // let target_ip = topol.nodes[1].port.ip();
+    // Create iPerf server on one zone.
+    // This will be implicitly closed on exit, I guess.
+    let _iperf_sess = topol.nodes[1].command("iperf -s").spawn()?;
+    let target_ip = topol.nodes[1].port.ip();
 
-    // print_banner("iPerf spawned!\nWaiting... (10s)");
-    // std::thread::sleep(Duration::from_secs(10));
-    // print_banner("Go!");
+    print_banner("iPerf spawned!\nWaiting... (10s)");
+    std::thread::sleep(Duration::from_secs(10));
+    print_banner("Go!");
 
-    // // Ping for good luck / to verify reachability.
-    // &topol.nodes[0]
-    //     .zone
-    //     .zone
-    //     .zexec(&format!("ping {}", &topol.nodes[1].port.ip()))?;
+    // Ping for good luck / to verify reachability.
+    let _ = &topol.nodes[0]
+        .zone
+        .zone
+        .zexec(&format!("ping {}", &topol.nodes[1].port.ip()))?;
 
-    // // Begin dtrace sessions in global zone.
-    // let (kill, done) = spawn_local_dtraces("iperf-tcp");
+    // Begin dtrace sessions in global zone.
+    let (kill, done) = spawn_local_dtraces("iperf-tcp");
 
-    // // Begin a handful of iPerf client sessions, dtrace will cat
-    // // all stack traces/times together.
-    // let mut outputs = vec![];
-    // let max = 3;
-    // for i in 0..3 {
-    //     // XXX: Want to run one of the dtraces at a time?
-    //     //      Looks like histo-timing has a noticeable cost on BW.
-    //     print!("Run {i}/{max}...");
-    //     let iperf_done = topol.nodes[0]
-    //         .command(&format!("iperf -c {target_ip} -J"))
-    //         .output()?;
-    //     let iperf_out = std::str::from_utf8(&iperf_done.stdout)?;
-    //     let parsed_out: Output = serde_json::from_str(&iperf_out)?;
-    //     println!("{}Mbps", parsed_out.end.sum_sent.bits_per_second / 1e6);
-    //     outputs.push(parsed_out);
-    // }
+    // Begin a handful of iPerf client sessions, dtrace will cat
+    // all stack traces/times together.
+    let mut outputs = vec![];
+    let max = 3;
+    for i in 0..3 {
+        // XXX: Want to run one of the dtraces at a time?
+        //      Looks like histo-timing has a noticeable cost on BW.
+        print!("Run {i}/{max}...");
+        let iperf_done = topol.nodes[0]
+            .command(&format!("iperf -c {target_ip} -J"))
+            .output()?;
+        let iperf_out = std::str::from_utf8(&iperf_done.stdout)?;
+        let parsed_out: Output = serde_json::from_str(&iperf_out)?;
+        println!("{}Mbps", parsed_out.end.sum_sent.bits_per_second / 1e6);
+        outputs.push(parsed_out);
+    }
 
-    // // Close dtrace.
-    // print_banner("iPerf done...\nAwaiting out files...");
-    // let _ = kill.send(());
-    // println!("got: {:?}", done.recv());
-    // print_banner("done!");
+    // Close dtrace.
+    print_banner("iPerf done...\nAwaiting out files...");
+    let _ = kill.send(());
+    print_banner("done!");
+    process_output(done.recv()??)
+}
 
-    // XXX: parse out files, hack into criterion.
-
+fn zone_to_zone_dummy() -> Result<()> {
     let out_dir = output_base_dir().join("iperf-tcp");
     let histo_path = out_dir.join("histos.out");
     let stack_path = out_dir.join("raw.stacks");
-    let outdata = DtraceOutput { histo_path, stack_path };
+    let outdata = DtraceOutput { histo_path, stack_path, out_dir };
 
-    println!("{outdata:?}",);
+    process_output(outdata)
+}
 
-    build_flamegraph(outdata.stack_path, &out_dir, None, None)?;
+fn process_output(outdata: DtraceOutput) -> Result<()> {
+    build_flamegraph(&outdata.stack_path, &outdata.out_dir, None, None)?;
+
+    let histos = DTraceHisto::from_path(&outdata.histo_path, 256)?;
+
+    for histo in histos {
+        let label = histo.label.clone().unwrap();
+        let mut c =
+            Criterion::default().measurement_time(Duration::from_secs(20));
+
+        let mut rng = thread_rng();
+        let idx =
+            WeightedIndex::new(histo.buckets.iter().map(|x| x.1)).unwrap();
+
+        let mut c = c.benchmark_group("iperf-tcp/local");
+        c.bench_function(&label, move |b| {
+            b.iter_custom(|iters| {
+                (0..iters)
+                    .map(|_| {
+                        let chosen_bucket = idx.sample(&mut rng);
+                        let sample = &histo.buckets[chosen_bucket].0;
+
+                        // uniformly distribute within bucket.
+                        Duration::from_nanos(
+                            rng.gen_range(
+                                *sample..*sample + histo.bucket_width,
+                            ),
+                        )
+                    })
+                    .sum()
+            })
+        });
+    }
 
     Ok(())
 }
@@ -438,6 +478,12 @@ fn main() -> Result<()> {
 
     match cfg.command {
         Experiment::Remote { iperf_server: _server, .. } => todo!(),
-        Experiment::Local { .. } => zone_to_zone(),
+        Experiment::Local { no_bench, .. } => {
+            if no_bench {
+                zone_to_zone_dummy()
+            } else {
+                zone_to_zone()
+            }
+        }
     }
 }
