@@ -512,6 +512,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             hdlr_resp(&mut env, resp)
         }
 
+        OpteCmd::ClearLft => {
+            let resp = clear_lft_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
         OpteCmd::DumpUft => {
             let resp = dump_uft_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
@@ -2178,6 +2183,20 @@ fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     };
 
     dev.port.clear_uft()?;
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
+fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: api::ClearLftReq = env.copy_in_req()?;
+    let devs = unsafe { xde_devs.read() };
+    let mut iter = devs.iter();
+    let dev = match iter.find(|x| x.devname == req.port_name) {
+        Some(dev) => dev,
+        None => return Err(OpteError::PortNotFound(req.port_name)),
+    };
+
+    dev.port.clear_lft(&req.layer_name)?;
     Ok(NoResp::default())
 }
 

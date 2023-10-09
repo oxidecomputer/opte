@@ -36,6 +36,7 @@ pub enum OpteCmd {
     DumpUft = 32,        // dump the Unified Flow Table
     ListLayers = 33,     // list the layers on a given port
     ClearUft = 40,       // clear the UFT
+    ClearLft = 41,       // clear the given Layer's Flow Table
     SetVirt2Phys = 50,   // set a v2p mapping
     DumpVirt2Phys = 51,  // dump the v2p mappings
     AddRouterEntry = 60, // add a router entry for IP dest
@@ -58,6 +59,7 @@ impl TryFrom<c_int> for OpteCmd {
             32 => Ok(Self::DumpUft),
             33 => Ok(Self::ListLayers),
             40 => Ok(Self::ClearUft),
+            41 => Ok(Self::ClearLft),
             50 => Ok(Self::SetVirt2Phys),
             51 => Ok(Self::DumpVirt2Phys),
             60 => Ok(Self::AddRouterEntry),

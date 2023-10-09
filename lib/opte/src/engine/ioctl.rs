@@ -97,6 +97,12 @@ pub struct ClearUftReq {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct ClearLftReq {
+    pub port_name: String,
+    pub layer_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct DumpUftReq {
     pub port_name: String,
 }

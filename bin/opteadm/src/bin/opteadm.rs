@@ -72,6 +72,13 @@ enum Command {
         port: String,
     },
 
+    /// Clear all entries from the given Layer's Flow Table.
+    ClearLft {
+        #[arg(short)]
+        port: String,
+        layer: String,
+    },
+
     /// Dump the Unified Flow Table.
     DumpUft {
         #[arg(short)]
@@ -335,6 +342,11 @@ fn main() -> anyhow::Result<()> {
         Command::ClearUft { port } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             hdl.clear_uft(&port)?;
+        }
+
+        Command::ClearLft { port, layer } => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+            hdl.clear_lft(&port, &layer)?;
         }
 
         Command::DumpUft { port } => {
