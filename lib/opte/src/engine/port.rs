@@ -920,6 +920,25 @@ impl<N: NetworkImpl> Port<N> {
         Ok(())
     }
 
+    /// Clear all entries from the Layer Flow Table (LFT) of
+    /// the layer named `layer`.
+    ///
+    /// # States
+    ///
+    /// This command is valid for the following states.
+    ///
+    /// * [`PortState::Running`]
+    pub fn clear_lft(&self, layer: &str) -> Result<()> {
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Running])?;
+        data.layers
+            .iter_mut()
+            .find(|l| l.name() == layer)
+            .ok_or_else(|| OpteError::LayerNotFound(layer.to_string()))?
+            .clear_flows();
+        Ok(())
+    }
+
     /// Dump the contents of the Unified Flow Table (UFT).
     ///
     /// # States

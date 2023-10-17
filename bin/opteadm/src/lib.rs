@@ -190,6 +190,23 @@ impl OpteAdm {
         )
     }
 
+    /// Clear all entries from the given Layer's Flow Table (LFT).
+    pub fn clear_lft(
+        &self,
+        port_name: &str,
+        layer_name: &str,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearLft;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&api::ClearLftReq {
+                port_name: port_name.to_string(),
+                layer_name: layer_name.to_string(),
+            }),
+        )
+    }
+
     /// Return the Unified Flow Table (UFT).
     pub fn dump_uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
         let cmd = OpteCmd::DumpUft;
