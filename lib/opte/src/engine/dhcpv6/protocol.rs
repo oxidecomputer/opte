@@ -383,7 +383,9 @@ fn generate_reply_options<'a>(
         // XXX: We should verify customer flow here -- correct
         //      for internal DNS, maybe not external?
         // Flags: we are (O)verriding client preference, and (S)erver is
-        // responsible for installing DNS records.
+        // installing AAAA DNS records, and server isn't (N)ot installing
+        // any DNS records (yes, this is a negative flag).
+        // https://datatracker.ietf.org/doc/html/rfc4704#section-4.1
         //                   xxxx_xNOS
         let mut buf = vec![0b0000_0011u8];
         action.dhcp_cfg.push_fqdn(&mut buf);
