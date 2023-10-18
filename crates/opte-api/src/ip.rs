@@ -1391,11 +1391,11 @@ mod test {
         only_host.push_fqdn(&mut space);
         assert_eq!(&space, "\x05mybox\x00".as_bytes());
 
-        space.truncate(0);
+        space.clear();
         with_domain.push_fqdn(&mut space);
         assert_eq!(&space, "\x05mybox\x05oxide\x08computer\x00".as_bytes());
 
-        space.truncate(0);
+        space.clear();
         domain_no_host.push_fqdn(&mut space);
         assert!(space.is_empty());
     }
