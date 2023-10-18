@@ -117,35 +117,6 @@ pub struct DhcpCfg {
 }
 
 impl DhcpCfg {
-    /// Provide DNS servers which allow basic name resolution via CloudFlare/Google.
-    pub fn base_reachable() -> DhcpCfg {
-        DhcpCfg {
-            dns4_servers: vec![
-                // Google
-                Ipv4Addr::from([8, 8, 8, 8]),
-                // Cloudflare
-                Ipv4Addr::from([1, 1, 1, 1]),
-            ],
-            dns6_servers: vec![
-                // CloudFlare
-                Ipv6Addr::from_const([
-                    0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111,
-                ]),
-                Ipv6Addr::from_const([
-                    0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1001,
-                ]),
-                // Google
-                Ipv6Addr::from_const([
-                    0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888,
-                ]),
-                Ipv6Addr::from_const([
-                    0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8844,
-                ]),
-            ],
-            ..Default::default()
-        }
-    }
-
     /// Combine `hostname` and `host_domain` into a single FQDN
     /// in a target buffer.
     pub fn push_fqdn(&self, buf: &mut Vec<u8>) {
