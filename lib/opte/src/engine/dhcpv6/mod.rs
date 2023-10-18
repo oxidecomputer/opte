@@ -74,7 +74,6 @@ pub mod options;
 pub mod protocol;
 pub use protocol::MessageType;
 
-use crate::ddi::sync::KRwLock;
 use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Display;
@@ -88,11 +87,9 @@ use opte_api::MacAddr;
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::borrow::Cow;
-        use alloc::sync::Arc;
         use alloc::vec::Vec;
     } else {
         use std::borrow::Cow;
-        use std::sync::Arc;
         use std::vec::Vec;
     }
 }
@@ -159,7 +156,7 @@ pub struct Dhcpv6Action {
     pub sntp_servers: Vec<Ipv6Addr>,
 
     /// Runtime-reconfigurable DHCP options (DNS, search lists, etc.).
-    pub dhcp_cfg: Arc<KRwLock<DhcpCfg>>,
+    pub dhcp_cfg: DhcpCfg,
 }
 
 impl Dhcpv6Action {

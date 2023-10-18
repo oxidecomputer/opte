@@ -30,7 +30,6 @@ use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
 use super::udp::UdpHdr;
 use super::udp::UdpMeta;
-use crate::ddi::sync::KRwLock;
 use core::fmt;
 use core::fmt::Display;
 use opte_api::DhcpCfg;
@@ -52,11 +51,9 @@ use smoltcp::wire::Ipv4Address;
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::string::ToString;
-        use alloc::sync::Arc;
         use alloc::vec::Vec;
     } else {
         use std::string::ToString;
-        use std::sync::Arc;
         use std::vec::Vec;
     }
 }
@@ -416,7 +413,7 @@ pub struct DhcpAction {
     pub re3: Option<SubnetRouterPair>,
 
     /// Runtime-reconfigurable DHCP options (DNS, search lists, etc.).
-    pub dhcp_cfg: Arc<KRwLock<DhcpCfg>>,
+    pub dhcp_cfg: DhcpCfg,
 }
 
 impl Display for DhcpAction {
@@ -480,13 +477,11 @@ impl HairpinAction for DhcpAction {
         let client_dhcp = DhcpRepr::parse(&client_pkt)?;
         let mt = MessageType::from(self.reply_type);
 
-        let dhcp_state_lock = self.dhcp_cfg.read();
-
         let mut dns_space = [None; 3];
-        let dns_servers = if dhcp_state_lock.dns4_servers.is_empty() {
+        let dns_servers = if self.dhcp_cfg.dns4_servers.is_empty() {
             None
         } else {
-            dns_space.iter_mut().zip(&dhcp_state_lock.dns4_servers).for_each(
+            dns_space.iter_mut().zip(&self.dhcp_cfg.dns4_servers).for_each(
                 |(slot, server)| *slot = Some(Ipv4Address::from(*server)),
             );
             Some(dns_space)
@@ -548,18 +543,17 @@ impl HairpinAction for DhcpAction {
         //      or  prebuild to suit its API.
         csr_opt.emit(&mut tmp);
 
-        if let Some(name) = &dhcp_state_lock.hostname {
+        if let Some(name) = &self.dhcp_cfg.hostname {
             HostNameOpt { name }.emit(&mut tmp)
         }
 
-        if let Some(name) = &dhcp_state_lock.host_domain {
+        if let Some(name) = &self.dhcp_cfg.host_domain {
             DomainNameOpt { name }.emit(&mut tmp)
         }
 
-        if !dhcp_state_lock.domain_search_list.is_empty() {
-            let encoded = encode_domain_search_option(
-                &dhcp_state_lock.domain_search_list,
-            );
+        if !self.dhcp_cfg.domain_search_list.is_empty() {
+            let encoded =
+                encode_domain_search_option(&self.dhcp_cfg.domain_search_list);
             tmp.extend_from_slice(&encoded);
         }
 

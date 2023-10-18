@@ -43,8 +43,6 @@ pub enum OpteCmd {
     CreateXde = 70,      // create a new xde device
     DeleteXde = 71,      // delete an xde device
     SetXdeUnderlay = 72, // set xde underlay devices
-    SetDhcpParams = 80,  // update dhcp options on a port
-    DumpDhcpParams = 81, // dump current dhcp options on a port
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -68,8 +66,6 @@ impl TryFrom<c_int> for OpteCmd {
             70 => Ok(Self::CreateXde),
             71 => Ok(Self::DeleteXde),
             72 => Ok(Self::SetXdeUnderlay),
-            80 => Ok(Self::SetDhcpParams),
-            81 => Ok(Self::DumpDhcpParams),
             _ => Err(()),
         }
     }

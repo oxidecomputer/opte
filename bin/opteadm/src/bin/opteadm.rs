@@ -29,7 +29,6 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
 use oxide_vpc::api::DhcpCfg;
-use oxide_vpc::api::DumpDhcpParamsReq;
 use oxide_vpc::api::Filters as FirewallFilters;
 use oxide_vpc::api::FirewallAction;
 use oxide_vpc::api::FirewallRule;
@@ -44,10 +43,8 @@ use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
-use oxide_vpc::api::SetDhcpParamsReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
-use oxide_vpc::engine::print::print_dhcp_params;
 use oxide_vpc::engine::print::print_v2p;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
@@ -189,6 +186,9 @@ enum Command {
         #[command(flatten)]
         snat: Option<SnatConfig>,
 
+        #[command(flatten)]
+        dhcp: DhcpConfig,
+
         #[arg(long)]
         external_ip: Option<IpAddr>,
 
@@ -214,23 +214,6 @@ enum Command {
         dest: IpCidr,
         /// The location to which traffic matching the destination is sent.
         target: RouterTarget,
-    },
-
-    /// Set DHCP parameters (DNS servers, hostname, domain)
-    SetDhcpParams {
-        /// The OPTE port to configure.
-        #[arg(short)]
-        port: String,
-
-        #[command(flatten)]
-        dhcp: DhcpConfig,
-    },
-
-    /// Retreive DHCP parameters on a given port
-    DumpDhcpParams {
-        /// The OPTE port to query.
-        #[arg(short)]
-        port: String,
     },
 }
 
@@ -456,6 +439,7 @@ fn main() -> anyhow::Result<()> {
             vpc_vni,
             src_underlay_addr,
             snat,
+            dhcp,
             external_ip,
             passthrough,
         } => {
@@ -529,7 +513,7 @@ fn main() -> anyhow::Result<()> {
                 },
             };
 
-            hdl.create_xde(&name, cfg, passthrough)?;
+            hdl.create_xde(&name, cfg, dhcp.into(), passthrough)?;
         }
 
         Command::DeleteXde { name } => {
@@ -554,16 +538,6 @@ fn main() -> anyhow::Result<()> {
         Command::AddRouterEntry { port, dest, target } => {
             let req = AddRouterEntryReq { port_name: port, dest, target };
             hdl.add_router_entry(&req)?;
-        }
-
-        Command::SetDhcpParams { port, dhcp } => {
-            let req = SetDhcpParamsReq { port_name: port, data: dhcp.into() };
-            hdl.set_dhcp_params(&req)?;
-        }
-
-        Command::DumpDhcpParams { port } => {
-            let req = DumpDhcpParamsReq { port_name: port };
-            print_dhcp_params(&hdl.dump_dhcp_params(&req)?);
         }
     }
 

@@ -207,14 +207,6 @@ pub struct KRwLock<T> {
     data: UnsafeCell<T>,
 }
 
-impl<T> KRwLock<T> {
-    pub fn into_driver(val: T) -> Self {
-        let mut out = Self::new(val);
-        out.init(KRwLockType::Driver);
-        out
-    }
-}
-
 pub enum KRwLockType {
     Driver = krw_type_t::RW_DRIVER as isize,
     Default = krw_type_t::RW_DEFAULT as isize,

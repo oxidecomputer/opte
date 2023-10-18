@@ -468,6 +468,9 @@ pub struct CreateXdeReq {
     /// details.
     pub cfg: VpcCfg,
 
+    /// Configuration for DHCP responses created by OPTE
+    pub dhcp: DhcpCfg,
+
     /// This is a development tool for completely bypassing OPTE processing.
     ///
     /// XXX Pretty sure we aren't making much use of this anymore, and

@@ -321,15 +321,9 @@ fn generate_reply_options<'a>(
         msg.find_option(OptionCode::ClientId).unwrap().clone(),
     ];
 
-    // XXX: I'd like for these types to go back to being borrowed,
-    //      which might take a little more consideration. We've lost
-    //      that for now to get configurability.
-    let dhcp_state_lock = action.dhcp_cfg.read();
-    let dhcp_state = &*dhcp_state_lock;
-
     // If requested, provide the list of DNS servers.
     if msg.has_option_request_with(OptionCode::DnsServers) {
-        let ip_list = IpList(Cow::Owned(dhcp_state.dns6_servers.clone()));
+        let ip_list = IpList(Cow::Owned(action.dhcp_cfg.dns6_servers.clone()));
         let opt = Dhcpv6Option::DnsServers(ip_list);
         options.push(opt);
     }
@@ -370,10 +364,10 @@ fn generate_reply_options<'a>(
     // resolve them.
     if (msg.has_option(OptionCode::DomainList)
         || msg.has_option_request_with(OptionCode::DomainList))
-        && !dhcp_state.domain_search_list.is_empty()
+        && !action.dhcp_cfg.domain_search_list.is_empty()
     {
-        // let opt = Dhcpv6Option::DomainList(dhcp_state.domain_search_list.clone().into());
-        let opt = Dhcpv6Option::from(dhcp_state.domain_search_list.as_slice());
+        let opt =
+            Dhcpv6Option::from(action.dhcp_cfg.domain_search_list.as_slice());
 
         // Slightly hacky assertion that the contents are owned.
         let Dhcpv6Option::DomainList(Cow::Owned(raw_list)) = opt else {
@@ -392,7 +386,7 @@ fn generate_reply_options<'a>(
         // responsible for installing DNS records.
         //                   xxxx_xNOS
         let mut buf = vec![0b0000_0011u8];
-        dhcp_state.push_fqdn(&mut buf);
+        action.dhcp_cfg.push_fqdn(&mut buf);
 
         // XXX: May want to reflect client's hostname request if
         //      we have no override.

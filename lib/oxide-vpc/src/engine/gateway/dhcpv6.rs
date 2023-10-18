@@ -10,7 +10,6 @@ use crate::api::VpcCfg;
 use opte::api::DhcpCfg;
 use opte::api::Direction;
 use opte::api::OpteError;
-use opte::ddi::sync::KRwLock;
 use opte::engine::dhcpv6::AddressInfo;
 use opte::engine::dhcpv6::Dhcpv6Action;
 use opte::engine::dhcpv6::LeasedAddress;
@@ -29,7 +28,7 @@ cfg_if! {
 pub fn setup(
     layer: &mut Layer,
     cfg: &VpcCfg,
-    dhcp_cfg: Arc<KRwLock<DhcpCfg>>,
+    dhcp_cfg: DhcpCfg,
 ) -> Result<(), OpteError> {
     let ip_cfg = match cfg.ipv6_cfg() {
         None => return Ok(()),

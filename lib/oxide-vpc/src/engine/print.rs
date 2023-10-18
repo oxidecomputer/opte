@@ -9,12 +9,10 @@
 //! This is mostly just a place to hang printing routines so that they
 //! can be used by both opteadm and integration tests.
 
-use crate::api::DumpDhcpParamsResp;
 use crate::api::GuestPhysAddr;
 use crate::api::Ipv4Addr;
 use crate::api::Ipv6Addr;
 use crate::engine::overlay::DumpVirt2PhysResp;
-use opte::api::DomainName;
 use opte::engine::print::*;
 
 /// Print the header for the [`print_v2p()`] output.
@@ -66,46 +64,4 @@ fn print_v2p_ip6((src, phys): &(Ipv6Addr, GuestPhysAddr)) {
         eth,
         std::net::Ipv6Addr::from(phys.ip.bytes()),
     );
-}
-
-/// Print a [`DumpDhcpParamsResp`].
-pub fn print_dhcp_params(resp: &DumpDhcpParamsResp) {
-    println!("DHCP Configuration");
-    print_hrb();
-    println!(
-        "Hostname: {}",
-        resp.data.hostname.as_ref().map(DomainName::name).unwrap_or("<unset>")
-    );
-    println!(
-        "Domain: {}",
-        resp.data
-            .host_domain
-            .as_ref()
-            .map(DomainName::name)
-            .unwrap_or("<unset>")
-    );
-
-    println!(
-        "Search Domains:{}",
-        if resp.data.domain_search_list.is_empty() { " <unset>" } else { "" }
-    );
-    for domain in &resp.data.domain_search_list {
-        println!("- {}", domain.name());
-    }
-
-    println!(
-        "IPv4 DNS Servers:{}",
-        if resp.data.dns4_servers.is_empty() { " <unset>" } else { "" }
-    );
-    for server in &resp.data.dns4_servers {
-        println!("- {}", server);
-    }
-
-    println!(
-        "IPv6 DNS Servers:{}",
-        if resp.data.dns6_servers.is_empty() { " <unset>" } else { "" }
-    );
-    for server in &resp.data.dns6_servers {
-        println!("- {}", server);
-    }
 }

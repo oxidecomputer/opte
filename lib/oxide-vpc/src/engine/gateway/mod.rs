@@ -53,7 +53,6 @@ use core::fmt::Display;
 use core::marker::PhantomData;
 use opte::api::Direction;
 use opte::api::OpteError;
-use opte::ddi::sync::KRwLock;
 use opte::engine::ether::EtherMod;
 use opte::engine::headers::HeaderAction;
 use opte::engine::layer::DefaultAction;
@@ -103,7 +102,7 @@ pub fn setup(
     cfg: &VpcCfg,
     vpc_mappings: Arc<VpcMappings>,
     ft_limit: core::num::NonZeroU32,
-    dhcp_cfg: &Arc<KRwLock<DhcpCfg>>,
+    dhcp_cfg: &DhcpCfg,
 ) -> Result<(), OpteError> {
     // We implement the gateway as a filtering layer in order to
     // enforce that any traffic that makes it past this layer is
@@ -175,7 +174,7 @@ fn setup_ipv4(
     cfg: &VpcCfg,
     ip_cfg: &Ipv4Cfg,
     vpc_mappings: Arc<VpcMappings>,
-    dhcp_cfg: Arc<KRwLock<DhcpCfg>>,
+    dhcp_cfg: DhcpCfg,
 ) -> Result<(), OpteError> {
     arp::setup(layer, cfg)?;
     dhcp::setup(layer, cfg, ip_cfg, dhcp_cfg)?;
@@ -215,7 +214,7 @@ fn setup_ipv6(
     cfg: &VpcCfg,
     ip_cfg: &Ipv6Cfg,
     vpc_mappings: Arc<VpcMappings>,
-    dhcp_cfg: Arc<KRwLock<DhcpCfg>>,
+    dhcp_cfg: DhcpCfg,
 ) -> Result<(), OpteError> {
     icmpv6::setup(layer, cfg, ip_cfg)?;
     dhcpv6::setup(layer, cfg, dhcp_cfg)?;

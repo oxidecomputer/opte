@@ -191,10 +191,3 @@ pub fn dump_tcp_flows(
 ) -> Result<DumpTcpFlowsResp, OpteError> {
     port.dump_tcp_flows()
 }
-
-pub fn dump_dhcp_params(
-    port: &Port<impl crate::engine::NetworkImpl>,
-    _req: &DumpTcpFlowsReq,
-) -> Result<DumpTcpFlowsResp, OpteError> {
-    port.dump_tcp_flows()
-}

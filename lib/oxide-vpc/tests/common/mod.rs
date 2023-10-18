@@ -219,7 +219,7 @@ fn oxide_net_builder(
     let snat_limit = NonZeroU32::new(8096).unwrap();
     let one_limit = NonZeroU32::new(1).unwrap();
 
-    let dhcp = Arc::new(KRwLock::into_driver(base_dhcp_config()));
+    let dhcp = base_dhcp_config();
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
     gateway::setup(&pb, cfg, vpc_map, fw_limit, &dhcp)
