@@ -323,7 +323,7 @@ fn generate_reply_options<'a>(
 
     // If requested, provide the list of DNS servers.
     if msg.has_option_request_with(OptionCode::DnsServers) {
-        let ip_list = IpList(Cow::Owned(action.dhcp_cfg.dns6_servers.clone()));
+        let ip_list = IpList(Cow::Borrowed(&action.dhcp_cfg.dns6_servers));
         let opt = Dhcpv6Option::DnsServers(ip_list);
         options.push(opt);
     }

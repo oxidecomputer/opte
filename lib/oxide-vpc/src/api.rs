@@ -567,24 +567,6 @@ pub struct RemFwRuleReq {
     pub id: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct SetDhcpParamsReq {
-    pub port_name: String,
-    pub data: DhcpCfg,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpDhcpParamsReq {
-    pub port_name: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpDhcpParamsResp {
-    pub data: DhcpCfg,
-}
-
-impl CmdOk for DumpDhcpParamsResp {}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FirewallRule {
     pub direction: Direction,
