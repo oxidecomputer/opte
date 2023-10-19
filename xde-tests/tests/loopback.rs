@@ -3,6 +3,7 @@ use opteadm::OpteAdm;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
+use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::Direction;
 use oxide_vpc::api::Filters;
 use oxide_vpc::api::FirewallAction;
@@ -103,7 +104,7 @@ impl OptePort {
             },
         };
         let adm = OpteAdm::open(OpteAdm::XDE_CTL)?;
-        adm.create_xde(name, cfg.clone(), false)?;
+        adm.create_xde(name, cfg.clone(), DhcpCfg::default(), false)?;
         Ok(OptePort { name: name.into(), cfg })
     }
 
