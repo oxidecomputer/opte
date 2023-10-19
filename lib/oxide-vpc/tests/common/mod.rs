@@ -17,6 +17,7 @@ pub mod port_state;
 // Let's make our lives easier and pub use a bunch of stuff.
 pub use opte::api::Direction::*;
 pub use opte::api::MacAddr;
+pub use opte::ddi::sync::KRwLock;
 pub use opte::engine::checksum::HeaderChecksum;
 pub use opte::engine::ether::EtherHdr;
 pub use opte::engine::ether::EtherMeta;
@@ -63,6 +64,7 @@ pub use opte::engine::GenericUlp;
 pub use opte::ExecCtx;
 pub use oxide_vpc::api::AddFwRuleReq;
 pub use oxide_vpc::api::BoundaryServices;
+pub use oxide_vpc::api::DhcpCfg;
 pub use oxide_vpc::api::IpCfg;
 pub use oxide_vpc::api::Ipv4Cfg;
 pub use oxide_vpc::api::Ipv6Cfg;
@@ -102,6 +104,24 @@ const TCP_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 
 pub fn ox_vpc_mac(id: [u8; 3]) -> MacAddr {
     MacAddr::from([0xA8, 0x40, 0x25, 0xF0 | id[0], id[1], id[2]])
+}
+
+pub fn base_dhcp_config() -> DhcpCfg {
+    DhcpCfg {
+        hostname: "testbox".parse().ok(),
+        host_domain: "test.oxide.computer".parse().ok(),
+        domain_search_list: vec!["oxide.computer".parse().unwrap()],
+        dns4_servers: vec![
+            Ipv4Addr::from([8, 8, 8, 8]),
+            Ipv4Addr::from([1, 1, 1, 1]),
+        ],
+        dns6_servers: vec![
+            Ipv6Addr::from_const([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888]),
+            Ipv6Addr::from_const([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8844]),
+            Ipv6Addr::from_const([0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111]),
+            Ipv6Addr::from_const([0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1001]),
+        ],
+    }
 }
 
 pub fn g1_cfg() -> VpcCfg {
@@ -148,7 +168,6 @@ pub fn g1_cfg2(ip_cfg: IpCfg) -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
-        domain_list: vec!["oxide.computer".parse().unwrap()],
     }
 }
 
@@ -192,7 +211,6 @@ pub fn g2_cfg() -> VpcCfg {
             ]),
             vni: Vni::new(99u32).unwrap(),
         },
-        domain_list: vec!["oxide.computer".parse().unwrap()],
     }
 }
 
@@ -210,8 +228,10 @@ fn oxide_net_builder(
     let snat_limit = NonZeroU32::new(8096).unwrap();
     let one_limit = NonZeroU32::new(1).unwrap();
 
+    let dhcp = base_dhcp_config();
+
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    gateway::setup(&pb, cfg, vpc_map, fw_limit)
+    gateway::setup(&pb, cfg, vpc_map, fw_limit, &dhcp)
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");

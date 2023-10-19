@@ -75,6 +75,7 @@ use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
+use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::PhysNet;
@@ -625,6 +626,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         state.vpc_map.clone(),
         port_v2p.clone(),
         state.ectx.clone(),
+        &req.dhcp,
     )?;
 
     let port_periodic = Periodic::new(
@@ -1955,6 +1957,7 @@ fn new_port(
     vpc_map: Arc<overlay::VpcMappings>,
     v2p: Arc<overlay::Virt2Phys>,
     ectx: Arc<ExecCtx>,
+    dhcp_cfg: &DhcpCfg,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
     let name_cstr = match CString::new(name.as_str()) {
         Ok(v) => v,
@@ -1966,7 +1969,7 @@ fn new_port(
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, cfg, vpc_map, FT_LIMIT_ONE)?;
+    gateway::setup(&pb, cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
     router::setup(&pb, cfg, FT_LIMIT_ONE)?;
     let nat_ft_limit = match cfg.n_external_ports() {
         None => FT_LIMIT_ONE,

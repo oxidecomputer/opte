@@ -6,11 +6,7 @@
 
 //! Types for working with the DHCPv6
 
-use crate::DomainName;
 use crate::Ipv6Addr;
-use crate::MacAddr;
-use core::fmt;
-use core::fmt::Display;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -19,46 +15,6 @@ cfg_if! {
     } else {
         use std::vec::Vec;
         use std::string::String;
-    }
-}
-
-/// An action for acting as a DHCPv6 server, leasing IPv6 addresses.
-#[derive(Clone, Debug)]
-pub struct Dhcpv6Action {
-    /// Expected MAC address of the client.
-    pub client_mac: MacAddr,
-
-    /// MAC address we advertise as the DHCP server.
-    pub server_mac: MacAddr,
-
-    /// IPv6 addresses leased to the client.
-    pub addrs: AddressInfo,
-
-    /// DNS servers the client should use.
-    pub dns_servers: Vec<Ipv6Addr>,
-
-    /// SNTP servers the client should use.
-    pub sntp_servers: Vec<Ipv6Addr>,
-
-    /// A list of domain names used during DNS resolution.
-    pub domain_list: Vec<DomainName>,
-}
-
-impl Dhcpv6Action {
-    /// Return an iterator over the actual leased IPv6 addresses.
-    pub fn addresses(&self) -> impl Iterator<Item = Ipv6Addr> + '_ {
-        self.addrs.addrs.iter().map(|lease| lease.addr)
-    }
-}
-
-impl Display for Dhcpv6Action {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let addr_list = self
-            .addresses()
-            .map(|addr| format!("{}", addr))
-            .collect::<Vec<_>>()
-            .join(",");
-        write!(f, "DHCPv6 IA Addrs: [{}]", addr_list)
     }
 }
 

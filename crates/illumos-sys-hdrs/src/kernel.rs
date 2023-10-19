@@ -68,17 +68,6 @@ pub struct krwlock_t {
     pub _opaque: u64,
 }
 
-/// `krwlock_t` type passed to `rw_init(9F)`.
-#[repr(transparent)]
-#[derive(Copy, Clone, Eq, PartialEq)]
-pub struct krw_type_t(pub c_int);
-impl krw_type_t {
-    /// Lock for use by (DDI) drivers.
-    pub const RW_DRIVER: Self = Self(2);
-    /// Kernel default lock.
-    pub const RW_DEFAULT: Self = Self(4);
-}
-
 /// Lock acquisition type passed to `rw_[try]enter(9F)`.
 #[repr(transparent)]
 #[derive(Copy, Clone, Eq, PartialEq)]

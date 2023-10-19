@@ -40,6 +40,7 @@
 //!
 //! No IPv6 link-local traffic should ever make it past this layer.
 
+use crate::api::DhcpCfg;
 use crate::api::Ipv4Cfg;
 use crate::api::Ipv6Cfg;
 use crate::api::MacAddr;
@@ -101,6 +102,7 @@ pub fn setup(
     cfg: &VpcCfg,
     vpc_mappings: Arc<VpcMappings>,
     ft_limit: core::num::NonZeroU32,
+    dhcp_cfg: &DhcpCfg,
 ) -> Result<(), OpteError> {
     // We implement the gateway as a filtering layer in order to
     // enforce that any traffic that makes it past this layer is
@@ -119,11 +121,17 @@ pub fn setup(
     let mut layer = Layer::new(NAME, pb.name(), actions, ft_limit);
 
     if let Some(ipv4_cfg) = cfg.ipv4_cfg() {
-        setup_ipv4(&mut layer, cfg, ipv4_cfg, vpc_mappings.clone())?;
+        setup_ipv4(
+            &mut layer,
+            cfg,
+            ipv4_cfg,
+            vpc_mappings.clone(),
+            dhcp_cfg.clone(),
+        )?;
     }
 
     if let Some(ipv6_cfg) = cfg.ipv6_cfg() {
-        setup_ipv6(&mut layer, cfg, ipv6_cfg, vpc_mappings)?;
+        setup_ipv6(&mut layer, cfg, ipv6_cfg, vpc_mappings, dhcp_cfg.clone())?;
     }
 
     pb.add_layer(layer, Pos::Before("firewall"))
@@ -166,9 +174,10 @@ fn setup_ipv4(
     cfg: &VpcCfg,
     ip_cfg: &Ipv4Cfg,
     vpc_mappings: Arc<VpcMappings>,
+    dhcp_cfg: DhcpCfg,
 ) -> Result<(), OpteError> {
     arp::setup(layer, cfg)?;
-    dhcp::setup(layer, cfg, ip_cfg)?;
+    dhcp::setup(layer, cfg, ip_cfg, dhcp_cfg)?;
     icmp::setup(layer, cfg, ip_cfg)?;
 
     let vpc_meta =
@@ -205,9 +214,10 @@ fn setup_ipv6(
     cfg: &VpcCfg,
     ip_cfg: &Ipv6Cfg,
     vpc_mappings: Arc<VpcMappings>,
+    dhcp_cfg: DhcpCfg,
 ) -> Result<(), OpteError> {
     icmpv6::setup(layer, cfg, ip_cfg)?;
-    dhcpv6::setup(layer, cfg)?;
+    dhcpv6::setup(layer, cfg, dhcp_cfg)?;
     let vpc_meta =
         Arc::new(VpcMeta::new(vpc_mappings, cfg.boundary_services.vni));
     let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));

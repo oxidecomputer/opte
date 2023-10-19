@@ -192,12 +192,6 @@ pub struct VpcCfg {
     /// Information for reaching Boundary Services, for traffic destined
     /// for external networks.
     pub boundary_services: BoundaryServices,
-
-    /// A list of domain names used during DNS resolution.
-    ///
-    /// Resolvers will use the provided list when resolving relative domain
-    /// names.
-    pub domain_list: Vec<DomainName>,
 }
 
 impl VpcCfg {
@@ -473,6 +467,9 @@ pub struct CreateXdeReq {
     /// Configuration information describing the device. See [`VpcCfg`] for more
     /// details.
     pub cfg: VpcCfg,
+
+    /// Configuration for DHCP responses created by OPTE
+    pub dhcp: DhcpCfg,
 
     /// This is a development tool for completely bypassing OPTE processing.
     ///
@@ -968,7 +965,6 @@ mod tests {
                 mac: MacAddr::from([0xa8, 0x40, 0x25, 0x00, 0x00, 0x99]),
                 vni: Vni::new(99u32).unwrap(),
             },
-            domain_list: vec![],
             gateway_mac: MacAddr::from([0xa8, 0x40, 0x25, 0x00, 0x00, 0x01]),
             guest_mac: MacAddr::from([0xa8, 0x40, 0x25, 0xff, 0xff, 0x01]),
             phys_ip: "fd00::1".parse().unwrap(),

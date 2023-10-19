@@ -17,13 +17,14 @@ cfg_if! {
 use crate::api::Ipv4Cfg;
 use crate::api::VpcCfg;
 use core::result::Result;
-use opte::api::DhcpAction;
+use opte::api::DhcpCfg;
 use opte::api::DhcpReplyType;
 use opte::api::Direction;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv4PrefixLen;
 use opte::api::OpteError;
 use opte::api::SubnetRouterPair;
+use opte::engine::dhcp::DhcpAction;
 use opte::engine::ip4::Ipv4Cidr;
 use opte::engine::layer::Layer;
 use opte::engine::rule::Action;
@@ -33,6 +34,7 @@ pub fn setup(
     layer: &mut Layer,
     cfg: &VpcCfg,
     ip_cfg: &Ipv4Cfg,
+    dhcp_cfg: DhcpCfg,
 ) -> Result<(), OpteError> {
     // All guest interfaces live on a `/32`-network in the Oxide VPC;
     // restricting the L2 domain to two nodes: the guest NIC and the
@@ -80,9 +82,7 @@ pub fn setup(
         re1,
         re2: Some(re2),
         re3: None,
-        // XXX For now at least resolve the internet.
-        dns_servers: Some([Some(Ipv4Addr::from([8, 8, 8, 8])), None, None]),
-        domain_list: cfg.domain_list.clone(),
+        dhcp_cfg: dhcp_cfg.clone(),
     }));
 
     let ack = Action::Hairpin(Arc::new(DhcpAction {
@@ -95,9 +95,7 @@ pub fn setup(
         re1,
         re2: Some(re2),
         re3: None,
-        // XXX For now at least resolve the internet.
-        dns_servers: Some([Some(Ipv4Addr::from([8, 8, 8, 8])), None, None]),
-        domain_list: cfg.domain_list.clone(),
+        dhcp_cfg,
     }));
 
     let discover_rule = Rule::new(1, offer);

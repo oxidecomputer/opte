@@ -28,6 +28,7 @@ use opteadm::MAJOR_VERSION;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
+use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
 use oxide_vpc::api::FirewallAction;
 use oxide_vpc::api::FirewallRule;
@@ -185,10 +186,8 @@ enum Command {
         #[command(flatten)]
         snat: Option<SnatConfig>,
 
-        /// A comma-separated list of domain names provided to the guest,
-        /// used when resolving hostnames.
-        #[arg(long, value_delimiter = ',')]
-        domain_list: Vec<DomainName>,
+        #[command(flatten)]
+        dhcp: DhcpConfig,
 
         #[arg(long)]
         external_ip: Option<IpAddr>,
@@ -283,6 +282,51 @@ impl TryFrom<SnatConfig> for SNat6Cfg {
     }
 }
 
+#[derive(Args, Debug)]
+struct DhcpConfig {
+    /// The hostname a connected guest should be provided via DHCP.
+    #[arg(long)]
+    hostname: Option<DomainName>,
+
+    /// The domain used by a guest to contruct its FQDN, provided via DHCP.
+    #[arg(long)]
+    host_domain: Option<DomainName>,
+
+    /// A comma-delimited list of DNS server IP addresses to provide over DHCP.
+    #[arg(long, value_delimiter = ',')]
+    dns_servers: Vec<IpAddr>,
+
+    /// A comma-separated list of domain names provided to the guest,
+    /// used when resolving hostnames.
+    #[arg(long, value_delimiter = ',')]
+    domain_search_list: Vec<DomainName>,
+}
+
+impl From<DhcpConfig> for DhcpCfg {
+    fn from(value: DhcpConfig) -> Self {
+        let mut dns4_servers = vec![];
+        let dns6_servers = value
+            .dns_servers
+            .into_iter()
+            .filter_map(|ip| match ip {
+                IpAddr::Ip4(ip) => {
+                    dns4_servers.push(ip);
+                    None
+                }
+                IpAddr::Ip6(ip) => Some(ip),
+            })
+            .collect();
+
+        Self {
+            hostname: value.hostname,
+            host_domain: value.host_domain,
+            domain_search_list: value.domain_search_list,
+            dns4_servers,
+            dns6_servers,
+        }
+    }
+}
+
 fn opte_pkg_version() -> String {
     format!("{MAJOR_VERSION}.{API_VERSION}.{COMMIT_COUNT}")
 }
@@ -320,9 +364,10 @@ fn print_port(pi: PortInfo) {
 
 fn main() -> anyhow::Result<()> {
     let cmd = Command::parse();
+    let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+
     match cmd {
         Command::ListPorts => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_port_header();
             for p in hdl.list_ports()?.ports {
                 print_port(p);
@@ -330,17 +375,14 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::ListLayers { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_list_layers(&hdl.list_layers(&port)?);
         }
 
         Command::DumpLayer { port, name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_layer(&hdl.get_layer_by_name(&port, &name)?);
         }
 
         Command::ClearUft { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             hdl.clear_uft(&port)?;
         }
 
@@ -350,22 +392,18 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::DumpUft { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_uft(&hdl.dump_uft(&port)?);
         }
 
         Command::DumpTcpFlows { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_tcp_flows(&hdl.dump_tcp_flows(&port)?);
         }
 
         Command::DumpV2P => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_v2p(&hdl.dump_v2p()?);
         }
 
         Command::AddFwRule { port, direction, filters, action, priority } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let rule = FirewallRule {
                 direction,
                 filters: filters.into(),
@@ -401,12 +439,10 @@ fn main() -> anyhow::Result<()> {
             vpc_vni,
             src_underlay_addr,
             snat,
-            domain_list,
+            dhcp,
             external_ip,
             passthrough,
         } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
-
             let ip_cfg = match private_ip {
                 IpAddr::Ip4(private_ip) => {
                     let IpCidr::Ip4(vpc_subnet) = vpc_subnet else {
@@ -475,37 +511,31 @@ fn main() -> anyhow::Result<()> {
                     vni: bsvc_vni,
                     mac: bsvc_mac,
                 },
-                domain_list,
             };
 
-            hdl.create_xde(&name, cfg, passthrough)?;
+            hdl.create_xde(&name, cfg, dhcp.into(), passthrough)?;
         }
 
         Command::DeleteXde { name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let _ = hdl.delete_xde(&name)?;
         }
 
         Command::SetXdeUnderlay { u1, u2 } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let _ = hdl.set_xde_underlay(&u1, &u2)?;
         }
 
         Command::RmFwRule { port, direction, id } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let request = RemFwRuleReq { port_name: port, dir: direction, id };
             hdl.remove_firewall_rule(&request)?;
         }
 
         Command::SetV2P { vpc_ip, vpc_mac, underlay_ip, vni } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let phys = PhysNet { ether: vpc_mac, ip: underlay_ip, vni };
             let req = SetVirt2PhysReq { vip: vpc_ip, phys };
             hdl.set_v2p(&req)?;
         }
 
         Command::AddRouterEntry { port, dest, target } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let req = AddRouterEntryReq { port_name: port, dest, target };
             hdl.add_router_entry(&req)?;
         }

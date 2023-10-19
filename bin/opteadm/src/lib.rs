@@ -20,6 +20,7 @@ use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
+use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::RemFwRuleReq;
@@ -50,6 +51,7 @@ impl OpteAdm {
         &self,
         name: &str,
         cfg: VpcCfg,
+        dhcp: DhcpCfg,
         passthrough: bool,
     ) -> Result<NoResp, Error> {
         use libnet::link;
@@ -62,7 +64,7 @@ impl OpteAdm {
 
         let xde_devname = name.into();
         let cmd = OpteCmd::CreateXde;
-        let req = CreateXdeReq { xde_devname, linkid, cfg, passthrough };
+        let req = CreateXdeReq { xde_devname, linkid, cfg, dhcp, passthrough };
         let res = run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req));
 
         if res.is_err() {

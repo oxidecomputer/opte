@@ -47,13 +47,13 @@
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
         use alloc::borrow::Cow;
         use alloc::str::from_utf8;
+        use alloc::vec::Vec;
     } else {
-        use std::vec::Vec;
-        use std::str::from_utf8;
         use std::borrow::Cow;
+        use std::str::from_utf8;
+        use std::vec::Vec;
     }
 }
 
@@ -117,6 +117,12 @@ pub enum Code {
     ///
     /// This option is specified in RFC 4075.
     SntpServers,
+    /// The option contains a fully-qualified domain name, used by the client to
+    /// request a given IP address or by the server to supply a host with its
+    /// intended hostname and domain.
+    ///
+    /// This option is specified in RFC 4704
+    Fqdn,
     /// Any other option, which is unsupported and uninterpreted.
     Other(u16),
 }
@@ -141,6 +147,7 @@ impl From<Code> for u16 {
             DnsServers => 23,
             DomainList => 24,
             SntpServers => 31,
+            Fqdn => 39,
             Other(x) => x,
         }
     }
@@ -162,6 +169,7 @@ impl From<u16> for Code {
             23 => DnsServers,
             24 => DomainList,
             31 => SntpServers,
+            39 => Fqdn,
             x => Other(x),
         }
     }
@@ -225,6 +233,7 @@ pub enum Option<'a> {
     DnsServers(IpList<'a>),
     DomainList(Cow<'a, [u8]>),
     SntpServers(IpList<'a>),
+    Fqdn(Cow<'a, [u8]>),
     Other { code: Code, data: RawOption<'a> },
 }
 
@@ -248,6 +257,7 @@ impl<'a> Option<'a> {
             Option::DnsServers(_) => Code::DnsServers,
             Option::DomainList(_) => Code::DomainList,
             Option::SntpServers(_) => Code::SntpServers,
+            Option::Fqdn(_) => Code::Fqdn,
             Option::Other { code, .. } => *code,
         }
     }
@@ -266,6 +276,7 @@ impl<'a> Option<'a> {
             Option::DnsServers(inner) => inner.buffer_len(),
             Option::DomainList(inner) => inner.len(),
             Option::SntpServers(inner) => inner.buffer_len(),
+            Option::Fqdn(inner) => inner.len(),
             Option::Other { data, .. } => data.buffer_len(),
         }
     }
@@ -307,7 +318,7 @@ impl<'a> Option<'a> {
             Option::Status(inner) => inner.copy_into(data),
             Option::RapidCommit => unreachable!(),
             Option::DnsServers(inner) => inner.copy_into(data),
-            Option::DomainList(inner) => {
+            Option::DomainList(inner) | Option::Fqdn(inner) => {
                 data[..inner.len()].copy_from_slice(inner);
                 Ok(())
             }
@@ -366,6 +377,7 @@ impl<'a> Option<'a> {
             Code::SntpServers => {
                 IpList::from_bytes(data).map(Option::SntpServers)
             }
+            Code::Fqdn => Ok(Option::Fqdn(data.into())),
             Code::Other(_) => {
                 Ok(Option::Other { code, data: RawOption(data.into()) })
             }
@@ -1066,7 +1078,7 @@ mod test {
             assert!(inner.contains(Code::DnsServers));
             assert!(inner.contains(Code::DomainList));
             assert!(inner.contains(Code::SntpServers));
-            assert!(inner.contains(Code::Other(0x27)));
+            assert!(inner.contains(Code::Fqdn));
         } else {
             panic!("Expected an Option Request");
         }
