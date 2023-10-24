@@ -46,7 +46,7 @@ impl<'a> OpteZone<'a> {
             Ok(_) => "omicron1",
             _ => "sparse",
         };
-        let zone = Zone::new(name, brand, zfs, ifx)?;
+        let zone = Zone::new(name, brand, zfs, ifx, &[])?;
         Ok(Self { _zfs: zfs, zone })
     }
 
