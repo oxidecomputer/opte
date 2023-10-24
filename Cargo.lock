@@ -762,7 +762,7 @@ dependencies = [
  "smoltcp",
  "usdt",
  "version_check",
- "zerocopy 0.6.5",
+ "zerocopy 0.7.11",
 ]
 
 [[package]]
@@ -818,7 +818,7 @@ dependencies = [
  "serde",
  "smoltcp",
  "usdt",
- "zerocopy 0.6.5",
+ "zerocopy 0.7.11",
 ]
 
 [[package]]
@@ -1721,12 +1721,12 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.6.5"
+version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96f8f25c15a0edc9b07eb66e7e6e97d124c0505435c382fde1ab7ceb188aa956"
+checksum = "4c19fae0c8a9efc6a8281f2e623db8af1db9e57852e04cde3e754dd2dc29340f"
 dependencies = [
  "byteorder",
- "zerocopy-derive 0.6.5",
+ "zerocopy-derive 0.7.11",
 ]
 
 [[package]]
@@ -1742,9 +1742,9 @@ dependencies = [
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.6.5"
+version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "855e0f6af9cd72b87d8a6c586f3cb583f5cdcc62c2c80869d8cd7e96fdf7ee20"
+checksum = "fc56589e9ddd1f1c28d4b4b5c773ce232910a6bb67a70133d61c9e347585efe9"
 dependencies = [
  "proc-macro2",
  "quote",

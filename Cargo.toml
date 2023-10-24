@@ -55,7 +55,7 @@ syn = "2"
 thiserror = "1.0"
 usdt = "0.3"
 version_check = "0.9"
-zerocopy = "0.6"
+zerocopy = { version = "0.7", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 

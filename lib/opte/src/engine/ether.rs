@@ -23,7 +23,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
+use zerocopy::FromZeroes;
+use zerocopy::Ref;
 use zerocopy::Unaligned;
 
 pub const ETHER_TYPE_ETHER: u16 = 0x6558;
@@ -251,7 +252,7 @@ impl EtherMeta {
 
 #[derive(Debug)]
 pub struct EtherHdr<'a> {
-    bytes: LayoutVerified<&'a mut [u8], EtherHdrRaw>,
+    bytes: Ref<&'a mut [u8], EtherHdrRaw>,
 }
 
 impl<'a> EtherHdr<'a> {
@@ -336,7 +337,7 @@ impl From<&EtherMeta> for EtherHdrRaw {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, Default, FromBytes, AsBytes, Unaligned)]
+#[derive(Clone, Debug, Default, FromBytes, AsBytes, FromZeroes, Unaligned)]
 pub struct EtherHdrRaw {
     pub dst: [u8; 6],
     pub src: [u8; 6],
@@ -345,11 +346,9 @@ pub struct EtherHdrRaw {
 
 impl<'a> RawHeader<'a> for EtherHdrRaw {
     #[inline]
-    fn new_mut(
-        src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match LayoutVerified::new(src) {
+        let hdr = match Ref::new(src) {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

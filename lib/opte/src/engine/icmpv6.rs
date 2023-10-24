@@ -54,7 +54,8 @@ use smoltcp::wire::NdiscRepr;
 use smoltcp::wire::RawHardwareAddress;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
+use zerocopy::FromZeroes;
+use zerocopy::Ref;
 use zerocopy::Unaligned;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -103,7 +104,7 @@ impl From<ReadErr> for Icmpv6HdrError {
 
 #[derive(Debug)]
 pub struct Icmpv6Hdr<'a> {
-    base: LayoutVerified<&'a mut [u8], Icmpv6HdrRaw>,
+    base: Ref<&'a mut [u8], Icmpv6HdrRaw>,
 }
 
 impl<'a> Icmpv6Hdr<'a> {
@@ -141,7 +142,7 @@ impl<'a> Icmpv6Hdr<'a> {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
+#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
 pub struct Icmpv6HdrRaw {
     pub msg_type: u8,
     pub msg_code: u8,
@@ -155,11 +156,9 @@ impl Icmpv6HdrRaw {
 
 impl<'a> RawHeader<'a> for Icmpv6HdrRaw {
     #[inline]
-    fn new_mut(
-        src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match LayoutVerified::new(src) {
+        let hdr = match Ref::new(src) {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

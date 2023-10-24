@@ -15,7 +15,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
+use zerocopy::FromZeroes;
+use zerocopy::Ref;
 use zerocopy::Unaligned;
 
 use super::checksum::Checksum;
@@ -322,7 +323,7 @@ impl ModifyAction<Ipv4Meta> for Ipv4Mod {
 
 #[derive(Debug)]
 pub struct Ipv4Hdr<'a> {
-    bytes: LayoutVerified<&'a mut [u8], Ipv4HdrRaw>,
+    bytes: Ref<&'a mut [u8], Ipv4HdrRaw>,
 }
 
 impl<'a> Ipv4Hdr<'a> {
@@ -470,7 +471,7 @@ impl From<ReadErr> for Ipv4HdrError {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
+#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
 pub struct Ipv4HdrRaw {
     pub ver_hdr_len: u8,
     pub dscp_ecn: u8,
@@ -486,11 +487,9 @@ pub struct Ipv4HdrRaw {
 
 impl<'a> RawHeader<'a> for Ipv4HdrRaw {
     #[inline]
-    fn new_mut(
-        src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match LayoutVerified::new(src) {
+        let hdr = match Ref::new(src) {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
