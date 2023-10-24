@@ -653,13 +653,12 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     drop(underlay_);
 
     // set up upper mac
-    let Some(mreg) = (unsafe {
-        mac::mac_alloc(MAC_VERSION as u32).as_mut()
-    }) else {
+    let Some(mreg) = (unsafe { mac::mac_alloc(MAC_VERSION as u32).as_mut() })
+    else {
         return Err(OpteError::System {
             errno: ENOMEM,
             msg: "failed to alloc mac".to_string(),
-        })
+        });
     };
 
     mreg.m_type_ident = MAC_PLUGIN_IDENT_ETHER;
@@ -2053,9 +2052,8 @@ unsafe extern "C" fn xde_rx(
 
     let vni = geneve.vni;
     let ether_dst = meta.inner.ether.dst;
-    let Some(dev) = devs
-        .iter()
-        .find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
+    let Some(dev) =
+        devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
     else {
         // TODO add SDT probe
         // TODO add stat

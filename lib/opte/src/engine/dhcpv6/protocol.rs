@@ -371,7 +371,9 @@ fn generate_reply_options<'a>(
 
         // Slightly hacky assertion that the contents are owned.
         let Dhcpv6Option::DomainList(Cow::Owned(raw_list)) = opt else {
-            panic!("DHCPv6 DomainList creation allocs into new vec -- not found?")
+            panic!(
+                "DHCPv6 DomainList creation allocs into new vec -- not found?"
+            )
         };
 
         options.push(Dhcpv6Option::DomainList(Cow::Owned(raw_list)));
