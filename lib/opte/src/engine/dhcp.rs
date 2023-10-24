@@ -640,45 +640,7 @@ mod test {
     use crate::engine::ip4::Ipv4Cidr;
 
     fn test_option_emit(opt: impl DhcpOption, truth: Vec<u8>) {
-        let mut buf = vec![];
-        let mut opts = vec![];
-        opt.emit(&mut buf, &mut opts);
-
-        let opts: Vec<_> =
-            opts.into_iter().map(|val| val.reify(&buf)).collect();
-
-        let reply = DhcpRepr {
-            message_type: smoltcp::wire::DhcpMessageType::Offer,
-            transaction_id: 0,
-            secs: 0,
-            client_hardware_address: Default::default(),
-            client_ip: Ipv4Addr::ANY_ADDR.into(),
-            your_ip: Default::default(),
-            server_ip: Default::default(),
-            router: None,
-            subnet_mask: None,
-            relay_agent_ip: Ipv4Addr::ANY_ADDR.into(),
-            broadcast: false,
-            requested_ip: None,
-            client_identifier: None,
-            server_identifier: None,
-            parameter_request_list: None,
-            dns_servers: None,
-            max_size: None,
-            lease_duration: Some(86400),
-            renew_duration: None,
-            rebind_duration: None,
-            additional_options: &opts[..],
-        };
-
-        let reply_len = reply.buffer_len();
-
-        let mut tmp = vec![0u8; reply_len];
-        let mut dhcp = DhcpPacket::new_unchecked(&mut tmp);
-        reply.emit(&mut dhcp).unwrap();
-
         let buf = gen_dhcp_from_option(opt);
-
         assert_eq!(get_additional_options(&buf), truth);
     }
 
@@ -898,7 +860,7 @@ mod test {
         assert_eq!(opts[1].data.len(), optbuf.len() - MAX_OPTION_LEN);
 
         // Now, verify that smoltcp correctly preserves the multiple options.
-        // Inspect the actual output bytes form here on out.
+        // Inspect the actual output bytes from here on out.
         let dhcp_pkt = gen_dhcp_from_option(DomainSearchOpt { names: &names });
         let buf = get_additional_options(&dhcp_pkt);
         assert_eq!(buf[0], CustomDhcpOptionType::DomainSearch as u8);
