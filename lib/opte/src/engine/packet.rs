@@ -1012,8 +1012,8 @@ pub enum BodyTransformError {
     UnexpectedBody(String),
 }
 
-impl From<smoltcp::Error> for BodyTransformError {
-    fn from(e: smoltcp::Error) -> Self {
+impl From<smoltcp::wire::Error> for BodyTransformError {
+    fn from(e: smoltcp::wire::Error) -> Self {
         Self::ParseFailure(format!("{}", e))
     }
 }

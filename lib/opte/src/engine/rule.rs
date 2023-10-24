@@ -487,7 +487,6 @@ pub enum GenErr {
     BadPayload(super::packet::ReadErr),
     Malformed,
     MissingMeta,
-    Truncated,
     Unexpected(String),
 }
 
@@ -497,15 +496,9 @@ impl From<super::packet::ReadErr> for GenErr {
     }
 }
 
-impl From<smoltcp::Error> for GenErr {
-    fn from(err: smoltcp::Error) -> Self {
-        use smoltcp::Error::*;
-
-        match err {
-            Malformed => Self::Malformed,
-            Truncated => Self::Truncated,
-            _ => Self::Unexpected(format!("smoltcp error {}", err)),
-        }
+impl From<smoltcp::wire::Error> for GenErr {
+    fn from(_err: smoltcp::wire::Error) -> Self {
+        Self::Malformed
     }
 }
 
@@ -517,8 +510,8 @@ pub enum GenBtError {
     ParseBody(String),
 }
 
-impl From<smoltcp::Error> for GenBtError {
-    fn from(e: smoltcp::Error) -> Self {
+impl From<smoltcp::wire::Error> for GenBtError {
+    fn from(e: smoltcp::wire::Error) -> Self {
         Self::ParseBody(format!("{}", e))
     }
 }

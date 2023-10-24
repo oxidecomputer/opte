@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! IPv6 headers.
 
@@ -22,6 +22,7 @@ pub use opte_api::Ipv6Cidr;
 use serde::Deserialize;
 use serde::Serialize;
 use smoltcp::wire::IpProtocol;
+use smoltcp::wire::Ipv6ExtHeader;
 use smoltcp::wire::Ipv6FragmentHeader;
 use smoltcp::wire::Ipv6HopByHopHeader;
 use smoltcp::wire::Ipv6Packet;
@@ -322,7 +323,8 @@ impl<'a> Ipv6Hdr<'a> {
 
                 IpProtocol::Ipv6Route => {
                     let buf = rdr.slice_mut(rdr.seg_left())?;
-                    let header = Ipv6RoutingHeader::new_checked(buf)?;
+                    let mut header = Ipv6ExtHeader::new_checked(buf)?;
+                    _ = Ipv6RoutingHeader::new_checked(header.payload_mut())?;
                     let n_bytes = 8 * (usize::from(header.header_len()) + 1);
                     next_header = header.next_header();
                     let buf = header.into_inner();
@@ -343,7 +345,8 @@ impl<'a> Ipv6Hdr<'a> {
                     const FRAGMENT_HDR_SIZE: usize = 8;
                     let buf = rdr.slice_mut(FRAGMENT_HDR_SIZE)?;
                     ext_len += buf.len();
-                    let header = Ipv6FragmentHeader::new_checked(buf)?;
+                    let mut header = Ipv6ExtHeader::new_checked(buf)?;
+                    _ = Ipv6FragmentHeader::new_checked(header.payload_mut())?;
                     next_header = header.next_header();
 
                     if !is_ulp_protocol(next_header) {
@@ -467,18 +470,12 @@ pub enum Ipv6HdrError {
     BadVersion { vsn: u8 },
     ReadError { error: ReadErr },
     UnexpectedNextHeader { next_header: u8 },
-    Truncated,
     Malformed,
 }
 
-impl From<smoltcp::Error> for Ipv6HdrError {
-    fn from(err: smoltcp::Error) -> Ipv6HdrError {
-        use smoltcp::Error::*;
-        match err {
-            Truncated => Ipv6HdrError::Truncated,
-            Malformed => Ipv6HdrError::Malformed,
-            _ => unreachable!("Impossible smoltcp error variant: {:#?}", err),
-        }
+impl From<smoltcp::wire::Error> for Ipv6HdrError {
+    fn from(_error: smoltcp::wire::Error) -> Ipv6HdrError {
+        Ipv6HdrError::Malformed
     }
 }
 
@@ -549,31 +546,20 @@ pub(crate) mod test {
         Ipv6HopByHopRepr {
             next_header: IpProtocol::Tcp,
             length: OPTION_LEN as _,
-            options: &OPTIONS,
+            data: &OPTIONS,
         }
     }
 
     fn route_header() -> Ipv6RoutingRepr<'static> {
         // In 8-octet units, not including the first, i.e., this just needs the
         // home address, 128 bits.
-        let length = 2;
         let segments_left = 1;
         let home_address = Ipv6Address::new(0xfd00, 0, 0, 0, 0, 0, 0, 1);
-        Ipv6RoutingRepr::Type2 {
-            next_header: IpProtocol::Tcp,
-            length,
-            segments_left,
-            home_address,
-        }
+        Ipv6RoutingRepr::Type2 { segments_left, home_address }
     }
 
     fn fragment_header() -> Ipv6FragmentRepr {
-        Ipv6FragmentRepr {
-            next_header: IpProtocol::Tcp,
-            frag_offset: 128,
-            more_frags: false,
-            ident: 0x17,
-        }
+        Ipv6FragmentRepr { frag_offset: 128, more_frags: false, ident: 0x17 }
     }
 
     // Generate a test packet.
@@ -632,21 +618,30 @@ pub(crate) mod test {
                     let mut packet =
                         Ipv6HopByHopHeader::new_checked(&mut buf).unwrap();
                     hbh.emit(&mut packet);
-                    hbh.buffer_len()
+                    8 + (hbh.length as usize) * 8
                 }
                 Ipv6Frag => {
                     let frag = fragment_header();
                     let mut packet =
-                        Ipv6FragmentHeader::new_checked(&mut buf).unwrap();
-                    frag.emit(&mut packet);
-                    frag.buffer_len()
+                        Ipv6ExtHeader::new_checked(&mut buf).unwrap();
+                    packet.set_next_header(IpProtocol::Tcp);
+                    let mut frag_packet =
+                        Ipv6FragmentHeader::new_checked(packet.payload_mut())
+                            .unwrap();
+                    frag.emit(&mut frag_packet);
+                    2 + frag.buffer_len()
                 }
                 Ipv6Route => {
                     let route = route_header();
                     let mut packet =
-                        Ipv6RoutingHeader::new_checked(&mut buf).unwrap();
-                    route.emit(&mut packet);
-                    route.buffer_len()
+                        Ipv6ExtHeader::new_checked(&mut buf).unwrap();
+                    packet.set_next_header(IpProtocol::Tcp);
+                    packet.set_header_len(((route.buffer_len() - 6) / 8) as u8);
+                    let mut route_packet =
+                        Ipv6RoutingHeader::new_checked(packet.payload_mut())
+                            .unwrap();
+                    route.emit(&mut route_packet);
+                    2 + route.buffer_len()
                 }
                 Unknown(x) if x == &DDM_HEADER_ID => {
                     // Starts with next_header, then a length excluding that.

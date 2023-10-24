@@ -38,6 +38,7 @@ cfg-if = "1"
 clap = { version = "4", features = ["derive", "string"] }
 ctor = "0.2"
 dyn-clone = "1.0"
+heapless = "0.7"
 ipnetwork = { version = "0.20", default-features = false }
 itertools = "0.11"
 libc = "0.2"
@@ -50,7 +51,7 @@ slog = { version = "2.7", features = ["max_level_trace", "release_max_level_trac
 slog-async = "2.7"
 slog-envlogger = "2.2"
 slog-term = "2.9"
-smoltcp = { version = "0.8", default-features = false }
+smoltcp = { version = "0.10", default-features = false }
 syn = "2"
 thiserror = "1.0"
 usdt = "0.3"
