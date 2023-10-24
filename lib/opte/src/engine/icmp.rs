@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! ICMP headers.
 use super::ether::EtherHdr;
@@ -23,6 +23,7 @@ use super::rule::AllowOrDeny;
 use super::rule::GenErr;
 use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 pub use opte_api::ip::IcmpEchoReply;
@@ -34,14 +35,6 @@ use smoltcp::phy::ChecksumCapabilities as Csum;
 use smoltcp::wire;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
-    } else {
-        use std::vec::Vec;
-    }
-}
 
 impl HairpinAction for IcmpEchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {

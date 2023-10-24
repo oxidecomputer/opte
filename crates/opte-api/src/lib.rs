@@ -12,25 +12,14 @@
 #[macro_use]
 extern crate std;
 
-#[cfg(all(not(feature = "std"), not(test)))]
 #[macro_use]
 extern crate alloc;
 
-#[macro_use]
-extern crate cfg_if;
-
+use alloc::string::String;
 use core::fmt;
 use core::fmt::Display;
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-    } else {
-        use std::string::String;
-    }
-}
 
 pub mod cmd;
 pub mod dhcpv6;

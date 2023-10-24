@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! 1:1 NAT.
 
@@ -22,22 +22,13 @@ use super::rule::AllowOrDeny;
 use super::rule::HdrTransform;
 use super::rule::StatefulAction;
 use crate::engine::snat::ConcreteIpAddr;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt;
 use core::marker::PhantomData;
 use opte_api::Direction;
 use opte_api::IpAddr;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::ToString;
-        use alloc::sync::Arc;
-        use alloc::vec::Vec;
-    } else {
-        use std::string::ToString;
-        use std::sync::Arc;
-        use std::vec::Vec;
-    }
-}
 
 /// A mapping from a private to external IP address for NAT.
 #[derive(Debug, Clone, Copy)]

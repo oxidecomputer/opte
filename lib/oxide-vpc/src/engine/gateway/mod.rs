@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The Oxide VPC Virtual Gateway.
 //!
@@ -48,6 +48,9 @@ use crate::api::Vni;
 use crate::api::VpcCfg;
 use crate::engine::overlay::VpcMappings;
 use crate::engine::overlay::ACTION_META_VNI;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use core::marker::PhantomData;
@@ -76,18 +79,6 @@ use opte::engine::rule::MetaAction;
 use opte::engine::rule::ModMetaResult;
 use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::ToString;
-        use alloc::sync::Arc;
-        use alloc::vec::Vec;
-    } else {
-        use std::string::ToString;
-        use std::sync::Arc;
-        use std::vec::Vec;
-    }
-}
 
 pub mod arp;
 pub mod dhcp;

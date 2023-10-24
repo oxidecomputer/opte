@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! IPv4 headers.
 
@@ -30,18 +30,11 @@ use super::predicate::MatchExactVal;
 use super::predicate::MatchPrefix;
 use super::predicate::MatchPrefixVal;
 use super::predicate::MatchRangeVal;
+use alloc::string::String;
 pub use opte_api::Ipv4Addr;
 pub use opte_api::Ipv4Cidr;
 pub use opte_api::Ipv4PrefixLen;
 pub use opte_api::Protocol;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-    } else {
-        use std::string::String;
-    }
-}
 
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
 pub const IPV4_HDR_VER_MASK: u8 = 0xF0;

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The Oxide VPC firewall.
 //!
@@ -19,6 +19,7 @@ pub use crate::api::ProtoFilter;
 use crate::api::RemFwRuleReq;
 use crate::api::SetFwRulesReq;
 use crate::engine::overlay::ACTION_META_VNI;
+use alloc::string::ToString;
 use core::num::NonZeroU32;
 use opte::api::Direction;
 use opte::api::IpAddr;
@@ -40,14 +41,6 @@ use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Finalized;
 use opte::engine::rule::Rule;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::ToString;
-    } else {
-        use std::string::ToString;
-    }
-}
 
 pub const FW_LAYER_NAME: &str = "firewall";
 

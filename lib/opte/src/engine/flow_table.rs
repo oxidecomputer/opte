@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The flow table implementation.
 //!
@@ -12,6 +12,10 @@
 use super::packet::InnerFlowId;
 use crate::ddi::time::Moment;
 use crate::ddi::time::MILLIS;
+use alloc::collections::BTreeMap;
+use alloc::ffi::CString;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 use core::num::NonZeroU32;
 use opte_api::OpteError;
@@ -20,17 +24,8 @@ use serde::Serialize;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::collections::BTreeMap;
-        use alloc::ffi::CString;
-        use alloc::string::String;
-        use alloc::vec::Vec;
         use illumos_sys_hdrs::uintptr_t;
         use super::rule::flow_id_sdt_arg;
-    } else {
-        use std::collections::BTreeMap;
-        use std::ffi::CString;
-        use std::string::String;
-        use std::vec::Vec;
     }
 }
 

@@ -12,21 +12,13 @@ use super::packet::InnerFlowId;
 use super::port::Port;
 use super::predicate::DataPredicate;
 use super::tcp::TcpState;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt::Debug;
 use opte_api::CmdOk;
 use opte_api::OpteError;
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-        use alloc::vec::Vec;
-    } else {
-        use std::string::String;
-        use std::vec::Vec;
-    }
-}
 
 /// Dump various information about a layer, for use in debugging or
 /// administrative purposes.

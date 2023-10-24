@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Predicates used for `Rule` matching.
 
@@ -22,6 +22,10 @@ use super::ip6::Ipv6Meta;
 use super::packet::PacketMeta;
 use super::packet::PacketRead;
 use super::port::meta::ActionMeta;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use core::ops::RangeInclusive;
@@ -33,18 +37,6 @@ use smoltcp::wire::DhcpPacket;
 use smoltcp::wire::DhcpRepr;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::boxed::Box;
-        use alloc::string::{String, ToString};
-        use alloc::vec::Vec;
-    } else {
-        use std::boxed::Box;
-        use std::string::{String, ToString};
-        use std::vec::Vec;
-    }
-}
 
 /// A marker trait for types that can be matched exactly, usually by direct
 /// equality comparison.

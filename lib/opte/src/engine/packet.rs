@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Types for creating, reading, and writing network packets.
 //!
@@ -60,19 +60,17 @@ use super::udp::UdpHdr;
 use super::udp::UdpHdrError;
 use super::udp::UdpMeta;
 use super::Direction;
+use alloc::string::String;
+use alloc::vec::Vec;
 use illumos_sys_hdrs::dblk_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-        use alloc::vec::Vec;
         use illumos_sys_hdrs as ddi;
     } else {
         use std::boxed::Box;
-        use std::string::String;
-        use std::vec::Vec;
         use illumos_sys_hdrs::c_uchar;
     }
 }

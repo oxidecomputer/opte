@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The engine in OPTE.
 //!
@@ -40,19 +40,11 @@ pub mod tcp_state;
 #[macro_use]
 pub mod udp;
 
+use alloc::string::String;
 use core::fmt;
+use core::num::ParseIntError;
 use ip4::IpError;
 pub use opte_api::Direction;
-
-use core::num::ParseIntError;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-    } else {
-        use std::string::String;
-    }
-}
 
 // TODO Currently I'm using this for parsing many different things. It
 // might be wise to have different parse error types. E.g., one for

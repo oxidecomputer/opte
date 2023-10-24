@@ -4,6 +4,9 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use alloc::str::FromStr;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Debug;
@@ -11,16 +14,6 @@ use core::fmt::Display;
 use core::ops::Deref;
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-    } else {
-        use std::result;
-        use std::str::FromStr;
-        use std::string::String;
-        use std::vec::Vec;
-    }
-}
 
 /// A MAC address.
 #[derive(
@@ -76,7 +69,6 @@ impl Deref for MacAddr {
     }
 }
 
-#[cfg(any(feature = "std", test))]
 impl FromStr for MacAddr {
     type Err = String;
 
@@ -87,7 +79,7 @@ impl FromStr for MacAddr {
                 u8::from_str_radix(s, 16)
                     .map_err(|_| format!("bad octet: {}", s))
             })
-            .collect::<result::Result<Vec<u8>, _>>()?;
+            .collect::<Result<Vec<u8>, _>>()?;
 
         if octets.len() != 6 {
             return Err(format!("incorrect number of bytes: {}", octets.len()));

@@ -2,23 +2,16 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
+use alloc::string::String;
+use alloc::string::ToString;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
 use core::str::FromStr;
-
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::{String, ToString};
-    } else {
-        use std::string::{String, ToString};
-    }
-}
 
 /// A Geneve Virtual Network Identifier (VNI).
 #[derive(

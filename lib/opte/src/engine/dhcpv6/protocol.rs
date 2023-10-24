@@ -43,6 +43,8 @@ use crate::engine::rule::GenPacketResult;
 use crate::engine::rule::HairpinAction;
 use crate::engine::udp::UdpHdr;
 use crate::engine::udp::UdpMeta;
+use alloc::borrow::Cow;
+use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
 use opte_api::Ipv6Addr;
@@ -52,16 +54,6 @@ use opte_api::Protocol;
 use serde::Deserialize;
 use serde::Serialize;
 use smoltcp::wire::IpProtocol;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::borrow::Cow;
-        use alloc::vec::Vec;
-    } else {
-        use std::borrow::Cow;
-        use std::vec::Vec;
-    }
-}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MessageType {

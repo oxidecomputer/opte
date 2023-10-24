@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Internet Control Message Protocol version 6
 
@@ -29,6 +29,8 @@ use super::rule::AllowOrDeny;
 use super::rule::GenErr;
 use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 pub use opte_api::ip::Icmpv6EchoReply;
@@ -54,16 +56,6 @@ use zerocopy::AsBytes;
 use zerocopy::FromBytes;
 use zerocopy::LayoutVerified;
 use zerocopy::Unaligned;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
-        use alloc::string::String;
-    } else {
-        use std::vec::Vec;
-        use std::string::String;
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Icmpv6Meta {

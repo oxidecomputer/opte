@@ -7,6 +7,7 @@
 //! The DHCPv6 implementation of the Virtual Gateway.
 
 use crate::api::VpcCfg;
+use alloc::sync::Arc;
 use opte::api::DhcpCfg;
 use opte::api::Direction;
 use opte::api::OpteError;
@@ -16,14 +17,6 @@ use opte::engine::dhcpv6::LeasedAddress;
 use opte::engine::layer::Layer;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::sync::Arc;
-    } else {
-        use std::sync::Arc;
-    }
-}
 
 pub fn setup(
     layer: &mut Layer,

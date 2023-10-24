@@ -754,7 +754,6 @@ dependencies = [
 name = "opte-api"
 version = "0.1.0"
 dependencies = [
- "cfg-if 0.1.10",
  "illumos-sys-hdrs",
  "ipnetwork",
  "postcard",
@@ -796,7 +795,6 @@ dependencies = [
 name = "oxide-vpc"
 version = "0.1.0"
 dependencies = [
- "cfg-if 0.1.10",
  "ctor",
  "illumos-sys-hdrs",
  "opte",

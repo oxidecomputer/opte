@@ -30,6 +30,8 @@ use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
 use super::udp::UdpHdr;
 use super::udp::UdpMeta;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use opte_api::DhcpCfg;
@@ -47,16 +49,6 @@ use serde::Serializer;
 use smoltcp::wire::DhcpPacket;
 use smoltcp::wire::DhcpRepr;
 use smoltcp::wire::Ipv4Address;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::ToString;
-        use alloc::vec::Vec;
-    } else {
-        use std::string::ToString;
-        use std::vec::Vec;
-    }
-}
 
 /// The DHCP message type.
 ///

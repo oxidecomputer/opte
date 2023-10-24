@@ -2,23 +2,15 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::ToString;
-        use alloc::sync::Arc;
-    } else {
-        use std::string::ToString;
-        use std::sync::Arc;
-    }
-}
+// Copyright 2023 Oxide Computer Company
 
 use super::router::RouterTargetInternal;
 use super::router::ROUTER_LAYER_NAME;
 use crate::api::Ipv4Cfg;
 use crate::api::Ipv6Cfg;
 use crate::api::VpcCfg;
+use alloc::string::ToString;
+use alloc::sync::Arc;
 use core::num::NonZeroU32;
 use core::result::Result;
 use opte::api::Direction;

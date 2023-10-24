@@ -4,6 +4,9 @@
 
 // Copyright 2023 Oxide Computer Company
 
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use core::result;
@@ -12,16 +15,6 @@ use illumos_sys_hdrs::datalink_id_t;
 pub use opte::api::*;
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::{String, ToString};
-        use alloc::vec::Vec;
-    } else {
-        use std::string::{String, ToString};
-        use std::vec::Vec;
-    }
-}
 
 /// Description of Boundary Services, the endpoint used to route traffic
 /// to external networks.

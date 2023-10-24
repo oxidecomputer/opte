@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! A layer in a port.
 
@@ -39,6 +39,12 @@ use crate::ddi::kstat::KStatU64;
 use crate::ddi::time::Moment;
 use crate::ExecCtx;
 use crate::LogLevel;
+use alloc::ffi::CString;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
 use core::num::NonZeroU32;
@@ -47,22 +53,6 @@ use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
 use kstat_macro::KStatProvider;
 use opte_api::Direction;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::ffi::CString;
-        use alloc::string::{String, ToString};
-        use alloc::sync::Arc;
-        use alloc::vec::Vec;
-        use core::ffi::CStr;
-    } else {
-        use core::ffi::CStr;
-        use std::ffi::CString;
-        use std::string::{String, ToString};
-        use std::sync::Arc;
-        use std::vec::Vec;
-    }
-}
 
 #[derive(Debug)]
 pub enum LayerError {

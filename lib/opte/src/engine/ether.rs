@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Ethernet frames.
 
@@ -11,6 +11,8 @@ use super::headers::PushAction;
 use super::headers::RawHeader;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
@@ -23,16 +25,6 @@ use zerocopy::AsBytes;
 use zerocopy::FromBytes;
 use zerocopy::LayoutVerified;
 use zerocopy::Unaligned;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-        use alloc::vec::Vec;
-    } else {
-        use std::string::String;
-        use std::vec::Vec;
-    }
-}
 
 pub const ETHER_TYPE_ETHER: u16 = 0x6558;
 pub const ETHER_TYPE_IPV4: u16 = 0x0800;
