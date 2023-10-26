@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Core implementation of DHCPv6 protocol.
 //!
@@ -74,6 +74,8 @@ pub mod options;
 pub mod protocol;
 pub use protocol::MessageType;
 
+use alloc::borrow::Cow;
+use alloc::vec::Vec;
 use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Display;
@@ -83,16 +85,6 @@ pub use opte_api::dhcpv6::LeasedAddress;
 use opte_api::DhcpCfg;
 use opte_api::Ipv6Addr;
 use opte_api::MacAddr;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::borrow::Cow;
-        use alloc::vec::Vec;
-    } else {
-        use std::borrow::Cow;
-        use std::vec::Vec;
-    }
-}
 
 /// The All-DHCP-Relay-Agents-And-Servers IPv6 address.
 pub const ALL_RELAYS_AND_SERVERS: Ipv6Addr =

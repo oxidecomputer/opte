@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The Oxide VPC Network.
 //!
@@ -26,12 +26,8 @@
 #[macro_use]
 extern crate std;
 
-#[cfg(all(not(feature = "std"), not(test)))]
 #[macro_use]
 extern crate alloc;
-
-#[macro_use]
-extern crate cfg_if;
 
 #[cfg(any(feature = "api", test))]
 pub mod api;

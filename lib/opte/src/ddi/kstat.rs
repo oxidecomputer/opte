@@ -2,26 +2,24 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Export Rust structs as illumos kstats.
 //!
 //! See `kstat_create(9F)`.
+use alloc::boxed::Box;
+use alloc::string::String;
 use core::fmt;
 use core::fmt::Display;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::boxed::Box;
         use alloc::ffi::CString;
-        use alloc::string::{String, ToString};
+        use alloc::string::ToString;
         use illumos_sys_hdrs::{
             c_void, kstat_t, kstat_create, kstat_delete, kstat_install,
             kstat_named_init, kstat_named_t, KSTAT_STRLEN, KSTAT_TYPE_NAMED,
         };
-    } else {
-        use std::boxed::Box;
-        use std::string::String;
     }
 }
 

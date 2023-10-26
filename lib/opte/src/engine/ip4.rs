@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! IPv4 headers.
 
@@ -15,7 +15,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
+use zerocopy::FromZeroes;
+use zerocopy::Ref;
 use zerocopy::Unaligned;
 
 use super::checksum::Checksum;
@@ -30,18 +31,11 @@ use super::predicate::MatchExactVal;
 use super::predicate::MatchPrefix;
 use super::predicate::MatchPrefixVal;
 use super::predicate::MatchRangeVal;
+use alloc::string::String;
 pub use opte_api::Ipv4Addr;
 pub use opte_api::Ipv4Cidr;
 pub use opte_api::Ipv4PrefixLen;
 pub use opte_api::Protocol;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-    } else {
-        use std::string::String;
-    }
-}
 
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
 pub const IPV4_HDR_VER_MASK: u8 = 0xF0;
@@ -329,7 +323,7 @@ impl ModifyAction<Ipv4Meta> for Ipv4Mod {
 
 #[derive(Debug)]
 pub struct Ipv4Hdr<'a> {
-    bytes: LayoutVerified<&'a mut [u8], Ipv4HdrRaw>,
+    bytes: Ref<&'a mut [u8], Ipv4HdrRaw>,
 }
 
 impl<'a> Ipv4Hdr<'a> {
@@ -477,7 +471,7 @@ impl From<ReadErr> for Ipv4HdrError {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
+#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
 pub struct Ipv4HdrRaw {
     pub ver_hdr_len: u8,
     pub dscp_ecn: u8,
@@ -493,11 +487,9 @@ pub struct Ipv4HdrRaw {
 
 impl<'a> RawHeader<'a> for Ipv4HdrRaw {
     #[inline]
-    fn new_mut(
-        src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match LayoutVerified::new(src) {
+        let hdr = match Ref::new(src) {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

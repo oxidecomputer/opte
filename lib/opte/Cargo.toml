@@ -28,6 +28,7 @@ opte-api.workspace = true
 
 cfg-if.workspace = true
 dyn-clone.workspace = true
+heapless.workspace = true
 postcard.workspace = true
 serde.workspace = true
 usdt = { workspace = true, optional = true }

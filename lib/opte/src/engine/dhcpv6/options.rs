@@ -45,21 +45,12 @@
 //! RFC 8415 sec 21 describes options in general, with each option in a
 //! subsection.
 
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::borrow::Cow;
-        use alloc::str::from_utf8;
-        use alloc::vec::Vec;
-    } else {
-        use std::borrow::Cow;
-        use std::str::from_utf8;
-        use std::vec::Vec;
-    }
-}
-
 use super::Duid;
 use super::Error;
 use super::Lifetime;
+use alloc::borrow::Cow;
+use alloc::str::from_utf8;
+use alloc::vec::Vec;
 use core::mem::size_of;
 use core::ops::Range;
 use opte_api::DomainName;

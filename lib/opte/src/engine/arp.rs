@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! ARP headers and data.
 
@@ -23,7 +23,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
+use zerocopy::FromZeroes;
+use zerocopy::Ref;
 use zerocopy::Unaligned;
 
 pub const ARP_HTYPE_ETHERNET: u16 = 1;
@@ -145,12 +146,12 @@ impl ArpEthIpv4 {
     }
 }
 
-impl TryFrom<&LayoutVerified<&mut [u8], ArpEthIpv4Raw>> for ArpEthIpv4 {
+impl TryFrom<&Ref<&mut [u8], ArpEthIpv4Raw>> for ArpEthIpv4 {
     type Error = ArpHdrError;
 
     // NOTE: This only accepts IPv4/Ethernet ARP.
     fn try_from(
-        raw: &LayoutVerified<&mut [u8], ArpEthIpv4Raw>,
+        raw: &Ref<&mut [u8], ArpEthIpv4Raw>,
     ) -> Result<Self, Self::Error> {
         let htype = u16::from_be_bytes(raw.htype);
 
@@ -209,7 +210,7 @@ impl From<&ArpEthIpv4> for ArpEthIpv4Raw {
 }
 
 #[repr(C)]
-#[derive(AsBytes, Clone, Debug, FromBytes, Unaligned)]
+#[derive(AsBytes, Clone, Debug, FromBytes, FromZeroes, Unaligned)]
 pub struct ArpEthIpv4Raw {
     pub htype: [u8; 2],
     pub ptype: [u8; 2],
@@ -224,11 +225,9 @@ pub struct ArpEthIpv4Raw {
 
 impl<'a> RawHeader<'a> for ArpEthIpv4Raw {
     #[inline]
-    fn new_mut(
-        src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match LayoutVerified::new(src) {
+        let hdr = match Ref::new(src) {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

@@ -37,7 +37,7 @@ pub use opte_api::Protocol;
 pub use opte_api::Vni;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::LayoutVerified;
+use zerocopy::Ref;
 
 pub const AF_INET: i32 = 2;
 pub const AF_INET6: i32 = 26;
@@ -54,13 +54,11 @@ pub trait RawHeader<'a>: Sized {
 
     /// Create a mutable, zerocopy version of the raw header from the
     /// src.
-    fn new_mut(
-        src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr>;
+    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr>;
 
     /// Create an immutable, zerocopy version of the raw header from the
     /// src.
-    fn new(_src: &[u8]) -> Result<LayoutVerified<&[u8], Self>, ReadErr> {
+    fn new(_src: &[u8]) -> Result<Ref<&[u8], Self>, ReadErr> {
         Err(ReadErr::NotImplemented)
     }
 }

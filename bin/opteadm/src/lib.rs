@@ -31,11 +31,6 @@ use oxide_vpc::engine::overlay;
 
 include!(concat!(env!("OUT_DIR"), "/gen.rs"));
 
-// XX: This should live in opte-api, but doing so would bump the API
-//     version inappropriately. Move me alongside another change?
-/// Major version of the OPTE package.
-pub const MAJOR_VERSION: u64 = 0;
-
 /// The handle used to send administration commands to the OPTE
 /// control node.
 #[derive(Debug)]

@@ -6,23 +6,14 @@
 
 //! Types related to DNS and advertisement of DNS options to clients.
 
+use alloc::str;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::fmt;
 use core::str::FromStr;
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-        use alloc::vec::Vec;
-        use alloc::str;
-    } else {
-        use std::string::String;
-        use std::vec::Vec;
-        use std::str;
-    }
-}
 
 /// A DNS domain name, which can be encoded in the label-sequence format of RFC
 /// 1035 section 3.1.
@@ -133,7 +124,8 @@ impl TryFrom<&[u8]> for DomainName {
             let Some(end) = start.checked_add(len) else {
                 return Err("Invalid label length");
             };
-            let Some(chunk) = buf.get(usize::from(start)..usize::from(end)) else {
+            let Some(chunk) = buf.get(usize::from(start)..usize::from(end))
+            else {
                 return Err("Invalid label length");
             };
 

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Internet Control Message Protocol version 6
 
@@ -29,6 +29,8 @@ use super::rule::AllowOrDeny;
 use super::rule::GenErr;
 use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 pub use opte_api::ip::Icmpv6EchoReply;
@@ -52,18 +54,9 @@ use smoltcp::wire::NdiscRepr;
 use smoltcp::wire::RawHardwareAddress;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
+use zerocopy::FromZeroes;
+use zerocopy::Ref;
 use zerocopy::Unaligned;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
-        use alloc::string::String;
-    } else {
-        use std::vec::Vec;
-        use std::string::String;
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Icmpv6Meta {
@@ -111,7 +104,7 @@ impl From<ReadErr> for Icmpv6HdrError {
 
 #[derive(Debug)]
 pub struct Icmpv6Hdr<'a> {
-    base: LayoutVerified<&'a mut [u8], Icmpv6HdrRaw>,
+    base: Ref<&'a mut [u8], Icmpv6HdrRaw>,
 }
 
 impl<'a> Icmpv6Hdr<'a> {
@@ -149,7 +142,7 @@ impl<'a> Icmpv6Hdr<'a> {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
+#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
 pub struct Icmpv6HdrRaw {
     pub msg_type: u8,
     pub msg_code: u8,
@@ -163,11 +156,9 @@ impl Icmpv6HdrRaw {
 
 impl<'a> RawHeader<'a> for Icmpv6HdrRaw {
     #[inline]
-    fn new_mut(
-        src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match LayoutVerified::new(src) {
+        let hdr = match Ref::new(src) {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

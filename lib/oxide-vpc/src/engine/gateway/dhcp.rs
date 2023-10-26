@@ -6,16 +6,9 @@
 
 //! The DHCP implementation of the Virtual Gateway.
 
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::sync::Arc;
-    } else {
-        use std::sync::Arc;
-    }
-}
-
 use crate::api::Ipv4Cfg;
 use crate::api::VpcCfg;
+use alloc::sync::Arc;
 use core::result::Result;
 use opte::api::DhcpCfg;
 use opte::api::DhcpReplyType;

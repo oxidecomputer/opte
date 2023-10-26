@@ -2,20 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The ICMPv6 implementation of the Virtual Gateway.
 
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::sync::Arc;
-    } else {
-        use std::sync::Arc;
-    }
-}
-
 use crate::api::Ipv6Cfg;
 use crate::api::VpcCfg;
+use alloc::sync::Arc;
 use core::result::Result;
 use opte::api::Direction;
 use opte::api::Ipv6Addr;

@@ -6,6 +6,9 @@
 
 use super::mac::MacAddr;
 use crate::DomainName;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Debug;
@@ -15,18 +18,6 @@ use core::result;
 use core::str::FromStr;
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-        use alloc::string::ToString;
-        use alloc::vec::Vec;
-    } else {
-        use std::string::String;
-        use std::string::ToString;
-        use std::vec::Vec;
-    }
-}
 
 /// Generate an ICMPv6 Echo Reply message.
 ///
@@ -120,7 +111,9 @@ impl DhcpCfg {
     /// Combine `hostname` and `host_domain` into a single FQDN
     /// in a target buffer.
     pub fn push_fqdn(&self, buf: &mut Vec<u8>) {
-        let Some(hostname) = &self.hostname else {return;};
+        let Some(hostname) = &self.hostname else {
+            return;
+        };
         buf.extend_from_slice(hostname.encode());
         if let Some(domain_name) = &self.host_domain {
             // Need to overwrite trailing terminator of hostname.

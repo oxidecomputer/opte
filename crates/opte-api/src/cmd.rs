@@ -2,24 +2,17 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 use super::encap::Vni;
 use super::ip::IpCidr;
 use super::mac::MacAddr;
 use super::API_VERSION;
+use alloc::string::String;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::size_t;
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-    } else {
-        use std::string::String;
-    }
-}
 
 pub const XDE_IOC: u32 = 0xde777700;
 pub const XDE_IOC_OPTE_CMD: i32 = XDE_IOC as i32 | 0x01;

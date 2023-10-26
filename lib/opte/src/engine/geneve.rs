@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Geneve headers and their related actions.
 //!
@@ -20,7 +20,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
+use zerocopy::FromZeroes;
+use zerocopy::Ref;
 use zerocopy::Unaligned;
 
 pub const GENEVE_VSN: u8 = 0;
@@ -137,7 +138,7 @@ impl<'a> From<&GeneveHdr<'a>> for GeneveMeta {
 
 pub struct GeneveHdr<'a> {
     /// Main body of the Geneve Header.
-    bytes: LayoutVerified<&'a mut [u8], GeneveHdrRaw>,
+    bytes: Ref<&'a mut [u8], GeneveHdrRaw>,
     /// Byte slice occupied by Geneve options.
     opts: Option<&'a mut [u8]>,
 }
@@ -227,7 +228,7 @@ impl From<ReadErr> for GeneveHdrError {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
+#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
 pub struct GeneveHdrRaw {
     src_port: [u8; 2],
     dst_port: [u8; 2],
@@ -258,11 +259,9 @@ impl GeneveHdrRaw {
 
 impl<'a> RawHeader<'a> for GeneveHdrRaw {
     #[inline]
-    fn new_mut(
-        src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), mem::size_of::<Self>());
-        let hdr = match LayoutVerified::new(src) {
+        let hdr = match Ref::new(src) {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
@@ -423,7 +422,7 @@ impl OxideOption {
 ///
 /// Note: Unaligned on the same rationale as [`GeneveHdrRaw`].
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
+#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
 pub struct GeneveOptHdrRaw {
     option_class: [u8; 2],
     crit_type: u8,
@@ -455,11 +454,9 @@ impl GeneveOptHdrRaw {
 
 impl<'a> RawHeader<'a> for GeneveOptHdrRaw {
     #[inline]
-    fn new_mut(
-        src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), mem::size_of::<Self>());
-        let hdr = match LayoutVerified::new(src) {
+        let hdr = match Ref::new(src) {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
@@ -467,9 +464,9 @@ impl<'a> RawHeader<'a> for GeneveOptHdrRaw {
     }
 
     #[inline]
-    fn new(src: &[u8]) -> Result<LayoutVerified<&[u8], Self>, ReadErr> {
+    fn new(src: &[u8]) -> Result<Ref<&[u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), mem::size_of::<Self>());
-        let hdr = match LayoutVerified::new(src) {
+        let hdr = match Ref::new(src) {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

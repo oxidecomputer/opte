@@ -7,16 +7,8 @@
 //! Types for working with the DHCPv6
 
 use crate::Ipv6Addr;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
-        use alloc::string::String;
-    } else {
-        use std::vec::Vec;
-        use std::string::String;
-    }
-}
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// A single leased IPv6 address, with associated lifetime.
 #[derive(Clone, Copy, Debug)]

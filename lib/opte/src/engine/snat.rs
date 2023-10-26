@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Types for working with IP Source NAT, both IPv4 and IPv6.
 
@@ -35,6 +35,11 @@ use super::rule::ResourceError;
 use super::rule::StatefulAction;
 use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KMutexType;
+use alloc::boxed::Box;
+use alloc::collections::btree_map::BTreeMap;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use core::marker::PhantomData;
@@ -46,22 +51,6 @@ use opte_api::Ipv6Addr;
 use opte_api::Protocol;
 use smoltcp::wire::Icmpv4Message;
 use smoltcp::wire::Icmpv4Packet;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::boxed::Box;
-        use alloc::collections::btree_map::BTreeMap;
-        use alloc::string::ToString;
-        use alloc::sync::Arc;
-        use alloc::vec::Vec;
-    } else {
-        use std::boxed::Box;
-        use std::collections::btree_map::BTreeMap;
-        use std::string::ToString;
-        use std::sync::Arc;
-        use std::vec::Vec;
-    }
-}
 
 /// A single entry in the NAT pool, describing the public IP and port used to
 /// NAT a private address.
