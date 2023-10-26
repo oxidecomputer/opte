@@ -500,14 +500,14 @@ impl HairpinAction for DhcpAction {
         let dns_servers = if self.dhcp_cfg.dns4_servers.is_empty() {
             None
         } else {
-            for server in self
-                .dhcp_cfg
-                .dns4_servers
-                .iter()
-                .take(DHCP_MAX_DNS_SERVER_COUNT)
-            {
-                _ = dns_vec.push(Ipv4Address::from(*server));
-            }
+            dns_vec.extend(
+                self.dhcp_cfg
+                    .dns4_servers
+                    .iter()
+                    .copied()
+                    .map(Ipv4Address::from)
+                    .take(DHCP_MAX_DNS_SERVER_COUNT),
+            );
             Some(dns_vec)
         };
 

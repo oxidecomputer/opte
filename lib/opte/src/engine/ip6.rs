@@ -618,7 +618,7 @@ pub(crate) mod test {
                     let mut packet =
                         Ipv6HopByHopHeader::new_checked(&mut buf).unwrap();
                     hbh.emit(&mut packet);
-                    8 + (hbh.length as usize) * 8
+                    hbh.header_len() + hbh.data.len()
                 }
                 Ipv6Frag => {
                     let frag = fragment_header();
