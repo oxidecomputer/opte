@@ -48,7 +48,7 @@ postcard = { version = "1", features = ["alloc"], default-features = false }
 quote = "1.0"
 serde = { version = "1.0", features = ["alloc", "derive"], default-features = false }
 slog = { version = "2.7", features = ["max_level_trace", "release_max_level_trace"] }
-slog-async = "2.7"
+slog-async = "2.8"
 slog-envlogger = "2.2"
 slog-term = "2.9"
 smoltcp = { version = "0.10", default-features = false }
