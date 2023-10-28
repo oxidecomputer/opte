@@ -1176,6 +1176,54 @@ fn snat_icmp4_echo_rewrite() {
 
     unpack_and_verify_icmp4(&pkt4, ident, seq_no, false, 0);
     assert_eq!(g1.port.stats_snap().in_uft_hit, 1);
+
+    // ================================================================
+    // Insert a new packet along the same S/D pair: this should occupy
+    // a new port and install a new rule for matching.
+    // ================================================================
+    let new_port = mapped_port - 1;
+    let ident2 = 8;
+    let mut pkt5 = gen_icmp_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip.into(),
+        dst_ip.into(),
+        ident2,
+        seq_no,
+        &data[..],
+        2,
+    );
+
+    let res = g1.port.process(Out, &mut pkt5, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.out, nat.flows.in",
+            "uft.out",
+            "stats.port.out_modified, stats.port.out_uft_miss",
+        ]
+    );
+
+    let meta = pkt5.meta();
+
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, g1_cfg.guest_mac);
+    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
+    assert_eq!(eth.ether_type, EtherType::Ipv4);
+
+    match meta.inner.ip.as_ref().unwrap() {
+        IpMeta::Ip4(ip4) => {
+            assert_eq!(ip4.src, g1_cfg.snat().external_ip);
+            assert_eq!(ip4.dst, dst_ip);
+            assert_eq!(ip4.proto, Protocol::ICMP);
+        }
+
+        ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
+    }
+
+    unpack_and_verify_icmp4(&pkt5, new_port, seq_no, true, 0);
 }
 
 #[test]
