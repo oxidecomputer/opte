@@ -63,9 +63,21 @@ impl HairpinAction for IcmpEchoReply {
 
     fn gen_packet(
         &self,
-        _meta: &PacketMeta,
+        meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
+        let Some(icmp) = meta.inner_icmp() else {
+            // Getting here implies the predicate matched, but that the
+            // extracted metadata indicates this isn't an ICMP packet. That
+            // should be impossible, but we avoid panicking given the kernel
+            // context.
+            return Err(GenErr::Unexpected(format!(
+                "Expected ICMP packet metadata, but found: {:?}",
+                meta
+            )));
+        };
+
+        rdr.seek_back(icmp.hdr_len())?;
         let body = rdr.copy_remaining();
         let src_pkt = Icmpv4Packet::new_checked(&body)?;
         let src_icmp = Icmpv4Repr::parse(&src_pkt, &Csum::ignored())?;
@@ -136,12 +148,18 @@ impl HairpinAction for IcmpEchoReply {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(from = "u8", into = "u8")]
 pub struct MessageType {
-    inner: wire::Icmpv4Message,
+    pub inner: wire::Icmpv4Message,
 }
 
 impl PartialOrd for MessageType {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        u8::from(*self).partial_cmp(&u8::from(*other))
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MessageType {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        u8::from(*self).cmp(&u8::from(*other))
     }
 }
 

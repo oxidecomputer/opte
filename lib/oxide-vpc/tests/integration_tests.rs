@@ -31,7 +31,7 @@ use opte::engine::geneve::Vni;
 use opte::engine::headers::EncapMeta;
 use opte::engine::headers::IpMeta;
 use opte::engine::headers::UlpMeta;
-use opte::engine::icmpv6::Icmpv6Hdr;
+use opte::engine::icmpv6::IcmpHdr;
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip4::Ipv4Hdr;
 use opte::engine::ip4::Ipv4Meta;
@@ -385,7 +385,7 @@ fn gateway_icmp4_ping() {
     // encapsulated.
     let reply = hp.parse(In, GenericUlp {}).unwrap();
     pcap.add_pkt(&reply);
-    assert_eq!(reply.body_offset(), IP4_SZ);
+    assert_eq!(reply.body_offset(), IP4_SZ + IcmpHdr::SIZE);
     assert_eq!(reply.body_seg(), 0);
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());
@@ -406,7 +406,8 @@ fn gateway_icmp4_ping() {
         ip6 => panic!("expected inner IPv4 metadata, got IPv6: {:?}", ip6),
     }
 
-    let rdr = reply.get_body_rdr();
+    let mut rdr = reply.get_body_rdr();
+    rdr.seek_back(IcmpHdr::SIZE).unwrap();
     let reply_body = rdr.copy_remaining();
     let reply_pkt = Icmpv4Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();
@@ -947,6 +948,39 @@ fn guest_to_internet_ipv6() {
     pcap_guest.add_pkt(&pkt1);
 }
 
+fn unpack_and_verify_icmp4(
+    pkt: &Packet<Parsed>,
+    expected_ident: u16,
+    seq_no: u16,
+    encapped: bool,
+    body_seg: usize,
+) {
+    let icmp_offset = pkt.body_offset() - IcmpHdr::SIZE;
+    let tgt_offset = IP4_SZ + if encapped { VPC_ENCAP_SZ } else { 0 };
+    assert_eq!(icmp_offset, tgt_offset);
+    assert_eq!(pkt.body_seg(), body_seg);
+
+    // Because we treat ICMPv4 as a full-fledged ULP, we need to
+    // unsplit the emitted header from the body.
+    let pkt_bytes = pkt.all_bytes();
+    let icmp = Icmpv4Packet::new_checked(&pkt_bytes[icmp_offset..]).unwrap();
+    let parsy = Icmpv4Repr::parse(
+        &icmp,
+        &smoltcp::phy::ChecksumCapabilities::ignored(),
+    )
+    .unwrap();
+
+    let mut emit_caps = smoltcp::phy::ChecksumCapabilities::ignored();
+    emit_caps.icmpv4 = smoltcp::phy::Checksum::Both;
+    let mut new_buf = vec![0; pkt_bytes.len() - icmp_offset];
+    let mut icmp2 = Icmpv4Packet::new_unchecked(&mut new_buf[..]);
+    parsy.emit(&mut icmp2, &emit_caps);
+
+    assert!(icmp.verify_checksum());
+    assert_eq!(icmp.echo_ident(), expected_ident);
+    assert_eq!(icmp.echo_seq_no(), seq_no);
+}
+
 // Verify that an ICMP Echo request has its identifier rewritten by
 // SNAT.
 #[test]
@@ -996,8 +1030,6 @@ fn snat_icmp4_echo_rewrite() {
         ]
     );
 
-    assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + IP4_SZ);
-    assert_eq!(pkt1.body_seg(), 0);
     let meta = pkt1.meta();
 
     let eth = meta.inner.ether;
@@ -1015,11 +1047,7 @@ fn snat_icmp4_echo_rewrite() {
         ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
     }
 
-    let body = pkt1.body_segs().unwrap()[0];
-    let icmp = Icmpv4Packet::new_checked(body).unwrap();
-    assert!(icmp.verify_checksum());
-    assert_eq!(icmp.echo_ident(), mapped_port);
-    assert_eq!(icmp.echo_seq_no(), seq_no);
+    unpack_and_verify_icmp4(&pkt1, mapped_port, seq_no, true, 0);
 
     // ================================================================
     // Verify echo reply rewrite.
@@ -1049,8 +1077,6 @@ fn snat_icmp4_echo_rewrite() {
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
-    assert_eq!(pkt2.body_offset(), IP4_SZ);
-    assert_eq!(pkt2.body_seg(), 0);
     let meta = pkt2.meta();
 
     let eth = meta.inner.ether;
@@ -1068,11 +1094,7 @@ fn snat_icmp4_echo_rewrite() {
         ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
     }
 
-    let body = pkt2.body_segs().unwrap()[0];
-    let icmp = Icmpv4Packet::new_checked(body).unwrap();
-    assert!(icmp.verify_checksum());
-    assert_eq!(icmp.echo_ident(), ident);
-    assert_eq!(icmp.echo_seq_no(), seq_no);
+    unpack_and_verify_icmp4(&pkt2, ident, seq_no, false, 0);
 
     // ================================================================
     // Send ICMP Echo Req a second time. We want to verify that a) the
@@ -1095,8 +1117,6 @@ fn snat_icmp4_echo_rewrite() {
     let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
-    assert_eq!(pkt3.body_offset(), VPC_ENCAP_SZ + IP4_SZ);
-    assert_eq!(pkt3.body_seg(), 1);
     let meta = pkt3.meta();
 
     let eth = meta.inner.ether;
@@ -1114,12 +1134,8 @@ fn snat_icmp4_echo_rewrite() {
         ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
     }
 
-    let body = pkt3.body_segs().unwrap()[0];
-    let icmp = Icmpv4Packet::new_checked(body).unwrap();
-    assert!(icmp.verify_checksum());
-    assert_eq!(icmp.echo_ident(), mapped_port);
-    assert_eq!(icmp.echo_seq_no(), seq_no);
     assert_eq!(g1.port.stats_snap().out_uft_hit, 1);
+    unpack_and_verify_icmp4(&pkt3, mapped_port, seq_no, true, 1);
 
     // ================================================================
     // Process ICMP Echo Reply a second time. Once again, this time we
@@ -1141,8 +1157,6 @@ fn snat_icmp4_echo_rewrite() {
     let res = g1.port.process(In, &mut pkt4, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
-    assert_eq!(pkt4.body_offset(), IP4_SZ);
-    assert_eq!(pkt4.body_seg(), 0);
     let meta = pkt4.meta();
 
     let eth = meta.inner.ether;
@@ -1160,11 +1174,7 @@ fn snat_icmp4_echo_rewrite() {
         ip6 => panic!("execpted inner IPv4 metadata, got IPv6: {:?}", ip6),
     }
 
-    let body = pkt4.body_segs().unwrap()[0];
-    let icmp = Icmpv4Packet::new_checked(body).unwrap();
-    assert!(icmp.verify_checksum());
-    assert_eq!(icmp.echo_ident(), ident);
-    assert_eq!(icmp.echo_seq_no(), seq_no);
+    unpack_and_verify_icmp4(&pkt4, ident, seq_no, false, 0);
     assert_eq!(g1.port.stats_snap().in_uft_hit, 1);
 }
 
@@ -1377,7 +1387,7 @@ fn test_guest_to_gateway_icmpv6_ping(
     pcap.add_pkt(&reply);
 
     // Ether + IPv6 + ICMPv6
-    assert_eq!(reply.body_offset(), IP6_SZ + Icmpv6Hdr::SIZE);
+    assert_eq!(reply.body_offset(), IP6_SZ + IcmpHdr::SIZE);
     assert_eq!(reply.body_seg(), 0);
 
     let meta = reply.meta();
@@ -1475,7 +1485,7 @@ fn gateway_router_advert_reply() {
     pcap.add_pkt(&reply);
 
     // Ether + IPv6 + ICMPv6
-    assert_eq!(reply.body_offset(), IP6_SZ + Icmpv6Hdr::SIZE);
+    assert_eq!(reply.body_offset(), IP6_SZ + IcmpHdr::SIZE);
     assert_eq!(reply.body_seg(), 0);
 
     let meta = reply.meta();
@@ -1901,7 +1911,7 @@ fn validate_hairpin_advert(
     pcap.add_pkt(&reply);
 
     // Verify Ethernet and IPv6 header basics.
-    assert_eq!(reply.body_offset(), IP6_SZ + Icmpv6Hdr::SIZE);
+    assert_eq!(reply.body_offset(), IP6_SZ + IcmpHdr::SIZE);
     assert_eq!(reply.body_seg(), 0);
     let meta = reply.meta();
     assert!(meta.outer.ether.is_none());

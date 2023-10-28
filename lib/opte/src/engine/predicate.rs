@@ -621,29 +621,12 @@ impl DataPredicate {
             }
 
             Self::IcmpMsgType(mt) => {
-                let bytes = rdr.copy_remaining();
-                let pkt = match Icmpv4Packet::new_checked(&bytes) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        super::err(format!(
-                            "Icmpv4Packet::new_checked() failed: {:?}",
-                            e
-                        ));
-                        return false;
-                    }
-                };
-                let _icmp = match Icmpv4Repr::parse(&pkt, &Csum::ignored()) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        super::err(format!(
-                            "Icmpv4Repr::parse() failed: {:?}",
-                            e
-                        ));
-                        return false;
-                    }
+                let Some(icmp) = meta.inner_icmp() else {
+                    // This isn't an ICMPv4 packet at all
+                    return false;
                 };
 
-                mt.is_match(&IcmpMessageType::from(pkt.msg_type()))
+                mt.is_match(&icmp.msg_type)
             }
 
             Self::Icmpv6MsgType(mt) => {

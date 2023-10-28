@@ -30,7 +30,9 @@ use super::headers::IpAddr;
 use super::headers::IpMeta;
 use super::headers::UlpHdr;
 use super::headers::UlpMeta;
-use super::icmpv6::Icmpv6Hdr;
+use super::icmpv6::IcmpHdr;
+use super::icmpv6::IcmpMeta;
+use super::icmpv6::Icmpv4Meta;
 use super::icmpv6::Icmpv6HdrError;
 use super::icmpv6::Icmpv6Meta;
 use super::ip4::Ipv4Addr;
@@ -157,7 +159,10 @@ impl From<&PacketMeta> for InnerFlowId {
             .inner
             .ulp
             .map(|ulp| {
-                (ulp.src_port().unwrap_or(0), ulp.dst_port().unwrap_or(0))
+                (
+                    ulp.src_port().or_else(|| ulp.pseudo_port()).unwrap_or(0),
+                    ulp.dst_port().or_else(|| ulp.pseudo_port()).unwrap_or(0),
+                )
             })
             .unwrap_or((0, 0));
 
@@ -220,6 +225,13 @@ impl InnerMeta {
         }
     }
 
+    fn is_pseudoheader_in_ulp_csum(&self) -> bool {
+        match self.ulp {
+            Some(ulp) => ulp.is_pseudoheader_in_csum(),
+            None => false,
+        }
+    }
+
     fn hdr_len(&self) -> usize {
         let mut hdr_len = self.ether.hdr_len();
 
@@ -277,6 +289,14 @@ impl PacketMeta {
     pub fn inner_ip6(&self) -> Option<&Ipv6Meta> {
         match &self.inner.ip {
             Some(IpMeta::Ip6(x)) => Some(x),
+            _ => None,
+        }
+    }
+
+    /// Return the inner ICMPv6 metadata, if the inner ULP is ICMPv6.
+    pub fn inner_icmp(&self) -> Option<&Icmpv4Meta> {
+        match &self.inner.ulp {
+            Some(UlpMeta::Icmpv4(icmp)) => Some(icmp),
             _ => None,
         }
     }
@@ -672,12 +692,23 @@ impl Packet<Initialized> {
         Ok((HdrInfo { meta, offset }, ip))
     }
 
+    pub fn parse_icmp<'a>(
+        rdr: &mut PacketReaderMut<'a>,
+    ) -> Result<(HdrInfo<UlpMeta>, UlpHdr<'a>), ParseError> {
+        let icmp = IcmpHdr::parse(rdr)?;
+        let offset = HdrOffset::new(rdr.offset(), icmp.hdr_len());
+        let mut icmp_meta = Icmpv4Meta::from(&icmp);
+        let meta = UlpMeta::from(icmp_meta);
+        Ok((HdrInfo { meta, offset }, UlpHdr::from(icmp)))
+    }
+
     pub fn parse_icmp6<'a>(
         rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<UlpMeta>, UlpHdr<'a>), ParseError> {
-        let icmp6 = Icmpv6Hdr::parse(rdr)?;
+        let icmp6 = IcmpHdr::parse(rdr)?;
         let offset = HdrOffset::new(rdr.offset(), icmp6.hdr_len());
-        let meta = UlpMeta::from(Icmpv6Meta::from(&icmp6));
+        let mut icmp_meta = Icmpv6Meta::from(&icmp6);
+        let meta = UlpMeta::from(icmp_meta);
         Ok((HdrInfo { meta, offset }, UlpHdr::from(icmp6)))
     }
 
@@ -1140,8 +1171,16 @@ impl Packet<Parsed> {
             let ulp = &mut seg0_bytes[ulp_start..ulp_end];
 
             match self.state.meta.inner.ulp.as_mut().unwrap() {
-                UlpMeta::Icmpv6(icmp6) => {
-                    Self::update_icmpv6_csum(icmp6, csum, ulp);
+                UlpMeta::Icmpv4(icmp) => {
+                    Self::update_icmp_csum(
+                        icmp,
+                        self.state.body_csum.unwrap(),
+                        ulp,
+                    );
+                }
+
+                UlpMeta::Icmpv6(icmp) => {
+                    Self::update_icmp_csum(icmp, csum, ulp);
                 }
 
                 UlpMeta::Tcp(tcp) => {
@@ -1175,13 +1214,13 @@ impl Packet<Parsed> {
         }
     }
 
-    fn update_icmpv6_csum(
-        icmp6: &mut Icmpv6Meta,
+    fn update_icmp_csum<T>(
+        icmp: &mut IcmpMeta<T>,
         mut csum: Checksum,
         ulp: &mut [u8],
     ) {
-        let csum_start = Icmpv6Hdr::CSUM_BEGIN_OFFSET;
-        let csum_end = Icmpv6Hdr::CSUM_END_OFFSET;
+        let csum_start = IcmpHdr::CSUM_BEGIN_OFFSET;
+        let csum_end = IcmpHdr::CSUM_END_OFFSET;
 
         // First we must zero the existing checksum.
         ulp[csum_start..csum_end].copy_from_slice(&[0; 2]);
@@ -1189,9 +1228,9 @@ impl Packet<Parsed> {
         csum.add_bytes(ulp);
         // Convert the checksum to its final form.
         let ulp_csum = HeaderChecksum::from(csum).bytes();
-        // Update the ICMPv6 metadata.
-        icmp6.csum = ulp_csum;
-        // Update the ICMPv6 header bytes.
+        // Update the ICMP(v6) metadata.
+        icmp.csum = ulp_csum;
+        // Update the ICMP(v6) header bytes.
         ulp[csum_start..csum_end].copy_from_slice(&ulp_csum);
     }
 
@@ -1253,8 +1292,16 @@ impl Packet<Parsed> {
             let ulp = &mut all_hdr_bytes[ulp_start..ulp_end];
 
             match self.state.meta.inner.ulp.as_mut().unwrap() {
-                UlpMeta::Icmpv6(icmp6) => {
-                    Self::update_icmpv6_csum(icmp6, csum, ulp);
+                UlpMeta::Icmpv4(icmp) => {
+                    Self::update_icmp_csum(
+                        icmp,
+                        self.state.body_csum.unwrap(),
+                        ulp,
+                    );
+                }
+
+                UlpMeta::Icmpv6(icmp) => {
+                    Self::update_icmp_csum(icmp, csum, ulp);
                 }
 
                 UlpMeta::Tcp(tcp) => {
@@ -1670,13 +1717,23 @@ impl Packet<Parsed> {
         // ULP
         // ================================================================
         match meta.ulp.as_mut() {
-            Some(UlpMeta::Icmpv6(icmp6)) => {
-                icmp6.emit(wtr.slice_mut(icmp6.hdr_len())?);
+            Some(UlpMeta::Icmpv4(icmp)) => {
+                icmp.emit(wtr.slice_mut(icmp.hdr_len())?);
                 offsets.ulp = Some(HdrOffset {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
                     seg_pos: pkt_offset,
-                    hdr_len: icmp6.hdr_len(),
+                    hdr_len: icmp.hdr_len(),
+                });
+            }
+
+            Some(UlpMeta::Icmpv6(icmp)) => {
+                icmp.emit(wtr.slice_mut(icmp.hdr_len())?);
+                offsets.ulp = Some(HdrOffset {
+                    pkt_pos: pkt_offset,
+                    seg_idx: 0,
+                    seg_pos: pkt_offset,
+                    hdr_len: icmp.hdr_len(),
                 });
             }
 

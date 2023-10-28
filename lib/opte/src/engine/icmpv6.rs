@@ -12,6 +12,7 @@ use super::ether::EtherHdr;
 use super::ether::EtherMeta;
 use super::ether::EtherType;
 use super::headers::RawHeader;
+use super::icmp::MessageType as I4MessageType;
 use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6Meta;
 use super::packet::Packet;
@@ -29,6 +30,9 @@ use super::rule::AllowOrDeny;
 use super::rule::GenErr;
 use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
+use crate::engine::headers::HeaderActionModify;
+use crate::engine::headers::UlpMetaModify;
+use crate::engine::ParseError;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -43,6 +47,7 @@ pub use opte_api::ndp::RouterAdvertisement;
 use serde::Deserialize;
 use serde::Serialize;
 use smoltcp::phy::ChecksumCapabilities as Csum;
+use smoltcp::wire::Icmpv4Message;
 use smoltcp::wire::Icmpv6Message;
 use smoltcp::wire::Icmpv6Packet;
 use smoltcp::wire::Icmpv6Repr;
@@ -58,36 +63,125 @@ use zerocopy::FromZeroes;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
+pub type Icmpv4Meta = IcmpMeta<I4MessageType>;
+pub type Icmpv6Meta = IcmpMeta<MessageType>;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Icmpv6Meta {
-    pub msg_type: MessageType,
+pub struct IcmpMeta<T> {
+    pub msg_type: T,
     pub msg_code: u8,
     pub csum: [u8; 2],
+    pub rest_of_header: [u8; 4],
 }
 
-impl Icmpv6Meta {
+impl<T: Into<u8> + Copy> IcmpMeta<T> {
     // This assumes the dst is large enough.
     #[inline]
     pub fn emit(&self, dst: &mut [u8]) {
-        debug_assert!(dst.len() >= Icmpv6Hdr::SIZE);
+        debug_assert!(dst.len() >= IcmpHdr::SIZE);
         dst[0] = self.msg_type.into();
         dst[1] = self.msg_code;
         dst[2..4].copy_from_slice(&self.csum);
+        dst[4..8].copy_from_slice(&self.rest_of_header);
     }
 
     #[inline]
     pub fn hdr_len(&self) -> usize {
-        Icmpv6Hdr::SIZE
+        IcmpHdr::SIZE
+    }
+
+    #[inline]
+    pub fn body_echo(&self) -> Ref<&[u8], IcmpEchoRaw> {
+        // Panic safety: Size *must* be 4B by construction.
+        IcmpEchoRaw::new(&self.rest_of_header[..]).unwrap()
+    }
+
+    #[inline]
+    pub fn body_echo_mut(&mut self) -> Ref<&mut [u8], IcmpEchoRaw> {
+        // Panic safety: Size *must* be 4B by construction.
+        IcmpEchoRaw::new_mut(&mut self.rest_of_header[..]).unwrap()
     }
 }
 
-impl<'a> From<&Icmpv6Hdr<'a>> for Icmpv6Meta {
-    fn from(hdr: &Icmpv6Hdr<'a>) -> Self {
+impl Icmpv4Meta {
+    /// Extract an ID from the body of an ICMPv4 packet to use as a
+    /// pseudo port for flow differentiation.
+    ///
+    /// This assumes that rdr is positioned at the end of the ICMP header.
+    #[inline]
+    pub fn echo_id(&self) -> Option<u16> {
+        match self.msg_type.inner {
+            Icmpv4Message::EchoRequest | Icmpv4Message::EchoReply => {
+                Some(u16::from_be_bytes(self.body_echo().id))
+            }
+            _ => None,
+        }
+    }
+}
+
+impl Icmpv6Meta {
+    /// Extract an ID from the body of an ICMPv6 packet to use as a
+    /// pseudo port for flow differentiation.
+    ///
+    /// This assumes that rdr is positioned at the end of the ICMP header.
+    #[inline]
+    pub fn echo_id(&self) -> Option<u16> {
+        match self.msg_type.inner {
+            Icmpv6Message::EchoRequest | Icmpv6Message::EchoReply => {
+                Some(u16::from_be_bytes(self.body_echo().id))
+            }
+            _ => None,
+        }
+    }
+}
+
+fn extract_icmp_echo_id<'a, 'b>(
+    rdr: &'b mut impl PacketReadMut<'a>,
+) -> Result<u16, ReadErr> {
+    let n_bytes = core::mem::size_of::<u16>();
+    let id = u16::from_be_bytes(
+        rdr.slice(n_bytes)?
+            .try_into()
+            .expect("`slice` returned incorrect number of bytes."),
+    );
+    rdr.seek_back(n_bytes)?;
+    Ok(id)
+}
+
+impl<'a, T: From<u8>> From<&IcmpHdr<'a>> for IcmpMeta<T> {
+    fn from(hdr: &IcmpHdr<'a>) -> Self {
         Self {
             msg_type: hdr.base.msg_type.into(),
             msg_code: hdr.base.msg_code,
             csum: hdr.base.csum,
+            rest_of_header: hdr.base.rest_of_header,
         }
+    }
+}
+
+impl HeaderActionModify<UlpMetaModify> for Icmpv4Meta {
+    fn run_modify(&mut self, spec: &UlpMetaModify) {
+        let Some(new_id) = spec.icmp_id else {
+            return;
+        };
+
+        let Some(old_id) = self.echo_id() else {
+            return;
+        };
+
+        let mut echo_data = self.body_echo_mut();
+        echo_data.id = new_id.to_be_bytes();
+
+        // Update csum using the RFC1141 incremental update logic.
+        // Checksum::from(u16::from_ne_bytes(self.csum));
+        // let csum = u16::from_be_bytes(self.csum);
+        // self.csum = [0; 2];// (csum + old_id + !new_id).to_be_bytes();
+    }
+}
+
+impl HeaderActionModify<UlpMetaModify> for Icmpv6Meta {
+    fn run_modify(&mut self, spec: &UlpMetaModify) {
+        // TODO
     }
 }
 
@@ -103,12 +197,12 @@ impl From<ReadErr> for Icmpv6HdrError {
 }
 
 #[derive(Debug)]
-pub struct Icmpv6Hdr<'a> {
-    base: Ref<&'a mut [u8], Icmpv6HdrRaw>,
+pub struct IcmpHdr<'a> {
+    base: Ref<&'a mut [u8], IcmpHdrRaw>,
 }
 
-impl<'a> Icmpv6Hdr<'a> {
-    pub const SIZE: usize = Icmpv6HdrRaw::SIZE;
+impl<'a> IcmpHdr<'a> {
+    pub const SIZE: usize = IcmpHdrRaw::SIZE;
 
     /// Offset to the start of the ICMPv6 checksum field.
     pub const CSUM_BEGIN_OFFSET: usize = 2;
@@ -119,7 +213,9 @@ impl<'a> Icmpv6Hdr<'a> {
     pub fn csum_minus_hdr(&self) -> Option<Checksum> {
         if self.base.csum != [0; 2] {
             let mut csum = Checksum::from(HeaderChecksum::wrap(self.base.csum));
-            csum.sub_bytes(&self.base.bytes()[0..Self::CSUM_BEGIN_OFFSET]);
+            let bytes = self.base.bytes();
+            csum.sub_bytes(&bytes[..Self::CSUM_BEGIN_OFFSET]);
+            csum.sub_bytes(&bytes[Self::CSUM_END_OFFSET..]);
             Some(csum)
         } else {
             None
@@ -134,8 +230,8 @@ impl<'a> Icmpv6Hdr<'a> {
     pub fn parse<'b>(
         rdr: &'b mut impl PacketReadMut<'a>,
     ) -> Result<Self, Icmpv6HdrError> {
-        let src = rdr.slice_mut(Icmpv6Hdr::SIZE)?;
-        let icmp6 = Self { base: Icmpv6HdrRaw::new_mut(src)? };
+        let src = rdr.slice_mut(IcmpHdr::SIZE)?;
+        let icmp6 = Self { base: IcmpHdrRaw::new_mut(src)? };
         Ok(icmp6)
     }
 }
@@ -143,20 +239,55 @@ impl<'a> Icmpv6Hdr<'a> {
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
 #[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
-pub struct Icmpv6HdrRaw {
+pub struct IcmpHdrRaw {
     pub msg_type: u8,
     pub msg_code: u8,
     pub csum: [u8; 2],
+    pub rest_of_header: [u8; 4],
 }
 
-impl Icmpv6HdrRaw {
-    /// An ICMPv6 header is always 4 bytes.
-    pub const SIZE: usize = 4;
+impl IcmpHdrRaw {
+    /// An ICMP(v6) header is always 8 bytes.
+    pub const SIZE: usize = std::mem::size_of::<Self>();
 }
 
-impl<'a> RawHeader<'a> for Icmpv6HdrRaw {
+impl<'a> RawHeader<'a> for IcmpHdrRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
+        debug_assert_eq!(src.len(), Self::SIZE);
+        let hdr = match Ref::new(src) {
+            Some(hdr) => hdr,
+            None => return Err(ReadErr::BadLayout),
+        };
+        Ok(hdr)
+    }
+}
+
+/// Internal structure of an ICMP(v6)'s 'rest_of_header'.
+#[repr(C)]
+#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+pub struct IcmpEchoRaw {
+    pub id: [u8; 2],
+    pub sequence: [u8; 2],
+}
+
+impl IcmpEchoRaw {
+    /// An ICMPv6 header is always 4 bytes.
+    pub const SIZE: usize = std::mem::size_of::<Self>();
+}
+
+impl<'a> RawHeader<'a> for IcmpEchoRaw {
+    #[inline]
+    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
+        debug_assert_eq!(src.len(), Self::SIZE);
+        let hdr = match Ref::new(src) {
+            Some(hdr) => hdr,
+            None => return Err(ReadErr::BadLayout),
+        };
+        Ok(hdr)
+    }
+
+    fn new(src: &[u8]) -> Result<Ref<&[u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
         let hdr = match Ref::new(src) {
             Some(hdr) => hdr,
@@ -804,5 +935,37 @@ impl HairpinAction for NeighborAdvertisement {
         ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
         wtr.write(&ulp_body).unwrap();
         Ok(AllowOrDeny::Allow(pkt))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use smoltcp::wire::Icmpv4Packet;
+    use smoltcp::wire::Icmpv4Repr;
+
+    use super::*;
+
+    #[test]
+    fn icmp4_body_csum_equals_body() {
+        let data = b"reunion\0";
+        let mut body_csum = Checksum::default();
+        body_csum.add_bytes(data);
+
+        let mut cksum_cfg = smoltcp::phy::ChecksumCapabilities::ignored();
+        cksum_cfg.icmpv4 = smoltcp::phy::Checksum::Both;
+
+        let test_pkt =
+            Icmpv4Repr::EchoRequest { ident: 7, seq_no: 7777, data: data };
+        let mut out = vec![0u8; test_pkt.buffer_len()];
+        let mut packet = Icmpv4Packet::new_unchecked(&mut out);
+        test_pkt.emit(&mut packet, &cksum_cfg);
+
+        let src = &mut out[..IcmpHdr::SIZE];
+        let icmp = IcmpHdr { base: IcmpHdrRaw::new_mut(src).unwrap() };
+
+        assert_eq!(
+            Some(body_csum.finalize()),
+            icmp.csum_minus_hdr().map(|mut v| v.finalize())
+        );
     }
 }
