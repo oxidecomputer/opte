@@ -31,6 +31,7 @@ use super::udp::UdpHdr;
 use super::udp::UdpMeta;
 use super::udp::UdpMod;
 use super::udp::UdpPush;
+use crate::engine::icmp::QueryEcho;
 use core::fmt;
 pub use opte_api::IpAddr;
 pub use opte_api::IpCidr;

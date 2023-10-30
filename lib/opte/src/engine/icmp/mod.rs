@@ -96,6 +96,33 @@ impl<'a, T: From<u8>> From<&IcmpHdr<'a>> for IcmpMeta<T> {
     }
 }
 
+/// Shared methods for handling ICMPv4/v6 Echo fields.
+pub trait QueryEcho {
+    /// Extract an ID from the body of an ICMP(v6) packet.
+    ///
+    /// This method should return `None` for any non-echo packets.
+    fn echo_id(&self) -> Option<u16>;
+}
+
+// This covers both v4/v6 ICMP Echo rewriting for SNAT compatibility.
+impl<T: Into<u8> + Copy> HeaderActionModify<UlpMetaModify> for IcmpMeta<T>
+where
+    IcmpMeta<T>: QueryEcho,
+{
+    fn run_modify(&mut self, spec: &UlpMetaModify) {
+        let Some(new_id) = spec.icmp_id else {
+            return;
+        };
+
+        if self.echo_id().is_none() {
+            return;
+        }
+
+        let mut echo_data = self.body_echo_mut();
+        echo_data.id = new_id.to_be_bytes();
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IcmpHdrError {
     ReadError { error: ReadErr },

@@ -30,34 +30,19 @@ use smoltcp::wire::RawHardwareAddress;
 
 pub type Icmpv6Meta = IcmpMeta<MessageType>;
 
-impl Icmpv6Meta {
+impl QueryEcho for Icmpv6Meta {
     /// Extract an ID from the body of an ICMPv6 packet to use as a
     /// pseudo port for flow differentiation.
     ///
     /// This method returns `None` for any non-echo packets.
     #[inline]
-    pub fn echo_id(&self) -> Option<u16> {
+    fn echo_id(&self) -> Option<u16> {
         match self.msg_type.inner {
             Icmpv6Message::EchoRequest | Icmpv6Message::EchoReply => {
                 Some(u16::from_be_bytes(self.body_echo().id))
             }
             _ => None,
         }
-    }
-}
-
-impl HeaderActionModify<UlpMetaModify> for Icmpv6Meta {
-    fn run_modify(&mut self, spec: &UlpMetaModify) {
-        let Some(new_id) = spec.icmp_id else {
-            return;
-        };
-
-        if self.echo_id().is_none() {
-            return;
-        }
-
-        let mut echo_data = self.body_echo_mut();
-        echo_data.id = new_id.to_be_bytes();
     }
 }
 

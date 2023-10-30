@@ -18,34 +18,19 @@ use smoltcp::wire::Icmpv4Repr;
 
 pub type Icmpv4Meta = IcmpMeta<MessageType>;
 
-impl Icmpv4Meta {
+impl QueryEcho for Icmpv4Meta {
     /// Extract an ID from the body of an ICMPv4 packet to use as a
     /// pseudo port for flow differentiation.
     ///
     /// This method returns `None` for any non-echo packets.
     #[inline]
-    pub fn echo_id(&self) -> Option<u16> {
+    fn echo_id(&self) -> Option<u16> {
         match self.msg_type.inner {
             Icmpv4Message::EchoRequest | Icmpv4Message::EchoReply => {
                 Some(u16::from_be_bytes(self.body_echo().id))
             }
             _ => None,
         }
-    }
-}
-
-impl HeaderActionModify<UlpMetaModify> for Icmpv4Meta {
-    fn run_modify(&mut self, spec: &UlpMetaModify) {
-        let Some(new_id) = spec.icmp_id else {
-            return;
-        };
-
-        if self.echo_id().is_none() {
-            return;
-        }
-
-        let mut echo_data = self.body_echo_mut();
-        echo_data.id = new_id.to_be_bytes();
     }
 }
 

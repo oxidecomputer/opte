@@ -34,6 +34,7 @@ use super::rule::ResourceError;
 use super::rule::StatefulAction;
 use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KMutexType;
+use crate::engine::icmp::QueryEcho;
 use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::ToString;
