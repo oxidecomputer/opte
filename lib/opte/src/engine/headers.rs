@@ -375,12 +375,6 @@ impl<'a> UlpHdr<'a> {
     }
 }
 
-impl<'a> From<IcmpHdr<'a>> for UlpHdr<'a> {
-    fn from(icmp6: IcmpHdr<'a>) -> Self {
-        Self::Icmpv6(icmp6)
-    }
-}
-
 impl<'a> From<TcpHdr<'a>> for UlpHdr<'a> {
     fn from(tcp: TcpHdr<'a>) -> Self {
         UlpHdr::Tcp(tcp)
@@ -406,7 +400,7 @@ impl UlpMeta {
     pub fn csum(&self) -> [u8; 2] {
         match self {
             Self::Icmpv4(icmp) => icmp.csum,
-            Self::Icmpv6(icmp) => icmp.csum,
+            Self::Icmpv6(icmp6) => icmp6.csum,
             Self::Tcp(tcp) => tcp.csum,
             Self::Udp(udp) => udp.csum,
         }
@@ -433,7 +427,7 @@ impl UlpMeta {
     pub fn hdr_len(&self) -> usize {
         match self {
             Self::Icmpv4(icmp) => icmp.hdr_len(),
-            Self::Icmpv6(icmp) => icmp.hdr_len(),
+            Self::Icmpv6(icmp6) => icmp6.hdr_len(),
             Self::Tcp(tcp) => tcp.hdr_len(),
             Self::Udp(udp) => udp.hdr_len(),
         }
@@ -444,7 +438,7 @@ impl UlpMeta {
     pub fn pseudo_port(&self) -> Option<u16> {
         match self {
             Self::Icmpv4(icmp) => icmp.echo_id(),
-            Self::Icmpv6(icmp) => icmp.echo_id(),
+            Self::Icmpv6(icmp6) => icmp6.echo_id(),
             _ => None,
         }
     }
@@ -462,7 +456,7 @@ impl UlpMeta {
     pub fn emit(&self, dst: &mut [u8]) {
         match self {
             Self::Icmpv4(icmp) => icmp.emit(dst),
-            Self::Icmpv6(icmp) => icmp.emit(dst),
+            Self::Icmpv6(icmp6) => icmp6.emit(dst),
             Self::Tcp(tcp) => tcp.emit(dst),
             Self::Udp(udp) => udp.emit(dst),
         }
@@ -563,7 +557,7 @@ impl<'a> From<&UlpHdr<'a>> for UlpMeta {
     fn from(ulp: &UlpHdr) -> Self {
         match ulp {
             UlpHdr::Icmpv4(icmp) => UlpMeta::Icmpv4(Icmpv4Meta::from(icmp)),
-            UlpHdr::Icmpv6(icmp) => UlpMeta::Icmpv6(Icmpv6Meta::from(icmp)),
+            UlpHdr::Icmpv6(icmp6) => UlpMeta::Icmpv6(Icmpv6Meta::from(icmp6)),
             UlpHdr::Tcp(tcp) => UlpMeta::Tcp(TcpMeta::from(tcp)),
             UlpHdr::Udp(udp) => UlpMeta::Udp(UdpMeta::from(udp)),
         }

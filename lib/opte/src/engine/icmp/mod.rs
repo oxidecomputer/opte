@@ -142,10 +142,10 @@ pub struct IcmpHdr<'a> {
 impl<'a> IcmpHdr<'a> {
     pub const SIZE: usize = IcmpHdrRaw::SIZE;
 
-    /// Offset to the start of the ICMPv6 checksum field.
+    /// Offset to the start of the ICMP(v6) checksum field.
     pub const CSUM_BEGIN_OFFSET: usize = 2;
 
-    /// Offset to the end of the ICMPv6 checksum field.
+    /// Offset to the end of the ICMP(v6) checksum field.
     pub const CSUM_END_OFFSET: usize = 4;
 
     pub fn csum_minus_hdr(&self) -> Option<OpteCsum> {
@@ -169,8 +169,7 @@ impl<'a> IcmpHdr<'a> {
         rdr: &'b mut impl PacketReadMut<'a>,
     ) -> Result<Self, IcmpHdrError> {
         let src = rdr.slice_mut(IcmpHdr::SIZE)?;
-        let icmp6 = Self { base: IcmpHdrRaw::new_mut(src)? };
-        Ok(icmp6)
+        Ok(Self { base: IcmpHdrRaw::new_mut(src)? })
     }
 }
 
@@ -201,7 +200,7 @@ impl<'a> RawHeader<'a> for IcmpHdrRaw {
     }
 }
 
-/// Internal structure of an ICMP(v6) Echo( Reply)'s 'rest_of_header'.
+/// Internal structure of an ICMP(v6) Echo(Reply)'s rest_of_header.
 #[repr(C)]
 #[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
 pub struct IcmpEchoRaw {
@@ -210,7 +209,7 @@ pub struct IcmpEchoRaw {
 }
 
 impl IcmpEchoRaw {
-    /// An ICMPv6 header is always 4 bytes.
+    /// Echo-specific fields are always 4 bytes.
     pub const SIZE: usize = core::mem::size_of::<Self>();
 }
 
@@ -225,6 +224,7 @@ impl<'a> RawHeader<'a> for IcmpEchoRaw {
         Ok(hdr)
     }
 
+    #[inline]
     fn new(src: &[u8]) -> Result<Ref<&[u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
         let hdr = match Ref::new(src) {

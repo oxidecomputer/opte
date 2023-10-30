@@ -286,7 +286,7 @@ impl PacketMeta {
         }
     }
 
-    /// Return the inner ICMPv6 metadata, if the inner ULP is ICMPv6.
+    /// Return the inner ICMP metadata, if the inner ULP is ICMP.
     pub fn inner_icmp(&self) -> Option<&Icmpv4Meta> {
         match &self.inner.ulp {
             Some(UlpMeta::Icmpv4(icmp)) => Some(icmp),
@@ -692,7 +692,7 @@ impl Packet<Initialized> {
         let offset = HdrOffset::new(rdr.offset(), icmp.hdr_len());
         let icmp_meta = Icmpv4Meta::from(&icmp);
         let meta = UlpMeta::from(icmp_meta);
-        Ok((HdrInfo { meta, offset }, UlpHdr::from(icmp)))
+        Ok((HdrInfo { meta, offset }, UlpHdr::Icmpv4(icmp)))
     }
 
     pub fn parse_icmp6<'a>(
@@ -702,7 +702,7 @@ impl Packet<Initialized> {
         let offset = HdrOffset::new(rdr.offset(), icmp6.hdr_len());
         let icmp_meta = Icmpv6Meta::from(&icmp6);
         let meta = UlpMeta::from(icmp_meta);
-        Ok((HdrInfo { meta, offset }, UlpHdr::from(icmp6)))
+        Ok((HdrInfo { meta, offset }, UlpHdr::Icmpv6(icmp6)))
     }
 
     pub fn parse_tcp<'a>(
@@ -1288,6 +1288,8 @@ impl Packet<Parsed> {
                 UlpMeta::Icmpv4(icmp) => {
                     Self::update_icmp_csum(
                         icmp,
+                        // ICMP4 requires the body_csum *without*
+                        // the pseudoheader added back in.
                         self.state.body_csum.unwrap(),
                         ulp,
                     );
@@ -1720,13 +1722,13 @@ impl Packet<Parsed> {
                 });
             }
 
-            Some(UlpMeta::Icmpv6(icmp)) => {
-                icmp.emit(wtr.slice_mut(icmp.hdr_len())?);
+            Some(UlpMeta::Icmpv6(icmp6)) => {
+                icmp6.emit(wtr.slice_mut(icmp6.hdr_len())?);
                 offsets.ulp = Some(HdrOffset {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
                     seg_pos: pkt_offset,
-                    hdr_len: icmp.hdr_len(),
+                    hdr_len: icmp6.hdr_len(),
                 });
             }
 
