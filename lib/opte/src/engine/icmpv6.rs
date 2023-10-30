@@ -32,7 +32,6 @@ use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
 use crate::engine::headers::HeaderActionModify;
 use crate::engine::headers::UlpMetaModify;
-use crate::engine::ParseError;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -92,13 +91,13 @@ impl<T: Into<u8> + Copy> IcmpMeta<T> {
 
     #[inline]
     pub fn body_echo(&self) -> Ref<&[u8], IcmpEchoRaw> {
-        // Panic safety: Size *must* be 4B by construction.
+        // Panic safety: Size *must* be 8B by construction.
         IcmpEchoRaw::new(&self.rest_of_header[..]).unwrap()
     }
 
     #[inline]
     pub fn body_echo_mut(&mut self) -> Ref<&mut [u8], IcmpEchoRaw> {
-        // Panic safety: Size *must* be 4B by construction.
+        // Panic safety: Size *must* be 8B by construction.
         IcmpEchoRaw::new_mut(&mut self.rest_of_header[..]).unwrap()
     }
 }
@@ -107,7 +106,7 @@ impl Icmpv4Meta {
     /// Extract an ID from the body of an ICMPv4 packet to use as a
     /// pseudo port for flow differentiation.
     ///
-    /// This assumes that rdr is positioned at the end of the ICMP header.
+    /// This method returns `None` for any non-echo packets.
     #[inline]
     pub fn echo_id(&self) -> Option<u16> {
         match self.msg_type.inner {
@@ -123,7 +122,7 @@ impl Icmpv6Meta {
     /// Extract an ID from the body of an ICMPv6 packet to use as a
     /// pseudo port for flow differentiation.
     ///
-    /// This assumes that rdr is positioned at the end of the ICMP header.
+    /// This method returns `None` for any non-echo packets.
     #[inline]
     pub fn echo_id(&self) -> Option<u16> {
         match self.msg_type.inner {
@@ -133,19 +132,6 @@ impl Icmpv6Meta {
             _ => None,
         }
     }
-}
-
-fn extract_icmp_echo_id<'a, 'b>(
-    rdr: &'b mut impl PacketReadMut<'a>,
-) -> Result<u16, ReadErr> {
-    let n_bytes = core::mem::size_of::<u16>();
-    let id = u16::from_be_bytes(
-        rdr.slice(n_bytes)?
-            .try_into()
-            .expect("`slice` returned incorrect number of bytes."),
-    );
-    rdr.seek_back(n_bytes)?;
-    Ok(id)
 }
 
 impl<'a, T: From<u8>> From<&IcmpHdr<'a>> for IcmpMeta<T> {
@@ -165,23 +151,27 @@ impl HeaderActionModify<UlpMetaModify> for Icmpv4Meta {
             return;
         };
 
-        let Some(old_id) = self.echo_id() else {
+        if self.echo_id().is_none() {
             return;
-        };
+        }
 
         let mut echo_data = self.body_echo_mut();
         echo_data.id = new_id.to_be_bytes();
-
-        // Update csum using the RFC1141 incremental update logic.
-        // Checksum::from(u16::from_ne_bytes(self.csum));
-        // let csum = u16::from_be_bytes(self.csum);
-        // self.csum = [0; 2];// (csum + old_id + !new_id).to_be_bytes();
     }
 }
 
 impl HeaderActionModify<UlpMetaModify> for Icmpv6Meta {
     fn run_modify(&mut self, spec: &UlpMetaModify) {
-        // TODO
+        let Some(new_id) = spec.icmp_id else {
+            return;
+        };
+
+        if self.echo_id().is_none() {
+            return;
+        }
+
+        let mut echo_data = self.body_echo_mut();
+        echo_data.id = new_id.to_be_bytes();
     }
 }
 
@@ -248,7 +238,7 @@ pub struct IcmpHdrRaw {
 
 impl IcmpHdrRaw {
     /// An ICMP(v6) header is always 8 bytes.
-    pub const SIZE: usize = std::mem::size_of::<Self>();
+    pub const SIZE: usize = core::mem::size_of::<Self>();
 }
 
 impl<'a> RawHeader<'a> for IcmpHdrRaw {
@@ -273,7 +263,7 @@ pub struct IcmpEchoRaw {
 
 impl IcmpEchoRaw {
     /// An ICMPv6 header is always 4 bytes.
-    pub const SIZE: usize = std::mem::size_of::<Self>();
+    pub const SIZE: usize = core::mem::size_of::<Self>();
 }
 
 impl<'a> RawHeader<'a> for IcmpEchoRaw {
@@ -954,8 +944,7 @@ mod test {
         let mut cksum_cfg = smoltcp::phy::ChecksumCapabilities::ignored();
         cksum_cfg.icmpv4 = smoltcp::phy::Checksum::Both;
 
-        let test_pkt =
-            Icmpv4Repr::EchoRequest { ident: 7, seq_no: 7777, data: data };
+        let test_pkt = Icmpv4Repr::EchoRequest { ident: 7, seq_no: 7777, data };
         let mut out = vec![0u8; test_pkt.buffer_len()];
         let mut packet = Icmpv4Packet::new_unchecked(&mut out);
         test_pkt.emit(&mut packet, &cksum_cfg);

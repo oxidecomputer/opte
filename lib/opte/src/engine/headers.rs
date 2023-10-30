@@ -646,6 +646,7 @@ pub struct UlpGenericModify {
 pub struct UlpMetaModify {
     pub generic: UlpGenericModify,
     pub tcp_flags: Option<u8>,
+    /// Used by a rule to replace ICMP Echo ID values with a new value.
     pub icmp_id: Option<u16>,
 }
 

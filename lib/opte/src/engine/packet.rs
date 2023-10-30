@@ -225,13 +225,6 @@ impl InnerMeta {
         }
     }
 
-    fn is_pseudoheader_in_ulp_csum(&self) -> bool {
-        match self.ulp {
-            Some(ulp) => ulp.is_pseudoheader_in_csum(),
-            None => false,
-        }
-    }
-
     fn hdr_len(&self) -> usize {
         let mut hdr_len = self.ether.hdr_len();
 
@@ -697,7 +690,7 @@ impl Packet<Initialized> {
     ) -> Result<(HdrInfo<UlpMeta>, UlpHdr<'a>), ParseError> {
         let icmp = IcmpHdr::parse(rdr)?;
         let offset = HdrOffset::new(rdr.offset(), icmp.hdr_len());
-        let mut icmp_meta = Icmpv4Meta::from(&icmp);
+        let icmp_meta = Icmpv4Meta::from(&icmp);
         let meta = UlpMeta::from(icmp_meta);
         Ok((HdrInfo { meta, offset }, UlpHdr::from(icmp)))
     }
@@ -707,7 +700,7 @@ impl Packet<Initialized> {
     ) -> Result<(HdrInfo<UlpMeta>, UlpHdr<'a>), ParseError> {
         let icmp6 = IcmpHdr::parse(rdr)?;
         let offset = HdrOffset::new(rdr.offset(), icmp6.hdr_len());
-        let mut icmp_meta = Icmpv6Meta::from(&icmp6);
+        let icmp_meta = Icmpv6Meta::from(&icmp6);
         let meta = UlpMeta::from(icmp_meta);
         Ok((HdrInfo { meta, offset }, UlpHdr::from(icmp6)))
     }

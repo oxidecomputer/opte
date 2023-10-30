@@ -32,11 +32,8 @@ use core::ops::RangeInclusive;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
-use smoltcp::phy::ChecksumCapabilities as Csum;
 use smoltcp::wire::DhcpPacket;
 use smoltcp::wire::DhcpRepr;
-use smoltcp::wire::Icmpv4Packet;
-use smoltcp::wire::Icmpv4Repr;
 
 /// A marker trait for types that can be matched exactly, usually by direct
 /// equality comparison.

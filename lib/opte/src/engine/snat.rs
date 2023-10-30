@@ -11,11 +11,9 @@ use super::headers::IpMod;
 use super::headers::UlpGenericModify;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
-use super::icmp::MessageType;
 use super::ip4::Ipv4Mod;
 use super::ip6::Ipv6Mod;
 use super::packet::BodyTransform;
-use super::packet::BodyTransformError;
 use super::packet::InnerFlowId;
 use super::packet::Packet;
 use super::packet::PacketMeta;
@@ -51,7 +49,6 @@ use opte_api::Ipv4Addr;
 use opte_api::Ipv6Addr;
 use opte_api::Protocol;
 use smoltcp::wire::Icmpv4Message;
-use smoltcp::wire::Icmpv4Packet;
 
 /// A single entry in the NAT pool, describing the public IP and port used to
 /// NAT a private address.
@@ -474,7 +471,8 @@ pub const SNAT_ICMP_ECHO_NAME: &str = "SNAT_ICMP_ECHO";
 impl ActionDesc for SNatIcmpEchoDesc {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
-            // Outbound traffic needs its source IP and source port
+            // Outbound traffic needs its source IP rewritten, and its
+            // 'source port' placed into the ICMP echo ID field.
             Direction::Out => {
                 let ip = IpMod::from(Ipv4Mod {
                     src: Some(self.nat.ip),
@@ -518,14 +516,9 @@ impl ActionDesc for SNatIcmpEchoDesc {
     fn gen_bt(
         &self,
         _dir: Direction,
-        meta: &PacketMeta,
+        _meta: &PacketMeta,
         _payload_segs: &[&[u8]],
     ) -> Result<Option<Box<dyn BodyTransform>>, GenBtError> {
-        // Ok(Some(Box::new(SNatIcmpEchoBt::new(
-        //     meta.inner_icmp().map(|a| a.msg_type.inner),
-        //     self.echo_ident,
-        //     self.nat,
-        //     ))))
         Ok(None)
     }
 
@@ -539,64 +532,6 @@ impl Drop for SNatIcmpEchoDesc {
         self.pool.release(&self.priv_ip, self.nat);
     }
 }
-
-// /// Perform SNAT for ICMP Echo/Reply messages, treating the Identifier
-// /// as a source port.
-// #[derive(Clone)]
-// pub struct SNatIcmpEchoBt {
-//     icmp_type: Option<Icmpv4Message>,
-//     ident: u16,
-//     nat: NatPoolEntry<Ipv4Addr>,
-// }
-
-// impl SNatIcmpEchoBt {
-//     pub fn new(icmp_type: Option<Icmpv4Message>, ident: u16, nat: NatPoolEntry<Ipv4Addr>) -> Self {
-//         Self { icmp_type, ident, nat }
-//     }
-// }
-
-// impl BodyTransform for SNatIcmpEchoBt {
-//     fn run(
-//         &self,
-//         dir: Direction,
-//         body: &mut [&mut [u8]],
-//     ) -> Result<(), BodyTransformError> {
-//         use Icmpv4Message::EchoReply;
-//         use Icmpv4Message::EchoRequest;
-
-//         // let mut icmp = Icmpv4Packet::new_checked(&mut *body[0])?;
-
-//         match (self.icmp_type, dir) {
-//             (Some(EchoReply | EchoRequest), Direction::Out) => {
-//                 // Panic: We know this is safe because we make it here
-//                 // only if this ICMP message is an Echo/Reply.
-//                 icmp.set_echo_ident(self.nat.port);
-//             }
-
-//             (Some(EchoReply | EchoRequest), Direction::In) => {
-//                 // Panic: We know this is safe because we make it here
-//                 // only if this ICMP message is an Echo/Reply.
-//                 icmp.set_echo_ident(self.ident);
-//             }
-
-//             (_, _) => {
-//                 return Err(BodyTransformError::UnexpectedBody(format!(
-//                     "Expected ICMP Echo/Reply, found: {:?}",
-//                     self.icmp_type
-//                 )));
-//             }
-//         }
-
-//         icmp.fill_checksum();
-//         Ok(())
-//     }
-// }
-
-// impl Display for SNatIcmpEchoBt {
-//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//         write!(f, "ICMP Echo Ident/SNAT {} <=> {}", self.ident, self.nat.port)
-//     }
-// }
 
 #[cfg(test)]
 mod test {
