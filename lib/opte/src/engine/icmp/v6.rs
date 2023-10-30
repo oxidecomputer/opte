@@ -6,36 +6,11 @@
 
 //! ICMPv6 headers and processing.
 
-use super::IcmpMeta;
-use crate::engine::checksum::Checksum;
-use crate::engine::checksum::HeaderChecksum;
-use crate::engine::ether::EtherHdr;
-use crate::engine::ether::EtherMeta;
-use crate::engine::ether::EtherType;
-use crate::engine::headers::HeaderActionModify;
-use crate::engine::headers::RawHeader;
-use crate::engine::headers::UlpMetaModify;
+use super::*;
 use crate::engine::ip6::Ipv6Hdr;
 use crate::engine::ip6::Ipv6Meta;
-use crate::engine::packet::Packet;
-use crate::engine::packet::PacketMeta;
-use crate::engine::packet::PacketRead;
-use crate::engine::packet::PacketReadMut;
-use crate::engine::packet::PacketReader;
-use crate::engine::packet::ReadErr;
-use crate::engine::predicate::DataPredicate;
-use crate::engine::predicate::EtherAddrMatch;
-use crate::engine::predicate::IpProtoMatch;
 use crate::engine::predicate::Ipv6AddrMatch;
-use crate::engine::predicate::Predicate;
-use crate::engine::rule::AllowOrDeny;
-use crate::engine::rule::GenErr;
-use crate::engine::rule::GenPacketResult;
-use crate::engine::rule::HairpinAction;
 use alloc::string::String;
-use alloc::vec::Vec;
-use core::fmt;
-use core::fmt::Display;
 pub use opte_api::ip::Icmpv6EchoReply;
 pub use opte_api::ip::Ipv6Addr;
 pub use opte_api::ip::Ipv6Cidr;
@@ -43,9 +18,6 @@ pub use opte_api::ip::Protocol;
 use opte_api::mac::MacAddr;
 pub use opte_api::ndp::NeighborAdvertisement;
 pub use opte_api::ndp::RouterAdvertisement;
-use serde::Deserialize;
-use serde::Serialize;
-use smoltcp::phy::ChecksumCapabilities as Csum;
 use smoltcp::wire::Icmpv6Message;
 use smoltcp::wire::Icmpv6Packet;
 use smoltcp::wire::Icmpv6Repr;
@@ -55,11 +27,6 @@ use smoltcp::wire::Ipv6Address;
 use smoltcp::wire::NdiscNeighborFlags;
 use smoltcp::wire::NdiscRepr;
 use smoltcp::wire::RawHardwareAddress;
-use zerocopy::AsBytes;
-use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
-use zerocopy::Ref;
-use zerocopy::Unaligned;
 
 pub type Icmpv6Meta = IcmpMeta<MessageType>;
 
@@ -167,8 +134,6 @@ impl HairpinAction for Icmpv6EchoReply {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
-        use smoltcp::phy::Checksum;
-
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That
@@ -305,7 +270,6 @@ impl HairpinAction for RouterAdvertisement {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
-        use smoltcp::phy::Checksum;
         use smoltcp::time::Duration;
         use smoltcp::wire::NdiscRouterFlags;
 
@@ -462,8 +426,6 @@ fn validate_neighbor_solicitation(
     rdr: &mut PacketReader,
     metadata: &Ipv6Meta,
 ) -> Result<Ipv6Addr, GenErr> {
-    use smoltcp::phy::Checksum;
-
     // First, check if this is in fact a NS message.
     let smol_src = IpAddress::Ipv6(metadata.src.into());
     let smol_dst = IpAddress::Ipv6(metadata.dst.into());
@@ -644,8 +606,6 @@ impl HairpinAction for NeighborAdvertisement {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
-        use smoltcp::phy::Checksum;
-
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That
