@@ -18,7 +18,6 @@ pub mod geneve;
 #[macro_use]
 pub mod headers;
 pub mod icmp;
-pub mod icmpv6;
 pub mod ioctl;
 #[macro_use]
 pub mod ip4;

@@ -30,11 +30,11 @@ use super::headers::IpAddr;
 use super::headers::IpMeta;
 use super::headers::UlpHdr;
 use super::headers::UlpMeta;
-use super::icmpv6::IcmpHdr;
-use super::icmpv6::IcmpMeta;
-use super::icmpv6::Icmpv4Meta;
-use super::icmpv6::Icmpv6HdrError;
-use super::icmpv6::Icmpv6Meta;
+use super::icmp::IcmpHdr;
+use super::icmp::IcmpHdrError;
+use super::icmp::IcmpMeta;
+use super::icmp::Icmpv4Meta;
+use super::icmp::Icmpv6Meta;
 use super::ip4::Ipv4Addr;
 use super::ip4::Ipv4Hdr;
 use super::ip4::Ipv4HdrError;
@@ -2268,8 +2268,8 @@ impl From<Ipv6HdrError> for ParseError {
     }
 }
 
-impl From<Icmpv6HdrError> for ParseError {
-    fn from(err: Icmpv6HdrError) -> Self {
+impl From<IcmpHdrError> for ParseError {
+    fn from(err: IcmpHdrError) -> Self {
         Self::BadHeader(format!("ICMPv6: {:?}", err))
     }
 }

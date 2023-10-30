@@ -31,7 +31,7 @@ use opte::engine::geneve::Vni;
 use opte::engine::headers::EncapMeta;
 use opte::engine::headers::IpMeta;
 use opte::engine::headers::UlpMeta;
-use opte::engine::icmpv6::IcmpHdr;
+use opte::engine::icmp::IcmpHdr;
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip4::Ipv4Hdr;
 use opte::engine::ip4::Ipv4Meta;
