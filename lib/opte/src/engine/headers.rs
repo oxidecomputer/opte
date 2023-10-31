@@ -349,7 +349,7 @@ impl<'a> UlpHdr<'a> {
 
     pub fn set_pay_len(&mut self, len: usize) {
         match self {
-            // Nothing to do for ICMPv6 or TCP which determine payload len
+            // Nothing to do for ICMP(v6) or TCP which determine payload len
             // from IP header.
             Self::Icmpv4(_) | Self::Icmpv6(_) => (),
             Self::Tcp(_tcp) => (),
@@ -359,7 +359,7 @@ impl<'a> UlpHdr<'a> {
 
     pub fn set_total_len(&mut self, len: usize) {
         match self {
-            // Nothing to do for ICMPv6 or TCP which determine payload len
+            // Nothing to do for ICMP(v6) or TCP which determine payload len
             // from IP header.
             Self::Icmpv4(_) | Self::Icmpv6(_) => (),
             Self::Tcp(_tcp) => (),

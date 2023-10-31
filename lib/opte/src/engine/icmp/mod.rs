@@ -74,13 +74,13 @@ impl<T: Into<u8> + Copy> IcmpMeta<T> {
 
     #[inline]
     pub fn body_echo(&self) -> Ref<&[u8], IcmpEchoRaw> {
-        // Panic safety: Size *must* be 8B by construction.
+        // Panic safety: Size *must* be 4B by construction.
         IcmpEchoRaw::new(&self.rest_of_header[..]).unwrap()
     }
 
     #[inline]
     pub fn body_echo_mut(&mut self) -> Ref<&mut [u8], IcmpEchoRaw> {
-        // Panic safety: Size *must* be 8B by construction.
+        // Panic safety: Size *must* be 4B by construction.
         IcmpEchoRaw::new_mut(&mut self.rest_of_header[..]).unwrap()
     }
 }

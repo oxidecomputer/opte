@@ -323,10 +323,13 @@ impl GenericUlp {
             proto => return Err(ParseError::UnexpectedProtocol(proto)),
         };
 
+        let use_pseudo = ulp_hi.meta.is_pseudoheader_in_csum();
         meta.inner.ulp = Some(ulp_hi.meta);
         offsets.inner.ulp = Some(ulp_hi.offset);
         let body_csum = if let Some(mut csum) = ulp_hdr.csum_minus_hdr() {
-            csum -= pseudo_csum;
+            if use_pseudo {
+                csum -= pseudo_csum;
+            }
             Some(csum)
         } else {
             None

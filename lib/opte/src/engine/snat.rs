@@ -219,7 +219,8 @@ impl SNat {
             Ok(AllowOrDeny::Allow(Arc::new(desc)))
         } else {
             Err(GenDescError::Unexpected {
-                msg: "No ICMP body found".to_string(),
+                msg: "No ICMP metadata found despite Protocol::ICMP"
+                    .to_string(),
             })
         }
     }

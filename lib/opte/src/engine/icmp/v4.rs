@@ -75,6 +75,8 @@ impl HairpinAction for IcmpEchoReply {
             )));
         };
 
+        // `Icmpv4Packet` requires the ICMPv4 header and not just the message payload.
+        // Given we successfully got the ICMPv4 metadata, rewinding here is fine.
         rdr.seek_back(icmp.hdr_len())?;
         let body = rdr.copy_remaining();
         let src_pkt = Icmpv4Packet::new_checked(&body)?;
