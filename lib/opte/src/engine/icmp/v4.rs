@@ -4,37 +4,35 @@
 
 // Copyright 2023 Oxide Computer Company
 
-//! ICMP headers.
-use super::ether::EtherHdr;
-use super::ether::EtherMeta;
-use super::ether::EtherType;
-use super::ip4::Ipv4Hdr;
-use super::ip4::Ipv4Meta;
-use super::packet::Packet;
-use super::packet::PacketMeta;
-use super::packet::PacketRead;
-use super::packet::PacketReader;
-use super::predicate::DataPredicate;
-use super::predicate::EtherAddrMatch;
-use super::predicate::IpProtoMatch;
-use super::predicate::Ipv4AddrMatch;
-use super::predicate::Predicate;
-use super::rule::AllowOrDeny;
-use super::rule::GenErr;
-use super::rule::GenPacketResult;
-use super::rule::HairpinAction;
-use alloc::vec::Vec;
-use core::fmt;
-use core::fmt::Display;
+//! ICMPv4 headers and processing.
+
+use super::*;
+use crate::engine::ip4::Ipv4Hdr;
+use crate::engine::ip4::Ipv4Meta;
+use crate::engine::predicate::Ipv4AddrMatch;
 pub use opte_api::ip::IcmpEchoReply;
-pub use opte_api::ip::Protocol;
-use serde::Deserialize;
-use serde::Serialize;
-use smoltcp::phy::Checksum;
-use smoltcp::phy::ChecksumCapabilities as Csum;
 use smoltcp::wire;
+use smoltcp::wire::Icmpv4Message;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
+
+pub type Icmpv4Meta = IcmpMeta<MessageType>;
+
+impl QueryEcho for Icmpv4Meta {
+    /// Extract an ID from the body of an ICMPv4 packet to use as a
+    /// pseudo port for flow differentiation.
+    ///
+    /// This method returns `None` for any non-echo packets.
+    #[inline]
+    fn echo_id(&self) -> Option<u16> {
+        match self.msg_type.inner {
+            Icmpv4Message::EchoRequest | Icmpv4Message::EchoReply => {
+                Some(u16::from_be_bytes(self.body_echo().id))
+            }
+            _ => None,
+        }
+    }
+}
 
 impl HairpinAction for IcmpEchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
@@ -63,9 +61,23 @@ impl HairpinAction for IcmpEchoReply {
 
     fn gen_packet(
         &self,
-        _meta: &PacketMeta,
+        meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
+        let Some(icmp) = meta.inner_icmp() else {
+            // Getting here implies the predicate matched, but that the
+            // extracted metadata indicates this isn't an ICMP packet. That
+            // should be impossible, but we avoid panicking given the kernel
+            // context.
+            return Err(GenErr::Unexpected(format!(
+                "Expected ICMP packet metadata, but found: {:?}",
+                meta
+            )));
+        };
+
+        // `Icmpv4Packet` requires the ICMPv4 header and not just the message payload.
+        // Given we successfully got the ICMPv4 metadata, rewinding here is fine.
+        rdr.seek_back(icmp.hdr_len())?;
         let body = rdr.copy_remaining();
         let src_pkt = Icmpv4Packet::new_checked(&body)?;
         let src_icmp = Icmpv4Repr::parse(&src_pkt, &Csum::ignored())?;
@@ -136,12 +148,18 @@ impl HairpinAction for IcmpEchoReply {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(from = "u8", into = "u8")]
 pub struct MessageType {
-    inner: wire::Icmpv4Message,
+    pub inner: wire::Icmpv4Message,
 }
 
 impl PartialOrd for MessageType {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        u8::from(*self).partial_cmp(&u8::from(*other))
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MessageType {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        u8::from(*self).cmp(&u8::from(*other))
     }
 }
 
@@ -172,5 +190,40 @@ impl From<u8> for MessageType {
 impl Display for MessageType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.inner)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::engine::checksum::Checksum as OpteCsum;
+    use crate::engine::headers::RawHeader;
+    use crate::engine::icmp::IcmpHdr;
+    use crate::engine::icmp::IcmpHdrRaw;
+    use smoltcp::wire::Icmpv4Packet;
+    use smoltcp::wire::Icmpv4Repr;
+
+    use super::*;
+
+    #[test]
+    fn icmp4_body_csum_equals_body() {
+        let data = b"reunion\0";
+        let mut body_csum = OpteCsum::default();
+        body_csum.add_bytes(data);
+
+        let mut cksum_cfg = Csum::ignored();
+        cksum_cfg.icmpv4 = Checksum::Both;
+
+        let test_pkt = Icmpv4Repr::EchoRequest { ident: 7, seq_no: 7777, data };
+        let mut out = vec![0u8; test_pkt.buffer_len()];
+        let mut packet = Icmpv4Packet::new_unchecked(&mut out);
+        test_pkt.emit(&mut packet, &cksum_cfg);
+
+        let src = &mut out[..IcmpHdr::SIZE];
+        let icmp = IcmpHdr { base: IcmpHdrRaw::new_mut(src).unwrap() };
+
+        assert_eq!(
+            Some(body_csum.finalize()),
+            icmp.csum_minus_hdr().map(|mut v| v.finalize())
+        );
     }
 }

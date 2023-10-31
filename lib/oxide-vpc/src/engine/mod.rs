@@ -160,28 +160,21 @@ impl NetworkParser for VpcParser {
         offsets.inner.ip = Some(ip_hi.offset);
 
         let (ulp_hi, ulp_hdr) = match ip_hi.meta.proto() {
-            Protocol::ICMP => {
-                return Ok(PacketInfo {
-                    meta,
-                    offsets,
-                    body_csum: None,
-                    extra_hdr_space: EXTRA_SPACE,
-                });
-                // todo!("need to reintrodouce ICMP as pseudo-ULP header");
-                // pkt.parse_icmp()?,
-            }
-
+            Protocol::ICMP => Packet::parse_icmp(rdr)?,
             Protocol::ICMPv6 => Packet::parse_icmp6(rdr)?,
             Protocol::TCP => Packet::parse_tcp(rdr)?,
             Protocol::UDP => Packet::parse_udp(rdr)?,
             proto => return Err(ParseError::UnexpectedProtocol(proto)),
         };
 
+        let use_pseudo = ulp_hi.meta.is_pseudoheader_in_csum();
         meta.inner.ulp = Some(ulp_hi.meta);
         offsets.inner.ulp = Some(ulp_hi.offset);
 
         let body_csum = if let Some(mut csum) = ulp_hdr.csum_minus_hdr() {
-            csum -= pseudo_csum;
+            if use_pseudo {
+                csum -= pseudo_csum;
+            }
             Some(csum)
         } else {
             None
@@ -249,27 +242,21 @@ impl NetworkParser for VpcParser {
         offsets.inner.ip = Some(inner_ip_hi.offset);
 
         let (inner_ulp_hi, inner_ulp_hdr) = match inner_ip_hi.meta.proto() {
-            Protocol::ICMP => {
-                return Ok(PacketInfo {
-                    meta,
-                    offsets,
-                    body_csum: None,
-                    extra_hdr_space: None,
-                });
-                // todo!("need to reintrodouce ICMP as pseudo-ULP header");
-                // pkt.parse_icmp()?,
-            }
-
+            Protocol::ICMP => Packet::parse_icmp(rdr)?,
             Protocol::ICMPv6 => Packet::parse_icmp6(rdr)?,
             Protocol::TCP => Packet::parse_tcp(rdr)?,
             Protocol::UDP => Packet::parse_udp(rdr)?,
             proto => return Err(ParseError::UnexpectedProtocol(proto)),
         };
 
+        let use_pseudo = inner_ulp_hi.meta.is_pseudoheader_in_csum();
         meta.inner.ulp = Some(inner_ulp_hi.meta);
         offsets.inner.ulp = Some(inner_ulp_hi.offset);
+
         let body_csum = if let Some(mut csum) = inner_ulp_hdr.csum_minus_hdr() {
-            csum -= pseudo_csum;
+            if use_pseudo {
+                csum -= pseudo_csum;
+            }
             Some(csum)
         } else {
             None

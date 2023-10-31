@@ -14,7 +14,6 @@ use super::headers::UlpMetaModify;
 use super::ip4::Ipv4Mod;
 use super::ip6::Ipv6Mod;
 use super::packet::BodyTransform;
-use super::packet::BodyTransformError;
 use super::packet::InnerFlowId;
 use super::packet::Packet;
 use super::packet::PacketMeta;
@@ -35,6 +34,7 @@ use super::rule::ResourceError;
 use super::rule::StatefulAction;
 use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KMutexType;
+use crate::engine::icmp::QueryEcho;
 use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::ToString;
@@ -50,7 +50,6 @@ use opte_api::Ipv4Addr;
 use opte_api::Ipv6Addr;
 use opte_api::Protocol;
 use smoltcp::wire::Icmpv4Message;
-use smoltcp::wire::Icmpv4Packet;
 
 /// A single entry in the NAT pool, describing the public IP and port used to
 /// NAT a private address.
@@ -194,38 +193,34 @@ impl SNat {
         nat: NatPoolEntry<Ipv4Addr>,
         pkt: &Packet<Parsed>,
     ) -> GenDescResult {
-        if let Some(body_segs) = pkt.body_segs() {
-            let icmp = match Icmpv4Packet::new_checked(body_segs[0]) {
-                Ok(icmp) => icmp,
-                Err(e) => {
-                    return Err(GenDescError::Unexpected {
-                        msg: format!("Failed to parse ICMP: {}", e),
-                    });
-                }
-            };
+        let meta = pkt.meta();
 
-            if icmp.msg_type() != Icmpv4Message::EchoRequest {
+        if let Some(icmp) = meta.inner_icmp() {
+            if icmp.msg_type.inner != Icmpv4Message::EchoRequest {
                 return Err(GenDescError::Unexpected {
                     msg: format!(
                         "Expected ICMP Echo Request, found: {}",
-                        icmp.msg_type(),
+                        icmp.msg_type,
                     ),
                 });
             }
+
+            // Panic: We know this is safe because we make it here
+            // only if this ICMP message is an Echo Request.
+            let echo_ident = icmp.echo_id().unwrap();
 
             let desc = SNatIcmpEchoDesc {
                 pool: self.ip_pool.clone(),
                 priv_ip: self.priv_ip,
                 nat,
-                // Panic: We know this is safe because we make it here
-                // only if this ICMP message is an Echo Request.
-                echo_ident: icmp.echo_ident(),
+                echo_ident,
             };
 
             Ok(AllowOrDeny::Allow(Arc::new(desc)))
         } else {
             Err(GenDescError::Unexpected {
-                msg: "No ICMP body found".to_string(),
+                msg: "No ICMP metadata found despite Protocol::ICMP"
+                    .to_string(),
             })
         }
     }
@@ -478,7 +473,8 @@ pub const SNAT_ICMP_ECHO_NAME: &str = "SNAT_ICMP_ECHO";
 impl ActionDesc for SNatIcmpEchoDesc {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
-            // Outbound traffic needs its source IP and source port
+            // Outbound traffic needs its source IP rewritten, and its
+            // 'source port' placed into the ICMP echo ID field.
             Direction::Out => {
                 let ip = IpMod::from(Ipv4Mod {
                     src: Some(self.nat.ip),
@@ -488,6 +484,10 @@ impl ActionDesc for SNatIcmpEchoDesc {
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
                     inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
+                        icmp_id: Some(self.nat.port),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 }
             }
@@ -503,6 +503,10 @@ impl ActionDesc for SNatIcmpEchoDesc {
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
                     inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
+                        icmp_id: Some(self.echo_ident),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 }
             }
@@ -517,7 +521,7 @@ impl ActionDesc for SNatIcmpEchoDesc {
         _meta: &PacketMeta,
         _payload_segs: &[&[u8]],
     ) -> Result<Option<Box<dyn BodyTransform>>, GenBtError> {
-        Ok(Some(Box::new(SNatIcmpEchoBt::new(self.echo_ident, self.nat))))
+        Ok(None)
     }
 
     fn name(&self) -> &str {
@@ -528,63 +532,6 @@ impl ActionDesc for SNatIcmpEchoDesc {
 impl Drop for SNatIcmpEchoDesc {
     fn drop(&mut self) {
         self.pool.release(&self.priv_ip, self.nat);
-    }
-}
-
-/// Perform SNAT for ICMP Echo/Reply messages, treating the Identifier
-/// as a source port.
-#[derive(Clone)]
-pub struct SNatIcmpEchoBt {
-    ident: u16,
-    nat: NatPoolEntry<Ipv4Addr>,
-}
-
-impl SNatIcmpEchoBt {
-    pub fn new(ident: u16, nat: NatPoolEntry<Ipv4Addr>) -> Self {
-        Self { ident, nat }
-    }
-}
-
-impl BodyTransform for SNatIcmpEchoBt {
-    fn run(
-        &self,
-        dir: Direction,
-        body: &mut [&mut [u8]],
-    ) -> Result<(), BodyTransformError> {
-        use Icmpv4Message::EchoReply;
-        use Icmpv4Message::EchoRequest;
-
-        let mut icmp = Icmpv4Packet::new_checked(&mut *body[0])?;
-
-        match (icmp.msg_type(), dir) {
-            (EchoReply | EchoRequest, Direction::Out) => {
-                // Panic: We know this is safe because we make it here
-                // only if this ICMP message is an Echo/Reply.
-                icmp.set_echo_ident(self.nat.port);
-            }
-
-            (EchoReply | EchoRequest, Direction::In) => {
-                // Panic: We know this is safe because we make it here
-                // only if this ICMP message is an Echo/Reply.
-                icmp.set_echo_ident(self.ident);
-            }
-
-            (_, _) => {
-                return Err(BodyTransformError::UnexpectedBody(format!(
-                    "Expected ICMP Echo/Reply, found: {}",
-                    icmp.msg_type()
-                )));
-            }
-        }
-
-        icmp.fill_checksum();
-        Ok(())
-    }
-}
-
-impl Display for SNatIcmpEchoBt {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ICMP Echo Ident/SNAT {} <=> {}", self.ident, self.nat.port)
     }
 }
 

@@ -12,7 +12,7 @@ use alloc::sync::Arc;
 use core::result::Result;
 use opte::api::Direction;
 use opte::api::OpteError;
-use opte::engine::icmp::IcmpEchoReply;
+use opte::engine::icmp::v4::IcmpEchoReply;
 use opte::engine::layer::Layer;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
