@@ -2,3 +2,4 @@
 comment_width = 74
 max_width = 80
 use_small_heuristics = "max"
+imports_granularity = "Item"

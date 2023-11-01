@@ -1,0 +1,6 @@
+
+[build]
+target = "i686-unknown-illumos.json"
+
+[unstable]
+build-std = ["core"]

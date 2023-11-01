@@ -1,3 +1,9 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Copyright 2022 Oxide Computer Company
+
 // XXX? this file is the beginning of hand crafting the data structures we need
 // from the kernel to build an IRE/NCE client. That list turns out to be big and
 // for the sake of expediency i'm just using bindgen for the moment. Use of

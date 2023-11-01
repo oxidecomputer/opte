@@ -2,11 +2,13 @@
 #:
 #: name = "opteadm"
 #: variety = "basic"
-#: target = "helios"
-#: rust_toolchain = "nightly"
+#: target = "helios-2.0"
+#: rust_toolchain = "nightly-2023-10-23"
 #: output_rules = [
-#:   "/work/debug/*",
-#:   "/work/release/*",
+#:   "=/work/debug/opteadm",
+#:   "=/work/debug/opteadm.debug.sha256",
+#:   "=/work/release/opteadm",
+#:   "=/work/release/opteadm.release.sha256",
 #: ]
 #:
 
@@ -21,25 +23,25 @@ function header {
 cargo --version
 rustc --version
 
-cd opteadm
+pushd bin/opteadm
 
 header "check style"
-ptime -m cargo +nightly fmt -- --check
+ptime -m cargo +nightly-2023-10-23 fmt -- --check
 
 header "analyze"
-ptime -m cargo +nightly check
+ptime -m cargo clippy --all-targets
 
 header "debug build"
-ptime -m cargo +nightly build
+ptime -m cargo build
 
 header "release build"
-ptime -m cargo +nightly build --release
+ptime -m cargo build --release
 
-header "test"
-ptime -m cargo +nightly test
+popd
 
 for x in debug release
 do
     mkdir -p /work/$x
     cp target/$x/opteadm /work/$x/
+    sha256sum "target/$x/opteadm" > "/work/$x/opteadm.$x.sha256"
 done

@@ -1,0 +1,5 @@
+[build]
+target = "x86_64-unknown-unknown.json"
+
+[unstable]
+build-std = ["core", "alloc"]

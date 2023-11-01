@@ -1,383 +1,339 @@
-// mac/mac_client APIs that we need.
-use crate::ip::{in6_addr_t, in6_addr__bindgen_ty_1};
-use illumos_ddi_dki::*;
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-pub const MAC_DROP_ON_NO_DESC: u16 = 0x01;
-pub const MAC_TX_NO_ENQUEUE: u16 = 0x02;
-pub const MAC_TX_NO_HOLD: u16 = 0x04;
-pub const MCIS_NO_UNICAST_ADDR: u16 = 0x2000;
+// Copyright 2023 Oxide Computer Company
 
-pub const MAC_VIRT_NONE: c_int = 0x0;
-pub const MAC_VIRT_LEVEL1: c_int = 0x0;
-pub const MAC_VIRT_HIO: c_int = 0x0;
+//! Safe abstractions for the mac client API.
+//!
+//! NOTE: This module is re-exporting all of the sys definitions at
+//! the moment out of laziness.
+pub use super::mac_sys::*;
+use alloc::ffi::CString;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use bitflags::bitflags;
+use core::ffi::CStr;
+use core::fmt;
+use core::ptr;
+use illumos_sys_hdrs::*;
+use opte::engine::ether::EtherAddr;
+use opte::engine::packet::Initialized;
+use opte::engine::packet::Packet;
+use opte::engine::packet::PacketState;
 
-pub const MAC_UNICAST_NODUPCHECK: u16 = 0x0001;
-pub const MAC_UNICAST_PRIMARY: u16 = 0x0002;
-pub const MAC_UNICAST_HW: u16 = 0x0004;
-pub const MAC_UNICAST_VNIC_PRIMARY: u16 = 0x0008;
-pub const MAC_UNICAST_TAG_DISABLE: u16 = 0x0010;
-pub const MAC_UNICAST_STRIP_DISABLE: u16 = 0x0020;
-pub const MAC_UNICAST_DISABLE_TX_VID_CHECK: u16 = 0x0040;
-
-pub const MAC_OPEN_FLAGS_IS_VNIC: u16 = 0x0001;
-pub const MAC_OPEN_FLAGS_EXCLUSIVE: u16 = 0x0002;
-pub const MAC_OPEN_FLAGS_IS_AGGR_PORT: u16 = 0x0004;
-pub const MAC_OPEN_FLAGS_SHARES_DESIRED: u16 = 0x0008;
-pub const MAC_OPEN_FLAGS_USE_DATALINK_NAME: u16 = 0x0010;
-pub const MAC_OPEN_FLAGS_MULTI_PRIMARY: u16 = 0x0020;
-pub const MAC_OPEN_FLAGS_NO_UNICAST_ADDR: u16 = 0x0040;
-
-#[allow(dead_code)]
-#[repr(C)]
-pub enum mac_client_promisc_type_t {
-    MAC_CLIENT_PROMISC_ALL,
-    MAC_CLIENT_PROMISC_FILTERED,
-    MAC_CLIENT_PROMISC_MULTI,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub enum link_state_t {
-    Unknown = -1,
-    Down,
-    Up,
-}
-
-#[allow(unused_imports)]
-use mac_client_promisc_type_t::*;
-
-type mac_tx_cookie_t = uintptr_t;
-type mac_rx_fn = unsafe extern "C" fn(
-    *mut c_void,
-    *mut mac_resource_handle,
-    *mut mblk_t,
-    boolean_t,
-);
-
-extern "C" {
-    pub type mac_handle;
-    pub type mac_client_handle;
-    pub type mac_unicast_handle;
-    pub type mac_promisc_handle;
-    pub type mac_resource_handle;
-    pub type mac_prop_info_handle;
-
-    pub fn mac_client_open(
-        mh: *const mac_handle,
-        mch: *mut *mut mac_client_handle,
-        name: *const c_char,
-        flags: u16,
-    ) -> c_int;
-
-    pub fn mac_alloc(mac_version: c_uint) -> *mut mac_register_t;
-    pub fn mac_free(mregp: *mut mac_register_t);
-    pub fn mac_init_ops(ops: *mut dev_ops, name: *const c_char);
-    pub fn mac_fini_ops(ops: *mut dev_ops);
-    pub fn mac_drop_chain(chain: *mut mblk_t, fmt: *const c_char, ...);
-    pub fn mac_register(
-        mregp: *mut mac_register_t,
-        mhp: *mut *mut mac_handle,
-    ) -> c_int;
-    pub fn mac_unregister(mh: *const mac_handle) -> c_int;
-
-    pub fn mac_client_close(mch: *const mac_client_handle, flags: u16);
-    pub fn mac_client_name(mch: *const mac_client_handle) -> *const c_char;
-    pub fn mac_close(mh: *mut mac_handle);
-    pub fn mac_open_by_linkid(
-        linkid: datalink_id_t,
-        mhp: *mut *mut mac_handle,
-    ) -> c_int;
-    pub fn mac_open_by_linkname(
-        link: *const c_char,
-        mhp: *mut *mut mac_handle,
-    ) -> c_int;
-    pub fn mac_promisc_add(
-        mch: *const mac_client_handle,
-        ptype: mac_client_promisc_type_t,
-        pfn: mac_rx_fn,
-        arg: *mut c_void,
-        mphp: *mut *mut mac_promisc_handle,
-        flags: u16,
-    ) -> c_int;
-    pub fn mac_promisc_remove(mph: *const mac_promisc_handle);
-    pub fn mac_rx_barrier(mch: *const mac_client_handle);
-    pub fn mac_rx_set(
-        mch: *const mac_client_handle,
-        rx_fn: mac_rx_fn,
-        arg: *mut c_void,
-    );
-    pub fn mac_rx_clear(mch: *const mac_client_handle);
-    pub fn mac_tx(
-        mch: *const mac_client_handle,
-        mp_chain: *const mblk_t,
-        hint: uintptr_t,
-        flag: u16,
-        ret_mp: *mut *const mblk_t,
-    ) -> mac_tx_cookie_t;
-    pub fn mac_unicast_primary_get(mh: *const mac_handle, addr: *mut [u8; 6]);
-    pub fn mac_link_update(mh: *const mac_handle, link: link_state_t);
-    pub fn mac_tx_update(mh: *const mac_handle);
-    pub fn mac_unicast_add(
-        mch: *mut mac_client_handle,
-        mac_addr: *mut u8,
-        flags: u16,
-        mah: *mut *mut mac_unicast_handle,
-        vid: u16,
-        diag: *mut mac_diag,
-    ) -> c_int;
-    pub fn mac_unicast_remove(
-        mch: *mut mac_client_handle,
-        mah: *mut mac_unicast_handle,
-    ) -> c_int;
-    pub fn mac_rx(
-        mh: *mut mac_handle,
-        mrh: *mut mac_resource_handle,
-        mp_chain: *mut mblk_t,
-    );
-
-    pub fn mac_link_flow_add(
-        linkid: datalink_id_t,
-        flow_name: *const c_char,
-        flow_desc: *const flow_desc_t,
-        mrp: *const mac_resource_props_t,
-    ) -> c_int;
-}
-
-#[repr(C)]
+/// Errors while opening a MAC handle.
 #[derive(Debug)]
-pub enum mac_diag {
-    MAC_DIAG_NONE,
-    MAC_DIAG_MACADDR_NIC,
-    MAC_DIAG_MACADDR_INUSE,
-    MAC_DIAG_MACADDR_INVALID,
-    MAC_DIAG_MACADDRLEN_INVALID,
-    MAC_DIAG_MACFACTORYSLOTINVALID,
-    MAC_DIAG_MACFACTORYSLOTUSED,
-    MAC_DIAG_MACFACTORYSLOTALLUSED,
-    MAC_DIAG_MACFACTORYNOTSUP,
-    MAC_DIAG_MACPREFIX_INVALID,
-    MAC_DIAG_MACPREFIXLEN_INVALID,
-    MAC_DIAG_MACNO_HWRINGS,
+pub enum MacOpenError<'a> {
+    InvalidLinkName(&'a str),
+    OpenFailed(&'a str, i32),
 }
 
-// See mac_callbacks(9S) for more information on mac callbacks
-#[repr(C)]
-pub struct mac_callbacks_t {
-    pub mc_callbacks: c_uint,
-    pub mc_getstat:
-        unsafe extern "C" fn(*mut c_void, c_uint, *mut u64) -> c_int,
-    pub mc_start: unsafe extern "C" fn(*mut c_void) -> c_int,
-    pub mc_stop: unsafe extern "C" fn(*mut c_void),
-    pub mc_setpromisc: unsafe extern "C" fn(*mut c_void, boolean_t) -> c_int,
-    pub mc_multicst:
-        unsafe extern "C" fn(*mut c_void, boolean_t, *const u8) -> c_int,
-    pub mc_unicst: unsafe extern "C" fn(*mut c_void, *const u8) -> c_int,
-    pub mc_tx: unsafe extern "C" fn(*mut c_void, *mut mblk_t) -> *mut mblk_t,
-    pub mc_reserved: *mut c_void,
-    pub mc_ioctl: unsafe extern "C" fn(*mut c_void, *mut queue_t, *mut mblk_t),
-
-    pub mc_getcapab: unsafe extern "C" fn(
-        *mut c_void,
-        mac_capab_t,
-        *mut c_void,
-    ) -> boolean_t,
-
-    pub mc_open: unsafe extern "C" fn(*mut c_void) -> c_int,
-    pub mc_close: unsafe extern "C" fn(*mut c_void),
-    pub mc_setprop: unsafe extern "C" fn(
-        *mut c_void,
-        *const c_char,
-        mac_prop_id_t,
-        c_uint,
-        *const c_void,
-    ) -> c_int,
-
-    pub mc_getprop: unsafe extern "C" fn(
-        *mut c_void,
-        *const c_char,
-        mac_prop_id_t,
-        c_uint,
-        *mut c_void,
-    ) -> c_int,
-
-    pub mc_propinfo: unsafe extern "C" fn(
-        *mut c_void,
-        *const c_char,
-        mac_prop_id_t,
-        *mut mac_prop_info_handle,
-    ),
-}
-unsafe impl Sync for mac_callbacks_t {}
-
-pub const MC_RESERVED: c_int = 0x0001;
-pub const MC_IOCTL: c_int = 0x0002;
-pub const MC_GETCAPAB: c_int = 0x0004;
-pub const MC_OPEN: c_int = 0x0008;
-pub const MC_CLOSE: c_int = 0x0010;
-pub const MC_SETPROP: c_int = 0x0020;
-pub const MC_GETPROP: c_int = 0x0040;
-pub const MC_PROPINFO: c_int = 0x0080;
-pub const MC_PROPERTIES: c_int = MC_SETPROP | MC_GETPROP | MC_PROPINFO;
-
-#[repr(C)]
-pub enum mac_prop_id_t {
-    MAC_PROP_PRIVATE = -1,
-    MAC_PROP_DUPLEX = 0x00000001,
-    MAC_PROP_SPEED,
-    MAC_PROP_STATUS,
-    MAC_PROP_AUTONEG,
-    MAC_PROP_EN_AUTONEG,
-    MAC_PROP_MTU,
-    MAC_PROP_ZONE,
-    MAC_PROP_AUTOPUSH,
-    MAC_PROP_FLOWCTRL,
-    MAC_PROP_ADV_1000FDX_CAP,
-    MAC_PROP_EN_1000FDX_CAP,
-    MAC_PROP_ADV_1000HDX_CAP,
-    MAC_PROP_EN_1000HDX_CAP,
-    MAC_PROP_ADV_100FDX_CAP,
-    MAC_PROP_EN_100FDX_CAP,
-    MAC_PROP_ADV_100HDX_CAP,
-    MAC_PROP_EN_100HDX_CAP,
-    MAC_PROP_ADV_10FDX_CAP,
-    MAC_PROP_EN_10FDX_CAP,
-    MAC_PROP_ADV_10HDX_CAP,
-    MAC_PROP_EN_10HDX_CAP,
-    MAC_PROP_ADV_100T4_CAP,
-    MAC_PROP_EN_100T4_CAP,
-    MAC_PROP_IPTUN_HOPLIMIT,
-    MAC_PROP_IPTUN_ENCAPLIMIT,
-    MAC_PROP_WL_ESSID,
-    MAC_PROP_WL_BSSID,
-    MAC_PROP_WL_BSSTYPE,
-    MAC_PROP_WL_LINKSTATUS,
-    MAC_PROP_WL_DESIRED_RATES,
-    MAC_PROP_WL_SUPPORTED_RATES,
-    MAC_PROP_WL_AUTH_MODE,
-    MAC_PROP_WL_ENCRYPTION,
-    MAC_PROP_WL_RSSI,
-    MAC_PROP_WL_PHY_CONFIG,
-    MAC_PROP_WL_CAPABILITY,
-    MAC_PROP_WL_WPA,
-    MAC_PROP_WL_SCANRESULTS,
-    MAC_PROP_WL_POWER_MODE,
-    MAC_PROP_WL_RADIO,
-    MAC_PROP_WL_ESS_LIST,
-    MAC_PROP_WL_KEY_TAB,
-    MAC_PROP_WL_CREATE_IBSS,
-    MAC_PROP_WL_SETOPTIE,
-    MAC_PROP_WL_DELKEY,
-    MAC_PROP_WL_KEY,
-    MAC_PROP_WL_MLME,
-    MAC_PROP_TAGMODE,
-    MAC_PROP_ADV_10GFDX_CAP,
-    MAC_PROP_EN_10GFDX_CAP,
-    MAC_PROP_PVID,
-    MAC_PROP_LLIMIT,
-    MAC_PROP_LDECAY,
-    MAC_PROP_RESOURCE,
-    MAC_PROP_RESOURCE_EFF,
-    MAC_PROP_RXRINGSRANGE,
-    MAC_PROP_TXRINGSRANGE,
-    MAC_PROP_MAX_TX_RINGS_AVAIL,
-    MAC_PROP_MAX_RX_RINGS_AVAIL,
-    MAC_PROP_MAX_RXHWCLNT_AVAIL,
-    MAC_PROP_MAX_TXHWCLNT_AVAIL,
-    MAC_PROP_IB_LINKMODE,
-    MAC_PROP_VN_PROMISC_FILTERED,
-    MAC_PROP_SECONDARY_ADDRS,
-    MAC_PROP_ADV_40GFDX_CAP,
-    MAC_PROP_EN_40GFDX_CAP,
-    MAC_PROP_ADV_100GFDX_CAP,
-    MAC_PROP_EN_100GFDX_CAP,
-    MAC_PROP_ADV_2500FDX_CAP,
-    MAC_PROP_EN_2500FDX_CAP,
-    MAC_PROP_ADV_5000FDX_CAP,
-    MAC_PROP_EN_5000FDX_CAP,
-    MAC_PROP_ADV_25GFDX_CAP,
-    MAC_PROP_EN_25GFDX_CAP,
-    MAC_PROP_ADV_50GFDX_CAP,
-    MAC_PROP_EN_50GFDX_CAP,
-    MAC_PROP_EN_FEC_CAP,
-    MAC_PROP_ADV_FEC_CAP,
+impl fmt::Display for MacOpenError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MacOpenError::InvalidLinkName(link) => {
+                write!(f, "invalid link name: {link}")
+            }
+            MacOpenError::OpenFailed(link, err) => {
+                write!(f, "mac_open_by_linkname failed for {link}: {err}")
+            }
+        }
+    }
 }
 
-#[repr(C)]
-pub enum mac_capab_t {
-    /*
-     * Public Capabilities (MAC_VERSION_V1)
-     */
-    MAC_CAPAB_HCKSUM = 0x00000001, /* data is a uint32_t */
-    MAC_CAPAB_LSO = 0x00000008,    /* data is mac_capab_lso_t */
+/// Safe wrapper around a `mac_handle_t`.
+#[derive(Debug)]
+pub struct MacHandle(*mut mac_handle);
 
-    /*
-     * Reserved capabilities, do not use
-     */
-    MAC_CAPAB_RESERVED1 = 0x00000002,
-    MAC_CAPAB_RESERVED2 = 0x00000004,
+impl MacHandle {
+    /// Grab a handle to the mac provider for the given link.
+    pub fn open_by_link_name(link: &str) -> Result<Self, MacOpenError> {
+        let name = CString::new(link)
+            .map_err(|_| MacOpenError::InvalidLinkName(link))?;
 
-    /*
-     * Private driver capabilities
-     */
-    MAC_CAPAB_RINGS = 0x00000010, /* data is mac_capab_rings_t */
-    MAC_CAPAB_SHARES = 0x00000020, /* data is mac_capab_share_t */
-    MAC_CAPAB_MULTIFACTADDR = 0x00000040, /* mac_data_multifactaddr_t */
+        let mut mh = ptr::null_mut();
+        let ret = unsafe { mac_open_by_linkname(name.as_ptr(), &mut mh) };
+        if ret != 0 {
+            return Err(MacOpenError::OpenFailed(link, ret));
+        }
 
-    /*
-     * Private driver capabilities for use by the GLDv3 framework only
-     */
-    MAC_CAPAB_VNIC = 0x00010000, /* data is mac_capab_vnic_t */
-    MAC_CAPAB_ANCHOR_VNIC = 0x00020000, /* boolean only, no data */
-    MAC_CAPAB_AGGR = 0x00040000, /* data is mac_capab_aggr_t */
-    MAC_CAPAB_NO_NATIVEVLAN = 0x00080000, /* boolean only, no data */
-    MAC_CAPAB_NO_ZCOPY = 0x00100000, /* boolean only, no data */
-    MAC_CAPAB_LEGACY = 0x00200000, /* data is mac_capab_legacy_t */
-    MAC_CAPAB_VRRP = 0x00400000, /* data is mac_capab_vrrp_t */
-    MAC_CAPAB_TRANSCEIVER = 0x01000000, /* mac_capab_transciever_t */
-    MAC_CAPAB_LED = 0x02000000,  /* data is mac_capab_led_t */
+        Ok(Self(mh))
+    }
+
+    pub fn get_mac_addr(&self) -> [u8; 6] {
+        let mut mac = [0u8; 6];
+        unsafe {
+            mac_unicast_primary_get(self.0, &mut mac);
+        }
+        mac
+    }
 }
 
-#[repr(C)]
-pub struct mac_register_t {
-    pub m_version: c_uint,
-    pub m_type_ident: *const c_char,
-    pub m_driver: *mut c_void,
-    pub m_dip: *mut dev_info,
-    pub m_instance: c_uint,
-    pub m_src_addr: *mut u8,
-    pub m_dst_addr: *mut u8,
-    pub m_callbacks: *mut mac_callbacks_t,
-    pub m_min_sdu: c_uint,
-    pub m_max_sdu: c_uint,
-    pub m_pdata: *mut c_void,
-    pub m_pdata_size: size_t,
-    pub m_priv_props: *mut *mut c_char,
-    pub m_margin: u32,
-    pub m_v12n: u32,
-    pub m_multicast_sdu: c_uint,
+impl Drop for MacHandle {
+    fn drop(&mut self) {
+        // Safety: We know that a `MacHandle` can only exist if a mac
+        // handle was successfully obtained.
+        unsafe { mac_close(self.0) };
+    }
 }
 
-pub type flow_mask_t = u64;
-pub const MAXMACADDR: usize = 20;
+/// Safe wrapper around a `mac_client_handle_t`.
+#[derive(Debug)]
+pub struct MacClientHandle {
+    /// Flags to pass to `mac_client_close()`.
+    close_flags: u16,
 
-#[repr(C)]
-pub struct flow_desc_t {
-    pub fd_mask: flow_mask_t,
-    pub fd_mac_len: u32,
-    pub fd_dst_mac: [u8; MAXMACADDR],
-    pub fd_src_mac: [u8; MAXMACADDR],
-    pub fd_vid: u16,
-    pub fd_sap: u32,
-    pub fd_ipversion: u8,
-    pub fd_protocol: u8,
-    pub fd_local_addr: crate::ip::in6_addr_t,
-    pub fd_local_netmask: crate::ip::in6_addr_t,
-    pub fd_remote_addr: crate::ip::in6_addr_t,
-    pub fd_remote_netmask: crate::ip::in6_addr_t,
-    pub fd_local_port: crate::ip::in_port_t,
-    pub fd_remote_port: crate::ip::in_port_t,
-    pub fd_dsfield: u8,
-    pub fd_dsfield_mask: u8,
+    /// The client handle.
+    mch: *mut mac_client_handle,
+
+    /// Reference to the underlying MAC handle for this client.
+    _mh: Arc<MacHandle>,
+}
+
+bitflags! {
+    pub struct MacTxFlags: u16 {
+        const NO_ENQUEUE = MAC_TX_NO_ENQUEUE;
+        const NO_HOLD = MAC_TX_NO_HOLD;
+    }
+}
+
+bitflags! {
+    // See uts/common/sys/mac_client.h.
+    //
+    // For now we only include flags currently used by consumers.
+    pub struct MacOpenFlags: u16 {
+        const NONE = 0;
+        const NO_UNICAST_ADDR = MAC_OPEN_FLAGS_NO_UNICAST_ADDR;
+    }
+}
+
+impl MacClientHandle {
+    /// Open a new client for the given MAC, `mh`.
+    pub fn open(
+        mh: &Arc<MacHandle>,
+        name: Option<&str>,
+        open_flags: MacOpenFlags,
+        close_flags: u16,
+    ) -> Result<Self, c_int> {
+        let mut raw_oflags = open_flags.bits();
+        let mut mch = ptr::null_mut::<c_void> as *mut mac_client_handle;
+        let ret = match name {
+            Some(name_str) => {
+                // It's imperative to declare name_cstr here and not
+                // call as_ptr(); otherwise the CString value is
+                // dropped before mac_client_open() and we are left
+                // with a pointer to freed memory.
+                let name_cstr = CString::new(name_str).unwrap();
+                unsafe {
+                    mac_client_open(
+                        mh.0,
+                        &mut mch,
+                        name_cstr.as_ptr(),
+                        raw_oflags,
+                    )
+                }
+            }
+
+            None => {
+                let name_cstr = ptr::null_mut();
+                raw_oflags |= MAC_OPEN_FLAGS_USE_DATALINK_NAME;
+                unsafe {
+                    mac_client_open(mh.0, &mut mch, name_cstr, raw_oflags)
+                }
+            }
+        };
+
+        if ret != 0 {
+            return Err(ret);
+        }
+
+        Ok(Self { close_flags, mch, _mh: mh.clone() })
+    }
+
+    /// Get the name of the client.
+    pub fn name(&self) -> String {
+        unsafe {
+            CStr::from_ptr(mac_client_name(self.mch))
+                .to_str()
+                .unwrap()
+                .to_string()
+        }
+    }
+
+    pub fn rx_barrier(&self) {
+        unsafe { mac_rx_barrier(self.mch) };
+    }
+
+    /// Clear the Rx callback handler; resetting it to the default.
+    ///
+    /// Future packets destined for this client are dropped by mac.
+    pub fn clear_rx(&self) {
+        unsafe { mac_rx_clear(self.mch) };
+    }
+
+    /// Calls `mac_unicast_add` on the underlying system.
+    pub fn add_unicast(
+        self: &Arc<Self>,
+        mac: EtherAddr,
+    ) -> Result<MacUnicastHandle, c_int> {
+        let mut diag = mac_diag::MAC_DIAG_NONE;
+        let mut ether = mac.to_bytes();
+        let mut muh = ptr::null_mut();
+        unsafe {
+            match mac_unicast_add(
+                self.mch,
+                ether.as_mut_ptr(),
+                0,
+                &mut muh,
+                0,
+                &mut diag,
+            ) {
+                0 => Ok(MacUnicastHandle { muh, mch: self.clone() }),
+                err => Err(err),
+            }
+        }
+    }
+
+    /// Register promiscuous callback to receive packets on the underlying MAC.
+    pub fn add_promisc(
+        self: &Arc<Self>,
+        ptype: mac_client_promisc_type_t,
+        promisc_fn: mac_rx_fn,
+        flags: u16,
+    ) -> Result<MacPromiscHandle, c_int> {
+        let mut mph = ptr::null_mut();
+
+        // `MacPromiscHandle` keeps a reference to this `MacClientHandle`
+        // until it is removed and so we can safely access it from the
+        // callback via the `arg` pointer.
+        let mch = self.clone();
+        let arg = Arc::as_ptr(&mch) as *mut c_void;
+        let ret = unsafe {
+            mac_promisc_add(self.mch, ptype, promisc_fn, arg, &mut mph, flags)
+        };
+
+        if ret == 0 {
+            Ok(MacPromiscHandle { mph, _mch: mch })
+        } else {
+            Err(ret)
+        }
+    }
+
+    /// Send the [`Packet`] on this client.
+    ///
+    /// If the packet cannot be sent, return it. If you want to drop
+    /// the packet when no descriptors are available, then use
+    /// [`MacClient::tx_drop_on_no_desc()`].
+    ///
+    /// XXX The underlying mac_tx() function accepts a packet chain,
+    /// but for now we pass only a single packet at a time.
+    pub fn tx(
+        &self,
+        pkt: Packet<impl PacketState>,
+        hint: uintptr_t,
+        flags: MacTxFlags,
+    ) -> Option<Packet<Initialized>> {
+        // We must unwrap the raw `mblk_t` out of the `pkt` here,
+        // otherwise the mblk_t would be dropped at the end of this
+        // function along with `pkt`.
+        let mut ret_mp = ptr::null_mut();
+        unsafe {
+            mac_tx(self.mch, pkt.unwrap_mblk(), hint, flags.bits(), &mut ret_mp)
+        };
+        if !ret_mp.is_null() {
+            // Unwrap: We know the ret_mp is valid because we gave
+            // mac_tx() a valid mp_chain; and mac_tx() will give us
+            // either that exact pointer back (via ret_mp) or the
+            // portion of the packet chain it could not queue.
+            //
+            // XXX Technically we are still only passing single
+            // packets, but eventually we will pass packet chains and
+            // the sentence above will hold.
+            Some(unsafe { Packet::wrap_mblk(ret_mp).unwrap() })
+        } else {
+            None
+        }
+    }
+
+    /// Send the [`Packet`] on this client, dropping if there is no
+    /// descriptor available
+    ///
+    /// This function always consumes the [`Packet`].
+    ///
+    /// XXX The underlying mac_tx() function accepts a packet chain,
+    /// but for now we pass only a single packet at a time.
+    pub fn tx_drop_on_no_desc(
+        &self,
+        pkt: Packet<impl PacketState>,
+        hint: uintptr_t,
+        flags: MacTxFlags,
+    ) {
+        // We must unwrap the raw `mblk_t` out of the `pkt` here,
+        // otherwise the mblk_t would be dropped at the end of this
+        // function along with `pkt`.
+        let mut raw_flags = flags.bits();
+        raw_flags |= MAC_DROP_ON_NO_DESC;
+        let mut ret_mp = ptr::null_mut();
+        unsafe {
+            mac_tx(self.mch, pkt.unwrap_mblk(), hint, raw_flags, &mut ret_mp)
+        };
+        debug_assert_eq!(ret_mp, ptr::null_mut());
+    }
+
+    /// TODO: document what's happening here.
+    /// TODO: error conditions?
+    pub fn rx_set(&self, promisc_fn: mac_rx_fn) {
+        unsafe { mac_rx_set(self.mch, promisc_fn, ptr::null_mut()) }
+    }
+}
+
+impl Drop for MacClientHandle {
+    fn drop(&mut self) {
+        // Safety: We know that a `MacClientHandle` can only exist if a mac
+        // client handle was successfully obtained, and thus mch is
+        // valid.
+        unsafe { mac_client_close(self.mch, self.close_flags) };
+    }
+}
+
+/// Safe wrapper around a `mac_promisc_handle_t`.
+#[derive(Debug)]
+pub struct MacPromiscHandle {
+    /// The underlying `mac_promisc_handle_t`.
+    mph: *mut mac_promisc_handle,
+
+    /// The `MacClientHandle` used to create this promiscuous callback.
+    _mch: Arc<MacClientHandle>,
+}
+
+impl Drop for MacPromiscHandle {
+    fn drop(&mut self) {
+        // Safety: We know that a `MacPromiscHandle` can only exist if a
+        // mac promisc handle was successfully obtained, and thus `mph`
+        // is valid.
+        unsafe { mac_promisc_remove(self.mph) };
+    }
+}
+
+/// Safe wrapper around a `mac_unicast_handle_t`.
+#[derive(Debug)]
+pub struct MacUnicastHandle {
+    /// The underlying `mac_unicast_handle_t`.
+    muh: *mut mac_unicast_handle,
+
+    /// The `MacClientHandle` used to create this unicast callback.
+    mch: Arc<MacClientHandle>,
+}
+
+impl Drop for MacUnicastHandle {
+    fn drop(&mut self) {
+        // Safety: We know that a `MacUnicastHandle` can only exist if a
+        // mac unicast handle was successfully obtained, and thus `muh`
+        // is valid.
+        unsafe { mac_unicast_remove(self.mch.mch, self.muh) };
+    }
 }
 
 // TODO Move this somewhere else?
@@ -385,7 +341,7 @@ pub struct flow_desc_t {
 pub struct MacFlow {
     mask: flow_mask_t,
     ip_ver: Option<u8>,
-    proto: Option<opte_core::ip4::Protocol>,
+    proto: Option<opte::api::ip::Protocol>,
     local_port: Option<u16>,
 }
 
@@ -416,7 +372,7 @@ impl MacFlow {
         self
     }
 
-    pub fn set_proto(&mut self, proto: opte_core::ip4::Protocol) -> &mut Self {
+    pub fn set_proto(&mut self, proto: opte::api::ip::Protocol) -> &mut Self {
         self.mask |= FLOW_IP_PROTOCOL;
         self.proto = Some(proto);
         self
@@ -433,10 +389,6 @@ impl MacFlow {
     }
 }
 
-pub const IP_NO_ADDR: in6_addr_t = in6_addr_t {
-    _S6_un: in6_addr__bindgen_ty_1 { _S6_u16: [0u16; 8] }
-};
-
 impl From<MacFlow> for flow_desc_t {
     fn from(mf: MacFlow) -> Self {
         let no_addr = IP_NO_ADDR;
@@ -445,7 +397,7 @@ impl From<MacFlow> for flow_desc_t {
         // The mac flow subsystem uses 0 as sentinel to indicate no
         // filtering on protocol.
         let fd_protocol = match mf.proto {
-            Some(p) => p as u8,
+            Some(p) => u8::from(p),
             None => 0,
         };
 
@@ -477,170 +429,4 @@ impl From<MacFlow> for flow_desc_t {
             fd_dsfield_mask: 0,
         }
     }
-}
-
-#[repr(C)]
-pub struct mac_resource_props_t {
-    mrp_mask: u32,
-    mrp_maxbw: u64,
-    mrp_priority: mac_priority_level_t,
-    mrp_cpus: mac_cpus_t,
-    mrp_protect: mac_protect_t,
-    mrp_nrxings: u32,
-    mrp_ntxrings: u32,
-    mrp_pool: [c_char; MAXPATHLEN],
-}
-
-pub const FLOW_LINK_DST: u64 = 0x00000001;
-pub const FLOW_LINK_SRC: u64 = 0x00000002;
-pub const FLOW_LINK_VID: u64 = 0x00000004;
-pub const FLOW_LINK_SAP: u64 = 0x00000008;
-
-pub const FLOW_IP_VERSION: u64 = 0x00000010;
-pub const FLOW_IP_PROTOCOL: u64 = 0x00000020;
-pub const FLOW_IP_LOCAL: u64 = 0x00000040;
-pub const FLOW_IP_REMOTE: u64 = 0x00000080;
-pub const FLOW_IP_DSFIELD: u64 = 0x00000100;
-
-pub const FLOW_ULP_PORT_LOCAL: u64 = 0x00001000;
-pub const FLOW_ULP_PORT_REMOTE: u64 = 0x00002000;
-
-pub const MPT_MACNOSPOOF: c_int = 0x00000001;
-pub const MPT_RESTRICTED: c_int = 0x00000002;
-pub const MPT_IPNOSPOOF: c_int = 0x00000004;
-pub const MPT_DHCPNOSPOOF: c_int = 0x00000008;
-pub const MPT_ALL: c_int = 0x0000000f;
-pub const MPT_RESET: c_int = -1;
-pub const MPT_MAXCNT: usize = 32;
-pub const MPT_MAXIPADDR: usize = MPT_MAXCNT;
-pub const MPT_MAXCID: usize = MPT_MAXCNT;
-pub const MPT_MAXCIDLEN: usize = 256;
-
-pub const MRP_MAXBW: c_int = 0x00000001;
-pub const MRP_CPUS: c_int = 0x00000002;
-pub const MRP_CPUS_USERSPEC: c_int = 0x00000004;
-pub const MRP_PRIORITY: c_int = 0x00000008;
-pub const MRP_PROTECT: c_int = 0x00000010;
-pub const MRP_RX_RINGS: c_int =	0x00000020;
-pub const MRP_TX_RINGS: c_int = 0x00000040;
-pub const MRP_RXRINGS_UNSPEC: c_int = 0x00000080;
-pub const MRP_TXRINGS_UNSPEC: c_int = 0x00000100;
-pub const MRP_RINGS_RESET: c_int = 0x00000200;
-pub const MRP_POOL: c_int = 0x00000400;
-
-pub const MRP_NCPUS: usize = 256;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub enum mac_priority_level_t {
-    MPL_LOW,
-    MPL_MEDIUM,
-    MPL_HIGH,
-    MPL_RESET,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub enum mac_cpu_mode_t {
-    MCM_FANOUT = 1,
-    MCM_CPUS,
-}
-
-
-pub const MAC_RESOURCE_PROPS_DEF: mac_resource_props_t = mac_resource_props_t {
-    mrp_mask: 0,
-    mrp_maxbw: 0,
-    mrp_priority: mac_priority_level_t::MPL_HIGH,
-    mrp_cpus: MAC_CPUS_DEF,
-    mrp_protect: MAC_PROTECT_DEF,
-    mrp_nrxings: 0,
-    mrp_ntxrings: 0,
-    mrp_pool: [0; MAXPATHLEN],
-};
-
-pub const MAC_CPUS_DEF: mac_cpus_t = mac_cpus_t {
-    mc_ncpus: 0,
-    mc_cpus: [0; MRP_NCPUS],
-    mc_rx_fanout_cnt: 0,
-    mc_rx_fanout_cpus: [0; MRP_NCPUS],
-    mc_rx_pollid: 0,
-    mc_rx_workerid: 0,
-    mc_rx_intr_cpu: 0,
-    mc_tx_fanout_cpus: [0; MRP_NCPUS],
-    mc_tx_intr_cpus: mac_tx_intr_cpu_t {
-        mtc_intr_cpu: [0; MRP_NCPUS],
-        mtc_retargeted_cpu: [0; MRP_NCPUS],
-    },
-    mc_fanout_mode: mac_cpu_mode_t::MCM_FANOUT,
-};
-
-#[repr(C)]
-pub struct mac_cpus_t {
-    mc_ncpus: u32,
-    mc_cpus: [u32; MRP_NCPUS],
-    mc_rx_fanout_cnt: u32,
-    mc_rx_fanout_cpus: [u32; MRP_NCPUS],
-    mc_rx_pollid: u32,
-    mc_rx_workerid: u32,
-    mc_rx_intr_cpu: i32,
-    mc_tx_fanout_cpus: [i32; MRP_NCPUS],
-    mc_tx_intr_cpus: mac_tx_intr_cpu_t,
-    mc_fanout_mode: mac_cpu_mode_t,
-}
-
-#[repr(C)]
-pub struct mac_tx_intr_cpu_t {
-    mtc_intr_cpu: [i32; MRP_NCPUS],
-    mtc_retargeted_cpu: [i32; MRP_NCPUS],
-}
-
-#[repr(C)]
-pub struct mac_protect_t {
-    mp_types: u32,
-    mp_ipaddrcnt: u32,
-    mp_ipaddrs: [mac_ipaddr_t; MPT_MAXIPADDR as usize],
-    mp_cidcnt: u32,
-    mp_cids: [mac_dhcpcid_t; MPT_MAXCID as usize],
-}
-
-pub const MAC_PROTECT_DEF: mac_protect_t = mac_protect_t {
-    mp_types: 0,
-    mp_ipaddrcnt: 0,
-    mp_ipaddrs: [MAC_IPADDR_DEF; MPT_MAXIPADDR],
-    mp_cidcnt: 0,
-    mp_cids: [MAC_DHCPCID_DEF; MPT_MAXCID],
-};
-
-#[repr(C)]
-pub struct mac_ipaddr_t {
-    ip_version: u32,
-    ip_addr: in6_addr_t,
-    ip_netmask: u8,
-}
-
-pub const MAC_IPADDR_DEF: mac_ipaddr_t = mac_ipaddr_t {
-    ip_version: 0,
-    ip_addr: IP_NO_ADDR,
-    ip_netmask: 0,
-};
-
-#[repr(C)]
-pub struct mac_dhcpcid_t {
-    dc_id: [c_uchar; MPT_MAXCIDLEN as usize],
-    dc_len: u32,
-    dc_form: mac_dhcpcid_form_t,
-}
-
-pub const MAC_DHCPCID_DEF: mac_dhcpcid_t  = mac_dhcpcid_t {
-    dc_id: [0; MPT_MAXCIDLEN],
-    dc_len: 0,
-    dc_form: mac_dhcpcid_form_t::CIDFORM_TYPED,
-};
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub enum mac_dhcpcid_form_t {
-    CIDFORM_TYPED = 1,
-    CIDFORM_HEX,
-    CIDFORM_STR,
 }

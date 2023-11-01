@@ -1,0 +1,967 @@
+:toc: left
+:toclevels: 5
+
+= OPTE
+
+The Oxide Packet Transformation Engine, or OPTE for short, is a
+generic, flexible packet filtering and transformation engine. It takes
+a stream of packets as input, runs them through a configurable,
+dynamic processing pipeline, producing a stream of packets as output.
+It's akin to a Match-Action Table found in a packet switch
+architecture, with the twist that it processes traffic at the flow
+level as opposed to the packet level.
+
+The context of OPTE's design is best understood by first reading
+RFD 63. It describes the design goals of the initial Oxide Rack and
+VPC networks, how they interact, and why we decided to solve virtual
+networking with a combination of edge computing (OPTE) and central
+routing (Tofino/Dendrite). The architecture of OPTE is highly inspired
+by Microsoft's VFP. OPTE is written in Rust with its initial target
+environment set to the illumos kernel.
+
+NOTE: One very important thing to keep in mind: OPTE (and the initial
+network implementation of the VPC network, `oxide-vpc`) has grown
+organically over a two year period as the initial author, Ryan
+Zezeski, was simultaneously trying to learn Rust, Rust in the illumos
+kernel, The Oxide Rack, IPv6, and various other aspects of Oxide and
+networking. Furthermore, there were many times where expediency of
+prototyping outweighed up-front planning and thought. For these
+reasons, the initial author is not satisfied with the current state
+of the code, and recognizes there are many opportunities for
+improvement in the dimensions of code organization, documentation,
+runtime efficiency, performance, and idiomatic use of Rust. If you are
+asking yourself "why did Ryan do it this way?", consider that it might
+just be an accident of history. Throughout this document I will call
+out areas of design where I know OPTE falls short of its ideal.
+
+== Generic Engine vs. Network Implementation
+
+Like many things in computer software, the OPTE moniker is overloaded
+to refer to a couple of different things.
+
+1. The overall OPTE project, made up of all the Rust crates in this
+   repository, which contains both the generic engine and the initial
+   consumer of said engine in the form of the Oxide VPC
+   implementation.
+
+2. The `opte` crate, which makes up the "Engine" part of OPTE. In the
+   strictest sense, this is OPTE; and all other code is a consumer.
+
+In its truest form, OPTE is a generic engine for filtering and
+transforming packets using a flow-based model. Said as concisely as
+possible: it provides generic, configurable, packet processing based
+on uniquely identified "flows". For flow X, run action Y. For flow A,
+run action B, etc. OPTE provides the framework and tooling to defines
+flows and the actions to take on their packets, but it's up to another
+program fill in the details. In a loose sense, you can think of the
+whole of OPTE as something akin to a generic type you would find in
+Rust, where OPTE is the base type, and it takes a generic type
+implementing a "network" as parameter.
+
+----
+pub struct Opte<N: NetworkImpl> {
+   ... generic behavior customized by N ...
+}
+----
+
+This is obviously not the real Rust code behind OPTE, rather it's just
+useful mental model. That said, the entity that configures OPTE is
+known as a "network implementation", and there exists a `NetworkImpl`
+type that defines some of the network-specific behavior. The idea of a
+"network implementation" is just that: a collection of packet
+filtering and transformation rules that implement a desired network.
+One such example is found in the `oxide-vpc` crate; implementing the
+Oxide VPC network described in RFD 63.
+
+=== Ideal vs Reality
+
+There are still many areas where network-specific concerns bleed into
+the generic bits. The only network implementation that exists
+currently is Oxide VPC; and while much of it is cordoned off in
+`oxide-vpc`, there are still various aspects of `opte` which are still
+specific to the VPC implementation. These bits should eventually be
+made generic.
+
+`opteadm`:: The `opteadm` command should deal only in things generic
+to OPTE. Currently it also includes VPC-specific concerns like
+firewall rules, V2P mappings, routing, etc. It also contains
+VPC-specific information in generic commands: e.g., `list-ports`
+includes IP addresses. When really OPTE should probably operate
+generically at purely and L2 level. Any notion of IPs should live in a
+network-specific configuration. This is discussed in issue #108.
+
+`xde`:: This is an illumos kernel driver that allows one to insert
+OPTE + network implementation into the kernel as a `mac` provider with
+the purpose of intercepting all packets between some number of
+upstream NICs/ports (currently called "underlays") and its client.
+Ideally, xde would provide a generic "network driver" (separate from
+the OS notion of kernel driver) where network implementations could
+register themselves, providing user visible data links with their
+corresponding network implementation sitting underneath. For example,
+perhaps in the future Oxide may want to provide a "services network"
+dedicated to carrying the traffic of fleet-internal services. The
+`xde` driver would allow both `oxide-vpc` and `oxide-svcs` to register
+their implementations and the ability to create data links of these
+various implementations. All that said, `xde` is far removed from this
+ideal today. It is hard-coded to only run the `oxide-vpc`
+implementation.
+
+`InnerFlowId`:: The inner flow ID is the 5-tuple of the inner packet,
+i.e. the packet as an Oxide VPC guest sees it. This is tightly coupled
+with the `oxide-vpc` network implementation. Ideally, the flow ID
+definition would be generic in `opte`, and defined by the network
+implementation.
+
+== Architecture
+
+The architecture of OPTE is greatly influenced by the design of
+https://www.microsoft.com/en-us/research/publication/vfp-virtual-switch-platform-host-sdn-public-cloud/[Microsoft's
+VFP].
+
+=== Direction
+
+All packet transformations are keyed on two dimensions:
+
+1. direction, and
+2. the flow identifier.
+
+To uniquely identify the transformations to take on a given packet,
+one must identify the direction the packet is traveling and its "flow
+id". The notion of direction is important because it dictates what we
+consider the "source" and what we consider the "destination". It is
+also vital when dealing with a virtual network abstraction, where one
+is mapping the client's "virtual" network onto the host's "real"
+network. Direction gives us the frame of reference required to know
+which is which.
+
+Inbound:: The packet is flowing from the upstream network towards the
+client.
+
+Outbound:: The packet is flowing from the client towards the upstream
+network.
+
+As an example, in the Oxide VPC case, a packet sent out of the guest
+is heading in the outbound direction. A packet coming in from the
+larger network towards the guest is heading in the inbound direction.
+The frame of reference is always from the client.
+
+=== Virtual Switch
+
+The heart of OPTE is the virtual switch and <<_port>> abstractions.
+Each port has some way to be uniquely identified. E.g. in the case of
+`oxide-vpc` this would be the combination of VNI and MAC address. A
+port can represent either a "downstream" client or an "upstream"
+network. Packets destined from one port to another on the same switch
+do not least the switch, but rather are "looped back" internally.
+Packets destined for an upstream/external network are sent out one of
+the upstream ports.
+
+The above paragraph is the ideal, but the current reality is
+hard-coded purely for the `oxide-vpc` network.
+
+* The switch currently lines inside of `xde`, but it should live in
+  `opte` and be generic so that the unique identifier for switching
+  can be programmer by the `NetworkImpl` (this implies that a given
+  switch may contain ports only for a specific network flavor -- no
+  mixing).
+
+* There is no notion of downstream/upstream ports in the code,
+  currently there is only `Port` which represents a downstream
+  (client) node.
+
+=== Port
+
+The port is the client's interface to the virtual switch and thus
+other ports on the same switch as well as the upstream network. All
+traffic for a given client, inbound and outbound, must travel through
+the port. Each port maps to a single client with a single MAC address.
+The port is also the main unit of management. It's the mechanism
+through which policy is programmed; where layers, rules, and actions
+combine to implement the desired network implementation. The typical
+life cycle of a port involves the following.
+
+Creation & Setup:: A port is created. Creating an associated data link
+in the operating system through which a client can obtain a handle and
+send data. Part of creation involves setup, where a given network
+implementation creates a combination of layers, rules, and actions to
+implement the desired network functionality.
+
+Packet Processing:: An active port processes inbound and outbound
+packets according to the rules established by the network
+implementation. The set of rules may be dynamically altered by an
+external agent, referred to as the "control plane". Typically, during
+setup, the network implementation installs a skeleton of the layers,
+rules, and actions required to reify itself; and it is up to the
+control plane to dynamically add and remove rules to required to
+enforce the specific constraints of its client. Additionally, as
+packets are processes, flow state is constructed, which acts as a
+cache mappings flow identity to the desired transformations. This
+state has its own life cycle, as flows come and go.
+
+Deletion:: When a port is no longer of us, it may be deleted. Any
+per-flow resources that were being held for active flows are released.
+This may include resources granted to it by the control plane. E.g. an
+oxide-vpc port may be given a SNAT resource which hands temporary
+ownership of an external IP + port range to it. Any host resources in
+use are also freed, such as memory allocation or other external
+resources.
+
+Pausing, Saving, & Restoring:: A port may be paused, saved, and
+restored for the purpose of live migration. The pausing of a state
+allows it to halt all packet processing and quiesce to a steady state.
+In this state is is then possible to save the port's state which has
+all data needed to restart the port without rebuilding the entire flow
+state. This is achieved by restoring the port based on some payload of
+save data.
+
+=== Layers
+
+The main function of the port is to process packets in a flow-based
+manner. But flows are not known a priori, there must exist some method
+for creating flows based on the initial packets of a flow. This is
+where layers come in. They allow the configurable stacking of rules
+and actions for the purpose of discovering and creating flows for the
+given type of network traffic expected. Layers are much like the
+Match-Action Tables found in switches, except the goal is to create a
+flow entry to avoid rule processing on subsequent traffic (as opposed
+to a typical MAT which deals only in individual packets).
+
+In order to process unclassified packets we must have some way to
+organize the set of rules the make up the port's processing
+"pipeline". A port's pipeline is made up of one or more layers. Each
+layer has two sets of rules: one for inbound, one for outbound. Each
+set is also referred to as a "rule table". Each rule table has zero or
+more rules. Each rule consists of one or more predicates and a single
+action. Each rule table also has a default action, taken in the event
+that no rule matches the given packet.
+
+As rules match their actions are run, creating a set of header
+transformations to apply to the packet. The action may also acquire
+some finite resource and create a stateful flow entry in the
+<<_layer_flow_table>> to track it. As the packet passes through the
+pipeline its metadata is modified, it's flow ID morphs, and the list
+of <<_header_transformations>> applied to it is collected. At the end
+we have its original flow ID and the total set of header
+transformations applied. Along with the direction of the packet, we
+then have enough to create an entry in the <<_unified_flow_table>> for
+that direction.
+
+=== Rules
+
+A rule consists of three things:
+
+Priority:: The priority this rule takes in relation to other rules.
+The value of the priority field is a `u16`. It essentially acts as an
+index into the list of rules. When processing a packet, the rule table
+starts by first comparing it to the rule with the lowest priority
+value, and moving upward. Thus, a rule with a priority of 0 is checked
+before a rule with a priority of 11, which is checked before a rule
+with a priority of 65535.
+
+Predicates:: A rule has zero or more <<_predicates>>. These predicates
+match against various header metadata. If all predicates match, then
+the rule matches. Once a rule is matched, rule processing stops and
+its attached action is taken.
+
+Action:: A rule has a single action attached to it. There are many
+different types of actions that may be taken which are described later
+in the action subsection.
+
+The rule table processing is essentially your traditional match-action
+table found in a switch architecture -- you match packets based on a
+set of header fields, taking a specific action for a specific
+combination of header field values. But remember, OPTE is a
+flow-oriented model. The path to establishing a flow is through the
+pairing of one or more actions to a given direction + flow id. As the
+port processes the packet through the rule table of each layer, it
+builds a collection of header transformations. These header
+transformations are determined by the actions selected by the matched
+rules.
+
+=== Predicates
+
+Predicates match rules to packets. The set of possible predicates
+consist of three types:
+
+Header:: Header predicates match a rule to a specific header field. A
+header predicate may provide one or more possible values to match; the
+predicate is considered to match if **any** of the values match
+(logical OR). Furthermore, some header field matches may allowing
+match on a range of values at once; e.g., you can match an IP address
+by prefix by CIDR notation.
+
+Meta:: Meta predicates allow you to match a specific key-value combos
+in the <<_action_metadata>>.
+
+Negation:: Finally, a predicate may be logically negated.
+
+=== Action Metadata
+
+There are times when one layer may want to pass along information to
+subsequent layers that is additional to the packet data but not part
+of the packet data itself, referred to as "action metadata". It
+provides a basic mechanism for a layer to communicate with its
+downstream peers.
+
+For example, in the Oxide VPC implementation, the `router` layer maps
+a VIP destination to its specified target per the routing table
+assignments. This target is stored as action metadata, allowing the
+downstream `overlay` layer to map the target to an address on the
+"Oxide Rack Network" the sled is a member of.
+
+=== Actions
+
+Actions are the verbs of OPTE. They describe the action to take when
+their enclosing rule is matched. This can include modifying the
+contents of the packet as well as creating/modifying system state.
+There are several types of actions to account for the different types
+or responses required for different types of packets. Ac action's use
+cases include:
+
+* Determining if a packet should be allowed or denied.
+
+* Specifying the <<_header_transformations>> to take.
+
+* Creating a stateful flow entry to match the flow ID to the cached
+  header transformation and optionally reserve a hold on a finite
+  resource.
+
+* Modifying the <<_action_metadata>> values.
+
+* Generating a <<_hairpin_packet>>.
+
+* Escaping to a packet-based handler for non-urgent traffic that does
+  not map neatly into the flow-based model.
+
+=== Hairpin Packet
+
+A hairpin packet is one that is generated in response to a single
+packet and sent back in the opposite direction. It is always generated
+in full as its own independent packet; it is not a transformation of
+the packet currently under processing. A hairpin packet is not a
+special type in OPTE, but simply a `Packet` that is generated as part
+of a `HairpinAction`.
+
+For example, the `oxide-vpc` implementation uses hairpin packets to
+generate ARP replies to the guest in order to act as gateway to said
+guest. The guest sends an ARP to resolve its gateway's MAC address,
+the "gateway" layer of the `oxide-vpc` implementation has a rule that
+matches ARP requests to its handle packet callback, that callback
+generates an ARP response packet, and that packet is returned as a
+"hairpin packet" result to the port processing code, indicating that
+OPTE should send the generated packet in the opposite direction in
+which it is currently processing.
+
+=== Packet
+
+The packet (`opte::engine::Packet`) abstraction forms a single view
+into the the underlying `mblk_t *` chain that makes up the underlying
+packet and its data. It attempts to hide the complexity of dealing
+with mblk chains directly.
+
+=== Layer Flow Table
+
+* `opte::engine::flow_table::FlowTable`
+* `opte::engine::layer::Layer`
+* `opte::engine::rule::ActionDesc`
+
+Each layer contains a Layer Flow Table (LFT). The LFT maps a flow ID
+to an action descriptor. The action descriptor contains the header
+transformation and optionally keeps a hold on the resources reserved
+for this particular transformation. These descriptors are created only
+for stateful actions. Each layer has a pair of LFTs: one for the
+inbound direction and one for outbound. When the matching rule
+contains a stateful action, an action descriptor is created in
+**each** LFT -- one for each direction. This is done by running the
+transformation against the packet's metadata and then mirroring the
+flow ID.
+
+Some stateful actions require obtaining a part of a finite resource.
+When a rule is matched, the stateful action first tries to acquire
+this resource and create the action descriptor. If the resource is
+currently exhausted, then an error is returned and the packet is
+dropped. Otherwise, an action descriptor is created to track the
+resource so that it may be returned when the flow is expired.
+
+For example, the `SNat` action must acquire an unused port for each new
+flow. If all ports are currently in use, then the new flow cannot be
+created and the packet must be dropped. If a port is available, then
+an `SNatDesc` entry is created to track it and return it to the pool
+when the flow is no longer active.
+
+There is also an upper limit on the number of LFT entries. When that
+limit is reached no new flows may be created -- their packets are
+dropped until an existing flow expires and a slot opens up.
+
+=== Unified Flow Table
+
+The Unified Flow Table, or UFT for short, is the cornerstone of the
+VFP architecture. It is the method by which flows are defined,
+performance is gained, and the mechanism for hardware offload.
+
+When a packet arrives for processing, whether in the inbound or
+outbound direction, the first step taken is to look for a matching
+flow entry in the UFT. A match indicates that this packet belongs to a
+known, active flow and that the expensive work of rule matching and
+resource acquisition has already happened. In this case it's simply a
+matter or executing the <<_header_transformations>> and sending the
+packet along its way -- this is the "fast path".
+
+A miss against the UFT indicates one of two things: either it's the
+start of a new flow or this packet stands alone and simply needs
+individual processing -- this is the "slow path".
+
+In the first case, where it's the start of a new flow, the goal is to
+perform rule processing and resource acquisition once, building flow
+state in the process. At the end of processing, after all layers have
+processed the packet, we have the flow ID and the complete list of
+header transformations to take for packets of this flow in this
+direction. That information is then used to create a new UFT entry.
+This process happens for both the inbound and outbound side, and there
+is a UFT for each direction.
+
+If there are no UFT slots available, then a new flow cannot be created
+and the packet is dropped. This is to keep resource usage bounded.
+Even if the UFT table were allowed to grow without bounds, there may
+be other finite resources to consider. For example, in the `oxide-vpc`
+case the only method for outbound connections may be an SNAT pool.
+Each guest interface is given a port range in a given IP for outbound
+connections. When the number of concurrent flows exhausts the range
+given, no new flows may be created until existing flows become
+inactive and expire. Another reason to bound the UFT table is to put a
+cap on system resource usage, such as CPU and memory. A given
+implementation may not consider all ports equal, and may want to
+assign more resources to one port over another.
+
+Not all packets are considered part of a flow, and not all packets
+require the reduced latency of the fast path. For example, in the
+`oxide-vpc` implementation there is no need to consider ARP/NDP/DHCP
+as part of a flow; their latency demands do not require it and to
+create a flow for such packets would only tie up UFT slots that are
+better used for actual TCP/UDP data flows. There are also one-off
+packets like ICMP Destination Unreachable which are a bit special and
+are actually in response to some other flow.
+
+Finally, the UFT acts as the mechanism for offloading packet
+processing to hardware. The UFT is really no different than a
+traditional Match-Action Table. All you need is the definition of the
+flow id (i.e., which header fields to match) and some way to push new
+entries into the hardware MAT. The offloading could be
+software-defined on numerous dimensions. For example, in the Oxide VPC
+case you could limit offloading to more premium guest types. You could
+further limit offloading to dynamically happen only for flows that
+meet a certain bandwidth threshold or that request some type of
+latency-sensitive feature in the control plane; the possibilities are
+endless.
+
+=== TCP State Machine
+
+The default mechanism for expiring stale flows in the
+<<_unified_flow_table>> is that of a simple time-to-live value. After
+so many seconds, if a flow has seen no traffic, it is removed from
+the UFT. For protocols such as UDP this is the only option, as there
+is no definition of a connection or any state transitions to define
+when a UDP flow is "closed". However, for TCP we do have such state
+and can be more proactive in clearing out closed flows.
+
+For this purpose OPTE does some **minimal** tracking of the TCP state
+machine and its transitions. This allows OPTE to know when a
+connections has been closed, reset, or is in a `TIME_WAIT` state and
+should expire in time. With this knowledge, OPTE can reclaim UFT slots
+more aggressively in order to maximize the slots available and minimize
+wasted slots.
+
+=== Header Transformations
+
+* `opte::engine::rule::HdrTransform`
+* `otpe::engine::headers::HeaderAction`
+* `opte::engine::headers::UlpHeaderAction`
+
+A header transformation (`HdrTransform`) is a high-level description
+of the actions to take on a packet's header metadata. A header
+transformation must specify a header action for all possible headers:
+outer and inner. These transformations include pushing, popping,
+modifying, and ignoring a given header; with the exception of the
+inner ULP header, which may only be modified or ignored.
+
+As a packet travels the processing pipeline, matched rules may add a
+new header transformation to the list of total transformations to
+perform on the packet. This list of transformations is what ultimately
+gets stored in the <<_unified_flow_table>>.
+
+NOTE: VFP describes "compiling" the transformations (transpositions in
+their parlance) into one. That is, rather than building a list of
+transformations, each one combines with the previous sum, effectively
+forming a fold into a single transformation. However, they seem to
+only consider disjoint transformations in the paper, where none of
+them overlap in terms of which headers they modify. There is nothing
+said about nonsensical combinations; e.g., if one were to pop the
+inner Ethernet header in transformation #1, but then modify it in
+transformation #2. I think the intent is that the programmer of the
+network implementation would simply avoid such configurations; and I
+think that's a fair contract. In fact, even as a list of
+transformations, we still have the same problem: how do you modify a
+header that doesn't exist (probably just ignore the modification and
+report a warning to the user)? Furthermore, you could give the engine
+the smarts to determine when there is a contradiction and report some
+kind of error. You could also effect a sort of "last write wins" for
+some sequences of transformations: e.g., two modifications on the same
+header. In any event, OPTE has not implemented any sort of "compiling"
+of header transformations at this time. It simply builds a list,
+assuming its sequence of transformations are sane, and stores said
+list in the UFT.
+
+=== SDT probes
+
+NOTE: Some of the SDT probes are currently allocating memory each time
+they are hit, regardless if that probe is enabled by a DTrace consumer
+process (the SDT provider has no control over the code **around** the
+probe site, only the probe itself). This is discussed in
+https://github.com/oxidecomputer/opte/issues/259[opte#259].
+
+There are SDT probes placed throughout the engine to help debug a
+running system, whether in development or production. For example, the
+`port-process-return` probe fires for each packet processed by OPTE
+describing the port it came in on, the direction, the before/after
+flow ID, and the result of processing.
+
+You can list available SDT probes with the following command:
+
+----
+# dtrace -ln 'sdt:xde::'
+----
+
+There are some useful predefined scripts in the `dtrace/` directory.
+
+Since `opte`/`xde` are written in Rust, the usual niceties you are
+used to from C-based kernel modules do not apply. There is no CTF
+information and no way to pass a pointer to a Rust structure and
+expect to know the memory layout on the consumer side (your DTrace
+script). This means no fancy `print()` action for you. For now, the
+best way to work around this is to create a `repr(C)` struct in the
+Rust code, and an equivalent C struct in `dtrace/lib/common.d`. You
+can then define a function or `From<T>` impl to create a temporary
+value of this type and pass a pointer of that to the SDT probe,
+allowing your DTrace script to have convenient member field access and
+the `print()` action.
+
+=== Running Context
+
+OPTE is designed to run in either a user or kernel context. When
+running in user context the engine may take advantage of Rust's `std`
+library: providing heap allocation and various system APIs. When
+running in kernel context the engine is constrained to Rust's `core`
+and `alloc` libraries. The engine **cannot** make use of `std` in this
+context for several reasons, the main ones being:
+
+* Some of the APIs `std` relies on do not exist in kernel context;
+  others exist but in different form.
+
+* The engine's functions may be called in more constrained contexts
+  like interrupt context, requiring more careful consideration of the
+  code allowed to execute.
+
+The upshot of all this is that OPTE is designed with kernel context in
+mind first, but at the same time is built with the shims needed to
+lift it into userland when helpful. Currently the only purpose of
+userland support, though one that has proven its value over and over
+again, is to run unit tests and simulate traffic against the engine.
+For this reason it's imperative that the engine continues to be
+developed so that it can run in both contexts.
+
+The running context of OPTE **must** be determined at compile time.
+You cannot compile OPTE in such a way that the resulting object code
+can run in user or kernel context. Rather, there is an additional step
+of having another executable object that uses (or "wraps") OPTE
+providing the communication between it and the greater system. This
+wrapping executable will naturally dictate how `opte` is compiled in
+that case. For example, the `xde` kernel driver uses the `opte` code
+in kernel context to provide the Oxide VPC Network implementation. It
+is the liaison between the OPTE and the greater system. The
+`oxide-vpc` integration test programs, on the other hand, compile
+`opte` in `std` context.
+
+When talking about "kernel context" we are limiting ourselves to the
+illumos kernel only. It is a non-goal to maintain OPTE in a manner
+that would allow it to run in other kernel environments such as Linux
+or FreeBSD. To do so would require a kernel-shim layer in order to
+present a single abstraction (say a mutex) with different kernel
+implementations backing it. Shim layers like this often quickly
+breakdown because the underlying abstractions ultimately leak into the
+API (you see this in network drivers where FreeBSD uses a shim header
+to map Linux network driver code into their kernel API and the result
+is never pretty).
+
+Allowing OPTE to run in user or kernel context is achieved using
+different methods laid out below.
+
+==== Synonym types
+
+A synonym type is one that provides a kernel-context API which can be
+replicated with high fidelity with a different API in user-context,
+using a type from `std` or an external crate. When compiled for
+kernel-context it provides a kernel API. When compiled for
+user-context it presents a sort of "new type" pattern: `opte` always
+uses the synonym type, but may be backed by an existing `std`/crate
+type when compiled with `std` enabled.
+
+The canonical example of this is the `opte::sync::KMutex` synonym
+type. It provides a safe abstraction to the illumos kernel
+https://illumos.org/man/9F/mutex_enter[mutex_enter(9F)] API when
+compiled for kernel context. When compiled for user context it simply
+uses `std::sync::Mutex` under the covers.
+
+NOTE: One could argue that `opte` should just define this type as
+Mutex, replicate the `std::sync::Mutex` API 1:1, and map that to the
+underlying `mutex_enter(9F)` API. This mostly works, but if you look
+closely cracks start to appear in the paint. The `std::sync::Mutex`
+lives in the Rust `std` world, and that world needs to consider
+non-abort panics: where a thread that unwinds itself on panic instead
+of aborting the entire process. For this reason the std mutex returns
+a `Result` when attempting to lock the mutex. In the case that a
+thread panics/unwinds while holding this mutex, it will be placed in a
+poisoned state and all future lock attempts (by other threads) will
+return an error. The illumos kernel does not concern itself with such
+things: if you panic, the party is over. There is no `Result` to check
+when calling `lock()`: either you acquired the lock or you ruined the
+party for everyone. Now, you could achieve this with `Infallible` in
+the error position, but it would still require `unwrap()` calls
+against all the locks. This isn't the worst thing in the world, but
+given OPTE's prerogative to run in kernel context, all `unwrap()` calls
+must be eyed with great suspicion, as anyone of them could take out
+the entire host.
+
+The upshot of a synonym type is that the kernel/user context problem
+is solved at a type level, behind the type's implementation.
+
+==== Providers
+
+NOTE: Providers were an idea I came up with one day but never really
+fully fleshed them out. The only provider currently defined is the
+`LogProvider`. I had the intention of also doing stats this way, but
+that didn't actually happen; and I'm not sure we'd want do implement
+stats this way as I believe it would add a layer of overhead for
+dispatching to kstats (you'd need to defined a function that maps
+`&str` to the stat you want to increment). It might be best to just
+scrap the provider idea.
+
+Providers are also determined at compile-time but allow more
+flexibility for what types can stand in for a given API. Defined as
+trait that any type can implement. It potentially allows the operator
+to select at runtime different implementations for a given context. A
+good example of this is logging, where an basic API can be defined and
+kernel context can define in terms of `cmn_err(9F)` and userland can
+have several impls including `println!` or some logging crate (granted
+the developer writes a shim for that crate to work with the provider
+trait defined by `opte`).
+
+While `opte` **can** provide an user context implementation of a
+provider interface, it doesn't have to. The provider abstraction
+allows `opte` to distance itself from the user context implementation
+while at the same time giving the developer more freedom. For example,
+it means that `opte` doesn't have to pull in third-party crates to
+provide these user context implementations and instead can just
+provide the interface to which the developer of the userland
+application needs to provide an implementation. It's like a synonym
+type, but the developer of the user program provides the user context
+implementation. This seems good for a type like `Periodic` where there
+is a clear kernel API to use but perhaps an assortment of userland
+providers a developer may want to choose from, and rather than have
+`opte` provide the shim for all those crates it can simply as the
+developer to write their own shim to the provider interface.
+
+==== cfg/attribute based
+
+Some differences between user/kernel context are just too different
+and require something more akin to C's `#define`. A good example of
+this are the SDT probes. OPTE provides SDT probes in key locations
+that can prove useful for debugging in the field. These same probes
+can also be useful when running integration tests in user context:
+both for debugging unexpected test results but also just for verifying
+that certain traffic fires off probes in certain ways. To this effect,
+OPTE defines both an SDT and USDT probe at each probe site. The former
+is for kernel context, the later for user/test context. The method by
+which SDT probes and USDT probes are completely different. For that
+reason, the easiest approach was to place them behind `cfg` blocks.
+
+== Communicating with OPTE
+
+The `xde` device registers a single entry point with the DLD ioctl
+framework. This entry point allows a client to send commands to OPTE
+for the purpose of programming the engine.
+
+.entry point into `xde` via DLD
+----
+static xde_ioc_list: [dld::dld_ioc_info_t; 1] = [
+    dld::dld_ioc_info_t {
+        di_cmd: opte::api::XDE_OPTE_CMD as u32,
+        di_flags: dld::DLDCOPYINOUT,
+        di_argsize: IOCTL_SZ,
+        di_func: xde_dld_ioc_opte_cmd,
+        di_priv_func: secpolicy::secpolicy_dl_config,
+    },
+];
+----
+
+There are four values which make up an OPTE command.
+
+`OpteCmd`:: `OpteCmd` is analogous to the `ioctl(2)` `request`
+argument: it's an integer used to determine what type of request is
+being made; this value is used by the kernel side to determine how to
+interpret the ioctl argument
+
+`OpteCmdIoctl`:: `OpteCmdIoctl` is analogous to the `ioctl(2)` `arg`
+command: a pointer to a structure whose definition is shared across
+both userspace and kernelspace; in this case both `opteadm` running in
+userland and the `opte` engine running in the kernel share a
+consistent (`repr(C)`) layout of this structure. Think of it as the
+common delivery mechanism for the various `XxxReq`/`XxxResp` pairs.
+
+`XxxReq`:: The request value for a given `OpteCmd`. It contains the
+input needed to perform the specified command. E.g., the
+`ListLayersReq` requires a `port_name: String` argument to know which
+port to query. This value is shuttled from user to kernel via
+`OpteCmdIotcl.req_bytes`. It is serialized in userland, written to
+`req_bytes`. On the kernel side `req_bytes` is copied into Kernel
+Address Space (KAS) and deserialized.
+
+`XxxResp`:: The response value for a given `OpteCmd`. E.g., the
+`ListLayersResp` value contains a `Vec<LayerDesc>` describing the
+layers registered for the given port. A command that has no response
+data specifies `NoResp`. This value is shuttled from kernel to user
+via `OpteCmdIoctl.resp_bytes`. The `resp_bytes` buffer is allocated
+and initialized by the client in userspace. In the kernel the response
+structure is serialized and then copied out to the userspace address.
+When control returns to userland the client can then deserialize the
+response buffer into the appropriate struct.
+
+There's one more value that plays an important role in OPTE commands
+and separates the OPTE ioctl mechanism from the more traditional
+`ioctl(2)` APIs: `OpteError`. The OPTE ioctl mechanism is built in
+such a way that in the case of command failure it tries its best to
+deliver an `OpteError` value to the client. This is done via the same
+`OpteCmdIoctl.resp_bytes` buffer used for the `XxxResp` value when a
+command is successful. This allows the client to get more context
+about the error compared to the traditional `ioctl(2)` usage which
+gives you only an `errno` to work with (which is often ambiguous and
+of little immediate help). This allows for the client to potentially
+take additional measures on command failure. At minimum it allows
+client logs to contain more context about why a command failed.
+
+Finally, on the kernel side, there is the `IoctlEnvelope` for wrapping
+`OpteCmdIoctl`. This type provides a safe API for accessing the
+request and marshaling a response out to the user. It relieves the
+handler code of having to know the details of
+`ddi_copyin(9F)`/`ddi_copyout(9F)`; allowing it to focus purely on
+executing the command and returning a response.
+
+Here's what the user/kernel address space looks like upon initial
+entry into `xde_dld_ioc_opte_cmd()`. The key point this visual is
+meant to convey is that at initial entry into the parent handler the
+`req_bytes` and `resp_bytes` pointers still point to the userland
+buffers. The `OpteCmdIoctl` data was copied-in by DLD on xde's behalf,
+visualized by the dotted line from `karg` to `arg`. At this point the
+xde ioctl handler still needs to copy-in the request. After processing
+it needs to copy-out the response value to `resp_bytes` (`0x86ddf20`)
+as well as the `OpteCmdIoctl` itself in order to update the
+`resp_len_needed` value. Keep in mind this shows the logical value of
+what's in `req_bytes`. The real value is actually the byte stream
+produced from serializing this request value.
+
+----
+      ┌─────────────────────────────┐
+  ┌ ─ │arg: 0x86de011               │
+      └─────────────────────────────┘
+  │                  │
+                     ▼
+  │ OpteCmdIoctl──────────────────────┐             ListLayersReq───────┐
+    │ ┌─────────────────────────────┐ │             │┌─────────────────┐│
+  │ │ │api_version: 0x1             │ │     ┌──────▶││port_name: "xde0"││◀─┐
+    │ ├─────────────────────────────┤ │     │       │└─────────────────┘│  │
+  │ │ │cmd: OpteCmd::ListLayers     │ │     │       └───────────────────┘  │
+    │ ├─────────────────────────────┤ │     │                              │
+  │ │ │req_bytes: 0x86dd010         │─┼─────┘                              │
+    │ ├─────────────────────────────┤ │                                    │
+  │ │ │req_len: 18                  │ │             ┌─────────────────┐    │
+    │ ├─────────────────────────────┤ │             │┌─┬─┬─┬─┬─┬─┬─┬─┐│    │
+  │ │ │resp_bytes: 0x86ddf20        │─┼────────────▶││0│0│0│0│0│0│0│0││    │
+    │ ├─────────────────────────────┤ │             │└─┴─┴─┴─┴─┴─┴─┴─┘│    │
+  │ │ │resp_len: 16384 (16K)        │ │             └─────────────────┘    │
+    │ ├─────────────────────────────┤ │                      ▲             │
+  │ │ │resp_len_needed: 0           │ │                      │             │
+    │ └─────────────────────────────┘ │                      │             │
+  │ └─────────────────────────────────┘                      │             │
+                                                             │             │
+  │                                                          │             │
+                                                             │             │
+  │                           User Address Space             │             │
+   ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ╋ ━ ━ ━ ━ ━ ━ ╋ ━
+  │                          Kernel Address Space            │             │
+                                                             │             │
+┌ ┴ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                                      │             │
+     ddi_copyin(9F)    │                                     │             │
+└ ┬ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                                      │             │
+     ┌─────────────────────────────┐                         │             │
+  └ ▶│karg: 0xfffffeb4eaafbe00     │                         │             │
+     └─────────────────────────────┘                         │             │
+                    │                                        │             │
+   OpteCmdIoctl─────▼────────────────┐                       │             │
+   │ ┌─────────────────────────────┐ │                       │             │
+   │ │api_version: 0x1             │ │                       │             │
+   │ ├─────────────────────────────┤ │                       │             │
+   │ │cmd: OpteCmd::ListLayers     │─┼───────────────────────┼─────────────┘
+   │ ├─────────────────────────────┤ │                       │
+   │ │req_bytes: 0x86dd010         │ │                       │
+   │ ├─────────────────────────────┤ │                       │
+   │ │req_len: 18                  │ │                       │
+   │ ├─────────────────────────────┤ │                       │
+   │ │resp_bytes: 0x86ddf20        │─┼───────────────────────┘
+   │ ├─────────────────────────────┤ │
+   │ │resp_len: 16384 (16K)        │ │
+   │ ├─────────────────────────────┤ │
+   │ │resp_len_needed: 0           │ │
+   │ └─────────────────────────────┘ │
+   └─────────────────────────────────┘
+----
+
+Here's what the address spaces look like after `list_layers_hdlr()` has
+called `IoctlEnvelope::copy_in_req()`. Notice the kernel now has its
+own copy of the `ListLayersReq` that it can access. Once again, keep
+in mind that the truth is a little more complicated: `req_bytes`
+contains the serialized bytes of `ListLayersReq`, and the
+`IoctlEnvelope::copy_in_req()` deserializes the byte stream to create
+a `ListLayersReq` value on the stack.
+
+----
+      ┌─────────────────────────────┐
+  ┌ ─ │arg: 0x86de011               │
+      └─────────────────────────────┘
+  │                  │
+                     ▼
+  │ OpteCmdIoctl──────────────────────┐             ListLayersReq───────┐
+    │ ┌─────────────────────────────┐ │             │┌─────────────────┐│
+  │ │ │api_version: 0x1             │ │     ┌──────▶││port_name: "xde0"││
+    │ ├─────────────────────────────┤ │     │       │└─────────────────┘│
+  │ │ │cmd: OpteCmd::ListLayers     │ │     │       └───────────────────┘
+    │ ├─────────────────────────────┤ │     │
+  │ │ │req_bytes: 0x86dd010         │─┼─────┘
+    │ ├─────────────────────────────┤ │
+  │ │ │req_len: 18                  │ │             ┌─────────────────┐
+    │ ├─────────────────────────────┤ │             │┌─┬─┬─┬─┬─┬─┬─┬─┐│
+  │ │ │resp_bytes: 0x86ddf20        │─┼────────────▶││0│0│0│0│0│0│0│0││
+    │ ├─────────────────────────────┤ │             │└─┴─┴─┴─┴─┴─┴─┴─┘│
+  │ │ │resp_len: 16384 (16K)        │ │             └─────────────────┘
+    │ ├─────────────────────────────┤ │                      ▲
+  │ │ │resp_len_needed: 0           │ │                      │
+    │ └─────────────────────────────┘ │                      │
+  │ └─────────────────────────────────┘                      │
+                                                             │
+  │                                                          │
+                                                             │
+  │                           User Address Space             │
+   ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ╋ ━ ━ ━ ━ ━ ━ ━ ━
+  │                          Kernel Address Space            │
+                                                             │
+┌ ┴ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                                      │
+     ddi_copyin(9F)    │                                     │
+└ ┬ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                                      │
+     ┌─────────────────────────────┐                         │
+  └ ▶│karg: 0xfffffeb4eaafbe00     │                         │
+     └─────────────────────────────┘                         │
+                    │                                        │
+   OpteCmdIoctl─────▼────────────────┐               ListLayersReq───────┐
+   │ ┌─────────────────────────────┐ │               │┌─────────────────┐│
+   │ │api_version: 0x1             │ │      ┌───────▶││port_name: "xde0"││
+   │ ├─────────────────────────────┤ │      │        │└─────────────────┘│
+   │ │cmd: OpteCmd::ListLayers     │ │      │        └───────┬───────────┘
+   │ ├─────────────────────────────┤ │      │                │
+   │ │req_bytes: 0xfffffeb4eaaf... │─┼──────┘                │
+   │ ├─────────────────────────────┤ │                       │
+   │ │req_len: 18                  │ │                       │
+   │ ├─────────────────────────────┤ │                       │
+   │ │resp_bytes: 0x86ddf20        │─┼───────────────────────┘
+   │ ├─────────────────────────────┤ │
+   │ │resp_len: 16384 (16K)        │ │
+   │ ├─────────────────────────────┤ │
+   │ │resp_len_needed: 0           │ │
+   │ └─────────────────────────────┘ │
+   └─────────────────────────────────┘
+----
+
+Finally, here's the address space after `hdlr_resp()` has called
+`IoctlEnvelope::copy_out_resp()`. Notice the response has been
+copied-out to the user's `resp_bytes` buffer **AND** the kernel's copy
+of `OpteCmdIoctl` has been copied-out as well to overwrite the user's
+copy. This later step is required in order to update `resp_len_needed`
+which is how the client knows how many bytes to read during
+deserialization. Once again, I'm showing the logical view of
+`resp_bytes` here. The reality is that it points to the serialized
+bytes and the client uses this pointer along with `resp_len_needed` to
+deserialize into a `ListLayersResp` value on the stack.
+
+----
+      ┌─────────────────────────────┐
+  ┌ ─▶│arg: 0x86de011               │
+      └─────────────────────────────┘
+  │                  │
+                     ▼
+  │ OpteCmdIoctl──────────────────────┐             ListLayersReq───────┐
+    │ ┌─────────────────────────────┐ │             │┌─────────────────┐│
+  │ │ │api_version: 0x1             │ │     ┌──────▶││port_name: "xde0"││
+    │ ├─────────────────────────────┤ │     │       │└─────────────────┘│
+  │ │ │cmd: OpteCmd::ListLayers     │ │     │       └───────────────────┘
+    │ ├─────────────────────────────┤ │     │
+  │ │ │req_bytes: 0x86dd010         │─┼─────┘
+    │ ├─────────────────────────────┤ │
+  │ │ │req_len: 18                  │ │             ListLayersResp──────┐
+    │ ├─────────────────────────────┤ │             │┌─────────────────┐│
+  │ │ │resp_bytes: 0x86ddf20        │─┼────────────▶││layers: Vec<...> ││
+    │ ├─────────────────────────────┤ │             │└─────────────────┘│
+  │ │ │resp_len: 16384 (16K)        │ │             └───────────────────┘
+    │ ├─────────────────────────────┤ │                       ▲
+  │ │ │resp_len_needed: 179         │ │
+    │ └─────────────────────────────┘ │                       │
+  │ └─────────────────────────────────┘
+                                                              │
+  │
+                                                              │
+  │                           User Address Space
+   ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━│━ ━ ━ ━ ━ ━ ━ ━
+  │                          Kernel Address Space
+                                                              │
+┌ ┴ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+    ddi_copyout(9F)    │                                      │
+└ ┬ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+     ┌─────────────────────────────┐                          │
+  └ ─│karg: 0xfffffeb4eaafbe00     │
+     └─────────────────────────────┘                          │
+                    │
+   OpteCmdIoctl─────▼────────────────┐               ListLayersReq───────┐
+   │ ┌─────────────────────────────┐ │               │┌─────────────────┐│
+   │ │api_version: 0x1             │ │      ┌───────▶││port_name: "xde0"││
+   │ ├─────────────────────────────┤ │      │        │└─────────────────┘│
+   │ │cmd: OpteCmd::ListLayers     │ │      │        └────────┬──────────┘
+   │ ├─────────────────────────────┤ │      │
+   │ │req_bytes: 0xfffffeb4eaaf... │─┼──────┘                 │
+   │ ├─────────────────────────────┤ │
+   │ │req_len: 18                  │ │                        │
+   │ ├─────────────────────────────┤ │             ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+   │ │resp_bytes: 0x86ddf20        │─│─ ─ ─ ─ ─ ─ ─   ddi_copyout(9F)
+   │ ├─────────────────────────────┤ │             └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+   │ │resp_len: 16384 (16K)        │ │
+   │ ├─────────────────────────────┤ │
+   │ │resp_len_needed: 179         │ │
+   │ └─────────────────────────────┘ │
+   └─────────────────────────────────┘
+----
+
+== Unwrap
+
+NOTE: There are a lot of `unwrap()` calls in OPTE that require
+analysis/documentation. See
+https://github.com/oxidecomputer/opte/issues/234[opte#234].
+
+A panic in the kernel is for keeps. Any `unwrap()`/`expect()` call is
+a potential support call in the future. These calls should be made
+carefully; and their call site should have an `Unwrap:` comment
+describing why it should always succeed.
