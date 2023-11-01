@@ -21,6 +21,7 @@ use crate::mac;
 use crate::mac::mac_getinfo;
 use crate::mac::mac_private_minor;
 use crate::mac::MacClientHandle;
+use crate::mac::MacFlow;
 use crate::mac::MacHandle;
 use crate::mac::MacOpenFlags;
 use crate::mac::MacPromiscHandle;
@@ -202,6 +203,9 @@ struct xde_underlay_port {
 
     /// The MAC address associated with this underlay port.
     mac: [u8; 6],
+
+    /// Handles to created MacFlow instances.
+    flows: Vec<MacFlow>,
 
     /// MAC handle to the underlay link.
     mh: Arc<MacHandle>,
@@ -954,11 +958,11 @@ fn create_underlay_port(
     // its client are sent upstream. The plan is to expand mac's flow
     // classification to handle encapsulated packets; at which point
     // we should be able to setup a distinct flow per xde instance.
-    let flow_desc = mac::MacFlow::new()
+    let mut flow_desc = mac::MacFlowDesc::new();
+    flow_desc
         // .set_ipver(6)
         .set_proto(opte::api::ip::Protocol::UDP)
-        .set_local_port(opte::engine::geneve::GENEVE_PORT)
-        .to_desc();
+        .set_local_port(opte::engine::geneve::GENEVE_PORT);
 
     // TODO I'm able to remove these flows via flowadm while the
     // driver is still attached -- that's no good. Either find a way
@@ -968,28 +972,35 @@ fn create_underlay_port(
     // those.
 
     // We already know this string is valid.
-    let flow_name =
-        CString::new(format!("{}_xde", link_name).as_str()).unwrap();
+    // let flow_name =
+    // CString::new(format!("{}_xde", link_name).as_str()).unwrap();
 
     // TODO: fixup to correctly handle errors.
-    unsafe {
-        match mac::mac_link_flow_add(
-            link_id,
-            flow_name.as_ptr(),
-            &flow_desc,
-            &mac::MAC_RESOURCE_PROPS_DEF,
-        ) {
-            0 => {}
-            e => {
-                return Err(OpteError::System {
-                    errno: EFAULT,
-                    msg: format!(
-                        "mac_link_flow_add failed for {link_name}: {e}"
-                    ),
-                });
-            }
-        }
-    }
+    // unsafe {
+    //     match mac::mac_link_flow_add(
+    //         link_id,
+    //         flow_name.as_ptr(),
+    //         &flow_desc,
+    //         &mac::MAC_RESOURCE_PROPS_DEF,
+    //     ) {
+    //         0 => {}
+    //         e => {
+    //             return Err(OpteError::System {
+    //                 errno: EFAULT,
+    //                 msg: format!(
+    //                     "mac_link_flow_add failed for {link_name}: {e}"
+    //                 ),
+    //             });
+    //         }
+    //     }
+    // }
+    let fkey = flow_desc
+        .new_flow(format!("{link_name}_xde").as_str(), link_id)
+        .map_err(|e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("{e}"),
+        })?;
+    let flows = vec![fkey];
 
     // Setup promiscuous callback to receive all packets on this link.
     //
@@ -1029,6 +1040,7 @@ fn create_underlay_port(
     Ok(xde_underlay_port {
         name: link_name,
         mac: mh.get_mac_addr(),
+        flows,
         mh,
         mch,
         mph,
@@ -1180,6 +1192,10 @@ unsafe extern "C" fn xde_detach(
             // Clear all Rx paths
             u.mch.clear_rx();
 
+            // Drop our reference to any underlay flows before any other
+            // device state.
+            drop(u.flows);
+
             // We have a chain of refs here:
             //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
             //  2. `MacUnicastHandle` holds a ref to `MacClientHandle`, and
@@ -1207,8 +1223,6 @@ unsafe extern "C" fn xde_detach(
                 return DDI_FAILURE;
             }
             drop(u.mh);
-
-            // TODO: clear all device flows on `u`.
         }
     }
 

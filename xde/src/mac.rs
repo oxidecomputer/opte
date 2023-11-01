@@ -8,6 +8,8 @@
 //!
 //! NOTE: This module is re-exporting all of the sys definitions at
 //! the moment out of laziness.
+use crate::ip::datalink_id_t;
+
 pub use super::mac_sys::*;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -338,7 +340,7 @@ impl Drop for MacUnicastHandle {
 
 // TODO Move this somewhere else?
 #[derive(Clone, Default)]
-pub struct MacFlow {
+pub struct MacFlowDesc {
     mask: flow_mask_t,
     ip_ver: Option<u8>,
     proto: Option<opte::api::ip::Protocol>,
@@ -360,7 +362,7 @@ pub struct MacFlow {
 // For now my best bet is to use
 // transport={tcp|udp|sctp},local_port=port to classify on Geneve
 // packets.
-impl MacFlow {
+impl MacFlowDesc {
     pub fn new() -> Self {
         Default::default()
     }
@@ -387,10 +389,32 @@ impl MacFlow {
     pub fn to_desc(&self) -> flow_desc_t {
         flow_desc_t::from(self.clone())
     }
+
+    pub fn new_flow<'a>(
+        &'a self,
+        flow_name: &'a str,
+        link_id: datalink_id_t,
+    ) -> Result<MacFlow, FlowCreateError> {
+        let name = CString::new(flow_name)
+            .map_err(|_| FlowCreateError::InvalidFlowName(flow_name))?;
+        let desc = self.to_desc();
+
+        match unsafe {
+            mac_link_flow_add(
+                link_id,
+                name.as_ptr(),
+                &desc,
+                &MAC_RESOURCE_PROPS_DEF,
+            )
+        } {
+            0 => Ok(MacFlow { name }),
+            err => Err(FlowCreateError::CreateFailed(flow_name, err)),
+        }
+    }
 }
 
-impl From<MacFlow> for flow_desc_t {
-    fn from(mf: MacFlow) -> Self {
+impl From<MacFlowDesc> for flow_desc_t {
+    fn from(mf: MacFlowDesc) -> Self {
         let no_addr = IP_NO_ADDR;
         let fd_ipversion = mf.ip_ver.unwrap_or(0);
 
@@ -427,6 +451,40 @@ impl From<MacFlow> for flow_desc_t {
             fd_remote_port: 0,
             fd_dsfield: 0,
             fd_dsfield_mask: 0,
+        }
+    }
+}
+
+/// Errors while opening a MAC handle.
+#[derive(Debug)]
+pub enum FlowCreateError<'a> {
+    InvalidFlowName(&'a str),
+    CreateFailed(&'a str, i32),
+}
+
+impl fmt::Display for FlowCreateError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FlowCreateError::InvalidFlowName(flow) => {
+                write!(f, "invalid flow name: {flow}")
+            }
+            FlowCreateError::CreateFailed(flow, err) => {
+                write!(f, "mac_link_flow_add failed for {flow}: {err}")
+            }
+        }
+    }
+}
+
+/// Resource handle for a created Mac flow.
+#[derive(Debug)]
+pub struct MacFlow {
+    name: CString,
+}
+
+impl Drop for MacFlow {
+    fn drop(&mut self) {
+        unsafe {
+            mac_link_flow_remove(self.name.as_ptr());
         }
     }
 }

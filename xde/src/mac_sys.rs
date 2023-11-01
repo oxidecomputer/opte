@@ -169,6 +169,7 @@ extern "C" {
         flow_desc: *const flow_desc_t,
         mrp: *const mac_resource_props_t,
     ) -> c_int;
+    pub fn mac_link_flow_remove(flow_name: *const c_char) -> c_int;
 }
 
 #[repr(C)]
