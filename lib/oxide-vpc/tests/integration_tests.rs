@@ -998,7 +998,7 @@ fn unpack_and_verify_icmp(
             assert_eq!(IpAddr::from(meta.dst), dst_ip);
             assert_eq!(meta.proto, Protocol::ICMP);
 
-            unpack_and_verify_icmp4(&pkt, ident, seq_no, encapped, body_seg);
+            unpack_and_verify_icmp4(pkt, ident, seq_no, encapped, body_seg);
         }
         (IpAddr::Ip6(_), IpMeta::Ip6(meta)) => {
             assert_eq!(eth.ether_type, EtherType::Ipv6);
@@ -1007,7 +1007,7 @@ fn unpack_and_verify_icmp(
             assert_eq!(meta.proto, Protocol::ICMPv6);
 
             unpack_and_verify_icmp6(
-                &pkt, ident, seq_no, encapped, body_seg, meta.src, meta.dst,
+                pkt, ident, seq_no, encapped, body_seg, meta.src, meta.dst,
             );
         }
         (IpAddr::Ip4(_), ip6) => {
@@ -1167,7 +1167,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
         private_ip,
-        dst_ip.into(),
+        dst_ip,
         ident,
         seq_no,
         &data[..],

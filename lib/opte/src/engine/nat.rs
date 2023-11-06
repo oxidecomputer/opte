@@ -81,7 +81,7 @@ impl ActionDesc for NatDesc {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             Direction::Out => {
-                let ip = IpMod::new_src(self.external_ip.into());
+                let ip = IpMod::new_src(self.external_ip);
 
                 HdrTransform {
                     name: NAT_NAME.to_string(),
@@ -91,7 +91,7 @@ impl ActionDesc for NatDesc {
             }
 
             Direction::In => {
-                let ip = IpMod::new_dst(self.priv_ip.into());
+                let ip = IpMod::new_dst(self.priv_ip);
 
                 HdrTransform {
                     name: NAT_NAME.to_string(),
