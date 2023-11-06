@@ -11,8 +11,6 @@ use super::headers::IpMod;
 use super::headers::UlpGenericModify;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
-use super::ip4::Ipv4Mod;
-use super::ip6::Ipv6Mod;
 use super::packet::BodyTransform;
 use super::packet::InnerFlowId;
 use super::packet::Packet;
@@ -391,15 +389,12 @@ pub struct SNatDesc<T: ConcreteIpAddr> {
 
 pub const SNAT_NAME: &str = "SNAT";
 
-impl ActionDesc for SNatDesc<Ipv4Addr> {
+impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             // Outbound traffic needs its source IP and source port
             Direction::Out => {
-                let ip = IpMod::from(Ipv4Mod {
-                    src: Some(self.nat.ip),
-                    ..Default::default()
-                });
+                let ip = IpMod::new_src(self.nat.ip.into());
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
@@ -419,63 +414,8 @@ impl ActionDesc for SNatDesc<Ipv4Addr> {
             // destination port mapped back to the private values that
             // the guest expects to see.
             Direction::In => {
-                let ip = IpMod::from(Ipv4Mod {
-                    dst: Some(self.priv_ip),
-                    ..Default::default()
-                });
-                HdrTransform {
-                    name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
-                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
-                        generic: UlpGenericModify {
-                            dst_port: Some(self.priv_port),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }
-            }
-        }
-    }
+                let ip = IpMod::new_dst(self.priv_ip.into());
 
-    fn name(&self) -> &str {
-        SNAT_NAME
-    }
-}
-
-impl ActionDesc for SNatDesc<Ipv6Addr> {
-    fn gen_ht(&self, dir: Direction) -> HdrTransform {
-        match dir {
-            // Outbound traffic needs its source IP and source port
-            Direction::Out => {
-                let ip = IpMod::from(Ipv6Mod {
-                    src: Some(self.nat.ip),
-                    ..Default::default()
-                });
-
-                HdrTransform {
-                    name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
-                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
-                        generic: UlpGenericModify {
-                            src_port: Some(self.nat.port),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }
-            }
-
-            // Inbound traffic needs its destination IP and
-            // destination port mapped back to the private values that
-            // the guest expects to see.
-            Direction::In => {
-                let ip = IpMod::from(Ipv6Mod {
-                    dst: Some(self.priv_ip),
-                    ..Default::default()
-                });
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
                     inner_ip: HeaderAction::Modify(ip, PhantomData),
@@ -513,16 +453,13 @@ pub struct SNatIcmpEchoDesc<T: ConcreteIpAddr> {
 
 pub const SNAT_ICMP_ECHO_NAME: &str = "SNAT_ICMP_ECHO";
 
-impl ActionDesc for SNatIcmpEchoDesc<Ipv4Addr> {
+impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             // Outbound traffic needs its source IP rewritten, and its
             // 'source port' placed into the ICMP echo ID field.
             Direction::Out => {
-                let ip = IpMod::from(Ipv4Mod {
-                    src: Some(self.nat.ip),
-                    ..Default::default()
-                });
+                let ip = IpMod::new_src(self.nat.ip.into());
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
@@ -539,69 +476,8 @@ impl ActionDesc for SNatIcmpEchoDesc<Ipv4Addr> {
             // destination port mapped back to the private values that
             // the guest expects to see.
             Direction::In => {
-                let ip = IpMod::from(Ipv4Mod {
-                    dst: Some(self.priv_ip),
-                    ..Default::default()
-                });
-                HdrTransform {
-                    name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
-                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
-                        icmp_id: Some(self.echo_ident),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }
-            }
-        }
-    }
+                let ip = IpMod::new_dst(self.priv_ip.into());
 
-    // SNAT needs to generate a payload transform for ICMP traffic in
-    // order to treat the Echo Identifier as a psuedo ULP port.
-    fn gen_bt(
-        &self,
-        _dir: Direction,
-        _meta: &PacketMeta,
-        _payload_segs: &[&[u8]],
-    ) -> Result<Option<Box<dyn BodyTransform>>, GenBtError> {
-        Ok(None)
-    }
-
-    fn name(&self) -> &str {
-        SNAT_ICMP_ECHO_NAME
-    }
-}
-
-impl ActionDesc for SNatIcmpEchoDesc<Ipv6Addr> {
-    fn gen_ht(&self, dir: Direction) -> HdrTransform {
-        match dir {
-            // Outbound traffic needs its source IP rewritten, and its
-            // 'source port' placed into the ICMP echo ID field.
-            Direction::Out => {
-                let ip = IpMod::from(Ipv6Mod {
-                    src: Some(self.nat.ip),
-                    ..Default::default()
-                });
-
-                HdrTransform {
-                    name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
-                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
-                        icmp_id: Some(self.nat.port),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }
-            }
-
-            // Inbound traffic needs its destination IP and
-            // destination port mapped back to the private values that
-            // the guest expects to see.
-            Direction::In => {
-                let ip = IpMod::from(Ipv6Mod {
-                    dst: Some(self.priv_ip),
-                    ..Default::default()
-                });
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
                     inner_ip: HeaderAction::Modify(ip, PhantomData),

@@ -8,8 +8,6 @@
 
 use super::headers::HeaderAction;
 use super::headers::IpMod;
-use super::ip4::Ipv4Mod;
-use super::ip6::Ipv6Mod;
 use super::packet::InnerFlowId;
 use super::packet::Packet;
 use super::packet::Parsed;
@@ -83,16 +81,7 @@ impl ActionDesc for NatDesc {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             Direction::Out => {
-                let ip = match self.external_ip {
-                    IpAddr::Ip4(ipv4) => IpMod::from(Ipv4Mod {
-                        src: Some(ipv4),
-                        ..Default::default()
-                    }),
-                    IpAddr::Ip6(ipv6) => IpMod::from(Ipv6Mod {
-                        src: Some(ipv6),
-                        ..Default::default()
-                    }),
-                };
+                let ip = IpMod::new_src(self.external_ip.into());
 
                 HdrTransform {
                     name: NAT_NAME.to_string(),
@@ -102,16 +91,8 @@ impl ActionDesc for NatDesc {
             }
 
             Direction::In => {
-                let ip = match self.priv_ip {
-                    IpAddr::Ip4(ipv4) => IpMod::from(Ipv4Mod {
-                        dst: Some(ipv4),
-                        ..Default::default()
-                    }),
-                    IpAddr::Ip6(ipv6) => IpMod::from(Ipv6Mod {
-                        dst: Some(ipv6),
-                        ..Default::default()
-                    }),
-                };
+                let ip = IpMod::new_dst(self.priv_ip.into());
+
                 HdrTransform {
                     name: NAT_NAME.to_string(),
                     inner_ip: HeaderAction::Modify(ip, PhantomData),
