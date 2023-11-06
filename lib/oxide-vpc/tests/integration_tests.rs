@@ -45,6 +45,7 @@ use opte::engine::packet::Parsed;
 use opte::engine::port::ProcessError;
 use opte::engine::tcp::TcpState;
 use opte::engine::udp::UdpMeta;
+use opte::engine::Direction;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::VpcCfg;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
@@ -948,6 +949,76 @@ fn guest_to_internet_ipv6() {
     pcap_guest.add_pkt(&pkt1);
 }
 
+#[derive(Debug)]
+struct IcmpSnatParams {
+    private_ip: IpAddr,
+    public_ip: IpAddr,
+    partner_ip: IpAddr,
+    icmp_id: u16,
+    snat_port: u16,
+}
+
+fn unpack_and_verify_icmp(
+    pkt: &Packet<Parsed>,
+    cfg: &VpcCfg,
+    params: &IcmpSnatParams,
+    dir: Direction,
+    seq_no: u16,
+    body_seg: usize,
+) {
+    let meta = pkt.meta();
+
+    let (src_eth, dst_eth, src_ip, dst_ip, encapped, ident) = match dir {
+        Direction::Out => (
+            cfg.guest_mac,
+            cfg.boundary_services.mac,
+            params.public_ip,
+            params.partner_ip,
+            true,
+            params.snat_port,
+        ),
+        Direction::In => (
+            cfg.gateway_mac,
+            cfg.guest_mac,
+            params.partner_ip,
+            params.private_ip,
+            false,
+            params.icmp_id,
+        ),
+    };
+
+    let eth = meta.inner.ether;
+    assert_eq!(eth.src, src_eth);
+    assert_eq!(eth.dst, dst_eth);
+
+    match (dst_ip, meta.inner.ip.as_ref().unwrap()) {
+        (IpAddr::Ip4(_), IpMeta::Ip4(meta)) => {
+            assert_eq!(eth.ether_type, EtherType::Ipv4);
+            assert_eq!(IpAddr::from(meta.src), src_ip);
+            assert_eq!(IpAddr::from(meta.dst), dst_ip);
+            assert_eq!(meta.proto, Protocol::ICMP);
+
+            unpack_and_verify_icmp4(&pkt, ident, seq_no, encapped, body_seg);
+        }
+        (IpAddr::Ip6(_), IpMeta::Ip6(meta)) => {
+            assert_eq!(eth.ether_type, EtherType::Ipv6);
+            assert_eq!(IpAddr::from(meta.src), src_ip);
+            assert_eq!(IpAddr::from(meta.dst), dst_ip);
+            assert_eq!(meta.proto, Protocol::ICMPv6);
+
+            unpack_and_verify_icmp6(
+                &pkt, ident, seq_no, encapped, body_seg, meta.src, meta.dst,
+            );
+        }
+        (IpAddr::Ip4(_), ip6) => {
+            panic!("expected inner IPv4 metadata, got IPv6: {:?}", ip6)
+        }
+        (IpAddr::Ip6(_), ip4) => {
+            panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4)
+        }
+    }
+}
+
 fn unpack_and_verify_icmp4(
     pkt: &Packet<Parsed>,
     expected_ident: u16,
@@ -1002,7 +1073,7 @@ fn unpack_and_verify_icmp6(
     assert_eq!(icmp_offset, tgt_offset);
     assert_eq!(pkt.body_seg(), body_seg);
 
-    // Because we treat ICMPv4 as a full-fledged ULP, we need to
+    // Because we treat ICMPv6 as a full-fledged ULP, we need to
     // unsplit the emitted header from the body.
     let pkt_bytes = pkt.all_bytes();
     let icmp = Icmpv6Packet::new_checked(&pkt_bytes[icmp_offset..][..pay_len])
@@ -1021,9 +1092,6 @@ fn unpack_and_verify_icmp6(
     let mut icmp2 = Icmpv6Packet::new_unchecked(&mut new_buf[..]);
     parsy.emit(&src_ip, &dst_ip, &mut icmp2, &emit_caps);
 
-    println!("{pkt_bytes:x?}",);
-    println!("{new_buf:x?}",);
-
     assert!(icmp.verify_checksum(&src_ip, &dst_ip));
     assert_eq!(icmp.echo_ident(), expected_ident);
     assert_eq!(icmp.echo_seq_no(), seq_no);
@@ -1033,261 +1101,29 @@ fn unpack_and_verify_icmp6(
 // SNAT.
 #[test]
 fn snat_icmp4_echo_rewrite() {
-    let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
-    g1.port.start();
-    set!(g1, "port_state=running");
     let dst_ip: Ipv4Addr = "45.55.45.205".parse().unwrap();
-    let ident = 7;
-    let mut seq_no = 777;
-    let data = b"reunion\0";
-
-    // Add router entry that allows g1 to route to internet.
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
-    )
-    .unwrap();
-    incr!(g1, ["epoch", "router.rules.out"]);
-    let mapped_port = g1_cfg.snat().ports.clone().next_back().unwrap();
-
-    // ================================================================
-    // Verify echo request rewrite.
-    // ================================================================
-    let mut pkt1 = gen_icmp_echo_req(
-        g1_cfg.guest_mac,
-        g1_cfg.gateway_mac,
-        g1_cfg.ipv4().private_ip.into(),
-        dst_ip.into(),
-        ident,
-        seq_no,
-        &data[..],
-        2,
-    );
-
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    incr!(
-        g1,
-        [
-            "firewall.flows.out, firewall.flows.in",
-            "nat.flows.out, nat.flows.in",
-            "uft.out",
-            "stats.port.out_modified, stats.port.out_uft_miss",
-        ]
-    );
-
-    let meta = pkt1.meta();
-
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, g1_cfg.guest_mac);
-    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
-    assert_eq!(eth.ether_type, EtherType::Ipv4);
-
-    match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip4(ip4) => {
-            assert_eq!(ip4.src, g1_cfg.snat().external_ip);
-            assert_eq!(ip4.dst, dst_ip);
-            assert_eq!(ip4.proto, Protocol::ICMP);
-        }
-
-        ip6 => panic!("expected inner IPv4 metadata, got IPv6: {:?}", ip6),
-    }
-
-    unpack_and_verify_icmp4(&pkt1, mapped_port, seq_no, true, 0);
-
-    // ================================================================
-    // Verify echo reply rewrite.
-    // ================================================================
-    let mut pkt2 = gen_icmp_echo_reply(
-        g1_cfg.boundary_services.mac,
-        g1_cfg.guest_mac,
-        dst_ip.into(),
-        g1_cfg.snat().external_ip.into(),
-        mapped_port,
-        seq_no,
-        &data[..],
-        3,
-    );
-    let bsvc_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.boundary_services.vni,
-    };
-    let g1_phys = TestIpPhys {
-        ip: g1_cfg.phys_ip,
-        mac: g1_cfg.guest_mac,
-        vni: g1_cfg.vni,
-    };
-    pkt2 = encap_external(pkt2, bsvc_phys, g1_phys);
-
-    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
-    let meta = pkt2.meta();
-
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, g1_cfg.gateway_mac);
-    assert_eq!(eth.dst, g1_cfg.guest_mac);
-    assert_eq!(eth.ether_type, EtherType::Ipv4);
-
-    match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip4(ip4) => {
-            assert_eq!(ip4.src, dst_ip);
-            assert_eq!(ip4.dst, g1_cfg.ipv4().private_ip);
-            assert_eq!(ip4.proto, Protocol::ICMP);
-        }
-
-        ip6 => panic!("expected inner IPv4 metadata, got IPv6: {:?}", ip6),
-    }
-
-    unpack_and_verify_icmp4(&pkt2, ident, seq_no, false, 0);
-
-    // ================================================================
-    // Send ICMP Echo Req a second time. We want to verify that a) the
-    // UFT entry is used and b) that it runs the attached body
-    // transformation.
-    // ================================================================
-    seq_no += 1;
-    let mut pkt3 = gen_icmp_echo_req(
-        g1_cfg.guest_mac,
-        g1_cfg.gateway_mac,
-        g1_cfg.ipv4().private_ip.into(),
-        dst_ip.into(),
-        ident,
-        seq_no,
-        &data[..],
-        1,
-    );
-
-    assert_eq!(g1.port.stats_snap().out_uft_hit, 0);
-    let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
-    let meta = pkt3.meta();
-
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, g1_cfg.guest_mac);
-    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
-    assert_eq!(eth.ether_type, EtherType::Ipv4);
-
-    match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip4(ip4) => {
-            assert_eq!(ip4.src, g1_cfg.snat().external_ip);
-            assert_eq!(ip4.dst, dst_ip);
-            assert_eq!(ip4.proto, Protocol::ICMP);
-        }
-
-        ip6 => panic!("expected inner IPv4 metadata, got IPv6: {:?}", ip6),
-    }
-
-    assert_eq!(g1.port.stats_snap().out_uft_hit, 1);
-    unpack_and_verify_icmp4(&pkt3, mapped_port, seq_no, true, 1);
-
-    // ================================================================
-    // Process ICMP Echo Reply a second time. Once again, this time we
-    // want to verify that the body transformation comes from the UFT
-    // entry.
-    // ================================================================
-    let mut pkt4 = gen_icmp_echo_reply(
-        g1_cfg.boundary_services.mac,
-        g1_cfg.guest_mac,
-        dst_ip.into(),
-        g1_cfg.snat().external_ip.into(),
-        mapped_port,
-        seq_no,
-        &data[..],
-        2,
-    );
-
-    assert_eq!(g1.port.stats_snap().in_uft_hit, 0);
-    let res = g1.port.process(In, &mut pkt4, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
-    let meta = pkt4.meta();
-
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, g1_cfg.gateway_mac);
-    assert_eq!(eth.dst, g1_cfg.guest_mac);
-    assert_eq!(eth.ether_type, EtherType::Ipv4);
-
-    match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip4(ip4) => {
-            assert_eq!(ip4.src, dst_ip);
-            assert_eq!(ip4.dst, g1_cfg.ipv4().private_ip);
-            assert_eq!(ip4.proto, Protocol::ICMP);
-        }
-
-        ip6 => panic!("expected inner IPv4 metadata, got IPv6: {:?}", ip6),
-    }
-
-    unpack_and_verify_icmp4(&pkt4, ident, seq_no, false, 0);
-    assert_eq!(g1.port.stats_snap().in_uft_hit, 1);
-
-    // ================================================================
-    // Insert a new packet along the same S/D pair: this should occupy
-    // a new port and install a new rule for matching.
-    // ================================================================
-    let new_port = mapped_port - 1;
-    let ident2 = 8;
-    let mut pkt5 = gen_icmp_echo_req(
-        g1_cfg.guest_mac,
-        g1_cfg.gateway_mac,
-        g1_cfg.ipv4().private_ip.into(),
-        dst_ip.into(),
-        ident2,
-        seq_no,
-        &data[..],
-        2,
-    );
-
-    let res = g1.port.process(Out, &mut pkt5, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-    incr!(
-        g1,
-        [
-            "firewall.flows.out, firewall.flows.in",
-            "nat.flows.out, nat.flows.in",
-            "uft.out",
-            "stats.port.out_modified, stats.port.out_uft_miss",
-        ]
-    );
-
-    let meta = pkt5.meta();
-
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, g1_cfg.guest_mac);
-    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
-    assert_eq!(eth.ether_type, EtherType::Ipv4);
-
-    match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip4(ip4) => {
-            assert_eq!(ip4.src, g1_cfg.snat().external_ip);
-            assert_eq!(ip4.dst, dst_ip);
-            assert_eq!(ip4.proto, Protocol::ICMP);
-        }
-
-        ip6 => panic!("expected inner IPv4 metadata, got IPv6: {:?}", ip6),
-    }
-
-    unpack_and_verify_icmp4(&pkt5, new_port, seq_no, true, 0);
+    snat_icmp_shared_echo_rewrite(dst_ip.into());
 }
 
-// Verify that an ICMP Echo request has its identifier rewritten by
+// Verify that an ICMPv6 Echo request has its identifier rewritten by
 // SNAT.
 #[test]
 fn snat_icmp6_echo_rewrite() {
+    let dst_ip: Ipv6Addr = "2001:4860:4860::8888".parse().unwrap();
+    snat_icmp_shared_echo_rewrite(dst_ip.into());
+}
+
+fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
     let g1_cfg = g1_cfg();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
-    let dst_ip: Ipv6Addr = "2001:4860:4860::8888".parse().unwrap();
+
     let ident = 7;
     let mut seq_no = 777;
     let data = b"reunion\0";
 
-    // Add router entry that allows g1 to route to internet.
+    // Add router entries that allow g1 to route to internet.
     router::add_entry(
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
@@ -1295,7 +1131,34 @@ fn snat_icmp6_echo_rewrite() {
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
-    let mapped_port = g1_cfg.snat6().ports.clone().next_back().unwrap();
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    let (private_ip, public_ip, mapped_port) = match dst_ip {
+        IpAddr::Ip4(_) => (
+            g1_cfg.ipv4().private_ip.into(),
+            g1_cfg.snat().external_ip.into(),
+            g1_cfg.snat().ports.clone().next_back().unwrap(),
+        ),
+        IpAddr::Ip6(_) => (
+            g1_cfg.ipv6().private_ip.into(),
+            g1_cfg.snat6().external_ip.into(),
+            g1_cfg.snat6().ports.clone().next_back().unwrap(),
+        ),
+    };
+
+    let params = IcmpSnatParams {
+        private_ip,
+        public_ip,
+        partner_ip: dst_ip,
+        icmp_id: ident,
+        snat_port: mapped_port,
+    };
 
     // ================================================================
     // Verify echo request rewrite.
@@ -1303,7 +1166,7 @@ fn snat_icmp6_echo_rewrite() {
     let mut pkt1 = gen_icmp_echo_req(
         g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
-        g1_cfg.ipv6().private_ip.into(),
+        private_ip,
         dst_ip.into(),
         ident,
         seq_no,
@@ -1323,32 +1186,7 @@ fn snat_icmp6_echo_rewrite() {
         ]
     );
 
-    let meta = pkt1.meta();
-
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, g1_cfg.guest_mac);
-    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
-    assert_eq!(eth.ether_type, EtherType::Ipv6);
-
-    match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip6(ip6) => {
-            assert_eq!(ip6.src, g1_cfg.snat6().external_ip);
-            assert_eq!(ip6.dst, dst_ip);
-            assert_eq!(ip6.proto, Protocol::ICMPv6);
-        }
-
-        ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
-    }
-
-    unpack_and_verify_icmp6(
-        &pkt1,
-        mapped_port,
-        seq_no,
-        true,
-        0,
-        g1_cfg.snat6().external_ip,
-        dst_ip,
-    );
+    unpack_and_verify_icmp(&pkt1, &g1_cfg, &params, Out, seq_no, 0);
 
     // ================================================================
     // Verify echo reply rewrite.
@@ -1356,8 +1194,8 @@ fn snat_icmp6_echo_rewrite() {
     let mut pkt2 = gen_icmp_echo_reply(
         g1_cfg.boundary_services.mac,
         g1_cfg.guest_mac,
-        dst_ip.into(),
-        g1_cfg.snat6().external_ip.into(),
+        dst_ip,
+        public_ip,
         mapped_port,
         seq_no,
         &data[..],
@@ -1378,44 +1216,20 @@ fn snat_icmp6_echo_rewrite() {
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
-    let meta = pkt2.meta();
 
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, g1_cfg.gateway_mac);
-    assert_eq!(eth.dst, g1_cfg.guest_mac);
-    assert_eq!(eth.ether_type, EtherType::Ipv6);
-
-    match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip6(ip6) => {
-            assert_eq!(ip6.src, dst_ip);
-            assert_eq!(ip6.dst, g1_cfg.ipv6().private_ip);
-            assert_eq!(ip6.proto, Protocol::ICMPv6);
-        }
-
-        ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
-    }
-
-    unpack_and_verify_icmp6(
-        &pkt2,
-        ident,
-        seq_no,
-        false,
-        0,
-        dst_ip,
-        g1_cfg.ipv6().private_ip,
-    );
+    unpack_and_verify_icmp(&pkt2, &g1_cfg, &params, In, seq_no, 0);
 
     // ================================================================
     // Send ICMP Echo Req a second time. We want to verify that a) the
-    // UFT entry is used and b) that it runs the attached body
+    // UFT entry is used and b) that it runs the attached header
     // transformation.
     // ================================================================
     seq_no += 1;
     let mut pkt3 = gen_icmp_echo_req(
         g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
-        g1_cfg.ipv6().private_ip.into(),
-        dst_ip.into(),
+        private_ip,
+        dst_ip,
         ident,
         seq_no,
         &data[..],
@@ -1426,33 +1240,9 @@ fn snat_icmp6_echo_rewrite() {
     let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
-    let meta = pkt3.meta();
-
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, g1_cfg.guest_mac);
-    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
-    assert_eq!(eth.ether_type, EtherType::Ipv6);
-
-    match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip6(ip6) => {
-            assert_eq!(ip6.src, g1_cfg.snat6().external_ip);
-            assert_eq!(ip6.dst, dst_ip);
-            assert_eq!(ip6.proto, Protocol::ICMPv6);
-        }
-
-        ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
-    }
 
     assert_eq!(g1.port.stats_snap().out_uft_hit, 1);
-    unpack_and_verify_icmp6(
-        &pkt3,
-        mapped_port,
-        seq_no,
-        true,
-        1,
-        g1_cfg.snat6().external_ip,
-        dst_ip,
-    );
+    unpack_and_verify_icmp(&pkt3, &g1_cfg, &params, Out, seq_no, 1);
 
     // ================================================================
     // Process ICMP Echo Reply a second time. Once again, this time we
@@ -1462,8 +1252,8 @@ fn snat_icmp6_echo_rewrite() {
     let mut pkt4 = gen_icmp_echo_reply(
         g1_cfg.boundary_services.mac,
         g1_cfg.guest_mac,
-        dst_ip.into(),
-        g1_cfg.snat6().external_ip.into(),
+        dst_ip,
+        public_ip,
         mapped_port,
         seq_no,
         &data[..],
@@ -1474,46 +1264,23 @@ fn snat_icmp6_echo_rewrite() {
     let res = g1.port.process(In, &mut pkt4, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
-    let meta = pkt4.meta();
 
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, g1_cfg.gateway_mac);
-    assert_eq!(eth.dst, g1_cfg.guest_mac);
-    assert_eq!(eth.ether_type, EtherType::Ipv6);
-
-    match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip6(ip6) => {
-            assert_eq!(ip6.src, dst_ip);
-            assert_eq!(ip6.dst, g1_cfg.ipv6().private_ip);
-            assert_eq!(ip6.proto, Protocol::ICMPv6);
-        }
-
-        ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
-    }
-
-    unpack_and_verify_icmp6(
-        &pkt4,
-        ident,
-        seq_no,
-        false,
-        0,
-        dst_ip,
-        g1_cfg.ipv6().private_ip,
-    );
     assert_eq!(g1.port.stats_snap().in_uft_hit, 1);
+    unpack_and_verify_icmp(&pkt4, &g1_cfg, &params, In, seq_no, 0);
 
     // ================================================================
     // Insert a new packet along the same S/D pair: this should occupy
     // a new port and install a new rule for matching.
     // ================================================================
-    let new_port = mapped_port - 1;
-    let ident2 = 8;
+    let new_params =
+        IcmpSnatParams { icmp_id: 8, snat_port: mapped_port - 1, ..params };
+
     let mut pkt5 = gen_icmp_echo_req(
         g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
-        g1_cfg.ipv6().private_ip.into(),
-        dst_ip.into(),
-        ident2,
+        private_ip,
+        dst_ip,
+        new_params.icmp_id,
         seq_no,
         &data[..],
         2,
@@ -1531,32 +1298,7 @@ fn snat_icmp6_echo_rewrite() {
         ]
     );
 
-    let meta = pkt5.meta();
-
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, g1_cfg.guest_mac);
-    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
-    assert_eq!(eth.ether_type, EtherType::Ipv6);
-
-    match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip6(ip6) => {
-            assert_eq!(ip6.src, g1_cfg.snat6().external_ip);
-            assert_eq!(ip6.dst, dst_ip);
-            assert_eq!(ip6.proto, Protocol::ICMPv6);
-        }
-
-        ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
-    }
-
-    unpack_and_verify_icmp6(
-        &pkt5,
-        new_port,
-        seq_no,
-        true,
-        0,
-        g1_cfg.snat6().external_ip,
-        dst_ip,
-    );
+    unpack_and_verify_icmp(&pkt5, &g1_cfg, &new_params, Out, seq_no, 0);
 }
 
 #[test]
