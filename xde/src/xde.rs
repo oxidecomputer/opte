@@ -217,7 +217,7 @@ struct xde_underlay_port {
     muh: MacUnicastHandle,
 
     /// MAC promiscuous handle for receiving packets on the underlay link.
-    mph: MacPromiscHandle,
+    mph: Option<MacPromiscHandle>,
 }
 
 struct XdeState {
@@ -937,7 +937,7 @@ fn create_underlay_port(
 
     // Get a mac client handle as well.
     //
-    let oflags = MacOpenFlags::NONE;
+    let oflags = MacOpenFlags::NONE;//MULTI_PRIMARY;// MacOpenFlags::NONE;
     let mch = MacClientHandle::open(&mh, Some(mc_name), oflags, 0)
         .map(Arc::new)
         .map_err(|e| OpteError::System {
@@ -1006,16 +1006,31 @@ fn create_underlay_port(
     //
     // We specify `MAC_PROMISC_FLAGS_NO_TX_LOOP` here to skip receiving copies
     // of outgoing packets we sent ourselves.
-    let mph = mch
-        .add_promisc(
-            mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-            xde_rx,
-            mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
-        )
-        .map_err(|e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("mac_promisc_add failed for {link_name}: {e}"),
-        })?;
+    // let mph = Some(mch
+    //     .add_promisc(
+    //         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
+    //         // mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_FILTERED,
+    //         xde_rx,
+    //         mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
+    //     )
+    //     .map_err(|e| OpteError::System {
+    //         errno: EFAULT,
+    //         msg: format!("mac_promisc_add failed for {link_name}: {e}"),
+    //     })?);
+    let mph = None;
+
+    /*
+     * TODO: this - curently promisc RX is needed to get packets into the xde
+     * device. Maybehapps setting something like MAC_OPEN_FLAGS_MULTI_PRIMARY
+     * and doing a mac_unicast_add with MAC_UNICAST_PRIMARY would work?.
+     */
+    // Ah crap these need to come before unicast ass since it calls 
+    // mac_client_datapath_setup
+    // How does this compare to the above?
+    // mch.rx_set(xde_rx);
+    // mch.rx_bypass_disable();
+    mch.set_flow_cb(xde_rx);
+
 
     // Set up a unicast callback. The MAC address here is a sentinel value with
     // nothing real behind it. This is why we picked the zero value in the Oxide
@@ -1028,14 +1043,6 @@ fn create_underlay_port(
         errno: EFAULT,
         msg: format!("mac_unicast_add failed for {link_name}: {e}"),
     })?;
-
-    /*
-     * TODO: this - curently promisc RX is needed to get packets into the xde
-     * device. Maybehapps setting something like MAC_OPEN_FLAGS_MULTI_PRIMARY
-     * and doing a mac_unicast_add with MAC_UNICAST_PRIMARY would work?.
-     */
-    // How does this compare to the above?
-    // mch.rx_set(xde_rx);
 
     Ok(xde_underlay_port {
         name: link_name,

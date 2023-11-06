@@ -131,7 +131,7 @@ extern "C" {
     pub fn mac_rx_barrier(mch: *const mac_client_handle);
     pub fn mac_rx_set(
         mch: *const mac_client_handle,
-        rx_fn: mac_rx_fn,
+        rx_fn: Option<mac_rx_fn>,
         arg: *mut c_void,
     );
     pub fn mac_rx_clear(mch: *const mac_client_handle);
@@ -170,6 +170,14 @@ extern "C" {
         mrp: *const mac_resource_props_t,
     ) -> c_int;
     pub fn mac_link_flow_remove(flow_name: *const c_char) -> c_int;
+
+    // void mac_rx_bypass_enable(mac_client_handle_t mch)
+    // void mac_rx_bypass_disable(mac_client_handle_t mch)
+    pub fn mac_rx_bypass_enable(mch: *mut mac_client_handle);
+    pub fn mac_rx_bypass_disable(mch: *mut mac_client_handle);
+
+    // void mac_client_set_flow_cb(mac_client_handle_t mch, mac_rx_t func, void *arg1)
+    pub fn mac_client_set_flow_cb(mch: *mut mac_client_handle, rx_fn: Option<mac_rx_fn>, arg: *mut c_void);
 }
 
 #[repr(C)]

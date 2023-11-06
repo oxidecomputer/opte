@@ -107,6 +107,12 @@ bitflags! {
     // For now we only include flags currently used by consumers.
     pub struct MacOpenFlags: u16 {
         const NONE = 0;
+        const IS_VNIC = MAC_OPEN_FLAGS_IS_VNIC;
+        const EXCLUSIVE = MAC_OPEN_FLAGS_EXCLUSIVE;
+        const IS_AGGR_PORT = MAC_OPEN_FLAGS_IS_AGGR_PORT;
+        const SHARES_DESIRED = MAC_OPEN_FLAGS_SHARES_DESIRED;
+        const USE_DATALINK_NAME = MAC_OPEN_FLAGS_USE_DATALINK_NAME;
+        const MULTI_PRIMARY = MAC_OPEN_FLAGS_MULTI_PRIMARY;
         const NO_UNICAST_ADDR = MAC_OPEN_FLAGS_NO_UNICAST_ADDR;
     }
 }
@@ -188,6 +194,7 @@ impl MacClientHandle {
                 self.mch,
                 ether.as_mut_ptr(),
                 0,
+                // MAC_UNICAST_PRIMARY | MAC_UNICAST_NODUPCHECK,
                 &mut muh,
                 0,
                 &mut diag,
@@ -286,8 +293,30 @@ impl MacClientHandle {
 
     /// TODO: document what's happening here.
     /// TODO: error conditions?
-    pub fn rx_set(&self, promisc_fn: mac_rx_fn) {
-        unsafe { mac_rx_set(self.mch, promisc_fn, ptr::null_mut()) }
+    pub fn rx_set(self: &Arc<Self>, promisc_fn: mac_rx_fn) {
+        let mch = self.clone();
+        let arg = Arc::as_ptr(&mch) as *mut c_void;
+        unsafe { mac_rx_set(self.mch, Some(promisc_fn), arg) }
+        // unsafe { mac_rx_set(self.mch, None, arg) }
+    }
+
+    pub fn set_flow_cb(self: &Arc<Self>, promisc_fn: mac_rx_fn) {
+        let mch = self.clone();
+        let arg = Arc::as_ptr(&mch) as *mut c_void;
+        unsafe { mac_client_set_flow_cb(self.mch, Some(promisc_fn), arg) }
+        // unsafe { mac_client_set_flow_cb(self.mch, None, arg) }
+    }
+
+    /// TODO: document what's happening here.
+    /// TODO: error conditions?
+    pub fn rx_bypass_disable(&self) {
+        unsafe { mac_rx_bypass_disable(self.mch) }
+    }
+
+    /// TODO: document what's happening here.
+    /// TODO: error conditions?
+    pub fn rx_bypass_enable(&self) {
+        unsafe { mac_rx_bypass_enable(self.mch) }
     }
 }
 
