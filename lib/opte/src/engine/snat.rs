@@ -246,9 +246,8 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
                 icmp6.echo_id()
             }
             _ => Err(GenDescError::Unexpected {
-                msg:
-                    "Mistakenly called gen_icmp_desc on non Protocol::ICMP(v6)."
-                        .to_string(),
+                msg: "Mistakenly called gen_icmp_desc on non ICMP(v6)."
+                    .to_string(),
             })?,
         }
         .ok_or(GenDescError::Unexpected {
@@ -403,7 +402,7 @@ pub struct SNatIcmpEchoDesc<T: ConcreteIpAddr> {
 pub const SNAT_ICMP_ECHO_NAME: &str = "SNAT_ICMP_ECHO";
 
 impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
-    // SNAT needs to generate a payload transform for ICMP traffic in
+    // SNAT needs to generate an additional transform for ICMP traffic in
     // order to treat the Echo Identifier as a psuedo ULP port.
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
