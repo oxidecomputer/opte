@@ -1035,17 +1035,6 @@ fn unpack_and_verify_icmp4(
     // unsplit the emitted header from the body.
     let pkt_bytes = pkt.all_bytes();
     let icmp = Icmpv4Packet::new_checked(&pkt_bytes[icmp_offset..]).unwrap();
-    let parsy = Icmpv4Repr::parse(
-        &icmp,
-        &smoltcp::phy::ChecksumCapabilities::ignored(),
-    )
-    .unwrap();
-
-    let mut emit_caps = smoltcp::phy::ChecksumCapabilities::ignored();
-    emit_caps.icmpv4 = smoltcp::phy::Checksum::Both;
-    let mut new_buf = vec![0; pkt_bytes.len() - icmp_offset];
-    let mut icmp2 = Icmpv4Packet::new_unchecked(&mut new_buf[..]);
-    parsy.emit(&mut icmp2, &emit_caps);
 
     assert!(icmp.verify_checksum());
     assert_eq!(icmp.echo_ident(), expected_ident);
@@ -1078,19 +1067,6 @@ fn unpack_and_verify_icmp6(
     let pkt_bytes = pkt.all_bytes();
     let icmp = Icmpv6Packet::new_checked(&pkt_bytes[icmp_offset..][..pay_len])
         .unwrap();
-    let parsy = Icmpv6Repr::parse(
-        &src_ip,
-        &dst_ip,
-        &icmp,
-        &smoltcp::phy::ChecksumCapabilities::ignored(),
-    )
-    .unwrap();
-
-    let mut emit_caps = smoltcp::phy::ChecksumCapabilities::ignored();
-    emit_caps.icmpv6 = smoltcp::phy::Checksum::Both;
-    let mut new_buf = vec![0; pay_len];
-    let mut icmp2 = Icmpv6Packet::new_unchecked(&mut new_buf[..]);
-    parsy.emit(&src_ip, &dst_ip, &mut icmp2, &emit_caps);
 
     assert!(icmp.verify_checksum(&src_ip, &dst_ip));
     assert_eq!(icmp.echo_ident(), expected_ident);
@@ -1101,16 +1077,14 @@ fn unpack_and_verify_icmp6(
 // SNAT.
 #[test]
 fn snat_icmp4_echo_rewrite() {
-    let dst_ip: Ipv4Addr = "45.55.45.205".parse().unwrap();
-    snat_icmp_shared_echo_rewrite(dst_ip.into());
+    snat_icmp_shared_echo_rewrite("45.55.45.205".parse().unwrap());
 }
 
 // Verify that an ICMPv6 Echo request has its identifier rewritten by
 // SNAT.
 #[test]
 fn snat_icmp6_echo_rewrite() {
-    let dst_ip: Ipv6Addr = "2001:4860:4860::8888".parse().unwrap();
-    snat_icmp_shared_echo_rewrite(dst_ip.into());
+    snat_icmp_shared_echo_rewrite("2001:4860:4860::8888".parse().unwrap());
 }
 
 fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {

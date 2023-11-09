@@ -230,26 +230,26 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
                     .inner_icmp()
                     .ok_or(GenIcmpErr::<Icmpv4Message>::MetaNotFound)?;
                 if icmp.msg_type != Icmpv4Message::EchoRequest.into() {
-                    Err(GenIcmpErr::NotRequest(icmp.msg_type))?;
+                    Err(GenIcmpErr::NotRequest(icmp.msg_type).into())
+                } else {
+                    Ok(icmp.echo_id())
                 }
-
-                icmp.echo_id()
             }
             Protocol::ICMPv6 => {
                 let icmp6 = meta
                     .inner_icmp6()
                     .ok_or(GenIcmpErr::<Icmpv6Message>::MetaNotFound)?;
                 if icmp6.msg_type != Icmpv6Message::EchoRequest.into() {
-                    Err(GenIcmpErr::NotRequest(icmp6.msg_type))?;
+                    Err(GenIcmpErr::NotRequest(icmp6.msg_type).into())
+                } else {
+                    Ok(icmp6.echo_id())
                 }
-
-                icmp6.echo_id()
             }
             _ => Err(GenDescError::Unexpected {
                 msg: "Mistakenly called gen_icmp_desc on non ICMP(v6)."
                     .to_string(),
-            })?,
-        }
+            }),
+        }?
         .ok_or(GenDescError::Unexpected {
             msg: "No ICMP(v6) echo ID found in metadata".to_string(),
         })?;
