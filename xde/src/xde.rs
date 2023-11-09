@@ -214,7 +214,7 @@ struct xde_underlay_port {
     mch: Arc<MacClientHandle>,
 
     /// MAC client handle for tx/rx on the underlay link.
-    muh: MacUnicastHandle,
+    muh: Option<MacUnicastHandle>,
 
     /// MAC promiscuous handle for receiving packets on the underlay link.
     mph: Option<MacPromiscHandle>,
@@ -927,24 +927,6 @@ fn create_underlay_port(
         }
     }
 
-    // Grab mac handle for underlying link
-    let mh = MacHandle::open_by_link_name(&link_name).map(Arc::new).map_err(
-        |e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("failed to open link {link_name} for underlay: {e}"),
-        },
-    )?;
-
-    // Get a mac client handle as well.
-    //
-    let oflags = MacOpenFlags::NONE;//MULTI_PRIMARY;// MacOpenFlags::NONE;
-    let mch = MacClientHandle::open(&mh, Some(mc_name), oflags, 0)
-        .map(Arc::new)
-        .map_err(|e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("mac_client_open failed for {link_name}: {e}"),
-        })?;
-
     // TODO: #61 originally uses mac::MAC_OPEN_FLAGS_NO_UNICAST_ADDR above
     // for MacFlags. Double check its usecase.
 
@@ -994,13 +976,30 @@ fn create_underlay_port(
     //         }
     //     }
     // }
-    let fkey = flow_desc
+    let mut fkey = flow_desc
         .new_flow(format!("{link_name}_xde").as_str(), link_id)
         .map_err(|e| OpteError::System {
             errno: EFAULT,
             msg: format!("{e}"),
         })?;
-    let flows = vec![fkey];
+
+    // Grab mac handle for underlying link
+    let mh = MacHandle::open_by_link_name(&link_name).map(Arc::new).map_err(
+        |e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("failed to open link {link_name} for underlay: {e}"),
+        },
+    )?;
+
+    // Get a mac client handle as well.
+    //
+    let oflags = MacOpenFlags::NO_UNICAST_ADDR; //MULTI_PRIMARY;// MacOpenFlags::NONE;
+    let mch = MacClientHandle::open(&mh, Some(mc_name), oflags, 0)
+        .map(Arc::new)
+        .map_err(|e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("mac_client_open failed for {link_name}: {e}"),
+        })?;
 
     // Setup promiscuous callback to receive all packets on this link.
     //
@@ -1024,13 +1023,10 @@ fn create_underlay_port(
      * device. Maybehapps setting something like MAC_OPEN_FLAGS_MULTI_PRIMARY
      * and doing a mac_unicast_add with MAC_UNICAST_PRIMARY would work?.
      */
-    // Ah crap these need to come before unicast ass since it calls 
-    // mac_client_datapath_setup
     // How does this compare to the above?
     // mch.rx_set(xde_rx);
     // mch.rx_bypass_disable();
-    mch.set_flow_cb(xde_rx);
-
+    // mch.set_flow_cb(xde_rx);
 
     // Set up a unicast callback. The MAC address here is a sentinel value with
     // nothing real behind it. This is why we picked the zero value in the Oxide
@@ -1038,11 +1034,16 @@ fn create_underlay_port(
     // requires that if there is a single mac client on a link, that client must
     // have an L2 address. This was not caught until recently, because this is
     // only enforced as a debug assert in the kernel.
-    let mac = EtherAddr::from([0xa8, 0x40, 0x25, 0xff, 0x00, 0x00]);
-    let muh = mch.add_unicast(mac).map_err(|e| OpteError::System {
-        errno: EFAULT,
-        msg: format!("mac_unicast_add failed for {link_name}: {e}"),
-    })?;
+    // let mac = EtherAddr::from([0xa8, 0x40, 0x25, 0xff, 0x00, 0x00]);
+    // let muh = mch.add_unicast(mac).map_err(|e| OpteError::System {
+    //     errno: EFAULT,
+    //     msg: format!("mac_unicast_add failed for {link_name}: {e}"),
+    // })?;
+
+    let muh = None;
+
+    fkey.set_flow_cb(xde_rx, &mch);
+    let flows = vec![fkey];
 
     Ok(xde_underlay_port {
         name: link_name,

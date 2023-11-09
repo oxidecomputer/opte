@@ -23,6 +23,7 @@
 #![feature(alloc_error_handler)]
 #![feature(rustc_private)]
 #![deny(unused_must_use)]
+#![feature(offset_of)]
 
 mod ioctl;
 

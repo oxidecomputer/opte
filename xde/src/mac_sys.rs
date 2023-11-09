@@ -6,11 +6,18 @@
 
 // stuff we need from mac
 
+use crate::ip::clock_t;
 use crate::ip::in6_addr__bindgen_ty_1;
 use crate::ip::in6_addr_t;
+use crate::ip::kcondvar_t;
+use crate::ip::kthread_t;
+use crate::ip::pri_t;
+use crate::ip::processorid_t;
+use crate::ip::timeout_id_t;
 use illumos_sys_hdrs::boolean_t;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::c_int;
+use illumos_sys_hdrs::c_short;
 use illumos_sys_hdrs::c_uchar;
 use illumos_sys_hdrs::c_uint;
 use illumos_sys_hdrs::c_void;
@@ -18,12 +25,17 @@ use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::ddi_info_cmd_t;
 use illumos_sys_hdrs::dev_info;
 use illumos_sys_hdrs::dev_ops;
+use illumos_sys_hdrs::kmutex_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::minor_t;
 use illumos_sys_hdrs::queue_t;
 use illumos_sys_hdrs::size_t;
 use illumos_sys_hdrs::uintptr_t;
 use illumos_sys_hdrs::MAXPATHLEN;
+
+pub const MAX_RINGS_PER_GROUP: usize = 128;
+
+pub const MAXFLOWNAMELEN: usize = 128;
 
 pub const MAC_DROP_ON_NO_DESC: u16 = 0x01;
 pub const MAC_TX_NO_ENQUEUE: u16 = 0x02;
@@ -78,6 +90,14 @@ pub type mac_rx_fn = unsafe extern "C" fn(
     *mut mblk_t,
     boolean_t,
 );
+
+// typedef boolean_t   (*flow_match_fn_t)(flow_tab_t *, flow_entry_t *,
+//                 flow_state_t *);
+pub type flow_match_fn =
+    unsafe extern "C" fn(*mut c_void, *mut flow_entry_t, *mut c_void);
+
+// TODO: actual.
+pub type mac_srs_drain_proc_fn = *mut c_void;
 
 extern "C" {
     pub type mac_handle;
@@ -177,7 +197,19 @@ extern "C" {
     pub fn mac_rx_bypass_disable(mch: *mut mac_client_handle);
 
     // void mac_client_set_flow_cb(mac_client_handle_t mch, mac_rx_t func, void *arg1)
-    pub fn mac_client_set_flow_cb(mch: *mut mac_client_handle, rx_fn: Option<mac_rx_fn>, arg: *mut c_void);
+    pub fn mac_client_set_flow_cb(
+        mch: *mut mac_client_handle,
+        rx_fn: Option<mac_rx_fn>,
+        arg: *mut c_void,
+    );
+
+    // pub fn mac_datapath_setup(mch: *mut mac_client_handle, flow_entry_t *flent, uint32_t link_type);
+
+    // int mac_flow_lookup_byname(char *name, flow_entry_t **flentp)
+    pub fn mac_flow_lookup_byname(
+        flow_name: *const c_char,
+        flent: *mut *mut flow_entry_t,
+    ) -> c_int;
 }
 
 #[repr(C)]
@@ -466,7 +498,12 @@ pub struct mac_register_t {
 pub type flow_mask_t = u64;
 pub const MAXMACADDR: usize = 20;
 
-#[repr(C)]
+// mac_flow.h:
+// #if _LONG_LONG_ALIGNMENT == 8 && _LONG_LONG_ALIGNMENT_32 == 4
+// #pragma pack(4)
+// #endif
+
+#[repr(C, packed(4))]
 pub struct flow_desc_t {
     pub fd_mask: flow_mask_t,
     pub fd_mac_len: u32,
@@ -486,7 +523,7 @@ pub struct flow_desc_t {
     pub fd_dsfield_mask: u8,
 }
 
-#[repr(C)]
+#[repr(C, packed(4))]
 pub struct mac_resource_props_t {
     mrp_mask: u32,
     mrp_maxbw: u64,
@@ -580,7 +617,7 @@ pub const MAC_CPUS_DEF: mac_cpus_t = mac_cpus_t {
     mc_fanout_mode: mac_cpu_mode_t::MCM_FANOUT,
 };
 
-#[repr(C)]
+#[repr(C, packed(4))]
 pub struct mac_cpus_t {
     mc_ncpus: u32,
     mc_cpus: [u32; MRP_NCPUS],
@@ -594,13 +631,13 @@ pub struct mac_cpus_t {
     mc_fanout_mode: mac_cpu_mode_t,
 }
 
-#[repr(C)]
+#[repr(C, packed(4))]
 pub struct mac_tx_intr_cpu_t {
     mtc_intr_cpu: [i32; MRP_NCPUS],
     mtc_retargeted_cpu: [i32; MRP_NCPUS],
 }
 
-#[repr(C)]
+#[repr(C, packed(4))]
 pub struct mac_protect_t {
     mp_types: u32,
     mp_ipaddrcnt: u32,
@@ -617,7 +654,7 @@ pub const MAC_PROTECT_DEF: mac_protect_t = mac_protect_t {
     mp_cids: [MAC_DHCPCID_DEF; MPT_MAXCID],
 };
 
-#[repr(C)]
+#[repr(C, packed(4))]
 pub struct mac_ipaddr_t {
     ip_version: u32,
     ip_addr: in6_addr_t,
@@ -627,7 +664,7 @@ pub struct mac_ipaddr_t {
 pub const MAC_IPADDR_DEF: mac_ipaddr_t =
     mac_ipaddr_t { ip_version: 0, ip_addr: IP_NO_ADDR, ip_netmask: 0 };
 
-#[repr(C)]
+#[repr(C, packed(4))]
 pub struct mac_dhcpcid_t {
     dc_id: [c_uchar; MPT_MAXCIDLEN as usize],
     dc_len: u32,
@@ -650,3 +687,395 @@ pub enum mac_dhcpcid_form_t {
 
 pub const IP_NO_ADDR: in6_addr_t =
     in6_addr_t { _S6_un: in6_addr__bindgen_ty_1 { _S6_u16: [0u16; 8] } };
+
+// typedef mac_resource_handle_t   (*mac_resource_add_t)(void *, mac_resource_t *);
+pub type mac_resource_handle_t = *mut c_void;
+
+// have 0 8 10 3c50 7890 ... 79d8
+// want 0 8 0c 3c48 7888 ... 79d0
+
+#[repr(C)]
+pub struct flow_entry_t {
+    pub fe_next: *mut flow_entry_t, /* ft_lock */
+
+    pub fe_link_id: datalink_id_t, /* WO */
+
+    /* Properties as specified for this flow */
+    pub fe_resource_props: mac_resource_props_t, /* SL */
+
+    /* Properties actually effective at run time for this flow */
+    pub fe_effective_props: mac_resource_props_t, /* SL */
+
+    pub fe_lock: kmutex_t,
+    fe_flow_name: [c_char; MAXFLOWNAMELEN], /* fe_lock */
+    fe_flow_desc: flow_desc_t,              /* fe_lock */
+    pub fe_cv: kcondvar_t,                  /* fe_lock */
+    /*
+     * Initial flow ref is 1 on creation. A thread that lookups the
+     * flent typically by a mac_flow_lookup() dynamically holds a ref.
+     * If the ref is 1, it means there arent' any upcalls from the driver
+     * or downcalls from the stack using this flent. Structures pointing
+     * to the flent or flent inserted in lists don't count towards this
+     * refcnt. Instead they are tracked using fe_flags. Only a control
+     * thread doing a teardown operation deletes the flent, after waiting
+     * for upcalls to finish synchronously. The fe_refcnt tracks
+     * the number of upcall refs
+     */
+    fe_refcnt: u32, /* fe_lock */
+
+    /*
+     * This tracks lookups done using the global hash list for user
+     * generated flows. This refcnt only protects the flent itself
+     * from disappearing and helps walkers to read the flent info such
+     * as flow spec. However the flent may be quiesced and the SRS could
+     * be deleted. The fe_user_refcnt tracks the number of global flow
+     * has refs.
+     */
+    pub fe_user_refcnt: u32, /* fe_lock */
+    pub fe_flags: c_uint,    /* fe_lock */
+
+    //uint_t
+
+    /*
+     * Function/args to invoke for delivering matching packets
+     * Only the function ff_fn may be changed dynamically and atomically.
+     * The ff_arg1 and ff_arg2 are set at creation time and may not
+     * be changed.
+     */
+    pub fe_cb_fn: mac_rx_fn,     /* fe_lock */
+    pub fe_cb_arg1: *mut c_void, /* fe_lock */
+    pub fe_cb_arg2: *mut c_void, /* fe_lock */
+
+    fe_client_cookie: *mut c_void, /* WO */
+    fe_rx_ring_group: *mut c_void, /* SL */
+    pub fe_rx_srs: [*mut mac_soft_ring_set_t; MAX_RINGS_PER_GROUP], /* fe_lock */
+    pub fe_rx_srs_cnt: c_int, /* fe_lock */
+    //int??
+    fe_tx_ring_group: *mut c_void,
+    fe_tx_srs: *mut c_void, /* WO */
+    fe_tx_ring_cnt: c_int,
+
+    /*
+     * This is a unicast flow, and is a mac_client_impl_t
+     */
+    fe_mcip: *mut c_void, /* WO */
+
+    /*
+     * Used by mci_flent_list of mac_client_impl_t to track flows sharing
+     * the same mac_client_impl_t.
+     */
+    fe_client_next: *mut flow_entry_t,
+
+    /*
+     * This is a broadcast or multicast flow and is a mac_bcast_grp_t
+     */
+    fe_mbg: *mut c_void, /* WO */
+    fe_type: c_uint,     /* WO */
+
+    /*
+     * BW control info.
+     */
+    fe_tx_bw: mac_bw_ctl_t,
+    fe_rx_bw: mac_bw_ctl_t,
+
+    /*
+     * Used by flow table lookup code
+     */
+    fe_match: flow_match_fn,
+
+    /*
+     * Used by mac_flow_remove().
+     */
+    fe_index: c_int,
+    fe_flow_tab: *mut c_void, //flow_tab_t
+
+    fe_ksp: *mut c_void,           // kstat_t
+    fe_misc_stat_ksp: *mut c_void, // kstat_t
+
+    fe_desc_logged: boolean_t,
+    fe_nic_speed: u64,
+}
+
+#[repr(C)]
+pub struct mac_bw_ctl_t {
+    mac_bw_lock: kmutex_t,
+    mac_bw_state: u32,
+    mac_bw_sz: size_t,             /* ?? Is it needed */
+    mac_bw_limit: size_t,          /* Max bytes to process per tick */
+    mac_bw_used: size_t,           /* Bytes processed in current tick */
+    mac_bw_drop_threshold: size_t, /* Max queue length */
+    mac_bw_drop_bytes: size_t,
+    mac_bw_polled: size_t,
+    mac_bw_intr: size_t,
+    mac_bw_curr_time: clock_t,
+}
+
+pub type mac_soft_ring_t = c_void;
+
+#[repr(C)]
+pub struct mac_soft_ring_set_t {
+    /*
+     * Common elements, common to both Rx and Tx SRS type.
+     * The following block of fields are protected by srs_lock
+     */
+    pub srs_lock: kmutex_t,
+    srs_type: u32,
+    srs_state: u32, /* state flags */
+    srs_count: u32,
+    srs_first: *mut mblk_t, /* first mblk chain or NULL */
+    srs_last: *mut mblk_t,  /* last mblk chain or NULL */
+    srs_async: kcondvar_t,  /* cv for worker thread */
+    srs_cv: kcondvar_t,     /* cv for poll thread */
+    srs_quiesce_done_cv: kcondvar_t, /* cv for removal */
+    srs_tid: timeout_id_t,  /* timeout id for pending timeout */
+
+    /*
+     * List of soft rings & processing function.
+     * The following block is protected by Rx quiescence.
+     * i.e. they can be changed only after quiescing the SRS
+     * Protected by srs_lock.
+     */
+    srs_soft_ring_head: *mut mac_soft_ring_t,
+    srs_soft_ring_tail: *mut mac_soft_ring_t,
+    srs_soft_ring_count: c_int,
+    srs_soft_ring_quiesced_count: c_int,
+    srs_soft_ring_condemned_count: c_int,
+    srs_tcp_soft_rings: *mut *mut mac_soft_ring_t,
+    srs_tcp_ring_count: c_int,
+    srs_udp_soft_rings: *mut *mut mac_soft_ring_t,
+    srs_udp_ring_count: c_int,
+    srs_oth_soft_rings: *mut *mut mac_soft_ring_t,
+    srs_oth_ring_count: c_int,
+    /*
+     * srs_tx_soft_rings is used by tx_srs in
+     * when operating in multi tx ring mode.
+     */
+    srs_tx_soft_rings: *mut *mut mac_soft_ring_t,
+    srs_tx_ring_count: c_int,
+
+    /*
+     * Bandwidth control related members.
+     * They are common to both Rx- and Tx-side.
+     * Following protected by srs_lock
+     */
+    srs_bw: *mut mac_bw_ctl_t,
+    srs_size: size_t, /* Size of packets queued in bytes */
+    srs_pri: pri_t,
+
+    srs_next: *mut mac_soft_ring_set_t, /* mac_srs_g_lock */
+    srs_prev: *mut mac_soft_ring_set_t, /* mac_srs_g_lock */
+
+    /* Attribute specific drain func (BW ctl vs non-BW ctl) */
+    srs_drain_func: mac_srs_drain_proc_fn, /* Write once (WO) */
+
+    /*
+     * If the associated ring is exclusively used by a mac client, e.g.,
+     * an aggregation, this fields is used to keep a reference to the
+     * MAC client's pseudo ring.
+     */
+    srs_mrh: mac_resource_handle_t,
+    /*
+     * The following blocks are write once (WO) and valid for the life
+     * of the SRS
+     */
+    srs_mcip: *mut c_void, /* back ptr to mac client */
+    // mac_client_impl_s*
+    srs_flent: *mut c_void, /* back ptr to flent */
+    srs_ring: *mut c_void,  /*  Ring Descriptor */
+
+    // mac_ring_t*
+
+    /* Teardown, disable control ops */
+    srs_client_cv: kcondvar_t, /* Client wait for the control op */
+
+    srs_worker: *mut kthread_t, /* WO, worker thread */
+    srs_poll_thr: *mut kthread_t, /* WO, poll thread */
+
+    srs_ind: c_uint, /* Round Robin indx for picking up SR */
+    srs_worker_cpuid: processorid_t, /* processor to bind to */
+    srs_worker_cpuid_save: processorid_t, /* saved cpuid during offline */
+    srs_poll_cpuid: processorid_t, /* processor to bind to */
+    srs_poll_cpuid_save: processorid_t, /* saved cpuid during offline */
+    srs_fanout_state: c_uint,
+    srs_cpu: mac_cpus_t,
+
+    pub srs_rx: mac_srs_rx_t,
+    srs_tx: mac_srs_tx_t,
+    srs_ksp: *mut c_void, //kstat_t
+}
+
+/* Transmit side Soft Ring Set */
+#[repr(C)]
+pub struct mac_srs_tx_t {
+    /* Members for Tx size processing */
+    st_mode: u32,
+    st_func: *mut c_void, //mac_tx_func_t
+    st_arg1: *mut c_void,
+    st_arg2: *mut c_void,
+    st_group: *mut c_void, /* TX group for share */
+    // mac_group_t
+    st_woken_up: boolean_t,
+
+    /*
+     * st_max_q_cnt is the queue depth threshold to limit
+     * outstanding packets on the Tx SRS. Once the limit
+     * is reached, Tx SRS will drop packets until the
+     * limit goes below the threshold.
+     */
+    st_max_q_cnt: u32, /* max. outstanding packets */
+    /*
+     * st_hiwat is used Tx serializer and bandwidth mode.
+     * This is the queue depth threshold upto which
+     * packets will get buffered with no flow-control
+     * back pressure applied to the caller. Once this
+     * threshold is reached, back pressure will be
+     * applied to the caller of mac_tx() (mac_tx() starts
+     * returning a cookie to indicate a blocked SRS).
+     * st_hiwat should always be lesser than or equal to
+     * st_max_q_cnt.
+     */
+    st_hiwat: u32,     /* mblk cnt to apply flow control */
+    st_lowat: u32,     /* mblk cnt to relieve flow control */
+    st_hiwat_cnt: u32, /* times blocked for Tx descs */
+    st_stat: mac_tx_stats_t,
+    st_capab_aggr: mac_capab_aggr_t,
+    /*
+     * st_soft_rings is used as an array to store aggr Tx soft
+     * rings. When aggr_find_tx_ring() returns a pseudo ring,
+     * the associated soft ring has to be found. st_soft_rings
+     * array stores the soft ring associated with a pseudo Tx
+     * ring and it can be accessed using the pseudo ring
+     * index (mr_index). Note that the ring index is unique
+     * for each ring in a group.
+     */
+    st_soft_rings: *mut *mut mac_soft_ring_t,
+}
+
+/* Receive side Soft Ring Set */
+#[repr(C)]
+pub struct mac_srs_rx_t {
+    /*
+     * Upcall Function for fanout, Rx processing etc. Perhaps
+     * the same 3 members below can be used for Tx
+     * processing, but looking around, mac_rx_func_t has
+     * proliferated too much into various files at different
+     * places. I am leaving the consolidation battle for
+     * another day.
+     */
+    pub sr_func: mac_rx_fn,             /* srs_lock */
+    pub sr_arg1: *mut c_void,           /* srs_lock */
+    pub sr_arg2: mac_resource_handle_t, /* srs_lock */
+    // mac_resource_handle_t
+    sr_lower_proc: mac_rx_fn, /* Atomically changed */
+    // should be subflow srs
+    sr_poll_pkt_cnt: u32,
+    sr_poll_thres: u32,
+
+    /* mblk cnt to apply flow control */
+    sr_hiwat: u32,
+    /* mblk cnt to relieve flow control */
+    sr_lowat: u32,
+    sr_stat: mac_rx_stats_t,
+
+    /* Times polling was enabled */
+    sr_poll_on: u32,
+    /* Times polling was enabled by worker thread */
+    sr_worker_poll_on: u32,
+    /* Times polling was disabled */
+    sr_poll_off: u32,
+    /* Poll thread signalled count */
+    sr_poll_thr_sig: u32,
+    /* Poll thread busy */
+    sr_poll_thr_busy: u32,
+    /* SRS drains, stays in poll mode but doesn't poll */
+    sr_poll_drain_no_poll: u32,
+    /*
+     * SRS has nothing to do and no packets in H/W but
+     * there is a backlog in softrings. SRS stays in
+     * poll mode but doesn't do polling.
+     */
+    sr_poll_no_poll: u32,
+    /* Active polling restarted */
+    sr_below_hiwat: u32,
+    /* Found packets in last poll so try and poll again */
+    sr_poll_again: u32,
+    /*
+     * Packets in queue but poll thread not allowed to process so
+     * signal the worker thread.
+     */
+    sr_poll_sig_worker: u32,
+    /*
+     * Poll thread has nothing to do and H/W has nothing so
+     * reenable the interrupts.
+     */
+    sr_poll_intr_enable: u32,
+    /*
+     * Poll thread has nothing to do and worker thread was already
+     * running so it can decide to reenable interrupt or poll again.
+     */
+    sr_poll_goto_sleep: u32,
+    /* Worker thread goes back to draining the queue */
+    sr_drain_again: u32,
+    /* More Packets in queue so signal the poll thread to drain */
+    sr_drain_poll_sig: u32,
+    /* More Packets in queue so signal the worker thread to drain */
+    sr_drain_worker_sig: u32,
+    /* Poll thread is already running so worker has nothing to do */
+    sr_drain_poll_running: u32,
+    /* We have packets already queued so keep polling */
+    sr_drain_keep_polling: u32,
+    /* Drain is done and interrupts are reenabled */
+    sr_drain_finish_intr: u32,
+    /* Polling thread needs to schedule worker wakeup */
+    sr_poll_worker_wakeup: u32,
+}
+
+#[repr(C)]
+pub struct mac_rx_stats_t {
+    mrs_lclbytes: u64,
+    mrs_lclcnt: u64,
+    mrs_pollcnt: u64,
+    mrs_pollbytes: u64,
+    mrs_intrcnt: u64,
+    mrs_intrbytes: u64,
+    mrs_sdrops: u64,
+    mrs_chaincntundr10: u64,
+    mrs_chaincnt10to50: u64,
+    mrs_chaincntover50: u64,
+    mrs_ierrors: u64,
+}
+
+#[repr(C)]
+pub struct mac_tx_stats_t {
+    mts_obytes: u64,
+    mts_opackets: u64,
+    mts_oerrors: u64,
+    /*
+     * Number of times the srs gets blocked due to lack of Tx
+     * desc is noted down. Corresponding wakeup from driver
+     * to unblock is also noted down. They should match in a
+     * correctly working setup. If there is less unblocks
+     * than blocks, then Tx side waits forever for a wakeup
+     * from below. The following protected by srs_lock.
+     */
+    mts_blockcnt: u64,   /* times blocked for Tx descs */
+    mts_unblockcnt: u64, /* unblock calls from driver */
+    mts_sdrops: u64,
+}
+
+#[repr(C)]
+pub struct mac_capab_aggr_t {
+    mca_rename_fn: *mut c_void,
+    mca_unicst: *mut c_void,
+    mca_find_tx_ring_fn: *mut c_void,
+    mca_arg: *mut c_void,
+}
+
+pub const FE_QUIESCE: u32 = 0x01; /* Quiesce the flow */
+pub const FE_WAITER: u32 = 0x02; /* Flow has a waiter */
+pub const FE_FLOW_TAB: u32 = 0x04; /* Flow is in the flow tab list */
+pub const FE_G_FLOW_HASH: u32 = 0x08; /* Flow is in the global flow hash */
+pub const FE_INCIPIENT: u32 = 0x10; /* Being setup */
+pub const FE_CONDEMNED: u32 = 0x20; /* Being deleted */
+pub const FE_UF_NO_DATAPATH: u32 = 0x40; /* No datapath setup for User flow */
+pub const FE_MC_NO_DATAPATH: u32 = 0x80; /* No datapath setup for mac client */

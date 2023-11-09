@@ -18,6 +18,7 @@ use alloc::sync::Arc;
 use bitflags::bitflags;
 use core::ffi::CStr;
 use core::fmt;
+use core::mem;
 use core::ptr;
 use illumos_sys_hdrs::*;
 use opte::engine::ether::EtherAddr;
@@ -436,7 +437,13 @@ impl MacFlowDesc {
                 &MAC_RESOURCE_PROPS_DEF,
             )
         } {
-            0 => Ok(MacFlow { name }),
+            0 => {}
+            err => return Err(FlowCreateError::CreateFailed(flow_name, err)),
+        }
+
+        let mut flent = ptr::null_mut();
+        match unsafe { mac_flow_lookup_byname(name.as_ptr(), &mut flent) } {
+            0 => Ok(MacFlow { name, flent, cb_mch: None }),
             err => Err(FlowCreateError::CreateFailed(flow_name, err)),
         }
     }
@@ -489,6 +496,7 @@ impl From<MacFlowDesc> for flow_desc_t {
 pub enum FlowCreateError<'a> {
     InvalidFlowName(&'a str),
     CreateFailed(&'a str, i32),
+    LookupFailed(&'a str, i32),
 }
 
 impl fmt::Display for FlowCreateError<'_> {
@@ -500,6 +508,9 @@ impl fmt::Display for FlowCreateError<'_> {
             FlowCreateError::CreateFailed(flow, err) => {
                 write!(f, "mac_link_flow_add failed for {flow}: {err}")
             }
+            FlowCreateError::LookupFailed(flow, err) => {
+                write!(f, "mac_flow_lookup_byname failed for {flow}: {err}")
+            }
         }
     }
 }
@@ -508,11 +519,81 @@ impl fmt::Display for FlowCreateError<'_> {
 #[derive(Debug)]
 pub struct MacFlow {
     name: CString,
+    flent: *mut flow_entry_t,
+    cb_mch: Option<Arc<MacClientHandle>>,
+}
+
+impl MacFlow {
+    /// Forcibly wrench this flow from the clutches of DLS.
+    pub fn set_flow_cb(
+        &mut self,
+        new_fn: mac_rx_fn,
+        cb_mch: &Arc<MacClientHandle>,
+    ) {
+        let mch = cb_mch.clone();
+        let arg = Arc::as_ptr(&mch) as *mut c_void;
+        unsafe {
+            crate::warn!(
+                "Some potential offsets {:x} {:x} {:x} {:x} {:x} {:x}",
+                mem::offset_of!(flow_entry_t, fe_next),
+                mem::offset_of!(flow_entry_t, fe_link_id),
+                mem::offset_of!(flow_entry_t, fe_resource_props),
+                mem::offset_of!(flow_entry_t, fe_effective_props),
+                mem::offset_of!(flow_entry_t, fe_lock),
+                mem::offset_of!(flow_entry_t, fe_rx_srs)
+            );
+
+            // flow_cb_pre_srs(self.flent, new_fn);
+            flow_cb_post_srs(self.flent, new_fn, arg);
+        }
+        self.cb_mch = Some(mch);
+    }
+}
+
+/// Insert a flow callback which replaces `mac_rx_srs_subflow_process`.
+#[no_mangle]
+pub unsafe fn flow_cb_pre_srs(flent: *mut flow_entry_t, new_fn: mac_rx_fn) {
+    // TODO: locks, negative handling, ...
+    (*flent).fe_cb_fn = new_fn;
+}
+
+/// Insert a flow callback accessed via `mac_rx_srs_subflow_process`.
+///
+/// This will usually replace `mac_rx_deliver`, which will call into the mac_rx
+/// callback on the *parent device* (i.e., i_dls_link_rx).
+#[no_mangle]
+pub unsafe fn flow_cb_post_srs(
+    flent: *mut flow_entry_t,
+    new_fn: mac_rx_fn,
+    arg: *mut c_void,
+) {
+    // TODO: locks, negative handling, ...
+    let n_srs = (*flent).fe_rx_srs_cnt;
+    for srs in (*flent).fe_rx_srs.iter().take(n_srs as usize) {
+        mutex_enter(&mut (**srs).srs_lock);
+        (**srs).srs_rx.sr_func = new_fn;
+        (**srs).srs_rx.sr_arg1 = arg;
+        mutex_exit(&mut (**srs).srs_lock);
+    }
+}
+
+unsafe fn flow_user_refrele(flent: *mut flow_entry_t) {
+    // TODO: use the existing KMutex code...
+    mutex_enter(&mut (*flent).fe_lock);
+    // ASSERT((flent)->fe_user_refcnt != 0);       \
+    (*flent).fe_user_refcnt -= 1;
+    if (*flent).fe_user_refcnt == 0 && (*flent).fe_flags & FE_WAITER != 0 {
+        crate::ip::cv_signal((&mut (*flent).fe_cv) as *mut _);
+    }
+
+    mutex_exit(&mut (*flent).fe_lock);
 }
 
 impl Drop for MacFlow {
     fn drop(&mut self) {
         unsafe {
+            // TODO: need to reimplement FLOW_USER_REFRELE in here...
+            flow_user_refrele(self.flent);
             mac_link_flow_remove(self.name.as_ptr());
         }
     }
