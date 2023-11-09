@@ -248,6 +248,11 @@ impl VpcCfg {
     }
 
     #[cfg(any(feature = "test-help", test))]
+    pub fn ipv6(&self) -> &Ipv6Cfg {
+        self.ipv6_cfg().expect("expected an IPv6 configuration")
+    }
+
+    #[cfg(any(feature = "test-help", test))]
     /// Return the physical address of the guest.
     pub fn phys_addr(&self) -> PhysNet {
         PhysNet { ether: self.guest_mac, ip: self.phys_ip, vni: self.vni }

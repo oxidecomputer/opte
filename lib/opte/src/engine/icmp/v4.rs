@@ -148,7 +148,7 @@ impl HairpinAction for IcmpEchoReply {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(from = "u8", into = "u8")]
 pub struct MessageType {
-    pub inner: wire::Icmpv4Message,
+    inner: wire::Icmpv4Message,
 }
 
 impl PartialOrd for MessageType {

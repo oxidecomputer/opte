@@ -11,8 +11,6 @@ use super::headers::IpMod;
 use super::headers::UlpGenericModify;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
-use super::ip4::Ipv4Mod;
-use super::ip6::Ipv6Mod;
 use super::packet::BodyTransform;
 use super::packet::InnerFlowId;
 use super::packet::Packet;
@@ -50,6 +48,7 @@ use opte_api::Ipv4Addr;
 use opte_api::Ipv6Addr;
 use opte_api::Protocol;
 use smoltcp::wire::Icmpv4Message;
+use smoltcp::wire::Icmpv6Message;
 
 /// A single entry in the NAT pool, describing the public IP and port used to
 /// NAT a private address.
@@ -87,9 +86,19 @@ impl<T: ConcreteIpAddr> Default for NatPool<T> {
 }
 
 mod private {
-    pub trait Ip: Into<super::IpAddr> {}
-    impl Ip for super::Ipv4Addr {}
-    impl Ip for super::Ipv6Addr {}
+    use opte_api::Protocol;
+
+    pub trait Ip: Into<super::IpAddr> {
+        const MESSAGE_PROTOCOL: Protocol;
+    }
+
+    impl Ip for super::Ipv4Addr {
+        const MESSAGE_PROTOCOL: Protocol = Protocol::ICMP;
+    }
+
+    impl Ip for super::Ipv6Addr {
+        const MESSAGE_PROTOCOL: Protocol = Protocol::ICMPv6;
+    }
 }
 /// A marker trait for IP addresses of a concrete protocol version.
 ///
@@ -177,63 +186,103 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
 
 /// A NAT pool mapping provided for Source NAT (only outbound connections).
 #[derive(Clone)]
-pub struct SNat {
-    priv_ip: Ipv4Addr,
-    ip_pool: Arc<NatPool<Ipv4Addr>>,
+pub struct SNat<T: ConcreteIpAddr> {
+    priv_ip: T,
+    ip_pool: Arc<NatPool<T>>,
 }
 
-impl SNat {
-    pub fn new(addr: Ipv4Addr, ip_pool: Arc<NatPool<Ipv4Addr>>) -> Self {
-        SNat { priv_ip: addr, ip_pool }
-    }
+enum GenIcmpErr<T: Display> {
+    MetaNotFound,
+    NotRequest(T),
+}
 
-    // A helper method for generating an SNAT + ICMP action descriptor.
-    fn gen_icmp_desc(
-        &self,
-        nat: NatPoolEntry<Ipv4Addr>,
-        pkt: &Packet<Parsed>,
-    ) -> GenDescResult {
-        let meta = pkt.meta();
-
-        if let Some(icmp) = meta.inner_icmp() {
-            if icmp.msg_type.inner != Icmpv4Message::EchoRequest {
-                return Err(GenDescError::Unexpected {
-                    msg: format!(
-                        "Expected ICMP Echo Request, found: {}",
-                        icmp.msg_type,
-                    ),
-                });
-            }
-
-            // Panic: We know this is safe because we make it here
-            // only if this ICMP message is an Echo Request.
-            let echo_ident = icmp.echo_id().unwrap();
-
-            let desc = SNatIcmpEchoDesc {
-                pool: self.ip_pool.clone(),
-                priv_ip: self.priv_ip,
-                nat,
-                echo_ident,
-            };
-
-            Ok(AllowOrDeny::Allow(Arc::new(desc)))
-        } else {
-            Err(GenDescError::Unexpected {
-                msg: "No ICMP metadata found despite Protocol::ICMP"
-                    .to_string(),
-            })
+impl<T: Display> From<GenIcmpErr<T>> for GenDescError {
+    fn from(val: GenIcmpErr<T>) -> Self {
+        GenDescError::Unexpected {
+            msg: match val {
+                GenIcmpErr::MetaNotFound => {
+                    "No ICMP metadata found despite Protocol::ICMP".to_string()
+                }
+                GenIcmpErr::NotRequest(v) => {
+                    format!("Expected ICMP Echo Request, found: {}", v)
+                }
+            },
         }
     }
 }
 
-impl Display for SNat {
+impl<T: ConcreteIpAddr + 'static> SNat<T> {
+    pub fn new(addr: T, ip_pool: Arc<NatPool<T>>) -> Self {
+        SNat { priv_ip: addr, ip_pool }
+    }
+
+    // A helper method for generating an SNAT + ICMP(v6) action descriptor.
+    fn gen_icmp_desc(
+        &self,
+        nat: NatPoolEntry<T>,
+        pkt: &Packet<Parsed>,
+    ) -> GenDescResult {
+        let meta = pkt.meta();
+
+        let echo_ident = match T::MESSAGE_PROTOCOL {
+            Protocol::ICMP => {
+                let icmp = meta
+                    .inner_icmp()
+                    .ok_or(GenIcmpErr::<Icmpv4Message>::MetaNotFound)?;
+                if icmp.msg_type != Icmpv4Message::EchoRequest.into() {
+                    Err(GenIcmpErr::NotRequest(icmp.msg_type).into())
+                } else {
+                    Ok(icmp.echo_id())
+                }
+            }
+            Protocol::ICMPv6 => {
+                let icmp6 = meta
+                    .inner_icmp6()
+                    .ok_or(GenIcmpErr::<Icmpv6Message>::MetaNotFound)?;
+                if icmp6.msg_type != Icmpv6Message::EchoRequest.into() {
+                    Err(GenIcmpErr::NotRequest(icmp6.msg_type).into())
+                } else {
+                    Ok(icmp6.echo_id())
+                }
+            }
+            _ => Err(GenDescError::Unexpected {
+                msg: "Mistakenly called gen_icmp_desc on non ICMP(v6)."
+                    .to_string(),
+            }),
+        }?
+        .ok_or(GenDescError::Unexpected {
+            msg: "No ICMP(v6) echo ID found in metadata".to_string(),
+        })?;
+
+        let desc = SNatIcmpEchoDesc {
+            pool: self.ip_pool.clone(),
+            priv_ip: self.priv_ip,
+            nat,
+            echo_ident,
+        };
+
+        Ok(AllowOrDeny::Allow(Arc::new(desc)))
+    }
+}
+
+impl Display for SNat<Ipv4Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (pub_ip, ports) = self.ip_pool.mapping(self.priv_ip).unwrap();
         write!(f, "{}:{}-{}", pub_ip, ports.start(), ports.end())
     }
 }
 
-impl StatefulAction for SNat {
+impl Display for SNat<Ipv6Addr> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let (pub_ip, ports) = self.ip_pool.mapping(self.priv_ip).unwrap();
+        write!(f, "[{}]:{}-{}", pub_ip, ports.start(), ports.end())
+    }
+}
+
+impl<T: ConcreteIpAddr + 'static> StatefulAction for SNat<T>
+where
+    SNat<T>: Display,
+{
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
@@ -243,63 +292,10 @@ impl StatefulAction for SNat {
         let pool = &self.ip_pool;
         let priv_port = flow_id.src_port;
         match pool.obtain(&self.priv_ip) {
-            Ok(nat) => match flow_id.proto {
-                Protocol::ICMP => self.gen_icmp_desc(nat, pkt),
-
-                _ => {
-                    let desc = SNatDesc {
-                        pool: pool.clone(),
-                        priv_ip: self.priv_ip,
-                        priv_port,
-                        nat,
-                    };
-
-                    Ok(AllowOrDeny::Allow(Arc::new(desc)))
-                }
-            },
-
-            Err(ResourceError::Exhausted) => {
-                Err(GenDescError::ResourceExhausted {
-                    name: "SNAT Pool (exhausted)".to_string(),
-                })
+            Ok(nat) if flow_id.proto == T::MESSAGE_PROTOCOL => {
+                self.gen_icmp_desc(nat, pkt)
             }
 
-            Err(ResourceError::NoMatch(ip)) => Err(GenDescError::Unexpected {
-                msg: format!("SNAT pool (no match: {})", ip),
-            }),
-        }
-    }
-
-    // XXX we should be able to set implicit predicates if we add an
-    // IpCidr field to describe which subnet the client is on; but for
-    // now just keep the predicates fully explicit.
-    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
-        (vec![], vec![])
-    }
-}
-
-#[derive(Clone)]
-pub struct SNat6 {
-    priv_ip: Ipv6Addr,
-    ip_pool: Arc<NatPool<Ipv6Addr>>,
-}
-
-impl SNat6 {
-    pub fn new(addr: Ipv6Addr, ip_pool: Arc<NatPool<Ipv6Addr>>) -> Self {
-        SNat6 { priv_ip: addr, ip_pool }
-    }
-}
-
-impl StatefulAction for SNat6 {
-    fn gen_desc(
-        &self,
-        flow_id: &InnerFlowId,
-        _pkt: &Packet<Parsed>,
-        _meta: &mut ActionMeta,
-    ) -> GenDescResult {
-        let pool = &self.ip_pool;
-        let priv_port = flow_id.src_port;
-        match pool.obtain(&self.priv_ip) {
             Ok(nat) => {
                 let desc = SNatDesc {
                     pool: pool.clone(),
@@ -331,13 +327,6 @@ impl StatefulAction for SNat6 {
     }
 }
 
-impl Display for SNat6 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let (pub_ip, ports) = self.ip_pool.mapping(self.priv_ip).unwrap();
-        write!(f, "[{}]:{}-{}", pub_ip, ports.start(), ports.end())
-    }
-}
-
 #[derive(Clone)]
 pub struct SNatDesc<T: ConcreteIpAddr> {
     pool: Arc<NatPool<T>>,
@@ -348,15 +337,12 @@ pub struct SNatDesc<T: ConcreteIpAddr> {
 
 pub const SNAT_NAME: &str = "SNAT";
 
-impl ActionDesc for SNatDesc<Ipv4Addr> {
+impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             // Outbound traffic needs its source IP and source port
             Direction::Out => {
-                let ip = IpMod::from(Ipv4Mod {
-                    src: Some(self.nat.ip),
-                    ..Default::default()
-                });
+                let ip = IpMod::new_src(self.nat.ip.into());
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
@@ -376,63 +362,8 @@ impl ActionDesc for SNatDesc<Ipv4Addr> {
             // destination port mapped back to the private values that
             // the guest expects to see.
             Direction::In => {
-                let ip = IpMod::from(Ipv4Mod {
-                    dst: Some(self.priv_ip),
-                    ..Default::default()
-                });
-                HdrTransform {
-                    name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
-                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
-                        generic: UlpGenericModify {
-                            dst_port: Some(self.priv_port),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }
-            }
-        }
-    }
+                let ip = IpMod::new_dst(self.priv_ip.into());
 
-    fn name(&self) -> &str {
-        SNAT_NAME
-    }
-}
-
-impl ActionDesc for SNatDesc<Ipv6Addr> {
-    fn gen_ht(&self, dir: Direction) -> HdrTransform {
-        match dir {
-            // Outbound traffic needs its source IP and source port
-            Direction::Out => {
-                let ip = IpMod::from(Ipv6Mod {
-                    src: Some(self.nat.ip),
-                    ..Default::default()
-                });
-
-                HdrTransform {
-                    name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
-                    inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
-                        generic: UlpGenericModify {
-                            src_port: Some(self.nat.port),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }
-            }
-
-            // Inbound traffic needs its destination IP and
-            // destination port mapped back to the private values that
-            // the guest expects to see.
-            Direction::In => {
-                let ip = IpMod::from(Ipv6Mod {
-                    dst: Some(self.priv_ip),
-                    ..Default::default()
-                });
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
                     inner_ip: HeaderAction::Modify(ip, PhantomData),
@@ -461,25 +392,24 @@ impl<T: ConcreteIpAddr> Drop for SNatDesc<T> {
 }
 
 #[derive(Clone)]
-pub struct SNatIcmpEchoDesc {
-    pool: Arc<NatPool<Ipv4Addr>>,
-    nat: NatPoolEntry<Ipv4Addr>,
-    priv_ip: Ipv4Addr,
+pub struct SNatIcmpEchoDesc<T: ConcreteIpAddr> {
+    pool: Arc<NatPool<T>>,
+    nat: NatPoolEntry<T>,
+    priv_ip: T,
     echo_ident: u16,
 }
 
 pub const SNAT_ICMP_ECHO_NAME: &str = "SNAT_ICMP_ECHO";
 
-impl ActionDesc for SNatIcmpEchoDesc {
+impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
+    // SNAT needs to generate an additional transform for ICMP traffic in
+    // order to treat the Echo Identifier as a psuedo ULP port.
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             // Outbound traffic needs its source IP rewritten, and its
             // 'source port' placed into the ICMP echo ID field.
             Direction::Out => {
-                let ip = IpMod::from(Ipv4Mod {
-                    src: Some(self.nat.ip),
-                    ..Default::default()
-                });
+                let ip = IpMod::new_src(self.nat.ip.into());
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
@@ -496,10 +426,8 @@ impl ActionDesc for SNatIcmpEchoDesc {
             // destination port mapped back to the private values that
             // the guest expects to see.
             Direction::In => {
-                let ip = IpMod::from(Ipv4Mod {
-                    dst: Some(self.priv_ip),
-                    ..Default::default()
-                });
+                let ip = IpMod::new_dst(self.priv_ip.into());
+
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
                     inner_ip: HeaderAction::Modify(ip, PhantomData),
@@ -513,8 +441,6 @@ impl ActionDesc for SNatIcmpEchoDesc {
         }
     }
 
-    // SNAT needs to generate a payload transform for ICMP traffic in
-    // order to treat the Echo Identifier as a psuedo ULP port.
     fn gen_bt(
         &self,
         _dir: Direction,
@@ -529,7 +455,7 @@ impl ActionDesc for SNatIcmpEchoDesc {
     }
 }
 
-impl Drop for SNatIcmpEchoDesc {
+impl<T: ConcreteIpAddr> Drop for SNatIcmpEchoDesc<T> {
     fn drop(&mut self) {
         self.pool.release(&self.priv_ip, self.nat);
     }

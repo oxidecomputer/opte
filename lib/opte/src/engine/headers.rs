@@ -224,6 +224,30 @@ pub enum IpMod {
     Ip6(Ipv6Mod),
 }
 
+impl IpMod {
+    pub fn new_src(ip: IpAddr) -> Self {
+        match ip {
+            IpAddr::Ip4(ip) => {
+                Self::Ip4(Ipv4Mod { src: Some(ip), ..Default::default() })
+            }
+            IpAddr::Ip6(ip) => {
+                Self::Ip6(Ipv6Mod { src: Some(ip), ..Default::default() })
+            }
+        }
+    }
+
+    pub fn new_dst(ip: IpAddr) -> Self {
+        match ip {
+            IpAddr::Ip4(ip) => {
+                Self::Ip4(Ipv4Mod { dst: Some(ip), ..Default::default() })
+            }
+            IpAddr::Ip6(ip) => {
+                Self::Ip6(Ipv6Mod { dst: Some(ip), ..Default::default() })
+            }
+        }
+    }
+}
+
 impl ModifyAction<IpMeta> for IpMod {
     fn modify(&self, meta: &mut IpMeta) {
         match (self, meta) {

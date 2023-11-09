@@ -32,7 +32,6 @@ use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
 use opte::engine::snat::NatPool;
 use opte::engine::snat::SNat;
-use opte::engine::snat::SNat6;
 
 pub const NAT_LAYER_NAME: &str = "nat";
 const ONE_TO_ONE_NAT_PRIORITY: u16 = 10;
@@ -153,7 +152,7 @@ fn setup_ipv6_nat(
             snat_cfg.external_ip,
             snat_cfg.ports.clone(),
         );
-        let snat = SNat6::new(ip_cfg.private_ip, Arc::new(pool));
+        let snat = SNat::new(ip_cfg.private_ip, Arc::new(pool));
         let mut rule =
             Rule::new(SNAT_PRIORITY, Action::Stateful(Arc::new(snat)));
 
