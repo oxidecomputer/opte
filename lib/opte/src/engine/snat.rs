@@ -11,10 +11,8 @@ use super::headers::IpMod;
 use super::headers::UlpGenericModify;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
-use super::packet::BodyTransform;
 use super::packet::InnerFlowId;
 use super::packet::Packet;
-use super::packet::PacketMeta;
 use super::packet::Parsed;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
@@ -23,7 +21,6 @@ use super::rule::ActionDesc;
 use super::rule::AllowOrDeny;
 use super::rule::FiniteHandle;
 use super::rule::FiniteResource;
-use super::rule::GenBtError;
 use super::rule::GenDescError;
 use super::rule::GenDescResult;
 use super::rule::HdrTransform;
@@ -34,7 +31,6 @@ use super::rule::StatefulAction;
 use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KMutexType;
 use crate::engine::icmp::QueryEcho;
-use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -67,7 +63,7 @@ struct PortList<T: ConcreteIpAddr> {
     ip: T,
     // The list of all possible ports available in the NAT pool
     ports: RangeInclusive<u16>,
-    // The list of unused / free ports in the pool
+    // The list of unused / free ports in the pool.
     free_ports: Vec<u16>,
 }
 
@@ -77,6 +73,7 @@ impl<T: ConcreteIpAddr> ResourceEntry for NatPoolEntry<T> {}
 /// NAT-ing connections.
 pub struct NatPool<T: ConcreteIpAddr> {
     // Map private IP to public IP + free list of ports
+    // TODO: consider KRWlock + ringbuf of free_ports?
     free_list: KMutex<BTreeMap<T, PortList<T>>>,
 }
 
@@ -191,7 +188,15 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
 #[derive(Clone)]
 pub struct SNat<T: ConcreteIpAddr> {
     priv_ip: T,
-    ip_pool: Arc<NatPool<T>>,
+
+    // Each ULP has its own pool of SNAT ports to allocate, as flow-keys are already
+    // disambiguated since the UFT 5-tuple includes protocol information.
+    // We store separate NAT pools instead of implementing NatPool::Key = (Protocol, T)
+    // (and having multiple freelists in `PortList`) to prevent us from needing to
+    // include protocol in the generated `ActionDesc`.
+    tcp_pool: Arc<NatPool<T>>,
+    udp_pool: Arc<NatPool<T>>,
+    icmp_pool: Arc<NatPool<T>>,
 }
 
 enum GenIcmpErr<T: Display> {
@@ -215,8 +220,20 @@ impl<T: Display> From<GenIcmpErr<T>> for GenDescError {
 }
 
 impl<T: ConcreteIpAddr + 'static> SNat<T> {
-    pub fn new(addr: T, ip_pool: Arc<NatPool<T>>) -> Self {
-        SNat { priv_ip: addr, ip_pool }
+    pub fn new(addr: T) -> Self {
+        SNat {
+            priv_ip: addr,
+            tcp_pool: Default::default(),
+            udp_pool: Default::default(),
+            icmp_pool: Default::default(),
+        }
+    }
+
+    pub fn add(&self, priv_ip: T, pub_ip: T, pub_ports: RangeInclusive<u16>) {
+        let pools = [&self.tcp_pool, &self.udp_pool, &self.icmp_pool];
+        for pool in pools {
+            pool.add(priv_ip, pub_ip, pub_ports.clone())
+        }
     }
 
     // A helper method for generating an SNAT + ICMP(v6) action descriptor.
@@ -265,14 +282,15 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
 
 impl Display for SNat<Ipv4Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let (pub_ip, ports) = self.ip_pool.mapping(self.priv_ip).unwrap();
+        // Here and below: all ULP-specific pools have the same SNAT mappings.
+        let (pub_ip, ports) = self.tcp_pool.mapping(self.priv_ip).unwrap();
         write!(f, "{}:{}-{}", pub_ip, ports.start(), ports.end())
     }
 }
 
 impl Display for SNat<Ipv6Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let (pub_ip, ports) = self.ip_pool.mapping(self.priv_ip).unwrap();
+        let (pub_ip, ports) = self.tcp_pool.mapping(self.priv_ip).unwrap();
         write!(f, "[{}]:{}-{}", pub_ip, ports.start(), ports.end())
     }
 }
@@ -287,17 +305,27 @@ where
         pkt: &Packet<Parsed>,
         _meta: &mut ActionMeta,
     ) -> GenDescResult {
-        let pool = &self.ip_pool;
         let priv_port = flow_id.src_port;
-        match pool.obtain(&self.priv_ip) {
-            Ok(nat) if flow_id.proto == T::MESSAGE_PROTOCOL => {
-                self.gen_icmp_desc(nat, pkt)
+        let is_icmp = flow_id.proto == T::MESSAGE_PROTOCOL;
+        let pool = match flow_id.proto {
+            Protocol::TCP => &self.tcp_pool,
+            Protocol::UDP => &self.udp_pool,
+            _ if is_icmp => &self.icmp_pool,
+            proto => {
+                return Err(GenDescError::Unexpected {
+                    msg: format!("SNAT pool (unexpected ULP: {})", proto),
+                })
             }
+        };
 
+        match pool.obtain(&self.priv_ip) {
             Ok(nat) => {
-                let desc = SNatDesc { priv_port, nat };
-
-                Ok(AllowOrDeny::Allow(Arc::new(desc)))
+                if is_icmp {
+                    self.gen_icmp_desc(nat, pkt)
+                } else {
+                    let desc = SNatDesc { priv_port, nat };
+                    Ok(AllowOrDeny::Allow(Arc::new(desc)))
+                }
             }
 
             Err(ResourceError::Exhausted) => {
@@ -375,6 +403,9 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
     }
 }
 
+// NOTE: we may or may not want to fuse with `SNatDesc` using an
+// `enum PrivatePort` or similar -- depends on what the best way is
+// to handle body transforms of nested ICMP like OPTE#369.
 pub struct SNatIcmpEchoDesc<T: ConcreteIpAddr> {
     nat: SNatAlloc<T>,
     echo_ident: u16,
@@ -420,15 +451,6 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
                 }
             }
         }
-    }
-
-    fn gen_bt(
-        &self,
-        _dir: Direction,
-        _meta: &PacketMeta,
-        _payload_segs: &[&[u8]],
-    ) -> Result<Option<Box<dyn BodyTransform>>, GenBtError> {
-        Ok(None)
     }
 
     fn name(&self) -> &str {
@@ -484,11 +506,10 @@ mod test {
         let outside_ip: Ipv4Addr = "76.76.21.21".parse().unwrap();
         let outside_port = 80;
 
-        let pool = Arc::new(NatPool::new());
-        pool.add(priv_ip, pub_ip, 8765..=8765);
-        let snat = SNat::new(priv_ip, pool.clone());
+        let snat = SNat::new(priv_ip);
+        snat.add(priv_ip, pub_ip, 8765..=8765);
         let mut action_meta = ActionMeta::new();
-        assert!(pool.verify_available(priv_ip, pub_ip, pub_port));
+        assert!(snat.tcp_pool.verify_available(priv_ip, pub_ip, pub_port));
 
         // ================================================================
         // Build the packet
@@ -526,7 +547,7 @@ mod test {
             Ok(AllowOrDeny::Allow(desc)) => desc,
             _ => panic!("expected AllowOrDeny::Allow(desc) result"),
         };
-        assert!(!pool.verify_available(priv_ip, pub_ip, pub_port));
+        assert!(!snat.tcp_pool.verify_available(priv_ip, pub_ip, pub_port));
 
         // ================================================================
         // Verify outbound header transformation
@@ -612,11 +633,17 @@ mod test {
         assert_eq!(tcp_meta.flags, 0);
 
         // ================================================================
+        // Verify other ULPs are unaffected.
+        // ================================================================
+        assert!(snat.udp_pool.verify_available(priv_ip, pub_ip, pub_port));
+        assert!(snat.icmp_pool.verify_available(priv_ip, pub_ip, pub_port));
+
+        // ================================================================
         // Drop the descriptor and verify the IP/port resource is
         // handed back to the pool.
         // ================================================================
         drop(desc);
-        assert!(pool.verify_available(priv_ip, pub_ip, pub_port));
+        assert!(snat.tcp_pool.verify_available(priv_ip, pub_ip, pub_port));
     }
 
     #[test]
@@ -630,7 +657,7 @@ mod test {
         pool.add(priv2, external_ip, 4097..=8192);
 
         assert_eq!(pool.num_avail(priv1).unwrap(), 3072);
-        let npe1 = match pool.obtain(&priv1) {
+        let npe1 = match pool.obtain_raw(&priv1) {
             Ok(npe) => npe,
             _ => panic!("failed to obtain mapping"),
         };
@@ -640,7 +667,7 @@ mod test {
         assert!(npe1.port <= 4096);
 
         assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
-        let npe2 = match pool.obtain(&priv2) {
+        let npe2 = match pool.obtain_raw(&priv2) {
             Ok(npe) => npe,
             _ => panic!("failed to obtain mapping"),
         };
