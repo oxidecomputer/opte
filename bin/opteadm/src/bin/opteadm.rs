@@ -184,13 +184,10 @@ enum Command {
         src_underlay_addr: Ipv6Addr,
 
         #[command(flatten)]
-        snat: Option<SnatConfig>,
+        external_net: ExternalNetConfig,
 
         #[command(flatten)]
         dhcp: DhcpConfig,
-
-        #[arg(long)]
-        external_ip: Option<IpAddr>,
 
         #[arg(long)]
         passthrough: bool,
@@ -242,18 +239,44 @@ impl From<Filters> for FirewallFilters {
     }
 }
 
+// TODO: expand this to allow for v4 and v6 simultaneously?
+///
+#[derive(Args, Debug)]
+struct ExternalNetConfig {
+    #[command(flatten)]
+    snat: Option<SnatConfig>,
+
+    /// An external IP address used for 1-to-1 NAT.
+    ///
+    /// If `floating_ip`s are defined, then a port will receive and reply
+    /// (but not originate traffic on) this address.
+    #[arg(long)]
+    external_ip: Option<IpAddr>,
+
+    /// A comma-separated list of floating IP addresses which a port will prefer
+    /// for sending and receiving traffic.
+    #[arg(long)]
+    floating_ip: Vec<IpAddr>,
+}
+
 #[derive(Args, Debug)]
 #[group(requires_all = ["snat_ip", "snat_start", "snat_end"], multiple = true)]
 struct SnatConfig {
     /// The external IP address used for source NAT for the guest.
+    ///
+    /// Requires `snat_ip`, `snat_start`, and `snat_end` to be defined.
     #[arg(long, required = false)]
     snat_ip: IpAddr,
 
     /// The starting L4 port used for source NAT for the guest.
+    ///
+    /// See `snat_ip` for mandatory shared arguments.
     #[arg(long, required = false)]
     snat_start: u16,
 
     /// The ending L4 port used for source NAT for the guest.
+    ///
+    /// See `snat_ip` for mandatory shared arguments.
     #[arg(long, required = false)]
     snat_end: u16,
 }
@@ -438,11 +461,13 @@ fn main() -> anyhow::Result<()> {
             bsvc_mac,
             vpc_vni,
             src_underlay_addr,
-            snat,
             dhcp,
-            external_ip,
+            external_net,
             passthrough,
         } => {
+            let ExternalNetConfig { snat, external_ip, floating_ip } =
+                external_net;
+
             let ip_cfg = match private_ip {
                 IpAddr::Ip4(private_ip) => {
                     let IpCidr::Ip4(vpc_subnet) = vpc_subnet else {
@@ -463,12 +488,22 @@ fn main() -> anyhow::Result<()> {
                         None => None,
                     };
 
+                    let floating_ips = floating_ip
+                        .iter()
+                        .copied()
+                        .map(|ip| match ip {
+                            IpAddr::Ip4(ip) => Ok(ip),
+                            _ => anyhow::bail!("expected IPv4 floating IP"),
+                        })
+                        .collect::<Result<Vec<opte::api::Ipv4Addr>, _>>()?;
+
                     IpCfg::Ipv4(Ipv4Cfg {
                         vpc_subnet,
                         private_ip,
                         gateway_ip,
                         snat,
-                        external_ips: external_ip,
+                        external_ip,
+                        floating_ips,
                     })
                 }
                 IpAddr::Ip6(private_ip) => {
@@ -490,12 +525,22 @@ fn main() -> anyhow::Result<()> {
                         None => None,
                     };
 
+                    let floating_ips = floating_ip
+                        .iter()
+                        .copied()
+                        .map(|ip| match ip {
+                            IpAddr::Ip6(ip) => Ok(ip),
+                            _ => anyhow::bail!("expected IPv6 floating IP"),
+                        })
+                        .collect::<Result<Vec<opte::api::Ipv6Addr>, _>>()?;
+
                     IpCfg::Ipv6(Ipv6Cfg {
                         vpc_subnet,
                         private_ip,
                         gateway_ip,
                         snat,
-                        external_ips: external_ip,
+                        external_ip,
+                        floating_ips,
                     })
                 }
             };

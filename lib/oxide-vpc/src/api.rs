@@ -70,14 +70,22 @@ pub struct Ipv4Cfg {
     // implemented in Omicron.
     pub snat: Option<SNat4Cfg>,
 
-    /// Optional external IP addresses for this port.
+    /// Optional external IP address for this port.
     ///
     /// This allows hosts on the external network to make inbound connections to
     /// the guest. When present, it is also used as 1:1 NAT for outbound
     /// connections from the guest to an external network.
-    //
-    // XXX For now we only allow one external IP.
-    pub external_ips: Option<Ipv4Addr>,
+    ///
+    /// In the presence of one or more floating IPs, this address will only be used to
+    /// listen and reply to inbound flows.
+    pub external_ip: Option<Ipv4Addr>,
+
+    /// Optional floating IP addresses for this port.
+    ///
+    /// These serve a similar function to `external_ip`, however a host will explicitly
+    /// prefer floating IPs for outbound traffic and will spread outbound flows across
+    /// the addresses provided by Omicron.
+    pub floating_ips: Vec<Ipv4Addr>,
 }
 
 /// The IPv6 configuration of a VPC guest.
@@ -112,14 +120,22 @@ pub struct Ipv6Cfg {
     // implemented in Omicron.
     pub snat: Option<SNat6Cfg>,
 
-    /// Optional external IP addresses for this port.
+    /// Optional external IP address for this port.
     ///
     /// This allows hosts on the external network to make inbound connections to
     /// the guest. When present, it is also used as 1:1 NAT for outbound
     /// connections from the guest to an external network.
-    //
-    // XXX For now we only allow one external IP.
-    pub external_ips: Option<Ipv6Addr>,
+    ///
+    /// In the presence of one or more floating IPs, this address will only be used to
+    /// listen and reply to inbound flows.
+    pub external_ip: Option<Ipv6Addr>,
+
+    /// Optional floating IP addresses for this port.
+    ///
+    /// These serve a similar function to `external_ip`, however a host will explicitly
+    /// prefer floating IPs for outbound traffic and will spread outbound flows across
+    /// the addresses provided by Omicron.
+    pub floating_ips: Vec<Ipv6Addr>,
 }
 
 /// The IP configuration of a VPC guest.
@@ -135,7 +151,7 @@ impl IpCfg {
     pub fn ext_ipv4(&self) -> Ipv4Addr {
         match self {
             Self::Ipv4(ipv4) | Self::DualStack { ipv4, .. } => {
-                ipv4.external_ips.unwrap()
+                ipv4.external_ip.unwrap()
             }
 
             _ => panic!("set IPv4 external IP on IPv6-only config"),
@@ -149,7 +165,7 @@ impl IpCfg {
                 if let Some(snat) = &ipv4.snat {
                     assert_ne!(snat.external_ip, ip);
                 }
-                ipv4.external_ips = Some(ip);
+                ipv4.external_ip = Some(ip);
             }
 
             _ => panic!("set IPv4 external IP on IPv6-only config"),
@@ -315,9 +331,10 @@ impl VpcCfg {
     // for confirmation that the layer will be "empty" if we have no external
     // addresses.
     pub fn n_external_ports(&self) -> Option<u32> {
+        // TODO: factor in floating IPs here?
         let n_ipv4_ports = match &self.ip_cfg {
             IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. } => {
-                match (ipv4.external_ips, &ipv4.snat) {
+                match (ipv4.external_ip, &ipv4.snat) {
                     (Some(_), _) => Some(u32::from(u16::MAX)),
                     (None, Some(snat)) => {
                         // Safety: This is an inclusive range of `u16`s, so the
@@ -332,7 +349,7 @@ impl VpcCfg {
         };
         let n_ipv6_ports = match &self.ip_cfg {
             IpCfg::Ipv6(ipv6) | IpCfg::DualStack { ipv6, .. } => {
-                match (ipv6.external_ips, &ipv6.snat) {
+                match (ipv6.external_ip, &ipv6.snat) {
                     (Some(_), _) => Some(u32::from(u16::MAX)),
                     (None, Some(snat)) => {
                         // Safety: This is an inclusive range of `u16`s, so the
@@ -969,23 +986,25 @@ mod tests {
             ip_cfg: IpCfg::DualStack {
                 ipv4: Ipv4Cfg {
                     private_ip: "10.0.0.5".parse().unwrap(),
-                    external_ips: Some("10.1.0.5".parse().unwrap()),
+                    external_ip: Some("10.1.0.5".parse().unwrap()),
                     gateway_ip: "10.0.0.1".parse().unwrap(),
                     snat: Some(SNat4Cfg {
                         external_ip: "10.1.0.6".parse().unwrap(),
                         ports: 0..=8095,
                     }),
                     vpc_subnet: "10.0.0.0/24".parse().unwrap(),
+                    floating_ips: vec![],
                 },
                 ipv6: Ipv6Cfg {
                     private_ip: "fd00::5".parse().unwrap(),
-                    external_ips: Some("fd00:1::5".parse().unwrap()),
+                    external_ip: Some("fd00:1::5".parse().unwrap()),
                     gateway_ip: "fd00::1".parse().unwrap(),
                     snat: Some(SNat6Cfg {
                         external_ip: "fd00:1::6".parse().unwrap(),
                         ports: 0..=8095,
                     }),
                     vpc_subnet: "fd00::/64".parse().unwrap(),
+                    floating_ips: vec![],
                 },
             },
             vni: Vni::new(100u32).unwrap(),
@@ -1006,10 +1025,10 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let ipv4 = cfg.ipv4_cfg_mut().unwrap();
         ipv4.snat.take();
-        ipv4.external_ips.take();
+        ipv4.external_ip.take();
         let ipv6 = cfg.ipv6_cfg_mut().unwrap();
         ipv6.snat.take();
-        ipv6.external_ips.take();
+        ipv6.external_ip.take();
         assert_eq!(cfg.n_external_ports(), None);
     }
 
@@ -1018,7 +1037,7 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let ipv6 = cfg.ipv6_cfg_mut().unwrap();
         ipv6.snat.take();
-        ipv6.external_ips.take();
+        ipv6.external_ip.take();
         assert_eq!(cfg.n_external_ports(), Some(u32::from(u16::MAX)));
     }
 
@@ -1027,7 +1046,7 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let ipv4 = cfg.ipv4_cfg_mut().unwrap();
         ipv4.snat.take();
-        ipv4.external_ips.take();
+        ipv4.external_ip.take();
         assert_eq!(cfg.n_external_ports(), Some(u32::from(u16::MAX)));
     }
 
@@ -1036,9 +1055,9 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let ipv6 = cfg.ipv6_cfg_mut().unwrap();
         ipv6.snat.take();
-        ipv6.external_ips.take();
+        ipv6.external_ip.take();
         let ipv4 = cfg.ipv4_cfg_mut().unwrap();
-        ipv4.external_ips.take();
+        ipv4.external_ip.take();
         assert_eq!(cfg.n_external_ports(), Some(8096));
     }
 
@@ -1047,9 +1066,9 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let ipv4 = cfg.ipv4_cfg_mut().unwrap();
         ipv4.snat.take();
-        ipv4.external_ips.take();
+        ipv4.external_ip.take();
         let ipv6 = cfg.ipv6_cfg_mut().unwrap();
-        ipv6.external_ips.take();
+        ipv6.external_ip.take();
         assert_eq!(cfg.n_external_ports(), Some(8096));
     }
 
@@ -1058,11 +1077,11 @@ mod tests {
     fn test_n_external_ports_bad_snat_range() {
         let mut cfg = test_vpc_cfg();
         let ipv4 = cfg.ipv4_cfg_mut().unwrap();
-        ipv4.external_ips.take();
+        ipv4.external_ip.take();
         ipv4.snat.as_mut().unwrap().ports = 8096..=0;
         let ipv6 = cfg.ipv6_cfg_mut().unwrap();
         ipv6.snat.take();
-        ipv6.external_ips.take();
+        ipv6.external_ip.take();
         assert_eq!(cfg.n_external_ports(), Some(0));
     }
 }

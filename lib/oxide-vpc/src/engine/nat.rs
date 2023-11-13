@@ -67,7 +67,7 @@ fn setup_ipv4_nat(
     // When it comes to NAT we always prefer using 1:1 NAT of external
     // IP to SNAT. To achieve this we place the NAT rules at a lower
     // priority than SNAT.
-    if let Some(ip4) = ip_cfg.external_ips {
+    if let Some(ip4) = ip_cfg.external_ip {
         let nat = Arc::new(Nat::new(ip_cfg.private_ip, ip4));
 
         // 1:1 NAT outbound packets destined for internet gateway.
@@ -121,7 +121,7 @@ fn setup_ipv6_nat(
     // When it comes to NAT we always prefer using 1:1 NAT of external
     // IP to SNAT. To achieve this we place the NAT rules at a lower
     // priority than SNAT.
-    if let Some(ip6) = ip_cfg.external_ips {
+    if let Some(ip6) = ip_cfg.external_ip {
         let nat = Arc::new(Nat::new(ip_cfg.private_ip, ip6));
 
         // 1:1 NAT outbound packets destined for internet gateway.
