@@ -134,7 +134,7 @@ pub fn g1_cfg() -> VpcCfg {
                 external_ip: "10.77.77.13".parse().unwrap(),
                 ports: 1025..=4096,
             }),
-            external_ip: None,
+            ephemeral_ip: None,
             floating_ips: vec![],
         },
         ipv6: Ipv6Cfg {
@@ -145,7 +145,7 @@ pub fn g1_cfg() -> VpcCfg {
                 external_ip: "2001:db8::1".parse().unwrap(),
                 ports: 4097..=8192,
             }),
-            external_ip: None,
+            ephemeral_ip: None,
             floating_ips: vec![],
         },
     };
@@ -183,7 +183,7 @@ pub fn g2_cfg() -> VpcCfg {
                 external_ip: "10.77.77.23".parse().unwrap(),
                 ports: 4097..=8192,
             }),
-            external_ip: None,
+            ephemeral_ip: None,
             floating_ips: vec![],
         },
         ipv6: Ipv6Cfg {
@@ -194,7 +194,7 @@ pub fn g2_cfg() -> VpcCfg {
                 external_ip: "2001:db8::1".parse().unwrap(),
                 ports: 1025..=4096,
             }),
-            external_ip: None,
+            ephemeral_ip: None,
             floating_ips: vec![],
         },
     };
@@ -327,7 +327,7 @@ pub fn oxide_net_setup2(
     let vps = VpcPortState::new();
     let mut pav = PortAndVps { port, vps, vpc_map };
 
-    let nat_rules = match cfg.ipv4().external_ip {
+    let nat_rules = match cfg.ipv4().ephemeral_ip {
         Some(_) => "incr:nat.rules.in, nat.rules.out",
         _ => "",
     };

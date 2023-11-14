@@ -107,7 +107,7 @@ fn setup_ipv4_nat(
         layer.add_rule(Direction::In, in_nat.finalize());
     }
 
-    if let Some(ip4) = ip_cfg.external_ip {
+    if let Some(ip4) = ip_cfg.ephemeral_ip {
         // 1:1 NAT outbound packets destined for internet gateway.
         let mut out_nat = Rule::new(
             EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,
@@ -201,7 +201,7 @@ fn setup_ipv6_nat(
         layer.add_rule(Direction::In, in_nat.finalize());
     }
 
-    if let Some(ip6) = ip_cfg.external_ip {
+    if let Some(ip6) = ip_cfg.ephemeral_ip {
         // 1:1 NAT outbound packets destined for internet gateway.
         let mut out_nat = Rule::new(
             EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,

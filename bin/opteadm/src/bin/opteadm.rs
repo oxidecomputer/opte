@@ -251,7 +251,7 @@ struct ExternalNetConfig {
     /// If `floating_ip`s are defined, then a port will receive and reply
     /// (but not originate traffic on) this address.
     #[arg(long)]
-    external_ip: Option<IpAddr>,
+    ephemeral_ip: Option<IpAddr>,
 
     /// A comma-separated list of floating IP addresses which a port will prefer
     /// for sending and receiving traffic.
@@ -374,11 +374,11 @@ fn print_port(pi: PortInfo) {
         pi.name,
         pi.mac_addr.to_string(),
         pi.ip4_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
-        pi.external_ip4_addr
+        pi.ephemeral_ip4_addr
             .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
         pi.ip6_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
-        pi.external_ip6_addr
+        pi.ephemeral_ip6_addr
             .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
         pi.state,
@@ -465,7 +465,7 @@ fn main() -> anyhow::Result<()> {
             external_net,
             passthrough,
         } => {
-            let ExternalNetConfig { snat, external_ip, floating_ip } =
+            let ExternalNetConfig { snat, ephemeral_ip, floating_ip } =
                 external_net;
 
             let ip_cfg = match private_ip {
@@ -480,7 +480,7 @@ fn main() -> anyhow::Result<()> {
 
                     let snat = snat.map(SNat4Cfg::try_from).transpose()?;
 
-                    let external_ip = match external_ip {
+                    let ephemeral_ip = match ephemeral_ip {
                         Some(IpAddr::Ip4(ip)) => Some(ip),
                         Some(IpAddr::Ip6(_)) => {
                             anyhow::bail!("expected IPv4 external IP");
@@ -502,7 +502,7 @@ fn main() -> anyhow::Result<()> {
                         private_ip,
                         gateway_ip,
                         snat,
-                        external_ip,
+                        ephemeral_ip,
                         floating_ips,
                     })
                 }
@@ -517,7 +517,7 @@ fn main() -> anyhow::Result<()> {
 
                     let snat = snat.map(SNat6Cfg::try_from).transpose()?;
 
-                    let external_ip = match external_ip {
+                    let ephemeral_ip = match ephemeral_ip {
                         Some(IpAddr::Ip4(_)) => {
                             anyhow::bail!("expected IPv6 external IP");
                         }
@@ -539,7 +539,7 @@ fn main() -> anyhow::Result<()> {
                         private_ip,
                         gateway_ip,
                         snat,
-                        external_ip,
+                        ephemeral_ip,
                         floating_ips,
                     })
                 }

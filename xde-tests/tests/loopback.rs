@@ -91,7 +91,7 @@ impl OptePort {
                     external_ip: "1.2.3.4".parse().unwrap(),
                     ports: 1000..=2000,
                 }),
-                external_ip: None,
+                ephemeral_ip: None,
                 floating_ips: vec![],
             }),
             guest_mac: guest_mac.parse().unwrap(),

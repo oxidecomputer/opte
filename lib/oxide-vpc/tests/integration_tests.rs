@@ -88,7 +88,7 @@ fn lab_cfg() -> VpcCfg {
             external_ip: "76.76.21.21".parse().unwrap(),
             ports: 1025..=4096,
         }),
-        external_ip: None,
+        ephemeral_ip: None,
         floating_ips: vec![],
     });
     VpcCfg {
@@ -3065,7 +3065,7 @@ fn tcp_inbound() {
                 external_ip: "10.77.77.13".parse().unwrap(),
                 ports: 1025..=4096,
             }),
-            external_ip: Some("10.60.1.20".parse().unwrap()),
+            ephemeral_ip: Some("10.60.1.20".parse().unwrap()),
             floating_ips: vec![],
         },
         ipv6: Ipv6Cfg {
@@ -3076,7 +3076,7 @@ fn tcp_inbound() {
                 external_ip: "2001:db8::1".parse().unwrap(),
                 ports: 1025..=4096,
             }),
-            external_ip: None,
+            ephemeral_ip: None,
             floating_ips: vec![],
         },
     };
@@ -3098,7 +3098,7 @@ fn tcp_inbound() {
     let client_ip = "52.10.128.69".parse().unwrap();
     let bs_mac = g1_cfg.boundary_services.mac;
     let serv_mac = g1_cfg.guest_mac;
-    let serv_ext_ip = g1_cfg.ipv4().external_ip.unwrap();
+    let serv_ext_ip = g1_cfg.ipv4().ephemeral_ip.unwrap();
     let bs_phys = TestIpPhys {
         ip: g1_cfg.boundary_services.ip,
         mac: g1_cfg.boundary_services.mac,

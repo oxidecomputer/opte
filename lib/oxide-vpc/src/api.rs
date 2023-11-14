@@ -78,7 +78,7 @@ pub struct Ipv4Cfg {
     ///
     /// In the presence of one or more floating IPs, this address will only be used to
     /// listen and reply to inbound flows.
-    pub external_ip: Option<Ipv4Addr>,
+    pub ephemeral_ip: Option<Ipv4Addr>,
 
     /// Optional floating IP addresses for this port.
     ///
@@ -128,7 +128,7 @@ pub struct Ipv6Cfg {
     ///
     /// In the presence of one or more floating IPs, this address will only be used to
     /// listen and reply to inbound flows.
-    pub external_ip: Option<Ipv6Addr>,
+    pub ephemeral_ip: Option<Ipv6Addr>,
 
     /// Optional floating IP addresses for this port.
     ///
@@ -151,7 +151,7 @@ impl IpCfg {
     pub fn ext_ipv4(&self) -> Ipv4Addr {
         match self {
             Self::Ipv4(ipv4) | Self::DualStack { ipv4, .. } => {
-                ipv4.external_ip.unwrap()
+                ipv4.ephemeral_ip.unwrap()
             }
 
             _ => panic!("set IPv4 external IP on IPv6-only config"),
@@ -165,7 +165,7 @@ impl IpCfg {
                 if let Some(snat) = &ipv4.snat {
                     assert_ne!(snat.external_ip, ip);
                 }
-                ipv4.external_ip = Some(ip);
+                ipv4.ephemeral_ip = Some(ip);
             }
 
             _ => panic!("set IPv4 external IP on IPv6-only config"),
@@ -334,7 +334,7 @@ impl VpcCfg {
         // TODO: factor in floating IPs here?
         let n_ipv4_ports = match &self.ip_cfg {
             IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. } => {
-                match (ipv4.external_ip, &ipv4.snat) {
+                match (ipv4.ephemeral_ip, &ipv4.snat) {
                     (Some(_), _) => Some(u32::from(u16::MAX)),
                     (None, Some(snat)) => {
                         // Safety: This is an inclusive range of `u16`s, so the
@@ -349,7 +349,7 @@ impl VpcCfg {
         };
         let n_ipv6_ports = match &self.ip_cfg {
             IpCfg::Ipv6(ipv6) | IpCfg::DualStack { ipv6, .. } => {
-                match (ipv6.external_ip, &ipv6.snat) {
+                match (ipv6.ephemeral_ip, &ipv6.snat) {
                     (Some(_), _) => Some(u32::from(u16::MAX)),
                     (None, Some(snat)) => {
                         // Safety: This is an inclusive range of `u16`s, so the
@@ -521,10 +521,10 @@ pub struct PortInfo {
     pub name: String,
     pub mac_addr: MacAddr,
     pub ip4_addr: Option<Ipv4Addr>,
-    pub external_ip4_addr: Option<Ipv4Addr>,
+    pub ephemeral_ip4_addr: Option<Ipv4Addr>,
     pub floating_ip4_addrs: Option<Vec<Ipv4Addr>>,
     pub ip6_addr: Option<Ipv6Addr>,
-    pub external_ip6_addr: Option<Ipv6Addr>,
+    pub ephemeral_ip6_addr: Option<Ipv6Addr>,
     pub floating_ip6_addrs: Option<Vec<Ipv6Addr>>,
     pub state: String,
 }
@@ -988,7 +988,7 @@ mod tests {
             ip_cfg: IpCfg::DualStack {
                 ipv4: Ipv4Cfg {
                     private_ip: "10.0.0.5".parse().unwrap(),
-                    external_ip: Some("10.1.0.5".parse().unwrap()),
+                    ephemeral_ip: Some("10.1.0.5".parse().unwrap()),
                     gateway_ip: "10.0.0.1".parse().unwrap(),
                     snat: Some(SNat4Cfg {
                         external_ip: "10.1.0.6".parse().unwrap(),
@@ -999,7 +999,7 @@ mod tests {
                 },
                 ipv6: Ipv6Cfg {
                     private_ip: "fd00::5".parse().unwrap(),
-                    external_ip: Some("fd00:1::5".parse().unwrap()),
+                    ephemeral_ip: Some("fd00:1::5".parse().unwrap()),
                     gateway_ip: "fd00::1".parse().unwrap(),
                     snat: Some(SNat6Cfg {
                         external_ip: "fd00:1::6".parse().unwrap(),
@@ -1027,10 +1027,10 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let ipv4 = cfg.ipv4_cfg_mut().unwrap();
         ipv4.snat.take();
-        ipv4.external_ip.take();
+        ipv4.ephemeral_ip.take();
         let ipv6 = cfg.ipv6_cfg_mut().unwrap();
         ipv6.snat.take();
-        ipv6.external_ip.take();
+        ipv6.ephemeral_ip.take();
         assert_eq!(cfg.n_external_ports(), None);
     }
 
@@ -1039,7 +1039,7 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let ipv6 = cfg.ipv6_cfg_mut().unwrap();
         ipv6.snat.take();
-        ipv6.external_ip.take();
+        ipv6.ephemeral_ip.take();
         assert_eq!(cfg.n_external_ports(), Some(u32::from(u16::MAX)));
     }
 
@@ -1048,7 +1048,7 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let ipv4 = cfg.ipv4_cfg_mut().unwrap();
         ipv4.snat.take();
-        ipv4.external_ip.take();
+        ipv4.ephemeral_ip.take();
         assert_eq!(cfg.n_external_ports(), Some(u32::from(u16::MAX)));
     }
 
@@ -1057,9 +1057,9 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let ipv6 = cfg.ipv6_cfg_mut().unwrap();
         ipv6.snat.take();
-        ipv6.external_ip.take();
+        ipv6.ephemeral_ip.take();
         let ipv4 = cfg.ipv4_cfg_mut().unwrap();
-        ipv4.external_ip.take();
+        ipv4.ephemeral_ip.take();
         assert_eq!(cfg.n_external_ports(), Some(8096));
     }
 
@@ -1068,9 +1068,9 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let ipv4 = cfg.ipv4_cfg_mut().unwrap();
         ipv4.snat.take();
-        ipv4.external_ip.take();
+        ipv4.ephemeral_ip.take();
         let ipv6 = cfg.ipv6_cfg_mut().unwrap();
-        ipv6.external_ip.take();
+        ipv6.ephemeral_ip.take();
         assert_eq!(cfg.n_external_ports(), Some(8096));
     }
 
@@ -1079,11 +1079,11 @@ mod tests {
     fn test_n_external_ports_bad_snat_range() {
         let mut cfg = test_vpc_cfg();
         let ipv4 = cfg.ipv4_cfg_mut().unwrap();
-        ipv4.external_ip.take();
+        ipv4.ephemeral_ip.take();
         ipv4.snat.as_mut().unwrap().ports = 8096..=0;
         let ipv6 = cfg.ipv6_cfg_mut().unwrap();
         ipv6.snat.take();
-        ipv6.external_ip.take();
+        ipv6.ephemeral_ip.take();
         assert_eq!(cfg.n_external_ports(), Some(0));
     }
 }

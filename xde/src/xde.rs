@@ -2255,19 +2255,19 @@ fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
             name: dev.port.name().to_string(),
             mac_addr: dev.port.mac_addr(),
             ip4_addr: dev.vpc_cfg.ipv4_cfg().map(|cfg| cfg.private_ip),
-            external_ip4_addr: dev
+            ephemeral_ip4_addr: dev
                 .vpc_cfg
                 .ipv4_cfg()
-                .and_then(|cfg| cfg.external_ip),
+                .and_then(|cfg| cfg.ephemeral_ip),
             floating_ip4_addrs: dev
                 .vpc_cfg
                 .ipv4_cfg()
                 .map(|cfg| cfg.floating_ips.clone()),
             ip6_addr: dev.vpc_cfg.ipv6_cfg().map(|cfg| cfg.private_ip),
-            external_ip6_addr: dev
+            ephemeral_ip6_addr: dev
                 .vpc_cfg
                 .ipv6_cfg()
-                .and_then(|cfg| cfg.external_ip),
+                .and_then(|cfg| cfg.ephemeral_ip),
             floating_ip6_addrs: dev
                 .vpc_cfg
                 .ipv6_cfg()
