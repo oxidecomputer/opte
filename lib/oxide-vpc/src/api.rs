@@ -522,8 +522,10 @@ pub struct PortInfo {
     pub mac_addr: MacAddr,
     pub ip4_addr: Option<Ipv4Addr>,
     pub external_ip4_addr: Option<Ipv4Addr>,
+    pub floating_ip4_addrs: Option<Vec<Ipv4Addr>>,
     pub ip6_addr: Option<Ipv6Addr>,
     pub external_ip6_addr: Option<Ipv6Addr>,
+    pub floating_ip6_addrs: Option<Vec<Ipv6Addr>>,
     pub state: String,
 }
 

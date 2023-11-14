@@ -20,7 +20,8 @@ use opte::engine::ether::ETHER_TYPE_IPV6;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
-use opte::engine::nat::Nat;
+use opte::engine::nat::InboundNat;
+use opte::engine::nat::OutboundNat;
 use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
@@ -34,7 +35,8 @@ use opte::engine::snat::NatPool;
 use opte::engine::snat::SNat;
 
 pub const NAT_LAYER_NAME: &str = "nat";
-const ONE_TO_ONE_NAT_PRIORITY: u16 = 10;
+const FLOATING_ONE_TO_ONE_NAT_PRIORITY: u16 = 5;
+const EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY: u16 = 10;
 const SNAT_PRIORITY: u16 = 100;
 
 pub fn setup(
@@ -60,19 +62,27 @@ pub fn setup(
     pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))
 }
 
+// TODO: modify this and below to work with `set_rules` or similar so that we can
+//       call at runtime.
+// TODO: remove this code duplication.
 fn setup_ipv4_nat(
     layer: &mut Layer,
     ip_cfg: &Ipv4Cfg,
 ) -> Result<(), OpteError> {
     // When it comes to NAT we always prefer using 1:1 NAT of external
-    // IP to SNAT. To achieve this we place the NAT rules at a lower
+    // IP to SNAT, preferring floating IPs over ephemeral.
+    // To achieve this we place the NAT rules at a lower
     // priority than SNAT.
-    if let Some(ip4) = ip_cfg.external_ip {
-        let nat = Arc::new(Nat::new(ip_cfg.private_ip, ip4));
+    let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip));
 
-        // 1:1 NAT outbound packets destined for internet gateway.
-        let mut out_nat =
-            Rule::new(ONE_TO_ONE_NAT_PRIORITY, Action::Stateful(nat.clone()));
+    if !ip_cfg.floating_ips.is_empty() {
+        let mut out_nat = Rule::new(
+            FLOATING_ONE_TO_ONE_NAT_PRIORITY,
+            Action::Stateful(Arc::new(OutboundNat::new(
+                ip_cfg.private_ip,
+                &ip_cfg.floating_ips,
+            ))),
+        );
         out_nat.add_predicate(Predicate::InnerEtherType(vec![
             EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
         ]));
@@ -83,8 +93,43 @@ fn setup_ipv4_nat(
         layer.add_rule(Direction::Out, out_nat.finalize());
 
         // 1:1 NAT inbound packets destined for external IP.
-        let mut in_nat =
-            Rule::new(ONE_TO_ONE_NAT_PRIORITY, Action::Stateful(nat));
+        let mut in_nat = Rule::new(
+            FLOATING_ONE_TO_ONE_NAT_PRIORITY,
+            Action::Stateful(in_nat.clone()),
+        );
+        let matches = ip_cfg
+            .floating_ips
+            .iter()
+            .copied()
+            .map(Ipv4AddrMatch::Exact)
+            .collect();
+        in_nat.add_predicate(Predicate::InnerDstIp4(matches));
+        layer.add_rule(Direction::In, in_nat.finalize());
+    }
+
+    if let Some(ip4) = ip_cfg.external_ip {
+        // 1:1 NAT outbound packets destined for internet gateway.
+        let mut out_nat = Rule::new(
+            EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,
+            Action::Stateful(Arc::new(OutboundNat::new(
+                ip_cfg.private_ip,
+                &[ip4],
+            ))),
+        );
+        out_nat.add_predicate(Predicate::InnerEtherType(vec![
+            EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
+        ]));
+        out_nat.add_predicate(Predicate::Meta(
+            RouterTargetInternal::KEY.to_string(),
+            RouterTargetInternal::InternetGateway.as_meta(),
+        ));
+        layer.add_rule(Direction::Out, out_nat.finalize());
+
+        // 1:1 NAT inbound packets destined for external IP.
+        let mut in_nat = Rule::new(
+            EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,
+            Action::Stateful(in_nat),
+        );
         in_nat.add_predicate(Predicate::InnerDstIp4(vec![
             Ipv4AddrMatch::Exact(ip4),
         ]));
@@ -119,14 +164,52 @@ fn setup_ipv6_nat(
     ip_cfg: &Ipv6Cfg,
 ) -> Result<(), OpteError> {
     // When it comes to NAT we always prefer using 1:1 NAT of external
-    // IP to SNAT. To achieve this we place the NAT rules at a lower
+    // IP to SNAT, preferring floating IPs over ephemeral.
+    // To achieve this we place the NAT rules at a lower
     // priority than SNAT.
-    if let Some(ip6) = ip_cfg.external_ip {
-        let nat = Arc::new(Nat::new(ip_cfg.private_ip, ip6));
+    let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip));
 
+    if !ip_cfg.floating_ips.is_empty() {
+        let mut out_nat = Rule::new(
+            FLOATING_ONE_TO_ONE_NAT_PRIORITY,
+            Action::Stateful(Arc::new(OutboundNat::new(
+                ip_cfg.private_ip,
+                &ip_cfg.floating_ips,
+            ))),
+        );
+        out_nat.add_predicate(Predicate::InnerEtherType(vec![
+            EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
+        ]));
+        out_nat.add_predicate(Predicate::Meta(
+            RouterTargetInternal::KEY.to_string(),
+            RouterTargetInternal::InternetGateway.as_meta(),
+        ));
+        layer.add_rule(Direction::Out, out_nat.finalize());
+
+        // 1:1 NAT inbound packets destined for external IP.
+        let mut in_nat = Rule::new(
+            FLOATING_ONE_TO_ONE_NAT_PRIORITY,
+            Action::Stateful(in_nat.clone()),
+        );
+        let matches = ip_cfg
+            .floating_ips
+            .iter()
+            .copied()
+            .map(Ipv6AddrMatch::Exact)
+            .collect();
+        in_nat.add_predicate(Predicate::InnerDstIp6(matches));
+        layer.add_rule(Direction::In, in_nat.finalize());
+    }
+
+    if let Some(ip6) = ip_cfg.external_ip {
         // 1:1 NAT outbound packets destined for internet gateway.
-        let mut out_nat =
-            Rule::new(ONE_TO_ONE_NAT_PRIORITY, Action::Stateful(nat.clone()));
+        let mut out_nat = Rule::new(
+            EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,
+            Action::Stateful(Arc::new(OutboundNat::new(
+                ip_cfg.private_ip,
+                &[ip6],
+            ))),
+        );
         out_nat.add_predicate(Predicate::InnerEtherType(vec![
             EtherTypeMatch::Exact(ETHER_TYPE_IPV6),
         ]));
@@ -137,8 +220,10 @@ fn setup_ipv6_nat(
         layer.add_rule(Direction::Out, out_nat.finalize());
 
         // 1:1 NAT inbound packets destined for external IP.
-        let mut in_nat =
-            Rule::new(ONE_TO_ONE_NAT_PRIORITY, Action::Stateful(nat));
+        let mut in_nat = Rule::new(
+            EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,
+            Action::Stateful(in_nat),
+        );
         in_nat.add_predicate(Predicate::InnerDstIp6(vec![
             Ipv6AddrMatch::Exact(ip6),
         ]));

@@ -27,6 +27,7 @@ kstat-macro.workspace = true
 opte-api.workspace = true
 
 cfg-if.workspace = true
+crc32fast.workspace = true
 dyn-clone.workspace = true
 heapless.workspace = true
 postcard.workspace = true

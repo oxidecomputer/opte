@@ -36,6 +36,7 @@ anyhow = "1.0"
 bitflags = "2"
 cfg-if = "1"
 clap = { version = "4", features = ["derive", "string"] }
+crc32fast = { version = "1", default-features = false }
 ctor = "0.2"
 dyn-clone = "1.0"
 heapless = "0.7"

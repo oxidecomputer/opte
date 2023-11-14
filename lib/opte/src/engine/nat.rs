@@ -24,40 +24,123 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
+use core::hash::Hash;
 use core::marker::PhantomData;
+use crc32fast::Hasher;
 use opte_api::Direction;
 use opte_api::IpAddr;
 
-/// A mapping from a private to external IP address for NAT.
-#[derive(Debug, Clone, Copy)]
-pub struct Nat {
+/// A mapping from a private to one of several external IP addresses for NAT.
+#[derive(Debug, Clone)]
+pub struct OutboundNat {
     priv_ip: IpAddr,
-    external_ip: IpAddr,
+    // TODO: remove Vec on ephemeral IP.
+    external_ips: Vec<IpAddr>,
 }
 
-impl Nat {
+impl OutboundNat {
     /// Create a new NAT mapping from a private to public IP address.
-    pub fn new<T: ConcreteIpAddr>(priv_ip: T, external_ip: T) -> Self {
-        Self { priv_ip: priv_ip.into(), external_ip: external_ip.into() }
+    pub fn new<T: ConcreteIpAddr>(priv_ip: T, external_ips: &[T]) -> Self {
+        let external_ips = external_ips.iter().copied().map(T::into).collect();
+        Self { priv_ip: priv_ip.into(), external_ips }
     }
 }
 
-impl fmt::Display for Nat {
+impl fmt::Display for OutboundNat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} <=> {}", self.priv_ip, self.external_ip)
+        write!(f, "{} <=> ", self.priv_ip)?;
+
+        // Sadly, there is no `formatter::Fmt::display_list()`.
+        if self.external_ips.len() > 1 {
+            write!(f, "{{")?;
+        }
+
+        for (i, ip) in self.external_ips.iter().enumerate() {
+            write!(f, "{ip}")?;
+            if i != self.external_ips.len() - 1 {
+                write!(f, ",")?;
+            }
+        }
+
+        if self.external_ips.len() > 1 {
+            write!(f, "}}")?;
+        }
+
+        Ok(())
     }
 }
 
-impl StatefulAction for Nat {
+impl StatefulAction for OutboundNat {
     fn gen_desc(
         &self,
-        _flow_id: &InnerFlowId,
+        flow_id: &InnerFlowId,
         _pkt: &Packet<Parsed>,
         _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
-        let desc =
-            NatDesc { priv_ip: self.priv_ip, external_ip: self.external_ip };
-        Ok(AllowOrDeny::Allow(Arc::new(desc)))
+        // When we have several external IPs at our disposal, we are
+        // to use them equally.
+        let ip_idx = match self.external_ips.len() {
+            0 => {
+                return Err(rule::GenDescError::Unexpected {
+                    msg: "Outbound NAT: no external IP addresses specified"
+                        .into(),
+                })
+            }
+            1 => 0,
+            n => {
+                // XXX: Is this (CRC32) the right choice of hash algo?
+                let mut hasher = Hasher::new();
+                flow_id.hash(&mut hasher);
+                hasher.finalize() as usize % n
+            }
+        };
+
+        Ok(AllowOrDeny::Allow(Arc::new(NatDesc {
+            priv_ip: self.priv_ip,
+            external_ip: self.external_ips[ip_idx],
+        })))
+    }
+
+    // XXX we should be able to set implicit predicates if we add an
+    // IpCidr field to describe which subnet the client is on; but for
+    // now just keep the predicates fully explicit.
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
+    }
+}
+
+/// A NAT mapping which preserves affinity with the external IP that a port
+/// received a packet on.
+pub struct InboundNat {
+    priv_ip: IpAddr,
+}
+
+impl InboundNat {
+    /// Create a new NAT mapping from a private to public IP address.
+    pub fn new<T: ConcreteIpAddr>(priv_ip: T) -> Self {
+        Self { priv_ip: priv_ip.into() }
+    }
+}
+
+impl fmt::Display for InboundNat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} <=> (external)", self.priv_ip)
+    }
+}
+
+impl StatefulAction for InboundNat {
+    fn gen_desc(
+        &self,
+        flow_id: &InnerFlowId,
+        _pkt: &Packet<Parsed>,
+        _meta: &mut ActionMeta,
+    ) -> rule::GenDescResult {
+        // We rely on the attached predicates to filter out IPs which are *not*
+        // registered to this port.
+        Ok(AllowOrDeny::Allow(Arc::new(NatDesc {
+            priv_ip: self.priv_ip,
+            external_ip: flow_id.dst_ip,
+        })))
     }
 
     // XXX we should be able to set implicit predicates if we add an
@@ -133,7 +216,7 @@ mod test {
         let pub_ip = "52.10.128.69".parse().unwrap();
         let outside_ip = "76.76.21.21".parse().unwrap();
         let outside_port = 80;
-        let nat = Nat::new(priv_ip, pub_ip);
+        let nat = OutboundNat::new(priv_ip, &[pub_ip]);
         let mut ameta = ActionMeta::new();
 
         // ================================================================
