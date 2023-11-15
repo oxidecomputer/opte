@@ -46,6 +46,7 @@ use opte::engine::port::ProcessError;
 use opte::engine::tcp::TcpState;
 use opte::engine::udp::UdpMeta;
 use opte::engine::Direction;
+use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::VpcCfg;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
@@ -84,12 +85,14 @@ fn lab_cfg() -> VpcCfg {
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
         private_ip: "172.20.14.16".parse().unwrap(),
         gateway_ip: "172.20.14.1".parse().unwrap(),
-        snat: Some(SNat4Cfg {
-            external_ip: "76.76.21.21".parse().unwrap(),
-            ports: 1025..=4096,
-        }),
-        ephemeral_ip: None,
-        floating_ips: vec![],
+        external_ips: ExternalIpCfg {
+            snat: Some(SNat4Cfg {
+                external_ip: "76.76.21.21".parse().unwrap(),
+                ports: 1025..=4096,
+            }),
+            ephemeral_ip: None,
+            floating_ips: vec![],
+        },
     });
     VpcCfg {
         ip_cfg,
@@ -3061,23 +3064,27 @@ fn tcp_inbound() {
             vpc_subnet: "172.30.0.0/22".parse().unwrap(),
             private_ip: "172.30.0.5".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
-            snat: Some(SNat4Cfg {
-                external_ip: "10.77.77.13".parse().unwrap(),
-                ports: 1025..=4096,
-            }),
-            ephemeral_ip: Some("10.60.1.20".parse().unwrap()),
-            floating_ips: vec![],
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat4Cfg {
+                    external_ip: "10.77.77.13".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: Some("10.60.1.20".parse().unwrap()),
+                floating_ips: vec![],
+            },
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
             private_ip: "fd00::5".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
-            snat: Some(SNat6Cfg {
-                external_ip: "2001:db8::1".parse().unwrap(),
-                ports: 1025..=4096,
-            }),
-            ephemeral_ip: None,
-            floating_ips: vec![],
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat6Cfg {
+                    external_ip: "2001:db8::1".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
         },
     };
 
@@ -3098,7 +3105,7 @@ fn tcp_inbound() {
     let client_ip = "52.10.128.69".parse().unwrap();
     let bs_mac = g1_cfg.boundary_services.mac;
     let serv_mac = g1_cfg.guest_mac;
-    let serv_ext_ip = g1_cfg.ipv4().ephemeral_ip.unwrap();
+    let serv_ext_ip = g1_cfg.ipv4().external_ips.ephemeral_ip.unwrap();
     let bs_phys = TestIpPhys {
         ip: g1_cfg.boundary_services.ip,
         mac: g1_cfg.boundary_services.mac,

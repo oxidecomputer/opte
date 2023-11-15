@@ -14,6 +14,7 @@ use opte::api::Direction;
 use opte::api::DomainName;
 use opte::api::IpAddr;
 use opte::api::IpCidr;
+use opte::api::Ipv4Addr;
 use opte::api::Ipv6Addr;
 use opte::api::MacAddr;
 use opte::api::Vni;
@@ -29,6 +30,7 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
 use oxide_vpc::api::FirewallAction;
 use oxide_vpc::api::FirewallRule;
@@ -240,7 +242,7 @@ impl From<Filters> for FirewallFilters {
 }
 
 // TODO: expand this to allow for v4 and v6 simultaneously?
-///
+/// Per-port configuration for rack-external networking.
 #[derive(Args, Debug)]
 struct ExternalNetConfig {
     #[command(flatten)]
@@ -257,6 +259,62 @@ struct ExternalNetConfig {
     /// for sending and receiving traffic.
     #[arg(long)]
     floating_ip: Vec<IpAddr>,
+}
+
+impl TryFrom<ExternalNetConfig> for ExternalIpCfg<Ipv4Addr> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ExternalNetConfig) -> Result<Self, Self::Error> {
+        let snat = value.snat.map(SNat4Cfg::try_from).transpose()?;
+
+        let ephemeral_ip = match value.ephemeral_ip {
+            Some(IpAddr::Ip4(ip)) => Some(ip),
+            Some(IpAddr::Ip6(_)) => {
+                anyhow::bail!("expected IPv4 external IP");
+            }
+            None => None,
+        };
+
+        let floating_ips = value
+            .floating_ip
+            .iter()
+            .copied()
+            .map(|ip| match ip {
+                IpAddr::Ip4(ip) => Ok(ip),
+                _ => anyhow::bail!("expected IPv4 floating IP"),
+            })
+            .collect::<Result<Vec<opte::api::Ipv4Addr>, _>>()?;
+
+        Ok(Self { snat, ephemeral_ip, floating_ips })
+    }
+}
+
+impl TryFrom<ExternalNetConfig> for ExternalIpCfg<Ipv6Addr> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ExternalNetConfig) -> Result<Self, Self::Error> {
+        let snat = value.snat.map(SNat6Cfg::try_from).transpose()?;
+
+        let ephemeral_ip = match value.ephemeral_ip {
+            Some(IpAddr::Ip4(_)) => {
+                anyhow::bail!("expected IPv6 external IP");
+            }
+            Some(IpAddr::Ip6(ip)) => Some(ip),
+            None => None,
+        };
+
+        let floating_ips = value
+            .floating_ip
+            .iter()
+            .copied()
+            .map(|ip| match ip {
+                IpAddr::Ip6(ip) => Ok(ip),
+                _ => anyhow::bail!("expected IPv6 floating IP"),
+            })
+            .collect::<Result<Vec<opte::api::Ipv6Addr>, _>>()?;
+
+        Ok(Self { snat, ephemeral_ip, floating_ips })
+    }
 }
 
 #[derive(Args, Debug)]
@@ -465,9 +523,6 @@ fn main() -> anyhow::Result<()> {
             external_net,
             passthrough,
         } => {
-            let ExternalNetConfig { snat, ephemeral_ip, floating_ip } =
-                external_net;
-
             let ip_cfg = match private_ip {
                 IpAddr::Ip4(private_ip) => {
                     let IpCidr::Ip4(vpc_subnet) = vpc_subnet else {
@@ -478,32 +533,13 @@ fn main() -> anyhow::Result<()> {
                         anyhow::bail!("expected IPv4 gateway IP");
                     };
 
-                    let snat = snat.map(SNat4Cfg::try_from).transpose()?;
-
-                    let ephemeral_ip = match ephemeral_ip {
-                        Some(IpAddr::Ip4(ip)) => Some(ip),
-                        Some(IpAddr::Ip6(_)) => {
-                            anyhow::bail!("expected IPv4 external IP");
-                        }
-                        None => None,
-                    };
-
-                    let floating_ips = floating_ip
-                        .iter()
-                        .copied()
-                        .map(|ip| match ip {
-                            IpAddr::Ip4(ip) => Ok(ip),
-                            _ => anyhow::bail!("expected IPv4 floating IP"),
-                        })
-                        .collect::<Result<Vec<opte::api::Ipv4Addr>, _>>()?;
+                    let external_ips = external_net.try_into()?;
 
                     IpCfg::Ipv4(Ipv4Cfg {
                         vpc_subnet,
                         private_ip,
                         gateway_ip,
-                        snat,
-                        ephemeral_ip,
-                        floating_ips,
+                        external_ips,
                     })
                 }
                 IpAddr::Ip6(private_ip) => {
@@ -515,32 +551,13 @@ fn main() -> anyhow::Result<()> {
                         anyhow::bail!("expected IPv6 gateway IP");
                     };
 
-                    let snat = snat.map(SNat6Cfg::try_from).transpose()?;
-
-                    let ephemeral_ip = match ephemeral_ip {
-                        Some(IpAddr::Ip4(_)) => {
-                            anyhow::bail!("expected IPv6 external IP");
-                        }
-                        Some(IpAddr::Ip6(ip)) => Some(ip),
-                        None => None,
-                    };
-
-                    let floating_ips = floating_ip
-                        .iter()
-                        .copied()
-                        .map(|ip| match ip {
-                            IpAddr::Ip6(ip) => Ok(ip),
-                            _ => anyhow::bail!("expected IPv6 floating IP"),
-                        })
-                        .collect::<Result<Vec<opte::api::Ipv6Addr>, _>>()?;
+                    let external_ips = external_net.try_into()?;
 
                     IpCfg::Ipv6(Ipv6Cfg {
                         vpc_subnet,
                         private_ip,
                         gateway_ip,
-                        snat,
-                        ephemeral_ip,
-                        floating_ips,
+                        external_ips,
                     })
                 }
             };

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! xde - A mac provider for OPTE.
 //!
@@ -76,14 +76,14 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
-use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2PhysReq;
-use oxide_vpc::api::VpcCfg;
+use oxide_vpc::cfg::IpCfg;
+use oxide_vpc::cfg::VpcCfg;
 use oxide_vpc::engine::firewall;
 use oxide_vpc::engine::gateway;
 use oxide_vpc::engine::nat;
@@ -587,7 +587,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         return Err(OpteError::PortExists(req.xde_devname.clone()));
     }
 
-    let cfg = &req.cfg;
+    let cfg = VpcCfg::from(req.cfg.clone());
     if devs
         .iter()
         .any(|x| x.vni == cfg.vni && x.port.mac_addr() == cfg.guest_mac)
@@ -622,7 +622,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     let port = new_port(
         req.xde_devname.clone(),
-        cfg,
+        &cfg,
         state.vpc_map.clone(),
         port_v2p.clone(),
         state.ectx.clone(),
@@ -644,9 +644,9 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         port,
         port_periodic,
         port_v2p,
-        vpc_cfg: cfg.clone(),
-        passthrough: req.passthrough,
         vni: cfg.vni,
+        vpc_cfg: cfg,
+        passthrough: req.passthrough,
         u1: underlay.u1.clone(),
         u2: underlay.u2.clone(),
     });
@@ -1958,6 +1958,7 @@ fn new_port(
     ectx: Arc<ExecCtx>,
     dhcp_cfg: &DhcpCfg,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
+    let cfg = cfg.clone();
     let name_cstr = match CString::new(name.as_str()) {
         Ok(v) => v,
         Err(_) => return Err(OpteError::BadName),
@@ -1968,15 +1969,10 @@ fn new_port(
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
-    router::setup(&pb, cfg, FT_LIMIT_ONE)?;
-    let nat_ft_limit = match cfg.n_external_ports() {
-        None => FT_LIMIT_ONE,
-        Some(0) => return Err(OpteError::InvalidIpCfg),
-        Some(n) => NonZeroU32::new(n).unwrap(),
-    };
-    nat::setup(&mut pb, cfg, nat_ft_limit)?;
-    overlay::setup(&pb, cfg, v2p, FT_LIMIT_ONE)?;
+    gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
+    router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
+    let nat_ft_limit = nat::setup(&mut pb, &cfg)?;
+    overlay::setup(&pb, &cfg, v2p, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -1987,7 +1983,7 @@ fn new_port(
     // construct a new one, so the unwrap is safe.
     let limit =
         NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
-    let net = VpcNetwork { cfg: cfg.clone() };
+    let net = VpcNetwork { cfg };
     Ok(Arc::new(pb.create(net, limit, limit)?))
 }
 
@@ -2251,26 +2247,26 @@ fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
     let mut resp = ListPortsResp { ports: vec![] };
     let devs = unsafe { xde_devs.read() };
     for dev in devs.iter() {
+        let ipv4_state =
+            dev.vpc_cfg.ipv4_cfg().map(|cfg| cfg.external_ips.load());
+        let ipv6_state =
+            dev.vpc_cfg.ipv6_cfg().map(|cfg| cfg.external_ips.load());
         resp.ports.push(PortInfo {
             name: dev.port.name().to_string(),
             mac_addr: dev.port.mac_addr(),
             ip4_addr: dev.vpc_cfg.ipv4_cfg().map(|cfg| cfg.private_ip),
-            ephemeral_ip4_addr: dev
-                .vpc_cfg
-                .ipv4_cfg()
+            ephemeral_ip4_addr: ipv4_state
+                .as_ref()
                 .and_then(|cfg| cfg.ephemeral_ip),
-            floating_ip4_addrs: dev
-                .vpc_cfg
-                .ipv4_cfg()
+            floating_ip4_addrs: ipv4_state
+                .as_ref()
                 .map(|cfg| cfg.floating_ips.clone()),
             ip6_addr: dev.vpc_cfg.ipv6_cfg().map(|cfg| cfg.private_ip),
-            ephemeral_ip6_addr: dev
-                .vpc_cfg
-                .ipv6_cfg()
+            ephemeral_ip6_addr: ipv6_state
+                .as_ref()
                 .and_then(|cfg| cfg.ephemeral_ip),
-            floating_ip6_addrs: dev
-                .vpc_cfg
-                .ipv6_cfg()
+            floating_ip6_addrs: ipv6_state
+                .as_ref()
                 .map(|cfg| cfg.floating_ips.clone()),
             state: dev.port.state().to_string(),
         });

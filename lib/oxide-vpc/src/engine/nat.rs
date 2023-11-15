@@ -6,9 +6,9 @@
 
 use super::router::RouterTargetInternal;
 use super::router::ROUTER_LAYER_NAME;
-use crate::api::Ipv4Cfg;
-use crate::api::Ipv6Cfg;
-use crate::api::VpcCfg;
+use crate::cfg::Ipv4Cfg;
+use crate::cfg::Ipv6Cfg;
+use crate::cfg::VpcCfg;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use core::num::NonZeroU32;
@@ -39,11 +39,22 @@ const FLOATING_ONE_TO_ONE_NAT_PRIORITY: u16 = 5;
 const EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY: u16 = 10;
 const SNAT_PRIORITY: u16 = 100;
 
+/// Per-IP-stack rule count for NAT.
+///
+/// We need to always maintain enough flowtable space to store rules for floating IPs,
+/// ephemeral IP, and SNAT -- 3 in total. Users can certainly reconfigure floating IPs
+/// at will, but the rule count remains constant since we defer var-width elements
+/// (dst IP checks on inbound traffic) to each rule's predicates.
+pub const FT_LIMIT_NAT: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(3) };
+pub const FT_LIMIT_NAT_DUALSTACK: NonZeroU32 =
+    unsafe { NonZeroU32::new_unchecked(6) };
+
+/// Create the NAT layer for a new port, returning the number of flowtable layers
+/// required.
 pub fn setup(
     pb: &mut PortBuilder,
     cfg: &VpcCfg,
-    ft_limit: NonZeroU32,
-) -> Result<(), OpteError> {
+) -> Result<NonZeroU32, OpteError> {
     // The NAT layer is rewrite layer and not a filtering one. Any
     // packets that don't match should be allowed to pass through to
     // the next layer.
@@ -52,14 +63,25 @@ pub fn setup(
         default_in: DefaultAction::Allow,
         default_out: DefaultAction::Allow,
     };
-    let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), actions, ft_limit);
+
+    // If we make v4/v6/dual-stack dynamic in future, then we may wish to
+    // use FT_LIMIT_NAT_DUALSTACK unconditionally.
+    let ft_count = match (cfg.ipv4_cfg(), cfg.ipv6_cfg()) {
+        (Some(_), Some(_)) => FT_LIMIT_NAT_DUALSTACK,
+        (Some(_), None) | (None, Some(_)) => FT_LIMIT_NAT,
+        _ => return Err(OpteError::InvalidIpCfg),
+    };
+
+    let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), actions, ft_count);
     if let Some(ipv4_cfg) = cfg.ipv4_cfg() {
         setup_ipv4_nat(&mut layer, ipv4_cfg)?;
     }
     if let Some(ipv6_cfg) = cfg.ipv6_cfg() {
         setup_ipv6_nat(&mut layer, ipv6_cfg)?;
     }
-    pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))
+    pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))?;
+
+    Ok(ft_count)
 }
 
 // TODO: modify this and below to work with `set_rules` or similar so that we can
@@ -74,13 +96,14 @@ fn setup_ipv4_nat(
     // To achieve this we place the NAT rules at a lower
     // priority than SNAT.
     let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip));
+    let external_cfg = ip_cfg.external_ips.load();
 
-    if !ip_cfg.floating_ips.is_empty() {
+    if !external_cfg.floating_ips.is_empty() {
         let mut out_nat = Rule::new(
             FLOATING_ONE_TO_ONE_NAT_PRIORITY,
             Action::Stateful(Arc::new(OutboundNat::new(
                 ip_cfg.private_ip,
-                &ip_cfg.floating_ips,
+                &external_cfg.floating_ips,
             ))),
         );
         out_nat.add_predicate(Predicate::InnerEtherType(vec![
@@ -97,7 +120,7 @@ fn setup_ipv4_nat(
             FLOATING_ONE_TO_ONE_NAT_PRIORITY,
             Action::Stateful(in_nat.clone()),
         );
-        let matches = ip_cfg
+        let matches = external_cfg
             .floating_ips
             .iter()
             .copied()
@@ -107,7 +130,7 @@ fn setup_ipv4_nat(
         layer.add_rule(Direction::In, in_nat.finalize());
     }
 
-    if let Some(ip4) = ip_cfg.ephemeral_ip {
+    if let Some(ip4) = external_cfg.ephemeral_ip {
         // 1:1 NAT outbound packets destined for internet gateway.
         let mut out_nat = Rule::new(
             EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,
@@ -136,7 +159,7 @@ fn setup_ipv4_nat(
         layer.add_rule(Direction::In, in_nat.finalize());
     }
 
-    if let Some(snat_cfg) = &ip_cfg.snat {
+    if let Some(snat_cfg) = &external_cfg.snat {
         let pool = NatPool::new();
         pool.add(
             ip_cfg.private_ip,
@@ -168,13 +191,14 @@ fn setup_ipv6_nat(
     // To achieve this we place the NAT rules at a lower
     // priority than SNAT.
     let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip));
+    let external_cfg = ip_cfg.external_ips.load();
 
-    if !ip_cfg.floating_ips.is_empty() {
+    if !external_cfg.floating_ips.is_empty() {
         let mut out_nat = Rule::new(
             FLOATING_ONE_TO_ONE_NAT_PRIORITY,
             Action::Stateful(Arc::new(OutboundNat::new(
                 ip_cfg.private_ip,
-                &ip_cfg.floating_ips,
+                &external_cfg.floating_ips,
             ))),
         );
         out_nat.add_predicate(Predicate::InnerEtherType(vec![
@@ -191,7 +215,7 @@ fn setup_ipv6_nat(
             FLOATING_ONE_TO_ONE_NAT_PRIORITY,
             Action::Stateful(in_nat.clone()),
         );
-        let matches = ip_cfg
+        let matches = external_cfg
             .floating_ips
             .iter()
             .copied()
@@ -201,7 +225,7 @@ fn setup_ipv6_nat(
         layer.add_rule(Direction::In, in_nat.finalize());
     }
 
-    if let Some(ip6) = ip_cfg.ephemeral_ip {
+    if let Some(ip6) = external_cfg.ephemeral_ip {
         // 1:1 NAT outbound packets destined for internet gateway.
         let mut out_nat = Rule::new(
             EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,
@@ -230,7 +254,7 @@ fn setup_ipv6_nat(
         layer.add_rule(Direction::In, in_nat.finalize());
     }
 
-    if let Some(ref snat_cfg) = ip_cfg.snat {
+    if let Some(ref snat_cfg) = external_cfg.snat {
         let pool = NatPool::new();
         pool.add(
             ip_cfg.private_ip,

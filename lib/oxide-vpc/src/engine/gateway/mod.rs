@@ -41,11 +41,11 @@
 //! No IPv6 link-local traffic should ever make it past this layer.
 
 use crate::api::DhcpCfg;
-use crate::api::Ipv4Cfg;
-use crate::api::Ipv6Cfg;
 use crate::api::MacAddr;
 use crate::api::Vni;
-use crate::api::VpcCfg;
+use crate::cfg::Ipv4Cfg;
+use crate::cfg::Ipv6Cfg;
+use crate::cfg::VpcCfg;
 use crate::engine::overlay::VpcMappings;
 use crate::engine::overlay::ACTION_META_VNI;
 use alloc::string::ToString;

@@ -65,6 +65,7 @@ pub use opte::ExecCtx;
 pub use oxide_vpc::api::AddFwRuleReq;
 pub use oxide_vpc::api::BoundaryServices;
 pub use oxide_vpc::api::DhcpCfg;
+pub use oxide_vpc::api::ExternalIpCfg;
 pub use oxide_vpc::api::IpCfg;
 pub use oxide_vpc::api::Ipv4Cfg;
 pub use oxide_vpc::api::Ipv6Cfg;
@@ -130,23 +131,27 @@ pub fn g1_cfg() -> VpcCfg {
             vpc_subnet: "172.30.0.0/22".parse().unwrap(),
             private_ip: "172.30.0.5".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
-            snat: Some(SNat4Cfg {
-                external_ip: "10.77.77.13".parse().unwrap(),
-                ports: 1025..=4096,
-            }),
-            ephemeral_ip: None,
-            floating_ips: vec![],
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat4Cfg {
+                    external_ip: "10.77.77.13".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
             private_ip: "fd00::5".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
-            snat: Some(SNat6Cfg {
-                external_ip: "2001:db8::1".parse().unwrap(),
-                ports: 4097..=8192,
-            }),
-            ephemeral_ip: None,
-            floating_ips: vec![],
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat6Cfg {
+                    external_ip: "2001:db8::1".parse().unwrap(),
+                    ports: 4097..=8192,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
         },
     };
     g1_cfg2(ip_cfg)
@@ -179,23 +184,27 @@ pub fn g2_cfg() -> VpcCfg {
             vpc_subnet: "172.30.0.0/22".parse().unwrap(),
             private_ip: "172.30.0.6".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
-            snat: Some(SNat4Cfg {
-                external_ip: "10.77.77.23".parse().unwrap(),
-                ports: 4097..=8192,
-            }),
-            ephemeral_ip: None,
-            floating_ips: vec![],
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat4Cfg {
+                    external_ip: "10.77.77.23".parse().unwrap(),
+                    ports: 4097..=8192,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
             private_ip: "fd00::6".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
-            snat: Some(SNat6Cfg {
-                external_ip: "2001:db8::1".parse().unwrap(),
-                ports: 1025..=4096,
-            }),
-            ephemeral_ip: None,
-            floating_ips: vec![],
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat6Cfg {
+                    external_ip: "2001:db8::1".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
         },
     };
     VpcCfg {
@@ -220,7 +229,7 @@ pub fn g2_cfg() -> VpcCfg {
 
 fn oxide_net_builder(
     name: &str,
-    cfg: &VpcCfg,
+    cfg: &oxide_vpc::cfg::VpcCfg,
     vpc_map: Arc<VpcMappings>,
     v2p: Arc<Virt2Phys>,
 ) -> PortBuilder {
@@ -229,7 +238,6 @@ fn oxide_net_builder(
     let mut pb = PortBuilder::new(name, name_cstr, cfg.guest_mac, ectx);
 
     let fw_limit = NonZeroU32::new(8096).unwrap();
-    let snat_limit = NonZeroU32::new(8096).unwrap();
     let one_limit = NonZeroU32::new(1).unwrap();
 
     let dhcp = base_dhcp_config();
@@ -238,7 +246,7 @@ fn oxide_net_builder(
     gateway::setup(&pb, cfg, vpc_map, fw_limit, &dhcp)
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
-    nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
+    nat::setup(&mut pb, cfg).expect("failed to add nat layer");
     overlay::setup(&pb, cfg, v2p, one_limit)
         .expect("failed to add overlay layer");
     pb
@@ -308,12 +316,14 @@ pub fn oxide_net_setup2(
         }
     };
 
-    let vpc_net = VpcNetwork { cfg: cfg.clone() };
+    let converted_cfg: oxide_vpc::cfg::VpcCfg = cfg.clone().into();
+    let vpc_net = VpcNetwork { cfg: converted_cfg.clone() };
     let uft_limit = flow_table_limits.unwrap_or(UFT_LIMIT.unwrap());
     let tcp_limit = flow_table_limits.unwrap_or(TCP_LIMIT.unwrap());
-    let port = oxide_net_builder(name, cfg, vpc_map.clone(), port_v2p)
-        .create(vpc_net, uft_limit, tcp_limit)
-        .unwrap();
+    let port =
+        oxide_net_builder(name, &converted_cfg, vpc_map.clone(), port_v2p)
+            .create(vpc_net, uft_limit, tcp_limit)
+            .unwrap();
 
     // Add router entry that allows the guest to send to other guests
     // on same subnet.
@@ -327,7 +337,7 @@ pub fn oxide_net_setup2(
     let vps = VpcPortState::new();
     let mut pav = PortAndVps { port, vps, vpc_map };
 
-    let nat_rules = match cfg.ipv4().ephemeral_ip {
+    let nat_rules = match cfg.ipv4().external_ips.ephemeral_ip {
         Some(_) => "incr:nat.rules.in, nat.rules.out",
         _ => "",
     };

@@ -1,3 +1,9 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Copyright 2023 Oxide Computer Company
+
 use anyhow::Result;
 use opteadm::OpteAdm;
 use oxide_vpc::api::AddRouterEntryReq;
@@ -5,6 +11,7 @@ use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::Direction;
+use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters;
 use oxide_vpc::api::FirewallAction;
 use oxide_vpc::api::FirewallRule;
@@ -87,12 +94,14 @@ impl OptePort {
                 vpc_subnet: OVERLAY_NET.parse().unwrap(),
                 private_ip: private_ip.parse().unwrap(),
                 gateway_ip: OVERLAY_GW.parse().unwrap(),
-                snat: Some(SNat4Cfg {
-                    external_ip: "1.2.3.4".parse().unwrap(),
-                    ports: 1000..=2000,
-                }),
-                ephemeral_ip: None,
-                floating_ips: vec![],
+                external_ips: ExternalIpCfg {
+                    snat: Some(SNat4Cfg {
+                        external_ip: "1.2.3.4".parse().unwrap(),
+                        ports: 1000..=2000,
+                    }),
+                    ephemeral_ip: None,
+                    floating_ips: vec![],
+                },
             }),
             guest_mac: guest_mac.parse().unwrap(),
             gateway_mac: "a8:40:25:00:00:01".parse().unwrap(),

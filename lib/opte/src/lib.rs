@@ -42,6 +42,9 @@ pub mod ddi;
 #[cfg(any(feature = "engine", test))]
 pub mod engine;
 
+#[cfg(any(feature = "engine", test))]
+pub mod resource;
+
 /// Return value with `bit` set.
 ///
 /// TODO Make generic and take any unsigned integer.

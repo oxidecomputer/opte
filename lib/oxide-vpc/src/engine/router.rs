@@ -12,7 +12,7 @@ use super::firewall as fw;
 use super::VpcNetwork;
 use crate::api::DelRouterEntryResp;
 use crate::api::RouterTarget;
-use crate::api::VpcCfg;
+use crate::cfg::VpcCfg;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
