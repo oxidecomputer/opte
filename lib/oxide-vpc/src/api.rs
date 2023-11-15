@@ -544,6 +544,13 @@ pub enum DelRouterEntryResp {
     NotFound,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SetExternalIpsReq {
+    pub port_name: String,
+    pub external_ips_v4: Option<ExternalIpCfg<Ipv4Addr>>,
+    pub external_ips_v6: Option<ExternalIpCfg<Ipv6Addr>>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AddFwRuleReq {
     pub port_name: String,

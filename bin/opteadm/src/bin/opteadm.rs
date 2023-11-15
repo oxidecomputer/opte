@@ -4,12 +4,8 @@
 
 // Copyright 2023 Oxide Computer Company
 
-use std::io;
-use std::str::FromStr;
-
 use clap::Args;
 use clap::Parser;
-
 use opte::api::Direction;
 use opte::api::DomainName;
 use opte::api::IpAddr;
@@ -45,9 +41,12 @@ use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
+use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::print::print_v2p;
+use std::io;
+use std::str::FromStr;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, Parser)]
@@ -214,6 +213,16 @@ enum Command {
         /// The location to which traffic matching the destination is sent.
         target: RouterTarget,
     },
+
+    /// Configure (S)NAT used by a port for VPC-external traffic.
+    SetExternalIps {
+        /// The OPTE port to which the route is added
+        #[arg(short)]
+        port: String,
+
+        #[command(flatten)]
+        external_net: ExternalNetConfig,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -243,7 +252,7 @@ impl From<Filters> for FirewallFilters {
 
 // TODO: expand this to allow for v4 and v6 simultaneously?
 /// Per-port configuration for rack-external networking.
-#[derive(Args, Debug)]
+#[derive(Args, Clone, Debug)]
 struct ExternalNetConfig {
     #[command(flatten)]
     snat: Option<SnatConfig>,
@@ -317,7 +326,7 @@ impl TryFrom<ExternalNetConfig> for ExternalIpCfg<Ipv6Addr> {
     }
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Clone, Copy, Debug)]
 #[group(requires_all = ["snat_ip", "snat_start", "snat_end"], multiple = true)]
 struct SnatConfig {
     /// The external IP address used for source NAT for the guest.
@@ -600,6 +609,31 @@ fn main() -> anyhow::Result<()> {
         Command::AddRouterEntry { port, dest, target } => {
             let req = AddRouterEntryReq { port_name: port, dest, target };
             hdl.add_router_entry(&req)?;
+        }
+
+        Command::SetExternalIps { port, external_net } => {
+            if let Ok(cfg) =
+                ExternalIpCfg::<Ipv4Addr>::try_from(external_net.clone())
+            {
+                let req = SetExternalIpsReq {
+                    port_name: port,
+                    external_ips_v4: Some(cfg),
+                    external_ips_v6: None,
+                };
+                hdl.set_external_ips(&req)?;
+            } else if let Ok(cfg) =
+                ExternalIpCfg::<Ipv6Addr>::try_from(external_net)
+            {
+                let req = SetExternalIpsReq {
+                    port_name: port,
+                    external_ips_v6: Some(cfg),
+                    external_ips_v4: None,
+                };
+                hdl.set_external_ips(&req)?;
+            } else {
+                // TODO: show *actual* parse failure.
+                anyhow::bail!("expected IPv4 *or* IPv6 config.");
+            }
         }
     }
 

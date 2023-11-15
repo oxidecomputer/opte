@@ -34,7 +34,7 @@ use opte_api::IpAddr;
 #[derive(Debug, Clone)]
 pub struct OutboundNat {
     priv_ip: IpAddr,
-    // TODO: remove Vec on ephemeral IP.
+    // TODO: possibly remove Vec on ephemeral IP.
     external_ips: Vec<IpAddr>,
 }
 

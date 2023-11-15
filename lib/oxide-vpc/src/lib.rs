@@ -36,4 +36,5 @@ pub mod api;
 #[cfg(any(feature = "engine", test))]
 pub mod engine;
 
+#[cfg(any(feature = "engine", test))]
 pub mod cfg;

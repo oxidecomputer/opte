@@ -6,6 +6,9 @@
 
 use super::router::RouterTargetInternal;
 use super::router::ROUTER_LAYER_NAME;
+use super::VpcNetwork;
+use crate::api::SetExternalIpsReq;
+use crate::cfg::IpCfg;
 use crate::cfg::Ipv4Cfg;
 use crate::cfg::Ipv6Cfg;
 use crate::cfg::VpcCfg;
@@ -23,6 +26,7 @@ use opte::engine::layer::LayerActions;
 use opte::engine::nat::InboundNat;
 use opte::engine::nat::OutboundNat;
 use opte::engine::port::meta::ActionMetaValue;
+use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::predicate::EtherTypeMatch;
@@ -275,4 +279,43 @@ fn setup_ipv6_nat(
         layer.add_rule(Direction::Out, rule.finalize());
     }
     Ok(())
+}
+
+pub fn set_nat_rules(
+    cfg: &VpcCfg,
+    port: &Port<VpcNetwork>,
+    req: SetExternalIpsReq,
+) -> Result<(), OpteError> {
+    let in_rules = vec![];
+    let out_rules = vec![];
+
+    match (&cfg.ip_cfg, req.external_ips_v4, req.external_ips_v6) {
+        (IpCfg::DualStack { ipv4, ipv6 }, Some(new_v4), Some(new_v6)) => {
+            ipv4.external_ips.store(new_v4);
+            ipv6.external_ips.store(new_v6);
+        }
+        (
+            IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. },
+            Some(new_v4),
+            None,
+        ) => {
+            ipv4.external_ips.store(new_v4);
+        }
+        (
+            IpCfg::Ipv6(ipv6) | IpCfg::DualStack { ipv6, .. },
+            None,
+            Some(new_v6),
+        ) => {
+            ipv6.external_ips.store(new_v6);
+        }
+        _ => return Err(OpteError::InvalidIpCfg),
+    }
+
+    // XXX: need to alter `setup` fns to produce rule lists.
+    // XXX: need to be able to set_rules on a non-finalised port.
+    // XXX: do we need to flush the FT on set? Don't want to wipe affinity.
+
+    port.set_rules(NAT_LAYER_NAME, in_rules, out_rules)?;
+
+    todo!();
 }

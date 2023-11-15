@@ -547,6 +547,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             let resp = dump_tcp_flows_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
+
+        OpteCmd::SetExternalIps => {
+            let resp = set_external_ips_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
     }
 }
 
@@ -2240,6 +2245,20 @@ fn dump_tcp_flows_hdlr(
     };
 
     api::dump_tcp_flows(&dev.port, &req)
+}
+
+#[no_mangle]
+fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: oxide_vpc::api::SetExternalIpsReq = env.copy_in_req()?;
+    let devs = unsafe { xde_devs.read() };
+    let mut iter = devs.iter();
+    let dev = match iter.find(|x| x.devname == req.port_name) {
+        Some(dev) => dev,
+        None => return Err(OpteError::PortNotFound(req.port_name)),
+    };
+
+    nat::set_nat_rules(&dev.vpc_cfg, &dev.port, req)?;
+    Ok(NoResp::default())
 }
 
 #[no_mangle]

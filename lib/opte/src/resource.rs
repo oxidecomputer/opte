@@ -11,8 +11,6 @@
 // TODO: may want to look into porting arc-swap for alloc and core,
 //       which should allow us to do better than a mutex.
 
-//
-
 use crate::ddi::sync::KRwLock;
 use crate::ddi::sync::KRwLockType;
 use alloc::sync::Arc;
