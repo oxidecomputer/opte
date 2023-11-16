@@ -1402,7 +1402,7 @@ impl Layer {
     ///
     /// Updating the ruleset immediately invalidates all flows
     /// established in the Flow Table.
-    pub(crate) fn set_rules(
+    pub fn set_rules(
         &mut self,
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,

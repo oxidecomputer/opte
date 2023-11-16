@@ -14,9 +14,9 @@ use crate::cfg::Ipv6Cfg;
 use crate::cfg::VpcCfg;
 use alloc::string::ToString;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::num::NonZeroU32;
 use core::result::Result;
-use opte::api::Direction;
 use opte::api::OpteError;
 use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::ether::ETHER_TYPE_IPV6;
@@ -34,6 +34,7 @@ use opte::engine::predicate::Ipv4AddrMatch;
 use opte::engine::predicate::Ipv6AddrMatch;
 use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
+use opte::engine::rule::Finalized;
 use opte::engine::rule::Rule;
 use opte::engine::snat::NatPool;
 use opte::engine::snat::SNat;
@@ -70,6 +71,9 @@ pub fn setup(
 
     // If we make v4/v6/dual-stack dynamic in future, then we may wish to
     // use FT_LIMIT_NAT_DUALSTACK unconditionally.
+
+    // XXX: double check how FT alloc logic works with many S/D pairs...
+
     let ft_count = match (cfg.ipv4_cfg(), cfg.ipv6_cfg()) {
         (Some(_), Some(_)) => FT_LIMIT_NAT_DUALSTACK,
         (Some(_), None) | (None, Some(_)) => FT_LIMIT_NAT,
@@ -77,23 +81,32 @@ pub fn setup(
     };
 
     let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), actions, ft_count);
-    if let Some(ipv4_cfg) = cfg.ipv4_cfg() {
-        setup_ipv4_nat(&mut layer, ipv4_cfg)?;
-    }
-    if let Some(ipv6_cfg) = cfg.ipv6_cfg() {
-        setup_ipv6_nat(&mut layer, ipv6_cfg)?;
-    }
+    let (in_rules, out_rules) = create_nat_rules(cfg)?;
+    layer.set_rules(in_rules, out_rules);
     pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))?;
 
     Ok(ft_count)
 }
 
-// TODO: modify this and below to work with `set_rules` or similar so that we can
-//       call at runtime.
+fn create_nat_rules(
+    cfg: &VpcCfg,
+) -> Result<(Vec<Rule<Finalized>>, Vec<Rule<Finalized>>), OpteError> {
+    let mut in_rules = vec![];
+    let mut out_rules = vec![];
+    if let Some(ipv4_cfg) = cfg.ipv4_cfg() {
+        setup_ipv4_nat(ipv4_cfg, &mut in_rules, &mut out_rules)?;
+    }
+    if let Some(ipv6_cfg) = cfg.ipv6_cfg() {
+        setup_ipv6_nat(ipv6_cfg, &mut in_rules, &mut out_rules)?;
+    }
+    Ok((in_rules, out_rules))
+}
+
 // TODO: remove this code duplication.
 fn setup_ipv4_nat(
-    layer: &mut Layer,
     ip_cfg: &Ipv4Cfg,
+    in_rules: &mut Vec<Rule<Finalized>>,
+    out_rules: &mut Vec<Rule<Finalized>>,
 ) -> Result<(), OpteError> {
     // When it comes to NAT we always prefer using 1:1 NAT of external
     // IP to SNAT, preferring floating IPs over ephemeral.
@@ -117,7 +130,7 @@ fn setup_ipv4_nat(
             RouterTargetInternal::KEY.to_string(),
             RouterTargetInternal::InternetGateway.as_meta(),
         ));
-        layer.add_rule(Direction::Out, out_nat.finalize());
+        out_rules.push(out_nat.finalize());
 
         // 1:1 NAT inbound packets destined for external IP.
         let mut in_nat = Rule::new(
@@ -131,7 +144,7 @@ fn setup_ipv4_nat(
             .map(Ipv4AddrMatch::Exact)
             .collect();
         in_nat.add_predicate(Predicate::InnerDstIp4(matches));
-        layer.add_rule(Direction::In, in_nat.finalize());
+        in_rules.push(in_nat.finalize());
     }
 
     if let Some(ip4) = external_cfg.ephemeral_ip {
@@ -150,7 +163,7 @@ fn setup_ipv4_nat(
             RouterTargetInternal::KEY.to_string(),
             RouterTargetInternal::InternetGateway.as_meta(),
         ));
-        layer.add_rule(Direction::Out, out_nat.finalize());
+        out_rules.push(out_nat.finalize());
 
         // 1:1 NAT inbound packets destined for external IP.
         let mut in_nat = Rule::new(
@@ -160,7 +173,7 @@ fn setup_ipv4_nat(
         in_nat.add_predicate(Predicate::InnerDstIp4(vec![
             Ipv4AddrMatch::Exact(ip4),
         ]));
-        layer.add_rule(Direction::In, in_nat.finalize());
+        in_rules.push(in_nat.finalize());
     }
 
     if let Some(snat_cfg) = &external_cfg.snat {
@@ -181,14 +194,15 @@ fn setup_ipv4_nat(
             RouterTargetInternal::KEY.to_string(),
             RouterTargetInternal::InternetGateway.as_meta(),
         ));
-        layer.add_rule(Direction::Out, rule.finalize());
+        out_rules.push(rule.finalize());
     }
     Ok(())
 }
 
 fn setup_ipv6_nat(
-    layer: &mut Layer,
     ip_cfg: &Ipv6Cfg,
+    in_rules: &mut Vec<Rule<Finalized>>,
+    out_rules: &mut Vec<Rule<Finalized>>,
 ) -> Result<(), OpteError> {
     // When it comes to NAT we always prefer using 1:1 NAT of external
     // IP to SNAT, preferring floating IPs over ephemeral.
@@ -212,7 +226,7 @@ fn setup_ipv6_nat(
             RouterTargetInternal::KEY.to_string(),
             RouterTargetInternal::InternetGateway.as_meta(),
         ));
-        layer.add_rule(Direction::Out, out_nat.finalize());
+        out_rules.push(out_nat.finalize());
 
         // 1:1 NAT inbound packets destined for external IP.
         let mut in_nat = Rule::new(
@@ -226,7 +240,7 @@ fn setup_ipv6_nat(
             .map(Ipv6AddrMatch::Exact)
             .collect();
         in_nat.add_predicate(Predicate::InnerDstIp6(matches));
-        layer.add_rule(Direction::In, in_nat.finalize());
+        in_rules.push(in_nat.finalize());
     }
 
     if let Some(ip6) = external_cfg.ephemeral_ip {
@@ -245,7 +259,7 @@ fn setup_ipv6_nat(
             RouterTargetInternal::KEY.to_string(),
             RouterTargetInternal::InternetGateway.as_meta(),
         ));
-        layer.add_rule(Direction::Out, out_nat.finalize());
+        out_rules.push(out_nat.finalize());
 
         // 1:1 NAT inbound packets destined for external IP.
         let mut in_nat = Rule::new(
@@ -255,7 +269,7 @@ fn setup_ipv6_nat(
         in_nat.add_predicate(Predicate::InnerDstIp6(vec![
             Ipv6AddrMatch::Exact(ip6),
         ]));
-        layer.add_rule(Direction::In, in_nat.finalize());
+        in_rules.push(in_nat.finalize());
     }
 
     if let Some(ref snat_cfg) = external_cfg.snat {
@@ -276,7 +290,7 @@ fn setup_ipv6_nat(
             RouterTargetInternal::KEY.to_string(),
             RouterTargetInternal::InternetGateway.as_meta(),
         ));
-        layer.add_rule(Direction::Out, rule.finalize());
+        out_rules.push(rule.finalize());
     }
     Ok(())
 }
@@ -286,9 +300,6 @@ pub fn set_nat_rules(
     port: &Port<VpcNetwork>,
     req: SetExternalIpsReq,
 ) -> Result<(), OpteError> {
-    let in_rules = vec![];
-    let out_rules = vec![];
-
     match (&cfg.ip_cfg, req.external_ips_v4, req.external_ips_v6) {
         (IpCfg::DualStack { ipv4, ipv6 }, Some(new_v4), Some(new_v6)) => {
             ipv4.external_ips.store(new_v4);
@@ -311,10 +322,9 @@ pub fn set_nat_rules(
         _ => return Err(OpteError::InvalidIpCfg),
     }
 
-    // XXX: need to alter `setup` fns to produce rule lists.
-    // XXX: need to be able to set_rules on a non-finalised port.
     // XXX: do we need to flush the FT on set? Don't want to wipe affinity.
 
+    let (in_rules, out_rules) = create_nat_rules(cfg)?;
     port.set_rules(NAT_LAYER_NAME, in_rules, out_rules)?;
 
     todo!();
