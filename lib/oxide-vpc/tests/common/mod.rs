@@ -337,11 +337,6 @@ pub fn oxide_net_setup2(
     let vps = VpcPortState::new();
     let mut pav = PortAndVps { port, vps, vpc_map };
 
-    let nat_rules = match cfg.ipv4().external_ips.ephemeral_ip {
-        Some(_) => "incr:nat.rules.in, nat.rules.out",
-        _ => "",
-    };
-
     let mut updates = vec![
         // * Epoch starts at 1, adding router entry bumps it to 2.
         "set:epoch=2",
@@ -374,13 +369,28 @@ pub fn oxide_net_setup2(
         // * Outbound IPv4 SNAT
         // * Outbound IPv6 SNAT
         "set:nat.rules.out=2",
-        nat_rules,
+    ];
+
+    [
+        cfg.ipv4().external_ips.ephemeral_ip.is_some(),
+        !cfg.ipv4().external_ips.floating_ips.is_empty(),
+        cfg.ipv6().external_ips.ephemeral_ip.is_some(),
+        !cfg.ipv6().external_ips.floating_ips.is_empty(),
+    ]
+    .into_iter()
+    .for_each(|c| {
+        if c {
+            updates.push("incr:nat.rules.in, nat.rules.out")
+        }
+    });
+
+    updates.extend_from_slice(&[
         // * Allow guest to route to own subnet
         "set:router.rules.out=1",
         // * Outbound encap
         // * Inbound decap
         "set:overlay.rules.in=1, overlay.rules.out=1",
-    ];
+    ]);
 
     if let Some(val) = custom_updates {
         updates.extend_from_slice(val);
@@ -534,6 +544,16 @@ pub fn http_syn2(
     eth_dst: MacAddr,
     ip_dst: impl Into<IpAddr>,
 ) -> Packet<Parsed> {
+    http_syn3(eth_src, ip_src, eth_dst, ip_dst, 44490)
+}
+
+pub fn http_syn3(
+    eth_src: MacAddr,
+    ip_src: impl Into<IpAddr>,
+    eth_dst: MacAddr,
+    ip_dst: impl Into<IpAddr>,
+    sport: u16,
+) -> Packet<Parsed> {
     let body = vec![];
     let mut options = [0x00; TcpHdr::MAX_OPTION_SIZE];
     #[rustfmt::skip]
@@ -553,7 +573,7 @@ pub fn http_syn2(
     let options_len = bytes.len();
 
     let tcp = TcpMeta {
-        src: 44490,
+        src: sport,
         dst: 80,
         flags: TcpFlags::SYN,
         seq: 2382112979,
@@ -613,9 +633,9 @@ pub fn http_syn_ack(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
 
 pub fn http_syn_ack2(
     eth_src: MacAddr,
-    ip_src: Ipv4Addr,
+    ip_src: impl Into<IpAddr>,
     eth_dst: MacAddr,
-    ip_dst: Ipv4Addr,
+    ip_dst: impl Into<IpAddr>,
     dport: u16,
 ) -> Packet<Parsed> {
     let body = vec![];
@@ -627,16 +647,37 @@ pub fn http_syn_ack2(
         ack: 2382112980,
         ..Default::default()
     };
-    let ip4 = Ipv4Meta {
-        src: ip_src,
-        dst: ip_dst,
-        proto: Protocol::TCP,
-        total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len()) as u16,
-        ..Default::default()
+    let (ether_type, ip): (_, IpMeta) = match (ip_src.into(), ip_dst.into()) {
+        (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => (
+            EtherType::Ipv4,
+            Ipv4Meta {
+                src,
+                dst,
+                proto: Protocol::TCP,
+                total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len())
+                    as u16,
+                ttl: 64,
+                ident: 2662,
+                ..Default::default()
+            }
+            .into(),
+        ),
+        (IpAddr::Ip6(src), IpAddr::Ip6(dst)) => (
+            EtherType::Ipv6,
+            Ipv6Meta {
+                src,
+                dst,
+                proto: Protocol::TCP,
+                next_hdr: IpProtocol::Tcp,
+                pay_len: (tcp.hdr_len() + body.len()) as u16,
+                ..Default::default()
+            }
+            .into(),
+        ),
+        _ => panic!("source and destination must be the same IP version"),
     };
-    let eth =
-        EtherMeta { ether_type: EtherType::Ipv4, src: eth_src, dst: eth_dst };
-    ulp_pkt(eth, ip4, tcp, &body)
+    let eth = EtherMeta { ether_type, src: eth_src, dst: eth_dst };
+    ulp_pkt(eth, ip, tcp, &body)
 }
 
 pub fn http_ack2(

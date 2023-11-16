@@ -52,7 +52,8 @@ const SNAT_PRIORITY: u16 = 100;
 /// (dst IP checks on inbound traffic) to each rule's predicates.
 pub const FT_LIMIT_NAT: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(3) };
 pub const FT_LIMIT_NAT_DUALSTACK: NonZeroU32 =
-    unsafe { NonZeroU32::new_unchecked(6) };
+    // unsafe { NonZeroU32::new_unchecked(6) };
+    unsafe { NonZeroU32::new_unchecked(8192) };
 
 /// Create the NAT layer for a new port, returning the number of flowtable layers
 /// required.
@@ -220,7 +221,7 @@ fn setup_ipv6_nat(
             ))),
         );
         out_nat.add_predicate(Predicate::InnerEtherType(vec![
-            EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
+            EtherTypeMatch::Exact(ETHER_TYPE_IPV6),
         ]));
         out_nat.add_predicate(Predicate::Meta(
             RouterTargetInternal::KEY.to_string(),
