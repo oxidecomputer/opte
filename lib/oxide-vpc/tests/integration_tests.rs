@@ -1091,7 +1091,7 @@ fn check_external_ip_inbound_behaviour(
         let flow_port = 44490 + i as u16;
 
         // Suppose that 'example.com' wants to contact us.
-        let external_host_ip: IpAddr = match ext_ip {
+        let partner_ip: IpAddr = match ext_ip {
             IpAddr::Ip4(_) => "93.184.216.34".parse().unwrap(),
             IpAddr::Ip6(_) => {
                 "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap()
@@ -1102,7 +1102,7 @@ fn check_external_ip_inbound_behaviour(
         // ================================================================
         let pkt1 = http_syn3(
             cfg.boundary_services.mac,
-            external_host_ip,
+            partner_ip,
             cfg.guest_mac,
             ext_ip,
             flow_port,
@@ -1137,8 +1137,7 @@ fn check_external_ip_inbound_behaviour(
             ];
             incr!(port, rules[(if firewall_flow_exists { 1 } else { 0 })..]);
         }
-
-        // print_port(&port.port, &port.vpc_map);
+        print_port(&port.port, &port.vpc_map);
 
         let private_ip: IpAddr = match ext_ip {
             IpAddr::Ip4(_) => {
@@ -1179,19 +1178,14 @@ fn check_external_ip_inbound_behaviour(
             cfg.guest_mac,
             private_ip,
             GW_MAC_ADDR,
-            ext_ip,
+            partner_ip,
             flow_port,
         );
         let res = port.port.process(Out, &mut pkt2, ActionMeta::new());
         assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
         incr!(
             port,
-            [
-                "firewall.flows.out, firewall.flows.in",
-                "nat.flows.out, nat.flows.in",
-                "uft.out",
-                "stats.port.out_modified, stats.port.out_uft_miss",
-            ]
+            ["uft.out", "stats.port.out_modified, stats.port.out_uft_miss",]
         );
         print_port(&port.port, &port.vpc_map);
         match ext_ip {
@@ -1311,19 +1305,44 @@ fn external_ip_epoch_affinity_preserved() {
         vni: g1_cfg.vni,
     };
 
+    let new_v4: Ipv4Addr = "10.60.1.10".parse().unwrap();
+    let new_v4_cfg = g1_cfg.ipv4_cfg().map(|v| {
+        let mut floating_ips = v.external_ips.floating_ips.clone();
+        floating_ips.push(new_v4);
+        ExternalIpCfg { floating_ips, ..v.external_ips.clone() }
+    });
+    let new_v6: Ipv6Addr = "2001:db8::10".parse().unwrap();
+    let new_v6_cfg = g1_cfg.ipv6_cfg().map(|v| {
+        let mut floating_ips = v.external_ips.floating_ips.clone();
+        floating_ips.push(new_v6);
+        ExternalIpCfg { floating_ips, ..v.external_ips.clone() }
+    });
+
+    let mut req = oxide_vpc::api::SetExternalIpsReq {
+        port_name: g1.port.name().to_string(),
+        external_ips_v4: None,
+        external_ips_v6: None,
+    };
+
     for ext_ip in [ext_v4[0].into(), ext_v6[0].into()] {
         // ====================================================================
         // Create an inbound flow on each ephemeral IP.
         // ====================================================================
         let (partner_ip, private_ip): (IpAddr, IpAddr) = match ext_ip {
-            IpAddr::Ip4(_) => (
-                "93.184.216.34".parse().unwrap(),
-                g1_cfg.ipv4().private_ip.into(),
-            ),
-            IpAddr::Ip6(_) => (
-                "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap(),
-                g1_cfg.ipv6().private_ip.into(),
-            ),
+            IpAddr::Ip4(_) => {
+                req.external_ips_v4 = new_v4_cfg.clone();
+                (
+                    "93.184.216.34".parse().unwrap(),
+                    g1_cfg.ipv4().private_ip.into(),
+                )
+            }
+            IpAddr::Ip6(_) => {
+                req.external_ips_v6 = new_v6_cfg.clone();
+                (
+                    "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap(),
+                    g1_cfg.ipv6().private_ip.into(),
+                )
+            }
         };
 
         let pkt1 = http_syn2(
@@ -1350,19 +1369,20 @@ fn external_ip_epoch_affinity_preserved() {
         );
 
         // ====================================================================
-        // Add a firewall rule to bump epoch
+        // Add another floating IP to bump epoch
+        // Bumping epoch on other layers (e.g., firewall) is typically fine,
+        // since that won't affect the internal flowtable for NAT.
         // ====================================================================
-        firewall::add_fw_rule(
-            &g1.port,
-            &AddFwRuleReq {
-                port_name: g1.port.name().to_string(),
-                rule: "dir=in action=allow priority=10 protocol=UDP"
-                    .parse()
-                    .unwrap(),
-            },
-        )
-        .unwrap();
-        incr!(g1, ["epoch", "firewall.rules.in"]);
+        nat::set_nat_rules(&g1.cfg, &g1.port, req.clone()).unwrap();
+        update!(
+            g1,
+            [
+                "incr:epoch",
+                "set:nat.flows.in=0, nat.flows.out=0",
+                "set:nat.rules.in=4, nat.rules.out=6",
+                // "set:firewall.flows.in=2, firewall.flows.out=2",
+            ]
+        );
 
         // ================================================================
         // The reply packet must still originate from the ephepemeral port
@@ -1372,7 +1392,7 @@ fn external_ip_epoch_affinity_preserved() {
             g1_cfg.guest_mac,
             private_ip,
             GW_MAC_ADDR,
-            ext_ip,
+            partner_ip,
             44490,
         );
         let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
@@ -1380,7 +1400,6 @@ fn external_ip_epoch_affinity_preserved() {
         incr!(
             g1,
             [
-                "firewall.flows.out, firewall.flows.in",
                 "nat.flows.out, nat.flows.in",
                 "uft.out",
                 "stats.port.out_modified, stats.port.out_uft_miss",
