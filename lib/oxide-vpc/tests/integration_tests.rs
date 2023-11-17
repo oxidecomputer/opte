@@ -1193,13 +1193,13 @@ fn check_external_ip_inbound_behaviour(
                 "stats.port.out_modified, stats.port.out_uft_miss",
             ]
         );
-        // print_port(&port.port, &port.vpc_map);
+        print_port(&port.port, &port.vpc_map);
         match ext_ip {
             IpAddr::Ip4(ip) => {
                 assert_eq!(pkt2.meta().inner_ip4().unwrap().src, ip);
             }
             IpAddr::Ip6(ip) => {
-                assert_eq!(pkt1.meta().inner_ip6().unwrap().src, ip);
+                assert_eq!(pkt2.meta().inner_ip6().unwrap().src, ip);
             }
         };
     }
@@ -1299,7 +1299,102 @@ fn external_ip_balanced_over_floating_ips() {
 
 #[test]
 fn external_ip_epoch_affinity_preserved() {
-    todo!()
+    let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(2, true);
+    let bsvc_phys = TestIpPhys {
+        ip: g1_cfg.boundary_services.ip,
+        mac: g1_cfg.boundary_services.mac,
+        vni: g1_cfg.boundary_services.vni,
+    };
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    for ext_ip in [ext_v4[0].into(), ext_v6[0].into()] {
+        // ====================================================================
+        // Create an inbound flow on each ephemeral IP.
+        // ====================================================================
+        let (partner_ip, private_ip): (IpAddr, IpAddr) = match ext_ip {
+            IpAddr::Ip4(_) => (
+                "93.184.216.34".parse().unwrap(),
+                g1_cfg.ipv4().private_ip.into(),
+            ),
+            IpAddr::Ip6(_) => (
+                "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap(),
+                g1_cfg.ipv6().private_ip.into(),
+            ),
+        };
+
+        let pkt1 = http_syn2(
+            g1_cfg.boundary_services.mac,
+            partner_ip,
+            g1_cfg.guest_mac,
+            ext_ip,
+        );
+        let mut pkt1 = encap_external(pkt1, bsvc_phys, g1_phys);
+
+        let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
+        assert!(
+            matches!(res, Ok(Modified)),
+            "bad result for ip {ext_ip:?}: {res:?}"
+        );
+        incr!(
+            g1,
+            [
+                "firewall.flows.out, firewall.flows.in",
+                "nat.flows.out, nat.flows.in",
+                "uft.in",
+                "stats.port.in_modified, stats.port.in_uft_miss",
+            ]
+        );
+
+        // ====================================================================
+        // Add a firewall rule to bump epoch
+        // ====================================================================
+        firewall::add_fw_rule(
+            &g1.port,
+            &AddFwRuleReq {
+                port_name: g1.port.name().to_string(),
+                rule: "dir=in action=allow priority=10 protocol=UDP"
+                    .parse()
+                    .unwrap(),
+            },
+        )
+        .unwrap();
+        incr!(g1, ["epoch", "firewall.rules.in"]);
+
+        // ================================================================
+        // The reply packet must still originate from the ephepemeral port
+        // after an epoch change.
+        // ================================================================
+        let mut pkt2 = http_syn_ack2(
+            g1_cfg.guest_mac,
+            private_ip,
+            GW_MAC_ADDR,
+            ext_ip,
+            44490,
+        );
+        let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
+        assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+        incr!(
+            g1,
+            [
+                "firewall.flows.out, firewall.flows.in",
+                "nat.flows.out, nat.flows.in",
+                "uft.out",
+                "stats.port.out_modified, stats.port.out_uft_miss",
+            ]
+        );
+        match ext_ip {
+            IpAddr::Ip4(ip) => {
+                assert_eq!(pkt2.meta().inner_ip4().unwrap().src, ip);
+            }
+            IpAddr::Ip6(ip) => {
+                assert_eq!(pkt2.meta().inner_ip6().unwrap().src, ip);
+            }
+        };
+    }
 }
 
 #[test]
