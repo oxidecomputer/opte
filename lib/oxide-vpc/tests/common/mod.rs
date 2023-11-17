@@ -256,6 +256,7 @@ pub struct PortAndVps {
     pub port: Port<VpcNetwork>,
     pub vps: VpcPortState,
     pub vpc_map: Arc<VpcMappings>,
+    pub cfg: oxide_vpc::cfg::VpcCfg,
 }
 
 pub fn oxide_net_setup(
@@ -335,7 +336,7 @@ pub fn oxide_net_setup2(
     .unwrap();
 
     let vps = VpcPortState::new();
-    let mut pav = PortAndVps { port, vps, vpc_map };
+    let mut pav = PortAndVps { port, vps, vpc_map, cfg: converted_cfg };
 
     let mut updates = vec![
         // * Epoch starts at 1, adding router entry bumps it to 2.

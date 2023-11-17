@@ -326,7 +326,5 @@ pub fn set_nat_rules(
     // XXX: do we need to flush the FT on set? Don't want to wipe affinity.
 
     let (in_rules, out_rules) = create_nat_rules(cfg)?;
-    port.set_rules(NAT_LAYER_NAME, in_rules, out_rules)?;
-
-    todo!();
+    port.set_rules(NAT_LAYER_NAME, in_rules, out_rules)
 }

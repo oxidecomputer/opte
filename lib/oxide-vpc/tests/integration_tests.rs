@@ -1019,10 +1019,9 @@ fn multi_external_setup(
 }
 
 fn multi_external_ip_setup(
+    n_ips: usize,
     use_ephemeral: bool,
 ) -> (PortAndVps, VpcCfg, Vec<Ipv4Addr>, Vec<Ipv6Addr>) {
-    let n_ips = 8;
-
     // ================================================================
     // In order for a guest to receive external connections, it must
     // have an external IP.
@@ -1065,25 +1064,28 @@ fn multi_external_ip_setup(
     (g1, g1_cfg, ext_v4, ext_v6)
 }
 
-#[test]
-fn external_ip_receive_on_all() {
-    let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(true);
-
+fn check_external_ip_inbound_behaviour(
+    check_reply: bool,
+    should_fail: bool,
+    firewall_flow_exists: bool,
+    port: &mut PortAndVps,
+    cfg: &VpcCfg,
+    ext_v4: &[Ipv4Addr],
+    ext_v6: &[Ipv6Addr],
+) {
     let bsvc_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.boundary_services.vni,
+        ip: cfg.boundary_services.ip,
+        mac: cfg.boundary_services.mac,
+        vni: cfg.boundary_services.vni,
     };
-    let g1_phys = TestIpPhys {
-        ip: g1_cfg.phys_ip,
-        mac: g1_cfg.guest_mac,
-        vni: g1_cfg.vni,
-    };
+    let g1_phys =
+        TestIpPhys { ip: cfg.phys_ip, mac: cfg.guest_mac, vni: cfg.vni };
 
     let ext_ips = ext_v4
-        .into_iter()
+        .iter()
+        .copied()
         .map(IpAddr::Ip4)
-        .chain(ext_v6.into_iter().map(IpAddr::Ip6))
+        .chain(ext_v6.iter().copied().map(IpAddr::Ip6))
         .collect::<Vec<_>>();
     for (i, ext_ip) in ext_ips.into_iter().enumerate() {
         let flow_port = 44490 + i as u16;
@@ -1099,42 +1101,71 @@ fn external_ip_receive_on_all() {
         // Generate a TCP SYN packet to the chosen ext_ip
         // ================================================================
         let pkt1 = http_syn3(
-            g1_cfg.boundary_services.mac,
+            cfg.boundary_services.mac,
             external_host_ip,
-            g1_cfg.guest_mac,
+            cfg.guest_mac,
             ext_ip,
             flow_port,
         );
         let mut pkt1 = encap_external(pkt1, bsvc_phys, g1_phys);
 
-        let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
-        assert!(
-            matches!(res, Ok(Modified)),
-            "bad result for ip {ext_ip:?}: {res:?}"
-        );
-        incr!(
-            g1,
-            [
+        let res = port.port.process(In, &mut pkt1, ActionMeta::new());
+        if should_fail {
+            assert!(
+                matches!(res, Ok(ProcessResult::Drop { .. })),
+                "bad result for ip {ext_ip:?}: {res:?}"
+            );
+            update!(
+                port,
+                [
+                    "incr:firewall.flows.out, firewall.flows.in",
+                    "decr:uft.in",
+                    "incr:stats.port.in_drop, stats.port.in_drop_layer",
+                    "incr:stats.port.in_uft_miss",
+                ]
+            );
+        } else {
+            assert!(
+                matches!(res, Ok(Modified)),
+                "bad result for ip {ext_ip:?}: {res:?}"
+            );
+            let rules = [
                 "firewall.flows.out, firewall.flows.in",
                 "nat.flows.out, nat.flows.in",
                 "uft.in",
                 "stats.port.in_modified, stats.port.in_uft_miss",
-            ]
-        );
-        print_port(&g1.port, &g1.vpc_map);
+            ];
+            incr!(port, rules[(if firewall_flow_exists { 1 } else { 0 })..]);
+        }
+
+        // print_port(&port.port, &port.vpc_map);
 
         let private_ip: IpAddr = match ext_ip {
             IpAddr::Ip4(_) => {
-                let private_ip = g1_cfg.ipv4().private_ip;
-                assert_eq!(pkt1.meta().inner_ip4().unwrap().dst, private_ip);
+                let private_ip = cfg.ipv4().private_ip;
+                if !should_fail {
+                    assert_eq!(
+                        pkt1.meta().inner_ip4().unwrap().dst,
+                        private_ip
+                    );
+                }
                 private_ip.into()
             }
             IpAddr::Ip6(_) => {
-                let private_ip = g1_cfg.ipv6().private_ip;
-                assert_eq!(pkt1.meta().inner_ip6().unwrap().dst, private_ip);
+                let private_ip = cfg.ipv6().private_ip;
+                if !should_fail {
+                    assert_eq!(
+                        pkt1.meta().inner_ip6().unwrap().dst,
+                        private_ip
+                    );
+                }
                 private_ip.into()
             }
         };
+
+        if !check_reply {
+            continue;
+        }
 
         // ================================================================
         // Generate a reply packet: post processing, this must appear to be
@@ -1145,16 +1176,16 @@ fn external_ip_receive_on_all() {
         // draw from a separate pool).
         // ================================================================
         let mut pkt2 = http_syn_ack2(
-            g1_cfg.guest_mac,
+            cfg.guest_mac,
             private_ip,
             GW_MAC_ADDR,
             ext_ip,
             flow_port,
         );
-        let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
+        let res = port.port.process(Out, &mut pkt2, ActionMeta::new());
         assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
         incr!(
-            g1,
+            port,
             [
                 "firewall.flows.out, firewall.flows.in",
                 "nat.flows.out, nat.flows.in",
@@ -1162,7 +1193,7 @@ fn external_ip_receive_on_all() {
                 "stats.port.out_modified, stats.port.out_uft_miss",
             ]
         );
-        print_port(&g1.port, &g1.vpc_map);
+        // print_port(&port.port, &port.vpc_map);
         match ext_ip {
             IpAddr::Ip4(ip) => {
                 assert_eq!(pkt2.meta().inner_ip4().unwrap().src, ip);
@@ -1175,8 +1206,17 @@ fn external_ip_receive_on_all() {
 }
 
 #[test]
+fn external_ip_receive_and_reply_on_all() {
+    let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(8, true);
+
+    check_external_ip_inbound_behaviour(
+        true, false, false, &mut g1, &g1_cfg, &ext_v4, &ext_v6,
+    );
+}
+
+#[test]
 fn external_ip_balanced_over_floating_ips() {
-    let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(true);
+    let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(8, true);
 
     let bsvc_phys = TestIpPhys {
         ip: g1_cfg.boundary_services.ip,
@@ -1264,7 +1304,67 @@ fn external_ip_epoch_affinity_preserved() {
 
 #[test]
 fn external_ip_reconfigurable() {
-    todo!()
+    let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(1, true);
+
+    // ====================================================================
+    // Create several inbound flows.
+    // ====================================================================
+    check_external_ip_inbound_behaviour(
+        false, false, false, &mut g1, &g1_cfg, &ext_v4, &ext_v6,
+    );
+
+    // ====================================================================
+    // Install new config.
+    // ====================================================================
+
+    let new_v4 = "10.60.1.2".parse().unwrap();
+    let new_v4_cfg = g1_cfg.ipv4_cfg().map(|v| ExternalIpCfg {
+        floating_ips: vec![new_v4],
+        ephemeral_ip: None,
+        ..v.external_ips.clone()
+    });
+    let new_v6 = "2001:db8::2".parse().unwrap();
+    let new_v6_cfg = g1_cfg.ipv6_cfg().map(|v| ExternalIpCfg {
+        floating_ips: vec![new_v6],
+        ephemeral_ip: None,
+        ..v.external_ips.clone()
+    });
+
+    let req = oxide_vpc::api::SetExternalIpsReq {
+        port_name: g1.port.name().to_string(),
+        external_ips_v4: new_v4_cfg,
+        external_ips_v6: new_v6_cfg,
+    };
+    nat::set_nat_rules(&g1.cfg, &g1.port, req).unwrap();
+    update!(
+        g1,
+        [
+            "incr:epoch",
+            "set:nat.flows.in=0, nat.flows.out=0",
+            "set:nat.rules.in=2, nat.rules.out=4",
+            "set:firewall.flows.in=2, firewall.flows.out=2",
+        ]
+    );
+
+    // ====================================================================
+    // Port should no longer admit external traffic on old IPs.
+    // ====================================================================
+    check_external_ip_inbound_behaviour(
+        false, true, false, &mut g1, &g1_cfg, &ext_v4, &ext_v6,
+    );
+
+    // ====================================================================
+    // Port should admit external traffic on new IPs.
+    // ====================================================================
+    check_external_ip_inbound_behaviour(
+        false,
+        false,
+        true,
+        &mut g1,
+        &g1_cfg,
+        &[new_v4],
+        &[new_v6],
+    );
 }
 
 #[derive(Debug)]
