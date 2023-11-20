@@ -1,5 +1,4 @@
-// We need our own VpcCfg here which is separate from the
-// api one to hide the things we do for perf/reconfig.
+//! Reconfigurable, internal configuration built from `oxide_vpc::api`.
 
 use crate::api;
 use crate::api::BoundaryServices;
@@ -7,7 +6,7 @@ use crate::api::ExternalIpCfg;
 #[cfg(any(feature = "test-help", test))]
 use crate::api::PhysNet;
 use opte::api::*;
-use opte::resource::Resource;
+use opte::dynamic::Dynamic;
 
 #[derive(Debug, Clone)]
 pub struct Ipv4Cfg {
@@ -26,7 +25,7 @@ pub struct Ipv4Cfg {
     pub gateway_ip: Ipv4Addr,
 
     /// (S)NAT assignments used for rack-external configuration.
-    pub external_ips: Resource<ExternalIpCfg<Ipv4Addr>>,
+    pub external_ips: Dynamic<ExternalIpCfg<Ipv4Addr>>,
 }
 
 /// The IPv6 configuration of a VPC guest.
@@ -51,7 +50,7 @@ pub struct Ipv6Cfg {
     pub gateway_ip: Ipv6Addr,
 
     /// (S)NAT assignments used for rack-external configuration.
-    pub external_ips: Resource<ExternalIpCfg<Ipv6Addr>>,
+    pub external_ips: Dynamic<ExternalIpCfg<Ipv6Addr>>,
 }
 
 /// The IP configuration of a VPC guest.
@@ -144,48 +143,13 @@ impl VpcCfg {
         PhysNet { ether: self.guest_mac, ip: self.phys_ip, vni: self.vni }
     }
 
-    // #[cfg(not(any(feature = "test-help", test)))]
-    // /// Return the IPv4 SNAT config, if it exists.
-    // pub fn snat(&self) -> Option<&SNat4Cfg> {
-    //     match &self.ip_cfg {
-    //         IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. } => {
-    //             ipv4.snat.as_ref()
-    //         }
-
-    //         _ => None,
-    //     }
-    // }
-
-    // #[cfg(any(feature = "test-help", test))]
-    // pub fn snat(&self) -> &SNat4Cfg {
-    //     match &self.ip_cfg {
-    //         IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. } => {
-    //             ipv4.external_ips.snat.as_ref().unwrap()
-    //         }
-
-    //         _ => panic!("expected an IPv4 SNAT configuration"),
-    //     }
-    // }
-
-    // #[cfg(any(feature = "test-help", test))]
-    // pub fn snat6(&self) -> &SNat6Cfg {
-    //     match &self.ip_cfg {
-    //         IpCfg::Ipv6(ipv6) | IpCfg::DualStack { ipv6, .. } => {
-    //             ipv6.external_ips.snat.as_ref().unwrap()
-    //         }
-
-    //         _ => panic!("expected an IPv6 SNAT configuration"),
-    //     }
-    // }
-
-    // / Return the total number of external ports in the IP configuration,
-    // / across both IPv4 and IPv6. If there is no external address configured,
-    // / of either family, `None` is returned. If there is such a configuration,
-    // / then `Some` is returned, though the contained value may still be zero if
-    // / the port range for the relevant address is empty
-    // /
-    // / Note that this uses the explicit 1-1 NAT external IP address over the
-    // / SNAT address, if both are provided.
+    /// Return the total number of flowtable entries required in the IP
+    /// configuration, across both IPv4 and IPv6. Given that external IP addresses
+    /// are reconfigurable but `Layer`s and the UFT are not resizeable, we currently
+    /// allocate `u16::MAX` per IP stack.
+    ///
+    /// If there is no external address configured of either family, `None` is
+    /// returned.
     //
     // # Notes
     //
@@ -200,43 +164,21 @@ impl VpcCfg {
     // flow-table size in that case, of one. See `oxide_vpc::engine::nat::setup`
     // for confirmation that the layer will be "empty" if we have no external
     // addresses.
-    // pub fn n_external_ports(&self) -> Option<u32> {
-    //     // TODO: factor in floating IPs here?
-    //     let n_ipv4_ports = match &self.ip_cfg {
-    //         IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. } => {
-    //             match (ipv4.external_ips.ephemeral_ip, &ipv4.external_ips.snat) {
-    //                 (Some(_), _) => Some(u32::from(u16::MAX)),
-    //                 (None, Some(snat)) => {
-    //                     // Safety: This is an inclusive range of `u16`s, so the
-    //                     // length is <= `u16::MAX` and fits in a `u32`.
-    //                     let n_ports = u32::try_from(snat.ports.len()).unwrap();
-    //                     Some(n_ports)
-    //                 }
-    //                 (None, None) => None,
-    //             }
-    //         }
-    //         _ => None,
-    //     };
-    //     let n_ipv6_ports = match &self.ip_cfg {
-    //         IpCfg::Ipv6(ipv6) | IpCfg::DualStack { ipv6, .. } => {
-    //             match (ipv6.external_ips.ephemeral_ip, &ipv6.external_ips.snat) {
-    //                 (Some(_), _) => Some(u32::from(u16::MAX)),
-    //                 (None, Some(snat)) => {
-    //                     // Safety: This is an inclusive range of `u16`s, so the
-    //                     // length is <= `u16::MAX` and fits in a `u32`.
-    //                     let n_ports = u32::try_from(snat.ports.len()).unwrap();
-    //                     Some(n_ports)
-    //                 }
-    //                 (None, None) => None,
-    //             }
-    //         }
-    //         _ => None,
-    //     };
-    //     match (n_ipv4_ports, n_ipv6_ports) {
-    //         (None, None) => None,
-    //         (v4, v6) => Some(v4.unwrap_or(0) + v6.unwrap_or(0)),
-    //     }
-    // }
+    pub fn required_nat_space(&self) -> u32 {
+        let n_ipv4_ports = match &self.ip_cfg {
+            IpCfg::Ipv4(_) | IpCfg::DualStack { ipv4: _, .. } => {
+                u32::from(u16::MAX)
+            }
+            _ => 0,
+        };
+        let n_ipv6_ports = match &self.ip_cfg {
+            IpCfg::Ipv6(_) | IpCfg::DualStack { ipv6: _, .. } => {
+                u32::from(u16::MAX)
+            }
+            _ => 0,
+        };
+        n_ipv4_ports + n_ipv6_ports
+    }
 }
 
 impl From<api::VpcCfg> for VpcCfg {
@@ -283,5 +225,37 @@ impl From<api::Ipv6Cfg> for Ipv6Cfg {
             gateway_ip: value.gateway_ip,
             external_ips: value.external_ips.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use api::tests::test_vpc_cfg;
+
+    #[test]
+    fn test_required_nat_space() {
+        let cfg = test_vpc_cfg();
+        // Each IPv4/v6 has the full port range.
+        assert_eq!(
+            VpcCfg::from(cfg).required_nat_space(),
+            u32::from(u16::MAX) * 2
+        );
+    }
+
+    #[test]
+    fn test_required_nat_space_only_ipv6() {
+        let mut cfg = test_vpc_cfg();
+        let api::IpCfg::DualStack { ipv6, .. } = cfg.ip_cfg else { panic!() };
+        cfg.ip_cfg = api::IpCfg::Ipv6(ipv6);
+        assert_eq!(VpcCfg::from(cfg).required_nat_space(), u32::from(u16::MAX));
+    }
+
+    #[test]
+    fn test_required_nat_space_only_ipv4() {
+        let mut cfg = test_vpc_cfg();
+        let api::IpCfg::DualStack { ipv4, .. } = cfg.ip_cfg else { panic!() };
+        cfg.ip_cfg = api::IpCfg::Ipv4(ipv4);
+        assert_eq!(VpcCfg::from(cfg).required_nat_space(), u32::from(u16::MAX));
     }
 }

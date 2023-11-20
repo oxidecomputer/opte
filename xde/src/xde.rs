@@ -1972,11 +1972,15 @@ fn new_port(
     let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac, ectx);
     firewall::setup(&mut pb, FW_FT_LIMIT)?;
 
+    // Unwrap safety: we always have at least one FT entry, because we always
+    // have at least one IP stack (v4 and/or v6).
+    let nat_ft_limit = NonZeroU32::new(cfg.required_nat_space()).unwrap();
+
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
     gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
     router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
-    let nat_ft_limit = nat::setup(&mut pb, &cfg)?;
+    nat::setup(&mut pb, &cfg, nat_ft_limit)?;
     overlay::setup(&pb, &cfg, v2p, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total

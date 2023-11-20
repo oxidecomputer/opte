@@ -238,6 +238,7 @@ fn oxide_net_builder(
     let mut pb = PortBuilder::new(name, name_cstr, cfg.guest_mac, ectx);
 
     let fw_limit = NonZeroU32::new(8096).unwrap();
+    let snat_limit = NonZeroU32::new(8096).unwrap();
     let one_limit = NonZeroU32::new(1).unwrap();
 
     let dhcp = base_dhcp_config();
@@ -246,7 +247,7 @@ fn oxide_net_builder(
     gateway::setup(&pb, cfg, vpc_map, fw_limit, &dhcp)
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
-    nat::setup(&mut pb, cfg).expect("failed to add nat layer");
+    nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
     overlay::setup(&pb, cfg, v2p, one_limit)
         .expect("failed to add overlay layer");
     pb

@@ -1219,7 +1219,7 @@ impl<N: NetworkImpl> Port<N> {
         Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
 
-    // TODO: not dupe
+    // TODO: not dupe `set_rules`.
     pub fn set_rules_soft(
         &self,
         layer_name: &str,

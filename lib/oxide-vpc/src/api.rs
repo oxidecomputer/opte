@@ -289,68 +289,6 @@ impl VpcCfg {
             _ => panic!("expected an IPv6 SNAT configuration"),
         }
     }
-
-    /// Return the total number of external ports in the IP configuration,
-    /// across both IPv4 and IPv6. If there is no external address configured,
-    /// of either family, `None` is returned. If there is such a configuration,
-    /// then `Some` is returned, though the contained value may still be zero if
-    /// the port range for the relevant address is empty
-    ///
-    /// Note that this uses the explicit 1-1 NAT external IP address over the
-    /// SNAT address, if both are provided.
-    //
-    // # Notes
-    //
-    // This is mostly used for computing flow table limits in some situations,
-    // such as for the NAT layer in OPTE.
-    //
-    // The NAT layer only applies to traffic that is destinted outside the VPC.
-    // If the configuration supplies no external addresses at all, then we
-    // return `NonZeroU32(1)`. The logic here is that we'd like to keep the NAT
-    // layer itself, but it will have zero rules / predicates. I.e., no traffic
-    // will ever match or be rewritten. We supply the minimum possible
-    // flow-table size in that case, of one. See `oxide_vpc::engine::nat::setup`
-    // for confirmation that the layer will be "empty" if we have no external
-    // addresses.
-    pub fn n_external_ports(&self) -> Option<u32> {
-        // TODO: factor in floating IPs here?
-        let n_ipv4_ports = match &self.ip_cfg {
-            IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. } => {
-                match (ipv4.external_ips.ephemeral_ip, &ipv4.external_ips.snat)
-                {
-                    (Some(_), _) => Some(u32::from(u16::MAX)),
-                    (None, Some(snat)) => {
-                        // Safety: This is an inclusive range of `u16`s, so the
-                        // length is <= `u16::MAX` and fits in a `u32`.
-                        let n_ports = u32::try_from(snat.ports.len()).unwrap();
-                        Some(n_ports)
-                    }
-                    (None, None) => None,
-                }
-            }
-            _ => None,
-        };
-        let n_ipv6_ports = match &self.ip_cfg {
-            IpCfg::Ipv6(ipv6) | IpCfg::DualStack { ipv6, .. } => {
-                match (ipv6.external_ips.ephemeral_ip, &ipv6.external_ips.snat)
-                {
-                    (Some(_), _) => Some(u32::from(u16::MAX)),
-                    (None, Some(snat)) => {
-                        // Safety: This is an inclusive range of `u16`s, so the
-                        // length is <= `u16::MAX` and fits in a `u32`.
-                        let n_ports = u32::try_from(snat.ports.len()).unwrap();
-                        Some(n_ports)
-                    }
-                    (None, None) => None,
-                }
-            }
-            _ => None,
-        };
-        match (n_ipv4_ports, n_ipv6_ports) {
-            (None, None) => None,
-            (v4, v6) => Some(v4.unwrap_or(0) + v6.unwrap_or(0)),
-        }
-    }
 }
 
 /// A network destination on the Oxide Rack's physical network.
@@ -877,7 +815,7 @@ impl Display for Ports {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]
@@ -947,7 +885,7 @@ mod tests {
         assert!("6".parse::<ProtoFilter>().is_err());
     }
 
-    fn test_vpc_cfg() -> VpcCfg {
+    pub fn test_vpc_cfg() -> VpcCfg {
         VpcCfg {
             boundary_services: BoundaryServices {
                 ip: "fd00::99".parse().unwrap(),
@@ -987,79 +925,5 @@ mod tests {
             },
             vni: Vni::new(100u32).unwrap(),
         }
-    }
-
-    #[test]
-    fn test_n_external_ports() {
-        let cfg = test_vpc_cfg();
-        // Each IPv4/v6 has the full port range.
-        assert_eq!(cfg.n_external_ports(), Some(u32::from(u16::MAX) * 2));
-    }
-
-    // Check that without any external address configuration at all, we return
-    // None for the number of external ports.
-    #[test]
-    fn test_n_external_ports_none() {
-        let mut cfg = test_vpc_cfg();
-        let ipv4 = cfg.ipv4_cfg_mut().unwrap();
-        ipv4.external_ips.snat.take();
-        ipv4.external_ips.ephemeral_ip.take();
-        let ipv6 = cfg.ipv6_cfg_mut().unwrap();
-        ipv6.external_ips.snat.take();
-        ipv6.external_ips.ephemeral_ip.take();
-        assert_eq!(cfg.n_external_ports(), None);
-    }
-
-    #[test]
-    fn test_n_external_ports_only_ipv4() {
-        let mut cfg = test_vpc_cfg();
-        let ipv6 = cfg.ipv6_cfg_mut().unwrap();
-        ipv6.external_ips.snat.take();
-        ipv6.external_ips.ephemeral_ip.take();
-        assert_eq!(cfg.n_external_ports(), Some(u32::from(u16::MAX)));
-    }
-
-    #[test]
-    fn test_n_external_ports_only_ipv6() {
-        let mut cfg = test_vpc_cfg();
-        let ipv4 = cfg.ipv4_cfg_mut().unwrap();
-        ipv4.external_ips.snat.take();
-        ipv4.external_ips.ephemeral_ip.take();
-        assert_eq!(cfg.n_external_ports(), Some(u32::from(u16::MAX)));
-    }
-
-    #[test]
-    fn test_n_external_ports_only_snat4() {
-        let mut cfg = test_vpc_cfg();
-        let ipv6 = cfg.ipv6_cfg_mut().unwrap();
-        ipv6.external_ips.snat.take();
-        ipv6.external_ips.ephemeral_ip.take();
-        let ipv4 = cfg.ipv4_cfg_mut().unwrap();
-        ipv4.external_ips.ephemeral_ip.take();
-        assert_eq!(cfg.n_external_ports(), Some(8096));
-    }
-
-    #[test]
-    fn test_n_external_ports_only_snat6() {
-        let mut cfg = test_vpc_cfg();
-        let ipv4 = cfg.ipv4_cfg_mut().unwrap();
-        ipv4.external_ips.snat.take();
-        ipv4.external_ips.ephemeral_ip.take();
-        let ipv6 = cfg.ipv6_cfg_mut().unwrap();
-        ipv6.external_ips.ephemeral_ip.take();
-        assert_eq!(cfg.n_external_ports(), Some(8096));
-    }
-
-    #[test]
-    #[allow(clippy::reversed_empty_ranges)]
-    fn test_n_external_ports_bad_snat_range() {
-        let mut cfg = test_vpc_cfg();
-        let ipv4 = cfg.ipv4_cfg_mut().unwrap();
-        ipv4.external_ips.ephemeral_ip.take();
-        ipv4.external_ips.snat.as_mut().unwrap().ports = 8096..=0;
-        let ipv6 = cfg.ipv6_cfg_mut().unwrap();
-        ipv6.external_ips.snat.take();
-        ipv6.external_ips.ephemeral_ip.take();
-        assert_eq!(cfg.n_external_ports(), Some(0));
     }
 }

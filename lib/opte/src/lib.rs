@@ -43,7 +43,7 @@ pub mod ddi;
 pub mod engine;
 
 #[cfg(any(feature = "engine", test))]
-pub mod resource;
+pub mod dynamic;
 
 /// Return value with `bit` set.
 ///

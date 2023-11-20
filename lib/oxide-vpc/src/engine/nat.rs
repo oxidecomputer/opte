@@ -43,23 +43,13 @@ const FLOATING_ONE_TO_ONE_NAT_PRIORITY: u16 = 5;
 const EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY: u16 = 10;
 const SNAT_PRIORITY: u16 = 100;
 
-/// Per-IP-stack rule count for NAT.
-///
-/// We need to always maintain enough flowtable space to store rules for floating IPs,
-/// ephemeral IP, and SNAT -- 3 in total. Users can certainly reconfigure floating IPs
-/// at will, but the rule count remains constant since we defer var-width elements
-/// (dst IP checks on inbound traffic) to each rule's predicates.
-pub const FT_LIMIT_NAT: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(3) };
-pub const FT_LIMIT_NAT_DUALSTACK: NonZeroU32 =
-    // unsafe { NonZeroU32::new_unchecked(6) };
-    unsafe { NonZeroU32::new_unchecked(8192) };
-
 /// Create the NAT layer for a new port, returning the number of flowtable layers
 /// required.
 pub fn setup(
     pb: &mut PortBuilder,
     cfg: &VpcCfg,
-) -> Result<NonZeroU32, OpteError> {
+    ft_limit: NonZeroU32,
+) -> Result<(), OpteError> {
     // The NAT layer is rewrite layer and not a filtering one. Any
     // packets that don't match should be allowed to pass through to
     // the next layer.
@@ -69,23 +59,10 @@ pub fn setup(
         default_out: DefaultAction::Allow,
     };
 
-    // If we make v4/v6/dual-stack dynamic in future, then we may wish to
-    // use FT_LIMIT_NAT_DUALSTACK unconditionally.
-
-    // XXX: double check how FT alloc logic works with many S/D pairs...
-
-    let ft_count = match (cfg.ipv4_cfg(), cfg.ipv6_cfg()) {
-        (Some(_), Some(_)) => FT_LIMIT_NAT_DUALSTACK,
-        (Some(_), None) | (None, Some(_)) => FT_LIMIT_NAT,
-        _ => return Err(OpteError::InvalidIpCfg),
-    };
-
-    let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), actions, ft_count);
+    let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), actions, ft_limit);
     let (in_rules, out_rules) = create_nat_rules(cfg)?;
     layer.set_rules(in_rules, out_rules);
-    pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))?;
-
-    Ok(ft_count)
+    pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))
 }
 
 #[allow(clippy::type_complexity)]

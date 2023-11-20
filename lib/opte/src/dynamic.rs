@@ -4,12 +4,13 @@
 
 // Copyright 2023 Oxide Computer Company
 
-// We need a KMutex-based wrapper for dynamically updatable resources (e.g., config),
-// ideally that also abstracts over the outputs *generated* from inner without needing
-// to read the contents.
+//! A KMutex-based wrapper for dynamically updateable resources (e.g., config),
+//! and the outputs *generated* from
 
 // TODO: may want to look into porting arc-swap for alloc and core,
 //       which should allow us to do better than a mutex.
+
+// TODO: Implement the generated outputs for e.g. DHCP responses.
 
 use crate::ddi::sync::KRwLock;
 use crate::ddi::sync::KRwLockType;
@@ -21,52 +22,52 @@ use core::sync::atomic::Ordering;
 use core::write;
 
 #[derive(Clone)]
-pub struct Resource<T>(Arc<InnerResource<T>>);
+pub struct Dynamic<T>(Arc<InnerDynamic<T>>);
 
-struct InnerResource<T> {
+struct InnerDynamic<T> {
     inner: KRwLock<Arc<T>>,
     epoch: AtomicU64,
 }
 
 #[derive(Debug)]
-pub struct ResourceVersion<T> {
+pub struct Snapshot<T> {
     pub value: Arc<T>,
     pub epoch: u64,
 }
 
-impl<T> From<T> for Resource<T> {
+impl<T> From<T> for Dynamic<T> {
     fn from(value: T) -> Self {
         let mut inner = KRwLock::new(value.into());
         inner.init(KRwLockType::Driver);
 
-        Self(InnerResource { inner, epoch: AtomicU64::default() }.into())
+        Self(InnerDynamic { inner, epoch: AtomicU64::default() }.into())
     }
 }
 
-impl<T> Resource<T> {
+impl<T> Dynamic<T> {
     pub fn store(&self, value: T) {
         let mut inner = self.0.inner.write();
         *inner = value.into();
         _ = self.0.epoch.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn load(&self) -> ResourceVersion<T> {
+    pub fn load(&self) -> Snapshot<T> {
         let value_locked = self.0.inner.read();
         let value = Arc::clone(&*value_locked);
         let epoch = self.0.epoch.load(Ordering::Relaxed);
 
-        ResourceVersion { epoch, value }
+        Snapshot { epoch, value }
     }
 }
 
-impl<T: Debug> Debug for Resource<T> {
+impl<T: Debug> Debug for Dynamic<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let current_val = self.load();
         write!(f, "{current_val:?}")
     }
 }
 
-impl<T> Deref for ResourceVersion<T> {
+impl<T> Deref for Snapshot<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {

@@ -250,7 +250,7 @@ pub struct FlowEntry<S: Dump> {
     /// This tracks the last time the flow was matched.
     last_hit: Moment,
 
-    /// Records whether this flow predates arule change,
+    /// Records whether this flow predates a rule change, and
     /// must rerun rule processing before `state` can be used.
     dirty: bool,
 }
