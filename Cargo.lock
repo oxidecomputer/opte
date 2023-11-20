@@ -162,9 +162,9 @@ checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
 
 [[package]]
 name = "cc"
-version = "1.0.84"
+version = "1.0.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f8e7c90afad890484a21653d08b6e209ae34770fb5ee298f9c699fcc1e5c856"
+checksum = "f1174fb0b6ec23863f8b971027804a42614e347eafb0a95bf0b12cdae21fc4d0"
 dependencies = [
  "libc",
 ]
@@ -455,9 +455,9 @@ checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
 
 [[package]]
 name = "errno"
-version = "0.3.6"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c18ee0ed65a5f1f81cac6b1d213b69c35fa47d4252ad41f1486dbd8226fe36e"
+checksum = "f258a7194e7f7c2a7837a8913aeab7fd8c383457034fa20ce4dd3dcb813e8eb8"
 dependencies = [
  "libc",
  "windows-sys",
@@ -608,9 +608,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1c173a5686ce8bfa551b3563d0c2170bf24ca44da99c7ca4bfdab5418c3fe57"
+checksum = "25db6b064527c5d482d0423354fcd07a89a2dfe07b67892e62411946db7f07b0"
 dependencies = [
  "either",
 ]
@@ -844,7 +844,7 @@ dependencies = [
  "dyn-clone",
  "heapless",
  "illumos-sys-hdrs",
- "itertools 0.11.0",
+ "itertools 0.12.0",
  "kstat-macro",
  "opte",
  "opte-api",
@@ -853,7 +853,7 @@ dependencies = [
  "smoltcp",
  "usdt",
  "version_check",
- "zerocopy 0.7.25",
+ "zerocopy 0.7.26",
 ]
 
 [[package]]
@@ -909,7 +909,7 @@ dependencies = [
  "serde",
  "smoltcp",
  "usdt",
- "zerocopy 0.7.25",
+ "zerocopy 0.7.26",
 ]
 
 [[package]]
@@ -1148,9 +1148,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "0.38.21"
+version = "0.38.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b426b0506e5d50a7d8dafcf2e81471400deb602392c7dd110815afb4eaf02a3"
+checksum = "dc99bc2d4f1fed22595588a013687477aedf3cdcfb26558c559edb67b4d9b22e"
 dependencies = [
  "bitflags 2.4.1",
  "errno",
@@ -1836,12 +1836,12 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.7.25"
+version = "0.7.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cd369a67c0edfef15010f980c3cbe45d7f651deac2cd67ce097cd801de16557"
+checksum = "e97e415490559a91254a2979b4829267a57d2fcd741a98eee8b722fb57289aa0"
 dependencies = [
  "byteorder",
- "zerocopy-derive 0.7.25",
+ "zerocopy-derive 0.7.26",
 ]
 
 [[package]]
@@ -1857,9 +1857,9 @@ dependencies = [
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.7.25"
+version = "0.7.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2f140bda219a26ccc0cdb03dba58af72590c53b22642577d88a927bc5c87d6b"
+checksum = "dd7e48ccf166952882ca8bd778a43502c64f33bf94c12ebe2a7f08e5a0f6689f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1891,7 +1891,7 @@ dependencies = [
 [[package]]
 name = "ztest"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/falcon?branch=main#3546f4f5c5a366df3b02afe6f5e9803cf69996c8"
+source = "git+https://github.com/oxidecomputer/falcon?branch=main#d5fe4b1eb15dfead4f746f0cb7104c93fde10e1f"
 dependencies = [
  "anyhow",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys?branch=main)",

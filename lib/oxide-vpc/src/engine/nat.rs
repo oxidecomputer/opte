@@ -36,7 +36,6 @@ use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Finalized;
 use opte::engine::rule::Rule;
-use opte::engine::snat::NatPool;
 use opte::engine::snat::SNat;
 
 pub const NAT_LAYER_NAME: &str = "nat";
@@ -179,13 +178,12 @@ fn setup_ipv4_nat(
     }
 
     if let Some(snat_cfg) = &external_cfg.snat {
-        let pool = NatPool::new();
-        pool.add(
+        let snat = SNat::new(ip_cfg.private_ip);
+        snat.add(
             ip_cfg.private_ip,
             snat_cfg.external_ip,
             snat_cfg.ports.clone(),
         );
-        let snat = SNat::new(ip_cfg.private_ip, Arc::new(pool));
         let mut rule =
             Rule::new(SNAT_PRIORITY, Action::Stateful(Arc::new(snat)));
 
@@ -275,13 +273,12 @@ fn setup_ipv6_nat(
     }
 
     if let Some(ref snat_cfg) = external_cfg.snat {
-        let pool = NatPool::new();
-        pool.add(
+        let snat = SNat::new(ip_cfg.private_ip);
+        snat.add(
             ip_cfg.private_ip,
             snat_cfg.external_ip,
             snat_cfg.ports.clone(),
         );
-        let snat = SNat::new(ip_cfg.private_ip, Arc::new(pool));
         let mut rule =
             Rule::new(SNAT_PRIORITY, Action::Stateful(Arc::new(snat)));
 
