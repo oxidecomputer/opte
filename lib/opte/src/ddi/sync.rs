@@ -264,9 +264,7 @@ impl<T> KRwLock<T> {
     }
 }
 
-#[cfg(all(not(feature = "std"), not(test)))]
 unsafe impl<T: Send> Send for KRwLock<T> {}
-#[cfg(all(not(feature = "std"), not(test)))]
 unsafe impl<T: Sync> Sync for KRwLock<T> {}
 
 #[cfg(all(not(feature = "std"), not(test)))]

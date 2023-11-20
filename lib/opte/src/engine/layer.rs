@@ -810,35 +810,17 @@ impl Layer {
         // Do we have a FlowTable entry? If so, use it.
         let flow = *pkt.flow();
         let action = match self.ft.get_in(&flow) {
-            EntryState::Dirty(action) => {
-                // revalidate without altering counters until the last minute.
-                let mut rdr = pkt.get_body_rdr();
-                let rule = self.rules_in.find_match(
-                    &flow,
-                    pkt.meta(),
-                    ameta,
-                    &mut rdr,
-                );
-                let _ = rdr.finish();
-
-                let (new_action, reason) = if let Some(rule) = rule {
-                    (rule.action(), DenyReason::Rule)
-                } else {
-                    (self.default_in.into(), DenyReason::Default)
-                };
-
-                // XXX: obviously incorrect, as we need to rerun the nested action
-                //      behaviour *without adding any state to the FT*. Needs rework
-                //      of the below process_in_rules, so we can consolidate stats etc.
-                if let Action::Deny = new_action {
-                    self.ft.remove_in(&flow);
-                    return Ok(LayerResult::Deny { name: self.name, reason });
-                } else {
-                    rule.map(|_| {
-                        self.ft.mark_clean(Direction::In, &flow);
-                        action
-                    })
-                }
+            EntryState::Dirty(ActionDescEntry::Desc(action))
+                if action.is_valid() =>
+            {
+                self.ft.mark_clean(Direction::In, &flow);
+                Some(ActionDescEntry::Desc(action))
+            }
+            EntryState::Dirty(_) => {
+                // NoOps are included in this case as we can't ask the actor whether
+                // it remains valid: the simplest method to do so is to rerun lookup.
+                self.ft.remove_in(&flow);
+                None
             }
             EntryState::Clean(action) => Some(action),
             EntryState::None => None,
@@ -1125,35 +1107,17 @@ impl Layer {
         // Do we have a FlowTable entry? If so, use it.
         let flow = *pkt.flow();
         let action = match self.ft.get_out(&flow) {
-            EntryState::Dirty(action) => {
-                // revalidate without altering counters until the last minute.
-                let mut rdr = pkt.get_body_rdr();
-                let rule = self.rules_out.find_match(
-                    &flow,
-                    pkt.meta(),
-                    ameta,
-                    &mut rdr,
-                );
-                let _ = rdr.finish();
-
-                let (new_action, reason) = if let Some(rule) = rule {
-                    (rule.action(), DenyReason::Rule)
-                } else {
-                    (self.default_out.into(), DenyReason::Default)
-                };
-
-                // XXX: obviously incorrect, as we need to rerun the nested action
-                //      behaviour *without adding any state to the FT*. Needs rework
-                //      of the below process_out_rules, so we can consolidate stats etc.
-                if let Action::Deny = new_action {
-                    self.ft.remove_out(&flow);
-                    return Ok(LayerResult::Deny { name: self.name, reason });
-                } else {
-                    rule.map(|_| {
-                        self.ft.mark_clean(Direction::Out, &flow);
-                        action
-                    })
-                }
+            EntryState::Dirty(ActionDescEntry::Desc(action))
+                if action.is_valid() =>
+            {
+                self.ft.mark_clean(Direction::Out, &flow);
+                Some(ActionDescEntry::Desc(action))
+            }
+            EntryState::Dirty(_) => {
+                // NoOps are included in this case as we can't ask the actor whether
+                // it remains valid: the simplest method to do so is to rerun lookup.
+                self.ft.remove_out(&flow);
+                None
             }
             EntryState::Clean(action) => Some(action),
             EntryState::None => None,

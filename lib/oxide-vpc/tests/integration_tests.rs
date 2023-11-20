@@ -1066,7 +1066,7 @@ fn multi_external_ip_setup(
 
 fn check_external_ip_inbound_behaviour(
     check_reply: bool,
-    should_fail: bool,
+    old_ip_gone: bool,
     firewall_flow_exists: bool,
     port: &mut PortAndVps,
     cfg: &VpcCfg,
@@ -1110,7 +1110,10 @@ fn check_external_ip_inbound_behaviour(
         let mut pkt1 = encap_external(pkt1, bsvc_phys, g1_phys);
 
         let res = port.port.process(In, &mut pkt1, ActionMeta::new());
-        if should_fail {
+        if old_ip_gone {
+            // If we lose an external IP, the failure mode is obvious:
+            // invalidate the action, do not rewrite dst IP to target the
+            // port's private IP, which will be filtered by `gateway`.
             assert!(
                 matches!(res, Ok(ProcessResult::Drop { .. })),
                 "bad result for ip {ext_ip:?}: {res:?}"
@@ -1135,14 +1138,14 @@ fn check_external_ip_inbound_behaviour(
                 "uft.in",
                 "stats.port.in_modified, stats.port.in_uft_miss",
             ];
-            incr!(port, rules[(if firewall_flow_exists { 1 } else { 0 })..]);
+            incr!(port, rules[(if firewall_flow_exists { 2 } else { 0 })..]);
         }
         print_port(&port.port, &port.vpc_map);
 
         let private_ip: IpAddr = match ext_ip {
             IpAddr::Ip4(_) => {
                 let private_ip = cfg.ipv4().private_ip;
-                if !should_fail {
+                if !old_ip_gone {
                     assert_eq!(
                         pkt1.meta().inner_ip4().unwrap().dst,
                         private_ip
@@ -1152,7 +1155,7 @@ fn check_external_ip_inbound_behaviour(
             }
             IpAddr::Ip6(_) => {
                 let private_ip = cfg.ipv6().private_ip;
-                if !should_fail {
+                if !old_ip_gone {
                     assert_eq!(
                         pkt1.meta().inner_ip6().unwrap().dst,
                         private_ip
@@ -1182,20 +1185,54 @@ fn check_external_ip_inbound_behaviour(
             flow_port,
         );
         let res = port.port.process(Out, &mut pkt2, ActionMeta::new());
-        assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-        incr!(
-            port,
-            ["uft.out", "stats.port.out_modified, stats.port.out_uft_miss",]
-        );
         print_port(&port.port, &port.vpc_map);
-        match ext_ip {
-            IpAddr::Ip4(ip) => {
-                assert_eq!(pkt2.meta().inner_ip4().unwrap().src, ip);
-            }
-            IpAddr::Ip6(ip) => {
-                assert_eq!(pkt2.meta().inner_ip6().unwrap().src, ip);
-            }
-        };
+
+        if old_ip_gone {
+            // Failure mode here is different (assuming we have at least one
+            // external IP). The packet must fail to send via the old IP,
+            // invalidate the entry, and then choose the new external IP.
+            assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+            print_port(&port.port, &port.vpc_map);
+            update!(
+                port,
+                [
+                    "incr:uft.out",
+                    "incr:stats.port.out_modified",
+                    "incr:stats.port.out_uft_miss",
+                    "incr:nat.flows.in, nat.flows.out",
+                ]
+            );
+
+            match ext_ip {
+                IpAddr::Ip4(ip) => {
+                    let chosen_ip = pkt2.meta().inner_ip4().unwrap().src;
+                    assert_ne!(chosen_ip, ip);
+                    assert_ne!(IpAddr::from(chosen_ip), private_ip);
+                }
+                IpAddr::Ip6(ip) => {
+                    let chosen_ip = pkt2.meta().inner_ip6().unwrap().src;
+                    assert_ne!(chosen_ip, ip);
+                    assert_ne!(IpAddr::from(chosen_ip), private_ip);
+                }
+            };
+        } else {
+            assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+            update!(
+                port,
+                [
+                    "incr:uft.out",
+                    "incr:stats.port.out_modified, stats.port.out_uft_miss",
+                ]
+            );
+            match ext_ip {
+                IpAddr::Ip4(ip) => {
+                    assert_eq!(pkt2.meta().inner_ip4().unwrap().src, ip);
+                }
+                IpAddr::Ip6(ip) => {
+                    assert_eq!(pkt2.meta().inner_ip6().unwrap().src, ip);
+                }
+            };
+        }
     }
 }
 
@@ -1377,7 +1414,7 @@ fn external_ip_epoch_affinity_preserved() {
         update!(g1, ["incr:epoch", "set:nat.rules.in=4, nat.rules.out=6",]);
 
         // ================================================================
-        // The reply packet must still originate from the ephepemeral port
+        // The reply packet must still originate from the ephemeral port
         // after an epoch change.
         // ================================================================
         let mut pkt2 = http_syn_ack2(
@@ -1421,7 +1458,6 @@ fn external_ip_reconfigurable() {
     // ====================================================================
     // Install new config.
     // ====================================================================
-
     let new_v4 = "10.60.1.2".parse().unwrap();
     let new_v4_cfg = g1_cfg.ipv4_cfg().map(|v| ExternalIpCfg {
         floating_ips: vec![new_v4],
@@ -1451,10 +1487,11 @@ fn external_ip_reconfigurable() {
     );
 
     // ====================================================================
-    // Port should no longer admit external traffic on old IPs.
+    // Port should no longer admit external traffic on old IPs, and affinity
+    // with the old external IP should be broken.
     // ====================================================================
     check_external_ip_inbound_behaviour(
-        false, true, false, &mut g1, &g1_cfg, &ext_v4, &ext_v6,
+        true, true, false, &mut g1, &g1_cfg, &ext_v4, &ext_v6,
     );
 
     // ====================================================================

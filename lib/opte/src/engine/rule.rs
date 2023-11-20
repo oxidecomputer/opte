@@ -162,6 +162,18 @@ pub trait ActionDesc {
     }
 
     fn name(&self) -> &str;
+
+    /// Check whether this action should be preserved after a soft-clear
+    /// of the flow-table.
+    ///
+    /// This method, if implemented, allows an action to hold onto its original
+    /// action after a rule change (i.e., preserving a pseudo-random external IP
+    /// allocation).
+    ///
+    /// Defaults to removing the matched entry.
+    fn is_valid(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Debug for dyn ActionDesc {

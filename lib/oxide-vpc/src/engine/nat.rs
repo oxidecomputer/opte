@@ -7,6 +7,7 @@
 use super::router::RouterTargetInternal;
 use super::router::ROUTER_LAYER_NAME;
 use super::VpcNetwork;
+use crate::api::ExternalIpCfg;
 use crate::api::SetExternalIpsReq;
 use crate::cfg::IpCfg;
 use crate::cfg::Ipv4Cfg;
@@ -17,7 +18,11 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
 use core::result::Result;
+use opte::api::IpAddr;
+use opte::api::Ipv4Addr;
+use opte::api::Ipv6Addr;
 use opte::api::OpteError;
+use opte::dynamic::Dynamic;
 use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::ether::ETHER_TYPE_IPV6;
 use opte::engine::layer::DefaultAction;
@@ -25,6 +30,7 @@ use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::nat::InboundNat;
 use opte::engine::nat::OutboundNat;
+use opte::engine::nat::VerifyAddr;
 use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
@@ -36,12 +42,46 @@ use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Finalized;
 use opte::engine::rule::Rule;
+use opte::engine::snat::ConcreteIpAddr;
 use opte::engine::snat::SNat;
 
 pub const NAT_LAYER_NAME: &str = "nat";
 const FLOATING_ONE_TO_ONE_NAT_PRIORITY: u16 = 5;
 const EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY: u16 = 10;
 const SNAT_PRIORITY: u16 = 100;
+
+// A note on concurrency correctness of accessing the `Dynamic`:
+// * Validation will not be triggered until table is marked dirty
+//   after config is rebuilt.
+// * A packet may see a future `ExternalIpCfg` during `is_addr_valid`:
+//   in the worst case, this will pre-emptively remove a flow.
+// * If a flow is marked clean but followed by a new config insert,
+//   the flow will be re-marked as dirty once the ioctl thread acquires
+//   the table lock.
+#[derive(Debug)]
+struct ExtIps<T: ConcreteIpAddr>(Dynamic<ExternalIpCfg<T>>);
+
+impl VerifyAddr for ExtIps<Ipv4Addr> {
+    fn is_addr_valid(&self, addr: &IpAddr) -> bool {
+        let IpAddr::Ip4(ip) = addr else {
+            return false;
+        };
+
+        let snap = self.0.load();
+        snap.ephemeral_ip == Some(*ip) || snap.floating_ips.contains(ip)
+    }
+}
+
+impl VerifyAddr for ExtIps<Ipv6Addr> {
+    fn is_addr_valid(&self, addr: &IpAddr) -> bool {
+        let IpAddr::Ip6(ip) = addr else {
+            return false;
+        };
+
+        let snap = self.0.load();
+        snap.ephemeral_ip == Some(*ip) || snap.floating_ips.contains(ip)
+    }
+}
 
 /// Create the NAT layer for a new port, returning the number of flowtable layers
 /// required.
@@ -90,7 +130,8 @@ fn setup_ipv4_nat(
     // IP to SNAT, preferring floating IPs over ephemeral.
     // To achieve this we place the NAT rules at a lower
     // priority than SNAT.
-    let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip));
+    let verifier = Arc::new(ExtIps(ip_cfg.external_ips.clone()));
+    let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip, verifier.clone()));
     let external_cfg = ip_cfg.external_ips.load();
 
     if !external_cfg.floating_ips.is_empty() {
@@ -99,6 +140,7 @@ fn setup_ipv4_nat(
             Action::Stateful(Arc::new(OutboundNat::new(
                 ip_cfg.private_ip,
                 &external_cfg.floating_ips,
+                verifier.clone(),
             ))),
         );
         out_nat.add_predicate(Predicate::InnerEtherType(vec![
@@ -132,6 +174,7 @@ fn setup_ipv4_nat(
             Action::Stateful(Arc::new(OutboundNat::new(
                 ip_cfg.private_ip,
                 &[ip4],
+                verifier,
             ))),
         );
         out_nat.add_predicate(Predicate::InnerEtherType(vec![
@@ -185,7 +228,8 @@ fn setup_ipv6_nat(
     // IP to SNAT, preferring floating IPs over ephemeral.
     // To achieve this we place the NAT rules at a lower
     // priority than SNAT.
-    let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip));
+    let verifier = Arc::new(ExtIps(ip_cfg.external_ips.clone()));
+    let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip, verifier.clone()));
     let external_cfg = ip_cfg.external_ips.load();
 
     if !external_cfg.floating_ips.is_empty() {
@@ -194,6 +238,7 @@ fn setup_ipv6_nat(
             Action::Stateful(Arc::new(OutboundNat::new(
                 ip_cfg.private_ip,
                 &external_cfg.floating_ips,
+                verifier.clone(),
             ))),
         );
         out_nat.add_predicate(Predicate::InnerEtherType(vec![
@@ -227,6 +272,7 @@ fn setup_ipv6_nat(
             Action::Stateful(Arc::new(OutboundNat::new(
                 ip_cfg.private_ip,
                 &[ip6],
+                verifier,
             ))),
         );
         out_nat.add_predicate(Predicate::InnerEtherType(vec![

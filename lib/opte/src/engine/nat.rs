@@ -30,19 +30,36 @@ use crc32fast::Hasher;
 use opte_api::Direction;
 use opte_api::IpAddr;
 
+/// A trait which allows a VPC implementation to specify how NAT actions
+/// can be re-verified after a rule change.
+///
+/// This is needed for outbound flows in particular, as the flow id and opaque
+/// action alone don't allow us to see the chosen external IpAddr. For the inbound
+/// case, the gateway layer can successfully rematch if needed but reusing this
+/// mechanism is the most sensible approach.
+pub trait VerifyAddr: alloc::fmt::Debug + Send + Sync {
+    fn is_addr_valid(&self, addr: &IpAddr) -> bool;
+}
+
 /// A mapping from a private to one of several external IP addresses for NAT.
 #[derive(Debug, Clone)]
 pub struct OutboundNat {
     priv_ip: IpAddr,
     // TODO: possibly remove Vec on ephemeral IP.
     external_ips: Vec<IpAddr>,
+
+    verifier: Arc<dyn VerifyAddr>,
 }
 
 impl OutboundNat {
     /// Create a new NAT mapping from a private to public IP address.
-    pub fn new<T: ConcreteIpAddr>(priv_ip: T, external_ips: &[T]) -> Self {
+    pub fn new<T: ConcreteIpAddr>(
+        priv_ip: T,
+        external_ips: &[T],
+        verifier: Arc<impl VerifyAddr + 'static>,
+    ) -> Self {
         let external_ips = external_ips.iter().copied().map(T::into).collect();
-        Self { priv_ip: priv_ip.into(), external_ips }
+        Self { priv_ip: priv_ip.into(), external_ips, verifier }
     }
 }
 
@@ -98,6 +115,7 @@ impl StatefulAction for OutboundNat {
         Ok(AllowOrDeny::Allow(Arc::new(NatDesc {
             priv_ip: self.priv_ip,
             external_ip: self.external_ips[ip_idx],
+            verifier: self.verifier.clone(),
         })))
     }
 
@@ -113,12 +131,16 @@ impl StatefulAction for OutboundNat {
 /// received a packet on.
 pub struct InboundNat {
     priv_ip: IpAddr,
+    verifier: Arc<dyn VerifyAddr>,
 }
 
 impl InboundNat {
     /// Create a new NAT mapping from a private to public IP address.
-    pub fn new<T: ConcreteIpAddr>(priv_ip: T) -> Self {
-        Self { priv_ip: priv_ip.into() }
+    pub fn new<T: ConcreteIpAddr>(
+        priv_ip: T,
+        verifier: Arc<impl VerifyAddr + 'static>,
+    ) -> Self {
+        Self { priv_ip: priv_ip.into(), verifier }
     }
 }
 
@@ -140,6 +162,7 @@ impl StatefulAction for InboundNat {
         Ok(AllowOrDeny::Allow(Arc::new(NatDesc {
             priv_ip: self.priv_ip,
             external_ip: flow_id.dst_ip,
+            verifier: self.verifier.clone(),
         })))
     }
 
@@ -152,10 +175,11 @@ impl StatefulAction for InboundNat {
 }
 
 /// An action descriptor for a NAT action.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct NatDesc {
     priv_ip: IpAddr,
     external_ip: IpAddr,
+    verifier: Arc<dyn VerifyAddr>,
 }
 
 pub const NAT_NAME: &str = "NAT";
@@ -188,6 +212,10 @@ impl ActionDesc for NatDesc {
     fn name(&self) -> &str {
         NAT_NAME
     }
+
+    fn is_valid(&self) -> bool {
+        self.verifier.is_addr_valid(&self.external_ip)
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +224,15 @@ mod test {
     use crate::engine::ether::EtherMeta;
     use crate::engine::GenericUlp;
     use opte_api::Direction::*;
+
+    #[derive(Debug)]
+    struct DummyVerify;
+
+    impl VerifyAddr for DummyVerify {
+        fn is_addr_valid(&self, _addr: &IpAddr) -> bool {
+            true
+        }
+    }
 
     #[test]
     fn nat4_rewrite() {
@@ -216,7 +253,7 @@ mod test {
         let pub_ip = "52.10.128.69".parse().unwrap();
         let outside_ip = "76.76.21.21".parse().unwrap();
         let outside_port = 80;
-        let nat = OutboundNat::new(priv_ip, &[pub_ip]);
+        let nat = OutboundNat::new(priv_ip, &[pub_ip], DummyVerify.into());
         let mut ameta = ActionMeta::new();
 
         // ================================================================
