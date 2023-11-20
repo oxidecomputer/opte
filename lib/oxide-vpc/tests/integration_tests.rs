@@ -1374,13 +1374,7 @@ fn external_ip_epoch_affinity_preserved() {
         // since that won't affect the internal flowtable for NAT.
         // ====================================================================
         nat::set_nat_rules(&g1.cfg, &g1.port, req.clone()).unwrap();
-        update!(
-            g1,
-            [
-                "incr:epoch",
-                "set:nat.rules.in=4, nat.rules.out=6",
-            ]
-        );
+        update!(g1, ["incr:epoch", "set:nat.rules.in=4, nat.rules.out=6",]);
 
         // ================================================================
         // The reply packet must still originate from the ephepemeral port
