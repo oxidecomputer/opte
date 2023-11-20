@@ -86,14 +86,59 @@ pub trait FiniteResource: Resource {
 
     /// Obtain a new entry given the key.
     ///
+    /// Callers are responsible for manually `release`ing this entry into
+    /// the correct parent pool.
+    ///
     /// # Errors
     ///
     /// Return an error if no entry can be mapped to this key or if
     /// the resource is exhausted.
-    fn obtain(&self, key: &Self::Key) -> Result<Self::Entry, ResourceError>;
+    fn obtain_raw(&self, key: &Self::Key)
+        -> Result<Self::Entry, ResourceError>;
+
+    /// Obtain a smart handle to an entry given the key.
+    ///
+    /// # Errors
+    ///
+    /// Return an error if no entry can be mapped to this key or if
+    /// the resource is exhausted.
+    fn obtain(
+        self: &Arc<Self>,
+        key: &Self::Key,
+    ) -> Result<FiniteHandle<Self>, ResourceError>
+    where
+        Self: Sized,
+        Self::Entry: Copy,
+    {
+        Ok(FiniteHandle {
+            key: key.clone(),
+            entry: self.obtain_raw(key)?,
+            pool: self.clone(),
+        })
+    }
 
     /// Release the entry back to the available resources.
     fn release(&self, key: &Self::Key, br: Self::Entry);
+}
+
+/// A smart handle which will automatically return a finite `ResourceEntry`
+/// to its parent pool on drop.
+pub struct FiniteHandle<Pool: FiniteResource>
+where
+    Pool::Entry: Copy,
+{
+    pub key: Pool::Key,
+    pub entry: Pool::Entry,
+    pool: Arc<Pool>,
+}
+
+impl<Pool: FiniteResource> Drop for FiniteHandle<Pool>
+where
+    Pool::Entry: Copy,
+{
+    fn drop(&mut self) {
+        self.pool.release(&self.key, self.entry)
+    }
 }
 
 /// An Action Descriptor holds the information needed to create the
