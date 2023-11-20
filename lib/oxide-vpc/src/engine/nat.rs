@@ -322,6 +322,11 @@ pub fn set_nat_rules(
     port: &Port<VpcNetwork>,
     req: SetExternalIpsReq,
 ) -> Result<(), OpteError> {
+    // This procedure only holds one lock at a time: a `Dynamic`'s shared
+    // space writelock, *or* the table lock via set_rules_soft.
+    // The datapath will hold the table lock for processing, *and* the `Dynamic`'s
+    // readlock when validating dirty match entries.
+    // As such, the two should not deadlock.
     match (&cfg.ip_cfg, req.external_ips_v4, req.external_ips_v6) {
         (IpCfg::DualStack { ipv4, ipv6 }, Some(new_v4), Some(new_v6)) => {
             ipv4.external_ips.store(new_v4);
