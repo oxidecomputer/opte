@@ -981,7 +981,7 @@ fn multi_external_setup(
         .collect::<Vec<_>>();
 
     let (v4_eph, v6_eph, first_float) = if use_ephemeral {
-        (v4s.get(0).copied(), v6s.get(0).copied(), 1)
+        (v4s.first().copied(), v6s.first().copied(), 1)
     } else {
         (None, None, 0)
     };
@@ -997,7 +997,7 @@ fn multi_external_setup(
                     ports: 1025..=4096,
                 }),
                 ephemeral_ip: v4_eph,
-                floating_ips: v4s[first_float..].iter().copied().collect(),
+                floating_ips: v4s[first_float..].to_vec(),
             },
         },
         ipv6: Ipv6Cfg {
@@ -1010,7 +1010,7 @@ fn multi_external_setup(
                     ports: 1025..=4096,
                 }),
                 ephemeral_ip: v6_eph,
-                floating_ips: v6s[first_float..].iter().copied().collect(),
+                floating_ips: v6s[first_float..].to_vec(),
             },
         },
     };
@@ -1235,7 +1235,7 @@ fn external_ip_balanced_over_floating_ips() {
     // ====================================================================
     for i in 0..16 {
         let flow_port = 44490 + i;
-        for partner_ip in [partner_ipv4.into(), partner_ipv6.into()] {
+        for partner_ip in [partner_ipv4, partner_ipv6] {
             let private_ip: IpAddr = match partner_ip {
                 IpAddr::Ip4(_) => g1_cfg.ipv4().private_ip.into(),
                 IpAddr::Ip6(_) => g1_cfg.ipv6().private_ip.into(),
@@ -1378,9 +1378,7 @@ fn external_ip_epoch_affinity_preserved() {
             g1,
             [
                 "incr:epoch",
-                "set:nat.flows.in=0, nat.flows.out=0",
                 "set:nat.rules.in=4, nat.rules.out=6",
-                // "set:firewall.flows.in=2, firewall.flows.out=2",
             ]
         );
 
@@ -1397,12 +1395,11 @@ fn external_ip_epoch_affinity_preserved() {
         );
         let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
         assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-        incr!(
+        update!(
             g1,
             [
-                "nat.flows.out, nat.flows.in",
-                "uft.out",
-                "stats.port.out_modified, stats.port.out_uft_miss",
+                "incr:uft.out",
+                "incr:stats.port.out_modified, stats.port.out_uft_miss",
             ]
         );
         match ext_ip {
@@ -1454,7 +1451,6 @@ fn external_ip_reconfigurable() {
         g1,
         [
             "incr:epoch",
-            "set:nat.flows.in=0, nat.flows.out=0",
             "set:nat.rules.in=2, nat.rules.out=4",
             "set:firewall.flows.in=2, firewall.flows.out=2",
         ]

@@ -89,6 +89,7 @@ pub fn setup(
     Ok(ft_count)
 }
 
+#[allow(clippy::type_complexity)]
 fn create_nat_rules(
     cfg: &VpcCfg,
 ) -> Result<(Vec<Rule<Finalized>>, Vec<Rule<Finalized>>), OpteError> {
@@ -323,8 +324,6 @@ pub fn set_nat_rules(
         _ => return Err(OpteError::InvalidIpCfg),
     }
 
-    // XXX: do we need to flush the FT on set? Don't want to wipe affinity.
-
     let (in_rules, out_rules) = create_nat_rules(cfg)?;
-    port.set_rules(NAT_LAYER_NAME, in_rules, out_rules)
+    port.set_rules_soft(NAT_LAYER_NAME, in_rules, out_rules)
 }
