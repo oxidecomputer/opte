@@ -167,9 +167,10 @@ where
     /// Mark all flow table entries as requiring revalidation after a
     /// reset or removal of rules.
     ///
-    /// It is typically cheaper to use [`clear`]; this method should be
-    /// used only when the original state (`S`) *must* be preserved to
-    /// ensure correctness.
+    /// It is typically cheaper to use [`FlowTable::clear`]; dirty entries
+    /// will occupy flowtable space until they are denied or expire. As such
+    /// this method should be used only when the original state (`S`) *must*
+    /// be preserved to ensure correctness.
     pub fn mark_dirty(&mut self) {
         self.map.values_mut().for_each(|v| v.dirty = true);
     }
