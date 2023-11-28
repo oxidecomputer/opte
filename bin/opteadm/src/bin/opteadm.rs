@@ -421,15 +421,19 @@ fn opte_pkg_version() -> String {
     format!("{MAJOR_VERSION}.{API_VERSION}.{COMMIT_COUNT}")
 }
 
+// XXX: These are growing unwieldy to the point we might want an actual table
+//      pretty-printer for opte outputs.
 fn print_port_header() {
     println!(
-        "{:<32} {:<24} {:<16} {:<16} {:<40} {:<40} {:<8}",
+        "{:<32} {:<24} {:<16} {:<16} {:<16} {:<40} {:<40} {:<40} {:<8}",
         "LINK",
         "MAC ADDRESS",
         "IPv4 ADDRESS",
-        "EXTERNAL IPv4",
+        "EPHEMERAL IPv4",
+        "FLOATING IPv4",
         "IPv6 ADDRESS",
         "EXTERNAL IPv6",
+        "FLOATING IPv6",
         "STATE"
     );
 }
@@ -437,16 +441,30 @@ fn print_port_header() {
 fn print_port(pi: PortInfo) {
     let none = String::from("None");
     println!(
-        "{:<32} {:<24} {:<16} {:<16} {:<40} {:<40} {:<8}",
+        "{:<32} {:<24} {:<16} {:<16} {:<16} {:<40} {:<40} {:<40} {:<8}",
         pi.name,
         pi.mac_addr.to_string(),
         pi.ip4_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
         pi.ephemeral_ip4_addr
             .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
+        pi.floating_ip4_addrs
+            .map(|vec| vec
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join(","))
+            .unwrap_or_else(|| none.clone()),
         pi.ip6_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
         pi.ephemeral_ip6_addr
             .map(|x| x.to_string())
+            .unwrap_or_else(|| none.clone()),
+        pi.floating_ip6_addrs
+            .map(|vec| vec
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join(","))
             .unwrap_or_else(|| none.clone()),
         pi.state,
     );
