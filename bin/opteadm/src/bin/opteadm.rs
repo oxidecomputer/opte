@@ -214,7 +214,7 @@ enum Command {
         target: RouterTarget,
     },
 
-    /// Configure (S)NAT used by a port for VPC-external traffic.
+    /// Configure external network addresses used by a port for VPC-external traffic.
     SetExternalIps {
         /// The OPTE port to which the route is added
         #[arg(short)]
@@ -260,7 +260,7 @@ struct ExternalNetConfig {
     /// An external IP address used for 1-to-1 NAT.
     ///
     /// If `floating_ip`s are defined, then a port will receive and reply
-    /// (but not originate traffic on) this address.
+    /// (but not originate traffic) on this address.
     #[arg(long)]
     ephemeral_ip: Option<IpAddr>,
 

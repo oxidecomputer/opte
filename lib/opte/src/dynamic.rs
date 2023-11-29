@@ -4,13 +4,13 @@
 
 // Copyright 2023 Oxide Computer Company
 
-//! A KMutex-based wrapper for dynamically updateable resources (e.g., config),
-//! and the outputs *generated* from
+//! A KRwLock-based wrapper for dynamically updateable resources (e.g., config),
+//! and for memoizing the outputs generated from those resources.
 
 // TODO: may want to look into porting arc-swap for alloc and core,
 //       which should allow us to do better than a mutex.
 
-// TODO: Implement the generated outputs for e.g. DHCP responses.
+// TODO: Implement the generated outputs to reduce cost of, e.g., DHCP responses.
 
 use crate::ddi::sync::KRwLock;
 use crate::ddi::sync::KRwLockType;

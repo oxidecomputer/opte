@@ -1514,7 +1514,7 @@ impl Layer {
 
     /// Set all rules at once without clearing the flow table.
     ///
-    /// See [FlowTable::mark_dirty] for the performance and correctness
+    /// See [`FlowTable::mark_dirty`] for the performance and correctness
     /// implications.
     pub fn set_rules_soft(
         &mut self,

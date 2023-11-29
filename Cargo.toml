@@ -41,7 +41,7 @@ ctor = "0.2"
 dyn-clone = "1.0"
 heapless = "0.7"
 ipnetwork = { version = "0.20", default-features = false }
-itertools = "0.12"
+itertools = { version = "0.12", default-features = false }
 libc = "0.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
 pcap-parser = "0.14"

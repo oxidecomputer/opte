@@ -59,7 +59,7 @@ pub struct Ipv4Cfg {
     /// which is acting as the gateway to the guest.
     pub gateway_ip: Ipv4Addr,
 
-    /// (S)NAT assignments used for rack-external configuration.
+    /// External IP assignments used for rack-external communication.
     pub external_ips: ExternalIpCfg<Ipv4Addr>,
 }
 
@@ -84,7 +84,7 @@ pub struct Ipv6Cfg {
     // with that, this should be removed.
     pub gateway_ip: Ipv6Addr,
 
-    /// (S)NAT assignments used for rack-external configuration.
+    /// External IP assignments used for rack-external communication.
     pub external_ips: ExternalIpCfg<Ipv6Addr>,
 }
 
@@ -97,9 +97,6 @@ pub struct ExternalIpCfg<T> {
     /// This allows a guest to make outbound connections to hosts on an external
     /// network when there is no external IP address assigned to the guest
     /// itself.
-    //
-    // XXX Keep this optional for now until NAT'ing is more thoroughly
-    // implemented in Omicron.
     pub snat: Option<SNatCfg<T>>,
 
     /// Optional external IP address for this port.

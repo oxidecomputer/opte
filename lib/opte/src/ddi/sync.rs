@@ -265,7 +265,7 @@ impl<T> KRwLock<T> {
 }
 
 unsafe impl<T: Send> Send for KRwLock<T> {}
-unsafe impl<T: Sync> Sync for KRwLock<T> {}
+unsafe impl<T: Send + Sync> Sync for KRwLock<T> {}
 
 #[cfg(all(not(feature = "std"), not(test)))]
 pub struct KRwLockReadGuard<'a, T: 'a> {

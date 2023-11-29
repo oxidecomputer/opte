@@ -27,6 +27,7 @@ use core::fmt;
 use core::hash::Hash;
 use core::marker::PhantomData;
 use crc32fast::Hasher;
+use itertools::Itertools;
 use opte_api::Direction;
 use opte_api::IpAddr;
 
@@ -67,17 +68,11 @@ impl fmt::Display for OutboundNat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{} <=> ", self.priv_ip)?;
 
-        // Sadly, there is no `formatter::Fmt::display_list()`.
         if self.external_ips.len() > 1 {
             write!(f, "{{")?;
         }
 
-        for (i, ip) in self.external_ips.iter().enumerate() {
-            write!(f, "{ip}")?;
-            if i != self.external_ips.len() - 1 {
-                write!(f, ",")?;
-            }
-        }
+        write!(f, "{}", self.external_ips.iter().format(","))?;
 
         if self.external_ips.len() > 1 {
             write!(f, "}}")?;

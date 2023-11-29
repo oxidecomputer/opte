@@ -36,7 +36,7 @@ pub enum OpteCmd {
     CreateXde = 70,      // create a new xde device
     DeleteXde = 71,      // delete an xde device
     SetXdeUnderlay = 72, // set xde underlay devices
-    SetExternalIps = 80, // set xde (S)NAT settings
+    SetExternalIps = 80, // set xde external IPs for a port
 }
 
 impl TryFrom<c_int> for OpteCmd {
