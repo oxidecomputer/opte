@@ -169,7 +169,10 @@ impl OpteHdl {
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
-    pub fn set_external_ips(&self, req: &SetExternalIpsReq) -> Result<NoResp, Error> {
+    pub fn set_external_ips(
+        &self,
+        req: &SetExternalIpsReq,
+    ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetExternalIps;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
