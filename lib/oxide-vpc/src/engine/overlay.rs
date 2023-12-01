@@ -11,7 +11,7 @@ use super::router::RouterTargetInternal;
 use crate::api::BoundaryServices;
 use crate::api::GuestPhysAddr;
 use crate::api::PhysNet;
-use crate::api::VpcCfg;
+use crate::cfg::VpcCfg;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::ToString;
 use alloc::sync::Arc;

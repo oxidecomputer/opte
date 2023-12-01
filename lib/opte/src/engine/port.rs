@@ -1219,6 +1219,27 @@ impl<N: NetworkImpl> Port<N> {
         Err(OpteError::LayerNotFound(layer_name.to_string()))
     }
 
+    // TODO: not dupe `set_rules`.
+    pub fn set_rules_soft(
+        &self,
+        layer_name: &str,
+        in_rules: Vec<Rule<Finalized>>,
+        out_rules: Vec<Rule<Finalized>>,
+    ) -> Result<()> {
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Ready, PortState::Running])?;
+
+        for layer in &mut data.layers {
+            if layer.name() == layer_name {
+                self.epoch.fetch_add(1, SeqCst);
+                layer.set_rules_soft(in_rules, out_rules);
+                return Ok(());
+            }
+        }
+
+        Err(OpteError::LayerNotFound(layer_name.to_string()))
+    }
+
     /// Grab a snapshot of the port statistics.
     pub fn stats_snap(&self) -> PortStatsSnap {
         self.data.lock().stats.vals.snapshot()

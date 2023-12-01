@@ -164,6 +164,17 @@ where
         self.map.get_mut(flow_id)
     }
 
+    /// Mark all flow table entries as requiring revalidation after a
+    /// reset or removal of rules.
+    ///
+    /// It is typically cheaper to use [`FlowTable::clear`]; dirty entries
+    /// will occupy flowtable space until they are denied or expire. As such
+    /// this method should be used only when the original state (`S`) *must*
+    /// be preserved to ensure correctness.
+    pub fn mark_dirty(&mut self) {
+        self.map.values_mut().for_each(|v| v.dirty = true);
+    }
+
     pub fn new(
         port: &str,
         name: &str,
@@ -233,11 +244,15 @@ pub trait Dump {
 pub struct FlowEntry<S: Dump> {
     state: S,
 
-    // Number of times this flow has been matched.
+    /// Number of times this flow has been matched.
     hits: u64,
 
-    // This tracks the last time the flow was matched.
+    /// This tracks the last time the flow was matched.
     last_hit: Moment,
+
+    /// Records whether this flow predates a rule change, and
+    /// must rerun rule processing before `state` can be used.
+    dirty: bool,
 }
 
 impl<S: Dump> FlowEntry<S> {
@@ -262,6 +277,14 @@ impl<S: Dump> FlowEntry<S> {
         self.last_hit = Moment::now();
     }
 
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn mark_clean(&mut self) {
+        self.dirty = false
+    }
+
     pub fn last_hit(&self) -> &Moment {
         &self.last_hit
     }
@@ -271,7 +294,7 @@ impl<S: Dump> FlowEntry<S> {
     }
 
     fn new(state: S) -> Self {
-        FlowEntry { state, hits: 0, last_hit: Moment::now() }
+        FlowEntry { state, hits: 0, last_hit: Moment::now(), dirty: false }
     }
 }
 

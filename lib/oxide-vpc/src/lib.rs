@@ -29,8 +29,12 @@ extern crate std;
 #[macro_use]
 extern crate alloc;
 
+// TODO: move to own crate?
 #[cfg(any(feature = "api", test))]
 pub mod api;
 
 #[cfg(any(feature = "engine", test))]
 pub mod engine;
+
+#[cfg(any(feature = "engine", test))]
+pub mod cfg;

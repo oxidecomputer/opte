@@ -198,7 +198,16 @@ impl SubnetRouterPair {
 /// An IP protocol value.
 #[repr(u8)]
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
 )]
 pub enum Protocol {
     ICMP,
@@ -282,7 +291,16 @@ impl From<Protocol> for smoltcp::wire::IpProtocol {
 
 /// An IPv4 or IPv6 address.
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
 )]
 pub enum IpAddr {
     Ip4(Ipv4Addr),
@@ -351,7 +369,16 @@ impl FromStr for IpAddr {
 
 /// An IPv4 address.
 #[derive(
-    Clone, Copy, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
 )]
 pub struct Ipv4Addr {
     inner: [u8; 4],
@@ -520,6 +547,7 @@ impl Deref for Ipv4Addr {
     Debug,
     Default,
     Eq,
+    Hash,
     Ord,
     PartialEq,
     PartialOrd,

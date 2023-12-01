@@ -46,6 +46,7 @@ use opte::engine::port::ProcessError;
 use opte::engine::tcp::TcpState;
 use opte::engine::udp::UdpMeta;
 use opte::engine::Direction;
+use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::VpcCfg;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
@@ -84,11 +85,14 @@ fn lab_cfg() -> VpcCfg {
         vpc_subnet: "172.20.14.0/24".parse().unwrap(),
         private_ip: "172.20.14.16".parse().unwrap(),
         gateway_ip: "172.20.14.1".parse().unwrap(),
-        snat: Some(SNat4Cfg {
-            external_ip: "76.76.21.21".parse().unwrap(),
-            ports: 1025..=4096,
-        }),
-        external_ips: None,
+        external_ips: ExternalIpCfg {
+            snat: Some(SNat4Cfg {
+                external_ip: "76.76.21.21".parse().unwrap(),
+                ports: 1025..=4096,
+            }),
+            ephemeral_ip: None,
+            floating_ips: vec![],
+        },
     });
     VpcCfg {
         ip_cfg,
@@ -947,6 +951,561 @@ fn guest_to_internet_ipv6() {
 
     let mut pcap_guest = PcapBuilder::new("guest_to_internet_ipv6.pcap");
     pcap_guest.add_pkt(&pkt1);
+}
+
+fn multi_external_setup(
+    n: usize,
+    use_ephemeral: bool,
+) -> (Vec<Ipv4Addr>, Vec<Ipv6Addr>, IpCfg) {
+    if n >= 254 {
+        panic!("multi_external_setup can't yet handle that many addresses");
+    }
+
+    let base_v4: Ipv4Addr = "10.60.1.1".parse().unwrap();
+    let base_v6: Ipv6Addr = "2001:db8::1".parse().unwrap();
+
+    let v4s = (0..n)
+        .map(|i| {
+            let mut out = base_v4.bytes();
+            out[3] += i as u8;
+            out.into()
+        })
+        .collect::<Vec<_>>();
+
+    let v6s = (0..n)
+        .map(|i| {
+            let mut out = base_v6.bytes();
+            out[15] += i as u8;
+            out.into()
+        })
+        .collect::<Vec<_>>();
+
+    let (v4_eph, v6_eph, first_float) = if use_ephemeral {
+        (v4s.first().copied(), v6s.first().copied(), 1)
+    } else {
+        (None, None, 0)
+    };
+
+    let ip_cfg = IpCfg::DualStack {
+        ipv4: Ipv4Cfg {
+            vpc_subnet: "172.30.0.0/22".parse().unwrap(),
+            private_ip: "172.30.0.5".parse().unwrap(),
+            gateway_ip: "172.30.0.1".parse().unwrap(),
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat4Cfg {
+                    external_ip: "10.77.77.13".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: v4_eph,
+                floating_ips: v4s[first_float..].to_vec(),
+            },
+        },
+        ipv6: Ipv6Cfg {
+            vpc_subnet: "fd00::/64".parse().unwrap(),
+            private_ip: "fd00::5".parse().unwrap(),
+            gateway_ip: "fd00::1".parse().unwrap(),
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat6Cfg {
+                    external_ip: "2001:db8::1".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: v6_eph,
+                floating_ips: v6s[first_float..].to_vec(),
+            },
+        },
+    };
+
+    (v4s, v6s, ip_cfg)
+}
+
+fn multi_external_ip_setup(
+    n_ips: usize,
+    use_ephemeral: bool,
+) -> (PortAndVps, VpcCfg, Vec<Ipv4Addr>, Vec<Ipv6Addr>) {
+    // ================================================================
+    // In order for a guest to receive external connections, it must
+    // have an external IP.
+    // ================================================================
+    let (ext_v4, ext_v6, ip_cfg) = multi_external_setup(n_ips, use_ephemeral);
+    let g1_cfg = g1_cfg2(ip_cfg);
+    let mut g1 =
+        oxide_net_setup("g1_port", &g1_cfg, None, NonZeroU32::new(8192));
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Add router entry that allows g1 to route to internet.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip6("::/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // Allow incoming TCP connection on g1 from anyone.
+    let rule = "dir=in action=allow priority=10 protocol=TCP";
+    firewall::add_fw_rule(
+        &g1.port,
+        &AddFwRuleReq {
+            port_name: g1.port.name().to_string(),
+            rule: rule.parse().unwrap(),
+        },
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "firewall.rules.in"]);
+
+    (g1, g1_cfg, ext_v4, ext_v6)
+}
+
+fn check_external_ip_inbound_behaviour(
+    check_reply: bool,
+    old_ip_gone: bool,
+    firewall_flow_exists: bool,
+    port: &mut PortAndVps,
+    cfg: &VpcCfg,
+    ext_v4: &[Ipv4Addr],
+    ext_v6: &[Ipv6Addr],
+) {
+    let bsvc_phys = TestIpPhys {
+        ip: cfg.boundary_services.ip,
+        mac: cfg.boundary_services.mac,
+        vni: cfg.boundary_services.vni,
+    };
+    let g1_phys =
+        TestIpPhys { ip: cfg.phys_ip, mac: cfg.guest_mac, vni: cfg.vni };
+
+    let ext_ips = ext_v4
+        .iter()
+        .copied()
+        .map(IpAddr::Ip4)
+        .chain(ext_v6.iter().copied().map(IpAddr::Ip6))
+        .collect::<Vec<_>>();
+    for (i, ext_ip) in ext_ips.into_iter().enumerate() {
+        let flow_port = 44490 + i as u16;
+
+        // Suppose that 'example.com' wants to contact us.
+        let partner_ip: IpAddr = match ext_ip {
+            IpAddr::Ip4(_) => "93.184.216.34".parse().unwrap(),
+            IpAddr::Ip6(_) => {
+                "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap()
+            }
+        };
+        // ================================================================
+        // Generate a TCP SYN packet to the chosen ext_ip
+        // ================================================================
+        let pkt1 = http_syn3(
+            cfg.boundary_services.mac,
+            partner_ip,
+            cfg.guest_mac,
+            ext_ip,
+            flow_port,
+        );
+        let mut pkt1 = encap_external(pkt1, bsvc_phys, g1_phys);
+
+        let res = port.port.process(In, &mut pkt1, ActionMeta::new());
+        if old_ip_gone {
+            // If we lose an external IP, the failure mode is obvious:
+            // invalidate the action, do not rewrite dst IP to target the
+            // port's private IP, which will be filtered by `gateway`.
+            assert!(
+                matches!(res, Ok(ProcessResult::Drop { .. })),
+                "bad result for ip {ext_ip:?}: {res:?}"
+            );
+            update!(
+                port,
+                [
+                    "incr:firewall.flows.out, firewall.flows.in",
+                    "decr:uft.in",
+                    "incr:stats.port.in_drop, stats.port.in_drop_layer",
+                    "incr:stats.port.in_uft_miss",
+                ]
+            );
+        } else {
+            assert!(
+                matches!(res, Ok(Modified)),
+                "bad result for ip {ext_ip:?}: {res:?}"
+            );
+            let rules = [
+                "firewall.flows.out, firewall.flows.in",
+                "nat.flows.out, nat.flows.in",
+                "uft.in",
+                "stats.port.in_modified, stats.port.in_uft_miss",
+            ];
+            incr!(port, rules[(if firewall_flow_exists { 2 } else { 0 })..]);
+        }
+        print_port(&port.port, &port.vpc_map);
+
+        let private_ip: IpAddr = match ext_ip {
+            IpAddr::Ip4(_) => {
+                let private_ip = cfg.ipv4().private_ip;
+                if !old_ip_gone {
+                    assert_eq!(
+                        pkt1.meta().inner_ip4().unwrap().dst,
+                        private_ip
+                    );
+                }
+                private_ip.into()
+            }
+            IpAddr::Ip6(_) => {
+                let private_ip = cfg.ipv6().private_ip;
+                if !old_ip_gone {
+                    assert_eq!(
+                        pkt1.meta().inner_ip6().unwrap().dst,
+                        private_ip
+                    );
+                }
+                private_ip.into()
+            }
+        };
+
+        if !check_reply {
+            continue;
+        }
+
+        // ================================================================
+        // Generate a reply packet: post processing, this must appear to be
+        // sent from the correct address.
+        //
+        // While FIP selection is based on flow hash, we can guarantee on the first
+        // IP (ephemeral) that the wrong src_ip will be selected (as it will
+        // draw from a separate pool).
+        // ================================================================
+        let mut pkt2 = http_syn_ack2(
+            cfg.guest_mac,
+            private_ip,
+            GW_MAC_ADDR,
+            partner_ip,
+            flow_port,
+        );
+        let res = port.port.process(Out, &mut pkt2, ActionMeta::new());
+        print_port(&port.port, &port.vpc_map);
+
+        if old_ip_gone {
+            // Failure mode here is different (assuming we have at least one
+            // external IP). The packet must fail to send via the old IP,
+            // invalidate the entry, and then choose the new external IP.
+            assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+            print_port(&port.port, &port.vpc_map);
+            update!(
+                port,
+                [
+                    "incr:uft.out",
+                    "incr:stats.port.out_modified",
+                    "incr:stats.port.out_uft_miss",
+                    "incr:nat.flows.in, nat.flows.out",
+                ]
+            );
+
+            match ext_ip {
+                IpAddr::Ip4(ip) => {
+                    let chosen_ip = pkt2.meta().inner_ip4().unwrap().src;
+                    assert_ne!(chosen_ip, ip);
+                    assert_ne!(IpAddr::from(chosen_ip), private_ip);
+                }
+                IpAddr::Ip6(ip) => {
+                    let chosen_ip = pkt2.meta().inner_ip6().unwrap().src;
+                    assert_ne!(chosen_ip, ip);
+                    assert_ne!(IpAddr::from(chosen_ip), private_ip);
+                }
+            };
+        } else {
+            assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+            update!(
+                port,
+                [
+                    "incr:uft.out",
+                    "incr:stats.port.out_modified, stats.port.out_uft_miss",
+                ]
+            );
+            match ext_ip {
+                IpAddr::Ip4(ip) => {
+                    assert_eq!(pkt2.meta().inner_ip4().unwrap().src, ip);
+                }
+                IpAddr::Ip6(ip) => {
+                    assert_eq!(pkt2.meta().inner_ip6().unwrap().src, ip);
+                }
+            };
+        }
+    }
+}
+
+#[test]
+fn external_ip_receive_and_reply_on_all() {
+    let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(8, true);
+
+    check_external_ip_inbound_behaviour(
+        true, false, false, &mut g1, &g1_cfg, &ext_v4, &ext_v6,
+    );
+}
+
+#[test]
+fn external_ip_balanced_over_floating_ips() {
+    let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(8, true);
+
+    let bsvc_phys = TestIpPhys {
+        ip: g1_cfg.boundary_services.ip,
+        mac: g1_cfg.boundary_services.mac,
+        vni: g1_cfg.boundary_services.vni,
+    };
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    let partner_ipv4: IpAddr = "93.184.216.34".parse().unwrap();
+    let partner_ipv6: IpAddr =
+        "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap();
+
+    let mut seen_v4s = vec![];
+    let mut seen_v6s = vec![];
+
+    // ====================================================================
+    // Create several outbound flows, collate chosen external IP addresses.
+    // ====================================================================
+    for i in 0..16 {
+        let flow_port = 44490 + i;
+        for partner_ip in [partner_ipv4, partner_ipv6] {
+            let private_ip: IpAddr = match partner_ip {
+                IpAddr::Ip4(_) => g1_cfg.ipv4().private_ip.into(),
+                IpAddr::Ip6(_) => g1_cfg.ipv6().private_ip.into(),
+            };
+
+            let pkt = http_syn3(
+                g1_cfg.guest_mac,
+                private_ip,
+                g1_cfg.gateway_mac,
+                partner_ip,
+                flow_port,
+            );
+            let mut pkt = encap_external(pkt, bsvc_phys, g1_phys);
+
+            let res = g1.port.process(Out, &mut pkt, ActionMeta::new());
+            assert!(matches!(res, Ok(Modified)), "bad result: {res:?}");
+            incr!(
+                g1,
+                [
+                    "firewall.flows.out, firewall.flows.in",
+                    "nat.flows.out, nat.flows.in",
+                    "uft.out",
+                    "stats.port.out_modified, stats.port.out_uft_miss",
+                ]
+            );
+
+            match partner_ip {
+                IpAddr::Ip4(_) => {
+                    seen_v4s.push(pkt.meta().inner_ip4().unwrap().src);
+                }
+                IpAddr::Ip6(_) => {
+                    seen_v6s.push(pkt.meta().inner_ip6().unwrap().src);
+                }
+            }
+        }
+    }
+
+    // ====================================================================
+    // Check for spread, assert ephemeral IP not chosen.
+    // ====================================================================
+    seen_v4s.sort();
+    seen_v4s.dedup();
+    assert!(seen_v4s.len() > 1);
+    seen_v4s.iter().for_each(|ip| {
+        assert!(&ext_v4[1..].contains(ip), "unexpected v4 IP: {ip}")
+    });
+
+    seen_v6s.sort();
+    seen_v6s.dedup();
+    assert!(seen_v6s.len() > 1);
+    seen_v6s.iter().for_each(|ip| {
+        assert!(&ext_v6[1..].contains(ip), "unexpected v6 IP: {ip}")
+    });
+}
+
+#[test]
+fn external_ip_epoch_affinity_preserved() {
+    let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(2, true);
+    let bsvc_phys = TestIpPhys {
+        ip: g1_cfg.boundary_services.ip,
+        mac: g1_cfg.boundary_services.mac,
+        vni: g1_cfg.boundary_services.vni,
+    };
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    let new_v4: Ipv4Addr = "10.60.1.10".parse().unwrap();
+    let new_v4_cfg = g1_cfg.ipv4_cfg().map(|v| {
+        let mut floating_ips = v.external_ips.floating_ips.clone();
+        floating_ips.push(new_v4);
+        ExternalIpCfg { floating_ips, ..v.external_ips.clone() }
+    });
+    let new_v6: Ipv6Addr = "2001:db8::10".parse().unwrap();
+    let new_v6_cfg = g1_cfg.ipv6_cfg().map(|v| {
+        let mut floating_ips = v.external_ips.floating_ips.clone();
+        floating_ips.push(new_v6);
+        ExternalIpCfg { floating_ips, ..v.external_ips.clone() }
+    });
+
+    let mut req = oxide_vpc::api::SetExternalIpsReq {
+        port_name: g1.port.name().to_string(),
+        external_ips_v4: None,
+        external_ips_v6: None,
+    };
+
+    for ext_ip in [ext_v4[0].into(), ext_v6[0].into()] {
+        // ====================================================================
+        // Create an inbound flow on each ephemeral IP.
+        // ====================================================================
+        let (partner_ip, private_ip): (IpAddr, IpAddr) = match ext_ip {
+            IpAddr::Ip4(_) => {
+                req.external_ips_v4 = new_v4_cfg.clone();
+                (
+                    "93.184.216.34".parse().unwrap(),
+                    g1_cfg.ipv4().private_ip.into(),
+                )
+            }
+            IpAddr::Ip6(_) => {
+                req.external_ips_v6 = new_v6_cfg.clone();
+                (
+                    "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap(),
+                    g1_cfg.ipv6().private_ip.into(),
+                )
+            }
+        };
+
+        let pkt1 = http_syn2(
+            g1_cfg.boundary_services.mac,
+            partner_ip,
+            g1_cfg.guest_mac,
+            ext_ip,
+        );
+        let mut pkt1 = encap_external(pkt1, bsvc_phys, g1_phys);
+
+        let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
+        assert!(
+            matches!(res, Ok(Modified)),
+            "bad result for ip {ext_ip:?}: {res:?}"
+        );
+        incr!(
+            g1,
+            [
+                "firewall.flows.out, firewall.flows.in",
+                "nat.flows.out, nat.flows.in",
+                "uft.in",
+                "stats.port.in_modified, stats.port.in_uft_miss",
+            ]
+        );
+
+        // ====================================================================
+        // Add another floating IP to bump epoch
+        // Bumping epoch on other layers (e.g., firewall) is typically fine,
+        // since that won't affect the internal flowtable for NAT.
+        // ====================================================================
+        nat::set_nat_rules(&g1.cfg, &g1.port, req.clone()).unwrap();
+        update!(g1, ["incr:epoch", "set:nat.rules.in=4, nat.rules.out=6",]);
+
+        // ================================================================
+        // The reply packet must still originate from the ephemeral port
+        // after an epoch change.
+        // ================================================================
+        let mut pkt2 = http_syn_ack2(
+            g1_cfg.guest_mac,
+            private_ip,
+            GW_MAC_ADDR,
+            partner_ip,
+            44490,
+        );
+        let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
+        assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
+        update!(
+            g1,
+            [
+                "incr:uft.out",
+                "incr:stats.port.out_modified, stats.port.out_uft_miss",
+            ]
+        );
+        match ext_ip {
+            IpAddr::Ip4(ip) => {
+                assert_eq!(pkt2.meta().inner_ip4().unwrap().src, ip);
+            }
+            IpAddr::Ip6(ip) => {
+                assert_eq!(pkt2.meta().inner_ip6().unwrap().src, ip);
+            }
+        };
+    }
+}
+
+#[test]
+fn external_ip_reconfigurable() {
+    let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(1, true);
+
+    // ====================================================================
+    // Create several inbound flows.
+    // ====================================================================
+    check_external_ip_inbound_behaviour(
+        false, false, false, &mut g1, &g1_cfg, &ext_v4, &ext_v6,
+    );
+
+    // ====================================================================
+    // Install new config.
+    // ====================================================================
+    let new_v4 = "10.60.1.2".parse().unwrap();
+    let new_v4_cfg = g1_cfg.ipv4_cfg().map(|v| ExternalIpCfg {
+        floating_ips: vec![new_v4],
+        ephemeral_ip: None,
+        ..v.external_ips.clone()
+    });
+    let new_v6 = "2001:db8::2".parse().unwrap();
+    let new_v6_cfg = g1_cfg.ipv6_cfg().map(|v| ExternalIpCfg {
+        floating_ips: vec![new_v6],
+        ephemeral_ip: None,
+        ..v.external_ips.clone()
+    });
+
+    let req = oxide_vpc::api::SetExternalIpsReq {
+        port_name: g1.port.name().to_string(),
+        external_ips_v4: new_v4_cfg,
+        external_ips_v6: new_v6_cfg,
+    };
+    nat::set_nat_rules(&g1.cfg, &g1.port, req).unwrap();
+    update!(
+        g1,
+        [
+            "incr:epoch",
+            "set:nat.rules.in=2, nat.rules.out=4",
+            "set:firewall.flows.in=2, firewall.flows.out=2",
+        ]
+    );
+
+    // ====================================================================
+    // Port should no longer admit external traffic on old IPs, and affinity
+    // with the old external IP should be broken.
+    // ====================================================================
+    check_external_ip_inbound_behaviour(
+        true, true, false, &mut g1, &g1_cfg, &ext_v4, &ext_v6,
+    );
+
+    // ====================================================================
+    // Port should admit external traffic on new IPs.
+    // ====================================================================
+    check_external_ip_inbound_behaviour(
+        false,
+        false,
+        true,
+        &mut g1,
+        &g1_cfg,
+        &[new_v4],
+        &[new_v6],
+    );
 }
 
 #[derive(Debug)]
@@ -3060,21 +3619,27 @@ fn tcp_inbound() {
             vpc_subnet: "172.30.0.0/22".parse().unwrap(),
             private_ip: "172.30.0.5".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
-            snat: Some(SNat4Cfg {
-                external_ip: "10.77.77.13".parse().unwrap(),
-                ports: 1025..=4096,
-            }),
-            external_ips: Some("10.60.1.20".parse().unwrap()),
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat4Cfg {
+                    external_ip: "10.77.77.13".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: Some("10.60.1.20".parse().unwrap()),
+                floating_ips: vec![],
+            },
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
             private_ip: "fd00::5".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
-            snat: Some(SNat6Cfg {
-                external_ip: "2001:db8::1".parse().unwrap(),
-                ports: 1025..=4096,
-            }),
-            external_ips: None,
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat6Cfg {
+                    external_ip: "2001:db8::1".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
         },
     };
 
@@ -3095,7 +3660,7 @@ fn tcp_inbound() {
     let client_ip = "52.10.128.69".parse().unwrap();
     let bs_mac = g1_cfg.boundary_services.mac;
     let serv_mac = g1_cfg.guest_mac;
-    let serv_ext_ip = g1_cfg.ipv4().external_ips.unwrap();
+    let serv_ext_ip = g1_cfg.ipv4().external_ips.ephemeral_ip.unwrap();
     let bs_phys = TestIpPhys {
         ip: g1_cfg.boundary_services.ip,
         mac: g1_cfg.boundary_services.mac,

@@ -6,10 +6,6 @@
 
 //! OPTE driver administration library
 
-use std::fs::File;
-use std::fs::OpenOptions;
-use std::os::unix::io::AsRawFd;
-
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::SetXdeUnderlayReq;
@@ -24,10 +20,14 @@ use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::overlay;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::os::unix::io::AsRawFd;
 
 include!(concat!(env!("OUT_DIR"), "/gen.rs"));
 
@@ -231,6 +231,14 @@ impl OpteAdm {
         req: &AddRouterEntryReq,
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::AddRouterEntry;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn set_external_ips(
+        &self,
+        req: &SetExternalIpsReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetExternalIps;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 }

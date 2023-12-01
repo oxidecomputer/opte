@@ -102,6 +102,7 @@ pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     Default,
     Deserialize,
     Eq,
+    Hash,
     Ord,
     PartialEq,
     PartialOrd,
