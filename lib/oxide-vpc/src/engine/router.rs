@@ -2,31 +2,22 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The Oxide Network VPC Router.
 //!
 //! This implements both the Oxide Network VPC "System Router" and
 //! "Custom Router" abstractions, as described in RFD 21 §2.3.
-use core::fmt;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::{String, ToString};
-        use alloc::sync::Arc;
-        use alloc::vec::Vec;
-    } else {
-        use std::string::{String, ToString};
-        use std::sync::Arc;
-        use std::vec::Vec;
-    }
-}
-
 use super::firewall as fw;
 use super::VpcNetwork;
 use crate::api::DelRouterEntryResp;
 use crate::api::RouterTarget;
-use crate::api::VpcCfg;
+use crate::cfg::VpcCfg;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::fmt;
 use opte::api::Direction;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv4Cidr;

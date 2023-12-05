@@ -6,6 +6,9 @@
 
 use super::mac::MacAddr;
 use crate::DomainName;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Debug;
@@ -15,18 +18,6 @@ use core::result;
 use core::str::FromStr;
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-        use alloc::string::ToString;
-        use alloc::vec::Vec;
-    } else {
-        use std::string::String;
-        use std::string::ToString;
-        use std::vec::Vec;
-    }
-}
 
 /// Generate an ICMPv6 Echo Reply message.
 ///
@@ -94,68 +85,44 @@ impl Display for IcmpEchoReply {
     }
 }
 
-/// Generate DHCPv4 Offer+Ack.
-///
-/// Respond to a cilent's Discover and Request messages with Offer+Ack
-/// replies based on the information contained in this struct.
-///
-/// XXX Currently we return the same options no matter what the client
-/// specifies in the parameter request list. This has worked thus far,
-/// but we should come back to this and comb over RFC 2131 more
-/// carefully -- particularly §4.3.1 and §4.3.2.
-pub struct DhcpAction {
-    /// The client's MAC address.
-    pub client_mac: MacAddr,
+/// Per-guest DHCP options.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct DhcpCfg {
+    /// Hostname to assign connected guest over DHCP.
+    pub hostname: Option<DomainName>,
 
-    /// The client's IPv4 address. Used to fill in the `yiaddr` field.
-    pub client_ip: Ipv4Addr,
+    /// Local domain of connected guest over DHCP.
+    pub host_domain: Option<DomainName>,
 
-    /// The client's subnet mask specified as a prefix length. Used as
-    /// the value of `Subnet Mask Option (code 1)`.
-    pub subnet_prefix_len: Ipv4PrefixLen,
-
-    /// The gateway MAC address. The use of this action assumes that
-    /// the OPTE port is acting as gateway; this MAC address is what
-    /// the port will use when acting as a gateway to the client. This
-    /// is used as the Ethernet header's source address.
-    pub gw_mac: MacAddr,
-
-    /// The gateway IPv4 address. This is used for several purposes:
+    /// A list of domain names used during DNS resolution.
     ///
-    /// * As the IP header's source address.
-    ///
-    /// * As the value of the `siaddr` field.
-    ///
-    /// * As the value of the `Router Option (code 3)`.
-    ///
-    /// * As the value of the `Server Identifier Option (code 54)`.
-    pub gw_ip: Ipv4Addr,
+    /// Resolvers will use the provided list when resolving relative domain
+    /// names.
+    pub domain_search_list: Vec<DomainName>,
 
-    /// The value of the `DHCP Message Type Option (code 53)`. This
-    /// action supports only the Offer and Ack messages.
-    pub reply_type: DhcpReplyType,
+    /// IPv4 external DNS servers provided to a guest.
+    pub dns4_servers: Vec<Ipv4Addr>,
 
-    /// A static route entry, sent to the client via the `Classless
-    /// Static Route Option (code 131)`.
-    pub re1: SubnetRouterPair,
-
-    /// An optional second entry (see `re1`).
-    pub re2: Option<SubnetRouterPair>,
-
-    /// An optional third entry (see `re1`).
-    pub re3: Option<SubnetRouterPair>,
-
-    /// An optional list of 1-3 DNS servers.
-    pub dns_servers: Option<[Option<Ipv4Addr>; 3]>,
-
-    /// A list of domain names used when resolving relative names via
-    /// DNS.
-    pub domain_list: Vec<DomainName>,
+    /// IPv6 external DNS servers provided to a guest.
+    pub dns6_servers: Vec<Ipv6Addr>,
 }
 
-impl Display for DhcpAction {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DHCPv4 {}: {}", self.reply_type, self.client_ip)
+impl DhcpCfg {
+    /// Combine `hostname` and `host_domain` into a single FQDN
+    /// in a target buffer.
+    pub fn push_fqdn(&self, buf: &mut Vec<u8>) {
+        let Some(hostname) = &self.hostname else {
+            return;
+        };
+        buf.extend_from_slice(hostname.encode());
+        if let Some(domain_name) = &self.host_domain {
+            // Need to overwrite trailing terminator of hostname.
+            // Saturate is not strictly necessary: DomainNames can
+            // only be parsed rather than constructed, but safer
+            // to be conservative here.
+            buf.truncate(buf.len().saturating_sub(1));
+            buf.extend_from_slice(domain_name.encode());
+        }
     }
 }
 
@@ -231,7 +198,16 @@ impl SubnetRouterPair {
 /// An IP protocol value.
 #[repr(u8)]
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
 )]
 pub enum Protocol {
     ICMP,
@@ -315,7 +291,16 @@ impl From<Protocol> for smoltcp::wire::IpProtocol {
 
 /// An IPv4 or IPv6 address.
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
 )]
 pub enum IpAddr {
     Ip4(Ipv4Addr),
@@ -384,7 +369,16 @@ impl FromStr for IpAddr {
 
 /// An IPv4 address.
 #[derive(
-    Clone, Copy, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
 )]
 pub struct Ipv4Addr {
     inner: [u8; 4],
@@ -553,6 +547,7 @@ impl Deref for Ipv4Addr {
     Debug,
     Default,
     Eq,
+    Hash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -1393,5 +1388,36 @@ mod test {
         let addr = to_ipv6("fd00:abcd:abcd:abcd:abcd:abcd:abcd:abcd");
         let expected = to_ipv6("ff02::1:ffcd:abcd");
         assert_eq!(addr.solicited_node_multicast(), expected);
+    }
+
+    #[test]
+    fn dhcp_fqdn() {
+        let no_host = DhcpCfg { hostname: None, ..Default::default() };
+        let only_host =
+            DhcpCfg { hostname: "mybox".parse().ok(), ..Default::default() };
+        let with_domain = DhcpCfg {
+            host_domain: "oxide.computer".parse().ok(),
+            ..only_host.clone()
+        };
+        let domain_no_host = DhcpCfg {
+            host_domain: "oxide.computer".parse().ok(),
+            ..no_host.clone()
+        };
+
+        let mut space = vec![];
+
+        no_host.push_fqdn(&mut space);
+        assert!(space.is_empty());
+
+        only_host.push_fqdn(&mut space);
+        assert_eq!(&space, "\x05mybox\x00".as_bytes());
+
+        space.clear();
+        with_domain.push_fqdn(&mut space);
+        assert_eq!(&space, "\x05mybox\x05oxide\x08computer\x00".as_bytes());
+
+        space.clear();
+        domain_no_host.push_fqdn(&mut space);
+        assert!(space.is_empty());
     }
 }

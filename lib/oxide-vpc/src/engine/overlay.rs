@@ -2,35 +2,21 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The Oxide Network VPC Overlay.
 //!
 //! This implements the Oxide Network VPC Overlay.
-use core::fmt;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::collections::btree_map::BTreeMap;
-        use alloc::string::ToString;
-        use alloc::sync::Arc;
-        use alloc::vec::Vec;
-    } else {
-        use std::collections::btree_map::BTreeMap;
-        use std::string::ToString;
-        use std::sync::Arc;
-        use std::vec::Vec;
-    }
-}
-
-use serde::Deserialize;
-use serde::Serialize;
-
 use super::router::RouterTargetInternal;
 use crate::api::BoundaryServices;
 use crate::api::GuestPhysAddr;
 use crate::api::PhysNet;
-use crate::api::VpcCfg;
+use crate::cfg::VpcCfg;
+use alloc::collections::btree_map::BTreeMap;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::fmt;
 use core::marker::PhantomData;
 use opte::api::CmdOk;
 use opte::api::Direction;
@@ -73,6 +59,8 @@ use opte::engine::rule::Resource;
 use opte::engine::rule::ResourceEntry;
 use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
+use serde::Deserialize;
+use serde::Serialize;
 
 pub const OVERLAY_LAYER_NAME: &str = "overlay";
 

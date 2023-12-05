@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Predicates used for `Rule` matching.
 
@@ -10,8 +10,8 @@ use super::dhcp::MessageType as DhcpMessageType;
 use super::dhcpv6::MessageType as Dhcpv6MessageType;
 use super::ether::EtherType;
 use super::headers::IpMeta;
-use super::icmp::MessageType as IcmpMessageType;
-use super::icmpv6::MessageType as Icmpv6MessageType;
+use super::icmp::v4::MessageType as IcmpMessageType;
+use super::icmp::v6::MessageType as Icmpv6MessageType;
 use super::ip4::Ipv4Addr;
 use super::ip4::Ipv4Cidr;
 use super::ip4::Ipv4Meta;
@@ -22,29 +22,18 @@ use super::ip6::Ipv6Meta;
 use super::packet::PacketMeta;
 use super::packet::PacketRead;
 use super::port::meta::ActionMeta;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use core::ops::RangeInclusive;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
-use smoltcp::phy::ChecksumCapabilities as Csum;
 use smoltcp::wire::DhcpPacket;
 use smoltcp::wire::DhcpRepr;
-use smoltcp::wire::Icmpv4Packet;
-use smoltcp::wire::Icmpv4Repr;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::boxed::Box;
-        use alloc::string::{String, ToString};
-        use alloc::vec::Vec;
-    } else {
-        use std::boxed::Box;
-        use std::string::{String, ToString};
-        use std::vec::Vec;
-    }
-}
 
 /// A marker trait for types that can be matched exactly, usually by direct
 /// equality comparison.
@@ -629,29 +618,12 @@ impl DataPredicate {
             }
 
             Self::IcmpMsgType(mt) => {
-                let bytes = rdr.copy_remaining();
-                let pkt = match Icmpv4Packet::new_checked(&bytes) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        super::err(format!(
-                            "Icmpv4Packet::new_checked() failed: {:?}",
-                            e
-                        ));
-                        return false;
-                    }
-                };
-                let _icmp = match Icmpv4Repr::parse(&pkt, &Csum::ignored()) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        super::err(format!(
-                            "Icmpv4Repr::parse() failed: {:?}",
-                            e
-                        ));
-                        return false;
-                    }
+                let Some(icmp) = meta.inner_icmp() else {
+                    // This isn't an ICMPv4 packet at all
+                    return false;
                 };
 
-                mt.is_match(&IcmpMessageType::from(pkt.msg_type()))
+                mt.is_match(&icmp.msg_type)
             }
 
             Self::Icmpv6MsgType(mt) => {

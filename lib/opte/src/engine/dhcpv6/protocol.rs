@@ -6,6 +6,7 @@
 
 //! Implementation of the main message types for DHCPv6.
 
+use super::Dhcpv6Action;
 use super::TransactionId;
 use crate::engine::checksum::HeaderChecksum;
 use crate::engine::dhcpv6::options::Code as OptionCode;
@@ -42,9 +43,10 @@ use crate::engine::rule::GenPacketResult;
 use crate::engine::rule::HairpinAction;
 use crate::engine::udp::UdpHdr;
 use crate::engine::udp::UdpMeta;
+use alloc::borrow::Cow;
+use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
-use opte_api::dhcpv6::Dhcpv6Action;
 use opte_api::Ipv6Addr;
 use opte_api::Ipv6Cidr;
 use opte_api::MacAddr;
@@ -52,14 +54,6 @@ use opte_api::Protocol;
 use serde::Deserialize;
 use serde::Serialize;
 use smoltcp::wire::IpProtocol;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
-    } else {
-        use std::vec::Vec;
-    }
-}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MessageType {
@@ -321,9 +315,8 @@ fn generate_reply_options<'a>(
 
     // If requested, provide the list of DNS servers.
     if msg.has_option_request_with(OptionCode::DnsServers) {
-        let opt = Dhcpv6Option::DnsServers(IpList::from(
-            action.dns_servers.as_slice(),
-        ));
+        let ip_list = IpList(Cow::Borrowed(&action.dhcp_cfg.dns6_servers));
+        let opt = Dhcpv6Option::DnsServers(ip_list);
         options.push(opt);
     }
 
@@ -363,10 +356,39 @@ fn generate_reply_options<'a>(
     // resolve them.
     if (msg.has_option(OptionCode::DomainList)
         || msg.has_option_request_with(OptionCode::DomainList))
-        && !action.domain_list.is_empty()
+        && !action.dhcp_cfg.domain_search_list.is_empty()
     {
-        let opt = Dhcpv6Option::from(action.domain_list.as_slice());
-        options.push(opt);
+        let opt =
+            Dhcpv6Option::from(action.dhcp_cfg.domain_search_list.as_slice());
+
+        // Slightly hacky assertion that the contents are owned.
+        let Dhcpv6Option::DomainList(Cow::Owned(raw_list)) = opt else {
+            panic!(
+                "DHCPv6 DomainList creation allocs into new vec -- not found?"
+            )
+        };
+
+        options.push(Dhcpv6Option::DomainList(Cow::Owned(raw_list)));
+    }
+
+    if msg.has_option(OptionCode::Fqdn)
+        || msg.has_option_request_with(OptionCode::Fqdn)
+    {
+        // XXX: We should verify customer flow here -- correct
+        //      for internal DNS, maybe not external?
+        // Flags: we are (O)verriding client preference, and (S)erver is
+        // installing AAAA DNS records, and server isn't (N)ot installing
+        // any DNS records (yes, this is a negative flag).
+        // https://datatracker.ietf.org/doc/html/rfc4704#section-4.1
+        //                   xxxx_xNOS
+        let mut buf = vec![0b0000_0011u8];
+        action.dhcp_cfg.push_fqdn(&mut buf);
+
+        // XXX: May want to reflect client's hostname request if
+        //      we have no override.
+        if buf.len() != 1 {
+            options.push(Dhcpv6Option::Fqdn(Cow::Owned(buf)));
+        }
     }
     options
 }

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The ioctl interface.
 //!
@@ -12,21 +12,13 @@ use super::packet::InnerFlowId;
 use super::port::Port;
 use super::predicate::DataPredicate;
 use super::tcp::TcpState;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt::Debug;
 use opte_api::CmdOk;
 use opte_api::OpteError;
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-        use alloc::vec::Vec;
-    } else {
-        use std::string::String;
-        use std::vec::Vec;
-    }
-}
 
 /// Dump various information about a layer, for use in debugging or
 /// administrative purposes.
@@ -94,6 +86,12 @@ impl CmdOk for ListLayersResp {}
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ClearUftReq {
     pub port_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ClearLftReq {
+    pub port_name: String,
+    pub layer_name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

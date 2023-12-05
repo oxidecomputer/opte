@@ -46,7 +46,7 @@ impl OpteZone {
             Ok(_) => "omicron1",
             _ => "sparse",
         };
-        let zone = Zone::new(name, brand, zfs, ifx)?;
+        let zone = Zone::new(name, brand, zfs, ifx, &[])?;
         Ok(Self { zone })
     }
 
@@ -87,11 +87,14 @@ impl OptePort {
                 vpc_subnet: OVERLAY_NET.parse().unwrap(),
                 private_ip: private_ip.parse().unwrap(),
                 gateway_ip: OVERLAY_GW.parse().unwrap(),
-                snat: Some(SNat4Cfg {
-                    external_ip: "1.2.3.4".parse().unwrap(),
-                    ports: 1000..=2000,
-                }),
-                external_ips: None,
+                external_ips: ExternalIpCfg {
+                    snat: Some(SNat4Cfg {
+                        external_ip: "1.2.3.4".parse().unwrap(),
+                        ports: 1000..=2000,
+                    }),
+                    ephemeral_ip: None,
+                    floating_ips: vec![],
+                },
             }),
             guest_mac: guest_mac.parse().unwrap(),
             gateway_mac: "a8:40:25:00:00:01".parse().unwrap(),
@@ -102,10 +105,9 @@ impl OptePort {
                 vni: Vni::new(99u32).unwrap(),
                 mac: "00:00:00:00:00:00".parse().unwrap(),
             },
-            domain_list: Vec::new(),
         };
         let adm = OpteAdm::open(OpteAdm::XDE_CTL)?;
-        adm.create_xde(name, cfg.clone(), false)?;
+        adm.create_xde(name, cfg.clone(), DhcpCfg::default(), false)?;
         Ok(OptePort { name: name.into(), cfg })
     }
 

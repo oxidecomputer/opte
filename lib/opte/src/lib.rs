@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::len_without_is_empty)]
@@ -17,10 +17,6 @@
     feature(asm_sym)
 )]
 
-use core::fmt;
-use core::fmt::Display;
-
-#[cfg(all(not(feature = "std"), not(test)))]
 #[cfg_attr(feature = "engine", macro_use)]
 extern crate alloc;
 
@@ -31,13 +27,9 @@ extern crate cfg_if;
 // can use fully-qualified type paths.
 extern crate self as opte;
 
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::boxed::Box;
-    } else {
-        use std::boxed::Box;
-    }
-}
+use alloc::boxed::Box;
+use core::fmt;
+use core::fmt::Display;
 
 #[cfg(any(feature = "api", test))]
 pub mod api {
@@ -49,6 +41,9 @@ pub mod ddi;
 
 #[cfg(any(feature = "engine", test))]
 pub mod engine;
+
+#[cfg(any(feature = "engine", test))]
+pub mod dynamic;
 
 /// Return value with `bit` set.
 ///

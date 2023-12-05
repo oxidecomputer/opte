@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Rules and actions.
 
@@ -31,6 +31,12 @@ use super::packet::Parsed;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
+use alloc::boxed::Box;
+use alloc::ffi::CString;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Debug;
@@ -40,22 +46,6 @@ use illumos_sys_hdrs::uintptr_t;
 use opte_api::Direction;
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::boxed::Box;
-        use alloc::ffi::CString;
-        use alloc::string::{String, ToString};
-        use alloc::sync::Arc;
-        use alloc::vec::Vec;
-    } else {
-        use std::boxed::Box;
-        use std::ffi::CString;
-        use std::string::{String, ToString};
-        use std::sync::Arc;
-        use std::vec::Vec;
-    }
-}
 
 /// A marker trait indicating a type is an entry acuired from a [`Resource`].
 pub trait ResourceEntry {}
@@ -96,14 +86,59 @@ pub trait FiniteResource: Resource {
 
     /// Obtain a new entry given the key.
     ///
+    /// Callers are responsible for manually `release`ing this entry into
+    /// the correct parent pool.
+    ///
     /// # Errors
     ///
     /// Return an error if no entry can be mapped to this key or if
     /// the resource is exhausted.
-    fn obtain(&self, key: &Self::Key) -> Result<Self::Entry, ResourceError>;
+    fn obtain_raw(&self, key: &Self::Key)
+        -> Result<Self::Entry, ResourceError>;
+
+    /// Obtain a smart handle to an entry given the key.
+    ///
+    /// # Errors
+    ///
+    /// Return an error if no entry can be mapped to this key or if
+    /// the resource is exhausted.
+    fn obtain(
+        self: &Arc<Self>,
+        key: &Self::Key,
+    ) -> Result<FiniteHandle<Self>, ResourceError>
+    where
+        Self: Sized,
+        Self::Entry: Copy,
+    {
+        Ok(FiniteHandle {
+            key: key.clone(),
+            entry: self.obtain_raw(key)?,
+            pool: self.clone(),
+        })
+    }
 
     /// Release the entry back to the available resources.
     fn release(&self, key: &Self::Key, br: Self::Entry);
+}
+
+/// A smart handle which will automatically return a finite `ResourceEntry`
+/// to its parent pool on drop.
+pub struct FiniteHandle<Pool: FiniteResource>
+where
+    Pool::Entry: Copy,
+{
+    pub key: Pool::Key,
+    pub entry: Pool::Entry,
+    pool: Arc<Pool>,
+}
+
+impl<Pool: FiniteResource> Drop for FiniteHandle<Pool>
+where
+    Pool::Entry: Copy,
+{
+    fn drop(&mut self) {
+        self.pool.release(&self.key, self.entry)
+    }
 }
 
 /// An Action Descriptor holds the information needed to create the
@@ -127,6 +162,18 @@ pub trait ActionDesc {
     }
 
     fn name(&self) -> &str;
+
+    /// Check whether this action should be preserved after a soft-clear
+    /// of the flow-table.
+    ///
+    /// This method, if implemented, allows an action to hold onto its original
+    /// action after a rule change (i.e., preserving a pseudo-random external IP
+    /// allocation).
+    ///
+    /// Defaults to removing the matched entry.
+    fn is_valid(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Debug for dyn ActionDesc {
@@ -497,7 +544,6 @@ pub enum GenErr {
     BadPayload(super::packet::ReadErr),
     Malformed,
     MissingMeta,
-    Truncated,
     Unexpected(String),
 }
 
@@ -507,15 +553,9 @@ impl From<super::packet::ReadErr> for GenErr {
     }
 }
 
-impl From<smoltcp::Error> for GenErr {
-    fn from(err: smoltcp::Error) -> Self {
-        use smoltcp::Error::*;
-
-        match err {
-            Malformed => Self::Malformed,
-            Truncated => Self::Truncated,
-            _ => Self::Unexpected(format!("smoltcp error {}", err)),
-        }
+impl From<smoltcp::wire::Error> for GenErr {
+    fn from(_err: smoltcp::wire::Error) -> Self {
+        Self::Malformed
     }
 }
 
@@ -527,8 +567,8 @@ pub enum GenBtError {
     ParseBody(String),
 }
 
-impl From<smoltcp::Error> for GenBtError {
-    fn from(e: smoltcp::Error) -> Self {
+impl From<smoltcp::wire::Error> for GenBtError {
+    fn from(e: smoltcp::wire::Error) -> Self {
         Self::ParseBody(format!("{}", e))
     }
 }

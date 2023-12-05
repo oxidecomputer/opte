@@ -2,35 +2,15 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
-//! Internet Control Message Protocol version 6
+//! ICMPv6 headers and processing.
 
-use super::checksum::Checksum;
-use super::checksum::HeaderChecksum;
-use super::ether::EtherHdr;
-use super::ether::EtherMeta;
-use super::ether::EtherType;
-use super::headers::RawHeader;
-use super::ip6::Ipv6Hdr;
-use super::ip6::Ipv6Meta;
-use super::packet::Packet;
-use super::packet::PacketMeta;
-use super::packet::PacketRead;
-use super::packet::PacketReadMut;
-use super::packet::PacketReader;
-use super::packet::ReadErr;
-use super::predicate::DataPredicate;
-use super::predicate::EtherAddrMatch;
-use super::predicate::IpProtoMatch;
-use super::predicate::Ipv6AddrMatch;
-use super::predicate::Predicate;
-use super::rule::AllowOrDeny;
-use super::rule::GenErr;
-use super::rule::GenPacketResult;
-use super::rule::HairpinAction;
-use core::fmt;
-use core::fmt::Display;
+use super::*;
+use crate::engine::ip6::Ipv6Hdr;
+use crate::engine::ip6::Ipv6Meta;
+use crate::engine::predicate::Ipv6AddrMatch;
+use alloc::string::String;
 pub use opte_api::ip::Icmpv6EchoReply;
 pub use opte_api::ip::Ipv6Addr;
 pub use opte_api::ip::Ipv6Cidr;
@@ -38,9 +18,6 @@ pub use opte_api::ip::Protocol;
 use opte_api::mac::MacAddr;
 pub use opte_api::ndp::NeighborAdvertisement;
 pub use opte_api::ndp::RouterAdvertisement;
-use serde::Deserialize;
-use serde::Serialize;
-use smoltcp::phy::ChecksumCapabilities as Csum;
 use smoltcp::wire::Icmpv6Message;
 use smoltcp::wire::Icmpv6Packet;
 use smoltcp::wire::Icmpv6Repr;
@@ -50,128 +27,22 @@ use smoltcp::wire::Ipv6Address;
 use smoltcp::wire::NdiscNeighborFlags;
 use smoltcp::wire::NdiscRepr;
 use smoltcp::wire::RawHardwareAddress;
-use zerocopy::AsBytes;
-use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
-use zerocopy::Unaligned;
 
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::vec::Vec;
-        use alloc::string::String;
-    } else {
-        use std::vec::Vec;
-        use std::string::String;
-    }
-}
+pub type Icmpv6Meta = IcmpMeta<MessageType>;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Icmpv6Meta {
-    pub msg_type: MessageType,
-    pub msg_code: u8,
-    pub csum: [u8; 2],
-}
-
-impl Icmpv6Meta {
-    // This assumes the dst is large enough.
+impl QueryEcho for Icmpv6Meta {
+    /// Extract an ID from the body of an ICMPv6 packet to use as a
+    /// pseudo port for flow differentiation.
+    ///
+    /// This method returns `None` for any non-echo packets.
     #[inline]
-    pub fn emit(&self, dst: &mut [u8]) {
-        debug_assert!(dst.len() >= Icmpv6Hdr::SIZE);
-        dst[0] = self.msg_type.into();
-        dst[1] = self.msg_code;
-        dst[2..4].copy_from_slice(&self.csum);
-    }
-
-    #[inline]
-    pub fn hdr_len(&self) -> usize {
-        Icmpv6Hdr::SIZE
-    }
-}
-
-impl<'a> From<&Icmpv6Hdr<'a>> for Icmpv6Meta {
-    fn from(hdr: &Icmpv6Hdr<'a>) -> Self {
-        Self {
-            msg_type: hdr.base.msg_type.into(),
-            msg_code: hdr.base.msg_code,
-            csum: hdr.base.csum,
+    fn echo_id(&self) -> Option<u16> {
+        match self.msg_type.inner {
+            Icmpv6Message::EchoRequest | Icmpv6Message::EchoReply => {
+                Some(u16::from_be_bytes(self.body_echo().id))
+            }
+            _ => None,
         }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Icmpv6HdrError {
-    ReadError { error: ReadErr },
-}
-
-impl From<ReadErr> for Icmpv6HdrError {
-    fn from(error: ReadErr) -> Self {
-        Icmpv6HdrError::ReadError { error }
-    }
-}
-
-#[derive(Debug)]
-pub struct Icmpv6Hdr<'a> {
-    base: LayoutVerified<&'a mut [u8], Icmpv6HdrRaw>,
-}
-
-impl<'a> Icmpv6Hdr<'a> {
-    pub const SIZE: usize = Icmpv6HdrRaw::SIZE;
-
-    /// Offset to the start of the ICMPv6 checksum field.
-    pub const CSUM_BEGIN_OFFSET: usize = 2;
-
-    /// Offset to the end of the ICMPv6 checksum field.
-    pub const CSUM_END_OFFSET: usize = 4;
-
-    pub fn csum_minus_hdr(&self) -> Option<Checksum> {
-        if self.base.csum != [0; 2] {
-            let mut csum = Checksum::from(HeaderChecksum::wrap(self.base.csum));
-            csum.sub_bytes(&self.base.bytes()[0..Self::CSUM_BEGIN_OFFSET]);
-            Some(csum)
-        } else {
-            None
-        }
-    }
-
-    /// Return the header length, in bytes.
-    pub fn hdr_len(&self) -> usize {
-        Self::SIZE
-    }
-
-    pub fn parse<'b>(
-        rdr: &'b mut impl PacketReadMut<'a>,
-    ) -> Result<Self, Icmpv6HdrError> {
-        let src = rdr.slice_mut(Icmpv6Hdr::SIZE)?;
-        let icmp6 = Self { base: Icmpv6HdrRaw::new_mut(src)? };
-        Ok(icmp6)
-    }
-}
-
-/// Note: For now we keep this unaligned to be safe.
-#[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
-pub struct Icmpv6HdrRaw {
-    pub msg_type: u8,
-    pub msg_code: u8,
-    pub csum: [u8; 2],
-}
-
-impl Icmpv6HdrRaw {
-    /// An ICMPv6 header is always 4 bytes.
-    pub const SIZE: usize = 4;
-}
-
-impl<'a> RawHeader<'a> for Icmpv6HdrRaw {
-    #[inline]
-    fn new_mut(
-        src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
-        debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match LayoutVerified::new(src) {
-            Some(hdr) => hdr,
-            None => return Err(ReadErr::BadLayout),
-        };
-        Ok(hdr)
     }
 }
 
@@ -248,8 +119,6 @@ impl HairpinAction for Icmpv6EchoReply {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
-        use smoltcp::phy::Checksum;
-
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That
@@ -386,7 +255,6 @@ impl HairpinAction for RouterAdvertisement {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
-        use smoltcp::phy::Checksum;
         use smoltcp::time::Duration;
         use smoltcp::wire::NdiscRouterFlags;
 
@@ -543,8 +411,6 @@ fn validate_neighbor_solicitation(
     rdr: &mut PacketReader,
     metadata: &Ipv6Meta,
 ) -> Result<Ipv6Addr, GenErr> {
-    use smoltcp::phy::Checksum;
-
     // First, check if this is in fact a NS message.
     let smol_src = IpAddress::Ipv6(metadata.src.into());
     let smol_dst = IpAddress::Ipv6(metadata.dst.into());
@@ -725,8 +591,6 @@ impl HairpinAction for NeighborAdvertisement {
         meta: &PacketMeta,
         rdr: &mut PacketReader,
     ) -> GenPacketResult {
-        use smoltcp::phy::Checksum;
-
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That

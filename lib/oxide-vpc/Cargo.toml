@@ -33,7 +33,6 @@ usdt = ["opte/usdt"]
 illumos-sys-hdrs.workspace = true
 opte.workspace = true
 
-cfg-if.workspace = true
 serde.workspace = true
 smoltcp.workspace = true
 zerocopy.workspace = true

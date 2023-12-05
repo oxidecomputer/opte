@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! UDP headers.
 
@@ -11,7 +11,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::LayoutVerified;
+use zerocopy::FromZeroes;
+use zerocopy::Ref;
 use zerocopy::Unaligned;
 
 use crate::engine::checksum::Checksum;
@@ -115,7 +116,7 @@ impl HeaderActionModify<UlpMetaModify> for UdpMeta {
 
 #[derive(Debug)]
 pub struct UdpHdr<'a> {
-    base: LayoutVerified<&'a mut [u8], UdpHdrRaw>,
+    base: Ref<&'a mut [u8], UdpHdrRaw>,
 }
 
 impl<'a> UdpHdr<'a> {
@@ -214,7 +215,7 @@ impl From<ReadErr> for UdpHdrError {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, Unaligned)]
+#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
 pub struct UdpHdrRaw {
     pub src_port: [u8; 2],
     pub dst_port: [u8; 2],
@@ -228,11 +229,9 @@ impl UdpHdrRaw {
 
 impl<'a> RawHeader<'a> for UdpHdrRaw {
     #[inline]
-    fn new_mut(
-        src: &mut [u8],
-    ) -> Result<LayoutVerified<&mut [u8], Self>, ReadErr> {
+    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match LayoutVerified::new(src) {
+        let hdr = match Ref::new(src) {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

@@ -4,30 +4,29 @@
 
 // Copyright 2023 Oxide Computer Company
 
-use std::io;
-use std::str::FromStr;
-
 use clap::Args;
 use clap::Parser;
-
 use opte::api::Direction;
 use opte::api::DomainName;
 use opte::api::IpAddr;
 use opte::api::IpCidr;
+use opte::api::Ipv4Addr;
 use opte::api::Ipv6Addr;
 use opte::api::MacAddr;
 use opte::api::Vni;
 use opte::api::API_VERSION;
+use opte::api::MAJOR_VERSION;
 use opte::engine::print::print_layer;
 use opte::engine::print::print_list_layers;
 use opte::engine::print::print_tcp_flows;
 use opte::engine::print::print_uft;
 use opteadm::OpteAdm;
 use opteadm::COMMIT_COUNT;
-use opteadm::MAJOR_VERSION;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BoundaryServices;
+use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
 use oxide_vpc::api::FirewallAction;
 use oxide_vpc::api::FirewallRule;
@@ -42,9 +41,12 @@ use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
+use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::print::print_v2p;
+use std::io;
+use std::str::FromStr;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, Parser)]
@@ -70,6 +72,13 @@ enum Command {
     ClearUft {
         #[arg(short)]
         port: String,
+    },
+
+    /// Clear all entries from the given Layer's Flow Table.
+    ClearLft {
+        #[arg(short)]
+        port: String,
+        layer: String,
     },
 
     /// Dump the Unified Flow Table.
@@ -176,15 +185,10 @@ enum Command {
         src_underlay_addr: Ipv6Addr,
 
         #[command(flatten)]
-        snat: Option<SnatConfig>,
+        external_net: ExternalNetConfig,
 
-        /// A comma-separated list of domain names provided to the guest,
-        /// used when resolving hostnames.
-        #[arg(long, value_delimiter = ',')]
-        domain_list: Vec<DomainName>,
-
-        #[arg(long)]
-        external_ip: Option<IpAddr>,
+        #[command(flatten)]
+        dhcp: DhcpConfig,
 
         #[arg(long)]
         passthrough: bool,
@@ -208,6 +212,16 @@ enum Command {
         dest: IpCidr,
         /// The location to which traffic matching the destination is sent.
         target: RouterTarget,
+    },
+
+    /// Configure external network addresses used by a port for VPC-external traffic.
+    SetExternalIps {
+        /// The OPTE port to which the route is added
+        #[arg(short)]
+        port: String,
+
+        #[command(flatten)]
+        external_net: ExternalNetConfig,
     },
 }
 
@@ -236,18 +250,100 @@ impl From<Filters> for FirewallFilters {
     }
 }
 
-#[derive(Args, Debug)]
+// TODO: expand this to allow for v4 and v6 simultaneously?
+/// Per-port configuration for rack-external networking.
+#[derive(Args, Clone, Debug)]
+struct ExternalNetConfig {
+    #[command(flatten)]
+    snat: Option<SnatConfig>,
+
+    /// An external IP address used for 1-to-1 NAT.
+    ///
+    /// If `floating_ip`s are defined, then a port will receive and reply
+    /// (but not originate traffic) on this address.
+    #[arg(long)]
+    ephemeral_ip: Option<IpAddr>,
+
+    /// A comma-separated list of floating IP addresses which a port will prefer
+    /// for sending and receiving traffic.
+    #[arg(long)]
+    floating_ip: Vec<IpAddr>,
+}
+
+impl TryFrom<ExternalNetConfig> for ExternalIpCfg<Ipv4Addr> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ExternalNetConfig) -> Result<Self, Self::Error> {
+        let snat = value.snat.map(SNat4Cfg::try_from).transpose()?;
+
+        let ephemeral_ip = match value.ephemeral_ip {
+            Some(IpAddr::Ip4(ip)) => Some(ip),
+            Some(IpAddr::Ip6(_)) => {
+                anyhow::bail!("expected IPv4 external IP");
+            }
+            None => None,
+        };
+
+        let floating_ips = value
+            .floating_ip
+            .iter()
+            .copied()
+            .map(|ip| match ip {
+                IpAddr::Ip4(ip) => Ok(ip),
+                _ => anyhow::bail!("expected IPv4 floating IP"),
+            })
+            .collect::<Result<Vec<opte::api::Ipv4Addr>, _>>()?;
+
+        Ok(Self { snat, ephemeral_ip, floating_ips })
+    }
+}
+
+impl TryFrom<ExternalNetConfig> for ExternalIpCfg<Ipv6Addr> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ExternalNetConfig) -> Result<Self, Self::Error> {
+        let snat = value.snat.map(SNat6Cfg::try_from).transpose()?;
+
+        let ephemeral_ip = match value.ephemeral_ip {
+            Some(IpAddr::Ip4(_)) => {
+                anyhow::bail!("expected IPv6 external IP");
+            }
+            Some(IpAddr::Ip6(ip)) => Some(ip),
+            None => None,
+        };
+
+        let floating_ips = value
+            .floating_ip
+            .iter()
+            .copied()
+            .map(|ip| match ip {
+                IpAddr::Ip6(ip) => Ok(ip),
+                _ => anyhow::bail!("expected IPv6 floating IP"),
+            })
+            .collect::<Result<Vec<opte::api::Ipv6Addr>, _>>()?;
+
+        Ok(Self { snat, ephemeral_ip, floating_ips })
+    }
+}
+
+#[derive(Args, Clone, Copy, Debug)]
 #[group(requires_all = ["snat_ip", "snat_start", "snat_end"], multiple = true)]
 struct SnatConfig {
     /// The external IP address used for source NAT for the guest.
+    ///
+    /// Requires `snat_ip`, `snat_start`, and `snat_end` to be defined.
     #[arg(long, required = false)]
     snat_ip: IpAddr,
 
     /// The starting L4 port used for source NAT for the guest.
+    ///
+    /// See `snat_ip` for mandatory shared arguments.
     #[arg(long, required = false)]
     snat_start: u16,
 
     /// The ending L4 port used for source NAT for the guest.
+    ///
+    /// See `snat_ip` for mandatory shared arguments.
     #[arg(long, required = false)]
     snat_end: u16,
 }
@@ -276,19 +372,68 @@ impl TryFrom<SnatConfig> for SNat6Cfg {
     }
 }
 
+#[derive(Args, Debug)]
+struct DhcpConfig {
+    /// The hostname a connected guest should be provided via DHCP.
+    #[arg(long)]
+    hostname: Option<DomainName>,
+
+    /// The domain used by a guest to contruct its FQDN, provided via DHCP.
+    #[arg(long)]
+    host_domain: Option<DomainName>,
+
+    /// A comma-delimited list of DNS server IP addresses to provide over DHCP.
+    #[arg(long, value_delimiter = ',')]
+    dns_servers: Vec<IpAddr>,
+
+    /// A comma-separated list of domain names provided to the guest,
+    /// used when resolving hostnames.
+    #[arg(long, value_delimiter = ',')]
+    domain_search_list: Vec<DomainName>,
+}
+
+impl From<DhcpConfig> for DhcpCfg {
+    fn from(value: DhcpConfig) -> Self {
+        let mut dns4_servers = vec![];
+        let dns6_servers = value
+            .dns_servers
+            .into_iter()
+            .filter_map(|ip| match ip {
+                IpAddr::Ip4(ip) => {
+                    dns4_servers.push(ip);
+                    None
+                }
+                IpAddr::Ip6(ip) => Some(ip),
+            })
+            .collect();
+
+        Self {
+            hostname: value.hostname,
+            host_domain: value.host_domain,
+            domain_search_list: value.domain_search_list,
+            dns4_servers,
+            dns6_servers,
+        }
+    }
+}
+
 fn opte_pkg_version() -> String {
     format!("{MAJOR_VERSION}.{API_VERSION}.{COMMIT_COUNT}")
 }
 
+// XXX: These are growing unwieldy to the point we might want an actual table
+//      pretty-printer for opte outputs.
 fn print_port_header() {
     println!(
-        "{:<32} {:<24} {:<16} {:<16} {:<40} {:<40} {:<8}",
+        "{:<32} {:<24} {:<16} {:<16} {:<16} {:<40} {:<40} {:<40} {:<8}",
         "LINK",
         "MAC ADDRESS",
         "IPv4 ADDRESS",
-        "EXTERNAL IPv4",
+        "EPHEMERAL IPv4",
+        "FLOATING IPv4",
         "IPv6 ADDRESS",
         "EXTERNAL IPv6",
+        "FLOATING IPv6",
         "STATE"
     );
 }
@@ -296,16 +441,30 @@ fn print_port_header() {
 fn print_port(pi: PortInfo) {
     let none = String::from("None");
     println!(
-        "{:<32} {:<24} {:<16} {:<16} {:<40} {:<40} {:<8}",
+        "{:<32} {:<24} {:<16} {:<16} {:<16} {:<40} {:<40} {:<40} {:<8}",
         pi.name,
         pi.mac_addr.to_string(),
         pi.ip4_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
-        pi.external_ip4_addr
+        pi.ephemeral_ip4_addr
             .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
+        pi.floating_ip4_addrs
+            .map(|vec| vec
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join(","))
+            .unwrap_or_else(|| none.clone()),
         pi.ip6_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
-        pi.external_ip6_addr
+        pi.ephemeral_ip6_addr
             .map(|x| x.to_string())
+            .unwrap_or_else(|| none.clone()),
+        pi.floating_ip6_addrs
+            .map(|vec| vec
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join(","))
             .unwrap_or_else(|| none.clone()),
         pi.state,
     );
@@ -313,9 +472,10 @@ fn print_port(pi: PortInfo) {
 
 fn main() -> anyhow::Result<()> {
     let cmd = Command::parse();
+    let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+
     match cmd {
         Command::ListPorts => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_port_header();
             for p in hdl.list_ports()?.ports {
                 print_port(p);
@@ -323,37 +483,35 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::ListLayers { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_list_layers(&hdl.list_layers(&port)?);
         }
 
         Command::DumpLayer { port, name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_layer(&hdl.get_layer_by_name(&port, &name)?);
         }
 
         Command::ClearUft { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             hdl.clear_uft(&port)?;
         }
 
-        Command::DumpUft { port } => {
+        Command::ClearLft { port, layer } => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+            hdl.clear_lft(&port, &layer)?;
+        }
+
+        Command::DumpUft { port } => {
             print_uft(&hdl.dump_uft(&port)?);
         }
 
         Command::DumpTcpFlows { port } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_tcp_flows(&hdl.dump_tcp_flows(&port)?);
         }
 
         Command::DumpV2P => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_v2p(&hdl.dump_v2p()?);
         }
 
         Command::AddFwRule { port, direction, filters, action, priority } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let rule = FirewallRule {
                 direction,
                 filters: filters.into(),
@@ -388,13 +546,10 @@ fn main() -> anyhow::Result<()> {
             bsvc_mac,
             vpc_vni,
             src_underlay_addr,
-            snat,
-            domain_list,
-            external_ip,
+            dhcp,
+            external_net,
             passthrough,
         } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
-
             let ip_cfg = match private_ip {
                 IpAddr::Ip4(private_ip) => {
                     let IpCidr::Ip4(vpc_subnet) = vpc_subnet else {
@@ -405,22 +560,13 @@ fn main() -> anyhow::Result<()> {
                         anyhow::bail!("expected IPv4 gateway IP");
                     };
 
-                    let snat = snat.map(SNat4Cfg::try_from).transpose()?;
-
-                    let external_ip = match external_ip {
-                        Some(IpAddr::Ip4(ip)) => Some(ip),
-                        Some(IpAddr::Ip6(_)) => {
-                            anyhow::bail!("expected IPv4 external IP");
-                        }
-                        None => None,
-                    };
+                    let external_ips = external_net.try_into()?;
 
                     IpCfg::Ipv4(Ipv4Cfg {
                         vpc_subnet,
                         private_ip,
                         gateway_ip,
-                        snat,
-                        external_ips: external_ip,
+                        external_ips,
                     })
                 }
                 IpAddr::Ip6(private_ip) => {
@@ -432,22 +578,13 @@ fn main() -> anyhow::Result<()> {
                         anyhow::bail!("expected IPv6 gateway IP");
                     };
 
-                    let snat = snat.map(SNat6Cfg::try_from).transpose()?;
-
-                    let external_ip = match external_ip {
-                        Some(IpAddr::Ip4(_)) => {
-                            anyhow::bail!("expected IPv6 external IP");
-                        }
-                        Some(IpAddr::Ip6(ip)) => Some(ip),
-                        None => None,
-                    };
+                    let external_ips = external_net.try_into()?;
 
                     IpCfg::Ipv6(Ipv6Cfg {
                         vpc_subnet,
                         private_ip,
                         gateway_ip,
-                        snat,
-                        external_ips: external_ip,
+                        external_ips,
                     })
                 }
             };
@@ -463,39 +600,58 @@ fn main() -> anyhow::Result<()> {
                     vni: bsvc_vni,
                     mac: bsvc_mac,
                 },
-                domain_list,
             };
 
-            hdl.create_xde(&name, cfg, passthrough)?;
+            hdl.create_xde(&name, cfg, dhcp.into(), passthrough)?;
         }
 
         Command::DeleteXde { name } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let _ = hdl.delete_xde(&name)?;
         }
 
         Command::SetXdeUnderlay { u1, u2 } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let _ = hdl.set_xde_underlay(&u1, &u2)?;
         }
 
         Command::RmFwRule { port, direction, id } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let request = RemFwRuleReq { port_name: port, dir: direction, id };
             hdl.remove_firewall_rule(&request)?;
         }
 
         Command::SetV2P { vpc_ip, vpc_mac, underlay_ip, vni } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let phys = PhysNet { ether: vpc_mac, ip: underlay_ip, vni };
             let req = SetVirt2PhysReq { vip: vpc_ip, phys };
             hdl.set_v2p(&req)?;
         }
 
         Command::AddRouterEntry { port, dest, target } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let req = AddRouterEntryReq { port_name: port, dest, target };
             hdl.add_router_entry(&req)?;
+        }
+
+        Command::SetExternalIps { port, external_net } => {
+            if let Ok(cfg) =
+                ExternalIpCfg::<Ipv4Addr>::try_from(external_net.clone())
+            {
+                let req = SetExternalIpsReq {
+                    port_name: port,
+                    external_ips_v4: Some(cfg),
+                    external_ips_v6: None,
+                };
+                hdl.set_external_ips(&req)?;
+            } else if let Ok(cfg) =
+                ExternalIpCfg::<Ipv6Addr>::try_from(external_net)
+            {
+                let req = SetExternalIpsReq {
+                    port_name: port,
+                    external_ips_v6: Some(cfg),
+                    external_ips_v4: None,
+                };
+                hdl.set_external_ips(&req)?;
+            } else {
+                // TODO: show *actual* parse failure.
+                anyhow::bail!("expected IPv4 *or* IPv6 config.");
+            }
         }
     }
 

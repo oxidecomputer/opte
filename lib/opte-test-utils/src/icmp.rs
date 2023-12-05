@@ -68,6 +68,28 @@ pub fn gen_icmpv4_echo_req(
 pub fn gen_icmp_echo_reply(
     eth_src: MacAddr,
     eth_dst: MacAddr,
+    ip_src: IpAddr,
+    ip_dst: IpAddr,
+    ident: u16,
+    seq_no: u16,
+    data: &[u8],
+    segments: usize,
+) -> Packet<Parsed> {
+    match (ip_src, ip_dst) {
+        (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => gen_icmpv4_echo_reply(
+            eth_src, eth_dst, src, dst, ident, seq_no, data, segments,
+        ),
+        (IpAddr::Ip6(src), IpAddr::Ip6(dst)) => gen_icmpv6_echo_reply(
+            eth_src, eth_dst, src, dst, ident, seq_no, data, segments,
+        ),
+        (_, _) => panic!("IP src and dst versions must match"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn gen_icmpv4_echo_reply(
+    eth_src: MacAddr,
+    eth_dst: MacAddr,
     ip_src: Ipv4Addr,
     ip_dst: Ipv4Addr,
     ident: u16,
@@ -231,10 +253,49 @@ pub fn gen_icmpv6_echo_req(
     data: &[u8],
     segments: usize,
 ) -> Packet<Parsed> {
-    let req = Icmpv6Repr::EchoRequest { ident, seq_no, data };
-    let mut body_bytes = vec![0u8; req.buffer_len()];
+    let etype = IcmpEchoType::Req;
+    gen_icmpv6_echo(
+        etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data, segments,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn gen_icmpv6_echo_reply(
+    eth_src: MacAddr,
+    eth_dst: MacAddr,
+    ip_src: Ipv6Addr,
+    ip_dst: Ipv6Addr,
+    ident: u16,
+    seq_no: u16,
+    data: &[u8],
+    segments: usize,
+) -> Packet<Parsed> {
+    let etype = IcmpEchoType::Reply;
+    gen_icmpv6_echo(
+        etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data, segments,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn gen_icmpv6_echo(
+    etype: IcmpEchoType,
+    eth_src: MacAddr,
+    eth_dst: MacAddr,
+    ip_src: Ipv6Addr,
+    ip_dst: Ipv6Addr,
+    ident: u16,
+    seq_no: u16,
+    data: &[u8],
+    segments: usize,
+) -> Packet<Parsed> {
+    let icmp = match etype {
+        IcmpEchoType::Req => Icmpv6Repr::EchoRequest { ident, seq_no, data },
+        IcmpEchoType::Reply => Icmpv6Repr::EchoReply { ident, seq_no, data },
+    };
+
+    let mut body_bytes = vec![0u8; icmp.buffer_len()];
     let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body_bytes);
-    req.emit(
+    icmp.emit(
         &Ipv6Address::from_bytes(&ip_src).into(),
         &Ipv6Address::from_bytes(&ip_dst).into(),
         &mut req_pkt,
@@ -246,13 +307,13 @@ pub fn gen_icmpv6_echo_req(
         proto: Protocol::ICMPv6,
         next_hdr: IpProtocol::Icmpv6,
         hop_limit: 64,
-        pay_len: req.buffer_len() as u16,
+        pay_len: icmp.buffer_len() as u16,
         ..Default::default()
     };
     let eth =
         &EtherMeta { dst: eth_dst, src: eth_src, ether_type: EtherType::Ipv6 };
 
-    let total_len = EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len();
+    let total_len = EtherHdr::SIZE + ip6.hdr_len() + icmp.buffer_len();
 
     match segments {
         1 => {

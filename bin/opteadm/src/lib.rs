@@ -6,10 +6,6 @@
 
 //! OPTE driver administration library
 
-use std::fs::File;
-use std::fs::OpenOptions;
-use std::os::unix::io::AsRawFd;
-
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::SetXdeUnderlayReq;
@@ -20,20 +16,20 @@ use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
+use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::overlay;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::os::unix::io::AsRawFd;
 
 include!(concat!(env!("OUT_DIR"), "/gen.rs"));
-
-// XX: This should live in opte-api, but doing so would bump the API
-//     version inappropriately. Move me alongside another change?
-/// Major version of the OPTE package.
-pub const MAJOR_VERSION: u64 = 0;
 
 /// The handle used to send administration commands to the OPTE
 /// control node.
@@ -50,6 +46,7 @@ impl OpteAdm {
         &self,
         name: &str,
         cfg: VpcCfg,
+        dhcp: DhcpCfg,
         passthrough: bool,
     ) -> Result<NoResp, Error> {
         use libnet::link;
@@ -62,7 +59,7 @@ impl OpteAdm {
 
         let xde_devname = name.into();
         let cmd = OpteCmd::CreateXde;
-        let req = CreateXdeReq { xde_devname, linkid, cfg, passthrough };
+        let req = CreateXdeReq { xde_devname, linkid, cfg, dhcp, passthrough };
         let res = run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req));
 
         if res.is_err() {
@@ -187,6 +184,23 @@ impl OpteAdm {
         )
     }
 
+    /// Clear all entries from the given Layer's Flow Table (LFT).
+    pub fn clear_lft(
+        &self,
+        port_name: &str,
+        layer_name: &str,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearLft;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&api::ClearLftReq {
+                port_name: port_name.to_string(),
+                layer_name: layer_name.to_string(),
+            }),
+        )
+    }
+
     /// Return the Unified Flow Table (UFT).
     pub fn dump_uft(&self, port_name: &str) -> Result<api::DumpUftResp, Error> {
         let cmd = OpteCmd::DumpUft;
@@ -217,6 +231,14 @@ impl OpteAdm {
         req: &AddRouterEntryReq,
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::AddRouterEntry;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn set_external_ips(
+        &self,
+        req: &SetExternalIpsReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetExternalIps;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 }

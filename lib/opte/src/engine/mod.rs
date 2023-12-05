@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! The engine in OPTE.
 //!
@@ -18,7 +18,6 @@ pub mod geneve;
 #[macro_use]
 pub mod headers;
 pub mod icmp;
-pub mod icmpv6;
 pub mod ioctl;
 #[macro_use]
 pub mod ip4;
@@ -40,19 +39,11 @@ pub mod tcp_state;
 #[macro_use]
 pub mod udp;
 
+use alloc::string::String;
 use core::fmt;
+use core::num::ParseIntError;
 use ip4::IpError;
 pub use opte_api::Direction;
-
-use core::num::ParseIntError;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-    } else {
-        use std::string::String;
-    }
-}
 
 // TODO Currently I'm using this for parsing many different things. It
 // might be wise to have different parse error types. E.g., one for
@@ -325,28 +316,20 @@ impl GenericUlp {
         offsets.inner.ip = Some(ip_hi.offset);
 
         let (ulp_hi, ulp_hdr) = match ip_hi.meta.proto() {
-            Protocol::ICMP => {
-                return Ok(PacketInfo {
-                    meta,
-                    offsets,
-                    body_csum: None,
-                    extra_hdr_space: None,
-                });
-
-                // todo!("need to reintrodouce ICMP as pseudo-ULP header");
-                // pkt.parse_icmp()?,
-            }
-
+            Protocol::ICMP => Packet::parse_icmp(rdr)?,
             Protocol::ICMPv6 => Packet::parse_icmp6(rdr)?,
             Protocol::TCP => Packet::parse_tcp(rdr)?,
             Protocol::UDP => Packet::parse_udp(rdr)?,
             proto => return Err(ParseError::UnexpectedProtocol(proto)),
         };
 
+        let use_pseudo = ulp_hi.meta.is_pseudoheader_in_csum();
         meta.inner.ulp = Some(ulp_hi.meta);
         offsets.inner.ulp = Some(ulp_hi.offset);
         let body_csum = if let Some(mut csum) = ulp_hdr.csum_minus_hdr() {
-            csum -= pseudo_csum;
+            if use_pseudo {
+                csum -= pseudo_csum;
+            }
             Some(csum)
         } else {
             None

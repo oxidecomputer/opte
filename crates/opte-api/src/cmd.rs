@@ -2,24 +2,17 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 use super::encap::Vni;
 use super::ip::IpCidr;
 use super::mac::MacAddr;
 use super::API_VERSION;
+use alloc::string::String;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::size_t;
 use serde::Deserialize;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::string::String;
-    } else {
-        use std::string::String;
-    }
-}
 
 pub const XDE_IOC: u32 = 0xde777700;
 pub const XDE_IOC_OPTE_CMD: i32 = XDE_IOC as i32 | 0x01;
@@ -36,12 +29,14 @@ pub enum OpteCmd {
     DumpUft = 32,        // dump the Unified Flow Table
     ListLayers = 33,     // list the layers on a given port
     ClearUft = 40,       // clear the UFT
+    ClearLft = 41,       // clear the given Layer's Flow Table
     SetVirt2Phys = 50,   // set a v2p mapping
     DumpVirt2Phys = 51,  // dump the v2p mappings
     AddRouterEntry = 60, // add a router entry for IP dest
     CreateXde = 70,      // create a new xde device
     DeleteXde = 71,      // delete an xde device
     SetXdeUnderlay = 72, // set xde underlay devices
+    SetExternalIps = 80, // set xde external IPs for a port
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -58,12 +53,14 @@ impl TryFrom<c_int> for OpteCmd {
             32 => Ok(Self::DumpUft),
             33 => Ok(Self::ListLayers),
             40 => Ok(Self::ClearUft),
+            41 => Ok(Self::ClearLft),
             50 => Ok(Self::SetVirt2Phys),
             51 => Ok(Self::DumpVirt2Phys),
             60 => Ok(Self::AddRouterEntry),
             70 => Ok(Self::CreateXde),
             71 => Ok(Self::DeleteXde),
             72 => Ok(Self::SetXdeUnderlay),
+            80 => Ok(Self::SetExternalIps),
             _ => Err(()),
         }
     }

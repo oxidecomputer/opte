@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! A virtual switch port.
 
@@ -27,6 +27,8 @@ use super::packet::Packet;
 use super::packet::PacketMeta;
 use super::packet::Parsed;
 use super::packet::FLOW_ID_DEFAULT;
+#[cfg(all(not(feature = "std"), not(test)))]
+use super::rule::flow_id_sdt_arg;
 use super::rule::Action;
 use super::rule::Finalized;
 use super::rule::HdrTransform;
@@ -45,6 +47,12 @@ use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KMutexType;
 use crate::ddi::time::Moment;
 use crate::ExecCtx;
+use alloc::boxed::Box;
+use alloc::ffi::CString;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use core::num::NonZeroU32;
@@ -52,28 +60,12 @@ use core::result;
 use core::str::FromStr;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::SeqCst;
+#[cfg(all(not(feature = "std"), not(test)))]
+use illumos_sys_hdrs::uintptr_t;
 use kstat_macro::KStatProvider;
 use opte_api::Direction;
 use opte_api::MacAddr;
 use opte_api::OpteError;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use alloc::boxed::Box;
-        use alloc::ffi::CString;
-        use alloc::string::{String, ToString};
-        use alloc::sync::Arc;
-        use alloc::vec::Vec;
-        use super::rule::flow_id_sdt_arg;
-        use illumos_sys_hdrs::uintptr_t;
-    } else {
-        use std::boxed::Box;
-        use std::ffi::CString;
-        use std::string::{String, ToString};
-        use std::sync::Arc;
-        use std::vec::Vec;
-    }
-}
 
 pub type Result<T> = result::Result<T, OpteError>;
 
@@ -920,6 +912,25 @@ impl<N: NetworkImpl> Port<N> {
         Ok(())
     }
 
+    /// Clear all entries from the Layer Flow Table (LFT) of
+    /// the layer named `layer`.
+    ///
+    /// # States
+    ///
+    /// This command is valid for the following states.
+    ///
+    /// * [`PortState::Running`]
+    pub fn clear_lft(&self, layer: &str) -> Result<()> {
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Running])?;
+        data.layers
+            .iter_mut()
+            .find(|l| l.name() == layer)
+            .ok_or_else(|| OpteError::LayerNotFound(layer.to_string()))?
+            .clear_flows();
+        Ok(())
+    }
+
     /// Dump the contents of the Unified Flow Table (UFT).
     ///
     /// # States
@@ -1201,6 +1212,27 @@ impl<N: NetworkImpl> Port<N> {
             if layer.name() == layer_name {
                 self.epoch.fetch_add(1, SeqCst);
                 layer.set_rules(in_rules, out_rules);
+                return Ok(());
+            }
+        }
+
+        Err(OpteError::LayerNotFound(layer_name.to_string()))
+    }
+
+    // TODO: not dupe `set_rules`.
+    pub fn set_rules_soft(
+        &self,
+        layer_name: &str,
+        in_rules: Vec<Rule<Finalized>>,
+        out_rules: Vec<Rule<Finalized>>,
+    ) -> Result<()> {
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Ready, PortState::Running])?;
+
+        for layer in &mut data.layers {
+            if layer.name() == layer_name {
+                self.epoch.fetch_add(1, SeqCst);
+                layer.set_rules_soft(in_rules, out_rules);
                 return Ok(());
             }
         }
@@ -2435,15 +2467,9 @@ extern "C" {
 
 /// Metadata for inter-action communication.
 pub mod meta {
-    cfg_if! {
-        if #[cfg(all(not(feature = "std"), not(test)))] {
-            use alloc::collections::BTreeMap;
-            use alloc::string::{String, ToString};
-        } else {
-            use std::collections::BTreeMap;
-            use std::string::{String, ToString};
-        }
-    }
+    use alloc::collections::BTreeMap;
+    use alloc::string::String;
+    use alloc::string::ToString;
 
     /// A value meant to be used in the [`ActionMeta`] map.
     ///
