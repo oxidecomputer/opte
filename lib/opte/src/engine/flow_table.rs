@@ -118,7 +118,7 @@ where
     }
 
     pub fn expire(&mut self, flowid: &InnerFlowId) {
-        flow_expired_probe(&self.port_c, &self.name_c, flowid);
+        flow_expired_probe(&self.port_c, &self.name_c, flowid, None, None);
         self.map.remove(flowid);
     }
 
@@ -133,7 +133,13 @@ where
 
         self.map.retain(|flowid, entry| {
             if entry.is_expired(now, ttl) {
-                flow_expired_probe(port_c, name_c, flowid);
+                flow_expired_probe(
+                    port_c,
+                    name_c,
+                    flowid,
+                    Some(entry.last_hit),
+                    Some(now),
+                );
                 expired.push(f(entry.state()));
                 return false;
             }
@@ -206,7 +212,15 @@ where
     }
 }
 
-fn flow_expired_probe(port: &CString, name: &CString, flowid: &InnerFlowId) {
+#[allow(unused_variables)]
+fn flow_expired_probe(
+    port: &CString,
+    name: &CString,
+    flowid: &InnerFlowId,
+    last_hit: Option<Moment>,
+    now: Option<Moment>,
+) {
+    last_hit.unwrap_or_default();
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
             let arg = flow_id_sdt_arg::from(flowid);
@@ -216,6 +230,8 @@ fn flow_expired_probe(port: &CString, name: &CString, flowid: &InnerFlowId) {
                     port.as_ptr() as uintptr_t,
                     name.as_ptr() as uintptr_t,
                     &arg as *const flow_id_sdt_arg as uintptr_t,
+                    last_hit.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
+                    now.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
                 );
             }
         } else if #[cfg(feature = "usdt")] {
@@ -223,7 +239,7 @@ fn flow_expired_probe(port: &CString, name: &CString, flowid: &InnerFlowId) {
             let port_s = port.to_str().unwrap();
             let name_s = name.to_str().unwrap();
             crate::opte_provider::flow__expired!(
-                || (port_s, name_s, flowid.to_string())
+                || (port_s, name_s, flowid.to_string(), 0, 0)
             );
         } else {
             let (_, _, _) = (port, name, flowid);
@@ -308,6 +324,8 @@ extern "C" {
         port: uintptr_t,
         layer: uintptr_t,
         flowid: uintptr_t,
+        last_hit: uintptr_t,
+        now: uintptr_t,
     );
 
     pub fn __dtrace_probe_ft__entry__invalidated(

@@ -1718,7 +1718,14 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
-    fn uft_hit_probe(&self, dir: Direction, ufid: &InnerFlowId, epoch: u64) {
+    #[allow(unused_variables)]
+    fn uft_hit_probe(
+        &self,
+        dir: Direction,
+        ufid: &InnerFlowId,
+        epoch: u64,
+        last_hit: &Moment,
+    ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 let ufid_arg = flow_id_sdt_arg::from(ufid);
@@ -1729,13 +1736,14 @@ impl<N: NetworkImpl> Port<N> {
                         self.name_cstr.as_ptr() as uintptr_t,
                         &ufid_arg as *const flow_id_sdt_arg as uintptr_t,
                         epoch as uintptr_t,
+                        last_hit.raw_millis().unwrap_or_default() as usize
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.name_cstr.to_str().unwrap();
                 let ufid_s = ufid.to_string();
                 crate::opte_provider::uft__hit!(
-                    || (dir, port_s, ufid_s, epoch)
+                    || (dir, port_s, ufid_s, epoch, 0)
                 );
             } else {
                 let (_, _, _) = (dir, ufid, epoch);
@@ -1763,7 +1771,7 @@ impl<N: NetworkImpl> Port<N> {
                 // for lookup.
                 entry.hit();
                 data.stats.vals.in_uft_hit += 1;
-                self.uft_hit_probe(In, pkt.flow(), epoch);
+                self.uft_hit_probe(In, pkt.flow(), epoch, entry.last_hit());
 
                 for ht in &entry.state().xforms.hdr {
                     pkt.hdr_transform(ht)?;
@@ -2066,7 +2074,7 @@ impl<N: NetworkImpl> Port<N> {
             Some(entry) if entry.state().epoch == epoch => {
                 entry.hit();
                 data.stats.vals.out_uft_hit += 1;
-                self.uft_hit_probe(Out, pkt.flow(), epoch);
+                self.uft_hit_probe(Out, pkt.flow(), epoch, entry.last_hit());
 
                 let mut invalidated = false;
                 let mut ufid_in = None;
@@ -2451,6 +2459,7 @@ extern "C" {
         port: uintptr_t,
         ifid: uintptr_t,
         epoch: uintptr_t,
+        last_hit: uintptr_t,
     );
     pub fn __dtrace_probe_uft__invalidate(
         dir: uintptr_t,
