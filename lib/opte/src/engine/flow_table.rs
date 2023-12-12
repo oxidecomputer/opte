@@ -230,8 +230,8 @@ fn flow_expired_probe(
                     port.as_ptr() as uintptr_t,
                     name.as_ptr() as uintptr_t,
                     &arg as *const flow_id_sdt_arg as uintptr_t,
-                    last_hit.and_then(Moment::raw_millis).unwrap_or_default(),
-                    now.and_then(Moment::raw_millis).unwrap_or_default(),
+                    last_hit.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
+                    now.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
                 );
             }
         } else if #[cfg(feature = "usdt")] {

@@ -1736,7 +1736,7 @@ impl<N: NetworkImpl> Port<N> {
                         self.name_cstr.as_ptr() as uintptr_t,
                         &ufid_arg as *const flow_id_sdt_arg as uintptr_t,
                         epoch as uintptr_t,
-                        last_hit.raw_millis()
+                        last_hit.raw_millis().unwrap_or_default() as usize
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
@@ -2459,6 +2459,7 @@ extern "C" {
         port: uintptr_t,
         ifid: uintptr_t,
         epoch: uintptr_t,
+        last_hit: uintptr_t,
     );
     pub fn __dtrace_probe_uft__invalidate(
         dir: uintptr_t,
