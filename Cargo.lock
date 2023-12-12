@@ -1030,6 +1030,7 @@ dependencies = [
  "clap",
  "criterion",
  "ctor",
+ "itertools 0.12.0",
  "nix",
  "opte",
  "opte-test-utils",

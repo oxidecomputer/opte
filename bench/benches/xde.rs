@@ -16,6 +16,7 @@ use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
 use criterion::Criterion;
+use itertools::Itertools;
 use opte_bench::dtrace::DTraceHisto;
 use opte_bench::iperf::Output;
 use rand::distributions::Distribution;
@@ -37,6 +38,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::sync::OnceLock;
 use std::time::Duration;
+use xde_tests::Topology;
 
 #[cfg(not(target_os = "illumos"))]
 fn main() -> Result<()> {
@@ -100,11 +102,14 @@ enum Experiment {
     /// This should forward packets over a NIC:
     Remote {
         /// Listen address of an external iPerf server.
-        iperf_server: IpAddr,
+        // iperf_server: IpAddr,
+
+        #[command(flatten)]
+        opte_create: OpteCreateParams,
 
         /// Test.
-        #[arg(short, long, value_enum, default_value_t=CreateMode::Dont)]
-        opte_create: CreateMode,
+        // #[arg(short, long, value_enum, default_value_t=CreateMode::Dont)]
+        // opte_create: CreateMode,
 
         #[command(flatten)]
         _waste: IgnoredExtras,
@@ -122,13 +127,34 @@ enum Experiment {
         #[command(flatten)]
         _waste: IgnoredExtras,
     },
+    /// Run an iPerf server in an OPTE-connected zone for back-to-back
+    /// testing.
+    Server {
+        #[command(flatten)]
+        opte_create: OpteCreateParams,
+
+        #[command(flatten)]
+        _waste: IgnoredExtras,
+    },
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum CreateMode {
     Dont,
     Do,
-    DoWithPassthrough,
+}
+
+#[derive(Clone, Parser)]
+struct OpteCreateParams {
+    /// Names of two interfaces to bind to XDE as underlay NICs.
+    #[arg(
+        short,
+        long,
+        number_of_values(2),
+        value_delimiter=',',
+        default_values_t=["igb0".to_string(), "igb1".to_string()]
+    )]
+    underlay_nics: Vec<String>,
 }
 
 #[derive(Parser)]
@@ -199,23 +225,33 @@ fn ensure_xde() -> Result<()> {
 }
 
 fn check_deps() -> Result<()> {
+    enum Dep {
+        Program,
+        File,
+    }
     let dep_map = [
-        ("iperf", "iperf"),
-        ("stackcollapse.pl", "flamegraph"),
-        ("flamegraph.pl", "flamegraph"),
+        (Dep::Program, "iperf", "iperf"),
+        (Dep::Program, "stackcollapse.pl", "flamegraph"),
+        (Dep::Program, "flamegraph.pl", "flamegraph"),
+        (Dep::File, "/usr/lib/brand/sparse", "sparse"),
     ];
 
     let mut missing_progs = vec![];
     let mut missing_pkgs = HashSet::new();
 
-    for (prog, pkg) in dep_map {
-        if Command::new("which")
-            .arg(prog)
-            .output()
-            .map_err(|_| ())
-            .and_then(|out| if out.status.success() { Ok(()) } else { Err(()) })
-            .is_err()
-        {
+    for (dep_type, prog, pkg) in dep_map {
+        let missing_dep = match dep_type {
+            Dep::Program => Command::new("which")
+                .arg(prog)
+                .output()
+                .map_err(|_| ())
+                .and_then(
+                    |out| if out.status.success() { Ok(()) } else { Err(()) },
+                )
+                .is_err(),
+            Dep::File => !Path::new(prog).exists(),
+        };
+        if missing_dep {
             missing_progs.push(prog);
             missing_pkgs.insert(pkg);
         }
@@ -396,6 +432,38 @@ fn zone_to_zone() -> Result<()> {
         .zone
         .zexec(&format!("ping {}", &topol.nodes[1].port.ip()))?;
 
+    test_iperf(topol, &target_ip)
+}
+
+#[cfg(target_os = "illumos")]
+fn over_nic(params: &OpteCreateParams) -> Result<()> {
+    // add_drv xde.
+
+    use std::eprintln;
+    ensure_xde()?;
+
+    print_banner(&format!(
+        "Creating XDE device on NICS {}",
+        params.underlay_nics.iter().join(",")
+    ));
+    let topol = xde_tests::single_node_over_real_nic(
+        (&params.underlay_nics[..2]).try_into().unwrap(),
+        xde_tests::ZONE_B_PORT,
+        &[xde_tests::ZONE_A_PORT],
+    )?;
+    print_banner("Topology built!");
+
+    let target_ip = xde_tests::ZONE_A_PORT.ip;
+
+    // Ping for good luck / to verify reachability.
+    let _ = &topol.nodes[0].zone.zone.zexec(&format!("ping {}", &target_ip))?;
+
+    loop_til_exit();
+
+    test_iperf(topol, &target_ip.to_string())
+}
+
+fn test_iperf(topol: Topology, target_ip: &str) -> Result<()> {
     // Begin dtrace sessions in global zone.
     let (kill, done) = spawn_local_dtraces("iperf-tcp");
 
@@ -403,7 +471,7 @@ fn zone_to_zone() -> Result<()> {
     // all stack traces/times together.
     let mut outputs = vec![];
     let max = 3;
-    for i in 0..3 {
+    for i in 1..(max + 1) {
         // XXX: Want to run one of the dtraces at a time?
         //      Looks like histo-timing has a noticeable cost on BW.
         print!("Run {i}/{max}...");
@@ -411,7 +479,12 @@ fn zone_to_zone() -> Result<()> {
             .command(&format!("iperf -c {target_ip} -J"))
             .output()?;
         let iperf_out = std::str::from_utf8(&iperf_done.stdout)?;
-        let parsed_out: Output = serde_json::from_str(&iperf_out)?;
+        let parsed_out: Output =
+            serde_json::from_str(&iperf_out).map_err(|e| {
+                eprintln!("json {e:?}");
+                println!("\n\n{iperf_out}\n\n");
+                e
+            })?;
         println!("{}Mbps", parsed_out.end.sum_sent.bits_per_second / 1e6);
         outputs.push(parsed_out);
     }
@@ -469,6 +542,47 @@ fn process_output(outdata: DtraceOutput) -> Result<()> {
     Ok(())
 }
 
+fn loop_til_exit() {
+    let mut cmd = String::new();
+    loop {
+        match std::io::stdin().read_line(&mut cmd) {
+            Ok(_) if &cmd == "exit\n" => {
+                break;
+            }
+            Ok(_) => {
+                println!("wanted exit: saw {cmd:?}");
+                cmd.clear();
+            }
+            _ => {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "illumos")]
+fn host_iperf(params: &OpteCreateParams) -> Result<()> {
+    // add_drv xde.
+    ensure_xde()?;
+
+    print_banner(&format!(
+        "Creating XDE device on NICS {}",
+        params.underlay_nics.iter().join(",")
+    ));
+    let topol = xde_tests::single_node_over_real_nic(
+        (&params.underlay_nics[..2]).try_into().unwrap(),
+        xde_tests::ZONE_A_PORT,
+        &[xde_tests::ZONE_B_PORT],
+    )?;
+
+    print_banner("topology created, spawning iPerf.\ntype 'exit' to exit.");
+    let _iperf_sess = topol.nodes[0].command("iperf -s").spawn()?;
+
+    loop_til_exit();
+
+    Ok(())
+}
+
 #[cfg(target_os = "illumos")]
 fn main() -> Result<()> {
     elevate()?;
@@ -477,7 +591,7 @@ fn main() -> Result<()> {
     let cfg = ConfigInput::parse();
 
     match cfg.command {
-        Experiment::Remote { iperf_server: _server, .. } => todo!(),
+        Experiment::Remote { opte_create, .. } => over_nic(&opte_create),
         Experiment::Local { no_bench, .. } => {
             if no_bench {
                 zone_to_zone_dummy()
@@ -485,5 +599,6 @@ fn main() -> Result<()> {
                 zone_to_zone()
             }
         }
+        Experiment::Server { opte_create, .. } => host_iperf(&opte_create),
     }
 }

@@ -25,6 +25,7 @@ serde_json.workspace = true
 [dev-dependencies]
 clap.workspace = true
 ctor.workspace = true
+itertools = { workspace = true, features = ["use_std"] }
 smoltcp.workspace = true
 
 [target.'cfg(target_os = "illumos")'.dev-dependencies]

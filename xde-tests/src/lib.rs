@@ -9,9 +9,13 @@ use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters;
 use oxide_vpc::api::FirewallAction;
 use oxide_vpc::api::FirewallRule;
+use oxide_vpc::api::IpAddr;
 use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::IpCidr;
+use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv4Cfg;
+use oxide_vpc::api::Ipv6Addr;
+use oxide_vpc::api::MacAddr;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::Ports;
 use oxide_vpc::api::RouterTarget;
@@ -22,6 +26,7 @@ use oxide_vpc::api::VpcCfg;
 use std::env;
 use std::process::Command;
 use std::sync::Arc;
+use std::time::Duration;
 use zone::Zlogin;
 use ztest::*;
 
@@ -236,8 +241,8 @@ pub struct Topology {
     pub nodes: Vec<TestNode>,
     pub v6_routes: Vec<RouteV6>,
     pub xde: Xde,
-    pub lls: [LinkLocal; 2],
-    pub simnet: SimnetLink,
+    pub lls: Vec<LinkLocal>,
+    pub simnet: Option<SimnetLink>,
     pub zfs: Arc<Zfs>,
 }
 
@@ -352,13 +357,139 @@ pub fn two_node_topology() -> Result<Topology> {
 
     Ok(Topology {
         xde,
-        lls: [ll0, ll1],
-        simnet: sim,
+        lls: vec![ll0, ll1],
+        simnet: Some(sim),
         nodes: vec![
             TestNode { zone: a, port: opte0, nic: vopte0 },
             TestNode { zone: b, port: opte1, nic: vopte1 },
         ],
         v6_routes: vec![r0, r1],
+        zfs,
+    })
+}
+
+#[derive(Copy, Clone)]
+pub struct PortInfo {
+    pub ip: IpAddr,
+    pub mac: MacAddr,
+    pub underlay_addr: Ipv6Addr,
+}
+
+pub const ZONE_A_PORT: PortInfo = PortInfo {
+    ip: IpAddr::Ip4(Ipv4Addr::from_const([10, 0, 0, 1])),
+    mac: MacAddr::from_const([0xa8, 0x40, 0x25, 0xff, 0x00, 0x01]),
+    underlay_addr: Ipv6Addr::from_const([
+        0xfd44, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001,
+    ]),
+};
+
+pub const ZONE_B_PORT: PortInfo = PortInfo {
+    ip: IpAddr::Ip4(Ipv4Addr::from_const([10, 0, 0, 2])),
+    mac: MacAddr::from_const([0xa8, 0x40, 0x25, 0xff, 0x00, 0x02]),
+    underlay_addr: Ipv6Addr::from_const([
+        0xfd77, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001,
+    ]),
+};
+
+fn get_linklocal_addr(link_name: &str) -> Result<std::net::Ipv6Addr> {
+    // kyle@farme:~$ ipadm show-addr igb0/ll
+    // ADDROBJ           TYPE     STATE        ADDR
+    // igb0/ll           addrconf ok           fe80::a236:9fff:fe0c:2586%igb0/10
+    let target_addr = format!("{link_name}/ll");
+    let out = Command::new("ipadm")
+        .arg("show-addr")
+        .arg(target_addr.clone())
+        .output()?;
+
+    let text = std::str::from_utf8(&out.stdout)?;
+
+    if !out.status.success() || text.lines().count() == 1 {
+        anyhow::bail!("could not find address {target_addr}");
+    }
+
+    let mut maybe_addr = text
+        .lines()
+        .nth(1)
+        .ok_or(anyhow::anyhow!("expected to find entry line for IP"))?
+        .split_whitespace()
+        .last()
+        .ok_or(anyhow::anyhow!("expected to find column for IP"))?;
+
+    // remove iface qualifier on link-local addr.
+    if maybe_addr.contains('%') {
+        maybe_addr = maybe_addr.split('%').next().unwrap()
+    }
+
+    Ok(maybe_addr.parse()?)
+}
+
+pub fn single_node_over_real_nic(
+    underlay: &[String; 2],
+    my_info: PortInfo,
+    peers: &[PortInfo],
+) -> Result<Topology> {
+    Xde::set_xde_underlay(&underlay[0], &underlay[1])?;
+    let xde = Xde {};
+
+    // Fetch link-local addrs for underlay.
+    let ll0 = get_linklocal_addr(&underlay[0])?;
+    let ll1 = get_linklocal_addr(&underlay[1])?;
+
+    let ip = my_info.ip.to_string();
+    let mac = my_info.mac.to_string();
+    let underlay_addr = my_info.underlay_addr.to_string();
+    Xde::set_v2p(&ip, &mac, &underlay_addr)?;
+
+    let opte = OptePort::new("opte0", &ip, &mac, &underlay_addr)?;
+
+    let mut v6_routes = vec![];
+    for peer in peers {
+        let ip = peer.ip.to_string();
+        let mac = peer.mac.to_string();
+        let underlay_addr = peer.underlay_addr.to_string();
+        Xde::set_v2p(&ip, &mac, &underlay_addr)?;
+        opte.add_router_entry(&ip)?;
+
+        // let dst_ip = underlay_addr.parse()?;
+        // let r0 = RouteV6::new(
+        //     dst_ip,
+        //     64,
+        //     ll0,
+        //     Some(underlay[0].clone())
+        // )?;
+        // v6_routes.push(r0);
+
+        // let r1 = RouteV6::new(
+        //     dst_ip,
+        //     64,
+        //     ll1,
+        //     Some(underlay[1].clone())
+        // )?;
+        // v6_routes.push(r1);
+    }
+
+    opte.fw_allow_all()?;
+
+    // Create a few vnics atop our OPTE devices.
+    let vopte = Vnic::with_mac("vopte0", "opte0", opte.mac())?;
+
+    // Set up a zfs pool for our test zones.
+    let zfs = Arc::new(Zfs::new("opte1node")?);
+
+    println!("start zone");
+    let a = OpteZone::new("a", &zfs, &[&vopte.name])?;
+
+    std::thread::sleep(Duration::from_secs(30));
+
+    println!("setup zone");
+    a.setup(&vopte.name, opte.ip())?;
+
+    Ok(Topology {
+        xde,
+        lls: vec![],
+        simnet: None,
+        nodes: vec![TestNode { zone: a, port: opte, nic: vopte }],
+        v6_routes,
         zfs,
     })
 }
