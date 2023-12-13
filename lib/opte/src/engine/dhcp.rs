@@ -315,11 +315,11 @@ impl DhcpOption for HostNameOpt<'_> {
     const OPTION_CODE: CustomDhcpOptionType = CustomDhcpOptionType::HostName;
 
     fn write_body(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(self.name.encode());
+        buf.extend(self.name.name().as_bytes());
     }
 
     fn body_len_estimate(&self) -> Option<usize> {
-        Some(self.name.encode().len())
+        Some(self.name.name().len())
     }
 }
 
@@ -338,11 +338,11 @@ impl DhcpOption for DomainNameOpt<'_> {
     const OPTION_CODE: CustomDhcpOptionType = CustomDhcpOptionType::DomainName;
 
     fn write_body(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(self.name.encode());
+        buf.extend(self.name.name().as_bytes());
     }
 
     fn body_len_estimate(&self) -> Option<usize> {
-        Some(self.name.encode().len())
+        Some(self.name.name().len())
     }
 }
 
