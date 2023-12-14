@@ -690,6 +690,27 @@ mod test {
     }
 
     #[test]
+    fn hostname_encode() {
+        test_option_emit(
+            HostNameOpt { name: &"myhost".parse::<DomainName>().unwrap() },
+            vec![12, 6, 109, 121, 104, 111, 115, 116],
+        );
+    }
+
+    #[test]
+    fn domainname_encode() {
+        test_option_emit(
+            DomainNameOpt {
+                name: &"myhost.oxide.computer".parse::<DomainName>().unwrap(),
+            },
+            vec![
+                15, 21, 109, 121, 104, 111, 115, 116, 46, 111, 120, 105, 100,
+                101, 46, 99, 111, 109, 112, 117, 116, 101, 114,
+            ],
+        );
+    }
+
+    #[test]
     fn offlink_encode() {
         let if_ip = SubnetRouterPair {
             subnet: Ipv4Cidr::new_checked(Ipv4Addr::from([172, 30, 7, 77]), 32)
