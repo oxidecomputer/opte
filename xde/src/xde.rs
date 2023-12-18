@@ -54,7 +54,6 @@ use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
-use opte::ddi::time::Moment;
 use opte::ddi::time::Periodic;
 use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
@@ -563,7 +562,7 @@ fn expire_periodic(port: &mut Arc<Port<VpcNetwork>>) {
     // ignore the error. Eventually xde will also have logic for
     // moving a port to a paused state, and in that state the periodic
     // should probably be canceled.
-    let _ = port.expire_flows(Moment::now());
+    let _ = port.expire_flows();
 }
 
 #[no_mangle]

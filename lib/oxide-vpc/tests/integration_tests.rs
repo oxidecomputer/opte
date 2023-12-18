@@ -261,10 +261,7 @@ fn port_transition_pause() {
     // Verify that APIs which modify state are not allowed.
     // ================================================================
     assert!(matches!(g2.port.clear_uft(), Err(OpteError::BadState(_))));
-    assert!(matches!(
-        g2.port.expire_flows(Moment::now()),
-        Err(OpteError::BadState(_))
-    ));
+    assert!(matches!(g2.port.expire_flows(), Err(OpteError::BadState(_))));
     // This exercises Port::remove_rule().
     assert!(matches!(
         router::del_entry(
@@ -1966,11 +1963,13 @@ fn flow_expiration() {
     // ================================================================
     // Verify expiration
     // ================================================================
-    g1.port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0)).unwrap();
+    g1.port
+        .expire_flows_at(now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0))
+        .unwrap();
     assert_port!(g1);
 
     g1.port
-        .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0))
+        .expire_flows_at(now + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0))
         .unwrap();
     zero_flows!(g1);
 }
