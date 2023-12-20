@@ -966,15 +966,34 @@ impl<N: NetworkImpl> Port<N> {
         })
     }
 
-    /// Expire all flows whose TTL is overdue as of `now`.
+    /// Expire all flows whose TTL is overdue.
     ///
     /// # States
     ///
     /// This command is valid for the following states.
     ///
     /// * [`PortState::Running`]
-    pub fn expire_flows(&self, now: Moment) -> Result<()> {
+    pub fn expire_flows(&self) -> Result<()> {
+        self.expire_flows_inner(None)
+    }
+
+    /// Expire all flows whose TTL would be overdue at the time `now`,
+    /// used for testing purposes.
+    ///
+    /// # States
+    ///
+    /// This command is valid for the following states.
+    ///
+    /// * [`PortState::Running`]
+    #[cfg(any(feature = "std", test))]
+    pub fn expire_flows_at(&self, now: Moment) -> Result<()> {
+        self.expire_flows_inner(Some(now))
+    }
+
+    #[inline(always)]
+    fn expire_flows_inner(&self, now: Option<Moment>) -> Result<()> {
         let mut data = self.data.lock();
+        let now = now.unwrap_or_else(|| Moment::now());
         check_state!(data.state, [PortState::Running])?;
 
         for l in &mut data.layers {
