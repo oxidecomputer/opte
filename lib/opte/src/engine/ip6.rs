@@ -301,6 +301,8 @@ impl<'a> Ipv6Hdr<'a> {
             return Ok(Self { base, ext: None });
         }
 
+        // XXX: smoltcp now more or less imposes the same pattern on all these
+        //      branches. This could do with some cleanup as a result.
         let mut proto_offset: usize = 0;
         while !is_ulp_protocol(next_header) {
             match next_header {
@@ -497,6 +499,7 @@ pub(crate) mod test {
     use smoltcp::wire::Ipv6FragmentRepr;
     use smoltcp::wire::Ipv6HopByHopHeader;
     use smoltcp::wire::Ipv6HopByHopRepr;
+    use smoltcp::wire::Ipv6OptionRepr;
     use smoltcp::wire::Ipv6Packet;
     use smoltcp::wire::Ipv6Repr;
     use smoltcp::wire::Ipv6RoutingHeader;
@@ -541,13 +544,16 @@ pub(crate) mod test {
     fn hop_by_hop_header() -> Ipv6HopByHopRepr<'static> {
         // in 8-octet units, not including the first
         const OPTION_LEN: usize = 1;
-        // Pad to the next multiple of 8, then one more 8-octet unit
-        const LEN: usize = 6 + OPTION_LEN * 8;
-        static OPTIONS: [u8; LEN] = [0; LEN];
+        // SmolTCP limits us to 2 max HBH options in its repr.
+        // Pad to the next multiple of 8, then one more 8-octet unit.
+        // - Ext header takes 2B
+        // - PadN(n) takes 2B, then n bytes.
+        // => 4 + fill
+        const LEN: usize = 4 + OPTION_LEN * 8;
+        static OPTIONS: [Ipv6OptionRepr; 1] =
+            [Ipv6OptionRepr::PadN(LEN as u8); 1];
         Ipv6HopByHopRepr {
-            next_header: IpProtocol::Tcp,
-            length: OPTION_LEN as _,
-            data: &OPTIONS,
+            options: heapless::Vec::from_slice(&OPTIONS).unwrap(),
         }
     }
 
@@ -617,9 +623,14 @@ pub(crate) mod test {
                 HopByHop => {
                     let hbh = hop_by_hop_header();
                     let mut packet =
-                        Ipv6HopByHopHeader::new_checked(&mut buf).unwrap();
-                    hbh.emit(&mut packet);
-                    hbh.header_len() + hbh.data.len()
+                        Ipv6ExtHeader::new_checked(&mut buf).unwrap();
+                    packet.set_next_header(IpProtocol::Tcp);
+                    packet.set_header_len((hbh.buffer_len() / 8) as u8);
+                    let mut hbh_packet =
+                        Ipv6HopByHopHeader::new_checked(packet.payload_mut())
+                            .unwrap();
+                    hbh.emit(&mut hbh_packet);
+                    2 + hbh.buffer_len()
                 }
                 Ipv6Frag => {
                     let frag = fragment_header();
@@ -637,7 +648,7 @@ pub(crate) mod test {
                     let mut packet =
                         Ipv6ExtHeader::new_checked(&mut buf).unwrap();
                     packet.set_next_header(IpProtocol::Tcp);
-                    packet.set_header_len(((route.buffer_len() - 6) / 8) as u8);
+                    packet.set_header_len((route.buffer_len() / 8) as u8);
                     let mut route_packet =
                         Ipv6RoutingHeader::new_checked(packet.payload_mut())
                             .unwrap();
