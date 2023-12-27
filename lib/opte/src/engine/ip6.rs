@@ -618,6 +618,10 @@ pub(crate) mod test {
 
             // Insert the bytes of each extension header, returning the number
             // of octets written.
+            //
+            // For each extension header, we need to build the top level ExtHeader
+            // and set length manually: this is (inner_len / 8) := the number of
+            // 8-byte blocks FOLLOWING the first.
             use IpProtocol::*;
             let len = match extension {
                 HopByHop => {
@@ -637,6 +641,7 @@ pub(crate) mod test {
                     let mut packet =
                         Ipv6ExtHeader::new_checked(&mut buf).unwrap();
                     packet.set_next_header(IpProtocol::Tcp);
+                    packet.set_header_len(0);
                     let mut frag_packet =
                         Ipv6FragmentHeader::new_checked(packet.payload_mut())
                             .unwrap();
