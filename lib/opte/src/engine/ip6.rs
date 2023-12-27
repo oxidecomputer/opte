@@ -306,7 +306,8 @@ impl<'a> Ipv6Hdr<'a> {
             match next_header {
                 IpProtocol::HopByHop => {
                     let buf = rdr.slice_mut(rdr.seg_left())?;
-                    let header = Ipv6HopByHopHeader::new_checked(buf)?;
+                    let mut header = Ipv6ExtHeader::new_checked(buf)?;
+                    _ = Ipv6HopByHopHeader::new_checked(header.payload_mut())?;
                     let n_bytes = 8 * (usize::from(header.header_len()) + 1);
                     next_header = header.next_header();
                     let buf = header.into_inner();
