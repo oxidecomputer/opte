@@ -8,6 +8,7 @@
 
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
+use super::flow_table::Ttl;
 use super::headers::HeaderActionModify;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
@@ -31,6 +32,24 @@ pub const TCP_HDR_OFFSET_SHIFT: u8 = 4;
 
 pub const TCP_PORT_RDP: u16 = 3389;
 pub const TCP_PORT_SSH: u16 = 22;
+
+/// The duration after which a connection in TIME-WAIT should be
+/// considered free for either side to reuse.
+///
+/// This value is chosen by Windows and MacOS, which is larger
+/// than Linux's default 60s. Allowances for tuned servers and/or
+/// more aggressive reuse via RFCs 1323/7323 and/or 6191 are made in
+/// `tcp_state`.
+pub const TIME_WAIT_EXPIRE_SECS: u64 = 120;
+/// The duration after which otherwise healthy TCP flows should be pruned.
+///
+/// Currently, this is tuned to be 2.5 hours: higher than the default behaviour
+/// for SO_KEEPALIVE on linux/illumos. Each will wait 2 hours before sending a
+/// keepalive, when interval + probe count will result in a timeout after
+/// 8mins (illumos) / 11mins (linux).
+pub const KEEPALIVE_EXPIRE_SECS: u64 = 8_000;
+pub const TIME_WAIT_EXPIRE_TTL: Ttl = Ttl::new_seconds(TIME_WAIT_EXPIRE_SECS);
+pub const KEEPALIVE_EXPIRE_TTL: Ttl = Ttl::new_seconds(KEEPALIVE_EXPIRE_SECS);
 
 /// The standard TCP flags. We don't bother with the experimental NS
 /// flag.

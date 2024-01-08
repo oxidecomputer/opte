@@ -44,6 +44,7 @@ use opte::engine::packet::ParseError;
 use opte::engine::packet::Parsed;
 use opte::engine::port::ProcessError;
 use opte::engine::tcp::TcpState;
+use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
 use opte::engine::udp::UdpMeta;
 use opte::engine::Direction;
 use oxide_vpc::api::ExternalIpCfg;
@@ -3596,12 +3597,25 @@ fn tcp_outbound() {
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow).unwrap());
 
-    // TODO uncomment in follow up commit and make sure to expire TCP flows.
-    //
-    // g1.port
-    //     .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64 + 1, 0))
-    //     .unwrap();
-    // zero_flows!(g1);
+    // TCP flow expiry behaviour:
+    // - UFTs for individual flows live on the same cadence as other traffic.
+    // - TCP state machine info should be cleaned up after an active close.
+    // TimeWait state has a ~2min lifetime before we flush it -- it should still
+    // be present at UFT expiry:
+    let now = Moment::now();
+    g1.port
+        .expire_flows_at(now + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0))
+        .unwrap();
+    zero_flows!(g1);
+    assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow).unwrap());
+
+    // The TCP flow state should then be flushed after 2 mins.
+    // Note that this case applies to any active-close initiated by the
+    // guest, irrespective of inbound/outbound.
+    g1.port
+        .expire_flows_at(now + Duration::new(TIME_WAIT_EXPIRE_SECS + 1, 0))
+        .unwrap();
+    assert_eq!(None, g1.port.tcp_state(&flow));
 }
 
 // Verify TCP state transitions in relation to an inbound connection

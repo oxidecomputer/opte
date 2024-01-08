@@ -8,7 +8,9 @@
 
 use self::meta::ActionMeta;
 use super::flow_table::Dump;
+use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
+use super::flow_table::Ttl;
 use super::ioctl;
 use super::ioctl::TcpFlowEntryDump;
 use super::ioctl::TcpFlowStateDump;
@@ -35,6 +37,8 @@ use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
 use super::tcp::TcpState;
+use super::tcp::KEEPALIVE_EXPIRE_TTL;
+use super::tcp::TIME_WAIT_EXPIRE_TTL;
 use super::tcp_state::TcpFlowState;
 use super::tcp_state::TcpFlowStateError;
 use super::HdlPktAction;
@@ -46,6 +50,7 @@ use crate::ddi::kstat::KStatU64;
 use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KMutexType;
 use crate::ddi::time::Moment;
+use crate::engine::flow_table::ExpiryPolicy;
 use crate::ExecCtx;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
@@ -272,7 +277,12 @@ impl PortBuilder {
             layers: self.layers.into_inner(),
             uft_in: FlowTable::new(&self.name, "uft_in", uft_limit, None),
             uft_out: FlowTable::new(&self.name, "uft_out", uft_limit, None),
-            tcp_flows: FlowTable::new(&self.name, "tcp_flows", tcp_limit, None),
+            tcp_flows: FlowTable::new(
+                &self.name,
+                "tcp_flows",
+                tcp_limit,
+                Some(Box::<TcpExpiry>::default()),
+            ),
         };
 
         Ok(Port {
@@ -993,7 +1003,7 @@ impl<N: NetworkImpl> Port<N> {
     #[inline(always)]
     fn expire_flows_inner(&self, now: Option<Moment>) -> Result<()> {
         let mut data = self.data.lock();
-        let now = now.unwrap_or_else(|| Moment::now());
+        let now = now.unwrap_or_else(Moment::now);
         check_state!(data.state, [PortState::Running])?;
 
         for l in &mut data.layers {
@@ -1001,6 +1011,11 @@ impl<N: NetworkImpl> Port<N> {
         }
         let _ = data.uft_in.expire_flows(now, |_| FLOW_ID_DEFAULT);
         let _ = data.uft_out.expire_flows(now, |_| FLOW_ID_DEFAULT);
+
+        // XXX: TCP state expiry currently runs on a longer time scale than
+        //      UFT entries. If this changes, we might want to expire any UFTs
+        //      output here.
+        let _ = data.tcp_flows.expire_flows(now, |_| FLOW_ID_DEFAULT);
         Ok(())
     }
 
@@ -2444,6 +2459,36 @@ impl Dump for TcpFlowEntryState {
             bytes_in: self.bytes_in,
             bytes_out: self.bytes_out,
         }
+    }
+}
+
+/// Expiry behaviour for TCP flows dependent on the connection FSM.
+#[derive(Debug)]
+pub struct TcpExpiry {
+    time_wait_ttl: Ttl,
+    keepalive_ttl: Ttl,
+}
+
+impl Default for TcpExpiry {
+    fn default() -> Self {
+        Self {
+            time_wait_ttl: TIME_WAIT_EXPIRE_TTL,
+            keepalive_ttl: KEEPALIVE_EXPIRE_TTL,
+        }
+    }
+}
+
+impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
+    fn is_expired(
+        &self,
+        entry: &FlowEntry<TcpFlowEntryState>,
+        now: Moment,
+    ) -> bool {
+        let ttl = match entry.state().tcp_state.tcp_state() {
+            TcpState::TimeWait => self.time_wait_ttl,
+            _ => self.keepalive_ttl,
+        };
+        ttl.is_expired(*entry.last_hit(), now)
     }
 }
 
