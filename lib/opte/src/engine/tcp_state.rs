@@ -312,6 +312,29 @@ impl TcpFlowState {
                     return Some(TimeWait);
                 }
 
+                // The other endpoint has determined that it is safe to reuse
+                // a port combination for a new outbound flow before the guest
+                // did.
+                //
+                // This is applied based on the same logic as in flow_out,
+                // because any guest-initiated close (active or simul) will leave
+                // it in this state. If the guest is not yet ready, we expect it
+                // will send its own RST in response.
+                // XXX: We may want to limit this state violation based on a rate
+                //      limit/token bucket for *rack-external endpoints*, and not
+                //      punish e.g. reuse after ~50s. VPC-local (or even rack-local)
+                //      traffic can reasonably be tuned such that all guests can
+                //      reuse 4-tuples more aggressively, so we don't want that
+                //      case to be impacted.
+                // XXX: We need to invalidate flow stats on this transition and
+                //      its outbound equivalent.
+                // XXX: We need similar handling of SYN in other flow states when
+                //      we get it wrong, e.g. Established sticking iff. reorder
+                //      at close.
+                if tcp.has_flag(TcpFlags::SYN) {
+                    return Some(SynRcvd);
+                }
+
                 None
             }
         }
@@ -421,6 +444,23 @@ impl TcpFlowState {
                 // sent. Or this flow will expire.
                 if tcp.has_flag(TcpFlags::ACK) {
                     return Some(TimeWait);
+                }
+
+                // The guest has determined that it is safe to reuse
+                // a port combination for a new outbound flow before OPTE
+                // did.
+                // This can come from several sources:
+                // - Linux / Illumos default the TIME-WAIT state to 60s
+                //   vs. our/Win/Mac's (conservative) 120s. This could
+                //   be tuned lower still by users.
+                // - Application code in the guest sets SO_REUSEADDR.
+                // - `tcp_tw_reuse`, or other timestamp-based checks
+                //   recommended in RFC 6191.
+                // We could theoretically parse and replicate timestamp
+                // based logic, but we can't predict how a guest
+                // will behave with regard to a static timer.
+                if tcp.has_flag(TcpFlags::SYN) {
+                    return Some(SynSent);
                 }
 
                 None
