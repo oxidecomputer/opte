@@ -828,7 +828,7 @@ impl<N: NetworkImpl> Port<N> {
     //
     fn tcp_err(
         &self,
-        data: &mut PortData,
+        data: &FlowTable<TcpFlowEntryState>,
         dir: Direction,
         msg: String,
         pkt: &mut Packet<Parsed>,
@@ -837,7 +837,7 @@ impl<N: NetworkImpl> Port<N> {
             super::err(format!("mblk: {}", pkt.mblk_ptr_str()));
             super::err(format!("flow: {}", pkt.flow()));
             super::err(format!("meta: {:?}", pkt.meta()));
-            super::err(format!("flows: {:?}", data.tcp_flows,));
+            super::err(format!("flows: {:?}", data));
             todo!("bad packet: {}", msg);
         } else {
             self.tcp_err_probe(dir, pkt, msg)
@@ -1506,24 +1506,24 @@ impl<N: NetworkImpl> Port<N> {
                 tfes.segs_in += 1;
                 tfes.bytes_in += pkt_len;
 
-                match tfes.tcp_state.process(
+                let next_state = tfes.tcp_state.process(
                     self.name_cstr.as_c_str(),
                     In,
                     &ufid_out,
                     tcp,
+                );
+
+                if matches!(
+                    next_state,
+                    Ok(TcpState::Closed)
+                        | Err(TcpFlowStateError::NewFlow { .. })
                 ) {
-                    Ok(tcp_state) => {
-                        if tcp_state == TcpState::Closed {
-                            let entry = tcp_flows.remove(&ufid_out).unwrap();
-                            let ufid_in = entry.state().inbound_ufid.as_ref();
-                            self.uft_tcp_closed(data, &ufid_out, ufid_in);
-                        }
-
-                        Ok(tcp_state)
-                    }
-
-                    Err(e) => Err(ProcessError::TcpFlow(e)),
+                    let entry = tcp_flows.remove(&ufid_out).unwrap();
+                    let ufid_in = entry.state().inbound_ufid.as_ref();
+                    self.uft_tcp_closed(data, &ufid_out, ufid_in);
                 }
+
+                next_state.map_err(ProcessError::TcpFlow)
             }
 
             None => Err(ProcessError::MissingFlow(ufid_out)),
@@ -1719,19 +1719,22 @@ impl<N: NetworkImpl> Port<N> {
                     }
                 }
 
+                // Unlike for existing flows, we don't allow through
+                // unexpected packets here for now -- the `TcpState` FSM
+                // already encodes a shortcut from `Closed` to `Established.
                 Err(ProcessError::TcpFlow(err)) => {
                     let e = format!("{err}");
-                    self.tcp_err(data, Direction::In, e, pkt);
+                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
                     Ok(ProcessResult::Drop { reason: DropReason::TcpErr })
                 }
                 Err(ProcessError::MissingFlow(flow_id)) => {
                     let e = format!("Missing TCP flow ID: {flow_id}");
-                    self.tcp_err(data, Direction::In, e, pkt);
+                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
                     Ok(ProcessResult::Drop { reason: DropReason::TcpErr })
                 }
                 Err(ProcessError::FlowTableFull { kind, limit }) => {
                     let e = format!("{kind} flow table full ({limit} entries)");
-                    self.tcp_err(data, Direction::In, e, pkt);
+                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
                     Ok(ProcessResult::Drop { reason: DropReason::TcpErr })
                 }
                 res => unreachable!(
@@ -1824,16 +1827,39 @@ impl<N: NetworkImpl> Port<N> {
                         pkt.len() as u64,
                     ) {
                         Ok(_) => return Ok(ProcessResult::Modified),
-                        Err(ProcessError::TcpFlow(err)) => {
-                            let e = format!("{err}");
-                            self.tcp_err(data, In, e, pkt);
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
+                        Err(ProcessError::TcpFlow(
+                            e @ TcpFlowStateError::NewFlow { .. },
+                        )) => {
+                            // Don't return here: we invalidated the old flow and
+                            // need to redo processing as though a miss occurred.
+                            // This lets us increment counters for all layers
+                            // as opposed to just resetting UFT/TCP stats.
+                            self.tcp_err(
+                                &data.tcp_flows,
+                                In,
+                                format!("{e}"),
+                                pkt,
+                            );
+                        }
+                        Err(ProcessError::TcpFlow(
+                            e @ TcpFlowStateError::UnexpectedSegment { .. },
+                        )) => {
+                            self.tcp_err(
+                                &data.tcp_flows,
+                                In,
+                                format!("{e}"),
+                                pkt,
+                            );
+                            return Ok(ProcessResult::Modified);
                         }
                         Err(ProcessError::MissingFlow(flow_id)) => {
                             let e = format!("Missing TCP flow ID: {flow_id}");
-                            self.tcp_err(data, Direction::In, e, pkt);
+                            self.tcp_err(
+                                &data.tcp_flows,
+                                Direction::In,
+                                e,
+                                pkt,
+                            );
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
@@ -1842,7 +1868,12 @@ impl<N: NetworkImpl> Port<N> {
                             let e = format!(
                                 "{kind} flow table full ({limit} entries)"
                             );
-                            self.tcp_err(data, Direction::In, e, pkt);
+                            self.tcp_err(
+                                &data.tcp_flows,
+                                Direction::In,
+                                e,
+                                pkt,
+                            );
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
@@ -1908,7 +1939,12 @@ impl<N: NetworkImpl> Port<N> {
                     }
 
                     // TODO SDT probe for rejected packet.
-                    Err(e) => Err(ProcessError::TcpFlow(e)),
+                    Err(e) => {
+                        if matches!(e, TcpFlowStateError::NewFlow { .. }) {
+                            tcp_flows.remove(&ufid_out).unwrap();
+                        }
+                        Err(ProcessError::TcpFlow(e))
+                    }
                 }
             }
 
@@ -2026,23 +2062,26 @@ impl<N: NetworkImpl> Port<N> {
                 // Continue with processing.
                 Ok(_) => (),
 
+                // Unlike for existing flows, we don't allow through
+                // unexpected packets here for now -- the `TcpState` FSM
+                // already encodes a shortcut from `Closed` to `Established.
                 Err(ProcessError::TcpFlow(err)) => {
                     let e = format!("{err}");
-                    self.tcp_err(data, Out, e, pkt);
+                    self.tcp_err(&data.tcp_flows, Out, e, pkt);
                     return Ok(ProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
                 }
                 Err(ProcessError::MissingFlow(flow_id)) => {
                     let e = format!("Missing TCP flow ID: {flow_id}");
-                    self.tcp_err(data, Direction::In, e, pkt);
+                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
                     return Ok(ProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
                 }
                 Err(ProcessError::FlowTableFull { kind, limit }) => {
                     let e = format!("{kind} flow table full ({limit} entries)");
-                    self.tcp_err(data, Direction::In, e, pkt);
+                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
                     return Ok(ProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
@@ -2111,6 +2150,7 @@ impl<N: NetworkImpl> Port<N> {
                 self.uft_hit_probe(Out, pkt.flow(), epoch, entry.last_hit());
 
                 let mut invalidated = false;
+                let mut reprocess = false;
                 let mut ufid_in = None;
 
                 // For outbound traffic the TCP flow table must be
@@ -2130,16 +2170,38 @@ impl<N: NetworkImpl> Port<N> {
                             ufid_in = ufid_inbound;
                         }
 
-                        Err(ProcessError::TcpFlow(err)) => {
-                            let e = format!("{err}");
-                            self.tcp_err(data, Out, e, pkt);
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
+                        Err(ProcessError::TcpFlow(
+                            e @ TcpFlowStateError::NewFlow { .. },
+                        )) => {
+                            invalidated = true;
+                            reprocess = true;
+                            self.tcp_err(
+                                &data.tcp_flows,
+                                Out,
+                                format!("{e}"),
+                                pkt,
+                            );
                         }
+
+                        Err(ProcessError::TcpFlow(
+                            e @ TcpFlowStateError::UnexpectedSegment { .. },
+                        )) => {
+                            self.tcp_err(
+                                &data.tcp_flows,
+                                Out,
+                                format!("{e}"),
+                                pkt,
+                            );
+                        }
+
                         Err(ProcessError::MissingFlow(flow_id)) => {
                             let e = format!("Missing TCP flow ID: {flow_id}");
-                            self.tcp_err(data, Direction::In, e, pkt);
+                            self.tcp_err(
+                                &data.tcp_flows,
+                                Direction::In,
+                                e,
+                                pkt,
+                            );
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
@@ -2164,7 +2226,9 @@ impl<N: NetworkImpl> Port<N> {
                     self.uft_tcp_closed(data, &flow_before, ufid_in.as_ref());
                 }
 
-                return Ok(ProcessResult::Modified);
+                if !reprocess {
+                    return Ok(ProcessResult::Modified);
+                }
             }
 
             // The entry is from a previous epoch; invalidate its UFT
