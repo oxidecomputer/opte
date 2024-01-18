@@ -3602,17 +3602,6 @@ fn tcp_outbound() {
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
 
-    let bs_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.boundary_services.vni,
-    };
-    let g1_phys = TestIpPhys {
-        ip: g1_cfg.phys_ip,
-        mac: g1_cfg.guest_mac,
-        vni: g1_cfg.vni,
-    };
-
     // ================================================================
     // Main test on an HTTP flow.
     // ================================================================
@@ -3674,17 +3663,6 @@ fn early_tcp_invalidation() {
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
 
-    let bs_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.boundary_services.vni,
-    };
-    let g1_phys = TestIpPhys {
-        ip: g1_cfg.phys_ip,
-        mac: g1_cfg.guest_mac,
-        vni: g1_cfg.vni,
-    };
-
     // ================================================================
     // Setup TIME_WAIT state.
     // ================================================================
@@ -3711,7 +3689,6 @@ fn early_tcp_invalidation() {
             "stats.port.out_uft_hit",
         ]
     );
-    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
