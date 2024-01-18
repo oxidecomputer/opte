@@ -38,6 +38,7 @@ use opte::engine::ip4::Ipv4Meta;
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Hdr;
 use opte::engine::ip6::Ipv6Meta;
+use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketRead;
 use opte::engine::packet::ParseError;
@@ -3391,26 +3392,7 @@ fn uft_lft_invalidation_in() {
     );
 }
 
-// Verify TCP state transitions in relation to an outbound connection
-// (the "active open"). In this case the guest is the client, the
-// server is an external IP.
-#[test]
-fn tcp_outbound() {
-    let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
-    g1.port.start();
-    set!(g1, "port_state=running");
-    // let now = Moment::now();
-
-    // Add default route.
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
-    )
-    .unwrap();
-    incr!(g1, ["epoch", "router.rules.out"]);
-
+fn test_outbound_http(g1_cfg: &VpcCfg, g1: &mut PortAndVps) -> InnerFlowId {
     let bs_phys = TestIpPhys {
         ip: g1_cfg.boundary_services.ip,
         mac: g1_cfg.boundary_services.mac,
@@ -3597,7 +3579,48 @@ fn tcp_outbound() {
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow).unwrap());
 
-    // TCP flow expiry behaviour:
+    flow
+}
+
+// Verify TCP state transitions in relation to an outbound connection
+// (the "active open"). In this case the guest is the client, the
+// server is an external IP.
+#[test]
+fn tcp_outbound() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+    // let now = Moment::now();
+
+    // Add default route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    let bs_phys = TestIpPhys {
+        ip: g1_cfg.boundary_services.ip,
+        mac: g1_cfg.boundary_services.mac,
+        vni: g1_cfg.boundary_services.vni,
+    };
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    // ================================================================
+    // Main test on an HTTP flow.
+    // ================================================================
+    let flow = test_outbound_http(&g1_cfg, &mut g1);
+
+    // ================================================================
+    // TCP flow expiry behaviour
+    // ================================================================
     // - UFTs for individual flows live on the same cadence as other traffic.
     // - TCP state machine info should be cleaned up after an active close.
     // TimeWait state has a ~2min lifetime before we flush it -- it should still
@@ -3616,6 +3639,135 @@ fn tcp_outbound() {
         .expire_flows_at(now + Duration::new(TIME_WAIT_EXPIRE_SECS + 1, 0))
         .unwrap();
     assert_eq!(None, g1.port.tcp_state(&flow));
+}
+
+// Verify that a TCP SYN packet will result in a new flow regardless
+// of current TCP state. There are two main cases:
+// * TIME_WAIT -- either host decided a port was safe to reuse.
+// * ESTABLISHED -- an out-of order ACK may have triggered an
+//                  accidental flow revival.
+#[test]
+fn early_tcp_invalidation() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Allow incoming TCP connection on g2 from anyone.
+    let rule = "dir=in action=allow priority=10 protocol=TCP";
+    firewall::add_fw_rule(
+        &g1.port,
+        &AddFwRuleReq {
+            port_name: g1.port.name().to_string(),
+            rule: rule.parse().unwrap(),
+        },
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "firewall.rules.in"]);
+
+    // Add default route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    let bs_phys = TestIpPhys {
+        ip: g1_cfg.boundary_services.ip,
+        mac: g1_cfg.boundary_services.mac,
+        vni: g1_cfg.boundary_services.vni,
+    };
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    // ================================================================
+    // Setup TIME_WAIT state.
+    // ================================================================
+    let dst_ip = "52.10.128.69".parse::<IpAddr>().unwrap();
+    let flow = test_outbound_http(&g1_cfg, &mut g1);
+
+    // ================================================================
+    // Repeat the exact same flow. This SYN is not blocked, the old
+    // entry is invalidated, and a new one is created.
+    // ================================================================
+    let mut pkt1 = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(
+        g1,
+        [
+            "stats.port.out_modified, stats.port.out_uft_miss",
+            // We're hitting the old entry, before it is discarded.
+            "stats.port.out_uft_hit",
+        ]
+    );
+    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
+    assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // Suppose we have an earlier flow which was driven to CLOSED,
+    // where an ACK-carrying segment arrived out-of-order/duped OR one
+    // side sent an RST and knocked out our entry. That flow will move
+    // CLOSED->ESTABLISHED.
+    // ================================================================
+    let dst_ip2 = "52.10.128.70".parse().unwrap();
+
+    // This case is just an ACK, but the same logic applies for
+    // FIN+ACK. The FIN+ACK case could be special-cased CLOSED->CLOSED,
+    // but we're not doing that for now.
+    let mut pkt11 = http_guest_ack_fin2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip2,
+    );
+    let flow = *pkt11.flow();
+    let res = g1.port.process(Out, &mut pkt11, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(
+        g1,
+        [
+            "stats.port.out_modified, stats.port.out_uft_miss",
+            "firewall.flows.in, firewall.flows.out",
+            "nat.flows.in, nat.flows.out",
+            "uft.out",
+        ]
+    );
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // This entry will not block new flows on the same tuple.
+    // ================================================================
+    let mut pkt1 = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip2,
+    );
+    let flow = *pkt1.flow();
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(
+        g1,
+        [
+            "stats.port.out_modified, stats.port.out_uft_miss",
+            // We're hitting the old entry, before it is discarded.
+            "stats.port.out_uft_hit",
+        ]
+    );
+    println!("{:?}", g1.port.dump_tcp_flows());
+    eprintln!("{:?}", flow);
+    assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
 }
 
 // Verify TCP state transitions in relation to an inbound connection

@@ -221,6 +221,13 @@ impl TcpFlowState {
                     return Some(CloseWait);
                 }
 
+                if tcp.has_flag(TcpFlags::SYN) {
+                    // We may have gotten stuck in `Established` due to
+                    // a delayed FIN+ACK/ACK at connection close, or
+                    // unexpected OS reset/panic.
+                    return None;
+                }
+
                 // Normal traffic on an ESTABLISHED connection.
                 Some(Established)
             }
@@ -397,6 +404,10 @@ impl TcpFlowState {
             Established => {
                 if tcp.has_flag(TcpFlags::FIN) {
                     return Some(FinWait1);
+                }
+
+                if tcp.has_flag(TcpFlags::SYN) {
+                    return None;
                 }
 
                 Some(Established)
