@@ -1480,9 +1480,7 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         tcp_flows: &mut FlowTable<TcpFlowEntryState>,
         tcp: &crate::engine::tcp::TcpMeta,
-        dir: Direction,
-        ufid: &InnerFlowId,
-        mirror_flow: Option<&InnerFlowId>,
+        dir: &TcpDirection,
         pkt_len: u64,
     ) -> result::Result<TcpState, ProcessError> {
         // Create a new entry and find its current state. In
@@ -1490,23 +1488,27 @@ impl<N: NetworkImpl> Port<N> {
         // recovering an `Established` flow.
         let mut tfs = TcpFlowState::new();
 
-        let tcp_state =
-            match tfs.process(self.name_cstr.as_c_str(), dir, ufid, tcp) {
-                Ok(tcp_state) => tcp_state,
+        let tcp_state = match tfs.process(
+            self.name_cstr.as_c_str(),
+            dir.dir(),
+            dir.local_flow(),
+            tcp,
+        ) {
+            Ok(tcp_state) => tcp_state,
 
-                // XXX: intentionally not allowing through bad segs/newflow
-                Err(e) => return Err(ProcessError::TcpFlow(e)),
-            };
+            // XXX: intentionally not allowing through bad segs/newflow
+            Err(e) => return Err(ProcessError::TcpFlow(e)),
+        };
 
         if tcp_state != TcpState::Closed {
             // The inbound UFID is determined on the inbound side.
-            let (ufid_out, tfes) = match dir {
-                Direction::In => (
-                    mirror_flow.unwrap(),
-                    TcpFlowEntryState::new_inbound(*ufid, tfs, pkt_len),
+            let (ufid_out, tfes) = match *dir {
+                TcpDirection::In { ufid_in, ufid_out } => (
+                    ufid_out,
+                    TcpFlowEntryState::new_inbound(*ufid_in, tfs, pkt_len),
                 ),
-                Direction::Out => {
-                    (ufid, TcpFlowEntryState::new_outbound(tfs, pkt_len))
+                TcpDirection::Out { ufid_out } => {
+                    (ufid_out, TcpFlowEntryState::new_outbound(tfs, pkt_len))
                 }
             };
             match tcp_flows.add(*ufid_out, tfes) {
@@ -1528,22 +1530,17 @@ impl<N: NetworkImpl> Port<N> {
 
     fn update_tcp_entry(
         &self,
-        data: &mut PortData,
+        mut data: PortDataOrSubset,
         tcp: &crate::engine::tcp::TcpMeta,
-        dir: Direction,
-        ufid: &InnerFlowId,
-        ufid_mirror: Option<&InnerFlowId>,
+        dir: &TcpDirection,
         pkt_len: u64,
     ) -> result::Result<TcpState, ProcessError> {
-        let tcp_flows = &mut data.tcp_flows;
-        let (ufid_out, ufid_in) = match dir {
-            Direction::In => (ufid_mirror.unwrap(), Some(ufid)),
-            Direction::Out => (ufid, ufid_mirror),
+        let tcp_flows = data.tcp_flows();
+        let (ufid_out, ufid_in) = match *dir {
+            TcpDirection::In { ufid_in, ufid_out } => (ufid_out, Some(ufid_in)),
+            TcpDirection::Out { ufid_out } => (ufid_out, None),
         };
 
-        // currently visited for logic in:
-        // in + new, exising
-        // out + new
         let Some(entry) = tcp_flows.get_mut(ufid_out) else {
             return Err(ProcessError::MissingFlow(*ufid_out));
         };
@@ -1555,8 +1552,8 @@ impl<N: NetworkImpl> Port<N> {
 
         let next_state = tfes.tcp_state.process(
             self.name_cstr.as_c_str(),
-            dir,
-            &ufid_out,
+            dir.dir(),
+            ufid_out,
             tcp,
         );
 
@@ -1572,11 +1569,16 @@ impl<N: NetworkImpl> Port<N> {
             next_state,
             Ok(TcpState::Closed) | Err(TcpFlowStateError::NewFlow { .. })
         ) {
-            // The inbound side of the UFT is based on
-            // the network-side of the flow (pre-processing).
             let entry = tcp_flows.remove(&ufid_out).unwrap();
-            let ufid_in = entry.state().inbound_ufid.as_ref();
-            self.uft_tcp_closed(data, &ufid_out, ufid_in);
+
+            // Due to order of operations, out_tcp_existing must
+            // call uft_tcp_closed separately.
+            if let PortDataOrSubset::Port(data) = data {
+                // The inbound side of the UFT is based on
+                // the network-side of the flow (pre-processing).
+                let ufid_in = entry.state().inbound_ufid.as_ref();
+                self.uft_tcp_closed(data, &ufid_out, ufid_in);
+            }
         }
 
         match next_state {
@@ -1596,8 +1598,6 @@ impl<N: NetworkImpl> Port<N> {
         pmeta: &PacketMeta,
         pkt_len: u64,
     ) -> result::Result<TcpState, ProcessError> {
-        use Direction::In;
-
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we mirror the flow. This value must represent
         // the guest-side of the flow and thus come from the passed-in
@@ -1611,41 +1611,13 @@ impl<N: NetworkImpl> Port<N> {
         // we've implemented the notion of FlowSet and Packet is
         // generic on header group/flow type.
         let tcp = pmeta.inner_tcp().unwrap();
-        let tcp_flows = &mut data.tcp_flows;
 
-        // match tcp_flows.get_mut(&ufid_out) {
-        //     Some(entry) => {
-        //         entry.hit();
-        //         let tfes = entry.state_mut();
-        //         tfes.segs_in += 1;
-        //         tfes.bytes_in += pkt_len;
-
-        //         let next_state = tfes.tcp_state.process(
-        //             self.name_cstr.as_c_str(),
-        //             In,
-        //             &ufid_out,
-        //             tcp,
-        //         );
-
-        //         if matches!(
-        //             next_state,
-        //             Ok(TcpState::Closed)
-        //                 | Err(TcpFlowStateError::NewFlow { .. })
-        //         ) {
-        //             // The inbound side of the UFT is based on
-        //             // the network-side of the flow (pre-processing).
-        //             let entry = tcp_flows.remove(&ufid_out).unwrap();
-        //             let ufid_in = entry.state().inbound_ufid.as_ref();
-        //             self.uft_tcp_closed(data, &ufid_out, ufid_in);
-        //         }
-
-        //         next_state.map_err(ProcessError::TcpFlow)
-        //     }
-
-        //     None => Err(ProcessError::MissingFlow(ufid_out)),
-        // }
-
-        self.update_tcp_entry(data, tcp, In, &ufid_in, Some(&ufid_out), pkt_len)
+        self.update_tcp_entry(
+            PortDataOrSubset::Port(data),
+            tcp,
+            &TcpDirection::In { ufid_in: &ufid_in, ufid_out: &ufid_out },
+            pkt_len,
+        )
     }
 
     // Process the TCP packet for the purposes of connection tracking
@@ -1657,8 +1629,6 @@ impl<N: NetworkImpl> Port<N> {
         pmeta: &PacketMeta,
         pkt_len: u64,
     ) -> result::Result<TcpState, ProcessError> {
-        use Direction::In;
-
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we mirror the flow. This value must represent
         // the guest-side of the flow and thus come from the passed-in
@@ -1671,16 +1641,13 @@ impl<N: NetworkImpl> Port<N> {
         // we've implemented the notion of FlowSet and Packet is
         // generic on header group/flow type.
         let tcp = pmeta.inner_tcp().unwrap();
-        // let tcp_flows = &mut data.tcp_flows;
 
-        // TODO: cleanup and refactor all tcp flow lookups.
+        let dir = TcpDirection::In { ufid_in, ufid_out: &ufid_out };
 
         match self.update_tcp_entry(
-            data,
+            PortDataOrSubset::Port(data),
             tcp,
-            In,
-            ufid_in,
-            Some(&ufid_out),
+            &dir,
             pkt_len,
         ) {
             Err(
@@ -1689,69 +1656,11 @@ impl<N: NetworkImpl> Port<N> {
             ) => self.create_new_tcp_entry(
                 &mut data.tcp_flows,
                 tcp,
-                In,
-                ufid_in,
-                Some(&ufid_out),
+                &dir,
                 pkt_len,
             ),
             other => other,
         }
-
-        // let res = if let Some(entry) = tcp_flows.get_mut(&ufid_out) {
-        //     entry.hit();
-        //     let tfes = entry.state_mut();
-        //     tfes.segs_in += 1;
-        //     tfes.bytes_in += pkt_len;
-
-        //     let res = match tfes.tcp_state.process(
-        //         self.name_cstr.as_c_str(),
-        //         In,
-        //         &ufid_out,
-        //         tcp,
-        //     ) {
-        //         Ok(tcp_state) => {
-        //             if tcp_state == TcpState::Closed {
-        //                 let entry = tcp_flows.remove(&ufid_out).unwrap();
-        //                 // The inbound side of the UFT is based on
-        //                 // the network-side of the flow (pre-processing).
-        //                 let ufid_in = entry.state().inbound_ufid.as_ref();
-        //                 self.uft_tcp_closed(data, &ufid_out, ufid_in);
-        //                 return Ok(tcp_state);
-        //             }
-
-        //             Ok(Some(tcp_state))
-        //         }
-
-        //         Err(TcpFlowStateError::NewFlow { .. }) => {
-        //             // tcp_flows.remove(&ufid_out).unwrap();
-        //             Ok(None)
-        //         }
-
-        //         Err(e) => Err(ProcessError::TcpFlow(e)),
-        //     };
-
-        //     // We need to store the UFID of the inbound packet
-        //     // before it was processed so that we can retire the
-        //     // correct UFT/LFT entries upon connection
-        //     // termination.
-        //     tfes.inbound_ufid = Some(*ufid_in);
-        //     res?
-        // } else {
-        //     None
-        // };
-
-        // if let Some(res) = res {
-        //     Ok(res)
-        // } else {
-        //     self.create_new_tcp_entry(
-        //         tcp_flows,
-        //         tcp,
-        //         In,
-        //         ufid_in,
-        //         Some(&ufid_out),
-        //         pkt_len,
-        //     )
-        // }
     }
 
     fn process_in_miss(
@@ -2032,6 +1941,8 @@ impl<N: NetworkImpl> Port<N> {
             None => (),
         };
 
+        // TODO: need to consider exact semantics of NewFlow + this...
+
         self.process_in_miss(data, epoch, pkt, ameta)
     }
 
@@ -2039,63 +1950,21 @@ impl<N: NetworkImpl> Port<N> {
     // when an outbound UFT entry exists.
     fn process_out_tcp_existing(
         &self,
-        data: &mut PortData,
+        tcp_flows: &mut FlowTable<TcpFlowEntryState>,
         ufid_out: &InnerFlowId,
         pmeta: &PacketMeta,
         pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, ProcessError> {
         let tcp = pmeta.inner_tcp().unwrap();
-        // match tcp_flows.get_mut(ufid_out) {
-        //     Some(entry) => {
-        //         entry.hit();
-        //         let tfes = entry.state_mut();
-        //         tfes.segs_out += 1;
-        //         tfes.bytes_out += pkt_len;
-        //         let tcp = pmeta.inner_tcp().unwrap();
-        //         let res = tfes.tcp_state.process(
-        //             self.name_cstr.as_c_str(),
-        //             Direction::Out,
-        //             ufid_out,
-        //             tcp,
-        //         );
-
-        //         match res {
-        //             Ok(tcp_state) => {
-        //                 if tcp_state == TcpState::Closed {
-        //                     let entry = tcp_flows.remove(ufid_out).unwrap();
-        //                     return Ok(TcpMaybeClosed::Closed {
-        //                         ufid_inbound: entry.state().inbound_ufid,
-        //                     });
-        //                 }
-
-        //                 Ok(TcpMaybeClosed::NewState(tcp_state))
-        //             }
-
-        //             // TODO SDT probe for rejected packet.
-        //             Err(e) => {
-        //                 if matches!(e, TcpFlowStateError::NewFlow { .. }) {
-        //                     tcp_flows.remove(&ufid_out).unwrap();
-        //                 }
-        //                 Err(ProcessError::TcpFlow(e))
-        //             }
-        //         }
-        //     }
-
-        //     None => Err(ProcessError::MissingFlow(*ufid_out)),
-        // }
-
         self.update_tcp_entry(
-            data,
+            PortDataOrSubset::Tcp(tcp_flows),
             tcp,
-            Direction::Out,
-            ufid_out,
-            None,
+            &TcpDirection::Out { ufid_out },
             pkt_len,
         )
         .map(|tcp_state| match tcp_state {
             TcpState::Closed => TcpMaybeClosed::Closed {
-                ufid_inbound: data
-                    .tcp_flows
+                ufid_inbound: tcp_flows
                     .remove(ufid_out)
                     .and_then(|v| v.state().inbound_ufid),
             },
@@ -2113,14 +1982,12 @@ impl<N: NetworkImpl> Port<N> {
         pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, ProcessError> {
         let tcp = pmeta.inner_tcp().unwrap();
-        // let tcp_flows = &mut data.tcp_flows;
+        let dir = TcpDirection::Out { ufid_out };
 
         let tcp_state = match self.update_tcp_entry(
-            data,
+            PortDataOrSubset::Port(data),
             tcp,
-            Direction::Out,
-            ufid_out,
-            None,
+            &dir,
             pkt_len,
         ) {
             Err(
@@ -2129,50 +1996,11 @@ impl<N: NetworkImpl> Port<N> {
             ) => self.create_new_tcp_entry(
                 &mut data.tcp_flows,
                 tcp,
-                Direction::Out,
-                ufid_out,
-                None,
+                &dir,
                 pkt_len,
             ),
             other => other,
         }?;
-
-        // let tcp_state = if let Some(entry) = tcp_flows.get_mut(ufid_out) {
-        //     entry.hit();
-        //     let tfes = entry.state_mut();
-        //     tfes.segs_out += 1;
-        //     tfes.bytes_out += pkt_len;
-        //     let res = tfes.tcp_state.process(
-        //         self.name_cstr.as_c_str(),
-        //         Direction::Out,
-        //         ufid_out,
-        //         tcp,
-        //     );
-
-        //     match res {
-        //         Ok(tcp_state) => Some(tcp_state),
-        //         Err(TcpFlowStateError::NewFlow { .. }) => {
-        //             tcp_flows.remove(&ufid_out).unwrap();
-        //             None
-        //         }
-        //         Err(e) => return Err(ProcessError::TcpFlow(e)),
-        //     }
-        // } else {
-        //     None
-        // };
-
-        // let tcp_state = if let Some(tcp_state) = tcp_state {
-        //     tcp_state
-        // } else {
-        //     self.create_new_tcp_entry(
-        //         &mut data.tcp_flows,
-        //         tcp,
-        //         Direction::Out,
-        //         ufid_out,
-        //         None,
-        //         pkt_len,
-        //     )?
-        // };
 
         Ok(match tcp_state {
             TcpState::Closed => TcpMaybeClosed::Closed {
@@ -2313,7 +2141,7 @@ impl<N: NetworkImpl> Port<N> {
                 // checked _before_ processing take place.
                 if pkt.meta().is_inner_tcp() {
                     match self.process_out_tcp_existing(
-                        data,
+                        &mut data.tcp_flows,
                         pkt.flow(),
                         pkt.meta(),
                         pkt.len() as u64,
@@ -2370,20 +2198,31 @@ impl<N: NetworkImpl> Port<N> {
 
                 let flow_before = *pkt.flow();
 
-                for ht in &entry.state().xforms.hdr {
-                    pkt.hdr_transform(ht)?;
-                }
-
-                for bt in &entry.state().xforms.body {
-                    pkt.body_transform(Out, &**bt)?;
-                }
-
-                if invalidated {
-                    self.uft_tcp_closed(data, &flow_before, ufid_in.as_ref());
-                }
-
+                // TODO: shouldn't be applying transforms on new flow if we're
+                // going to reprocess!!
+                // Can we do this on  inbound?
                 if !reprocess {
+                    for ht in &entry.state().xforms.hdr {
+                        pkt.hdr_transform(ht)?;
+                    }
+
+                    for bt in &entry.state().xforms.body {
+                        pkt.body_transform(Out, &**bt)?;
+                    }
+
+                    // Due to borrowing constraints from order of operations, we have
+                    // to remove th UFT entr
+                    if invalidated {
+                        self.uft_tcp_closed(
+                            data,
+                            &flow_before,
+                            ufid_in.as_ref(),
+                        );
+                    }
+
                     return Ok(ProcessResult::Modified);
+                } else if invalidated {
+                    self.uft_tcp_closed(data, &flow_before, ufid_in.as_ref());
                 }
             }
 
@@ -2605,6 +2444,41 @@ impl<N: NetworkImpl> Port<N> {
             .find(|layer| layer.name() == layer_name)
             .map(|layer| layer.num_rules(dir))
             .unwrap_or_else(|| panic!("layer not found: {}", layer_name))
+    }
+}
+
+enum PortDataOrSubset<'a> {
+    Port(&'a mut PortData),
+    Tcp(&'a mut FlowTable<TcpFlowEntryState>),
+}
+
+impl<'a> PortDataOrSubset<'a> {
+    fn tcp_flows(&mut self) -> &mut FlowTable<TcpFlowEntryState> {
+        match self {
+            Self::Port(p) => &mut p.tcp_flows,
+            Self::Tcp(t) => *t,
+        }
+    }
+}
+
+enum TcpDirection<'a> {
+    In { ufid_in: &'a InnerFlowId, ufid_out: &'a InnerFlowId },
+    Out { ufid_out: &'a InnerFlowId },
+}
+
+impl<'a> TcpDirection<'a> {
+    fn dir(&self) -> Direction {
+        match self {
+            Self::In { .. } => Direction::In,
+            Self::Out { .. } => Direction::Out,
+        }
+    }
+
+    fn local_flow(&self) -> &InnerFlowId {
+        match self {
+            Self::In { ufid_in, .. } => ufid_in,
+            Self::Out { ufid_out } => ufid_out,
+        }
     }
 }
 
