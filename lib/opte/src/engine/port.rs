@@ -841,14 +841,21 @@ impl<N: NetworkImpl> Port<N> {
             super::err(format!("flows: {:?}", data));
             todo!("bad packet: {}", msg);
         } else {
-            self.tcp_err_probe(dir, pkt, msg)
+            self.tcp_err_probe(dir, Some(pkt), pkt.flow(), msg)
         }
     }
 
-    fn tcp_err_probe(&self, dir: Direction, pkt: &Packet<Parsed>, msg: String) {
+    fn tcp_err_probe(
+        &self,
+        dir: Direction,
+        pkt: Option<&Packet<Parsed>>,
+        flow: &InnerFlowId,
+        msg: String,
+    ) {
+        let mblk_addr = pkt.map(|p| p.mblk_addr()).unwrap_or_default();
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_arg = flow_id_sdt_arg::from(pkt.flow());
+                let flow_arg = flow_id_sdt_arg::from(flow);
                 let msg_arg = CString::new(msg).unwrap();
 
                 unsafe {
@@ -856,14 +863,14 @@ impl<N: NetworkImpl> Port<N> {
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
                         &flow_arg as *const flow_id_sdt_arg as uintptr_t,
-                        pkt.mblk_addr(),
+                        mblk_addr,
                         msg_arg.as_ptr() as uintptr_t,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
-                let flow_s = pkt.flow().to_string();
+                let flow_s = flow.to_string();
                 crate::opte_provider::tcp__err!(
-                    || (dir, &self.name, flow_s, pkt.mblk_addr(), &msg)
+                    || (dir, &self.name, flow_s, mblk_addr, &msg)
                 );
             } else {
                 let (..) = (dir, pkt, msg);
@@ -1604,8 +1611,13 @@ impl<N: NetworkImpl> Port<N> {
 
         match next_state {
             Ok(a) => Ok(a),
-            Err(TcpFlowStateError::UnexpectedSegment { state, .. }) => {
-                self.tcp_err(&data.tcp_flows, dir.dir(), format!("{e}"), pkt);
+            Err(e @ TcpFlowStateError::UnexpectedSegment { state, .. }) => {
+                self.tcp_err_probe(
+                    dir.dir(),
+                    None,
+                    dir.local_flow(),
+                    e.to_string(),
+                );
                 Ok(state)
             }
             Err(e) => Err(ProcessError::TcpFlow(e)),
@@ -1896,7 +1908,7 @@ impl<N: NetworkImpl> Port<N> {
                             self.tcp_err(
                                 &data.tcp_flows,
                                 In,
-                                format!("{e}"),
+                                e.to_string(),
                                 pkt,
                             );
                             // We cant redo processing here like we can in `process_out`:
@@ -1915,7 +1927,7 @@ impl<N: NetworkImpl> Port<N> {
                             self.tcp_err(
                                 &data.tcp_flows,
                                 Direction::In,
-                                e,
+                                e.to_string(),
                                 pkt,
                             );
                             return Ok(ProcessResult::Drop {
@@ -2191,7 +2203,7 @@ impl<N: NetworkImpl> Port<N> {
                             self.tcp_err(
                                 &data.tcp_flows,
                                 Out,
-                                format!("{e}"),
+                                e.to_string(),
                                 pkt,
                             );
                         }
@@ -2204,7 +2216,7 @@ impl<N: NetworkImpl> Port<N> {
                             self.tcp_err(
                                 &data.tcp_flows,
                                 Direction::In,
-                                e,
+                                e.to_string(),
                                 pkt,
                             );
                             return Ok(ProcessResult::Drop {
