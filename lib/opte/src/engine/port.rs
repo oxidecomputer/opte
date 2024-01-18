@@ -51,6 +51,7 @@ use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KMutexType;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::ExpiryPolicy;
+use crate::engine::tcp::TcpMeta;
 use crate::ExecCtx;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
@@ -1475,11 +1476,16 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
-    // XXX: create local enum to hold dir and mirror flow?
+    /// Creates a new TCP flow state entry for a given packet.
+    ///
+    /// # Errors
+    /// * `OpteError::MaxCapacity(_)` if the TCP flow stable is full.
+    /// * `ProcessError::TcpFlow(_)` if we do not have a valid transition from
+    ///   `Closed` based on the packet state.
     fn create_new_tcp_entry(
         &self,
         tcp_flows: &mut FlowTable<TcpFlowEntryState>,
-        tcp: &crate::engine::tcp::TcpMeta,
+        tcp: &TcpMeta,
         dir: &TcpDirection,
         pkt_len: u64,
     ) -> result::Result<TcpState, ProcessError> {
@@ -1496,7 +1502,9 @@ impl<N: NetworkImpl> Port<N> {
         ) {
             Ok(tcp_state) => tcp_state,
 
-            // XXX: intentionally not allowing through bad segs/newflow
+            // We're intentionally not allowing through unexpected segments or
+            // new flow conditions: SYN packets will always be accepted in the
+            // starting states, and we have valid shortcuts back into `Established`.
             Err(e) => return Err(ProcessError::TcpFlow(e)),
         };
 
@@ -1528,10 +1536,23 @@ impl<N: NetworkImpl> Port<N> {
         Ok(tcp_state)
     }
 
+    /// Attempts to lookup and update TCP flowstate in response to a given
+    /// packet.
+    ///
+    /// Unexpected TCP segments on existing connections will be allowed,
+    /// but will fire DTrace probes via `Self::tcp_err_probe`.
+    ///
+    /// # Errors
+    /// * `ProcessError::MissingFlow` if no flow currently exists.
+    /// * `ProcessError::TcpFlow(NewFlow { .. })` if this packet retired
+    ///   an existing TCP flow state entry.
+    ///
+    /// Callers which expect an existing UFT entry should resubmit a packet
+    /// for processing rather than locally rebuilding new TCP state.
     fn update_tcp_entry(
         &self,
         mut data: PortDataOrSubset,
-        tcp: &crate::engine::tcp::TcpMeta,
+        tcp: &TcpMeta,
         dir: &TcpDirection,
         pkt_len: u64,
     ) -> result::Result<TcpState, ProcessError> {
@@ -1584,6 +1605,7 @@ impl<N: NetworkImpl> Port<N> {
         match next_state {
             Ok(a) => Ok(a),
             Err(TcpFlowStateError::UnexpectedSegment { state, .. }) => {
+                self.tcp_err(&data.tcp_flows, dir.dir(), format!("{e}"), pkt);
                 Ok(state)
             }
             Err(e) => Err(ProcessError::TcpFlow(e)),
@@ -1871,27 +1893,34 @@ impl<N: NetworkImpl> Port<N> {
                         Err(ProcessError::TcpFlow(
                             e @ TcpFlowStateError::NewFlow { .. },
                         )) => {
-                            // Don't return here: we invalidated the old flow and
-                            // need to redo processing as though a miss occurred.
-                            // This lets us increment counters for all layers
-                            // as opposed to just resetting UFT/TCP stats.
                             self.tcp_err(
                                 &data.tcp_flows,
                                 In,
                                 format!("{e}"),
                                 pkt,
                             );
+                            // We cant redo processing here like we can in `process_out`:
+                            // we already modified the packet to check TCP state.
+                            // However, we *have* deleted and replaced the TCP FSM and
+                            // removed the UFT. The next packet on this flow (SYN-ACK) will
+                            // create the UFT, reference the existing TCP flow, and increment
+                            // all other layers' stats.
+                            return Ok(ProcessResult::Modified);
                         }
                         Err(ProcessError::TcpFlow(
                             e @ TcpFlowStateError::UnexpectedSegment { .. },
                         )) => {
+                            // Technically unreachable, as we filter these out in `update_tcp_entry`.
+                            // Panicking here would probably be overly fragile, however.
                             self.tcp_err(
                                 &data.tcp_flows,
-                                In,
-                                format!("{e}"),
+                                Direction::In,
+                                e,
                                 pkt,
                             );
-                            return Ok(ProcessResult::Modified);
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpErr,
+                            });
                         }
                         Err(ProcessError::MissingFlow(flow_id)) => {
                             let e = format!("Missing TCP flow ID: {flow_id}");
@@ -2170,12 +2199,17 @@ impl<N: NetworkImpl> Port<N> {
                         Err(ProcessError::TcpFlow(
                             e @ TcpFlowStateError::UnexpectedSegment { .. },
                         )) => {
+                            // Technically unreachable, as we filter these out in `update_tcp_entry`.
+                            // Panicking here would probably be overly fragile, however.
                             self.tcp_err(
                                 &data.tcp_flows,
-                                Out,
-                                format!("{e}"),
+                                Direction::In,
+                                e,
                                 pkt,
                             );
+                            return Ok(ProcessResult::Drop {
+                                reason: DropReason::TcpErr,
+                            });
                         }
 
                         Err(ProcessError::MissingFlow(flow_id)) => {
@@ -2198,9 +2232,9 @@ impl<N: NetworkImpl> Port<N> {
 
                 let flow_before = *pkt.flow();
 
-                // TODO: shouldn't be applying transforms on new flow if we're
-                // going to reprocess!!
-                // Can we do this on  inbound?
+                // If we suspect this is a new flow, we need to not perform
+                // existing transforms if we're going to behave as though we
+                // have a UFT miss.
                 if !reprocess {
                     for ht in &entry.state().xforms.hdr {
                         pkt.hdr_transform(ht)?;
@@ -2211,7 +2245,8 @@ impl<N: NetworkImpl> Port<N> {
                     }
 
                     // Due to borrowing constraints from order of operations, we have
-                    // to remove th UFT entr
+                    // to remove the UFT entry here rather than in `update_tcp_entry`.
+                    // The TCP entry itself is already removed.
                     if invalidated {
                         self.uft_tcp_closed(
                             data,
@@ -2447,6 +2482,8 @@ impl<N: NetworkImpl> Port<N> {
     }
 }
 
+/// Helper enum used to delay UFT entry removal in case of
+/// `tcp_out_existing`.
 enum PortDataOrSubset<'a> {
     Port(&'a mut PortData),
     Tcp(&'a mut FlowTable<TcpFlowEntryState>),
@@ -2461,6 +2498,8 @@ impl<'a> PortDataOrSubset<'a> {
     }
 }
 
+/// Helper enum for encoding what UFIDs are available when
+/// updating TCP flow state.
 enum TcpDirection<'a> {
     In { ufid_in: &'a InnerFlowId, ufid_out: &'a InnerFlowId },
     Out { ufid_out: &'a InnerFlowId },
