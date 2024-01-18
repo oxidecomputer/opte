@@ -845,7 +845,6 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
-    #[allow(unused_variables)]
     fn tcp_err_probe(
         &self,
         dir: Direction,
@@ -874,7 +873,7 @@ impl<N: NetworkImpl> Port<N> {
                     || (dir, &self.name, flow_s, mblk_addr, &msg)
                 );
             } else {
-                let (..) = (dir, pkt, msg);
+                let (..) = (dir, pkt, msg, flow, mblk_addr);
             }
         }
     }
