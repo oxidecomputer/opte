@@ -845,6 +845,7 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
+    #[allow(unused_variables)]
     fn tcp_err_probe(
         &self,
         dir: Direction,
