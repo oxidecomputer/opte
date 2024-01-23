@@ -212,7 +212,6 @@ pub enum KRwLockType {
     Default = krw_type_t::RW_DEFAULT as isize,
 }
 
-#[cfg(all(not(feature = "std"), not(test)))]
 impl From<KRwLockType> for krw_type_t {
     fn from(typ: KRwLockType) -> Self {
         match typ {

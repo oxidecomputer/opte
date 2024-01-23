@@ -16,6 +16,10 @@ pub use opte::api::*;
 use serde::Deserialize;
 use serde::Serialize;
 
+/// This is the MAC address that OPTE uses to act as the virtual gateway.
+pub const GW_MAC_ADDR: MacAddr =
+    MacAddr::from_const([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]);
+
 /// Description of Boundary Services, the endpoint used to route traffic
 /// to external networks.
 //
@@ -176,10 +180,6 @@ pub struct VpcCfg {
     /// The host (sled) IPv6 address. All guests on the same sled are
     /// sourced to a single IPv6 address.
     pub phys_ip: Ipv6Addr,
-
-    /// Information for reaching Boundary Services, for traffic destined
-    /// for external networks.
-    pub boundary_services: BoundaryServices,
 }
 
 impl VpcCfg {
@@ -295,6 +295,33 @@ pub struct PhysNet {
     pub ip: Ipv6Addr,
     pub vni: Vni,
 }
+
+/// A Geneve tunnel endpoint.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct TunnelEndpoint {
+    pub ip: Ipv6Addr,
+    pub vni: Vni,
+}
+
+impl PartialOrd for TunnelEndpoint {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TunnelEndpoint {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.ip.cmp(&other.ip)
+    }
+}
+
+impl PartialEq for TunnelEndpoint {
+    fn eq(&self, other: &Self) -> bool {
+        self.ip.eq(&other.ip)
+    }
+}
+
+impl Eq for TunnelEndpoint {}
 
 /// The physical address for a guest, minus the VNI.
 ///
@@ -455,6 +482,20 @@ impl opte::api::cmd::CmdOk for ListPortsResp {}
 pub struct SetVirt2PhysReq {
     pub vip: IpAddr,
     pub phys: PhysNet,
+}
+
+/// Set a mapping from a VPC IP to boundary tunnel endpoint destination.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SetVirt2BoundaryReq {
+    pub vip: IpCidr,
+    pub tep: Vec<TunnelEndpoint>,
+}
+
+/// Clear a mapping from VPC IP to a boundary tunnel endpoint destination.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClearVirt2BoundaryReq {
+    pub vip: IpCidr,
+    pub tep: Vec<TunnelEndpoint>,
 }
 
 /// Add an entry to the router. Addresses may be either IPv4 or IPv6, though the
@@ -884,11 +925,6 @@ pub mod tests {
 
     pub fn test_vpc_cfg() -> VpcCfg {
         VpcCfg {
-            boundary_services: BoundaryServices {
-                ip: "fd00::99".parse().unwrap(),
-                mac: MacAddr::from([0xa8, 0x40, 0x25, 0x00, 0x00, 0x99]),
-                vni: Vni::new(99u32).unwrap(),
-            },
             gateway_mac: MacAddr::from([0xa8, 0x40, 0x25, 0x00, 0x00, 0x01]),
             guest_mac: MacAddr::from([0xa8, 0x40, 0x25, 0xff, 0xff, 0x01]),
             phys_ip: "fd00::1".parse().unwrap(),

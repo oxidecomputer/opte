@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
 
 #[test]
 fn firewall_replace_rules() {
@@ -345,9 +346,9 @@ fn firewall_external_inbound() {
     // This will appear on the same VNI as guest.
     // ================================================================
     let bsvc_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.vni,
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
     };
     let guest_phys = TestIpPhys {
         ip: g1_cfg.phys_ip,
@@ -356,7 +357,7 @@ fn firewall_external_inbound() {
     };
 
     let mut pkt1 = http_syn2(
-        g1_cfg.boundary_services.mac,
+        BS_MAC_ADDR,
         std::net::IpAddr::from([1, 1, 1, 1]),
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,

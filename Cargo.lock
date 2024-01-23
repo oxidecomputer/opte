@@ -867,11 +867,13 @@ dependencies = [
 name = "oxide-vpc"
 version = "0.1.0"
 dependencies = [
+ "cfg-if",
  "ctor",
  "illumos-sys-hdrs",
  "opte",
  "oxide-vpc",
  "pcap-parser",
+ "poptrie",
  "serde",
  "smoltcp",
  "usdt",
@@ -969,6 +971,11 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "poptrie"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/poptrie?branch=multipath#ca52bef3f87ff1a67d81b3c6e601dcb5fdbcc165"
 
 [[package]]
 name = "postcard"
@@ -1810,6 +1817,7 @@ name = "xde"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.4.2",
+ "crc32fast",
  "illumos-sys-hdrs",
  "opte",
  "oxide-vpc",

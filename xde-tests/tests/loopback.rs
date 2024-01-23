@@ -8,7 +8,6 @@ use anyhow::Result;
 use opteadm::OpteAdm;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
-use oxide_vpc::api::BoundaryServices;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::Direction;
 use oxide_vpc::api::ExternalIpCfg;
@@ -25,7 +24,6 @@ use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::Vni;
 use oxide_vpc::api::VpcCfg;
-use std::env;
 use std::process::Command;
 use ztest::*;
 
@@ -46,14 +44,7 @@ impl<'a> OpteZone<'a> {
     /// of interfaces. In illumos parlance, the interfaces are data link
     /// devices.
     fn new(name: &str, zfs: &'a Zfs, ifx: &[&str]) -> Result<Self> {
-        // If we're running in CI, use the omicron1 zone, because that's whats
-        // there. If this is running locally, use a sparse zone which is much
-        // easier to set up on a regular Helios dev box.
-        let brand = match env::var("BUILDOMAT_JOB_ID") {
-            Ok(_) => "omicron1",
-            _ => "sparse",
-        };
-        let zone = Zone::new(name, brand, zfs, ifx, &[])?;
+        let zone = Zone::new(name, "sparse", zfs, ifx, &[])?;
         Ok(Self { _zfs: zfs, zone })
     }
 
@@ -107,11 +98,6 @@ impl OptePort {
             gateway_mac: "a8:40:25:00:00:01".parse().unwrap(),
             vni: Vni::new(1701u32).unwrap(),
             phys_ip: phys_ip.parse().unwrap(),
-            boundary_services: BoundaryServices {
-                ip: "fd00:99::1".parse().unwrap(),
-                vni: Vni::new(99u32).unwrap(),
-                mac: "00:00:00:00:00:00".parse().unwrap(),
-            },
         };
         let adm = OpteAdm::open(OpteAdm::XDE_CTL)?;
         adm.create_xde(name, cfg.clone(), DhcpCfg::default(), false)?;

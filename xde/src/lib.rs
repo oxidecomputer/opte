@@ -6,7 +6,6 @@
 
 // xde - A mac provider for OPTE-based network implementations.
 #![feature(extern_types)]
-#![feature(lang_items)]
 #![feature(panic_info_message)]
 #![no_std]
 #![allow(non_camel_case_types)]

@@ -526,8 +526,6 @@ mod test {
             vni: Vni::new(1234u32).unwrap(),
             len: (GeneveHdr::BASE_SIZE + GeneveOptHdrRaw::SIZE) as u16,
             oxide_external_pkt: true,
-
-            ..Default::default()
         };
 
         let len = geneve.hdr_len();

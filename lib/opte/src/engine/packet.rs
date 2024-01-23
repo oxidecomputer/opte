@@ -49,6 +49,7 @@ use core::fmt::Display;
 use core::ptr;
 use core::result;
 use core::slice;
+use crc32fast::Hasher;
 use dyn_clone::DynClone;
 use serde::Deserialize;
 use serde::Serialize;
@@ -324,6 +325,36 @@ impl PacketMeta {
             Some(UlpMeta::Udp(udp)) => Some(udp),
             _ => None,
         }
+    }
+
+    pub fn l4_hash(&self) -> Option<u32> {
+        let ulp = match self.inner.ulp {
+            Some(ulp) => ulp,
+            None => return None,
+        };
+        let mut h = Hasher::new();
+        match &self.inner.ip {
+            Some(IpMeta::Ip4(m)) => {
+                h.update(&m.src.bytes());
+                h.update(&m.dst.bytes());
+                h.update(&[u8::from(m.proto)]);
+            }
+            Some(IpMeta::Ip6(m)) => {
+                h.update(&m.src.bytes());
+                h.update(&m.dst.bytes());
+                h.update(&[u8::from(m.proto)]);
+            }
+            None => return None,
+        };
+        let (src, dst) = match ulp {
+            UlpMeta::Tcp(t) => (t.src, t.dst),
+            UlpMeta::Udp(u) => (u.src, u.dst),
+            UlpMeta::Icmpv4(_) => (0, 0), //TODO use icmp id
+            UlpMeta::Icmpv6(_) => (0, 0), //TODO use icmp id
+        };
+        h.update(&src.to_be_bytes());
+        h.update(&dst.to_be_bytes());
+        Some(h.finalize())
     }
 }
 

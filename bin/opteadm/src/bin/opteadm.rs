@@ -24,7 +24,7 @@ use opteadm::OpteAdm;
 use opteadm::COMMIT_COUNT;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
-use oxide_vpc::api::BoundaryServices;
+use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
@@ -42,8 +42,12 @@ use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
 use oxide_vpc::api::SetExternalIpsReq;
+use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::TunnelEndpoint;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
+use oxide_vpc::engine::print::print_v2b;
 use oxide_vpc::engine::print::print_v2p;
 use std::io;
 use std::str::FromStr;
@@ -51,6 +55,7 @@ use std::str::FromStr;
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, Parser)]
 #[command(version=opte_pkg_version())]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// List all ports.
     ListPorts,
@@ -95,6 +100,9 @@ enum Command {
 
     /// Dump virtual to physical address mapping
     DumpV2P,
+
+    /// Dump virtual to boundary address mapping
+    DumpV2B,
 
     /// Add a firewall rule
     AddFwRule {
@@ -162,19 +170,6 @@ enum Command {
         #[arg(long)]
         gateway_ip: IpAddr,
 
-        /// The IP address for Boundary Services, where packets destined to
-        /// off-rack networks are sent.
-        #[arg(long)]
-        bsvc_addr: Ipv6Addr,
-
-        /// The VNI used for Boundary Services.
-        #[arg(long)]
-        bsvc_vni: Vni,
-
-        /// The MAC address for Boundary Services.
-        #[arg(long, default_value = "00:00:00:00:00:00")]
-        bsvc_mac: MacAddr,
-
         /// The VNI for the VPC to which the guest belongs.
         #[arg(long)]
         vpc_vni: Vni,
@@ -202,6 +197,12 @@ enum Command {
 
     /// Set a virtual-to-physical mapping
     SetV2P { vpc_ip: IpAddr, vpc_mac: MacAddr, underlay_ip: Ipv6Addr, vni: Vni },
+
+    /// Set a virtual-to-boundary mapping
+    SetV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
+
+    /// Clear a virtual-to-boundary mapping
+    ClearV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
 
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
@@ -511,6 +512,11 @@ fn main() -> anyhow::Result<()> {
             print_v2p(&hdl.dump_v2p()?);
         }
 
+        Command::DumpV2B => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+            print_v2b(&hdl.dump_v2b()?);
+        }
+
         Command::AddFwRule { port, direction, filters, action, priority } => {
             let rule = FirewallRule {
                 direction,
@@ -541,9 +547,6 @@ fn main() -> anyhow::Result<()> {
             vpc_subnet,
             gateway_mac,
             gateway_ip,
-            bsvc_addr,
-            bsvc_vni,
-            bsvc_mac,
             vpc_vni,
             src_underlay_addr,
             dhcp,
@@ -595,11 +598,6 @@ fn main() -> anyhow::Result<()> {
                 gateway_mac,
                 vni: vpc_vni,
                 phys_ip: src_underlay_addr,
-                boundary_services: BoundaryServices {
-                    ip: bsvc_addr,
-                    vni: bsvc_vni,
-                    mac: bsvc_mac,
-                },
             };
 
             hdl.create_xde(&name, cfg, dhcp.into(), passthrough)?;
@@ -622,6 +620,32 @@ fn main() -> anyhow::Result<()> {
             let phys = PhysNet { ether: vpc_mac, ip: underlay_ip, vni };
             let req = SetVirt2PhysReq { vip: vpc_ip, phys };
             hdl.set_v2p(&req)?;
+        }
+
+        Command::SetV2B { prefix, tunnel_endpoint } => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+            let tep = tunnel_endpoint
+                .into_iter()
+                .map(|ip| TunnelEndpoint {
+                    ip,
+                    vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+                })
+                .collect();
+            let req = SetVirt2BoundaryReq { vip: prefix, tep };
+            hdl.set_v2b(&req)?;
+        }
+
+        Command::ClearV2B { prefix, tunnel_endpoint } => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+            let tep = tunnel_endpoint
+                .into_iter()
+                .map(|ip| TunnelEndpoint {
+                    ip,
+                    vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+                })
+                .collect();
+            let req = ClearVirt2BoundaryReq { vip: prefix, tep };
+            hdl.clear_v2b(&req)?;
         }
 
         Command::AddRouterEntry { port, dest, target } => {

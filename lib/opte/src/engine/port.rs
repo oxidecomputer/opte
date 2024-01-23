@@ -1601,7 +1601,7 @@ impl<N: NetworkImpl> Port<N> {
             next_state,
             Ok(TcpState::Closed) | Err(TcpFlowStateError::NewFlow { .. })
         ) {
-            let entry = tcp_flows.remove(&ufid_out).unwrap();
+            let entry = tcp_flows.remove(ufid_out).unwrap();
 
             // Due to order of operations, out_tcp_existing must
             // call uft_tcp_closed separately.
@@ -1609,7 +1609,7 @@ impl<N: NetworkImpl> Port<N> {
                 // The inbound side of the UFT is based on
                 // the network-side of the flow (pre-processing).
                 let ufid_in = entry.state().inbound_ufid.as_ref();
-                self.uft_tcp_closed(data, &ufid_out, ufid_in);
+                self.uft_tcp_closed(data, ufid_out, ufid_in);
             }
         }
 
@@ -2524,7 +2524,7 @@ impl<'a> PortDataOrSubset<'a> {
     fn tcp_flows(&mut self) -> &mut FlowTable<TcpFlowEntryState> {
         match self {
             Self::Port(p) => &mut p.tcp_flows,
-            Self::Tcp(t) => *t,
+            Self::Tcp(t) => t,
         }
     }
 }

@@ -1,7 +1,6 @@
 //! Reconfigurable, internal configuration built from `oxide_vpc::api`.
 
 use crate::api;
-use crate::api::BoundaryServices;
 use crate::api::ExternalIpCfg;
 #[cfg(any(feature = "test-help", test))]
 use crate::api::PhysNet;
@@ -85,10 +84,6 @@ pub struct VpcCfg {
     /// The host (sled) IPv6 address. All guests on the same sled are
     /// sourced to a single IPv6 address.
     pub phys_ip: Ipv6Addr,
-
-    /// Information for reaching Boundary Services, for traffic destined
-    /// for external networks.
-    pub boundary_services: BoundaryServices,
 }
 
 impl VpcCfg {
@@ -189,7 +184,6 @@ impl From<api::VpcCfg> for VpcCfg {
             gateway_mac: value.gateway_mac,
             vni: value.vni,
             phys_ip: value.phys_ip,
-            boundary_services: value.boundary_services,
         }
     }
 }

@@ -389,7 +389,7 @@ impl<'a> Ipv6Hdr<'a> {
         // Panic: The protocol is the last value of next header, and since
         // we've matched on everything we support in the `try_from` impl, this
         // unwrap can't panic.
-        let _protocol = Protocol::try_from(next_header).unwrap();
+        let _protocol = Protocol::from(next_header);
 
         // Seek back to the start of the extensions, then take a slice of
         // all the options.
@@ -414,9 +414,9 @@ impl<'a> Ipv6Hdr<'a> {
     pub fn proto(&self) -> Protocol {
         // Unwrap: We verified the proto is good upon parsing.
         if let Some((bytes, proto_offset)) = &self.ext {
-            Protocol::try_from(bytes[*proto_offset]).unwrap()
+            Protocol::from(bytes[*proto_offset])
         } else {
-            Protocol::try_from(self.base.next_header()).unwrap()
+            Protocol::from(self.base.next_header())
         }
     }
 

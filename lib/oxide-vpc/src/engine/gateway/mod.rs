@@ -42,7 +42,6 @@
 
 use crate::api::DhcpCfg;
 use crate::api::MacAddr;
-use crate::api::Vni;
 use crate::cfg::Ipv4Cfg;
 use crate::cfg::Ipv6Cfg;
 use crate::cfg::VpcCfg;
@@ -171,8 +170,7 @@ fn setup_ipv4(
     dhcp::setup(layer, cfg, ip_cfg, dhcp_cfg)?;
     icmp::setup(layer, cfg, ip_cfg)?;
 
-    let vpc_meta =
-        Arc::new(VpcMeta::new(vpc_mappings, cfg.boundary_services.vni));
+    let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
 
     let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));
     nospoof_out.add_predicate(Predicate::InnerSrcIp4(vec![
@@ -209,8 +207,7 @@ fn setup_ipv6(
 ) -> Result<(), OpteError> {
     icmpv6::setup(layer, cfg, ip_cfg)?;
     dhcpv6::setup(layer, cfg, dhcp_cfg)?;
-    let vpc_meta =
-        Arc::new(VpcMeta::new(vpc_mappings, cfg.boundary_services.vni));
+    let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
     let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));
     nospoof_out.add_predicate(Predicate::InnerSrcIp6(vec![
         Ipv6AddrMatch::Exact(ip_cfg.private_ip),
@@ -243,12 +240,11 @@ fn setup_ipv6(
 /// VPC.
 struct VpcMeta {
     vpc_mappings: Arc<VpcMappings>,
-    bsvc_vni: Vni,
 }
 
 impl VpcMeta {
-    fn new(vpc_mappings: Arc<VpcMappings>, bsvc_vni: Vni) -> Self {
-        Self { vpc_mappings, bsvc_vni }
+    fn new(vpc_mappings: Arc<VpcMappings>) -> Self {
+        Self { vpc_mappings }
     }
 }
 
@@ -265,13 +261,7 @@ impl MetaAction for VpcMeta {
                 Ok(AllowOrDeny::Allow(()))
             }
 
-            None => {
-                action_meta.insert(
-                    ACTION_META_VNI.to_string(),
-                    self.bsvc_vni.to_string(),
-                );
-                Ok(AllowOrDeny::Allow(()))
-            }
+            None => Ok(AllowOrDeny::Allow(())),
         }
     }
 

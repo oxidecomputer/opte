@@ -12,7 +12,11 @@
 use crate::api::GuestPhysAddr;
 use crate::api::Ipv4Addr;
 use crate::api::Ipv6Addr;
+use crate::engine::overlay::DumpVirt2BoundaryResp;
 use crate::engine::overlay::DumpVirt2PhysResp;
+use alloc::string::ToString;
+use opte::api::IpCidr;
+use opte::engine::geneve::Vni;
 use opte::engine::print::*;
 
 /// Print the header for the [`print_v2p()`] output.
@@ -44,6 +48,40 @@ pub fn print_v2p(resp: &DumpVirt2PhysResp) {
             print_v2p_ip6(pair);
         }
     }
+}
+
+/// Print the header for the [`print_v2p()`] output.
+fn print_v2b_header() {
+    println!("{:<24} {:<17} VNI", "TUNNELED PREFIX", "BOUNDARY IP");
+}
+
+fn print_v2b_entry(prefix: IpCidr, boundary: Ipv6Addr, vni: Vni) {
+    println!("{:<24} {:<17} {}", prefix.to_string(), boundary.to_string(), vni);
+}
+
+/// Print a [`DumpVirt2BoundaryResp`].
+pub fn print_v2b(resp: &DumpVirt2BoundaryResp) {
+    println!("Virtual to Boundary Mappings");
+    print_hrb();
+    println!();
+    println!("IPv4 mappings");
+    print_hr();
+    print_v2b_header();
+    for x in &resp.mappings.ip4 {
+        for tep in &x.1 {
+            print_v2b_entry(x.0.into(), tep.ip, tep.vni);
+        }
+    }
+    println!();
+    println!("IPv6 mappings");
+    print_hr();
+    print_v2b_header();
+    for x in &resp.mappings.ip6 {
+        for tep in &x.1 {
+            print_v2b_entry(x.0.into(), tep.ip, tep.vni);
+        }
+    }
+    println!();
 }
 
 fn print_v2p_ip4((src, phys): &(Ipv4Addr, GuestPhysAddr)) {
