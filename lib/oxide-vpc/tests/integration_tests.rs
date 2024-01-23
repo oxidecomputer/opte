@@ -1105,6 +1105,7 @@ fn check_external_ip_inbound_behaviour(
             cfg.guest_mac,
             ext_ip,
             flow_port,
+            80,
         );
         let mut pkt1 = encap_external(pkt1, bsvc_phys, g1_phys);
 
@@ -1283,6 +1284,7 @@ fn external_ip_balanced_over_floating_ips() {
                 g1_cfg.gateway_mac,
                 partner_ip,
                 flow_port,
+                80,
             );
             let mut pkt = encap_external(pkt, bsvc_phys, g1_phys);
 
@@ -3642,7 +3644,7 @@ fn early_tcp_invalidation() {
     g1.port.start();
     set!(g1, "port_state=running");
 
-    // Allow incoming TCP connection on g2 from anyone.
+    // Allow incoming TCP connection on g1 from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
     firewall::add_fw_rule(
         &g1.port,
@@ -3690,6 +3692,54 @@ fn early_tcp_invalidation() {
         ]
     );
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
+    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
+
+    // ================================================================
+    // Drive to established, then validate the same applies to inbound
+    // flows.
+    // ================================================================
+    let bs_phys = TestIpPhys {
+        ip: g1_cfg.boundary_services.ip,
+        mac: g1_cfg.boundary_services.mac,
+        vni: g1_cfg.boundary_services.vni,
+    };
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+    let mut pkt2 = http_syn_ack2(
+        g1_cfg.boundary_services.mac,
+        dst_ip,
+        g1_cfg.guest_mac,
+        g1_cfg.snat().external_ip,
+        snat_port,
+    );
+    pkt2 = encap_external(pkt2, bs_phys, g1_phys);
+    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+
+    let mut pkt1 = http_syn3(
+        g1_cfg.boundary_services.mac,
+        dst_ip,
+        g1_cfg.guest_mac,
+        g1_cfg.snat().external_ip,
+        80,
+        snat_port,
+    );
+    pkt1 = encap_external(pkt1, bs_phys, g1_phys);
+    let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    update!(
+        g1,
+        [
+            "incr:stats.port.in_modified, stats.port.in_uft_hit",
+            "set:uft.in=1, uft.out=0",
+        ]
+    );
+    assert_eq!(TcpState::Listen, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // Suppose we have an earlier flow which was driven to CLOSED,
@@ -3742,8 +3792,6 @@ fn early_tcp_invalidation() {
             "stats.port.out_uft_hit",
         ]
     );
-    println!("{:?}", g1.port.dump_tcp_flows());
-    eprintln!("{:?}", flow);
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
 }
 

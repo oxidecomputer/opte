@@ -1021,8 +1021,10 @@ impl<N: NetworkImpl> Port<N> {
         let _ = data.uft_out.expire_flows(now, |_| FLOW_ID_DEFAULT);
 
         // XXX: TCP state expiry currently runs on a longer time scale than
-        //      UFT entries. If this changes, we might want to expire any UFTs
-        //      output here.
+        //      UFT entries, so we don't need to expire any extra UFT entries
+        //      using the output Vec<InnerFlowId>. If this changes, i.e., we
+        //      set TIME_WAIT_EXPIRE_TTL or another state-specific timer lower
+        //      than 60s, we'll need to specifically expire the matching UFTs.
         let _ = data.tcp_flows.expire_flows(now, |_| FLOW_ID_DEFAULT);
         Ok(())
     }
@@ -1486,7 +1488,7 @@ impl<N: NetworkImpl> Port<N> {
     /// Creates a new TCP flow state entry for a given packet.
     ///
     /// # Errors
-    /// * `OpteError::MaxCapacity(_)` if the TCP flow stable is full.
+    /// * `OpteError::MaxCapacity(_)` if the TCP flows table is full.
     /// * `ProcessError::TcpFlow(_)` if we do not have a valid transition from
     ///   `Closed` based on the packet state.
     fn create_new_tcp_entry(
@@ -1554,8 +1556,10 @@ impl<N: NetworkImpl> Port<N> {
     /// * `ProcessError::TcpFlow(NewFlow { .. })` if this packet retired
     ///   an existing TCP flow state entry.
     ///
-    /// Callers which expect an existing UFT entry should resubmit a packet
-    /// for processing rather than locally rebuilding new TCP state.
+    /// Callers which expect an existing TCP flow entry due to an existing UFT
+    /// (e.g. `process_out_tcp_existing`) should respond to `NewFlow` by creating
+    /// a new TCP flow table entry. Where possible, this should be done by treating
+    /// a packet as a UFT miss (e.g., `process_out_miss`) and reprocessing the flow.
     fn update_tcp_entry(
         &self,
         mut data: PortDataOrSubset,
@@ -1646,12 +1650,29 @@ impl<N: NetworkImpl> Port<N> {
         // generic on header group/flow type.
         let tcp = pmeta.inner_tcp().unwrap();
 
-        self.update_tcp_entry(
+        let dir = TcpDirection::In { ufid_in: &ufid_in, ufid_out: &ufid_out };
+
+        match self.update_tcp_entry(
             PortDataOrSubset::Port(data),
             tcp,
-            &TcpDirection::In { ufid_in: &ufid_in, ufid_out: &ufid_out },
+            &dir,
             pkt_len,
-        )
+        ) {
+            // We need to create a new TCP entry here because we can't call
+            // `process_in_miss` on the already-modified packet.
+            e @ Err(ProcessError::TcpFlow(TcpFlowStateError::NewFlow {
+                ..
+            })) => {
+                self.create_new_tcp_entry(
+                    &mut data.tcp_flows,
+                    tcp,
+                    &dir,
+                    pkt_len,
+                )?;
+                e
+            }
+            other => other,
+        }
     }
 
     // Process the TCP packet for the purposes of connection tracking
@@ -1981,8 +2002,6 @@ impl<N: NetworkImpl> Port<N> {
             // There is no entry; proceed to rule processing;
             None => (),
         };
-
-        // TODO: need to consider exact semantics of NewFlow + this...
 
         self.process_in_miss(data, epoch, pkt, ameta)
     }
