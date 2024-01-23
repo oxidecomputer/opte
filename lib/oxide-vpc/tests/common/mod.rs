@@ -546,7 +546,7 @@ pub fn http_syn2(
     eth_dst: MacAddr,
     ip_dst: impl Into<IpAddr>,
 ) -> Packet<Parsed> {
-    http_syn3(eth_src, ip_src, eth_dst, ip_dst, 44490)
+    http_syn3(eth_src, ip_src, eth_dst, ip_dst, 44490, 80)
 }
 
 pub fn http_syn3(
@@ -555,6 +555,7 @@ pub fn http_syn3(
     eth_dst: MacAddr,
     ip_dst: impl Into<IpAddr>,
     sport: u16,
+    dport: u16,
 ) -> Packet<Parsed> {
     let body = vec![];
     let mut options = [0x00; TcpHdr::MAX_OPTION_SIZE];
@@ -576,7 +577,7 @@ pub fn http_syn3(
 
     let tcp = TcpMeta {
         src: sport,
-        dst: 80,
+        dst: dport,
         flags: TcpFlags::SYN,
         seq: 2382112979,
         ack: 0,

@@ -26,7 +26,22 @@ cfg_if! {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TcpFlowStateError {
     /// Encountered an unexpected TCP segment.
+    ///
+    /// We have either mishandled state based on reordered/duplicate packets,
+    /// or hosts are exhbiting behaviour not accounted for. Such packets should
+    /// be logged and allowed to progress.
     UnexpectedSegment {
+        direction: Direction,
+        flow_id: InnerFlowId,
+        state: TcpState,
+        flags: u8,
+    },
+    /// Either side has chosen to send a SYN-carrying packet and establish
+    /// a new flow.
+    ///
+    /// Handlers should clear any flow-specific stats and establish a new
+    /// state machine.
+    NewFlow {
         direction: Direction,
         flow_id: InnerFlowId,
         state: TcpState,
@@ -46,6 +61,15 @@ impl fmt::Display for TcpFlowStateError {
                 write!(
                     f,
                     "Unexpected TCP segment, \
+                    direction: {}, flow: {}, state: {}, \
+                    flags: 0x{:x}",
+                    direction, flow_id, state, flags,
+                )
+            }
+            TcpFlowStateError::NewFlow { direction, flow_id, state, flags } => {
+                write!(
+                    f,
+                    "Flow was reopened early by endpoint, \
                     direction: {}, flow: {}, state: {}, \
                     flags: 0x{:x}",
                     direction, flow_id, state, flags,
@@ -106,12 +130,6 @@ impl Default for TcpFlowState {
         Self::new()
     }
 }
-
-// impl TcpStateM<Next = TcpState::CloseWait> for TcpFlow<tcp_state = TcpState::Established> {
-//     type Next = TcpState::CloseWait;
-//     fn next_state(self, dir: Direction, flags: u8, guest_seq: u32, guest_ack: u32, remote_seq: u32, remote_ack: u32) -> Self<Self::Next> {
-//     }
-// }
 
 impl TcpFlowState {
     /// Transition the TCP state machine based on the inbound packet
@@ -201,6 +219,13 @@ impl TcpFlowState {
                     // In this case remote end has initiated the close
                     // and the guest is entering passive close.
                     return Some(CloseWait);
+                }
+
+                if tcp.has_flag(TcpFlags::SYN) {
+                    // We may have gotten stuck in `Established` due to
+                    // a delayed FIN+ACK/ACK at connection close, or
+                    // unexpected OS reset/panic.
+                    return None;
                 }
 
                 // Normal traffic on an ESTABLISHED connection.
@@ -381,6 +406,10 @@ impl TcpFlowState {
                     return Some(FinWait1);
                 }
 
+                if tcp.has_flag(TcpFlags::SYN) {
+                    return None;
+                }
+
                 Some(Established)
             }
 
@@ -500,6 +529,32 @@ impl TcpFlowState {
 
         let new_state = match res {
             Some(new_state) => new_state,
+
+            // The guest/other endpoint has determined it's safe to reuse
+            // a port combination for a new flow before OPTE did.
+            // This can come from several sources:
+            // - Linux / Illumos default the TIME-WAIT state to 60s
+            //   vs. our/Win/Mac's (conservative) 120s. This could
+            //   be tuned lower still by users.
+            // - Application code in the guest sets SO_REUSEADDR.
+            // - `tcp_tw_reuse`, or other timestamp-based checks
+            //   recommended in RFC 6191.
+            // We could theoretically parse and replicate timestamp
+            // based logic, but we can't predict how a guest
+            // will behave with regard to a static timer.
+            // We don't care about direction because any guest-initiated
+            // close (active or simul) will leave a flow in TIME-WAIT, which
+            // is the most common case. If the guest is not yet ready, we expect
+            // it will send its own RST in response.
+            None if tcp.has_flag(TcpFlags::SYN) => {
+                return Err(TcpFlowStateError::NewFlow {
+                    direction: dir,
+                    flow_id: *flow_id,
+                    state: curr_state,
+                    flags: tcp.flags,
+                });
+            }
+
             None => {
                 self.tcp_flow_drop_probe(port, flow_id, dir, tcp.flags);
                 return Err(TcpFlowStateError::UnexpectedSegment {

@@ -12,6 +12,7 @@
 use super::packet::InnerFlowId;
 use crate::ddi::time::Moment;
 use crate::ddi::time::MILLIS;
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -63,6 +64,19 @@ impl Ttl {
     }
 }
 
+/// A policy for expiring flow table entries over time.
+pub trait ExpiryPolicy<S: Dump>: fmt::Debug {
+    /// Returns whether the given flow should be removed, given current flow
+    /// state, the time a packet was last received, and the current time.
+    fn is_expired(&self, entry: &FlowEntry<S>, now: Moment) -> bool;
+}
+
+impl<S: Dump> ExpiryPolicy<S> for Ttl {
+    fn is_expired(&self, entry: &FlowEntry<S>, now: Moment) -> bool {
+        entry.is_expired(now, *self)
+    }
+}
+
 pub type FlowTableDump<T> = Vec<(InnerFlowId, T)>;
 
 #[derive(Debug)]
@@ -70,7 +84,7 @@ pub struct FlowTable<S: Dump> {
     port_c: CString,
     name_c: CString,
     limit: NonZeroU32,
-    ttl: Ttl,
+    policy: Box<dyn ExpiryPolicy<S>>,
     map: BTreeMap<InnerFlowId, FlowEntry<S>>,
 }
 
@@ -128,11 +142,10 @@ where
     {
         let name_c = &self.name_c;
         let port_c = &self.port_c;
-        let ttl = self.ttl;
         let mut expired = vec![];
 
         self.map.retain(|flowid, entry| {
-            if entry.is_expired(now, ttl) {
+            if self.policy.is_expired(entry, now) {
                 flow_expired_probe(
                     port_c,
                     name_c,
@@ -185,15 +198,15 @@ where
         port: &str,
         name: &str,
         limit: NonZeroU32,
-        ttl: Option<Ttl>,
+        policy: Option<Box<dyn ExpiryPolicy<S>>>,
     ) -> FlowTable<S> {
-        let ttl = ttl.unwrap_or(FLOW_DEF_TTL);
+        let policy = policy.unwrap_or_else(|| Box::new(FLOW_DEF_TTL));
 
         Self {
             port_c: CString::new(port).unwrap(),
             name_c: CString::new(name).unwrap(),
             limit,
-            ttl,
+            policy,
             map: BTreeMap::new(),
         }
     }
@@ -205,10 +218,6 @@ where
 
     pub fn remove(&mut self, flow: &InnerFlowId) -> Option<FlowEntry<S>> {
         self.map.remove(flow)
-    }
-
-    pub fn ttl(&self) -> Ttl {
-        self.ttl
     }
 }
 
