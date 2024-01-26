@@ -50,6 +50,9 @@ enum Xtask {
         #[arg(long)]
         skip_build: bool,
     },
+
+    /// Format the repository with `rustfmt`.
+    Fmt,
 }
 
 #[derive(Debug, Args)]
@@ -92,7 +95,41 @@ fn main() -> anyhow::Result<()> {
 
             cmd_package(build.release_only)
         }
+        Xtask::Fmt => {
+            let meta = cargo_meta();
+
+            // This is explicitly `cargo` rather than CARGO as we might
+            // be swapping toolchains to do this from the current cargo.
+            Command::new("cargo")
+                .arg(format!("+{}", get_current_nightly_toolchain()?))
+                .args(["fmt", "--all"])
+                .env_remove("RUSTUP_TOOLCHAIN")
+                .current_dir(&meta.workspace_root)
+                .output_nocapture()?;
+
+            Ok(())
+        }
     }
+}
+
+fn get_current_nightly_toolchain() -> Result<String> {
+    let meta = cargo_meta();
+    let toolchain_full: toml::Value =
+        toml::from_str(&std::fs::read_to_string(
+            meta.workspace_root.join("xde/rust-toolchain.toml"),
+        )?)?;
+
+    toolchain_full
+        .get("toolchain")
+        .and_then(|v| v.get("channel"))
+        .ok_or_else(|| {
+            anyhow::anyhow!("xde did not contain info on a pinned nightly")
+        })?
+        .as_str()
+        .ok_or_else(|| {
+            anyhow::anyhow!("toolchain channel was not a valid string")
+        })
+        .map(|s| s.to_string())
 }
 
 fn elevate(operation: &str, extra_args: &[&str]) -> Result<bool> {
@@ -197,7 +234,7 @@ fn build_cargo_bin(
     let mut command = if current_cargo {
         let cargo =
             std::env::var("CARGO").unwrap_or_else(|_| String::from("cargo"));
-        Command::new(&cargo)
+        Command::new(cargo)
     } else {
         Command::new("cargo")
     };
