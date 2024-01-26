@@ -10,6 +10,7 @@ use cargo_metadata::Metadata;
 use clap::Args;
 use clap::Parser;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
@@ -29,9 +30,16 @@ enum Xtask {
 
     /// Build and install the XDE kernel driver.
     Install {
-        /// Install from an illumos package file rather than ...
+        /// Install from an illumos package file rather than by copying
+        /// the drivers into place.
         #[arg(long)]
         from_package: bool,
+
+        /// Override any package freeze held in place by omicron.
+        ///
+        /// No-op if `from_package` is not specified.
+        #[arg(long)]
+        force_package_unfreeze: bool,
 
         /// Skips building opteadm and XDE.
         #[arg(long)]
@@ -68,10 +76,21 @@ fn main() -> anyhow::Result<()> {
     // TODO: gate some of these to illumos only.
     match cmd {
         Xtask::Build(b) => cmd_build(b.release_only),
-        Xtask::Install { from_package, skip_build, build } => {
+        Xtask::Install {
+            from_package,
+            force_package_unfreeze,
+            skip_build,
+            build,
+        } => {
             if !skip_build {
                 cmd_build(!from_package || build.release_only)?;
             }
+
+            let pkg_info = if from_package {
+                Some(cmd_package(!skip_build, build.release_only)?)
+            } else {
+                None
+            };
 
             if !elevate(
                 "install xde kernel module",
@@ -80,8 +99,26 @@ fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            if from_package {
-                cmd_package(build.release_only)?;
+            if let Some((a, version)) = pkg_info {
+                if force_package_unfreeze {
+                    Command::new("pkg")
+                        .args(["unfreeze", "opte"])
+                        .output_nocapture()?;
+                }
+
+                Command::new("pkg")
+                    .args([
+                        "install",
+                        "-g",
+                        a.parent().unwrap().to_str().unwrap(),
+                        &format!("opte@{version}"),
+                    ])
+                    .output_nocapture()
+                    .context(
+                        "failed to install opte, \
+                        add `--force-package-unfreeze` if package \
+                        is frozen",
+                    )?;
             } else {
                 raw_install()?;
             }
@@ -93,7 +130,14 @@ fn main() -> anyhow::Result<()> {
                 cmd_build(build.release_only)?;
             }
 
-            cmd_package(build.release_only)
+            let (p_path, _) = cmd_package(true, build.release_only)?;
+
+            println!(
+                "Successfully built package {}.",
+                p_path.to_str().unwrap()
+            );
+
+            Ok(())
         }
         Xtask::Fmt => {
             let meta = cargo_meta();
@@ -179,16 +223,47 @@ fn cmd_build(release_only: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_package(_release_only: bool) -> Result<()> {
+fn cmd_package(
+    do_package: bool,
+    _release_only: bool,
+) -> Result<(PathBuf, String)> {
     let meta = cargo_meta();
+    let pkg_dir = meta.workspace_root.join("pkg");
 
-    // XXX: should this be RIIR'd?
-    Command::new("bash")
-        .arg("build.sh")
-        .current_dir(meta.workspace_root.join("pkg"))
-        .output_nocapture()?;
+    if do_package {
+        // XXX: should this be RIIR'd?
+        Command::new("bash")
+            .arg("build.sh")
+            .current_dir(meta.workspace_root.join(&pkg_dir))
+            .output_nocapture()?;
+    }
 
-    Ok(())
+    // Find a matching p5p.
+    // XXX: I appreciate we could simplify this by depending on
+    // opteadm as a lib, but then we have to work to make
+    // some subset of it compile on non-illumos platforms.
+    let dir_entries = std::fs::read_dir(pkg_dir.join("packages/repo"))?;
+    for entry in dir_entries {
+        let entry = entry?;
+        let path = entry.path();
+
+        let Some(stem) = path.file_stem() else {
+            continue;
+        };
+        let Some(ext) = path.extension() else {
+            continue;
+        };
+        let prefix = "opte-";
+        match (stem.to_str(), ext.to_str()) {
+            (Some(stem), Some("p5p")) if stem.starts_with(prefix) => {
+                let package_vers = stem[prefix.len()..].to_string();
+                return Ok((path, package_vers));
+            }
+            _ => {}
+        }
+    }
+
+    anyhow::bail!("failed to find output package name")
 }
 
 fn raw_install() -> Result<()> {
