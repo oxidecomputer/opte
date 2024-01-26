@@ -20,6 +20,7 @@ fn cargo_meta() -> &'static Metadata {
 }
 
 const KMOD_TARGET: &str = "x86_64-unknown-unknown";
+const LINK_TARGET: &str = "i686-unknown-illumos";
 
 /// Development functions for OPTE.
 #[derive(Debug, Parser)]
@@ -131,7 +132,7 @@ fn elevate(operation: &str, extra_args: &[&str]) -> Result<bool> {
 }
 
 fn cmd_build(release_only: bool) -> Result<()> {
-    let modes = if release_only { &[true][..] } else { &[true, false] };
+    let modes = if release_only { &[false][..] } else { &[true, false] };
 
     for release_mode in modes {
         BuildTarget::OpteAdm.build(*release_mode)?;
@@ -163,14 +164,14 @@ fn raw_install() -> Result<()> {
     let mut kmod_dir = meta.target_directory.clone();
     kmod_dir.extend(&[KMOD_TARGET, "release", "xde"]);
 
-    let mut opteadm_dir = meta.target_directory.clone();
-    opteadm_dir.extend(&["release", "opteadm"]);
+    let opteadm_dir = meta.target_directory.join("release/opteadm");
+
+    let mut link_dir = meta.target_directory.clone();
+    link_dir.extend(&[LINK_TARGET, "release", "libxde_link.so"]);
 
     std::fs::copy(kmod_dir, "/kernel/drv/amd64/xde")?;
     std::fs::copy(opteadm_dir, "/opt/oxide/opte/bin/opteadm")?;
-
-    // Probably shouldn't make a symlink here.
-    // std::os::unix::fs::symlink(original, link)
+    std::fs::copy(link_dir, "/usr/lib/devfsadm/linkmod/SUNW_xde_link.so")?;
 
     Ok(())
 }
@@ -231,11 +232,14 @@ fn build_cargo_bin(
 
 impl BuildTarget {
     fn build(&self, debug: bool) -> Result<()> {
+        let profile = if debug { "debug" } else { "release" };
         match self {
             Self::OpteAdm => {
+                println!("Building opteadm ({profile}).");
                 build_cargo_bin(&["--bin", "opteadm"], !debug, None, true)
             }
             Self::Xde => {
+                println!("Building xde ({profile}).");
                 let meta = cargo_meta();
                 build_cargo_bin(&[], !debug, Some("xde"), false)?;
 
@@ -248,14 +252,15 @@ impl BuildTarget {
                     .target_directory
                     .join(format!("{KMOD_TARGET}/{folder}"));
 
+                println!("Linking xde kmod...");
                 Command::new("ld")
                     .args([
                         "-ztype=kmod",
-                        r#"-N"drv/mac""#,
-                        r#"-N"drv/ip""#,
-                        r#"-N"misc/mac""#,
-                        r#"-N"misc/dls""#,
-                        r#"-N"misc/dld""#,
+                        "-Ndrv/mac",
+                        "-Ndrv/ip",
+                        "-Nmisc/mac",
+                        "-Nmisc/dls",
+                        "-Nmisc/dld",
                         "-z",
                         "allextract",
                         &format!("{target_dir}/xde.a"),
@@ -267,7 +272,7 @@ impl BuildTarget {
 
                 build_cargo_bin(&[], !debug, Some("xde/xde-link"), false)?;
 
-                // verify no panicking in the devfsadm plugin?
+                // verify no panicking in the devfsadm plugin
                 let nm_output = Command::new("nm")
                     .arg(meta.target_directory.join(format!(
                         "i686-unknown-illumos/{folder}/libxde_link.so"
@@ -309,7 +314,3 @@ impl CommandNoCapture for Command {
         }
     }
 }
-
-// fn cmd_build() -> Result<> {
-//     BuildTarget::OpteAdm.build()
-// }
