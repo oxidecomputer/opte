@@ -14,9 +14,20 @@ mkdir -p proto/kernel/drv/amd64
 mkdir -p proto/opt/oxide/opte/bin
 mkdir -p proto/usr/lib/devfsadm/linkmod
 cp ../target/release/opteadm proto/opt/oxide/opte/bin/
-cp ../target/x86_64-unknown-unknown/release/xde proto/kernel/drv/amd64/xde
+cp ../target/x86_64-unknown-unknown/release/xde proto/kernel/drv/amd64
 cp ../xde/xde.conf proto/kernel/drv/
 cp ../target/i686-unknown-illumos/release/libxde_link.so proto/usr/lib/devfsadm/linkmod/SUNW_xde_link.so
+
+if [ -z ${RELEASE_ONLY+x} ]; then
+    cp ../target/debug/opteadm proto/opt/oxide/opte/bin/opteadm.dbg
+    cp ../target/x86_64-unknown-unknown/debug/xde.dbg proto/kernel/drv/amd64/xde.dbg
+else
+    # A bit of a hack for local release-only pkg builds.
+    # There are probably pkgmogrify transforms to do this correctly,
+    # based on RELEASE_ONLY!
+    cp proto/opt/oxide/opte/bin/opteadm proto/opt/oxide/opte/bin/opteadm.dbg
+    cp proto/kernel/drv/amd64/xde proto/kernel/drv/amd64/xde.dbg
+fi
 
 API_VSN=$(./print-api-version.sh)
 

@@ -44,10 +44,8 @@ function header {
 cargo --version
 rustc --version
 
-pushd xde
-header "build xde (release)"
-ptime -m ./build.sh
-popd
+header "build xde and opteadm (release+debug)"
+ptime -m cargo xtask build
 
 #
 # Inspect the kernel module for bad relocations in case the old
@@ -58,12 +56,8 @@ if elfdump $REL_SRC/xde | grep GOTPCREL; then
 	exit 1
 fi
 
-pushd bin/opteadm
-cargo build --release
-popd
-
-pushd pkg
-./build.sh
+header "package opte"
+cargo xtask package --skip-build
 
 banner copy
 pfexec mkdir -p /out

@@ -26,9 +26,10 @@ const LINK_TARGET: &str = "i686-unknown-illumos";
 /// Development functions for OPTE.
 #[derive(Debug, Parser)]
 enum Xtask {
+    /// Build the XDE kernel module.
     Build(BuildOptions),
 
-    /// Build and install the XDE kernel driver.
+    /// Build and install the XDE kernel module.
     Install {
         /// Install from an illumos package file rather than by copying
         /// the drivers into place.
@@ -49,7 +50,7 @@ enum Xtask {
         build: BuildOptions,
     },
 
-    /// Build the XDE kernel driver and produce an illumos package.
+    /// Build the XDE kernel module and produce an illumos package.
     Package {
         #[command(flatten)]
         build: BuildOptions,
@@ -231,17 +232,19 @@ fn cmd_package(
     let pkg_dir = meta.workspace_root.join("pkg");
 
     if do_package {
-        // XXX: should this be RIIR'd?
+        // XXX: I'm happy today for this to remain as a bash script,
+        //      given that it would be very verbose to xtask-ify.
         Command::new("bash")
             .arg("build.sh")
+            .env("RELEASE_ONLY", "1")
             .current_dir(meta.workspace_root.join(&pkg_dir))
             .output_nocapture()?;
     }
 
     // Find a matching p5p.
     // XXX: I appreciate we could simplify this by depending on
-    // opteadm as a lib, but then we have to work to make
-    // some subset of it compile on non-illumos platforms.
+    //      opteadm as a lib, but then we have to work to make
+    //      some subset of it compile on non-illumos platforms.
     let dir_entries = std::fs::read_dir(pkg_dir.join("packages/repo"))?;
     for entry in dir_entries {
         let entry = entry?;

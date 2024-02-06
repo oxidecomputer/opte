@@ -6,11 +6,15 @@ set name=info.classification \
     value=org.opensolaris.category.2008:Drivers/Networking
 set name=variant.opensolaris.zone value=global
 set name=variant.arch value=i386
+set name=variant.debug.illumos value=false value=true
 dir path=opt owner=root group=sys mode=0755
 dir path=opt/oxide owner=root group=bin mode=0755
 dir path=opt/oxide/opte owner=root group=bin mode=0755
 dir path=opt/oxide/opte/bin owner=root group=bin mode=0755
-file path=opt/oxide/opte/bin/opteadm owner=root group=bin mode=0755
+file path=opt/oxide/opte/bin/opteadm owner=root group=bin mode=0755 \
+    variant.debug.illumos=false
+file opt/oxide/opte/bin/opteadm.dbg path=opt/oxide/opte/bin/opteadm owner=root group=bin mode=0755 \
+    variant.debug.illumos=true
 dir path=kernel owner=root group=sys mode=0755
 dir path=kernel/drv owner=root group=sys mode=0755
 file path=kernel/drv/xde.conf owner=root group=sys mode=0644 preserve=renamenew
@@ -33,5 +37,12 @@ file path=usr/lib/devfsadm/linkmod/SUNW_xde_link.so owner=root group=sys mode=07
 #:
 file path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
     pkg.depend.bypass-generate=.*dld.* \
-    pkg.depend.bypass-generate=.*mac.*
+    pkg.depend.bypass-generate=.*mac.* \
+    variant.debug.illumos=false
+
+file kernel/drv/amd64/xde.dbg path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
+    pkg.depend.bypass-generate=.*dld.* \
+    pkg.depend.bypass-generate=.*mac.* \
+    variant.debug.illumos=true
+
 driver name=xde
