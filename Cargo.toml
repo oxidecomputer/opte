@@ -54,6 +54,7 @@ slog-envlogger = "2.2"
 slog-term = "2.9"
 smoltcp = { version = "0.11", default-features = false }
 syn = "2"
+tabwriter = { version = "1", features = ["ansi_formatting"] }
 thiserror = "1.0"
 usdt = "0.5"
 version_check = "0.9"
