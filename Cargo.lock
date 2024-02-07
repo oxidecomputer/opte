@@ -860,7 +860,6 @@ dependencies = [
  "anyhow",
  "cfg-if",
  "clap",
- "itertools",
  "libc",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
  "opte",
