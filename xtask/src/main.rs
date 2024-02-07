@@ -39,7 +39,7 @@ enum Xtask {
         /// Override any package freeze held in place by omicron.
         ///
         /// No-op if `from_package` is not specified.
-        #[arg(long)]
+        #[arg(long, requires = "from_package")]
         force_package_unfreeze: bool,
 
         /// Skips building opteadm and XDE.
@@ -226,7 +226,7 @@ fn cmd_build(release_only: bool) -> Result<()> {
 
 fn cmd_package(
     do_package: bool,
-    _release_only: bool,
+    release_only: bool,
 ) -> Result<(PathBuf, String)> {
     let meta = cargo_meta();
     let pkg_dir = meta.workspace_root.join("pkg");
@@ -234,9 +234,13 @@ fn cmd_package(
     if do_package {
         // XXX: I'm happy today for this to remain as a bash script,
         //      given that it would be very verbose to xtask-ify.
-        Command::new("bash")
-            .arg("build.sh")
-            .env("RELEASE_ONLY", "1")
+        let mut cmd = Command::new("bash");
+
+        if release_only {
+            cmd.env("RELEASE_ONLY", "1");
+        }
+            
+        cmd.arg("build.sh")
             .current_dir(meta.workspace_root.join(&pkg_dir))
             .output_nocapture()?;
     }

@@ -21,12 +21,9 @@ cp ../target/i686-unknown-illumos/release/libxde_link.so proto/usr/lib/devfsadm/
 if [ -z ${RELEASE_ONLY+x} ]; then
     cp ../target/debug/opteadm proto/opt/oxide/opte/bin/opteadm.dbg
     cp ../target/x86_64-unknown-unknown/debug/xde.dbg proto/kernel/drv/amd64/xde.dbg
+    INC_DEBUG=""
 else
-    # A bit of a hack for local release-only pkg builds.
-    # There are probably pkgmogrify transforms to do this correctly,
-    # based on RELEASE_ONLY!
-    cp proto/opt/oxide/opte/bin/opteadm proto/opt/oxide/opte/bin/opteadm.dbg
-    cp proto/kernel/drv/amd64/xde proto/kernel/drv/amd64/xde.dbg
+    INC_DEBUG="#"
 fi
 
 API_VSN=$(./print-api-version.sh)
@@ -35,7 +32,7 @@ API_VSN=$(./print-api-version.sh)
 sed -e "s/%PUBLISHER%/$PUBLISHER/g" \
     -e "s/%COMMIT_COUNT%/$COMMIT_COUNT/g" \
     -e "s/%API_VSN%/$API_VSN/g" \
-    opte.template.p5m | pkgmogrify -v -O opte.base.p5m
+    opte.template.p5m | pkgmogrify -v -D inc_debug="$INC_DEBUG" -O opte.base.p5m
 
 pkgdepend generate -d proto opte.base.p5m > opte.generate.p5m
 

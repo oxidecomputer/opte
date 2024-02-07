@@ -13,7 +13,7 @@ dir path=opt/oxide/opte owner=root group=bin mode=0755
 dir path=opt/oxide/opte/bin owner=root group=bin mode=0755
 file path=opt/oxide/opte/bin/opteadm owner=root group=bin mode=0755 \
     variant.debug.illumos=false
-file opt/oxide/opte/bin/opteadm.dbg path=opt/oxide/opte/bin/opteadm owner=root group=bin mode=0755 \
+$(inc_debug)file opt/oxide/opte/bin/opteadm.dbg path=opt/oxide/opte/bin/opteadm owner=root group=bin mode=0755 \
     variant.debug.illumos=true
 dir path=kernel owner=root group=sys mode=0755
 dir path=kernel/drv owner=root group=sys mode=0755
@@ -40,7 +40,7 @@ file path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
     pkg.depend.bypass-generate=.*mac.* \
     variant.debug.illumos=false
 
-file kernel/drv/amd64/xde.dbg path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
+$(inc_debug)file kernel/drv/amd64/xde.dbg path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
     pkg.depend.bypass-generate=.*dld.* \
     pkg.depend.bypass-generate=.*mac.* \
     variant.debug.illumos=true
