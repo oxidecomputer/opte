@@ -1129,7 +1129,6 @@ fn check_external_ip_inbound_behaviour(
             ];
             incr!(port, rules[(if firewall_flow_exists { 2 } else { 0 })..]);
         }
-        print_port(&port.port, &port.vpc_map);
 
         let private_ip: IpAddr = match ext_ip {
             IpAddr::Ip4(_) => {
@@ -1174,14 +1173,12 @@ fn check_external_ip_inbound_behaviour(
             flow_port,
         );
         let res = port.port.process(Out, &mut pkt2, ActionMeta::new());
-        print_port(&port.port, &port.vpc_map);
 
         if old_ip_gone {
             // Failure mode here is different (assuming we have at least one
             // external IP). The packet must fail to send via the old IP,
             // invalidate the entry, and then choose the new external IP.
             assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-            print_port(&port.port, &port.vpc_map);
             update!(
                 port,
                 [
@@ -1890,7 +1887,6 @@ fn arp_gateway() {
     bytes.extend_from_slice(eth_hdr.as_bytes());
     bytes.extend_from_slice(ArpEthIpv4Raw::from(&arp).as_bytes());
     let mut pkt = Packet::copy(&bytes).parse(Out, VpcParser::new()).unwrap();
-    print_port(&g1.port, &g1.vpc_map);
 
     let res = g1.port.process(Out, &mut pkt, ActionMeta::new());
     match res {

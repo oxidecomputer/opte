@@ -20,7 +20,7 @@ pub fn print_port(port: &Port<VpcNetwork>, vpc_map: &VpcMappings) {
     // ================================================================
     // Print VPC mappings.
     // ================================================================
-    print_v2p(&vpc_map.dump());
+    print_v2p(&vpc_map.dump()).unwrap();
     println!();
 
     println!(
@@ -34,11 +34,10 @@ pub fn print_port(port: &Port<VpcNetwork>, vpc_map: &VpcMappings) {
     // ================================================================
     // Print overall layer information.
     // ================================================================
-    println!();
-    println!("Layers");
+    println!("\nLayers");
     print_hr();
     let list_layers = port.list_layers();
-    print_list_layers(&list_layers);
+    print_list_layers(&list_layers).unwrap();
 
     // ================================================================
     // Print UFT.
@@ -46,17 +45,16 @@ pub fn print_port(port: &Port<VpcNetwork>, vpc_map: &VpcMappings) {
     println!();
     // Only some states will report a UFT.
     if let Ok(uft) = port.dump_uft() {
-        print_uft(&uft);
+        print_uft(&uft).unwrap();
     }
 
     // ================================================================
     // Print TCP flows.
     // ================================================================
     if port.state() == PortState::Running {
-        println!();
-        println!("TCP Flows (keyed on outbound)");
+        println!("\nTCP Flows (keyed on outbound)");
         print_hr();
-        print_tcp_flows(&port.dump_tcp_flows().unwrap());
+        print_tcp_flows(&port.dump_tcp_flows().unwrap()).unwrap();
     }
 
     // ================================================================
@@ -64,17 +62,14 @@ pub fn print_port(port: &Port<VpcNetwork>, vpc_map: &VpcMappings) {
     // ================================================================
     println!();
     for layer in &list_layers.layers {
-        print_layer(&port.dump_layer(&layer.name).unwrap());
-        println!();
-        println!("{:#?}", port.layer_stats_snap(&layer.name).unwrap());
-        println!();
+        print_layer(&port.dump_layer(&layer.name).unwrap()).unwrap();
+        println!("\n{:#?}\n", port.layer_stats_snap(&layer.name).unwrap());
     }
 
     // ================================================================
     // Print the PortStats.
     // ================================================================
-    println!();
-    println!("Port Stats");
+    println!("\nPort Stats");
     print_hr();
     println!("{:#?}", port.stats_snap());
 

@@ -16,7 +16,7 @@ default = ["api", "std"]
 api = ["opte/api"]
 engine = ["api", "opte/engine"]
 kernel = ["opte/kernel"]
-std = ["opte/std"]
+std = ["dep:tabwriter","opte/std"]
 #
 # XXX: This is a hack in order for integration tests to make use of
 # test-only methods.
@@ -35,6 +35,7 @@ opte.workspace = true
 
 serde.workspace = true
 smoltcp.workspace = true
+tabwriter = { workspace = true, optional = true }
 zerocopy.workspace = true
 poptrie.workspace = true
 cfg-if.workspace = true

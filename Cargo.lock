@@ -860,6 +860,7 @@ dependencies = [
  "anyhow",
  "cfg-if",
  "clap",
+ "itertools",
  "libc",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
  "opte",
@@ -867,6 +868,7 @@ dependencies = [
  "oxide-vpc",
  "postcard",
  "serde",
+ "tabwriter",
  "thiserror",
 ]
 
@@ -883,6 +885,7 @@ dependencies = [
  "poptrie",
  "serde",
  "smoltcp",
+ "tabwriter",
  "usdt",
  "zerocopy",
 ]

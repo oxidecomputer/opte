@@ -17,10 +17,12 @@ oxide-vpc = { workspace = true, features = ["api", "engine", "std"] }
 anyhow.workspace = true
 cfg-if.workspace = true
 clap.workspace = true
+itertools.workspace = true
 libc.workspace = true
 libnet.workspace = true
 postcard.workspace = true
 serde.workspace = true
+tabwriter.workspace = true
 thiserror.workspace = true
 
 [build-dependencies]
