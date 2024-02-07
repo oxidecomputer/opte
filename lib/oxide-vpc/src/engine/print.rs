@@ -28,7 +28,15 @@ fn print_v2p_header(t: &mut impl Write) -> std::io::Result<()> {
 
 /// Print a [`DumpVirt2PhysResp`].
 pub fn print_v2p(resp: &DumpVirt2PhysResp) -> std::io::Result<()> {
-    let mut t = TabWriter::new(std::io::stdout());
+    print_v2p_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`DumpVirt2PhysResp`] into a given writer.
+pub fn print_v2p_into(
+    writer: &mut impl Write,
+    resp: &DumpVirt2PhysResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
     writeln!(t, "Virtual to Physical Mappings")?;
     write_hrb(&mut t)?;
     for vpc in &resp.mappings {
@@ -69,7 +77,15 @@ fn print_v2b_entry(
 
 /// Print a [`DumpVirt2BoundaryResp`].
 pub fn print_v2b(resp: &DumpVirt2BoundaryResp) -> std::io::Result<()> {
-    let mut t = TabWriter::new(std::io::stdout());
+    print_v2b_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`DumpVirt2BoundaryResp`] into a given writer.
+pub fn print_v2b_into(
+    writer: &mut impl Write,
+    resp: &DumpVirt2BoundaryResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
     writeln!(t, "Virtual to Boundary Mappings")?;
     write_hrb(&mut t)?;
     writeln!(t, "\nIPv4 mappings")?;

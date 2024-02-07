@@ -1081,7 +1081,7 @@ fn _encap(
 macro_rules! chk {
     ($pav:expr, $check:expr) => {
         if !$check {
-            print_port(&$pav.port, &$pav.vpc_map);
+            print_port(&$pav.port, &$pav.vpc_map).unwrap();
             panic!("assertion failed: {}", stringify!($check));
         }
     };

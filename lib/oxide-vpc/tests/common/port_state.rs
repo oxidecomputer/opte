@@ -13,68 +13,84 @@ use oxide_vpc::engine::overlay::VpcMappings;
 use oxide_vpc::engine::print::*;
 use oxide_vpc::engine::VpcNetwork;
 use std::collections::BTreeMap;
+use std::io::Write;
 
 /// Print various port state in a human-friendly manner when a test
 /// assertion fails.
-pub fn print_port(port: &Port<VpcNetwork>, vpc_map: &VpcMappings) {
+pub fn print_port(
+    port: &Port<VpcNetwork>,
+    vpc_map: &VpcMappings,
+) -> std::io::Result<()> {
+    // To not interfere with output from `cargo test`, we need to build
+    // up the output locally rather than letting it go to stdout --
+    // cargo test redirects println, but *not* std::io::stdout.
+    let mut out = vec![];
+
     // ================================================================
     // Print VPC mappings.
     // ================================================================
-    print_v2p(&vpc_map.dump()).unwrap();
-    println!();
+    print_v2p_into(&mut out, &vpc_map.dump())?;
 
-    println!(
-        "Port: {} [state: {}, epoch: {}]",
+    writeln!(
+        &mut out,
+        "\nPort: {} [state: {}, epoch: {}]",
         port.name(),
         port.state(),
         port.epoch()
-    );
-    print_hrb();
+    )?;
+    write_hrb(&mut out)?;
 
     // ================================================================
     // Print overall layer information.
     // ================================================================
-    println!("\nLayers");
-    print_hr();
+    writeln!(&mut out, "\nLayers")?;
+    write_hr(&mut out)?;
     let list_layers = port.list_layers();
-    print_list_layers(&list_layers).unwrap();
+    print_list_layers_into(&mut out, &list_layers)?;
 
     // ================================================================
     // Print UFT.
     // ================================================================
-    println!();
+    writeln!(&mut out)?;
     // Only some states will report a UFT.
     if let Ok(uft) = port.dump_uft() {
-        print_uft(&uft).unwrap();
+        print_uft_into(&mut out, &uft)?;
     }
 
     // ================================================================
     // Print TCP flows.
     // ================================================================
     if port.state() == PortState::Running {
-        println!("\nTCP Flows (keyed on outbound)");
-        print_hr();
-        print_tcp_flows(&port.dump_tcp_flows().unwrap()).unwrap();
+        writeln!(&mut out, "\nTCP Flows (keyed on outbound)")?;
+        write_hr(&mut out)?;
+        print_tcp_flows_into(&mut out, &port.dump_tcp_flows().unwrap())?;
     }
 
     // ================================================================
     // Print information about each layer.
     // ================================================================
-    println!();
+    writeln!(&mut out)?;
     for layer in &list_layers.layers {
-        print_layer(&port.dump_layer(&layer.name).unwrap()).unwrap();
-        println!("\n{:#?}\n", port.layer_stats_snap(&layer.name).unwrap());
+        print_layer_into(&mut out, &port.dump_layer(&layer.name).unwrap())?;
+        writeln!(
+            &mut out,
+            "\n{:#?}\n",
+            port.layer_stats_snap(&layer.name).unwrap()
+        )?;
     }
 
     // ================================================================
     // Print the PortStats.
     // ================================================================
-    println!("\nPort Stats");
-    print_hr();
-    println!("{:#?}", port.stats_snap());
+    writeln!(&mut out, "\nPort Stats")?;
+    write_hr(&mut out)?;
+    writeln!(&mut out, "{:#?}", port.stats_snap())?;
 
-    print_hrb();
-    println!();
+    write_hrb(&mut out)?;
+    writeln!(&mut out)?;
+
+    println!("{}", std::str::from_utf8(&out).unwrap());
+    Ok(())
 }
 
 /// Track various bits of port state for the purpose of verifying
@@ -210,7 +226,7 @@ macro_rules! assert_port {
             };
 
             if *expected_val != val {
-                print_port(&$pav.port, &$pav.vpc_map);
+                print_port(&$pav.port, &$pav.vpc_map).unwrap();
                 panic!(
                     "field value mismatch: field: {field}, \
                      expected: {expected_val}, actual: {val}"
@@ -222,7 +238,7 @@ macro_rules! assert_port {
             let expected = $pav.vps.port_state;
             let actual = $pav.port.state();
             if expected != actual {
-                print_port(&$pav.port, &$pav.vpc_map);
+                print_port(&$pav.port, &$pav.vpc_map).unwrap();
                 panic!(
                     "port_state mismatch: expected: {expected}, \
                      actual: {actual}"

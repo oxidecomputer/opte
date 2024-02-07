@@ -26,7 +26,15 @@ use tabwriter::TabWriter;
 
 /// Print a [`DumpLayerResp`].
 pub fn print_layer(resp: &DumpLayerResp) -> std::io::Result<()> {
-    let mut t = TabWriter::new(std::io::stdout());
+    print_layer_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`DumpLayerResp`].
+pub fn print_layer_into(
+    writer: &mut impl Write,
+    resp: &DumpLayerResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
 
     writeln!(t, "Layer {}", resp.name)?;
     write_hrb(&mut t)?;
@@ -70,7 +78,15 @@ pub fn print_layer(resp: &DumpLayerResp) -> std::io::Result<()> {
 
 /// Print a [`ListLayersResp`].
 pub fn print_list_layers(resp: &ListLayersResp) -> std::io::Result<()> {
-    let mut t = TabWriter::new(std::io::stdout());
+    print_list_layers_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`ListLayersResp`] into a given writer.
+pub fn print_list_layers_into(
+    writer: &mut impl Write,
+    resp: &ListLayersResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
     writeln!(t, "NAME\tRULES IN\tRULES OUT\tDEF IN\tDEF OUT\tFLOWS",)?;
 
     for desc in &resp.layers {
@@ -90,7 +106,15 @@ pub fn print_list_layers(resp: &ListLayersResp) -> std::io::Result<()> {
 
 /// Print a [`DumpUftResp`].
 pub fn print_uft(uft: &DumpUftResp) -> std::io::Result<()> {
-    let mut t = TabWriter::new(std::io::stdout());
+    print_uft_into(&mut std::io::stdout(), uft)
+}
+
+/// Print a [`DumpUftResp`] into a given writer.
+pub fn print_uft_into(
+    writer: &mut impl Write,
+    uft: &DumpUftResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
 
     writeln!(t, "UFT Inbound: {}/{}", uft.in_num_flows, uft.in_limit)?;
     write_hr(&mut t)?;
@@ -221,7 +245,15 @@ pub fn print_uft_flow(
 
 /// Print a [`DumpTcpFlowsResp`].
 pub fn print_tcp_flows(flows: &DumpTcpFlowsResp) -> std::io::Result<()> {
-    let mut t = TabWriter::new(std::io::stdout());
+    print_tcp_flows_into(&mut std::io::stdout(), flows)
+}
+
+/// Print a [`DumpTcpFlowsResp`] into a given writer.
+pub fn print_tcp_flows_into(
+    writer: &mut impl Write,
+    flows: &DumpTcpFlowsResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
 
     writeln!(t, "FLOW\tSTATE\tHITS\tSEGS IN\tSEGS OUT\tBYTES IN\tBYTES OUT")?;
     for (flow_id, entry) in &flows.flows {
