@@ -520,7 +520,9 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::DumpLayer { port, name } => {
-            print_layer(&hdl.get_layer_by_name(&port, &name)?)?;
+            let resp = &hdl.get_layer_by_name(&port, &name)?;
+            print!("Port {port} - ");
+            print_layer(&resp)?;
         }
 
         Command::ClearUft { port } => {
