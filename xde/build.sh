@@ -7,11 +7,10 @@ REL_DIR=../target/x86_64-unknown-unknown/release/
 cargo -v build --release
 
 ld -ztype=kmod \
-   -N"drv/mac" \
+   -N"drv/dld" \
    -N"drv/ip" \
-   -N"misc/mac" \
    -N"misc/dls" \
-   -N"misc/dld" \
+   -N"misc/mac" \
    -z allextract $REL_DIR/xde.a \
    -o $REL_DIR/xde
 

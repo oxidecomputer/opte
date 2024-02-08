@@ -239,7 +239,7 @@ fn cmd_package(
         if release_only {
             cmd.env("RELEASE_ONLY", "1");
         }
-            
+
         cmd.arg("build.sh")
             .current_dir(meta.workspace_root.join(&pkg_dir))
             .output_nocapture()?;
@@ -375,11 +375,10 @@ impl BuildTarget {
                 Command::new("ld")
                     .args([
                         "-ztype=kmod",
-                        "-Ndrv/mac",
+                        "-Ndrv/dld",
                         "-Ndrv/ip",
-                        "-Nmisc/mac",
                         "-Nmisc/dls",
-                        "-Nmisc/dld",
+                        "-Nmisc/mac",
                         "-z",
                         "allextract",
                         &format!("{target_dir}/xde.a"),

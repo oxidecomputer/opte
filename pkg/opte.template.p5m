@@ -4,7 +4,7 @@ set name=pkg.fmri \
 set name=pkg.summary value="The Oxide Packet Transformation Engine"
 set name=info.classification \
     value=org.opensolaris.category.2008:Drivers/Networking
-set name=variant.opensolaris.zone value=global
+set name=variant.opensolaris.zone value=global value=nonglobal
 set name=variant.arch value=i386
 set name=variant.debug.illumos value=false value=true
 dir path=opt owner=root group=sys mode=0755
@@ -36,13 +36,11 @@ file path=usr/lib/devfsadm/linkmod/SUNW_xde_link.so owner=root group=sys mode=07
 #:  variant.opensolaris.zone:global
 #:
 file path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
-    pkg.depend.bypass-generate=.*dld.* \
-    pkg.depend.bypass-generate=.*mac.* \
-    variant.debug.illumos=false
+    variant.debug.illumos=false \
+    variant.opensolaris.zone=global
 
 $(inc_debug)file kernel/drv/amd64/xde.dbg path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
-    pkg.depend.bypass-generate=.*dld.* \
-    pkg.depend.bypass-generate=.*mac.* \
-    variant.debug.illumos=true
+    variant.debug.illumos=true \
+    variant.opensolaris.zone=global
 
 driver name=xde
