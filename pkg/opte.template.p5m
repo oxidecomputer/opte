@@ -22,23 +22,9 @@ dir path=usr/lib/devfsadm owner=root group=sys mode=0755
 dir path=usr/lib/devfsadm/linkmod owner=root group=sys mode=0755
 file path=usr/lib/devfsadm/linkmod/SUNW_xde_link.so owner=root group=sys mode=0755
 
-# XXX the bypasses below are a hack, but idk what the right thing to do is.
-# Without the bypass this happens
-#:
-#:  + pkgdepend resolve -d packages -s resolve.p5m opte.generate.p5m
-#:  /home/ry/src/opte/pkg/opte.generate.p5m has unresolved dependency '
-#:     depend type=require fmri=__TBD pkg.debug.depend.file=mac \
-#:         pkg.debug.depend.reason=kernel/drv/amd64/xde \
-#:         pkg.debug.depend.type=elf \
-#:         pkg.debug.depend.path=kernel/drv/amd64 \
-#:         pkg.debug.depend.path=usr/kernel/drv/amd64
-#:  ' under the following combinations of variants:
-#:  variant.opensolaris.zone:global
-#:
 file path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
     variant.debug.illumos=false \
     variant.opensolaris.zone=global
-
 $(inc_debug)file kernel/drv/amd64/xde.dbg path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
     variant.debug.illumos=true \
     variant.opensolaris.zone=global
