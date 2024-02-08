@@ -21,6 +21,7 @@ libc.workspace = true
 libnet.workspace = true
 postcard.workspace = true
 serde.workspace = true
+tabwriter.workspace = true
 thiserror.workspace = true
 
 [build-dependencies]

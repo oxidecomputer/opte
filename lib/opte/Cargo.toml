@@ -14,7 +14,7 @@ kernel = ["illumos-sys-hdrs/kernel"]
 # This feature indicates that OPTE is being built with std. This is
 # mostly useful to consumers of the API, providing convenient methods
 # for working with the API types in a std context.
-std = ["opte-api/std"]
+std = ["dep:tabwriter", "opte-api/std"]
 #
 # Used for declaring methods which are useful for integration testing.
 #
@@ -33,6 +33,7 @@ heapless = { workspace = true, optional = true }
 itertools = { workspace = true, optional = true }
 postcard.workspace = true
 serde.workspace = true
+tabwriter = { workspace = true, optional = true }
 usdt = { workspace = true, optional = true }
 zerocopy = { workspace = true, optional = true }
 

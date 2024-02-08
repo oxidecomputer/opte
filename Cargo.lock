@@ -823,6 +823,7 @@ dependencies = [
  "postcard",
  "serde",
  "smoltcp",
+ "tabwriter",
  "usdt",
  "version_check",
  "zerocopy",
@@ -866,6 +867,7 @@ dependencies = [
  "oxide-vpc",
  "postcard",
  "serde",
+ "tabwriter",
  "thiserror",
 ]
 
@@ -882,6 +884,7 @@ dependencies = [
  "poptrie",
  "serde",
  "smoltcp",
+ "tabwriter",
  "usdt",
  "zerocopy",
 ]
@@ -1390,6 +1393,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tabwriter"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a327282c4f64f6dc37e3bba4c2b6842cc3a992f204fa58d917696a89f691e5f6"
+dependencies = [
+ "unicode-width",
+]
+
+[[package]]
 name = "take_mut"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1574,6 +1586,12 @@ name = "unicode-ident"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
+
+[[package]]
+name = "unicode-width"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e51733f11c9c4f72aa0c160008246859e340b00807569a0da0e7a1079b27ba85"
 
 [[package]]
 name = "usdt"

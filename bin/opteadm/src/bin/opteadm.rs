@@ -50,7 +50,9 @@ use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
 use oxide_vpc::engine::print::print_v2b;
 use oxide_vpc::engine::print::print_v2p;
 use std::io;
+use std::io::Write;
 use std::str::FromStr;
+use tabwriter::TabWriter;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, Parser)]
@@ -422,11 +424,10 @@ fn opte_pkg_version() -> String {
     format!("{MAJOR_VERSION}.{API_VERSION}.{COMMIT_COUNT}")
 }
 
-// XXX: These are growing unwieldy to the point we might want an actual table
-//      pretty-printer for opte outputs.
-fn print_port_header() {
-    println!(
-        "{:<32} {:<24} {:<16} {:<16} {:<16} {:<40} {:<40} {:<40} {:<8}",
+fn print_port_header(t: &mut impl Write) -> std::io::Result<()> {
+    writeln!(
+        t,
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         "LINK",
         "MAC ADDRESS",
         "IPv4 ADDRESS",
@@ -436,13 +437,21 @@ fn print_port_header() {
         "EXTERNAL IPv6",
         "FLOATING IPv6",
         "STATE"
-    );
+    )
 }
 
-fn print_port(pi: PortInfo) {
-    let none = String::from("None");
-    println!(
-        "{:<32} {:<24} {:<16} {:<16} {:<16} {:<40} {:<40} {:<40} {:<8}",
+fn print_port(t: &mut impl Write, pi: PortInfo) -> std::io::Result<()> {
+    let none = "None".to_string();
+    let n_rows = pi
+        .floating_ip4_addrs
+        .as_ref()
+        .map(|v| v.len())
+        .unwrap_or(1)
+        .max(pi.floating_ip6_addrs.as_ref().map(|v| v.len()).unwrap_or(1));
+
+    writeln!(
+        t,
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         pi.name,
         pi.mac_addr.to_string(),
         pi.ip4_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
@@ -450,25 +459,46 @@ fn print_port(pi: PortInfo) {
             .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
         pi.floating_ip4_addrs
-            .map(|vec| vec
-                .into_iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<String>>()
-                .join(","))
+            .as_ref()
+            .and_then(|vec| vec.first())
+            .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
         pi.ip6_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
         pi.ephemeral_ip6_addr
             .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
         pi.floating_ip6_addrs
-            .map(|vec| vec
-                .into_iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<String>>()
-                .join(","))
+            .as_ref()
+            .and_then(|vec| vec.first())
+            .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
         pi.state,
-    );
+    )?;
+
+    for i in 1..n_rows {
+        writeln!(
+            t,
+            "\t\t\t\t{}\t\t\t{}\t",
+            pi.floating_ip4_addrs
+                .as_ref()
+                .and_then(|vec| vec.get(i))
+                .map(|x| x.to_string())
+                .unwrap_or_else(String::new),
+            pi.floating_ip6_addrs
+                .as_ref()
+                .and_then(|vec| vec.get(i))
+                .map(|x| x.to_string())
+                .unwrap_or_else(String::new),
+        )?;
+    }
+
+    if n_rows > 1 {
+        // This is required over a plain \n to preserve column alignment
+        // between all ports.
+        writeln!(t, "\t\t\t\t\t\t\t\t",)?;
+    }
+
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -477,18 +507,22 @@ fn main() -> anyhow::Result<()> {
 
     match cmd {
         Command::ListPorts => {
-            print_port_header();
+            let mut t = TabWriter::new(std::io::stdout());
+            print_port_header(&mut t)?;
             for p in hdl.list_ports()?.ports {
-                print_port(p);
+                print_port(&mut t, p)?;
             }
+            t.flush()?;
         }
 
         Command::ListLayers { port } => {
-            print_list_layers(&hdl.list_layers(&port)?);
+            print_list_layers(&hdl.list_layers(&port)?)?;
         }
 
         Command::DumpLayer { port, name } => {
-            print_layer(&hdl.get_layer_by_name(&port, &name)?);
+            let resp = &hdl.get_layer_by_name(&port, &name)?;
+            print!("Port {port} - ");
+            print_layer(&resp)?;
         }
 
         Command::ClearUft { port } => {
@@ -501,20 +535,20 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::DumpUft { port } => {
-            print_uft(&hdl.dump_uft(&port)?);
+            print_uft(&hdl.dump_uft(&port)?)?;
         }
 
         Command::DumpTcpFlows { port } => {
-            print_tcp_flows(&hdl.dump_tcp_flows(&port)?);
+            print_tcp_flows(&hdl.dump_tcp_flows(&port)?)?;
         }
 
         Command::DumpV2P => {
-            print_v2p(&hdl.dump_v2p()?);
+            print_v2p(&hdl.dump_v2p()?)?;
         }
 
         Command::DumpV2B => {
             let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
-            print_v2b(&hdl.dump_v2b()?);
+            print_v2b(&hdl.dump_v2b()?)?;
         }
 
         Command::AddFwRule { port, direction, filters, action, priority } => {
