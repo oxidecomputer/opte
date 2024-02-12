@@ -38,17 +38,22 @@ use opte::engine::ip4::Ipv4Meta;
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Hdr;
 use opte::engine::ip6::Ipv6Meta;
+use opte::engine::packet::Initialized;
+use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketRead;
 use opte::engine::packet::ParseError;
 use opte::engine::packet::Parsed;
 use opte::engine::port::ProcessError;
 use opte::engine::tcp::TcpState;
+use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
 use opte::engine::udp::UdpMeta;
 use opte::engine::Direction;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
+use pcap::*;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
@@ -104,19 +109,11 @@ fn lab_cfg() -> VpcCfg {
         // of OPTE dev when the VPC implementation was just part of an
         // existing IPv4 network. Any tests relying on this cfg need
         // to be rewritten or deleted.
-        vni: Vni::new(99u32).unwrap(),
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
         // Site 0xF7, Rack 1, Sled 1, Interface 1
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
-        boundary_services: BoundaryServices {
-            mac: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-            ip: Ipv6Addr::from([
-                0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
-            ]),
-            vni: Vni::new(99u32).unwrap(),
-        },
     }
 }
 
@@ -261,10 +258,7 @@ fn port_transition_pause() {
     // Verify that APIs which modify state are not allowed.
     // ================================================================
     assert!(matches!(g2.port.clear_uft(), Err(OpteError::BadState(_))));
-    assert!(matches!(
-        g2.port.expire_flows(Moment::now()),
-        Err(OpteError::BadState(_))
-    ));
+    assert!(matches!(g2.port.expire_flows(), Err(OpteError::BadState(_))));
     // This exercises Port::remove_rule().
     assert!(matches!(
         router::del_entry(
@@ -758,7 +752,6 @@ fn guest_to_internet_ipv4() {
     let inner_bytes = match meta.outer.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
             assert_eq!(ip6.src, g1_cfg.phys_ip);
-            assert_eq!(ip6.dst, g1_cfg.boundary_services.ip);
 
             // Check that the encoded payload length in the outer header is
             // correct, and matches the actual number of bytes in the rest of
@@ -780,7 +773,6 @@ fn guest_to_internet_ipv4() {
     match meta.outer.encap.as_ref() {
         Some(EncapMeta::Geneve(geneve)) => {
             assert_eq!(geneve.entropy, 7777);
-            assert_eq!(geneve.vni, g1_cfg.boundary_services.vni);
         }
 
         None => panic!("expected outer Geneve metadata"),
@@ -788,7 +780,6 @@ fn guest_to_internet_ipv4() {
 
     let eth = meta.inner.ether;
     assert_eq!(eth.src, g1_cfg.guest_mac);
-    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
     assert_eq!(eth.ether_type, EtherType::Ipv4);
 
     match meta.inner.ip.as_ref().unwrap() {
@@ -884,7 +875,6 @@ fn guest_to_internet_ipv6() {
     let inner_bytes = match meta.outer.ip.as_ref().unwrap() {
         IpMeta::Ip6(ip6) => {
             assert_eq!(ip6.src, g1_cfg.phys_ip);
-            assert_eq!(ip6.dst, g1_cfg.boundary_services.ip);
 
             // Check that the encoded payload length in the outer header is
             // correct, and matches the actual number of bytes in the rest of
@@ -906,7 +896,6 @@ fn guest_to_internet_ipv6() {
     match meta.outer.encap.as_ref() {
         Some(EncapMeta::Geneve(geneve)) => {
             assert_eq!(geneve.entropy, 7777);
-            assert_eq!(geneve.vni, g1_cfg.boundary_services.vni);
         }
 
         None => panic!("expected outer Geneve metadata"),
@@ -914,7 +903,6 @@ fn guest_to_internet_ipv6() {
 
     let eth = meta.inner.ether;
     assert_eq!(eth.src, g1_cfg.guest_mac);
-    assert_eq!(eth.dst, g1_cfg.boundary_services.mac);
     assert_eq!(eth.ether_type, EtherType::Ipv6);
 
     match meta.inner.ip.as_ref().unwrap() {
@@ -1074,9 +1062,9 @@ fn check_external_ip_inbound_behaviour(
     ext_v6: &[Ipv6Addr],
 ) {
     let bsvc_phys = TestIpPhys {
-        ip: cfg.boundary_services.ip,
-        mac: cfg.boundary_services.mac,
-        vni: cfg.boundary_services.vni,
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
     };
     let g1_phys =
         TestIpPhys { ip: cfg.phys_ip, mac: cfg.guest_mac, vni: cfg.vni };
@@ -1101,11 +1089,12 @@ fn check_external_ip_inbound_behaviour(
         // Generate a TCP SYN packet to the chosen ext_ip
         // ================================================================
         let pkt1 = http_syn3(
-            cfg.boundary_services.mac,
+            BS_MAC_ADDR,
             partner_ip,
             cfg.guest_mac,
             ext_ip,
             flow_port,
+            80,
         );
         let mut pkt1 = encap_external(pkt1, bsvc_phys, g1_phys);
 
@@ -1140,7 +1129,6 @@ fn check_external_ip_inbound_behaviour(
             ];
             incr!(port, rules[(if firewall_flow_exists { 2 } else { 0 })..]);
         }
-        print_port(&port.port, &port.vpc_map);
 
         let private_ip: IpAddr = match ext_ip {
             IpAddr::Ip4(_) => {
@@ -1185,14 +1173,12 @@ fn check_external_ip_inbound_behaviour(
             flow_port,
         );
         let res = port.port.process(Out, &mut pkt2, ActionMeta::new());
-        print_port(&port.port, &port.vpc_map);
 
         if old_ip_gone {
             // Failure mode here is different (assuming we have at least one
             // external IP). The packet must fail to send via the old IP,
             // invalidate the entry, and then choose the new external IP.
             assert!(matches!(res, Ok(Modified)), "bad result: {:?}", res);
-            print_port(&port.port, &port.vpc_map);
             update!(
                 port,
                 [
@@ -1250,9 +1236,9 @@ fn external_ip_balanced_over_floating_ips() {
     let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(8, true);
 
     let bsvc_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.boundary_services.vni,
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
     };
     let g1_phys = TestIpPhys {
         ip: g1_cfg.phys_ip,
@@ -1284,6 +1270,7 @@ fn external_ip_balanced_over_floating_ips() {
                 g1_cfg.gateway_mac,
                 partner_ip,
                 flow_port,
+                80,
             );
             let mut pkt = encap_external(pkt, bsvc_phys, g1_phys);
 
@@ -1332,9 +1319,9 @@ fn external_ip_balanced_over_floating_ips() {
 fn external_ip_epoch_affinity_preserved() {
     let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(2, true);
     let bsvc_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.boundary_services.vni,
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
     };
     let g1_phys = TestIpPhys {
         ip: g1_cfg.phys_ip,
@@ -1382,12 +1369,7 @@ fn external_ip_epoch_affinity_preserved() {
             }
         };
 
-        let pkt1 = http_syn2(
-            g1_cfg.boundary_services.mac,
-            partner_ip,
-            g1_cfg.guest_mac,
-            ext_ip,
-        );
+        let pkt1 = http_syn2(BS_MAC_ADDR, partner_ip, g1_cfg.guest_mac, ext_ip);
         let mut pkt1 = encap_external(pkt1, bsvc_phys, g1_phys);
 
         let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
@@ -1530,7 +1512,7 @@ fn unpack_and_verify_icmp(
     let (src_eth, dst_eth, src_ip, dst_ip, encapped, ident) = match dir {
         Direction::Out => (
             cfg.guest_mac,
-            cfg.boundary_services.mac,
+            BS_MAC_ADDR,
             params.public_ip,
             params.partner_ip,
             true,
@@ -1725,7 +1707,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
     // Verify echo reply rewrite.
     // ================================================================
     let mut pkt2 = gen_icmp_echo_reply(
-        g1_cfg.boundary_services.mac,
+        BS_MAC_ADDR,
         g1_cfg.guest_mac,
         dst_ip,
         public_ip,
@@ -1734,15 +1716,15 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &data[..],
         3,
     );
-    let bsvc_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.boundary_services.vni,
-    };
     let g1_phys = TestIpPhys {
         ip: g1_cfg.phys_ip,
         mac: g1_cfg.guest_mac,
         vni: g1_cfg.vni,
+    };
+    let bsvc_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
     };
     pkt2 = encap_external(pkt2, bsvc_phys, g1_phys);
 
@@ -1783,7 +1765,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
     // entry.
     // ================================================================
     let mut pkt4 = gen_icmp_echo_reply(
-        g1_cfg.boundary_services.mac,
+        BS_MAC_ADDR,
         g1_cfg.guest_mac,
         dst_ip,
         public_ip,
@@ -1905,7 +1887,6 @@ fn arp_gateway() {
     bytes.extend_from_slice(eth_hdr.as_bytes());
     bytes.extend_from_slice(ArpEthIpv4Raw::from(&arp).as_bytes());
     let mut pkt = Packet::copy(&bytes).parse(Out, VpcParser::new()).unwrap();
-    print_port(&g1.port, &g1.vpc_map);
 
     let res = g1.port.process(Out, &mut pkt, ActionMeta::new());
     match res {
@@ -1966,11 +1947,13 @@ fn flow_expiration() {
     // ================================================================
     // Verify expiration
     // ================================================================
-    g1.port.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0)).unwrap();
+    g1.port
+        .expire_flows_at(now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0))
+        .unwrap();
     assert_port!(g1);
 
     g1.port
-        .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0))
+        .expire_flows_at(now + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0))
         .unwrap();
     zero_flows!(g1);
 }
@@ -3148,21 +3131,21 @@ fn establish_http_conn(
     // direction and verify it is accepted.
     // ================================================================
     let mut pkt2 = http_syn_ack2(
-        g1_cfg.boundary_services.mac,
+        BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    let bs_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.boundary_services.vni,
-    };
     let g1_phys = TestIpPhys {
         ip: g1_cfg.phys_ip,
         mac: g1_cfg.guest_mac,
         vni: g1_cfg.vni,
+    };
+    let bs_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
     };
     pkt2 = encap_external(pkt2, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
@@ -3309,11 +3292,6 @@ fn uft_lft_invalidation_in() {
     // Step 2
     // ================================================================
     let dst_ip = "52.10.128.69".parse().unwrap();
-    let bs_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.boundary_services.vni,
-    };
     let g1_phys = TestIpPhys {
         ip: g1_cfg.phys_ip,
         mac: g1_cfg.guest_mac,
@@ -3332,12 +3310,17 @@ fn uft_lft_invalidation_in() {
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
 
     let mut pkt2 = http_get_ack2(
-        g1_cfg.boundary_services.mac,
+        BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
+    let bs_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+    };
     pkt2 = encap_external(pkt2, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
@@ -3368,12 +3351,17 @@ fn uft_lft_invalidation_in() {
     // Step 4
     // ================================================================
     let mut pkt3 = http_301_reply2(
-        g1_cfg.boundary_services.mac,
+        BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
+    let bs_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+    };
     pkt3 = encap_external(pkt3, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt3, ActionMeta::new());
     assert_drop!(
@@ -3391,31 +3379,7 @@ fn uft_lft_invalidation_in() {
     );
 }
 
-// Verify TCP state transitions in relation to an outbound connection
-// (the "active open"). In this case the guest is the client, the
-// server is an external IP.
-#[test]
-fn tcp_outbound() {
-    let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
-    g1.port.start();
-    set!(g1, "port_state=running");
-    // let now = Moment::now();
-
-    // Add default route.
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
-    )
-    .unwrap();
-    incr!(g1, ["epoch", "router.rules.out"]);
-
-    let bs_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.boundary_services.vni,
-    };
+fn test_outbound_http(g1_cfg: &VpcCfg, g1: &mut PortAndVps) -> InnerFlowId {
     let g1_phys = TestIpPhys {
         ip: g1_cfg.phys_ip,
         mac: g1_cfg.guest_mac,
@@ -3451,12 +3415,17 @@ fn tcp_outbound() {
     // SYN+ACK: Server -> Client
     // ================================================================
     let mut pkt2 = http_syn_ack2(
-        g1_cfg.boundary_services.mac,
+        BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
+    let bs_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+    };
     pkt2 = encap_external(pkt2, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
@@ -3495,12 +3464,17 @@ fn tcp_outbound() {
     // ACK HTTP GET: Server -> Client
     // ================================================================
     let mut pkt5 = http_get_ack2(
-        g1_cfg.boundary_services.mac,
+        BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
+    let bs_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+    };
     pkt5 = encap_external(pkt5, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt5, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
@@ -3511,12 +3485,17 @@ fn tcp_outbound() {
     // HTTP 301 Reply: Server -> Client
     // ================================================================
     let mut pkt6 = http_301_reply2(
-        g1_cfg.boundary_services.mac,
+        BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
+    let bs_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+    };
     pkt6 = encap_external(pkt6, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt6, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
@@ -3555,12 +3534,17 @@ fn tcp_outbound() {
     // ACK FIN: Server -> Client
     // ================================================================
     let mut pkt9 = http_server_ack_fin2(
-        g1_cfg.boundary_services.mac,
+        BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
+    let bs_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+    };
     pkt9 = encap_external(pkt9, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt9, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
@@ -3571,12 +3555,17 @@ fn tcp_outbound() {
     // FIN: Server -> Client
     // ================================================================
     let mut pkt10 = http_server_fin2(
-        g1_cfg.boundary_services.mac,
+        BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
+    let bs_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+    };
     pkt10 = encap_external(pkt10, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt10, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
@@ -3597,12 +3586,218 @@ fn tcp_outbound() {
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow).unwrap());
 
-    // TODO uncomment in follow up commit and make sure to expire TCP flows.
-    //
-    // g1.port
-    //     .expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS as u64 + 1, 0))
-    //     .unwrap();
-    // zero_flows!(g1);
+    flow
+}
+
+// Verify TCP state transitions in relation to an outbound connection
+// (the "active open"). In this case the guest is the client, the
+// server is an external IP.
+#[test]
+fn tcp_outbound() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+    // let now = Moment::now();
+
+    // Add default route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // ================================================================
+    // Main test on an HTTP flow.
+    // ================================================================
+    let flow = test_outbound_http(&g1_cfg, &mut g1);
+
+    // ================================================================
+    // TCP flow expiry behaviour
+    // ================================================================
+    // - UFTs for individual flows live on the same cadence as other traffic.
+    // - TCP state machine info should be cleaned up after an active close.
+    // TimeWait state has a ~2min lifetime before we flush it -- it should still
+    // be present at UFT expiry:
+    let now = Moment::now();
+    g1.port
+        .expire_flows_at(now + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0))
+        .unwrap();
+    zero_flows!(g1);
+    assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow).unwrap());
+
+    // The TCP flow state should then be flushed after 2 mins.
+    // Note that this case applies to any active-close initiated by the
+    // guest, irrespective of inbound/outbound.
+    g1.port
+        .expire_flows_at(now + Duration::new(TIME_WAIT_EXPIRE_SECS + 1, 0))
+        .unwrap();
+    assert_eq!(None, g1.port.tcp_state(&flow));
+}
+
+// Verify that a TCP SYN packet will result in a new flow regardless
+// of current TCP state. There are two main cases:
+// * TIME_WAIT -- either host decided a port was safe to reuse.
+// * ESTABLISHED -- an out-of order ACK may have triggered an
+//                  accidental flow revival.
+#[test]
+fn early_tcp_invalidation() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Allow incoming TCP connection on g1 from anyone.
+    let rule = "dir=in action=allow priority=10 protocol=TCP";
+    firewall::add_fw_rule(
+        &g1.port,
+        &AddFwRuleReq {
+            port_name: g1.port.name().to_string(),
+            rule: rule.parse().unwrap(),
+        },
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "firewall.rules.in"]);
+
+    // Add default route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // ================================================================
+    // Setup TIME_WAIT state.
+    // ================================================================
+    let dst_ip = "52.10.128.69".parse::<IpAddr>().unwrap();
+    let flow = test_outbound_http(&g1_cfg, &mut g1);
+
+    // ================================================================
+    // Repeat the exact same flow. This SYN is not blocked, the old
+    // entry is invalidated, and a new one is created.
+    // ================================================================
+    let mut pkt1 = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(
+        g1,
+        [
+            "stats.port.out_modified, stats.port.out_uft_miss",
+            // We're hitting the old entry, before it is discarded.
+            "stats.port.out_uft_hit",
+        ]
+    );
+    assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
+    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
+
+    // ================================================================
+    // Drive to established, then validate the same applies to inbound
+    // flows.
+    // ================================================================
+    let bs_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+    };
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+    let mut pkt2 = http_syn_ack2(
+        BS_MAC_ADDR,
+        dst_ip,
+        g1_cfg.guest_mac,
+        g1_cfg.snat().external_ip,
+        snat_port,
+    );
+    pkt2 = encap_external(pkt2, bs_phys, g1_phys);
+    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+
+    let mut pkt1 = http_syn3(
+        BS_MAC_ADDR,
+        dst_ip,
+        g1_cfg.guest_mac,
+        g1_cfg.snat().external_ip,
+        80,
+        snat_port,
+    );
+    pkt1 = encap_external(pkt1, bs_phys, g1_phys);
+    let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    update!(
+        g1,
+        [
+            "incr:stats.port.in_modified, stats.port.in_uft_hit",
+            "set:uft.in=1, uft.out=0",
+        ]
+    );
+    assert_eq!(TcpState::Listen, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // Suppose we have an earlier flow which was driven to CLOSED,
+    // where an ACK-carrying segment arrived out-of-order/duped OR one
+    // side sent an RST and knocked out our entry. That flow will move
+    // CLOSED->ESTABLISHED.
+    // ================================================================
+    let dst_ip2 = "52.10.128.70".parse().unwrap();
+
+    // This case is just an ACK, but the same logic applies for
+    // FIN+ACK. The FIN+ACK case could be special-cased CLOSED->CLOSED,
+    // but we're not doing that for now.
+    let mut pkt11 = http_guest_ack_fin2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip2,
+    );
+    let flow = *pkt11.flow();
+    let res = g1.port.process(Out, &mut pkt11, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(
+        g1,
+        [
+            "stats.port.out_modified, stats.port.out_uft_miss",
+            "firewall.flows.in, firewall.flows.out",
+            "nat.flows.in, nat.flows.out",
+            "uft.out",
+        ]
+    );
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+
+    // ================================================================
+    // This entry will not block new flows on the same tuple.
+    // ================================================================
+    let mut pkt1 = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip2,
+    );
+    let flow = *pkt1.flow();
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(Modified)));
+    incr!(
+        g1,
+        [
+            "stats.port.out_modified, stats.port.out_uft_miss",
+            // We're hitting the old entry, before it is discarded.
+            "stats.port.out_uft_hit",
+        ]
+    );
+    assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
 }
 
 // Verify TCP state transitions in relation to an inbound connection
@@ -3658,14 +3853,8 @@ fn tcp_inbound() {
     incr!(g1, ["epoch", "router.rules.out"]);
 
     let client_ip = "52.10.128.69".parse().unwrap();
-    let bs_mac = g1_cfg.boundary_services.mac;
     let serv_mac = g1_cfg.guest_mac;
     let serv_ext_ip = g1_cfg.ipv4().external_ips.ephemeral_ip.unwrap();
-    let bs_phys = TestIpPhys {
-        ip: g1_cfg.boundary_services.ip,
-        mac: g1_cfg.boundary_services.mac,
-        vni: g1_cfg.boundary_services.vni,
-    };
     let g1_phys = TestIpPhys {
         ip: g1_cfg.phys_ip,
         mac: g1_cfg.guest_mac,
@@ -3675,7 +3864,12 @@ fn tcp_inbound() {
     // ================================================================
     // SYN: Client -> Server
     // ================================================================
-    let mut pkt1 = http_syn2(bs_mac, client_ip, serv_mac, serv_ext_ip);
+    let mut pkt1 = http_syn2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
+    let bs_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+    };
     pkt1 = encap(pkt1, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
     let flow = pkt1.flow().mirror();
@@ -3710,12 +3904,7 @@ fn tcp_inbound() {
     // ================================================================
     // ACK: Client -> Server
     // ================================================================
-    let mut pkt3 = http_ack2(
-        g1_cfg.boundary_services.mac,
-        client_ip,
-        serv_mac,
-        serv_ext_ip,
-    );
+    let mut pkt3 = http_ack2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
     pkt3 = encap(pkt3, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
@@ -3725,7 +3914,7 @@ fn tcp_inbound() {
     // ================================================================
     // HTTP GET: Client -> Server
     // ================================================================
-    let mut pkt4 = http_get2(bs_mac, client_ip, serv_mac, serv_ext_ip);
+    let mut pkt4 = http_get2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
     pkt4 = encap(pkt4, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt4, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
@@ -3765,7 +3954,7 @@ fn tcp_inbound() {
     // ================================================================
     // ACK HTTP 301: Client -> Server
     // ================================================================
-    let mut pkt7 = http_301_ack2(bs_mac, client_ip, serv_mac, serv_ext_ip);
+    let mut pkt7 = http_301_ack2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
     pkt7 = encap(pkt7, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt7, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
@@ -3775,7 +3964,8 @@ fn tcp_inbound() {
     // ================================================================
     // FIN: Client -> Server
     // ================================================================
-    let mut pkt8 = http_guest_fin2(bs_mac, client_ip, serv_mac, serv_ext_ip);
+    let mut pkt8 =
+        http_guest_fin2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
     pkt8 = encap(pkt8, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt8, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));
@@ -3816,7 +4006,7 @@ fn tcp_inbound() {
     // ACK Server FIN: Client -> Server
     // ================================================================
     let mut pkt11 =
-        http_guest_ack_fin2(bs_mac, client_ip, serv_mac, serv_ext_ip);
+        http_guest_ack_fin2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
     pkt11 = encap(pkt11, bs_phys, g1_phys);
     let res = g1.port.process(In, &mut pkt11, ActionMeta::new());
     assert!(matches!(res, Ok(Modified)));

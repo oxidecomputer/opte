@@ -1,3 +1,9 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Copyright 2024 Oxide Computer Company
+
 use anyhow::Result;
 use opteadm::OpteAdm;
 use oxide_vpc::api::AddRouterEntryReq;
@@ -107,11 +113,6 @@ impl OptePort {
             gateway_mac: "a8:40:25:00:00:01".parse().unwrap(),
             vni: Vni::new(1701u32).unwrap(),
             phys_ip: phys_ip.parse().unwrap(),
-            boundary_services: BoundaryServices {
-                ip: "fd00:99::1".parse().unwrap(),
-                vni: Vni::new(99u32).unwrap(),
-                mac: "00:00:00:00:00:00".parse().unwrap(),
-            },
         };
         let adm = OpteAdm::open(OpteAdm::XDE_CTL)?;
         adm.create_xde(name, cfg.clone(), DhcpCfg::default(), false)?;

@@ -7,6 +7,7 @@ members = [
   "xde",
   "xde/xde-link",
   "xde-tests",
+  "xtask",
 ]
 default-members = [
   "bin/*",
@@ -38,19 +39,20 @@ oxide-vpc = { path = "lib/oxide-vpc", default-features = false }
 # External dependencies
 anyhow = "1.0"
 bitflags = "2"
+cargo_metadata = "0.18"
 cfg-if = "1"
-clap = { version = "4", features = ["derive", "string"] }
+clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.5"
 ctor = "0.2"
 dyn-clone = "1.0"
-heapless = "0.7"
+heapless = "0.8"
 ipnetwork = { version = "0.20", default-features = false }
 itertools = { version = "0.12", default-features = false }
 libc = "0.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
 nix = { version = "0.27", features = ["signal"] }
-pcap-parser = "0.14"
+pcap-parser = "0.15"
 postcard = { version = "1", features = ["alloc"], default-features = false }
 rand = "0.8.5"
 quote = "1.0"
@@ -60,14 +62,17 @@ slog = { version = "2.7", features = ["max_level_trace", "release_max_level_trac
 slog-async = "2.8"
 slog-envlogger = "2.2"
 slog-term = "2.9"
-smoltcp = { version = "0.10", default-features = false }
+smoltcp = { version = "0.11", default-features = false }
 syn = "2"
+tabwriter = { version = "1", features = ["ansi_formatting"] }
 thiserror = "1.0"
-usdt = "0.3"
+toml = "0.8"
+usdt = "0.5"
 version_check = "0.9"
 zerocopy = { version = "0.7", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
+poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipath" }
 
 [profile.release]
 debug = 2

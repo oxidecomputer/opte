@@ -24,7 +24,7 @@ use opteadm::OpteAdm;
 use opteadm::COMMIT_COUNT;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
-use oxide_vpc::api::BoundaryServices;
+use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
@@ -42,15 +42,22 @@ use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
 use oxide_vpc::api::SetExternalIpsReq;
+use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::TunnelEndpoint;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
+use oxide_vpc::engine::print::print_v2b;
 use oxide_vpc::engine::print::print_v2p;
 use std::io;
+use std::io::Write;
 use std::str::FromStr;
+use tabwriter::TabWriter;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, Parser)]
 #[command(version=opte_pkg_version())]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// List all ports.
     ListPorts,
@@ -95,6 +102,9 @@ enum Command {
 
     /// Dump virtual to physical address mapping
     DumpV2P,
+
+    /// Dump virtual to boundary address mapping
+    DumpV2B,
 
     /// Add a firewall rule
     AddFwRule {
@@ -162,19 +172,6 @@ enum Command {
         #[arg(long)]
         gateway_ip: IpAddr,
 
-        /// The IP address for Boundary Services, where packets destined to
-        /// off-rack networks are sent.
-        #[arg(long)]
-        bsvc_addr: Ipv6Addr,
-
-        /// The VNI used for Boundary Services.
-        #[arg(long)]
-        bsvc_vni: Vni,
-
-        /// The MAC address for Boundary Services.
-        #[arg(long, default_value = "00:00:00:00:00:00")]
-        bsvc_mac: MacAddr,
-
         /// The VNI for the VPC to which the guest belongs.
         #[arg(long)]
         vpc_vni: Vni,
@@ -202,6 +199,12 @@ enum Command {
 
     /// Set a virtual-to-physical mapping
     SetV2P { vpc_ip: IpAddr, vpc_mac: MacAddr, underlay_ip: Ipv6Addr, vni: Vni },
+
+    /// Set a virtual-to-boundary mapping
+    SetV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
+
+    /// Clear a virtual-to-boundary mapping
+    ClearV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
 
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
@@ -421,11 +424,10 @@ fn opte_pkg_version() -> String {
     format!("{MAJOR_VERSION}.{API_VERSION}.{COMMIT_COUNT}")
 }
 
-// XXX: These are growing unwieldy to the point we might want an actual table
-//      pretty-printer for opte outputs.
-fn print_port_header() {
-    println!(
-        "{:<32} {:<24} {:<16} {:<16} {:<16} {:<40} {:<40} {:<40} {:<8}",
+fn print_port_header(t: &mut impl Write) -> std::io::Result<()> {
+    writeln!(
+        t,
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         "LINK",
         "MAC ADDRESS",
         "IPv4 ADDRESS",
@@ -435,13 +437,21 @@ fn print_port_header() {
         "EXTERNAL IPv6",
         "FLOATING IPv6",
         "STATE"
-    );
+    )
 }
 
-fn print_port(pi: PortInfo) {
-    let none = String::from("None");
-    println!(
-        "{:<32} {:<24} {:<16} {:<16} {:<16} {:<40} {:<40} {:<40} {:<8}",
+fn print_port(t: &mut impl Write, pi: PortInfo) -> std::io::Result<()> {
+    let none = "None".to_string();
+    let n_rows = pi
+        .floating_ip4_addrs
+        .as_ref()
+        .map(|v| v.len())
+        .unwrap_or(1)
+        .max(pi.floating_ip6_addrs.as_ref().map(|v| v.len()).unwrap_or(1));
+
+    writeln!(
+        t,
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         pi.name,
         pi.mac_addr.to_string(),
         pi.ip4_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
@@ -449,25 +459,46 @@ fn print_port(pi: PortInfo) {
             .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
         pi.floating_ip4_addrs
-            .map(|vec| vec
-                .into_iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<String>>()
-                .join(","))
+            .as_ref()
+            .and_then(|vec| vec.first())
+            .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
         pi.ip6_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
         pi.ephemeral_ip6_addr
             .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
         pi.floating_ip6_addrs
-            .map(|vec| vec
-                .into_iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<String>>()
-                .join(","))
+            .as_ref()
+            .and_then(|vec| vec.first())
+            .map(|x| x.to_string())
             .unwrap_or_else(|| none.clone()),
         pi.state,
-    );
+    )?;
+
+    for i in 1..n_rows {
+        writeln!(
+            t,
+            "\t\t\t\t{}\t\t\t{}\t",
+            pi.floating_ip4_addrs
+                .as_ref()
+                .and_then(|vec| vec.get(i))
+                .map(|x| x.to_string())
+                .unwrap_or_else(String::new),
+            pi.floating_ip6_addrs
+                .as_ref()
+                .and_then(|vec| vec.get(i))
+                .map(|x| x.to_string())
+                .unwrap_or_else(String::new),
+        )?;
+    }
+
+    if n_rows > 1 {
+        // This is required over a plain \n to preserve column alignment
+        // between all ports.
+        writeln!(t, "\t\t\t\t\t\t\t\t",)?;
+    }
+
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -476,18 +507,22 @@ fn main() -> anyhow::Result<()> {
 
     match cmd {
         Command::ListPorts => {
-            print_port_header();
+            let mut t = TabWriter::new(std::io::stdout());
+            print_port_header(&mut t)?;
             for p in hdl.list_ports()?.ports {
-                print_port(p);
+                print_port(&mut t, p)?;
             }
+            t.flush()?;
         }
 
         Command::ListLayers { port } => {
-            print_list_layers(&hdl.list_layers(&port)?);
+            print_list_layers(&hdl.list_layers(&port)?)?;
         }
 
         Command::DumpLayer { port, name } => {
-            print_layer(&hdl.get_layer_by_name(&port, &name)?);
+            let resp = &hdl.get_layer_by_name(&port, &name)?;
+            print!("Port {port} - ");
+            print_layer(&resp)?;
         }
 
         Command::ClearUft { port } => {
@@ -500,15 +535,20 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::DumpUft { port } => {
-            print_uft(&hdl.dump_uft(&port)?);
+            print_uft(&hdl.dump_uft(&port)?)?;
         }
 
         Command::DumpTcpFlows { port } => {
-            print_tcp_flows(&hdl.dump_tcp_flows(&port)?);
+            print_tcp_flows(&hdl.dump_tcp_flows(&port)?)?;
         }
 
         Command::DumpV2P => {
-            print_v2p(&hdl.dump_v2p()?);
+            print_v2p(&hdl.dump_v2p()?)?;
+        }
+
+        Command::DumpV2B => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+            print_v2b(&hdl.dump_v2b()?)?;
         }
 
         Command::AddFwRule { port, direction, filters, action, priority } => {
@@ -541,9 +581,6 @@ fn main() -> anyhow::Result<()> {
             vpc_subnet,
             gateway_mac,
             gateway_ip,
-            bsvc_addr,
-            bsvc_vni,
-            bsvc_mac,
             vpc_vni,
             src_underlay_addr,
             dhcp,
@@ -595,11 +632,6 @@ fn main() -> anyhow::Result<()> {
                 gateway_mac,
                 vni: vpc_vni,
                 phys_ip: src_underlay_addr,
-                boundary_services: BoundaryServices {
-                    ip: bsvc_addr,
-                    vni: bsvc_vni,
-                    mac: bsvc_mac,
-                },
             };
 
             hdl.create_xde(&name, cfg, dhcp.into(), passthrough)?;
@@ -622,6 +654,32 @@ fn main() -> anyhow::Result<()> {
             let phys = PhysNet { ether: vpc_mac, ip: underlay_ip, vni };
             let req = SetVirt2PhysReq { vip: vpc_ip, phys };
             hdl.set_v2p(&req)?;
+        }
+
+        Command::SetV2B { prefix, tunnel_endpoint } => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+            let tep = tunnel_endpoint
+                .into_iter()
+                .map(|ip| TunnelEndpoint {
+                    ip,
+                    vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+                })
+                .collect();
+            let req = SetVirt2BoundaryReq { vip: prefix, tep };
+            hdl.set_v2b(&req)?;
+        }
+
+        Command::ClearV2B { prefix, tunnel_endpoint } => {
+            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+            let tep = tunnel_endpoint
+                .into_iter()
+                .map(|ip| TunnelEndpoint {
+                    ip,
+                    vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+                })
+                .collect();
+            let req = ClearVirt2BoundaryReq { vip: prefix, tep };
+            hdl.clear_v2b(&req)?;
         }
 
         Command::AddRouterEntry { port, dest, target } => {

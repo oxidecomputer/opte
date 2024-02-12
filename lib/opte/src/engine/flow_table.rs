@@ -12,6 +12,7 @@
 use super::packet::InnerFlowId;
 use crate::ddi::time::Moment;
 use crate::ddi::time::MILLIS;
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -63,6 +64,19 @@ impl Ttl {
     }
 }
 
+/// A policy for expiring flow table entries over time.
+pub trait ExpiryPolicy<S: Dump>: fmt::Debug {
+    /// Returns whether the given flow should be removed, given current flow
+    /// state, the time a packet was last received, and the current time.
+    fn is_expired(&self, entry: &FlowEntry<S>, now: Moment) -> bool;
+}
+
+impl<S: Dump> ExpiryPolicy<S> for Ttl {
+    fn is_expired(&self, entry: &FlowEntry<S>, now: Moment) -> bool {
+        entry.is_expired(now, *self)
+    }
+}
+
 pub type FlowTableDump<T> = Vec<(InnerFlowId, T)>;
 
 #[derive(Debug)]
@@ -70,7 +84,7 @@ pub struct FlowTable<S: Dump> {
     port_c: CString,
     name_c: CString,
     limit: NonZeroU32,
-    ttl: Ttl,
+    policy: Box<dyn ExpiryPolicy<S>>,
     map: BTreeMap<InnerFlowId, FlowEntry<S>>,
 }
 
@@ -118,7 +132,7 @@ where
     }
 
     pub fn expire(&mut self, flowid: &InnerFlowId) {
-        flow_expired_probe(&self.port_c, &self.name_c, flowid);
+        flow_expired_probe(&self.port_c, &self.name_c, flowid, None, None);
         self.map.remove(flowid);
     }
 
@@ -128,12 +142,17 @@ where
     {
         let name_c = &self.name_c;
         let port_c = &self.port_c;
-        let ttl = self.ttl;
         let mut expired = vec![];
 
         self.map.retain(|flowid, entry| {
-            if entry.is_expired(now, ttl) {
-                flow_expired_probe(port_c, name_c, flowid);
+            if self.policy.is_expired(entry, now) {
+                flow_expired_probe(
+                    port_c,
+                    name_c,
+                    flowid,
+                    Some(entry.last_hit),
+                    Some(now),
+                );
                 expired.push(f(entry.state()));
                 return false;
             }
@@ -179,15 +198,15 @@ where
         port: &str,
         name: &str,
         limit: NonZeroU32,
-        ttl: Option<Ttl>,
+        policy: Option<Box<dyn ExpiryPolicy<S>>>,
     ) -> FlowTable<S> {
-        let ttl = ttl.unwrap_or(FLOW_DEF_TTL);
+        let policy = policy.unwrap_or_else(|| Box::new(FLOW_DEF_TTL));
 
         Self {
             port_c: CString::new(port).unwrap(),
             name_c: CString::new(name).unwrap(),
             limit,
-            ttl,
+            policy,
             map: BTreeMap::new(),
         }
     }
@@ -200,13 +219,17 @@ where
     pub fn remove(&mut self, flow: &InnerFlowId) -> Option<FlowEntry<S>> {
         self.map.remove(flow)
     }
-
-    pub fn ttl(&self) -> Ttl {
-        self.ttl
-    }
 }
 
-fn flow_expired_probe(port: &CString, name: &CString, flowid: &InnerFlowId) {
+#[allow(unused_variables)]
+fn flow_expired_probe(
+    port: &CString,
+    name: &CString,
+    flowid: &InnerFlowId,
+    last_hit: Option<Moment>,
+    now: Option<Moment>,
+) {
+    last_hit.unwrap_or_default();
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
             let arg = flow_id_sdt_arg::from(flowid);
@@ -216,6 +239,8 @@ fn flow_expired_probe(port: &CString, name: &CString, flowid: &InnerFlowId) {
                     port.as_ptr() as uintptr_t,
                     name.as_ptr() as uintptr_t,
                     &arg as *const flow_id_sdt_arg as uintptr_t,
+                    last_hit.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
+                    now.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
                 );
             }
         } else if #[cfg(feature = "usdt")] {
@@ -223,7 +248,7 @@ fn flow_expired_probe(port: &CString, name: &CString, flowid: &InnerFlowId) {
             let port_s = port.to_str().unwrap();
             let name_s = name.to_str().unwrap();
             crate::opte_provider::flow__expired!(
-                || (port_s, name_s, flowid.to_string())
+                || (port_s, name_s, flowid.to_string(), 0, 0)
             );
         } else {
             let (_, _, _) = (port, name, flowid);
@@ -308,6 +333,8 @@ extern "C" {
         port: uintptr_t,
         layer: uintptr_t,
         flowid: uintptr_t,
+        last_hit: uintptr_t,
+        now: uintptr_t,
     );
 
     pub fn __dtrace_probe_ft__entry__invalidated(

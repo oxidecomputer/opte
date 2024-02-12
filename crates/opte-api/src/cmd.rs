@@ -20,23 +20,26 @@ pub const XDE_IOC_OPTE_CMD: i32 = XDE_IOC as i32 | 0x01;
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub enum OpteCmd {
-    ListPorts = 1,       // list all ports
-    AddFwRule = 20,      // add firewall rule
-    RemFwRule = 21,      // remove firewall rule
-    SetFwRules = 22,     // set/replace all firewall rules at once
-    DumpTcpFlows = 30,   // dump TCP flows
-    DumpLayer = 31,      // dump the specified Layer
-    DumpUft = 32,        // dump the Unified Flow Table
-    ListLayers = 33,     // list the layers on a given port
-    ClearUft = 40,       // clear the UFT
-    ClearLft = 41,       // clear the given Layer's Flow Table
-    SetVirt2Phys = 50,   // set a v2p mapping
-    DumpVirt2Phys = 51,  // dump the v2p mappings
-    AddRouterEntry = 60, // add a router entry for IP dest
-    CreateXde = 70,      // create a new xde device
-    DeleteXde = 71,      // delete an xde device
-    SetXdeUnderlay = 72, // set xde underlay devices
-    SetExternalIps = 80, // set xde external IPs for a port
+    ListPorts = 1,           // list all ports
+    AddFwRule = 20,          // add firewall rule
+    RemFwRule = 21,          // remove firewall rule
+    SetFwRules = 22,         // set/replace all firewall rules at once
+    DumpTcpFlows = 30,       // dump TCP flows
+    DumpLayer = 31,          // dump the specified Layer
+    DumpUft = 32,            // dump the Unified Flow Table
+    ListLayers = 33,         // list the layers on a given port
+    ClearUft = 40,           // clear the UFT
+    ClearLft = 41,           // clear the given Layer's Flow Table
+    SetVirt2Phys = 50,       // set a v2p mapping
+    DumpVirt2Phys = 51,      // dump the v2p mappings
+    SetVirt2Boundary = 52,   // set a v2b mapping
+    ClearVirt2Boundary = 53, // clear a v2b mapping
+    DumpVirt2Boundary = 54,  // dump the v2b mappings
+    AddRouterEntry = 60,     // add a router entry for IP dest
+    CreateXde = 70,          // create a new xde device
+    DeleteXde = 71,          // delete an xde device
+    SetXdeUnderlay = 72,     // set xde underlay devices
+    SetExternalIps = 80,     // set xde external IPs for a port
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -56,6 +59,9 @@ impl TryFrom<c_int> for OpteCmd {
             41 => Ok(Self::ClearLft),
             50 => Ok(Self::SetVirt2Phys),
             51 => Ok(Self::DumpVirt2Phys),
+            52 => Ok(Self::SetVirt2Boundary),
+            53 => Ok(Self::ClearVirt2Boundary),
+            54 => Ok(Self::DumpVirt2Boundary),
             60 => Ok(Self::AddRouterEntry),
             70 => Ok(Self::CreateXde),
             71 => Ok(Self::DeleteXde),

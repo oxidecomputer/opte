@@ -47,7 +47,7 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 27;
+pub const API_VERSION: u64 = 28;
 
 /// Major version of the OPTE package.
 pub const MAJOR_VERSION: u64 = 0;

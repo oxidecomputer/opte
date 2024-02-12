@@ -13,12 +13,14 @@ use opte::api::SetXdeUnderlayReq;
 use opte::api::API_VERSION;
 use opte::api::XDE_IOC_OPTE_CMD;
 use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
 use serde::de::DeserializeOwned;
@@ -142,6 +144,19 @@ impl OpteHdl {
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetVirt2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn set_v2b(&self, req: &SetVirt2BoundaryReq) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetVirt2Boundary;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn clear_v2b(
+        &self,
+        req: &ClearVirt2BoundaryReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearVirt2Boundary;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 

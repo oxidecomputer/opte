@@ -698,6 +698,11 @@ impl Ipv6Addr {
             ],
         }
     }
+
+    pub fn has_prefix(&self, prefix: u128, len: u8) -> bool {
+        let mask = ((1u128 << len) - 1) << (128 - len);
+        (mask & u128::from_be_bytes(self.inner)) == prefix
+    }
 }
 
 impl fmt::Display for Ipv6Addr {
@@ -743,6 +748,12 @@ impl From<&[u8; 16]> for Ipv6Addr {
     }
 }
 
+impl From<Ipv6Addr> for u128 {
+    fn from(ip: Ipv6Addr) -> u128 {
+        u128::from_be_bytes(ip.bytes())
+    }
+}
+
 impl From<[u8; 16]> for Ipv6Addr {
     fn from(bytes: [u8; 16]) -> Ipv6Addr {
         Ipv6Addr { inner: bytes }
@@ -759,6 +770,12 @@ impl From<[u16; 8]> for Ipv6Addr {
         }
 
         Ipv6Addr { inner: addr }
+    }
+}
+
+impl From<u128> for Ipv6Addr {
+    fn from(i: u128) -> Ipv6Addr {
+        Self::from(i.to_be_bytes())
     }
 }
 
@@ -873,7 +890,9 @@ impl From<IpCidr> for ipnetwork::IpNetwork {
 }
 
 /// A valid IPv4 prefix legnth.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, Ord, PartialOrd,
+)]
 pub struct Ipv4PrefixLen(u8);
 
 impl TryFrom<u8> for Ipv4PrefixLen {
@@ -913,6 +932,22 @@ impl Ipv4PrefixLen {
 pub struct Ipv4Cidr {
     ip: Ipv4Addr,
     prefix_len: Ipv4PrefixLen,
+}
+
+impl core::cmp::Ord for Ipv4Cidr {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        if self.ip != other.ip {
+            self.ip.cmp(&other.ip)
+        } else {
+            self.prefix_len.cmp(&other.prefix_len)
+        }
+    }
+}
+
+impl core::cmp::PartialOrd for Ipv4Cidr {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl FromStr for Ipv4Cidr {
@@ -1017,6 +1052,22 @@ pub struct Ipv6Cidr {
     prefix_len: Ipv6PrefixLen,
 }
 
+impl core::cmp::Ord for Ipv6Cidr {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        if self.ip != other.ip {
+            self.ip.cmp(&other.ip)
+        } else {
+            self.prefix_len.cmp(&other.prefix_len)
+        }
+    }
+}
+
+impl core::cmp::PartialOrd for Ipv6Cidr {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl fmt::Display for Ipv6Cidr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (ip, prefix_len) = self.parts();
@@ -1053,7 +1104,9 @@ impl FromStr for Ipv6Cidr {
 }
 
 /// A valid IPv6 prefix length.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, Ord, PartialOrd,
+)]
 pub struct Ipv6PrefixLen(u8);
 
 impl TryFrom<u8> for Ipv6PrefixLen {

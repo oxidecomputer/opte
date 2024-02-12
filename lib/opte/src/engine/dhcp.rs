@@ -315,11 +315,11 @@ impl DhcpOption for HostNameOpt<'_> {
     const OPTION_CODE: CustomDhcpOptionType = CustomDhcpOptionType::HostName;
 
     fn write_body(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(self.name.encode());
+        buf.extend(self.name.name().as_bytes());
     }
 
     fn body_len_estimate(&self) -> Option<usize> {
-        Some(self.name.encode().len())
+        Some(self.name.name().len())
     }
 }
 
@@ -338,11 +338,11 @@ impl DhcpOption for DomainNameOpt<'_> {
     const OPTION_CODE: CustomDhcpOptionType = CustomDhcpOptionType::DomainName;
 
     fn write_body(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(self.name.encode());
+        buf.extend(self.name.name().as_bytes());
     }
 
     fn body_len_estimate(&self) -> Option<usize> {
-        Some(self.name.encode().len())
+        Some(self.name.name().len())
     }
 }
 
@@ -687,6 +687,27 @@ mod test {
         reply.emit(&mut dhcp).unwrap();
 
         tmp
+    }
+
+    #[test]
+    fn hostname_encode() {
+        test_option_emit(
+            HostNameOpt { name: &"myhost".parse::<DomainName>().unwrap() },
+            vec![12, 6, 109, 121, 104, 111, 115, 116],
+        );
+    }
+
+    #[test]
+    fn domainname_encode() {
+        test_option_emit(
+            DomainNameOpt {
+                name: &"myhost.oxide.computer".parse::<DomainName>().unwrap(),
+            },
+            vec![
+                15, 21, 109, 121, 104, 111, 115, 116, 46, 111, 120, 105, 100,
+                101, 46, 99, 111, 109, 112, 117, 116, 101, 114,
+            ],
+        );
     }
 
     #[test]

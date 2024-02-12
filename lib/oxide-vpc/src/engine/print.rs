@@ -12,56 +12,127 @@
 use crate::api::GuestPhysAddr;
 use crate::api::Ipv4Addr;
 use crate::api::Ipv6Addr;
+use crate::engine::overlay::DumpVirt2BoundaryResp;
 use crate::engine::overlay::DumpVirt2PhysResp;
+use alloc::string::ToString;
+use opte::api::IpCidr;
+use opte::engine::geneve::Vni;
 use opte::engine::print::*;
+use std::io::Write;
+use tabwriter::TabWriter;
 
 /// Print the header for the [`print_v2p()`] output.
-fn print_v2p_header() {
-    println!("{:<24} {:<17} UNDERLAY IP", "VPC IP", "VPC MAC ADDR");
+fn print_v2p_header(t: &mut impl Write) -> std::io::Result<()> {
+    writeln!(t, "VPC_IP\tVPC MAC ADDR\tUNDERLAY IP")
 }
 
 /// Print a [`DumpVirt2PhysResp`].
-pub fn print_v2p(resp: &DumpVirt2PhysResp) {
-    println!("Virtual to Physical Mappings");
-    print_hrb();
-    for vpc in &resp.mappings {
-        println!();
-        println!("VPC {}", vpc.vni);
-        print_hr();
-        println!();
-        println!("IPv4 mappings");
-        print_hr();
-        print_v2p_header();
-        for pair in &vpc.ip4 {
-            print_v2p_ip4(pair);
-        }
+pub fn print_v2p(resp: &DumpVirt2PhysResp) -> std::io::Result<()> {
+    print_v2p_into(&mut std::io::stdout(), resp)
+}
 
-        println!();
-        println!("IPv6 mappings");
-        print_hr();
-        print_v2p_header();
+/// Print a [`DumpVirt2PhysResp`] into a given writer.
+pub fn print_v2p_into(
+    writer: &mut impl Write,
+    resp: &DumpVirt2PhysResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+    writeln!(t, "Virtual to Physical Mappings")?;
+    write_hrb(&mut t)?;
+    for vpc in &resp.mappings {
+        writeln!(t, "\nVPC {}", vpc.vni)?;
+        write_hr(&mut t)?;
+        writeln!(t, "\nIPv4 mappings")?;
+        write_hr(&mut t)?;
+        print_v2p_header(&mut t)?;
+        for pair in &vpc.ip4 {
+            print_v2p_ip4(&mut t, pair)?;
+        }
+        t.flush()?;
+
+        writeln!(t, "\nIPv6 mappings")?;
+        write_hr(&mut t)?;
+        print_v2p_header(&mut t)?;
         for pair in &vpc.ip6 {
-            print_v2p_ip6(pair);
+            print_v2p_ip6(&mut t, pair)?;
+        }
+        t.flush()?;
+    }
+    t.flush()
+}
+
+/// Print the header for the [`print_v2p()`] output.
+fn print_v2b_header(t: &mut impl Write) -> std::io::Result<()> {
+    writeln!(t, "TUNNELED PREFIX\tBOUNDARY IP\tVNI")
+}
+
+fn print_v2b_entry(
+    t: &mut impl Write,
+    prefix: IpCidr,
+    boundary: Ipv6Addr,
+    vni: Vni,
+) -> std::io::Result<()> {
+    writeln!(t, "{}\t{}\t{vni}", prefix.to_string(), boundary.to_string())
+}
+
+/// Print a [`DumpVirt2BoundaryResp`].
+pub fn print_v2b(resp: &DumpVirt2BoundaryResp) -> std::io::Result<()> {
+    print_v2b_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`DumpVirt2BoundaryResp`] into a given writer.
+pub fn print_v2b_into(
+    writer: &mut impl Write,
+    resp: &DumpVirt2BoundaryResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+    writeln!(t, "Virtual to Boundary Mappings")?;
+    write_hrb(&mut t)?;
+    writeln!(t, "\nIPv4 mappings")?;
+    write_hr(&mut t)?;
+    print_v2b_header(&mut t)?;
+    for x in &resp.mappings.ip4 {
+        for tep in &x.1 {
+            print_v2b_entry(&mut t, x.0.into(), tep.ip, tep.vni)?;
         }
     }
+    t.flush()?;
+
+    writeln!(t, "\nIPv6 mappings")?;
+    write_hr(&mut t)?;
+    print_v2b_header(&mut t)?;
+    for x in &resp.mappings.ip6 {
+        for tep in &x.1 {
+            print_v2b_entry(&mut t, x.0.into(), tep.ip, tep.vni)?;
+        }
+    }
+    writeln!(t)?;
+
+    t.flush()
 }
 
-fn print_v2p_ip4((src, phys): &(Ipv4Addr, GuestPhysAddr)) {
-    let eth = format!("{}", phys.ether);
-    println!(
-        "{:<24} {:<17} {}",
+fn print_v2p_ip4(
+    t: &mut impl Write,
+    (src, phys): &(Ipv4Addr, GuestPhysAddr),
+) -> std::io::Result<()> {
+    writeln!(
+        t,
+        "{}\t{}\t{}",
         std::net::Ipv4Addr::from(src.bytes()),
-        eth,
+        phys.ether,
         std::net::Ipv6Addr::from(phys.ip.bytes()),
-    );
+    )
 }
 
-fn print_v2p_ip6((src, phys): &(Ipv6Addr, GuestPhysAddr)) {
-    let eth = format!("{}", phys.ether);
-    println!(
-        "{:<24} {:<17} {}",
+fn print_v2p_ip6(
+    t: &mut impl Write,
+    (src, phys): &(Ipv6Addr, GuestPhysAddr),
+) -> std::io::Result<()> {
+    writeln!(
+        t,
+        "{}\t{}\t{}",
         std::net::Ipv6Addr::from(src.bytes()),
-        eth,
+        phys.ether,
         std::net::Ipv6Addr::from(phys.ip.bytes()),
-    );
+    )
 }

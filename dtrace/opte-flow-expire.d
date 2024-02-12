@@ -8,10 +8,11 @@
 #include "common.h"
 #include "protos.d"
 
-#define	HDR_FMT "%-24s %-18s %s\n"
+#define	HDR_FMT		"%-24s %-18s %s %s %s\n"
+#define	LINE_FMT	"%-24s %-18s %s %u %u\n"
 
 BEGIN {
-	printf(HDR_FMT, "PORT", "FT NAME", "FLOW");
+	printf(HDR_FMT, "PORT", "FT NAME", "FLOW", "LAST_HIT", "NOW");
 	num = 0;
 }
 
@@ -19,9 +20,11 @@ flow-expired {
 	this->port = stringof(arg0);
 	this->name = stringof(arg1);
 	this->flow = (flow_id_sdt_arg_t *)arg2;
+	this->last_hit = arg3;
+	this->now = arg4;
 
 	if (num >= 10) {
-		printf(HDR_FMT, "PORT", "FT NAME", "FLOW");
+		printf(HDR_FMT, "PORT", "FT NAME", "FLOW", "LAST_HIT", "NOW");
 		num = 0;
 	}
 
@@ -34,13 +37,13 @@ flow-expired {
 
 flow-expired /this->af == AF_INET/ {
 	FLOW_FMT(this->s, this->flow);
-	printf(HDR_FMT, this->port, this->name, this->s);
+	printf(LINE_FMT, this->port, this->name, this->s, this->last_hit, this->now);
 	num++;
 }
 
 flow-expired /this->af == AF_INET6/ {
 	FLOW_FMT6(this->s, this->flow);
-	printf(HDR_FMT, this->port, this->name, this->s);
+	printf(LINE_FMT, this->port, this->name, this->s, this->last_hit, this->now);
 	num++;
 }
 

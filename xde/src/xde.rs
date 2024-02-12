@@ -10,9 +10,7 @@
 //! interface, allowing one to run network implementations written in
 //! the OPTE framework.
 
-// TODO
-// - ddm integration to choose correct underlay device (currently just using
-//   first device)
+//#![allow(clippy::arc_with_non_send_sync)]
 
 use crate::dls;
 use crate::ioctl::IoctlEnvelope;
@@ -54,7 +52,6 @@ use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
-use opte::ddi::time::Moment;
 use opte::ddi::time::Periodic;
 use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
@@ -73,6 +70,7 @@ use opte::engine::port::ProcessResult;
 use opte::ExecCtx;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
@@ -81,6 +79,7 @@ use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::cfg::IpCfg;
 use oxide_vpc::cfg::VpcCfg;
@@ -219,6 +218,7 @@ struct xde_underlay_port {
 struct XdeState {
     ectx: Arc<ExecCtx>,
     vpc_map: Arc<overlay::VpcMappings>,
+    v2b: Arc<overlay::Virt2Boundary>,
     underlay: KMutex<Option<UnderlayState>>,
 }
 
@@ -246,6 +246,7 @@ impl XdeState {
             underlay: KMutex::new(None, KMutexType::Driver),
             ectx,
             vpc_map: Arc::new(overlay::VpcMappings::new()),
+            v2b: Arc::new(overlay::Virt2Boundary::new()),
         }
     }
 }
@@ -538,6 +539,21 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             hdlr_resp(&mut env, resp)
         }
 
+        OpteCmd::DumpVirt2Boundary => {
+            let resp = dump_v2b_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::SetVirt2Boundary => {
+            let resp = set_v2b_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ClearVirt2Boundary => {
+            let resp = clear_v2b_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
         OpteCmd::AddRouterEntry => {
             let resp = add_router_entry_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
@@ -563,7 +579,7 @@ fn expire_periodic(port: &mut Arc<Port<VpcNetwork>>) {
     // ignore the error. Eventually xde will also have logic for
     // moving a port to a paused state, and in that state the periodic
     // should probably be canceled.
-    let _ = port.expire_flows(Moment::now());
+    let _ = port.expire_flows();
 }
 
 #[no_mangle]
@@ -630,6 +646,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         &cfg,
         state.vpc_map.clone(),
         port_v2p.clone(),
+        state.v2b.clone(),
         state.ectx.clone(),
         &req.dhcp,
     )?;
@@ -1500,13 +1517,14 @@ unsafe extern "C" fn xde_mc_tx(
             // for the mac associated with the IRE nexthop to fill in
             // the outer frame of the packet. Also return the underlay
             // device associated with the nexthop
-            let (src, dst, underlay_dev) = next_hop(&ip6.dst, src_dev);
+            let (src, dst, underlay_dev) =
+                next_hop(&ip6.dst, src_dev, meta.l4_hash());
 
             // Get a pointer to the beginning of the outer frame and
             // fill in the dst/src addresses before sending out the
             // device.
             let mblk = pkt.unwrap_mblk();
-            let rptr = (*mblk).b_rptr as *mut u8;
+            let rptr = (*mblk).b_rptr;
             ptr::copy(dst.as_ptr(), rptr, 6);
             ptr::copy(src.as_ptr(), rptr.add(6), 6);
             // Unwrap: We know the packet is good because we just
@@ -1717,6 +1735,7 @@ fn netstack_rele(ns: *mut ip::netstack_t) {
 fn next_hop<'a>(
     ip6_dst: &Ipv6Addr,
     ustate: &'a XdeDev,
+    overlay_hash: Option<u32>,
 ) -> (EtherAddr, EtherAddr, &'a xde_underlay_port) {
     unsafe {
         // Use the GZ's routing table.
@@ -1729,7 +1748,7 @@ fn next_hop<'a>(
         let addr = ip::in6_addr_t {
             _S6_un: ip::in6_addr__bindgen_ty_1 { _S6_u8: ip6_dst.bytes() },
         };
-        let xmit_hint = 0;
+        let xmit_hint = overlay_hash.unwrap_or(0);
         let mut generation_op = 0u32;
 
         let mut underlay_port = &*ustate.u1;
@@ -1738,8 +1757,15 @@ fn next_hop<'a>(
         // to return one of the default gateway entries.
         let ire = DropRef::new(
             ire_refrele,
-            ip::ire_ftable_lookup_simple_v6(
+            ip::ire_ftable_lookup_v6(
                 &addr,
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null_mut(),
+                sys::ALL_ZONES,
+                ptr::null(),
+                0,
                 xmit_hint,
                 ipst,
                 &mut generation_op as *mut ip::uint_t,
@@ -1754,6 +1780,7 @@ fn next_hop<'a>(
         // an underlay network issue. How do we convey this situation
         // to the user/operator?
         if ire.inner().is_null() {
+            // Try without a pinned ill
             opte::engine::dbg(format!("no IRE for destination {:?}", ip6_dst));
             next_hop_probe(
                 ip6_dst,
@@ -1960,6 +1987,7 @@ fn new_port(
     cfg: &VpcCfg,
     vpc_map: Arc<overlay::VpcMappings>,
     v2p: Arc<overlay::Virt2Phys>,
+    v2b: Arc<overlay::Virt2Boundary>,
     ectx: Arc<ExecCtx>,
     dhcp_cfg: &DhcpCfg,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
@@ -1981,7 +2009,7 @@ fn new_port(
     gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
     router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, FT_LIMIT_ONE)?;
+    overlay::setup(&pb, &cfg, v2p, v2b, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -2161,6 +2189,31 @@ fn dump_v2p_hdlr(
     let _req: overlay::DumpVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
     Ok(state.vpc_map.dump())
+}
+
+#[no_mangle]
+fn set_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: SetVirt2BoundaryReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    state.v2b.set(req.vip, req.tep);
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
+fn clear_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: ClearVirt2BoundaryReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    state.v2b.remove(req.vip, req.tep);
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
+fn dump_v2b_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<overlay::DumpVirt2BoundaryResp, OpteError> {
+    let _req: overlay::DumpVirt2BoundaryReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    Ok(state.v2b.dump())
 }
 
 #[no_mangle]

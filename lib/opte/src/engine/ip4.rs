@@ -371,9 +371,7 @@ impl<'a> Ipv4Hdr<'a> {
             });
         }
 
-        let _proto = Protocol::try_from(ip.bytes.proto).map_err(|_s| {
-            Ipv4HdrError::UnexpectedProtocol { protocol: ip.bytes.proto }
-        })?;
+        let _proto = Protocol::from(ip.bytes.proto);
 
         Ok(ip)
     }
@@ -382,7 +380,7 @@ impl<'a> Ipv4Hdr<'a> {
     #[inline]
     pub fn proto(&self) -> Protocol {
         // Unwrap: We verified the proto is good upon parsing.
-        Protocol::try_from(self.bytes.proto).unwrap()
+        Protocol::from(self.bytes.proto)
     }
 
     /// Populate `bytes` with the pseudo header bytes.
