@@ -2,11 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Common routines for integration tests.
 
-// This type of pedantry is more trouble than its worth here.
+// This type of pedantry is more trouble than it's worth here.
 #![allow(dead_code)]
 
 pub mod dhcp;
@@ -35,10 +35,12 @@ pub use opte::engine::ip4::Ipv4Hdr;
 pub use opte::engine::ip4::Ipv4Meta;
 pub use opte::engine::ip4::Protocol;
 pub use opte::engine::ip6::Ipv6Addr;
+pub use opte::engine::ip6::Ipv6Hdr;
 pub use opte::engine::ip6::Ipv6Meta;
 pub use opte::engine::layer::DenyReason;
 pub use opte::engine::packet::BodyInfo;
 pub use opte::engine::packet::HdrOffset;
+pub use opte::engine::packet::Initialized;
 pub use opte::engine::packet::Packet;
 pub use opte::engine::packet::Parsed;
 pub use opte::engine::port::meta::ActionMeta;
@@ -51,6 +53,7 @@ pub use opte::engine::tcp::TcpFlags;
 pub use opte::engine::tcp::TcpHdr;
 pub use opte::engine::tcp::TcpMeta;
 pub use opte::engine::udp::UdpHdr;
+pub use opte::engine::udp::UdpMeta;
 pub use opte::engine::GenericUlp;
 pub use opte::ExecCtx;
 pub use oxide_vpc::api::AddFwRuleReq;
