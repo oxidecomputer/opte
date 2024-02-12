@@ -49,7 +49,6 @@ pub use opte::engine::port::ProcessResult::*;
 pub use opte::engine::tcp::TcpFlags;
 pub use opte::engine::tcp::TcpHdr;
 pub use opte::engine::tcp::TcpMeta;
-pub use opte::engine::udp::UdpHdr;
 pub use opte::engine::GenericUlp;
 pub use opte::ExecCtx;
 pub use oxide_vpc::api::AddFwRuleReq;
@@ -986,7 +985,7 @@ fn _encap(
     let geneve = GeneveMeta {
         entropy: 99,
         vni: dst.vni,
-        len: (UdpHdr::SIZE + GeneveHdr::BASE_SIZE + opt_len + inner_len) as u16,
+        len: (GeneveHdr::BASE_SIZE + opt_len + inner_len) as u16,
         oxide_external_pkt: external_snat,
     };
 

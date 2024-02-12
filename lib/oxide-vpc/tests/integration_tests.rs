@@ -47,6 +47,7 @@ use opte::engine::packet::Parsed;
 use opte::engine::port::ProcessError;
 use opte::engine::tcp::TcpState;
 use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
+use opte::engine::udp::UdpHdr;
 use opte::engine::udp::UdpMeta;
 use opte::engine::Direction;
 use oxide_vpc::api::ExternalIpCfg;
