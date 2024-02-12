@@ -52,14 +52,7 @@ impl OpteZone {
     /// of interfaces. In illumos parlance, the interfaces are data link
     /// devices.
     fn new(name: &str, zfs: &Zfs, ifx: &[&str]) -> Result<Self> {
-        // If we're running in CI, use the omicron1 zone, because that's whats
-        // there. If this is running locally, use a sparse zone which is much
-        // easier to set up on a regular Helios dev box.
-        let brand = match env::var("BUILDOMAT_JOB_ID") {
-            Ok(_) => "omicron1",
-            _ => "sparse",
-        };
-        let zone = Zone::new(name, brand, zfs, ifx, &[])?;
+        let zone = Zone::new(name, "sparse", zfs, ifx, &[])?;
         Ok(Self { zone })
     }
 
@@ -157,7 +150,7 @@ impl OptePort {
     pub fn ip(&self) -> String {
         match &self.cfg.ip_cfg {
             IpCfg::Ipv4(cfg) => cfg.private_ip.to_string(),
-            _ => panic!("expected ipv4 gueset"),
+            _ => panic!("expected ipv4 guest"),
         }
     }
 
