@@ -394,6 +394,7 @@ fn spawn_local_dtraces(
 }
 
 fn build_flamegraph(
+    config: &IperfConfig,
     stack_file: impl AsRef<Path>,
     out_dir: impl AsRef<Path>,
     rx_name: Option<&str>,
@@ -437,8 +438,8 @@ fn build_flamegraph(
         let flame_name = out_dir.as_ref().join(format!("{out_name}.svg"));
         let flame_file = File::create(&flame_name)?;
         let flame_status = Command::new("flamegraph.pl")
-            .args(["--title", "Mytitle"])
-            .args(["--subtitle", "b"])
+            .args(["--title", &config.title()])
+            .args(["--subtitle", &format!("Stacks containing: {tracked_fn}")])
             .args(["--fonttype", "Berkeley Mono,Fira Mono,monospace"])
             .args(["--width", "1600"])
             .arg(grepped_name.as_os_str())
@@ -476,7 +477,11 @@ fn zone_to_zone() -> Result<()> {
         .zone
         .zexec(&format!("ping {}", &topol.nodes[1].port.ip()))?;
 
-    test_iperf(topol, &target_ip)
+    for expt in base_experiments("local") {
+        test_iperf(&topol, &target_ip, &expt)?
+    }
+
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -648,31 +653,181 @@ fn over_nic(params: &OpteCreateParams, host: &str) -> Result<()> {
     // uncomment to enter the zone safely for testing.
     // loop_til_exit();
 
-    test_iperf(topol, &target_ip.to_string())
+    for expt in base_experiments("over-nic") {
+        test_iperf(&topol, &target_ip.to_string(), &expt)?
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+enum IperfMode {
+    ClientSend,
+    ServerSend,
+    // TODO: need an updated illumos package.
+    //       we can build and install locally and just call
+    //       /usr/local/iperf3 if need be.
+    BiDir,
+}
+
+impl std::fmt::Display for IperfMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            IperfMode::ClientSend => "Client->Server",
+            IperfMode::ServerSend => "Server->Client",
+            IperfMode::BiDir => "Bidirectional",
+        })
+    }
+}
+
+impl Default for IperfMode {
+    fn default() -> Self {
+        Self::ClientSend
+    }
+}
+
+#[derive(Debug, Clone)]
+enum IperfProto {
+    Tcp,
+    Udp {
+        /// Target bandwidth in MiB/s.
+        bw: f64,
+        /// Size of the UDP send buffer.
+        ///
+        /// Should be under 1500 due to dont_fragment.
+        pkt_sz: usize,
+    },
+}
+
+impl std::fmt::Display for IperfProto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IperfProto::Tcp => f.write_str("TCP"),
+            IperfProto::Udp { bw, pkt_sz } => {
+                write!(f, "UDP({pkt_sz}B, {bw}MiB/s)")
+            }
+        }
+    }
+}
+
+impl Default for IperfProto {
+    fn default() -> Self {
+        Self::Tcp
+    }
+}
+
+#[derive(Debug, Clone)]
+struct IperfConfig {
+    use_dtrace: bool,
+    n_iters: usize,
+    mode: IperfMode,
+    proto: IperfProto,
+    expt_name: String,
+}
+
+impl Default for IperfConfig {
+    fn default() -> Self {
+        Self {
+            use_dtrace: true,
+            n_iters: 10,
+            mode: IperfMode::default(),
+            proto: IperfProto::default(),
+            expt_name: "unspec".into(),
+        }
+    }
+}
+
+impl IperfConfig {
+    fn cmd_str(&self, target_ip: &str) -> String {
+        let proto_str;
+        let proto_segment = match self.proto {
+            IperfProto::Tcp => "",
+            IperfProto::Udp { bw, pkt_sz } => {
+                proto_str = format!("-u --length {pkt_sz} -b {bw}M");
+                proto_str.as_str()
+            }
+        };
+        let dir_segment = match self.mode {
+            IperfMode::ClientSend => "",
+            IperfMode::ServerSend => "-R",
+            IperfMode::BiDir => "--bidir",
+        };
+
+        // XXX: Setting several parallel streams because we don't
+        //      really have packet-wise ECMP yet from ddm -- the
+        //      P-values won't change, so the flowkey remains the same.
+        format!("iperf -c {target_ip} -J -P 8 {proto_segment} {dir_segment}")
+    }
+
+    fn benchmark_group(&self) -> String {
+        format!(
+            "iperf-{}/{}/{}",
+            match self.proto {
+                IperfProto::Tcp => "tcp",
+                IperfProto::Udp { .. } => "udp",
+            },
+            self.expt_name,
+            match self.mode {
+                IperfMode::ClientSend => "c2s",
+                IperfMode::ServerSend => "s2c",
+                IperfMode::BiDir => "bidir",
+            }
+        )
+    }
+
+    fn title(&self) -> String {
+        format!("iperf3 ({}) -- {}", self.mode, self.proto)
+    }
+}
+
+// XXX: want these as json somewhere, with command line options
+//      to choose which are run.
+fn base_experiments(expt_name: &str) -> Vec<IperfConfig> {
+    let base =
+        IperfConfig { expt_name: expt_name.to_string(), ..Default::default() };
+    vec![
+        // no dtrace: raw speeds.
+        IperfConfig {
+            use_dtrace: false,
+            n_iters: 5,
+            mode: IperfMode::ClientSend,
+            ..base.clone()
+        },
+        IperfConfig {
+            use_dtrace: false,
+            n_iters: 5,
+            mode: IperfMode::ServerSend,
+            ..base.clone()
+        },
+        // dtrace: collect all the stats!
+        IperfConfig { mode: IperfMode::ClientSend, ..base.clone() },
+        IperfConfig { mode: IperfMode::ServerSend, ..base.clone() },
+    ]
 }
 
 #[cfg(target_os = "illumos")]
-fn test_iperf(topol: Topology, target_ip: &str) -> Result<()> {
+fn test_iperf(
+    topol: &Topology,
+    target_ip: &str,
+    config: &IperfConfig,
+) -> Result<()> {
+    print_banner(
+        format!("Running experiment\n{}", config.benchmark_group()).as_str(),
+    );
+
     // Begin dtrace sessions in global zone.
-    let (kill, done) = spawn_local_dtraces("iperf-tcp");
+    let dt_handles = config
+        .use_dtrace
+        .then(|| spawn_local_dtraces(config.benchmark_group()));
+
+    let my_cmd = config.cmd_str(target_ip);
 
     // Begin a handful of iPerf client sessions, dtrace will cat
     // all stack traces/times together.
     let mut outputs = vec![];
-    let max = 3;
-    for i in 1..(max + 1) {
-        // XXX: Want to run one of the dtraces at a time?
-        //      Looks like histo-timing has a noticeable cost on BW.
-        // XXX: Setting several parallel streams because we don't
-        //      really have packet-wise ecmp yet from ddm because the
-        //      P-values won't change.
-        // XXX: want -R here
-        // XXX: want --bidir, but we need to build a more recent iperf3
-        //      pkg for illumos.
-        print!("Run {i}/{max}...");
-        let iperf_done = topol.nodes[0]
-            .command(&format!("iperf -c {target_ip} -J -P 8"))
-            .output()?;
+    for i in 1..(config.n_iters + 1) {
+        print!("Run {i}/{}...", config.n_iters);
+        let iperf_done = topol.nodes[0].command(&my_cmd).output()?;
         let iperf_out = std::str::from_utf8(&iperf_done.stdout)?;
         let parsed_out: Output =
             serde_json::from_str(iperf_out).map_err(|e| {
@@ -684,11 +839,19 @@ fn test_iperf(topol: Topology, target_ip: &str) -> Result<()> {
         outputs.push(parsed_out);
     }
 
-    // Close dtrace.
-    print_banner("iPerf done...\nAwaiting out files...");
-    let _ = kill.send(());
-    print_banner("done!");
-    process_output(done.recv()??)
+    // XXX: We don't currently have a way to just pass in straight
+    //      throughput numbers to criterion. I'd like to take the time
+    //      to flesh that out, but eyeballing the tput numbers will maybe
+    //      suffice for v1.
+    if let Some((kill, done)) = dt_handles {
+        // Close dtrace.
+        print_banner("iPerf done...\nAwaiting out files...");
+        let _ = kill.send(());
+        print_banner("done!");
+        process_output(config, done.recv()??)?;
+    }
+
+    Ok(())
 }
 
 fn zone_to_zone_dummy() -> Result<()> {
@@ -697,11 +860,17 @@ fn zone_to_zone_dummy() -> Result<()> {
     let stack_path = out_dir.join("raw.stacks");
     let outdata = DtraceOutput { histo_path, stack_path, out_dir };
 
-    process_output(outdata)
+    process_output(&Default::default(), outdata)
 }
 
-fn process_output(outdata: DtraceOutput) -> Result<()> {
-    build_flamegraph(&outdata.stack_path, &outdata.out_dir, None, None)?;
+fn process_output(config: &IperfConfig, outdata: DtraceOutput) -> Result<()> {
+    build_flamegraph(
+        config,
+        &outdata.stack_path,
+        &outdata.out_dir,
+        None,
+        None,
+    )?;
 
     let histos = DTraceHisto::from_path(&outdata.histo_path, 256)?;
 
@@ -714,7 +883,7 @@ fn process_output(outdata: DtraceOutput) -> Result<()> {
         let idx =
             WeightedIndex::new(histo.buckets.iter().map(|x| x.1)).unwrap();
 
-        let mut c = c.benchmark_group("iperf-tcp/local");
+        let mut c = c.benchmark_group(config.benchmark_group());
         c.bench_function(&label, move |b| {
             b.iter_custom(|iters| {
                 (0..iters)
