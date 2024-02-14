@@ -27,18 +27,32 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
-use std::net::IpAddr;
+use std::io::Read;
+use std::io::Write;
+use std::net::Ipv6Addr;
+use std::net::TcpListener;
+use std::net::TcpStream;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
+#[cfg(target_os = "illumos")]
+use xde_tests::get_linklocal_addr;
+#[cfg(target_os = "illumos")]
+use xde_tests::RouteV6;
+#[cfg(target_os = "illumos")]
 use xde_tests::Topology;
+
+const DEFAULT_PORT: u16 = 0x1dee;
 
 #[cfg(not(target_os = "illumos"))]
 fn main() -> Result<()> {
@@ -99,17 +113,15 @@ enum Experiment {
     /// Benchmark iPerf from a single zone to an existing server
     /// on another physical node.
     ///
-    /// This should forward packets over a NIC:
+    /// This should forward packets over a NIC, using the `underlay_nics`
+    /// argument.
     Remote {
-        /// Listen address of an external iPerf server.
-        // iperf_server: IpAddr,
+        /// Listen address/hostname of a `cargo kbench server` instance
+        /// for route exchange.
+        iperf_server: String,
 
         #[command(flatten)]
         opte_create: OpteCreateParams,
-
-        /// Test.
-        // #[arg(short, long, value_enum, default_value_t=CreateMode::Dont)]
-        // opte_create: CreateMode,
 
         #[command(flatten)]
         _waste: IgnoredExtras,
@@ -155,6 +167,14 @@ struct OpteCreateParams {
         default_values_t=["igb0".to_string(), "igb1".to_string()]
     )]
     underlay_nics: Vec<String>,
+
+    /// Port used for server-to-bench instance communication.
+    #[arg(
+        short,
+        long,
+        default_value_t=DEFAULT_PORT,
+    )]
+    port: u16,
 }
 
 #[derive(Parser)]
@@ -435,12 +455,152 @@ fn zone_to_zone() -> Result<()> {
     test_iperf(topol, &target_ip)
 }
 
-#[cfg(target_os = "illumos")]
-fn over_nic(params: &OpteCreateParams) -> Result<()> {
-    // add_drv xde.
+#[derive(Debug)]
+struct Routes {
+    lls: Vec<Ipv6Addr>,
+    underlay: Ipv6Addr,
+}
 
-    use std::eprintln;
+#[cfg(target_os = "illumos")]
+fn send_routes_client(
+    route: &Routes,
+    host: &str,
+    params: &OpteCreateParams,
+) -> Result<(TcpStream, Vec<RouteV6>)> {
+    println!("Connecting to {host}...");
+    let mut client = TcpStream::connect((host, params.port))?;
+    println!("Connected!");
+    client.set_nodelay(true)?;
+
+    let v6_routes = exchange_routes(route, &mut client, &params.underlay_nics)?;
+    Ok((client, v6_routes))
+}
+
+#[cfg(target_os = "illumos")]
+fn exchange_routes(
+    route: &Routes,
+    client: &mut TcpStream,
+    underlay_nics: &[String],
+) -> Result<Vec<RouteV6>> {
+    send_routes(route, client)?;
+    let new_routes = recv_routes(client)?;
+
+    // TODO:
+    // ping received new routes
+    // investigate ndp output to pin to ifs
+    // create RouteV6s
+
+    // ping the received link locals and prime NDP.
+    for ip in &new_routes.lls {
+        Command::new("ping").arg(ip.to_string()).output()?;
+    }
+
+    let ndp_data = Command::new("ndp").arg("-an").output()?;
+
+    let ndp_parse = std::str::from_utf8(&ndp_data.stdout)?;
+
+    let mut routes = vec![];
+    let mut nics_used = HashSet::new();
+    for line in ndp_parse.lines() {
+        let mut els = line.split_whitespace();
+
+        let Some(nic) = els.next() else {
+            continue;
+        };
+        let nic = nic.to_string();
+
+        let Some(_mac) = els.next() else {
+            continue;
+        };
+
+        let Some(_type) = els.next() else {
+            continue;
+        };
+
+        let Some(status) = els.next() else {
+            continue;
+        };
+
+        let Some(addr) = els.next() else {
+            continue;
+        };
+
+        if !underlay_nics.contains(&nic) {
+            continue;
+        }
+
+        if status != "REACHABLE" {
+            continue;
+        }
+
+        let Ok(gw_ip) = addr.parse::<Ipv6Addr>() else {
+            continue;
+        };
+
+        if new_routes.lls.contains(&gw_ip) {
+            println!(
+                "installing {}/64->{gw_ip} via {nic}",
+                new_routes.underlay
+            );
+            routes.push(RouteV6::new(
+                new_routes.underlay,
+                64,
+                gw_ip,
+                Some(nic.to_string()),
+            )?);
+            nics_used.insert(nic.to_string());
+        }
+    }
+
+    if nics_used.len() < 2 {
+        eprintln!("only found routes to other side over {nics_used:?}. multipath may be degraded.")
+    }
+
+    Ok(routes)
+}
+
+fn send_routes(route: &Routes, client: &mut TcpStream) -> Result<()> {
+    client.write_all(&(route.lls.len() as u64).to_be_bytes())?;
+    for ll in &route.lls {
+        client.write_all(&ll.octets())?;
+    }
+    client.write_all(&route.underlay.octets())?;
+
+    Ok(())
+}
+
+fn recv_routes(client: &mut TcpStream) -> Result<Routes> {
+    let mut buf = [0u8; std::mem::size_of::<Ipv6Addr>()];
+
+    client.read_exact(&mut buf[..8])?;
+    let len = u64::from_be_bytes(buf[..8].try_into()?);
+    let mut lls = Vec::with_capacity(len.try_into()?);
+    for _ in 0..len {
+        client.read_exact(&mut buf[..])?;
+        lls.push(Ipv6Addr::from(buf));
+    }
+    client.read_exact(&mut buf[..])?;
+    let underlay = Ipv6Addr::from(buf);
+
+    Ok(Routes { lls, underlay })
+}
+
+#[cfg(target_os = "illumos")]
+fn over_nic(params: &OpteCreateParams, host: &str) -> Result<()> {
+    // add_drv xde.
     ensure_xde()?;
+
+    let lls: Vec<Ipv6Addr> = params
+        .underlay_nics
+        .iter()
+        .map(String::as_str)
+        .map(get_linklocal_addr)
+        .collect::<Result<_>>()?;
+
+    let to_send =
+        Routes { lls, underlay: xde_tests::ZONE_B_PORT.underlay_addr.into() };
+
+    let (_sess, _routes) = send_routes_client(&to_send, host, params)?;
 
     print_banner(&format!(
         "Creating XDE device on NICS {}",
@@ -458,11 +618,13 @@ fn over_nic(params: &OpteCreateParams) -> Result<()> {
     // Ping for good luck / to verify reachability.
     let _ = &topol.nodes[0].zone.zone.zexec(&format!("ping {}", &target_ip))?;
 
-    loop_til_exit();
+    // uncomment to enter the zone safely for testing.
+    // loop_til_exit();
 
     test_iperf(topol, &target_ip.to_string())
 }
 
+#[cfg(target_os = "illumos")]
 fn test_iperf(topol: Topology, target_ip: &str) -> Result<()> {
     // Begin dtrace sessions in global zone.
     let (kill, done) = spawn_local_dtraces("iperf-tcp");
@@ -474,13 +636,19 @@ fn test_iperf(topol: Topology, target_ip: &str) -> Result<()> {
     for i in 1..(max + 1) {
         // XXX: Want to run one of the dtraces at a time?
         //      Looks like histo-timing has a noticeable cost on BW.
+        // XXX: Setting several parallel streams because we don't
+        //      really have packet-wise ecmp yet from ddm because the
+        //      P-values won't change.
+        // XXX: want -R here
+        // XXX: want --bidir, but we need to build a more recent iperf3
+        //      pkg for illumos.
         print!("Run {i}/{max}...");
         let iperf_done = topol.nodes[0]
-            .command(&format!("iperf -c {target_ip} -J"))
+            .command(&format!("iperf -c {target_ip} -J -P 4"))
             .output()?;
         let iperf_out = std::str::from_utf8(&iperf_done.stdout)?;
         let parsed_out: Output =
-            serde_json::from_str(&iperf_out).map_err(|e| {
+            serde_json::from_str(iperf_out).map_err(|e| {
                 eprintln!("json {e:?}");
                 println!("\n\n{iperf_out}\n\n");
                 e
@@ -565,6 +733,18 @@ fn host_iperf(params: &OpteCreateParams) -> Result<()> {
     // add_drv xde.
     ensure_xde()?;
 
+    let listener = TcpListener::bind(("0.0.0.0", params.port))?;
+
+    let lls: Vec<Ipv6Addr> = params
+        .underlay_nics
+        .iter()
+        .map(String::as_str)
+        .map(get_linklocal_addr)
+        .collect::<Result<_>>()?;
+
+    let to_send =
+        Routes { lls, underlay: xde_tests::ZONE_A_PORT.underlay_addr.into() };
+
     print_banner(&format!(
         "Creating XDE device on NICS {}",
         params.underlay_nics.iter().join(",")
@@ -578,9 +758,88 @@ fn host_iperf(params: &OpteCreateParams) -> Result<()> {
     print_banner("topology created, spawning iPerf.\ntype 'exit' to exit.");
     let _iperf_sess = topol.nodes[0].command("iperf -s").spawn()?;
 
+    let kill_switch: Arc<AtomicBool> = Arc::default();
+    let remote_ks = kill_switch.clone();
+    let underlay_nics = Arc::new(params.underlay_nics.clone());
+    let handle = std::thread::spawn(move || {
+        server_loop(listener, Arc::new(to_send), underlay_nics, remote_ks)
+    });
+
     loop_til_exit();
 
+    kill_switch.store(true, Ordering::Relaxed);
+
+    handle.join().unwrap();
+
     Ok(())
+}
+
+fn server_loop(
+    listener: TcpListener,
+    route: Arc<Routes>,
+    underlay_nics: Arc<Vec<String>>,
+    kill_switch: Arc<AtomicBool>,
+) {
+    listener.set_nonblocking(true).unwrap();
+    loop {
+        if kill_switch.load(Ordering::Relaxed) {
+            break;
+        }
+
+        match listener.accept() {
+            Ok((sess, _addr)) => {
+                let _ = sess.set_nodelay(true);
+                let route = route.clone();
+                let kill_switch = kill_switch.clone();
+                let underlay = underlay_nics.clone();
+                std::thread::spawn(move || {
+                    server_session(sess, route, underlay, kill_switch)
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) => {
+                eprintln!("failed to open stream for listener: {e:?}");
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn server_session(
+    mut stream: TcpStream,
+    route: Arc<Routes>,
+    underlay_nics: Arc<Vec<String>>,
+    kill_switch: Arc<AtomicBool>,
+) {
+    #[cfg(target_os = "illumos")]
+    let _rx_routes =
+        exchange_routes(&route, &mut stream, &underlay_nics).unwrap();
+
+    stream.set_nonblocking(true).unwrap();
+
+    let mut buf = [0u8; 16];
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => {
+                break;
+            }
+            Ok(_) => {
+                eprintln!("received extra data from {:?}", stream.peer_addr());
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(_) => {
+                break;
+            }
+        }
+
+        if kill_switch.load(Ordering::Relaxed) {
+            break;
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[cfg(target_os = "illumos")]
@@ -591,7 +850,9 @@ fn main() -> Result<()> {
     let cfg = ConfigInput::parse();
 
     match cfg.command {
-        Experiment::Remote { opte_create, .. } => over_nic(&opte_create),
+        Experiment::Remote { iperf_server, opte_create, .. } => {
+            over_nic(&opte_create, &iperf_server)
+        }
         Experiment::Local { no_bench, .. } => {
             if no_bench {
                 zone_to_zone_dummy()

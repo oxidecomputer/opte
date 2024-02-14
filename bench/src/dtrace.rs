@@ -119,8 +119,8 @@ impl ParseState {
                     .ok_or(anyhow::anyhow!("Failed to get first count."))?;
 
                 // special case first and last buckets.
-                let underlier = time_slice.contains("<");
-                let overlier = time_slice.contains(">");
+                let underlier = time_slice.contains('<');
+                let overlier = time_slice.contains('>');
                 if underlier || overlier {
                     time_slice = divided
                         .next()
@@ -148,9 +148,7 @@ impl Measurement for DTraceHisto {
     type Intermediate = ();
     type Value = Duration;
 
-    fn start(&self) -> Self::Intermediate {
-        ()
-    }
+    fn start(&self) -> Self::Intermediate {}
 
     fn end(&self, _i: Self::Intermediate) -> Self::Value {
         // XXX: I think we *really* want to precache the WeightedIndex.

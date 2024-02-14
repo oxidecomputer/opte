@@ -8,7 +8,6 @@ use anyhow::Result;
 use opteadm::OpteAdm;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
-use oxide_vpc::api::BoundaryServices;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::Direction;
 use oxide_vpc::api::ExternalIpCfg;
@@ -29,12 +28,11 @@ use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::Vni;
 use oxide_vpc::api::VpcCfg;
-use std::env;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 use zone::Zlogin;
-use ztest::*;
+pub use ztest::*;
 
 /// The overlay network used in all tests.
 pub const OVERLAY_NET: &str = "10.0.0.0/24";
@@ -385,7 +383,7 @@ pub const ZONE_B_PORT: PortInfo = PortInfo {
     ]),
 };
 
-fn get_linklocal_addr(link_name: &str) -> Result<std::net::Ipv6Addr> {
+pub fn get_linklocal_addr(link_name: &str) -> Result<std::net::Ipv6Addr> {
     // kyle@farme:~$ ipadm show-addr igb0/ll
     // ADDROBJ           TYPE     STATE        ADDR
     // igb0/ll           addrconf ok           fe80::a236:9fff:fe0c:2586%igb0/10
@@ -425,10 +423,6 @@ pub fn single_node_over_real_nic(
     Xde::set_xde_underlay(&underlay[0], &underlay[1])?;
     let xde = Xde {};
 
-    // Fetch link-local addrs for underlay.
-    let ll0 = get_linklocal_addr(&underlay[0])?;
-    let ll1 = get_linklocal_addr(&underlay[1])?;
-
     let ip = my_info.ip.to_string();
     let mac = my_info.mac.to_string();
     let underlay_addr = my_info.underlay_addr.to_string();
@@ -436,30 +430,13 @@ pub fn single_node_over_real_nic(
 
     let opte = OptePort::new("opte0", &ip, &mac, &underlay_addr)?;
 
-    let mut v6_routes = vec![];
+    let v6_routes = vec![];
     for peer in peers {
         let ip = peer.ip.to_string();
         let mac = peer.mac.to_string();
         let underlay_addr = peer.underlay_addr.to_string();
         Xde::set_v2p(&ip, &mac, &underlay_addr)?;
         opte.add_router_entry(&ip)?;
-
-        // let dst_ip = underlay_addr.parse()?;
-        // let r0 = RouteV6::new(
-        //     dst_ip,
-        //     64,
-        //     ll0,
-        //     Some(underlay[0].clone())
-        // )?;
-        // v6_routes.push(r0);
-
-        // let r1 = RouteV6::new(
-        //     dst_ip,
-        //     64,
-        //     ll1,
-        //     Some(underlay[1].clone())
-        // )?;
-        // v6_routes.push(r1);
     }
 
     opte.fw_allow_all()?;

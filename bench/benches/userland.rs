@@ -25,16 +25,16 @@ pub fn block<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
 
     for experiment in &all_tests {
         for case in experiment.test_cases() {
-            test_parse(c, experiment, &case);
-            test_handle(c, experiment, &case);
+            test_parse(c, &**experiment, &*case);
+            test_handle(c, &**experiment, &*case);
         }
     }
 }
 
 pub fn test_parse<M: MeasurementInfo + 'static>(
     c: &mut Criterion<M>,
-    experiment: &Box<dyn BenchPacket>,
-    case: &Box<dyn BenchPacketInstance>,
+    experiment: &dyn BenchPacket,
+    case: &dyn BenchPacketInstance,
 ) {
     let g1_cfg = g1_cfg();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
@@ -61,8 +61,8 @@ pub fn test_parse<M: MeasurementInfo + 'static>(
 
 pub fn test_handle<M: MeasurementInfo + 'static>(
     c: &mut Criterion<M>,
-    experiment: &Box<dyn BenchPacket>,
-    case: &Box<dyn BenchPacketInstance>,
+    experiment: &dyn BenchPacket,
+    case: &dyn BenchPacketInstance,
 ) {
     let g1_cfg = g1_cfg();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
