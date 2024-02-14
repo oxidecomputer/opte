@@ -114,7 +114,8 @@ enum Experiment {
     /// on another physical node.
     ///
     /// This should forward packets over a NIC, using the `underlay_nics`
-    /// argument.
+    /// argument. Your underlay NICS *must* have an MTU significantly
+    /// larger than 1500, and have ipv6 link locals e.g. igb0/ll.
     Remote {
         /// Listen address/hostname of a `cargo kbench server` instance
         /// for route exchange.
@@ -141,10 +142,21 @@ enum Experiment {
     },
     /// Run an iPerf server in an OPTE-connected zone for back-to-back
     /// testing.
+    ///
+    /// Your underlay NICS *must* have an MTU significantly larger
+    /// than 1500, and have ipv6 link local addresses e.g. igb0/ll.
     Server {
         #[command(flatten)]
         opte_create: OpteCreateParams,
 
+        #[command(flatten)]
+        _waste: IgnoredExtras,
+    },
+    /// Wipe out any leftover state if a test/server run ends poorly.
+    ///
+    /// This will remove the 'vopte0' adapter, 'a' zone, and the XDE
+    /// driver.
+    Cleanup {
         #[command(flatten)]
         _waste: IgnoredExtras,
     },
@@ -485,15 +497,18 @@ fn exchange_routes(
     send_routes(route, client)?;
     let new_routes = recv_routes(client)?;
 
-    // TODO:
-    // ping received new routes
-    // investigate ndp output to pin to ifs
-    // create RouteV6s
+    println!("peer owns connected lls {:?}", new_routes.lls);
 
     // ping the received link locals and prime NDP.
     for ip in &new_routes.lls {
         Command::new("ping").arg(ip.to_string()).output()?;
     }
+
+    // Leave ample time to also *be* pinged if necessary.
+    // I'm finding that the server can be caught with entries
+    // in state DELAYED, otherwise.
+    println!("lls pinged, awating ndp stabilising...");
+    std::thread::sleep(Duration::from_secs(10));
 
     let ndp_data = Command::new("ndp").arg("-an").output()?;
 
@@ -644,7 +659,7 @@ fn test_iperf(topol: Topology, target_ip: &str) -> Result<()> {
         //      pkg for illumos.
         print!("Run {i}/{max}...");
         let iperf_done = topol.nodes[0]
-            .command(&format!("iperf -c {target_ip} -J -P 4"))
+            .command(&format!("iperf -c {target_ip} -J -P 8"))
             .output()?;
         let iperf_out = std::str::from_utf8(&iperf_done.stdout)?;
         let parsed_out: Output =
@@ -842,6 +857,29 @@ fn server_session(
     }
 }
 
+fn cleanup_detritus() -> Result<()> {
+    // NOTE: We're not really caring about the success of these
+    // operations, just to do them all in (approximately) the
+    // correct sequence.
+
+    println!("stopping zones...");
+    Command::new("zoneadm").args(["-z", "a", "halt"]).output()?;
+
+    println!("deleting zones...");
+    Command::new("zoneadm").args(["-z", "a", "uninstall"]).output()?;
+
+    println!("deleting vnics...");
+    Command::new("dladm").args(["delete-vnic", "vopte0"]).output()?;
+
+    println!("deleting opte port...");
+    Command::new("opteadm").args(["delete-xde", "opte0"]).output()?;
+
+    println!("removing underlay binding...");
+    Command::new("rem_drv").arg("xde").output()?;
+
+    Ok(())
+}
+
 #[cfg(target_os = "illumos")]
 fn main() -> Result<()> {
     elevate()?;
@@ -861,5 +899,6 @@ fn main() -> Result<()> {
             }
         }
         Experiment::Server { opte_create, .. } => host_iperf(&opte_create),
+        Experiment::Cleanup { .. } => cleanup_detritus(),
     }
 }
