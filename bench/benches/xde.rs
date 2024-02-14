@@ -265,6 +265,7 @@ fn check_deps() -> Result<()> {
         (Dep::Program, "iperf", "iperf"),
         (Dep::Program, "stackcollapse.pl", "flamegraph"),
         (Dep::Program, "flamegraph.pl", "flamegraph"),
+        (Dep::Program, "demangle", "demangle"),
         (Dep::File, "/usr/lib/brand/sparse", "sparse"),
     ];
 
@@ -417,18 +418,29 @@ fn build_flamegraph(
     for (tracked_fn, out_name) in terms {
         let grepped_name = out_dir.as_ref().join(format!("{out_name}.folded"));
         let grepped = File::create(&grepped_name)?;
-        let grep_status = Command::new("grep")
+
+        let mut grep_status = Command::new("grep")
             .arg(tracked_fn)
             .arg(fold_path.as_os_str())
+            .stdout(Stdio::piped())
+            .spawn()?;
+
+        let dem_status = Command::new("demangle")
+            .stdin(grep_status.stdout.take().unwrap())
             .stdout(Stdio::from(grepped))
             .status()?;
-        if !grep_status.success() {
+
+        if !dem_status.success() {
             anyhow::bail!("Failed to grep stack trace for {tracked_fn}.")
         }
 
         let flame_name = out_dir.as_ref().join(format!("{out_name}.svg"));
         let flame_file = File::create(&flame_name)?;
         let flame_status = Command::new("flamegraph.pl")
+            .args(["--title", "Mytitle"])
+            .args(["--subtitle", "b"])
+            .args(["--fonttype", "Berkeley Mono,Fira Mono,monospace"])
+            .args(["--width", "1600"])
             .arg(grepped_name.as_os_str())
             .stdout(Stdio::from(flame_file))
             .status()?;

@@ -345,8 +345,6 @@ pub fn two_node_topology() -> Result<Topology> {
     println!("setup zone b");
     b.setup(&vopte1.name, opte1.ip())?;
 
-    // drop(_zfs);
-
     Ok(Topology {
         xde,
         lls: vec![ll0, ll1],
