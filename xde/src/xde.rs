@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! xde - A mac provider for OPTE.
 //!
@@ -159,13 +159,13 @@ fn bad_packet_probe(
     msg: &str,
 ) {
     let port_str = match port {
-        None => b"unknown\0" as *const u8 as *const i8,
-        Some(name) => name.as_ptr(),
+        None => c"unknown",
+        Some(name) => name.as_c_str(),
     };
     let msg_arg = CString::new(msg).unwrap();
     unsafe {
         __dtrace_probe_bad__packet(
-            port_str as uintptr_t,
+            port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
             msg_arg.as_ptr() as uintptr_t,
@@ -1437,13 +1437,14 @@ unsafe extern "C" fn xde_mc_tx(
                 // NOTE: We are using mp_chain as read only here to get
                 // the pointer value so that the DTrace consumer can
                 // examine the packet on failure.
-                bad_packet_parse_probe(
+                let temp_soln = format!("Tx->{:?}", e);
+                bad_packet_probe(
                     Some(src_dev.port.name_cstr()),
                     Direction::Out,
                     mp_chain,
-                    &e,
+                    &temp_soln,
                 );
-                opte::engine::dbg(format!("Tx bad packet: {:?}", e));
+                opte::engine::dbg(temp_soln);
                 return ptr::null_mut();
             }
         };
@@ -2061,8 +2062,9 @@ unsafe extern "C" fn xde_rx(
                 // examine the packet on failure.
                 //
                 // We don't know the port yet, thus the None.
-                bad_packet_parse_probe(None, Direction::In, mp_chain, &e);
-                opte::engine::dbg(format!("Rx bad packet: {:?}", e));
+                let temp_soln = format!("Rx->{:?}", e);
+                bad_packet_probe(None, Direction::In, mp_chain, &temp_soln);
+                opte::engine::dbg(temp_soln);
                 return;
             }
         };
