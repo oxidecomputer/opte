@@ -2,13 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! The engine in OPTE.
 //!
 //! All code under this namespace is guarded by the `engine` feature flag.
 pub mod arp;
 pub mod checksum;
+pub mod d_error;
 pub mod dhcp;
 pub mod dhcpv6;
 #[macro_use]
@@ -111,6 +112,7 @@ cfg_if! {
             println!("ERROR: {}", msg.as_ref());
         }
     } else if #[cfg(feature = "kernel")] {
+        use core::ffi::CStr;
         use alloc::ffi::CString;
         use illumos_sys_hdrs as ddi;
 
