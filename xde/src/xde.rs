@@ -53,6 +53,7 @@ use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
+use opte::engine::d_error::ErrorBlock;
 use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::EncapMeta;
@@ -121,7 +122,11 @@ extern "C" {
         port: uintptr_t,
         dir: uintptr_t,
         mp: uintptr_t,
-        msg: uintptr_t,
+        msgs: uintptr_t,
+        msgs_len: uintptr_t,
+        truncated: uintptr_t,
+        data: uintptr_t,
+        data_len: uintptr_t,
     );
     pub fn __dtrace_probe_guest__loopback(
         mp: uintptr_t,
@@ -148,8 +153,42 @@ fn bad_packet_parse_probe(
     mp: *mut mblk_t,
     err: &PacketError,
 ) {
-    let msg = format!("{:?}", err);
-    bad_packet_probe(port, dir, mp, &msg);
+    let port_str = match port {
+        None => c"unknown",
+        Some(name) => name.as_c_str(),
+    };
+
+    let bad_parse =
+        err.bad_header_str().map(|s| CString::new(s.as_str()).unwrap());
+
+    let bad_parse_cs = bad_parse.as_ref().map(CString::as_c_str);
+
+    let (mut truncated, mut block) = match ErrorBlock::<4>::from_err(err) {
+        Ok(block) => (false, block),
+        Err(block) => (true, block),
+    };
+
+    if let Some(bad_parse_cs) = bad_parse_cs {
+        unsafe {
+            truncated |= block.append_name_raw(bad_parse_cs).is_err();
+        }
+    }
+
+    let msgs = block.entries_ptr();
+    let data = block.data();
+
+    unsafe {
+        __dtrace_probe_bad__packet(
+            port_str.as_ptr() as uintptr_t,
+            dir as uintptr_t,
+            mp as uintptr_t,
+            msgs.as_ptr() as uintptr_t,
+            msgs.len() as uintptr_t,
+            truncated as uintptr_t,
+            data.as_ptr() as uintptr_t,
+            4,
+        )
+    };
 }
 
 fn bad_packet_probe(
@@ -163,12 +202,19 @@ fn bad_packet_probe(
         Some(name) => name.as_c_str(),
     };
     let msg_arg = CString::new(msg).unwrap();
+    let strs = [msg_arg];
+    let data = [0, 0, 0, 0];
+
     unsafe {
         __dtrace_probe_bad__packet(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
-            msg_arg.as_ptr() as uintptr_t,
+            strs.as_ptr() as uintptr_t,
+            strs.len() as uintptr_t,
+            false as uintptr_t,
+            data.as_ptr() as uintptr_t,
+            4,
         )
     };
 }
@@ -1437,14 +1483,13 @@ unsafe extern "C" fn xde_mc_tx(
                 // NOTE: We are using mp_chain as read only here to get
                 // the pointer value so that the DTrace consumer can
                 // examine the packet on failure.
-                let temp_soln = format!("Tx->{:?}", e);
-                bad_packet_probe(
+                bad_packet_parse_probe(
                     Some(src_dev.port.name_cstr()),
                     Direction::Out,
                     mp_chain,
-                    &temp_soln,
+                    &e,
                 );
-                opte::engine::dbg(temp_soln);
+                // opte::engine::dbg(temp_soln);
                 return ptr::null_mut();
             }
         };
@@ -2062,9 +2107,10 @@ unsafe extern "C" fn xde_rx(
                 // examine the packet on failure.
                 //
                 // We don't know the port yet, thus the None.
-                let temp_soln = format!("Rx->{:?}", e);
-                bad_packet_probe(None, Direction::In, mp_chain, &temp_soln);
-                opte::engine::dbg(temp_soln);
+                // let temp_soln = format!("Rx->{:?}", e);
+                // bad_packet_probe(None, Direction::In, mp_chain, &temp_soln);
+                bad_packet_parse_probe(None, Direction::In, mp_chain, &e);
+                // opte::engine::dbg(temp_soln);
                 return;
             }
         };

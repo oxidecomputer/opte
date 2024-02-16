@@ -117,6 +117,24 @@ impl<const L: usize> ErrorBlock<L> {
         Ok(())
     }
 
+    /// Appends the top layer name of a given error.
+    ///
+    /// Callers must ensure that pointee outlives this ErrorBlock.
+    pub unsafe fn append_name_raw<'a, 'b: 'a>(
+        &'a mut self,
+        err: &'b CStr,
+    ) -> Result<(), ()> {
+        if self.len >= L {
+            self.more = true;
+            return Err(());
+        }
+
+        self.entries[self.len] = err.as_ptr();
+        self.len += 1;
+
+        Ok(())
+    }
+
     /// Return the number of stored strings entries.
     pub fn len(&self) -> usize {
         self.len
@@ -130,6 +148,16 @@ impl<const L: usize> ErrorBlock<L> {
     /// Provides access to all stored [`CStr`]s.
     pub fn entries<'a>(&'a self) -> ErrorBlockIter<'a, L> {
         ErrorBlockIter { pos: 0, inner: self }
+    }
+
+    /// Provides pointers to all stored [`CStr`]s.
+    pub fn entries_ptr(&self) -> &[*const i8] {
+        &self.entries[..self.len]
+    }
+
+    /// Provides access to data stored in a leaf error.
+    pub fn data(&self) -> &[u64] {
+        &self.data[..]
     }
 }
 

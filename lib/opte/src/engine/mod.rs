@@ -112,7 +112,6 @@ cfg_if! {
             println!("ERROR: {}", msg.as_ref());
         }
     } else if #[cfg(feature = "kernel")] {
-        use core::ffi::CStr;
         use alloc::ffi::CString;
         use illumos_sys_hdrs as ddi;
 
