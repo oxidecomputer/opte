@@ -2245,6 +2245,17 @@ pub enum PacketError {
     Wrap(WrapError),
 }
 
+impl PacketError {
+    // TODO: write a DError derive proc macro so we don't need to do this.
+    pub fn bad_header_str(&self) -> Option<&String> {
+        if let Self::Parse(ParseError::BadHeader(s)) = self {
+            Some(&s)
+        } else {
+            None
+        }
+    }
+}
+
 impl From<ParseError> for PacketError {
     fn from(e: ParseError) -> Self {
         Self::Parse(e)

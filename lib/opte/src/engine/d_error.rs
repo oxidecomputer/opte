@@ -10,8 +10,9 @@
 use core::ffi::CStr;
 
 // TODO: use c"" from Rust 1.77 onwards.
-// I'd also like to use concat_bytes to put in the \0, but that's nightly.
-/// Compile-time const cstring from a byte slice. Callers must include a `b'\0'`.
+// I'd also like to use concat_bytes to put in the \0, but that's unstable/.
+/// Compile-time const cstring from a byte slice. Callers must
+/// include a `b'\0'`.
 macro_rules! cstr {
     ($e:expr) => {
         if let Ok(s) = CStr::from_bytes_with_nul($e) {
@@ -19,6 +20,14 @@ macro_rules! cstr {
         } else {
             panic!("Bad cstring constant!")
         }
+    };
+}
+
+/// Compile-time const cstring from a byte slice, including declaration.
+/// Callers must include a `b'\0'`.
+macro_rules! static_cstr {
+    ($i:ident, $e:expr) => {
+        const $i: &CStr = cstr!($e);
     };
 }
 
@@ -46,6 +55,7 @@ const EMPTY_STRING: &CStr = cstr!(b"\0");
 #[derive(Debug)]
 pub struct ErrorBlock<const L: usize> {
     entries: [*const i8; L],
+
     len: usize,
     more: bool,
 
@@ -58,6 +68,7 @@ impl<const L: usize> ErrorBlock<L> {
     pub fn new() -> Self {
         Self {
             entries: [EMPTY_STRING.as_ptr(); L],
+
             len: 0,
             more: false,
 
@@ -137,7 +148,7 @@ impl<'a, const L: usize> Iterator for ErrorBlockIter<'a, L> {
 
         // SAFETY: ErrorBlock can only be constructed using 'static CStr
         //         entries, and defaults to be full of empty entries.
-        //         So any pointee is a static CStr.
+        //         So any pointee is a valid static CStr.
         let out = unsafe { CStr::from_ptr(self.inner.entries[self.pos]) };
         self.pos += 1;
 
@@ -156,14 +167,136 @@ impl<'a, const L: usize> ExactSizeIterator for ErrorBlockIter<'a, L> {
     }
 }
 
+// XXX: A derive procmacro would be *really* nice for this. We only need it for
+//      one or two bad cases today, though.
+static_cstr!(PARSE, b"Parse\0");
+static_cstr!(WRAP, b"Wrap\0");
+impl DError for super::packet::PacketError {
+    fn discriminant(&self) -> &'static CStr {
+        match self {
+            Self::Parse(_) => PARSE,
+            Self::Wrap(_) => WRAP,
+        }
+    }
+
+    fn child(&self) -> Option<&dyn DError> {
+        match self {
+            Self::Parse(p) => Some(p),
+            Self::Wrap(w) => Some(w),
+        }
+    }
+}
+
+static_cstr!(NULLPTR, b"NullPtr\0");
+impl DError for super::packet::WrapError {
+    fn discriminant(&self) -> &'static CStr {
+        match self {
+            Self::NullPtr => NULLPTR,
+        }
+    }
+
+    fn child(&self) -> Option<&dyn DError> {
+        None
+    }
+}
+
+static_cstr!(BAD_HEADER, b"BadHeader\0");
+static_cstr!(BAD_INNER_IP_LEN, b"BadInnerIpLen\0");
+static_cstr!(BAD_OUTER_IP_LEN, b"BadOuterIpLen\0");
+static_cstr!(BAD_INNER_ULP_LEN, b"BadInnerUlpLen\0");
+static_cstr!(BAD_OUTER_ULP_LEN, b"BadOuterUlpLen\0");
+static_cstr!(BAD_READ, b"BadRead\0");
+static_cstr!(TRUNCATED_BODY, b"TruncatedBody\0");
+static_cstr!(UNEXPECTED_ETHER_TYPE, b"UnexpectedEtherType\0");
+static_cstr!(UNSUPPORTED_ETHER_TYPE, b"UnsupportedEtherType\0");
+static_cstr!(UNEXPECTED_PROTOCOL, b"UnexpectedProtocol\0");
+static_cstr!(UNSUPPORTED_PROTOCOL, b"UnsupportedProtocol\0");
+impl DError for super::packet::ParseError {
+    fn discriminant(&self) -> &'static CStr {
+        match self {
+            Self::BadHeader(_) => BAD_HEADER,
+            Self::BadInnerIpLen { .. } => BAD_INNER_IP_LEN,
+            Self::BadInnerUlpLen { .. } => BAD_INNER_ULP_LEN,
+            Self::BadOuterIpLen { .. } => BAD_OUTER_IP_LEN,
+            Self::BadOuterUlpLen { .. } => BAD_OUTER_ULP_LEN,
+            Self::BadRead(_) => BAD_READ,
+            Self::TruncatedBody { .. } => TRUNCATED_BODY,
+            Self::UnexpectedEtherType(_) => UNEXPECTED_ETHER_TYPE,
+            Self::UnsupportedEtherType(_) => UNSUPPORTED_ETHER_TYPE,
+            Self::UnexpectedProtocol(_) => UNEXPECTED_PROTOCOL,
+            Self::UnsupportedProtocol(_) => UNSUPPORTED_PROTOCOL,
+        }
+    }
+
+    fn child(&self) -> Option<&dyn DError> {
+        match self {
+            // Currently need to pull out the string at the end when needed -- ouch.
+            // TODO: Convert to BadHeader(Box<dyn DError>).
+            // Safely treating a String inside this is a little fraught:
+            // I think it can be done if it's a valid CStr and we e.g. take
+            // ownership of the root err. No point in doing this and needing
+            // to reason about non-static strings when we should just replace
+            // that body with e.g. another dyn DError in future.
+            Self::BadHeader(_s) => None,
+            Self::BadRead(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    fn leaf_data(&self, data: &mut [u64]) {
+        match self {
+            Self::BadInnerIpLen { expected, actual }
+            | Self::BadInnerUlpLen { expected, actual }
+            | Self::BadOuterIpLen { expected, actual }
+            | Self::BadOuterUlpLen { expected, actual }
+            | Self::TruncatedBody { expected, actual } => {
+                [data[0], data[1]] = [*expected as u64, *actual as u64]
+            }
+            Self::UnexpectedEtherType(eth) => data[0] = u16::from(*eth).into(),
+            Self::UnsupportedEtherType(eth) => data[0] = *eth as u64,
+            Self::UnexpectedProtocol(proto) => {
+                data[0] = u8::from(*proto).into()
+            }
+            Self::UnsupportedProtocol(proto) => {
+                data[0] = u8::from(*proto).into()
+            }
+
+            _ => {}
+        }
+    }
+}
+
+static_cstr!(BAD_LAYOUT, b"BadLayout\0");
+static_cstr!(END_OF_PACKET, b"EndOfPacket\0");
+static_cstr!(NOT_ENOUGH_BYTES, b"NotEnoughBytes\0");
+static_cstr!(OUT_OF_RANGE, b"OutOfRange\0");
+static_cstr!(STRADDLED_READ, b"StraddledRead\0");
+static_cstr!(NOT_IMPLEMENTED, b"NotImplemented\0");
+impl DError for super::packet::ReadErr {
+    fn discriminant(&self) -> &'static CStr {
+        match self {
+            Self::BadLayout => BAD_LAYOUT,
+            Self::EndOfPacket => END_OF_PACKET,
+            Self::NotEnoughBytes => NOT_ENOUGH_BYTES,
+            Self::OutOfRange => OUT_OF_RANGE,
+            Self::StraddledRead => STRADDLED_READ,
+            Self::NotImplemented => NOT_IMPLEMENTED,
+        }
+    }
+
+    fn child(&self) -> Option<&dyn DError> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const A_C: &CStr = cstr!(b"A\0");
-    const B_C: &CStr = cstr!(b"B\0");
-    const ND_C: &CStr = cstr!(b"NoData\0");
-    const D_C: &CStr = cstr!(b"Data\0");
+    static_cstr!(A_C, b"A\0");
+    static_cstr!(B_C, b"B\0");
+    static_cstr!(ND_C, b"NoData\0");
+    static_cstr!(D_C, b"Data\0");
 
     enum TestEnum {
         A,
@@ -202,10 +335,19 @@ mod tests {
         fn child(&self) -> Option<&dyn DError> {
             None
         }
+
+        fn leaf_data(&self, data: &mut [u64]) {
+            match self {
+                TestChildEnum::NoData => {}
+                TestChildEnum::Data { a, b } => {
+                    [data[0], data[1]] = [*a as u64, *b as u64]
+                }
+            }
+        }
     }
 
     #[test]
-    fn name_storage() {
+    fn name_and_data_storage() {
         let err = TestEnum::A;
         let block: ErrorBlock<2> = ErrorBlock::from_err(&err).unwrap();
         let mut block_iter = block.entries();
@@ -219,10 +361,12 @@ mod tests {
         let names = block.entries().collect::<Vec<_>>();
         assert_eq!(&names[..], &[B_C, ND_C][..]);
 
-        let err = TestEnum::B(TestChildEnum::Data { a: 0, b: 1 });
+        let err = TestEnum::B(TestChildEnum::Data { a: 0xab, b: 0xcd });
         let block: ErrorBlock<2> = ErrorBlock::from_err(&err).unwrap();
         let names = block.entries().collect::<Vec<_>>();
         assert_eq!(&names[..], &[B_C, D_C][..]);
+        assert_eq!(block.data[0], 0xab);
+        assert_eq!(block.data[1], 0xcd);
     }
 
     #[test]
