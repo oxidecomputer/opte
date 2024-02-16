@@ -104,43 +104,78 @@ pub static mut opte_panic_debug: i32 = 0;
 
 cfg_if! {
     if #[cfg(feature = "std")] {
-        pub fn dbg<S: AsRef<str>>(msg: S) {
-            println!("{}", msg.as_ref());
+        #[macro_export]
+        macro_rules! dbg_macro {
+            ($s:tt) => {
+                println!($s);
+            };
+            ($s:tt, $($arg:tt)*) => {
+                println!($s, $($arg)*);
+            };
         }
 
-        pub fn err<S: AsRef<str>>(msg: S) {
-            println!("ERROR: {}", msg.as_ref());
+        #[macro_export]
+        macro_rules! err_macro {
+            ($s:tt) => {
+                println!(concat!("ERROR: ", $s));
+            };
+            ($s:tt, $($arg:tt)*) => {
+                println!(concat!("ERROR: ", $s), $($arg)*);
+            };
         }
     } else if #[cfg(feature = "kernel")] {
-        use alloc::ffi::CString;
-        use illumos_sys_hdrs as ddi;
-
         /// When set to 1 enables debug messages.
         #[no_mangle]
         pub static mut opte_debug: i32 = 0;
 
-        pub fn dbg<S: AsRef<str>>(msg: S) {
-            use ddi::CE_NOTE;
-
-            unsafe {
-                if opte_debug != 0 {
-                    let cstr = CString::new(msg.as_ref()).unwrap();
-                    ddi::cmn_err(CE_NOTE, cstr.as_ptr());
+        #[macro_export]
+        macro_rules! dbg_macro {
+            ($s:tt) => {
+                unsafe {
+                    if ::opte::engine::opte_debug != 0 {
+                        let out_str = format!(concat!($s, "\0"));
+                        // Unwrap safety: we just concat'd a NUL.
+                        let cstr = ::core::ffi::CStr::from_bytes_with_nul(out_str.as_bytes()).unwrap();
+                        ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_NOTE, cstr.as_ptr());
+                    }
                 }
-            }
+            };
+            ($s:tt, $($arg:tt)*) => {
+                unsafe {
+                    if ::opte::engine::opte_debug != 0 {
+                        let out_str = format!(concat!($s, "\0"), $($arg)*);
+                        // Unwrap safety: we just concat'd a NUL.
+                        let cstr = ::core::ffi::CStr::from_bytes_with_nul(out_str.as_bytes()).unwrap();
+                        ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_NOTE, cstr.as_ptr());
+                    }
+                }
+            };
         }
 
-        pub fn err<S: AsRef<str>>(msg: S) {
-            use ddi::CE_WARN;
-
-            unsafe {
-                let cstr = CString::new(msg.as_ref()).unwrap();
-                ddi::cmn_err(CE_WARN, cstr.as_ptr());
-            }
+        #[macro_export]
+        macro_rules! err_macro {
+            ($s:tt) => {
+                unsafe {
+                    let out_str = format!(concat!($s, "\0"));
+                    // Unwrap safety: we just concat'd a NUL.
+                    let cstr = ::core::ffi::CStr::from_bytes_with_nul(out_str.as_bytes()).unwrap();
+                    ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_WARN, cstr.as_ptr());
+                }
+            };
+            ($s:tt, $($arg:tt)*) => {
+                unsafe {
+                    let out_str = format!(concat!($s, "\0"), $($arg)*);
+                    // Unwrap safety: we just concat'd a NUL.
+                    let cstr = ::core::ffi::CStr::from_bytes_with_nul(out_str.as_bytes()).unwrap();
+                    ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_WARN, cstr.as_ptr());
+                }
+            };
         }
-
     }
 }
+
+pub use dbg_macro as dbg;
+pub use err_macro as err;
 
 use crate::engine::ether::EtherType;
 use crate::engine::flow_table::FlowTable;

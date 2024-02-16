@@ -835,10 +835,10 @@ impl<N: NetworkImpl> Port<N> {
         pkt: &mut Packet<Parsed>,
     ) {
         if unsafe { super::opte_panic_debug != 0 } {
-            super::err(format!("mblk: {}", pkt.mblk_ptr_str()));
-            super::err(format!("flow: {}", pkt.flow()));
-            super::err(format!("meta: {:?}", pkt.meta()));
-            super::err(format!("flows: {:?}", data));
+            super::err!("mblk: {}", pkt.mblk_ptr_str());
+            super::err!("flow: {}", pkt.flow());
+            super::err!("meta: {:?}", pkt.meta());
+            super::err!("flows: {:?}", data);
             todo!("bad packet: {}", msg);
         } else {
             self.tcp_err_probe(dir, Some(pkt), pkt.flow(), msg)
