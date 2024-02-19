@@ -75,8 +75,7 @@ const IP6_SZ: usize = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE;
 const TCP4_SZ: usize = IP4_SZ + TcpHdr::BASE_SIZE;
 const TCP6_SZ: usize = IP6_SZ + TcpHdr::BASE_SIZE;
 
-// The GeneveHdr includes the UDP header.
-const VPC_ENCAP_SZ: usize = IP6_SZ + GeneveHdr::BASE_SIZE;
+const VPC_ENCAP_SZ: usize = IP6_SZ + UdpHdr::SIZE + GeneveHdr::BASE_SIZE;
 
 // If we are running `cargo test`, then make sure to
 // register the USDT probes before running any tests.
@@ -529,6 +528,7 @@ fn guest_to_guest() {
         ]
     );
 
+
     assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP4_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt1.body_seg(), 1);
     let ulp_csum_after = pkt1.meta().inner.ulp.unwrap().csum();
@@ -861,6 +861,7 @@ fn guest_to_internet_ipv6() {
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
+
     assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP6_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt1.body_seg(), 1);
     let meta = pkt1.meta();

@@ -25,6 +25,7 @@ use super::ether::EtherMeta;
 use super::geneve::GeneveHdr;
 use super::geneve::GeneveHdrError;
 use super::geneve::GeneveMeta;
+use super::geneve::GENEVE_PORT;
 use super::headers::EncapMeta;
 use super::headers::IpAddr;
 use super::headers::IpMeta;
@@ -756,6 +757,28 @@ impl Packet<Initialized> {
     }
 
     pub fn parse_geneve<'a>(
+        rdr: &mut PacketReaderMut<'a>,
+    ) -> Result<(HdrInfo<GeneveMeta>, GeneveHdr<'a>), ParseError> {
+        // We don't need to store the UDP metadata here because any
+        // relevant fields can be reconstructed from knowledge of the
+        // packet body and the encap itself.
+        let udp_hdr = UdpHdr::parse(rdr)?;
+
+        match udp_hdr.dst_port() {
+            GENEVE_PORT => {
+                let geneve = GeneveHdr::parse(rdr)?;
+                let offset = HdrOffset::new(
+                    rdr.offset(),
+                    geneve.hdr_len() + udp_hdr.hdr_len(),
+                );
+                let meta = GeneveMeta::from((&udp_hdr, &geneve));
+                Ok((HdrInfo { meta, offset }, geneve))
+            }
+            port => return Err(ParseError::UnexpectedDestPort(port)),
+        }
+    }
+
+    pub fn parse_geneve_inner<'a>(
         rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<GeneveMeta>, GeneveHdr<'a>), ParseError> {
         let geneve = GeneveHdr::parse(rdr)?;
@@ -1660,8 +1683,11 @@ impl Packet<Parsed> {
 
         match meta.encap.as_mut() {
             Some(EncapMeta::Geneve(geneve)) => {
-                geneve.len = (new_pkt_len - pkt_offset) as u16;
-                geneve.emit(wtr.slice_mut(geneve.hdr_len())?);
+                geneve.emit(
+                    (new_pkt_len - pkt_offset) as u16,
+                    wtr.slice_mut(geneve.hdr_len())?,
+                );
+                // geneve.emit(wtr.slice_mut(geneve.hdr_len())?);
                 offsets.ip = Some(HdrOffset {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
@@ -2269,6 +2295,7 @@ pub enum ParseError {
     UnexpectedEtherType(super::ether::EtherType),
     UnsupportedEtherType(u16),
     UnexpectedProtocol(Protocol),
+    UnexpectedDestPort(u16),
     UnsupportedProtocol(Protocol),
 }
 
