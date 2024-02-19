@@ -528,7 +528,6 @@ fn guest_to_guest() {
         ]
     );
 
-
     assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP4_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt1.body_seg(), 1);
     let ulp_csum_after = pkt1.meta().inner.ulp.unwrap().csum();
