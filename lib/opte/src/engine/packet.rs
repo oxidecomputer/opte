@@ -774,7 +774,7 @@ impl Packet<Initialized> {
                 let meta = GeneveMeta::from((&udp_hdr, &geneve));
                 Ok((HdrInfo { meta, offset }, geneve))
             }
-            port => return Err(ParseError::UnexpectedDestPort(port)),
+            port => Err(ParseError::UnexpectedDestPort(port)),
         }
     }
 
