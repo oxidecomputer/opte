@@ -2,25 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! IPv4 headers.
 
-use core::fmt;
-use core::fmt::Debug;
-use core::fmt::Display;
-use core::num::ParseIntError;
-use core::result;
-use serde::Deserialize;
-use serde::Serialize;
-use zerocopy::AsBytes;
-use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
-use zerocopy::Ref;
-use zerocopy::Unaligned;
-
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
+use super::d_error::DError;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
 use super::headers::RawHeader;
@@ -32,10 +20,22 @@ use super::predicate::MatchPrefix;
 use super::predicate::MatchPrefixVal;
 use super::predicate::MatchRangeVal;
 use alloc::string::String;
+use core::fmt;
+use core::fmt::Debug;
+use core::fmt::Display;
+use core::num::ParseIntError;
+use core::result;
 pub use opte_api::Ipv4Addr;
 pub use opte_api::Ipv4Cidr;
 pub use opte_api::Ipv4PrefixLen;
 pub use opte_api::Protocol;
+use serde::Deserialize;
+use serde::Serialize;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
+use zerocopy::Ref;
+use zerocopy::Unaligned;
 
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
 pub const IPV4_HDR_VER_MASK: u8 = 0xF0;
@@ -452,18 +452,31 @@ pub enum UlpCsumOpt {
     Full,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DError)]
+#[derror(leaf_data = Ipv4HdrError::derror_data)]
 pub enum Ipv4HdrError {
     BadTotalLen { total_len: u16 },
     BadVersion { vsn: u8 },
     HeaderTruncated { hdr_len: u16 },
-    ReadError { error: ReadErr },
+    ReadError(ReadErr),
     UnexpectedProtocol { protocol: u8 },
 }
 
 impl From<ReadErr> for Ipv4HdrError {
     fn from(error: ReadErr) -> Self {
-        Ipv4HdrError::ReadError { error }
+        Ipv4HdrError::ReadError(error)
+    }
+}
+
+impl Ipv4HdrError {
+    fn derror_data(&self, data: &mut [u64]) {
+        data[0] = match self {
+            Self::BadTotalLen { total_len } => *total_len as u64,
+            Self::BadVersion { vsn } => *vsn as u64,
+            Self::HeaderTruncated { hdr_len } => *hdr_len as u64,
+            Self::UnexpectedProtocol { protocol } => *protocol as u64,
+            _ => 0,
+        }
     }
 }
 

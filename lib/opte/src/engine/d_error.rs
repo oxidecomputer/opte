@@ -46,7 +46,7 @@ pub trait DError {
     fn leaf_data(&self, _data: &mut [u64]) {}
 }
 
-static EMPTY_STRING: &CStr = cstr!(b"\0");
+static_cstr!(EMPTY_STRING, b"\0");
 
 /// An error trace designed to be passed to a Dtrace handler, which contains
 /// the names of all `enum` discriminators encountered when resolving an error
@@ -119,24 +119,6 @@ impl<const L: usize> ErrorBlock<L> {
         Ok(())
     }
 
-    /// Appends the top layer name of a given error.
-    ///
-    /// Callers must ensure that pointee outlives this ErrorBlock.
-    pub unsafe fn append_name_raw<'a, 'b: 'a>(
-        &'a mut self,
-        err: &'b CStr,
-    ) -> Result<(), ()> {
-        if self.len >= L {
-            self.more = true;
-            return Err(());
-        }
-
-        self.entries[self.len] = err.as_ptr();
-        self.len += 1;
-
-        Ok(())
-    }
-
     /// Return the number of stored strings entries.
     pub fn len(&self) -> usize {
         self.len
@@ -194,72 +176,6 @@ impl<'a, const L: usize> Iterator for ErrorBlockIter<'a, L> {
 impl<'a, const L: usize> ExactSizeIterator for ErrorBlockIter<'a, L> {
     fn len(&self) -> usize {
         self.inner.len - self.pos
-    }
-}
-
-static_cstr!(BAD_HEADER, b"BadHeader\0");
-static_cstr!(BAD_INNER_IP_LEN, b"BadInnerIpLen\0");
-static_cstr!(BAD_OUTER_IP_LEN, b"BadOuterIpLen\0");
-static_cstr!(BAD_INNER_ULP_LEN, b"BadInnerUlpLen\0");
-static_cstr!(BAD_OUTER_ULP_LEN, b"BadOuterUlpLen\0");
-static_cstr!(BAD_READ, b"BadRead\0");
-static_cstr!(TRUNCATED_BODY, b"TruncatedBody\0");
-static_cstr!(UNEXPECTED_ETHER_TYPE, b"UnexpectedEtherType\0");
-static_cstr!(UNSUPPORTED_ETHER_TYPE, b"UnsupportedEtherType\0");
-static_cstr!(UNEXPECTED_PROTOCOL, b"UnexpectedProtocol\0");
-static_cstr!(UNSUPPORTED_PROTOCOL, b"UnsupportedProtocol\0");
-impl DError for super::packet::ParseError {
-    fn discriminant(&self) -> &'static CStr {
-        match self {
-            Self::BadHeader(_) => BAD_HEADER,
-            Self::BadInnerIpLen { .. } => BAD_INNER_IP_LEN,
-            Self::BadInnerUlpLen { .. } => BAD_INNER_ULP_LEN,
-            Self::BadOuterIpLen { .. } => BAD_OUTER_IP_LEN,
-            Self::BadOuterUlpLen { .. } => BAD_OUTER_ULP_LEN,
-            Self::BadRead(_) => BAD_READ,
-            Self::TruncatedBody { .. } => TRUNCATED_BODY,
-            Self::UnexpectedEtherType(_) => UNEXPECTED_ETHER_TYPE,
-            Self::UnsupportedEtherType(_) => UNSUPPORTED_ETHER_TYPE,
-            Self::UnexpectedProtocol(_) => UNEXPECTED_PROTOCOL,
-            Self::UnsupportedProtocol(_) => UNSUPPORTED_PROTOCOL,
-        }
-    }
-
-    fn child(&self) -> Option<&dyn DError> {
-        match self {
-            // Currently need to pull out the string at the end when needed -- ouch.
-            // TODO: Convert to BadHeader(Box<dyn DError>).
-            // Safely treating a String inside this is a little fraught:
-            // I think it can be done if it's a valid CStr and we e.g. take
-            // ownership of the root err. No point in doing this and needing
-            // to reason about non-static strings when we should just replace
-            // that body with e.g. another dyn DError in future.
-            Self::BadHeader(_s) => None,
-            Self::BadRead(r) => Some(r),
-            _ => None,
-        }
-    }
-
-    fn leaf_data(&self, data: &mut [u64]) {
-        match self {
-            Self::BadInnerIpLen { expected, actual }
-            | Self::BadInnerUlpLen { expected, actual }
-            | Self::BadOuterIpLen { expected, actual }
-            | Self::BadOuterUlpLen { expected, actual }
-            | Self::TruncatedBody { expected, actual } => {
-                [data[0], data[1]] = [*expected as u64, *actual as u64]
-            }
-            Self::UnexpectedEtherType(eth) => data[0] = u16::from(*eth).into(),
-            Self::UnsupportedEtherType(eth) => data[0] = *eth as u64,
-            Self::UnexpectedProtocol(proto) => {
-                data[0] = u8::from(*proto).into()
-            }
-            Self::UnsupportedProtocol(proto) => {
-                data[0] = u8::from(*proto).into()
-            }
-
-            _ => {}
-        }
     }
 }
 

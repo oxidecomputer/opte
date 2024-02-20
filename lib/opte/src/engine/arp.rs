@@ -2,10 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! ARP headers and data.
 
+use super::d_error::DError;
 use super::ether::EtherHdr;
 use super::ether::EtherMeta;
 use super::ether::EtherType;
@@ -69,19 +70,33 @@ impl Display for ArpOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, DError, Eq, PartialEq)]
+#[derror(leaf_data = ArpHdrError::derror_data)]
 pub enum ArpHdrError {
     BadOp { op: u16 },
-    ReadError { error: ReadErr },
+    ReadError(ReadErr),
     UnexpectedProtoLen { plen: u8 },
     UnexpectedProtoType { ptype: u16 },
     UnexpectedHwLen { hlen: u8 },
     UnexpectedHwType { htype: u16 },
 }
 
+impl ArpHdrError {
+    fn derror_data(&self, data: &mut [u64]) {
+        data[0] = match self {
+            Self::BadOp { op } => *op as u64,
+            Self::UnexpectedProtoLen { plen } => *plen as u64,
+            Self::UnexpectedProtoType { ptype } => *ptype as u64,
+            Self::UnexpectedHwLen { hlen } => *hlen as u64,
+            Self::UnexpectedHwType { htype } => *htype as u64,
+            _ => 0,
+        };
+    }
+}
+
 impl From<ReadErr> for ArpHdrError {
     fn from(error: ReadErr) -> Self {
-        Self::ReadError { error }
+        Self::ReadError(error)
     }
 }
 

@@ -2,19 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! UDP headers.
 
-use core::mem;
-use serde::Deserialize;
-use serde::Serialize;
-use zerocopy::AsBytes;
-use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
-use zerocopy::Ref;
-use zerocopy::Unaligned;
-
+use super::d_error::DError;
 use crate::engine::checksum::Checksum;
 use crate::engine::checksum::HeaderChecksum;
 use crate::engine::headers::HeaderActionModify;
@@ -24,7 +16,15 @@ use crate::engine::headers::RawHeader;
 use crate::engine::headers::UlpMetaModify;
 use crate::engine::packet::PacketReadMut;
 use crate::engine::packet::ReadErr;
+use core::mem;
 use opte_api::DYNAMIC_PORT;
+use serde::Deserialize;
+use serde::Serialize;
+use zerocopy::AsBytes;
+use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
+use zerocopy::Ref;
+use zerocopy::Unaligned;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct UdpMeta {
@@ -199,17 +199,29 @@ impl<'a> UdpHdr<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DError)]
+#[derror(leaf_data = UdpHdrError::derror_data)]
 pub enum UdpHdrError {
     BadDstPort { dst_port: u16 },
     BadLength { length: u16 },
     BadSrcPort { src_port: u16 },
-    ReadError { error: ReadErr },
+    ReadError(ReadErr),
+}
+
+impl UdpHdrError {
+    fn derror_data(&self, data: &mut [u64]) {
+        data[0] = match self {
+            Self::BadDstPort { dst_port } => *dst_port as u64,
+            Self::BadLength { length } => *length as u64,
+            Self::BadSrcPort { src_port } => *src_port as u64,
+            _ => 0,
+        }
+    }
 }
 
 impl From<ReadErr> for UdpHdrError {
     fn from(error: ReadErr) -> Self {
-        UdpHdrError::ReadError { error }
+        UdpHdrError::ReadError(error)
     }
 }
 

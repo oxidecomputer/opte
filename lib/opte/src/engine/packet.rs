@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Types for creating, reading, and writing network packets.
 //!
@@ -2246,17 +2246,6 @@ pub enum PacketError {
     Wrap(WrapError),
 }
 
-impl PacketError {
-    // TODO: write a DError derive proc macro so we don't need to do this.
-    pub fn bad_header_str(&self) -> Option<&String> {
-        if let Self::Parse(ParseError::BadHeader(s)) = self {
-            Some(&s)
-        } else {
-            None
-        }
-    }
-}
-
 impl From<ParseError> for PacketError {
     fn from(e: ParseError) -> Self {
         Self::Parse(e)
@@ -2269,19 +2258,63 @@ impl From<WrapError> for PacketError {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, DError)]
+#[derror(leaf_data = ParseError::data)]
 pub enum ParseError {
-    BadHeader(String),
-    BadInnerIpLen { expected: usize, actual: usize },
-    BadInnerUlpLen { expected: usize, actual: usize },
-    BadOuterIpLen { expected: usize, actual: usize },
-    BadOuterUlpLen { expected: usize, actual: usize },
+    BadHeader(HeaderReadErr),
+    BadInnerIpLen {
+        expected: usize,
+        actual: usize,
+    },
+    BadInnerUlpLen {
+        expected: usize,
+        actual: usize,
+    },
+    BadOuterIpLen {
+        expected: usize,
+        actual: usize,
+    },
+    BadOuterUlpLen {
+        expected: usize,
+        actual: usize,
+    },
     BadRead(ReadErr),
-    TruncatedBody { expected: usize, actual: usize },
+    TruncatedBody {
+        expected: usize,
+        actual: usize,
+    },
+    #[leaf]
     UnexpectedEtherType(super::ether::EtherType),
+    #[leaf]
     UnsupportedEtherType(u16),
+    #[leaf]
     UnexpectedProtocol(Protocol),
+    #[leaf]
     UnsupportedProtocol(Protocol),
+}
+
+impl ParseError {
+    fn data(&self, data: &mut [u64]) {
+        match self {
+            Self::BadInnerIpLen { expected, actual }
+            | Self::BadInnerUlpLen { expected, actual }
+            | Self::BadOuterIpLen { expected, actual }
+            | Self::BadOuterUlpLen { expected, actual }
+            | Self::TruncatedBody { expected, actual } => {
+                [data[0], data[1]] = [*expected as u64, *actual as u64]
+            }
+            Self::UnexpectedEtherType(eth) => data[0] = u16::from(*eth).into(),
+            Self::UnsupportedEtherType(eth) => data[0] = *eth as u64,
+            Self::UnexpectedProtocol(proto) => {
+                data[0] = u8::from(*proto).into()
+            }
+            Self::UnsupportedProtocol(proto) => {
+                data[0] = u8::from(*proto).into()
+            }
+
+            _ => {}
+        }
+    }
 }
 
 impl From<ReadErr> for ParseError {
@@ -2290,51 +2323,62 @@ impl From<ReadErr> for ParseError {
     }
 }
 
-impl From<EtherHdrError> for ParseError {
-    fn from(err: EtherHdrError) -> Self {
-        Self::BadHeader(format!("{}", err))
+impl<T: Into<HeaderReadErr>> From<T> for ParseError {
+    fn from(value: T) -> Self {
+        Self::BadHeader(value.into())
     }
 }
 
-impl From<ArpHdrError> for ParseError {
-    fn from(err: ArpHdrError) -> Self {
-        Self::BadHeader(format!("ARP: {:?}", err))
-    }
+#[derive(Clone, Debug, Eq, PartialEq, DError)]
+pub enum HeaderReadErr {
+    EtherHdr(EtherHdrError),
+    ArpHdr(ArpHdrError),
+    GeneveHdr(GeneveHdrError),
+    Ipv4Hdr(Ipv4HdrError),
+    Ipv6Hdr(Ipv6HdrError),
+    IcmpHdr(IcmpHdrError),
+    TcpHdr(TcpHdrError),
+    UdpHdr(UdpHdrError),
 }
 
-impl From<Ipv4HdrError> for ParseError {
-    fn from(err: Ipv4HdrError) -> Self {
-        Self::BadHeader(format!("IPv4: {:?}", err))
+impl From<EtherHdrError> for HeaderReadErr {
+    fn from(v: EtherHdrError) -> HeaderReadErr {
+        Self::EtherHdr(v)
     }
 }
-
-impl From<Ipv6HdrError> for ParseError {
-    fn from(err: Ipv6HdrError) -> Self {
-        Self::BadHeader(format!("IPv6: {:?}", err))
+impl From<ArpHdrError> for HeaderReadErr {
+    fn from(v: ArpHdrError) -> HeaderReadErr {
+        Self::ArpHdr(v)
     }
 }
-
-impl From<IcmpHdrError> for ParseError {
-    fn from(err: IcmpHdrError) -> Self {
-        Self::BadHeader(format!("ICMPv6: {:?}", err))
+impl From<GeneveHdrError> for HeaderReadErr {
+    fn from(v: GeneveHdrError) -> HeaderReadErr {
+        Self::GeneveHdr(v)
     }
 }
-
-impl From<TcpHdrError> for ParseError {
-    fn from(err: TcpHdrError) -> Self {
-        Self::BadHeader(format!("TCP: {:?}", err))
+impl From<Ipv4HdrError> for HeaderReadErr {
+    fn from(v: Ipv4HdrError) -> HeaderReadErr {
+        Self::Ipv4Hdr(v)
     }
 }
-
-impl From<UdpHdrError> for ParseError {
-    fn from(err: UdpHdrError) -> Self {
-        Self::BadHeader(format!("UDP: {:?}", err))
+impl From<Ipv6HdrError> for HeaderReadErr {
+    fn from(v: Ipv6HdrError) -> HeaderReadErr {
+        Self::Ipv6Hdr(v)
     }
 }
-
-impl From<GeneveHdrError> for ParseError {
-    fn from(err: GeneveHdrError) -> Self {
-        Self::BadHeader(format!("{:?}", err))
+impl From<IcmpHdrError> for HeaderReadErr {
+    fn from(v: IcmpHdrError) -> HeaderReadErr {
+        Self::IcmpHdr(v)
+    }
+}
+impl From<TcpHdrError> for HeaderReadErr {
+    fn from(v: TcpHdrError) -> HeaderReadErr {
+        Self::TcpHdr(v)
+    }
+}
+impl From<UdpHdrError> for HeaderReadErr {
+    fn from(v: UdpHdrError) -> HeaderReadErr {
+        Self::UdpHdr(v)
     }
 }
 
@@ -3013,7 +3057,10 @@ mod test {
         let res = pkt.parse(Out, GenericUlp {});
         match res {
             Err(ParseError::BadHeader(msg)) => {
-                assert_eq!(msg, "read error: EndOfPacket");
+                assert_eq!(
+                    msg,
+                    EtherHdrError::ReadError(ReadErr::EndOfPacket).into()
+                );
             }
 
             _ => panic!("expected read error, got: {:?}", res),
@@ -3026,7 +3073,10 @@ mod test {
         let res = pkt2.parse(Out, GenericUlp {});
         match res {
             Err(ParseError::BadHeader(msg)) => {
-                assert_eq!(msg, "read error: EndOfPacket");
+                assert_eq!(
+                    msg,
+                    EtherHdrError::ReadError(ReadErr::EndOfPacket).into()
+                );
             }
 
             _ => panic!("expected read error, got: {:?}", res),

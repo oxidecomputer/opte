@@ -158,22 +158,12 @@ fn bad_packet_parse_probe(
         Some(name) => name.as_c_str(),
     };
 
-    let bad_parse =
-        err.bad_header_str().map(|s| CString::new(s.as_str()).unwrap());
-
-    let bad_parse_cs = bad_parse.as_ref().map(CString::as_c_str);
-
-    let (mut truncated, mut block) = match ErrorBlock::<4>::from_err(err) {
+    let (mut truncated, mut block) = match ErrorBlock::<8>::from_err(err) {
         Ok(block) => (false, block),
         Err(block) => (true, block),
     };
 
-    if let Some(bad_parse_cs) = bad_parse_cs {
-        unsafe {
-            truncated |= block.append_name_raw(bad_parse_cs).is_err();
-        }
-    }
-
+    // XXX: can we do one better by having a repr(c) internally?
     let msgs = block.entries_ptr();
     let data = block.data();
 

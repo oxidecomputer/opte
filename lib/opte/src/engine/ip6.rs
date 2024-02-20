@@ -2,11 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! IPv6 headers.
 
 use super::checksum::Checksum;
+use super::d_error::DError;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
 use super::ip4::Protocol;
@@ -468,12 +469,23 @@ fn is_ulp_protocol(proto: IpProtocol) -> bool {
     matches!(proto, Icmp | Igmp | Tcp | Udp | Icmpv6)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DError)]
+#[derror(leaf_data = Ipv6HdrError::derror_data)]
 pub enum Ipv6HdrError {
     BadVersion { vsn: u8 },
-    ReadError { error: ReadErr },
+    ReadError(ReadErr),
     UnexpectedNextHeader { next_header: u8 },
     Malformed,
+}
+
+impl Ipv6HdrError {
+    fn derror_data(&self, data: &mut [u64]) {
+        data[0] = match self {
+            Self::BadVersion { vsn } => *vsn as u64,
+            Self::UnexpectedNextHeader { next_header } => *next_header as u64,
+            _ => 0,
+        }
+    }
 }
 
 impl From<smoltcp::wire::Error> for Ipv6HdrError {
@@ -484,7 +496,7 @@ impl From<smoltcp::wire::Error> for Ipv6HdrError {
 
 impl From<ReadErr> for Ipv6HdrError {
     fn from(error: ReadErr) -> Self {
-        Ipv6HdrError::ReadError { error }
+        Ipv6HdrError::ReadError(error)
     }
 }
 

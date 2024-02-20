@@ -19,7 +19,7 @@ struct Args {
 
 /// Generate a `DError` implementation given a tree-structured enum
 /// where only leaf nodes hold additional data.
-#[proc_macro_derive(DError, attributes(derror))]
+#[proc_macro_derive(DError, attributes(derror, leaf))]
 pub fn derive_derror(
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
@@ -59,10 +59,13 @@ pub fn derive_derror(
             };
         });
 
+        let known_leaf =
+            variant.attrs.iter().any(|v| v.path().is_ident("leaf"));
+
         let (cstr_block, child_block) = match variant.fields {
             syn::Fields::Unnamed(fields) => (
                 quote! {Self::#var_name(f) => #static_name,},
-                if fields.unnamed.len() == 1 {
+                if !known_leaf && fields.unnamed.len() == 1 {
                     quote! {
                         Self::#var_name(f) => Some(f),
                     }

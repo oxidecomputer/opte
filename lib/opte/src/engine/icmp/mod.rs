@@ -2,18 +2,16 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Internet Control Message Protocol (ICMP) shared data structures.
 
 pub mod v4;
 pub mod v6;
 
-pub use v4::Icmpv4Meta;
-pub use v6::Icmpv6Meta;
-
 use super::checksum::Checksum as OpteCsum;
 use super::checksum::HeaderChecksum;
+use super::d_error::DError;
 use super::headers::RawHeader;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
@@ -42,6 +40,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use smoltcp::phy::Checksum;
 use smoltcp::phy::ChecksumCapabilities as Csum;
+pub use v4::Icmpv4Meta;
+pub use v6::Icmpv6Meta;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
 use zerocopy::FromZeroes;
@@ -123,14 +123,14 @@ where
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DError)]
 pub enum IcmpHdrError {
-    ReadError { error: ReadErr },
+    ReadError(ReadErr),
 }
 
 impl From<ReadErr> for IcmpHdrError {
     fn from(error: ReadErr) -> Self {
-        IcmpHdrError::ReadError { error }
+        IcmpHdrError::ReadError(error)
     }
 }
 
