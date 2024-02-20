@@ -107,7 +107,7 @@ pub fn derive_derror(
         quote! {}
     };
 
-    let o = quote! {
+    quote! {
         impl DError for #ident {
             #[allow(non_upper_case_globals)]
             fn discriminant(&self) -> &'static ::core::ffi::CStr {
@@ -126,11 +126,6 @@ pub fn derive_derror(
 
             #leaf_data_impl
         }
-    };
-
-    // if data_fn.is_some(){
-    //     panic!("Here it is: {o}");
-    // }
-
-    o.into()
+    }
+    .into()
 }

@@ -59,6 +59,30 @@ bad-packet
 	printf(EL_FMT, stringof(this->msgs[3]));
 }
 
+bad-packet
+/this->msg_len > 4/
+{
+	printf(EL_FMT, stringof(this->msgs[4]));
+}
+
+bad-packet
+/this->msg_len > 5/
+{
+	printf(EL_FMT, stringof(this->msgs[5]));
+}
+
+bad-packet
+/this->msg_len > 6/
+{
+	printf(EL_FMT, stringof(this->msgs[6]));
+}
+
+bad-packet
+/this->msg_len > 7/
+{
+	printf(EL_FMT, stringof(this->msgs[7]));
+}
+
 bad-packet {
 	printf(" [%d, %d]\n", this->data[0], this->data[1]);
 }
