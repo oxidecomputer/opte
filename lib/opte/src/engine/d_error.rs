@@ -8,9 +8,8 @@
 //! static strings to avoid paying the `fmt` tax when calling an SDT.
 
 use core::ffi::CStr;
+pub use derror_macro::DError;
 
-// TODO: use c"" from Rust 1.77 onwards.
-// I'd also like to use concat_bytes to put in the \0, but that's unstable/.
 /// Compile-time const cstring from a byte slice. Callers must
 /// include a `b'\0'`.
 macro_rules! cstr {
@@ -27,9 +26,12 @@ macro_rules! cstr {
 /// Callers must include a `b'\0'`.
 macro_rules! static_cstr {
     ($i:ident, $e:expr) => {
-        const $i: &CStr = cstr!($e);
+        static $i: &CStr = cstr!($e);
     };
 }
+
+// XXX: I think we want some way of doing the whole thing in one big chunk
+//      to prevent e.g. 4 dyn dispatches in a row.
 
 /// A trait used for walking chains of errors which store useful data in
 /// a leaf node.
@@ -44,7 +46,7 @@ pub trait DError {
     fn leaf_data(&self, _data: &mut [u64]) {}
 }
 
-const EMPTY_STRING: &CStr = cstr!(b"\0");
+static EMPTY_STRING: &CStr = cstr!(b"\0");
 
 /// An error trace designed to be passed to a Dtrace handler, which contains
 /// the names of all `enum` discriminators encountered when resolving an error
@@ -195,39 +197,6 @@ impl<'a, const L: usize> ExactSizeIterator for ErrorBlockIter<'a, L> {
     }
 }
 
-// XXX: A derive procmacro would be *really* nice for this. We only need it for
-//      one or two bad cases today, though.
-static_cstr!(PARSE, b"Parse\0");
-static_cstr!(WRAP, b"Wrap\0");
-impl DError for super::packet::PacketError {
-    fn discriminant(&self) -> &'static CStr {
-        match self {
-            Self::Parse(_) => PARSE,
-            Self::Wrap(_) => WRAP,
-        }
-    }
-
-    fn child(&self) -> Option<&dyn DError> {
-        match self {
-            Self::Parse(p) => Some(p),
-            Self::Wrap(w) => Some(w),
-        }
-    }
-}
-
-static_cstr!(NULLPTR, b"NullPtr\0");
-impl DError for super::packet::WrapError {
-    fn discriminant(&self) -> &'static CStr {
-        match self {
-            Self::NullPtr => NULLPTR,
-        }
-    }
-
-    fn child(&self) -> Option<&dyn DError> {
-        None
-    }
-}
-
 static_cstr!(BAD_HEADER, b"BadHeader\0");
 static_cstr!(BAD_INNER_IP_LEN, b"BadInnerIpLen\0");
 static_cstr!(BAD_OUTER_IP_LEN, b"BadOuterIpLen\0");
@@ -294,29 +263,6 @@ impl DError for super::packet::ParseError {
     }
 }
 
-static_cstr!(BAD_LAYOUT, b"BadLayout\0");
-static_cstr!(END_OF_PACKET, b"EndOfPacket\0");
-static_cstr!(NOT_ENOUGH_BYTES, b"NotEnoughBytes\0");
-static_cstr!(OUT_OF_RANGE, b"OutOfRange\0");
-static_cstr!(STRADDLED_READ, b"StraddledRead\0");
-static_cstr!(NOT_IMPLEMENTED, b"NotImplemented\0");
-impl DError for super::packet::ReadErr {
-    fn discriminant(&self) -> &'static CStr {
-        match self {
-            Self::BadLayout => BAD_LAYOUT,
-            Self::EndOfPacket => END_OF_PACKET,
-            Self::NotEnoughBytes => NOT_ENOUGH_BYTES,
-            Self::OutOfRange => OUT_OF_RANGE,
-            Self::StraddledRead => STRADDLED_READ,
-            Self::NotImplemented => NOT_IMPLEMENTED,
-        }
-    }
-
-    fn child(&self) -> Option<&dyn DError> {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,45 +272,21 @@ mod tests {
     static_cstr!(ND_C, b"NoData\0");
     static_cstr!(D_C, b"Data\0");
 
+    #[derive(DError)]
     enum TestEnum {
         A,
         B(TestChildEnum),
     }
 
-    impl DError for TestEnum {
-        fn discriminant(&self) -> &'static CStr {
-            match self {
-                Self::A => A_C,
-                Self::B(_) => B_C,
-            }
-        }
-
-        fn child(&self) -> Option<&dyn DError> {
-            match self {
-                Self::A => None,
-                Self::B(b) => Some(b),
-            }
-        }
-    }
-
+    #[derive(DError)]
+    #[derror(leaf_data = TestChildEnum::data)]
     enum TestChildEnum {
         NoData,
         Data { a: u8, b: u8 },
     }
 
-    impl DError for TestChildEnum {
-        fn discriminant(&self) -> &'static CStr {
-            match self {
-                Self::NoData => ND_C,
-                Self::Data { .. } => D_C,
-            }
-        }
-
-        fn child(&self) -> Option<&dyn DError> {
-            None
-        }
-
-        fn leaf_data(&self, data: &mut [u64]) {
+    impl TestChildEnum {
+        fn data(&self, data: &mut [u64]) {
             match self {
                 TestChildEnum::NoData => {}
                 TestChildEnum::Data { a, b } => {

@@ -19,6 +19,7 @@
 use super::arp::ArpHdrError;
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
+use super::d_error::DError;
 use super::ether::EtherHdr;
 use super::ether::EtherHdrError;
 use super::ether::EtherMeta;
@@ -2232,14 +2233,14 @@ impl<'a> PacketSegWriter<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, DError)]
 pub enum WrapError {
     /// We tried to wrap a NULL pointer.
     NullPtr,
 }
 
 /// Some functions may return multiple types of errors.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, DError)]
 pub enum PacketError {
     Parse(ParseError),
     Wrap(WrapError),
@@ -2337,7 +2338,7 @@ impl From<GeneveHdrError> for ParseError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DError)]
 pub enum ReadErr {
     BadLayout,
     EndOfPacket,
