@@ -122,10 +122,7 @@ extern "C" {
         port: uintptr_t,
         dir: uintptr_t,
         mp: uintptr_t,
-        msgs: uintptr_t,
-        msgs_len: uintptr_t,
-        truncated: uintptr_t,
-        data: uintptr_t,
+        err_b: uintptr_t,
         data_len: uintptr_t,
     );
     pub fn __dtrace_probe_guest__loopback(
@@ -163,7 +160,6 @@ fn bad_packet_parse_probe(
         Err(block) => (true, block),
     };
 
-    // XXX: can we do one better by having a repr(c) internally?
     let msgs = block.entries_ptr();
     let data = block.data();
 
@@ -172,10 +168,7 @@ fn bad_packet_parse_probe(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
-            msgs.as_ptr() as uintptr_t,
-            msgs.len() as uintptr_t,
-            truncated as uintptr_t,
-            data.as_ptr() as uintptr_t,
+            &block.as_ptr() as uintptr_t,
             4,
         )
     };
@@ -185,26 +178,22 @@ fn bad_packet_probe(
     port: Option<&CString>,
     dir: Direction,
     mp: *mut mblk_t,
-    msg: &str,
+    msg: &CStr,
 ) {
     let port_str = match port {
         None => c"unknown",
         Some(name) => name.as_c_str(),
     };
-    let msg_arg = CString::new(msg).unwrap();
-    let strs = [msg_arg];
-    let data = [0, 0, 0, 0];
+    let mut eb = ErrorBlock::<8>::new();
 
     unsafe {
+        let _ = eb.append_name_raw(msg);
         __dtrace_probe_bad__packet(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
-            strs.as_ptr() as uintptr_t,
-            strs.len() as uintptr_t,
-            false as uintptr_t,
-            data.as_ptr() as uintptr_t,
-            4,
+            &eb.as_ptr() as uintptr_t,
+            8,
         )
     };
 }
@@ -2103,9 +2092,9 @@ unsafe extern "C" fn xde_rx(
         Some(EncapMeta::Geneve(geneve)) => geneve,
         None => {
             // TODO add stat
-            let msg = "no geneve header, dropping";
+            let msg = c"no geneve header, dropping";
             bad_packet_probe(None, Direction::In, mp_chain, msg);
-            opte::engine::dbg!("{}", msg);
+            opte::engine::dbg!("no geneve header, dropping");
             return;
         }
     };

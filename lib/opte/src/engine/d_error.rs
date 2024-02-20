@@ -53,7 +53,8 @@ static_cstr!(EMPTY_STRING, b"\0");
 /// as well as the data from a leaf node.
 ///
 /// This wrapper cannot contain a null c_string pointer, so all entries are
-/// safe to dereference from a dtrace script.
+/// safe to dereference from a dtrace script. Additionally, it has a fixed
+/// C-ABI representation to minimise the work needed to pass it as an SDT arg.
 #[derive(Debug)]
 #[repr(C)]
 pub struct ErrorBlock<const L: usize> {
@@ -61,6 +62,7 @@ pub struct ErrorBlock<const L: usize> {
     more: bool,
     // XXX: Maybe we can move this to a generic?
     data: [u64; 2],
+    // XXX: Box?
     entries: [*const i8; L],
 }
 
@@ -118,6 +120,24 @@ impl<const L: usize> ErrorBlock<L> {
         Ok(())
     }
 
+    /// Appends the top layer name of a given error.
+    ///
+    /// Callers must ensure that pointee outlives this ErrorBlock.
+    pub unsafe fn append_name_raw<'a, 'b: 'a>(
+        &'a mut self,
+        err: &'b CStr,
+    ) -> Result<(), ()> {
+        if self.len >= L {
+            self.more = true;
+            return Err(());
+        }
+
+        self.entries[self.len] = err.as_ptr();
+        self.len += 1;
+
+        Ok(())
+    }
+
     /// Return the number of stored strings entries.
     pub fn len(&self) -> usize {
         self.len
@@ -141,6 +161,11 @@ impl<const L: usize> ErrorBlock<L> {
     /// Provides access to data stored in a leaf error.
     pub fn data(&self) -> &[u64] {
         &self.data[..]
+    }
+
+    /// Return a pointer to this object for inclusion in an SDT.
+    pub fn as_ptr(&self) -> *const Self {
+        self as *const ErrorBlock<L>
     }
 }
 

@@ -18,11 +18,9 @@ bad-packet {
 	this->port = stringof(arg0);
 	this->dir = DIR_STR(arg1);
 	this->mblk = arg2;
-	this->msgs = (char**) arg3;
-	this->msg_len = arg4;
-	this->truncated = arg5;
-	this->data = (uint64_t*) arg6;
-	this->data_len = arg7;
+	this->msgs = (derror_sdt_arg_t*) arg3;
+	this->msg_len = this->msgs->len;
+	this->data_len = arg4;
 
 	if (num >= 10) {
 		printf(HDR_FMT, "PORT", "DIR", "MBLK", "MSG+DATA");
@@ -38,51 +36,51 @@ bad-packet {
 bad-packet
 /this->msg_len > 0/
 {
-	printf("%s", stringof(this->msgs[0]));
+	printf("%s", stringof(this->msgs->entry[0]));
 }
 
 bad-packet
 /this->msg_len > 1/
 {
-	printf(EL_FMT, stringof(this->msgs[1]));
+	printf(EL_FMT, stringof(this->msgs->entry[1]));
 }
 
 bad-packet
 /this->msg_len > 2/
 {
-	printf(EL_FMT, stringof(this->msgs[2]));
+	printf(EL_FMT, stringof(this->msgs->entry[2]));
 }
 
 bad-packet
 /this->msg_len > 3/
 {
-	printf(EL_FMT, stringof(this->msgs[3]));
+	printf(EL_FMT, stringof(this->msgs->entry[3]));
 }
 
 bad-packet
 /this->msg_len > 4/
 {
-	printf(EL_FMT, stringof(this->msgs[4]));
+	printf(EL_FMT, stringof(this->msgs->entry[4]));
 }
 
 bad-packet
 /this->msg_len > 5/
 {
-	printf(EL_FMT, stringof(this->msgs[5]));
+	printf(EL_FMT, stringof(this->msgs->entry[5]));
 }
 
 bad-packet
 /this->msg_len > 6/
 {
-	printf(EL_FMT, stringof(this->msgs[6]));
+	printf(EL_FMT, stringof(this->msgs->entry[6]));
 }
 
 bad-packet
 /this->msg_len > 7/
 {
-	printf(EL_FMT, stringof(this->msgs[7]));
+	printf(EL_FMT, stringof(this->msgs->entry[7]));
 }
 
 bad-packet {
-	printf(" [%d, %d]\n", this->data[0], this->data[1]);
+	printf(" [%d, %d]\n", this->msgs->data[0], this->msgs->data[1]);
 }
