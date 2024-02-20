@@ -55,14 +55,13 @@ static_cstr!(EMPTY_STRING, b"\0");
 /// This wrapper cannot contain a null c_string pointer, so all entries are
 /// safe to dereference from a dtrace script.
 #[derive(Debug)]
+#[repr(C)]
 pub struct ErrorBlock<const L: usize> {
-    entries: [*const i8; L],
-
     len: usize,
     more: bool,
-
     // XXX: Maybe we can move this to a generic?
     data: [u64; 2],
+    entries: [*const i8; L],
 }
 
 impl<const L: usize> ErrorBlock<L> {

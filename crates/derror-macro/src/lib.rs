@@ -18,7 +18,39 @@ struct Args {
 }
 
 /// Generate a `DError` implementation given a tree-structured enum
-/// where only leaf nodes hold additional data.
+/// where only leaf nodes hold additional data. This allows for deeply
+/// nested enums to be more easily understood in dtrace probes without
+/// calling `format!()`.
+///
+/// This is intended for annotating error chains such as:
+/// ```ignore
+/// #[derive(DError)]
+/// enum SomeErrors {
+///     A,
+///     B(NestedError),
+/// }
+///
+/// #[derive(DError)]
+/// #[derror(leaf_data = data_fn)]
+/// enum NestedError {
+///     Data1 { val1: u64, val2: u8},
+///     #[leaf]
+///     Data2(u32),
+///     NoData,
+/// }
+///
+/// fn data_fn(val: &NestedError, data: &mut [u8]) {
+///     [data[0], data[1]] = match {
+///         Self::Data1 { val1, val2 } => [val1 as u64, val2 as u64],
+///         Self::Data2(d) => [d as u64, 0],
+///         _ => [0, 0],
+///     }   
+/// }
+/// ```
+/// The macro will automatically generate `CStrs` for every enum variant
+/// and will traverse down all single-element tuple variants unless annotated
+/// as `#[leaf]`s. A `leaf_data` function can be specfied to fill in the data
+/// segment of an `ErrorBlock`. This is currently fixed as a `[u64; 2]`.
 #[proc_macro_derive(DError, attributes(derror, leaf))]
 pub fn derive_derror(
     input: proc_macro::TokenStream,
