@@ -168,7 +168,7 @@ fn bad_packet_parse_probe(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
-            &block.as_ptr() as uintptr_t,
+            block.as_ptr() as uintptr_t,
             4,
         )
     };
@@ -192,7 +192,7 @@ fn bad_packet_probe(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
-            &eb.as_ptr() as uintptr_t,
+            eb.as_ptr() as uintptr_t,
             8,
         )
     };
