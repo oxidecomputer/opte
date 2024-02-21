@@ -155,13 +155,11 @@ fn bad_packet_parse_probe(
         Some(name) => name.as_c_str(),
     };
 
-    let (mut truncated, mut block) = match ErrorBlock::<8>::from_err(err) {
-        Ok(block) => (false, block),
-        Err(block) => (true, block),
+    // Truncation is captured *in* the ErrorBlock.
+    let block = match ErrorBlock::<8>::from_err(err) {
+        Ok(block) => block,
+        Err(block) => block,
     };
-
-    let msgs = block.entries_ptr();
-    let data = block.data();
 
     unsafe {
         __dtrace_probe_bad__packet(
