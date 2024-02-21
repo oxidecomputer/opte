@@ -1,2 +1,4 @@
 [alias]
 xtask = "run --package xtask --"
+ubench = "bench --package opte-bench --bench userland --"
+kbench = "bench --package opte-bench --bench xde --"

@@ -1,0 +1,59 @@
+= OPTE Benchmarks
+
+OPTE maintains two sets of benchmarks: userland microbenchmarks, and kernel module benchmarks.
+Userland benchmarks can be run on most development machines, while the kernel module benchmarks will require a full Helios install and additional lab setup depending on what benchmarks you want to run.
+
+Benchmark outputs are located in `opte/target/criterion`, and any flamegraphs built during kmod benchmarks are placed into `opte/target/xde-bench`.
+
+== Userland Benchmarks
+
+We use https://github.com/bheisler/criterion.rs[`criterion`] to measure and profile individual packet processing times for slow-/fast-path traffic as well as generated hairpin packets.
+
+These can be called using `cargo ubench`, or `cargo bench --package opte-bench --bench userland -- <options>`.
+This benchmark runner uses the standard criterion CLI.
+
+== Kernel Module Benchmarks
+
+The kernel module benchmarks can be called using `cargo kbench`, or `cargo bench --package opte-bench --bench xde -- <options>`.
+They require that:
+
+ * you are running on an up-to-date Helios instance.
+ * the XDE kernel module and `opteadm` are installed, either via IPS or the `cargo xtask install` command.
+
+They implement zont-to-zone iperf traffic in two scenarios:
+
+ * `cargo kbench local` on one machine.
+   This uses an identical test setup to `xde-tests/loopback`.
+   Two sparse zones will be created on the current machine, with simnet links being used as an underlay network.
+   This is lower fidelity than the below two-node setup.
+ * `cargo kbench server` and `cargo kbench remote <SERVER_IP>` on two separate machines.
+   One zone will be created on each machine (running an iperf server and client respectively), using the shared lab/home network to exchange link local addresses.
+
+Below you can find a lab setup which suffices for the second option.
+Currently, linklocals must be created with the name syntax `igbx/ll`: this can be done using, e.g., `pfexec ipadm create-addr igb0/ll -T addrconf`.
+Additionally, MTUs should be set to `9000` for physical underlay links.
+
+[source]
+fe80::a236:9fff:fe0c:2586            fe80::a236:9fff:fe0c:25b6
+fe80::a236:9fff:fe0c:2587            fe80::a236:9fff:fe0c:25b7
+            ┌─────────────────────────────────────┐
+            │                                     │
+            │         ┌─────────────────┐         │
+            │         │                 │         │
+       igb0┌┴┐       ┌┴┐igb1       igb1┌┴┐       ┌┴┐igb0
+         ╔═╩═╩═══════╩═╩═╗           ╔═╩═╩═══════╩═╩═╗
+         ║ cargo kbench  ║░          ║ cargo kbench  ║░
+         ║    remote     ║░          ║    server     ║░
+         ║ 10.0.125.173  ║░          ║               ║░
+         ╚══════╦═╦══════╝░          ╚══════╦═╦══════╝░
+          ░░░░░░░│░░░░░░░░░           ░░░░░░░│░░░░░░░░░
+  10.0.125.187/8                               10.0.125.173/8
+                 │      ┌ ─ ─ ─ ─ ─ ┐        │
+                          Lab/Home
+                 └ ─ ─ ▶│  Network  │◀ ─ ─ ─ ┘
+                         ─ ─ ─ ─ ─ ─
+
+Connecting `igb0<->igb0`, etc., is not a requirement, as NDP tables are inspected for inserting underlay network routes.
+
+In both scenarios, the benchmark harness will run iperf in client-to-server and server-to-client modes, and will record periodic stack information and timings using `dtrace`.
+These are converted into flamegraphs and timing data for further analysis by criterion.

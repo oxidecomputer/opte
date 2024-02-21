@@ -10,6 +10,30 @@ For ease of development, the above command will bypass `pkg`. OPTE can instead b
 Please see the xref:CONTRIBUTING.adoc[CONTRIBUTING] doc if you are
 interested in contributing to the project.
 
+== Tests and performance
+
+While the XDE kernel module runs only on Helios, our test suite and microbenchmarks work on Unix-like development systems.
+
+[%header,cols="1,1"]
+|===
+| Helios
+| Linux/Mac/...
+
+| `cargo nextest run`
+| `cargo nextest run -p opte -p opte-api -p oxide-vpc`
+
+| `cargo build -p xde-tests --tests`, `pfexec target/debug/deps/loopback-<hash>`
+| N/A
+
+| `cargo ubench`
+| `cargo ubench`
+
+| `cargo kbench`
+| N/A
+|===
+
+More detail on our benchmarks can be found in xref:bench/README.adoc[bench/README].
+
 == Relevant RFDs and Inspiration
 
 * https://rfd.shared.oxide.computer/rfd/0009[RFD 9: Networking Considerations]

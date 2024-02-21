@@ -1,4 +1,4 @@
-mod common;
+use opte_test_utils as common;
 
 use common::*;
 use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
