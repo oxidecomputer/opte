@@ -6,6 +6,7 @@
 
 //! A layer in a port.
 
+use super::d_error::CRStr;
 use super::flow_table::Dump;
 use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
@@ -87,6 +88,7 @@ impl From<BodyTransformError> for LayerError {
 
 /// Why a given packet was denied.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum DenyReason {
     /// The packet was denied by the action itself.
     ///
@@ -120,7 +122,7 @@ impl Display for DenyReason {
 #[derive(Debug)]
 pub enum LayerResult {
     Allow,
-    Deny { name: &'static str, reason: DenyReason },
+    Deny { name: &'static CRStr, reason: DenyReason },
     Hairpin(Packet<Initialized>),
     HandlePkt,
 }
@@ -493,8 +495,7 @@ struct LayerStats {
 
 pub struct Layer {
     port_c: CString,
-    name: &'static str,
-    name_c: CString,
+    name: &'static CRStr,
     actions: Vec<Action>,
     default_in: DefaultAction,
     default_in_hits: u64,
@@ -576,7 +577,7 @@ impl Layer {
                 unsafe {
                     __dtrace_probe_gen__desc__fail(
                         self.port_c.as_ptr() as uintptr_t,
-                        self.name_c.as_ptr() as uintptr_t,
+                        self.name_c().as_ptr() as uintptr_t,
                         dir_c.as_ptr() as uintptr_t,
                         &flow_arg as *const flow_id_sdt_arg as uintptr_t,
                         msg_c.as_ptr() as uintptr_t,
@@ -584,7 +585,7 @@ impl Layer {
                 }
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
-                let name_s = self.name_c.to_str().unwrap();
+                let name_s = self.name_c().to_str().unwrap();
                 let flow_s = flow.to_string();
                 let msg_s = format!("{:?}", err);
 
@@ -592,7 +593,7 @@ impl Layer {
                     || (port_s, name_s, dir, flow_s, msg_s)
                 );
             } else {
-                let (..) = (&self.port_c, &self.name_c, dir, flow, err);
+                let (..) = (&self.port_c, &self.name_c(), dir, flow, err);
             }
         }
     }
@@ -720,18 +721,27 @@ impl Layer {
     }
 
     /// Return the name of the layer.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &'static str {
+        self.name.as_str()
+    }
+
+    /// Return the name of the layer as a C string.
+    pub fn name_c(&self) -> &'static CStr {
+        self.name.as_cstr()
+    }
+
+    /// Return the name of the layer as a joint C-Rust string.
+    pub fn name_cr(&self) -> &'static CRStr {
         self.name
     }
 
     pub fn new(
-        name: &'static str,
+        name: &'static CRStr,
         port: &str,
         actions: LayerActions,
         ft_limit: NonZeroU32,
     ) -> Self {
         let port_c = CString::new(port).unwrap();
-        let name_c = CString::new(name).unwrap();
 
         // Unwrap: We know this is fine because the stat names are
         // generated from the LayerStats structure.
@@ -751,12 +761,11 @@ impl Layer {
             default_out: actions.default_out,
             default_out_hits: 0,
             name,
-            name_c,
             port_c,
-            ft: LayerFlowTable::new(port, name, ft_limit),
+            ft: LayerFlowTable::new(port, name.as_str(), ft_limit),
             ft_cstr: CString::new(format!("ft-{}", name)).unwrap(),
-            rules_in: RuleTable::new(port, name, Direction::In),
-            rules_out: RuleTable::new(port, name, Direction::Out),
+            rules_in: RuleTable::new(port, name.as_str(), Direction::In),
+            rules_out: RuleTable::new(port, name.as_str(), Direction::Out),
             rt_cstr: CString::new(format!("rt-{}", name)).unwrap(),
             stats,
         }
@@ -896,7 +905,7 @@ impl Layer {
                 if self.ft.count == self.ft.limit.get() {
                     self.stats.vals.in_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
-                        layer: self.name,
+                        layer: self.name(),
                         dir: In,
                     });
                 }
@@ -953,7 +962,7 @@ impl Layer {
                     Err(e) => {
                         self.record_gen_ht_failure(ectx, In, pkt.flow(), &e);
                         return Err(LayerError::GenHdrTransform {
-                            layer: self.name,
+                            layer: self.name(),
                             err: e,
                         });
                     }
@@ -1006,7 +1015,7 @@ impl Layer {
                 if self.ft.count == self.ft.limit.get() {
                     self.stats.vals.in_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
-                        layer: self.name,
+                        layer: self.name(),
                         dir: In,
                     });
                 }
@@ -1193,7 +1202,7 @@ impl Layer {
                 if self.ft.count == self.ft.limit.get() {
                     self.stats.vals.out_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
-                        layer: self.name,
+                        layer: self.name(),
                         dir: Out,
                     });
                 }
@@ -1252,7 +1261,7 @@ impl Layer {
                     Err(e) => {
                         self.record_gen_ht_failure(ectx, Out, pkt.flow(), &e);
                         return Err(LayerError::GenHdrTransform {
-                            layer: self.name,
+                            layer: self.name(),
                             err: e,
                         });
                     }
@@ -1305,7 +1314,7 @@ impl Layer {
                 if self.ft.count == self.ft.limit.get() {
                     self.stats.vals.out_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
-                        layer: self.name,
+                        layer: self.name(),
                         dir: Out,
                     });
                 }

@@ -16,6 +16,7 @@ use crate::engine::headers::RawHeader;
 use crate::engine::headers::UlpMetaModify;
 use crate::engine::packet::PacketReadMut;
 use crate::engine::packet::ReadErr;
+use core::ffi::CStr;
 use core::mem;
 use opte_api::DYNAMIC_PORT;
 use serde::Deserialize;
@@ -209,13 +210,15 @@ pub enum UdpHdrError {
 }
 
 impl UdpHdrError {
-    fn derror_data(&self, data: &mut [u64]) {
+    fn derror_data(&self, data: &mut [u64]) -> Option<&'static CStr> {
         data[0] = match self {
             Self::BadDstPort { dst_port } => *dst_port as u64,
             Self::BadLength { length } => *length as u64,
             Self::BadSrcPort { src_port } => *src_port as u64,
             _ => 0,
-        }
+        };
+
+        None
     }
 }
 

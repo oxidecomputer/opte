@@ -15,6 +15,7 @@ use super::headers::PushAction;
 use super::headers::RawHeader;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use core::ffi::CStr;
 use core::mem;
 pub use opte_api::Vni;
 use serde::Deserialize;
@@ -229,7 +230,7 @@ impl From<ReadErr> for GeneveHdrError {
 }
 
 impl GeneveHdrError {
-    fn derror_data(&self, data: &mut [u64]) {
+    fn derror_data(&self, data: &mut [u64]) -> Option<&'static CStr> {
         [data[0], data[1]] = match self {
             Self::BadDstPort { dst_port } => [*dst_port as u64, 0],
             Self::BadLength { len } => [*len as u64, 0],
@@ -240,7 +241,9 @@ impl GeneveHdrError {
                 [*class as u64, *opt_type as u64]
             }
             _ => [0, 0],
-        }
+        };
+
+        None
     }
 }
 

@@ -45,6 +45,7 @@ use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6HdrError;
 use super::ip6::Ipv6Meta;
 use super::NetworkParser;
+use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
 use core::ptr;
@@ -2294,7 +2295,7 @@ pub enum ParseError {
 }
 
 impl ParseError {
-    fn data(&self, data: &mut [u64]) {
+    fn data(&self, data: &mut [u64]) -> Option<&'static CStr> {
         match self {
             Self::BadInnerIpLen { expected, actual }
             | Self::BadInnerUlpLen { expected, actual }
@@ -2314,6 +2315,8 @@ impl ParseError {
 
             _ => {}
         }
+
+        None
     }
 }
 

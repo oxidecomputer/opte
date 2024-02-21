@@ -16,6 +16,7 @@ use super::packet::Packet;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
 use core::convert::TryFrom;
+use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
 use opte_api::Ipv4Addr;
@@ -82,7 +83,7 @@ pub enum ArpHdrError {
 }
 
 impl ArpHdrError {
-    fn derror_data(&self, data: &mut [u64]) {
+    fn derror_data(&self, data: &mut [u64]) -> Option<&'static CStr> {
         data[0] = match self {
             Self::BadOp { op } => *op as u64,
             Self::UnexpectedProtoLen { plen } => *plen as u64,
@@ -91,6 +92,8 @@ impl ArpHdrError {
             Self::UnexpectedHwType { htype } => *htype as u64,
             _ => 0,
         };
+
+        None
     }
 }
 

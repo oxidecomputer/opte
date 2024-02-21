@@ -66,11 +66,13 @@ use opte::engine::rule::Resource;
 use opte::engine::rule::ResourceEntry;
 use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
+use opte::engine::d_error::CRStr;
+use opte::static_crstr;
 use poptrie::Poptrie;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub const OVERLAY_LAYER_NAME: &str = "overlay";
+static_crstr!(OVERLAY_LAYER_NAME, "overlay");
 
 pub fn setup(
     pb: &PortBuilder,

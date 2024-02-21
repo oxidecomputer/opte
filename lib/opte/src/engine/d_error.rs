@@ -30,6 +30,8 @@ macro_rules! static_cstr {
     };
 }
 
+static_cstr!(EMPTY_STRING, b"\0");
+
 // XXX: I think we want some way of doing the whole thing in one big chunk
 //      to prevent e.g. 4 dyn dispatches in a row.
 
@@ -42,11 +44,102 @@ pub trait DError {
     /// Provide a reference to the next error in the chain.
     fn child(&self) -> Option<&dyn DError>;
 
-    /// Store data from a leaf error to be bundled with a probe.
-    fn leaf_data(&self, _data: &mut [u64]) {}
+    /// Store data from a leaf error to be bundled with a probe, returning
+    /// an optional additional string parameter.
+    fn leaf_data(&self, _data: &mut [u64]) -> Option<&'static CStr> { None }
 }
 
-static_cstr!(EMPTY_STRING, b"\0");
+/// A static string which is jointly usable as a `CStr` and `str`.
+pub struct CRStr(&'static str, &'static CStr);
+
+impl CRStr {
+    pub const fn new(data: &'static str) -> Result<Self, ()> {
+        if let Ok(cs) = CStr::from_bytes_with_nul(data.as_bytes()) {
+            if let Some((_nul, actual_str)) = data.as_bytes().split_last() {
+                Ok(Self(
+                    // SAFETY: We have been given a valid &str, and we know
+                    // its last character *must* be \0 due to the success of
+                    // from_bytes_with_nul. Additionally, \0 cannot be an interior
+                    // byte of a UTF8 multibyte character (which are `0x10xx_xxxx`).
+                    unsafe {std::str::from_utf8_unchecked(actual_str)},
+                    cs
+                ))    
+            } else {
+                Err(())
+            }
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        self.0
+    }
+
+    pub fn as_cstr(&self) -> &'static CStr {
+        self.1
+    }
+}
+
+impl AsRef<str> for CRStr {
+    fn as_ref(&self) -> &'static str {
+        self.as_str()
+    }
+}
+
+impl AsRef<CStr> for CRStr {
+    fn as_ref(&self) -> &'static CStr {
+        &self.as_cstr()
+    }
+}
+
+impl DError for CRStr {
+    fn discriminant(&self) -> &'static CStr {
+        self.as_cstr()
+    }
+
+    fn child(&self) -> Option<&dyn DError> {
+        None
+    }
+}
+
+impl DError for &CRStr {
+    fn discriminant(&self) -> &'static CStr {
+        self.as_cstr()
+    }
+
+    fn child(&self) -> Option<&dyn DError> {
+        None
+    }
+}
+
+impl std::fmt::Debug for CRStr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::fmt::Display for CRStr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Create a const/statically verified `str`/`CStr` hybrid.
+#[macro_export]
+macro_rules! static_crstr {
+    ($i:ident, $e:expr) => {
+        static $i: CRStr = {
+            static LOCAL: &str = concat!($e, "\0");
+
+            let Ok(b) = CRStr::new(LOCAL) else {
+                panic!();
+            };
+
+            b
+        };
+    };
+}
 
 /// An error trace designed to be passed to a Dtrace handler, which contains
 /// the names of all `enum` discriminators encountered when resolving an error
@@ -101,7 +194,9 @@ impl<const L: usize> ErrorBlock<L> {
             top = el.child();
 
             if top.is_none() {
-                el.leaf_data(&mut self.data[..]);
+                if let Some(extra_label) = el.leaf_data(&mut self.data[..]) {
+                    self.append_static_name(extra_label)?;
+                }
             }
         }
         Ok(())
@@ -109,18 +204,24 @@ impl<const L: usize> ErrorBlock<L> {
 
     /// Appends the top layer name of a given error.
     pub fn append_name(&mut self, err: &dyn DError) -> Result<(), ()> {
+        self.append_static_name(err.discriminant())
+    }
+
+    /// XXX
+    #[inline]
+    pub fn append_static_name(&mut self, err: &'static CStr) -> Result<(), ()> {
         if self.len >= L {
             self.more = true;
             return Err(());
         }
 
-        self.entries[self.len] = err.discriminant().as_ptr();
+        self.entries[self.len] = err.as_ptr();
         self.len += 1;
 
         Ok(())
     }
 
-    /// Appends the top layer name of a given error.
+    /// XXX
     ///
     /// Callers must ensure that pointee outlives this ErrorBlock.
     pub unsafe fn append_name_raw<'a, 'b: 'a>(
@@ -165,7 +266,7 @@ impl<const L: usize> ErrorBlock<L> {
 
     /// Return a pointer to this object for inclusion in an SDT.
     pub fn as_ptr(&self) -> *const Self {
-        self as *const ErrorBlock<L>
+        self as *const ErrorBlock::<L>
     }
 }
 
@@ -211,6 +312,8 @@ mod tests {
     static_cstr!(B_C, b"B\0");
     static_cstr!(ND_C, b"NoData\0");
     static_cstr!(D_C, b"Data\0");
+    static_cstr!(EXTRASTR_C, b"ExtraStr\0");
+    static_crstr!(EXTRA_C, "Extra! Extra!");
 
     #[derive(DError)]
     enum TestEnum {
@@ -223,15 +326,18 @@ mod tests {
     enum TestChildEnum {
         NoData,
         Data { a: u8, b: u8 },
+        ExtraStr { s: &'static CRStr },
     }
 
     impl TestChildEnum {
-        fn data(&self, data: &mut [u64]) {
+        fn data(&self, data: &mut [u64])-> Option<&'static CStr> {
             match self {
-                TestChildEnum::NoData => {}
+                TestChildEnum::NoData => None,
                 TestChildEnum::Data { a, b } => {
-                    [data[0], data[1]] = [*a as u64, *b as u64]
+                    [data[0], data[1]] = [*a as u64, *b as u64];
+                    None
                 }
+                TestChildEnum::ExtraStr { s } => Some(s.as_cstr()),
             }
         }
     }
@@ -257,6 +363,11 @@ mod tests {
         assert_eq!(&names[..], &[B_C, D_C][..]);
         assert_eq!(block.data[0], 0xab);
         assert_eq!(block.data[1], 0xcd);
+
+        let err = TestEnum::B(TestChildEnum::ExtraStr { s: &EXTRA_C });
+        let block: ErrorBlock<3> = ErrorBlock::from_err(&err).unwrap();
+        let names = block.entries().collect::<Vec<_>>();
+        assert_eq!(&names[..], &[B_C, EXTRASTR_C, EXTRA_C.as_cstr()][..]);
     }
 
     #[test]

@@ -2,11 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! A virtual switch port.
 
 use self::meta::ActionMeta;
+use super::d_error::CRStr;
+use super::d_error::DError;
 use super::flow_table::Dump;
 use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
@@ -59,6 +61,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
 use core::num::NonZeroU32;
@@ -127,11 +130,12 @@ impl From<HdrTransformError> for ProcessError {
 /// * Hairpin: One of the layers has determined that it should reply
 /// directly with a packet of its own. In this case the original
 /// packet is dropped.
-#[derive(Debug)]
+#[derive(Debug, DError)]
 pub enum ProcessResult {
     Bypass,
-    Drop { reason: DropReason },
+    Drop(DropReason),
     Modified,
+    #[leaf]
     Hairpin(Packet<Initialized>),
 }
 
@@ -139,18 +143,31 @@ impl From<HdlPktAction> for ProcessResult {
     fn from(hpa: HdlPktAction) -> Self {
         match hpa {
             HdlPktAction::Allow => Self::Modified,
-            HdlPktAction::Deny => Self::Drop { reason: DropReason::HandlePkt },
+            HdlPktAction::Deny => Self::Drop(DropReason::HandlePkt),
             HdlPktAction::Hairpin(pkt) => Self::Hairpin(pkt),
         }
     }
 }
 
 /// The reason for a packet being dropped.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, DError)]
+#[derror(leaf_data = DropReason::leaf_data)]
 pub enum DropReason {
     HandlePkt,
-    Layer { name: &'static str, reason: layer::DenyReason },
+    Layer { name: &'static CRStr, reason: layer::DenyReason },
     TcpErr,
+}
+
+impl DropReason {
+    fn leaf_data(&self, data: &mut [u64]) -> Option<&'static CStr> {
+        match self {
+            DropReason::Layer { name, reason } => {
+                data[0] = *reason as u64;
+                Some(name.as_cstr())
+            },
+            _ => None,
+        }
+    }
 }
 
 /// Used to build a [`Port`].
@@ -1433,13 +1450,19 @@ impl<N: NetworkImpl> Port<N> {
         let flow_after = pkt.flow();
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
+                #[derive(DError)]
+                enum LocalResult{
+                    Ok(ProcessResult),
+                    Err(ProcessError),
+                }
+
                 let flow_b_arg = flow_id_sdt_arg::from(flow_before);
                 let flow_a_arg = flow_id_sdt_arg::from(flow_after);
                 // XXX This would probably be better as separate probes;
                 // for now this does the trick.
                 let res_str = match res {
-                    Ok(v) => format!("{:?}", v),
-                    Err(e) => format!("ERROR: {:?}", e),
+                    Ok(v) => LocalResult::Ok(v),
+                    Err(e) => LocalResult::Err(e),
                 };
                 let res_arg = CString::new(res_str).unwrap();
                 let hp_pkt_ptr = match res {
@@ -1741,9 +1764,9 @@ impl<N: NetworkImpl> Port<N> {
             }
 
             Ok(LayerResult::Deny { name, reason }) => {
-                return Ok(ProcessResult::Drop {
-                    reason: DropReason::Layer { name, reason },
-                })
+                return Ok(ProcessResult::Drop (
+                    DropReason::Layer { name, reason },
+                ))
             }
 
             Ok(LayerResult::Hairpin(hppkt)) => {
@@ -1821,17 +1844,17 @@ impl<N: NetworkImpl> Port<N> {
                 Err(ProcessError::TcpFlow(err)) => {
                     let e = format!("{err}");
                     self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
-                    Ok(ProcessResult::Drop { reason: DropReason::TcpErr })
+                    Ok(ProcessResult::Drop(DropReason::TcpErr))
                 }
                 Err(ProcessError::MissingFlow(flow_id)) => {
                     let e = format!("Missing TCP flow ID: {flow_id}");
                     self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
-                    Ok(ProcessResult::Drop { reason: DropReason::TcpErr })
+                    Ok(ProcessResult::Drop(DropReason::TcpErr))
                 }
                 Err(ProcessError::FlowTableFull { kind, limit }) => {
                     let e = format!("{kind} flow table full ({limit} entries)");
                     self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
-                    Ok(ProcessResult::Drop { reason: DropReason::TcpErr })
+                    Ok(ProcessResult::Drop(DropReason::TcpErr))
                 }
                 res => unreachable!(
                     "Cannot return other errors from \
@@ -1951,9 +1974,7 @@ impl<N: NetworkImpl> Port<N> {
                                 e.to_string(),
                                 pkt,
                             );
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
+                            return Ok(ProcessResult::Drop(DropReason::TcpErr));
                         }
                         Err(ProcessError::MissingFlow(flow_id)) => {
                             let e = format!("Missing TCP flow ID: {flow_id}");
@@ -1963,9 +1984,7 @@ impl<N: NetworkImpl> Port<N> {
                                 e,
                                 pkt,
                             );
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
+                            return Ok(ProcessResult::Drop(DropReason::TcpErr));
                         }
                         Err(ProcessError::FlowTableFull { kind, limit }) => {
                             let e = format!(
@@ -1977,9 +1996,7 @@ impl<N: NetworkImpl> Port<N> {
                                 e,
                                 pkt,
                             );
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
+                            return Ok(ProcessResult::Drop(DropReason::TcpErr));
                         }
                         _ => unreachable!(
                             "Cannot return other errors from process_in_tcp_new"
@@ -2112,23 +2129,17 @@ impl<N: NetworkImpl> Port<N> {
                 Err(ProcessError::TcpFlow(err)) => {
                     let e = format!("{err}");
                     self.tcp_err(&data.tcp_flows, Out, e, pkt);
-                    return Ok(ProcessResult::Drop {
-                        reason: DropReason::TcpErr,
-                    });
+                    return Ok(ProcessResult::Drop(DropReason::TcpErr));
                 }
                 Err(ProcessError::MissingFlow(flow_id)) => {
                     let e = format!("Missing TCP flow ID: {flow_id}");
                     self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
-                    return Ok(ProcessResult::Drop {
-                        reason: DropReason::TcpErr,
-                    });
+                    return Ok(ProcessResult::Drop(DropReason::TcpErr));
                 }
                 Err(ProcessError::FlowTableFull { kind, limit }) => {
                     let e = format!("{kind} flow table full ({limit} entries)");
                     self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
-                    return Ok(ProcessResult::Drop {
-                        reason: DropReason::TcpErr,
-                    });
+                    return Ok(ProcessResult::Drop(DropReason::TcpErr));
                 }
                 res => unreachable!(
                     "Cannot return other errors from process_in_tcp_new, returned: {res:?}"
@@ -2162,9 +2173,9 @@ impl<N: NetworkImpl> Port<N> {
                 Ok(ProcessResult::Hairpin(hppkt))
             }
 
-            Ok(LayerResult::Deny { name, reason }) => Ok(ProcessResult::Drop {
-                reason: DropReason::Layer { name, reason },
-            }),
+            Ok(LayerResult::Deny { name, reason }) => Ok(ProcessResult::Drop(
+                DropReason::Layer { name, reason },
+            )),
 
             Ok(LayerResult::HandlePkt) => Ok(ProcessResult::from(
                 self.net.handle_pkt(Out, pkt, &data.uft_in, &data.uft_out)?,
@@ -2238,9 +2249,7 @@ impl<N: NetworkImpl> Port<N> {
                                 e.to_string(),
                                 pkt,
                             );
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
+                            return Ok(ProcessResult::Drop(DropReason::TcpErr));
                         }
 
                         Err(ProcessError::MissingFlow(flow_id)) => {
@@ -2251,9 +2260,7 @@ impl<N: NetworkImpl> Port<N> {
                                 e,
                                 pkt,
                             );
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
+                            return Ok(ProcessResult::Drop(DropReason::TcpErr));
                         }
                         _ => unreachable!(
                             "Cannot return other errors from process_in_tcp_new"
@@ -2401,7 +2408,7 @@ impl<N: NetworkImpl> Port<N> {
         match res {
             Ok(ProcessResult::Bypass) => stats.in_bypass += 1,
 
-            Ok(ProcessResult::Drop { reason }) => {
+            Ok(ProcessResult::Drop(reason)) => {
                 stats.in_drop += 1;
 
                 match reason {
@@ -2434,7 +2441,7 @@ impl<N: NetworkImpl> Port<N> {
         match res {
             Ok(ProcessResult::Bypass) => stats.out_bypass += 1,
 
-            Ok(ProcessResult::Drop { reason }) => {
+            Ok(ProcessResult::Drop(reason)) => {
                 stats.out_drop += 1;
 
                 match reason {

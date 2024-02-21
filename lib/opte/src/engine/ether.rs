@@ -14,6 +14,7 @@ use super::packet::PacketReadMut;
 use super::packet::ReadErr;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
@@ -302,13 +303,15 @@ pub enum EtherHdrError {
 }
 
 impl EtherHdrError {
-    fn derror_data(&self, data: &mut [u64]) {
+    fn derror_data(&self, data: &mut [u64]) -> Option<&'static CStr> {
         match self {
             Self::UnsupportedEtherType { ether_type } => {
                 data[0] = *ether_type as u64;
             }
             _ => {}
-        }
+        };
+
+        None
     }
 }
 

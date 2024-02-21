@@ -6,6 +6,8 @@
 
 //! IPv6 headers.
 
+use core::ffi::CStr;
+
 use super::checksum::Checksum;
 use super::d_error::DError;
 use super::headers::ModifyAction;
@@ -479,12 +481,14 @@ pub enum Ipv6HdrError {
 }
 
 impl Ipv6HdrError {
-    fn derror_data(&self, data: &mut [u64]) {
+    fn derror_data(&self, data: &mut [u64]) -> Option<&'static CStr> {
         data[0] = match self {
             Self::BadVersion { vsn } => *vsn as u64,
             Self::UnexpectedNextHeader { next_header } => *next_header as u64,
             _ => 0,
-        }
+        };
+
+        None
     }
 }
 

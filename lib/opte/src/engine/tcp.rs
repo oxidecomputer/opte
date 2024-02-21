@@ -17,6 +17,7 @@ use super::headers::RawHeader;
 use super::headers::UlpMetaModify;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
 use opte_api::DYNAMIC_PORT;
@@ -380,7 +381,7 @@ pub enum TcpHdrError {
 }
 
 impl TcpHdrError {
-    fn derror_data(&self, data: &mut [u64]) {
+    fn derror_data(&self, data: &mut [u64]) -> Option<&'static CStr> {
         [data[0], data[1]] = match self {
             Self::BadDstPort { dst_port } => [*dst_port as u64, 0],
             Self::BadOffset { offset, len_in_bytes } => {
@@ -389,7 +390,9 @@ impl TcpHdrError {
             Self::BadSrcPort { src_port } => [*src_port as u64, 0],
             Self::TruncatedHdr { hdr_len_bytes } => [*hdr_len_bytes as u64, 0],
             _ => [0, 0],
-        }
+        };
+
+        None
     }
 }
 

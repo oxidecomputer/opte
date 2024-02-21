@@ -39,12 +39,13 @@ struct Args {
 ///     NoData,
 /// }
 ///
-/// fn data_fn(val: &NestedError, data: &mut [u8]) {
+/// fn data_fn(val: &NestedError, data: &mut [u8]) -> Option<&'static CStr> {
 ///     [data[0], data[1]] = match {
 ///         Self::Data1 { val1, val2 } => [val1 as u64, val2 as u64],
 ///         Self::Data2(d) => [d as u64, 0],
 ///         _ => [0, 0],
-///     }   
+///     };
+///     None
 /// }
 /// ```
 /// The macro will automatically generate `CStrs` for every enum variant
@@ -131,8 +132,8 @@ pub fn derive_derror(
 
     let leaf_data_impl = if let Some(data_fn) = parsed_args.leaf_data {
         quote! {
-            fn leaf_data(&self, data: &mut [u64]) {
-                #data_fn(self, data);
+            fn leaf_data(&self, data: &mut [u64]) -> Option<&'static ::core::ffi::CStr> {
+                #data_fn(self, data)
             }
         }
     } else {

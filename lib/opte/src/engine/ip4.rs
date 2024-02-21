@@ -20,6 +20,7 @@ use super::predicate::MatchPrefix;
 use super::predicate::MatchPrefixVal;
 use super::predicate::MatchRangeVal;
 use alloc::string::String;
+use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
@@ -469,14 +470,16 @@ impl From<ReadErr> for Ipv4HdrError {
 }
 
 impl Ipv4HdrError {
-    fn derror_data(&self, data: &mut [u64]) {
+    fn derror_data(&self, data: &mut [u64]) -> Option<&'static CStr> {
         data[0] = match self {
             Self::BadTotalLen { total_len } => *total_len as u64,
             Self::BadVersion { vsn } => *vsn as u64,
             Self::HeaderTruncated { hdr_len } => *hdr_len as u64,
             Self::UnexpectedProtocol { protocol } => *protocol as u64,
             _ => 0,
-        }
+        };
+
+        None
     }
 }
 

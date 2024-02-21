@@ -46,8 +46,11 @@ use opte::engine::rule::Finalized;
 use opte::engine::rule::MetaAction;
 use opte::engine::rule::ModMetaResult;
 use opte::engine::rule::Rule;
+use opte::engine::d_error::CRStr;
+use opte::static_crstr;
 
-pub const ROUTER_LAYER_NAME: &str = "router";
+static_crstr!(ROUTER_LAYER_NAME, "router");
+
 
 // The control plane wants to define "no destination" as a router
 // target. This routing layer implementation converts said target to a
@@ -182,7 +185,7 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
+    let layer = Layer::new(&ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
     pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
 
