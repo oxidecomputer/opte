@@ -152,6 +152,18 @@ enum Experiment {
         #[command(flatten)]
         _waste: IgnoredExtras,
     },
+    /// Record rx/tx dtrace samples from the currently running system
+    /// to produce flamegraphs and density plots.
+    ///
+    /// This assumes you already have an `xde` device loaded, a valid
+    /// underlay set, and have traffic you aim to measure produced by
+    /// another means.
+    InSitu {
+        experiment_name: String,
+
+        #[command(flatten)]
+        _waste: IgnoredExtras,
+    },
     /// Wipe out any leftover state if a test/server run ends poorly.
     ///
     /// This will remove the 'vopte0' adapter, 'a' zone, and the XDE
@@ -394,7 +406,7 @@ fn spawn_local_dtraces(
 }
 
 fn build_flamegraph(
-    config: &IperfConfig,
+    config: &OutputConfig,
     stack_file: impl AsRef<Path>,
     out_dir: impl AsRef<Path>,
     rx_name: Option<&str>,
@@ -446,7 +458,7 @@ fn build_flamegraph(
             .stdout(Stdio::from(flame_file))
             .status()?;
         if !flame_status.success() {
-            anyhow::bail!("Failed to create flamegraph for {tracked_fn}.")
+            eprintln!("Failed to create flamegraph for {tracked_fn}.")
         }
     }
 
@@ -480,6 +492,22 @@ fn zone_to_zone() -> Result<()> {
     for expt in base_experiments("local") {
         test_iperf(&topol, &target_ip, &expt)?
     }
+
+    Ok(())
+}
+
+fn dtrace_only(experiment_name: &str) -> Result<()> {
+    // Begin dtrace sessions in global zone.
+    let (kill, done) = spawn_local_dtraces(experiment_name);
+
+    print_banner("DTrace running...\nType 'exit' to finish.");
+    loop_til_exit();
+
+    // Close dtrace.
+    print_banner("iPerf done...\nAwaiting out files...");
+    let _ = kill.send(());
+    print_banner("done!");
+    process_output(&OutputConfig::InSitu(experiment_name), done.recv()??)?;
 
     Ok(())
 }
@@ -717,6 +745,34 @@ impl Default for IperfProto {
 }
 
 #[derive(Debug, Clone)]
+enum OutputConfig<'a> {
+    Iperf(&'a IperfConfig),
+    InSitu(&'a str),
+}
+
+impl OutputConfig<'_> {
+    fn benchmark_group(&self) -> String {
+        match self {
+            Self::Iperf(i) => i.benchmark_group(),
+            Self::InSitu(s) => format!("in-situ/{s}"),
+        }
+    }
+
+    fn title(&self) -> String {
+        match self {
+            Self::Iperf(i) => i.title(),
+            Self::InSitu(s) => format!("Local flamegraph -- {s}"),
+        }
+    }
+}
+
+impl<'a> From<&'a IperfConfig> for OutputConfig<'a> {
+    fn from(value: &'a IperfConfig) -> Self {
+        Self::Iperf(value)
+    }
+}
+
+#[derive(Debug, Clone)]
 struct IperfConfig {
     use_dtrace: bool,
     n_iters: usize,
@@ -848,7 +904,7 @@ fn test_iperf(
         print_banner("iPerf done...\nAwaiting out files...");
         let _ = kill.send(());
         print_banner("done!");
-        process_output(config, done.recv()??)?;
+        process_output(&(config.into()), done.recv()??)?;
     }
 
     Ok(())
@@ -860,10 +916,11 @@ fn zone_to_zone_dummy() -> Result<()> {
     let stack_path = out_dir.join("raw.stacks");
     let outdata = DtraceOutput { histo_path, stack_path, out_dir };
 
-    process_output(&Default::default(), outdata)
+    let cfg = IperfConfig::default();
+    process_output(&(&cfg).into(), outdata)
 }
 
-fn process_output(config: &IperfConfig, outdata: DtraceOutput) -> Result<()> {
+fn process_output(config: &OutputConfig, outdata: DtraceOutput) -> Result<()> {
     build_flamegraph(
         config,
         &outdata.stack_path,
@@ -1080,6 +1137,9 @@ fn main() -> Result<()> {
             }
         }
         Experiment::Server { opte_create, .. } => host_iperf(&opte_create),
+        Experiment::InSitu { experiment_name, .. } => {
+            dtrace_only(&experiment_name)
+        }
         Experiment::Cleanup { .. } => cleanup_detritus(),
     }
 }
