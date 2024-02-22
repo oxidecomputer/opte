@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! IPv6 headers.
 
@@ -32,6 +32,11 @@ pub const IPV6_HDR_VSN_MASK: u8 = 0xF0;
 pub const IPV6_HDR_VSN_SHIFT: u8 = 4;
 pub const IPV6_VERSION: u8 = 6;
 pub const DDM_HEADER_ID: u8 = 0xFE;
+/// Current maximum bytes for extension headers which fit
+/// in IPv6Meta.
+///
+/// TODO: refactor so as *not* to need this.
+pub const IPV6_MAX_EXT_LEN: usize = 64;
 
 impl MatchExactVal for Ipv6Addr {}
 impl MatchPrefixVal for Ipv6Cidr {}
@@ -233,8 +238,8 @@ pub struct Ipv6Hdr<'a> {
     // The proto reference points to the last next_header value (aka
     // the upper-layer protocol number).
     // proto: &'a mut u8,
-
-    // (extensions bytes, protocol field offset)
+    /// Byteslice verified to be smaller than `IPV6_MAX_EXT_LEN`.
+    /// (extensions bytes, protocol field offset).
     ext: Option<(&'a mut [u8], usize)>,
 }
 
@@ -285,6 +290,10 @@ impl<'a> Ipv6Hdr<'a> {
         // Parse the base IPv6 header.
         let buf = rdr.slice_mut(Self::BASE_SIZE)?;
         let base = Ipv6Packet::new_unchecked(buf);
+        match base.version() {
+            6 => {}
+            vsn => return Err(Ipv6HdrError::BadVersion { vsn }),
+        }
 
         // Parse any extension headers.
         //
@@ -391,6 +400,10 @@ impl<'a> Ipv6Hdr<'a> {
         // unwrap can't panic.
         let _protocol = Protocol::from(next_header);
 
+        if ext_len > IPV6_MAX_EXT_LEN {
+            return Err(Ipv6HdrError::ExtensionsTooLarge);
+        }
+
         // Seek back to the start of the extensions, then take a slice of
         // all the options.
         rdr.seek_back(ext_len)?;
@@ -474,6 +487,7 @@ pub enum Ipv6HdrError {
     ReadError { error: ReadErr },
     UnexpectedNextHeader { next_header: u8 },
     Malformed,
+    ExtensionsTooLarge,
 }
 
 impl From<smoltcp::wire::Error> for Ipv6HdrError {
@@ -835,5 +849,64 @@ pub(crate) mod test {
             meta.total_len() as usize,
             header.hdr_len() + header.ulp_len()
         );
+    }
+
+    #[test]
+    fn bad_ipv6_version_caught() {
+        // This packet was produced due to prior sidecar testing,
+        // and put 4B between Eth and IPv6. This should fail to
+        // parse 0x00 as a v6 version.
+        #[rustfmt::skip]
+        let buf: &[u8] = &[
+            // Garbage
+            0x00, 0xc8, 0x08, 0x00,
+            // IPv6
+            0x60, 0x00, 0x00, 0x00, 0x02, 0x27, 0x11, 0xfe, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xfd, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0x11, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x17, 0xc1, 0x17, 0xc1,
+            0x02, 0x27, 0xcf, 0x4e, 0x01, 0x00, 0x65, 0x58, 0x00, 0x00, 0x64,
+            0x00, 0x01, 0x29, 0x00, 0x00, 0xa8, 0x40, 0x25, 0xff, 0xe8, 0x5f,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x81, 0x00, 0x45, 0x00, 0x02,
+            0x05, 0xe0, 0x80, 0x40, 0x00, 0x37, 0x06, 0x1a, 0x9f, 0xc6, 0xd3,
+            0x7a, 0x40, 0x2d, 0x9a, 0xd8, 0x25, 0xa1, 0x22, 0x01, 0xbb, 0xad,
+            0x22, 0x51, 0x93, 0xa5, 0xf8, 0x01, 0x58, 0x80, 0x18, 0x01, 0x26,
+            0x02, 0x24, 0x00, 0x00, 0x01, 0x01, 0x08, 0x0a, 0x48, 0xd7, 0x9a,
+            0x23, 0x04, 0x31, 0x9f, 0x43, 0x14, 0x03, 0x03, 0x00, 0x01, 0x01,
+            0x17, 0x03, 0x03, 0x00, 0x45, 0xf6, 0xcd, 0xe2, 0xc1, 0xe5, 0xa0,
+            0x65, 0xa7, 0xfe, 0x29, 0xa8, 0xa2, 0xb0, 0x57, 0x91, 0x7e, 0xac,
+            0xc8, 0x34, 0xdd, 0x6b, 0xfa, 0x21,
+        ];
+
+        let mut pkt = Packet::copy(&buf);
+        let mut reader = pkt.get_rdr_mut();
+        assert!(matches!(
+            Ipv6Hdr::parse(&mut reader),
+            Err(Ipv6HdrError::BadVersion { vsn: 0 })
+        ));
+    }
+
+    #[test]
+    fn too_many_exts_are_parse_error() {
+        // Create a packet with entirely too many extension headers. 80B!
+        let (buf, _) = generate_test_packet(&[
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+        ]);
+        let mut pkt = Packet::copy(&buf);
+        let mut reader = pkt.get_rdr_mut();
+        assert!(matches!(
+            Ipv6Hdr::parse(&mut reader),
+            Err(Ipv6HdrError::ExtensionsTooLarge)
+        ));
     }
 }
