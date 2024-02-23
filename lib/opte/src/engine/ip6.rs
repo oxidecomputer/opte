@@ -367,6 +367,10 @@ impl<'a> Ipv6Hdr<'a> {
                 }
 
                 IpProtocol::Unknown(x) if x == DDM_HEADER_ID => {
+                    // XXX: This may need to be recast shortly for actual
+                    //      compliance with RFC 6564, but then we can unify
+                    //      all branches.
+
                     // The DDM header packet begins with next_header and the
                     // length, which describes the entire header excluding
                     // next_header.
@@ -379,7 +383,10 @@ impl<'a> Ipv6Hdr<'a> {
                     // We need to read remainder so that the reader is
                     // in the correct place for the proto_offset to be
                     // calculated correctly.
-                    let _remainder = rdr.slice_mut(total_len - FIXED_LEN);
+                    let remainder_len = total_len
+                        .checked_sub(FIXED_LEN)
+                        .ok_or(Ipv6HdrError::Malformed)?;
+                    let _remainder = rdr.slice_mut(remainder_len)?;
                     ext_len += total_len;
 
                     if !is_ulp_protocol(next_header) {
