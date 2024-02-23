@@ -359,11 +359,10 @@ impl<'a> Ipv4Hdr<'a> {
         let src = rdr.slice_mut(Ipv4HdrRaw::SIZE)?;
         let ip = Self { bytes: Ipv4HdrRaw::new_mut(src)? };
 
-        // comment for now to validate options fixes
-        // match ip.version() {
-        //     4 => {},
-        //     vsn => return Err(Ipv4HdrError::BadVersion { vsn }),
-        // }
+        match ip.version() {
+            4 => {}
+            vsn => return Err(Ipv4HdrError::BadVersion { vsn }),
+        }
 
         let hdr_len = ip.hdr_len();
 
