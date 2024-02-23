@@ -2,5 +2,9 @@
 	"overlong-ihl": (
 		description: "Packet has both bad version and IHL longer than the entire packet body.",
 		packet: "crash-64c95b1326dd017e7d1eee75181ffb681b7f8670"
+	),
+	"underlong-pkt-len": (
+		description: "Packet has total_len shorter than the end of an apparent TCP header, and shorter than the full packet.",
+		packet: "crash-13f1436eb96d0a2d186c5568816951b80ed3a8d6"
 	)
 }
