@@ -1,6 +1,6 @@
 {
-	"tbd": (
-		description: "tbd",
+	"overlong-ihl": (
+		description: "Packet has both bad version and IHL longer than the entire packet body.",
 		packet: "crash-64c95b1326dd017e7d1eee75181ffb681b7f8670"
 	)
 }
