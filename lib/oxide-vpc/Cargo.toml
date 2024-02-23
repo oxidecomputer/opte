@@ -57,4 +57,5 @@ oxide-vpc = { workspace = true, features = ["engine", "test-help", "usdt"] }
 
 ctor.workspace = true
 pcap-parser = { workspace = true, features = ["serialize"] }
+ron.workspace = true
 usdt.workspace = true
