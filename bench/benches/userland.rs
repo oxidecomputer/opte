@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 use criterion::criterion_group;
 use criterion::criterion_main;
@@ -21,7 +21,7 @@ use std::hint::black_box;
 // scale on options len etc.
 pub fn block<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
     let all_tests: Vec<Box<dyn BenchPacket>> =
-        vec![Box::new(Dhcp6 {}), Box::new(Icmp4 {})];
+        vec![Box::new(Dhcp6), Box::new(Icmp4)];
 
     for experiment in &all_tests {
         for case in experiment.test_cases() {

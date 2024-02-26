@@ -1,15 +1,8 @@
-// What do we need?
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Config modes:
-// - Spin up inner zone with iperf3 client.
-// - Spin up (optional) local iperf3 server.
-// - Spin up secondary zone with iperf3 server (VM<->VM).
-//
-// Do we also want to work on a rack-aware
-
-// What do we want?
-// - Run DTrace in host, focus on kernel module.
-// - Export iPerf run stats, collect.
+// Copyright 2024 Oxide Computer Company
 
 use anyhow::Result;
 use clap::Parser;

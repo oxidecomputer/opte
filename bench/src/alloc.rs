@@ -2,7 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
+
+//! Counting allocator used to track bytes allocated and the discrete
+//! number of allocations made during benchmark cases, with `criterion`
+//! integration.
 
 use super::MeasurementInfo;
 use criterion::measurement::Measurement;

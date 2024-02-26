@@ -1,3 +1,9 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Copyright 2024 Oxide Computer Company
+
 use opte::engine::dhcpv6::MessageType;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
@@ -28,7 +34,24 @@ pub trait BenchPacketInstance {
     fn generate(&self) -> (Packet<Initialized>, Direction);
 }
 
-pub struct Dhcp6 {}
+// XXX: need to extand harness to provide:
+//      VPC/Generic Ulp parsing
+//      Choice of Direction
+//      pre-setup of flows, post-packet teardown
+
+pub struct UftFastPath;
+
+impl BenchPacket for UftFastPath {
+    fn packet_label(&self) -> String {
+        "UFT".into()
+    }
+
+    fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
+        todo!()
+    }
+}
+
+pub struct Dhcp6;
 
 impl BenchPacket for Dhcp6 {
     fn packet_label(&self) -> String {
@@ -69,7 +92,7 @@ impl BenchPacketInstance for Dhcp6Instance {
     }
 }
 
-pub struct Icmp4 {}
+pub struct Icmp4;
 
 impl BenchPacket for Icmp4 {
     fn packet_label(&self) -> String {
