@@ -1128,6 +1128,21 @@ fn cleanup_detritus() -> Result<()> {
     Ok(())
 }
 
+fn give_ownership() -> Result<()> {
+    let Ok(user) = std::env::var("USER") else { return Ok(()) };
+
+    let criterion_path = cargo_target_directory()
+        .unwrap_or_else(|| Path::new(".").to_path_buf())
+        .join("criterion");
+    let outputs = [output_base_dir(), criterion_path.as_path()];
+
+    for path in outputs {
+        let a = Command::new("chown").args(["-R", &user]).arg(path).output()?;
+    }
+
+    Ok(())
+}
+
 #[cfg(target_os = "illumos")]
 fn main() -> Result<()> {
     elevate()?;
@@ -1137,18 +1152,21 @@ fn main() -> Result<()> {
 
     match cfg.command {
         Experiment::Remote { iperf_server, opte_create, .. } => {
-            over_nic(&opte_create, &iperf_server)
+            over_nic(&opte_create, &iperf_server)?;
+            give_ownership()
         }
         Experiment::Local { no_bench, .. } => {
             if no_bench {
-                zone_to_zone_dummy()
+                zone_to_zone_dummy()?;
             } else {
-                zone_to_zone()
+                zone_to_zone()?;
             }
+            give_ownership()
         }
         Experiment::Server { opte_create, .. } => host_iperf(&opte_create),
         Experiment::InSitu { experiment_name, .. } => {
-            dtrace_only(&experiment_name)
+            dtrace_only(&experiment_name)?;
+            give_ownership()
         }
         Experiment::Cleanup { .. } => cleanup_detritus(),
     }
