@@ -544,9 +544,19 @@ fn exchange_routes(
 
     println!("peer owns connected lls {:?}", new_routes.lls);
 
-    // ping the received link locals and prime NDP.
-    for ip in &new_routes.lls {
-        Command::new("ping").arg(ip.to_string()).output()?;
+    // ping the received link locals over our underlay and prime NDP.
+    for nic in underlay_nics {
+        for ip in &new_routes.lls {
+            // attempt to ping each ll over each NIC: failure is okay,
+            // but we need to do this to set up our NDP entries for route
+            // insertion.
+            // e.g., ping -Ainet6 -n -i igb1 -c 1 fe80::a236:9fff:fe0c:25b7 1
+            Command::new("ping")
+                .args(["-Ainet6", "-n", "-i", nic.as_str(), "-c", "1"])
+                .arg(ip.to_string())
+                .arg("1")
+                .output()?;
+        }
     }
 
     // Leave ample time to also *be* pinged if necessary.
