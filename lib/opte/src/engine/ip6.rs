@@ -314,11 +314,26 @@ impl<'a> Ipv6Hdr<'a> {
         //      branches. This could do with some cleanup as a result.
         let mut proto_offset: usize = 0;
         while !is_ulp_protocol(next_header) {
-            match next_header {
-                IpProtocol::HopByHop => {
+            let n_bytes = match V6ExtClass::from(next_header) {
+                V6ExtClass::Rfc6564 => {
                     let buf = rdr.slice_mut(rdr.seg_left())?;
                     let mut header = Ipv6ExtHeader::new_checked(buf)?;
-                    _ = Ipv6HopByHopHeader::new_checked(header.payload_mut())?;
+
+                    // verify carried protocol if possible.
+                    match next_header {
+                        IpProtocol::HopByHop => {
+                            _ = Ipv6HopByHopHeader::new_checked(
+                                header.payload_mut(),
+                            )?
+                        }
+                        IpProtocol::Ipv6Route => {
+                            _ = Ipv6RoutingHeader::new_checked(
+                                header.payload_mut(),
+                            )?
+                        }
+                        _ => {}
+                    }
+
                     let n_bytes = 8 * (usize::from(header.header_len()) + 1);
                     next_header = header.next_header();
                     let buf = header.into_inner();
@@ -328,27 +343,9 @@ impl<'a> Ipv6Hdr<'a> {
                     // for this header.
                     rdr.seek_back(buf.len() - n_bytes)?;
 
-                    if !is_ulp_protocol(next_header) {
-                        proto_offset += n_bytes;
-                    }
+                    n_bytes
                 }
-
-                IpProtocol::Ipv6Route => {
-                    let buf = rdr.slice_mut(rdr.seg_left())?;
-                    let mut header = Ipv6ExtHeader::new_checked(buf)?;
-                    _ = Ipv6RoutingHeader::new_checked(header.payload_mut())?;
-                    let n_bytes = 8 * (usize::from(header.header_len()) + 1);
-                    next_header = header.next_header();
-                    let buf = header.into_inner();
-                    ext_len += n_bytes;
-                    rdr.seek_back(buf.len() - n_bytes)?;
-
-                    if !is_ulp_protocol(next_header) {
-                        proto_offset += n_bytes;
-                    }
-                }
-
-                IpProtocol::Ipv6Frag => {
+                V6ExtClass::Frag => {
                     // This header's length is fixed.
                     //
                     // We'd like to use `size_of::<Ipv6FragmentRepr>()`, but
@@ -361,44 +358,17 @@ impl<'a> Ipv6Hdr<'a> {
                     _ = Ipv6FragmentHeader::new_checked(header.payload_mut())?;
                     next_header = header.next_header();
 
-                    if !is_ulp_protocol(next_header) {
-                        proto_offset += FRAGMENT_HDR_SIZE;
-                    }
+                    FRAGMENT_HDR_SIZE
                 }
-
-                IpProtocol::Unknown(x) if x == DDM_HEADER_ID => {
-                    // XXX: This may need to be recast shortly for actual
-                    //      compliance with RFC 6564, but then we can unify
-                    //      all branches.
-
-                    // The DDM header packet begins with next_header and the
-                    // length, which describes the entire header excluding
-                    // next_header.
-                    const FIXED_LEN: usize = 2;
-                    let fixed_buf = rdr.slice_mut(FIXED_LEN)?;
-                    next_header = IpProtocol::from(fixed_buf[0]);
-                    // We add one to account for the next_header byte,
-                    // as the DDM length does not include it.
-                    let total_len = usize::from(fixed_buf[1]) + 1;
-                    // We need to read remainder so that the reader is
-                    // in the correct place for the proto_offset to be
-                    // calculated correctly.
-                    let remainder_len = total_len
-                        .checked_sub(FIXED_LEN)
-                        .ok_or(Ipv6HdrError::Malformed)?;
-                    let _remainder = rdr.slice_mut(remainder_len)?;
-                    ext_len += total_len;
-
-                    if !is_ulp_protocol(next_header) {
-                        proto_offset += total_len;
-                    }
-                }
-
-                x => {
+                _ => {
                     return Err(Ipv6HdrError::UnexpectedNextHeader {
-                        next_header: x.into(),
+                        next_header: next_header.into(),
                     });
                 }
+            };
+
+            if !is_ulp_protocol(next_header) {
+                proto_offset += n_bytes;
             }
         }
 
@@ -486,6 +456,31 @@ impl<'a> Ipv6Hdr<'a> {
 fn is_ulp_protocol(proto: IpProtocol) -> bool {
     use IpProtocol::*;
     matches!(proto, Icmp | Igmp | Tcp | Udp | Icmpv6)
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum V6ExtClass {
+    Ulp,
+    Frag,
+    Rfc6564,
+    Unknown,
+}
+
+impl From<IpProtocol> for V6ExtClass {
+    #[inline]
+    fn from(value: IpProtocol) -> Self {
+        use IpProtocol::*;
+
+        match value {
+            Icmp | Igmp | Tcp | Udp | Icmpv6 => Self::Ulp,
+            Ipv6Frag => Self::Frag,
+            HopByHop | Ipv6Route | Ipv6Opts => Self::Rfc6564,
+            // Also follow RFC6564:
+            // 135 (RFC6275), 139 (RFC7401), 140 (RFC5533)
+            Unknown(x) if x == DDM_HEADER_ID => Self::Rfc6564,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -643,6 +638,8 @@ pub(crate) mod test {
             // For each extension header, we need to build the top level ExtHeader
             // and set length manually: this is (inner_len / 8) := the number of
             // 8-byte blocks FOLLOWING the first.
+
+            // XXX: Refactor on same grounds as parse logic.
             use IpProtocol::*;
             let len = match extension {
                 HopByHop => {
@@ -683,9 +680,10 @@ pub(crate) mod test {
                 }
                 Unknown(x) if x == &DDM_HEADER_ID => {
                     // Starts with next_header, then a length excluding that.
-                    const DDM_HDR_LEN: usize = 15;
+                    // (16 B, exclude first 8B) / 8
+                    const DDM_HDR_LEN: usize = 1;
                     buf[1] = DDM_HDR_LEN as u8;
-                    DDM_HDR_LEN + 1
+                    16
                 }
                 _ => unimplemented!(
                     "Extension header {:#?} unsupported",
