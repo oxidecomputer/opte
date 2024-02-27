@@ -1130,7 +1130,7 @@ fn give_ownership() -> Result<()> {
     let outputs = [output_base_dir(), criterion_path.as_path()];
 
     for path in outputs {
-        let a = Command::new("chown").args(["-R", &user]).arg(path).output()?;
+        let _ = Command::new("chown").args(["-R", &user]).arg(path).output()?;
     }
 
     Ok(())

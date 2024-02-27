@@ -13,6 +13,10 @@ use opte_bench::packet::BenchPacket;
 use opte_bench::packet::BenchPacketInstance;
 use opte_bench::packet::Dhcp6;
 use opte_bench::packet::Icmp4;
+use opte_bench::packet::ParserKind;
+use opte_bench::packet::TestCase;
+use opte_bench::packet::ULP_FAST_PATH;
+use opte_bench::packet::ULP_SLOW_PATH;
 use opte_bench::MeasurementInfo;
 use opte_test_utils::*;
 use std::hint::black_box;
@@ -20,8 +24,12 @@ use std::hint::black_box;
 // WANT: Parsing time as well for different packet classes,
 // scale on options len etc.
 pub fn block<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
-    let all_tests: Vec<Box<dyn BenchPacket>> =
-        vec![Box::new(Dhcp6), Box::new(Icmp4)];
+    let all_tests: Vec<Box<dyn BenchPacket>> = vec![
+        Box::new(Dhcp6),
+        Box::new(Icmp4),
+        Box::new(ULP_FAST_PATH),
+        Box::new(ULP_SLOW_PATH),
+    ];
 
     for experiment in &all_tests {
         for case in experiment.test_cases() {
@@ -36,23 +44,27 @@ pub fn test_parse<M: MeasurementInfo + 'static>(
     experiment: &dyn BenchPacket,
     case: &dyn BenchPacketInstance,
 ) {
-    let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
-    g1.port.start();
-    set!(g1, "port_state=running");
-
     let mut c = c.benchmark_group(format!(
         "parse/{}/{}",
         experiment.packet_label(),
         M::label()
     ));
+    let parser = case.parse_with();
     c.bench_with_input(
         BenchmarkId::from_parameter(case.instance_name()),
         &case,
         |b, inp| {
             b.iter_batched(
                 || inp.generate(),
-                |(in_pkt, direction)| in_pkt.parse(direction, GenericUlp {}),
+                // match *outside* the closure to prevent its selection from being timed.
+                match parser {
+                    ParserKind::Generic => |(in_pkt, direction): TestCase| {
+                        in_pkt.parse(direction, GenericUlp {})
+                    },
+                    ParserKind::OxideVpc => |(in_pkt, direction): TestCase| {
+                        in_pkt.parse(direction, VpcParser {})
+                    },
+                },
                 criterion::BatchSize::PerIteration,
             )
         },
@@ -64,26 +76,57 @@ pub fn test_handle<M: MeasurementInfo + 'static>(
     experiment: &dyn BenchPacket,
     case: &dyn BenchPacketInstance,
 ) {
-    let g1_cfg = g1_cfg();
-    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
-    g1.port.start();
-    set!(g1, "port_state=running");
+    let port = match case.create_port() {
+        Some(port) => port,
+        None => {
+            let g1_cfg = g1_cfg();
+            let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+            g1.port.start();
+            set!(g1, "port_state=running");
 
+            g1
+        }
+    };
     let mut c = c.benchmark_group(format!(
         "process/{}/{}",
         experiment.packet_label(),
         M::label()
     ));
-    let (pkt, dir) = case.generate();
-    let mut pkt = pkt.parse(dir, GenericUlp {}).unwrap();
 
     c.bench_with_input(
         BenchmarkId::from_parameter(case.instance_name()),
         &case,
         |b, _i| {
-            b.iter_with_large_drop(|| {
-                g1.port.process(Out, black_box(&mut pkt), ActionMeta::new())
-            })
+            b.iter_batched(
+                || {
+                    let (init_pkt, dir) = case.generate();
+                    let parsed_pkt = match case.parse_with() {
+                        ParserKind::Generic => {
+                            init_pkt.parse(dir, GenericUlp {}).unwrap()
+                        }
+                        ParserKind::OxideVpc => {
+                            init_pkt.parse(dir, VpcParser {}).unwrap()
+                        }
+                    };
+
+                    case.pre_handle(&port);
+
+                    (parsed_pkt, dir)
+                },
+                |(mut pkt, dir)| {
+                    assert!(!matches!(
+                        port.port
+                            .process(
+                                dir,
+                                black_box(&mut pkt),
+                                ActionMeta::new(),
+                            )
+                            .unwrap(),
+                        ProcessResult::Drop { .. }
+                    ))
+                },
+                criterion::BatchSize::PerIteration,
+            )
         },
     );
 }
