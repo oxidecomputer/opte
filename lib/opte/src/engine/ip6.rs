@@ -310,8 +310,6 @@ impl<'a> Ipv6Hdr<'a> {
             return Ok(Self { base, ext: None });
         }
 
-        // XXX: smoltcp now more or less imposes the same pattern on all these
-        //      branches. This could do with some cleanup as a result.
         let mut proto_offset: usize = 0;
         while !is_ulp_protocol(next_header) {
             let n_bytes = match V6ExtClass::from(next_header) {
@@ -454,8 +452,7 @@ impl<'a> Ipv6Hdr<'a> {
 }
 
 fn is_ulp_protocol(proto: IpProtocol) -> bool {
-    use IpProtocol::*;
-    matches!(proto, Icmp | Igmp | Tcp | Udp | Icmpv6)
+    matches!(V6ExtClass::from(proto), V6ExtClass::Ulp)
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -638,58 +635,55 @@ pub(crate) mod test {
             // For each extension header, we need to build the top level ExtHeader
             // and set length manually: this is (inner_len / 8) := the number of
             // 8-byte blocks FOLLOWING the first.
-
-            // XXX: Refactor on same grounds as parse logic.
             use IpProtocol::*;
-            let len = match extension {
+            let mut ext_packet = Ipv6ExtHeader::new_checked(&mut buf).unwrap();
+            ext_packet.set_next_header(IpProtocol::Tcp);
+            // Temporarily set high enough to give us enough bytes to emit into.
+            // XXX: propose a joint emit + set_len for smoltcp.
+            ext_packet.set_header_len(3);
+            let len = 2 + match extension {
                 HopByHop => {
                     let hbh = hop_by_hop_header();
-                    let mut packet =
-                        Ipv6ExtHeader::new_checked(&mut buf).unwrap();
-                    packet.set_next_header(IpProtocol::Tcp);
-                    packet.set_header_len((hbh.buffer_len() / 8) as u8);
-                    let mut hbh_packet =
-                        Ipv6HopByHopHeader::new_checked(packet.payload_mut())
-                            .unwrap();
+                    let mut hbh_packet = Ipv6HopByHopHeader::new_checked(
+                        ext_packet.payload_mut(),
+                    )
+                    .unwrap();
                     hbh.emit(&mut hbh_packet);
-                    2 + hbh.buffer_len()
+                    hbh.buffer_len()
                 }
                 Ipv6Frag => {
                     let frag = fragment_header();
-                    let mut packet =
-                        Ipv6ExtHeader::new_checked(&mut buf).unwrap();
-                    packet.set_next_header(IpProtocol::Tcp);
-                    packet.set_header_len(0);
-                    let mut frag_packet =
-                        Ipv6FragmentHeader::new_checked(packet.payload_mut())
-                            .unwrap();
-                    frag.emit(&mut frag_packet);
-                    2 + frag.buffer_len()
+                    let mut frag_packet = Ipv6FragmentHeader::new_checked(
+                        ext_packet.payload_mut(),
+                    )
+                    .unwrap();
+                    fragment_header().emit(&mut frag_packet);
+                    frag.buffer_len()
                 }
                 Ipv6Route => {
                     let route = route_header();
-                    let mut packet =
-                        Ipv6ExtHeader::new_checked(&mut buf).unwrap();
-                    packet.set_next_header(IpProtocol::Tcp);
-                    packet.set_header_len((route.buffer_len() / 8) as u8);
-                    let mut route_packet =
-                        Ipv6RoutingHeader::new_checked(packet.payload_mut())
-                            .unwrap();
+                    let mut route_packet = Ipv6RoutingHeader::new_checked(
+                        ext_packet.payload_mut(),
+                    )
+                    .unwrap();
                     route.emit(&mut route_packet);
-                    2 + route.buffer_len()
+                    route.buffer_len()
                 }
                 Unknown(x) if x == &DDM_HEADER_ID => {
-                    // Starts with next_header, then a length excluding that.
-                    // (16 B, exclude first 8B) / 8
-                    const DDM_HDR_LEN: usize = 1;
-                    buf[1] = DDM_HDR_LEN as u8;
-                    16
+                    // TODO: actually build DDM ID + Timestamp values here.
+                    //       for now we just emit an empty header here.
+                    14
                 }
                 _ => unimplemented!(
                     "Extension header {:#?} unsupported",
                     extension
                 ),
             };
+            ext_packet.set_header_len(match V6ExtClass::from(*extension) {
+                V6ExtClass::Frag => 0,
+                V6ExtClass::Rfc6564 => u8::try_from((len - 8) / 8).unwrap(),
+                _ => unreachable!(),
+            });
 
             // Move the position markers to the new header.
             header_start = header_end;
