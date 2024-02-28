@@ -7,9 +7,10 @@ license.workspace = true
 repository.workspace = true
 
 [features]
+usdt = ["oxide-vpc/usdt"]
 
 [dependencies]
 opte = { workspace = true, features = ["std"] }
-oxide-vpc = { workspace = true, features = ["engine", "std", "test-help", "usdt"] }
+oxide-vpc = { workspace = true, features = ["engine", "std", "test-help"] }
 pcap-parser = { workspace = true, features = ["serialize"] }
 smoltcp.workspace = true

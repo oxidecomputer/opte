@@ -42,6 +42,6 @@ cfg-if.workspace = true
 
 [dev-dependencies]
 ctor.workspace = true
-opte-test-utils.workspace = true
+opte-test-utils = { workspace = true, features = ["usdt"] }
 pcap-parser = { workspace = true, features = ["serialize"] }
 usdt.workspace = true
