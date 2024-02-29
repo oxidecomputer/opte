@@ -1,6 +1,52 @@
 use super::*;
 use dhcpv6::protocol::MessageType;
 use opte::engine::dhcpv6;
+pub use smoltcp::wire::DhcpMessageType;
+pub use smoltcp::wire::DhcpPacket;
+pub use smoltcp::wire::DhcpRepr;
+
+// Build a packet from a DHCPv4 message, from a client to server.
+pub fn packet_from_client_dhcpv4_message_unparsed(
+    cfg: &VpcCfg,
+    msg: &DhcpRepr,
+) -> Packet<Initialized> {
+    let eth = EtherMeta {
+        dst: MacAddr::BROADCAST,
+        src: cfg.guest_mac,
+        ether_type: EtherType::Ipv4,
+    };
+
+    let ip = Ipv4Meta {
+        src: Ipv4Addr::ANY_ADDR,
+        dst: Ipv4Addr::LOCAL_BCAST,
+        proto: Protocol::UDP,
+        total_len: (msg.buffer_len() + UdpHdr::SIZE + Ipv4Hdr::BASE_SIZE)
+            as u16,
+
+        ..Default::default()
+    };
+
+    let udp = UdpMeta {
+        src: 68,
+        dst: 67,
+        len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
+        ..Default::default()
+    };
+
+    let reply_len =
+        msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::BASE_SIZE + EtherHdr::SIZE;
+    let mut pkt = Packet::alloc_and_expand(reply_len);
+    let mut wtr = pkt.seg0_wtr();
+    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+    ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+    udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
+
+    let mut msg_buf = vec![0; msg.buffer_len()];
+    let mut dhcp_pkt = DhcpPacket::new_checked(&mut msg_buf).unwrap();
+    msg.emit(&mut dhcp_pkt).unwrap();
+    wtr.write(&msg_buf).unwrap();
+    pkt
+}
 
 // Build a packet from a DHCPv6 message, from a client to server.
 pub fn packet_from_client_dhcpv6_message_unparsed(

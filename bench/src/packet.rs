@@ -9,7 +9,9 @@ use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
 use opte::engine::Direction;
 use opte_test_utils::dhcp::dhcpv6_with_reasonable_defaults;
+use opte_test_utils::dhcp::packet_from_client_dhcpv4_message_unparsed;
 use opte_test_utils::dhcp::packet_from_client_dhcpv6_message_unparsed;
+use opte_test_utils::dhcp::DhcpRepr;
 use opte_test_utils::icmp::gen_icmp_echo_unparsed;
 use opte_test_utils::icmp::gen_icmpv6_echo_unparsed;
 use opte_test_utils::icmp::generate_ndisc_unparsed;
@@ -330,6 +332,76 @@ impl BenchPacketInstance for UlpProcessInstance {
     }
 }
 
+pub struct Dhcp4;
+
+impl BenchPacket for Dhcp4 {
+    fn packet_label(&self) -> String {
+        "Hairpin-DHCPv4".into()
+    }
+
+    fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
+        [Dhcp4Instance::Discover, Dhcp4Instance::Request]
+            .into_iter()
+            .map(|v| Box::new(v) as Box<dyn BenchPacketInstance>)
+            .collect()
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum Dhcp4Instance {
+    Discover,
+    Request,
+}
+
+impl BenchPacketInstance for Dhcp4Instance {
+    fn instance_name(&self) -> String {
+        format!("{self:?}")
+    }
+
+    fn generate(&self) -> (Packet<Initialized>, Direction) {
+        let cfg = g1_cfg();
+        let message_type = match self {
+            Dhcp4Instance::Discover => dhcp::DhcpMessageType::Discover,
+            Dhcp4Instance::Request => dhcp::DhcpMessageType::Request,
+        };
+        // XXX: We don't do too much work internally to check what options
+        // are being asked for today. These packets might need to be more
+        // accurate in future.
+
+        // The base DhcpCfg in `oxide_net_builder` currently populates DNS,
+        // hostnames, domain search on our behalf, so return packets
+        // contain everything (ditto for v6).
+        let repr = DhcpRepr {
+            message_type,
+            transaction_id: 1234,
+            secs: 0,
+            client_hardware_address: cfg.guest_mac.into(),
+            client_ip: Ipv4Addr::ANY_ADDR.into(),
+            your_ip: Ipv4Addr::ANY_ADDR.into(),
+            server_ip: Ipv4Addr::ANY_ADDR.into(),
+            router: None,
+            subnet_mask: None,
+            relay_agent_ip: Ipv4Addr::ANY_ADDR.into(),
+            broadcast: true,
+            requested_ip: None,
+            client_identifier: None,
+            server_identifier: None,
+            parameter_request_list: None,
+            dns_servers: None,
+            max_size: None,
+            lease_duration: None,
+            renew_duration: None,
+            rebind_duration: None,
+            additional_options: &[],
+        };
+
+        (
+            packet_from_client_dhcpv4_message_unparsed(&cfg, &repr),
+            Direction::Out,
+        )
+    }
+}
+
 pub struct Dhcp6;
 
 impl BenchPacket for Dhcp6 {
@@ -422,7 +494,7 @@ impl BenchPacket for Icmp6 {
 
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
         [
-            Icmp6Instance::Echo,
+            Icmp6Instance::EchoRequest,
             Icmp6Instance::NeighborSolicit,
             Icmp6Instance::RouterSolicit,
         ]
@@ -432,20 +504,16 @@ impl BenchPacket for Icmp6 {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub enum Icmp6Instance {
-    Echo,
+    EchoRequest,
     NeighborSolicit,
     RouterSolicit,
 }
 
 impl BenchPacketInstance for Icmp6Instance {
     fn instance_name(&self) -> String {
-        match self {
-            Icmp6Instance::Echo => "EchoRequest",
-            Icmp6Instance::NeighborSolicit => "NeighborSolicit",
-            Icmp6Instance::RouterSolicit => "RouterSolicit",
-        }
-        .into()
+        format!("{self:?}")
     }
 
     fn generate(&self) -> (Packet<Initialized>, Direction) {
@@ -455,7 +523,7 @@ impl BenchPacketInstance for Icmp6Instance {
         let data = b"reunion\0";
 
         let pkt = match self {
-            Icmp6Instance::Echo => gen_icmpv6_echo_unparsed(
+            Icmp6Instance::EchoRequest => gen_icmpv6_echo_unparsed(
                 icmp::IcmpEchoType::Req,
                 cfg.guest_mac,
                 cfg.gateway_mac,

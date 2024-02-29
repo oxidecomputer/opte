@@ -11,6 +11,7 @@ use criterion::Criterion;
 use opte_bench::alloc::*;
 use opte_bench::packet::BenchPacket;
 use opte_bench::packet::BenchPacketInstance;
+use opte_bench::packet::Dhcp4;
 use opte_bench::packet::Dhcp6;
 use opte_bench::packet::Icmp4;
 use opte_bench::packet::Icmp6;
@@ -26,6 +27,7 @@ use std::hint::black_box;
 // scale on options len etc.
 pub fn block<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
     let all_tests: Vec<Box<dyn BenchPacket>> = vec![
+        Box::new(Dhcp4),
         Box::new(Dhcp6),
         Box::new(Icmp4),
         Box::new(Icmp6),
