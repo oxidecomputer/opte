@@ -114,6 +114,11 @@ enum Experiment {
         /// for route exchange.
         iperf_server: String,
 
+        /// Pauses before running experiments from a zone, allowing
+        /// a window of time to access the zone using `zlogin a`.
+        #[arg(short, long)]
+        pause: bool,
+
         #[command(flatten)]
         opte_create: OpteCreateParams,
 
@@ -649,7 +654,7 @@ fn recv_routes(client: &mut TcpStream) -> Result<Routes> {
 }
 
 #[cfg(target_os = "illumos")]
-fn over_nic(params: &OpteCreateParams, host: &str) -> Result<()> {
+fn over_nic(params: &OpteCreateParams, host: &str, pause: bool) -> Result<()> {
     // add_drv xde.
     ensure_xde()?;
 
@@ -682,7 +687,10 @@ fn over_nic(params: &OpteCreateParams, host: &str) -> Result<()> {
     let _ = &topol.nodes[0].zone.zone.zexec(&format!("ping {}", &target_ip))?;
 
     // uncomment to enter the zone safely for testing.
-    // loop_til_exit();
+    if pause {
+        print_banner("Holding, type 'exit' to begin measurement.");
+        loop_til_exit();
+    }
 
     for expt in base_experiments("over-nic") {
         test_iperf(&topol, &target_ip.to_string(), &expt)?
@@ -1144,8 +1152,8 @@ fn main() -> Result<()> {
     let cfg = ConfigInput::parse();
 
     match cfg.command {
-        Experiment::Remote { iperf_server, opte_create, .. } => {
-            over_nic(&opte_create, &iperf_server)?;
+        Experiment::Remote { iperf_server, opte_create, pause, .. } => {
+            over_nic(&opte_create, &iperf_server, pause)?;
             give_ownership()
         }
         Experiment::Local { no_bench, .. } => {

@@ -13,6 +13,7 @@ use opte_bench::packet::BenchPacket;
 use opte_bench::packet::BenchPacketInstance;
 use opte_bench::packet::Dhcp6;
 use opte_bench::packet::Icmp4;
+use opte_bench::packet::Icmp6;
 use opte_bench::packet::ParserKind;
 use opte_bench::packet::TestCase;
 use opte_bench::packet::ULP_FAST_PATH;
@@ -27,6 +28,7 @@ pub fn block<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
     let all_tests: Vec<Box<dyn BenchPacket>> = vec![
         Box::new(Dhcp6),
         Box::new(Icmp4),
+        Box::new(Icmp6),
         Box::new(ULP_FAST_PATH),
         Box::new(ULP_SLOW_PATH),
     ];

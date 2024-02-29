@@ -11,10 +11,12 @@ use opte::engine::Direction;
 use opte_test_utils::dhcp::dhcpv6_with_reasonable_defaults;
 use opte_test_utils::dhcp::packet_from_client_dhcpv6_message_unparsed;
 use opte_test_utils::icmp::gen_icmp_echo_unparsed;
+use opte_test_utils::icmp::gen_icmpv6_echo_unparsed;
+use opte_test_utils::icmp::generate_ndisc_unparsed;
+use opte_test_utils::icmp::NdiscRepr;
+use opte_test_utils::icmp::RawHardwareAddress;
 use opte_test_utils::overlay::BOUNDARY_SERVICES_VNI;
 use opte_test_utils::*;
-
-// XXX: elements to keep in mind -- pkt dir, client config (may live in PARAMETER?)
 
 pub type TestCase = (Packet<Initialized>, Direction);
 
@@ -332,7 +334,7 @@ pub struct Dhcp6;
 
 impl BenchPacket for Dhcp6 {
     fn packet_label(&self) -> String {
-        "DHCPv6".into()
+        "Hairpin-DHCPv6".into()
     }
 
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
@@ -373,11 +375,11 @@ pub struct Icmp4;
 
 impl BenchPacket for Icmp4 {
     fn packet_label(&self) -> String {
-        "ICMPv4".into()
+        "Hairpin-ICMPv4".into()
     }
 
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
-        [Dhcp6Instance::Solicit, Dhcp6Instance::Request]
+        [Self]
             .into_iter()
             .map(|v| Box::new(v) as Box<dyn BenchPacketInstance>)
             .collect()
@@ -406,6 +408,100 @@ impl BenchPacketInstance for Icmp4 {
             &data[..],
             1,
         );
+
+        (pkt, Direction::Out)
+    }
+}
+
+pub struct Icmp6;
+
+impl BenchPacket for Icmp6 {
+    fn packet_label(&self) -> String {
+        "Hairpin-ICMPv6".into()
+    }
+
+    fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
+        [
+            Icmp6Instance::Echo,
+            Icmp6Instance::NeighborSolicit,
+            Icmp6Instance::RouterSolicit,
+        ]
+        .into_iter()
+        .map(|v| Box::new(v) as Box<dyn BenchPacketInstance>)
+        .collect()
+    }
+}
+
+pub enum Icmp6Instance {
+    Echo,
+    NeighborSolicit,
+    RouterSolicit,
+}
+
+impl BenchPacketInstance for Icmp6Instance {
+    fn instance_name(&self) -> String {
+        match self {
+            Icmp6Instance::Echo => "EchoRequest",
+            Icmp6Instance::NeighborSolicit => "NeighborSolicit",
+            Icmp6Instance::RouterSolicit => "RouterSolicit",
+        }
+        .into()
+    }
+
+    fn generate(&self) -> (Packet<Initialized>, Direction) {
+        let cfg = g1_cfg();
+        let ident = 7;
+        let seq_no = 777;
+        let data = b"reunion\0";
+
+        let pkt = match self {
+            Icmp6Instance::Echo => gen_icmpv6_echo_unparsed(
+                icmp::IcmpEchoType::Req,
+                cfg.guest_mac,
+                cfg.gateway_mac,
+                cfg.ipv6_cfg().unwrap().private_ip,
+                Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                ident,
+                seq_no,
+                &data[..],
+                3,
+            ),
+            Icmp6Instance::NeighborSolicit => {
+                let solicit = NdiscRepr::NeighborSolicit {
+                    target_addr: Ipv6Addr::from_eui64(&cfg.gateway_mac).into(),
+                    lladdr: Some(RawHardwareAddress::from_bytes(
+                        &cfg.guest_mac,
+                    )),
+                };
+                generate_ndisc_unparsed(
+                    solicit,
+                    cfg.guest_mac,
+                    cfg.gateway_mac,
+                    Ipv6Addr::from_eui64(&cfg.guest_mac),
+                    Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                    true,
+                )
+            }
+            Icmp6Instance::RouterSolicit => {
+                let src_mac = cfg.guest_mac;
+                let solicit = NdiscRepr::RouterSolicit {
+                    lladdr: Some(RawHardwareAddress::from_bytes(&src_mac)),
+                };
+                let dst_ip = Ipv6Addr::ALL_ROUTERS;
+
+                generate_ndisc_unparsed(
+                    solicit,
+                    src_mac,
+                    // Must be destined for the All-Routers IPv6 address, and the corresponding
+                    // multicast Ethernet address.
+                    dst_ip.multicast_mac().unwrap(),
+                    // The source IPv6 address is the EUI-64 transform of the source MAC.
+                    Ipv6Addr::from_eui64(&src_mac),
+                    dst_ip,
+                    true,
+                )
+            }
+        };
 
         (pkt, Direction::Out)
     }
