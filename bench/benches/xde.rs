@@ -159,6 +159,15 @@ enum Experiment {
     InSitu {
         experiment_name: String,
 
+        /// Which measurement program should be run.
+        #[arg(short, long, default_value_t=Instrumentation::Dtrace)]
+        capture_mode: Instrumentation,
+
+        /// Control whether flamegraphs and criterion outputs should
+        /// be generated.
+        #[arg(short, long)]
+        dont_process: bool,
+
         #[command(flatten)]
         _waste: IgnoredExtras,
     },
@@ -170,12 +179,6 @@ enum Experiment {
         #[command(flatten)]
         _waste: IgnoredExtras,
     },
-}
-
-#[derive(Copy, Clone, Debug, ValueEnum)]
-enum CreateMode {
-    Dont,
-    Do,
 }
 
 #[derive(Clone, Parser)]
@@ -266,6 +269,7 @@ fn ensure_xde() -> Result<()> {
     }
 }
 
+// XXX: these should be trimmed down for in_situ.
 fn check_deps() -> Result<()> {
     enum Dep {
         Program,
@@ -319,9 +323,11 @@ struct DtraceOutput {
     pub out_dir: PathBuf,
 }
 
+static DTRACE_STACK_PROG: &str =
+    include_str!("../../dtrace/opte-count-cycles.d");
+
 fn run_local_dtraces(out_dir: PathBuf) -> Result<(Vec<Child>, DtraceOutput)> {
     fs::create_dir_all(&out_dir)?;
-    let dtraces = ws_root().join("dtrace");
 
     // Default dtrace behaviour here is to append; which we don't want.
     let histo_path = out_dir.join("histos.out");
@@ -333,16 +339,11 @@ fn run_local_dtraces(out_dir: PathBuf) -> Result<(Vec<Child>, DtraceOutput)> {
     };
     let histo = Command::new("dtrace")
         .args([
-            "-L",
-            "lib",
-            "-I",
-            ".",
-            "-Cqs",
-            "opte-count-cycles.d",
+            "-qn",
+            DTRACE_STACK_PROG.replace('\n', "").as_str(),
             "-o",
             histo_path_str,
         ])
-        .current_dir(dtraces)
         .spawn()?;
 
     // Ditto for stack tracing.
@@ -365,8 +366,42 @@ fn run_local_dtraces(out_dir: PathBuf) -> Result<(Vec<Child>, DtraceOutput)> {
     Ok((vec![histo, stack], DtraceOutput { histo_path, stack_path, out_dir }))
 }
 
-fn spawn_local_dtraces(
+fn run_local_lockstat(
+    out_dir: PathBuf,
+    duration: Duration,
+) -> Result<(Vec<Child>, DtraceOutput)> {
+    fs::create_dir_all(&out_dir)?;
+
+    // Default dtrace behaviour here is to append; which we don't want.
+    let out_path = out_dir.join("lockstat.out");
+    if let Err(e) = fs::remove_file(&out_path) {
+        eprintln!("Failed to remove {out_path:?}: {e}");
+    }
+    let Some(out_path_str) = out_path.to_str() else {
+        anyhow::bail!("Illegal utf8 in histogram path.")
+    };
+    let histo = Command::new("lockstat")
+        .args([
+            "-h",
+            "-o",
+            out_path_str,
+            "sleep",
+            &format!("{}", duration.as_secs()),
+        ])
+        .spawn()?;
+
+    let stack_path = out_dir.join("_.ignore");
+
+    Ok((
+        vec![histo],
+        DtraceOutput { histo_path: out_path, stack_path, out_dir },
+    ))
+}
+
+fn spawn_local_instrument(
     expt_location: impl AsRef<Path>,
+    to_run: Instrumentation,
+    est_duration: Duration,
 ) -> (Sender<()>, Receiver<Result<DtraceOutput>>) {
     let (kill_tx, kill_rx) = mpsc::channel();
     let (out_tx, out_rx) = mpsc::channel();
@@ -376,20 +411,31 @@ fn spawn_local_dtraces(
     std::thread::spawn(move || {
         let out_dir = output_base_dir().join(expt_location);
 
-        let _ = out_tx.send(match run_local_dtraces(out_dir) {
+        let (spawned, should_sigint) = match to_run {
+            Instrumentation::Dtrace => (run_local_dtraces(out_dir), true),
+            Instrumentation::Lockstat => {
+                (run_local_lockstat(out_dir, est_duration), false)
+            }
+            Instrumentation::None => unreachable!(),
+        };
+
+        let _ = out_tx.send(match spawned {
             Ok((children, result)) => {
                 let _ = kill_rx.recv();
 
-                // Need to manually ctrl-c and await EACH process.
+                // Need to manually ctrl-c and await EACH process,
+                // in the dtrace case. Lockstat is set on a timer.
                 for mut child in children {
-                    let upgrade = nix::sys::signal::kill(
-                        nix::unistd::Pid::from_raw(child.id() as i32),
-                        nix::sys::signal::Signal::SIGINT,
-                    )
-                    .is_err();
-                    if upgrade {
-                        println!("...killing...");
-                        let _ = child.kill();
+                    if should_sigint {
+                        let upgrade = nix::sys::signal::kill(
+                            nix::unistd::Pid::from_raw(child.id() as i32),
+                            nix::sys::signal::Signal::SIGINT,
+                        )
+                        .is_err();
+                        if upgrade {
+                            println!("...killing...");
+                            let _ = child.kill();
+                        }
                     }
                     let _ = child.wait();
                 }
@@ -494,18 +540,52 @@ fn zone_to_zone() -> Result<()> {
     Ok(())
 }
 
-fn dtrace_only(experiment_name: &str) -> Result<()> {
+fn dtrace_only(
+    experiment_name: &str,
+    capture_mode: Instrumentation,
+    dont_process: bool,
+) -> Result<()> {
     // Begin dtrace sessions in global zone.
-    let (kill, done) = spawn_local_dtraces(experiment_name);
+    let waiters = match capture_mode {
+        Instrumentation::None => None,
+        Instrumentation::Dtrace => {
+            let a = spawn_local_instrument(
+                experiment_name,
+                capture_mode,
+                Default::default(),
+            );
+            print_banner("DTrace running...\nType 'exit' to finish.");
+            loop_til_exit();
+            Some(a)
+        }
+        Instrumentation::Lockstat => {
+            // TODO: prompt.
+            let duration = Duration::from_secs(20);
+            Some(spawn_local_instrument(
+                experiment_name,
+                capture_mode,
+                duration,
+            ))
+        }
+    };
 
-    print_banner("DTrace running...\nType 'exit' to finish.");
-    loop_til_exit();
+    let dtrace_out = if let Some((kill, done)) = waiters {
+        // Close dtrace.
+        print_banner("Awaiting out files...");
+        let _ = kill.send(());
+        print_banner("done!");
 
-    // Close dtrace.
-    print_banner("iPerf done...\nAwaiting out files...");
-    let _ = kill.send(());
-    print_banner("done!");
-    process_output(&OutputConfig::InSitu(experiment_name), done.recv()??)?;
+        done.recv()??
+    } else {
+        let out_dir = output_base_dir().join(experiment_name);
+        let histo_path = out_dir.join("histos.out");
+        let stack_path = out_dir.join("raw.stacks");
+        DtraceOutput { histo_path, stack_path, out_dir }
+    };
+
+    if !dont_process && !matches!(capture_mode, Instrumentation::Lockstat) {
+        process_output(&OutputConfig::InSitu(experiment_name), dtrace_out)?;
+    }
 
     Ok(())
 }
@@ -783,23 +863,38 @@ impl<'a> From<&'a IperfConfig> for OutputConfig<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Instrumentation {
+    None,
+    Dtrace,
+    Lockstat,
+}
+
+impl std::fmt::Display for Instrumentation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
 #[derive(Debug, Clone)]
 struct IperfConfig {
-    use_dtrace: bool,
+    instrumentation: Instrumentation,
     n_iters: usize,
     mode: IperfMode,
     proto: IperfProto,
     expt_name: String,
+    n_streams: Option<usize>,
 }
 
 impl Default for IperfConfig {
     fn default() -> Self {
         Self {
-            use_dtrace: true,
+            instrumentation: Instrumentation::Dtrace,
             n_iters: 10,
             mode: IperfMode::default(),
             proto: IperfProto::default(),
             expt_name: "unspec".into(),
+            n_streams: None,
         }
     }
 }
@@ -853,15 +948,15 @@ fn base_experiments(expt_name: &str) -> Vec<IperfConfig> {
     let base =
         IperfConfig { expt_name: expt_name.to_string(), ..Default::default() };
     vec![
-        // no dtrace: raw speeds.
+        // lockstat: (almost) raw speeds.
         IperfConfig {
-            use_dtrace: false,
+            instrumentation: Instrumentation::Lockstat,
             n_iters: 5,
             mode: IperfMode::ClientSend,
             ..base.clone()
         },
         IperfConfig {
-            use_dtrace: false,
+            instrumentation: Instrumentation::Lockstat,
             n_iters: 5,
             mode: IperfMode::ServerSend,
             ..base.clone()
@@ -883,9 +978,19 @@ fn test_iperf(
     );
 
     // Begin dtrace sessions in global zone.
-    let dt_handles = config
-        .use_dtrace
-        .then(|| spawn_local_dtraces(config.benchmark_group()));
+    let dt_handles = match config.instrumentation {
+        Instrumentation::Dtrace => Some(spawn_local_instrument(
+            config.benchmark_group(),
+            config.instrumentation,
+            Default::default(),
+        )),
+        Instrumentation::Lockstat => Some(spawn_local_instrument(
+            config.benchmark_group(),
+            config.instrumentation,
+            Duration::from_secs(11) * (config.n_iters as u32 + 1),
+        )),
+        Instrumentation::None => None,
+    };
 
     let my_cmd = config.cmd_str(target_ip);
 
@@ -915,7 +1020,9 @@ fn test_iperf(
         print_banner("iPerf done...\nAwaiting out files...");
         let _ = kill.send(());
         print_banner("done!");
-        process_output(&(config.into()), done.recv()??)?;
+        if !matches!(config.instrumentation, Instrumentation::Lockstat) {
+            process_output(&(config.into()), done.recv()??)?;
+        }
     }
 
     Ok(())
@@ -1165,8 +1272,13 @@ fn main() -> Result<()> {
             give_ownership()
         }
         Experiment::Server { opte_create, .. } => host_iperf(&opte_create),
-        Experiment::InSitu { experiment_name, .. } => {
-            dtrace_only(&experiment_name)?;
+        Experiment::InSitu {
+            experiment_name,
+            capture_mode,
+            dont_process,
+            ..
+        } => {
+            dtrace_only(&experiment_name, capture_mode, dont_process)?;
             give_ownership()
         }
         Experiment::Cleanup { .. } => cleanup_detritus(),
