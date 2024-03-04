@@ -9,8 +9,8 @@
 #define FLOW_FMT(svar, fvar)					\
 	this->src_ip = (ipaddr_t *)alloca(4);			\
 	this->dst_ip = (ipaddr_t *)alloca(4);			\
-	*this->src_ip = fvar->src_ip4;				\
-	*this->dst_ip = fvar->dst_ip4;				\
+	*this->src_ip = fvar->ip4[0];				\
+	*this->dst_ip = fvar->ip4[1];				\
 	svar = protos[fvar->proto];				\
 	svar = strjoin(svar, ",");				\
 	svar = strjoin(svar, inet_ntoa(this->src_ip));		\
@@ -24,8 +24,8 @@
 #define FLOW_FMT6(svar, fvar)					\
 	this->src_ip6 = (in6_addr_t *)alloca(16);		\
 	this->dst_ip6 = (in6_addr_t *)alloca(16);		\
-	*this->src_ip6 = fvar->src_ip6;				\
-	*this->dst_ip6 = fvar->dst_ip6;				\
+	*this->src_ip6 = fvar->ip6[0];				\
+	*this->dst_ip6 = fvar->ip6[1];				\
 	svar = protos[fvar->proto];				\
 	svar = strjoin(svar, ",[");				\
 	svar = strjoin(svar, inet_ntoa6(this->src_ip6));	\

@@ -1307,14 +1307,10 @@ unsafe extern "C" fn xde_mc_unicst(
 }
 
 fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
-    use opte::engine::rule::flow_id_sdt_arg;
-
-    let fid_arg = flow_id_sdt_arg::from(pkt.flow());
-
     unsafe {
         __dtrace_probe_guest__loopback(
             pkt.mblk_addr(),
-            &fid_arg as *const flow_id_sdt_arg as uintptr_t,
+            pkt.flow() as *const _ as uintptr_t,
             src.port.name_cstr().as_ptr() as uintptr_t,
             dst.port.name_cstr().as_ptr() as uintptr_t,
         )

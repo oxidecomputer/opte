@@ -24,7 +24,6 @@ use super::packet::FLOW_ID_DEFAULT;
 use super::port::meta::ActionMeta;
 use super::port::Transforms;
 use super::rule;
-use super::rule::flow_id_sdt_arg;
 use super::rule::ht_probe;
 use super::rule::Action;
 use super::rule::ActionDesc;
@@ -569,7 +568,6 @@ impl Layer {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_arg = flow_id_sdt_arg::from(flow);
                 let dir_c = CString::new(format!("{}", dir)).unwrap();
                 let msg_c = CString::new(format!("{:?}", err)).unwrap();
 
@@ -578,7 +576,7 @@ impl Layer {
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
                         dir_c.as_ptr() as uintptr_t,
-                        &flow_arg as *const flow_id_sdt_arg as uintptr_t,
+                        flow as *const _ as uintptr_t,
                         msg_c.as_ptr() as uintptr_t,
                     );
                 }
@@ -605,7 +603,6 @@ impl Layer {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_arg = flow_id_sdt_arg::from(flow);
                 let dir_c = CString::new(format!("{}", dir)).unwrap();
                 let msg_c = CString::new(format!("{:?}", err)).unwrap();
 
@@ -614,7 +611,7 @@ impl Layer {
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
                         dir_c.as_ptr() as uintptr_t,
-                        &flow_arg as *const flow_id_sdt_arg as uintptr_t,
+                        flow as *const _ as uintptr_t,
                         msg_c.as_ptr() as uintptr_t,
                     );
                 }
@@ -646,15 +643,12 @@ impl Layer {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-
-                let ifid_arg = flow_id_sdt_arg::from(ifid);
-
                 unsafe {
                     __dtrace_probe_layer__process__entry(
                         dir as uintptr_t,
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
-                        &ifid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        ifid as *const _ as uintptr_t,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
@@ -685,18 +679,15 @@ impl Layer {
                     Ok(v) => format!("{}", v),
                     Err(e) => format!("ERROR: {:?}", e),
                 };
-                let flow_b_arg = flow_id_sdt_arg::from(flow_before);
-                let flow_a_arg = flow_id_sdt_arg::from(flow_after);
                 let res_c = CString::new(res_str).unwrap();
-
 
                 unsafe {
                     __dtrace_probe_layer__process__return(
                         dir as uintptr_t,
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
-                        &flow_b_arg as *const flow_id_sdt_arg as uintptr_t,
-                        &flow_a_arg as *const flow_id_sdt_arg as uintptr_t,
+                        flow_before as *const _ as uintptr_t,
+                        flow_after as *const _ as uintptr_t,
                         res_c.as_ptr() as uintptr_t,
                     );
                 }
@@ -1460,14 +1451,12 @@ impl Layer {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_arg = flow_id_sdt_arg::from(flow_id);
-
                 unsafe {
                     __dtrace_probe_rule__deny(
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
                         dir as uintptr_t,
-                        &flow_arg as *const flow_id_sdt_arg as uintptr_t,
+                        flow_id as *const _ as uintptr_t,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
@@ -1701,13 +1690,11 @@ impl<'a> RuleTable {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_id = flow_id_sdt_arg::from(flow_id);
-
                 let arg = rule_no_match_sdt_arg {
                     port: port.as_ptr(),
                     layer: layer.as_ptr(),
                     dir: dir as uintptr_t,
-                    flow_id: &flow_id,
+                    flow_id,
                 };
 
                 unsafe {
@@ -1738,13 +1725,12 @@ impl<'a> RuleTable {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 let action_str = rule.action().to_string();
-                let flow_id = flow_id_sdt_arg::from(flow_id);
                 let action_str_c = CString::new(action_str).unwrap();
                 let arg = rule_match_sdt_arg {
                     port: port.as_ptr(),
                     layer: layer.as_ptr(),
                     dir: dir as uintptr_t,
-                    flow_id: &flow_id,
+                    flow_id,
                     rule_type: action_str_c.as_ptr(),
                 };
 
@@ -1825,7 +1811,7 @@ pub struct rule_match_sdt_arg {
     pub port: *const c_char,
     pub layer: *const c_char,
     pub dir: uintptr_t,
-    pub flow_id: *const flow_id_sdt_arg,
+    pub flow_id: *const InnerFlowId,
     pub rule_type: *const c_char,
 }
 
@@ -1834,7 +1820,7 @@ pub struct rule_no_match_sdt_arg {
     pub port: *const c_char,
     pub layer: *const c_char,
     pub dir: uintptr_t,
-    pub flow_id: *const flow_id_sdt_arg,
+    pub flow_id: *const InnerFlowId,
 }
 
 #[cfg(test)]

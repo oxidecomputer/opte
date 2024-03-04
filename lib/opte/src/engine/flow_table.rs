@@ -19,16 +19,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 use core::num::NonZeroU32;
+#[cfg(all(not(feature = "std"), not(test)))]
+use illumos_sys_hdrs::uintptr_t;
 use opte_api::OpteError;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use illumos_sys_hdrs::uintptr_t;
-        use super::rule::flow_id_sdt_arg;
-    }
-}
 
 // XXX This really shouldn't be pub but for now we are leaking this
 // info for the purpose of testing until the Port API has support for
@@ -232,13 +227,11 @@ fn flow_expired_probe(
     last_hit.unwrap_or_default();
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
-            let arg = flow_id_sdt_arg::from(flowid);
-
             unsafe {
                 __dtrace_probe_flow__expired(
                     port.as_ptr() as uintptr_t,
                     name.as_ptr() as uintptr_t,
-                    &arg as *const flow_id_sdt_arg as uintptr_t,
+                    flowid as *const _ as uintptr_t,
                     last_hit.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
                     now.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
                 );
@@ -355,8 +348,8 @@ impl Dump for () {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::engine::headers::IpAddr;
     use crate::engine::ip4::Protocol;
+    use crate::engine::packet::AddrPair;
     use crate::engine::packet::FLOW_ID_DEFAULT;
     use core::time::Duration;
 
@@ -366,9 +359,11 @@ mod test {
     fn flow_expired() {
         let flowid = InnerFlowId {
             proto: Protocol::TCP,
-            src_ip: IpAddr::Ip4("192.168.2.10".parse().unwrap()),
+            addrs: AddrPair::V4 {
+                src: "192.168.2.10".parse().unwrap(),
+                dst: "76.76.21.21".parse().unwrap(),
+            },
             src_port: 37890,
-            dst_ip: IpAddr::Ip4("76.76.21.21".parse().unwrap()),
             dst_port: 443,
         };
 
@@ -390,9 +385,11 @@ mod test {
     fn flow_clear() {
         let flowid = InnerFlowId {
             proto: Protocol::TCP,
-            src_ip: IpAddr::Ip4("192.168.2.10".parse().unwrap()),
+            addrs: AddrPair::V4 {
+                src: "192.168.2.10".parse().unwrap(),
+                dst: "76.76.21.21".parse().unwrap(),
+            },
             src_port: 37890,
-            dst_ip: IpAddr::Ip4("76.76.21.21".parse().unwrap()),
             dst_port: 443,
         };
 

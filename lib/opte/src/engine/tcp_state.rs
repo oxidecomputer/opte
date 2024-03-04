@@ -13,14 +13,9 @@ use super::tcp::TcpState;
 use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
+#[cfg(all(not(feature = "std"), not(test)))]
+use illumos_sys_hdrs::uintptr_t;
 use opte_api::Direction;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use illumos_sys_hdrs::uintptr_t;
-        use super::rule::flow_id_sdt_arg;
-    }
-}
 
 /// An error processing a TCP flow.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -587,13 +582,12 @@ impl TcpFlowState {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_id = flow_id_sdt_arg::from(flow_id);
                 let state = tcp_flow_state_sdt_arg::from(self);
 
                 unsafe {
                     __dtrace_probe_tcp__flow__drop(
                         port.as_ptr() as uintptr_t,
-                        &flow_id as *const flow_id_sdt_arg as uintptr_t,
+                        flow_id as *const _ as uintptr_t,
                         &state as *const tcp_flow_state_sdt_arg as uintptr_t,
                         dir as uintptr_t,
                         flags as uintptr_t,
@@ -626,11 +620,10 @@ impl TcpFlowState {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_id = flow_id_sdt_arg::from(flow_id);
                 unsafe {
                     __dtrace_probe_tcp__flow__state(
                         port.as_ptr() as uintptr_t,
-                        &flow_id as *const flow_id_sdt_arg as uintptr_t,
+                        flow_id as *const _ as uintptr_t,
                         self.tcp_state as uintptr_t,
                         new_state as uintptr_t,
                     );

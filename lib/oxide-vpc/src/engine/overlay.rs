@@ -237,7 +237,7 @@ impl StaticAction for EncapAction {
 
         let phys_target = match target {
             RouterTargetInternal::InternetGateway => {
-                match self.v2b.get(&flow_id.dst_ip) {
+                match self.v2b.get(&flow_id.dst_ip()) {
                     Some(phys) => {
                         // Hash the packet onto a route target. This is a very
                         // rudimentary mechanism. Should level-up to an ECMP
@@ -289,7 +289,7 @@ impl StaticAction for EncapAction {
             },
 
             RouterTargetInternal::VpcSubnet(_) => {
-                match self.v2p.get(&flow_id.dst_ip) {
+                match self.v2p.get(&flow_id.dst_ip()) {
                     Some(phys) => PhysNet {
                         ether: phys.ether,
                         ip: phys.ip,
