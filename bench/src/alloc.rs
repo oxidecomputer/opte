@@ -131,7 +131,7 @@ impl MemMeasure for BytesDealloced {
 struct CountFormatter;
 struct BytesFormatter;
 
-// These values should be reasonable enough tht we don't need to concern ourselves
+// These values should be reasonable enough that we don't need to concern ourselves
 // with scaling, at least on a per-packet basis.
 impl ValueFormatter for CountFormatter {
     fn scale_values(&self, _count: f64, _values: &mut [f64]) -> &'static str {
@@ -171,7 +171,7 @@ impl ValueFormatter for BytesFormatter {
     }
 }
 
-/// Newtype used for [`MemMeasure`] -> [`Measurement`] provision.
+/// Newtype used to mass-impl [`MemMeasure`] -> [`Measurement`].
 pub struct Local<T>(T);
 
 impl<T> From<T> for Local<T> {

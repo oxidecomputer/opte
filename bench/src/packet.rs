@@ -41,7 +41,6 @@ pub trait BenchPacketInstance {
     /// Label for the experiment instance via BencherId.
     fn instance_name(&self) -> String;
 
-    // XXX: We probably want this to take the cfg of one or more nodes
     /// Generate a single test packet.
     fn generate(&self) -> (Packet<Initialized>, Direction);
 
@@ -364,7 +363,7 @@ impl BenchPacketInstance for Dhcp4Instance {
             Dhcp4Instance::Discover => dhcp::DhcpMessageType::Discover,
             Dhcp4Instance::Request => dhcp::DhcpMessageType::Request,
         };
-        // XXX: We don't do too much work internally to check what options
+        // TODO: We don't do too much work internally to check what options
         // are being asked for today. These packets might need to be more
         // accurate in future.
 

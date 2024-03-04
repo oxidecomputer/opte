@@ -4,6 +4,8 @@
 
 // Copyright 2024 Oxide Computer Company
 
+//! Userland packet parsing and processing microbenchmarks.
+
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
@@ -23,8 +25,10 @@ use opte_bench::MeasurementInfo;
 use opte_test_utils::*;
 use std::hint::black_box;
 
-// WANT: Parsing time as well for different packet classes,
-// scale on options len etc.
+// Top level runner. Specifies packet classes.
+//
+// Timing/memory measurements are selected by `config` in the below
+// `criterion_group!` invocations.
 pub fn block<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
     let all_tests: Vec<Box<dyn BenchPacket>> = vec![
         Box::new(Dhcp4),
@@ -43,6 +47,7 @@ pub fn block<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
     }
 }
 
+// Run benchmarks for parsing a given type of packet.
 pub fn test_parse<M: MeasurementInfo + 'static>(
     c: &mut Criterion<M>,
     experiment: &dyn BenchPacket,
@@ -75,6 +80,8 @@ pub fn test_parse<M: MeasurementInfo + 'static>(
     );
 }
 
+// Run benchmarks for processing (e.g., generating hairpins, rewriting
+// fields, encapsulation) for a given type of packet.
 pub fn test_handle<M: MeasurementInfo + 'static>(
     c: &mut Criterion<M>,
     experiment: &dyn BenchPacket,

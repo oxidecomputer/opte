@@ -13,6 +13,7 @@ use criterion::measurement::WallTime;
 use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -20,6 +21,7 @@ pub struct DTraceHisto {
     pub label: Option<String>,
     pub bucket_width: u64,
     pub buckets: Vec<(u64, u64)>,
+    pub rng_idx: OnceLock<WeightedIndex<u64>>,
 }
 
 impl DTraceHisto {
@@ -88,11 +90,13 @@ impl ParseState {
                 label: None,
                 bucket_width,
                 buckets: vec![],
+                rng_idx: OnceLock::new(),
             }),
             Self::FoundName(label) => Self::Progress(DTraceHisto {
                 label: Some(label),
                 bucket_width,
                 buckets: vec![],
+                rng_idx: OnceLock::new(),
             }),
             Self::Progress(histo) => anyhow::bail!(
                 "Unexpected header in {:?}: should finalise with blank line!",
@@ -150,18 +154,18 @@ impl Measurement for DTraceHisto {
 
     fn start(&self) -> Self::Intermediate {}
 
+    // We use our parsed histogram as a PDF to draw new timing samples
+    // from. We build up the WeightedIndex once it is needed, at which
+    // point it will effectively mirror the input distribution.
     fn end(&self, _i: Self::Intermediate) -> Self::Value {
-        // XXX: I think we *really* want to precache the WeightedIndex.
         let mut rng = thread_rng();
-        let idx = WeightedIndex::new(self.buckets.iter().map(|x| x.1)).unwrap();
+        let idx = self.rng_idx.get_or_init(|| {
+            WeightedIndex::new(self.buckets.iter().map(|x| x.1)).unwrap()
+        });
 
         let chosen_bucket = idx.sample(&mut rng);
         let sample = self.buckets[chosen_bucket].0;
         let out = Duration::from_nanos(sample);
-
-        // Forgive me.
-        let t = Instant::now();
-        while t.elapsed() < out {}
 
         out
     }
