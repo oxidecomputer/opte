@@ -13,6 +13,7 @@ alloc = []
 
 [dependencies]
 anyhow.workspace = true
+clap.workspace = true
 criterion.workspace = true
 itertools = { workspace = true, features = ["use_std"] }
 nix.workspace = true
@@ -24,12 +25,13 @@ serde = { default_features = true, workspace = true }
 serde_json.workspace = true
 
 [dev-dependencies]
-clap.workspace = true
 ctor.workspace = true
 smoltcp.workspace = true
 
-[target.'cfg(target_os = "illumos")'.dev-dependencies]
+[target.'cfg(target_os = "illumos")'.dependencies]
 xde-tests = { path = "../xde-tests" }
+
+[target.'cfg(target_os = "illumos")'.dev-dependencies]
 ztest.workspace = true
 
 [[bench]]

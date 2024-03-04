@@ -7,41 +7,23 @@
 use anyhow::Result;
 use clap::Parser;
 use clap::Subcommand;
-use clap::ValueEnum;
-use criterion::Criterion;
 use itertools::Itertools;
-use opte_bench::dtrace::DTraceHisto;
 use opte_bench::iperf::Output;
-use rand::distributions::Distribution;
-use rand::distributions::WeightedIndex;
-use rand::thread_rng;
-use rand::Rng;
-use serde::Deserialize;
+use opte_bench::kbench::measurement::*;
+use opte_bench::kbench::remote::*;
+use opte_bench::kbench::workload::*;
+use opte_bench::kbench::*;
 use std::collections::HashSet;
-use std::fs;
-use std::fs::File;
-use std::io::Read;
-use std::io::Write;
 use std::net::Ipv6Addr;
 use std::net::TcpListener;
-use std::net::TcpStream;
 use std::path::Path;
-use std::path::PathBuf;
-use std::process::Child;
 use std::process::Command;
-use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc;
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::time::Duration;
 #[cfg(target_os = "illumos")]
 use xde_tests::get_linklocal_addr;
-#[cfg(target_os = "illumos")]
-use xde_tests::RouteV6;
 #[cfg(target_os = "illumos")]
 use xde_tests::Topology;
 
@@ -54,50 +36,6 @@ fn main() -> Result<()> {
     let _cfg = ConfigInput::parse();
 
     anyhow::bail!("This benchmark must be run on Helios!")
-}
-
-// XXX: lifted verbatim from criterion
-/// Returns the Cargo target directory, possibly calling `cargo metadata` to
-/// figure it out.
-fn cargo_target_directory() -> Option<PathBuf> {
-    #[derive(Deserialize)]
-    struct Metadata {
-        target_directory: PathBuf,
-    }
-
-    std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).or_else(|| {
-        let output = Command::new(std::env::var_os("CARGO")?)
-            .args(["metadata", "--format-version", "1"])
-            .output()
-            .ok()?;
-        let metadata: Metadata = serde_json::from_slice(&output.stdout).ok()?;
-        Some(metadata.target_directory)
-    })
-}
-
-static OUT_DIR: OnceLock<PathBuf> = OnceLock::new();
-static WS_ROOT: OnceLock<PathBuf> = OnceLock::new();
-
-fn output_base_dir() -> &'static Path {
-    OUT_DIR
-        .get_or_init(|| {
-            let mut out = cargo_target_directory()
-                .unwrap_or_else(|| Path::new(".").to_path_buf());
-            out.push("xde-bench");
-            out
-        })
-        .as_path()
-}
-
-fn ws_root() -> &'static Path {
-    WS_ROOT
-        .get_or_init(|| {
-            let mut out = cargo_target_directory()
-                .unwrap_or_else(|| Path::new(".").to_path_buf());
-            out.push("..");
-            out
-        })
-        .as_path()
 }
 
 #[derive(Clone, Subcommand)]
@@ -221,28 +159,6 @@ struct IgnoredExtras {
     bench: bool,
 }
 
-// Needed for us to just `cargo bench` easily.
-fn elevate() -> Result<()> {
-    if nix::unistd::Uid::current().is_root() {
-        Ok(())
-    } else {
-        let my_args = std::env::args();
-        let mut elevated = Command::new("pfexec").args(my_args).spawn()?;
-        let exit_code = elevated.wait()?;
-        std::process::exit(exit_code.code().unwrap_or(1))
-    }
-}
-
-fn print_banner(text: &str) {
-    let max_len = text.lines().map(str::len).max().unwrap_or_default();
-
-    println!("###{:->max_len$}###", "");
-    for line in text.lines() {
-        println!(":::{line:^max_len$}:::");
-    }
-    println!("###{:->max_len$}###", "");
-}
-
 /// Ensure that the XDE kernel module is present.
 fn ensure_xde() -> Result<()> {
     let run = Command::new("add_drv").arg("xde").output()?;
@@ -313,199 +229,6 @@ fn check_deps(process_flamegraph: bool, iperf_based: bool) -> Result<()> {
             missing_pkgs.into_iter().collect::<Vec<_>>().join(" "),
         )
     }
-}
-
-#[derive(Clone, Debug)]
-struct DtraceOutput {
-    pub stack_path: PathBuf,
-    pub histo_path: PathBuf,
-    pub out_dir: PathBuf,
-}
-
-static DTRACE_STACK_PROG: &str =
-    include_str!("../../dtrace/opte-count-cycles.d");
-
-fn run_local_dtraces(out_dir: PathBuf) -> Result<(Vec<Child>, DtraceOutput)> {
-    fs::create_dir_all(&out_dir)?;
-
-    // Default dtrace behaviour here is to append; which we don't want.
-    let histo_path = out_dir.join("histos.out");
-    if let Err(e) = fs::remove_file(&histo_path) {
-        eprintln!("Failed to remove {histo_path:?}: {e}");
-    }
-    let Some(histo_path_str) = histo_path.to_str() else {
-        anyhow::bail!("Illegal utf8 in histogram path.")
-    };
-    let histo = Command::new("dtrace")
-        .args([
-            "-qn",
-            DTRACE_STACK_PROG.replace('\n', "").as_str(),
-            "-o",
-            histo_path_str,
-        ])
-        .spawn()?;
-
-    // Ditto for stack tracing.
-    let stack_path = out_dir.join("raw.stacks");
-    if let Err(e) = fs::remove_file(&stack_path) {
-        eprintln!("Failed to remove {stack_path:?}: {e}");
-    }
-    let Some(stack_path_str) = stack_path.to_str() else {
-        anyhow::bail!("Illegal utf8 in histogram path.")
-    };
-    let stack = Command::new("dtrace")
-        .args([
-            "-x", "stackframes=100",
-            "-n",
-            "profile-201us /arg0/ { @[stack()] = count(); } tick-120s { exit(0); }",
-            "-o", stack_path_str,
-        ])
-        .spawn()?;
-
-    Ok((vec![histo, stack], DtraceOutput { histo_path, stack_path, out_dir }))
-}
-
-fn run_local_lockstat(
-    out_dir: PathBuf,
-    duration: Duration,
-) -> Result<(Vec<Child>, DtraceOutput)> {
-    fs::create_dir_all(&out_dir)?;
-
-    // Default dtrace behaviour here is to append; which we don't want.
-    let out_path = out_dir.join("lockstat.out");
-    if let Err(e) = fs::remove_file(&out_path) {
-        eprintln!("Failed to remove {out_path:?}: {e}");
-    }
-    let Some(out_path_str) = out_path.to_str() else {
-        anyhow::bail!("Illegal utf8 in histogram path.")
-    };
-    let histo = Command::new("lockstat")
-        .args([
-            "-h",
-            "-o",
-            out_path_str,
-            "sleep",
-            &format!("{}", duration.as_secs()),
-        ])
-        .spawn()?;
-
-    let stack_path = out_dir.join("_.ignore");
-
-    Ok((
-        vec![histo],
-        DtraceOutput { histo_path: out_path, stack_path, out_dir },
-    ))
-}
-
-fn spawn_local_instrument(
-    expt_location: impl AsRef<Path>,
-    to_run: Instrumentation,
-    est_duration: Duration,
-) -> (Sender<()>, Receiver<Result<DtraceOutput>>) {
-    let (kill_tx, kill_rx) = mpsc::channel();
-    let (out_tx, out_rx) = mpsc::channel();
-
-    let expt_location = expt_location.as_ref().to_path_buf();
-
-    std::thread::spawn(move || {
-        let out_dir = output_base_dir().join(expt_location);
-
-        let (spawned, should_sigint) = match to_run {
-            Instrumentation::Dtrace => (run_local_dtraces(out_dir), true),
-            Instrumentation::Lockstat => {
-                (run_local_lockstat(out_dir, est_duration), false)
-            }
-            Instrumentation::None => unreachable!(),
-        };
-
-        let _ = out_tx.send(match spawned {
-            Ok((children, result)) => {
-                let _ = kill_rx.recv();
-
-                // Need to manually ctrl-c and await EACH process,
-                // in the dtrace case. Lockstat is set on a timer.
-                for mut child in children {
-                    if should_sigint {
-                        let upgrade = nix::sys::signal::kill(
-                            nix::unistd::Pid::from_raw(child.id() as i32),
-                            nix::sys::signal::Signal::SIGINT,
-                        )
-                        .is_err();
-                        if upgrade {
-                            println!("...killing...");
-                            let _ = child.kill();
-                        }
-                    }
-                    let _ = child.wait();
-                }
-
-                Ok(result)
-            }
-            Err(e) => Err(e),
-        });
-    });
-
-    (kill_tx, out_rx)
-}
-
-fn build_flamegraph(
-    config: &OutputConfig,
-    stack_file: impl AsRef<Path>,
-    out_dir: impl AsRef<Path>,
-    rx_name: Option<&str>,
-    tx_name: Option<&str>,
-) -> Result<()> {
-    let fold_path = out_dir.as_ref().join("stacks.folded");
-    let fold_space = File::create(&fold_path)?;
-
-    let stack_status = Command::new("stackcollapse.pl")
-        .arg(stack_file.as_ref().as_os_str())
-        .stdout(Stdio::from(fold_space))
-        .status()?;
-    if !stack_status.success() {
-        anyhow::bail!("Failed to collapse stack traces.")
-    }
-
-    let terms = [
-        ("xde_rx", rx_name.unwrap_or("rx")),
-        ("xde_mc_tx", tx_name.unwrap_or("tx")),
-    ];
-
-    for (tracked_fn, out_name) in terms {
-        let grepped_name = out_dir.as_ref().join(format!("{out_name}.folded"));
-        let grepped = File::create(&grepped_name)?;
-
-        let mut grep_status = Command::new("grep")
-            .arg(tracked_fn)
-            .arg(fold_path.as_os_str())
-            .stdout(Stdio::piped())
-            .spawn()?;
-
-        let dem_status = Command::new("demangle")
-            .stdin(grep_status.stdout.take().unwrap())
-            .stdout(Stdio::from(grepped))
-            .status()?;
-
-        if !dem_status.success() {
-            anyhow::bail!("Failed to grep stack trace for {tracked_fn}.")
-        }
-
-        let flame_name = out_dir.as_ref().join(format!("{out_name}.svg"));
-        let flame_file = File::create(&flame_name)?;
-        let flame_status = Command::new("flamegraph.pl")
-            .args(["--title", &config.title()])
-            .args(["--subtitle", &format!("Stacks containing: {tracked_fn}")])
-            .args(["--fonttype", "Berkeley Mono,Fira Mono,monospace"])
-            .args(["--width", "1600"])
-            .arg(grepped_name.as_os_str())
-            .stdout(Stdio::from(flame_file))
-            .status()?;
-        if !flame_status.success() {
-            eprintln!("Failed to create flamegraph for {tracked_fn}.")
-        }
-    }
-
-    Ok(())
 }
 
 #[cfg(target_os = "illumos")]
@@ -589,149 +312,6 @@ fn dtrace_only(
     Ok(())
 }
 
-#[derive(Debug)]
-struct Routes {
-    lls: Vec<Ipv6Addr>,
-    underlay: Ipv6Addr,
-}
-
-#[cfg(target_os = "illumos")]
-fn send_routes_client(
-    route: &Routes,
-    host: &str,
-    params: &OpteCreateParams,
-) -> Result<(TcpStream, Vec<RouteV6>)> {
-    println!("Connecting to {host}...");
-    let mut client = TcpStream::connect((host, params.port))?;
-    println!("Connected!");
-    client.set_nodelay(true)?;
-
-    let v6_routes = exchange_routes(route, &mut client, &params.underlay_nics)?;
-    Ok((client, v6_routes))
-}
-
-#[cfg(target_os = "illumos")]
-fn exchange_routes(
-    route: &Routes,
-    client: &mut TcpStream,
-    underlay_nics: &[String],
-) -> Result<Vec<RouteV6>> {
-    send_routes(route, client)?;
-    let new_routes = recv_routes(client)?;
-
-    println!("peer owns connected lls {:?}", new_routes.lls);
-
-    // ping the received link locals over our underlay and prime NDP.
-    for nic in underlay_nics {
-        for ip in &new_routes.lls {
-            // attempt to ping each ll over each NIC: failure is okay,
-            // but we need to do this to set up our NDP entries for route
-            // insertion.
-            // e.g., ping -Ainet6 -n -i igb1 -c 1 fe80::a236:9fff:fe0c:25b7 1
-            Command::new("ping")
-                .args(["-Ainet6", "-n", "-i", nic.as_str(), "-c", "1"])
-                .arg(ip.to_string())
-                .arg("1")
-                .output()?;
-        }
-    }
-
-    // Leave ample time to also *be* pinged if necessary.
-    // I'm finding that the server can be caught with entries
-    // in state DELAYED, otherwise.
-    println!("lls pinged, awating ndp stabilising...");
-    std::thread::sleep(Duration::from_secs(10));
-
-    let ndp_data = Command::new("ndp").arg("-an").output()?;
-
-    let ndp_parse = std::str::from_utf8(&ndp_data.stdout)?;
-
-    let mut routes = vec![];
-    let mut nics_used = HashSet::new();
-    for line in ndp_parse.lines() {
-        let mut els = line.split_whitespace();
-
-        let Some(nic) = els.next() else {
-            continue;
-        };
-        let nic = nic.to_string();
-
-        let Some(_mac) = els.next() else {
-            continue;
-        };
-
-        let Some(_type) = els.next() else {
-            continue;
-        };
-
-        let Some(status) = els.next() else {
-            continue;
-        };
-
-        let Some(addr) = els.next() else {
-            continue;
-        };
-
-        if !underlay_nics.contains(&nic) {
-            continue;
-        }
-
-        if status != "REACHABLE" {
-            continue;
-        }
-
-        let Ok(gw_ip) = addr.parse::<Ipv6Addr>() else {
-            continue;
-        };
-
-        if new_routes.lls.contains(&gw_ip) {
-            println!(
-                "installing {}/64->{gw_ip} via {nic}",
-                new_routes.underlay
-            );
-            routes.push(RouteV6::new(
-                new_routes.underlay,
-                64,
-                gw_ip,
-                Some(nic.to_string()),
-            )?);
-            nics_used.insert(nic.to_string());
-        }
-    }
-
-    if nics_used.len() < 2 {
-        eprintln!("only found routes to other side over {nics_used:?}. multipath may be degraded.")
-    }
-
-    Ok(routes)
-}
-
-fn send_routes(route: &Routes, client: &mut TcpStream) -> Result<()> {
-    client.write_all(&(route.lls.len() as u64).to_be_bytes())?;
-    for ll in &route.lls {
-        client.write_all(&ll.octets())?;
-    }
-    client.write_all(&route.underlay.octets())?;
-
-    Ok(())
-}
-
-fn recv_routes(client: &mut TcpStream) -> Result<Routes> {
-    let mut buf = [0u8; std::mem::size_of::<Ipv6Addr>()];
-
-    client.read_exact(&mut buf[..8])?;
-    let len = u64::from_be_bytes(buf[..8].try_into()?);
-    let mut lls = Vec::with_capacity(len.try_into()?);
-    for _ in 0..len {
-        client.read_exact(&mut buf[..])?;
-        lls.push(Ipv6Addr::from(buf));
-    }
-    client.read_exact(&mut buf[..])?;
-    let underlay = Ipv6Addr::from(buf);
-
-    Ok(Routes { lls, underlay })
-}
-
 #[cfg(target_os = "illumos")]
 fn over_nic(params: &OpteCreateParams, host: &str, pause: bool) -> Result<()> {
     // add_drv xde.
@@ -747,7 +327,8 @@ fn over_nic(params: &OpteCreateParams, host: &str, pause: bool) -> Result<()> {
     let to_send =
         Routes { lls, underlay: xde_tests::ZONE_B_PORT.underlay_addr.into() };
 
-    let (_sess, _routes) = send_routes_client(&to_send, host, params)?;
+    let (_sess, _routes) =
+        send_routes_client(&to_send, host, params.port, &params.underlay_nics)?;
 
     print_banner(&format!(
         "Creating XDE device on NICS {}",
@@ -776,194 +357,6 @@ fn over_nic(params: &OpteCreateParams, host: &str, pause: bool) -> Result<()> {
     }
 
     Ok(())
-}
-
-#[derive(Debug, Clone)]
-enum IperfMode {
-    ClientSend,
-    ServerSend,
-    // TODO: need an updated illumos package.
-    //       we can build and install locally and just call
-    //       /usr/local/iperf3 if need be.
-    BiDir,
-}
-
-impl std::fmt::Display for IperfMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            IperfMode::ClientSend => "Client->Server",
-            IperfMode::ServerSend => "Server->Client",
-            IperfMode::BiDir => "Bidirectional",
-        })
-    }
-}
-
-impl Default for IperfMode {
-    fn default() -> Self {
-        Self::ClientSend
-    }
-}
-
-#[derive(Debug, Clone)]
-enum IperfProto {
-    Tcp,
-    Udp {
-        /// Target bandwidth in MiB/s.
-        bw: f64,
-        /// Size of the UDP send buffer.
-        ///
-        /// Should be under 1500 due to dont_fragment.
-        pkt_sz: usize,
-    },
-}
-
-impl std::fmt::Display for IperfProto {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IperfProto::Tcp => f.write_str("TCP"),
-            IperfProto::Udp { bw, pkt_sz } => {
-                write!(f, "UDP({pkt_sz}B, {bw}MiB/s)")
-            }
-        }
-    }
-}
-
-impl Default for IperfProto {
-    fn default() -> Self {
-        Self::Tcp
-    }
-}
-
-#[derive(Debug, Clone)]
-enum OutputConfig<'a> {
-    Iperf(&'a IperfConfig),
-    InSitu(&'a str),
-}
-
-impl OutputConfig<'_> {
-    fn benchmark_group(&self) -> String {
-        match self {
-            Self::Iperf(i) => i.benchmark_group(),
-            Self::InSitu(s) => format!("in-situ/{s}"),
-        }
-    }
-
-    fn title(&self) -> String {
-        match self {
-            Self::Iperf(i) => i.title(),
-            Self::InSitu(s) => format!("Local flamegraph -- {s}"),
-        }
-    }
-}
-
-impl<'a> From<&'a IperfConfig> for OutputConfig<'a> {
-    fn from(value: &'a IperfConfig) -> Self {
-        Self::Iperf(value)
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum Instrumentation {
-    None,
-    Dtrace,
-    Lockstat,
-}
-
-impl std::fmt::Display for Instrumentation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-#[derive(Debug, Clone)]
-struct IperfConfig {
-    instrumentation: Instrumentation,
-    n_iters: usize,
-    mode: IperfMode,
-    proto: IperfProto,
-    expt_name: String,
-    n_streams: Option<usize>,
-}
-
-impl Default for IperfConfig {
-    fn default() -> Self {
-        Self {
-            instrumentation: Instrumentation::Dtrace,
-            n_iters: 10,
-            mode: IperfMode::default(),
-            proto: IperfProto::default(),
-            expt_name: "unspec".into(),
-            n_streams: None,
-        }
-    }
-}
-
-impl IperfConfig {
-    fn cmd_str(&self, target_ip: &str) -> String {
-        let proto_str;
-        let proto_segment = match self.proto {
-            IperfProto::Tcp => "",
-            IperfProto::Udp { bw, pkt_sz } => {
-                proto_str = format!("-u --length {pkt_sz} -b {bw}M");
-                proto_str.as_str()
-            }
-        };
-        let dir_segment = match self.mode {
-            IperfMode::ClientSend => "",
-            IperfMode::ServerSend => "-R",
-            IperfMode::BiDir => "--bidir",
-        };
-
-        // XXX: Setting several parallel streams because we don't
-        //      really have packet-wise ECMP yet from ddm -- the
-        //      P-values won't change, so the flowkey remains the same.
-        format!("iperf -c {target_ip} -J -P 8 {proto_segment} {dir_segment}")
-    }
-
-    fn benchmark_group(&self) -> String {
-        format!(
-            "iperf-{}/{}/{}",
-            match self.proto {
-                IperfProto::Tcp => "tcp",
-                IperfProto::Udp { .. } => "udp",
-            },
-            self.expt_name,
-            match self.mode {
-                IperfMode::ClientSend => "c2s",
-                IperfMode::ServerSend => "s2c",
-                IperfMode::BiDir => "bidir",
-            }
-        )
-    }
-
-    fn title(&self) -> String {
-        format!("iperf3 ({}) -- {}", self.mode, self.proto)
-    }
-}
-
-// XXX: want these as json somewhere, with command line options
-//      to choose which are run.
-fn base_experiments(expt_name: &str) -> Vec<IperfConfig> {
-    let base =
-        IperfConfig { expt_name: expt_name.to_string(), ..Default::default() };
-    vec![
-        // lockstat: (almost) raw speeds.
-        IperfConfig {
-            instrumentation: Instrumentation::Lockstat,
-            n_iters: 5,
-            mode: IperfMode::ClientSend,
-            ..base.clone()
-        },
-        IperfConfig {
-            instrumentation: Instrumentation::Lockstat,
-            n_iters: 5,
-            mode: IperfMode::ServerSend,
-            ..base.clone()
-        },
-        // dtrace: collect all the stats!
-        IperfConfig { mode: IperfMode::ClientSend, ..base.clone() },
-        IperfConfig { mode: IperfMode::ServerSend, ..base.clone() },
-    ]
 }
 
 #[cfg(target_os = "illumos")]
@@ -1035,67 +428,6 @@ fn zone_to_zone_dummy() -> Result<()> {
 
     let cfg = IperfConfig::default();
     process_output(&(&cfg).into(), outdata)
-}
-
-fn process_output(config: &OutputConfig, outdata: DtraceOutput) -> Result<()> {
-    build_flamegraph(
-        config,
-        &outdata.stack_path,
-        &outdata.out_dir,
-        None,
-        None,
-    )?;
-
-    let histos = DTraceHisto::from_path(&outdata.histo_path, 256)?;
-
-    for histo in histos {
-        let label = histo.label.clone().unwrap();
-        let mut c =
-            Criterion::default().measurement_time(Duration::from_secs(20));
-
-        let mut rng = thread_rng();
-        let idx =
-            WeightedIndex::new(histo.buckets.iter().map(|x| x.1)).unwrap();
-
-        let mut c = c.benchmark_group(config.benchmark_group());
-        c.bench_function(&label, move |b| {
-            b.iter_custom(|iters| {
-                (0..iters)
-                    .map(|_| {
-                        let chosen_bucket = idx.sample(&mut rng);
-                        let sample = &histo.buckets[chosen_bucket].0;
-
-                        // uniformly distribute within bucket.
-                        Duration::from_nanos(
-                            rng.gen_range(
-                                *sample..*sample + histo.bucket_width,
-                            ),
-                        )
-                    })
-                    .sum()
-            })
-        });
-    }
-
-    Ok(())
-}
-
-fn loop_til_exit() {
-    let mut cmd = String::new();
-    loop {
-        match std::io::stdin().read_line(&mut cmd) {
-            Ok(_) if &cmd == "exit\n" => {
-                break;
-            }
-            Ok(_) => {
-                println!("wanted exit: saw {cmd:?}");
-                cmd.clear();
-            }
-            _ => {
-                break;
-            }
-        }
-    }
 }
 
 #[cfg(target_os = "illumos")]
@@ -1176,42 +508,6 @@ fn server_loop(
     }
 }
 
-fn server_session(
-    mut stream: TcpStream,
-    route: Arc<Routes>,
-    underlay_nics: Arc<Vec<String>>,
-    kill_switch: Arc<AtomicBool>,
-) {
-    #[cfg(target_os = "illumos")]
-    let _rx_routes =
-        exchange_routes(&route, &mut stream, &underlay_nics).unwrap();
-
-    stream.set_nonblocking(true).unwrap();
-
-    let mut buf = [0u8; 16];
-    loop {
-        match stream.read(&mut buf) {
-            Ok(0) => {
-                break;
-            }
-            Ok(_) => {
-                eprintln!("received extra data from {:?}", stream.peer_addr());
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => {
-                break;
-            }
-        }
-
-        if kill_switch.load(Ordering::Relaxed) {
-            break;
-        }
-
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 fn cleanup_detritus() -> Result<()> {
     // NOTE: We're not really caring about the success of these
     // operations, just to do them all in (approximately) the
@@ -1235,24 +531,9 @@ fn cleanup_detritus() -> Result<()> {
     Ok(())
 }
 
-fn give_ownership() -> Result<()> {
-    let Ok(user) = std::env::var("USER") else { return Ok(()) };
-
-    let criterion_path = cargo_target_directory()
-        .unwrap_or_else(|| Path::new(".").to_path_buf())
-        .join("criterion");
-    let outputs = [output_base_dir(), criterion_path.as_path()];
-
-    for path in outputs {
-        let _ = Command::new("chown").args(["-R", &user]).arg(path).output()?;
-    }
-
-    Ok(())
-}
-
 #[cfg(target_os = "illumos")]
 fn main() -> Result<()> {
-    elevate()?;
+    opte_bench::kbench::elevate()?;
 
     let cfg = ConfigInput::parse();
 

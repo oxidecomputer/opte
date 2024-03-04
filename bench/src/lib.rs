@@ -14,6 +14,7 @@ use criterion::measurement::WallTime;
 pub mod alloc;
 pub mod dtrace;
 pub mod iperf;
+pub mod kbench;
 pub mod packet;
 
 /// Additional labelling information for [`Measurement`]s for

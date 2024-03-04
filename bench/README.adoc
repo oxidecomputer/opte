@@ -11,6 +11,13 @@ We use https://github.com/bheisler/criterion.rs[`criterion`] to measure and prof
 
 These can be called using `cargo ubench`, or `cargo bench --package opte-bench --bench userland -- <options>`.
 This benchmark runner uses the standard criterion CLI.
+To see a clean list of available benchmarks, use the `cargo ubench --list 2> /dev/null | sort | uniq` command.
+
+Benchmarks are split into several categories:
+
+ * Metric: `wallclock`, `alloc_ct`, `alloc_sz.
+ * Action: `parse`, `process`.
+ * Packet family.
 
 == Kernel Module Benchmarks
 

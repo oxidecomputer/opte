@@ -15,7 +15,6 @@ use rand::prelude::*;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
-use std::time::Instant;
 
 pub struct DTraceHisto {
     pub label: Option<String>,
