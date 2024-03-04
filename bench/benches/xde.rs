@@ -38,6 +38,48 @@ fn main() -> Result<()> {
     anyhow::bail!("This benchmark must be run on Helios!")
 }
 
+#[cfg(target_os = "illumos")]
+fn main() -> Result<()> {
+    opte_bench::kbench::elevate()?;
+
+    let cfg = ConfigInput::parse();
+
+    match cfg.command {
+        Experiment::Remote { iperf_server, opte_create, pause, .. } => {
+            check_deps(true, true)?;
+            over_nic(&opte_create, &iperf_server, pause)?;
+            give_ownership()
+        }
+        Experiment::Local { no_bench, .. } => {
+            check_deps(true, !no_bench)?;
+            if no_bench {
+                zone_to_zone_dummy()?;
+            } else {
+                zone_to_zone()?;
+            }
+            give_ownership()
+        }
+        Experiment::Server { opte_create, .. } => {
+            check_deps(false, true)?;
+            host_iperf(&opte_create)
+        }
+        Experiment::InSitu {
+            experiment_name,
+            capture_mode,
+            dont_process,
+            ..
+        } => {
+            check_deps(!dont_process, false)?;
+            dtrace_only(&experiment_name, capture_mode, dont_process)?;
+            give_ownership()
+        }
+        Experiment::Cleanup { .. } => {
+            check_deps(false, false)?;
+            cleanup_detritus()
+        }
+    }
+}
+
 #[derive(Clone, Subcommand)]
 /// iPerf-driven benchmark harness for OPTE.
 enum Experiment {
@@ -529,46 +571,4 @@ fn cleanup_detritus() -> Result<()> {
     Command::new("rem_drv").arg("xde").output()?;
 
     Ok(())
-}
-
-#[cfg(target_os = "illumos")]
-fn main() -> Result<()> {
-    opte_bench::kbench::elevate()?;
-
-    let cfg = ConfigInput::parse();
-
-    match cfg.command {
-        Experiment::Remote { iperf_server, opte_create, pause, .. } => {
-            check_deps(true, true)?;
-            over_nic(&opte_create, &iperf_server, pause)?;
-            give_ownership()
-        }
-        Experiment::Local { no_bench, .. } => {
-            check_deps(true, !no_bench)?;
-            if no_bench {
-                zone_to_zone_dummy()?;
-            } else {
-                zone_to_zone()?;
-            }
-            give_ownership()
-        }
-        Experiment::Server { opte_create, .. } => {
-            check_deps(false, true)?;
-            host_iperf(&opte_create)
-        }
-        Experiment::InSitu {
-            experiment_name,
-            capture_mode,
-            dont_process,
-            ..
-        } => {
-            check_deps(!dont_process, false)?;
-            dtrace_only(&experiment_name, capture_mode, dont_process)?;
-            give_ownership()
-        }
-        Experiment::Cleanup { .. } => {
-            check_deps(false, false)?;
-            cleanup_detritus()
-        }
-    }
 }
