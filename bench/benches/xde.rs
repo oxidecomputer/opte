@@ -160,7 +160,7 @@ enum Experiment {
         experiment_name: String,
 
         /// Which measurement program should be run.
-        #[arg(short, long, default_value_t=Instrumentation::Dtrace)]
+        #[arg(short, long, default_value = "dtrace")]
         capture_mode: Instrumentation,
 
         /// Control whether flamegraphs and criterion outputs should
@@ -223,21 +223,13 @@ struct IgnoredExtras {
 
 // Needed for us to just `cargo bench` easily.
 fn elevate() -> Result<()> {
-    let curr_user_run = Command::new("whoami").output()?;
-    if !curr_user_run.status.success() {
-        let as_utf = std::str::from_utf8(&curr_user_run.stderr);
-        anyhow::bail!("Failed to get current user: {:?}", as_utf);
-    }
-
-    match std::str::from_utf8(&curr_user_run.stdout) {
-        Ok("root\n") => Ok(()),
-        Ok(_) => {
-            let my_args = std::env::args();
-            let mut elevated = Command::new("pfexec").args(my_args).spawn()?;
-            let exit_code = elevated.wait()?;
-            std::process::exit(exit_code.code().unwrap_or(1))
-        }
-        Err(_) => anyhow::bail!("`whoami` did not return a valid UTF user."),
+    if nix::unistd::Uid::current().is_root() {
+        Ok(())
+    } else {
+        let my_args = std::env::args();
+        let mut elevated = Command::new("pfexec").args(my_args).spawn()?;
+        let exit_code = elevated.wait()?;
+        std::process::exit(exit_code.code().unwrap_or(1))
     }
 }
 
@@ -269,19 +261,26 @@ fn ensure_xde() -> Result<()> {
     }
 }
 
-// XXX: these should be trimmed down for in_situ.
-fn check_deps() -> Result<()> {
+fn check_deps(process_flamegraph: bool, iperf_based: bool) -> Result<()> {
+    #[derive(Copy, Clone)]
     enum Dep {
         Program,
         File,
     }
-    let dep_map = [
-        (Dep::Program, "iperf", "iperf"),
-        (Dep::Program, "stackcollapse.pl", "flamegraph"),
-        (Dep::Program, "flamegraph.pl", "flamegraph"),
-        (Dep::Program, "demangle", "demangle"),
-        (Dep::File, "/usr/lib/brand/sparse", "sparse"),
-    ];
+    let mut dep_map = vec![];
+    if process_flamegraph {
+        dep_map.extend_from_slice(&[
+            (Dep::Program, "stackcollapse.pl", "flamegraph"),
+            (Dep::Program, "flamegraph.pl", "flamegraph"),
+            (Dep::Program, "demangle", "demangle"),
+        ]);
+    }
+    if iperf_based {
+        dep_map.extend_from_slice(&[
+            (Dep::Program, "iperf", "iperf"),
+            (Dep::File, "/usr/lib/brand/sparse", "sparse"),
+        ]);
+    }
 
     let mut missing_progs = vec![];
     let mut missing_pkgs = HashSet::new();
@@ -1254,16 +1253,17 @@ fn give_ownership() -> Result<()> {
 #[cfg(target_os = "illumos")]
 fn main() -> Result<()> {
     elevate()?;
-    check_deps()?;
 
     let cfg = ConfigInput::parse();
 
     match cfg.command {
         Experiment::Remote { iperf_server, opte_create, pause, .. } => {
+            check_deps(true, true)?;
             over_nic(&opte_create, &iperf_server, pause)?;
             give_ownership()
         }
         Experiment::Local { no_bench, .. } => {
+            check_deps(true, !no_bench)?;
             if no_bench {
                 zone_to_zone_dummy()?;
             } else {
@@ -1271,16 +1271,23 @@ fn main() -> Result<()> {
             }
             give_ownership()
         }
-        Experiment::Server { opte_create, .. } => host_iperf(&opte_create),
+        Experiment::Server { opte_create, .. } => {
+            check_deps(false, true)?;
+            host_iperf(&opte_create)
+        }
         Experiment::InSitu {
             experiment_name,
             capture_mode,
             dont_process,
             ..
         } => {
+            check_deps(!dont_process, false)?;
             dtrace_only(&experiment_name, capture_mode, dont_process)?;
             give_ownership()
         }
-        Experiment::Cleanup { .. } => cleanup_detritus(),
+        Experiment::Cleanup { .. } => {
+            check_deps(false, false)?;
+            cleanup_detritus()
+        }
     }
 }

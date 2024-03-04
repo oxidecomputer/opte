@@ -57,3 +57,44 @@ Connecting `igb0<->igb0`, etc., is not a requirement, as NDP tables are inspecte
 
 In both scenarios, the benchmark harness will run iperf in client-to-server and server-to-client modes, and will record periodic stack information and timings using `dtrace`.
 These are converted into flamegraphs and timing data for further analysis by criterion.
+
+=== In-situ measurement
+
+The kernel module benchmark harness can be moved onto a gimlet or other development system for measurement.
+The path to the binary can be found using the command:
+
+[source, bash]
+----
+cargo bench --package opte-bench \
+  --no-run --message-format json-render-diagnostics \
+  | jq -r -s "map( \
+      select(.reason==\"compiler-artifact\") \
+      | select( \
+          .target.kind\
+          | map_values(.==\"bench\") \
+          | any \
+      ) \
+      | select(.target.name==\"xde\") \
+  ) | map(.executable)"
+----
+
+Once the binary is moved onto the global zone of a target machine, measurements can be taken using `xde in-situ`.
+On a gimlet we add the `-d` flag as we do not have access to `flamegraph`.
+This places captured stacks into the `xde-bench` folder.
+
+[source, bash]
+----
+$ ./xde in-situ expt-name -d
+# ...
+exit
+
+$ ls -R xde-bench
+xde-bench:
+expt-name
+
+xde-bench/expt-name:
+histos.out  raw.stacks
+
+----
+
+Measured data in `xde-bench` can be moved and processed into flamegraphs and histograms on any development machine using the command `./xde in-situ expt-name -c none`.
