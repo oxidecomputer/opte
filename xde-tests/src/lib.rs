@@ -214,7 +214,8 @@ impl Drop for Xde {
     }
 }
 
-// Note: these have a *very* sensitive drop order.
+/// An individual zone connected to an OPTE port.
+// Note: these fields have a *very* sensitive drop order.
 pub struct TestNode {
     pub zone: OpteZone,
     pub nic: Vnic,
@@ -229,6 +230,9 @@ impl TestNode {
     }
 }
 
+/// A topology of local zones interconnected with simlinks over
+/// an OPTE dataplane.
+// Note: these fields have a *very* sensitive drop order.
 pub struct Topology {
     pub nodes: Vec<TestNode>,
     pub v6_routes: Vec<RouteV6>,
@@ -381,10 +385,9 @@ pub const ZONE_B_PORT: PortInfo = PortInfo {
     ]),
 };
 
+/// Return a link-local address attached to a device `link_name`,
+/// assuming that address is named `<link_name>/ll`.
 pub fn get_linklocal_addr(link_name: &str) -> Result<std::net::Ipv6Addr> {
-    // kyle@farme:~$ ipadm show-addr igb0/ll
-    // ADDROBJ           TYPE     STATE        ADDR
-    // igb0/ll           addrconf ok           fe80::a236:9fff:fe0c:2586%igb0/10
     let target_addr = format!("{link_name}/ll");
     let out = Command::new("ipadm")
         .arg("show-addr")
@@ -413,6 +416,8 @@ pub fn get_linklocal_addr(link_name: &str) -> Result<std::net::Ipv6Addr> {
     Ok(maybe_addr.parse()?)
 }
 
+/// Creates a single node zone on this machine and assigns it an OPTE
+/// VNIC.
 pub fn single_node_over_real_nic(
     underlay: &[String; 2],
     my_info: PortInfo,
