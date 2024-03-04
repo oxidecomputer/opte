@@ -159,6 +159,12 @@ impl VpcPortState {
     }
 }
 
+impl Default for VpcPortState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub enum SplitField<'a> {
     One(&'a str),
     Two(&'a str, &'a str),

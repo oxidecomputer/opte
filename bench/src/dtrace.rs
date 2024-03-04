@@ -164,9 +164,7 @@ impl Measurement for DTraceHisto {
 
         let chosen_bucket = idx.sample(&mut rng);
         let sample = self.buckets[chosen_bucket].0;
-        let out = Duration::from_nanos(sample);
-
-        out
+        Duration::from_nanos(sample)
     }
 
     fn add(&self, v1: &Self::Value, v2: &Self::Value) -> Self::Value {

@@ -125,11 +125,11 @@ pub fn write_dhcpv6_packet(
         .unwrap()
 }
 
-pub fn dhcpv6_with_reasonable_defaults<'a>(
+pub fn dhcpv6_with_reasonable_defaults(
     typ: MessageType,
     rapid_commit: bool,
-    cfg: &'a VpcCfg,
-) -> dhcpv6::protocol::Message<'a> {
+    cfg: &VpcCfg,
+) -> dhcpv6::protocol::Message<'_> {
     let requested_iana = dhcpv6::options::IaNa {
         id: dhcpv6::options::IaId(0xff7),
         t1: dhcpv6::Lifetime(3600),
