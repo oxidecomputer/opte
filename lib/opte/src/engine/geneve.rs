@@ -15,6 +15,8 @@ use super::headers::RawHeader;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
 use crate::d_error::DError;
+use super::udp::UdpHdr;
+use super::udp::UdpMeta;
 use core::mem;
 pub use opte_api::Vni;
 use serde::Deserialize;
@@ -42,8 +44,6 @@ pub const GENEVE_OPT_CLASS_OXIDE: u16 = 0x0129;
 pub struct GeneveMeta {
     pub entropy: u16,
     pub vni: Vni,
-    pub len: u16,
-
     pub oxide_external_pkt: bool,
 }
 
@@ -88,9 +88,10 @@ impl ModifyAction<GeneveMeta> for GeneveMod {
 }
 
 impl GeneveMeta {
+    /// Emit only the inner Geneve header.
     #[inline]
-    pub fn emit(&self, dst: &mut [u8]) {
-        debug_assert_eq!(dst.len(), self.hdr_len());
+    pub fn emit_inner(&self, dst: &mut [u8]) {
+        debug_assert_eq!(dst.len(), self.hdr_len_inner());
         let (base, remainder) = dst.split_at_mut(GeneveHdrRaw::SIZE);
         let mut raw = GeneveHdrRaw::new_mut(base).unwrap();
         raw.write(GeneveHdrRaw::from(self));
@@ -102,12 +103,41 @@ impl GeneveMeta {
         };
     }
 
+    /// Emit a full Geneve encapsulation for an inner packet, including
+    /// UDP.
+    ///
+    /// `total_len` should be precomputed as `self.hdr_len() + body.len()`.
+    #[inline]
+    pub fn emit(&self, total_len: u16, dst: &mut [u8]) {
+        let (udp_buf, geneve_buf) = dst.split_at_mut(UdpHdr::SIZE);
+        let udp = UdpMeta {
+            src: self.entropy,
+            dst: GENEVE_PORT,
+            len: total_len,
+            csum: [0; 2],
+        };
+        udp.emit(udp_buf);
+
+        self.emit_inner(geneve_buf);
+    }
+
+    /// Return the length of headers needed to fully Geneve-encapsulate
+    /// a packet, including UDP.
+    #[inline]
     pub fn hdr_len(&self) -> usize {
+        UdpHdr::SIZE + self.hdr_len_inner()
+    }
+
+    /// Return the length of only the Geneve header.
+    #[inline]
+    pub fn hdr_len_inner(&self) -> usize {
         GeneveHdr::BASE_SIZE + self.options_len()
     }
 
+    /// Return the required length (in bytes) needed to store
+    /// all Geneve options attached to this packet.
     pub fn options_len(&self) -> usize {
-        // XXX: This is a very special-cased just to enable testing.
+        // XXX: This is very special-cased just to enable testing.
         if self.oxide_external_pkt {
             GeneveOptHdrRaw::SIZE
         } else {
@@ -116,14 +146,18 @@ impl GeneveMeta {
     }
 }
 
+impl<'a> From<(&UdpHdr<'a>, &GeneveHdr<'a>)> for GeneveMeta {
+    fn from((udp, geneve): (&UdpHdr<'a>, &GeneveHdr<'a>)) -> Self {
+        let mut out = Self::from(geneve);
+        out.entropy = udp.src_port();
+        out
+    }
+}
+
 impl<'a> From<&GeneveHdr<'a>> for GeneveMeta {
     fn from(geneve: &GeneveHdr<'a>) -> Self {
-        let mut out = Self {
-            vni: geneve.vni(),
-            entropy: geneve.entropy(),
-            len: geneve.len() as u16,
-            ..Default::default()
-        };
+        let mut out =
+            Self { vni: geneve.vni(), entropy: 0, ..Default::default() };
 
         if let Some(ref opts) = geneve.opts {
             // XXX: Prevent duplication by making Meta generation fallible
@@ -152,14 +186,6 @@ impl<'a> GeneveHdr<'a> {
         usize::from(self.bytes.options_len() * 4) + Self::BASE_SIZE
     }
 
-    pub fn entropy(&self) -> u16 {
-        u16::from_be_bytes(self.bytes.src_port)
-    }
-
-    pub fn len(&self) -> usize {
-        usize::from(u16::from_be_bytes(self.bytes.length))
-    }
-
     pub fn parse<'b, R>(rdr: &'b mut R) -> Result<Self, GeneveHdrError>
     where
         R: PacketReadMut<'a>,
@@ -181,19 +207,6 @@ impl<'a> GeneveHdr<'a> {
         };
 
         Ok(Self { bytes, opts })
-    }
-
-    /// Set the length, in bytes.
-    ///
-    /// The UDP length field includes both header and payload.
-    pub fn set_len(&mut self, len: u16) {
-        self.bytes.length = len.to_be_bytes();
-    }
-
-    pub fn unify(&mut self, meta: &GeneveMeta) {
-        self.bytes.src_port = meta.entropy.to_be_bytes();
-        self.bytes.dst_port = GENEVE_PORT.to_be_bytes();
-        self.bytes.vni = meta.vni.bytes();
     }
 
     /// Return the VNI.
@@ -248,10 +261,6 @@ impl GeneveHdrError {
 #[repr(C)]
 #[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
 pub struct GeneveHdrRaw {
-    src_port: [u8; 2],
-    dst_port: [u8; 2],
-    length: [u8; 2],
-    csum: [u8; 2],
     ver_opt_len: u8,
     flags: u8,
     proto: [u8; 2],
@@ -290,10 +299,6 @@ impl<'a> RawHeader<'a> for GeneveHdrRaw {
 impl Default for GeneveHdrRaw {
     fn default() -> Self {
         Self {
-            src_port: [0; 2],
-            dst_port: [0; 2],
-            length: [0; 2],
-            csum: [0; 2],
             ver_opt_len: 0x0,
             flags: 0x0,
             proto: ETHER_TYPE_ETHER.to_be_bytes(),
@@ -306,10 +311,6 @@ impl Default for GeneveHdrRaw {
 impl From<&GeneveMeta> for GeneveHdrRaw {
     fn from(meta: &GeneveMeta) -> Self {
         Self {
-            src_port: meta.entropy.to_be_bytes(),
-            dst_port: GENEVE_PORT.to_be_bytes(),
-            length: meta.len.to_be_bytes(),
-            csum: [0; 2],
             ver_opt_len: (meta.options_len() >> GENEVE_OPT_LEN_SCALE_SHIFT)
                 as u8,
             flags: 0x0,
@@ -504,7 +505,6 @@ mod test {
         let geneve = GeneveMeta {
             entropy: 7777,
             vni: Vni::new(1234u32).unwrap(),
-            len: GeneveHdr::BASE_SIZE as u16,
 
             ..Default::default()
         };
@@ -512,8 +512,10 @@ mod test {
         let len = geneve.hdr_len();
         let mut pkt = Packet::alloc_and_expand(len);
         let mut wtr = pkt.seg0_wtr();
-        // geneve.emit(&mut wtr).unwrap();
-        geneve.emit(wtr.slice_mut(len).unwrap());
+        geneve.emit(
+            geneve.hdr_len().try_into().unwrap(),
+            wtr.slice_mut(len).unwrap(),
+        );
         assert_eq!(len, pkt.len());
         #[rustfmt::skip]
         let expected_bytes = vec![
@@ -542,15 +544,16 @@ mod test {
         let geneve = GeneveMeta {
             entropy: 7777,
             vni: Vni::new(1234u32).unwrap(),
-            len: (GeneveHdr::BASE_SIZE + GeneveOptHdrRaw::SIZE) as u16,
             oxide_external_pkt: true,
         };
 
         let len = geneve.hdr_len();
         let mut pkt = Packet::alloc_and_expand(len);
         let mut wtr = pkt.seg0_wtr();
-        // geneve.emit(&mut wtr).unwrap();
-        geneve.emit(wtr.slice_mut(len).unwrap());
+        geneve.emit(
+            geneve.hdr_len().try_into().unwrap(),
+            wtr.slice_mut(len).unwrap(),
+        );
         assert_eq!(len, pkt.len());
         #[rustfmt::skip]
         let expected_bytes = vec![
@@ -612,11 +615,12 @@ mod test {
         ];
         let mut pkt = Packet::copy(&buf);
         let mut reader = pkt.get_rdr_mut();
+        let udp = UdpHdr::parse(&mut reader).unwrap();
         let header = GeneveHdr::parse(&mut reader).unwrap();
 
         // Previously, the `Ipv6Meta::total_len` method double-counted the
         // extension header length. Assert we don't do that here.
-        let meta = GeneveMeta::from(&header);
+        let meta = GeneveMeta::from((&udp, &header));
         assert_eq!(
             meta.entropy,
             u16::from_be_bytes(buf[0..2].try_into().unwrap())
@@ -657,6 +661,7 @@ mod test {
         ];
         let mut pkt = Packet::copy(&buf);
         let mut reader = pkt.get_rdr_mut();
+        UdpHdr::parse(&mut reader).unwrap();
         assert!(matches!(
             GeneveHdr::parse(&mut reader),
             Err(GeneveHdrError::BadLength { .. }),
@@ -694,6 +699,7 @@ mod test {
         ];
         let mut pkt = Packet::copy(&buf);
         let mut reader = pkt.get_rdr_mut();
+        UdpHdr::parse(&mut reader).unwrap();
         assert!(matches!(
             GeneveHdr::parse(&mut reader),
             Err(GeneveHdrError::UnknownCriticalOption {
@@ -752,11 +758,12 @@ mod test {
         ];
         let mut pkt = Packet::copy(&buf);
         let mut reader = pkt.get_rdr_mut();
+        let udp = UdpHdr::parse(&mut reader).unwrap();
         let header = GeneveHdr::parse(&mut reader).unwrap();
 
         // Previously, the `Ipv6Meta::total_len` method double-counted the
         // extension header length. Assert we don't do that here.
-        let meta = GeneveMeta::from(&header);
+        let meta = GeneveMeta::from((&udp, &header));
         assert_eq!(
             meta.entropy,
             u16::from_be_bytes(buf[0..2].try_into().unwrap())

@@ -25,6 +25,7 @@ use super::ether::EtherMeta;
 use super::geneve::GeneveHdr;
 use super::geneve::GeneveHdrError;
 use super::geneve::GeneveMeta;
+use super::geneve::GENEVE_PORT;
 use super::headers::EncapMeta;
 use super::headers::IpAddr;
 use super::headers::IpMeta;
@@ -759,6 +760,28 @@ impl Packet<Initialized> {
     pub fn parse_geneve<'a>(
         rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<GeneveMeta>, GeneveHdr<'a>), ParseError> {
+        // We don't need to store the UDP metadata here because any
+        // relevant fields can be reconstructed from knowledge of the
+        // packet body and the encap itself.
+        let udp_hdr = UdpHdr::parse(rdr)?;
+
+        match udp_hdr.dst_port() {
+            GENEVE_PORT => {
+                let geneve = GeneveHdr::parse(rdr)?;
+                let offset = HdrOffset::new(
+                    rdr.offset(),
+                    geneve.hdr_len() + udp_hdr.hdr_len(),
+                );
+                let meta = GeneveMeta::from((&udp_hdr, &geneve));
+                Ok((HdrInfo { meta, offset }, geneve))
+            }
+            port => Err(ParseError::UnexpectedDestPort(port)),
+        }
+    }
+
+    pub fn parse_geneve_inner<'a>(
+        rdr: &mut PacketReaderMut<'a>,
+    ) -> Result<(HdrInfo<GeneveMeta>, GeneveHdr<'a>), ParseError> {
         let geneve = GeneveHdr::parse(rdr)?;
         let offset = HdrOffset::new(rdr.offset(), geneve.hdr_len());
         let meta = GeneveMeta::from(&geneve);
@@ -801,9 +824,24 @@ impl Packet<Initialized> {
             // the payload length.
             // If there's no ULP, just return the L3 payload length.
             Some(IpMeta::Ip4(ip4)) => {
-                usize::from(ip4.total_len) - ip4.hdr_len() - ulp_hdr_len
+                // Total length here refers to the n_bytes in this packet,
+                // so we won't get bogus overly long values in case of
+                // fragmentation.
+                let expected = ip4.hdr_len() + ulp_hdr_len;
+
+                usize::from(ip4.total_len).checked_sub(expected).ok_or(
+                    ParseError::BadInnerIpLen {
+                        expected,
+                        actual: usize::from(ip4.total_len),
+                    },
+                )?
             }
-            Some(IpMeta::Ip6(ip6)) => usize::from(ip6.pay_len) - ulp_hdr_len,
+            Some(IpMeta::Ip6(ip6)) => usize::from(ip6.pay_len)
+                .checked_sub(ulp_hdr_len)
+                .ok_or(ParseError::BadInnerIpLen {
+                    expected: ulp_hdr_len,
+                    actual: usize::from(ip6.pay_len),
+                })?,
 
             // If there's no IP metadata, we fallback to considering any
             // remaining bytes in the packet buffer to be the body.
@@ -1661,8 +1699,11 @@ impl Packet<Parsed> {
 
         match meta.encap.as_mut() {
             Some(EncapMeta::Geneve(geneve)) => {
-                geneve.len = (new_pkt_len - pkt_offset) as u16;
-                geneve.emit(wtr.slice_mut(geneve.hdr_len())?);
+                geneve.emit(
+                    (new_pkt_len - pkt_offset) as u16,
+                    wtr.slice_mut(geneve.hdr_len())?,
+                );
+                // geneve.emit(wtr.slice_mut(geneve.hdr_len())?);
                 offsets.ip = Some(HdrOffset {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
@@ -2290,6 +2331,8 @@ pub enum ParseError {
     #[leaf]
     UnexpectedProtocol(Protocol),
     #[leaf]
+    UnexpectedDestPort(u16),
+    #[leaf]
     UnsupportedProtocol(Protocol),
 }
 
@@ -2307,6 +2350,9 @@ impl ParseError {
             Self::UnsupportedEtherType(eth) => data[0] = *eth as u64,
             Self::UnexpectedProtocol(proto) => {
                 data[0] = u8::from(*proto).into()
+            }
+            Self::UnexpectedDestPort(port) => {
+                data[0] = (*port).into()
             }
             Self::UnsupportedProtocol(proto) => {
                 data[0] = u8::from(*proto).into()
