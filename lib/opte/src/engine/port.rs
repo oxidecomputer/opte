@@ -1300,6 +1300,7 @@ impl<N: NetworkImpl> Port<N> {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum TcpMaybeClosed {
     Closed { ufid_inbound: Option<InnerFlowId> },
