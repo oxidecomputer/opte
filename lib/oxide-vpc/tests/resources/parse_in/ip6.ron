@@ -1,0 +1,6 @@
+{
+	"ddm-small-len": (
+		description: "Incorrect DDM extension length handling leads to underflow.",
+		packet: "crash-e5000c291b7eec7b56d08822d4b3315cc667dbee"
+	)
+}

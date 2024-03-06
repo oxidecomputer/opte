@@ -823,9 +823,24 @@ impl Packet<Initialized> {
             // the payload length.
             // If there's no ULP, just return the L3 payload length.
             Some(IpMeta::Ip4(ip4)) => {
-                usize::from(ip4.total_len) - ip4.hdr_len() - ulp_hdr_len
+                // Total length here refers to the n_bytes in this packet,
+                // so we won't get bogus overly long values in case of
+                // fragmentation.
+                let expected = ip4.hdr_len() + ulp_hdr_len;
+
+                usize::from(ip4.total_len).checked_sub(expected).ok_or(
+                    ParseError::BadInnerIpLen {
+                        expected,
+                        actual: usize::from(ip4.total_len),
+                    },
+                )?
             }
-            Some(IpMeta::Ip6(ip6)) => usize::from(ip6.pay_len) - ulp_hdr_len,
+            Some(IpMeta::Ip6(ip6)) => usize::from(ip6.pay_len)
+                .checked_sub(ulp_hdr_len)
+                .ok_or(ParseError::BadInnerIpLen {
+                    expected: ulp_hdr_len,
+                    actual: usize::from(ip6.pay_len),
+                })?,
 
             // If there's no IP metadata, we fallback to considering any
             // remaining bytes in the packet buffer to be the body.

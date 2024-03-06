@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! IPv4 headers.
 
@@ -359,17 +359,29 @@ impl<'a> Ipv4Hdr<'a> {
         let src = rdr.slice_mut(Ipv4HdrRaw::SIZE)?;
         let ip = Self { bytes: Ipv4HdrRaw::new_mut(src)? };
 
-        if ip.hdr_len() < 20 {
-            return Err(Ipv4HdrError::HeaderTruncated {
-                hdr_len: ip.hdr_len(),
-            });
+        match ip.version() {
+            4 => {}
+            vsn => return Err(Ipv4HdrError::BadVersion { vsn }),
         }
 
-        if ip.total_len() < ip.hdr_len() {
+        let hdr_len = ip.hdr_len();
+
+        if (hdr_len as usize) < Ipv4HdrRaw::SIZE {
+            return Err(Ipv4HdrError::HeaderTruncated { hdr_len });
+        }
+
+        if ip.total_len() < hdr_len {
             return Err(Ipv4HdrError::BadTotalLen {
                 total_len: ip.total_len(),
             });
         }
+
+        // TODO: actually capture and re-emit ipv4 options.
+        //       before, they were accidentally *becoming* the ULP.
+        //       now, we're at least skipping them.
+        let remaining_bytes = (hdr_len as usize) - Ipv4HdrRaw::SIZE;
+        rdr.seek(remaining_bytes)
+            .map_err(|_| Ipv4HdrError::HeaderTruncated { hdr_len })?;
 
         let _proto = Protocol::from(ip.bytes.proto);
 
@@ -436,6 +448,12 @@ impl<'a> Ipv4Hdr<'a> {
     #[inline]
     pub fn ulp_len(&self) -> u16 {
         self.total_len() - self.hdr_len()
+    }
+
+    /// Return the reported IP version field from the packet.
+    #[inline]
+    pub fn version(&self) -> u8 {
+        self.bytes.ver_hdr_len >> IPV4_HDR_VER_SHIFT
     }
 }
 
