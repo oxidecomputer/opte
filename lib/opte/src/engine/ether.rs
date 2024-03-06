@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Ethernet frames.
 
@@ -11,6 +11,7 @@ use super::headers::PushAction;
 use super::headers::RawHeader;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use crate::d_error::DError;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -293,15 +294,27 @@ impl<'a> EtherHdr<'a> {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, DError)]
+#[derror(leaf_data = EtherHdrError::derror_data)]
 pub enum EtherHdrError {
-    ReadError { error: ReadErr },
+    ReadError(ReadErr),
     UnsupportedEtherType { ether_type: u16 },
+}
+
+impl EtherHdrError {
+    fn derror_data(&self, data: &mut [u64]) {
+        match self {
+            Self::UnsupportedEtherType { ether_type } => {
+                data[0] = *ether_type as u64;
+            }
+            _ => {}
+        }
+    }
 }
 
 impl From<ReadErr> for EtherHdrError {
     fn from(error: ReadErr) -> Self {
-        EtherHdrError::ReadError { error }
+        EtherHdrError::ReadError(error)
     }
 }
 
@@ -312,7 +325,7 @@ impl Display for EtherHdrError {
                 write!(f, "Unsupported Ether Type: 0x{:04X}", ether_type)
             }
 
-            Self::ReadError { error } => {
+            Self::ReadError(error) => {
                 write!(f, "read error: {:?}", error)
             }
         }

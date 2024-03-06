@@ -13,6 +13,7 @@ use super::ip4::Protocol;
 pub use super::ip4::UlpCsumOpt;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use crate::d_error::DError;
 use crate::engine::predicate::MatchExact;
 use crate::engine::predicate::MatchExactVal;
 use crate::engine::predicate::MatchPrefix;
@@ -480,13 +481,24 @@ impl From<IpProtocol> for V6ExtClass {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DError)]
+#[derror(leaf_data = Ipv6HdrError::derror_data)]
 pub enum Ipv6HdrError {
     BadVersion { vsn: u8 },
-    ReadError { error: ReadErr },
+    ReadError(ReadErr),
     UnexpectedNextHeader { next_header: u8 },
     Malformed,
     ExtensionsTooLarge,
+}
+
+impl Ipv6HdrError {
+    fn derror_data(&self, data: &mut [u64]) {
+        data[0] = match self {
+            Self::BadVersion { vsn } => *vsn as u64,
+            Self::UnexpectedNextHeader { next_header } => *next_header as u64,
+            _ => 0,
+        }
+    }
 }
 
 impl From<smoltcp::wire::Error> for Ipv6HdrError {
@@ -497,7 +509,7 @@ impl From<smoltcp::wire::Error> for Ipv6HdrError {
 
 impl From<ReadErr> for Ipv6HdrError {
     fn from(error: ReadErr) -> Self {
-        Ipv6HdrError::ReadError { error }
+        Ipv6HdrError::ReadError(error)
     }
 }
 

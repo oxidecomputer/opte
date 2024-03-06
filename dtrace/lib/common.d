@@ -46,3 +46,10 @@ typedef struct opte_cmd_ioctl {
 	size_t			resp_len;
 	size_t			resp_len_actual;
 } opte_cmd_ioctl_t;
+
+typedef struct derror_sdt_arg {
+    size_t len;
+    uint8_t truncated;
+    uint64_t data[2];
+    char* entry[8];
+} derror_sdt_arg_t;

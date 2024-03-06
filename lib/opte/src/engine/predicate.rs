@@ -595,20 +595,17 @@ impl DataPredicate {
                 let pkt = match DhcpPacket::new_checked(&bytes) {
                     Ok(v) => v,
                     Err(e) => {
-                        super::err(format!(
+                        super::err!(
                             "DhcpPacket::new_checked() failed: {:?}",
                             e
-                        ));
+                        );
                         return false;
                     }
                 };
                 let dhcp = match DhcpRepr::parse(&pkt) {
                     Ok(v) => v,
                     Err(e) => {
-                        super::err(format!(
-                            "DhcpRepr::parse() failed: {:?}",
-                            e
-                        ));
+                        super::err!("DhcpRepr::parse() failed: {:?}", e);
 
                         return false;
                     }
@@ -640,9 +637,9 @@ impl DataPredicate {
                     rdr.seek_back(1).expect("Failed to seek back");
                     mt.is_match(&buf[0].into())
                 } else {
-                    super::err(String::from(
-                        "Failed to read DHCPv6 message type from packet",
-                    ));
+                    super::err!(
+                        "Failed to read DHCPv6 message type from packet"
+                    );
                     false
                 }
             }

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! TCP headers.
 
@@ -16,6 +16,7 @@ use super::headers::RawHeader;
 use super::headers::UlpMetaModify;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;
 use opte_api::DYNAMIC_PORT;
@@ -337,7 +338,7 @@ impl<'a> TcpHdr<'a> {
             match rdr.slice_mut(opts_len) {
                 Ok(opts) => hdr.options = Some(opts),
                 Err(e) => {
-                    return Err(TcpHdrError::TruncatedOptions { error: e });
+                    return Err(TcpHdrError::TruncatedOptions(e));
                 }
             }
         }
@@ -366,20 +367,35 @@ impl<'a> TcpHdr<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DError)]
+#[derror(leaf_data = TcpHdrError::derror_data)]
 pub enum TcpHdrError {
     BadDstPort { dst_port: u16 },
     BadOffset { offset: u8, len_in_bytes: u8 },
     BadSrcPort { src_port: u16 },
-    ReadError { error: ReadErr },
+    ReadError(ReadErr),
     Straddled,
     TruncatedHdr { hdr_len_bytes: usize },
-    TruncatedOptions { error: ReadErr },
+    TruncatedOptions(ReadErr),
+}
+
+impl TcpHdrError {
+    fn derror_data(&self, data: &mut [u64]) {
+        [data[0], data[1]] = match self {
+            Self::BadDstPort { dst_port } => [*dst_port as u64, 0],
+            Self::BadOffset { offset, len_in_bytes } => {
+                [*offset as u64, *len_in_bytes as u64]
+            }
+            Self::BadSrcPort { src_port } => [*src_port as u64, 0],
+            Self::TruncatedHdr { hdr_len_bytes } => [*hdr_len_bytes as u64, 0],
+            _ => [0, 0],
+        }
+    }
 }
 
 impl From<ReadErr> for TcpHdrError {
     fn from(error: ReadErr) -> Self {
-        TcpHdrError::ReadError { error }
+        TcpHdrError::ReadError(error)
     }
 }
 
@@ -688,7 +704,7 @@ mod test {
 
         assert_eq!(
             tcp_hdr_err,
-            TcpHdrError::TruncatedOptions { error: ReadErr::NotEnoughBytes }
+            TcpHdrError::TruncatedOptions(ReadErr::NotEnoughBytes)
         );
     }
 }

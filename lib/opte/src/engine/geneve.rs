@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Geneve headers and their related actions.
 //!
@@ -16,6 +16,7 @@ use super::packet::PacketReadMut;
 use super::packet::ReadErr;
 use super::udp::UdpHdr;
 use super::udp::UdpMeta;
+use crate::d_error::DError;
 use core::mem;
 pub use opte_api::Vni;
 use serde::Deserialize;
@@ -222,20 +223,37 @@ impl<'a> GeneveHdr<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DError)]
+#[derror(leaf_data = GeneveHdrError::derror_data)]
 pub enum GeneveHdrError {
     BadDstPort { dst_port: u16 },
     BadLength { len: u16 },
     BadVersion { vsn: u8 },
     BadVni { vni: u32 },
-    ReadError { error: ReadErr },
+    ReadError(ReadErr),
     UnexpectedProtocol { protocol: u16 },
     UnknownCriticalOption { class: u16, opt_type: u8 },
 }
 
 impl From<ReadErr> for GeneveHdrError {
     fn from(error: ReadErr) -> Self {
-        GeneveHdrError::ReadError { error }
+        GeneveHdrError::ReadError(error)
+    }
+}
+
+impl GeneveHdrError {
+    fn derror_data(&self, data: &mut [u64]) {
+        [data[0], data[1]] = match self {
+            Self::BadDstPort { dst_port } => [*dst_port as u64, 0],
+            Self::BadLength { len } => [*len as u64, 0],
+            Self::BadVersion { vsn } => [*vsn as u64, 0],
+            Self::BadVni { vni } => [*vni as u64, 0],
+            Self::UnexpectedProtocol { protocol } => [*protocol as u64, 0],
+            Self::UnknownCriticalOption { class, opt_type } => {
+                [*class as u64, *opt_type as u64]
+            }
+            _ => [0, 0],
+        }
     }
 }
 

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Integration tests.
 //!
@@ -34,6 +34,7 @@ use opte::engine::headers::UlpMeta;
 use opte::engine::icmp::IcmpHdr;
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip4::Ipv4Hdr;
+use opte::engine::ip4::Ipv4HdrError;
 use opte::engine::ip4::Ipv4Meta;
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Hdr;
@@ -42,7 +43,6 @@ use opte::engine::packet::Initialized;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketRead;
-use opte::engine::packet::ParseError;
 use opte::engine::packet::Parsed;
 use opte::engine::port::ProcessError;
 use opte::engine::tcp::TcpState;
@@ -1851,7 +1851,7 @@ fn bad_ip_len() {
     let res = pkt.parse(Out, VpcParser::new());
     assert_eq!(
         res.err().unwrap(),
-        ParseError::BadHeader("IPv4: BadTotalLen { total_len: 4 }".to_string())
+        Ipv4HdrError::BadTotalLen { total_len: 4 }.into()
     );
 }
 

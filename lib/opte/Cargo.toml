@@ -22,6 +22,7 @@ test-help = []
 usdt = ["std", "dep:usdt"]
 
 [dependencies]
+derror-macro.workspace = true
 illumos-sys-hdrs.workspace = true
 kstat-macro.workspace = true
 opte-api.workspace = true
