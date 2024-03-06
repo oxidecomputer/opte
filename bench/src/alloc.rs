@@ -221,9 +221,9 @@ pub fn new_crit<T: MemMeasure>(val: T) -> Criterion<Local<T>> {
     Criterion::default()
         .with_measurement(Local(val))
         .sample_size(10)
-        .warm_up_time(Duration::from_nanos(1))
-        .measurement_time(Duration::from_micros(10))
-        .nresamples(1)
+        .warm_up_time(Duration::from_micros(100))
+        .measurement_time(Duration::from_micros(1000))
+        .nresamples(1001)
         // There seems to be a bug when all samples have the same value.
         // Equally, all t_tests are getting bogged down between calls...
         .without_plots()

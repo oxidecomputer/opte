@@ -29,7 +29,10 @@ use std::hint::black_box;
 //
 // Timing/memory measurements are selected by `config` in the below
 // `criterion_group!` invocations.
-pub fn block<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
+pub fn block<M: MeasurementInfo + 'static>(
+    c: &mut Criterion<M>,
+    do_parse: bool,
+) {
     let all_tests: Vec<Box<dyn BenchPacket>> = vec![
         Box::new(Dhcp4),
         Box::new(Dhcp6),
@@ -41,10 +44,20 @@ pub fn block<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
 
     for experiment in &all_tests {
         for case in experiment.test_cases() {
-            test_parse(c, &**experiment, &*case);
+            if do_parse {
+                test_parse(c, &**experiment, &*case);
+            }
             test_handle(c, &**experiment, &*case);
         }
     }
+}
+
+pub fn parse_and_process<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
+    block(c, true)
+}
+
+pub fn process_only<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
+    block(c, false)
 }
 
 // Run benchmarks for parsing a given type of packet.
@@ -142,15 +155,15 @@ pub fn test_handle<M: MeasurementInfo + 'static>(
     );
 }
 
-criterion_group!(wall, block);
+criterion_group!(wall, parse_and_process);
 criterion_group!(
     name = alloc;
     config = new_crit(Allocs);
-    targets = block
+    targets = process_only
 );
 criterion_group!(
     name = byte_alloc;
     config = new_crit(BytesAlloced);
-    targets = block
+    targets = process_only
 );
 criterion_main!(wall, alloc, byte_alloc);
