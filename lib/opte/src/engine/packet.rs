@@ -2351,9 +2351,7 @@ impl ParseError {
             Self::UnexpectedProtocol(proto) => {
                 data[0] = u8::from(*proto).into()
             }
-            Self::UnexpectedDestPort(port) => {
-                data[0] = (*port).into()
-            }
+            Self::UnexpectedDestPort(port) => data[0] = (*port).into(),
             Self::UnsupportedProtocol(proto) => {
                 data[0] = u8::from(*proto).into()
             }
