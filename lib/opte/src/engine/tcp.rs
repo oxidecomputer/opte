@@ -8,7 +8,6 @@
 
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
-use super::d_error::DError;
 use super::flow_table::Ttl;
 use super::headers::HeaderActionModify;
 use super::headers::ModifyAction;
@@ -17,6 +16,7 @@ use super::headers::RawHeader;
 use super::headers::UlpMetaModify;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;
 use opte_api::DYNAMIC_PORT;

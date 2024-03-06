@@ -9,7 +9,6 @@
 //! All code under this namespace is guarded by the `engine` feature flag.
 pub mod arp;
 pub mod checksum;
-pub mod d_error;
 pub mod dhcp;
 pub mod dhcpv6;
 #[macro_use]

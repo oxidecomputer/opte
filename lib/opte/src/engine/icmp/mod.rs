@@ -11,10 +11,10 @@ pub mod v6;
 
 use super::checksum::Checksum as OpteCsum;
 use super::checksum::HeaderChecksum;
-use super::d_error::DError;
 use super::headers::RawHeader;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use crate::d_error::DError;
 use crate::engine::ether::EtherHdr;
 use crate::engine::ether::EtherMeta;
 use crate::engine::ether::EtherType;

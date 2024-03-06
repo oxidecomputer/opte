@@ -19,7 +19,6 @@
 use super::arp::ArpHdrError;
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
-use super::d_error::DError;
 use super::ether::EtherHdr;
 use super::ether::EtherHdrError;
 use super::ether::EtherMeta;
@@ -45,6 +44,7 @@ use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6HdrError;
 use super::ip6::Ipv6Meta;
 use super::NetworkParser;
+use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;
 use core::ptr;

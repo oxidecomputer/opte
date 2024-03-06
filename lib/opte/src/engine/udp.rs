@@ -6,7 +6,7 @@
 
 //! UDP headers.
 
-use super::d_error::DError;
+use crate::d_error::DError;
 use crate::engine::checksum::Checksum;
 use crate::engine::checksum::HeaderChecksum;
 use crate::engine::headers::HeaderActionModify;

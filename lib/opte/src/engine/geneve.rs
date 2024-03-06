@@ -8,13 +8,13 @@
 //!
 //! RFC 8926 Geneve: Generic Network Virtualization Encapsulation
 
-use super::d_error::DError;
 use super::ether::ETHER_TYPE_ETHER;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
 use super::headers::RawHeader;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use crate::d_error::DError;
 use core::mem;
 pub use opte_api::Vni;
 use serde::Deserialize;

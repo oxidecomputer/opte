@@ -7,13 +7,13 @@
 //! IPv6 headers.
 
 use super::checksum::Checksum;
-use super::d_error::DError;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
 use super::ip4::Protocol;
 pub use super::ip4::UlpCsumOpt;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use crate::d_error::DError;
 use crate::engine::predicate::MatchExact;
 use crate::engine::predicate::MatchExactVal;
 use crate::engine::predicate::MatchPrefix;

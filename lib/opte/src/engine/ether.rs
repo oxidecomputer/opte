@@ -6,12 +6,12 @@
 
 //! Ethernet frames.
 
-use super::d_error::DError;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
 use super::headers::RawHeader;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use crate::d_error::DError;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;

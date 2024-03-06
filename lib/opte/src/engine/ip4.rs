@@ -8,7 +8,6 @@
 
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
-use super::d_error::DError;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
 use super::headers::RawHeader;
@@ -19,6 +18,7 @@ use super::predicate::MatchExactVal;
 use super::predicate::MatchPrefix;
 use super::predicate::MatchPrefixVal;
 use super::predicate::MatchRangeVal;
+use crate::d_error::DError;
 use alloc::string::String;
 use core::fmt;
 use core::fmt::Debug;

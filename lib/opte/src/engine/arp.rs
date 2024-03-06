@@ -6,7 +6,6 @@
 
 //! ARP headers and data.
 
-use super::d_error::DError;
 use super::ether::EtherHdr;
 use super::ether::EtherMeta;
 use super::ether::EtherType;
@@ -15,6 +14,7 @@ use super::packet::Initialized;
 use super::packet::Packet;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use crate::d_error::DError;
 use core::convert::TryFrom;
 use core::fmt;
 use core::fmt::Display;
