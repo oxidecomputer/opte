@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Integration tests.
 //!
@@ -34,6 +34,7 @@ use opte::engine::headers::UlpMeta;
 use opte::engine::icmp::IcmpHdr;
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip4::Ipv4Hdr;
+use opte::engine::ip4::Ipv4HdrError;
 use opte::engine::ip4::Ipv4Meta;
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Hdr;
@@ -42,11 +43,11 @@ use opte::engine::packet::Initialized;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketRead;
-use opte::engine::packet::ParseError;
 use opte::engine::packet::Parsed;
 use opte::engine::port::ProcessError;
 use opte::engine::tcp::TcpState;
 use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
+use opte::engine::udp::UdpHdr;
 use opte::engine::udp::UdpMeta;
 use opte::engine::Direction;
 use oxide_vpc::api::ExternalIpCfg;
@@ -74,8 +75,7 @@ const IP6_SZ: usize = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE;
 const TCP4_SZ: usize = IP4_SZ + TcpHdr::BASE_SIZE;
 const TCP6_SZ: usize = IP6_SZ + TcpHdr::BASE_SIZE;
 
-// The GeneveHdr includes the UDP header.
-const VPC_ENCAP_SZ: usize = IP6_SZ + GeneveHdr::BASE_SIZE;
+const VPC_ENCAP_SZ: usize = IP6_SZ + UdpHdr::SIZE + GeneveHdr::BASE_SIZE;
 
 // If we are running `cargo test`, then make sure to
 // register the USDT probes before running any tests.
@@ -860,6 +860,7 @@ fn guest_to_internet_ipv6() {
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
+
     assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP6_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt1.body_seg(), 1);
     let meta = pkt1.meta();
@@ -1850,7 +1851,7 @@ fn bad_ip_len() {
     let res = pkt.parse(Out, VpcParser::new());
     assert_eq!(
         res.err().unwrap(),
-        ParseError::BadHeader("IPv4: BadTotalLen { total_len: 4 }".to_string())
+        Ipv4HdrError::BadTotalLen { total_len: 4 }.into()
     );
 }
 

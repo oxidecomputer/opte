@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Types for creating, reading, and writing network packets.
 //!
@@ -25,6 +25,7 @@ use super::ether::EtherMeta;
 use super::geneve::GeneveHdr;
 use super::geneve::GeneveHdrError;
 use super::geneve::GeneveMeta;
+use super::geneve::GENEVE_PORT;
 use super::headers::EncapMeta;
 use super::headers::IpAddr;
 use super::headers::IpMeta;
@@ -44,6 +45,7 @@ use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6HdrError;
 use super::ip6::Ipv6Meta;
 use super::NetworkParser;
+use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;
 use core::ptr;
@@ -758,6 +760,28 @@ impl Packet<Initialized> {
     pub fn parse_geneve<'a>(
         rdr: &mut PacketReaderMut<'a>,
     ) -> Result<(HdrInfo<GeneveMeta>, GeneveHdr<'a>), ParseError> {
+        // We don't need to store the UDP metadata here because any
+        // relevant fields can be reconstructed from knowledge of the
+        // packet body and the encap itself.
+        let udp_hdr = UdpHdr::parse(rdr)?;
+
+        match udp_hdr.dst_port() {
+            GENEVE_PORT => {
+                let geneve = GeneveHdr::parse(rdr)?;
+                let offset = HdrOffset::new(
+                    rdr.offset(),
+                    geneve.hdr_len() + udp_hdr.hdr_len(),
+                );
+                let meta = GeneveMeta::from((&udp_hdr, &geneve));
+                Ok((HdrInfo { meta, offset }, geneve))
+            }
+            port => Err(ParseError::UnexpectedDestPort(port)),
+        }
+    }
+
+    pub fn parse_geneve_inner<'a>(
+        rdr: &mut PacketReaderMut<'a>,
+    ) -> Result<(HdrInfo<GeneveMeta>, GeneveHdr<'a>), ParseError> {
         let geneve = GeneveHdr::parse(rdr)?;
         let offset = HdrOffset::new(rdr.offset(), geneve.hdr_len());
         let meta = GeneveMeta::from(&geneve);
@@ -800,9 +824,24 @@ impl Packet<Initialized> {
             // the payload length.
             // If there's no ULP, just return the L3 payload length.
             Some(IpMeta::Ip4(ip4)) => {
-                usize::from(ip4.total_len) - ip4.hdr_len() - ulp_hdr_len
+                // Total length here refers to the n_bytes in this packet,
+                // so we won't get bogus overly long values in case of
+                // fragmentation.
+                let expected = ip4.hdr_len() + ulp_hdr_len;
+
+                usize::from(ip4.total_len).checked_sub(expected).ok_or(
+                    ParseError::BadInnerIpLen {
+                        expected,
+                        actual: usize::from(ip4.total_len),
+                    },
+                )?
             }
-            Some(IpMeta::Ip6(ip6)) => usize::from(ip6.pay_len) - ulp_hdr_len,
+            Some(IpMeta::Ip6(ip6)) => usize::from(ip6.pay_len)
+                .checked_sub(ulp_hdr_len)
+                .ok_or(ParseError::BadInnerIpLen {
+                    expected: ulp_hdr_len,
+                    actual: usize::from(ip6.pay_len),
+                })?,
 
             // If there's no IP metadata, we fallback to considering any
             // remaining bytes in the packet buffer to be the body.
@@ -1660,8 +1699,11 @@ impl Packet<Parsed> {
 
         match meta.encap.as_mut() {
             Some(EncapMeta::Geneve(geneve)) => {
-                geneve.len = (new_pkt_len - pkt_offset) as u16;
-                geneve.emit(wtr.slice_mut(geneve.hdr_len())?);
+                geneve.emit(
+                    (new_pkt_len - pkt_offset) as u16,
+                    wtr.slice_mut(geneve.hdr_len())?,
+                );
+                // geneve.emit(wtr.slice_mut(geneve.hdr_len())?);
                 offsets.ip = Some(HdrOffset {
                     pkt_pos: pkt_offset,
                     seg_idx: 0,
@@ -2232,14 +2274,14 @@ impl<'a> PacketSegWriter<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, DError)]
 pub enum WrapError {
     /// We tried to wrap a NULL pointer.
     NullPtr,
 }
 
 /// Some functions may return multiple types of errors.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, DError)]
 pub enum PacketError {
     Parse(ParseError),
     Wrap(WrapError),
@@ -2257,19 +2299,66 @@ impl From<WrapError> for PacketError {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, DError)]
+#[derror(leaf_data = ParseError::data)]
 pub enum ParseError {
-    BadHeader(String),
-    BadInnerIpLen { expected: usize, actual: usize },
-    BadInnerUlpLen { expected: usize, actual: usize },
-    BadOuterIpLen { expected: usize, actual: usize },
-    BadOuterUlpLen { expected: usize, actual: usize },
+    BadHeader(HeaderReadErr),
+    BadInnerIpLen {
+        expected: usize,
+        actual: usize,
+    },
+    BadInnerUlpLen {
+        expected: usize,
+        actual: usize,
+    },
+    BadOuterIpLen {
+        expected: usize,
+        actual: usize,
+    },
+    BadOuterUlpLen {
+        expected: usize,
+        actual: usize,
+    },
     BadRead(ReadErr),
-    TruncatedBody { expected: usize, actual: usize },
+    TruncatedBody {
+        expected: usize,
+        actual: usize,
+    },
+    #[leaf]
     UnexpectedEtherType(super::ether::EtherType),
+    #[leaf]
     UnsupportedEtherType(u16),
+    #[leaf]
     UnexpectedProtocol(Protocol),
+    #[leaf]
+    UnexpectedDestPort(u16),
+    #[leaf]
     UnsupportedProtocol(Protocol),
+}
+
+impl ParseError {
+    fn data(&self, data: &mut [u64]) {
+        match self {
+            Self::BadInnerIpLen { expected, actual }
+            | Self::BadInnerUlpLen { expected, actual }
+            | Self::BadOuterIpLen { expected, actual }
+            | Self::BadOuterUlpLen { expected, actual }
+            | Self::TruncatedBody { expected, actual } => {
+                [data[0], data[1]] = [*expected as u64, *actual as u64]
+            }
+            Self::UnexpectedEtherType(eth) => data[0] = u16::from(*eth).into(),
+            Self::UnsupportedEtherType(eth) => data[0] = *eth as u64,
+            Self::UnexpectedProtocol(proto) => {
+                data[0] = u8::from(*proto).into()
+            }
+            Self::UnexpectedDestPort(port) => data[0] = (*port).into(),
+            Self::UnsupportedProtocol(proto) => {
+                data[0] = u8::from(*proto).into()
+            }
+
+            _ => {}
+        }
+    }
 }
 
 impl From<ReadErr> for ParseError {
@@ -2278,55 +2367,66 @@ impl From<ReadErr> for ParseError {
     }
 }
 
-impl From<EtherHdrError> for ParseError {
-    fn from(err: EtherHdrError) -> Self {
-        Self::BadHeader(format!("{}", err))
+impl<T: Into<HeaderReadErr>> From<T> for ParseError {
+    fn from(value: T) -> Self {
+        Self::BadHeader(value.into())
     }
 }
 
-impl From<ArpHdrError> for ParseError {
-    fn from(err: ArpHdrError) -> Self {
-        Self::BadHeader(format!("ARP: {:?}", err))
+#[derive(Clone, Debug, Eq, PartialEq, DError)]
+pub enum HeaderReadErr {
+    EtherHdr(EtherHdrError),
+    ArpHdr(ArpHdrError),
+    GeneveHdr(GeneveHdrError),
+    Ipv4Hdr(Ipv4HdrError),
+    Ipv6Hdr(Ipv6HdrError),
+    IcmpHdr(IcmpHdrError),
+    TcpHdr(TcpHdrError),
+    UdpHdr(UdpHdrError),
+}
+
+impl From<EtherHdrError> for HeaderReadErr {
+    fn from(v: EtherHdrError) -> HeaderReadErr {
+        Self::EtherHdr(v)
+    }
+}
+impl From<ArpHdrError> for HeaderReadErr {
+    fn from(v: ArpHdrError) -> HeaderReadErr {
+        Self::ArpHdr(v)
+    }
+}
+impl From<GeneveHdrError> for HeaderReadErr {
+    fn from(v: GeneveHdrError) -> HeaderReadErr {
+        Self::GeneveHdr(v)
+    }
+}
+impl From<Ipv4HdrError> for HeaderReadErr {
+    fn from(v: Ipv4HdrError) -> HeaderReadErr {
+        Self::Ipv4Hdr(v)
+    }
+}
+impl From<Ipv6HdrError> for HeaderReadErr {
+    fn from(v: Ipv6HdrError) -> HeaderReadErr {
+        Self::Ipv6Hdr(v)
+    }
+}
+impl From<IcmpHdrError> for HeaderReadErr {
+    fn from(v: IcmpHdrError) -> HeaderReadErr {
+        Self::IcmpHdr(v)
+    }
+}
+impl From<TcpHdrError> for HeaderReadErr {
+    fn from(v: TcpHdrError) -> HeaderReadErr {
+        Self::TcpHdr(v)
+    }
+}
+impl From<UdpHdrError> for HeaderReadErr {
+    fn from(v: UdpHdrError) -> HeaderReadErr {
+        Self::UdpHdr(v)
     }
 }
 
-impl From<Ipv4HdrError> for ParseError {
-    fn from(err: Ipv4HdrError) -> Self {
-        Self::BadHeader(format!("IPv4: {:?}", err))
-    }
-}
-
-impl From<Ipv6HdrError> for ParseError {
-    fn from(err: Ipv6HdrError) -> Self {
-        Self::BadHeader(format!("IPv6: {:?}", err))
-    }
-}
-
-impl From<IcmpHdrError> for ParseError {
-    fn from(err: IcmpHdrError) -> Self {
-        Self::BadHeader(format!("ICMPv6: {:?}", err))
-    }
-}
-
-impl From<TcpHdrError> for ParseError {
-    fn from(err: TcpHdrError) -> Self {
-        Self::BadHeader(format!("TCP: {:?}", err))
-    }
-}
-
-impl From<UdpHdrError> for ParseError {
-    fn from(err: UdpHdrError) -> Self {
-        Self::BadHeader(format!("UDP: {:?}", err))
-    }
-}
-
-impl From<GeneveHdrError> for ParseError {
-    fn from(err: GeneveHdrError) -> Self {
-        Self::BadHeader(format!("{:?}", err))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DError)]
 pub enum ReadErr {
     BadLayout,
     EndOfPacket,
@@ -3001,7 +3101,10 @@ mod test {
         let res = pkt.parse(Out, GenericUlp {});
         match res {
             Err(ParseError::BadHeader(msg)) => {
-                assert_eq!(msg, "read error: EndOfPacket");
+                assert_eq!(
+                    msg,
+                    EtherHdrError::ReadError(ReadErr::EndOfPacket).into()
+                );
             }
 
             _ => panic!("expected read error, got: {:?}", res),
@@ -3014,7 +3117,10 @@ mod test {
         let res = pkt2.parse(Out, GenericUlp {});
         match res {
             Err(ParseError::BadHeader(msg)) => {
-                assert_eq!(msg, "read error: EndOfPacket");
+                assert_eq!(
+                    msg,
+                    EtherHdrError::ReadError(ReadErr::EndOfPacket).into()
+                );
             }
 
             _ => panic!("expected read error, got: {:?}", res),

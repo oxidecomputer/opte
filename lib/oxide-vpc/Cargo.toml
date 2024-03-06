@@ -44,4 +44,5 @@ cfg-if.workspace = true
 ctor.workspace = true
 opte-test-utils = { workspace = true, features = ["usdt"] }
 pcap-parser = { workspace = true, features = ["serialize"] }
+ron.workspace = true
 usdt.workspace = true

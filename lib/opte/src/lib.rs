@@ -35,15 +35,14 @@ use core::fmt::Display;
 pub mod api {
     pub use opte_api::*;
 }
-
+#[cfg(any(feature = "engine", test))]
+pub mod d_error;
 #[cfg(any(feature = "engine", test))]
 pub mod ddi;
-
-#[cfg(any(feature = "engine", test))]
-pub mod engine;
-
 #[cfg(any(feature = "engine", test))]
 pub mod dynamic;
+#[cfg(any(feature = "engine", test))]
+pub mod engine;
 
 /// Return value with `bit` set.
 ///

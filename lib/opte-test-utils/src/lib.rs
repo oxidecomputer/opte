@@ -974,6 +974,8 @@ fn _encap(
     dst: TestIpPhys,
     external_snat: bool,
 ) -> Packet<Parsed> {
+    let old_pkt = inner_pkt.all_bytes();
+
     let inner_ip_len = inner_pkt.hdr_offsets().inner.ip.map(|off| off.hdr_len);
 
     let inner_ulp_len =
@@ -990,14 +992,19 @@ fn _encap(
     let geneve = GeneveMeta {
         entropy: 99,
         vni: dst.vni,
-        len: (UdpHdr::SIZE + GeneveHdr::BASE_SIZE + opt_len + inner_len) as u16,
         oxide_external_pkt: external_snat,
     };
+
+    let pay_len: u16 = (inner_len + geneve.hdr_len()).try_into().unwrap();
+    assert_eq!(
+        pay_len as usize,
+        inner_len + UdpHdr::SIZE + GeneveHdr::BASE_SIZE + opt_len
+    );
 
     let ip = Ipv6Meta {
         src: src.ip,
         dst: dst.ip,
-        pay_len: geneve.len,
+        pay_len,
         proto: Protocol::UDP,
         next_hdr: IpProtocol::Udp,
         ..Default::default()
@@ -1011,8 +1018,8 @@ fn _encap(
     let mut wtr = pkt.seg0_wtr();
     eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
     ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-    geneve.emit(wtr.slice_mut(geneve.hdr_len()).unwrap());
-    wtr.write(&inner_pkt.all_bytes()).unwrap();
+    geneve.emit(pay_len, wtr.slice_mut(geneve.hdr_len()).unwrap());
+    wtr.write(&old_pkt).unwrap();
     let pkt = pkt.parse(In, VpcParser::new()).unwrap();
     let off = pkt.hdr_offsets();
     let mut pos = 0;
@@ -1075,6 +1082,9 @@ fn _encap(
             HdrOffset { pkt_pos: pos, seg_idx: 0, seg_pos: pos, hdr_len },
         );
     }
+
+    let new_pkt = pkt.all_bytes();
+    assert_eq!(&new_pkt[new_pkt.len() - old_pkt.len()..], &old_pkt);
 
     pkt
 }

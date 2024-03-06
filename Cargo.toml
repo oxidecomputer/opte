@@ -3,6 +3,7 @@ members = [
   "bench",
   "bin/*",
   "crates/*",
+  "fuzz",
   "lib/*",
   "xde",
   "xde/xde-link",
@@ -23,6 +24,7 @@ repository = "https://github.com/oxidecomputer/opte"
 
 [workspace.dependencies]
 # Internal crates
+derror-macro = { path = "crates/derror-macro" }
 illumos-sys-hdrs = { path = "crates/illumos-sys-hdrs" }
 kstat-macro = { path = "crates/kstat-macro" }
 opte-api = { path = "crates/opte-api", default-features = false }
@@ -45,6 +47,7 @@ clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.5"
 ctor = "0.2"
+darling = "0.20"
 dyn-clone = "1.0"
 heapless = "0.8"
 ipnetwork = { version = "0.20", default-features = false }
@@ -54,8 +57,10 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
 nix = { version = "0.27", features = ["signal", "user"] }
 pcap-parser = "0.15"
 postcard = { version = "1", features = ["alloc"], default-features = false }
-rand = "0.8.5"
+proc-macro2 = { version = "1" }
 quote = "1.0"
+rand = "0.8.5"
+ron = "0.8"
 serde = { version = "1.0", features = ["alloc", "derive"], default-features = false }
 serde_json = { version = "1.0" }
 slog = { version = "2.7", features = ["max_level_trace", "release_max_level_trace"] }
