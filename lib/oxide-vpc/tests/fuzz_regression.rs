@@ -18,8 +18,6 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::Path;
 
-mod common;
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Case {
     description: String,
