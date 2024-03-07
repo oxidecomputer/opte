@@ -1984,6 +1984,7 @@ impl<N: NetworkImpl> Port<N> {
                                 e,
                                 pkt,
                             );
+                            data.uft_in.remove(pkt.flow());
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
@@ -2263,6 +2264,7 @@ impl<N: NetworkImpl> Port<N> {
                                 e,
                                 pkt,
                             );
+                            data.uft_out.remove(pkt.flow());
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
