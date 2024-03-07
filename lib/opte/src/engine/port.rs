@@ -1622,7 +1622,7 @@ impl<N: NetworkImpl> Port<N> {
                 self.uft_tcp_closed(data, ufid_out, state_ufid.as_ref());
             }
 
-            ufid_in.map(|v| *v).and(state_ufid)
+            ufid_in.copied().or(state_ufid)
         } else {
             None
         };
@@ -2081,8 +2081,7 @@ impl<N: NetworkImpl> Port<N> {
                 Ok(a) => Ok(TcpMaybeClosed::NewState(a)),
                 Err(e) => Err(e),
             },
-            Ok(v) => Ok(v.into()),
-            Err(e) => Err(e),
+            other => other,
         }
     }
 
