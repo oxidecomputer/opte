@@ -179,7 +179,7 @@ pub fn build_flamegraph(
     let fold_path = out_dir.as_ref().join("stacks.folded");
     let fold_space = File::create(&fold_path)?;
 
-    let stack_status = Command::new("stackcollapse.pl")
+    let stack_status = Command::new("/opt/ooce/sbin/stackcollapse.pl")
         .arg(stack_file.as_ref().as_os_str())
         .stdout(Stdio::from(fold_space))
         .status()?;
@@ -213,7 +213,7 @@ pub fn build_flamegraph(
 
         let flame_name = out_dir.as_ref().join(format!("{out_name}.svg"));
         let flame_file = File::create(&flame_name)?;
-        let flame_status = Command::new("flamegraph.pl")
+        let flame_status = Command::new("/opt/ooce/sbin/flamegraph.pl")
             .args(["--title", &config.title()])
             .args(["--subtitle", &format!("Stacks containing: {tracked_fn}")])
             .args(["--fonttype", "Berkeley Mono,Fira Mono,monospace"])

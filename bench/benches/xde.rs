@@ -228,8 +228,8 @@ fn check_deps(process_flamegraph: bool, iperf_based: bool) -> Result<()> {
     let mut dep_map = vec![];
     if process_flamegraph {
         dep_map.extend_from_slice(&[
-            (Dep::Program, "stackcollapse.pl", "flamegraph"),
-            (Dep::Program, "flamegraph.pl", "flamegraph"),
+            (Dep::Program, "/opt/ooce/sbin/stackcollapse.pl", "flamegraph"),
+            (Dep::Program, "/opt/ooce/sbin/flamegraph.pl", "flamegraph"),
             (Dep::Program, "demangle", "demangle"),
         ]);
     }
