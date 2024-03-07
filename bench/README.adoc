@@ -26,6 +26,7 @@ They require that:
 
  * you are running on an up-to-date Helios instance.
  * the XDE kernel module and `opteadm` are installed, either via IPS or the `cargo xtask install` command.
+ * you have installed the IPS packages `flamegraph`, `demangle`, `iperf` and `sparse`.
 
 They implement zont-to-zone iperf traffic in two scenarios:
 
@@ -37,7 +38,9 @@ They implement zont-to-zone iperf traffic in two scenarios:
    One zone will be created on each machine (running an iperf server and client respectively), using the shared lab/home network to exchange link local addresses.
 
 Below you can find a lab setup which suffices for the second option.
-Currently, linklocals must be created with the name syntax `igbx/ll`: this can be done using, e.g., `pfexec ipadm create-addr igb0/ll -T addrconf`.
+Currently, linklocals must be created with the name syntax `<nic>/ll`: this can be done using, e.g., `pfexec ipadm create-addr igb0/ll -T addrconf`.
+The benchmark defaults to using the NICs `igb0` and `igb1`, and can be overridden to match your setup using the `--underlay-nics` option.
+E.g., when testing over a Chelsio NIC `--underlay-nics cxgbe0 cxgbe1` will select these devices and use the link-local addresses `cxgbe0/ll` and `cxgbe1/ll`.
 Additionally, MTUs should be set to `9000` for physical underlay links.
 
 [source]
