@@ -289,6 +289,7 @@ fn raw_install() -> Result<()> {
     link_dir.extend(&[LINK_TARGET, "release", "libxde_link.so"]);
 
     std::fs::copy(kmod_dir, "/kernel/drv/amd64/xde")?;
+    std::fs::create_dir_all("/opt/oxide/opte/bin")?;
     std::fs::copy(opteadm_dir, "/opt/oxide/opte/bin/opteadm")?;
     std::fs::copy(link_dir, "/usr/lib/devfsadm/linkmod/SUNW_xde_link.so")?;
 
