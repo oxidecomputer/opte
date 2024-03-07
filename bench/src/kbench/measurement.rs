@@ -51,9 +51,7 @@ pub fn run_local_dtraces(
 
     // Default dtrace behaviour here is to append; which we don't want.
     let histo_path = out_dir.join("histos.out");
-    if let Err(e) = fs::remove_file(&histo_path) {
-        eprintln!("Failed to remove {histo_path:?}: {e}");
-    }
+    let _ = fs::remove_file(&histo_path);
     let Some(histo_path_str) = histo_path.to_str() else {
         anyhow::bail!("Illegal utf8 in histogram path.")
     };
@@ -68,9 +66,7 @@ pub fn run_local_dtraces(
 
     // Ditto for stack tracing.
     let stack_path = out_dir.join("raw.stacks");
-    if let Err(e) = fs::remove_file(&stack_path) {
-        eprintln!("Failed to remove {stack_path:?}: {e}");
-    }
+    let _ = fs::remove_file(&stack_path);
     let Some(stack_path_str) = stack_path.to_str() else {
         anyhow::bail!("Illegal utf8 in histogram path.")
     };
@@ -94,9 +90,7 @@ pub fn run_local_lockstat(
 
     // Default dtrace behaviour here is to append; which we don't want.
     let out_path = out_dir.join("lockstat.out");
-    if let Err(e) = fs::remove_file(&out_path) {
-        eprintln!("Failed to remove {out_path:?}: {e}");
-    }
+    let _ = fs::remove_file(&out_path);
     let Some(out_path_str) = out_path.to_str() else {
         anyhow::bail!("Illegal utf8 in histogram path.")
     };
