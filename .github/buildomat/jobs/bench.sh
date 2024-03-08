@@ -11,7 +11,7 @@
 #: [[publish]]
 #: series = "benchmark" 
 #: name = "bench-results.tgz"
-#: from_output = "/work/bench_results.tgz"
+#: from_output = "/work/bench-results.tgz"
 #:
 #: [dependencies.xde]
 #: job = "opte-xde"
@@ -79,9 +79,12 @@ if [[ $GITHUB_BRANCH == "master" ]]; then
 fi
 
 # XXX: TEMP - test rest of machinery
-BASELINE_COMMIT=08c5b9f8da2aff49124653464ee4750079c85093
+BASELINE_COMMIT=0a490da21eaa76a225bcb2e566ed2dfd5a101c57
 
-if get_artifact opte benchmark $BASELINE_COMMIT bench-results.tgz; then
+# `if get_artifact` leads to my own helios bash playing nice, while
+# buildomat claims the return code 22 is not a number.
+get_artifact opte benchmark $BASELINE_COMMIT bench-results.tgz
+if [[ $? -eq "0" ]]; then
     # Illumos tar seems to lack --strip/--strip-components.
     tar -xf download/bench-results.tgz -C target
     mv target/bench-results/* target/
