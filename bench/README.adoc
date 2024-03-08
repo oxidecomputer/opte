@@ -15,7 +15,7 @@ To see a clean list of available benchmarks, use the `cargo ubench --list 2> /de
 
 Benchmarks are split into several categories:
 
- * Metric: `wallclock`, `alloc_ct`, `alloc_sz.
+ * Metric: `wallclock`, `alloc_ct`, `alloc_sz`.
  * Action: `parse`, `process`.
  * Packet family.
 
