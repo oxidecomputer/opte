@@ -55,12 +55,14 @@ impl Add<Duration> for Moment {
 impl Moment {
     /// Compute the delta between `now - self` and return as
     /// milliseconds.
+    ///
+    /// Saturates to zero if `earlier` is later than `self`.
     pub fn delta_as_millis(&self, earlier: Moment) -> u64 {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                (self.inner as u64 - earlier.inner as u64) / NANOS_TO_MILLIS
+                (self.inner as u64).saturating_sub(earlier.inner as u64) / NANOS_TO_MILLIS
             } else {
-                let delta = self.inner.duration_since(earlier.inner);
+                let delta = self.inner.saturating_duration_since(earlier.inner);
                 delta.as_secs() * MILLIS + delta.subsec_millis() as u64
             }
         }
@@ -72,6 +74,19 @@ impl Moment {
                 Self { inner: unsafe { ddi::gethrtime() } }
             } else {
                 Self { inner: Instant::now() }
+            }
+        }
+    }
+
+    /// Return the underlying timestamp for debugging purposes
+    /// if supported on the current platform.
+    #[allow(dead_code)]
+    pub(crate) fn raw_millis(&self) -> Option<u64> {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                Some(self.inner as u64 / NANOS_TO_MILLIS)
+            } else {
+                None
             }
         }
     }

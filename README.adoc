@@ -1,9 +1,38 @@
 = Oxide Packet Transformation Engine
 
+== Installation
+On helios systems, OPTE can be built and installed using the `cargo xtask install` command.
+
+For ease of development, the above command will bypass `pkg`. OPTE can instead be installed from a new IPS package using `cargo xtask install --from-package`, which may require the `--force-package-unfreeze` flag if OPTE has been installed as a prerequisite for omicron.
+
 == Contributing
 
 Please see the xref:CONTRIBUTING.adoc[CONTRIBUTING] doc if you are
 interested in contributing to the project.
+
+== Tests and performance
+
+While the XDE kernel module runs only on Helios, our test suite and microbenchmarks work on Unix-like development systems.
+
+[%header,cols="1,1"]
+|===
+| Helios
+| Linux/Mac/...
+
+| `cargo nextest run`
+| `cargo nextest run -p opte -p opte-api -p oxide-vpc`
+
+| `cargo build -p xde-tests --tests`, `pfexec target/debug/deps/loopback-<hash>`
+| N/A
+
+| `cargo ubench`
+| `cargo ubench`
+
+| `cargo kbench`
+| N/A
+|===
+
+More detail on our benchmarks can be found in xref:bench/README.adoc[bench/README].
 
 == Relevant RFDs and Inspiration
 

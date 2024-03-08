@@ -2,13 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Common routines for integration tests.
 
-// This type of pedantry is more trouble than its worth here.
+// This type of pedantry is more trouble than it's worth here.
 #![allow(dead_code)]
 
+pub mod dhcp;
 pub mod icmp;
 pub mod pcap;
 #[macro_use]
@@ -17,8 +18,6 @@ pub mod port_state;
 // Let's make our lives easier and pub use a bunch of stuff.
 pub use opte::api::Direction::*;
 pub use opte::api::MacAddr;
-pub use opte::ddi::sync::KRwLock;
-pub use opte::engine::checksum::HeaderChecksum;
 pub use opte::engine::ether::EtherHdr;
 pub use opte::engine::ether::EtherMeta;
 pub use opte::engine::ether::EtherType;
@@ -27,18 +26,14 @@ pub use opte::engine::geneve::GeneveMeta;
 pub use opte::engine::geneve::GeneveOption;
 pub use opte::engine::geneve::OxideOption;
 pub use opte::engine::geneve::Vni;
-pub use opte::engine::geneve::GENEVE_PORT;
 pub use opte::engine::headers::IpAddr;
 pub use opte::engine::headers::IpCidr;
-pub use opte::engine::headers::IpHdr;
 pub use opte::engine::headers::IpMeta;
-pub use opte::engine::headers::UlpHdr;
 pub use opte::engine::headers::UlpMeta;
 pub use opte::engine::ip4::Ipv4Addr;
 pub use opte::engine::ip4::Ipv4Hdr;
 pub use opte::engine::ip4::Ipv4Meta;
 pub use opte::engine::ip4::Protocol;
-pub use opte::engine::ip4::UlpCsumOpt;
 pub use opte::engine::ip6::Ipv6Addr;
 pub use opte::engine::ip6::Ipv6Hdr;
 pub use opte::engine::ip6::Ipv6Meta;
@@ -47,7 +42,6 @@ pub use opte::engine::packet::BodyInfo;
 pub use opte::engine::packet::HdrOffset;
 pub use opte::engine::packet::Initialized;
 pub use opte::engine::packet::Packet;
-pub use opte::engine::packet::PacketSeg;
 pub use opte::engine::packet::Parsed;
 pub use opte::engine::port::meta::ActionMeta;
 pub use opte::engine::port::DropReason;
@@ -63,8 +57,8 @@ pub use opte::engine::udp::UdpMeta;
 pub use opte::engine::GenericUlp;
 pub use opte::ExecCtx;
 pub use oxide_vpc::api::AddFwRuleReq;
-pub use oxide_vpc::api::BoundaryServices;
 pub use oxide_vpc::api::DhcpCfg;
+pub use oxide_vpc::api::ExternalIpCfg;
 pub use oxide_vpc::api::IpCfg;
 pub use oxide_vpc::api::Ipv4Cfg;
 pub use oxide_vpc::api::Ipv6Cfg;
@@ -73,17 +67,21 @@ pub use oxide_vpc::api::RouterTarget;
 pub use oxide_vpc::api::SNat4Cfg;
 pub use oxide_vpc::api::SNat6Cfg;
 pub use oxide_vpc::api::SetFwRulesReq;
+pub use oxide_vpc::api::TunnelEndpoint;
 pub use oxide_vpc::api::VpcCfg;
+pub use oxide_vpc::api::GW_MAC_ADDR;
 pub use oxide_vpc::engine::firewall;
 pub use oxide_vpc::engine::gateway;
 pub use oxide_vpc::engine::nat;
 pub use oxide_vpc::engine::overlay;
+pub use oxide_vpc::engine::overlay::Virt2Boundary;
 pub use oxide_vpc::engine::overlay::Virt2Phys;
 pub use oxide_vpc::engine::overlay::VpcMappings;
+use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
+use oxide_vpc::engine::overlay::TUNNEL_ENDPOINT_MAC;
 pub use oxide_vpc::engine::router;
 pub use oxide_vpc::engine::VpcNetwork;
 pub use oxide_vpc::engine::VpcParser;
-pub use pcap::*;
 pub use port_state::*;
 pub use smoltcp::wire::IpProtocol;
 pub use std::num::NonZeroU32;
@@ -95,9 +93,10 @@ pub use std::sync::Arc;
 pub const VPC_LAYERS: [&str; 5] =
     ["gateway", "firewall", "router", "nat", "overlay"];
 
-// This is the MAC address that OPTE uses to act as the virtual gateway.
-pub const GW_MAC_ADDR: MacAddr =
-    MacAddr::from_const([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]);
+pub const BS_MAC_ADDR: MacAddr = MacAddr::from_const(TUNNEL_ENDPOINT_MAC);
+
+pub const BS_IP_ADDR: Ipv6Addr =
+    Ipv6Addr::from_const([0xfd00, 0x99, 0, 0, 0, 0, 0, 1]);
 
 const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 const TCP_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
@@ -130,21 +129,27 @@ pub fn g1_cfg() -> VpcCfg {
             vpc_subnet: "172.30.0.0/22".parse().unwrap(),
             private_ip: "172.30.0.5".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
-            snat: Some(SNat4Cfg {
-                external_ip: "10.77.77.13".parse().unwrap(),
-                ports: 1025..=4096,
-            }),
-            external_ips: None,
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat4Cfg {
+                    external_ip: "10.77.77.13".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
             private_ip: "fd00::5".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
-            snat: Some(SNat6Cfg {
-                external_ip: "2001:db8::1".parse().unwrap(),
-                ports: 4097..=8192,
-            }),
-            external_ips: None,
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat6Cfg {
+                    external_ip: "2001:db8::1".parse().unwrap(),
+                    ports: 4097..=8192,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
         },
     };
     g1_cfg2(ip_cfg)
@@ -160,14 +165,6 @@ pub fn g1_cfg2(ip_cfg: IpCfg) -> VpcCfg {
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
-        boundary_services: BoundaryServices {
-            mac: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-            ip: Ipv6Addr::from([
-                0xFD, 0x00, 0x99, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-            ]),
-            vni: Vni::new(99u32).unwrap(),
-        },
     }
 }
 
@@ -177,21 +174,27 @@ pub fn g2_cfg() -> VpcCfg {
             vpc_subnet: "172.30.0.0/22".parse().unwrap(),
             private_ip: "172.30.0.6".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
-            snat: Some(SNat4Cfg {
-                external_ip: "10.77.77.23".parse().unwrap(),
-                ports: 4097..=8192,
-            }),
-            external_ips: None,
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat4Cfg {
+                    external_ip: "10.77.77.23".parse().unwrap(),
+                    ports: 4097..=8192,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
             private_ip: "fd00::6".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
-            snat: Some(SNat6Cfg {
-                external_ip: "2001:db8::1".parse().unwrap(),
-                ports: 1025..=4096,
-            }),
-            external_ips: None,
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat6Cfg {
+                    external_ip: "2001:db8::1".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
         },
     };
     VpcCfg {
@@ -203,23 +206,17 @@ pub fn g2_cfg() -> VpcCfg {
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
-        boundary_services: BoundaryServices {
-            mac: MacAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77]),
-            ip: Ipv6Addr::from([
-                0xFD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0xFF, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x77, 0x77,
-            ]),
-            vni: Vni::new(99u32).unwrap(),
-        },
     }
 }
 
 fn oxide_net_builder(
     name: &str,
-    cfg: &VpcCfg,
+    cfg: &oxide_vpc::cfg::VpcCfg,
     vpc_map: Arc<VpcMappings>,
     v2p: Arc<Virt2Phys>,
+    v2b: Arc<Virt2Boundary>,
 ) -> PortBuilder {
+    #[allow(clippy::arc_with_non_send_sync)]
     let ectx = Arc::new(ExecCtx { log: Box::new(opte::PrintlnLog {}) });
     let name_cstr = std::ffi::CString::new(name).unwrap();
     let mut pb = PortBuilder::new(name, name_cstr, cfg.guest_mac, ectx);
@@ -235,7 +232,7 @@ fn oxide_net_builder(
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&pb, cfg, v2p, one_limit)
+    overlay::setup(&pb, cfg, v2p, v2b, one_limit)
         .expect("failed to add overlay layer");
     pb
 }
@@ -244,6 +241,7 @@ pub struct PortAndVps {
     pub port: Port<VpcNetwork>,
     pub vps: VpcPortState,
     pub vpc_map: Arc<VpcMappings>,
+    pub cfg: oxide_vpc::cfg::VpcCfg,
 }
 
 pub fn oxide_net_setup(
@@ -304,12 +302,30 @@ pub fn oxide_net_setup2(
         }
     };
 
-    let vpc_net = VpcNetwork { cfg: cfg.clone() };
+    let converted_cfg: oxide_vpc::cfg::VpcCfg = cfg.clone().into();
+    let vpc_net = VpcNetwork { cfg: converted_cfg.clone() };
     let uft_limit = flow_table_limits.unwrap_or(UFT_LIMIT.unwrap());
     let tcp_limit = flow_table_limits.unwrap_or(TCP_LIMIT.unwrap());
-    let port = oxide_net_builder(name, cfg, vpc_map.clone(), port_v2p)
-        .create(vpc_net, uft_limit, tcp_limit)
-        .unwrap();
+    let v2b = Arc::new(Virt2Boundary::new());
+    v2b.set(
+        "0.0.0.0/0".parse().unwrap(),
+        vec![TunnelEndpoint {
+            ip: "fd00:9900::1".parse().unwrap(),
+            vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+        }],
+    );
+    v2b.set(
+        "::/0".parse().unwrap(),
+        vec![TunnelEndpoint {
+            ip: "fd00:9900::1".parse().unwrap(),
+            vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+        }],
+    );
+
+    let port =
+        oxide_net_builder(name, &converted_cfg, vpc_map.clone(), port_v2p, v2b)
+            .create(vpc_net, uft_limit, tcp_limit)
+            .unwrap();
 
     // Add router entry that allows the guest to send to other guests
     // on same subnet.
@@ -321,12 +337,7 @@ pub fn oxide_net_setup2(
     .unwrap();
 
     let vps = VpcPortState::new();
-    let mut pav = PortAndVps { port, vps, vpc_map };
-
-    let nat_rules = match cfg.ipv4().external_ips {
-        Some(_) => "incr:nat.rules.in, nat.rules.out",
-        _ => "",
-    };
+    let mut pav = PortAndVps { port, vps, vpc_map, cfg: converted_cfg };
 
     let mut updates = vec![
         // * Epoch starts at 1, adding router entry bumps it to 2.
@@ -360,13 +371,28 @@ pub fn oxide_net_setup2(
         // * Outbound IPv4 SNAT
         // * Outbound IPv6 SNAT
         "set:nat.rules.out=2",
-        nat_rules,
+    ];
+
+    [
+        cfg.ipv4().external_ips.ephemeral_ip.is_some(),
+        !cfg.ipv4().external_ips.floating_ips.is_empty(),
+        cfg.ipv6().external_ips.ephemeral_ip.is_some(),
+        !cfg.ipv6().external_ips.floating_ips.is_empty(),
+    ]
+    .into_iter()
+    .for_each(|c| {
+        if c {
+            updates.push("incr:nat.rules.in, nat.rules.out")
+        }
+    });
+
+    updates.extend_from_slice(&[
         // * Allow guest to route to own subnet
         "set:router.rules.out=1",
         // * Outbound encap
         // * Inbound decap
         "set:overlay.rules.in=1, overlay.rules.out=1",
-    ];
+    ]);
 
     if let Some(val) = custom_updates {
         updates.extend_from_slice(val);
@@ -520,6 +546,17 @@ pub fn http_syn2(
     eth_dst: MacAddr,
     ip_dst: impl Into<IpAddr>,
 ) -> Packet<Parsed> {
+    http_syn3(eth_src, ip_src, eth_dst, ip_dst, 44490, 80)
+}
+
+pub fn http_syn3(
+    eth_src: MacAddr,
+    ip_src: impl Into<IpAddr>,
+    eth_dst: MacAddr,
+    ip_dst: impl Into<IpAddr>,
+    sport: u16,
+    dport: u16,
+) -> Packet<Parsed> {
     let body = vec![];
     let mut options = [0x00; TcpHdr::MAX_OPTION_SIZE];
     #[rustfmt::skip]
@@ -539,8 +576,8 @@ pub fn http_syn2(
     let options_len = bytes.len();
 
     let tcp = TcpMeta {
-        src: 44490,
-        dst: 80,
+        src: sport,
+        dst: dport,
         flags: TcpFlags::SYN,
         seq: 2382112979,
         ack: 0,
@@ -599,9 +636,9 @@ pub fn http_syn_ack(src: &VpcCfg, dst: &VpcCfg) -> Packet<Parsed> {
 
 pub fn http_syn_ack2(
     eth_src: MacAddr,
-    ip_src: Ipv4Addr,
+    ip_src: impl Into<IpAddr>,
     eth_dst: MacAddr,
-    ip_dst: Ipv4Addr,
+    ip_dst: impl Into<IpAddr>,
     dport: u16,
 ) -> Packet<Parsed> {
     let body = vec![];
@@ -613,16 +650,37 @@ pub fn http_syn_ack2(
         ack: 2382112980,
         ..Default::default()
     };
-    let ip4 = Ipv4Meta {
-        src: ip_src,
-        dst: ip_dst,
-        proto: Protocol::TCP,
-        total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len()) as u16,
-        ..Default::default()
+    let (ether_type, ip): (_, IpMeta) = match (ip_src.into(), ip_dst.into()) {
+        (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => (
+            EtherType::Ipv4,
+            Ipv4Meta {
+                src,
+                dst,
+                proto: Protocol::TCP,
+                total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len())
+                    as u16,
+                ttl: 64,
+                ident: 2662,
+                ..Default::default()
+            }
+            .into(),
+        ),
+        (IpAddr::Ip6(src), IpAddr::Ip6(dst)) => (
+            EtherType::Ipv6,
+            Ipv6Meta {
+                src,
+                dst,
+                proto: Protocol::TCP,
+                next_hdr: IpProtocol::Tcp,
+                pay_len: (tcp.hdr_len() + body.len()) as u16,
+                ..Default::default()
+            }
+            .into(),
+        ),
+        _ => panic!("source and destination must be the same IP version"),
     };
-    let eth =
-        EtherMeta { ether_type: EtherType::Ipv4, src: eth_src, dst: eth_dst };
-    ulp_pkt(eth, ip4, tcp, &body)
+    let eth = EtherMeta { ether_type, src: eth_src, dst: eth_dst };
+    ulp_pkt(eth, ip, tcp, &body)
 }
 
 pub fn http_ack2(
@@ -916,6 +974,8 @@ fn _encap(
     dst: TestIpPhys,
     external_snat: bool,
 ) -> Packet<Parsed> {
+    let old_pkt = inner_pkt.all_bytes();
+
     let inner_ip_len = inner_pkt.hdr_offsets().inner.ip.map(|off| off.hdr_len);
 
     let inner_ulp_len =
@@ -932,16 +992,19 @@ fn _encap(
     let geneve = GeneveMeta {
         entropy: 99,
         vni: dst.vni,
-        len: (UdpHdr::SIZE + GeneveHdr::BASE_SIZE + opt_len + inner_len) as u16,
         oxide_external_pkt: external_snat,
-
-        ..Default::default()
     };
+
+    let pay_len: u16 = (inner_len + geneve.hdr_len()).try_into().unwrap();
+    assert_eq!(
+        pay_len as usize,
+        inner_len + UdpHdr::SIZE + GeneveHdr::BASE_SIZE + opt_len
+    );
 
     let ip = Ipv6Meta {
         src: src.ip,
         dst: dst.ip,
-        pay_len: geneve.len,
+        pay_len,
         proto: Protocol::UDP,
         next_hdr: IpProtocol::Udp,
         ..Default::default()
@@ -955,8 +1018,8 @@ fn _encap(
     let mut wtr = pkt.seg0_wtr();
     eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
     ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-    geneve.emit(wtr.slice_mut(geneve.hdr_len()).unwrap());
-    wtr.write(&inner_pkt.all_bytes()).unwrap();
+    geneve.emit(pay_len, wtr.slice_mut(geneve.hdr_len()).unwrap());
+    wtr.write(&old_pkt).unwrap();
     let pkt = pkt.parse(In, VpcParser::new()).unwrap();
     let off = pkt.hdr_offsets();
     let mut pos = 0;
@@ -1020,6 +1083,9 @@ fn _encap(
         );
     }
 
+    let new_pkt = pkt.all_bytes();
+    assert_eq!(&new_pkt[new_pkt.len() - old_pkt.len()..], &old_pkt);
+
     pkt
 }
 
@@ -1029,7 +1095,7 @@ fn _encap(
 macro_rules! chk {
     ($pav:expr, $check:expr) => {
         if !$check {
-            print_port(&$pav.port, &$pav.vpc_map);
+            print_port(&$pav.port, &$pav.vpc_map).unwrap();
             panic!("assertion failed: {}", stringify!($check));
         }
     };

@@ -6,8 +6,8 @@
 
 //! The DHCP implementation of the Virtual Gateway.
 
-use crate::api::Ipv4Cfg;
-use crate::api::VpcCfg;
+use crate::cfg::Ipv4Cfg;
+use crate::cfg::VpcCfg;
 use alloc::sync::Arc;
 use core::result::Result;
 use opte::api::DhcpCfg;

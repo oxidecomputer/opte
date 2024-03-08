@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 pub mod firewall;
 pub mod gateway;
@@ -12,7 +12,7 @@ pub mod overlay;
 pub mod print;
 pub mod router;
 
-use crate::api::VpcCfg;
+use crate::cfg::VpcCfg;
 use opte::engine::ether::EtherType;
 use opte::engine::flow_table::FlowTable;
 use opte::engine::headers::EncapMeta;

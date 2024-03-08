@@ -6,8 +6,8 @@
 
 //! The ICMPv6 implementation of the Virtual Gateway.
 
-use crate::api::Ipv6Cfg;
-use crate::api::VpcCfg;
+use crate::cfg::Ipv6Cfg;
+use crate::cfg::VpcCfg;
 use alloc::sync::Arc;
 use core::result::Result;
 use opte::api::Direction;

@@ -35,10 +35,12 @@ use core::fmt::Display;
 pub mod api {
     pub use opte_api::*;
 }
-
+#[cfg(any(feature = "engine", test))]
+pub mod d_error;
 #[cfg(any(feature = "engine", test))]
 pub mod ddi;
-
+#[cfg(any(feature = "engine", test))]
+pub mod dynamic;
 #[cfg(any(feature = "engine", test))]
 pub mod engine;
 
@@ -62,10 +64,24 @@ pub const fn bit_on(bit: u8) -> u8 {
 mod opte_provider {
     use opte_api::Direction;
 
-    fn uft__hit(dir: Direction, port: &str, flow: &str, epoch: u64) {}
+    fn uft__hit(
+        dir: Direction,
+        port: &str,
+        flow: &str,
+        epoch: u64,
+        last_hit: u64,
+    ) {
+    }
     fn uft__invalidate(dir: Direction, port: &str, flow: &str, epoch: u64) {}
     fn uft__tcp__closed(dir: Direction, port: &str, flow: &str) {}
-    fn flow__expired(port: &str, ft_name: &str, flow: &str) {}
+    fn flow__expired(
+        port: &str,
+        ft_name: &str,
+        flow: &str,
+        last_hit: u64,
+        now: u64,
+    ) {
+    }
     fn gen__desc__fail(
         port: &str,
         layer: &str,

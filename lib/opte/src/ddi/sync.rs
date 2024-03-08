@@ -212,7 +212,6 @@ pub enum KRwLockType {
     Default = krw_type_t::RW_DEFAULT as isize,
 }
 
-#[cfg(all(not(feature = "std"), not(test)))]
 impl From<KRwLockType> for krw_type_t {
     fn from(typ: KRwLockType) -> Self {
         match typ {
@@ -264,10 +263,8 @@ impl<T> KRwLock<T> {
     }
 }
 
-#[cfg(all(not(feature = "std"), not(test)))]
 unsafe impl<T: Send> Send for KRwLock<T> {}
-#[cfg(all(not(feature = "std"), not(test)))]
-unsafe impl<T: Sync> Sync for KRwLock<T> {}
+unsafe impl<T: Send + Sync> Sync for KRwLock<T> {}
 
 #[cfg(all(not(feature = "std"), not(test)))]
 pub struct KRwLockReadGuard<'a, T: 'a> {

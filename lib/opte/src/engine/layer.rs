@@ -7,6 +7,7 @@
 //! A layer in a port.
 
 use super::flow_table::Dump;
+use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
 use super::flow_table::FLOW_DEF_EXPIRE_SECS;
@@ -204,6 +205,7 @@ impl LayerFlowTable {
         self.count += 1;
     }
 
+    /// Clear all flow table entries.
     fn clear(&mut self) {
         self.ft_in.clear();
         self.ft_out.clear();
@@ -235,26 +237,78 @@ impl LayerFlowTable {
         self.count = self.ft_out.num_flows();
     }
 
-    fn get_in(&mut self, flow: &InnerFlowId) -> Option<ActionDescEntry> {
+    fn get_in(&mut self, flow: &InnerFlowId) -> EntryState {
         match self.ft_in.get_mut(flow) {
             Some(entry) => {
                 entry.hit();
-                Some(entry.state().clone())
+                if entry.is_dirty() {
+                    EntryState::Dirty(entry.state().clone())
+                } else {
+                    EntryState::Clean(entry.state().clone())
+                }
             }
 
-            None => None,
+            None => EntryState::None,
         }
     }
 
-    fn get_out(&mut self, flow: &InnerFlowId) -> Option<ActionDescEntry> {
+    fn get_out(&mut self, flow: &InnerFlowId) -> EntryState {
         match self.ft_out.get_mut(flow) {
             Some(entry) => {
                 entry.hit();
-                Some(entry.state().action_desc.clone())
+                let action = entry.state().action_desc.clone();
+                if entry.is_dirty() {
+                    EntryState::Dirty(action)
+                } else {
+                    EntryState::Clean(action)
+                }
             }
 
-            None => None,
+            None => EntryState::None,
         }
+    }
+
+    fn remove_in(
+        &mut self,
+        flow: &InnerFlowId,
+    ) -> Option<FlowEntry<ActionDescEntry>> {
+        self.ft_in.remove(flow)
+    }
+
+    fn remove_out(
+        &mut self,
+        flow: &InnerFlowId,
+    ) -> Option<FlowEntry<LftOutEntry>> {
+        self.ft_out.remove(flow)
+    }
+
+    fn mark_clean(&mut self, dir: Direction, flow: &InnerFlowId) {
+        match dir {
+            Direction::In => {
+                let entry = self.ft_in.get_mut(flow);
+                if let Some(entry) = entry {
+                    entry.mark_clean();
+                }
+            }
+            Direction::Out => {
+                let entry = self.ft_out.get_mut(flow);
+                if let Some(entry) = entry {
+                    entry.mark_clean();
+                }
+            }
+        }
+    }
+
+    /// Mark all flow table entries as requiring revalidation after a
+    /// reset or removal of rules.
+    ///
+    /// It is typically cheaper to use [`LayerFlowTable::clear`]; dirty entries
+    /// will occupy flowtable space until they are denied or expire. As such
+    /// this method should be used only when the original state (`S`) *must*
+    /// be preserved to ensure correctness.
+    fn mark_dirty(&mut self) {
+        self.ft_in.mark_dirty();
+        self.ft_out.mark_dirty();
     }
 
     fn new(port: &str, layer: &str, limit: NonZeroU32) -> Self {
@@ -274,6 +328,17 @@ impl LayerFlowTable {
     fn num_flows(&self) -> u32 {
         self.count
     }
+}
+
+/// The result of a flowtable lookup.
+pub enum EntryState {
+    /// No flow entry was found matching a given flowid.
+    None,
+    /// An existing flow table entry was found.
+    Clean(ActionDescEntry),
+    /// An existing flow table entry was found, but rule processing must be rerun
+    /// to use the original action or invalidate the underlying entry.
+    Dirty(ActionDescEntry),
 }
 
 /// The default action of a layer.
@@ -743,7 +808,25 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        match self.ft.get_in(pkt.flow()) {
+        let flow = *pkt.flow();
+        let action = match self.ft.get_in(&flow) {
+            EntryState::Dirty(ActionDescEntry::Desc(action))
+                if action.is_valid() =>
+            {
+                self.ft.mark_clean(Direction::In, &flow);
+                Some(ActionDescEntry::Desc(action))
+            }
+            EntryState::Dirty(_) => {
+                // NoOps are included in this case as we can't ask the actor whether
+                // it remains valid: the simplest method to do so is to rerun lookup.
+                self.ft.remove_in(&flow);
+                None
+            }
+            EntryState::Clean(action) => Some(action),
+            EntryState::None => None,
+        };
+
+        match action {
             Some(ActionDescEntry::NoOp) => {
                 self.stats.vals.in_lft_hit += 1;
                 Ok(LayerResult::Allow)
@@ -1022,7 +1105,25 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        match self.ft.get_out(pkt.flow()) {
+        let flow = *pkt.flow();
+        let action = match self.ft.get_out(&flow) {
+            EntryState::Dirty(ActionDescEntry::Desc(action))
+                if action.is_valid() =>
+            {
+                self.ft.mark_clean(Direction::Out, &flow);
+                Some(ActionDescEntry::Desc(action))
+            }
+            EntryState::Dirty(_) => {
+                // NoOps are included in this case as we can't ask the actor whether
+                // it remains valid: the simplest method to do so is to rerun lookup.
+                self.ft.remove_out(&flow);
+                None
+            }
+            EntryState::Clean(action) => Some(action),
+            EntryState::None => None,
+        };
+
+        match action {
             Some(ActionDescEntry::NoOp) => {
                 self.stats.vals.out_lft_hit += 1;
                 Ok(LayerResult::Allow)
@@ -1402,12 +1503,33 @@ impl Layer {
     ///
     /// Updating the ruleset immediately invalidates all flows
     /// established in the Flow Table.
-    pub(crate) fn set_rules(
+    pub fn set_rules(
         &mut self,
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
     ) {
         self.ft.clear();
+        self.set_rules_core(in_rules, out_rules);
+    }
+
+    /// Set all rules at once without clearing the flow table.
+    ///
+    /// See [`FlowTable::mark_dirty`] for the performance and correctness
+    /// implications.
+    pub fn set_rules_soft(
+        &mut self,
+        in_rules: Vec<Rule<Finalized>>,
+        out_rules: Vec<Rule<Finalized>>,
+    ) {
+        self.ft.mark_dirty();
+        self.set_rules_core(in_rules, out_rules);
+    }
+
+    fn set_rules_core(
+        &mut self,
+        in_rules: Vec<Rule<Finalized>>,
+        out_rules: Vec<Rule<Finalized>>,
+    ) {
         self.rules_in.set_rules(in_rules);
         self.rules_out.set_rules(out_rules);
         self.stats.vals.set_rules_called += 1;

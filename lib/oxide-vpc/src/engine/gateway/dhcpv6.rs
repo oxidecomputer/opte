@@ -6,7 +6,7 @@
 
 //! The DHCPv6 implementation of the Virtual Gateway.
 
-use crate::api::VpcCfg;
+use crate::cfg::VpcCfg;
 use alloc::sync::Arc;
 use opte::api::DhcpCfg;
 use opte::api::Direction;

@@ -9,12 +9,12 @@ repository.workspace = true
 [features]
 default = ["api", "std"]
 api = []
-engine = ["api"]
+engine = ["api", "dep:crc32fast", "dep:heapless", "dep:itertools", "dep:zerocopy"]
 kernel = ["illumos-sys-hdrs/kernel"]
 # This feature indicates that OPTE is being built with std. This is
 # mostly useful to consumers of the API, providing convenient methods
 # for working with the API types in a std context.
-std = ["opte-api/std"]
+std = ["dep:tabwriter", "opte-api/std"]
 #
 # Used for declaring methods which are useful for integration testing.
 #
@@ -22,17 +22,21 @@ test-help = []
 usdt = ["std", "dep:usdt"]
 
 [dependencies]
+derror-macro.workspace = true
 illumos-sys-hdrs.workspace = true
 kstat-macro.workspace = true
 opte-api.workspace = true
 
 cfg-if.workspace = true
+crc32fast = { workspace = true, optional = true }
 dyn-clone.workspace = true
-heapless.workspace = true
+heapless = { workspace = true, optional = true }
+itertools = { workspace = true, optional = true }
 postcard.workspace = true
 serde.workspace = true
+tabwriter = { workspace = true, optional = true }
 usdt = { workspace = true, optional = true }
-zerocopy.workspace = true
+zerocopy = { workspace = true, optional = true }
 
 [dependencies.smoltcp]
 workspace = true
@@ -47,6 +51,5 @@ version_check.workspace = true
 
 [dev-dependencies]
 # Enable usdt probes for testing.
-opte = { workspace = true, features = ["usdt"] }
-
-itertools.workspace = true
+opte = { workspace = true, features = ["engine", "usdt"] }
+itertools = { workspace = true, features = ["use_std"] }

@@ -16,7 +16,6 @@
     "linker": "ld",
     "llvm-target": "x86_64-none-none",
     "max-atomic-width": 64,
-    "needs-plt": true,
     "no-default-libraries": true,
     "os": "none",
     "panic-strategy": "abort",

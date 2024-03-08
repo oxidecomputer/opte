@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! xde - A mac provider for OPTE.
 //!
@@ -10,9 +10,7 @@
 //! interface, allowing one to run network implementations written in
 //! the OPTE framework.
 
-// TODO
-// - ddm integration to choose correct underlay device (currently just using
-//   first device)
+//#![allow(clippy::arc_with_non_send_sync)]
 
 use crate::dls;
 use crate::ioctl::IoctlEnvelope;
@@ -50,12 +48,12 @@ use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
+use opte::d_error::ErrorBlock;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
-use opte::ddi::time::Moment;
 use opte::ddi::time::Periodic;
 use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
@@ -74,17 +72,19 @@ use opte::engine::port::ProcessResult;
 use opte::ExecCtx;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
-use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
-use oxide_vpc::api::VpcCfg;
+use oxide_vpc::cfg::IpCfg;
+use oxide_vpc::cfg::VpcCfg;
 use oxide_vpc::engine::firewall;
 use oxide_vpc::engine::gateway;
 use oxide_vpc::engine::nat;
@@ -123,7 +123,8 @@ extern "C" {
         port: uintptr_t,
         dir: uintptr_t,
         mp: uintptr_t,
-        msg: uintptr_t,
+        err_b: uintptr_t,
+        data_len: uintptr_t,
     );
     pub fn __dtrace_probe_guest__loopback(
         mp: uintptr_t,
@@ -150,27 +151,48 @@ fn bad_packet_parse_probe(
     mp: *mut mblk_t,
     err: &PacketError,
 ) {
-    let msg = format!("{:?}", err);
-    bad_packet_probe(port, dir, mp, &msg);
+    let port_str = match port {
+        None => c"unknown",
+        Some(name) => name.as_c_str(),
+    };
+
+    // Truncation is captured *in* the ErrorBlock.
+    let block = match ErrorBlock::<8>::from_err(err) {
+        Ok(block) => block,
+        Err(block) => block,
+    };
+
+    unsafe {
+        __dtrace_probe_bad__packet(
+            port_str.as_ptr() as uintptr_t,
+            dir as uintptr_t,
+            mp as uintptr_t,
+            block.as_ptr() as uintptr_t,
+            4,
+        )
+    };
 }
 
 fn bad_packet_probe(
     port: Option<&CString>,
     dir: Direction,
     mp: *mut mblk_t,
-    msg: &str,
+    msg: &CStr,
 ) {
     let port_str = match port {
-        None => b"unknown\0" as *const u8 as *const i8,
-        Some(name) => name.as_ptr(),
+        None => c"unknown",
+        Some(name) => name.as_c_str(),
     };
-    let msg_arg = CString::new(msg).unwrap();
+    let mut eb = ErrorBlock::<8>::new();
+
     unsafe {
+        let _ = eb.append_name_raw(msg);
         __dtrace_probe_bad__packet(
-            port_str as uintptr_t,
+            port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
-            msg_arg.as_ptr() as uintptr_t,
+            eb.as_ptr() as uintptr_t,
+            8,
         )
     };
 }
@@ -223,6 +245,7 @@ struct xde_underlay_port {
 struct XdeState {
     ectx: Arc<ExecCtx>,
     vpc_map: Arc<overlay::VpcMappings>,
+    v2b: Arc<overlay::Virt2Boundary>,
     underlay: KMutex<Option<UnderlayState>>,
 }
 
@@ -250,6 +273,7 @@ impl XdeState {
             underlay: KMutex::new(None, KMutexType::Driver),
             ectx,
             vpc_map: Arc::new(overlay::VpcMappings::new()),
+            v2b: Arc::new(overlay::Virt2Boundary::new()),
         }
     }
 }
@@ -542,6 +566,21 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             hdlr_resp(&mut env, resp)
         }
 
+        OpteCmd::DumpVirt2Boundary => {
+            let resp = dump_v2b_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::SetVirt2Boundary => {
+            let resp = set_v2b_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ClearVirt2Boundary => {
+            let resp = clear_v2b_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
         OpteCmd::AddRouterEntry => {
             let resp = add_router_entry_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
@@ -549,6 +588,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::DumpTcpFlows => {
             let resp = dump_tcp_flows_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::SetExternalIps => {
+            let resp = set_external_ips_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
     }
@@ -562,7 +606,7 @@ fn expire_periodic(port: &mut Arc<Port<VpcNetwork>>) {
     // ignore the error. Eventually xde will also have logic for
     // moving a port to a paused state, and in that state the periodic
     // should probably be canceled.
-    let _ = port.expire_flows(Moment::now());
+    let _ = port.expire_flows();
 }
 
 #[no_mangle]
@@ -591,7 +635,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         return Err(OpteError::PortExists(req.xde_devname.clone()));
     }
 
-    let cfg = &req.cfg;
+    let cfg = VpcCfg::from(req.cfg.clone());
     if devs
         .iter()
         .any(|x| x.vni == cfg.vni && x.port.mac_addr() == cfg.guest_mac)
@@ -626,9 +670,10 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     let port = new_port(
         req.xde_devname.clone(),
-        cfg,
+        &cfg,
         state.vpc_map.clone(),
         port_v2p.clone(),
+        state.v2b.clone(),
         state.ectx.clone(),
         &req.dhcp,
     )?;
@@ -648,9 +693,9 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         port,
         port_periodic,
         port_v2p,
-        vpc_cfg: cfg.clone(),
-        passthrough: req.passthrough,
         vni: cfg.vni,
+        vpc_cfg: cfg,
+        passthrough: req.passthrough,
         u1: underlay.u1.clone(),
         u2: underlay.u2.clone(),
     });
@@ -1429,21 +1474,18 @@ fn guest_loopback(
                 }
 
                 Ok(ProcessResult::Drop { reason }) => {
-                    opte::engine::dbg(format!(
-                        "loopback rx drop: {:?}",
-                        reason
-                    ));
+                    opte::engine::dbg!("loopback rx drop: {:?}", reason);
                 }
 
                 Ok(ProcessResult::Hairpin(_hppkt)) => {
                     // There should be no reason for an loopback
                     // inbound packet to generate a hairpin response
                     // from the destination port.
-                    opte::engine::dbg("unexpected loopback rx hairpin");
+                    opte::engine::dbg!("unexpected loopback rx hairpin");
                 }
 
                 Ok(ProcessResult::Bypass) => {
-                    opte::engine::dbg("loopback rx bypass");
+                    opte::engine::dbg!("loopback rx bypass");
                     unsafe {
                         mac::mac_rx(
                             dest_dev.mh,
@@ -1454,23 +1496,23 @@ fn guest_loopback(
                 }
 
                 Err(e) => {
-                    opte::engine::dbg(format!(
+                    opte::engine::dbg!(
                         "loopback port process error: {} -> {} {:?}",
                         src_dev.port.name(),
                         dest_dev.port.name(),
                         e
-                    ));
+                    );
                 }
             }
         }
 
         None => {
-            opte::engine::dbg(format!(
+            opte::engine::dbg!(
                 "underlay dest is same as src but the Port was not found \
                  vni = {}, mac = {}",
                 vni.as_u32(),
                 ether_dst
-            ));
+            );
         }
     }
 
@@ -1520,7 +1562,7 @@ unsafe extern "C" fn xde_mc_tx(
                     mp_chain,
                     &e,
                 );
-                opte::engine::dbg(format!("Tx bad packet: {:?}", e));
+                opte::engine::dbg!("Rx bad packet: {:?}", e);
                 return ptr::null_mut();
             }
         };
@@ -1561,7 +1603,7 @@ unsafe extern "C" fn xde_mc_tx(
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
-                    opte::engine::dbg("no outer ip header, dropping");
+                    opte::engine::dbg!("no outer ip header, dropping");
                     return ptr::null_mut();
                 }
             };
@@ -1569,7 +1611,7 @@ unsafe extern "C" fn xde_mc_tx(
             let ip6 = match ip.ip6() {
                 Some(v) => v,
                 None => {
-                    opte::engine::dbg("outer IP header is not v6, dropping");
+                    opte::engine::dbg!("outer IP header is not v6, dropping");
                     return ptr::null_mut();
                 }
             };
@@ -1579,7 +1621,7 @@ unsafe extern "C" fn xde_mc_tx(
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
-                    opte::engine::dbg("no geneve header, dropping");
+                    opte::engine::dbg!("no geneve header, dropping");
                     return ptr::null_mut();
                 }
             };
@@ -1594,13 +1636,14 @@ unsafe extern "C" fn xde_mc_tx(
             // for the mac associated with the IRE nexthop to fill in
             // the outer frame of the packet. Also return the underlay
             // device associated with the nexthop
-            let (src, dst, underlay_dev) = next_hop(&ip6.dst, src_dev);
+            let (src, dst, underlay_dev) =
+                next_hop(&ip6.dst, src_dev, meta.l4_hash());
 
             // Get a pointer to the beginning of the outer frame and
             // fill in the dst/src addresses before sending out the
             // device.
             let mblk = pkt.unwrap_mblk();
-            let rptr = (*mblk).b_rptr as *mut u8;
+            let rptr = (*mblk).b_rptr;
             ptr::copy(dst.as_ptr(), rptr, 6);
             ptr::copy(src.as_ptr(), rptr.add(6), 6);
             // Unwrap: We know the packet is good because we just
@@ -1811,6 +1854,7 @@ fn netstack_rele(ns: *mut ip::netstack_t) {
 fn next_hop<'a>(
     ip6_dst: &Ipv6Addr,
     ustate: &'a XdeDev,
+    overlay_hash: Option<u32>,
 ) -> (EtherAddr, EtherAddr, &'a xde_underlay_port) {
     unsafe {
         // Use the GZ's routing table.
@@ -1823,7 +1867,7 @@ fn next_hop<'a>(
         let addr = ip::in6_addr_t {
             _S6_un: ip::in6_addr__bindgen_ty_1 { _S6_u8: ip6_dst.bytes() },
         };
-        let xmit_hint = 0;
+        let xmit_hint = overlay_hash.unwrap_or(0);
         let mut generation_op = 0u32;
 
         let mut underlay_port = &*ustate.u1;
@@ -1832,8 +1876,15 @@ fn next_hop<'a>(
         // to return one of the default gateway entries.
         let ire = DropRef::new(
             ire_refrele,
-            ip::ire_ftable_lookup_simple_v6(
+            ip::ire_ftable_lookup_v6(
                 &addr,
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null_mut(),
+                sys::ALL_ZONES,
+                ptr::null(),
+                0,
                 xmit_hint,
                 ipst,
                 &mut generation_op as *mut ip::uint_t,
@@ -1848,7 +1899,8 @@ fn next_hop<'a>(
         // an underlay network issue. How do we convey this situation
         // to the user/operator?
         if ire.inner().is_null() {
-            opte::engine::dbg(format!("no IRE for destination {:?}", ip6_dst));
+            // Try without a pinned ill
+            opte::engine::dbg!("no IRE for destination {:?}", ip6_dst);
             next_hop_probe(
                 ip6_dst,
                 None,
@@ -1860,10 +1912,7 @@ fn next_hop<'a>(
         }
         let ill = (*ire.inner()).ire_ill;
         if ill.is_null() {
-            opte::engine::dbg(format!(
-                "destination ILL is NULL for {:?}",
-                ip6_dst
-            ));
+            opte::engine::dbg!("destination ILL is NULL for {:?}", ip6_dst);
             next_hop_probe(
                 ip6_dst,
                 None,
@@ -1907,7 +1956,7 @@ fn next_hop<'a>(
         );
 
         if gw_ire.inner().is_null() {
-            opte::engine::dbg(format!("no IRE for gateway {:?}", gw_ip6));
+            opte::engine::dbg!("no IRE for gateway {:?}", gw_ip6);
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1923,10 +1972,10 @@ fn next_hop<'a>(
         // member or the internet routing entry.
         let src = (*ill).ill_phys_addr;
         if src.is_null() {
-            opte::engine::dbg(format!(
+            opte::engine::dbg!(
                 "gateway ILL phys addr is NULL for {:?}",
                 gw_ip6
-            ));
+            );
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1954,7 +2003,7 @@ fn next_hop<'a>(
         // link-local address.
         let nce = DropRef::new(nce_refrele, ip::nce_lookup_v6(ill, &gw));
         if nce.inner().is_null() {
-            opte::engine::dbg(format!("no NCE for gateway {:?}", gw_ip6));
+            opte::engine::dbg!("no NCE for gateway {:?}", gw_ip6);
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1967,10 +2016,7 @@ fn next_hop<'a>(
 
         let nce_common = (*nce.inner()).nce_common;
         if nce_common.is_null() {
-            opte::engine::dbg(format!(
-                "no NCE common for gateway {:?}",
-                gw_ip6
-            ));
+            opte::engine::dbg!("no NCE common for gateway {:?}", gw_ip6);
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1983,7 +2029,7 @@ fn next_hop<'a>(
 
         let mac = (*nce_common).ncec_lladdr;
         if mac.is_null() {
-            opte::engine::dbg(format!("NCE MAC address is NULL {:?}", gw_ip6));
+            opte::engine::dbg!("NCE MAC address is NULL {:?}", gw_ip6);
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -2054,9 +2100,11 @@ fn new_port(
     cfg: &VpcCfg,
     vpc_map: Arc<overlay::VpcMappings>,
     v2p: Arc<overlay::Virt2Phys>,
+    v2b: Arc<overlay::Virt2Boundary>,
     ectx: Arc<ExecCtx>,
     dhcp_cfg: &DhcpCfg,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
+    let cfg = cfg.clone();
     let name_cstr = match CString::new(name.as_str()) {
         Ok(v) => v,
         Err(_) => return Err(OpteError::BadName),
@@ -2065,17 +2113,16 @@ fn new_port(
     let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac, ectx);
     firewall::setup(&mut pb, FW_FT_LIMIT)?;
 
+    // Unwrap safety: we always have at least one FT entry, because we always
+    // have at least one IP stack (v4 and/or v6).
+    let nat_ft_limit = NonZeroU32::new(cfg.required_nat_space()).unwrap();
+
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
-    router::setup(&pb, cfg, FT_LIMIT_ONE)?;
-    let nat_ft_limit = match cfg.n_external_ports() {
-        None => FT_LIMIT_ONE,
-        Some(0) => return Err(OpteError::InvalidIpCfg),
-        Some(n) => NonZeroU32::new(n).unwrap(),
-    };
-    nat::setup(&mut pb, cfg, nat_ft_limit)?;
-    overlay::setup(&pb, cfg, v2p, FT_LIMIT_ONE)?;
+    gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
+    router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
+    nat::setup(&mut pb, &cfg, nat_ft_limit)?;
+    overlay::setup(&pb, &cfg, v2p, v2b, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -2086,7 +2133,7 @@ fn new_port(
     // construct a new one, so the unwrap is safe.
     let limit =
         NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
-    let net = VpcNetwork { cfg: cfg.clone() };
+    let net = VpcNetwork { cfg };
     Ok(Arc::new(pb.create(net, limit, limit)?))
 }
 
@@ -2128,7 +2175,7 @@ unsafe extern "C" fn xde_rx(
                 //
                 // We don't know the port yet, thus the None.
                 bad_packet_parse_probe(None, Direction::In, mp_chain, &e);
-                opte::engine::dbg(format!("Rx bad packet: {:?}", e));
+                opte::engine::dbg!("Tx bad packet: {:?}", e);
                 return;
             }
         };
@@ -2142,9 +2189,9 @@ unsafe extern "C" fn xde_rx(
         Some(EncapMeta::Geneve(geneve)) => geneve,
         None => {
             // TODO add stat
-            let msg = "no geneve header, dropping";
+            let msg = c"no geneve header, dropping";
             bad_packet_probe(None, Direction::In, mp_chain, msg);
-            opte::engine::dbg(msg);
+            opte::engine::dbg!("no geneve header, dropping");
             return;
         }
     };
@@ -2156,10 +2203,11 @@ unsafe extern "C" fn xde_rx(
     else {
         // TODO add SDT probe
         // TODO add stat
-        opte::engine::dbg(format!(
+        opte::engine::dbg!(
             "[encap] no device found for vni: {} mac: {}",
-            vni, ether_dst
-        ));
+            vni,
+            ether_dst
+        );
         return;
     };
 
@@ -2258,6 +2306,31 @@ fn dump_v2p_hdlr(
 }
 
 #[no_mangle]
+fn set_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: SetVirt2BoundaryReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    state.v2b.set(req.vip, req.tep);
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
+fn clear_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: ClearVirt2BoundaryReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    state.v2b.remove(req.vip, req.tep);
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
+fn dump_v2b_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<overlay::DumpVirt2BoundaryResp, OpteError> {
+    let _req: overlay::DumpVirt2BoundaryReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    Ok(state.v2b.dump())
+}
+
+#[no_mangle]
 fn list_layers_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<api::ListLayersResp, OpteError> {
@@ -2346,23 +2419,45 @@ fn dump_tcp_flows_hdlr(
 }
 
 #[no_mangle]
+fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: oxide_vpc::api::SetExternalIpsReq = env.copy_in_req()?;
+    let devs = unsafe { xde_devs.read() };
+    let mut iter = devs.iter();
+    let dev = match iter.find(|x| x.devname == req.port_name) {
+        Some(dev) => dev,
+        None => return Err(OpteError::PortNotFound(req.port_name)),
+    };
+
+    nat::set_nat_rules(&dev.vpc_cfg, &dev.port, req)?;
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
 fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
     let mut resp = ListPortsResp { ports: vec![] };
     let devs = unsafe { xde_devs.read() };
     for dev in devs.iter() {
+        let ipv4_state =
+            dev.vpc_cfg.ipv4_cfg().map(|cfg| cfg.external_ips.load());
+        let ipv6_state =
+            dev.vpc_cfg.ipv6_cfg().map(|cfg| cfg.external_ips.load());
         resp.ports.push(PortInfo {
             name: dev.port.name().to_string(),
             mac_addr: dev.port.mac_addr(),
             ip4_addr: dev.vpc_cfg.ipv4_cfg().map(|cfg| cfg.private_ip),
-            external_ip4_addr: dev
-                .vpc_cfg
-                .ipv4_cfg()
-                .and_then(|cfg| cfg.external_ips),
+            ephemeral_ip4_addr: ipv4_state
+                .as_ref()
+                .and_then(|cfg| cfg.ephemeral_ip),
+            floating_ip4_addrs: ipv4_state
+                .as_ref()
+                .map(|cfg| cfg.floating_ips.clone()),
             ip6_addr: dev.vpc_cfg.ipv6_cfg().map(|cfg| cfg.private_ip),
-            external_ip6_addr: dev
-                .vpc_cfg
-                .ipv6_cfg()
-                .and_then(|cfg| cfg.external_ips),
+            ephemeral_ip6_addr: ipv6_state
+                .as_ref()
+                .and_then(|cfg| cfg.ephemeral_ip),
+            floating_ip6_addrs: ipv6_state
+                .as_ref()
+                .map(|cfg| cfg.floating_ips.clone()),
             state: dev.port.state().to_string(),
         });
     }

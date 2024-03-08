@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Print comannd responses in human-friendly manner.
 //!
@@ -19,98 +19,141 @@ use super::ioctl::TcpFlowEntryDump;
 use super::ioctl::UftEntryDump;
 use super::packet::InnerFlowId;
 use std::collections::VecDeque;
+use std::io::Write;
 use std::string::String;
 use std::string::ToString;
+use tabwriter::TabWriter;
 
 /// Print a [`DumpLayerResp`].
-pub fn print_layer(resp: &DumpLayerResp) {
-    println!("Layer {}", resp.name);
-    print_hrb();
-    println!("Inbound Flows");
-    print_hr();
-    print_lft_flow_header();
+pub fn print_layer(resp: &DumpLayerResp) -> std::io::Result<()> {
+    print_layer_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`DumpLayerResp`].
+pub fn print_layer_into(
+    writer: &mut impl Write,
+    resp: &DumpLayerResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+
+    writeln!(t, "Layer {}", resp.name)?;
+    write_hrb(&mut t)?;
+    writeln!(t, "Inbound Flows")?;
+    write_hr(&mut t)?;
+    print_lft_flow_header(&mut t)?;
     for (flow_id, flow_state) in &resp.ft_in {
-        print_lft_flow(flow_id, flow_state);
+        print_lft_flow(&mut t, flow_id, flow_state)?;
     }
+    t.flush()?;
 
-    println!("\nOutbound Flows");
-    print_hr();
-    print_lft_flow_header();
+    writeln!(t, "\nOutbound Flows")?;
+    write_hr(&mut t)?;
+    print_lft_flow_header(&mut t)?;
     for (flow_id, flow_state) in &resp.ft_out {
-        print_lft_flow(flow_id, flow_state);
+        print_lft_flow(&mut t, flow_id, flow_state)?;
     }
+    t.flush()?;
 
-    println!("\nInbound Rules");
-    print_hr();
-    print_rule_header();
+    writeln!(t, "\nInbound Rules")?;
+    write_hr(&mut t)?;
+    print_rule_header(&mut t)?;
     for rte in &resp.rules_in {
-        print_rule(rte.id, rte.hits, &rte.rule);
+        print_rule(&mut t, rte.id, rte.hits, &rte.rule)?;
     }
-    print_def_rule(resp.default_in_hits, &resp.default_in);
+    print_def_rule(&mut t, resp.default_in_hits, &resp.default_in)?;
+    t.flush()?;
 
-    println!("\nOutbound Rules");
-    print_hr();
-    print_rule_header();
+    writeln!(t, "\nOutbound Rules")?;
+    write_hr(&mut t)?;
+    print_rule_header(&mut t)?;
     for rte in &resp.rules_out {
-        print_rule(rte.id, rte.hits, &rte.rule);
+        print_rule(&mut t, rte.id, rte.hits, &rte.rule)?;
     }
-    print_def_rule(resp.default_out_hits, &resp.default_out);
+    print_def_rule(&mut t, resp.default_out_hits, &resp.default_out)?;
+    t.flush()?;
 
-    println!();
+    writeln!(t)?;
+    t.flush()
 }
 
 /// Print a [`ListLayersResp`].
-pub fn print_list_layers(resp: &ListLayersResp) {
-    println!(
-        "{:<12} {:<10} {:<10} {:<8} {:<8} {:<10}",
-        "NAME", "RULES IN", "RULES OUT", "DEF IN", "DEF OUT", "FLOWS",
-    );
+pub fn print_list_layers(resp: &ListLayersResp) -> std::io::Result<()> {
+    print_list_layers_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`ListLayersResp`] into a given writer.
+pub fn print_list_layers_into(
+    writer: &mut impl Write,
+    resp: &ListLayersResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+    writeln!(t, "NAME\tRULES IN\tRULES OUT\tDEF IN\tDEF OUT\tFLOWS",)?;
 
     for desc in &resp.layers {
-        println!(
-            "{:<12} {:<10} {:<10} {:<8} {:<8} {:<10}",
+        writeln!(
+            t,
+            "{}\t{}\t{}\t{}\t{}\t{}",
             desc.name,
             desc.rules_in,
             desc.rules_out,
             desc.default_in,
             desc.default_out,
             desc.flows,
-        );
+        )?;
     }
+    t.flush()
 }
 
 /// Print a [`DumpUftResp`].
-pub fn print_uft(uft: &DumpUftResp) {
-    println!("UFT Inbound: {}/{}", uft.in_num_flows, uft.in_limit);
-    print_hr();
-    print_uft_flow_header();
-    for (flow_id, flow_state) in &uft.in_flows {
-        print_uft_flow(flow_id, flow_state);
-    }
+pub fn print_uft(uft: &DumpUftResp) -> std::io::Result<()> {
+    print_uft_into(&mut std::io::stdout(), uft)
+}
 
-    println!();
-    println!("UFT Outbound: {}/{}", uft.out_num_flows, uft.out_limit);
-    print_hr();
-    print_uft_flow_header();
-    for (flow_id, flow_state) in &uft.out_flows {
-        print_uft_flow(flow_id, flow_state);
+/// Print a [`DumpUftResp`] into a given writer.
+pub fn print_uft_into(
+    writer: &mut impl Write,
+    uft: &DumpUftResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+
+    writeln!(t, "UFT Inbound: {}/{}", uft.in_num_flows, uft.in_limit)?;
+    write_hr(&mut t)?;
+    print_uft_flow_header(&mut t)?;
+    for (flow_id, flow_state) in &uft.in_flows {
+        print_uft_flow(&mut t, flow_id, flow_state)?;
     }
+    t.flush()?;
+
+    writeln!(t)?;
+    writeln!(t, "UFT Outbound: {}/{}", uft.out_num_flows, uft.out_limit)?;
+    write_hr(&mut t)?;
+    print_uft_flow_header(&mut t)?;
+    for (flow_id, flow_state) in &uft.out_flows {
+        print_uft_flow(&mut t, flow_id, flow_state)?;
+    }
+    t.flush()
 }
 
 /// Print the header for the [`print_rule()`] output.
-pub fn print_rule_header() {
-    println!(
-        "{:<6} {:<6} {:<6} {:<38} {:<18}",
-        "ID", "PRI", "HITS", "PREDICATES", "ACTION"
-    );
+pub fn print_rule_header(t: &mut impl Write) -> std::io::Result<()> {
+    writeln!(t, "ID\tPRI\tHITS\tPREDICATES\tACTION")
 }
 
-pub fn print_def_rule(hits: u64, action: &str) {
-    println!("{:<6} {:<6} {:<6} {:<38} {:<?}", "DEF", "--", hits, "--", action);
+pub fn print_def_rule(
+    t: &mut impl Write,
+    hits: u64,
+    action: &str,
+) -> std::io::Result<()> {
+    writeln!(t, "DEF\t--\t{hits}\t--\t{action:?}")
 }
 
 /// Print a [`RuleDump`].
-pub fn print_rule(id: u64, hits: u64, rule: &RuleDump) {
+pub fn print_rule(
+    t: &mut impl Write,
+    id: u64,
+    hits: u64,
+    rule: &RuleDump,
+) -> std::io::Result<()> {
     let mut preds = rule
         .predicates
         .iter()
@@ -124,14 +167,15 @@ pub fn print_rule(id: u64, hits: u64, rule: &RuleDump) {
         preds.pop_front().unwrap()
     };
 
-    println!(
-        "{:<6} {:<6} {:<6} {:<38} {:<?}",
-        id, rule.priority, hits, first_pred, rule.action
-    );
+    writeln!(
+        t,
+        "{id}\t{}\t{hits}\t{first_pred}\t{:<?}",
+        rule.priority, rule.action
+    )?;
 
     let mut multi_preds = false;
     while let Some(pred) = preds.pop_front() {
-        println!("{:<6} {:<6} {:<6} {:<38}", "", "", "", pred);
+        writeln!(t, "\t\t\t{pred}\t")?;
         multi_preds = true;
     }
 
@@ -139,25 +183,29 @@ pub fn print_rule(id: u64, hits: u64, rule: &RuleDump) {
     // separation so it's easier to discern where one rule ends and
     // another begins.
     if multi_preds {
-        println!();
+        writeln!(t, "\t\t\t\t")?;
     }
+
+    Ok(())
 }
 
 /// Print the header for the [`print_lft_flow()`] output.
-pub fn print_lft_flow_header() {
-    println!(
-        "{:<6} {:<16} {:<6} {:<16} {:<6} {:<8} {:<22}",
-        "PROTO", "SRC IP", "SPORT", "DST IP", "DPORT", "HITS", "ACTION"
-    );
+pub fn print_lft_flow_header(t: &mut impl Write) -> std::io::Result<()> {
+    writeln!(t, "PROTO\tSRC IP\tSPORT\tDST IP\tDPORT\tHITS\tACTION")
 }
 
 /// Print information about a layer flow.
-pub fn print_lft_flow(flow_id: &InnerFlowId, flow_entry: &ActionDescEntryDump) {
+pub fn print_lft_flow(
+    t: &mut impl Write,
+    flow_id: &InnerFlowId,
+    flow_entry: &ActionDescEntryDump,
+) -> std::io::Result<()> {
     // For those types with custom Display implementations we need to
     // first format in into a String before passing it to println in
     // order for the format specification to be honored.
-    println!(
-        "{:<6} {:<16} {:<6} {:<16} {:<6} {:<8} {:<22}",
+    writeln!(
+        t,
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
         flow_id.proto.to_string(),
         flow_id.src_ip.to_string(),
         flow_id.src_port,
@@ -165,24 +213,26 @@ pub fn print_lft_flow(flow_id: &InnerFlowId, flow_entry: &ActionDescEntryDump) {
         flow_id.dst_port,
         flow_entry.hits,
         flow_entry.summary,
-    );
+    )
 }
 
 /// Print the header for the [`print_uft_flow()`] output.
-pub fn print_uft_flow_header() {
-    println!(
-        "{:<6} {:<16} {:<6} {:<16} {:<6} {:<8} {:<22}",
-        "PROTO", "SRC IP", "SPORT", "DST IP", "DPORT", "HITS", "XFORMS"
-    );
+pub fn print_uft_flow_header(t: &mut impl Write) -> std::io::Result<()> {
+    writeln!(t, "PROTO\tSRC IP\tSPORT\tDST IP\tDPORT\tHITS\tXFORMS")
 }
 
 /// Print information about a UFT entry.
-pub fn print_uft_flow(flow_id: &InnerFlowId, flow_entry: &UftEntryDump) {
+pub fn print_uft_flow(
+    t: &mut impl Write,
+    flow_id: &InnerFlowId,
+    flow_entry: &UftEntryDump,
+) -> std::io::Result<()> {
     // For those types with custom Display implementations we need to
     // first format in into a String before passing it to println in
     // order for the format specification to be honored.
-    println!(
-        "{:<6} {:<16} {:<6} {:<16} {:<6} {:<8} {:<22}",
+    writeln!(
+        t,
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}",
         flow_id.proto.to_string(),
         flow_id.src_ip.to_string(),
         flow_id.src_port,
@@ -190,39 +240,62 @@ pub fn print_uft_flow(flow_id: &InnerFlowId, flow_entry: &UftEntryDump) {
         flow_id.dst_port,
         flow_entry.hits,
         flow_entry.summary,
-    );
+    )
 }
 
 /// Print a [`DumpTcpFlowsResp`].
-pub fn print_tcp_flows(flows: &DumpTcpFlowsResp) {
-    println!(
-        "{:<48} {:<12} {:<8} {:<8} {:<8} {:<10} {:<10}",
-        "FLOW", "STATE", "HITS", "SEGS IN", "SEGS OUT", "BYTES IN", "BYTES OUT"
-    );
-    for (flow_id, entry) in &flows.flows {
-        print_tcp_flow(flow_id, entry);
-    }
+pub fn print_tcp_flows(flows: &DumpTcpFlowsResp) -> std::io::Result<()> {
+    print_tcp_flows_into(&mut std::io::stdout(), flows)
 }
 
-fn print_tcp_flow(id: &InnerFlowId, entry: &TcpFlowEntryDump) {
-    println!(
-        "{:<48} {:<12} {:<8} {:<8} {:<8} {:<10} {:<10}",
-        format!("{id}"),
+/// Print a [`DumpTcpFlowsResp`] into a given writer.
+pub fn print_tcp_flows_into(
+    writer: &mut impl Write,
+    flows: &DumpTcpFlowsResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+
+    writeln!(t, "FLOW\tSTATE\tHITS\tSEGS IN\tSEGS OUT\tBYTES IN\tBYTES OUT")?;
+    for (flow_id, entry) in &flows.flows {
+        print_tcp_flow(&mut t, flow_id, entry)?;
+    }
+
+    t.flush()
+}
+
+fn print_tcp_flow(
+    t: &mut impl Write,
+    id: &InnerFlowId,
+    entry: &TcpFlowEntryDump,
+) -> std::io::Result<()> {
+    writeln!(
+        t,
+        "{id}\t{}\t{}\t{}\t{}\t{}\t{}",
         entry.tcp_state.tcp_state.to_string(),
         entry.hits,
         entry.segs_in,
         entry.segs_out,
         entry.bytes_in,
         entry.bytes_out,
-    );
+    )
 }
 
-/// Print horizontal rule in bold.
+/// Output a horizontal rule in bold to the given writer.
+pub fn write_hrb(t: &mut impl Write) -> std::io::Result<()> {
+    writeln!(t, "{:=<70}", "=")
+}
+
+/// Print a horizontal rule in bold.
 pub fn print_hrb() {
     println!("{:=<70}", "=");
 }
 
-/// Print horizontal rule.
+/// Output a horizontal rule in bold to the given writer.
+pub fn write_hr(t: &mut impl Write) -> std::io::Result<()> {
+    writeln!(t, "{:-<70}", "-")
+}
+
+/// Print a horizontal rule.
 pub fn print_hr() {
     println!("{:-<70}", "-");
 }

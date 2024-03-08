@@ -1,5 +1,5 @@
 [toolchain]
-channel = "nightly-2023-10-23"
+channel = "nightly-2024-02-06"
 target = "x86_64-unknown-illumos"
 components = [ "clippy", "rustfmt", "rust-src" ]
 profile = "minimal"

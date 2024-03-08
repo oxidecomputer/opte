@@ -6,10 +6,6 @@
 
 //! OPTE driver administration library
 
-use std::fs::File;
-use std::fs::OpenOptions;
-use std::os::unix::io::AsRawFd;
-
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::SetXdeUnderlayReq;
@@ -18,16 +14,22 @@ use opte_ioctl::run_cmd_ioctl;
 use opte_ioctl::Error;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::overlay;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::os::unix::io::AsRawFd;
 
 include!(concat!(env!("OUT_DIR"), "/gen.rs"));
 
@@ -226,11 +228,42 @@ impl OpteAdm {
         )
     }
 
+    pub fn set_v2b(&self, req: &SetVirt2BoundaryReq) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetVirt2Boundary;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn clear_v2b(
+        &self,
+        req: &ClearVirt2BoundaryReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearVirt2Boundary;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    /// Dump the Virtual-to-Boundary mappings.
+    pub fn dump_v2b(&self) -> Result<overlay::DumpVirt2BoundaryResp, Error> {
+        let cmd = OpteCmd::DumpVirt2Boundary;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&overlay::DumpVirt2BoundaryReq { unused: 99 }),
+        )
+    }
+
     pub fn add_router_entry(
         &self,
         req: &AddRouterEntryReq,
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::AddRouterEntry;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn set_external_ips(
+        &self,
+        req: &SetExternalIpsReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetExternalIps;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 }

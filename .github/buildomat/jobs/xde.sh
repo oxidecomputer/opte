@@ -3,7 +3,7 @@
 #: name = "opte-xde"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2023-10-23"
+#: rust_toolchain = "nightly-2024-02-06"
 #: output_rules = [
 #:   "=/work/debug/xde.dbg",
 #:   "=/work/debug/xde.dbg.sha256",
@@ -17,6 +17,15 @@
 #:   "=/work/xde.conf",
 #: ]
 #:
+#: [[publish]]
+#: series = "module"
+#: name = "xde"
+#: from_output = "/work/release/xde"
+#
+#: [[publish]]
+#: series = "module"
+#: name = "xde.sha256"
+#: from_output = "/work/release/xde.sha256"
 
 set -o errexit
 set -o pipefail
@@ -66,13 +75,15 @@ pushd xde
 cp xde.conf /work/xde.conf
 
 header "check style"
-ptime -m cargo +nightly-2023-10-23 fmt -p xde -p xde-link -- --check
+ptime -m cargo +nightly-2024-02-06 fmt -p xde -p xde-link -- --check
 
 header "analyze"
-ptime -m cargo clippy -- --allow clippy::uninlined-format-args
+ptime -m cargo clippy -- \
+    --allow clippy::uninlined-format-args --allow clippy::bad_bit_mask
 
 pushd xde-link
-ptime -m cargo clippy -- --allow clippy::uninlined-format-args
+ptime -m cargo clippy -- \
+    --allow clippy::uninlined-format-args --allow clippy::bad_bit_mask
 popd
 
 header "build xde (debug)"
@@ -112,7 +123,7 @@ sha256sum $REL_TGT/xde_link.so > $REL_TGT/xde_link.so.sha256
 
 header "build xde integration tests"
 pushd xde-tests
-cargo +nightly-2023-10-23 fmt -- --check
+cargo +nightly-2024-02-06 fmt -- --check
 cargo clippy --all-targets
 cargo build --test loopback
 loopback_test=$(

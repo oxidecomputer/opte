@@ -8,11 +8,11 @@
 #include "common.h"
 #include "protos.d"
 
-#define	HDR_FMT		"%-8s %-3s %-43s %s\n"
-#define	LINE_FMT	"%-8s %-3s %-43s %u\n"
+#define	HDR_FMT		"%-8s %-3s %-43s %s %s\n"
+#define	LINE_FMT	"%-8s %-3s %-43s %u %u\n"
 
 BEGIN {
-	printf(HDR_FMT, "PORT", "DIR", "FLOW", "EPOCH");
+	printf(HDR_FMT, "PORT", "DIR", "FLOW", "EPOCH", "LAST_HIT");
 	num = 0;
 }
 
@@ -22,9 +22,10 @@ uft-hit {
 	this->flow = (flow_id_sdt_arg_t *)arg2;
 	this->epoch = arg3;
 	this->af = this->flow->af;
+	this->last_hit = arg4;
 
 	if (num >= 10) {
-		printf(HDR_FMT, "PORT", "DIR", "FLOW", "EPOCH");
+		printf(HDR_FMT, "PORT", "DIR", "FLOW", "EPOCH", "LAST_HIT");
 		num = 0;
 	}
 
@@ -35,13 +36,13 @@ uft-hit {
 
 uft-hit /this->af == AF_INET/ {
 	FLOW_FMT(this->s, this->flow);
-	printf(LINE_FMT, this->port, this->dir, this->s, this->epoch);
+	printf(LINE_FMT, this->port, this->dir, this->s, this->epoch, this->last_hit);
 	num++;
 }
 
 uft-hit /this->af == AF_INET6/ {
 	FLOW_FMT6(this->s, this->flow);
-	printf(LINE_FMT, this->port, this->dir, this->s, this->epoch);
+	printf(LINE_FMT, this->port, this->dir, this->s, this->epoch, this->last_hit);
 	num++;
 }
 
