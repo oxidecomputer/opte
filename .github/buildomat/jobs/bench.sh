@@ -5,7 +5,6 @@
 #: target = "helios-2.0"
 #: rust_toolchain = "stable"
 #: output_rules = [
-#:   "=/work/bench-results/*",
 #:   "=/work/bench-results.tgz",
 #: ]
 #:
@@ -56,7 +55,8 @@ function get_artifact {
     mkdir -p download
     pushd download
     if [[ ! -f $name ]]; then
-        curl_res=$(curl -fOL $url/$repo/$series/$commit/$name)
+        curl -fOL $url/$repo/$series/$commit/$name
+        curl_res=$?
     fi
     popd
 
@@ -69,8 +69,17 @@ mkdir -p $OUT_DIR
 mkdir -p target/criterion
 mkdir -p target/xde-bench
 
-banner "collect baseline"
+banner "collect"
+
+# If we're on a PR, compare against master.
+# If we're on master, compare against our parent.
 BASELINE_COMMIT=`cat .git/refs/heads/master`
+if [[ $GITHUB_BRANCH == "master" ]]; then
+    BASELINE_COMMIT=`git log --pretty=%P -n 1 "$GITHUB_BRANCH"`
+fi
+
+# XXX: TEMP - test rest of machinery
+BASELINE_COMMIT=08c5b9f8da2aff49124653464ee4750079c85093
 
 if get_artifact opte benchmark $BASELINE_COMMIT bench-results.tgz; then
     # Illumos tar seems to lack --strip/--strip-components.
