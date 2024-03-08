@@ -5,8 +5,14 @@
 #: target = "helios-2.0"
 #: rust_toolchain = "stable"
 #: output_rules = [
-#:   "=/work/bench_results/*",
+#:   "=/work/bench-results/*",
+#:   "=/work/bench-results.tgz",
 #: ]
+#:
+#: [[publish]]
+#: series = "benchmark" 
+#: name = "bench-results.tgz"
+#: from_output = "/work/bench_results.tgz"
 #:
 #: [dependencies.xde]
 #: job = "opte-xde"
@@ -39,6 +45,8 @@ function cleanup {
 trap cleanup EXIT
 
 function get_artifact {
+    local curl_res
+
     repo=$1
     series=$2
     commit=$3
@@ -48,9 +56,11 @@ function get_artifact {
     mkdir -p download
     pushd download
     if [[ ! -f $name ]]; then
-        curl -fOL $url/$repo/$series/$commit/$name
+        curl_res=$(curl -fOL $url/$repo/$series/$commit/$name)
     fi
     popd
+
+    return curl_res
 }
 
 OUT_DIR=/work/bench-results
@@ -59,13 +69,17 @@ mkdir -p $OUT_DIR
 mkdir -p target/criterion
 mkdir -p target/xde-bench
 
-banner "collect"
-# get_artifact softnpu image 88f5f1334364e5580fe778c44ac0746a35927351 softnpu
-# get_artifact sidecar-lite release 3fff53ae549ab1348b680845693e66b224bb5d2f libsidecar_lite.so
-# get_artifact sidecar-lite release 3fff53ae549ab1348b680845693e66b224bb5d2f scadm
+banner "collect baseline"
+BASELINE_COMMIT=`cat .git/refs/heads/master`
 
-# TODO: figure out commit hash of master here, pull in and stand up
-# old results in target/criterion
+if get_artifact opte benchmark $BASELINE_COMMIT bench-results.tgz; then
+    # Illumos tar seems to lack --strip/--strip-components.
+    tar -xf download/bench-results.tgz -C target
+    mv target/bench-results/* target/
+    rm -r target/bench-results
+else
+    echo "Baseline results not found for branch 'master'. Running without comparison."
+fi
 
 if [[ $DOWNLOAD_ONLY -eq 1 ]]; then
     exit 0;
@@ -93,3 +107,7 @@ cargo ubench
 
 cp -r target/criterion $OUT_DIR
 cp -r target/xde-bench $OUT_DIR
+
+pushd /work
+tar -caf bench-results.tgz bench-results
+popd
