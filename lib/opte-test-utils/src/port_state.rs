@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Routines for verifying various Port state.
 
@@ -105,7 +105,7 @@ pub fn print_port(
 /// port. It's best not to overthink this, but instead look at some
 /// examples.
 ///
-/// ```
+/// ```text
 /// firewall.rules.in => number of inbound rules in the 'firewall' layer
 /// uft.out => number of outbound UFT entries
 /// epoch => the Port's epoch
@@ -156,6 +156,12 @@ impl VpcPortState {
         counts.insert("stats.port.out_uft_miss".to_string(), 0);
 
         Self { counts, port_state: PortState::Ready }
+    }
+}
+
+impl Default for VpcPortState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -354,7 +360,7 @@ macro_rules! set_na {
 
 /// Set the values of a list of fields and assert.
 ///
-/// ```
+/// ```ignore
 /// set_fields!(pav, "port_state=running, epoch=4, firewall.rules.in=6");
 /// ```
 #[macro_export]
@@ -395,7 +401,7 @@ macro_rules! zero_flows {
 /// `<fields list>` is a `, ` separated list of strings appropriate
 /// for the given instruction.
 ///
-/// ```
+/// ```ignore
 /// update!(g1, ["incr:epoch, firewall.flows.out", "set:port_state=running"])
 /// ```
 #[macro_export]
