@@ -78,9 +78,6 @@ if [[ $GITHUB_BRANCH == "master" ]]; then
     BASELINE_COMMIT=`git log --pretty=%P -n 1 "$GITHUB_BRANCH"`
 fi
 
-# XXX: TEMP - test rest of machinery
-BASELINE_COMMIT=4c997c0f61b83afed0166ad88b1426fb7a295910
-
 if get_artifact opte benchmark $BASELINE_COMMIT bench-results.tgz; then
     # Illumos tar seems to lack --strip/--strip-components.
     tar -xf download/bench-results.tgz -C target
