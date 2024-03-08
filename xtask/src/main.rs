@@ -280,6 +280,9 @@ fn raw_install() -> Result<()> {
     // failure code even if we don't care about it.
     Command::new("rem_drv").arg("xde").output()?;
 
+    let mut conf_path = meta.workspace_root.clone();
+    conf_path.extend(&["xde", "xde.conf"]);
+
     let mut kmod_dir = meta.target_directory.clone();
     kmod_dir.extend(&[KMOD_TARGET, "release", "xde"]);
 
@@ -288,9 +291,18 @@ fn raw_install() -> Result<()> {
     let mut link_dir = meta.target_directory.clone();
     link_dir.extend(&[LINK_TARGET, "release", "libxde_link.so"]);
 
+    std::fs::copy(conf_path, "/kernel/drv/xde.conf")?;
     std::fs::copy(kmod_dir, "/kernel/drv/amd64/xde")?;
+    std::fs::create_dir_all("/opt/oxide/opte/bin")?;
     std::fs::copy(opteadm_dir, "/opt/oxide/opte/bin/opteadm")?;
     std::fs::copy(link_dir, "/usr/lib/devfsadm/linkmod/SUNW_xde_link.so")?;
+
+    Command::new("add_drv")
+        .arg("-m")
+        .arg("'xde 0755 root sys'")
+        .arg("xde")
+        .output_nocapture()
+        .context("add xde driver")?;
 
     Ok(())
 }
@@ -388,6 +400,7 @@ impl BuildTarget {
                     .output_nocapture()
                     .context("failed to link XDE kernel module")?;
 
+                println!("Building xde dev link helper ({profile}).");
                 build_cargo_bin(&[], !debug, Some("xde/xde-link"), false)?;
 
                 // verify no panicking in the devfsadm plugin
