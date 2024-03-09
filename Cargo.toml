@@ -54,7 +54,7 @@ ipnetwork = { version = "0.20", default-features = false }
 itertools = { version = "0.12", default-features = false }
 libc = "0.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
-nix = { version = "0.27", features = ["signal", "user"] }
+nix = { version = "0.28", features = ["signal", "user"] }
 pcap-parser = "0.15"
 postcard = { version = "1", features = ["alloc"], default-features = false }
 proc-macro2 = { version = "1" }
