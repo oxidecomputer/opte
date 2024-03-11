@@ -272,7 +272,7 @@ impl PortBuilder {
     ) -> result::Result<Port<N>, PortCreateError> {
         let data = PortData {
             state: PortState::Ready,
-            stats: KStatNamed::new("xde", &self.name, PortStats::new())?,
+            stats: Arc::new(KStatNamed::new("xde", &self.name, PortStats::new())?),
             // At this point the layer pipeline is immutable, thus we
             // move the layers out of the mutex.
             layers: self.layers.into_inner(),
@@ -595,7 +595,7 @@ struct PortStats {
 
 struct PortData {
     state: PortState,
-    stats: KStatNamed<PortStats>,
+    stats: Arc<KStatNamed<PortStats>>,
     layers: Vec<Layer>,
     uft_in: FlowTable<UftEntry<InnerFlowId>>,
     uft_out: FlowTable<UftEntry<InnerFlowId>>,
@@ -1153,6 +1153,7 @@ impl<N: NetworkImpl> Port<N> {
         let res = match dir {
             Direction::Out => {
                 let res = self.process_out(&mut data, epoch, pkt, &mut ameta);
+                let stats = data.stats.clone();
                 drop(data);
                 let proc_res = match res {
                     Ok(DecisionOrInstruction::Decision(d)) => Ok(d),
@@ -1160,16 +1161,15 @@ impl<N: NetworkImpl> Port<N> {
                         => xf.transform(pkt, Direction::Out),
                     Err(e) => Err(e),
                 };
-                let mut data = self.data.lock();
-                Self::update_stats_out(&mut data.stats.vals, &proc_res);
-                drop(data);
+                Self::update_stats_out(&stats.vals, &proc_res);
                 proc_res
             }
 
             Direction::In => {
                 let res = self.process_in(&mut data, epoch, pkt, &mut ameta);
-                Self::update_stats_in(&mut data.stats.vals, &res);
+                let stats = data.stats.clone();
                 drop(data);
+                Self::update_stats_in(&stats.vals, &res);
                 res
             }
         };
@@ -1769,7 +1769,7 @@ impl<N: NetworkImpl> Port<N> {
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::In;
 
-        data.stats.vals.in_uft_miss += 1;
+        data.stats.vals.in_uft_miss.incr();
         let flow_before = *pkt.flow();
         let mut xforms = Transforms::new();
         let res = self.layers_process(data, In, pkt, &mut xforms, ameta);
@@ -1946,7 +1946,7 @@ impl<N: NetworkImpl> Port<N> {
                 // Arc<HdrTransform>; that way we only hold the lock
                 // for lookup.
                 entry.hit();
-                data.stats.vals.in_uft_hit += 1;
+                data.stats.vals.in_uft_hit.incr();
                 self.uft_hit_probe(In, pkt.flow(), epoch, entry.last_hit());
 
                 for ht in &entry.state().xforms.hdr {
@@ -2116,7 +2116,7 @@ impl<N: NetworkImpl> Port<N> {
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::Out;
 
-        data.stats.vals.out_uft_miss += 1;
+        data.stats.vals.out_uft_miss.incr();
         let mut tcp_closed = false;
 
         // For outbound traffic the TCP flow table must be checked
@@ -2225,7 +2225,7 @@ impl<N: NetworkImpl> Port<N> {
         match uft_out.get_mut(pkt.flow()) {
             Some(entry) if entry.state().epoch == epoch => {
                 entry.hit();
-                data.stats.vals.out_uft_hit += 1;
+                data.stats.vals.out_uft_hit.incr();
                 self.uft_hit_probe(Out, pkt.flow(), epoch, entry.last_hit());
 
                 let mut invalidated = false;
@@ -2424,25 +2424,25 @@ impl<N: NetworkImpl> Port<N> {
     }
 
     fn update_stats_in(
-        stats: &mut PortStats,
+        stats: &PortStats,
         res: &result::Result<ProcessResult, ProcessError>,
     ) {
         match res {
-            Ok(ProcessResult::Bypass) => stats.in_bypass += 1,
+            Ok(ProcessResult::Bypass) => stats.in_bypass.incr(),
 
             Ok(ProcessResult::Drop { reason }) => {
-                stats.in_drop += 1;
+                stats.in_drop.incr();
 
                 match reason {
-                    DropReason::HandlePkt => stats.in_drop_handle_pkt += 1,
-                    DropReason::Layer { .. } => stats.in_drop_layer += 1,
-                    DropReason::TcpErr => stats.in_drop_tcp_err += 1,
+                    DropReason::HandlePkt => stats.in_drop_handle_pkt.incr(),
+                    DropReason::Layer { .. } => stats.in_drop_layer.incr(),
+                    DropReason::TcpErr => stats.in_drop_tcp_err.incr(),
                 }
             }
 
-            Ok(ProcessResult::Modified) => stats.in_modified += 1,
+            Ok(ProcessResult::Modified) => stats.in_modified.incr(),
 
-            Ok(ProcessResult::Hairpin(_)) => stats.in_hairpin += 1,
+            Ok(ProcessResult::Hairpin(_)) => stats.in_hairpin.incr(),
 
             // XXX We should split the different error types out into
             // individual stats. However, I'm not sure exactly how I
@@ -2452,30 +2452,30 @@ impl<N: NetworkImpl> Port<N> {
             // to just have a top-level error counter in the
             // PortStats, and then also publisher LayerStats for each
             // layer along with the different error counts.
-            Err(_) => stats.in_process_err += 1,
+            Err(_) => stats.in_process_err.incr(),
         }
     }
 
     fn update_stats_out(
-        stats: &mut PortStats,
+        stats: &PortStats,
         res: &result::Result<ProcessResult, ProcessError>,
     ) {
         match res {
-            Ok(ProcessResult::Bypass) => stats.out_bypass += 1,
+            Ok(ProcessResult::Bypass) => stats.out_bypass.incr(),
 
             Ok(ProcessResult::Drop { reason }) => {
-                stats.out_drop += 1;
+                stats.out_drop.incr();
 
                 match reason {
-                    DropReason::HandlePkt => stats.out_drop_handle_pkt += 1,
-                    DropReason::Layer { .. } => stats.out_drop_layer += 1,
-                    DropReason::TcpErr => stats.out_drop_tcp_err += 1,
+                    DropReason::HandlePkt => stats.out_drop_handle_pkt.incr(),
+                    DropReason::Layer { .. } => stats.out_drop_layer.incr(),
+                    DropReason::TcpErr => stats.out_drop_tcp_err.incr(),
                 }
             }
 
-            Ok(ProcessResult::Modified) => stats.out_modified += 1,
+            Ok(ProcessResult::Modified) => stats.out_modified.incr(),
 
-            Ok(ProcessResult::Hairpin(_)) => stats.out_hairpin += 1,
+            Ok(ProcessResult::Hairpin(_)) => stats.out_hairpin.incr(),
 
             // XXX We should split the different error types out into
             // individual stats. However, I'm not sure exactly how I
@@ -2485,7 +2485,7 @@ impl<N: NetworkImpl> Port<N> {
             // to just have a top-level error counter in the
             // PortStats, and then also publisher LayerStats for each
             // layer along with the different error counts.
-            Err(_) => stats.out_process_err += 1,
+            Err(_) => stats.out_process_err.incr(),
         }
     }
 }

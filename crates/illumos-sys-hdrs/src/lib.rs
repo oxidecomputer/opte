@@ -12,7 +12,8 @@ pub mod kernel;
 #[cfg(feature = "kernel")]
 pub use kernel::*;
 
-use core::ptr;
+use core::{ptr, sync::atomic::AtomicU64};
+use core::sync::atomic::Ordering;
 
 // The following are "C type" aliases for native Rust types so that
 // the native illumos structures may be defined almost verbatim to the
@@ -118,7 +119,7 @@ impl kstat_named_t {
     }
 
     pub fn val_u64(&self) -> u64 {
-        unsafe { self.value._u64 }
+        unsafe { self.value._u64_a.load(Ordering::Relaxed) }
     }
 }
 
@@ -132,6 +133,7 @@ impl Default for kstat_named_t {
     }
 }
 
+// 
 #[repr(C)]
 pub union KStatNamedValue {
     _c: [c_char; 16],
@@ -139,25 +141,37 @@ pub union KStatNamedValue {
     _u32: u32,
     _i64: i64,
     _u64: u64,
+    _u64_a: core::mem::ManuallyDrop<AtomicU64>,
 }
 
-impl core::ops::AddAssign<u64> for KStatNamedValue {
-    #[inline]
-    fn add_assign(&mut self, other: u64) {
-        unsafe { self._u64 += other };
-    }
-}
+// impl core::ops::AddAssign<u64> for KStatNamedValue {
+//     #[inline]
+//     fn add_assign(&mut self, other: u64) {
+//         unsafe { self._u64 += other };
+//     }
+// }
 
-impl core::ops::SubAssign<u64> for KStatNamedValue {
-    #[inline]
-    fn sub_assign(&mut self, other: u64) {
-        unsafe { self._u64 -= other };
-    }
-}
+// impl core::ops::SubAssign<u64> for KStatNamedValue {
+//     #[inline]
+//     fn sub_assign(&mut self, other: u64) {
+//         unsafe { self._u64 -= other };
+//     }
+// }
 
 impl KStatNamedValue {
-    pub fn set_u64(&mut self, val: u64) {
-        self._u64 = val;
+    #[inline]
+    pub fn set_u64(&self, val: u64) {
+        unsafe {self._u64_a.store(val, Ordering::Relaxed);}
+    }
+
+    #[inline]
+    pub fn incr_u64(&self, other: u64) {
+        unsafe {self._u64_a.fetch_add(other, Ordering::Relaxed);}
+    }
+
+    #[inline]
+    pub fn decr_u64(&self, other: u64) {
+        unsafe {self._u64_a.fetch_sub(other, Ordering::Relaxed);}
     }
 }
 

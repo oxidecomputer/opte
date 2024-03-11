@@ -11,6 +11,8 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use core::fmt;
 use core::fmt::Display;
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -221,35 +223,45 @@ impl KStatU64 {
         Self { inner: kstat_named_t::new() }
     }
 
-    pub fn set(&mut self, val: u64) {
+    pub fn set(&self, val: u64) {
         self.inner.value.set_u64(val);
     }
 
     pub fn val(&self) -> u64 {
         self.inner.val_u64()
     }
-}
 
-#[cfg(all(not(feature = "std"), not(test)))]
-impl core::ops::AddAssign<u64> for KStatU64 {
     #[inline]
-    fn add_assign(&mut self, other: u64) {
-        self.inner.value += other;
+    pub fn incr_by(&self, other: u64) {
+        self.inner.value.incr_u64(other);
+    }
+
+    #[inline]
+    pub fn decr_by(&self, other: u64) {
+        self.inner.value.decr_u64(other);
     }
 }
 
-#[cfg(all(not(feature = "std"), not(test)))]
-impl core::ops::SubAssign<u64> for KStatU64 {
-    #[inline]
-    fn sub_assign(&mut self, other: u64) {
-        self.inner.value -= other;
-    }
-}
+// #[cfg(all(not(feature = "std"), not(test)))]
+// impl core::ops::AddAssign<u64> for KStatU64 {
+//     #[inline]
+//     fn add_assign(&mut self, other: u64) {
+//         self.inner.value += other;
+//     }
+// }
+
+// #[cfg(all(not(feature = "std"), not(test)))]
+// impl core::ops::SubAssign<u64> for KStatU64 {
+//     #[inline]
+//     fn sub_assign(&mut self, other: u64) {
+//         self.inner.value -= other;
+//     }
+// }
 
 #[cfg(any(feature = "std", test))]
 #[derive(Default)]
 pub struct KStatU64 {
-    value: u64,
+    value: AtomicU64,
 }
 
 #[cfg(any(feature = "std", test))]
@@ -262,28 +274,50 @@ impl KStatU64 {
         Self::default()
     }
 
-    pub fn set(&mut self, val: u64) {
-        self.value = val;
+    pub fn set(&self, val: u64) {
+        self.value.store(val, Ordering::Relaxed);
     }
 
     pub fn val(&self) -> u64 {
-        self.value
+        self.value.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn incr_by(&self, other: u64) {
+        self.value.fetch_add(other, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn decr_by(&self, other: u64) {
+        self.value.fetch_sub(other, Ordering::Relaxed);
     }
 }
 
-#[cfg(any(feature = "std", test))]
-impl core::ops::AddAssign<u64> for KStatU64 {
-    fn add_assign(&mut self, other: u64) {
-        self.value += other;
+impl KStatU64 {
+    #[inline]
+    pub fn incr(&self) {
+        self.incr_by(1)
+    }
+
+    #[inline]
+    pub fn decr(&self) {
+        self.decr_by(1)
     }
 }
 
-#[cfg(any(feature = "std", test))]
-impl core::ops::SubAssign<u64> for KStatU64 {
-    fn sub_assign(&mut self, other: u64) {
-        self.value -= other;
-    }
-}
+// #[cfg(any(feature = "std", test))]
+// impl core::ops::AddAssign<u64> for KStatU64 {
+//     fn add_assign(&mut self, other: u64) {
+//         self.value += other;
+//     }
+// }
+
+// #[cfg(any(feature = "std", test))]
+// impl core::ops::SubAssign<u64> for KStatU64 {
+//     fn sub_assign(&mut self, other: u64) {
+//         self.value -= other;
+//     }
+// }
 
 /// A kstat error.
 #[derive(Clone, Debug)]

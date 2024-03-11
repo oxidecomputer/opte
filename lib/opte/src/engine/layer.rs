@@ -517,16 +517,16 @@ impl Layer {
         match dir {
             Direction::Out => {
                 self.rules_out.add(rule);
-                self.stats.vals.out_rules += 1;
+                self.stats.vals.out_rules.incr();
             }
 
             Direction::In => {
                 self.rules_in.add(rule);
-                self.stats.vals.in_rules += 1;
+                self.stats.vals.in_rules.incr();
             }
         }
 
-        self.stats.vals.add_rule_called += 1;
+        self.stats.vals.add_rule_called.incr();
     }
 
     /// Clear all flows from the layer's flow tables.
@@ -735,7 +735,7 @@ impl Layer {
 
         // Unwrap: We know this is fine because the stat names are
         // generated from the LayerStats structure.
-        let mut stats = KStatNamed::new(
+        let stats = KStatNamed::new(
             "xde",
             &format!("{}_{}", port, name),
             LayerStats::new(),
@@ -828,12 +828,12 @@ impl Layer {
 
         match action {
             Some(ActionDescEntry::NoOp) => {
-                self.stats.vals.in_lft_hit += 1;
+                self.stats.vals.in_lft_hit.incr();
                 Ok(LayerResult::Allow)
             }
 
             Some(ActionDescEntry::Desc(desc)) => {
-                self.stats.vals.in_lft_hit += 1;
+                self.stats.vals.in_lft_hit.incr();
                 let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::In);
                 pkt.hdr_transform(&ht)?;
@@ -874,17 +874,17 @@ impl Layer {
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::In;
 
-        self.stats.vals.in_lft_miss += 1;
+        self.stats.vals.in_lft_miss.incr();
         let mut rdr = pkt.get_body_rdr();
         let rule =
             self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta, &mut rdr);
         let _ = rdr.finish();
 
         let action = if let Some(rule) = rule {
-            self.stats.vals.in_rule_match += 1;
+            self.stats.vals.in_rule_match.incr();
             rule.action()
         } else {
-            self.stats.vals.in_rule_nomatch += 1;
+            self.stats.vals.in_rule_nomatch.incr();
             self.default_in_hits += 1;
             self.default_in.into()
         };
@@ -894,7 +894,7 @@ impl Layer {
 
             Action::StatefulAllow => {
                 if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.in_lft_full += 1;
+                    self.stats.vals.in_lft_full.incr();
                     return Err(LayerError::FlowTableFull {
                         layer: self.name,
                         dir: In,
@@ -908,12 +908,12 @@ impl Layer {
                 let flow_out = pkt.flow().mirror();
                 let desc = ActionDescEntry::NoOp;
                 self.ft.add_pair(desc, *pkt.flow(), flow_out);
-                self.stats.vals.flows += 1;
+                self.stats.vals.flows.incr();
                 Ok(LayerResult::Allow)
             }
 
             Action::Deny => {
-                self.stats.vals.in_deny += 1;
+                self.stats.vals.in_deny.incr();
                 let reason = if rule.is_some() {
                     self.rule_deny_probe(In, pkt.flow());
                     DenyReason::Rule
@@ -1004,7 +1004,7 @@ impl Layer {
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
                 if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.in_lft_full += 1;
+                    self.stats.vals.in_lft_full.incr();
                     return Err(LayerError::FlowTableFull {
                         layer: self.name,
                         dir: In,
@@ -1061,7 +1061,7 @@ impl Layer {
                     flow_before,
                     flow_out,
                 );
-                self.stats.vals.flows += 1;
+                self.stats.vals.flows.incr();
                 Ok(LayerResult::Allow)
             }
 
@@ -1125,12 +1125,12 @@ impl Layer {
 
         match action {
             Some(ActionDescEntry::NoOp) => {
-                self.stats.vals.out_lft_hit += 1;
+                self.stats.vals.out_lft_hit.incr();
                 Ok(LayerResult::Allow)
             }
 
             Some(ActionDescEntry::Desc(desc)) => {
-                self.stats.vals.out_lft_hit += 1;
+                self.stats.vals.out_lft_hit.incr();
                 let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::Out);
                 pkt.hdr_transform(&ht)?;
@@ -1171,17 +1171,17 @@ impl Layer {
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::Out;
 
-        self.stats.vals.out_lft_miss += 1;
+        self.stats.vals.out_lft_miss.incr();
         let mut rdr = pkt.get_body_rdr();
         let rule =
             self.rules_out.find_match(pkt.flow(), pkt.meta(), ameta, &mut rdr);
         let _ = rdr.finish();
 
         let action = if let Some(rule) = rule {
-            self.stats.vals.out_rule_match += 1;
+            self.stats.vals.out_rule_match.incr();
             rule.action()
         } else {
-            self.stats.vals.out_rule_nomatch += 1;
+            self.stats.vals.out_rule_nomatch.incr();
             self.default_out_hits += 1;
             self.default_out.into()
         };
@@ -1191,7 +1191,7 @@ impl Layer {
 
             Action::StatefulAllow => {
                 if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.out_lft_full += 1;
+                    self.stats.vals.out_lft_full.incr();
                     return Err(LayerError::FlowTableFull {
                         layer: self.name,
                         dir: Out,
@@ -1207,12 +1207,12 @@ impl Layer {
                 // reflect the traffic direction change.
                 let flow_in = pkt.flow().mirror();
                 self.ft.add_pair(ActionDescEntry::NoOp, flow_in, *pkt.flow());
-                self.stats.vals.flows += 1;
+                self.stats.vals.flows.incr();
                 Ok(LayerResult::Allow)
             }
 
             Action::Deny => {
-                self.stats.vals.out_deny += 1;
+                self.stats.vals.out_deny.incr();
                 let reason = if rule.is_some() {
                     self.rule_deny_probe(Out, pkt.flow());
                     DenyReason::Rule
@@ -1303,7 +1303,7 @@ impl Layer {
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
                 if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.out_lft_full += 1;
+                    self.stats.vals.out_lft_full.incr();
                     return Err(LayerError::FlowTableFull {
                         layer: self.name,
                         dir: Out,
@@ -1363,7 +1363,7 @@ impl Layer {
                     flow_in,
                     flow_before,
                 );
-                self.stats.vals.flows += 1;
+                self.stats.vals.flows.incr();
                 Ok(LayerResult::Allow)
             }
 
@@ -1440,16 +1440,16 @@ impl Layer {
         match dir {
             Direction::In => {
                 self.rules_in.remove(id)?;
-                self.stats.vals.in_rules -= 1;
+                self.stats.vals.in_rules.decr();
             }
 
             Direction::Out => {
                 self.rules_out.remove(id)?;
-                self.stats.vals.out_rules -= 1;
+                self.stats.vals.out_rules.decr();
             }
         }
 
-        self.stats.vals.remove_rule_called += 1;
+        self.stats.vals.remove_rule_called.incr();
         Ok(())
     }
 
@@ -1532,7 +1532,7 @@ impl Layer {
     ) {
         self.rules_in.set_rules(in_rules);
         self.rules_out.set_rules(out_rules);
-        self.stats.vals.set_rules_called += 1;
+        self.stats.vals.set_rules_called.incr();
         self.stats.vals.in_rules.set(self.rules_in.num_rules() as u64);
         self.stats.vals.out_rules.set(self.rules_out.num_rules() as u64);
     }
