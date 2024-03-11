@@ -474,7 +474,7 @@ pub struct UftEntry<Id> {
     pair: Option<Id>,
 
     /// The transformations to perform.
-    xforms: Transforms,
+    xforms: Arc<Transforms>,
 
     /// The port epoch upon which this entry was established. Used for
     /// invalidation when the rule set is updated.
@@ -1153,17 +1153,26 @@ impl<N: NetworkImpl> Port<N> {
         let res = match dir {
             Direction::Out => {
                 let res = self.process_out(&mut data, epoch, pkt, &mut ameta);
-                Self::update_stats_out(&mut data.stats.vals, &res);
-                res
+                drop(data);
+                let proc_res = match res {
+                    Ok(DecisionOrInstruction::Decision(d)) => Ok(d),
+                    Ok(DecisionOrInstruction::Instruction(xf))
+                        => xf.transform(pkt, Direction::Out),
+                    Err(e) => Err(e),
+                };
+                let mut data = self.data.lock();
+                Self::update_stats_out(&mut data.stats.vals, &proc_res);
+                drop(data);
+                proc_res
             }
 
             Direction::In => {
                 let res = self.process_in(&mut data, epoch, pkt, &mut ameta);
                 Self::update_stats_in(&mut data.stats.vals, &res);
+                drop(data);
                 res
             }
         };
-        drop(data);
 
         // Emit the updated headers if the packet was modified as part
         // of processing.
@@ -1328,6 +1337,18 @@ pub(crate) struct Transforms {
 impl Transforms {
     fn new() -> Self {
         Self { hdr: Vec::with_capacity(8), body: Vec::with_capacity(2) }
+    }
+
+    fn transform(&self, pkt: &mut Packet<Parsed>, dir: Direction) -> result::Result<ProcessResult, ProcessError> {
+        for ht in &self.hdr {
+            pkt.hdr_transform(ht)?;
+        }
+
+        for bt in &self.body {
+            pkt.body_transform(dir, &**bt)?;
+        }
+
+        Ok(ProcessResult::Modified)
     }
 }
 
@@ -1783,6 +1804,7 @@ impl<N: NetworkImpl> Port<N> {
             Err(e) => return Err(ProcessError::Layer(e)),
         }
 
+        let xforms = xforms.into();
         let ufid_out = pkt.flow().mirror();
         let hte = UftEntry { pair: Some(ufid_out), xforms, epoch };
 
@@ -2151,6 +2173,7 @@ impl<N: NetworkImpl> Port<N> {
         let mut xforms = Transforms::new();
         let flow_before = *pkt.flow();
         let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
+        let xforms = xforms.into();
         let hte = UftEntry { pair: None, xforms, epoch };
 
         match res {
@@ -2192,7 +2215,7 @@ impl<N: NetworkImpl> Port<N> {
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         ameta: &mut ActionMeta,
-    ) -> result::Result<ProcessResult, ProcessError> {
+    ) -> result::Result<DecisionOrInstruction, ProcessError> {
         use Direction::Out;
 
         let uft_out = &mut data.uft_out;
@@ -2252,7 +2275,7 @@ impl<N: NetworkImpl> Port<N> {
                             );
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
-                            });
+                            }.into());
                         }
 
                         Err(ProcessError::MissingFlow(flow_id)) => {
@@ -2266,7 +2289,7 @@ impl<N: NetworkImpl> Port<N> {
                             data.uft_out.remove(pkt.flow());
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
-                            });
+                            }.into());
                         }
                         _ => unreachable!(
                             "Cannot return other errors from process_in_tcp_new"
@@ -2280,14 +2303,7 @@ impl<N: NetworkImpl> Port<N> {
                 // existing transforms if we're going to behave as though we
                 // have a UFT miss.
                 if !reprocess {
-                    for ht in &entry.state().xforms.hdr {
-                        pkt.hdr_transform(ht)?;
-                    }
-
-                    for bt in &entry.state().xforms.body {
-                        pkt.body_transform(Out, &**bt)?;
-                    }
-
+                    let hts = entry.state().xforms.clone();
                     // Due to borrowing constraints from order of operations, we have
                     // to remove the UFT entry here rather than in `update_tcp_entry`.
                     // The TCP entry itself is already removed.
@@ -2299,7 +2315,7 @@ impl<N: NetworkImpl> Port<N> {
                         );
                     }
 
-                    return Ok(ProcessResult::Modified);
+                    return Ok(hts.into());
                 } else if invalidated {
                     self.uft_tcp_closed(data, &flow_before, ufid_in.as_ref());
                 }
@@ -2318,7 +2334,7 @@ impl<N: NetworkImpl> Port<N> {
             None => (),
         }
 
-        self.process_out_miss(data, epoch, pkt, ameta)
+        self.process_out_miss(data, epoch, pkt, ameta).map(Into::into)
     }
 
     fn uft_invalidate(
@@ -2523,6 +2539,23 @@ impl<N: NetworkImpl> Port<N> {
             .find(|layer| layer.name() == layer_name)
             .map(|layer| layer.num_rules(dir))
             .unwrap_or_else(|| panic!("layer not found: {}", layer_name))
+    }
+}
+
+enum DecisionOrInstruction {
+    Decision(ProcessResult),
+    Instruction(Arc<Transforms>),
+}
+
+impl From<ProcessResult> for DecisionOrInstruction {
+    fn from(value: ProcessResult) -> Self {
+        Self::Decision(value)
+    }
+}
+
+impl From<Arc<Transforms>> for DecisionOrInstruction {
+    fn from(value: Arc<Transforms>) -> Self {
+        Self::Instruction(value)
     }
 }
 
