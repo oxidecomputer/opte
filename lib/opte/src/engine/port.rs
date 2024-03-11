@@ -1169,8 +1169,16 @@ impl<N: NetworkImpl> Port<N> {
                 let res = self.process_in(&mut data, epoch, pkt, &mut ameta);
                 let stats = data.stats.clone();
                 drop(data);
-                Self::update_stats_in(&stats.vals, &res);
-                res
+                // NOTE: INBOUND TCP IS FUBAR
+                let proc_res = match res {
+                    Ok(DecisionOrInstruction::Decision(d)) => Ok(d),
+                    Ok(DecisionOrInstruction::Instruction(xf))
+                        => xf.transform(pkt, Direction::In),
+                    Err(e) => Err(e),
+                };
+                // NOTE: INBOUND TCP IS FUBAR
+                Self::update_stats_in(&stats.vals, &proc_res);
+                proc_res
             }
         };
 
@@ -1933,7 +1941,7 @@ impl<N: NetworkImpl> Port<N> {
         epoch: u64,
         pkt: &mut Packet<Parsed>,
         ameta: &mut ActionMeta,
-    ) -> result::Result<ProcessResult, ProcessError> {
+    ) -> result::Result<DecisionOrInstruction, ProcessError> {
         use Direction::In;
 
         // Use the compiled UFT entry if one exists. Otherwise
@@ -1948,90 +1956,91 @@ impl<N: NetworkImpl> Port<N> {
                 entry.hit();
                 data.stats.vals.in_uft_hit.incr();
                 self.uft_hit_probe(In, pkt.flow(), epoch, entry.last_hit());
+                return Ok(entry.state().xforms.clone().into());
 
-                for ht in &entry.state().xforms.hdr {
-                    pkt.hdr_transform(ht)?;
-                }
+                // for ht in &entry.state().xforms.hdr {
+                //     pkt.hdr_transform(ht)?;
+                // }
 
-                for bt in &entry.state().xforms.body {
-                    pkt.body_transform(In, &**bt)?;
-                }
+                // for bt in &entry.state().xforms.body {
+                //     pkt.body_transform(In, &**bt)?;
+                // }
 
-                // For inbound traffic the TCP flow table must be
-                // checked _after_ processing take place.
-                if pkt.meta().is_inner_tcp() {
-                    match self.process_in_tcp_existing(
-                        data,
-                        pkt.meta(),
-                        pkt.len() as u64,
-                    ) {
-                        Ok(_) => return Ok(ProcessResult::Modified),
-                        Err(ProcessError::TcpFlow(
-                            e @ TcpFlowStateError::NewFlow { .. },
-                        )) => {
-                            self.tcp_err(
-                                &data.tcp_flows,
-                                In,
-                                e.to_string(),
-                                pkt,
-                            );
-                            // We cant redo processing here like we can in `process_out`:
-                            // we already modified the packet to check TCP state.
-                            // However, we *have* deleted and replaced the TCP FSM and
-                            // removed the UFT. The next packet on this flow (SYN-ACK) will
-                            // create the UFT, reference the existing TCP flow, and increment
-                            // all other layers' stats.
-                            return Ok(ProcessResult::Modified);
-                        }
-                        Err(ProcessError::TcpFlow(
-                            e @ TcpFlowStateError::UnexpectedSegment { .. },
-                        )) => {
-                            // Technically unreachable, as we filter these out in `update_tcp_entry`.
-                            // Panicking here would probably be overly fragile, however.
-                            self.tcp_err(
-                                &data.tcp_flows,
-                                Direction::In,
-                                e.to_string(),
-                                pkt,
-                            );
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
-                        }
-                        Err(ProcessError::MissingFlow(flow_id)) => {
-                            let e = format!("Missing TCP flow ID: {flow_id}");
-                            self.tcp_err(
-                                &data.tcp_flows,
-                                Direction::In,
-                                e,
-                                pkt,
-                            );
-                            data.uft_in.remove(pkt.flow());
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
-                        }
-                        Err(ProcessError::FlowTableFull { kind, limit }) => {
-                            let e = format!(
-                                "{kind} flow table full ({limit} entries)"
-                            );
-                            self.tcp_err(
-                                &data.tcp_flows,
-                                Direction::In,
-                                e,
-                                pkt,
-                            );
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
-                        }
-                        _ => unreachable!(
-                            "Cannot return other errors from process_in_tcp_new"
-                        ),
-                    }
-                } else {
-                    return Ok(ProcessResult::Modified);
-                }
+                // // For inbound traffic the TCP flow table must be
+                // // checked _after_ processing take place.
+                // if pkt.meta().is_inner_tcp() {
+                //     match self.process_in_tcp_existing(
+                //         data,
+                //         pkt.meta(),
+                //         pkt.len() as u64,
+                //     ) {
+                //         Ok(_) => return Ok(ProcessResult::Modified),
+                //         Err(ProcessError::TcpFlow(
+                //             e @ TcpFlowStateError::NewFlow { .. },
+                //         )) => {
+                //             self.tcp_err(
+                //                 &data.tcp_flows,
+                //                 In,
+                //                 e.to_string(),
+                //                 pkt,
+                //             );
+                //             // We cant redo processing here like we can in `process_out`:
+                //             // we already modified the packet to check TCP state.
+                //             // However, we *have* deleted and replaced the TCP FSM and
+                //             // removed the UFT. The next packet on this flow (SYN-ACK) will
+                //             // create the UFT, reference the existing TCP flow, and increment
+                //             // all other layers' stats.
+                //             return Ok(ProcessResult::Modified);
+                //         }
+                //         Err(ProcessError::TcpFlow(
+                //             e @ TcpFlowStateError::UnexpectedSegment { .. },
+                //         )) => {
+                //             // Technically unreachable, as we filter these out in `update_tcp_entry`.
+                //             // Panicking here would probably be overly fragile, however.
+                //             self.tcp_err(
+                //                 &data.tcp_flows,
+                //                 Direction::In,
+                //                 e.to_string(),
+                //                 pkt,
+                //             );
+                //             return Ok(ProcessResult::Drop {
+                //                 reason: DropReason::TcpErr,
+                //             });
+                //         }
+                //         Err(ProcessError::MissingFlow(flow_id)) => {
+                //             let e = format!("Missing TCP flow ID: {flow_id}");
+                //             self.tcp_err(
+                //                 &data.tcp_flows,
+                //                 Direction::In,
+                //                 e,
+                //                 pkt,
+                //             );
+                //             data.uft_in.remove(pkt.flow());
+                //             return Ok(ProcessResult::Drop {
+                //                 reason: DropReason::TcpErr,
+                //             });
+                //         }
+                //         Err(ProcessError::FlowTableFull { kind, limit }) => {
+                //             let e = format!(
+                //                 "{kind} flow table full ({limit} entries)"
+                //             );
+                //             self.tcp_err(
+                //                 &data.tcp_flows,
+                //                 Direction::In,
+                //                 e,
+                //                 pkt,
+                //             );
+                //             return Ok(ProcessResult::Drop {
+                //                 reason: DropReason::TcpErr,
+                //             });
+                //         }
+                //         _ => unreachable!(
+                //             "Cannot return other errors from process_in_tcp_new"
+                //         ),
+                //     }
+                // } else {
+                //     return Ok(ProcessResult::Modified);
+                // }
             }
 
             // The entry is from a previous epoch; invalidate its UFT
@@ -2047,7 +2056,7 @@ impl<N: NetworkImpl> Port<N> {
             None => (),
         };
 
-        self.process_in_miss(data, epoch, pkt, ameta)
+        self.process_in_miss(data, epoch, pkt, ameta).map(Into::into)
     }
 
     // Process the TCP packet for the purposes of connection tracking
