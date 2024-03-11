@@ -884,6 +884,10 @@ pub struct mac_soft_ring_set_t {
     srs_ring: *mut c_void,  /*  Ring Descriptor */
 
     // mac_ring_t*
+    // NOTE: srs_ring->mr_srs->sr_lower_proc is called into if
+    // we have hardware classification (mr->mr_classify_type ==
+    // MAC_HW_CLASSIFIER). Might be worth keeping in mind.
+    // otherwise go through mac_rx_flow.
 
     /* Teardown, disable control ops */
     srs_client_cv: kcondvar_t, /* Client wait for the control op */
