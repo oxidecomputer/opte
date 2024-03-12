@@ -376,8 +376,8 @@ pub fn ht_probe(
         } else if #[cfg(feature = "usdt")] {
             let port_s = port.to_str().unwrap();
             let loc_c = loc.to_str().unwrap();
-            let before_s = before.to_string();
-            let after_s = after.to_string();
+            let before_s = flow_id_before.to_string();
+            let after_s = flow_id_after.to_string();
 
             crate::opte_provider::ht__run!(
                 || (port_s, loc_c, dir, before_s, after_s)
