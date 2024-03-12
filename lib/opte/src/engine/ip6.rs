@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! IPv6 headers.
 
@@ -13,6 +13,7 @@ use super::ip4::Protocol;
 pub use super::ip4::UlpCsumOpt;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
+use crate::d_error::DError;
 use crate::engine::predicate::MatchExact;
 use crate::engine::predicate::MatchExactVal;
 use crate::engine::predicate::MatchPrefix;
@@ -32,6 +33,11 @@ pub const IPV6_HDR_VSN_MASK: u8 = 0xF0;
 pub const IPV6_HDR_VSN_SHIFT: u8 = 4;
 pub const IPV6_VERSION: u8 = 6;
 pub const DDM_HEADER_ID: u8 = 0xFE;
+/// Current maximum bytes for extension headers which fit
+/// in IPv6Meta.
+///
+/// TODO: refactor so as *not* to need this.
+pub const IPV6_MAX_EXT_LEN: usize = 64;
 
 impl MatchExactVal for Ipv6Addr {}
 impl MatchPrefixVal for Ipv6Cidr {}
@@ -233,8 +239,8 @@ pub struct Ipv6Hdr<'a> {
     // The proto reference points to the last next_header value (aka
     // the upper-layer protocol number).
     // proto: &'a mut u8,
-
-    // (extensions bytes, protocol field offset)
+    /// Byteslice verified to be smaller than `IPV6_MAX_EXT_LEN`.
+    /// (extensions bytes, protocol field offset).
     ext: Option<(&'a mut [u8], usize)>,
 }
 
@@ -285,6 +291,10 @@ impl<'a> Ipv6Hdr<'a> {
         // Parse the base IPv6 header.
         let buf = rdr.slice_mut(Self::BASE_SIZE)?;
         let base = Ipv6Packet::new_unchecked(buf);
+        match base.version() {
+            6 => {}
+            vsn => return Err(Ipv6HdrError::BadVersion { vsn }),
+        }
 
         // Parse any extension headers.
         //
@@ -301,15 +311,28 @@ impl<'a> Ipv6Hdr<'a> {
             return Ok(Self { base, ext: None });
         }
 
-        // XXX: smoltcp now more or less imposes the same pattern on all these
-        //      branches. This could do with some cleanup as a result.
         let mut proto_offset: usize = 0;
         while !is_ulp_protocol(next_header) {
-            match next_header {
-                IpProtocol::HopByHop => {
+            let n_bytes = match V6ExtClass::from(next_header) {
+                V6ExtClass::Rfc6564 => {
                     let buf = rdr.slice_mut(rdr.seg_left())?;
                     let mut header = Ipv6ExtHeader::new_checked(buf)?;
-                    _ = Ipv6HopByHopHeader::new_checked(header.payload_mut())?;
+
+                    // verify carried protocol if possible.
+                    match next_header {
+                        IpProtocol::HopByHop => {
+                            _ = Ipv6HopByHopHeader::new_checked(
+                                header.payload_mut(),
+                            )?
+                        }
+                        IpProtocol::Ipv6Route => {
+                            _ = Ipv6RoutingHeader::new_checked(
+                                header.payload_mut(),
+                            )?
+                        }
+                        _ => {}
+                    }
+
                     let n_bytes = 8 * (usize::from(header.header_len()) + 1);
                     next_header = header.next_header();
                     let buf = header.into_inner();
@@ -319,27 +342,9 @@ impl<'a> Ipv6Hdr<'a> {
                     // for this header.
                     rdr.seek_back(buf.len() - n_bytes)?;
 
-                    if !is_ulp_protocol(next_header) {
-                        proto_offset += n_bytes;
-                    }
+                    n_bytes
                 }
-
-                IpProtocol::Ipv6Route => {
-                    let buf = rdr.slice_mut(rdr.seg_left())?;
-                    let mut header = Ipv6ExtHeader::new_checked(buf)?;
-                    _ = Ipv6RoutingHeader::new_checked(header.payload_mut())?;
-                    let n_bytes = 8 * (usize::from(header.header_len()) + 1);
-                    next_header = header.next_header();
-                    let buf = header.into_inner();
-                    ext_len += n_bytes;
-                    rdr.seek_back(buf.len() - n_bytes)?;
-
-                    if !is_ulp_protocol(next_header) {
-                        proto_offset += n_bytes;
-                    }
-                }
-
-                IpProtocol::Ipv6Frag => {
+                V6ExtClass::Frag => {
                     // This header's length is fixed.
                     //
                     // We'd like to use `size_of::<Ipv6FragmentRepr>()`, but
@@ -352,37 +357,17 @@ impl<'a> Ipv6Hdr<'a> {
                     _ = Ipv6FragmentHeader::new_checked(header.payload_mut())?;
                     next_header = header.next_header();
 
-                    if !is_ulp_protocol(next_header) {
-                        proto_offset += FRAGMENT_HDR_SIZE;
-                    }
+                    FRAGMENT_HDR_SIZE
                 }
-
-                IpProtocol::Unknown(x) if x == DDM_HEADER_ID => {
-                    // The DDM header packet begins with next_header and the
-                    // length, which describes the entire header excluding
-                    // next_header.
-                    const FIXED_LEN: usize = 2;
-                    let fixed_buf = rdr.slice_mut(FIXED_LEN)?;
-                    next_header = IpProtocol::from(fixed_buf[0]);
-                    // We add one to account for the next_header byte,
-                    // as the DDM length does not include it.
-                    let total_len = usize::from(fixed_buf[1]) + 1;
-                    // We need to read remainder so that the reader is
-                    // in the correct place for the proto_offset to be
-                    // calculated correctly.
-                    let _remainder = rdr.slice_mut(total_len - FIXED_LEN);
-                    ext_len += total_len;
-
-                    if !is_ulp_protocol(next_header) {
-                        proto_offset += total_len;
-                    }
-                }
-
-                x => {
+                _ => {
                     return Err(Ipv6HdrError::UnexpectedNextHeader {
-                        next_header: x.into(),
+                        next_header: next_header.into(),
                     });
                 }
+            };
+
+            if !is_ulp_protocol(next_header) {
+                proto_offset += n_bytes;
             }
         }
 
@@ -390,6 +375,10 @@ impl<'a> Ipv6Hdr<'a> {
         // we've matched on everything we support in the `try_from` impl, this
         // unwrap can't panic.
         let _protocol = Protocol::from(next_header);
+
+        if ext_len > IPV6_MAX_EXT_LEN {
+            return Err(Ipv6HdrError::ExtensionsTooLarge);
+        }
 
         // Seek back to the start of the extensions, then take a slice of
         // all the options.
@@ -464,16 +453,52 @@ impl<'a> Ipv6Hdr<'a> {
 }
 
 fn is_ulp_protocol(proto: IpProtocol) -> bool {
-    use IpProtocol::*;
-    matches!(proto, Icmp | Igmp | Tcp | Udp | Icmpv6)
+    matches!(V6ExtClass::from(proto), V6ExtClass::Ulp)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum V6ExtClass {
+    Ulp,
+    Frag,
+    Rfc6564,
+    Unknown,
+}
+
+impl From<IpProtocol> for V6ExtClass {
+    #[inline]
+    fn from(value: IpProtocol) -> Self {
+        use IpProtocol::*;
+
+        match value {
+            Icmp | Igmp | Tcp | Udp | Icmpv6 => Self::Ulp,
+            Ipv6Frag => Self::Frag,
+            HopByHop | Ipv6Route | Ipv6Opts => Self::Rfc6564,
+            // Also follow RFC6564:
+            // 135 (RFC6275), 139 (RFC7401), 140 (RFC5533)
+            Unknown(x) if x == DDM_HEADER_ID => Self::Rfc6564,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, DError)]
+#[derror(leaf_data = Ipv6HdrError::derror_data)]
 pub enum Ipv6HdrError {
     BadVersion { vsn: u8 },
-    ReadError { error: ReadErr },
+    ReadError(ReadErr),
     UnexpectedNextHeader { next_header: u8 },
     Malformed,
+    ExtensionsTooLarge,
+}
+
+impl Ipv6HdrError {
+    fn derror_data(&self, data: &mut [u64]) {
+        data[0] = match self {
+            Self::BadVersion { vsn } => *vsn as u64,
+            Self::UnexpectedNextHeader { next_header } => *next_header as u64,
+            _ => 0,
+        }
+    }
 }
 
 impl From<smoltcp::wire::Error> for Ipv6HdrError {
@@ -484,7 +509,7 @@ impl From<smoltcp::wire::Error> for Ipv6HdrError {
 
 impl From<ReadErr> for Ipv6HdrError {
     fn from(error: ReadErr) -> Self {
-        Ipv6HdrError::ReadError { error }
+        Ipv6HdrError::ReadError(error)
     }
 }
 
@@ -623,54 +648,54 @@ pub(crate) mod test {
             // and set length manually: this is (inner_len / 8) := the number of
             // 8-byte blocks FOLLOWING the first.
             use IpProtocol::*;
-            let len = match extension {
+            let mut ext_packet = Ipv6ExtHeader::new_checked(&mut buf).unwrap();
+            ext_packet.set_next_header(IpProtocol::Tcp);
+            // Temporarily set high enough to give us enough bytes to emit into.
+            // XXX: propose a joint emit + set_len for smoltcp.
+            ext_packet.set_header_len(3);
+            let len = 2 + match extension {
                 HopByHop => {
                     let hbh = hop_by_hop_header();
-                    let mut packet =
-                        Ipv6ExtHeader::new_checked(&mut buf).unwrap();
-                    packet.set_next_header(IpProtocol::Tcp);
-                    packet.set_header_len((hbh.buffer_len() / 8) as u8);
-                    let mut hbh_packet =
-                        Ipv6HopByHopHeader::new_checked(packet.payload_mut())
-                            .unwrap();
+                    let mut hbh_packet = Ipv6HopByHopHeader::new_checked(
+                        ext_packet.payload_mut(),
+                    )
+                    .unwrap();
                     hbh.emit(&mut hbh_packet);
-                    2 + hbh.buffer_len()
+                    hbh.buffer_len()
                 }
                 Ipv6Frag => {
                     let frag = fragment_header();
-                    let mut packet =
-                        Ipv6ExtHeader::new_checked(&mut buf).unwrap();
-                    packet.set_next_header(IpProtocol::Tcp);
-                    packet.set_header_len(0);
-                    let mut frag_packet =
-                        Ipv6FragmentHeader::new_checked(packet.payload_mut())
-                            .unwrap();
-                    frag.emit(&mut frag_packet);
-                    2 + frag.buffer_len()
+                    let mut frag_packet = Ipv6FragmentHeader::new_checked(
+                        ext_packet.payload_mut(),
+                    )
+                    .unwrap();
+                    fragment_header().emit(&mut frag_packet);
+                    frag.buffer_len()
                 }
                 Ipv6Route => {
                     let route = route_header();
-                    let mut packet =
-                        Ipv6ExtHeader::new_checked(&mut buf).unwrap();
-                    packet.set_next_header(IpProtocol::Tcp);
-                    packet.set_header_len((route.buffer_len() / 8) as u8);
-                    let mut route_packet =
-                        Ipv6RoutingHeader::new_checked(packet.payload_mut())
-                            .unwrap();
+                    let mut route_packet = Ipv6RoutingHeader::new_checked(
+                        ext_packet.payload_mut(),
+                    )
+                    .unwrap();
                     route.emit(&mut route_packet);
-                    2 + route.buffer_len()
+                    route.buffer_len()
                 }
                 Unknown(x) if x == &DDM_HEADER_ID => {
-                    // Starts with next_header, then a length excluding that.
-                    const DDM_HDR_LEN: usize = 15;
-                    buf[1] = DDM_HDR_LEN as u8;
-                    DDM_HDR_LEN + 1
+                    // TODO: actually build DDM ID + Timestamp values here.
+                    //       for now we just emit an empty header here.
+                    14
                 }
                 _ => unimplemented!(
                     "Extension header {:#?} unsupported",
                     extension
                 ),
             };
+            ext_packet.set_header_len(match V6ExtClass::from(*extension) {
+                V6ExtClass::Frag => 0,
+                V6ExtClass::Rfc6564 => u8::try_from((len - 8) / 8).unwrap(),
+                _ => unreachable!(),
+            });
 
             // Move the position markers to the new header.
             header_start = header_end;
@@ -835,5 +860,64 @@ pub(crate) mod test {
             meta.total_len() as usize,
             header.hdr_len() + header.ulp_len()
         );
+    }
+
+    #[test]
+    fn bad_ipv6_version_caught() {
+        // This packet was produced due to prior sidecar testing,
+        // and put 4B between Eth and IPv6. This should fail to
+        // parse 0x00 as a v6 version.
+        #[rustfmt::skip]
+        let buf: &[u8] = &[
+            // Garbage
+            0x00, 0xc8, 0x08, 0x00,
+            // IPv6
+            0x60, 0x00, 0x00, 0x00, 0x02, 0x27, 0x11, 0xfe, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xfd, 0x00, 0x11, 0x22, 0x33, 0x44, 0x01, 0x11, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x17, 0xc1, 0x17, 0xc1,
+            0x02, 0x27, 0xcf, 0x4e, 0x01, 0x00, 0x65, 0x58, 0x00, 0x00, 0x64,
+            0x00, 0x01, 0x29, 0x00, 0x00, 0xa8, 0x40, 0x25, 0xff, 0xe8, 0x5f,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x81, 0x00, 0x45, 0x00, 0x02,
+            0x05, 0xe0, 0x80, 0x40, 0x00, 0x37, 0x06, 0x1a, 0x9f, 0xc6, 0xd3,
+            0x7a, 0x40, 0x2d, 0x9a, 0xd8, 0x25, 0xa1, 0x22, 0x01, 0xbb, 0xad,
+            0x22, 0x51, 0x93, 0xa5, 0xf8, 0x01, 0x58, 0x80, 0x18, 0x01, 0x26,
+            0x02, 0x24, 0x00, 0x00, 0x01, 0x01, 0x08, 0x0a, 0x48, 0xd7, 0x9a,
+            0x23, 0x04, 0x31, 0x9f, 0x43, 0x14, 0x03, 0x03, 0x00, 0x01, 0x01,
+            0x17, 0x03, 0x03, 0x00, 0x45, 0xf6, 0xcd, 0xe2, 0xc1, 0xe5, 0xa0,
+            0x65, 0xa7, 0xfe, 0x29, 0xa8, 0xa2, 0xb0, 0x57, 0x91, 0x7e, 0xac,
+            0xc8, 0x34, 0xdd, 0x6b, 0xfa, 0x21,
+        ];
+
+        let mut pkt = Packet::copy(&buf);
+        let mut reader = pkt.get_rdr_mut();
+        assert!(matches!(
+            Ipv6Hdr::parse(&mut reader),
+            Err(Ipv6HdrError::BadVersion { vsn: 0 })
+        ));
+    }
+
+    #[test]
+    fn too_many_exts_are_parse_error() {
+        // Create a packet with entirely too many extension headers. 80B!
+        let (buf, _) = generate_test_packet(&[
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+            IpProtocol::Ipv6Route,
+        ]);
+        let mut pkt = Packet::copy(&buf);
+        let mut reader = pkt.get_rdr_mut();
+        assert!(matches!(
+            Ipv6Hdr::parse(&mut reader),
+            Err(Ipv6HdrError::ExtensionsTooLarge)
+        ));
     }
 }

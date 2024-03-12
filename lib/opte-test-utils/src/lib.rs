@@ -2,13 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Common routines for integration tests.
 
-// This type of pedantry is more trouble than its worth here.
+// This type of pedantry is more trouble than it's worth here.
 #![allow(dead_code)]
 
+pub mod dhcp;
 pub mod icmp;
 pub mod pcap;
 #[macro_use]
@@ -34,10 +35,12 @@ pub use opte::engine::ip4::Ipv4Hdr;
 pub use opte::engine::ip4::Ipv4Meta;
 pub use opte::engine::ip4::Protocol;
 pub use opte::engine::ip6::Ipv6Addr;
+pub use opte::engine::ip6::Ipv6Hdr;
 pub use opte::engine::ip6::Ipv6Meta;
 pub use opte::engine::layer::DenyReason;
 pub use opte::engine::packet::BodyInfo;
 pub use opte::engine::packet::HdrOffset;
+pub use opte::engine::packet::Initialized;
 pub use opte::engine::packet::Packet;
 pub use opte::engine::packet::Parsed;
 pub use opte::engine::port::meta::ActionMeta;
@@ -50,6 +53,7 @@ pub use opte::engine::tcp::TcpFlags;
 pub use opte::engine::tcp::TcpHdr;
 pub use opte::engine::tcp::TcpMeta;
 pub use opte::engine::udp::UdpHdr;
+pub use opte::engine::udp::UdpMeta;
 pub use opte::engine::GenericUlp;
 pub use opte::ExecCtx;
 pub use oxide_vpc::api::AddFwRuleReq;
@@ -970,6 +974,8 @@ fn _encap(
     dst: TestIpPhys,
     external_snat: bool,
 ) -> Packet<Parsed> {
+    let old_pkt = inner_pkt.all_bytes();
+
     let inner_ip_len = inner_pkt.hdr_offsets().inner.ip.map(|off| off.hdr_len);
 
     let inner_ulp_len =
@@ -986,14 +992,19 @@ fn _encap(
     let geneve = GeneveMeta {
         entropy: 99,
         vni: dst.vni,
-        len: (UdpHdr::SIZE + GeneveHdr::BASE_SIZE + opt_len + inner_len) as u16,
         oxide_external_pkt: external_snat,
     };
+
+    let pay_len: u16 = (inner_len + geneve.hdr_len()).try_into().unwrap();
+    assert_eq!(
+        pay_len as usize,
+        inner_len + UdpHdr::SIZE + GeneveHdr::BASE_SIZE + opt_len
+    );
 
     let ip = Ipv6Meta {
         src: src.ip,
         dst: dst.ip,
-        pay_len: geneve.len,
+        pay_len,
         proto: Protocol::UDP,
         next_hdr: IpProtocol::Udp,
         ..Default::default()
@@ -1007,8 +1018,8 @@ fn _encap(
     let mut wtr = pkt.seg0_wtr();
     eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
     ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-    geneve.emit(wtr.slice_mut(geneve.hdr_len()).unwrap());
-    wtr.write(&inner_pkt.all_bytes()).unwrap();
+    geneve.emit(pay_len, wtr.slice_mut(geneve.hdr_len()).unwrap());
+    wtr.write(&old_pkt).unwrap();
     let pkt = pkt.parse(In, VpcParser::new()).unwrap();
     let off = pkt.hdr_offsets();
     let mut pos = 0;
@@ -1071,6 +1082,9 @@ fn _encap(
             HdrOffset { pkt_pos: pos, seg_idx: 0, seg_pos: pos, hdr_len },
         );
     }
+
+    let new_pkt = pkt.all_bytes();
+    assert_eq!(&new_pkt[new_pkt.len() - old_pkt.len()..], &old_pkt);
 
     pkt
 }

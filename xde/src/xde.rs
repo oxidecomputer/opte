@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! xde - A mac provider for OPTE.
 //!
@@ -47,6 +47,7 @@ use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
+use opte::d_error::ErrorBlock;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
@@ -121,7 +122,8 @@ extern "C" {
         port: uintptr_t,
         dir: uintptr_t,
         mp: uintptr_t,
-        msg: uintptr_t,
+        err_b: uintptr_t,
+        data_len: uintptr_t,
     );
     pub fn __dtrace_probe_guest__loopback(
         mp: uintptr_t,
@@ -148,27 +150,48 @@ fn bad_packet_parse_probe(
     mp: *mut mblk_t,
     err: &PacketError,
 ) {
-    let msg = format!("{:?}", err);
-    bad_packet_probe(port, dir, mp, &msg);
+    let port_str = match port {
+        None => c"unknown",
+        Some(name) => name.as_c_str(),
+    };
+
+    // Truncation is captured *in* the ErrorBlock.
+    let block = match ErrorBlock::<8>::from_err(err) {
+        Ok(block) => block,
+        Err(block) => block,
+    };
+
+    unsafe {
+        __dtrace_probe_bad__packet(
+            port_str.as_ptr() as uintptr_t,
+            dir as uintptr_t,
+            mp as uintptr_t,
+            block.as_ptr() as uintptr_t,
+            4,
+        )
+    };
 }
 
 fn bad_packet_probe(
     port: Option<&CString>,
     dir: Direction,
     mp: *mut mblk_t,
-    msg: &str,
+    msg: &CStr,
 ) {
     let port_str = match port {
-        None => b"unknown\0" as *const u8 as *const i8,
-        Some(name) => name.as_ptr(),
+        None => c"unknown",
+        Some(name) => name.as_c_str(),
     };
-    let msg_arg = CString::new(msg).unwrap();
+    let mut eb = ErrorBlock::<8>::new();
+
     unsafe {
+        let _ = eb.append_name_raw(msg);
         __dtrace_probe_bad__packet(
-            port_str as uintptr_t,
+            port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
-            msg_arg.as_ptr() as uintptr_t,
+            eb.as_ptr() as uintptr_t,
+            8,
         )
     };
 }
@@ -1348,21 +1371,18 @@ fn guest_loopback(
                 }
 
                 Ok(ProcessResult::Drop { reason }) => {
-                    opte::engine::dbg(format!(
-                        "loopback rx drop: {:?}",
-                        reason
-                    ));
+                    opte::engine::dbg!("loopback rx drop: {:?}", reason);
                 }
 
                 Ok(ProcessResult::Hairpin(_hppkt)) => {
                     // There should be no reason for an loopback
                     // inbound packet to generate a hairpin response
                     // from the destination port.
-                    opte::engine::dbg("unexpected loopback rx hairpin");
+                    opte::engine::dbg!("unexpected loopback rx hairpin");
                 }
 
                 Ok(ProcessResult::Bypass) => {
-                    opte::engine::dbg("loopback rx bypass");
+                    opte::engine::dbg!("loopback rx bypass");
                     unsafe {
                         mac::mac_rx(
                             dest_dev.mh,
@@ -1373,23 +1393,23 @@ fn guest_loopback(
                 }
 
                 Err(e) => {
-                    opte::engine::dbg(format!(
+                    opte::engine::dbg!(
                         "loopback port process error: {} -> {} {:?}",
                         src_dev.port.name(),
                         dest_dev.port.name(),
                         e
-                    ));
+                    );
                 }
             }
         }
 
         None => {
-            opte::engine::dbg(format!(
+            opte::engine::dbg!(
                 "underlay dest is same as src but the Port was not found \
                  vni = {}, mac = {}",
                 vni.as_u32(),
                 ether_dst
-            ));
+            );
         }
     }
 
@@ -1439,7 +1459,7 @@ unsafe extern "C" fn xde_mc_tx(
                     mp_chain,
                     &e,
                 );
-                opte::engine::dbg(format!("Tx bad packet: {:?}", e));
+                opte::engine::dbg!("Rx bad packet: {:?}", e);
                 return ptr::null_mut();
             }
         };
@@ -1480,7 +1500,7 @@ unsafe extern "C" fn xde_mc_tx(
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
-                    opte::engine::dbg("no outer ip header, dropping");
+                    opte::engine::dbg!("no outer ip header, dropping");
                     return ptr::null_mut();
                 }
             };
@@ -1488,7 +1508,7 @@ unsafe extern "C" fn xde_mc_tx(
             let ip6 = match ip.ip6() {
                 Some(v) => v,
                 None => {
-                    opte::engine::dbg("outer IP header is not v6, dropping");
+                    opte::engine::dbg!("outer IP header is not v6, dropping");
                     return ptr::null_mut();
                 }
             };
@@ -1498,7 +1518,7 @@ unsafe extern "C" fn xde_mc_tx(
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
-                    opte::engine::dbg("no geneve header, dropping");
+                    opte::engine::dbg!("no geneve header, dropping");
                     return ptr::null_mut();
                 }
             };
@@ -1777,7 +1797,7 @@ fn next_hop<'a>(
         // to the user/operator?
         if ire.inner().is_null() {
             // Try without a pinned ill
-            opte::engine::dbg(format!("no IRE for destination {:?}", ip6_dst));
+            opte::engine::dbg!("no IRE for destination {:?}", ip6_dst);
             next_hop_probe(
                 ip6_dst,
                 None,
@@ -1789,10 +1809,7 @@ fn next_hop<'a>(
         }
         let ill = (*ire.inner()).ire_ill;
         if ill.is_null() {
-            opte::engine::dbg(format!(
-                "destination ILL is NULL for {:?}",
-                ip6_dst
-            ));
+            opte::engine::dbg!("destination ILL is NULL for {:?}", ip6_dst);
             next_hop_probe(
                 ip6_dst,
                 None,
@@ -1836,7 +1853,7 @@ fn next_hop<'a>(
         );
 
         if gw_ire.inner().is_null() {
-            opte::engine::dbg(format!("no IRE for gateway {:?}", gw_ip6));
+            opte::engine::dbg!("no IRE for gateway {:?}", gw_ip6);
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1852,10 +1869,10 @@ fn next_hop<'a>(
         // member or the internet routing entry.
         let src = (*ill).ill_phys_addr;
         if src.is_null() {
-            opte::engine::dbg(format!(
+            opte::engine::dbg!(
                 "gateway ILL phys addr is NULL for {:?}",
                 gw_ip6
-            ));
+            );
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1883,7 +1900,7 @@ fn next_hop<'a>(
         // link-local address.
         let nce = DropRef::new(nce_refrele, ip::nce_lookup_v6(ill, &gw));
         if nce.inner().is_null() {
-            opte::engine::dbg(format!("no NCE for gateway {:?}", gw_ip6));
+            opte::engine::dbg!("no NCE for gateway {:?}", gw_ip6);
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1896,10 +1913,7 @@ fn next_hop<'a>(
 
         let nce_common = (*nce.inner()).nce_common;
         if nce_common.is_null() {
-            opte::engine::dbg(format!(
-                "no NCE common for gateway {:?}",
-                gw_ip6
-            ));
+            opte::engine::dbg!("no NCE common for gateway {:?}", gw_ip6);
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -1912,7 +1926,7 @@ fn next_hop<'a>(
 
         let mac = (*nce_common).ncec_lladdr;
         if mac.is_null() {
-            opte::engine::dbg(format!("NCE MAC address is NULL {:?}", gw_ip6));
+            opte::engine::dbg!("NCE MAC address is NULL {:?}", gw_ip6);
             next_hop_probe(
                 ip6_dst,
                 Some(&gw_ip6),
@@ -2058,7 +2072,7 @@ unsafe extern "C" fn xde_rx(
                 //
                 // We don't know the port yet, thus the None.
                 bad_packet_parse_probe(None, Direction::In, mp_chain, &e);
-                opte::engine::dbg(format!("Rx bad packet: {:?}", e));
+                opte::engine::dbg!("Tx bad packet: {:?}", e);
                 return;
             }
         };
@@ -2072,9 +2086,9 @@ unsafe extern "C" fn xde_rx(
         Some(EncapMeta::Geneve(geneve)) => geneve,
         None => {
             // TODO add stat
-            let msg = "no geneve header, dropping";
+            let msg = c"no geneve header, dropping";
             bad_packet_probe(None, Direction::In, mp_chain, msg);
-            opte::engine::dbg(msg);
+            opte::engine::dbg!("no geneve header, dropping");
             return;
         }
     };
@@ -2086,10 +2100,11 @@ unsafe extern "C" fn xde_rx(
     else {
         // TODO add SDT probe
         // TODO add stat
-        opte::engine::dbg(format!(
+        opte::engine::dbg!(
             "[encap] no device found for vni: {} mac: {}",
-            vni, ether_dst
-        ));
+            vni,
+            ether_dst
+        );
         return;
     };
 

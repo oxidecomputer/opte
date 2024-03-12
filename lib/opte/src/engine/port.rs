@@ -833,10 +833,10 @@ impl<N: NetworkImpl> Port<N> {
         pkt: &mut Packet<Parsed>,
     ) {
         if unsafe { super::opte_panic_debug != 0 } {
-            super::err(format!("mblk: {}", pkt.mblk_ptr_str()));
-            super::err(format!("flow: {}", pkt.flow()));
-            super::err(format!("meta: {:?}", pkt.meta()));
-            super::err(format!("flows: {:?}", data));
+            super::err!("mblk: {}", pkt.mblk_ptr_str());
+            super::err!("flow: {}", pkt.flow());
+            super::err!("meta: {:?}", pkt.meta());
+            super::err!("flows: {:?}", data);
             todo!("bad packet: {}", msg);
         } else {
             self.tcp_err_probe(dir, Some(pkt), pkt.flow(), msg)
@@ -1297,10 +1297,20 @@ impl<N: NetworkImpl> Port<N> {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 enum TcpMaybeClosed {
     Closed { ufid_inbound: Option<InnerFlowId> },
     NewState(TcpState),
+}
+
+impl From<TcpMaybeClosed> for TcpState {
+    fn from(value: TcpMaybeClosed) -> Self {
+        match value {
+            TcpMaybeClosed::Closed { .. } => TcpState::Closed,
+            TcpMaybeClosed::NewState(s) => s,
+        }
+    }
 }
 
 // This is a convenience wrapper for keeping the header and body
@@ -1559,7 +1569,7 @@ impl<N: NetworkImpl> Port<N> {
         tcp: &TcpMeta,
         dir: &TcpDirection,
         pkt_len: u64,
-    ) -> result::Result<TcpState, ProcessError> {
+    ) -> result::Result<TcpMaybeClosed, ProcessError> {
         let tcp_flows = data.tcp_flows();
         let (ufid_out, ufid_in) = match *dir {
             TcpDirection::In { ufid_in, ufid_out } => (ufid_out, Some(ufid_in)),
@@ -1590,23 +1600,27 @@ impl<N: NetworkImpl> Port<N> {
             tfes.inbound_ufid = Some(*ufid_in);
         }
 
-        if matches!(
+        let ufid_inbound = if matches!(
             next_state,
             Ok(TcpState::Closed) | Err(TcpFlowStateError::NewFlow { .. })
         ) {
-            let entry = tcp_flows.remove(ufid_out).unwrap();
-
             // Due to order of operations, out_tcp_existing must
             // call uft_tcp_closed separately.
+            let entry = tcp_flows.remove(ufid_out).unwrap();
+            let state_ufid = entry.state().inbound_ufid;
+
             if let PortDataOrSubset::Port(data) = data {
                 // The inbound side of the UFT is based on
                 // the network-side of the flow (pre-processing).
-                let ufid_in = entry.state().inbound_ufid.as_ref();
-                self.uft_tcp_closed(data, ufid_out, ufid_in);
+                self.uft_tcp_closed(data, ufid_out, state_ufid.as_ref());
             }
-        }
 
-        match next_state {
+            ufid_in.copied().or(state_ufid)
+        } else {
+            None
+        };
+
+        let next_state = match next_state {
             Ok(a) => Ok(a),
             Err(e @ TcpFlowStateError::UnexpectedSegment { state, .. }) => {
                 self.tcp_err_probe(
@@ -1618,7 +1632,12 @@ impl<N: NetworkImpl> Port<N> {
                 Ok(state)
             }
             Err(e) => Err(ProcessError::TcpFlow(e)),
-        }
+        }?;
+
+        Ok(match next_state {
+            TcpState::Closed => TcpMaybeClosed::Closed { ufid_inbound },
+            a => TcpMaybeClosed::NewState(a),
+        })
     }
 
     // Process the TCP packet for the purposes of connection tracking
@@ -1662,9 +1681,10 @@ impl<N: NetworkImpl> Port<N> {
                     &dir,
                     pkt_len,
                 )?;
-                e
+                e.map(Into::into)
             }
-            other => other,
+            Ok(v) => Ok(v.into()),
+            Err(e) => Err(e),
         }
     }
 
@@ -1707,7 +1727,8 @@ impl<N: NetworkImpl> Port<N> {
                 &dir,
                 pkt_len,
             ),
-            other => other,
+            Ok(v) => Ok(v.into()),
+            Err(e) => Err(e),
         }
     }
 
@@ -1954,6 +1975,7 @@ impl<N: NetworkImpl> Port<N> {
                                 e,
                                 pkt,
                             );
+                            data.uft_in.remove(pkt.flow());
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
@@ -2013,14 +2035,6 @@ impl<N: NetworkImpl> Port<N> {
             &TcpDirection::Out { ufid_out },
             pkt_len,
         )
-        .map(|tcp_state| match tcp_state {
-            TcpState::Closed => TcpMaybeClosed::Closed {
-                ufid_inbound: tcp_flows
-                    .remove(ufid_out)
-                    .and_then(|v| v.state().inbound_ufid),
-            },
-            other => TcpMaybeClosed::NewState(other),
-        })
     }
 
     // Process the TCP packet for the purposes of connection tracking
@@ -2035,7 +2049,7 @@ impl<N: NetworkImpl> Port<N> {
         let tcp = pmeta.inner_tcp().unwrap();
         let dir = TcpDirection::Out { ufid_out };
 
-        let tcp_state = match self.update_tcp_entry(
+        match self.update_tcp_entry(
             PortDataOrSubset::Port(data),
             tcp,
             &dir,
@@ -2044,24 +2058,22 @@ impl<N: NetworkImpl> Port<N> {
             Err(
                 ProcessError::TcpFlow(TcpFlowStateError::NewFlow { .. })
                 | ProcessError::MissingFlow(_),
-            ) => self.create_new_tcp_entry(
+            ) => match self.create_new_tcp_entry(
                 &mut data.tcp_flows,
                 tcp,
                 &dir,
                 pkt_len,
-            ),
-            other => other,
-        }?;
-
-        Ok(match tcp_state {
-            TcpState::Closed => TcpMaybeClosed::Closed {
-                ufid_inbound: data
-                    .tcp_flows
-                    .remove(ufid_out)
-                    .and_then(|v| v.state().inbound_ufid),
+            ) {
+                // Note: don't need to remove on this case, as create_new_tcp_entry
+                // will only insert to the map if state != Closed.
+                Ok(TcpState::Closed) => {
+                    Ok(TcpMaybeClosed::Closed { ufid_inbound: None })
+                }
+                Ok(a) => Ok(TcpMaybeClosed::NewState(a)),
+                Err(e) => Err(e),
             },
-            other => TcpMaybeClosed::NewState(other),
-        })
+            other => other,
+        }
     }
 
     fn process_out_miss(
@@ -2242,6 +2254,7 @@ impl<N: NetworkImpl> Port<N> {
                                 e,
                                 pkt,
                             );
+                            data.uft_out.remove(pkt.flow());
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });

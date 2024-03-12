@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Integration tests.
 //!
@@ -13,7 +13,7 @@
 //! OPTE pipeline by single-stepping the packets in each capture and
 //! verifying that OPTE processing produces the expected bytes.
 
-mod common;
+use opte_test_utils as common;
 
 use common::icmp::*;
 use common::*;
@@ -34,6 +34,7 @@ use opte::engine::headers::UlpMeta;
 use opte::engine::icmp::IcmpHdr;
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::ip4::Ipv4Hdr;
+use opte::engine::ip4::Ipv4HdrError;
 use opte::engine::ip4::Ipv4Meta;
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Hdr;
@@ -42,11 +43,11 @@ use opte::engine::packet::Initialized;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketRead;
-use opte::engine::packet::ParseError;
 use opte::engine::packet::Parsed;
 use opte::engine::port::ProcessError;
 use opte::engine::tcp::TcpState;
 use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
+use opte::engine::udp::UdpHdr;
 use opte::engine::udp::UdpMeta;
 use opte::engine::Direction;
 use oxide_vpc::api::ExternalIpCfg;
@@ -74,8 +75,7 @@ const IP6_SZ: usize = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE;
 const TCP4_SZ: usize = IP4_SZ + TcpHdr::BASE_SIZE;
 const TCP6_SZ: usize = IP6_SZ + TcpHdr::BASE_SIZE;
 
-// The GeneveHdr includes the UDP header.
-const VPC_ENCAP_SZ: usize = IP6_SZ + GeneveHdr::BASE_SIZE;
+const VPC_ENCAP_SZ: usize = IP6_SZ + UdpHdr::SIZE + GeneveHdr::BASE_SIZE;
 
 // If we are running `cargo test`, then make sure to
 // register the USDT probes before running any tests.
@@ -860,6 +860,7 @@ fn guest_to_internet_ipv6() {
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
+
     assert_eq!(pkt1.body_offset(), VPC_ENCAP_SZ + TCP6_SZ + HTTP_SYN_OPTS_LEN);
     assert_eq!(pkt1.body_seg(), 1);
     let meta = pkt1.meta();
@@ -1850,7 +1851,7 @@ fn bad_ip_len() {
     let res = pkt.parse(Out, VpcParser::new());
     assert_eq!(
         res.err().unwrap(),
-        ParseError::BadHeader("IPv4: BadTotalLen { total_len: 4 }".to_string())
+        Ipv4HdrError::BadTotalLen { total_len: 4 }.into()
     );
 }
 
@@ -2216,171 +2217,6 @@ fn gateway_router_advert_reply() {
             );
         }
     };
-}
-
-/// Generate an NDP packet given an inner `repr`.
-fn generate_ndisc(
-    repr: NdiscRepr,
-    src_mac: MacAddr,
-    dst_mac: MacAddr,
-    src_ip: Ipv6Addr,
-    dst_ip: Ipv6Addr,
-    with_checksum: bool,
-) -> Packet<Parsed> {
-    let req = Icmpv6Repr::Ndisc(repr);
-    let mut body = vec![0u8; req.buffer_len()];
-    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body);
-    let mut csum = CsumCapab::ignored();
-    if with_checksum {
-        csum.icmpv6 = smoltcp::phy::Checksum::Tx;
-    }
-    req.emit(
-        &IpAddress::Ipv6(src_ip.into()),
-        &IpAddress::Ipv6(dst_ip.into()),
-        &mut req_pkt,
-        &csum,
-    );
-    let ip6 = Ipv6Meta {
-        src: src_ip,
-        dst: dst_ip,
-        proto: Protocol::ICMPv6,
-        next_hdr: IpProtocol::Icmpv6,
-        hop_limit: 255,
-        pay_len: req.buffer_len() as u16,
-        ..Default::default()
-    };
-    let eth =
-        EtherMeta { dst: dst_mac, src: src_mac, ether_type: EtherType::Ipv6 };
-
-    let total_len = EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len();
-    let mut pkt = Packet::alloc_and_expand(total_len);
-    let mut wtr = pkt.seg0_wtr();
-    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-    ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-    wtr.write(&body).unwrap();
-    pkt.parse(Out, VpcParser::new()).unwrap()
-}
-
-// Generate a packet containing an NDP Router Solicitation.
-//
-// The source MAC is used to generate the source IPv6 address, using the EUI-64
-// transform. The resulting packet has a multicast MAC address, and the
-// All-Routers destination IPv6 address.
-fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
-    let solicit = NdiscRepr::RouterSolicit {
-        lladdr: Some(RawHardwareAddress::from_bytes(src_mac)),
-    };
-    let dst_ip = Ipv6Addr::ALL_ROUTERS;
-
-    generate_ndisc(
-        solicit,
-        *src_mac,
-        // Must be destined for the All-Routers IPv6 address, and the corresponding
-        // multicast Ethernet address.
-        dst_ip.multicast_mac().unwrap(),
-        // The source IPv6 address is the EUI-64 transform of the source MAC.
-        Ipv6Addr::from_eui64(src_mac),
-        dst_ip,
-        true,
-    )
-}
-
-// Create a Neighbor Solicitation.
-fn generate_neighbor_solicitation(
-    info: &SolicitInfo,
-    with_checksum: bool,
-) -> Packet<Parsed> {
-    let solicit = NdiscRepr::NeighborSolicit {
-        target_addr: Ipv6Address::from(info.target_addr),
-        lladdr: info.lladdr.map(|x| RawHardwareAddress::from_bytes(&x)),
-    };
-    generate_ndisc(
-        solicit,
-        info.src_mac,
-        info.dst_mac,
-        info.src_ip,
-        info.dst_ip,
-        with_checksum,
-    )
-}
-
-// Helper type describing a Neighbor Solicitation
-#[derive(Clone, Copy, Debug)]
-struct SolicitInfo {
-    src_mac: MacAddr,
-    dst_mac: MacAddr,
-    src_ip: Ipv6Addr,
-    dst_ip: Ipv6Addr,
-    target_addr: Ipv6Addr,
-    lladdr: Option<MacAddr>,
-}
-
-impl std::fmt::Display for SolicitInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let lladdr = match self.lladdr {
-            None => "None".to_string(),
-            Some(x) => x.to_string(),
-        };
-        f.debug_struct("SolicitInfo")
-            .field("src_mac", &self.src_mac.to_string())
-            .field("dst_mac", &self.dst_mac.to_string())
-            .field("src_ip", &self.src_ip.to_string())
-            .field("dst_ip", &self.dst_ip.to_string())
-            .field("target_addr", &self.target_addr.to_string())
-            .field("lladdr", &lladdr)
-            .finish()
-    }
-}
-
-// Create a Neighbor Advertisement.
-fn generate_neighbor_advertisement(
-    info: &AdvertInfo,
-    with_checksum: bool,
-) -> Packet<Parsed> {
-    let advert = NdiscRepr::NeighborAdvert {
-        flags: info.flags,
-        target_addr: info.target_addr.into(),
-        lladdr: info.lladdr.map(|x| RawHardwareAddress::from_bytes(&x)),
-    };
-
-    generate_ndisc(
-        advert,
-        info.src_mac,
-        info.dst_mac,
-        info.src_ip,
-        info.dst_ip,
-        with_checksum,
-    )
-}
-
-// Helper type describing a Neighbor Advertisement
-#[derive(Clone, Copy, Debug)]
-struct AdvertInfo {
-    src_mac: MacAddr,
-    dst_mac: MacAddr,
-    src_ip: Ipv6Addr,
-    dst_ip: Ipv6Addr,
-    target_addr: Ipv6Addr,
-    lladdr: Option<MacAddr>,
-    flags: NdiscNeighborFlags,
-}
-
-impl std::fmt::Display for AdvertInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let lladdr = match self.lladdr {
-            None => "None".to_string(),
-            Some(x) => x.to_string(),
-        };
-        f.debug_struct("AdvertInfo")
-            .field("src_mac", &self.src_mac.to_string())
-            .field("dst_mac", &self.dst_mac.to_string())
-            .field("src_ip", &self.src_ip.to_string())
-            .field("dst_ip", &self.dst_ip.to_string())
-            .field("target_addr", &self.target_addr.to_string())
-            .field("lladdr", &lladdr)
-            .field("flags", &self.flags)
-            .finish()
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
