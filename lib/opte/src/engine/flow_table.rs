@@ -141,13 +141,13 @@ where
 
         self.map.retain(|flowid, entry| {
             if self.policy.is_expired(entry, now) {
-                flow_expired_probe(
-                    port_c,
-                    name_c,
-                    flowid,
-                    Some(entry.last_hit),
-                    Some(now),
-                );
+                // flow_expired_probe(
+                //     port_c,
+                //     name_c,
+                //     flowid,
+                //     Some(entry.last_hit),
+                //     Some(now),
+                // );
                 expired.push(f(entry.state()));
                 return false;
             }
