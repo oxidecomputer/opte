@@ -127,7 +127,7 @@ where
     }
 
     pub fn expire(&mut self, flowid: &InnerFlowId) {
-        flow_expired_probe(&self.port_c, &self.name_c, flowid, None, None);
+        // flow_expired_probe(&self.port_c, &self.name_c, flowid, None, None);
         self.map.remove(flowid);
     }
 

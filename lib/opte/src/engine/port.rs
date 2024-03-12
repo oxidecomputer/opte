@@ -2366,10 +2366,10 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         if let Some(ufid_in) = ufid_in {
             data.uft_in.remove(ufid_in);
-            self.uft_tcp_closed_probe(Direction::In, ufid_in);
+            // self.uft_tcp_closed_probe(Direction::In, ufid_in);
         }
         data.uft_out.remove(ufid_out);
-        self.uft_tcp_closed_probe(Direction::Out, ufid_out);
+        // self.uft_tcp_closed_probe(Direction::Out, ufid_out);
     }
 
     fn uft_tcp_closed_probe(&self, dir: Direction, ufid: &InnerFlowId) {
