@@ -86,7 +86,7 @@ cfg_if! {
 pub static MBLK_MAX_SIZE: usize = u16::MAX as usize;
 
 pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
-    proto: Protocol::Unknown(255),
+    proto: 255,
     addrs: AddrPair::V4 { src: Ipv4Addr::ANY_ADDR, dst: Ipv4Addr::ANY_ADDR },
     src_port: 0,
     dst_port: 0,
@@ -99,7 +99,7 @@ pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
 ///
 /// NOTE: This should not be defined in `opte`. Rather, the engine
 /// should be generic in regards to the flow identifier, and it should
-/// be up to the `NetowrkImpl` to define it.
+/// be up to the `NetworkImpl` to define it.
 #[derive(
     Clone,
     Copy,
@@ -112,17 +112,13 @@ pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     PartialOrd,
     Serialize,
 )]
-// pub struct InnerFlowId {
-//     pub proto: Protocol,
-//     pub src_ip: IpAddr,
-//     pub src_port: u16,
-//     pub dst_ip: IpAddr,
-//     pub dst_port: u16,
-// }
 #[repr(C)]
 pub struct InnerFlowId {
-    // XXX: if we store proto as `u8`, we get size down to 38B.
-    pub proto: Protocol,
+    // Using a `u8` here for `proto` hides the enum repr from SDTs,
+    // but we need to have a `u16` discriminant for the IPs to set up
+    // 4B alignment on inaddr6_t on the dtrace side (so we lose out
+    // on the possibility of 38B packing).
+    pub proto: u8,
     pub addrs: AddrPair,
     pub src_port: u16,
     pub dst_port: u16,
@@ -146,10 +142,10 @@ impl Default for InnerFlowId {
     PartialOrd,
     Serialize,
 )]
-#[repr(u8)]
+#[repr(u16)]
 pub enum AddrPair {
-    V4 { src: Ipv4Addr, dst: Ipv4Addr } = AF_INET as u8,
-    V6 { src: Ipv6Addr, dst: Ipv6Addr } = AF_INET6 as u8,
+    V4 { src: Ipv4Addr, dst: Ipv4Addr } = AF_INET as u16,
+    V6 { src: Ipv6Addr, dst: Ipv6Addr } = AF_INET6 as u16,
 }
 
 impl AddrPair {
@@ -225,7 +221,7 @@ impl From<&PacketMeta> for InnerFlowId {
             })
             .unwrap_or((0, 0));
 
-        InnerFlowId { proto, addrs, src_port, dst_port }
+        InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
     }
 }
 
@@ -1474,7 +1470,7 @@ impl Packet<Parsed> {
     }
 
     /// Return a reference to the flow ID of this packet.
-    #[inline]
+    // #[inline]
     pub fn flow(&self) -> &InnerFlowId {
         &self.state.flow
     }

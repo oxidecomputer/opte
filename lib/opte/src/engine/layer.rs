@@ -671,6 +671,8 @@ impl Layer {
         flow_after: &InnerFlowId,
         res: &result::Result<LayerResult, LayerError>,
     ) {
+        // opte::engine::err!("are we stable tables? {:p}", flow_after);
+        // opte::engine::err!("are we stabler tables? {:?}", flow_after);
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 // XXX This would probably be better as separate probes;
@@ -686,8 +688,8 @@ impl Layer {
                         dir as uintptr_t,
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
-                        flow_before as *const _ as uintptr_t,
-                        flow_after as *const _ as uintptr_t,
+                        flow_before,
+                        flow_after,
                         res_c.as_ptr() as uintptr_t,
                     );
                 }
@@ -1790,8 +1792,8 @@ extern "C" {
         dir: uintptr_t,
         port: uintptr_t,
         name: uintptr_t,
-        flow_before: uintptr_t,
-        flow_after: uintptr_t,
+        flow_before: *const InnerFlowId,
+        flow_after: *const InnerFlowId,
         res: uintptr_t,
     );
 

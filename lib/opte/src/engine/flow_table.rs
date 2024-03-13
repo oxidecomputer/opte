@@ -358,7 +358,7 @@ mod test {
     #[test]
     fn flow_expired() {
         let flowid = InnerFlowId {
-            proto: Protocol::TCP,
+            proto: Protocol::TCP.into(),
             addrs: AddrPair::V4 {
                 src: "192.168.2.10".parse().unwrap(),
                 dst: "76.76.21.21".parse().unwrap(),
@@ -384,7 +384,7 @@ mod test {
     #[test]
     fn flow_clear() {
         let flowid = InnerFlowId {
-            proto: Protocol::TCP,
+            proto: Protocol::TCP.into(),
             addrs: AddrPair::V4 {
                 src: "192.168.2.10".parse().unwrap(),
                 dst: "76.76.21.21".parse().unwrap(),
