@@ -587,7 +587,7 @@ impl TcpFlowState {
                 unsafe {
                     __dtrace_probe_tcp__flow__drop(
                         port.as_ptr() as uintptr_t,
-                        flow_id as *const _ as uintptr_t,
+                        flow_id,
                         &state as *const tcp_flow_state_sdt_arg as uintptr_t,
                         dir as uintptr_t,
                         flags as uintptr_t,
@@ -623,7 +623,7 @@ impl TcpFlowState {
                 unsafe {
                     __dtrace_probe_tcp__flow__state(
                         port.as_ptr() as uintptr_t,
-                        flow_id as *const _ as uintptr_t,
+                        flow_id,
                         self.tcp_state as uintptr_t,
                         new_state as uintptr_t,
                     );
@@ -674,14 +674,14 @@ impl From<&TcpFlowState> for tcp_flow_state_sdt_arg {
 extern "C" {
     pub fn __dtrace_probe_tcp__flow__state(
         port: uintptr_t,
-        flow_id: uintptr_t,
+        flow_id: *const InnerFlowId,
         prev_state: uintptr_t,
         curr_state: uintptr_t,
     );
 
     pub fn __dtrace_probe_tcp__flow__drop(
         port: uintptr_t,
-        flow_id: uintptr_t,
+        flow_id: *const InnerFlowId,
         flow_state: uintptr_t,
         dir: uintptr_t,
         flags: uintptr_t,

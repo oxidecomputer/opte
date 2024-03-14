@@ -33,6 +33,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use opte::engine::packet::InnerFlowId;
 use core::convert::TryInto;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
@@ -127,7 +128,7 @@ extern "C" {
     );
     pub fn __dtrace_probe_guest__loopback(
         mp: uintptr_t,
-        flow: uintptr_t,
+        flow: *const InnerFlowId,
         src_port: uintptr_t,
         dst_port: uintptr_t,
     );
@@ -1333,7 +1334,7 @@ fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
     unsafe {
         __dtrace_probe_guest__loopback(
             pkt.mblk_addr(),
-            pkt.flow() as *const _ as uintptr_t,
+            pkt.flow(),
             src.port.name_cstr().as_ptr() as uintptr_t,
             dst.port.name_cstr().as_ptr() as uintptr_t,
         )

@@ -231,7 +231,7 @@ fn flow_expired_probe(
                 __dtrace_probe_flow__expired(
                     port.as_ptr() as uintptr_t,
                     name.as_ptr() as uintptr_t,
-                    flowid as *const _ as uintptr_t,
+                    flowid,
                     last_hit.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
                     now.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
                 );
@@ -325,7 +325,7 @@ extern "C" {
     pub fn __dtrace_probe_flow__expired(
         port: uintptr_t,
         layer: uintptr_t,
-        flowid: uintptr_t,
+        flowid: *const InnerFlowId,
         last_hit: uintptr_t,
         now: uintptr_t,
     );
@@ -334,7 +334,7 @@ extern "C" {
         dir: uintptr_t,
         port: uintptr_t,
         layer: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
         epoch: uintptr_t,
     );
 }

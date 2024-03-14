@@ -859,7 +859,7 @@ impl<N: NetworkImpl> Port<N> {
                     __dtrace_probe_tcp__err(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        flow as *const _ as uintptr_t,
+                        flow,
                         mblk_addr,
                         msg_arg.as_ptr() as uintptr_t,
                     );
@@ -1411,7 +1411,7 @@ impl<N: NetworkImpl> Port<N> {
                     __dtrace_probe_port__process__entry(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        flow as *const _ as uintptr_t,
+                        flow,
                         epoch as uintptr_t,
                         pkt.mblk_addr(),
                     );
@@ -1456,8 +1456,8 @@ impl<N: NetworkImpl> Port<N> {
                     __dtrace_probe_port__process__return(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        flow_before as *const _ as uintptr_t,
-                        &flow_after as *const _ as uintptr_t,
+                        flow_before,
+                        flow_after,
                         epoch as uintptr_t,
                         pkt.mblk_addr(),
                         hp_pkt_ptr,
@@ -1879,7 +1879,7 @@ impl<N: NetworkImpl> Port<N> {
                     __dtrace_probe_uft__hit(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        ufid as *const _ as uintptr_t,
+                        ufid,
                         epoch as uintptr_t,
                         last_hit.raw_millis().unwrap_or_default() as usize
                     );
@@ -2342,7 +2342,7 @@ impl<N: NetworkImpl> Port<N> {
                     __dtrace_probe_uft__invalidate(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        ufid as *const _ as uintptr_t,
+                        ufid,
                         epoch as uintptr_t,
                     );
                 }
@@ -2379,7 +2379,7 @@ impl<N: NetworkImpl> Port<N> {
                     __dtrace_probe_uft__tcp__closed(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        ufid as *const _ as uintptr_t,
+                        ufid,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
@@ -2661,15 +2661,15 @@ extern "C" {
     pub fn __dtrace_probe_port__process__entry(
         dir: uintptr_t,
         port: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
         epoch: uintptr_t,
         pkt: uintptr_t,
     );
     pub fn __dtrace_probe_port__process__return(
         dir: uintptr_t,
         port: uintptr_t,
-        flow_before: uintptr_t,
-        flow_after: uintptr_t,
+        flow_before: *const InnerFlowId,
+        flow_after: *const InnerFlowId,
         epoch: uintptr_t,
         pkt: uintptr_t,
         hp_pkt: uintptr_t,
@@ -2678,27 +2678,27 @@ extern "C" {
     pub fn __dtrace_probe_tcp__err(
         dir: uintptr_t,
         port: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
         pkt: uintptr_t,
         msg: uintptr_t,
     );
     pub fn __dtrace_probe_uft__hit(
         dir: uintptr_t,
         port: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
         epoch: uintptr_t,
         last_hit: uintptr_t,
     );
     pub fn __dtrace_probe_uft__invalidate(
         dir: uintptr_t,
         port: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
         epoch: uintptr_t,
     );
     pub fn __dtrace_probe_uft__tcp__closed(
         dir: uintptr_t,
         port: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
     );
 }
 

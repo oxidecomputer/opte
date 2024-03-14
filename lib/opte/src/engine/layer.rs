@@ -576,7 +576,7 @@ impl Layer {
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
                         dir_c.as_ptr() as uintptr_t,
-                        flow as *const _ as uintptr_t,
+                        flow,
                         msg_c.as_ptr() as uintptr_t,
                     );
                 }
@@ -611,7 +611,7 @@ impl Layer {
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
                         dir_c.as_ptr() as uintptr_t,
-                        flow as *const _ as uintptr_t,
+                        flow,
                         msg_c.as_ptr() as uintptr_t,
                     );
                 }
@@ -648,7 +648,7 @@ impl Layer {
                         dir as uintptr_t,
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
-                        ifid as *const _ as uintptr_t,
+                        ifid,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
@@ -1458,7 +1458,7 @@ impl Layer {
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
                         dir as uintptr_t,
-                        flow_id as *const _ as uintptr_t,
+                        flow_id,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
@@ -1770,7 +1770,7 @@ extern "C" {
         port: uintptr_t,
         layer: uintptr_t,
         dir: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
         msg: uintptr_t,
     );
 
@@ -1778,7 +1778,7 @@ extern "C" {
         port: uintptr_t,
         layer: uintptr_t,
         dir: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
         msg: uintptr_t,
     );
 
@@ -1786,7 +1786,7 @@ extern "C" {
         dir: uintptr_t,
         port: uintptr_t,
         name: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
     );
     pub fn __dtrace_probe_layer__process__return(
         dir: uintptr_t,
@@ -1804,7 +1804,7 @@ extern "C" {
         port: uintptr_t,
         layer: uintptr_t,
         dir: uintptr_t,
-        flow: uintptr_t,
+        flow: *const InnerFlowId,
     );
 }
 
