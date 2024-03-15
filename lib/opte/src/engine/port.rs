@@ -41,6 +41,9 @@ use super::tcp_state::TcpFlowState;
 use super::tcp_state::TcpFlowStateError;
 use super::HdlPktAction;
 use super::NetworkImpl;
+use crate::d_error::DError;
+#[cfg(all(not(feature = "std"), not(test)))]
+use crate::d_error::ErrorBlock;
 use crate::ddi::kstat;
 use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
@@ -125,11 +128,14 @@ impl From<HdrTransformError> for ProcessError {
 /// * Hairpin: One of the layers has determined that it should reply
 /// directly with a packet of its own. In this case the original
 /// packet is dropped.
-#[derive(Debug)]
+#[derive(Debug, DError)]
 pub enum ProcessResult {
     Bypass,
-    Drop { reason: DropReason },
+    Drop {
+        reason: DropReason,
+    },
     Modified,
+    #[leaf]
     Hairpin(Packet<Initialized>),
 }
 
@@ -1436,15 +1442,33 @@ impl<N: NetworkImpl> Port<N> {
         res: &result::Result<ProcessResult, ProcessError>,
     ) {
         let flow_after = pkt.flow();
+
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 // XXX This would probably be better as separate probes;
                 // for now this does the trick.
-                let res_str = match res {
-                    Ok(v) => format!("{:?}", v),
-                    Err(e) => format!("ERROR: {:?}", e),
+                let (eb, extra_str) = match res {
+                    Ok(v @ ProcessResult::Drop { reason }) => (
+                        ErrorBlock::from_err(v),
+                        Some(format!("{reason:?}\0"))
+                    ),
+                    Ok(v) => (ErrorBlock::from_err(v), None),
+                    // TODO: Handle the error types in a zero-cost way.
+                    Err(e) => (Ok(ErrorBlock::new()), Some(format!("ERROR: {:?}\0", e))),
                 };
-                let res_arg = CString::new(res_str).unwrap();
+
+                // Truncation is captured *in* the ErrorBlock.
+                let mut eb = match eb {
+                    Ok(block) => block,
+                    Err(block) => block,
+                };
+
+                let extra_cstr = extra_str
+                    .as_ref()
+                    .and_then(
+                        |v| core::ffi::CStr::from_bytes_until_nul(v.as_bytes()).ok()
+                    );
+
                 let hp_pkt_ptr = match res {
                     Ok(ProcessResult::Hairpin(hp)) => {
                         hp.mblk_addr()
@@ -1453,6 +1477,9 @@ impl<N: NetworkImpl> Port<N> {
                 };
 
                 unsafe {
+                    if let Some(extra_cstr) = extra_cstr {
+                        let _ = eb.append_name_raw(extra_cstr);
+                    }
                     __dtrace_probe_port__process__return(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
@@ -1461,10 +1488,11 @@ impl<N: NetworkImpl> Port<N> {
                         epoch as uintptr_t,
                         pkt.mblk_addr(),
                         hp_pkt_ptr,
-                        res_arg.as_ptr() as uintptr_t,
+                        eb.as_ptr(),
                     );
                 }
 
+                drop(extra_str);
             } else if #[cfg(feature = "usdt")] {
                 let flow_b_s = flow_before.to_string();
                 let flow_a_s = flow_after.to_string();
@@ -2681,7 +2709,7 @@ extern "C" {
         epoch: uintptr_t,
         pkt: uintptr_t,
         hp_pkt: uintptr_t,
-        res: uintptr_t,
+        err_b: *const ErrorBlock<2>,
     );
     pub fn __dtrace_probe_tcp__err(
         dir: uintptr_t,

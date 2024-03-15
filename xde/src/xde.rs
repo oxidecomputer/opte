@@ -33,7 +33,6 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use opte::engine::packet::InnerFlowId;
 use core::convert::TryInto;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
@@ -62,6 +61,7 @@ use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::Initialized;
+use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketError;
 use opte::engine::packet::Parsed;
@@ -123,7 +123,7 @@ extern "C" {
         port: uintptr_t,
         dir: uintptr_t,
         mp: uintptr_t,
-        err_b: uintptr_t,
+        err_b: *const ErrorBlock<8>,
         data_len: uintptr_t,
     );
     pub fn __dtrace_probe_guest__loopback(
@@ -167,7 +167,7 @@ fn bad_packet_parse_probe(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
-            block.as_ptr() as uintptr_t,
+            block.as_ptr(),
             4,
         )
     };
@@ -191,7 +191,7 @@ fn bad_packet_probe(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
-            eb.as_ptr() as uintptr_t,
+            eb.as_ptr(),
             8,
         )
     };

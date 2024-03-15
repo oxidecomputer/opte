@@ -32,6 +32,9 @@ use super::rule::Finalized;
 use super::rule::GenBtError;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
+use crate::d_error::DError;
+#[cfg(all(not(feature = "std"), not(test)))]
+use crate::d_error::ErrorBlock;
 use crate::ddi::kstat;
 use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
@@ -116,10 +119,15 @@ impl Display for DenyReason {
     }
 }
 
-#[derive(Debug)]
+// TODO: Represent `name` as joint C+RStr to implement fully.
+#[derive(Debug, DError)]
 pub enum LayerResult {
     Allow,
-    Deny { name: &'static str, reason: DenyReason },
+    Deny {
+        name: &'static str,
+        reason: DenyReason,
+    },
+    #[leaf]
     Hairpin(Packet<Initialized>),
     HandlePkt,
 }
@@ -675,22 +683,42 @@ impl Layer {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 // XXX This would probably be better as separate probes;
                 // for now this does the trick.
-                let res_str = match res {
-                    Ok(v) => format!("{}", v),
-                    Err(e) => format!("ERROR: {:?}", e),
+                let (eb, extra_str) = match res {
+                    Ok(v @ LayerResult::Deny { name, reason }) => (
+                        ErrorBlock::from_err(v),
+                        Some(format!("{name}, {reason:?}\0"))
+                    ),
+                    Ok(v) => (ErrorBlock::from_err(v), None),
+                    // TODO: Handle the error types in a zero-cost way.
+                    Err(e) => (Ok(ErrorBlock::new()), Some(format!("ERROR: {:?}\0", e))),
                 };
-                let res_c = CString::new(res_str).unwrap();
+
+                // Truncation is captured *in* the ErrorBlock.
+                let mut eb = match eb {
+                    Ok(block) => block,
+                    Err(block) => block,
+                };
+
+                let extra_cstr = extra_str
+                    .as_ref()
+                    .and_then(
+                        |v| core::ffi::CStr::from_bytes_until_nul(v.as_bytes()).ok()
+                    );
 
                 unsafe {
+                    if let Some(extra_cstr) = extra_cstr {
+                        let _ = eb.append_name_raw(extra_cstr);
+                    }
                     __dtrace_probe_layer__process__return(
                         dir as uintptr_t,
                         self.port_c.as_ptr() as uintptr_t,
                         self.name_c.as_ptr() as uintptr_t,
                         flow_before,
                         flow_after,
-                        res_c.as_ptr() as uintptr_t,
+                        eb.as_ptr(),
                     );
                 }
+                drop(extra_str);
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
                 let flow_b_s = flow_before.to_string();
@@ -1792,7 +1820,7 @@ extern "C" {
         name: uintptr_t,
         flow_before: *const InnerFlowId,
         flow_after: *const InnerFlowId,
-        res: uintptr_t,
+        res: *const ErrorBlock<2>,
     );
 
     pub fn __dtrace_probe_rule__match(arg: uintptr_t);
