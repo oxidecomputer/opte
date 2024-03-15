@@ -686,7 +686,7 @@ impl Layer {
                 let (eb, extra_str) = match res {
                     Ok(v @ LayerResult::Deny { name, reason }) => (
                         ErrorBlock::from_err(v),
-                        Some(format!("{name}, {reason:?}\0"))
+                        Some(format!("{{name: \"{name}\", reason: {reason:?}}}\0"))
                     ),
                     Ok(v) => (ErrorBlock::from_err(v), None),
                     // TODO: Handle the error types in a zero-cost way.

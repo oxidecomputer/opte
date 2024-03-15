@@ -55,3 +55,6 @@
  * 2 = Outbound
  */
 #define DIR_STR(dir)	((dir) == 1 ? "IN" : "OUT")
+
+#define	EL_DELIMIT	"->"
+#define	EL_FMT		"->%s"

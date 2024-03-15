@@ -131,6 +131,7 @@ impl From<HdrTransformError> for ProcessError {
 #[derive(Debug, DError)]
 pub enum ProcessResult {
     Bypass,
+    #[leaf]
     Drop {
         reason: DropReason,
     },
