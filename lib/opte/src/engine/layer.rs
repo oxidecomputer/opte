@@ -671,8 +671,6 @@ impl Layer {
         flow_after: &InnerFlowId,
         res: &result::Result<LayerResult, LayerError>,
     ) {
-        // opte::engine::err!("are we stable tables? {:p}", flow_after);
-        // opte::engine::err!("are we stabler tables? {:?}", flow_after);
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 // XXX This would probably be better as separate probes;

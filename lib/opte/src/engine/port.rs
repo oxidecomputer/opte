@@ -2336,6 +2336,8 @@ impl<N: NetworkImpl> Port<N> {
         ufid: &InnerFlowId,
         epoch: u64,
     ) {
+        let a = crate::NopDrop;
+
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 unsafe {
@@ -2356,6 +2358,8 @@ impl<N: NetworkImpl> Port<N> {
                 let (_, _, _) = (dir, ufid, epoch);
             }
         }
+
+        drop(a);
     }
 
     fn uft_tcp_closed(
@@ -2366,13 +2370,15 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         if let Some(ufid_in) = ufid_in {
             data.uft_in.remove(ufid_in);
-            // self.uft_tcp_closed_probe(Direction::In, ufid_in);
+            self.uft_tcp_closed_probe(Direction::In, ufid_in);
         }
         data.uft_out.remove(ufid_out);
-        // self.uft_tcp_closed_probe(Direction::Out, ufid_out);
+        self.uft_tcp_closed_probe(Direction::Out, ufid_out);
     }
 
     fn uft_tcp_closed_probe(&self, dir: Direction, ufid: &InnerFlowId) {
+        let a = crate::NopDrop;
+
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 unsafe {
@@ -2392,6 +2398,8 @@ impl<N: NetworkImpl> Port<N> {
                 let (_, _) = (dir, ufid);
             }
         }
+
+        drop(a);
     }
 
     fn update_stats_in(

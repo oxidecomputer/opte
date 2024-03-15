@@ -170,6 +170,20 @@ mod opte_provider {
     }
 }
 
+/// A *temporary* sledgehammer used to prevent tail-call optimisation
+/// from being applied to SDTs. This forces a destructor to be fired
+/// at the epilogue of a function, stopping LLVM from inserting a JMP
+/// to a DTrace SDT probe (which are fixed up incorrectly, without a RET).
+///
+/// See: opte#476.
+pub struct NopDrop;
+
+impl Drop for NopDrop {
+    fn drop(&mut self) {
+        core::hint::black_box(self);
+    }
+}
+
 // ================================================================
 // Providers
 //

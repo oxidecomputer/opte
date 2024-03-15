@@ -127,7 +127,7 @@ where
     }
 
     pub fn expire(&mut self, flowid: &InnerFlowId) {
-        // flow_expired_probe(&self.port_c, &self.name_c, flowid, None, None);
+        flow_expired_probe(&self.port_c, &self.name_c, flowid, None, None);
         self.map.remove(flowid);
     }
 
@@ -141,13 +141,13 @@ where
 
         self.map.retain(|flowid, entry| {
             if self.policy.is_expired(entry, now) {
-                // flow_expired_probe(
-                //     port_c,
-                //     name_c,
-                //     flowid,
-                //     Some(entry.last_hit),
-                //     Some(now),
-                // );
+                flow_expired_probe(
+                    port_c,
+                    name_c,
+                    flowid,
+                    Some(entry.last_hit),
+                    Some(now),
+                );
                 expired.push(f(entry.state()));
                 return false;
             }
@@ -224,6 +224,7 @@ fn flow_expired_probe(
     last_hit: Option<Moment>,
     now: Option<Moment>,
 ) {
+    let a = crate::NopDrop;
     last_hit.unwrap_or_default();
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -247,6 +248,7 @@ fn flow_expired_probe(
             let (_, _, _) = (port, name, flowid);
         }
     }
+    drop(a);
 }
 
 /// A type that can be "dumped" for the purposes of presenting an
