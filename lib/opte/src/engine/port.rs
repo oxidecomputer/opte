@@ -1934,11 +1934,12 @@ impl<N: NetworkImpl> Port<N> {
                                 e,
                                 pkt,
                             );
-
                             // If we have a UFT but no TCP flow ID, there is likely a bug
                             // and we are now out of sync. As above we can't reprocess,
                             // but we have regenerated the TCP entry to be less disruptive
-                            // than a drop.
+                            // than a drop. Remove the UFT entry on the same proviso since the
+                            // next packet to use it will regenerate it.
+                            data.uft_in.remove(ufid_in);
                             return Ok(ProcessResult::Modified);
                         }
                         Err(ProcessError::TcpFlow(
