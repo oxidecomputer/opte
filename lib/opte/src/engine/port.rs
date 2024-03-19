@@ -1880,7 +1880,7 @@ impl<N: NetworkImpl> Port<N> {
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        match data.uft_in.get_mut(pkt.flow()) {
+        match data.uft_in.get_mut(ufid_in) {
             Some(entry) if entry.state().epoch == epoch => {
                 // TODO At the moment I'm holding the UFT locks not
                 // just for lookup, but for the entire duration of
@@ -1939,7 +1939,7 @@ impl<N: NetworkImpl> Port<N> {
                             // but we have regenerated the TCP entry to be less disruptive
                             // than a drop. Remove the UFT entry on the same proviso since the
                             // next packet to use it will regenerate it.
-                            data.uft_in.remove(ufid_in);
+                            self.uft_invalidate(data, None, Some(ufid_in), epoch);
                             return Ok(ProcessResult::Modified);
                         }
                         Err(ProcessError::TcpFlow(
