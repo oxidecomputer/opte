@@ -1939,7 +1939,12 @@ impl<N: NetworkImpl> Port<N> {
                             // but we have regenerated the TCP entry to be less disruptive
                             // than a drop. Remove the UFT entry on the same proviso since the
                             // next packet to use it will regenerate it.
-                            self.uft_invalidate(data, None, Some(ufid_in), epoch);
+                            self.uft_invalidate(
+                                data,
+                                None,
+                                Some(ufid_in),
+                                epoch,
+                            );
                             return Ok(ProcessResult::Modified);
                         }
                         Err(ProcessError::TcpFlow(
@@ -1984,7 +1989,7 @@ impl<N: NetworkImpl> Port<N> {
             // entries and proceed to rule processing.
             Some(entry) => {
                 let epoch = entry.state().epoch;
-                let ufid_in = Some(pkt.flow());
+                let ufid_in = Some(ufid_in);
                 let ufid_out = entry.state().pair;
                 self.uft_invalidate(data, ufid_out.as_ref(), ufid_in, epoch);
             }
