@@ -3577,7 +3577,7 @@ fn early_tcp_invalidation() {
         g1,
         [
             "incr:stats.port.in_modified, stats.port.in_uft_hit",
-            "set:uft.in=1, uft.out=0",
+            "set:uft.in=0, uft.out=0",
         ]
     );
     assert_eq!(TcpState::Listen, g1.port.tcp_state(&flow).unwrap());
@@ -3850,7 +3850,7 @@ fn tcp_inbound() {
         g1,
         [
             "incr:stats.port.in_modified, stats.port.in_uft_hit",
-            "set:uft.in=1, uft.out=0",
+            "set:uft.in=0, uft.out=0",
         ]
     );
     assert_eq!(None, g1.port.tcp_state(&flow));

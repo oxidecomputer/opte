@@ -1158,7 +1158,13 @@ impl<N: NetworkImpl> Port<N> {
             }
 
             Direction::In => {
-                let res = self.process_in(&mut data, epoch, pkt, &mut ameta);
+                let res = self.process_in(
+                    &mut data,
+                    epoch,
+                    pkt,
+                    &flow_before,
+                    &mut ameta,
+                );
                 Self::update_stats_in(&mut data.stats.vals, &res);
                 res
             }
@@ -1653,14 +1659,14 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         pmeta: &PacketMeta,
+        ufid_in: &InnerFlowId,
         pkt_len: u64,
     ) -> result::Result<TcpState, ProcessError> {
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we mirror the flow. This value must represent
         // the guest-side of the flow and thus come from the passed-in
         // packet metadata that represents the post-processed packet.
-        let ufid_in = InnerFlowId::from(pmeta);
-        let ufid_out = ufid_in.mirror();
+        let ufid_out = InnerFlowId::from(pmeta).mirror();
 
         // Unwrap: We know this is a TCP packet at this point.
         //
@@ -1669,7 +1675,7 @@ impl<N: NetworkImpl> Port<N> {
         // generic on header group/flow type.
         let tcp = pmeta.inner_tcp().unwrap();
 
-        let dir = TcpDirection::In { ufid_in: &ufid_in, ufid_out: &ufid_out };
+        let dir = TcpDirection::In { ufid_in, ufid_out: &ufid_out };
 
         match self.update_tcp_entry(
             PortDataOrSubset::Port(data),
@@ -1744,19 +1750,19 @@ impl<N: NetworkImpl> Port<N> {
         data: &mut PortData,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
+        ufid_in: &InnerFlowId,
         ameta: &mut ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::In;
 
         data.stats.vals.in_uft_miss += 1;
-        let flow_before = *pkt.flow();
         let mut xforms = Transforms::new();
         let res = self.layers_process(data, In, pkt, &mut xforms, ameta);
         match res {
             Ok(LayerResult::Allow) => {
                 // If there is no flow ID, then do not create a UFT
                 // entry.
-                if flow_before == FLOW_ID_DEFAULT {
+                if *ufid_in == FLOW_ID_DEFAULT {
                     return Ok(ProcessResult::Modified);
                 }
             }
@@ -1794,7 +1800,7 @@ impl<N: NetworkImpl> Port<N> {
             Some(out_entry) => {
                 // Remember, the inbound UFID is the flow as seen by
                 // the network, before any processing is done by OPTE.
-                out_entry.state_mut().pair = Some(flow_before);
+                out_entry.state_mut().pair = Some(*ufid_in);
             }
 
             // Ideally we would simulate the outbound flow if no
@@ -1814,7 +1820,7 @@ impl<N: NetworkImpl> Port<N> {
         if pkt.meta().is_inner_tcp() {
             match self.process_in_tcp_new(
                 data,
-                pkt.flow(),
+                ufid_in,
                 pkt.meta(),
                 pkt.len() as u64,
             ) {
@@ -1822,7 +1828,7 @@ impl<N: NetworkImpl> Port<N> {
 
                 Ok(_) => {
                     // We have a good TCP flow, create a new UFT entry.
-                    match data.uft_in.add(flow_before, hte) {
+                    match data.uft_in.add(*ufid_in, hte) {
                         Ok(_) => Ok(ProcessResult::Modified),
                         Err(OpteError::MaxCapacity(limit)) => {
                             Err(ProcessError::FlowTableFull {
@@ -1860,7 +1866,7 @@ impl<N: NetworkImpl> Port<N> {
                 ),
             }
         } else {
-            match data.uft_in.add(flow_before, hte) {
+            match data.uft_in.add(*ufid_in, hte) {
                 Ok(_) => Ok(ProcessResult::Modified),
                 Err(OpteError::MaxCapacity(limit)) => {
                     Err(ProcessError::FlowTableFull { kind: "UFT", limit })
@@ -1910,6 +1916,7 @@ impl<N: NetworkImpl> Port<N> {
         data: &mut PortData,
         epoch: u64,
         pkt: &mut Packet<Parsed>,
+        ufid_in: &InnerFlowId,
         ameta: &mut ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
         use Direction::In;
@@ -1941,6 +1948,7 @@ impl<N: NetworkImpl> Port<N> {
                     match self.process_in_tcp_existing(
                         data,
                         pkt.meta(),
+                        ufid_in,
                         pkt.len() as u64,
                     ) {
                         Ok(_) => return Ok(ProcessResult::Modified),
@@ -1984,7 +1992,9 @@ impl<N: NetworkImpl> Port<N> {
                                 e,
                                 pkt,
                             );
-                            data.uft_in.remove(pkt.flow());
+                            data.uft_in.remove(ufid_in);
+
+                            // TODO: change to modified and explain.
                             return Ok(ProcessResult::Drop {
                                 reason: DropReason::TcpErr,
                             });
@@ -2025,7 +2035,7 @@ impl<N: NetworkImpl> Port<N> {
             None => (),
         };
 
-        self.process_in_miss(data, epoch, pkt, ameta)
+        self.process_in_miss(data, epoch, pkt, ufid_in, ameta)
     }
 
     // Process the TCP packet for the purposes of connection tracking
