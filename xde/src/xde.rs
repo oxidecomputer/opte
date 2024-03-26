@@ -37,6 +37,8 @@ use core::convert::TryInto;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::ptr;
+use core::ptr::addr_of;
+use core::ptr::addr_of_mut;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
 use opte::api::CmdOk;
@@ -307,13 +309,13 @@ struct XdeDev {
 #[no_mangle]
 unsafe extern "C" fn _init() -> c_int {
     xde_devs.init(KRwLockType::Driver);
-    mac::mac_init_ops(&mut xde_devops, XDE_STR);
+    mac::mac_init_ops(addr_of_mut!(xde_devops), XDE_STR);
 
     match mod_install(&xde_linkage) {
         0 => 0,
         err => {
             warn!("mod_install failed: {}", err);
-            mac::mac_fini_ops(&mut xde_devops);
+            mac::mac_fini_ops(addr_of_mut!(xde_devops));
             err
         }
     }
@@ -329,7 +331,7 @@ unsafe extern "C" fn _info(modinfop: *mut modinfo) -> c_int {
 unsafe extern "C" fn _fini() -> c_int {
     match mod_remove(&xde_linkage) {
         0 => {
-            mac::mac_fini_ops(&mut xde_devops);
+            mac::mac_fini_ops(addr_of_mut!(xde_devops));
             0
         }
         err => {
@@ -721,7 +723,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     unsafe {
         mreg.m_dip = xde_dip;
-        mreg.m_callbacks = &mut xde_mac_callbacks;
+        mreg.m_callbacks = addr_of_mut!(xde_mac_callbacks);
     }
 
     // TODO Total hack to allow a VNIC atop of xde to have the guest's
@@ -1222,7 +1224,7 @@ static mut xde_devops: dev_ops = dev_ops {
     // Safety: Yes, this is a mutable static. No, there is no race as
     // it's mutated only during `_init()`. Yes, it needs to be mutable
     // to allow `dld_init_ops()` to set `cb_str`.
-    devo_cb_ops: unsafe { &xde_cb_ops },
+    devo_cb_ops: unsafe { addr_of!(xde_cb_ops) },
     devo_bus_ops: 0 as *const bus_ops,
     devo_power: nodev_power,
     devo_quiesce: ddi_quiesce_not_needed,
@@ -1231,9 +1233,9 @@ static mut xde_devops: dev_ops = dev_ops {
 #[no_mangle]
 static xde_modldrv: modldrv = unsafe {
     modldrv {
-        drv_modops: &mod_driverops,
+        drv_modops: addr_of!(mod_driverops),
         drv_linkinfo: XDE_STR,
-        drv_dev_ops: &xde_devops,
+        drv_dev_ops: addr_of!(xde_devops),
     }
 };
 
