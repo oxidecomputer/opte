@@ -24,7 +24,9 @@ port-process-return {
 	this->mp = (mblk_t *)arg5;
 	/* If the result is a hairpin packet, then hp_mp is non-NULL. */
 	this->hp_mp = (mblk_t *)arg6;
-	this->res = stringof(arg7);
+	this->msgs = (derror_sdt_arg_t*) arg7;
+	this->msg_len = this->msgs->len;
+	this->res = stringof("");
 
 	if (num >= 10) {
 		printf(HDR_FMT, "NAME", "DIR", "EPOCH", "FLOW BEFORE",
@@ -37,6 +39,19 @@ port-process-return {
 	if (this->af != AF_INET && this->af != AF_INET6) {
 		printf("BAD ADDRESS FAMILY: %d\n", this->af);
 	}
+}
+
+port-process-return
+/this->msg_len > 0/
+{
+	this->res = strjoin(this->res, stringof(this->msgs->entry[0]));
+}
+
+port-process-return
+/this->msg_len > 1/
+{
+	this->res = strjoin(this->res, EL_DELIMIT);
+	this->res = strjoin(this->res, stringof(this->msgs->entry[1]));
 }
 
 port-process-return /this->af == AF_INET/ {
@@ -54,5 +69,4 @@ port-process-return /this->af == AF_INET6/ {
 	    this->s_after, msgsize(this->mp), this->res);
 	num++;
 }
-
 
