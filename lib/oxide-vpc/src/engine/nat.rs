@@ -17,7 +17,6 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
-use core::result::Result;
 use opte::api::IpAddr;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv6Addr;

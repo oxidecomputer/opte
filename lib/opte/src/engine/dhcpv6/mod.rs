@@ -76,7 +76,6 @@ pub use protocol::MessageType;
 
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
-use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Display;
 use core::ops::Deref;

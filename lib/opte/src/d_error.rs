@@ -10,23 +10,11 @@
 use core::ffi::CStr;
 pub use derror_macro::DError;
 
-/// Compile-time const cstring from a byte slice. Callers must
-/// include a `b'\0'`.
-macro_rules! cstr {
-    ($e:expr) => {
-        if let Ok(s) = CStr::from_bytes_with_nul($e) {
-            s
-        } else {
-            panic!("Bad cstring constant!")
-        }
-    };
-}
-
 /// Compile-time const cstring from a byte slice, including declaration.
 /// Callers must include a `b'\0'`.
 macro_rules! static_cstr {
     ($i:ident, $e:expr) => {
-        static $i: &CStr = cstr!($e);
+        static $i: &CStr = $e;
     };
 }
 
@@ -46,7 +34,7 @@ pub trait DError {
     fn leaf_data(&self, _data: &mut [u64]) {}
 }
 
-static_cstr!(EMPTY_STRING, b"\0");
+static_cstr!(EMPTY_STRING, c"");
 
 /// An error trace designed to be passed to a Dtrace handler, which contains
 /// the names of all `enum` discriminators encountered when resolving an error
@@ -64,6 +52,16 @@ pub struct ErrorBlock<const L: usize> {
     data: [u64; 2],
     // XXX: Box?
     entries: [*const i8; L],
+}
+
+/// Signals that an [`ErrorBlock`] could not contain a new string entry.
+#[derive(Clone, Copy, Debug)]
+pub struct ErrorBlockFull;
+
+impl<const L: usize> Default for ErrorBlock<L> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<const L: usize> ErrorBlock<L> {
@@ -94,7 +92,7 @@ impl<const L: usize> ErrorBlock<L> {
     }
 
     /// Push all layers (and data) of an error into a block.
-    pub fn append(&mut self, err: &dyn DError) -> Result<(), ()> {
+    pub fn append(&mut self, err: &dyn DError) -> Result<(), ErrorBlockFull> {
         let mut top: Option<&dyn DError> = Some(err);
         while let Some(el) = top {
             self.append_name(el)?;
@@ -108,10 +106,13 @@ impl<const L: usize> ErrorBlock<L> {
     }
 
     /// Appends the top layer name of a given error.
-    pub fn append_name(&mut self, err: &dyn DError) -> Result<(), ()> {
+    pub fn append_name(
+        &mut self,
+        err: &dyn DError,
+    ) -> Result<(), ErrorBlockFull> {
         if self.len >= L {
             self.more = true;
-            return Err(());
+            return Err(ErrorBlockFull);
         }
 
         self.entries[self.len] = err.discriminant().as_ptr();
@@ -122,14 +123,15 @@ impl<const L: usize> ErrorBlock<L> {
 
     /// Appends the top layer name of a given error.
     ///
+    /// # Safety
     /// Callers must ensure that pointee outlives this ErrorBlock.
     pub unsafe fn append_name_raw<'a, 'b: 'a>(
         &'a mut self,
         err: &'b CStr,
-    ) -> Result<(), ()> {
+    ) -> Result<(), ErrorBlockFull> {
         if self.len >= L {
             self.more = true;
-            return Err(());
+            return Err(ErrorBlockFull);
         }
 
         self.entries[self.len] = err.as_ptr();
@@ -149,7 +151,7 @@ impl<const L: usize> ErrorBlock<L> {
     }
 
     /// Provides access to all stored [`CStr`]s.
-    pub fn entries<'a>(&'a self) -> ErrorBlockIter<'a, L> {
+    pub fn entries(&self) -> ErrorBlockIter<'_, L> {
         ErrorBlockIter { pos: 0, inner: self }
     }
 
@@ -207,10 +209,10 @@ impl<'a, const L: usize> ExactSizeIterator for ErrorBlockIter<'a, L> {
 mod tests {
     use super::*;
 
-    static_cstr!(A_C, b"A\0");
-    static_cstr!(B_C, b"B\0");
-    static_cstr!(ND_C, b"NoData\0");
-    static_cstr!(D_C, b"Data\0");
+    static_cstr!(A_C, c"A");
+    static_cstr!(B_C, c"B");
+    static_cstr!(ND_C, c"NoData");
+    static_cstr!(D_C, c"Data");
 
     #[derive(DError)]
     enum TestEnum {
@@ -268,6 +270,6 @@ mod tests {
         assert_eq!(block_iter.next(), Some(B_C));
         assert_eq!(block_iter.len(), 0);
         assert_eq!(block_iter.next(), None);
-        assert_eq!(block.more, true);
+        assert!(block.more);
     }
 }

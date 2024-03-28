@@ -33,10 +33,11 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::convert::TryInto;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::ptr;
+use core::ptr::addr_of;
+use core::ptr::addr_of_mut;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
 use opte::api::CmdOk;
@@ -100,10 +101,10 @@ const FW_FT_LIMIT: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(8096) };
 const FT_LIMIT_ONE: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(1) };
 
 /// The name of this driver.
-const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
+const XDE_STR: *const c_char = c"xde".as_ptr();
 
 /// Name of the control device.
-const XDE_CTL_STR: *const c_char = b"ctl\0".as_ptr() as *const c_char;
+const XDE_CTL_STR: *const c_char = c"ctl".as_ptr();
 
 /// Minor number for the control device.
 // Set once in `xde_attach`.
@@ -137,7 +138,7 @@ extern "C" {
         gw: uintptr_t,
         gw_ether_src: uintptr_t,
         gw_ether_dst: uintptr_t,
-        msg: uintptr_t,
+        msg: *const c_char,
     );
     pub fn __dtrace_probe_rx(mp: uintptr_t);
     pub fn __dtrace_probe_rx__chain__todo(mp: uintptr_t);
@@ -201,7 +202,7 @@ fn next_hop_probe(
     gw: Option<&Ipv6Addr>,
     gw_eth_src: EtherAddr,
     gw_eth_dst: EtherAddr,
-    msg: &[u8],
+    msg: &CStr,
 ) {
     let gw_bytes = gw.unwrap_or(&Ipv6Addr::from([0u8; 16])).bytes();
 
@@ -211,7 +212,7 @@ fn next_hop_probe(
             gw_bytes.as_ptr() as uintptr_t,
             gw_eth_src.to_bytes().as_ptr() as uintptr_t,
             gw_eth_dst.to_bytes().as_ptr() as uintptr_t,
-            msg.as_ptr() as uintptr_t,
+            msg.as_ptr(),
         );
     }
 }
@@ -307,13 +308,13 @@ struct XdeDev {
 #[no_mangle]
 unsafe extern "C" fn _init() -> c_int {
     xde_devs.init(KRwLockType::Driver);
-    mac::mac_init_ops(&mut xde_devops, XDE_STR);
+    mac::mac_init_ops(addr_of_mut!(xde_devops), XDE_STR);
 
     match mod_install(&xde_linkage) {
         0 => 0,
         err => {
             warn!("mod_install failed: {}", err);
-            mac::mac_fini_ops(&mut xde_devops);
+            mac::mac_fini_ops(addr_of_mut!(xde_devops));
             err
         }
     }
@@ -329,7 +330,7 @@ unsafe extern "C" fn _info(modinfop: *mut modinfo) -> c_int {
 unsafe extern "C" fn _fini() -> c_int {
     match mod_remove(&xde_linkage) {
         0 => {
-            mac::mac_fini_ops(&mut xde_devops);
+            mac::mac_fini_ops(addr_of_mut!(xde_devops));
             0
         }
         err => {
@@ -721,7 +722,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     unsafe {
         mreg.m_dip = xde_dip;
-        mreg.m_callbacks = &mut xde_mac_callbacks;
+        mreg.m_callbacks = addr_of_mut!(xde_mac_callbacks);
     }
 
     // TODO Total hack to allow a VNIC atop of xde to have the guest's
@@ -1222,7 +1223,7 @@ static mut xde_devops: dev_ops = dev_ops {
     // Safety: Yes, this is a mutable static. No, there is no race as
     // it's mutated only during `_init()`. Yes, it needs to be mutable
     // to allow `dld_init_ops()` to set `cb_str`.
-    devo_cb_ops: unsafe { &xde_cb_ops },
+    devo_cb_ops: unsafe { addr_of!(xde_cb_ops) },
     devo_bus_ops: 0 as *const bus_ops,
     devo_power: nodev_power,
     devo_quiesce: ddi_quiesce_not_needed,
@@ -1231,9 +1232,9 @@ static mut xde_devops: dev_ops = dev_ops {
 #[no_mangle]
 static xde_modldrv: modldrv = unsafe {
     modldrv {
-        drv_modops: &mod_driverops,
+        drv_modops: addr_of!(mod_driverops),
         drv_linkinfo: XDE_STR,
-        drv_dev_ops: &xde_devops,
+        drv_dev_ops: addr_of!(xde_devops),
     }
 };
 
@@ -1807,7 +1808,7 @@ fn next_hop<'a>(
                 None,
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"no IRE for destination\0",
+                c"no IRE for destination",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1819,7 +1820,7 @@ fn next_hop<'a>(
                 None,
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"destination ILL is NULL\0",
+                c"destination ILL is NULL",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1863,7 +1864,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"no IRE for gateway\0",
+                c"no IRE for gateway",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1882,7 +1883,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"gateway ILL phys addr is NULL\0",
+                c"gateway ILL phys addr is NULL",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1910,7 +1911,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 src,
                 EtherAddr::zero(),
-                b"no NCE for gateway\0",
+                c"no NCE for gateway",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1923,7 +1924,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 src,
                 EtherAddr::zero(),
-                b"no NCE common for gateway\0",
+                c"no NCE common for gateway",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1936,7 +1937,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 src,
                 EtherAddr::zero(),
-                b"NCE MAC address if NULL for gateway\0",
+                c"NCE MAC address if NULL for gateway",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1949,7 +1950,7 @@ fn next_hop<'a>(
             .expect("mac from pointer");
         let dst = EtherAddr::from(dst);
 
-        next_hop_probe(ip6_dst, Some(&gw_ip6), src, dst, b"\0");
+        next_hop_probe(ip6_dst, Some(&gw_ip6), src, dst, c"");
 
         (src, dst, underlay_port)
     }

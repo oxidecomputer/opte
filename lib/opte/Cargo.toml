@@ -9,7 +9,7 @@ repository.workspace = true
 [features]
 default = ["api", "std"]
 api = []
-engine = ["api", "dep:crc32fast", "dep:heapless", "dep:itertools", "dep:zerocopy"]
+engine = ["api", "dep:crc32fast", "dep:derror-macro", "dep:heapless", "dep:itertools", "dep:zerocopy"]
 kernel = ["illumos-sys-hdrs/kernel"]
 # This feature indicates that OPTE is being built with std. This is
 # mostly useful to consumers of the API, providing convenient methods
@@ -22,7 +22,7 @@ test-help = []
 usdt = ["std", "dep:usdt"]
 
 [dependencies]
-derror-macro.workspace = true
+derror-macro = { workspace = true, optional = true }
 illumos-sys-hdrs.workspace = true
 kstat-macro.workspace = true
 opte-api.workspace = true

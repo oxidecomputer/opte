@@ -14,7 +14,6 @@ use crate::api::Ipv4Addr;
 use crate::api::Ipv6Addr;
 use crate::engine::overlay::DumpVirt2BoundaryResp;
 use crate::engine::overlay::DumpVirt2PhysResp;
-use alloc::string::ToString;
 use opte::api::IpCidr;
 use opte::engine::geneve::Vni;
 use opte::engine::print::*;
@@ -72,7 +71,7 @@ fn print_v2b_entry(
     boundary: Ipv6Addr,
     vni: Vni,
 ) -> std::io::Result<()> {
-    writeln!(t, "{}\t{}\t{vni}", prefix.to_string(), boundary.to_string())
+    writeln!(t, "{prefix}\t{boundary}\t{vni}")
 }
 
 /// Print a [`DumpVirt2BoundaryResp`].

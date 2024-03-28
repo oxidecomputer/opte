@@ -9,7 +9,6 @@
 use crate::cfg::Ipv4Cfg;
 use crate::cfg::VpcCfg;
 use alloc::sync::Arc;
-use core::result::Result;
 use opte::api::DhcpCfg;
 use opte::api::DhcpReplyType;
 use opte::api::Direction;

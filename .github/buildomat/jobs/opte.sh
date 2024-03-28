@@ -3,7 +3,7 @@
 #: name = "opte"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2024-02-06"
+#: rust_toolchain = "nightly-2024-03-26"
 #: output_rules = []
 #:
 
@@ -21,7 +21,7 @@ rustc --version
 cd lib/opte
 
 header "check style"
-ptime -m cargo +nightly-2024-02-06 fmt -- --check
+ptime -m cargo +nightly-2024-03-26 fmt -- --check
 
 header "check docs"
 #
@@ -30,13 +30,13 @@ header "check docs"
 #
 # Use nightly which is needed for the `kernel` feature.
 RUSTDOCFLAGS="-D warnings" ptime -m \
-	    cargo +nightly-2024-02-06 doc --no-default-features --features=api,std,engine,kernel
+	    cargo +nightly-2024-03-26 doc --no-default-features --features=api,std,engine,kernel
 
 header "analyze std + api"
 ptime -m cargo clippy --all-targets
 
 header "analyze no_std + engine + kernel"
-ptime -m cargo +nightly-2024-02-06 clippy --no-default-features --features engine,kernel
+ptime -m cargo +nightly-2024-03-26 clippy --no-default-features --features engine,kernel
 
 header "test"
 ptime -m cargo test

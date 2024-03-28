@@ -40,7 +40,7 @@ fn run_tests(
     // Find all test descriptions in tests/resources/$root_dir.
     let mut tests: HashMap<Label, Case> = HashMap::new();
     let my_test_dir = base_resource_path.join(root_dir);
-    for entry in std::fs::read_dir(&my_test_dir)
+    for entry in std::fs::read_dir(my_test_dir)
         .unwrap_or_else(|e| panic!("failed to find directory {root_dir}: {e}"))
     {
         let entry = entry.unwrap_or_else(|e| {
