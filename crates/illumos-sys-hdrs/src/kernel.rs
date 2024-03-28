@@ -52,7 +52,6 @@ impl ddi_reset_cmd_t {
 
 // TODO Technically this is not a "raw" interface. This should live
 // somewhere else.
-use core::ptr;
 impl kmutex_t {
     pub fn new(mtype: kmutex_type_t) -> Self {
         let mut kmutex = kmutex_t { _opaque: 0 };

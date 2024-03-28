@@ -9,7 +9,6 @@
 use crate::cfg::Ipv4Cfg;
 use crate::cfg::VpcCfg;
 use alloc::sync::Arc;
-use core::result::Result;
 use opte::api::Direction;
 use opte::api::OpteError;
 use opte::engine::icmp::v4::IcmpEchoReply;

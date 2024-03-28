@@ -9,7 +9,6 @@ use crate::DomainName;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;

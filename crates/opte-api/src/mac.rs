@@ -7,7 +7,6 @@
 use alloc::str::FromStr;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;

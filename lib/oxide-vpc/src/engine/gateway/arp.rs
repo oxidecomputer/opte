@@ -7,7 +7,6 @@
 //! The ARP implementation of the Virtual Gateway.
 
 use crate::cfg::VpcCfg;
-use core::result::Result;
 use opte::api::Direction;
 use opte::api::MacAddr;
 use opte::api::OpteError;
