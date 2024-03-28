@@ -54,6 +54,16 @@ pub struct ErrorBlock<const L: usize> {
     entries: [*const i8; L],
 }
 
+/// Signals that an [`ErrorBlock`] could not contain a new string entry.
+#[derive(Clone, Copy, Debug)]
+pub struct ErrorBlockFull;
+
+impl<const L: usize> Default for ErrorBlock<L> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<const L: usize> ErrorBlock<L> {
     /// Create storage to hold at most `L` static string entries.
     pub fn new() -> Self {
@@ -82,7 +92,7 @@ impl<const L: usize> ErrorBlock<L> {
     }
 
     /// Push all layers (and data) of an error into a block.
-    pub fn append(&mut self, err: &dyn DError) -> Result<(), ()> {
+    pub fn append(&mut self, err: &dyn DError) -> Result<(), ErrorBlockFull> {
         let mut top: Option<&dyn DError> = Some(err);
         while let Some(el) = top {
             self.append_name(el)?;
@@ -96,10 +106,13 @@ impl<const L: usize> ErrorBlock<L> {
     }
 
     /// Appends the top layer name of a given error.
-    pub fn append_name(&mut self, err: &dyn DError) -> Result<(), ()> {
+    pub fn append_name(
+        &mut self,
+        err: &dyn DError,
+    ) -> Result<(), ErrorBlockFull> {
         if self.len >= L {
             self.more = true;
-            return Err(());
+            return Err(ErrorBlockFull);
         }
 
         self.entries[self.len] = err.discriminant().as_ptr();
@@ -110,14 +123,15 @@ impl<const L: usize> ErrorBlock<L> {
 
     /// Appends the top layer name of a given error.
     ///
+    /// # Safety
     /// Callers must ensure that pointee outlives this ErrorBlock.
     pub unsafe fn append_name_raw<'a, 'b: 'a>(
         &'a mut self,
         err: &'b CStr,
-    ) -> Result<(), ()> {
+    ) -> Result<(), ErrorBlockFull> {
         if self.len >= L {
             self.more = true;
-            return Err(());
+            return Err(ErrorBlockFull);
         }
 
         self.entries[self.len] = err.as_ptr();
@@ -137,7 +151,7 @@ impl<const L: usize> ErrorBlock<L> {
     }
 
     /// Provides access to all stored [`CStr`]s.
-    pub fn entries<'a>(&'a self) -> ErrorBlockIter<'a, L> {
+    pub fn entries(&self) -> ErrorBlockIter<'_, L> {
         ErrorBlockIter { pos: 0, inner: self }
     }
 

@@ -59,7 +59,7 @@ pub fn derive_derror(
 
     let parsed_args = match Args::from_derive_input(&derive_input) {
         Ok(o) => o,
-        Err(e) => return TokenStream::from(e.write_errors()).into(),
+        Err(e) => return e.write_errors().into(),
     };
 
     let DeriveInput { ident, data, .. } = derive_input;
