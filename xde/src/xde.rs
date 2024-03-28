@@ -102,10 +102,10 @@ const FW_FT_LIMIT: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(8096) };
 const FT_LIMIT_ONE: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(1) };
 
 /// The name of this driver.
-const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
+const XDE_STR: *const c_char = c"xde".as_ptr();
 
 /// Name of the control device.
-const XDE_CTL_STR: *const c_char = b"ctl\0".as_ptr() as *const c_char;
+const XDE_CTL_STR: *const c_char = c"ctl".as_ptr();
 
 /// Minor number for the control device.
 // Set once in `xde_attach`.
@@ -139,7 +139,7 @@ extern "C" {
         gw: uintptr_t,
         gw_ether_src: uintptr_t,
         gw_ether_dst: uintptr_t,
-        msg: uintptr_t,
+        msg: *const c_char,
     );
     pub fn __dtrace_probe_rx(mp: uintptr_t);
     pub fn __dtrace_probe_rx__chain__todo(mp: uintptr_t);
@@ -203,7 +203,7 @@ fn next_hop_probe(
     gw: Option<&Ipv6Addr>,
     gw_eth_src: EtherAddr,
     gw_eth_dst: EtherAddr,
-    msg: &[u8],
+    msg: &CStr,
 ) {
     let gw_bytes = gw.unwrap_or(&Ipv6Addr::from([0u8; 16])).bytes();
 
@@ -213,7 +213,7 @@ fn next_hop_probe(
             gw_bytes.as_ptr() as uintptr_t,
             gw_eth_src.to_bytes().as_ptr() as uintptr_t,
             gw_eth_dst.to_bytes().as_ptr() as uintptr_t,
-            msg.as_ptr() as uintptr_t,
+            msg.as_ptr(),
         );
     }
 }
@@ -1809,7 +1809,7 @@ fn next_hop<'a>(
                 None,
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"no IRE for destination\0",
+                c"no IRE for destination",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1821,7 +1821,7 @@ fn next_hop<'a>(
                 None,
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"destination ILL is NULL\0",
+                c"destination ILL is NULL",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1865,7 +1865,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"no IRE for gateway\0",
+                c"no IRE for gateway",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1884,7 +1884,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"gateway ILL phys addr is NULL\0",
+                c"gateway ILL phys addr is NULL",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1912,7 +1912,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 src,
                 EtherAddr::zero(),
-                b"no NCE for gateway\0",
+                c"no NCE for gateway",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1925,7 +1925,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 src,
                 EtherAddr::zero(),
-                b"no NCE common for gateway\0",
+                c"no NCE common for gateway",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1938,7 +1938,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 src,
                 EtherAddr::zero(),
-                b"NCE MAC address if NULL for gateway\0",
+                c"NCE MAC address if NULL for gateway",
             );
             return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
         }
@@ -1951,7 +1951,7 @@ fn next_hop<'a>(
             .expect("mac from pointer");
         let dst = EtherAddr::from(dst);
 
-        next_hop_probe(ip6_dst, Some(&gw_ip6), src, dst, b"\0");
+        next_hop_probe(ip6_dst, Some(&gw_ip6), src, dst, c"");
 
         (src, dst, underlay_port)
     }

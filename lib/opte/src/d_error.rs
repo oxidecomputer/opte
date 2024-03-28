@@ -10,23 +10,11 @@
 use core::ffi::CStr;
 pub use derror_macro::DError;
 
-/// Compile-time const cstring from a byte slice. Callers must
-/// include a `b'\0'`.
-macro_rules! cstr {
-    ($e:expr) => {
-        if let Ok(s) = CStr::from_bytes_with_nul($e) {
-            s
-        } else {
-            panic!("Bad cstring constant!")
-        }
-    };
-}
-
 /// Compile-time const cstring from a byte slice, including declaration.
 /// Callers must include a `b'\0'`.
 macro_rules! static_cstr {
     ($i:ident, $e:expr) => {
-        static $i: &CStr = cstr!($e);
+        static $i: &CStr = $e;
     };
 }
 
@@ -46,7 +34,7 @@ pub trait DError {
     fn leaf_data(&self, _data: &mut [u64]) {}
 }
 
-static_cstr!(EMPTY_STRING, b"\0");
+static_cstr!(EMPTY_STRING, c"");
 
 /// An error trace designed to be passed to a Dtrace handler, which contains
 /// the names of all `enum` discriminators encountered when resolving an error
@@ -207,10 +195,10 @@ impl<'a, const L: usize> ExactSizeIterator for ErrorBlockIter<'a, L> {
 mod tests {
     use super::*;
 
-    static_cstr!(A_C, b"A\0");
-    static_cstr!(B_C, b"B\0");
-    static_cstr!(ND_C, b"NoData\0");
-    static_cstr!(D_C, b"Data\0");
+    static_cstr!(A_C, c"A");
+    static_cstr!(B_C, c"B");
+    static_cstr!(ND_C, c"NoData");
+    static_cstr!(D_C, c"Data");
 
     #[derive(DError)]
     enum TestEnum {

@@ -82,7 +82,7 @@ pub fn derive_derror(
         let static_name_val =
             syn::LitByteStr::new(&var_name_bytes, var_name.span());
 
-        // TODO: use c"" from Rust 1.77 onwards, and when syn gets that.
+        // TODO: use c"" once proc_macro_c_str_literals (https://github.com/rust-lang/rust/issues/119750) stabilised.
         cstr_decls.push(quote! {
             static #static_name: &CStr = if let Ok(s) = CStr::from_bytes_with_nul(#static_name_val) {
                 s
