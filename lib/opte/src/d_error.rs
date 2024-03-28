@@ -270,6 +270,6 @@ mod tests {
         assert_eq!(block_iter.next(), Some(B_C));
         assert_eq!(block_iter.len(), 0);
         assert_eq!(block_iter.next(), None);
-        assert_eq!(block.more, true);
+        assert!(block.more);
     }
 }
