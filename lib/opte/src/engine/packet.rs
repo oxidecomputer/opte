@@ -49,6 +49,7 @@ use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;
 use core::ptr;
+use core::ptr::NonNull;
 use core::result;
 use core::slice;
 use crc32fast::Hasher;
@@ -357,6 +358,142 @@ impl PacketMeta {
         h.update(&src.to_be_bytes());
         h.update(&dst.to_be_bytes());
         Some(h.finalize())
+    }
+}
+
+/// The head and tail of an mblk_t list.
+struct PacketChainInner {
+    head: NonNull<mblk_t>,
+    tail: NonNull<mblk_t>,
+}
+
+/// A chain of network packets.
+///
+/// Network packets are provided by illumos as a linked list, using
+/// the `b_next` and `b_prev` fields.
+///
+/// See the documentation for [`Packet`] for full context.
+// TODO: We might modify Packet to do away with the `Vec<PacketSeg>`.
+// I could see Chain being retooled accordingly (i.e., Packets could
+// be allocated a lifetime via PhantomData based on whether we want
+// to remove them from the chain or modify in place).
+// Today's code is all equivalent to always using 'static, because
+// we remove and re-add the mblks to work on them.
+pub struct PacketChain {
+    inner: Option<PacketChainInner>,
+}
+
+impl PacketChain {
+    /// Create an empty packet chain.
+    pub fn empty() -> Self {
+        Self { inner: None }
+    }
+
+    /// Convert an mblk_t packet chain into a safe source of `Packet`s.
+    ///
+    /// # Safety
+    /// The `mp` pointer must point to an `mblk_t` allocated by
+    /// `allocb(9F)` or provided by some kernel API which itself used
+    /// one of the DDI/DKI APIs to allocate it.
+    /// Packets must form a valid linked list (no loops).
+    /// The original mblk_t pointer must not be used again.
+    pub unsafe fn new(mp: *mut mblk_t) -> Result<Self, WrapError> {
+        let head = NonNull::new(mp).ok_or(WrapError::NullPtr)?;
+
+        // Walk the chain to find the tail, and support faster append.
+        let mut tail = head;
+        while let Some(next_ptr) = NonNull::new((*tail.as_ptr()).b_next) {
+            tail = next_ptr;
+        }
+
+        Ok(Self { inner: Some(PacketChainInner { head, tail }) })
+    }
+
+    /// Removes the next packet from the top of the chain and returns
+    /// it, taking ownership.
+    pub fn next(&mut self) -> Option<Packet<Initialized>> {
+        if let Some(ref mut list) = &mut self.inner {
+            unsafe {
+                let curr = list.head.as_ptr();
+                let next = NonNull::new((*curr).b_next);
+
+                // Break the forward link on the packet we have access to,
+                // and the backward link on the next element if possible.
+                if let Some(next) = next {
+                    (*next.as_ptr()).b_prev = ptr::null_mut();
+                }
+                (*curr).b_next = ptr::null_mut();
+
+                // Update the current head. If the next element is null,
+                // we're now empty.
+                if let Some(next) = next {
+                    list.head = next;
+                } else {
+                    self.inner = None;
+                }
+
+                // Unwrap safety: We have already guaranteed that this
+                // ptr is NonNull in this case, and violating that is
+                // the only failure mode for wrap_mblk.
+                Some(Packet::wrap_mblk(curr).unwrap())
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Adds an owned `Packet` to the end of this chain.
+    ///
+    /// Internally, this unwraps the `Packet` back into an mblk_t,
+    /// before placing it at the tail.
+    pub fn append<S: PacketState>(&mut self, packet: Packet<S>) {
+        // Unwrap safety: a valid Packet implies a non-null mblk_t.
+        // Jamming `NonNull` into PacketSeg/Packet might take some
+        // work just to avoid this unwrap.
+        let pkt = NonNull::new(packet.unwrap_mblk()).unwrap();
+
+        // We're guaranteeing today that a 'static Packet has
+        // no neighbours and is not part of a chain.
+        // This simplifies tail updates in both cases (no chain walk).
+        unsafe {
+            assert!((*pkt.as_ptr()).b_prev.is_null());
+            assert!((*pkt.as_ptr()).b_next.is_null());
+        }
+
+        if let Some(ref mut list) = &mut self.inner {
+            let pkt_p = pkt.as_ptr();
+            let tail_p = list.tail.as_ptr();
+            unsafe {
+                (*tail_p).b_next = pkt_p;
+                (*pkt_p).b_prev = list_p;
+                // pkt_p->b_next is already null.
+            }
+            list.tail = pkt;
+        } else {
+            self.inner = Some(PacketChainInner { head: pkt, tail: pkt });
+        }
+    }
+}
+
+impl Drop for PacketChain {
+    fn drop(&mut self) {
+        // This is a minor variation on Packet's logic. illumos
+        // contains helper functions from STREAMS to just drop a whole
+        // chain.
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                // Safety: This is safe as long as the original
+                // `mblk_t` came from a call to `allocb(9F)` (or
+                // similar API).
+                if let Some(list) = &self.inner {
+                    unsafe { ddi::freemsgchain(list.head.as_ptr()) };
+                }
+            } else {
+                while let Some(pkt) = self.next() {
+                    drop(pkt);
+                }
+            }
+        }
     }
 }
 

@@ -508,6 +508,7 @@ extern "C" {
 
     pub fn freeb(mp: *mut mblk_t);
     pub fn freemsg(mp: *mut mblk_t);
+    pub fn freemsgchain(mp: *mut mblk_t);
 
     pub fn gethrtime() -> hrtime_t;
 
