@@ -33,7 +33,6 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use opte::engine::packet::PacketChain;
 use core::convert::TryInto;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
@@ -63,6 +62,7 @@ use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
+use opte::engine::packet::PacketChain;
 use opte::engine::packet::PacketError;
 use opte::engine::packet::Parsed;
 use opte::engine::port::meta::ActionMeta;
@@ -1471,25 +1471,24 @@ unsafe fn xde_mc_tx_one(
     // ================================================================
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
-    let mut pkt =
-        match pkt.parse(Direction::Out, parser) {
-            Ok(pkt) => pkt,
-            Err(e) => {
-                // TODO Add bad packet stat.
-                //
-                // NOTE: We are using mp_chain as read only here to get
-                // the pointer value so that the DTrace consumer can
-                // examine the packet on failure.
-                opte::engine::dbg!("Rx bad packet: {:?}", e);
-                bad_packet_parse_probe(
-                    Some(src_dev.port.name_cstr()),
-                    Direction::Out,
-                    mblk_addr,
-                    &e.into(),
-                );
-                return ptr::null_mut();
-            }
-        };
+    let mut pkt = match pkt.parse(Direction::Out, parser) {
+        Ok(pkt) => pkt,
+        Err(e) => {
+            // TODO Add bad packet stat.
+            //
+            // NOTE: We are using mp_chain as read only here to get
+            // the pointer value so that the DTrace consumer can
+            // examine the packet on failure.
+            opte::engine::dbg!("Rx bad packet: {:?}", e);
+            bad_packet_parse_probe(
+                Some(src_dev.port.name_cstr()),
+                Direction::Out,
+                mblk_addr,
+                &e.into(),
+            );
+            return ptr::null_mut();
+        }
+    };
 
     // Choose u1 as a starting point. This may be changed in the next_hop
     // function when we are actually able to determine what interface should be
@@ -2107,23 +2106,22 @@ unsafe fn xde_rx_one(
     // is to be delivered.
     let parser = VpcParser {};
     let mblk_addr = pkt.mblk_addr();
-    let mut pkt =
-        match pkt.parse(Direction::In, parser) {
-            Ok(pkt) => pkt,
-            Err(e) => {
-                // TODO Add bad packet stat.
-                //
-                // NOTE: We are using mp_chain as read only here to get
-                // the pointer value so that the DTrace consumer can
-                // examine the packet on failure.
-                //
-                // We don't know the port yet, thus the None.
-                opte::engine::dbg!("Tx bad packet: {:?}", e);
-                bad_packet_parse_probe(None, Direction::In, mblk_addr, &e.into());
-                
-                return;
-            }
-        };
+    let mut pkt = match pkt.parse(Direction::In, parser) {
+        Ok(pkt) => pkt,
+        Err(e) => {
+            // TODO Add bad packet stat.
+            //
+            // NOTE: We are using mp_chain as read only here to get
+            // the pointer value so that the DTrace consumer can
+            // examine the packet on failure.
+            //
+            // We don't know the port yet, thus the None.
+            opte::engine::dbg!("Tx bad packet: {:?}", e);
+            bad_packet_parse_probe(None, Direction::In, mblk_addr, &e.into());
+
+            return;
+        }
+    };
 
     let meta = pkt.meta();
     let devs = xde_devs.read();
