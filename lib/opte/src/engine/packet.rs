@@ -465,7 +465,7 @@ impl PacketChain {
             let tail_p = list.tail.as_ptr();
             unsafe {
                 (*tail_p).b_next = pkt_p;
-                (*pkt_p).b_prev = list_p;
+                (*pkt_p).b_prev = tail_p;
                 // pkt_p->b_next is already null.
             }
             list.tail = pkt;

@@ -33,6 +33,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use opte::engine::packet::PacketChain;
 use core::convert::TryInto;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
@@ -140,14 +141,13 @@ extern "C" {
         msg: uintptr_t,
     );
     pub fn __dtrace_probe_rx(mp: uintptr_t);
-    pub fn __dtrace_probe_rx__chain__todo(mp: uintptr_t);
     pub fn __dtrace_probe_tx(mp: uintptr_t);
 }
 
 fn bad_packet_parse_probe(
     port: Option<&CString>,
     dir: Direction,
-    mp: *mut mblk_t,
+    mp: uintptr_t,
     err: &PacketError,
 ) {
     let port_str = match port {
@@ -165,7 +165,7 @@ fn bad_packet_parse_probe(
         __dtrace_probe_bad__packet(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
-            mp as uintptr_t,
+            mp,
             block.as_ptr() as uintptr_t,
             4,
         )
@@ -175,7 +175,7 @@ fn bad_packet_parse_probe(
 fn bad_packet_probe(
     port: Option<&CString>,
     dir: Direction,
-    mp: *mut mblk_t,
+    mp: uintptr_t,
     msg: &CStr,
 ) {
     let port_str = match port {
@@ -189,7 +189,7 @@ fn bad_packet_probe(
         __dtrace_probe_bad__packet(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
-            mp as uintptr_t,
+            mp,
             eb.as_ptr() as uintptr_t,
             8,
         )
@@ -1428,11 +1428,33 @@ unsafe extern "C" fn xde_mc_tx(
     // The device must be started before we can transmit.
     let src_dev = &*(arg as *mut XdeDev);
 
-    // TODO I haven't dealt with chains, though I'm pretty sure it's
-    // always just one.
-    assert!((*mp_chain).b_next.is_null());
     __dtrace_probe_tx(mp_chain as uintptr_t);
+    let Ok(mut chain) = PacketChain::new(mp_chain) else {
+        bad_packet_probe(
+            Some(src_dev.port.name_cstr()),
+            Direction::Out,
+            mp_chain as uintptr_t,
+            c"rx'd packet chain from guest was null",
+        );
+        return ptr::null_mut();
+    };
 
+    // TODO: In future we may want to batch packets for further tx
+    // by the mch they're being targeted to. E.g., either build a list
+    // of chains (u1, u2, port0, port1, ...), or hold tx until another
+    // packet breaks the run targeting the same dest.
+    while let Some(pkt) = chain.next() {
+        xde_mc_tx_one(src_dev, pkt);
+    }
+
+    ptr::null_mut()
+}
+
+#[inline]
+unsafe fn xde_mc_tx_one(
+    src_dev: &XdeDev,
+    pkt: Packet<Initialized>,
+) -> *mut mblk_t {
     // ================================================================
     // IMPORTANT: Packet now takes ownership of mp_chain. When Packet
     // is dropped so is the chain. Be careful with any calls involving
@@ -1448,8 +1470,9 @@ unsafe extern "C" fn xde_mc_tx(
     // than the immediate fix that needs to happen.
     // ================================================================
     let parser = src_dev.port.network().parser();
+    let mblk_addr = pkt.mblk_addr();
     let mut pkt =
-        match Packet::wrap_mblk_and_parse(mp_chain, Direction::Out, parser) {
+        match pkt.parse(Direction::Out, parser) {
             Ok(pkt) => pkt,
             Err(e) => {
                 // TODO Add bad packet stat.
@@ -1457,13 +1480,13 @@ unsafe extern "C" fn xde_mc_tx(
                 // NOTE: We are using mp_chain as read only here to get
                 // the pointer value so that the DTrace consumer can
                 // examine the packet on failure.
+                opte::engine::dbg!("Rx bad packet: {:?}", e);
                 bad_packet_parse_probe(
                     Some(src_dev.port.name_cstr()),
                     Direction::Out,
-                    mp_chain,
-                    &e,
+                    mblk_addr,
+                    &e.into(),
                 );
-                opte::engine::dbg!("Rx bad packet: {:?}", e);
                 return ptr::null_mut();
             }
         };
@@ -2045,12 +2068,6 @@ unsafe extern "C" fn xde_rx(
     mp_chain: *mut mblk_t,
     _is_loopback: boolean_t,
 ) {
-    // XXX Need to deal with chains. This was an assert but it's
-    // blocking other work that's more pressing at the moment as I
-    // keep tripping it.
-    if !(*mp_chain).b_next.is_null() {
-        __dtrace_probe_rx__chain__todo(mp_chain as uintptr_t);
-    }
     __dtrace_probe_rx(mp_chain as uintptr_t);
 
     // Safety: This arg comes from `Arc::as_ptr()` on the `MacClientHandle`
@@ -2059,13 +2076,39 @@ unsafe extern "C" fn xde_rx(
     // dropped yet and thus our `MacClientHandle` is also still valid.
     let mch_ptr = arg as *const MacClientHandle;
     Arc::increment_strong_count(mch_ptr);
-    let mch = Arc::from_raw(mch_ptr);
+    let mch: Arc<MacClientHandle> = Arc::from_raw(mch_ptr);
 
+    let Ok(mut chain) = PacketChain::new(mp_chain) else {
+        bad_packet_probe(
+            None,
+            Direction::Out,
+            mp_chain as uintptr_t,
+            c"rx'd packet chain was null",
+        );
+        return;
+    };
+
+    // TODO: In future we may want to batch packets for further tx
+    // by the mch they're being targeted to. E.g., either build a list
+    // of chains (port0, port1, ...), or hold tx until another
+    // packet breaks the run targeting the same dest.
+    while let Some(pkt) = chain.next() {
+        xde_rx_one(&mch, mrh, pkt);
+    }
+}
+
+#[inline]
+unsafe fn xde_rx_one(
+    mch: &MacClientHandle,
+    mrh: *mut mac::mac_resource_handle,
+    pkt: Packet<Initialized>,
+) {
     // We must first parse the packet in order to determine where it
     // is to be delivered.
     let parser = VpcParser {};
+    let mblk_addr = pkt.mblk_addr();
     let mut pkt =
-        match Packet::wrap_mblk_and_parse(mp_chain, Direction::In, parser) {
+        match pkt.parse(Direction::In, parser) {
             Ok(pkt) => pkt,
             Err(e) => {
                 // TODO Add bad packet stat.
@@ -2075,8 +2118,9 @@ unsafe extern "C" fn xde_rx(
                 // examine the packet on failure.
                 //
                 // We don't know the port yet, thus the None.
-                bad_packet_parse_probe(None, Direction::In, mp_chain, &e);
                 opte::engine::dbg!("Tx bad packet: {:?}", e);
+                bad_packet_parse_probe(None, Direction::In, mblk_addr, &e.into());
+                
                 return;
             }
         };
@@ -2091,7 +2135,7 @@ unsafe extern "C" fn xde_rx(
         None => {
             // TODO add stat
             let msg = c"no geneve header, dropping";
-            bad_packet_probe(None, Direction::In, mp_chain, msg);
+            bad_packet_probe(None, Direction::In, pkt.mblk_addr(), msg);
             opte::engine::dbg!("no geneve header, dropping");
             return;
         }
@@ -2114,21 +2158,18 @@ unsafe extern "C" fn xde_rx(
 
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
-        mac::mac_rx(dev.mh, mrh, mp_chain);
+        mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
         return;
     }
 
     let port = &dev.port;
     let res = port.process(Direction::In, &mut pkt, ActionMeta::new());
     match res {
-        Ok(ProcessResult::Modified) => {
+        Ok(ProcessResult::Modified | ProcessResult::Bypass) => {
             mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
             mch.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
-        }
-        Ok(ProcessResult::Bypass) => {
-            mac::mac_rx(dev.mh, mrh, mp_chain);
         }
         _ => {}
     }
