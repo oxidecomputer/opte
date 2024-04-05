@@ -197,6 +197,9 @@ enum Command {
     /// Set up xde underlay devices
     SetXdeUnderlay { u1: String, u2: String },
 
+    /// Clear xde underlay devices
+    ClearXdeUnderlay,
+
     /// Set a virtual-to-physical mapping
     SetV2P { vpc_ip: IpAddr, vpc_mac: MacAddr, underlay_ip: Ipv6Addr, vni: Vni },
 
@@ -643,6 +646,10 @@ fn main() -> anyhow::Result<()> {
 
         Command::SetXdeUnderlay { u1, u2 } => {
             let _ = hdl.set_xde_underlay(&u1, &u2)?;
+        }
+
+        Command::ClearXdeUnderlay => {
+            let _ = hdl.clear_xde_underlay()?;
         }
 
         Command::RmFwRule { port, direction, id } => {

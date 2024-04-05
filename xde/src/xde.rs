@@ -39,6 +39,7 @@ use core::num::NonZeroU32;
 use core::ptr;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
+use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
 use opte::api::NoResp;
@@ -258,7 +259,7 @@ fn get_xde_state() -> &'static XdeState {
     // it was derived from Box::into_raw() during `xde_attach`.
     unsafe {
         let p = ddi_get_driver_private(xde_dip);
-        &mut *(p as *mut XdeState)
+        &*(p as *mut XdeState)
     }
 }
 
@@ -474,6 +475,13 @@ fn set_xde_underlay_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     set_xde_underlay(&req)
 }
 
+fn clear_xde_underlay_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<NoResp, OpteError> {
+    let _req: ClearXdeUnderlayReq = env.copy_in_req()?;
+    clear_xde_underlay()
+}
+
 // This is the entry point for all OPTE commands. It verifies the API
 // version and then multiplexes the command to its appropriate handler.
 #[no_mangle]
@@ -524,6 +532,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::SetXdeUnderlay => {
             let resp = set_xde_underlay_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ClearXdeUnderlay => {
+            let resp = clear_xde_underlay_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
 
@@ -856,6 +869,84 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
+#[no_mangle]
+fn clear_xde_underlay() -> Result<NoResp, OpteError> {
+    let state = get_xde_state();
+    let mut underlay = state.underlay.lock();
+    if underlay.is_none() {
+        return Err(OpteError::System {
+            errno: ENOENT,
+            msg: "underlay not yet initialized".into(),
+        });
+    }
+    if unsafe { xde_devs.read().len() } > 0 {
+        return Err(OpteError::System {
+            errno: EBUSY,
+            msg: "underlay in use by attached ports".into(),
+        });
+    }
+
+    if let Some(underlay) = underlay.take() {
+        // There shouldn't be anymore refs to the underlay given we checked for
+        // 0 ports above.
+        let Ok(u1) = Arc::try_unwrap(underlay.u1) else {
+            return Err(OpteError::System {
+                errno: EBUSY,
+                msg: "underlay u1 has outstanding refs".into(),
+            });
+        };
+        let Ok(u2) = Arc::try_unwrap(underlay.u2) else {
+            return Err(OpteError::System {
+                errno: EBUSY,
+                msg: "underlay u2 has outstanding refs".into(),
+            });
+        };
+
+        for u in [u1, u2] {
+            // Clear all Rx paths
+            u.mch.clear_rx();
+
+            // We have a chain of refs here:
+            //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
+            //  2. `MacUnicastHandle` holds a ref to `MacClientHandle`, and
+            //  3. `MacClientHandle` holds a ref to `MacHandle`.
+            // We explicitly drop them in order here to ensure there are no
+            // outstanding refs.
+
+            // 1. Remove promisc and unicast callbacks
+            drop(u.mph);
+            drop(u.muh);
+
+            // 2. Remove MAC client handle
+            if Arc::strong_count(&u.mch) > 1 {
+                warn!(
+                    "underlay {} has outstanding mac client handle refs",
+                    u.name
+                );
+                return Err(OpteError::System {
+                    errno: EBUSY,
+                    msg: format!("underlay {} has outstanding refs", u.name),
+                });
+            }
+            drop(u.mch);
+
+            // Finally, we can cleanup the MAC handle for this underlay
+            if Arc::strong_count(&u.mh) > 1 {
+                return Err(OpteError::System {
+                    errno: EBUSY,
+                    msg: format!(
+                        "underlay {} has outstanding mac handle refs",
+                        u.name
+                    ),
+                });
+            }
+            drop(u.mh);
+        }
+    }
+
+    Ok(NoResp::default())
+}
+
 const IOCTL_SZ: usize = core::mem::size_of::<OpteCmdIoctl>();
 
 #[no_mangle]
@@ -1129,56 +1220,19 @@ unsafe extern "C" fn xde_detach(
         return DDI_FAILURE;
     }
 
-    let rstate = ddi_get_driver_private(xde_dip);
-    assert!(!rstate.is_null());
-    let state = Box::from_raw(rstate as *mut XdeState);
-    let underlay = state.underlay.into_inner();
+    let state = ddi_get_driver_private(xde_dip) as *mut XdeState;
+    assert!(!state.is_null());
 
-    if let Some(underlay) = underlay {
-        // There shouldn't be anymore refs to the underlay given we checked for
-        // 0 ports above.
-        let Ok(u1) = Arc::try_unwrap(underlay.u1) else {
-            warn!("failed to detach: underlay u1 has outstanding refs");
-            return DDI_FAILURE;
-        };
-        let Ok(u2) = Arc::try_unwrap(underlay.u2) else {
-            warn!("failed to detach: underlay u2 has outstanding refs");
-            return DDI_FAILURE;
-        };
+    let state_ref = &*(state);
+    let underlay = state_ref.underlay.lock();
 
-        for u in [u1, u2] {
-            // Clear all Rx paths
-            u.mch.clear_rx();
-
-            // We have a chain of refs here:
-            //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
-            //  2. `MacUnicastHandle` holds a ref to `MacClientHandle`, and
-            //  3. `MacClientHandle` holds a ref to `MacHandle`.
-            // We explicitly drop them in order here to ensure there are no
-            // outstanding refs.
-
-            // 1. Remove promisc and unicast callbacks
-            drop(u.mph);
-            drop(u.muh);
-
-            // 2. Remove MAC client handle
-            if Arc::strong_count(&u.mch) > 1 {
-                warn!(
-                    "underlay {} has outstanding mac client handle refs",
-                    u.name
-                );
-                return DDI_FAILURE;
-            }
-            drop(u.mch);
-
-            // Finally, we can cleanup the MAC handle for this underlay
-            if Arc::strong_count(&u.mh) > 1 {
-                warn!("underlay {} has outstanding mac handle refs", u.name);
-                return DDI_FAILURE;
-            }
-            drop(u.mh);
-        }
+    if underlay.is_some() {
+        warn!("failed to detach: underlay is set");
+        return DDI_FAILURE;
     }
+
+    // Reattach the XdeState to a Box, which will free it on drop.
+    drop(Box::from_raw(state));
 
     // Remove control device
     ddi_remove_minor_node(xde_dip, XDE_STR);
