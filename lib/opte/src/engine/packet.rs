@@ -473,6 +473,13 @@ impl PacketChain {
             self.inner = Some(PacketChainInner { head: pkt, tail: pkt });
         }
     }
+
+    /// Return the head of the underlying `mblk_t` packet chain and
+    /// consume `self`. The caller of this function now owns the
+    /// `mblk_t` segment chain.
+    pub fn unwrap_mblk(mut self) -> Option<NonNull<mblk_t>> {
+        self.inner.take().map(|v| v.head)
+    }
 }
 
 impl Drop for PacketChain {
@@ -3876,5 +3883,89 @@ mod test {
 
         // And make sure they don't include the padding bytes
         assert_eq!(ip6_hdr.pay_len(), udp_hdr.hdr_len() + body.len());
+    }
+
+    fn create_linked_mblks(n: usize) -> Vec<*mut mblk_t> {
+        let mut els = vec![];
+        for i in 0..n {
+            els.push(allocb(8));
+        }
+
+        // connect the elements in a chain
+        for (lhs, rhs) in els.iter().zip(els[1..].iter()) {
+            unsafe {
+                (**lhs).b_next = *rhs;
+                (**rhs).b_prev = *lhs;
+            }
+        }
+
+        els
+    }
+
+    #[test]
+    fn chain_has_correct_ends() {
+        let mut els = create_linked_mblks(3);
+
+        let chain = unsafe { PacketChain::new(els[0]) }.unwrap();
+        let chain_inner = chain.inner.as_ref().unwrap();
+        assert_eq!(chain_inner.head.as_ptr(), els[0]);
+        assert_eq!(chain_inner.tail.as_ptr(), els[2]);
+    }
+
+    #[test]
+    fn chain_breaks_links() {
+        let els = create_linked_mblks(3);
+
+        let mut chain = unsafe { PacketChain::new(els[0]) }.unwrap();
+
+        let p0 = chain.next().unwrap();
+        assert_eq!(p0.mblk_addr(), els[0] as uintptr_t);
+        unsafe {
+            assert!((*els[0]).b_prev.is_null());
+            assert!((*els[0]).b_next.is_null());
+        }
+
+        // Chain head/tail ptrs are correct
+        let chain_inner = chain.inner.as_ref().unwrap();
+        assert_eq!(chain_inner.head.as_ptr(), els[1]);
+        assert_eq!(chain_inner.tail.as_ptr(), els[2]);
+    }
+
+    #[test]
+    fn chain_append_links() {
+        let els = create_linked_mblks(3);
+        let new_el = allocb(8);
+
+        let mut chain = unsafe { PacketChain::new(els[0]) }.unwrap();
+        let pkt = unsafe { Packet::wrap_mblk(new_el) }.unwrap();
+
+        chain.append(pkt);
+
+        // Chain head/tail ptrs are correct
+        let chain_inner = chain.inner.as_ref().unwrap();
+        assert_eq!(chain_inner.head.as_ptr(), els[0]);
+        assert_eq!(chain_inner.tail.as_ptr(), new_el);
+
+        // Last el has been linked to the new pkt, and it has a valid
+        // backward link.
+        unsafe {
+            assert_eq!((*new_el).b_prev, els[2]);
+            assert!((*new_el).b_next.is_null());
+            assert_eq!((*els[2]).b_next, new_el);
+        }
+    }
+
+    #[test]
+    fn chain_drain_complete() {
+        let els = create_linked_mblks(64);
+
+        let mut chain = unsafe { PacketChain::new(els[0]) }.unwrap();
+
+        for i in 0..els.len() {
+            let pkt = chain.next().unwrap();
+            assert_eq!(pkt.mblk_addr(), els[i] as uintptr_t);
+        }
+
+        assert!(chain.next().is_none());
     }
 }
