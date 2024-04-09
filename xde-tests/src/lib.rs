@@ -117,6 +117,7 @@ impl OptePort {
             port_name: self.name.clone(),
             dest: IpCidr::Ip4(format!("{}/32", dest).parse().unwrap()),
             target: RouterTarget::Ip(dest.parse().unwrap()),
+            class: oxide_vpc::api::RouterClass::System,
         })?;
         Ok(())
     }

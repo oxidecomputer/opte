@@ -16,6 +16,7 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DelRouterEntryReq;
+use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::ListPortsResp;
@@ -183,7 +184,7 @@ impl OpteHdl {
     pub fn del_router_entry(
         &self,
         req: &DelRouterEntryReq,
-    ) -> Result<NoResp, Error> {
+    ) -> Result<DelRouterEntryResp, Error> {
         let cmd = OpteCmd::DelRouterEntry;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }

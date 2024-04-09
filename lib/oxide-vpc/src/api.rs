@@ -556,6 +556,8 @@ pub enum DelRouterEntryResp {
     NotFound,
 }
 
+impl opte::api::cmd::CmdOk for DelRouterEntryResp {}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetExternalIpsReq {
     pub port_name: String,

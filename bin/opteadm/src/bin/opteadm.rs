@@ -26,6 +26,7 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::DelRouterEntryReq;
+use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
@@ -711,7 +712,11 @@ fn main() -> anyhow::Result<()> {
         } => {
             let req =
                 DelRouterEntryReq { port_name: port, dest, target, class };
-            hdl.del_router_entry(&req)?;
+            if let DelRouterEntryResp::NotFound = hdl.del_router_entry(&req)? {
+                anyhow::bail!(
+                    "could not delete entry -- no matching rule found"
+                );
+            }
         }
 
         Command::SetExternalIps { port, external_net } => {

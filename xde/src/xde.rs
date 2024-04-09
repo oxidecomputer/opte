@@ -74,6 +74,7 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DelRouterEntryReq;
+use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::ListPortsResp;
@@ -2154,7 +2155,9 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 }
 
 #[no_mangle]
-fn del_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+fn del_router_entry_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<DelRouterEntryResp, OpteError> {
     let req: DelRouterEntryReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
     let mut iter = devs.iter();
