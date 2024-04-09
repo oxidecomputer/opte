@@ -2151,7 +2151,7 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    router::add_entry(&dev.port, req.dest, req.target)
+    router::add_entry(&dev.port, req.dest, req.target, req.class)
 }
 
 #[no_mangle]
@@ -2166,7 +2166,7 @@ fn del_router_entry_hdlr(
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    router::del_entry(&dev.port, req.dest, req.target)
+    router::del_entry(&dev.port, req.dest, req.target, req.class)
 }
 
 #[no_mangle]
