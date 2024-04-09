@@ -3998,3 +3998,124 @@ fn no_panic_on_flow_table_full() {
     let res2 = g1.port.process(Out, &mut pkt2, ActionMeta::new());
     assert_drop!(res2, DropReason::TcpErr);
 }
+
+#[test]
+fn intra_subnet_routes_with_custom() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // This guest is 172.30.0.5 on 172.30.0.0/22.
+    // Suppose that we have a second subnet, 172.30.4.0/22.
+    // The control plane must insert a system route for as long
+    // as this subnet exists.
+    let cidr = IpCidr::Ip4("172.30.4.0/22".parse().unwrap());
+    router::add_entry(
+        &g1.port,
+        cidr.clone(),
+        RouterTarget::VpcSubnet(cidr.clone()),
+        RouterClass::System,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // define a guest in this range...
+    let dst_ip: Ipv4Addr = "172.30.4.5".parse().unwrap();
+    let other_guest_mac = ox_vpc_mac([0xF0, 0x00, 0x66]);
+    let other_guest_phys_ip = Ipv6Addr::from([
+        0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
+    ]);
+    g1.vpc_map.add(
+        dst_ip.into(),
+        PhysNet {
+            ether: other_guest_mac,
+            ip: other_guest_phys_ip,
+            vni: g1_cfg.vni,
+        },
+    );
+    let data = b"1234\0";
+
+    // Send one ICMP packet to that guest.
+    let mut pkt1 = gen_icmpv4_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip,
+        dst_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+
+    // Process the packet through our port. It should be allowed through:
+    // we have a V2P mapping for the target guest, and a route for the other
+    // subnet.
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.out_modified, stats.port.out_uft_miss, uft.out",
+        ]
+    );
+
+    // Suppose the user now installs a 'custom' route in the first subnet to
+    // drop traffic towards the second subnet. This rule must take priority.
+    router::add_entry(
+        &g1.port,
+        cidr.clone(),
+        RouterTarget::Drop,
+        RouterClass::Custom,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+    let mut pkt2 = gen_icmpv4_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip,
+        dst_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
+    assert!(matches!(
+        res,
+        Ok(ProcessResult::Drop {
+            reason: DropReason::Layer { name: "router", .. }
+        })
+    ));
+    update!(
+        g1,
+        [
+            "incr:stats.port.out_drop, stats.port.out_drop_layer",
+            "incr:stats.port.out_uft_miss",
+            "decr:uft.out"
+        ]
+    );
+
+    // When the user removes this rule, traffic may flow again to subnet 2.
+    router::del_entry(
+        &g1.port,
+        cidr.clone(),
+        RouterTarget::Drop,
+        RouterClass::Custom,
+    )
+    .unwrap();
+    update!(g1, ["incr:epoch", "decr:router.rules.out"]);
+    let mut pkt3 = gen_icmpv4_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip,
+        dst_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
+}
