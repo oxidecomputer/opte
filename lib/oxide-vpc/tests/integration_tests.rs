@@ -52,6 +52,7 @@ use opte::engine::udp::UdpMeta;
 use opte::engine::Direction;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::FirewallRule;
+use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
 use pcap::*;
@@ -267,6 +268,7 @@ fn port_transition_pause() {
             RouterTarget::VpcSubnet(IpCidr::Ip4(
                 g2_cfg.ipv4_cfg().unwrap().vpc_subnet
             )),
+            RouterClass::System,
         ),
         Err(OpteError::BadState(_))
     ));
@@ -444,6 +446,7 @@ fn guest_to_guest_no_route() {
         &g1.port,
         IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet)),
+        RouterClass::System,
     )
     .unwrap();
     update!(g1, ["incr:epoch", "set:router.rules.out=0"]);
@@ -707,6 +710,7 @@ fn guest_to_internet_ipv4() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -830,6 +834,7 @@ fn guest_to_internet_ipv6() {
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -1027,6 +1032,7 @@ fn multi_external_ip_setup(
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -1034,6 +1040,7 @@ fn multi_external_ip_setup(
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -1644,6 +1651,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -1651,6 +1659,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -2523,6 +2532,7 @@ fn outbound_ndp_dropped() {
         &g1.port,
         IpCidr::Ip6(ipv6.vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip6(ipv6.vpc_subnet)),
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["router.rules.out", "epoch"]);
@@ -2532,6 +2542,7 @@ fn outbound_ndp_dropped() {
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["router.rules.out", "epoch"]);
@@ -3034,6 +3045,7 @@ fn uft_lft_invalidation_out() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3120,6 +3132,7 @@ fn uft_lft_invalidation_in() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3441,6 +3454,7 @@ fn tcp_outbound() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3502,6 +3516,7 @@ fn early_tcp_invalidation() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3684,6 +3699,7 @@ fn tcp_inbound() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3949,6 +3965,7 @@ fn no_panic_on_flow_table_full() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);

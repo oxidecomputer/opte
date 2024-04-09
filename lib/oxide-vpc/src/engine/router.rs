@@ -11,6 +11,7 @@
 use super::firewall as fw;
 use super::VpcNetwork;
 use crate::api::DelRouterEntryResp;
+use crate::api::RouterClass;
 use crate::api::RouterTarget;
 use crate::cfg::VpcCfg;
 use alloc::string::String;
@@ -116,17 +117,20 @@ impl fmt::Display for RouterTargetInternal {
 }
 
 // Return the priority for a given IP subnet. The priority is based on
-// the subnet's prefix length. Specifically, it is given the following
-// value.
+// the subnet's prefix length and the type of router the rule belongs to.
+// Specifically, it is given the following value:
 //
 // ```
-// priroity = max_prefix_len - prefix len + 10
+// priority = (((max_prefix_len - prefix len) << 1) | is_system) + 10
 // ```
 //
 // `max_prefix_len` is the maximum prefix length for a given IP
 // CIDR type: `32` for IPv4, `128` for IPv6.
 //
 // `prefix_len` comes from the passed in `cidr` argument.
+//
+// One bit is used to ensure that 'custom' router rules take precedence
+// over 'system' rules when all other factors are equal.
 //
 // The constant `10` displaces these rules so they start at a priority
 // of `10`. This allows placing higher priority rules (lower number)
@@ -135,27 +139,31 @@ impl fmt::Display for RouterTargetInternal {
 // # IPv4
 //
 // ```
-// |Prefix Len |Priority            |
-// |-----------|--------------------|
-// |32         |10 = 32 - 32  10    |
-// |31         |11 = 32 - 31  10    |
-// |30         |12 = 32 - 30  10    |
-// |...        |...                 |
-// |0          |42 = 32 - 0  10     |
+// |Prefix Len |System?|Priority                       |
+// |-----------|-------|-------------------------------|
+// |32         |0      |10 = ((32 - 32) << 1 | 0) + 10 |
+// |32         |1      |11 = ((32 - 32) << 1 | 1) + 10 |
+// |31         |0      |12 = ((32 - 31) << 1 | 0) + 10 |
+// |30         |0      |14 = ((32 - 30) << 1 | 0) + 10 |
+// |...        |...    |...                            |
+// |0          |0      |74 = ((32 - 0) << 1 | 0) + 10  |
+// |0          |1      |75 = ((32 - 0) << 1 | 1) + 10  |
 // ```
 //
 // # IPv6
 //
 // ```
-// |Prefix Len |Priority            |
-// |-----------|--------------------|
-// |128        |10 = 128 - 128  10  |
-// |127        |11 = 128 - 127  10  |
-// |126        |12 = 128 - 126  10  |
-// |...        |...                 |
-// |0          |138 = 128 - 0  10   |
+// |Prefix Len |System?|Priority                         |
+// |-----------|-------|---------------------------------|
+// |128        |0      |10 = ((128 - 128) << 1 | 0) + 10 |
+// |128        |1      |11 = ((128 - 128) << 1 | 1) + 10 |
+// |127        |0      |12 = ((128 - 127) << 1 | 0) + 10 |
+// |126        |0      |14 = ((128 - 126) << 1 | 0) + 10 |
+// |...        |...    |...                              |
+// |0          |0      |266 = ((128 - 0) << 1 | 0) + 10  |
+// |0          |1      |267 = ((128 - 0) << 1 | 1) + 10  |
 // ```
-fn prefix_len_to_priority(cidr: &IpCidr) -> u16 {
+fn compute_rule_priority(cidr: &IpCidr, class: RouterClass) -> u16 {
     use opte::api::ip::IpCidr::*;
     use opte::api::ip::Ipv4PrefixLen;
     use opte::api::ip::Ipv6PrefixLen;
@@ -163,7 +171,11 @@ fn prefix_len_to_priority(cidr: &IpCidr) -> u16 {
         Ip4(ipv4) => (Ipv4PrefixLen::NETMASK_ALL.val(), ipv4.prefix_len()),
         Ip6(ipv6) => (Ipv6PrefixLen::NETMASK_ALL.val(), ipv6.prefix_len()),
     };
-    (max_prefix_len - prefix_len) as u16 + 10
+    let class_prio = match class {
+        RouterClass::Custom => 0,
+        RouterClass::System => 1,
+    };
+    ((((max_prefix_len - prefix_len) as u16) << 1) | class_prio) + 10
 }
 
 pub fn setup(
@@ -209,6 +221,7 @@ fn valid_router_dest_target_pair(dest: &IpCidr, target: &RouterTarget) -> bool {
 fn make_rule(
     dest: IpCidr,
     target: RouterTarget,
+    class: RouterClass,
 ) -> Result<Rule<Finalized>, OpteError> {
     if !valid_router_dest_target_pair(&dest, &target) {
         return Err(OpteError::InvalidRouterEntry {
@@ -280,7 +293,7 @@ fn make_rule(
         }
     };
 
-    let priority = prefix_len_to_priority(&dest);
+    let priority = compute_rule_priority(&dest, class);
     let mut rule = Rule::new(priority, action);
     rule.add_predicate(predicate);
     Ok(rule.finalize())
@@ -294,8 +307,9 @@ pub fn del_entry(
     port: &Port<VpcNetwork>,
     dest: IpCidr,
     target: RouterTarget,
+    class: RouterClass,
 ) -> Result<DelRouterEntryResp, OpteError> {
-    let rule = make_rule(dest, target)?;
+    let rule = make_rule(dest, target, class)?;
     let maybe_id = port.find_rule(ROUTER_LAYER_NAME, Direction::Out, &rule)?;
     match maybe_id {
         Some(id) => {
@@ -314,8 +328,9 @@ pub fn add_entry(
     port: &Port<VpcNetwork>,
     dest: IpCidr,
     target: RouterTarget,
+    class: RouterClass,
 ) -> Result<NoResp, OpteError> {
-    let rule = make_rule(dest, target)?;
+    let rule = make_rule(dest, target, class)?;
     port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?;
     Ok(NoResp::default())
 }
@@ -323,20 +338,17 @@ pub fn add_entry(
 /// Replace the current set of router entries with the set passed in.
 pub fn replace(
     port: &Port<VpcNetwork>,
-    entries: Vec<(IpCidr, RouterTarget)>,
+    entries: Vec<(IpCidr, RouterTarget, RouterClass)>,
 ) -> Result<NoResp, OpteError> {
     let mut out_rules = Vec::with_capacity(entries.len());
-    for (cidr, target) in entries {
-        out_rules.push(make_rule(cidr, target)?);
+    for (cidr, target, class) in entries {
+        out_rules.push(make_rule(cidr, target, class)?);
     }
 
     port.set_rules(ROUTER_LAYER_NAME, vec![], out_rules)?;
     Ok(NoResp::default())
 }
 
-// TODO For each router table entry we should mark whether it came
-// from system or custom.
-//
 // TODO I may want to have different types of rule/flow tables a layer
 // can have. Up to this point the tables consist of `Rule` entires;
 // matching arbitrary header predicates to a `RuleAction`. I may want
@@ -350,8 +362,6 @@ pub fn replace(
 // VFP §6.5 ("Packet Classification"), talks about the ability for
 // each condition type to use 1 of 4 different types of classifiers.
 pub struct RouterAction {
-    // system_table: RouterTable,
-    // subnet_table: Option<RouterTable>,
     target: RouterTargetInternal,
 }
 
