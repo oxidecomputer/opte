@@ -73,6 +73,7 @@ use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::CreateXdeReq;
+use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::ListPortsResp;
@@ -579,6 +580,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::AddRouterEntry => {
             let resp = add_router_entry_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::DelRouterEntry => {
+            let resp = del_router_entry_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
 
@@ -2145,6 +2151,19 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     };
 
     router::add_entry(&dev.port, req.dest, req.target)
+}
+
+#[no_mangle]
+fn del_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: DelRouterEntryReq = env.copy_in_req()?;
+    let devs = unsafe { xde_devs.read() };
+    let mut iter = devs.iter();
+    let dev = match iter.find(|x| x.devname == req.port_name) {
+        Some(dev) => dev,
+        None => return Err(OpteError::PortNotFound(req.port_name)),
+    };
+
+    router::del_entry(&dev.port, req.dest, req.target)
 }
 
 #[no_mangle]

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 use alloc::string::String;
 use alloc::string::ToString;
@@ -414,6 +414,40 @@ impl Display for RouterTarget {
     }
 }
 
+/// The class of router which a rule belongs to.
+#[derive(Clone, Debug, Copy, Deserialize, Serialize)]
+pub enum RouterClass {
+    /// The rule belongs to the shared VPC-wide router.
+    System,
+    /// The rule belongs to the subnet-specific router, and has precendence
+    /// over a `System` rule of equal priority.
+    Custom,
+}
+
+#[cfg(any(feature = "std", test))]
+impl FromStr for RouterClass {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "system" => Ok(Self::System),
+            "custom" => Ok(Self::Custom),
+            lower => Err(format!(
+                "unexpected router class {lower} -- expected 'system' or 'custom'"
+            )),
+        }
+    }
+}
+
+impl Display for RouterClass {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::System => write!(f, "System"),
+            Self::Custom => write!(f, "Custom"),
+        }
+    }
+}
+
 /// Xde create ioctl parameter data.
 ///
 /// The bulk of the information is provided via [`VpcCfg`].
@@ -505,6 +539,7 @@ pub struct AddRouterEntryReq {
     pub port_name: String,
     pub dest: IpCidr,
     pub target: RouterTarget,
+    pub class: RouterClass,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -512,6 +547,7 @@ pub struct DelRouterEntryReq {
     pub port_name: String,
     pub dest: IpCidr,
     pub target: RouterTarget,
+    pub class: RouterClass,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

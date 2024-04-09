@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 use super::encap::Vni;
 use super::ip::IpCidr;
@@ -36,6 +36,7 @@ pub enum OpteCmd {
     ClearVirt2Boundary = 53, // clear a v2b mapping
     DumpVirt2Boundary = 54,  // dump the v2b mappings
     AddRouterEntry = 60,     // add a router entry for IP dest
+    DelRouterEntry = 61,     // remove a router entry for IP dest
     CreateXde = 70,          // create a new xde device
     DeleteXde = 71,          // delete an xde device
     SetXdeUnderlay = 72,     // set xde underlay devices
@@ -63,6 +64,7 @@ impl TryFrom<c_int> for OpteCmd {
             53 => Ok(Self::ClearVirt2Boundary),
             54 => Ok(Self::DumpVirt2Boundary),
             60 => Ok(Self::AddRouterEntry),
+            61 => Ok(Self::DelRouterEntry),
             70 => Ok(Self::CreateXde),
             71 => Ok(Self::DeleteXde),
             72 => Ok(Self::SetXdeUnderlay),

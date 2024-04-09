@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 use clap::Args;
 use clap::Parser;
@@ -25,6 +25,7 @@ use opteadm::COMMIT_COUNT;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
+use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
@@ -38,6 +39,7 @@ use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::Ports;
 use oxide_vpc::api::ProtoFilter;
 use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
@@ -208,13 +210,14 @@ enum Command {
 
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
-        /// The OPTE port to which the route is added
-        #[arg(short)]
-        port: String,
-        /// The network destination to which the route applies.
-        dest: IpCidr,
-        /// The location to which traffic matching the destination is sent.
-        target: RouterTarget,
+        #[command(flatten)]
+        route: RouterRule,
+    },
+
+    /// Remove an existing router entry, either IPv4 or IPv6.
+    DelRouterEntry {
+        #[command(flatten)]
+        route: RouterRule,
     },
 
     /// Configure external network addresses used by a port for VPC-external traffic.
@@ -251,6 +254,19 @@ impl From<Filters> for FirewallFilters {
             .set_ports(f.ports)
             .clone()
     }
+}
+
+#[derive(Debug, Parser)]
+struct RouterRule {
+    /// The OPTE port to which the route change is applied.
+    #[arg(short)]
+    port: String,
+    /// The network destination to which the route applies.
+    dest: IpCidr,
+    /// The location to which traffic matching the destination is sent.
+    target: RouterTarget,
+    /// The class of router a rule belongs to ('system' or 'custom')
+    class: RouterClass,
 }
 
 // TODO: expand this to allow for v4 and v6 simultaneously?
@@ -682,9 +698,20 @@ fn main() -> anyhow::Result<()> {
             hdl.clear_v2b(&req)?;
         }
 
-        Command::AddRouterEntry { port, dest, target } => {
-            let req = AddRouterEntryReq { port_name: port, dest, target };
+        Command::AddRouterEntry {
+            route: RouterRule { port, dest, target, class },
+        } => {
+            let req =
+                AddRouterEntryReq { port_name: port, dest, target, class };
             hdl.add_router_entry(&req)?;
+        }
+
+        Command::DelRouterEntry {
+            route: RouterRule { port, dest, target, class },
+        } => {
+            let req =
+                DelRouterEntryReq { port_name: port, dest, target, class };
+            hdl.del_router_entry(&req)?;
         }
 
         Command::SetExternalIps { port, external_net } => {
