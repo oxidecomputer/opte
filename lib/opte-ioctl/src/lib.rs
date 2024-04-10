@@ -13,13 +13,17 @@ use opte::api::SetXdeUnderlayReq;
 use opte::api::API_VERSION;
 use opte::api::XDE_IOC_OPTE_CMD;
 use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::AllowCidrReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::ListPortsResp;
+use oxide_vpc::api::RemoveCidrReq;
+use oxide_vpc::api::RemoveCidrResp;
 use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
@@ -200,6 +204,32 @@ impl OpteHdl {
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetExternalIps;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn allow_cidr(
+        &self,
+        port_name: &str,
+        cidr: IpCidr,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::AllowCidr;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&AllowCidrReq { cidr, port_name: port_name.into() }),
+        )
+    }
+
+    pub fn remove_cidr(
+        &self,
+        port_name: &str,
+        cidr: IpCidr,
+    ) -> Result<RemoveCidrResp, Error> {
+        let cmd = OpteCmd::RemoveCidr;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&RemoveCidrReq { cidr, port_name: port_name.into() }),
+        )
     }
 }
 

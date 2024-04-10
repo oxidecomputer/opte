@@ -40,6 +40,7 @@ use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::Ports;
 use oxide_vpc::api::ProtoFilter;
 use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::RemoveCidrResp;
 use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
@@ -223,12 +224,32 @@ enum Command {
 
     /// Configure external network addresses used by a port for VPC-external traffic.
     SetExternalIps {
-        /// The OPTE port to which the route is added
+        /// The OPTE port to configure
         #[arg(short)]
         port: String,
 
         #[command(flatten)]
         external_net: ExternalNetConfig,
+    },
+
+    /// Allows a guest to send and receive traffic on a given CIDR block.
+    AllowCidr {
+        /// The OPTE port to configure
+        #[arg(short)]
+        port: String,
+
+        /// The IP block to allow through the gateway.
+        prefix: IpCidr,
+    },
+
+    /// Prevents a guest from sending/receiving traffic on a given CIDR block.
+    RemoveCidr {
+        /// The OPTE port to configure
+        #[arg(short)]
+        port: String,
+
+        /// The IP block to deny at the gateway.
+        prefix: IpCidr,
     },
 }
 
@@ -741,6 +762,18 @@ fn main() -> anyhow::Result<()> {
             } else {
                 // TODO: show *actual* parse failure.
                 anyhow::bail!("expected IPv4 *or* IPv6 config.");
+            }
+        }
+
+        Command::AllowCidr { port, prefix } => {
+            hdl.allow_cidr(&port, prefix)?;
+        }
+
+        Command::RemoveCidr { port, prefix } => {
+            if let RemoveCidrResp::NotFound = hdl.remove_cidr(&port, prefix)? {
+                anyhow::bail!(
+                    "could not remove cidr {prefix} from gateway -- not found"
+                );
             }
         }
     }

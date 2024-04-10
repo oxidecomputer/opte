@@ -4119,3 +4119,106 @@ fn intra_subnet_routes_with_custom() {
     let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
     assert!(matches!(res, Ok(ProcessResult::Modified)));
 }
+
+#[test]
+fn port_as_router_target() {
+    // RFD 21 allows VPC routers to direct traffic on a subnet
+    // towards a given node. There are a few pieces here to consider:
+    // * Packet send from a node must send traffic to the correct
+    //   PhysNet -- underlay and macaddr of the receiving VM's port.
+    // * A node must be able to receive traffic on such a block.
+    let g1_cfg = g1_cfg();
+    let g2_cfg = g2_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
+    g1.port.start();
+    set!(g1, "port_state=running");
+    let mut g2 =
+        oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()), None);
+    g2.port.start();
+    set!(g2, "port_state=running");
+
+    // Node G2 is configured to carry and soft-route VPN traffic on
+    // 192.168.0.0/16.
+    let cidr = IpCidr::Ip4("192.168.0.0/16".parse().unwrap());
+    let dst_ip: Ipv4Addr = "192.168.0.1".parse().unwrap();
+    router::add_entry(
+        &g1.port,
+        cidr.clone(),
+        RouterTarget::Ip(g2_cfg.ipv4().private_ip.into()),
+        RouterClass::Custom,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // This also requires that we allow g2 to send/recv on this CIDR.
+    gateway::allow_cidr(&g2.port, cidr, g2.vpc_map.clone()).unwrap();
+    incr!(g2, ["epoch, epoch, gateway.rules.out, gateway.rules.in"]);
+
+    let data = b"1234\0";
+
+    // Send one ICMP packet to that range.
+    let mut pkt1 = gen_icmpv4_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip,
+        dst_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+
+    // That packet should be allowed: the target IP resolves to a valid
+    // V2P Mapping.
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.out_modified, stats.port.out_uft_miss, uft.out",
+        ]
+    );
+
+    // Encap routes between sleds correctly, inner IPs are not modified,
+    // and L2 dst matches the guest's NIC.
+    let v6_encap_meta = pkt1.meta().outer.ip.as_ref().unwrap().ip6().unwrap();
+    assert_eq!(v6_encap_meta.src, g1_cfg.phys_ip);
+    assert_eq!(v6_encap_meta.dst, g2_cfg.phys_ip);
+    assert_eq!(pkt1.meta().inner_ether().dst, g2_cfg.guest_mac);
+    assert_eq!(pkt1.meta().inner_ether().src, g1_cfg.guest_mac);
+    assert_eq!(pkt1.meta().inner_ip4().unwrap().src, g1_cfg.ipv4().private_ip);
+    assert_eq!(pkt1.meta().inner_ip4().unwrap().dst, dst_ip);
+
+    // Now deliver the packet to node g2.
+    let res = g2.port.process(In, &mut pkt1, ActionMeta::new());
+    incr!(
+        g2,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.in_modified, stats.port.in_uft_miss, uft.in",
+        ]
+    );
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
+
+    // A reply from that address must be allowed out by g2, and accepted
+    // by g1.
+    let mut pkt2 = gen_icmpv4_echo_reply(
+        g2_cfg.guest_mac,
+        g2_cfg.gateway_mac,
+        dst_ip,
+        g1_cfg.ipv4().private_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+
+    let res = g2.port.process(Out, &mut pkt2, ActionMeta::new());
+    incr!(g2, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out",]);
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
+
+    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
+}

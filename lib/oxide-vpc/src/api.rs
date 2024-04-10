@@ -542,6 +542,8 @@ pub struct AddRouterEntryReq {
     pub class: RouterClass,
 }
 
+/// Remove an entry to the router. Addresses may be either IPv4 or IPv6, though the
+/// destination and target must match in protocol version.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DelRouterEntryReq {
     pub port_name: String,
@@ -889,6 +891,30 @@ impl Display for Ports {
         }
     }
 }
+
+/// Add an entry to the gateway allowing a port to send and receive
+/// traffic on a CIDR other than its private IP.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AllowCidrReq {
+    pub port_name: String,
+    pub cidr: IpCidr,
+}
+
+/// Remove entries from the gateway allowing a port to send and receive
+/// traffic on a specific CIDR other than its private IP.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RemoveCidrReq {
+    pub port_name: String,
+    pub cidr: IpCidr,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum RemoveCidrResp {
+    Ok,
+    NotFound,
+}
+
+impl opte::api::cmd::CmdOk for RemoveCidrResp {}
 
 #[cfg(test)]
 pub mod tests {
