@@ -1,0 +1,87 @@
+= Running OPTE Benchmarks on a Gimlet (pair)
+
+The kernel module benchmarks can be run on a pair of lab gimlets connected over their `cxgbe` interfaces.
+Today, SN9/SN14 are set up in this configuration.
+
+== Image construction
+When https://github.com/oxidecomputer/helios[building a helios image], we need to include some extra packages and pull in the latest (host-installed) version of OPTE.
+The below patch adds these packages behind a conditional flag:
+
+[source, diff]
+----
+diff --git a/image/templates/gimlet/ramdisk-01-os.json b/image/templates/gimlet/ramdisk-01-os.json
+index a063784..c81974f 100644
+--- a/image/templates/gimlet/ramdisk-01-os.json
++++ b/image/templates/gimlet/ramdisk-01-os.json
+@@ -105,6 +105,14 @@
+             "/driver/developer/amd/zen"
+         ] },
+
++        { "t": "pkg_install", "with": "netperf", "pkgs": [
++            "/network/test/iperf",
++            "/driver/network/opte",
++            "/system/zones/brand/sparse",
++            "/system/library/demangle",
++            "/ooce/developer/flamegraph"
++        ] },
++
+         { "t": "pkg_install", "with": "compliance", "pkgs": [
+             "/driver/developer/amd/zen",
+             "/developer/debug/humility"
+----
+
+After following instructions to setup Helios and build illumos, a Helios image suitable for running `kbench` can then be built using the command:
+
+[source, bash]
+----
+./helios-build experiment-image -F netperf -B -p helios-dev="https://pkg.oxide.computer/helios/2/dev/" -N netperf
+----
+
+This image may then be installed onto your bench gimlet(s) as standard.
+
+== Running kbench on a bench gimlet
+
+Bench gimlets will not have cargo or rust installed, so typically we will need to locally compile these artifacts on a Helios/illumos machine and transfer these artifacts onto the gimlet ramdisk:
+
+ - the `xde` kernel module -- `target/x86_64-unknown-unknown/release/xde`
+ - `opteadm` -- `target/release/opteadm`
+ - the `kbench` binary.
+
+All three artifacts require a consistent API version.
+
+The first two are stored in a static location, however see link:README.adoc#in-situ-measurement[the README entry on in-situ measurement] to acquire the current path for the third entry.
+This `cargo bench ... --message-format json-render-diagnostics` invocation will return a path such as:
+
+[source,json]
+----
+[
+  "/develop/gits/opte/target/release/deps/xde-5f922c3588d78a41"
+]
+----
+
+=== Installing and running artifacts
+
+Assuming all components have been `rsync`/`scp`'d into `/tmp`, we run on both machines:
+
+[source, bash]
+----
+cd /tmp
+rem_drv xde
+cp xde /kernel/drv/amd64/
+----
+
+On SN9:
+
+[source, bash]
+----
+./kbench server -u cxgbe0 cxgbe1 -b omicron1
+----
+
+On SN14:
+
+[source, bash]
+----
+./kbench remote 172.20.2.109 -u cxgbe0 cxgbe1 -b omicron1
+----
+
+`opteadm` invocations for inspecting state or, e.g., manually configuring the underlay can then be made using `/tmp/opteadm [args]`.
