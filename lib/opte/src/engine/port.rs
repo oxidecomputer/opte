@@ -1181,6 +1181,26 @@ impl<N: NetworkImpl> Port<N> {
         res
     }
 
+    pub fn psuedo_process(
+        &self,
+        dir: Direction,
+        pkt: &mut Packet<Parsed>,
+        mut ameta: ActionMeta,
+    ) -> result::Result<ProcessResult, ProcessError> {
+        let flow_before = *pkt.flow();
+        let epoch = self.epoch.load(SeqCst);
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Running])
+            .map_err(|_| ProcessError::BadState(data.state))?;
+
+        match dir {
+            Direction::In => data.uft_in.get(&flow_before),
+            Direction::Out => data.uft_out.get(&flow_before),
+        };
+        
+        Ok(ProcessResult::Modified)
+    }
+
     /// Remove the rule identified by the `dir`, `layer_name`, `id`
     /// combination, if such a rule exists.
     ///

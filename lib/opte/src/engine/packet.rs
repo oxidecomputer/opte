@@ -185,7 +185,7 @@ pub struct OuterMeta {
 }
 
 impl OuterMeta {
-    fn hdr_len(&self) -> usize {
+    pub fn hdr_len(&self) -> usize {
         let mut hdr_len = 0;
 
         if let Some(ether) = self.ether {
@@ -229,7 +229,7 @@ impl InnerMeta {
         }
     }
 
-    fn hdr_len(&self) -> usize {
+    pub fn hdr_len(&self) -> usize {
         let mut hdr_len = self.ether.hdr_len();
 
         if let Some(ip) = self.ip {
@@ -265,7 +265,7 @@ pub struct PacketMeta {
 impl PacketMeta {
     /// Return the number of bytes requires to emit the header
     /// metadata into full headers.
-    fn hdr_len(&self) -> usize {
+    pub fn hdr_len(&self) -> usize {
         self.outer.hdr_len() + self.inner.hdr_len()
     }
 
@@ -419,7 +419,7 @@ impl PacketMeta {
 #[derive(Debug)]
 pub struct Packet<S: PacketState> {
     avail: usize,
-    segs: Vec<PacketSeg>,
+    pub segs: Vec<PacketSeg>,
     state: S,
 }
 
@@ -2015,7 +2015,7 @@ impl PacketSeg {
         self.len
     }
 
-    fn link(&mut self, seg: &PacketSeg) {
+    pub fn link(&mut self, seg: &PacketSeg) {
         unsafe {
             // We should not be creating message block continuations to zero
             // sized blocks. This is not a generally expected thing and has
@@ -2029,7 +2029,7 @@ impl PacketSeg {
         };
     }
 
-    fn unlink(&mut self) {
+    pub fn unlink(&mut self) {
         unsafe {
             (*self.mp).b_cont = ptr::null_mut();
         }
@@ -2166,7 +2166,7 @@ impl PacketSeg {
     //
     // After calling this function, the original mp pointer should
     // not be dereferenced.
-    unsafe fn wrap_mblk(mp: *mut mblk_t) -> Self {
+    pub unsafe fn wrap_mblk(mp: *mut mblk_t) -> Self {
         let dblk = (*mp).b_datap as *mut dblk_t;
         let len = (*mp).b_wptr.offset_from((*mp).b_rptr) as usize;
         let avail = (*dblk).db_lim.offset_from((*dblk).db_base) as usize;

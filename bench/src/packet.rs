@@ -121,6 +121,58 @@ impl BenchPacket for UlpProcess {
     }
 }
 
+impl UlpProcess {
+    pub fn for_strawman(&self) -> Vec<Box<dyn BenchPacketInstance>> {
+        let ip_cfg = IpCfg::DualStack {
+            ipv4: Ipv4Cfg {
+                vpc_subnet: "172.30.0.0/22".parse().unwrap(),
+                private_ip: "172.30.0.5".parse().unwrap(),
+                gateway_ip: "172.30.0.1".parse().unwrap(),
+                external_ips: ExternalIpCfg {
+                    snat: Some(SNat4Cfg {
+                        external_ip: "10.77.77.13".parse().unwrap(),
+                        ports: 1025..=4096,
+                    }),
+                    ephemeral_ip: Some("10.60.1.20".parse().unwrap()),
+                    floating_ips: vec![],
+                },
+            },
+            ipv6: Ipv6Cfg {
+                vpc_subnet: "fd00::/64".parse().unwrap(),
+                private_ip: "fd00::5".parse().unwrap(),
+                gateway_ip: "fd00::1".parse().unwrap(),
+                external_ips: ExternalIpCfg {
+                    snat: Some(SNat6Cfg {
+                        external_ip: "2001:db8::1".parse().unwrap(),
+                        ports: 1025..=4096,
+                    }),
+                    ephemeral_ip: Some("2001:db8::2".parse().unwrap()),
+                    floating_ips: vec![],
+                },
+            },
+        };
+
+        let cfg = g1_cfg2(ip_cfg);
+
+        itertools::iproduct!(
+            [IpVariant::V4],
+            [ProtoVariant::Tcp],
+            [Direction::Out, Direction::In],
+            [1400]
+        )
+        .map(|(ip, proto, direction, body_len)| UlpProcessInstance {
+            ip,
+            proto,
+            direction,
+            body_len,
+            fast_path: self.fast_path,
+            cfg: cfg.clone(),
+        })
+        .map(|v| Box::new(v) as Box<dyn BenchPacketInstance>)
+        .collect()
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum IpVariant {
     V4,
