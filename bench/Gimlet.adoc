@@ -34,7 +34,7 @@ After following instructions to setup Helios and build illumos, a Helios image s
 
 [source, bash]
 ----
-./helios-build experiment-image -F netperf -B -p helios-dev="https://pkg.oxide.computer/helios/2/dev/" -N netperf
+./helios-build experiment-image -F netperf -B -N netperf
 ----
 
 This image may then be installed onto your bench gimlet(s) as standard.
