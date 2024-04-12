@@ -23,6 +23,7 @@ use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::engine::overlay::DumpVirt2PhysResp;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fs::File;
@@ -140,6 +141,11 @@ impl OpteHdl {
         Ok(OpteHdl {
             device: OpenOptions::new().read(true).write(true).open(what)?,
         })
+    }
+
+    pub fn list_v2p(&self) -> Result<DumpVirt2PhysResp, Error> {
+        let cmd = OpteCmd::DumpVirt2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
     }
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
