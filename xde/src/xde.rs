@@ -75,6 +75,10 @@ use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpVirt2BoundaryReq;
+use oxide_vpc::api::DumpVirt2BoundaryResp;
+use oxide_vpc::api::DumpVirt2PhysReq;
+use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
@@ -2200,8 +2204,8 @@ fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 #[no_mangle]
 fn dump_v2p_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<overlay::DumpVirt2PhysResp, OpteError> {
-    let _req: overlay::DumpVirt2PhysReq = env.copy_in_req()?;
+) -> Result<DumpVirt2PhysResp, OpteError> {
+    let _req: DumpVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
     Ok(state.vpc_map.dump())
 }
@@ -2225,8 +2229,8 @@ fn clear_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 #[no_mangle]
 fn dump_v2b_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<overlay::DumpVirt2BoundaryResp, OpteError> {
-    let _req: overlay::DumpVirt2BoundaryReq = env.copy_in_req()?;
+) -> Result<DumpVirt2BoundaryResp, OpteError> {
+    let _req: DumpVirt2BoundaryReq = env.copy_in_req()?;
     let state = get_xde_state();
     Ok(state.v2b.dump())
 }
