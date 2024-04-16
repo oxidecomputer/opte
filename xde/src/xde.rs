@@ -53,6 +53,7 @@ use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
+use opte::ddi::time::Moment;
 use opte::ddi::time::Periodic;
 use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
@@ -1420,6 +1421,33 @@ fn guest_loopback(
     ptr::null_mut()
 }
 
+// XXX: clean this up, after measuring.
+// XXX: completely arbitrary timeout.
+const MAX_ROUTE_LIFETIME: Duration = Duration::from_millis(100);
+static ROUTE_CACHE: KRwLock<
+    alloc::collections::BTreeMap<RouteKey, CachedRoute>,
+> = KRwLock::new(alloc::collections::BTreeMap::new());
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct RouteKey {
+    dst: Ipv6Addr,
+    l4_hash: Option<u32>,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct CachedRoute {
+    src: EtherAddr,
+    dst: EtherAddr,
+    underlay_idx: u8,
+    timestep: Moment,
+}
+
+impl CachedRoute {
+    pub fn is_still_valid(&self, t: Moment) -> bool {
+        t.delta_as_millis(self.timestep)
+            <= MAX_ROUTE_LIFETIME.as_millis() as u64
+    }
+}
+
 #[no_mangle]
 unsafe extern "C" fn xde_mc_tx(
     arg: *mut c_void,
@@ -1537,8 +1565,78 @@ unsafe extern "C" fn xde_mc_tx(
             // for the mac associated with the IRE nexthop to fill in
             // the outer frame of the packet. Also return the underlay
             // device associated with the nexthop
-            let (src, dst, underlay_dev) =
-                next_hop(&ip6.dst, src_dev, meta.l4_hash());
+            //
+            // As route lookups are fairly expensive, we can cache their
+            // results for a given dst + entropy. These have a fairly tight
+            // expiry so that we can actually react to new reachability/load
+            // info from DDM.
+            // XXX: this is an absolute mess.
+            let my_key = RouteKey { dst: ip6.dst, l4_hash: meta.l4_hash() };
+            let mut maybe_route = {
+                let route_cache = ROUTE_CACHE.read();
+                route_cache.get(&my_key).copied()
+            };
+            let t = Moment::now();
+
+            let recompute = match maybe_route {
+                None => true,
+                Some(route) => !route.is_still_valid(t),
+            };
+            let (src, dst, underlay_dev) = if recompute {
+                let mut route_cache = ROUTE_CACHE.write();
+                // Someone else may have written while we were
+                // taking the lock. DO NOT waste time if it's a
+                // good route.
+                maybe_route = route_cache.get(&my_key).copied();
+                let recompute = match maybe_route {
+                    None => true,
+                    Some(route) => !route.is_still_valid(t),
+                };
+                if recompute {
+                    let (src, dst, underlay_dev) =
+                        next_hop(&ip6.dst, src_dev, meta.l4_hash());
+
+                    // This is terrible.
+                    let underlay_idx = if underlay_dev as *const _
+                        == (&*src_dev.u1) as *const _
+                    {
+                        0
+                    } else {
+                        1
+                    };
+
+                    route_cache.insert(
+                        my_key,
+                        CachedRoute { src, dst, underlay_idx, timestep: t },
+                    );
+
+                    (src, dst, underlay_dev)
+                } else {
+                    let x = maybe_route.unwrap();
+
+                    (
+                        x.src,
+                        x.dst,
+                        if x.underlay_idx == 0 {
+                            &*src_dev.u1
+                        } else {
+                            &*src_dev.u2
+                        },
+                    )
+                }
+            } else {
+                let x = maybe_route.unwrap();
+
+                (
+                    x.src,
+                    x.dst,
+                    if x.underlay_idx == 0 {
+                        &*src_dev.u1
+                    } else {
+                        &*src_dev.u2
+                    },
+                )
+            };
 
             // Get a pointer to the beginning of the outer frame and
             // fill in the dst/src addresses before sending out the
