@@ -1438,12 +1438,12 @@ struct CachedRoute {
     src: EtherAddr,
     dst: EtherAddr,
     underlay_idx: u8,
-    timestep: Moment,
+    timestamp: Moment,
 }
 
 impl CachedRoute {
     pub fn is_still_valid(&self, t: Moment) -> bool {
-        t.delta_as_millis(self.timestep)
+        t.delta_as_millis(self.timestamp)
             <= MAX_ROUTE_LIFETIME.as_millis() as u64
     }
 }
@@ -1594,7 +1594,7 @@ unsafe extern "C" fn xde_mc_tx(
                 };
                 if recompute {
                     let (src, dst, underlay_dev) =
-                        next_hop(&ip6.dst, src_dev, meta.l4_hash());
+                        next_hop(&ip6.dst, src_dev, my_key.l4_hash);
 
                     // This is terrible.
                     let underlay_idx = if underlay_dev as *const _
@@ -1607,7 +1607,7 @@ unsafe extern "C" fn xde_mc_tx(
 
                     route_cache.insert(
                         my_key,
-                        CachedRoute { src, dst, underlay_idx, timestep: t },
+                        CachedRoute { src, dst, underlay_idx, timestamp: t },
                     );
 
                     (src, dst, underlay_dev)
