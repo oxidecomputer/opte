@@ -17,6 +17,7 @@ use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpVirt2PhysReq;
 use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::SetExternalIpsReq;
@@ -143,9 +144,12 @@ impl OpteHdl {
         })
     }
 
-    pub fn dump_v2p(&self) -> Result<DumpVirt2PhysResp, Error> {
+    pub fn dump_v2p(
+        &self,
+        req: &DumpVirt2PhysReq,
+    ) -> Result<DumpVirt2PhysResp, Error> {
         let cmd = OpteCmd::DumpVirt2Phys;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
