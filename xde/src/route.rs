@@ -493,7 +493,7 @@ impl Route<'_> {
         // As unfortunate as `into_route`.
         let port_0: &xde_underlay_port = &xde.u1;
         let underlay_idx =
-            if core::ptr::addr_eq(self.underlay_dev, port_0) { 0 } else { 1 };
+            if core::ptr::eq(self.underlay_dev, port_0) { 0 } else { 1 };
 
         CachedRoute { src: self.src, dst: self.dst, underlay_idx, timestamp }
     }
