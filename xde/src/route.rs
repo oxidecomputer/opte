@@ -187,7 +187,7 @@ fn next_hop<'a>(
     key: &RouteKey,
     ustate: &'a XdeDev,
 ) -> Result<Route<'a>, &'a xde_underlay_port> {
-    let RouteKey { dst: ip6_dst, l4_hash: overlay_hash } = key;
+    let RouteKey { dst: ip6_dst, l4_hash } = key;
     unsafe {
         // Use the GZ's routing table.
         let netstack =
@@ -199,10 +199,10 @@ fn next_hop<'a>(
         let addr = ip::in6_addr_t {
             _S6_un: ip::in6_addr__bindgen_ty_1 { _S6_u8: key.dst.bytes() },
         };
-        let xmit_hint = overlay_hash.unwrap_or(0);
+        let xmit_hint = l4_hash.unwrap_or(0);
         let mut generation_op = 0u32;
 
-        let mut underlay_port = &*ustate.u1;
+        let mut underlay_dev = &*ustate.u1;
 
         // Step (1): Lookup the IRE for the destination. This is going
         // to return one of the default gateway entries.
@@ -240,7 +240,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 b"no IRE for destination\0",
             );
-            return Err(underlay_port);
+            return Err(underlay_dev);
         }
         let ill = (*ire.inner()).ire_ill;
         if ill.is_null() {
@@ -252,7 +252,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 b"destination ILL is NULL\0",
             );
-            return Err(underlay_port);
+            return Err(underlay_dev);
         }
 
         // Step (2): Lookup the IRE for the gateway's link-local
@@ -296,7 +296,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 b"no IRE for gateway\0",
             );
-            return Err(underlay_port);
+            return Err(underlay_dev);
         }
 
         // Step (3): Determine the source address of the outer frame
@@ -315,7 +315,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 b"gateway ILL phys addr is NULL\0",
             );
-            return Err(underlay_port);
+            return Err(underlay_dev);
         }
 
         let src: [u8; 6] = alloc::slice::from_raw_parts(src, 6)
@@ -325,7 +325,7 @@ fn next_hop<'a>(
         // Switch to the 2nd underlay device if we determine the source mac
         // belongs to that device.
         if src == ustate.u2.mac {
-            underlay_port = &ustate.u2;
+            underlay_dev = &ustate.u2;
         }
 
         let src = EtherAddr::from(src);
@@ -343,7 +343,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 b"no NCE for gateway\0",
             );
-            return Err(underlay_port);
+            return Err(underlay_dev);
         }
 
         let nce_common = (*nce.inner()).nce_common;
@@ -356,7 +356,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 b"no NCE common for gateway\0",
             );
-            return Err(underlay_port);
+            return Err(underlay_dev);
         }
 
         let mac = (*nce_common).ncec_lladdr;
@@ -369,7 +369,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 b"NCE MAC address if NULL for gateway\0",
             );
-            return Err(underlay_port);
+            return Err(underlay_dev);
         }
 
         let maclen = (*nce_common).ncec_lladdr_length;
@@ -382,11 +382,12 @@ fn next_hop<'a>(
 
         next_hop_probe(ip6_dst, Some(&gw_ip6), src, dst, b"\0");
 
-        Ok(Route { src, dst, underlay_dev: underlay_port })
+        Ok(Route { src, dst, underlay_dev })
     }
 }
 
 /// A simple caching layer over `next_hop`.
+#[derive(Clone)]
 pub struct RouteCache(Arc<KRwLock<BTreeMap<RouteKey, CachedRoute>>>);
 
 impl Default for RouteCache {
@@ -398,6 +399,11 @@ impl Default for RouteCache {
 }
 
 impl RouteCache {
+    /// Retrieve a [`Route`] (device and L2 information) for a given `key`.
+    ///
+    /// This will retrieve an existing entry, if one exists from a recent
+    /// query, or computes the current route using `next_hop` on miss or
+    /// discovery of a stale entry.
     pub fn next_hop<'b>(&self, key: RouteKey, xde: &'b XdeDev) -> Route<'b> {
         let t = Moment::now();
 
@@ -440,6 +446,14 @@ impl RouteCache {
                 underlay_dev,
             },
         }
+    }
+
+    /// Discards any cached route entries which have expired.
+    pub fn expire_routes(&self) {
+        let mut route_cache = self.0.write();
+
+        let t = Moment::now();
+        route_cache.retain(|_, v| v.is_still_valid(t));
     }
 }
 

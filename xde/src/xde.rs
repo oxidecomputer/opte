@@ -287,6 +287,7 @@ pub struct XdeDev {
     // ports to theoretically reduce contention around route expiry
     // and reinsertion.
     routes: RouteCache,
+    routes_periodic: Periodic<RouteCache>,
 }
 
 #[cfg(not(test))]
@@ -592,6 +593,11 @@ fn expire_periodic(port: &mut Arc<Port<VpcNetwork>>) {
 }
 
 #[no_mangle]
+fn expire_route_cache(routes: &mut RouteCache) {
+    routes.expire_routes()
+}
+
+#[no_mangle]
 fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // TODO name validation
     let state = get_xde_state();
@@ -667,6 +673,15 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         ONE_SECOND,
     );
 
+    let routes = RouteCache::default();
+
+    let routes_periodic = Periodic::new(
+        port.name_cstr().clone(),
+        expire_route_cache,
+        Box::new(routes.clone()),
+        ONE_SECOND,
+    );
+
     let mut xde = Box::new(XdeDev {
         devname: req.xde_devname.clone(),
         linkid: req.linkid,
@@ -680,7 +695,8 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         passthrough: req.passthrough,
         u1: underlay.u1.clone(),
         u2: underlay.u2.clone(),
-        routes: RouteCache::default(),
+        routes,
+        routes_periodic,
     });
     drop(underlay_);
 
