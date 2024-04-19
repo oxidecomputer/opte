@@ -45,6 +45,7 @@ pub mod dls;
 pub mod ip;
 pub mod mac;
 mod mac_sys;
+pub mod route;
 pub mod secpolicy;
 pub mod sys;
 pub mod xde;
