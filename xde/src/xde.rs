@@ -72,6 +72,7 @@ use opte::ExecCtx;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
+use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
@@ -563,6 +564,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::SetVirt2Phys => {
             let resp = set_v2p_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ClearVirt2Phys => {
+            let resp = clear_v2p_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
 
@@ -2198,6 +2204,14 @@ fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
     state.vpc_map.add(req.vip, req.phys);
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
+fn clear_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: ClearVirt2PhysReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    state.vpc_map.del(&req.vip, &req.phys);
     Ok(NoResp::default())
 }
 

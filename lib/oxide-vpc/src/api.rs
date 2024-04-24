@@ -524,6 +524,13 @@ pub struct SetVirt2PhysReq {
     pub phys: PhysNet,
 }
 
+/// Clear a mapping from VPC IP to physical network destination.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClearVirt2PhysReq {
+    pub vip: IpAddr,
+    pub phys: PhysNet,
+}
+
 /// Set a mapping from a VPC IP to boundary tunnel endpoint destination.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2BoundaryReq {

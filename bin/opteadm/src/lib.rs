@@ -15,6 +15,7 @@ use opte_ioctl::Error;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
+use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
@@ -218,6 +219,11 @@ impl OpteAdm {
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetVirt2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn clear_v2p(&self, req: &ClearVirt2PhysReq) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearVirt2Phys;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
