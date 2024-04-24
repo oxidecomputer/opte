@@ -329,3 +329,35 @@ impl Drop for MacUnicastHandle {
         unsafe { mac_unicast_remove(self.mch.mch, self.muh) };
     }
 }
+
+// XXX: cleanup
+
+/// Safe wrapper around a `mac_perim_handle_t`.
+pub struct MacPerimeterHandle {
+    mph: mac_perim_handle,
+    link: datalink_id_t,
+}
+
+impl MacPerimeterHandle {
+    pub fn from_linkid(link: datalink_id_t) -> Result<Self, c_int> {
+        let mut mph = 0;
+        let res = unsafe { mac_perim_enter_by_linkid(link, &mut mph) };
+        if res == 0 {
+            Ok(Self { mph, link })
+        } else {
+            Err(res)
+        }
+    }
+
+    pub fn linkid(&self) -> datalink_id_t {
+        self.link
+    }
+}
+
+impl Drop for MacPerimeterHandle {
+    fn drop(&mut self) {
+        unsafe {
+            mac_perim_exit(self.mph);
+        }
+    }
+}

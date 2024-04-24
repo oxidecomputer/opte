@@ -13,6 +13,8 @@
 //#![allow(clippy::arc_with_non_send_sync)]
 
 use crate::dls;
+use crate::dls::DldStream;
+use crate::dls::DlsLink;
 use crate::ioctl::IoctlEnvelope;
 use crate::ip;
 use crate::mac;
@@ -21,6 +23,7 @@ use crate::mac::mac_private_minor;
 use crate::mac::MacClientHandle;
 use crate::mac::MacHandle;
 use crate::mac::MacOpenFlags;
+use crate::mac::MacPerimeterHandle;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
 use crate::mac::MacUnicastHandle;
@@ -231,11 +234,14 @@ struct xde_underlay_port {
     /// MAC client handle for tx/rx on the underlay link.
     mch: Arc<MacClientHandle>,
 
-    /// MAC client handle for tx/rx on the underlay link.
-    muh: MacUnicastHandle,
-
+    // /// MAC client handle for tx/rx on the underlay link.
+    // muh: MacUnicastHandle,
     /// MAC promiscuous handle for receiving packets on the underlay link.
     mph: MacPromiscHandle,
+
+    link: DlsLink,
+
+    stream: DldStream,
 }
 
 struct XdeState {
@@ -951,6 +957,44 @@ fn create_underlay_port(
     link_name: String,
     mc_name: &str,
 ) -> Result<xde_underlay_port, OpteError> {
+    let mut link_id = 0;
+    let link_cstr = CString::new(link_name.as_str()).unwrap();
+    unsafe {
+        match dls::dls_mgmt_get_linkid(link_cstr.as_ptr(), &mut link_id) {
+            0 => {}
+            err => {
+                return Err(OpteError::System {
+                    errno: EFAULT,
+                    msg: format!("failed to get linkid for {link_name}: {err}"),
+                })
+            }
+        }
+    }
+
+    let mph = MacPerimeterHandle::from_linkid(link_id).map_err(|e| {
+        OpteError::System {
+            errno: EFAULT,
+            msg: format!("failed to grab MAC perimeter for {link_name}: {e}"),
+        }
+    })?;
+
+    // XXX: error handling will be REALLY fucking bad here with these panic drops.
+    let link = DlsLink::hold(&mph).map_err(|e| OpteError::System {
+        errno: EFAULT,
+        msg: format!(
+            "failed to grab hold on link perimeter for {link_name}: {e}"
+        ),
+    })?;
+
+    let stream = link.open_stream(&mph).map_err(|e| OpteError::System {
+        errno: EFAULT,
+        msg: format!("failed to grab open stream for {link_name}: {e}"),
+    })?;
+
+    drop(mph);
+
+    // Promisc setup.
+
     // Grab mac handle for underlying link
     let mh = MacHandle::open_by_link_name(&link_name).map(Arc::new).map_err(
         |e| OpteError::System {
@@ -990,11 +1034,17 @@ fn create_underlay_port(
     // requires that if there is a single mac client on a link, that client must
     // have an L2 address. This was not caught until recently, because this is
     // only enforced as a debug assert in the kernel.
-    let mac = EtherAddr::from([0xa8, 0x40, 0x25, 0xff, 0x00, 0x00]);
-    let muh = mch.add_unicast(mac).map_err(|e| OpteError::System {
-        errno: EFAULT,
-        msg: format!("mac_unicast_add failed for {link_name}: {e}"),
-    })?;
+
+    // ks:
+    // ON ABOVE: we are never the only MAC client on a link. If we somehow are, we
+    // should find a way to enfore the above constraint.
+    // (even so, the presence of a dls-visible link implies a client?)
+
+    // let mac = EtherAddr::from([0xa8, 0x40, 0x25, 0xff, 0x00, 0x00]);
+    // let muh = mch.add_unicast(mac).map_err(|e| OpteError::System {
+    //     errno: EFAULT,
+    //     msg: format!("mac_unicast_add failed for {link_name}: {e}"),
+    // })?;
 
     Ok(xde_underlay_port {
         name: link_name,
@@ -1002,7 +1052,9 @@ fn create_underlay_port(
         mh,
         mch,
         mph,
-        muh,
+        // muh,
+        link,
+        stream,
     })
 }
 
@@ -1159,7 +1211,7 @@ unsafe extern "C" fn xde_detach(
 
             // 1. Remove promisc and unicast callbacks
             drop(u.mph);
-            drop(u.muh);
+            // drop(u.muh);
 
             // 2. Remove MAC client handle
             if Arc::strong_count(&u.mch) > 1 {
@@ -1177,6 +1229,34 @@ unsafe extern "C" fn xde_detach(
                 return DDI_FAILURE;
             }
             drop(u.mh);
+
+            // XXX: test code
+            let mut link_id = 0;
+            let link_cstr = CString::new(u.name.as_str()).unwrap();
+            unsafe {
+                match dls::dls_mgmt_get_linkid(link_cstr.as_ptr(), &mut link_id)
+                {
+                    0 => {}
+                    err => {
+                        warn!("failed to get linkid for {}: {}", u.name, err);
+                        return DDI_FAILURE;
+                    }
+                }
+            }
+
+            let mph = match MacPerimeterHandle::from_linkid(link_id) {
+                Ok(mph) => mph,
+                Err(err) => {
+                    warn!(
+                        "failed to grab MAC perimeter for {}: {}",
+                        u.name, err
+                    );
+                    return DDI_FAILURE;
+                }
+            };
+
+            u.stream.release(&mph);
+            u.link.release(&mph);
         }
     }
 
@@ -1471,7 +1551,8 @@ unsafe extern "C" fn xde_mc_tx(
     // Choose u1 as a starting point. This may be changed in the next_hop
     // function when we are actually able to determine what interface should be
     // used.
-    let mch = &src_dev.u1.mch;
+    // let mch = &src_dev.u1.mch;
+    let stream = &src_dev.u1.stream;
     let hint = 0;
 
     // Send straight to underlay in passthrough mode.
@@ -1482,7 +1563,7 @@ unsafe extern "C" fn xde_mc_tx(
         // refresh my memory on all of this.
         //
         // TODO Is there way to set mac_tx to must use result?
-        mch.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+        stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
         return ptr::null_mut();
     }
 
@@ -1550,7 +1631,12 @@ unsafe extern "C" fn xde_mc_tx(
             // Unwrap: We know the packet is good because we just
             // unwrapped it above.
             let new_pkt = Packet::<Initialized>::wrap_mblk(mblk).unwrap();
-            underlay_dev.mch.tx_drop_on_no_desc(
+            // underlay_dev.mch.tx_drop_on_no_desc(
+            //     new_pkt,
+            //     hint,
+            //     MacTxFlags::empty(),
+            // );
+            underlay_dev.stream.tx_drop_on_no_desc(
                 new_pkt,
                 hint,
                 MacTxFlags::empty(),
@@ -1566,7 +1652,7 @@ unsafe extern "C" fn xde_mc_tx(
         }
 
         Ok(ProcessResult::Bypass) => {
-            mch.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+            stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
         }
 
         Err(_) => {}
