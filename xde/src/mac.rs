@@ -202,7 +202,7 @@ impl MacClientHandle {
         ptype: mac_client_promisc_type_t,
         promisc_fn: mac_rx_fn,
         flags: u16,
-    ) -> Result<MacPromiscHandle, c_int> {
+    ) -> Result<MacPromiscHandle<Self>, c_int> {
         let mut mph = ptr::null_mut();
 
         // `MacPromiscHandle` keeps a reference to this `MacClientHandle`
@@ -215,7 +215,7 @@ impl MacClientHandle {
         };
 
         if ret == 0 {
-            Ok(MacPromiscHandle { mph, _mch: mch })
+            Ok(MacPromiscHandle { mph, _parent: mch })
         } else {
             Err(ret)
         }
@@ -294,15 +294,15 @@ impl Drop for MacClientHandle {
 
 /// Safe wrapper around a `mac_promisc_handle_t`.
 #[derive(Debug)]
-pub struct MacPromiscHandle {
+pub struct MacPromiscHandle<P> {
     /// The underlying `mac_promisc_handle_t`.
-    mph: *mut mac_promisc_handle,
+    pub(crate) mph: *mut mac_promisc_handle,
 
     /// The `MacClientHandle` used to create this promiscuous callback.
-    _mch: Arc<MacClientHandle>,
+    pub(crate) _parent: Arc<P>,
 }
 
-impl Drop for MacPromiscHandle {
+impl<P> Drop for MacPromiscHandle<P> {
     fn drop(&mut self) {
         // Safety: We know that a `MacPromiscHandle` can only exist if a
         // mac promisc handle was successfully obtained, and thus `mph`

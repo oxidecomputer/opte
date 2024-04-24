@@ -229,19 +229,19 @@ struct xde_underlay_port {
     mac: [u8; 6],
 
     /// MAC handle to the underlay link.
-    mh: Arc<MacHandle>,
+    // mh: Arc<MacHandle>,
 
     /// MAC client handle for tx/rx on the underlay link.
-    mch: Arc<MacClientHandle>,
+    // mch: Arc<MacClientHandle>,
 
     // /// MAC client handle for tx/rx on the underlay link.
     // muh: MacUnicastHandle,
     /// MAC promiscuous handle for receiving packets on the underlay link.
-    mph: MacPromiscHandle,
+    mph: MacPromiscHandle<DldStream>,
 
     link: DlsLink,
 
-    stream: DldStream,
+    stream: Arc<DldStream>,
 }
 
 struct XdeState {
@@ -995,29 +995,7 @@ fn create_underlay_port(
 
     // Promisc setup.
 
-    // Grab mac handle for underlying link
-    let mh = MacHandle::open_by_link_name(&link_name).map(Arc::new).map_err(
-        |e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("failed to open link {link_name} for underlay: {e}"),
-        },
-    )?;
-
-    // Get a mac client handle as well.
-    //
-    let oflags = MacOpenFlags::NONE;
-    let mch = MacClientHandle::open(&mh, Some(mc_name), oflags, 0)
-        .map(Arc::new)
-        .map_err(|e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("mac_client_open failed for {link_name}: {e}"),
-        })?;
-
-    // Setup promiscuous callback to receive all packets on this link.
-    //
-    // We specify `MAC_PROMISC_FLAGS_NO_TX_LOOP` here to skip receiving copies
-    // of outgoing packets we sent ourselves.
-    let mph = mch
+    let mph = stream
         .add_promisc(
             mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
             xde_rx,
@@ -1027,6 +1005,39 @@ fn create_underlay_port(
             errno: EFAULT,
             msg: format!("mac_promisc_add failed for {link_name}: {e}"),
         })?;
+
+    // Grab mac handle for underlying link
+    let mh = MacHandle::open_by_link_name(&link_name).map(Arc::new).map_err(
+        |e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("failed to open link {link_name} for underlay: {e}"),
+        },
+    )?;
+
+    // // Get a mac client handle as well.
+    // //
+    // let oflags = MacOpenFlags::NONE;
+    // let mch = MacClientHandle::open(&mh, Some(mc_name), oflags, 0)
+    //     .map(Arc::new)
+    //     .map_err(|e| OpteError::System {
+    //         errno: EFAULT,
+    //         msg: format!("mac_client_open failed for {link_name}: {e}"),
+    //     })?;
+
+    // // Setup promiscuous callback to receive all packets on this link.
+    // //
+    // // We specify `MAC_PROMISC_FLAGS_NO_TX_LOOP` here to skip receiving copies
+    // // of outgoing packets we sent ourselves.
+    // let mph = mch
+    //     .add_promisc(
+    //         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
+    //         xde_rx,
+    //         mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
+    //     )
+    //     .map_err(|e| OpteError::System {
+    //         errno: EFAULT,
+    //         msg: format!("mac_promisc_add failed for {link_name}: {e}"),
+    //     })?;
 
     // Set up a unicast callback. The MAC address here is a sentinel value with
     // nothing real behind it. This is why we picked the zero value in the Oxide
@@ -1049,8 +1060,8 @@ fn create_underlay_port(
     Ok(xde_underlay_port {
         name: link_name,
         mac: mh.get_mac_addr(),
-        mh,
-        mch,
+        // mh,
+        // mch,
         mph,
         // muh,
         link,
@@ -1200,7 +1211,7 @@ unsafe extern "C" fn xde_detach(
 
         for u in [u1, u2] {
             // Clear all Rx paths
-            u.mch.clear_rx();
+            // u.mch.clear_rx();
 
             // We have a chain of refs here:
             //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
@@ -1212,23 +1223,30 @@ unsafe extern "C" fn xde_detach(
             // 1. Remove promisc and unicast callbacks
             drop(u.mph);
             // drop(u.muh);
-
-            // 2. Remove MAC client handle
-            if Arc::strong_count(&u.mch) > 1 {
+            let Ok(stream) = Arc::try_unwrap(u.stream) else {
                 warn!(
                     "underlay {} has outstanding mac client handle refs",
                     u.name
                 );
                 return DDI_FAILURE;
-            }
-            drop(u.mch);
+            };
 
-            // Finally, we can cleanup the MAC handle for this underlay
-            if Arc::strong_count(&u.mh) > 1 {
-                warn!("underlay {} has outstanding mac handle refs", u.name);
-                return DDI_FAILURE;
-            }
-            drop(u.mh);
+            // // 2. Remove MAC client handle
+            // if Arc::strong_count(&u.stream) > 1 {
+            //     warn!(
+            //         "underlay {} has outstanding mac client handle refs",
+            //         u.name
+            //     );
+            //     return DDI_FAILURE;
+            // }
+            // drop(u.mch);
+
+            // // Finally, we can cleanup the MAC handle for this underlay
+            // if Arc::strong_count(&u.mh) > 1 {
+            //     warn!("underlay {} has outstanding mac handle refs", u.name);
+            //     return DDI_FAILURE;
+            // }
+            // drop(u.mh);
 
             // XXX: test code
             let mut link_id = 0;
@@ -1255,7 +1273,7 @@ unsafe extern "C" fn xde_detach(
                 }
             };
 
-            u.stream.release(&mph);
+            stream.release(&mph);
             u.link.release(&mph);
         }
     }

@@ -15,12 +15,17 @@ use crate::ip::queue_t;
 use crate::ip::t_uscalar_t;
 use crate::mac;
 use crate::mac::mac_client_handle;
+use crate::mac::mac_client_promisc_type_t;
 use crate::mac::mac_handle;
+use crate::mac::mac_promisc_add;
 use crate::mac::mac_promisc_handle;
+use crate::mac::mac_rx_fn;
 use crate::mac::MacPerimeterHandle;
+use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
 use crate::mac_sys::mac_tx_cookie_t;
 use crate::mac_sys::MAC_DROP_ON_NO_DESC;
+use alloc::sync::Arc;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use core::ptr;
@@ -350,7 +355,7 @@ impl DlsLink {
     pub fn open_stream(
         &self,
         mph: &MacPerimeterHandle,
-    ) -> Result<DldStream, c_int> {
+    ) -> Result<Arc<DldStream>, c_int> {
         let Some(inner) = self.inner.as_ref() else {
             return Err(-1);
         };
@@ -367,7 +372,8 @@ impl DlsLink {
             let dld_str = unsafe { stream.assume_init() };
             Ok(DldStream {
                 inner: Some(DldStreamInner { dld_str, link: mph.linkid() }),
-            })
+            }
+            .into())
         } else {
             Err(res)
         }
@@ -397,6 +403,38 @@ pub struct DldStreamInner {
 }
 
 impl DldStream {
+    /// Register promiscuous callback to receive packets on the underlying MAC.
+    pub fn add_promisc(
+        self: &Arc<Self>,
+        ptype: mac_client_promisc_type_t,
+        promisc_fn: mac_rx_fn,
+        flags: u16,
+    ) -> Result<MacPromiscHandle<Self>, c_int> {
+        let Some(inner) = self.inner.as_ref() else {
+            return Err(-1);
+        };
+
+        let mut mph = ptr::null_mut();
+
+        // `MacPromiscHandle` keeps a reference to this `MacClientHandle`
+        // until it is removed and so we can safely access it from the
+        // callback via the `arg` pointer.
+        let _parent = self.clone();
+        let arg = Arc::as_ptr(&_parent) as *mut c_void;
+        let mch = inner.dld_str.ds_mch;
+        let ret = unsafe {
+            // NOTE: arg is reinterpreted as `mac_resource_handle` -> `mac_ring`
+            // in `mac_rx_common`. Is what we've been doing here and before even safe?
+            mac_promisc_add(mch, ptype, promisc_fn, arg, &mut mph, flags)
+        };
+
+        if ret == 0 {
+            Ok(MacPromiscHandle { mph, _parent })
+        } else {
+            Err(ret)
+        }
+    }
+
     pub fn tx_drop_on_no_desc(
         &self,
         pkt: Packet<impl PacketState>,
