@@ -10,8 +10,9 @@
 use core::ffi::CStr;
 pub use derror_macro::DError;
 
-/// Compile-time const cstring from a byte slice, including declaration.
-/// Callers must include a `b'\0'`.
+/// Convenience macro for a compile-time static CStr declaration.
+/// Callers must pass in a `c"..."` or other valid const CStr
+/// initialiser.
 macro_rules! static_cstr {
     ($i:ident, $e:expr) => {
         static $i: &CStr = $e;
