@@ -1470,7 +1470,7 @@ impl Packet<Parsed> {
     }
 
     /// Return a reference to the flow ID of this packet.
-    // #[inline]
+    #[inline]
     pub fn flow(&self) -> &InnerFlowId {
         &self.state.flow
     }
