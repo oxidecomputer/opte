@@ -112,7 +112,7 @@ pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     PartialOrd,
     Serialize,
 )]
-#[repr(C)]
+#[repr(C, align(4))]
 pub struct InnerFlowId {
     // Using a `u8` here for `proto` hides the enum repr from SDTs.
     pub proto: u8,
@@ -121,7 +121,7 @@ pub struct InnerFlowId {
     // side `union addrs` is 4B aligned -- in6_addr_t has a 4B alignment.
     // So, this layout has to match that constraint -- placing addrs at
     // offset 0x2 with `u16` discriminant sets up 4B alignment for the
-    // enum variant data.
+    // enum variant data (and this struct itself is 4B aligned).
     pub addrs: AddrPair,
     pub src_port: u16,
     pub dst_port: u16,
