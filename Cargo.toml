@@ -44,7 +44,7 @@ bitflags = "2"
 cargo_metadata = "0.18"
 cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
-crc32fast = { version = "1", default-features = false }
+crc32fast = { version = "1.4.0", default-features = false }
 criterion = "0.5"
 ctor = "0.2"
 darling = "0.20"
