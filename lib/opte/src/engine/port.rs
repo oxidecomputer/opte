@@ -43,7 +43,7 @@ use super::HdlPktAction;
 use super::NetworkImpl;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
-use crate::d_error::ErrorBlock;
+use crate::d_error::LabelBlock;
 use crate::ddi::kstat;
 use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
@@ -1459,15 +1459,15 @@ impl<N: NetworkImpl> Port<N> {
                 // for now this does the trick.
                 let (eb, extra_str) = match res {
                     Ok(v @ ProcessResult::Drop { reason }) => (
-                        ErrorBlock::from_err(v),
+                        LabelBlock::from_nested(v),
                         Some(format!("{reason:?}\0"))
                     ),
-                    Ok(v) => (ErrorBlock::from_err(v), None),
+                    Ok(v) => (LabelBlock::from_nested(v), None),
                     // TODO: Handle the error types in a zero-cost way.
-                    Err(e) => (Ok(ErrorBlock::new()), Some(format!("ERROR: {:?}\0", e))),
+                    Err(e) => (Ok(LabelBlock::new()), Some(format!("ERROR: {:?}\0", e))),
                 };
 
-                // Truncation is captured *in* the ErrorBlock.
+                // Truncation is captured *in* the LabelBlock.
                 let mut eb = match eb {
                     Ok(block) => block,
                     Err(block) => block,
@@ -2688,7 +2688,7 @@ extern "C" {
         epoch: uintptr_t,
         pkt: uintptr_t,
         hp_pkt: uintptr_t,
-        err_b: *const ErrorBlock<2>,
+        err_b: *const LabelBlock<2>,
     );
     pub fn __dtrace_probe_tcp__err(
         dir: uintptr_t,

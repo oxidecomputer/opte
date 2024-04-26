@@ -34,7 +34,7 @@ use super::rule::HdrTransformError;
 use super::rule::Rule;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
-use crate::d_error::ErrorBlock;
+use crate::d_error::LabelBlock;
 use crate::ddi::kstat;
 use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
@@ -685,15 +685,15 @@ impl Layer {
                 // for now this does the trick.
                 let (eb, extra_str) = match res {
                     Ok(v @ LayerResult::Deny { name, reason }) => (
-                        ErrorBlock::from_err(v),
+                        LabelBlock::from_nested(v),
                         Some(format!("{{name: \"{name}\", reason: {reason:?}}}\0"))
                     ),
-                    Ok(v) => (ErrorBlock::from_err(v), None),
+                    Ok(v) => (LabelBlock::from_nested(v), None),
                     // TODO: Handle the error types in a zero-cost way.
-                    Err(e) => (Ok(ErrorBlock::new()), Some(format!("ERROR: {:?}\0", e))),
+                    Err(e) => (Ok(LabelBlock::new()), Some(format!("ERROR: {:?}\0", e))),
                 };
 
-                // Truncation is captured *in* the ErrorBlock.
+                // Truncation is captured *in* the LabelBlock.
                 let mut eb = match eb {
                     Ok(block) => block,
                     Err(block) => block,
@@ -1820,7 +1820,7 @@ extern "C" {
         name: uintptr_t,
         flow_before: *const InnerFlowId,
         flow_after: *const InnerFlowId,
-        res: *const ErrorBlock<2>,
+        res: *const LabelBlock<2>,
     );
 
     pub fn __dtrace_probe_rule__match(arg: uintptr_t);

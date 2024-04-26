@@ -47,7 +47,7 @@ use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
-use opte::d_error::ErrorBlock;
+use opte::d_error::LabelBlock;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
@@ -128,7 +128,7 @@ extern "C" {
         port: uintptr_t,
         dir: uintptr_t,
         mp: uintptr_t,
-        err_b: *const ErrorBlock<8>,
+        err_b: *const LabelBlock<8>,
         data_len: uintptr_t,
     );
     pub fn __dtrace_probe_guest__loopback(
@@ -161,8 +161,8 @@ fn bad_packet_parse_probe(
         Some(name) => name.as_c_str(),
     };
 
-    // Truncation is captured *in* the ErrorBlock.
-    let block = match ErrorBlock::<8>::from_err(err) {
+    // Truncation is captured *in* the LabelBlock.
+    let block = match LabelBlock::<8>::from_nested(err) {
         Ok(block) => block,
         Err(block) => block,
     };
@@ -188,7 +188,7 @@ fn bad_packet_probe(
         None => c"unknown",
         Some(name) => name.as_c_str(),
     };
-    let mut eb = ErrorBlock::<8>::new();
+    let mut eb = LabelBlock::<8>::new();
 
     unsafe {
         let _ = eb.append_name_raw(msg);
