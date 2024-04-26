@@ -9,13 +9,13 @@
 #define FLOW_FMT(svar, fvar)					\
 	this->src_ip = (ipaddr_t *)alloca(4);			\
 	this->dst_ip = (ipaddr_t *)alloca(4);			\
-	*this->src_ip = fvar->addrs.ip4[0];				\
-	*this->dst_ip = fvar->addrs.ip4[1];				\
+	*this->src_ip = fvar->addrs.ip4.src;			\
+	*this->dst_ip = fvar->addrs.ip4.dst;			\
 	svar = protos[fvar->proto];				\
 	svar = strjoin(svar, ",");				\
 	svar = strjoin(svar, inet_ntoa(this->src_ip));		\
 	svar = strjoin(svar, ":");				\
-	svar = strjoin(svar, lltostr(fvar->src_port));	\
+	svar = strjoin(svar, lltostr(fvar->src_port));		\
 	svar = strjoin(svar, ",");				\
 	svar = strjoin(svar, inet_ntoa(this->dst_ip));		\
 	svar = strjoin(svar, ":");				\
@@ -24,13 +24,13 @@
 #define FLOW_FMT6(svar, fvar)					\
 	this->src_ip6 = (in6_addr_t *)alloca(16);		\
 	this->dst_ip6 = (in6_addr_t *)alloca(16);		\
-	*this->src_ip6 = fvar->addrs.ip6[0];				\
-	*this->dst_ip6 = fvar->addrs.ip6[1];				\
+	*this->src_ip6 = fvar->addrs.ip6.src;			\
+	*this->dst_ip6 = fvar->addrs.ip6.dst;			\
 	svar = protos[fvar->proto];				\
 	svar = strjoin(svar, ",[");				\
 	svar = strjoin(svar, inet_ntoa6(this->src_ip6));	\
 	svar = strjoin(svar, "]:");				\
-	svar = strjoin(svar, lltostr(fvar->src_port));	\
+	svar = strjoin(svar, lltostr(fvar->src_port));		\
 	svar = strjoin(svar, ",[");				\
 	svar = strjoin(svar, inet_ntoa6(this->dst_ip6));	\
 	svar = strjoin(svar, "]:");				\

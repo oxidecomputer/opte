@@ -5,8 +5,14 @@ typedef struct flow_id_sdt_arg {
 	uint8_t		proto;
 	uint16_t	af;
 	union addrs {
-		ipaddr_t	ip4[2];
-		in6_addr_t	ip6[2];
+		struct {
+                        ipaddr_t src;
+                        ipaddr_t dst;
+                } ip4;
+                struct {
+                        in6_addr_t src;
+                        in6_addr_t dst;
+                } ip6;
 	} addrs;
 	uint16_t	src_port;
 	uint16_t	dst_port;

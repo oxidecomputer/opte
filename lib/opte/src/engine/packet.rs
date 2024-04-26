@@ -114,11 +114,14 @@ pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
 )]
 #[repr(C)]
 pub struct InnerFlowId {
-    // Using a `u8` here for `proto` hides the enum repr from SDTs,
-    // but we need to have a `u16` discriminant for the IPs to set up
-    // 4B alignment on inaddr6_t on the dtrace side (so we lose out
-    // on the possibility of 38B packing).
+    // Using a `u8` here for `proto` hides the enum repr from SDTs.
     pub proto: u8,
+    // We could also theoretically get to a 38B packing if we reduce
+    // AddrPair's repr from `u16` to `u8`. However, on the dtrace/illumos
+    // side `union addrs` is 4B aligned -- in6_addr_t has a 4B alignment.
+    // So, this layout has to match that constraint -- placing addrs at
+    // offset 0x2 with `u16` discriminant sets up 4B alignment for the
+    // enum variant data.
     pub addrs: AddrPair,
     pub src_port: u16,
     pub dst_port: u16,
@@ -142,7 +145,7 @@ impl Default for InnerFlowId {
     PartialOrd,
     Serialize,
 )]
-#[repr(u16)]
+#[repr(C, u16)]
 pub enum AddrPair {
     V4 { src: Ipv4Addr, dst: Ipv4Addr } = AF_INET as u16,
     V6 { src: Ipv6Addr, dst: Ipv6Addr } = AF_INET6 as u16,
