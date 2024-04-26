@@ -208,14 +208,20 @@ impl MacClientHandle {
         // `MacPromiscHandle` keeps a reference to this `MacClientHandle`
         // until it is removed and so we can safely access it from the
         // callback via the `arg` pointer.
-        let mch = self.clone();
-        let arg = Arc::as_ptr(&mch) as *mut c_void;
+        let mch = Arc::into_raw(self.clone());
         let ret = unsafe {
-            mac_promisc_add(self.mch, ptype, promisc_fn, arg, &mut mph, flags)
+            mac_promisc_add(
+                self.mch,
+                ptype,
+                promisc_fn,
+                mch as *mut c_void,
+                &mut mph,
+                flags,
+            )
         };
 
         if ret == 0 {
-            Ok(MacPromiscHandle { mph, _mch: mch })
+            Ok(MacPromiscHandle { mph, mch })
         } else {
             Err(ret)
         }
@@ -299,7 +305,7 @@ pub struct MacPromiscHandle {
     mph: *mut mac_promisc_handle,
 
     /// The `MacClientHandle` used to create this promiscuous callback.
-    _mch: Arc<MacClientHandle>,
+    mch: *const MacClientHandle,
 }
 
 impl Drop for MacPromiscHandle {
@@ -307,7 +313,10 @@ impl Drop for MacPromiscHandle {
         // Safety: We know that a `MacPromiscHandle` can only exist if a
         // mac promisc handle was successfully obtained, and thus `mph`
         // is valid.
-        unsafe { mac_promisc_remove(self.mph) };
+        unsafe {
+            mac_promisc_remove(self.mph);
+            Arc::from_raw(self.mch); // dropped immediately
+        };
     }
 }
 

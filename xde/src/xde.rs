@@ -2080,7 +2080,7 @@ unsafe extern "C" fn xde_rx(
 ) {
     __dtrace_probe_rx(mp_chain as uintptr_t);
 
-    // Safety: This arg comes from `Arc::as_ptr()` on the `MacClientHandle`
+    // Safety: This arg comes from `Arc::from_ptr()` on the `MacClientHandle`
     // corresponding to the underlay port we're receiving on. Being
     // here in the callback means the `MacPromiscHandle` hasn't been
     // dropped yet and thus our `MacClientHandle` is also still valid.
