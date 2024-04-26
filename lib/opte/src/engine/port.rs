@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! A virtual switch port.
 
@@ -1444,8 +1444,11 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         let flow_after = pkt.flow();
 
+        let a = crate::NopDrop;
+
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
+
                 // XXX This would probably be better as separate probes;
                 // for now this does the trick.
                 let (eb, extra_str) = match res {
@@ -1492,8 +1495,6 @@ impl<N: NetworkImpl> Port<N> {
                         eb.as_ptr(),
                     );
                 }
-
-                drop(extra_str);
             } else if #[cfg(feature = "usdt")] {
                 let flow_b_s = flow_before.to_string();
                 let flow_a_s = flow_after.to_string();
@@ -1515,6 +1516,8 @@ impl<N: NetworkImpl> Port<N> {
                 let (..) = (dir, flow_before, flow_after, epoch, pkt, res);
             }
         }
+
+        drop(a);
     }
 
     /// Creates a new TCP flow state entry for a given packet.
