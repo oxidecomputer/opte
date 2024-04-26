@@ -185,6 +185,10 @@ impl InnerFlowId {
             AddrPair::V6 { dst, .. } => dst.into(),
         }
     }
+
+    pub fn protocol(&self) -> Protocol {
+        Protocol::from(self.proto)
+    }
 }
 
 impl Display for InnerFlowId {
@@ -192,7 +196,7 @@ impl Display for InnerFlowId {
         write!(
             f,
             "{}:{}:{}:{}:{}",
-            self.proto,
+            self.protocol(),
             self.src_ip(),
             self.src_port,
             self.dst_ip(),

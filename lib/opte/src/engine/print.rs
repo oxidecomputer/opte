@@ -200,16 +200,13 @@ pub fn print_lft_flow(
     flow_id: &InnerFlowId,
     flow_entry: &ActionDescEntryDump,
 ) -> std::io::Result<()> {
-    // For those types with custom Display implementations we need to
-    // first format in into a String before passing it to println in
-    // order for the format specification to be honored.
     writeln!(
         t,
         "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-        flow_id.proto.to_string(),
-        flow_id.src_ip().to_string(),
+        flow_id.protocol(),
+        flow_id.src_ip(),
         flow_id.src_port,
-        flow_id.dst_ip().to_string(),
+        flow_id.dst_ip(),
         flow_id.dst_port,
         flow_entry.hits,
         flow_entry.summary,
@@ -227,16 +224,13 @@ pub fn print_uft_flow(
     flow_id: &InnerFlowId,
     flow_entry: &UftEntryDump,
 ) -> std::io::Result<()> {
-    // For those types with custom Display implementations we need to
-    // first format in into a String before passing it to println in
-    // order for the format specification to be honored.
     writeln!(
         t,
         "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-        flow_id.proto.to_string(),
-        flow_id.src_ip().to_string(),
+        flow_id.protocol(),
+        flow_id.src_ip(),
         flow_id.src_port,
-        flow_id.dst_ip().to_string(),
+        flow_id.dst_ip(),
         flow_id.dst_port,
         flow_entry.hits,
         flow_entry.summary,

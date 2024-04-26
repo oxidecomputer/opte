@@ -306,7 +306,7 @@ where
         _meta: &mut ActionMeta,
     ) -> GenDescResult {
         let priv_port = flow_id.src_port;
-        let proto = flow_id.proto.into();
+        let proto = flow_id.protocol();
         let is_icmp = proto == T::MESSAGE_PROTOCOL;
         let pool = match proto {
             Protocol::TCP => &self.tcp_pool,
