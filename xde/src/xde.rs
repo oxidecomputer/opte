@@ -604,7 +604,7 @@ fn expire_periodic(port: &mut Arc<Port<VpcNetwork>>) {
 
 #[no_mangle]
 fn expire_route_cache(routes: &mut RouteCache) {
-    routes.expire_routes()
+    routes.remove_routes()
 }
 
 #[no_mangle]

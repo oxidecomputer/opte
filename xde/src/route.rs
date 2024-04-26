@@ -20,9 +20,17 @@ use opte::ddi::time::Moment;
 use opte::engine::ether::EtherAddr;
 use opte::engine::ip6::Ipv6Addr;
 
-// XXX: completely arbitrary timeout.
-/// The duration a cached route remains valid for.
-const MAX_ROUTE_LIFETIME: Duration = Duration::from_millis(100);
+// XXX: completely arbitrary timeouts.
+/// The duration a cached route remains valid for before it must be
+/// refreshed.
+///
+/// Expired routes will not be removed from the cache, and will leave
+/// an entry to enable a quick in-place refresh in the `BTreeMap`.
+const EXPIRE_ROUTE_LIFETIME: Duration = Duration::from_millis(100);
+
+/// The time after which a route should be completely removed from
+/// the cache.
+const REMOVE_ROUTE_LIFETIME: Duration = Duration::from_millis(1000);
 
 /// Maximum cache size, set to prevent excessive map modification latency.
 const MAX_CACHE_ENTRIES: usize = 512;
@@ -451,22 +459,18 @@ impl RouteCache {
         };
 
         match maybe_route {
-            Some(route) if route.is_still_valid(t) => {
-                return route.into_route(xde)
-            }
+            Some(route) if route.is_valid(t) => return route.into_route(xde),
             _ => {}
         }
 
         // Cache miss: intent is to now ask illumos, then insert.
-        let mut route_cache = self.0.write();
+        let route_cache = self.0.write();
 
         // Someone else may have written while we were taking the lock.
         // DO NOT waste time if there's a good route.
         let maybe_route = route_cache.get(&key).copied();
         match maybe_route {
-            Some(route) if route.is_still_valid(t) => {
-                return route.into_route(xde)
-            }
+            Some(route) if route.is_valid(t) => return route.into_route(xde),
             _ => {}
         }
 
@@ -499,12 +503,13 @@ impl RouteCache {
         }
     }
 
-    /// Discards any cached route entries which have expired.
-    pub fn expire_routes(&self) {
+    /// Discards any cached route entries which have been present
+    /// for longer than `REMOVE_ROUTE_LIFETIME`.
+    pub fn remove_routes(&self) {
         let mut route_cache = self.0.write();
 
         let t = Moment::now();
-        route_cache.retain(|_, v| v.is_still_valid(t));
+        route_cache.retain(|_, v| v.is_retained(t));
     }
 }
 
@@ -525,9 +530,14 @@ pub struct CachedRoute {
 }
 
 impl CachedRoute {
-    fn is_still_valid(&self, t: Moment) -> bool {
+    fn is_valid(&self, t: Moment) -> bool {
         t.delta_as_millis(self.timestamp)
-            <= MAX_ROUTE_LIFETIME.as_millis() as u64
+            <= EXPIRE_ROUTE_LIFETIME.as_millis() as u64
+    }
+
+    fn is_retained(&self, t: Moment) -> bool {
+        t.delta_as_millis(self.timestamp)
+            <= REMOVE_ROUTE_LIFETIME.as_millis() as u64
     }
 
     fn into_route(self, xde: &XdeDev) -> Route<'_> {
