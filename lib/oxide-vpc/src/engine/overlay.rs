@@ -8,9 +8,13 @@
 //!
 //! This implements the Oxide Network VPC Overlay.
 use super::router::RouterTargetInternal;
+use crate::api::DumpVirt2BoundaryResp;
+use crate::api::DumpVirt2PhysResp;
 use crate::api::GuestPhysAddr;
 use crate::api::PhysNet;
 use crate::api::TunnelEndpoint;
+use crate::api::V2bMapResp;
+use crate::api::VpcMapResp;
 use crate::cfg::VpcCfg;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::BTreeSet;
@@ -19,7 +23,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::marker::PhantomData;
-use opte::api::CmdOk;
 use opte::api::Direction;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv4Cidr;
@@ -67,8 +70,6 @@ use opte::engine::rule::ResourceEntry;
 use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
 use poptrie::Poptrie;
-use serde::Deserialize;
-use serde::Serialize;
 
 pub const OVERLAY_LAYER_NAME: &str = "overlay";
 
@@ -786,42 +787,3 @@ impl MappingResource for Virt2Phys {
         }
     }
 }
-
-#[repr(C)]
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpVirt2PhysReq {
-    pub unused: u64,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct VpcMapResp {
-    pub vni: Vni,
-    pub ip4: Vec<(Ipv4Addr, GuestPhysAddr)>,
-    pub ip6: Vec<(Ipv6Addr, GuestPhysAddr)>,
-}
-
-#[repr(C)]
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpVirt2BoundaryReq {
-    pub unused: u64,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpVirt2PhysResp {
-    pub mappings: Vec<VpcMapResp>,
-}
-
-impl CmdOk for DumpVirt2PhysResp {}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct V2bMapResp {
-    pub ip4: Vec<(Ipv4Cidr, BTreeSet<TunnelEndpoint>)>,
-    pub ip6: Vec<(Ipv6Cidr, BTreeSet<TunnelEndpoint>)>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpVirt2BoundaryResp {
-    pub mappings: V2bMapResp,
-}
-
-impl CmdOk for DumpVirt2BoundaryResp {}
