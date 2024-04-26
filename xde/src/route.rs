@@ -1,3 +1,9 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Copyright 2024 Oxide Computer Company
+
 use crate::ip;
 use crate::sys;
 use crate::xde::xde_underlay_port;
@@ -17,6 +23,9 @@ use opte::engine::ip6::Ipv6Addr;
 // XXX: completely arbitrary timeout.
 /// The duration a cached route remains valid for.
 const MAX_ROUTE_LIFETIME: Duration = Duration::from_millis(100);
+
+/// Maximum cache size, set to prevent excessive map modification latency.
+const MAX_CACHE_ENTRIES: usize = 512;
 
 extern "C" {
     pub fn __dtrace_probe_next__hop(
@@ -144,7 +153,7 @@ fn netstack_rele(ns: *mut ip::netstack_t) {
 //
 // Let's say this host (sled1) wants to send a packet to sled2. Our
 // sled1 host lives on network `fd00:<rack1_sled1>::/64` while our
-// sled2 host lives on `fd00:<rack1_seld2>::/64` -- the key point
+// sled2 host lives on `fd00:<rack1_sled2>::/64` -- the key point
 // being they are two different networks and thus must be routed to
 // talk to each other. For sled1 to send this packet it will attempt
 // to look up destination `fd00:<rack1_sled2>::7777` (in this case
@@ -387,6 +396,35 @@ fn next_hop<'a>(
 }
 
 /// A simple caching layer over `next_hop`.
+///
+/// [`next_hop`] has a latency distribution which roughly looks like this:
+/// ```text
+/// t(ns)                                          Count
+/// 1024 |                                         337
+/// 1280 |                                         108
+/// 1536 |@@@@@@@@@@@@@@@@@@@@@                    376883
+/// 1792 |@@@@@@@@@@@@@@@                          264693
+/// 2048 |@                                        17798
+/// 2304 |@                                        14791
+/// 2560 |@@                                       32901
+/// 2816 |@                                        10730
+/// 3072 |                                         3459
+/// ```
+///
+/// Naturally, bringing this down to O(ns) is desirable. Usually, illumos
+/// holds `ire_t`s per `conn_t`, but we're aiming to be more fine-grained
+/// with DDM -- so we need a tradeoff between 'asking about the best route
+/// per-packet' and 'holding a route until it is expired'. We choose, for noe,
+/// to hold a route for 100ms.
+///
+/// Note, this uses a `BTreeMap`, but we would prefer the more consistent
+/// (faster) add/remove costs of a `HashMap`. As `BTreeMap` modification costs
+/// outpace the cost of `next_hop` between 256--512 entries, we currently set 512
+/// as a cap on cache size to prevent significant packet stalls. This may be tricky
+/// to tune.
+///
+/// (See: https://github.com/oxidecomputer/opte/pull/499#discussion_r1581164767
+/// for some performance numbers.)
 #[derive(Clone)]
 pub struct RouteCache(Arc<KRwLock<BTreeMap<RouteKey, CachedRoute>>>);
 
@@ -432,15 +470,28 @@ impl RouteCache {
             _ => {}
         }
 
+        // We've had a definitive flow miss, but we need to cap the cache
+        // size to prevent excessive modification latencies at high flow
+        // counts.
+        // If full and we have no old entry to update, drop the lock and do
+        // not insert.
+        // XXX: Want to profile in future to see if LRU expiry is
+        //      affordable/sane here.
+        // XXX: A HashMap would exchange insert cost for lookup.
+        let route_cache = (maybe_route.is_some()
+            || route_cache.len() <= MAX_CACHE_ENTRIES)
+            .then_some(route_cache);
+
         // `next_hop` might fail for myriad reasons, but we still
         // send the packet on an underlay device depending on our
         // progress. However, we do not want to cache bad mappings.
-        match next_hop(&key, xde) {
-            Ok(route) => {
+        match (route_cache, next_hop(&key, xde)) {
+            (Some(mut route_cache), Ok(route)) => {
                 route_cache.insert(key, route.cached(xde, t));
                 route
             }
-            Err(underlay_dev) => Route {
+            (None, Ok(route)) => route,
+            (_, Err(underlay_dev)) => Route {
                 src: EtherAddr::zero(),
                 dst: EtherAddr::zero(),
                 underlay_dev,
