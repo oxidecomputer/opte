@@ -1428,6 +1428,21 @@ unsafe extern "C" fn xde_mc_tx(
     // The device must be started before we can transmit.
     let src_dev = &*(arg as *mut XdeDev);
 
+    // ================================================================
+    // IMPORTANT: PacketChain now takes ownership of mp_chain, and each
+    // Packet takes ownership of an mblk_t from mp_chain. When these
+    // structs are dropped, so are any contained packets at those pointers.
+    // Be careful with any calls involving mblk_t pointers (or their
+    // uintptr_t numeric forms) after this point. They should only be calls
+    // that read (i.e., SDT arguments), nothing that writes or frees. But
+    // really you should think of mp_chain as &mut and avoid any reference
+    // to it past this point. Ownership is taken back by calling
+    // Packet/PacketChain::unwrap_mblk().
+    //
+    // XXX We may use Packet types with non-'static lifetimes in future.
+    //     We *will* still need to remain careful here and `xde_rx` as
+    //     pointers are `Copy`.
+    // ================================================================
     __dtrace_probe_tx(mp_chain as uintptr_t);
     let Ok(mut chain) = PacketChain::new(mp_chain) else {
         bad_packet_probe(
@@ -1455,20 +1470,6 @@ unsafe fn xde_mc_tx_one(
     src_dev: &XdeDev,
     pkt: Packet<Initialized>,
 ) -> *mut mblk_t {
-    // ================================================================
-    // IMPORTANT: Packet now takes ownership of mp_chain. When Packet
-    // is dropped so is the chain. Be careful with any calls involving
-    // mp_chain after this point. They should only be calls that read,
-    // nothing that writes or frees. But really you should think of
-    // mp_chain as &mut and avoid any reference to it past this point.
-    // Owernship is taken back by calling Packet::unwrap_mblk().
-    //
-    // XXX Make this fool proof by converting the mblk_t pointer to an
-    // &mut or some smart pointer type that can be truly owned by the
-    // Packet type. This way rustc gives us lifetime enforcement
-    // instead of my code comments. But that work is more involved
-    // than the immediate fix that needs to happen.
-    // ================================================================
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
     let mut pkt = match pkt.parse(Direction::Out, parser) {
@@ -1476,9 +1477,9 @@ unsafe fn xde_mc_tx_one(
         Err(e) => {
             // TODO Add bad packet stat.
             //
-            // NOTE: We are using mp_chain as read only here to get
-            // the pointer value so that the DTrace consumer can
-            // examine the packet on failure.
+            // NOTE: We are using the individual mblk_t as read only
+            // here to get the pointer value so that the DTrace consumer
+            // can examine the packet on failure.
             opte::engine::dbg!("Rx bad packet: {:?}", e);
             bad_packet_parse_probe(
                 Some(src_dev.port.name_cstr()),
@@ -2111,9 +2112,9 @@ unsafe fn xde_rx_one(
         Err(e) => {
             // TODO Add bad packet stat.
             //
-            // NOTE: We are using mp_chain as read only here to get
-            // the pointer value so that the DTrace consumer can
-            // examine the packet on failure.
+            // NOTE: We are using the individual mblk_t as read only
+            // here to get the pointer value so that the DTrace consumer
+            // can examine the packet on failure.
             //
             // We don't know the port yet, thus the None.
             opte::engine::dbg!("Tx bad packet: {:?}", e);

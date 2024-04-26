@@ -3929,6 +3929,10 @@ mod test {
         let chain_inner = chain.inner.as_ref().unwrap();
         assert_eq!(chain_inner.head.as_ptr(), els[1]);
         assert_eq!(chain_inner.tail.as_ptr(), els[2]);
+        unsafe {
+            assert!((*els[1]).b_prev.is_null());
+            assert!((*els[2]).b_next.is_null());
+        }
     }
 
     #[test]
