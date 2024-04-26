@@ -2,18 +2,18 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
-//! Functions for printing comannd responses.
+//! Functions for printing command responses.
 //!
 //! This is mostly just a place to hang printing routines so that they
 //! can be used by both opteadm and integration tests.
 
+use crate::api::DumpVirt2BoundaryResp;
+use crate::api::DumpVirt2PhysResp;
 use crate::api::GuestPhysAddr;
 use crate::api::Ipv4Addr;
 use crate::api::Ipv6Addr;
-use crate::engine::overlay::DumpVirt2BoundaryResp;
-use crate::engine::overlay::DumpVirt2PhysResp;
 use opte::api::IpCidr;
 use opte::engine::geneve::Vni;
 use opte::engine::print::*;
