@@ -10,15 +10,6 @@
 use core::ffi::CStr;
 pub use derror_macro::DError;
 
-/// Convenience macro for a compile-time static CStr declaration.
-/// Callers must pass in a `c"..."` or other valid const CStr
-/// initialiser.
-macro_rules! static_cstr {
-    ($i:ident, $e:expr) => {
-        static $i: &CStr = $e;
-    };
-}
-
 // XXX: I think we want some way of doing the whole thing in one big chunk
 //      to prevent e.g. 4 dyn dispatches in a row.
 
@@ -35,7 +26,7 @@ pub trait DError {
     fn leaf_data(&self, _data: &mut [u64]) {}
 }
 
-static_cstr!(EMPTY_STRING, c"");
+static EMPTY_STRING: &CStr = c"";
 
 /// An error trace designed to be passed to a Dtrace handler, which contains
 /// the names of all `enum` discriminators encountered when resolving an error
@@ -210,10 +201,10 @@ impl<'a, const L: usize> ExactSizeIterator for ErrorBlockIter<'a, L> {
 mod tests {
     use super::*;
 
-    static_cstr!(A_C, c"A");
-    static_cstr!(B_C, c"B");
-    static_cstr!(ND_C, c"NoData");
-    static_cstr!(D_C, c"Data");
+    static A_C: &CStr = c"A";
+    static B_C: &CStr = c"B";
+    static ND_C: &CStr = c"NoData";
+    static D_C: &CStr = c"Data";
 
     #[derive(DError)]
     enum TestEnum {
