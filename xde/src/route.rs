@@ -9,6 +9,7 @@ use crate::sys;
 use crate::xde::xde_underlay_port;
 use crate::xde::DropRef;
 use crate::xde::XdeDev;
+use alloc::collections::btree_map::Entry;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::ptr;
@@ -464,15 +465,19 @@ impl RouteCache {
         }
 
         // Cache miss: intent is to now ask illumos, then insert.
-        let route_cache = self.0.write();
+        let mut route_cache = self.0.write();
+        let space_remaining = route_cache.len() < MAX_CACHE_ENTRIES;
 
         // Someone else may have written while we were taking the lock.
         // DO NOT waste time if there's a good route.
-        let maybe_route = route_cache.get(&key).copied();
-        match maybe_route {
-            Some(route) if route.is_valid(t) => return route.into_route(xde),
-            _ => {}
-        }
+        let maybe_route = route_cache.entry(key);
+        let entry_exists = match &maybe_route {
+            Entry::Occupied(e) if e.get().is_valid(t) => {
+                return e.get().into_route(xde);
+            }
+            Entry::Occupied(_) => true,
+            _ => false,
+        };
 
         // We've had a definitive flow miss, but we need to cap the cache
         // size to prevent excessive modification latencies at high flow
@@ -482,24 +487,27 @@ impl RouteCache {
         // XXX: Want to profile in future to see if LRU expiry is
         //      affordable/sane here.
         // XXX: A HashMap would exchange insert cost for lookup.
-        let route_cache = (maybe_route.is_some()
-            || route_cache.len() <= MAX_CACHE_ENTRIES)
-            .then_some(route_cache);
-
-        // `next_hop` might fail for myriad reasons, but we still
-        // send the packet on an underlay device depending on our
-        // progress. However, we do not want to cache bad mappings.
-        match (route_cache, next_hop(&key, xde)) {
-            (Some(mut route_cache), Ok(route)) => {
-                route_cache.insert(key, route.cached(xde, t));
-                route
+        if entry_exists || space_remaining {
+            // `next_hop` might fail for myriad reasons, but we still
+            // send the packet on an underlay device depending on our
+            // progress. However, we do not want to cache bad mappings.
+            match (maybe_route, next_hop(&key, xde)) {
+                (Entry::Vacant(slot), Ok(route)) => {
+                    slot.insert(route.cached(xde, t));
+                    route
+                }
+                (Entry::Occupied(mut slot), Ok(route)) => {
+                    slot.insert(route.cached(xde, t));
+                    route
+                }
+                (_, Err(dev)) => Route::zero_addr(dev),
             }
-            (None, Ok(route)) => route,
-            (_, Err(underlay_dev)) => Route {
-                src: EtherAddr::zero(),
-                dst: EtherAddr::zero(),
-                underlay_dev,
-            },
+        } else {
+            drop(route_cache);
+            match next_hop(&key, xde) {
+                Ok(route) => route,
+                Err(dev) => Route::zero_addr(dev),
+            }
         }
     }
 
@@ -563,7 +571,7 @@ pub struct Route<'a> {
     pub underlay_dev: &'a xde_underlay_port,
 }
 
-impl Route<'_> {
+impl<'a> Route<'a> {
     fn cached(&self, xde: &XdeDev, timestamp: Moment) -> CachedRoute {
         // As unfortunate as `into_route`.
         let port_0: &xde_underlay_port = &xde.u1;
@@ -571,5 +579,9 @@ impl Route<'_> {
             if core::ptr::eq(self.underlay_dev, port_0) { 0 } else { 1 };
 
         CachedRoute { src: self.src, dst: self.dst, underlay_idx, timestamp }
+    }
+
+    fn zero_addr(underlay_dev: &'a xde_underlay_port) -> Route<'a> {
+        Self { src: EtherAddr::zero(), dst: EtherAddr::zero(), underlay_dev }
     }
 }
