@@ -9,11 +9,11 @@
 //! This is mostly just a place to hang printing routines so that they
 //! can be used by both opteadm and integration tests.
 
+use crate::api::DumpVirt2BoundaryResp;
+use crate::api::DumpVirt2PhysResp;
 use crate::api::GuestPhysAddr;
 use crate::api::Ipv4Addr;
 use crate::api::Ipv6Addr;
-use crate::engine::overlay::DumpVirt2BoundaryResp;
-use crate::engine::overlay::DumpVirt2PhysResp;
 use alloc::string::ToString;
 use opte::api::IpCidr;
 use opte::engine::geneve::Vni;
