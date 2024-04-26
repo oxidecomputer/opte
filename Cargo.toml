@@ -43,7 +43,7 @@ anyhow = "1.0"
 bitflags = "2"
 cargo_metadata = "0.18"
 cfg-if = "1"
-clap = { version = "4", features = ["derive", "string", "wrap_help"] }
+clap = { version = "4.5.4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.5"
 ctor = "0.2"
