@@ -241,7 +241,7 @@ where
     const MAX_ITERATIONS: u8 = 3;
     for _ in 0..MAX_ITERATIONS {
         let ret = unsafe {
-            libc::ioctl(dev, XDE_IOC_OPTE_CMD as libc::c_int, &rioctl)
+            libc::ioctl(dev, XDE_IOC_OPTE_CMD as libc::c_int, &mut rioctl)
         };
 
         // The ioctl(2) failed for a reason other than the response
