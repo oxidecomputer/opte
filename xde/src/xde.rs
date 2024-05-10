@@ -48,7 +48,7 @@ use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
-use opte::d_error::ErrorBlock;
+use opte::d_error::LabelBlock;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
@@ -62,6 +62,7 @@ use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::Initialized;
+use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketError;
 use opte::engine::packet::Parsed;
@@ -73,9 +74,14 @@ use opte::ExecCtx;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
+use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpVirt2BoundaryReq;
+use oxide_vpc::api::DumpVirt2BoundaryResp;
+use oxide_vpc::api::DumpVirt2PhysReq;
+use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
@@ -123,12 +129,12 @@ extern "C" {
         port: uintptr_t,
         dir: uintptr_t,
         mp: uintptr_t,
-        err_b: uintptr_t,
+        err_b: *const LabelBlock<8>,
         data_len: uintptr_t,
     );
     pub fn __dtrace_probe_guest__loopback(
         mp: uintptr_t,
-        flow: uintptr_t,
+        flow: *const InnerFlowId,
         src_port: uintptr_t,
         dst_port: uintptr_t,
     );
@@ -156,8 +162,8 @@ fn bad_packet_parse_probe(
         Some(name) => name.as_c_str(),
     };
 
-    // Truncation is captured *in* the ErrorBlock.
-    let block = match ErrorBlock::<8>::from_err(err) {
+    // Truncation is captured *in* the LabelBlock.
+    let block = match LabelBlock::<8>::from_nested(err) {
         Ok(block) => block,
         Err(block) => block,
     };
@@ -167,7 +173,7 @@ fn bad_packet_parse_probe(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
-            block.as_ptr() as uintptr_t,
+            block.as_ptr(),
             4,
         )
     };
@@ -183,7 +189,7 @@ fn bad_packet_probe(
         None => c"unknown",
         Some(name) => name.as_c_str(),
     };
-    let mut eb = ErrorBlock::<8>::new();
+    let mut eb = LabelBlock::<8>::new();
 
     unsafe {
         let _ = eb.append_name_raw(msg);
@@ -191,7 +197,7 @@ fn bad_packet_probe(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp as uintptr_t,
-            eb.as_ptr() as uintptr_t,
+            eb.as_ptr(),
             8,
         )
     };
@@ -572,6 +578,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::SetVirt2Phys => {
             let resp = set_v2p_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ClearVirt2Phys => {
+            let resp = clear_v2p_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
 
@@ -1384,14 +1395,10 @@ unsafe extern "C" fn xde_mc_unicst(
 }
 
 fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
-    use opte::engine::rule::flow_id_sdt_arg;
-
-    let fid_arg = flow_id_sdt_arg::from(pkt.flow());
-
     unsafe {
         __dtrace_probe_guest__loopback(
             pkt.mblk_addr(),
-            &fid_arg as *const flow_id_sdt_arg as uintptr_t,
+            pkt.flow(),
             src.port.name_cstr().as_ptr() as uintptr_t,
             dst.port.name_cstr().as_ptr() as uintptr_t,
         )
@@ -2252,10 +2259,18 @@ fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 }
 
 #[no_mangle]
+fn clear_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: ClearVirt2PhysReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    state.vpc_map.del(&req.vip, &req.phys);
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
 fn dump_v2p_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<overlay::DumpVirt2PhysResp, OpteError> {
-    let _req: overlay::DumpVirt2PhysReq = env.copy_in_req()?;
+) -> Result<DumpVirt2PhysResp, OpteError> {
+    let _req: DumpVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
     Ok(state.vpc_map.dump())
 }
@@ -2279,8 +2294,8 @@ fn clear_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 #[no_mangle]
 fn dump_v2b_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<overlay::DumpVirt2BoundaryResp, OpteError> {
-    let _req: overlay::DumpVirt2BoundaryReq = env.copy_in_req()?;
+) -> Result<DumpVirt2BoundaryResp, OpteError> {
+    let _req: DumpVirt2BoundaryReq = env.copy_in_req()?;
     let state = get_xde_state();
     Ok(state.v2b.dump())
 }

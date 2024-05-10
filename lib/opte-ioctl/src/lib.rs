@@ -15,9 +15,12 @@ use opte::api::API_VERSION;
 use opte::api::XDE_IOC_OPTE_CMD;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
+use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpVirt2PhysReq;
+use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
@@ -143,8 +146,21 @@ impl OpteHdl {
         })
     }
 
+    pub fn dump_v2p(
+        &self,
+        req: &DumpVirt2PhysReq,
+    ) -> Result<DumpVirt2PhysResp, Error> {
+        let cmd = OpteCmd::DumpVirt2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetVirt2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn clear_v2p(&self, req: &ClearVirt2PhysReq) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearVirt2Phys;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
@@ -249,7 +265,7 @@ where
     const MAX_ITERATIONS: u8 = 3;
     for _ in 0..MAX_ITERATIONS {
         let ret = unsafe {
-            libc::ioctl(dev, XDE_IOC_OPTE_CMD as libc::c_int, &rioctl)
+            libc::ioctl(dev, XDE_IOC_OPTE_CMD as libc::c_int, &mut rioctl)
         };
 
         // The ioctl(2) failed for a reason other than the response
