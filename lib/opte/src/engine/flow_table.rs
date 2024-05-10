@@ -224,8 +224,6 @@ fn flow_expired_probe(
     last_hit: Option<Moment>,
     now: Option<Moment>,
 ) {
-    let a = crate::NopDrop;
-    last_hit.unwrap_or_default();
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
             unsafe {
@@ -248,7 +246,6 @@ fn flow_expired_probe(
             let (_, _, _) = (port, name, flowid);
         }
     }
-    drop(a);
 }
 
 /// A type that can be "dumped" for the purposes of presenting an

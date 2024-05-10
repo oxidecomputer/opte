@@ -1450,8 +1450,6 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         let flow_after = pkt.flow();
 
-        let a = crate::NopDrop;
-
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
 
@@ -1522,8 +1520,6 @@ impl<N: NetworkImpl> Port<N> {
                 let (..) = (dir, flow_before, flow_after, epoch, pkt, res);
             }
         }
-
-        drop(a);
     }
 
     /// Creates a new TCP flow state entry for a given packet.
@@ -2343,8 +2339,6 @@ impl<N: NetworkImpl> Port<N> {
         ufid: &InnerFlowId,
         epoch: u64,
     ) {
-        let a = crate::NopDrop;
-
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 unsafe {
@@ -2365,8 +2359,6 @@ impl<N: NetworkImpl> Port<N> {
                 let (_, _, _) = (dir, ufid, epoch);
             }
         }
-
-        drop(a);
     }
 
     fn uft_tcp_closed(
@@ -2384,8 +2376,6 @@ impl<N: NetworkImpl> Port<N> {
     }
 
     fn uft_tcp_closed_probe(&self, dir: Direction, ufid: &InnerFlowId) {
-        let a = crate::NopDrop;
-
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 unsafe {
@@ -2405,8 +2395,6 @@ impl<N: NetworkImpl> Port<N> {
                 let (_, _) = (dir, ufid);
             }
         }
-
-        drop(a);
     }
 
     fn update_stats_in(
