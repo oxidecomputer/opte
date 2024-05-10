@@ -897,16 +897,18 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         });
     }
 
+    // XXX: Need to safely quiesce xde_rx here.
+
     if let Some(underlay) = underlay.take() {
         // There shouldn't be anymore refs to the underlay given we checked for
         // 0 ports above.
-        let Ok(u1) = Arc::try_unwrap(underlay.u1) else {
+        let Some(u1) = Arc::into_inner(underlay.u1) else {
             return Err(OpteError::System {
                 errno: EBUSY,
                 msg: "underlay u1 has outstanding refs".into(),
             });
         };
-        let Ok(u2) = Arc::try_unwrap(underlay.u2) else {
+        let Some(u2) = Arc::into_inner(underlay.u2) else {
             return Err(OpteError::System {
                 errno: EBUSY,
                 msg: "underlay u2 has outstanding refs".into(),
@@ -929,7 +931,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             drop(u.muh);
 
             // 2. Remove MAC client handle
-            if Arc::strong_count(&u.mch) > 1 {
+            if Arc::into_inner(u.mch).is_none() {
                 warn!(
                     "underlay {} has outstanding mac client handle refs",
                     u.name
@@ -939,10 +941,9 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
                     msg: format!("underlay {} has outstanding refs", u.name),
                 });
             }
-            drop(u.mch);
 
             // Finally, we can cleanup the MAC handle for this underlay
-            if Arc::strong_count(&u.mh) > 1 {
+            if Arc::into_inner(u.mh).is_none() {
                 return Err(OpteError::System {
                     errno: EBUSY,
                     msg: format!(
@@ -951,7 +952,6 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
                     ),
                 });
             }
-            drop(u.mh);
         }
     }
 
