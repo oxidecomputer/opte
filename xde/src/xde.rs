@@ -897,8 +897,6 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         });
     }
 
-    // XXX: Need to safely quiesce xde_rx here.
-
     if let Some(underlay) = underlay.take() {
         // There shouldn't be anymore refs to the underlay given we checked for
         // 0 ports above.
@@ -929,6 +927,14 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // 1. Remove promisc and unicast callbacks
             drop(u.mph);
             drop(u.muh);
+
+            // Although `xde_rx` can be called into without any running ports
+            // via the promisc and unicast handles, illumos guarantees that
+            // neither callback will be running here. `mac_promisc_remove` will
+            // either remove the callback immediately (if there are no walkers)
+            // or will mark the callback as condemned and await all active
+            // walkers finishing. Accordingly, no one else will have or try to
+            // clone the MAC client handle.
 
             // 2. Remove MAC client handle
             if Arc::into_inner(u.mch).is_none() {
