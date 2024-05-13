@@ -46,7 +46,7 @@ pub struct LabelBlock<const L: usize> {
     entries: [*const i8; L],
 }
 
-/// Signals that an [`ErrorBlock`] could not contain a new string entry.
+/// Signals that a [`LabelBlock`] could not contain a new string entry.
 #[derive(Clone, Copy, Debug)]
 pub struct LabelBlockFull;
 
