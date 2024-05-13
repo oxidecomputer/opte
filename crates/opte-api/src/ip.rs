@@ -379,6 +379,7 @@ impl FromStr for IpAddr {
     PartialOrd,
     Serialize,
 )]
+#[repr(C)]
 pub struct Ipv4Addr {
     inner: [u8; 4],
 }
@@ -553,6 +554,7 @@ impl Deref for Ipv4Addr {
     Serialize,
     Deserialize,
 )]
+#[repr(C)]
 pub struct Ipv6Addr {
     inner: [u8; 16],
 }
