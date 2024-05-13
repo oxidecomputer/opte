@@ -9,13 +9,11 @@
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
 use super::flow_table::StateSummary;
-use super::headers;
 use super::headers::EncapMeta;
 use super::headers::EncapMod;
 use super::headers::EncapPush;
 use super::headers::HeaderAction;
 use super::headers::HeaderActionError;
-use super::headers::IpAddr;
 use super::headers::IpMeta;
 use super::headers::IpMod;
 use super::headers::IpPush;
@@ -306,71 +304,29 @@ extern "C" {
 }
 
 #[repr(C)]
-pub struct flow_id_sdt_arg {
-    af: i32,
-    src_ip4: u32,
-    dst_ip4: u32,
-    src_ip6: [u8; 16],
-    dst_ip6: [u8; 16],
-    src_port: u16,
-    dst_port: u16,
-    proto: u8,
-}
-
-impl From<&InnerFlowId> for flow_id_sdt_arg {
-    fn from(ifid: &InnerFlowId) -> Self {
-        // Consumers expect all data to be presented as it would be
-        // traveling across the network.
-        let (af, src_ip4, src_ip6) = match ifid.src_ip {
-            IpAddr::Ip4(ip4) => (headers::AF_INET, ip4.to_be(), [0; 16]),
-            IpAddr::Ip6(ip6) => (headers::AF_INET6, 0, ip6.bytes()),
-        };
-
-        let (dst_ip4, dst_ip6) = match ifid.dst_ip {
-            IpAddr::Ip4(ip4) => (ip4.to_be(), [0; 16]),
-            IpAddr::Ip6(ip6) => (0, ip6.bytes()),
-        };
-
-        flow_id_sdt_arg {
-            af,
-            src_ip4,
-            dst_ip4,
-            src_ip6,
-            dst_ip6,
-            src_port: ifid.src_port.to_be(),
-            dst_port: ifid.dst_port.to_be(),
-            proto: u8::from(ifid.proto),
-        }
-    }
-}
-
-#[repr(C)]
 pub struct ht_run_sdt_arg {
     pub port: *const c_char,
     pub loc: *const c_char,
     pub dir: uintptr_t,
-    pub flow_id_before: *const flow_id_sdt_arg,
-    pub flow_id_after: *const flow_id_sdt_arg,
+    pub flow_id_before: *const InnerFlowId,
+    pub flow_id_after: *const InnerFlowId,
 }
 
 pub fn ht_probe(
     port: &CString,
     loc: &CStr,
     dir: Direction,
-    before: &InnerFlowId,
-    after: &InnerFlowId,
+    flow_id_before: &InnerFlowId,
+    flow_id_after: &InnerFlowId,
 ) {
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
-            let flow_id_before = flow_id_sdt_arg::from(before);
-            let flow_id_after = flow_id_sdt_arg::from(after);
-
             let arg = ht_run_sdt_arg {
                 port: port.as_ptr(),
                 loc: loc.as_ptr(),
                 dir: dir as uintptr_t,
-                flow_id_before: &flow_id_before,
-                flow_id_after: &flow_id_after,
+                flow_id_before,
+                flow_id_after,
             };
 
             unsafe {
@@ -381,14 +337,14 @@ pub fn ht_probe(
         } else if #[cfg(feature = "usdt")] {
             let port_s = port.to_str().unwrap();
             let loc_c = loc.to_str().unwrap();
-            let before_s = before.to_string();
-            let after_s = after.to_string();
+            let before_s = flow_id_before.to_string();
+            let after_s = flow_id_after.to_string();
 
             crate::opte_provider::ht__run!(
                 || (port_s, loc_c, dir, before_s, after_s)
             );
         } else {
-            let (..) = (port, loc, dir, before, after);
+            let (..) = (port, loc, dir, flow_id_before, flow_id_after);
         }
     }
 }

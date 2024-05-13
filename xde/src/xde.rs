@@ -47,7 +47,7 @@ use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
-use opte::d_error::ErrorBlock;
+use opte::d_error::LabelBlock;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
@@ -61,6 +61,7 @@ use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::Initialized;
+use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketChain;
 use opte::engine::packet::PacketError;
@@ -128,12 +129,12 @@ extern "C" {
         port: uintptr_t,
         dir: uintptr_t,
         mp: uintptr_t,
-        err_b: uintptr_t,
+        err_b: *const LabelBlock<8>,
         data_len: uintptr_t,
     );
     pub fn __dtrace_probe_guest__loopback(
         mp: uintptr_t,
-        flow: uintptr_t,
+        flow: *const InnerFlowId,
         src_port: uintptr_t,
         dst_port: uintptr_t,
     );
@@ -160,8 +161,8 @@ fn bad_packet_parse_probe(
         Some(name) => name.as_c_str(),
     };
 
-    // Truncation is captured *in* the ErrorBlock.
-    let block = match ErrorBlock::<8>::from_err(err) {
+    // Truncation is captured *in* the LabelBlock.
+    let block = match LabelBlock::<8>::from_nested(err) {
         Ok(block) => block,
         Err(block) => block,
     };
@@ -171,7 +172,7 @@ fn bad_packet_parse_probe(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp,
-            block.as_ptr() as uintptr_t,
+            block.as_ptr(),
             4,
         )
     };
@@ -187,7 +188,7 @@ fn bad_packet_probe(
         None => c"unknown",
         Some(name) => name.as_c_str(),
     };
-    let mut eb = ErrorBlock::<8>::new();
+    let mut eb = LabelBlock::<8>::new();
 
     unsafe {
         let _ = eb.append_name_raw(msg);
@@ -195,7 +196,7 @@ fn bad_packet_probe(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
             mp,
-            eb.as_ptr() as uintptr_t,
+            eb.as_ptr(),
             8,
         )
     };
@@ -1340,14 +1341,10 @@ unsafe extern "C" fn xde_mc_unicst(
 }
 
 fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
-    use opte::engine::rule::flow_id_sdt_arg;
-
-    let fid_arg = flow_id_sdt_arg::from(pkt.flow());
-
     unsafe {
         __dtrace_probe_guest__loopback(
             pkt.mblk_addr(),
-            &fid_arg as *const flow_id_sdt_arg as uintptr_t,
+            pkt.flow(),
             src.port.name_cstr().as_ptr() as uintptr_t,
             dst.port.name_cstr().as_ptr() as uintptr_t,
         )

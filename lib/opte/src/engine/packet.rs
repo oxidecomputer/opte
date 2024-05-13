@@ -31,6 +31,8 @@ use super::headers::IpAddr;
 use super::headers::IpMeta;
 use super::headers::UlpHdr;
 use super::headers::UlpMeta;
+use super::headers::AF_INET;
+use super::headers::AF_INET6;
 use super::icmp::IcmpHdr;
 use super::icmp::IcmpHdrError;
 use super::icmp::IcmpMeta;
@@ -41,6 +43,7 @@ use super::ip4::Ipv4Hdr;
 use super::ip4::Ipv4HdrError;
 use super::ip4::Ipv4Meta;
 use super::ip4::Protocol;
+use super::ip6::Ipv6Addr;
 use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6HdrError;
 use super::ip6::Ipv6Meta;
@@ -84,10 +87,9 @@ cfg_if! {
 pub static MBLK_MAX_SIZE: usize = u16::MAX as usize;
 
 pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
-    proto: Protocol::Unknown(255),
-    src_ip: IpAddr::Ip4(Ipv4Addr::ANY_ADDR),
+    proto: 255,
+    addrs: AddrPair::V4 { src: Ipv4Addr::ANY_ADDR, dst: Ipv4Addr::ANY_ADDR },
     src_port: 0,
-    dst_ip: IpAddr::Ip4(Ipv4Addr::ANY_ADDR),
     dst_port: 0,
 };
 
@@ -98,12 +100,11 @@ pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
 ///
 /// NOTE: This should not be defined in `opte`. Rather, the engine
 /// should be generic in regards to the flow identifier, and it should
-/// be up to the `NetowrkImpl` to define it.
+/// be up to the `NetworkImpl` to define it.
 #[derive(
     Clone,
     Copy,
     Debug,
-    Default,
     Deserialize,
     Eq,
     Hash,
@@ -112,12 +113,52 @@ pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     PartialOrd,
     Serialize,
 )]
+#[repr(C, align(4))]
 pub struct InnerFlowId {
-    pub proto: Protocol,
-    pub src_ip: IpAddr,
+    // Using a `u8` here for `proto` hides the enum repr from SDTs.
+    pub proto: u8,
+    // We could also theoretically get to a 38B packing if we reduce
+    // AddrPair's repr from `u16` to `u8`. However, on the dtrace/illumos
+    // side `union addrs` is 4B aligned -- in6_addr_t has a 4B alignment.
+    // So, this layout has to match that constraint -- placing addrs at
+    // offset 0x2 with `u16` discriminant sets up 4B alignment for the
+    // enum variant data (and this struct itself is 4B aligned).
+    pub addrs: AddrPair,
     pub src_port: u16,
-    pub dst_ip: IpAddr,
     pub dst_port: u16,
+}
+
+impl Default for InnerFlowId {
+    fn default() -> Self {
+        FLOW_ID_DEFAULT
+    }
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
+#[repr(C, u16)]
+pub enum AddrPair {
+    V4 { src: Ipv4Addr, dst: Ipv4Addr } = AF_INET as u16,
+    V6 { src: Ipv6Addr, dst: Ipv6Addr } = AF_INET6 as u16,
+}
+
+impl AddrPair {
+    pub fn mirror(self) -> Self {
+        match self {
+            Self::V4 { src, dst } => Self::V4 { src: dst, dst: src },
+            Self::V6 { src, dst } => Self::V6 { src: dst, dst: src },
+        }
+    }
 }
 
 impl InnerFlowId {
@@ -126,11 +167,28 @@ impl InnerFlowId {
     pub fn mirror(self) -> Self {
         Self {
             proto: self.proto,
-            src_ip: self.dst_ip,
+            addrs: self.addrs.mirror(),
             src_port: self.dst_port,
-            dst_ip: self.src_ip,
             dst_port: self.src_port,
         }
+    }
+
+    pub fn src_ip(&self) -> IpAddr {
+        match self.addrs {
+            AddrPair::V4 { src, .. } => src.into(),
+            AddrPair::V6 { src, .. } => src.into(),
+        }
+    }
+
+    pub fn dst_ip(&self) -> IpAddr {
+        match self.addrs {
+            AddrPair::V4 { dst, .. } => dst.into(),
+            AddrPair::V6 { dst, .. } => dst.into(),
+        }
+    }
+
+    pub fn protocol(&self) -> Protocol {
+        Protocol::from(self.proto)
     }
 }
 
@@ -139,25 +197,25 @@ impl Display for InnerFlowId {
         write!(
             f,
             "{}:{}:{}:{}:{}",
-            self.proto, self.src_ip, self.src_port, self.dst_ip, self.dst_port,
+            self.protocol(),
+            self.src_ip(),
+            self.src_port,
+            self.dst_ip(),
+            self.dst_port,
         )
     }
 }
 
 impl From<&PacketMeta> for InnerFlowId {
     fn from(meta: &PacketMeta) -> Self {
-        let (proto, src_ip, dst_ip) = match &meta.inner.ip {
+        let (proto, addrs) = match &meta.inner.ip {
             Some(IpMeta::Ip4(ip4)) => {
-                (ip4.proto, IpAddr::Ip4(ip4.src), IpAddr::Ip4(ip4.dst))
+                (ip4.proto, AddrPair::V4 { src: ip4.src, dst: ip4.dst })
             }
             Some(IpMeta::Ip6(ip6)) => {
-                (ip6.proto, IpAddr::Ip6(ip6.src), IpAddr::Ip6(ip6.dst))
+                (ip6.proto, AddrPair::V6 { src: ip6.src, dst: ip6.dst })
             }
-            None => (
-                Protocol::Unknown(255),
-                IpAddr::Ip4(Ipv4Addr::from([0; 4])),
-                IpAddr::Ip4(Ipv4Addr::from([0; 4])),
-            ),
+            None => (Protocol::Unknown(255), FLOW_ID_DEFAULT.addrs),
         };
 
         let (src_port, dst_port) = meta
@@ -171,7 +229,7 @@ impl From<&PacketMeta> for InnerFlowId {
             })
             .unwrap_or((0, 0));
 
-        InnerFlowId { proto, src_ip, src_port, dst_ip, dst_port }
+        InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
     }
 }
 
