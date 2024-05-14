@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! A virtual switch port.
 
@@ -29,8 +29,6 @@ use super::packet::Packet;
 use super::packet::PacketMeta;
 use super::packet::Parsed;
 use super::packet::FLOW_ID_DEFAULT;
-#[cfg(all(not(feature = "std"), not(test)))]
-use super::rule::flow_id_sdt_arg;
 use super::rule::Action;
 use super::rule::Finalized;
 use super::rule::HdrTransform;
@@ -43,6 +41,9 @@ use super::tcp_state::TcpFlowState;
 use super::tcp_state::TcpFlowStateError;
 use super::HdlPktAction;
 use super::NetworkImpl;
+use crate::d_error::DError;
+#[cfg(all(not(feature = "std"), not(test)))]
+use crate::d_error::LabelBlock;
 use crate::ddi::kstat;
 use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
@@ -127,11 +128,15 @@ impl From<HdrTransformError> for ProcessError {
 /// * Hairpin: One of the layers has determined that it should reply
 /// directly with a packet of its own. In this case the original
 /// packet is dropped.
-#[derive(Debug)]
+#[derive(Debug, DError)]
 pub enum ProcessResult {
     Bypass,
-    Drop { reason: DropReason },
+    #[leaf]
+    Drop {
+        reason: DropReason,
+    },
     Modified,
+    #[leaf]
     Hairpin(Packet<Initialized>),
 }
 
@@ -855,14 +860,13 @@ impl<N: NetworkImpl> Port<N> {
         let mblk_addr = pkt.map(|p| p.mblk_addr()).unwrap_or_default();
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_arg = flow_id_sdt_arg::from(flow);
                 let msg_arg = CString::new(msg).unwrap();
 
                 unsafe {
                     __dtrace_probe_tcp__err(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        &flow_arg as *const flow_id_sdt_arg as uintptr_t,
+                        flow,
                         mblk_addr,
                         msg_arg.as_ptr() as uintptr_t,
                     );
@@ -1416,13 +1420,11 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_arg = flow_id_sdt_arg::from(flow);
-
                 unsafe {
                     __dtrace_probe_port__process__entry(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        &flow_arg as *const flow_id_sdt_arg as uintptr_t,
+                        flow,
                         epoch as uintptr_t,
                         pkt.mblk_addr(),
                     );
@@ -1447,17 +1449,34 @@ impl<N: NetworkImpl> Port<N> {
         res: &result::Result<ProcessResult, ProcessError>,
     ) {
         let flow_after = pkt.flow();
+
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let flow_b_arg = flow_id_sdt_arg::from(flow_before);
-                let flow_a_arg = flow_id_sdt_arg::from(flow_after);
+
                 // XXX This would probably be better as separate probes;
                 // for now this does the trick.
-                let res_str = match res {
-                    Ok(v) => format!("{:?}", v),
-                    Err(e) => format!("ERROR: {:?}", e),
+                let (eb, extra_str) = match res {
+                    Ok(v @ ProcessResult::Drop { reason }) => (
+                        LabelBlock::from_nested(v),
+                        Some(format!("{reason:?}\0"))
+                    ),
+                    Ok(v) => (LabelBlock::from_nested(v), None),
+                    // TODO: Handle the error types in a zero-cost way.
+                    Err(e) => (Ok(LabelBlock::new()), Some(format!("ERROR: {:?}\0", e))),
                 };
-                let res_arg = CString::new(res_str).unwrap();
+
+                // Truncation is captured *in* the LabelBlock.
+                let mut eb = match eb {
+                    Ok(block) => block,
+                    Err(block) => block,
+                };
+
+                let extra_cstr = extra_str
+                    .as_ref()
+                    .and_then(
+                        |v| core::ffi::CStr::from_bytes_until_nul(v.as_bytes()).ok()
+                    );
+
                 let hp_pkt_ptr = match res {
                     Ok(ProcessResult::Hairpin(hp)) => {
                         hp.mblk_addr()
@@ -1466,18 +1485,20 @@ impl<N: NetworkImpl> Port<N> {
                 };
 
                 unsafe {
+                    if let Some(extra_cstr) = extra_cstr {
+                        let _ = eb.append_name_raw(extra_cstr);
+                    }
                     __dtrace_probe_port__process__return(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        &flow_b_arg as *const flow_id_sdt_arg as uintptr_t,
-                        &flow_a_arg as *const flow_id_sdt_arg as uintptr_t,
+                        flow_before,
+                        flow_after,
                         epoch as uintptr_t,
                         pkt.mblk_addr(),
                         hp_pkt_ptr,
-                        res_arg.as_ptr() as uintptr_t,
+                        eb.as_ptr(),
                     );
                 }
-
             } else if #[cfg(feature = "usdt")] {
                 let flow_b_s = flow_before.to_string();
                 let flow_a_s = flow_after.to_string();
@@ -1845,13 +1866,11 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let ufid_arg = flow_id_sdt_arg::from(ufid);
-
                 unsafe {
                     __dtrace_probe_uft__hit(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        &ufid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        ufid,
                         epoch as uintptr_t,
                         last_hit.raw_millis().unwrap_or_default() as usize
                     );
@@ -2322,13 +2341,11 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let ufid_arg = flow_id_sdt_arg::from(ufid);
-
                 unsafe {
                     __dtrace_probe_uft__invalidate(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        &ufid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        ufid,
                         epoch as uintptr_t,
                     );
                 }
@@ -2361,13 +2378,11 @@ impl<N: NetworkImpl> Port<N> {
     fn uft_tcp_closed_probe(&self, dir: Direction, ufid: &InnerFlowId) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let ufid_arg = flow_id_sdt_arg::from(ufid);
-
                 unsafe {
                     __dtrace_probe_uft__tcp__closed(
                         dir as uintptr_t,
                         self.name_cstr.as_ptr() as uintptr_t,
-                        &ufid_arg as *const flow_id_sdt_arg as uintptr_t,
+                        ufid,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
@@ -2649,44 +2664,44 @@ extern "C" {
     pub fn __dtrace_probe_port__process__entry(
         dir: uintptr_t,
         port: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
         epoch: uintptr_t,
         pkt: uintptr_t,
     );
     pub fn __dtrace_probe_port__process__return(
         dir: uintptr_t,
         port: uintptr_t,
-        flow_before: uintptr_t,
-        flow_after: uintptr_t,
+        flow_before: *const InnerFlowId,
+        flow_after: *const InnerFlowId,
         epoch: uintptr_t,
         pkt: uintptr_t,
         hp_pkt: uintptr_t,
-        res: uintptr_t,
+        err_b: *const LabelBlock<2>,
     );
     pub fn __dtrace_probe_tcp__err(
         dir: uintptr_t,
         port: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
         pkt: uintptr_t,
         msg: uintptr_t,
     );
     pub fn __dtrace_probe_uft__hit(
         dir: uintptr_t,
         port: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
         epoch: uintptr_t,
         last_hit: uintptr_t,
     );
     pub fn __dtrace_probe_uft__invalidate(
         dir: uintptr_t,
         port: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
         epoch: uintptr_t,
     );
     pub fn __dtrace_probe_uft__tcp__closed(
         dir: uintptr_t,
         port: uintptr_t,
-        ifid: uintptr_t,
+        ifid: *const InnerFlowId,
     );
 }
 

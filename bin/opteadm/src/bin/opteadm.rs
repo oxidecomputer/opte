@@ -25,6 +25,7 @@ use opteadm::COMMIT_COUNT;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
+use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DhcpCfg;
@@ -203,6 +204,14 @@ enum Command {
 
     /// Set a virtual-to-physical mapping
     SetV2P { vpc_ip: IpAddr, vpc_mac: MacAddr, underlay_ip: Ipv6Addr, vni: Vni },
+
+    /// Clear a virtual-to-physical mapping
+    ClearV2P {
+        vpc_ip: IpAddr,
+        vpc_mac: MacAddr,
+        underlay_ip: Ipv6Addr,
+        vni: Vni,
+    },
 
     /// Set a virtual-to-boundary mapping
     SetV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
@@ -692,6 +701,12 @@ fn main() -> anyhow::Result<()> {
             let phys = PhysNet { ether: vpc_mac, ip: underlay_ip, vni };
             let req = SetVirt2PhysReq { vip: vpc_ip, phys };
             hdl.set_v2p(&req)?;
+        }
+
+        Command::ClearV2P { vpc_ip, vpc_mac, underlay_ip, vni } => {
+            let phys = PhysNet { ether: vpc_mac, ip: underlay_ip, vni };
+            let req = ClearVirt2PhysReq { vip: vpc_ip, phys };
+            hdl.clear_v2p(&req)?;
         }
 
         Command::SetV2B { prefix, tunnel_endpoint } => {

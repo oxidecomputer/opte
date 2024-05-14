@@ -4,6 +4,7 @@
 
 // Copyright 2024 Oxide Computer Company
 
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -511,9 +512,55 @@ pub struct ListPortsResp {
 
 impl opte::api::cmd::CmdOk for ListPortsResp {}
 
+#[repr(C)]
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpVirt2PhysReq {
+    pub unused: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct VpcMapResp {
+    pub vni: Vni,
+    pub ip4: Vec<(Ipv4Addr, GuestPhysAddr)>,
+    pub ip6: Vec<(Ipv6Addr, GuestPhysAddr)>,
+}
+
+#[repr(C)]
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpVirt2BoundaryReq {
+    pub unused: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpVirt2PhysResp {
+    pub mappings: Vec<VpcMapResp>,
+}
+
+impl CmdOk for DumpVirt2PhysResp {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct V2bMapResp {
+    pub ip4: Vec<(Ipv4Cidr, BTreeSet<TunnelEndpoint>)>,
+    pub ip6: Vec<(Ipv6Cidr, BTreeSet<TunnelEndpoint>)>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpVirt2BoundaryResp {
+    pub mappings: V2bMapResp,
+}
+
+impl CmdOk for DumpVirt2BoundaryResp {}
+
 /// Set mapping from VPC IP to physical network destination.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2PhysReq {
+    pub vip: IpAddr,
+    pub phys: PhysNet,
+}
+
+/// Clear a mapping from VPC IP to physical network destination.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClearVirt2PhysReq {
     pub vip: IpAddr,
     pub phys: PhysNet,
 }
