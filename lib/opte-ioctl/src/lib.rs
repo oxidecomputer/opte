@@ -4,6 +4,7 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
@@ -184,6 +185,13 @@ impl OpteHdl {
     ) -> Result<NoResp, Error> {
         let req = SetXdeUnderlayReq { u1: u1.into(), u2: u2.into() };
         let cmd = OpteCmd::SetXdeUnderlay;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    /// Clear xde underlay devices.
+    pub fn clear_xde_underlay(&self) -> Result<NoResp, Error> {
+        let req = ClearXdeUnderlayReq { _unused: 0 };
+        let cmd = OpteCmd::ClearXdeUnderlay;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 

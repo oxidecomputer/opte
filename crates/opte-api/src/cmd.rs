@@ -40,6 +40,7 @@ pub enum OpteCmd {
     CreateXde = 70,          // create a new xde device
     DeleteXde = 71,          // delete an xde device
     SetXdeUnderlay = 72,     // set xde underlay devices
+    ClearXdeUnderlay = 73,   // clear xde underlay devices
     SetExternalIps = 80,     // set xde external IPs for a port
 }
 
@@ -68,6 +69,7 @@ impl TryFrom<c_int> for OpteCmd {
             70 => Ok(Self::CreateXde),
             71 => Ok(Self::DeleteXde),
             72 => Ok(Self::SetXdeUnderlay),
+            73 => Ok(Self::ClearXdeUnderlay),
             80 => Ok(Self::SetExternalIps),
             _ => Err(()),
         }

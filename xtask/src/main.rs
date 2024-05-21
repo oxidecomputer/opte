@@ -276,8 +276,14 @@ fn cmd_package(
 fn raw_install() -> Result<()> {
     let meta = cargo_meta();
 
-    // NOTE: we don't need to actually check this one, it'll return a
-    // failure code even if we don't care about it.
+    // NOTE: we don't need to actually check either command, they'll
+    // return a failure code even if we don't care about it.
+    // Opteadm may not even be installed/accessible, so also allow it to
+    // fail to run at all.
+    let _ = Command::new("/opt/oxide/opte/bin/opteadm")
+        .arg("clear-xde-underlay")
+        .output();
+
     Command::new("rem_drv").arg("xde").output()?;
 
     let mut conf_path = meta.workspace_root.clone();
