@@ -8,7 +8,6 @@
 #![feature(extern_types)]
 #![feature(panic_info_message)]
 #![no_std]
-#![allow(non_camel_case_types)]
 #![allow(non_upper_case_globals)]
 // XXX We do not use double in the kernel. We should not allow
 // "improper C types". This hack is here is because of the ip.rs code

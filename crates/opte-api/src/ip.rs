@@ -9,7 +9,6 @@ use crate::DomainName;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use core::convert::AsRef;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
@@ -380,6 +379,7 @@ impl FromStr for IpAddr {
     PartialOrd,
     Serialize,
 )]
+#[repr(C)]
 pub struct Ipv4Addr {
     inner: [u8; 4],
 }
@@ -554,6 +554,7 @@ impl Deref for Ipv4Addr {
     Serialize,
     Deserialize,
 )]
+#[repr(C)]
 pub struct Ipv6Addr {
     inner: [u8; 16],
 }

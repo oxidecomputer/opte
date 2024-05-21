@@ -2,14 +2,20 @@
 #pragma D depends_on provider ip
 
 typedef struct flow_id_sdt_arg {
-	int		af;
-	ipaddr_t	src_ip4;
-	ipaddr_t	dst_ip4;
-	in6_addr_t	src_ip6;
-	in6_addr_t	dst_ip6;
+	uint8_t		proto;
+	uint16_t	af;
+	union addrs {
+		struct {
+			ipaddr_t src;
+			ipaddr_t dst;
+		} ip4;
+		struct {
+			in6_addr_t src;
+			in6_addr_t dst;
+		} ip6;
+	} addrs;
 	uint16_t	src_port;
 	uint16_t	dst_port;
-	uint8_t		proto;
 } flow_id_sdt_arg_t;
 
 typedef struct rule_match_sdt_arg {
@@ -48,8 +54,8 @@ typedef struct opte_cmd_ioctl {
 } opte_cmd_ioctl_t;
 
 typedef struct derror_sdt_arg {
-    size_t len;
-    uint8_t truncated;
-    uint64_t data[2];
-    char* entry[8];
+	size_t len;
+	uint8_t truncated;
+	uint64_t data[2];
+	char* entry[8];
 } derror_sdt_arg_t;

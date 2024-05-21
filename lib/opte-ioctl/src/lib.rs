@@ -4,6 +4,7 @@
 
 // Copyright 2022 Oxide Computer Company
 
+use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
@@ -187,6 +188,13 @@ impl OpteHdl {
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
+    /// Clear xde underlay devices.
+    pub fn clear_xde_underlay(&self) -> Result<NoResp, Error> {
+        let req = ClearXdeUnderlayReq { _unused: 0 };
+        let cmd = OpteCmd::ClearXdeUnderlay;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
     pub fn add_router_entry(
         &self,
         req: &AddRouterEntryReq,
@@ -257,7 +265,7 @@ where
     const MAX_ITERATIONS: u8 = 3;
     for _ in 0..MAX_ITERATIONS {
         let ret = unsafe {
-            libc::ioctl(dev, XDE_IOC_OPTE_CMD as libc::c_int, &rioctl)
+            libc::ioctl(dev, XDE_IOC_OPTE_CMD as libc::c_int, &mut rioctl)
         };
 
         // The ioctl(2) failed for a reason other than the response
