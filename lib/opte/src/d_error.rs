@@ -10,26 +10,6 @@
 use core::ffi::CStr;
 pub use derror_macro::DError;
 
-/// Compile-time const cstring from a byte slice. Callers must
-/// include a `b'\0'`.
-macro_rules! cstr {
-    ($e:expr) => {
-        if let Ok(s) = CStr::from_bytes_with_nul($e) {
-            s
-        } else {
-            panic!("Bad cstring constant!")
-        }
-    };
-}
-
-/// Compile-time const cstring from a byte slice, including declaration.
-/// Callers must include a `b'\0'`.
-macro_rules! static_cstr {
-    ($i:ident, $e:expr) => {
-        static $i: &CStr = cstr!($e);
-    };
-}
-
 // XXX: I think we want some way of doing the whole thing in one big chunk
 //      to prevent e.g. 4 dyn dispatches in a row.
 
@@ -46,7 +26,7 @@ pub trait DError {
     fn leaf_data(&self, _data: &mut [u64]) {}
 }
 
-static_cstr!(EMPTY_STRING, b"\0");
+static EMPTY_STRING: &CStr = c"";
 
 /// An string list designed to be passed to a DTrace handler, which contains
 /// the names of all `enum` discriminators encountered when resolving an error
@@ -64,6 +44,16 @@ pub struct LabelBlock<const L: usize> {
     data: [u64; 2],
     // XXX: Box?
     entries: [*const i8; L],
+}
+
+/// Signals that a [`LabelBlock`] could not contain a new string entry.
+#[derive(Clone, Copy, Debug)]
+pub struct LabelBlockFull;
+
+impl<const L: usize> Default for LabelBlock<L> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<const L: usize> LabelBlock<L> {
@@ -96,7 +86,7 @@ impl<const L: usize> LabelBlock<L> {
     }
 
     /// Push all layers (and data) of a nested type into a block.
-    pub fn append(&mut self, err: &dyn DError) -> Result<(), ()> {
+    pub fn append(&mut self, err: &dyn DError) -> Result<(), LabelBlockFull> {
         let mut top: Option<&dyn DError> = Some(err);
         while let Some(el) = top {
             self.append_name(el)?;
@@ -110,10 +100,13 @@ impl<const L: usize> LabelBlock<L> {
     }
 
     /// Appends the top layer name of a given error.
-    pub fn append_name(&mut self, err: &dyn DError) -> Result<(), ()> {
+    pub fn append_name(
+        &mut self,
+        err: &dyn DError,
+    ) -> Result<(), LabelBlockFull> {
         if self.len >= L {
             self.more = true;
-            return Err(());
+            return Err(LabelBlockFull);
         }
 
         self.entries[self.len] = err.discriminant().as_ptr();
@@ -124,14 +117,15 @@ impl<const L: usize> LabelBlock<L> {
 
     /// Appends the top layer name of a given error.
     ///
+    /// # Safety
     /// Callers must ensure that pointee outlives this LabelBlock.
     pub unsafe fn append_name_raw<'a, 'b: 'a>(
         &'a mut self,
         err: &'b CStr,
-    ) -> Result<(), ()> {
+    ) -> Result<(), LabelBlockFull> {
         if self.len >= L {
             self.more = true;
-            return Err(());
+            return Err(LabelBlockFull);
         }
 
         self.entries[self.len] = err.as_ptr();
@@ -209,10 +203,10 @@ impl<'a, const L: usize> ExactSizeIterator for LabelBlockIter<'a, L> {
 mod tests {
     use super::*;
 
-    static_cstr!(A_C, b"A\0");
-    static_cstr!(B_C, b"B\0");
-    static_cstr!(ND_C, b"NoData\0");
-    static_cstr!(D_C, b"Data\0");
+    static A_C: &CStr = c"A";
+    static B_C: &CStr = c"B";
+    static ND_C: &CStr = c"NoData";
+    static D_C: &CStr = c"Data";
 
     #[derive(DError)]
     enum TestEnum {
@@ -270,6 +264,6 @@ mod tests {
         assert_eq!(block_iter.next(), Some(B_C));
         assert_eq!(block_iter.len(), 0);
         assert_eq!(block_iter.next(), None);
-        assert_eq!(block.more, true);
+        assert!(block.more);
     }
 }

@@ -22,9 +22,9 @@ pub static _devfsadm_create_reg: _devfsadm_create_reg_t =
         version: DEVFSADM_V0,
         count: 1,
         tblp: &devfsadm_create_t {
-            device_class: b"pseudo\0".as_ptr().cast(),
+            device_class: c"pseudo".as_ptr(),
             node_type: DDI_PSEUDO,
-            drv_name: b"xde\0".as_ptr().cast(),
+            drv_name: c"xde".as_ptr(),
             flags: TYPE_EXACT | DRV_EXACT,
             interpose_lvl: ILEVEL_0,
             callback_fcn: create_xde_link,
@@ -38,8 +38,8 @@ pub static _devfsadm_remove_reg: _devfsadm_remove_reg_t =
         version: DEVFSADM_V0,
         count: 1,
         tblp: &devfsadm_remove_t {
-            device_class: b"pseudo\0".as_ptr().cast(),
-            dev_dirs_re: b"^xde$\0".as_ptr().cast(),
+            device_class: c"pseudo".as_ptr(),
+            dev_dirs_re: c"^xde$".as_ptr(),
             flags: RM_HOT | RM_PRE | RM_ALWAYS,
             interpose_lvl: ILEVEL_0,
             callback_fcn: devfsadm_rm_all,
@@ -56,8 +56,8 @@ unsafe extern "C" fn create_xde_link(
     extern "C" {
         fn strcmp(s1: *const c_char, s2: *const c_char) -> c_int;
     }
-    if strcmp(di_minor_name(minor), b"ctl\0".as_ptr().cast()) == 0 {
-        devfsadm_mklink(b"xde\0".as_ptr().cast(), node, minor, 0);
+    if strcmp(di_minor_name(minor), c"ctl".as_ptr()) == 0 {
+        devfsadm_mklink(c"xde".as_ptr(), node, minor, 0);
     }
     0
 }
@@ -88,7 +88,7 @@ pub const RM_PRE: c_int = 0x02;
 pub const RM_ALWAYS: c_int = 0x08;
 
 /// Minor node type for pseudo devices
-pub const DDI_PSEUDO: *const c_char = b"ddi_pseudo\0".as_ptr().cast();
+pub const DDI_PSEUDO: *const c_char = c"ddi_pseudo".as_ptr();
 
 /// Opaque minor node handle
 type di_minor = core::ffi::c_void;

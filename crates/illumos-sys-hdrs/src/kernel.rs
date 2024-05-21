@@ -52,7 +52,6 @@ impl ddi_reset_cmd_t {
 
 // TODO Technically this is not a "raw" interface. This should live
 // somewhere else.
-use core::ptr;
 impl kmutex_t {
     pub fn new(mtype: kmutex_type_t) -> Self {
         let mut kmutex = kmutex_t { _opaque: 0 };
@@ -376,7 +375,7 @@ pub const DDI_IPL_10: c_int = 10;
 
 pub const DDI_SUCCESS: c_int = 0;
 pub const DDI_FAILURE: c_int = -1;
-pub const DDI_PSEUDO: *const c_char = b"ddi_pseudo\0".as_ptr() as *const c_char;
+pub const DDI_PSEUDO: *const c_char = c"ddi_pseudo".as_ptr();
 
 pub const KM_SLEEP: i32 = 0x0000;
 pub const KM_NOSLEEP: i32 = 0x0001;
@@ -387,8 +386,7 @@ pub const S_IFCHR: c_int = 0x2000;
 
 pub const MAC_VERSION_V1: c_int = 0x1;
 pub const MAC_VERSION: c_int = MAC_VERSION_V1;
-pub const MAC_PLUGIN_IDENT_ETHER: *const c_char =
-    b"mac_ether\0".as_ptr() as *const c_char;
+pub const MAC_PLUGIN_IDENT_ETHER: *const c_char = c"mac_ether".as_ptr();
 
 pub type periodic_cb = unsafe extern "C" fn(arg: *mut c_void);
 

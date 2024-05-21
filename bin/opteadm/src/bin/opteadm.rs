@@ -433,6 +433,7 @@ fn opte_pkg_version() -> String {
     format!("{MAJOR_VERSION}.{API_VERSION}.{COMMIT_COUNT}")
 }
 
+#[allow(clippy::write_literal)]
 fn print_port_header(t: &mut impl Write) -> std::io::Result<()> {
     writeln!(
         t,
@@ -462,7 +463,7 @@ fn print_port(t: &mut impl Write, pi: PortInfo) -> std::io::Result<()> {
         t,
         "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         pi.name,
-        pi.mac_addr.to_string(),
+        pi.mac_addr,
         pi.ip4_addr.map(|x| x.to_string()).unwrap_or_else(|| none.clone()),
         pi.ephemeral_ip4_addr
             .map(|x| x.to_string())
@@ -492,12 +493,12 @@ fn print_port(t: &mut impl Write, pi: PortInfo) -> std::io::Result<()> {
                 .as_ref()
                 .and_then(|vec| vec.get(i))
                 .map(|x| x.to_string())
-                .unwrap_or_else(String::new),
+                .unwrap_or_default(),
             pi.floating_ip6_addrs
                 .as_ref()
                 .and_then(|vec| vec.get(i))
                 .map(|x| x.to_string())
-                .unwrap_or_else(String::new),
+                .unwrap_or_default(),
         )?;
     }
 
@@ -531,7 +532,7 @@ fn main() -> anyhow::Result<()> {
         Command::DumpLayer { port, name } => {
             let resp = &hdl.get_layer_by_name(&port, &name)?;
             print!("Port {port} - ");
-            print_layer(&resp)?;
+            print_layer(resp)?;
         }
 
         Command::ClearUft { port } => {

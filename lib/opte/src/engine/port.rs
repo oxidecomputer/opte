@@ -1616,8 +1616,16 @@ impl<N: NetworkImpl> Port<N> {
 
         entry.hit();
         let tfes = entry.state_mut();
-        tfes.segs_in += 1;
-        tfes.bytes_in += pkt_len;
+        match *dir {
+            TcpDirection::In { .. } => {
+                tfes.segs_in += 1;
+                tfes.bytes_in += pkt_len;
+            }
+            TcpDirection::Out { .. } => {
+                tfes.segs_out += 1;
+                tfes.bytes_out += pkt_len;
+            }
+        }
 
         let next_state = tfes.tcp_state.process(
             self.name_cstr.as_c_str(),
