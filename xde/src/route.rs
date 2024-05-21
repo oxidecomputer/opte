@@ -12,6 +12,7 @@ use crate::xde::XdeDev;
 use alloc::collections::btree_map::Entry;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use core::ffi::CStr;
 use core::ptr;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
@@ -42,7 +43,7 @@ extern "C" {
         gw: uintptr_t,
         gw_ether_src: uintptr_t,
         gw_ether_dst: uintptr_t,
-        msg: uintptr_t,
+        msg: *const c_char,
     );
 }
 
@@ -51,7 +52,7 @@ fn next_hop_probe(
     gw: Option<&Ipv6Addr>,
     gw_eth_src: EtherAddr,
     gw_eth_dst: EtherAddr,
-    msg: &[u8],
+    msg: &CStr,
 ) {
     let gw_bytes = gw.unwrap_or(&Ipv6Addr::from([0u8; 16])).bytes();
 
@@ -61,7 +62,7 @@ fn next_hop_probe(
             gw_bytes.as_ptr() as uintptr_t,
             gw_eth_src.to_bytes().as_ptr() as uintptr_t,
             gw_eth_dst.to_bytes().as_ptr() as uintptr_t,
-            msg.as_ptr() as uintptr_t,
+            msg.as_ptr(),
         );
     }
 }
@@ -256,7 +257,7 @@ fn next_hop<'a>(
                 None,
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"no IRE for destination\0",
+                c"no IRE for destination",
             );
             return Err(underlay_dev);
         }
@@ -268,7 +269,7 @@ fn next_hop<'a>(
                 None,
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"destination ILL is NULL\0",
+                c"destination ILL is NULL",
             );
             return Err(underlay_dev);
         }
@@ -312,7 +313,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"no IRE for gateway\0",
+                c"no IRE for gateway",
             );
             return Err(underlay_dev);
         }
@@ -331,7 +332,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 EtherAddr::zero(),
                 EtherAddr::zero(),
-                b"gateway ILL phys addr is NULL\0",
+                c"gateway ILL phys addr is NULL",
             );
             return Err(underlay_dev);
         }
@@ -359,7 +360,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 src,
                 EtherAddr::zero(),
-                b"no NCE for gateway\0",
+                c"no NCE for gateway",
             );
             return Err(underlay_dev);
         }
@@ -372,7 +373,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 src,
                 EtherAddr::zero(),
-                b"no NCE common for gateway\0",
+                c"no NCE common for gateway",
             );
             return Err(underlay_dev);
         }
@@ -385,7 +386,7 @@ fn next_hop<'a>(
                 Some(&gw_ip6),
                 src,
                 EtherAddr::zero(),
-                b"NCE MAC address if NULL for gateway\0",
+                c"NCE MAC address if NULL for gateway",
             );
             return Err(underlay_dev);
         }
@@ -398,7 +399,7 @@ fn next_hop<'a>(
             .expect("mac from pointer");
         let dst = EtherAddr::from(dst);
 
-        next_hop_probe(ip6_dst, Some(&gw_ip6), src, dst, b"\0");
+        next_hop_probe(ip6_dst, Some(&gw_ip6), src, dst, c"");
 
         Ok(Route { src, dst, underlay_dev })
     }

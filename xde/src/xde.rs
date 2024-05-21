@@ -143,13 +143,6 @@ extern "C" {
         dst_port: uintptr_t,
     );
     pub fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
-    pub fn __dtrace_probe_next__hop(
-        dst: uintptr_t,
-        gw: uintptr_t,
-        gw_ether_src: uintptr_t,
-        gw_ether_dst: uintptr_t,
-        msg: *const c_char,
-    );
     pub fn __dtrace_probe_rx(mp: uintptr_t);
     pub fn __dtrace_probe_tx(mp: uintptr_t);
 }
