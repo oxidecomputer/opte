@@ -303,11 +303,8 @@ pub enum EtherHdrError {
 
 impl EtherHdrError {
     fn derror_data(&self, data: &mut [u64]) {
-        match self {
-            Self::UnsupportedEtherType { ether_type } => {
-                data[0] = *ether_type as u64;
-            }
-            _ => {}
+        if let Self::UnsupportedEtherType { ether_type } = self {
+            data[0] = *ether_type as u64;
         }
     }
 }

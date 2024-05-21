@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Rules and actions.
 
@@ -831,7 +831,7 @@ impl<'a> Rule<Finalized> {
     where
         R: PacketRead<'a>,
     {
-        #[cfg(debug_assert)]
+        #[cfg(debug_assertions)]
         {
             if let Some(preds) = &self.state.preds {
                 if preds.hdr_preds.len() == 0 && preds.data_preds.len() == 0 {

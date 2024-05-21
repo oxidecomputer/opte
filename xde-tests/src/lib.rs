@@ -208,6 +208,12 @@ impl Drop for Xde {
     /// When this object is dropped, remove the xde kernel module from the
     /// underlying system.
     fn drop(&mut self) {
+        // The module can no longer be successfully removed until the underlay
+        // has been cleared. This may not have been done, so this is fallible.
+        if let Ok(adm) = OpteAdm::open(OpteAdm::XDE_CTL) {
+            let _ = adm.clear_xde_underlay();
+        }
+
         let mut cmd = Command::new("pfexec");
         cmd.args(["rem_drv", "xde"]);
         if let Err(e) = cmd.output() {

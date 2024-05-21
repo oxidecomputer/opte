@@ -15,7 +15,6 @@ use super::packet::Packet;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
 use crate::d_error::DError;
-use core::convert::TryFrom;
 use core::fmt;
 use core::fmt::Display;
 use opte_api::Ipv4Addr;

@@ -265,7 +265,7 @@ fn print_tcp_flow(
     writeln!(
         t,
         "{id}\t{}\t{}\t{}\t{}\t{}\t{}",
-        entry.tcp_state.tcp_state.to_string(),
+        entry.tcp_state.tcp_state,
         entry.hits,
         entry.segs_in,
         entry.segs_out,
