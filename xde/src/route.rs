@@ -45,6 +45,36 @@ extern "C" {
         gw_ether_dst: uintptr_t,
         msg: *const c_char,
     );
+
+    pub fn __dtrace_probe_routecache__full(
+        cache: uintptr_t,
+        dst: uintptr_t,
+        entropy: uintptr_t,
+    );
+
+    pub fn __dtrace_probe_routecache__hit(
+        cache: uintptr_t,
+        dst: uintptr_t,
+        entropy: uintptr_t,
+    );
+
+    pub fn __dtrace_probe_routecache__insert(
+        cache: uintptr_t,
+        dst: uintptr_t,
+        entropy: uintptr_t,
+    );
+
+    pub fn __dtrace_probe_routecache__refresh(
+        cache: uintptr_t,
+        dst: uintptr_t,
+        entropy: uintptr_t,
+    );
+
+    pub fn __dtrace_probe_routecache__delete(
+        cache: uintptr_t,
+        dst: uintptr_t,
+        entropy: uintptr_t,
+    );
 }
 
 fn next_hop_probe(
@@ -63,6 +93,56 @@ fn next_hop_probe(
             gw_eth_src.to_bytes().as_ptr() as uintptr_t,
             gw_eth_dst.to_bytes().as_ptr() as uintptr_t,
             msg.as_ptr(),
+        );
+    }
+}
+
+fn route_full_probe(map: uintptr_t, key: &RouteKey) {
+    unsafe {
+        __dtrace_probe_routecache__full(
+            map,
+            key.dst.as_ptr() as uintptr_t,
+            key.l4_hash.unwrap_or_default() as uintptr_t,
+        );
+    }
+}
+
+fn route_hit_probe(map: uintptr_t, key: &RouteKey) {
+    unsafe {
+        __dtrace_probe_routecache__hit(
+            map,
+            key.dst.as_ptr() as uintptr_t,
+            key.l4_hash.unwrap_or_default() as uintptr_t,
+        );
+    }
+}
+
+fn route_insert_probe(map: uintptr_t, key: &RouteKey) {
+    unsafe {
+        __dtrace_probe_routecache__insert(
+            map,
+            key.dst.as_ptr() as uintptr_t,
+            key.l4_hash.unwrap_or_default() as uintptr_t,
+        );
+    }
+}
+
+fn route_refresh_probe(map: uintptr_t, key: &RouteKey) {
+    unsafe {
+        __dtrace_probe_routecache__refresh(
+            map,
+            key.dst.as_ptr() as uintptr_t,
+            key.l4_hash.unwrap_or_default() as uintptr_t,
+        );
+    }
+}
+
+fn route_delete_probe(map: uintptr_t, key: &RouteKey) {
+    unsafe {
+        __dtrace_probe_routecache__delete(
+            map,
+            key.dst.as_ptr() as uintptr_t,
+            key.l4_hash.unwrap_or_default() as uintptr_t,
         );
     }
 }
@@ -455,13 +535,19 @@ impl RouteCache {
     pub fn next_hop<'b>(&self, key: RouteKey, xde: &'b XdeDev) -> Route<'b> {
         let t = Moment::now();
 
-        let maybe_route = {
+        let (maybe_route, map_ptr_int) = {
             let route_cache = self.0.read();
-            route_cache.get(&key).copied()
+            (
+                route_cache.get(&key).copied(),
+                &*route_cache as *const BTreeMap<_, _> as uintptr_t,
+            )
         };
 
         match maybe_route {
-            Some(route) if route.is_valid(t) => return route.into_route(xde),
+            Some(route) if route.is_valid(t) => {
+                route_hit_probe(map_ptr_int, &key);
+                return route.into_route(xde);
+            }
             _ => {}
         }
 
@@ -474,6 +560,7 @@ impl RouteCache {
         let maybe_route = route_cache.entry(key);
         let entry_exists = match &maybe_route {
             Entry::Occupied(e) if e.get().is_valid(t) => {
+                route_hit_probe(map_ptr_int, &key);
                 return e.get().into_route(xde);
             }
             Entry::Occupied(_) => true,
@@ -494,16 +581,19 @@ impl RouteCache {
             // progress. However, we do not want to cache bad mappings.
             match (maybe_route, next_hop(&key, xde)) {
                 (Entry::Vacant(slot), Ok(route)) => {
+                    route_insert_probe(map_ptr_int, &key);
                     slot.insert(route.cached(xde, t));
                     route
                 }
                 (Entry::Occupied(mut slot), Ok(route)) => {
+                    route_refresh_probe(map_ptr_int, &key);
                     slot.insert(route.cached(xde, t));
                     route
                 }
                 (_, Err(dev)) => Route::zero_addr(dev),
             }
         } else {
+            route_full_probe(map_ptr_int, &key);
             drop(route_cache);
             match next_hop(&key, xde) {
                 Ok(route) => route,
@@ -518,7 +608,17 @@ impl RouteCache {
         let mut route_cache = self.0.write();
 
         let t = Moment::now();
-        route_cache.retain(|_, v| v.is_retained(t));
+        let ptr: *const BTreeMap<_, _> = &*route_cache;
+        let map_ptr_int = ptr as uintptr_t;
+
+        route_cache.retain(|k, v| {
+            if v.is_retained(t) {
+                true
+            } else {
+                route_delete_probe(map_ptr_int, &k);
+                false
+            }
+        });
     }
 }
 
