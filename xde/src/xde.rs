@@ -1523,7 +1523,7 @@ unsafe extern "C" fn xde_mc_tx(
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (u1, u2, port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
-    while let Some(pkt) = chain.next() {
+    while let Some(pkt) = chain.pop_front() {
         xde_mc_tx_one(src_dev, pkt);
     }
 
@@ -1825,7 +1825,7 @@ unsafe extern "C" fn xde_rx(
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
-    while let Some(pkt) = chain.next() {
+    while let Some(pkt) = chain.pop_front() {
         xde_rx_one(&mch, mrh, pkt);
     }
 }

@@ -469,7 +469,7 @@ impl PacketChain {
 
     /// Removes the next packet from the top of the chain and returns
     /// it, taking ownership.
-    pub fn next(&mut self) -> Option<Packet<Initialized>> {
+    pub fn pop_front(&mut self) -> Option<Packet<Initialized>> {
         if let Some(ref mut list) = &mut self.inner {
             unsafe {
                 let curr = list.head.as_ptr();
@@ -554,7 +554,7 @@ impl Drop for PacketChain {
                     unsafe { ddi::freemsgchain(list.head.as_ptr()) };
                 }
             } else {
-                while let Some(pkt) = self.next() {
+                while let Some(pkt) = self.pop_front() {
                     drop(pkt);
                 }
             }
@@ -3945,7 +3945,7 @@ mod test {
 
     fn create_linked_mblks(n: usize) -> Vec<*mut mblk_t> {
         let mut els = vec![];
-        for i in 0..n {
+        for _ in 0..n {
             els.push(allocb(8));
         }
 
@@ -3962,7 +3962,7 @@ mod test {
 
     #[test]
     fn chain_has_correct_ends() {
-        let mut els = create_linked_mblks(3);
+        let els = create_linked_mblks(3);
 
         let chain = unsafe { PacketChain::new(els[0]) }.unwrap();
         let chain_inner = chain.inner.as_ref().unwrap();
@@ -3976,7 +3976,7 @@ mod test {
 
         let mut chain = unsafe { PacketChain::new(els[0]) }.unwrap();
 
-        let p0 = chain.next().unwrap();
+        let p0 = chain.pop_front().unwrap();
         assert_eq!(p0.mblk_addr(), els[0] as uintptr_t);
         unsafe {
             assert!((*els[0]).b_prev.is_null());
@@ -4024,10 +4024,10 @@ mod test {
         let mut chain = unsafe { PacketChain::new(els[0]) }.unwrap();
 
         for i in 0..els.len() {
-            let pkt = chain.next().unwrap();
+            let pkt = chain.pop_front().unwrap();
             assert_eq!(pkt.mblk_addr(), els[i] as uintptr_t);
         }
 
-        assert!(chain.next().is_none());
+        assert!(chain.pop_front().is_none());
     }
 }
