@@ -615,7 +615,7 @@ impl RouteCache {
             if v.is_retained(t) {
                 true
             } else {
-                route_delete_probe(map_ptr_int, &k);
+                route_delete_probe(map_ptr_int, k);
                 false
             }
         });
