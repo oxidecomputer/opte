@@ -145,7 +145,7 @@ impl<const L: usize> LabelBlock<L> {
     }
 
     /// Provides access to all stored [`CStr`]s.
-    pub fn entries<'a>(&'a self) -> LabelBlockIter<'a, L> {
+    pub fn entries(&self) -> LabelBlockIter<'_, L> {
         LabelBlockIter { pos: 0, inner: self }
     }
 
