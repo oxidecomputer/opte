@@ -424,7 +424,7 @@ fn next_hop<'a>(
 /// Naturally, bringing this down to O(ns) is desirable. Usually, illumos
 /// holds `ire_t`s per `conn_t`, but we're aiming to be more fine-grained
 /// with DDM -- so we need a tradeoff between 'asking about the best route
-/// per-packet' and 'holding a route until it is expired'. We choose, for noe,
+/// per-packet' and 'holding a route until it is expired'. We choose, for now,
 /// to hold a route for 100ms.
 ///
 /// Note, this uses a `BTreeMap`, but we would prefer the more consistent
@@ -540,13 +540,13 @@ pub struct CachedRoute {
 
 impl CachedRoute {
     fn is_valid(&self, t: Moment) -> bool {
-        t.delta_as_millis(self.timestamp)
-            <= EXPIRE_ROUTE_LIFETIME.as_millis() as u64
+        u128::from(t.delta_as_millis(self.timestamp))
+            <= EXPIRE_ROUTE_LIFETIME.as_millis()
     }
 
     fn is_retained(&self, t: Moment) -> bool {
-        t.delta_as_millis(self.timestamp)
-            <= REMOVE_ROUTE_LIFETIME.as_millis() as u64
+        u128::from(t.delta_as_millis(self.timestamp))
+            <= REMOVE_ROUTE_LIFETIME.as_millis()
     }
 
     fn into_route(self, xde: &XdeDev) -> Route<'_> {
