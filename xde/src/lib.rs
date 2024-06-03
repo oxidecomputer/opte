@@ -47,6 +47,7 @@ mod mac_sys;
 pub mod route;
 pub mod secpolicy;
 pub mod sys;
+pub mod thread;
 pub mod xde;
 
 // On alignment, `kmem_alloc(9F)` has this of offer:
