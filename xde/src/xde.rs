@@ -1238,15 +1238,22 @@ unsafe extern "C" fn xde_detach(
     let state = ddi_get_driver_private(xde_dip) as *mut XdeState;
     assert!(!state.is_null());
 
-    let state_ref = &*(state);
-    let underlay = state_ref.underlay.lock();
+    // Lock a *reference* to the XdeState, and ensure we are ready
+    // to detach and cleanup.
+    {
+        let state_ref = &*(state);
+        let underlay = state_ref.underlay.lock();
 
-    if underlay.is_some() {
-        warn!("failed to detach: underlay is set");
-        return DDI_FAILURE;
+        if underlay.is_some() {
+            warn!("failed to detach: underlay is set");
+            return DDI_FAILURE;
+        }
     }
+    // Drop the lock, and ensure we only have the raw ptr (and not
+    // a `&'static XdeState`) again.
 
-    // Reattach the XdeState to a Box, which will free it on drop.
+    // Reattach the XdeState to a Box, which takes ownership and will
+    // free it on drop.
     drop(Box::from_raw(state));
 
     // Remove control device
