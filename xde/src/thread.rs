@@ -56,9 +56,10 @@ where
         )
     };
 
-    let handle = NonNull::new(handle)
-        .expect("thread_create returned a null ptr, \
-            but is documented as infallible");
+    let handle = NonNull::new(handle).expect(
+        "thread_create returned a null ptr, \
+            but is documented as infallible",
+    );
 
     JoinHandle { handle }
 }

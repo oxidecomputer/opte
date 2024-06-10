@@ -51,7 +51,7 @@ darling = "0.20"
 dyn-clone = "1.0"
 heapless = "0.8"
 ipnetwork = { version = "0.20", default-features = false }
-itertools = { version = "0.12", default-features = false }
+itertools = { version = "0.13", default-features = false }
 libc = "0.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
 nix = { version = "0.28", features = ["signal", "user"] }
