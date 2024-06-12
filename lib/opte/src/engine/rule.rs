@@ -834,7 +834,7 @@ impl<'a> Rule<Finalized> {
         #[cfg(debug_assertions)]
         {
             if let Some(preds) = &self.state.preds {
-                if preds.hdr_preds.len() == 0 && preds.data_preds.len() == 0 {
+                if preds.hdr_preds.is_empty() && preds.data_preds.is_empty() {
                     panic!(
                         "bug: RulePredicates must have at least one \
                             predicate"
