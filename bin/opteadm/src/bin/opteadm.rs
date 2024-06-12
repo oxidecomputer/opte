@@ -244,7 +244,7 @@ enum Command {
         external_net: ExternalNetConfig,
     },
 
-    /// Allows a guest to send and receive traffic on a given CIDR block.
+    /// Allows a guest to send or receive traffic on a given CIDR block.
     AllowCidr {
         /// The OPTE port to configure
         #[arg(short)]
@@ -252,6 +252,11 @@ enum Command {
 
         /// The IP block to allow through the gateway.
         prefix: IpCidr,
+
+        /// Control whether traffic on the CIDR should be allowed for
+        /// inbound or outbound traffic.
+        #[arg(long = "dir")]
+        direction: Direction,
     },
 
     /// Prevents a guest from sending/receiving traffic on a given CIDR block.
@@ -262,6 +267,11 @@ enum Command {
 
         /// The IP block to deny at the gateway.
         prefix: IpCidr,
+
+        /// Control whether traffic on the CIDR should be allowed for
+        /// inbound or outbound traffic.
+        #[arg(long = "dir")]
+        direction: Direction,
     },
 }
 
@@ -788,12 +798,14 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Command::AllowCidr { port, prefix } => {
-            hdl.allow_cidr(&port, prefix)?;
+        Command::AllowCidr { port, prefix, direction } => {
+            hdl.allow_cidr(&port, prefix, direction)?;
         }
 
-        Command::RemoveCidr { port, prefix } => {
-            if let RemoveCidrResp::NotFound = hdl.remove_cidr(&port, prefix)? {
+        Command::RemoveCidr { port, prefix, direction } => {
+            if let RemoveCidrResp::NotFound =
+                hdl.remove_cidr(&port, prefix, direction)?
+            {
                 anyhow::bail!(
                     "could not remove cidr {prefix} from gateway -- not found"
                 );

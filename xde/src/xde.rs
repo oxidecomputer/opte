@@ -2494,7 +2494,7 @@ fn allow_cidr_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     };
     let state = get_xde_state();
 
-    gateway::allow_cidr(&dev.port, req.cidr, state.vpc_map.clone())?;
+    gateway::allow_cidr(&dev.port, req.cidr, req.dir, state.vpc_map.clone())?;
     Ok(NoResp::default())
 }
 
@@ -2511,7 +2511,7 @@ fn remove_cidr_hdlr(
     };
     let state = get_xde_state();
 
-    gateway::remove_cidr(&dev.port, req.cidr, state.vpc_map.clone())
+    gateway::remove_cidr(&dev.port, req.cidr, req.dir, state.vpc_map.clone())
 }
 
 #[no_mangle]

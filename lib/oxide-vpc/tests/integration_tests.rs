@@ -4152,7 +4152,10 @@ fn port_as_router_target() {
     incr!(g1, ["epoch", "router.rules.out"]);
 
     // This also requires that we allow g2 to send/recv on this CIDR.
-    gateway::allow_cidr(&g2.port, cidr, g2.vpc_map.clone()).unwrap();
+    gateway::allow_cidr(&g2.port, cidr, Direction::In, g2.vpc_map.clone())
+        .unwrap();
+    gateway::allow_cidr(&g2.port, cidr, Direction::Out, g2.vpc_map.clone())
+        .unwrap();
     incr!(g2, ["epoch, epoch, gateway.rules.out, gateway.rules.in"]);
 
     let data = b"1234\0";

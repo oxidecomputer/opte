@@ -844,6 +844,13 @@ impl IpCidr {
             Self::Ip6(ip6) => ip6.prefix_len(),
         }
     }
+
+    pub fn max_prefix_len(&self) -> u8 {
+        match self {
+            Self::Ip4(_) => Ipv4PrefixLen::NETMASK_ALL.val(),
+            Self::Ip6(_) => Ipv6PrefixLen::NETMASK_ALL.val(),
+        }
+    }
 }
 
 impl fmt::Display for IpCidr {

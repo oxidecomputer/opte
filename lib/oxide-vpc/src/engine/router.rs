@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! The Oxide Network VPC Router.
 //!
@@ -164,13 +164,8 @@ impl fmt::Display for RouterTargetInternal {
 // |0          |1      |267 = ((128 - 0) << 1 | 1) + 10  |
 // ```
 fn compute_rule_priority(cidr: &IpCidr, class: RouterClass) -> u16 {
-    use opte::api::ip::IpCidr::*;
-    use opte::api::ip::Ipv4PrefixLen;
-    use opte::api::ip::Ipv6PrefixLen;
-    let (max_prefix_len, prefix_len) = match cidr {
-        Ip4(ipv4) => (Ipv4PrefixLen::NETMASK_ALL.val(), ipv4.prefix_len()),
-        Ip6(ipv6) => (Ipv6PrefixLen::NETMASK_ALL.val(), ipv6.prefix_len()),
-    };
+    let max_prefix_len = cidr.max_prefix_len();
+    let prefix_len = cidr.prefix_len();
     let class_prio = match class {
         RouterClass::Custom => 0,
         RouterClass::System => 1,

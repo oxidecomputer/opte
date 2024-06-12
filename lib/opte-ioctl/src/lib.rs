@@ -6,6 +6,7 @@
 
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
+use opte::api::Direction;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -234,12 +235,13 @@ impl OpteHdl {
         &self,
         port_name: &str,
         cidr: IpCidr,
+        dir: Direction,
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::AllowCidr;
         run_cmd_ioctl(
             self.device.as_raw_fd(),
             cmd,
-            Some(&AllowCidrReq { cidr, port_name: port_name.into() }),
+            Some(&AllowCidrReq { cidr, port_name: port_name.into(), dir }),
         )
     }
 
@@ -247,12 +249,13 @@ impl OpteHdl {
         &self,
         port_name: &str,
         cidr: IpCidr,
+        dir: Direction,
     ) -> Result<RemoveCidrResp, Error> {
         let cmd = OpteCmd::RemoveCidr;
         run_cmd_ioctl(
             self.device.as_raw_fd(),
             cmd,
-            Some(&RemoveCidrReq { cidr, port_name: port_name.into() }),
+            Some(&RemoveCidrReq { cidr, port_name: port_name.into(), dir }),
         )
     }
 }

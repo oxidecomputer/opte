@@ -939,20 +939,22 @@ impl Display for Ports {
     }
 }
 
-/// Add an entry to the gateway allowing a port to send and receive
+/// Add an entry to the gateway allowing a port to send or receive
 /// traffic on a CIDR other than its private IP.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AllowCidrReq {
     pub port_name: String,
     pub cidr: IpCidr,
+    pub dir: Direction,
 }
 
-/// Remove entries from the gateway allowing a port to send and receive
+/// Remove entries from the gateway allowing a port to send or receive
 /// traffic on a specific CIDR other than its private IP.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RemoveCidrReq {
     pub port_name: String,
     pub cidr: IpCidr,
+    pub dir: Direction,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
