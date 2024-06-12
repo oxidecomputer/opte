@@ -103,6 +103,6 @@ pub fn remove_cidr(
     Ok(if maybe_id.is_none() {
         RemoveCidrResp::NotFound
     } else {
-        RemoveCidrResp::Ok
+        RemoveCidrResp::Ok(dest)
     })
 }

@@ -959,7 +959,7 @@ pub struct RemoveCidrReq {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum RemoveCidrResp {
-    Ok,
+    Ok(IpCidr),
     NotFound,
 }
 
