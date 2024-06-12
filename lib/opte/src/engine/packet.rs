@@ -49,6 +49,7 @@ use crate::ddi::sync::KMutex;
 use alloc::collections::LinkedList;
 use core::fmt;
 use core::fmt::Display;
+use core::num::NonZeroUsize;
 use core::ptr;
 use core::ptr::NonNull;
 use core::result;
@@ -460,7 +461,7 @@ impl PacketChain {
 
         // Walk the chain to find the tail, and support faster append.
         let mut tail = head;
-        let mut len = 0;
+        let mut len = 1;
         while let Some(next_ptr) = NonNull::new((*tail.as_ptr()).b_next) {
             len += 1;
             tail = next_ptr;
@@ -599,11 +600,20 @@ impl Drop for PacketChain {
     }
 }
 
+unsafe impl Send for PacketChain {}
+unsafe impl Sync for PacketChain {}
+
 /// A `PacketChain` plus per-element metadata.
 // using linked list, probably want to swap vecdeques in and out.
 pub struct PacketChainAnd<T> {
     packets: PacketChain,
     metadata: LinkedList<T>,
+}
+
+impl<T> PacketChainAnd<T> {
+    pub fn len(&self) -> usize {
+        self.packets.len()
+    }
 }
 
 impl<T> Default for PacketChainAnd<T> {
@@ -627,12 +637,12 @@ impl<T> Iterator for PacketChainAnd<T> {
 pub struct EssQueue<T> {
     inner: KMutex<PacketChainAnd<T>>,
     cv: KCondvar,
-    watermark: usize,
+    watermark: Option<NonZeroUsize>,
     kill: AtomicBool,
 }
 
 impl<T> EssQueue<T> {
-    pub fn new(watermark: usize) -> Self {
+    pub fn new(watermark: Option<NonZeroUsize>) -> Self {
         Self {
             inner: KMutex::new(
                 Default::default(),
@@ -655,7 +665,7 @@ impl<T> EssQueue<T> {
 
         let mut workspace = self.inner.lock();
 
-        if workspace.packets.len() > self.watermark {
+        if self.watermark.map(|w| workspace.packets.len() > w.into()).unwrap_or(false) {
             return Err(EssQueueDeliverError::Full);
         }
 
@@ -4136,6 +4146,8 @@ mod test {
 
         let mut chain = unsafe { PacketChain::new(els[0]) }.unwrap();
         let pkt = unsafe { Packet::wrap_mblk(new_el) }.unwrap();
+
+        assert_eq!(chain.len(), els.len());
 
         chain.append(pkt);
 

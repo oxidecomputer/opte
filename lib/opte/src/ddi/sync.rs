@@ -18,8 +18,9 @@ cfg_if! {
         use illumos_sys_hdrs::{
             cv_broadcast, cv_destroy, cv_init, cv_signal, cv_wait,
             kcondvar_t, kcv_type_t,
-            kmutex_t, krw_t, krwlock_t, mutex_enter, mutex_exit,
-            mutex_destroy, mutex_init, rw_enter, rw_exit, rw_init,
+            kmutex_t, krw_t, krwlock_t, mutex_destroy, mutex_enter,
+            mutex_exit,
+            mutex_init, mutex_tryenter, rw_enter, rw_exit, rw_init,
             rw_destroy
         };
     } else {
@@ -137,10 +138,23 @@ impl<T> KMutex<T> {
         unsafe { mutex_enter(self.mutex.0.get()) };
         KMutexGuard { lock: self }
     }
+
+    pub fn try_lock(&self) -> Result<KMutexGuard<T>, LockTaken> {
+        let try_lock = unsafe {
+            mutex_tryenter(self.mutex.0.get())
+        };
+        if try_lock != 0 {
+            KMutexGuard { lock: self }
+        } else {
+            Err(LockTaken)
+        }
+    }
 }
 
-unsafe impl<T: Send> Send for KMutex<T> {}
-unsafe impl<T: Sync> Sync for KMutex<T> {}
+pub struct LockTaken;
+
+unsafe impl Send for KCondvar {}
+unsafe impl Sync for KCondvar {}
 
 #[cfg(all(not(feature = "std"), not(test)))]
 pub struct KMutexGuard<'a, T: 'a> {
@@ -214,6 +228,13 @@ impl<T> KMutex<T> {
     pub fn lock(&self) -> KMutexGuard<T> {
         let guard = self.inner.lock().unwrap();
         KMutexGuard { guard }
+    }
+
+    pub fn try_lock(&self) -> Result<KMutexGuard<T>, LockTaken> {
+        self.inner.try_lock().map_err(|err| match err {
+            std::sync::TryLockError::Poisoned(_) => panic!("oops"),
+            std::sync::TryLockError::WouldBlock => LockTaken,
+        })
     }
 }
 
@@ -403,6 +424,9 @@ impl<T> KRwLock<T> {
         KRwLockWriteGuard { guard }
     }
 }
+
+unsafe impl<T: Send> Send for KMutex<T> {}
+unsafe impl<T: Sync> Sync for KMutex<T> {}
 
 #[cfg(all(not(feature = "std"), not(test)))]
 pub struct KCondvar {
