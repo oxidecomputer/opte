@@ -715,7 +715,7 @@ macro_rules! check_state {
 
 impl<N: NetworkImpl> Port<N> {
     /// Return the [`NetworkImpl`] associated with this port.
-    pub fn network(&self) -> &dyn NetworkImpl<Parser = N::Parser> {
+    pub fn network(&self) -> &N {
         &self.net
     }
 
