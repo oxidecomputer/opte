@@ -2,8 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
+use anyhow::Context;
 use clap::Args;
 use clap::Parser;
 use opte::api::Direction;
@@ -26,6 +27,8 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::ClearVirt2PhysReq;
+use oxide_vpc::api::DelRouterEntryReq;
+use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
@@ -39,6 +42,8 @@ use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::Ports;
 use oxide_vpc::api::ProtoFilter;
 use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::RemoveCidrResp;
+use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
@@ -220,23 +225,54 @@ enum Command {
 
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
-        /// The OPTE port to which the route is added
-        #[arg(short)]
-        port: String,
-        /// The network destination to which the route applies.
-        dest: IpCidr,
-        /// The location to which traffic matching the destination is sent.
-        target: RouterTarget,
+        #[command(flatten)]
+        route: RouterRule,
+    },
+
+    /// Remove an existing router entry, either IPv4 or IPv6.
+    DelRouterEntry {
+        #[command(flatten)]
+        route: RouterRule,
     },
 
     /// Configure external network addresses used by a port for VPC-external traffic.
     SetExternalIps {
-        /// The OPTE port to which the route is added
+        /// The OPTE port to configure
         #[arg(short)]
         port: String,
 
         #[command(flatten)]
         external_net: ExternalNetConfig,
+    },
+
+    /// Allows a guest to send or receive traffic on a given CIDR block.
+    AllowCidr {
+        /// The OPTE port to configure
+        #[arg(short)]
+        port: String,
+
+        /// The IP block to allow through the gateway.
+        prefix: IpCidr,
+
+        /// Control whether traffic on the CIDR should be allowed for
+        /// inbound or outbound traffic.
+        #[arg(long = "dir")]
+        direction: Option<Direction>,
+    },
+
+    /// Prevents a guest from sending/receiving traffic on a given CIDR block.
+    RemoveCidr {
+        /// The OPTE port to configure
+        #[arg(short)]
+        port: String,
+
+        /// The IP block to deny at the gateway.
+        prefix: IpCidr,
+
+        /// Control whether traffic on the CIDR should be allowed for
+        /// inbound or outbound traffic.
+        #[arg(long = "dir")]
+        direction: Option<Direction>,
     },
 }
 
@@ -263,6 +299,19 @@ impl From<Filters> for FirewallFilters {
             .set_ports(f.ports)
             .clone()
     }
+}
+
+#[derive(Debug, Parser)]
+struct RouterRule {
+    /// The OPTE port to which the route change is applied.
+    #[arg(short)]
+    port: String,
+    /// The network destination to which the route applies.
+    dest: IpCidr,
+    /// The location to which traffic matching the destination is sent.
+    target: RouterTarget,
+    /// The class of router a rule belongs to ('system' or 'custom')
+    class: RouterClass,
 }
 
 // TODO: expand this to allow for v4 and v6 simultaneously?
@@ -705,9 +754,24 @@ fn main() -> anyhow::Result<()> {
             hdl.clear_v2b(&req)?;
         }
 
-        Command::AddRouterEntry { port, dest, target } => {
-            let req = AddRouterEntryReq { port_name: port, dest, target };
+        Command::AddRouterEntry {
+            route: RouterRule { port, dest, target, class },
+        } => {
+            let req =
+                AddRouterEntryReq { port_name: port, dest, target, class };
             hdl.add_router_entry(&req)?;
+        }
+
+        Command::DelRouterEntry {
+            route: RouterRule { port, dest, target, class },
+        } => {
+            let req =
+                DelRouterEntryReq { port_name: port, dest, target, class };
+            if let DelRouterEntryResp::NotFound = hdl.del_router_entry(&req)? {
+                anyhow::bail!(
+                    "could not delete entry -- no matching rule found"
+                );
+            }
         }
 
         Command::SetExternalIps { port, external_net } => {
@@ -732,6 +796,54 @@ fn main() -> anyhow::Result<()> {
             } else {
                 // TODO: show *actual* parse failure.
                 anyhow::bail!("expected IPv4 *or* IPv6 config.");
+            }
+        }
+
+        Command::AllowCidr { port, prefix, direction } => {
+            if let Some(dir) = direction {
+                hdl.allow_cidr(&port, prefix, dir)?;
+            } else {
+                hdl.allow_cidr(&port, prefix, Direction::In)
+                    .context("failed to allow on inbound direction")?;
+                hdl.allow_cidr(&port, prefix, Direction::Out).inspect_err(
+                    |e| {
+                        hdl.remove_cidr(&port, prefix, Direction::In).expect(
+                            &format!(
+                                "FATAL: failed to rollback in-direction allow \
+                                of {prefix} after {e}"
+                            ),
+                        );
+                    },
+                )?;
+            }
+        }
+
+        Command::RemoveCidr { port, prefix, direction } => {
+            let remove_cidr = |dir: Direction| -> anyhow::Result<()> {
+                if let RemoveCidrResp::NotFound =
+                    hdl.remove_cidr(&port, prefix, dir)?
+                {
+                    anyhow::bail!(
+                        "could not remove cidr {prefix} from gateway ({dir}) -- not found"
+                    );
+                }
+
+                Ok(())
+            };
+
+            if let Some(dir) = direction {
+                remove_cidr(dir)?;
+            } else {
+                remove_cidr(Direction::In)
+                    .context("failed to deny on inbound direction")?;
+                remove_cidr(Direction::Out).inspect_err(|e| {
+                    hdl.allow_cidr(&port, prefix, Direction::In).expect(
+                        &format!(
+                            "FATAL: failed to rollback in-direction remove \
+                                of {prefix} after {e}"
+                        ),
+                    );
+                })?;
             }
         }
     }

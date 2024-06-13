@@ -74,12 +74,15 @@ use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessResult;
+use opte::engine::NetworkImpl;
 use opte::ExecCtx;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::CreateXdeReq;
+use oxide_vpc::api::DelRouterEntryReq;
+use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::DumpVirt2BoundaryReq;
@@ -90,6 +93,7 @@ use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::RemFwRuleReq;
+use oxide_vpc::api::RemoveCidrResp;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
@@ -588,6 +592,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             hdlr_resp(&mut env, resp)
         }
 
+        OpteCmd::DelRouterEntry => {
+            let resp = del_router_entry_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
         OpteCmd::DumpTcpFlows => {
             let resp = dump_tcp_flows_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
@@ -595,6 +604,16 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::SetExternalIps => {
             let resp = set_external_ips_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::AllowCidr => {
+            let resp = allow_cidr_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::RemoveCidr => {
+            let resp = remove_cidr_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
     }
@@ -1924,7 +1943,22 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         None => return Err(OpteError::PortNotFound(req.port_name)),
     };
 
-    router::add_entry(&dev.port, req.dest, req.target)
+    router::add_entry(&dev.port, req.dest, req.target, req.class)
+}
+
+#[no_mangle]
+fn del_router_entry_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<DelRouterEntryResp, OpteError> {
+    let req: DelRouterEntryReq = env.copy_in_req()?;
+    let devs = unsafe { xde_devs.read() };
+    let mut iter = devs.iter();
+    let dev = match iter.find(|x| x.devname == req.port_name) {
+        Some(dev) => dev,
+        None => return Err(OpteError::PortNotFound(req.port_name)),
+    };
+
+    router::del_entry(&dev.port, req.dest, req.target, req.class)
 }
 
 #[no_mangle]
@@ -2119,6 +2153,37 @@ fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 
     nat::set_nat_rules(&dev.vpc_cfg, &dev.port, req)?;
     Ok(NoResp::default())
+}
+
+#[no_mangle]
+fn allow_cidr_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: oxide_vpc::api::AllowCidrReq = env.copy_in_req()?;
+    let devs = unsafe { xde_devs.read() };
+    let mut iter = devs.iter();
+    let dev = match iter.find(|x| x.devname == req.port_name) {
+        Some(dev) => dev,
+        None => return Err(OpteError::PortNotFound(req.port_name)),
+    };
+    let state = get_xde_state();
+
+    gateway::allow_cidr(&dev.port, req.cidr, req.dir, state.vpc_map.clone())?;
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
+fn remove_cidr_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<RemoveCidrResp, OpteError> {
+    let req: oxide_vpc::api::RemoveCidrReq = env.copy_in_req()?;
+    let devs = unsafe { xde_devs.read() };
+    let mut iter = devs.iter();
+    let dev = match iter.find(|x| x.devname == req.port_name) {
+        Some(dev) => dev,
+        None => return Err(OpteError::PortNotFound(req.port_name)),
+    };
+    let state = get_xde_state();
+
+    gateway::remove_cidr(&dev.port, req.cidr, req.dir, state.vpc_map.clone())
 }
 
 #[no_mangle]
