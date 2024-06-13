@@ -265,7 +265,9 @@ impl XdeState {
         let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
 
         // Completely arbitrary watermark lmao.
-        let deliver = Arc::new(EssQueue::new(Some(NonZeroUsize::new(usize::MAX).unwrap())));
+        let deliver = Arc::new(EssQueue::new(Some(
+            NonZeroUsize::new(usize::MAX).unwrap(),
+        )));
         let worker_mailbox = deliver.clone();
 
         let deliver_hdl = Some(spawn(|| xde_worker(worker_mailbox)));
@@ -1569,7 +1571,7 @@ unsafe extern "C" fn xde_mc_tx(
 
     if let Err(_) = get_xde_state()
         .deliver
-        .deliver(chain, || Origin::Port(src_dev.devname.clone()))
+        .deliver(1, chain, || Origin::Port(src_dev.devname.clone()))
     {
         unsafe {
             __dtrace_probe_worker__no__space(Direction::Out as _, n_pkts);
@@ -1962,7 +1964,7 @@ unsafe extern "C" fn xde_rx(
     // Eh... The only reason I can get away with this is because we never
     // Hairpin anything on the underlay, for good reason lmao.
     if let Err(_) =
-        get_xde_state().deliver.deliver(chain, || Origin::Underlay(0))
+        get_xde_state().deliver.deliver(0, chain, || Origin::Underlay(0))
     {
         unsafe {
             __dtrace_probe_worker__no__space(Direction::In as _, n_pkts);

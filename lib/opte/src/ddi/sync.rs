@@ -140,11 +140,9 @@ impl<T> KMutex<T> {
     }
 
     pub fn try_lock(&self) -> Result<KMutexGuard<T>, LockTaken> {
-        let try_lock = unsafe {
-            mutex_tryenter(self.mutex.0.get())
-        };
+        let try_lock = unsafe { mutex_tryenter(self.mutex.0.get()) };
         if try_lock != 0 {
-            KMutexGuard { lock: self }
+            Ok(KMutexGuard { lock: self })
         } else {
             Err(LockTaken)
         }
@@ -231,10 +229,13 @@ impl<T> KMutex<T> {
     }
 
     pub fn try_lock(&self) -> Result<KMutexGuard<T>, LockTaken> {
-        self.inner.try_lock().map_err(|err| match err {
-            std::sync::TryLockError::Poisoned(_) => panic!("oops"),
-            std::sync::TryLockError::WouldBlock => LockTaken,
-        })
+        self.inner
+            .try_lock()
+            .map_err(|err| match err {
+                std::sync::TryLockError::Poisoned(_) => panic!("oops"),
+                std::sync::TryLockError::WouldBlock => LockTaken,
+            })
+            .map(|guard| KMutexGuard { guard })
     }
 }
 

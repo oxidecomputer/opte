@@ -55,6 +55,7 @@ use core::ptr::NonNull;
 use core::result;
 use core::slice;
 use core::sync::atomic::AtomicBool;
+use core::sync::atomic::AtomicUsize;
 use crc32fast::Hasher;
 use dyn_clone::DynClone;
 use serde::Deserialize;
@@ -614,6 +615,15 @@ impl<T> PacketChainAnd<T> {
     pub fn len(&self) -> usize {
         self.packets.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn extend(&mut self, mut other: Self) {
+        self.packets.extend(other.packets);
+        self.metadata.append(&mut other.metadata);
+    }
 }
 
 impl<T> Default for PacketChainAnd<T> {
@@ -632,21 +642,43 @@ impl<T> Iterator for PacketChainAnd<T> {
     }
 }
 
-/// Not quite an SQueue.
-// TODO: work in signalling/condvar
-pub struct EssQueue<T> {
+// to test: double-buffer inner with shared tick?
+
+struct WriteSlot<T> {
     inner: KMutex<PacketChainAnd<T>>,
+    pkts: AtomicUsize,
+}
+
+impl<T> Default for WriteSlot<T> {
+    fn default() -> Self {
+        Self {
+            inner: KMutex::new(
+                Default::default(),
+                crate::ddi::sync::KMutexType::Spin,
+            ),
+            pkts: 0.into(),
+        }
+    }
+}
+
+/// Not quite an SQueue.
+pub struct EssQueue<T> {
+    slots: [WriteSlot<T>; 2],
+    sleepy: KMutex<()>,
     cv: KCondvar,
     watermark: Option<NonZeroUsize>,
     kill: AtomicBool,
 }
 
+// NOTE: this is a really dumb proxy for per-port.
+
 impl<T> EssQueue<T> {
     pub fn new(watermark: Option<NonZeroUsize>) -> Self {
         Self {
-            inner: KMutex::new(
+            slots: Default::default(),
+            sleepy: KMutex::new(
                 Default::default(),
-                crate::ddi::sync::KMutexType::Driver,
+                crate::ddi::sync::KMutexType::Spin,
             ),
             cv: KCondvar::new(),
             watermark,
@@ -657,23 +689,34 @@ impl<T> EssQueue<T> {
     // TODO: want in future to maybe have T be derived from the packet (e.g., parsed).
     pub fn deliver(
         &self,
+        slot: usize,
         packets: PacketChain,
         mut f: impl FnMut() -> T,
     ) -> Result<(), EssQueueDeliverError> {
+        let n = packets.len();
         // pre-prepare list of elements to push at back.
-        let mut els: LinkedList<T> = (0..packets.len()).map(|_| f()).collect();
+        let mut els: LinkedList<T> = (0..n).map(|_| f()).collect();
 
-        let mut workspace = self.inner.lock();
+        let mut workspace = self.slots[slot].inner.lock();
 
-        if self.watermark.map(|w| workspace.packets.len() > w.into()).unwrap_or(false) {
+        if self
+            .watermark
+            .map(|w| workspace.packets.len() > w.into())
+            .unwrap_or(false)
+        {
             return Err(EssQueueDeliverError::Full);
         }
 
         workspace.packets.extend(packets);
         workspace.metadata.append(&mut els);
 
+        self.slots[slot]
+            .pkts
+            .fetch_add(n, core::sync::atomic::Ordering::Relaxed);
+
         // We can notify with/without the lock, but illumos prefers
         // we do so with the lock 'for scheduling purposes'.
+        drop(workspace);
         self.cv.notify_one();
 
         Ok(())
@@ -681,17 +724,31 @@ impl<T> EssQueue<T> {
 
     // Probably want there to be a timeout here rather than just a kill flag.
     pub fn receive(&self) -> Result<PacketChainAnd<T>, EssQueueReceiveError> {
-        let mut workspace = self.inner.lock();
+        let mut pkts = PacketChainAnd::default();
 
-        while workspace.packets.is_empty() {
+        while pkts.is_empty() {
             if self.kill.load(core::sync::atomic::Ordering::Relaxed) {
                 return Err(EssQueueReceiveError::Dead);
             }
 
-            workspace = self.cv.wait(workspace);
+            for slot in &self.slots {
+                if slot.pkts.load(core::sync::atomic::Ordering::Relaxed) == 0 {
+                    continue;
+                }
+                let mut workspace = slot.inner.lock();
+
+                let taken = core::mem::take(&mut *workspace);
+                slot.pkts.store(0, core::sync::atomic::Ordering::Relaxed);
+                drop(workspace);
+
+                pkts.extend(taken);
+            }
+
+            let a = self.sleepy.lock();
+            self.cv.wait(a);
         }
 
-        Ok(core::mem::take(&mut workspace))
+        Ok(pkts)
     }
 
     pub fn quiesce(&self) {
