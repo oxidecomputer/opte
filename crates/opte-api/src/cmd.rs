@@ -35,10 +35,12 @@ pub enum OpteCmd {
     SetVirt2Boundary = 52,   // set a v2b mapping
     ClearVirt2Boundary = 53, // clear a v2b mapping
     DumpVirt2Boundary = 54,  // dump the v2b mappings
+    ClearVirt2Phys = 55,     // clear a v2p mapping
     AddRouterEntry = 60,     // add a router entry for IP dest
     CreateXde = 70,          // create a new xde device
     DeleteXde = 71,          // delete an xde device
     SetXdeUnderlay = 72,     // set xde underlay devices
+    ClearXdeUnderlay = 73,   // clear xde underlay devices
     SetExternalIps = 80,     // set xde external IPs for a port
 }
 
@@ -62,10 +64,12 @@ impl TryFrom<c_int> for OpteCmd {
             52 => Ok(Self::SetVirt2Boundary),
             53 => Ok(Self::ClearVirt2Boundary),
             54 => Ok(Self::DumpVirt2Boundary),
+            55 => Ok(Self::ClearVirt2Phys),
             60 => Ok(Self::AddRouterEntry),
             70 => Ok(Self::CreateXde),
             71 => Ok(Self::DeleteXde),
             72 => Ok(Self::SetXdeUnderlay),
+            73 => Ok(Self::ClearXdeUnderlay),
             80 => Ok(Self::SetExternalIps),
             _ => Err(()),
         }

@@ -9,7 +9,6 @@
 use crate::cfg::Ipv6Cfg;
 use crate::cfg::VpcCfg;
 use alloc::sync::Arc;
-use core::result::Result;
 use opte::api::Direction;
 use opte::api::Ipv6Addr;
 use opte::api::OpteError;

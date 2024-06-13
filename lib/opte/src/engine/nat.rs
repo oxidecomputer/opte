@@ -156,7 +156,7 @@ impl StatefulAction for InboundNat {
         // registered to this port.
         Ok(AllowOrDeny::Allow(Arc::new(NatDesc {
             priv_ip: self.priv_ip,
-            external_ip: flow_id.dst_ip,
+            external_ip: flow_id.dst_ip(),
             verifier: self.verifier.clone(),
         })))
     }

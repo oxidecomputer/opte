@@ -2,13 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 // xde - A mac provider for OPTE-based network implementations.
 #![feature(extern_types)]
 #![feature(panic_info_message)]
 #![no_std]
-#![allow(non_camel_case_types)]
 #![allow(non_upper_case_globals)]
 // XXX We do not use double in the kernel. We should not allow
 // "improper C types". This hack is here is because of the ip.rs code
@@ -45,6 +44,7 @@ pub mod dls;
 pub mod ip;
 pub mod mac;
 mod mac_sys;
+pub mod route;
 pub mod secpolicy;
 pub mod sys;
 pub mod xde;

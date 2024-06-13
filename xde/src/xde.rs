@@ -14,7 +14,6 @@
 
 use crate::dls;
 use crate::ioctl::IoctlEnvelope;
-use crate::ip;
 use crate::mac;
 use crate::mac::mac_getinfo;
 use crate::mac::mac_private_minor;
@@ -24,6 +23,9 @@ use crate::mac::MacOpenFlags;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
 use crate::mac::MacUnicastHandle;
+use crate::route::Route;
+use crate::route::RouteCache;
+use crate::route::RouteKey;
 use crate::secpolicy;
 use crate::sys;
 use crate::warn;
@@ -33,12 +35,14 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::convert::TryInto;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::ptr;
+use core::ptr::addr_of;
+use core::ptr::addr_of_mut;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
+use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
 use opte::api::NoResp;
@@ -47,7 +51,7 @@ use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
-use opte::d_error::ErrorBlock;
+use opte::d_error::LabelBlock;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
@@ -61,7 +65,9 @@ use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::Initialized;
+use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
+use opte::engine::packet::PacketChain;
 use opte::engine::packet::PacketError;
 use opte::engine::packet::Parsed;
 use opte::engine::port::meta::ActionMeta;
@@ -72,9 +78,14 @@ use opte::ExecCtx;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
+use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpVirt2BoundaryReq;
+use oxide_vpc::api::DumpVirt2BoundaryResp;
+use oxide_vpc::api::DumpVirt2PhysReq;
+use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
@@ -100,10 +111,10 @@ const FW_FT_LIMIT: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(8096) };
 const FT_LIMIT_ONE: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(1) };
 
 /// The name of this driver.
-const XDE_STR: *const c_char = b"xde\0".as_ptr() as *const c_char;
+const XDE_STR: *const c_char = c"xde".as_ptr();
 
 /// Name of the control device.
-const XDE_CTL_STR: *const c_char = b"ctl\0".as_ptr() as *const c_char;
+const XDE_CTL_STR: *const c_char = c"ctl".as_ptr();
 
 /// Minor number for the control device.
 // Set once in `xde_attach`.
@@ -122,32 +133,24 @@ extern "C" {
         port: uintptr_t,
         dir: uintptr_t,
         mp: uintptr_t,
-        err_b: uintptr_t,
+        err_b: *const LabelBlock<8>,
         data_len: uintptr_t,
     );
     pub fn __dtrace_probe_guest__loopback(
         mp: uintptr_t,
-        flow: uintptr_t,
+        flow: *const InnerFlowId,
         src_port: uintptr_t,
         dst_port: uintptr_t,
     );
     pub fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
-    pub fn __dtrace_probe_next__hop(
-        dst: uintptr_t,
-        gw: uintptr_t,
-        gw_ether_src: uintptr_t,
-        gw_ether_dst: uintptr_t,
-        msg: uintptr_t,
-    );
     pub fn __dtrace_probe_rx(mp: uintptr_t);
-    pub fn __dtrace_probe_rx__chain__todo(mp: uintptr_t);
     pub fn __dtrace_probe_tx(mp: uintptr_t);
 }
 
 fn bad_packet_parse_probe(
     port: Option<&CString>,
     dir: Direction,
-    mp: *mut mblk_t,
+    mp: uintptr_t,
     err: &PacketError,
 ) {
     let port_str = match port {
@@ -155,8 +158,8 @@ fn bad_packet_parse_probe(
         Some(name) => name.as_c_str(),
     };
 
-    // Truncation is captured *in* the ErrorBlock.
-    let block = match ErrorBlock::<8>::from_err(err) {
+    // Truncation is captured *in* the LabelBlock.
+    let block = match LabelBlock::<8>::from_nested(err) {
         Ok(block) => block,
         Err(block) => block,
     };
@@ -165,8 +168,8 @@ fn bad_packet_parse_probe(
         __dtrace_probe_bad__packet(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
-            mp as uintptr_t,
-            block.as_ptr() as uintptr_t,
+            mp,
+            block.as_ptr(),
             4,
         )
     };
@@ -175,55 +178,35 @@ fn bad_packet_parse_probe(
 fn bad_packet_probe(
     port: Option<&CString>,
     dir: Direction,
-    mp: *mut mblk_t,
+    mp: uintptr_t,
     msg: &CStr,
 ) {
     let port_str = match port {
         None => c"unknown",
         Some(name) => name.as_c_str(),
     };
-    let mut eb = ErrorBlock::<8>::new();
+    let mut eb = LabelBlock::<8>::new();
 
     unsafe {
         let _ = eb.append_name_raw(msg);
         __dtrace_probe_bad__packet(
             port_str.as_ptr() as uintptr_t,
             dir as uintptr_t,
-            mp as uintptr_t,
-            eb.as_ptr() as uintptr_t,
+            mp,
+            eb.as_ptr(),
             8,
         )
     };
 }
 
-fn next_hop_probe(
-    dst: &Ipv6Addr,
-    gw: Option<&Ipv6Addr>,
-    gw_eth_src: EtherAddr,
-    gw_eth_dst: EtherAddr,
-    msg: &[u8],
-) {
-    let gw_bytes = gw.unwrap_or(&Ipv6Addr::from([0u8; 16])).bytes();
-
-    unsafe {
-        __dtrace_probe_next__hop(
-            dst.bytes().as_ptr() as uintptr_t,
-            gw_bytes.as_ptr() as uintptr_t,
-            gw_eth_src.to_bytes().as_ptr() as uintptr_t,
-            gw_eth_dst.to_bytes().as_ptr() as uintptr_t,
-            msg.as_ptr() as uintptr_t,
-        );
-    }
-}
-
 /// Underlay port state.
 #[derive(Debug)]
-struct xde_underlay_port {
+pub struct xde_underlay_port {
     /// Name of the link being used for this underlay port.
-    name: String,
+    pub name: String,
 
     /// The MAC address associated with this underlay port.
-    mac: [u8; 6],
+    pub mac: [u8; 6],
 
     /// MAC handle to the underlay link.
     mh: Arc<MacHandle>,
@@ -258,7 +241,7 @@ fn get_xde_state() -> &'static XdeState {
     // it was derived from Box::into_raw() during `xde_attach`.
     unsafe {
         let p = ddi_get_driver_private(xde_dip);
-        &mut *(p as *mut XdeState)
+        &*(p as *mut XdeState)
     }
 }
 
@@ -275,7 +258,7 @@ impl XdeState {
 }
 
 #[repr(C)]
-struct XdeDev {
+pub struct XdeDev {
     devname: String,
     linkid: datalink_id_t,
     mh: *mut mac::mac_handle,
@@ -299,21 +282,27 @@ struct XdeDev {
 
     // These are clones of the underlay ports initialized by the
     // driver.
-    u1: Arc<xde_underlay_port>,
-    u2: Arc<xde_underlay_port>,
+    pub u1: Arc<xde_underlay_port>,
+    pub u2: Arc<xde_underlay_port>,
+
+    // We make this a per-port cache rather than sharing between all
+    // ports to theoretically reduce contention around route expiry
+    // and reinsertion.
+    routes: RouteCache,
+    routes_periodic: Periodic<RouteCache>,
 }
 
 #[cfg(not(test))]
 #[no_mangle]
 unsafe extern "C" fn _init() -> c_int {
     xde_devs.init(KRwLockType::Driver);
-    mac::mac_init_ops(&mut xde_devops, XDE_STR);
+    mac::mac_init_ops(addr_of_mut!(xde_devops), XDE_STR);
 
     match mod_install(&xde_linkage) {
         0 => 0,
         err => {
             warn!("mod_install failed: {}", err);
-            mac::mac_fini_ops(&mut xde_devops);
+            mac::mac_fini_ops(addr_of_mut!(xde_devops));
             err
         }
     }
@@ -329,7 +318,7 @@ unsafe extern "C" fn _info(modinfop: *mut modinfo) -> c_int {
 unsafe extern "C" fn _fini() -> c_int {
     match mod_remove(&xde_linkage) {
         0 => {
-            mac::mac_fini_ops(&mut xde_devops);
+            mac::mac_fini_ops(addr_of_mut!(xde_devops));
             0
         }
         err => {
@@ -474,6 +463,13 @@ fn set_xde_underlay_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     set_xde_underlay(&req)
 }
 
+fn clear_xde_underlay_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<NoResp, OpteError> {
+    let _req: ClearXdeUnderlayReq = env.copy_in_req()?;
+    clear_xde_underlay()
+}
+
 // This is the entry point for all OPTE commands. It verifies the API
 // version and then multiplexes the command to its appropriate handler.
 #[no_mangle]
@@ -527,6 +523,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             hdlr_resp(&mut env, resp)
         }
 
+        OpteCmd::ClearXdeUnderlay => {
+            let resp = clear_xde_underlay_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
         OpteCmd::DumpLayer => {
             let resp = dump_layer_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
@@ -559,6 +560,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::SetVirt2Phys => {
             let resp = set_v2p_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ClearVirt2Phys => {
+            let resp = clear_v2p_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
 
@@ -603,6 +609,11 @@ fn expire_periodic(port: &mut Arc<Port<VpcNetwork>>) {
     // moving a port to a paused state, and in that state the periodic
     // should probably be canceled.
     let _ = port.expire_flows();
+}
+
+#[no_mangle]
+fn expire_route_cache(routes: &mut RouteCache) {
+    routes.remove_routes()
 }
 
 #[no_mangle]
@@ -681,6 +692,15 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         ONE_SECOND,
     );
 
+    let routes = RouteCache::default();
+
+    let routes_periodic = Periodic::new(
+        port.name_cstr().clone(),
+        expire_route_cache,
+        Box::new(routes.clone()),
+        ONE_SECOND,
+    );
+
     let mut xde = Box::new(XdeDev {
         devname: req.xde_devname.clone(),
         linkid: req.linkid,
@@ -694,6 +714,8 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         passthrough: req.passthrough,
         u1: underlay.u1.clone(),
         u2: underlay.u2.clone(),
+        routes,
+        routes_periodic,
     });
     drop(underlay_);
 
@@ -721,7 +743,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     unsafe {
         mreg.m_dip = xde_dip;
-        mreg.m_callbacks = &mut xde_mac_callbacks;
+        mreg.m_callbacks = addr_of_mut!(xde_mac_callbacks);
     }
 
     // TODO Total hack to allow a VNIC atop of xde to have the guest's
@@ -852,6 +874,90 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     *underlay = Some(unsafe {
         init_underlay_ingress_handlers(req.u1.clone(), req.u2.clone())?
     });
+
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
+fn clear_xde_underlay() -> Result<NoResp, OpteError> {
+    let state = get_xde_state();
+    let mut underlay = state.underlay.lock();
+    if underlay.is_none() {
+        return Err(OpteError::System {
+            errno: ENOENT,
+            msg: "underlay not yet initialized".into(),
+        });
+    }
+    if unsafe { xde_devs.read().len() } > 0 {
+        return Err(OpteError::System {
+            errno: EBUSY,
+            msg: "underlay in use by attached ports".into(),
+        });
+    }
+
+    if let Some(underlay) = underlay.take() {
+        // There shouldn't be anymore refs to the underlay given we checked for
+        // 0 ports above.
+        let Some(u1) = Arc::into_inner(underlay.u1) else {
+            return Err(OpteError::System {
+                errno: EBUSY,
+                msg: "underlay u1 has outstanding refs".into(),
+            });
+        };
+        let Some(u2) = Arc::into_inner(underlay.u2) else {
+            return Err(OpteError::System {
+                errno: EBUSY,
+                msg: "underlay u2 has outstanding refs".into(),
+            });
+        };
+
+        for u in [u1, u2] {
+            // Clear all Rx paths
+            u.mch.clear_rx();
+
+            // We have a chain of refs here:
+            //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
+            //  2. `MacUnicastHandle` holds a ref to `MacClientHandle`, and
+            //  3. `MacClientHandle` holds a ref to `MacHandle`.
+            // We explicitly drop them in order here to ensure there are no
+            // outstanding refs.
+
+            // 1. Remove promisc and unicast callbacks
+            drop(u.mph);
+            drop(u.muh);
+
+            // Although `xde_rx` can be called into without any running ports
+            // via the promisc and unicast handles, illumos guarantees that
+            // neither callback will be running here. `mac_promisc_remove` will
+            // either remove the callback immediately (if there are no walkers)
+            // or will mark the callback as condemned and await all active
+            // walkers finishing. Accordingly, no one else will have or try to
+            // clone the MAC client handle.
+
+            // 2. Remove MAC client handle
+            if Arc::into_inner(u.mch).is_none() {
+                warn!(
+                    "underlay {} has outstanding mac client handle refs",
+                    u.name
+                );
+                return Err(OpteError::System {
+                    errno: EBUSY,
+                    msg: format!("underlay {} has outstanding refs", u.name),
+                });
+            }
+
+            // Finally, we can cleanup the MAC handle for this underlay
+            if Arc::into_inner(u.mh).is_none() {
+                return Err(OpteError::System {
+                    errno: EBUSY,
+                    msg: format!(
+                        "underlay {} has outstanding mac handle refs",
+                        u.name
+                    ),
+                });
+            }
+        }
+    }
 
     Ok(NoResp::default())
 }
@@ -1129,56 +1235,26 @@ unsafe extern "C" fn xde_detach(
         return DDI_FAILURE;
     }
 
-    let rstate = ddi_get_driver_private(xde_dip);
-    assert!(!rstate.is_null());
-    let state = Box::from_raw(rstate as *mut XdeState);
-    let underlay = state.underlay.into_inner();
+    let state = ddi_get_driver_private(xde_dip) as *mut XdeState;
+    assert!(!state.is_null());
 
-    if let Some(underlay) = underlay {
-        // There shouldn't be anymore refs to the underlay given we checked for
-        // 0 ports above.
-        let Ok(u1) = Arc::try_unwrap(underlay.u1) else {
-            warn!("failed to detach: underlay u1 has outstanding refs");
+    // Lock a *reference* to the XdeState, and ensure we are ready
+    // to detach and cleanup.
+    {
+        let state_ref = &*(state);
+        let underlay = state_ref.underlay.lock();
+
+        if underlay.is_some() {
+            warn!("failed to detach: underlay is set");
             return DDI_FAILURE;
-        };
-        let Ok(u2) = Arc::try_unwrap(underlay.u2) else {
-            warn!("failed to detach: underlay u2 has outstanding refs");
-            return DDI_FAILURE;
-        };
-
-        for u in [u1, u2] {
-            // Clear all Rx paths
-            u.mch.clear_rx();
-
-            // We have a chain of refs here:
-            //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
-            //  2. `MacUnicastHandle` holds a ref to `MacClientHandle`, and
-            //  3. `MacClientHandle` holds a ref to `MacHandle`.
-            // We explicitly drop them in order here to ensure there are no
-            // outstanding refs.
-
-            // 1. Remove promisc and unicast callbacks
-            drop(u.mph);
-            drop(u.muh);
-
-            // 2. Remove MAC client handle
-            if Arc::strong_count(&u.mch) > 1 {
-                warn!(
-                    "underlay {} has outstanding mac client handle refs",
-                    u.name
-                );
-                return DDI_FAILURE;
-            }
-            drop(u.mch);
-
-            // Finally, we can cleanup the MAC handle for this underlay
-            if Arc::strong_count(&u.mh) > 1 {
-                warn!("underlay {} has outstanding mac handle refs", u.name);
-                return DDI_FAILURE;
-            }
-            drop(u.mh);
         }
     }
+    // Drop the lock, and ensure we only have the raw ptr (and not
+    // a `&'static XdeState`) again.
+
+    // Reattach the XdeState to a Box, which takes ownership and will
+    // free it on drop.
+    drop(Box::from_raw(state));
 
     // Remove control device
     ddi_remove_minor_node(xde_dip, XDE_STR);
@@ -1222,7 +1298,7 @@ static mut xde_devops: dev_ops = dev_ops {
     // Safety: Yes, this is a mutable static. No, there is no race as
     // it's mutated only during `_init()`. Yes, it needs to be mutable
     // to allow `dld_init_ops()` to set `cb_str`.
-    devo_cb_ops: unsafe { &xde_cb_ops },
+    devo_cb_ops: unsafe { addr_of!(xde_cb_ops) },
     devo_bus_ops: 0 as *const bus_ops,
     devo_power: nodev_power,
     devo_quiesce: ddi_quiesce_not_needed,
@@ -1231,9 +1307,9 @@ static mut xde_devops: dev_ops = dev_ops {
 #[no_mangle]
 static xde_modldrv: modldrv = unsafe {
     modldrv {
-        drv_modops: &mod_driverops,
+        drv_modops: addr_of!(mod_driverops),
         drv_linkinfo: XDE_STR,
-        drv_dev_ops: &xde_devops,
+        drv_dev_ops: addr_of!(xde_devops),
     }
 };
 
@@ -1330,14 +1406,10 @@ unsafe extern "C" fn xde_mc_unicst(
 }
 
 fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
-    use opte::engine::rule::flow_id_sdt_arg;
-
-    let fid_arg = flow_id_sdt_arg::from(pkt.flow());
-
     unsafe {
         __dtrace_probe_guest__loopback(
             pkt.mblk_addr(),
-            &fid_arg as *const flow_id_sdt_arg as uintptr_t,
+            pkt.flow(),
             src.port.name_cstr().as_ptr() as uintptr_t,
             dst.port.name_cstr().as_ptr() as uintptr_t,
         )
@@ -1428,45 +1500,68 @@ unsafe extern "C" fn xde_mc_tx(
     // The device must be started before we can transmit.
     let src_dev = &*(arg as *mut XdeDev);
 
-    // TODO I haven't dealt with chains, though I'm pretty sure it's
-    // always just one.
-    assert!((*mp_chain).b_next.is_null());
-    __dtrace_probe_tx(mp_chain as uintptr_t);
-
     // ================================================================
-    // IMPORTANT: Packet now takes ownership of mp_chain. When Packet
-    // is dropped so is the chain. Be careful with any calls involving
-    // mp_chain after this point. They should only be calls that read,
-    // nothing that writes or frees. But really you should think of
-    // mp_chain as &mut and avoid any reference to it past this point.
-    // Owernship is taken back by calling Packet::unwrap_mblk().
+    // IMPORTANT: PacketChain now takes ownership of mp_chain, and each
+    // Packet takes ownership of an mblk_t from mp_chain. When these
+    // structs are dropped, so are any contained packets at those pointers.
+    // Be careful with any calls involving mblk_t pointers (or their
+    // uintptr_t numeric forms) after this point. They should only be calls
+    // that read (i.e., SDT arguments), nothing that writes or frees. But
+    // really you should think of mp_chain as &mut and avoid any reference
+    // to it past this point. Ownership is taken back by calling
+    // Packet/PacketChain::unwrap_mblk().
     //
-    // XXX Make this fool proof by converting the mblk_t pointer to an
-    // &mut or some smart pointer type that can be truly owned by the
-    // Packet type. This way rustc gives us lifetime enforcement
-    // instead of my code comments. But that work is more involved
-    // than the immediate fix that needs to happen.
+    // XXX We may use Packet types with non-'static lifetimes in future.
+    //     We *will* still need to remain careful here and `xde_rx` as
+    //     pointers are `Copy`.
     // ================================================================
+    __dtrace_probe_tx(mp_chain as uintptr_t);
+    let Ok(mut chain) = PacketChain::new(mp_chain) else {
+        bad_packet_probe(
+            Some(src_dev.port.name_cstr()),
+            Direction::Out,
+            mp_chain as uintptr_t,
+            c"rx'd packet chain from guest was null",
+        );
+        return ptr::null_mut();
+    };
+
+    // TODO: In future we may want to batch packets for further tx
+    // by the mch they're being targeted to. E.g., either build a list
+    // of chains (u1, u2, port0, port1, ...), or hold tx until another
+    // packet breaks the run targeting the same dest.
+    while let Some(pkt) = chain.pop_front() {
+        xde_mc_tx_one(src_dev, pkt);
+    }
+
+    ptr::null_mut()
+}
+
+#[inline]
+unsafe fn xde_mc_tx_one(
+    src_dev: &XdeDev,
+    pkt: Packet<Initialized>,
+) -> *mut mblk_t {
     let parser = src_dev.port.network().parser();
-    let mut pkt =
-        match Packet::wrap_mblk_and_parse(mp_chain, Direction::Out, parser) {
-            Ok(pkt) => pkt,
-            Err(e) => {
-                // TODO Add bad packet stat.
-                //
-                // NOTE: We are using mp_chain as read only here to get
-                // the pointer value so that the DTrace consumer can
-                // examine the packet on failure.
-                bad_packet_parse_probe(
-                    Some(src_dev.port.name_cstr()),
-                    Direction::Out,
-                    mp_chain,
-                    &e,
-                );
-                opte::engine::dbg!("Rx bad packet: {:?}", e);
-                return ptr::null_mut();
-            }
-        };
+    let mblk_addr = pkt.mblk_addr();
+    let mut pkt = match pkt.parse(Direction::Out, parser) {
+        Ok(pkt) => pkt,
+        Err(e) => {
+            // TODO Add bad packet stat.
+            //
+            // NOTE: We are using the individual mblk_t as read only
+            // here to get the pointer value so that the DTrace consumer
+            // can examine the packet on failure.
+            opte::engine::dbg!("Rx bad packet: {:?}", e);
+            bad_packet_parse_probe(
+                Some(src_dev.port.name_cstr()),
+                Direction::Out,
+                mblk_addr,
+                &e.into(),
+            );
+            return ptr::null_mut();
+        }
+    };
 
     // Choose u1 as a starting point. This may be changed in the next_hop
     // function when we are actually able to determine what interface should be
@@ -1537,8 +1632,14 @@ unsafe extern "C" fn xde_mc_tx(
             // for the mac associated with the IRE nexthop to fill in
             // the outer frame of the packet. Also return the underlay
             // device associated with the nexthop
-            let (src, dst, underlay_dev) =
-                next_hop(&ip6.dst, src_dev, meta.l4_hash());
+            //
+            // As route lookups are fairly expensive, we can cache their
+            // results for a given dst + entropy. These have a fairly tight
+            // expiry so that we can actually react to new reachability/load
+            // info from DDM.
+            let my_key = RouteKey { dst: ip6.dst, l4_hash: meta.l4_hash() };
+            let Route { src, dst, underlay_dev } =
+                src_dev.routes.next_hop(my_key, src_dev);
 
             // Get a pointer to the beginning of the outer frame and
             // fill in the dst/src addresses before sending out the
@@ -1579,7 +1680,7 @@ unsafe extern "C" fn xde_mc_tx(
 
 /// This is a generic wrapper for references that should be dropped once not in
 /// use.
-struct DropRef<DropFn, Arg>
+pub(crate) struct DropRef<DropFn, Arg>
 where
     DropFn: Fn(*mut Arg),
 {
@@ -1595,12 +1696,12 @@ where
 {
     /// Create a new `DropRef` for the provided reference argument. When this
     /// object is dropped, the provided `func` will be called.
-    fn new(func: DropFn, arg: *mut Arg) -> Self {
+    pub(crate) fn new(func: DropFn, arg: *mut Arg) -> Self {
         Self { func, arg }
     }
 
     /// Return a pointer to the underlying reference.
-    fn inner(&self) -> *mut Arg {
+    pub(crate) fn inner(&self) -> *mut Arg {
         self.arg
     }
 }
@@ -1614,344 +1715,6 @@ where
         if !self.arg.is_null() {
             (self.func)(self.arg);
         }
-    }
-}
-
-// The following are wrappers for reference drop functions used in XDE.
-
-fn ire_refrele(ire: *mut ip::ire_t) {
-    unsafe { ip::ire_refrele(ire) }
-}
-
-fn nce_refrele(ire: *mut ip::nce_t) {
-    unsafe { ip::nce_refrele(ire) }
-}
-
-fn netstack_rele(ns: *mut ip::netstack_t) {
-    unsafe { ip::netstack_rele(ns) }
-}
-
-// At this point the core engine of OPTE has delivered a Geneve
-// encapsulated guest Ethernet Frame (also simply referred to as "the
-// packet") to xde to be sent to the specific outer IPv6 destination
-// address. This packet includes the outer Ethernet Frame as well;
-// however, the outer frame's destination and source addresses are set
-// to zero. It is the job of this function to determine what those
-// values should be.
-//
-// Adjacent to xde is the native IPv6 stack along with its routing
-// table. This table is routinely updated to indicate the best path to
-// any given IPv6 destination that may be specified in the outer IP
-// header. As xde is not utilizing the native IPv6 stack to send out
-// the packet, but rather is handing it directly to the mac module, it
-// must somehow query the native routing table to determine which port
-// this packet should egress and fill in the outer frame accordingly.
-// This query is done via a private interface which allows a kernel
-// module outside of IP to query the routing table.
-//
-// This process happens in a sequence of steps described below.
-//
-// 1. With an IPv6 destination in hand we need to determine the next
-//    hop, also known as the gateway, for this address. That is, of
-//    our neighbors (in this case one of the two switches, which are
-//    also acting as routers), who should we forward this packet to in
-//    order for it to arrive at its destination? We get this
-//    information from the routing table, which contains Internet
-//    Routing Entries, or IREs. Specifically, we query the native IPv6
-//    routing table using the kernel function
-//    `ire_ftable_lookup_simple_v6()`. This function returns an
-//    `ire_t`, which includes the member `ire_u`, which contains the
-//    address of the gateway as `ire6_gateway_addr`.
-//
-// 2. We have the gateway IPv6 address; but in the world of the Oxide
-//    Network that is not enough to deliver the packet. In the Oxide
-//    Network the router (switch) is not a member of the host's
-//    network. Instead, we rely on link-local addresses to reach the
-//    switches. The lookup in step (1) gave us that link-local address
-//    of the gateway; now we need to figure out how to reach it. That
-//    requires consulting the routing table a second time: this time
-//    to find the IRE for the gateway's link-local address.
-//
-// 3. The IRE of the link-local address from step (2) allows us to
-//    determine which interface this traffic should traverse.
-//    Specifically it gives us access to the `ill_t` of the gateway's
-//    link-local address. This structure contains the IP Lower Level
-//    information. In particular it contains the `ill_phys_addr`
-//    which gives us the source MAC address for our outer frame.
-//
-// 4. The final piece of information to obtain is the destination MAC
-//    address. We have the link-local address of the switch port we
-//    want to send to. To get the MAC address of this port it must
-//    first be assumed that the host and its connected switches have
-//    performed NDP in order to learn each other's IPv6 addresses and
-//    corresponding MAC addresses. With that information in hand it is
-//    a matter of querying the kernel's Neighbor Cache Entry Table
-//    (NCE) for the mapping that belongs to our gateway's link-local
-//    address. This is done via the `nce_lookup_v6()` kernel function.
-//
-// With those four steps we have obtained the source and destination
-// MAC addresses and the packet can be sent to mac to be delivered to
-// the underlying NIC. However, the careful reader may find themselves
-// confused about how step (1) actually works.
-//
-//   If step (1) always returns a single gateway, then how do we
-//   actually utilize both NICs/switches?
-//
-// This is where a bit of knowledge about routing tables comes into
-// play along with our very own Delay Driven Multipath in-rack routing
-// protocol. You might imagine the IPv6 routing table on an Oxide Sled
-// looking something like this.
-//
-// Destination/Mask             Gateway                 Flags  If
-// ----------------          -------------------------  ----- ---------
-// default                   fe80::<sc1_p5>             UG     cxgbe0
-// default                   fe80::<sc1_p6>             UG     cxgbe1
-// fe80::/10                 fe80::<sc1_p5>             U      cxgbe0
-// fe80::/10                 fe80::<sc1_p6>             U      cxgbe1
-// fd00:<rack1_sled1>::/64   fe80::<sc1_p5>             U      cxgbe0
-// fd00:<rack1_sled1>::/64   fe80::<sc1_p6>             U      cxgbe1
-//
-// Let's say this host (sled1) wants to send a packet to sled2. Our
-// sled1 host lives on network `fd00:<rack1_sled1>::/64` while our
-// sled2 host lives on `fd00:<rack1_seld2>::/64` -- the key point
-// being they are two different networks and thus must be routed to
-// talk to each other. For sled1 to send this packet it will attempt
-// to look up destination `fd00:<rack1_sled2>::7777` (in this case
-// `7777` is the IP of sled2) in the routing table above. The routing
-// table will then perform a longest prefix match against the
-// `Destination` field for all entries: the longest prefix that
-// matches wins and that entry is returned. However, in this case, no
-// destinations match except for the `default` ones. When more than
-// one entry matches it is left to the system to decide which one to
-// return; typically this just means the first one that matches. But
-// not for us! This is where DDM comes into play.
-//
-// Let's reimagine the routing table again, this time with a
-// probability added to each gateway entry.
-//
-// Destination/Mask             Gateway                 Flags  If      P
-// ----------------          -------------------------  ----- ------- ----
-// default                   fe80::<sc1_p5>             UG     cxgbe0  0.70
-// default                   fe80::<sc1_p6>             UG     cxgbe1  0.30
-// fe80::/10                 fe80::<sc1_p5>             U      cxgbe0
-// fe80::/10                 fe80::<sc1_p6>             U      cxgbe1
-// fd00:<rack1_sled1>::/64   fe80::<sc1_p5>             U      cxgbe0
-// fd00:<rack1_sled1>::/64   fe80::<sc1_p6>             U      cxgbe1
-//
-// With these P values added we now have a new option for deciding
-// which IRE to return when faced with two matches: give each a
-// probability of return based on their P value. In this case, for any
-// given gateway IRE lookup, there would be a 70% chance
-// `fe80::<sc1_p5>` is returned and a 30% chance `fe80::<sc1_p6>` is
-// returned.
-//
-// But wait, what determines those P values? That's the job of DDM.
-// The full story of what DDM is and how it works is outside the scope
-// of this already long block comment; but suffice to say it monitors
-// the flow of the network based on precise latency measurements and
-// with that data constantly refines the P values of all the hosts's
-// routing tables to bias new packets towards one path or another.
-#[no_mangle]
-fn next_hop<'a>(
-    ip6_dst: &Ipv6Addr,
-    ustate: &'a XdeDev,
-    overlay_hash: Option<u32>,
-) -> (EtherAddr, EtherAddr, &'a xde_underlay_port) {
-    unsafe {
-        // Use the GZ's routing table.
-        let netstack =
-            DropRef::new(netstack_rele, ip::netstack_find_by_zoneid(0));
-        assert!(!netstack.inner().is_null());
-        let ipst = (*netstack.inner()).netstack_u.nu_s.nu_ip;
-        assert!(!ipst.is_null());
-
-        let addr = ip::in6_addr_t {
-            _S6_un: ip::in6_addr__bindgen_ty_1 { _S6_u8: ip6_dst.bytes() },
-        };
-        let xmit_hint = overlay_hash.unwrap_or(0);
-        let mut generation_op = 0u32;
-
-        let mut underlay_port = &*ustate.u1;
-
-        // Step (1): Lookup the IRE for the destination. This is going
-        // to return one of the default gateway entries.
-        let ire = DropRef::new(
-            ire_refrele,
-            ip::ire_ftable_lookup_v6(
-                &addr,
-                ptr::null(),
-                ptr::null(),
-                0,
-                ptr::null_mut(),
-                sys::ALL_ZONES,
-                ptr::null(),
-                0,
-                xmit_hint,
-                ipst,
-                &mut generation_op as *mut ip::uint_t,
-            ),
-        );
-
-        // TODO If there is no entry should we return host
-        // unreachable? I'm not sure since really the guest would map
-        // that with its VPC network. That is, if a user saw host
-        // unreachable they would be correct to think that their VPC
-        // routing table is misconfigured, but in reality it would be
-        // an underlay network issue. How do we convey this situation
-        // to the user/operator?
-        if ire.inner().is_null() {
-            // Try without a pinned ill
-            opte::engine::dbg!("no IRE for destination {:?}", ip6_dst);
-            next_hop_probe(
-                ip6_dst,
-                None,
-                EtherAddr::zero(),
-                EtherAddr::zero(),
-                b"no IRE for destination\0",
-            );
-            return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
-        }
-        let ill = (*ire.inner()).ire_ill;
-        if ill.is_null() {
-            opte::engine::dbg!("destination ILL is NULL for {:?}", ip6_dst);
-            next_hop_probe(
-                ip6_dst,
-                None,
-                EtherAddr::zero(),
-                EtherAddr::zero(),
-                b"destination ILL is NULL\0",
-            );
-            return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
-        }
-
-        // Step (2): Lookup the IRE for the gateway's link-local
-        // address. This is going to return one of the `fe80::/10`
-        // entries.
-        let ireu = (*ire.inner()).ire_u;
-        let gw = ireu.ire6_u.ire6_gateway_addr;
-        let gw_ip6 = Ipv6Addr::from(&ireu.ire6_u.ire6_gateway_addr);
-
-        // NOTE: specifying the ill is important here, because the gateway
-        // address is going to be of the form fe80::<interface-id>. This means a
-        // simple query that does not specify an ill could come back with any
-        // route matching fe80::/10 over any interface. Since all interfaces
-        // that have an IPv6 link-local address assigned have an associated
-        // fe80::/10 route, we must restrict our search to the interface that
-        // actually has a route to the desired (non-link-local) destination.
-        let flags = ip::MATCH_IRE_ILL as i32;
-        let gw_ire = DropRef::new(
-            ire_refrele,
-            ip::ire_ftable_lookup_v6(
-                &gw,
-                ptr::null(),
-                ptr::null(),
-                0,
-                ill,
-                sys::ALL_ZONES,
-                ptr::null(),
-                flags,
-                xmit_hint,
-                ipst,
-                &mut generation_op as *mut ip::uint_t,
-            ),
-        );
-
-        if gw_ire.inner().is_null() {
-            opte::engine::dbg!("no IRE for gateway {:?}", gw_ip6);
-            next_hop_probe(
-                ip6_dst,
-                Some(&gw_ip6),
-                EtherAddr::zero(),
-                EtherAddr::zero(),
-                b"no IRE for gateway\0",
-            );
-            return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
-        }
-
-        // Step (3): Determine the source address of the outer frame
-        // from the physical address of the IP Lower Layer object
-        // member or the internet routing entry.
-        let src = (*ill).ill_phys_addr;
-        if src.is_null() {
-            opte::engine::dbg!(
-                "gateway ILL phys addr is NULL for {:?}",
-                gw_ip6
-            );
-            next_hop_probe(
-                ip6_dst,
-                Some(&gw_ip6),
-                EtherAddr::zero(),
-                EtherAddr::zero(),
-                b"gateway ILL phys addr is NULL\0",
-            );
-            return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
-        }
-
-        let src: [u8; 6] = alloc::slice::from_raw_parts(src, 6)
-            .try_into()
-            .expect("src mac from pointer");
-
-        // Switch to the 2nd underlay device if we determine the source mac
-        // belongs to that device.
-        if src == ustate.u2.mac {
-            underlay_port = &ustate.u2;
-        }
-
-        let src = EtherAddr::from(src);
-
-        // Step (4): Determine the destination address of the outer
-        // frame by retrieving the NCE entry for the gateway's
-        // link-local address.
-        let nce = DropRef::new(nce_refrele, ip::nce_lookup_v6(ill, &gw));
-        if nce.inner().is_null() {
-            opte::engine::dbg!("no NCE for gateway {:?}", gw_ip6);
-            next_hop_probe(
-                ip6_dst,
-                Some(&gw_ip6),
-                src,
-                EtherAddr::zero(),
-                b"no NCE for gateway\0",
-            );
-            return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
-        }
-
-        let nce_common = (*nce.inner()).nce_common;
-        if nce_common.is_null() {
-            opte::engine::dbg!("no NCE common for gateway {:?}", gw_ip6);
-            next_hop_probe(
-                ip6_dst,
-                Some(&gw_ip6),
-                src,
-                EtherAddr::zero(),
-                b"no NCE common for gateway\0",
-            );
-            return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
-        }
-
-        let mac = (*nce_common).ncec_lladdr;
-        if mac.is_null() {
-            opte::engine::dbg!("NCE MAC address is NULL {:?}", gw_ip6);
-            next_hop_probe(
-                ip6_dst,
-                Some(&gw_ip6),
-                src,
-                EtherAddr::zero(),
-                b"NCE MAC address if NULL for gateway\0",
-            );
-            return (EtherAddr::zero(), EtherAddr::zero(), underlay_port);
-        }
-
-        let maclen = (*nce_common).ncec_lladdr_length;
-        assert!(maclen == 6);
-
-        let dst: [u8; 6] = alloc::slice::from_raw_parts(mac, 6)
-            .try_into()
-            .expect("mac from pointer");
-        let dst = EtherAddr::from(dst);
-
-        next_hop_probe(ip6_dst, Some(&gw_ip6), src, dst, b"\0");
-
-        (src, dst, underlay_port)
     }
 }
 
@@ -2045,41 +1808,61 @@ unsafe extern "C" fn xde_rx(
     mp_chain: *mut mblk_t,
     _is_loopback: boolean_t,
 ) {
-    // XXX Need to deal with chains. This was an assert but it's
-    // blocking other work that's more pressing at the moment as I
-    // keep tripping it.
-    if !(*mp_chain).b_next.is_null() {
-        __dtrace_probe_rx__chain__todo(mp_chain as uintptr_t);
-    }
     __dtrace_probe_rx(mp_chain as uintptr_t);
 
-    // Safety: This arg comes from `Arc::as_ptr()` on the `MacClientHandle`
+    // Safety: This arg comes from `Arc::from_ptr()` on the `MacClientHandle`
     // corresponding to the underlay port we're receiving on. Being
     // here in the callback means the `MacPromiscHandle` hasn't been
     // dropped yet and thus our `MacClientHandle` is also still valid.
     let mch_ptr = arg as *const MacClientHandle;
     Arc::increment_strong_count(mch_ptr);
-    let mch = Arc::from_raw(mch_ptr);
+    let mch: Arc<MacClientHandle> = Arc::from_raw(mch_ptr);
 
+    let Ok(mut chain) = PacketChain::new(mp_chain) else {
+        bad_packet_probe(
+            None,
+            Direction::Out,
+            mp_chain as uintptr_t,
+            c"rx'd packet chain was null",
+        );
+        return;
+    };
+
+    // TODO: In future we may want to batch packets for further tx
+    // by the mch they're being targeted to. E.g., either build a list
+    // of chains (port0, port1, ...), or hold tx until another
+    // packet breaks the run targeting the same dest.
+    while let Some(pkt) = chain.pop_front() {
+        xde_rx_one(&mch, mrh, pkt);
+    }
+}
+
+#[inline]
+unsafe fn xde_rx_one(
+    mch: &MacClientHandle,
+    mrh: *mut mac::mac_resource_handle,
+    pkt: Packet<Initialized>,
+) {
     // We must first parse the packet in order to determine where it
     // is to be delivered.
     let parser = VpcParser {};
-    let mut pkt =
-        match Packet::wrap_mblk_and_parse(mp_chain, Direction::In, parser) {
-            Ok(pkt) => pkt,
-            Err(e) => {
-                // TODO Add bad packet stat.
-                //
-                // NOTE: We are using mp_chain as read only here to get
-                // the pointer value so that the DTrace consumer can
-                // examine the packet on failure.
-                //
-                // We don't know the port yet, thus the None.
-                bad_packet_parse_probe(None, Direction::In, mp_chain, &e);
-                opte::engine::dbg!("Tx bad packet: {:?}", e);
-                return;
-            }
-        };
+    let mblk_addr = pkt.mblk_addr();
+    let mut pkt = match pkt.parse(Direction::In, parser) {
+        Ok(pkt) => pkt,
+        Err(e) => {
+            // TODO Add bad packet stat.
+            //
+            // NOTE: We are using the individual mblk_t as read only
+            // here to get the pointer value so that the DTrace consumer
+            // can examine the packet on failure.
+            //
+            // We don't know the port yet, thus the None.
+            opte::engine::dbg!("Tx bad packet: {:?}", e);
+            bad_packet_parse_probe(None, Direction::In, mblk_addr, &e.into());
+
+            return;
+        }
+    };
 
     let meta = pkt.meta();
     let devs = xde_devs.read();
@@ -2091,7 +1874,7 @@ unsafe extern "C" fn xde_rx(
         None => {
             // TODO add stat
             let msg = c"no geneve header, dropping";
-            bad_packet_probe(None, Direction::In, mp_chain, msg);
+            bad_packet_probe(None, Direction::In, pkt.mblk_addr(), msg);
             opte::engine::dbg!("no geneve header, dropping");
             return;
         }
@@ -2114,21 +1897,18 @@ unsafe extern "C" fn xde_rx(
 
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
-        mac::mac_rx(dev.mh, mrh, mp_chain);
+        mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
         return;
     }
 
     let port = &dev.port;
     let res = port.process(Direction::In, &mut pkt, ActionMeta::new());
     match res {
-        Ok(ProcessResult::Modified) => {
+        Ok(ProcessResult::Modified | ProcessResult::Bypass) => {
             mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
             mch.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
-        }
-        Ok(ProcessResult::Bypass) => {
-            mac::mac_rx(dev.mh, mrh, mp_chain);
         }
         _ => {}
     }
@@ -2198,10 +1978,18 @@ fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 }
 
 #[no_mangle]
+fn clear_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: ClearVirt2PhysReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    state.vpc_map.del(&req.vip, &req.phys);
+    Ok(NoResp::default())
+}
+
+#[no_mangle]
 fn dump_v2p_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<overlay::DumpVirt2PhysResp, OpteError> {
-    let _req: overlay::DumpVirt2PhysReq = env.copy_in_req()?;
+) -> Result<DumpVirt2PhysResp, OpteError> {
+    let _req: DumpVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
     Ok(state.vpc_map.dump())
 }
@@ -2225,8 +2013,8 @@ fn clear_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 #[no_mangle]
 fn dump_v2b_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<overlay::DumpVirt2BoundaryResp, OpteError> {
-    let _req: overlay::DumpVirt2BoundaryReq = env.copy_in_req()?;
+) -> Result<DumpVirt2BoundaryResp, OpteError> {
+    let _req: DumpVirt2BoundaryReq = env.copy_in_req()?;
     let state = get_xde_state();
     Ok(state.v2b.dump())
 }

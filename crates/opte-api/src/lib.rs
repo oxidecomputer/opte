@@ -47,7 +47,7 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 28;
+pub const API_VERSION: u64 = 31;
 
 /// Major version of the OPTE package.
 pub const MAJOR_VERSION: u64 = 0;
@@ -86,4 +86,10 @@ impl Display for Direction {
 pub struct SetXdeUnderlayReq {
     pub u1: String,
     pub u2: String,
+}
+
+/// Clear the underlay devices used by the xde kernel module
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClearXdeUnderlayReq {
+    pub _unused: u64,
 }
