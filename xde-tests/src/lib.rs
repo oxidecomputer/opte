@@ -50,8 +50,8 @@ impl OpteZone {
     /// Create a new zone with the given name, underlying zfs instance and set
     /// of interfaces. In illumos parlance, the interfaces are data link
     /// devices.
-    fn new(name: &str, zfs: &Zfs, ifx: &[&str]) -> Result<Self> {
-        let zone = Zone::new(name, "sparse", zfs, ifx, &[])?;
+    fn new(name: &str, zfs: &Zfs, ifx: &[&str], brand: &str) -> Result<Self> {
+        let zone = Zone::new(name, brand, zfs, ifx, &[])?;
         Ok(Self { zone })
     }
 
@@ -347,9 +347,9 @@ pub fn two_node_topology() -> Result<Topology> {
 
     // Create a pair of zones to simulate our VM instances.
     println!("start zone a");
-    let a = OpteZone::new("a", &zfs, &[&vopte0.name])?;
+    let a = OpteZone::new("a", &zfs, &[&vopte0.name], "sparse")?;
     println!("start zone b");
-    let b = OpteZone::new("b", &zfs, &[&vopte1.name])?;
+    let b = OpteZone::new("b", &zfs, &[&vopte1.name], "sparse")?;
 
     println!("setup zone a");
     a.setup(&vopte0.name, opte0.ip())?;
@@ -430,6 +430,7 @@ pub fn single_node_over_real_nic(
     underlay: &[String; 2],
     my_info: PortInfo,
     peers: &[PortInfo],
+    brand: &str,
 ) -> Result<Topology> {
     Xde::set_xde_underlay(&underlay[0], &underlay[1])?;
     let xde = Xde {};
@@ -459,7 +460,7 @@ pub fn single_node_over_real_nic(
     let zfs = Arc::new(Zfs::new("opte1node")?);
 
     println!("start zone");
-    let a = OpteZone::new("a", &zfs, &[&vopte.name])?;
+    let a = OpteZone::new("a", &zfs, &[&vopte.name], brand)?;
 
     std::thread::sleep(Duration::from_secs(30));
 
