@@ -5,38 +5,19 @@ Today, SN9/SN14 are set up in this configuration.
 
 == Image construction
 When https://github.com/oxidecomputer/helios[building a helios image], we need to include some extra packages and pull in the latest (host-installed) version of OPTE.
-The below patch adds these packages behind a conditional flag:
-
-[source, diff]
-----
-diff --git a/image/templates/gimlet/ramdisk-01-os.json b/image/templates/gimlet/ramdisk-01-os.json
-index a063784..c81974f 100644
---- a/image/templates/gimlet/ramdisk-01-os.json
-+++ b/image/templates/gimlet/ramdisk-01-os.json
-@@ -105,6 +105,14 @@
-             "/driver/developer/amd/zen"
-         ] },
-
-+        { "t": "pkg_install", "with": "netperf", "pkgs": [
-+            "/network/test/iperf",
-+            "/driver/network/opte",
-+            "/system/zones/brand/sparse",
-+            "/system/library/demangle",
-+            "/ooce/developer/flamegraph"
-+        ] },
-+
-         { "t": "pkg_install", "with": "compliance", "pkgs": [
-             "/driver/developer/amd/zen",
-             "/developer/debug/humility"
-----
-
 After following instructions to setup Helios and build illumos, a Helios image suitable for running `kbench` can then be built using the command:
 
 [source, bash]
 ----
-./helios-build experiment-image -F netperf -B -N netperf
+./helios-build experiment-image \
+  -F extra_packages+=/network/test/iperf \
+  -F extra_packages+=/system/library/demangle \
+  -F extra_packages+=/ooce/developer/flamegraph \
+  -F optever=0.31.264 \
+  -B -N netperf
 ----
 
+The version of opte installed here is unimportant, as we will often be using local unpublished binaries and modules for testing.
 This image may then be installed onto your bench gimlet(s) as standard.
 
 == Running kbench on a bench gimlet
