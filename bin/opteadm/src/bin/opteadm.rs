@@ -4,6 +4,7 @@
 
 // Copyright 2024 Oxide Computer Company
 
+use anyhow::Context;
 use clap::Args;
 use clap::Parser;
 use opte::api::Direction;
@@ -256,7 +257,7 @@ enum Command {
         /// Control whether traffic on the CIDR should be allowed for
         /// inbound or outbound traffic.
         #[arg(long = "dir")]
-        direction: Direction,
+        direction: Option<Direction>,
     },
 
     /// Prevents a guest from sending/receiving traffic on a given CIDR block.
@@ -271,7 +272,7 @@ enum Command {
         /// Control whether traffic on the CIDR should be allowed for
         /// inbound or outbound traffic.
         #[arg(long = "dir")]
-        direction: Direction,
+        direction: Option<Direction>,
     },
 }
 
@@ -799,16 +800,50 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::AllowCidr { port, prefix, direction } => {
-            hdl.allow_cidr(&port, prefix, direction)?;
+            if let Some(dir) = direction {
+                hdl.allow_cidr(&port, prefix, dir)?;
+            } else {
+                hdl.allow_cidr(&port, prefix, Direction::In)
+                    .context("failed to allow on inbound direction")?;
+                hdl.allow_cidr(&port, prefix, Direction::Out).inspect_err(
+                    |e| {
+                        hdl.remove_cidr(&port, prefix, Direction::In).expect(
+                            &format!(
+                                "FATAL: failed to rollback in-direction allow \
+                                of {prefix} after {e}"
+                            ),
+                        );
+                    },
+                )?;
+            }
         }
 
         Command::RemoveCidr { port, prefix, direction } => {
-            if let RemoveCidrResp::NotFound =
-                hdl.remove_cidr(&port, prefix, direction)?
-            {
-                anyhow::bail!(
-                    "could not remove cidr {prefix} from gateway -- not found"
-                );
+            let remove_cidr = |dir: Direction| -> anyhow::Result<()> {
+                if let RemoveCidrResp::NotFound =
+                    hdl.remove_cidr(&port, prefix, dir)?
+                {
+                    anyhow::bail!(
+                        "could not remove cidr {prefix} from gateway ({dir}) -- not found"
+                    );
+                }
+
+                Ok(())
+            };
+
+            if let Some(dir) = direction {
+                remove_cidr(dir)?;
+            } else {
+                remove_cidr(Direction::In)
+                    .context("failed to deny on inbound direction")?;
+                remove_cidr(Direction::Out).inspect_err(|e| {
+                    hdl.allow_cidr(&port, prefix, Direction::In).expect(
+                        &format!(
+                            "FATAL: failed to rollback in-direction remove \
+                                of {prefix} after {e}"
+                        ),
+                    );
+                })?;
             }
         }
     }
