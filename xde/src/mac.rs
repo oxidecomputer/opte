@@ -2,12 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Safe abstractions for the mac client API.
 //!
 //! NOTE: This module is re-exporting all of the sys definitions at
 //! the moment out of laziness.
+use crate::dls::DldStreamInner;
+
 pub use super::mac_sys::*;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -221,7 +223,7 @@ impl MacClientHandle {
         };
 
         if ret == 0 {
-            Ok(MacPromiscHandle { mph, mch })
+            Ok(MacPromiscHandle { mph, parent: mch })
         } else {
             Err(ret)
         }
@@ -305,7 +307,8 @@ pub struct MacPromiscHandle<P> {
     pub(crate) mph: *mut mac_promisc_handle,
 
     /// The `MacClientHandle` used to create this promiscuous callback.
-    mch: *const MacClientHandle,
+    /// MUST BE A RAW ARC.
+    pub(crate) parent: *const P,
 }
 
 impl<P> Drop for MacPromiscHandle<P> {
@@ -315,7 +318,7 @@ impl<P> Drop for MacPromiscHandle<P> {
         // is valid.
         unsafe {
             mac_promisc_remove(self.mph);
-            Arc::from_raw(self.mch); // dropped immediately
+            Arc::from_raw(self.parent); // dropped immediately
         };
     }
 }

@@ -937,9 +937,6 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         };
 
         for u in [u1, u2] {
-            // Clear all Rx paths
-            u.mch.clear_rx();
-
             // We have a chain of refs here:
             //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
             //  2. `MacUnicastHandle` holds a ref to `MacClientHandle`, and
@@ -965,8 +962,14 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
                 {
                     0 => {}
                     err => {
-                        warn!("failed to get linkid for {}: {}", u.name, err);
-                        return DDI_FAILURE;
+                        return Err(OpteError::System {
+                            errno: EBUSY,
+                            msg: format!(
+                                "failed to get linkid for {}: {err}",
+                                u.name
+                            )
+                            .into(),
+                        });
                     }
                 }
             }
@@ -974,15 +977,18 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             let mph = match MacPerimeterHandle::from_linkid(link_id) {
                 Ok(mph) => mph,
                 Err(err) => {
-                    warn!(
-                        "failed to grab MAC perimeter for {}: {}",
-                        u.name, err
-                    );
-                    return DDI_FAILURE;
+                    return Err(OpteError::System {
+                        errno: EBUSY,
+                        msg: format!(
+                            "failed to grab MAC perimeter for {}: {err}",
+                            u.name
+                        )
+                        .into(),
+                    });
                 }
             };
 
-            stream.release(&mph);
+            Arc::try_unwrap(u.stream).unwrap().release(&mph);
             u.link.release(&mph);
         }
     }
@@ -1106,7 +1112,7 @@ fn create_underlay_port(
         }
     })?;
 
-    // XXX: error handling will be REALLY fucking bad here with these panic drops.
+    // XXX: error handling will be REALLY bad here with these panic drops.
     let link = DlsLink::hold(&mph).map_err(|e| OpteError::System {
         errno: EFAULT,
         msg: format!(
@@ -1142,31 +1148,6 @@ fn create_underlay_port(
         },
     )?;
 
-    // // Get a mac client handle as well.
-    // //
-    // let oflags = MacOpenFlags::NONE;
-    // let mch = MacClientHandle::open(&mh, Some(mc_name), oflags, 0)
-    //     .map(Arc::new)
-    //     .map_err(|e| OpteError::System {
-    //         errno: EFAULT,
-    //         msg: format!("mac_client_open failed for {link_name}: {e}"),
-    //     })?;
-
-    // // Setup promiscuous callback to receive all packets on this link.
-    // //
-    // // We specify `MAC_PROMISC_FLAGS_NO_TX_LOOP` here to skip receiving copies
-    // // of outgoing packets we sent ourselves.
-    // let mph = mch
-    //     .add_promisc(
-    //         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-    //         xde_rx,
-    //         mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
-    //     )
-    //     .map_err(|e| OpteError::System {
-    //         errno: EFAULT,
-    //         msg: format!("mac_promisc_add failed for {link_name}: {e}"),
-    //     })?;
-
     // Set up a unicast callback. The MAC address here is a sentinel value with
     // nothing real behind it. This is why we picked the zero value in the Oxide
     // OUI space for virtual MACs. The reason this is being done is that illumos
@@ -1188,10 +1169,7 @@ fn create_underlay_port(
     Ok(xde_underlay_port {
         name: link_name,
         mac: mh.get_mac_addr(),
-        // mh,
-        // mch,
         mph,
-        // muh,
         link,
         stream,
     })

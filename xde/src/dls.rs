@@ -420,7 +420,8 @@ impl DldStream {
         // until it is removed and so we can safely access it from the
         // callback via the `arg` pointer.
         let _parent = self.clone();
-        let arg = Arc::as_ptr(&_parent) as *mut c_void;
+        let parent = Arc::into_raw(_parent) as *mut _;
+        let arg = parent as *mut c_void;
         let mch = inner.dld_str.ds_mch;
         let ret = unsafe {
             // NOTE: arg is reinterpreted as `mac_resource_handle` -> `mac_ring`
@@ -429,7 +430,7 @@ impl DldStream {
         };
 
         if ret == 0 {
-            Ok(MacPromiscHandle { mph, _parent })
+            Ok(MacPromiscHandle { mph, parent })
         } else {
             Err(ret)
         }
