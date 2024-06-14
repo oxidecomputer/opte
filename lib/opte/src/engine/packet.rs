@@ -55,6 +55,7 @@ use core::ptr::NonNull;
 use core::result;
 use core::slice;
 use core::sync::atomic::AtomicBool;
+use core::sync::atomic::AtomicU64;
 use core::sync::atomic::AtomicUsize;
 use crc32fast::Hasher;
 use dyn_clone::DynClone;
@@ -744,8 +745,8 @@ impl<T> EssQueue<T> {
                 pkts.extend(taken);
             }
 
-            let a = self.sleepy.lock();
-            self.cv.wait(a);
+            // let a = self.sleepy.lock();
+            // self.cv.wait(a);
         }
 
         Ok(pkts)
