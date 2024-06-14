@@ -52,6 +52,7 @@ use opte::engine::udp::UdpMeta;
 use opte::engine::Direction;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::FirewallRule;
+use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
 use pcap::*;
@@ -267,6 +268,7 @@ fn port_transition_pause() {
             RouterTarget::VpcSubnet(IpCidr::Ip4(
                 g2_cfg.ipv4_cfg().unwrap().vpc_subnet
             )),
+            RouterClass::System,
         ),
         Err(OpteError::BadState(_))
     ));
@@ -444,6 +446,7 @@ fn guest_to_guest_no_route() {
         &g1.port,
         IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet)),
+        RouterClass::System,
     )
     .unwrap();
     update!(g1, ["incr:epoch", "set:router.rules.out=0"]);
@@ -707,6 +710,7 @@ fn guest_to_internet_ipv4() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -830,6 +834,7 @@ fn guest_to_internet_ipv6() {
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -1027,6 +1032,7 @@ fn multi_external_ip_setup(
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -1034,6 +1040,7 @@ fn multi_external_ip_setup(
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -1644,6 +1651,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -1651,6 +1659,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -2523,6 +2532,7 @@ fn outbound_ndp_dropped() {
         &g1.port,
         IpCidr::Ip6(ipv6.vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip6(ipv6.vpc_subnet)),
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["router.rules.out", "epoch"]);
@@ -2532,6 +2542,7 @@ fn outbound_ndp_dropped() {
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["router.rules.out", "epoch"]);
@@ -3034,6 +3045,7 @@ fn uft_lft_invalidation_out() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3120,6 +3132,7 @@ fn uft_lft_invalidation_in() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3441,6 +3454,7 @@ fn tcp_outbound() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3502,6 +3516,7 @@ fn early_tcp_invalidation() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3684,6 +3699,7 @@ fn tcp_inbound() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3949,6 +3965,7 @@ fn no_panic_on_flow_table_full() {
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
         RouterTarget::InternetGateway,
+        RouterClass::System,
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3980,4 +3997,231 @@ fn no_panic_on_flow_table_full() {
     );
     let res2 = g1.port.process(Out, &mut pkt2, ActionMeta::new());
     assert_drop!(res2, DropReason::TcpErr);
+}
+
+#[test]
+fn intra_subnet_routes_with_custom() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // This guest is 172.30.0.5 on 172.30.0.0/22.
+    // Suppose that we have a second subnet, 172.30.4.0/22.
+    // The control plane must insert a system route for as long
+    // as this subnet exists.
+    let cidr = IpCidr::Ip4("172.30.4.0/22".parse().unwrap());
+    router::add_entry(
+        &g1.port,
+        cidr.clone(),
+        RouterTarget::VpcSubnet(cidr.clone()),
+        RouterClass::System,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // define a guest in this range...
+    let dst_ip: Ipv4Addr = "172.30.4.5".parse().unwrap();
+    let other_guest_mac = ox_vpc_mac([0xF0, 0x00, 0x66]);
+    let other_guest_phys_ip = Ipv6Addr::from([
+        0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
+    ]);
+    g1.vpc_map.add(
+        dst_ip.into(),
+        PhysNet {
+            ether: other_guest_mac,
+            ip: other_guest_phys_ip,
+            vni: g1_cfg.vni,
+        },
+    );
+    let data = b"1234\0";
+
+    // Send one ICMP packet to that guest.
+    let mut pkt1 = gen_icmpv4_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip,
+        dst_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+
+    // Process the packet through our port. It should be allowed through:
+    // we have a V2P mapping for the target guest, and a route for the other
+    // subnet.
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.out_modified, stats.port.out_uft_miss, uft.out",
+        ]
+    );
+
+    // Suppose the user now installs a 'custom' route in the first subnet to
+    // drop traffic towards the second subnet. This rule must take priority.
+    router::add_entry(
+        &g1.port,
+        cidr.clone(),
+        RouterTarget::Drop,
+        RouterClass::Custom,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+    let mut pkt2 = gen_icmpv4_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip,
+        dst_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
+    assert!(matches!(
+        res,
+        Ok(ProcessResult::Drop {
+            reason: DropReason::Layer { name: "router", .. }
+        })
+    ));
+    update!(
+        g1,
+        [
+            "incr:stats.port.out_drop, stats.port.out_drop_layer",
+            "incr:stats.port.out_uft_miss",
+            "decr:uft.out"
+        ]
+    );
+
+    // When the user removes this rule, traffic may flow again to subnet 2.
+    router::del_entry(
+        &g1.port,
+        cidr.clone(),
+        RouterTarget::Drop,
+        RouterClass::Custom,
+    )
+    .unwrap();
+    update!(g1, ["incr:epoch", "decr:router.rules.out"]);
+    let mut pkt3 = gen_icmpv4_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip,
+        dst_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
+}
+
+#[test]
+fn port_as_router_target() {
+    // RFD 21 allows VPC routers to direct traffic on a subnet
+    // towards a given node. There are a few pieces here to consider:
+    // * Packet send from a node must send traffic to the correct
+    //   PhysNet -- underlay and macaddr of the receiving VM's port.
+    // * A node must be able to receive traffic on such a block.
+    let g1_cfg = g1_cfg();
+    let g2_cfg = g2_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
+    g1.port.start();
+    set!(g1, "port_state=running");
+    let mut g2 =
+        oxide_net_setup("g2_port", &g2_cfg, Some(g1.vpc_map.clone()), None);
+    g2.port.start();
+    set!(g2, "port_state=running");
+
+    // Node G2 is configured to carry and soft-route VPN traffic on
+    // 192.168.0.0/16.
+    let cidr = IpCidr::Ip4("192.168.0.0/16".parse().unwrap());
+    let dst_ip: Ipv4Addr = "192.168.0.1".parse().unwrap();
+    router::add_entry(
+        &g1.port,
+        cidr.clone(),
+        RouterTarget::Ip(g2_cfg.ipv4().private_ip.into()),
+        RouterClass::Custom,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // This also requires that we allow g2 to send/recv on this CIDR.
+    gateway::allow_cidr(&g2.port, cidr, Direction::In, g2.vpc_map.clone())
+        .unwrap();
+    gateway::allow_cidr(&g2.port, cidr, Direction::Out, g2.vpc_map.clone())
+        .unwrap();
+    incr!(g2, ["epoch, epoch, gateway.rules.out, gateway.rules.in"]);
+
+    let data = b"1234\0";
+
+    // Send one ICMP packet to that range.
+    let mut pkt1 = gen_icmpv4_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip,
+        dst_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+
+    // That packet should be allowed: the target IP resolves to a valid
+    // V2P Mapping.
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.out_modified, stats.port.out_uft_miss, uft.out",
+        ]
+    );
+
+    // Encap routes between sleds correctly, inner IPs are not modified,
+    // and L2 dst matches the guest's NIC.
+    let v6_encap_meta = pkt1.meta().outer.ip.as_ref().unwrap().ip6().unwrap();
+    assert_eq!(v6_encap_meta.src, g1_cfg.phys_ip);
+    assert_eq!(v6_encap_meta.dst, g2_cfg.phys_ip);
+    assert_eq!(pkt1.meta().inner_ether().dst, g2_cfg.guest_mac);
+    assert_eq!(pkt1.meta().inner_ether().src, g1_cfg.guest_mac);
+    assert_eq!(pkt1.meta().inner_ip4().unwrap().src, g1_cfg.ipv4().private_ip);
+    assert_eq!(pkt1.meta().inner_ip4().unwrap().dst, dst_ip);
+
+    // Now deliver the packet to node g2.
+    let res = g2.port.process(In, &mut pkt1, ActionMeta::new());
+    incr!(
+        g2,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.in_modified, stats.port.in_uft_miss, uft.in",
+        ]
+    );
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
+
+    // A reply from that address must be allowed out by g2, and accepted
+    // by g1.
+    let mut pkt2 = gen_icmpv4_echo_reply(
+        g2_cfg.guest_mac,
+        g2_cfg.gateway_mac,
+        dst_ip,
+        g1_cfg.ipv4().private_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+
+    let res = g2.port.process(Out, &mut pkt2, ActionMeta::new());
+    incr!(g2, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out",]);
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
+
+    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
+    assert!(matches!(res, Ok(ProcessResult::Modified)));
 }

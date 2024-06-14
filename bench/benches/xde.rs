@@ -7,6 +7,7 @@
 use anyhow::Result;
 use clap::Parser;
 use clap::Subcommand;
+use clap::ValueEnum;
 use itertools::Itertools;
 use opte_bench::iperf::Output;
 use opte_bench::kbench::measurement::*;
@@ -38,6 +39,32 @@ fn main() -> Result<()> {
     anyhow::bail!("This benchmark must be run on Helios!")
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ZoneBrand {
+    /// A sparse zone built using `pkg` info in the current GZ.
+    Sparse,
+    /// An omicron1-branded zone.
+    ///
+    /// You will need to ensure the baseline has been built to include
+    /// all intended dependencies.
+    Omicron1,
+}
+
+impl ZoneBrand {
+    fn to_str(&self) -> &'static str {
+        match self {
+            ZoneBrand::Sparse => "sparse",
+            ZoneBrand::Omicron1 => "omicron1",
+        }
+    }
+}
+
+impl std::fmt::Display for ZoneBrand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_str())
+    }
+}
+
 #[cfg(target_os = "illumos")]
 fn main() -> Result<()> {
     opte_bench::kbench::elevate()?;
@@ -46,12 +73,12 @@ fn main() -> Result<()> {
 
     match cfg.command {
         Experiment::Remote { iperf_server, opte_create, pause, .. } => {
-            check_deps(true, true)?;
+            check_deps(true, true, Some(opte_create.brand))?;
             over_nic(&opte_create, &iperf_server, pause)?;
             give_ownership()
         }
         Experiment::Local { no_bench, .. } => {
-            check_deps(true, !no_bench)?;
+            check_deps(true, !no_bench, Some(ZoneBrand::Sparse))?;
             if no_bench {
                 zone_to_zone_dummy()?;
             } else {
@@ -60,7 +87,7 @@ fn main() -> Result<()> {
             give_ownership()
         }
         Experiment::Server { opte_create, .. } => {
-            check_deps(false, true)?;
+            check_deps(false, true, Some(opte_create.brand))?;
             host_iperf(&opte_create)
         }
         Experiment::InSitu {
@@ -69,12 +96,12 @@ fn main() -> Result<()> {
             dont_process,
             ..
         } => {
-            check_deps(!dont_process, false)?;
+            check_deps(!dont_process, false, None)?;
             dtrace_only(&experiment_name, capture_mode, dont_process)?;
             give_ownership()
         }
         Experiment::Cleanup { .. } => {
-            check_deps(false, false)?;
+            check_deps(false, false, None)?;
             cleanup_detritus()
         }
     }
@@ -180,6 +207,14 @@ struct OpteCreateParams {
         default_value_t=DEFAULT_PORT,
     )]
     port: u16,
+
+    /// Type of Zone created to host iperf instances.
+    #[arg(
+        short,
+        long,
+        default_value_t=ZoneBrand::Sparse,
+    )]
+    brand: ZoneBrand,
 }
 
 #[derive(Parser)]
@@ -219,7 +254,11 @@ fn ensure_xde() -> Result<()> {
     }
 }
 
-fn check_deps(process_flamegraph: bool, iperf_based: bool) -> Result<()> {
+fn check_deps(
+    process_flamegraph: bool,
+    iperf_based: bool,
+    zone_type: Option<ZoneBrand>,
+) -> Result<()> {
     #[derive(Copy, Clone)]
     enum Dep {
         Program,
@@ -234,10 +273,16 @@ fn check_deps(process_flamegraph: bool, iperf_based: bool) -> Result<()> {
         ]);
     }
     if iperf_based {
-        dep_map.extend_from_slice(&[
-            (Dep::Program, "iperf", "iperf"),
-            (Dep::File, "/usr/lib/brand/sparse", "sparse"),
-        ]);
+        dep_map.extend_from_slice(&[(Dep::Program, "iperf", "iperf")]);
+        dep_map.extend_from_slice(match zone_type {
+            Some(ZoneBrand::Sparse) => {
+                &[(Dep::File, "/usr/lib/brand/sparse", "sparse")]
+            }
+            Some(ZoneBrand::Omicron1) => {
+                &[(Dep::File, "/usr/lib/brand/omicron1", "omicron1")]
+            }
+            _ => &[],
+        });
     }
 
     let mut missing_progs = vec![];
@@ -380,6 +425,7 @@ fn over_nic(params: &OpteCreateParams, host: &str, pause: bool) -> Result<()> {
         (&params.underlay_nics[..2]).try_into().unwrap(),
         xde_tests::ZONE_B_PORT,
         &[xde_tests::ZONE_A_PORT],
+        params.brand.to_str(),
     )?;
     print_banner("Topology built!");
 
@@ -497,6 +543,7 @@ fn host_iperf(params: &OpteCreateParams) -> Result<()> {
         (&params.underlay_nics[..2]).try_into().unwrap(),
         xde_tests::ZONE_A_PORT,
         &[xde_tests::ZONE_B_PORT],
+        params.brand.to_str(),
     )?;
 
     print_banner("topology created, spawning iPerf.\ntype 'exit' to exit.");

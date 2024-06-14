@@ -2,8 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -414,6 +415,40 @@ impl Display for RouterTarget {
     }
 }
 
+/// The class of router which a rule belongs to.
+#[derive(Clone, Debug, Copy, Deserialize, Serialize)]
+pub enum RouterClass {
+    /// The rule belongs to the shared VPC-wide router.
+    System,
+    /// The rule belongs to the subnet-specific router, and has precendence
+    /// over a `System` rule of equal priority.
+    Custom,
+}
+
+#[cfg(any(feature = "std", test))]
+impl FromStr for RouterClass {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "system" => Ok(Self::System),
+            "custom" => Ok(Self::Custom),
+            lower => Err(format!(
+                "unexpected router class {lower} -- expected 'system' or 'custom'"
+            )),
+        }
+    }
+}
+
+impl Display for RouterClass {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::System => write!(f, "System"),
+            Self::Custom => write!(f, "Custom"),
+        }
+    }
+}
+
 /// Xde create ioctl parameter data.
 ///
 /// The bulk of the information is provided via [`VpcCfg`].
@@ -477,9 +512,55 @@ pub struct ListPortsResp {
 
 impl opte::api::cmd::CmdOk for ListPortsResp {}
 
+#[repr(C)]
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpVirt2PhysReq {
+    pub unused: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct VpcMapResp {
+    pub vni: Vni,
+    pub ip4: Vec<(Ipv4Addr, GuestPhysAddr)>,
+    pub ip6: Vec<(Ipv6Addr, GuestPhysAddr)>,
+}
+
+#[repr(C)]
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpVirt2BoundaryReq {
+    pub unused: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpVirt2PhysResp {
+    pub mappings: Vec<VpcMapResp>,
+}
+
+impl CmdOk for DumpVirt2PhysResp {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct V2bMapResp {
+    pub ip4: Vec<(Ipv4Cidr, BTreeSet<TunnelEndpoint>)>,
+    pub ip6: Vec<(Ipv6Cidr, BTreeSet<TunnelEndpoint>)>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpVirt2BoundaryResp {
+    pub mappings: V2bMapResp,
+}
+
+impl CmdOk for DumpVirt2BoundaryResp {}
+
 /// Set mapping from VPC IP to physical network destination.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2PhysReq {
+    pub vip: IpAddr,
+    pub phys: PhysNet,
+}
+
+/// Clear a mapping from VPC IP to physical network destination.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClearVirt2PhysReq {
     pub vip: IpAddr,
     pub phys: PhysNet,
 }
@@ -505,13 +586,17 @@ pub struct AddRouterEntryReq {
     pub port_name: String,
     pub dest: IpCidr,
     pub target: RouterTarget,
+    pub class: RouterClass,
 }
 
+/// Remove an entry to the router. Addresses may be either IPv4 or IPv6, though the
+/// destination and target must match in protocol version.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DelRouterEntryReq {
     pub port_name: String,
     pub dest: IpCidr,
     pub target: RouterTarget,
+    pub class: RouterClass,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -519,6 +604,8 @@ pub enum DelRouterEntryResp {
     Ok,
     NotFound,
 }
+
+impl opte::api::cmd::CmdOk for DelRouterEntryResp {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetExternalIpsReq {
@@ -851,6 +938,32 @@ impl Display for Ports {
         }
     }
 }
+
+/// Add an entry to the gateway allowing a port to send or receive
+/// traffic on a CIDR other than its private IP.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AllowCidrReq {
+    pub port_name: String,
+    pub cidr: IpCidr,
+    pub dir: Direction,
+}
+
+/// Remove entries from the gateway allowing a port to send or receive
+/// traffic on a specific CIDR other than its private IP.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RemoveCidrReq {
+    pub port_name: String,
+    pub cidr: IpCidr,
+    pub dir: Direction,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum RemoveCidrResp {
+    Ok(IpCidr),
+    NotFound,
+}
+
+impl opte::api::cmd::CmdOk for RemoveCidrResp {}
 
 #[cfg(test)]
 pub mod tests {

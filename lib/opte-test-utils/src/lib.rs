@@ -63,6 +63,7 @@ pub use oxide_vpc::api::IpCfg;
 pub use oxide_vpc::api::Ipv4Cfg;
 pub use oxide_vpc::api::Ipv6Cfg;
 pub use oxide_vpc::api::PhysNet;
+pub use oxide_vpc::api::RouterClass;
 pub use oxide_vpc::api::RouterTarget;
 pub use oxide_vpc::api::SNat4Cfg;
 pub use oxide_vpc::api::SNat6Cfg;
@@ -333,6 +334,7 @@ pub fn oxide_net_setup2(
         &port,
         IpCidr::Ip4(cfg.ipv4().vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip4(cfg.ipv4().vpc_subnet)),
+        RouterClass::System,
     )
     .unwrap();
 

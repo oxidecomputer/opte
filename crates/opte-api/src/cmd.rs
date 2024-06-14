@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 use super::encap::Vni;
 use super::ip::IpCidr;
@@ -35,11 +35,16 @@ pub enum OpteCmd {
     SetVirt2Boundary = 52,   // set a v2b mapping
     ClearVirt2Boundary = 53, // clear a v2b mapping
     DumpVirt2Boundary = 54,  // dump the v2b mappings
+    ClearVirt2Phys = 55,     // clear a v2p mapping
     AddRouterEntry = 60,     // add a router entry for IP dest
+    DelRouterEntry = 61,     // remove a router entry for IP dest
     CreateXde = 70,          // create a new xde device
     DeleteXde = 71,          // delete an xde device
     SetXdeUnderlay = 72,     // set xde underlay devices
+    ClearXdeUnderlay = 73,   // clear xde underlay devices
     SetExternalIps = 80,     // set xde external IPs for a port
+    AllowCidr = 90,          // allow ip block through gateway tx/rx
+    RemoveCidr = 91,         // deny ip block through gateway tx/rx
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -62,11 +67,16 @@ impl TryFrom<c_int> for OpteCmd {
             52 => Ok(Self::SetVirt2Boundary),
             53 => Ok(Self::ClearVirt2Boundary),
             54 => Ok(Self::DumpVirt2Boundary),
+            55 => Ok(Self::ClearVirt2Phys),
             60 => Ok(Self::AddRouterEntry),
+            61 => Ok(Self::DelRouterEntry),
             70 => Ok(Self::CreateXde),
             71 => Ok(Self::DeleteXde),
             72 => Ok(Self::SetXdeUnderlay),
+            73 => Ok(Self::ClearXdeUnderlay),
             80 => Ok(Self::SetExternalIps),
+            90 => Ok(Self::AllowCidr),
+            91 => Ok(Self::RemoveCidr),
             _ => Err(()),
         }
     }
