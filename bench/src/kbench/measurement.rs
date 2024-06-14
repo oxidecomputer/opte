@@ -182,8 +182,9 @@ pub fn build_flamegraph(
     }
 
     let terms = [
-        ("xde_rx", rx_name.unwrap_or("rx")),
-        ("xde_mc_tx", tx_name.unwrap_or("tx")),
+        ("xde_rx", rx_name.unwrap_or("in_place")),
+        ("xde_mc_tx", tx_name.unwrap_or("out_place")),
+        ("xde_worker", "process"),
     ];
 
     for (tracked_fn, out_name) in terms {
