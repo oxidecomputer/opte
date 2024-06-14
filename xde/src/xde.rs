@@ -1846,12 +1846,12 @@ fn xde_worker(mailbox: Arc<EssQueue<Origin>>) {
                 }
                 Origin::Underlay(0) => unsafe {
                     if let Some(ulay) = &*ulay {
-                        xde_rx_one(&ulay.u1.mch, ptr::null_mut(), packet);
+                        xde_rx_one(&ulay.u1.stream, ptr::null_mut(), packet);
                     }
                 },
                 Origin::Underlay(1) => unsafe {
                     if let Some(ulay) = &*ulay {
-                        xde_rx_one(&ulay.u2.mch, ptr::null_mut(), packet);
+                        xde_rx_one(&ulay.u2.stream, ptr::null_mut(), packet);
                     }
                 },
                 Origin::Underlay(n) => panic!("I don't have an {n}th underlay"),
@@ -2043,7 +2043,7 @@ unsafe extern "C" fn xde_rx(
 
 #[inline]
 unsafe fn xde_rx_one(
-    mch: &MacClientHandle,
+    mch: &DldStream,
     mrh: *mut mac::mac_resource_handle,
     pkt: Packet<Initialized>,
 ) {
