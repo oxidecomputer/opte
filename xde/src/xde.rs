@@ -217,7 +217,8 @@ pub struct xde_underlay_port {
     /// MAC promiscuous handle for receiving packets on the underlay link.
     mph: MacPromiscHandle<DldStream>,
 
-    /// XXX
+    /// DLS-level handle on a device for promiscuous registration and
+    /// packet Tx.
     stream: Arc<DldStream>,
 }
 
@@ -962,6 +963,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
                 }
             };
 
+            // Finally, we can clean up the TX stream on the underlay device.
             match Arc::into_inner(u.stream) {
                 Some(stream) => stream.release(&mph),
                 None => {
@@ -1091,7 +1093,6 @@ fn create_underlay_port(
         }
     })?;
 
-    // XXX: error handling will be REALLY bad here with these panic drops.
     let link = DlsLink::hold(&mph).map_err(|e| OpteError::System {
         errno: EFAULT,
         msg: format!(
@@ -1106,7 +1107,10 @@ fn create_underlay_port(
 
     drop(mph);
 
-    // Promisc setup.
+    // Setup promiscuous callback to receive all packets on this link.
+    //
+    // We specify `MAC_PROMISC_FLAGS_NO_TX_LOOP` here to skip receiving copies
+    // of outgoing packets we sent ourselves.
     let mph = MacPromiscHandle::new(
         stream.clone(),
         mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
@@ -1118,31 +1122,13 @@ fn create_underlay_port(
         msg: format!("mac_promisc_add failed for {link_name}: {e}"),
     })?;
 
-    // Grab mac handle for underlying link
+    // Grab mac handle for underlying link, to retrieve its MAC address.
     let mh = MacHandle::open_by_link_name(&link_name).map(Arc::new).map_err(
         |e| OpteError::System {
             errno: EFAULT,
             msg: format!("failed to open link {link_name} for underlay: {e}"),
         },
     )?;
-
-    // Set up a unicast callback. The MAC address here is a sentinel value with
-    // nothing real behind it. This is why we picked the zero value in the Oxide
-    // OUI space for virtual MACs. The reason this is being done is that illumos
-    // requires that if there is a single mac client on a link, that client must
-    // have an L2 address. This was not caught until recently, because this is
-    // only enforced as a debug assert in the kernel.
-
-    // ks:
-    // ON ABOVE: we are never the only MAC client on a link. If we somehow are, we
-    // should find a way to enfore the above constraint.
-    // (even so, the presence of a dls-visible link implies a client?)
-
-    // let mac = EtherAddr::from([0xa8, 0x40, 0x25, 0xff, 0x00, 0x00]);
-    // let muh = mch.add_unicast(mac).map_err(|e| OpteError::System {
-    //     errno: EFAULT,
-    //     msg: format!("mac_unicast_add failed for {link_name}: {e}"),
-    // })?;
 
     Ok(xde_underlay_port {
         name: link_name,
@@ -1606,7 +1592,6 @@ unsafe fn xde_mc_tx_one(
     // Choose u1 as a starting point. This may be changed in the next_hop
     // function when we are actually able to determine what interface should be
     // used.
-    // let mch = &src_dev.u1.mch;
     let stream = &src_dev.u1.stream;
     let hint = 0;
 
@@ -1692,11 +1677,6 @@ unsafe fn xde_mc_tx_one(
             // Unwrap: We know the packet is good because we just
             // unwrapped it above.
             let new_pkt = Packet::<Initialized>::wrap_mblk(mblk).unwrap();
-            // underlay_dev.mch.tx_drop_on_no_desc(
-            //     new_pkt,
-            //     hint,
-            //     MacTxFlags::empty(),
-            // );
             underlay_dev.stream.tx_drop_on_no_desc(
                 new_pkt,
                 hint,
