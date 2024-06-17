@@ -80,7 +80,7 @@ struct DlsLinkInner {
 }
 
 impl DlsLink {
-    /// Place a hold on an existing link,
+    /// Place a hold on an existing link.
     pub fn hold(mph: &MacPerimeterHandle) -> Result<Self, c_int> {
         let mut dlp = ptr::null_mut();
         let mut dlh = ptr::null_mut();
@@ -95,11 +95,15 @@ impl DlsLink {
         }
     }
 
+    /// Returns the ID of the link which is held.
     pub fn link_id(&self) -> LinkId {
         self.link
     }
 
-    // XXX: cleanup REQUIRES that we hold the MAC perimeter handle.
+    /// Release a hold on a given link.
+    ///
+    /// This operation requires that you acquire the MAC perimeter
+    /// for the target device.
     pub fn release(mut self, mph: &MacPerimeterHandle) {
         if let Some(inner) = self.inner.take() {
             if mph.link_id() != self.link {
@@ -112,6 +116,7 @@ impl DlsLink {
         }
     }
 
+    /// Convert a hold into a `DldStream` for packet Rx/Tx.
     pub fn open_stream(
         mut self,
         mph: &MacPerimeterHandle,
@@ -155,7 +160,8 @@ impl Drop for DlsLink {
     }
 }
 
-/// A DLS message stream derived from a
+/// A DLS message stream on a target link, allowing packet
+/// Rx and Tx.
 #[derive(Debug)]
 pub struct DldStream {
     inner: Option<DldStreamInner>,
@@ -168,10 +174,18 @@ struct DldStreamInner {
 }
 
 impl DldStream {
+    /// Returns the ID of the link this stream belongs to.
     pub fn link_id(&self) -> LinkId {
         self.link
     }
 
+    /// Send the [`Packet`] on this client, dropping if there is no
+    /// descriptor available
+    ///
+    /// This function always consumes the [`Packet`].
+    ///
+    /// XXX The underlying mac_tx() function accepts a packet chain,
+    /// but for now we pass only a single packet at a time.
     pub fn tx_drop_on_no_desc(
         &self,
         pkt: Packet<impl PacketState>,
@@ -197,7 +211,10 @@ impl DldStream {
         };
     }
 
-    // XXX: cleanup REQUIRES that we hold the MAC perimeter handle.
+    /// Close this stream.
+    ///
+    /// This operation requires that you acquire the MAC perimeter
+    /// for the parent device.
     pub fn release(mut self, mph: &MacPerimeterHandle) {
         if let Some(mut inner) = self.inner.take() {
             if mph.link_id() != self.link {
