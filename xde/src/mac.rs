@@ -8,8 +8,6 @@
 //!
 //! NOTE: This module is re-exporting all of the sys definitions at
 //! the moment out of laziness.
-use crate::dls::DldStreamInner;
-
 pub use super::mac_sys::*;
 use alloc::ffi::CString;
 use alloc::string::String;

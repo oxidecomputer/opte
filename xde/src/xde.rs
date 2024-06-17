@@ -21,11 +21,9 @@ use crate::mac::mac_getinfo;
 use crate::mac::mac_private_minor;
 use crate::mac::MacClientHandle;
 use crate::mac::MacHandle;
-use crate::mac::MacOpenFlags;
 use crate::mac::MacPerimeterHandle;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
-use crate::mac::MacUnicastHandle;
 use crate::route::Route;
 use crate::route::RouteCache;
 use crate::route::RouteKey;
@@ -215,19 +213,10 @@ pub struct xde_underlay_port {
     /// The MAC address associated with this underlay port.
     pub mac: [u8; 6],
 
-    /// MAC handle to the underlay link.
-    // mh: Arc<MacHandle>,
-
-    /// MAC client handle for tx/rx on the underlay link.
-    // mch: Arc<MacClientHandle>,
-
-    // /// MAC client handle for tx/rx on the underlay link.
-    // muh: MacUnicastHandle,
     /// MAC promiscuous handle for receiving packets on the underlay link.
     mph: MacPromiscHandle<DldStream>,
 
-    link: DlsLink,
-
+    /// XXX
     stream: Arc<DldStream>,
 }
 
@@ -988,8 +977,8 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
                 }
             };
 
+            // XXX: is this the right tool? Think about ownership etc.
             Arc::try_unwrap(u.stream).unwrap().release(&mph);
-            u.link.release(&mph);
         }
     }
 
@@ -1089,7 +1078,8 @@ unsafe extern "C" fn xde_attach(
 /// Setup underlay port atop the given link.
 fn create_underlay_port(
     link_name: String,
-    mc_name: &str,
+    // This parameter is likely to be used as part of the flows work.
+    _mc_name: &str,
 ) -> Result<xde_underlay_port, OpteError> {
     let mut link_id = 0;
     let link_cstr = CString::new(link_name.as_str()).unwrap();
@@ -1170,7 +1160,6 @@ fn create_underlay_port(
         name: link_name,
         mac: mh.get_mac_addr(),
         mph,
-        link,
         stream,
     })
 }

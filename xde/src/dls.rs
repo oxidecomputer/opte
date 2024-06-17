@@ -353,7 +353,7 @@ impl DlsLink {
     }
 
     pub fn open_stream(
-        &self,
+        mut self,
         mph: &MacPerimeterHandle,
     ) -> Result<Arc<DldStream>, c_int> {
         let Some(inner) = self.inner.as_ref() else {
@@ -369,12 +369,15 @@ impl DlsLink {
         let res =
             unsafe { dls_open(inner.dlp, inner.dlh, stream.as_mut_ptr()) };
         if res == 0 {
+            // DLP is held/consumed by dls_open.
+            _ = self.inner.take();
             let dld_str = unsafe { stream.assume_init() };
             Ok(DldStream {
                 inner: Some(DldStreamInner { dld_str, link: mph.linkid() }),
             }
             .into())
         } else {
+            self.release(mph);
             Err(res)
         }
     }
