@@ -15,6 +15,7 @@
 use crate::dls;
 use crate::dls::DldStream;
 use crate::dls::DlsLink;
+use crate::dls::LinkId;
 use crate::ioctl::IoctlEnvelope;
 use crate::mac;
 use crate::mac::mac_getinfo;
@@ -944,25 +945,11 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // walkers finishing. Accordingly, no one else will have or try to
             // clone the MAC client handle.
 
-            let mut link_id = 0;
-            let link_cstr = CString::new(u.name.as_str()).unwrap();
-            unsafe {
-                match dls::dls_mgmt_get_linkid(link_cstr.as_ptr(), &mut link_id)
-                {
-                    0 => {}
-                    err => {
-                        return Err(OpteError::System {
-                            errno: EBUSY,
-                            msg: format!(
-                                "failed to get linkid for {}: {err}",
-                                u.name
-                            ),
-                        });
-                    }
-                }
-            }
-
-            let mph = match MacPerimeterHandle::from_linkid(link_id) {
+            // 2. Close the open stream handle.
+            // This requires that we take the MAC perimeter on this device, which
+            // will be dropped at the end of this scope.
+            let mph = match MacPerimeterHandle::from_linkid(u.stream.link_id())
+            {
                 Ok(mph) => mph,
                 Err(err) => {
                     return Err(OpteError::System {
@@ -975,8 +962,18 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
                 }
             };
 
-            // XXX: is this the right tool? Think about ownership etc.
-            Arc::try_unwrap(u.stream).unwrap().release(&mph);
+            match Arc::into_inner(u.stream) {
+                Some(stream) => stream.release(&mph),
+                None => {
+                    return Err(OpteError::System {
+                        errno: EBUSY,
+                        msg: format!(
+                            "DLS stream for {} has outstanding refs",
+                            u.name
+                        ),
+                    })
+                }
+            }
         }
     }
 
@@ -1079,19 +1076,13 @@ fn create_underlay_port(
     // This parameter is likely to be used as part of the flows work.
     _mc_name: &str,
 ) -> Result<xde_underlay_port, OpteError> {
-    let mut link_id = 0;
     let link_cstr = CString::new(link_name.as_str()).unwrap();
-    unsafe {
-        match dls::dls_mgmt_get_linkid(link_cstr.as_ptr(), &mut link_id) {
-            0 => {}
-            err => {
-                return Err(OpteError::System {
-                    errno: EFAULT,
-                    msg: format!("failed to get linkid for {link_name}: {err}"),
-                })
-            }
-        }
-    }
+
+    let link_id =
+        LinkId::from_name(link_cstr).map_err(|err| OpteError::System {
+            errno: EFAULT,
+            msg: format!("failed to get linkid for {link_name}: {err}"),
+        })?;
 
     let mph = MacPerimeterHandle::from_linkid(link_id).map_err(|e| {
         OpteError::System {
@@ -1116,17 +1107,16 @@ fn create_underlay_port(
     drop(mph);
 
     // Promisc setup.
-
-    let mph = stream
-        .add_promisc(
-            mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-            xde_rx,
-            mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
-        )
-        .map_err(|e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("mac_promisc_add failed for {link_name}: {e}"),
-        })?;
+    let mph = MacPromiscHandle::new(
+        stream.clone(),
+        mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
+        xde_rx,
+        mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
+    )
+    .map_err(|e| OpteError::System {
+        errno: EFAULT,
+        msg: format!("mac_promisc_add failed for {link_name}: {e}"),
+    })?;
 
     // Grab mac handle for underlying link
     let mh = MacHandle::open_by_link_name(&link_name).map(Arc::new).map_err(

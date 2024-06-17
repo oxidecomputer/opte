@@ -10,6 +10,7 @@
 //! the moment out of laziness.
 pub mod sys;
 
+use crate::dls::LinkId;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -198,37 +199,6 @@ impl MacClientHandle {
         }
     }
 
-    /// Register promiscuous callback to receive packets on the underlying MAC.
-    pub fn add_promisc(
-        self: &Arc<Self>,
-        ptype: mac_client_promisc_type_t,
-        promisc_fn: mac_rx_fn,
-        flags: u16,
-    ) -> Result<MacPromiscHandle<Self>, c_int> {
-        let mut mph = ptr::null_mut();
-
-        // `MacPromiscHandle` keeps a reference to this `MacClientHandle`
-        // until it is removed and so we can safely access it from the
-        // callback via the `arg` pointer.
-        let mch = Arc::into_raw(self.clone());
-        let ret = unsafe {
-            mac_promisc_add(
-                self.mch,
-                ptype,
-                promisc_fn,
-                mch as *mut c_void,
-                &mut mph,
-                flags,
-            )
-        };
-
-        if ret == 0 {
-            Ok(MacPromiscHandle { mph, parent: mch })
-        } else {
-            Err(ret)
-        }
-    }
-
     /// Send the [`Packet`] on this client.
     ///
     /// If the packet cannot be sent, return it. If you want to drop
@@ -300,15 +270,52 @@ impl Drop for MacClientHandle {
     }
 }
 
+pub trait MacClient {
+    fn mac_client_handle(&self) -> Result<*mut mac_client_handle, c_int>;
+}
+
+impl MacClient for MacClientHandle {
+    fn mac_client_handle(&self) -> Result<*mut mac_client_handle, c_int> {
+        Ok(self.mch)
+    }
+}
+
 /// Safe wrapper around a `mac_promisc_handle_t`.
 #[derive(Debug)]
 pub struct MacPromiscHandle<P> {
     /// The underlying `mac_promisc_handle_t`.
-    pub(crate) mph: *mut mac_promisc_handle,
+    mph: *mut mac_promisc_handle,
 
-    /// The `MacClientHandle` used to create this promiscuous callback.
-    /// MUST BE A RAW ARC.
-    pub(crate) parent: *const P,
+    /// The parent used to create this promiscuous callback.
+    parent: *const P,
+}
+
+impl<P: MacClient> MacPromiscHandle<P> {
+    /// Register a promiscuous callback to receive packets on the underlying MAC.
+    pub fn new(
+        parent: Arc<P>,
+        ptype: mac_client_promisc_type_t,
+        promisc_fn: mac_rx_fn,
+        flags: u16,
+    ) -> Result<MacPromiscHandle<P>, c_int> {
+        let mut mph = ptr::null_mut();
+        let mch = parent.mac_client_handle()?;
+        let parent = Arc::into_raw(parent);
+        let arg = parent as *mut c_void;
+
+        // SAFETY: `MacPromiscHandle` keeps a reference to this `P`
+        // until it is removed and so we can safely access it from the
+        // callback via the `arg` pointer.
+        let ret = unsafe {
+            mac_promisc_add(mch, ptype, promisc_fn, arg, &mut mph, flags)
+        };
+
+        if ret == 0 {
+            Ok(Self { mph, parent })
+        } else {
+            Err(ret)
+        }
+    }
 }
 
 impl<P> Drop for MacPromiscHandle<P> {
@@ -342,18 +349,17 @@ impl Drop for MacUnicastHandle {
     }
 }
 
-// XXX: cleanup
-
 /// Safe wrapper around a `mac_perim_handle_t`.
 pub struct MacPerimeterHandle {
     mph: mac_perim_handle,
-    link: datalink_id_t,
+    link: LinkId,
 }
 
 impl MacPerimeterHandle {
-    pub fn from_linkid(link: datalink_id_t) -> Result<Self, c_int> {
+    /// Attempt to acquire the MAC perimeter for a given link.
+    pub fn from_linkid(link: LinkId) -> Result<Self, c_int> {
         let mut mph = 0;
-        let res = unsafe { mac_perim_enter_by_linkid(link, &mut mph) };
+        let res = unsafe { mac_perim_enter_by_linkid(link.into(), &mut mph) };
         if res == 0 {
             Ok(Self { mph, link })
         } else {
@@ -361,7 +367,8 @@ impl MacPerimeterHandle {
         }
     }
 
-    pub fn linkid(&self) -> datalink_id_t {
+    /// Returns the ID of the link whose MAC perimeter is held.
+    pub fn link_id(&self) -> LinkId {
         self.link
     }
 }
