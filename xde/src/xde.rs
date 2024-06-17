@@ -956,8 +956,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
                             msg: format!(
                                 "failed to get linkid for {}: {err}",
                                 u.name
-                            )
-                            .into(),
+                            ),
                         });
                     }
                 }
@@ -971,8 +970,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
                         msg: format!(
                             "failed to grab MAC perimeter for {}: {err}",
                             u.name
-                        )
-                        .into(),
+                        ),
                     });
                 }
             };

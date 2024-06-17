@@ -4,7 +4,7 @@
 
 // Copyright 2024 Oxide Computer Company
 
-// stuff we need from dls
+//! Safe abstractions around DLS public and private functions.
 
 pub mod sys;
 
