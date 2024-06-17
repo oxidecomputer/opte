@@ -8,7 +8,8 @@
 //!
 //! NOTE: This module is re-exporting all of the sys definitions at
 //! the moment out of laziness.
-pub use super::mac_sys::*;
+pub mod sys;
+
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -22,6 +23,7 @@ use opte::engine::ether::EtherAddr;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
+pub use sys::*;
 
 /// Errors while opening a MAC handle.
 #[derive(Debug)]
