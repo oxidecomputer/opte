@@ -270,6 +270,10 @@ impl Drop for MacClientHandle {
     }
 }
 
+/// Structs which are (or contain) a usable MAC client.
+///
+/// Currently, this is only used to enable promiscuous handler
+/// registration.
 pub trait MacClient {
     fn mac_client_handle(&self) -> Result<*mut mac_client_handle, c_int>;
 }

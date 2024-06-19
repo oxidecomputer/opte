@@ -945,7 +945,15 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // clone the MAC client handle.
 
             // 2. Close the open stream handle.
-            _ = Arc::into_inner(u.stream);
+            if Arc::into_inner(u.stream).is_none() {
+                return Err(OpteError::System {
+                    errno: EBUSY,
+                    msg: format!(
+                        "underlay {} has outstanding dls_stream refs",
+                        u.name
+                    ),
+                });
+            }
         }
     }
 

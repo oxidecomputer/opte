@@ -84,6 +84,8 @@ extern "C" {
         dlpp: *mut *mut dls_link,
     ) -> c_int;
 
+    pub fn dls_link_rele(dlp: *mut dls_link);
+
     pub fn dls_devnet_mac(dlh: dls_dl_handle) -> *const c_char;
 
     pub fn dls_open(

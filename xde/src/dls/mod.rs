@@ -111,7 +111,8 @@ impl DlsLink {
                     mph.link_id(), self.link);
             }
             unsafe {
-                dls_devnet_rele_link(inner.dlh, inner.dlp);
+                dls_link_rele(inner.dlp);
+                dls_devnet_rele(inner.dlh);
             }
         }
     }
@@ -238,7 +239,8 @@ impl Drop for DlsStream {
                     // mac notify callbacks. Should we just come in through
                     // dld_open/dld_close/dld_wput? That would make it a bit
                     // weirder to set the promisc handle, and I don't know how
-                    // this would interact with
+                    // this would interact with the existing (logical)
+                    // STREAMS up to ip.
                     dls_close(&mut inner.dld_str);
                     dls_devnet_rele(inner.dld_str.ds_ddh)
                 },
