@@ -108,7 +108,7 @@ impl DlsLink {
         if let Some(inner) = self.inner.take() {
             if mph.link_id() != self.link {
                 panic!("Tried to free link hold with the wrong MAC perimeter: saw {:?}, wanted {:?}",
-                    mph.link_id(),self.link);
+                    mph.link_id(), self.link);
             }
             unsafe {
                 dls_devnet_rele_link(inner.dlh, inner.dlp);
@@ -116,18 +116,18 @@ impl DlsLink {
         }
     }
 
-    /// Convert a hold into a `DldStream` for packet Rx/Tx.
+    /// Convert a hold into a `DlsStream` for packet Rx/Tx.
     fn open_stream(
         mut self,
         mph: &MacPerimeterHandle,
-    ) -> Result<Arc<DldStream>, c_int> {
+    ) -> Result<Arc<DlsStream>, c_int> {
         let Some(inner) = self.inner.as_ref() else {
             return Err(-1);
         };
 
         if mph.link_id() != self.link {
             panic!("Tried to open stream with the wrong MAC perimeter: saw {:?}, wanted {:?}",
-                mph.link_id(),self.link);
+                mph.link_id(), self.link);
         }
 
         let mut stream = MaybeUninit::zeroed();
@@ -137,8 +137,8 @@ impl DlsLink {
             // DLP is held/consumed by dls_open.
             _ = self.inner.take();
             let dld_str = unsafe { stream.assume_init() };
-            Ok(DldStream {
-                inner: Some(DldStreamInner { dld_str }),
+            Ok(DlsStream {
+                inner: Some(DlsStreamInner { dld_str }),
                 link: mph.link_id(),
             }
             .into())
@@ -163,17 +163,17 @@ impl Drop for DlsLink {
 /// A DLS message stream on a target link, allowing packet
 /// Rx and Tx.
 #[derive(Debug)]
-pub struct DldStream {
-    inner: Option<DldStreamInner>,
+pub struct DlsStream {
+    inner: Option<DlsStreamInner>,
     link: LinkId,
 }
 
 #[derive(Debug)]
-struct DldStreamInner {
+struct DlsStreamInner {
     dld_str: dld_str_s,
 }
 
-impl DldStream {
+impl DlsStream {
     pub fn open(link_id: LinkId) -> Result<Arc<Self>, c_int> {
         let perim = MacPerimeterHandle::from_linkid(link_id)?;
         let link_handle = DlsLink::hold(&perim)?;
@@ -218,7 +218,7 @@ impl DldStream {
     }
 }
 
-impl MacClient for DldStream {
+impl MacClient for DlsStream {
     fn mac_client_handle(&self) -> Result<*mut mac_client_handle, c_int> {
         let Some(inner) = self.inner.as_ref() else {
             return Err(-1);
@@ -228,7 +228,7 @@ impl MacClient for DldStream {
     }
 }
 
-impl Drop for DldStream {
+impl Drop for DlsStream {
     fn drop(&mut self) {
         if let Some(mut inner) = self.inner.take() {
             match MacPerimeterHandle::from_linkid(self.link) {

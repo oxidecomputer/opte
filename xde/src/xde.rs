@@ -13,7 +13,7 @@
 //#![allow(clippy::arc_with_non_send_sync)]
 
 use crate::dls;
-use crate::dls::DldStream;
+use crate::dls::DlsStream;
 use crate::dls::LinkId;
 use crate::ioctl::IoctlEnvelope;
 use crate::mac;
@@ -213,11 +213,11 @@ pub struct xde_underlay_port {
     pub mac: [u8; 6],
 
     /// MAC promiscuous handle for receiving packets on the underlay link.
-    mph: MacPromiscHandle<DldStream>,
+    mph: MacPromiscHandle<DlsStream>,
 
     /// DLS-level handle on a device for promiscuous registration and
     /// packet Tx.
-    stream: Arc<DldStream>,
+    stream: Arc<DlsStream>,
 }
 
 struct XdeState {
@@ -1056,7 +1056,7 @@ fn create_underlay_port(
             msg: format!("failed to get linkid for {link_name}: {err}"),
         })?;
 
-    let stream = DldStream::open(link_id).map_err(|e| OpteError::System {
+    let stream = DlsStream::open(link_id).map_err(|e| OpteError::System {
         errno: EFAULT,
         msg: format!("failed to grab open stream for {link_name}: {e}"),
     })?;
