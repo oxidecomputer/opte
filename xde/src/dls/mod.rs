@@ -14,6 +14,7 @@ use crate::mac::MacPerimeterHandle;
 use crate::mac::MacTxFlags;
 use crate::mac::MAC_DROP_ON_NO_DESC;
 use alloc::sync::Arc;
+use illumos_sys_hdrs::ENOENT;
 use core::ffi::CStr;
 use core::fmt::Display;
 use core::mem::MaybeUninit;
@@ -21,7 +22,6 @@ use core::ptr;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::uintptr_t;
-use illumos_sys_hdrs::ENOENT;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
 pub use sys::*;
@@ -36,11 +36,12 @@ impl LinkId {
         let mut link_id = 0;
 
         unsafe {
-            match dls_mgmt_get_linkid(name.as_ref().as_ptr(), &mut link_id) {
-                0 => Ok(LinkId(link_id)),
-                ENOENT => Err(LinkError::NotFound),
-                err => Err(LinkError::Other(err)),
-            }
+            match dls_mgmt_get_linkid(name.as_ref().as_ptr(), &mut link_id)
+                {
+                    0 => Ok(LinkId(link_id)),
+                    ENOENT => Err(LinkError::NotFound),
+                    err => Err(LinkError::Other(err)),
+                }
         }
     }
 }
@@ -54,7 +55,7 @@ impl From<LinkId> for datalink_id_t {
 /// Errors encountered while querying DLS for a `LinkId`.
 pub enum LinkError {
     NotFound,
-    Other(i32),
+    Other(i32)
 }
 
 impl Display for LinkError {
@@ -68,7 +69,7 @@ impl Display for LinkError {
 
 /// A hold on an existing link managed by DLS.
 #[derive(Debug)]
-pub struct DlsLink {
+struct DlsLink {
     inner: Option<DlsLinkInner>,
     link: LinkId,
 }
@@ -81,7 +82,7 @@ struct DlsLinkInner {
 
 impl DlsLink {
     /// Place a hold on an existing link.
-    pub fn hold(mph: &MacPerimeterHandle) -> Result<Self, c_int> {
+    fn hold(mph: &MacPerimeterHandle) -> Result<Self, c_int> {
         let mut dlp = ptr::null_mut();
         let mut dlh = ptr::null_mut();
         let link = mph.link_id();
@@ -100,18 +101,13 @@ impl DlsLink {
         }
     }
 
-    /// Returns the ID of the link which is held.
-    pub fn link_id(&self) -> LinkId {
-        self.link
-    }
-
     /// Release a hold on a given link.
     ///
     /// This operation requires that you acquire the MAC perimeter
     /// for the target device.
-    pub fn release(mut self, mph: &MacPerimeterHandle) {
+    fn release(mut self, mph: &MacPerimeterHandle) {
         if let Some(inner) = self.inner.take() {
-            if mph.link_id() != self.link {
+            if mph.link_id() !=self.link {
                 panic!("Tried to free link hold with the wrong MAC perimeter: saw {:?}, wanted {:?}",
                     mph.link_id(),self.link);
             }
@@ -122,7 +118,7 @@ impl DlsLink {
     }
 
     /// Convert a hold into a `DldStream` for packet Rx/Tx.
-    pub fn open_stream(
+    fn open_stream(
         mut self,
         mph: &MacPerimeterHandle,
     ) -> Result<Arc<DldStream>, c_int> {
@@ -130,7 +126,7 @@ impl DlsLink {
             return Err(-1);
         };
 
-        if mph.link_id() != self.link {
+        if mph.link_id() !=self.link {
             panic!("Tried to open stream with the wrong MAC perimeter: saw {:?}, wanted {:?}",
                 mph.link_id(),self.link);
         }
@@ -159,7 +155,7 @@ impl Drop for DlsLink {
         if self.inner.take().is_some() {
             opte::engine::err!(
                 "dropped hold on link {:?} without releasing!!",
-                self.link
+               self.link
             );
         }
     }
@@ -179,6 +175,12 @@ struct DldStreamInner {
 }
 
 impl DldStream {
+    pub fn open(link_id: LinkId) -> Result<Arc<Self>, c_int> {
+        let perim = MacPerimeterHandle::from_linkid(link_id)?;
+        let link_handle = DlsLink::hold(&perim)?;
+        link_handle.open_stream(&perim)
+    }
+
     /// Returns the ID of the link this stream belongs to.
     pub fn link_id(&self) -> LinkId {
         self.link
@@ -215,28 +217,6 @@ impl DldStream {
             )
         };
     }
-
-    /// Close this stream.
-    ///
-    /// This operation requires that you acquire the MAC perimeter
-    /// for the parent device.
-    pub fn release(mut self, mph: &MacPerimeterHandle) {
-        if let Some(mut inner) = self.inner.take() {
-            if mph.link_id() != self.link {
-                opte::engine::err!("Tried to free link hold with the wrong MAC perimeter: saw {:?}, wanted {:?}",
-                    mph.link_id(), self.link);
-            }
-            unsafe {
-                // NOTE: this is reimplementing dld_str_detach
-                // but we're avoiding capab negotiation/disable and
-                // mac notify callbacks. Should we just come in through
-                // dld_open/dld_close/dld_wput? That would make it a bit
-                // weirder to set the promisc handle.
-                dls_close(&mut inner.dld_str);
-                dls_devnet_rele(inner.dld_str.ds_ddh)
-            }
-        }
-    }
 }
 
 impl MacClient for DldStream {
@@ -251,11 +231,24 @@ impl MacClient for DldStream {
 
 impl Drop for DldStream {
     fn drop(&mut self) {
-        if self.inner.take().is_some() {
-            opte::engine::err!(
-                "dropped stream on link {:?} without releasing!!",
-                self.link,
-            );
+        if let Some(mut inner) = self.inner.take() {
+            match MacPerimeterHandle::from_linkid(self.link) {
+                Ok(_perim) => unsafe {
+                    // NOTE: this is reimplementing dld_str_detach
+                    // but we're avoiding capab negotiation/disable and
+                    // mac notify callbacks. Should we just come in through
+                    // dld_open/dld_close/dld_wput? That would make it a bit
+                    // weirder to set the promisc handle, and I don't know how
+                    // this would interact with 
+                    dls_close(&mut inner.dld_str);
+                    dls_devnet_rele(inner.dld_str.ds_ddh)
+                },
+                Err(e) => opte::engine::err!(
+                    "couldn't acquire MAC perimeter (err {}): \
+                    dropped stream on link {:?} without releasing",
+                    e, self.link,
+                ),
+            }
         }
     }
 }

@@ -14,7 +14,6 @@
 
 use crate::dls;
 use crate::dls::DldStream;
-use crate::dls::DlsLink;
 use crate::dls::LinkId;
 use crate::ioctl::IoctlEnvelope;
 use crate::mac;
@@ -22,7 +21,6 @@ use crate::mac::mac_getinfo;
 use crate::mac::mac_private_minor;
 use crate::mac::MacClientHandle;
 use crate::mac::MacHandle;
-use crate::mac::MacPerimeterHandle;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
 use crate::route::Route;
@@ -947,35 +945,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // clone the MAC client handle.
 
             // 2. Close the open stream handle.
-            // This requires that we take the MAC perimeter on this device, which
-            // will be dropped at the end of this scope.
-            let mph = match MacPerimeterHandle::from_linkid(u.stream.link_id())
-            {
-                Ok(mph) => mph,
-                Err(err) => {
-                    return Err(OpteError::System {
-                        errno: EBUSY,
-                        msg: format!(
-                            "failed to grab MAC perimeter for {}: {err}",
-                            u.name
-                        ),
-                    });
-                }
-            };
-
-            // Finally, we can clean up the TX stream on the underlay device.
-            match Arc::into_inner(u.stream) {
-                Some(stream) => stream.release(&mph),
-                None => {
-                    return Err(OpteError::System {
-                        errno: EBUSY,
-                        msg: format!(
-                            "DLS stream for {} has outstanding refs",
-                            u.name
-                        ),
-                    })
-                }
-            }
+            _ = Arc::into_inner(u.stream);
         }
     }
 
@@ -1086,26 +1056,10 @@ fn create_underlay_port(
             msg: format!("failed to get linkid for {link_name}: {err}"),
         })?;
 
-    let mph = MacPerimeterHandle::from_linkid(link_id).map_err(|e| {
-        OpteError::System {
-            errno: EFAULT,
-            msg: format!("failed to grab MAC perimeter for {link_name}: {e}"),
-        }
-    })?;
-
-    let link = DlsLink::hold(&mph).map_err(|e| OpteError::System {
-        errno: EFAULT,
-        msg: format!(
-            "failed to grab hold on link perimeter for {link_name}: {e}"
-        ),
-    })?;
-
-    let stream = link.open_stream(&mph).map_err(|e| OpteError::System {
+    let stream = DldStream::open(link_id).map_err(|e| OpteError::System {
         errno: EFAULT,
         msg: format!("failed to grab open stream for {link_name}: {e}"),
     })?;
-
-    drop(mph);
 
     // Setup promiscuous callback to receive all packets on this link.
     //
