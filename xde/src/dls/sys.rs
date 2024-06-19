@@ -64,14 +64,6 @@ extern "C" {
     ) -> mac_tx_cookie_t;
 
     // NOTE: ALL BELOW FUNCTIONS REQUIRE THE MAC PERIMETER TO BE HELD.
-    pub fn dls_devnet_hold_link(
-        link: datalink_id_t,
-        ddhp: *mut dls_dl_handle,
-        dlpp: *mut *mut dls_link,
-    ) -> c_int;
-
-    pub fn dls_devnet_rele_link(dlh: dls_dl_handle, dlp: *mut dls_link);
-
     pub fn dls_devnet_hold(
         link: datalink_id_t,
         ddhp: *mut dls_dl_handle,
@@ -111,7 +103,8 @@ pub enum dld_passivestate_t {
     DLD_ACTIVE,
 }
 
-//
+// Direct translation of the illumos type type, with some
+// pointer fields left as opaque void*s for simplicity.
 #[repr(C)]
 pub struct dld_str_s {
     ds_major: major_t,
