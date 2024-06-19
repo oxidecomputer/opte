@@ -86,11 +86,16 @@ impl DlsLink {
         let mut dlh = ptr::null_mut();
         let link = mph.link_id();
 
-        let res =
-            unsafe { dls_devnet_hold_link(link.into(), &mut dlh, &mut dlp) };
+        let res = unsafe { dls_devnet_hold(link.into(), &mut dlh) };
+        if res != 0 {
+            return Err(res);
+        }
+
+        let res = unsafe { dls_link_hold(dls_devnet_mac(dlh), &mut dlp) };
         if res == 0 {
             Ok(Self { inner: Some(DlsLinkInner { dlp, dlh }), link })
         } else {
+            unsafe { dls_devnet_rele(dlh) };
             Err(res)
         }
     }
@@ -222,7 +227,13 @@ impl DldStream {
                     mph.link_id(), self.link);
             }
             unsafe {
+                // NOTE: this is reimplementing dld_str_detach
+                // but we're avoiding capab negotiation/disable and
+                // mac notify callbacks. Should we just come in through
+                // dld_open/dld_close/dld_wput? That would make it a bit
+                // weirder to set the promisc handle.
                 dls_close(&mut inner.dld_str);
+                dls_devnet_rele(inner.dld_str.ds_ddh)
             }
         }
     }

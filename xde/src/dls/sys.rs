@@ -72,6 +72,20 @@ extern "C" {
 
     pub fn dls_devnet_rele_link(dlh: dls_dl_handle, dlp: *mut dls_link);
 
+    pub fn dls_devnet_hold(
+        link: datalink_id_t,
+        ddhp: *mut dls_dl_handle,
+    ) -> c_int;
+
+    pub fn dls_devnet_rele(dlh: dls_dl_handle);
+
+    pub fn dls_link_hold(
+        name: *const c_char,
+        dlpp: *mut *mut dls_link,
+    ) -> c_int;
+
+    pub fn dls_devnet_mac(dlh: dls_dl_handle) -> *const c_char;
+
     pub fn dls_open(
         dlp: *mut dls_link,
         ddh: dls_dl_handle,
@@ -162,7 +176,7 @@ pub struct dld_str_s {
     ds_nactive: c_uint,
     ds_next: *mut dld_str_s,
     ds_head: *mut c_void, // dls_head_t
-    ds_ddh: dls_dl_handle,
+    pub ds_ddh: dls_dl_handle,
     ds_tqlist: list_node_t,
 
     ds_private: *mut c_void,
