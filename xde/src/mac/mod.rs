@@ -10,8 +10,8 @@
 //! the moment out of laziness.
 pub mod sys;
 
-use crate::dls::LinkId;
 use crate::dls::DlsStream;
+use crate::dls::LinkId;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -547,13 +547,8 @@ pub struct MacFlow {
 
 impl MacFlow {
     /// Forcibly wrench this flow from the clutches of DLS.
-    pub fn set_flow_cb(
-        &mut self,
-        new_fn: mac_rx_fn,
-        cb_mch: Arc<DlsStream>,
-    ) {
-        let mch = cb_mch.clone();
-        let arg = Arc::into_raw(&mch);
+    pub fn set_flow_cb(&mut self, new_fn: mac_rx_fn, cb_mch: Arc<DlsStream>) {
+        let arg = Arc::into_raw(cb_mch);
         unsafe {
             crate::warn!(
                 "Some potential offsets {:x} {:x} {:x} {:x} {:x} {:x}",
@@ -568,7 +563,7 @@ impl MacFlow {
             // flow_cb_pre_srs(self.flent, new_fn);
             flow_cb_post_srs(self.flent, new_fn, arg as *mut c_void);
         }
-        self.cb_mch = Some(mch);
+        self.cb_mch = Some(arg);
     }
 }
 
@@ -617,6 +612,9 @@ impl Drop for MacFlow {
             // TODO: need to reimplement FLOW_USER_REFRELE in here...
             flow_user_refrele(self.flent);
             mac_link_flow_remove(self.name.as_ptr());
+            if let Some(ptr) = self.cb_mch {
+                _ = Arc::from_raw(ptr);
+            }
         }
     }
 }

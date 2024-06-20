@@ -929,17 +929,9 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         for u in [u1, u2] {
             // Drop our reference to any underlay flows before any other
             // device state.
+
+            // 1. Remove Flows.
             drop(u.flows);
-
-            // We have a chain of refs here:
-            //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
-            //  2. `MacUnicastHandle` holds a ref to `MacClientHandle`, and
-            //  3. `MacClientHandle` holds a ref to `MacHandle`.
-            // We explicitly drop them in order here to ensure there are no
-            // outstanding refs.
-
-            // 1. Remove promisc and unicast callbacks
-            drop(u.mph);
 
             // Although `xde_rx` can be called into without any running ports
             // via the promisc and unicast handles, illumos guarantees that
@@ -1093,21 +1085,6 @@ fn create_underlay_port(
         msg: format!("failed to grab open stream for {link_name}: {e}"),
     })?;
 
-    // Setup promiscuous callback to receive all packets on this link.
-    //
-    // We specify `MAC_PROMISC_FLAGS_NO_TX_LOOP` here to skip receiving copies
-    // of outgoing packets we sent ourselves.
-    let mph = MacPromiscHandle::new(
-        stream.clone(),
-        mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-        xde_rx,
-        mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
-    )
-    .map_err(|e| OpteError::System {
-        errno: EFAULT,
-        msg: format!("mac_promisc_add failed for {link_name}: {e}"),
-    })?;
-
     // TODO I'm able to remove these flows via flowadm while the
     // driver is still attached -- that's no good. Either find a way
     // to add a hold or I'll need to implement such a mechanism.
@@ -1128,7 +1105,6 @@ fn create_underlay_port(
             msg: format!("failed to open link {link_name} for underlay: {e}"),
         },
     )?;
-
 
     fkey.set_flow_cb(xde_rx, stream.clone());
     let flows = vec![fkey];
