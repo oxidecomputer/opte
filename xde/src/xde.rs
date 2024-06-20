@@ -19,7 +19,6 @@ use crate::ioctl::IoctlEnvelope;
 use crate::mac;
 use crate::mac::mac_getinfo;
 use crate::mac::mac_private_minor;
-use crate::mac::MacClientHandle;
 use crate::mac::MacHandle;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
@@ -926,23 +925,19 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         };
 
         for u in [u1, u2] {
-            // We have a chain of refs here:
-            //  1. `MacPromiscHandle` holds a ref to `MacClientHandle`, and
-            //  2. `MacUnicastHandle` holds a ref to `MacClientHandle`, and
-            //  3. `MacClientHandle` holds a ref to `MacHandle`.
-            // We explicitly drop them in order here to ensure there are no
-            // outstanding refs.
+            // We have a chain of refs here: `MacPromiscHandle` holds a ref to
+            // `DldStream`. We explicitly drop them in order here to ensure
+            // there are no outstanding refs.
 
             // 1. Remove promisc and unicast callbacks
             drop(u.mph);
 
             // Although `xde_rx` can be called into without any running ports
-            // via the promisc and unicast handles, illumos guarantees that
-            // neither callback will be running here. `mac_promisc_remove` will
-            // either remove the callback immediately (if there are no walkers)
-            // or will mark the callback as condemned and await all active
-            // walkers finishing. Accordingly, no one else will have or try to
-            // clone the MAC client handle.
+            // via the promisc handle, illumos guarantees that this callback won't
+            // be running here. `mac_promisc_remove` will either remove the callback
+            // immediately (if there are no walkers) or will mark the callback as
+            // condemned and await all active walkers finishing. Accordingly, no one
+            // else will have or try to clone the Stream handle.
 
             // 2. Close the open stream handle.
             if Arc::into_inner(u.stream).is_none() {
@@ -1802,9 +1797,9 @@ unsafe extern "C" fn xde_rx(
     // corresponding to the underlay port we're receiving on. Being
     // here in the callback means the `MacPromiscHandle` hasn't been
     // dropped yet and thus our `MacClientHandle` is also still valid.
-    let mch_ptr = arg as *const MacClientHandle;
+    let mch_ptr = arg as *const DlsStream;
     Arc::increment_strong_count(mch_ptr);
-    let mch: Arc<MacClientHandle> = Arc::from_raw(mch_ptr);
+    let stream: Arc<DlsStream> = Arc::from_raw(mch_ptr);
 
     let Ok(mut chain) = PacketChain::new(mp_chain) else {
         bad_packet_probe(
@@ -1821,13 +1816,13 @@ unsafe extern "C" fn xde_rx(
     // of chains (port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
     while let Some(pkt) = chain.pop_front() {
-        xde_rx_one(&mch, mrh, pkt);
+        xde_rx_one(&stream, mrh, pkt);
     }
 }
 
 #[inline]
 unsafe fn xde_rx_one(
-    mch: &MacClientHandle,
+    stream: &DlsStream,
     mrh: *mut mac::mac_resource_handle,
     pkt: Packet<Initialized>,
 ) {
@@ -1896,7 +1891,7 @@ unsafe fn xde_rx_one(
             mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
-            mch.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
+            stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
         }
         _ => {}
     }
