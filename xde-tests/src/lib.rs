@@ -24,6 +24,7 @@ use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::MacAddr;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::Ports;
+use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SetVirt2PhysReq;
@@ -50,8 +51,8 @@ impl OpteZone {
     /// Create a new zone with the given name, underlying zfs instance and set
     /// of interfaces. In illumos parlance, the interfaces are data link
     /// devices.
-    fn new(name: &str, zfs: &Zfs, ifx: &[&str]) -> Result<Self> {
-        let zone = Zone::new(name, "sparse", zfs, ifx, &[])?;
+    fn new(name: &str, zfs: &Zfs, ifx: &[&str], brand: &str) -> Result<Self> {
+        let zone = Zone::new(name, brand, zfs, ifx, &[])?;
         Ok(Self { zone })
     }
 
@@ -118,6 +119,7 @@ impl OptePort {
             port_name: self.name.clone(),
             dest: IpCidr::Ip4(format!("{}/32", dest).parse().unwrap()),
             target: RouterTarget::Ip(dest.parse().unwrap()),
+            class: RouterClass::System,
         })?;
         Ok(())
     }
@@ -207,6 +209,12 @@ impl Drop for Xde {
     /// When this object is dropped, remove the xde kernel module from the
     /// underlying system.
     fn drop(&mut self) {
+        // The module can no longer be successfully removed until the underlay
+        // has been cleared. This may not have been done, so this is fallible.
+        if let Ok(adm) = OpteAdm::open(OpteAdm::XDE_CTL) {
+            let _ = adm.clear_xde_underlay();
+        }
+
         let mut cmd = Command::new("pfexec");
         cmd.args(["rem_drv", "xde"]);
         if let Err(e) = cmd.output() {
@@ -340,9 +348,9 @@ pub fn two_node_topology() -> Result<Topology> {
 
     // Create a pair of zones to simulate our VM instances.
     println!("start zone a");
-    let a = OpteZone::new("a", &zfs, &[&vopte0.name])?;
+    let a = OpteZone::new("a", &zfs, &[&vopte0.name], "sparse")?;
     println!("start zone b");
-    let b = OpteZone::new("b", &zfs, &[&vopte1.name])?;
+    let b = OpteZone::new("b", &zfs, &[&vopte1.name], "sparse")?;
 
     println!("setup zone a");
     a.setup(&vopte0.name, opte0.ip())?;
@@ -444,6 +452,7 @@ pub fn single_node_over_real_nic(
     underlay: &[String; 2],
     my_info: PortInfo,
     peers: &[PortInfo],
+    brand: &str,
 ) -> Result<Topology> {
     Xde::set_xde_underlay(&underlay[0], &underlay[1])?;
     let xde = Xde {};
@@ -473,7 +482,7 @@ pub fn single_node_over_real_nic(
     let zfs = Arc::new(Zfs::new("opte1node")?);
 
     println!("start zone");
-    let a = OpteZone::new("a", &zfs, &[&vopte.name])?;
+    let a = OpteZone::new("a", &zfs, &[&vopte.name], brand)?;
 
     std::thread::sleep(Duration::from_secs(30));
 

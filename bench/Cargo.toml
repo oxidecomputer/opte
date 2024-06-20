@@ -21,7 +21,7 @@ rand.workspace = true
 opte.workspace = true
 opte-test-utils.workspace = true
 oxide-vpc.workspace = true
-serde = { default_features = true, workspace = true }
+serde = { default-features = true, workspace = true }
 serde_json.workspace = true
 
 [dev-dependencies]

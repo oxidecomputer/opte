@@ -17,7 +17,8 @@ cfg_if! {
         use core::ptr;
         use illumos_sys_hdrs::{
             kmutex_t, krw_t, krwlock_t, mutex_enter, mutex_exit,
-            mutex_init, rw_enter, rw_exit, rw_init,
+            mutex_destroy, mutex_init, rw_enter, rw_exit, rw_init,
+            rw_destroy
         };
     } else {
         use std::sync::Mutex;
@@ -56,10 +57,20 @@ use illumos_sys_hdrs::krw_type_t;
 #[cfg(all(not(feature = "std"), not(test)))]
 pub struct KMutex<T> {
     // The mutex(9F) structure.
-    mutex: UnsafeCell<kmutex_t>,
+    mutex: KMutexInner,
 
     // The data this mutex protects.
     data: UnsafeCell<T>,
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+struct KMutexInner(UnsafeCell<kmutex_t>);
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl Drop for KMutexInner {
+    fn drop(&mut self) {
+        unsafe { mutex_destroy(self.0.get()) }
+    }
 }
 
 pub enum KMutexType {
@@ -109,7 +120,10 @@ impl<T> KMutex<T> {
             mutex_init(&mut kmutex, ptr::null(), mtype.into(), ptr::null());
         }
 
-        KMutex { mutex: UnsafeCell::new(kmutex), data: UnsafeCell::new(val) }
+        KMutex {
+            mutex: KMutexInner(UnsafeCell::new(kmutex)),
+            data: UnsafeCell::new(val),
+        }
     }
 
     /// Try to acquire the mutex guard to gain access to the underlying
@@ -117,7 +131,7 @@ impl<T> KMutex<T> {
     /// block. The mutex is released when the guard is dropped.
     pub fn lock(&self) -> KMutexGuard<T> {
         // Safety: ???.
-        unsafe { mutex_enter(self.mutex.get()) };
+        unsafe { mutex_enter(self.mutex.0.get()) };
         KMutexGuard { lock: self }
     }
 }
@@ -134,7 +148,7 @@ pub struct KMutexGuard<'a, T: 'a> {
 impl<T> Drop for KMutexGuard<'_, T> {
     fn drop(&mut self) {
         // Safety: ???.
-        unsafe { mutex_exit(self.lock.mutex.get()) };
+        unsafe { mutex_exit(self.lock.mutex.0.get()) };
     }
 }
 
@@ -205,6 +219,13 @@ impl<T> KMutex<T> {
 pub struct KRwLock<T> {
     rwl: UnsafeCell<krwlock_t>,
     data: UnsafeCell<T>,
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl<T> Drop for KRwLock<T> {
+    fn drop(&mut self) {
+        unsafe { rw_destroy(self.rwl.get()) }
+    }
 }
 
 pub enum KRwLockType {

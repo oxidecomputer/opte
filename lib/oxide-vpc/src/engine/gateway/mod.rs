@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! The Oxide VPC Virtual Gateway.
 //!
@@ -84,6 +84,8 @@ pub mod dhcp;
 pub mod dhcpv6;
 pub mod icmp;
 pub mod icmpv6;
+mod transit;
+pub use transit::*;
 
 pub const NAME: &str = "gateway";
 
@@ -254,7 +256,7 @@ impl MetaAction for VpcMeta {
         flow: &InnerFlowId,
         action_meta: &mut ActionMeta,
     ) -> ModMetaResult {
-        match self.vpc_mappings.ip_to_vni(&flow.dst_ip) {
+        match self.vpc_mappings.ip_to_vni(&flow.dst_ip()) {
             Some(vni) => {
                 action_meta
                     .insert(ACTION_META_VNI.to_string(), vni.to_string());

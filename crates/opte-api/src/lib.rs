@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 #![no_std]
 #![deny(unreachable_patterns)]
@@ -47,7 +47,7 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 28;
+pub const API_VERSION: u64 = 32;
 
 /// Major version of the OPTE package.
 pub const MAJOR_VERSION: u64 = 0;
@@ -86,4 +86,10 @@ impl Display for Direction {
 pub struct SetXdeUnderlayReq {
     pub u1: String,
     pub u2: String,
+}
+
+/// Clear the underlay devices used by the xde kernel module
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClearXdeUnderlayReq {
+    pub _unused: u64,
 }

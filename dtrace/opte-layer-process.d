@@ -23,7 +23,9 @@ layer-process-return {
 	this->layer = stringof(arg2);
 	this->flow_before = (flow_id_sdt_arg_t *)arg3;
 	this->flow_after = (flow_id_sdt_arg_t *)arg4;
-	this->res = stringof(arg5);
+	this->msgs = (derror_sdt_arg_t*) arg5;
+	this->msg_len = this->msgs->len;
+	this->res = stringof("");
 
 	if (num >= 10) {
 		printf(HDR_FMT, "PORT", "LAYER", "DIR", "FLOW BEFORE",
@@ -36,6 +38,19 @@ layer-process-return {
 	if (this->af != AF_INET && this->af != AF_INET6) {
 		printf("BAD ADDRESS FAMILY: %d\n", this->af);
 	}
+}
+
+layer-process-return
+/this->msg_len > 0/
+{
+	this->res = strjoin(this->res, stringof(this->msgs->entry[0]));
+}
+
+layer-process-return
+/this->msg_len > 1/
+{
+	this->res = strjoin(this->res, EL_DELIMIT);
+	this->res = strjoin(this->res, stringof(this->msgs->entry[1]));
 }
 
 layer-process-return /this->af == AF_INET/ {

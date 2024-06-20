@@ -2,9 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
+use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
+use opte::api::Direction;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -13,11 +15,20 @@ use opte::api::SetXdeUnderlayReq;
 use opte::api::API_VERSION;
 use opte::api::XDE_IOC_OPTE_CMD;
 use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::AllowCidrReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
+use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::CreateXdeReq;
+use oxide_vpc::api::DelRouterEntryReq;
+use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpVirt2PhysReq;
+use oxide_vpc::api::DumpVirt2PhysResp;
+use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::ListPortsResp;
+use oxide_vpc::api::RemoveCidrReq;
+use oxide_vpc::api::RemoveCidrResp;
 use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
@@ -142,8 +153,21 @@ impl OpteHdl {
         })
     }
 
+    pub fn dump_v2p(
+        &self,
+        req: &DumpVirt2PhysReq,
+    ) -> Result<DumpVirt2PhysResp, Error> {
+        let cmd = OpteCmd::DumpVirt2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetVirt2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn clear_v2p(&self, req: &ClearVirt2PhysReq) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearVirt2Phys;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
@@ -171,11 +195,26 @@ impl OpteHdl {
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
+    /// Clear xde underlay devices.
+    pub fn clear_xde_underlay(&self) -> Result<NoResp, Error> {
+        let req = ClearXdeUnderlayReq { _unused: 0 };
+        let cmd = OpteCmd::ClearXdeUnderlay;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
     pub fn add_router_entry(
         &self,
         req: &AddRouterEntryReq,
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::AddRouterEntry;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn del_router_entry(
+        &self,
+        req: &DelRouterEntryReq,
+    ) -> Result<DelRouterEntryResp, Error> {
+        let cmd = OpteCmd::DelRouterEntry;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
@@ -190,6 +229,34 @@ impl OpteHdl {
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetExternalIps;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn allow_cidr(
+        &self,
+        port_name: &str,
+        cidr: IpCidr,
+        dir: Direction,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::AllowCidr;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&AllowCidrReq { cidr, port_name: port_name.into(), dir }),
+        )
+    }
+
+    pub fn remove_cidr(
+        &self,
+        port_name: &str,
+        cidr: IpCidr,
+        dir: Direction,
+    ) -> Result<RemoveCidrResp, Error> {
+        let cmd = OpteCmd::RemoveCidr;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&RemoveCidrReq { cidr, port_name: port_name.into(), dir }),
+        )
     }
 }
 
@@ -241,7 +308,7 @@ where
     const MAX_ITERATIONS: u8 = 3;
     for _ in 0..MAX_ITERATIONS {
         let ret = unsafe {
-            libc::ioctl(dev, XDE_IOC_OPTE_CMD as libc::c_int, &rioctl)
+            libc::ioctl(dev, XDE_IOC_OPTE_CMD as libc::c_int, &mut rioctl)
         };
 
         // The ioctl(2) failed for a reason other than the response

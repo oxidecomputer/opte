@@ -295,6 +295,7 @@ impl BenchPacketInstance for UlpProcessInstance {
             &g1.port,
             IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
             RouterTarget::InternetGateway,
+            RouterClass::System,
         )
         .unwrap();
         incr!(g1, ["epoch", "router.rules.out"]);
@@ -303,6 +304,7 @@ impl BenchPacketInstance for UlpProcessInstance {
             &g1.port,
             IpCidr::Ip6("::/0".parse().unwrap()),
             RouterTarget::InternetGateway,
+            RouterClass::System,
         )
         .unwrap();
         incr!(g1, ["epoch", "router.rules.out"]);

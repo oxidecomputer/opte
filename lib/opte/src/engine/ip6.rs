@@ -889,7 +889,7 @@ pub(crate) mod test {
             0xc8, 0x34, 0xdd, 0x6b, 0xfa, 0x21,
         ];
 
-        let mut pkt = Packet::copy(&buf);
+        let mut pkt = Packet::copy(buf);
         let mut reader = pkt.get_rdr_mut();
         assert!(matches!(
             Ipv6Hdr::parse(&mut reader),
