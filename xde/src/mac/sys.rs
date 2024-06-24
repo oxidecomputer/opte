@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 // stuff we need from mac
 
@@ -11,6 +11,7 @@ use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::c_uint;
 use illumos_sys_hdrs::c_void;
+use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::ddi_info_cmd_t;
 use illumos_sys_hdrs::dev_info;
 use illumos_sys_hdrs::dev_ops;
@@ -158,6 +159,24 @@ extern "C" {
         mp_chain: *mut mblk_t,
     );
     pub fn mac_private_minor() -> minor_t;
+}
+
+// Private MAC functions needed to get us a Tx path.
+
+// Not quite a `void*` -- this includes extra flags etc.
+pub type mac_perim_handle = uintptr_t;
+extern "C" {
+    pub fn mac_perim_enter_by_mh(mh: mac_handle, mph: *mut mac_perim_handle);
+    pub fn mac_perim_enter_by_macname(
+        name: *const c_char,
+        mph: *mut mac_perim_handle,
+    ) -> c_int;
+    pub fn mac_perim_enter_by_linkid(
+        link: datalink_id_t,
+        mph: *mut mac_perim_handle,
+    ) -> c_int;
+    pub fn mac_perim_exit(mph: mac_perim_handle);
+    pub fn mac_perim_held(mh: mac_handle) -> boolean_t;
 }
 
 #[repr(C)]
