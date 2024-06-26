@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 #![cfg_attr(feature = "kernel", feature(extern_types))]
 #![allow(non_camel_case_types)]
 #![no_std]
@@ -307,6 +307,7 @@ pub type hrtime_t = c_longlong;
 // ======================================================================
 // uts/common/sys/types.h
 // ======================================================================
+pub type clock_t = c_long;
 pub type datalink_id_t = uint32_t;
 pub type dev_t = c_ulong;
 pub type id_t = c_int;

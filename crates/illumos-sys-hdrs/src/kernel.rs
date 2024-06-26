@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 #![allow(clippy::missing_safety_doc)]
 
@@ -78,6 +78,31 @@ impl krw_t {
     pub const RW_READER: Self = Self(1);
     /// Acquire lock non-exclusively, ignoring waiting writers.
     pub const RW_READER_STARVEWRITER: Self = Self(2);
+}
+
+#[repr(C)]
+pub struct kcondvar_t {
+    pub _opaque: c_ushort,
+}
+
+#[repr(transparent)]
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct kcv_type_t(pub c_int);
+impl kcv_type_t {
+    pub const CV_DEFAULT: Self = Self(0);
+    pub const CV_DRIVER: Self = Self(1);
+}
+
+#[repr(transparent)]
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct time_res_t(pub c_int);
+impl time_res_t {
+    pub const TR_NANOSEC: Self = Self(0);
+    pub const TR_MICROSEC: Self = Self(1);
+    pub const TR_MILLISEC: Self = Self(2);
+    pub const TR_SEC: Self = Self(3);
+    pub const TR_CLOCK_TICK: Self = Self(4);
+    pub const TR_COUNT: Self = Self(5);
 }
 
 extern "C" {
@@ -585,6 +610,40 @@ extern "C" {
     pub fn rw_downgrade(rwlp: *mut krwlock_t);
     pub fn rw_tryupgrade(rwlp: *mut krwlock_t);
     pub fn rw_read_locked(rwlp: *mut krwlock_t);
+
+    pub fn cv_init(
+        cvp: *mut kcondvar_t,
+        name: *const c_char,
+        cv_type: kcv_type_t,
+        arg: *mut c_void,
+    );
+    pub fn cv_destroy(cvp: *mut kcondvar_t);
+    pub fn cv_wait(cvp: *mut kcondvar_t, mp: *mut kmutex_t);
+    pub fn cv_signal(cvp: *mut kcondvar_t);
+    pub fn cv_broadcast(cvp: *mut kcondvar_t);
+    pub fn cv_wait_sig(cvp: *mut kcondvar_t, mp: *mut kmutex_t) -> c_int;
+    pub fn cv_timedwait(
+        cvp: *mut kcondvar_t,
+        mp: *mut kmutex_t,
+        timeout: clock_t,
+    ) -> clock_t;
+    pub fn cv_timedwait_sig(
+        cvp: *mut kcondvar_t,
+        mp: *mut kmutex_t,
+        timeout: clock_t,
+    ) -> clock_t;
+    pub fn cv_reltimedwait(
+        cvp: *mut kcondvar_t,
+        mp: *mut kmutex_t,
+        delta: clock_t,
+        res: time_res_t,
+    ) -> clock_t;
+    pub fn cv_reltimedwait_sig(
+        cvp: *mut kcondvar_t,
+        mp: *mut kmutex_t,
+        delta: clock_t,
+        res: time_res_t,
+    ) -> clock_t;
 
     pub fn nochpoll() -> c_int;
     pub fn nodev() -> c_int;

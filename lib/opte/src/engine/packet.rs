@@ -8,11 +8,6 @@
 //!
 //! TODO
 //!
-//! * Add a PacketChain type to represent a chain of one or more
-//! indepenndent packets. Also consider having chains that represent
-//! multiple packets for the same flow if it would be advantageous to
-//! do so.
-//!
 //! * Add hardware offload information to [`Packet`].
 //!
 
@@ -49,12 +44,19 @@ use super::ip6::Ipv6HdrError;
 use super::ip6::Ipv6Meta;
 use super::NetworkParser;
 use crate::d_error::DError;
+use crate::ddi::sync::KCondvar;
+use crate::ddi::sync::KMutex;
+use alloc::collections::LinkedList;
 use core::fmt;
 use core::fmt::Display;
+use core::num::NonZeroUsize;
 use core::ptr;
 use core::ptr::NonNull;
 use core::result;
 use core::slice;
+use core::sync::atomic::AtomicBool;
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::AtomicUsize;
 use crc32fast::Hasher;
 use dyn_clone::DynClone;
 use serde::Deserialize;
@@ -423,6 +425,7 @@ impl PacketMeta {
 struct PacketChainInner {
     head: NonNull<mblk_t>,
     tail: NonNull<mblk_t>,
+    len: usize,
 }
 
 /// A chain of network packets.
@@ -460,11 +463,21 @@ impl PacketChain {
 
         // Walk the chain to find the tail, and support faster append.
         let mut tail = head;
+        let mut len = 1;
         while let Some(next_ptr) = NonNull::new((*tail.as_ptr()).b_next) {
+            len += 1;
             tail = next_ptr;
         }
 
-        Ok(Self { inner: Some(PacketChainInner { head, tail }) })
+        Ok(Self { inner: Some(PacketChainInner { head, tail, len }) })
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.as_ref().map(|v| v.len).unwrap_or_default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Removes the next packet from the top of the chain and returns
@@ -527,8 +540,10 @@ impl PacketChain {
                 // pkt_p->b_next is already null.
             }
             list.tail = pkt;
+            list.len += 1;
         } else {
-            self.inner = Some(PacketChainInner { head: pkt, tail: pkt });
+            self.inner =
+                Some(PacketChainInner { head: pkt, tail: pkt, len: 1 });
         }
     }
 
@@ -537,6 +552,31 @@ impl PacketChain {
     /// `mblk_t` segment chain.
     pub fn unwrap_mblk(mut self) -> Option<NonNull<mblk_t>> {
         self.inner.take().map(|v| v.head)
+    }
+
+    /// Append another `PacketChain` to the end of this one.
+    pub fn extend(&mut self, mut other: Self) {
+        match (&mut self.inner, other.inner.take()) {
+            // Append them to us.
+            (Some(my_inner), Some(their_inner)) => {
+                // link our tail with their head.
+                let old_tail_p = my_inner.tail.as_ptr();
+                let their_head_p = their_inner.head.as_ptr();
+                unsafe {
+                    (*old_tail_p).b_next = their_head_p;
+                    (*their_head_p).b_prev = old_tail_p;
+                }
+
+                my_inner.tail = their_inner.tail;
+                my_inner.len += their_inner.len;
+            }
+            // replace with their inner.
+            (None, their_inner @ Some(_)) => {
+                self.inner = their_inner;
+            }
+            // Append an empty list: no-op.
+            (_, None) => {}
+        }
     }
 }
 
@@ -560,6 +600,170 @@ impl Drop for PacketChain {
             }
         }
     }
+}
+
+unsafe impl Send for PacketChain {}
+unsafe impl Sync for PacketChain {}
+
+/// A `PacketChain` plus per-element metadata.
+// using linked list, probably want to swap vecdeques in and out.
+pub struct PacketChainAnd<T> {
+    packets: PacketChain,
+    metadata: LinkedList<T>,
+}
+
+impl<T> PacketChainAnd<T> {
+    pub fn len(&self) -> usize {
+        self.packets.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn extend(&mut self, mut other: Self) {
+        self.packets.extend(other.packets);
+        self.metadata.append(&mut other.metadata);
+    }
+}
+
+impl<T> Default for PacketChainAnd<T> {
+    fn default() -> Self {
+        Self { packets: PacketChain::empty(), metadata: LinkedList::new() }
+    }
+}
+
+impl<T> Iterator for PacketChainAnd<T> {
+    type Item = (Packet<Initialized>, T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.packets
+            .pop_front()
+            .and_then(|el| self.metadata.pop_front().map(|meta| (el, meta)))
+    }
+}
+
+// to test: double-buffer inner with shared tick?
+
+struct WriteSlot<T> {
+    inner: KMutex<PacketChainAnd<T>>,
+    pkts: AtomicUsize,
+}
+
+impl<T> Default for WriteSlot<T> {
+    fn default() -> Self {
+        Self {
+            inner: KMutex::new(
+                Default::default(),
+                crate::ddi::sync::KMutexType::Spin,
+            ),
+            pkts: 0.into(),
+        }
+    }
+}
+
+/// Not quite an SQueue.
+pub struct EssQueue<T> {
+    slots: [WriteSlot<T>; 2],
+    sleepy: KMutex<()>,
+    cv: KCondvar,
+    watermark: Option<NonZeroUsize>,
+    kill: AtomicBool,
+}
+
+// NOTE: this is a really dumb proxy for per-port.
+
+impl<T> EssQueue<T> {
+    pub fn new(watermark: Option<NonZeroUsize>) -> Self {
+        Self {
+            slots: Default::default(),
+            sleepy: KMutex::new(
+                Default::default(),
+                crate::ddi::sync::KMutexType::Spin,
+            ),
+            cv: KCondvar::new(),
+            watermark,
+            kill: false.into(),
+        }
+    }
+
+    // TODO: want in future to maybe have T be derived from the packet (e.g., parsed).
+    pub fn deliver(
+        &self,
+        slot: usize,
+        packets: PacketChain,
+        mut f: impl FnMut() -> T,
+    ) -> Result<(), EssQueueDeliverError> {
+        let n = packets.len();
+        // pre-prepare list of elements to push at back.
+        let mut els: LinkedList<T> = (0..n).map(|_| f()).collect();
+
+        let mut workspace = self.slots[slot].inner.lock();
+
+        if self
+            .watermark
+            .map(|w| workspace.packets.len() > w.into())
+            .unwrap_or(false)
+        {
+            return Err(EssQueueDeliverError::Full);
+        }
+
+        workspace.packets.extend(packets);
+        workspace.metadata.append(&mut els);
+
+        self.slots[slot]
+            .pkts
+            .fetch_add(n, core::sync::atomic::Ordering::Relaxed);
+
+        // We can notify with/without the lock, but illumos prefers
+        // we do so with the lock 'for scheduling purposes'.
+        drop(workspace);
+        self.cv.notify_one();
+
+        Ok(())
+    }
+
+    // Probably want there to be a timeout here rather than just a kill flag.
+    pub fn receive(&self) -> Result<PacketChainAnd<T>, EssQueueReceiveError> {
+        let mut pkts = PacketChainAnd::default();
+
+        while pkts.is_empty() {
+            if self.kill.load(core::sync::atomic::Ordering::Relaxed) {
+                return Err(EssQueueReceiveError::Dead);
+            }
+
+            for slot in &self.slots {
+                if slot.pkts.load(core::sync::atomic::Ordering::Relaxed) == 0 {
+                    continue;
+                }
+                let mut workspace = slot.inner.lock();
+
+                let taken = core::mem::take(&mut *workspace);
+                slot.pkts.store(0, core::sync::atomic::Ordering::Relaxed);
+                drop(workspace);
+
+                pkts.extend(taken);
+            }
+
+            // let a = self.sleepy.lock();
+            // self.cv.wait(a);
+        }
+
+        Ok(pkts)
+    }
+
+    pub fn quiesce(&self) {
+        self.kill.store(true, core::sync::atomic::Ordering::Relaxed);
+        self.cv.notify_all();
+    }
+}
+
+pub enum EssQueueDeliverError {
+    Full,
+}
+
+pub enum EssQueueReceiveError {
+    Dead,
 }
 
 /// A network packet.
@@ -4000,6 +4204,8 @@ mod test {
 
         let mut chain = unsafe { PacketChain::new(els[0]) }.unwrap();
         let pkt = unsafe { Packet::wrap_mblk(new_el) }.unwrap();
+
+        assert_eq!(chain.len(), els.len());
 
         chain.append(pkt);
 
