@@ -50,6 +50,7 @@ ctor = "0.2"
 darling = "0.20"
 dyn-clone = "1.0"
 heapless = "0.8"
+illumos = { git = "ssh://git@github.com/oxidecomputer/illumos-rs.git", branch = "luqmana/rusty-modules" }
 ipnetwork = { version = "0.20", default-features = false }
 itertools = { version = "0.12", default-features = false }
 libc = "0.2"
@@ -81,3 +82,4 @@ poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipat
 
 [profile.release]
 debug = 2
+lto = true
