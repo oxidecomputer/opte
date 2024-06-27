@@ -152,7 +152,7 @@ dependencies = [
 [[package]]
 name = "bindings"
 version = "0.1.0"
-source = "git+ssh://git@github.com/oxidecomputer/illumos-rs.git?branch=luqmana/rusty-modules#e3f8c3d6c38e28c45f7ebc35a6f8bc06f7bd7f31"
+source = "git+ssh://git@github.com/oxidecomputer/illumos-rs.git?branch=felixmcfelix/rusty-for-opte#735a4daf33a7d5a6368f7df76d88ed4f231ab24a"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -936,7 +936,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "illumos"
 version = "0.1.0"
-source = "git+ssh://git@github.com/oxidecomputer/illumos-rs.git?branch=luqmana/rusty-modules#e3f8c3d6c38e28c45f7ebc35a6f8bc06f7bd7f31"
+source = "git+ssh://git@github.com/oxidecomputer/illumos-rs.git?branch=felixmcfelix/rusty-for-opte#735a4daf33a7d5a6368f7df76d88ed4f231ab24a"
 dependencies = [
  "bindings",
  "bitflags 2.5.0",
@@ -1074,7 +1074,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e310b3a6b5907f99202fcdb4960ff45b93735d7c7d96b760fcff8db2dc0e103d"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.5",
 ]
 
 [[package]]
@@ -1152,7 +1152,7 @@ checksum = "90ed8c1e510134f979dbc4f070f87d4313098b704861a105fe34231c70a3901c"
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+ssh://git@github.com/oxidecomputer/illumos-rs.git?branch=luqmana/rusty-modules#e3f8c3d6c38e28c45f7ebc35a6f8bc06f7bd7f31"
+source = "git+ssh://git@github.com/oxidecomputer/illumos-rs.git?branch=felixmcfelix/rusty-for-opte#735a4daf33a7d5a6368f7df76d88ed4f231ab24a"
 dependencies = [
  "bindings",
  "proc-macro2",
@@ -1324,6 +1324,7 @@ dependencies = [
  "derror-macro",
  "dyn-clone",
  "heapless",
+ "illumos",
  "illumos-sys-hdrs",
  "itertools 0.12.1",
  "kstat-macro",

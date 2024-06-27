@@ -29,7 +29,6 @@ use super::rule::ResourceEntry;
 use super::rule::ResourceError;
 use super::rule::StatefulAction;
 use crate::ddi::sync::KMutex;
-use crate::ddi::sync::KMutexType;
 use crate::engine::icmp::QueryEcho;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::ToString;
@@ -133,7 +132,7 @@ impl<T: ConcreteIpAddr> NatPool<T> {
 
     /// Create a new NAT pool, with no entries.
     pub fn new() -> Self {
-        NatPool { free_list: KMutex::new(BTreeMap::new(), KMutexType::Driver) }
+        NatPool { free_list: KMutex::new(BTreeMap::new()) }
     }
 
     // A helper function to verify correct operation during testing.

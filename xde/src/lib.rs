@@ -81,15 +81,6 @@ unsafe impl GlobalAlloc for KmemAlloc {
     }
 }
 
-#[panic_handler]
-fn panic_hdlr(info: &PanicInfo) -> ! {
-    let msg = CString::new(format!("{}", info)).expect("cstring new");
-    unsafe {
-        cmn_err(CE_WARN, msg.as_ptr());
-        panic(msg.as_ptr());
-    }
-}
-
 // The GlobalAlloc is using KM_SLEEP; we can never hit this. However, the
 // compiler forces us to define it, so we do.
 #[alloc_error_handler]

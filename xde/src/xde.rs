@@ -53,9 +53,7 @@ use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
 use opte::d_error::LabelBlock;
 use opte::ddi::sync::KMutex;
-use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
-use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
 use opte::engine::ether::EtherAddr;
@@ -106,6 +104,82 @@ use oxide_vpc::engine::overlay;
 use oxide_vpc::engine::router;
 use oxide_vpc::engine::VpcNetwork;
 use oxide_vpc::engine::VpcParser;
+
+// use illumos::driver::cb::CharBlockOps;
+// use illumos::driver::cb::OpenFlags;
+// use illumos::driver::Driver;
+// use illumos::module;
+// use illumos::module::Module;
+
+// module!(
+//     kind = Driver {
+//         info = "$ENV{CARGO_PKG_NAME} $ENV{CARGO_PKG_VERSION}",
+//     },
+//     type = Xde2,
+// );
+
+// struct Xde2 {
+//     devs: Arc<KRwLock<XdeDev>>,
+// }
+
+// impl Driver for Xde2 {
+//     fn get_dev_info(
+//         &self,
+//         dev: illumos::driver::Dev,
+//     ) -> Option<illumos::driver::GetDevInfo> {
+//         todo!()
+//     }
+
+//     fn get_dev_instance(
+//         &self,
+//         dev: illumos::driver::Dev,
+//     ) -> Option<illumos::driver::DevInstance> {
+//         todo!()
+//     }
+
+//     fn attach(
+//         &self,
+//         dev_info: illumos::driver::DevInfo,
+//     ) -> illumos::driver::AttachResult {
+//         // dev_info.get_dev_info()
+//         todo!()
+//     }
+
+//     fn detach(
+//         &self,
+//         instance: illumos::driver::DevInstance,
+//     ) -> illumos::driver::DetachResult {
+//         todo!()
+//     }
+// }
+
+// impl Module for Xde2 {
+//     fn init() -> Result<Self, illumos::Error> {
+//         todo!()
+//     }
+
+//     fn fini(self) {
+//         todo!()
+//     }
+// }
+
+// impl CharBlockOps for Xde2 {
+//     fn open(
+//         &self,
+//         minor: illumos::driver::DevMinor,
+//         flags: OpenFlags,
+//     ) -> Result<illumos::driver::DevMinor, illumos::Error> {
+//         todo!()
+//     }
+
+//     fn close(
+//         &self,
+//         minor: illumos::driver::DevMinor,
+//         open_flags: OpenFlags,
+//     ) -> Result<(), illumos::Error> {
+//         todo!()
+//     }
+// }
 
 // Entry limits for the various flow tables.
 //
@@ -253,7 +327,7 @@ impl XdeState {
     fn new() -> Self {
         let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
         XdeState {
-            underlay: KMutex::new(None, KMutexType::Driver),
+            underlay: KMutex::new(None),
             ectx,
             vpc_map: Arc::new(overlay::VpcMappings::new()),
             v2b: Arc::new(overlay::Virt2Boundary::new()),
@@ -299,7 +373,6 @@ pub struct XdeDev {
 #[cfg(not(test))]
 #[no_mangle]
 unsafe extern "C" fn _init() -> c_int {
-    xde_devs.init(KRwLockType::Driver);
     mac::mac_init_ops(addr_of_mut!(xde_devops), XDE_STR);
 
     match mod_install(&xde_linkage) {

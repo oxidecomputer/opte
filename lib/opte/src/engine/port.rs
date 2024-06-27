@@ -49,7 +49,6 @@ use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::sync::KMutex;
-use crate::ddi::sync::KMutexType;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::tcp::TcpMeta;
@@ -298,7 +297,7 @@ impl PortBuilder {
             ectx: self.ectx,
             epoch: AtomicU64::new(1),
             net,
-            data: KMutex::new(data, KMutexType::Driver),
+            data: KMutex::new(data),
         })
     }
 
@@ -350,7 +349,7 @@ impl PortBuilder {
             name_cstr,
             mac,
             ectx,
-            layers: KMutex::new(Vec::new(), KMutexType::Driver),
+            layers: KMutex::new(Vec::new()),
         }
     }
 
