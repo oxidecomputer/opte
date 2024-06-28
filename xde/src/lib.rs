@@ -49,47 +49,12 @@ pub mod secpolicy;
 pub mod sys;
 pub mod xde;
 
-// On alignment, `kmem_alloc(9F)` has this of offer:
-//
-// > The allocated memory is at least double-word aligned, so it can
-// > hold any C data structure. No greater alignment can be assumed.
-//
-// I really hate when documentation uses "word", because that seems to
-// mean different things in different contexts. In this case I have to
-// assume it means native integer size, or 32-bit in the case our our
-// AMD64 kernel. This implis all allocations are at least 8-byte
-// aligned, but could be more. However, the last sentence in the quote
-// above says that you cannot assume alignment is ever greater than 8
-// bytes. Therefore, it seems best to assume it's 8 bytes. For the
-// purposes of implementing GlobalAlloc, I believe this means that we
-// should return NULL for any Layout which requests more than 8-byte
-// alignment (or probably just panic since I never expect this).
-// Furthermore, things that can use smaller alignment will just have
-// to live with the larger alignment.
-struct KmemAlloc;
-
-unsafe impl GlobalAlloc for KmemAlloc {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if layout.align() > 8 {
-            panic!("kernel alloc greater than 8-byte alignment");
-        }
-        kmem_alloc(layout.size(), KM_SLEEP) as *mut u8
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        kmem_free(ptr as *mut c_void, layout.size() as size_t)
-    }
-}
-
 // The GlobalAlloc is using KM_SLEEP; we can never hit this. However, the
 // compiler forces us to define it, so we do.
 #[alloc_error_handler]
 fn alloc_error(_: Layout) -> ! {
     panic!("allocation error");
 }
-
-#[global_allocator]
-static A: KmemAlloc = KmemAlloc;
 
 // This is a hack to get around the fact that liballoc includes
 // calls to _Unwind_Resume, supposedly because it is not compiled

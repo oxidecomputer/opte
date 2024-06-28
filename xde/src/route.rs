@@ -519,7 +519,7 @@ pub struct RouteCache(Arc<KRwLock<BTreeMap<RouteKey, CachedRoute>>>);
 
 impl Default for RouteCache {
     fn default() -> Self {
-        let mut lock = KRwLock::new(BTreeMap::new());
+        let lock = KRwLock::new(BTreeMap::new());
         Self(lock.into())
     }
 }
