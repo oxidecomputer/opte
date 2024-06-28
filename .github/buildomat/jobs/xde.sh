@@ -16,6 +16,9 @@
 #:   "=/work/test/loopback",
 #:   "=/work/xde.conf",
 #: ]
+#: access_repos = [
+#:  "oxidecomputer/illumos-rs",
+#: ]
 #:
 #: [[publish]]
 #: series = "module"
