@@ -12,19 +12,84 @@ pub use super::mac_sys::*;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
+use alloc::sync::Arc;
 use bitflags::bitflags;
 use core::ffi::CStr;
+use core::fmt;
 use core::ptr;
 use illumos_sys_hdrs::*;
+use opte::engine::ether::EtherAddr;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
 
-/// A mac client
-#[derive(Clone, Debug)]
-pub struct MacClient {
+/// Errors while opening a MAC handle.
+#[derive(Debug)]
+pub enum MacOpenError<'a> {
+    InvalidLinkName(&'a str),
+    OpenFailed(&'a str, i32),
+}
+
+impl fmt::Display for MacOpenError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MacOpenError::InvalidLinkName(link) => {
+                write!(f, "invalid link name: {link}")
+            }
+            MacOpenError::OpenFailed(link, err) => {
+                write!(f, "mac_open_by_linkname failed for {link}: {err}")
+            }
+        }
+    }
+}
+
+/// Safe wrapper around a `mac_handle_t`.
+#[derive(Debug)]
+pub struct MacHandle(*mut mac_handle);
+
+impl MacHandle {
+    /// Grab a handle to the mac provider for the given link.
+    pub fn open_by_link_name(link: &str) -> Result<Self, MacOpenError> {
+        let name = CString::new(link)
+            .map_err(|_| MacOpenError::InvalidLinkName(link))?;
+
+        let mut mh = ptr::null_mut();
+        let ret = unsafe { mac_open_by_linkname(name.as_ptr(), &mut mh) };
+        if ret != 0 {
+            return Err(MacOpenError::OpenFailed(link, ret));
+        }
+
+        Ok(Self(mh))
+    }
+
+    pub fn get_mac_addr(&self) -> [u8; 6] {
+        let mut mac = [0u8; 6];
+        unsafe {
+            mac_unicast_primary_get(self.0, &mut mac);
+        }
+        mac
+    }
+}
+
+impl Drop for MacHandle {
+    fn drop(&mut self) {
+        // Safety: We know that a `MacHandle` can only exist if a mac
+        // handle was successfully obtained.
+        unsafe { mac_close(self.0) };
+    }
+}
+
+/// Safe wrapper around a `mac_client_handle_t`.
+#[derive(Debug)]
+pub struct MacClientHandle {
+    /// Flags to pass to `mac_client_close()`.
     close_flags: u16,
+
+    /// The client handle.
     mch: *mut mac_client_handle,
+
+    /// Reference to the underlying MAC handle for this client.
+    _mh: Arc<MacHandle>,
 }
 
 bitflags! {
@@ -39,14 +104,15 @@ bitflags! {
     //
     // For now we only include flags currently used by consumers.
     pub struct MacOpenFlags: u16 {
+        const NONE = 0;
         const NO_UNICAST_ADDR = MAC_OPEN_FLAGS_NO_UNICAST_ADDR;
     }
 }
 
-impl MacClient {
-    /// Open a new client on top of the provider specified by `mh`.
+impl MacClientHandle {
+    /// Open a new client for the given MAC, `mh`.
     pub fn open(
-        mh: *const mac_handle,
+        mh: &Arc<MacHandle>,
         name: Option<&str>,
         open_flags: MacOpenFlags,
         close_flags: u16,
@@ -62,7 +128,7 @@ impl MacClient {
                 let name_cstr = CString::new(name_str).unwrap();
                 unsafe {
                     mac_client_open(
-                        mh,
+                        mh.0,
                         &mut mch,
                         name_cstr.as_ptr(),
                         raw_oflags,
@@ -73,7 +139,9 @@ impl MacClient {
             None => {
                 let name_cstr = ptr::null_mut();
                 raw_oflags |= MAC_OPEN_FLAGS_USE_DATALINK_NAME;
-                unsafe { mac_client_open(mh, &mut mch, name_cstr, raw_oflags) }
+                unsafe {
+                    mac_client_open(mh.0, &mut mch, name_cstr, raw_oflags)
+                }
             }
         };
 
@@ -81,7 +149,7 @@ impl MacClient {
             return Err(ret);
         }
 
-        Ok(Self { close_flags, mch })
+        Ok(Self { close_flags, mch, _mh: mh.clone() })
     }
 
     /// Get the name of the client.
@@ -105,33 +173,58 @@ impl MacClient {
         unsafe { mac_rx_clear(self.mch) };
     }
 
-    /// Set the Rx callback handler.
-    pub fn set_rx(&self, rx_fn: mac_rx_fn, arg: *mut c_void) {
-        unsafe { mac_rx_set(self.mch, rx_fn, arg) };
-    }
-
-    pub fn add_promisc(
-        &self,
-        ptype: mac_client_promisc_type_t,
-        promisc_fn: mac_rx_fn,
-        arg: *mut c_void,
-        flags: u16,
-    ) -> Result<*mut mac_promisc_handle, c_int> {
-        let mut mph = 0 as *mut mac_promisc_handle;
-
-        let ret = unsafe {
-            mac_promisc_add(self.mch, ptype, promisc_fn, arg, &mut mph, flags)
-        };
-
-        if ret == 0 {
-            Ok(mph)
-        } else {
-            return Err(ret);
+    /// Calls `mac_unicast_add` on the underlying system.
+    pub fn add_unicast(
+        self: &Arc<Self>,
+        mac: EtherAddr,
+    ) -> Result<MacUnicastHandle, c_int> {
+        let mut diag = mac_diag::MAC_DIAG_NONE;
+        let mut ether = mac.to_bytes();
+        let mut muh = ptr::null_mut();
+        unsafe {
+            match mac_unicast_add(
+                self.mch,
+                ether.as_mut_ptr(),
+                0,
+                &mut muh,
+                0,
+                &mut diag,
+            ) {
+                0 => Ok(MacUnicastHandle { muh, mch: self.clone() }),
+                err => Err(err),
+            }
         }
     }
 
-    pub fn rem_promisc(&self, mph: *mut mac_promisc_handle) {
-        unsafe { mac_promisc_remove(mph) };
+    /// Register promiscuous callback to receive packets on the underlying MAC.
+    pub fn add_promisc(
+        self: &Arc<Self>,
+        ptype: mac_client_promisc_type_t,
+        promisc_fn: mac_rx_fn,
+        flags: u16,
+    ) -> Result<MacPromiscHandle, c_int> {
+        let mut mph = ptr::null_mut();
+
+        // `MacPromiscHandle` keeps a reference to this `MacClientHandle`
+        // until it is removed and so we can safely access it from the
+        // callback via the `arg` pointer.
+        let mch = Arc::into_raw(self.clone());
+        let ret = unsafe {
+            mac_promisc_add(
+                self.mch,
+                ptype,
+                promisc_fn,
+                mch as *mut c_void,
+                &mut mph,
+                flags,
+            )
+        };
+
+        if ret == 0 {
+            Ok(MacPromiscHandle { mph, mch })
+        } else {
+            Err(ret)
+        }
     }
 
     /// Send the [`Packet`] on this client.
@@ -155,7 +248,7 @@ impl MacClient {
         unsafe {
             mac_tx(self.mch, pkt.unwrap_mblk(), hint, flags.bits(), &mut ret_mp)
         };
-        if ret_mp != ptr::null_mut() {
+        if !ret_mp.is_null() {
             // Unwrap: We know the ret_mp is valid because we gave
             // mac_tx() a valid mp_chain; and mac_tx() will give us
             // either that exact pointer back (via ret_mp) or the
@@ -196,11 +289,52 @@ impl MacClient {
     }
 }
 
-impl Drop for MacClient {
+impl Drop for MacClientHandle {
     fn drop(&mut self) {
-        // Safety: We know that a MacClient can only exist if a mac
+        // Safety: We know that a `MacClientHandle` can only exist if a mac
         // client handle was successfully obtained, and thus mch is
         // valid.
         unsafe { mac_client_close(self.mch, self.close_flags) };
+    }
+}
+
+/// Safe wrapper around a `mac_promisc_handle_t`.
+#[derive(Debug)]
+pub struct MacPromiscHandle {
+    /// The underlying `mac_promisc_handle_t`.
+    mph: *mut mac_promisc_handle,
+
+    /// The `MacClientHandle` used to create this promiscuous callback.
+    mch: *const MacClientHandle,
+}
+
+impl Drop for MacPromiscHandle {
+    fn drop(&mut self) {
+        // Safety: We know that a `MacPromiscHandle` can only exist if a
+        // mac promisc handle was successfully obtained, and thus `mph`
+        // is valid.
+        unsafe {
+            mac_promisc_remove(self.mph);
+            Arc::from_raw(self.mch); // dropped immediately
+        };
+    }
+}
+
+/// Safe wrapper around a `mac_unicast_handle_t`.
+#[derive(Debug)]
+pub struct MacUnicastHandle {
+    /// The underlying `mac_unicast_handle_t`.
+    muh: *mut mac_unicast_handle,
+
+    /// The `MacClientHandle` used to create this unicast callback.
+    mch: Arc<MacClientHandle>,
+}
+
+impl Drop for MacUnicastHandle {
+    fn drop(&mut self) {
+        // Safety: We know that a `MacUnicastHandle` can only exist if a
+        // mac unicast handle was successfully obtained, and thus `muh`
+        // is valid.
+        unsafe { mac_unicast_remove(self.mch.mch, self.muh) };
     }
 }

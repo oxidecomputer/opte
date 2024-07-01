@@ -4,33 +4,29 @@ set name=pkg.fmri \
 set name=pkg.summary value="The Oxide Packet Transformation Engine"
 set name=info.classification \
     value=org.opensolaris.category.2008:Drivers/Networking
-set name=variant.opensolaris.zone value=global
+set name=variant.opensolaris.zone value=global value=nonglobal
 set name=variant.arch value=i386
+set name=variant.debug.illumos value=false value=true
 dir path=opt owner=root group=sys mode=0755
 dir path=opt/oxide owner=root group=bin mode=0755
 dir path=opt/oxide/opte owner=root group=bin mode=0755
 dir path=opt/oxide/opte/bin owner=root group=bin mode=0755
-file path=opt/oxide/opte/bin/opteadm owner=root group=bin mode=0755
+file path=opt/oxide/opte/bin/opteadm owner=root group=bin mode=0755 \
+    variant.debug.illumos=false
+$(inc_debug)file opt/oxide/opte/bin/opteadm.dbg path=opt/oxide/opte/bin/opteadm owner=root group=bin mode=0755 \
+    variant.debug.illumos=true
 dir path=kernel owner=root group=sys mode=0755
 dir path=kernel/drv owner=root group=sys mode=0755
 file path=kernel/drv/xde.conf owner=root group=sys mode=0644 preserve=renamenew
+dir path=usr/lib/devfsadm owner=root group=sys mode=0755
+dir path=usr/lib/devfsadm/linkmod owner=root group=sys mode=0755
+file path=usr/lib/devfsadm/linkmod/SUNW_xde_link.so owner=root group=sys mode=0755
 
-# XXX the bypasses below are a hack, but idk what the right thing to do is.
-# Without the bypass this happens
-#:
-#:  + pkgdepend resolve -d packages -s resolve.p5m opte.generate.p5m
-#:  /home/ry/src/opte/pkg/opte.generate.p5m has unresolved dependency '
-#:     depend type=require fmri=__TBD pkg.debug.depend.file=mac \
-#:         pkg.debug.depend.reason=kernel/drv/amd64/xde \
-#:         pkg.debug.depend.type=elf \
-#:         pkg.debug.depend.path=kernel/drv/amd64 \
-#:         pkg.debug.depend.path=usr/kernel/drv/amd64
-#:  ' under the following combinations of variants:
-#:  variant.opensolaris.zone:global
-#:
 file path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
-    pkg.depend.bypass-generate=.*dld.* \
-    pkg.depend.bypass-generate=.*mac.*
+    variant.debug.illumos=false \
+    variant.opensolaris.zone=global
+$(inc_debug)file kernel/drv/amd64/xde.dbg path=kernel/drv/amd64/xde owner=root group=sys mode=0755 \
+    variant.debug.illumos=true \
+    variant.opensolaris.zone=global
+
 driver name=xde
-depend type=incorporate fmri=pkg:/driver/network/opte@0.%API_VSN%.%COMMIT_COUNT%
-depend type=require fmri=pkg:/driver/network/opte@0.%API_VSN%.%COMMIT_COUNT%

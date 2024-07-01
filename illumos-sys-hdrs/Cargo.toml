@@ -1,9 +1,0 @@
-[package]
-name = "illumos-sys-hdrs"
-version = "0.1.0"
-authors = ["Ryan Zezeski <ryan@oxide.computer>"]
-edition = "2021"
-
-[features]
-default = []
-kernel = []

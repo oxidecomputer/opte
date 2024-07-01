@@ -1,0 +1,55 @@
+[package]
+name = "opte"
+version = "0.1.0"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["api", "std"]
+api = []
+engine = ["api", "dep:crc32fast", "dep:derror-macro", "dep:heapless", "dep:itertools", "dep:zerocopy"]
+kernel = ["illumos-sys-hdrs/kernel"]
+# This feature indicates that OPTE is being built with std. This is
+# mostly useful to consumers of the API, providing convenient methods
+# for working with the API types in a std context.
+std = ["dep:tabwriter", "opte-api/std"]
+#
+# Used for declaring methods which are useful for integration testing.
+#
+test-help = []
+usdt = ["std", "dep:usdt"]
+
+[dependencies]
+derror-macro = { workspace = true, optional = true }
+illumos-sys-hdrs.workspace = true
+kstat-macro.workspace = true
+opte-api.workspace = true
+
+cfg-if.workspace = true
+crc32fast = { workspace = true, optional = true }
+dyn-clone.workspace = true
+heapless = { workspace = true, optional = true }
+itertools = { workspace = true, optional = true }
+postcard.workspace = true
+serde.workspace = true
+tabwriter = { workspace = true, optional = true }
+usdt = { workspace = true, optional = true }
+zerocopy = { workspace = true, optional = true }
+
+[dependencies.smoltcp]
+workspace = true
+default-features = false
+#
+# TODO Would defmt be of any use?
+#
+features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-ipv6", "proto-dhcpv4", "socket", "socket-raw"]
+
+[build-dependencies]
+version_check.workspace = true
+
+[dev-dependencies]
+# Enable usdt probes for testing.
+opte = { workspace = true, features = ["engine", "usdt"] }
+itertools = { workspace = true, features = ["use_std"] }

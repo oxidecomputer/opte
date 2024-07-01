@@ -3,7 +3,7 @@
  *
  * dtrace -L ./lib -I . -Cqs ./opte-ioctl.d
  */
-xde_dld_ioc_opte_cmd:entry {
+xde_ioc_opte_cmd:entry {
 	this->opte_cmd_ioctl = (opte_cmd_ioctl_t *)arg0;
 	print(*this->opte_cmd_ioctl);
 	printf("\n");
@@ -18,6 +18,6 @@ ddi_copyin:return /self->t/ {
 	printf(" %d\n", arg1);
 }
 
-xde_dld_ioc_opte_cmd:return {
+xde_ioc_opte_cmd:return {
 	self->t = 0;
 }

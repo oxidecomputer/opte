@@ -2,14 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 // xde - A mac provider for OPTE-based network implementations.
 #![feature(extern_types)]
-#![feature(lang_items)]
 #![feature(panic_info_message)]
 #![no_std]
-#![allow(non_camel_case_types)]
 #![allow(non_upper_case_globals)]
 // XXX We do not use double in the kernel. We should not allow
 // "improper C types". This hack is here is because of the ip.rs code
@@ -42,11 +40,11 @@ use illumos_sys_hdrs::size_t;
 use illumos_sys_hdrs::CE_WARN;
 use illumos_sys_hdrs::KM_SLEEP;
 
-pub mod dld;
 pub mod dls;
 pub mod ip;
 pub mod mac;
 mod mac_sys;
+pub mod route;
 pub mod secpolicy;
 pub mod sys;
 pub mod xde;
@@ -119,31 +117,25 @@ fn _Unwind_Resume() -> ! {
 #[macro_export]
 macro_rules! warn {
     ($format:expr) => {
-        let msg = format!($format);
+        let msg = CString::new(format!($format)).unwrap();
         #[allow(unused_unsafe)]
-        unsafe { cmn_err(CE_WARN, CString::new(msg).unwrap().as_ptr()) };
+        unsafe { cmn_err(CE_WARN, msg.as_ptr()) };
     };
     ($format:expr, $($args:expr),*) => {
-        let msg = format!($format, $($args),*);
+        let msg = CString::new(format!($format, $($args),*)).unwrap();
         #[allow(unused_unsafe)]
-        unsafe { cmn_err(CE_WARN, CString::new(msg).unwrap().as_ptr()) };
+        unsafe { cmn_err(CE_WARN, msg.as_ptr()) };
     };
 }
 
 #[macro_export]
 macro_rules! note {
     ($format:expr) => {
-        let msg = format!($format);
-        cmn_err(
-            CE_NOTE,
-            CString::new(msg).unwrap().as_ptr(),
-        );
+        let msg = CString::new(format!($format));
+        cmn_err(CE_NOTE, msg.as_ptr());
     };
     ($format:expr, $($args:expr),*) => {
-        let msg = format!($format, $($args),*);
-        cmn_err(
-            CE_NOTE,
-            CString::new(msg).unwrap().as_ptr(),
-        );
+        let msg = CString::new(format!($format, $($args),*));
+        cmn_err(CE_NOTE, msg.as_ptr());
     };
 }

@@ -17,7 +17,6 @@ use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
 use opte::api::API_VERSION;
 use opte::api::OPTE_CMD_RESP_COPY_OUT;
-use postcard;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -131,7 +130,7 @@ impl<'a> IoctlEnvelope<'a> {
         };
 
         // We failed to serialize the response, communicate this with ENOMSG.
-        if let Err(_) = ser_result {
+        if ser_result.is_err() {
             // XXX In this case we aren't trying to serialize +
             // copyout the serialization error. We should do that so
             // there is more context for the caller.
@@ -162,7 +161,7 @@ impl<'a> IoctlEnvelope<'a> {
         if ret != 0 {
             // We failed to copyout, respond with the recommended
             // EFAULT.
-            return ddi::EFAULT;
+            ddi::EFAULT
         } else {
             // We successfully copied out a response. If the response
             // is a command error, set the errno based on the type of

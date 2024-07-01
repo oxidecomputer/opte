@@ -11,9 +11,11 @@ use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::c_uint;
 use illumos_sys_hdrs::c_void;
+use illumos_sys_hdrs::ddi_info_cmd_t;
 use illumos_sys_hdrs::dev_info;
 use illumos_sys_hdrs::dev_ops;
 use illumos_sys_hdrs::mblk_t;
+use illumos_sys_hdrs::minor_t;
 use illumos_sys_hdrs::queue_t;
 use illumos_sys_hdrs::size_t;
 use illumos_sys_hdrs::uintptr_t;
@@ -42,6 +44,8 @@ pub const MAC_OPEN_FLAGS_SHARES_DESIRED: u16 = 0x0008;
 pub const MAC_OPEN_FLAGS_USE_DATALINK_NAME: u16 = 0x0010;
 pub const MAC_OPEN_FLAGS_MULTI_PRIMARY: u16 = 0x0020;
 pub const MAC_OPEN_FLAGS_NO_UNICAST_ADDR: u16 = 0x0040;
+
+pub const MAC_PROMISC_FLAGS_NO_TX_LOOP: u16 = 0x0001;
 
 #[allow(dead_code)]
 #[repr(C)]
@@ -77,6 +81,13 @@ extern "C" {
     pub type mac_promisc_handle;
     pub type mac_resource_handle;
     pub type mac_prop_info_handle;
+
+    pub fn mac_getinfo(
+        dip: *mut dev_info,
+        cmd: ddi_info_cmd_t,
+        arg: *mut c_void,
+        result: *mut *mut c_void,
+    ) -> c_int;
 
     pub fn mac_client_open(
         mh: *const mac_handle,
@@ -146,7 +157,7 @@ extern "C" {
         mrh: *mut mac_resource_handle,
         mp_chain: *mut mblk_t,
     );
-
+    pub fn mac_private_minor() -> minor_t;
 }
 
 #[repr(C)]
@@ -166,52 +177,121 @@ pub enum mac_diag {
     MAC_DIAG_MACNO_HWRINGS,
 }
 
-// See mac_callbacks(9S) for more information on mac callbacks
+/// Networking device driver callbacks.
+///
+/// See `mac_callbacks(9S)`.
 #[repr(C)]
 pub struct mac_callbacks_t {
+    /// Indicates which optional callbacks are supported by the driver.
     pub mc_callbacks: c_uint,
+
+    /// Used to return statistics about the device.
+    ///
+    /// See `mac(9E)` & `mc_getstat(9E)`.
     pub mc_getstat:
         unsafe extern "C" fn(*mut c_void, c_uint, *mut u64) -> c_int,
+
+    /// Entry point used to start a device.
+    ///
+    /// See `mc_start(9E)`.
     pub mc_start: unsafe extern "C" fn(*mut c_void) -> c_int,
+
+    /// Entry point used to stop a device.
+    ///
+    /// See `mc_stop(9E)`.
     pub mc_stop: unsafe extern "C" fn(*mut c_void),
+
+    /// Entry point used to enable and disable promiscuous mode.
+    ///
+    /// See `mc_setpromisc(9E)`.
     pub mc_setpromisc: unsafe extern "C" fn(*mut c_void, boolean_t) -> c_int,
+
+    /// Entry point used to enable and disable filtering multicast addresses.
+    ///
+    /// See `mc_multicst(9E)`.
     pub mc_multicst:
         unsafe extern "C" fn(*mut c_void, boolean_t, *const u8) -> c_int,
-    pub mc_unicst: unsafe extern "C" fn(*mut c_void, *const u8) -> c_int,
-    pub mc_tx: unsafe extern "C" fn(*mut c_void, *mut mblk_t) -> *mut mblk_t,
+
+    /// Entry point used to update the primary unicast MAC address.
+    ///
+    /// Must not be set if the `MAC_CAPAB_RINGS` capability is set for
+    /// receive rings. See `mc_unicst(9E)`.
+    pub mc_unicst:
+        Option<unsafe extern "C" fn(*mut c_void, *const u8) -> c_int>,
+
+    /// Entry point used to transmit a single message.
+    ///
+    /// Must not be set if the `MAC_CAPAB_RINGS` capability is set for
+    /// transmit rings. See `mc_tx(9E)`.
+    pub mc_tx:
+        Option<unsafe extern "C" fn(*mut c_void, *mut mblk_t) -> *mut mblk_t>,
+
     pub mc_reserved: *mut c_void,
-    pub mc_ioctl: unsafe extern "C" fn(*mut c_void, *mut queue_t, *mut mblk_t),
 
-    pub mc_getcapab: unsafe extern "C" fn(
-        *mut c_void,
-        mac_capab_t,
-        *mut c_void,
-    ) -> boolean_t,
+    /// Entry point to process device specific ioctls.
+    ///
+    /// Must set `MC_IOCTL` on `mc_callbacks` if non-NULL. See `mc_ioctl(9E)`.
+    pub mc_ioctl:
+        Option<unsafe extern "C" fn(*mut c_void, *mut queue_t, *mut mblk_t)>,
 
-    pub mc_open: unsafe extern "C" fn(*mut c_void) -> c_int,
-    pub mc_close: unsafe extern "C" fn(*mut c_void),
-    pub mc_setprop: unsafe extern "C" fn(
-        *mut c_void,
-        *const c_char,
-        mac_prop_id_t,
-        c_uint,
-        *const c_void,
-    ) -> c_int,
+    /// Entry point used to determine device capabilities.
+    ///
+    /// Must set `MC_GETCAPAB` on `mc_callbacks` if non-NULL. See `mc_getcapab(9E)`.
+    pub mc_getcapab: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            mac_capab_t,
+            *mut c_void,
+        ) -> boolean_t,
+    >,
 
-    pub mc_getprop: unsafe extern "C" fn(
-        *mut c_void,
-        *const c_char,
-        mac_prop_id_t,
-        c_uint,
-        *mut c_void,
-    ) -> c_int,
+    /// Entry point for actions to take when a device is opened.
+    ///
+    /// Must set `MC_OPEN` on `mc_callbacks` if non-NULL. See `mc_open(9E)`.
+    pub mc_open: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
 
-    pub mc_propinfo: unsafe extern "C" fn(
-        *mut c_void,
-        *const c_char,
-        mac_prop_id_t,
-        *mut mac_prop_info_handle,
-    ),
+    /// Entry point for actions to take when a device is closed.
+    ///
+    /// Must set `MC_CLOSE` on `mc_callbacks` if non-NULL. See `mc_close(9E)`.
+    pub mc_close: Option<unsafe extern "C" fn(*mut c_void)>,
+
+    /// Entry point used to set a device property.
+    ///
+    /// Must set `MC_SETPROP` on `mc_callbacks` if non-NULL. See `mc_setprop(9E)`.
+    pub mc_setprop: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *const c_char,
+            mac_prop_id_t,
+            c_uint,
+            *const c_void,
+        ) -> c_int,
+    >,
+
+    /// Entry point used to get current value of a device property.
+    ///
+    /// Must set `MC_GETPROP` on `mc_callbacks` if non-NULL. See `mc_getprop(9E)`.
+    pub mc_getprop: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *const c_char,
+            mac_prop_id_t,
+            c_uint,
+            *mut c_void,
+        ) -> c_int,
+    >,
+
+    /// Entry point used to get information about a device property.
+    ///
+    /// Must set `MC_PROPINFO` on `mc_callbacks` if non-NULL. See `mc_propinfo(9E)`.
+    pub mc_propinfo: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *const c_char,
+            mac_prop_id_t,
+            *mut mac_prop_info_handle,
+        ),
+    >,
 }
 unsafe impl Sync for mac_callbacks_t {}
 

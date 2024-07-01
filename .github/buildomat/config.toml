@@ -3,3 +3,9 @@
 # order for the buildomat integration to create check suites.
 #
 enable = true
+org_only = true
+
+allow_users = [
+	"oxide-reflector-bot[bot]",
+	"oxide-renovate[bot]",
+]

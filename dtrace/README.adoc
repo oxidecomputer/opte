@@ -6,25 +6,56 @@ script which makes it more convenient to run these scripts; otherwise
 you have to make sure to pass the correct DTrace flags to import the
 local library file and common header.
 
+Some scripts also include USDT versions. Those can be useful when
+running unit/integration tests.
+
 |===
 |Script |Description
 
+a|`opte-bad-packet.d`
+|Trace "bad" packets as they occur. A bad packet is merly one that we
+ failed to parse, typically because it had an unexpected structure.
+ This probe may fire quite often given xde's current use of
+ promiscuous mode; and that is to be expected until we can make use of
+ mac flows (see
+ https://github.com/oxidecomputer/opte/issues/61[opte#61]).
+
 a|`opte-flow-expire.d`
-|Track flows as they expire.
+|Track flows as they expire. This includes the Unified Flow Table
+ (UFT), Layer Flow Tables (LFTs), and the TCP flow table.
 
 a|`opte-gen-desc-fail.d`
-|Track `gen_desc()` failures of stateful actions.
+|Track `Action::Stateful::gen_desc()` failures. A failure here
+ typically indicates failure to acquire a finite resource due to
+ exhaustion.
 
 a|`opte-gen-ht-fail.d`
-|Track `StaticAction::gen_gt()` failures.
+|Track `StaticAction::gen_ht()` failures.
+
+a|`opte-guest-loopback.d`
+|Track packets that travel the "guest loopback" path. This is the path
+ taken when two VPC guests live on the same sled.
 
 a|`opte-ht.d`
-|Track header transpositions as they happen. Printing the direction,
-location, and before/after flow IDs.
+|Track header transformations as they happen. This only tracks rule
+ processing, it does not track transformations that take place in the
+ hot-path (UFT hit).
+
+a|`opte-ioctl.d`
+|Track opte ioctl commands as they happen.
 
 a|`opte-layer-process.d`
 |Track a flow as it is processed by the different layers. This only
- applies to flows without a UFT entry.
+ applies to packets that do not match a flow in the UFT.
+
+a|`opte-next-hop.d`
+|Track the Oxide Rack Network (the "physical" network to the VPC) next
+ hop resolution.
+
+a|`opte-port-process.d`
+|Track packet processing results as they happen. Print the port,
+ direction, epoch, before/after flow ID, the packet length, and the
+ result of processing.
 
 a|`opte-rule-match.d`
 |Track rule match/no-match as it happens. Printing the direction,
@@ -35,4 +66,12 @@ a|`opte-tcp-flow-state.d`
 |Track the TCP flow state changes as they happen. Printing the state
  transition as well as the flow ID.
 
+a|`opte-uft-invalidate.d`
+|Track Unified Flow Table invalidation as it happens. A UFT entry is
+ invalidated whenever the rule set has been updated causing the port's
+ epoch to leap ahead of the UFT entry's epoch value.
+
+a|`protos.d`
+|This doesn't track anything, it's just a nice way to share IP
+ protocol definitions across all scripts.
 |===

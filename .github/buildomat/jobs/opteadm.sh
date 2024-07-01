@@ -2,8 +2,8 @@
 #:
 #: name = "opteadm"
 #: variety = "basic"
-#: target = "helios"
-#: rust_toolchain = "nightly"
+#: target = "helios-2.0"
+#: rust_toolchain = "nightly-2024-05-12"
 #: output_rules = [
 #:   "=/work/debug/opteadm",
 #:   "=/work/debug/opteadm.debug.sha256",
@@ -23,10 +23,13 @@ function header {
 cargo --version
 rustc --version
 
-cd opteadm
+pushd bin/opteadm
 
 header "check style"
-ptime -m cargo fmt -- --check
+ptime -m cargo +nightly-2024-05-12 fmt -- --check
+
+header "analyze"
+ptime -m cargo clippy --all-targets
 
 header "debug build"
 ptime -m cargo build
@@ -34,8 +37,7 @@ ptime -m cargo build
 header "release build"
 ptime -m cargo build --release
 
-header "test"
-ptime -m cargo test
+popd
 
 for x in debug release
 do

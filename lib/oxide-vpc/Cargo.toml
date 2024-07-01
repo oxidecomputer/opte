@@ -1,0 +1,48 @@
+[package]
+name = "oxide-vpc"
+version = "0.1.0"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The api feature is used by consumers of the Oxide VPC
+# implementation, namely Omicron.
+#
+# The engine feature is used by the OPTE driver that provides the
+# Oxide VPC implementation, namely xde.
+[features]
+default = ["api", "std"]
+api = ["opte/api"]
+engine = ["api", "opte/engine"]
+kernel = ["opte/kernel"]
+std = ["dep:tabwriter","opte/std"]
+#
+# XXX: This is a hack in order for integration tests to make use of
+# test-only methods.
+#
+# For a method/function to be used by both unit and integration tests
+# mark them with the following:
+#
+# #[cfg(any(feature = "test-help", test))]
+#
+test-help = ["opte/test-help"]
+usdt = ["opte/usdt"]
+
+[dependencies]
+illumos-sys-hdrs.workspace = true
+opte.workspace = true
+
+serde.workspace = true
+smoltcp.workspace = true
+tabwriter = { workspace = true, optional = true }
+zerocopy.workspace = true
+poptrie.workspace = true
+cfg-if.workspace = true
+
+[dev-dependencies]
+ctor.workspace = true
+opte-test-utils = { workspace = true, features = ["usdt"] }
+pcap-parser = { workspace = true, features = ["serialize"] }
+ron.workspace = true
+usdt.workspace = true

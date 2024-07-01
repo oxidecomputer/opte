@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export PUBLISHER=helios-netdev
+export PUBLISHER=helios-dev
 export COMMIT_COUNT=`git rev-list --count HEAD`
 export REPO=packages/repo
 
@@ -12,9 +12,19 @@ set -x
 # create the proto area
 mkdir -p proto/kernel/drv/amd64
 mkdir -p proto/opt/oxide/opte/bin
-cp ../opteadm/target/release/opteadm proto/opt/oxide/opte/bin/
-cp ../xde/target/x86_64-unknown-unknown/release/xde proto/kernel/drv/amd64/xde
+mkdir -p proto/usr/lib/devfsadm/linkmod
+cp ../target/release/opteadm proto/opt/oxide/opte/bin/
+cp ../target/x86_64-unknown-unknown/release/xde proto/kernel/drv/amd64
 cp ../xde/xde.conf proto/kernel/drv/
+cp ../target/i686-unknown-illumos/release/libxde_link.so proto/usr/lib/devfsadm/linkmod/SUNW_xde_link.so
+
+if [ -z ${RELEASE_ONLY+x} ]; then
+    cp ../target/debug/opteadm proto/opt/oxide/opte/bin/opteadm.dbg
+    cp ../target/x86_64-unknown-unknown/debug/xde.dbg proto/kernel/drv/amd64/xde.dbg
+    INC_DEBUG=""
+else
+    INC_DEBUG="#"
+fi
 
 API_VSN=$(./print-api-version.sh)
 
@@ -22,7 +32,7 @@ API_VSN=$(./print-api-version.sh)
 sed -e "s/%PUBLISHER%/$PUBLISHER/g" \
     -e "s/%COMMIT_COUNT%/$COMMIT_COUNT/g" \
     -e "s/%API_VSN%/$API_VSN/g" \
-    opte.template.p5m | pkgmogrify -v -O opte.base.p5m
+    opte.template.p5m | pkgmogrify -v -D inc_debug="$INC_DEBUG" -O opte.base.p5m
 
 pkgdepend generate -d proto opte.base.p5m > opte.generate.p5m
 

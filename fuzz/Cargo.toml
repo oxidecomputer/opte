@@ -1,0 +1,27 @@
+[package]
+name = "opte-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+opte = { workspace = true, features = ["engine", "test-help", "usdt"] }
+oxide-vpc = { workspace = true, features = ["engine", "test-help", "usdt"] }
+
+[[bin]]
+name = "parse-in"
+path = "fuzz_targets/parse-in.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse-out"
+path = "fuzz_targets/parse-out.rs"
+test = false
+doc = false
+bench = false
