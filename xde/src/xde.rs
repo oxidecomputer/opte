@@ -53,9 +53,7 @@ use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
 use opte::d_error::LabelBlock;
 use opte::ddi::sync::KMutex;
-use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
-use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
 use opte::engine::ether::EtherAddr;
@@ -107,6 +105,82 @@ use oxide_vpc::engine::router;
 use oxide_vpc::engine::VpcNetwork;
 use oxide_vpc::engine::VpcParser;
 
+// use illumos::driver::cb::CharBlockOps;
+// use illumos::driver::cb::OpenFlags;
+// use illumos::driver::Driver;
+// use illumos::module;
+// use illumos::module::Module;
+
+// module!(
+//     kind = Driver {
+//         info = "$ENV{CARGO_PKG_NAME} $ENV{CARGO_PKG_VERSION}",
+//     },
+//     type = Xde2,
+// );
+
+// struct Xde2 {
+//     devs: Arc<KRwLock<XdeDev>>,
+// }
+
+// impl Driver for Xde2 {
+//     fn get_dev_info(
+//         &self,
+//         dev: illumos::driver::Dev,
+//     ) -> Option<illumos::driver::GetDevInfo> {
+//         todo!()
+//     }
+
+//     fn get_dev_instance(
+//         &self,
+//         dev: illumos::driver::Dev,
+//     ) -> Option<illumos::driver::DevInstance> {
+//         todo!()
+//     }
+
+//     fn attach(
+//         &self,
+//         dev_info: illumos::driver::DevInfo,
+//     ) -> illumos::driver::AttachResult {
+//         // dev_info.get_dev_info()
+//         todo!()
+//     }
+
+//     fn detach(
+//         &self,
+//         instance: illumos::driver::DevInstance,
+//     ) -> illumos::driver::DetachResult {
+//         todo!()
+//     }
+// }
+
+// impl Module for Xde2 {
+//     fn init() -> Result<Self, illumos::Error> {
+//         todo!()
+//     }
+
+//     fn fini(self) {
+//         todo!()
+//     }
+// }
+
+// impl CharBlockOps for Xde2 {
+//     fn open(
+//         &self,
+//         minor: illumos::driver::DevMinor,
+//         flags: OpenFlags,
+//     ) -> Result<illumos::driver::DevMinor, illumos::Error> {
+//         todo!()
+//     }
+
+//     fn close(
+//         &self,
+//         minor: illumos::driver::DevMinor,
+//         open_flags: OpenFlags,
+//     ) -> Result<(), illumos::Error> {
+//         todo!()
+//     }
+// }
+
 // Entry limits for the various flow tables.
 //
 // Safety: Despite the name of `new_unchecked`, there actually is a compile-time
@@ -126,7 +200,7 @@ static mut XDE_CTL_MINOR: minor_t = 0;
 
 /// A list of xde devices instantiated through xde_ioc_create.
 #[allow(clippy::vec_box)]
-static mut xde_devs: KRwLock<Vec<Box<XdeDev>>> = KRwLock::new(Vec::new());
+static mut xde_devs: Option<KRwLock<Vec<Box<XdeDev>>>> = None;
 
 /// DDI dev info pointer to the attached xde device.
 static mut xde_dip: *mut dev_info = ptr::null_mut();
@@ -253,7 +327,7 @@ impl XdeState {
     fn new() -> Self {
         let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
         XdeState {
-            underlay: KMutex::new(None, KMutexType::Driver),
+            underlay: KMutex::new(None),
             ectx,
             vpc_map: Arc::new(overlay::VpcMappings::new()),
             v2b: Arc::new(overlay::Virt2Boundary::new()),
@@ -299,8 +373,11 @@ pub struct XdeDev {
 #[cfg(not(test))]
 #[no_mangle]
 unsafe extern "C" fn _init() -> c_int {
-    xde_devs.init(KRwLockType::Driver);
     mac::mac_init_ops(addr_of_mut!(xde_devops), XDE_STR);
+
+    unsafe {
+        xde_devs = Some(KRwLock::new(vec![]));
+    }
 
     match mod_install(&xde_linkage) {
         0 => 0,
@@ -656,7 +733,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     //
     // This does mean that the current Rx path is blocked on device
     // creation, but that's a price we need to pay for the moment.
-    let mut devs = unsafe { xde_devs.write() };
+    let mut devs = unsafe { xde_devs.as_ref().unwrap().write() };
     if devs.iter().any(|x| x.devname == req.xde_devname) {
         return Err(OpteError::PortExists(req.xde_devname.clone()));
     }
@@ -818,7 +895,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 #[no_mangle]
 fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
-    let mut devs = unsafe { xde_devs.write() };
+    let mut devs = unsafe { xde_devs.as_ref().unwrap().write() };
     let index = match devs.iter().position(|x| x.devname == req.xde_devname) {
         Some(index) => index,
         None => return Err(OpteError::PortNotFound(req.xde_devname.clone())),
@@ -907,7 +984,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             msg: "underlay not yet initialized".into(),
         });
     }
-    if unsafe { xde_devs.read().len() } > 0 {
+    if unsafe { xde_devs.as_ref().unwrap().read().len() } > 0 {
         return Err(OpteError::System {
             errno: EBUSY,
             msg: "underlay in use by attached ports".into(),
@@ -1249,7 +1326,7 @@ unsafe extern "C" fn xde_detach(
         _ => return DDI_FAILURE,
     }
 
-    if xde_devs.read().len() > 0 {
+    if xde_devs.as_ref().unwrap().read().len() > 0 {
         warn!("failed to detach: outstanding ports");
         return DDI_FAILURE;
     }
@@ -1443,7 +1520,7 @@ fn guest_loopback(
 ) -> *mut mblk_t {
     use Direction::*;
     let ether_dst = pkt.meta().inner.ether.dst;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let maybe_dest_dev =
         devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst);
 
@@ -1884,7 +1961,7 @@ unsafe fn xde_rx_one(
     };
 
     let meta = pkt.meta();
-    let devs = xde_devs.read();
+    let devs = xde_devs.as_ref().unwrap().read();
 
     // Determine where to send packet based on Geneve VNI and
     // destination MAC address.
@@ -1936,7 +2013,7 @@ unsafe fn xde_rx_one(
 #[no_mangle]
 fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: AddRouterEntryReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -1951,7 +2028,7 @@ fn del_router_entry_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<DelRouterEntryResp, OpteError> {
     let req: DelRouterEntryReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -1964,7 +2041,7 @@ fn del_router_entry_hdlr(
 #[no_mangle]
 fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: AddFwRuleReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -1978,7 +2055,7 @@ fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 #[no_mangle]
 fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: RemFwRuleReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -1992,7 +2069,7 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 #[no_mangle]
 fn set_fw_rules_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetFwRulesReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -2058,7 +2135,7 @@ fn list_layers_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<api::ListLayersResp, OpteError> {
     let req: api::ListLayersReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -2071,7 +2148,7 @@ fn list_layers_hdlr(
 #[no_mangle]
 fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: api::ClearUftReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -2085,7 +2162,7 @@ fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 #[no_mangle]
 fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: api::ClearLftReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -2101,7 +2178,7 @@ fn dump_uft_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<api::DumpUftResp, OpteError> {
     let req: api::DumpUftReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -2116,7 +2193,7 @@ fn dump_layer_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<api::DumpLayerResp, OpteError> {
     let req: api::DumpLayerReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -2131,7 +2208,7 @@ fn dump_tcp_flows_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<api::DumpTcpFlowsResp, OpteError> {
     let req: api::DumpTcpFlowsReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -2144,7 +2221,7 @@ fn dump_tcp_flows_hdlr(
 #[no_mangle]
 fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: oxide_vpc::api::SetExternalIpsReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -2158,7 +2235,7 @@ fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 #[no_mangle]
 fn allow_cidr_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: oxide_vpc::api::AllowCidrReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -2175,7 +2252,7 @@ fn remove_cidr_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<RemoveCidrResp, OpteError> {
     let req: oxide_vpc::api::RemoveCidrReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -2189,7 +2266,7 @@ fn remove_cidr_hdlr(
 #[no_mangle]
 fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
     let mut resp = ListPortsResp { ports: vec![] };
-    let devs = unsafe { xde_devs.read() };
+    let devs = unsafe { xde_devs.as_ref().unwrap().read() };
     for dev in devs.iter() {
         let ipv4_state =
             dev.vpc_cfg.ipv4_cfg().map(|cfg| cfg.external_ips.load());

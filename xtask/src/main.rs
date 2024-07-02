@@ -20,7 +20,7 @@ fn cargo_meta() -> &'static Metadata {
         .get_or_init(|| cargo_metadata::MetadataCommand::new().exec().unwrap())
 }
 
-const KMOD_TARGET: &str = "x86_64-unknown-unknown";
+const KMOD_TARGET: &str = "x86_64-illumos";
 const LINK_TARGET: &str = "i686-unknown-illumos";
 
 /// Development functions for OPTE.
@@ -380,41 +380,18 @@ impl BuildTarget {
                 let meta = cargo_meta();
                 build_cargo_bin(&[], !debug, Some("xde"), false)?;
 
-                let (folder, out_name) = if debug {
-                    ("debug", "xde.dbg")
-                } else {
-                    ("release", "xde")
-                };
-                let target_dir = meta
-                    .target_directory
-                    .join(format!("{KMOD_TARGET}/{folder}"));
-
-                println!("Linking xde kmod...");
-                Command::new("ld")
-                    .args([
-                        "-ztype=kmod",
-                        "-Ndrv/dld",
-                        "-Ndrv/ip",
-                        "-Nmisc/dls",
-                        "-Nmisc/mac",
-                        "-z",
-                        "allextract",
-                        &format!("{target_dir}/xde.a"),
-                        "-o",
-                        &format!("{target_dir}/{out_name}"),
-                    ])
-                    .output_nocapture()
-                    .context("failed to link XDE kernel module")?;
+                let folder = if debug { "debug" } else { "release" };
 
                 println!("Building xde dev link helper ({profile}).");
                 build_cargo_bin(&[], !debug, Some("xde/xde-link"), false)?;
 
                 // verify no panicking in the devfsadm plugin
-                let nm_output = Command::new("nm")
-                    .arg(meta.target_directory.join(format!(
-                        "i686-unknown-illumos/{folder}/libxde_link.so"
-                    )))
-                    .output()?;
+                let nm_output =
+                    Command::new("nm")
+                        .arg(meta.target_directory.join(format!(
+                            "{LINK_TARGET}/{folder}/libxde_link.so"
+                        )))
+                        .output()?;
 
                 if nm_output.status.success() {
                     if std::str::from_utf8(&nm_output.stdout)?

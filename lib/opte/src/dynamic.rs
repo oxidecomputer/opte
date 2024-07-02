@@ -13,7 +13,6 @@
 // TODO: Implement the generated outputs to reduce cost of, e.g., DHCP responses.
 
 use crate::ddi::sync::KRwLock;
-use crate::ddi::sync::KRwLockType;
 use alloc::sync::Arc;
 use core::fmt::Debug;
 use core::ops::Deref;
@@ -37,8 +36,7 @@ pub struct Snapshot<T> {
 
 impl<T> From<T> for Dynamic<T> {
     fn from(value: T) -> Self {
-        let mut inner = KRwLock::new(value.into());
-        inner.init(KRwLockType::Driver);
+        let inner = KRwLock::new(value.into());
 
         Self(InnerDynamic { inner, epoch: AtomicU64::default() }.into())
     }

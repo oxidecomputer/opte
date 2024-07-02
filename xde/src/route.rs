@@ -17,7 +17,6 @@ use core::ptr;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
 use opte::ddi::sync::KRwLock;
-use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Moment;
 use opte::engine::ether::EtherAddr;
 use opte::engine::ip6::Ipv6Addr;
@@ -520,8 +519,7 @@ pub struct RouteCache(Arc<KRwLock<BTreeMap<RouteKey, CachedRoute>>>);
 
 impl Default for RouteCache {
     fn default() -> Self {
-        let mut lock = KRwLock::new(BTreeMap::new());
-        lock.init(KRwLockType::Driver);
+        let lock = KRwLock::new(BTreeMap::new());
         Self(lock.into())
     }
 }
