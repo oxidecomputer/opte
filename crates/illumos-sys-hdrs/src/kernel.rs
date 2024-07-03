@@ -211,14 +211,12 @@ unsafe impl Sync for cb_ops {}
 pub struct dev_ops {
     pub devo_rev: c_int,
     pub devo_refcnt: c_int,
-    pub devo_getinfo: Option<
-        unsafe extern "C" fn(
-            dip: *mut dev_info,
-            infocmd: ddi_info_cmd_t,
-            arg: *mut c_void,
-            result: *mut *mut c_void,
-        ) -> c_int,
-    >,
+    pub devo_getinfo: unsafe extern "C" fn(
+        dip: *mut dev_info,
+        infocmd: ddi_info_cmd_t,
+        arg: *mut c_void,
+        result: *mut *mut c_void,
+    ) -> c_int,
     pub devo_identify: unsafe extern "C" fn(dip: *mut dev_info) -> c_int,
     pub devo_probe: unsafe extern "C" fn(dip: *mut dev_info) -> c_int,
     pub devo_attach:

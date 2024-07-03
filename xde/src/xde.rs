@@ -1302,8 +1302,7 @@ static mut xde_cb_ops: cb_ops = cb_ops {
 static mut xde_devops: dev_ops = dev_ops {
     devo_rev: DEVO_REV,
     devo_refcnt: 0,
-    // If this is None (represented NULL), it will be set to `dld_getinfo` via `mac_init_ops`.
-    devo_getinfo: Some(xde_getinfo),
+    devo_getinfo: xde_getinfo,
     devo_identify: nulldev_identify,
     devo_probe: nulldev_probe,
     devo_attach: xde_attach,
