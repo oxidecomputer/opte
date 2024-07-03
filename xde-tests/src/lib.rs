@@ -226,7 +226,6 @@ impl Drop for Xde {
 // Note: these fields have a *very* sensitive drop order.
 pub struct TestNode {
     pub zone: OpteZone,
-    pub nic: Vnic,
     pub port: OptePort,
 }
 
@@ -338,32 +337,28 @@ pub fn two_node_topology() -> Result<Topology> {
     let r1 =
         RouteV6::new(opte1.underlay_ip(), 64, ll1.ip, Some(sim.end_a.clone()))?;
 
-    // Create a few vnics atop our OPTE devices.
-    let vopte0 = Vnic::with_mac("vopte0", "opte0", opte0.mac())?;
-    let vopte1 = Vnic::with_mac("vopte1", "opte1", opte1.mac())?;
-
     // Set up a zfs pool for our test zones.
     let zfs = Arc::new(Zfs::new("opte2node")?);
 
     // Create a pair of zones to simulate our VM instances.
     println!("start zone a");
-    let a = OpteZone::new("a", &zfs, &[&vopte0.name], "sparse")?;
+    let a = OpteZone::new("a", &zfs, &[&opte0.name], "sparse")?;
     println!("start zone b");
-    let b = OpteZone::new("b", &zfs, &[&vopte1.name], "sparse")?;
+    let b = OpteZone::new("b", &zfs, &[&opte1.name], "sparse")?;
 
     println!("setup zone a");
-    a.setup(&vopte0.name, opte0.ip())?;
+    a.setup(&opte0.name, opte0.ip())?;
 
     println!("setup zone b");
-    b.setup(&vopte1.name, opte1.ip())?;
+    b.setup(&opte1.name, opte1.ip())?;
 
     Ok(Topology {
         xde,
         lls: vec![ll0, ll1],
         simnet: Some(sim),
         nodes: vec![
-            TestNode { zone: a, port: opte0, nic: vopte0 },
-            TestNode { zone: b, port: opte1, nic: vopte1 },
+            TestNode { zone: a, port: opte0 },
+            TestNode { zone: b, port: opte1 },
         ],
         v6_routes: vec![r0, r1],
         zfs,
@@ -453,25 +448,22 @@ pub fn single_node_over_real_nic(
 
     opte.fw_allow_all()?;
 
-    // Create a few vnics atop our OPTE devices.
-    let vopte = Vnic::with_mac("vopte0", "opte0", opte.mac())?;
-
     // Set up a zfs pool for our test zones.
     let zfs = Arc::new(Zfs::new("opte1node")?);
 
     println!("start zone");
-    let a = OpteZone::new("a", &zfs, &[&vopte.name], brand)?;
+    let a = OpteZone::new("a", &zfs, &[&opte.name], brand)?;
 
     std::thread::sleep(Duration::from_secs(30));
 
     println!("setup zone");
-    a.setup(&vopte.name, opte.ip())?;
+    a.setup(&opte.name, opte.ip())?;
 
     Ok(Topology {
         xde,
         lls: vec![],
         simnet: None,
-        nodes: vec![TestNode { zone: a, port: opte, nic: vopte }],
+        nodes: vec![TestNode { zone: a, port: opte }],
         v6_routes,
         zfs,
     })
