@@ -272,16 +272,6 @@ pub unsafe extern "C" fn nulldev_close(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn nodev_getinfo(
-    _dip: *mut dev_info,
-    _infocmd: ddi_info_cmd_t,
-    _arg: *mut c_void,
-    _result: *mut *mut c_void,
-) -> c_int {
-    nodev()
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn nodev_reset(
     _dip: *mut dev_info,
     _cmd: ddi_reset_cmd_t,
