@@ -13,7 +13,6 @@ use crate::mac::MacClient;
 use crate::mac::MacPerimeterHandle;
 use crate::mac::MacTxFlags;
 use crate::mac::MAC_DROP_ON_NO_DESC;
-use alloc::sync::Arc;
 use core::ffi::CStr;
 use core::fmt::Display;
 use core::mem::MaybeUninit;
@@ -28,7 +27,7 @@ pub use sys::*;
 
 /// An integer ID used by DLS to refer to a given link.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LinkId(u32);
+pub struct LinkId(datalink_id_t);
 
 impl LinkId {
     /// Request the link ID for a device using its name.
@@ -121,9 +120,9 @@ impl DlsLink {
     fn open_stream(
         mut self,
         mph: &MacPerimeterHandle,
-    ) -> Result<Arc<DlsStream>, c_int> {
+    ) -> Result<DlsStream, c_int> {
         let Some(inner) = self.inner.as_ref() else {
-            return Err(-1);
+            panic!("attempted to open a DlsStream on freed link")
         };
 
         if mph.link_id() != self.link {
@@ -175,7 +174,7 @@ struct DlsStreamInner {
 }
 
 impl DlsStream {
-    pub fn open(link_id: LinkId) -> Result<Arc<Self>, c_int> {
+    pub fn open(link_id: LinkId) -> Result<Self, c_int> {
         let perim = MacPerimeterHandle::from_linkid(link_id)?;
         let link_handle = DlsLink::hold(&perim)?;
         link_handle.open_stream(&perim)

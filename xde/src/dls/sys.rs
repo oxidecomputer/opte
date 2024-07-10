@@ -103,7 +103,7 @@ pub enum dld_passivestate_t {
     DLD_ACTIVE,
 }
 
-// Direct translation of the illumos type type, with some
+// Direct translation of the illumos type, with some
 // pointer fields left as opaque void*s for simplicity.
 #[repr(C)]
 pub struct dld_str_s {

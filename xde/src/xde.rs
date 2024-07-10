@@ -929,7 +929,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // `DldStream`. We explicitly drop them in order here to ensure
             // there are no outstanding refs.
 
-            // 1. Remove promisc and unicast callbacks
+            // 1. Remove promisc callback.
             drop(u.mph);
 
             // Although `xde_rx` can be called into without any running ports
@@ -1059,10 +1059,11 @@ fn create_underlay_port(
             msg: format!("failed to get linkid for {link_name}: {err}"),
         })?;
 
-    let stream = DlsStream::open(link_id).map_err(|e| OpteError::System {
-        errno: EFAULT,
-        msg: format!("failed to grab open stream for {link_name}: {e}"),
-    })?;
+    let stream =
+        Arc::new(DlsStream::open(link_id).map_err(|e| OpteError::System {
+            errno: EFAULT,
+            msg: format!("failed to grab open stream for {link_name}: {e}"),
+        })?);
 
     // Setup promiscuous callback to receive all packets on this link.
     //
