@@ -99,7 +99,7 @@ ptime cargo xtask build
 # Inspect the kernel module for bad relocations in case the old
 # codegen issue ever shows its face again.
 #
-if elfdump $DBG_SRC/xde.dbg | grep GOTPCREL; then
+if elfdump $DBG_SRC/xde | grep GOTPCREL; then
 	echo "found GOTPCREL relocation in debug build"
 	exit 1
 fi
@@ -109,7 +109,7 @@ if elfdump $REL_SRC/xde | grep GOTPCREL; then
 	exit 1
 fi
 
-cp $DBG_SRC/xde.dbg $DBG_TGT/
+cp $DBG_SRC/xde $DBG_TGT/xde.dbg
 sha256sum $DBG_TGT/xde.dbg > $DBG_TGT/xde.dbg.sha256
 
 cp $DBG_LINK_SRC/libxde_link.so $DBG_TGT/xde_link.dbg.so

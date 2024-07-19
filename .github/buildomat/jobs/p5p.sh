@@ -55,7 +55,7 @@ REL_LINK_SRC=target/i686-unknown-illumos/release
 mkdir -p $REL_SRC
 cp /input/xde/work/release/xde $REL_SRC
 mkdir -p $DBG_SRC
-cp /input/xde/work/debug/xde $DBG_SRC
+cp /input/xde/work/debug/xde.dbg $DBG_SRC/xde
 
 mkdir -p $REL_LINK_SRC
 cp /input/xde/work/release/xde_link.so $REL_LINK_SRC/libxde_link.so
