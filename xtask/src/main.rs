@@ -61,7 +61,11 @@ enum Xtask {
     },
 
     /// Format the repository with `rustfmt`.
-    Fmt,
+    Fmt {
+        /// Run rustfmt in check mode.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -140,17 +144,22 @@ fn main() -> anyhow::Result<()> {
 
             Ok(())
         }
-        Xtask::Fmt => {
+        Xtask::Fmt { check } => {
             let meta = cargo_meta();
 
             // This is explicitly `cargo` rather than CARGO as we might
             // be swapping toolchains to do this from the current cargo.
-            Command::new("cargo")
-                .arg(format!("+{}", get_current_nightly_toolchain()?))
+            let mut c = Command::new("cargo");
+            c.arg(format!("+{}", get_current_nightly_toolchain()?))
                 .args(["fmt", "--all"])
                 .env_remove("RUSTUP_TOOLCHAIN")
-                .current_dir(&meta.workspace_root)
-                .output_nocapture()?;
+                .current_dir(&meta.workspace_root);
+
+            if check {
+                c.arg("--check");
+            }
+
+            c.output_nocapture()?;
 
             Ok(())
         }

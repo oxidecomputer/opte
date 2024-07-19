@@ -26,9 +26,6 @@ cd crates/opte-api
 header "check API_VERSION"
 ./check-api-version.sh
 
-header "check style"
-ptime -m cargo +nightly-2024-05-12 fmt -- --check
-
 header "analyze std"
 ptime -m cargo clippy --all-targets
 

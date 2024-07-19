@@ -78,9 +78,6 @@ pushd xde
 
 cp xde.conf /work/xde.conf
 
-header "check style"
-ptime -m cargo +nightly-2024-05-12 fmt -p xde -p xde-link -- --check
-
 header "analyze"
 ptime -m cargo clippy -- \
     --allow clippy::uninlined-format-args --allow clippy::bad_bit_mask

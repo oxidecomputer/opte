@@ -28,9 +28,6 @@ rustc --version
 
 pushd bin/opteadm
 
-header "check style"
-ptime -m cargo +nightly-2024-05-12 fmt -- --check
-
 header "analyze"
 ptime -m cargo clippy --all-targets
 

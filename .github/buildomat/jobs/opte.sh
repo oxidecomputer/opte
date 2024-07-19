@@ -25,9 +25,6 @@ rustc --version
 
 cd lib/opte
 
-header "check style"
-ptime -m cargo +nightly-2024-05-12 fmt -- --check
-
 header "check docs"
 #
 # I believe this means any doc warnings in deps will cause this to
