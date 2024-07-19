@@ -18,6 +18,8 @@ function header {
 	echo "# ==== $* ==== #"
 }
 
+pfexec pkg install clang-15
+
 cargo --version
 rustc --version
 

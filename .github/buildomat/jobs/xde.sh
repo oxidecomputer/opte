@@ -72,6 +72,7 @@ cargo --version
 rustc --version
 
 install_pkg jq
+install_pkg clang-15
 
 pushd xde
 

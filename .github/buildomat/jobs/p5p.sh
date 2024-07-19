@@ -27,6 +27,8 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
+pfexec pkg install clang-15
+
 #
 # TGT_BASE allows one to run this more easily in their local
 # environment:
