@@ -52,6 +52,7 @@ dyn-clone = "1.0"
 heapless = "0.8"
 illumos = { git = "https://github.com/oxidecomputer/illumos-rs.git", branch = "felixmcfelix/rusty-for-opte" }
 # illumos = { git = "ssh://git@github.com/oxidecomputer/illumos-rs.git", branch = "felixmcfelix/rusty-for-opte" }
+# illumos = { path = "../illumos-rs/illumos" }
 ipnetwork = { version = "0.20", default-features = false }
 itertools = { version = "0.12", default-features = false }
 libc = "0.2"
