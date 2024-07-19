@@ -3,7 +3,7 @@
 #: name = "opteadm"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2024-05-12"
+#: rust_toolchain = "nightly-2024-06-27"
 #: output_rules = [
 #:   "=/work/debug/opteadm",
 #:   "=/work/debug/opteadm.debug.sha256",

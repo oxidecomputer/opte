@@ -3,7 +3,7 @@
 #: name = "opte"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2024-05-12"
+#: rust_toolchain = "nightly-2024-06-27"
 #: output_rules = []
 #: access_repos = [
 #:  "oxidecomputer/illumos-rs",
@@ -32,13 +32,13 @@ header "check docs"
 #
 # Use nightly which is needed for the `kernel` feature.
 RUSTDOCFLAGS="-D warnings" ptime -m \
-	    cargo +nightly-2024-05-12 doc --no-default-features --features=api,std,engine,kernel
+	    cargo +nightly-2024-06-27 doc --no-default-features --features=api,std,engine,kernel
 
 header "analyze std + api"
 ptime -m cargo clippy --all-targets
 
 header "analyze no_std + engine + kernel"
-ptime -m cargo +nightly-2024-05-12 clippy --no-default-features --features engine,kernel
+ptime -m cargo +nightly-2024-06-27 clippy --no-default-features --features engine,kernel
 
 header "test"
 ptime -m cargo test
