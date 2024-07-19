@@ -797,6 +797,8 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         ONE_SECOND,
     );
 
+    let mut guest_addr = cfg.guest_mac.bytes();
+
     let mut xde = Box::new(XdeDev {
         devname: req.xde_devname.clone(),
         linkid: req.linkid,
@@ -842,15 +844,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         mreg.m_callbacks = addr_of_mut!(xde_mac_callbacks);
     }
 
-    // TODO Total hack to allow a VNIC atop of xde to have the guest's
-    // MAC address. The VNIC **NEEDS** to have the guest's MAC address
-    // or else none of the ethernet rule predicates will match.
-    //
-    // The real answer is to stop putting VNICs atop xde. The xde
-    // device needs to sit in the place where a VNIC would usually go.
-    mreg.m_src_addr = EtherAddr::from([0xA8, 0x40, 0x25, 0x77, 0x77, 0x77])
-        .to_bytes()
-        .as_mut_ptr();
+    mreg.m_src_addr = guest_addr.as_mut_ptr();
 
     let reg_res = unsafe {
         mac::mac_register(mreg as *mut mac::mac_register_t, &mut xde.mh)
