@@ -20,7 +20,7 @@ cp ../target/i686-unknown-illumos/release/libxde_link.so proto/usr/lib/devfsadm/
 
 if [ -z ${RELEASE_ONLY+x} ]; then
     cp ../target/debug/opteadm proto/opt/oxide/opte/bin/opteadm.dbg
-    cp ../target/x86_64-illumos/debug/xde.dbg proto/kernel/drv/amd64/xde.dbg
+    cp ../target/x86_64-illumos/debug/xde proto/kernel/drv/amd64/xde.dbg
     INC_DEBUG=""
 else
     INC_DEBUG="#"
