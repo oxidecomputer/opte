@@ -37,7 +37,7 @@ pfexec pkg install clang-15
 #
 TGT_BASE=${TGT_BASE:=/work}
 
-REL_SRC=target/x86_64-unknown-unknown/release
+REL_SRC=target/x86_64-illumos/release
 REL_TGT=$TGT_BASE/release
 
 mkdir -p $REL_TGT
@@ -49,8 +49,11 @@ function header {
 cargo --version
 rustc --version
 
+# TODO: shouldn't these be copied as a dependency/output of xde.sh?
 header "build xde and opteadm (release+debug)"
 ptime -m cargo xtask build
+
+# TODO: doesn't this dupe xde.sh?
 
 #
 # Inspect the kernel module for bad relocations in case the old

@@ -42,11 +42,11 @@ set -o xtrace
 #
 TGT_BASE=${TGT_BASE:=/work}
 
-DBG_SRC=target/x86_64-unknown-unknown/debug
+DBG_SRC=target/x86_64-illumos/debug
 DBG_LINK_SRC=target/i686-unknown-illumos/debug
 DBG_TGT=$TGT_BASE/debug
 
-REL_SRC=target/x86_64-unknown-unknown/release
+REL_SRC=target/x86_64-illumos/release
 REL_LINK_SRC=target/i686-unknown-illumos/release
 REL_TGT=$TGT_BASE/release
 
@@ -90,13 +90,10 @@ ptime -m cargo clippy -- \
     --allow clippy::uninlined-format-args --allow clippy::bad_bit_mask
 popd
 
-header "build xde (debug)"
-ptime -m ./build-debug.sh
-
-header "build xde (release)"
-ptime -m ./build.sh
-
 popd
+
+header "build xde (release/debug)"
+ptime cargo xtask build
 
 #
 # Inspect the kernel module for bad relocations in case the old
