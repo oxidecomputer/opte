@@ -22,12 +22,12 @@
 #: name = "opte.p5p.sha256"
 #: from_output = "/out/opte.p5p.sha256"
 #:
+#: [dependencies.xde]
+#: job = "opte-xde"
 
 set -o errexit
 set -o pipefail
 set -o xtrace
-
-pfexec pkg install clang-15
 
 #
 # TGT_BASE allows one to run this more easily in their local
@@ -37,11 +37,6 @@ pfexec pkg install clang-15
 #
 TGT_BASE=${TGT_BASE:=/work}
 
-REL_SRC=target/x86_64-illumos/release
-REL_TGT=$TGT_BASE/release
-
-mkdir -p $REL_TGT
-
 function header {
 	echo "# ==== $* ==== #"
 }
@@ -49,20 +44,23 @@ function header {
 cargo --version
 rustc --version
 
-# TODO: shouldn't these be copied as a dependency/output of xde.sh?
-header "build xde and opteadm (release+debug)"
-ptime -m cargo xtask build
+header "move artifacts for packaging"
+# Copy in just-built artifacts
+DBG_SRC=target/x86_64-illumos/debug
+DBG_LINK_SRC=target/i686-unknown-illumos/debug
 
-# TODO: doesn't this dupe xde.sh?
+REL_SRC=target/x86_64-illumos/release
+REL_LINK_SRC=target/i686-unknown-illumos/release
 
-#
-# Inspect the kernel module for bad relocations in case the old
-# codegen issue ever shows its face again.
-#
-if elfdump $REL_SRC/xde | grep GOTPCREL; then
-	echo "found GOTPCREL relocation in release build"
-	exit 1
-fi
+mkdir -p $REL_SRC
+cp /input/xde/work/release/xde $REL_SRC
+mkdir -p $DBG_SRC
+cp /input/xde/work/debug/xde $DBG_SRC
+
+mkdir -p $REL_LINK_SRC
+cp /input/xde/work/release/xde_link.so $REL_LINK_SRC/libxde_link.so
+mkdir -p $DBG_LINK_SRC
+cp /input/xde/work/debug/xde_link.dbg.so $DBG_LINK_SRC/libxde_link.so
 
 header "package opte"
 cargo xtask package --skip-build
