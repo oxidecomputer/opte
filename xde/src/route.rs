@@ -17,7 +17,7 @@ use core::ptr;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
 use opte::ddi::sync::KRwLock;
-use opte::ddi::time::Moment;
+use opte::ddi::time::Instant;
 use opte::engine::ether::EtherAddr;
 use opte::engine::ip6::Ipv6Addr;
 
@@ -531,7 +531,7 @@ impl RouteCache {
     /// query, or computes the current route using `next_hop` on miss or
     /// discovery of a stale entry.
     pub fn next_hop<'b>(&self, key: RouteKey, xde: &'b XdeDev) -> Route<'b> {
-        let t = Moment::now();
+        let t = Instant::now();
 
         let (maybe_route, map_ptr_int) = {
             let route_cache = self.0.read();
@@ -605,7 +605,7 @@ impl RouteCache {
     pub fn remove_routes(&self) {
         let mut route_cache = self.0.write();
 
-        let t = Moment::now();
+        let t = Instant::now();
         let ptr: *const BTreeMap<_, _> = &*route_cache;
         let map_ptr_int = ptr as uintptr_t;
 
@@ -633,18 +633,16 @@ pub struct CachedRoute {
     pub src: EtherAddr,
     pub dst: EtherAddr,
     pub underlay_idx: u8,
-    pub timestamp: Moment,
+    pub timestamp: Instant,
 }
 
 impl CachedRoute {
-    fn is_valid(&self, t: Moment) -> bool {
-        u128::from(t.delta_as_millis(self.timestamp))
-            <= EXPIRE_ROUTE_LIFETIME.as_millis()
+    fn is_valid(&self, t: Instant) -> bool {
+        t.duration_since(self.timestamp) <= EXPIRE_ROUTE_LIFETIME
     }
 
-    fn is_retained(&self, t: Moment) -> bool {
-        u128::from(t.delta_as_millis(self.timestamp))
-            <= REMOVE_ROUTE_LIFETIME.as_millis()
+    fn is_retained(&self, t: Instant) -> bool {
+        t.duration_since(self.timestamp) <= REMOVE_ROUTE_LIFETIME
     }
 
     fn into_route(self, xde: &XdeDev) -> Route<'_> {
@@ -671,7 +669,7 @@ pub struct Route<'a> {
 }
 
 impl<'a> Route<'a> {
-    fn cached(&self, xde: &XdeDev, timestamp: Moment) -> CachedRoute {
+    fn cached(&self, xde: &XdeDev, timestamp: Instant) -> CachedRoute {
         // As unfortunate as `into_route`.
         let port_0: &xde_underlay_port = &xde.u1;
         let underlay_idx =

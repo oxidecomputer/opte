@@ -696,7 +696,12 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
     }
 }
 
-const ONE_SECOND: Interval = Interval::from_duration(Duration::new(1, 0));
+const ONE_SECOND: Interval =
+    if let Some(v) = Interval::from_duration(Duration::new(1, 0)) {
+        v
+    } else {
+        panic!("chosen duration must be 10ms-aligned")
+    };
 
 #[no_mangle]
 fn expire_periodic(port: &mut Arc<Port<VpcNetwork>>) {
@@ -1127,7 +1132,7 @@ unsafe extern "C" fn xde_attach(
     ) {
         0 => {}
         err => {
-            warn_!("failed to create xde control device: {err}");
+            warn_!("failed to create xde control device: {}", err);
             return DDI_FAILURE;
         }
     }

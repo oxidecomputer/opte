@@ -49,7 +49,7 @@ use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::sync::KMutex;
-use crate::ddi::time::Moment;
+use crate::ddi::time::Instant;
 use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::tcp::TcpMeta;
 use crate::ExecCtx;
@@ -1007,14 +1007,14 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// * [`PortState::Running`]
     #[cfg(any(feature = "std", test))]
-    pub fn expire_flows_at(&self, now: Moment) -> Result<()> {
+    pub fn expire_flows_at(&self, now: Instant) -> Result<()> {
         self.expire_flows_inner(Some(now))
     }
 
     #[inline(always)]
-    fn expire_flows_inner(&self, now: Option<Moment>) -> Result<()> {
+    fn expire_flows_inner(&self, now: Option<Instant>) -> Result<()> {
         let mut data = self.data.lock();
-        let now = now.unwrap_or_else(Moment::now);
+        let now = now.unwrap_or_else(Instant::now);
         check_state!(data.state, [PortState::Running])?;
 
         for l in &mut data.layers {
@@ -1869,7 +1869,7 @@ impl<N: NetworkImpl> Port<N> {
         dir: Direction,
         ufid: &InnerFlowId,
         epoch: u64,
-        last_hit: &Moment,
+        last_hit: &Instant,
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -1879,7 +1879,7 @@ impl<N: NetworkImpl> Port<N> {
                         self.name_cstr.as_ptr() as uintptr_t,
                         ufid,
                         epoch as uintptr_t,
-                        last_hit.raw_millis().unwrap_or_default() as usize
+                        last_hit.raw_millis() as usize
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
@@ -2656,7 +2656,7 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
     fn is_expired(
         &self,
         entry: &FlowEntry<TcpFlowEntryState>,
-        now: Moment,
+        now: Instant,
     ) -> bool {
         let ttl = match entry.state().tcp_state.tcp_state() {
             TcpState::TimeWait => self.time_wait_ttl,

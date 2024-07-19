@@ -19,7 +19,7 @@ use common::icmp::*;
 use common::*;
 use opte::api::MacAddr;
 use opte::api::OpteError;
-use opte::ddi::time::Moment;
+use opte::ddi::time::Instant;
 use opte::engine::arp::ArpEthIpv4;
 use opte::engine::arp::ArpEthIpv4Raw;
 use opte::engine::dhcpv6;
@@ -1936,7 +1936,7 @@ fn flow_expiration() {
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
     set!(g1, "port_state=running");
-    let now = Moment::now();
+    let now = Instant::now();
 
     // ================================================================
     // Run the packet through g1's port in the outbound direction and
@@ -3447,7 +3447,7 @@ fn tcp_outbound() {
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
-    // let now = Moment::now();
+    // let now = Instant::now();
 
     // Add default route.
     router::add_entry(
@@ -3471,7 +3471,7 @@ fn tcp_outbound() {
     // - TCP state machine info should be cleaned up after an active close.
     // TimeWait state has a ~2min lifetime before we flush it -- it should still
     // be present at UFT expiry:
-    let now = Moment::now();
+    let now = Instant::now();
     g1.port
         .expire_flows_at(now + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0))
         .unwrap();
