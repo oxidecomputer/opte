@@ -28,7 +28,6 @@ use crate::route::RouteCache;
 use crate::route::RouteKey;
 use crate::secpolicy;
 use crate::sys;
-use crate::warn;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -41,6 +40,7 @@ use core::ptr;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
+use illumos::warn_;
 use illumos_sys_hdrs::*;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
@@ -382,7 +382,7 @@ unsafe extern "C" fn _init() -> c_int {
     match mod_install(&xde_linkage) {
         0 => 0,
         err => {
-            warn!("mod_install failed: {}", err);
+            warn_!("mod_install failed: {}", err);
             mac::mac_fini_ops(addr_of_mut!(xde_devops));
             err
         }
@@ -403,7 +403,7 @@ unsafe extern "C" fn _fini() -> c_int {
             0
         }
         err => {
-            warn!("mod remove failed: {}", err);
+            warn_!("mod remove failed: {}", err);
             err
         }
     }
@@ -440,7 +440,7 @@ unsafe extern "C" fn xde_open(
     match secpolicy::secpolicy_dl_config(credp) {
         0 => {}
         err => {
-            warn!("secpolicy_dl_config failed: {err}");
+            warn_!("secpolicy_dl_config failed: {err}");
             return err;
         }
     }
@@ -919,7 +919,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
             match unsafe { dls::dls_devnet_create(xde.mh, xde.linkid, 0) } {
                 0 => {}
                 err => {
-                    warn!("failed to recreate DLS devnet entry: {}", err);
+                    warn_!("failed to recreate DLS devnet entry: {}", err);
                 }
             };
             return Err(OpteError::System {
@@ -1026,7 +1026,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
 
             // 2. Remove MAC client handle
             if Arc::into_inner(u.mch).is_none() {
-                warn!(
+                warn_!(
                     "underlay {} has outstanding mac client handle refs",
                     u.name
                 );
@@ -1127,7 +1127,7 @@ unsafe extern "C" fn xde_attach(
     ) {
         0 => {}
         err => {
-            warn!("failed to create xde control device: {err}");
+            warn_!("failed to create xde control device: {err}");
             return DDI_FAILURE;
         }
     }
@@ -1217,7 +1217,7 @@ unsafe fn driver_prop_exists(dip: *mut dev_info, pname: &str) -> bool {
     let name = match CString::new(pname) {
         Ok(s) => s,
         Err(e) => {
-            warn!("bad driver prop string name: {}: {:?}", pname, e);
+            warn_!("bad driver prop string name: {}: {:?}", pname, e);
             return false;
         }
     };
@@ -1240,7 +1240,7 @@ unsafe fn get_driver_prop_bool(
     let name = match CString::new(pname) {
         Ok(s) => s,
         Err(e) => {
-            warn!("bad driver prop string name: {}: {:?}", pname, e);
+            warn_!("bad driver prop string name: {}: {:?}", pname, e);
             return None;
         }
     };
@@ -1262,7 +1262,7 @@ unsafe fn get_driver_prop_bool(
     // between a true value of 1 and the case where the user entered
     // gibberish. In this case we treat gibberish as true.
     if ret == 99 {
-        warn!("driver prop {} not found", pname);
+        warn_!("driver prop {} not found", pname);
         return None;
     }
 
@@ -1277,7 +1277,7 @@ unsafe fn get_driver_prop_string(
     let name = match CString::new(pname) {
         Ok(s) => s,
         Err(e) => {
-            warn!("bad driver prop string name: {}: {:?}", pname, e);
+            warn_!("bad driver prop string name: {}: {:?}", pname, e);
             return None;
         }
     };
@@ -1291,16 +1291,17 @@ unsafe fn get_driver_prop_string(
         &mut value,
     );
     if ret != DDI_PROP_SUCCESS {
-        warn!("failed to get driver property {}", pname);
+        warn_!("failed to get driver property {}", pname);
         return None;
     }
     let s = CStr::from_ptr(value);
     let s = match s.to_str() {
         Ok(s) => s,
         Err(e) => {
-            warn!(
+            warn_!(
                 "failed to create string from property value for {}: {:?}",
-                pname, e
+                pname,
+                e
             );
             return None;
         }
@@ -1321,7 +1322,7 @@ unsafe extern "C" fn xde_detach(
     }
 
     if xde_devs.as_ref().unwrap().read().len() > 0 {
-        warn!("failed to detach: outstanding ports");
+        warn_!("failed to detach: outstanding ports");
         return DDI_FAILURE;
     }
 
@@ -1335,7 +1336,7 @@ unsafe extern "C" fn xde_detach(
         let underlay = state_ref.underlay.lock();
 
         if underlay.is_some() {
-            warn!("failed to detach: underlay is set");
+            warn_!("failed to detach: underlay is set");
             return DDI_FAILURE;
         }
     }

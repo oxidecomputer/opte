@@ -132,7 +132,7 @@ version = "0.68.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "726e4313eb6ec35d2730258ad4e15b547ee75d6afaa1361a922e78e59b7d8078"
 dependencies = [
- "bitflags 2.5.0",
+ "bitflags 2.6.0",
  "cexpr",
  "clang-sys",
  "lazy_static",
@@ -145,14 +145,14 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex",
- "syn 2.0.68",
+ "syn 2.0.71",
  "which",
 ]
 
 [[package]]
 name = "bindings"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/illumos-rs.git?branch=felixmcfelix/rusty-for-opte#735a4daf33a7d5a6368f7df76d88ed4f231ab24a"
+source = "git+https://github.com/oxidecomputer/illumos-rs.git?branch=felixmcfelix/rusty-for-opte#bd985eeca879edccc94171af823a1dac2e6c6a74"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -935,10 +935,10 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "illumos"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/illumos-rs.git?branch=felixmcfelix/rusty-for-opte#735a4daf33a7d5a6368f7df76d88ed4f231ab24a"
+source = "git+https://github.com/oxidecomputer/illumos-rs.git?branch=felixmcfelix/rusty-for-opte#bd985eeca879edccc94171af823a1dac2e6c6a74"
 dependencies = [
  "bindings",
- "bitflags 2.5.0",
+ "bitflags 2.6.0",
  "macros",
 ]
 
@@ -1073,7 +1073,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e310b3a6b5907f99202fcdb4960ff45b93735d7c7d96b760fcff8db2dc0e103d"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.5",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -1151,7 +1151,7 @@ checksum = "a7a70ba024b9dc04c27ea2f0c0548feb474ec5c54bba33a7f72f873a39d07b24"
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/illumos-rs.git?branch=felixmcfelix/rusty-for-opte#735a4daf33a7d5a6368f7df76d88ed4f231ab24a"
+source = "git+https://github.com/oxidecomputer/illumos-rs.git?branch=felixmcfelix/rusty-for-opte#bd985eeca879edccc94171af823a1dac2e6c6a74"
 dependencies = [
  "bindings",
  "proc-macro2",
@@ -1159,7 +1159,7 @@ dependencies = [
  "regex-lite",
  "serde",
  "serde_tokenstream",
- "syn 2.0.68",
+ "syn 2.0.71",
 ]
 
 [[package]]
@@ -1629,7 +1629,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f12335488a2f3b0a83b14edad48dca9879ce89b2edd10e80237e4e852dd645e"
 dependencies = [
  "proc-macro2",
- "syn 2.0.68",
+ "syn 2.0.71",
 ]
 
 [[package]]

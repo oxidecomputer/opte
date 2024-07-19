@@ -27,18 +27,7 @@ mod ioctl;
 #[macro_use]
 extern crate alloc;
 
-use alloc::ffi::CString;
-use core::alloc::GlobalAlloc;
 use core::alloc::Layout;
-use core::panic::PanicInfo;
-use illumos_sys_hdrs::c_void;
-use illumos_sys_hdrs::cmn_err;
-use illumos_sys_hdrs::kmem_alloc;
-use illumos_sys_hdrs::kmem_free;
-use illumos_sys_hdrs::panic;
-use illumos_sys_hdrs::size_t;
-use illumos_sys_hdrs::CE_WARN;
-use illumos_sys_hdrs::KM_SLEEP;
 
 pub mod dls;
 pub mod ip;
@@ -66,32 +55,4 @@ fn alloc_error(_: Layout) -> ! {
 #[no_mangle]
 fn _Unwind_Resume() -> ! {
     panic!("_Unwind_Resume called");
-}
-
-// NOTE: We allow unused_unsafe so these macros can be used freely in
-// unsafe and non-unsafe functions.
-#[macro_export]
-macro_rules! warn {
-    ($format:expr) => {
-        let msg = CString::new(format!($format)).unwrap();
-        #[allow(unused_unsafe)]
-        unsafe { cmn_err(CE_WARN, msg.as_ptr()) };
-    };
-    ($format:expr, $($args:expr),*) => {
-        let msg = CString::new(format!($format, $($args),*)).unwrap();
-        #[allow(unused_unsafe)]
-        unsafe { cmn_err(CE_WARN, msg.as_ptr()) };
-    };
-}
-
-#[macro_export]
-macro_rules! note {
-    ($format:expr) => {
-        let msg = CString::new(format!($format));
-        cmn_err(CE_NOTE, msg.as_ptr());
-    };
-    ($format:expr, $($args:expr),*) => {
-        let msg = CString::new(format!($format, $($args),*));
-        cmn_err(CE_NOTE, msg.as_ptr());
-    };
 }
