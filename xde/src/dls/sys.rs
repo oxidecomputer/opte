@@ -7,6 +7,7 @@
 // stuff we need from dls
 
 use crate::ip::kcondvar_t;
+use crate::ip::kmem_cache_t;
 use crate::ip::krwlock_t;
 use crate::ip::list_node_t;
 use crate::ip::major_t;
@@ -57,7 +58,7 @@ extern "C" {
     /// Transmit a packet chain on a given link.
     /// This is effectively one layer above mac_tx.
     pub fn str_mdata_fastpath_put(
-        dsp: *const dld_str_s,
+        dsp: *mut dld_str_s,
         mp: *mut mblk_t,
         f_hint: uintptr_t,
         flag: u16,
@@ -87,6 +88,8 @@ extern "C" {
     ) -> c_int;
 
     pub fn dls_close(dsp: *mut dld_str_s);
+
+    pub static dld_str_cachep: *mut kmem_cache_t;
 }
 
 #[repr(C)]
@@ -121,14 +124,14 @@ pub struct dld_str_s {
     ds_style: t_uscalar_t,
     ds_sap: u16,
 
-    ds_mh: *mut mac_handle,
+    pub ds_mh: *mut mac_handle,
     pub ds_mch: *mut mac_client_handle,
 
     ds_promisc: u32,
     ds_mph: *mut mac_promisc_handle,
     ds_vlan_mph: *mut mac_promisc_handle,
 
-    ds_mip: *const c_void, // mac_info_t
+    pub ds_mip: *const c_void, // mac_info_t
 
     ds_pri: c_uint,
 

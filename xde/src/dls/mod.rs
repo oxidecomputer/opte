@@ -8,6 +8,8 @@
 
 pub mod sys;
 
+use crate::kmem::sys::kmem_cache_alloc;
+use crate::kmem::sys::kmem_cache_free;
 use crate::mac::mac_client_handle;
 use crate::mac::MacClient;
 use crate::mac::MacPerimeterHandle;
@@ -15,12 +17,13 @@ use crate::mac::MacTxFlags;
 use crate::mac::MAC_DROP_ON_NO_DESC;
 use core::ffi::CStr;
 use core::fmt::Display;
-use core::mem::MaybeUninit;
 use core::ptr;
+use core::ptr::NonNull;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::uintptr_t;
 use illumos_sys_hdrs::ENOENT;
+use illumos_sys_hdrs::KM_SLEEP;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
 pub use sys::*;
@@ -130,13 +133,18 @@ impl DlsLink {
                 mph.link_id(), self.link);
         }
 
-        let mut stream = MaybeUninit::zeroed();
-        let res =
-            unsafe { dls_open(inner.dlp, inner.dlh, stream.as_mut_ptr()) };
+        let dld_str = NonNull::new(unsafe {
+            kmem_cache_alloc(dld_str_cachep, KM_SLEEP) as *mut dld_str_s
+        });
+        let Some(dld_str) = dld_str else {
+            self.release(mph);
+            return Err(-1);
+        };
+
+        let res = unsafe { dls_open(inner.dlp, inner.dlh, dld_str.as_ptr()) };
         if res == 0 {
             // DLP is held/consumed by dls_open.
             _ = self.inner.take();
-            let dld_str = unsafe { stream.assume_init() };
             Ok(DlsStream {
                 inner: Some(DlsStreamInner { dld_str }),
                 link: mph.link_id(),
@@ -170,7 +178,7 @@ pub struct DlsStream {
 
 #[derive(Debug)]
 struct DlsStreamInner {
-    dld_str: dld_str_s,
+    dld_str: NonNull<dld_str_s>,
 }
 
 impl DlsStream {
@@ -209,7 +217,7 @@ impl DlsStream {
         raw_flags |= MAC_DROP_ON_NO_DESC;
         unsafe {
             str_mdata_fastpath_put(
-                &inner.dld_str,
+                inner.dld_str.as_ptr(),
                 pkt.unwrap_mblk(),
                 hint,
                 raw_flags,
@@ -224,13 +232,13 @@ impl MacClient for DlsStream {
             return Err(-1);
         };
 
-        Ok(inner.dld_str.ds_mch)
+        Ok(unsafe { (*inner.dld_str.as_ptr()).ds_mch })
     }
 }
 
 impl Drop for DlsStream {
     fn drop(&mut self) {
-        if let Some(mut inner) = self.inner.take() {
+        if let Some(inner) = self.inner.take() {
             match MacPerimeterHandle::from_linkid(self.link) {
                 Ok(_perim) => unsafe {
                     // NOTE: this is reimplementing dld_str_detach
@@ -240,8 +248,24 @@ impl Drop for DlsStream {
                     // weirder to set the promisc handle, and I don't know how
                     // this would interact with the existing (logical)
                     // STREAMS up to ip.
-                    dls_close(&mut inner.dld_str);
-                    dls_devnet_rele(inner.dld_str.ds_ddh)
+                    dls_close(inner.dld_str.as_ptr());
+                    dls_devnet_rele((*inner.dld_str.as_ptr()).ds_ddh);
+
+                    (*inner.dld_str.as_ptr()).ds_mh = ptr::null_mut();
+                    (*inner.dld_str.as_ptr()).ds_mch = ptr::null_mut();
+                    // ddh NULL not checked by destroy fn or cleared by ddh
+                    // but it probably should be.
+                    (*inner.dld_str.as_ptr()).ds_ddh = ptr::null_mut();
+                    (*inner.dld_str.as_ptr()).ds_mip = ptr::null();
+
+                    // already the case:
+                    // dsp->ds_dlstate = DL_UNATTACHED;
+                    // dsp->ds_sap = 0;
+
+                    kmem_cache_free(
+                        dld_str_cachep,
+                        inner.dld_str.as_ptr() as *mut _,
+                    );
                 },
                 Err(e) => opte::engine::err!(
                     "couldn't acquire MAC perimeter (err {}): \
