@@ -24,6 +24,7 @@ repository = "https://github.com/oxidecomputer/opte"
 
 [workspace.dependencies]
 # Internal crates
+ctf = { path = "crates/ctf" }
 derror-macro = { path = "crates/derror-macro" }
 illumos-sys-hdrs = { path = "crates/illumos-sys-hdrs" }
 kstat-macro = { path = "crates/kstat-macro" }
@@ -78,6 +79,12 @@ zerocopy = { version = "0.7", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipath" }
+
+# For CTF (temp?)
+arrayref = "0.3"
+flate2 = "1"
+num_enum = "0.7"
+object = "0.36"
 
 [profile.release]
 debug = 2
