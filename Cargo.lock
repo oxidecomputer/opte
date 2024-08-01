@@ -1326,6 +1326,7 @@ dependencies = [
 name = "opte-ioctl"
 version = "0.1.0"
 dependencies = [
+ "ctf",
  "libc",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
  "opte",
@@ -1352,7 +1353,6 @@ dependencies = [
  "anyhow",
  "cfg-if",
  "clap",
- "ctf",
  "libc",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
  "opte",

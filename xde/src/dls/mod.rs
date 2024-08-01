@@ -15,6 +15,8 @@ use crate::mac::MacClient;
 use crate::mac::MacPerimeterHandle;
 use crate::mac::MacTxFlags;
 use crate::mac::MAC_DROP_ON_NO_DESC;
+use crate::warn;
+use alloc::string::String;
 use core::ffi::CStr;
 use core::fmt::Display;
 use core::ptr;
@@ -24,6 +26,7 @@ use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::uintptr_t;
 use illumos_sys_hdrs::ENOENT;
 use illumos_sys_hdrs::KM_SLEEP;
+use opte::api::StructDef;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
 pub use sys::*;
@@ -182,6 +185,42 @@ struct DlsStreamInner {
 }
 
 impl DlsStream {
+    pub fn verify_bindings(bindings: &StructDef) -> Result<(), String> {
+        let expt = [
+            ("ds_ddh", core::mem::offset_of!(dld_str_s, ds_ddh)),
+            ("ds_mch", core::mem::offset_of!(dld_str_s, ds_mch)),
+            ("ds_mh", core::mem::offset_of!(dld_str_s, ds_mh)),
+            ("ds_mip", core::mem::offset_of!(dld_str_s, ds_mip)),
+        ];
+
+        let mut errs = vec![];
+        for (field_name, byte_offset) in expt {
+            let bit_offset = 8 * byte_offset;
+            let Some(field) = bindings.fields.get(field_name) else {
+                errs.push(format!("missing field {field_name}"));
+                continue;
+            };
+
+            if field.bit_offset != bit_offset as u64 {
+                errs.push(format!(
+                    "field {field_name} at bit {} (wanted {})",
+                    field.bit_offset, bit_offset,
+                ));
+            }
+
+            warn!(
+                "f {} saw {} want {}",
+                field_name, field.bit_offset, bit_offset
+            );
+        }
+
+        if errs.is_empty() {
+            Ok(())
+        } else {
+            Err(errs.join(", "))
+        }
+    }
+
     pub fn open(link_id: LinkId) -> Result<Self, c_int> {
         let perim = MacPerimeterHandle::from_linkid(link_id)?;
         let link_handle = DlsLink::hold(&perim)?;

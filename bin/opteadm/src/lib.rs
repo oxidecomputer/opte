@@ -13,6 +13,7 @@ use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::SetXdeUnderlayReq;
 use opte::engine::ioctl::{self as api};
+use opte_ioctl::fetch_fragile_types;
 use opte_ioctl::run_cmd_ioctl;
 use opte_ioctl::Error;
 use oxide_vpc::api::AddFwRuleReq;
@@ -99,7 +100,9 @@ impl OpteAdm {
         u1: &str,
         u2: &str,
     ) -> Result<NoResp, Error> {
-        let req = SetXdeUnderlayReq { u1: u1.into(), u2: u2.into() };
+        let illumos_state = fetch_fragile_types()?;
+        let req =
+            SetXdeUnderlayReq { u1: u1.into(), u2: u2.into(), illumos_state };
         let cmd = OpteCmd::SetXdeUnderlay;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }

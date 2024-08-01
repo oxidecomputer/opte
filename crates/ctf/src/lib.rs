@@ -344,7 +344,8 @@ pub enum TypeRepr {
     Array { contents: u16, index: u16, n_elems: u32 },
     Int(u32),
     Float(u32),
-    Empty,
+    Othertype,
+    Forward,
 }
 
 #[derive(Debug)]
@@ -617,7 +618,7 @@ impl Sections {
                         name_offset,
                         type_encoding,
                         info: TypeInfo::Type(type_size),
-                        repr: TypeRepr::Empty,
+                        repr: TypeRepr::Othertype,
                         lsize: None,
                     });
                 }
@@ -639,7 +640,6 @@ impl Sections {
                     })
                 }
 
-                // Added by me: testing
                 Kind::Function => {
                     //TODO - skip for now
                     let len = (4 * type_encoding.vlen()) as usize;
@@ -647,7 +647,6 @@ impl Sections {
                     data = &data[len..];
                 }
 
-                // Added by me: testing
                 Kind::Enum => {
                     let (repr, remaining) =
                         Self::parse_enum(type_encoding.vlen(), data);
@@ -661,16 +660,12 @@ impl Sections {
                     });
                 }
 
-                // Added by me: testing
                 Kind::Forward => {
-                    //TODO - skip for now
-                    // let len = BASE_TYPE_SIZE;
-                    // data = &data[len..];
                     result.push(Type {
                         name_offset,
                         type_encoding,
                         info: TypeInfo::Size(type_size),
-                        repr: TypeRepr::Empty,
+                        repr: TypeRepr::Forward,
                         lsize: None,
                     });
                 }

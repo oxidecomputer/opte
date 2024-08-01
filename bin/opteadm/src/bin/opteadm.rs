@@ -7,8 +7,6 @@
 use anyhow::Context;
 use clap::Args;
 use clap::Parser;
-use ctf::Ctf;
-use ctf::TypeRepr;
 use opte::api::Direction;
 use opte::api::DomainName;
 use opte::api::IpAddr;
@@ -200,26 +198,16 @@ enum Command {
     },
 
     /// Delete an xde device
-    DeleteXde {
-        name: String,
-    },
+    DeleteXde { name: String },
 
     /// Set up xde underlay devices
-    SetXdeUnderlay {
-        u1: String,
-        u2: String,
-    },
+    SetXdeUnderlay { u1: String, u2: String },
 
     /// Clear xde underlay devices
     ClearXdeUnderlay,
 
     /// Set a virtual-to-physical mapping
-    SetV2P {
-        vpc_ip: IpAddr,
-        vpc_mac: MacAddr,
-        underlay_ip: Ipv6Addr,
-        vni: Vni,
-    },
+    SetV2P { vpc_ip: IpAddr, vpc_mac: MacAddr, underlay_ip: Ipv6Addr, vni: Vni },
 
     /// Clear a virtual-to-physical mapping
     ClearV2P {
@@ -230,16 +218,10 @@ enum Command {
     },
 
     /// Set a virtual-to-boundary mapping
-    SetV2B {
-        prefix: IpCidr,
-        tunnel_endpoint: Vec<Ipv6Addr>,
-    },
+    SetV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
 
     /// Clear a virtual-to-boundary mapping
-    ClearV2B {
-        prefix: IpCidr,
-        tunnel_endpoint: Vec<Ipv6Addr>,
-    },
+    ClearV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
 
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
@@ -292,9 +274,6 @@ enum Command {
         #[arg(long = "dir")]
         direction: Option<Direction>,
     },
-
-    // Test out some stuff.
-    Test,
 }
 
 #[derive(Debug, Parser)]
@@ -586,37 +565,6 @@ fn print_port(t: &mut impl Write, pi: PortInfo) -> std::io::Result<()> {
 
 fn main() -> anyhow::Result<()> {
     let cmd = Command::parse();
-
-    if let Command::Test = cmd {
-        let a = Ctf::from_file("/kernel/drv/amd64/dld")?;
-        // println!("quack");
-        // println!("{:#?}", a.sections);
-        // println!("{:?}", a);
-
-        for (i, ty) in a.sections.types.iter().enumerate() {
-            let s = a.string_at(ty.name_offset);
-            println!("{s}, {i:?}")
-        }
-
-        println!("{:?}", a.header);
-
-        let dld = a.find_type_by_name("dld_str_s").unwrap();
-        println!("{:?}", dld);
-
-        if let TypeRepr::Struct(ref fields) = dld.repr {
-            println!("dld_str_s has:");
-            for field in fields {
-                println!("{}, {}", field.name_offset, field.type_offset);
-                let field_name = a.string_at(field.name_offset);
-                let ty_name = a.type_name(field.type_offset);
-                // let ty_name = "";
-                println!("- {field_name}: {ty_name:?} @ ({})", field.offset)
-            }
-        }
-
-        return Ok(());
-    };
-
     let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
 
     match cmd {
@@ -898,8 +846,6 @@ fn main() -> anyhow::Result<()> {
                 })?;
             }
         }
-
-        _ => {}
     }
 
     Ok(())
