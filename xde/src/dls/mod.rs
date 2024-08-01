@@ -207,11 +207,6 @@ impl DlsStream {
                     field.bit_offset, bit_offset,
                 ));
             }
-
-            warn!(
-                "f {} saw {} want {}",
-                field_name, field.bit_offset, bit_offset
-            );
         }
 
         if errs.is_empty() {
