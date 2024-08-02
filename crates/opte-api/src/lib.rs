@@ -111,7 +111,7 @@ pub struct StructField {
     //       for, which is reading four pointers from a struct defn.
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum FieldType {
     Pointer,
     Other(Option<String>),

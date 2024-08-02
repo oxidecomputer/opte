@@ -231,8 +231,6 @@ impl Ctf {
             type_id.checked_sub(1)
         }? as usize;
 
-        println!("idx {type_id} -> {true_idx}");
-
         self.sections.types.get(true_idx)
     }
 
@@ -400,7 +398,7 @@ impl TypeEncoding {
 
     /// Length of the associated type data.
     pub fn vlen(&self) -> u16 {
-        (self.0 & 0x3ff) as u16
+        self.0 & 0x3ff
     }
 }
 

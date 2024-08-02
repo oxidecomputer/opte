@@ -396,7 +396,7 @@ where
 }
 
 pub fn fetch_fragile_types() -> Result<FragileInternals, Error> {
-    let dld_ctf = Ctf::from_file("/kernel/drv/amd64/dld")
+    let dld_ctf = Ctf::from_file("/system/object/dld/object")
         .map_err(|e| Error::CtfError(e.to_string()))?;
 
     let Some(dld) = dld_ctf.find_type_by_name("dld_str_s") else {

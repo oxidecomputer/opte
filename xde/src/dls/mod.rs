@@ -15,7 +15,6 @@ use crate::mac::MacClient;
 use crate::mac::MacPerimeterHandle;
 use crate::mac::MacTxFlags;
 use crate::mac::MAC_DROP_ON_NO_DESC;
-use crate::warn;
 use alloc::string::String;
 use core::ffi::CStr;
 use core::fmt::Display;
@@ -26,6 +25,7 @@ use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::uintptr_t;
 use illumos_sys_hdrs::ENOENT;
 use illumos_sys_hdrs::KM_SLEEP;
+use opte::api::FieldType;
 use opte::api::StructDef;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
@@ -187,19 +187,44 @@ struct DlsStreamInner {
 impl DlsStream {
     pub fn verify_bindings(bindings: &StructDef) -> Result<(), String> {
         let expt = [
-            ("ds_ddh", core::mem::offset_of!(dld_str_s, ds_ddh)),
-            ("ds_mch", core::mem::offset_of!(dld_str_s, ds_mch)),
-            ("ds_mh", core::mem::offset_of!(dld_str_s, ds_mh)),
-            ("ds_mip", core::mem::offset_of!(dld_str_s, ds_mip)),
+            (
+                "ds_ddh",
+                core::mem::offset_of!(dld_str_s, ds_ddh),
+                FieldType::Pointer,
+            ),
+            (
+                "ds_mch",
+                core::mem::offset_of!(dld_str_s, ds_mch),
+                FieldType::Pointer,
+            ),
+            (
+                "ds_mip",
+                core::mem::offset_of!(dld_str_s, ds_mip),
+                FieldType::Pointer,
+            ),
+            // This is a pointer, but uniquification puts its def in the parent (genunix).
+            // We don't yet support resolution via parents.
+            (
+                "ds_mh",
+                core::mem::offset_of!(dld_str_s, ds_mh),
+                FieldType::Other(None),
+            ),
         ];
 
         let mut errs = vec![];
-        for (field_name, byte_offset) in expt {
+        for (field_name, byte_offset, ty) in expt {
             let bit_offset = 8 * byte_offset;
             let Some(field) = bindings.fields.get(field_name) else {
                 errs.push(format!("missing field {field_name}"));
                 continue;
             };
+
+            if field.ty != ty {
+                errs.push(format!(
+                    "field {field_name} has type {:?} (wanted {:?})",
+                    field.ty, ty,
+                ));
+            }
 
             if field.bit_offset != bit_offset as u64 {
                 errs.push(format!(
@@ -212,7 +237,7 @@ impl DlsStream {
         if errs.is_empty() {
             Ok(())
         } else {
-            Err(errs.join(", "))
+            Err(format!("dls_str_s: [{}]", errs.join(", ")))
         }
     }
 
