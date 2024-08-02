@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Safe abstractions for synchronization primitives.
 //!
@@ -16,12 +16,16 @@ cfg_if! {
         use core::cell::UnsafeCell;
         use core::ptr;
         use illumos_sys_hdrs::{
-            kmutex_t, krw_t, krwlock_t, mutex_enter, mutex_exit,
-            mutex_destroy, mutex_init, rw_enter, rw_exit, rw_init,
+            cv_broadcast, cv_destroy, cv_init, cv_signal, cv_wait,
+            kcondvar_t, kcv_type_t,
+            kmutex_t, krw_t, krwlock_t, mutex_destroy, mutex_enter,
+            mutex_exit,
+            mutex_init, mutex_tryenter, rw_enter, rw_exit, rw_init,
             rw_destroy
         };
     } else {
         use std::sync::Mutex;
+        use std::sync::Condvar;
     }
 }
 
@@ -134,10 +138,21 @@ impl<T> KMutex<T> {
         unsafe { mutex_enter(self.mutex.0.get()) };
         KMutexGuard { lock: self }
     }
+
+    pub fn try_lock(&self) -> Result<KMutexGuard<T>, LockTaken> {
+        let try_lock = unsafe { mutex_tryenter(self.mutex.0.get()) };
+        if try_lock != 0 {
+            Ok(KMutexGuard { lock: self })
+        } else {
+            Err(LockTaken)
+        }
+    }
 }
 
-unsafe impl<T: Send> Send for KMutex<T> {}
-unsafe impl<T: Sync> Sync for KMutex<T> {}
+pub struct LockTaken;
+
+unsafe impl Send for KCondvar {}
+unsafe impl Sync for KCondvar {}
 
 #[cfg(all(not(feature = "std"), not(test)))]
 pub struct KMutexGuard<'a, T: 'a> {
@@ -211,6 +226,16 @@ impl<T> KMutex<T> {
     pub fn lock(&self) -> KMutexGuard<T> {
         let guard = self.inner.lock().unwrap();
         KMutexGuard { guard }
+    }
+
+    pub fn try_lock(&self) -> Result<KMutexGuard<T>, LockTaken> {
+        self.inner
+            .try_lock()
+            .map_err(|err| match err {
+                std::sync::TryLockError::Poisoned(_) => panic!("oops"),
+                std::sync::TryLockError::WouldBlock => LockTaken,
+            })
+            .map(|guard| KMutexGuard { guard })
     }
 }
 
@@ -398,5 +423,81 @@ impl<T> KRwLock<T> {
     pub fn write(&self) -> KRwLockWriteGuard<T> {
         let guard = self.inner.write().unwrap();
         KRwLockWriteGuard { guard }
+    }
+}
+
+unsafe impl<T: Send> Send for KMutex<T> {}
+unsafe impl<T: Sync> Sync for KMutex<T> {}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+pub struct KCondvar {
+    cv: UnsafeCell<kcondvar_t>,
+}
+
+#[cfg(any(feature = "std", test))]
+pub struct KCondvar {
+    cv: Condvar,
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl KCondvar {
+    pub fn new() -> Self {
+        let mut cv = kcondvar_t { _opaque: 0 };
+
+        unsafe {
+            cv_init(
+                &mut cv,
+                ptr::null_mut(),
+                kcv_type_t::CV_DRIVER,
+                ptr::null_mut(),
+            );
+        }
+
+        Self { cv: UnsafeCell::new(cv) }
+    }
+
+    pub fn notify_one(&self) {
+        unsafe { cv_signal(self.cv.get()) }
+    }
+
+    pub fn notify_all(&self) {
+        unsafe { cv_broadcast(self.cv.get()) }
+    }
+
+    pub fn wait<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+    ) -> KMutexGuard<'a, T> {
+        unsafe { cv_wait(self.cv.get(), lock.lock.mutex.0.get()) }
+        lock
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl KCondvar {
+    pub fn new() -> Self {
+        Self { cv: Condvar::new() }
+    }
+
+    pub fn notify_one(&self) {
+        self.cv.notify_one()
+    }
+
+    pub fn notify_all(&self) {
+        self.cv.notify_one()
+    }
+
+    pub fn wait<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+    ) -> KMutexGuard<'a, T> {
+        KMutexGuard { guard: self.cv.wait(lock.guard).unwrap() }
+    }
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl Drop for KCondvar {
+    fn drop(&mut self) {
+        unsafe { cv_destroy(self.cv.get()) };
     }
 }

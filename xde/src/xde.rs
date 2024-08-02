@@ -28,6 +28,8 @@ use crate::route::RouteCache;
 use crate::route::RouteKey;
 use crate::secpolicy;
 use crate::sys;
+use crate::thread::spawn;
+use crate::thread::JoinHandle;
 use crate::warn;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
@@ -37,6 +39,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
+use core::num::NonZeroUsize;
 use core::ptr;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
@@ -64,6 +67,7 @@ use opte::engine::headers::EncapMeta;
 use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
+use opte::engine::packet::EssQueue;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
@@ -149,6 +153,14 @@ extern "C" {
     pub fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
     pub fn __dtrace_probe_rx(mp: uintptr_t);
     pub fn __dtrace_probe_tx(mp: uintptr_t);
+
+    pub fn __dtrace_probe_worker__start(n_pkts: uintptr_t);
+    pub fn __dtrace_probe_worker__end();
+
+    pub fn __dtrace_probe_worker__pkt__start(dir: uintptr_t);
+    pub fn __dtrace_probe_worker__pkt__end();
+
+    pub fn __dtrace_probe_worker__no__space(dir: uintptr_t, n_pkts: uintptr_t);
 }
 
 fn bad_packet_parse_probe(
@@ -230,6 +242,9 @@ struct XdeState {
     vpc_map: Arc<overlay::VpcMappings>,
     v2b: Arc<overlay::Virt2Boundary>,
     underlay: KMutex<Option<UnderlayState>>,
+
+    deliver: Arc<EssQueue<Origin>>,
+    deliver_hdl: Option<JoinHandle>,
 }
 
 struct UnderlayState {
@@ -252,11 +267,23 @@ fn get_xde_state() -> &'static XdeState {
 impl XdeState {
     fn new() -> Self {
         let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
+
+        // Completely arbitrary watermark lmao.
+        let deliver = Arc::new(EssQueue::new(Some(
+            NonZeroUsize::new(usize::MAX).unwrap(),
+        )));
+        let worker_mailbox = deliver.clone();
+
+        let deliver_hdl = Some(spawn(|| xde_worker(worker_mailbox)));
+
         XdeState {
             underlay: KMutex::new(None, KMutexType::Driver),
             ectx,
             vpc_map: Arc::new(overlay::VpcMappings::new()),
             v2b: Arc::new(overlay::Virt2Boundary::new()),
+
+            deliver,
+            deliver_hdl,
         }
     }
 }
@@ -1267,7 +1294,13 @@ unsafe extern "C" fn xde_detach(
 
     // Reattach the XdeState to a Box, which takes ownership and will
     // free it on drop.
-    drop(Box::from_raw(state));
+    let mut xde = Box::from_raw(state);
+
+    // End the worker thread.
+    xde.deliver.quiesce();
+    xde.deliver_hdl.take().unwrap().join();
+
+    drop(xde);
 
     // Remove control device
     ddi_remove_minor_node(xde_dip, XDE_STR);
@@ -1543,8 +1576,19 @@ unsafe extern "C" fn xde_mc_tx(
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (u1, u2, port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
-    while let Some(pkt) = chain.pop_front() {
-        xde_mc_tx_one(src_dev, pkt);
+    // while let Some(pkt) = chain.pop_front() {
+    //     xde_mc_tx_one(src_dev, pkt);
+    // }
+
+    let n_pkts = chain.len();
+
+    if let Err(_) = get_xde_state()
+        .deliver
+        .deliver(1, chain, || Origin::Port(src_dev.devname.clone()))
+    {
+        unsafe {
+            __dtrace_probe_worker__no__space(Direction::Out as _, n_pkts);
+        }
     }
 
     ptr::null_mut()
@@ -1689,6 +1733,85 @@ unsafe fn xde_mc_tx_one(
     // On return the Packet is dropped and its underlying mblk
     // segments are freed.
     ptr::null_mut()
+}
+
+// Doing it this wey for now because passing Arcs will really
+// complicate the detach flow + safety (e.g., Arcs to ports/ulays
+// outliving the quiesced callbacks)...
+// Strings suck but this is a POC, so w/e.
+enum Origin {
+    Underlay(usize),
+    Port(String),
+}
+
+// TODO: put somewhere sane
+
+pub const CPU_BEST: c_int = -4;
+
+extern "C" {
+    pub fn affinity_set(affinity: c_int);
+}
+
+fn xde_worker(mailbox: Arc<EssQueue<Origin>>) {
+    opte::engine::err!("XDE WORKER STARTED");
+
+    unsafe { affinity_set(CPU_BEST) };
+
+    while let Ok(packets) = mailbox.receive() {
+        unsafe {
+            __dtrace_probe_worker__start(packets.len());
+        }
+
+        let devs = unsafe { xde_devs.read() };
+        let xde = get_xde_state();
+        let ulay = xde.underlay.lock();
+
+        // TODO: hold packets out here for batched dispatch.
+        for (packet, origin) in packets {
+            let dir = if let Origin::Underlay(_) = &origin {
+                Direction::In
+            } else {
+                Direction::Out
+            };
+            unsafe {
+                __dtrace_probe_worker__pkt__start(dir as _);
+            }
+
+            match origin {
+                Origin::Port(port_name) => {
+                    let my_port =
+                        devs.iter().find(|port| port.devname == port_name);
+
+                    if let Some(port) = my_port {
+                        unsafe {
+                            xde_mc_tx_one(port, packet);
+                        }
+                    }
+                }
+                Origin::Underlay(0) => unsafe {
+                    if let Some(ulay) = &*ulay {
+                        xde_rx_one(&ulay.u1.mch, ptr::null_mut(), packet);
+                    }
+                },
+                Origin::Underlay(1) => unsafe {
+                    if let Some(ulay) = &*ulay {
+                        xde_rx_one(&ulay.u2.mch, ptr::null_mut(), packet);
+                    }
+                },
+                Origin::Underlay(n) => panic!("I don't have an {n}th underlay"),
+            };
+
+            unsafe {
+                __dtrace_probe_worker__pkt__end();
+            }
+        }
+
+        unsafe {
+            __dtrace_probe_worker__end();
+        }
+    }
+
+    opte::engine::err!("XDE WORKER EXITED");
 }
 
 /// This is a generic wrapper for references that should be dropped once not in
@@ -1845,8 +1968,20 @@ unsafe extern "C" fn xde_rx(
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
-    while let Some(pkt) = chain.pop_front() {
-        xde_rx_one(&mch, mrh, pkt);
+    // while let Some(pkt) = chain.pop_front() {
+    //     xde_rx_one(&mch, mrh, pkt);
+    // }
+
+    let n_pkts = chain.len();
+
+    // Eh... The only reason I can get away with this is because we never
+    // Hairpin anything on the underlay, for good reason lmao.
+    if let Err(_) =
+        get_xde_state().deliver.deliver(0, chain, || Origin::Underlay(0))
+    {
+        unsafe {
+            __dtrace_probe_worker__no__space(Direction::In as _, n_pkts);
+        }
     }
 }
 
