@@ -43,7 +43,6 @@ use thiserror::Error;
 
 /// Errors related to administering the OPTE driver.
 #[derive(Debug, Error)]
-#[cfg(target_os = "illumos")]
 pub enum Error {
     #[error("OPTE driver is not attached")]
     DriverNotAttached,
@@ -74,7 +73,6 @@ pub enum Error {
     CommandError(OpteCmd, OpteError),
 }
 
-#[cfg(target_os = "illumos")]
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         match e.kind() {
@@ -84,7 +82,6 @@ impl From<std::io::Error> for Error {
     }
 }
 
-#[cfg(target_os = "illumos")]
 impl From<libnet::Error> for Error {
     fn from(e: libnet::Error) -> Self {
         Self::NetadmFailed(e)
@@ -93,12 +90,10 @@ impl From<libnet::Error> for Error {
 
 /// The handle used to send administration commands to OPTE.
 #[derive(Debug)]
-#[cfg(target_os = "illumos")]
 pub struct OpteHdl {
     device: File,
 }
 
-#[cfg(target_os = "illumos")]
 impl OpteHdl {
     pub const XDE_CTL: &'static str = "/dev/xde";
 
@@ -260,7 +255,6 @@ impl OpteHdl {
     }
 }
 
-#[cfg(target_os = "illumos")]
 pub fn run_cmd_ioctl<T, R>(
     dev: libc::c_int,
     cmd: OpteCmd,
@@ -289,10 +283,9 @@ where
         None => (core::ptr::null(), 0),
     };
 
-    // It would be a shame if the command failed and we didn't have
-    // enough bytes to serialize the error response, so we set this to
-    // default to 16 KiB.
-    let mut resp_buf: Vec<u8> = vec![0; 16 * 1024];
+    // It would be a shame if the command failed and we didn't have enough bytes
+    // to serialize the error response, so we set this to default to 16 KiB.
+    let mut resp_buf = Vec::with_capacity(16 * 1024);
     let mut rioctl = OpteCmdIoctl {
         api_version: API_VERSION,
         cmd,
@@ -301,36 +294,33 @@ where
         req_bytes: req_bytes_ptr,
         req_len,
         resp_bytes: resp_buf.as_mut_ptr(),
-        resp_len: resp_buf.len(),
+        resp_len: resp_buf.capacity(),
         resp_len_actual: 0,
     };
 
     const MAX_ITERATIONS: u8 = 3;
     for _ in 0..MAX_ITERATIONS {
-        let ret = unsafe {
-            libc::ioctl(dev, XDE_IOC_OPTE_CMD as libc::c_int, &mut rioctl)
-        };
+        let ret =
+            unsafe { ioctl(dev, XDE_IOC_OPTE_CMD as libc::c_int, &mut rioctl) };
 
-        // The ioctl(2) failed for a reason other than the response
-        // buffer being too small.
-        //
-        // errno == ENOBUFS
-        //
-        //    The command ran successfully, but there is not enough
-        //    space to copyout(9F) the response. In this case bump
-        //    up the size of the response buffer and retry.
-        //
-        // errno != 0 && OPTE_CMD_RESP_COPY_OUT
-        //
-        //    The command failed and we have an error response
-        //    serialized in the response buffer.
-        //
-        // errno != 0
-        //
-        //    Either the command failed or the general ioctl mechanism
-        //    failed: make our best guess as to what might have gone
-        //    wrong based on errno value.
-        if ret == -1 && unsafe { *libc::___errno() } != libc::ENOBUFS {
+        if ret == -1 {
+            let err = std::io::Error::last_os_error();
+            let raw_err = err.raw_os_error().unwrap();
+
+            // The command ran successfully, but there is not enough space to
+            // copyout(9F) the response. In this case bump up the size of the
+            // response buffer and retry.
+            if raw_err == libc::ENOBUFS {
+                assert!(rioctl.resp_len_actual != 0);
+                assert!(rioctl.resp_len_actual > resp_buf.capacity());
+                // Make room for the size the kernel claims to need
+                resp_buf.reserve(rioctl.resp_len_actual - resp_buf.capacity());
+                rioctl.resp_bytes = resp_buf.as_mut_ptr();
+                rioctl.resp_len = resp_buf.capacity();
+                rioctl.resp_len_actual = 0;
+                continue;
+            }
+
             // Anytime a response is present it will have more context
             // for the error. Otherwise, we have to approximate the
             // error via errno.
@@ -338,7 +328,7 @@ where
                 return Err(Error::CommandError(cmd, cmd_err));
             }
 
-            let msg = match unsafe { *libc::___errno() } {
+            let msg = match raw_err {
                 libc::EPROTO => "API version mismatch".to_string(),
 
                 libc::EFAULT => "failed to copyin/copyout req/resp".to_string(),
@@ -355,29 +345,32 @@ where
             };
 
             return Err(Error::IoctlFailed(cmd, msg));
-        }
-
-        // Check for successful response, try to deserialize it
-        assert!(rioctl.resp_len_actual != 0);
-        if ret == 0 && rioctl.resp_len_actual <= rioctl.resp_len {
-            let response = unsafe {
-                std::slice::from_raw_parts(
-                    rioctl.resp_bytes,
-                    rioctl.resp_len_actual,
-                )
-            };
-            return postcard::from_bytes(response)
+        } else {
+            // Check for successful response, try to deserialize it
+            assert!(rioctl.resp_len_actual <= resp_buf.capacity());
+            // Safety:
+            // The xde ioctl has promised that it has populated
+            // `resp_len_actual` bytes in the buffer which we provided to it.
+            unsafe {
+                resp_buf.set_len(rioctl.resp_len_actual);
+            }
+            return postcard::from_bytes(&resp_buf)
                 .map_err(|e| Error::RespDeser(cmd, e));
         }
-
-        // The buffer wasn't large enough to hold the response.
-        // Enlarge the buffer by asking for more capacity and
-        // initializing it so that it is usable.
-        resp_buf.resize(rioctl.resp_len_actual, 0);
-        rioctl.resp_bytes = resp_buf.as_mut_ptr();
-        rioctl.resp_len = resp_buf.len();
-        rioctl.resp_len_actual = 0;
     }
 
     Err(Error::MaxAttempts(cmd, MAX_ITERATIONS))
+}
+
+unsafe fn ioctl<T>(
+    fd: libc::c_int,
+    req: libc::c_int,
+    arg: *mut T,
+) -> libc::c_int {
+    // Most other OSes define the request argument to be ulong_t rather than int
+    // Cast that away here so that it compiles in both places
+    #[cfg(not(target_os = "illumos"))]
+    let req = req as libc::c_ulong;
+
+    libc::ioctl(fd, req, arg)
 }
