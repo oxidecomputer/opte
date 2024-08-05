@@ -8,6 +8,7 @@
 
 use crate::mac;
 use illumos_sys_hdrs::boolean_t;
+use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::zoneid_t;
@@ -23,5 +24,10 @@ extern "C" {
         mh: *mut mac::mac_handle,
         linkid: *mut datalink_id_t,
         wait: boolean_t,
+    ) -> c_int;
+
+    pub fn dls_mgmt_get_linkid(
+        link: *const c_char,
+        linkid: *mut datalink_id_t,
     ) -> c_int;
 }
