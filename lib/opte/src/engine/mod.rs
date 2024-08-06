@@ -130,23 +130,14 @@ cfg_if! {
         #[macro_export]
         macro_rules! dbg_macro {
             ($s:tt) => {
-                unsafe {
-                    if ::opte::engine::opte_debug != 0 {
-                        let out_str = format!(concat!($s, "\0"));
-                        // Unwrap safety: we just concat'd a NUL.
-                        let cstr = ::core::ffi::CStr::from_bytes_with_nul(out_str.as_bytes()).unwrap();
-                        ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_NOTE, cstr.as_ptr());
-                    }
+                if unsafe {::opte::engine::opte_debug != 0} {
+                    ::illumos::note!($s);
                 }
             };
             ($s:tt, $($arg:tt)*) => {
-                unsafe {
-                    if ::opte::engine::opte_debug != 0 {
-                        let out_str = format!(concat!($s, "\0"), $($arg)*);
-                        // Unwrap safety: we just concat'd a NUL.
-                        let cstr = ::core::ffi::CStr::from_bytes_with_nul(out_str.as_bytes()).unwrap();
-                        ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_NOTE, cstr.as_ptr());
-                    }
+                if unsafe{::opte::engine::opte_debug != 0} {
+                    let out_str = format!(concat!($s, "\0"), $($arg)*);
+                    ::illumos::note!($s, $($arg)*);
                 }
             };
         }
@@ -154,20 +145,10 @@ cfg_if! {
         #[macro_export]
         macro_rules! err_macro {
             ($s:tt) => {
-                unsafe {
-                    let out_str = format!(concat!($s, "\0"));
-                    // Unwrap safety: we just concat'd a NUL.
-                    let cstr = ::core::ffi::CStr::from_bytes_with_nul(out_str.as_bytes()).unwrap();
-                    ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_WARN, cstr.as_ptr());
-                }
+                ::illumos::warn_!($s);
             };
             ($s:tt, $($arg:tt)*) => {
-                unsafe {
-                    let out_str = format!(concat!($s, "\0"), $($arg)*);
-                    // Unwrap safety: we just concat'd a NUL.
-                    let cstr = ::core::ffi::CStr::from_bytes_with_nul(out_str.as_bytes()).unwrap();
-                    ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_WARN, cstr.as_ptr());
-                }
+                ::illumos::warn_!($s, $($arg)*);
             };
         }
     }

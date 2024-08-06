@@ -12,11 +12,13 @@ opte = { workspace = true, features = ["engine", "kernel"], default-features = f
 oxide-vpc = { workspace = true, features = ["engine", "kernel"], default-features = false }
 
 bitflags.workspace = true
+crc32fast.workspace = true
+illumos.workspace = true
 postcard.workspace = true
 serde.workspace = true
-crc32fast.workspace = true
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["cdylib"]
 name = "xde"
-
+bench = false
+test = false

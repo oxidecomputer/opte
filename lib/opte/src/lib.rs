@@ -236,16 +236,17 @@ pub struct KernelLog {}
 #[cfg(all(feature = "kernel", not(feature = "std"), not(test)))]
 impl LogProvider for KernelLog {
     fn log(&self, level: LogLevel, msg: &str) {
-        use illumos_sys_hdrs as ddi;
-
-        let cmn_level = match level {
-            LogLevel::Note => ddi::CE_NOTE,
-            LogLevel::Warn => ddi::CE_WARN,
-            LogLevel::Error => ddi::CE_WARN,
-        };
-
-        let msg_arg = alloc::ffi::CString::new(msg).unwrap();
-        unsafe { ddi::cmn_err(cmn_level, msg_arg.as_ptr()) }
+        match level {
+            LogLevel::Note => {
+                illumos::note!("{}", msg);
+            }
+            LogLevel::Warn => {
+                illumos::warn_!("{}", msg);
+            }
+            LogLevel::Error => {
+                illumos::warn_!("{}", msg);
+            }
+        }
     }
 }
 

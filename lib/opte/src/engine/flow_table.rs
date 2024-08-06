@@ -10,7 +10,7 @@
 //! tables: UFT, LFT, and the TCP Flow Table.
 
 use super::packet::InnerFlowId;
-use crate::ddi::time::Moment;
+use crate::ddi::time::Instant;
 use crate::ddi::time::MILLIS;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -19,6 +19,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 use core::num::NonZeroU32;
+use core::time::Duration;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
 use opte_api::OpteError;
@@ -49,8 +50,8 @@ impl Ttl {
     }
 
     /// Is `last_hit` expired?
-    pub fn is_expired(&self, last_hit: Moment, now: Moment) -> bool {
-        now.delta_as_millis(last_hit) >= self.0
+    pub fn is_expired(&self, last_hit: Instant, now: Instant) -> bool {
+        now.duration_since(last_hit) >= Duration::from_millis(self.0)
     }
 
     /// Create a new TTL based on seconds.
@@ -63,11 +64,11 @@ impl Ttl {
 pub trait ExpiryPolicy<S: Dump>: fmt::Debug {
     /// Returns whether the given flow should be removed, given current flow
     /// state, the time a packet was last received, and the current time.
-    fn is_expired(&self, entry: &FlowEntry<S>, now: Moment) -> bool;
+    fn is_expired(&self, entry: &FlowEntry<S>, now: Instant) -> bool;
 }
 
 impl<S: Dump> ExpiryPolicy<S> for Ttl {
-    fn is_expired(&self, entry: &FlowEntry<S>, now: Moment) -> bool {
+    fn is_expired(&self, entry: &FlowEntry<S>, now: Instant) -> bool {
         entry.is_expired(now, *self)
     }
 }
@@ -131,7 +132,7 @@ where
         self.map.remove(flowid);
     }
 
-    pub fn expire_flows<F>(&mut self, now: Moment, f: F) -> Vec<InnerFlowId>
+    pub fn expire_flows<F>(&mut self, now: Instant, f: F) -> Vec<InnerFlowId>
     where
         F: Fn(&S) -> InnerFlowId,
     {
@@ -221,8 +222,8 @@ fn flow_expired_probe(
     port: &CString,
     name: &CString,
     flowid: &InnerFlowId,
-    last_hit: Option<Moment>,
-    now: Option<Moment>,
+    last_hit: Option<Instant>,
+    now: Option<Instant>,
 ) {
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -231,8 +232,8 @@ fn flow_expired_probe(
                     port.as_ptr() as uintptr_t,
                     name.as_ptr() as uintptr_t,
                     flowid,
-                    last_hit.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
-                    now.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
+                    last_hit.map(|m| m.raw_millis()).unwrap_or_default() as usize,
+                    now.map(|m| m.raw_millis()).unwrap_or_default() as usize,
                 );
             }
         } else if #[cfg(feature = "usdt")] {
@@ -265,7 +266,7 @@ pub struct FlowEntry<S: Dump> {
     hits: u64,
 
     /// This tracks the last time the flow was matched.
-    last_hit: Moment,
+    last_hit: Instant,
 
     /// Records whether this flow predates a rule change, and
     /// must rerun rule processing before `state` can be used.
@@ -291,7 +292,7 @@ impl<S: Dump> FlowEntry<S> {
 
     pub fn hit(&mut self) {
         self.hits += 1;
-        self.last_hit = Moment::now();
+        self.last_hit = Instant::now();
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -302,16 +303,16 @@ impl<S: Dump> FlowEntry<S> {
         self.dirty = false
     }
 
-    pub fn last_hit(&self) -> &Moment {
+    pub fn last_hit(&self) -> &Instant {
         &self.last_hit
     }
 
-    fn is_expired(&self, now: Moment, ttl: Ttl) -> bool {
+    fn is_expired(&self, now: Instant, ttl: Ttl) -> bool {
         ttl.is_expired(self.last_hit, now)
     }
 
     fn new(state: S) -> Self {
-        FlowEntry { state, hits: 0, last_hit: Moment::now(), dirty: false }
+        FlowEntry { state, hits: 0, last_hit: Instant::now(), dirty: false }
     }
 }
 
@@ -370,7 +371,7 @@ mod test {
             FlowTable::new("port", "flow-expired-test", FT_SIZE.unwrap(), None);
         assert_eq!(ft.num_flows(), 0);
         ft.add(flowid, ()).unwrap();
-        let now = Moment::now();
+        let now = Instant::now();
         assert_eq!(ft.num_flows(), 1);
         ft.expire_flows(now, |_| FLOW_ID_DEFAULT);
         assert_eq!(ft.num_flows(), 1);
