@@ -7,7 +7,6 @@
 // stuff we need from dls
 
 use crate::ip::kcondvar_t;
-use crate::ip::kmem_cache_t;
 use crate::ip::krwlock_t;
 use crate::ip::list_node_t;
 use crate::ip::major_t;
@@ -89,7 +88,8 @@ extern "C" {
 
     pub fn dls_close(dsp: *mut dld_str_s);
 
-    pub static dld_str_cachep: *mut kmem_cache_t;
+    pub fn dld_str_create_detached() -> *mut dld_str_s;
+    pub fn dld_str_destroy_detached(val: *mut dld_str_s);
 }
 
 #[repr(C)]
@@ -124,14 +124,14 @@ pub struct dld_str_s {
     ds_style: t_uscalar_t,
     ds_sap: u16,
 
-    pub ds_mh: *mut mac_handle,
+    ds_mh: *mut mac_handle,
     pub ds_mch: *mut mac_client_handle,
 
     ds_promisc: u32,
     ds_mph: *mut mac_promisc_handle,
     ds_vlan_mph: *mut mac_promisc_handle,
 
-    pub ds_mip: *const c_void, // mac_info_t
+    ds_mip: *const c_void, // mac_info_t
 
     ds_pri: c_uint,
 
@@ -174,7 +174,7 @@ pub struct dld_str_s {
     ds_nactive: c_uint,
     ds_next: *mut dld_str_s,
     ds_head: *mut c_void, // dls_head_t
-    pub ds_ddh: dls_dl_handle,
+    ds_ddh: dls_dl_handle,
     ds_tqlist: list_node_t,
 
     ds_private: *mut c_void,

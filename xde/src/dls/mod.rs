@@ -8,8 +8,6 @@
 
 pub mod sys;
 
-use crate::kmem::sys::kmem_cache_alloc;
-use crate::kmem::sys::kmem_cache_free;
 use crate::mac::mac_client_handle;
 use crate::mac::MacClient;
 use crate::mac::MacPerimeterHandle;
@@ -24,7 +22,6 @@ use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::uintptr_t;
 use illumos_sys_hdrs::ENOENT;
-use illumos_sys_hdrs::KM_SLEEP;
 use opte::api::FieldType;
 use opte::api::StructDef;
 use opte::engine::packet::Packet;
@@ -136,9 +133,7 @@ impl DlsLink {
                 mph.link_id(), self.link);
         }
 
-        let dld_str = NonNull::new(unsafe {
-            kmem_cache_alloc(dld_str_cachep, KM_SLEEP) as *mut dld_str_s
-        });
+        let dld_str = NonNull::new(unsafe { dld_str_create_detached() });
         let Some(dld_str) = dld_str else {
             self.release(mph);
             return Err(-1);
@@ -186,30 +181,11 @@ struct DlsStreamInner {
 
 impl DlsStream {
     pub fn verify_bindings(bindings: &StructDef) -> Result<(), String> {
-        let expt = [
-            (
-                "ds_ddh",
-                core::mem::offset_of!(dld_str_s, ds_ddh),
-                FieldType::Pointer,
-            ),
-            (
-                "ds_mch",
-                core::mem::offset_of!(dld_str_s, ds_mch),
-                FieldType::Pointer,
-            ),
-            (
-                "ds_mip",
-                core::mem::offset_of!(dld_str_s, ds_mip),
-                FieldType::Pointer,
-            ),
-            // This is a pointer, but uniquification puts its def in the parent (genunix).
-            // We don't yet support resolution via parents.
-            (
-                "ds_mh",
-                core::mem::offset_of!(dld_str_s, ds_mh),
-                FieldType::Other(None),
-            ),
-        ];
+        let expt = [(
+            "ds_mch",
+            core::mem::offset_of!(dld_str_s, ds_mch),
+            FieldType::Pointer,
+        )];
 
         let mut errs = vec![];
         for (field_name, byte_offset, ty) in expt {
@@ -308,23 +284,7 @@ impl Drop for DlsStream {
                     // this would interact with the existing (logical)
                     // STREAMS up to ip.
                     dls_close(inner.dld_str.as_ptr());
-                    dls_devnet_rele((*inner.dld_str.as_ptr()).ds_ddh);
-
-                    (*inner.dld_str.as_ptr()).ds_mh = ptr::null_mut();
-                    (*inner.dld_str.as_ptr()).ds_mch = ptr::null_mut();
-                    // ddh NULL not checked by destroy fn or cleared by ddh
-                    // but it probably should be.
-                    (*inner.dld_str.as_ptr()).ds_ddh = ptr::null_mut();
-                    (*inner.dld_str.as_ptr()).ds_mip = ptr::null();
-
-                    // already the case:
-                    // dsp->ds_dlstate = DL_UNATTACHED;
-                    // dsp->ds_sap = 0;
-
-                    kmem_cache_free(
-                        dld_str_cachep,
-                        inner.dld_str.as_ptr() as *mut _,
-                    );
+                    dld_str_destroy_detached(inner.dld_str.as_ptr());
                 },
                 Err(e) => opte::engine::err!(
                     "couldn't acquire MAC perimeter (err {}): \

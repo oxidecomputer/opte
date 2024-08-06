@@ -42,7 +42,6 @@ use illumos_sys_hdrs::KM_SLEEP;
 
 pub mod dls;
 pub mod ip;
-pub mod kmem;
 pub mod mac;
 pub mod route;
 pub mod secpolicy;
