@@ -15,7 +15,4 @@ libc.workspace = true
 postcard.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-
-[target.'cfg(target_os = "illumos")'.dependencies]
 libnet.workspace = true
-
