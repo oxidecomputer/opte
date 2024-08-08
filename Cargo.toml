@@ -45,7 +45,7 @@ cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.5"
-ctf-bindgen = { git = "https://github.com/oxidecomputer/ctf-bindgen", rev = "ecd1ad8dfb3e2a49945abb6047154dd0d322a511", default-features = false }
+ctf-bindgen = { git = "https://github.com/oxidecomputer/ctf-bindgen", rev = "96d2a532335d46bd42732161725188a4d67f6644", default-features = false }
 ctor = "0.2"
 darling = "0.20"
 dyn-clone = "1.0"
