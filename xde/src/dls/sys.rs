@@ -88,6 +88,9 @@ extern "C" {
 
     pub fn dls_close(dsp: *mut dld_str_s);
 
+    // These are stlouis-only methods used to enable the
+    // approach we're using here to get a Tx pathway via the
+    // existing primary MAC client on the underlay devices.
     pub fn dld_str_create_detached() -> *mut dld_str_s;
     pub fn dld_str_destroy_detached(val: *mut dld_str_s);
 }
@@ -108,6 +111,9 @@ pub enum dld_passivestate_t {
 
 // Direct translation of the illumos type, with some
 // pointer fields left as opaque void*s for simplicity.
+// Note that we only access ds_mch, and *do not create this
+// ourselves* -- the offset of ds_mch is verified against the
+// running OS when setting the underlay.
 #[repr(C)]
 pub struct dld_str_s {
     ds_major: major_t,

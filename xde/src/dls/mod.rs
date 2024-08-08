@@ -133,6 +133,9 @@ impl DlsLink {
                 mph.link_id(), self.link);
         }
 
+        // NOTE: this is a stlouis-only way to create a dld_str_t. It
+        // is virtually identical to the clean-slate state from the kmemcache,
+        // with no rq/wq set.
         let dld_str = NonNull::new(unsafe { dld_str_create_detached() });
         let Some(dld_str) = dld_str else {
             self.release(mph);
@@ -276,13 +279,10 @@ impl Drop for DlsStream {
         if let Some(inner) = self.inner.take() {
             match MacPerimeterHandle::from_linkid(self.link) {
                 Ok(_perim) => unsafe {
-                    // NOTE: this is reimplementing dld_str_detach
-                    // but we're avoiding capab negotiation/disable and
-                    // mac notify callbacks. Should we just come in through
-                    // dld_open/dld_close/dld_wput? That would make it a bit
-                    // weirder to set the promisc handle, and I don't know how
-                    // this would interact with the existing (logical)
-                    // STREAMS up to ip.
+                    // NOTE: this is a stlouis-only way to free this
+                    // dld_str_t. It will handle the remainder of the
+                    // cleanup for which dld_str_detach would have been
+                    // responsible.
                     dls_close(inner.dld_str.as_ptr());
                     dld_str_destroy_detached(inner.dld_str.as_ptr());
                 },

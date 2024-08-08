@@ -108,7 +108,7 @@ pub struct StructField {
     pub bit_offset: u64,
     pub ty: FieldType,
     // TODO: size is not required for the one aspect we need this
-    //       for, which is reading four pointers from a struct defn.
+    //       for, which is reading one pointer offset in a struct defn.
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
