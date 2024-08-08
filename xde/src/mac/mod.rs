@@ -2,13 +2,15 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Safe abstractions for the mac client API.
 //!
 //! NOTE: This module is re-exporting all of the sys definitions at
 //! the moment out of laziness.
-pub use super::mac_sys::*;
+pub mod sys;
+
+use crate::dls::LinkId;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -22,6 +24,7 @@ use opte::engine::ether::EtherAddr;
 use opte::engine::packet::Initialized;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
+pub use sys::*;
 
 /// Errors while opening a MAC handle.
 #[derive(Debug)]
@@ -196,37 +199,6 @@ impl MacClientHandle {
         }
     }
 
-    /// Register promiscuous callback to receive packets on the underlying MAC.
-    pub fn add_promisc(
-        self: &Arc<Self>,
-        ptype: mac_client_promisc_type_t,
-        promisc_fn: mac_rx_fn,
-        flags: u16,
-    ) -> Result<MacPromiscHandle, c_int> {
-        let mut mph = ptr::null_mut();
-
-        // `MacPromiscHandle` keeps a reference to this `MacClientHandle`
-        // until it is removed and so we can safely access it from the
-        // callback via the `arg` pointer.
-        let mch = Arc::into_raw(self.clone());
-        let ret = unsafe {
-            mac_promisc_add(
-                self.mch,
-                ptype,
-                promisc_fn,
-                mch as *mut c_void,
-                &mut mph,
-                flags,
-            )
-        };
-
-        if ret == 0 {
-            Ok(MacPromiscHandle { mph, mch })
-        } else {
-            Err(ret)
-        }
-    }
-
     /// Send the [`Packet`] on this client.
     ///
     /// If the packet cannot be sent, return it. If you want to drop
@@ -298,24 +270,66 @@ impl Drop for MacClientHandle {
     }
 }
 
+/// Structs which are (or contain) a usable MAC client.
+///
+/// Currently, this is only used to enable promiscuous handler
+/// registration.
+pub trait MacClient {
+    fn mac_client_handle(&self) -> Result<*mut mac_client_handle, c_int>;
+}
+
+impl MacClient for MacClientHandle {
+    fn mac_client_handle(&self) -> Result<*mut mac_client_handle, c_int> {
+        Ok(self.mch)
+    }
+}
+
 /// Safe wrapper around a `mac_promisc_handle_t`.
 #[derive(Debug)]
-pub struct MacPromiscHandle {
+pub struct MacPromiscHandle<P> {
     /// The underlying `mac_promisc_handle_t`.
     mph: *mut mac_promisc_handle,
 
-    /// The `MacClientHandle` used to create this promiscuous callback.
-    mch: *const MacClientHandle,
+    /// The parent used to create this promiscuous callback.
+    parent: *const P,
 }
 
-impl Drop for MacPromiscHandle {
+impl<P: MacClient> MacPromiscHandle<P> {
+    /// Register a promiscuous callback to receive packets on the underlying MAC.
+    pub fn new(
+        parent: Arc<P>,
+        ptype: mac_client_promisc_type_t,
+        promisc_fn: mac_rx_fn,
+        flags: u16,
+    ) -> Result<MacPromiscHandle<P>, c_int> {
+        let mut mph = ptr::null_mut();
+        let mch = parent.mac_client_handle()?;
+        let parent = Arc::into_raw(parent);
+        let arg = parent as *mut c_void;
+
+        // SAFETY: `MacPromiscHandle` keeps a reference to this `P`
+        // until it is removed and so we can safely access it from the
+        // callback via the `arg` pointer.
+        let ret = unsafe {
+            mac_promisc_add(mch, ptype, promisc_fn, arg, &mut mph, flags)
+        };
+
+        if ret == 0 {
+            Ok(Self { mph, parent })
+        } else {
+            Err(ret)
+        }
+    }
+}
+
+impl<P> Drop for MacPromiscHandle<P> {
     fn drop(&mut self) {
         // Safety: We know that a `MacPromiscHandle` can only exist if a
         // mac promisc handle was successfully obtained, and thus `mph`
         // is valid.
         unsafe {
             mac_promisc_remove(self.mph);
-            Arc::from_raw(self.mch); // dropped immediately
+            Arc::from_raw(self.parent); // dropped immediately
         };
     }
 }
@@ -336,5 +350,37 @@ impl Drop for MacUnicastHandle {
         // mac unicast handle was successfully obtained, and thus `muh`
         // is valid.
         unsafe { mac_unicast_remove(self.mch.mch, self.muh) };
+    }
+}
+
+/// Safe wrapper around a `mac_perim_handle_t`.
+pub struct MacPerimeterHandle {
+    mph: mac_perim_handle,
+    link: LinkId,
+}
+
+impl MacPerimeterHandle {
+    /// Attempt to acquire the MAC perimeter for a given link.
+    pub fn from_linkid(link: LinkId) -> Result<Self, c_int> {
+        let mut mph = 0;
+        let res = unsafe { mac_perim_enter_by_linkid(link.into(), &mut mph) };
+        if res == 0 {
+            Ok(Self { mph, link })
+        } else {
+            Err(res)
+        }
+    }
+
+    /// Returns the ID of the link whose MAC perimeter is held.
+    pub fn link_id(&self) -> LinkId {
+        self.link
+    }
+}
+
+impl Drop for MacPerimeterHandle {
+    fn drop(&mut self) {
+        unsafe {
+            mac_perim_exit(self.mph);
+        }
     }
 }

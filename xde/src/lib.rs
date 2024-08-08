@@ -43,7 +43,6 @@ use illumos_sys_hdrs::KM_SLEEP;
 pub mod dls;
 pub mod ip;
 pub mod mac;
-mod mac_sys;
 pub mod route;
 pub mod secpolicy;
 pub mod sys;
@@ -117,25 +116,25 @@ fn _Unwind_Resume() -> ! {
 #[macro_export]
 macro_rules! warn {
     ($format:expr) => {
-        let msg = CString::new(format!($format)).unwrap();
+        let msg = ::alloc::ffi::CString::new(format!($format)).unwrap();
         #[allow(unused_unsafe)]
-        unsafe { cmn_err(CE_WARN, msg.as_ptr()) };
+        unsafe { ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_WARN, msg.as_ptr()) };
     };
     ($format:expr, $($args:expr),*) => {
-        let msg = CString::new(format!($format, $($args),*)).unwrap();
+        let msg = ::alloc::ffi::CString::new(format!($format, $($args),*)).unwrap();
         #[allow(unused_unsafe)]
-        unsafe { cmn_err(CE_WARN, msg.as_ptr()) };
+        unsafe { ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_WARN, msg.as_ptr()) };
     };
 }
 
 #[macro_export]
 macro_rules! note {
     ($format:expr) => {
-        let msg = CString::new(format!($format));
-        cmn_err(CE_NOTE, msg.as_ptr());
+        let msg = ::alloc::ffi::CString::new(format!($format));
+        ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_NOTE, msg.as_ptr());
     };
     ($format:expr, $($args:expr),*) => {
-        let msg = CString::new(format!($format, $($args),*));
-        cmn_err(CE_NOTE, msg.as_ptr());
+        let msg = ::alloc::ffi::CString::new(format!($format, $($args),*));
+        ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_NOTE, msg.as_ptr());
     };
 }
