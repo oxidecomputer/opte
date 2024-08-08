@@ -4,9 +4,9 @@
 
 // Copyright 2024 Oxide Computer Company
 
-use ctf::Ctf;
-use ctf::TypeInfo;
-use ctf::TypeRepr;
+use ctf_bindgen::Ctf;
+use ctf_bindgen::TypeInfo;
+use ctf_bindgen::TypeRepr;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;

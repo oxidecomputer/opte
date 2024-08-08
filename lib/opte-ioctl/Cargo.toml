@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-ctf.workspace = true
+ctf-bindgen.workspace = true
 opte = { workspace = true, default-features = false, features = ["api"] }
 oxide-vpc = { workspace = true, default-features = false, features = ["api"] }
 

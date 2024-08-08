@@ -8,6 +8,9 @@
 #:   "=/out/opte.p5p",
 #:   "=/out/opte.p5p.sha256",
 #: ]
+#: access_repos = [
+#:  "oxidecomputer/ctf-bindgen",
+#: ]
 #:
 #: [[publish]]
 #: series = "repo"

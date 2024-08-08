@@ -455,11 +455,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctf"
+name = "ctf-bindgen"
 version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/ctf-bindgen?rev=445a849e710e4ba2e0f1ab25991f39ac88d1e2b4#445a849e710e4ba2e0f1ab25991f39ac88d1e2b4"
 dependencies = [
  "anyhow",
  "arrayref",
+ "clap",
  "flate2",
  "num_enum 0.7.3",
  "object",
@@ -1326,7 +1328,7 @@ dependencies = [
 name = "opte-ioctl"
 version = "0.1.0"
 dependencies = [
- "ctf",
+ "ctf-bindgen",
  "libc",
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
  "opte",

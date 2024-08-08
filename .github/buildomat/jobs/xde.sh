@@ -16,6 +16,9 @@
 #:   "=/work/test/loopback",
 #:   "=/work/xde.conf",
 #: ]
+#: access_repos = [
+#:  "oxidecomputer/ctf-bindgen",
+#: ]
 #:
 #: [[publish]]
 #: series = "module"

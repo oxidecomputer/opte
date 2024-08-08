@@ -23,8 +23,6 @@ license = "MPL-2.0"
 repository = "https://github.com/oxidecomputer/opte"
 
 [workspace.dependencies]
-# Internal crates
-ctf = { path = "crates/ctf" }
 derror-macro = { path = "crates/derror-macro" }
 illumos-sys-hdrs = { path = "crates/illumos-sys-hdrs" }
 kstat-macro = { path = "crates/kstat-macro" }
@@ -47,6 +45,7 @@ cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.5"
+ctf-bindgen = { git = "https://github.com/oxidecomputer/ctf-bindgen", rev = "445a849e710e4ba2e0f1ab25991f39ac88d1e2b4", default-features = false }
 ctor = "0.2"
 darling = "0.20"
 dyn-clone = "1.0"
@@ -79,12 +78,6 @@ zerocopy = { version = "0.7", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipath" }
-
-# For CTF (temp?)
-arrayref = "0.3"
-flate2 = "1"
-num_enum = "0.7"
-object = "0.36"
 
 [profile.release]
 debug = 2

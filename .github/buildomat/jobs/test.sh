@@ -7,6 +7,9 @@
 #: output_rules = [
 #:   "/work/*.log",
 #: ]
+#: access_repos = [
+#:  "oxidecomputer/ctf-bindgen",
+#: ]
 #:
 #: [dependencies.xde]
 #: job = "opte-xde"
