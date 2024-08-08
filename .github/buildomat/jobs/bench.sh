@@ -7,9 +7,6 @@
 #: output_rules = [
 #:   "=/work/bench-results.tgz",
 #: ]
-#: access_repos = [
-#:  "oxidecomputer/ctf-bindgen",
-#: ]
 #:
 #: [[publish]]
 #: series = "benchmark" 

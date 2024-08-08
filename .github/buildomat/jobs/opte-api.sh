@@ -5,9 +5,6 @@
 #: target = "helios-2.0"
 #: rust_toolchain = "nightly-2024-05-12"
 #: output_rules = []
-#: access_repos = [
-#:  "oxidecomputer/ctf-bindgen",
-#: ]
 #:
 
 set -o errexit

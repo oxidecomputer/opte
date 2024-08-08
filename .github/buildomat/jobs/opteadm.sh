@@ -10,9 +10,6 @@
 #:   "=/work/release/opteadm",
 #:   "=/work/release/opteadm.release.sha256",
 #: ]
-#: access_repos = [
-#:  "oxidecomputer/ctf-bindgen",
-#: ]
 #:
 
 set -o errexit
