@@ -10,7 +10,7 @@ repository.workspace = true
 default = ["api", "std"]
 api = []
 engine = ["api", "dep:crc32fast", "dep:derror-macro", "dep:heapless", "dep:itertools", "dep:zerocopy"]
-kernel = ["illumos-sys-hdrs/kernel"]
+kernel = ["illumos-sys-hdrs/kernel", "dep:illumos"]
 # This feature indicates that OPTE is being built with std. This is
 # mostly useful to consumers of the API, providing convenient methods
 # for working with the API types in a std context.
@@ -31,6 +31,7 @@ cfg-if.workspace = true
 crc32fast = { workspace = true, optional = true }
 dyn-clone.workspace = true
 heapless = { workspace = true, optional = true }
+illumos = { workspace = true, optional = true }
 itertools = { workspace = true, optional = true }
 postcard.workspace = true
 serde.workspace = true

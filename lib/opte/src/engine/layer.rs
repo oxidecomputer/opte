@@ -39,7 +39,7 @@ use crate::ddi::kstat;
 use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
-use crate::ddi::time::Moment;
+use crate::ddi::time::Instant;
 use crate::ExecCtx;
 use crate::LogLevel;
 use alloc::ffi::CString;
@@ -223,7 +223,7 @@ impl LayerFlowTable {
         LftDump { ft_in: self.ft_in.dump(), ft_out: self.ft_out.dump() }
     }
 
-    fn expire_flows(&mut self, now: Moment) {
+    fn expire_flows(&mut self, now: Instant) {
         // XXX The two sides can have different traffic patterns and
         // thus one side could be considered expired while the other
         // is active. You could have one side seeing packets while the
@@ -639,7 +639,7 @@ impl Layer {
 
     /// Expire all flows whose TTL has been reached based on the
     /// passed in moment.
-    pub(crate) fn expire_flows(&mut self, now: Moment) {
+    pub(crate) fn expire_flows(&mut self, now: Instant) {
         self.ft.expire_flows(now);
         self.stats.vals.flows.set(self.ft.num_flows() as u64);
     }

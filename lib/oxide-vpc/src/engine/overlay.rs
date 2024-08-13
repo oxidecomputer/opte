@@ -30,9 +30,7 @@ use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexGuard;
-use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
-use opte::ddi::sync::KRwLockType;
 use opte::engine::ether::EtherMeta;
 use opte::engine::ether::EtherMod;
 use opte::engine::ether::EtherType;
@@ -511,7 +509,7 @@ impl VpcMappings {
     }
 
     pub fn new() -> Self {
-        VpcMappings { inner: KMutex::new(BTreeMap::new(), KMutexType::Driver) }
+        VpcMappings { inner: KMutex::new(BTreeMap::new()) }
     }
 }
 
@@ -586,14 +584,12 @@ impl Virt2Boundary {
     }
 
     pub fn new() -> Self {
-        let mut pt4 = KRwLock::new(Poptrie::default());
-        pt4.init(KRwLockType::Driver);
-        let mut pt6 = KRwLock::new(Poptrie::default());
-        pt6.init(KRwLockType::Driver);
+        let pt4 = KRwLock::new(Poptrie::default());
+        let pt6 = KRwLock::new(Poptrie::default());
 
         Virt2Boundary {
-            ip4: KMutex::new(BTreeMap::new(), KMutexType::Driver),
-            ip6: KMutex::new(BTreeMap::new(), KMutexType::Driver),
+            ip4: KMutex::new(BTreeMap::new()),
+            ip6: KMutex::new(BTreeMap::new()),
             pt4,
             pt6,
         }
@@ -747,8 +743,8 @@ impl Virt2Phys {
 
     pub fn new() -> Self {
         Virt2Phys {
-            ip4: KMutex::new(BTreeMap::new(), KMutexType::Driver),
-            ip6: KMutex::new(BTreeMap::new(), KMutexType::Driver),
+            ip4: KMutex::new(BTreeMap::new()),
+            ip6: KMutex::new(BTreeMap::new()),
         }
     }
 }

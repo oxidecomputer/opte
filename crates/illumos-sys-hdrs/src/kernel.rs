@@ -421,8 +421,6 @@ extern "C" {
 
     pub fn bcopy(src: *const c_void, dst: *mut c_void, count: size_t);
 
-    pub fn cmn_err(code: c_int, msg: *const c_char, ...);
-
     pub fn ddi_copyin(
         buf: *const c_void,
         driverbuf: *mut c_void,

@@ -3,10 +3,13 @@
 #: name = "opte-p5p"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2024-05-12"
+#: rust_toolchain = "nightly-2024-06-27"
 #: output_rules = [
 #:   "=/out/opte.p5p",
 #:   "=/out/opte.p5p.sha256",
+#: ]
+#: access_repos = [
+#:  "oxidecomputer/illumos-rs",
 #: ]
 #:
 #: [[publish]]
@@ -19,6 +22,11 @@
 #: name = "opte.p5p.sha256"
 #: from_output = "/out/opte.p5p.sha256"
 #:
+#: [dependencies.xde]
+#: job = "opte-xde"
+#;
+#: [dependencies.opteadm]
+#: job = "opteadm"
 
 set -o errexit
 set -o pipefail
@@ -32,11 +40,6 @@ set -o xtrace
 #
 TGT_BASE=${TGT_BASE:=/work}
 
-REL_SRC=target/x86_64-unknown-unknown/release
-REL_TGT=$TGT_BASE/release
-
-mkdir -p $REL_TGT
-
 function header {
 	echo "# ==== $* ==== #"
 }
@@ -44,17 +47,30 @@ function header {
 cargo --version
 rustc --version
 
-header "build xde and opteadm (release+debug)"
-ptime -m cargo xtask build
+header "move artifacts for packaging"
+# Copy in just-built artifacts
+DBG_SRC=target/x86_64-illumos/debug
+DBG_LINK_SRC=target/i686-unknown-illumos/debug
+DBG_ADM_SRC=target/debug
 
-#
-# Inspect the kernel module for bad relocations in case the old
-# codegen issue ever shows its face again.
-#
-if elfdump $REL_SRC/xde | grep GOTPCREL; then
-	echo "found GOTPCREL relocation in release build"
-	exit 1
-fi
+REL_SRC=target/x86_64-illumos/release
+REL_LINK_SRC=target/i686-unknown-illumos/release
+REL_ADM_SRC=target/release
+
+mkdir -p $REL_SRC
+cp /input/xde/work/release/xde $REL_SRC
+mkdir -p $DBG_SRC
+cp /input/xde/work/debug/xde.dbg $DBG_SRC/xde
+
+mkdir -p $REL_LINK_SRC
+cp /input/xde/work/release/xde_link.so $REL_LINK_SRC/libxde_link.so
+mkdir -p $DBG_LINK_SRC
+cp /input/xde/work/debug/xde_link.dbg.so $DBG_LINK_SRC/libxde_link.so
+
+mkdir -p $REL_ADM_SRC
+cp /input/opteadm/work/release/opteadm $REL_ADM_SRC
+mkdir -p $DBG_ADM_SRC
+cp /input/opteadm/work/debug/opteadm $DBG_ADM_SRC
 
 header "package opte"
 cargo xtask package --skip-build
