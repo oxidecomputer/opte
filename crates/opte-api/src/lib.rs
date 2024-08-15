@@ -15,7 +15,6 @@ extern crate std;
 #[macro_use]
 extern crate alloc;
 
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 use core::fmt;
 use core::fmt::Display;
@@ -48,7 +47,7 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 34;
+pub const API_VERSION: u64 = 33;
 
 /// Major version of the OPTE package.
 pub const MAJOR_VERSION: u64 = 0;
@@ -87,40 +86,6 @@ impl Display for Direction {
 pub struct SetXdeUnderlayReq {
     pub u1: String,
     pub u2: String,
-
-    // There are limited/no CTF utilities available in the
-    // kernel, but there are non-committed (and private) interfaces
-    // we need to use in the short term. We need to be certain that
-    // the aspects we care about match the live system.
-    // Ideally we would build against a fixed proto area and limit
-    // ourselves to known compatible bits -- but that will require
-    // heavy build system rework.
-    pub illumos_state: FragileInternals,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FragileInternals {
-    pub dld_str_s: StructDef,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StructField {
-    pub bit_offset: u64,
-    pub ty: FieldType,
-    // TODO: size is not required for the one aspect we need this
-    //       for, which is reading one pointer offset in a struct defn.
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum FieldType {
-    Pointer,
-    Other(Option<String>),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StructDef {
-    pub size: u64,
-    pub fields: BTreeMap<String, StructField>,
 }
 
 /// Clear the underlay devices used by the xde kernel module

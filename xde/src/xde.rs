@@ -44,7 +44,6 @@ use illumos_sys_hdrs::*;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
-use opte::api::FragileInternals;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -872,8 +871,6 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
 fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
 
-    verify_fragile_internals(&req.illumos_state)?;
-
     let mut underlay = state.underlay.lock();
     if underlay.is_some() {
         return Err(OpteError::System {
@@ -886,25 +883,6 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     });
 
     Ok(NoResp::default())
-}
-
-#[no_mangle]
-fn verify_fragile_internals(req: &FragileInternals) -> Result<(), OpteError> {
-    let mut errs = vec![];
-
-    if let Err(e) = DlsStream::verify_bindings(&req.dld_str_s) {
-        errs.push(e);
-    }
-
-    if errs.is_empty() {
-        Ok(())
-    } else {
-        let msg = format!(
-            "field mismatches encountered, mismatched OS bits from build: {}",
-            errs.join(", ")
-        );
-        Err(OpteError::System { errno: -1, msg })
-    }
 }
 
 #[no_mangle]

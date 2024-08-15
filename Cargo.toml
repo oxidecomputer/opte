@@ -23,6 +23,7 @@ license = "MPL-2.0"
 repository = "https://github.com/oxidecomputer/opte"
 
 [workspace.dependencies]
+# Internal crates
 derror-macro = { path = "crates/derror-macro" }
 illumos-sys-hdrs = { path = "crates/illumos-sys-hdrs" }
 kstat-macro = { path = "crates/kstat-macro" }
@@ -45,7 +46,6 @@ cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.5"
-ctf-bindgen = { git = "https://github.com/oxidecomputer/ctf-bindgen", rev = "96d2a532335d46bd42732161725188a4d67f6644", default-features = false }
 ctor = "0.2"
 darling = "0.20"
 dyn-clone = "1.0"

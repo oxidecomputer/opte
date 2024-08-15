@@ -4,21 +4,14 @@
 
 // Copyright 2024 Oxide Computer Company
 
-use ctf_bindgen::Ctf;
-use ctf_bindgen::TypeInfo;
-use ctf_bindgen::TypeRepr;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
-use opte::api::FieldType;
-use opte::api::FragileInternals;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 pub use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
-use opte::api::StructDef;
-use opte::api::StructField;
 use opte::api::API_VERSION;
 use opte::api::XDE_IOC_OPTE_CMD;
 use oxide_vpc::api::AddRouterEntryReq;
@@ -43,7 +36,6 @@ use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::collections::BTreeMap;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
@@ -79,9 +71,6 @@ pub enum Error {
 
     #[error("command {0:?} failed: {1:?}")]
     CommandError(OpteCmd, OpteError),
-
-    #[error("failed to fetch local type information: {0:?}")]
-    CtfError(String),
 }
 
 impl From<std::io::Error> for Error {
@@ -196,9 +185,7 @@ impl OpteHdl {
         u1: &str,
         u2: &str,
     ) -> Result<NoResp, Error> {
-        let illumos_state = fetch_fragile_types()?;
-        let req =
-            SetXdeUnderlayReq { u1: u1.into(), u2: u2.into(), illumos_state };
+        let req = SetXdeUnderlayReq { u1: u1.into(), u2: u2.into() };
         let cmd = OpteCmd::SetXdeUnderlay;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
@@ -373,56 +360,6 @@ where
     }
 
     Err(Error::MaxAttempts(cmd, MAX_ITERATIONS))
-}
-
-pub fn fetch_fragile_types() -> Result<FragileInternals, Error> {
-    let dld_ctf = Ctf::from_file("/system/object/dld/object")
-        .map_err(|e| Error::CtfError(e.to_string()))?;
-
-    let Some(dld) = dld_ctf.find_type_by_name("dld_str_s") else {
-        return Err(Error::CtfError(
-            "failed to find symbol 'dld_str_s'".into(),
-        ));
-    };
-
-    if let TypeRepr::Struct(ref fields) = dld.repr {
-        let mut processed_fields = BTreeMap::new();
-        for field in fields {
-            let field_name = dld_ctf.string_at(field.name_offset);
-            let ty = match dld_ctf.resolve_type(field.type_offset) {
-                Some(t) => match t.repr {
-                    TypeRepr::Othertype => FieldType::Pointer,
-                    _ => FieldType::Other(Some(
-                        dld_ctf.string_at(t.name_offset).into(),
-                    )),
-                },
-                None => FieldType::Other(None),
-            };
-
-            processed_fields.insert(
-                field_name.into(),
-                StructField { bit_offset: u64::from(field.offset), ty },
-            );
-        }
-
-        // invariant: struct should store info as size
-        let TypeInfo::Size(size) = dld.info else {
-            return Err(Error::CtfError(
-                "struct recorded info as 'type'\
-                rather than 'size'"
-                    .into(),
-            ));
-        };
-
-        Ok(FragileInternals {
-            dld_str_s: StructDef {
-                size: size.into(),
-                fields: processed_fields,
-            },
-        })
-    } else {
-        Err(Error::CtfError("symbol 'dld_str_s' is not of type struct".into()))
-    }
 }
 
 unsafe fn ioctl<T>(

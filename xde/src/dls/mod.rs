@@ -13,7 +13,6 @@ use crate::mac::MacClient;
 use crate::mac::MacPerimeterHandle;
 use crate::mac::MacTxFlags;
 use crate::mac::MAC_DROP_ON_NO_DESC;
-use alloc::string::String;
 use core::ffi::CStr;
 use core::fmt::Display;
 use core::ptr;
@@ -22,8 +21,6 @@ use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::uintptr_t;
 use illumos_sys_hdrs::ENOENT;
-use opte::api::FieldType;
-use opte::api::StructDef;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
 pub use sys::*;
@@ -183,43 +180,6 @@ struct DlsStreamInner {
 }
 
 impl DlsStream {
-    pub fn verify_bindings(bindings: &StructDef) -> Result<(), String> {
-        let expt = [(
-            "ds_mch",
-            core::mem::offset_of!(dld_str_s, ds_mch),
-            FieldType::Pointer,
-        )];
-
-        let mut errs = vec![];
-        for (field_name, byte_offset, ty) in expt {
-            let bit_offset = 8 * byte_offset;
-            let Some(field) = bindings.fields.get(field_name) else {
-                errs.push(format!("missing field {field_name}"));
-                continue;
-            };
-
-            if field.ty != ty {
-                errs.push(format!(
-                    "field {field_name} has type {:?} (wanted {:?})",
-                    field.ty, ty,
-                ));
-            }
-
-            if field.bit_offset != bit_offset as u64 {
-                errs.push(format!(
-                    "field {field_name} at bit {} (wanted {})",
-                    field.bit_offset, bit_offset,
-                ));
-            }
-        }
-
-        if errs.is_empty() {
-            Ok(())
-        } else {
-            Err(format!("dls_str_s: [{}]", errs.join(", ")))
-        }
-    }
-
     pub fn open(link_id: LinkId) -> Result<Self, c_int> {
         let perim = MacPerimeterHandle::from_linkid(link_id)?;
         let link_handle = DlsLink::hold(&perim)?;
@@ -270,7 +230,7 @@ impl MacClient for DlsStream {
             return Err(-1);
         };
 
-        Ok(unsafe { (*inner.dld_str.as_ptr()).ds_mch })
+        Ok(unsafe { dld_str_mac_client_handle(inner.dld_str.as_ptr()) })
     }
 }
 
