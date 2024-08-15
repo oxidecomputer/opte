@@ -176,6 +176,7 @@ pub const KSTAT_DATA_UINT64: c_int = 4;
 // ======================================================================
 pub const MAXLINKNAMELEN: c_int = 32;
 pub const MAXNAMELEN: c_int = 256;
+pub const MAXPATHLEN: usize = 1024;
 
 // ======================================================================
 // uts/common/sys/mutex.h

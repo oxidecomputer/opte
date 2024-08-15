@@ -2,12 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2023 Oxide Computer Company
 
 //! Safe abstractions for the mac client API.
 //!
 //! NOTE: This module is re-exporting all of the sys definitions at
 //! the moment out of laziness.
+use crate::ip::datalink_id_t;
+
 pub use super::mac_sys::*;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -16,6 +18,7 @@ use alloc::sync::Arc;
 use bitflags::bitflags;
 use core::ffi::CStr;
 use core::fmt;
+use core::mem;
 use core::ptr;
 use illumos_sys_hdrs::*;
 use opte::engine::ether::EtherAddr;
@@ -105,6 +108,12 @@ bitflags! {
     // For now we only include flags currently used by consumers.
     pub struct MacOpenFlags: u16 {
         const NONE = 0;
+        const IS_VNIC = MAC_OPEN_FLAGS_IS_VNIC;
+        const EXCLUSIVE = MAC_OPEN_FLAGS_EXCLUSIVE;
+        const IS_AGGR_PORT = MAC_OPEN_FLAGS_IS_AGGR_PORT;
+        const SHARES_DESIRED = MAC_OPEN_FLAGS_SHARES_DESIRED;
+        const USE_DATALINK_NAME = MAC_OPEN_FLAGS_USE_DATALINK_NAME;
+        const MULTI_PRIMARY = MAC_OPEN_FLAGS_MULTI_PRIMARY;
         const NO_UNICAST_ADDR = MAC_OPEN_FLAGS_NO_UNICAST_ADDR;
     }
 }
@@ -186,6 +195,7 @@ impl MacClientHandle {
                 self.mch,
                 ether.as_mut_ptr(),
                 0,
+                // MAC_UNICAST_PRIMARY | MAC_UNICAST_NODUPCHECK,
                 &mut muh,
                 0,
                 &mut diag,
@@ -287,6 +297,34 @@ impl MacClientHandle {
         };
         debug_assert_eq!(ret_mp, ptr::null_mut());
     }
+
+    /// TODO: document what's happening here.
+    /// TODO: error conditions?
+    pub fn rx_set(self: &Arc<Self>, promisc_fn: mac_rx_fn) {
+        let mch = self.clone();
+        let arg = Arc::as_ptr(&mch) as *mut c_void;
+        unsafe { mac_rx_set(self.mch, Some(promisc_fn), arg) }
+        // unsafe { mac_rx_set(self.mch, None, arg) }
+    }
+
+    pub fn set_flow_cb(self: &Arc<Self>, promisc_fn: mac_rx_fn) {
+        let mch = self.clone();
+        let arg = Arc::as_ptr(&mch) as *mut c_void;
+        unsafe { mac_client_set_flow_cb(self.mch, Some(promisc_fn), arg) }
+        // unsafe { mac_client_set_flow_cb(self.mch, None, arg) }
+    }
+
+    /// TODO: document what's happening here.
+    /// TODO: error conditions?
+    pub fn rx_bypass_disable(&self) {
+        unsafe { mac_rx_bypass_disable(self.mch) }
+    }
+
+    /// TODO: document what's happening here.
+    /// TODO: error conditions?
+    pub fn rx_bypass_enable(&self) {
+        unsafe { mac_rx_bypass_enable(self.mch) }
+    }
 }
 
 impl Drop for MacClientHandle {
@@ -336,5 +374,236 @@ impl Drop for MacUnicastHandle {
         // mac unicast handle was successfully obtained, and thus `muh`
         // is valid.
         unsafe { mac_unicast_remove(self.mch.mch, self.muh) };
+    }
+}
+
+// TODO Move this somewhere else?
+#[derive(Clone, Default)]
+pub struct MacFlowDesc {
+    mask: flow_mask_t,
+    ip_ver: Option<u8>,
+    proto: Option<opte::api::ip::Protocol>,
+    local_port: Option<u16>,
+}
+
+// TODO At the moment the flow system only allows six different
+// combinations of attributes:
+//
+//   local_ip=address[/prefixlen]
+//   remote_ip=address[/prefixlen]
+//   transport={tcp|udp|sctp|icmp|icmpv6}
+//   transport={tcp|udp|sctp},local_port=port
+//   transport={tcp|udp|sctp},remote_port=port
+//   dsfield=val[:dsfield_mask]
+//
+// Update this type to enforce the above.
+//
+// For now my best bet is to use
+// transport={tcp|udp|sctp},local_port=port to classify on Geneve
+// packets.
+impl MacFlowDesc {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// TODO create an IpVersion type to avoid invalid descriptors.
+    pub fn set_ipver(&mut self, ver: u8) -> &mut Self {
+        self.mask |= FLOW_IP_VERSION;
+        self.ip_ver = Some(ver);
+        self
+    }
+
+    pub fn set_proto(&mut self, proto: opte::api::ip::Protocol) -> &mut Self {
+        self.mask |= FLOW_IP_PROTOCOL;
+        self.proto = Some(proto);
+        self
+    }
+
+    pub fn set_local_port(&mut self, port: u16) -> &mut Self {
+        self.mask |= FLOW_ULP_PORT_LOCAL;
+        self.local_port = Some(port);
+        self
+    }
+
+    pub fn to_desc(&self) -> flow_desc_t {
+        flow_desc_t::from(self.clone())
+    }
+
+    pub fn new_flow<'a>(
+        &'a self,
+        flow_name: &'a str,
+        link_id: datalink_id_t,
+    ) -> Result<MacFlow, FlowCreateError> {
+        let name = CString::new(flow_name)
+            .map_err(|_| FlowCreateError::InvalidFlowName(flow_name))?;
+        let desc = self.to_desc();
+
+        match unsafe {
+            mac_link_flow_add(
+                link_id,
+                name.as_ptr(),
+                &desc,
+                &MAC_RESOURCE_PROPS_DEF,
+            )
+        } {
+            0 => {}
+            err => return Err(FlowCreateError::CreateFailed(flow_name, err)),
+        }
+
+        let mut flent = ptr::null_mut();
+        match unsafe { mac_flow_lookup_byname(name.as_ptr(), &mut flent) } {
+            0 => Ok(MacFlow { name, flent, cb_mch: None }),
+            err => Err(FlowCreateError::CreateFailed(flow_name, err)),
+        }
+    }
+}
+
+impl From<MacFlowDesc> for flow_desc_t {
+    fn from(mf: MacFlowDesc) -> Self {
+        let no_addr = IP_NO_ADDR;
+        let fd_ipversion = mf.ip_ver.unwrap_or(0);
+
+        // The mac flow subsystem uses 0 as sentinel to indicate no
+        // filtering on protocol.
+        let fd_protocol = match mf.proto {
+            Some(p) => u8::from(p),
+            None => 0,
+        };
+
+        // Apparently mac flow wants this in network order.
+        let fd_local_port = mf.local_port.unwrap_or(0).to_be();
+
+        Self {
+            // The mask controls options like priority and bandwidth,
+            // which we are not using at the moment.
+            fd_mask: mf.mask,
+            fd_mac_len: 0,
+            fd_dst_mac: [0u8; MAXMACADDR],
+            fd_src_mac: [0u8; MAXMACADDR],
+            fd_vid: 0,
+            // XXX Typically I would saw the SAP is the EtherType
+            // (when talking about Ethernet, but this stuff always
+            // confuses me. This doesn't seem to be used to filter
+            // anything.
+            fd_sap: 0,
+            fd_ipversion,
+            fd_protocol,
+            fd_local_addr: no_addr,
+            fd_local_netmask: no_addr,
+            fd_remote_addr: no_addr,
+            fd_remote_netmask: no_addr,
+            fd_local_port,
+            fd_remote_port: 0,
+            fd_dsfield: 0,
+            fd_dsfield_mask: 0,
+        }
+    }
+}
+
+/// Errors while opening a MAC handle.
+#[derive(Debug)]
+pub enum FlowCreateError<'a> {
+    InvalidFlowName(&'a str),
+    CreateFailed(&'a str, i32),
+    LookupFailed(&'a str, i32),
+}
+
+impl fmt::Display for FlowCreateError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FlowCreateError::InvalidFlowName(flow) => {
+                write!(f, "invalid flow name: {flow}")
+            }
+            FlowCreateError::CreateFailed(flow, err) => {
+                write!(f, "mac_link_flow_add failed for {flow}: {err}")
+            }
+            FlowCreateError::LookupFailed(flow, err) => {
+                write!(f, "mac_flow_lookup_byname failed for {flow}: {err}")
+            }
+        }
+    }
+}
+
+/// Resource handle for a created Mac flow.
+#[derive(Debug)]
+pub struct MacFlow {
+    name: CString,
+    flent: *mut flow_entry_t,
+    cb_mch: Option<Arc<MacClientHandle>>,
+}
+
+impl MacFlow {
+    /// Forcibly wrench this flow from the clutches of DLS.
+    pub fn set_flow_cb(
+        &mut self,
+        new_fn: mac_rx_fn,
+        cb_mch: &Arc<MacClientHandle>,
+    ) {
+        let mch = cb_mch.clone();
+        let arg = Arc::as_ptr(&mch) as *mut c_void;
+        unsafe {
+            crate::warn!(
+                "Some potential offsets {:x} {:x} {:x} {:x} {:x} {:x}",
+                mem::offset_of!(flow_entry_t, fe_next),
+                mem::offset_of!(flow_entry_t, fe_link_id),
+                mem::offset_of!(flow_entry_t, fe_resource_props),
+                mem::offset_of!(flow_entry_t, fe_effective_props),
+                mem::offset_of!(flow_entry_t, fe_lock),
+                mem::offset_of!(flow_entry_t, fe_rx_srs)
+            );
+
+            // flow_cb_pre_srs(self.flent, new_fn);
+            flow_cb_post_srs(self.flent, new_fn, arg);
+        }
+        self.cb_mch = Some(mch);
+    }
+}
+
+/// Insert a flow callback which replaces `mac_rx_srs_subflow_process`.
+#[no_mangle]
+pub unsafe fn flow_cb_pre_srs(flent: *mut flow_entry_t, new_fn: mac_rx_fn) {
+    // TODO: locks, negative handling, ...
+    (*flent).fe_cb_fn = new_fn;
+}
+
+/// Insert a flow callback accessed via `mac_rx_srs_subflow_process`.
+///
+/// This will usually replace `mac_rx_deliver`, which will call into the mac_rx
+/// callback on the *parent device* (i.e., i_dls_link_rx).
+#[no_mangle]
+pub unsafe fn flow_cb_post_srs(
+    flent: *mut flow_entry_t,
+    new_fn: mac_rx_fn,
+    arg: *mut c_void,
+) {
+    // TODO: locks, negative handling, ...
+    let n_srs = (*flent).fe_rx_srs_cnt;
+    for srs in (*flent).fe_rx_srs.iter().take(n_srs as usize) {
+        mutex_enter(&mut (**srs).srs_lock);
+        (**srs).srs_rx.sr_func = new_fn;
+        (**srs).srs_rx.sr_arg1 = arg;
+        mutex_exit(&mut (**srs).srs_lock);
+    }
+}
+
+unsafe fn flow_user_refrele(flent: *mut flow_entry_t) {
+    // TODO: use the existing KMutex code...
+    mutex_enter(&mut (*flent).fe_lock);
+    // ASSERT((flent)->fe_user_refcnt != 0);       \
+    (*flent).fe_user_refcnt -= 1;
+    if (*flent).fe_user_refcnt == 0 && (*flent).fe_flags & FE_WAITER != 0 {
+        crate::ip::cv_signal((&mut (*flent).fe_cv) as *mut _);
+    }
+
+    mutex_exit(&mut (*flent).fe_lock);
+}
+
+impl Drop for MacFlow {
+    fn drop(&mut self) {
+        unsafe {
+            // TODO: need to reimplement FLOW_USER_REFRELE in here...
+            flow_user_refrele(self.flent);
+            mac_link_flow_remove(self.name.as_ptr());
+        }
     }
 }
