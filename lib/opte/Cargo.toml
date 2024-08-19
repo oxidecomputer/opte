@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["api", "std", "engine"]
+default = ["api", "std"]
 api = []
 engine = ["api", "dep:crc32fast", "dep:derror-macro", "dep:heapless", "dep:itertools", "dep:zerocopy"]
 kernel = ["illumos-sys-hdrs/kernel"]

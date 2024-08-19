@@ -888,7 +888,7 @@ dependencies = [
 [[package]]
 name = "ingot"
 version = "0.1.0"
-source = "git+ssh://git@github.com/oxidecomputer/ingot.git?rev=37dbb101bbb8781739103e0d5cecaed53c383f05#37dbb101bbb8781739103e0d5cecaed53c383f05"
+source = "git+ssh://git@github.com/oxidecomputer/ingot.git?rev=48be4aba2320794291c172f146bb391b04f77bfb#48be4aba2320794291c172f146bb391b04f77bfb"
 dependencies = [
  "bitflags 2.6.0",
  "ingot-macros",
@@ -903,7 +903,7 @@ dependencies = [
 [[package]]
 name = "ingot-macros"
 version = "0.1.0"
-source = "git+ssh://git@github.com/oxidecomputer/ingot.git?rev=37dbb101bbb8781739103e0d5cecaed53c383f05#37dbb101bbb8781739103e0d5cecaed53c383f05"
+source = "git+ssh://git@github.com/oxidecomputer/ingot.git?rev=48be4aba2320794291c172f146bb391b04f77bfb#48be4aba2320794291c172f146bb391b04f77bfb"
 dependencies = [
  "darling",
  "prettyplease",
@@ -916,7 +916,7 @@ dependencies = [
 [[package]]
 name = "ingot-types"
 version = "0.1.0"
-source = "git+ssh://git@github.com/oxidecomputer/ingot.git?rev=37dbb101bbb8781739103e0d5cecaed53c383f05#37dbb101bbb8781739103e0d5cecaed53c383f05"
+source = "git+ssh://git@github.com/oxidecomputer/ingot.git?rev=48be4aba2320794291c172f146bb391b04f77bfb#48be4aba2320794291c172f146bb391b04f77bfb"
 dependencies = [
  "heapless",
  "macaddr",

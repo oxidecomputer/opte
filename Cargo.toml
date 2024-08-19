@@ -50,8 +50,8 @@ ctor = "0.2"
 darling = "0.20"
 dyn-clone = "1.0"
 heapless = "0.8"
-ingot = { git = "ssh://git@github.com/oxidecomputer/ingot.git", rev = "37dbb101bbb8781739103e0d5cecaed53c383f05"}
-ingot-types = { git = "ssh://git@github.com/oxidecomputer/ingot.git", rev = "37dbb101bbb8781739103e0d5cecaed53c383f05"}
+ingot = { git = "ssh://git@github.com/oxidecomputer/ingot.git", rev = "48be4aba2320794291c172f146bb391b04f77bfb"}
+ingot-types = { git = "ssh://git@github.com/oxidecomputer/ingot.git", rev = "48be4aba2320794291c172f146bb391b04f77bfb"}
 ipnetwork = { version = "0.20", default-features = false }
 itertools = { version = "0.12", default-features = false }
 libc = "0.2"

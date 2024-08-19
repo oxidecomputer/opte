@@ -38,6 +38,7 @@ use super::icmp::IcmpHdrError;
 use super::icmp::IcmpMeta;
 use super::icmp::Icmpv4Meta;
 use super::icmp::Icmpv6Meta;
+use super::ingot_packet::MsgBlk;
 use super::ip4::Ipv4Addr;
 use super::ip4::Ipv4Hdr;
 use super::ip4::Ipv4HdrError;
@@ -501,6 +502,37 @@ impl PacketChain {
                 // ptr is NonNull in this case, and violating that is
                 // the only failure mode for wrap_mblk.
                 Some(Packet::wrap_mblk(curr).unwrap())
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Removes the next packet from the top of the chain and returns
+    /// it, taking ownership.
+    pub fn pop_front2(&mut self) -> Option<MsgBlk> {
+        if let Some(ref mut list) = &mut self.inner {
+            unsafe {
+                let curr_b = list.head;
+                let curr = curr_b.as_ptr();
+                let next = NonNull::new((*curr).b_next);
+
+                // Break the forward link on the packet we have access to,
+                // and the backward link on the next element if possible.
+                if let Some(next) = next {
+                    (*next.as_ptr()).b_prev = ptr::null_mut();
+                }
+                (*curr).b_next = ptr::null_mut();
+
+                // Update the current head. If the next element is null,
+                // we're now empty.
+                if let Some(next) = next {
+                    list.head = next;
+                } else {
+                    self.inner = None;
+                }
+
+                Some(MsgBlk{ inner: curr_b })
             }
         } else {
             None
