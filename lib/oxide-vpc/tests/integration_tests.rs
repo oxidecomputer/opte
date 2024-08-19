@@ -69,7 +69,7 @@ use smoltcp::wire::NdiscRouterFlags;
 use smoltcp::wire::RawHardwareAddress;
 use std::prelude::v1::*;
 use std::time::Duration;
-use zerocopy::AsBytes;
+use zerocopy::IntoBytes;
 
 const IP4_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE;
 const IP6_SZ: usize = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE;

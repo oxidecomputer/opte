@@ -22,9 +22,11 @@ use core::fmt::Display;
 use opte_api::DYNAMIC_PORT;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::FromZeros;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -401,7 +403,9 @@ impl From<ReadErr> for TcpHdrError {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct TcpHdrRaw {
     pub src_port: [u8; 2],
     pub dst_port: [u8; 2],

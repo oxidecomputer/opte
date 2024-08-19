@@ -21,9 +21,10 @@ use opte_api::Ipv4Addr;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -224,7 +225,9 @@ impl From<&ArpEthIpv4> for ArpEthIpv4Raw {
 }
 
 #[repr(C)]
-#[derive(AsBytes, Clone, Debug, FromBytes, FromZeroes, Unaligned)]
+#[derive(
+    IntoBytes, Clone, Debug, FromBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct ArpEthIpv4Raw {
     pub htype: [u8; 2],
     pub ptype: [u8; 2],

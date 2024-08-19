@@ -51,6 +51,9 @@ use super::NetworkParser;
 use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;
+use core::marker::PhantomData;
+use core::ops::Deref;
+use core::ops::DerefMut;
 use core::ptr;
 use core::ptr::NonNull;
 use core::result;
@@ -74,6 +77,8 @@ use alloc::vec::Vec;
 use illumos_sys_hdrs::dblk_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
+use zerocopy::ByteOrder;
+use zerocopy::NetworkEndian;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -85,6 +90,8 @@ cfg_if! {
 }
 
 pub static MBLK_MAX_SIZE: usize = u16::MAX as usize;
+
+// --- REWRITE IN PROGRESS ---
 
 pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     proto: 255,

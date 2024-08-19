@@ -22,9 +22,10 @@ use core::str::FromStr;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -347,7 +348,16 @@ impl From<&EtherMeta> for EtherHdrRaw {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, Default, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    FromBytes,
+    IntoBytes,
+    Unaligned,
+    Immutable,
+    KnownLayout,
+)]
 pub struct EtherHdrRaw {
     pub dst: [u8; 6],
     pub src: [u8; 6],

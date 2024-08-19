@@ -31,9 +31,10 @@ pub use opte_api::Ipv4PrefixLen;
 pub use opte_api::Protocol;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -500,7 +501,9 @@ impl Ipv4HdrError {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct Ipv4HdrRaw {
     pub ver_hdr_len: u8,
     pub dscp_ecn: u8,

@@ -21,9 +21,10 @@ use core::mem;
 pub use opte_api::Vni;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -259,7 +260,9 @@ impl GeneveHdrError {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct GeneveHdrRaw {
     ver_opt_len: u8,
     flags: u8,
@@ -441,7 +444,9 @@ impl OxideOption {
 ///
 /// Note: Unaligned on the same rationale as [`GeneveHdrRaw`].
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct GeneveOptHdrRaw {
     option_class: [u8; 2],
     crit_type: u8,

@@ -39,6 +39,8 @@ pub mod tcp_state;
 #[macro_use]
 pub mod udp;
 
+pub mod ingot_packet;
+
 use alloc::string::String;
 use core::fmt;
 use core::num::ParseIntError;

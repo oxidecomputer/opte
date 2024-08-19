@@ -432,15 +432,13 @@ impl Ipv4Addr {
     }
 }
 
-#[cfg(any(feature = "std", test))]
-impl From<std::net::Ipv4Addr> for Ipv4Addr {
-    fn from(ip4: std::net::Ipv4Addr) -> Self {
+impl From<core::net::Ipv4Addr> for Ipv4Addr {
+    fn from(ip4: core::net::Ipv4Addr) -> Self {
         Self { inner: ip4.octets() }
     }
 }
 
-#[cfg(any(feature = "std", test))]
-impl From<Ipv4Addr> for std::net::Ipv4Addr {
+impl From<Ipv4Addr> for core::net::Ipv4Addr {
     fn from(ip4: Ipv4Addr) -> Self {
         Self::from(ip4.inner)
     }
@@ -713,15 +711,13 @@ impl fmt::Display for Ipv6Addr {
     }
 }
 
-#[cfg(any(feature = "std", test))]
-impl From<std::net::Ipv6Addr> for Ipv6Addr {
-    fn from(ip6: std::net::Ipv6Addr) -> Self {
+impl From<core::net::Ipv6Addr> for Ipv6Addr {
+    fn from(ip6: core::net::Ipv6Addr) -> Self {
         Self { inner: ip6.octets() }
     }
 }
 
-#[cfg(any(feature = "std", test))]
-impl From<Ipv6Addr> for std::net::Ipv6Addr {
+impl From<Ipv6Addr> for core::net::Ipv6Addr {
     fn from(ip6: Ipv6Addr) -> Self {
         Self::from(ip6.inner)
     }

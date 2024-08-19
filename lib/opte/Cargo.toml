@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["api", "std"]
+default = ["api", "std", "engine"]
 api = []
 engine = ["api", "dep:crc32fast", "dep:derror-macro", "dep:heapless", "dep:itertools", "dep:zerocopy"]
 kernel = ["illumos-sys-hdrs/kernel"]
@@ -26,6 +26,9 @@ derror-macro = { workspace = true, optional = true }
 illumos-sys-hdrs.workspace = true
 kstat-macro.workspace = true
 opte-api.workspace = true
+
+ingot.workspace = true
+ingot-types.workspace = true
 
 cfg-if.workspace = true
 crc32fast = { workspace = true, optional = true }

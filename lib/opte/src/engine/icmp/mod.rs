@@ -42,9 +42,10 @@ use smoltcp::phy::Checksum;
 use smoltcp::phy::ChecksumCapabilities as Csum;
 pub use v4::Icmpv4Meta;
 pub use v6::Icmpv6Meta;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -175,7 +176,9 @@ impl<'a> IcmpHdr<'a> {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct IcmpHdrRaw {
     pub msg_type: u8,
     pub msg_code: u8,
@@ -202,7 +205,9 @@ impl<'a> RawHeader<'a> for IcmpHdrRaw {
 
 /// Internal structure of an ICMP(v6) Echo(Reply)'s rest_of_header.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct IcmpEchoRaw {
     pub id: [u8; 2],
     pub sequence: [u8; 2],
