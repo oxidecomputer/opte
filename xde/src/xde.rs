@@ -1541,7 +1541,8 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     let pkt_len_old = pkt.byte_len();
     match Parsed2::parse(pkt.iter_mut(), Direction::Out) {
         Ok(mut p) => {
-            let mch = &src_dev.u1.mch;
+            // let mch = &src_dev.u1.mch;
+            let stream = &src_dev.u1.stream;
             let hint = 0;
             let port = &src_dev.port;
             let flow_id = p.flow;
@@ -1666,12 +1667,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                     .map(|v| v.as_ref().len())
                     .collect::<Vec<_>>();
 
-                // opte::engine::err!(
-                //     "okay, we did pkt surgery: {:?} szs {:?}",
-                //     new_bytes, szs
-                // );
-
-                underlay_dev.mch.tx_drop_on_no_desc2(
+                underlay_dev.stream.tx_drop_on_no_desc2(
                     new_pkt,
                     hint,
                     MacTxFlags::empty(),
