@@ -7,6 +7,9 @@
 #: output_rules = [
 #:   "/work/*.log",
 #: ]
+#: access_repos = [
+#:  "oxidecomputer/ingot",
+#: ]
 #:
 #: [dependencies.xde]
 #: job = "opte-xde"
