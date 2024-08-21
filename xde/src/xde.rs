@@ -1659,14 +1659,6 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 // unwrapped it above.
                 let new_pkt = MsgBlk::wrap_mblk(mblk).unwrap();
 
-                let new_bytes =
-                    new_pkt.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
-
-                let szs = new_pkt
-                    .iter()
-                    .map(|v| v.as_ref().len())
-                    .collect::<Vec<_>>();
-
                 underlay_dev.stream.tx_drop_on_no_desc2(
                     new_pkt,
                     hint,
