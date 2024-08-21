@@ -36,12 +36,28 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
+use core::hash::Hash;
+use core::mem::MaybeUninit;
 use core::num::NonZeroU32;
 use core::ptr;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
+use crc32fast::Hasher;
 use illumos_sys_hdrs::*;
+use ingot::types::Header;
+use ingot::types::HeaderParse;
+use ingot::EthernetMut;
+use ingot::EthernetRef;
+use ingot::GeneveFlags;
+use ingot::GeneveMut;
+use ingot::GeneveRef;
+use ingot::Ipv6Mut;
+use ingot::UdpMut;
+use ingot::ValidEthernet;
+use ingot::ValidGeneve;
+use ingot::ValidIpv6;
+use ingot::ValidUdp;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
@@ -61,7 +77,11 @@ use opte::ddi::time::Periodic;
 use opte::engine::ether::EtherAddr;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::EncapMeta;
+use opte::engine::headers::EncapPush;
 use opte::engine::headers::IpAddr;
+use opte::engine::headers::IpPush;
+use opte::engine::ingot_packet::MsgBlk;
+use opte::engine::ingot_packet::Parsed2;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::Initialized;
@@ -1543,7 +1563,7 @@ unsafe extern "C" fn xde_mc_tx(
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (u1, u2, port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
-    while let Some(pkt) = chain.pop_front() {
+    while let Some(pkt) = chain.pop_front2() {
         xde_mc_tx_one(src_dev, pkt);
     }
 
@@ -1551,10 +1571,169 @@ unsafe extern "C" fn xde_mc_tx(
 }
 
 #[inline]
-unsafe fn xde_mc_tx_one(
-    src_dev: &XdeDev,
-    pkt: Packet<Initialized>,
-) -> *mut mblk_t {
+unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
+    let mblk_addr = pkt.mblk_addr();
+    let pkt_len_old = pkt.byte_len();
+    match Parsed2::parse(pkt.iter_mut(), Direction::Out) {
+        Ok(mut p) => {
+            let mch = &src_dev.u1.mch;
+            let hint = 0;
+            let port = &src_dev.port;
+            let flow_id = p.flow;
+
+            let mut hasher = Hasher::new();
+            flow_id.hash(&mut hasher);
+            let f_hash = hasher.finalize();
+
+            // TODO: emit hdr, reuse cksum, actually send...
+            let mut ip6_src = Default::default();
+            let mut ip6_dst = Default::default();
+            if let Ok(decision) = port.thin_process(Direction::Out, &mut p) {
+                match decision {
+                    opte::engine::port::ThinProcRes::PushEncap(
+                        eth,
+                        ip,
+                        udp,
+                    ) => {
+                        // TODO: generate methods to fill a maybeuninit.
+                        // total bytes: ETH 14, V6 40, UDP 8, GENEVE 8
+                        let new_hdrs = 14 + 40 + 8 + 8;
+                        let mut new_blk =
+                            MsgBlk::new_with_headroom(0, new_hdrs);
+
+                        new_blk.write(14, |uninit| {
+                            let slice = unsafe {
+                                MaybeUninit::slice_assume_init_mut(uninit)
+                            };
+                            let (mut a, _) =
+                                ValidEthernet::parse(slice).unwrap();
+                            a.set_source(eth.src.bytes().into());
+                            a.set_destination(eth.dst.bytes().into());
+                            a.set_ethertype(eth.ether_type.into());
+
+                            // slice
+                        });
+
+                        // we know we'er only pushing v6.
+                        let IpPush::Ip6(v6) = ip else { panic!() };
+                        new_blk.write(40, |uninit| {
+                            let slice = unsafe {
+                                MaybeUninit::slice_assume_init_mut(uninit)
+                            };
+                            let (mut a, _) = ValidIpv6::parse(slice).unwrap();
+                            a.set_version(6);
+                            a.set_dscp(0);
+                            a.set_ecn(ingot::Ecn::NotCapable);
+                            a.set_payload_len((pkt_len_old + 16) as u16);
+                            a.set_flow_label(0);
+                            a.set_hop_limit(128);
+                            a.set_next_header(v6.proto.into());
+                            a.set_source(v6.src.bytes().into());
+                            a.set_destination(v6.dst.bytes().into());
+
+                            ip6_src = v6.src;
+                            ip6_dst = v6.dst;
+
+                            // slice
+                        });
+
+                        new_blk.write(16, |uninit| {
+                            let slice = unsafe {
+                                MaybeUninit::slice_assume_init_mut(uninit)
+                            };
+
+                            let EncapPush::Geneve(gen) = udp else { panic!() };
+
+                            let (mut a, rest) = ValidUdp::parse(slice).unwrap();
+                            // ideally write out w/o looking at contents, be safer.
+                            rest[0] = 0;
+                            let (mut b, rest) =
+                                ValidGeneve::parse(rest).unwrap();
+
+                            a.set_source(gen.entropy);
+                            a.set_destination(6081);
+                            a.set_checksum(0);
+                            a.set_length((pkt_len_old + 16) as u16);
+
+                            b.set_flags(GeneveFlags::empty());
+                            b.set_reserved(0);
+                            b.set_protocol_type(0x6558);
+                            b.set_vni(gen.vni.into());
+
+                            // slice
+                        });
+
+                        core::mem::swap(&mut new_blk, &mut pkt);
+                        pkt.extend_if_one(new_blk);
+                    }
+                    // we're in Tx for a ULP'd pkt -- this should NEVER happen.
+                    opte::engine::port::ThinProcRes::PopEncap => unreachable!(),
+                    opte::engine::port::ThinProcRes::Na => unreachable!(),
+                }
+
+                if ip6_dst == ip6_src {
+                    // todo. broken just now ig
+                    // return guest_loopback(src_dev, pkt, vni);
+                    opte::engine::err!("eh?");
+                    return ptr::null_mut();
+                }
+
+                let my_key = RouteKey { dst: ip6_dst, l4_hash: Some(f_hash) };
+                let Route { src, dst, underlay_dev } =
+                    src_dev.routes.next_hop(my_key, src_dev);
+
+                // Get a pointer to the beginning of the outer frame and
+                // fill in the dst/src addresses before sending out the
+                // device.
+                let mblk = pkt.unwrap_mblk();
+                let rptr = (*mblk).b_rptr;
+                ptr::copy(dst.as_ptr(), rptr, 6);
+                ptr::copy(src.as_ptr(), rptr.add(6), 6);
+                // Unwrap: We know the packet is good because we just
+                // unwrapped it above.
+                let new_pkt = MsgBlk::wrap_mblk(mblk).unwrap();
+
+                let new_bytes =
+                    new_pkt.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+
+                let szs = new_pkt
+                    .iter()
+                    .map(|v| v.as_ref().len())
+                    .collect::<Vec<_>>();
+
+                // opte::engine::err!(
+                //     "okay, we did pkt surgery: {:?} szs {:?}",
+                //     new_bytes, szs
+                // );
+
+                underlay_dev.mch.tx_drop_on_no_desc2(
+                    new_pkt,
+                    hint,
+                    MacTxFlags::empty(),
+                );
+
+                return ptr::null_mut();
+            }
+        }
+        Err(e) => {
+            let mut bytes = vec![];
+            pkt.iter_mut().for_each(|v| bytes.extend_from_slice(v));
+            opte::engine::err!("NEW Rx bad packet: {:?} -> {:?}", e, bytes);
+            bad_packet_parse_probe(
+                Some(src_dev.port.name_cstr()),
+                Direction::Out,
+                mblk_addr,
+                &PacketError::Parse(
+                    opte::engine::packet::ParseError::UnexpectedProtocol(
+                        99.into(),
+                    ),
+                ),
+            );
+            // return ptr::null_mut();
+        }
+    };
+    let pkt = pkt.as_pkt();
+
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
     let mut pkt = match pkt.parse(Direction::Out, parser) {
@@ -1845,7 +2024,7 @@ unsafe extern "C" fn xde_rx(
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
-    while let Some(pkt) = chain.pop_front() {
+    while let Some(pkt) = chain.pop_front2() {
         xde_rx_one(&mch, mrh, pkt);
     }
 }
@@ -1854,8 +2033,98 @@ unsafe extern "C" fn xde_rx(
 unsafe fn xde_rx_one(
     mch: &MacClientHandle,
     mrh: *mut mac::mac_resource_handle,
-    pkt: Packet<Initialized>,
+    mut pkt: MsgBlk,
 ) {
+    let mblk_addr = pkt.mblk_addr();
+    let pkt_len_old = pkt.byte_len();
+    match Parsed2::parse(pkt.iter_mut(), Direction::In) {
+        Ok(mut p) => {
+            // opte::engine::err!("Successful parse.");
+            let devs = xde_devs.read();
+            let h = p.meta.0.headers();
+            let (vni, ether_dst) = match (&h.outer_encap, Some(&h.inner_eth)) {
+                (Some(ref geneve), Some(ref eth)) => {
+                    (Vni::new(geneve.vni()).unwrap(), eth.destination())
+                }
+                _ => {
+                    opte::engine::err!("Wut");
+                    return;
+                }
+            };
+            let Some(dev) = devs.iter().find(|x| {
+                x.vni == vni
+                    && x.port.mac_addr().bytes() == ether_dst.as_bytes()
+            }) else {
+                // TODO add SDT probe
+                // TODO add stat
+                opte::engine::err!(
+                    "[encap] no device found for vni: {} mac: {}",
+                    vni,
+                    ether_dst
+                );
+                return;
+            };
+
+            let e_len = h.outer_eth.as_ref().map(|v| v.packet_length());
+            let v_len = h.outer_v6.as_ref().map(|v| v.packet_length());
+            let u_len = h.outer_udp.as_ref().map(|v| v.packet_length());
+            let g_len = h.outer_encap.as_ref().map(|v| v.packet_length());
+
+            let pop_len: usize = [e_len, v_len, u_len, g_len]
+                .iter()
+                .map(|v| v.unwrap_or_default())
+                .sum();
+
+            // opte::engine::err!("Want to pop: {}", pop_len);
+
+            let port = &dev.port;
+            if let Ok(decision) = port.thin_process(Direction::In, &mut p) {
+                match decision {
+                    opte::engine::port::ThinProcRes::PopEncap => {
+                        let mut to_pop = pop_len;
+                        for layer in pkt.iter_mut() {
+                            let max_drop = layer.len();
+                            let will_drop = max_drop.min(to_pop);
+                            layer.drop_front_bytes(will_drop);
+                            to_pop -= will_drop;
+
+                            if to_pop == 0 {
+                                break;
+                            }
+                        }
+
+                        // could theoretically have empty segments here.
+                        // not an issue over NIC for now.
+                        mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
+                    }
+                    // we know this to be true given how we cfg opte
+                    opte::engine::port::ThinProcRes::PushEncap(_, _, _) => {
+                        unreachable!()
+                    }
+                    opte::engine::port::ThinProcRes::Na => unreachable!(),
+                }
+                return;
+            }
+        }
+        Err(e) => {
+            let mut bytes = vec![];
+            pkt.iter().for_each(|v| bytes.extend_from_slice(v));
+            // opte::engine::err!("NEW Rx bad packet: {:?} -> {:?}", e, bytes);
+            bad_packet_parse_probe(
+                None,
+                Direction::In,
+                mblk_addr,
+                &PacketError::Parse(
+                    opte::engine::packet::ParseError::UnexpectedProtocol(
+                        99.into(),
+                    ),
+                ),
+            );
+        }
+    }
+    // opte::engine::err!("bk to basics.");
+    let pkt = pkt.as_pkt();
+
     // We must first parse the packet in order to determine where it
     // is to be delivered.
     let parser = VpcParser {};

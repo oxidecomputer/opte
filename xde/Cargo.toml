@@ -11,6 +11,8 @@ illumos-sys-hdrs = { workspace = true, features = ["kernel"] }
 opte = { workspace = true, features = ["engine", "kernel"], default-features = false }
 oxide-vpc = { workspace = true, features = ["engine", "kernel"], default-features = false }
 
+ingot.workspace = true
+
 bitflags.workspace = true
 postcard.workspace = true
 serde.workspace = true

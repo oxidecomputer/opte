@@ -532,7 +532,7 @@ impl PacketChain {
                     self.inner = None;
                 }
 
-                Some(MsgBlk{ inner: curr_b })
+                Some(MsgBlk { inner: curr_b })
             }
         } else {
             None
