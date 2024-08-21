@@ -499,7 +499,7 @@ pub struct UftEntry<Id> {
     pair: Option<Id>,
 
     /// The transformations to perform.
-    xforms: Transforms,
+    xforms: Arc<Transforms>,
 
     /// The port epoch upon which this entry was established. Used for
     /// invalidation when the rule set is updated.
@@ -1232,13 +1232,14 @@ impl<N: NetworkImpl> Port<N> {
                 let Some(a) = a else {
                     // eh. It will get recirc'd for free...
                     // opte::engine::err!("not found! Releasing!");
-                    drop(data);
                     return Err(ProcessError::FlowTableFull {
                         kind: "()",
                         limit: 0,
                     });
                 };
                 // opte::engine::err!("found!");
+                let xforms = Arc::clone(&a.state().xforms);
+                drop(data);
 
                 let mut hm = pkt.meta.0.headers_mut();
 
@@ -1246,7 +1247,7 @@ impl<N: NetworkImpl> Port<N> {
                 let mut new_ip = None;
                 let mut new_encap = None;
                 // opte::engine::err!("xforms {:?}!", &a.state().xforms.hdr);
-                for xf in &a.state().xforms.hdr {
+                for xf in &xforms.hdr {
                     // opte::engine::err!("xf...");
                     if let HeaderAction::Push(outer_eth, _) = &xf.outer_ether {
                         new_eth = Some(outer_eth.clone());
@@ -1386,13 +1387,15 @@ impl<N: NetworkImpl> Port<N> {
                         limit: 0,
                     });
                 };
+                let xforms = Arc::clone(&a.state().xforms);
+                drop(data);
 
                 let mut hm = pkt.meta.0.headers_mut();
 
                 let mut pop_eth = false;
                 let mut pop_ip = false;
                 let mut pop_encap = false;
-                for xf in &a.state().xforms.hdr {
+                for xf in &xforms.hdr {
                     // opte::engine::err!("xf...");
                     if let HeaderAction::Pop = &xf.outer_ether {
                         pop_eth = true;
@@ -2120,7 +2123,8 @@ impl<N: NetworkImpl> Port<N> {
         }
 
         let ufid_out = pkt.flow().mirror();
-        let hte = UftEntry { pair: Some(ufid_out), xforms, epoch };
+        let hte =
+            UftEntry { pair: Some(ufid_out), xforms: xforms.into(), epoch };
 
         // Keep around the comment on the `None` arm
         #[allow(clippy::single_match)]
@@ -2495,7 +2499,7 @@ impl<N: NetworkImpl> Port<N> {
         let mut xforms = Transforms::new();
         let flow_before = *pkt.flow();
         let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
-        let hte = UftEntry { pair: None, xforms, epoch };
+        let hte = UftEntry { pair: None, xforms: xforms.into(), epoch };
 
         match res {
             Ok(LayerResult::Allow) => {

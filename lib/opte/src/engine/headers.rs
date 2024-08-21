@@ -600,7 +600,7 @@ impl HeaderActionModify<UlpMetaModify> for UlpMeta {
 }
 
 /// The action to take for a particular header transposition.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Copy, Clone, Debug, Default, Deserialize, Serialize)]
 pub enum HeaderAction<H, P, M>
 where
     P: PushAction<H> + fmt::Debug,
