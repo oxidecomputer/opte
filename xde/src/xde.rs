@@ -1550,7 +1550,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // TODO: emit hdr, reuse cksum, actually send...
             let mut ip6_src = Default::default();
             let mut ip6_dst = Default::default();
-            let mut f_hash = None;
+            let f_hash;
             if let Ok(decision) = port.thin_process(Direction::Out, &mut p) {
                 match decision {
                     opte::engine::port::ThinProcRes::PushEncap(
@@ -1564,7 +1564,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                         // total bytes: ETH 14, V6 40, UDP 8, GENEVE 8
                         let new_hdrs = 14 + 40 + 8 + 8;
                         let mut new_blk =
-                            MsgBlk::new_with_headroom(0, new_hdrs);
+                            MsgBlk::new_with_headroom(2, new_hdrs);
 
                         new_blk.write(14, |uninit| {
                             let slice = unsafe {
