@@ -69,6 +69,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
+use core::hash::Hash;
 use core::num::NonZeroU32;
 use core::result;
 use core::str::FromStr;
@@ -500,6 +501,9 @@ pub struct UftEntry<Id> {
 
     /// The transformations to perform.
     xforms: Arc<Transforms>,
+
+    /// Cached flow hash to speed up route selection.
+    l4_hash: u32,
 
     /// The port epoch upon which this entry was established. Used for
     /// invalidation when the rule set is updated.
@@ -1237,8 +1241,13 @@ impl<N: NetworkImpl> Port<N> {
                         limit: 0,
                     });
                 };
+                pkt.l4_hash = Some(a.state().l4_hash);
                 // opte::engine::err!("found!");
                 let xforms = Arc::clone(&a.state().xforms);
+                Self::update_stats_out(
+                    &mut data.stats.vals,
+                    &Ok(ProcessResult::Modified),
+                );
                 drop(data);
 
                 let mut hm = pkt.meta.0.headers_mut();
@@ -1387,7 +1396,12 @@ impl<N: NetworkImpl> Port<N> {
                         limit: 0,
                     });
                 };
+                pkt.l4_hash = Some(a.state().l4_hash);
                 let xforms = Arc::clone(&a.state().xforms);
+                Self::update_stats_in(
+                    &mut data.stats.vals,
+                    &Ok(ProcessResult::Modified),
+                );
                 drop(data);
 
                 let mut hm = pkt.meta.0.headers_mut();
@@ -2123,8 +2137,12 @@ impl<N: NetworkImpl> Port<N> {
         }
 
         let ufid_out = pkt.flow().mirror();
-        let hte =
-            UftEntry { pair: Some(ufid_out), xforms: xforms.into(), epoch };
+        let hte = UftEntry {
+            pair: Some(ufid_out),
+            xforms: xforms.into(),
+            epoch,
+            l4_hash: ufid_in.crc32(),
+        };
 
         // Keep around the comment on the `None` arm
         #[allow(clippy::single_match)]
@@ -2499,7 +2517,13 @@ impl<N: NetworkImpl> Port<N> {
         let mut xforms = Transforms::new();
         let flow_before = *pkt.flow();
         let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
-        let hte = UftEntry { pair: None, xforms: xforms.into(), epoch };
+        // XXXX: may be hashing the wrong thing.
+        let hte = UftEntry {
+            pair: None,
+            xforms: xforms.into(),
+            epoch,
+            l4_hash: flow_before.crc32(),
+        };
 
         match res {
             Ok(LayerResult::Allow) => {

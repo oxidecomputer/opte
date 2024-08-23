@@ -1547,13 +1547,10 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             let port = &src_dev.port;
             let flow_id = p.flow;
 
-            let mut hasher = Hasher::new();
-            flow_id.hash(&mut hasher);
-            let f_hash = hasher.finalize();
-
             // TODO: emit hdr, reuse cksum, actually send...
             let mut ip6_src = Default::default();
             let mut ip6_dst = Default::default();
+            let mut f_hash = None;
             if let Ok(decision) = port.thin_process(Direction::Out, &mut p) {
                 match decision {
                     opte::engine::port::ThinProcRes::PushEncap(
@@ -1561,6 +1558,8 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                         ip,
                         udp,
                     ) => {
+                        f_hash = p.l4_hash;
+
                         // TODO: generate methods to fill a maybeuninit.
                         // total bytes: ETH 14, V6 40, UDP 8, GENEVE 8
                         let new_hdrs = 14 + 40 + 8 + 8;
@@ -1644,7 +1643,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                     return ptr::null_mut();
                 }
 
-                let my_key = RouteKey { dst: ip6_dst, l4_hash: Some(f_hash) };
+                let my_key = RouteKey { dst: ip6_dst, l4_hash: f_hash };
                 let Route { src, dst, underlay_dev } =
                     src_dev.routes.next_hop(my_key, src_dev);
 

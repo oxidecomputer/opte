@@ -435,6 +435,7 @@ pub struct Parsed2<T: Read> {
     pub meta: PacketMeta3<T>,
     pub flow: InnerFlowId,
     pub body_csum: Option<Checksum>,
+    pub l4_hash: Option<u32>,
     // body: BodyInfo,
     // body_modified: bool,
 }
@@ -535,7 +536,7 @@ impl<T: Read> Parsed2<T>
         let pseudo_csum = match meta.0.headers().inner_eth.ethertype() {
             // ARP
             0x0806 => {
-                return Ok(Self { meta, body_csum: None, flow });
+                return Ok(Self { meta, body_csum: None, flow, l4_hash: None });
             }
             // Ipv4
             0x0800 => {
@@ -576,6 +577,6 @@ impl<T: Read> Parsed2<T>
                 v
             });
 
-        Ok(Self { meta, flow, body_csum })
+        Ok(Self { meta, flow, body_csum, l4_hash: None })
     }
 }

@@ -349,7 +349,7 @@ impl StaticAction for EncapAction {
             outer_encap: HeaderAction::Push(
                 EncapPush::from(GenevePush {
                     vni: phys_target.vni,
-                    entropy: 7777,
+                    entropy: flow_id.crc32() as u16,
                 }),
                 PhantomData,
             ),

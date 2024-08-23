@@ -52,6 +52,7 @@ use super::NetworkParser;
 use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;
+use core::hash::Hash;
 use core::marker::PhantomData;
 use core::ops::Deref;
 use core::ops::DerefMut;
@@ -134,6 +135,14 @@ pub struct InnerFlowId {
     pub addrs: AddrPair,
     pub src_port: u16,
     pub dst_port: u16,
+}
+
+impl InnerFlowId {
+    pub fn crc32(&self) -> u32 {
+        let mut hasher = Hasher::new();
+        self.hash(&mut hasher);
+        hasher.finalize()
+    }
 }
 
 impl Default for InnerFlowId {
