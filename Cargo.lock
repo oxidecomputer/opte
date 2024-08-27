@@ -1393,9 +1393,9 @@ dependencies = [
 
 [[package]]
 name = "pcap-parser"
-version = "0.15.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a480475d0fe046a92de4f00abae56ee07c2b77a4cf383a786acfb5647909c16"
+checksum = "2f8d57cc6bdf76d7abd6d3cc1113278047dab29c2ff6d97190e8d1c29d4efdac"
 dependencies = [
  "circular",
  "cookie-factory",
