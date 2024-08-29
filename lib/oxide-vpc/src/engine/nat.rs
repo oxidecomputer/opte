@@ -147,7 +147,7 @@ fn setup_ipv4_nat(
         ]));
         out_nat.add_predicate(Predicate::Meta(
             RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway.as_meta(),
+            RouterTargetInternal::InternetGateway(None).as_meta(),
         ));
         out_rules.push(out_nat.finalize());
 
@@ -181,7 +181,7 @@ fn setup_ipv4_nat(
         ]));
         out_nat.add_predicate(Predicate::Meta(
             RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway.as_meta(),
+            RouterTargetInternal::InternetGateway(None).as_meta(),
         ));
         out_rules.push(out_nat.finalize());
 
@@ -211,7 +211,7 @@ fn setup_ipv4_nat(
         ]));
         rule.add_predicate(Predicate::Meta(
             RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway.as_meta(),
+            RouterTargetInternal::InternetGateway(None).as_meta(),
         ));
         out_rules.push(rule.finalize());
     }
@@ -230,7 +230,6 @@ fn setup_ipv6_nat(
     let verifier = Arc::new(ExtIps(ip_cfg.external_ips.clone()));
     let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip, verifier.clone()));
     let external_cfg = ip_cfg.external_ips.load();
-
     if !external_cfg.floating_ips.is_empty() {
         let mut out_nat = Rule::new(
             FLOATING_ONE_TO_ONE_NAT_PRIORITY,
@@ -245,7 +244,7 @@ fn setup_ipv6_nat(
         ]));
         out_nat.add_predicate(Predicate::Meta(
             RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway.as_meta(),
+            RouterTargetInternal::InternetGateway(None).as_meta(),
         ));
         out_rules.push(out_nat.finalize());
 
@@ -279,7 +278,7 @@ fn setup_ipv6_nat(
         ]));
         out_nat.add_predicate(Predicate::Meta(
             RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway.as_meta(),
+            RouterTargetInternal::InternetGateway(None).as_meta(),
         ));
         out_rules.push(out_nat.finalize());
 
@@ -309,7 +308,7 @@ fn setup_ipv6_nat(
         ]));
         rule.add_predicate(Predicate::Meta(
             RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway.as_meta(),
+            RouterTargetInternal::InternetGateway(None).as_meta(),
         ));
         out_rules.push(rule.finalize());
     }

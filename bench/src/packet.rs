@@ -294,7 +294,7 @@ impl BenchPacketInstance for UlpProcessInstance {
         router::add_entry(
             &g1.port,
             IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-            RouterTarget::InternetGateway,
+            RouterTarget::InternetGateway(self.cfg.snat().external_ip.into()),
             RouterClass::System,
         )
         .unwrap();
@@ -303,7 +303,7 @@ impl BenchPacketInstance for UlpProcessInstance {
         router::add_entry(
             &g1.port,
             IpCidr::Ip6("::/0".parse().unwrap()),
-            RouterTarget::InternetGateway,
+            RouterTarget::InternetGateway(self.cfg.snat6().external_ip.into()),
             RouterClass::System,
         )
         .unwrap();

@@ -347,7 +347,8 @@ impl From<PhysNet> for GuestPhysAddr {
 /// * InternetGateway: Packets matching this entry are forwarded to
 /// the internet. In the case of the Oxide Network the IG is not an
 /// actual destination, but rather a configuration that determines how
-/// we should NAT the flow.
+/// we should NAT the flow. The address in the gateway is the source
+/// address that is to be used.
 ///
 /// * Ip: Packets matching this entry are forwarded to the specified IP.
 ///
@@ -362,7 +363,7 @@ impl From<PhysNet> for GuestPhysAddr {
 #[derive(Clone, Debug, Copy, Deserialize, Serialize)]
 pub enum RouterTarget {
     Drop,
-    InternetGateway,
+    InternetGateway(IpAddr),
     Ip(IpAddr),
     VpcSubnet(IpCidr),
 }
@@ -374,7 +375,6 @@ impl FromStr for RouterTarget {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "drop" => Ok(Self::Drop),
-            "ig" => Ok(Self::InternetGateway),
             lower => match lower.split_once('=') {
                 Some(("ip4", ip4s)) => {
                     let ip4 = ip4s
@@ -396,6 +396,8 @@ impl FromStr for RouterTarget {
                     cidr6s.parse().map(|x| Self::VpcSubnet(IpCidr::Ip6(x)))
                 }
 
+                Some(("ig", ip)) => Ok(Self::InternetGateway(ip.parse()?)),
+
                 _ => Err(format!("malformed router target: {}", lower)),
             },
         }
@@ -406,7 +408,7 @@ impl Display for RouterTarget {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Drop => write!(f, "Drop"),
-            Self::InternetGateway => write!(f, "IG"),
+            Self::InternetGateway(ip) => write!(f, "IG({})", ip),
             Self::Ip(IpAddr::Ip4(ip4)) => write!(f, "ip4={}", ip4),
             Self::Ip(IpAddr::Ip6(ip6)) => write!(f, "ip6={}", ip6),
             Self::VpcSubnet(IpCidr::Ip4(sub4)) => write!(f, "sub4={}", sub4),

@@ -43,6 +43,7 @@ use opte::engine::headers::EncapPush;
 use opte::engine::headers::HeaderAction;
 use opte::engine::headers::IpAddr;
 use opte::engine::headers::IpCidr;
+use opte::engine::headers::IpMod;
 use opte::engine::headers::IpPush;
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Addr;
@@ -211,7 +212,7 @@ impl StaticAction for EncapAction {
         // The router layer determines a RouterTarget and stores it in
         // the meta map. We need to map this virtual target to a
         // physical one.
-        let target_str = match action_meta.get(RouterTargetInternal::KEY) {
+        let target_str = match action_meta.get(RouterTargetInternal::IP_KEY) {
             Some(val) => val,
             None => {
                 // This should never happen. The router should always
@@ -237,7 +238,7 @@ impl StaticAction for EncapAction {
         };
 
         let phys_target = match target {
-            RouterTargetInternal::InternetGateway => {
+            RouterTargetInternal::InternetGateway(_) => {
                 match self.v2b.get(&flow_id.dst_ip()) {
                     Some(phys) => {
                         // Hash the packet onto a route target. This is a very
@@ -318,7 +319,7 @@ impl StaticAction for EncapAction {
             }
         };
 
-        Ok(AllowOrDeny::Allow(HdrTransform {
+        let mut tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
             outer_ether: HeaderAction::Push(
@@ -358,7 +359,14 @@ impl StaticAction for EncapAction {
                 PhantomData,
             ),
             ..Default::default()
-        }))
+        };
+
+        if let RouterTargetInternal::InternetGateway(Some(x)) = target {
+            tfrm.inner_ip =
+                HeaderAction::Modify(IpMod::new_src(x), PhantomData);
+        }
+
+        Ok(AllowOrDeny::Allow(tfrm))
     }
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {

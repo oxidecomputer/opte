@@ -54,12 +54,26 @@ pub const ROUTER_LAYER_NAME: &str = "router";
 // target. This routing layer implementation converts said target to a
 // `Rule` paired with `Action::Deny`. The MetaAction wants an internal
 // version of the router target without the "drop" target to match the
-// remaining possible targets.
+// remaining possible targets. Ip adderess of internet gateway specifies
+// source address
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouterTargetInternal {
-    InternetGateway,
+    InternetGateway(Option<IpAddr>),
     Ip(IpAddr),
     VpcSubnet(IpCidr),
+}
+
+impl RouterTargetInternal {
+    pub const IP_KEY: &'static str = "router-target-ip";
+    pub const GENERIC_META: &'static str = "ig";
+
+    pub fn generic_meta(&self) -> String {
+        Self::GENERIC_META.to_string()
+    }
+
+    pub fn ip_key(&self) -> String {
+        Self::IP_KEY.to_string()
+    }
 }
 
 impl ActionMetaValue for RouterTargetInternal {
@@ -67,7 +81,7 @@ impl ActionMetaValue for RouterTargetInternal {
 
     fn from_meta(s: &str) -> Result<Self, String> {
         match s {
-            "ig" => Ok(Self::InternetGateway),
+            "ig" => Ok(Self::InternetGateway(None)),
             _ => match s.split_once('=') {
                 Some(("ip4", ip4_s)) => {
                     let ip4 = ip4_s.parse::<Ipv4Addr>()?;
@@ -89,6 +103,11 @@ impl ActionMetaValue for RouterTargetInternal {
                     Ok(Self::VpcSubnet(IpCidr::Ip6(cidr6)))
                 }
 
+                Some(("ig", ig)) => {
+                    let ig = ig.parse::<IpAddr>()?;
+                    Ok(Self::InternetGateway(Some(ig)))
+                }
+
                 _ => Err(format!("bad router target: {}", s)),
             },
         }
@@ -96,7 +115,10 @@ impl ActionMetaValue for RouterTargetInternal {
 
     fn as_meta(&self) -> String {
         match self {
-            Self::InternetGateway => "ig".to_string(),
+            Self::InternetGateway(ip) => match ip {
+                Some(ip) => format!("ig={}", ip),
+                None => String::from("ig"),
+            },
             Self::Ip(IpAddr::Ip4(ip4)) => format!("ip4={}", ip4),
             Self::Ip(IpAddr::Ip6(ip6)) => format!("ip6={}", ip6),
             Self::VpcSubnet(IpCidr::Ip4(cidr4)) => format!("sub4={}", cidr4),
@@ -108,7 +130,7 @@ impl ActionMetaValue for RouterTargetInternal {
 impl fmt::Display for RouterTargetInternal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {
-            Self::InternetGateway => "IG".to_string(),
+            Self::InternetGateway(addr) => format!("IG({:?})", addr),
             Self::Ip(addr) => format!("IP: {}", addr),
             Self::VpcSubnet(sub) => format!("Subnet: {}", sub),
         };
@@ -207,9 +229,9 @@ fn valid_router_dest_target_pair(dest: &IpCidr, target: &RouterTarget) -> bool {
         // IPv6 destination, IPv6 subnet
         (IpCidr::Ip6(_), RouterTarget::VpcSubnet(IpCidr::Ip6(_))) |
         // IPv4 destination, IPv4 Internet Gateway
-        (IpCidr::Ip4(_), RouterTarget::InternetGateway) |
+        (IpCidr::Ip4(_), RouterTarget::InternetGateway(IpAddr::Ip4(_))) |
         // IPv6 destination, IPv6 Internet Gateway
-        (IpCidr::Ip6(_), RouterTarget::InternetGateway)
+        (IpCidr::Ip6(_), RouterTarget::InternetGateway(IpAddr::Ip6(_)))
     )
 }
 
@@ -239,7 +261,7 @@ fn make_rule(
             (predicate, Action::Deny)
         }
 
-        RouterTarget::InternetGateway => {
+        RouterTarget::InternetGateway(ip) => {
             let predicate = match dest {
                 IpCidr::Ip4(ip4) => {
                     Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(ip4)])
@@ -250,7 +272,7 @@ fn make_rule(
                 }
             };
             let action = Action::Meta(Arc::new(RouterAction::new(
-                RouterTargetInternal::InternetGateway,
+                RouterTargetInternal::InternetGateway(Some(ip)),
             )));
             (predicate, action)
         }
@@ -291,6 +313,7 @@ fn make_rule(
     let priority = compute_rule_priority(&dest, class);
     let mut rule = Rule::new(priority, action);
     rule.add_predicate(predicate);
+
     Ok(rule.finalize())
 }
 
@@ -386,7 +409,10 @@ impl MetaAction for RouterAction {
         // would be a bug. However, because of the dynamic nature of
         // metadata we don't have an easy way to enforce this
         // constraint in the type system.
-        meta.insert(self.target.key(), self.target.as_meta());
+        if let RouterTargetInternal::InternetGateway(_) = self.target {
+            meta.insert(self.target.key(), self.target.generic_meta());
+        }
+        meta.insert(self.target.ip_key(), self.target.as_meta());
         Ok(AllowOrDeny::Allow(()))
     }
 }
