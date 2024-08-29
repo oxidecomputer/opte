@@ -44,19 +44,20 @@ use core::ptr::addr_of_mut;
 use core::time::Duration;
 use crc32fast::Hasher;
 use illumos_sys_hdrs::*;
+use ingot::ethernet::EthernetMut;
+use ingot::ethernet::EthernetRef;
+use ingot::ethernet::ValidEthernet;
+use ingot::geneve::GeneveFlags;
+use ingot::geneve::GeneveMut;
+use ingot::geneve::GeneveRef;
+use ingot::geneve::ValidGeneve;
+use ingot::ip::IpProtocol;
+use ingot::ip::Ipv6Mut;
+use ingot::ip::ValidIpv6;
 use ingot::types::Header;
 use ingot::types::HeaderParse;
-use ingot::EthernetMut;
-use ingot::EthernetRef;
-use ingot::GeneveFlags;
-use ingot::GeneveMut;
-use ingot::GeneveRef;
-use ingot::Ipv6Mut;
-use ingot::UdpMut;
-use ingot::ValidEthernet;
-use ingot::ValidGeneve;
-use ingot::ValidIpv6;
-use ingot::ValidUdp;
+use ingot::udp::UdpMut;
+use ingot::udp::ValidUdp;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
@@ -1570,11 +1571,13 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                             let slice = unsafe {
                                 MaybeUninit::slice_assume_init_mut(uninit)
                             };
-                            let (mut a, _) =
+                            let (mut a, ..) =
                                 ValidEthernet::parse(slice).unwrap();
                             a.set_source(eth.src.bytes().into());
                             a.set_destination(eth.dst.bytes().into());
-                            a.set_ethertype(eth.ether_type.into());
+                            a.set_ethertype(ingot::ethernet::Ethertype(
+                                eth.ether_type.into(),
+                            ));
 
                             // slice
                         });
@@ -1585,14 +1588,18 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                             let slice = unsafe {
                                 MaybeUninit::slice_assume_init_mut(uninit)
                             };
-                            let (mut a, _) = ValidIpv6::parse(slice).unwrap();
+                            use ingot::types::NetworkRepr;
+                            slice[6] = IpProtocol::UDP.to_network();
+                            let (mut a, ..) = ValidIpv6::parse(slice).unwrap();
                             a.set_version(6);
                             a.set_dscp(0);
-                            a.set_ecn(ingot::Ecn::NotCapable);
+                            a.set_ecn(ingot::ip::Ecn::NotCapable);
                             a.set_payload_len((pkt_len_old + 16) as u16);
                             a.set_flow_label(0);
                             a.set_hop_limit(128);
-                            a.set_next_header(v6.proto.into());
+                            a.set_next_header(ingot::ip::IpProtocol(
+                                v6.proto.into(),
+                            ));
                             a.set_source(v6.src.bytes().into());
                             a.set_destination(v6.dst.bytes().into());
 
@@ -1609,11 +1616,11 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
 
                             let EncapPush::Geneve(gen) = udp else { panic!() };
 
-                            let (mut a, rest) = ValidUdp::parse(slice).unwrap();
+                            let (mut a, .., rest) =
+                                ValidUdp::parse(slice).unwrap();
                             // ideally write out w/o looking at contents, be safer.
                             rest[0] = 0;
-                            let (mut b, rest) =
-                                ValidGeneve::parse(rest).unwrap();
+                            let (mut b, ..) = ValidGeneve::parse(rest).unwrap();
 
                             a.set_source(gen.entropy);
                             a.set_destination(6081);

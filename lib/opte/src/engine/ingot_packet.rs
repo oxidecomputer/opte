@@ -8,33 +8,34 @@ use core::slice;
 
 use illumos_sys_hdrs as ddi;
 use illumos_sys_hdrs::mblk_t;
-use ingot::types::Chunk;
+use ingot::ethernet::EthernetPacket;
+use ingot::ethernet::EthernetRef;
+use ingot::ethernet::Ethertype;
+use ingot::ethernet::ValidEthernet;
+use ingot::example_chain::Ulp;
+use ingot::example_chain::L3;
+use ingot::example_chain::L4;
+use ingot::geneve::GenevePacket;
+use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV6Ref;
+use ingot::ip::IpProtocol;
+use ingot::ip::Ipv4;
+use ingot::ip::Ipv4Ref;
+use ingot::ip::Ipv6Packet;
+use ingot::ip::Ipv6Ref;
+use ingot::tcp::TcpPacket;
+use ingot::tcp::TcpRef;
 use ingot::types::HasView;
+use ingot::types::Header;
+use ingot::types::HeaderStack;
 use ingot::types::ParseControl;
 use ingot::types::ParseError as IngotParseErr;
+use ingot::types::ParseResult;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
-use ingot::EthernetPacket;
-use ingot::EthernetRef;
-use ingot::GenevePacket;
-use ingot::IcmpV4Ref;
-use ingot::IcmpV6Ref;
-use ingot::Ipv4;
-use ingot::Ipv4Ref;
-use ingot::Ipv6Packet;
-use ingot::Ipv6Ref;
+use ingot::udp::UdpPacket;
+use ingot::udp::UdpRef;
 use ingot::Parse;
-use ingot::TcpPacket;
-use ingot::TcpRef;
-use ingot::UdpPacket;
-use ingot::UdpRef;
-use ingot::Ulp;
-use ingot::ValidEthernet;
-use ingot::L3;
-use ingot::L4;
-use ingot_types::Header;
-use ingot_types::HeaderStack;
-use ingot_types::ParseResult;
 use opte_api::Direction;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
@@ -48,21 +49,13 @@ use super::packet::Initialized;
 use super::packet::Packet;
 use illumos_sys_hdrs::uintptr_t;
 
-// NOTE: these are not being handled correctly and need to be
-// stealth-imported in ingot.
-use ingot_types::HeaderParse;
-use ingot_types::NextLayer;
-use ingot_types::ParseChoice;
-// (also, need to cleanup ::ingot_types vs. ::ingot::types
-// imports, somehow)
-
 use super::checksum::Checksum;
 use super::packet::AddrPair;
 use super::packet::InnerFlowId;
 use super::packet::FLOW_ID_DEFAULT;
 
 #[derive(Parse)]
-pub struct OpteIn<Q> {
+pub struct OpteIn<Q: ByteSlice> {
     pub outer_eth: EthernetPacket<Q>,
     #[ingot(from = "L3<Q>")]
     pub outer_v6: Ipv6Packet<Q>,
@@ -79,7 +72,7 @@ pub struct OpteIn<Q> {
 
 #[inline]
 fn exit_on_arp<V: ByteSlice>(eth: &EthernetPacket<V>) -> ParseControl {
-    if eth.ethertype() == 0x0806 {
+    if eth.ethertype() == Ethertype::ARP {
         ParseControl::Accept
     } else {
         ParseControl::Continue
@@ -87,7 +80,7 @@ fn exit_on_arp<V: ByteSlice>(eth: &EthernetPacket<V>) -> ParseControl {
 }
 
 #[derive(Parse)]
-pub struct OpteOut<Q> {
+pub struct OpteOut<Q: ByteSlice> {
     #[ingot(control = exit_on_arp)]
     pub inner_eth: EthernetPacket<Q>,
     pub inner_l3: Option<L3<Q>>,
@@ -297,7 +290,7 @@ impl Drop for MsgBlk {
     }
 }
 
-pub struct OpteUnified<Q> {
+pub struct OpteUnified<Q: ByteSlice> {
     pub outer_eth: Option<EthernetPacket<Q>>,
     pub outer_v6: Option<Ipv6Packet<Q>>,
     pub outer_udp: Option<UdpPacket<Q>>,
@@ -308,7 +301,7 @@ pub struct OpteUnified<Q> {
     pub inner_ulp: Option<Ulp<Q>>,
 }
 
-impl<Q> From<OpteIn<Q>> for OpteUnified<Q> {
+impl<Q: ByteSlice> From<OpteIn<Q>> for OpteUnified<Q> {
     fn from(value: OpteIn<Q>) -> Self {
         Self {
             outer_eth: Some(value.outer_eth),
@@ -322,7 +315,7 @@ impl<Q> From<OpteIn<Q>> for OpteUnified<Q> {
     }
 }
 
-impl<Q> From<OpteOut<Q>> for OpteUnified<Q> {
+impl<Q: ByteSlice> From<OpteOut<Q>> for OpteUnified<Q> {
     fn from(value: OpteOut<Q>) -> Self {
         Self {
             outer_eth: None,
@@ -341,16 +334,18 @@ pub struct PacketMeta3<T: ingot::types::Read>(
 );
 
 impl<T: Read> PacketMeta3<T> {
-    pub fn inner_l3(&self) -> Option<&ingot::L3<T::Chunk>> {
+    pub fn inner_l3(&self) -> Option<&ingot::example_chain::L3<T::Chunk>> {
         self.0.headers().inner_l3.as_ref()
     }
 
-    pub fn inner_ulp(&self) -> Option<&ingot::Ulp<T::Chunk>> {
+    pub fn inner_ulp(&self) -> Option<&ingot::example_chain::Ulp<T::Chunk>> {
         self.0.headers().inner_ulp.as_ref()
     }
 }
 
-fn actual_src_port<T: Chunk>(chunk: &ingot::Ulp<T>) -> Option<u16> {
+fn actual_src_port<T: ByteSlice>(
+    chunk: &ingot::example_chain::Ulp<T>,
+) -> Option<u16> {
     match chunk {
         Ulp::Tcp(pkt) => Some(pkt.source()),
         Ulp::Udp(pkt) => Some(pkt.source()),
@@ -358,7 +353,9 @@ fn actual_src_port<T: Chunk>(chunk: &ingot::Ulp<T>) -> Option<u16> {
     }
 }
 
-fn actual_dst_port<T: Chunk>(chunk: &ingot::Ulp<T>) -> Option<u16> {
+fn actual_dst_port<T: ByteSlice>(
+    chunk: &ingot::example_chain::Ulp<T>,
+) -> Option<u16> {
     match chunk {
         Ulp::Tcp(pkt) => Some(pkt.destination()),
         Ulp::Udp(pkt) => Some(pkt.destination()),
@@ -366,7 +363,9 @@ fn actual_dst_port<T: Chunk>(chunk: &ingot::Ulp<T>) -> Option<u16> {
     }
 }
 
-fn pseudo_port<T: Chunk>(chunk: &ingot::Ulp<T>) -> Option<u16> {
+fn pseudo_port<T: ByteSlice>(
+    chunk: &ingot::example_chain::Ulp<T>,
+) -> Option<u16> {
     match chunk {
         Ulp::IcmpV4(pkt) if pkt.ty() == 0 || pkt.ty() == 3 => {
             Some(u16::from_be_bytes(pkt.rest_of_hdr()[..2].try_into().unwrap()))
@@ -382,14 +381,14 @@ impl<T: Read> From<&PacketMeta3<T>> for InnerFlowId {
     fn from(meta: &PacketMeta3<T>) -> Self {
         let (proto, addrs) = match meta.inner_l3() {
             Some(L3::Ipv4(pkt)) => (
-                pkt.protocol(),
+                pkt.protocol().0,
                 AddrPair::V4 {
                     src: pkt.source().into(),
                     dst: pkt.destination().into(),
                 },
             ),
             Some(L3::Ipv6(pkt)) => (
-                pkt.next_header(),
+                pkt.next_header().0,
                 AddrPair::V6 {
                     src: pkt.source().into(),
                     dst: pkt.destination().into(),
@@ -440,7 +439,7 @@ pub struct Parsed2<T: Read> {
     // body_modified: bool,
 }
 
-fn csum_minus_hdr<V: Chunk>(ulp: &Ulp<V>) -> Option<Checksum> {
+fn csum_minus_hdr<V: ByteSlice>(ulp: &Ulp<V>) -> Option<Checksum> {
     match ulp {
         Ulp::IcmpV4(icmp) => {
             if icmp.checksum() == 0 {
@@ -487,7 +486,13 @@ fn csum_minus_hdr<V: Chunk>(ulp: &Ulp<V>) -> Option<Checksum> {
 
             csum.sub_bytes(&b[0..16]);
             csum.sub_bytes(&b[18..]);
-            csum.sub_bytes(t.1.as_ref());
+
+            // TODO: bad bound?
+            // csum.sub_bytes(t.1.as_ref());
+            csum.sub_bytes(match &t.1 {
+                ingot_types::Packet::Repr(v) => &v[..],
+                ingot_types::Packet::Raw(v) => &v[..],
+            });
 
             Some(csum)
         }
@@ -535,32 +540,32 @@ impl<T: Read> Parsed2<T>
 
         let pseudo_csum = match meta.0.headers().inner_eth.ethertype() {
             // ARP
-            0x0806 => {
+            Ethertype::ARP => {
                 return Ok(Self { meta, body_csum: None, flow, l4_hash: None });
             }
             // Ipv4
-            0x0800 => {
+            Ethertype::IPV4 => {
                 let h = meta.0.headers();
                 let mut pseudo_hdr_bytes = [0u8; 12];
                 let Some(L3::Ipv4(ref v4)) = h.inner_l3 else { panic!() };
                 pseudo_hdr_bytes[0..4].copy_from_slice(&v4.source().octets());
                 pseudo_hdr_bytes[4..8]
                     .copy_from_slice(&v4.destination().octets());
-                pseudo_hdr_bytes[9] = v4.protocol();
+                pseudo_hdr_bytes[9] = v4.protocol().0;
                 let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
                 pseudo_hdr_bytes[10..].copy_from_slice(&ulp_len.to_be_bytes());
 
                 Checksum::compute(&pseudo_hdr_bytes)
             }
             // Ipv6
-            0x86dd => {
+            Ethertype::IPV6 => {
                 let h = meta.0.headers();
                 let mut pseudo_hdr_bytes = [0u8; 40];
                 let Some(L3::Ipv6(ref v6)) = h.inner_l3 else { panic!() };
                 pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().octets());
                 pseudo_hdr_bytes[16..32]
                     .copy_from_slice(&v6.destination().octets());
-                pseudo_hdr_bytes[39] = v6.next_header();
+                pseudo_hdr_bytes[39] = v6.next_header().0;
                 let ulp_len = v6.payload_len() as u32;
                 pseudo_hdr_bytes[32..36]
                     .copy_from_slice(&ulp_len.to_be_bytes());

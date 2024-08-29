@@ -77,17 +77,17 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::SeqCst;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
-use ingot::EthernetMut;
-use ingot::IcmpV4Mut;
-use ingot::IcmpV4Ref;
-use ingot::IcmpV6Mut;
-use ingot::IcmpV6Ref;
-use ingot::Ipv4Mut;
-use ingot::Ipv6Mut;
-use ingot::TcpFlags;
-use ingot::TcpMut;
-use ingot::UdpMut;
-use ingot::Ulp;
+use ingot::ethernet::EthernetMut;
+use ingot::example_chain::Ulp;
+use ingot::icmp::IcmpV4Mut;
+use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV6Mut;
+use ingot::icmp::IcmpV6Ref;
+use ingot::ip::Ipv4Mut;
+use ingot::ip::Ipv6Mut;
+use ingot::tcp::TcpFlags;
+use ingot::tcp::TcpMut;
+use ingot::udp::UdpMut;
 use ingot_types::Read;
 use kstat_macro::KStatProvider;
 use opte_api::Direction;
@@ -1278,8 +1278,9 @@ impl<N: NetworkImpl> Port<N> {
                     if let HeaderAction::Modify(m, _) = &xf.inner_ip {
                         match m {
                             super::headers::IpMod::Ip4(v4) => {
-                                let Some(ingot::L3::Ipv4(ref mut v4_t)) =
-                                    hm.inner_l3
+                                let Some(ingot::example_chain::L3::Ipv4(
+                                    ref mut v4_t,
+                                )) = hm.inner_l3
                                 else {
                                     return Err(ProcessError::FlowTableFull {
                                         kind: "()",
@@ -1296,8 +1297,9 @@ impl<N: NetworkImpl> Port<N> {
                                 }
                             }
                             super::headers::IpMod::Ip6(v6) => {
-                                let Some(ingot::L3::Ipv6(ref mut v6_t)) =
-                                    hm.inner_l3
+                                let Some(ingot::example_chain::L3::Ipv6(
+                                    ref mut v6_t,
+                                )) = hm.inner_l3
                                 else {
                                     return Err(ProcessError::FlowTableFull {
                                         kind: "()",
@@ -1431,8 +1433,9 @@ impl<N: NetworkImpl> Port<N> {
                     if let HeaderAction::Modify(m, _) = &xf.inner_ip {
                         match m {
                             super::headers::IpMod::Ip4(v4) => {
-                                let Some(ingot::L3::Ipv4(ref mut v4_t)) =
-                                    hm.inner_l3
+                                let Some(ingot::example_chain::L3::Ipv4(
+                                    ref mut v4_t,
+                                )) = hm.inner_l3
                                 else {
                                     return Err(ProcessError::FlowTableFull {
                                         kind: "()",
@@ -1449,8 +1452,9 @@ impl<N: NetworkImpl> Port<N> {
                                 }
                             }
                             super::headers::IpMod::Ip6(v6) => {
-                                let Some(ingot::L3::Ipv6(ref mut v6_t)) =
-                                    hm.inner_l3
+                                let Some(ingot::example_chain::L3::Ipv6(
+                                    ref mut v6_t,
+                                )) = hm.inner_l3
                                 else {
                                     return Err(ProcessError::FlowTableFull {
                                         kind: "()",
