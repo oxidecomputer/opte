@@ -28,7 +28,6 @@ kstat-macro.workspace = true
 opte-api.workspace = true
 
 ingot.workspace = true
-ingot-types.workspace = true
 
 cfg-if.workspace = true
 crc32fast = { workspace = true, optional = true }

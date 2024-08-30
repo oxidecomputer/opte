@@ -882,19 +882,19 @@ dependencies = [
 [[package]]
 name = "ingot"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/ingot.git?rev=053c02f34c5e43d0132d6446caf00f4f8fb13be1#053c02f34c5e43d0132d6446caf00f4f8fb13be1"
+source = "git+https://github.com/oxidecomputer/ingot.git?rev=9582711e0d27b82feeadfbfacb9e2f7da4f86788#9582711e0d27b82feeadfbfacb9e2f7da4f86788"
 dependencies = [
  "bitflags 2.6.0",
  "ingot-macros",
  "ingot-types",
  "macaddr",
- "zerocopy 0.8.0-alpha.16",
+ "zerocopy 0.8.0-alpha.17",
 ]
 
 [[package]]
 name = "ingot-macros"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/ingot.git?rev=053c02f34c5e43d0132d6446caf00f4f8fb13be1#053c02f34c5e43d0132d6446caf00f4f8fb13be1"
+source = "git+https://github.com/oxidecomputer/ingot.git?rev=9582711e0d27b82feeadfbfacb9e2f7da4f86788#9582711e0d27b82feeadfbfacb9e2f7da4f86788"
 dependencies = [
  "darling",
  "itertools 0.13.0",
@@ -908,12 +908,12 @@ dependencies = [
 [[package]]
 name = "ingot-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/ingot.git?rev=053c02f34c5e43d0132d6446caf00f4f8fb13be1#053c02f34c5e43d0132d6446caf00f4f8fb13be1"
+source = "git+https://github.com/oxidecomputer/ingot.git?rev=9582711e0d27b82feeadfbfacb9e2f7da4f86788#9582711e0d27b82feeadfbfacb9e2f7da4f86788"
 dependencies = [
  "heapless",
  "ingot-macros",
  "macaddr",
- "zerocopy 0.8.0-alpha.16",
+ "zerocopy 0.8.0-alpha.17",
 ]
 
 [[package]]
@@ -1261,7 +1261,6 @@ dependencies = [
  "heapless",
  "illumos-sys-hdrs",
  "ingot",
- "ingot-types",
  "itertools 0.13.0",
  "kstat-macro",
  "opte",
@@ -1272,7 +1271,7 @@ dependencies = [
  "tabwriter",
  "usdt",
  "version_check",
- "zerocopy 0.8.0-alpha.16",
+ "zerocopy 0.8.0-alpha.17",
 ]
 
 [[package]]
@@ -1373,7 +1372,7 @@ dependencies = [
  "smoltcp",
  "tabwriter",
  "usdt",
- "zerocopy 0.8.0-alpha.16",
+ "zerocopy 0.8.0-alpha.17",
 ]
 
 [[package]]
@@ -2745,11 +2744,11 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.0-alpha.16"
+version = "0.8.0-alpha.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a5fe242a39bc4f8b8d808be6314c0f0e5e499a902c44e704f3c86a89f7a7c64"
+checksum = "da056c7307048e30bce8d625c6f0633366d31f1086b3c87ed9b1f18fa1081cb1"
 dependencies = [
- "zerocopy-derive 0.8.0-alpha.16",
+ "zerocopy-derive 0.8.0-alpha.17",
 ]
 
 [[package]]
@@ -2765,9 +2764,9 @@ dependencies = [
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.0-alpha.16"
+version = "0.8.0-alpha.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76fc519c421ad48c6c8ba02cee449398d54276c839887f9f3562d1862b43b91c"
+checksum = "9eb22123403bf9c05af423e2ced336a5fc2853df9179b42bea8144d6bf497a57"
 dependencies = [
  "proc-macro2",
  "quote",

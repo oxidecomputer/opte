@@ -318,6 +318,8 @@ impl StaticAction for EncapAction {
             }
         };
 
+        let f_hash = flow_id.crc32();
+
         Ok(AllowOrDeny::Allow(HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
@@ -346,6 +348,13 @@ impl StaticAction for EncapAction {
             // network is always IPv6, perhaps we should just use
             // that? For now I defer the choice and leave this
             // hard-coded.
+            //
+            // (kyle) -- I think we should use both, mainly because
+            // we can expose the extra entropy to devices which can use it.
+            // We may want flow id to be symmetric, however...
+            // It's worth keeping in mind that Chelsio's RSS picks us a ring
+            // based on Toeplitz hash of the 5-tuple, so we need to write into
+            // there regardless. I don't believe it *looks* at v6 flowid.
             outer_encap: HeaderAction::Push(
                 EncapPush::from(GenevePush {
                     vni: phys_target.vni,

@@ -415,7 +415,7 @@ impl<T: Read> From<&PacketMeta3<T>> for InnerFlowId {
     }
 }
 
-fn transform_parse_stage1<S, P: ingot_types::Read, S2: From<S>>(
+fn transform_parse_stage1<S, P: Read, S2: From<S>>(
     p: IngotParsed<S, P>,
 ) -> IngotParsed<S2, P> {
     IngotParsed {
@@ -490,8 +490,8 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &Ulp<V>) -> Option<Checksum> {
             // TODO: bad bound?
             // csum.sub_bytes(t.1.as_ref());
             csum.sub_bytes(match &t.1 {
-                ingot_types::Packet::Repr(v) => &v[..],
-                ingot_types::Packet::Raw(v) => &v[..],
+                ingot::types::Packet::Repr(v) => &v[..],
+                ingot::types::Packet::Raw(v) => &v[..],
             });
 
             Some(csum)

@@ -1567,72 +1567,77 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                         let mut new_blk =
                             MsgBlk::new_with_headroom(2, new_hdrs);
 
-                        new_blk.write(14, |uninit| {
-                            let slice = unsafe {
-                                MaybeUninit::slice_assume_init_mut(uninit)
-                            };
-                            let (mut a, ..) =
-                                ValidEthernet::parse(slice).unwrap();
-                            a.set_source(eth.src.bytes().into());
-                            a.set_destination(eth.dst.bytes().into());
-                            a.set_ethertype(ingot::ethernet::Ethertype(
-                                eth.ether_type.into(),
-                            ));
+                        use opte::ingot::types::EmitUninit as _;
 
-                            // slice
+                        let w_encap_bytes = (pkt_len_old + 16) as u16;
+
+                        new_blk.write(14, |uninit| {
+                            let complete_eth =
+                                opte::ingot::ethernet::Ethernet {
+                                    destination: eth.dst.bytes().into(),
+                                    source: eth.src.bytes().into(),
+                                    ethertype: ingot::ethernet::Ethertype(
+                                        eth.ether_type.into(),
+                                    ),
+                                };
+
+                            complete_eth
+                                .emit_uninit(uninit)
+                                .expect("must be enough room...");
                         });
 
                         // we know we'er only pushing v6.
                         let IpPush::Ip6(v6) = ip else { panic!() };
+                        ip6_src = v6.src;
+                        ip6_dst = v6.dst;
+
                         new_blk.write(40, |uninit| {
-                            let slice = unsafe {
-                                MaybeUninit::slice_assume_init_mut(uninit)
+                            let complete_v6 = opte::ingot::ip::Ipv6 {
+                                version: 6,
+                                dscp: 0,
+                                ecn: ingot::ip::Ecn::NotCapable,
+                                flow_label: 12345678,
+                                payload_len: w_encap_bytes,
+                                next_header: ingot::ip::IpProtocol(
+                                    v6.proto.into(),
+                                ),
+                                hop_limit: 128,
+                                source: v6.src.bytes().into(),
+                                destination: v6.dst.bytes().into(),
+                                v6ext: vec![].into(),
                             };
-                            use ingot::types::NetworkRepr;
-                            slice[6] = IpProtocol::UDP.to_network();
-                            let (mut a, ..) = ValidIpv6::parse(slice).unwrap();
-                            a.set_version(6);
-                            a.set_dscp(0);
-                            a.set_ecn(ingot::ip::Ecn::NotCapable);
-                            a.set_payload_len((pkt_len_old + 16) as u16);
-                            a.set_flow_label(0);
-                            a.set_hop_limit(128);
-                            a.set_next_header(ingot::ip::IpProtocol(
-                                v6.proto.into(),
-                            ));
-                            a.set_source(v6.src.bytes().into());
-                            a.set_destination(v6.dst.bytes().into());
 
-                            ip6_src = v6.src;
-                            ip6_dst = v6.dst;
-
-                            // slice
+                            complete_v6
+                                .emit_uninit(uninit)
+                                .expect("must be enough room...");
                         });
 
+                        let EncapPush::Geneve(gen) = udp else { panic!() };
                         new_blk.write(16, |uninit| {
-                            let slice = unsafe {
-                                MaybeUninit::slice_assume_init_mut(uninit)
+                            let complete_udp = opte::ingot::udp::Udp {
+                                source: gen.entropy,
+                                destination: 6081,
+                                length: w_encap_bytes,
+                                checksum: 0,
+                            };
+                            let complete_geneve = opte::ingot::geneve::Geneve {
+                                version: 0,
+                                opt_len: 0,
+                                flags: opte::ingot::geneve::GeneveFlags::empty(
+                                ),
+                                protocol_type:
+                                    opte::ingot::ethernet::Ethertype::ETHERNET,
+                                vni: gen.vni.into(),
+                                reserved: 0,
+                                options: Vec::new(),
                             };
 
-                            let EncapPush::Geneve(gen) = udp else { panic!() };
-
-                            let (mut a, .., rest) =
-                                ValidUdp::parse(slice).unwrap();
-                            // ideally write out w/o looking at contents, be safer.
-                            rest[0] = 0;
-                            let (mut b, ..) = ValidGeneve::parse(rest).unwrap();
-
-                            a.set_source(gen.entropy);
-                            a.set_destination(6081);
-                            a.set_checksum(0);
-                            a.set_length((pkt_len_old + 16) as u16);
-
-                            b.set_flags(GeneveFlags::empty());
-                            b.set_reserved(0);
-                            b.set_protocol_type(0x6558);
-                            b.set_vni(gen.vni.into());
-
-                            // slice
+                            let len = complete_udp
+                                .emit_uninit(uninit)
+                                .expect("must be enough room...");
+                            complete_geneve
+                                .emit_uninit(&mut uninit[len..])
+                                .expect("must be enough room...");
                         });
 
                         core::mem::swap(&mut new_blk, &mut pkt);
