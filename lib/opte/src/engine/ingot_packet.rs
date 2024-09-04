@@ -151,6 +151,10 @@ impl MsgBlk {
         Self { inner }
     }
 
+    pub fn new_ethernet(len: usize) -> Self {
+        Self::new_with_headroom(2, len)
+    }
+
     pub fn byte_len(&self) -> usize {
         self.iter().map(|el| el.len()).sum()
     }
@@ -446,7 +450,7 @@ impl<T: Read> PktBodyWalker<T> {
             // sourced from an exclusive borrow on something which ownas a [u8]).
             // This allows us to cast to &mut later, but not here!
             let mut to_hold = vec![];
-            if let Some(chunk) = first {
+            if let Some(ref chunk) = first {
                 let as_bytes = chunk.deref();
                 to_hold.push(unsafe { core::mem::transmute(as_bytes) });
             }
@@ -463,7 +467,13 @@ impl<T: Read> PktBodyWalker<T> {
                     core::sync::atomic::Ordering::Relaxed,
                     core::sync::atomic::Ordering::Relaxed,
                 )
-                .expect("apparent concurrent access to body_seg memoiser");
+                .expect("unexpected concurrent access to body_seg memoiser");
+
+            // SAFETY:
+            // Replace contents to get correct drop behaviour on T.
+            // Currently the only ByteSlice impls are &[u8] and friends,
+            // but this may extend to e.g. Vec<u8> in future.
+            self.base.set(Some((first, rest)));
         }
     }
 
@@ -471,9 +481,12 @@ impl<T: Read> PktBodyWalker<T> {
     where
         T::Chunk: ByteSlice,
     {
-        self.reify_body_segs();
-
-        let slice_ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
+        let mut slice_ptr =
+            self.slice.load(core::sync::atomic::Ordering::Relaxed);
+        if slice_ptr.is_null() {
+            self.reify_body_segs();
+            slice_ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
+        }
         assert!(!slice_ptr.is_null());
 
         // let use_ref: &[_] = &b;
@@ -487,9 +500,12 @@ impl<T: Read> PktBodyWalker<T> {
     where
         T::Chunk: ByteSliceMut,
     {
-        self.reify_body_segs();
-
-        let slice_ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
+        let mut slice_ptr =
+            self.slice.load(core::sync::atomic::Ordering::Relaxed);
+        if slice_ptr.is_null() {
+            self.reify_body_segs();
+            slice_ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
+        }
         assert!(!slice_ptr.is_null());
 
         // SAFETY: We have an exclusive reference, and the ByteSliceMut
@@ -833,8 +849,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
         self.state.body_modified = true;
 
         match self.body_segs_mut() {
-            Some(mut body_segs) => Err(BodyTransformError::Todo("huh".into())),
-            // Some(mut body_segs) => xform.run(dir, &mut body_segs),
+            Some(mut body_segs) => xform.run(dir, &mut body_segs),
             None => {
                 self.state.body_modified = false;
                 Err(BodyTransformError::NoPayload)

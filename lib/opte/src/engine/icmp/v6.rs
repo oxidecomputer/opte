@@ -15,7 +15,6 @@ use crate::engine::predicate::Ipv6AddrMatch;
 use alloc::string::String;
 use ingot::ip::Ipv6Ref;
 use ingot::types::Emit;
-use ingot::types::Header;
 pub use opte_api::ip::Icmpv6EchoReply;
 pub use opte_api::ip::Ipv6Addr;
 pub use opte_api::ip::Ipv6Cidr;

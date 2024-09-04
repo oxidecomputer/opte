@@ -78,24 +78,11 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::SeqCst;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
-use ingot::ethernet::EthernetMut;
-use ingot::example_chain::Ulp;
-use ingot::icmp::IcmpV4Mut;
-use ingot::icmp::IcmpV4Ref;
-use ingot::icmp::IcmpV6Mut;
-use ingot::icmp::IcmpV6Ref;
-use ingot::ip::Ipv4Mut;
-use ingot::ip::Ipv6Mut;
-use ingot::tcp::TcpFlags;
-use ingot::tcp::TcpMut;
-use ingot::types::Read;
-use ingot::udp::UdpMut;
 use kstat_macro::KStatProvider;
 use opte_api::Direction;
 use opte_api::MacAddr;
 use opte_api::OpteError;
 use std::process;
-use zerocopy::ByteSliceMut;
 
 pub type Result<T> = result::Result<T, OpteError>;
 
@@ -180,6 +167,12 @@ enum InternalProcessResult {
     Drop {
         reason: DropReason,
     },
+    /// A set of transforms which have not yet been performed on a
+    /// packet.
+    ///
+    /// Slow-path packets are transformed as they traverse tables in the lock,
+    /// whereas fast-path packets have a complete set of transforms to be applied
+    /// without blocking the rest of the table.
     Modified {
         transform: Option<Arc<Transforms>>,
         tcp_state: Option<Arc<KMutex<TcpFlowEntryState>>>,
@@ -1259,7 +1252,7 @@ impl<N: NetworkImpl> Port<N> {
                 }),
             ) => {
                 // TCP, then transform?
-                // (I forget the order)
+                todo!()
             }
             (
                 Direction::In,
@@ -1269,7 +1262,7 @@ impl<N: NetworkImpl> Port<N> {
                 }),
             ) => {
                 // Transform, then TCP?
-                // (I forget the order)
+                todo!()
             }
             _ => {}
         }
@@ -2209,8 +2202,8 @@ impl<N: NetworkImpl> Port<N> {
                 // entry.
                 if *ufid_in == FLOW_ID_DEFAULT {
                     return Ok(InternalProcessResult::Modified {
-                        transform: todo!(),
-                        tcp_state: todo!(),
+                        transform: None,
+                        tcp_state: None,
                     });
                 }
             }
@@ -2333,7 +2326,7 @@ impl<N: NetworkImpl> Port<N> {
         match data.uft_in.add(*ufid_in, hte) {
             Ok(_) => Ok(InternalProcessResult::Modified {
                 transform: None,
-                tcp_state: todo!(),
+                tcp_state: None,
             }),
             Err(OpteError::MaxCapacity(limit)) => {
                 Err(ProcessError::FlowTableFull { kind: "UFT", limit })
@@ -2496,7 +2489,7 @@ impl<N: NetworkImpl> Port<N> {
 
                 return Ok(InternalProcessResult::Modified {
                     transform,
-                    tcp_state: todo!(),
+                    tcp_state: None,
                 });
             }
 

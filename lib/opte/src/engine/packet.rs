@@ -48,7 +48,6 @@ use super::ip6::Ipv6Addr;
 use super::ip6::Ipv6Hdr;
 use super::ip6::Ipv6HdrError;
 use super::ip6::Ipv6Meta;
-use super::NetworkParser;
 use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;
@@ -63,7 +62,6 @@ use serde::Deserialize;
 use serde::Serialize;
 // TODO should probably move these two into this module now.
 use super::rule::HdrTransform;
-use super::rule::HdrTransformError;
 use super::tcp::TcpHdr;
 use super::tcp::TcpHdrError;
 use super::tcp::TcpMeta;

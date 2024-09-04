@@ -36,6 +36,7 @@ use core::ops::RangeInclusive;
 use ingot::ethernet::EthernetRef;
 use ingot::example_chain::L3;
 use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV6Ref;
 use ingot::ip::Ipv4Ref;
 use ingot::ip::Ipv6Ref;
 use opte_api::MacAddr;
@@ -635,7 +636,7 @@ impl DataPredicate {
                     return false;
                 };
 
-                mt.is_match(&Icmpv6MessageType::from(icmp.ty()))
+                mt.is_match(&Icmpv6MessageType::from(icmp6.ty()))
             }
 
             Self::Dhcpv6MsgType(mt) => {

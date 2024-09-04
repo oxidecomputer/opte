@@ -28,7 +28,6 @@ use super::packet::Initialized;
 use super::packet::InnerFlowId;
 use super::packet::Packet;
 use super::packet::PacketMeta;
-use super::packet::PacketRead;
 use super::packet::PacketReader;
 use super::packet::Parsed;
 use super::port::meta::ActionMeta;
