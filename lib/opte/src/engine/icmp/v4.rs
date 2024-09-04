@@ -7,9 +7,12 @@
 //! ICMPv4 headers and processing.
 
 use super::*;
+use crate::engine::ingot_packet::MsgBlk;
+use crate::engine::ingot_packet::PacketHeaders2;
 use crate::engine::ip4::Ipv4Hdr;
 use crate::engine::ip4::Ipv4Meta;
 use crate::engine::predicate::Ipv4AddrMatch;
+use ingot::types::Emit;
 pub use opte_api::ip::IcmpEchoReply;
 use smoltcp::wire;
 use smoltcp::wire::Icmpv4Message;
@@ -59,11 +62,7 @@ impl HairpinAction for IcmpEchoReply {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(
-        &self,
-        meta: &PacketMeta,
-        rdr: &mut PacketReader,
-    ) -> GenPacketResult {
+    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
         let Some(icmp) = meta.inner_icmp() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMP packet. That
@@ -77,8 +76,9 @@ impl HairpinAction for IcmpEchoReply {
 
         // `Icmpv4Packet` requires the ICMPv4 header and not just the message payload.
         // Given we successfully got the ICMPv4 metadata, rewinding here is fine.
-        rdr.seek_back(icmp.hdr_len())?;
-        let body = rdr.copy_remaining();
+        let mut body = icmp.emit_vec();
+        meta.append_remaining(&mut body);
+
         let src_pkt = Icmpv4Packet::new_checked(&body)?;
         let src_icmp = Icmpv4Repr::parse(&src_pkt, &Csum::ignored())?;
 
@@ -134,7 +134,10 @@ impl HairpinAction for IcmpEchoReply {
         eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
         ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
         wtr.write(&tmp).unwrap();
-        Ok(AllowOrDeny::Allow(pkt))
+        Ok(AllowOrDeny::Allow(
+            unsafe { MsgBlk::wrap_mblk(pkt.unwrap_mblk()) }
+                .expect("known valid"),
+        ))
     }
 }
 

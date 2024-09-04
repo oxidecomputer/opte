@@ -35,13 +35,17 @@ use crate::engine::rule::HairpinAction;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
+use ingot::icmp::IcmpV4Packet;
+use ingot::icmp::IcmpV4Ref;
 pub use opte_api::ip::Protocol;
 use serde::Deserialize;
 use serde::Serialize;
 use smoltcp::phy::Checksum;
 use smoltcp::phy::ChecksumCapabilities as Csum;
+use smoltcp::wire::Icmpv4Message;
 pub use v4::Icmpv4Meta;
 pub use v6::Icmpv6Meta;
+use zerocopy::ByteSlice;
 use zerocopy::FromBytes;
 use zerocopy::Immutable;
 use zerocopy::IntoBytes;
@@ -195,7 +199,7 @@ impl<'a> RawHeader<'a> for IcmpHdrRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
@@ -222,7 +226,7 @@ impl<'a> RawHeader<'a> for IcmpEchoRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
@@ -232,7 +236,7 @@ impl<'a> RawHeader<'a> for IcmpEchoRaw {
     #[inline]
     fn new(src: &[u8]) -> Result<Ref<&[u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

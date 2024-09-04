@@ -25,6 +25,8 @@ use crate::engine::dhcpv6::SERVER_PORT;
 use crate::engine::ether::EtherHdr;
 use crate::engine::ether::EtherMeta;
 use crate::engine::ether::EtherType;
+use crate::engine::ingot_packet::MsgBlk;
+use crate::engine::ingot_packet::PacketHeaders2;
 use crate::engine::ip6::Ipv6Hdr;
 use crate::engine::ip6::Ipv6Meta;
 use crate::engine::ip6::UlpCsumOpt;
@@ -47,6 +49,7 @@ use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
+use ingot::ip::Ipv6Ref;
 use opte_api::Ipv6Addr;
 use opte_api::Ipv6Cidr;
 use opte_api::MacAddr;
@@ -590,7 +593,7 @@ fn process_confirm_message<'a>(
 // Process a DHCPv6 message from the a client.
 fn process_client_message<'a>(
     action: &'a Dhcpv6Action,
-    _meta: &'a PacketMeta,
+    _meta: &'a PacketHeaders2,
     client_msg: &'a Message<'a>,
 ) -> Option<Message<'a>> {
     match client_msg.typ {
@@ -612,7 +615,7 @@ fn process_client_message<'a>(
 // the request and the actual DHCPv6 message to send out.
 fn generate_packet<'a>(
     action: &Dhcpv6Action,
-    meta: &PacketMeta,
+    meta: &PacketHeaders2,
     msg: &'a Message<'a>,
 ) -> GenPacketResult {
     let eth = EtherMeta {
@@ -625,7 +628,7 @@ fn generate_packet<'a>(
         src: Ipv6Addr::from_eui64(&action.server_mac),
         // Safety: We're only here if the predicates match, one of which is
         // IPv6.
-        dst: meta.inner_ip6().unwrap().src,
+        dst: meta.inner_ip6().unwrap().source().octets().into(),
         proto: Protocol::UDP,
         next_hdr: IpProtocol::Udp,
         pay_len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
@@ -661,7 +664,9 @@ fn generate_packet<'a>(
     udp.csum = HeaderChecksum::from(csum).bytes();
     udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
     wtr.write(&msg_buf).unwrap();
-    Ok(AllowOrDeny::Allow(pkt))
+    Ok(AllowOrDeny::Allow(
+        unsafe { MsgBlk::wrap_mblk(pkt.unwrap_mblk()) }.expect("known valid"),
+    ))
 }
 
 impl HairpinAction for Dhcpv6Action {
@@ -683,12 +688,8 @@ impl HairpinAction for Dhcpv6Action {
     // Rather than put this logic into DataPredicates, we just parse the packet
     // here and reply accordingly. So the `Dhcpv6Action` is really a full
     // server, to the extent we emulate one.
-    fn gen_packet(
-        &self,
-        meta: &PacketMeta,
-        rdr: &mut PacketReader,
-    ) -> GenPacketResult {
-        let body = rdr.copy_remaining();
+    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
+        let body = meta.copy_remaining();
         if let Some(client_msg) = Message::from_bytes(&body) {
             if let Some(reply) = process_client_message(self, meta, &client_msg)
             {

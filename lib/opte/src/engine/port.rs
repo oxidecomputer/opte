@@ -16,7 +16,10 @@ use super::headers::EncapPush;
 use super::headers::HeaderAction;
 use super::headers::IpPush;
 use super::headers::UlpHeaderAction;
+use super::ingot_packet::MsgBlk;
+use super::ingot_packet::Packet2;
 use super::ingot_packet::Parsed2;
+use super::ingot_packet::ParsedMblk;
 use super::ioctl;
 use super::ioctl::TcpFlowEntryDump;
 use super::ioctl::TcpFlowStateDump;
@@ -31,7 +34,6 @@ use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
 use super::packet::Initialized;
 use super::packet::InnerFlowId;
-use super::packet::OuterMeta;
 use super::packet::Packet;
 use super::packet::PacketMeta;
 use super::packet::Parsed;
@@ -69,7 +71,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
-use core::hash::Hash;
 use core::num::NonZeroU32;
 use core::result;
 use core::str::FromStr;
@@ -93,6 +94,7 @@ use kstat_macro::KStatProvider;
 use opte_api::Direction;
 use opte_api::MacAddr;
 use opte_api::OpteError;
+use std::process;
 use zerocopy::ByteSliceMut;
 
 pub type Result<T> = result::Result<T, OpteError>;
@@ -157,14 +159,53 @@ pub enum ProcessResult {
         reason: DropReason,
     },
     Modified,
+    // TODO: it would be nice if this packet type could be user-specified, but might
+    // be tricky.
     #[leaf]
-    Hairpin(Packet<Initialized>),
+    Hairpin(MsgBlk),
 }
 
 impl From<HdlPktAction> for ProcessResult {
     fn from(hpa: HdlPktAction) -> Self {
         match hpa {
             HdlPktAction::Allow => Self::Modified,
+            HdlPktAction::Deny => Self::Drop { reason: DropReason::HandlePkt },
+            HdlPktAction::Hairpin(pkt) => Self::Hairpin(pkt),
+        }
+    }
+}
+
+enum InternalProcessResult {
+    Bypass,
+    Drop {
+        reason: DropReason,
+    },
+    Modified {
+        transform: Option<Arc<Transforms>>,
+        tcp_state: Option<Arc<KMutex<TcpFlowEntryState>>>,
+    },
+    Hairpin(MsgBlk),
+}
+
+impl From<InternalProcessResult> for ProcessResult {
+    fn from(value: InternalProcessResult) -> Self {
+        match value {
+            InternalProcessResult::Bypass => Self::Bypass,
+            InternalProcessResult::Drop { reason } => Self::Drop { reason },
+            InternalProcessResult::Hairpin(v) => Self::Hairpin(v),
+            InternalProcessResult::Modified { transform, tcp_state } => {
+                Self::Modified
+            }
+        }
+    }
+}
+
+impl From<HdlPktAction> for InternalProcessResult {
+    fn from(hpa: HdlPktAction) -> Self {
+        match hpa {
+            HdlPktAction::Allow => {
+                Self::Modified { transform: None, tcp_state: None }
+            }
             HdlPktAction::Deny => Self::Drop { reason: DropReason::HandlePkt },
             HdlPktAction::Hairpin(pkt) => Self::Hairpin(pkt),
         }
@@ -1168,10 +1209,15 @@ impl<N: NetworkImpl> Port<N> {
     pub fn process(
         &self,
         dir: Direction,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
         mut ameta: ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
         let flow_before = *pkt.flow();
+        // XXX: See remove_rule -- there is a 1-pkt wide TOCTOU here.
+        //      This should probably be ordered:
+        //       - remove                    - process
+        //        * lock port                 * lock port
+        //        * increment epoch(relaxed)  * fetch epoch(relaxed)
         let epoch = self.epoch.load(SeqCst);
         let mut data = self.data.lock();
         check_state!(data.state, [PortState::Running])
@@ -1181,6 +1227,9 @@ impl<N: NetworkImpl> Port<N> {
         let res = match dir {
             Direction::Out => {
                 let res = self.process_out(&mut data, epoch, pkt, &mut ameta);
+                // XXX: Ideally the Kstat should be holding atmoic U64s, then we get
+                // out of the lock sooner. Note that we don't need to *apply* a given
+                // set of transforms in order to know which stats we'll modify.
                 Self::update_stats_out(&mut data.stats.vals, &res);
                 res
             }
@@ -1199,350 +1248,393 @@ impl<N: NetworkImpl> Port<N> {
         };
         drop(data);
 
-        // Emit the updated headers if the packet was modified as part
-        // of processing.
-        if let Ok(ProcessResult::Modified) = res {
-            pkt.emit_new_headers()?;
+        // Now, apply transforms and update TCP state.
+        // UFT misses will have done so already in the port lock.
+        match (dir, &res) {
+            (
+                Direction::Out,
+                Ok(InternalProcessResult::Modified {
+                    transform: Some(transform),
+                    tcp_state,
+                }),
+            ) => {
+                // TCP, then transform?
+                // (I forget the order)
+            }
+            (
+                Direction::In,
+                Ok(InternalProcessResult::Modified {
+                    transform: Some(transform),
+                    tcp_state,
+                }),
+            ) => {
+                // Transform, then TCP?
+                // (I forget the order)
+            }
+            _ => {}
         }
 
-        self.port_process_return_probe(dir, &flow_before, epoch, pkt, &res);
-        res
+        // Emit the updated headers if the packet was modified as part
+        // of processing.
+        // TODO: now contingent on caller to do this if they want it.
+        //       Why? To prevent any copy-out for loopback packets.
+        // if let Ok(ProcessResult::Modified) = res {
+        //     pkt.emit_new_headers()?;
+        // }
+
+        let safe_res = res.map(Into::into);
+        self.port_process_return_probe(
+            dir,
+            &flow_before,
+            epoch,
+            pkt,
+            &safe_res,
+        );
+        safe_res
     }
 
     // hope and pray we find a ULP, then use that?
-    pub fn thin_process<T: Read>(
-        &self,
-        dir: Direction,
-        pkt: &mut Parsed2<T>,
-    ) -> result::Result<ThinProcRes, ProcessError>
-    where
-        T::Chunk: ByteSliceMut,
-    {
-        let flow_before = pkt.flow;
-        // let flow_before = *pkt.flow();
-        let epoch = self.epoch.load(SeqCst);
-        let mut data = self.data.lock();
-        check_state!(data.state, [PortState::Running])
-            .map_err(|_| ProcessError::BadState(data.state))?;
+    // pub fn thin_process<T: Read>(
+    //     &self,
+    //     dir: Direction,
+    //     pkt: &mut Parsed2<T>,
+    // ) -> result::Result<ThinProcRes, ProcessError>
+    // where
+    //     T::Chunk: ByteSliceMut,
+    // {
+    //     let flow_before = pkt.flow();
+    //     // let flow_before = *pkt.flow();
+    //     let _epoch = self.epoch.load(SeqCst);
+    //     let mut data = self.data.lock();
+    //     check_state!(data.state, [PortState::Running])
+    //         .map_err(|_| ProcessError::BadState(data.state))?;
 
-        let mut dirty_csum = false;
+    //     let mut dirty_csum = false;
 
-        // self.port_process_entry_probe(dir, &flow_before, epoch, pskt);
-        // TODO: what stats? lmao
-        match dir {
-            Direction::Out => {
-                // opte::engine::err!("looking up {:?} in outdir...", flow_before);
-                let a = data.uft_out.get(&flow_before);
-                let Some(a) = a else {
-                    // eh. It will get recirc'd for free...
-                    // opte::engine::err!("not found! Releasing!");
-                    return Err(ProcessError::FlowTableFull {
-                        kind: "()",
-                        limit: 0,
-                    });
-                };
-                pkt.l4_hash = Some(a.state().l4_hash);
-                // opte::engine::err!("found!");
-                let xforms = Arc::clone(&a.state().xforms);
-                Self::update_stats_out(
-                    &mut data.stats.vals,
-                    &Ok(ProcessResult::Modified),
-                );
-                drop(data);
+    //     // self.port_process_entry_probe(dir, &flow_before, epoch, pskt);
+    //     // TODO: what stats? lmao
+    //     match dir {
+    //         Direction::Out => {
+    //             // opte::engine::err!("looking up {:?} in outdir...", flow_before);
+    //             let a = data.uft_out.get(&flow_before);
+    //             let Some(a) = a else {
+    //                 // eh. It will get recirc'd for free...
+    //                 // opte::engine::err!("not found! Releasing!");
+    //                 return Err(ProcessError::FlowTableFull {
+    //                     kind: "()",
+    //                     limit: 0,
+    //                 });
+    //             };
+    //             pkt.set_l4_hash(a.state().l4_hash);
+    //             // opte::engine::err!("found!");
+    //             let xforms = Arc::clone(&a.state().xforms);
+    //             Self::update_stats_out(
+    //                 &mut data.stats.vals,
+    //                 &Ok(ProcessResult::Modified),
+    //             );
+    //             drop(data);
 
-                let mut hm = pkt.meta.0.headers_mut();
+    //             let hm = pkt.meta.0.headers_mut();
 
-                let mut new_eth = None;
-                let mut new_ip = None;
-                let mut new_encap = None;
-                // opte::engine::err!("xforms {:?}!", &a.state().xforms.hdr);
-                for xf in &xforms.hdr {
-                    // opte::engine::err!("xf...");
-                    if let HeaderAction::Push(outer_eth, _) = &xf.outer_ether {
-                        new_eth = Some(outer_eth.clone());
-                    }
-                    if let HeaderAction::Push(outer_ip, _) = &xf.outer_ip {
-                        new_ip = Some(outer_ip.clone());
-                    }
-                    if let HeaderAction::Push(outer_ec, _) = &xf.outer_encap {
-                        new_encap = Some(outer_ec.clone());
-                    }
-                    if let HeaderAction::Modify(m, _) = &xf.inner_ether {
-                        if let Some(src) = m.src {
-                            hm.inner_eth.set_source(src.bytes().into());
-                        }
-                        if let Some(dst) = m.dst {
-                            hm.inner_eth.set_destination(dst.bytes().into());
-                        }
-                    }
-                    if let HeaderAction::Modify(m, _) = &xf.inner_ip {
-                        match m {
-                            super::headers::IpMod::Ip4(v4) => {
-                                let Some(ingot::example_chain::L3::Ipv4(
-                                    ref mut v4_t,
-                                )) = hm.inner_l3
-                                else {
-                                    return Err(ProcessError::FlowTableFull {
-                                        kind: "()",
-                                        limit: 0,
-                                    });
-                                };
-                                if let Some(src) = v4.src {
-                                    dirty_csum = true;
-                                    v4_t.set_source(src.into());
-                                }
-                                if let Some(dst) = v4.dst {
-                                    dirty_csum = true;
-                                    v4_t.set_destination(dst.into());
-                                }
-                            }
-                            super::headers::IpMod::Ip6(v6) => {
-                                let Some(ingot::example_chain::L3::Ipv6(
-                                    ref mut v6_t,
-                                )) = hm.inner_l3
-                                else {
-                                    return Err(ProcessError::FlowTableFull {
-                                        kind: "()",
-                                        limit: 0,
-                                    });
-                                };
-                                if let Some(src) = v6.src {
-                                    dirty_csum = true;
-                                    v6_t.set_source(src.into());
-                                }
-                                if let Some(dst) = v6.dst {
-                                    dirty_csum = true;
-                                    v6_t.set_destination(dst.into());
-                                }
-                            }
-                        }
-                    }
-                    if let UlpHeaderAction::Modify(m) = &xf.inner_ulp {
-                        if let Some(src) = &m.generic.src_port {
-                            match hm.inner_ulp {
-                                Some(Ulp::Tcp(ref mut t)) => {
-                                    dirty_csum = true;
-                                    t.set_source(*src)
-                                }
-                                Some(Ulp::Udp(ref mut t)) => {
-                                    dirty_csum = true;
-                                    t.set_source(*src)
-                                }
-                                _ => {}
-                            }
-                        }
-                        if let Some(dst) = &m.generic.dst_port {
-                            match hm.inner_ulp {
-                                Some(Ulp::Tcp(ref mut t)) => {
-                                    dirty_csum = true;
-                                    t.set_destination(*dst)
-                                }
-                                Some(Ulp::Udp(ref mut t)) => {
-                                    dirty_csum = true;
-                                    t.set_destination(*dst)
-                                }
-                                _ => {}
-                            }
-                        }
-                        if let Some(flags) = &m.tcp_flags {
-                            match hm.inner_ulp {
-                                Some(Ulp::Tcp(ref mut t)) => {
-                                    dirty_csum = true;
-                                    t.set_flags(TcpFlags::from_bits_retain(
-                                        *flags,
-                                    ))
-                                }
-                                _ => {}
-                            }
-                        }
-                        if let Some(new_id) = &m.icmp_id {
-                            match hm.inner_ulp {
-                                Some(Ulp::IcmpV4(ref mut pkt))
-                                    if pkt.ty() == 0 || pkt.ty() == 3 =>
-                                {
-                                    dirty_csum = true;
-                                    pkt.rest_of_hdr_mut()[..2]
-                                        .copy_from_slice(&new_id.to_be_bytes())
-                                }
-                                Some(Ulp::IcmpV6(ref mut pkt))
-                                    if pkt.ty() == 128 || pkt.ty() == 129 =>
-                                {
-                                    dirty_csum = true;
-                                    pkt.rest_of_hdr_mut()[..2]
-                                        .copy_from_slice(&new_id.to_be_bytes())
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
+    //             let mut new_eth = None;
+    //             let mut new_ip = None;
+    //             let mut new_encap = None;
+    //             // opte::engine::err!("xforms {:?}!", &a.state().xforms.hdr);
+    //             for xf in &xforms.hdr {
+    //                 // opte::engine::err!("xf...");
+    //                 if let HeaderAction::Push(outer_eth, _) = &xf.outer_ether {
+    //                     new_eth = Some(outer_eth.clone());
+    //                 }
+    //                 if let HeaderAction::Push(outer_ip, _) = &xf.outer_ip {
+    //                     new_ip = Some(outer_ip.clone());
+    //                 }
+    //                 if let HeaderAction::Push(outer_ec, _) = &xf.outer_encap {
+    //                     new_encap = Some(outer_ec.clone());
+    //                 }
+    //                 if let HeaderAction::Modify(m, _) = &xf.inner_ether {
+    //                     if let Some(src) = m.src {
+    //                         hm.inner_eth.set_source(src.bytes().into());
+    //                     }
+    //                     if let Some(dst) = m.dst {
+    //                         hm.inner_eth.set_destination(dst.bytes().into());
+    //                     }
+    //                 }
+    //                 if let HeaderAction::Modify(m, _) = &xf.inner_ip {
+    //                     match m {
+    //                         super::headers::IpMod::Ip4(v4) => {
+    //                             let Some(ingot::example_chain::L3::Ipv4(
+    //                                 ref mut v4_t,
+    //                             )) = hm.inner_l3
+    //                             else {
+    //                                 return Err(ProcessError::FlowTableFull {
+    //                                     kind: "()",
+    //                                     limit: 0,
+    //                                 });
+    //                             };
+    //                             if let Some(src) = v4.src {
+    //                                 dirty_csum = true;
+    //                                 v4_t.set_source(src.into());
+    //                             }
+    //                             if let Some(dst) = v4.dst {
+    //                                 dirty_csum = true;
+    //                                 v4_t.set_destination(dst.into());
+    //                             }
+    //                         }
+    //                         super::headers::IpMod::Ip6(v6) => {
+    //                             let Some(ingot::example_chain::L3::Ipv6(
+    //                                 ref mut v6_t,
+    //                             )) = hm.inner_l3
+    //                             else {
+    //                                 return Err(ProcessError::FlowTableFull {
+    //                                     kind: "()",
+    //                                     limit: 0,
+    //                                 });
+    //                             };
+    //                             if let Some(src) = v6.src {
+    //                                 dirty_csum = true;
+    //                                 v6_t.set_source(src.into());
+    //                             }
+    //                             if let Some(dst) = v6.dst {
+    //                                 dirty_csum = true;
+    //                                 v6_t.set_destination(dst.into());
+    //                             }
+    //                         }
+    //                     }
+    //                 }
+    //                 if let UlpHeaderAction::Modify(m) = &xf.inner_ulp {
+    //                     if let Some(src) = &m.generic.src_port {
+    //                         match hm.inner_ulp {
+    //                             Some(Ulp::Tcp(ref mut t)) => {
+    //                                 dirty_csum = true;
+    //                                 t.set_source(*src)
+    //                             }
+    //                             Some(Ulp::Udp(ref mut t)) => {
+    //                                 dirty_csum = true;
+    //                                 t.set_source(*src)
+    //                             }
+    //                             _ => {}
+    //                         }
+    //                     }
+    //                     if let Some(dst) = &m.generic.dst_port {
+    //                         match hm.inner_ulp {
+    //                             Some(Ulp::Tcp(ref mut t)) => {
+    //                                 dirty_csum = true;
+    //                                 t.set_destination(*dst)
+    //                             }
+    //                             Some(Ulp::Udp(ref mut t)) => {
+    //                                 dirty_csum = true;
+    //                                 t.set_destination(*dst)
+    //                             }
+    //                             _ => {}
+    //                         }
+    //                     }
+    //                     if let Some(flags) = &m.tcp_flags {
+    //                         match hm.inner_ulp {
+    //                             Some(Ulp::Tcp(ref mut t)) => {
+    //                                 dirty_csum = true;
+    //                                 t.set_flags(TcpFlags::from_bits_retain(
+    //                                     *flags,
+    //                                 ))
+    //                             }
+    //                             _ => {}
+    //                         }
+    //                     }
+    //                     if let Some(new_id) = &m.icmp_id {
+    //                         match hm.inner_ulp {
+    //                             Some(Ulp::IcmpV4(ref mut pkt))
+    //                                 if pkt.ty() == 0 || pkt.ty() == 3 =>
+    //                             {
+    //                                 dirty_csum = true;
+    //                                 pkt.rest_of_hdr_mut()[..2]
+    //                                     .copy_from_slice(&new_id.to_be_bytes())
+    //                             }
+    //                             Some(Ulp::IcmpV6(ref mut pkt))
+    //                                 if pkt.ty() == 128 || pkt.ty() == 129 =>
+    //                             {
+    //                                 dirty_csum = true;
+    //                                 pkt.rest_of_hdr_mut()[..2]
+    //                                     .copy_from_slice(&new_id.to_be_bytes())
+    //                             }
+    //                             _ => {}
+    //                         }
+    //                     }
+    //                 }
+    //             }
 
-                match (new_eth, new_ip, new_encap) {
-                    (Some(a), Some(b), Some(c)) => {
-                        Ok(ThinProcRes::PushEncap(a, b, c))
-                    }
-                    (None, None, None) => Ok(ThinProcRes::Na),
-                    _ => Err(ProcessError::FlowTableFull {
-                        kind: "()",
-                        limit: 0,
-                    }),
-                }
-            }
+    //             if dirty_csum {
+    //                 // TODO: something.
+    //             }
 
-            Direction::In => {
-                let a = data.uft_in.get(&flow_before);
-                let Some(a) = a else {
-                    // eh.
-                    return Err(ProcessError::FlowTableFull {
-                        kind: "()",
-                        limit: 0,
-                    });
-                };
-                pkt.l4_hash = Some(a.state().l4_hash);
-                let xforms = Arc::clone(&a.state().xforms);
-                Self::update_stats_in(
-                    &mut data.stats.vals,
-                    &Ok(ProcessResult::Modified),
-                );
-                drop(data);
+    //             match (new_eth, new_ip, new_encap) {
+    //                 (Some(a), Some(b), Some(c)) => {
+    //                     Ok(ThinProcRes::PushEncap(a, b, c))
+    //                 }
+    //                 (None, None, None) => Ok(ThinProcRes::Na),
+    //                 _ => Err(ProcessError::FlowTableFull {
+    //                     kind: "()",
+    //                     limit: 0,
+    //                 }),
+    //             }
+    //         }
 
-                let mut hm = pkt.meta.0.headers_mut();
+    //         Direction::In => {
+    //             let a = data.uft_in.get(&flow_before);
+    //             let Some(a) = a else {
+    //                 // eh.
+    //                 return Err(ProcessError::FlowTableFull {
+    //                     kind: "()",
+    //                     limit: 0,
+    //                 });
+    //             };
+    //             pkt.set_l4_hash(a.state().l4_hash);
+    //             let xforms = Arc::clone(&a.state().xforms);
+    //             Self::update_stats_in(
+    //                 &mut data.stats.vals,
+    //                 &Ok(ProcessResult::Modified),
+    //             );
+    //             drop(data);
 
-                let mut pop_eth = false;
-                let mut pop_ip = false;
-                let mut pop_encap = false;
-                for xf in &xforms.hdr {
-                    // opte::engine::err!("xf...");
-                    if let HeaderAction::Pop = &xf.outer_ether {
-                        pop_eth = true;
-                    }
-                    if let HeaderAction::Pop = &xf.outer_ip {
-                        pop_ip = true;
-                    }
-                    if let HeaderAction::Pop = &xf.outer_encap {
-                        pop_encap = true;
-                    }
-                    if let HeaderAction::Modify(m, _) = &xf.inner_ether {
-                        if let Some(src) = m.src {
-                            hm.inner_eth.set_source(src.bytes().into());
-                        }
-                        if let Some(dst) = m.dst {
-                            hm.inner_eth.set_destination(dst.bytes().into());
-                        }
-                    }
-                    if let HeaderAction::Modify(m, _) = &xf.inner_ip {
-                        match m {
-                            super::headers::IpMod::Ip4(v4) => {
-                                let Some(ingot::example_chain::L3::Ipv4(
-                                    ref mut v4_t,
-                                )) = hm.inner_l3
-                                else {
-                                    return Err(ProcessError::FlowTableFull {
-                                        kind: "()",
-                                        limit: 0,
-                                    });
-                                };
-                                if let Some(src) = v4.src {
-                                    dirty_csum = true;
-                                    v4_t.set_source(src.into());
-                                }
-                                if let Some(dst) = v4.dst {
-                                    dirty_csum = true;
-                                    v4_t.set_destination(dst.into());
-                                }
-                            }
-                            super::headers::IpMod::Ip6(v6) => {
-                                let Some(ingot::example_chain::L3::Ipv6(
-                                    ref mut v6_t,
-                                )) = hm.inner_l3
-                                else {
-                                    return Err(ProcessError::FlowTableFull {
-                                        kind: "()",
-                                        limit: 0,
-                                    });
-                                };
-                                if let Some(src) = v6.src {
-                                    dirty_csum = true;
-                                    v6_t.set_source(src.into());
-                                }
-                                if let Some(dst) = v6.dst {
-                                    dirty_csum = true;
-                                    v6_t.set_destination(dst.into());
-                                }
-                            }
-                        }
-                    }
-                    if let UlpHeaderAction::Modify(m) = &xf.inner_ulp {
-                        if let Some(src) = &m.generic.src_port {
-                            match hm.inner_ulp {
-                                Some(Ulp::Tcp(ref mut t)) => {
-                                    dirty_csum = true;
-                                    t.set_source(*src)
-                                }
-                                Some(Ulp::Udp(ref mut t)) => {
-                                    dirty_csum = true;
-                                    t.set_source(*src)
-                                }
-                                _ => {}
-                            }
-                        }
-                        if let Some(dst) = &m.generic.dst_port {
-                            match hm.inner_ulp {
-                                Some(Ulp::Tcp(ref mut t)) => {
-                                    dirty_csum = true;
-                                    t.set_destination(*dst)
-                                }
-                                Some(Ulp::Udp(ref mut t)) => {
-                                    dirty_csum = true;
-                                    t.set_destination(*dst)
-                                }
-                                _ => {}
-                            }
-                        }
-                        if let Some(flags) = &m.tcp_flags {
-                            match hm.inner_ulp {
-                                Some(Ulp::Tcp(ref mut t)) => {
-                                    dirty_csum = true;
-                                    t.set_flags(TcpFlags::from_bits_retain(
-                                        *flags,
-                                    ))
-                                }
-                                _ => {}
-                            }
-                        }
-                        if let Some(new_id) = &m.icmp_id {
-                            match hm.inner_ulp {
-                                Some(Ulp::IcmpV4(ref mut pkt))
-                                    if pkt.ty() == 0 || pkt.ty() == 3 =>
-                                {
-                                    dirty_csum = true;
-                                    pkt.rest_of_hdr_mut()[..2]
-                                        .copy_from_slice(&new_id.to_be_bytes())
-                                }
-                                Some(Ulp::IcmpV6(ref mut pkt))
-                                    if pkt.ty() == 128 || pkt.ty() == 129 =>
-                                {
-                                    dirty_csum = true;
-                                    pkt.rest_of_hdr_mut()[..2]
-                                        .copy_from_slice(&new_id.to_be_bytes())
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
+    //             let hm = pkt.meta.0.headers_mut();
 
-                match (pop_eth, pop_ip, pop_encap) {
-                    (true, true, true) => Ok(ThinProcRes::PopEncap),
-                    (false, false, false) => Ok(ThinProcRes::Na),
-                    _ => Err(ProcessError::FlowTableFull {
-                        kind: "()",
-                        limit: 0,
-                    }),
-                }
-            }
-        }
-    }
+    //             let mut pop_eth = false;
+    //             let mut pop_ip = false;
+    //             let mut pop_encap = false;
+    //             for xf in &xforms.hdr {
+    //                 // opte::engine::err!("xf...");
+    //                 if let HeaderAction::Pop = &xf.outer_ether {
+    //                     pop_eth = true;
+    //                 }
+    //                 if let HeaderAction::Pop = &xf.outer_ip {
+    //                     pop_ip = true;
+    //                 }
+    //                 if let HeaderAction::Pop = &xf.outer_encap {
+    //                     pop_encap = true;
+    //                 }
+    //                 if let HeaderAction::Modify(m, _) = &xf.inner_ether {
+    //                     if let Some(src) = m.src {
+    //                         hm.inner_eth.set_source(src.bytes().into());
+    //                     }
+    //                     if let Some(dst) = m.dst {
+    //                         hm.inner_eth.set_destination(dst.bytes().into());
+    //                     }
+    //                 }
+    //                 if let HeaderAction::Modify(m, _) = &xf.inner_ip {
+    //                     match m {
+    //                         super::headers::IpMod::Ip4(v4) => {
+    //                             let Some(ingot::example_chain::L3::Ipv4(
+    //                                 ref mut v4_t,
+    //                             )) = hm.inner_l3
+    //                             else {
+    //                                 return Err(ProcessError::FlowTableFull {
+    //                                     kind: "()",
+    //                                     limit: 0,
+    //                                 });
+    //                             };
+    //                             if let Some(src) = v4.src {
+    //                                 dirty_csum = true;
+    //                                 v4_t.set_source(src.into());
+    //                             }
+    //                             if let Some(dst) = v4.dst {
+    //                                 dirty_csum = true;
+    //                                 v4_t.set_destination(dst.into());
+    //                             }
+    //                         }
+    //                         super::headers::IpMod::Ip6(v6) => {
+    //                             let Some(ingot::example_chain::L3::Ipv6(
+    //                                 ref mut v6_t,
+    //                             )) = hm.inner_l3
+    //                             else {
+    //                                 return Err(ProcessError::FlowTableFull {
+    //                                     kind: "()",
+    //                                     limit: 0,
+    //                                 });
+    //                             };
+    //                             if let Some(src) = v6.src {
+    //                                 dirty_csum = true;
+    //                                 v6_t.set_source(src.into());
+    //                             }
+    //                             if let Some(dst) = v6.dst {
+    //                                 dirty_csum = true;
+    //                                 v6_t.set_destination(dst.into());
+    //                             }
+    //                         }
+    //                     }
+    //                 }
+    //                 if let UlpHeaderAction::Modify(m) = &xf.inner_ulp {
+    //                     if let Some(src) = &m.generic.src_port {
+    //                         match hm.inner_ulp {
+    //                             Some(Ulp::Tcp(ref mut t)) => {
+    //                                 dirty_csum = true;
+    //                                 t.set_source(*src)
+    //                             }
+    //                             Some(Ulp::Udp(ref mut t)) => {
+    //                                 dirty_csum = true;
+    //                                 t.set_source(*src)
+    //                             }
+    //                             _ => {}
+    //                         }
+    //                     }
+    //                     if let Some(dst) = &m.generic.dst_port {
+    //                         match hm.inner_ulp {
+    //                             Some(Ulp::Tcp(ref mut t)) => {
+    //                                 dirty_csum = true;
+    //                                 t.set_destination(*dst)
+    //                             }
+    //                             Some(Ulp::Udp(ref mut t)) => {
+    //                                 dirty_csum = true;
+    //                                 t.set_destination(*dst)
+    //                             }
+    //                             _ => {}
+    //                         }
+    //                     }
+    //                     if let Some(flags) = &m.tcp_flags {
+    //                         match hm.inner_ulp {
+    //                             Some(Ulp::Tcp(ref mut t)) => {
+    //                                 dirty_csum = true;
+    //                                 t.set_flags(TcpFlags::from_bits_retain(
+    //                                     *flags,
+    //                                 ))
+    //                             }
+    //                             _ => {}
+    //                         }
+    //                     }
+    //                     if let Some(new_id) = &m.icmp_id {
+    //                         match hm.inner_ulp {
+    //                             Some(Ulp::IcmpV4(ref mut pkt))
+    //                                 if pkt.ty() == 0 || pkt.ty() == 3 =>
+    //                             {
+    //                                 dirty_csum = true;
+    //                                 pkt.rest_of_hdr_mut()[..2]
+    //                                     .copy_from_slice(&new_id.to_be_bytes())
+    //                             }
+    //                             Some(Ulp::IcmpV6(ref mut pkt))
+    //                                 if pkt.ty() == 128 || pkt.ty() == 129 =>
+    //                             {
+    //                                 dirty_csum = true;
+    //                                 pkt.rest_of_hdr_mut()[..2]
+    //                                     .copy_from_slice(&new_id.to_be_bytes())
+    //                             }
+    //                             _ => {}
+    //                         }
+    //                     }
+    //                 }
+    //             }
+
+    //             if dirty_csum {
+    //                 // TODO: do something.
+    //             }
+
+    //             match (pop_eth, pop_ip, pop_encap) {
+    //                 (true, true, true) => Ok(ThinProcRes::PopEncap),
+    //                 (false, false, false) => Ok(ThinProcRes::Na),
+    //                 _ => Err(ProcessError::FlowTableFull {
+    //                     kind: "()",
+    //                     limit: 0,
+    //                 }),
+    //             }
+    //         }
+    //     }
+    // }
 
     /// Remove the rule identified by the `dir`, `layer_name`, `id`
     /// combination, if such a rule exists.
@@ -1582,6 +1674,8 @@ impl<N: NetworkImpl> Port<N> {
                         // future we could eliminate this window by passing a
                         // reference to the epoch to `Layer::remove_rule()`
                         // and let it perform the increment.
+                        // XXX(kyle) Above comment misunderstands TOCTOU --
+                        //           THE TABLE IS LOCKED.
                         self.epoch.fetch_add(1, SeqCst);
                         return Ok(());
                     }
@@ -1737,7 +1831,7 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         dir: Direction,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -1781,7 +1875,7 @@ impl<N: NetworkImpl> Port<N> {
         dir: Direction,
         flow: &InnerFlowId,
         epoch: u64,
-        pkt: &Packet<Parsed>,
+        pkt: &Packet2<ParsedMblk>,
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -1810,7 +1904,7 @@ impl<N: NetworkImpl> Port<N> {
         dir: Direction,
         flow_before: &InnerFlowId,
         epoch: u64,
-        pkt: &Packet<Parsed>,
+        pkt: &Packet2<ParsedMblk>,
         res: &result::Result<ProcessResult, ProcessError>,
     ) {
         let flow_after = pkt.flow();
@@ -2100,10 +2194,10 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         epoch: u64,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
         ufid_in: &InnerFlowId,
         ameta: &mut ActionMeta,
-    ) -> result::Result<ProcessResult, ProcessError> {
+    ) -> result::Result<InternalProcessResult, ProcessError> {
         use Direction::In;
 
         data.stats.vals.in_uft_miss += 1;
@@ -2114,22 +2208,25 @@ impl<N: NetworkImpl> Port<N> {
                 // If there is no flow ID, then do not create a UFT
                 // entry.
                 if *ufid_in == FLOW_ID_DEFAULT {
-                    return Ok(ProcessResult::Modified);
+                    return Ok(InternalProcessResult::Modified {
+                        transform: todo!(),
+                        tcp_state: todo!(),
+                    });
                 }
             }
 
             Ok(LayerResult::Deny { name, reason }) => {
-                return Ok(ProcessResult::Drop {
+                return Ok(InternalProcessResult::Drop {
                     reason: DropReason::Layer { name, reason },
                 })
             }
 
             Ok(LayerResult::Hairpin(hppkt)) => {
-                return Ok(ProcessResult::Hairpin(hppkt))
+                return Ok(InternalProcessResult::Hairpin(hppkt))
             }
 
             Ok(LayerResult::HandlePkt) => {
-                return Ok(ProcessResult::from(self.net.handle_pkt(
+                return Ok(InternalProcessResult::from(self.net.handle_pkt(
                     In,
                     pkt,
                     &data.uft_in,
@@ -2173,63 +2270,76 @@ impl<N: NetworkImpl> Port<N> {
 
         // For inbound traffic the TCP flow table must be
         // checked _after_ processing take place.
-        if pkt.meta().is_inner_tcp() {
-            match self.process_in_tcp(
-                data,
-                pkt.meta(),
-                ufid_in,
-                pkt.len() as u64,
-            ) {
-                Ok(TcpState::Closed) => Ok(ProcessResult::Modified),
+        // TODO: uncork
+        // if pkt.meta().is_inner_tcp() {
+        //     match self.process_in_tcp(
+        //         data,
+        //         pkt.meta(),
+        //         ufid_in,
+        //         pkt.len() as u64,
+        //     ) {
+        //         Ok(TcpState::Closed) => Ok(InternalProcessResult::Modified { transform: todo!(), tcp_state: todo!() }),
 
-                // Found existing TCP flow, or have just created a new one.
-                Ok(_)
-                | Err(ProcessError::TcpFlow(TcpFlowStateError::NewFlow {
-                    ..
-                }))
-                | Err(ProcessError::MissingFlow(_)) => {
-                    // We have a good TCP flow, create a new UFT entry.
-                    match data.uft_in.add(*ufid_in, hte) {
-                        Ok(_) => Ok(ProcessResult::Modified),
-                        Err(OpteError::MaxCapacity(limit)) => {
-                            Err(ProcessError::FlowTableFull {
-                                kind: "UFT",
-                                limit,
-                            })
-                        }
-                        Err(_) => unreachable!(
-                            "Cannot return other errors from FlowTable::add"
-                        ),
-                    }
-                }
+        //         // Found existing TCP flow, or have just created a new one.
+        //         Ok(_)
+        //         | Err(ProcessError::TcpFlow(TcpFlowStateError::NewFlow {
+        //             ..
+        //         }))
+        //         | Err(ProcessError::MissingFlow(_)) => {
+        //             // We have a good TCP flow, create a new UFT entry.
+        //             match data.uft_in.add(*ufid_in, hte) {
+        //                 Ok(_) => Ok(InternalProcessResult::Modified { transform: todo!(), tcp_state: todo!() }),
+        //                 Err(OpteError::MaxCapacity(limit)) => {
+        //                     Err(ProcessError::FlowTableFull {
+        //                         kind: "UFT",
+        //                         limit,
+        //                     })
+        //                 }
+        //                 Err(_) => unreachable!(
+        //                     "Cannot return other errors from FlowTable::add"
+        //                 ),
+        //             }
+        //         }
 
-                // Unlike for existing flows, we don't allow through
-                // unexpected packets here for now -- the `TcpState` FSM
-                // already encodes a shortcut from `Closed` to `Established.
-                Err(ProcessError::TcpFlow(err)) => {
-                    let e = format!("{err}");
-                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
-                    Ok(ProcessResult::Drop { reason: DropReason::TcpErr })
-                }
-                Err(ProcessError::FlowTableFull { kind, limit }) => {
-                    let e = format!("{kind} flow table full ({limit} entries)");
-                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
-                    Ok(ProcessResult::Drop { reason: DropReason::TcpErr })
-                }
-                res => unreachable!(
-                    "Cannot return other errors from \
-                    process_in_tcp, returned: {res:?}"
-                ),
+        //         // Unlike for existing flows, we don't allow through
+        //         // unexpected packets here for now -- the `TcpState` FSM
+        //         // already encodes a shortcut from `Closed` to `Established.
+        //         Err(ProcessError::TcpFlow(err)) => {
+        //             let e = format!("{err}");
+        //             self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+        //             Ok(InternalProcessResult::Drop { reason: DropReason::TcpErr })
+        //         }
+        //         Err(ProcessError::FlowTableFull { kind, limit }) => {
+        //             let e = format!("{kind} flow table full ({limit} entries)");
+        //             self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+        //             Ok(InternalProcessResult::Drop { reason: DropReason::TcpErr })
+        //         }
+        //         res => unreachable!(
+        //             "Cannot return other errors from \
+        //             process_in_tcp, returned: {res:?}"
+        //         ),
+        //     }
+        // } else {
+        //     match data.uft_in.add(*ufid_in, hte) {
+        //         Ok(_) => Ok(InternalProcessResult::Modified{ transform: todo!(), tcp_state: todo!() }),
+        //         Err(OpteError::MaxCapacity(limit)) => {
+        //             Err(ProcessError::FlowTableFull { kind: "UFT", limit })
+        //         }
+        //         Err(_) => unreachable!(
+        //             "Cannot return other errors from FlowTable::add"
+        //         ),
+        //     }
+        // }
+        match data.uft_in.add(*ufid_in, hte) {
+            Ok(_) => Ok(InternalProcessResult::Modified {
+                transform: None,
+                tcp_state: todo!(),
+            }),
+            Err(OpteError::MaxCapacity(limit)) => {
+                Err(ProcessError::FlowTableFull { kind: "UFT", limit })
             }
-        } else {
-            match data.uft_in.add(*ufid_in, hte) {
-                Ok(_) => Ok(ProcessResult::Modified),
-                Err(OpteError::MaxCapacity(limit)) => {
-                    Err(ProcessError::FlowTableFull { kind: "UFT", limit })
-                }
-                Err(_) => unreachable!(
-                    "Cannot return other errors from FlowTable::add"
-                ),
+            Err(_) => {
+                unreachable!("Cannot return other errors from FlowTable::add")
             }
         }
     }
@@ -2269,10 +2379,10 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         epoch: u64,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
         ufid_in: &InnerFlowId,
         ameta: &mut ActionMeta,
-    ) -> result::Result<ProcessResult, ProcessError> {
+    ) -> result::Result<InternalProcessResult, ProcessError> {
         use Direction::In;
 
         // Use the compiled UFT entry if one exists. Otherwise
@@ -2288,98 +2398,106 @@ impl<N: NetworkImpl> Port<N> {
                 data.stats.vals.in_uft_hit += 1;
                 self.uft_hit_probe(In, pkt.flow(), epoch, entry.last_hit());
 
-                for ht in &entry.state().xforms.hdr {
-                    pkt.hdr_transform(ht)?;
-                }
+                let transform = Some(Arc::clone(&entry.state().xforms));
 
-                for bt in &entry.state().xforms.body {
-                    pkt.body_transform(In, &**bt)?;
-                }
+                // for ht in &entry.state().xforms.hdr {
+                //     pkt.hdr_transform(ht)?;
+                // }
+
+                // for bt in &entry.state().xforms.body {
+                //     pkt.body_transform(In, &**bt)?;
+                // }
 
                 // For inbound traffic the TCP flow table must be
                 // checked _after_ processing take place.
-                if pkt.meta().is_inner_tcp() {
-                    match self.process_in_tcp(
-                        data,
-                        pkt.meta(),
-                        ufid_in,
-                        pkt.len() as u64,
-                    ) {
-                        Ok(_) => return Ok(ProcessResult::Modified),
-                        Err(ProcessError::TcpFlow(
-                            e @ TcpFlowStateError::NewFlow { .. },
-                        )) => {
-                            self.tcp_err(
-                                &data.tcp_flows,
-                                In,
-                                e.to_string(),
-                                pkt,
-                            );
-                            // We cant redo processing here like we can in `process_out`:
-                            // we already modified the packet to check TCP state.
-                            // However, we *have* deleted and replaced the TCP FSM and
-                            // removed the UFT. The next packet on this flow (SYN-ACK) will
-                            // create the UFT, reference the existing TCP flow, and increment
-                            // all other layers' stats.
-                            return Ok(ProcessResult::Modified);
-                        }
-                        Err(ProcessError::MissingFlow(flow_id)) => {
-                            let e = format!("Missing TCP flow ID: {flow_id}");
-                            self.tcp_err(
-                                &data.tcp_flows,
-                                Direction::In,
-                                e,
-                                pkt,
-                            );
-                            // If we have a UFT but no TCP flow ID, there is likely a bug
-                            // and we are now out of sync. As above we can't reprocess,
-                            // but we have regenerated the TCP entry to be less disruptive
-                            // than a drop. Remove the UFT entry on the same proviso since the
-                            // next packet to use it will regenerate it.
-                            self.uft_invalidate(
-                                data,
-                                None,
-                                Some(ufid_in),
-                                epoch,
-                            );
-                            return Ok(ProcessResult::Modified);
-                        }
-                        Err(ProcessError::TcpFlow(
-                            e @ TcpFlowStateError::UnexpectedSegment { .. },
-                        )) => {
-                            // Technically unreachable, as we filter these out in `update_tcp_entry`.
-                            // Panicking here would probably be overly fragile, however.
-                            self.tcp_err(
-                                &data.tcp_flows,
-                                Direction::In,
-                                e.to_string(),
-                                pkt,
-                            );
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
-                        }
-                        Err(ProcessError::FlowTableFull { kind, limit }) => {
-                            let e = format!(
-                                "{kind} flow table full ({limit} entries)"
-                            );
-                            self.tcp_err(
-                                &data.tcp_flows,
-                                Direction::In,
-                                e,
-                                pkt,
-                            );
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
-                        }
-                        _ => unreachable!(
-                            "Cannot return other errors from process_in_tcp"
-                        ),
-                    }
-                } else {
-                    return Ok(ProcessResult::Modified);
-                }
+                // TODO: uncork
+                // if pkt.meta().is_inner_tcp() {
+                //     match self.process_in_tcp(
+                //         data,
+                //         pkt.meta(),
+                //         ufid_in,
+                //         pkt.len() as u64,
+                //     ) {
+                //         Ok(_) => return Ok(ProcessResult::Modified),
+                //         Err(ProcessError::TcpFlow(
+                //             e @ TcpFlowStateError::NewFlow { .. },
+                //         )) => {
+                //             self.tcp_err(
+                //                 &data.tcp_flows,
+                //                 In,
+                //                 e.to_string(),
+                //                 pkt,
+                //             );
+                //             // We cant redo processing here like we can in `process_out`:
+                //             // we already modified the packet to check TCP state.
+                //             // However, we *have* deleted and replaced the TCP FSM and
+                //             // removed the UFT. The next packet on this flow (SYN-ACK) will
+                //             // create the UFT, reference the existing TCP flow, and increment
+                //             // all other layers' stats.
+                //             return Ok(ProcessResult::Modified);
+                //         }
+                //         Err(ProcessError::MissingFlow(flow_id)) => {
+                //             let e = format!("Missing TCP flow ID: {flow_id}");
+                //             self.tcp_err(
+                //                 &data.tcp_flows,
+                //                 Direction::In,
+                //                 e,
+                //                 pkt,
+                //             );
+                //             // If we have a UFT but no TCP flow ID, there is likely a bug
+                //             // and we are now out of sync. As above we can't reprocess,
+                //             // but we have regenerated the TCP entry to be less disruptive
+                //             // than a drop. Remove the UFT entry on the same proviso since the
+                //             // next packet to use it will regenerate it.
+                //             self.uft_invalidate(
+                //                 data,
+                //                 None,
+                //                 Some(ufid_in),
+                //                 epoch,
+                //             );
+                //             return Ok(ProcessResult::Modified);
+                //         }
+                //         Err(ProcessError::TcpFlow(
+                //             e @ TcpFlowStateError::UnexpectedSegment { .. },
+                //         )) => {
+                //             // Technically unreachable, as we filter these out in `update_tcp_entry`.
+                //             // Panicking here would probably be overly fragile, however.
+                //             self.tcp_err(
+                //                 &data.tcp_flows,
+                //                 Direction::In,
+                //                 e.to_string(),
+                //                 pkt,
+                //             );
+                //             return Ok(ProcessResult::Drop {
+                //                 reason: DropReason::TcpErr,
+                //             });
+                //         }
+                //         Err(ProcessError::FlowTableFull { kind, limit }) => {
+                //             let e = format!(
+                //                 "{kind} flow table full ({limit} entries)"
+                //             );
+                //             self.tcp_err(
+                //                 &data.tcp_flows,
+                //                 Direction::In,
+                //                 e,
+                //                 pkt,
+                //             );
+                //             return Ok(ProcessResult::Drop {
+                //                 reason: DropReason::TcpErr,
+                //             });
+                //         }
+                //         _ => unreachable!(
+                //             "Cannot return other errors from process_in_tcp"
+                //         ),
+                //     }
+                // } else {
+                //     return Ok(ProcessResult::Modified);
+                // }
+
+                return Ok(InternalProcessResult::Modified {
+                    transform,
+                    tcp_state: todo!(),
+                });
             }
 
             // The entry is from a previous epoch; invalidate its UFT
@@ -2459,9 +2577,9 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         epoch: u64,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
         ameta: &mut ActionMeta,
-    ) -> result::Result<ProcessResult, ProcessError> {
+    ) -> result::Result<InternalProcessResult, ProcessError> {
         use Direction::Out;
 
         data.stats.vals.out_uft_miss += 1;
@@ -2469,54 +2587,55 @@ impl<N: NetworkImpl> Port<N> {
 
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
-        if pkt.meta().is_inner_tcp() {
-            match self.process_out_tcp_new(
-                data,
-                pkt.flow(),
-                pkt.meta(),
-                pkt.len() as u64,
-            ) {
-                Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
-                    tcp_closed = true;
-                    self.uft_tcp_closed(
-                        data,
-                        pkt.flow(),
-                        ufid_inbound.as_ref(),
-                    );
-                }
+        // TODO: uncork
+        // if pkt.meta().is_inner_tcp() {
+        //     match self.process_out_tcp_new(
+        //         data,
+        //         pkt.flow(),
+        //         pkt.meta(),
+        //         pkt.len() as u64,
+        //     ) {
+        //         Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
+        //             tcp_closed = true;
+        //             self.uft_tcp_closed(
+        //                 data,
+        //                 pkt.flow(),
+        //                 ufid_inbound.as_ref(),
+        //             );
+        //         }
 
-                // Continue with processing.
-                Ok(_) => (),
+        //         // Continue with processing.
+        //         Ok(_) => (),
 
-                // Unlike for existing flows, we don't allow through
-                // unexpected packets here for now -- the `TcpState` FSM
-                // already encodes a shortcut from `Closed` to `Established.
-                Err(ProcessError::TcpFlow(err)) => {
-                    let e = format!("{err}");
-                    self.tcp_err(&data.tcp_flows, Out, e, pkt);
-                    return Ok(ProcessResult::Drop {
-                        reason: DropReason::TcpErr,
-                    });
-                }
-                Err(ProcessError::MissingFlow(flow_id)) => {
-                    let e = format!("Missing TCP flow ID: {flow_id}");
-                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
-                    return Ok(ProcessResult::Drop {
-                        reason: DropReason::TcpErr,
-                    });
-                }
-                Err(ProcessError::FlowTableFull { kind, limit }) => {
-                    let e = format!("{kind} flow table full ({limit} entries)");
-                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
-                    return Ok(ProcessResult::Drop {
-                        reason: DropReason::TcpErr,
-                    });
-                }
-                res => unreachable!(
-                    "Cannot return other errors from process_in_tcp_new, returned: {res:?}"
-                ),
-            }
-        }
+        //         // Unlike for existing flows, we don't allow through
+        //         // unexpected packets here for now -- the `TcpState` FSM
+        //         // already encodes a shortcut from `Closed` to `Established.
+        //         Err(ProcessError::TcpFlow(err)) => {
+        //             let e = format!("{err}");
+        //             self.tcp_err(&data.tcp_flows, Out, e, pkt);
+        //             return Ok(InternalProcessResult::Drop {
+        //                 reason: DropReason::TcpErr,
+        //             });
+        //         }
+        //         Err(ProcessError::MissingFlow(flow_id)) => {
+        //             let e = format!("Missing TCP flow ID: {flow_id}");
+        //             self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+        //             return Ok(InternalProcessResult::Drop {
+        //                 reason: DropReason::TcpErr,
+        //             });
+        //         }
+        //         Err(ProcessError::FlowTableFull { kind, limit }) => {
+        //             let e = format!("{kind} flow table full ({limit} entries)");
+        //             self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+        //             return Ok(InternalProcessResult::Drop {
+        //                 reason: DropReason::TcpErr,
+        //             });
+        //         }
+        //         res => unreachable!(
+        //             "Cannot return other errors from process_in_tcp_new, returned: {res:?}"
+        //         ),
+        //     }
+        // }
 
         let mut xforms = Transforms::new();
         let flow_before = *pkt.flow();
@@ -2533,10 +2652,16 @@ impl<N: NetworkImpl> Port<N> {
             Ok(LayerResult::Allow) => {
                 // If there is no Flow ID, then there is no UFT entry.
                 if flow_before == FLOW_ID_DEFAULT || tcp_closed {
-                    return Ok(ProcessResult::Modified);
+                    return Ok(InternalProcessResult::Modified {
+                        transform: None,
+                        tcp_state: None,
+                    });
                 }
                 match data.uft_out.add(flow_before, hte) {
-                    Ok(_) => Ok(ProcessResult::Modified),
+                    Ok(_) => Ok(InternalProcessResult::Modified {
+                        transform: None,
+                        tcp_state: None,
+                    }),
                     Err(OpteError::MaxCapacity(limit)) => {
                         Err(ProcessError::FlowTableFull { kind: "UFT", limit })
                     }
@@ -2547,14 +2672,16 @@ impl<N: NetworkImpl> Port<N> {
             }
 
             Ok(LayerResult::Hairpin(hppkt)) => {
-                Ok(ProcessResult::Hairpin(hppkt))
+                Ok(InternalProcessResult::Hairpin(hppkt))
             }
 
-            Ok(LayerResult::Deny { name, reason }) => Ok(ProcessResult::Drop {
-                reason: DropReason::Layer { name, reason },
-            }),
+            Ok(LayerResult::Deny { name, reason }) => {
+                Ok(InternalProcessResult::Drop {
+                    reason: DropReason::Layer { name, reason },
+                })
+            }
 
-            Ok(LayerResult::HandlePkt) => Ok(ProcessResult::from(
+            Ok(LayerResult::HandlePkt) => Ok(InternalProcessResult::from(
                 self.net.handle_pkt(Out, pkt, &data.uft_in, &data.uft_out)?,
             )),
 
@@ -2566,16 +2693,16 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         epoch: u64,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
         ameta: &mut ActionMeta,
-    ) -> result::Result<ProcessResult, ProcessError> {
+    ) -> result::Result<InternalProcessResult, ProcessError> {
         use Direction::Out;
 
         let uft_out = &mut data.uft_out;
 
         // Use the compiled UFT entry if one exists. Otherwise
         // fallback to layer processing.
-        match uft_out.get_mut(pkt.flow()) {
+        match uft_out.get_mut(&pkt.flow()) {
             Some(entry) if entry.state().epoch == epoch => {
                 entry.hit();
                 data.stats.vals.out_uft_hit += 1;
@@ -2585,72 +2712,74 @@ impl<N: NetworkImpl> Port<N> {
                 let mut reprocess = false;
                 let mut ufid_in = None;
 
+                // TODO: find the best way to unbreak.
+
                 // For outbound traffic the TCP flow table must be
                 // checked _before_ processing take place.
-                if pkt.meta().is_inner_tcp() {
-                    match self.process_out_tcp_existing(
-                        &mut data.tcp_flows,
-                        pkt.flow(),
-                        pkt.meta(),
-                        pkt.len() as u64,
-                    ) {
-                        // Continue with processing.
-                        Ok(TcpMaybeClosed::NewState(_)) => (),
+                // if pkt.meta().is_inner_tcp() {
+                //     match self.process_out_tcp_existing(
+                //         &mut data.tcp_flows,
+                //         pkt.flow(),
+                //         pkt.meta(),
+                //         pkt.len() as u64,
+                //     ) {
+                //         // Continue with processing.
+                //         Ok(TcpMaybeClosed::NewState(_)) => (),
 
-                        Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
-                            invalidated = true;
-                            ufid_in = ufid_inbound;
-                        }
+                //         Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
+                //             invalidated = true;
+                //             ufid_in = ufid_inbound;
+                //         }
 
-                        Err(ProcessError::TcpFlow(
-                            e @ TcpFlowStateError::NewFlow { .. },
-                        )) => {
-                            invalidated = true;
-                            reprocess = true;
-                            self.tcp_err(
-                                &data.tcp_flows,
-                                Out,
-                                e.to_string(),
-                                pkt,
-                            );
-                        }
+                //         Err(ProcessError::TcpFlow(
+                //             e @ TcpFlowStateError::NewFlow { .. },
+                //         )) => {
+                //             invalidated = true;
+                //             reprocess = true;
+                //             self.tcp_err(
+                //                 &data.tcp_flows,
+                //                 Out,
+                //                 e.to_string(),
+                //                 pkt,
+                //             );
+                //         }
 
-                        Err(ProcessError::MissingFlow(flow_id)) => {
-                            // If we have a UFT but no TCP flow ID, there is likely a bug
-                            // and we are now out of sync. A full reprocess will be
-                            // slower for this packet but will sync up the tables again.
-                            invalidated = true;
-                            reprocess = true;
-                            let e = format!("Missing TCP flow ID: {flow_id}");
-                            self.tcp_err(
-                                &data.tcp_flows,
-                                Direction::In,
-                                e,
-                                pkt,
-                            );
-                        }
+                //         Err(ProcessError::MissingFlow(flow_id)) => {
+                //             // If we have a UFT but no TCP flow ID, there is likely a bug
+                //             // and we are now out of sync. A full reprocess will be
+                //             // slower for this packet but will sync up the tables again.
+                //             invalidated = true;
+                //             reprocess = true;
+                //             let e = format!("Missing TCP flow ID: {flow_id}");
+                //             self.tcp_err(
+                //                 &data.tcp_flows,
+                //                 Direction::In,
+                //                 e,
+                //                 pkt,
+                //             );
+                //         }
 
-                        Err(ProcessError::TcpFlow(
-                            e @ TcpFlowStateError::UnexpectedSegment { .. },
-                        )) => {
-                            // Technically unreachable, as we filter these out in `update_tcp_entry`.
-                            // Panicking here would probably be overly fragile, however.
-                            self.tcp_err(
-                                &data.tcp_flows,
-                                Direction::In,
-                                e.to_string(),
-                                pkt,
-                            );
-                            return Ok(ProcessResult::Drop {
-                                reason: DropReason::TcpErr,
-                            });
-                        }
+                //         Err(ProcessError::TcpFlow(
+                //             e @ TcpFlowStateError::UnexpectedSegment { .. },
+                //         )) => {
+                //             // Technically unreachable, as we filter these out in `update_tcp_entry`.
+                //             // Panicking here would probably be overly fragile, however.
+                //             self.tcp_err(
+                //                 &data.tcp_flows,
+                //                 Direction::In,
+                //                 e.to_string(),
+                //                 pkt,
+                //             );
+                //             return Ok(ProcessResult::Drop {
+                //                 reason: DropReason::TcpErr,
+                //             });
+                //         }
 
-                        _ => unreachable!(
-                            "Cannot return other errors from process_in_tcp_new"
-                        ),
-                    }
-                }
+                //         _ => unreachable!(
+                //             "Cannot return other errors from process_in_tcp_new"
+                //         ),
+                //     }
+                // }
 
                 let flow_to_invalidate = invalidated.then(|| *pkt.flow());
 
@@ -2658,14 +2787,7 @@ impl<N: NetworkImpl> Port<N> {
                 // existing transforms if we're going to behave as though we
                 // have a UFT miss.
                 if !reprocess {
-                    for ht in &entry.state().xforms.hdr {
-                        pkt.hdr_transform(ht)?;
-                    }
-
-                    for bt in &entry.state().xforms.body {
-                        pkt.body_transform(Out, &**bt)?;
-                    }
-
+                    let transform = Some(Arc::clone(&entry.state().xforms));
                     // Due to borrowing constraints from order of operations, we have
                     // to remove the UFT entry here rather than in `update_tcp_entry`.
                     // The TCP entry itself is already removed.
@@ -2677,7 +2799,11 @@ impl<N: NetworkImpl> Port<N> {
                         );
                     }
 
-                    return Ok(ProcessResult::Modified);
+                    return Ok(InternalProcessResult::Modified {
+                        transform,
+                        // TODO
+                        tcp_state: None,
+                    });
                 } else if let Some(flow_before) = flow_to_invalidate {
                     self.uft_tcp_closed(data, &flow_before, ufid_in.as_ref());
                 }
@@ -2783,12 +2909,12 @@ impl<N: NetworkImpl> Port<N> {
 
     fn update_stats_in(
         stats: &mut PortStats,
-        res: &result::Result<ProcessResult, ProcessError>,
+        res: &result::Result<InternalProcessResult, ProcessError>,
     ) {
         match res {
-            Ok(ProcessResult::Bypass) => stats.in_bypass += 1,
+            Ok(InternalProcessResult::Bypass) => stats.in_bypass += 1,
 
-            Ok(ProcessResult::Drop { reason }) => {
+            Ok(InternalProcessResult::Drop { reason }) => {
                 stats.in_drop += 1;
 
                 match reason {
@@ -2798,9 +2924,11 @@ impl<N: NetworkImpl> Port<N> {
                 }
             }
 
-            Ok(ProcessResult::Modified) => stats.in_modified += 1,
+            Ok(InternalProcessResult::Modified { .. }) => {
+                stats.in_modified += 1
+            }
 
-            Ok(ProcessResult::Hairpin(_)) => stats.in_hairpin += 1,
+            Ok(InternalProcessResult::Hairpin(_)) => stats.in_hairpin += 1,
 
             // XXX We should split the different error types out into
             // individual stats. However, I'm not sure exactly how I
@@ -2816,12 +2944,12 @@ impl<N: NetworkImpl> Port<N> {
 
     fn update_stats_out(
         stats: &mut PortStats,
-        res: &result::Result<ProcessResult, ProcessError>,
+        res: &result::Result<InternalProcessResult, ProcessError>,
     ) {
         match res {
-            Ok(ProcessResult::Bypass) => stats.out_bypass += 1,
+            Ok(InternalProcessResult::Bypass) => stats.out_bypass += 1,
 
-            Ok(ProcessResult::Drop { reason }) => {
+            Ok(InternalProcessResult::Drop { reason }) => {
                 stats.out_drop += 1;
 
                 match reason {
@@ -2831,9 +2959,11 @@ impl<N: NetworkImpl> Port<N> {
                 }
             }
 
-            Ok(ProcessResult::Modified) => stats.out_modified += 1,
+            Ok(InternalProcessResult::Modified { .. }) => {
+                stats.out_modified += 1
+            }
 
-            Ok(ProcessResult::Hairpin(_)) => stats.out_hairpin += 1,
+            Ok(InternalProcessResult::Hairpin(_)) => stats.out_hairpin += 1,
 
             // XXX We should split the different error types out into
             // individual stats. However, I'm not sure exactly how I

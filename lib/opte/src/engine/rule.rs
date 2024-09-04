@@ -18,6 +18,11 @@ use super::headers::IpMeta;
 use super::headers::IpMod;
 use super::headers::IpPush;
 use super::headers::UlpHeaderAction;
+use super::ingot_packet::MsgBlk;
+use super::ingot_packet::Packet2;
+use super::ingot_packet::PacketHeaders;
+use super::ingot_packet::PacketHeaders2;
+use super::ingot_packet::ParsedMblk;
 use super::packet::BodyTransform;
 use super::packet::Initialized;
 use super::packet::InnerFlowId;
@@ -41,6 +46,7 @@ use core::fmt::Debug;
 use core::fmt::Display;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
+use ingot::types::Read;
 use opte_api::Direction;
 use serde::Deserialize;
 use serde::Serialize;
@@ -153,7 +159,7 @@ pub trait ActionDesc {
     fn gen_bt(
         &self,
         _dir: Direction,
-        _meta: &PacketMeta,
+        _meta: &PacketHeaders2,
         _payload_segs: &[&[u8]],
     ) -> Result<Option<Box<dyn BodyTransform>>, GenBtError> {
         Ok(None)
@@ -251,7 +257,7 @@ impl StaticAction for Identity {
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _pkt_meta: &PacketMeta,
+        _pkt_meta: &PacketHeaders2,
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform::identity(&self.name)))
@@ -372,7 +378,10 @@ impl HdrTransform {
     /// If there is an [`HeaderAction::Modify`], but no metadata is
     /// present for that particular header, then a
     /// [`HdrTransformError::MissingHeader`] is returned.
-    pub fn run(&self, meta: &mut PacketMeta) -> Result<(), HdrTransformError> {
+    pub fn run<T: Read>(
+        &self,
+        meta: &mut PacketHeaders<T>,
+    ) -> Result<(), HdrTransformError> {
         self.outer_ether
             .run(&mut meta.outer.ether)
             .map_err(Self::err_fn("outer ether"))?;
@@ -442,7 +451,7 @@ pub trait StatefulAction: Display {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet<Parsed>,
+        pkt: &Packet2<ParsedMblk>,
         meta: &mut ActionMeta,
     ) -> GenDescResult;
 
@@ -462,7 +471,7 @@ pub trait StaticAction: Display {
         &self,
         dir: Direction,
         flow_id: &InnerFlowId,
-        packet_meta: &PacketMeta,
+        packet_meta: &PacketHeaders2,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult;
 
@@ -515,7 +524,7 @@ impl From<smoltcp::wire::Error> for GenErr {
     }
 }
 
-pub type GenPacketResult = ActionResult<Packet<Initialized>, GenErr>;
+pub type GenPacketResult = ActionResult<MsgBlk, GenErr>;
 
 /// An error while generating a [`BodyTransform`].
 #[derive(Clone, Debug)]
@@ -536,16 +545,12 @@ impl From<smoltcp::wire::Error> for GenBtError {
 /// ARP request.
 pub trait HairpinAction: Display {
     /// Generate a [`Packet`] to hairpin back to the source. The
-    /// `meta` argument holds the packet metadata, inlucding any
+    /// `meta` argument holds the packet metadata, including any
     /// modifications made by previous layers up to this point. The
     /// `rdr` argument provides a [`PacketReader`] against
     /// [`Packet<Parsed>`], with its starting position set to the
     /// beginning of the packet's payload.
-    fn gen_packet(
-        &self,
-        meta: &PacketMeta,
-        rdr: &mut PacketReader,
-    ) -> GenPacketResult;
+    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult;
 
     /// Return the predicates implicit to this action.
     ///
@@ -822,15 +827,11 @@ impl Rule<Ready> {
 }
 
 impl<'a> Rule<Finalized> {
-    pub fn is_match<'b, R>(
+    pub fn is_match<'b>(
         &self,
-        meta: &PacketMeta,
+        meta: &PacketHeaders2,
         action_meta: &ActionMeta,
-        rdr: &'b mut R,
-    ) -> bool
-    where
-        R: PacketRead<'a>,
-    {
+    ) -> bool {
         #[cfg(debug_assertions)]
         {
             if let Some(preds) = &self.state.preds {
@@ -855,7 +856,7 @@ impl<'a> Rule<Finalized> {
                 }
 
                 for p in &preds.data_preds {
-                    if !p.is_match(meta, rdr) {
+                    if !p.is_match(meta) {
                         return false;
                     }
                 }

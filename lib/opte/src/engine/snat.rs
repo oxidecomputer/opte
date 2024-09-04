@@ -11,6 +11,8 @@ use super::headers::IpMod;
 use super::headers::UlpGenericModify;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
+use super::ingot_packet::Packet2;
+use super::ingot_packet::ParsedMblk;
 use super::packet::InnerFlowId;
 use super::packet::Packet;
 use super::packet::Parsed;
@@ -39,6 +41,8 @@ use core::fmt;
 use core::fmt::Display;
 use core::marker::PhantomData;
 use core::ops::RangeInclusive;
+use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV6Ref;
 use opte_api::Direction;
 use opte_api::IpAddr;
 use opte_api::Ipv4Addr;
@@ -240,7 +244,7 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
     fn gen_icmp_desc(
         &self,
         nat: SNatAlloc<T>,
-        pkt: &Packet<Parsed>,
+        pkt: &Packet2<ParsedMblk>,
     ) -> GenDescResult {
         let meta = pkt.meta();
 
@@ -249,8 +253,8 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
                 let icmp = meta
                     .inner_icmp()
                     .ok_or(GenIcmpErr::<Icmpv4Message>::MetaNotFound)?;
-                if icmp.msg_type != Icmpv4Message::EchoRequest.into() {
-                    Err(GenIcmpErr::NotRequest(icmp.msg_type).into())
+                if icmp.ty() != u8::from(Icmpv4Message::EchoRequest) {
+                    Err(GenIcmpErr::NotRequest(icmp.ty()).into())
                 } else {
                     Ok(icmp.echo_id())
                 }
@@ -259,8 +263,8 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
                 let icmp6 = meta
                     .inner_icmp6()
                     .ok_or(GenIcmpErr::<Icmpv6Message>::MetaNotFound)?;
-                if icmp6.msg_type != Icmpv6Message::EchoRequest.into() {
-                    Err(GenIcmpErr::NotRequest(icmp6.msg_type).into())
+                if icmp6.ty() != u8::from(Icmpv6Message::EchoRequest) {
+                    Err(GenIcmpErr::NotRequest(icmp6.ty()).into())
                 } else {
                     Ok(icmp6.echo_id())
                 }
@@ -302,7 +306,7 @@ where
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet<Parsed>,
+        pkt: &Packet2<ParsedMblk>,
         _meta: &mut ActionMeta,
     ) -> GenDescResult {
         let priv_port = flow_id.src_port;

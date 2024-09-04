@@ -1,3 +1,26 @@
+use super::checksum::Checksum as OpteCsum;
+use super::checksum::Checksum;
+use super::checksum::HeaderChecksum;
+use super::headers::EncapPush;
+use super::headers::IpPush;
+use super::icmp::QueryEcho;
+use super::packet::allocb;
+use super::packet::AddrPair;
+use super::packet::BodyTransform;
+use super::packet::BodyTransformError;
+use super::packet::Initialized;
+use super::packet::InnerFlowId;
+use super::packet::Packet;
+use super::packet::PacketState;
+use super::packet::ParseError;
+use super::packet::FLOW_ID_DEFAULT;
+use super::rule::HdrTransform;
+use super::rule::HdrTransformError;
+use super::NetworkParser;
+use alloc::sync::Arc;
+use core::cell::Cell;
+use core::cell::RefCell;
+use core::hash::Hash;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::mem::MaybeUninit;
@@ -5,27 +28,31 @@ use core::ops::Deref;
 use core::ops::DerefMut;
 use core::ptr::NonNull;
 use core::slice;
-
-use illumos_sys_hdrs as ddi;
+use core::sync::atomic::AtomicPtr;
 use illumos_sys_hdrs::mblk_t;
+use illumos_sys_hdrs::uintptr_t;
+use ingot::ethernet::Ethernet;
 use ingot::ethernet::EthernetPacket;
 use ingot::ethernet::EthernetRef;
 use ingot::ethernet::Ethertype;
 use ingot::ethernet::ValidEthernet;
+use ingot::example_chain::L3Repr;
 use ingot::example_chain::Ulp;
 use ingot::example_chain::L3;
 use ingot::example_chain::L4;
+use ingot::geneve::Geneve;
 use ingot::geneve::GenevePacket;
+use ingot::geneve::ValidGeneve;
+use ingot::icmp::IcmpV4Packet;
 use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV6Packet;
 use ingot::icmp::IcmpV6Ref;
-use ingot::ip::IpProtocol;
-use ingot::ip::Ipv4;
+use ingot::ip::Ipv4Packet;
 use ingot::ip::Ipv4Ref;
 use ingot::ip::Ipv6Packet;
 use ingot::ip::Ipv6Ref;
 use ingot::tcp::TcpPacket;
 use ingot::tcp::TcpRef;
-use ingot::types::HasView;
 use ingot::types::Header;
 use ingot::types::HeaderStack;
 use ingot::types::ParseControl;
@@ -33,26 +60,15 @@ use ingot::types::ParseError as IngotParseErr;
 use ingot::types::ParseResult;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
+use ingot::udp::Udp;
 use ingot::udp::UdpPacket;
 use ingot::udp::UdpRef;
+use ingot::udp::ValidUdp;
 use ingot::Parse;
 use opte_api::Direction;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 use zerocopy::IntoBytes;
-use zerocopy::NetworkEndian;
-
-use super::checksum::Checksum as OpteCsum;
-use super::checksum::HeaderChecksum;
-use super::packet::allocb;
-use super::packet::Initialized;
-use super::packet::Packet;
-use illumos_sys_hdrs::uintptr_t;
-
-use super::checksum::Checksum;
-use super::packet::AddrPair;
-use super::packet::InnerFlowId;
-use super::packet::FLOW_ID_DEFAULT;
 
 #[derive(Parse)]
 pub struct OpteIn<Q: ByteSlice> {
@@ -88,10 +104,12 @@ pub struct OpteOut<Q: ByteSlice> {
 }
 
 // --- REWRITE IN PROGRESS ---
+#[derive(Debug)]
 pub struct MsgBlk {
     pub inner: NonNull<mblk_t>,
 }
 
+#[derive(Debug)]
 pub struct MsgBlkNode(mblk_t);
 
 impl Deref for MsgBlkNode {
@@ -127,10 +145,10 @@ impl MsgBlkNode {
 
 impl MsgBlk {
     pub fn new(len: usize) -> Self {
-        let inner = unsafe { NonNull::new(allocb(len)) }
+        let inner = NonNull::new(allocb(len))
             .expect("somehow failed to get an mblk...");
 
-        unsafe { Self { inner } }
+        Self { inner }
     }
 
     pub fn byte_len(&self) -> usize {
@@ -152,7 +170,6 @@ impl MsgBlk {
         out
     }
 
-    // pub fn write(&mut self, n_bytes: usize, f: impl FnOnce(&mut [MaybeUninit<u8>]) -> &mut [u8]) -> usize {
     pub unsafe fn write(
         &mut self,
         n_bytes: usize,
@@ -170,11 +187,8 @@ impl MsgBlk {
                 n_bytes,
             )
         };
-        // let out_slice = f(in_slice);
-        f(in_slice);
 
-        // assert!(out_slice.as_ptr() == mut_out.b_wptr);
-        // assert!(out_slice.len() <= n_bytes);
+        f(in_slice);
 
         mut_out.b_wptr = unsafe { mut_out.b_wptr.add(n_bytes) };
     }
@@ -211,27 +225,46 @@ impl MsgBlk {
         self.inner.as_ptr() as uintptr_t
     }
 
-    pub fn unwrap_mblk(mut self) -> *mut mblk_t {
+    pub fn unwrap_mblk(self) -> *mut mblk_t {
         let ptr_out = self.inner.as_ptr();
         _ = ManuallyDrop::new(self);
         ptr_out
     }
 
     pub unsafe fn wrap_mblk(ptr: *mut mblk_t) -> Option<Self> {
-        let inner = unsafe { NonNull::new(ptr)? };
+        let inner = NonNull::new(ptr)?;
 
         Some(Self { inner })
     }
 }
 
+#[derive(Debug)]
 pub struct MsgBlkIter<'a> {
     curr: Option<NonNull<mblk_t>>,
     marker: PhantomData<&'a MsgBlk>,
 }
 
+#[derive(Debug)]
 pub struct MsgBlkIterMut<'a> {
     curr: Option<NonNull<mblk_t>>,
     marker: PhantomData<&'a mut MsgBlk>,
+}
+
+impl<'a> MsgBlkIterMut<'a> {
+    ///
+    pub fn next_iter(&self) -> MsgBlkIter {
+        let curr = self
+            .curr
+            .and_then(|ptr| NonNull::new(unsafe { ptr.as_ref() }.b_cont));
+        MsgBlkIter { curr, marker: PhantomData }
+    }
+
+    pub fn next_iter_mut(&mut self) -> MsgBlkIterMut {
+        let curr = self
+            .curr
+            .and_then(|ptr| NonNull::new(unsafe { ptr.as_ref() }.b_cont));
+        MsgBlkIterMut { curr, marker: PhantomData }
+    }
 }
 
 impl<'a> Iterator for MsgBlkIter<'a> {
@@ -292,7 +325,7 @@ impl Drop for MsgBlk {
 
 pub struct OpteUnified<Q: ByteSlice> {
     pub outer_eth: Option<EthernetPacket<Q>>,
-    pub outer_v6: Option<Ipv6Packet<Q>>,
+    pub outer_v6: Option<L3<Q>>,
     pub outer_udp: Option<UdpPacket<Q>>,
     pub outer_encap: Option<GenevePacket<Q>>,
 
@@ -301,11 +334,61 @@ pub struct OpteUnified<Q: ByteSlice> {
     pub inner_ulp: Option<Ulp<Q>>,
 }
 
+pub struct OpteUnifiedLengths {
+    pub outer_eth: usize,
+    pub outer_l3: usize,
+    pub outer_encap: usize,
+
+    pub inner_eth: usize,
+    pub inner_l3: usize,
+    pub inner_ulp: usize,
+}
+
+// TODO: Choices (L3, etc.) don't have Debug in all the right places yet.
+impl<Q: ByteSlice> core::fmt::Debug for OpteUnified<Q> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OpteUnified{ .. }")
+    }
+}
+
+// THIS IS THE GOAL.
+
+// pub struct OpteUnified3 {
+//     pub outer_eth: Weird<Ethernet, ValidEthernet<&[u8]>>,
+//     pub outer_v6: Weird<IpPush, L3<&[u8]>>,
+//     pub outer_encap: Weird<EncapPush, EncapMeta<&[u8]>>,
+
+//     pub inner_eth: EthernetPacket<&[u8]>,
+//     pub inner_l3: Option<L3<&[u8]>>,
+//     pub inner_ulp: Option<Ulp<&[u8]>>,
+// }
+
+// IDEA: anything can take an encap push which is Into<..> its meta
+// type. Modification is another trait.
+pub enum Weird<Compact, T> {
+    Absent,
+    LocalForm(Compact),
+    Packeted(T),
+}
+
+impl<X, T> From<Option<T>> for Weird<X, T> {
+    fn from(value: Option<T>) -> Self {
+        match value {
+            Some(val) => Self::Packeted(val),
+            None => Self::Absent,
+        }
+    }
+}
+
+pub enum EncapMeta<B: ByteSlice> {
+    Geneve(UdpPacket<B>, GenevePacket<B>),
+}
+
 impl<Q: ByteSlice> From<OpteIn<Q>> for OpteUnified<Q> {
     fn from(value: OpteIn<Q>) -> Self {
         Self {
             outer_eth: Some(value.outer_eth),
-            outer_v6: Some(value.outer_v6),
+            outer_v6: Some(L3::Ipv6(value.outer_v6)),
             outer_udp: Some(value.outer_udp),
             outer_encap: Some(value.outer_encap),
             inner_eth: value.inner_eth,
@@ -329,17 +412,237 @@ impl<Q: ByteSlice> From<OpteOut<Q>> for OpteUnified<Q> {
     }
 }
 
-pub struct PacketMeta3<T: ingot::types::Read>(
-    pub IngotParsed<OpteUnified<T::Chunk>, T>,
-);
+// This really needs a rethink, but also I just need to get this working...
+struct PktBodyWalker<T: Read> {
+    base: Cell<Option<(Option<T::Chunk>, T)>>,
+    slice: AtomicPtr<Box<[(*mut u8, usize)]>>,
+}
 
-impl<T: Read> PacketMeta3<T> {
+impl<T: Read> Drop for PktBodyWalker<T> {
+    fn drop(&mut self) {
+        let ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
+        if !ptr.is_null() {
+            // Reacquire and drop.
+            unsafe { Box::from_raw(ptr) };
+        }
+    }
+}
+
+impl<T: Read> PktBodyWalker<T> {
+    fn reify_body_segs(&self)
+    where
+        <T as Read>::Chunk: ByteSlice,
+    {
+        if let Some((first, mut rest)) = self.base.take() {
+            // SAFETY: ByteSlice requires as part of its API
+            // that any implementors are stable, so we will always
+            // get the same view via deref. We are then consuming them
+            // into references which live exactly as long as their initial
+            // form.
+            //
+            // The next question is one of ownership.
+            // We know that these chunks are at least &[u8]s, they
+            // *will* be exclusive if ByteSliceMut is met (because they are
+            // sourced from an exclusive borrow on something which ownas a [u8]).
+            // This allows us to cast to &mut later, but not here!
+            let mut to_hold = vec![];
+            if let Some(chunk) = first {
+                let as_bytes = chunk.deref();
+                to_hold.push(unsafe { core::mem::transmute(as_bytes) });
+            }
+            while let Ok(chunk) = rest.next_chunk() {
+                to_hold.push(unsafe { core::mem::transmute(chunk.deref()) });
+            }
+
+            let to_store = Box::into_raw(Box::new(to_hold.into_boxed_slice()));
+
+            self.slice
+                .compare_exchange(
+                    core::ptr::null_mut(),
+                    to_store,
+                    core::sync::atomic::Ordering::Relaxed,
+                    core::sync::atomic::Ordering::Relaxed,
+                )
+                .expect("apparent concurrent access to body_seg memoiser");
+        }
+    }
+
+    fn body_segs(&self) -> &[&[u8]]
+    where
+        T::Chunk: ByteSlice,
+    {
+        self.reify_body_segs();
+
+        let slice_ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
+        assert!(!slice_ptr.is_null());
+
+        // let use_ref: &[_] = &b;
+        unsafe {
+            let a = (&*(*slice_ptr)) as *const _;
+            core::mem::transmute(a)
+        }
+    }
+
+    fn body_segs_mut(&mut self) -> &mut [&mut [u8]]
+    where
+        T::Chunk: ByteSliceMut,
+    {
+        self.reify_body_segs();
+
+        let slice_ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
+        assert!(!slice_ptr.is_null());
+
+        // SAFETY: We have an exclusive reference, and the ByteSliceMut
+        // bound guarantees that this packet view was construced from
+        // an exclusive reference. In turn, we know that we are the only
+        // possible referent.
+        unsafe {
+            let a = (&mut *(*slice_ptr)) as *mut _;
+            core::mem::transmute(a)
+        }
+    }
+}
+
+pub struct PacketHeaders<T: Read> {
+    headers: OpteUnified<T::Chunk>,
+    initial_lens: OpteUnifiedLengths,
+    body: PktBodyWalker<T>,
+}
+
+impl<T: Read> From<IngotParsed<OpteUnified<T::Chunk>, T>> for PacketHeaders<T> {
+    fn from(value: IngotParsed<OpteUnified<T::Chunk>, T>) -> Self {
+        let IngotParsed { stack: HeaderStack(headers), data, last_chunk } =
+            value;
+        let initial_lens = OpteUnifiedLengths {
+            outer_eth: headers.outer_eth.packet_length(),
+            outer_l3: headers.outer_v6.packet_length(),
+            outer_encap: headers.outer_udp.packet_length()
+                + headers.outer_encap.packet_length(),
+            inner_eth: headers.inner_eth.packet_length(),
+            inner_l3: headers.inner_l3.packet_length(),
+            inner_ulp: headers.inner_ulp.packet_length(),
+        };
+        let body = PktBodyWalker {
+            base: Some((last_chunk, data)).into(),
+            slice: Default::default(),
+        };
+        Self { headers, initial_lens, body }
+    }
+}
+
+impl<T: Read> core::fmt::Debug for PacketHeaders<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PacketHeaders(..)")
+    }
+}
+
+pub fn ulp_src_port<B: ByteSlice>(pkt: &Ulp<B>) -> Option<u16> {
+    match pkt {
+        Ulp::Tcp(t) => Some(t.source()),
+        Ulp::Udp(t) => Some(t.source()),
+        _ => None,
+    }
+}
+
+pub fn ulp_dst_port<B: ByteSlice>(pkt: &Ulp<B>) -> Option<u16> {
+    match pkt {
+        Ulp::Tcp(t) => Some(t.destination()),
+        Ulp::Udp(t) => Some(t.destination()),
+        _ => None,
+    }
+}
+
+impl<T: Read> PacketHeaders<T> {
+    pub fn outer_ether(&self) -> Option<&EthernetPacket<T::Chunk>> {
+        self.headers.outer_eth.as_ref()
+    }
+
+    pub fn inner_ether(&self) -> &EthernetPacket<T::Chunk> {
+        &self.headers.inner_eth
+    }
+
     pub fn inner_l3(&self) -> Option<&ingot::example_chain::L3<T::Chunk>> {
-        self.0.headers().inner_l3.as_ref()
+        self.headers.inner_l3.as_ref()
     }
 
     pub fn inner_ulp(&self) -> Option<&ingot::example_chain::Ulp<T::Chunk>> {
-        self.0.headers().inner_ulp.as_ref()
+        self.headers.inner_ulp.as_ref()
+    }
+
+    pub fn inner_ip4(&self) -> Option<&Ipv4Packet<T::Chunk>> {
+        self.inner_l3().and_then(|v| match v {
+            L3::Ipv4(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_ip6(&self) -> Option<&Ipv6Packet<T::Chunk>> {
+        self.inner_l3().and_then(|v| match v {
+            L3::Ipv6(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_icmp(&self) -> Option<&IcmpV4Packet<T::Chunk>> {
+        self.inner_ulp().and_then(|v| match v {
+            Ulp::IcmpV4(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_icmp6(&self) -> Option<&IcmpV6Packet<T::Chunk>> {
+        self.inner_ulp().and_then(|v| match v {
+            Ulp::IcmpV6(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_tcp(&self) -> Option<&TcpPacket<T::Chunk>> {
+        self.inner_ulp().and_then(|v| match v {
+            Ulp::Tcp(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_udp(&self) -> Option<&UdpPacket<T::Chunk>> {
+        self.inner_ulp().and_then(|v| match v {
+            Ulp::Udp(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn is_inner_tcp(&self) -> bool {
+        matches!(self.inner_ulp(), Some(Ulp::Tcp(_)))
+    }
+
+    pub fn body_segs(&self) -> &[&[u8]] {
+        self.body.body_segs()
+    }
+
+    pub fn copy_remaining(&self) -> Vec<u8> {
+        let base = self.body_segs();
+        let len = base.iter().map(|v| v.len()).sum();
+        let mut out = Vec::with_capacity(len);
+        for el in base {
+            out.extend_from_slice(el);
+        }
+        out
+    }
+
+    pub fn append_remaining(&self, buf: &mut Vec<u8>) {
+        let base = self.body_segs();
+        let len = base.iter().map(|v| v.len()).sum();
+        buf.reserve_exact(len);
+        for el in base {
+            buf.extend_from_slice(el);
+        }
+    }
+
+    pub fn body_segs_mut(&mut self) -> &mut [&mut [u8]]
+    where
+        T::Chunk: ByteSliceMut,
+    {
+        self.body.body_segs_mut()
     }
 }
 
@@ -367,18 +670,22 @@ fn pseudo_port<T: ByteSlice>(
     chunk: &ingot::example_chain::Ulp<T>,
 ) -> Option<u16> {
     match chunk {
-        Ulp::IcmpV4(pkt) if pkt.ty() == 0 || pkt.ty() == 3 => {
+        Ulp::IcmpV4(pkt)
+            if pkt.code() == 0 && (pkt.ty() == 0 || pkt.ty() == 8) =>
+        {
             Some(u16::from_be_bytes(pkt.rest_of_hdr()[..2].try_into().unwrap()))
         }
-        Ulp::IcmpV6(pkt) if pkt.ty() == 128 || pkt.ty() == 129 => {
+        Ulp::IcmpV6(pkt)
+            if pkt.code() == 0 && (pkt.ty() == 128 || pkt.ty() == 129) =>
+        {
             Some(u16::from_be_bytes(pkt.rest_of_hdr()[..2].try_into().unwrap()))
         }
         _ => None,
     }
 }
 
-impl<T: Read> From<&PacketMeta3<T>> for InnerFlowId {
-    fn from(meta: &PacketMeta3<T>) -> Self {
+impl<T: Read> From<&PacketHeaders<T>> for InnerFlowId {
+    fn from(meta: &PacketHeaders<T>) -> Self {
         let (proto, addrs) = match meta.inner_l3() {
             Some(L3::Ipv4(pkt)) => (
                 pkt.protocol().0,
@@ -428,16 +735,236 @@ fn transform_parse_stage1<S, P: Read, S2: From<S>>(
 // GOAL: get to an absolute minimum point where we:
 // - parse into an innerflowid
 // - use existing transforms if a ULP entry exists.
-
-pub struct Parsed2<T: Read> {
-    // len: usize,
-    pub meta: PacketMeta3<T>,
-    pub flow: InnerFlowId,
-    pub body_csum: Option<Checksum>,
-    pub l4_hash: Option<u32>,
-    // body: BodyInfo,
-    // body_modified: bool,
+#[derive(Debug)]
+pub struct Packet2<S: PacketState> {
+    state: S,
 }
+
+impl<T: Read + QueryLen> Packet2<Initialized2<T>> {
+    pub fn new(pkt: T) -> Self
+    where
+        Initialized2<T>: PacketState,
+    {
+        let len = pkt.len();
+        Self { state: Initialized2 { len, inner: pkt } }
+    }
+}
+
+impl<T: Read> Packet2<Initialized2<T>> {
+    pub fn parse(
+        self,
+        dir: Direction,
+        net: impl NetworkParser,
+    ) -> Result<Packet2<Parsed2<T>>, ParseError> {
+        let Packet2 { state: Initialized2 { len, inner } } = self;
+        let mut meta = match dir {
+            Direction::Out => net.parse_outbound(inner)?,
+            Direction::In => net.parse_inbound(inner)?,
+        };
+
+        let flow = (&meta).into();
+
+        let body_csum = match (&meta.headers).inner_eth.ethertype() {
+            Ethertype::ARP => Memoised::Known(None),
+            Ethertype::IPV4 | Ethertype::IPV6 => Memoised::Uninit,
+            _ => return Err(IngotParseErr::Unwanted.into()),
+        };
+
+        let state = Parsed2 {
+            meta,
+            flow,
+            body_csum,
+            l4_hash: Memoised::Uninit,
+            body_modified: false,
+            len,
+        };
+
+        Ok(Packet2 { state })
+    }
+}
+
+impl<T: Read> Packet2<Parsed2<T>> {
+    pub fn meta(&self) -> &PacketHeaders<T> {
+        &self.state.meta
+    }
+
+    pub fn meta_mut(&mut self) -> &mut PacketHeaders<T> {
+        &mut self.state.meta
+    }
+
+    pub fn emit_spec(&self) -> EmitSpec {
+        todo!()
+    }
+
+    pub fn len(&self) -> usize {
+        self.state.len
+    }
+
+    pub fn flow(&self) -> &InnerFlowId {
+        &self.state.flow
+    }
+
+    /// Run the [`HdrTransform`] against this packet.
+    #[inline]
+    pub fn hdr_transform(
+        &mut self,
+        xform: &HdrTransform,
+    ) -> Result<(), HdrTransformError> {
+        xform.run(&mut self.state.meta)?;
+        // Given that n_transform layers is 1 or 2, probably won't
+        // save too much by trying to tie to a generation number.
+        // TODO: profile.
+        self.state.flow = InnerFlowId::from(self.meta());
+        Ok(())
+    }
+
+    /// Run the [`BodyTransform`] against this packet.
+    pub fn body_transform(
+        &mut self,
+        dir: Direction,
+        xform: &dyn BodyTransform,
+    ) -> Result<(), BodyTransformError> {
+        // We set the flag now with the assumption that the transform
+        // could fail after modifying part of the body. In the future
+        // we could have something more sophisticated that only sets
+        // the flag if at least one byte was modified, but for now
+        // this does the job as nothing that needs top performance
+        // should make use of body transformations.
+        self.state.body_modified = true;
+
+        match self.body_segs_mut() {
+            Some(mut body_segs) => Err(BodyTransformError::Todo("huh".into())),
+            // Some(mut body_segs) => xform.run(dir, &mut body_segs),
+            None => {
+                self.state.body_modified = false;
+                Err(BodyTransformError::NoPayload)
+            }
+        }
+    }
+
+    #[inline]
+    pub fn body_segs(&self) -> Option<&[&[u8]]> {
+        // TODO. Not needed for today's d'plane.
+        None
+    }
+
+    #[inline]
+    pub fn body_segs_mut(&mut self) -> Option<&mut [&mut [u8]]> {
+        // TODO. Not needed for today's d'plane.
+        None
+    }
+
+    pub fn mblk_addr(&self) -> uintptr_t {
+        // TODO.
+        0
+    }
+
+    pub fn body_csum(&mut self) -> Option<Checksum> {
+        *self.state.body_csum.get(|| {
+            let use_pseudo = if let Some(v) = self.state.meta.inner_ulp() {
+                !matches!(v, Ulp::IcmpV4(_))
+            } else {
+                false
+            };
+
+            // XXX TODO: make these valid even AFTER all packet pushings occur.
+            let pseudo_csum = match (&self.state.meta.headers)
+                .inner_eth
+                .ethertype()
+            {
+                // ARP
+                Ethertype::ARP => {
+                    return None;
+                }
+                // Ipv4
+                Ethertype::IPV4 => {
+                    let h = &self.state.meta.headers;
+                    let mut pseudo_hdr_bytes = [0u8; 12];
+                    let Some(L3::Ipv4(ref v4)) = h.inner_l3 else { panic!() };
+                    pseudo_hdr_bytes[0..4]
+                        .copy_from_slice(&v4.source().octets());
+                    pseudo_hdr_bytes[4..8]
+                        .copy_from_slice(&v4.destination().octets());
+                    pseudo_hdr_bytes[9] = v4.protocol().0;
+                    let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
+                    pseudo_hdr_bytes[10..]
+                        .copy_from_slice(&ulp_len.to_be_bytes());
+
+                    Checksum::compute(&pseudo_hdr_bytes)
+                }
+                // Ipv6
+                Ethertype::IPV6 => {
+                    let h = &self.state.meta.headers;
+                    let mut pseudo_hdr_bytes = [0u8; 40];
+                    let Some(L3::Ipv6(ref v6)) = h.inner_l3 else { panic!() };
+                    pseudo_hdr_bytes[0..16]
+                        .copy_from_slice(&v6.source().octets());
+                    pseudo_hdr_bytes[16..32]
+                        .copy_from_slice(&v6.destination().octets());
+                    pseudo_hdr_bytes[39] = v6.next_header().0;
+                    let ulp_len = v6.payload_len() as u32;
+                    pseudo_hdr_bytes[32..36]
+                        .copy_from_slice(&ulp_len.to_be_bytes());
+                    Checksum::compute(&pseudo_hdr_bytes)
+                }
+                _ => unreachable!(),
+            };
+
+            self.state.meta.inner_ulp().and_then(csum_minus_hdr).map(|mut v| {
+                if use_pseudo {
+                    v -= pseudo_csum;
+                }
+                v
+            })
+        })
+    }
+
+    pub fn l4_hash(&mut self) -> u32 {
+        *self.state.l4_hash.get(|| {
+            let mut hasher = crc32fast::Hasher::new();
+            self.state.flow.hash(&mut hasher);
+            hasher.finalize()
+        })
+    }
+
+    pub fn set_l4_hash(&mut self, hash: u32) {
+        self.state.l4_hash.set(hash);
+    }
+}
+
+/// The type state of a packet that has been initialized and allocated, but
+/// about which nothing else is known besides the length.
+#[derive(Debug)]
+pub struct Initialized2<T: Read> {
+    // Total length of packet, in bytes. This is equal to the sum of
+    // the length of the _initialized_ window in all the segments
+    // (`b_wptr - b_rptr`).
+    len: usize,
+
+    inner: T,
+}
+
+impl<T: Read> PacketState for Initialized2<T> {}
+impl<T: Read> PacketState for Parsed2<T> {}
+
+/// Zerocopy view onto a parsed packet, acompanied by locally
+/// computed state.
+pub struct Parsed2<T: Read> {
+    len: usize,
+    meta: PacketHeaders<T>,
+    flow: InnerFlowId,
+    body_csum: Memoised<Option<Checksum>>,
+    l4_hash: Memoised<u32>,
+    body_modified: bool,
+}
+
+// Needed for now to account for not wanting to redesign ActionDescs
+// to be generic over T (trait object safety rules, etc.).
+pub type PacketMeta3<'a> = Parsed2<MsgBlkIterMut<'a>>;
+pub type PacketHeaders2<'a> = PacketHeaders<MsgBlkIterMut<'a>>;
+
+pub type InitMblk<'a> = Initialized2<MsgBlkIterMut<'a>>;
+pub type ParsedMblk<'a> = Parsed2<MsgBlkIterMut<'a>>;
 
 fn csum_minus_hdr<V: ByteSlice>(ulp: &Ulp<V>) -> Option<Checksum> {
     match ulp {
@@ -517,71 +1044,87 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &Ulp<V>) -> Option<Checksum> {
     }
 }
 
-impl<T: Read> Parsed2<T>
-// where T::Chunk: ByteSliceMut
-{
-    pub fn parse(pkt: T, dir: Direction) -> ParseResult<Self> {
-        let mut meta = PacketMeta3(match dir {
-            Direction::In => {
-                OpteIn::parse_read(pkt).map(transform_parse_stage1)
-            }
-            Direction::Out => {
-                OpteOut::parse_read(pkt).map(transform_parse_stage1)
-            }
-        }?);
+trait QueryLen {
+    fn len(&self) -> usize;
+}
 
-        let flow = (&meta).into();
+impl<'a> QueryLen for MsgBlkIterMut<'a> {
+    fn len(&self) -> usize {
+        let own_blk_len = self
+            .curr
+            .map(|v| unsafe {
+                let v = v.as_ref();
+                v.b_wptr.offset_from(v.b_rptr) as usize
+            })
+            .unwrap_or_default();
 
-        let use_pseudo = if let Some(v) = meta.inner_ulp() {
-            !matches!(v, Ulp::IcmpV4(_))
-        } else {
-            false
-        };
+        own_blk_len + self.next_iter().map(|v| v.len()).sum::<usize>()
+    }
+}
 
-        let pseudo_csum = match meta.0.headers().inner_eth.ethertype() {
-            // ARP
-            Ethertype::ARP => {
-                return Ok(Self { meta, body_csum: None, flow, l4_hash: None });
-            }
-            // Ipv4
-            Ethertype::IPV4 => {
-                let h = meta.0.headers();
-                let mut pseudo_hdr_bytes = [0u8; 12];
-                let Some(L3::Ipv4(ref v4)) = h.inner_l3 else { panic!() };
-                pseudo_hdr_bytes[0..4].copy_from_slice(&v4.source().octets());
-                pseudo_hdr_bytes[4..8]
-                    .copy_from_slice(&v4.destination().octets());
-                pseudo_hdr_bytes[9] = v4.protocol().0;
-                let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
-                pseudo_hdr_bytes[10..].copy_from_slice(&ulp_len.to_be_bytes());
+pub enum Emitter<T> {
+    Repr(Box<T>),
+    Cached(Arc<[u8]>),
+}
 
-                Checksum::compute(&pseudo_hdr_bytes)
-            }
-            // Ipv6
-            Ethertype::IPV6 => {
-                let h = meta.0.headers();
-                let mut pseudo_hdr_bytes = [0u8; 40];
-                let Some(L3::Ipv6(ref v6)) = h.inner_l3 else { panic!() };
-                pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().octets());
-                pseudo_hdr_bytes[16..32]
-                    .copy_from_slice(&v6.destination().octets());
-                pseudo_hdr_bytes[39] = v6.next_header().0;
-                let ulp_len = v6.payload_len() as u32;
-                pseudo_hdr_bytes[32..36]
-                    .copy_from_slice(&ulp_len.to_be_bytes());
-                Checksum::compute(&pseudo_hdr_bytes)
-            }
-            _ => return Err(IngotParseErr::Unwanted),
-        };
+// TODO: don't really care about pushing 'inner' reprs today.
+pub struct OpteEmit {
+    outer_eth: Emitter<Ethernet>,
+    outer_ip: Emitter<L3Repr>,
+    outer_encap: Emitter<(Udp, Geneve)>,
+}
 
-        let body_csum =
-            meta.inner_ulp().and_then(csum_minus_hdr).map(|mut v| {
-                if use_pseudo {
-                    v -= pseudo_csum;
-                }
-                v
-            });
+pub struct EmitSpec {
+    pub rewind: usize,
+    pub push_spec: OpteEmit,
+}
 
-        Ok(Self { meta, flow, body_csum, l4_hash: None })
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Default)]
+pub enum Memoised<T> {
+    #[default]
+    Uninit,
+    Known(T),
+}
+
+impl<T> Memoised<T> {
+    pub fn get(&mut self, or: impl FnOnce() -> T) -> &T {
+        if self.try_get().is_none() {
+            self.set(or());
+        }
+
+        self.try_get().unwrap()
+    }
+
+    pub fn try_get(&self) -> Option<&T> {
+        match self {
+            Memoised::Uninit => None,
+            Memoised::Known(v) => Some(v),
+        }
+    }
+
+    pub fn set(&mut self, val: T) {
+        *self = Self::Known(val);
+    }
+}
+
+impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
+    fn echo_id(&self) -> Option<u16> {
+        match (self.code(), self.ty()) {
+            (0, 0) | (0, 8) => Some(u16::from_be_bytes(
+                self.rest_of_hdr()[..2].try_into().unwrap(),
+            )),
+            _ => None,
+        }
+    }
+}
+
+impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
+    fn echo_id(&self) -> Option<u16> {
+        match (self.code(), self.ty()) {
+            (0, 128) | (0, 129) => Some(u16::from_be_bytes(
+                self.rest_of_hdr()[..2].try_into().unwrap(),
+            )),
+            _ => None,
+        }
     }
 }

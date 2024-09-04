@@ -882,7 +882,7 @@ dependencies = [
 [[package]]
 name = "ingot"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/ingot.git?rev=9582711e0d27b82feeadfbfacb9e2f7da4f86788#9582711e0d27b82feeadfbfacb9e2f7da4f86788"
+source = "git+https://github.com/oxidecomputer/ingot.git?rev=f3f138bcefb4c625597c4add3a509921955d646c#f3f138bcefb4c625597c4add3a509921955d646c"
 dependencies = [
  "bitflags 2.6.0",
  "ingot-macros",
@@ -894,7 +894,7 @@ dependencies = [
 [[package]]
 name = "ingot-macros"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/ingot.git?rev=9582711e0d27b82feeadfbfacb9e2f7da4f86788#9582711e0d27b82feeadfbfacb9e2f7da4f86788"
+source = "git+https://github.com/oxidecomputer/ingot.git?rev=f3f138bcefb4c625597c4add3a509921955d646c#f3f138bcefb4c625597c4add3a509921955d646c"
 dependencies = [
  "darling",
  "itertools 0.13.0",
@@ -908,7 +908,7 @@ dependencies = [
 [[package]]
 name = "ingot-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/ingot.git?rev=9582711e0d27b82feeadfbfacb9e2f7da4f86788#9582711e0d27b82feeadfbfacb9e2f7da4f86788"
+source = "git+https://github.com/oxidecomputer/ingot.git?rev=f3f138bcefb4c625597c4add3a509921955d646c#f3f138bcefb4c625597c4add3a509921955d646c"
 dependencies = [
  "heapless",
  "ingot-macros",

@@ -23,7 +23,6 @@ use opte_api::DYNAMIC_PORT;
 use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::FromBytes;
-use zerocopy::FromZeros;
 use zerocopy::Immutable;
 use zerocopy::IntoBytes;
 use zerocopy::KnownLayout;
@@ -113,7 +112,7 @@ pub struct TcpMeta {
     pub csum: [u8; 2],
     // Fow now we keep options as raw bytes, allowing up to 40 bytes
     // of options.
-    pub options_bytes: Option<[u8; TcpHdr::MAX_OPTION_SIZE]>,
+    pub options_bytes: Option<[u8; 40]>,
     pub options_len: usize,
 }
 
@@ -428,7 +427,7 @@ impl<'a> RawHeader<'a> for TcpHdrRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

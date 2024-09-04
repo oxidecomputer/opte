@@ -53,9 +53,6 @@ use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;
 use core::hash::Hash;
-use core::marker::PhantomData;
-use core::ops::Deref;
-use core::ops::DerefMut;
 use core::ptr;
 use core::ptr::NonNull;
 use core::result;
@@ -79,8 +76,6 @@ use alloc::vec::Vec;
 use illumos_sys_hdrs::dblk_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
-use zerocopy::ByteOrder;
-use zerocopy::NetworkEndian;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -1038,181 +1033,181 @@ impl Packet<Initialized> {
         Ok((HdrInfo { meta, offset }, geneve))
     }
 
-    pub fn parse(
-        mut self,
-        dir: Direction,
-        net: impl NetworkParser,
-    ) -> Result<Packet<Parsed>, ParseError> {
-        let mut rdr = self.get_rdr_mut();
+    // pub fn parse(
+    //     mut self,
+    //     dir: Direction,
+    //     net: impl NetworkParser,
+    // ) -> Result<Packet<Parsed>, ParseError> {
+    //     let mut rdr = self.get_rdr_mut();
 
-        let mut info = match dir {
-            Direction::Out => net.parse_outbound(&mut rdr)?,
-            Direction::In => net.parse_inbound(&mut rdr)?,
-        };
+    //     let mut info = match dir {
+    //         Direction::Out => net.parse_outbound(&mut rdr)?,
+    //         Direction::In => net.parse_inbound(&mut rdr)?,
+    //     };
 
-        let (pkt_offset, mut seg_index, mut seg_offset, end_of_seg) =
-            rdr.finish();
+    //     let (pkt_offset, mut seg_index, mut seg_offset, end_of_seg) =
+    //         rdr.finish();
 
-        // If we finished on the end of a segment, and there are more
-        // segments to go, then bump the segment index and reset the
-        // segment offset to properly indicate the start of the body.
-        if end_of_seg && ((seg_index + 1) < self.segs.len()) {
-            seg_index += 1;
-            seg_offset = 0;
-        }
+    //     // If we finished on the end of a segment, and there are more
+    //     // segments to go, then bump the segment index and reset the
+    //     // segment offset to properly indicate the start of the body.
+    //     if end_of_seg && ((seg_index + 1) < self.segs.len()) {
+    //         seg_index += 1;
+    //         seg_offset = 0;
+    //     }
 
-        assert!(
-            self.state.len >= pkt_offset,
-            "{} >= {}",
-            self.state.len,
-            pkt_offset,
-        );
+    //     assert!(
+    //         self.state.len >= pkt_offset,
+    //         "{} >= {}",
+    //         self.state.len,
+    //         pkt_offset,
+    //     );
 
-        let ulp_hdr_len = info.meta.inner.ulp.map(|u| u.hdr_len()).unwrap_or(0);
-        let body_len = match info.meta.inner.ip {
-            // If we have IP and ULP metadata, we can use those to compute
-            // the payload length.
-            // If there's no ULP, just return the L3 payload length.
-            Some(IpMeta::Ip4(ip4)) => {
-                // Total length here refers to the n_bytes in this packet,
-                // so we won't get bogus overly long values in case of
-                // fragmentation.
-                let expected = ip4.hdr_len() + ulp_hdr_len;
+    //     let ulp_hdr_len = info.meta.inner.ulp.map(|u| u.hdr_len()).unwrap_or(0);
+    //     let body_len = match info.meta.inner.ip {
+    //         // If we have IP and ULP metadata, we can use those to compute
+    //         // the payload length.
+    //         // If there's no ULP, just return the L3 payload length.
+    //         Some(IpMeta::Ip4(ip4)) => {
+    //             // Total length here refers to the n_bytes in this packet,
+    //             // so we won't get bogus overly long values in case of
+    //             // fragmentation.
+    //             let expected = ip4.hdr_len() + ulp_hdr_len;
 
-                usize::from(ip4.total_len).checked_sub(expected).ok_or(
-                    ParseError::BadInnerIpLen {
-                        expected,
-                        actual: usize::from(ip4.total_len),
-                    },
-                )?
-            }
-            Some(IpMeta::Ip6(ip6)) => usize::from(ip6.pay_len)
-                .checked_sub(ulp_hdr_len)
-                .ok_or(ParseError::BadInnerIpLen {
-                    expected: ulp_hdr_len,
-                    actual: usize::from(ip6.pay_len),
-                })?,
+    //             usize::from(ip4.total_len).checked_sub(expected).ok_or(
+    //                 ParseError::BadInnerIpLen {
+    //                     expected,
+    //                     actual: usize::from(ip4.total_len),
+    //                 },
+    //             )?
+    //         }
+    //         Some(IpMeta::Ip6(ip6)) => usize::from(ip6.pay_len)
+    //             .checked_sub(ulp_hdr_len)
+    //             .ok_or(ParseError::BadInnerIpLen {
+    //                 expected: ulp_hdr_len,
+    //                 actual: usize::from(ip6.pay_len),
+    //             })?,
 
-            // If there's no IP metadata, we fallback to considering any
-            // remaining bytes in the packet buffer to be the body.
-            None => self.state.len - pkt_offset,
-        };
-        let mut body =
-            BodyInfo { pkt_offset, seg_index, seg_offset, len: body_len };
-        let flow = InnerFlowId::from(&info.meta);
+    //         // If there's no IP metadata, we fallback to considering any
+    //         // remaining bytes in the packet buffer to be the body.
+    //         None => self.state.len - pkt_offset,
+    //     };
+    //     let mut body =
+    //         BodyInfo { pkt_offset, seg_index, seg_offset, len: body_len };
+    //     let flow = InnerFlowId::from(&info.meta);
 
-        // Packet processing logic requires all headers to be in the leading
-        // segment. Detect if this is not the case and squash segments
-        // containing headers into one segment. This value represents the
-        // inclusive upper bound of the squash.
-        let squash_to = match (body.seg_index, body.seg_offset) {
-            // The body is in the first segment meaning all headers are also in
-            // the first segment. No squashing needed.
-            (0, _) => 0,
+    //     // Packet processing logic requires all headers to be in the leading
+    //     // segment. Detect if this is not the case and squash segments
+    //     // containing headers into one segment. This value represents the
+    //     // inclusive upper bound of the squash.
+    //     let squash_to = match (body.seg_index, body.seg_offset) {
+    //         // The body is in the first segment meaning all headers are also in
+    //         // the first segment. No squashing needed.
+    //         (0, _) => 0,
 
-            // The body starts at a zero offset in segment n. This means we need
-            // to squash all segments prior to n.
-            (n, 0) => n - 1,
+    //         // The body starts at a zero offset in segment n. This means we need
+    //         // to squash all segments prior to n.
+    //         (n, 0) => n - 1,
 
-            // The body starts at a non-zero offset in segment n. This means we
-            // need to squash all segments up to and including n.
-            (n, _) => n,
-        };
+    //         // The body starts at a non-zero offset in segment n. This means we
+    //         // need to squash all segments up to and including n.
+    //         (n, _) => n,
+    //     };
 
-        // If the squash bound is zero, there is nothing left to do here, just
-        // return.
-        if squash_to == 0 {
-            return Ok(Packet {
-                avail: self.avail,
-                // The new packet is taking ownership of the segments.
-                segs: core::mem::take(&mut self.segs),
-                state: Parsed {
-                    len: self.state.len,
-                    hdr_offsets: info.offsets,
-                    meta: info.meta,
-                    flow,
-                    body_csum: info.body_csum,
-                    body,
-                    body_modified: false,
-                },
-            });
-        }
+    //     // If the squash bound is zero, there is nothing left to do here, just
+    //     // return.
+    //     if squash_to == 0 {
+    //         return Ok(Packet {
+    //             avail: self.avail,
+    //             // The new packet is taking ownership of the segments.
+    //             segs: core::mem::take(&mut self.segs),
+    //             state: Parsed {
+    //                 len: self.state.len,
+    //                 hdr_offsets: info.offsets,
+    //                 meta: info.meta,
+    //                 flow,
+    //                 body_csum: info.body_csum,
+    //                 body,
+    //                 body_modified: false,
+    //             },
+    //         });
+    //     }
 
-        // Calculate the body offset within the new squashed segment
-        if body.seg_offset != 0 {
-            for s in &self.segs[..squash_to] {
-                body.seg_offset += s.len;
-            }
-        }
-        body.seg_index -= squash_to;
+    //     // Calculate the body offset within the new squashed segment
+    //     if body.seg_offset != 0 {
+    //         for s in &self.segs[..squash_to] {
+    //             body.seg_offset += s.len;
+    //         }
+    //     }
+    //     body.seg_index -= squash_to;
 
-        // Determine how big the message block for the squashed segment needs to
-        // be.
-        let mut new_seg_size = 0;
-        for s in &self.segs[..squash_to + 1] {
-            new_seg_size += s.len;
-        }
+    //     // Determine how big the message block for the squashed segment needs to
+    //     // be.
+    //     let mut new_seg_size = 0;
+    //     for s in &self.segs[..squash_to + 1] {
+    //         new_seg_size += s.len;
+    //     }
 
-        let extra_space = info.extra_hdr_space.unwrap_or(0);
-        let mp = allocb(new_seg_size + extra_space);
-        unsafe {
-            (*mp).b_wptr = (*mp).b_wptr.add(extra_space);
-            (*mp).b_rptr = (*mp).b_rptr.add(extra_space);
-            for s in &self.segs[..squash_to + 1] {
-                core::ptr::copy_nonoverlapping(
-                    (*s.mp).b_rptr,
-                    (*mp).b_wptr,
-                    s.len,
-                );
-                (*mp).b_wptr = (*mp).b_wptr.add(s.len);
-            }
-        }
+    //     let extra_space = info.extra_hdr_space.unwrap_or(0);
+    //     let mp = allocb(new_seg_size + extra_space);
+    //     unsafe {
+    //         (*mp).b_wptr = (*mp).b_wptr.add(extra_space);
+    //         (*mp).b_rptr = (*mp).b_rptr.add(extra_space);
+    //         for s in &self.segs[..squash_to + 1] {
+    //             core::ptr::copy_nonoverlapping(
+    //                 (*s.mp).b_rptr,
+    //                 (*mp).b_wptr,
+    //                 s.len,
+    //             );
+    //             (*mp).b_wptr = (*mp).b_wptr.add(s.len);
+    //         }
+    //     }
 
-        // Construct a new segment vector, tacking on any remaining segments
-        // after the header segments.
-        let orig_segs = core::mem::take(&mut self.segs);
-        let mut segs = vec![unsafe { PacketSeg::wrap_mblk(mp) }];
-        if squash_to + 1 < orig_segs.len() {
-            segs[0].link(&orig_segs[squash_to + 1]);
-            segs.extend_from_slice(&orig_segs[squash_to + 1..]);
-        }
-        #[cfg(any(feature = "std", test))]
-        for s in &orig_segs[..squash_to + 1] {
-            mock_freeb(s.mp);
-        }
+    //     // Construct a new segment vector, tacking on any remaining segments
+    //     // after the header segments.
+    //     let orig_segs = core::mem::take(&mut self.segs);
+    //     let mut segs = vec![unsafe { PacketSeg::wrap_mblk(mp) }];
+    //     if squash_to + 1 < orig_segs.len() {
+    //         segs[0].link(&orig_segs[squash_to + 1]);
+    //         segs.extend_from_slice(&orig_segs[squash_to + 1..]);
+    //     }
+    //     #[cfg(any(feature = "std", test))]
+    //     for s in &orig_segs[..squash_to + 1] {
+    //         mock_freeb(s.mp);
+    //     }
 
-        let mut off = 0;
-        for header_offsets in [
-            info.offsets.outer.ether.as_mut(),
-            info.offsets.outer.ip.as_mut(),
-            info.offsets.outer.encap.as_mut(),
-            Some(&mut info.offsets.inner.ether),
-            info.offsets.inner.ip.as_mut(),
-            info.offsets.inner.ulp.as_mut(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            header_offsets.pkt_pos = off;
-            header_offsets.seg_idx = 0;
-            header_offsets.seg_pos = off;
-            off += header_offsets.hdr_len;
-        }
+    //     let mut off = 0;
+    //     for header_offsets in [
+    //         info.offsets.outer.ether.as_mut(),
+    //         info.offsets.outer.ip.as_mut(),
+    //         info.offsets.outer.encap.as_mut(),
+    //         Some(&mut info.offsets.inner.ether),
+    //         info.offsets.inner.ip.as_mut(),
+    //         info.offsets.inner.ulp.as_mut(),
+    //     ]
+    //     .into_iter()
+    //     .flatten()
+    //     {
+    //         header_offsets.pkt_pos = off;
+    //         header_offsets.seg_idx = 0;
+    //         header_offsets.seg_pos = off;
+    //         off += header_offsets.hdr_len;
+    //     }
 
-        Ok(Packet {
-            avail: self.avail,
-            segs,
-            state: Parsed {
-                len: self.state.len,
-                hdr_offsets: info.offsets,
-                meta: info.meta,
-                flow,
-                body_csum: info.body_csum,
-                body,
-                body_modified: false,
-            },
-        })
-    }
+    //     Ok(Packet {
+    //         avail: self.avail,
+    //         segs,
+    //         state: Parsed {
+    //             len: self.state.len,
+    //             hdr_offsets: info.offsets,
+    //             meta: info.meta,
+    //             flow,
+    //             body_csum: info.body_csum,
+    //             body,
+    //             body_modified: false,
+    //         },
+    //     })
+    // }
 
     pub fn seg0_wtr(&mut self) -> PacketSegWriter {
         self.segs[0].get_writer()
@@ -1304,22 +1299,22 @@ impl Packet<Initialized> {
         Ok(Packet { avail, segs, state: Initialized { len } })
     }
 
-    /// A combination of [`Self::wrap_mblk()`] followed by [`Self::parse()`].
-    ///
-    /// This is a bit more convenient than dealing with the possible
-    /// error from each separately.
-    ///
-    /// # Safety
-    ///
-    /// See [`Self::wrap_mblk()`].
-    pub unsafe fn wrap_mblk_and_parse<N: NetworkParser>(
-        mp: *mut mblk_t,
-        dir: Direction,
-        net: N,
-    ) -> Result<Packet<Parsed>, PacketError> {
-        let pkt = Self::wrap_mblk(mp)?;
-        pkt.parse(dir, net).map_err(PacketError::from)
-    }
+    // /// A combination of [`Self::wrap_mblk()`] followed by [`Self::parse()`].
+    // ///
+    // /// This is a bit more convenient than dealing with the possible
+    // /// error from each separately.
+    // ///
+    // /// # Safety
+    // ///
+    // /// See [`Self::wrap_mblk()`].
+    // pub unsafe fn wrap_mblk_and_parse<N: NetworkParser>(
+    //     mp: *mut mblk_t,
+    //     dir: Direction,
+    //     net: N,
+    // ) -> Result<Packet<Parsed>, PacketError> {
+    //     let pkt = Self::wrap_mblk(mp)?;
+    //     pkt.parse(dir, net).map_err(PacketError::from)
+    // }
 }
 
 /// A packet body transformation.
@@ -1658,15 +1653,15 @@ impl Packet<Parsed> {
     }
 
     /// Run the [`HdrTransform`] against this packet.
-    #[inline]
-    pub fn hdr_transform(
-        &mut self,
-        xform: &HdrTransform,
-    ) -> Result<(), HdrTransformError> {
-        xform.run(&mut self.state.meta)?;
-        self.state.flow = InnerFlowId::from(&self.state.meta);
-        Ok(())
-    }
+    // #[inline]
+    // pub fn hdr_transform(
+    //     &mut self,
+    //     xform: &HdrTransform,
+    // ) -> Result<(), HdrTransformError> {
+    //     xform.run(&mut self.state.meta)?;
+    //     self.state.flow = InnerFlowId::from(&self.state.meta);
+    //     Ok(())
+    // }
 
     /// Return a reference to the flow ID of this packet.
     #[inline]
@@ -2552,6 +2547,9 @@ impl From<WrapError> for PacketError {
 #[derive(Clone, Debug, Eq, PartialEq, DError)]
 #[derror(leaf_data = ParseError::data)]
 pub enum ParseError {
+    // TODO: make this far richer...
+    #[leaf]
+    IngotError(ingot::types::ParseError),
     BadHeader(HeaderReadErr),
     BadInnerIpLen {
         expected: usize,
@@ -2608,6 +2606,12 @@ impl ParseError {
 
             _ => {}
         }
+    }
+}
+
+impl From<ingot::types::ParseError> for ParseError {
+    fn from(value: ingot::types::ParseError) -> Self {
+        Self::IngotError(value)
     }
 }
 

@@ -7,10 +7,15 @@
 //! ICMPv6 headers and processing.
 
 use super::*;
+use crate::engine::ingot_packet::MsgBlk;
+use crate::engine::ingot_packet::PacketHeaders2;
 use crate::engine::ip6::Ipv6Hdr;
 use crate::engine::ip6::Ipv6Meta;
 use crate::engine::predicate::Ipv6AddrMatch;
 use alloc::string::String;
+use ingot::ip::Ipv6Ref;
+use ingot::types::Emit;
+use ingot::types::Header;
 pub use opte_api::ip::Icmpv6EchoReply;
 pub use opte_api::ip::Ipv6Addr;
 pub use opte_api::ip::Ipv6Cidr;
@@ -114,11 +119,8 @@ impl HairpinAction for Icmpv6EchoReply {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(
-        &self,
-        meta: &PacketMeta,
-        rdr: &mut PacketReader,
-    ) -> GenPacketResult {
+    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
+        // TODO: fold reader access into PacketHeaders2
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That
@@ -134,8 +136,8 @@ impl HairpinAction for Icmpv6EchoReply {
         // resulting ICMPv6 echo reply.
         let (src_ip, dst_ip) = if let Some(metadata) = meta.inner_ip6() {
             (
-                IpAddress::Ipv6(Ipv6Address(metadata.src.bytes())),
-                IpAddress::Ipv6(Ipv6Address(metadata.dst.bytes())),
+                IpAddress::Ipv6(Ipv6Address(metadata.source().octets())),
+                IpAddress::Ipv6(Ipv6Address(metadata.destination().octets())),
             )
         } else {
             // We got the ICMPv6 metadata above but no IPv6 somehow?
@@ -147,9 +149,9 @@ impl HairpinAction for Icmpv6EchoReply {
 
         // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
         // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
-        rdr.seek_back(icmp6.hdr_len())?;
+        let mut body = icmp6.emit_vec();
+        meta.append_remaining(&mut body);
 
-        let body = rdr.copy_remaining();
         let src_pkt = Icmpv6Packet::new_checked(&body)?;
         let src_icmp =
             Icmpv6Repr::parse(&src_ip, &dst_ip, &src_pkt, &Csum::ignored())?;
@@ -208,7 +210,10 @@ impl HairpinAction for Icmpv6EchoReply {
         eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
         ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
         wtr.write(&ulp_body).unwrap();
-        Ok(AllowOrDeny::Allow(pkt))
+        Ok(AllowOrDeny::Allow(
+            unsafe { MsgBlk::wrap_mblk(pkt.unwrap_mblk()) }
+                .expect("known valid"),
+        ))
     }
 }
 
@@ -250,11 +255,8 @@ impl HairpinAction for RouterAdvertisement {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(
-        &self,
-        meta: &PacketMeta,
-        rdr: &mut PacketReader,
-    ) -> GenPacketResult {
+    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
+        // TODO: fold reader access into PacketHeaders2
         use smoltcp::time::Duration;
         use smoltcp::wire::NdiscRouterFlags;
 
@@ -278,14 +280,14 @@ impl HairpinAction for RouterAdvertisement {
                 meta
             )));
         };
-        let src_ip = IpAddress::Ipv6(Ipv6Address(ip6.src.bytes()));
-        let dst_ip = IpAddress::Ipv6(Ipv6Address(ip6.dst.bytes()));
+        let src_ip = IpAddress::Ipv6(Ipv6Address(ip6.source().octets()));
+        let dst_ip = IpAddress::Ipv6(Ipv6Address(ip6.destination().octets()));
 
         // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
         // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
-        rdr.seek_back(icmp6.hdr_len())?;
+        let mut body = icmp6.emit_vec();
+        meta.append_remaining(&mut body);
 
-        let body = rdr.copy_remaining();
         let src_pkt = Icmpv6Packet::new_checked(&body)?;
         let mut csum = Csum::ignored();
         csum.icmpv6 = Checksum::Rx;
@@ -322,10 +324,10 @@ impl HairpinAction for RouterAdvertisement {
         // and thus _not_ UNSPEC, so we skip that checking here.
         //
         // This leaves the hop limit as the only validity check.
-        if ip6.hop_limit != 255 {
+        if ip6.hop_limit() != 255 {
             return Err(GenErr::Unexpected(format!(
                 "Received RS with invalid hop limit ({}).",
-                ip6.hop_limit
+                ip6.hop_limit()
             )));
         }
 
@@ -372,7 +374,7 @@ impl HairpinAction for RouterAdvertisement {
         let ip = Ipv6Meta {
             src: *self.ip(),
             // Safety: We match on this being Some(_) above, so unwrap is safe.
-            dst: meta.inner_ip6().unwrap().src,
+            dst: meta.inner_ip6().unwrap().source().octets().into(),
             proto: Protocol::ICMPv6,
             next_hdr: IpProtocol::Icmpv6,
             // RFC 4861 6.1.2 requires that the hop limit be 255 in an RA.
@@ -397,7 +399,10 @@ impl HairpinAction for RouterAdvertisement {
         eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
         ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
         wtr.write(&ulp_body).unwrap();
-        Ok(AllowOrDeny::Allow(pkt))
+        Ok(AllowOrDeny::Allow(
+            unsafe { MsgBlk::wrap_mblk(pkt.unwrap_mblk()) }
+                .expect("known valid"),
+        ))
     }
 }
 
@@ -407,15 +412,15 @@ impl HairpinAction for RouterAdvertisement {
 // the validations performed.
 //
 // Return the target address from the Neighbor Solicitation.
-fn validate_neighbor_solicitation(
-    rdr: &mut PacketReader,
-    metadata: &Ipv6Meta,
+fn validate_neighbor_solicitation<B: ByteSlice>(
+    rdr: &[u8],
+    metadata: &impl Ipv6Ref<B>,
 ) -> Result<Ipv6Addr, GenErr> {
     // First, check if this is in fact a NS message.
-    let smol_src = IpAddress::Ipv6(metadata.src.into());
-    let smol_dst = IpAddress::Ipv6(metadata.dst.into());
-    let body = rdr.copy_remaining();
-    let src_pkt = Icmpv6Packet::new_checked(&body)?;
+    let smol_src = IpAddress::Ipv6(Ipv6Address(metadata.source().octets()));
+    let smol_dst =
+        IpAddress::Ipv6(Ipv6Address(metadata.destination().octets()));
+    let src_pkt = Icmpv6Packet::new_checked(rdr)?;
     let mut csum = Csum::ignored();
     csum.icmpv6 = Checksum::Rx;
     let icmp = Icmpv6Repr::parse(&smol_src, &smol_dst, &src_pkt, &csum)?;
@@ -426,10 +431,10 @@ fn validate_neighbor_solicitation(
     //  - ICMP length is at least 24 octets
     //  - Any included options have a non-zero length
 
-    if metadata.hop_limit != 255 {
+    if metadata.hop_limit() != 255 {
         return Err(GenErr::Unexpected(format!(
             "Received NS with invalid hop limit ({}).",
-            metadata.hop_limit
+            metadata.hop_limit()
         )));
     }
 
@@ -460,8 +465,8 @@ fn validate_neighbor_solicitation(
 
     // NS is only allowed from the unspecified address if the destination is a
     // solicited-node multicast address.
-    if metadata.src == Ipv6Addr::ANY_ADDR
-        && !metadata.dst.is_solicited_node_multicast()
+    if metadata.source().is_unspecified()
+        && !Ipv6Addr::from(metadata.destination()).is_solicited_node_multicast()
     {
         return Err(GenErr::Unexpected(String::from(
             "Received NS from UNSPEC, but destination is not the solicited \
@@ -470,7 +475,7 @@ fn validate_neighbor_solicitation(
     }
 
     // Cannot contain Link-Layer address option if from the unspecified address.
-    if metadata.src == Ipv6Addr::ANY_ADDR && has_ll_option {
+    if metadata.source().is_unspecified() && has_ll_option {
         return Err(GenErr::Unexpected(String::from(
             "Received NS from UNSPEC, but message contains the \
             Link-Layer Address option.",
@@ -586,11 +591,7 @@ impl HairpinAction for NeighborAdvertisement {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(
-        &self,
-        meta: &PacketMeta,
-        rdr: &mut PacketReader,
-    ) -> GenPacketResult {
+    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That
@@ -613,23 +614,22 @@ impl HairpinAction for NeighborAdvertisement {
 
         // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
         // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
-        rdr.seek_back(icmp6.hdr_len())?;
+        let mut body = icmp6.emit_vec();
+        meta.append_remaining(&mut body);
 
         // Validate the ICMPv6 packet is actually a Neighbor Solicitation, and
         // that its data is appopriate.
-        let target_addr = validate_neighbor_solicitation(rdr, metadata)?;
+        let target_addr = validate_neighbor_solicitation(&body, metadata)?;
 
         // Build the NA, whose data depends on how we received the packet. If
         // `None` is returned, the NS is not destined for us, and will be
         // dropped.
-        let (dst_ip, advert) = match construct_neighbor_advert(
-            self,
-            &target_addr,
-            &metadata.src,
-        ) {
-            Some(data) => data,
-            None => return Ok(AllowOrDeny::Deny),
-        };
+        let conv_ip = metadata.source().into();
+        let (dst_ip, advert) =
+            match construct_neighbor_advert(self, &target_addr, &conv_ip) {
+                Some(data) => data,
+                None => return Ok(AllowOrDeny::Deny),
+            };
 
         // Construct the actual bytes of the reply packet, and return it.
         let reply = Icmpv6Repr::Ndisc(advert);
@@ -676,6 +676,9 @@ impl HairpinAction for NeighborAdvertisement {
         eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
         ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
         wtr.write(&ulp_body).unwrap();
-        Ok(AllowOrDeny::Allow(pkt))
+        Ok(AllowOrDeny::Allow(
+            unsafe { MsgBlk::wrap_mblk(pkt.unwrap_mblk()) }
+                .expect("known valid"),
+        ))
     }
 }

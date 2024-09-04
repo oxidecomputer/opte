@@ -11,6 +11,11 @@ use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
 use super::flow_table::FLOW_DEF_EXPIRE_SECS;
+use super::ingot_packet::MsgBlk;
+use super::ingot_packet::Packet2;
+use super::ingot_packet::PacketHeaders2;
+use super::ingot_packet::Parsed2;
+use super::ingot_packet::ParsedMblk;
 use super::ioctl;
 use super::ioctl::ActionDescEntryDump;
 use super::packet::BodyTransformError;
@@ -54,6 +59,7 @@ use core::num::NonZeroU32;
 use core::result;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
+use ingot::types::Read;
 use kstat_macro::KStatProvider;
 use opte_api::Direction;
 
@@ -128,7 +134,7 @@ pub enum LayerResult {
         reason: DenyReason,
     },
     #[leaf]
-    Hairpin(Packet<Initialized>),
+    Hairpin(MsgBlk),
     HandlePkt,
 }
 
@@ -799,7 +805,7 @@ impl Layer {
         &mut self,
         ectx: &ExecCtx,
         dir: Direction,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -817,7 +823,7 @@ impl Layer {
     fn process_in(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -887,17 +893,14 @@ impl Layer {
     fn process_in_rules(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::In;
 
         self.stats.vals.in_lft_miss += 1;
-        let mut rdr = pkt.get_body_rdr();
-        let rule =
-            self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta, &mut rdr);
-        let _ = rdr.finish();
+        let rule = self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta);
 
         let action = if let Some(rule) = rule {
             self.stats.vals.in_rule_match += 1;
@@ -1085,23 +1088,16 @@ impl Layer {
             }
 
             Action::Hairpin(action) => {
-                let mut rdr = pkt.get_body_rdr();
-                match action.gen_packet(pkt.meta(), &mut rdr) {
-                    Ok(aord) => match aord {
-                        AllowOrDeny::Allow(pkt) => {
-                            let _ = rdr.finish();
-                            Ok(LayerResult::Hairpin(pkt))
-                        }
-
-                        AllowOrDeny::Deny => Ok(LayerResult::Deny {
-                            name: self.name,
-                            reason: DenyReason::Action,
-                        }),
-                    },
-
+                match action.gen_packet(pkt.meta()) {
+                    Ok(AllowOrDeny::Allow(pkt)) => {
+                        Ok(LayerResult::Hairpin(pkt))
+                    }
+                    Ok(AllowOrDeny::Deny) => Ok(LayerResult::Deny {
+                        name: self.name,
+                        reason: DenyReason::Action,
+                    }),
                     Err(e) => {
                         // XXX SDT probe, error stat, log
-                        let _ = rdr.finish();
                         Err(LayerError::GenPacket(e))
                     }
                 }
@@ -1114,7 +1110,7 @@ impl Layer {
     fn process_out(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -1184,17 +1180,14 @@ impl Layer {
     fn process_out_rules(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::Out;
 
         self.stats.vals.out_lft_miss += 1;
-        let mut rdr = pkt.get_body_rdr();
-        let rule =
-            self.rules_out.find_match(pkt.flow(), pkt.meta(), ameta, &mut rdr);
-        let _ = rdr.finish();
+        let rule = self.rules_out.find_match(pkt.flow(), pkt.meta(), ameta);
 
         let action = if let Some(rule) = rule {
             self.stats.vals.out_rule_match += 1;
@@ -1387,23 +1380,16 @@ impl Layer {
             }
 
             Action::Hairpin(action) => {
-                let mut rdr = pkt.get_body_rdr();
-                match action.gen_packet(pkt.meta(), &mut rdr) {
-                    Ok(aord) => match aord {
-                        AllowOrDeny::Allow(pkt) => {
-                            let _ = rdr.finish();
-                            Ok(LayerResult::Hairpin(pkt))
-                        }
-
-                        AllowOrDeny::Deny => Ok(LayerResult::Deny {
-                            name: self.name,
-                            reason: DenyReason::Action,
-                        }),
-                    },
-
+                match action.gen_packet(pkt.meta()) {
+                    Ok(AllowOrDeny::Allow(pkt)) => {
+                        Ok(LayerResult::Hairpin(pkt))
+                    }
+                    Ok(AllowOrDeny::Deny) => Ok(LayerResult::Deny {
+                        name: self.name,
+                        reason: DenyReason::Action,
+                    }),
                     Err(e) => {
                         // XXX SDT probe, error stat, log
-                        let _ = rdr.finish();
                         Err(LayerError::GenPacket(e))
                     }
                 }
@@ -1620,18 +1606,14 @@ impl<'a> RuleTable {
         dump
     }
 
-    fn find_match<'b, R>(
+    fn find_match<'b>(
         &mut self,
         ifid: &InnerFlowId,
-        pmeta: &PacketMeta,
+        pmeta: &PacketHeaders2,
         ameta: &ActionMeta,
-        rdr: &'b mut R,
-    ) -> Option<&Rule<rule::Finalized>>
-    where
-        R: PacketRead<'a>,
-    {
+    ) -> Option<&Rule<rule::Finalized>> {
         for rte in self.rules.iter_mut() {
-            if rte.rule.is_match(pmeta, ameta, rdr) {
+            if rte.rule.is_match(pmeta, ameta) {
                 rte.hits += 1;
                 Self::rule_match_probe(
                     self.port_c.as_c_str(),
@@ -1912,12 +1894,9 @@ mod test {
 
         // The pkt/rdr aren't actually used in this case.
         let pkt = Packet::copy(&[0xA]);
-        let mut rdr = pkt.get_rdr();
         let ameta = ActionMeta::new();
         let ifid = InnerFlowId::from(&pmeta);
-        assert!(rule_table
-            .find_match(&ifid, &pmeta, &ameta, &mut rdr)
-            .is_some());
+        assert!(rule_table.find_match(&ifid, &pmeta, &ameta).is_some());
     }
 }
 // TODO Reinstate

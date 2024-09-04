@@ -44,6 +44,14 @@ pub mod ingot_packet;
 use alloc::string::String;
 use core::fmt;
 use core::num::ParseIntError;
+use ingot::types::Parsed as IngotParsed;
+use ingot::types::Read;
+use ingot_packet::MsgBlk;
+use ingot_packet::OpteOut;
+use ingot_packet::Packet2;
+use ingot_packet::PacketHeaders;
+use ingot_packet::Parsed2;
+use ingot_packet::ParsedMblk;
 use ip4::IpError;
 pub use opte_api::Direction;
 
@@ -178,18 +186,11 @@ cfg_if! {
 pub use dbg_macro as dbg;
 pub use err_macro as err;
 
-use crate::engine::ether::EtherType;
 use crate::engine::flow_table::FlowTable;
-use crate::engine::ip4::Protocol;
-use crate::engine::packet::HeaderOffsets;
 use crate::engine::packet::Initialized;
 use crate::engine::packet::InnerFlowId;
 use crate::engine::packet::Packet;
-use crate::engine::packet::PacketInfo;
-use crate::engine::packet::PacketMeta;
-use crate::engine::packet::PacketReaderMut;
 use crate::engine::packet::ParseError;
-use crate::engine::packet::Parsed;
 use crate::engine::port::UftEntry;
 
 /// The action to take for a single packet, based on the processing of
@@ -207,7 +208,7 @@ pub enum HdlPktAction {
     /// input packet.
     ///
     /// The input packet is dropped.
-    Hairpin(Packet<Initialized>),
+    Hairpin(MsgBlk),
 }
 
 /// Some type of problem occurred during [`NetworkImpl::handle_pkt()`]
@@ -271,13 +272,15 @@ pub trait NetworkImpl {
     /// myriad of reasons. The error returned is for informational
     /// purposes, rather than having any obvious direct action to take
     /// in response.
-    fn handle_pkt(
+    fn handle_pkt<T: Read>(
         &self,
         dir: Direction,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<Parsed2<T>>,
         uft_in: &FlowTable<UftEntry<InnerFlowId>>,
         uft_out: &FlowTable<UftEntry<InnerFlowId>>,
-    ) -> Result<HdlPktAction, HdlPktError>;
+    ) -> Result<HdlPktAction, HdlPktError>
+    where
+        T: Read;
 
     /// Return the parser for this network implementation.
     fn parser(&self) -> Self::Parser;
@@ -290,21 +293,21 @@ pub trait NetworkImpl {
 pub trait NetworkParser {
     /// Parse an outbound packet.
     ///
-    /// An outbound packet is one traveling from the [`port::Port`]
+    /// An outbound packet is one travelling from the [`port::Port`]
     /// client to the network.
-    fn parse_outbound(
+    fn parse_outbound<T: Read>(
         &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError>;
+        rdr: T,
+    ) -> Result<PacketHeaders<T>, ParseError>;
 
     /// Parse an inbound packet.
     ///
     /// An inbound packet is one traveling from the network to the
     /// [`port::Port`] client.
-    fn parse_inbound(
+    fn parse_inbound<T: Read>(
         &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError>;
+        rdr: T,
+    ) -> Result<PacketHeaders<T>, ParseError>;
 }
 
 /// A generic ULP parser, useful for testing inside of the opte crate
@@ -314,80 +317,34 @@ pub struct GenericUlp {}
 impl GenericUlp {
     /// Parse a generic L2 + L3 + L4 packet, storing the headers in
     /// the inner position.
-    fn parse_ulp(
+    fn parse_ulp<T: Read>(
         &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError> {
-        let mut meta = PacketMeta::default();
-        let mut offsets = HeaderOffsets::default();
+        rdr: T,
+    ) -> Result<PacketHeaders<T>, ParseError> {
+        let stage1 = OpteOut::parse_read(rdr)?;
 
-        let (ether_hi, _ether_hdr) = Packet::parse_ether(rdr)?;
-        meta.inner.ether = ether_hi.meta;
-        offsets.inner.ether = ether_hi.offset;
-        let ether_type = ether_hi.meta.ether_type;
-
-        let (ip_hi, pseudo_csum) = match ether_type {
-            EtherType::Arp => {
-                return Ok(PacketInfo {
-                    meta,
-                    offsets,
-                    body_csum: None,
-                    extra_hdr_space: None,
-                });
-            }
-
-            EtherType::Ipv4 => {
-                let (ip_hi, hdr) = Packet::parse_ip4(rdr)?;
-                (ip_hi, hdr.pseudo_csum())
-            }
-
-            EtherType::Ipv6 => {
-                let (ip_hi, hdr) = Packet::parse_ip6(rdr)?;
-                (ip_hi, hdr.pseudo_csum())
-            }
-
-            _ => return Err(ParseError::UnexpectedEtherType(ether_type)),
+        let meta = IngotParsed {
+            stack: ingot::types::HeaderStack(stage1.stack.0.into()),
+            data: stage1.data,
+            last_chunk: stage1.last_chunk,
         };
 
-        meta.inner.ip = Some(ip_hi.meta);
-        offsets.inner.ip = Some(ip_hi.offset);
-
-        let (ulp_hi, ulp_hdr) = match ip_hi.meta.proto() {
-            Protocol::ICMP => Packet::parse_icmp(rdr)?,
-            Protocol::ICMPv6 => Packet::parse_icmp6(rdr)?,
-            Protocol::TCP => Packet::parse_tcp(rdr)?,
-            Protocol::UDP => Packet::parse_udp(rdr)?,
-            proto => return Err(ParseError::UnexpectedProtocol(proto)),
-        };
-
-        let use_pseudo = ulp_hi.meta.is_pseudoheader_in_csum();
-        meta.inner.ulp = Some(ulp_hi.meta);
-        offsets.inner.ulp = Some(ulp_hi.offset);
-        let body_csum = if let Some(mut csum) = ulp_hdr.csum_minus_hdr() {
-            if use_pseudo {
-                csum -= pseudo_csum;
-            }
-            Some(csum)
-        } else {
-            None
-        };
-
-        Ok(PacketInfo { meta, offsets, body_csum, extra_hdr_space: None })
+        Ok(meta.into())
     }
 }
 
 impl NetworkParser for GenericUlp {
-    fn parse_inbound(
+    fn parse_inbound<T: Read>(
         &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError> {
+        rdr: T,
+    ) -> Result<PacketHeaders<T>, ParseError> {
         self.parse_ulp(rdr)
     }
 
-    fn parse_outbound(
+    fn parse_outbound<T: Read>(
         &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError> {
+        rdr: T,
+    ) -> Result<PacketHeaders<T>, ParseError> {
         self.parse_ulp(rdr)
     }
 }

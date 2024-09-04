@@ -8,6 +8,8 @@
 
 use super::headers::HeaderAction;
 use super::headers::IpMod;
+use super::ingot_packet::Packet2;
+use super::ingot_packet::ParsedMblk;
 use super::packet::InnerFlowId;
 use super::packet::Packet;
 use super::packet::Parsed;
@@ -86,7 +88,7 @@ impl StatefulAction for OutboundNat {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        _pkt: &Packet<Parsed>,
+        _pkt: &Packet2<ParsedMblk>,
         _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
         // When we have several external IPs at our disposal, we are
@@ -149,7 +151,7 @@ impl StatefulAction for InboundNat {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        _pkt: &Packet<Parsed>,
+        _pkt: &Packet2<ParsedMblk>,
         _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
         // We rely on the attached predicates to filter out IPs which are *not*
