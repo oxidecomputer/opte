@@ -27,6 +27,8 @@ use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
+use super::headers::HeaderActionError;
+
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct UdpMeta {
     pub src: u16,
@@ -104,7 +106,10 @@ impl ModifyAction<UdpMeta> for UdpMod {
 }
 
 impl HeaderActionModify<UlpMetaModify> for UdpMeta {
-    fn run_modify(&mut self, spec: &UlpMetaModify) {
+    fn run_modify(
+        &mut self,
+        spec: &UlpMetaModify,
+    ) -> Result<(), HeaderActionError> {
         if spec.generic.src_port.is_some() {
             self.src = spec.generic.src_port.unwrap()
         }
@@ -112,6 +117,8 @@ impl HeaderActionModify<UlpMetaModify> for UdpMeta {
         if spec.generic.dst_port.is_some() {
             self.dst = spec.generic.dst_port.unwrap()
         }
+
+        Ok(())
     }
 }
 

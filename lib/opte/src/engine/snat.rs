@@ -369,7 +369,7 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ip: HeaderAction::Modify(ip),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                         generic: UlpGenericModify {
                             src_port: Some(self.nat.entry.port),
@@ -389,7 +389,7 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ip: HeaderAction::Modify(ip),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                         generic: UlpGenericModify {
                             dst_port: Some(self.priv_port),
@@ -430,7 +430,7 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ip: HeaderAction::Modify(ip),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                         icmp_id: Some(self.nat.entry.port),
                         ..Default::default()
@@ -447,7 +447,7 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ip: HeaderAction::Modify(ip),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                         icmp_id: Some(self.echo_ident),
                         ..Default::default()

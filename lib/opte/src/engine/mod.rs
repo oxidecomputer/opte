@@ -47,7 +47,9 @@ use core::num::ParseIntError;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
 use ingot_packet::MsgBlk;
-use ingot_packet::OpteOut;
+use ingot_packet::NoEncap;
+use ingot_packet::OpteMeta;
+use ingot_packet::OpteParsed;
 use ingot_packet::Packet2;
 use ingot_packet::PacketHeaders;
 use ingot_packet::Parsed2;
@@ -298,7 +300,7 @@ pub trait NetworkParser {
     fn parse_outbound<T: Read>(
         &self,
         rdr: T,
-    ) -> Result<PacketHeaders<T>, ParseError>;
+    ) -> Result<OpteParsed<T>, ParseError>;
 
     /// Parse an inbound packet.
     ///
@@ -307,7 +309,7 @@ pub trait NetworkParser {
     fn parse_inbound<T: Read>(
         &self,
         rdr: T,
-    ) -> Result<PacketHeaders<T>, ParseError>;
+    ) -> Result<OpteParsed<T>, ParseError>;
 }
 
 /// A generic ULP parser, useful for testing inside of the opte crate
@@ -317,19 +319,9 @@ pub struct GenericUlp {}
 impl GenericUlp {
     /// Parse a generic L2 + L3 + L4 packet, storing the headers in
     /// the inner position.
-    fn parse_ulp<T: Read>(
-        &self,
-        rdr: T,
-    ) -> Result<PacketHeaders<T>, ParseError> {
-        let stage1 = OpteOut::parse_read(rdr)?;
-
-        let meta = IngotParsed {
-            stack: ingot::types::HeaderStack(stage1.stack.0.into()),
-            data: stage1.data,
-            last_chunk: stage1.last_chunk,
-        };
-
-        Ok(meta.into())
+    fn parse_ulp<T: Read>(&self, rdr: T) -> Result<OpteParsed<T>, ParseError> {
+        let v = NoEncap::parse_read(rdr)?;
+        Ok(OpteMeta::convert_ingot(v))
     }
 }
 
@@ -337,14 +329,14 @@ impl NetworkParser for GenericUlp {
     fn parse_inbound<T: Read>(
         &self,
         rdr: T,
-    ) -> Result<PacketHeaders<T>, ParseError> {
+    ) -> Result<OpteParsed<T>, ParseError> {
         self.parse_ulp(rdr)
     }
 
     fn parse_outbound<T: Read>(
         &self,
         rdr: T,
-    ) -> Result<PacketHeaders<T>, ParseError> {
+    ) -> Result<OpteParsed<T>, ParseError> {
         self.parse_ulp(rdr)
     }
 }

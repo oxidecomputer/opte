@@ -11,6 +11,7 @@ pub mod v6;
 
 use super::checksum::Checksum as OpteCsum;
 use super::checksum::HeaderChecksum;
+use super::headers::HeaderActionError;
 use super::headers::RawHeader;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
@@ -108,17 +109,22 @@ impl<T: Into<u8> + Copy> HeaderActionModify<UlpMetaModify> for IcmpMeta<T>
 where
     IcmpMeta<T>: QueryEcho,
 {
-    fn run_modify(&mut self, spec: &UlpMetaModify) {
+    fn run_modify(
+        &mut self,
+        spec: &UlpMetaModify,
+    ) -> Result<(), HeaderActionError> {
         let Some(new_id) = spec.icmp_id else {
-            return;
+            return Ok(());
         };
 
         if self.echo_id().is_none() {
-            return;
+            return Ok(());
         }
 
         let mut echo_data = self.body_echo_mut();
         echo_data.id = new_id.to_be_bytes();
+
+        Ok(())
     }
 }
 

@@ -77,7 +77,7 @@ impl PushAction<GeneveMeta> for GenevePush {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GeneveMod {
-    vni: Option<Vni>,
+    pub vni: Option<Vni>,
 }
 
 impl ModifyAction<GeneveMeta> for GeneveMod {

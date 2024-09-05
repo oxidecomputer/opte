@@ -9,6 +9,7 @@
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
 use super::flow_table::Ttl;
+use super::headers::HeaderActionError;
 use super::headers::HeaderActionModify;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
@@ -209,7 +210,10 @@ impl ModifyAction<TcpMeta> for TcpMod {
 }
 
 impl HeaderActionModify<UlpMetaModify> for TcpMeta {
-    fn run_modify(&mut self, spec: &UlpMetaModify) {
+    fn run_modify(
+        &mut self,
+        spec: &UlpMetaModify,
+    ) -> Result<(), HeaderActionError> {
         if spec.generic.src_port.is_some() {
             self.src = spec.generic.src_port.unwrap()
         }
@@ -221,6 +225,8 @@ impl HeaderActionModify<UlpMetaModify> for TcpMeta {
         if spec.tcp_flags.is_some() {
             self.flags = spec.tcp_flags.unwrap()
         }
+
+        Ok(())
     }
 }
 

@@ -49,6 +49,7 @@ use ingot::types::Read;
 use opte_api::Direction;
 use serde::Deserialize;
 use serde::Serialize;
+use zerocopy::ByteSliceMut;
 
 /// A marker trait indicating a type is an entry acuired from a [`Resource`].
 pub trait ResourceEntry {}
@@ -282,11 +283,11 @@ pub enum ModifyAction<T> {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct HdrTransform {
     pub name: String,
-    pub outer_ether: HeaderAction<EtherMeta, EtherMeta, EtherMod>,
-    pub outer_ip: HeaderAction<IpMeta, IpPush, IpMod>,
-    pub outer_encap: HeaderAction<EncapMeta, EncapPush, EncapMod>,
-    pub inner_ether: HeaderAction<EtherMeta, EtherMeta, EtherMod>,
-    pub inner_ip: HeaderAction<IpMeta, IpPush, IpMod>,
+    pub outer_ether: HeaderAction<EtherMeta, EtherMod>,
+    pub outer_ip: HeaderAction<IpPush, IpMod>,
+    pub outer_encap: HeaderAction<EncapPush, EncapMod>,
+    pub inner_ether: HeaderAction<EtherMeta, EtherMod>,
+    pub inner_ip: HeaderAction<IpPush, IpMod>,
     // We don't support push/pop for inner_ulp.
     pub inner_ulp: UlpHeaderAction<super::headers::UlpMetaModify>,
 }
@@ -372,6 +373,8 @@ impl HdrTransform {
     /// Run this header transformation against the passed in
     /// [`PacketMeta`], mutating it in place.
     ///
+    /// Returns whether the inner checksum needs recomputed.
+    ///
     /// # Errors
     ///
     /// If there is an [`HeaderAction::Modify`], but no metadata is
@@ -380,27 +383,74 @@ impl HdrTransform {
     pub fn run<T: Read>(
         &self,
         meta: &mut PacketHeaders<T>,
-    ) -> Result<(), HdrTransformError> {
+    ) -> Result<bool, HdrTransformError>
+    where
+        T::Chunk: ByteSliceMut,
+    {
+        // NOTE: we want to track cksum dirtying here, somehow.
+
+        // meta.headers.outer_eth
+        //     .act_on(&self.outer_ether)
+        //     .map_err(Self::err_fn("outer ether"))?;
         self.outer_ether
-            .run(&mut meta.outer.ether)
+            .act_on_option(&mut meta.headers.outer_eth)
             .map_err(Self::err_fn("outer ether"))?;
+        // self.outer_ether
+        //     .run(&mut meta.outer.ether)
+        //     .map_err(Self::err_fn("outer ether"))?;
+        // self.outer_ip
+        //     .run(&mut meta.outer.ip)
+        //     .map_err(Self::err_fn("outer IP"))?;
+        // meta.headers.outer_l3
+        //     .act_on(&self.outer_ip)
+        //     .map_err(Self::err_fn("outer IP"))?;
         self.outer_ip
-            .run(&mut meta.outer.ip)
+            .act_on_option(&mut meta.headers.outer_l3)
             .map_err(Self::err_fn("outer IP"))?;
+        // self.outer_encap
+        //     .run(&mut meta.outer.encap)
+        //     .map_err(Self::err_fn("outer encap"))?;
+        // meta.headers.outer_encap
+        //     .act_on(&self.outer_encap)
+        //     .map_err(Self::err_fn("outer encap"))?;
         self.outer_encap
-            .run(&mut meta.outer.encap)
+            .act_on_option(&mut meta.headers.outer_encap)
             .map_err(Self::err_fn("outer encap"))?;
         // XXX A hack so that inner ethernet can meet the interface of
         // `HeaderAction::run().`
-        let mut tmp = Some(meta.inner.ether);
-        self.inner_ether.run(&mut tmp).map_err(Self::err_fn("inner ether"))?;
-        meta.inner.ether = tmp.unwrap();
-        self.inner_ip
-            .run(&mut meta.inner.ip)
+        // let mut tmp = Some(meta.inner.ether);
+        // self.inner_ether.run(&mut tmp).map_err(Self::err_fn("inner ether"))?;
+        // meta.inner.ether = tmp.unwrap();
+
+        // If I set this up right, we can handle the above w/o panic on a
+        // dumb EtherDrop action...
+        meta.headers
+            .inner_eth
+            .act_on(&self.inner_ether)
+            .map_err(Self::err_fn("inner eth"))?;
+
+        // self.inner_ip
+        //     .run(&mut meta.inner.ip)
+        //     .map_err(Self::err_fn("inner IP"))?;
+        // let l3_dirty = meta.headers.inner_l3
+        //     .act_on(&self.inner_ip)
+        //     .map_err(Self::err_fn("inner IP"))?;
+        let l3_dirty = self
+            .inner_ip
+            .act_on_option(&mut meta.headers.inner_l3)
             .map_err(Self::err_fn("inner IP"))?;
-        self.inner_ulp
-            .run(&mut meta.inner.ulp)
-            .map_err(Self::err_fn("inner ULP"))
+
+        // self.inner_ulp
+        //     .run(&mut meta.inner.ulp)
+        //     .map_err(Self::err_fn("inner ULP"))
+
+        // let ulp_dirty = meta.headers.inner_ulp
+        //     .act_on(&self.inner_ulp)
+        //     .map_err(Self::err_fn("inner ULP"))?;
+
+        let ulp_dirty = todo!();
+
+        Ok(l3_dirty || ulp_dirty)
     }
 
     fn err_fn(
@@ -411,6 +461,9 @@ impl HdrTransform {
                 HeaderActionError::MissingHeader => {
                     HdrTransformError::MissingHeader(header)
                 }
+                HeaderActionError::CantPop => {
+                    HdrTransformError::CantPop(header)
+                }
             }
         }
     }
@@ -419,6 +472,7 @@ impl HdrTransform {
 #[derive(Clone, Copy, Debug)]
 pub enum HdrTransformError {
     MissingHeader(&'static str),
+    CantPop(&'static str),
 }
 
 #[derive(Debug)]

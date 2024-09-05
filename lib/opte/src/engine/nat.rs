@@ -189,7 +189,7 @@ impl ActionDesc for NatDesc {
 
                 HdrTransform {
                     name: NAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ip: HeaderAction::Modify(ip),
                     ..Default::default()
                 }
             }
@@ -199,7 +199,7 @@ impl ActionDesc for NatDesc {
 
                 HdrTransform {
                     name: NAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ip: HeaderAction::Modify(ip),
                     ..Default::default()
                 }
             }
