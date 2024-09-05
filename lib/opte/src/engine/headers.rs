@@ -611,7 +611,7 @@ pub trait HasInnerCksum {
 pub trait Transform<H, P, M>: HasInnerCksum
 where
     P: PushAction<H> + fmt::Debug,
-    M: ModifyAction<H> + fmt::Debug,
+    M: fmt::Debug,
 {
     /// Returns whether we will need a checksum recompute on the target field.
     fn act_on(
@@ -650,7 +650,7 @@ impl<T: HasInnerCksum> HasInnerCksum for Option<T> {
 impl<H, P, M, X> Transform<H, P, M> for X
 where
     P: PushAction<H> + fmt::Debug,
-    M: ModifyAction<H> + fmt::Debug,
+    M: fmt::Debug,
     X: HeaderActionModify<M> + From<H> + HasInnerCksum,
 {
     fn act_on(
@@ -665,7 +665,7 @@ where
             }
             HeaderAction::Pop => Err(HeaderActionError::CantPop),
             HeaderAction::Modify(m) => {
-                self.run_modify(m);
+                self.run_modify(m)?;
                 Ok(Self::HAS_CKSUM)
             }
         }
@@ -716,8 +716,9 @@ impl<P, M> HeaderAction<P, M> {
     ) -> Result<bool, HeaderActionError>
     where
         P: PushAction<H> + fmt::Debug,
-        M: ModifyAction<H> + fmt::Debug,
+        M: fmt::Debug,
         X: Transform<H, P, M> + From<H>,
+        X: HeaderActionModify<M> + HasInnerCksum,
     {
         match (self, target) {
             (HeaderAction::Ignore, _) => Ok(false),
@@ -773,18 +774,22 @@ pub enum UlpHeaderAction<M: ModifyActionArg> {
 }
 
 impl<M: ModifyActionArg> UlpHeaderAction<M> {
-    pub fn run<P>(&self, meta: &mut Option<P>) -> Result<(), HeaderActionError>
+    pub fn run<P>(
+        &self,
+        meta: &mut Option<P>,
+    ) -> Result<bool, HeaderActionError>
     where
         P: HeaderActionModify<M>,
     {
         match self {
-            Self::Ignore => (),
+            Self::Ignore => Ok(false),
             Self::Modify(arg) => match meta {
-                Some(meta) => meta.run_modify(arg)?,
+                Some(meta) => {
+                    meta.run_modify(arg)?;
+                    Ok(true)
+                }
                 None => return Err(HeaderActionError::MissingHeader),
             },
         }
-
-        Ok(())
     }
 }

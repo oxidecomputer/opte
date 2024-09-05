@@ -17,6 +17,7 @@ use super::headers::HeaderActionError;
 use super::headers::IpMeta;
 use super::headers::IpMod;
 use super::headers::IpPush;
+use super::headers::Transform;
 use super::headers::UlpHeaderAction;
 use super::ingot_packet::MsgBlk;
 use super::ingot_packet::Packet2;
@@ -440,15 +441,16 @@ impl HdrTransform {
             .act_on_option(&mut meta.headers.inner_l3)
             .map_err(Self::err_fn("inner IP"))?;
 
-        // self.inner_ulp
-        //     .run(&mut meta.inner.ulp)
-        //     .map_err(Self::err_fn("inner ULP"))
+        let ulp_dirty = self
+            .inner_ulp
+            .run(&mut meta.headers.inner_ulp)
+            .map_err(Self::err_fn("inner ULP"))?;
 
         // let ulp_dirty = meta.headers.inner_ulp
-        //     .act_on(&self.inner_ulp)
+        //     .run(&self.inner_ulp)
         //     .map_err(Self::err_fn("inner ULP"))?;
 
-        let ulp_dirty = todo!();
+        // let ulp_dirty = todo!();
 
         Ok(l3_dirty || ulp_dirty)
     }

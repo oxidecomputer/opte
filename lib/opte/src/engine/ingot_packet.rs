@@ -1,6 +1,7 @@
 use super::checksum::Checksum as OpteCsum;
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
+use super::ether::EtherMeta;
 use super::ether::EtherMod;
 use super::headers::EncapMeta;
 use super::headers::EncapMod;
@@ -8,6 +9,7 @@ use super::headers::EncapPush;
 use super::headers::HasInnerCksum;
 use super::headers::HeaderActionError;
 use super::headers::HeaderActionModify;
+use super::headers::IpMeta;
 use super::headers::IpMod;
 use super::headers::IpPush;
 use super::headers::UlpMetaModify;
@@ -64,6 +66,8 @@ use ingot::icmp::IcmpV6Mut;
 use ingot::icmp::IcmpV6Packet;
 use ingot::icmp::IcmpV6Ref;
 use ingot::ip::IpProtocol;
+use ingot::ip::Ipv4;
+use ingot::ip::Ipv4Flags;
 use ingot::ip::Ipv4Mut;
 use ingot::ip::Ipv4Packet;
 use ingot::ip::Ipv4Ref;
@@ -83,6 +87,7 @@ use ingot::types::ParseError as IngotParseErr;
 use ingot::types::ParseResult;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
+use ingot::types::Repeated;
 use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use ingot::udp::UdpPacket;
@@ -520,7 +525,9 @@ impl<T: Read> Drop for PktBodyWalker<T> {
         let ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
         if !ptr.is_null() {
             // Reacquire and drop.
-            unsafe { Box::from_raw(ptr) };
+            unsafe {
+                let _ = Box::from_raw(ptr);
+            }
         }
     }
 }
@@ -1578,4 +1585,119 @@ impl<T: ByteSlice> HasInnerCksum for L3<T> {
 
 impl<T: ByteSlice> HasInnerCksum for Ulp<T> {
     const HAS_CKSUM: bool = true;
+}
+
+// papering over a lot here...
+// need to briefly keep both around while I systematically rewrite the test suite.
+
+impl<T: ByteSlice> From<EtherMeta>
+    for ingot::types::Packet<ingot::ethernet::Ethernet, ValidEthernet<T>>
+{
+    fn from(value: EtherMeta) -> Self {
+        ingot::types::Packet::Repr(
+            Ethernet {
+                destination: value.dst.bytes().into(),
+                source: value.src.bytes().into(),
+                ethertype: Ethertype(u16::from(value.ether_type)),
+            }
+            .into(),
+        )
+    }
+}
+
+impl<T: ByteSlice> From<EtherMeta>
+    for OwnedPacket<ingot::ethernet::Ethernet, ValidEthernet<T>>
+{
+    fn from(value: EtherMeta) -> Self {
+        OwnedPacket::Repr(
+            Ethernet {
+                destination: value.dst.bytes().into(),
+                source: value.src.bytes().into(),
+                ethertype: Ethertype(u16::from(value.ether_type)),
+            }
+            .into(),
+        )
+    }
+}
+
+impl<T: ByteSlice> From<EncapMeta>
+    for ingot::types::Packet<EncapMeta, ValidEncapMeta<T>>
+{
+    fn from(value: EncapMeta) -> Self {
+        ingot::types::Packet::Repr(value.into())
+    }
+}
+
+impl<T: ByteSlice> From<EncapMeta>
+    for OwnedPacket<EncapMeta, ValidEncapMeta<T>>
+{
+    fn from(value: EncapMeta) -> Self {
+        OwnedPacket::Repr(value)
+    }
+}
+
+impl<T: ByteSlice> From<IpMeta> for OwnedPacket<L3Repr, ValidL3<T>> {
+    fn from(value: IpMeta) -> Self {
+        match value {
+            IpMeta::Ip4(v4) => OwnedPacket::Repr(
+                Ipv4 {
+                    ihl: (v4.hdr_len / 4) as u8,
+                    total_len: v4.total_len,
+                    identification: v4.ident,
+                    protocol: IpProtocol(u8::from(v4.proto)),
+                    checksum: u16::from_be_bytes(v4.csum),
+                    source: v4.src.bytes().into(),
+                    destination: v4.dst.bytes().into(),
+                    flags: Ipv4Flags::DONT_FRAGMENT,
+                    ..Default::default()
+                }
+                .into(),
+            ),
+            IpMeta::Ip6(v6) => OwnedPacket::Repr(
+                Ipv6 {
+                    payload_len: v6.pay_len,
+                    next_header: IpProtocol(u8::from(v6.next_hdr)),
+                    hop_limit: v6.hop_limit,
+                    source: v6.src.bytes().into(),
+                    destination: v6.dst.bytes().into(),
+                    v6ext: Repeated::default(), // TODO
+                    ..Default::default()
+                }
+                .into(),
+            ),
+        }
+    }
+}
+
+impl<T: ByteSlice> From<IpMeta> for L3<T> {
+    fn from(value: IpMeta) -> Self {
+        match value {
+            IpMeta::Ip4(v4) => L3::Ipv4(
+                Ipv4 {
+                    ihl: (v4.hdr_len / 4) as u8,
+                    total_len: v4.total_len,
+                    identification: v4.ident,
+                    protocol: IpProtocol(u8::from(v4.proto)),
+                    checksum: u16::from_be_bytes(v4.csum),
+                    source: v4.src.bytes().into(),
+                    destination: v4.dst.bytes().into(),
+                    flags: Ipv4Flags::DONT_FRAGMENT,
+                    ..Default::default()
+                }
+                .into(),
+            ),
+            IpMeta::Ip6(v6) => L3::Ipv6(
+                Ipv6 {
+                    payload_len: v6.pay_len,
+                    next_header: IpProtocol(u8::from(v6.next_hdr)),
+                    hop_limit: v6.hop_limit,
+                    source: v6.src.bytes().into(),
+                    destination: v6.dst.bytes().into(),
+                    v6ext: Repeated::default(), // TODO
+                    ..Default::default()
+                }
+                .into(),
+            ),
+        }
+    }
 }
