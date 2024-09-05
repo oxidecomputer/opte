@@ -16,6 +16,13 @@ use crate::cfg::VpcCfg;
 use opte::engine::ether::EtherType;
 use opte::engine::flow_table::FlowTable;
 use opte::engine::headers::EncapMeta;
+use opte::engine::ingot_packet::GeneveOverV6;
+use opte::engine::ingot_packet::MsgBlk;
+use opte::engine::ingot_packet::NoEncap;
+use opte::engine::ingot_packet::OpteMeta;
+use opte::engine::ingot_packet::OpteParsed;
+use opte::engine::ingot_packet::Packet2;
+use opte::engine::ingot_packet::Parsed2;
 use opte::engine::ip4::Protocol;
 use opte::engine::packet::HeaderOffsets;
 use opte::engine::packet::InnerFlowId;
@@ -38,6 +45,10 @@ use opte::engine::arp::ArpEthIpv4;
 use opte::engine::arp::ArpOp;
 use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::ip4::Ipv4Addr;
+use opte::ingot::ethernet::EthernetRef;
+use opte::ingot::ethernet::Ethertype;
+use opte::ingot::types::Read;
+use zerocopy::ByteSliceMut;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VpcParser {}
@@ -67,14 +78,13 @@ fn is_arp_req_for_tpa(tpa: Ipv4Addr, arp: &ArpEthIpv4) -> bool {
 }
 
 impl VpcNetwork {
-    fn handle_arp_out(
+    fn handle_arp_out<T: Read>(
         &self,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<Parsed2<T>>,
     ) -> Result<HdlPktAction, HdlPktError> {
-        let arp_start = pkt.hdr_offsets().inner.ether.hdr_len;
-        let mut rdr = pkt.get_rdr_mut();
-        rdr.seek(arp_start).unwrap();
-        let arp = ArpEthIpv4::parse(&mut rdr)
+        let body =
+            pkt.body_segs().ok_or_else(|| HdlPktError("outbound ARP"))?;
+        let arp = ArpEthIpv4::parse_normally(body)
             .map_err(|_| HdlPktError("outbound ARP"))?;
         let gw_ip = self.cfg.ipv4_cfg().unwrap().gateway_ip;
 
@@ -82,7 +92,11 @@ impl VpcNetwork {
             let gw_mac = self.cfg.gateway_mac;
 
             let hp = arp::gen_arp_reply(gw_mac, gw_ip, arp.sha, arp.spa);
-            return Ok(HdlPktAction::Hairpin(hp));
+            // TODO: just emit into an mblk normally.
+            return Ok(HdlPktAction::Hairpin(
+                unsafe { MsgBlk::wrap_mblk(hp.unwrap_mblk()) }
+                    .expect("known valid"),
+            ));
         }
 
         Ok(HdlPktAction::Deny)
@@ -92,15 +106,17 @@ impl VpcNetwork {
 impl NetworkImpl for VpcNetwork {
     type Parser = VpcParser;
 
-    fn handle_pkt(
+    fn handle_pkt<T: Read>(
         &self,
         dir: Direction,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<Parsed2<T>>,
         _uft_in: &FlowTable<UftEntry<InnerFlowId>>,
         _uft_out: &FlowTable<UftEntry<InnerFlowId>>,
-    ) -> Result<HdlPktAction, HdlPktError> {
-        match (dir, pkt.meta().inner.ether.ether_type) {
-            (Direction::Out, EtherType::Arp) => self.handle_arp_out(pkt),
+    ) -> Result<HdlPktAction, HdlPktError>
+// where T::Chunk: ByteSliceMut
+    {
+        match (dir, pkt.meta().inner_ether().ethertype()) {
+            (Direction::Out, Ethertype::ARP) => self.handle_arp_out(pkt),
 
             _ => Ok(HdlPktAction::Deny),
         }
@@ -112,156 +128,19 @@ impl NetworkImpl for VpcNetwork {
 }
 
 impl NetworkParser for VpcParser {
-    fn parse_outbound(
+    fn parse_outbound<T: Read>(
         &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError> {
-        let mut meta = PacketMeta::default();
-        let mut offsets = HeaderOffsets::default();
-        let (ether_hi, _hdr) = Packet::parse_ether(rdr)?;
-        meta.inner.ether = ether_hi.meta;
-        offsets.inner.ether = ether_hi.offset;
-        let ether_type = ether_hi.meta.ether_type;
-
-        // Allocate a message block and copy in the squashed data. Provide
-        // enough extra space for geneve encapsulation to not require an extra
-        // allocation later on. 128 is based on
-        // - 18 byte ethernet header (vlan space)
-        // - 40 byte ipv6 header
-        // - 8 byte udp header
-        // - 8 byte geneve header
-        // - space for geneve options
-        const EXTRA_SPACE: Option<usize> = Some(128);
-
-        let (ip_hi, pseudo_csum) = match ether_type {
-            EtherType::Arp => {
-                return Ok(PacketInfo {
-                    meta,
-                    offsets,
-                    body_csum: None,
-                    extra_hdr_space: EXTRA_SPACE,
-                });
-            }
-
-            EtherType::Ipv4 => {
-                let (ip_hi, hdr) = Packet::parse_ip4(rdr)?;
-                (ip_hi, hdr.pseudo_csum())
-            }
-
-            EtherType::Ipv6 => {
-                let (ip_hi, hdr) = Packet::parse_ip6(rdr)?;
-                (ip_hi, hdr.pseudo_csum())
-            }
-
-            _ => return Err(ParseError::UnexpectedEtherType(ether_type)),
-        };
-
-        meta.inner.ip = Some(ip_hi.meta);
-        offsets.inner.ip = Some(ip_hi.offset);
-
-        let (ulp_hi, ulp_hdr) = match ip_hi.meta.proto() {
-            Protocol::ICMP => Packet::parse_icmp(rdr)?,
-            Protocol::ICMPv6 => Packet::parse_icmp6(rdr)?,
-            Protocol::TCP => Packet::parse_tcp(rdr)?,
-            Protocol::UDP => Packet::parse_udp(rdr)?,
-            proto => return Err(ParseError::UnexpectedProtocol(proto)),
-        };
-
-        let use_pseudo = ulp_hi.meta.is_pseudoheader_in_csum();
-        meta.inner.ulp = Some(ulp_hi.meta);
-        offsets.inner.ulp = Some(ulp_hi.offset);
-
-        let body_csum = if let Some(mut csum) = ulp_hdr.csum_minus_hdr() {
-            if use_pseudo {
-                csum -= pseudo_csum;
-            }
-            Some(csum)
-        } else {
-            None
-        };
-
-        Ok(PacketInfo {
-            meta,
-            offsets,
-            body_csum,
-            extra_hdr_space: EXTRA_SPACE,
-        })
+        rdr: T,
+    ) -> Result<OpteParsed<T>, ParseError> {
+        let v = GeneveOverV6::parse_read(rdr)?;
+        Ok(OpteMeta::convert_ingot(v))
     }
 
-    fn parse_inbound(
+    fn parse_inbound<T: Read>(
         &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError> {
-        let mut meta = PacketMeta::default();
-        let mut offsets = HeaderOffsets::default();
-
-        let (outer_ether_hi, _hdr) = Packet::parse_ether(rdr)?;
-        meta.outer.ether = Some(outer_ether_hi.meta);
-        offsets.outer.ether = Some(outer_ether_hi.offset);
-        let outer_et = outer_ether_hi.meta.ether_type;
-
-        // VPC traffic is delivered exclusively on an IPv6 +
-        // Geneve underlay.
-        let outer_ip_hi = match outer_et {
-            EtherType::Ipv6 => Packet::parse_ip6(rdr)?.0,
-
-            _ => return Err(ParseError::UnexpectedEtherType(outer_et)),
-        };
-
-        meta.outer.ip = Some(outer_ip_hi.meta);
-        offsets.outer.ip = Some(outer_ip_hi.offset);
-
-        let (geneve_hi, _geneve_hdr) = match outer_ip_hi.meta.proto() {
-            Protocol::UDP => Packet::parse_geneve(rdr)?,
-            proto => return Err(ParseError::UnexpectedProtocol(proto)),
-        };
-
-        meta.outer.encap = Some(EncapMeta::from(geneve_hi.meta));
-        offsets.outer.encap = Some(geneve_hi.offset);
-
-        let (inner_ether_hi, _) = Packet::parse_ether(rdr)?;
-        meta.inner.ether = inner_ether_hi.meta;
-        offsets.inner.ether = inner_ether_hi.offset;
-        let inner_et = inner_ether_hi.meta.ether_type;
-
-        let (inner_ip_hi, pseudo_csum) = match inner_et {
-            EtherType::Ipv4 => {
-                let (ip_hi, hdr) = Packet::parse_ip4(rdr)?;
-                (ip_hi, hdr.pseudo_csum())
-            }
-
-            EtherType::Ipv6 => {
-                let (ip_hi, hdr) = Packet::parse_ip6(rdr)?;
-                (ip_hi, hdr.pseudo_csum())
-            }
-
-            _ => return Err(ParseError::UnexpectedEtherType(inner_et)),
-        };
-
-        meta.inner.ip = Some(inner_ip_hi.meta);
-        offsets.inner.ip = Some(inner_ip_hi.offset);
-
-        let (inner_ulp_hi, inner_ulp_hdr) = match inner_ip_hi.meta.proto() {
-            Protocol::ICMP => Packet::parse_icmp(rdr)?,
-            Protocol::ICMPv6 => Packet::parse_icmp6(rdr)?,
-            Protocol::TCP => Packet::parse_tcp(rdr)?,
-            Protocol::UDP => Packet::parse_udp(rdr)?,
-            proto => return Err(ParseError::UnexpectedProtocol(proto)),
-        };
-
-        let use_pseudo = inner_ulp_hi.meta.is_pseudoheader_in_csum();
-        meta.inner.ulp = Some(inner_ulp_hi.meta);
-        offsets.inner.ulp = Some(inner_ulp_hi.offset);
-
-        let body_csum = if let Some(mut csum) = inner_ulp_hdr.csum_minus_hdr() {
-            if use_pseudo {
-                csum -= pseudo_csum;
-            }
-            Some(csum)
-        } else {
-            None
-        };
-
-        Ok(PacketInfo { meta, offsets, body_csum, extra_hdr_space: None })
+        rdr: T,
+    ) -> Result<OpteParsed<T>, ParseError> {
+        let v = NoEncap::parse_read(rdr)?;
+        Ok(OpteMeta::convert_ingot(v))
     }
 }

@@ -157,17 +157,33 @@ impl ArpEthIpv4 {
         R: PacketReadMut<'a>,
     {
         let src = rdr.slice_mut(ArpEthIpv4Raw::SIZE)?;
-        Self::try_from(&ArpEthIpv4Raw::new_mut(src)?)
+        Self::try_from(&ArpEthIpv4Raw::new(src)?)
+    }
+
+    pub fn parse_normally(rdr: &[&[u8]]) -> Result<Self, ArpHdrError> {
+        let space_in_front = rdr.get(0).map(|v| !v.is_empty());
+
+        let to_use = match space_in_front {
+            None => {
+                return Err(ArpHdrError::ReadError(ReadErr::NotEnoughBytes))
+            }
+            Some(true) => rdr.get(0),
+            Some(false) => rdr.get(1),
+        };
+
+        if let Some(to_use) = to_use {
+            Self::try_from(&ArpEthIpv4Raw::new(to_use)?)
+        } else {
+            Err(ArpHdrError::ReadError(ReadErr::NotEnoughBytes))
+        }
     }
 }
 
-impl TryFrom<&Ref<&mut [u8], ArpEthIpv4Raw>> for ArpEthIpv4 {
+impl TryFrom<&Ref<&[u8], ArpEthIpv4Raw>> for ArpEthIpv4 {
     type Error = ArpHdrError;
 
     // NOTE: This only accepts IPv4/Ethernet ARP.
-    fn try_from(
-        raw: &Ref<&mut [u8], ArpEthIpv4Raw>,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(raw: &Ref<&[u8], ArpEthIpv4Raw>) -> Result<Self, Self::Error> {
         let htype = u16::from_be_bytes(raw.htype);
 
         if htype != ARP_HTYPE_ETHERNET {

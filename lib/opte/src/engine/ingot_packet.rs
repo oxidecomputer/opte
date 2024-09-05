@@ -3,6 +3,7 @@ use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
+use super::geneve::GeneveMeta;
 use super::headers::EncapMeta;
 use super::headers::EncapMod;
 use super::headers::EncapPush;
@@ -58,6 +59,7 @@ use ingot::example_chain::L4;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveMut;
 use ingot::geneve::GenevePacket;
+use ingot::geneve::GeneveRef;
 use ingot::geneve::ValidGeneve;
 use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Packet;
@@ -95,6 +97,7 @@ use ingot::udp::UdpRef;
 use ingot::udp::ValidUdp;
 use ingot::Parse;
 use opte_api::Direction;
+use opte_api::Vni;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 use zerocopy::IntoBytes;
@@ -719,6 +722,23 @@ impl<T: Read> PacketHeaders<T> {
         self.headers.outer_eth.as_ref()
     }
 
+    // Need to expose this a lil cleaner...
+    /// Returns whether this packet is sourced from outside the rack,
+    /// in addition to its VNI.
+    pub fn outer_encap_geneve_vni_and_origin(&self) -> Option<(Vni, bool)> {
+        match &self.headers.outer_encap {
+            Some(OwnedPacket::Repr(EncapMeta::Geneve(g))) => {
+                Some((g.vni, g.oxide_external_pkt))
+            }
+            Some(OwnedPacket::Raw(ValidEncapMeta::Geneve(_, g))) => {
+                // TODO: hack.
+                let oxide_external = g.1.packet_length() != 0;
+                Some((Vni::new(g.vni()).unwrap(), oxide_external))
+            }
+            None => None,
+        }
+    }
+
     pub fn inner_ether(&self) -> &EthernetPacket<T::Chunk> {
         &self.headers.inner_eth
     }
@@ -1001,7 +1021,10 @@ impl<T: Read> Packet2<Parsed2<T>> {
         &mut self,
         dir: Direction,
         xform: &dyn BodyTransform,
-    ) -> Result<(), BodyTransformError> {
+    ) -> Result<(), BodyTransformError>
+    where
+        T::Chunk: ByteSliceMut,
+    {
         // We set the flag now with the assumption that the transform
         // could fail after modifying part of the body. In the future
         // we could have something more sophisticated that only sets
@@ -1021,14 +1044,25 @@ impl<T: Read> Packet2<Parsed2<T>> {
 
     #[inline]
     pub fn body_segs(&self) -> Option<&[&[u8]]> {
-        // TODO. Not needed for today's d'plane.
-        None
+        let out = self.state.meta.body_segs();
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 
     #[inline]
-    pub fn body_segs_mut(&mut self) -> Option<&mut [&mut [u8]]> {
-        // TODO. Not needed for today's d'plane.
-        None
+    pub fn body_segs_mut(&mut self) -> Option<&mut [&mut [u8]]>
+    where
+        T::Chunk: ByteSliceMut,
+    {
+        let out = self.state.meta.body_segs_mut();
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 
     pub fn mblk_addr(&self) -> uintptr_t {
