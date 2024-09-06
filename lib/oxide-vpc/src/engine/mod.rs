@@ -132,15 +132,21 @@ impl NetworkParser for VpcParser {
         &self,
         rdr: T,
     ) -> Result<OpteParsed<T>, ParseError> {
-        let v = GeneveOverV6::parse_read(rdr)?;
-        Ok(OpteMeta::convert_ingot(v))
+        let v = NoEncap::parse_read(rdr);
+        if let Err(e) = v {
+            opte::engine::err!("PARSERR OUT [NoEncap] {:?}", e);
+        }
+        Ok(OpteMeta::convert_ingot(v?))
     }
 
     fn parse_inbound<T: Read>(
         &self,
         rdr: T,
     ) -> Result<OpteParsed<T>, ParseError> {
-        let v = NoEncap::parse_read(rdr)?;
-        Ok(OpteMeta::convert_ingot(v))
+        let v = GeneveOverV6::parse_read(rdr);
+        if let Err(e) = v {
+            opte::engine::err!("PARSERR IN [GeneveOverV6] {:?}", e);
+        }
+        Ok(OpteMeta::convert_ingot(v?))
     }
 }
