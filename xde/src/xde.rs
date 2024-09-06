@@ -61,6 +61,7 @@ use ingot::udp::ValidUdp;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
+use opte::api::MacAddr;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -71,6 +72,7 @@ use opte::d_error::LabelBlock;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
+use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
@@ -80,7 +82,9 @@ use opte::engine::headers::EncapPush;
 use opte::engine::headers::IpAddr;
 use opte::engine::headers::IpPush;
 use opte::engine::ingot_packet::MsgBlk;
+use opte::engine::ingot_packet::Packet2;
 use opte::engine::ingot_packet::Parsed2;
+use opte::engine::ingot_packet::ParsedMblk;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::Initialized;
@@ -1404,7 +1408,7 @@ unsafe extern "C" fn xde_mc_unicst(
     0
 }
 
-fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
+fn guest_loopback_probe(pkt: &Packet2<ParsedMblk>, src: &XdeDev, dst: &XdeDev) {
     unsafe {
         __dtrace_probe_guest__loopback(
             pkt.mblk_addr(),
@@ -1416,14 +1420,16 @@ fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
 }
 
 #[no_mangle]
-fn guest_loopback(
+fn guest_loopback<'a>(
     src_dev: &XdeDev,
-    mut pkt: Packet<Parsed>,
+    devs: &'a KRwLockReadGuard<Vec<Box<XdeDev>>>,
+    pkt: &mut Packet2<ParsedMblk>,
     vni: Vni,
-) -> *mut mblk_t {
+) -> Option<&'a Box<XdeDev>> {
     use Direction::*;
-    let ether_dst = pkt.meta().inner.ether.dst;
-    let devs = unsafe { xde_devs.read() };
+    let ether_dst =
+        MacAddr::from(pkt.meta().inner_ether().destination().into_array());
+    // let devs = unsafe { xde_devs.read() };
     let maybe_dest_dev =
         devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst);
 
@@ -1434,19 +1440,21 @@ fn guest_loopback(
             // We have found a matching Port on this host; "loop back"
             // the packet into the inbound processing path of the
             // destination Port.
-            match dest_dev.port.process(In, &mut pkt, ActionMeta::new()) {
+            match dest_dev.port.process(In, pkt, ActionMeta::new()) {
                 Ok(ProcessResult::Modified) => {
-                    unsafe {
-                        mac::mac_rx(
-                            dest_dev.mh,
-                            ptr::null_mut(),
-                            pkt.unwrap_mblk(),
-                        )
-                    };
+                    // unsafe {
+                    //     mac::mac_rx(
+                    //         dest_dev.mh,
+                    //         ptr::null_mut(),
+                    //         pkt.unwrap_mblk(),
+                    //     )
+                    // };
+                    Some(dest_dev)
                 }
 
                 Ok(ProcessResult::Drop { reason }) => {
                     opte::engine::dbg!("loopback rx drop: {:?}", reason);
+                    None
                 }
 
                 Ok(ProcessResult::Hairpin(_hppkt)) => {
@@ -1454,17 +1462,19 @@ fn guest_loopback(
                     // inbound packet to generate a hairpin response
                     // from the destination port.
                     opte::engine::dbg!("unexpected loopback rx hairpin");
+                    None
                 }
 
                 Ok(ProcessResult::Bypass) => {
                     opte::engine::dbg!("loopback rx bypass");
-                    unsafe {
-                        mac::mac_rx(
-                            dest_dev.mh,
-                            ptr::null_mut(),
-                            pkt.unwrap_mblk(),
-                        )
-                    };
+                    // unsafe {
+                    //     mac::mac_rx(
+                    //         dest_dev.mh,
+                    //         ptr::null_mut(),
+                    //         pkt.unwrap_mblk(),
+                    //     )
+                    // };
+                    Some(dest_dev)
                 }
 
                 Err(e) => {
@@ -1474,6 +1484,7 @@ fn guest_loopback(
                         dest_dev.port.name(),
                         e
                     );
+                    None
                 }
             }
         }
@@ -1485,10 +1496,9 @@ fn guest_loopback(
                 vni.as_u32(),
                 ether_dst
             );
+            None
         }
     }
-
-    ptr::null_mut()
 }
 
 #[no_mangle]
@@ -1540,167 +1550,11 @@ unsafe extern "C" fn xde_mc_tx(
 unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     let mblk_addr = pkt.mblk_addr();
     let pkt_len_old = pkt.byte_len();
-    match Parsed2::parse(pkt.iter_mut(), Direction::Out) {
-        Ok(mut p) => {
-            // let mch = &src_dev.u1.mch;
-            let stream = &src_dev.u1.stream;
-            let hint = 0;
-            let port = &src_dev.port;
-            let flow_id = p.flow;
-
-            // TODO: emit hdr, reuse cksum, actually send...
-            let mut ip6_src = Default::default();
-            let mut ip6_dst = Default::default();
-            let f_hash;
-            if let Ok(decision) = port.thin_process(Direction::Out, &mut p) {
-                match decision {
-                    opte::engine::port::ThinProcRes::PushEncap(
-                        eth,
-                        ip,
-                        udp,
-                    ) => {
-                        f_hash = p.l4_hash;
-
-                        // TODO: generate methods to fill a maybeuninit.
-                        // total bytes: ETH 14, V6 40, UDP 8, GENEVE 8
-                        let new_hdrs = 14 + 40 + 8 + 8;
-                        let mut new_blk =
-                            MsgBlk::new_with_headroom(2, new_hdrs);
-
-                        use opte::ingot::types::EmitUninit as _;
-
-                        let w_encap_bytes = (pkt_len_old + 16) as u16;
-
-                        new_blk.write(14, |uninit| {
-                            let complete_eth =
-                                opte::ingot::ethernet::Ethernet {
-                                    destination: eth.dst.bytes().into(),
-                                    source: eth.src.bytes().into(),
-                                    ethertype: ingot::ethernet::Ethertype(
-                                        eth.ether_type.into(),
-                                    ),
-                                };
-
-                            complete_eth
-                                .emit_uninit(uninit)
-                                .expect("must be enough room...");
-                        });
-
-                        // we know we'er only pushing v6.
-                        let IpPush::Ip6(v6) = ip else { panic!() };
-                        ip6_src = v6.src;
-                        ip6_dst = v6.dst;
-
-                        new_blk.write(40, |uninit| {
-                            let complete_v6 = opte::ingot::ip::Ipv6 {
-                                version: 6,
-                                dscp: 0,
-                                ecn: ingot::ip::Ecn::NotCapable,
-                                flow_label: 12345678,
-                                payload_len: w_encap_bytes,
-                                next_header: ingot::ip::IpProtocol(
-                                    v6.proto.into(),
-                                ),
-                                hop_limit: 128,
-                                source: v6.src.bytes().into(),
-                                destination: v6.dst.bytes().into(),
-                                v6ext: vec![].into(),
-                            };
-
-                            complete_v6
-                                .emit_uninit(uninit)
-                                .expect("must be enough room...");
-                        });
-
-                        let EncapPush::Geneve(gen) = udp else { panic!() };
-                        new_blk.write(16, |uninit| {
-                            let complete_udp = opte::ingot::udp::Udp {
-                                source: gen.entropy,
-                                destination: 6081,
-                                length: w_encap_bytes,
-                                checksum: 0,
-                            };
-                            let complete_geneve = opte::ingot::geneve::Geneve {
-                                version: 0,
-                                opt_len: 0,
-                                flags: opte::ingot::geneve::GeneveFlags::empty(
-                                ),
-                                protocol_type:
-                                    opte::ingot::ethernet::Ethertype::ETHERNET,
-                                vni: gen.vni.into(),
-                                reserved: 0,
-                                options: Vec::new(),
-                            };
-
-                            let len = complete_udp
-                                .emit_uninit(uninit)
-                                .expect("must be enough room...");
-                            complete_geneve
-                                .emit_uninit(&mut uninit[len..])
-                                .expect("must be enough room...");
-                        });
-
-                        core::mem::swap(&mut new_blk, &mut pkt);
-                        pkt.extend_if_one(new_blk);
-                    }
-                    // we're in Tx for a ULP'd pkt -- this should NEVER happen.
-                    opte::engine::port::ThinProcRes::PopEncap => unreachable!(),
-                    opte::engine::port::ThinProcRes::Na => unreachable!(),
-                }
-
-                if ip6_dst == ip6_src {
-                    // todo. broken just now ig
-                    // return guest_loopback(src_dev, pkt, vni);
-                    opte::engine::err!("eh?");
-                    return ptr::null_mut();
-                }
-
-                let my_key = RouteKey { dst: ip6_dst, l4_hash: f_hash };
-                let Route { src, dst, underlay_dev } =
-                    src_dev.routes.next_hop(my_key, src_dev);
-
-                // Get a pointer to the beginning of the outer frame and
-                // fill in the dst/src addresses before sending out the
-                // device.
-                let mblk = pkt.unwrap_mblk();
-                let rptr = (*mblk).b_rptr;
-                ptr::copy(dst.as_ptr(), rptr, 6);
-                ptr::copy(src.as_ptr(), rptr.add(6), 6);
-                // Unwrap: We know the packet is good because we just
-                // unwrapped it above.
-                let new_pkt = MsgBlk::wrap_mblk(mblk).unwrap();
-
-                underlay_dev.stream.tx_drop_on_no_desc2(
-                    new_pkt,
-                    hint,
-                    MacTxFlags::empty(),
-                );
-
-                return ptr::null_mut();
-            }
-        }
-        Err(e) => {
-            let mut bytes = vec![];
-            pkt.iter_mut().for_each(|v| bytes.extend_from_slice(v));
-            opte::engine::err!("NEW Rx bad packet: {:?} -> {:?}", e, bytes);
-            bad_packet_parse_probe(
-                Some(src_dev.port.name_cstr()),
-                Direction::Out,
-                mblk_addr,
-                &PacketError::Parse(
-                    opte::engine::packet::ParseError::UnexpectedProtocol(
-                        99.into(),
-                    ),
-                ),
-            );
-            // return ptr::null_mut();
-        }
-    };
-    let pkt = pkt.as_pkt();
 
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
-    let mut pkt = match pkt.parse(Direction::Out, parser) {
+    let parsed_pkt = Packet2::new(pkt.iter_mut());
+    let mut parsed_pkt = match parsed_pkt.parse(Direction::Out, parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.
@@ -1733,7 +1587,8 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         // refresh my memory on all of this.
         //
         // TODO Is there way to set mac_tx to must use result?
-        stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+        drop(parsed_pkt);
+        stream.tx_drop_on_no_desc2(pkt, hint, MacTxFlags::empty());
         return ptr::null_mut();
     }
 
@@ -1742,34 +1597,27 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     // The port processing code will fire a probe that describes what
     // action was taken -- there should be no need to add probes or
     // prints here.
-    let res = port.process(Direction::Out, &mut pkt, ActionMeta::new());
+    let res = port.process(Direction::Out, &mut parsed_pkt, ActionMeta::new());
+
     match res {
         Ok(ProcessResult::Modified) => {
-            let meta = pkt.meta();
+            let meta = parsed_pkt.meta();
 
             // If the outer IPv6 destination is the same as the
             // source, then we need to loop the packet inbound to the
             // guest on this same host.
-            let ip = match meta.outer.ip {
+            let (ip6_src, ip6_dst) = match meta.outer_ip6_addrs() {
                 Some(v) => v,
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
-                    opte::engine::dbg!("no outer ip header, dropping");
+                    opte::engine::dbg!("no outer IPv6 header, dropping");
                     return ptr::null_mut();
                 }
             };
 
-            let ip6 = match ip.ip6() {
-                Some(v) => v,
-                None => {
-                    opte::engine::dbg!("outer IP header is not v6, dropping");
-                    return ptr::null_mut();
-                }
-            };
-
-            let vni = match meta.outer.encap {
-                Some(EncapMeta::Geneve(geneve)) => geneve.vni,
+            let vni = match meta.outer_encap_geneve_vni_and_origin() {
+                Some((vni, _)) => vni,
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
@@ -1778,9 +1626,37 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 }
             };
 
-            if ip6.dst == ip6.src {
-                return guest_loopback(src_dev, pkt, vni);
+            // what we WANT to do is pass in the parsed pkt, handle the
+            // emitspec in the same place, then send elsewhere.
+            let devs = unsafe { xde_devs.read() };
+            let local_port = if ip6_dst == ip6_src {
+                let Some(valid_local) =
+                    guest_loopback(src_dev, &devs, &mut parsed_pkt, vni)
+                else {
+                    return ptr::null_mut();
+                };
+
+                Some(valid_local)
+            } else {
+                None
+            };
+
+            let l4_hash = parsed_pkt.l4_hash();
+            let mut emit_spec = parsed_pkt.emit_spec();
+
+            let out_pkt = emit_spec.apply(pkt);
+
+            if let Some(local_port) = local_port {
+                unsafe {
+                    mac::mac_rx(
+                        local_port.mh,
+                        ptr::null_mut(),
+                        out_pkt.unwrap_mblk(),
+                    )
+                };
+                return ptr::null_mut();
             }
+            drop(devs);
 
             // Currently the overlay layer leaves the outer frame
             // destination and source zero'd. Ask IRE for the route
@@ -1793,21 +1669,22 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // results for a given dst + entropy. These have a fairly tight
             // expiry so that we can actually react to new reachability/load
             // info from DDM.
-            let my_key = RouteKey { dst: ip6.dst, l4_hash: meta.l4_hash() };
+            let my_key = RouteKey { dst: ip6_dst, l4_hash: Some(l4_hash) };
             let Route { src, dst, underlay_dev } =
                 src_dev.routes.next_hop(my_key, src_dev);
 
             // Get a pointer to the beginning of the outer frame and
             // fill in the dst/src addresses before sending out the
             // device.
-            let mblk = pkt.unwrap_mblk();
+            let mblk = out_pkt.unwrap_mblk();
             let rptr = (*mblk).b_rptr;
             ptr::copy(dst.as_ptr(), rptr, 6);
             ptr::copy(src.as_ptr(), rptr.add(6), 6);
             // Unwrap: We know the packet is good because we just
             // unwrapped it above.
-            let new_pkt = Packet::<Initialized>::wrap_mblk(mblk).unwrap();
-            underlay_dev.stream.tx_drop_on_no_desc(
+            let new_pkt = MsgBlk::wrap_mblk(mblk).unwrap();
+
+            underlay_dev.stream.tx_drop_on_no_desc2(
                 new_pkt,
                 hint,
                 MacTxFlags::empty(),
@@ -1815,18 +1692,23 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         }
 
         Ok(ProcessResult::Drop { .. }) => {
+            drop(parsed_pkt);
             return ptr::null_mut();
         }
 
         Ok(ProcessResult::Hairpin(hpkt)) => {
+            drop(parsed_pkt);
             mac::mac_rx(src_dev.mh, ptr::null_mut(), hpkt.unwrap_mblk());
         }
 
         Ok(ProcessResult::Bypass) => {
-            stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+            drop(parsed_pkt);
+            stream.tx_drop_on_no_desc2(pkt, hint, MacTxFlags::empty());
         }
 
-        Err(_) => {}
+        Err(_) => {
+            drop(parsed_pkt);
+        }
     }
 
     // On return the Packet is dropped and its underlying mblk
@@ -2001,99 +1883,13 @@ unsafe fn xde_rx_one(
 ) {
     let mblk_addr = pkt.mblk_addr();
     let pkt_len_old = pkt.byte_len();
-    match Parsed2::parse(pkt.iter_mut(), Direction::In) {
-        Ok(mut p) => {
-            // opte::engine::err!("Successful parse.");
-            let devs = xde_devs.read();
-            let h = p.meta.0.headers();
-            let (vni, ether_dst) = match (&h.outer_encap, Some(&h.inner_eth)) {
-                (Some(ref geneve), Some(ref eth)) => {
-                    (Vni::new(geneve.vni()).unwrap(), eth.destination())
-                }
-                _ => {
-                    opte::engine::err!("Wut");
-                    return;
-                }
-            };
-            let Some(dev) = devs.iter().find(|x| {
-                x.vni == vni
-                    && x.port.mac_addr().bytes() == ether_dst.as_bytes()
-            }) else {
-                // TODO add SDT probe
-                // TODO add stat
-                opte::engine::err!(
-                    "[encap] no device found for vni: {} mac: {}",
-                    vni,
-                    ether_dst
-                );
-                return;
-            };
-
-            let e_len = h.outer_eth.as_ref().map(|v| v.packet_length());
-            let v_len = h.outer_v6.as_ref().map(|v| v.packet_length());
-            let u_len = h.outer_udp.as_ref().map(|v| v.packet_length());
-            let g_len = h.outer_encap.as_ref().map(|v| v.packet_length());
-
-            let pop_len: usize = [e_len, v_len, u_len, g_len]
-                .iter()
-                .map(|v| v.unwrap_or_default())
-                .sum();
-
-            // opte::engine::err!("Want to pop: {}", pop_len);
-
-            let port = &dev.port;
-            if let Ok(decision) = port.thin_process(Direction::In, &mut p) {
-                match decision {
-                    opte::engine::port::ThinProcRes::PopEncap => {
-                        let mut to_pop = pop_len;
-                        for layer in pkt.iter_mut() {
-                            let max_drop = layer.len();
-                            let will_drop = max_drop.min(to_pop);
-                            layer.drop_front_bytes(will_drop);
-                            to_pop -= will_drop;
-
-                            if to_pop == 0 {
-                                break;
-                            }
-                        }
-
-                        // could theoretically have empty segments here.
-                        // not an issue over NIC for now.
-                        mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
-                    }
-                    // we know this to be true given how we cfg opte
-                    opte::engine::port::ThinProcRes::PushEncap(_, _, _) => {
-                        unreachable!()
-                    }
-                    opte::engine::port::ThinProcRes::Na => unreachable!(),
-                }
-                return;
-            }
-        }
-        Err(e) => {
-            let mut bytes = vec![];
-            pkt.iter().for_each(|v| bytes.extend_from_slice(v));
-            // opte::engine::err!("NEW Rx bad packet: {:?} -> {:?}", e, bytes);
-            bad_packet_parse_probe(
-                None,
-                Direction::In,
-                mblk_addr,
-                &PacketError::Parse(
-                    opte::engine::packet::ParseError::UnexpectedProtocol(
-                        99.into(),
-                    ),
-                ),
-            );
-        }
-    }
-    // opte::engine::err!("bk to basics.");
-    let pkt = pkt.as_pkt();
+    let parsed_pkt = Packet2::new(pkt.iter_mut());
 
     // We must first parse the packet in order to determine where it
     // is to be delivered.
     let parser = VpcParser {};
-    let mblk_addr = pkt.mblk_addr();
-    let mut pkt = match pkt.parse(Direction::In, parser) {
+    // let mblk_addr = parsed_pkt.mblk_addr();
+    let mut parsed_pkt = match parsed_pkt.parse(Direction::In, parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.
@@ -2110,24 +1906,28 @@ unsafe fn xde_rx_one(
         }
     };
 
-    let meta = pkt.meta();
+    let meta = parsed_pkt.meta();
     let devs = xde_devs.read();
 
     // Determine where to send packet based on Geneve VNI and
     // destination MAC address.
-    let geneve = match meta.outer.encap {
-        Some(EncapMeta::Geneve(geneve)) => geneve,
+    // Todo: this, but better.
+    let vni = match meta.outer_encap_geneve_vni_and_origin() {
+        Some((vni, _)) => vni,
         None => {
             // TODO add stat
             let msg = c"no geneve header, dropping";
-            bad_packet_probe(None, Direction::In, pkt.mblk_addr(), msg);
+            bad_packet_probe(None, Direction::In, mblk_addr, msg);
             opte::engine::dbg!("no geneve header, dropping");
             return;
         }
     };
 
-    let vni = geneve.vni;
-    let ether_dst = meta.inner.ether.dst;
+    let ether_dst = meta.inner_ether().destination();
+    let ether_dst = ether_dst.into_array().into();
+
+    // let vni = geneve.vni;
+    // let ether_dst = meta.inner.ether.dst;
     let Some(dev) =
         devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
     else {
@@ -2143,18 +1943,23 @@ unsafe fn xde_rx_one(
 
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
+        drop(parsed_pkt);
         mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
         return;
     }
 
     let port = &dev.port;
-    let res = port.process(Direction::In, &mut pkt, ActionMeta::new());
+    let res = port.process(Direction::In, &mut parsed_pkt, ActionMeta::new());
+    let mut emit_spec = parsed_pkt.emit_spec();
+
     match res {
         Ok(ProcessResult::Modified | ProcessResult::Bypass) => {
-            mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
+            let npkt = emit_spec.apply(pkt);
+
+            mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk());
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
-            stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
+            stream.tx_drop_on_no_desc2(hppkt, 0, MacTxFlags::empty());
         }
         _ => {}
     }

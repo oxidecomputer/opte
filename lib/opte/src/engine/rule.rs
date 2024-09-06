@@ -388,40 +388,17 @@ impl HdrTransform {
     where
         T::Chunk: ByteSliceMut,
     {
-        // NOTE: we want to track cksum dirtying here, somehow.
-
-        // meta.headers.outer_eth
-        //     .act_on(&self.outer_ether)
-        //     .map_err(Self::err_fn("outer ether"))?;
         self.outer_ether
             .act_on_option(&mut meta.headers.outer_eth)
             .map_err(Self::err_fn("outer ether"))?;
-        // self.outer_ether
-        //     .run(&mut meta.outer.ether)
-        //     .map_err(Self::err_fn("outer ether"))?;
-        // self.outer_ip
-        //     .run(&mut meta.outer.ip)
-        //     .map_err(Self::err_fn("outer IP"))?;
-        // meta.headers.outer_l3
-        //     .act_on(&self.outer_ip)
-        //     .map_err(Self::err_fn("outer IP"))?;
+
         self.outer_ip
             .act_on_option(&mut meta.headers.outer_l3)
             .map_err(Self::err_fn("outer IP"))?;
-        // self.outer_encap
-        //     .run(&mut meta.outer.encap)
-        //     .map_err(Self::err_fn("outer encap"))?;
-        // meta.headers.outer_encap
-        //     .act_on(&self.outer_encap)
-        //     .map_err(Self::err_fn("outer encap"))?;
+
         self.outer_encap
             .act_on_option(&mut meta.headers.outer_encap)
             .map_err(Self::err_fn("outer encap"))?;
-        // XXX A hack so that inner ethernet can meet the interface of
-        // `HeaderAction::run().`
-        // let mut tmp = Some(meta.inner.ether);
-        // self.inner_ether.run(&mut tmp).map_err(Self::err_fn("inner ether"))?;
-        // meta.inner.ether = tmp.unwrap();
 
         // If I set this up right, we can handle the above w/o panic on a
         // dumb EtherDrop action...
@@ -430,12 +407,6 @@ impl HdrTransform {
             .act_on(&self.inner_ether)
             .map_err(Self::err_fn("inner eth"))?;
 
-        // self.inner_ip
-        //     .run(&mut meta.inner.ip)
-        //     .map_err(Self::err_fn("inner IP"))?;
-        // let l3_dirty = meta.headers.inner_l3
-        //     .act_on(&self.inner_ip)
-        //     .map_err(Self::err_fn("inner IP"))?;
         let l3_dirty = self
             .inner_ip
             .act_on_option(&mut meta.headers.inner_l3)
@@ -445,12 +416,6 @@ impl HdrTransform {
             .inner_ulp
             .run(&mut meta.headers.inner_ulp)
             .map_err(Self::err_fn("inner ULP"))?;
-
-        // let ulp_dirty = meta.headers.inner_ulp
-        //     .run(&self.inner_ulp)
-        //     .map_err(Self::err_fn("inner ULP"))?;
-
-        // let ulp_dirty = todo!();
 
         Ok(l3_dirty || ulp_dirty)
     }

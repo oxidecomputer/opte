@@ -78,11 +78,12 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::SeqCst;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
+use ingot::types::Read;
 use kstat_macro::KStatProvider;
 use opte_api::Direction;
 use opte_api::MacAddr;
 use opte_api::OpteError;
-use std::process;
+use zerocopy::ByteSliceMut;
 
 pub type Result<T> = result::Result<T, OpteError>;
 
@@ -1252,7 +1253,10 @@ impl<N: NetworkImpl> Port<N> {
                 }),
             ) => {
                 // TCP, then transform?
-                todo!()
+                // TODO: tcp
+
+                // todo!(); //TCP
+                transform.apply(pkt, dir)?;
             }
             (
                 Direction::In,
@@ -1262,7 +1266,13 @@ impl<N: NetworkImpl> Port<N> {
                 }),
             ) => {
                 // Transform, then TCP?
-                todo!()
+
+                transform.apply(pkt, dir)?;
+                // todo!(); //TCP
+            }
+            // Nothing left to do other than csums; we took the slowpath.
+            (_, Ok(InternalProcessResult::Modified { .. })) => {
+                pkt.update_checksums()
             }
             _ => {}
         }
@@ -1790,6 +1800,28 @@ pub(crate) struct Transforms {
 impl Transforms {
     fn new() -> Self {
         Self { hdr: Vec::with_capacity(8), body: Vec::with_capacity(2) }
+    }
+
+    fn apply<T: Read>(
+        &self,
+        pkt: &mut Packet2<Parsed2<T>>,
+        dir: Direction,
+    ) -> result::Result<(), ProcessError>
+    where
+        T::Chunk: ByteSliceMut,
+    {
+        // TODO: prebake these into one transform?
+        for ht in &self.hdr {
+            pkt.hdr_transform(ht)?;
+        }
+
+        for bt in &self.body {
+            pkt.body_transform(dir, &**bt)?;
+        }
+
+        pkt.update_checksums();
+
+        Ok(())
     }
 }
 

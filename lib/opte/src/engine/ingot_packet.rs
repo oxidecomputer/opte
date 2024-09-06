@@ -29,7 +29,9 @@ use super::packet::FLOW_ID_DEFAULT;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::NetworkParser;
+use alloc::boxed::Box;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::cell::Cell;
 use core::cell::RefCell;
 use core::hash::Hash;
@@ -41,6 +43,8 @@ use core::ops::DerefMut;
 use core::ptr::NonNull;
 use core::slice;
 use core::sync::atomic::AtomicPtr;
+#[cfg(all(not(feature = "std"), not(test)))]
+use illumos_sys_hdrs as ddi;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::ethernet::Ethernet;
@@ -82,8 +86,10 @@ use ingot::tcp::TcpFlags;
 use ingot::tcp::TcpMut;
 use ingot::tcp::TcpPacket;
 use ingot::tcp::TcpRef;
+use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderStack;
+use ingot::types::Packet as IngotPacket;
 use ingot::types::ParseControl;
 use ingot::types::ParseError as IngotParseErr;
 use ingot::types::ParseResult;
@@ -97,6 +103,7 @@ use ingot::udp::UdpRef;
 use ingot::udp::ValidUdp;
 use ingot::Parse;
 use opte_api::Direction;
+use opte_api::Ipv6Addr;
 use opte_api::Vni;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
@@ -183,6 +190,14 @@ impl MsgBlk {
         Self { inner }
     }
 
+    pub fn headroom(&self) -> usize {
+        unsafe {
+            let inner = self.inner.as_ref();
+
+            inner.b_rptr.offset_from((*inner.b_datap).db_base) as usize
+        }
+    }
+
     pub fn new_ethernet(len: usize) -> Self {
         Self::new_with_headroom(2, len)
     }
@@ -214,6 +229,29 @@ impl MsgBlk {
         let mut_out = unsafe { self.inner.as_mut() };
         let avail_bytes =
             unsafe { (*mut_out.b_datap).db_lim.offset_from(mut_out.b_wptr) };
+        assert!(avail_bytes >= 0);
+        assert!(avail_bytes as usize >= n_bytes);
+
+        let in_slice = unsafe {
+            slice::from_raw_parts_mut(
+                mut_out.b_wptr as *mut MaybeUninit<u8>,
+                n_bytes,
+            )
+        };
+
+        f(in_slice);
+
+        mut_out.b_wptr = unsafe { mut_out.b_wptr.add(n_bytes) };
+    }
+
+    pub unsafe fn write_front(
+        &mut self,
+        n_bytes: usize,
+        f: impl FnOnce(&mut [MaybeUninit<u8>]),
+    ) {
+        let mut_out = unsafe { self.inner.as_mut() };
+        let avail_bytes =
+            unsafe { mut_out.b_rptr.offset_from((*mut_out.b_datap).db_base) };
         assert!(avail_bytes >= 0);
         assert!(avail_bytes as usize >= n_bytes);
 
@@ -380,6 +418,17 @@ pub struct OpteUnifiedLengths {
     pub inner_ulp: usize,
 }
 
+impl OpteUnifiedLengths {
+    pub fn hdr_len(&self) -> usize {
+        self.outer_eth
+            + self.outer_l3
+            + self.outer_encap
+            + self.inner_eth
+            + self.inner_l3
+            + self.inner_ulp
+    }
+}
+
 // TODO: Choices (L3, etc.) don't have Debug in all the right places yet.
 impl<Q: ByteSlice> core::fmt::Debug for OpteUnified<Q> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -449,6 +498,94 @@ impl<O: Header, B: Header> Header for OwnedPacket<O, B> {
         match self {
             OwnedPacket::Repr(o) => o.packet_length(),
             OwnedPacket::Raw(b) => b.packet_length(),
+        }
+    }
+}
+
+impl<O: Emit, B: Emit> Emit for OwnedPacket<O, B> {
+    fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
+        match self {
+            OwnedPacket::Repr(o) => o.emit_raw(buf),
+            OwnedPacket::Raw(b) => b.emit_raw(buf),
+        }
+    }
+
+    fn needs_emit(&self) -> bool {
+        match self {
+            OwnedPacket::Repr(o) => true,
+            OwnedPacket::Raw(b) => b.needs_emit(),
+        }
+    }
+}
+
+struct SizeHoldingEncap<'a> {
+    encapped_len: u16,
+    meta: &'a EncapMeta,
+}
+
+unsafe impl<'a> ingot::types::EmitDoesNotRelyOnBufContents
+    for SizeHoldingEncap<'a>
+{
+}
+
+impl<'a> Header for SizeHoldingEncap<'a> {
+    const MINIMUM_LENGTH: usize = EncapMeta::MINIMUM_LENGTH;
+
+    #[inline]
+    fn packet_length(&self) -> usize {
+        self.meta.packet_length()
+    }
+}
+
+impl<'a> Emit for SizeHoldingEncap<'a> {
+    fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
+        match self.meta {
+            EncapMeta::Geneve(g) => {
+                (
+                    Udp {
+                        source: g.entropy,
+                        destination: 6081,
+                        // TODO: account for options.
+                        length: self.encapped_len + 16,
+                        ..Default::default()
+                    },
+                    Geneve {
+                        protocol_type: Ethertype::ETHERNET,
+                        vni: g.vni.as_u32(),
+                        ..Default::default()
+                    },
+                )
+                    .emit_raw(buf)
+            }
+        }
+    }
+
+    fn needs_emit(&self) -> bool {
+        true
+    }
+}
+
+impl Emit for EncapMeta {
+    #[inline]
+    fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
+        SizeHoldingEncap { encapped_len: 0, meta: self }.emit_raw(buf)
+    }
+
+    fn needs_emit(&self) -> bool {
+        true
+    }
+}
+
+impl<B: ByteSliceMut> Emit for ValidEncapMeta<B> {
+    fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
+        match self {
+            ValidEncapMeta::Geneve(u, g) => todo!(),
+        }
+    }
+
+    fn needs_emit(&self) -> bool {
+        match self {
+            ValidEncapMeta::Geneve(u, g) => u.needs_emit() && g.needs_emit(),
         }
     }
 }
@@ -739,6 +876,21 @@ impl<T: Read> PacketHeaders<T> {
         }
     }
 
+    // Again: really need to make Owned/Direct choices better-served by ingot.
+    // this interface sucks.
+    pub fn outer_ip6_addrs(&self) -> Option<(Ipv6Addr, Ipv6Addr)> {
+        match &self.headers.outer_l3 {
+            Some(OwnedPacket::Repr(L3Repr::Ipv6(v6))) => Some((
+                v6.source.octets().into(),
+                v6.destination.octets().into(),
+            )),
+            Some(OwnedPacket::Raw(ValidL3::Ipv6(v6))) => {
+                Some((v6.source().octets().into(), v6.source().octets().into()))
+            }
+            _ => None,
+        }
+    }
+
     pub fn inner_ether(&self) -> &EthernetPacket<T::Chunk> {
         &self.headers.inner_eth
     }
@@ -825,6 +977,30 @@ impl<T: Read> PacketHeaders<T> {
         T::Chunk: ByteSliceMut,
     {
         self.body.body_segs_mut()
+    }
+
+    /// Return whether the IP layer has a checksum both structurally
+    /// and that it is non-zero (i.e., not offloaded).
+    pub fn has_ip_csum(&self) -> bool {
+        match &self.headers.inner_l3 {
+            Some(L3::Ipv4(v4)) => v4.checksum() != 0,
+            Some(L3::Ipv6(_)) => false,
+            None => false,
+        }
+    }
+
+    /// Return whether the ULP layer has a checksum both structurally
+    /// and that it is non-zero (i.e., not offloaded).
+    pub fn has_ulp_csum(&self) -> bool {
+        let csum = match &self.headers.inner_ulp {
+            Some(Ulp::Tcp(t)) => t.checksum(),
+            Some(Ulp::Udp(u)) => u.checksum(),
+            Some(Ulp::IcmpV4(i4)) => i4.checksum(),
+            Some(Ulp::IcmpV6(i6)) => i6.checksum(),
+            None => return false,
+        };
+
+        csum != 0
     }
 }
 
@@ -966,6 +1142,7 @@ impl<T: Read> Packet2<Initialized2<T>> {
             l4_hash: Memoised::Uninit,
             body_modified: false,
             len,
+            inner_csum_dirty: false,
         };
 
         let mut pkt = Packet2 { state };
@@ -987,8 +1164,195 @@ impl<T: Read> Packet2<Parsed2<T>> {
         &mut self.state.meta
     }
 
-    pub fn emit_spec(self) -> EmitSpec {
-        todo!()
+    /// Convert a packet's metadata into a set of instructions
+    /// needed to serialize all its changes to the wire.
+    pub fn emit_spec(self) -> EmitSpec
+    where
+        T::Chunk: ByteSliceMut,
+    {
+        // Roughly how does this work:
+        // - Identify rightmost structural-changed field.
+        // - fill out owned versions into the push_spec of all
+        //   extant fields we rewound past.
+        // - Rewind up to+including that point in original
+        //   pkt space.
+        let state = self.state;
+        let init_lens = state.meta.initial_lens;
+        let headers = state.meta.headers;
+        let payload_len = state.len - init_lens.hdr_len();
+        let mut encapped_len = payload_len;
+
+        let mut push_spec = OpteEmit::default();
+        let mut rewind = 0;
+
+        // structural change if:
+        // hdr_len is different.
+        // needs_emit is true (i.e., now on an owned repr).
+
+        // Part of the initial design idea of ingot was the desire to automatically
+        // do this sort of thing. We are so, so far from that...
+        let mut force_serialize = false;
+
+        use ingot::types::ToOwnedPacket;
+
+        match headers.inner_ulp {
+            Some(ulp) => {
+                let l = ulp.packet_length();
+                encapped_len += l;
+
+                if ulp.needs_emit() || l != init_lens.inner_ulp {
+                    let inner =
+                        push_spec.inner.get_or_insert_with(Default::default);
+                    // TODO: impl ToOwnedPacket / From<&Ulp> for UlpRepr here? generally seems a bit anaemic.
+                    inner.ulp = Some(match ulp {
+                        Ulp::Tcp(IngotPacket::Repr(t)) => UlpRepr::Tcp(*t),
+                        Ulp::Tcp(IngotPacket::Raw(t)) => {
+                            UlpRepr::Tcp((&t).into())
+                        }
+                        Ulp::Udp(IngotPacket::Repr(t)) => UlpRepr::Udp(*t),
+                        Ulp::Udp(IngotPacket::Raw(t)) => {
+                            UlpRepr::Udp((&t).into())
+                        }
+                        Ulp::IcmpV4(IngotPacket::Repr(t)) => {
+                            UlpRepr::IcmpV4(*t)
+                        }
+                        Ulp::IcmpV4(IngotPacket::Raw(t)) => {
+                            UlpRepr::IcmpV4((&t).into())
+                        }
+                        Ulp::IcmpV6(IngotPacket::Repr(t)) => {
+                            UlpRepr::IcmpV6(*t)
+                        }
+                        Ulp::IcmpV6(IngotPacket::Raw(t)) => {
+                            UlpRepr::IcmpV6((&t).into())
+                        }
+                    });
+                    // inner.ulp = Some((&ulp).into());
+                    force_serialize = true;
+                    rewind += init_lens.inner_ulp;
+                }
+            }
+            None if init_lens.inner_ulp != 0 => {
+                force_serialize = true;
+                rewind += init_lens.inner_ulp;
+            }
+            _ => {}
+        }
+
+        match headers.inner_l3 {
+            Some(l3) => {
+                let l = l3.packet_length();
+                encapped_len += l;
+
+                if force_serialize || l3.needs_emit() || l != init_lens.inner_l3
+                {
+                    let inner =
+                        push_spec.inner.get_or_insert_with(Default::default);
+
+                    inner.l3 = Some(match l3 {
+                        L3::Ipv4(IngotPacket::Repr(v4)) => L3Repr::Ipv4(*v4),
+                        L3::Ipv4(IngotPacket::Raw(v4)) => {
+                            L3Repr::Ipv4((&v4).into())
+                        }
+                        L3::Ipv6(IngotPacket::Repr(v6)) => L3Repr::Ipv6(*v6),
+
+                        // This needs a fuller ToOwnedPacket due to EHs...
+                        // We can't actually do structural mods here today using OPTE.
+                        L3::Ipv6(IngotPacket::Raw(v6)) => todo!(), // L3Repr::Ipv6((&v6).into()),
+                    });
+                    force_serialize = true;
+                    rewind += init_lens.inner_l3;
+                }
+            }
+            None if init_lens.inner_l3 != 0 => {
+                force_serialize = true;
+                rewind += init_lens.inner_l3;
+            }
+            _ => {}
+        }
+
+        // inner eth
+        encapped_len += headers.inner_eth.packet_length();
+        if force_serialize {
+            let inner = push_spec.inner.get_or_insert_with(Default::default);
+            inner.eth = match headers.inner_eth {
+                IngotPacket::Repr(p) => *p,
+                IngotPacket::Raw(p) => (&p).into(),
+            };
+            rewind += init_lens.inner_eth;
+        }
+
+        match headers.outer_encap {
+            Some(encap)
+                if force_serialize
+                    || encap.needs_emit()
+                    || encap.packet_length() != init_lens.outer_encap =>
+            {
+                push_spec.outer_encap = Some(match encap {
+                    OwnedPacket::Repr(o) => o,
+                    // Needed in fullness of time, but not here.
+                    OwnedPacket::Raw(_) => todo!(),
+                });
+
+                force_serialize = true;
+                rewind += init_lens.outer_encap;
+            }
+            None if init_lens.outer_encap != 0 => {
+                force_serialize = true;
+                rewind += init_lens.outer_encap;
+            }
+            _ => {}
+        }
+
+        match headers.outer_l3 {
+            Some(l3)
+                if force_serialize
+                    || l3.needs_emit()
+                    || l3.packet_length() != init_lens.outer_l3 =>
+            {
+                push_spec.outer_ip = Some(match l3 {
+                    OwnedPacket::Repr(o) => o,
+                    // Needed in fullness of time, but not here.
+                    OwnedPacket::Raw(_) => todo!(),
+                });
+
+                force_serialize = true;
+                rewind += init_lens.outer_l3;
+            }
+            None if init_lens.outer_l3 != 0 => {
+                force_serialize = true;
+                rewind += init_lens.outer_l3;
+            }
+            _ => {}
+        }
+
+        match headers.outer_eth {
+            Some(eth)
+                if force_serialize
+                    || eth.needs_emit()
+                    || eth.packet_length() != init_lens.outer_eth =>
+            {
+                push_spec.outer_eth = Some(match eth {
+                    OwnedPacket::Repr(o) => o,
+                    // Needed in fullness of time, but not here.
+                    OwnedPacket::Raw(_) => todo!(),
+                });
+
+                force_serialize = true;
+                rewind += init_lens.outer_eth;
+            }
+            None if init_lens.outer_eth != 0 => {
+                force_serialize = true;
+                rewind += init_lens.outer_eth;
+            }
+            _ => {}
+        }
+
+        EmitSpec {
+            rewind: rewind as u16,
+            payload_len: payload_len as u16,
+            encapped_len: encapped_len as u16,
+            push_spec,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -1008,7 +1372,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
     where
         T::Chunk: ByteSliceMut,
     {
-        xform.run(&mut self.state.meta)?;
+        self.state.inner_csum_dirty |= xform.run(&mut self.state.meta)?;
         // Given that n_transform layers is 1 or 2, probably won't
         // save too much by trying to tie to a generation number.
         // TODO: profile.
@@ -1141,6 +1505,87 @@ impl<T: Read> Packet2<Parsed2<T>> {
     pub fn set_l4_hash(&mut self, hash: u32) {
         self.state.l4_hash.set(hash);
     }
+
+    /// Perform an incremental checksum update for the ULP checksums
+    /// based on the stored body checksum.
+    ///
+    /// This avoids duplicating work already done by the client in the
+    /// case where checksums are **not** being offloaded to the hardware.
+    pub fn update_checksums(&mut self) {
+        if !self.state.inner_csum_dirty {
+            return;
+        }
+        let update_ip = self.state.meta.has_ip_csum();
+        let update_ulp = self.state.meta.has_ulp_csum();
+
+        // TODO
+
+        // // If a ULP exists, then compute and set its checksum.
+        // if let (true, Some(ulp_off)) =
+        //     (update_ulp, self.state.hdr_offsets.inner.ulp)
+        // {
+        //     // Start by reusing the known checksum of the body.
+        //     let mut csum = self.state.body_csum.unwrap();
+        //     // Unwrap: Can't have a ULP without an IP.
+        //     let ip = self.meta().inner.ip.unwrap();
+        //     // Add pseudo header checksum.
+        //     let pseudo_csum = ip.pseudo_csum();
+        //     csum += pseudo_csum;
+        //     // All headers must reside in the first segment.
+        //     let all_hdr_bytes = self.segs[0].slice_mut();
+        //     // Determine ULP slice and add its bytes to the
+        //     // checksum.
+        //     let ulp_start = ulp_off.seg_pos;
+        //     let ulp_end = ulp_start + ulp_off.hdr_len;
+        //     let ulp = &mut all_hdr_bytes[ulp_start..ulp_end];
+
+        //     match self.state.meta.inner.ulp.as_mut().unwrap() {
+        //         UlpMeta::Icmpv4(icmp) => {
+        //             Self::update_icmp_csum(
+        //                 icmp,
+        //                 // ICMP4 requires the body_csum *without*
+        //                 // the pseudoheader added back in.
+        //                 self.state.body_csum.unwrap(),
+        //                 ulp,
+        //             );
+        //         }
+
+        //         UlpMeta::Icmpv6(icmp) => {
+        //             Self::update_icmp_csum(icmp, csum, ulp);
+        //         }
+
+        //         UlpMeta::Tcp(tcp) => {
+        //             Self::update_tcp_csum(tcp, csum, ulp);
+        //         }
+
+        //         UlpMeta::Udp(udp) => {
+        //             Self::update_udp_csum(udp, csum, ulp);
+        //         }
+        //     }
+        // }
+
+        // // Compute and fill in the IPv4 header checksum.
+        // if let (true, Some(IpMeta::Ip4(ip))) =
+        //     (update_ip, self.state.meta.inner.ip.as_mut())
+        // {
+        //     let ip_off = self.state.hdr_offsets.inner.ip.unwrap();
+        //     let all_hdr_bytes = self.segs[0].slice_mut();
+        //     let ip_start = ip_off.seg_pos;
+        //     let ip_end = ip_start + ip_off.hdr_len;
+        //     let ip_bytes = &mut all_hdr_bytes[ip_start..ip_end];
+        //     let csum_start = Ipv4Hdr::CSUM_BEGIN;
+        //     let csum_end = Ipv4Hdr::CSUM_END;
+        //     ip_bytes[csum_start..csum_end].copy_from_slice(&[0; 2]);
+        //     let csum =
+        //         HeaderChecksum::from(Checksum::compute(ip_bytes)).bytes();
+
+        //     // Update the metadata.
+        //     ip.csum = csum;
+
+        //     // Update the header bytes.
+        //     ip_bytes[csum_start..csum_end].copy_from_slice(&csum[..]);
+        // }
+    }
 }
 
 /// The type state of a packet that has been initialized and allocated, but
@@ -1167,6 +1612,7 @@ pub struct Parsed2<T: Read> {
     body_csum: Memoised<Option<Checksum>>,
     l4_hash: Memoised<u32>,
     body_modified: bool,
+    inner_csum_dirty: bool,
 }
 
 // Needed for now to account for not wanting to redesign ActionDescs
@@ -1279,6 +1725,7 @@ pub enum Emitter<T> {
 }
 
 // TODO: don't really care about pushing 'inner' reprs today.
+#[derive(Default)]
 pub struct OpteEmit {
     outer_eth: Option<Ethernet>,
     outer_ip: Option<L3Repr>,
@@ -1289,6 +1736,7 @@ pub struct OpteEmit {
     inner: Option<Box<OpteInnerEmit>>,
 }
 
+#[derive(Default)]
 pub struct OpteInnerEmit {
     eth: Ethernet,
     l3: Option<L3Repr>,
@@ -1296,8 +1744,121 @@ pub struct OpteInnerEmit {
 }
 
 pub struct EmitSpec {
-    pub rewind: usize,
+    pub rewind: u16,
+    pub encapped_len: u16,
+    pub payload_len: u16,
     pub push_spec: OpteEmit,
+}
+
+impl EmitSpec {
+    pub fn apply(&mut self, mut pkt: MsgBlk) -> MsgBlk {
+        // Rewind
+        {
+            let mut slots = heapless::Vec::<&mut MsgBlkNode, 6>::new();
+            let mut to_rewind = self.rewind as usize;
+
+            let mut reader = pkt.iter_mut();
+            while to_rewind != 0 {
+                let this = reader.next();
+                let Some(node) = this else {
+                    to_rewind = 0;
+                    break;
+                };
+
+                let has = node.len();
+                let droppable = to_rewind.min(has);
+                node.drop_front_bytes(droppable);
+                to_rewind -= droppable;
+
+                slots.push(node).unwrap();
+            }
+
+            // TODO: put available layers into said slots?
+        }
+
+        // TODO:
+        //  - remove all zero-length nodes.
+        //  - actually push in to existing slots we rewound past if needed.
+        //  - actually support pushing dirty segments apart from the encap.
+
+        let needed_push = self.push_spec.outer_eth.packet_length()
+            + self.push_spec.outer_ip.packet_length()
+            + self.push_spec.outer_encap.packet_length();
+        let needed_alloc = needed_push.saturating_sub(pkt.headroom());
+        let mut space_in_front = needed_push - needed_alloc;
+
+        let mut prepend = if needed_alloc > 0 {
+            Some(MsgBlk::new_ethernet(needed_alloc))
+        } else {
+            None
+        };
+
+        // NOT NEEDED TODAY.
+        if let Some(inner_new) = &self.push_spec.inner {
+            todo!()
+        }
+
+        if let Some(outer_encap) = &self.push_spec.outer_encap {
+            let a = SizeHoldingEncap {
+                encapped_len: self.encapped_len,
+                meta: &outer_encap,
+            };
+
+            let l = a.packet_length();
+
+            let target = if space_in_front > l {
+                space_in_front -= l;
+                &mut pkt
+            } else {
+                prepend.as_mut().unwrap()
+            };
+
+            unsafe {
+                target.write_front(l, |v| {
+                    a.emit_uninit(v).unwrap();
+                })
+            }
+        }
+
+        if let Some(outer_ip) = &self.push_spec.outer_ip {
+            let l = outer_ip.packet_length();
+            let target = if space_in_front > 0 {
+                space_in_front -= l;
+                &mut pkt
+            } else {
+                prepend.as_mut().unwrap()
+            };
+
+            unsafe {
+                target.write_front(l, |v| {
+                    outer_ip.emit_uninit(v).unwrap();
+                })
+            }
+        }
+
+        if let Some(outer_eth) = &self.push_spec.outer_eth {
+            let l = outer_eth.packet_length();
+            let target = if space_in_front > 0 {
+                space_in_front -= l;
+                &mut pkt
+            } else {
+                prepend.as_mut().unwrap()
+            };
+
+            unsafe {
+                target.write_front(l, |v| {
+                    outer_eth.emit_uninit(v).unwrap();
+                })
+            }
+        }
+
+        if let Some(mut prepend) = prepend {
+            prepend.extend_if_one(pkt);
+            prepend
+        } else {
+            pkt
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Default)]
