@@ -11,6 +11,10 @@
 #:   "=/work/release/opteadm.release.sha256",
 #: ]
 #:
+#: [[publish]]
+#: series = "release"
+#: name = "opteadm"
+#: from_output = "/work/release/opteadm"
 
 set -o errexit
 set -o pipefail
