@@ -13,6 +13,7 @@ use super::headers::HeaderActionModify;
 use super::headers::IpMeta;
 use super::headers::IpMod;
 use super::headers::IpPush;
+use super::headers::PushAction;
 use super::headers::UlpMetaModify;
 use super::headers::UlpMod;
 use super::icmp::QueryEcho;
@@ -429,6 +430,7 @@ pub struct OpteUnifiedLengths {
 }
 
 impl OpteUnifiedLengths {
+    #[inline]
     pub fn hdr_len(&self) -> usize {
         self.outer_eth
             + self.outer_l3
@@ -484,6 +486,7 @@ pub struct OpteMeta<T: ByteSlice> {
 pub type OpteParsed<T> = IngotParsed<OpteMeta<<T as Read>::Chunk>, T>;
 
 impl<T: ByteSlice> OpteMeta<T> {
+    #[inline]
     pub fn convert_ingot<U: Into<Self>, Q: Read<Chunk = T>>(
         value: IngotParsed<U, Q>,
     ) -> OpteParsed<Q> {
@@ -513,6 +516,7 @@ impl<O: Header, B: Header> Header for OwnedPacket<O, B> {
 }
 
 impl<O: Emit, B: Emit> Emit for OwnedPacket<O, B> {
+    #[inline]
     fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
         match self {
             OwnedPacket::Repr(o) => o.emit_raw(buf),
@@ -520,6 +524,7 @@ impl<O: Emit, B: Emit> Emit for OwnedPacket<O, B> {
         }
     }
 
+    #[inline]
     fn needs_emit(&self) -> bool {
         match self {
             OwnedPacket::Repr(o) => true,
@@ -548,6 +553,7 @@ impl<'a> Header for SizeHoldingEncap<'a> {
 }
 
 impl<'a> Emit for SizeHoldingEncap<'a> {
+    #[inline]
     fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
         match self.meta {
             EncapMeta::Geneve(g) => {
@@ -570,6 +576,7 @@ impl<'a> Emit for SizeHoldingEncap<'a> {
         }
     }
 
+    #[inline]
     fn needs_emit(&self) -> bool {
         true
     }
@@ -581,18 +588,21 @@ impl Emit for EncapMeta {
         SizeHoldingEncap { encapped_len: 0, meta: self }.emit_raw(buf)
     }
 
+    #[inline]
     fn needs_emit(&self) -> bool {
         true
     }
 }
 
 impl<B: ByteSliceMut> Emit for ValidEncapMeta<B> {
+    #[inline]
     fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
         match self {
             ValidEncapMeta::Geneve(u, g) => todo!(),
         }
     }
 
+    #[inline]
     fn needs_emit(&self) -> bool {
         match self {
             ValidEncapMeta::Geneve(u, g) => u.needs_emit() && g.needs_emit(),
@@ -628,6 +638,7 @@ impl<B: ByteSlice> Header for ValidEncapMeta<B> {
 }
 
 impl<O, B> From<ingot::types::Packet<O, B>> for OwnedPacket<O, B> {
+    #[inline]
     fn from(value: ingot::types::Packet<O, B>) -> Self {
         match value {
             ingot::types::Packet::Raw(b) => Self::Raw(b),
@@ -637,6 +648,7 @@ impl<O, B> From<ingot::types::Packet<O, B>> for OwnedPacket<O, B> {
 }
 
 impl<Q: ByteSlice> From<GeneveOverV6<Q>> for OpteUnified<Q> {
+    #[inline]
     fn from(value: GeneveOverV6<Q>) -> Self {
         Self {
             outer_eth: Some(value.outer_eth),
@@ -651,6 +663,7 @@ impl<Q: ByteSlice> From<GeneveOverV6<Q>> for OpteUnified<Q> {
 }
 
 impl<Q: ByteSlice> From<NoEncap<Q>> for OpteUnified<Q> {
+    #[inline]
     fn from(value: NoEncap<Q>) -> Self {
         Self {
             outer_eth: None,
@@ -779,6 +792,7 @@ pub struct PacketHeaders<T: Read> {
 }
 
 impl<T: ByteSlice> From<NoEncap<T>> for OpteMeta<T> {
+    #[inline]
     fn from(value: NoEncap<T>) -> Self {
         OpteMeta {
             outer_eth: None,
@@ -792,6 +806,7 @@ impl<T: ByteSlice> From<NoEncap<T>> for OpteMeta<T> {
 }
 
 impl<T: ByteSlice> From<GeneveOverV6<T>> for OpteMeta<T> {
+    #[inline]
     fn from(value: GeneveOverV6<T>) -> Self {
         // These are practically all Valid, anyhow.
 
@@ -1056,6 +1071,7 @@ fn pseudo_port<T: ByteSlice>(
 }
 
 impl<T: Read> From<&PacketHeaders<T>> for InnerFlowId {
+    #[inline]
     fn from(meta: &PacketHeaders<T>) -> Self {
         let (proto, addrs) = match meta.inner_l3() {
             Some(L3::Ipv4(pkt)) => (
@@ -1112,6 +1128,7 @@ impl<T: Read + QueryLen> Packet2<Initialized2<T>> {
 }
 
 impl<T: Read> Packet2<Initialized2<T>> {
+    #[inline]
     pub fn parse(
         self,
         dir: Direction,
@@ -1177,6 +1194,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
         &mut self.state.meta
     }
 
+    #[inline]
     /// Convert a packet's metadata into a set of instructions
     /// needed to serialize all its changes to the wire.
     pub fn emit_spec(self) -> EmitSpec
@@ -1372,6 +1390,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
         self.state.len
     }
 
+    #[inline]
     pub fn flow(&self) -> &InnerFlowId {
         &self.state.flow
     }
@@ -1636,6 +1655,7 @@ pub type PacketHeaders2<'a> = PacketHeaders<MsgBlkIterMut<'a>>;
 pub type InitMblk<'a> = Initialized2<MsgBlkIterMut<'a>>;
 pub type ParsedMblk<'a> = Parsed2<MsgBlkIterMut<'a>>;
 
+#[inline]
 fn csum_minus_hdr<V: ByteSlice>(ulp: &Ulp<V>) -> Option<Checksum> {
     match ulp {
         Ulp::IcmpV4(icmp) => {
@@ -1719,6 +1739,7 @@ trait QueryLen {
 }
 
 impl<'a> QueryLen for MsgBlkIterMut<'a> {
+    #[inline]
     fn len(&self) -> usize {
         let own_blk_len = self
             .curr
@@ -1764,26 +1785,29 @@ pub struct EmitSpec {
 }
 
 impl EmitSpec {
+    #[inline]
     pub fn apply(&mut self, mut pkt: MsgBlk) -> MsgBlk {
         // Rewind
         {
             let mut slots = heapless::Vec::<&mut MsgBlkNode, 6>::new();
             let mut to_rewind = self.rewind as usize;
 
-            let mut reader = pkt.iter_mut();
-            while to_rewind != 0 {
-                let this = reader.next();
-                let Some(node) = this else {
-                    to_rewind = 0;
-                    break;
-                };
+            if to_rewind > 0 {
+                let mut reader = pkt.iter_mut();
+                while to_rewind != 0 {
+                    let this = reader.next();
+                    let Some(node) = this else {
+                        to_rewind = 0;
+                        break;
+                    };
 
-                let has = node.len();
-                let droppable = to_rewind.min(has);
-                node.drop_front_bytes(droppable);
-                to_rewind -= droppable;
+                    let has = node.len();
+                    let droppable = to_rewind.min(has);
+                    node.drop_front_bytes(droppable);
+                    to_rewind -= droppable;
 
-                slots.push(node).unwrap();
+                    slots.push(node).unwrap();
+                }
             }
 
             // TODO: put available layers into said slots?
@@ -1797,7 +1821,7 @@ impl EmitSpec {
         let needed_push = self.push_spec.outer_eth.packet_length()
             + self.push_spec.outer_ip.packet_length()
             + self.push_spec.outer_encap.packet_length();
-        let needed_alloc = needed_push.saturating_sub(pkt.headroom());
+        let needed_alloc = needed_push; //.saturating_sub(pkt.headroom());
         let mut space_in_front = needed_push - needed_alloc;
 
         let mut prepend = if needed_alloc > 0 {
@@ -1821,7 +1845,7 @@ impl EmitSpec {
 
             let l = a.packet_length();
 
-            let target = if space_in_front >= l {
+            let target = if prepend.is_none() {
                 space_in_front -= l;
                 &mut pkt
             } else {
@@ -1838,7 +1862,7 @@ impl EmitSpec {
 
         if let Some(outer_ip) = &self.push_spec.outer_ip {
             let l = outer_ip.packet_length();
-            let target = if space_in_front >= l {
+            let target = if prepend.is_none() {
                 space_in_front -= l;
                 &mut pkt
             } else {
@@ -1855,7 +1879,7 @@ impl EmitSpec {
 
         if let Some(outer_eth) = &self.push_spec.outer_eth {
             let l = outer_eth.packet_length();
-            let target = if space_in_front >= l {
+            let target = if prepend.is_none() {
                 space_in_front -= l;
                 &mut pkt
             } else {
@@ -1887,6 +1911,7 @@ pub enum Memoised<T> {
 }
 
 impl<T> Memoised<T> {
+    #[inline]
     pub fn get(&mut self, or: impl FnOnce() -> T) -> &T {
         if self.try_get().is_none() {
             self.set(or());
@@ -1895,6 +1920,7 @@ impl<T> Memoised<T> {
         self.try_get().unwrap()
     }
 
+    #[inline]
     pub fn try_get(&self) -> Option<&T> {
         match self {
             Memoised::Uninit => None,
@@ -1902,12 +1928,14 @@ impl<T> Memoised<T> {
         }
     }
 
+    #[inline]
     pub fn set(&mut self, val: T) {
         *self = Self::Known(val);
     }
 }
 
 impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
+    #[inline]
     fn echo_id(&self) -> Option<u16> {
         match (self.code(), self.ty()) {
             (0, 0) | (0, 8) => Some(u16::from_be_bytes(
@@ -1919,6 +1947,7 @@ impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
 }
 
 impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
+    #[inline]
     fn echo_id(&self) -> Option<u16> {
         match (self.code(), self.ty()) {
             (0, 128) | (0, 129) => Some(u16::from_be_bytes(
@@ -1933,6 +1962,7 @@ impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
 impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
     for OwnedPacket<Ethernet, ValidEthernet<T>>
 {
+    #[inline]
     fn run_modify(
         &mut self,
         mod_spec: &EtherMod,
@@ -1961,6 +1991,7 @@ impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
 }
 
 impl<T: ByteSliceMut> HeaderActionModify<EtherMod> for EthernetPacket<T> {
+    #[inline]
     fn run_modify(
         &mut self,
         mod_spec: &EtherMod,
@@ -1980,6 +2011,7 @@ impl<T: ByteSliceMut> HeaderActionModify<EtherMod> for EthernetPacket<T> {
 impl<T: ByteSliceMut> HeaderActionModify<IpMod>
     for OwnedPacket<L3Repr, ValidL3<T>>
 {
+    #[inline]
     fn run_modify(
         &mut self,
         mod_spec: &IpMod,
@@ -2064,6 +2096,7 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
 }
 
 impl<T: ByteSliceMut> HeaderActionModify<IpMod> for L3<T> {
+    #[inline]
     fn run_modify(
         &mut self,
         mod_spec: &IpMod,
@@ -2100,6 +2133,7 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod> for L3<T> {
 }
 
 impl<T: ByteSliceMut> HeaderActionModify<UlpMetaModify> for Ulp<T> {
+    #[inline]
     fn run_modify(
         &mut self,
         mod_spec: &UlpMetaModify,
@@ -2149,6 +2183,7 @@ impl<T: ByteSliceMut> HeaderActionModify<UlpMetaModify> for Ulp<T> {
 impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
     for OwnedPacket<EncapMeta, ValidEncapMeta<T>>
 {
+    #[inline]
     fn run_modify(
         &mut self,
         mod_spec: &EncapMod,
@@ -2206,6 +2241,7 @@ impl<T: ByteSlice> HasInnerCksum for Ulp<T> {
 impl<T: ByteSlice> From<EtherMeta>
     for ingot::types::Packet<ingot::ethernet::Ethernet, ValidEthernet<T>>
 {
+    #[inline]
     fn from(value: EtherMeta) -> Self {
         ingot::types::Packet::Repr(
             Ethernet {
@@ -2221,6 +2257,7 @@ impl<T: ByteSlice> From<EtherMeta>
 impl<T: ByteSlice> From<EtherMeta>
     for OwnedPacket<ingot::ethernet::Ethernet, ValidEthernet<T>>
 {
+    #[inline]
     fn from(value: EtherMeta) -> Self {
         OwnedPacket::Repr(
             Ethernet {
@@ -2236,6 +2273,7 @@ impl<T: ByteSlice> From<EtherMeta>
 impl<T: ByteSlice> From<EncapMeta>
     for ingot::types::Packet<EncapMeta, ValidEncapMeta<T>>
 {
+    #[inline]
     fn from(value: EncapMeta) -> Self {
         ingot::types::Packet::Repr(value.into())
     }
@@ -2244,12 +2282,14 @@ impl<T: ByteSlice> From<EncapMeta>
 impl<T: ByteSlice> From<EncapMeta>
     for OwnedPacket<EncapMeta, ValidEncapMeta<T>>
 {
+    #[inline]
     fn from(value: EncapMeta) -> Self {
         OwnedPacket::Repr(value)
     }
 }
 
 impl<T: ByteSlice> From<IpMeta> for OwnedPacket<L3Repr, ValidL3<T>> {
+    #[inline]
     fn from(value: IpMeta) -> Self {
         match value {
             IpMeta::Ip4(v4) => OwnedPacket::Repr(
@@ -2283,6 +2323,7 @@ impl<T: ByteSlice> From<IpMeta> for OwnedPacket<L3Repr, ValidL3<T>> {
 }
 
 impl<T: ByteSlice> From<IpMeta> for L3<T> {
+    #[inline]
     fn from(value: IpMeta) -> Self {
         match value {
             IpMeta::Ip4(v4) => L3::Ipv4(
@@ -2312,5 +2353,11 @@ impl<T: ByteSlice> From<IpMeta> for L3<T> {
                 .into(),
             ),
         }
+    }
+}
+
+impl PushAction<Ethernet> for Ethernet {
+    fn push(&self) -> Ethernet {
+        *self
     }
 }

@@ -2424,6 +2424,7 @@ impl<N: NetworkImpl> Port<N> {
                 self.uft_hit_probe(In, pkt.flow(), epoch, entry.last_hit());
 
                 let transform = Some(Arc::clone(&entry.state().xforms));
+                pkt.set_l4_hash(entry.state().l4_hash);
 
                 // for ht in &entry.state().xforms.hdr {
                 //     pkt.hdr_transform(ht)?;
@@ -2813,6 +2814,7 @@ impl<N: NetworkImpl> Port<N> {
                 // have a UFT miss.
                 if !reprocess {
                     let transform = Some(Arc::clone(&entry.state().xforms));
+                    pkt.set_l4_hash(entry.state().l4_hash);
                     // Due to borrowing constraints from order of operations, we have
                     // to remove the UFT entry here rather than in `update_tcp_entry`.
                     // The TCP entry itself is already removed.

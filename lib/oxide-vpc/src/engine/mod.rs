@@ -129,6 +129,7 @@ impl NetworkImpl for VpcNetwork {
 }
 
 impl NetworkParser for VpcParser {
+    #[inline]
     fn parse_outbound<T: Read>(
         &self,
         rdr: T,
@@ -137,6 +138,7 @@ impl NetworkParser for VpcParser {
         Ok(OpteMeta::convert_ingot(v?))
     }
 
+    #[inline]
     fn parse_inbound<T: Read>(
         &self,
         rdr: T,
