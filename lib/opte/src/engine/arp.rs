@@ -266,4 +266,13 @@ impl<'a> RawHeader<'a> for ArpEthIpv4Raw {
         };
         Ok(hdr)
     }
+
+    fn new(src: &[u8]) -> Result<Ref<&[u8], Self>, ReadErr> {
+        debug_assert_eq!(src.len(), Self::SIZE);
+        let hdr = match Ref::from_bytes(src).ok() {
+            Some(hdr) => hdr,
+            None => return Err(ReadErr::BadLayout),
+        };
+        Ok(hdr)
+    }
 }

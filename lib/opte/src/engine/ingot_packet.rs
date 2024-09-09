@@ -252,19 +252,19 @@ impl MsgBlk {
         let mut_out = unsafe { self.inner.as_mut() };
         let avail_bytes =
             unsafe { mut_out.b_rptr.offset_from((*mut_out.b_datap).db_base) };
+
         assert!(avail_bytes >= 0);
         assert!(avail_bytes as usize >= n_bytes);
 
+        let new_head = unsafe { mut_out.b_rptr.sub(n_bytes) };
+
         let in_slice = unsafe {
-            slice::from_raw_parts_mut(
-                mut_out.b_wptr as *mut MaybeUninit<u8>,
-                n_bytes,
-            )
+            slice::from_raw_parts_mut(new_head as *mut MaybeUninit<u8>, n_bytes)
         };
 
         f(in_slice);
 
-        mut_out.b_wptr = unsafe { mut_out.b_wptr.add(n_bytes) };
+        mut_out.b_rptr = new_head;
     }
 
     // TODO: I really need to rethink this one in practice.
@@ -276,6 +276,16 @@ impl MsgBlk {
         }
 
         mut_self.b_cont = other.unwrap_mblk();
+    }
+
+    /// Drop all bytes and move the cursor to the very back of the dblk.
+    pub fn pop_all(&mut self) {
+        unsafe {
+            (*self.inner.as_ptr()).b_rptr =
+                (*(*self.inner.as_ptr()).b_datap).db_lim;
+            (*self.inner.as_ptr()).b_wptr =
+                (*(*self.inner.as_ptr()).b_datap).db_lim;
+        }
     }
 
     pub fn iter(&self) -> MsgBlkIter {
@@ -597,7 +607,7 @@ impl Header for EncapMeta {
     fn packet_length(&self) -> usize {
         match self {
             EncapMeta::Geneve(g) => {
-                Geneve::MINIMUM_LENGTH
+                Self::MINIMUM_LENGTH
                     + g.oxide_external_pkt.then_some(4).unwrap_or_default()
             }
         }
@@ -694,8 +704,11 @@ impl<T: Read> PktBodyWalker<T> {
                 let as_bytes = chunk.deref();
                 to_hold.push(unsafe { core::mem::transmute(as_bytes) });
             }
+
+            // TODO(drop-safety): we need to give these chunks a longer life, too.
             while let Ok(chunk) = rest.next_chunk() {
-                to_hold.push(unsafe { core::mem::transmute(chunk.deref()) });
+                let as_bytes = chunk.deref();
+                to_hold.push(unsafe { core::mem::transmute(as_bytes) });
             }
 
             let to_store = Box::into_raw(Box::new(to_hold.into_boxed_slice()));
@@ -1788,7 +1801,9 @@ impl EmitSpec {
         let mut space_in_front = needed_push - needed_alloc;
 
         let mut prepend = if needed_alloc > 0 {
-            Some(MsgBlk::new_ethernet(needed_alloc))
+            let mut new_mblk = MsgBlk::new_ethernet(needed_alloc);
+            new_mblk.pop_all();
+            Some(new_mblk)
         } else {
             None
         };
@@ -1806,10 +1821,11 @@ impl EmitSpec {
 
             let l = a.packet_length();
 
-            let target = if space_in_front > l {
+            let target = if space_in_front >= l {
                 space_in_front -= l;
                 &mut pkt
             } else {
+                space_in_front = 0;
                 prepend.as_mut().unwrap()
             };
 
@@ -1822,10 +1838,11 @@ impl EmitSpec {
 
         if let Some(outer_ip) = &self.push_spec.outer_ip {
             let l = outer_ip.packet_length();
-            let target = if space_in_front > 0 {
+            let target = if space_in_front >= l {
                 space_in_front -= l;
                 &mut pkt
             } else {
+                space_in_front = 0;
                 prepend.as_mut().unwrap()
             };
 
@@ -1838,10 +1855,11 @@ impl EmitSpec {
 
         if let Some(outer_eth) = &self.push_spec.outer_eth {
             let l = outer_eth.packet_length();
-            let target = if space_in_front > 0 {
+            let target = if space_in_front >= l {
                 space_in_front -= l;
                 &mut pkt
             } else {
+                space_in_front = 0;
                 prepend.as_mut().unwrap()
             };
 

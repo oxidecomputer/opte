@@ -82,10 +82,11 @@ impl VpcNetwork {
         &self,
         pkt: &mut Packet2<Parsed2<T>>,
     ) -> Result<HdlPktAction, HdlPktError> {
-        let body =
-            pkt.body_segs().ok_or_else(|| HdlPktError("outbound ARP"))?;
+        let body = pkt
+            .body_segs()
+            .ok_or_else(|| HdlPktError("outbound ARP (no body)"))?;
         let arp = ArpEthIpv4::parse_normally(body)
-            .map_err(|_| HdlPktError("outbound ARP"))?;
+            .map_err(|_| HdlPktError("outbound ARP (parse)"))?;
         let gw_ip = self.cfg.ipv4_cfg().unwrap().gateway_ip;
 
         if is_arp_req_for_tpa(gw_ip, &arp) {
@@ -133,9 +134,6 @@ impl NetworkParser for VpcParser {
         rdr: T,
     ) -> Result<OpteParsed<T>, ParseError> {
         let v = NoEncap::parse_read(rdr);
-        if let Err(e) = v {
-            opte::engine::err!("PARSERR OUT [NoEncap] {:?}", e);
-        }
         Ok(OpteMeta::convert_ingot(v?))
     }
 
@@ -144,9 +142,6 @@ impl NetworkParser for VpcParser {
         rdr: T,
     ) -> Result<OpteParsed<T>, ParseError> {
         let v = GeneveOverV6::parse_read(rdr);
-        if let Err(e) = v {
-            opte::engine::err!("PARSERR IN [GeneveOverV6] {:?}", e);
-        }
         Ok(OpteMeta::convert_ingot(v?))
     }
 }
