@@ -46,6 +46,7 @@ use core::fmt::Debug;
 use core::fmt::Display;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
+use ingot::ethernet::Ethernet;
 use ingot::types::Read;
 use opte_api::Direction;
 use serde::Deserialize;

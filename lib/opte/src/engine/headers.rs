@@ -653,6 +653,7 @@ where
     M: fmt::Debug,
     X: HeaderActionModify<M> + From<H> + HasInnerCksum,
 {
+    #[inline]
     fn act_on(
         &mut self,
         action: &HeaderAction<P, M>,

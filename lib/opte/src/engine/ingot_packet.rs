@@ -1479,46 +1479,24 @@ impl<T: Read> Packet2<Parsed2<T>> {
             };
 
             // XXX TODO: make these valid even AFTER all packet pushings occur.
-            let pseudo_csum = match (&self.state.meta.headers)
-                .inner_eth
-                .ethertype()
-            {
-                // ARP
-                Ethertype::ARP => {
-                    return None;
-                }
-                // Ipv4
-                Ethertype::IPV4 => {
-                    let h = &self.state.meta.headers;
-                    let mut pseudo_hdr_bytes = [0u8; 12];
-                    let Some(L3::Ipv4(ref v4)) = h.inner_l3 else { panic!() };
-                    pseudo_hdr_bytes[0..4]
-                        .copy_from_slice(&v4.source().octets());
-                    pseudo_hdr_bytes[4..8]
-                        .copy_from_slice(&v4.destination().octets());
-                    pseudo_hdr_bytes[9] = v4.protocol().0;
-                    let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
-                    pseudo_hdr_bytes[10..]
-                        .copy_from_slice(&ulp_len.to_be_bytes());
+            let pseudo_csum =
+                match (&self.state.meta.headers).inner_eth.ethertype() {
+                    // ARP
+                    Ethertype::ARP => {
+                        return None;
+                    }
+                    Ethertype::IPV4 | Ethertype::IPV6 => self
+                        .state
+                        .meta
+                        .headers
+                        .inner_l3
+                        .as_ref()
+                        .map(l3_pseudo_header),
+                    _ => unreachable!(),
+                };
 
-                    Checksum::compute(&pseudo_hdr_bytes)
-                }
-                // Ipv6
-                Ethertype::IPV6 => {
-                    let h = &self.state.meta.headers;
-                    let mut pseudo_hdr_bytes = [0u8; 40];
-                    let Some(L3::Ipv6(ref v6)) = h.inner_l3 else { panic!() };
-                    pseudo_hdr_bytes[0..16]
-                        .copy_from_slice(&v6.source().octets());
-                    pseudo_hdr_bytes[16..32]
-                        .copy_from_slice(&v6.destination().octets());
-                    pseudo_hdr_bytes[39] = v6.next_header().0;
-                    let ulp_len = v6.payload_len() as u32;
-                    pseudo_hdr_bytes[32..36]
-                        .copy_from_slice(&ulp_len.to_be_bytes());
-                    Checksum::compute(&pseudo_hdr_bytes)
-                }
-                _ => unreachable!(),
+            let Some(pseudo_csum) = pseudo_csum else {
+                return None;
             };
 
             self.state.meta.inner_ulp().and_then(csum_minus_hdr).map(|mut v| {
@@ -1547,80 +1525,141 @@ impl<T: Read> Packet2<Parsed2<T>> {
     ///
     /// This avoids duplicating work already done by the client in the
     /// case where checksums are **not** being offloaded to the hardware.
-    pub fn update_checksums(&mut self) {
+    pub fn update_checksums(&mut self)
+    where
+        T::Chunk: ByteSliceMut,
+    {
         if !self.state.inner_csum_dirty {
             return;
         }
         let update_ip = self.state.meta.has_ip_csum();
         let update_ulp = self.state.meta.has_ulp_csum();
 
-        // TODO
+        // Start by reusing the known checksum of the body.
+        let mut body_csum = self.body_csum().unwrap_or_default();
 
-        // // If a ULP exists, then compute and set its checksum.
-        // if let (true, Some(ulp_off)) =
-        //     (update_ulp, self.state.hdr_offsets.inner.ulp)
-        // {
-        //     // Start by reusing the known checksum of the body.
-        //     let mut csum = self.state.body_csum.unwrap();
-        //     // Unwrap: Can't have a ULP without an IP.
-        //     let ip = self.meta().inner.ip.unwrap();
-        //     // Add pseudo header checksum.
-        //     let pseudo_csum = ip.pseudo_csum();
-        //     csum += pseudo_csum;
-        //     // All headers must reside in the first segment.
-        //     let all_hdr_bytes = self.segs[0].slice_mut();
-        //     // Determine ULP slice and add its bytes to the
-        //     // checksum.
-        //     let ulp_start = ulp_off.seg_pos;
-        //     let ulp_end = ulp_start + ulp_off.hdr_len;
-        //     let ulp = &mut all_hdr_bytes[ulp_start..ulp_end];
+        // If a ULP exists, then compute and set its checksum.
+        if let (true, Some(ulp)) =
+            (update_ulp, &mut self.state.meta.headers.inner_ulp)
+        {
+            let mut csum = body_csum;
+            // Unwrap: Can't have a ULP without an IP.
+            let ip = self.state.meta.headers.inner_l3.as_ref().unwrap();
+            // Add pseudo header checksum.
+            let pseudo_csum = l3_pseudo_header(ip);
+            csum += pseudo_csum;
+            // Determine ULP slice and add its bytes to the
+            // checksum.
+            match ulp {
+                // ICMP4 requires the body_csum *without*
+                // the pseudoheader added back in.
+                Ulp::IcmpV4(i4) => {
+                    let mut bytes = [0u8; 8];
+                    i4.set_checksum(0);
+                    i4.emit_raw(&mut bytes[..]);
+                    body_csum.add_bytes(&bytes[..]);
+                    i4.set_checksum(body_csum.finalize());
+                }
+                Ulp::IcmpV6(i6) => {
+                    let mut bytes = [0u8; 8];
+                    i6.set_checksum(0);
+                    i6.emit_raw(&mut bytes[..]);
+                    csum.add_bytes(&bytes[..]);
+                    i6.set_checksum(csum.finalize());
+                }
+                Ulp::Tcp(tcp) => {
+                    tcp.set_checksum(0);
+                    match tcp {
+                        IngotPacket::Repr(tcp) => {
+                            let mut bytes = [0u8; 56];
+                            tcp.emit_raw(&mut bytes[..]);
+                            csum.add_bytes(&bytes[..]);
+                        }
+                        IngotPacket::Raw(tcp) => {
+                            csum.add_bytes(tcp.0.bytes());
+                            match &tcp.1 {
+                                IngotPacket::Repr(opts) => {
+                                    csum.add_bytes(&*opts);
+                                }
+                                IngotPacket::Raw(opts) => {
+                                    csum.add_bytes(&*opts);
+                                }
+                            }
+                        }
+                    }
+                    tcp.set_checksum(csum.finalize());
+                }
+                Ulp::Udp(udp) => {
+                    udp.set_checksum(0);
+                    match udp {
+                        IngotPacket::Repr(udp) => {
+                            let mut bytes = [0u8; 8];
+                            udp.emit_raw(&mut bytes[..]);
+                            csum.add_bytes(&bytes[..]);
+                        }
+                        IngotPacket::Raw(udp) => {
+                            csum.add_bytes(udp.0.bytes());
+                        }
+                    }
+                    udp.set_checksum(csum.finalize());
+                }
+            }
+        }
 
-        //     match self.state.meta.inner.ulp.as_mut().unwrap() {
-        //         UlpMeta::Icmpv4(icmp) => {
-        //             Self::update_icmp_csum(
-        //                 icmp,
-        //                 // ICMP4 requires the body_csum *without*
-        //                 // the pseudoheader added back in.
-        //                 self.state.body_csum.unwrap(),
-        //                 ulp,
-        //             );
-        //         }
+        // Compute and fill in the IPv4 header checksum.
+        if let (true, Some(L3::Ipv4(ip))) =
+            (update_ip, &mut self.state.meta.headers.inner_l3)
+        {
+            ip.set_checksum(0);
 
-        //         UlpMeta::Icmpv6(icmp) => {
-        //             Self::update_icmp_csum(icmp, csum, ulp);
-        //         }
+            let mut csum = Checksum::default();
 
-        //         UlpMeta::Tcp(tcp) => {
-        //             Self::update_tcp_csum(tcp, csum, ulp);
-        //         }
+            match ip {
+                IngotPacket::Repr(ip) => {
+                    let mut bytes = [0u8; 56];
+                    ip.emit_raw(&mut bytes[..]);
+                    csum.add_bytes(&bytes[..]);
+                }
+                IngotPacket::Raw(ip) => {
+                    csum.add_bytes(ip.0.bytes());
+                    match &ip.1 {
+                        IngotPacket::Repr(opts) => {
+                            csum.add_bytes(&*opts);
+                        }
+                        IngotPacket::Raw(opts) => {
+                            csum.add_bytes(&*opts);
+                        }
+                    }
+                }
+            }
 
-        //         UlpMeta::Udp(udp) => {
-        //             Self::update_udp_csum(udp, csum, ulp);
-        //         }
-        //     }
-        // }
+            ip.set_checksum(csum.finalize());
+        }
+    }
+}
 
-        // // Compute and fill in the IPv4 header checksum.
-        // if let (true, Some(IpMeta::Ip4(ip))) =
-        //     (update_ip, self.state.meta.inner.ip.as_mut())
-        // {
-        //     let ip_off = self.state.hdr_offsets.inner.ip.unwrap();
-        //     let all_hdr_bytes = self.segs[0].slice_mut();
-        //     let ip_start = ip_off.seg_pos;
-        //     let ip_end = ip_start + ip_off.hdr_len;
-        //     let ip_bytes = &mut all_hdr_bytes[ip_start..ip_end];
-        //     let csum_start = Ipv4Hdr::CSUM_BEGIN;
-        //     let csum_end = Ipv4Hdr::CSUM_END;
-        //     ip_bytes[csum_start..csum_end].copy_from_slice(&[0; 2]);
-        //     let csum =
-        //         HeaderChecksum::from(Checksum::compute(ip_bytes)).bytes();
+fn l3_pseudo_header<T: ByteSlice>(l3: &L3<T>) -> Checksum {
+    match l3 {
+        L3::Ipv4(v4) => {
+            let mut pseudo_hdr_bytes = [0u8; 12];
+            pseudo_hdr_bytes[0..4].copy_from_slice(&v4.source().octets());
+            pseudo_hdr_bytes[4..8].copy_from_slice(&v4.destination().octets());
+            pseudo_hdr_bytes[9] = v4.protocol().0;
+            let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
+            pseudo_hdr_bytes[10..].copy_from_slice(&ulp_len.to_be_bytes());
 
-        //     // Update the metadata.
-        //     ip.csum = csum;
-
-        //     // Update the header bytes.
-        //     ip_bytes[csum_start..csum_end].copy_from_slice(&csum[..]);
-        // }
+            Checksum::compute(&pseudo_hdr_bytes)
+        }
+        L3::Ipv6(v6) => {
+            let mut pseudo_hdr_bytes = [0u8; 40];
+            pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().octets());
+            pseudo_hdr_bytes[16..32]
+                .copy_from_slice(&v6.destination().octets());
+            pseudo_hdr_bytes[39] = v6.next_header().0;
+            let ulp_len = v6.payload_len() as u32;
+            pseudo_hdr_bytes[32..36].copy_from_slice(&ulp_len.to_be_bytes());
+            Checksum::compute(&pseudo_hdr_bytes)
+        }
     }
 }
 
@@ -2360,8 +2399,28 @@ impl<T: ByteSlice> From<IpMeta> for L3<T> {
     }
 }
 
-impl PushAction<Ethernet> for Ethernet {
-    fn push(&self) -> Ethernet {
-        *self
-    }
-}
+// impl PushAction<Ethernet> for Ethernet {
+//     fn push(&self) -> Ethernet {
+//         *self
+//     }
+// }
+
+// impl<T: ByteSlice> PushAction<OwnedPacket<L3Repr, ValidL3<T>>> for IpPush {
+//     fn push(&self) -> OwnedPacket<L3Repr, ValidL3<T>> {
+//         OwnedPacket::Repr(match self {
+//             IpPush::Ip4(v4) => L3Repr::Ipv4(Ipv4 {
+//                 protocol: IpProtocol(u8::from(v4.proto)),
+//                 source: v4.src.bytes().into(),
+//                 destination: v4.dst.bytes().into(),
+//                 flags: Ipv4Flags::DONT_FRAGMENT,
+//                 ..Default::default()
+//             }),
+//             IpPush::Ip6(v6) => L3Repr::Ipv6(Ipv6 {
+//                 next_header: IpProtocol(u8::from(v6.proto)),
+//                 source: v6.src.bytes().into(),
+//                 destination: v6.dst.bytes().into(),
+//                 ..Default::default()
+//             }),
+//         })
+//     }
+// }
