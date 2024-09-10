@@ -1297,347 +1297,362 @@ impl<N: NetworkImpl> Port<N> {
     }
 
     // hope and pray we find a ULP, then use that?
-    // pub fn thin_process<T: Read>(
-    //     &self,
-    //     dir: Direction,
-    //     pkt: &mut Parsed2<T>,
-    // ) -> result::Result<ThinProcRes, ProcessError>
-    // where
-    //     T::Chunk: ByteSliceMut,
-    // {
-    //     let flow_before = pkt.flow();
-    //     // let flow_before = *pkt.flow();
-    //     let _epoch = self.epoch.load(SeqCst);
-    //     let mut data = self.data.lock();
-    //     check_state!(data.state, [PortState::Running])
-    //         .map_err(|_| ProcessError::BadState(data.state))?;
+    pub fn thin_process(
+        &self,
+        dir: Direction,
+        pkt: &mut Packet2<ParsedMblk>,
+    ) -> result::Result<ThinProcRes, ProcessError> {
+        use ingot::ethernet::EthernetMut;
+        use ingot::example_chain::Ulp;
+        use ingot::icmp::IcmpV4Mut;
+        use ingot::icmp::IcmpV4Ref;
+        use ingot::icmp::IcmpV6Mut;
+        use ingot::icmp::IcmpV6Ref;
+        use ingot::ip::Ipv4Mut;
+        use ingot::ip::Ipv6Mut;
+        use ingot::tcp::TcpFlags;
+        use ingot::tcp::TcpMut;
+        use ingot::udp::UdpMut;
 
-    //     let mut dirty_csum = false;
+        let flow_before = pkt.flow();
+        // let flow_before = *pkt.flow();
+        let _epoch = self.epoch.load(SeqCst);
+        let mut data = self.data.lock();
+        check_state!(data.state, [PortState::Running])
+            .map_err(|_| ProcessError::BadState(data.state))?;
 
-    //     // self.port_process_entry_probe(dir, &flow_before, epoch, pskt);
-    //     // TODO: what stats? lmao
-    //     match dir {
-    //         Direction::Out => {
-    //             // opte::engine::err!("looking up {:?} in outdir...", flow_before);
-    //             let a = data.uft_out.get(&flow_before);
-    //             let Some(a) = a else {
-    //                 // eh. It will get recirc'd for free...
-    //                 // opte::engine::err!("not found! Releasing!");
-    //                 return Err(ProcessError::FlowTableFull {
-    //                     kind: "()",
-    //                     limit: 0,
-    //                 });
-    //             };
-    //             pkt.set_l4_hash(a.state().l4_hash);
-    //             // opte::engine::err!("found!");
-    //             let xforms = Arc::clone(&a.state().xforms);
-    //             Self::update_stats_out(
-    //                 &mut data.stats.vals,
-    //                 &Ok(ProcessResult::Modified),
-    //             );
-    //             drop(data);
+        let mut dirty_csum = false;
 
-    //             let hm = pkt.meta.0.headers_mut();
+        // self.port_process_entry_probe(dir, &flow_before, epoch, pskt);
+        // TODO: what stats? lmao
+        match dir {
+            Direction::Out => {
+                // opte::engine::err!("looking up {:?} in outdir...", flow_before);
+                let a = data.uft_out.get(&flow_before);
+                let Some(a) = a else {
+                    // eh. It will get recirc'd for free...
+                    // opte::engine::err!("not found! Releasing!");
+                    return Err(ProcessError::FlowTableFull {
+                        kind: "()",
+                        limit: 0,
+                    });
+                };
+                pkt.set_l4_hash(a.state().l4_hash);
+                // opte::engine::err!("found!");
+                let xforms = Arc::clone(&a.state().xforms);
+                Self::update_stats_out(
+                    &mut data.stats.vals,
+                    &Ok(InternalProcessResult::Modified {
+                        transform: None,
+                        tcp_state: None,
+                    }),
+                );
+                drop(data);
 
-    //             let mut new_eth = None;
-    //             let mut new_ip = None;
-    //             let mut new_encap = None;
-    //             // opte::engine::err!("xforms {:?}!", &a.state().xforms.hdr);
-    //             for xf in &xforms.hdr {
-    //                 // opte::engine::err!("xf...");
-    //                 if let HeaderAction::Push(outer_eth, _) = &xf.outer_ether {
-    //                     new_eth = Some(outer_eth.clone());
-    //                 }
-    //                 if let HeaderAction::Push(outer_ip, _) = &xf.outer_ip {
-    //                     new_ip = Some(outer_ip.clone());
-    //                 }
-    //                 if let HeaderAction::Push(outer_ec, _) = &xf.outer_encap {
-    //                     new_encap = Some(outer_ec.clone());
-    //                 }
-    //                 if let HeaderAction::Modify(m, _) = &xf.inner_ether {
-    //                     if let Some(src) = m.src {
-    //                         hm.inner_eth.set_source(src.bytes().into());
-    //                     }
-    //                     if let Some(dst) = m.dst {
-    //                         hm.inner_eth.set_destination(dst.bytes().into());
-    //                     }
-    //                 }
-    //                 if let HeaderAction::Modify(m, _) = &xf.inner_ip {
-    //                     match m {
-    //                         super::headers::IpMod::Ip4(v4) => {
-    //                             let Some(ingot::example_chain::L3::Ipv4(
-    //                                 ref mut v4_t,
-    //                             )) = hm.inner_l3
-    //                             else {
-    //                                 return Err(ProcessError::FlowTableFull {
-    //                                     kind: "()",
-    //                                     limit: 0,
-    //                                 });
-    //                             };
-    //                             if let Some(src) = v4.src {
-    //                                 dirty_csum = true;
-    //                                 v4_t.set_source(src.into());
-    //                             }
-    //                             if let Some(dst) = v4.dst {
-    //                                 dirty_csum = true;
-    //                                 v4_t.set_destination(dst.into());
-    //                             }
-    //                         }
-    //                         super::headers::IpMod::Ip6(v6) => {
-    //                             let Some(ingot::example_chain::L3::Ipv6(
-    //                                 ref mut v6_t,
-    //                             )) = hm.inner_l3
-    //                             else {
-    //                                 return Err(ProcessError::FlowTableFull {
-    //                                     kind: "()",
-    //                                     limit: 0,
-    //                                 });
-    //                             };
-    //                             if let Some(src) = v6.src {
-    //                                 dirty_csum = true;
-    //                                 v6_t.set_source(src.into());
-    //                             }
-    //                             if let Some(dst) = v6.dst {
-    //                                 dirty_csum = true;
-    //                                 v6_t.set_destination(dst.into());
-    //                             }
-    //                         }
-    //                     }
-    //                 }
-    //                 if let UlpHeaderAction::Modify(m) = &xf.inner_ulp {
-    //                     if let Some(src) = &m.generic.src_port {
-    //                         match hm.inner_ulp {
-    //                             Some(Ulp::Tcp(ref mut t)) => {
-    //                                 dirty_csum = true;
-    //                                 t.set_source(*src)
-    //                             }
-    //                             Some(Ulp::Udp(ref mut t)) => {
-    //                                 dirty_csum = true;
-    //                                 t.set_source(*src)
-    //                             }
-    //                             _ => {}
-    //                         }
-    //                     }
-    //                     if let Some(dst) = &m.generic.dst_port {
-    //                         match hm.inner_ulp {
-    //                             Some(Ulp::Tcp(ref mut t)) => {
-    //                                 dirty_csum = true;
-    //                                 t.set_destination(*dst)
-    //                             }
-    //                             Some(Ulp::Udp(ref mut t)) => {
-    //                                 dirty_csum = true;
-    //                                 t.set_destination(*dst)
-    //                             }
-    //                             _ => {}
-    //                         }
-    //                     }
-    //                     if let Some(flags) = &m.tcp_flags {
-    //                         match hm.inner_ulp {
-    //                             Some(Ulp::Tcp(ref mut t)) => {
-    //                                 dirty_csum = true;
-    //                                 t.set_flags(TcpFlags::from_bits_retain(
-    //                                     *flags,
-    //                                 ))
-    //                             }
-    //                             _ => {}
-    //                         }
-    //                     }
-    //                     if let Some(new_id) = &m.icmp_id {
-    //                         match hm.inner_ulp {
-    //                             Some(Ulp::IcmpV4(ref mut pkt))
-    //                                 if pkt.ty() == 0 || pkt.ty() == 3 =>
-    //                             {
-    //                                 dirty_csum = true;
-    //                                 pkt.rest_of_hdr_mut()[..2]
-    //                                     .copy_from_slice(&new_id.to_be_bytes())
-    //                             }
-    //                             Some(Ulp::IcmpV6(ref mut pkt))
-    //                                 if pkt.ty() == 128 || pkt.ty() == 129 =>
-    //                             {
-    //                                 dirty_csum = true;
-    //                                 pkt.rest_of_hdr_mut()[..2]
-    //                                     .copy_from_slice(&new_id.to_be_bytes())
-    //                             }
-    //                             _ => {}
-    //                         }
-    //                     }
-    //                 }
-    //             }
+                let hm = &mut pkt.meta_mut().headers;
 
-    //             if dirty_csum {
-    //                 // TODO: something.
-    //             }
+                let mut new_eth = None;
+                let mut new_ip = None;
+                let mut new_encap = None;
+                // opte::engine::err!("xforms {:?}!", &a.state().xforms.hdr);
+                for xf in &xforms.hdr {
+                    // opte::engine::err!("xf...");
+                    if let HeaderAction::Push(outer_eth) = &xf.outer_ether {
+                        new_eth = Some(outer_eth.clone());
+                    }
+                    if let HeaderAction::Push(outer_ip) = &xf.outer_ip {
+                        new_ip = Some(outer_ip.clone());
+                    }
+                    if let HeaderAction::Push(outer_ec) = &xf.outer_encap {
+                        new_encap = Some(outer_ec.clone());
+                    }
+                    if let HeaderAction::Modify(m) = &xf.inner_ether {
+                        if let Some(src) = m.src {
+                            hm.inner_eth.set_source(src.bytes().into());
+                        }
+                        if let Some(dst) = m.dst {
+                            hm.inner_eth.set_destination(dst.bytes().into());
+                        }
+                    }
+                    if let HeaderAction::Modify(m) = &xf.inner_ip {
+                        match m {
+                            super::headers::IpMod::Ip4(v4) => {
+                                let Some(ingot::example_chain::L3::Ipv4(
+                                    ref mut v4_t,
+                                )) = hm.inner_l3
+                                else {
+                                    return Err(ProcessError::FlowTableFull {
+                                        kind: "()",
+                                        limit: 0,
+                                    });
+                                };
+                                if let Some(src) = v4.src {
+                                    dirty_csum = true;
+                                    v4_t.set_source(src.into());
+                                }
+                                if let Some(dst) = v4.dst {
+                                    dirty_csum = true;
+                                    v4_t.set_destination(dst.into());
+                                }
+                            }
+                            super::headers::IpMod::Ip6(v6) => {
+                                let Some(ingot::example_chain::L3::Ipv6(
+                                    ref mut v6_t,
+                                )) = hm.inner_l3
+                                else {
+                                    return Err(ProcessError::FlowTableFull {
+                                        kind: "()",
+                                        limit: 0,
+                                    });
+                                };
+                                if let Some(src) = v6.src {
+                                    dirty_csum = true;
+                                    v6_t.set_source(src.into());
+                                }
+                                if let Some(dst) = v6.dst {
+                                    dirty_csum = true;
+                                    v6_t.set_destination(dst.into());
+                                }
+                            }
+                        }
+                    }
+                    if let UlpHeaderAction::Modify(m) = &xf.inner_ulp {
+                        if let Some(src) = &m.generic.src_port {
+                            match hm.inner_ulp {
+                                Some(Ulp::Tcp(ref mut t)) => {
+                                    dirty_csum = true;
+                                    t.set_source(*src)
+                                }
+                                Some(Ulp::Udp(ref mut t)) => {
+                                    dirty_csum = true;
+                                    t.set_source(*src)
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(dst) = &m.generic.dst_port {
+                            match hm.inner_ulp {
+                                Some(Ulp::Tcp(ref mut t)) => {
+                                    dirty_csum = true;
+                                    t.set_destination(*dst)
+                                }
+                                Some(Ulp::Udp(ref mut t)) => {
+                                    dirty_csum = true;
+                                    t.set_destination(*dst)
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(flags) = &m.tcp_flags {
+                            match hm.inner_ulp {
+                                Some(Ulp::Tcp(ref mut t)) => {
+                                    dirty_csum = true;
+                                    t.set_flags(TcpFlags::from_bits_retain(
+                                        *flags,
+                                    ))
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(new_id) = &m.icmp_id {
+                            match hm.inner_ulp {
+                                Some(Ulp::IcmpV4(ref mut pkt))
+                                    if pkt.ty() == 0 || pkt.ty() == 3 =>
+                                {
+                                    dirty_csum = true;
+                                    pkt.rest_of_hdr_mut()[..2]
+                                        .copy_from_slice(&new_id.to_be_bytes())
+                                }
+                                Some(Ulp::IcmpV6(ref mut pkt))
+                                    if pkt.ty() == 128 || pkt.ty() == 129 =>
+                                {
+                                    dirty_csum = true;
+                                    pkt.rest_of_hdr_mut()[..2]
+                                        .copy_from_slice(&new_id.to_be_bytes())
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
 
-    //             match (new_eth, new_ip, new_encap) {
-    //                 (Some(a), Some(b), Some(c)) => {
-    //                     Ok(ThinProcRes::PushEncap(a, b, c))
-    //                 }
-    //                 (None, None, None) => Ok(ThinProcRes::Na),
-    //                 _ => Err(ProcessError::FlowTableFull {
-    //                     kind: "()",
-    //                     limit: 0,
-    //                 }),
-    //             }
-    //         }
+                if dirty_csum {
+                    // TODO: something.
+                }
 
-    //         Direction::In => {
-    //             let a = data.uft_in.get(&flow_before);
-    //             let Some(a) = a else {
-    //                 // eh.
-    //                 return Err(ProcessError::FlowTableFull {
-    //                     kind: "()",
-    //                     limit: 0,
-    //                 });
-    //             };
-    //             pkt.set_l4_hash(a.state().l4_hash);
-    //             let xforms = Arc::clone(&a.state().xforms);
-    //             Self::update_stats_in(
-    //                 &mut data.stats.vals,
-    //                 &Ok(ProcessResult::Modified),
-    //             );
-    //             drop(data);
+                match (new_eth, new_ip, new_encap) {
+                    (Some(a), Some(b), Some(c)) => {
+                        Ok(ThinProcRes::PushEncap(a, b, c))
+                    }
+                    (None, None, None) => Ok(ThinProcRes::Na),
+                    _ => Err(ProcessError::FlowTableFull {
+                        kind: "()",
+                        limit: 0,
+                    }),
+                }
+            }
 
-    //             let hm = pkt.meta.0.headers_mut();
+            Direction::In => {
+                let a = data.uft_in.get(&flow_before);
+                let Some(a) = a else {
+                    // eh.
+                    return Err(ProcessError::FlowTableFull {
+                        kind: "()",
+                        limit: 0,
+                    });
+                };
+                pkt.set_l4_hash(a.state().l4_hash);
+                let xforms = Arc::clone(&a.state().xforms);
+                Self::update_stats_in(
+                    &mut data.stats.vals,
+                    &Ok(InternalProcessResult::Modified {
+                        transform: None,
+                        tcp_state: None,
+                    }),
+                );
+                drop(data);
 
-    //             let mut pop_eth = false;
-    //             let mut pop_ip = false;
-    //             let mut pop_encap = false;
-    //             for xf in &xforms.hdr {
-    //                 // opte::engine::err!("xf...");
-    //                 if let HeaderAction::Pop = &xf.outer_ether {
-    //                     pop_eth = true;
-    //                 }
-    //                 if let HeaderAction::Pop = &xf.outer_ip {
-    //                     pop_ip = true;
-    //                 }
-    //                 if let HeaderAction::Pop = &xf.outer_encap {
-    //                     pop_encap = true;
-    //                 }
-    //                 if let HeaderAction::Modify(m, _) = &xf.inner_ether {
-    //                     if let Some(src) = m.src {
-    //                         hm.inner_eth.set_source(src.bytes().into());
-    //                     }
-    //                     if let Some(dst) = m.dst {
-    //                         hm.inner_eth.set_destination(dst.bytes().into());
-    //                     }
-    //                 }
-    //                 if let HeaderAction::Modify(m, _) = &xf.inner_ip {
-    //                     match m {
-    //                         super::headers::IpMod::Ip4(v4) => {
-    //                             let Some(ingot::example_chain::L3::Ipv4(
-    //                                 ref mut v4_t,
-    //                             )) = hm.inner_l3
-    //                             else {
-    //                                 return Err(ProcessError::FlowTableFull {
-    //                                     kind: "()",
-    //                                     limit: 0,
-    //                                 });
-    //                             };
-    //                             if let Some(src) = v4.src {
-    //                                 dirty_csum = true;
-    //                                 v4_t.set_source(src.into());
-    //                             }
-    //                             if let Some(dst) = v4.dst {
-    //                                 dirty_csum = true;
-    //                                 v4_t.set_destination(dst.into());
-    //                             }
-    //                         }
-    //                         super::headers::IpMod::Ip6(v6) => {
-    //                             let Some(ingot::example_chain::L3::Ipv6(
-    //                                 ref mut v6_t,
-    //                             )) = hm.inner_l3
-    //                             else {
-    //                                 return Err(ProcessError::FlowTableFull {
-    //                                     kind: "()",
-    //                                     limit: 0,
-    //                                 });
-    //                             };
-    //                             if let Some(src) = v6.src {
-    //                                 dirty_csum = true;
-    //                                 v6_t.set_source(src.into());
-    //                             }
-    //                             if let Some(dst) = v6.dst {
-    //                                 dirty_csum = true;
-    //                                 v6_t.set_destination(dst.into());
-    //                             }
-    //                         }
-    //                     }
-    //                 }
-    //                 if let UlpHeaderAction::Modify(m) = &xf.inner_ulp {
-    //                     if let Some(src) = &m.generic.src_port {
-    //                         match hm.inner_ulp {
-    //                             Some(Ulp::Tcp(ref mut t)) => {
-    //                                 dirty_csum = true;
-    //                                 t.set_source(*src)
-    //                             }
-    //                             Some(Ulp::Udp(ref mut t)) => {
-    //                                 dirty_csum = true;
-    //                                 t.set_source(*src)
-    //                             }
-    //                             _ => {}
-    //                         }
-    //                     }
-    //                     if let Some(dst) = &m.generic.dst_port {
-    //                         match hm.inner_ulp {
-    //                             Some(Ulp::Tcp(ref mut t)) => {
-    //                                 dirty_csum = true;
-    //                                 t.set_destination(*dst)
-    //                             }
-    //                             Some(Ulp::Udp(ref mut t)) => {
-    //                                 dirty_csum = true;
-    //                                 t.set_destination(*dst)
-    //                             }
-    //                             _ => {}
-    //                         }
-    //                     }
-    //                     if let Some(flags) = &m.tcp_flags {
-    //                         match hm.inner_ulp {
-    //                             Some(Ulp::Tcp(ref mut t)) => {
-    //                                 dirty_csum = true;
-    //                                 t.set_flags(TcpFlags::from_bits_retain(
-    //                                     *flags,
-    //                                 ))
-    //                             }
-    //                             _ => {}
-    //                         }
-    //                     }
-    //                     if let Some(new_id) = &m.icmp_id {
-    //                         match hm.inner_ulp {
-    //                             Some(Ulp::IcmpV4(ref mut pkt))
-    //                                 if pkt.ty() == 0 || pkt.ty() == 3 =>
-    //                             {
-    //                                 dirty_csum = true;
-    //                                 pkt.rest_of_hdr_mut()[..2]
-    //                                     .copy_from_slice(&new_id.to_be_bytes())
-    //                             }
-    //                             Some(Ulp::IcmpV6(ref mut pkt))
-    //                                 if pkt.ty() == 128 || pkt.ty() == 129 =>
-    //                             {
-    //                                 dirty_csum = true;
-    //                                 pkt.rest_of_hdr_mut()[..2]
-    //                                     .copy_from_slice(&new_id.to_be_bytes())
-    //                             }
-    //                             _ => {}
-    //                         }
-    //                     }
-    //                 }
-    //             }
+                let hm = &mut pkt.meta_mut().headers;
 
-    //             if dirty_csum {
-    //                 // TODO: do something.
-    //             }
+                let mut pop_eth = false;
+                let mut pop_ip = false;
+                let mut pop_encap = false;
+                for xf in &xforms.hdr {
+                    // opte::engine::err!("xf...");
+                    if let HeaderAction::Pop = &xf.outer_ether {
+                        pop_eth = true;
+                    }
+                    if let HeaderAction::Pop = &xf.outer_ip {
+                        pop_ip = true;
+                    }
+                    if let HeaderAction::Pop = &xf.outer_encap {
+                        pop_encap = true;
+                    }
+                    if let HeaderAction::Modify(m) = &xf.inner_ether {
+                        if let Some(src) = m.src {
+                            hm.inner_eth.set_source(src.bytes().into());
+                        }
+                        if let Some(dst) = m.dst {
+                            hm.inner_eth.set_destination(dst.bytes().into());
+                        }
+                    }
+                    if let HeaderAction::Modify(m) = &xf.inner_ip {
+                        match m {
+                            super::headers::IpMod::Ip4(v4) => {
+                                let Some(ingot::example_chain::L3::Ipv4(
+                                    ref mut v4_t,
+                                )) = hm.inner_l3
+                                else {
+                                    return Err(ProcessError::FlowTableFull {
+                                        kind: "()",
+                                        limit: 0,
+                                    });
+                                };
+                                if let Some(src) = v4.src {
+                                    dirty_csum = true;
+                                    v4_t.set_source(src.into());
+                                }
+                                if let Some(dst) = v4.dst {
+                                    dirty_csum = true;
+                                    v4_t.set_destination(dst.into());
+                                }
+                            }
+                            super::headers::IpMod::Ip6(v6) => {
+                                let Some(ingot::example_chain::L3::Ipv6(
+                                    ref mut v6_t,
+                                )) = hm.inner_l3
+                                else {
+                                    return Err(ProcessError::FlowTableFull {
+                                        kind: "()",
+                                        limit: 0,
+                                    });
+                                };
+                                if let Some(src) = v6.src {
+                                    dirty_csum = true;
+                                    v6_t.set_source(src.into());
+                                }
+                                if let Some(dst) = v6.dst {
+                                    dirty_csum = true;
+                                    v6_t.set_destination(dst.into());
+                                }
+                            }
+                        }
+                    }
+                    if let UlpHeaderAction::Modify(m) = &xf.inner_ulp {
+                        if let Some(src) = &m.generic.src_port {
+                            match hm.inner_ulp {
+                                Some(Ulp::Tcp(ref mut t)) => {
+                                    dirty_csum = true;
+                                    t.set_source(*src)
+                                }
+                                Some(Ulp::Udp(ref mut t)) => {
+                                    dirty_csum = true;
+                                    t.set_source(*src)
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(dst) = &m.generic.dst_port {
+                            match hm.inner_ulp {
+                                Some(Ulp::Tcp(ref mut t)) => {
+                                    dirty_csum = true;
+                                    t.set_destination(*dst)
+                                }
+                                Some(Ulp::Udp(ref mut t)) => {
+                                    dirty_csum = true;
+                                    t.set_destination(*dst)
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(flags) = &m.tcp_flags {
+                            match hm.inner_ulp {
+                                Some(Ulp::Tcp(ref mut t)) => {
+                                    dirty_csum = true;
+                                    t.set_flags(TcpFlags::from_bits_retain(
+                                        *flags,
+                                    ))
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(new_id) = &m.icmp_id {
+                            match hm.inner_ulp {
+                                Some(Ulp::IcmpV4(ref mut pkt))
+                                    if pkt.ty() == 0 || pkt.ty() == 3 =>
+                                {
+                                    dirty_csum = true;
+                                    pkt.rest_of_hdr_mut()[..2]
+                                        .copy_from_slice(&new_id.to_be_bytes())
+                                }
+                                Some(Ulp::IcmpV6(ref mut pkt))
+                                    if pkt.ty() == 128 || pkt.ty() == 129 =>
+                                {
+                                    dirty_csum = true;
+                                    pkt.rest_of_hdr_mut()[..2]
+                                        .copy_from_slice(&new_id.to_be_bytes())
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
 
-    //             match (pop_eth, pop_ip, pop_encap) {
-    //                 (true, true, true) => Ok(ThinProcRes::PopEncap),
-    //                 (false, false, false) => Ok(ThinProcRes::Na),
-    //                 _ => Err(ProcessError::FlowTableFull {
-    //                     kind: "()",
-    //                     limit: 0,
-    //                 }),
-    //             }
-    //         }
-    //     }
-    // }
+                if dirty_csum {
+                    // TODO: do something.
+                }
+
+                match (pop_eth, pop_ip, pop_encap) {
+                    (true, true, true) => Ok(ThinProcRes::PopEncap),
+                    (false, false, false) => Ok(ThinProcRes::Na),
+                    _ => Err(ProcessError::FlowTableFull {
+                        kind: "()",
+                        limit: 0,
+                    }),
+                }
+            }
+        }
+    }
 
     /// Remove the rule identified by the `dir`, `layer_name`, `id`
     /// combination, if such a rule exists.
@@ -1802,6 +1817,7 @@ impl Transforms {
         Self { hdr: Vec::with_capacity(8), body: Vec::with_capacity(2) }
     }
 
+    #[inline]
     fn apply<T: Read>(
         &self,
         pkt: &mut Packet2<Parsed2<T>>,

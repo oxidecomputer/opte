@@ -881,6 +881,10 @@ pub fn ulp_dst_port<B: ByteSlice>(pkt: &Ulp<B>) -> Option<u16> {
 }
 
 impl<T: Read> PacketHeaders<T> {
+    pub fn initial_lens(&self) -> &OpteUnifiedLengths {
+        &self.initial_lens
+    }
+
     pub fn outer_ether(
         &self,
     ) -> Option<&OwnedPacket<Ethernet, ValidEthernet<T::Chunk>>> {
