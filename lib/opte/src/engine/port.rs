@@ -1303,14 +1303,15 @@ impl<N: NetworkImpl> Port<N> {
         dir: Direction,
         pkt: &mut Packet2<ParsedMblk>,
     ) -> result::Result<ThinProcRes, ProcessError> {
-        use ingot::ethernet::EthernetMut;
-        use ingot::example_chain::Ulp;
+        use super::ingot_base::EthernetMut;
+        use super::ingot_base::Ipv4Mut;
+        use super::ingot_base::Ipv6Mut;
+        use super::ingot_base::Ulp;
+        use super::ingot_base::L3;
         use ingot::icmp::IcmpV4Mut;
         use ingot::icmp::IcmpV4Ref;
         use ingot::icmp::IcmpV6Mut;
         use ingot::icmp::IcmpV6Ref;
-        use ingot::ip::Ipv4Mut;
-        use ingot::ip::Ipv6Mut;
         use ingot::tcp::TcpFlags;
         use ingot::tcp::TcpMut;
         use ingot::udp::UdpMut;
@@ -1369,18 +1370,16 @@ impl<N: NetworkImpl> Port<N> {
                     }
                     if let HeaderAction::Modify(m) = &xf.inner_ether {
                         if let Some(src) = m.src {
-                            hm.inner_eth.set_source(src.bytes().into());
+                            hm.inner_eth.set_source(src);
                         }
                         if let Some(dst) = m.dst {
-                            hm.inner_eth.set_destination(dst.bytes().into());
+                            hm.inner_eth.set_destination(dst);
                         }
                     }
                     if let HeaderAction::Modify(m) = &xf.inner_ip {
                         match m {
                             super::headers::IpMod::Ip4(v4) => {
-                                let Some(ingot::example_chain::L3::Ipv4(
-                                    ref mut v4_t,
-                                )) = hm.inner_l3
+                                let Some(L3::Ipv4(ref mut v4_t)) = hm.inner_l3
                                 else {
                                     return Err(ProcessError::FlowTableFull {
                                         kind: "()",
@@ -1397,9 +1396,7 @@ impl<N: NetworkImpl> Port<N> {
                                 }
                             }
                             super::headers::IpMod::Ip6(v6) => {
-                                let Some(ingot::example_chain::L3::Ipv6(
-                                    ref mut v6_t,
-                                )) = hm.inner_l3
+                                let Some(L3::Ipv6(ref mut v6_t)) = hm.inner_l3
                                 else {
                                     return Err(ProcessError::FlowTableFull {
                                         kind: "()",
@@ -1531,18 +1528,16 @@ impl<N: NetworkImpl> Port<N> {
                     }
                     if let HeaderAction::Modify(m) = &xf.inner_ether {
                         if let Some(src) = m.src {
-                            hm.inner_eth.set_source(src.bytes().into());
+                            hm.inner_eth.set_source(src);
                         }
                         if let Some(dst) = m.dst {
-                            hm.inner_eth.set_destination(dst.bytes().into());
+                            hm.inner_eth.set_destination(dst);
                         }
                     }
                     if let HeaderAction::Modify(m) = &xf.inner_ip {
                         match m {
                             super::headers::IpMod::Ip4(v4) => {
-                                let Some(ingot::example_chain::L3::Ipv4(
-                                    ref mut v4_t,
-                                )) = hm.inner_l3
+                                let Some(L3::Ipv4(ref mut v4_t)) = hm.inner_l3
                                 else {
                                     return Err(ProcessError::FlowTableFull {
                                         kind: "()",
@@ -1559,9 +1554,7 @@ impl<N: NetworkImpl> Port<N> {
                                 }
                             }
                             super::headers::IpMod::Ip6(v6) => {
-                                let Some(ingot::example_chain::L3::Ipv6(
-                                    ref mut v6_t,
-                                )) = hm.inner_l3
+                                let Some(L3::Ipv6(ref mut v6_t)) = hm.inner_l3
                                 else {
                                     return Err(ProcessError::FlowTableFull {
                                         kind: "()",

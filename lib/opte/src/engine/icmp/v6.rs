@@ -7,13 +7,13 @@
 //! ICMPv6 headers and processing.
 
 use super::*;
+use crate::engine::ingot_base::Ipv6Ref;
 use crate::engine::ingot_packet::MsgBlk;
 use crate::engine::ingot_packet::PacketHeaders2;
 use crate::engine::ip6::Ipv6Hdr;
 use crate::engine::ip6::Ipv6Meta;
 use crate::engine::predicate::Ipv6AddrMatch;
 use alloc::string::String;
-use ingot::ip::Ipv6Ref;
 use ingot::types::Emit;
 pub use opte_api::ip::Icmpv6EchoReply;
 pub use opte_api::ip::Ipv6Addr;
@@ -135,8 +135,8 @@ impl HairpinAction for Icmpv6EchoReply {
         // resulting ICMPv6 echo reply.
         let (src_ip, dst_ip) = if let Some(metadata) = meta.inner_ip6() {
             (
-                IpAddress::Ipv6(Ipv6Address(metadata.source().octets())),
-                IpAddress::Ipv6(Ipv6Address(metadata.destination().octets())),
+                IpAddress::Ipv6(Ipv6Address(metadata.source().bytes())),
+                IpAddress::Ipv6(Ipv6Address(metadata.destination().bytes())),
             )
         } else {
             // We got the ICMPv6 metadata above but no IPv6 somehow?
@@ -279,8 +279,8 @@ impl HairpinAction for RouterAdvertisement {
                 meta
             )));
         };
-        let src_ip = IpAddress::Ipv6(Ipv6Address(ip6.source().octets()));
-        let dst_ip = IpAddress::Ipv6(Ipv6Address(ip6.destination().octets()));
+        let src_ip = IpAddress::Ipv6(Ipv6Address(ip6.source().bytes()));
+        let dst_ip = IpAddress::Ipv6(Ipv6Address(ip6.destination().bytes()));
 
         // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
         // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
@@ -373,7 +373,7 @@ impl HairpinAction for RouterAdvertisement {
         let ip = Ipv6Meta {
             src: *self.ip(),
             // Safety: We match on this being Some(_) above, so unwrap is safe.
-            dst: meta.inner_ip6().unwrap().source().octets().into(),
+            dst: meta.inner_ip6().unwrap().source(),
             proto: Protocol::ICMPv6,
             next_hdr: IpProtocol::Icmpv6,
             // RFC 4861 6.1.2 requires that the hop limit be 255 in an RA.
@@ -416,9 +416,8 @@ fn validate_neighbor_solicitation<B: ByteSlice>(
     metadata: &impl Ipv6Ref<B>,
 ) -> Result<Ipv6Addr, GenErr> {
     // First, check if this is in fact a NS message.
-    let smol_src = IpAddress::Ipv6(Ipv6Address(metadata.source().octets()));
-    let smol_dst =
-        IpAddress::Ipv6(Ipv6Address(metadata.destination().octets()));
+    let smol_src = IpAddress::Ipv6(Ipv6Address(metadata.source().bytes()));
+    let smol_dst = IpAddress::Ipv6(Ipv6Address(metadata.destination().bytes()));
     let src_pkt = Icmpv6Packet::new_checked(rdr)?;
     let mut csum = Csum::ignored();
     csum.icmpv6 = Checksum::Rx;
@@ -464,7 +463,7 @@ fn validate_neighbor_solicitation<B: ByteSlice>(
 
     // NS is only allowed from the unspecified address if the destination is a
     // solicited-node multicast address.
-    if metadata.source().is_unspecified()
+    if metadata.source() == Ipv6Addr::ANY_ADDR
         && !Ipv6Addr::from(metadata.destination()).is_solicited_node_multicast()
     {
         return Err(GenErr::Unexpected(String::from(
@@ -474,7 +473,7 @@ fn validate_neighbor_solicitation<B: ByteSlice>(
     }
 
     // Cannot contain Link-Layer address option if from the unspecified address.
-    if metadata.source().is_unspecified() && has_ll_option {
+    if metadata.source() == Ipv6Addr::ANY_ADDR && has_ll_option {
         return Err(GenErr::Unexpected(String::from(
             "Received NS from UNSPEC, but message contains the \
             Link-Layer Address option.",

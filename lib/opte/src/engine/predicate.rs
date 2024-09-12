@@ -12,6 +12,10 @@ use super::ether::EtherType;
 use super::headers::IpMeta;
 use super::icmp::v4::MessageType as IcmpMessageType;
 use super::icmp::v6::MessageType as Icmpv6MessageType;
+use super::ingot_base::EthernetRef;
+use super::ingot_base::Ipv4Ref;
+use super::ingot_base::Ipv6Ref;
+use super::ingot_base::L3;
 use super::ingot_packet::ulp_dst_port;
 use super::ingot_packet::ulp_src_port;
 use super::ingot_packet::PacketHeaders;
@@ -33,12 +37,8 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use core::ops::RangeInclusive;
-use ingot::ethernet::EthernetRef;
-use ingot::example_chain::L3;
 use ingot::icmp::IcmpV4Ref;
 use ingot::icmp::IcmpV6Ref;
-use ingot::ip::Ipv4Ref;
-use ingot::ip::Ipv6Ref;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
@@ -388,9 +388,7 @@ impl Predicate {
 
             Self::InnerEtherDst(list) => {
                 for m in list {
-                    if m.matches(
-                        meta.inner_ether().destination().into_array().into(),
-                    ) {
+                    if m.matches(meta.inner_ether().destination()) {
                         return true;
                     }
                 }
@@ -398,9 +396,7 @@ impl Predicate {
 
             Self::InnerEtherSrc(list) => {
                 for m in list {
-                    if m.matches(
-                        meta.inner_ether().source().into_array().into(),
-                    ) {
+                    if m.matches(meta.inner_ether().source()) {
                         return true;
                     }
                 }

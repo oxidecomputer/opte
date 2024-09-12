@@ -17,6 +17,27 @@ use super::headers::PushAction;
 use super::headers::UlpMetaModify;
 use super::headers::UlpMod;
 use super::icmp::QueryEcho;
+use super::ingot_base::Ethernet;
+use super::ingot_base::EthernetMut;
+use super::ingot_base::EthernetPacket;
+use super::ingot_base::EthernetRef;
+use super::ingot_base::Ipv4;
+use super::ingot_base::Ipv4Mut;
+use super::ingot_base::Ipv4Packet;
+use super::ingot_base::Ipv4Ref;
+use super::ingot_base::Ipv6;
+use super::ingot_base::Ipv6Mut;
+use super::ingot_base::Ipv6Packet;
+use super::ingot_base::Ipv6Ref;
+use super::ingot_base::L3Repr;
+use super::ingot_base::Ulp;
+use super::ingot_base::UlpRepr;
+use super::ingot_base::ValidEthernet;
+use super::ingot_base::ValidIpv6;
+use super::ingot_base::ValidL3;
+use super::ingot_base::ValidUlp;
+use super::ingot_base::L3;
+use super::ingot_base::L4;
 use super::packet::allocb;
 use super::packet::AddrPair;
 use super::packet::BodyTransform;
@@ -48,19 +69,7 @@ use core::sync::atomic::AtomicPtr;
 use illumos_sys_hdrs as ddi;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
-use ingot::ethernet::Ethernet;
-use ingot::ethernet::EthernetMut;
-use ingot::ethernet::EthernetPacket;
-use ingot::ethernet::EthernetRef;
 use ingot::ethernet::Ethertype;
-use ingot::ethernet::ValidEthernet;
-use ingot::example_chain::L3Repr;
-use ingot::example_chain::Ulp;
-use ingot::example_chain::UlpRepr;
-use ingot::example_chain::ValidL3;
-use ingot::example_chain::ValidUlp;
-use ingot::example_chain::L3;
-use ingot::example_chain::L4;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveMut;
 use ingot::geneve::GenevePacket;
@@ -73,17 +82,8 @@ use ingot::icmp::IcmpV6Mut;
 use ingot::icmp::IcmpV6Packet;
 use ingot::icmp::IcmpV6Ref;
 use ingot::ip::IpProtocol;
-use ingot::ip::Ipv4;
 use ingot::ip::Ipv4Flags;
-use ingot::ip::Ipv4Mut;
-use ingot::ip::Ipv4Packet;
-use ingot::ip::Ipv4Ref;
-use ingot::ip::Ipv6;
-use ingot::ip::Ipv6Mut;
-use ingot::ip::Ipv6Packet;
-use ingot::ip::Ipv6Ref;
 use ingot::ip::LowRentV6EhRepr;
-use ingot::ip::ValidIpv6;
 use ingot::tcp::TcpFlags;
 use ingot::tcp::TcpMut;
 use ingot::tcp::TcpPacket;
@@ -865,7 +865,7 @@ impl<T: Read> PacketHeaders<T> {
             Some(DirectPacket::Raw(ValidEncapMeta::Geneve(_, g))) => {
                 // TODO: hack.
                 let oxide_external = g.1.packet_length() != 0;
-                Some((Vni::new(g.vni()).unwrap(), oxide_external))
+                Some((g.vni(), oxide_external))
             }
             None => None,
         }
@@ -874,21 +874,8 @@ impl<T: Read> PacketHeaders<T> {
     // Again: really need to make Owned/Direct choices better-served by ingot.
     // this interface sucks.
     pub fn outer_ip6_addrs(&self) -> Option<(Ipv6Addr, Ipv6Addr)> {
-        // match &self.headers.outer_l3 {
-        //     Some(DirectPacket::Repr(L3Repr::Ipv6(v6))) => Some((
-        //         v6.source.octets().into(),
-        //         v6.destination.octets().into(),
-        //     )),
-        //     Some(DirectPacket::Raw(ValidL3::Ipv6(v6))) => {
-        //         Some((v6.source().octets().into(), v6.destination().octets().into()))
-        //     }
-        //     _ => None,
-        // }
         match &self.headers.outer_l3 {
-            Some(L3::Ipv6(v6)) => Some((
-                v6.source().octets().into(),
-                v6.destination().octets().into(),
-            )),
+            Some(L3::Ipv6(v6)) => Some((v6.source(), v6.destination())),
             _ => None,
         }
     }
@@ -897,11 +884,11 @@ impl<T: Read> PacketHeaders<T> {
         &self.headers.inner_eth
     }
 
-    pub fn inner_l3(&self) -> Option<&ingot::example_chain::L3<T::Chunk>> {
+    pub fn inner_l3(&self) -> Option<&L3<T::Chunk>> {
         self.headers.inner_l3.as_ref()
     }
 
-    pub fn inner_ulp(&self) -> Option<&ingot::example_chain::Ulp<T::Chunk>> {
+    pub fn inner_ulp(&self) -> Option<&Ulp<T::Chunk>> {
         self.headers.inner_ulp.as_ref()
     }
 
@@ -1006,9 +993,7 @@ impl<T: Read> PacketHeaders<T> {
     }
 }
 
-fn actual_src_port<T: ByteSlice>(
-    chunk: &ingot::example_chain::Ulp<T>,
-) -> Option<u16> {
+fn actual_src_port<T: ByteSlice>(chunk: &Ulp<T>) -> Option<u16> {
     match chunk {
         Ulp::Tcp(pkt) => Some(pkt.source()),
         Ulp::Udp(pkt) => Some(pkt.source()),
@@ -1016,9 +1001,7 @@ fn actual_src_port<T: ByteSlice>(
     }
 }
 
-fn actual_dst_port<T: ByteSlice>(
-    chunk: &ingot::example_chain::Ulp<T>,
-) -> Option<u16> {
+fn actual_dst_port<T: ByteSlice>(chunk: &Ulp<T>) -> Option<u16> {
     match chunk {
         Ulp::Tcp(pkt) => Some(pkt.destination()),
         Ulp::Udp(pkt) => Some(pkt.destination()),
@@ -1026,9 +1009,7 @@ fn actual_dst_port<T: ByteSlice>(
     }
 }
 
-fn pseudo_port<T: ByteSlice>(
-    chunk: &ingot::example_chain::Ulp<T>,
-) -> Option<u16> {
+fn pseudo_port<T: ByteSlice>(chunk: &Ulp<T>) -> Option<u16> {
     match chunk {
         Ulp::IcmpV4(pkt)
             if pkt.code() == 0 && (pkt.ty() == 0 || pkt.ty() == 8) =>
@@ -1050,17 +1031,11 @@ impl<T: Read> From<&PacketHeaders<T>> for InnerFlowId {
         let (proto, addrs) = match meta.inner_l3() {
             Some(L3::Ipv4(pkt)) => (
                 pkt.protocol().0,
-                AddrPair::V4 {
-                    src: pkt.source().into(),
-                    dst: pkt.destination().into(),
-                },
+                AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
             ),
             Some(L3::Ipv6(pkt)) => (
                 pkt.next_header().0,
-                AddrPair::V6 {
-                    src: pkt.source().into(),
-                    dst: pkt.destination().into(),
-                },
+                AddrPair::V6 { src: pkt.source(), dst: pkt.destination() },
             ),
             None => (255, FLOW_ID_DEFAULT.addrs),
         };
@@ -1625,8 +1600,8 @@ fn l3_pseudo_header<T: ByteSlice>(l3: &L3<T>) -> Checksum {
     match l3 {
         L3::Ipv4(v4) => {
             let mut pseudo_hdr_bytes = [0u8; 12];
-            pseudo_hdr_bytes[0..4].copy_from_slice(&v4.source().octets());
-            pseudo_hdr_bytes[4..8].copy_from_slice(&v4.destination().octets());
+            pseudo_hdr_bytes[0..4].copy_from_slice(v4.source().as_ref());
+            pseudo_hdr_bytes[4..8].copy_from_slice(v4.destination().as_ref());
             pseudo_hdr_bytes[9] = v4.protocol().0;
             let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
             pseudo_hdr_bytes[10..].copy_from_slice(&ulp_len.to_be_bytes());
@@ -1635,9 +1610,9 @@ fn l3_pseudo_header<T: ByteSlice>(l3: &L3<T>) -> Checksum {
         }
         L3::Ipv6(v6) => {
             let mut pseudo_hdr_bytes = [0u8; 40];
-            pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().octets());
+            pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().as_ref());
             pseudo_hdr_bytes[16..32]
-                .copy_from_slice(&v6.destination().octets());
+                .copy_from_slice(&v6.destination().as_ref());
             pseudo_hdr_bytes[39] = v6.next_header().0;
             let ulp_len = v6.payload_len() as u32;
             pseudo_hdr_bytes[32..36].copy_from_slice(&ulp_len.to_be_bytes());
@@ -1998,18 +1973,18 @@ impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
         match self {
             DirectPacket::Repr(a) => {
                 if let Some(src) = mod_spec.src {
-                    a.set_source(src.bytes().into());
+                    a.set_source(src);
                 }
                 if let Some(dst) = mod_spec.dst {
-                    a.set_destination(dst.bytes().into());
+                    a.set_destination(dst);
                 }
             }
             DirectPacket::Raw(a) => {
                 if let Some(src) = mod_spec.src {
-                    a.set_source(src.bytes().into());
+                    a.set_source(src);
                 }
                 if let Some(dst) = mod_spec.dst {
-                    a.set_destination(dst.bytes().into());
+                    a.set_destination(dst);
                 }
             }
         }
@@ -2025,10 +2000,10 @@ impl<T: ByteSliceMut> HeaderActionModify<EtherMod> for EthernetPacket<T> {
         mod_spec: &EtherMod,
     ) -> Result<(), HeaderActionError> {
         if let Some(src) = mod_spec.src {
-            self.set_source(src.bytes().into());
+            self.set_source(src);
         }
         if let Some(dst) = mod_spec.dst {
-            self.set_destination(dst.bytes().into());
+            self.set_destination(dst);
         }
 
         Ok(())
@@ -2048,19 +2023,13 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
             IpMod::Ip4(mods) => match self {
                 DirectPacket::Repr(L3Repr::Ipv4(v4)) => {
                     if let Some(src) = mods.src {
-                        <ingot::ip::Ipv4 as Ipv4Mut<T>>::set_source(
-                            v4,
-                            src.bytes().into(),
-                        );
+                        <Ipv4 as Ipv4Mut<T>>::set_source(v4, src);
                     }
                     if let Some(dst) = mods.dst {
-                        <ingot::ip::Ipv4 as Ipv4Mut<T>>::set_destination(
-                            v4,
-                            dst.bytes().into(),
-                        );
+                        <Ipv4 as Ipv4Mut<T>>::set_destination(v4, dst);
                     }
                     if let Some(p) = mods.proto {
-                        <ingot::ip::Ipv4 as Ipv4Mut<T>>::set_protocol(
+                        <Ipv4 as Ipv4Mut<T>>::set_protocol(
                             v4,
                             IpProtocol(u8::from(p)),
                         );
@@ -2068,10 +2037,10 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
                 }
                 DirectPacket::Raw(ValidL3::Ipv4(v4)) => {
                     if let Some(src) = mods.src {
-                        v4.set_source(src.bytes().into());
+                        v4.set_source(src);
                     }
                     if let Some(dst) = mods.dst {
-                        v4.set_destination(dst.bytes().into());
+                        v4.set_destination(dst);
                     }
                     if let Some(p) = mods.proto {
                         v4.set_protocol(IpProtocol(u8::from(p)));
@@ -2083,20 +2052,14 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
             IpMod::Ip6(mods) => match self {
                 DirectPacket::Repr(L3Repr::Ipv6(v6)) => {
                     if let Some(src) = mods.src {
-                        <ingot::ip::Ipv6 as Ipv6Mut<T>>::set_source(
-                            v6,
-                            src.bytes().into(),
-                        );
+                        <Ipv6 as Ipv6Mut<T>>::set_source(v6, src);
                     }
                     if let Some(dst) = mods.dst {
-                        <ingot::ip::Ipv6 as Ipv6Mut<T>>::set_destination(
-                            v6,
-                            dst.bytes().into(),
-                        );
+                        <Ipv6 as Ipv6Mut<T>>::set_destination(v6, dst);
                     }
                     if let Some(p) = mods.proto {
                         // NOTE: I know this is broken for V6EHs
-                        <ingot::ip::Ipv6 as Ipv6Mut<T>>::set_next_header(
+                        <Ipv6 as Ipv6Mut<T>>::set_next_header(
                             v6,
                             IpProtocol(u8::from(p)),
                         );
@@ -2104,10 +2067,10 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
                 }
                 DirectPacket::Raw(ValidL3::Ipv6(v6)) => {
                     if let Some(src) = mods.src {
-                        v6.set_source(src.bytes().into());
+                        v6.set_source(src);
                     }
                     if let Some(dst) = mods.dst {
-                        v6.set_destination(dst.bytes().into());
+                        v6.set_destination(dst);
                     }
                     if let Some(p) = mods.proto {
                         // NOTE: I know this is broken for V6EHs
@@ -2132,10 +2095,10 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod> for L3<T> {
         match (self, mod_spec) {
             (L3::Ipv4(v4), IpMod::Ip4(mods)) => {
                 if let Some(src) = mods.src {
-                    v4.set_source(src.bytes().into());
+                    v4.set_source(src);
                 }
                 if let Some(dst) = mods.dst {
-                    v4.set_destination(dst.bytes().into());
+                    v4.set_destination(dst);
                 }
                 if let Some(p) = mods.proto {
                     v4.set_protocol(IpProtocol(u8::from(p)));
@@ -2144,10 +2107,10 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod> for L3<T> {
             }
             (L3::Ipv6(v6), IpMod::Ip6(mods)) => {
                 if let Some(src) = mods.src {
-                    v6.set_source(src.bytes().into());
+                    v6.set_source(src);
                 }
                 if let Some(dst) = mods.dst {
-                    v6.set_destination(dst.bytes().into());
+                    v6.set_destination(dst);
                 }
                 if let Some(p) = mods.proto {
                     // NOTE: I know this is broken for V6EHs
@@ -2269,14 +2232,14 @@ impl<T: ByteSlice> HasInnerCksum for Ulp<T> {
 // need to briefly keep both around while I systematically rewrite the test suite.
 
 impl<T: ByteSlice> From<EtherMeta>
-    for ingot::types::Packet<ingot::ethernet::Ethernet, ValidEthernet<T>>
+    for ingot::types::Packet<Ethernet, ValidEthernet<T>>
 {
     #[inline]
     fn from(value: EtherMeta) -> Self {
         ingot::types::Packet::Repr(
             Ethernet {
-                destination: value.dst.bytes().into(),
-                source: value.src.bytes().into(),
+                destination: value.dst,
+                source: value.src,
                 ethertype: Ethertype(u16::from(value.ether_type)),
             }
             .into(),
@@ -2285,14 +2248,14 @@ impl<T: ByteSlice> From<EtherMeta>
 }
 
 impl<T: ByteSlice> From<EtherMeta>
-    for DirectPacket<ingot::ethernet::Ethernet, ValidEthernet<T>>
+    for DirectPacket<Ethernet, ValidEthernet<T>>
 {
     #[inline]
     fn from(value: EtherMeta) -> Self {
         DirectPacket::Repr(
             Ethernet {
-                destination: value.dst.bytes().into(),
-                source: value.src.bytes().into(),
+                destination: value.dst,
+                source: value.src,
                 ethertype: Ethertype(u16::from(value.ether_type)),
             }
             .into(),
@@ -2329,8 +2292,8 @@ impl<T: ByteSlice> From<IpMeta> for DirectPacket<L3Repr, ValidL3<T>> {
                     identification: v4.ident,
                     protocol: IpProtocol(u8::from(v4.proto)),
                     checksum: u16::from_be_bytes(v4.csum),
-                    source: v4.src.bytes().into(),
-                    destination: v4.dst.bytes().into(),
+                    source: v4.src,
+                    destination: v4.dst,
                     flags: Ipv4Flags::DONT_FRAGMENT,
                     ..Default::default()
                 }
@@ -2341,8 +2304,8 @@ impl<T: ByteSlice> From<IpMeta> for DirectPacket<L3Repr, ValidL3<T>> {
                     payload_len: v6.pay_len,
                     next_header: IpProtocol(u8::from(v6.next_hdr)),
                     hop_limit: v6.hop_limit,
-                    source: v6.src.bytes().into(),
-                    destination: v6.dst.bytes().into(),
+                    source: v6.src,
+                    destination: v6.dst,
                     v6ext: Repeated::default(), // TODO
                     ..Default::default()
                 }
@@ -2363,8 +2326,8 @@ impl<T: ByteSlice> From<IpMeta> for L3<T> {
                     identification: v4.ident,
                     protocol: IpProtocol(u8::from(v4.proto)),
                     checksum: u16::from_be_bytes(v4.csum),
-                    source: v4.src.bytes().into(),
-                    destination: v4.dst.bytes().into(),
+                    source: v4.src,
+                    destination: v4.dst,
                     flags: Ipv4Flags::DONT_FRAGMENT,
                     ..Default::default()
                 }
@@ -2375,8 +2338,8 @@ impl<T: ByteSlice> From<IpMeta> for L3<T> {
                     payload_len: v6.pay_len,
                     next_header: IpProtocol(u8::from(v6.next_hdr)),
                     hop_limit: v6.hop_limit,
-                    source: v6.src.bytes().into(),
-                    destination: v6.dst.bytes().into(),
+                    source: v6.src,
+                    destination: v6.dst,
                     v6ext: Repeated::default(), // TODO
                     ..Default::default()
                 }
@@ -2398,8 +2361,8 @@ impl<T: ByteSlice> PushAction<DirectPacket<Ethernet, ValidEthernet<T>>>
     #[inline]
     fn push(&self) -> DirectPacket<Ethernet, ValidEthernet<T>> {
         DirectPacket::Repr(Ethernet {
-            destination: self.dst.bytes().into(),
-            source: self.src.bytes().into(),
+            destination: self.dst,
+            source: self.src,
             ethertype: Ethertype(u16::from(self.ether_type)),
         })
     }
@@ -2410,8 +2373,8 @@ impl<T: ByteSlice> PushAction<EthernetPacket<T>> for EtherMeta {
     fn push(&self) -> EthernetPacket<T> {
         ingot::types::Packet::Repr(
             Ethernet {
-                destination: self.dst.bytes().into(),
-                source: self.src.bytes().into(),
+                destination: self.dst,
+                source: self.src,
                 ethertype: Ethertype(u16::from(self.ether_type)),
             }
             .into(),
@@ -2445,8 +2408,8 @@ impl<T: ByteSlice> PushAction<L3<T>> for IpPush {
             IpPush::Ip4(v4) => L3::Ipv4(
                 Ipv4 {
                     protocol: IpProtocol(u8::from(v4.proto)),
-                    source: v4.src.bytes().into(),
-                    destination: v4.dst.bytes().into(),
+                    source: v4.src,
+                    destination: v4.dst,
                     flags: Ipv4Flags::DONT_FRAGMENT,
                     ..Default::default()
                 }
@@ -2455,8 +2418,8 @@ impl<T: ByteSlice> PushAction<L3<T>> for IpPush {
             IpPush::Ip6(v6) => L3::Ipv6(
                 Ipv6 {
                     next_header: IpProtocol(u8::from(v6.proto)),
-                    source: v6.src.bytes().into(),
-                    destination: v6.dst.bytes().into(),
+                    source: v6.src,
+                    destination: v6.dst,
                     ..Default::default()
                 }
                 .into(),

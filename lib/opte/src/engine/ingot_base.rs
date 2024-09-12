@@ -12,6 +12,7 @@ use ingot::ip::LowRentV6EhRepr;
 use ingot::tcp::Tcp;
 use ingot::tcp::ValidTcp;
 use ingot::types::primitives::*;
+use ingot::types::ByteSlice;
 use ingot::types::NetworkRepr;
 use ingot::types::Packet;
 use ingot::types::ParseError;
@@ -23,7 +24,6 @@ use ingot::Ingot;
 use opte_api::Ipv4Addr;
 use opte_api::Ipv6Addr;
 use opte_api::MacAddr;
-use zerocopy::ByteSlice;
 
 // Redefine Ethernet and v4/v6 because we have our own, internal,
 // types already.
@@ -32,6 +32,12 @@ use zerocopy::ByteSlice;
 pub enum L3 {
     Ipv4 = Ethertype::IPV4,
     Ipv6 = Ethertype::IPV6,
+}
+
+#[choice(on = IpProtocol)]
+pub enum L4 {
+    Tcp = IpProtocol::TCP,
+    Udp = IpProtocol::UDP,
 }
 
 #[choice(on = IpProtocol)]
@@ -113,14 +119,26 @@ pub struct Ipv6 {
 }
 
 // Why TF do I need to redefine these? Check...
-impl<V: ByteSlice, Any> From<ValidIpv4<V>> for Packet<Any, ValidIpv4<V>> {
-    fn from(value: ValidIpv4<V>) -> Self {
-        Packet::Raw(value)
-    }
-}
+// impl<Any> From<Ipv4> for Packet<Ipv4, Any> {
+//     fn from(value: Ipv4) -> Self {
+//         Packet::Repr(value)
+//     }
+// }
 
-impl<V: ByteSlice, Any> From<ValidIpv6<V>> for Packet<Any, ValidIpv6<V>> {
-    fn from(value: ValidIpv6<V>) -> Self {
-        Packet::Raw(value)
-    }
-}
+// impl<V: ByteSlice, Any> From<ValidIpv4<V>> for Packet<Any, ValidIpv4<V>> {
+//     fn from(value: ValidIpv4<V>) -> Self {
+//         Packet::Raw(value)
+//     }
+// }
+
+// impl<Any> From<Ipv6> for Packet<Ipv6, Any> {
+//     fn from(value: Ipv6) -> Self {
+//         Packet::Repr(value)
+//     }
+// }
+
+// impl<V: ByteSlice, Any> From<ValidIpv6<V>> for Packet<Any, ValidIpv6<V>> {
+//     fn from(value: ValidIpv6<V>) -> Self {
+//         Packet::Raw(value)
+//     }
+// }

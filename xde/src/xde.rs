@@ -44,9 +44,6 @@ use core::ptr::addr_of_mut;
 use core::time::Duration;
 use crc32fast::Hasher;
 use illumos_sys_hdrs::*;
-use ingot::ethernet::EthernetMut;
-use ingot::ethernet::EthernetRef;
-use ingot::ethernet::ValidEthernet;
 use ingot::geneve::GeneveFlags;
 use ingot::geneve::GeneveMut;
 use ingot::geneve::GeneveRef;
@@ -82,6 +79,9 @@ use opte::engine::headers::EncapMeta;
 use opte::engine::headers::EncapPush;
 use opte::engine::headers::IpAddr;
 use opte::engine::headers::IpPush;
+use opte::engine::ingot_base::EthernetMut;
+use opte::engine::ingot_base::EthernetRef;
+use opte::engine::ingot_base::ValidEthernet;
 use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ingot_packet::Packet2;
 use opte::engine::ingot_packet::Parsed2;
@@ -1428,8 +1428,7 @@ fn guest_loopback<'a>(
     vni: Vni,
 ) -> Option<&'a Box<XdeDev>> {
     use Direction::*;
-    let ether_dst =
-        MacAddr::from(pkt.meta().inner_ether().destination().into_array());
+    let ether_dst = pkt.meta().inner_ether().destination();
     // let devs = unsafe { xde_devs.read() };
     let maybe_dest_dev =
         devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst);
@@ -1596,134 +1595,125 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     let port = &src_dev.port;
 
     // BEGIN THIN_PROCESS RE-EXPERIMENT
-    // let mut ip6_src = Default::default();
-    // let mut ip6_dst = Default::default();
-    // let f_hash;
-    // if let Ok(decision) = port.thin_process(Direction::Out, &mut parsed_pkt) {
-    //     match decision {
-    //         opte::engine::port::ThinProcRes::PushEncap(
-    //             eth,
-    //             ip,
-    //             udp,
-    //         ) => {
-    //             f_hash = parsed_pkt.l4_hash();
-    //             drop(parsed_pkt);
+    let mut ip6_src = Default::default();
+    let mut ip6_dst = Default::default();
+    let f_hash;
+    if let Ok(decision) = port.thin_process(Direction::Out, &mut parsed_pkt) {
+        match decision {
+            opte::engine::port::ThinProcRes::PushEncap(eth, ip, udp) => {
+                f_hash = parsed_pkt.l4_hash();
+                drop(parsed_pkt);
 
-    //             // TODO: generate methods to fill a maybeuninit.
-    //             // total bytes: ETH 14, V6 40, UDP 8, GENEVE 8
-    //             let new_hdrs = 14 + 40 + 8 + 8;
-    //             let mut new_blk =
-    //                 MsgBlk::new_with_headroom(2, new_hdrs);
+                // TODO: generate methods to fill a maybeuninit.
+                // total bytes: ETH 14, V6 40, UDP 8, GENEVE 8
+                let new_hdrs = 14 + 40 + 8 + 8;
+                let mut new_blk = MsgBlk::new_with_headroom(2, new_hdrs);
 
-    //             let w_encap_bytes = (pkt_len_old + 16) as u16;
+                let w_encap_bytes = (pkt_len_old + 16) as u16;
 
-    //             new_blk.write(14, |uninit| {
-    //                 let complete_eth =
-    //                     opte::ingot::ethernet::Ethernet {
-    //                         destination: eth.dst.bytes().into(),
-    //                         source: eth.src.bytes().into(),
-    //                         ethertype: ingot::ethernet::Ethertype(
-    //                             eth.ether_type.into(),
-    //                         ),
-    //                     };
+                new_blk.write(14, |uninit| {
+                    let complete_eth = opte::ingot::ethernet::Ethernet {
+                        destination: eth.dst.bytes().into(),
+                        source: eth.src.bytes().into(),
+                        ethertype: ingot::ethernet::Ethertype(
+                            eth.ether_type.into(),
+                        ),
+                    };
 
-    //                 complete_eth
-    //                     .emit_uninit(uninit)
-    //                     .expect("must be enough room...");
-    //             });
+                    complete_eth
+                        .emit_uninit(uninit)
+                        .expect("must be enough room...");
+                });
 
-    //             // we know we'er only pushing v6.
-    //             let IpPush::Ip6(v6) = ip else { panic!() };
-    //             ip6_src = v6.src;
-    //             ip6_dst = v6.dst;
+                // we know we'er only pushing v6.
+                let IpPush::Ip6(v6) = ip else { panic!() };
+                ip6_src = v6.src;
+                ip6_dst = v6.dst;
 
-    //             new_blk.write(40, |uninit| {
-    //                 let complete_v6 = opte::ingot::ip::Ipv6 {
-    //                     version: 6,
-    //                     dscp: 0,
-    //                     ecn: ingot::ip::Ecn::NotCapable,
-    //                     flow_label: 12345678,
-    //                     payload_len: w_encap_bytes,
-    //                     next_header: ingot::ip::IpProtocol(
-    //                         v6.proto.into(),
-    //                     ),
-    //                     hop_limit: 128,
-    //                     source: v6.src.bytes().into(),
-    //                     destination: v6.dst.bytes().into(),
-    //                     v6ext: vec![].into(),
-    //                 };
+                new_blk.write(40, |uninit| {
+                    let complete_v6 = opte::ingot::ip::Ipv6 {
+                        version: 6,
+                        dscp: 0,
+                        ecn: ingot::ip::Ecn::NotCapable,
+                        flow_label: 12345678,
+                        payload_len: w_encap_bytes,
+                        next_header: ingot::ip::IpProtocol(v6.proto.into()),
+                        hop_limit: 128,
+                        source: v6.src.bytes().into(),
+                        destination: v6.dst.bytes().into(),
+                        v6ext: vec![].into(),
+                    };
 
-    //                 complete_v6
-    //                     .emit_uninit(uninit)
-    //                     .expect("must be enough room...");
-    //             });
+                    complete_v6
+                        .emit_uninit(uninit)
+                        .expect("must be enough room...");
+                });
 
-    //             let EncapPush::Geneve(gen) = udp else { panic!() };
-    //             new_blk.write(16, |uninit| {
-    //                 let complete_udp = opte::ingot::udp::Udp {
-    //                     source: gen.entropy,
-    //                     destination: 6081,
-    //                     length: w_encap_bytes,
-    //                     checksum: 0,
-    //                 };
-    //                 let complete_geneve = opte::ingot::geneve::Geneve {
-    //                     version: 0,
-    //                     opt_len: 0,
-    //                     flags: opte::ingot::geneve::GeneveFlags::empty(
-    //                     ),
-    //                     protocol_type:
-    //                         opte::ingot::ethernet::Ethertype::ETHERNET,
-    //                     vni: gen.vni.into(),
-    //                     reserved: 0,
-    //                     options: Vec::new(),
-    //                 };
+                let EncapPush::Geneve(gen) = udp else { panic!() };
+                new_blk.write(16, |uninit| {
+                    let complete_udp = opte::ingot::udp::Udp {
+                        source: gen.entropy,
+                        destination: 6081,
+                        length: w_encap_bytes,
+                        checksum: 0,
+                    };
+                    let complete_geneve = opte::ingot::geneve::Geneve {
+                        version: 0,
+                        opt_len: 0,
+                        flags: opte::ingot::geneve::GeneveFlags::empty(),
+                        protocol_type:
+                            opte::ingot::ethernet::Ethertype::ETHERNET,
+                        vni: gen.vni.into(),
+                        reserved: 0,
+                        options: Vec::new(),
+                    };
 
-    //                 let len = complete_udp
-    //                     .emit_uninit(uninit)
-    //                     .expect("must be enough room...");
-    //                 complete_geneve
-    //                     .emit_uninit(&mut uninit[len..])
-    //                     .expect("must be enough room...");
-    //             });
+                    let len = complete_udp
+                        .emit_uninit(uninit)
+                        .expect("must be enough room...");
+                    complete_geneve
+                        .emit_uninit(&mut uninit[len..])
+                        .expect("must be enough room...");
+                });
 
-    //             core::mem::swap(&mut new_blk, &mut pkt);
-    //             pkt.extend_if_one(new_blk);
-    //         }
-    //         // we're in Tx for a ULP'd pkt -- this should NEVER happen.
-    //         opte::engine::port::ThinProcRes::PopEncap => unreachable!(),
-    //         opte::engine::port::ThinProcRes::Na => unreachable!(),
-    //     }
+                core::mem::swap(&mut new_blk, &mut pkt);
+                pkt.extend_if_one(new_blk);
+            }
+            // we're in Tx for a ULP'd pkt -- this should NEVER happen.
+            opte::engine::port::ThinProcRes::PopEncap => unreachable!(),
+            opte::engine::port::ThinProcRes::Na => unreachable!(),
+        }
 
-    //     if ip6_dst == ip6_src {
-    //         // todo. broken just now ig
-    //         // return guest_loopback(src_dev, pkt, vni);
-    //         opte::engine::err!("eh?");
-    //         return ptr::null_mut();
-    //     }
+        if ip6_dst == ip6_src {
+            // todo. broken just now ig
+            // return guest_loopback(src_dev, pkt, vni);
+            opte::engine::err!("eh?");
+            return ptr::null_mut();
+        }
 
-    //     let my_key = RouteKey { dst: ip6_dst, l4_hash: Some(f_hash) };
-    //     let Route { src, dst, underlay_dev } =
-    //         src_dev.routes.next_hop(my_key, src_dev);
+        let my_key = RouteKey { dst: ip6_dst, l4_hash: Some(f_hash) };
+        let Route { src, dst, underlay_dev } =
+            src_dev.routes.next_hop(my_key, src_dev);
 
-    //     // Get a pointer to the beginning of the outer frame and
-    //     // fill in the dst/src addresses before sending out the
-    //     // device.
-    //     let mblk = pkt.unwrap_mblk();
-    //     let rptr = (*mblk).b_rptr;
-    //     ptr::copy(dst.as_ptr(), rptr, 6);
-    //     ptr::copy(src.as_ptr(), rptr.add(6), 6);
-    //     // Unwrap: We know the packet is good because we just
-    //     // unwrapped it above.
-    //     let new_pkt = MsgBlk::wrap_mblk(mblk).unwrap();
+        // Get a pointer to the beginning of the outer frame and
+        // fill in the dst/src addresses before sending out the
+        // device.
+        let mblk = pkt.unwrap_mblk();
+        let rptr = (*mblk).b_rptr;
+        ptr::copy(dst.as_ptr(), rptr, 6);
+        ptr::copy(src.as_ptr(), rptr.add(6), 6);
+        // Unwrap: We know the packet is good because we just
+        // unwrapped it above.
+        let new_pkt = MsgBlk::wrap_mblk(mblk).unwrap();
 
-    //     underlay_dev.stream.tx_drop_on_no_desc2(
-    //         new_pkt,
-    //         hint,
-    //         MacTxFlags::empty(),
-    //     );
+        underlay_dev.stream.tx_drop_on_no_desc2(
+            new_pkt,
+            hint,
+            MacTxFlags::empty(),
+        );
 
-    //     return ptr::null_mut();
-    // }
+        return ptr::null_mut();
+    }
     // END   THIN_PROCESS RE-EXPERIMENT
 
     // The port processing code will fire a probe that describes what
@@ -2056,7 +2046,6 @@ unsafe fn xde_rx_one(
     };
 
     let ether_dst = meta.inner_ether().destination();
-    let ether_dst = ether_dst.into_array().into();
 
     // let vni = geneve.vni;
     // let ether_dst = meta.inner.ether.dst;
@@ -2083,38 +2072,38 @@ unsafe fn xde_rx_one(
     let port = &dev.port;
 
     // BEGIN THIN_PROCESS EXPERIMENT
-    // let h = parsed_pkt.meta();
+    let h = parsed_pkt.meta();
 
-    // let pop_len: usize = 70;//h.outer_ether().packet_length() + h.outer_l3 + h.outer_encap;
+    let pop_len: usize = 70; //h.outer_ether().packet_length() + h.outer_l3 + h.outer_encap;
 
-    // if let Ok(decision) = port.thin_process(Direction::In, &mut parsed_pkt) {
-    //     match decision {
-    //         opte::engine::port::ThinProcRes::PopEncap => {
-    //             let mut to_pop = pop_len;
-    //             drop(parsed_pkt);
-    //             for layer in pkt.iter_mut() {
-    //                 let max_drop = layer.len();
-    //                 let will_drop = max_drop.min(to_pop);
-    //                 layer.drop_front_bytes(will_drop);
-    //                 to_pop -= will_drop;
+    if let Ok(decision) = port.thin_process(Direction::In, &mut parsed_pkt) {
+        match decision {
+            opte::engine::port::ThinProcRes::PopEncap => {
+                let mut to_pop = pop_len;
+                drop(parsed_pkt);
+                for layer in pkt.iter_mut() {
+                    let max_drop = layer.len();
+                    let will_drop = max_drop.min(to_pop);
+                    layer.drop_front_bytes(will_drop);
+                    to_pop -= will_drop;
 
-    //                 if to_pop == 0 {
-    //                     break;
-    //                 }
-    //             }
+                    if to_pop == 0 {
+                        break;
+                    }
+                }
 
-    //             // could theoretically have empty segments here.
-    //             // not an issue over NIC for now.
-    //             mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
-    //         }
-    //         // we know this to be true given how we cfg opte
-    //         opte::engine::port::ThinProcRes::PushEncap(_, _, _) => {
-    //             unreachable!()
-    //         }
-    //         opte::engine::port::ThinProcRes::Na => unreachable!(),
-    //     }
-    //     return;
-    // }
+                // could theoretically have empty segments here.
+                // not an issue over NIC for now.
+                mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
+            }
+            // we know this to be true given how we cfg opte
+            opte::engine::port::ThinProcRes::PushEncap(_, _, _) => {
+                unreachable!()
+            }
+            opte::engine::port::ThinProcRes::Na => unreachable!(),
+        }
+        return;
+    }
     // END   THIN_PROCESS EXPERIMENT
 
     let res = port.process(Direction::In, &mut parsed_pkt, ActionMeta::new());

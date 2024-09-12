@@ -25,6 +25,7 @@ use crate::engine::dhcpv6::SERVER_PORT;
 use crate::engine::ether::EtherHdr;
 use crate::engine::ether::EtherMeta;
 use crate::engine::ether::EtherType;
+use crate::engine::ingot_base::Ipv6Ref;
 use crate::engine::ingot_packet::MsgBlk;
 use crate::engine::ingot_packet::PacketHeaders2;
 use crate::engine::ip6::Ipv6Hdr;
@@ -46,7 +47,6 @@ use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
-use ingot::ip::Ipv6Ref;
 use opte_api::Ipv6Addr;
 use opte_api::Ipv6Cidr;
 use opte_api::MacAddr;
@@ -625,7 +625,7 @@ fn generate_packet<'a>(
         src: Ipv6Addr::from_eui64(&action.server_mac),
         // Safety: We're only here if the predicates match, one of which is
         // IPv6.
-        dst: meta.inner_ip6().unwrap().source().octets().into(),
+        dst: meta.inner_ip6().unwrap().source(),
         proto: Protocol::UDP,
         next_hdr: IpProtocol::Udp,
         pay_len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
