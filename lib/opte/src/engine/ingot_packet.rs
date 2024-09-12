@@ -94,6 +94,7 @@ use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderStack;
 use ingot::types::IndirectPacket;
+use ingot::types::NextLayer;
 use ingot::types::Packet as IngotPacket;
 use ingot::types::ParseControl;
 use ingot::types::ParseError as IngotParseErr;
@@ -1034,7 +1035,7 @@ impl<T: Read> From<&PacketHeaders<T>> for InnerFlowId {
                 AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
             ),
             Some(L3::Ipv6(pkt)) => (
-                pkt.next_header().0,
+                pkt.next_layer().unwrap_or_default().0,
                 AddrPair::V6 { src: pkt.source(), dst: pkt.destination() },
             ),
             None => (255, FLOW_ID_DEFAULT.addrs),
@@ -1429,7 +1430,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
     }
 
     pub fn body_csum(&mut self) -> Option<Checksum> {
-        *self.state.body_csum.get(|| {
+        let out = *self.state.body_csum.get(|| {
             let use_pseudo = if let Some(v) = self.state.meta.inner_ulp() {
                 !matches!(v, Ulp::IcmpV4(_))
             } else {
@@ -1463,7 +1464,22 @@ impl<T: Read> Packet2<Parsed2<T>> {
                 }
                 v
             })
-        })
+        });
+
+        let mut manual = Checksum::default();
+        if let Some(segs) = self.body_segs() {
+            for seg in segs {
+                manual.add_bytes(*seg);
+            }
+
+            opte::engine::err!(
+                "think my csum is {:?}, reality is {:?}",
+                out.map(|mut v| v.finalize()),
+                manual.finalize()
+            );
+        }
+
+        out
     }
 
     pub fn l4_hash(&mut self) -> u32 {
@@ -1613,7 +1629,7 @@ fn l3_pseudo_header<T: ByteSlice>(l3: &L3<T>) -> Checksum {
             pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().as_ref());
             pseudo_hdr_bytes[16..32]
                 .copy_from_slice(&v6.destination().as_ref());
-            pseudo_hdr_bytes[39] = v6.next_header().0;
+            pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
             let ulp_len = v6.payload_len() as u32;
             pseudo_hdr_bytes[32..36].copy_from_slice(&ulp_len.to_be_bytes());
             Checksum::compute(&pseudo_hdr_bytes)
