@@ -15,6 +15,7 @@ use core::fmt::Display;
 use core::ops::Deref;
 use core::result;
 use core::str::FromStr;
+use ingot::types::NetworkRepr;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -1201,6 +1202,26 @@ impl From<Ipv6Cidr> for ipnetwork::Ipv6Network {
         let (ip, prefix) = c.parts();
         // A valid `Ipv6Cidr` necessarily has a valid prefix so fine to unwrap.
         ipnetwork::Ipv6Network::new(ip.into(), prefix.val()).unwrap()
+    }
+}
+
+impl NetworkRepr<[u8; 4]> for Ipv4Addr {
+    fn to_network(self) -> [u8; 4] {
+        self.inner
+    }
+
+    fn from_network(val: [u8; 4]) -> Self {
+        Self { inner: val }
+    }
+}
+
+impl NetworkRepr<[u8; 16]> for Ipv6Addr {
+    fn to_network(self) -> [u8; 16] {
+        self.inner
+    }
+
+    fn from_network(val: [u8; 16]) -> Self {
+        Self { inner: val }
     }
 }
 

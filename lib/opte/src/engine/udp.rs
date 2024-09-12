@@ -133,7 +133,7 @@ impl<'a> UdpHdr<'a> {
     pub const CSUM_END_OFFSET: usize = 8;
 
     pub fn bytes(&self) -> &[u8] {
-        self.base.bytes()
+        self.base.as_bytes()
     }
 
     pub fn csum_bytes(&self) -> [u8; 2] {
@@ -143,7 +143,7 @@ impl<'a> UdpHdr<'a> {
     pub fn csum_minus_hdr(&self) -> Option<Checksum> {
         if self.base.csum != [0; 2] {
             let mut csum = Checksum::from(HeaderChecksum::wrap(self.base.csum));
-            csum.sub_bytes(&self.base.bytes()[0..Self::CSUM_BEGIN_OFFSET]);
+            csum.sub_bytes(&self.base.as_bytes()[0..Self::CSUM_BEGIN_OFFSET]);
             Some(csum)
         } else {
             None

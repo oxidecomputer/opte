@@ -82,14 +82,18 @@ use ingot::ip::Ipv6;
 use ingot::ip::Ipv6Mut;
 use ingot::ip::Ipv6Packet;
 use ingot::ip::Ipv6Ref;
+use ingot::ip::LowRentV6EhRepr;
 use ingot::ip::ValidIpv6;
 use ingot::tcp::TcpFlags;
 use ingot::tcp::TcpMut;
 use ingot::tcp::TcpPacket;
 use ingot::tcp::TcpRef;
+use ingot::types::primitives::*;
+use ingot::types::DirectPacket;
 use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderStack;
+use ingot::types::IndirectPacket;
 use ingot::types::Packet as IngotPacket;
 use ingot::types::ParseControl;
 use ingot::types::ParseError as IngotParseErr;
@@ -104,6 +108,7 @@ use ingot::udp::UdpRef;
 use ingot::udp::ValidUdp;
 use ingot::Parse;
 use opte_api::Direction;
+use opte_api::Ipv4Addr;
 use opte_api::Ipv6Addr;
 use opte_api::Vni;
 use zerocopy::ByteSlice;
@@ -472,16 +477,19 @@ pub enum ValidEncapMeta<B: ByteSlice> {
 }
 
 pub struct OpteMeta<T: ByteSlice> {
-    pub outer_eth: Option<OwnedPacket<Ethernet, ValidEthernet<T>>>,
+    pub outer_eth: Option<DirectPacket<Ethernet, ValidEthernet<T>>>,
     // pub outer_eth: Option<Either<Ethernet, ValidEthernet<&[u8]>>>,
-    pub outer_l3: Option<OwnedPacket<L3Repr, ValidL3<T>>>,
+    pub outer_l3: Option<L3<T>>,
+    // pub outer_l3: Option<OwnedPacket<L3Repr, ValidL3<T>>>,
     // pub outer_v6: Option<Either<L3Repr, ValidL3<&[u8]>>>,
-    pub outer_encap: Option<OwnedPacket<EncapMeta, ValidEncapMeta<T>>>,
+    pub outer_encap: Option<DirectPacket<EncapMeta, ValidEncapMeta<T>>>,
     // pub outer_encap: Option<Either<EncapMeta, EncapMeta2<&[u8]>>>,
     pub inner_eth: EthernetPacket<T>,
     pub inner_l3: Option<L3<T>>,
     pub inner_ulp: Option<Ulp<T>>,
 }
+
+pub type Test = OpteMeta<&'static [u8]>;
 
 pub type OpteParsed<T> = IngotParsed<OpteMeta<<T as Read>::Chunk>, T>;
 
@@ -494,42 +502,6 @@ impl<T: ByteSlice> OpteMeta<T> {
             value;
 
         IngotParsed { stack: HeaderStack(headers.into()), data, last_chunk }
-    }
-}
-
-// TODO: make sure both are in ingot, by user choice.
-pub enum OwnedPacket<O, B> {
-    Repr(O),
-    Raw(B),
-}
-
-impl<O: Header, B: Header> Header for OwnedPacket<O, B> {
-    const MINIMUM_LENGTH: usize = O::MINIMUM_LENGTH;
-
-    #[inline]
-    fn packet_length(&self) -> usize {
-        match self {
-            OwnedPacket::Repr(o) => o.packet_length(),
-            OwnedPacket::Raw(b) => b.packet_length(),
-        }
-    }
-}
-
-impl<O: Emit, B: Emit> Emit for OwnedPacket<O, B> {
-    #[inline]
-    fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
-        match self {
-            OwnedPacket::Repr(o) => o.emit_raw(buf),
-            OwnedPacket::Raw(b) => b.emit_raw(buf),
-        }
-    }
-
-    #[inline]
-    fn needs_emit(&self) -> bool {
-        match self {
-            OwnedPacket::Repr(o) => true,
-            OwnedPacket::Raw(b) => b.needs_emit(),
-        }
     }
 }
 
@@ -567,7 +539,7 @@ impl<'a> Emit for SizeHoldingEncap<'a> {
                     },
                     Geneve {
                         protocol_type: Ethertype::ETHERNET,
-                        vni: g.vni.as_u32(),
+                        vni: g.vni,
                         ..Default::default()
                     },
                 )
@@ -633,16 +605,6 @@ impl<B: ByteSlice> Header for ValidEncapMeta<B> {
             ValidEncapMeta::Geneve(u, g) => {
                 u.packet_length() + g.packet_length()
             }
-        }
-    }
-}
-
-impl<O, B> From<ingot::types::Packet<O, B>> for OwnedPacket<O, B> {
-    #[inline]
-    fn from(value: ingot::types::Packet<O, B>) -> Self {
-        match value {
-            ingot::types::Packet::Raw(b) => Self::Raw(b),
-            ingot::types::Packet::Repr(o) => Self::Repr(*o),
         }
     }
 }
@@ -787,7 +749,7 @@ impl<T: Read> PktBodyWalker<T> {
 
 pub struct PacketHeaders<T: Read> {
     pub(crate) headers: OpteMeta<T::Chunk>,
-    initial_lens: OpteUnifiedLengths,
+    initial_lens: Option<Box<OpteUnifiedLengths>>,
     body: PktBodyWalker<T>,
 }
 
@@ -809,22 +771,23 @@ impl<T: ByteSlice> From<GeneveOverV6<T>> for OpteMeta<T> {
     #[inline]
     fn from(value: GeneveOverV6<T>) -> Self {
         // These are practically all Valid, anyhow.
-
         let outer_encap = match (value.outer_udp, value.outer_encap) {
             (ingot::types::Packet::Raw(u), ingot::types::Packet::Raw(g)) => {
-                Some(OwnedPacket::Raw(ValidEncapMeta::Geneve(u, g)))
+                Some(DirectPacket::Raw(ValidEncapMeta::Geneve(u, g)))
             }
             _ => todo!(),
         };
 
-        let outer_l3 = match value.outer_v6 {
-            ingot::types::Packet::Repr(v) => {
-                Some(OwnedPacket::Repr(L3Repr::Ipv6(*v)))
-            }
-            ingot::types::Packet::Raw(v) => {
-                Some(OwnedPacket::Raw(ValidL3::Ipv6(v)))
-            }
-        };
+        // let outer_l3 = match value.outer_v6 {
+        //     ingot::types::Packet::Repr(v) => {
+        //         Some(DirectPacket::Repr(L3Repr::Ipv6(*v)))
+        //     }
+        //     ingot::types::Packet::Raw(v) => {
+        //         Some(DirectPacket::Raw(ValidL3::Ipv6(v)))
+        //     }
+        // };
+
+        let outer_l3 = Some(L3::Ipv6(value.outer_v6));
 
         OpteMeta {
             outer_eth: Some(value.outer_eth.into()),
@@ -881,13 +844,13 @@ pub fn ulp_dst_port<B: ByteSlice>(pkt: &Ulp<B>) -> Option<u16> {
 }
 
 impl<T: Read> PacketHeaders<T> {
-    pub fn initial_lens(&self) -> &OpteUnifiedLengths {
-        &self.initial_lens
+    pub fn initial_lens(&self) -> Option<&OpteUnifiedLengths> {
+        self.initial_lens.as_ref().map(|v| &**v)
     }
 
     pub fn outer_ether(
         &self,
-    ) -> Option<&OwnedPacket<Ethernet, ValidEthernet<T::Chunk>>> {
+    ) -> Option<&DirectPacket<Ethernet, ValidEthernet<T::Chunk>>> {
         self.headers.outer_eth.as_ref()
     }
 
@@ -896,10 +859,10 @@ impl<T: Read> PacketHeaders<T> {
     /// in addition to its VNI.
     pub fn outer_encap_geneve_vni_and_origin(&self) -> Option<(Vni, bool)> {
         match &self.headers.outer_encap {
-            Some(OwnedPacket::Repr(EncapMeta::Geneve(g))) => {
+            Some(DirectPacket::Repr(EncapMeta::Geneve(g))) => {
                 Some((g.vni, g.oxide_external_pkt))
             }
-            Some(OwnedPacket::Raw(ValidEncapMeta::Geneve(_, g))) => {
+            Some(DirectPacket::Raw(ValidEncapMeta::Geneve(_, g))) => {
                 // TODO: hack.
                 let oxide_external = g.1.packet_length() != 0;
                 Some((Vni::new(g.vni()).unwrap(), oxide_external))
@@ -911,14 +874,21 @@ impl<T: Read> PacketHeaders<T> {
     // Again: really need to make Owned/Direct choices better-served by ingot.
     // this interface sucks.
     pub fn outer_ip6_addrs(&self) -> Option<(Ipv6Addr, Ipv6Addr)> {
+        // match &self.headers.outer_l3 {
+        //     Some(DirectPacket::Repr(L3Repr::Ipv6(v6))) => Some((
+        //         v6.source.octets().into(),
+        //         v6.destination.octets().into(),
+        //     )),
+        //     Some(DirectPacket::Raw(ValidL3::Ipv6(v6))) => {
+        //         Some((v6.source().octets().into(), v6.destination().octets().into()))
+        //     }
+        //     _ => None,
+        // }
         match &self.headers.outer_l3 {
-            Some(OwnedPacket::Repr(L3Repr::Ipv6(v6))) => Some((
-                v6.source.octets().into(),
-                v6.destination.octets().into(),
+            Some(L3::Ipv6(v6)) => Some((
+                v6.source().octets().into(),
+                v6.destination().octets().into(),
             )),
-            Some(OwnedPacket::Raw(ValidL3::Ipv6(v6))) => {
-                Some((v6.source().octets().into(), v6.source().octets().into()))
-            }
             _ => None,
         }
     }
@@ -1145,23 +1115,16 @@ impl<T: Read> Packet2<Initialized2<T>> {
                 Direction::In => net.parse_inbound(inner)?,
             };
 
-        let initial_lens = OpteUnifiedLengths {
-            outer_eth: headers.outer_eth.packet_length(),
-            outer_l3: headers.outer_l3.packet_length(),
-            outer_encap: headers.outer_encap.packet_length(),
-            inner_eth: headers.inner_eth.packet_length(),
-            inner_l3: headers.inner_l3.packet_length(),
-            inner_ulp: headers.inner_ulp.packet_length(),
-        };
+        let initial_lens = None;
 
         let body = PktBodyWalker {
             base: Some((last_chunk, data)).into(),
             slice: Default::default(),
         };
 
-        let meta = PacketHeaders { headers, initial_lens, body };
+        let meta = Box::new(PacketHeaders { headers, initial_lens, body });
 
-        let flow = (&meta).into();
+        let flow = (&*meta).into();
 
         let body_csum = match (&meta.headers).inner_eth.ethertype() {
             Ethertype::ARP => Memoised::Known(None),
@@ -1198,6 +1161,21 @@ impl<T: Read> Packet2<Parsed2<T>> {
         &mut self.state.meta
     }
 
+    pub fn store_lens_for_slopath(&mut self) {
+        let headers = &self.state.meta.headers;
+        self.state.meta.initial_lens = Some(
+            OpteUnifiedLengths {
+                outer_eth: headers.outer_eth.packet_length(),
+                outer_l3: headers.outer_l3.packet_length(),
+                outer_encap: headers.outer_encap.packet_length(),
+                inner_eth: headers.inner_eth.packet_length(),
+                inner_l3: headers.inner_l3.packet_length(),
+                inner_ulp: headers.inner_ulp.packet_length(),
+            }
+            .into(),
+        );
+    }
+
     #[inline]
     /// Convert a packet's metadata into a set of instructions
     /// needed to serialize all its changes to the wire.
@@ -1212,7 +1190,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
         // - Rewind up to+including that point in original
         //   pkt space.
         let state = self.state;
-        let init_lens = state.meta.initial_lens;
+        let init_lens = state.meta.initial_lens.unwrap();
         let headers = state.meta.headers;
         let payload_len = state.len - init_lens.hdr_len();
         let mut encapped_len = payload_len;
@@ -1228,7 +1206,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
         // do this sort of thing. We are so, so far from that...
         let mut force_serialize = false;
 
-        use ingot::types::ToOwnedPacket;
+        use ingot::types::DirectPacket;
 
         match headers.inner_ulp {
             Some(ulp) => {
@@ -1238,7 +1216,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
                 if ulp.needs_emit() || l != init_lens.inner_ulp {
                     let inner =
                         push_spec.inner.get_or_insert_with(Default::default);
-                    // TODO: impl ToOwnedPacket / From<&Ulp> for UlpRepr here? generally seems a bit anaemic.
+                    // TODO: impl DirectPacket / From<&Ulp> for UlpRepr here? generally seems a bit anaemic.
                     inner.ulp = Some(match ulp {
                         Ulp::Tcp(IngotPacket::Repr(t)) => UlpRepr::Tcp(*t),
                         Ulp::Tcp(IngotPacket::Raw(t)) => {
@@ -1290,7 +1268,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
                         }
                         L3::Ipv6(IngotPacket::Repr(v6)) => L3Repr::Ipv6(*v6),
 
-                        // This needs a fuller ToOwnedPacket due to EHs...
+                        // This needs a fuller DirectPacket due to EHs...
                         // We can't actually do structural mods here today using OPTE.
                         L3::Ipv6(IngotPacket::Raw(v6)) => todo!(), // L3Repr::Ipv6((&v6).into()),
                     });
@@ -1323,9 +1301,9 @@ impl<T: Read> Packet2<Parsed2<T>> {
                     || encap.packet_length() != init_lens.outer_encap =>
             {
                 push_spec.outer_encap = Some(match encap {
-                    OwnedPacket::Repr(o) => o,
+                    DirectPacket::Repr(o) => o,
                     // Needed in fullness of time, but not here.
-                    OwnedPacket::Raw(_) => todo!(),
+                    DirectPacket::Raw(_) => todo!(),
                 });
 
                 force_serialize = true;
@@ -1344,10 +1322,15 @@ impl<T: Read> Packet2<Parsed2<T>> {
                     || l3.needs_emit()
                     || l3.packet_length() != init_lens.outer_l3 =>
             {
+                // push_spec.outer_ip = Some(match l3 {
+                //     DirectPacket::Repr(o) => o,
+                //     // Needed in fullness of time, but not here.
+                //     DirectPacket::Raw(_) => todo!(),
+                // });
                 push_spec.outer_ip = Some(match l3 {
-                    OwnedPacket::Repr(o) => o,
-                    // Needed in fullness of time, but not here.
-                    OwnedPacket::Raw(_) => todo!(),
+                    L3::Ipv6(IndirectPacket::Repr(o)) => L3Repr::Ipv6(*o),
+                    L3::Ipv4(IndirectPacket::Repr(o)) => L3Repr::Ipv4(*o),
+                    _ => todo!(),
                 });
 
                 force_serialize = true;
@@ -1367,9 +1350,9 @@ impl<T: Read> Packet2<Parsed2<T>> {
                     || eth.packet_length() != init_lens.outer_eth =>
             {
                 push_spec.outer_eth = Some(match eth {
-                    OwnedPacket::Repr(o) => o,
+                    DirectPacket::Repr(o) => o,
                     // Needed in fullness of time, but not here.
-                    OwnedPacket::Raw(_) => todo!(),
+                    DirectPacket::Raw(_) => todo!(),
                 });
 
                 force_serialize = true;
@@ -1412,7 +1395,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
         // Given that n_transform layers is 1 or 2, probably won't
         // save too much by trying to tie to a generation number.
         // TODO: profile.
-        self.state.flow = InnerFlowId::from(self.meta());
+        // self.state.flow = InnerFlowId::from(self.meta());
         Ok(())
     }
 
@@ -1576,7 +1559,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
                             csum.add_bytes(&bytes[..]);
                         }
                         IngotPacket::Raw(tcp) => {
-                            csum.add_bytes(tcp.0.bytes());
+                            csum.add_bytes(tcp.0.as_bytes());
                             match &tcp.1 {
                                 IngotPacket::Repr(opts) => {
                                     csum.add_bytes(&*opts);
@@ -1598,7 +1581,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
                             csum.add_bytes(&bytes[..]);
                         }
                         IngotPacket::Raw(udp) => {
-                            csum.add_bytes(udp.0.bytes());
+                            csum.add_bytes(udp.0.as_bytes());
                         }
                     }
                     udp.set_checksum(csum.finalize());
@@ -1621,7 +1604,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
                     csum.add_bytes(&bytes[..]);
                 }
                 IngotPacket::Raw(ip) => {
-                    csum.add_bytes(ip.0.bytes());
+                    csum.add_bytes(ip.0.as_bytes());
                     match &ip.1 {
                         IngotPacket::Repr(opts) => {
                             csum.add_bytes(&*opts);
@@ -1682,13 +1665,15 @@ impl<T: Read> PacketState for Parsed2<T> {}
 /// computed state.
 pub struct Parsed2<T: Read> {
     len: usize,
-    meta: PacketHeaders<T>,
+    meta: Box<PacketHeaders<T>>,
     flow: InnerFlowId,
     body_csum: Memoised<Option<Checksum>>,
     l4_hash: Memoised<u32>,
     body_modified: bool,
     inner_csum_dirty: bool,
 }
+
+type Quack = Parsed2<MsgBlkIterMut<'static>>;
 
 // Needed for now to account for not wanting to redesign ActionDescs
 // to be generic over T (trait object safety rules, etc.).
@@ -2001,9 +1986,9 @@ impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
     }
 }
 
-// TODO: generate ref/mut traits on OwnedPacket AND BoxPacket in ingot to halve the code here...
+// TODO: generate ref/mut traits on DirectPacket AND BoxPacket in ingot to halve the code here...
 impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
-    for OwnedPacket<Ethernet, ValidEthernet<T>>
+    for DirectPacket<Ethernet, ValidEthernet<T>>
 {
     #[inline]
     fn run_modify(
@@ -2011,7 +1996,7 @@ impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
         mod_spec: &EtherMod,
     ) -> Result<(), HeaderActionError> {
         match self {
-            OwnedPacket::Repr(a) => {
+            DirectPacket::Repr(a) => {
                 if let Some(src) = mod_spec.src {
                     a.set_source(src.bytes().into());
                 }
@@ -2019,7 +2004,7 @@ impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
                     a.set_destination(dst.bytes().into());
                 }
             }
-            OwnedPacket::Raw(a) => {
+            DirectPacket::Raw(a) => {
                 if let Some(src) = mod_spec.src {
                     a.set_source(src.bytes().into());
                 }
@@ -2050,9 +2035,9 @@ impl<T: ByteSliceMut> HeaderActionModify<EtherMod> for EthernetPacket<T> {
     }
 }
 
-// TODO: generate ref/mut traits on OwnedPacket AND BoxPacket in ingot to halve the code here...
+// TODO: generate ref/mut traits on DirectPacket AND BoxPacket in ingot to halve the code here...
 impl<T: ByteSliceMut> HeaderActionModify<IpMod>
-    for OwnedPacket<L3Repr, ValidL3<T>>
+    for DirectPacket<L3Repr, ValidL3<T>>
 {
     #[inline]
     fn run_modify(
@@ -2061,7 +2046,7 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
     ) -> Result<(), HeaderActionError> {
         match mod_spec {
             IpMod::Ip4(mods) => match self {
-                OwnedPacket::Repr(L3Repr::Ipv4(v4)) => {
+                DirectPacket::Repr(L3Repr::Ipv4(v4)) => {
                     if let Some(src) = mods.src {
                         <ingot::ip::Ipv4 as Ipv4Mut<T>>::set_source(
                             v4,
@@ -2081,7 +2066,7 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
                         );
                     }
                 }
-                OwnedPacket::Raw(ValidL3::Ipv4(v4)) => {
+                DirectPacket::Raw(ValidL3::Ipv4(v4)) => {
                     if let Some(src) = mods.src {
                         v4.set_source(src.bytes().into());
                     }
@@ -2096,7 +2081,7 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
                 _ => return Err(HeaderActionError::MissingHeader),
             },
             IpMod::Ip6(mods) => match self {
-                OwnedPacket::Repr(L3Repr::Ipv6(v6)) => {
+                DirectPacket::Repr(L3Repr::Ipv6(v6)) => {
                     if let Some(src) = mods.src {
                         <ingot::ip::Ipv6 as Ipv6Mut<T>>::set_source(
                             v6,
@@ -2117,7 +2102,7 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
                         );
                     }
                 }
-                OwnedPacket::Raw(ValidL3::Ipv6(v6)) => {
+                DirectPacket::Raw(ValidL3::Ipv6(v6)) => {
                     if let Some(src) = mods.src {
                         v6.set_source(src.bytes().into());
                     }
@@ -2224,7 +2209,7 @@ impl<T: ByteSliceMut> HeaderActionModify<UlpMetaModify> for Ulp<T> {
 }
 
 impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
-    for OwnedPacket<EncapMeta, ValidEncapMeta<T>>
+    for DirectPacket<EncapMeta, ValidEncapMeta<T>>
 {
     #[inline]
     fn run_modify(
@@ -2233,7 +2218,7 @@ impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
     ) -> Result<(), HeaderActionError> {
         match (self, mod_spec) {
             (
-                OwnedPacket::Repr(EncapMeta::Geneve(g)),
+                DirectPacket::Repr(EncapMeta::Geneve(g)),
                 EncapMod::Geneve(mod_spec),
             ) => {
                 if let Some(vni) = mod_spec.vni {
@@ -2241,11 +2226,11 @@ impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
                 }
             }
             (
-                OwnedPacket::Raw(ValidEncapMeta::Geneve(u, g)),
+                DirectPacket::Raw(ValidEncapMeta::Geneve(u, g)),
                 EncapMod::Geneve(mod_spec),
             ) => {
                 if let Some(vni) = mod_spec.vni {
-                    g.set_vni(vni.as_u32());
+                    g.set_vni(vni);
                 }
             }
         }
@@ -2254,15 +2239,17 @@ impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
     }
 }
 
-impl<T: ByteSlice> HasInnerCksum for OwnedPacket<Ethernet, ValidEthernet<T>> {
+impl<T: ByteSlice> HasInnerCksum for DirectPacket<Ethernet, ValidEthernet<T>> {
     const HAS_CKSUM: bool = false;
 }
 
-impl<T: ByteSlice> HasInnerCksum for OwnedPacket<L3Repr, ValidL3<T>> {
+impl<T: ByteSlice> HasInnerCksum for DirectPacket<L3Repr, ValidL3<T>> {
     const HAS_CKSUM: bool = true;
 }
 
-impl<T: ByteSlice> HasInnerCksum for OwnedPacket<EncapMeta, ValidEncapMeta<T>> {
+impl<T: ByteSlice> HasInnerCksum
+    for DirectPacket<EncapMeta, ValidEncapMeta<T>>
+{
     const HAS_CKSUM: bool = false;
 }
 
@@ -2298,11 +2285,11 @@ impl<T: ByteSlice> From<EtherMeta>
 }
 
 impl<T: ByteSlice> From<EtherMeta>
-    for OwnedPacket<ingot::ethernet::Ethernet, ValidEthernet<T>>
+    for DirectPacket<ingot::ethernet::Ethernet, ValidEthernet<T>>
 {
     #[inline]
     fn from(value: EtherMeta) -> Self {
-        OwnedPacket::Repr(
+        DirectPacket::Repr(
             Ethernet {
                 destination: value.dst.bytes().into(),
                 source: value.src.bytes().into(),
@@ -2323,19 +2310,19 @@ impl<T: ByteSlice> From<EncapMeta>
 }
 
 impl<T: ByteSlice> From<EncapMeta>
-    for OwnedPacket<EncapMeta, ValidEncapMeta<T>>
+    for DirectPacket<EncapMeta, ValidEncapMeta<T>>
 {
     #[inline]
     fn from(value: EncapMeta) -> Self {
-        OwnedPacket::Repr(value)
+        DirectPacket::Repr(value)
     }
 }
 
-impl<T: ByteSlice> From<IpMeta> for OwnedPacket<L3Repr, ValidL3<T>> {
+impl<T: ByteSlice> From<IpMeta> for DirectPacket<L3Repr, ValidL3<T>> {
     #[inline]
     fn from(value: IpMeta) -> Self {
         match value {
-            IpMeta::Ip4(v4) => OwnedPacket::Repr(
+            IpMeta::Ip4(v4) => DirectPacket::Repr(
                 Ipv4 {
                     ihl: (v4.hdr_len / 4) as u8,
                     total_len: v4.total_len,
@@ -2349,7 +2336,7 @@ impl<T: ByteSlice> From<IpMeta> for OwnedPacket<L3Repr, ValidL3<T>> {
                 }
                 .into(),
             ),
-            IpMeta::Ip6(v6) => OwnedPacket::Repr(
+            IpMeta::Ip6(v6) => DirectPacket::Repr(
                 Ipv6 {
                     payload_len: v6.pay_len,
                     next_header: IpProtocol(u8::from(v6.next_hdr)),
@@ -2405,9 +2392,36 @@ impl<T: ByteSlice> From<IpMeta> for L3<T> {
 //     }
 // }
 
-// impl<T: ByteSlice> PushAction<OwnedPacket<L3Repr, ValidL3<T>>> for IpPush {
-//     fn push(&self) -> OwnedPacket<L3Repr, ValidL3<T>> {
-//         OwnedPacket::Repr(match self {
+impl<T: ByteSlice> PushAction<DirectPacket<Ethernet, ValidEthernet<T>>>
+    for EtherMeta
+{
+    #[inline]
+    fn push(&self) -> DirectPacket<Ethernet, ValidEthernet<T>> {
+        DirectPacket::Repr(Ethernet {
+            destination: self.dst.bytes().into(),
+            source: self.src.bytes().into(),
+            ethertype: Ethertype(u16::from(self.ether_type)),
+        })
+    }
+}
+
+impl<T: ByteSlice> PushAction<EthernetPacket<T>> for EtherMeta {
+    #[inline]
+    fn push(&self) -> EthernetPacket<T> {
+        ingot::types::Packet::Repr(
+            Ethernet {
+                destination: self.dst.bytes().into(),
+                source: self.src.bytes().into(),
+                ethertype: Ethertype(u16::from(self.ether_type)),
+            }
+            .into(),
+        )
+    }
+}
+
+// impl<T: ByteSlice> PushAction<DirectPacket<L3Repr, ValidL3<T>>> for IpPush {
+//     fn push(&self) -> DirectPacket<L3Repr, ValidL3<T>> {
+//         DirectPacket::Repr(match self {
 //             IpPush::Ip4(v4) => L3Repr::Ipv4(Ipv4 {
 //                 protocol: IpProtocol(u8::from(v4.proto)),
 //                 source: v4.src.bytes().into(),
@@ -2424,3 +2438,29 @@ impl<T: ByteSlice> From<IpMeta> for L3<T> {
 //         })
 //     }
 // }
+
+impl<T: ByteSlice> PushAction<L3<T>> for IpPush {
+    fn push(&self) -> L3<T> {
+        match self {
+            IpPush::Ip4(v4) => L3::Ipv4(
+                Ipv4 {
+                    protocol: IpProtocol(u8::from(v4.proto)),
+                    source: v4.src.bytes().into(),
+                    destination: v4.dst.bytes().into(),
+                    flags: Ipv4Flags::DONT_FRAGMENT,
+                    ..Default::default()
+                }
+                .into(),
+            ),
+            IpPush::Ip6(v6) => L3::Ipv6(
+                Ipv6 {
+                    next_header: IpProtocol(u8::from(v6.proto)),
+                    source: v6.src.bytes().into(),
+                    destination: v6.dst.bytes().into(),
+                    ..Default::default()
+                }
+                .into(),
+            ),
+        }
+    }
+}

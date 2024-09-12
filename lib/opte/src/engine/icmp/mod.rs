@@ -156,7 +156,7 @@ impl<'a> IcmpHdr<'a> {
     pub fn csum_minus_hdr(&self) -> Option<OpteCsum> {
         if self.base.csum != [0; 2] {
             let mut csum = OpteCsum::from(HeaderChecksum::wrap(self.base.csum));
-            let bytes = self.base.bytes();
+            let bytes = self.base.as_bytes();
             csum.sub_bytes(&bytes[..Self::CSUM_BEGIN_OFFSET]);
             csum.sub_bytes(&bytes[Self::CSUM_END_OFFSET..]);
             Some(csum)

@@ -50,7 +50,7 @@ ctor = "0.2"
 darling = "0.20"
 dyn-clone = "1.0"
 heapless = "0.8"
-ingot = { git = "https://github.com/oxidecomputer/ingot.git", rev = "7188e7adb3f8e404fcc431501dd2312bad47b628"}
+ingot = { git = "https://github.com/oxidecomputer/ingot.git", rev = "cc332a8d74438fa27a1d0a0205428b700f31220a"}
 ipnetwork = { version = "0.20", default-features = false }
 itertools = { version = "0.13", default-features = false }
 libc = "0.2"
@@ -75,7 +75,7 @@ thiserror = "1.0"
 toml = "0.8"
 usdt = "0.5"
 version_check = "0.9"
-zerocopy = { version = "0.8.0-alpha.17", features = ["derive"] }
+zerocopy = { version = "0.8.0-alpha.21", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipath" }

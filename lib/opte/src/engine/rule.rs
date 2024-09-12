@@ -47,6 +47,10 @@ use core::fmt::Display;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::ethernet::Ethernet;
+use ingot::ethernet::EthernetPacket;
+use ingot::ethernet::ValidEthernet;
+use ingot::example_chain::L3;
+use ingot::types::DirectPacket;
 use ingot::types::Read;
 use opte_api::Direction;
 use serde::Deserialize;
@@ -390,11 +394,13 @@ impl HdrTransform {
         T::Chunk: ByteSliceMut,
     {
         self.outer_ether
-            .act_on_option(&mut meta.headers.outer_eth)
+            .act_on_option::<DirectPacket<Ethernet, ValidEthernet<_>>, _>(
+                &mut meta.headers.outer_eth,
+            )
             .map_err(Self::err_fn("outer ether"))?;
 
         self.outer_ip
-            .act_on_option(&mut meta.headers.outer_l3)
+            .act_on_option::<L3<_>, _>(&mut meta.headers.outer_l3)
             .map_err(Self::err_fn("outer IP"))?;
 
         self.outer_encap
@@ -403,14 +409,18 @@ impl HdrTransform {
 
         // If I set this up right, we can handle the above w/o panic on a
         // dumb EtherDrop action...
-        meta.headers
-            .inner_eth
-            .act_on(&self.inner_ether)
-            .map_err(Self::err_fn("inner eth"))?;
+        <EthernetPacket<_> as Transform<EthernetPacket<_>, _, _>>::act_on(
+            &mut meta.headers.inner_eth,
+            &self.inner_ether,
+        )
+        // meta.headers
+        //     .inner_eth
+        //     .act_on::(&self.inner_ether)
+        .map_err(Self::err_fn("inner eth"))?;
 
         let l3_dirty = self
             .inner_ip
-            .act_on_option(&mut meta.headers.inner_l3)
+            .act_on_option::<L3<_>, _>(&mut meta.headers.inner_l3)
             .map_err(Self::err_fn("inner IP"))?;
 
         let ulp_dirty = self

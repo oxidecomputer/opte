@@ -230,7 +230,7 @@ impl Ipv4Meta {
         // The raw header relies on the slice being the exactly length.
         debug_assert_eq!(dst.len(), Ipv4Hdr::BASE_SIZE);
         let mut raw = Ipv4HdrRaw::new_mut(dst).unwrap();
-        raw.write(Ipv4HdrRaw::from(self));
+        Ref::write(&mut raw, Ipv4HdrRaw::from(self));
     }
 
     /// Return the length of the header needed to emit the metadata.
@@ -262,7 +262,7 @@ impl Ipv4Meta {
 
 impl<'a> From<&Ipv4Hdr<'a>> for Ipv4Meta {
     fn from(ip4: &Ipv4Hdr) -> Self {
-        let raw = ip4.bytes.read();
+        let raw = &ip4.bytes;
 
         let hdr_len = u16::from((raw.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4);
 

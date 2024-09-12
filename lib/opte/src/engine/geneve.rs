@@ -95,7 +95,9 @@ impl GeneveMeta {
         debug_assert_eq!(dst.len(), self.hdr_len_inner());
         let (base, remainder) = dst.split_at_mut(GeneveHdrRaw::SIZE);
         let mut raw = GeneveHdrRaw::new_mut(base).unwrap();
-        raw.write(GeneveHdrRaw::from(self));
+        Ref::write(&mut raw, GeneveHdrRaw::from(self));
+
+        // GeneveHdrRaw::from(self).write_to(dst).unwrap();
 
         raw.ver_opt_len = if self.oxide_external_pkt {
             GeneveOption::Oxide(OxideOption::External).emit(remainder) as u8

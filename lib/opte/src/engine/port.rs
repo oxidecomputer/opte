@@ -1207,6 +1207,7 @@ impl<N: NetworkImpl> Port<N> {
         mut ameta: ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError> {
         let flow_before = *pkt.flow();
+        pkt.store_lens_for_slopath();
         // XXX: See remove_rule -- there is a 1-pkt wide TOCTOU here.
         //      This should probably be ordered:
         //       - remove                    - process

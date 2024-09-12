@@ -148,8 +148,10 @@ impl ArpEthIpv4 {
 
     pub fn emit(&self, dst: &mut [u8]) {
         debug_assert_eq!(dst.len(), ArpEthIpv4Raw::SIZE);
-        let mut raw = ArpEthIpv4Raw::new_mut(dst).unwrap();
-        raw.write(ArpEthIpv4Raw::from(self));
+        // let mut raw = ArpEthIpv4Raw::new_mut(dst).unwrap();
+        // raw.write_to();
+
+        ArpEthIpv4Raw::from(self).write_to(dst).unwrap()
     }
 
     pub fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, ArpHdrError>

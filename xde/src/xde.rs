@@ -2083,9 +2083,9 @@ unsafe fn xde_rx_one(
     let port = &dev.port;
 
     // BEGIN THIN_PROCESS EXPERIMENT
-    // let h = parsed_pkt.meta().initial_lens();
+    // let h = parsed_pkt.meta();
 
-    // let pop_len: usize = h.outer_eth + h.outer_l3 + h.outer_encap;
+    // let pop_len: usize = 70;//h.outer_ether().packet_length() + h.outer_l3 + h.outer_encap;
 
     // if let Ok(decision) = port.thin_process(Direction::In, &mut parsed_pkt) {
     //     match decision {

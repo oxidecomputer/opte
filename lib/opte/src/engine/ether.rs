@@ -242,8 +242,10 @@ impl EtherMeta {
     #[inline]
     pub fn emit(&self, dst: &mut [u8]) {
         debug_assert_eq!(dst.len(), EtherHdrRaw::SIZE);
-        let mut raw = EtherHdrRaw::new_mut(dst).unwrap();
-        raw.write(EtherHdrRaw::from(self));
+        // let mut raw = EtherHdrRaw::new_mut(dst).unwrap();
+        // raw. .write(EtherHdrRaw::from(self));
+
+        EtherHdrRaw::from(self).write_to(dst).unwrap()
     }
 
     #[inline]
@@ -263,7 +265,7 @@ impl<'a> EtherHdr<'a> {
     pub const SIZE: usize = EtherHdrRaw::SIZE;
 
     pub fn as_bytes(&self) -> &[u8] {
-        self.bytes.bytes()
+        self.bytes.as_bytes()
     }
 
     pub fn ether_type(&self) -> EtherType {

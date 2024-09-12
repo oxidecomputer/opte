@@ -124,7 +124,8 @@ impl TcpMeta {
         debug_assert_eq!(dst.len(), self.hdr_len());
         let base = &mut dst[0..TcpHdrRaw::SIZE];
         let mut raw = TcpHdrRaw::new_mut(base).unwrap();
-        raw.write(TcpHdrRaw::from(self));
+        // raw.write_to(TcpHdrRaw::from(self));
+        Ref::write(&mut raw, TcpHdrRaw::from(self));
         if let Some(bytes) = self.options_bytes {
             dst[TcpHdr::BASE_SIZE..]
                 .copy_from_slice(&bytes[0..self.options_len]);
@@ -153,7 +154,7 @@ impl<'a> From<&TcpHdr<'a>> for TcpMeta {
             }
         };
 
-        let raw = tcp.base.read();
+        let raw = &tcp.base;
         Self {
             src: u16::from_be_bytes(raw.src_port),
             dst: u16::from_be_bytes(raw.dst_port),
@@ -261,7 +262,7 @@ impl<'a> TcpHdr<'a> {
     }
 
     pub fn base_bytes(&self) -> &[u8] {
-        self.base.bytes()
+        self.base.as_bytes()
     }
 
     pub fn options_bytes(&self) -> Option<&[u8]> {
@@ -284,8 +285,8 @@ impl<'a> TcpHdr<'a> {
         // bytes themselves as zero; therefore its imperative we do
         // not include the checksum field bytes when subtracting from
         // the checksum value.
-        csum.sub_bytes(&self.base.bytes()[0..Self::CSUM_BEGIN_OFFSET]);
-        csum.sub_bytes(&self.base.bytes()[Self::CSUM_END_OFFSET..]);
+        csum.sub_bytes(&self.base.as_bytes()[0..Self::CSUM_BEGIN_OFFSET]);
+        csum.sub_bytes(&self.base.as_bytes()[Self::CSUM_END_OFFSET..]);
 
         if let Some(options) = self.options.as_ref() {
             csum.sub_bytes(options);
