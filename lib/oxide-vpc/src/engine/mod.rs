@@ -81,7 +81,10 @@ impl VpcNetwork {
     fn handle_arp_out<T: Read>(
         &self,
         pkt: &mut Packet2<Parsed2<T>>,
-    ) -> Result<HdlPktAction, HdlPktError> {
+    ) -> Result<HdlPktAction, HdlPktError>
+    where
+        T::Chunk: ByteSliceMut,
+    {
         let body = pkt
             .body_segs()
             .ok_or_else(|| HdlPktError("outbound ARP (no body)"))?;
@@ -114,7 +117,8 @@ impl NetworkImpl for VpcNetwork {
         _uft_in: &FlowTable<UftEntry<InnerFlowId>>,
         _uft_out: &FlowTable<UftEntry<InnerFlowId>>,
     ) -> Result<HdlPktAction, HdlPktError>
-// where T::Chunk: ByteSliceMut
+    where
+        T::Chunk: ByteSliceMut,
     {
         match (dir, pkt.meta().inner_ether().ethertype()) {
             (Direction::Out, Ethertype::ARP) => self.handle_arp_out(pkt),
@@ -130,19 +134,25 @@ impl NetworkImpl for VpcNetwork {
 
 impl NetworkParser for VpcParser {
     #[inline]
-    fn parse_outbound<T: Read>(
+    fn parse_outbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError> {
+    ) -> Result<OpteParsed<T>, ParseError>
+    where
+        T::Chunk: zerocopy::IntoByteSlice<'a>,
+    {
         let v = NoEncap::parse_read(rdr);
         Ok(OpteMeta::convert_ingot(v?))
     }
 
     #[inline]
-    fn parse_inbound<T: Read>(
+    fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError> {
+    ) -> Result<OpteParsed<T>, ParseError>
+    where
+        T::Chunk: zerocopy::IntoByteSlice<'a>,
+    {
         let v = GeneveOverV6::parse_read(rdr);
         Ok(OpteMeta::convert_ingot(v?))
     }

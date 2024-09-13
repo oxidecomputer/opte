@@ -661,9 +661,9 @@ impl<T: Read> Drop for PktBodyWalker<T> {
 impl<T: Read> PktBodyWalker<T> {
     fn reify_body_segs(&self)
     where
-        <T as Read>::Chunk: ByteSlice,
+        <T as Read>::Chunk: ByteSliceMut,
     {
-        if let Some((first, mut rest)) = self.base.take() {
+        if let Some((mut first, mut rest)) = self.base.take() {
             // SAFETY: ByteSlice requires as part of its API
             // that any implementors are stable, so we will always
             // get the same view via deref. We are then consuming them
@@ -676,8 +676,8 @@ impl<T: Read> PktBodyWalker<T> {
             // sourced from an exclusive borrow on something which ownas a [u8]).
             // This allows us to cast to &mut later, but not here!
             let mut to_hold = vec![];
-            if let Some(ref chunk) = first {
-                let as_bytes = chunk.deref();
+            if let Some(ref mut chunk) = first {
+                let as_bytes = chunk.deref_mut();
                 to_hold.push(unsafe { core::mem::transmute(as_bytes) });
             }
 
@@ -708,7 +708,7 @@ impl<T: Read> PktBodyWalker<T> {
 
     fn body_segs(&self) -> &[&[u8]]
     where
-        T::Chunk: ByteSlice,
+        T::Chunk: ByteSliceMut,
     {
         let mut slice_ptr =
             self.slice.load(core::sync::atomic::Ordering::Relaxed);
@@ -939,11 +939,17 @@ impl<T: Read> PacketHeaders<T> {
         matches!(self.inner_ulp(), Some(Ulp::Tcp(_)))
     }
 
-    pub fn body_segs(&self) -> &[&[u8]] {
+    pub fn body_segs(&self) -> &[&[u8]]
+    where
+        T::Chunk: ByteSliceMut,
+    {
         self.body.body_segs()
     }
 
-    pub fn copy_remaining(&self) -> Vec<u8> {
+    pub fn copy_remaining(&self) -> Vec<u8>
+    where
+        T::Chunk: ByteSliceMut,
+    {
         let base = self.body_segs();
         let len = base.iter().map(|v| v.len()).sum();
         let mut out = Vec::with_capacity(len);
@@ -953,7 +959,10 @@ impl<T: Read> PacketHeaders<T> {
         out
     }
 
-    pub fn append_remaining(&self, buf: &mut Vec<u8>) {
+    pub fn append_remaining(&self, buf: &mut Vec<u8>)
+    where
+        T::Chunk: ByteSliceMut,
+    {
         let base = self.body_segs();
         let len = base.iter().map(|v| v.len()).sum();
         buf.reserve_exact(len);
@@ -1077,7 +1086,10 @@ impl<T: Read + QueryLen> Packet2<Initialized2<T>> {
     }
 }
 
-impl<T: Read> Packet2<Initialized2<T>> {
+impl<'a, T: Read + 'a> Packet2<Initialized2<T>>
+where
+    T::Chunk: zerocopy::IntoByteSlice<'a>,
+{
     #[inline]
     pub fn parse(
         self,
@@ -1402,7 +1414,10 @@ impl<T: Read> Packet2<Parsed2<T>> {
     }
 
     #[inline]
-    pub fn body_segs(&self) -> Option<&[&[u8]]> {
+    pub fn body_segs(&self) -> Option<&[&[u8]]>
+    where
+        T::Chunk: ByteSliceMut,
+    {
         let out = self.state.meta.body_segs();
         if out.is_empty() {
             None
@@ -1466,18 +1481,14 @@ impl<T: Read> Packet2<Parsed2<T>> {
             })
         });
 
-        let mut manual = Checksum::default();
-        if let Some(segs) = self.body_segs() {
-            for seg in segs {
-                manual.add_bytes(*seg);
-            }
+        // let mut manual = Checksum::default();
+        // if let Some(segs) = self.body_segs() {
+        //     for seg in segs {
+        //         manual.add_bytes(*seg);
+        //     }
 
-            opte::engine::err!(
-                "think my csum is {:?}, reality is {:?}",
-                out.map(|mut v| v.finalize()),
-                manual.finalize()
-            );
-        }
+        //     opte::engine::err!("think my csum is {:?}, reality is {:?}", out.map(|mut v| v.finalize()), manual.finalize());
+        // }
 
         out
     }

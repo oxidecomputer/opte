@@ -57,6 +57,7 @@ use ingot_packet::Parsed2;
 use ingot_packet::ParsedMblk;
 use ip4::IpError;
 pub use opte_api::Direction;
+use zerocopy::ByteSliceMut;
 
 // TODO Currently I'm using this for parsing many different things. It
 // might be wise to have different parse error types. E.g., one for
@@ -283,7 +284,8 @@ pub trait NetworkImpl {
         uft_out: &FlowTable<UftEntry<InnerFlowId>>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
-        T: Read;
+        T: Read,
+        T::Chunk: ByteSliceMut;
 
     /// Return the parser for this network implementation.
     fn parser(&self) -> Self::Parser;
@@ -298,19 +300,23 @@ pub trait NetworkParser {
     ///
     /// An outbound packet is one travelling from the [`port::Port`]
     /// client to the network.
-    fn parse_outbound<T: Read>(
+    fn parse_outbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError>;
+    ) -> Result<OpteParsed<T>, ParseError>
+    where
+        T::Chunk: zerocopy::IntoByteSlice<'a>;
 
     /// Parse an inbound packet.
     ///
     /// An inbound packet is one traveling from the network to the
     /// [`port::Port`] client.
-    fn parse_inbound<T: Read>(
+    fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError>;
+    ) -> Result<OpteParsed<T>, ParseError>
+    where
+        T::Chunk: zerocopy::IntoByteSlice<'a>;
 }
 
 /// A generic ULP parser, useful for testing inside of the opte crate
@@ -320,24 +326,36 @@ pub struct GenericUlp {}
 impl GenericUlp {
     /// Parse a generic L2 + L3 + L4 packet, storing the headers in
     /// the inner position.
-    fn parse_ulp<T: Read>(&self, rdr: T) -> Result<OpteParsed<T>, ParseError> {
+    fn parse_ulp<'a, T: Read + 'a>(
+        &self,
+        rdr: T,
+    ) -> Result<OpteParsed<T>, ParseError>
+    where
+        T::Chunk: zerocopy::IntoByteSlice<'a>,
+    {
         let v = NoEncap::parse_read(rdr)?;
         Ok(OpteMeta::convert_ingot(v))
     }
 }
 
 impl NetworkParser for GenericUlp {
-    fn parse_inbound<T: Read>(
+    fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError> {
+    ) -> Result<OpteParsed<T>, ParseError>
+    where
+        T::Chunk: zerocopy::IntoByteSlice<'a>,
+    {
         self.parse_ulp(rdr)
     }
 
-    fn parse_outbound<T: Read>(
+    fn parse_outbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError> {
+    ) -> Result<OpteParsed<T>, ParseError>
+    where
+        T::Chunk: zerocopy::IntoByteSlice<'a>,
+    {
         self.parse_ulp(rdr)
     }
 }
