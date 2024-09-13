@@ -139,7 +139,7 @@ impl NetworkParser for VpcParser {
         rdr: T,
     ) -> Result<OpteParsed<T>, ParseError>
     where
-        T::Chunk: zerocopy::IntoByteSlice<'a>,
+        T::Chunk: opte::ingot::types::IntoBufPointer<'a>,
     {
         let v = NoEncap::parse_read(rdr);
         Ok(OpteMeta::convert_ingot(v?))
@@ -151,7 +151,7 @@ impl NetworkParser for VpcParser {
         rdr: T,
     ) -> Result<OpteParsed<T>, ParseError>
     where
-        T::Chunk: zerocopy::IntoByteSlice<'a>,
+        T::Chunk: opte::ingot::types::IntoBufPointer<'a>,
     {
         let v = GeneveOverV6::parse_read(rdr);
         Ok(OpteMeta::convert_ingot(v?))

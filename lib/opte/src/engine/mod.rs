@@ -305,7 +305,7 @@ pub trait NetworkParser {
         rdr: T,
     ) -> Result<OpteParsed<T>, ParseError>
     where
-        T::Chunk: zerocopy::IntoByteSlice<'a>;
+        T::Chunk: ingot::types::IntoBufPointer<'a>;
 
     /// Parse an inbound packet.
     ///
@@ -316,7 +316,7 @@ pub trait NetworkParser {
         rdr: T,
     ) -> Result<OpteParsed<T>, ParseError>
     where
-        T::Chunk: zerocopy::IntoByteSlice<'a>;
+        T::Chunk: ingot::types::IntoBufPointer<'a>;
 }
 
 /// A generic ULP parser, useful for testing inside of the opte crate
@@ -331,7 +331,7 @@ impl GenericUlp {
         rdr: T,
     ) -> Result<OpteParsed<T>, ParseError>
     where
-        T::Chunk: zerocopy::IntoByteSlice<'a>,
+        T::Chunk: ingot::types::IntoBufPointer<'a>,
     {
         let v = NoEncap::parse_read(rdr)?;
         Ok(OpteMeta::convert_ingot(v))
@@ -344,7 +344,7 @@ impl NetworkParser for GenericUlp {
         rdr: T,
     ) -> Result<OpteParsed<T>, ParseError>
     where
-        T::Chunk: zerocopy::IntoByteSlice<'a>,
+        T::Chunk: ingot::types::IntoBufPointer<'a>,
     {
         self.parse_ulp(rdr)
     }
@@ -354,7 +354,7 @@ impl NetworkParser for GenericUlp {
         rdr: T,
     ) -> Result<OpteParsed<T>, ParseError>
     where
-        T::Chunk: zerocopy::IntoByteSlice<'a>,
+        T::Chunk: ingot::types::IntoBufPointer<'a>,
     {
         self.parse_ulp(rdr)
     }

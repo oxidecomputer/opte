@@ -1088,7 +1088,7 @@ impl<T: Read + QueryLen> Packet2<Initialized2<T>> {
 
 impl<'a, T: Read + 'a> Packet2<Initialized2<T>>
 where
-    T::Chunk: zerocopy::IntoByteSlice<'a>,
+    T::Chunk: ingot::types::IntoBufPointer<'a>,
 {
     #[inline]
     pub fn parse(
