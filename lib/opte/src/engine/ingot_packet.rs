@@ -133,7 +133,7 @@ pub struct GeneveOverV6<Q: ByteSlice> {
 }
 
 #[inline]
-fn exit_on_arp<V: ByteSlice>(eth: &EthernetPacket<V>) -> ParseControl {
+fn exit_on_arp<V: ByteSlice>(eth: &ValidEthernet<V>) -> ParseControl {
     if eth.ethertype() == Ethertype::ARP {
         ParseControl::Accept
     } else {
