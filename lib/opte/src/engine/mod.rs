@@ -55,8 +55,10 @@ use ingot_packet::Packet2;
 use ingot_packet::PacketHeaders;
 use ingot_packet::Parsed2;
 use ingot_packet::ParsedMblk;
+use ingot_packet::ValidNoEncap;
 use ip4::IpError;
 pub use opte_api::Direction;
+use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
 // TODO Currently I'm using this for parsing many different things. It
@@ -296,6 +298,9 @@ pub trait NetworkImpl {
 /// This provides parsing for inbound/outbound packets for a given
 /// [`NetworkImpl`].
 pub trait NetworkParser {
+    type InMeta<T: ByteSlice>: LightweightMeta<T>;
+    type OutMeta<T: ByteSlice>: LightweightMeta<T>;
+
     /// Parse an outbound packet.
     ///
     /// An outbound packet is one travelling from the [`port::Port`]
@@ -319,6 +324,19 @@ pub trait NetworkParser {
         T::Chunk: ingot::types::IntoBufPointer<'a>;
 }
 
+/// Header formats which allow a flow ID to be read out, and which can be converted
+/// into the shared `OpteMeta` format.
+pub trait LightweightMeta<T: ByteSlice>: Into<OpteMeta<T>> + FlowKey {}
+
+// This is a separate trait since `where for<'a> &'a Self: Into<InnerFlowId>`
+// had *awful* ergonomics around that bound's propagation.
+/// Headers which allow a flow ID to be read out.
+pub trait FlowKey {
+    /// Return the flow ID (5-tuple, or other composite key) which
+    /// identifies this packet's parent flow.
+    fn flow(&self) -> InnerFlowId;
+}
+
 /// A generic ULP parser, useful for testing inside of the opte crate
 /// itself.
 pub struct GenericUlp {}
@@ -339,6 +357,9 @@ impl GenericUlp {
 }
 
 impl NetworkParser for GenericUlp {
+    type InMeta<T: ByteSlice> = ValidNoEncap<T>;
+    type OutMeta<T: ByteSlice> = ValidNoEncap<T>;
+
     fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,

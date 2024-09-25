@@ -50,6 +50,8 @@ use super::packet::ParseError;
 use super::packet::FLOW_ID_DEFAULT;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
+use super::FlowKey;
+use super::LightweightMeta;
 use super::NetworkParser;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -126,9 +128,7 @@ pub struct GeneveOverV6<Q: ByteSlice> {
     pub outer_encap: GenevePacket<Q>,
 
     pub inner_eth: EthernetPacket<Q>,
-    // pub inner_l3: L3<Q>,
     pub inner_l3: L3<Q>,
-    // pub inner_ulp: L4<Q>,
     pub inner_ulp: Ulp<Q>,
 }
 
@@ -148,6 +148,118 @@ pub struct NoEncap<Q: ByteSlice> {
     pub inner_l3: Option<L3<Q>>,
     pub inner_ulp: Option<Ulp<Q>>,
 }
+
+// impl<'a, T: ByteSlice> From<&'a NoEncap<T>> for InnerFlowId {
+//     #[inline]
+//     fn from(meta: &NoEncap<T>) -> Self {
+//         let (proto, addrs) = match &meta.inner_l3 {
+//             Some(L3::Ipv4(pkt)) => (
+//                 pkt.protocol().0,
+//                 AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
+//             ),
+//             Some(L3::Ipv6(pkt)) => (
+//                 pkt.next_layer().unwrap_or_default().0,
+//                 AddrPair::V6 { src: pkt.source(), dst: pkt.destination() },
+//             ),
+//             None => (255, FLOW_ID_DEFAULT.addrs),
+//         };
+
+//         let (src_port, dst_port) = meta
+//             .inner_ulp
+//             .as_ref()
+//             .map(|ulp| {
+//                 (
+//                     actual_src_port(ulp)
+//                         .or_else(|| pseudo_port(ulp))
+//                         .unwrap_or(0),
+//                     actual_dst_port(ulp)
+//                         .or_else(|| pseudo_port(ulp))
+//                         .unwrap_or(0),
+//                 )
+//             })
+//             .unwrap_or((0, 0));
+
+//         InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
+//     }
+// }
+
+impl<T: ByteSlice> FlowKey for ValidNoEncap<T> {
+    #[inline]
+    fn flow(&self) -> InnerFlowId {
+        let (proto, addrs) = match &self.inner_l3 {
+            Some(ValidL3::Ipv4(pkt)) => (
+                pkt.protocol().0,
+                AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
+            ),
+            Some(ValidL3::Ipv6(pkt)) => (
+                pkt.next_layer().unwrap_or_default().0,
+                AddrPair::V6 { src: pkt.source(), dst: pkt.destination() },
+            ),
+            None => (255, FLOW_ID_DEFAULT.addrs),
+        };
+
+        let (src_port, dst_port) = self
+            .inner_ulp
+            .as_ref()
+            .map(|ulp| {
+                (
+                    actual_src_port_v(ulp)
+                        .or_else(|| pseudo_port_v(ulp))
+                        .unwrap_or(0),
+                    actual_dst_port_v(ulp)
+                        .or_else(|| pseudo_port_v(ulp))
+                        .unwrap_or(0),
+                )
+            })
+            .unwrap_or((0, 0));
+
+        InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
+    }
+}
+
+impl<T: ByteSlice> From<ValidNoEncap<T>> for OpteMeta<T> {
+    #[inline]
+    fn from(value: ValidNoEncap<T>) -> Self {
+        NoEncap::from(value).into()
+    }
+}
+
+impl<V: ByteSlice> LightweightMeta<V> for ValidNoEncap<V> {}
+
+impl<T: ByteSlice> FlowKey for ValidGeneveOverV6<T> {
+    #[inline]
+    fn flow(&self) -> InnerFlowId {
+        let (proto, addrs) = match &self.inner_l3 {
+            ValidL3::Ipv4(pkt) => (
+                pkt.protocol().0,
+                AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
+            ),
+            ValidL3::Ipv6(pkt) => (
+                pkt.next_layer().unwrap_or_default().0,
+                AddrPair::V6 { src: pkt.source(), dst: pkt.destination() },
+            ),
+        };
+
+        let src_port = actual_src_port_v(&self.inner_ulp)
+            .or_else(|| pseudo_port_v(&self.inner_ulp))
+            .unwrap_or(0);
+
+        let dst_port = actual_dst_port_v(&self.inner_ulp)
+            .or_else(|| pseudo_port_v(&self.inner_ulp))
+            .unwrap_or(0);
+
+        InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
+    }
+}
+
+impl<T: ByteSlice> From<ValidGeneveOverV6<T>> for OpteMeta<T> {
+    #[inline]
+    fn from(value: ValidGeneveOverV6<T>) -> Self {
+        GeneveOverV6::from(value).into()
+    }
+}
+
+impl<V: ByteSlice> LightweightMeta<V> for ValidGeneveOverV6<V> {}
 
 // --- REWRITE IN PROGRESS ---
 #[derive(Debug)]
@@ -491,6 +603,8 @@ pub struct OpteMeta<T: ByteSlice> {
 }
 
 pub type Test = OpteMeta<&'static [u8]>;
+pub type Test2 = ValidNoEncap<&'static [u8]>;
+pub type Test3 = ValidGeneveOverV6<&'static [u8]>;
 
 pub type OpteParsed<T> = IngotParsed<OpteMeta<<T as Read>::Chunk>, T>;
 
@@ -1011,10 +1125,26 @@ fn actual_src_port<T: ByteSlice>(chunk: &Ulp<T>) -> Option<u16> {
     }
 }
 
+fn actual_src_port_v<T: ByteSlice>(chunk: &ValidUlp<T>) -> Option<u16> {
+    match chunk {
+        ValidUlp::Tcp(pkt) => Some(pkt.source()),
+        ValidUlp::Udp(pkt) => Some(pkt.source()),
+        _ => None,
+    }
+}
+
 fn actual_dst_port<T: ByteSlice>(chunk: &Ulp<T>) -> Option<u16> {
     match chunk {
         Ulp::Tcp(pkt) => Some(pkt.destination()),
         Ulp::Udp(pkt) => Some(pkt.destination()),
+        _ => None,
+    }
+}
+
+fn actual_dst_port_v<T: ByteSlice>(chunk: &ValidUlp<T>) -> Option<u16> {
+    match chunk {
+        ValidUlp::Tcp(pkt) => Some(pkt.destination()),
+        ValidUlp::Udp(pkt) => Some(pkt.destination()),
         _ => None,
     }
 }
@@ -1027,6 +1157,22 @@ fn pseudo_port<T: ByteSlice>(chunk: &Ulp<T>) -> Option<u16> {
             Some(u16::from_be_bytes(pkt.rest_of_hdr()[..2].try_into().unwrap()))
         }
         Ulp::IcmpV6(pkt)
+            if pkt.code() == 0 && (pkt.ty() == 128 || pkt.ty() == 129) =>
+        {
+            Some(u16::from_be_bytes(pkt.rest_of_hdr()[..2].try_into().unwrap()))
+        }
+        _ => None,
+    }
+}
+
+fn pseudo_port_v<T: ByteSlice>(chunk: &ValidUlp<T>) -> Option<u16> {
+    match chunk {
+        ValidUlp::IcmpV4(pkt)
+            if pkt.code() == 0 && (pkt.ty() == 0 || pkt.ty() == 8) =>
+        {
+            Some(u16::from_be_bytes(pkt.rest_of_hdr()[..2].try_into().unwrap()))
+        }
+        ValidUlp::IcmpV6(pkt)
             if pkt.code() == 0 && (pkt.ty() == 128 || pkt.ty() == 129) =>
         {
             Some(u16::from_be_bytes(pkt.rest_of_hdr()[..2].try_into().unwrap()))
