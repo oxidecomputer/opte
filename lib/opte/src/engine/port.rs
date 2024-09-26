@@ -17,9 +17,11 @@ use super::headers::HeaderAction;
 use super::headers::IpPush;
 use super::headers::UlpHeaderAction;
 use super::ingot_packet::MsgBlk;
+use super::ingot_packet::MsgBlkIterMut;
 use super::ingot_packet::Packet2;
 use super::ingot_packet::Parsed2;
 use super::ingot_packet::ParsedMblk;
+use super::ingot_packet::ParsedStage1;
 use super::ioctl;
 use super::ioctl::TcpFlowEntryDump;
 use super::ioctl::TcpFlowStateDump;
@@ -39,6 +41,7 @@ use super::packet::PacketMeta;
 use super::packet::Parsed;
 use super::packet::FLOW_ID_DEFAULT;
 use super::rule::Action;
+use super::rule::CompiledTransform;
 use super::rule::Finalized;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
@@ -49,6 +52,7 @@ use super::tcp::TIME_WAIT_EXPIRE_TTL;
 use super::tcp_state::TcpFlowState;
 use super::tcp_state::TcpFlowStateError;
 use super::HdlPktAction;
+use super::LightweightMeta;
 use super::NetworkImpl;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -61,6 +65,9 @@ use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KMutexType;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::ExpiryPolicy;
+use crate::engine::ingot_packet::EmitterSpec;
+use crate::engine::ingot_packet::EmittestSpec;
+use crate::engine::rule::CompiledEncap;
 use crate::engine::tcp::TcpMeta;
 use crate::ExecCtx;
 use alloc::boxed::Box;
@@ -130,7 +137,7 @@ impl From<HdrTransformError> for ProcessError {
 /// all. XXX This is probably going away as its only use is for
 /// punting on traffic I didn't want to deal with yet.
 ///
-/// * Drop: The packet has beend dropped, as determined by the rules
+/// * Drop: The packet has been dropped, as determined by the rules
 /// or because of resource exhaustion. Included is the reason for the
 /// drop.
 ///
@@ -146,7 +153,8 @@ pub enum ProcessResult {
     Drop {
         reason: DropReason,
     },
-    Modified,
+    #[leaf]
+    Modified(EmittestSpec),
     // TODO: it would be nice if this packet type could be user-specified, but might
     // be tricky.
     #[leaf]
@@ -156,7 +164,7 @@ pub enum ProcessResult {
 impl From<HdlPktAction> for ProcessResult {
     fn from(hpa: HdlPktAction) -> Self {
         match hpa {
-            HdlPktAction::Allow => Self::Modified,
+            HdlPktAction::Allow => Self::Modified(todo!()),
             HdlPktAction::Deny => Self::Drop { reason: DropReason::HandlePkt },
             HdlPktAction::Hairpin(pkt) => Self::Hairpin(pkt),
         }
@@ -179,19 +187,6 @@ enum InternalProcessResult {
         tcp_state: Option<Arc<KMutex<TcpFlowEntryState>>>,
     },
     Hairpin(MsgBlk),
-}
-
-impl From<InternalProcessResult> for ProcessResult {
-    fn from(value: InternalProcessResult) -> Self {
-        match value {
-            InternalProcessResult::Bypass => Self::Bypass,
-            InternalProcessResult::Drop { reason } => Self::Drop { reason },
-            InternalProcessResult::Hairpin(v) => Self::Hairpin(v),
-            InternalProcessResult::Modified { transform, tcp_state } => {
-                Self::Modified
-            }
-        }
-    }
 }
 
 impl From<HdlPktAction> for InternalProcessResult {
@@ -1200,101 +1195,250 @@ impl<N: NetworkImpl> Port<N> {
     /// # States
     ///
     /// This command is valid only for [`PortState::Running`].
-    pub fn process(
+    pub fn process<'a, M>(
         &self,
         dir: Direction,
-        pkt: &mut Packet2<ParsedMblk>,
-        mut ameta: ActionMeta,
-    ) -> result::Result<ProcessResult, ProcessError> {
-        let flow_before = *pkt.flow();
-        pkt.store_lens_for_slopath();
-        // XXX: See remove_rule -- there is a 1-pkt wide TOCTOU here.
-        //      This should probably be ordered:
-        //       - remove                    - process
-        //        * lock port                 * lock port
-        //        * increment epoch(relaxed)  * fetch epoch(relaxed)
-        let epoch = self.epoch.load(SeqCst);
+        // TODO: might want to pass in a &mut to an enum
+        // which can advance to (and hold) light->full-fat metadata.
+        // Then we can have our cake and eat it too.
+        mut pkt: Packet2<ParsedStage1<MsgBlkIterMut<'a>, M>>,
+    ) -> result::Result<ProcessResult, ProcessError>
+    where
+        M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>,
+    {
+        let flow_before = pkt.flow();
+
+        // Packet processing is split into a few mechanisms based on
+        // expected speed, based on actions and the size of required metadata:
+        //
+        // 1. UFT exists. Pure push/pop with simple modifications to
+        //    inner ULP fields. No body transform.
+        // 2. UFT exists. Flow transform could not be compiled as above.
+        //    Convert to full metadata and apply saved transform list.
+        // 3. No UFT exists. Walk all tables, save and apply transforms
+        //    piecemeal OR produce a non-`Modified` decision.
+        //
+        // Generally, 1 > 2 >>> 3 in terms of rate of pps.
+        // Both 1 and 2 are able to drop the port lock very quickly.
+        //
+        // This tiering exists because we can save space on metadata
+        // when we know that we won't have mixed owned/borrowed packet
+        // data, and when we don't need to keep space for absent layers.
+        // The size of metadata structs is a large bottleneck on packet
+        // parsing performance, so we expect that minimising it for the
+        // majority of packets pays off in the limit.
+        //
+        // In case 1, we can also cache and reuse the same EmitSpec for
+        // all hit packets.
+
+        // (1) Check for UFT and precompiled.
         let mut data = self.data.lock();
+        let epoch = self.epoch();
         check_state!(data.state, [PortState::Running])
             .map_err(|_| ProcessError::BadState(data.state))?;
 
-        self.port_process_entry_probe(dir, &flow_before, epoch, pkt);
-        let res = match dir {
-            Direction::Out => {
-                let res = self.process_out(&mut data, epoch, pkt, &mut ameta);
-                // XXX: Ideally the Kstat should be holding atmoic U64s, then we get
+        // TODO: fixup types here.
+        // self.port_process_entry_probe(dir, &flow_before, epoch, &pkt);
+
+        let mut uft: Option<&mut FlowEntry<UftEntry<InnerFlowId>>> = match dir {
+            Direction::Out => data.uft_out.get_mut(&flow_before),
+            Direction::In => data.uft_out.get_mut(&flow_before),
+        };
+
+        enum FastPathDecision {
+            CompiledUft { tx: Arc<CompiledTransform>, l4_hash: u32 },
+            Uft { tx: Arc<Transforms>, l4_hash: u32 },
+            Slow,
+        }
+
+        let decision = match uft {
+            // We have a valid UFT entry of some kind -- clone out the
+            // saved transforms so that we can drop the lock ASAP.
+            Some(entry) if entry.state().epoch == epoch => {
+                entry.hit();
+                let now = *entry.last_hit();
+
+                // The Fast Path.
+                let xforms = &entry.state().xforms;
+                let out = if let Some(compiled) = xforms.compiled.as_ref() {
+                    FastPathDecision::CompiledUft {
+                        tx: Arc::clone(compiled),
+                        l4_hash: entry.state().l4_hash,
+                    }
+                } else {
+                    FastPathDecision::Uft {
+                        tx: Arc::clone(xforms),
+                        l4_hash: entry.state().l4_hash,
+                    }
+                };
+
+                match dir {
+                    Direction::In => data.stats.vals.in_uft_hit += 1,
+                    Direction::Out => data.stats.vals.out_uft_hit += 1,
+                }
+                self.uft_hit_probe(dir, &flow_before, epoch, &now);
+
+                out
+            }
+
+            // The entry is from a previous epoch; invalidate its UFT
+            // entries and proceed to rule processing.
+            Some(entry) => {
+                let epoch = entry.state().epoch;
+                let owned_pair = entry.state().pair;
+                let (ufid_in, ufid_out) = match dir {
+                    Direction::Out => (owned_pair.as_ref(), Some(&flow_before)),
+                    Direction::In => (Some(&flow_before), owned_pair.as_ref()),
+                };
+                self.uft_invalidate(&mut data, ufid_out, ufid_in, epoch);
+
+                FastPathDecision::Slow
+            }
+            None => FastPathDecision::Slow,
+        };
+
+        // (1)/(2) UFT hit without invalidation -- We know the result for stats purposes.
+        match &decision {
+            FastPathDecision::CompiledUft { .. }
+            | FastPathDecision::Uft { .. } => {
+                // XXX: Ideally the Kstat should be holding AtomicU64s, then we get
                 // out of the lock sooner. Note that we don't need to *apply* a given
                 // set of transforms in order to know which stats we'll modify.
-                Self::update_stats_out(&mut data.stats.vals, &res);
-                res
-            }
-
-            Direction::In => {
-                let res = self.process_in(
-                    &mut data,
-                    epoch,
-                    pkt,
-                    &flow_before,
-                    &mut ameta,
-                );
-                Self::update_stats_in(&mut data.stats.vals, &res);
-                res
-            }
-        };
-        drop(data);
-
-        // Now, apply transforms and update TCP state.
-        // UFT misses will have done so already in the port lock.
-        match (dir, &res) {
-            (
-                Direction::Out,
-                Ok(InternalProcessResult::Modified {
-                    transform: Some(transform),
-                    tcp_state,
-                }),
-            ) => {
-                // TCP, then transform?
-                // TODO: tcp
-
-                // todo!(); //TCP
-                transform.apply(pkt, dir)?;
-            }
-            (
-                Direction::In,
-                Ok(InternalProcessResult::Modified {
-                    transform: Some(transform),
-                    tcp_state,
-                }),
-            ) => {
-                // Transform, then TCP?
-
-                transform.apply(pkt, dir)?;
-                // todo!(); //TCP
-            }
-            // Nothing left to do other than csums; we took the slowpath.
-            (_, Ok(InternalProcessResult::Modified { .. })) => {
-                pkt.update_checksums()
+                // Also, not an elegant hack!
+                let dummy_res = Ok(InternalProcessResult::Modified {
+                    transform: None,
+                    tcp_state: None,
+                });
+                match dir {
+                    Direction::In => {
+                        Self::update_stats_in(&mut data.stats.vals, &dummy_res)
+                    }
+                    Direction::Out => {
+                        Self::update_stats_out(&mut data.stats.vals, &dummy_res)
+                    }
+                }
             }
             _ => {}
         }
 
-        // Emit the updated headers if the packet was modified as part
-        // of processing.
-        // TODO: now contingent on caller to do this if they want it.
-        //       Why? To prevent any copy-out for loopback packets.
-        // if let Ok(ProcessResult::Modified) = res {
-        //     pkt.emit_new_headers()?;
-        // }
+        // (1) Execute precompiled, and exit.
+        if let FastPathDecision::CompiledUft { tx, l4_hash } = decision {
+            drop(data);
 
-        let safe_res = res.map(Into::into);
+            let len = pkt.len();
+            let meta = pkt.meta_mut();
+            let body_csum = if tx.checksums_dirty {
+                meta.compute_body_csum()
+            } else {
+                None
+            };
+            meta.run_compiled_transform(&tx);
+            if let Some(csum) = body_csum {
+                meta.update_ulp_checksums(csum);
+            }
+            let encap_len = meta.encap_len();
+            let ulp_len = (len - (encap_len as usize)) as u32;
+            let rewind = match tx.encap {
+                CompiledEncap::Pop => encap_len,
+                _ => 0,
+            };
+            let out = EmittestSpec {
+                spec: EmitterSpec::Fastpath(tx),
+                l4_hash,
+                rewind,
+                ulp_len,
+            };
+
+            let flow_after = meta.flow();
+            let res = Ok(ProcessResult::Modified(out));
+            self.port_process_return_probe(
+                dir,
+                &flow_before,
+                &flow_after,
+                epoch,
+                // &pkt,
+                &res,
+            );
+            return res;
+        }
+
+        // (2)/(3) Full-fat metadata is required.
+        let mut pkt = pkt.to_full_meta();
+        let mut ameta = ActionMeta::new();
+
+        // TODO: remove/convert to a slopath indicator?
+        self.port_process_entry_probe(dir, &flow_before, epoch, &pkt);
+
+        let res = match (&decision, dir) {
+            // (2) Drop lock, then apply retrieved transform.
+            // Store cached l4 hash.
+            (FastPathDecision::Uft { tx, l4_hash }, _) => {
+                drop(data);
+                pkt.set_l4_hash(*l4_hash);
+                tx.apply(&mut pkt, dir)?;
+                Ok(InternalProcessResult::Modified {
+                    transform: None,
+                    tcp_state: None,
+                })
+            }
+
+            // (3) Full-table processing for the packet, then drop the lock.
+            // Cksum updates are the only thing left undone.
+            (FastPathDecision::Slow, Direction::In) => {
+                let res = self.process_in_miss(
+                    &mut data,
+                    epoch,
+                    &mut pkt,
+                    &flow_before,
+                    &mut ameta,
+                );
+                Self::update_stats_in(&mut data.stats.vals, &res);
+                drop(data);
+                pkt.update_checksums();
+                res
+            }
+            (FastPathDecision::Slow, Direction::Out) => {
+                let res = self
+                    .process_out_miss(&mut data, epoch, &mut pkt, &mut ameta);
+                Self::update_stats_out(&mut data.stats.vals, &res);
+                drop(data);
+                pkt.update_checksums();
+                res
+            }
+            _ => unreachable!(),
+        };
+
+        let flow_after = *pkt.flow();
+
+        let res = res.map(|v| match v {
+            InternalProcessResult::Bypass => ProcessResult::Bypass,
+            InternalProcessResult::Drop { reason } => {
+                ProcessResult::Drop { reason }
+            }
+            InternalProcessResult::Hairpin(v) => ProcessResult::Hairpin(v),
+            InternalProcessResult::Modified { transform, tcp_state } => {
+                let l4_hash = pkt.l4_hash();
+                let emit_spec = pkt.emit_spec();
+
+                // TODO: remove EmitSpec and have above method just spit out the new
+                // variant.
+                ProcessResult::Modified(EmittestSpec {
+                    spec: EmitterSpec::Slowpath(emit_spec.push_spec.into()),
+                    l4_hash,
+                    rewind: emit_spec.rewind,
+                    ulp_len: emit_spec.encapped_len as u32,
+                })
+            }
+        });
         self.port_process_return_probe(
             dir,
             &flow_before,
+            &flow_after,
             epoch,
-            pkt,
-            &safe_res,
+            // &pkt,
+            &res,
         );
-        safe_res
+        res
     }
 
     // hope and pray we find a ULP, then use that?
@@ -1804,11 +1948,16 @@ pub enum ThinProcRes {
 pub(crate) struct Transforms {
     pub(crate) hdr: Vec<HdrTransform>,
     pub(crate) body: Vec<Box<dyn BodyTransform>>,
+    pub(crate) compiled: Option<Arc<CompiledTransform>>,
 }
 
 impl Transforms {
     fn new() -> Self {
-        Self { hdr: Vec::with_capacity(8), body: Vec::with_capacity(2) }
+        Self {
+            hdr: Vec::with_capacity(8),
+            body: Vec::with_capacity(2),
+            compiled: None,
+        }
     }
 
     #[inline]
@@ -1842,6 +1991,7 @@ impl fmt::Debug for Transforms {
         f.debug_struct("Transforms")
             .field("hdr", &self.hdr)
             .field("body", &body_strs)
+            .field("compiled", &self.compiled)
             .finish()
     }
 }
@@ -1938,11 +2088,13 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         dir: Direction,
         flow_before: &InnerFlowId,
+        flow_after: &InnerFlowId,
         epoch: u64,
-        pkt: &Packet2<ParsedMblk>,
+        // pkt: &Packet2<ParsedMblk>,
         res: &result::Result<ProcessResult, ProcessError>,
     ) {
-        let flow_after = pkt.flow();
+        // let flow_after = pkt.flow();
+        let mblk_addr = 0; // TODO.
 
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -1988,7 +2140,7 @@ impl<N: NetworkImpl> Port<N> {
                         flow_before,
                         flow_after,
                         epoch as uintptr_t,
-                        pkt.mblk_addr(),
+                        mblk_addr,
                         hp_pkt_ptr,
                         eb.as_ptr(),
                     );
@@ -2006,7 +2158,7 @@ impl<N: NetworkImpl> Port<N> {
                         (dir, self.name.as_str()),
                         (flow_b_s.as_ref(), flow_a_s.as_ref()),
                         epoch,
-                        pkt.mblk_addr(),
+                        mblk_addr,
                         res_str
                     )
                 );
@@ -2410,6 +2562,7 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
+    // TODO: remove.
     fn process_in(
         &self,
         data: &mut PortData,
@@ -2725,6 +2878,7 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
+    // TODO: remove.
     fn process_out(
         &self,
         data: &mut PortData,

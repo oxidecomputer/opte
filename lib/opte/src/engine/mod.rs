@@ -43,6 +43,7 @@ pub mod ingot_base;
 pub mod ingot_packet;
 
 use alloc::string::String;
+use checksum::Checksum;
 use core::fmt;
 use core::num::ParseIntError;
 use ingot::types::Parsed as IngotParsed;
@@ -51,6 +52,7 @@ use ingot_packet::MsgBlk;
 use ingot_packet::NoEncap;
 use ingot_packet::OpteMeta;
 use ingot_packet::OpteParsed;
+use ingot_packet::OpteParsed2;
 use ingot_packet::Packet2;
 use ingot_packet::PacketHeaders;
 use ingot_packet::Parsed2;
@@ -58,6 +60,7 @@ use ingot_packet::ParsedMblk;
 use ingot_packet::ValidNoEncap;
 use ip4::IpError;
 pub use opte_api::Direction;
+use rule::CompiledTransform;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
@@ -308,7 +311,7 @@ pub trait NetworkParser {
     fn parse_outbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError>
+    ) -> Result<OpteParsed2<T, Self::OutMeta<T::Chunk>>, ParseError>
     where
         T::Chunk: ingot::types::IntoBufPointer<'a>;
 
@@ -319,22 +322,31 @@ pub trait NetworkParser {
     fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError>
+    ) -> Result<OpteParsed2<T, Self::InMeta<T::Chunk>>, ParseError>
     where
         T::Chunk: ingot::types::IntoBufPointer<'a>;
 }
 
 /// Header formats which allow a flow ID to be read out, and which can be converted
 /// into the shared `OpteMeta` format.
-pub trait LightweightMeta<T: ByteSlice>: Into<OpteMeta<T>> + FlowKey {}
+pub trait LightweightMeta<T: ByteSlice>: Into<OpteMeta<T>> {
+    /// Runs a compiled fastpath action against the target metadata.
+    fn run_compiled_transform(&mut self, transform: &CompiledTransform);
 
-// This is a separate trait since `where for<'a> &'a Self: Into<InnerFlowId>`
-// had *awful* ergonomics around that bound's propagation.
-/// Headers which allow a flow ID to be read out.
-pub trait FlowKey {
+    /// Derive the checksum for the packet body from inner headers.
+    fn compute_body_csum(&self) -> Option<Checksum>;
+
+    // This is a dedicated fn since `where for<'a> &'a Self: Into<InnerFlowId>`
+    // had *awful* ergonomics around that bound's propagation.
     /// Return the flow ID (5-tuple, or other composite key) which
     /// identifies this packet's parent flow.
     fn flow(&self) -> InnerFlowId;
+
+    /// Returns the number of bytes occupied by the packet's outer encapsulation.
+    fn encap_len(&self) -> u16;
+
+    /// Recalculate checksums within ULP headers, derived from a pre-computed `body_csum`.
+    fn update_ulp_checksums(&mut self, body_csum: Checksum);
 }
 
 /// A generic ULP parser, useful for testing inside of the opte crate
@@ -363,20 +375,22 @@ impl NetworkParser for GenericUlp {
     fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError>
+    ) -> Result<OpteParsed2<T, Self::InMeta<T::Chunk>>, ParseError>
     where
         T::Chunk: ingot::types::IntoBufPointer<'a>,
     {
-        self.parse_ulp(rdr)
+        // self.parse_ulp(rdr)
+        Ok(ValidNoEncap::parse_read(rdr)?)
     }
 
     fn parse_outbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError>
+    ) -> Result<OpteParsed2<T, Self::OutMeta<T::Chunk>>, ParseError>
     where
         T::Chunk: ingot::types::IntoBufPointer<'a>,
     {
-        self.parse_ulp(rdr)
+        // self.parse_ulp(rdr)
+        Ok(ValidNoEncap::parse_read(rdr)?)
     }
 }

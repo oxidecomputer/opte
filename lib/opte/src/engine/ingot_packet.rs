@@ -48,9 +48,9 @@ use super::packet::Packet;
 use super::packet::PacketState;
 use super::packet::ParseError;
 use super::packet::FLOW_ID_DEFAULT;
+use super::rule::CompiledTransform;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
-use super::FlowKey;
 use super::LightweightMeta;
 use super::NetworkParser;
 use alloc::boxed::Box;
@@ -62,6 +62,7 @@ use core::hash::Hash;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::mem::MaybeUninit;
+use core::num::NonZeroU32;
 use core::ops::Deref;
 use core::ops::DerefMut;
 use core::ptr::NonNull;
@@ -149,41 +150,14 @@ pub struct NoEncap<Q: ByteSlice> {
     pub inner_ulp: Option<Ulp<Q>>,
 }
 
-// impl<'a, T: ByteSlice> From<&'a NoEncap<T>> for InnerFlowId {
-//     #[inline]
-//     fn from(meta: &NoEncap<T>) -> Self {
-//         let (proto, addrs) = match &meta.inner_l3 {
-//             Some(L3::Ipv4(pkt)) => (
-//                 pkt.protocol().0,
-//                 AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
-//             ),
-//             Some(L3::Ipv6(pkt)) => (
-//                 pkt.next_layer().unwrap_or_default().0,
-//                 AddrPair::V6 { src: pkt.source(), dst: pkt.destination() },
-//             ),
-//             None => (255, FLOW_ID_DEFAULT.addrs),
-//         };
+impl<T: ByteSlice> From<ValidNoEncap<T>> for OpteMeta<T> {
+    #[inline]
+    fn from(value: ValidNoEncap<T>) -> Self {
+        NoEncap::from(value).into()
+    }
+}
 
-//         let (src_port, dst_port) = meta
-//             .inner_ulp
-//             .as_ref()
-//             .map(|ulp| {
-//                 (
-//                     actual_src_port(ulp)
-//                         .or_else(|| pseudo_port(ulp))
-//                         .unwrap_or(0),
-//                     actual_dst_port(ulp)
-//                         .or_else(|| pseudo_port(ulp))
-//                         .unwrap_or(0),
-//                 )
-//             })
-//             .unwrap_or((0, 0));
-
-//         InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
-//     }
-// }
-
-impl<T: ByteSlice> FlowKey for ValidNoEncap<T> {
+impl<V: ByteSlice> LightweightMeta<V> for ValidNoEncap<V> {
     #[inline]
     fn flow(&self) -> InnerFlowId {
         let (proto, addrs) = match &self.inner_l3 {
@@ -215,18 +189,56 @@ impl<T: ByteSlice> FlowKey for ValidNoEncap<T> {
 
         InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
     }
-}
 
-impl<T: ByteSlice> From<ValidNoEncap<T>> for OpteMeta<T> {
-    #[inline]
-    fn from(value: ValidNoEncap<T>) -> Self {
-        NoEncap::from(value).into()
+    fn run_compiled_transform(&mut self, transform: &CompiledTransform) {
+        todo!()
+    }
+
+    // FIXME: identical to
+    fn compute_body_csum(&self) -> Option<OpteCsum> {
+        let use_pseudo = if let Some(v) = &self.inner_ulp {
+            !matches!(v, ValidUlp::IcmpV4(_))
+        } else {
+            false
+        };
+
+        let pseudo_csum = match self.inner_eth.ethertype() {
+            Ethertype::IPV4 | Ethertype::IPV6 => {
+                self.inner_l3.as_ref().map(l3_pseudo_header_v)
+            }
+            // Includes ARP.
+            _ => return None,
+        };
+
+        let Some(pseudo_csum) = pseudo_csum else {
+            return None;
+        };
+
+        self.inner_ulp.as_ref().and_then(csum_minus_hdr).map(|mut v| {
+            if use_pseudo {
+                v -= pseudo_csum;
+            }
+            v
+        })
+    }
+
+    fn encap_len(&self) -> u16 {
+        todo!()
+    }
+
+    fn update_ulp_checksums(&mut self, body_csum: OpteCsum) {
+        todo!()
     }
 }
 
-impl<V: ByteSlice> LightweightMeta<V> for ValidNoEncap<V> {}
+impl<T: ByteSlice> From<ValidGeneveOverV6<T>> for OpteMeta<T> {
+    #[inline]
+    fn from(value: ValidGeneveOverV6<T>) -> Self {
+        GeneveOverV6::from(value).into()
+    }
+}
 
-impl<T: ByteSlice> FlowKey for ValidGeneveOverV6<T> {
+impl<V: ByteSlice> LightweightMeta<V> for ValidGeneveOverV6<V> {
     #[inline]
     fn flow(&self) -> InnerFlowId {
         let (proto, addrs) = match &self.inner_l3 {
@@ -250,16 +262,23 @@ impl<T: ByteSlice> FlowKey for ValidGeneveOverV6<T> {
 
         InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
     }
-}
 
-impl<T: ByteSlice> From<ValidGeneveOverV6<T>> for OpteMeta<T> {
-    #[inline]
-    fn from(value: ValidGeneveOverV6<T>) -> Self {
-        GeneveOverV6::from(value).into()
+    fn run_compiled_transform(&mut self, transform: &CompiledTransform) {
+        todo!()
+    }
+
+    fn compute_body_csum(&self) -> Option<OpteCsum> {
+        todo!()
+    }
+
+    fn encap_len(&self) -> u16 {
+        todo!()
+    }
+
+    fn update_ulp_checksums(&mut self, body_csum: OpteCsum) {
+        todo!()
     }
 }
-
-impl<V: ByteSlice> LightweightMeta<V> for ValidGeneveOverV6<V> {}
 
 // --- REWRITE IN PROGRESS ---
 #[derive(Debug)]
@@ -607,6 +626,8 @@ pub type Test2 = ValidNoEncap<&'static [u8]>;
 pub type Test3 = ValidGeneveOverV6<&'static [u8]>;
 
 pub type OpteParsed<T> = IngotParsed<OpteMeta<<T as Read>::Chunk>, T>;
+pub type OpteParsed2<T: Read, M: LightweightMeta<<T as Read>::Chunk>> =
+    IngotParsed<M, T>;
 
 impl<T: ByteSlice> OpteMeta<T> {
     #[inline]
@@ -1236,68 +1257,110 @@ impl<'a, T: Read + 'a> Packet2<Initialized2<T>>
 where
     T::Chunk: ingot::types::IntoBufPointer<'a>,
 {
+    // #[inline]
+    // pub fn parse(
+    //     self,
+    //     dir: Direction,
+    //     net: impl NetworkParser,
+    // ) -> Result<Packet2<Parsed2<T>>, ParseError> {
+    //     let Packet2 { state: Initialized2 { len, inner } } = self;
+    //     let IngotParsed { stack: HeaderStack(headers), data, last_chunk } =
+    //         match dir {
+    //             Direction::Out => net.parse_outbound(inner)?,
+    //             Direction::In => net.parse_inbound(inner)?,
+    //         };
+
+    //     let initial_lens = Some(OpteUnifiedLengths {
+    //             outer_eth: headers.outer_eth.packet_length(),
+    //             outer_l3: headers.outer_l3.packet_length(),
+    //             outer_encap: headers.outer_encap.packet_length(),
+    //             inner_eth: headers.inner_eth.packet_length(),
+    //             inner_l3: headers.inner_l3.packet_length(),
+    //             inner_ulp: headers.inner_ulp.packet_length(),
+    //         }
+    //         .into());
+
+    //     let body = PktBodyWalker {
+    //         base: Some((last_chunk, data)).into(),
+    //         slice: Default::default(),
+    //     };
+
+    //     let meta = Box::new(PacketHeaders { headers, initial_lens, body });
+
+    //     let flow = (&*meta).into();
+
+    //     let body_csum = match (&meta.headers).inner_eth.ethertype() {
+    //         Ethertype::ARP => Memoised::Known(None),
+    //         Ethertype::IPV4 | Ethertype::IPV6 => Memoised::Uninit,
+    //         _ => return Err(IngotParseErr::Unwanted.into()),
+    //     };
+
+    //     let state = Parsed2 {
+    //         meta,
+    //         flow,
+    //         body_csum,
+    //         l4_hash: Memoised::Uninit,
+    //         body_modified: false,
+    //         len,
+    //         inner_csum_dirty: false,
+    //     };
+
+    //     let mut pkt = Packet2 { state };
+    //     // TODO: we can probably not do this in some cases, but we
+    //     // don't have a way for headeractions to signal that they
+    //     // *may* change the fields we need in the slowpath.
+    //     let _ = pkt.body_csum();
+
+    //     Ok(pkt)
+    // }
+
+    // TODO: cleanup type aliases.
+
     #[inline]
-    pub fn parse(
+    pub fn parse_inbound<NP: NetworkParser>(
         self,
-        dir: Direction,
-        net: impl NetworkParser,
-    ) -> Result<Packet2<Parsed2<T>>, ParseError> {
+        net: NP,
+    ) -> Result<Packet2<ParsedStage1<T, NP::InMeta<T::Chunk>>>, ParseError>
+    {
         let Packet2 { state: Initialized2 { len, inner } } = self;
-        let IngotParsed { stack: HeaderStack(headers), data, last_chunk } =
-            match dir {
-                Direction::Out => net.parse_outbound(inner)?,
-                Direction::In => net.parse_inbound(inner)?,
-            };
 
-        let initial_lens = None;
+        Ok(Packet2 {
+            state: ParsedStage1 { meta: net.parse_inbound(inner)?, len },
+        })
+    }
 
-        let body = PktBodyWalker {
-            base: Some((last_chunk, data)).into(),
-            slice: Default::default(),
-        };
+    #[inline]
+    pub fn parse_outbound<NP: NetworkParser>(
+        self,
+        net: NP,
+    ) -> Result<Packet2<ParsedStage1<T, NP::OutMeta<T::Chunk>>>, ParseError>
+    {
+        let Packet2 { state: Initialized2 { len, inner } } = self;
 
-        let meta = Box::new(PacketHeaders { headers, initial_lens, body });
-
-        let flow = (&*meta).into();
-
-        let body_csum = match (&meta.headers).inner_eth.ethertype() {
-            Ethertype::ARP => Memoised::Known(None),
-            Ethertype::IPV4 | Ethertype::IPV6 => Memoised::Uninit,
-            _ => return Err(IngotParseErr::Unwanted.into()),
-        };
-
-        let state = Parsed2 {
-            meta,
-            flow,
-            body_csum,
-            l4_hash: Memoised::Uninit,
-            body_modified: false,
-            len,
-            inner_csum_dirty: false,
-        };
-
-        let mut pkt = Packet2 { state };
-        // TODO: we can probably not do this in some cases, but we
-        // don't have a way for headeractions to signal that they
-        // *may* change the fields we need in the slowpath.
-        let _ = pkt.body_csum();
-
-        Ok(pkt)
+        Ok(Packet2 {
+            state: ParsedStage1 { meta: net.parse_outbound(inner)?, len },
+        })
     }
 }
 
-impl<T: Read> Packet2<Parsed2<T>> {
-    pub fn meta(&self) -> &PacketHeaders<T> {
-        &self.state.meta
-    }
+impl<'a, T: Read + 'a, M: LightweightMeta<T::Chunk>> Packet2<ParsedStage1<T, M>>
+where
+    T::Chunk: ingot::types::IntoBufPointer<'a>,
+{
+    #[inline]
+    pub fn to_full_meta(self) -> Packet2<Parsed2<T>> {
+        let Packet2 { state: ParsedStage1 { len, meta } } = self;
+        let IngotParsed { stack: HeaderStack(headers), data, last_chunk } =
+            meta;
 
-    pub fn meta_mut(&mut self) -> &mut PacketHeaders<T> {
-        &mut self.state.meta
-    }
+        // TODO: we can probably not do this in some cases, but we
+        // don't have a way for headeractions to signal that they
+        // *may* change the fields we need in the slowpath.
+        let body_csum = headers.compute_body_csum();
+        let flow = headers.flow();
 
-    pub fn store_lens_for_slopath(&mut self) {
-        let headers = &self.state.meta.headers;
-        self.state.meta.initial_lens = Some(
+        let headers: OpteMeta<_> = headers.into();
+        let initial_lens = Some(
             OpteUnifiedLengths {
                 outer_eth: headers.outer_eth.packet_length(),
                 outer_l3: headers.outer_l3.packet_length(),
@@ -1308,6 +1371,53 @@ impl<T: Read> Packet2<Parsed2<T>> {
             }
             .into(),
         );
+        let body = PktBodyWalker {
+            base: Some((last_chunk, data)).into(),
+            slice: Default::default(),
+        };
+        let meta = Box::new(PacketHeaders { headers, initial_lens, body });
+
+        Packet2 {
+            state: Parsed2 {
+                meta,
+                flow,
+                body_csum,
+                l4_hash: Memoised::Uninit,
+                body_modified: false,
+                len,
+                inner_csum_dirty: false,
+            },
+        }
+    }
+
+    #[inline]
+    pub fn meta(&self) -> &M {
+        &self.state.meta.stack.0
+    }
+
+    #[inline]
+    pub fn meta_mut(&mut self) -> &mut M {
+        &mut self.state.meta.stack.0
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.state.len
+    }
+
+    #[inline]
+    pub fn flow(&self) -> InnerFlowId {
+        self.meta().flow()
+    }
+}
+
+impl<T: Read> Packet2<Parsed2<T>> {
+    pub fn meta(&self) -> &PacketHeaders<T> {
+        &self.state.meta
+    }
+
+    pub fn meta_mut(&mut self) -> &mut PacketHeaders<T> {
+        &mut self.state.meta
     }
 
     #[inline]
@@ -1529,7 +1639,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
         // Given that n_transform layers is 1 or 2, probably won't
         // save too much by trying to tie to a generation number.
         // TODO: profile.
-        // self.state.flow = InnerFlowId::from(self.meta());
+        self.state.flow = InnerFlowId::from(self.meta());
         Ok(())
     }
 
@@ -1591,52 +1701,55 @@ impl<T: Read> Packet2<Parsed2<T>> {
     }
 
     pub fn body_csum(&mut self) -> Option<Checksum> {
-        let out = *self.state.body_csum.get(|| {
-            let use_pseudo = if let Some(v) = self.state.meta.inner_ulp() {
-                !matches!(v, Ulp::IcmpV4(_))
-            } else {
-                false
-            };
+        self.state.body_csum
 
-            // XXX TODO: make these valid even AFTER all packet pushings occur.
-            let pseudo_csum =
-                match (&self.state.meta.headers).inner_eth.ethertype() {
-                    // ARP
-                    Ethertype::ARP => {
-                        return None;
-                    }
-                    Ethertype::IPV4 | Ethertype::IPV6 => self
-                        .state
-                        .meta
-                        .headers
-                        .inner_l3
-                        .as_ref()
-                        .map(l3_pseudo_header),
-                    _ => unreachable!(),
-                };
+        // let out = *self.state.body_csum
+        // .get(|| {
+        //     let use_pseudo = if let Some(v) = self.state.meta.inner_ulp() {
+        //         !matches!(v, Ulp::IcmpV4(_))
+        //     } else {
+        //         false
+        //     };
 
-            let Some(pseudo_csum) = pseudo_csum else {
-                return None;
-            };
+        //     // XXX TODO: make these valid even AFTER all packet pushings occur.
+        //     let pseudo_csum =
+        //         match (&self.state.meta.headers).inner_eth.ethertype() {
+        //             // ARP
+        //             Ethertype::ARP => {
+        //                 return None;
+        //             }
+        //             Ethertype::IPV4 | Ethertype::IPV6 => self
+        //                 .state
+        //                 .meta
+        //                 .headers
+        //                 .inner_l3
+        //                 .as_ref()
+        //                 .map(l3_pseudo_header),
+        //             _ => unreachable!(),
+        //         };
 
-            self.state.meta.inner_ulp().and_then(csum_minus_hdr).map(|mut v| {
-                if use_pseudo {
-                    v -= pseudo_csum;
-                }
-                v
-            })
-        });
+        //     let Some(pseudo_csum) = pseudo_csum else {
+        //         return None;
+        //     };
 
-        // let mut manual = Checksum::default();
-        // if let Some(segs) = self.body_segs() {
-        //     for seg in segs {
-        //         manual.add_bytes(*seg);
-        //     }
+        //     self.state.meta.inner_ulp().and_then(csum_minus_hdr).map(|mut v| {
+        //         if use_pseudo {
+        //             v -= pseudo_csum;
+        //         }
+        //         v
+        //     })
+        // });
 
-        //     opte::engine::err!("think my csum is {:?}, reality is {:?}", out.map(|mut v| v.finalize()), manual.finalize());
-        // }
+        // // let mut manual = Checksum::default();
+        // // if let Some(segs) = self.body_segs() {
+        // //     for seg in segs {
+        // //         manual.add_bytes(*seg);
+        // //     }
 
-        out
+        // //     opte::engine::err!("think my csum is {:?}, reality is {:?}", out.map(|mut v| v.finalize()), manual.finalize());
+        // // }
+
+        // out
     }
 
     pub fn l4_hash(&mut self) -> u32 {
@@ -1794,6 +1907,33 @@ fn l3_pseudo_header<T: ByteSlice>(l3: &L3<T>) -> Checksum {
     }
 }
 
+fn l3_pseudo_header_v<T: ByteSlice>(l3: &ValidL3<T>) -> Checksum {
+    match l3 {
+        ValidL3::Ipv4(v4) => {
+            let mut pseudo_hdr_bytes = [0u8; 12];
+            pseudo_hdr_bytes[0..4].copy_from_slice(v4.source().as_ref());
+            pseudo_hdr_bytes[4..8].copy_from_slice(v4.destination().as_ref());
+            // pseudo_hdr_bytes[8] reserved
+            pseudo_hdr_bytes[9] = v4.protocol().0;
+            let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
+            pseudo_hdr_bytes[10..].copy_from_slice(&ulp_len.to_be_bytes());
+
+            Checksum::compute(&pseudo_hdr_bytes)
+        }
+        ValidL3::Ipv6(v6) => {
+            let mut pseudo_hdr_bytes = [0u8; 40];
+            pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().as_ref());
+            pseudo_hdr_bytes[16..32]
+                .copy_from_slice(&v6.destination().as_ref());
+            pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
+            let ulp_len = v6.payload_len() as u32;
+            pseudo_hdr_bytes[32..36].copy_from_slice(&ulp_len.to_be_bytes());
+
+            Checksum::compute(&pseudo_hdr_bytes)
+        }
+    }
+}
+
 /// The type state of a packet that has been initialized and allocated, but
 /// about which nothing else is known besides the length.
 #[derive(Debug)]
@@ -1815,11 +1955,27 @@ pub struct Parsed2<T: Read> {
     len: usize,
     meta: Box<PacketHeaders<T>>,
     flow: InnerFlowId,
-    body_csum: Memoised<Option<Checksum>>,
+    body_csum: Option<Checksum>,
     l4_hash: Memoised<u32>,
     body_modified: bool,
     inner_csum_dirty: bool,
 }
+
+pub struct ParsedStage1<T: Read, M: LightweightMeta<T::Chunk>> {
+    len: usize,
+    // This type is... pretty fat.
+    // But we need to hang onto this to allow hairpins/body txms/ARP
+    // to function.
+    meta: IngotParsed<M, T>,
+    // REMOVED:
+    // flow: InnerFlowId, // (can be computed out)
+    // body_csum: Option<Checksum>, // (can be computed based on header class)
+    // l4_hash: Option<NonZeroU32>, // Should be stored in emitspec.
+}
+
+impl<T: Read, M: LightweightMeta<T::Chunk>> PacketState for ParsedStage1<T, M> {}
+
+impl<T: Read, M: LightweightMeta<T::Chunk>> ParsedStage1<T, M> {}
 
 type Quack = Parsed2<MsgBlkIterMut<'static>>;
 
@@ -1830,11 +1986,12 @@ pub type PacketHeaders2<'a> = PacketHeaders<MsgBlkIterMut<'a>>;
 
 pub type InitMblk<'a> = Initialized2<MsgBlkIterMut<'a>>;
 pub type ParsedMblk<'a> = Parsed2<MsgBlkIterMut<'a>>;
+pub type LightParsedMblk<'a, M> = ParsedStage1<MsgBlkIterMut<'a>, M>;
 
 #[inline]
-fn csum_minus_hdr<V: ByteSlice>(ulp: &Ulp<V>) -> Option<Checksum> {
+fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
     match ulp {
-        Ulp::IcmpV4(icmp) => {
+        ValidUlp::IcmpV4(icmp) => {
             if icmp.checksum() == 0 {
                 return None;
             }
@@ -1848,7 +2005,7 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &Ulp<V>) -> Option<Checksum> {
 
             Some(csum)
         }
-        Ulp::IcmpV6(icmp) => {
+        ValidUlp::IcmpV6(icmp) => {
             if icmp.checksum() == 0 {
                 return None;
             }
@@ -1862,7 +2019,7 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &Ulp<V>) -> Option<Checksum> {
 
             Some(csum)
         }
-        Ulp::Tcp(tcp) => {
+        ValidUlp::Tcp(tcp) => {
             if tcp.checksum() == 0 {
                 return None;
             }
@@ -1871,25 +2028,21 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &Ulp<V>) -> Option<Checksum> {
                 tcp.checksum().to_be_bytes(),
             ));
 
-            let TcpPacket::Raw(t) = tcp else {
-                panic!("hmm... maybe one day.")
-            };
-
-            let b = t.0.as_bytes();
+            let b = tcp.0.as_bytes();
 
             csum.sub_bytes(&b[0..16]);
             csum.sub_bytes(&b[18..]);
 
             // TODO: bad bound?
-            // csum.sub_bytes(t.1.as_ref());
-            csum.sub_bytes(match &t.1 {
+            // csum.sub_bytes(tcp.1.as_ref());
+            csum.sub_bytes(match &tcp.1 {
                 ingot::types::Packet::Repr(v) => &v[..],
                 ingot::types::Packet::Raw(v) => &v[..],
             });
 
             Some(csum)
         }
-        Ulp::Udp(udp) => {
+        ValidUlp::Udp(udp) => {
             if udp.checksum() == 0 {
                 return None;
             }
@@ -1898,11 +2051,7 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &Ulp<V>) -> Option<Checksum> {
                 udp.checksum().to_be_bytes(),
             ));
 
-            let UdpPacket::Raw(t) = udp else {
-                panic!("hmm... maybe one day.")
-            };
-
-            let b = t.0.as_bytes();
+            let b = udp.0.as_bytes();
             csum.sub_bytes(&b[0..6]);
 
             Some(csum)
@@ -1935,7 +2084,7 @@ pub enum Emitter<T> {
 }
 
 // TODO: don't really care about pushing 'inner' reprs today.
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct OpteEmit {
     outer_eth: Option<Ethernet>,
     outer_ip: Option<L3Repr>,
@@ -1946,13 +2095,28 @@ pub struct OpteEmit {
     inner: Option<Box<OpteInnerEmit>>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct OpteInnerEmit {
     eth: Ethernet,
     l3: Option<L3Repr>,
     ulp: Option<UlpRepr>,
 }
 
+#[derive(Clone, Debug)]
+pub struct EmittestSpec {
+    pub spec: EmitterSpec,
+    pub l4_hash: u32,
+    pub rewind: u16,
+    pub ulp_len: u32,
+}
+
+#[derive(Clone, Debug)]
+pub enum EmitterSpec {
+    Fastpath(Arc<CompiledTransform>),
+    Slowpath(Box<OpteEmit>),
+}
+
+#[derive(Clone, Debug)]
 pub struct EmitSpec {
     pub rewind: u16,
     pub encapped_len: u16,

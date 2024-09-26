@@ -19,6 +19,7 @@ use super::headers::IpMod;
 use super::headers::IpPush;
 use super::headers::Transform;
 use super::headers::UlpHeaderAction;
+use super::headers::UlpMetaModify;
 use super::ingot_base::Ethernet;
 use super::ingot_base::EthernetPacket;
 use super::ingot_base::ValidEthernet;
@@ -295,7 +296,7 @@ pub struct HdrTransform {
     pub inner_ether: HeaderAction<EtherMeta, EtherMod>,
     pub inner_ip: HeaderAction<IpPush, IpMod>,
     // We don't support push/pop for inner_ulp.
-    pub inner_ulp: UlpHeaderAction<super::headers::UlpMetaModify>,
+    pub inner_ulp: UlpHeaderAction<UlpMetaModify>,
 }
 
 impl StateSummary for Vec<HdrTransform> {
@@ -308,6 +309,28 @@ impl Display for HdrTransform {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.name)
     }
+}
+
+/// Header transformations matching a simple format, amenable
+/// to fastpath compilation:
+/// * Encap is either pushed or popped in its entirety,
+/// * The inner packet is only modified, with no layers pushed or
+///   popped.
+/// * The packet action must be `Modified`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CompiledTransform {
+    pub encap: CompiledEncap,
+    pub inner_ether: Option<EtherMod>,
+    pub inner_ip: Option<IpMod>,
+    pub inner_ulp: Option<UlpMetaModify>,
+    pub checksums_dirty: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum CompiledEncap {
+    Pop,
+    // TODO: can we cache these in an Arc'd buffer?
+    Push(EtherMeta, IpPush, EncapPush),
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
