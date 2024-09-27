@@ -1243,7 +1243,7 @@ impl<N: NetworkImpl> Port<N> {
 
         let mut uft: Option<&mut FlowEntry<UftEntry<InnerFlowId>>> = match dir {
             Direction::Out => data.uft_out.get_mut(&flow_before),
-            Direction::In => data.uft_out.get_mut(&flow_before),
+            Direction::In => data.uft_in.get_mut(&flow_before),
         };
 
         enum FastPathDecision {
