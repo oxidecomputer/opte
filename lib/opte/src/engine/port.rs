@@ -12,10 +12,15 @@ use super::flow_table::Dump;
 use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
 use super::flow_table::Ttl;
+use super::geneve::GENEVE_PORT;
 use super::headers::EncapPush;
 use super::headers::HeaderAction;
 use super::headers::IpPush;
 use super::headers::UlpHeaderAction;
+use super::ingot_base::Ethernet;
+use super::ingot_base::Ipv4;
+use super::ingot_base::Ipv6;
+use super::ingot_base::L3Repr;
 use super::ingot_packet::MsgBlk;
 use super::ingot_packet::MsgBlkIterMut;
 use super::ingot_packet::Packet2;
@@ -85,7 +90,11 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::SeqCst;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
+use ingot::geneve::Geneve;
+use ingot::types::Emit;
+use ingot::types::Header;
 use ingot::types::Read;
+use ingot::udp::Udp;
 use kstat_macro::KStatProvider;
 use opte_api::Direction;
 use opte_api::MacAddr;
@@ -2049,8 +2058,74 @@ impl Transforms {
 
             if still_permissable {
                 let encap = match (outer_ether, outer_ip, outer_encap) {
-                    (Some(eth), Some(ip), Some(enc)) => {
-                        Some(CompiledEncap::Push(eth, ip, enc))
+                    (Some(eth), Some(ip), Some(encap)) => {
+                        let mut encap_repr = match encap {
+                            EncapPush::Geneve(g) => (
+                                Udp {
+                                    source: g.entropy,
+                                    destination: GENEVE_PORT,
+                                    ..Default::default()
+                                },
+                                Geneve { vni: g.vni, ..Default::default() },
+                            ),
+                        };
+
+                        let eth_repr = Ethernet {
+                            destination: eth.dst.bytes().into(),
+                            source: eth.src.bytes().into(),
+                            ethertype: ingot::ethernet::Ethertype(
+                                eth.ether_type.into(),
+                            ),
+                        };
+                        let (ip_repr, l3_extra_bytes, ip_len_offset) = match ip
+                        {
+                            IpPush::Ip4(v4) => (
+                                L3Repr::Ipv4(Ipv4 {
+                                    protocol: ingot::ip::IpProtocol(
+                                        v4.proto.into(),
+                                    ),
+                                    source: v4.src,
+                                    destination: v4.dst,
+                                    total_len: 20,
+                                    ..Default::default()
+                                }),
+                                20,
+                                2,
+                            ),
+                            IpPush::Ip6(v6) => (
+                                L3Repr::Ipv6(Ipv6 {
+                                    next_header: ingot::ip::IpProtocol(
+                                        v6.proto.into(),
+                                    ),
+                                    source: v6.src,
+                                    destination: v6.dst,
+                                    payload_len: 0,
+                                    ..Default::default()
+                                }),
+                                0,
+                                4,
+                            ),
+                        };
+
+                        let encap_sz = encap_repr.packet_length();
+                        let l3_len_offset =
+                            eth_repr.packet_length() + ip_len_offset;
+                        let l4_len_offset = eth_repr.packet_length()
+                            + ip_repr.packet_length()
+                            + 4;
+
+                        let bytes = (eth_repr, ip_repr, encap_repr).emit_vec();
+
+                        Some(CompiledEncap::Push {
+                            encap,
+                            eth,
+                            ip,
+                            bytes,
+                            l3_len_offset,
+                            l3_extra_bytes,
+                            l4_len_offset,
+                            encap_sz,
+                        })
                     }
                     (None, None, None) => Some(CompiledEncap::Pop),
                     _ => None,

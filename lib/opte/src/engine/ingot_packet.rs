@@ -478,6 +478,30 @@ pub struct MsgBlk {
     pub inner: NonNull<mblk_t>,
 }
 
+impl Deref for MsgBlk {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        unsafe {
+            let self_ref = self.inner.as_ref();
+            let rptr = self_ref.b_rptr;
+            let len = self_ref.b_wptr.offset_from(rptr) as usize;
+            slice::from_raw_parts(rptr, len)
+        }
+    }
+}
+
+impl DerefMut for MsgBlk {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe {
+            let self_ref = self.inner.as_mut();
+            let rptr = self_ref.b_rptr;
+            let len = self_ref.b_wptr.offset_from(rptr) as usize;
+            slice::from_raw_parts_mut(rptr, len)
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct MsgBlkNode(mblk_t);
 
@@ -2336,66 +2360,9 @@ impl EmittestSpec {
         }
 
         match &mut self.spec {
-            EmitterSpec::Fastpath(push_spec) => match push_spec.encap {
-                CompiledEncap::Pop => pkt,
-                CompiledEncap::Push(eth, ip, encap) => {
-                    // ... why am I not just pre-making these guys?
-                    let mut encap = match encap {
-                        EncapPush::Geneve(g) => (
-                            Udp {
-                                source: g.entropy,
-                                destination: GENEVE_PORT,
-                                ..Default::default()
-                            },
-                            Geneve { vni: g.vni, ..Default::default() },
-                        ),
-                    };
-
-                    let encap_len = encap.packet_length() as u16;
-                    encap.0.length = (self.ulp_len as u16) + encap_len;
-
-                    let eth = Ethernet {
-                        destination: eth.dst.bytes().into(),
-                        source: eth.src.bytes().into(),
-                        ethertype: ingot::ethernet::Ethertype(
-                            eth.ether_type.into(),
-                        ),
-                    };
-                    let ip = match ip {
-                        IpPush::Ip4(v4) => L3Repr::Ipv4(Ipv4 {
-                            protocol: ingot::ip::IpProtocol(v4.proto.into()),
-                            source: v4.src,
-                            destination: v4.dst,
-                            total_len: 20 + encap.0.length,
-                            ..Default::default()
-                        }),
-                        IpPush::Ip6(v6) => L3Repr::Ipv6(Ipv6 {
-                            next_header: ingot::ip::IpProtocol(v6.proto.into()),
-                            source: v6.src,
-                            destination: v6.dst,
-                            payload_len: encap.0.length,
-                            ..Default::default()
-                        }),
-                    };
-
-                    // TODO: actually use space in the front pkt.
-                    let needed_alloc = eth.packet_length()
-                        + ip.packet_length()
-                        + (encap_len as usize);
-                    let mut new_mblk = MsgBlk::new_ethernet(needed_alloc);
-                    unsafe {
-                        new_mblk.write(needed_alloc, |v| {
-                            (eth, ip, encap)
-                                .emit_uninit(v)
-                                .expect("just allocated the necessary n bytes");
-                        })
-                    }
-
-                    new_mblk.extend_if_one(pkt);
-
-                    new_mblk
-                }
-            },
+            EmitterSpec::Fastpath(push_spec) => {
+                push_spec.encap.prepend(pkt, self.ulp_len as usize)
+            }
             EmitterSpec::Slowpath(push_spec) => {
                 // TODO:
                 //  - remove all zero-length nodes.
@@ -2492,7 +2459,9 @@ impl EmittestSpec {
     pub fn outer_encap_vni(&self) -> Option<Vni> {
         match &self.spec {
             EmitterSpec::Fastpath(c) => match &c.encap {
-                CompiledEncap::Push(_, _, EncapPush::Geneve(g)) => Some(g.vni),
+                CompiledEncap::Push { encap: EncapPush::Geneve(g), .. } => {
+                    Some(g.vni)
+                }
                 _ => None,
             },
             EmitterSpec::Slowpath(s) => match &s.outer_encap {
@@ -2506,7 +2475,7 @@ impl EmittestSpec {
     pub fn outer_ip6_addrs(&self) -> Option<(Ipv6Addr, Ipv6Addr)> {
         match &self.spec {
             EmitterSpec::Fastpath(c) => match &c.encap {
-                CompiledEncap::Push(_, IpPush::Ip6(v6), _) => {
+                CompiledEncap::Push { ip: IpPush::Ip6(v6), .. } => {
                     Some((v6.src, v6.dst))
                 }
                 _ => None,

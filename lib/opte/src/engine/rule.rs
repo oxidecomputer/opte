@@ -49,6 +49,7 @@ use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
+use core::mem::MaybeUninit;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::types::DirectPacket;
@@ -330,7 +331,81 @@ pub struct CompiledTransform {
 pub enum CompiledEncap {
     Pop,
     // TODO: can we cache these in an Arc'd buffer?
-    Push(EtherMeta, IpPush, EncapPush),
+    Push {
+        eth: EtherMeta,
+        ip: IpPush,
+        encap: EncapPush,
+        bytes: Vec<u8>,
+        l3_len_offset: usize,
+        l3_extra_bytes: usize,
+        l4_len_offset: usize,
+        encap_sz: usize,
+    },
+}
+
+impl CompiledEncap {
+    #[inline]
+    pub fn prepend(&self, mut pkt: MsgBlk, ulp_len: usize) -> MsgBlk {
+        let Self::Push {
+            ref bytes,
+            l3_len_offset,
+            l3_extra_bytes,
+            l4_len_offset,
+            encap_sz,
+            ..
+        } = self
+        else {
+            return pkt;
+        };
+
+        let mut prepend = if pkt.headroom() < bytes.len() {
+            let mut pkt = MsgBlk::new_ethernet(bytes.len());
+            pkt.pop_all();
+            Some(pkt)
+        } else {
+            None
+        };
+
+        let target = if let Some(prepend) = prepend.as_mut() {
+            prepend
+        } else {
+            &mut pkt
+        };
+
+        unsafe {
+            target.write_front(bytes.len(), |v| {
+                // feat(maybe_uninit_write_slice) -> copy_from_slice
+                // is unstable.
+                let uninit_src: &[MaybeUninit<u8>] =
+                    core::mem::transmute(bytes.as_slice());
+                v.copy_from_slice(uninit_src);
+            });
+        }
+
+        let l4_len = ulp_len + encap_sz;
+        let l3_len = l4_len + l3_extra_bytes;
+
+        let l3_len_slot: &mut [u8; core::mem::size_of::<u16>()] = (&mut target
+            [*l3_len_offset..l3_len_offset + core::mem::size_of::<u16>()])
+            .try_into()
+            .expect("exact no bytes");
+
+        *l3_len_slot = (l3_len as u16).to_be_bytes();
+
+        let l4_len_slot: &mut [u8; core::mem::size_of::<u16>()] = (&mut target
+            [*l4_len_offset..l4_len_offset + core::mem::size_of::<u16>()])
+            .try_into()
+            .expect("exact no bytes");
+
+        *l4_len_slot = (l4_len as u16).to_be_bytes();
+
+        if let Some(mut prepend) = prepend {
+            prepend.extend_if_one(pkt);
+            prepend
+        } else {
+            pkt
+        }
+    }
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
