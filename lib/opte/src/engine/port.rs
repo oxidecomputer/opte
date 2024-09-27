@@ -1195,6 +1195,7 @@ impl<N: NetworkImpl> Port<N> {
     /// # States
     ///
     /// This command is valid only for [`PortState::Running`].
+    #[inline]
     pub fn process<'a, M>(
         &self,
         dir: Direction,
@@ -2163,7 +2164,7 @@ impl<N: NetworkImpl> Port<N> {
                     )
                 );
             } else {
-                let (..) = (dir, flow_before, flow_after, epoch, pkt, res);
+                let (..) = (dir, flow_before, flow_after, epoch, /*pkt,*/ res);
             }
         }
     }

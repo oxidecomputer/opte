@@ -21,6 +21,7 @@ use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ingot_packet::NoEncap;
 use opte::engine::ingot_packet::OpteMeta;
 use opte::engine::ingot_packet::OpteParsed;
+use opte::engine::ingot_packet::OpteParsed2;
 use opte::engine::ingot_packet::Packet2;
 use opte::engine::ingot_packet::Parsed2;
 use opte::engine::ingot_packet::ValidGeneveOverV6;
@@ -143,23 +144,21 @@ impl NetworkParser for VpcParser {
     fn parse_outbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError>
+    ) -> Result<OpteParsed2<T, Self::OutMeta<T::Chunk>>, ParseError>
     where
         T::Chunk: opte::ingot::types::IntoBufPointer<'a>,
     {
-        let v = NoEncap::parse_read(rdr);
-        Ok(OpteMeta::convert_ingot(v?))
+        Ok(ValidNoEncap::parse_read(rdr)?)
     }
 
     #[inline]
     fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError>
+    ) -> Result<OpteParsed2<T, Self::InMeta<T::Chunk>>, ParseError>
     where
         T::Chunk: opte::ingot::types::IntoBufPointer<'a>,
     {
-        let v = GeneveOverV6::parse_read(rdr);
-        Ok(OpteMeta::convert_ingot(v?))
+        Ok(ValidGeneveOverV6::parse_read(rdr)?)
     }
 }

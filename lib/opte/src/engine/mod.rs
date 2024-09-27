@@ -379,7 +379,6 @@ impl NetworkParser for GenericUlp {
     where
         T::Chunk: ingot::types::IntoBufPointer<'a>,
     {
-        // self.parse_ulp(rdr)
         Ok(ValidNoEncap::parse_read(rdr)?)
     }
 
@@ -390,7 +389,6 @@ impl NetworkParser for GenericUlp {
     where
         T::Chunk: ingot::types::IntoBufPointer<'a>,
     {
-        // self.parse_ulp(rdr)
         Ok(ValidNoEncap::parse_read(rdr)?)
     }
 }

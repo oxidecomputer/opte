@@ -1409,11 +1409,16 @@ unsafe extern "C" fn xde_mc_unicst(
     0
 }
 
-fn guest_loopback_probe(pkt: &Packet2<ParsedMblk>, src: &XdeDev, dst: &XdeDev) {
+fn guest_loopback_probe(
+    mblk_addr: uintptr_t,
+    flow: &InnerFlowId,
+    src: &XdeDev,
+    dst: &XdeDev,
+) {
     unsafe {
         __dtrace_probe_guest__loopback(
-            pkt.mblk_addr(),
-            pkt.flow(),
+            mblk_addr,
+            flow,
             src.port.name_cstr().as_ptr() as uintptr_t,
             dst.port.name_cstr().as_ptr() as uintptr_t,
         )
@@ -1424,37 +1429,53 @@ fn guest_loopback_probe(pkt: &Packet2<ParsedMblk>, src: &XdeDev, dst: &XdeDev) {
 fn guest_loopback<'a>(
     src_dev: &XdeDev,
     devs: &'a KRwLockReadGuard<Vec<Box<XdeDev>>>,
-    pkt: &mut Packet2<ParsedMblk>,
+    mut pkt: MsgBlk,
     vni: Vni,
-) -> Option<&'a Box<XdeDev>> {
+) {
     use Direction::*;
-    let ether_dst = pkt.meta().inner_ether().destination();
-    // let devs = unsafe { xde_devs.read() };
+
+    let mblk_addr = pkt.mblk_addr();
+    let parsed_pkt = Packet2::new(pkt.iter_mut());
+
+    // TODO: Rework currently requires a reparse on loopback to account for UFT fastpath.
+
+    let mut parsed_pkt = match parsed_pkt.parse_inbound(VpcParser {}) {
+        Ok(pkt) => pkt,
+        Err(e) => {
+            opte::engine::dbg!("Loopback bad packet: {:?}", e);
+            bad_packet_parse_probe(None, Direction::In, mblk_addr, &e.into());
+
+            return;
+        }
+    };
+
+    let flow = parsed_pkt.flow();
+
+    let ether_dst = parsed_pkt.meta().inner_eth.destination();
     let maybe_dest_dev =
         devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst);
 
     match maybe_dest_dev {
         Some(dest_dev) => {
-            guest_loopback_probe(&pkt, src_dev, dest_dev);
+            guest_loopback_probe(mblk_addr, &flow, src_dev, dest_dev);
 
             // We have found a matching Port on this host; "loop back"
             // the packet into the inbound processing path of the
             // destination Port.
-            match dest_dev.port.process(In, pkt, ActionMeta::new()) {
-                Ok(ProcessResult::Modified) => {
-                    // unsafe {
-                    //     mac::mac_rx(
-                    //         dest_dev.mh,
-                    //         ptr::null_mut(),
-                    //         pkt.unwrap_mblk(),
-                    //     )
-                    // };
-                    Some(dest_dev)
+            match dest_dev.port.process(In, parsed_pkt) {
+                Ok(ProcessResult::Modified(mut emit_spec)) => {
+                    let pkt = emit_spec.apply(pkt);
+                    unsafe {
+                        mac::mac_rx(
+                            dest_dev.mh,
+                            ptr::null_mut(),
+                            pkt.unwrap_mblk(),
+                        )
+                    };
                 }
 
                 Ok(ProcessResult::Drop { reason }) => {
                     opte::engine::dbg!("loopback rx drop: {:?}", reason);
-                    None
                 }
 
                 Ok(ProcessResult::Hairpin(_hppkt)) => {
@@ -1462,19 +1483,17 @@ fn guest_loopback<'a>(
                     // inbound packet to generate a hairpin response
                     // from the destination port.
                     opte::engine::dbg!("unexpected loopback rx hairpin");
-                    None
                 }
 
                 Ok(ProcessResult::Bypass) => {
                     opte::engine::dbg!("loopback rx bypass");
-                    // unsafe {
-                    //     mac::mac_rx(
-                    //         dest_dev.mh,
-                    //         ptr::null_mut(),
-                    //         pkt.unwrap_mblk(),
-                    //     )
-                    // };
-                    Some(dest_dev)
+                    unsafe {
+                        mac::mac_rx(
+                            dest_dev.mh,
+                            ptr::null_mut(),
+                            pkt.unwrap_mblk(),
+                        )
+                    };
                 }
 
                 Err(e) => {
@@ -1484,7 +1503,6 @@ fn guest_loopback<'a>(
                         dest_dev.port.name(),
                         e
                     );
-                    None
                 }
             }
         }
@@ -1496,7 +1514,6 @@ fn guest_loopback<'a>(
                 vni.as_u32(),
                 ether_dst
             );
-            None
         }
     }
 }
@@ -1554,7 +1571,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
     let parsed_pkt = Packet2::new(pkt.iter_mut());
-    let mut parsed_pkt = match parsed_pkt.parse(Direction::Out, parser) {
+    let mut parsed_pkt = match parsed_pkt.parse_outbound(parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.
@@ -1719,16 +1736,14 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     // The port processing code will fire a probe that describes what
     // action was taken -- there should be no need to add probes or
     // prints here.
-    let res = port.process(Direction::Out, &mut parsed_pkt, ActionMeta::new());
+    let res = port.process(Direction::Out, parsed_pkt);
 
     match res {
-        Ok(ProcessResult::Modified) => {
-            let meta = parsed_pkt.meta();
-
+        Ok(ProcessResult::Modified(mut emit_spec)) => {
             // If the outer IPv6 destination is the same as the
             // source, then we need to loop the packet inbound to the
             // guest on this same host.
-            let (ip6_src, ip6_dst) = match meta.outer_ip6_addrs() {
+            let (ip6_src, ip6_dst) = match emit_spec.outer_ip6_addrs() {
                 Some(v) => v,
                 None => {
                     // XXX add SDT probe
@@ -1738,8 +1753,8 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 }
             };
 
-            let vni = match meta.outer_encap_geneve_vni_and_origin() {
-                Some((vni, _)) => vni,
+            let vni = match emit_spec.outer_encap_vni() {
+                Some(vni) => vni,
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
@@ -1751,33 +1766,16 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // what we WANT to do is pass in the parsed pkt, handle the
             // emitspec in the same place, then send elsewhere.
             let devs = unsafe { xde_devs.read() };
-            let local_port = if ip6_dst == ip6_src {
-                let Some(valid_local) =
-                    guest_loopback(src_dev, &devs, &mut parsed_pkt, vni)
-                else {
-                    return ptr::null_mut();
-                };
 
-                Some(valid_local)
-            } else {
-                None
-            };
-
-            let l4_hash = parsed_pkt.l4_hash();
-            let mut emit_spec = parsed_pkt.emit_spec();
+            let l4_hash = emit_spec.l4_hash;
 
             let out_pkt = emit_spec.apply(pkt);
 
-            if let Some(local_port) = local_port {
-                unsafe {
-                    mac::mac_rx(
-                        local_port.mh,
-                        ptr::null_mut(),
-                        out_pkt.unwrap_mblk(),
-                    )
-                };
+            if ip6_src == ip6_dst {
+                guest_loopback(src_dev, &devs, out_pkt, vni);
                 return ptr::null_mut();
             }
+
             drop(devs);
 
             // Currently the overlay layer leaves the outer frame
@@ -1814,23 +1812,18 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         }
 
         Ok(ProcessResult::Drop { .. }) => {
-            drop(parsed_pkt);
             return ptr::null_mut();
         }
 
         Ok(ProcessResult::Hairpin(hpkt)) => {
-            drop(parsed_pkt);
             mac::mac_rx(src_dev.mh, ptr::null_mut(), hpkt.unwrap_mblk());
         }
 
         Ok(ProcessResult::Bypass) => {
-            drop(parsed_pkt);
             stream.tx_drop_on_no_desc2(pkt, hint, MacTxFlags::empty());
         }
 
-        Err(_) => {
-            drop(parsed_pkt);
-        }
+        Err(_) => {}
     }
 
     // On return the Packet is dropped and its underlying mblk
@@ -2011,7 +2004,7 @@ unsafe fn xde_rx_one(
     // is to be delivered.
     let parser = VpcParser {};
     // let mblk_addr = parsed_pkt.mblk_addr();
-    let mut parsed_pkt = match parsed_pkt.parse(Direction::In, parser) {
+    let mut parsed_pkt = match parsed_pkt.parse_inbound(parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.
@@ -2033,22 +2026,10 @@ unsafe fn xde_rx_one(
 
     // Determine where to send packet based on Geneve VNI and
     // destination MAC address.
-    // Todo: this, but better.
-    let vni = match meta.outer_encap_geneve_vni_and_origin() {
-        Some((vni, _)) => vni,
-        None => {
-            // TODO add stat
-            let msg = c"no geneve header, dropping";
-            bad_packet_probe(None, Direction::In, mblk_addr, msg);
-            opte::engine::dbg!("no geneve header, dropping");
-            return;
-        }
-    };
+    let vni = meta.outer_encap.vni();
 
-    let ether_dst = meta.inner_ether().destination();
+    let ether_dst = meta.inner_eth.destination();
 
-    // let vni = geneve.vni;
-    // let ether_dst = meta.inner.ether.dst;
     let Some(dev) =
         devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
     else {
@@ -2106,11 +2087,13 @@ unsafe fn xde_rx_one(
     // }
     // END   THIN_PROCESS EXPERIMENT
 
-    let res = port.process(Direction::In, &mut parsed_pkt, ActionMeta::new());
-    let mut emit_spec = parsed_pkt.emit_spec();
+    let res = port.process(Direction::In, parsed_pkt);
 
     match res {
-        Ok(ProcessResult::Modified | ProcessResult::Bypass) => {
+        Ok(ProcessResult::Bypass) => {
+            mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
+        }
+        Ok(ProcessResult::Modified(mut emit_spec)) => {
             let npkt = emit_spec.apply(pkt);
 
             mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk());

@@ -48,6 +48,7 @@ use super::packet::Packet;
 use super::packet::PacketState;
 use super::packet::ParseError;
 use super::packet::FLOW_ID_DEFAULT;
+use super::rule::CompiledEncap;
 use super::rule::CompiledTransform;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
@@ -194,7 +195,7 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidNoEncap<V> {
         todo!()
     }
 
-    // FIXME: identical to
+    // FIXME: identical to Geneve.
     fn compute_body_csum(&self) -> Option<OpteCsum> {
         let use_pseudo = if let Some(v) = &self.inner_ulp {
             !matches!(v, ValidUlp::IcmpV4(_))
@@ -223,7 +224,7 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidNoEncap<V> {
     }
 
     fn encap_len(&self) -> u16 {
-        todo!()
+        0
     }
 
     fn update_ulp_checksums(&mut self, body_csum: OpteCsum) {
@@ -268,11 +269,33 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidGeneveOverV6<V> {
     }
 
     fn compute_body_csum(&self) -> Option<OpteCsum> {
-        todo!()
+        let use_pseudo = !matches!(self.inner_ulp, ValidUlp::IcmpV4(_));
+
+        let pseudo_csum = match self.inner_eth.ethertype() {
+            Ethertype::IPV4 | Ethertype::IPV6 => {
+                Some(l3_pseudo_header_v(&self.inner_l3))
+            }
+            // Includes ARP.
+            _ => return None,
+        };
+
+        let Some(pseudo_csum) = pseudo_csum else {
+            return None;
+        };
+
+        csum_minus_hdr(&self.inner_ulp).map(|mut v| {
+            if use_pseudo {
+                v -= pseudo_csum;
+            }
+            v
+        })
     }
 
     fn encap_len(&self) -> u16 {
-        todo!()
+        (self.outer_eth.packet_length()
+            + self.outer_v6.packet_length()
+            + self.outer_udp.packet_length()
+            + self.outer_encap.packet_length()) as u16
     }
 
     fn update_ulp_checksums(&mut self, body_csum: OpteCsum) {
@@ -2108,6 +2131,165 @@ pub struct EmittestSpec {
     pub l4_hash: u32,
     pub rewind: u16,
     pub ulp_len: u32,
+}
+
+impl EmittestSpec {
+    #[inline]
+    pub fn apply(&mut self, mut pkt: MsgBlk) -> MsgBlk {
+        // Rewind
+        {
+            let mut slots = heapless::Vec::<&mut MsgBlkNode, 6>::new();
+            let mut to_rewind = self.rewind as usize;
+
+            if to_rewind > 0 {
+                let mut reader = pkt.iter_mut();
+                while to_rewind != 0 {
+                    let this = reader.next();
+                    let Some(node) = this else {
+                        to_rewind = 0;
+                        break;
+                    };
+
+                    let has = node.len();
+                    let droppable = to_rewind.min(has);
+                    node.drop_front_bytes(droppable);
+                    to_rewind -= droppable;
+
+                    slots.push(node).unwrap();
+                }
+            }
+
+            // TODO: put available layers into said slots?
+        }
+
+        match &mut self.spec {
+            EmitterSpec::Fastpath(push_spec) => match push_spec.encap {
+                CompiledEncap::Pop => pkt,
+                CompiledEncap::Push(eth, ip, encap) => {
+                    todo!()
+                }
+            },
+            EmitterSpec::Slowpath(push_spec) => {
+                // TODO:
+                //  - remove all zero-length nodes.
+                //  - actually push in to existing slots we rewound past if needed.
+                //  - actually support pushing dirty segments apart from the encap.
+
+                let needed_push = push_spec.outer_eth.packet_length()
+                    + push_spec.outer_ip.packet_length()
+                    + push_spec.outer_encap.packet_length();
+                let needed_alloc = needed_push; //.saturating_sub(pkt.headroom());
+                let mut space_in_front = needed_push - needed_alloc;
+
+                let mut prepend = if needed_alloc > 0 {
+                    let mut new_mblk = MsgBlk::new_ethernet(needed_alloc);
+                    new_mblk.pop_all();
+                    Some(new_mblk)
+                } else {
+                    None
+                };
+
+                // NOT NEEDED TODAY.
+                if let Some(inner_new) = &push_spec.inner {
+                    todo!()
+                }
+
+                if let Some(outer_encap) = &push_spec.outer_encap {
+                    let a = SizeHoldingEncap {
+                        encapped_len: self.ulp_len as u16,
+                        meta: &outer_encap,
+                    };
+
+                    let l = a.packet_length();
+
+                    let target = if prepend.is_none() {
+                        space_in_front -= l;
+                        &mut pkt
+                    } else {
+                        space_in_front = 0;
+                        prepend.as_mut().unwrap()
+                    };
+
+                    unsafe {
+                        target.write_front(l, |v| {
+                            a.emit_uninit(v).unwrap();
+                        })
+                    }
+                }
+
+                if let Some(outer_ip) = &push_spec.outer_ip {
+                    let l = outer_ip.packet_length();
+                    let target = if prepend.is_none() {
+                        space_in_front -= l;
+                        &mut pkt
+                    } else {
+                        space_in_front = 0;
+                        prepend.as_mut().unwrap()
+                    };
+
+                    unsafe {
+                        target.write_front(l, |v| {
+                            outer_ip.emit_uninit(v).unwrap();
+                        })
+                    }
+                }
+
+                if let Some(outer_eth) = &push_spec.outer_eth {
+                    let l = outer_eth.packet_length();
+                    let target = if prepend.is_none() {
+                        space_in_front -= l;
+                        &mut pkt
+                    } else {
+                        space_in_front = 0;
+                        prepend.as_mut().unwrap()
+                    };
+
+                    unsafe {
+                        target.write_front(l, |v| {
+                            outer_eth.emit_uninit(v).unwrap();
+                        })
+                    }
+                }
+
+                if let Some(mut prepend) = prepend {
+                    prepend.extend_if_one(pkt);
+                    prepend
+                } else {
+                    pkt
+                }
+            }
+        }
+    }
+
+    #[inline]
+    pub fn outer_encap_vni(&self) -> Option<Vni> {
+        match &self.spec {
+            EmitterSpec::Fastpath(c) => match &c.encap {
+                CompiledEncap::Push(_, _, EncapPush::Geneve(g)) => Some(g.vni),
+                _ => None,
+            },
+            EmitterSpec::Slowpath(s) => match &s.outer_encap {
+                Some(EncapMeta::Geneve(g)) => Some(g.vni),
+                _ => None,
+            },
+        }
+    }
+
+    #[inline]
+    pub fn outer_ip6_addrs(&self) -> Option<(Ipv6Addr, Ipv6Addr)> {
+        match &self.spec {
+            EmitterSpec::Fastpath(c) => match &c.encap {
+                CompiledEncap::Push(_, IpPush::Ip6(v6), _) => {
+                    Some((v6.src, v6.dst))
+                }
+                _ => None,
+            },
+            EmitterSpec::Slowpath(s) => match &s.outer_ip {
+                Some(L3Repr::Ipv6(v6)) => Some((v6.source, v6.destination)),
+                _ => None,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
