@@ -31,9 +31,10 @@ pub use opte_api::Ipv4PrefixLen;
 pub use opte_api::Protocol;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -229,7 +230,7 @@ impl Ipv4Meta {
         // The raw header relies on the slice being the exactly length.
         debug_assert_eq!(dst.len(), Ipv4Hdr::BASE_SIZE);
         let mut raw = Ipv4HdrRaw::new_mut(dst).unwrap();
-        raw.write(Ipv4HdrRaw::from(self));
+        Ref::write(&mut raw, Ipv4HdrRaw::from(self));
     }
 
     /// Return the length of the header needed to emit the metadata.
@@ -261,7 +262,7 @@ impl Ipv4Meta {
 
 impl<'a> From<&Ipv4Hdr<'a>> for Ipv4Meta {
     fn from(ip4: &Ipv4Hdr) -> Self {
-        let raw = ip4.bytes.read();
+        let raw = &ip4.bytes;
 
         let hdr_len = u16::from((raw.ver_hdr_len & IPV4_HDR_LEN_MASK) * 4);
 
@@ -500,7 +501,9 @@ impl Ipv4HdrError {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct Ipv4HdrRaw {
     pub ver_hdr_len: u8,
     pub dscp_ecn: u8,
@@ -518,7 +521,7 @@ impl<'a> RawHeader<'a> for Ipv4HdrRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

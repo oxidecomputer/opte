@@ -10,15 +10,14 @@ use super::checksum::HeaderChecksum;
 use super::ether::EtherHdr;
 use super::ether::EtherMeta;
 use super::ether::EtherType;
+use super::ingot_packet::MsgBlk;
+use super::ingot_packet::PacketHeaders2;
 use super::ip4::Ipv4Addr;
 use super::ip4::Ipv4Hdr;
 use super::ip4::Ipv4Meta;
 use super::ip4::Protocol;
 use super::ip6::UlpCsumOpt;
 use super::packet::Packet;
-use super::packet::PacketMeta;
-use super::packet::PacketRead;
-use super::packet::PacketReader;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;
@@ -482,12 +481,9 @@ impl HairpinAction for DhcpAction {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(
-        &self,
-        _meta: &PacketMeta,
-        rdr: &mut PacketReader,
-    ) -> GenPacketResult {
-        let body = rdr.copy_remaining();
+    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
+        // TODO: fold reader access into PacketHeaders2
+        let body = meta.copy_remaining();
         let client_pkt = DhcpPacket::new_checked(&body)?;
         let client_dhcp = DhcpRepr::parse(&client_pkt)?;
         let mt = MessageType::from(self.reply_type);
@@ -617,8 +613,9 @@ impl HairpinAction for DhcpAction {
 
         // XXX: Would be preferable to write in here directly rather than
         //      allocing tmp.
-        let total_len =
-            EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + UdpHdr::SIZE + tmp.len();
+        let hdr_len = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + UdpHdr::SIZE;
+        let total_len = hdr_len + tmp.len();
+
         let mut pkt = Packet::alloc_and_expand(total_len);
         let mut wtr = pkt.seg0_wtr();
         eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
@@ -629,7 +626,11 @@ impl HairpinAction for DhcpAction {
         udp.csum = HeaderChecksum::from(csum).bytes();
         udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
         wtr.write(&tmp).unwrap();
-        Ok(AllowOrDeny::Allow(pkt))
+
+        Ok(AllowOrDeny::Allow(
+            unsafe { MsgBlk::wrap_mblk(pkt.unwrap_mblk()) }
+                .expect("known valid"),
+        ))
     }
 }
 

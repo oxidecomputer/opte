@@ -21,6 +21,7 @@ use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::uintptr_t;
 use illumos_sys_hdrs::ENOENT;
+use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
 pub use sys::*;
@@ -214,6 +215,32 @@ impl DlsStream {
         let mut raw_flags = flags.bits();
         raw_flags |= MAC_DROP_ON_NO_DESC;
         unsafe {
+            str_mdata_fastpath_put(
+                inner.dld_str.as_ptr(),
+                pkt.unwrap_mblk(),
+                hint,
+                raw_flags,
+            )
+        };
+    }
+
+    pub fn tx_drop_on_no_desc2(
+        &self,
+        pkt: MsgBlk,
+        hint: uintptr_t,
+        flags: MacTxFlags,
+    ) {
+        let Some(inner) = self.inner.as_ref() else {
+            // XXX: probably handle or signal an error here.
+            return;
+        };
+        // We must unwrap the raw `mblk_t` out of the `pkt` here,
+        // otherwise the mblk_t would be dropped at the end of this
+        // function along with `pkt`.
+        let mut raw_flags = flags.bits();
+        raw_flags |= MAC_DROP_ON_NO_DESC;
+        unsafe {
+            // mac_tx(self.mch, pkt.unwrap_mblk(), hint, raw_flags, &mut ret_mp)
             str_mdata_fastpath_put(
                 inner.dld_str.as_ptr(),
                 pkt.unwrap_mblk(),

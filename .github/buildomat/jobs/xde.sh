@@ -16,6 +16,9 @@
 #:   "=/work/test/loopback",
 #:   "=/work/xde.conf",
 #: ]
+#: access_repos = [
+#:  "oxidecomputer/ingot",
+#: ]
 #:
 #: [[publish]]
 #: series = "module"

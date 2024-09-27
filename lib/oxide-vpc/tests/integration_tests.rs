@@ -69,7 +69,7 @@ use smoltcp::wire::NdiscRouterFlags;
 use smoltcp::wire::RawHardwareAddress;
 use std::prelude::v1::*;
 use std::time::Duration;
-use zerocopy::AsBytes;
+use zerocopy::IntoBytes;
 
 const IP4_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE;
 const IP6_SZ: usize = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE;
@@ -559,7 +559,7 @@ fn guest_to_guest() {
 
     match meta.outer.encap.as_ref() {
         Some(EncapMeta::Geneve(geneve)) => {
-            assert_eq!(geneve.entropy, 7777);
+            assert_eq!(geneve.entropy, 12700);
             assert_eq!(geneve.vni, Vni::new(g1_cfg.vni).unwrap());
         }
 
@@ -776,7 +776,7 @@ fn guest_to_internet_ipv4() {
 
     match meta.outer.encap.as_ref() {
         Some(EncapMeta::Geneve(geneve)) => {
-            assert_eq!(geneve.entropy, 7777);
+            assert_eq!(geneve.entropy, 24329);
         }
 
         None => panic!("expected outer Geneve metadata"),
@@ -901,7 +901,7 @@ fn guest_to_internet_ipv6() {
 
     match meta.outer.encap.as_ref() {
         Some(EncapMeta::Geneve(geneve)) => {
-            assert_eq!(geneve.entropy, 7777);
+            assert_eq!(geneve.entropy, 63246);
         }
 
         None => panic!("expected outer Geneve metadata"),

@@ -21,9 +21,10 @@ use opte_api::Ipv4Addr;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -147,8 +148,10 @@ impl ArpEthIpv4 {
 
     pub fn emit(&self, dst: &mut [u8]) {
         debug_assert_eq!(dst.len(), ArpEthIpv4Raw::SIZE);
-        let mut raw = ArpEthIpv4Raw::new_mut(dst).unwrap();
-        raw.write(ArpEthIpv4Raw::from(self));
+        // let mut raw = ArpEthIpv4Raw::new_mut(dst).unwrap();
+        // raw.write_to();
+
+        ArpEthIpv4Raw::from(self).write_to(dst).unwrap()
     }
 
     pub fn parse<'a, 'b, R>(rdr: &'b mut R) -> Result<Self, ArpHdrError>
@@ -156,17 +159,33 @@ impl ArpEthIpv4 {
         R: PacketReadMut<'a>,
     {
         let src = rdr.slice_mut(ArpEthIpv4Raw::SIZE)?;
-        Self::try_from(&ArpEthIpv4Raw::new_mut(src)?)
+        Self::try_from(&ArpEthIpv4Raw::new(src)?)
+    }
+
+    pub fn parse_normally(rdr: &[&[u8]]) -> Result<Self, ArpHdrError> {
+        let space_in_front = rdr.get(0).map(|v| !v.is_empty());
+
+        let to_use = match space_in_front {
+            None => {
+                return Err(ArpHdrError::ReadError(ReadErr::NotEnoughBytes))
+            }
+            Some(true) => rdr.get(0),
+            Some(false) => rdr.get(1),
+        };
+
+        if let Some(to_use) = to_use {
+            Self::try_from(&ArpEthIpv4Raw::new(to_use)?)
+        } else {
+            Err(ArpHdrError::ReadError(ReadErr::NotEnoughBytes))
+        }
     }
 }
 
-impl TryFrom<&Ref<&mut [u8], ArpEthIpv4Raw>> for ArpEthIpv4 {
+impl TryFrom<&Ref<&[u8], ArpEthIpv4Raw>> for ArpEthIpv4 {
     type Error = ArpHdrError;
 
     // NOTE: This only accepts IPv4/Ethernet ARP.
-    fn try_from(
-        raw: &Ref<&mut [u8], ArpEthIpv4Raw>,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(raw: &Ref<&[u8], ArpEthIpv4Raw>) -> Result<Self, Self::Error> {
         let htype = u16::from_be_bytes(raw.htype);
 
         if htype != ARP_HTYPE_ETHERNET {
@@ -224,7 +243,9 @@ impl From<&ArpEthIpv4> for ArpEthIpv4Raw {
 }
 
 #[repr(C)]
-#[derive(AsBytes, Clone, Debug, FromBytes, FromZeroes, Unaligned)]
+#[derive(
+    IntoBytes, Clone, Debug, FromBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct ArpEthIpv4Raw {
     pub htype: [u8; 2],
     pub ptype: [u8; 2],
@@ -241,7 +262,16 @@ impl<'a> RawHeader<'a> for ArpEthIpv4Raw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
+            Some(hdr) => hdr,
+            None => return Err(ReadErr::BadLayout),
+        };
+        Ok(hdr)
+    }
+
+    fn new(src: &[u8]) -> Result<Ref<&[u8], Self>, ReadErr> {
+        debug_assert_eq!(src.len(), Self::SIZE);
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

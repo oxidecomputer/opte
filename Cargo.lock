@@ -599,7 +599,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
- "zerocopy",
+ "zerocopy 0.7.35",
 ]
 
 [[package]]
@@ -893,6 +893,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "ingot"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/ingot.git?rev=facb123e8b5c0dc08fd74c1c8f4945b82be2c91c#facb123e8b5c0dc08fd74c1c8f4945b82be2c91c"
+dependencies = [
+ "bitflags 2.6.0",
+ "ingot-macros",
+ "ingot-types",
+ "macaddr",
+ "serde",
+ "zerocopy 0.8.0-alpha.25",
+]
+
+[[package]]
+name = "ingot-macros"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/ingot.git?rev=facb123e8b5c0dc08fd74c1c8f4945b82be2c91c#facb123e8b5c0dc08fd74c1c8f4945b82be2c91c"
+dependencies = [
+ "darling",
+ "itertools 0.13.0",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 2.0.75",
+]
+
+[[package]]
+name = "ingot-types"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/ingot.git?rev=facb123e8b5c0dc08fd74c1c8f4945b82be2c91c#facb123e8b5c0dc08fd74c1c8f4945b82be2c91c"
+dependencies = [
+ "heapless",
+ "ingot-macros",
+ "macaddr",
+ "zerocopy 0.8.0-alpha.25",
+]
+
+[[package]]
 name = "ipnetwork"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1082,6 +1120,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7a70ba024b9dc04c27ea2f0c0548feb474ec5c54bba33a7f72f873a39d07b24"
 
 [[package]]
+name = "macaddr"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baee0bbc17ce759db233beb01648088061bf678383130602a298e6998eedb2d8"
+
+[[package]]
 name = "managed"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1228,12 +1272,14 @@ checksum = "b410bbe7e14ab526a0e86877eb47c6996a2bd7746f027ba551028c925390e4e9"
 name = "opte"
 version = "0.1.0"
 dependencies = [
+ "bitflags 2.6.0",
  "cfg-if",
  "crc32fast",
  "derror-macro",
  "dyn-clone",
  "heapless",
  "illumos-sys-hdrs",
+ "ingot",
  "itertools 0.13.0",
  "kstat-macro",
  "opte",
@@ -1244,7 +1290,7 @@ dependencies = [
  "tabwriter",
  "usdt",
  "version_check",
- "zerocopy",
+ "zerocopy 0.8.0-alpha.25",
 ]
 
 [[package]]
@@ -1252,6 +1298,7 @@ name = "opte-api"
 version = "0.1.0"
 dependencies = [
  "illumos-sys-hdrs",
+ "ingot",
  "ipnetwork",
  "postcard",
  "serde",
@@ -1345,7 +1392,7 @@ dependencies = [
  "smoltcp",
  "tabwriter",
  "usdt",
- "zerocopy",
+ "zerocopy 0.8.0-alpha.25",
 ]
 
 [[package]]
@@ -1514,7 +1561,7 @@ version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77957b295656769bb8ad2b6a6b09d897d94f05c41b069aede1fcdaa675eaea04"
 dependencies = [
- "zerocopy",
+ "zerocopy 0.7.35",
 ]
 
 [[package]]
@@ -1528,6 +1575,16 @@ name = "pretty-hex"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbc83ee4a840062f368f9096d80077a9841ec117e17e7f700df81958f1451254"
+
+[[package]]
+name = "prettyplease"
+version = "0.2.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f12335488a2f3b0a83b14edad48dca9879ce89b2edd10e80237e4e852dd645e"
+dependencies = [
+ "proc-macro2",
+ "syn 2.0.75",
+]
 
 [[package]]
 name = "proc-macro-crate"
@@ -2656,6 +2713,7 @@ dependencies = [
  "bitflags 2.6.0",
  "crc32fast",
  "illumos-sys-hdrs",
+ "ingot",
  "opte",
  "oxide-vpc",
  "postcard",
@@ -2699,7 +2757,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b9b4fd18abc82b8136838da5d50bae7bdea537c574d8dc1a34ed098d6c166f0"
 dependencies = [
  "byteorder",
- "zerocopy-derive",
+ "zerocopy-derive 0.7.35",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.8.0-alpha.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ade16fe7106200b0c121a3251c106c40ffcdecdab68122de5909643d22db075e"
+dependencies = [
+ "zerocopy-derive 0.8.0-alpha.25",
 ]
 
 [[package]]
@@ -2711,6 +2778,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.77",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.0-alpha.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7873cce5410d6ff897beb4b4847366c1013fcda5ec96387a74fa4e0d2580025b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.75",
 ]
 
 [[package]]

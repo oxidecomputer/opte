@@ -837,7 +837,9 @@ impl FromStr for Address {
                 )),
                 Some(("ip", val)) => Ok(Address::Ip(val.parse()?)),
                 Some(("subnet", val)) => Ok(Address::Subnet(val.parse()?)),
-                Some(("vni", val)) => Ok(Address::Vni(val.parse()?)),
+                Some(("vni", val)) => {
+                    Ok(Address::Vni(val.parse().map_err(|e| format!("{e:?}"))?))
+                }
                 Some((key, _)) => Err(format!("invalid address type: {}", key)),
             },
         }

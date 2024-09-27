@@ -5,3 +5,6 @@ kbench = "bench --package opte-bench --bench xde --"
 
 [env]
 CARGO_WORKSPACE_DIR = { value = "", relative = true }
+
+[net]
+git-fetch-with-cli = true

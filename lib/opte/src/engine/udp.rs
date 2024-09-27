@@ -20,11 +20,14 @@ use core::mem;
 use opte_api::DYNAMIC_PORT;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
+
+use super::headers::HeaderActionError;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct UdpMeta {
@@ -103,7 +106,10 @@ impl ModifyAction<UdpMeta> for UdpMod {
 }
 
 impl HeaderActionModify<UlpMetaModify> for UdpMeta {
-    fn run_modify(&mut self, spec: &UlpMetaModify) {
+    fn run_modify(
+        &mut self,
+        spec: &UlpMetaModify,
+    ) -> Result<(), HeaderActionError> {
         if spec.generic.src_port.is_some() {
             self.src = spec.generic.src_port.unwrap()
         }
@@ -111,6 +117,8 @@ impl HeaderActionModify<UlpMetaModify> for UdpMeta {
         if spec.generic.dst_port.is_some() {
             self.dst = spec.generic.dst_port.unwrap()
         }
+
+        Ok(())
     }
 }
 
@@ -125,7 +133,7 @@ impl<'a> UdpHdr<'a> {
     pub const CSUM_END_OFFSET: usize = 8;
 
     pub fn bytes(&self) -> &[u8] {
-        self.base.bytes()
+        self.base.as_bytes()
     }
 
     pub fn csum_bytes(&self) -> [u8; 2] {
@@ -135,7 +143,7 @@ impl<'a> UdpHdr<'a> {
     pub fn csum_minus_hdr(&self) -> Option<Checksum> {
         if self.base.csum != [0; 2] {
             let mut csum = Checksum::from(HeaderChecksum::wrap(self.base.csum));
-            csum.sub_bytes(&self.base.bytes()[0..Self::CSUM_BEGIN_OFFSET]);
+            csum.sub_bytes(&self.base.as_bytes()[0..Self::CSUM_BEGIN_OFFSET]);
             Some(csum)
         } else {
             None
@@ -227,7 +235,9 @@ impl From<ReadErr> for UdpHdrError {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct UdpHdrRaw {
     pub src_port: [u8; 2],
     pub dst_port: [u8; 2],
@@ -243,7 +253,7 @@ impl<'a> RawHeader<'a> for UdpHdrRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
