@@ -173,28 +173,15 @@ impl From<HdlPktAction> for ProcessResult {
 
 enum InternalProcessResult {
     Bypass,
-    Drop {
-        reason: DropReason,
-    },
-    /// A set of transforms which have not yet been performed on a
-    /// packet.
-    ///
-    /// Slow-path packets are transformed as they traverse tables in the lock,
-    /// whereas fast-path packets have a complete set of transforms to be applied
-    /// without blocking the rest of the table.
-    Modified {
-        transform: Option<Arc<Transforms>>,
-        tcp_state: Option<Arc<KMutex<TcpFlowEntryState>>>,
-    },
+    Drop { reason: DropReason },
+    Modified,
     Hairpin(MsgBlk),
 }
 
 impl From<HdlPktAction> for InternalProcessResult {
     fn from(hpa: HdlPktAction) -> Self {
         match hpa {
-            HdlPktAction::Allow => {
-                Self::Modified { transform: None, tcp_state: None }
-            }
+            HdlPktAction::Allow => Self::Modified,
             HdlPktAction::Deny => Self::Drop { reason: DropReason::HandlePkt },
             HdlPktAction::Hairpin(pkt) => Self::Hairpin(pkt),
         }
@@ -1195,7 +1182,7 @@ impl<N: NetworkImpl> Port<N> {
     /// # States
     ///
     /// This command is valid only for [`PortState::Running`].
-    #[inline]
+    // #[inline]
     pub fn process<'a, M>(
         &self,
         dir: Direction,
@@ -1306,10 +1293,7 @@ impl<N: NetworkImpl> Port<N> {
                 // out of the lock sooner. Note that we don't need to *apply* a given
                 // set of transforms in order to know which stats we'll modify.
                 // Also, not an elegant hack!
-                let dummy_res = Ok(InternalProcessResult::Modified {
-                    transform: None,
-                    tcp_state: None,
-                });
+                let dummy_res = Ok(InternalProcessResult::Modified);
                 match dir {
                     Direction::In => {
                         Self::update_stats_in(&mut data.stats.vals, &dummy_res)
@@ -1377,10 +1361,7 @@ impl<N: NetworkImpl> Port<N> {
                 drop(data);
                 pkt.set_l4_hash(*l4_hash);
                 tx.apply(&mut pkt, dir)?;
-                Ok(InternalProcessResult::Modified {
-                    transform: None,
-                    tcp_state: None,
-                })
+                Ok(InternalProcessResult::Modified)
             }
 
             // (3) Full-table processing for the packet, then drop the lock.
@@ -1417,7 +1398,7 @@ impl<N: NetworkImpl> Port<N> {
                 ProcessResult::Drop { reason }
             }
             InternalProcessResult::Hairpin(v) => ProcessResult::Hairpin(v),
-            InternalProcessResult::Modified { transform, tcp_state } => {
+            InternalProcessResult::Modified => {
                 let l4_hash = pkt.l4_hash();
                 let emit_spec = pkt.emit_spec();
 
@@ -1489,10 +1470,7 @@ impl<N: NetworkImpl> Port<N> {
                 let xforms = Arc::clone(&a.state().xforms);
                 Self::update_stats_out(
                     &mut data.stats.vals,
-                    &Ok(InternalProcessResult::Modified {
-                        transform: None,
-                        tcp_state: None,
-                    }),
+                    &Ok(InternalProcessResult::Modified),
                 );
                 drop(data);
 
@@ -1648,10 +1626,7 @@ impl<N: NetworkImpl> Port<N> {
                 let xforms = Arc::clone(&a.state().xforms);
                 Self::update_stats_in(
                     &mut data.stats.vals,
-                    &Ok(InternalProcessResult::Modified {
-                        transform: None,
-                        tcp_state: None,
-                    }),
+                    &Ok(InternalProcessResult::Modified),
                 );
                 drop(data);
 
@@ -1982,6 +1957,121 @@ impl Transforms {
         pkt.update_checksums();
 
         Ok(())
+    }
+
+    #[inline]
+    fn compile(mut self, checksums_dirty: bool) -> Arc<Self> {
+        // Compile to a fasterpath transform iff. no body transform.
+        if self.body.is_empty() {
+            let mut still_permissable = true;
+
+            let mut outer_ether = None;
+            let mut outer_ip = None;
+            let mut outer_encap = None;
+
+            let mut inner_ether = None;
+            let mut inner_ip = None;
+            let mut inner_ulp = None;
+            for transform in &self.hdr {
+                if !still_permissable {
+                    continue;
+                }
+
+                // TODO: refactor.
+
+                // All outer layers must be pushed (or popped/ignored) at the same
+                // time for compilation. No modifications are permissable.
+                match transform.outer_ether {
+                    HeaderAction::Push(p) => outer_ether = Some(p),
+                    HeaderAction::Pop => {
+                        outer_ether = None;
+                    }
+                    HeaderAction::Modify(_) => {
+                        still_permissable = false;
+                    }
+                    HeaderAction::Ignore => {}
+                }
+
+                match transform.outer_ip {
+                    HeaderAction::Push(p) => outer_ip = Some(p),
+                    HeaderAction::Pop => {
+                        outer_ip = None;
+                    }
+                    HeaderAction::Modify(_) => {
+                        still_permissable = false;
+                    }
+                    HeaderAction::Ignore => {}
+                }
+
+                match transform.outer_encap {
+                    HeaderAction::Push(p) => outer_encap = Some(p),
+                    HeaderAction::Pop => {
+                        outer_encap = None;
+                    }
+                    HeaderAction::Modify(_) => {
+                        still_permissable = false;
+                    }
+                    HeaderAction::Ignore => {}
+                }
+
+                // Allow up to one action per ULP field, which must be modify.
+                // We can't yet combine sets of `Modify` actions,
+                // but the Oxide dataplane does not use this in practice.
+                match &transform.inner_ether {
+                    HeaderAction::Push(_) | HeaderAction::Pop => {
+                        still_permissable = false;
+                        continue;
+                    }
+                    HeaderAction::Modify(m) => {
+                        still_permissable &= !inner_ether.replace(m).is_some();
+                    }
+                    HeaderAction::Ignore => {}
+                }
+
+                match &transform.inner_ip {
+                    HeaderAction::Push(_) | HeaderAction::Pop => {
+                        still_permissable = false;
+                        continue;
+                    }
+                    HeaderAction::Modify(m) => {
+                        still_permissable &= !inner_ip.replace(m).is_some();
+                    }
+                    HeaderAction::Ignore => {}
+                }
+
+                match &transform.inner_ulp {
+                    UlpHeaderAction::Modify(m) => {
+                        still_permissable &= !inner_ulp.replace(m).is_some();
+                    }
+                    UlpHeaderAction::Ignore => {}
+                }
+            }
+
+            if still_permissable {
+                let encap = match (outer_ether, outer_ip, outer_encap) {
+                    (Some(eth), Some(ip), Some(enc)) => {
+                        Some(CompiledEncap::Push(eth, ip, enc))
+                    }
+                    (None, None, None) => Some(CompiledEncap::Pop),
+                    _ => None,
+                };
+
+                if let Some(encap) = encap {
+                    self.compiled = Some(
+                        CompiledTransform {
+                            encap,
+                            inner_ether: inner_ether.cloned(),
+                            inner_ip: inner_ip.cloned(),
+                            inner_ulp: inner_ulp.cloned(),
+                            checksums_dirty,
+                        }
+                        .into(),
+                    );
+                }
+            }
+        }
+
+        Arc::new(self)
     }
 }
 
@@ -2396,10 +2486,7 @@ impl<N: NetworkImpl> Port<N> {
                 // If there is no flow ID, then do not create a UFT
                 // entry.
                 if *ufid_in == FLOW_ID_DEFAULT {
-                    return Ok(InternalProcessResult::Modified {
-                        transform: None,
-                        tcp_state: None,
-                    });
+                    return Ok(InternalProcessResult::Modified);
                 }
             }
 
@@ -2428,7 +2515,7 @@ impl<N: NetworkImpl> Port<N> {
         let ufid_out = pkt.flow().mirror();
         let hte = UftEntry {
             pair: Some(ufid_out),
-            xforms: xforms.into(),
+            xforms: xforms.compile(pkt.checksums_dirty()),
             epoch,
             l4_hash: ufid_in.crc32(),
         };
@@ -2519,10 +2606,7 @@ impl<N: NetworkImpl> Port<N> {
         //     }
         // }
         match data.uft_in.add(*ufid_in, hte) {
-            Ok(_) => Ok(InternalProcessResult::Modified {
-                transform: None,
-                tcp_state: None,
-            }),
+            Ok(_) => Ok(InternalProcessResult::Modified),
             Err(OpteError::MaxCapacity(limit)) => {
                 Err(ProcessError::FlowTableFull { kind: "UFT", limit })
             }
@@ -2684,10 +2768,7 @@ impl<N: NetworkImpl> Port<N> {
                 //     return Ok(ProcessResult::Modified);
                 // }
 
-                return Ok(InternalProcessResult::Modified {
-                    transform,
-                    tcp_state: None,
-                });
+                return Ok(InternalProcessResult::Modified);
             }
 
             // The entry is from a previous epoch; invalidate its UFT
@@ -2833,7 +2914,7 @@ impl<N: NetworkImpl> Port<N> {
         // XXXX: may be hashing the wrong thing.
         let hte = UftEntry {
             pair: None,
-            xforms: xforms.into(),
+            xforms: xforms.compile(pkt.checksums_dirty()),
             epoch,
             l4_hash: flow_before.crc32(),
         };
@@ -2842,16 +2923,10 @@ impl<N: NetworkImpl> Port<N> {
             Ok(LayerResult::Allow) => {
                 // If there is no Flow ID, then there is no UFT entry.
                 if flow_before == FLOW_ID_DEFAULT || tcp_closed {
-                    return Ok(InternalProcessResult::Modified {
-                        transform: None,
-                        tcp_state: None,
-                    });
+                    return Ok(InternalProcessResult::Modified);
                 }
                 match data.uft_out.add(flow_before, hte) {
-                    Ok(_) => Ok(InternalProcessResult::Modified {
-                        transform: None,
-                        tcp_state: None,
-                    }),
+                    Ok(_) => Ok(InternalProcessResult::Modified),
                     Err(OpteError::MaxCapacity(limit)) => {
                         Err(ProcessError::FlowTableFull { kind: "UFT", limit })
                     }
@@ -2991,11 +3066,7 @@ impl<N: NetworkImpl> Port<N> {
                         );
                     }
 
-                    return Ok(InternalProcessResult::Modified {
-                        transform,
-                        // TODO
-                        tcp_state: None,
-                    });
+                    return Ok(InternalProcessResult::Modified);
                 } else if let Some(flow_before) = flow_to_invalidate {
                     self.uft_tcp_closed(data, &flow_before, ufid_in.as_ref());
                 }
@@ -3116,9 +3187,7 @@ impl<N: NetworkImpl> Port<N> {
                 }
             }
 
-            Ok(InternalProcessResult::Modified { .. }) => {
-                stats.in_modified += 1
-            }
+            Ok(InternalProcessResult::Modified) => stats.in_modified += 1,
 
             Ok(InternalProcessResult::Hairpin(_)) => stats.in_hairpin += 1,
 
@@ -3151,9 +3220,7 @@ impl<N: NetworkImpl> Port<N> {
                 }
             }
 
-            Ok(InternalProcessResult::Modified { .. }) => {
-                stats.out_modified += 1
-            }
+            Ok(InternalProcessResult::Modified) => stats.out_modified += 1,
 
             Ok(InternalProcessResult::Hairpin(_)) => stats.out_hairpin += 1,
 

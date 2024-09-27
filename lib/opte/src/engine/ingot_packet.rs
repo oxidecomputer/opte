@@ -4,6 +4,7 @@ use super::checksum::HeaderChecksum;
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
 use super::geneve::GeneveMeta;
+use super::geneve::GENEVE_PORT;
 use super::headers::EncapMeta;
 use super::headers::EncapMod;
 use super::headers::EncapPush;
@@ -191,11 +192,93 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidNoEncap<V> {
         InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
     }
 
-    fn run_compiled_transform(&mut self, transform: &CompiledTransform) {
-        todo!()
+    #[inline]
+    fn run_compiled_transform(&mut self, transform: &CompiledTransform)
+    where
+        V: ByteSliceMut,
+    {
+        // TODO: break out commonalities for this and geneve.
+        if let Some(ether_tx) = &transform.inner_ether {
+            if let Some(new_src) = &ether_tx.src {
+                self.inner_eth.set_source(*new_src);
+            }
+            if let Some(new_dst) = &ether_tx.dst {
+                self.inner_eth.set_destination(*new_dst);
+            }
+        }
+        match (&mut self.inner_l3, &transform.inner_ip) {
+            (Some(ValidL3::Ipv4(pkt)), Some(IpMod::Ip4(tx))) => {
+                if let Some(new_src) = &tx.src {
+                    pkt.set_source(*new_src);
+                }
+                if let Some(new_dst) = &tx.dst {
+                    pkt.set_destination(*new_dst);
+                }
+                if let Some(new_proto) = &tx.proto {
+                    pkt.set_protocol(IpProtocol(u8::from(*new_proto)));
+                }
+            }
+            (Some(ValidL3::Ipv6(pkt)), Some(IpMod::Ip6(tx))) => {
+                if let Some(new_src) = &tx.src {
+                    pkt.set_source(*new_src);
+                }
+                if let Some(new_dst) = &tx.dst {
+                    pkt.set_destination(*new_dst);
+                }
+                if let Some(new_proto) = &tx.proto {
+                    // TODO: wrong in the face of EHs...
+                    // For now, we never use this on our dataplane.
+                    pkt.set_next_header(IpProtocol(u8::from(*new_proto)));
+                }
+            }
+            _ => {}
+        }
+
+        match (&mut self.inner_ulp, &transform.inner_ulp) {
+            (Some(ValidUlp::Tcp(pkt)), Some(tx)) => {
+                if let Some(flags) = tx.tcp_flags {
+                    pkt.set_flags(TcpFlags::from_bits_retain(flags));
+                }
+
+                if let Some(new_src) = &tx.generic.src_port {
+                    pkt.set_source(*new_src);
+                }
+
+                if let Some(new_dst) = &tx.generic.dst_port {
+                    pkt.set_destination(*new_dst);
+                }
+            }
+            (Some(ValidUlp::Udp(pkt)), Some(tx)) => {
+                if let Some(new_src) = &tx.generic.src_port {
+                    pkt.set_source(*new_src);
+                }
+
+                if let Some(new_dst) = &tx.generic.dst_port {
+                    pkt.set_destination(*new_dst);
+                }
+            }
+            (Some(ValidUlp::IcmpV4(pkt)), Some(tx))
+                if pkt.ty() == 0 || pkt.ty() == 3 =>
+            {
+                if let Some(new_id) = tx.icmp_id {
+                    pkt.rest_of_hdr_mut()[..2]
+                        .copy_from_slice(&new_id.to_be_bytes())
+                }
+            }
+            (Some(ValidUlp::IcmpV6(pkt)), Some(tx))
+                if pkt.ty() == 128 || pkt.ty() == 129 =>
+            {
+                if let Some(new_id) = tx.icmp_id {
+                    pkt.rest_of_hdr_mut()[..2]
+                        .copy_from_slice(&new_id.to_be_bytes())
+                }
+            }
+            _ => {}
+        }
     }
 
     // FIXME: identical to Geneve.
+    #[inline]
     fn compute_body_csum(&self) -> Option<OpteCsum> {
         let use_pseudo = if let Some(v) = &self.inner_ulp {
             !matches!(v, ValidUlp::IcmpV4(_))
@@ -223,10 +306,12 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidNoEncap<V> {
         })
     }
 
+    #[inline]
     fn encap_len(&self) -> u16 {
         0
     }
 
+    #[inline]
     fn update_ulp_checksums(&mut self, body_csum: OpteCsum) {
         todo!()
     }
@@ -264,10 +349,92 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidGeneveOverV6<V> {
         InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
     }
 
-    fn run_compiled_transform(&mut self, transform: &CompiledTransform) {
-        todo!()
+    #[inline]
+    fn run_compiled_transform(&mut self, transform: &CompiledTransform)
+    where
+        V: ByteSliceMut,
+    {
+        // TODO: break out commonalities for this and geneve.
+        if let Some(ether_tx) = &transform.inner_ether {
+            if let Some(new_src) = &ether_tx.src {
+                self.inner_eth.set_source(*new_src);
+            }
+            if let Some(new_dst) = &ether_tx.dst {
+                self.inner_eth.set_destination(*new_dst);
+            }
+        }
+        match (&mut self.inner_l3, &transform.inner_ip) {
+            (ValidL3::Ipv4(pkt), Some(IpMod::Ip4(tx))) => {
+                if let Some(new_src) = &tx.src {
+                    pkt.set_source(*new_src);
+                }
+                if let Some(new_dst) = &tx.dst {
+                    pkt.set_destination(*new_dst);
+                }
+                if let Some(new_proto) = &tx.proto {
+                    pkt.set_protocol(IpProtocol(u8::from(*new_proto)));
+                }
+            }
+            (ValidL3::Ipv6(pkt), Some(IpMod::Ip6(tx))) => {
+                if let Some(new_src) = &tx.src {
+                    pkt.set_source(*new_src);
+                }
+                if let Some(new_dst) = &tx.dst {
+                    pkt.set_destination(*new_dst);
+                }
+                if let Some(new_proto) = &tx.proto {
+                    // TODO: wrong in the face of EHs...
+                    // For now, we never use this on our dataplane.
+                    pkt.set_next_header(IpProtocol(u8::from(*new_proto)));
+                }
+            }
+            _ => {}
+        }
+
+        match (&mut self.inner_ulp, &transform.inner_ulp) {
+            (ValidUlp::Tcp(pkt), Some(tx)) => {
+                if let Some(flags) = tx.tcp_flags {
+                    pkt.set_flags(TcpFlags::from_bits_retain(flags));
+                }
+
+                if let Some(new_src) = &tx.generic.src_port {
+                    pkt.set_source(*new_src);
+                }
+
+                if let Some(new_dst) = &tx.generic.dst_port {
+                    pkt.set_destination(*new_dst);
+                }
+            }
+            (ValidUlp::Udp(pkt), Some(tx)) => {
+                if let Some(new_src) = &tx.generic.src_port {
+                    pkt.set_source(*new_src);
+                }
+
+                if let Some(new_dst) = &tx.generic.dst_port {
+                    pkt.set_destination(*new_dst);
+                }
+            }
+            (ValidUlp::IcmpV4(pkt), Some(tx))
+                if pkt.ty() == 0 || pkt.ty() == 3 =>
+            {
+                if let Some(new_id) = tx.icmp_id {
+                    pkt.rest_of_hdr_mut()[..2]
+                        .copy_from_slice(&new_id.to_be_bytes())
+                }
+            }
+            (ValidUlp::IcmpV6(pkt), Some(tx))
+                if pkt.ty() == 128 || pkt.ty() == 129 =>
+            {
+                if let Some(new_id) = tx.icmp_id {
+                    pkt.rest_of_hdr_mut()[..2]
+                        .copy_from_slice(&new_id.to_be_bytes())
+                }
+            }
+            _ => {}
+        }
     }
 
+    #[inline]
     fn compute_body_csum(&self) -> Option<OpteCsum> {
         let use_pseudo = !matches!(self.inner_ulp, ValidUlp::IcmpV4(_));
 
@@ -291,6 +458,7 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidGeneveOverV6<V> {
         })
     }
 
+    #[inline]
     fn encap_len(&self) -> u16 {
         (self.outer_eth.packet_length()
             + self.outer_v6.packet_length()
@@ -298,6 +466,7 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidGeneveOverV6<V> {
             + self.outer_encap.packet_length()) as u16
     }
 
+    #[inline]
     fn update_ulp_checksums(&mut self, body_csum: OpteCsum) {
         todo!()
     }
@@ -1443,6 +1612,10 @@ impl<T: Read> Packet2<Parsed2<T>> {
         &mut self.state.meta
     }
 
+    pub fn checksums_dirty(&self) -> bool {
+        self.state.inner_csum_dirty
+    }
+
     #[inline]
     /// Convert a packet's metadata into a set of instructions
     /// needed to serialize all its changes to the wire.
@@ -2166,7 +2339,61 @@ impl EmittestSpec {
             EmitterSpec::Fastpath(push_spec) => match push_spec.encap {
                 CompiledEncap::Pop => pkt,
                 CompiledEncap::Push(eth, ip, encap) => {
-                    todo!()
+                    // ... why am I not just pre-making these guys?
+                    let mut encap = match encap {
+                        EncapPush::Geneve(g) => (
+                            Udp {
+                                source: g.entropy,
+                                destination: GENEVE_PORT,
+                                ..Default::default()
+                            },
+                            Geneve { vni: g.vni, ..Default::default() },
+                        ),
+                    };
+
+                    let encap_len = encap.packet_length() as u16;
+                    encap.0.length = (self.ulp_len as u16) + encap_len;
+
+                    let eth = Ethernet {
+                        destination: eth.dst.bytes().into(),
+                        source: eth.src.bytes().into(),
+                        ethertype: ingot::ethernet::Ethertype(
+                            eth.ether_type.into(),
+                        ),
+                    };
+                    let ip = match ip {
+                        IpPush::Ip4(v4) => L3Repr::Ipv4(Ipv4 {
+                            protocol: ingot::ip::IpProtocol(v4.proto.into()),
+                            source: v4.src,
+                            destination: v4.dst,
+                            total_len: 20 + encap.0.length,
+                            ..Default::default()
+                        }),
+                        IpPush::Ip6(v6) => L3Repr::Ipv6(Ipv6 {
+                            next_header: ingot::ip::IpProtocol(v6.proto.into()),
+                            source: v6.src,
+                            destination: v6.dst,
+                            payload_len: encap.0.length,
+                            ..Default::default()
+                        }),
+                    };
+
+                    // TODO: actually use space in the front pkt.
+                    let needed_alloc = eth.packet_length()
+                        + ip.packet_length()
+                        + (encap_len as usize);
+                    let mut new_mblk = MsgBlk::new_ethernet(needed_alloc);
+                    unsafe {
+                        new_mblk.write(needed_alloc, |v| {
+                            (eth, ip, encap)
+                                .emit_uninit(v)
+                                .expect("just allocated the necessary n bytes");
+                        })
+                    }
+
+                    new_mblk.extend_if_one(pkt);
+
+                    new_mblk
                 }
             },
             EmitterSpec::Slowpath(push_spec) => {

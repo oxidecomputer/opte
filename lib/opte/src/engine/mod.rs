@@ -331,7 +331,9 @@ pub trait NetworkParser {
 /// into the shared `OpteMeta` format.
 pub trait LightweightMeta<T: ByteSlice>: Into<OpteMeta<T>> {
     /// Runs a compiled fastpath action against the target metadata.
-    fn run_compiled_transform(&mut self, transform: &CompiledTransform);
+    fn run_compiled_transform(&mut self, transform: &CompiledTransform)
+    where
+        T: ByteSliceMut;
 
     /// Derive the checksum for the packet body from inner headers.
     fn compute_body_csum(&self) -> Option<Checksum>;
