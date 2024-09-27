@@ -1191,13 +1191,13 @@ impl<N: NetworkImpl> Port<N> {
     /// # States
     ///
     /// This command is valid only for [`PortState::Running`].
-    // #[inline]
     pub fn process<'a, M>(
         &self,
         dir: Direction,
         // TODO: might want to pass in a &mut to an enum
         // which can advance to (and hold) light->full-fat metadata.
-        // Then we can have our cake and eat it too.
+        // My gutfeel is that there's a perf cost here -- this struct
+        // is pretty fat, but expressing the transform on a &mut also sucks.
         mut pkt: Packet2<ParsedStage1<MsgBlkIterMut<'a>, M>>,
     ) -> result::Result<ProcessResult, ProcessError>
     where
@@ -1905,6 +1905,7 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
+    #[inline]
     fn port_process_return_probe(
         &self,
         dir: Direction,
