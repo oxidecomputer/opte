@@ -145,10 +145,13 @@ fn setup_ipv4_nat(
         out_nat.add_predicate(Predicate::InnerEtherType(vec![
             EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
         ]));
-        out_nat.add_predicate(Predicate::Meta(
-            RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway(None).as_meta(),
-        ));
+        for ip in &external_cfg.floating_ips {
+            out_nat.add_predicate(Predicate::Meta(
+                RouterTargetInternal::KEY.to_string(),
+                RouterTargetInternal::InternetGateway(Some(IpAddr::Ip4(*ip)))
+                    .as_meta(),
+            ));
+        }
         out_rules.push(out_nat.finalize());
 
         // 1:1 NAT inbound packets destined for external IP.
@@ -181,7 +184,8 @@ fn setup_ipv4_nat(
         ]));
         out_nat.add_predicate(Predicate::Meta(
             RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway(None).as_meta(),
+            RouterTargetInternal::InternetGateway(Some(IpAddr::Ip4(ip4)))
+                .as_meta(),
         ));
         out_rules.push(out_nat.finalize());
 
@@ -211,7 +215,10 @@ fn setup_ipv4_nat(
         ]));
         rule.add_predicate(Predicate::Meta(
             RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway(None).as_meta(),
+            RouterTargetInternal::InternetGateway(Some(IpAddr::Ip4(
+                snat_cfg.external_ip,
+            )))
+            .as_meta(),
         ));
         out_rules.push(rule.finalize());
     }
@@ -242,10 +249,13 @@ fn setup_ipv6_nat(
         out_nat.add_predicate(Predicate::InnerEtherType(vec![
             EtherTypeMatch::Exact(ETHER_TYPE_IPV6),
         ]));
-        out_nat.add_predicate(Predicate::Meta(
-            RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway(None).as_meta(),
-        ));
+        for ip in &external_cfg.floating_ips {
+            out_nat.add_predicate(Predicate::Meta(
+                RouterTargetInternal::KEY.to_string(),
+                RouterTargetInternal::InternetGateway(Some(IpAddr::Ip6(*ip)))
+                    .as_meta(),
+            ));
+        }
         out_rules.push(out_nat.finalize());
 
         // 1:1 NAT inbound packets destined for external IP.
@@ -278,7 +288,8 @@ fn setup_ipv6_nat(
         ]));
         out_nat.add_predicate(Predicate::Meta(
             RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway(None).as_meta(),
+            RouterTargetInternal::InternetGateway(Some(IpAddr::Ip6(ip6)))
+                .as_meta(),
         ));
         out_rules.push(out_nat.finalize());
 
@@ -308,7 +319,10 @@ fn setup_ipv6_nat(
         ]));
         rule.add_predicate(Predicate::Meta(
             RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway(None).as_meta(),
+            RouterTargetInternal::InternetGateway(Some(IpAddr::Ip6(
+                snat_cfg.external_ip,
+            )))
+            .as_meta(),
         ));
         out_rules.push(rule.finalize());
     }

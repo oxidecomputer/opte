@@ -405,12 +405,8 @@ impl MetaAction for RouterAction {
         _flow_id: &InnerFlowId,
         meta: &mut ActionMeta,
     ) -> ModMetaResult {
-        // No target entry should currently exist in the metadata; it
-        // would be a bug. However, because of the dynamic nature of
-        // metadata we don't have an easy way to enforce this
-        // constraint in the type system.
         if let RouterTargetInternal::InternetGateway(_) = self.target {
-            meta.insert(self.target.key(), self.target.generic_meta());
+            meta.insert(self.target.key(), self.target.as_meta());
         }
         meta.insert(self.target.ip_key(), self.target.as_meta());
         Ok(AllowOrDeny::Allow(()))

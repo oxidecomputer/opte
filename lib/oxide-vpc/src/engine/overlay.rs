@@ -361,11 +361,6 @@ impl StaticAction for EncapAction {
             ..Default::default()
         };
 
-        if let RouterTargetInternal::InternetGateway(Some(x)) = target {
-            tfrm.inner_ip =
-                HeaderAction::Modify(IpMod::new_src(x), PhantomData);
-        }
-
         Ok(AllowOrDeny::Allow(tfrm))
     }
 
