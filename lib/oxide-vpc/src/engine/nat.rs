@@ -134,25 +134,25 @@ fn setup_ipv4_nat(
     let external_cfg = ip_cfg.external_ips.load();
 
     if !external_cfg.floating_ips.is_empty() {
-        let mut out_nat = Rule::new(
-            FLOATING_ONE_TO_ONE_NAT_PRIORITY,
-            Action::Stateful(Arc::new(OutboundNat::new(
-                ip_cfg.private_ip,
-                &external_cfg.floating_ips,
-                verifier.clone(),
-            ))),
-        );
-        out_nat.add_predicate(Predicate::InnerEtherType(vec![
-            EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
-        ]));
         for ip in &external_cfg.floating_ips {
+            let mut out_nat = Rule::new(
+                FLOATING_ONE_TO_ONE_NAT_PRIORITY,
+                Action::Stateful(Arc::new(OutboundNat::new(
+                    ip_cfg.private_ip,
+                    &[*ip],
+                    verifier.clone(),
+                ))),
+            );
+            out_nat.add_predicate(Predicate::InnerEtherType(vec![
+                EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
+            ]));
             out_nat.add_predicate(Predicate::Meta(
                 RouterTargetInternal::KEY.to_string(),
                 RouterTargetInternal::InternetGateway(Some(IpAddr::Ip4(*ip)))
                     .as_meta(),
             ));
+            out_rules.push(out_nat.finalize());
         }
-        out_rules.push(out_nat.finalize());
 
         // 1:1 NAT inbound packets destined for external IP.
         let mut in_nat = Rule::new(
@@ -238,25 +238,25 @@ fn setup_ipv6_nat(
     let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip, verifier.clone()));
     let external_cfg = ip_cfg.external_ips.load();
     if !external_cfg.floating_ips.is_empty() {
-        let mut out_nat = Rule::new(
-            FLOATING_ONE_TO_ONE_NAT_PRIORITY,
-            Action::Stateful(Arc::new(OutboundNat::new(
-                ip_cfg.private_ip,
-                &external_cfg.floating_ips,
-                verifier.clone(),
-            ))),
-        );
-        out_nat.add_predicate(Predicate::InnerEtherType(vec![
-            EtherTypeMatch::Exact(ETHER_TYPE_IPV6),
-        ]));
         for ip in &external_cfg.floating_ips {
+            let mut out_nat = Rule::new(
+                FLOATING_ONE_TO_ONE_NAT_PRIORITY,
+                Action::Stateful(Arc::new(OutboundNat::new(
+                    ip_cfg.private_ip,
+                    &[*ip],
+                    verifier.clone(),
+                ))),
+            );
+            out_nat.add_predicate(Predicate::InnerEtherType(vec![
+                EtherTypeMatch::Exact(ETHER_TYPE_IPV6),
+            ]));
             out_nat.add_predicate(Predicate::Meta(
                 RouterTargetInternal::KEY.to_string(),
                 RouterTargetInternal::InternetGateway(Some(IpAddr::Ip6(*ip)))
                     .as_meta(),
             ));
+            out_rules.push(out_nat.finalize());
         }
-        out_rules.push(out_nat.finalize());
 
         // 1:1 NAT inbound packets destined for external IP.
         let mut in_nat = Rule::new(

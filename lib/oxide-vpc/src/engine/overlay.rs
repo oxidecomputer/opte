@@ -43,7 +43,6 @@ use opte::engine::headers::EncapPush;
 use opte::engine::headers::HeaderAction;
 use opte::engine::headers::IpAddr;
 use opte::engine::headers::IpCidr;
-use opte::engine::headers::IpMod;
 use opte::engine::headers::IpPush;
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Addr;
@@ -319,7 +318,7 @@ impl StaticAction for EncapAction {
             }
         };
 
-        let mut tfrm = HdrTransform {
+        let tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
             outer_ether: HeaderAction::Push(
