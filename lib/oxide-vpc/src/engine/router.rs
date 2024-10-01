@@ -47,6 +47,7 @@ use opte::engine::rule::Finalized;
 use opte::engine::rule::MetaAction;
 use opte::engine::rule::ModMetaResult;
 use opte::engine::rule::Rule;
+use uuid::Uuid;
 
 pub const ROUTER_LAYER_NAME: &str = "router";
 
@@ -54,11 +55,13 @@ pub const ROUTER_LAYER_NAME: &str = "router";
 // target. This routing layer implementation converts said target to a
 // `Rule` paired with `Action::Deny`. The MetaAction wants an internal
 // version of the router target without the "drop" target to match the
-// remaining possible targets. Ip adderess of internet gateway specifies
-// source address
+// remaining possible targets.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouterTargetInternal {
-    InternetGateway(Option<IpAddr>),
+    // The selected internet gateway determines a packet's chosen source
+    // address during NAT. We don't necessarily *know* the ID of this
+    // gateway.
+    InternetGateway(Option<Uuid>),
     Ip(IpAddr),
     VpcSubnet(IpCidr),
 }
@@ -73,6 +76,16 @@ impl RouterTargetInternal {
 
     pub fn ip_key(&self) -> String {
         Self::IP_KEY.to_string()
+    }
+
+    pub fn class(&self) -> RouterTargetClass {
+        match self {
+            RouterTargetInternal::InternetGateway(_) => {
+                RouterTargetClass::InternetGateway
+            }
+            RouterTargetInternal::Ip(_) => RouterTargetClass::Ip,
+            RouterTargetInternal::VpcSubnet(_) => RouterTargetClass::VpcSubnet,
+        }
     }
 }
 
@@ -104,7 +117,7 @@ impl ActionMetaValue for RouterTargetInternal {
                 }
 
                 Some(("ig", ig)) => {
-                    let ig = ig.parse::<IpAddr>()?;
+                    let ig = ig.parse::<Uuid>().map_err(|e| e.to_string())?;
                     Ok(Self::InternetGateway(Some(ig)))
                 }
 
@@ -135,6 +148,44 @@ impl fmt::Display for RouterTargetInternal {
             Self::VpcSubnet(sub) => format!("Subnet: {}", sub),
         };
         write!(f, "{}", s)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RouterTargetClass {
+    InternetGateway,
+    Ip,
+    VpcSubnet,
+}
+
+impl ActionMetaValue for RouterTargetClass {
+    const KEY: &'static str = "router-target-class";
+
+    fn from_meta(s: &str) -> Result<Self, String> {
+        match s {
+            "ig" => Ok(Self::InternetGateway),
+            "ip" => Ok(Self::Ip),
+            "subnet" => Ok(Self::VpcSubnet),
+            _ => Err(format!("bad router target class: {}", s)),
+        }
+    }
+
+    fn as_meta(&self) -> String {
+        match self {
+            Self::InternetGateway => "ig".into(),
+            Self::Ip => "ip".into(),
+            Self::VpcSubnet => "subnet".into(),
+        }
+    }
+}
+
+impl fmt::Display for RouterTargetClass {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::InternetGateway => write!(f, "IG"),
+            Self::Ip => write!(f, "IP"),
+            Self::VpcSubnet => write!(f, "Subnet"),
+        }
     }
 }
 
@@ -220,6 +271,8 @@ fn valid_router_dest_target_pair(dest: &IpCidr, target: &RouterTarget) -> bool {
         (&dest, &target),
         // Anything can be dropped
         (_, RouterTarget::Drop) |
+        // Internet gateways are valid for any IP family.
+        (_, RouterTarget::InternetGateway(_)) |
         // IPv4 destination, IPv4 address
         (IpCidr::Ip4(_), RouterTarget::Ip(IpAddr::Ip4(_))) |
         // IPv4 destination, IPv4 subnet
@@ -227,11 +280,7 @@ fn valid_router_dest_target_pair(dest: &IpCidr, target: &RouterTarget) -> bool {
         // IPv6 destination, IPv6 address
         (IpCidr::Ip6(_), RouterTarget::Ip(IpAddr::Ip6(_))) |
         // IPv6 destination, IPv6 subnet
-        (IpCidr::Ip6(_), RouterTarget::VpcSubnet(IpCidr::Ip6(_))) |
-        // IPv4 destination, IPv4 Internet Gateway
-        (IpCidr::Ip4(_), RouterTarget::InternetGateway(IpAddr::Ip4(_))) |
-        // IPv6 destination, IPv6 Internet Gateway
-        (IpCidr::Ip6(_), RouterTarget::InternetGateway(IpAddr::Ip6(_)))
+        (IpCidr::Ip6(_), RouterTarget::VpcSubnet(IpCidr::Ip6(_)))
     )
 }
 
@@ -261,7 +310,7 @@ fn make_rule(
             (predicate, Action::Deny)
         }
 
-        RouterTarget::InternetGateway(ip) => {
+        RouterTarget::InternetGateway(id) => {
             let predicate = match dest {
                 IpCidr::Ip4(ip4) => {
                     Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(ip4)])
@@ -272,7 +321,7 @@ fn make_rule(
                 }
             };
             let action = Action::Meta(Arc::new(RouterAction::new(
-                RouterTargetInternal::InternetGateway(Some(ip)),
+                RouterTargetInternal::InternetGateway(id),
             )));
             (predicate, action)
         }
@@ -405,10 +454,13 @@ impl MetaAction for RouterAction {
         _flow_id: &InnerFlowId,
         meta: &mut ActionMeta,
     ) -> ModMetaResult {
+        // TODO: I don't think we need IP_KEY.
         if let RouterTargetInternal::InternetGateway(_) = self.target {
             meta.insert(self.target.key(), self.target.as_meta());
         }
         meta.insert(self.target.ip_key(), self.target.as_meta());
+        let rt_class = self.target.class();
+        meta.insert(rt_class.key(), rt_class.as_meta());
         Ok(AllowOrDeny::Allow(()))
     }
 }

@@ -72,6 +72,7 @@ syn = "2"
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 thiserror = "1.0"
 toml = "0.8"
+uuid = { version = "1.0", default-features = false, features = ["serde"]}
 usdt = "0.5"
 version_check = "0.9"
 zerocopy = { version = "0.7", features = ["derive"] }

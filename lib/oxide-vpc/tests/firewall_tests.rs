@@ -156,7 +156,7 @@ fn firewall_vni_inbound() {
     // could prove useful in other tests.
     let g1_ext_ip = "10.77.78.9".parse().unwrap();
     g1_cfg.set_ext_ipv4(g1_ext_ip);
-    let custom = ["set:nat.rules.in=1", "set:nat.rules.out=3"];
+    let custom = ["set:nat.rules.in=1", "set:nat.rules.out=4"];
     let mut g1 =
         oxide_net_setup2("g1_port", &g1_cfg, None, None, Some(&custom));
     g1.port.start();
@@ -332,7 +332,7 @@ fn firewall_external_inbound() {
     let mut g1_cfg = g1_cfg();
     let g1_ext_ip = "10.77.78.9".parse().unwrap();
     g1_cfg.set_ext_ipv4(g1_ext_ip);
-    let custom = ["set:nat.rules.in=1", "set:nat.rules.out=3"];
+    let custom = ["set:nat.rules.in=1", "set:nat.rules.out=4"];
     let mut g1 =
         oxide_net_setup2("g1_port", &g1_cfg, None, None, Some(&custom));
     g1.port.start();

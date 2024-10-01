@@ -782,6 +782,10 @@ fn main() -> anyhow::Result<()> {
                     port_name: port,
                     external_ips_v4: Some(cfg),
                     external_ips_v6: None,
+                    // TODO: It'd be nice to have this user-specifiable via
+                    //       opteadm, but for now it's a purely control-plane
+                    //       concept.
+                    inet_gw_map: None,
                 };
                 hdl.set_external_ips(&req)?;
             } else if let Ok(cfg) =
@@ -791,6 +795,8 @@ fn main() -> anyhow::Result<()> {
                     port_name: port,
                     external_ips_v6: Some(cfg),
                     external_ips_v4: None,
+                    // TODO: As above.
+                    inet_gw_map: None,
                 };
                 hdl.set_external_ips(&req)?;
             } else {

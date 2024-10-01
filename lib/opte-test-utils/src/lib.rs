@@ -375,7 +375,8 @@ pub fn oxide_net_setup2(
         "set:firewall.rules.out=0",
         // * Outbound IPv4 SNAT
         // * Outbound IPv6 SNAT
-        "set:nat.rules.out=2",
+        // * Drop uncaught InetGw packets.
+        "set:nat.rules.out=3",
     ];
 
     [
