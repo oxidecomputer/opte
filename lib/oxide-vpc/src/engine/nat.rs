@@ -15,6 +15,7 @@ use crate::cfg::Ipv4Cfg;
 use crate::cfg::Ipv6Cfg;
 use crate::cfg::VpcCfg;
 use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -114,7 +115,7 @@ pub fn setup(
 #[allow(clippy::type_complexity)]
 fn create_nat_rules(
     cfg: &VpcCfg,
-    inet_gw_map: Option<BTreeMap<IpAddr, Uuid>>,
+    inet_gw_map: Option<BTreeMap<IpAddr, BTreeSet<Uuid>>>,
 ) -> Result<(Vec<Rule<Finalized>>, Vec<Rule<Finalized>>), OpteError> {
     let mut in_rules = vec![];
     let mut out_rules = vec![];
@@ -155,7 +156,7 @@ fn setup_ipv4_nat(
     ip_cfg: &Ipv4Cfg,
     in_rules: &mut Vec<Rule<Finalized>>,
     out_rules: &mut Vec<Rule<Finalized>>,
-    inet_gw_map: Option<&BTreeMap<IpAddr, Uuid>>,
+    inet_gw_map: Option<&BTreeMap<IpAddr, BTreeSet<Uuid>>>,
 ) -> Result<(), OpteError> {
     // When it comes to NAT we always prefer using 1:1 NAT of external
     // IP to SNAT, preferring floating IPs over ephemeral.
@@ -171,13 +172,22 @@ fn setup_ipv4_nat(
     // each belongs to. This may in future extend to further SNATs from each
     // attached Internet Gateway, but not today.
     if !external_cfg.floating_ips.is_empty() {
-        let mut fips_by_gw = BTreeMap::new();
+        let mut fips_by_gw: BTreeMap<Option<Uuid>, Vec<Ipv4Addr>> =
+            BTreeMap::new();
         for ip in &external_cfg.floating_ips {
-            let gw_mapping =
-                inet_gw_map.and_then(|map| map.get(&(*ip).into())).copied();
-            let entry = fips_by_gw.entry(gw_mapping);
-            let ips = entry.or_insert_with(|| vec![]);
-            ips.push(*ip);
+            let gw_mappings =
+                inet_gw_map.and_then(|map| map.get(&(*ip).into())).cloned();
+            if let Some(igw_list) = gw_mappings {
+                for igw in igw_list {
+                    let entry = fips_by_gw.entry(Some(igw));
+                    let ips = entry.or_default();
+                    ips.push(*ip);
+                }
+            } else {
+                let entry = fips_by_gw.entry(None);
+                let ips = entry.or_default();
+                ips.push(*ip);
+            };
         }
 
         for (gw, fips) in fips_by_gw {
@@ -185,7 +195,7 @@ fn setup_ipv4_nat(
                 FLOATING_ONE_TO_ONE_NAT_PRIORITY,
                 Action::Stateful(Arc::new(OutboundNat::new(
                     ip_cfg.private_ip,
-                    &fips,
+                    &fips[..],
                     verifier.clone(),
                 ))),
             );
@@ -216,24 +226,34 @@ fn setup_ipv4_nat(
 
     if let Some(ip4) = external_cfg.ephemeral_ip {
         // 1:1 NAT outbound packets destined for internet gateway.
-        let mut out_nat = Rule::new(
-            EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,
-            Action::Stateful(Arc::new(OutboundNat::new(
-                ip_cfg.private_ip,
-                &[ip4],
-                verifier,
-            ))),
-        );
-        out_nat.add_predicate(Predicate::InnerEtherType(vec![
-            EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
-        ]));
-        let parent_gw =
-            inet_gw_map.and_then(|map| map.get(&(ip4.into()))).copied();
-        out_nat.add_predicate(Predicate::Meta(
-            RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway(parent_gw).as_meta(),
-        ));
-        out_rules.push(out_nat.finalize());
+        let igw_matches = match inet_gw_map {
+            Some(inet_gw_map) => match inet_gw_map.get(&(ip4.into())) {
+                Some(igw_set) => {
+                    igw_set.iter().copied().map(Option::Some).collect()
+                }
+                None => vec![None],
+            },
+            None => vec![None],
+        };
+
+        for igw_id in igw_matches {
+            let mut out_nat = Rule::new(
+                EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,
+                Action::Stateful(Arc::new(OutboundNat::new(
+                    ip_cfg.private_ip,
+                    &[ip4],
+                    verifier.clone(),
+                ))),
+            );
+            out_nat.add_predicate(Predicate::InnerEtherType(vec![
+                EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
+            ]));
+            out_nat.add_predicate(Predicate::Meta(
+                RouterTargetInternal::KEY.to_string(),
+                RouterTargetInternal::InternetGateway(igw_id).as_meta(),
+            ));
+            out_rules.push(out_nat.finalize());
+        }
 
         // 1:1 NAT inbound packets destined for external IP.
         let mut in_nat = Rule::new(
@@ -247,26 +267,39 @@ fn setup_ipv4_nat(
     }
 
     if let Some(snat_cfg) = &external_cfg.snat {
+        let igw_matches = match inet_gw_map {
+            Some(inet_gw_map) => {
+                match inet_gw_map.get(&(snat_cfg.external_ip.into())) {
+                    Some(igw_set) => {
+                        igw_set.iter().copied().map(Option::Some).collect()
+                    }
+                    None => vec![None],
+                }
+            }
+            None => vec![None],
+        };
+
         let snat = SNat::new(ip_cfg.private_ip);
         snat.add(
             ip_cfg.private_ip,
             snat_cfg.external_ip,
             snat_cfg.ports.clone(),
         );
-        let mut rule =
-            Rule::new(SNAT_PRIORITY, Action::Stateful(Arc::new(snat)));
+        let snat = Arc::new(snat);
 
-        rule.add_predicate(Predicate::InnerEtherType(vec![
-            EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
-        ]));
-        let parent_gw = inet_gw_map
-            .and_then(|map| map.get(&snat_cfg.external_ip.into()))
-            .copied();
-        rule.add_predicate(Predicate::Meta(
-            RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway(parent_gw).as_meta(),
-        ));
-        out_rules.push(rule.finalize());
+        for igw_id in igw_matches {
+            let mut rule =
+                Rule::new(SNAT_PRIORITY, Action::Stateful(snat.clone()));
+
+            rule.add_predicate(Predicate::InnerEtherType(vec![
+                EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
+            ]));
+            rule.add_predicate(Predicate::Meta(
+                RouterTargetInternal::KEY.to_string(),
+                RouterTargetInternal::InternetGateway(igw_id).as_meta(),
+            ));
+            out_rules.push(rule.finalize());
+        }
     }
     Ok(())
 }
@@ -275,7 +308,7 @@ fn setup_ipv6_nat(
     ip_cfg: &Ipv6Cfg,
     in_rules: &mut Vec<Rule<Finalized>>,
     out_rules: &mut Vec<Rule<Finalized>>,
-    inet_gw_map: Option<&BTreeMap<IpAddr, Uuid>>,
+    inet_gw_map: Option<&BTreeMap<IpAddr, BTreeSet<Uuid>>>,
 ) -> Result<(), OpteError> {
     // When it comes to NAT we always prefer using 1:1 NAT of external
     // IP to SNAT, preferring floating IPs over ephemeral.
@@ -288,13 +321,22 @@ fn setup_ipv6_nat(
     // See `setup_ipv4_nat` for an explanation on partitioning FIPs
     // by internet gateway ID.
     if !external_cfg.floating_ips.is_empty() {
-        let mut fips_by_gw = BTreeMap::new();
+        let mut fips_by_gw: BTreeMap<Option<Uuid>, Vec<Ipv6Addr>> =
+            BTreeMap::new();
         for ip in &external_cfg.floating_ips {
-            let gw_mapping =
-                inet_gw_map.and_then(|map| map.get(&(*ip).into())).copied();
-            let entry = fips_by_gw.entry(gw_mapping);
-            let ips = entry.or_insert_with(|| vec![]);
-            ips.push(*ip);
+            let gw_mappings =
+                inet_gw_map.and_then(|map| map.get(&(*ip).into())).cloned();
+            if let Some(igw_list) = gw_mappings {
+                for igw in igw_list {
+                    let entry = fips_by_gw.entry(Some(igw));
+                    let ips = entry.or_default();
+                    ips.push(*ip);
+                }
+            } else {
+                let entry = fips_by_gw.entry(None);
+                let ips = entry.or_default();
+                ips.push(*ip);
+            };
         }
 
         for (gw, fips) in fips_by_gw {
@@ -302,7 +344,7 @@ fn setup_ipv6_nat(
                 FLOATING_ONE_TO_ONE_NAT_PRIORITY,
                 Action::Stateful(Arc::new(OutboundNat::new(
                     ip_cfg.private_ip,
-                    &fips,
+                    &fips[..],
                     verifier.clone(),
                 ))),
             );
@@ -333,24 +375,34 @@ fn setup_ipv6_nat(
 
     if let Some(ip6) = external_cfg.ephemeral_ip {
         // 1:1 NAT outbound packets destined for internet gateway.
-        let mut out_nat = Rule::new(
-            EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,
-            Action::Stateful(Arc::new(OutboundNat::new(
-                ip_cfg.private_ip,
-                &[ip6],
-                verifier,
-            ))),
-        );
-        out_nat.add_predicate(Predicate::InnerEtherType(vec![
-            EtherTypeMatch::Exact(ETHER_TYPE_IPV6),
-        ]));
-        let parent_gw =
-            inet_gw_map.and_then(|map| map.get(&(ip6.into()))).copied();
-        out_nat.add_predicate(Predicate::Meta(
-            RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway(parent_gw).as_meta(),
-        ));
-        out_rules.push(out_nat.finalize());
+        let igw_matches = match inet_gw_map {
+            Some(inet_gw_map) => match inet_gw_map.get(&(ip6.into())) {
+                Some(igw_set) => {
+                    igw_set.iter().copied().map(Option::Some).collect()
+                }
+                None => vec![None],
+            },
+            None => vec![None],
+        };
+
+        for igw_id in igw_matches {
+            let mut out_nat = Rule::new(
+                EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY,
+                Action::Stateful(Arc::new(OutboundNat::new(
+                    ip_cfg.private_ip,
+                    &[ip6],
+                    verifier.clone(),
+                ))),
+            );
+            out_nat.add_predicate(Predicate::InnerEtherType(vec![
+                EtherTypeMatch::Exact(ETHER_TYPE_IPV6),
+            ]));
+            out_nat.add_predicate(Predicate::Meta(
+                RouterTargetInternal::KEY.to_string(),
+                RouterTargetInternal::InternetGateway(igw_id).as_meta(),
+            ));
+            out_rules.push(out_nat.finalize());
+        }
 
         // 1:1 NAT inbound packets destined for external IP.
         let mut in_nat = Rule::new(
@@ -364,26 +416,39 @@ fn setup_ipv6_nat(
     }
 
     if let Some(ref snat_cfg) = external_cfg.snat {
+        let igw_matches = match inet_gw_map {
+            Some(inet_gw_map) => {
+                match inet_gw_map.get(&(snat_cfg.external_ip.into())) {
+                    Some(igw_set) => {
+                        igw_set.iter().copied().map(Option::Some).collect()
+                    }
+                    None => vec![None],
+                }
+            }
+            None => vec![None],
+        };
+
         let snat = SNat::new(ip_cfg.private_ip);
         snat.add(
             ip_cfg.private_ip,
             snat_cfg.external_ip,
             snat_cfg.ports.clone(),
         );
-        let mut rule =
-            Rule::new(SNAT_PRIORITY, Action::Stateful(Arc::new(snat)));
+        let snat = Arc::new(snat);
 
-        rule.add_predicate(Predicate::InnerEtherType(vec![
-            EtherTypeMatch::Exact(ETHER_TYPE_IPV6),
-        ]));
-        let parent_gw = inet_gw_map
-            .and_then(|map| map.get(&snat_cfg.external_ip.into()))
-            .copied();
-        rule.add_predicate(Predicate::Meta(
-            RouterTargetInternal::KEY.to_string(),
-            RouterTargetInternal::InternetGateway(parent_gw).as_meta(),
-        ));
-        out_rules.push(rule.finalize());
+        for igw_id in igw_matches {
+            let mut rule =
+                Rule::new(SNAT_PRIORITY, Action::Stateful(snat.clone()));
+
+            rule.add_predicate(Predicate::InnerEtherType(vec![
+                EtherTypeMatch::Exact(ETHER_TYPE_IPV6),
+            ]));
+            rule.add_predicate(Predicate::Meta(
+                RouterTargetInternal::KEY.to_string(),
+                RouterTargetInternal::InternetGateway(igw_id).as_meta(),
+            ));
+            out_rules.push(rule.finalize());
+        }
     }
     Ok(())
 }

@@ -620,7 +620,7 @@ pub struct SetExternalIpsReq {
     pub port_name: String,
     pub external_ips_v4: Option<ExternalIpCfg<Ipv4Addr>>,
     pub external_ips_v6: Option<ExternalIpCfg<Ipv6Addr>>,
-    pub inet_gw_map: Option<BTreeMap<IpAddr, Uuid>>,
+    pub inet_gw_map: Option<BTreeMap<IpAddr, BTreeSet<Uuid>>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

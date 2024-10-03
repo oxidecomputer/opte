@@ -4322,6 +4322,11 @@ fn select_eip_conditioned_on_igw() {
     let custom_igw1 = Uuid::from_u128(3);
     let ipless_igw = Uuid::from_u128(4);
 
+    // The control plane may have several IGWs associated with a given
+    // pool. Accordingly, there is a chance that an IP might be a valid choice
+    // on several prefixes.
+    let all_ips_igw = Uuid::from_u128(5);
+
     // To test this, we want to set up a port such that:
     // * It has an ephemeral IP in IGW 1.
     //   - If we target 0.0.0.0/0, we choose the eph IP 192.168.0.1 .
@@ -4331,6 +4336,8 @@ fn select_eip_conditioned_on_igw() {
     // * It has no EIP in IGW3 [dst 3.3.3.0/24].
     //   - Packets sent here are denied -- we have no valid NAT IPs for this
     //     outbound traffic.
+    // * All EIPs are valid on IGW4.
+    //   - Packets will choose a random FIP, by priority ordering.
 
     let ip_cfg = IpCfg::DualStack {
         ipv4: Ipv4Cfg {
@@ -4425,26 +4432,34 @@ fn select_eip_conditioned_on_igw() {
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("4.4.4.0/24".parse().unwrap()),
+        RouterTarget::InternetGateway(Some(all_ips_igw)),
+        RouterClass::Custom,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
 
     // ====================================================================
     // Install new config.
     // ====================================================================
-    let mut inet_gw_map: BTreeMap<_, Uuid> = Default::default();
+    let mut inet_gw_map: BTreeMap<_, _> = Default::default();
     inet_gw_map.insert(
         g1_cfg.ipv4_cfg().unwrap().external_ips.ephemeral_ip.unwrap().into(),
-        default_igw,
+        [default_igw, all_ips_igw].into_iter().collect(),
     );
     inet_gw_map.insert(
         g1_cfg.ipv4_cfg().unwrap().external_ips.floating_ips[0].into(),
-        custom_igw0,
+        [custom_igw0, all_ips_igw].into_iter().collect(),
     );
     inet_gw_map.insert(
         g1_cfg.ipv4_cfg().unwrap().external_ips.floating_ips[1].into(),
-        custom_igw0,
+        [custom_igw0, all_ips_igw].into_iter().collect(),
     );
     inet_gw_map.insert(
         g1_cfg.ipv4_cfg().unwrap().external_ips.floating_ips[2].into(),
-        custom_igw1,
+        [custom_igw1, all_ips_igw].into_iter().collect(),
     );
 
     let new_v4_cfg = g1_cfg.ipv4_cfg().map(|v| v.external_ips.clone());
@@ -4459,7 +4474,7 @@ fn select_eip_conditioned_on_igw() {
         inet_gw_map: Some(inet_gw_map),
     };
     nat::set_nat_rules(&g1.cfg, &g1.port, req).unwrap();
-    update!(g1, ["incr:epoch, nat.rules.out",]);
+    update!(g1, ["incr:epoch", "set:nat.rules.out=8"]);
 
     // Send an ICMP packet for each destination, and verify that the
     // correct source IP is written in (or the packet is denied).
@@ -4565,6 +4580,31 @@ fn select_eip_conditioned_on_igw() {
             "firewall.flows.out, firewall.flows.in",
             "stats.port.out_uft_miss",
             "stats.port.out_drop, stats.port.out_drop_layer",
+        ]
+    );
+
+    // 4.4.4.0/24
+    let mut pkt1 = gen_icmp_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4_cfg().unwrap().private_ip.into(),
+        "4.4.4.1".parse().unwrap(),
+        ident,
+        seq_no,
+        &data[..],
+        1,
+    );
+    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new()).unwrap();
+    assert!(matches!(res, ProcessResult::Modified));
+    assert!(&g1_cfg.ipv4().external_ips.floating_ips[..]
+        .contains(&pkt1.meta().inner_ip4().unwrap().src));
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.out, nat.flows.in",
+            "stats.port.out_uft_miss, uft.out",
+            "stats.port.out_modified",
         ]
     );
 }
