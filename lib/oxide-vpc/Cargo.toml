@@ -33,12 +33,13 @@ usdt = ["opte/usdt"]
 illumos-sys-hdrs.workspace = true
 opte.workspace = true
 
+cfg-if.workspace = true
+poptrie.workspace = true
 serde.workspace = true
 smoltcp.workspace = true
 tabwriter = { workspace = true, optional = true }
+uuid.workspace = true
 zerocopy.workspace = true
-poptrie.workspace = true
-cfg-if.workspace = true
 
 [dev-dependencies]
 ctor.workspace = true
