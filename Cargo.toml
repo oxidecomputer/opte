@@ -75,7 +75,7 @@ toml = "0.8"
 uuid = { version = "1.0", default-features = false, features = ["serde"]}
 usdt = "0.5"
 version_check = "0.9"
-zerocopy = { version = "0.7", features = ["derive"] }
+zerocopy = { version = "0.8", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipath" }
