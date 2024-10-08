@@ -12,11 +12,11 @@ use ingot::ip::LowRentV6EhRepr;
 use ingot::tcp::Tcp;
 use ingot::tcp::ValidTcp;
 use ingot::types::primitives::*;
+use ingot::types::util::Repeated;
 use ingot::types::ByteSlice;
 use ingot::types::NetworkRepr;
 use ingot::types::Packet;
 use ingot::types::ParseError;
-use ingot::types::Repeated;
 use ingot::types::Vec;
 use ingot::udp::Udp;
 use ingot::udp::ValidUdp;
@@ -117,28 +117,3 @@ pub struct Ipv6 {
     #[ingot(subparse(on_next_layer))]
     pub v6ext: Repeated<LowRentV6EhRepr>,
 }
-
-// Why TF do I need to redefine these? Check...
-// impl<Any> From<Ipv4> for Packet<Ipv4, Any> {
-//     fn from(value: Ipv4) -> Self {
-//         Packet::Repr(value)
-//     }
-// }
-
-// impl<V: ByteSlice, Any> From<ValidIpv4<V>> for Packet<Any, ValidIpv4<V>> {
-//     fn from(value: ValidIpv4<V>) -> Self {
-//         Packet::Raw(value)
-//     }
-// }
-
-// impl<Any> From<Ipv6> for Packet<Ipv6, Any> {
-//     fn from(value: Ipv6) -> Self {
-//         Packet::Repr(value)
-//     }
-// }
-
-// impl<V: ByteSlice, Any> From<ValidIpv6<V>> for Packet<Any, ValidIpv6<V>> {
-//     fn from(value: ValidIpv6<V>) -> Self {
-//         Packet::Raw(value)
-//     }
-// }

@@ -94,10 +94,10 @@ use ingot::tcp::TcpMut;
 use ingot::tcp::TcpPacket;
 use ingot::tcp::TcpRef;
 use ingot::types::primitives::*;
+use ingot::types::util::Repeated;
 use ingot::types::DirectPacket;
 use ingot::types::Emit;
 use ingot::types::Header;
-use ingot::types::HeaderStack;
 use ingot::types::IndirectPacket;
 use ingot::types::NextLayer;
 use ingot::types::Packet as IngotPacket;
@@ -106,7 +106,6 @@ use ingot::types::ParseError as IngotParseErr;
 use ingot::types::ParseResult;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
-use ingot::types::Repeated;
 use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use ingot::udp::UdpPacket;
@@ -850,10 +849,9 @@ impl<T: ByteSlice> OpteMeta<T> {
     pub fn convert_ingot<U: Into<Self>, Q: Read<Chunk = T>>(
         value: IngotParsed<U, Q>,
     ) -> OpteParsed<Q> {
-        let IngotParsed { stack: HeaderStack(headers), data, last_chunk } =
-            value;
+        let IngotParsed { stack: headers, data, last_chunk } = value;
 
-        IngotParsed { stack: HeaderStack(headers.into()), data, last_chunk }
+        IngotParsed { stack: headers.into(), data, last_chunk }
     }
 }
 
@@ -1566,8 +1564,7 @@ where
     #[inline]
     pub fn to_full_meta(self) -> Packet2<Parsed2<T>> {
         let Packet2 { state: ParsedStage1 { len, meta } } = self;
-        let IngotParsed { stack: HeaderStack(headers), data, last_chunk } =
-            meta;
+        let IngotParsed { stack: headers, data, last_chunk } = meta;
 
         // TODO: we can probably not do this in some cases, but we
         // don't have a way for headeractions to signal that they
@@ -1608,12 +1605,12 @@ where
 
     #[inline]
     pub fn meta(&self) -> &M {
-        &self.state.meta.stack.0
+        &self.state.meta.stack
     }
 
     #[inline]
     pub fn meta_mut(&mut self) -> &mut M {
-        &mut self.state.meta.stack.0
+        &mut self.state.meta.stack
     }
 
     #[inline]

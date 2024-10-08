@@ -2542,12 +2542,31 @@ impl From<WrapError> for PacketError {
     }
 }
 
+impl DError for ingot::types::ParseError {
+    fn discriminant(&self) -> &'static core::ffi::CStr {
+        self.as_cstr()
+    }
+
+    fn child(&self) -> Option<&dyn DError> {
+        None
+    }
+}
+
+impl DError for ingot::types::PacketParseError {
+    fn discriminant(&self) -> &'static core::ffi::CStr {
+        self.header().as_cstr()
+    }
+
+    fn child(&self) -> Option<&dyn DError> {
+        Some(self.error())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, DError)]
 #[derror(leaf_data = ParseError::data)]
 pub enum ParseError {
-    // TODO: make this far richer...
-    #[leaf]
-    IngotError(ingot::types::ParseError),
+    // TODO: I think this may be the only err variant?
+    IngotError(ingot::types::PacketParseError),
     BadHeader(HeaderReadErr),
     BadInnerIpLen {
         expected: usize,
@@ -2607,8 +2626,8 @@ impl ParseError {
     }
 }
 
-impl From<ingot::types::ParseError> for ParseError {
-    fn from(value: ingot::types::ParseError) -> Self {
+impl From<ingot::types::PacketParseError> for ParseError {
+    fn from(value: ingot::types::PacketParseError) -> Self {
         Self::IngotError(value)
     }
 }
