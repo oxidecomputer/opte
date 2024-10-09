@@ -14,6 +14,7 @@ use ingot::tcp::ValidTcp;
 use ingot::types::primitives::*;
 use ingot::types::util::Repeated;
 use ingot::types::ByteSlice;
+use ingot::types::Emit;
 use ingot::types::NetworkRepr;
 use ingot::types::Packet;
 use ingot::types::ParseError;
@@ -24,6 +25,8 @@ use ingot::Ingot;
 use opte_api::Ipv4Addr;
 use opte_api::Ipv6Addr;
 use opte_api::MacAddr;
+
+use super::checksum::Checksum;
 
 // Redefine Ethernet and v4/v6 because we have our own, internal,
 // types already.
@@ -90,6 +93,19 @@ pub struct Ipv4 {
 
     #[ingot(var_len = "(ihl * 4).saturating_sub(20)")]
     pub options: Vec<u8>,
+}
+
+impl Ipv4 {
+    pub fn fill_checksum(&mut self) {
+        let mut csum = Checksum::default();
+        self.checksum = 0;
+
+        let mut bytes = [0u8; 56];
+        self.emit_raw(&mut bytes[..]);
+        csum.add_bytes(&bytes[..]);
+
+        self.checksum = csum.finalize();
+    }
 }
 
 #[derive(Debug, Clone, Ingot, Eq, PartialEq)]

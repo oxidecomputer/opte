@@ -52,6 +52,9 @@ use smoltcp::wire::DhcpRepr;
 use smoltcp::wire::Ipv4Address;
 use smoltcp::wire::DHCP_MAX_DNS_SERVER_COUNT;
 
+pub const DHCP_SERVER_PORT: u16 = 67;
+pub const DHCP_CLIENT_PORT: u16 = 68;
+
 /// The DHCP message type.
 ///
 /// Why define our own wrapper type when smoltcp already provides this
@@ -460,8 +463,8 @@ impl HairpinAction for DhcpAction {
                 Ipv4Addr::LOCAL_BCAST,
             )]),
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::UDP)]),
-            Predicate::InnerDstPort(vec![PortMatch::Exact(67)]),
-            Predicate::InnerSrcPort(vec![PortMatch::Exact(68)]),
+            Predicate::InnerDstPort(vec![PortMatch::Exact(DHCP_SERVER_PORT)]),
+            Predicate::InnerSrcPort(vec![PortMatch::Exact(DHCP_CLIENT_PORT)]),
         ];
 
         let data_preds = match self.reply_type {

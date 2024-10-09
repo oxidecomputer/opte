@@ -372,15 +372,8 @@ impl CompiledEncap {
             &mut pkt
         };
 
-        unsafe {
-            target.write_front(bytes.len(), |v| {
-                // feat(maybe_uninit_write_slice) -> copy_from_slice
-                // is unstable.
-                let uninit_src: &[MaybeUninit<u8>] =
-                    core::mem::transmute(bytes.as_slice());
-                v.copy_from_slice(uninit_src);
-            });
-        }
+        // Unwrap safety -- we either had enough bytes, or we just allocated them.
+        target.write_bytes_front(bytes).unwrap();
 
         let l4_len = ulp_len + encap_sz;
         let l3_len = l4_len + l3_extra_bytes;

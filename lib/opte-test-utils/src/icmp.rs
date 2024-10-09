@@ -8,10 +8,17 @@
 
 use opte::api::*;
 use opte::engine::ether::*;
+use opte::engine::ingot_base::Ethernet;
+use opte::engine::ingot_base::Ipv4;
+use opte::engine::ingot_base::Ipv6;
+use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ip4::*;
 use opte::engine::ip6::*;
 use opte::engine::packet::*;
 use opte::engine::Direction::*;
+use opte::ingot::ethernet::Ethertype;
+use opte::ingot::ip::IpProtocol as IngotIpProto;
+use opte::ingot::types::Header;
 use oxide_vpc::engine::VpcParser;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use smoltcp::wire::Icmpv4Packet;
@@ -40,7 +47,7 @@ pub fn gen_icmp_echo_req(
     seq_no: u16,
     data: &[u8],
     segments: usize,
-) -> Packet<Parsed> {
+) -> MsgBlk {
     match (ip_src, ip_dst) {
         (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => gen_icmpv4_echo_req(
             eth_src, eth_dst, src, dst, ident, seq_no, data, segments,
@@ -62,7 +69,7 @@ pub fn gen_icmpv4_echo_req(
     seq_no: u16,
     data: &[u8],
     segments: usize,
-) -> Packet<Parsed> {
+) -> MsgBlk {
     let etype = IcmpEchoType::Req;
     gen_icmp_echo(
         etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data, segments,
@@ -79,7 +86,7 @@ pub fn gen_icmp_echo_reply(
     seq_no: u16,
     data: &[u8],
     segments: usize,
-) -> Packet<Parsed> {
+) -> MsgBlk {
     match (ip_src, ip_dst) {
         (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => gen_icmpv4_echo_reply(
             eth_src, eth_dst, src, dst, ident, seq_no, data, segments,
@@ -101,7 +108,7 @@ pub fn gen_icmpv4_echo_reply(
     seq_no: u16,
     data: &[u8],
     segments: usize,
-) -> Packet<Parsed> {
+) -> MsgBlk {
     let etype = IcmpEchoType::Reply;
     gen_icmp_echo(
         etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data, segments,
@@ -118,8 +125,8 @@ pub fn gen_icmp_echo(
     ident: u16,
     seq_no: u16,
     data: &[u8],
-    segments: usize,
-) -> Packet<Parsed> {
+    n_segments: usize,
+) -> MsgBlk {
     let icmp = match etype {
         IcmpEchoType::Req => Icmpv4Repr::EchoRequest { ident, seq_no, data },
         IcmpEchoType::Reply => Icmpv4Repr::EchoReply { ident, seq_no, data },
@@ -128,123 +135,72 @@ pub fn gen_icmp_echo(
     let mut icmp_pkt = Icmpv4Packet::new_unchecked(&mut icmp_bytes);
     icmp.emit(&mut icmp_pkt, &Default::default());
 
-    let mut ip4 = Ipv4Meta {
-        src: ip_src,
-        dst: ip_dst,
-        proto: Protocol::ICMP,
-        total_len: (Ipv4Hdr::BASE_SIZE + icmp.buffer_len()) as u16,
+    let eth = Ethernet {
+        destination: eth_dst,
+        source: eth_src,
+        ethertype: Ethertype::IPV4,
+    };
+
+    let mut ip = Ipv4 {
+        source: ip_src,
+        destination: ip_dst,
+        protocol: IngotIpProto::ICMP,
+        total_len: (icmp.buffer_len() + Ipv4::MINIMUM_LENGTH) as u16,
         ..Default::default()
     };
-    ip4.compute_hdr_csum();
-    let eth =
-        &EtherMeta { dst: eth_dst, src: eth_src, ether_type: EtherType::Ipv4 };
+    ip.fill_checksum();
 
-    let total_len = EtherHdr::SIZE + ip4.hdr_len() + icmp.buffer_len();
+    let total_len =
+        eth.packet_length() + ip.packet_length() + icmp.buffer_len();
+    let mut segments = vec![];
 
-    match segments {
+    match n_segments {
         1 => {
-            let mut pkt = Packet::alloc_and_expand(total_len);
-            let mut wtr = pkt.seg0_wtr();
-            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-            wtr.write(&icmp_bytes).unwrap();
-            pkt.parse(Out, VpcParser::new()).unwrap()
+            let mut pkt = MsgBlk::new_ethernet(total_len);
+            pkt.emit_back(&(eth, ip));
+            pkt.resize(total_len);
+            pkt.write_bytes_back(&icmp_bytes).unwrap();
+
+            return pkt;
         }
         2 => {
-            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
-            let mut wtr = pkt.seg_wtr(0);
-            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            let mut wtr =
-                pkt.add_seg(ip4.hdr_len() + icmp_bytes.len()).unwrap();
-            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-            wtr.write(&icmp_bytes).unwrap();
-            pkt.parse(Out, VpcParser::new()).unwrap()
+            let mut pkt = MsgBlk::new_ethernet(eth.packet_length());
+            pkt.emit_back(eth).unwrap();
+            segments.push(pkt);
+
+            let t_len = ip.packet_length() + icmp.buffer_len();
+            let mut pkt = MsgBlk::new(t_len);
+            pkt.emit_back(ip).unwrap();
+            pkt.resize(t_len).unwrap();
+            pkt.write_bytes_back(&icmp_bytes).unwrap();
+            segments.push(pkt);
         }
         3 => {
-            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
-            let mut wtr = pkt.seg_wtr(0);
-            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            let mut wtr = pkt.add_seg(ip4.hdr_len()).unwrap();
-            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-            let mut wtr = pkt.add_seg(icmp_bytes.len()).unwrap();
-            wtr.write(&icmp_bytes).unwrap();
-            pkt.parse(Out, VpcParser::new()).unwrap()
+            let mut pkt = MsgBlk::new_ethernet(eth.packet_length());
+            pkt.emit_back(eth).unwrap();
+            segments.push(pkt);
+
+            let mut pkt = MsgBlk::new(ip.packet_length());
+            pkt.emit_back(eth).unwrap();
+            segments.push(pkt);
+
+            let mut pkt = MsgBlk::new(icmp.buffer_len());
+            pkt.write_bytes_back(&icmp_bytes).unwrap();
+            segments.push(pkt);
         }
         _ => {
             panic!("only 1 2 or 3 segments allowed")
         }
     }
-}
 
-#[allow(clippy::too_many_arguments)]
-pub fn gen_icmp_echo_unparsed(
-    etype: IcmpEchoType,
-    eth_src: MacAddr,
-    eth_dst: MacAddr,
-    ip_src: Ipv4Addr,
-    ip_dst: Ipv4Addr,
-    ident: u16,
-    seq_no: u16,
-    data: &[u8],
-    segments: usize,
-) -> Packet<Initialized> {
-    let icmp = match etype {
-        IcmpEchoType::Req => Icmpv4Repr::EchoRequest { ident, seq_no, data },
-        IcmpEchoType::Reply => Icmpv4Repr::EchoReply { ident, seq_no, data },
-    };
-    let mut icmp_bytes = vec![0u8; icmp.buffer_len()];
-    let mut icmp_pkt = Icmpv4Packet::new_unchecked(&mut icmp_bytes);
-    icmp.emit(&mut icmp_pkt, &Default::default());
+    while segments.len() > 1 {
+        let chain = segments.pop().unwrap();
+        let mut new_el = segments.last_mut().unwrap();
 
-    let mut ip4 = Ipv4Meta {
-        src: ip_src,
-        dst: ip_dst,
-        proto: Protocol::ICMP,
-        total_len: (Ipv4Hdr::BASE_SIZE + icmp.buffer_len()) as u16,
-        ..Default::default()
-    };
-    ip4.compute_hdr_csum();
-    let eth =
-        &EtherMeta { dst: eth_dst, src: eth_src, ether_type: EtherType::Ipv4 };
-
-    let total_len = EtherHdr::SIZE + ip4.hdr_len() + icmp.buffer_len();
-
-    match segments {
-        1 => {
-            let mut pkt = Packet::alloc_and_expand(total_len);
-            let mut wtr = pkt.seg0_wtr();
-            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-            wtr.write(&icmp_bytes).unwrap();
-
-            pkt
-        }
-        2 => {
-            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
-            let mut wtr = pkt.seg_wtr(0);
-            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            let mut wtr =
-                pkt.add_seg(ip4.hdr_len() + icmp_bytes.len()).unwrap();
-            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-            wtr.write(&icmp_bytes).unwrap();
-
-            pkt
-        }
-        3 => {
-            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
-            let mut wtr = pkt.seg_wtr(0);
-            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            let mut wtr = pkt.add_seg(ip4.hdr_len()).unwrap();
-            ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-            let mut wtr = pkt.add_seg(icmp_bytes.len()).unwrap();
-            wtr.write(&icmp_bytes).unwrap();
-
-            pkt
-        }
-        _ => {
-            panic!("only 1 2 or 3 segments allowed")
-        }
+        new_el.extend_if_one(chain);
     }
+
+    segments.pop().unwrap()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -257,7 +213,7 @@ pub fn gen_icmpv6_echo_req(
     seq_no: u16,
     data: &[u8],
     segments: usize,
-) -> Packet<Parsed> {
+) -> MsgBlk {
     let etype = IcmpEchoType::Req;
     gen_icmpv6_echo(
         etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data, segments,
@@ -274,7 +230,7 @@ pub fn gen_icmpv6_echo_reply(
     seq_no: u16,
     data: &[u8],
     segments: usize,
-) -> Packet<Parsed> {
+) -> MsgBlk {
     let etype = IcmpEchoType::Reply;
     gen_icmpv6_echo(
         etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data, segments,
@@ -291,27 +247,8 @@ pub fn gen_icmpv6_echo(
     ident: u16,
     seq_no: u16,
     data: &[u8],
-    segments: usize,
-) -> Packet<Parsed> {
-    gen_icmpv6_echo_unparsed(
-        etype, eth_src, eth_dst, ip_src, ip_dst, ident, seq_no, data, segments,
-    )
-    .parse(Out, VpcParser::new())
-    .unwrap()
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn gen_icmpv6_echo_unparsed(
-    etype: IcmpEchoType,
-    eth_src: MacAddr,
-    eth_dst: MacAddr,
-    ip_src: Ipv6Addr,
-    ip_dst: Ipv6Addr,
-    ident: u16,
-    seq_no: u16,
-    data: &[u8],
-    segments: usize,
-) -> Packet<Initialized> {
+    n_segments: usize,
+) -> MsgBlk {
     let icmp = match etype {
         IcmpEchoType::Req => Icmpv6Repr::EchoRequest { ident, seq_no, data },
         IcmpEchoType::Reply => Icmpv6Repr::EchoReply { ident, seq_no, data },
@@ -325,53 +262,73 @@ pub fn gen_icmpv6_echo_unparsed(
         &mut req_pkt,
         &Default::default(),
     );
-    let ip6 = Ipv6Meta {
-        src: ip_src,
-        dst: ip_dst,
-        proto: Protocol::ICMPv6,
-        next_hdr: IpProtocol::Icmpv6,
+
+    let eth = Ethernet {
+        destination: eth_dst,
+        source: eth_src,
+        ethertype: Ethertype::IPV4,
+    };
+
+    let ip = Ipv6 {
+        source: ip_src,
+        destination: ip_dst,
+        next_header: IngotIpProto::ICMP_V6,
+        payload_len: icmp.buffer_len() as u16,
         hop_limit: 64,
-        pay_len: icmp.buffer_len() as u16,
         ..Default::default()
     };
-    let eth =
-        &EtherMeta { dst: eth_dst, src: eth_src, ether_type: EtherType::Ipv6 };
 
-    let total_len = EtherHdr::SIZE + ip6.hdr_len() + icmp.buffer_len();
+    let total_len =
+        eth.packet_length() + ip.packet_length() + icmp.buffer_len();
+    let mut segments = vec![];
 
-    match segments {
+    match n_segments {
         1 => {
-            let mut pkt = Packet::alloc_and_expand(total_len);
-            let mut wtr = pkt.seg0_wtr();
-            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-            wtr.write(&body_bytes).unwrap();
-            pkt
+            let mut pkt = MsgBlk::new_ethernet(total_len);
+            pkt.emit_back(&(eth, ip));
+            pkt.resize(total_len);
+            pkt.write_bytes_back(&body_bytes).unwrap();
+
+            return pkt;
         }
         2 => {
-            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
-            let mut wtr = pkt.seg_wtr(0);
-            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            let mut wtr =
-                pkt.add_seg(ip6.hdr_len() + body_bytes.len()).unwrap();
-            ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-            wtr.write(&body_bytes).unwrap();
-            pkt
+            let mut pkt = MsgBlk::new_ethernet(eth.packet_length());
+            pkt.emit_back(eth).unwrap();
+            segments.push(pkt);
+
+            let t_len = ip.packet_length() + icmp.buffer_len();
+            let mut pkt = MsgBlk::new(t_len);
+            pkt.emit_back(ip).unwrap();
+            pkt.resize(t_len).unwrap();
+            pkt.write_bytes_back(&body_bytes).unwrap();
+            segments.push(pkt);
         }
         3 => {
-            let mut pkt = Packet::alloc_and_expand(EtherHdr::SIZE);
-            let mut wtr = pkt.seg_wtr(0);
-            eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-            let mut wtr = pkt.add_seg(ip6.hdr_len()).unwrap();
-            ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-            let mut wtr = pkt.add_seg(body_bytes.len()).unwrap();
-            wtr.write(&body_bytes).unwrap();
-            pkt
+            let mut pkt = MsgBlk::new_ethernet(eth.packet_length());
+            pkt.emit_back(eth).unwrap();
+            segments.push(pkt);
+
+            let mut pkt = MsgBlk::new(ip.packet_length());
+            pkt.emit_back(eth).unwrap();
+            segments.push(pkt);
+
+            let mut pkt = MsgBlk::new(icmp.buffer_len());
+            pkt.write_bytes_back(&body_bytes).unwrap();
+            segments.push(pkt);
         }
         _ => {
             panic!("only 1 2 or 3 segments allowed")
         }
     }
+
+    while segments.len() > 1 {
+        let chain = segments.pop().unwrap();
+        let mut new_el = segments.last_mut().unwrap();
+
+        new_el.extend_if_one(chain);
+    }
+
+    segments.pop().unwrap()
 }
 
 /// Generate an NDP packet given an inner `repr`.
@@ -382,31 +339,31 @@ pub fn generate_ndisc(
     src_ip: Ipv6Addr,
     dst_ip: Ipv6Addr,
     with_checksum: bool,
-) -> Packet<Parsed> {
-    generate_ndisc_unparsed(
-        repr,
-        src_mac,
-        dst_mac,
-        src_ip,
-        dst_ip,
-        with_checksum,
-    )
-    .parse(Out, VpcParser::new())
-    .unwrap()
-}
-
-/// Generate an NDP packet given an inner `repr`.
-pub fn generate_ndisc_unparsed(
-    repr: NdiscRepr,
-    src_mac: MacAddr,
-    dst_mac: MacAddr,
-    src_ip: Ipv6Addr,
-    dst_ip: Ipv6Addr,
-    with_checksum: bool,
-) -> Packet<Initialized> {
+) -> MsgBlk {
     let req = Icmpv6Repr::Ndisc(repr);
-    let mut body = vec![0u8; req.buffer_len()];
-    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body);
+    let eth = Ethernet {
+        destination: dst_mac,
+        source: src_mac,
+        ethertype: Ethertype::IPV6,
+    };
+
+    let ip = Ipv6 {
+        source: src_ip,
+        destination: dst_ip,
+        next_header: IngotIpProto::ICMP_V6,
+        payload_len: req.buffer_len() as u16,
+        hop_limit: 255,
+        ..Default::default()
+    };
+
+    let headers = (eth, ip);
+    let total_len = req.buffer_len() + headers.packet_length();
+    let mut pkt = MsgBlk::new_ethernet(total_len);
+    pkt.emit_back(&headers).unwrap();
+    let ndisc_off = pkt.len();
+    pkt.resize(total_len);
+
+    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut pkt[ndisc_off..]);
     let mut csum = CsumCapab::ignored();
     if with_checksum {
         csum.icmpv6 = smoltcp::phy::Checksum::Tx;
@@ -417,24 +374,7 @@ pub fn generate_ndisc_unparsed(
         &mut req_pkt,
         &csum,
     );
-    let ip6 = Ipv6Meta {
-        src: src_ip,
-        dst: dst_ip,
-        proto: Protocol::ICMPv6,
-        next_hdr: IpProtocol::Icmpv6,
-        hop_limit: 255,
-        pay_len: req.buffer_len() as u16,
-        ..Default::default()
-    };
-    let eth =
-        EtherMeta { dst: dst_mac, src: src_mac, ether_type: EtherType::Ipv6 };
 
-    let total_len = EtherHdr::SIZE + ip6.hdr_len() + req.buffer_len();
-    let mut pkt = Packet::alloc_and_expand(total_len);
-    let mut wtr = pkt.seg0_wtr();
-    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-    ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-    wtr.write(&body).unwrap();
     pkt
 }
 
@@ -443,7 +383,7 @@ pub fn generate_ndisc_unparsed(
 // The source MAC is used to generate the source IPv6 address, using the EUI-64
 // transform. The resulting packet has a multicast MAC address, and the
 // All-Routers destination IPv6 address.
-pub fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
+pub fn gen_router_solicitation(src_mac: &MacAddr) -> MsgBlk {
     let solicit = NdiscRepr::RouterSolicit {
         lladdr: Some(RawHardwareAddress::from_bytes(src_mac)),
     };
@@ -466,7 +406,7 @@ pub fn gen_router_solicitation(src_mac: &MacAddr) -> Packet<Parsed> {
 pub fn generate_neighbor_solicitation(
     info: &SolicitInfo,
     with_checksum: bool,
-) -> Packet<Parsed> {
+) -> MsgBlk {
     let solicit = NdiscRepr::NeighborSolicit {
         target_addr: Ipv6Address::from(info.target_addr),
         lladdr: info.lladdr.map(|x| RawHardwareAddress::from_bytes(&x)),
@@ -513,7 +453,7 @@ impl std::fmt::Display for SolicitInfo {
 pub fn generate_neighbor_advertisement(
     info: &AdvertInfo,
     with_checksum: bool,
-) -> Packet<Parsed> {
+) -> MsgBlk {
     let advert = NdiscRepr::NeighborAdvert {
         flags: info.flags,
         target_addr: info.target_addr.into(),

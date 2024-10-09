@@ -48,6 +48,7 @@ use super::packet::InnerFlowId;
 use super::packet::Packet;
 use super::packet::PacketState;
 use super::packet::ParseError;
+use super::packet::WriteError;
 use super::packet::FLOW_ID_DEFAULT;
 use super::rule::CompiledEncap;
 use super::rule::CompiledTransform;
@@ -97,6 +98,7 @@ use ingot::types::primitives::*;
 use ingot::types::util::Repeated;
 use ingot::types::DirectPacket;
 use ingot::types::Emit;
+use ingot::types::EmitDoesNotRelyOnBufContents;
 use ingot::types::Header;
 use ingot::types::IndirectPacket;
 use ingot::types::NextLayer;
@@ -543,6 +545,12 @@ impl MsgBlk {
         Self { inner }
     }
 
+    pub fn new_pkt(emit: impl Emit + EmitDoesNotRelyOnBufContents) -> Self {
+        let mut pkt = Self::new(emit.packet_length());
+        pkt.emit_back(emit).unwrap();
+        pkt
+    }
+
     pub fn headroom(&self) -> usize {
         unsafe {
             let inner = self.inner.as_ref();
@@ -553,6 +561,14 @@ impl MsgBlk {
 
     pub fn new_ethernet(len: usize) -> Self {
         Self::new_with_headroom(2, len)
+    }
+
+    pub fn new_ethernet_pkt(
+        emit: impl Emit + EmitDoesNotRelyOnBufContents,
+    ) -> Self {
+        let mut pkt = Self::new_ethernet(emit.packet_length());
+        pkt.emit_back(emit).unwrap();
+        pkt
     }
 
     pub fn byte_len(&self) -> usize {
@@ -578,12 +594,17 @@ impl MsgBlk {
         &mut self,
         n_bytes: usize,
         f: impl FnOnce(&mut [MaybeUninit<u8>]),
-    ) {
+    ) -> Result<(), WriteError> {
         let mut_out = unsafe { self.inner.as_mut() };
         let avail_bytes =
             unsafe { (*mut_out.b_datap).db_lim.offset_from(mut_out.b_wptr) };
-        assert!(avail_bytes >= 0);
-        assert!(avail_bytes as usize >= n_bytes);
+
+        if avail_bytes < 0 || (avail_bytes as usize) < n_bytes {
+            return Err(WriteError::NotEnoughBytes {
+                available: avail_bytes.max(0) as usize,
+                needed: n_bytes,
+            });
+        }
 
         let in_slice = unsafe {
             slice::from_raw_parts_mut(
@@ -595,19 +616,25 @@ impl MsgBlk {
         f(in_slice);
 
         mut_out.b_wptr = unsafe { mut_out.b_wptr.add(n_bytes) };
+
+        Ok(())
     }
 
     pub unsafe fn write_front(
         &mut self,
         n_bytes: usize,
         f: impl FnOnce(&mut [MaybeUninit<u8>]),
-    ) {
+    ) -> Result<(), WriteError> {
         let mut_out = unsafe { self.inner.as_mut() };
         let avail_bytes =
             unsafe { mut_out.b_rptr.offset_from((*mut_out.b_datap).db_base) };
 
-        assert!(avail_bytes >= 0);
-        assert!(avail_bytes as usize >= n_bytes);
+        if avail_bytes < 0 || (avail_bytes as usize) < n_bytes {
+            return Err(WriteError::NotEnoughBytes {
+                available: avail_bytes.max(0) as usize,
+                needed: n_bytes,
+            });
+        }
 
         let new_head = unsafe { mut_out.b_rptr.sub(n_bytes) };
 
@@ -618,6 +645,90 @@ impl MsgBlk {
         f(in_slice);
 
         mut_out.b_rptr = new_head;
+
+        Ok(())
+    }
+
+    /// Adjusts the write pointer for this MsgBlk, initialising any extra bytes to 0.
+    pub fn resize(&mut self, new_len: usize) -> Result<(), WriteError> {
+        let len = self.len();
+        if new_len < len {
+            unsafe {
+                let mut_inner = self.inner.as_mut();
+                mut_inner.b_wptr = mut_inner.b_wptr.sub(len - new_len);
+            }
+            Ok(())
+        } else if new_len > len {
+            unsafe {
+                self.write(new_len - len, |v| {
+                    // MaybeUninit::fill is unstable.
+                    let n = v.len();
+                    v.as_mut_ptr().write_bytes(0, n);
+                })
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Emits an `ingot` packet after any bytes present in this mblk.
+    pub fn emit_back(
+        &mut self,
+        pkt: impl Emit + EmitDoesNotRelyOnBufContents,
+    ) -> Result<(), WriteError> {
+        unsafe {
+            self.write(pkt.packet_length(), |v| {
+                // Unwrap safety: write will return an Error if
+                // unsuccessful.
+                pkt.emit_uninit(v).unwrap();
+            })
+        }
+    }
+
+    /// Emits an `ingot` packet before any bytes present in this mblk.
+    pub fn emit_front(
+        &mut self,
+        pkt: impl Emit + EmitDoesNotRelyOnBufContents,
+    ) -> Result<(), WriteError> {
+        unsafe {
+            self.write_front(pkt.packet_length(), |v| {
+                pkt.emit_uninit(v).unwrap();
+            })
+        }
+    }
+
+    /// XXX
+    pub fn write_bytes_back(
+        &mut self,
+        bytes: impl AsRef<[u8]>,
+    ) -> Result<(), WriteError> {
+        let bytes = bytes.as_ref();
+        unsafe {
+            self.write(bytes.len(), |v| {
+                // feat(maybe_uninit_write_slice) -> copy_from_slice
+                // is unstable.
+                let uninit_src: &[MaybeUninit<u8>] =
+                    core::mem::transmute(bytes);
+                v.copy_from_slice(uninit_src);
+            })
+        }
+    }
+
+    /// XXX
+    pub fn write_bytes_front(
+        &mut self,
+        bytes: impl AsRef<[u8]>,
+    ) -> Result<(), WriteError> {
+        let bytes = bytes.as_ref();
+        unsafe {
+            self.write_front(bytes.len(), |v| {
+                // feat(maybe_uninit_write_slice) -> copy_from_slice
+                // is unstable.
+                let uninit_src: &[MaybeUninit<u8>] =
+                    core::mem::transmute(bytes);
+                v.copy_from_slice(uninit_src);
+            })
+        }
     }
 
     // TODO: I really need to rethink this one in practice.
@@ -1531,6 +1642,11 @@ where
     // TODO: cleanup type aliases.
 
     #[inline]
+    pub fn len(&self) -> usize {
+        self.state.len
+    }
+
+    #[inline]
     pub fn parse_inbound<NP: NetworkParser>(
         self,
         net: NP,
@@ -1915,6 +2031,13 @@ impl<T: Read> Packet2<Parsed2<T>> {
     pub fn mblk_addr(&self) -> uintptr_t {
         // TODO.
         0
+    }
+
+    /// Compute ULP and IP header checksum from scratch.
+    ///
+    /// This should really only be used for testing.
+    pub fn compute_checksums(&mut self) {
+        todo!()
     }
 
     pub fn body_csum(&mut self) -> Option<Checksum> {
@@ -2386,12 +2509,12 @@ impl EmittestSpec {
                 }
 
                 if let Some(outer_encap) = &push_spec.outer_encap {
-                    let a = SizeHoldingEncap {
+                    let encap = SizeHoldingEncap {
                         encapped_len: self.ulp_len as u16,
                         meta: &outer_encap,
                     };
 
-                    let l = a.packet_length();
+                    let l = encap.packet_length();
 
                     let target = if prepend.is_none() {
                         space_in_front -= l;
@@ -2401,11 +2524,7 @@ impl EmittestSpec {
                         prepend.as_mut().unwrap()
                     };
 
-                    unsafe {
-                        target.write_front(l, |v| {
-                            a.emit_uninit(v).unwrap();
-                        })
-                    }
+                    target.emit_front(&encap).unwrap();
                 }
 
                 if let Some(outer_ip) = &push_spec.outer_ip {
@@ -2418,11 +2537,7 @@ impl EmittestSpec {
                         prepend.as_mut().unwrap()
                     };
 
-                    unsafe {
-                        target.write_front(l, |v| {
-                            outer_ip.emit_uninit(v).unwrap();
-                        })
-                    }
+                    target.emit_front(outer_ip).unwrap();
                 }
 
                 if let Some(outer_eth) = &push_spec.outer_eth {
@@ -2435,11 +2550,7 @@ impl EmittestSpec {
                         prepend.as_mut().unwrap()
                     };
 
-                    unsafe {
-                        target.write_front(l, |v| {
-                            outer_eth.emit_uninit(v).unwrap();
-                        })
-                    }
+                    target.emit_front(outer_eth).unwrap();
                 }
 
                 if let Some(mut prepend) = prepend {
@@ -2553,12 +2664,12 @@ impl EmitSpec {
         }
 
         if let Some(outer_encap) = &self.push_spec.outer_encap {
-            let a = SizeHoldingEncap {
+            let encap = SizeHoldingEncap {
                 encapped_len: self.encapped_len,
                 meta: &outer_encap,
             };
 
-            let l = a.packet_length();
+            let l = encap.packet_length();
 
             let target = if prepend.is_none() {
                 space_in_front -= l;
@@ -2568,11 +2679,7 @@ impl EmitSpec {
                 prepend.as_mut().unwrap()
             };
 
-            unsafe {
-                target.write_front(l, |v| {
-                    a.emit_uninit(v).unwrap();
-                })
-            }
+            target.emit_front(&encap).unwrap();
         }
 
         if let Some(outer_ip) = &self.push_spec.outer_ip {
@@ -2585,11 +2692,7 @@ impl EmitSpec {
                 prepend.as_mut().unwrap()
             };
 
-            unsafe {
-                target.write_front(l, |v| {
-                    outer_ip.emit_uninit(v).unwrap();
-                })
-            }
+            target.emit_front(outer_ip).unwrap();
         }
 
         if let Some(outer_eth) = &self.push_spec.outer_eth {
@@ -2602,11 +2705,7 @@ impl EmitSpec {
                 prepend.as_mut().unwrap()
             };
 
-            unsafe {
-                target.write_front(l, |v| {
-                    outer_eth.emit_uninit(v).unwrap();
-                })
-            }
+            target.emit_front(outer_eth).unwrap();
         }
 
         if let Some(mut prepend) = prepend {
