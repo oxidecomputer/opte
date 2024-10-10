@@ -96,13 +96,13 @@ use ingot::tcp::TcpPacket;
 use ingot::tcp::TcpRef;
 use ingot::types::primitives::*;
 use ingot::types::util::Repeated;
-use ingot::types::DirectPacket;
+use ingot::types::BoxedHeader;
 use ingot::types::Emit;
 use ingot::types::EmitDoesNotRelyOnBufContents;
-use ingot::types::Header;
-use ingot::types::IndirectPacket;
+use ingot::types::Header as IngotHeader;
+use ingot::types::HeaderLen;
+use ingot::types::InlineHeader;
 use ingot::types::NextLayer;
-use ingot::types::Packet as IngotPacket;
 use ingot::types::ParseControl;
 use ingot::types::ParseError as IngotParseErr;
 use ingot::types::ParseResult;
@@ -935,12 +935,12 @@ pub enum ValidEncapMeta<B: ByteSlice> {
 }
 
 pub struct OpteMeta<T: ByteSlice> {
-    pub outer_eth: Option<DirectPacket<Ethernet, ValidEthernet<T>>>,
+    pub outer_eth: Option<InlineHeader<Ethernet, ValidEthernet<T>>>,
     // pub outer_eth: Option<Either<Ethernet, ValidEthernet<&[u8]>>>,
     pub outer_l3: Option<L3<T>>,
     // pub outer_l3: Option<OwnedPacket<L3Repr, ValidL3<T>>>,
     // pub outer_v6: Option<Either<L3Repr, ValidL3<&[u8]>>>,
-    pub outer_encap: Option<DirectPacket<EncapMeta, ValidEncapMeta<T>>>,
+    pub outer_encap: Option<InlineHeader<EncapMeta, ValidEncapMeta<T>>>,
     // pub outer_encap: Option<Either<EncapMeta, EncapMeta2<&[u8]>>>,
     pub inner_eth: EthernetPacket<T>,
     pub inner_l3: Option<L3<T>>,
@@ -976,7 +976,7 @@ unsafe impl<'a> ingot::types::EmitDoesNotRelyOnBufContents
 {
 }
 
-impl<'a> Header for SizeHoldingEncap<'a> {
+impl<'a> HeaderLen for SizeHoldingEncap<'a> {
     const MINIMUM_LENGTH: usize = EncapMeta::MINIMUM_LENGTH;
 
     #[inline]
@@ -1043,7 +1043,7 @@ impl<B: ByteSliceMut> Emit for ValidEncapMeta<B> {
     }
 }
 
-impl Header for EncapMeta {
+impl HeaderLen for EncapMeta {
     const MINIMUM_LENGTH: usize = Udp::MINIMUM_LENGTH + Geneve::MINIMUM_LENGTH;
 
     #[inline]
@@ -1057,7 +1057,7 @@ impl Header for EncapMeta {
     }
 }
 
-impl<B: ByteSlice> Header for ValidEncapMeta<B> {
+impl<B: ByteSlice> HeaderLen for ValidEncapMeta<B> {
     const MINIMUM_LENGTH: usize = Udp::MINIMUM_LENGTH + Geneve::MINIMUM_LENGTH;
 
     #[inline]
@@ -1233,18 +1233,18 @@ impl<T: ByteSlice> From<GeneveOverV6<T>> for OpteMeta<T> {
     fn from(value: GeneveOverV6<T>) -> Self {
         // These are practically all Valid, anyhow.
         let outer_encap = match (value.outer_udp, value.outer_encap) {
-            (ingot::types::Packet::Raw(u), ingot::types::Packet::Raw(g)) => {
-                Some(DirectPacket::Raw(ValidEncapMeta::Geneve(u, g)))
+            (ingot::types::Header::Raw(u), ingot::types::Header::Raw(g)) => {
+                Some(InlineHeader::Raw(ValidEncapMeta::Geneve(u, g)))
             }
             _ => todo!(),
         };
 
         // let outer_l3 = match value.outer_v6 {
-        //     ingot::types::Packet::Repr(v) => {
-        //         Some(DirectPacket::Repr(L3Repr::Ipv6(*v)))
+        //     ingot::types::Header::Repr(v) => {
+        //         Some(InlineHeader::Repr(L3Repr::Ipv6(*v)))
         //     }
-        //     ingot::types::Packet::Raw(v) => {
-        //         Some(DirectPacket::Raw(ValidL3::Ipv6(v)))
+        //     ingot::types::Header::Raw(v) => {
+        //         Some(InlineHeader::Raw(ValidL3::Ipv6(v)))
         //     }
         // };
 
@@ -1311,7 +1311,7 @@ impl<T: Read> PacketHeaders<T> {
 
     pub fn outer_ether(
         &self,
-    ) -> Option<&DirectPacket<Ethernet, ValidEthernet<T::Chunk>>> {
+    ) -> Option<&InlineHeader<Ethernet, ValidEthernet<T::Chunk>>> {
         self.headers.outer_eth.as_ref()
     }
 
@@ -1320,10 +1320,10 @@ impl<T: Read> PacketHeaders<T> {
     /// in addition to its VNI.
     pub fn outer_encap_geneve_vni_and_origin(&self) -> Option<(Vni, bool)> {
         match &self.headers.outer_encap {
-            Some(DirectPacket::Repr(EncapMeta::Geneve(g))) => {
+            Some(InlineHeader::Repr(EncapMeta::Geneve(g))) => {
                 Some((g.vni, g.oxide_external_pkt))
             }
-            Some(DirectPacket::Raw(ValidEncapMeta::Geneve(_, g))) => {
+            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(_, g))) => {
                 // TODO: hack.
                 let oxide_external = g.1.packet_length() != 0;
                 Some((g.vni(), oxide_external))
@@ -1783,7 +1783,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
         // do this sort of thing. We are so, so far from that...
         let mut force_serialize = false;
 
-        use ingot::types::DirectPacket;
+        use ingot::types::InlineHeader;
 
         match headers.inner_ulp {
             Some(ulp) => {
@@ -1793,26 +1793,26 @@ impl<T: Read> Packet2<Parsed2<T>> {
                 if ulp.needs_emit() || l != init_lens.inner_ulp {
                     let inner =
                         push_spec.inner.get_or_insert_with(Default::default);
-                    // TODO: impl DirectPacket / From<&Ulp> for UlpRepr here? generally seems a bit anaemic.
+                    // TODO: impl InlineHeader / From<&Ulp> for UlpRepr here? generally seems a bit anaemic.
                     inner.ulp = Some(match ulp {
-                        Ulp::Tcp(IngotPacket::Repr(t)) => UlpRepr::Tcp(*t),
-                        Ulp::Tcp(IngotPacket::Raw(t)) => {
+                        Ulp::Tcp(IngotHeader::Repr(t)) => UlpRepr::Tcp(*t),
+                        Ulp::Tcp(IngotHeader::Raw(t)) => {
                             UlpRepr::Tcp((&t).into())
                         }
-                        Ulp::Udp(IngotPacket::Repr(t)) => UlpRepr::Udp(*t),
-                        Ulp::Udp(IngotPacket::Raw(t)) => {
+                        Ulp::Udp(IngotHeader::Repr(t)) => UlpRepr::Udp(*t),
+                        Ulp::Udp(IngotHeader::Raw(t)) => {
                             UlpRepr::Udp((&t).into())
                         }
-                        Ulp::IcmpV4(IngotPacket::Repr(t)) => {
+                        Ulp::IcmpV4(IngotHeader::Repr(t)) => {
                             UlpRepr::IcmpV4(*t)
                         }
-                        Ulp::IcmpV4(IngotPacket::Raw(t)) => {
+                        Ulp::IcmpV4(IngotHeader::Raw(t)) => {
                             UlpRepr::IcmpV4((&t).into())
                         }
-                        Ulp::IcmpV6(IngotPacket::Repr(t)) => {
+                        Ulp::IcmpV6(IngotHeader::Repr(t)) => {
                             UlpRepr::IcmpV6(*t)
                         }
-                        Ulp::IcmpV6(IngotPacket::Raw(t)) => {
+                        Ulp::IcmpV6(IngotHeader::Raw(t)) => {
                             UlpRepr::IcmpV6((&t).into())
                         }
                     });
@@ -1839,15 +1839,15 @@ impl<T: Read> Packet2<Parsed2<T>> {
                         push_spec.inner.get_or_insert_with(Default::default);
 
                     inner.l3 = Some(match l3 {
-                        L3::Ipv4(IngotPacket::Repr(v4)) => L3Repr::Ipv4(*v4),
-                        L3::Ipv4(IngotPacket::Raw(v4)) => {
+                        L3::Ipv4(IngotHeader::Repr(v4)) => L3Repr::Ipv4(*v4),
+                        L3::Ipv4(IngotHeader::Raw(v4)) => {
                             L3Repr::Ipv4((&v4).into())
                         }
-                        L3::Ipv6(IngotPacket::Repr(v6)) => L3Repr::Ipv6(*v6),
+                        L3::Ipv6(IngotHeader::Repr(v6)) => L3Repr::Ipv6(*v6),
 
-                        // This needs a fuller DirectPacket due to EHs...
+                        // This needs a fuller InlineHeader due to EHs...
                         // We can't actually do structural mods here today using OPTE.
-                        L3::Ipv6(IngotPacket::Raw(v6)) => todo!(), // L3Repr::Ipv6((&v6).into()),
+                        L3::Ipv6(IngotHeader::Raw(v6)) => todo!(), // L3Repr::Ipv6((&v6).into()),
                     });
                     force_serialize = true;
                     rewind += init_lens.inner_l3;
@@ -1865,8 +1865,8 @@ impl<T: Read> Packet2<Parsed2<T>> {
         if force_serialize {
             let inner = push_spec.inner.get_or_insert_with(Default::default);
             inner.eth = match headers.inner_eth {
-                IngotPacket::Repr(p) => *p,
-                IngotPacket::Raw(p) => (&p).into(),
+                IngotHeader::Repr(p) => *p,
+                IngotHeader::Raw(p) => (&p).into(),
             };
             rewind += init_lens.inner_eth;
         }
@@ -1878,9 +1878,9 @@ impl<T: Read> Packet2<Parsed2<T>> {
                     || encap.packet_length() != init_lens.outer_encap =>
             {
                 push_spec.outer_encap = Some(match encap {
-                    DirectPacket::Repr(o) => o,
+                    InlineHeader::Repr(o) => o,
                     // Needed in fullness of time, but not here.
-                    DirectPacket::Raw(_) => todo!(),
+                    InlineHeader::Raw(_) => todo!(),
                 });
 
                 force_serialize = true;
@@ -1900,13 +1900,13 @@ impl<T: Read> Packet2<Parsed2<T>> {
                     || l3.packet_length() != init_lens.outer_l3 =>
             {
                 // push_spec.outer_ip = Some(match l3 {
-                //     DirectPacket::Repr(o) => o,
+                //     InlineHeader::Repr(o) => o,
                 //     // Needed in fullness of time, but not here.
-                //     DirectPacket::Raw(_) => todo!(),
+                //     InlineHeader::Raw(_) => todo!(),
                 // });
                 push_spec.outer_ip = Some(match l3 {
-                    L3::Ipv6(IndirectPacket::Repr(o)) => L3Repr::Ipv6(*o),
-                    L3::Ipv4(IndirectPacket::Repr(o)) => L3Repr::Ipv4(*o),
+                    L3::Ipv6(BoxedHeader::Repr(o)) => L3Repr::Ipv6(*o),
+                    L3::Ipv4(BoxedHeader::Repr(o)) => L3Repr::Ipv4(*o),
                     _ => todo!(),
                 });
 
@@ -1927,9 +1927,9 @@ impl<T: Read> Packet2<Parsed2<T>> {
                     || eth.packet_length() != init_lens.outer_eth =>
             {
                 push_spec.outer_eth = Some(match eth {
-                    DirectPacket::Repr(o) => o,
+                    InlineHeader::Repr(o) => o,
                     // Needed in fullness of time, but not here.
-                    DirectPacket::Raw(_) => todo!(),
+                    InlineHeader::Raw(_) => todo!(),
                 });
 
                 force_serialize = true;
@@ -2154,18 +2154,18 @@ impl<T: Read> Packet2<Parsed2<T>> {
                 Ulp::Tcp(tcp) => {
                     tcp.set_checksum(0);
                     match tcp {
-                        IngotPacket::Repr(tcp) => {
+                        IngotHeader::Repr(tcp) => {
                             let mut bytes = [0u8; 56];
                             tcp.emit_raw(&mut bytes[..]);
                             csum.add_bytes(&bytes[..]);
                         }
-                        IngotPacket::Raw(tcp) => {
+                        IngotHeader::Raw(tcp) => {
                             csum.add_bytes(tcp.0.as_bytes());
                             match &tcp.1 {
-                                IngotPacket::Repr(opts) => {
+                                IngotHeader::Repr(opts) => {
                                     csum.add_bytes(&*opts);
                                 }
-                                IngotPacket::Raw(opts) => {
+                                IngotHeader::Raw(opts) => {
                                     csum.add_bytes(&*opts);
                                 }
                             }
@@ -2176,12 +2176,12 @@ impl<T: Read> Packet2<Parsed2<T>> {
                 Ulp::Udp(udp) => {
                     udp.set_checksum(0);
                     match udp {
-                        IngotPacket::Repr(udp) => {
+                        IngotHeader::Repr(udp) => {
                             let mut bytes = [0u8; 8];
                             udp.emit_raw(&mut bytes[..]);
                             csum.add_bytes(&bytes[..]);
                         }
-                        IngotPacket::Raw(udp) => {
+                        IngotHeader::Raw(udp) => {
                             csum.add_bytes(udp.0.as_bytes());
                         }
                     }
@@ -2199,18 +2199,18 @@ impl<T: Read> Packet2<Parsed2<T>> {
             let mut csum = Checksum::default();
 
             match ip {
-                IngotPacket::Repr(ip) => {
+                IngotHeader::Repr(ip) => {
                     let mut bytes = [0u8; 56];
                     ip.emit_raw(&mut bytes[..]);
                     csum.add_bytes(&bytes[..]);
                 }
-                IngotPacket::Raw(ip) => {
+                IngotHeader::Raw(ip) => {
                     csum.add_bytes(ip.0.as_bytes());
                     match &ip.1 {
-                        IngotPacket::Repr(opts) => {
+                        IngotHeader::Repr(opts) => {
                             csum.add_bytes(&*opts);
                         }
-                        IngotPacket::Raw(opts) => {
+                        IngotHeader::Raw(opts) => {
                             csum.add_bytes(&*opts);
                         }
                     }
@@ -2376,8 +2376,8 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
             // TODO: bad bound?
             // csum.sub_bytes(tcp.1.as_ref());
             csum.sub_bytes(match &tcp.1 {
-                ingot::types::Packet::Repr(v) => &v[..],
-                ingot::types::Packet::Raw(v) => &v[..],
+                ingot::types::Header::Repr(v) => &v[..],
+                ingot::types::Header::Raw(v) => &v[..],
             });
 
             Some(csum)
@@ -2772,9 +2772,9 @@ impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
     }
 }
 
-// TODO: generate ref/mut traits on DirectPacket AND BoxPacket in ingot to halve the code here...
+// TODO: generate ref/mut traits on InlineHeader AND BoxPacket in ingot to halve the code here...
 impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
-    for DirectPacket<Ethernet, ValidEthernet<T>>
+    for InlineHeader<Ethernet, ValidEthernet<T>>
 {
     #[inline]
     fn run_modify(
@@ -2782,7 +2782,7 @@ impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
         mod_spec: &EtherMod,
     ) -> Result<(), HeaderActionError> {
         match self {
-            DirectPacket::Repr(a) => {
+            InlineHeader::Repr(a) => {
                 if let Some(src) = mod_spec.src {
                     a.set_source(src);
                 }
@@ -2790,7 +2790,7 @@ impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
                     a.set_destination(dst);
                 }
             }
-            DirectPacket::Raw(a) => {
+            InlineHeader::Raw(a) => {
                 if let Some(src) = mod_spec.src {
                     a.set_source(src);
                 }
@@ -2821,9 +2821,9 @@ impl<T: ByteSliceMut> HeaderActionModify<EtherMod> for EthernetPacket<T> {
     }
 }
 
-// TODO: generate ref/mut traits on DirectPacket AND BoxPacket in ingot to halve the code here...
+// TODO: generate ref/mut traits on InlineHeader AND BoxPacket in ingot to halve the code here...
 impl<T: ByteSliceMut> HeaderActionModify<IpMod>
-    for DirectPacket<L3Repr, ValidL3<T>>
+    for InlineHeader<L3Repr, ValidL3<T>>
 {
     #[inline]
     fn run_modify(
@@ -2832,7 +2832,7 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
     ) -> Result<(), HeaderActionError> {
         match mod_spec {
             IpMod::Ip4(mods) => match self {
-                DirectPacket::Repr(L3Repr::Ipv4(v4)) => {
+                InlineHeader::Repr(L3Repr::Ipv4(v4)) => {
                     if let Some(src) = mods.src {
                         <Ipv4 as Ipv4Mut<T>>::set_source(v4, src);
                     }
@@ -2846,7 +2846,7 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
                         );
                     }
                 }
-                DirectPacket::Raw(ValidL3::Ipv4(v4)) => {
+                InlineHeader::Raw(ValidL3::Ipv4(v4)) => {
                     if let Some(src) = mods.src {
                         v4.set_source(src);
                     }
@@ -2861,7 +2861,7 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
                 _ => return Err(HeaderActionError::MissingHeader),
             },
             IpMod::Ip6(mods) => match self {
-                DirectPacket::Repr(L3Repr::Ipv6(v6)) => {
+                InlineHeader::Repr(L3Repr::Ipv6(v6)) => {
                     if let Some(src) = mods.src {
                         <Ipv6 as Ipv6Mut<T>>::set_source(v6, src);
                     }
@@ -2876,7 +2876,7 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
                         );
                     }
                 }
-                DirectPacket::Raw(ValidL3::Ipv6(v6)) => {
+                InlineHeader::Raw(ValidL3::Ipv6(v6)) => {
                     if let Some(src) = mods.src {
                         v6.set_source(src);
                     }
@@ -2983,7 +2983,7 @@ impl<T: ByteSliceMut> HeaderActionModify<UlpMetaModify> for Ulp<T> {
 }
 
 impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
-    for DirectPacket<EncapMeta, ValidEncapMeta<T>>
+    for InlineHeader<EncapMeta, ValidEncapMeta<T>>
 {
     #[inline]
     fn run_modify(
@@ -2992,7 +2992,7 @@ impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
     ) -> Result<(), HeaderActionError> {
         match (self, mod_spec) {
             (
-                DirectPacket::Repr(EncapMeta::Geneve(g)),
+                InlineHeader::Repr(EncapMeta::Geneve(g)),
                 EncapMod::Geneve(mod_spec),
             ) => {
                 if let Some(vni) = mod_spec.vni {
@@ -3000,7 +3000,7 @@ impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
                 }
             }
             (
-                DirectPacket::Raw(ValidEncapMeta::Geneve(u, g)),
+                InlineHeader::Raw(ValidEncapMeta::Geneve(u, g)),
                 EncapMod::Geneve(mod_spec),
             ) => {
                 if let Some(vni) = mod_spec.vni {
@@ -3013,16 +3013,16 @@ impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
     }
 }
 
-impl<T: ByteSlice> HasInnerCksum for DirectPacket<Ethernet, ValidEthernet<T>> {
+impl<T: ByteSlice> HasInnerCksum for InlineHeader<Ethernet, ValidEthernet<T>> {
     const HAS_CKSUM: bool = false;
 }
 
-impl<T: ByteSlice> HasInnerCksum for DirectPacket<L3Repr, ValidL3<T>> {
+impl<T: ByteSlice> HasInnerCksum for InlineHeader<L3Repr, ValidL3<T>> {
     const HAS_CKSUM: bool = true;
 }
 
 impl<T: ByteSlice> HasInnerCksum
-    for DirectPacket<EncapMeta, ValidEncapMeta<T>>
+    for InlineHeader<EncapMeta, ValidEncapMeta<T>>
 {
     const HAS_CKSUM: bool = false;
 }
@@ -3043,11 +3043,11 @@ impl<T: ByteSlice> HasInnerCksum for Ulp<T> {
 // need to briefly keep both around while I systematically rewrite the test suite.
 
 impl<T: ByteSlice> From<EtherMeta>
-    for ingot::types::Packet<Ethernet, ValidEthernet<T>>
+    for ingot::types::Header<Ethernet, ValidEthernet<T>>
 {
     #[inline]
     fn from(value: EtherMeta) -> Self {
-        ingot::types::Packet::Repr(
+        ingot::types::Header::Repr(
             Ethernet {
                 destination: value.dst,
                 source: value.src,
@@ -3059,11 +3059,11 @@ impl<T: ByteSlice> From<EtherMeta>
 }
 
 impl<T: ByteSlice> From<EtherMeta>
-    for DirectPacket<Ethernet, ValidEthernet<T>>
+    for InlineHeader<Ethernet, ValidEthernet<T>>
 {
     #[inline]
     fn from(value: EtherMeta) -> Self {
-        DirectPacket::Repr(
+        InlineHeader::Repr(
             Ethernet {
                 destination: value.dst,
                 source: value.src,
@@ -3075,28 +3075,28 @@ impl<T: ByteSlice> From<EtherMeta>
 }
 
 impl<T: ByteSlice> From<EncapMeta>
-    for ingot::types::Packet<EncapMeta, ValidEncapMeta<T>>
+    for ingot::types::Header<EncapMeta, ValidEncapMeta<T>>
 {
     #[inline]
     fn from(value: EncapMeta) -> Self {
-        ingot::types::Packet::Repr(value.into())
+        ingot::types::Header::Repr(value.into())
     }
 }
 
 impl<T: ByteSlice> From<EncapMeta>
-    for DirectPacket<EncapMeta, ValidEncapMeta<T>>
+    for InlineHeader<EncapMeta, ValidEncapMeta<T>>
 {
     #[inline]
     fn from(value: EncapMeta) -> Self {
-        DirectPacket::Repr(value)
+        InlineHeader::Repr(value)
     }
 }
 
-impl<T: ByteSlice> From<IpMeta> for DirectPacket<L3Repr, ValidL3<T>> {
+impl<T: ByteSlice> From<IpMeta> for InlineHeader<L3Repr, ValidL3<T>> {
     #[inline]
     fn from(value: IpMeta) -> Self {
         match value {
-            IpMeta::Ip4(v4) => DirectPacket::Repr(
+            IpMeta::Ip4(v4) => InlineHeader::Repr(
                 Ipv4 {
                     ihl: (v4.hdr_len / 4) as u8,
                     total_len: v4.total_len,
@@ -3110,7 +3110,7 @@ impl<T: ByteSlice> From<IpMeta> for DirectPacket<L3Repr, ValidL3<T>> {
                 }
                 .into(),
             ),
-            IpMeta::Ip6(v6) => DirectPacket::Repr(
+            IpMeta::Ip6(v6) => InlineHeader::Repr(
                 Ipv6 {
                     payload_len: v6.pay_len,
                     next_header: IpProtocol(u8::from(v6.next_hdr)),
@@ -3166,12 +3166,12 @@ impl<T: ByteSlice> From<IpMeta> for L3<T> {
 //     }
 // }
 
-impl<T: ByteSlice> PushAction<DirectPacket<Ethernet, ValidEthernet<T>>>
+impl<T: ByteSlice> PushAction<InlineHeader<Ethernet, ValidEthernet<T>>>
     for EtherMeta
 {
     #[inline]
-    fn push(&self) -> DirectPacket<Ethernet, ValidEthernet<T>> {
-        DirectPacket::Repr(Ethernet {
+    fn push(&self) -> InlineHeader<Ethernet, ValidEthernet<T>> {
+        InlineHeader::Repr(Ethernet {
             destination: self.dst,
             source: self.src,
             ethertype: Ethertype(u16::from(self.ether_type)),
@@ -3182,7 +3182,7 @@ impl<T: ByteSlice> PushAction<DirectPacket<Ethernet, ValidEthernet<T>>>
 impl<T: ByteSlice> PushAction<EthernetPacket<T>> for EtherMeta {
     #[inline]
     fn push(&self) -> EthernetPacket<T> {
-        ingot::types::Packet::Repr(
+        ingot::types::Header::Repr(
             Ethernet {
                 destination: self.dst,
                 source: self.src,
@@ -3193,9 +3193,9 @@ impl<T: ByteSlice> PushAction<EthernetPacket<T>> for EtherMeta {
     }
 }
 
-// impl<T: ByteSlice> PushAction<DirectPacket<L3Repr, ValidL3<T>>> for IpPush {
-//     fn push(&self) -> DirectPacket<L3Repr, ValidL3<T>> {
-//         DirectPacket::Repr(match self {
+// impl<T: ByteSlice> PushAction<InlineHeader<L3Repr, ValidL3<T>>> for IpPush {
+//     fn push(&self) -> InlineHeader<L3Repr, ValidL3<T>> {
+//         InlineHeader::Repr(match self {
 //             IpPush::Ip4(v4) => L3Repr::Ipv4(Ipv4 {
 //                 protocol: IpProtocol(u8::from(v4.proto)),
 //                 source: v4.src.bytes().into(),

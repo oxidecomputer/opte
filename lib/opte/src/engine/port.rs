@@ -92,7 +92,7 @@ use core::sync::atomic::Ordering::SeqCst;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::geneve::Geneve;
 use ingot::types::Emit;
-use ingot::types::Header;
+use ingot::types::HeaderLen;
 use ingot::types::Read;
 use ingot::udp::Udp;
 use kstat_macro::KStatProvider;

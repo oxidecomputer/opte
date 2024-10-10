@@ -18,7 +18,7 @@ use opte::engine::packet::*;
 use opte::engine::Direction::*;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::ip::IpProtocol as IngotIpProto;
-use opte::ingot::types::Header;
+use opte::ingot::types::HeaderLen;
 use oxide_vpc::engine::VpcParser;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use smoltcp::wire::Icmpv4Packet;

@@ -52,7 +52,7 @@ use core::fmt::Display;
 use core::mem::MaybeUninit;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
-use ingot::types::DirectPacket;
+use ingot::types::InlineHeader;
 use ingot::types::Read;
 use opte_api::Direction;
 use serde::Deserialize;
@@ -485,7 +485,7 @@ impl HdrTransform {
         T::Chunk: ByteSliceMut,
     {
         self.outer_ether
-            .act_on_option::<DirectPacket<Ethernet, ValidEthernet<_>>, _>(
+            .act_on_option::<InlineHeader<Ethernet, ValidEthernet<_>>, _>(
                 &mut meta.headers.outer_eth,
             )
             .map_err(Self::err_fn("outer ether"))?;

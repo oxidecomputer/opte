@@ -72,7 +72,7 @@ use opte::ingot::tcp::Tcp;
 use opte::ingot::tcp::TcpFlags as IngotTcpFlags;
 use opte::ingot::types::Emit;
 use opte::ingot::types::EmitDoesNotRelyOnBufContents;
-use opte::ingot::types::Header;
+use opte::ingot::types::HeaderLen;
 use opte::ingot::udp::Udp;
 pub use opte::ExecCtx;
 pub use oxide_vpc::api::AddFwRuleReq;
