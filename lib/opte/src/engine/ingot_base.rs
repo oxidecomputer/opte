@@ -67,6 +67,16 @@ impl<B: ByteSlice> ValidUlp<B> {
     }
 }
 
+impl<B: ByteSlice> Ulp<B> {
+    pub fn src_port(&self) -> Option<u16> {
+        match self {
+            Ulp::Tcp(t) => Some(t.source()),
+            Ulp::Udp(u) => Some(u.source()),
+            _ => None,
+        }
+    }
+}
+
 impl<B: ByteSlice> ValidL3<B> {
     pub fn csum(&self) -> [u8; 2] {
         match self {

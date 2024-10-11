@@ -30,8 +30,10 @@ use opte::engine::headers::EncapMeta;
 use opte::engine::headers::IpMeta;
 use opte::engine::headers::UlpMeta;
 use opte::engine::icmp::IcmpHdr;
+use opte::engine::ingot_base::Ethernet;
 use opte::engine::ingot_base::EthernetRef;
 use opte::engine::ingot_base::Ipv4Ref;
+use opte::engine::ingot_base::Ipv6;
 use opte::engine::ingot_base::Ipv6Ref;
 use opte::engine::ingot_base::ValidL3;
 use opte::engine::ingot_base::ValidUlp;
@@ -62,9 +64,11 @@ use opte::engine::udp::UdpMeta;
 use opte::engine::Direction;
 use opte::engine::NetworkParser;
 use opte::ingot::geneve::GeneveRef;
+use opte::ingot::icmp::IcmpV6Ref;
 use opte::ingot::tcp::TcpRef;
 use opte::ingot::types::Emit;
 use opte::ingot::types::HeaderLen;
+use opte::ingot::udp::Udp;
 use opte::ingot::udp::UdpRef;
 use opte_test_utils as common;
 use oxide_vpc::api::ExternalIpCfg;
@@ -76,6 +80,7 @@ use pcap::*;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
+use smoltcp::wire::Icmpv6Message;
 use smoltcp::wire::Icmpv6Packet;
 use smoltcp::wire::Icmpv6Repr;
 use smoltcp::wire::IpAddress;
@@ -86,6 +91,7 @@ use smoltcp::wire::NdiscRouterFlags;
 use smoltcp::wire::RawHardwareAddress;
 use std::prelude::v1::*;
 use std::time::Duration;
+use zerocopy::FromBytes;
 use zerocopy::IntoBytes;
 
 const IP4_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE;
@@ -1864,40 +1870,43 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
 
 #[test]
 fn bad_ip_len() {
-    let cfg = lab_cfg();
+    // TODO(kyle)
+    panic!()
 
-    let eth = EtherMeta {
-        src: cfg.guest_mac,
-        dst: MacAddr::BROADCAST,
-        ether_type: EtherType::Ipv4,
-    };
+    // let cfg = lab_cfg();
 
-    let ip = Ipv4Meta {
-        src: "0.0.0.0".parse().unwrap(),
-        dst: Ipv4Addr::LOCAL_BCAST,
-        proto: Protocol::UDP,
-        ttl: 64,
-        ident: 1,
-        hdr_len: 20,
-        // We write a total legnth of 4 bytes, which is completely
-        // bogus for an IP header and should return an error during
-        // processing.
-        total_len: 4,
-        ..Default::default()
-    };
+    // let eth = EtherMeta {
+    //     src: cfg.guest_mac,
+    //     dst: MacAddr::BROADCAST,
+    //     ether_type: EtherType::Ipv4,
+    // };
 
-    let udp = UdpMeta { src: 68, dst: 67, ..Default::default() };
-    let total_len = EtherHdr::SIZE + usize::from(ip.hdr_len) + udp.hdr_len();
-    let mut pkt = Packet::alloc_and_expand(total_len);
-    let mut wtr = pkt.seg0_wtr();
-    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-    ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-    udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
-    let res = pkt.parse(Out, VpcParser::new());
-    assert_eq!(
-        res.err().unwrap(),
-        Ipv4HdrError::BadTotalLen { total_len: 4 }.into()
-    );
+    // let ip = Ipv4Meta {
+    //     src: "0.0.0.0".parse().unwrap(),
+    //     dst: Ipv4Addr::LOCAL_BCAST,
+    //     proto: Protocol::UDP,
+    //     ttl: 64,
+    //     ident: 1,
+    //     hdr_len: 20,
+    //     // We write a total legnth of 4 bytes, which is completely
+    //     // bogus for an IP header and should return an error during
+    //     // processing.
+    //     total_len: 4,
+    //     ..Default::default()
+    // };
+
+    // let udp = UdpMeta { src: 68, dst: 67, ..Default::default() };
+    // let total_len = EtherHdr::SIZE + usize::from(ip.hdr_len) + udp.hdr_len();
+    // let mut pkt = Packet::alloc_and_expand(total_len);
+    // let mut wtr = pkt.seg0_wtr();
+    // eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+    // ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+    // udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
+    // let res = pkt.parse(Out, VpcParser::new());
+    // assert_eq!(
+    //     res.err().unwrap(),
+    //     Ipv4HdrError::BadTotalLen { total_len: 4 }.into()
+    // );
 }
 
 // Verify that OPTE generates a hairpin ARP reply when the guest
@@ -1911,12 +1920,13 @@ fn arp_gateway() {
     g1.port.start();
     set!(g1, "port_state=running");
 
-    let eth_hdr = EtherHdrRaw {
-        dst: [0xff; 6],
-        src: cfg.guest_mac.bytes(),
-        ether_type: [0x08, 0x06],
+    let eth_hdr = Ethernet {
+        destination: MacAddr::BROADCAST,
+        source: cfg.guest_mac,
+        ethertype: Ethertype::ARP,
     };
 
+    // TODO: ingot?
     let arp = ArpEthIpv4 {
         htype: 1,
         ptype: u16::from(EtherType::Ipv4),
@@ -1929,34 +1939,40 @@ fn arp_gateway() {
         tpa: cfg.ipv4_cfg().unwrap().gateway_ip,
     };
 
-    let mut bytes = vec![];
-    bytes.extend_from_slice(eth_hdr.as_bytes());
+    let mut bytes = eth_hdr.emit_vec();
     bytes.extend_from_slice(ArpEthIpv4Raw::from(&arp).as_bytes());
-    let mut pkt = Packet::copy(&bytes).parse(Out, VpcParser::new()).unwrap();
 
-    let res = g1.port.process(Out, &mut pkt, ActionMeta::new());
+    let mut pkt_m = MsgBlk::copy(bytes);
+    let pkt = parse_outbound(&mut pkt_m, VpcParser {}).unwrap();
+
+    let res = g1.port.process(Out, pkt);
     match res {
-        Ok(Hairpin(hppkt)) => {
+        Ok(Hairpin(mut hppkt)) => {
             // In this case we are parsing a hairpin reply, so we
             // can't use the VpcParser since it would expect any
             // inbound packet to be encapsulated.
-            let mut hppkt = hppkt.parse(In, GenericUlp {}).unwrap();
+            let hppkt = parse_inbound(&mut hppkt, GenericUlp {}).unwrap();
             let meta = hppkt.meta();
-            let ethm = meta.inner.ether;
-            assert_eq!(ethm.dst, cfg.guest_mac);
-            assert_eq!(ethm.src, cfg.gateway_mac);
-            assert_eq!(ethm.ether_type, EtherType::Arp);
-            let eth_len = hppkt.hdr_offsets().inner.ether.hdr_len;
+            let ethm = &meta.inner_eth;
+            assert_eq!(ethm.destination(), cfg.guest_mac);
+            assert_eq!(ethm.source(), cfg.gateway_mac);
+            assert_eq!(ethm.ethertype(), Ethertype::ARP);
 
-            let mut rdr = hppkt.get_rdr_mut();
-            assert!(rdr.seek(eth_len).is_ok());
-            let arp = ArpEthIpv4::parse(&mut rdr).unwrap();
-            assert_eq!(arp.op, ArpOp::Reply);
-            assert_eq!(arp.ptype, u16::from(EtherType::Ipv4));
-            assert_eq!(arp.sha, cfg.gateway_mac);
-            assert_eq!(arp.spa, cfg.ipv4_cfg().unwrap().gateway_ip);
-            assert_eq!(arp.tha, cfg.guest_mac);
-            assert_eq!(arp.tpa, cfg.ipv4_cfg().unwrap().private_ip);
+            let body = hppkt.to_full_meta().meta().copy_remaining();
+
+            let (arp, _) = ArpEthIpv4Raw::ref_from_prefix(&body[..]).unwrap();
+            assert_eq!(arp.op, ArpOp::Reply.to_be_bytes());
+            assert_eq!(arp.ptype, Ethertype::IPV4.0.to_be_bytes());
+            assert_eq!(MacAddr::from(arp.sha), cfg.gateway_mac);
+            assert_eq!(
+                Ipv4Addr::from(arp.spa),
+                cfg.ipv4_cfg().unwrap().gateway_ip
+            );
+            assert_eq!(MacAddr::from(arp.tha), cfg.guest_mac);
+            assert_eq!(
+                Ipv4Addr::from(arp.tpa),
+                cfg.ipv4_cfg().unwrap().private_ip
+            );
         }
 
         res => panic!("expected a Hairpin, got {:?}", res),
@@ -1978,9 +1994,10 @@ fn flow_expiration() {
     // Run the packet through g1's port in the outbound direction and
     // verify the resulting packet meets expectations.
     // ================================================================
-    let mut pkt1 = http_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let mut pkt1_m = http_syn(&g1_cfg, &g2_cfg);
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
     incr!(
         g1,
         [
@@ -2041,7 +2058,7 @@ fn test_guest_to_gateway_icmpv6_ping(
     // ================================================================
     // Generate an ICMP Echo Request from G1 to Virtual GW
     // ================================================================
-    let mut pkt1 = gen_icmp_echo_req(
+    let mut pkt1_m = gen_icmp_echo_req(
         g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
         src_ip.into(),
@@ -2051,15 +2068,16 @@ fn test_guest_to_gateway_icmpv6_ping(
         &data[..],
         3,
     );
-    pcap.add_pkt(&pkt1);
+    pcap.add_pkt(&pkt1_m);
 
     // ================================================================
     // Run the Echo Request through g1's port in the outbound
     // direction and verify it results in an Echo Reply Hairpin packet
     // back to guest.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    let hp = match res {
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    let mut hp = match res {
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {:?}", res),
     };
@@ -2068,50 +2086,43 @@ fn test_guest_to_gateway_icmpv6_ping(
     // In this case we are parsing a hairpin reply, so we can't use
     // the VpcParser since it would expect any inbound packet to be
     // encapsulated.
-    let reply = hp.parse(In, GenericUlp {}).unwrap();
-    pcap.add_pkt(&reply);
-
-    // Ether + IPv6 + ICMPv6
-    assert_eq!(reply.body_offset(), IP6_SZ + IcmpHdr::SIZE);
-    assert_eq!(reply.body_seg(), 0);
+    pcap.add_pkt(&hp);
+    let reply = parse_inbound(&mut hp, GenericUlp {}).unwrap();
 
     let meta = reply.meta();
-    assert!(meta.outer.ether.is_none());
-    assert!(meta.outer.ip.is_none());
-    assert!(meta.outer.encap.is_none());
 
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, g1_cfg.gateway_mac);
-    assert_eq!(eth.dst, g1_cfg.guest_mac);
+    let eth = &meta.inner_eth;
+    assert_eq!(eth.source(), g1_cfg.gateway_mac);
+    assert_eq!(eth.destination(), g1_cfg.guest_mac);
 
-    let (src, dst) = match meta.inner.ip.as_ref().unwrap() {
-        IpMeta::Ip6(ip6) => {
-            assert_eq!(ip6.src, dst_ip);
-            assert_eq!(ip6.dst, src_ip);
-            assert_eq!(ip6.proto, Protocol::ICMPv6);
+    let (src, dst) = match meta.inner_l3.as_ref().unwrap() {
+        ValidL3::Ipv6(ip6) => {
+            assert_eq!(ip6.source(), dst_ip);
+            assert_eq!(ip6.destination(), src_ip);
+            assert_eq!(ip6.next_header(), IngotIpProto::ICMP_V6);
             (
-                Ipv6Address::from_bytes(&ip6.src),
-                Ipv6Address::from_bytes(&ip6.dst),
+                Ipv6Address::from_bytes(&ip6.source()),
+                Ipv6Address::from_bytes(&ip6.destination()),
             )
         }
-        ip4 => panic!("expected inner IPv6 metadata, got IPv4: {:?}", ip4),
+        _ => panic!("expected inner IPv6 metadata, got IPv4"),
     };
 
-    let Some(icmp6) = meta.inner_icmp6() else {
+    let Some(ValidUlp::IcmpV6(icmp6)) = &meta.inner_ulp else {
         panic!("expected inner ICMPv6 metadata");
     };
 
     // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
-    // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
-    let mut rdr = reply.get_body_rdr();
-    rdr.seek_back(icmp6.hdr_len()).unwrap();
+    let mut reply_body = icmp6.emit_vec();
+    let msg_type = Icmpv6Message::from(icmp6.ty());
+    let msg_code = icmp6.code();
 
-    let reply_body = rdr.copy_remaining();
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining().into_iter());
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
 
     // Verify the parsed metadata matches the packet
-    assert_eq!(icmp6.msg_code, reply_pkt.msg_code());
-    assert_eq!(icmp6.msg_type, reply_pkt.msg_type().into());
+    assert_eq!(msg_code, reply_pkt.msg_code());
+    assert_eq!(msg_type, reply_pkt.msg_type());
 
     let mut csum = CsumCapab::ignored();
     csum.icmpv6 = smoltcp::phy::Checksum::Rx;
@@ -2148,16 +2159,17 @@ fn gateway_router_advert_reply() {
     // ====================================================
     // Generate a Router Solicitation from G1 to Virtual GW
     // ====================================================
-    let mut pkt1 = gen_router_solicitation(&g1_cfg.guest_mac);
-    pcap.add_pkt(&pkt1);
+    let mut pkt1_m = gen_router_solicitation(&g1_cfg.guest_mac);
+    pcap.add_pkt(&pkt1_m);
 
     // ================================================================
     // Run the Solicitation through g1's port in the outbound
     // direction and verify it results in an Router Advertisement
     // hairpin back to guest.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    let hp = match res {
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    let mut hp = match res {
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {:?}", res),
     };
@@ -2166,35 +2178,31 @@ fn gateway_router_advert_reply() {
     // In this case we are parsing a hairpin reply, so we can't use
     // the VpcParser since it would expect any inbound packet to be
     // encapsulated.
-    let reply = hp.parse(In, GenericUlp {}).unwrap();
-    pcap.add_pkt(&reply);
-
-    // Ether + IPv6 + ICMPv6
-    assert_eq!(reply.body_offset(), IP6_SZ + IcmpHdr::SIZE);
-    assert_eq!(reply.body_seg(), 0);
+    pcap.add_pkt(&hp);
+    let reply = parse_inbound(&mut hp, GenericUlp {}).unwrap();
 
     let meta = reply.meta();
-    assert!(meta.outer.ether.is_none());
-    assert!(meta.outer.ip.is_none());
-    assert!(meta.outer.encap.is_none());
 
-    let eth = meta.inner.ether;
+    let eth = &meta.inner_eth;
     assert_eq!(
-        eth.src, g1_cfg.gateway_mac,
+        eth.source(),
+        g1_cfg.gateway_mac,
         "Router advertisement should come from the gateway's MAC"
     );
     assert_eq!(
-        eth.dst, g1_cfg.guest_mac,
+        eth.destination(),
+        g1_cfg.guest_mac,
         "Router advertisement should be destined for the guest's MAC"
     );
 
-    let IpMeta::Ip6(ip6) = meta.inner.ip.as_ref().expect("No inner IP header")
+    let ValidL3::Ipv6(ip6) =
+        meta.inner_l3.as_ref().expect("No inner IP header")
     else {
         panic!("Inner IP header is not IPv6");
     };
 
     assert_eq!(
-        ip6.src,
+        ip6.source(),
         Ipv6Addr::from_eui64(&g1_cfg.gateway_mac),
         "Router advertisement should come from the \
         gateway's link-local IPv6 address, generated \
@@ -2202,32 +2210,35 @@ fn gateway_router_advert_reply() {
     );
     let expected_dst = Ipv6Addr::from_eui64(&g1_cfg.guest_mac);
     assert_eq!(
-        ip6.dst, expected_dst,
+        ip6.destination(),
+        expected_dst,
         "Router advertisement should be destined for \
         the guest's Link-Local IPv6 address, generated from \
         the EUI-64 transform of its MAC"
     );
-    assert_eq!(ip6.proto, Protocol::ICMPv6);
+    assert_eq!(ip6.next_header(), IngotIpProto::ICMP_V6);
 
     // RFC 4861 6.1.2 requires that the hop limit be 255 in an RA.
-    assert_eq!(ip6.hop_limit, 255);
+    assert_eq!(ip6.hop_limit(), 255);
 
-    let Some(icmp6) = meta.inner_icmp6() else {
+    let Some(ValidUlp::IcmpV6(icmp6)) = &meta.inner_ulp else {
         panic!("expected inner ICMPv6 metadata");
     };
 
     // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
     // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
-    let mut rdr = reply.get_body_rdr();
-    rdr.seek_back(icmp6.hdr_len()).unwrap();
+    let mut reply_body = icmp6.emit_vec();
+    let ip6_src = ip6.source();
+    let ip6_dst = ip6.destination();
 
-    let reply_body = rdr.copy_remaining();
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining().into_iter());
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
+
     let mut csum = CsumCapab::ignored();
     csum.icmpv6 = smoltcp::phy::Checksum::Rx;
     let reply_icmp = Icmpv6Repr::parse(
-        &IpAddress::Ipv6(ip6.src.into()),
-        &IpAddress::Ipv6(ip6.dst.into()),
+        &IpAddress::Ipv6(ip6_src.into()),
+        &IpAddress::Ipv6(ip6_dst.into()),
         &reply_pkt,
         &csum,
     )
@@ -2421,60 +2432,54 @@ fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
 // `na`.
 fn validate_hairpin_advert(
     pcap: &mut PcapBuilder,
-    hp: Packet<Initialized>,
+    mut hp: MsgBlk,
     na: AdvertInfo,
 ) {
     // In this case we are parsing a hairpin reply, so we can't use
     // the VpcParser since it would expect any inbound packet to be
     // encapsulated.
-    let reply = hp.parse(In, GenericUlp {}).unwrap();
-    pcap.add_pkt(&reply);
+    pcap.add_pkt(&hp);
+    let reply = parse_inbound(&mut hp, GenericUlp {}).unwrap();
 
-    // Verify Ethernet and IPv6 header basics.
-    assert_eq!(reply.body_offset(), IP6_SZ + IcmpHdr::SIZE);
-    assert_eq!(reply.body_seg(), 0);
     let meta = reply.meta();
-    assert!(meta.outer.ether.is_none());
-    assert!(meta.outer.ip.is_none());
-    assert!(meta.outer.encap.is_none());
 
     // Check that the inner MACs are what we expect.
-    let eth = meta.inner.ether;
-    assert_eq!(eth.src, na.src_mac);
-    assert_eq!(eth.dst, na.dst_mac);
+    let eth = &meta.inner_eth;
+    assert_eq!(eth.source(), na.src_mac);
+    assert_eq!(eth.destination(), na.dst_mac);
 
     // Check that the inner IPs are what we expect.
-    let ip6 = if let IpMeta::Ip6(ip6) =
-        meta.inner.ip.as_ref().expect("No inner IP header")
-    {
-        ip6
-    } else {
+    let ValidL3::Ipv6(ip6) =
+        meta.inner_l3.as_ref().expect("No inner IP header")
+    else {
         panic!("Inner IP header is not IPv6");
     };
-    assert_eq!(ip6.src, na.src_ip);
-    assert_eq!(ip6.dst, na.dst_ip);
-    assert_eq!(ip6.proto, Protocol::ICMPv6);
+    assert_eq!(ip6.source(), na.src_ip);
+    assert_eq!(ip6.destination(), na.dst_ip);
+    assert_eq!(ip6.next_header(), IngotIpProto::ICMP_V6);
 
     // RFC 4861 7.1.2 requires that the hop limit be 255 in an NA.
-    assert_eq!(ip6.hop_limit, 255);
+    assert_eq!(ip6.hop_limit(), 255);
 
-    let Some(icmp6) = meta.inner_icmp6() else {
+    let Some(ValidUlp::IcmpV6(icmp6)) = &meta.inner_ulp else {
         panic!("expected inner ICMPv6 metadata");
     };
 
     // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
     // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
-    let mut rdr = reply.get_body_rdr();
-    rdr.seek_back(icmp6.hdr_len()).unwrap();
+    let mut reply_body = icmp6.emit_vec();
+    let ip6_src = ip6.source();
+    let ip6_dst = ip6.destination();
+
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining().into_iter());
+    let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
 
     // Validate the details of the Neighbor Advertisement itself.
-    let reply_body = rdr.copy_remaining();
-    let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();
     csum.icmpv6 = smoltcp::phy::Checksum::Rx;
     let reply_icmp = Icmpv6Repr::parse(
-        &IpAddress::Ipv6(ip6.src.into()),
-        &IpAddress::Ipv6(ip6.dst.into()),
+        &IpAddress::Ipv6(ip6_src.into()),
+        &IpAddress::Ipv6(ip6_dst.into()),
         &reply_pkt,
         &csum,
     )
@@ -2596,9 +2601,10 @@ fn outbound_ndp_dropped() {
         flags: NdiscNeighborFlags::OVERRIDE,
     };
 
-    let mut pkt = generate_neighbor_advertisement(&outbound_na, true);
+    let mut pkt_m = generate_neighbor_advertisement(&outbound_na, true);
+    let pkt = parse_outbound(&mut pkt_m, VpcParser {}).unwrap();
 
-    let res = g1.port.process(Out, &mut pkt, ActionMeta::new()).unwrap();
+    let res = g1.port.process(Out, pkt).unwrap();
     match res {
         ProcessResult::Drop { .. } => {
             incr!(
@@ -2655,8 +2661,9 @@ fn inbound_ndp_dropped_at_gateway() {
     };
 
     let pkt = generate_neighbor_solicitation(&ns, true);
-    let mut pkt = encap(pkt, g2_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt, ActionMeta::new()).unwrap();
+    let mut pkt_m = encap(pkt, g2_phys, g1_phys);
+    let pkt = parse_inbound(&mut pkt_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt).unwrap();
     println!("{res:?}");
     match res {
         ProcessResult::Drop { .. } => {
@@ -2683,26 +2690,27 @@ fn inbound_ndp_dropped_at_gateway() {
 fn packet_from_client_dhcpv6_message(
     cfg: &VpcCfg,
     msg: &dhcpv6::protocol::Message<'_>,
-) -> Packet<Parsed> {
-    let eth = EtherMeta {
-        dst: dhcpv6::ALL_RELAYS_AND_SERVERS.multicast_mac().unwrap(),
-        src: cfg.guest_mac,
-        ether_type: EtherType::Ipv6,
+) -> MsgBlk {
+    let eth = Ethernet {
+        destination: dhcpv6::ALL_RELAYS_AND_SERVERS.multicast_mac().unwrap(),
+        source: cfg.guest_mac,
+        ethertype: Ethertype::IPV6,
     };
 
-    let ip = Ipv6Meta {
-        src: Ipv6Addr::from_eui64(&cfg.guest_mac),
-        dst: dhcpv6::ALL_RELAYS_AND_SERVERS,
-        proto: Protocol::UDP,
-        next_hdr: IpProtocol::Udp,
-        pay_len: (msg.buffer_len() + UdpHdr::SIZE) as u16,
+    let payload_len = (msg.buffer_len() + Udp::MINIMUM_LENGTH) as u16;
+
+    let ip = Ipv6 {
+        source: Ipv6Addr::from_eui64(&cfg.guest_mac),
+        destination: dhcpv6::ALL_RELAYS_AND_SERVERS,
+        next_header: IngotIpProto::UDP,
+        payload_len,
         ..Default::default()
     };
 
-    let udp = UdpMeta {
-        src: dhcpv6::CLIENT_PORT,
-        dst: dhcpv6::SERVER_PORT,
-        len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
+    let udp = Udp {
+        source: dhcpv6::CLIENT_PORT,
+        destination: dhcpv6::SERVER_PORT,
+        length: payload_len,
         ..Default::default()
     };
 
@@ -2710,22 +2718,20 @@ fn packet_from_client_dhcpv6_message(
 }
 
 fn write_dhcpv6_packet(
-    eth: EtherMeta,
-    ip: Ipv6Meta,
-    udp: UdpMeta,
+    eth: Ethernet,
+    ip: Ipv6,
+    udp: Udp,
     msg: &dhcpv6::protocol::Message<'_>,
-) -> Packet<Parsed> {
-    let reply_len =
-        msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::BASE_SIZE + EtherHdr::SIZE;
-    let mut pkt = Packet::alloc_and_expand(reply_len);
-    let mut wtr = pkt.seg0_wtr();
-    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-    ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-    udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
-    let mut msg_buf = vec![0; msg.buffer_len()];
-    msg.copy_into(&mut msg_buf).unwrap();
-    wtr.write(&msg_buf).unwrap();
-    pkt.parse(Out, GenericUlp {}).unwrap()
+) -> MsgBlk {
+    let total_len = msg.buffer_len() + (&eth, &ip, &udp).packet_length();
+
+    let mut pkt = MsgBlk::new_ethernet(total_len);
+    pkt.emit_back((eth, ip, udp));
+    let l = pkt.len();
+    pkt.resize(total_len);
+    msg.copy_into(&mut pkt[l..]);
+
+    pkt
 }
 
 // Assert the essential details of a DHCPv6 exchange. The client request is in
@@ -2739,36 +2745,40 @@ fn write_dhcpv6_packet(
 // - The server must include its own Server ID option.
 fn verify_dhcpv6_essentials<'a>(
     cfg: &VpcCfg,
-    request_pkt: &Packet<Parsed>,
+    request_pkt: &mut MsgBlk,
     request: &dhcpv6::protocol::Message<'a>,
-    reply_pkt: &Packet<Parsed>,
+    reply_pkt: &mut MsgBlk,
     reply: &dhcpv6::protocol::Message<'a>,
 ) {
+    let request_pkt =
+        parse_outbound(request_pkt, GenericUlp {}).unwrap().to_full_meta();
+    let reply_pkt =
+        parse_inbound(reply_pkt, GenericUlp {}).unwrap().to_full_meta();
     let request_meta = request_pkt.meta();
     let reply_meta = reply_pkt.meta();
     let request_ether = request_meta.inner_ether();
     let reply_ether = reply_meta.inner_ether();
     assert_eq!(
-        request_ether.dst,
+        request_ether.destination(),
         dhcpv6::ALL_RELAYS_AND_SERVERS.multicast_mac().unwrap()
     );
-    assert_eq!(request_ether.src, reply_ether.dst);
+    assert_eq!(request_ether.source(), reply_ether.destination());
 
     let request_ip = request_meta.inner_ip6().unwrap();
     let reply_ip = reply_meta.inner_ip6().unwrap();
-    assert_eq!(request_ip.src, Ipv6Addr::from_eui64(&cfg.guest_mac));
-    assert_eq!(request_ip.dst, dhcpv6::ALL_RELAYS_AND_SERVERS);
-    assert_eq!(request_ip.proto, Protocol::UDP);
-    assert_eq!(reply_ip.dst, request_ip.src);
-    assert_eq!(reply_ip.src, Ipv6Addr::from_eui64(&cfg.gateway_mac));
-    assert_eq!(reply_ip.proto, Protocol::UDP);
+    assert_eq!(request_ip.source(), Ipv6Addr::from_eui64(&cfg.guest_mac));
+    assert_eq!(request_ip.destination(), dhcpv6::ALL_RELAYS_AND_SERVERS);
+    assert_eq!(request_ip.next_header(), IngotIpProto::UDP);
+    assert_eq!(reply_ip.destination(), request_ip.source());
+    assert_eq!(reply_ip.source(), Ipv6Addr::from_eui64(&cfg.gateway_mac));
+    assert_eq!(reply_ip.next_header(), IngotIpProto::UDP);
 
     let request_udp = request_meta.inner_udp().unwrap();
     let reply_udp = reply_meta.inner_udp().unwrap();
-    assert_eq!(request_udp.src, dhcpv6::CLIENT_PORT);
-    assert_eq!(request_udp.dst, dhcpv6::SERVER_PORT);
-    assert_eq!(reply_udp.dst, dhcpv6::CLIENT_PORT);
-    assert_eq!(reply_udp.src, dhcpv6::SERVER_PORT);
+    assert_eq!(request_udp.source(), dhcpv6::CLIENT_PORT);
+    assert_eq!(request_udp.destination(), dhcpv6::SERVER_PORT);
+    assert_eq!(reply_udp.destination(), dhcpv6::CLIENT_PORT);
+    assert_eq!(reply_udp.source(), dhcpv6::SERVER_PORT);
 
     // Verify the details of the DHCPv6 exchange itself.
     assert_eq!(reply.xid, request.xid);
@@ -2857,28 +2867,32 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                 xid: dhcpv6::TransactionId::from(&[0u8, 1, 2]),
                 options,
             };
-            let mut request_pkt =
+            let mut request_pkt_m =
                 packet_from_client_dhcpv6_message(&g1_cfg, &request);
-            pcap.add_pkt(&request_pkt);
-            let res = g1
-                .port
-                .process(Out, &mut request_pkt, ActionMeta::new())
-                .unwrap();
-            if let Hairpin(hp) = res {
+            pcap.add_pkt(&request_pkt_m);
+            let request_pkt =
+                parse_outbound(&mut request_pkt_m, VpcParser {}).unwrap();
+            let res = g1.port.process(Out, request_pkt).unwrap();
+
+            if let Hairpin(mut hp) = res {
                 // In this case we are parsing a hairpin reply, so we
                 // can't use the VpcParser since it would expect any
                 // inbound packet to be encapsulated.
-                let reply_pkt = hp.parse(In, GenericUlp {}).unwrap();
-                pcap.add_pkt(&reply_pkt);
+                pcap.add_pkt(&hp);
 
-                let body = reply_pkt.get_body_rdr().copy_remaining();
+                let reply_pkt = parse_inbound(&mut hp, GenericUlp {})
+                    .unwrap()
+                    .to_full_meta();
+                let out_body = reply_pkt.meta().copy_remaining();
+                drop(reply_pkt);
+
                 let reply =
-                    dhcpv6::protocol::Message::from_bytes(&body).unwrap();
+                    dhcpv6::protocol::Message::from_bytes(&out_body).unwrap();
                 verify_dhcpv6_essentials(
                     &g1_cfg,
-                    &request_pkt,
+                    &mut request_pkt_m,
                     &request,
-                    &reply_pkt,
+                    &mut hp,
                     &reply,
                 );
 
@@ -2988,14 +3002,15 @@ fn establish_http_conn(
     // Run the SYN packet through g1's port in the outbound direction
     // and verify it is accepted.
     // ================================================================
-    let mut pkt1 = http_syn2(
+    let mut pkt1_m = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
     incr!(
         g1,
         [
@@ -3005,7 +3020,9 @@ fn establish_http_conn(
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
-    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let snat_port =
+        pkt1.to_full_meta().meta().inner_ulp().unwrap().src_port().unwrap();
 
     // ================================================================
     // Step 2
@@ -3013,7 +3030,7 @@ fn establish_http_conn(
     // Run the SYN+ACK packet through g1's port in the inbound
     // direction and verify it is accepted.
     // ================================================================
-    let mut pkt2 = http_syn_ack2(
+    let mut pkt2_m = http_syn_ack2(
         BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
@@ -3030,9 +3047,10 @@ fn establish_http_conn(
         mac: BS_MAC_ADDR,
         vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
     };
-    pkt2 = encap_external(pkt2, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    pkt2_m = encap_external(pkt2_m, bs_phys, g1_phys);
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt2);
+    expect_modified!(res, pkt2_m);
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
 
     // ================================================================
@@ -3040,14 +3058,15 @@ fn establish_http_conn(
     //
     // Send ACK to establish connection.
     // ================================================================
-    let mut pkt3 = http_ack2(
+    let mut pkt3_m = http_ack2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt3 = parse_outbound(&mut pkt3_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt3);
+    expect_modified!(res, pkt3_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     snat_port
 }
@@ -3116,13 +3135,14 @@ fn uft_lft_invalidation_out() {
     // ================================================================
     // Step 4
     // ================================================================
-    let mut pkt4 = http_get2(
+    let mut pkt4_m = http_get2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let res = g1.port.process(Out, &mut pkt4, ActionMeta::new());
+    let pkt4 = parse_outbound(&mut pkt4_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt4);
     assert_drop!(
         res,
         DropReason::Layer { name: "firewall", reason: DenyReason::Rule }
@@ -3184,17 +3204,18 @@ fn uft_lft_invalidation_in() {
     };
     let snat_port = establish_http_conn(&g1_cfg, &mut g1, dst_ip);
 
-    let mut pkt1 = http_get2(
+    let mut pkt1_m = http_get2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
 
-    let mut pkt2 = http_get_ack2(
+    let mut pkt2_m = http_get_ack2(
         BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
@@ -3206,10 +3227,11 @@ fn uft_lft_invalidation_in() {
         mac: BS_MAC_ADDR,
         vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
     };
-    pkt2 = encap_external(pkt2, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
+    pkt2_m = encap_external(pkt2_m, bs_phys, g1_phys);
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt2);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
-    assert!(matches!(res, Ok(Modified)));
+    expect_modified!(res, pkt2_m);
 
     // ================================================================
     // Step 3
@@ -3235,7 +3257,7 @@ fn uft_lft_invalidation_in() {
     // ================================================================
     // Step 4
     // ================================================================
-    let mut pkt3 = http_301_reply2(
+    let mut pkt3_m = http_301_reply2(
         BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
@@ -3247,8 +3269,9 @@ fn uft_lft_invalidation_in() {
         mac: BS_MAC_ADDR,
         vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
     };
-    pkt3 = encap_external(pkt3, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt3, ActionMeta::new());
+    pkt3_m = encap_external(pkt3_m, bs_phys, g1_phys);
+    let pkt3 = parse_inbound(&mut pkt3_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt3);
     assert_drop!(
         res,
         DropReason::Layer { name: "firewall", reason: DenyReason::Default }
@@ -3270,20 +3293,26 @@ fn test_outbound_http(g1_cfg: &VpcCfg, g1: &mut PortAndVps) -> InnerFlowId {
         mac: g1_cfg.guest_mac,
         vni: g1_cfg.vni,
     };
+    let bs_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+    };
 
     // ================================================================
     // SYN: Client -> Server
     // ================================================================
     let dst_ip = "52.10.128.69".parse().unwrap();
-    let mut pkt1 = http_syn2(
+    let mut pkt1_m = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let flow = *pkt1.flow();
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let flow = pkt1.flow();
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
     incr!(
         g1,
         [
@@ -3293,181 +3322,168 @@ fn test_outbound_http(g1_cfg: &VpcCfg, g1: &mut PortAndVps) -> InnerFlowId {
             "stats.port.out_modified, stats.port.out_uft_miss",
         ]
     );
-    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let snat_port =
+        pkt1.to_full_meta().meta().inner_ulp().unwrap().src_port().unwrap();
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // SYN+ACK: Server -> Client
     // ================================================================
-    let mut pkt2 = http_syn_ack2(
+    let mut pkt2_m = http_syn_ack2(
         BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    let bs_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
-    pkt2 = encap_external(pkt2, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    pkt2_m = encap_external(pkt2_m, bs_phys, g1_phys);
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt2);
+    expect_modified!(res, pkt2_m);
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // ACK: Client -> Server
     // ================================================================
-    let mut pkt3 = http_ack2(
+    let mut pkt3_m = http_ack2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt3 = parse_outbound(&mut pkt3_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt3);
+    expect_modified!(res, pkt3_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // HTTP GET: Client -> Server
     // ================================================================
-    let mut pkt4 = http_get2(
+    let mut pkt4_m = http_get2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let res = g1.port.process(Out, &mut pkt4, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt4 = parse_outbound(&mut pkt4_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt4);
+    expect_modified!(res, pkt4_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // ACK HTTP GET: Server -> Client
     // ================================================================
-    let mut pkt5 = http_get_ack2(
+    let mut pkt5_m = http_get_ack2(
         BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    let bs_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
-    pkt5 = encap_external(pkt5, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt5, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    pkt5_m = encap_external(pkt5_m, bs_phys, g1_phys);
+    let pkt5 = parse_inbound(&mut pkt5_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt5);
+    expect_modified!(res, pkt5_m);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // HTTP 301 Reply: Server -> Client
     // ================================================================
-    let mut pkt6 = http_301_reply2(
+    let mut pkt6_m = http_301_reply2(
         BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    let bs_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
-    pkt6 = encap_external(pkt6, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt6, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    pkt6_m = encap_external(pkt6_m, bs_phys, g1_phys);
+    let pkt6 = parse_inbound(&mut pkt6_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt6);
+    expect_modified!(res, pkt6_m);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // ACK HTTP 301: Client -> Server
     // ================================================================
-    let mut pkt7 = http_301_ack2(
+    let mut pkt7_m = http_301_ack2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let res = g1.port.process(Out, &mut pkt7, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt7 = parse_outbound(&mut pkt7_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt7);
+    expect_modified!(res, pkt7_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // FIN: Client -> Server
     // ================================================================
-    let mut pkt8 = http_guest_fin2(
+    let mut pkt8_m = http_guest_fin2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let res = g1.port.process(Out, &mut pkt8, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt8 = parse_outbound(&mut pkt8_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt8);
+    expect_modified!(res, pkt8_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::FinWait1, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // ACK FIN: Server -> Client
     // ================================================================
-    let mut pkt9 = http_server_ack_fin2(
+    let mut pkt9_m = http_server_ack_fin2(
         BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    let bs_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
-    pkt9 = encap_external(pkt9, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt9, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    pkt9_m = encap_external(pkt9_m, bs_phys, g1_phys);
+    let pkt9 = parse_inbound(&mut pkt9_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt9);
+    expect_modified!(res, pkt9_m);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::FinWait2, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // FIN: Server -> Client
     // ================================================================
-    let mut pkt10 = http_server_fin2(
+    let mut pkt10_m = http_server_fin2(
         BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    let bs_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
-    pkt10 = encap_external(pkt10, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt10, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    pkt10_m = encap_external(pkt10_m, bs_phys, g1_phys);
+    let pkt10 = parse_inbound(&mut pkt10_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt10);
+    expect_modified!(res, pkt10_m);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // ACK Server FIN: Client -> Server
     // ================================================================
-    let mut pkt11 = http_guest_ack_fin2(
+    let mut pkt11_m = http_guest_ack_fin2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let res = g1.port.process(Out, &mut pkt11, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt11 = parse_outbound(&mut pkt11_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt11);
+    expect_modified!(res, pkt11_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow).unwrap());
 
@@ -3567,14 +3583,15 @@ fn early_tcp_invalidation() {
     // Repeat the exact same flow. This SYN is not blocked, the old
     // entry is invalidated, and a new one is created.
     // ================================================================
-    let mut pkt1 = http_syn2(
+    let mut pkt1_m = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
     incr!(
         g1,
         [
@@ -3584,7 +3601,9 @@ fn early_tcp_invalidation() {
         ]
     );
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
-    let snat_port = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let snat_port =
+        pkt1.to_full_meta().meta().inner_ulp().unwrap().src_port().unwrap();
 
     // ================================================================
     // Drive to established, then validate the same applies to inbound
@@ -3600,20 +3619,21 @@ fn early_tcp_invalidation() {
         mac: g1_cfg.guest_mac,
         vni: g1_cfg.vni,
     };
-    let mut pkt2 = http_syn_ack2(
+    let mut pkt2_m = http_syn_ack2(
         BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
         g1_cfg.snat().external_ip,
         snat_port,
     );
-    pkt2 = encap_external(pkt2, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    pkt2_m = encap_external(pkt2_m, bs_phys, g1_phys);
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt2);
+    expect_modified!(res, pkt2_m);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
-    let mut pkt1 = http_syn3(
+    let mut pkt1_m = http_syn3(
         BS_MAC_ADDR,
         dst_ip,
         g1_cfg.guest_mac,
@@ -3621,9 +3641,10 @@ fn early_tcp_invalidation() {
         80,
         snat_port,
     );
-    pkt1 = encap_external(pkt1, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    pkt1_m = encap_external(pkt1_m, bs_phys, g1_phys);
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt1);
+    expect_modified!(res, pkt1_m);
     update!(
         g1,
         [
@@ -3644,15 +3665,16 @@ fn early_tcp_invalidation() {
     // This case is just an ACK, but the same logic applies for
     // FIN+ACK. The FIN+ACK case could be special-cased CLOSED->CLOSED,
     // but we're not doing that for now.
-    let mut pkt11 = http_guest_ack_fin2(
+    let mut pkt11_m = http_guest_ack_fin2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip2,
     );
-    let flow = *pkt11.flow();
-    let res = g1.port.process(Out, &mut pkt11, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt11 = parse_outbound(&mut pkt11_m, VpcParser {}).unwrap();
+    let flow = pkt11.flow();
+    let res = g1.port.process(Out, pkt11);
+    expect_modified!(res, pkt11_m);
     incr!(
         g1,
         [
@@ -3667,15 +3689,16 @@ fn early_tcp_invalidation() {
     // ================================================================
     // This entry will not block new flows on the same tuple.
     // ================================================================
-    let mut pkt1 = http_syn2(
+    let mut pkt1_m = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         dst_ip2,
     );
-    let flow = *pkt1.flow();
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let flow = pkt1.flow();
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
     incr!(
         g1,
         [
@@ -3752,16 +3775,16 @@ fn tcp_inbound() {
     // ================================================================
     // SYN: Client -> Server
     // ================================================================
-    let mut pkt1 = http_syn2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
+    let mut pkt1_m = http_syn2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
     let bs_phys = TestIpPhys {
         ip: BS_IP_ADDR,
         mac: BS_MAC_ADDR,
         vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
     };
-    pkt1 = encap(pkt1, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
-    let flow = pkt1.flow().mirror();
-    assert!(matches!(res, Ok(Modified)));
+    pkt1_m = encap(pkt1_m, bs_phys, g1_phys);
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt1);
+    expect_modified!(res, pkt1_m);
     incr!(
         g1,
         [
@@ -3771,133 +3794,147 @@ fn tcp_inbound() {
             "stats.port.in_modified, stats.port.in_uft_miss",
         ]
     );
-    let sport = pkt1.meta().inner.ulp.unwrap().src_port().unwrap();
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let flow = pkt1.flow().mirror();
+    let sport =
+        pkt1.to_full_meta().meta().inner_ulp().unwrap().src_port().unwrap();
     assert_eq!(TcpState::Listen, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // SYN+ACK: Server -> Client
     // ================================================================
-    let mut pkt2 = http_syn_ack2(
+    let mut pkt2_m = http_syn_ack2(
         serv_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         client_ip,
         sport,
     );
-    let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)), "expected Modified, got {:?}", res);
+    let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt2);
+    expect_modified!(res, pkt2_m);
     incr!(g1, ["uft.out, stats.port.out_modified, stats.port.out_uft_miss"]);
     assert_eq!(TcpState::SynRcvd, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // ACK: Client -> Server
     // ================================================================
-    let mut pkt3 = http_ack2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
-    pkt3 = encap(pkt3, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt3, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let mut pkt3_m = http_ack2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
+    pkt3_m = encap(pkt3_m, bs_phys, g1_phys);
+    let pkt3 = parse_inbound(&mut pkt3_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt3);
+    expect_modified!(res, pkt3_m);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // HTTP GET: Client -> Server
     // ================================================================
-    let mut pkt4 = http_get2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
-    pkt4 = encap(pkt4, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt4, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let mut pkt4_m = http_get2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
+    pkt4_m = encap(pkt4_m, bs_phys, g1_phys);
+    let pkt4 = parse_inbound(&mut pkt4_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt4);
+    expect_modified!(res, pkt4_m);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // ACK HTTP GET: Server -> Client
     // ================================================================
-    let mut pkt5 = http_get_ack2(
+    let mut pkt5_m = http_get_ack2(
         serv_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         client_ip,
         sport,
     );
-    let res = g1.port.process(Out, &mut pkt5, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt5 = parse_outbound(&mut pkt5_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt5);
+    expect_modified!(res, pkt5_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // HTTP 301 Reply: Server -> Client
     // ================================================================
-    let mut pkt6 = http_301_reply2(
+    let mut pkt6_m = http_301_reply2(
         serv_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         client_ip,
         sport,
     );
-    let res = g1.port.process(Out, &mut pkt6, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt6 = parse_outbound(&mut pkt6_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt6);
+    expect_modified!(res, pkt6_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // ACK HTTP 301: Client -> Server
     // ================================================================
-    let mut pkt7 = http_301_ack2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
-    pkt7 = encap(pkt7, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt7, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let mut pkt7_m =
+        http_301_ack2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
+    pkt7_m = encap(pkt7_m, bs_phys, g1_phys);
+    let pkt7 = parse_inbound(&mut pkt7_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt7);
+    expect_modified!(res, pkt7_m);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // FIN: Client -> Server
     // ================================================================
-    let mut pkt8 =
+    let mut pkt8_m =
         http_guest_fin2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
-    pkt8 = encap(pkt8, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt8, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    pkt8_m = encap(pkt8_m, bs_phys, g1_phys);
+    let pkt8 = parse_inbound(&mut pkt8_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt8);
+    expect_modified!(res, pkt8_m);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
     assert_eq!(TcpState::CloseWait, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // ACK Client FIN: Server -> Client
     // ================================================================
-    let mut pkt9 = http_server_ack_fin2(
+    let mut pkt9_m = http_server_ack_fin2(
         serv_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         client_ip,
         sport,
     );
-    let res = g1.port.process(Out, &mut pkt9, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt9 = parse_outbound(&mut pkt9_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt9);
+    expect_modified!(res, pkt9_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::CloseWait, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // FIN: Server -> Client
     // ================================================================
-    let mut pkt10 = http_server_fin2(
+    let mut pkt10_m = http_server_fin2(
         serv_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         client_ip,
         sport,
     );
-    let res = g1.port.process(Out, &mut pkt10, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let pkt10 = parse_outbound(&mut pkt10_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt10);
+    expect_modified!(res, pkt10_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
     assert_eq!(TcpState::LastAck, g1.port.tcp_state(&flow).unwrap());
 
     // ================================================================
     // ACK Server FIN: Client -> Server
     // ================================================================
-    let mut pkt11 =
+    let mut pkt11_m =
         http_guest_ack_fin2(BS_MAC_ADDR, client_ip, serv_mac, serv_ext_ip);
-    pkt11 = encap(pkt11, bs_phys, g1_phys);
-    let res = g1.port.process(In, &mut pkt11, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    pkt11_m = encap(pkt11_m, bs_phys, g1_phys);
+    let pkt11 = parse_inbound(&mut pkt11_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt11);
+    expect_modified!(res, pkt11_m);
     update!(
         g1,
         [
@@ -3925,13 +3962,14 @@ fn anti_spoof() {
     // ================================================================
     // Try to send an outbound packet with a spoofed IP.
     // ================================================================
-    let mut pkt1 = http_syn2(
+    let mut pkt1_m = http_syn2(
         g1_cfg.guest_mac,
         src_ip,
         GW_MAC_ADDR,
         g2_cfg.ipv4().private_ip,
     );
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
     assert_drop!(
         res,
         DropReason::Layer { name: "gateway", reason: DenyReason::Default }
@@ -3947,13 +3985,14 @@ fn anti_spoof() {
     // ================================================================
     // Try to send an outbound packet with a spoofed MAC address.
     // ================================================================
-    pkt1 = http_syn2(
+    pkt1_m = http_syn2(
         src_mac,
         g1_cfg.ipv4().private_ip,
         GW_MAC_ADDR,
         g2_cfg.ipv4().private_ip,
     );
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
     assert_drop!(
         res,
         DropReason::Layer { name: "gateway", reason: DenyReason::Default }
@@ -3969,8 +4008,9 @@ fn anti_spoof() {
     // ================================================================
     // Try to send an outbound packet with a spoofed MAC address and IP.
     // ================================================================
-    pkt1 = http_syn2(src_mac, src_ip, GW_MAC_ADDR, g2_cfg.ipv4().private_ip);
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    pkt1_m = http_syn2(src_mac, src_ip, GW_MAC_ADDR, g2_cfg.ipv4().private_ip);
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
     assert_drop!(
         res,
         DropReason::Layer { name: "gateway", reason: DenyReason::Default }
@@ -4008,7 +4048,7 @@ fn no_panic_on_flow_table_full() {
 
     // Send one TCP packet to `zinascii.com`.
     let dst_ip: Ipv4Addr = "52.10.128.69".parse().unwrap();
-    let mut pkt1 = http_syn2(
+    let mut pkt1_m = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4_cfg().unwrap().private_ip,
         GW_MAC_ADDR,
@@ -4018,20 +4058,22 @@ fn no_panic_on_flow_table_full() {
     // Process the packet through our port. We don't actually care about the
     // contents here, we just want to make sure that the packet can be _sent at
     // all_.
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
     assert!(res.is_ok());
 
     // Send another one, which should exhaust the TCP flow table limit we
     // severely truncated above. Note we need to send to a different IP address.
     // Let's use google.com.
     let dst_ip: Ipv4Addr = "142.251.46.238".parse().unwrap();
-    let mut pkt2 = http_syn2(
+    let mut pkt2_m = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4_cfg().unwrap().private_ip,
         GW_MAC_ADDR,
         dst_ip,
     );
-    let res2 = g1.port.process(Out, &mut pkt2, ActionMeta::new());
+    let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res2 = g1.port.process(Out, pkt2);
     assert_drop!(res2, DropReason::TcpErr);
 }
 
@@ -4073,7 +4115,7 @@ fn intra_subnet_routes_with_custom() {
     let data = b"1234\0";
 
     // Send one ICMP packet to that guest.
-    let mut pkt1 = gen_icmpv4_echo_req(
+    let mut pkt1_m = gen_icmpv4_echo_req(
         g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
         g1_cfg.ipv4().private_ip,
@@ -4087,8 +4129,9 @@ fn intra_subnet_routes_with_custom() {
     // Process the packet through our port. It should be allowed through:
     // we have a V2P mapping for the target guest, and a route for the other
     // subnet.
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    assert!(matches!(res, Ok(ProcessResult::Modified)));
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
     incr!(
         g1,
         [
@@ -4107,7 +4150,7 @@ fn intra_subnet_routes_with_custom() {
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
-    let mut pkt2 = gen_icmpv4_echo_req(
+    let mut pkt2_m = gen_icmpv4_echo_req(
         g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
         g1_cfg.ipv4().private_ip,
@@ -4117,7 +4160,8 @@ fn intra_subnet_routes_with_custom() {
         data,
         1,
     );
-    let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
+    let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt2);
     assert!(matches!(
         res,
         Ok(ProcessResult::Drop {
@@ -4142,7 +4186,7 @@ fn intra_subnet_routes_with_custom() {
     )
     .unwrap();
     update!(g1, ["incr:epoch", "decr:router.rules.out"]);
-    let mut pkt3 = gen_icmpv4_echo_req(
+    let mut pkt3_m = gen_icmpv4_echo_req(
         g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
         g1_cfg.ipv4().private_ip,
@@ -4152,8 +4196,9 @@ fn intra_subnet_routes_with_custom() {
         data,
         1,
     );
-    let res = g1.port.process(Out, &mut pkt3, ActionMeta::new());
-    assert!(matches!(res, Ok(ProcessResult::Modified)));
+    let pkt3 = parse_outbound(&mut pkt3_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt3);
+    expect_modified!(res, pkt3_m);
 }
 
 #[test]
@@ -4197,7 +4242,7 @@ fn port_as_router_target() {
     let data = b"1234\0";
 
     // Send one ICMP packet to that range.
-    let mut pkt1 = gen_icmpv4_echo_req(
+    let mut pkt1_m = gen_icmpv4_echo_req(
         g1_cfg.guest_mac,
         g1_cfg.gateway_mac,
         g1_cfg.ipv4().private_ip,
@@ -4210,8 +4255,9 @@ fn port_as_router_target() {
 
     // That packet should be allowed: the target IP resolves to a valid
     // V2P Mapping.
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    assert!(matches!(res, Ok(ProcessResult::Modified)));
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
     incr!(
         g1,
         [
@@ -4220,18 +4266,23 @@ fn port_as_router_target() {
         ]
     );
 
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
+
     // Encap routes between sleds correctly, inner IPs are not modified,
     // and L2 dst matches the guest's NIC.
-    let v6_encap_meta = pkt1.meta().outer.ip.as_ref().unwrap().ip6().unwrap();
-    assert_eq!(v6_encap_meta.src, g1_cfg.phys_ip);
-    assert_eq!(v6_encap_meta.dst, g2_cfg.phys_ip);
-    assert_eq!(pkt1.meta().inner_ether().dst, g2_cfg.guest_mac);
-    assert_eq!(pkt1.meta().inner_ether().src, g1_cfg.guest_mac);
-    assert_eq!(pkt1.meta().inner_ip4().unwrap().src, g1_cfg.ipv4().private_ip);
-    assert_eq!(pkt1.meta().inner_ip4().unwrap().dst, dst_ip);
+    let v6_encap_meta = &pkt1.meta().outer_v6;
+    assert_eq!(v6_encap_meta.source(), g1_cfg.phys_ip);
+    assert_eq!(v6_encap_meta.destination(), g2_cfg.phys_ip);
+    assert_eq!(pkt1.meta().inner_eth.destination(), g2_cfg.guest_mac);
+    assert_eq!(pkt1.meta().inner_eth.source(), g1_cfg.guest_mac);
+    let ValidL3::Ipv4(inner_ip4) = &pkt1.meta().inner_l3 else {
+        panic!("encapped v4 packet did not parse back as v4");
+    };
+    assert_eq!(inner_ip4.source(), g1_cfg.ipv4().private_ip);
+    assert_eq!(inner_ip4.destination(), dst_ip);
 
     // Now deliver the packet to node g2.
-    let res = g2.port.process(In, &mut pkt1, ActionMeta::new());
+    let res = g2.port.process(In, pkt1);
     incr!(
         g2,
         [
@@ -4239,11 +4290,11 @@ fn port_as_router_target() {
             "stats.port.in_modified, stats.port.in_uft_miss, uft.in",
         ]
     );
-    assert!(matches!(res, Ok(ProcessResult::Modified)));
+    expect_modified!(res, pkt1_m);
 
     // A reply from that address must be allowed out by g2, and accepted
     // by g1.
-    let mut pkt2 = gen_icmpv4_echo_reply(
+    let mut pkt2_m = gen_icmpv4_echo_reply(
         g2_cfg.guest_mac,
         g2_cfg.gateway_mac,
         dst_ip,
@@ -4253,11 +4304,13 @@ fn port_as_router_target() {
         data,
         1,
     );
+    let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
 
-    let res = g2.port.process(Out, &mut pkt2, ActionMeta::new());
+    let res = g2.port.process(Out, pkt2);
     incr!(g2, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out",]);
-    assert!(matches!(res, Ok(ProcessResult::Modified)));
+    expect_modified!(res, pkt2_m);
 
-    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
-    assert!(matches!(res, Ok(ProcessResult::Modified)));
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt2);
+    expect_modified!(res, pkt2_m);
 }

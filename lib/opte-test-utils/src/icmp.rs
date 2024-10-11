@@ -157,8 +157,8 @@ pub fn gen_icmp_echo(
     match n_segments {
         1 => {
             let mut pkt = MsgBlk::new_ethernet(total_len);
-            pkt.emit_back(&(eth, ip));
-            pkt.resize(total_len);
+            pkt.emit_back(&(eth, ip)).unwrap();
+            pkt.resize(total_len).unwrap();
             pkt.write_bytes_back(&icmp_bytes).unwrap();
 
             return pkt;

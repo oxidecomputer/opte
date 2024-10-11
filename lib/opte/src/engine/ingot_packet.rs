@@ -556,6 +556,13 @@ impl MsgBlk {
         Self { inner }
     }
 
+    pub fn copy(buf: impl AsRef<[u8]>) -> Self {
+        let mut out = Self::new(buf.as_ref().len());
+        // Unwarp safety -- just allocated length of input buffer.
+        out.write_bytes_back(buf).unwrap();
+        out
+    }
+
     pub fn new_pkt(emit: impl Emit + EmitDoesNotRelyOnBufContents) -> Self {
         let mut pkt = Self::new(emit.packet_length());
         pkt.emit_back(emit).unwrap();
