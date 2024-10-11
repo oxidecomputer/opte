@@ -150,8 +150,7 @@ pub fn gen_icmp_echo(
     };
     ip.fill_checksum();
 
-    let total_len =
-        eth.packet_length() + ip.packet_length() + icmp.buffer_len();
+    let total_len = eth.packet_length() + ip.packet_length() + icmp_bytes.len();
     let mut segments = vec![];
 
     match n_segments {

@@ -1,3 +1,4 @@
+use opte::engine::ingot_packet::MsgBlk;
 use opte_test_utils as common;
 
 use common::*;
@@ -32,9 +33,10 @@ fn firewall_replace_rules() {
     // Run the SYN packet through g1's port in the outbound direction
     // and verify if passes the firewall.
     // ================================================================
-    let mut pkt1 = http_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let mut pkt1_m = http_syn(&g1_cfg, &g2_cfg);
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
     incr!(
         g1,
         [
@@ -71,9 +73,10 @@ fn firewall_replace_rules() {
         ]
     );
 
-    let mut pkt2 = http_syn(&g1_cfg, &g2_cfg);
-    let res = g1.port.process(Out, &mut pkt2, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    let mut pkt2_m = http_syn(&g1_cfg, &g2_cfg);
+    let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt2);
+    expect_modified!(res, pkt2_m);
     incr!(
         g1,
         [
@@ -88,14 +91,16 @@ fn firewall_replace_rules() {
     // of the real process we first dump the raw bytes of g1's
     // outgoing packet and then reparse it.
     // ================================================================
-    let mblk = pkt2.unwrap_mblk();
-    let mut pkt3 = unsafe {
-        Packet::wrap_mblk_and_parse(mblk, In, VpcParser::new()).unwrap()
-    };
-    let mut pkt3_copy =
-        Packet::copy(&pkt3.all_bytes()).parse(In, VpcParser::new()).unwrap();
-    let res = g2.port.process(In, &mut pkt3, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+
+    let mut pkt3_m = pkt2_m;
+    let pkt3_bytes = pkt3_m.copy_all();
+    let mut pkt3_copy_m = MsgBlk::copy(pkt3_bytes);
+
+    let pkt3 = parse_inbound(&mut pkt3_m, VpcParser {}).unwrap();
+    let pkt3_copy = parse_inbound(&mut pkt3_copy_m, VpcParser {}).unwrap();
+
+    let res = g2.port.process(In, pkt3);
+    expect_modified!(res, pkt3_m);
     incr!(
         g2,
         [
@@ -130,7 +135,7 @@ fn firewall_replace_rules() {
 
     // Verify the packet is dropped and that the firewall flow table
     // entry (along with its dual) was invalidated.
-    let res = g2.port.process(In, &mut pkt3_copy, ActionMeta::new());
+    let res = g2.port.process(In, pkt3_copy);
     assert_drop!(
         res,
         DropReason::Layer { name: "firewall", reason: DenyReason::Rule }
@@ -181,20 +186,21 @@ fn firewall_vni_inbound() {
         mac: g2_cfg.guest_mac,
         vni: g2_cfg.vni,
     };
-    let mut pkt1 = http_syn2(
+    let mut pkt1_m = http_syn2(
         g2_cfg.guest_mac,
         g2_cfg.ipv4().private_ip,
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
     );
-    pkt1 = encap(pkt1, phys_src, phys_dst);
+    pkt1_m = encap(pkt1_m, phys_src, phys_dst);
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
 
     // ================================================================
     // Verify that g1's firewall rejects this packet, as the default
     // VPC firewall rules dictate that only inbound traffic from the
     // same VPC should be allowed.
     // ================================================================
-    let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
+    let res = g1.port.process(In, pkt1);
     assert_drop!(
         res,
         DropReason::Layer { name: "firewall", reason: DenyReason::Default }
@@ -222,15 +228,16 @@ fn firewall_vni_inbound() {
         mac: g2_cfg.guest_mac,
         vni: g2_cfg.vni,
     };
-    let mut pkt2 = http_syn2(
+    let mut pkt2_m = http_syn2(
         g2_cfg.guest_mac,
         g2_cfg.ipv4().private_ip,
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
     );
-    pkt2 = encap(pkt2, phys_src, phys_dst);
-    let res = g1.port.process(In, &mut pkt2, ActionMeta::new());
-    assert!(matches!(res, Ok(Modified)));
+    pkt2_m = encap(pkt2_m, phys_src, phys_dst);
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt2);
+    expect_modified!(res, pkt2_m);
     incr!(
         g1,
         [
@@ -293,18 +300,19 @@ fn firewall_vni_outbound() {
         mac: g2_cfg.guest_mac,
         vni: g2_cfg.vni,
     };
-    let mut pkt1 = http_syn2(
+    let mut pkt1_m = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         g1_cfg.guest_mac,
         g2_cfg.ipv4().private_ip,
     );
-    pkt1 = encap(pkt1, phys_src, phys_dst);
+    // pkt1 = encap(pkt1, phys_src, phys_dst);
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
 
     // ================================================================
     // Try to send the packet and verify the firewall does not allow it.
     // ================================================================
-    let res = g1.port.process(Out, &mut pkt1, ActionMeta::new());
+    let res = g1.port.process(Out, pkt1);
     assert_drop!(
         res,
         DropReason::Layer { name: "firewall", reason: DenyReason::Rule }
@@ -356,20 +364,21 @@ fn firewall_external_inbound() {
         vni: g1_cfg.vni,
     };
 
-    let mut pkt1 = http_syn2(
+    let mut pkt1_m = http_syn2(
         BS_MAC_ADDR,
         std::net::IpAddr::from([1, 1, 1, 1]),
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
     );
-    pkt1 = encap_external(pkt1, bsvc_phys, guest_phys);
+    pkt1_m = encap_external(pkt1_m, bsvc_phys, guest_phys);
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
 
     // ================================================================
     // Verify that g1's firewall rejects this packet, as the default
     // VPC firewall rules dictate that only inbound traffic from the
     // same VPC should be allowed.
     // ================================================================
-    let res = g1.port.process(In, &mut pkt1, ActionMeta::new());
+    let res = g1.port.process(In, pkt1);
     assert_drop!(
         res,
         DropReason::Layer { name: "firewall", reason: DenyReason::Default }

@@ -10,6 +10,7 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
+use opte::engine::ingot_packet::Packet2;
 use opte_bench::alloc::*;
 use opte_bench::packet::BenchPacket;
 use opte_bench::packet::BenchPacketInstance;
@@ -80,12 +81,31 @@ pub fn test_parse<M: MeasurementInfo + 'static>(
                 || inp.generate(),
                 // match *outside* the closure to prevent its selection from being timed.
                 match parser {
-                    ParserKind::Generic => |(in_pkt, direction): TestCase| {
-                        in_pkt.parse(direction, GenericUlp {})
-                    },
-                    ParserKind::OxideVpc => |(in_pkt, direction): TestCase| {
-                        in_pkt.parse(direction, VpcParser {})
-                    },
+                    ParserKind::Generic => {
+                        |(mut in_pkt, direction): TestCase| {
+                            let pkt =
+                                black_box(Packet2::new(in_pkt.iter_mut()));
+                            black_box(match direction {
+                                In => pkt.parse_inbound(GenericUlp {}),
+                                Out => pkt.parse_outbound(GenericUlp {}),
+                            })
+                            .unwrap();
+                        }
+                    }
+                    ParserKind::OxideVpc => {
+                        |(mut in_pkt, direction): TestCase| {
+                            let pkt =
+                                black_box(Packet2::new(in_pkt.iter_mut()));
+                            black_box(match direction {
+                                In => {
+                                    pkt.parse_inbound(VpcParser {}).unwrap();
+                                }
+                                Out => {
+                                    pkt.parse_outbound(VpcParser {}).unwrap();
+                                }
+                            });
+                        }
+                    }
                 },
                 criterion::BatchSize::PerIteration,
             )
@@ -117,6 +137,7 @@ pub fn test_handle<M: MeasurementInfo + 'static>(
         M::label()
     ));
 
+    let parser = case.parse_with();
     c.bench_with_input(
         BenchmarkId::from_parameter(case.instance_name()),
         &case,
@@ -124,30 +145,52 @@ pub fn test_handle<M: MeasurementInfo + 'static>(
             b.iter_batched(
                 || {
                     let (init_pkt, dir) = case.generate();
-                    let parsed_pkt = match case.parse_with() {
-                        ParserKind::Generic => {
-                            init_pkt.parse(dir, GenericUlp {}).unwrap()
-                        }
-                        ParserKind::OxideVpc => {
-                            init_pkt.parse(dir, VpcParser {}).unwrap()
-                        }
-                    };
-
                     case.pre_handle(&port);
 
-                    (parsed_pkt, dir)
+                    (init_pkt, dir)
                 },
-                |(mut pkt, dir)| {
-                    assert!(!matches!(
-                        port.port
-                            .process(
-                                dir,
-                                black_box(&mut pkt),
-                                ActionMeta::new(),
-                            )
-                            .unwrap(),
-                        ProcessResult::Drop { .. }
-                    ))
+                // Can't seem to match outside here -- must be missing something.
+                // Sadly, we can't elide parsing here as the
+                // packet is now a view over the generated pkt.
+                |(mut pkt_m, dir): TestCase| match parser {
+                    ParserKind::Generic => {
+                        let pkt = Packet2::new(pkt_m.iter_mut());
+                        let res = match dir {
+                            In => {
+                                let pkt =
+                                    pkt.parse_inbound(GenericUlp {}).unwrap();
+                                port.port.process(dir, black_box(pkt)).unwrap()
+                            }
+                            Out => {
+                                let pkt =
+                                    pkt.parse_outbound(GenericUlp {}).unwrap();
+                                port.port.process(dir, black_box(pkt)).unwrap()
+                            }
+                        };
+                        assert!(!matches!(res, ProcessResult::Drop { .. }));
+                        if let Modified(spec) = res {
+                            black_box(spec.apply(pkt_m));
+                        }
+                    }
+                    ParserKind::OxideVpc => {
+                        let pkt = Packet2::new(pkt_m.iter_mut());
+                        let res = match dir {
+                            In => {
+                                let pkt =
+                                    pkt.parse_inbound(VpcParser {}).unwrap();
+                                port.port.process(dir, black_box(pkt)).unwrap()
+                            }
+                            Out => {
+                                let pkt =
+                                    pkt.parse_outbound(VpcParser {}).unwrap();
+                                port.port.process(dir, black_box(pkt)).unwrap()
+                            }
+                        };
+                        assert!(!matches!(res, ProcessResult::Drop { .. }));
+                        if let Modified(spec) = res {
+                            black_box(spec.apply(pkt_m));
+                        }
+                    }
                 },
                 criterion::BatchSize::PerIteration,
             )

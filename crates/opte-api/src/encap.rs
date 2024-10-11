@@ -23,7 +23,7 @@ mod test {
     fn good_vni() {
         assert!(Vni::new(0u32).is_ok());
         assert!(Vni::new(11u8).is_ok());
-        assert!(Vni::new(VNI_MAX).is_ok());
+        assert!(Vni::new((1u32 << 24) - 1).is_ok());
     }
 
     #[test]
@@ -35,7 +35,7 @@ mod test {
     #[test]
     fn vni_round_trip() {
         let vni = Vni::new(7777u32).unwrap();
-        assert_eq!([0x00, 0x1E, 0x61], vni.inner);
+        assert_eq!([0x00, 0x1E, 0x61], vni.bytes());
         assert_eq!(7777, u32::from(vni));
     }
 }

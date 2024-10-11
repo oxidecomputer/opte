@@ -36,6 +36,7 @@ use opte::engine::ingot_base::Ethernet;
 use opte::engine::ingot_base::Ipv4;
 use opte::engine::ingot_base::Ipv6;
 use opte::engine::ingot_base::L3Repr;
+use opte::engine::ingot_packet::LightParsedMblk;
 use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ingot_packet::Packet2;
 pub use opte::engine::ip4::Ipv4Addr;
@@ -50,6 +51,7 @@ pub use opte::engine::packet::BodyInfo;
 pub use opte::engine::packet::HdrOffset;
 pub use opte::engine::packet::Initialized;
 pub use opte::engine::packet::Packet;
+use opte::engine::packet::ParseError;
 pub use opte::engine::packet::Parsed;
 pub use opte::engine::port::meta::ActionMeta;
 pub use opte::engine::port::DropReason;
@@ -63,6 +65,7 @@ pub use opte::engine::tcp::TcpMeta;
 pub use opte::engine::udp::UdpHdr;
 pub use opte::engine::udp::UdpMeta;
 pub use opte::engine::GenericUlp;
+use opte::engine::NetworkParser;
 pub use opte::ingot::ethernet::Ethertype;
 use opte::ingot::geneve::Geneve;
 use opte::ingot::geneve::GeneveOpt;
@@ -106,6 +109,36 @@ pub use port_state::*;
 pub use smoltcp::wire::IpProtocol;
 pub use std::num::NonZeroU32;
 pub use std::sync::Arc;
+
+/// Expects that a packet result is modified, and applies that modification.
+#[macro_export]
+macro_rules! expect_modified {
+    ($res:ident, $pkt:ident) => {
+        assert!(matches!($res, Ok(Modified(_))));
+        #[allow(unused_assignments)]
+        if let Ok(Modified(spec)) = $res {
+            $pkt = spec.apply($pkt);
+        }
+    };
+}
+
+pub fn parse_inbound<NP: NetworkParser>(
+    pkt: &mut MsgBlk,
+    parser: NP,
+) -> Result<Packet2<LightParsedMblk<'_, NP::InMeta<&'_ mut [u8]>>>, ParseError>
+{
+    let pkt = Packet2::new(pkt.iter_mut());
+    pkt.parse_inbound(parser)
+}
+
+pub fn parse_outbound<NP: NetworkParser>(
+    pkt: &mut MsgBlk,
+    parser: NP,
+) -> Result<Packet2<LightParsedMblk<'_, NP::OutMeta<&'_ mut [u8]>>>, ParseError>
+{
+    let pkt = Packet2::new(pkt.iter_mut());
+    pkt.parse_outbound(parser)
+}
 
 // It's imperative that this list stays in sync with the layers that
 // makeup the VPC implementation. We verify this in the `check_layers`
