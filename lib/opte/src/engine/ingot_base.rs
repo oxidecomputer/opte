@@ -2,7 +2,9 @@ use bitflags::bitflags;
 use ingot::choice;
 use ingot::ethernet::Ethertype;
 use ingot::icmp::IcmpV4;
+use ingot::icmp::IcmpV4Ref;
 use ingot::icmp::IcmpV6;
+use ingot::icmp::IcmpV6Ref;
 use ingot::icmp::ValidIcmpV4;
 use ingot::icmp::ValidIcmpV6;
 use ingot::ip::Ecn;
@@ -10,6 +12,7 @@ use ingot::ip::IpProtocol;
 use ingot::ip::Ipv4Flags;
 use ingot::ip::LowRentV6EhRepr;
 use ingot::tcp::Tcp;
+use ingot::tcp::TcpRef;
 use ingot::tcp::ValidTcp;
 use ingot::types::primitives::*;
 use ingot::types::util::Repeated;
@@ -20,6 +23,7 @@ use ingot::types::NetworkRepr;
 use ingot::types::ParseError;
 use ingot::types::Vec;
 use ingot::udp::Udp;
+use ingot::udp::UdpRef;
 use ingot::udp::ValidUdp;
 use ingot::Ingot;
 use opte_api::Ipv4Addr;
@@ -29,7 +33,7 @@ use opte_api::MacAddr;
 use super::checksum::Checksum;
 
 // Redefine Ethernet and v4/v6 because we have our own, internal,
-// types already.
+// address types already.
 
 #[choice(on = Ethertype)]
 pub enum L3 {
@@ -49,6 +53,28 @@ pub enum Ulp {
     Udp = IpProtocol::UDP,
     IcmpV4 = IpProtocol::ICMP,
     IcmpV6 = IpProtocol::ICMP_V6,
+}
+
+impl<B: ByteSlice> ValidUlp<B> {
+    pub fn csum(&self) -> [u8; 2] {
+        match self {
+            ValidUlp::Tcp(t) => t.checksum(),
+            ValidUlp::Udp(u) => u.checksum(),
+            ValidUlp::IcmpV4(i4) => i4.checksum(),
+            ValidUlp::IcmpV6(i6) => i6.checksum(),
+        }
+        .to_be_bytes()
+    }
+}
+
+impl<B: ByteSlice> ValidL3<B> {
+    pub fn csum(&self) -> [u8; 2] {
+        match self {
+            ValidL3::Ipv4(i4) => i4.checksum(),
+            ValidL3::Ipv6(i6) => 0,
+        }
+        .to_be_bytes()
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Ingot)]

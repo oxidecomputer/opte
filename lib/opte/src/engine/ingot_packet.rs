@@ -36,6 +36,7 @@ use super::ingot_base::UlpRepr;
 use super::ingot_base::ValidEthernet;
 use super::ingot_base::ValidIpv6;
 use super::ingot_base::ValidL3;
+use super::ingot_base::ValidL4;
 use super::ingot_base::ValidUlp;
 use super::ingot_base::L3;
 use super::ingot_base::L4;
@@ -127,13 +128,23 @@ pub struct GeneveOverV6<Q: ByteSlice> {
     pub outer_eth: EthernetPacket<Q>,
     #[ingot(from = "L3<Q>")]
     pub outer_v6: Ipv6Packet<Q>,
-    #[ingot(from = "L4<Q>")]
+    #[ingot(from = "L4<Q>", control = geneve_dst_port)]
     pub outer_udp: UdpPacket<Q>,
     pub outer_encap: GenevePacket<Q>,
 
     pub inner_eth: EthernetPacket<Q>,
     pub inner_l3: L3<Q>,
     pub inner_ulp: Ulp<Q>,
+}
+
+#[inline]
+fn geneve_dst_port<V: ByteSlice>(l4: &ValidL4<V>) -> ParseControl {
+    match l4 {
+        ValidL4::Udp(u) if u.destination() == GENEVE_PORT => {
+            ParseControl::Continue
+        }
+        _ => ParseControl::Reject,
+    }
 }
 
 #[inline]
@@ -784,6 +795,18 @@ impl MsgBlk {
 
         Some(Self { inner })
     }
+
+    /// Copy out all bytes within this mblk and its successors
+    /// to a single contiguous buffer.
+    pub fn copy_all(&self) -> Vec<u8> {
+        let mut out = vec![];
+
+        for node in self.iter() {
+            out.extend_from_slice(node)
+        }
+
+        out
+    }
 }
 
 #[derive(Debug)]
@@ -1315,6 +1338,10 @@ impl<T: Read> PacketHeaders<T> {
         self.headers.outer_eth.as_ref()
     }
 
+    pub fn outer_ip(&self) -> Option<&L3<T::Chunk>> {
+        self.headers.outer_l3.as_ref()
+    }
+
     // Need to expose this a lil cleaner...
     /// Returns whether this packet is sourced from outside the rack,
     /// in addition to its VNI.
@@ -1406,6 +1433,7 @@ impl<T: Read> PacketHeaders<T> {
         self.body.body_segs()
     }
 
+    // right place for this to live? Or is `meta()` misnamed?
     pub fn copy_remaining(&self) -> Vec<u8>
     where
         T::Chunk: ByteSliceMut,
@@ -2317,8 +2345,6 @@ impl<T: Read, M: LightweightMeta<T::Chunk>> PacketState for ParsedStage1<T, M> {
 
 impl<T: Read, M: LightweightMeta<T::Chunk>> ParsedStage1<T, M> {}
 
-type Quack = Parsed2<MsgBlkIterMut<'static>>;
-
 // Needed for now to account for not wanting to redesign ActionDescs
 // to be generic over T (trait object safety rules, etc.).
 pub type PacketMeta3<'a> = Parsed2<MsgBlkIterMut<'a>>;
@@ -2452,7 +2478,8 @@ pub struct EmittestSpec {
 
 impl EmittestSpec {
     #[inline]
-    pub fn apply(&mut self, mut pkt: MsgBlk) -> MsgBlk {
+    #[must_use]
+    pub fn apply(&self, mut pkt: MsgBlk) -> MsgBlk {
         // Rewind
         {
             let mut slots = heapless::Vec::<&mut MsgBlkNode, 6>::new();
@@ -2479,7 +2506,7 @@ impl EmittestSpec {
             // TODO: put available layers into said slots?
         }
 
-        match &mut self.spec {
+        match &self.spec {
             EmitterSpec::Fastpath(push_spec) => {
                 push_spec.encap.prepend(pkt, self.ulp_len as usize)
             }

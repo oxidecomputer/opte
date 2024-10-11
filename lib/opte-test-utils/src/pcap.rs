@@ -6,6 +6,7 @@
 
 //! Routines for building packet capture files.
 
+use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::packet::*;
 use pcap_parser::pcap;
 use pcap_parser::pcap::LegacyPcapBlock;
@@ -62,8 +63,8 @@ impl PcapBuilder {
     }
 
     /// Add a packet to the capture.
-    pub fn add_pkt(&mut self, pkt: &Packet<Parsed>) {
-        let pkt_bytes = pkt.get_rdr().copy_remaining();
+    pub fn add_pkt(&mut self, pkt: &MsgBlk) {
+        let pkt_bytes = pkt.copy_all();
         let mut block = LegacyPcapBlock {
             ts_sec: 7777,
             ts_usec: 7777,
