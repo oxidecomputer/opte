@@ -1,3 +1,5 @@
+use crate::engine::packet::mock_freemsg;
+
 use super::checksum::Checksum as OpteCsum;
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
@@ -895,7 +897,7 @@ impl Drop for MsgBlk {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 unsafe { ddi::freemsg(self.inner.as_ptr()) };
             } else {
-                // mock_freemsg(self.inner.as_ptr());
+                mock_freemsg(self.inner.as_ptr());
             }
         }
     }

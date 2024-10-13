@@ -157,7 +157,6 @@ pub fn gen_icmp_echo(
         1 => {
             let mut pkt = MsgBlk::new_ethernet(total_len);
             pkt.emit_back(&(eth, ip)).unwrap();
-            pkt.resize(total_len).unwrap();
             pkt.write_bytes_back(&icmp_bytes).unwrap();
 
             return pkt;
@@ -170,7 +169,6 @@ pub fn gen_icmp_echo(
             let t_len = ip.packet_length() + icmp.buffer_len();
             let mut pkt = MsgBlk::new(t_len);
             pkt.emit_back(ip).unwrap();
-            pkt.resize(t_len).unwrap();
             pkt.write_bytes_back(&icmp_bytes).unwrap();
             segments.push(pkt);
         }
@@ -265,7 +263,7 @@ pub fn gen_icmpv6_echo(
     let eth = Ethernet {
         destination: eth_dst,
         source: eth_src,
-        ethertype: Ethertype::IPV4,
+        ethertype: Ethertype::IPV6,
     };
 
     let ip = Ipv6 {
@@ -285,7 +283,6 @@ pub fn gen_icmpv6_echo(
         1 => {
             let mut pkt = MsgBlk::new_ethernet(total_len);
             pkt.emit_back(&(eth, ip));
-            pkt.resize(total_len);
             pkt.write_bytes_back(&body_bytes).unwrap();
 
             return pkt;
@@ -298,7 +295,6 @@ pub fn gen_icmpv6_echo(
             let t_len = ip.packet_length() + icmp.buffer_len();
             let mut pkt = MsgBlk::new(t_len);
             pkt.emit_back(ip).unwrap();
-            pkt.resize(t_len).unwrap();
             pkt.write_bytes_back(&body_bytes).unwrap();
             segments.push(pkt);
         }
@@ -308,7 +304,7 @@ pub fn gen_icmpv6_echo(
             segments.push(pkt);
 
             let mut pkt = MsgBlk::new(ip.packet_length());
-            pkt.emit_back(eth).unwrap();
+            pkt.emit_back(ip).unwrap();
             segments.push(pkt);
 
             let mut pkt = MsgBlk::new(icmp.buffer_len());

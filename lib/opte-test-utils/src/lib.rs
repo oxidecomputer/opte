@@ -495,7 +495,7 @@ pub fn ulp_pkt<
     let view = Packet2::new(pkt.iter_mut());
     let view = view.parse_outbound(GenericUlp {}).unwrap();
     let mut view = view.to_full_meta();
-    view.compute_checksums();
+    // view.compute_checksums();
     drop(view);
 
     // Note: we don't need to create and act on an EmitSpec here

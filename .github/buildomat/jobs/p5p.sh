@@ -3,7 +3,7 @@
 #: name = "opte-p5p"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2024-05-12"
+#: rust_toolchain = "nightly-2024-10-12"
 #: output_rules = [
 #:   "=/out/opte.p5p",
 #:   "=/out/opte.p5p.sha256",

@@ -3264,7 +3264,7 @@ pub fn mock_desballoc(buf: Vec<u8>) -> *mut mblk_t {
 
 // The std equivalent to `freemsg(9F)`.
 #[cfg(any(feature = "std", test))]
-fn mock_freemsg(mut mp: *mut mblk_t) {
+pub(crate) fn mock_freemsg(mut mp: *mut mblk_t) {
     while !mp.is_null() {
         let cont = unsafe { (*mp).b_cont };
         mock_freeb(mp);
