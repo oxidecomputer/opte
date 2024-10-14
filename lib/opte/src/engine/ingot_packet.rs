@@ -273,7 +273,7 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
                 }
             }
             (Some(ValidUlp::IcmpV4(pkt)), Some(tx))
-                if pkt.ty() == 0 || pkt.ty() == 3 =>
+                if pkt.ty() == 0 || pkt.ty() == 8 =>
             {
                 if let Some(new_id) = tx.icmp_id {
                     pkt.rest_of_hdr_mut()[..2]
@@ -435,7 +435,7 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
                 }
             }
             (ValidUlp::IcmpV4(pkt), Some(tx))
-                if pkt.ty() == 0 || pkt.ty() == 3 =>
+                if pkt.ty() == 0 || pkt.ty() == 8 =>
             {
                 if let Some(new_id) = tx.icmp_id {
                     pkt.rest_of_hdr_mut()[..2]
@@ -2197,54 +2197,6 @@ impl<T: Read> Packet2<Parsed2<T>> {
 
     pub fn body_csum(&mut self) -> Option<Checksum> {
         self.state.body_csum
-
-        // let out = *self.state.body_csum
-        // .get(|| {
-        //     let use_pseudo = if let Some(v) = self.state.meta.inner_ulp() {
-        //         !matches!(v, Ulp::IcmpV4(_))
-        //     } else {
-        //         false
-        //     };
-
-        //     // XXX TODO: make these valid even AFTER all packet pushings occur.
-        //     let pseudo_csum =
-        //         match (&self.state.meta.headers).inner_eth.ethertype() {
-        //             // ARP
-        //             Ethertype::ARP => {
-        //                 return None;
-        //             }
-        //             Ethertype::IPV4 | Ethertype::IPV6 => self
-        //                 .state
-        //                 .meta
-        //                 .headers
-        //                 .inner_l3
-        //                 .as_ref()
-        //                 .map(l3_pseudo_header),
-        //             _ => unreachable!(),
-        //         };
-
-        //     let Some(pseudo_csum) = pseudo_csum else {
-        //         return None;
-        //     };
-
-        //     self.state.meta.inner_ulp().and_then(csum_minus_hdr).map(|mut v| {
-        //         if use_pseudo {
-        //             v -= pseudo_csum;
-        //         }
-        //         v
-        //     })
-        // });
-
-        // // let mut manual = Checksum::default();
-        // // if let Some(segs) = self.body_segs() {
-        // //     for seg in segs {
-        // //         manual.add_bytes(*seg);
-        // //     }
-
-        // //     opte::engine::err!("think my csum is {:?}, reality is {:?}", out.map(|mut v| v.finalize()), manual.finalize());
-        // // }
-
-        // out
     }
 
     pub fn l4_hash(&mut self) -> u32 {
@@ -2276,7 +2228,6 @@ impl<T: Read> Packet2<Parsed2<T>> {
 
         // Start by reusing the known checksum of the body.
         let mut body_csum = self.body_csum().unwrap_or_default();
-        eprintln!("{body_csum:?}");
 
         // If a ULP exists, then compute and set its checksum.
         if let (true, Some(ulp)) =
@@ -2419,7 +2370,7 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
                 icmp.checksum().to_be_bytes(),
             ));
 
-            csum.sub_bytes(&[icmp.code(), icmp.ty()]);
+            csum.sub_bytes(&[icmp.ty(), icmp.code()]);
             csum.sub_bytes(icmp.rest_of_hdr_ref());
 
             Some(csum)
@@ -2433,7 +2384,7 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
                 icmp.checksum().to_be_bytes(),
             ));
 
-            csum.sub_bytes(&[icmp.code(), icmp.ty()]);
+            csum.sub_bytes(&[icmp.ty(), icmp.code()]);
             csum.sub_bytes(icmp.rest_of_hdr_ref());
 
             Some(csum)

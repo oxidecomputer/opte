@@ -180,7 +180,7 @@ pub fn gen_icmp_echo(
             segments.push(pkt);
 
             let mut pkt = MsgBlk::new(ip.packet_length());
-            pkt.emit_back(eth).unwrap();
+            pkt.emit_back(ip).unwrap();
             segments.push(pkt);
 
             let mut pkt = MsgBlk::new(icmp.buffer_len());

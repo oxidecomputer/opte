@@ -20,6 +20,7 @@ use opte::api::OpteError;
 use opte::ddi::time::Moment;
 use opte::engine::arp::ArpEthIpv4;
 use opte::engine::arp::ArpEthIpv4Raw;
+use opte::engine::checksum::Checksum as OpteCsum;
 use opte::engine::dhcpv6;
 use opte::engine::ether::EtherHdr;
 use opte::engine::ether::EtherHdrRaw;
@@ -77,6 +78,7 @@ use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
 use pcap::*;
+use smoltcp::phy::Checksum;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
@@ -163,6 +165,7 @@ fn port_transition_running() {
     // -> Running.
     // ================================================================
     let mut pkt1_m = tcp_telnet_syn(&g1_cfg, &g2_cfg);
+
     let pkt1 = parse_outbound(&mut pkt1_m, GenericUlp {}).unwrap();
     let res = g1.port.process(Out, pkt1);
     assert!(matches!(res, Err(ProcessError::BadState(_))));
@@ -758,6 +761,7 @@ fn guest_to_internet_ipv4() {
         dst_ip,
     );
     pcap_guest.add_pkt(&pkt1_m);
+
     let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
 
     // ================================================================
@@ -1714,6 +1718,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         2,
     );
     pcap.add_pkt(&pkt1_m);
+
     let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
 
     let res = g1.port.process(Out, pkt1);
@@ -1757,6 +1762,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
     };
     pkt2_m = encap_external(pkt2_m, bsvc_phys, g1_phys);
     pcap.add_pkt(&pkt2_m);
+
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
 
     let res = g1.port.process(In, pkt2);
@@ -1809,6 +1815,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &data[..],
         2,
     );
+    pkt4_m = encap_external(pkt4_m, bsvc_phys, g1_phys);
     pcap.add_pkt(&pkt4_m);
     let pkt4 = parse_inbound(&mut pkt4_m, VpcParser {}).unwrap();
 
