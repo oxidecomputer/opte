@@ -137,8 +137,8 @@ impl NetworkImpl for VpcNetwork {
 }
 
 impl NetworkParser for VpcParser {
-    type InMeta<T: ByteSlice> = ValidGeneveOverV6<T>;
-    type OutMeta<T: ByteSlice> = ValidNoEncap<T>;
+    type InMeta<T: ByteSliceMut> = ValidGeneveOverV6<T>;
+    type OutMeta<T: ByteSliceMut> = ValidNoEncap<T>;
 
     #[inline]
     fn parse_outbound<'a, T: Read + 'a>(
@@ -146,7 +146,7 @@ impl NetworkParser for VpcParser {
         rdr: T,
     ) -> Result<OpteParsed2<T, Self::OutMeta<T::Chunk>>, ParseError>
     where
-        T::Chunk: opte::ingot::types::IntoBufPointer<'a>,
+        T::Chunk: opte::ingot::types::IntoBufPointer<'a> + ByteSliceMut,
     {
         Ok(ValidNoEncap::parse_read(rdr)?)
     }
@@ -157,7 +157,7 @@ impl NetworkParser for VpcParser {
         rdr: T,
     ) -> Result<OpteParsed2<T, Self::InMeta<T::Chunk>>, ParseError>
     where
-        T::Chunk: opte::ingot::types::IntoBufPointer<'a>,
+        T::Chunk: opte::ingot::types::IntoBufPointer<'a> + ByteSliceMut,
     {
         Ok(ValidGeneveOverV6::parse_read(rdr)?)
     }

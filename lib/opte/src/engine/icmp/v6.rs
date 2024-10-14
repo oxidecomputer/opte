@@ -7,6 +7,8 @@
 //! ICMPv6 headers and processing.
 
 use super::*;
+use crate::engine::ingot_base::Ethernet;
+use crate::engine::ingot_base::Ipv6;
 use crate::engine::ingot_base::Ipv6Ref;
 use crate::engine::ingot_packet::MsgBlk;
 use crate::engine::ingot_packet::PacketHeaders2;
@@ -14,6 +16,8 @@ use crate::engine::ip6::Ipv6Hdr;
 use crate::engine::ip6::Ipv6Meta;
 use crate::engine::predicate::Ipv6AddrMatch;
 use alloc::string::String;
+use ingot::ethernet::Ethertype;
+use ingot::ip::IpProtocol as IngotIpProto;
 use ingot::types::Emit;
 pub use opte_api::ip::Icmpv6EchoReply;
 pub use opte_api::ip::Ipv6Addr;
@@ -179,6 +183,8 @@ impl HairpinAction for Icmpv6EchoReply {
             data: src_data,
         };
 
+        // TODO: less Vec
+
         let reply_len = reply.buffer_len();
         let mut ulp_body = vec![0u8; reply_len];
         let mut icmp_reply = Icmpv6Packet::new_unchecked(&mut ulp_body);
@@ -186,33 +192,23 @@ impl HairpinAction for Icmpv6EchoReply {
         csum.icmpv6 = Checksum::Tx;
         reply.emit(&dst_ip, &src_ip, &mut icmp_reply, &csum);
 
-        let ip = Ipv6Meta {
-            src: self.dst_ip,
-            dst: self.src_ip,
-            proto: Protocol::ICMPv6,
-            next_hdr: IpProtocol::Icmpv6,
-            // There are no extension headers. The ULP is the only
-            // content.
-            pay_len: reply_len as u16,
+        let mut ip6 = Ipv6 {
+            source: self.dst_ip,
+            destination: self.src_ip,
+            next_header: IngotIpProto::ICMP_V6,
+            payload_len: reply_len as u16,
             ..Default::default()
         };
 
-        let eth = EtherMeta {
-            ether_type: EtherType::Ipv6,
-            dst: self.src_mac,
-            src: self.dst_mac,
+        let eth = Ethernet {
+            destination: self.src_mac,
+            source: self.dst_mac,
+            ethertype: Ethertype::IPV6,
         };
 
-        let total_len = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE + reply_len;
-        let mut pkt = Packet::alloc_and_expand(total_len);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-        wtr.write(&ulp_body).unwrap();
-        Ok(AllowOrDeny::Allow(
-            unsafe { MsgBlk::wrap_mblk(pkt.unwrap_mblk()) }
-                .expect("known valid"),
-        ))
+        Ok(AllowOrDeny::Allow(MsgBlk::new_ethernet_pkt((
+            &eth, &ip6, &ulp_body,
+        ))))
     }
 }
 
@@ -370,38 +366,26 @@ impl HairpinAction for RouterAdvertisement {
             &csum,
         );
 
-        let ip = Ipv6Meta {
-            src: *self.ip(),
-            // Safety: We match on this being Some(_) above, so unwrap is safe.
-            dst: meta.inner_ip6().unwrap().source(),
-            proto: Protocol::ICMPv6,
-            next_hdr: IpProtocol::Icmpv6,
+        let mut ip6 = Ipv6 {
+            source: *self.ip(),
+            destination: meta.inner_ip6().unwrap().source(),
+            next_header: IngotIpProto::ICMP_V6,
+            payload_len: reply_len as u16,
+
             // RFC 4861 6.1.2 requires that the hop limit be 255 in an RA.
             hop_limit: 255,
-            // There are no extension headers; the ULP is the only
-            // content.
-            pay_len: reply_len as u16,
             ..Default::default()
         };
 
-        // The Ethernet frame should come from OPTE's virtual gateway MAC, and
-        // be destined for the client which sent us the packet.
-        let eth = EtherMeta {
-            ether_type: EtherType::Ipv6,
-            dst: self.src_mac,
-            src: self.mac,
+        let eth = Ethernet {
+            destination: self.src_mac,
+            source: self.mac,
+            ethertype: Ethertype::IPV6,
         };
 
-        let total_len = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE + reply_len;
-        let mut pkt = Packet::alloc_and_expand(total_len);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-        wtr.write(&ulp_body).unwrap();
-        Ok(AllowOrDeny::Allow(
-            unsafe { MsgBlk::wrap_mblk(pkt.unwrap_mblk()) }
-                .expect("known valid"),
-        ))
+        Ok(AllowOrDeny::Allow(MsgBlk::new_ethernet_pkt((
+            &eth, &ip6, &ulp_body,
+        ))))
     }
 }
 
@@ -643,40 +627,29 @@ impl HairpinAction for NeighborAdvertisement {
             &csum,
         );
 
-        let ip = Ipv6Meta {
-            src: *self.ip(),
-            dst: dst_ip,
-            proto: Protocol::ICMPv6,
-            next_hdr: IpProtocol::Icmpv6,
-            // RFC 4861 7.1.2 requires that the hop limit be 255 in an NA.
-            hop_limit: 255,
-            // There are no extension headers; the ULP is the only
-            // content.
-            pay_len: reply_len as u16,
-            ..Default::default()
-        };
-
         // While the frame must always be sent from the gateway, who the frame
         // is addressed to depends on whether we should multicast the packet.
         let dst_mac = dst_ip.multicast_mac().unwrap_or(self.src_mac);
 
-        // The Ethernet frame should come from OPTE's virtual gateway MAC, and
-        // be destined for the client which sent us the packet.
-        let eth = EtherMeta {
-            ether_type: EtherType::Ipv6,
-            dst: dst_mac,
-            src: self.mac,
+        let mut ip6 = Ipv6 {
+            source: *self.ip(),
+            destination: dst_ip,
+            next_header: IngotIpProto::ICMP_V6,
+            payload_len: reply_len as u16,
+
+            // RFC 4861 7.1.2 requires that the hop limit be 255 in an NA.
+            hop_limit: 255,
+            ..Default::default()
         };
 
-        let len = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE + reply_len;
-        let mut pkt = Packet::alloc_and_expand(len);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-        wtr.write(&ulp_body).unwrap();
-        Ok(AllowOrDeny::Allow(
-            unsafe { MsgBlk::wrap_mblk(pkt.unwrap_mblk()) }
-                .expect("known valid"),
-        ))
+        let eth = Ethernet {
+            destination: dst_mac,
+            source: self.mac,
+            ethertype: Ethertype::IPV6,
+        };
+
+        Ok(AllowOrDeny::Allow(MsgBlk::new_ethernet_pkt((
+            &eth, &ip6, &ulp_body,
+        ))))
     }
 }

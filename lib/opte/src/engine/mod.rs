@@ -301,8 +301,8 @@ pub trait NetworkImpl {
 /// This provides parsing for inbound/outbound packets for a given
 /// [`NetworkImpl`].
 pub trait NetworkParser {
-    type InMeta<T: ByteSlice>: LightweightMeta<T>;
-    type OutMeta<T: ByteSlice>: LightweightMeta<T>;
+    type InMeta<T: ByteSliceMut>: LightweightMeta<T>;
+    type OutMeta<T: ByteSliceMut>: LightweightMeta<T>;
 
     /// Parse an outbound packet.
     ///
@@ -313,7 +313,7 @@ pub trait NetworkParser {
         rdr: T,
     ) -> Result<OpteParsed2<T, Self::OutMeta<T::Chunk>>, ParseError>
     where
-        T::Chunk: ingot::types::IntoBufPointer<'a>;
+        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut;
 
     /// Parse an inbound packet.
     ///
@@ -324,7 +324,7 @@ pub trait NetworkParser {
         rdr: T,
     ) -> Result<OpteParsed2<T, Self::InMeta<T::Chunk>>, ParseError>
     where
-        T::Chunk: ingot::types::IntoBufPointer<'a>;
+        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut;
 }
 
 /// Header formats which allow a flow ID to be read out, and which can be converted
@@ -347,8 +347,8 @@ pub trait LightweightMeta<T: ByteSlice>: Into<OpteMeta<T>> {
     /// Returns the number of bytes occupied by the packet's outer encapsulation.
     fn encap_len(&self) -> u16;
 
-    /// Recalculate checksums within ULP headers, derived from a pre-computed `body_csum`.
-    fn update_ulp_checksums(&mut self, body_csum: Checksum);
+    /// Recalculate checksums within inner headers, derived from a pre-computed `body_csum`.
+    fn update_inner_checksums(&mut self, body_csum: Checksum);
 }
 
 /// A generic ULP parser, useful for testing inside of the opte crate
@@ -371,15 +371,15 @@ impl GenericUlp {
 }
 
 impl NetworkParser for GenericUlp {
-    type InMeta<T: ByteSlice> = ValidNoEncap<T>;
-    type OutMeta<T: ByteSlice> = ValidNoEncap<T>;
+    type InMeta<T: ByteSliceMut> = ValidNoEncap<T>;
+    type OutMeta<T: ByteSliceMut> = ValidNoEncap<T>;
 
     fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
     ) -> Result<OpteParsed2<T, Self::InMeta<T::Chunk>>, ParseError>
     where
-        T::Chunk: ingot::types::IntoBufPointer<'a>,
+        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut,
     {
         Ok(ValidNoEncap::parse_read(rdr)?)
     }
@@ -389,7 +389,7 @@ impl NetworkParser for GenericUlp {
         rdr: T,
     ) -> Result<OpteParsed2<T, Self::OutMeta<T::Chunk>>, ParseError>
     where
-        T::Chunk: ingot::types::IntoBufPointer<'a>,
+        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut,
     {
         Ok(ValidNoEncap::parse_read(rdr)?)
     }

@@ -114,7 +114,11 @@ pub use std::sync::Arc;
 #[macro_export]
 macro_rules! expect_modified {
     ($res:ident, $pkt:ident) => {
-        assert!(matches!($res, Ok(Modified(_))));
+        assert!(
+            matches!($res, Ok(Modified(_))),
+            "expected Modified, got {:?}",
+            $res
+        );
         #[allow(unused_assignments)]
         if let Ok(Modified(spec)) = $res {
             $pkt = spec.apply($pkt);
@@ -495,7 +499,7 @@ pub fn ulp_pkt<
     let view = Packet2::new(pkt.iter_mut());
     let view = view.parse_outbound(GenericUlp {}).unwrap();
     let mut view = view.to_full_meta();
-    // view.compute_checksums();
+    view.compute_checksums();
     drop(view);
 
     // Note: we don't need to create and act on an EmitSpec here
@@ -607,7 +611,7 @@ pub fn http_syn3(
             }),
         ),
         (IpAddr::Ip6(source), IpAddr::Ip6(destination)) => (
-            Ethertype::IPV4,
+            Ethertype::IPV6,
             L3Repr::Ipv6(Ipv6 {
                 payload_len: (tcp.packet_length() + body.len()) as u16,
                 next_header: IngotIpProto::TCP,
@@ -670,7 +674,7 @@ pub fn http_syn_ack2(
             }),
         ),
         (IpAddr::Ip6(source), IpAddr::Ip6(destination)) => (
-            Ethertype::IPV4,
+            Ethertype::IPV6,
             L3Repr::Ipv6(Ipv6 {
                 payload_len: (tcp.packet_length() + body.len()) as u16,
                 next_header: IngotIpProto::TCP,

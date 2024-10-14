@@ -1,5 +1,3 @@
-use crate::engine::packet::mock_freemsg;
-
 use super::checksum::Checksum as OpteCsum;
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
@@ -59,6 +57,8 @@ use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::LightweightMeta;
 use super::NetworkParser;
+#[cfg(any(feature = "std", test))]
+use crate::engine::packet::mock_freemsg;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -71,6 +71,7 @@ use core::mem::MaybeUninit;
 use core::num::NonZeroU32;
 use core::ops::Deref;
 use core::ops::DerefMut;
+use core::ptr;
 use core::ptr::NonNull;
 use core::slice;
 use core::sync::atomic::AtomicPtr;
@@ -173,7 +174,7 @@ impl<T: ByteSlice> From<ValidNoEncap<T>> for OpteMeta<T> {
     }
 }
 
-impl<V: ByteSlice> LightweightMeta<V> for ValidNoEncap<V> {
+impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
     #[inline]
     fn flow(&self) -> InnerFlowId {
         let (proto, addrs) = match &self.inner_l3 {
@@ -302,7 +303,7 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidNoEncap<V> {
 
         let pseudo_csum = match self.inner_eth.ethertype() {
             Ethertype::IPV4 | Ethertype::IPV6 => {
-                self.inner_l3.as_ref().map(l3_pseudo_header_v)
+                self.inner_l3.as_ref().map(|v| v.pseudo_header())
             }
             // Includes ARP.
             _ => return None,
@@ -326,8 +327,13 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidNoEncap<V> {
     }
 
     #[inline]
-    fn update_ulp_checksums(&mut self, body_csum: OpteCsum) {
-        todo!()
+    fn update_inner_checksums(&mut self, body_csum: OpteCsum) {
+        if let Some(l3) = self.inner_l3.as_mut() {
+            if let Some(ulp) = self.inner_ulp.as_mut() {
+                ulp.compute_checksum(body_csum, l3);
+            }
+            l3.compute_checksum();
+        }
     }
 }
 
@@ -338,7 +344,7 @@ impl<T: ByteSlice> From<ValidGeneveOverV6<T>> for OpteMeta<T> {
     }
 }
 
-impl<V: ByteSlice> LightweightMeta<V> for ValidGeneveOverV6<V> {
+impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
     #[inline]
     fn flow(&self) -> InnerFlowId {
         let (proto, addrs) = match &self.inner_l3 {
@@ -454,7 +460,7 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidGeneveOverV6<V> {
 
         let pseudo_csum = match self.inner_eth.ethertype() {
             Ethertype::IPV4 | Ethertype::IPV6 => {
-                Some(l3_pseudo_header_v(&self.inner_l3))
+                Some(self.inner_l3.pseudo_header())
             }
             // Includes ARP.
             _ => return None,
@@ -481,8 +487,9 @@ impl<V: ByteSlice> LightweightMeta<V> for ValidGeneveOverV6<V> {
     }
 
     #[inline]
-    fn update_ulp_checksums(&mut self, body_csum: OpteCsum) {
-        todo!()
+    fn update_inner_checksums(&mut self, body_csum: OpteCsum) {
+        self.inner_ulp.compute_checksum(body_csum, &self.inner_l3);
+        self.inner_l3.compute_checksum();
     }
 }
 
@@ -815,6 +822,30 @@ impl MsgBlk {
         }
 
         out
+    }
+
+    /// Drops all empty mblks from the start of this chain where possible
+    /// (i.e., any empty mblk is followed by another mblk).
+    pub fn drop_empty_segments(&mut self) {
+        let mut head = self.inner;
+        let mut neighbour = unsafe { (*head.as_ptr()).b_cont };
+
+        while !neighbour.is_null()
+            && unsafe { (*head.as_ptr()).b_rptr == (*head.as_ptr()).b_wptr }
+        {
+            // Replace head with neighbour.
+            // Disconnect head from neighbour, and drop head.
+            unsafe {
+                (*head.as_ptr()).b_cont = ptr::null_mut();
+                drop(MsgBlk::wrap_mblk(head.as_ptr()));
+
+                // SAFETY: we know neighbour is non_null.
+                head = NonNull::new_unchecked(neighbour);
+                neighbour = (*head.as_ptr()).b_cont
+            }
+        }
+
+        self.inner = head;
     }
 }
 
@@ -1617,7 +1648,7 @@ impl<T: Read + QueryLen> Packet2<Initialized2<T>> {
 
 impl<'a, T: Read + 'a> Packet2<Initialized2<T>>
 where
-    T::Chunk: ingot::types::IntoBufPointer<'a>,
+    T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut,
 {
     // #[inline]
     // pub fn parse(
@@ -1936,16 +1967,25 @@ impl<T: Read> Packet2<Parsed2<T>> {
                     || l3.needs_emit()
                     || l3.packet_length() != init_lens.outer_l3 =>
             {
-                // push_spec.outer_ip = Some(match l3 {
-                //     InlineHeader::Repr(o) => o,
-                //     // Needed in fullness of time, but not here.
-                //     InlineHeader::Raw(_) => todo!(),
-                // });
+                let encap_len = push_spec.outer_encap.packet_length();
+
                 push_spec.outer_ip = Some(match l3 {
                     L3::Ipv6(BoxedHeader::Repr(o)) => L3Repr::Ipv6(*o),
                     L3::Ipv4(BoxedHeader::Repr(o)) => L3Repr::Ipv4(*o),
                     _ => todo!(),
                 });
+
+                let inner_sz = (encapped_len + encap_len) as u16;
+
+                match &mut push_spec.outer_ip {
+                    Some(L3Repr::Ipv4(v4)) => {
+                        v4.total_len = (v4.ihl as u16) * 4 + inner_sz;
+                    }
+                    Some(L3Repr::Ipv6(v6)) => {
+                        v6.payload_len = inner_sz;
+                    }
+                    _ => {}
+                }
 
                 force_serialize = true;
                 rewind += init_lens.outer_l3;
@@ -2073,8 +2113,86 @@ impl<T: Read> Packet2<Parsed2<T>> {
     /// Compute ULP and IP header checksum from scratch.
     ///
     /// This should really only be used for testing.
-    pub fn compute_checksums(&mut self) {
-        todo!()
+    pub fn compute_checksums(&mut self)
+    where
+        T::Chunk: ByteSliceMut,
+    {
+        let mut body_csum = Checksum::new();
+        for seg in self.body_segs_mut().unwrap_or_default() {
+            body_csum.add_bytes(seg);
+        }
+        self.state.body_csum = Some(body_csum);
+
+        if let Some(ulp) = &mut self.state.meta.headers.inner_ulp {
+            let mut csum = body_csum;
+
+            // Unwrap: Can't have a ULP without an IP.
+            let ip = self.state.meta.headers.inner_l3.as_ref().unwrap();
+            // Add pseudo header checksum.
+            let pseudo_csum = ip.pseudo_header();
+            csum += pseudo_csum;
+            // Determine ULP slice and add its bytes to the
+            // checksum.
+            match ulp {
+                // ICMP4 requires the body_csum *without*
+                // the pseudoheader added back in.
+                Ulp::IcmpV4(i4) => {
+                    let mut bytes = [0u8; 8];
+                    i4.set_checksum(0);
+                    i4.emit_raw(&mut bytes[..]);
+                    body_csum.add_bytes(&bytes[..]);
+                    i4.set_checksum(body_csum.finalize_for_ingot());
+                }
+                Ulp::IcmpV6(i6) => {
+                    let mut bytes = [0u8; 8];
+                    i6.set_checksum(0);
+                    i6.emit_raw(&mut bytes[..]);
+                    csum.add_bytes(&bytes[..]);
+                    i6.set_checksum(csum.finalize_for_ingot());
+                }
+                Ulp::Tcp(tcp) => {
+                    tcp.set_checksum(0);
+                    match tcp {
+                        IngotHeader::Repr(tcp) => {
+                            let mut bytes = [0u8; 56];
+                            tcp.emit_raw(&mut bytes[..]);
+                            csum.add_bytes(&bytes[..]);
+                        }
+                        IngotHeader::Raw(tcp) => {
+                            csum.add_bytes(tcp.0.as_bytes());
+                            match &tcp.1 {
+                                IngotHeader::Repr(opts) => {
+                                    csum.add_bytes(&*opts);
+                                }
+                                IngotHeader::Raw(opts) => {
+                                    csum.add_bytes(&*opts);
+                                }
+                            }
+                        }
+                    }
+                    tcp.set_checksum(csum.finalize_for_ingot());
+                }
+                Ulp::Udp(udp) => {
+                    udp.set_checksum(0);
+                    match udp {
+                        IngotHeader::Repr(udp) => {
+                            let mut bytes = [0u8; 8];
+                            udp.emit_raw(&mut bytes[..]);
+                            csum.add_bytes(&bytes[..]);
+                        }
+                        IngotHeader::Raw(udp) => {
+                            csum.add_bytes(udp.0.as_bytes());
+                        }
+                    }
+                    udp.set_checksum(csum.finalize_for_ingot());
+                }
+            }
+        }
+
+        // Compute and fill in the IPv4 header checksum.
+        if let Some(l3) = self.state.meta.headers.inner_l3.as_mut() {
+            l3.compute_checksum();
+        }
     }
 
     pub fn body_csum(&mut self) -> Option<Checksum> {
@@ -2158,6 +2276,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
 
         // Start by reusing the known checksum of the body.
         let mut body_csum = self.body_csum().unwrap_or_default();
+        eprintln!("{body_csum:?}");
 
         // If a ULP exists, then compute and set its checksum.
         if let (true, Some(ulp)) =
@@ -2167,7 +2286,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
             // Unwrap: Can't have a ULP without an IP.
             let ip = self.state.meta.headers.inner_l3.as_ref().unwrap();
             // Add pseudo header checksum.
-            let pseudo_csum = l3_pseudo_header(ip);
+            let pseudo_csum = ip.pseudo_header();
             csum += pseudo_csum;
             // Determine ULP slice and add its bytes to the
             // checksum.
@@ -2179,14 +2298,14 @@ impl<T: Read> Packet2<Parsed2<T>> {
                     i4.set_checksum(0);
                     i4.emit_raw(&mut bytes[..]);
                     body_csum.add_bytes(&bytes[..]);
-                    i4.set_checksum(body_csum.finalize());
+                    i4.set_checksum(body_csum.finalize_for_ingot());
                 }
                 Ulp::IcmpV6(i6) => {
                     let mut bytes = [0u8; 8];
                     i6.set_checksum(0);
                     i6.emit_raw(&mut bytes[..]);
                     csum.add_bytes(&bytes[..]);
-                    i6.set_checksum(csum.finalize());
+                    i6.set_checksum(csum.finalize_for_ingot());
                 }
                 Ulp::Tcp(tcp) => {
                     tcp.set_checksum(0);
@@ -2208,7 +2327,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
                             }
                         }
                     }
-                    tcp.set_checksum(csum.finalize());
+                    tcp.set_checksum(csum.finalize_for_ingot());
                 }
                 Ulp::Udp(udp) => {
                     udp.set_checksum(0);
@@ -2222,91 +2341,16 @@ impl<T: Read> Packet2<Parsed2<T>> {
                             csum.add_bytes(udp.0.as_bytes());
                         }
                     }
-                    udp.set_checksum(csum.finalize());
+                    udp.set_checksum(csum.finalize_for_ingot());
                 }
             }
         }
 
         // Compute and fill in the IPv4 header checksum.
-        if let (true, Some(L3::Ipv4(ip))) =
+        if let (true, Some(l3)) =
             (update_ip, &mut self.state.meta.headers.inner_l3)
         {
-            ip.set_checksum(0);
-
-            let mut csum = Checksum::default();
-
-            match ip {
-                IngotHeader::Repr(ip) => {
-                    let mut bytes = [0u8; 56];
-                    ip.emit_raw(&mut bytes[..]);
-                    csum.add_bytes(&bytes[..]);
-                }
-                IngotHeader::Raw(ip) => {
-                    csum.add_bytes(ip.0.as_bytes());
-                    match &ip.1 {
-                        IngotHeader::Repr(opts) => {
-                            csum.add_bytes(&*opts);
-                        }
-                        IngotHeader::Raw(opts) => {
-                            csum.add_bytes(&*opts);
-                        }
-                    }
-                }
-            }
-
-            ip.set_checksum(csum.finalize());
-        }
-    }
-}
-
-fn l3_pseudo_header<T: ByteSlice>(l3: &L3<T>) -> Checksum {
-    match l3 {
-        L3::Ipv4(v4) => {
-            let mut pseudo_hdr_bytes = [0u8; 12];
-            pseudo_hdr_bytes[0..4].copy_from_slice(v4.source().as_ref());
-            pseudo_hdr_bytes[4..8].copy_from_slice(v4.destination().as_ref());
-            pseudo_hdr_bytes[9] = v4.protocol().0;
-            let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
-            pseudo_hdr_bytes[10..].copy_from_slice(&ulp_len.to_be_bytes());
-
-            Checksum::compute(&pseudo_hdr_bytes)
-        }
-        L3::Ipv6(v6) => {
-            let mut pseudo_hdr_bytes = [0u8; 40];
-            pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().as_ref());
-            pseudo_hdr_bytes[16..32]
-                .copy_from_slice(&v6.destination().as_ref());
-            pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
-            let ulp_len = v6.payload_len() as u32;
-            pseudo_hdr_bytes[32..36].copy_from_slice(&ulp_len.to_be_bytes());
-            Checksum::compute(&pseudo_hdr_bytes)
-        }
-    }
-}
-
-fn l3_pseudo_header_v<T: ByteSlice>(l3: &ValidL3<T>) -> Checksum {
-    match l3 {
-        ValidL3::Ipv4(v4) => {
-            let mut pseudo_hdr_bytes = [0u8; 12];
-            pseudo_hdr_bytes[0..4].copy_from_slice(v4.source().as_ref());
-            pseudo_hdr_bytes[4..8].copy_from_slice(v4.destination().as_ref());
-            // pseudo_hdr_bytes[8] reserved
-            pseudo_hdr_bytes[9] = v4.protocol().0;
-            let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
-            pseudo_hdr_bytes[10..].copy_from_slice(&ulp_len.to_be_bytes());
-
-            Checksum::compute(&pseudo_hdr_bytes)
-        }
-        ValidL3::Ipv6(v6) => {
-            let mut pseudo_hdr_bytes = [0u8; 40];
-            pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().as_ref());
-            pseudo_hdr_bytes[16..32]
-                .copy_from_slice(&v6.destination().as_ref());
-            pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
-            let ulp_len = v6.payload_len() as u32;
-            pseudo_hdr_bytes[32..36].copy_from_slice(&ulp_len.to_be_bytes());
-
-            Checksum::compute(&pseudo_hdr_bytes)
+            l3.compute_checksum();
         }
     }
 }
@@ -2515,7 +2559,7 @@ impl EmittestSpec {
             // TODO: put available layers into said slots?
         }
 
-        match &self.spec {
+        let mut out = match &self.spec {
             EmitterSpec::Fastpath(push_spec) => {
                 push_spec.encap.prepend(pkt, self.ulp_len as usize)
             }
@@ -2596,7 +2640,11 @@ impl EmittestSpec {
                     pkt
                 }
             }
-        }
+        };
+
+        out.drop_empty_segments();
+
+        out
     }
 
     #[inline]

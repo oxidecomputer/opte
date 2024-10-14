@@ -11,6 +11,7 @@ use opte::engine::ether::*;
 use opte::engine::ingot_base::Ethernet;
 use opte::engine::ingot_base::Ipv4;
 use opte::engine::ingot_base::Ipv6;
+use opte::engine::ingot_base::L3;
 use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ip4::*;
 use opte::engine::ip6::*;
@@ -141,14 +142,15 @@ pub fn gen_icmp_echo(
         ethertype: Ethertype::IPV4,
     };
 
-    let mut ip = Ipv4 {
+    let mut ip: L3<&mut [u8]> = Ipv4 {
         source: ip_src,
         destination: ip_dst,
         protocol: IngotIpProto::ICMP,
         total_len: (icmp.buffer_len() + Ipv4::MINIMUM_LENGTH) as u16,
         ..Default::default()
-    };
-    ip.fill_checksum();
+    }
+    .into();
+    ip.compute_checksum();
 
     let total_len = eth.packet_length() + ip.packet_length() + icmp_bytes.len();
     let mut segments = vec![];

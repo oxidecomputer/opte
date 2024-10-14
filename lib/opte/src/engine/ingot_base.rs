@@ -1,9 +1,12 @@
+use super::checksum::Checksum;
 use bitflags::bitflags;
 use ingot::choice;
 use ingot::ethernet::Ethertype;
 use ingot::icmp::IcmpV4;
+use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Ref;
 use ingot::icmp::IcmpV6;
+use ingot::icmp::IcmpV6Mut;
 use ingot::icmp::IcmpV6Ref;
 use ingot::icmp::ValidIcmpV4;
 use ingot::icmp::ValidIcmpV6;
@@ -12,6 +15,7 @@ use ingot::ip::IpProtocol;
 use ingot::ip::Ipv4Flags;
 use ingot::ip::LowRentV6EhRepr;
 use ingot::tcp::Tcp;
+use ingot::tcp::TcpMut;
 use ingot::tcp::TcpRef;
 use ingot::tcp::ValidTcp;
 use ingot::types::primitives::*;
@@ -19,18 +23,21 @@ use ingot::types::util::Repeated;
 use ingot::types::ByteSlice;
 use ingot::types::Emit;
 use ingot::types::Header;
+use ingot::types::HeaderLen;
 use ingot::types::NetworkRepr;
+use ingot::types::NextLayer;
 use ingot::types::ParseError;
 use ingot::types::Vec;
 use ingot::udp::Udp;
+use ingot::udp::UdpMut;
 use ingot::udp::UdpRef;
 use ingot::udp::ValidUdp;
 use ingot::Ingot;
 use opte_api::Ipv4Addr;
 use opte_api::Ipv6Addr;
 use opte_api::MacAddr;
-
-use super::checksum::Checksum;
+use zerocopy::ByteSliceMut;
+use zerocopy::IntoBytes;
 
 // Redefine Ethernet and v4/v6 because we have our own, internal,
 // address types already.
@@ -39,6 +46,121 @@ use super::checksum::Checksum;
 pub enum L3 {
     Ipv4 = Ethertype::IPV4,
     Ipv6 = Ethertype::IPV6,
+}
+
+impl<V: ByteSlice> L3<V> {
+    pub fn pseudo_header(&self) -> Checksum {
+        match self {
+            L3::Ipv4(v4) => {
+                let mut pseudo_hdr_bytes = [0u8; 12];
+                pseudo_hdr_bytes[0..4].copy_from_slice(v4.source().as_ref());
+                pseudo_hdr_bytes[4..8]
+                    .copy_from_slice(v4.destination().as_ref());
+                pseudo_hdr_bytes[9] = v4.protocol().0;
+                let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
+                pseudo_hdr_bytes[10..].copy_from_slice(&ulp_len.to_be_bytes());
+
+                Checksum::compute(&pseudo_hdr_bytes)
+            }
+            L3::Ipv6(v6) => {
+                let mut pseudo_hdr_bytes = [0u8; 40];
+                pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().as_ref());
+                pseudo_hdr_bytes[16..32]
+                    .copy_from_slice(&v6.destination().as_ref());
+                pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
+                let ulp_len = v6.payload_len() as u32;
+                pseudo_hdr_bytes[32..36]
+                    .copy_from_slice(&ulp_len.to_be_bytes());
+                Checksum::compute(&pseudo_hdr_bytes)
+            }
+        }
+    }
+}
+
+impl<V: ByteSlice> ValidL3<V> {
+    pub fn pseudo_header(&self) -> Checksum {
+        match self {
+            ValidL3::Ipv4(v4) => {
+                let mut pseudo_hdr_bytes = [0u8; 12];
+                pseudo_hdr_bytes[0..4].copy_from_slice(v4.source().as_ref());
+                pseudo_hdr_bytes[4..8]
+                    .copy_from_slice(v4.destination().as_ref());
+                // pseudo_hdr_bytes[8] reserved
+                pseudo_hdr_bytes[9] = v4.protocol().0;
+                let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
+                pseudo_hdr_bytes[10..].copy_from_slice(&ulp_len.to_be_bytes());
+
+                Checksum::compute(&pseudo_hdr_bytes)
+            }
+            ValidL3::Ipv6(v6) => {
+                let mut pseudo_hdr_bytes = [0u8; 40];
+                pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().as_ref());
+                pseudo_hdr_bytes[16..32]
+                    .copy_from_slice(&v6.destination().as_ref());
+                pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
+                let ulp_len = v6.payload_len() as u32;
+                pseudo_hdr_bytes[32..36]
+                    .copy_from_slice(&ulp_len.to_be_bytes());
+
+                Checksum::compute(&pseudo_hdr_bytes)
+            }
+        }
+    }
+}
+
+impl<V: ByteSliceMut> L3<V> {
+    #[inline]
+    pub fn compute_checksum(&mut self) {
+        if let L3::Ipv4(ip) = self {
+            ip.set_checksum(0);
+
+            let mut csum = Checksum::new();
+
+            match ip {
+                Header::Repr(ip) => {
+                    let mut bytes = [0u8; 56];
+                    ip.emit_raw(&mut bytes[..]);
+                    csum.add_bytes(&bytes[..]);
+                }
+                Header::Raw(ip) => {
+                    csum.add_bytes(ip.0.as_bytes());
+
+                    match &ip.1 {
+                        Header::Repr(opts) => {
+                            csum.add_bytes(&*opts);
+                        }
+                        Header::Raw(opts) => {
+                            csum.add_bytes(&*opts);
+                        }
+                    }
+                }
+            }
+
+            ip.set_checksum(csum.finalize_for_ingot());
+        }
+    }
+}
+
+impl<V: ByteSliceMut> ValidL3<V> {
+    #[inline]
+    pub fn compute_checksum(&mut self) {
+        if let ValidL3::Ipv4(ip) = self {
+            ip.set_checksum(0);
+
+            let mut csum = Checksum::new();
+            csum.add_bytes(ip.0.as_bytes());
+            match &ip.1 {
+                Header::Repr(opts) => {
+                    csum.add_bytes(&*opts);
+                }
+                Header::Raw(opts) => {
+                    csum.add_bytes(&*opts);
+                }
+            }
+
+            ip.set_checksum(csum.finalize_for_ingot());
+        }
+    }
 }
 
 #[choice(on = IpProtocol)]
@@ -64,6 +186,53 @@ impl<B: ByteSlice> ValidUlp<B> {
             ValidUlp::IcmpV6(i6) => i6.checksum(),
         }
         .to_be_bytes()
+    }
+}
+
+impl<B: ByteSliceMut> ValidUlp<B> {
+    pub fn compute_checksum(
+        &mut self,
+        mut body_csum: Checksum,
+        l3: &ValidL3<B>,
+    ) {
+        match self {
+            // ICMP4 requires the body_csum *without*
+            // the pseudoheader added back in.
+            ValidUlp::IcmpV4(i4) => {
+                i4.set_checksum(0);
+                body_csum.add_bytes(i4.0.as_bytes());
+                i4.set_checksum(body_csum.finalize_for_ingot());
+            }
+            ValidUlp::IcmpV6(i6) => {
+                body_csum += l3.pseudo_header();
+
+                i6.set_checksum(0);
+                body_csum.add_bytes(i6.0.as_bytes());
+                i6.set_checksum(body_csum.finalize_for_ingot());
+            }
+            ValidUlp::Tcp(tcp) => {
+                body_csum += l3.pseudo_header();
+
+                tcp.set_checksum(0);
+                body_csum.add_bytes(tcp.0.as_bytes());
+                match &tcp.1 {
+                    Header::Repr(opts) => {
+                        body_csum.add_bytes(&*opts);
+                    }
+                    Header::Raw(opts) => {
+                        body_csum.add_bytes(&*opts);
+                    }
+                }
+                tcp.set_checksum(body_csum.finalize_for_ingot());
+            }
+            ValidUlp::Udp(udp) => {
+                body_csum += l3.pseudo_header();
+
+                udp.set_checksum(0);
+                body_csum.add_bytes(udp.0.as_bytes());
+                udp.set_checksum(body_csum.finalize_for_ingot());
+            }
+        }
     }
 }
 
@@ -129,19 +298,6 @@ pub struct Ipv4 {
 
     #[ingot(var_len = "(ihl * 4).saturating_sub(20)")]
     pub options: Vec<u8>,
-}
-
-impl Ipv4 {
-    pub fn fill_checksum(&mut self) {
-        let mut csum = Checksum::default();
-        self.checksum = 0;
-
-        let mut bytes = [0u8; 56];
-        self.emit_raw(&mut bytes[..]);
-        csum.add_bytes(&bytes[..]);
-
-        self.checksum = csum.finalize();
-    }
 }
 
 #[derive(Debug, Clone, Ingot, Eq, PartialEq)]

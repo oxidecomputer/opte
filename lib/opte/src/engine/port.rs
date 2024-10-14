@@ -1328,7 +1328,7 @@ impl<N: NetworkImpl> Port<N> {
             };
             meta.run_compiled_transform(&tx);
             if let Some(csum) = body_csum {
-                meta.update_ulp_checksums(csum);
+                meta.update_inner_checksums(csum);
             }
             let encap_len = meta.encap_len();
             let ulp_len = (len - (encap_len as usize)) as u32;

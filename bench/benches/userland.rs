@@ -107,7 +107,7 @@ pub fn test_parse<M: MeasurementInfo + 'static>(
                         }
                     }
                 },
-                criterion::BatchSize::PerIteration,
+                criterion::BatchSize::LargeInput,
             )
         },
     );
@@ -192,7 +192,7 @@ pub fn test_handle<M: MeasurementInfo + 'static>(
                         }
                     }
                 },
-                criterion::BatchSize::PerIteration,
+                criterion::BatchSize::LargeInput,
             )
         },
     );

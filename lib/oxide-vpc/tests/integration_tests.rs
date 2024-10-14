@@ -440,10 +440,11 @@ fn gateway_icmp4_ping() {
             assert_eq!(ip4.protocol(), IngotIpProto::ICMP);
         }
 
-        L3::Ipv6(v6) => panic!("expected inner IPv4 metadata, got IPv6"),
+        L3::Ipv6(_) => panic!("expected inner IPv4 metadata, got IPv6"),
     }
 
-    let reply_body = reply.meta().copy_remaining();
+    let mut reply_body = meta.inner_ulp().expect("ICMPv4 is a ULP").emit_vec();
+    reply.meta().append_remaining(&mut reply_body);
     let reply_pkt = Icmpv4Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();
     csum.ipv4 = smoltcp::phy::Checksum::Rx;
@@ -640,7 +641,7 @@ fn guest_to_guest() {
     // assert_eq!(pkt2.body_offset(), TCP4_SZ + HTTP_SYN_OPTS_LEN);
     // assert_eq!(pkt2.body_seg(), 0);
 
-    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
     let g2_meta = pkt2.meta();
 
     // TODO: can we have a convenience method that verifies that the
@@ -652,7 +653,7 @@ fn guest_to_guest() {
     assert_eq!(g2_eth.ethertype(), Ethertype::IPV4);
 
     match &g2_meta.inner_l3 {
-        ValidL3::Ipv4(ip4) => {
+        Some(ValidL3::Ipv4(ip4)) => {
             assert_eq!(ip4.source(), g1_cfg.ipv4_cfg().unwrap().private_ip);
             assert_eq!(
                 ip4.destination(),
@@ -664,7 +665,7 @@ fn guest_to_guest() {
     }
 
     match &g2_meta.inner_ulp {
-        ValidUlp::Tcp(tcp) => {
+        Some(ValidUlp::Tcp(tcp)) => {
             assert_eq!(tcp.source(), 44490);
             assert_eq!(tcp.destination(), 80);
         }
@@ -730,6 +731,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
 // Verify that a guest can communicate with the internet over IPv4.
 #[test]
 fn guest_to_internet_ipv4() {
+    let mut pcap_guest = PcapBuilder::new("guest_to_internet_ipv4.pcap");
     let g1_cfg = g1_cfg();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
@@ -755,6 +757,7 @@ fn guest_to_internet_ipv4() {
         GW_MAC_ADDR,
         dst_ip,
     );
+    pcap_guest.add_pkt(&pkt1_m);
     let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
 
     // ================================================================
@@ -832,13 +835,13 @@ fn guest_to_internet_ipv4() {
         _ => panic!("expected inner TCP metadata, got (other)"),
     }
 
-    let mut pcap_guest = PcapBuilder::new("guest_to_internet_ipv4.pcap");
     pcap_guest.add_pkt(&pkt1_m);
 }
 
 // Verify that a guest can communicate with the internet over IPv6.
 #[test]
 fn guest_to_internet_ipv6() {
+    let mut pcap_guest = PcapBuilder::new("guest_to_internet_ipv6.pcap");
     let g1_cfg = g1_cfg();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
@@ -864,6 +867,7 @@ fn guest_to_internet_ipv6() {
         GW_MAC_ADDR,
         dst_ip,
     );
+    pcap_guest.add_pkt(&pkt1_m);
 
     // ================================================================
     // Run the packet through g1's port in the outbound direction and
@@ -896,11 +900,11 @@ fn guest_to_internet_ipv6() {
         pkt1.len() - (&meta.outer_eth, &meta.outer_v6).packet_length();
     assert_eq!(meta.outer_v6.payload_len() as usize, len_post_v6);
 
-    assert_eq!(meta.outer_udp.source(), 24329);
+    assert_eq!(meta.outer_udp.source(), 63246);
     assert_eq!(meta.outer_udp.length() as usize, len_post_v6);
 
     assert_eq!(meta.inner_eth.source(), g1_cfg.guest_mac);
-    assert_eq!(meta.inner_eth.ethertype(), Ethertype::IPV4);
+    assert_eq!(meta.inner_eth.ethertype(), Ethertype::IPV6);
 
     match &meta.inner_l3 {
         ValidL3::Ipv6(ip6) => {
@@ -939,8 +943,6 @@ fn guest_to_internet_ipv6() {
         // ulp => panic!("expected inner TCP metadata, got: {:?}", ulp),
         _ => panic!("expected inner TCP metadata, got (other)"),
     }
-
-    let mut pcap_guest = PcapBuilder::new("guest_to_internet_ipv6.pcap");
     pcap_guest.add_pkt(&pkt1_m);
 }
 
@@ -1524,9 +1526,10 @@ fn unpack_and_verify_icmp(
     seq_no: u16,
     body_seg: usize,
 ) {
+    // Note the reversed direction -- parse the expected *output* format.
     let parsed = match dir {
-        In => parse_inbound(pkt, VpcParser {}).unwrap().to_full_meta(),
-        Out => parse_outbound(pkt, VpcParser {}).unwrap().to_full_meta(),
+        In => parse_outbound(pkt, VpcParser {}).unwrap().to_full_meta(),
+        Out => parse_inbound(pkt, VpcParser {}).unwrap().to_full_meta(),
     };
     let meta = parsed.meta();
 
@@ -1597,7 +1600,7 @@ fn unpack_and_verify_icmp4(
     // Because we treat ICMPv4 as a full-fledged ULP, we need to
     // unsplit the emitted header from the body.
     let mut icmp = pkt.meta().inner_ulp().unwrap().emit_vec();
-    icmp.extend(pkt.meta().copy_remaining().into_iter());
+    pkt.meta().append_remaining(&mut icmp);
 
     let icmp = Icmpv4Packet::new_checked(&icmp[..]).unwrap();
 
@@ -1621,7 +1624,7 @@ fn unpack_and_verify_icmp6(
     // Because we treat ICMPv4 as a full-fledged ULP, we need to
     // unsplit the emitted header from the body.
     let mut icmp = pkt.meta().inner_ulp().unwrap().emit_vec();
-    icmp.extend(pkt.meta().copy_remaining().into_iter());
+    pkt.meta().append_remaining(&mut icmp);
     let icmp = Icmpv6Packet::new_checked(&icmp[..]).unwrap();
 
     assert!(icmp.verify_checksum(&src_ip, &dst_ip));
@@ -1644,6 +1647,11 @@ fn snat_icmp6_echo_rewrite() {
 }
 
 fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
+    let mut pcap = match &dst_ip {
+        IpAddr::Ip4(_) => PcapBuilder::new("snat-v4-echo-id.pcap"),
+        IpAddr::Ip6(_) => PcapBuilder::new("snat-v6-echo-id.pcap"),
+    };
+
     let g1_cfg = g1_cfg();
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
@@ -1705,10 +1713,12 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &data[..],
         2,
     );
+    pcap.add_pkt(&pkt1_m);
     let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
 
     let res = g1.port.process(Out, pkt1);
     expect_modified!(res, pkt1_m);
+    pcap.add_pkt(&pkt1_m);
     incr!(
         g1,
         [
@@ -1746,10 +1756,12 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
     };
     pkt2_m = encap_external(pkt2_m, bsvc_phys, g1_phys);
+    pcap.add_pkt(&pkt2_m);
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
 
     let res = g1.port.process(In, pkt2);
     expect_modified!(res, pkt2_m);
+    pcap.add_pkt(&pkt2_m);
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
 
     unpack_and_verify_icmp(&mut pkt2_m, &g1_cfg, &params, In, seq_no, 0);
@@ -1770,11 +1782,13 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &data[..],
         1,
     );
+    pcap.add_pkt(&pkt3_m);
     let pkt3 = parse_outbound(&mut pkt3_m, VpcParser {}).unwrap();
 
     assert_eq!(g1.port.stats_snap().out_uft_hit, 0);
     let res = g1.port.process(Out, pkt3);
     expect_modified!(res, pkt3_m);
+    pcap.add_pkt(&pkt3_m);
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
 
     assert_eq!(g1.port.stats_snap().out_uft_hit, 1);
@@ -1795,11 +1809,13 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &data[..],
         2,
     );
+    pcap.add_pkt(&pkt4_m);
     let pkt4 = parse_inbound(&mut pkt4_m, VpcParser {}).unwrap();
 
     assert_eq!(g1.port.stats_snap().in_uft_hit, 0);
     let res = g1.port.process(In, pkt4);
     expect_modified!(res, pkt4_m);
+    pcap.add_pkt(&pkt4_m);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
 
     assert_eq!(g1.port.stats_snap().in_uft_hit, 1);
@@ -1822,10 +1838,12 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &data[..],
         2,
     );
+    pcap.add_pkt(&pkt5_m);
     let pkt5 = parse_outbound(&mut pkt5_m, VpcParser {}).unwrap();
 
     let res = g1.port.process(Out, pkt5);
     expect_modified!(res, pkt5_m);
+    pcap.add_pkt(&pkt5_m);
     incr!(
         g1,
         [
@@ -2488,17 +2506,15 @@ fn test_gateway_neighbor_advert_reply() {
     let mut with_checksum = false;
     let data = generate_solicit_test_data(&g1_cfg);
     for d in data {
-        // TODO(kyle)
-        let with_checksum = true;
-
         let mut pkt = generate_neighbor_solicitation(&d.ns, with_checksum);
         // Alternate between using smoltcp or our `compute_checksums` method
         // to compute the checksums.
-        // TODO(kyle)
-        // if !with_checksum {
-        //     pkt.compute_checksums();
-        // }
-        // with_checksum = !with_checksum;
+        if !with_checksum {
+            let mut parsed =
+                parse_outbound(&mut pkt, VpcParser {}).unwrap().to_full_meta();
+            parsed.compute_checksums();
+        }
+        with_checksum = !with_checksum;
         pcap.add_pkt(&pkt);
         let pkt1 = parse_outbound(&mut pkt, VpcParser {}).unwrap();
         let res = g1.port.process(Out, pkt1);
