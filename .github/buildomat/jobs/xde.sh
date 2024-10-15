@@ -24,7 +24,7 @@
 #: series = "module"
 #: name = "xde"
 #: from_output = "/work/release/xde"
-#
+#:
 #: [[publish]]
 #: series = "module"
 #: name = "xde.sha256"

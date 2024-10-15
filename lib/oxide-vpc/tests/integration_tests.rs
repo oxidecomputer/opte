@@ -91,8 +91,10 @@ use smoltcp::wire::NdiscNeighborFlags;
 use smoltcp::wire::NdiscRepr;
 use smoltcp::wire::NdiscRouterFlags;
 use smoltcp::wire::RawHardwareAddress;
+use std::collections::BTreeMap;
 use std::prelude::v1::*;
 use std::time::Duration;
+use uuid::Uuid;
 use zerocopy::FromBytes;
 use zerocopy::IntoBytes;
 
@@ -744,7 +746,7 @@ fn guest_to_internet_ipv4() {
     router::add_entry(
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -855,7 +857,7 @@ fn guest_to_internet_ipv6() {
     router::add_entry(
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -1034,7 +1036,7 @@ fn multi_external_ip_setup(
     router::add_entry(
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -1042,7 +1044,7 @@ fn multi_external_ip_setup(
     router::add_entry(
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -1281,7 +1283,7 @@ fn external_ip_balanced_over_floating_ips() {
                 IpAddr::Ip6(_) => g1_cfg.ipv6().private_ip.into(),
             };
 
-            let pkt = http_syn3(
+            let mut pkt_m = http_syn3(
                 g1_cfg.guest_mac,
                 private_ip,
                 g1_cfg.gateway_mac,
@@ -1289,7 +1291,6 @@ fn external_ip_balanced_over_floating_ips() {
                 flow_port,
                 80,
             );
-            let mut pkt_m = encap_external(pkt, bsvc_phys, g1_phys);
             let pkt = parse_outbound(&mut pkt_m, VpcParser {}).unwrap();
 
             let res = g1.port.process(Out, pkt);
@@ -1367,6 +1368,10 @@ fn external_ip_epoch_affinity_preserved() {
         port_name: g1.port.name().to_string(),
         external_ips_v4: None,
         external_ips_v6: None,
+
+        // This test does not focus on controlling EIP selection
+        // based on destination prefix.
+        inet_gw_map: None,
     };
 
     for ext_ip in [ext_v4[0].into(), ext_v6[0].into()] {
@@ -1412,7 +1417,7 @@ fn external_ip_epoch_affinity_preserved() {
         // since that won't affect the internal flowtable for NAT.
         // ====================================================================
         nat::set_nat_rules(&g1.cfg, &g1.port, req.clone()).unwrap();
-        update!(g1, ["incr:epoch", "set:nat.rules.in=4, nat.rules.out=6",]);
+        update!(g1, ["incr:epoch", "set:nat.rules.in=4, nat.rules.out=7",]);
 
         // ================================================================
         // The reply packet must still originate from the ephemeral port
@@ -1480,13 +1485,17 @@ fn external_ip_reconfigurable() {
         port_name: g1.port.name().to_string(),
         external_ips_v4: new_v4_cfg,
         external_ips_v6: new_v6_cfg,
+
+        // This test does not focus on controlling EIP selection
+        // based on destination prefix.
+        inet_gw_map: None,
     };
     nat::set_nat_rules(&g1.cfg, &g1.port, req).unwrap();
     update!(
         g1,
         [
             "incr:epoch",
-            "set:nat.rules.in=2, nat.rules.out=4",
+            "set:nat.rules.in=2, nat.rules.out=5",
             "set:firewall.flows.in=2, firewall.flows.out=2",
         ]
     );
@@ -1669,7 +1678,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
     router::add_entry(
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -1677,7 +1686,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
     router::add_entry(
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -2579,7 +2588,7 @@ fn outbound_ndp_dropped() {
     router::add_entry(
         &g1.port,
         IpCidr::Ip6("::/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -3096,7 +3105,7 @@ fn uft_lft_invalidation_out() {
     router::add_entry(
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -3184,7 +3193,7 @@ fn uft_lft_invalidation_in() {
     router::add_entry(
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -3502,7 +3511,7 @@ fn tcp_outbound() {
     router::add_entry(
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -3564,7 +3573,7 @@ fn early_tcp_invalidation() {
     router::add_entry(
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -3707,6 +3716,91 @@ fn early_tcp_invalidation() {
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
 }
 
+#[test]
+fn ephemeral_ip_preferred_over_snat_outbound() {
+    let ip_cfg = IpCfg::DualStack {
+        ipv4: Ipv4Cfg {
+            vpc_subnet: "172.30.0.0/22".parse().unwrap(),
+            private_ip: "172.30.0.5".parse().unwrap(),
+            gateway_ip: "172.30.0.1".parse().unwrap(),
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat4Cfg {
+                    external_ip: "10.77.77.13".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: Some("10.60.1.20".parse().unwrap()),
+                floating_ips: vec![],
+            },
+        },
+        ipv6: Ipv6Cfg {
+            vpc_subnet: "fd00::/64".parse().unwrap(),
+            private_ip: "fd00::5".parse().unwrap(),
+            gateway_ip: "fd00::1".parse().unwrap(),
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat6Cfg {
+                    external_ip: "2001:db8::1".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
+        },
+    };
+
+    let g1_cfg = g1_cfg2(ip_cfg);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Add default route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway(None),
+        RouterClass::System,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    let client_ip = "52.10.128.69".parse().unwrap();
+
+    let data = b"reunion";
+    let mut pkt1_m = gen_icmpv4_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4().private_ip,
+        client_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+
+    // Process the packet through our port. It should be allowed through:
+    // we have a V2P mapping for the target guest, and a route for the other
+    // subnet.
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
+
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.out_modified, stats.port.out_uft_miss, uft.out",
+            "nat.flows.in, nat.flows.out",
+        ]
+    );
+
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap().to_full_meta();
+
+    assert_eq!(
+        pkt1.meta().inner_ip4().unwrap().source(),
+        "10.60.1.20".parse().unwrap(),
+        "did not choose assigned ephemeral IP"
+    );
+}
+
 // Verify TCP state transitions in relation to an inbound connection
 // (the "passive open"). In this case the client is external, and the
 // guest is the server.
@@ -3754,7 +3848,7 @@ fn tcp_inbound() {
     router::add_entry(
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -4037,7 +4131,7 @@ fn no_panic_on_flow_table_full() {
     router::add_entry(
         &g1.port,
         IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway,
+        RouterTarget::InternetGateway(None),
         RouterClass::System,
     )
     .unwrap();
@@ -4088,8 +4182,8 @@ fn intra_subnet_routes_with_custom() {
     let cidr = IpCidr::Ip4("172.30.4.0/22".parse().unwrap());
     router::add_entry(
         &g1.port,
-        cidr.clone(),
-        RouterTarget::VpcSubnet(cidr.clone()),
+        cidr,
+        RouterTarget::VpcSubnet(cidr),
         RouterClass::System,
     )
     .unwrap();
@@ -4139,13 +4233,8 @@ fn intra_subnet_routes_with_custom() {
 
     // Suppose the user now installs a 'custom' route in the first subnet to
     // drop traffic towards the second subnet. This rule must take priority.
-    router::add_entry(
-        &g1.port,
-        cidr.clone(),
-        RouterTarget::Drop,
-        RouterClass::Custom,
-    )
-    .unwrap();
+    router::add_entry(&g1.port, cidr, RouterTarget::Drop, RouterClass::Custom)
+        .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
     let mut pkt2_m = gen_icmpv4_echo_req(
         g1_cfg.guest_mac,
@@ -4175,13 +4264,8 @@ fn intra_subnet_routes_with_custom() {
     );
 
     // When the user removes this rule, traffic may flow again to subnet 2.
-    router::del_entry(
-        &g1.port,
-        cidr.clone(),
-        RouterTarget::Drop,
-        RouterClass::Custom,
-    )
-    .unwrap();
+    router::del_entry(&g1.port, cidr, RouterTarget::Drop, RouterClass::Custom)
+        .unwrap();
     update!(g1, ["incr:epoch", "decr:router.rules.out"]);
     let mut pkt3_m = gen_icmpv4_echo_req(
         g1_cfg.guest_mac,
@@ -4222,7 +4306,7 @@ fn port_as_router_target() {
     let dst_ip: Ipv4Addr = "192.168.0.1".parse().unwrap();
     router::add_entry(
         &g1.port,
-        cidr.clone(),
+        cidr,
         RouterTarget::Ip(g2_cfg.ipv4().private_ip.into()),
         RouterClass::Custom,
     )
@@ -4310,4 +4394,295 @@ fn port_as_router_target() {
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
     let res = g1.port.process(In, pkt2);
     expect_modified!(res, pkt2_m);
+}
+
+#[test]
+fn select_eip_conditioned_on_igw() {
+    // RFD 21 Internet Gateways are used as a mechanism to narrow
+    // down the set of valid source IPs that an outbound packet may
+    // choose from, conditioned on a packet's destination network.
+    //
+    // To do this, the control plane is responsible for installing
+    // IGW rules with UUID associations, and then determining which
+    // external IPs are associated with each IGW.
+    let default_igw = Uuid::from_u128(1);
+    let custom_igw0 = Uuid::from_u128(2);
+    let custom_igw1 = Uuid::from_u128(3);
+    let ipless_igw = Uuid::from_u128(4);
+
+    // The control plane may have several IGWs associated with a given
+    // pool. Accordingly, there is a chance that an IP might be a valid choice
+    // on several prefixes.
+    let all_ips_igw = Uuid::from_u128(5);
+
+    // To test this, we want to set up a port such that:
+    // * It has an ephemeral IP in IGW 1.
+    //   - If we target 0.0.0.0/0, we choose the eph IP 192.168.0.1 .
+    // * It has FIPs across IGWs 2 [dst 1.1.1.0/24], 3 [dst 2.2.2.0/24].
+    //   - IGW 2 has FIPs 192.168.0.2, 192.168.0.3. Either will be picked.
+    //   - IGW 3 has FIP 192.168.0.4.
+    // * It has no EIP in IGW3 [dst 3.3.3.0/24].
+    //   - Packets sent here are denied -- we have no valid NAT IPs for this
+    //     outbound traffic.
+    // * All EIPs are valid on IGW4.
+    //   - Packets will choose a random FIP, by priority ordering.
+
+    let ip_cfg = IpCfg::DualStack {
+        ipv4: Ipv4Cfg {
+            vpc_subnet: "172.30.0.0/22".parse().unwrap(),
+            private_ip: "172.30.0.5".parse().unwrap(),
+            gateway_ip: "172.30.0.1".parse().unwrap(),
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat4Cfg {
+                    external_ip: "10.77.77.13".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: Some("192.168.0.1".parse().unwrap()),
+                floating_ips: vec![
+                    "192.168.0.2".parse().unwrap(),
+                    "192.168.0.3".parse().unwrap(),
+                    "192.168.0.4".parse().unwrap(),
+                ],
+            },
+        },
+        // Not really testing V6 here. Same principles apply.
+        ipv6: Ipv6Cfg {
+            vpc_subnet: "fd00::/64".parse().unwrap(),
+            private_ip: "fd00::5".parse().unwrap(),
+            gateway_ip: "fd00::1".parse().unwrap(),
+            external_ips: ExternalIpCfg {
+                snat: Some(SNat6Cfg {
+                    external_ip: "2001:db8::1".parse().unwrap(),
+                    ports: 1025..=4096,
+                }),
+                ephemeral_ip: None,
+                floating_ips: vec![],
+            },
+        },
+    };
+
+    let g1_cfg = g1_cfg2(ip_cfg);
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Add default route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway(Some(default_igw)),
+        RouterClass::System,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // Add custom inetgw routes.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("1.1.1.0/24".parse().unwrap()),
+        RouterTarget::InternetGateway(Some(custom_igw0)),
+        RouterClass::Custom,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("2.2.2.0/24".parse().unwrap()),
+        RouterTarget::InternetGateway(Some(custom_igw1)),
+        RouterClass::Custom,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("3.3.3.0/24".parse().unwrap()),
+        RouterTarget::InternetGateway(Some(ipless_igw)),
+        RouterClass::Custom,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("4.4.4.0/24".parse().unwrap()),
+        RouterTarget::InternetGateway(Some(all_ips_igw)),
+        RouterClass::Custom,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // ====================================================================
+    // Install new config.
+    // ====================================================================
+    let mut inet_gw_map: BTreeMap<_, _> = Default::default();
+    inet_gw_map.insert(
+        g1_cfg.ipv4_cfg().unwrap().external_ips.ephemeral_ip.unwrap().into(),
+        [default_igw, all_ips_igw].into_iter().collect(),
+    );
+    inet_gw_map.insert(
+        g1_cfg.ipv4_cfg().unwrap().external_ips.floating_ips[0].into(),
+        [custom_igw0, all_ips_igw].into_iter().collect(),
+    );
+    inet_gw_map.insert(
+        g1_cfg.ipv4_cfg().unwrap().external_ips.floating_ips[1].into(),
+        [custom_igw0, all_ips_igw].into_iter().collect(),
+    );
+    inet_gw_map.insert(
+        g1_cfg.ipv4_cfg().unwrap().external_ips.floating_ips[2].into(),
+        [custom_igw1, all_ips_igw].into_iter().collect(),
+    );
+
+    let new_v4_cfg = g1_cfg.ipv4_cfg().map(|v| v.external_ips.clone());
+
+    let req = oxide_vpc::api::SetExternalIpsReq {
+        port_name: g1.port.name().to_string(),
+        external_ips_v4: new_v4_cfg,
+        external_ips_v6: None,
+
+        // Setting the inet GW mappings for each external IP
+        // enables the limiting we aim to test here.
+        inet_gw_map: Some(inet_gw_map),
+    };
+    nat::set_nat_rules(&g1.cfg, &g1.port, req).unwrap();
+    update!(g1, ["incr:epoch", "set:nat.rules.out=8"]);
+
+    // Send an ICMP packet for each destination, and verify that the
+    // correct source IP is written in (or the packet is denied).
+    let ident = 7;
+    let seq_no = 777;
+    let data = b"reunion\0";
+
+    // Default route.
+    let mut pkt1_m = gen_icmp_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4_cfg().unwrap().private_ip.into(),
+        "77.77.77.77".parse().unwrap(),
+        ident,
+        seq_no,
+        &data[..],
+        1,
+    );
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap().to_full_meta();
+    assert_eq!(
+        pkt1.meta().inner_ip4().unwrap().source(),
+        g1_cfg.ipv4().external_ips.ephemeral_ip.unwrap()
+    );
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.out, nat.flows.in",
+            "stats.port.out_uft_miss, uft.out",
+            "stats.port.out_modified",
+        ]
+    );
+
+    // 1.1.1.0/24
+    let mut pkt2_m = gen_icmp_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4_cfg().unwrap().private_ip.into(),
+        "1.1.1.1".parse().unwrap(),
+        ident,
+        seq_no,
+        &data[..],
+        1,
+    );
+    let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt2);
+    expect_modified!(res, pkt2_m);
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap().to_full_meta();
+    assert!(&g1_cfg.ipv4().external_ips.floating_ips[..2]
+        .contains(&pkt2.meta().inner_ip4().unwrap().source()));
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.out, nat.flows.in",
+            "stats.port.out_uft_miss, uft.out",
+            "stats.port.out_modified",
+        ]
+    );
+
+    // 2.2.2.0/24
+    let mut pkt3_m = gen_icmp_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4_cfg().unwrap().private_ip.into(),
+        "2.2.2.1".parse().unwrap(),
+        ident,
+        seq_no,
+        &data[..],
+        1,
+    );
+    let pkt3 = parse_outbound(&mut pkt3_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt3);
+    expect_modified!(res, pkt3_m);
+    let pkt3 = parse_inbound(&mut pkt3_m, VpcParser {}).unwrap().to_full_meta();
+    assert_eq!(
+        pkt3.meta().inner_ip4().unwrap().source(),
+        g1_cfg.ipv4().external_ips.floating_ips[2]
+    );
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.out, nat.flows.in",
+            "stats.port.out_uft_miss, uft.out",
+            "stats.port.out_modified",
+        ]
+    );
+
+    // 3.3.3.0/24
+    let mut pkt4_m = gen_icmp_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4_cfg().unwrap().private_ip.into(),
+        "3.3.3.1".parse().unwrap(),
+        ident,
+        seq_no,
+        &data[..],
+        1,
+    );
+    let pkt4 = parse_outbound(&mut pkt4_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt4).unwrap();
+    assert!(matches!(res, ProcessResult::Drop { .. }));
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "stats.port.out_uft_miss",
+            "stats.port.out_drop, stats.port.out_drop_layer",
+        ]
+    );
+
+    // 4.4.4.0/24
+    let mut pkt5_m = gen_icmp_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4_cfg().unwrap().private_ip.into(),
+        "4.4.4.1".parse().unwrap(),
+        ident,
+        seq_no,
+        &data[..],
+        1,
+    );
+    let pkt5 = parse_outbound(&mut pkt5_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt5);
+    expect_modified!(res, pkt5_m);
+    let pkt5 = parse_inbound(&mut pkt5_m, VpcParser {}).unwrap().to_full_meta();
+    assert!(&g1_cfg.ipv4().external_ips.floating_ips[..]
+        .contains(&pkt5.meta().inner_ip4().unwrap().source()));
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "nat.flows.out, nat.flows.in",
+            "stats.port.out_uft_miss, uft.out",
+            "stats.port.out_modified",
+        ]
+    );
 }

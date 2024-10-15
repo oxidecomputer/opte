@@ -14,6 +14,10 @@
 #:  "oxidecomputer/ingot",
 #: ]
 #:
+#: [[publish]]
+#: series = "release"
+#: name = "opteadm"
+#: from_output = "/work/release/opteadm"
 
 set -o errexit
 set -o pipefail

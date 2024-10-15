@@ -158,6 +158,9 @@ pub const BS_IP_ADDR: Ipv6Addr =
 const UFT_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 const TCP_LIMIT: Option<NonZeroU32> = NonZeroU32::new(16);
 
+pub const EXT_IP4: &str = "10.77.77.13";
+pub const EXT_IP6: &str = "fd00:100::1";
+
 pub fn ox_vpc_mac(id: [u8; 3]) -> MacAddr {
     MacAddr::from([0xA8, 0x40, 0x25, 0xF0 | id[0], id[1], id[2]])
 }
@@ -188,7 +191,7 @@ pub fn g1_cfg() -> VpcCfg {
             gateway_ip: "172.30.0.1".parse().unwrap(),
             external_ips: ExternalIpCfg {
                 snat: Some(SNat4Cfg {
-                    external_ip: "10.77.77.13".parse().unwrap(),
+                    external_ip: EXT_IP4.parse().unwrap(),
                     ports: 1025..=4096,
                 }),
                 ephemeral_ip: None,
@@ -428,7 +431,8 @@ pub fn oxide_net_setup2(
         "set:firewall.rules.out=0",
         // * Outbound IPv4 SNAT
         // * Outbound IPv6 SNAT
-        "set:nat.rules.out=2",
+        // * Drop uncaught InetGw packets.
+        "set:nat.rules.out=3",
     ];
 
     [
