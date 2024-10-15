@@ -6,6 +6,10 @@
 
 //! Rules and actions.
 
+use crate::engine::ingot_base::Ipv4;
+use crate::engine::ingot_base::Ipv4Mut;
+use crate::engine::GenericUlp;
+
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
 use super::flow_table::StateSummary;
@@ -52,6 +56,10 @@ use core::fmt::Display;
 use core::mem::MaybeUninit;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
+use ingot::ethernet::Ethertype;
+use ingot::ip::IpProtocol;
+use ingot::tcp::Tcp;
+use ingot::types::HeaderLen;
 use ingot::types::InlineHeader;
 use ingot::types::Read;
 use opte_api::Direction;
@@ -1031,35 +1039,29 @@ fn rule_matching() {
     let dst_port = "443".parse().unwrap();
     // There is no DataPredicate usage in this test, so this pkt/rdr
     // can be bogus.
-    let pkt = Packet::copy(&[0xA]);
-    let mut rdr = pkt.get_rdr();
-
-    let ip = IpMeta::from(Ipv4Meta {
-        src: src_ip,
-        dst: dst_ip,
-        proto: Protocol::TCP,
-        ttl: 64,
-        ident: 1,
-        hdr_len: 20,
-        total_len: 40,
-        csum: [0; 2],
-    });
-    let ulp = UlpMeta::from(TcpMeta {
-        src: src_port,
-        dst: dst_port,
-        flags: 0,
-        seq: 0,
-        ack: 0,
-        options_bytes: None,
-        options_len: 0,
+    let tcp = Tcp {
+        source: src_port,
+        destination: dst_port,
         window_size: 64240,
         ..Default::default()
-    });
-
-    let meta = PacketMeta {
-        outer: Default::default(),
-        inner: InnerMeta { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
     };
+    let mut ip4 = Ipv4 {
+        source: src_ip,
+        destination: dst_ip,
+        protocol: IpProtocol::TCP,
+        total_len: (Ipv4::MINIMUM_LENGTH + tcp.packet_length()) as u16,
+        ..Default::default()
+    };
+
+    let eth = Ethernet { ethertype: Ethertype::IPV4, ..Default::default() };
+
+    let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp));
+    let mut pkt = Packet2::new(pkt_m.iter_mut())
+        .parse_outbound(GenericUlp {})
+        .unwrap()
+        .to_full_meta();
+    pkt.compute_checksums();
+    let meta = pkt.meta();
 
     r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
         src_ip,
@@ -1067,36 +1069,14 @@ fn rule_matching() {
     let r1 = r1.finalize();
 
     let ameta = ActionMeta::new();
-    assert!(r1.is_match(&meta, &ameta, &mut rdr));
+    assert!(r1.is_match(&meta, &ameta));
 
     let new_src_ip = "10.11.11.99".parse().unwrap();
 
-    let ip = IpMeta::from(Ipv4Meta {
-        src: new_src_ip,
-        dst: dst_ip,
-        proto: Protocol::TCP,
-        ttl: 64,
-        ident: 1,
-        hdr_len: 20,
-        total_len: 40,
-        csum: [0; 2],
-    });
-    let ulp = UlpMeta::from(TcpMeta {
-        src: src_port,
-        dst: dst_port,
-        flags: 0,
-        seq: 0,
-        ack: 0,
-        options_bytes: None,
-        options_len: 0,
-        window_size: 64240,
-        ..Default::default()
-    });
+    let meta = pkt.meta_mut();
+    if let Some(L3::Ipv4(v4)) = &mut meta.headers.inner_l3 {
+        v4.set_source(new_src_ip);
+    }
 
-    let meta = PacketMeta {
-        outer: Default::default(),
-        inner: InnerMeta { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
-    };
-
-    assert!(!r1.is_match(&meta, &ameta, &mut rdr));
+    assert!(!r1.is_match(&meta, &ameta));
 }

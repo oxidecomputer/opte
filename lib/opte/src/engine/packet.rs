@@ -3363,40 +3363,41 @@ mod test {
         pkt
     }
 
-    #[test]
-    fn zero_byte_packet() {
-        let pkt = Packet::alloc(0);
-        assert_eq!(pkt.len(), 0);
-        assert_eq!(pkt.num_segs(), 1);
-        assert_eq!(pkt.avail(), 16);
-        let res = pkt.parse(Out, GenericUlp {});
-        match res {
-            Err(ParseError::BadHeader(msg)) => {
-                assert_eq!(
-                    msg,
-                    EtherHdrError::ReadError(ReadErr::EndOfPacket).into()
-                );
-            }
+    // TODO(kyle): equivalent for MsgBlk
+    // #[test]
+    // fn zero_byte_packet() {
+    //     let pkt = Packet::alloc(0);
+    //     assert_eq!(pkt.len(), 0);
+    //     assert_eq!(pkt.num_segs(), 1);
+    //     assert_eq!(pkt.avail(), 16);
+    //     let res = pkt.parse(Out, GenericUlp {});
+    //     match res {
+    //         Err(ParseError::BadHeader(msg)) => {
+    //             assert_eq!(
+    //                 msg,
+    //                 EtherHdrError::ReadError(ReadErr::EndOfPacket).into()
+    //             );
+    //         }
 
-            _ => panic!("expected read error, got: {:?}", res),
-        }
+    //         _ => panic!("expected read error, got: {:?}", res),
+    //     }
 
-        let pkt2 = Packet::copy(&[]);
-        assert_eq!(pkt2.len(), 0);
-        assert_eq!(pkt2.num_segs(), 1);
-        assert_eq!(pkt2.avail(), 16);
-        let res = pkt2.parse(Out, GenericUlp {});
-        match res {
-            Err(ParseError::BadHeader(msg)) => {
-                assert_eq!(
-                    msg,
-                    EtherHdrError::ReadError(ReadErr::EndOfPacket).into()
-                );
-            }
+    //     let pkt2 = Packet::copy(&[]);
+    //     assert_eq!(pkt2.len(), 0);
+    //     assert_eq!(pkt2.num_segs(), 1);
+    //     assert_eq!(pkt2.avail(), 16);
+    //     let res = pkt2.parse(Out, GenericUlp {});
+    //     match res {
+    //         Err(ParseError::BadHeader(msg)) => {
+    //             assert_eq!(
+    //                 msg,
+    //                 EtherHdrError::ReadError(ReadErr::EndOfPacket).into()
+    //             );
+    //         }
 
-            _ => panic!("expected read error, got: {:?}", res),
-        }
-    }
+    //         _ => panic!("expected read error, got: {:?}", res),
+    //     }
+    // }
 
     // Verify uninitialized packet.
     #[test]
@@ -3444,115 +3445,117 @@ mod test {
         assert_eq!(pkt.len(), 6);
     }
 
-    #[test]
-    fn read_single_segment() {
-        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
-        assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_idx, 0);
-        assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_pos, 0);
+    // TODO(kyle): equivalents for MsgBlk?
+    // #[test]
+    // fn read_single_segment() {
+    //     let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
+    //     assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_idx, 0);
+    //     assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_pos, 0);
 
-        let eth_meta = parsed.state.meta.inner.ether;
-        assert_eq!(eth_meta.ether_type, EtherType::Ipv4);
-        assert_eq!(eth_meta.dst, DST_MAC);
-        assert_eq!(eth_meta.src, SRC_MAC);
+    //     let eth_meta = parsed.state.meta.inner.ether;
+    //     assert_eq!(eth_meta.ether_type, EtherType::Ipv4);
+    //     assert_eq!(eth_meta.dst, DST_MAC);
+    //     assert_eq!(eth_meta.src, SRC_MAC);
 
-        let offsets = &parsed.state.hdr_offsets;
+    //     let offsets = &parsed.state.hdr_offsets;
 
-        let ip4_meta = match parsed.state.meta.inner.ip.as_ref().unwrap() {
-            IpMeta::Ip4(v) => v,
-            _ => panic!("expected IPv4"),
-        };
-        assert_eq!(ip4_meta.src, SRC_IP4);
-        assert_eq!(ip4_meta.dst, DST_IP4);
-        assert_eq!(ip4_meta.proto, Protocol::TCP);
-        assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_idx, 0);
-        assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_pos, 14);
+    //     let ip4_meta = match parsed.state.meta.inner.ip.as_ref().unwrap() {
+    //         IpMeta::Ip4(v) => v,
+    //         _ => panic!("expected IPv4"),
+    //     };
+    //     assert_eq!(ip4_meta.src, SRC_IP4);
+    //     assert_eq!(ip4_meta.dst, DST_IP4);
+    //     assert_eq!(ip4_meta.proto, Protocol::TCP);
+    //     assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_idx, 0);
+    //     assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_pos, 14);
 
-        let tcp_meta = match parsed.state.meta.inner.ulp.as_ref().unwrap() {
-            UlpMeta::Tcp(v) => v,
-            _ => panic!("expected TCP"),
-        };
-        assert_eq!(tcp_meta.src, 3839);
-        assert_eq!(tcp_meta.dst, 80);
-        assert_eq!(tcp_meta.flags, TcpFlags::SYN);
-        assert_eq!(tcp_meta.seq, 4224936861);
-        assert_eq!(tcp_meta.ack, 0);
-        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_idx, 0);
-        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_pos, 34);
-    }
+    //     let tcp_meta = match parsed.state.meta.inner.ulp.as_ref().unwrap() {
+    //         UlpMeta::Tcp(v) => v,
+    //         _ => panic!("expected TCP"),
+    //     };
+    //     assert_eq!(tcp_meta.src, 3839);
+    //     assert_eq!(tcp_meta.dst, 80);
+    //     assert_eq!(tcp_meta.flags, TcpFlags::SYN);
+    //     assert_eq!(tcp_meta.seq, 4224936861);
+    //     assert_eq!(tcp_meta.ack, 0);
+    //     assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_idx, 0);
+    //     assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_pos, 34);
+    // }
 
-    #[test]
-    fn write_and_read_multi_segment() {
-        let mp1 = allocb(34);
-        let mp2 = allocb(20);
+    // TODO(kyle): equivalents for MsgBlk?
+    // #[test]
+    // fn write_and_read_multi_segment() {
+    //     let mp1 = allocb(34);
+    //     let mp2 = allocb(20);
 
-        unsafe {
-            (*mp1).b_cont = mp2;
-        }
+    //     unsafe {
+    //         (*mp1).b_cont = mp2;
+    //     }
 
-        let mut seg1 = unsafe { PacketSeg::wrap_mblk(mp1) };
-        let mut seg2 = unsafe { PacketSeg::wrap_mblk(mp2) };
+    //     let mut seg1 = unsafe { PacketSeg::wrap_mblk(mp1) };
+    //     let mut seg2 = unsafe { PacketSeg::wrap_mblk(mp2) };
 
-        let tcp = TcpMeta {
-            src: 3839,
-            dst: 80,
-            flags: TcpFlags::SYN,
-            seq: 4224936861,
-            ..Default::default()
-        };
-        let ip4 = Ipv4Meta {
-            src: SRC_IP4,
-            dst: DST_IP4,
-            proto: Protocol::TCP,
-            total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len()) as u16,
-            ..Default::default()
-        };
-        let eth = EtherMeta {
-            ether_type: EtherType::Ipv4,
-            src: SRC_MAC,
-            dst: DST_MAC,
-        };
-        seg1.expand_end(34).unwrap();
-        let mut wtr1 = seg1.get_writer();
-        eth.emit(wtr1.slice_mut(EtherHdr::SIZE).unwrap());
-        ip4.emit(wtr1.slice_mut(ip4.hdr_len()).unwrap());
+    //     let tcp = TcpMeta {
+    //         src: 3839,
+    //         dst: 80,
+    //         flags: TcpFlags::SYN,
+    //         seq: 4224936861,
+    //         ..Default::default()
+    //     };
+    //     let ip4 = Ipv4Meta {
+    //         src: SRC_IP4,
+    //         dst: DST_IP4,
+    //         proto: Protocol::TCP,
+    //         total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len()) as u16,
+    //         ..Default::default()
+    //     };
+    //     let eth = EtherMeta {
+    //         ether_type: EtherType::Ipv4,
+    //         src: SRC_MAC,
+    //         dst: DST_MAC,
+    //     };
+    //     seg1.expand_end(34).unwrap();
+    //     let mut wtr1 = seg1.get_writer();
+    //     eth.emit(wtr1.slice_mut(EtherHdr::SIZE).unwrap());
+    //     ip4.emit(wtr1.slice_mut(ip4.hdr_len()).unwrap());
 
-        seg2.expand_end(20).unwrap();
-        let mut wtr2 = seg2.get_writer();
-        tcp.emit(wtr2.slice_mut(tcp.hdr_len()).unwrap());
-        let pkt = Packet::new2(seg1, seg2);
-        let parsed = pkt.parse(Out, GenericUlp {}).unwrap();
+    //     seg2.expand_end(20).unwrap();
+    //     let mut wtr2 = seg2.get_writer();
+    //     tcp.emit(wtr2.slice_mut(tcp.hdr_len()).unwrap());
+    //     let pkt = Packet::new2(seg1, seg2);
+    //     let parsed = pkt.parse(Out, GenericUlp {}).unwrap();
 
-        let eth_parsed = parsed.state.meta.inner.ether;
-        assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_idx, 0);
-        assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_pos, 0);
-        assert_eq!(eth_parsed.ether_type, EtherType::Ipv4);
-        assert_eq!(eth_parsed.dst, DST_MAC);
-        assert_eq!(eth_parsed.src, SRC_MAC);
+    //     let eth_parsed = parsed.state.meta.inner.ether;
+    //     assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_idx, 0);
+    //     assert_eq!(parsed.state.hdr_offsets.inner.ether.seg_pos, 0);
+    //     assert_eq!(eth_parsed.ether_type, EtherType::Ipv4);
+    //     assert_eq!(eth_parsed.dst, DST_MAC);
+    //     assert_eq!(eth_parsed.src, SRC_MAC);
 
-        let offsets = &parsed.state.hdr_offsets;
+    //     let offsets = &parsed.state.hdr_offsets;
 
-        let ip4_parsed = match parsed.state.meta.inner.ip.unwrap() {
-            IpMeta::Ip4(v) => v,
-            _ => panic!("expected IPv4"),
-        };
-        assert_eq!(ip4_parsed.src, SRC_IP4);
-        assert_eq!(ip4_parsed.dst, DST_IP4);
-        assert_eq!(ip4_parsed.proto, Protocol::TCP);
-        assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_idx, 0);
-        assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_pos, 14);
+    //     let ip4_parsed = match parsed.state.meta.inner.ip.unwrap() {
+    //         IpMeta::Ip4(v) => v,
+    //         _ => panic!("expected IPv4"),
+    //     };
+    //     assert_eq!(ip4_parsed.src, SRC_IP4);
+    //     assert_eq!(ip4_parsed.dst, DST_IP4);
+    //     assert_eq!(ip4_parsed.proto, Protocol::TCP);
+    //     assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_idx, 0);
+    //     assert_eq!(offsets.inner.ip.as_ref().unwrap().seg_pos, 14);
 
-        let tcp_parsed = match parsed.state.meta.inner.ulp.unwrap() {
-            UlpMeta::Tcp(v) => v,
-            _ => panic!("expected TCP"),
-        };
-        assert_eq!(tcp_parsed.src, 3839);
-        assert_eq!(tcp_parsed.dst, 80);
-        assert_eq!(tcp_parsed.flags, TcpFlags::SYN);
-        assert_eq!(tcp_parsed.seq, 4224936861);
-        assert_eq!(tcp_parsed.ack, 0);
-        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_idx, 0);
-        assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_pos, 34);
-    }
+    //     let tcp_parsed = match parsed.state.meta.inner.ulp.unwrap() {
+    //         UlpMeta::Tcp(v) => v,
+    //         _ => panic!("expected TCP"),
+    //     };
+    //     assert_eq!(tcp_parsed.src, 3839);
+    //     assert_eq!(tcp_parsed.dst, 80);
+    //     assert_eq!(tcp_parsed.flags, TcpFlags::SYN);
+    //     assert_eq!(tcp_parsed.seq, 4224936861);
+    //     assert_eq!(tcp_parsed.ack, 0);
+    //     assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_idx, 0);
+    //     assert_eq!(offsets.inner.ulp.as_ref().unwrap().seg_pos, 34);
+    // }
 
     // Verify that we catch when a read requires more bytes than are
     // available.
@@ -3583,210 +3586,213 @@ mod test {
         ));
     }
 
-    #[test]
-    #[should_panic]
-    fn slice_unchecked_bad_offset() {
-        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
-        // Offset past end of segment.
-        parsed.segs[0].slice_unchecked(99, None);
-    }
+    // TODO(kyle): equivalents for MsgBlk?
+    // #[test]
+    // #[should_panic]
+    // fn slice_unchecked_bad_offset() {
+    //     let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
+    //     // Offset past end of segment.
+    //     parsed.segs[0].slice_unchecked(99, None);
+    // }
 
-    #[test]
-    #[should_panic]
-    fn slice_mut_unchecked_bad_offset() {
-        let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
-        // Offset past end of segment.
-        parsed.segs[0].slice_mut_unchecked(99, None);
-    }
+    // #[test]
+    // #[should_panic]
+    // fn slice_mut_unchecked_bad_offset() {
+    //     let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
+    //     // Offset past end of segment.
+    //     parsed.segs[0].slice_mut_unchecked(99, None);
+    // }
 
-    #[test]
-    #[should_panic]
-    fn slice_unchecked_bad_len() {
-        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
-        // Length past end of segment.
-        parsed.segs[0].slice_unchecked(0, Some(99));
-    }
+    // #[test]
+    // #[should_panic]
+    // fn slice_unchecked_bad_len() {
+    //     let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
+    //     // Length past end of segment.
+    //     parsed.segs[0].slice_unchecked(0, Some(99));
+    // }
 
-    #[test]
-    #[should_panic]
-    fn slice_mut_unchecked_bad_len() {
-        let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
-        // Length past end of segment.
-        parsed.segs[0].slice_mut_unchecked(0, Some(99));
-    }
+    // #[test]
+    // #[should_panic]
+    // fn slice_mut_unchecked_bad_len() {
+    //     let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
+    //     // Length past end of segment.
+    //     parsed.segs[0].slice_mut_unchecked(0, Some(99));
+    // }
 
-    #[test]
-    fn slice_unchecked_zero() {
-        let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
-        // Set offset to end of packet and slice the "rest" by
-        // passing None.
-        assert_eq!(parsed.segs[0].slice_unchecked(54, None).len(), 0);
-    }
+    // #[test]
+    // fn slice_unchecked_zero() {
+    //     let parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
+    //     // Set offset to end of packet and slice the "rest" by
+    //     // passing None.
+    //     assert_eq!(parsed.segs[0].slice_unchecked(54, None).len(), 0);
+    // }
 
-    #[test]
-    fn slice_mut_unchecked_zero() {
-        let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
-        // Set offset to end of packet and slice the "rest" by
-        // passing None.
-        assert_eq!(parsed.segs[0].slice_mut_unchecked(54, None).len(), 0);
-    }
+    // #[test]
+    // fn slice_mut_unchecked_zero() {
+    //     let mut parsed = tcp_pkt(&[]).parse(Out, GenericUlp {}).unwrap();
+    //     // Set offset to end of packet and slice the "rest" by
+    //     // passing None.
+    //     assert_eq!(parsed.segs[0].slice_mut_unchecked(54, None).len(), 0);
+    // }
 
+    // TODO(kyle): equivalent for MsgBlk
     // Verify that if the TCP header straddles an mblk we return an
     // error.
-    #[test]
-    fn straddled_tcp() {
-        let mp1 = allocb(46);
-        let mp2 = allocb(8);
+    // #[test]
+    // fn straddled_tcp() {
+    //     let mp1 = allocb(46);
+    //     let mp2 = allocb(8);
 
-        unsafe {
-            (*mp1).b_cont = mp2;
-        }
+    //     unsafe {
+    //         (*mp1).b_cont = mp2;
+    //     }
 
-        let mut seg1 = unsafe { PacketSeg::wrap_mblk(mp1) };
-        let mut seg2 = unsafe { PacketSeg::wrap_mblk(mp2) };
+    //     let mut seg1 = unsafe { PacketSeg::wrap_mblk(mp1) };
+    //     let mut seg2 = unsafe { PacketSeg::wrap_mblk(mp2) };
 
-        let tcp = TcpMeta { src: 3839, dst: 80, ..Default::default() };
-        let ip4 = Ipv4Meta {
-            src: SRC_IP4,
-            dst: DST_IP4,
-            proto: Protocol::TCP,
-            total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len()) as u16,
-            ..Default::default()
-        };
-        let eth = EtherMeta {
-            ether_type: EtherType::Ipv4,
-            src: SRC_MAC,
-            dst: DST_MAC,
-        };
-        seg1.expand_end(46).unwrap();
-        let mut wtr1 = seg1.get_writer();
-        eth.emit(wtr1.slice_mut(EtherHdr::SIZE).unwrap());
-        ip4.emit(wtr1.slice_mut(ip4.hdr_len()).unwrap());
-        let mut tcp_bytes = vec![0u8; tcp.hdr_len()];
-        tcp.emit(&mut tcp_bytes);
-        wtr1.write(&tcp_bytes[0..12]).unwrap();
+    //     let tcp = TcpMeta { src: 3839, dst: 80, ..Default::default() };
+    //     let ip4 = Ipv4Meta {
+    //         src: SRC_IP4,
+    //         dst: DST_IP4,
+    //         proto: Protocol::TCP,
+    //         total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len()) as u16,
+    //         ..Default::default()
+    //     };
+    //     let eth = EtherMeta {
+    //         ether_type: EtherType::Ipv4,
+    //         src: SRC_MAC,
+    //         dst: DST_MAC,
+    //     };
+    //     seg1.expand_end(46).unwrap();
+    //     let mut wtr1 = seg1.get_writer();
+    //     eth.emit(wtr1.slice_mut(EtherHdr::SIZE).unwrap());
+    //     ip4.emit(wtr1.slice_mut(ip4.hdr_len()).unwrap());
+    //     let mut tcp_bytes = vec![0u8; tcp.hdr_len()];
+    //     tcp.emit(&mut tcp_bytes);
+    //     wtr1.write(&tcp_bytes[0..12]).unwrap();
 
-        seg2.expand_end(8).unwrap();
-        let mut wtr2 = seg2.get_writer();
-        wtr2.write(&tcp_bytes[12..]).unwrap();
-        let pkt = Packet::new2(seg1, seg2);
-        assert_eq!(pkt.num_segs(), 2);
-        assert_eq!(
-            pkt.len(),
-            EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + TcpHdr::BASE_SIZE
-        );
-        assert!(matches!(
-            pkt.parse(Out, GenericUlp {}),
-            Err(ParseError::BadHeader(_))
-        ));
-    }
+    //     seg2.expand_end(8).unwrap();
+    //     let mut wtr2 = seg2.get_writer();
+    //     wtr2.write(&tcp_bytes[12..]).unwrap();
+    //     let pkt = Packet::new2(seg1, seg2);
+    //     assert_eq!(pkt.num_segs(), 2);
+    //     assert_eq!(
+    //         pkt.len(),
+    //         EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + TcpHdr::BASE_SIZE
+    //     );
+    //     assert!(matches!(
+    //         pkt.parse(Out, GenericUlp {}),
+    //         Err(ParseError::BadHeader(_))
+    //     ));
+    // }
 
+    // TODO(kyle): equivalent for MsgBlk
     // Verify that we correctly parse an IPv6 packet with extension headers
-    #[test]
-    fn parse_ipv6_extension_headers_ok() {
-        use crate::engine::ip6::test::generate_test_packet;
-        use crate::engine::ip6::test::SUPPORTED_EXTENSIONS;
-        use itertools::Itertools;
-        use smoltcp::wire::IpProtocol;
-        for n_extensions in 0..SUPPORTED_EXTENSIONS.len() {
-            for extensions in
-                SUPPORTED_EXTENSIONS.into_iter().permutations(n_extensions)
-            {
-                // Generate a full IPv6 test packet, but pull out the extension
-                // headers as a byte array.
-                let (buf, ipv6_header_size) =
-                    generate_test_packet(extensions.as_slice());
+    // #[test]
+    // fn parse_ipv6_extension_headers_ok() {
+    //     use crate::engine::ip6::test::generate_test_packet;
+    //     use crate::engine::ip6::test::SUPPORTED_EXTENSIONS;
+    //     use itertools::Itertools;
+    //     use smoltcp::wire::IpProtocol;
+    //     for n_extensions in 0..SUPPORTED_EXTENSIONS.len() {
+    //         for extensions in
+    //             SUPPORTED_EXTENSIONS.into_iter().permutations(n_extensions)
+    //         {
+    //             // Generate a full IPv6 test packet, but pull out the extension
+    //             // headers as a byte array.
+    //             let (buf, ipv6_header_size) =
+    //                 generate_test_packet(extensions.as_slice());
 
-                let next_hdr =
-                    *(extensions.first().unwrap_or(&IpProtocol::Tcp));
-                let ext_hdrs = &buf[Ipv6Hdr::BASE_SIZE..ipv6_header_size];
+    //             let next_hdr =
+    //                 *(extensions.first().unwrap_or(&IpProtocol::Tcp));
+    //             let ext_hdrs = &buf[Ipv6Hdr::BASE_SIZE..ipv6_header_size];
 
-                // Append a TCP header
-                let tcp = TcpMeta {
-                    src: 3839,
-                    dst: 80,
-                    seq: 4224936861,
-                    ..Default::default()
-                };
-                let mut ext_bytes = [0; 64];
-                let ext_len = ext_hdrs.len();
-                assert!(ext_len <= 64);
-                ext_bytes[0..ext_len].copy_from_slice(ext_hdrs);
+    //             // Append a TCP header
+    //             let tcp = TcpMeta {
+    //                 src: 3839,
+    //                 dst: 80,
+    //                 seq: 4224936861,
+    //                 ..Default::default()
+    //             };
+    //             let mut ext_bytes = [0; 64];
+    //             let ext_len = ext_hdrs.len();
+    //             assert!(ext_len <= 64);
+    //             ext_bytes[0..ext_len].copy_from_slice(ext_hdrs);
 
-                let pay_len = tcp.hdr_len() + ext_len;
-                let ip6 = Ipv6Meta {
-                    src: SRC_IP6,
-                    dst: DST_IP6,
-                    proto: Protocol::TCP,
-                    next_hdr,
-                    hop_limit: 255,
-                    pay_len: pay_len as u16,
-                    ext: Some(ext_bytes),
-                    ext_len,
-                };
-                let eth = EtherMeta {
-                    ether_type: EtherType::Ipv6,
-                    src: SRC_MAC,
-                    dst: DST_MAC,
-                };
+    //             let pay_len = tcp.hdr_len() + ext_len;
+    //             let ip6 = Ipv6Meta {
+    //                 src: SRC_IP6,
+    //                 dst: DST_IP6,
+    //                 proto: Protocol::TCP,
+    //                 next_hdr,
+    //                 hop_limit: 255,
+    //                 pay_len: pay_len as u16,
+    //                 ext: Some(ext_bytes),
+    //                 ext_len,
+    //             };
+    //             let eth = EtherMeta {
+    //                 ether_type: EtherType::Ipv6,
+    //                 src: SRC_MAC,
+    //                 dst: DST_MAC,
+    //             };
 
-                let mut seg = PacketSeg::alloc(1024);
-                seg.expand_end(14 + ipv6_header_size + tcp.hdr_len()).unwrap();
-                let mut wtr = seg.get_writer();
-                eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-                ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-                tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
-                let parsed =
-                    Packet::new(seg).parse(Out, GenericUlp {}).unwrap();
+    //             let mut seg = PacketSeg::alloc(1024);
+    //             seg.expand_end(14 + ipv6_header_size + tcp.hdr_len()).unwrap();
+    //             let mut wtr = seg.get_writer();
+    //             eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
+    //             ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
+    //             tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
+    //             let parsed =
+    //                 Packet::new(seg).parse(Out, GenericUlp {}).unwrap();
 
-                // Assert that the computed offsets of the headers and payloads
-                // are accurate
-                let offsets = &parsed.state.hdr_offsets;
-                let ip = offsets
-                    .inner
-                    .ip
-                    .as_ref()
-                    .expect("Expected IP header offsets");
-                assert_eq!(
-                    ip.seg_idx, 0,
-                    "Expected IP headers to be in segment 0"
-                );
-                assert_eq!(
-                    ip.seg_pos,
-                    EtherHdr::SIZE,
-                    "Expected the IP header to start immediately \
-                    after the Ethernet header"
-                );
-                assert_eq!(
-                    ip.pkt_pos,
-                    EtherHdr::SIZE,
-                    "Expected the IP header to start immediately \
-                    after the Ethernet header"
-                );
-                let ulp = &offsets
-                    .inner
-                    .ulp
-                    .as_ref()
-                    .expect("Expected ULP header offsets");
-                assert_eq!(
-                    ulp.seg_idx, 0,
-                    "Expected the ULP header to be in segment 0"
-                );
-                assert_eq!(
-                    ulp.seg_pos,
-                    EtherHdr::SIZE + ipv6_header_size,
-                    "Expected the ULP header to start immediately \
-                    after the IP header",
-                );
-                assert_eq!(
-                    ulp.pkt_pos,
-                    EtherHdr::SIZE + ipv6_header_size,
-                    "Expected the ULP header to start immediately \
-                    after the IP header",
-                );
-            }
-        }
-    }
+    //             // Assert that the computed offsets of the headers and payloads
+    //             // are accurate
+    //             let offsets = &parsed.state.hdr_offsets;
+    //             let ip = offsets
+    //                 .inner
+    //                 .ip
+    //                 .as_ref()
+    //                 .expect("Expected IP header offsets");
+    //             assert_eq!(
+    //                 ip.seg_idx, 0,
+    //                 "Expected IP headers to be in segment 0"
+    //             );
+    //             assert_eq!(
+    //                 ip.seg_pos,
+    //                 EtherHdr::SIZE,
+    //                 "Expected the IP header to start immediately \
+    //                 after the Ethernet header"
+    //             );
+    //             assert_eq!(
+    //                 ip.pkt_pos,
+    //                 EtherHdr::SIZE,
+    //                 "Expected the IP header to start immediately \
+    //                 after the Ethernet header"
+    //             );
+    //             let ulp = &offsets
+    //                 .inner
+    //                 .ulp
+    //                 .as_ref()
+    //                 .expect("Expected ULP header offsets");
+    //             assert_eq!(
+    //                 ulp.seg_idx, 0,
+    //                 "Expected the ULP header to be in segment 0"
+    //             );
+    //             assert_eq!(
+    //                 ulp.seg_pos,
+    //                 EtherHdr::SIZE + ipv6_header_size,
+    //                 "Expected the ULP header to start immediately \
+    //                 after the IP header",
+    //             );
+    //             assert_eq!(
+    //                 ulp.pkt_pos,
+    //                 EtherHdr::SIZE + ipv6_header_size,
+    //                 "Expected the ULP header to start immediately \
+    //                 after the IP header",
+    //             );
+    //         }
+    //     }
+    // }
 
     #[test]
     fn seg_writer() {
@@ -3875,142 +3881,144 @@ mod test {
         }
     }
 
-    #[test]
-    fn small_packet_with_padding() {
-        const MINIMUM_ETH_FRAME_SZ: usize = 64;
-        const FRAME_CHECK_SEQ_SZ: usize = 4;
+    // TODO(kyle): equivalent for MsgBlk
+    // #[test]
+    // fn small_packet_with_padding() {
+    //     const MINIMUM_ETH_FRAME_SZ: usize = 64;
+    //     const FRAME_CHECK_SEQ_SZ: usize = 4;
 
-        // Start with a test packet that's smaller than the minimum
-        // ethernet frame size (64).
-        let body = [];
-        let mut pkt = tcp_pkt(&body);
-        assert!(pkt.len() < MINIMUM_ETH_FRAME_SZ);
+    //     // Start with a test packet that's smaller than the minimum
+    //     // ethernet frame size (64).
+    //     let body = [];
+    //     let mut pkt = tcp_pkt(&body);
+    //     assert!(pkt.len() < MINIMUM_ETH_FRAME_SZ);
 
-        // Many (most?) NICs will pad out any such frames so that
-        // the total size is 64.
-        let padding_len = MINIMUM_ETH_FRAME_SZ
-            - pkt.len()
-            // Discount the 4 bytes for the Frame Check Sequence (FCS)
-            // which is usually not visible to upstack software.
-            - FRAME_CHECK_SEQ_SZ;
+    //     // Many (most?) NICs will pad out any such frames so that
+    //     // the total size is 64.
+    //     let padding_len = MINIMUM_ETH_FRAME_SZ
+    //         - pkt.len()
+    //         // Discount the 4 bytes for the Frame Check Sequence (FCS)
+    //         // which is usually not visible to upstack software.
+    //         - FRAME_CHECK_SEQ_SZ;
 
-        // Tack on a new segment filled with zero to pad the packet so that
-        // it meets the minimum frame size.
-        // Note that we do NOT update any of the packet headers themselves
-        // as this padding process should be transparent to the upper
-        // layers.
-        let mut padding_seg_wtr = pkt.add_seg(padding_len).unwrap();
-        padding_seg_wtr.write(&vec![0; padding_len]).unwrap();
-        assert_eq!(pkt.len(), MINIMUM_ETH_FRAME_SZ - FRAME_CHECK_SEQ_SZ);
+    //     // Tack on a new segment filled with zero to pad the packet so that
+    //     // it meets the minimum frame size.
+    //     // Note that we do NOT update any of the packet headers themselves
+    //     // as this padding process should be transparent to the upper
+    //     // layers.
+    //     let mut padding_seg_wtr = pkt.add_seg(padding_len).unwrap();
+    //     padding_seg_wtr.write(&vec![0; padding_len]).unwrap();
+    //     assert_eq!(pkt.len(), MINIMUM_ETH_FRAME_SZ - FRAME_CHECK_SEQ_SZ);
 
-        // Generate the metadata by parsing the packet
-        let mut pkt = pkt.parse(Direction::In, GenericUlp {}).unwrap();
+    //     // Generate the metadata by parsing the packet
+    //     let mut pkt = pkt.parse(Direction::In, GenericUlp {}).unwrap();
 
-        // Grab parsed metadata
-        let ip4_meta = pkt.meta().inner_ip4().cloned().unwrap();
-        let tcp_meta = pkt.meta().inner_tcp().cloned().unwrap();
+    //     // Grab parsed metadata
+    //     let ip4_meta = pkt.meta().inner_ip4().cloned().unwrap();
+    //     let tcp_meta = pkt.meta().inner_tcp().cloned().unwrap();
 
-        // Length in packet headers shouldn't reflect include padding
-        assert_eq!(
-            usize::from(ip4_meta.total_len),
-            ip4_meta.hdr_len() + tcp_meta.hdr_len() + body.len(),
-        );
+    //     // Length in packet headers shouldn't reflect include padding
+    //     assert_eq!(
+    //         usize::from(ip4_meta.total_len),
+    //         ip4_meta.hdr_len() + tcp_meta.hdr_len() + body.len(),
+    //     );
 
-        // The computed body length also shouldn't include the padding
-        assert_eq!(pkt.state.body.len, body.len());
+    //     // The computed body length also shouldn't include the padding
+    //     assert_eq!(pkt.state.body.len, body.len());
 
-        // Pretend some processing happened...
-        // And now we need to update the packet headers based on the
-        // modified packet metadata.
-        pkt.emit_new_headers().unwrap();
+    //     // Pretend some processing happened...
+    //     // And now we need to update the packet headers based on the
+    //     // modified packet metadata.
+    //     pkt.emit_new_headers().unwrap();
 
-        // Grab the actual packet headers
-        let ip4_off = pkt.hdr_offsets().inner.ip.unwrap().pkt_pos;
-        let mut rdr = pkt.get_rdr_mut();
-        rdr.seek(ip4_off).unwrap();
-        let ip4_hdr = Ipv4Hdr::parse(&mut rdr).unwrap();
-        let tcp_hdr = TcpHdr::parse(&mut rdr).unwrap();
+    //     // Grab the actual packet headers
+    //     let ip4_off = pkt.hdr_offsets().inner.ip.unwrap().pkt_pos;
+    //     let mut rdr = pkt.get_rdr_mut();
+    //     rdr.seek(ip4_off).unwrap();
+    //     let ip4_hdr = Ipv4Hdr::parse(&mut rdr).unwrap();
+    //     let tcp_hdr = TcpHdr::parse(&mut rdr).unwrap();
 
-        // And make sure they don't include the padding bytes
-        assert_eq!(
-            usize::from(ip4_hdr.total_len()),
-            usize::from(ip4_hdr.hdr_len()) + tcp_hdr.hdr_len() + body.len()
-        );
-    }
+    //     // And make sure they don't include the padding bytes
+    //     assert_eq!(
+    //         usize::from(ip4_hdr.total_len()),
+    //         usize::from(ip4_hdr.hdr_len()) + tcp_hdr.hdr_len() + body.len()
+    //     );
+    // }
 
-    #[test]
-    fn udp6_packet_with_padding() {
-        let body = [1, 2, 3, 4];
-        let udp = UdpMeta {
-            src: 124,
-            dst: 5673,
-            len: u16::try_from(UdpHdr::SIZE + body.len()).unwrap(),
-            ..Default::default()
-        };
-        let ip6 = Ipv6Meta {
-            src: SRC_IP6,
-            dst: DST_IP6,
-            proto: Protocol::UDP,
-            next_hdr: smoltcp::wire::IpProtocol::Udp,
-            hop_limit: 255,
-            pay_len: udp.len,
-            ext: None,
-            ext_len: 0,
-        };
-        let eth = EtherMeta {
-            ether_type: EtherType::Ipv6,
-            src: SRC_MAC,
-            dst: DST_MAC,
-        };
+    // TODO(kyle): equivalent for MsgBlk
+    // #[test]
+    // fn udp6_packet_with_padding() {
+    //     let body = [1, 2, 3, 4];
+    //     let udp = UdpMeta {
+    //         src: 124,
+    //         dst: 5673,
+    //         len: u16::try_from(UdpHdr::SIZE + body.len()).unwrap(),
+    //         ..Default::default()
+    //     };
+    //     let ip6 = Ipv6Meta {
+    //         src: SRC_IP6,
+    //         dst: DST_IP6,
+    //         proto: Protocol::UDP,
+    //         next_hdr: smoltcp::wire::IpProtocol::Udp,
+    //         hop_limit: 255,
+    //         pay_len: udp.len,
+    //         ext: None,
+    //         ext_len: 0,
+    //     };
+    //     let eth = EtherMeta {
+    //         ether_type: EtherType::Ipv6,
+    //         src: SRC_MAC,
+    //         dst: DST_MAC,
+    //     };
 
-        let pkt_sz = eth.hdr_len() + ip6.hdr_len() + usize::from(ip6.pay_len);
-        let mut pkt = Packet::alloc_and_expand(pkt_sz);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(eth.hdr_len()).unwrap());
-        ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
-        udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
-        wtr.write(&body).unwrap();
-        assert_eq!(pkt.len(), pkt_sz);
+    //     let pkt_sz = eth.hdr_len() + ip6.hdr_len() + usize::from(ip6.pay_len);
+    //     let mut pkt = Packet::alloc_and_expand(pkt_sz);
+    //     let mut wtr = pkt.seg0_wtr();
+    //     eth.emit(wtr.slice_mut(eth.hdr_len()).unwrap());
+    //     ip6.emit(wtr.slice_mut(ip6.hdr_len()).unwrap());
+    //     udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
+    //     wtr.write(&body).unwrap();
+    //     assert_eq!(pkt.len(), pkt_sz);
 
-        // Tack on a new segment filled zero padding at
-        // the end that's not part of the payload as indicated
-        // by the packet headers.
-        let padding_len = 8;
-        let mut padding_seg_wtr = pkt.add_seg(padding_len).unwrap();
-        padding_seg_wtr.write(&vec![0; padding_len]).unwrap();
-        assert_eq!(pkt.len(), pkt_sz + padding_len);
+    //     // Tack on a new segment filled zero padding at
+    //     // the end that's not part of the payload as indicated
+    //     // by the packet headers.
+    //     let padding_len = 8;
+    //     let mut padding_seg_wtr = pkt.add_seg(padding_len).unwrap();
+    //     padding_seg_wtr.write(&vec![0; padding_len]).unwrap();
+    //     assert_eq!(pkt.len(), pkt_sz + padding_len);
 
-        // Generate the metadata by parsing the packet
-        let mut pkt = pkt.parse(Direction::In, GenericUlp {}).unwrap();
+    //     // Generate the metadata by parsing the packet
+    //     let mut pkt = pkt.parse(Direction::In, GenericUlp {}).unwrap();
 
-        // Grab parsed metadata
-        let ip6_meta = pkt.meta().inner_ip6().cloned().unwrap();
-        let udp_meta = pkt.meta().inner_udp().cloned().unwrap();
+    //     // Grab parsed metadata
+    //     let ip6_meta = pkt.meta().inner_ip6().cloned().unwrap();
+    //     let udp_meta = pkt.meta().inner_udp().cloned().unwrap();
 
-        // Length in packet headers shouldn't reflect include padding
-        assert_eq!(
-            usize::from(ip6_meta.pay_len),
-            udp_meta.hdr_len() + body.len(),
-        );
+    //     // Length in packet headers shouldn't reflect include padding
+    //     assert_eq!(
+    //         usize::from(ip6_meta.pay_len),
+    //         udp_meta.hdr_len() + body.len(),
+    //     );
 
-        // The computed body length also shouldn't include the padding
-        assert_eq!(pkt.state.body.len, body.len());
+    //     // The computed body length also shouldn't include the padding
+    //     assert_eq!(pkt.state.body.len, body.len());
 
-        // Pretend some processing happened...
-        // And now we need to update the packet headers based on the
-        // modified packet metadata.
-        pkt.emit_new_headers().unwrap();
+    //     // Pretend some processing happened...
+    //     // And now we need to update the packet headers based on the
+    //     // modified packet metadata.
+    //     pkt.emit_new_headers().unwrap();
 
-        // Grab the actual packet headers
-        let ip6_off = pkt.hdr_offsets().inner.ip.unwrap().pkt_pos;
-        let mut rdr = pkt.get_rdr_mut();
-        rdr.seek(ip6_off).unwrap();
-        let ip6_hdr = Ipv6Hdr::parse(&mut rdr).unwrap();
-        let udp_hdr = UdpHdr::parse(&mut rdr).unwrap();
+    //     // Grab the actual packet headers
+    //     let ip6_off = pkt.hdr_offsets().inner.ip.unwrap().pkt_pos;
+    //     let mut rdr = pkt.get_rdr_mut();
+    //     rdr.seek(ip6_off).unwrap();
+    //     let ip6_hdr = Ipv6Hdr::parse(&mut rdr).unwrap();
+    //     let udp_hdr = UdpHdr::parse(&mut rdr).unwrap();
 
-        // And make sure they don't include the padding bytes
-        assert_eq!(ip6_hdr.pay_len(), udp_hdr.hdr_len() + body.len());
-    }
+    //     // And make sure they don't include the padding bytes
+    //     assert_eq!(ip6_hdr.pay_len(), udp_hdr.hdr_len() + body.len());
+    // }
 
     fn create_linked_mblks(n: usize) -> Vec<*mut mblk_t> {
         let mut els = vec![];

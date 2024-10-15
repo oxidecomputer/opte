@@ -1828,6 +1828,14 @@ pub struct rule_no_match_sdt_arg {
 
 #[cfg(test)]
 mod test {
+    use ingot::ethernet::Ethernet;
+    use ingot::ethernet::Ethertype;
+    use ingot::tcp::Tcp;
+    use ingot::types::HeaderLen;
+
+    use crate::engine::ingot_base::Ipv4;
+    use crate::engine::GenericUlp;
+
     use super::*;
 
     #[test]
@@ -1854,42 +1862,32 @@ mod test {
 
         rule_table.add(rule.finalize());
 
-        let ip = IpMeta::from(Ipv4Meta {
-            src: "10.0.0.77".parse().unwrap(),
-            dst: "52.10.128.69".parse().unwrap(),
-            proto: Protocol::TCP,
-            ttl: 64,
-            ident: 1,
-            hdr_len: 20,
-            total_len: 40,
-            csum: [0; 2],
-        });
-        let ulp = UlpMeta::from(TcpMeta {
-            src: 5555,
-            dst: 443,
-            flags: 0,
-            seq: 0,
-            ack: 0,
-            window_size: 64240,
-            options_bytes: None,
-            options_len: 0,
-            ..Default::default()
-        });
-
-        let pmeta = PacketMeta {
-            outer: Default::default(),
-            inner: InnerMeta {
-                ip: Some(ip),
-                ulp: Some(ulp),
+        let mut test_pkt = MsgBlk::new_ethernet_pkt((
+            Ethernet { ethertype: Ethertype::IPV4, ..Default::default() },
+            Ipv4 {
+                source: "10.0.0.77".parse().unwrap(),
+                destination: "52.10.128.69".parse().unwrap(),
+                protocol: ingot::ip::IpProtocol::TCP,
+                identification: 1,
+                total_len: (20 + Tcp::MINIMUM_LENGTH) as u16,
                 ..Default::default()
             },
-        };
+            Tcp {
+                source: 5555,
+                destination: 443,
+                window_size: 64240,
+                ..Default::default()
+            },
+        ));
+
+        let pkt_view = Packet2::new(test_pkt.iter_mut());
+        let pmeta =
+            pkt_view.parse_outbound(GenericUlp {}).unwrap().to_full_meta();
 
         // The pkt/rdr aren't actually used in this case.
-        let pkt = Packet::copy(&[0xA]);
         let ameta = ActionMeta::new();
-        let ifid = InnerFlowId::from(&pmeta);
-        assert!(rule_table.find_match(&ifid, &pmeta, &ameta).is_some());
+        let ifid = *pmeta.flow();
+        assert!(rule_table.find_match(&ifid, &pmeta.meta(), &ameta).is_some());
     }
 }
 // TODO Reinstate

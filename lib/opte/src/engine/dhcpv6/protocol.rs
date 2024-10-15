@@ -710,6 +710,8 @@ mod test {
     use super::OptionCode;
     use super::Packet;
     use crate::engine::dhcpv6::test_data;
+    use crate::engine::ingot_packet::MsgBlk;
+    use crate::engine::ingot_packet::Packet2;
     use crate::engine::port::meta::ActionMeta;
     use crate::engine::GenericUlp;
     use opte_api::Direction::*;
@@ -741,9 +743,11 @@ mod test {
 
     #[test]
     fn test_predicates_match_snooped_solicit_message() {
-        let pkt = Packet::copy(test_data::TEST_SOLICIT_PACKET)
-            .parse(Out, GenericUlp {})
-            .unwrap();
+        let mut pkt = MsgBlk::copy(test_data::TEST_SOLICIT_PACKET);
+        let pkt = Packet2::new(pkt.iter_mut())
+            .parse_outbound(GenericUlp {})
+            .unwrap()
+            .to_full_meta();
         let pmeta = pkt.meta();
         let ameta = ActionMeta::new();
         let client_mac =

@@ -108,35 +108,51 @@ impl<V: ByteSlice> ValidL3<V> {
     }
 }
 
+impl Ipv4 {
+    #[inline]
+    pub fn compute_checksum(&mut self) {
+        self.checksum = 0;
+
+        let mut csum = Checksum::new();
+
+        let mut bytes = [0u8; 56];
+        self.emit_raw(&mut bytes[..]);
+        csum.add_bytes(&bytes[..]);
+
+        self.checksum = csum.finalize_for_ingot();
+    }
+}
+
+impl<V: ByteSliceMut> ValidIpv4<V> {
+    #[inline]
+    pub fn compute_checksum(&mut self) {
+        self.set_checksum(0);
+
+        let mut csum = Checksum::new();
+
+        csum.add_bytes(self.0.as_bytes());
+
+        match &self.1 {
+            Header::Repr(opts) => {
+                csum.add_bytes(&*opts);
+            }
+            Header::Raw(opts) => {
+                csum.add_bytes(&*opts);
+            }
+        }
+
+        self.set_checksum(csum.finalize_for_ingot());
+    }
+}
+
 impl<V: ByteSliceMut> L3<V> {
     #[inline]
     pub fn compute_checksum(&mut self) {
         if let L3::Ipv4(ip) = self {
-            ip.set_checksum(0);
-
-            let mut csum = Checksum::new();
-
             match ip {
-                Header::Repr(ip) => {
-                    let mut bytes = [0u8; 56];
-                    ip.emit_raw(&mut bytes[..]);
-                    csum.add_bytes(&bytes[..]);
-                }
-                Header::Raw(ip) => {
-                    csum.add_bytes(ip.0.as_bytes());
-
-                    match &ip.1 {
-                        Header::Repr(opts) => {
-                            csum.add_bytes(&*opts);
-                        }
-                        Header::Raw(opts) => {
-                            csum.add_bytes(&*opts);
-                        }
-                    }
-                }
+                Header::Repr(ip) => ip.compute_checksum(),
+                Header::Raw(ip) => ip.compute_checksum(),
             }
-
-            ip.set_checksum(csum.finalize_for_ingot());
         }
     }
 }
