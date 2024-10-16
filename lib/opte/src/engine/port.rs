@@ -1321,7 +1321,7 @@ impl<N: NetworkImpl> Port<N> {
             // entries and proceed to rule processing.
             Some(entry) => {
                 let epoch = entry.state().epoch;
-                let owned_pair = (*entry.state().pair.lock());
+                let owned_pair = *entry.state().pair.lock();
                 let (ufid_in, ufid_out) = match dir {
                     Direction::Out => (owned_pair.as_ref(), Some(&flow_before)),
                     Direction::In => (Some(&flow_before), owned_pair.as_ref()),
@@ -2636,7 +2636,7 @@ impl<N: NetworkImpl> Port<N> {
             Some(entry) => {
                 let epoch = entry.state().epoch;
                 let ufid_in = Some(ufid_in);
-                let ufid_out = (*entry.state().pair.lock());
+                let ufid_out = *entry.state().pair.lock();
                 self.uft_invalidate(data, ufid_out.as_ref(), ufid_in, epoch);
             }
 
@@ -2939,7 +2939,7 @@ impl<N: NetworkImpl> Port<N> {
             Some(entry) => {
                 let epoch = entry.state().epoch;
                 let ufid_out = Some(pkt.flow());
-                let ufid_in = (*entry.state().pair.lock());
+                let ufid_in = *entry.state().pair.lock();
                 self.uft_invalidate(data, ufid_out, ufid_in.as_ref(), epoch);
             }
 
