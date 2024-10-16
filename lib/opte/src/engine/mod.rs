@@ -46,6 +46,7 @@ use alloc::string::String;
 use checksum::Checksum;
 use core::fmt;
 use core::num::ParseIntError;
+use ingot::tcp::TcpRef;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
 use ingot_packet::MsgBlk;
@@ -349,6 +350,9 @@ pub trait LightweightMeta<T: ByteSlice>: Into<OpteMeta<T>> {
 
     /// Recalculate checksums within inner headers, derived from a pre-computed `body_csum`.
     fn update_inner_checksums(&mut self, body_csum: Checksum);
+
+    /// Provide a view of internal TCP state.
+    fn inner_tcp(&self) -> Option<&impl TcpRef<T>>;
 }
 
 /// A generic ULP parser, useful for testing inside of the opte crate

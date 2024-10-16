@@ -82,6 +82,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
 use core::num::NonZeroU32;
@@ -1236,8 +1237,14 @@ impl<N: NetworkImpl> Port<N> {
         // In case 1, we can also cache and reuse the same EmitSpec for
         // all hit packets.
 
+        // The lock needs to be optional here because there is one
+        // case wherein we need to reacquire the lock -- invalidation
+        // by TCP state.
+        let mut lock = Some(self.data.lock());
+        let mut data =
+            lock.as_mut().expect("lock should be held on this codepath");
+
         // (1) Check for UFT and precompiled.
-        let mut data = self.data.lock();
         let epoch = self.epoch();
         check_state!(data.state, [PortState::Running])
             .map_err(|_| ProcessError::BadState(data.state))?;
@@ -1251,46 +1258,47 @@ impl<N: NetworkImpl> Port<N> {
             Direction::In => data.uft_in.get(&flow_before),
         };
 
-        enum FastPathDecision {
-            CompiledUft { tx: Arc<CompiledTransform>, l4_hash: u32 },
-            Uft { tx: Arc<Transforms>, l4_hash: u32 },
-            Slow,
-        }
-
         // enum FastPathDecision {
-        //     CompiledUft { tx: Arc<FlowEntry<UftEntry<InnerFlowId>>>, l4_hash: u32 },
-        //     Uft { tx: Arc<FlowEntry<UftEntry<InnerFlowId>>>, l4_hash: u32 },
+        //     CompiledUft { tx: Arc<CompiledTransform>, l4_hash: u32 },
+        //     Uft { tx: Arc<Transforms>, l4_hash: u32 },
         //     Slow,
         // }
+
+        enum FastPathDecision {
+            CompiledUft(Arc<FlowEntry<UftEntry<InnerFlowId>>>),
+            Uft(Arc<FlowEntry<UftEntry<InnerFlowId>>>),
+            Slow,
+        }
 
         let decision = match uft {
             // We have a valid UFT entry of some kind -- clone out the
             // saved transforms so that we can drop the lock ASAP.
             Some(entry) if entry.state().epoch == epoch => {
-                entry.hit();
-                let now = entry.last_hit();
+                // entry.hit();
+                // let now = entry.last_hit();
 
                 // The Fast Path.
                 let xforms = &entry.state().xforms;
                 let out = if let Some(compiled) = xforms.compiled.as_ref() {
-                    FastPathDecision::CompiledUft {
-                        tx: Arc::clone(compiled),
-                        // tx: Arc::clone(entry),
-                        l4_hash: entry.state().l4_hash,
-                    }
+                    FastPathDecision::CompiledUft(Arc::clone(entry))
+                    // FastPathDecision::CompiledUft {
+                    //     tx: Arc::clone(compiled),
+                    //     // tx: Arc::clone(entry),
+                    //     l4_hash: entry.state().l4_hash,
+                    // }
                 } else {
-                    FastPathDecision::Uft {
-                        tx: Arc::clone(xforms),
-                        // tx: Arc::clone(entry),
-                        l4_hash: entry.state().l4_hash,
-                    }
+                    FastPathDecision::Uft(Arc::clone(entry))
+                    // FastPathDecision::Uft {
+                    //     tx: Arc::clone(xforms),
+                    //     // tx: Arc::clone(entry),
+                    //     l4_hash: entry.state().l4_hash,
+                    // }
                 };
 
                 match dir {
                     Direction::In => data.stats.vals.in_uft_hit += 1,
                     Direction::Out => data.stats.vals.out_uft_hit += 1,
                 }
-                self.uft_hit_probe(dir, &flow_before, epoch, &now);
 
                 out
             }
@@ -1311,10 +1319,18 @@ impl<N: NetworkImpl> Port<N> {
             None => FastPathDecision::Slow,
         };
 
-        // (1)/(2) UFT hit without invalidation -- We know the result for stats purposes.
+        // (1)/(2) UFT hit. Update stats, drop locks, validate TCP state.
+        //    We *almost always* know the result is modified.
+        //    This will produce an incorrect stat in the event that TCP invalidation
+        //    forces a reprocess, but I believe this is a necessary evil to keep work
+        //    out of the portlock today. The correct fix is to AtomicU64 those stats,
+        //    which we'll need for later metrics too.
+        let mut invalidated_tcp = None;
+        let mut reprocess = false;
+
         match &decision {
-            FastPathDecision::CompiledUft { .. }
-            | FastPathDecision::Uft { .. } => {
+            FastPathDecision::CompiledUft(entry)
+            | FastPathDecision::Uft(entry) => {
                 // XXX: Ideally the Kstat should be holding AtomicU64s, then we get
                 // out of the lock sooner. Note that we don't need to *apply* a given
                 // set of transforms in order to know which stats we'll modify.
@@ -1322,55 +1338,119 @@ impl<N: NetworkImpl> Port<N> {
                 let dummy_res = Ok(InternalProcessResult::Modified);
                 match dir {
                     Direction::In => {
-                        Self::update_stats_in(&mut data.stats.vals, &dummy_res)
+                        Self::update_stats_in(&mut data.stats.vals, &dummy_res);
                     }
                     Direction::Out => {
-                        Self::update_stats_out(&mut data.stats.vals, &dummy_res)
+                        Self::update_stats_out(
+                            &mut data.stats.vals,
+                            &dummy_res,
+                        );
+                    }
+                }
+
+                drop(data);
+                drop(lock.take());
+
+                //
+                entry.hit_at(process_start);
+                self.uft_hit_probe(dir, &flow_before, epoch, &process_start);
+
+                let tcp = entry.state().tcp_flow.as_ref();
+                if let Some(tcp_flow) = tcp {
+                    tcp_flow.hit_at(process_start);
+
+                    let tcp = pkt
+                        .meta()
+                        .inner_tcp()
+                        .expect("failed to find TCP state on known TCP flow");
+
+                    let ufid_in = match dir {
+                        Direction::In => Some(&flow_before),
+                        Direction::Out => None,
+                    };
+
+                    match tcp_flow.state().update(
+                        self.name_cstr.as_c_str(),
+                        tcp,
+                        dir,
+                        pkt.len() as u64,
+                        ufid_in,
+                    ) {
+                        Ok(TcpState::Closed) => {
+                            invalidated_tcp = Some(Arc::clone(tcp_flow));
+                        }
+                        Err(TcpFlowStateError::NewFlow { .. }) => {
+                            invalidated_tcp = Some(Arc::clone(tcp_flow));
+                            reprocess = true;
+                        }
+                        _ => {}
                     }
                 }
             }
-            _ => {}
+            _ => {
+                drop(data);
+            }
         }
 
-        // (1) Execute precompiled, and exit.
-        if let FastPathDecision::CompiledUft { tx, l4_hash } = decision {
-            drop(data);
+        // If we're in here, we took a faster-path. We know the lock is dropped.
+        // Reacquire the lock to remove the flow.
+        if let Some(entry) = invalidated_tcp {
+            let mut lock = self.data.lock();
 
-            let len = pkt.len();
-            let meta = pkt.meta_mut();
-            let body_csum = if tx.checksums_dirty {
-                meta.compute_body_csum()
-            } else {
-                None
-            };
-            meta.run_compiled_transform(&tx);
-            if let Some(csum) = body_csum {
-                meta.update_inner_checksums(csum);
+            let flow_lock = entry.state().inner.lock();
+            let ufid_out = &flow_lock.outbound_ufid;
+
+            let ufid_in = flow_lock.inbound_ufid.as_ref();
+            self.uft_tcp_closed(&mut lock, ufid_out, ufid_in);
+
+            let _ = lock.tcp_flows.remove(ufid_out).unwrap();
+        }
+
+        if !reprocess {
+            // (1) Execute precompiled, and exit.
+            if let FastPathDecision::CompiledUft(entry) = decision {
+                let l4_hash = entry.state().l4_hash;
+                let tx =
+                    entry.state().xforms.compiled.as_ref().cloned().unwrap();
+
+                let len = pkt.len();
+                let meta = pkt.meta_mut();
+                let body_csum = if tx.checksums_dirty {
+                    meta.compute_body_csum()
+                } else {
+                    None
+                };
+                meta.run_compiled_transform(&tx);
+                if let Some(csum) = body_csum {
+                    meta.update_inner_checksums(csum);
+                }
+                let encap_len = meta.encap_len();
+                let ulp_len = (len - (encap_len as usize)) as u32;
+                let rewind = match tx.encap {
+                    CompiledEncap::Pop => encap_len,
+                    _ => 0,
+                };
+                let out = EmittestSpec {
+                    spec: EmitterSpec::Fastpath(tx),
+                    l4_hash,
+                    rewind,
+                    ulp_len,
+                };
+
+                let flow_after = meta.flow();
+                let res = Ok(ProcessResult::Modified(out));
+                self.port_process_return_probe(
+                    dir,
+                    &flow_before,
+                    &flow_after,
+                    epoch,
+                    // &pkt,
+                    &res,
+                );
+                return res;
             }
-            let encap_len = meta.encap_len();
-            let ulp_len = (len - (encap_len as usize)) as u32;
-            let rewind = match tx.encap {
-                CompiledEncap::Pop => encap_len,
-                _ => 0,
-            };
-            let out = EmittestSpec {
-                spec: EmitterSpec::Fastpath(tx),
-                l4_hash,
-                rewind,
-                ulp_len,
-            };
-
-            let flow_after = meta.flow();
-            let res = Ok(ProcessResult::Modified(out));
-            self.port_process_return_probe(
-                dir,
-                &flow_before,
-                &flow_after,
-                epoch,
-                // &pkt,
-                &res,
-            );
-            return res;
+        } else {
+            lock = Some(self.data.lock());
         }
 
         // (2)/(3) Full-fat metadata is required.
@@ -1381,18 +1461,23 @@ impl<N: NetworkImpl> Port<N> {
         self.port_process_entry_probe(dir, &flow_before, epoch, &pkt);
 
         let res = match (&decision, dir) {
-            // (2) Drop lock, then apply retrieved transform.
+            // (2) Apply retrieved transform. Lock is dropped.
             // Store cached l4 hash.
-            (FastPathDecision::Uft { tx, l4_hash }, _) => {
-                drop(data);
-                pkt.set_l4_hash(*l4_hash);
+            (FastPathDecision::Uft(entry), _) if !reprocess => {
+                let l4_hash = entry.state().l4_hash;
+                let tx = Arc::clone(&entry.state().xforms);
+
+                pkt.set_l4_hash(l4_hash);
                 tx.apply(&mut pkt, dir)?;
                 Ok(InternalProcessResult::Modified)
             }
 
             // (3) Full-table processing for the packet, then drop the lock.
             // Cksum updates are the only thing left undone.
-            (FastPathDecision::Slow, Direction::In) => {
+            (_, Direction::In) => {
+                let mut data = lock
+                    .as_mut()
+                    .expect("lock should be held on this codepath");
                 let res = self.process_in_miss(
                     &mut data,
                     epoch,
@@ -1405,7 +1490,10 @@ impl<N: NetworkImpl> Port<N> {
                 pkt.update_checksums();
                 res
             }
-            (FastPathDecision::Slow, Direction::Out) => {
+            (_, Direction::Out) => {
+                let mut data = lock
+                    .as_mut()
+                    .expect("lock should be held on this codepath");
                 let res = self
                     .process_out_miss(&mut data, epoch, &mut pkt, &mut ameta);
                 Self::update_stats_out(&mut data.stats.vals, &res);
@@ -1413,7 +1501,6 @@ impl<N: NetworkImpl> Port<N> {
                 pkt.update_checksums();
                 res
             }
-            _ => unreachable!(),
         };
 
         let flow_after = *pkt.flow();
@@ -2035,11 +2122,14 @@ impl<N: NetworkImpl> Port<N> {
             let (ufid_out, tfes) = match *dir {
                 TcpDirection::In { ufid_in, ufid_out } => (
                     ufid_out,
-                    TcpFlowEntryState::new_inbound(*ufid_in, tfs, pkt_len),
+                    TcpFlowEntryState::new_inbound(
+                        *ufid_out, *ufid_in, tfs, pkt_len,
+                    ),
                 ),
-                TcpDirection::Out { ufid_out } => {
-                    (ufid_out, TcpFlowEntryState::new_outbound(tfs, pkt_len))
-                }
+                TcpDirection::Out { ufid_out } => (
+                    ufid_out,
+                    TcpFlowEntryState::new_outbound(*ufid_out, tfs, pkt_len),
+                ),
             };
             match tcp_flows.add_and_return(*ufid_out, tfes) {
                 Ok(entry) => Ok(TcpMaybeClosed::NewState(tcp_state, entry)),
@@ -2097,6 +2187,9 @@ impl<N: NetworkImpl> Port<N> {
         // Work out atomics shortly...
         entry.hit();
         let tfes_base = entry.state();
+
+        // let next_state = tfes_base.update();
+
         let mut tfes = tfes_base.inner.lock();
         match *dir {
             TcpDirection::In { .. } => {
@@ -3084,6 +3177,9 @@ pub enum Pos {
 /// An entry in the TCP flow table.
 #[derive(Clone, Debug)]
 pub struct TcpFlowEntryStateInner {
+    // We store this for the benefit of inbound flows who have UFTs
+    // but which need to know their partner UFID to perform an invalidation.
+    outbound_ufid: InnerFlowId,
     // This must be the UFID of inbound traffic _as it arrives_ from
     // the network, not after it's processed.
     inbound_ufid: Option<InnerFlowId>,
@@ -3100,6 +3196,7 @@ pub struct TcpFlowEntryState {
 
 impl TcpFlowEntryState {
     fn new_inbound(
+        outbound_ufid: InnerFlowId,
         inbound_ufid: InnerFlowId,
         tcp_state: TcpFlowState,
         bytes_in: u64,
@@ -3107,6 +3204,7 @@ impl TcpFlowEntryState {
         Self {
             inner: KMutex::new(
                 TcpFlowEntryStateInner {
+                    outbound_ufid,
                     inbound_ufid: Some(inbound_ufid),
                     tcp_state,
                     segs_in: 1,
@@ -3120,10 +3218,15 @@ impl TcpFlowEntryState {
         }
     }
 
-    fn new_outbound(tcp_state: TcpFlowState, bytes_out: u64) -> Self {
+    fn new_outbound(
+        outbound_ufid: InnerFlowId,
+        tcp_state: TcpFlowState,
+        bytes_out: u64,
+    ) -> Self {
         Self {
             inner: KMutex::new(
                 TcpFlowEntryStateInner {
+                    outbound_ufid,
                     inbound_ufid: None,
                     tcp_state,
                     segs_in: 0,
@@ -3140,6 +3243,40 @@ impl TcpFlowEntryState {
     fn tcp_state(&self) -> TcpState {
         let lock = self.inner.lock();
         lock.tcp_state.tcp_state()
+    }
+
+    #[inline(always)]
+    fn update<V: ByteSlice>(
+        &self,
+        port_name: &CStr,
+        tcp: &impl TcpRef<V>,
+        dir: Direction,
+        pkt_len: u64,
+        ufid_in: Option<&InnerFlowId>,
+    ) -> result::Result<TcpState, TcpFlowStateError> {
+        let mut tfes = self.inner.lock();
+        match dir {
+            Direction::In { .. } => {
+                tfes.segs_in += 1;
+                tfes.bytes_in += pkt_len;
+            }
+            Direction::Out { .. } => {
+                tfes.segs_out += 1;
+                tfes.bytes_out += pkt_len;
+            }
+        }
+
+        if let Some(ufid_in) = ufid_in {
+            // We need to store the UFID of the inbound packet
+            // before it was processed so that we can retire the
+            // correct UFT/LFT entries upon connection
+            // termination.
+            tfes.inbound_ufid = Some(*ufid_in);
+        }
+        let ufid_out = tfes.outbound_ufid;
+        let tcp_state = &mut tfes.tcp_state;
+
+        tcp_state.process(port_name, dir, &ufid_out, tcp)
     }
 }
 

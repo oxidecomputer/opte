@@ -335,6 +335,14 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
             l3.compute_checksum();
         }
     }
+
+    #[inline]
+    fn inner_tcp(&self) -> Option<&impl TcpRef<V>> {
+        match self.inner_ulp.as_ref() {
+            Some(ValidUlp::Tcp(t)) => Some(t),
+            _ => None,
+        }
+    }
 }
 
 impl<T: ByteSlice> From<ValidGeneveOverV6<T>> for OpteMeta<T> {
@@ -490,6 +498,14 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
     fn update_inner_checksums(&mut self, body_csum: OpteCsum) {
         self.inner_ulp.compute_checksum(body_csum, &self.inner_l3);
         self.inner_l3.compute_checksum();
+    }
+
+    #[inline]
+    fn inner_tcp(&self) -> Option<&impl TcpRef<V>> {
+        match &self.inner_ulp {
+            ValidUlp::Tcp(t) => Some(t),
+            _ => None,
+        }
     }
 }
 
