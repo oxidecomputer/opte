@@ -12,13 +12,18 @@
 use super::packet::InnerFlowId;
 use crate::ddi::time::Moment;
 use crate::ddi::time::MILLIS;
+use crate::ddi::time::NANOS_TO_MILLIS;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::ffi::CString;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::num::NonZeroU32;
+use core::sync::atomic::AtomicBool;
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
 use opte_api::OpteError;
@@ -80,12 +85,13 @@ pub struct FlowTable<S: Dump> {
     name_c: CString,
     limit: NonZeroU32,
     policy: Box<dyn ExpiryPolicy<S>>,
-    map: BTreeMap<InnerFlowId, FlowEntry<S>>,
+    map: BTreeMap<InnerFlowId, Arc<FlowEntry<S>>>,
 }
 
 impl<S> FlowTable<S>
 where
-    S: Clone + fmt::Debug + Dump,
+    // S: Clone + fmt::Debug + Dump,
+    S: fmt::Debug + Dump,
 {
     /// Add a new entry to the flow table.
     ///
@@ -101,8 +107,31 @@ where
         }
 
         let entry = FlowEntry::new(state);
-        self.map.insert(flow_id, entry);
+        self.map.insert(flow_id, entry.into());
         Ok(())
+    }
+
+    /// Add a new entry to the flow table, returning a shared refrence to
+    /// the entry.
+    ///
+    /// # Errors
+    ///
+    /// If the table is at max capacity, an error is returned and no
+    /// modification is made to the table.
+    ///
+    /// If an entry already exists for this flow, it is overwritten.
+    pub fn add_and_return(
+        &mut self,
+        flow_id: InnerFlowId,
+        state: S,
+    ) -> Result<Arc<FlowEntry<S>>> {
+        if self.map.len() == self.limit.get() as usize {
+            return Err(OpteError::MaxCapacity(self.limit.get() as u64));
+        }
+
+        let entry = Arc::new(FlowEntry::new(state));
+        self.map.insert(flow_id, entry.clone());
+        Ok(entry)
     }
 
     /// Add a new entry to the flow table while eliding the capacity check.
@@ -110,7 +139,7 @@ where
     /// This is meant for table implementations that enforce their own limit.
     pub fn add_unchecked(&mut self, flow_id: InnerFlowId, state: S) {
         let entry = FlowEntry::new(state);
-        self.map.insert(flow_id, entry);
+        self.map.insert(flow_id, entry.into());
     }
 
     // Clear all entries from the flow table.
@@ -145,8 +174,8 @@ where
                     port_c,
                     name_c,
                     flowid,
-                    Some(entry.last_hit),
-                    Some(now),
+                    Some(entry.last_hit.load(Ordering::Relaxed)),
+                    Some(now.raw_millis()),
                 );
                 expired.push(f(entry.state()));
                 return false;
@@ -165,18 +194,18 @@ where
 
     /// Get a reference to the flow entry for a given flow, if one
     /// exists.
-    pub fn get(&mut self, flow_id: &InnerFlowId) -> Option<&FlowEntry<S>> {
+    pub fn get(&self, flow_id: &InnerFlowId) -> Option<&Arc<FlowEntry<S>>> {
         self.map.get(flow_id)
     }
 
     /// Get a mutable reference to the flow entry for a given flow, if
     /// one exists.
-    pub fn get_mut(
-        &mut self,
-        flow_id: &InnerFlowId,
-    ) -> Option<&mut FlowEntry<S>> {
-        self.map.get_mut(flow_id)
-    }
+    // pub fn get_mut(
+    //     &mut self,
+    //     flow_id: &InnerFlowId,
+    // ) -> Option<&mut FlowEntry<S>> {
+    //     self.map.get_mut(flow_id)
+    // }
 
     /// Mark all flow table entries as requiring revalidation after a
     /// reset or removal of rules.
@@ -185,8 +214,8 @@ where
     /// will occupy flowtable space until they are denied or expire. As such
     /// this method should be used only when the original state (`S`) *must*
     /// be preserved to ensure correctness.
-    pub fn mark_dirty(&mut self) {
-        self.map.values_mut().for_each(|v| v.dirty = true);
+    pub fn mark_dirty(&self) {
+        self.map.values().for_each(|v| v.set_dirty());
     }
 
     pub fn new(
@@ -211,7 +240,7 @@ where
         self.map.len() as u32
     }
 
-    pub fn remove(&mut self, flow: &InnerFlowId) -> Option<FlowEntry<S>> {
+    pub fn remove(&mut self, flow: &InnerFlowId) -> Option<Arc<FlowEntry<S>>> {
         self.map.remove(flow)
     }
 }
@@ -221,8 +250,8 @@ fn flow_expired_probe(
     port: &CString,
     name: &CString,
     flowid: &InnerFlowId,
-    last_hit: Option<Moment>,
-    now: Option<Moment>,
+    last_hit: Option<u64>,
+    now: Option<u64>,
 ) {
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -231,8 +260,8 @@ fn flow_expired_probe(
                     port.as_ptr() as uintptr_t,
                     name.as_ptr() as uintptr_t,
                     flowid,
-                    last_hit.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
-                    now.and_then(|m| m.raw_millis()).unwrap_or_default() as usize,
+                    last_hit.unwrap_or_default() as usize,
+                    now.unwrap_or_default() as usize,
                 );
             }
         } else if #[cfg(feature = "usdt")] {
@@ -240,7 +269,7 @@ fn flow_expired_probe(
             let port_s = port.to_str().unwrap();
             let name_s = name.to_str().unwrap();
             crate::opte_provider::flow__expired!(
-                || (port_s, name_s, flowid.to_string(), 0, 0)
+                || (port_s, name_s, flowid.to_string(), last_hit.unwrap_or_default(), now.unwrap_or_default())
             );
         } else {
             let (_, _, _) = (port, name, flowid);
@@ -257,24 +286,27 @@ pub trait Dump {
 }
 
 /// The FlowEntry holds any arbitrary state type `S`.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FlowEntry<S: Dump> {
     state: S,
 
     /// Number of times this flow has been matched.
-    hits: u64,
+    hits: AtomicU64,
 
     /// This tracks the last time the flow was matched.
-    last_hit: Moment,
+    ///
+    /// These are raw u64s sourced from `Moment`, which track time
+    /// in nanoseconds.
+    last_hit: AtomicU64,
 
     /// Records whether this flow predates a rule change, and
     /// must rerun rule processing before `state` can be used.
-    dirty: bool,
+    dirty: AtomicBool,
 }
 
 impl<S: Dump> FlowEntry<S> {
     fn dump(&self) -> S::DumpVal {
-        self.state.dump(self.hits)
+        self.state.dump(self.hits.load(Ordering::Relaxed))
     }
 
     pub fn state_mut(&mut self) -> &mut S {
@@ -286,32 +318,54 @@ impl<S: Dump> FlowEntry<S> {
     }
 
     pub fn hits(&self) -> u64 {
-        self.hits
+        self.hits.load(Ordering::Relaxed)
     }
 
-    pub fn hit(&mut self) {
-        self.hits += 1;
-        self.last_hit = Moment::now();
+    /// Increments this flow's hit counter and
+    pub fn hit(&self) {
+        self.hit_at(Moment::now())
+    }
+
+    /// Increments a flow's hit counter and sets th
+    ///
+    /// This is used to minimise calls to `gethrtime` in fastpath
+    /// operations. Callers *MUST* be certain that expiry logic for this flow
+    /// entry uses saturating comparisons, particularly if timestamps are
+    /// sourced before grabbing a lock / processing a packet / any other
+    /// long-running operation. **This is doubly true if you are not holding
+    /// the port lock.**
+    pub(crate) fn hit_at(&self, now: Moment) {
+        self.hits.fetch_add(1, Ordering::Relaxed);
+        self.last_hit.store(now.raw(), Ordering::Relaxed);
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.dirty.load(Ordering::Relaxed)
     }
 
-    pub fn mark_clean(&mut self) {
-        self.dirty = false
+    pub fn set_dirty(&self) {
+        self.dirty.store(true, Ordering::Relaxed)
     }
 
-    pub fn last_hit(&self) -> &Moment {
-        &self.last_hit
+    pub fn mark_clean(&self) {
+        self.dirty.store(false, Ordering::Relaxed)
+    }
+
+    pub fn last_hit(&self) -> Moment {
+        Moment::from_raw_nanos(self.last_hit.load(Ordering::Relaxed))
     }
 
     fn is_expired(&self, now: Moment, ttl: Ttl) -> bool {
-        ttl.is_expired(self.last_hit, now)
+        ttl.is_expired(self.last_hit(), now)
     }
 
     fn new(state: S) -> Self {
-        FlowEntry { state, hits: 0, last_hit: Moment::now(), dirty: false }
+        FlowEntry {
+            state,
+            hits: 0.into(),
+            last_hit: Moment::now().raw().into(),
+            dirty: false.into(),
+        }
     }
 }
 

@@ -243,8 +243,8 @@ impl LayerFlowTable {
         self.count = self.ft_out.num_flows();
     }
 
-    fn get_in(&mut self, flow: &InnerFlowId) -> EntryState {
-        match self.ft_in.get_mut(flow) {
+    fn get_in(&self, flow: &InnerFlowId) -> EntryState {
+        match self.ft_in.get(flow) {
             Some(entry) => {
                 entry.hit();
                 if entry.is_dirty() {
@@ -258,8 +258,8 @@ impl LayerFlowTable {
         }
     }
 
-    fn get_out(&mut self, flow: &InnerFlowId) -> EntryState {
-        match self.ft_out.get_mut(flow) {
+    fn get_out(&self, flow: &InnerFlowId) -> EntryState {
+        match self.ft_out.get(flow) {
             Some(entry) => {
                 entry.hit();
                 let action = entry.state().action_desc.clone();
@@ -277,27 +277,27 @@ impl LayerFlowTable {
     fn remove_in(
         &mut self,
         flow: &InnerFlowId,
-    ) -> Option<FlowEntry<ActionDescEntry>> {
+    ) -> Option<Arc<FlowEntry<ActionDescEntry>>> {
         self.ft_in.remove(flow)
     }
 
     fn remove_out(
         &mut self,
         flow: &InnerFlowId,
-    ) -> Option<FlowEntry<LftOutEntry>> {
+    ) -> Option<Arc<FlowEntry<LftOutEntry>>> {
         self.ft_out.remove(flow)
     }
 
     fn mark_clean(&mut self, dir: Direction, flow: &InnerFlowId) {
         match dir {
             Direction::In => {
-                let entry = self.ft_in.get_mut(flow);
+                let entry = self.ft_in.get(flow);
                 if let Some(entry) = entry {
                     entry.mark_clean();
                 }
             }
             Direction::Out => {
-                let entry = self.ft_out.get_mut(flow);
+                let entry = self.ft_out.get(flow);
                 if let Some(entry) = entry {
                     entry.mark_clean();
                 }
