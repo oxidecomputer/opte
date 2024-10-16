@@ -524,10 +524,10 @@ pub enum DumpLayerError {
 }
 
 /// An entry in the Unified Flow Table.
-#[derive(Clone, Debug)]
+// #[derive(Debug)]
 pub struct UftEntry<Id> {
     /// The flow ID for the other side.
-    pair: Option<Id>,
+    pair: KMutex<Option<Id>>,
 
     /// The transformations to perform.
     xforms: Arc<Transforms>,
@@ -569,6 +569,20 @@ impl<Id> Display for UftEntry<Id> {
             .collect::<Vec<String>>()
             .join(",");
         write!(f, "hdr: {hdr}, body: {body}")
+    }
+}
+
+impl<Id> fmt::Debug for UftEntry<Id> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let UftEntry { pair, xforms, l4_hash, epoch, tcp_flow } = self;
+
+        f.debug_struct("UftEntry")
+            .field("pair", &"<lock>")
+            .field("xforms", xforms)
+            .field("l4_hash", l4_hash)
+            .field("epoch", epoch)
+            .field("tcp_flow", tcp_flow)
+            .finish()
     }
 }
 
@@ -1307,7 +1321,7 @@ impl<N: NetworkImpl> Port<N> {
             // entries and proceed to rule processing.
             Some(entry) => {
                 let epoch = entry.state().epoch;
-                let owned_pair = entry.state().pair;
+                let owned_pair = (*entry.state().pair.lock());
                 let (ufid_in, ufid_out) = match dir {
                     Direction::Out => (owned_pair.as_ref(), Some(&flow_before)),
                     Direction::In => (Some(&flow_before), owned_pair.as_ref()),
@@ -1325,6 +1339,7 @@ impl<N: NetworkImpl> Port<N> {
         //    forces a reprocess, but I believe this is a necessary evil to keep work
         //    out of the portlock today. The correct fix is to AtomicU64 those stats,
         //    which we'll need for later metrics too.
+        //    However, accounting for this below is simple enough.
         let mut invalidated_tcp = None;
         let mut reprocess = false;
 
@@ -1485,7 +1500,12 @@ impl<N: NetworkImpl> Port<N> {
                     &flow_before,
                     &mut ameta,
                 );
-                Self::update_stats_in(&mut data.stats.vals, &res);
+                // Prevent double-counting reprocessed modify entries.
+                if !(reprocess
+                    && matches!(res, Ok(InternalProcessResult::Modified)))
+                {
+                    Self::update_stats_in(&mut data.stats.vals, &res);
+                }
                 drop(data);
                 pkt.update_checksums();
                 res
@@ -1496,7 +1516,12 @@ impl<N: NetworkImpl> Port<N> {
                     .expect("lock should be held on this codepath");
                 let res = self
                     .process_out_miss(&mut data, epoch, &mut pkt, &mut ameta);
-                Self::update_stats_out(&mut data.stats.vals, &res);
+                // Prevent double-counting reprocessed modify entries.
+                if !(reprocess
+                    && matches!(res, Ok(InternalProcessResult::Modified)))
+                {
+                    Self::update_stats_out(&mut data.stats.vals, &res);
+                }
                 drop(data);
                 pkt.update_checksums();
                 res
@@ -2352,7 +2377,7 @@ impl<N: NetworkImpl> Port<N> {
 
         let ufid_out = pkt.flow().mirror();
         let mut hte = UftEntry {
-            pair: Some(ufid_out),
+            pair: KMutex::new(Some(ufid_out), KMutexType::Spin),
             xforms: xforms.compile(pkt.checksums_dirty()),
             epoch,
             l4_hash: ufid_in.crc32(),
@@ -2368,8 +2393,7 @@ impl<N: NetworkImpl> Port<N> {
                 // Remember, the inbound UFID is the flow as seen by
                 // the network, before any processing is done by OPTE.
 
-                // TODO(kyle)
-                // out_entry.state().pair = Some(*ufid_in);
+                *out_entry.state().pair.lock() = Some(*ufid_in);
             }
 
             // Ideally we would simulate the outbound flow if no
@@ -2612,7 +2636,7 @@ impl<N: NetworkImpl> Port<N> {
             Some(entry) => {
                 let epoch = entry.state().epoch;
                 let ufid_in = Some(ufid_in);
-                let ufid_out = entry.state().pair;
+                let ufid_out = (*entry.state().pair.lock());
                 self.uft_invalidate(data, ufid_out.as_ref(), ufid_in, epoch);
             }
 
@@ -2747,7 +2771,7 @@ impl<N: NetworkImpl> Port<N> {
         let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
         // XXXX: may be hashing the wrong thing.
         let hte = UftEntry {
-            pair: None,
+            pair: KMutex::new(None, KMutexType::Spin),
             xforms: xforms.compile(pkt.checksums_dirty()),
             epoch,
             l4_hash: flow_before.crc32(),
@@ -2915,7 +2939,7 @@ impl<N: NetworkImpl> Port<N> {
             Some(entry) => {
                 let epoch = entry.state().epoch;
                 let ufid_out = Some(pkt.flow());
-                let ufid_in = entry.state().pair;
+                let ufid_in = (*entry.state().pair.lock());
                 self.uft_invalidate(data, ufid_out, ufid_in.as_ref(), epoch);
             }
 

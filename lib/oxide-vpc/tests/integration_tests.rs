@@ -3598,12 +3598,15 @@ fn early_tcp_invalidation() {
     let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
     let res = g1.port.process(Out, pkt1);
     expect_modified!(res, pkt1_m);
-    incr!(
+    update!(
         g1,
         [
-            "stats.port.out_modified, stats.port.out_uft_miss",
+            "incr:stats.port.out_modified, stats.port.out_uft_miss",
             // We're hitting the old entry, before it is discarded.
-            "stats.port.out_uft_hit",
+            "incr:stats.port.out_uft_hit",
+            // Both UFTs are wiped out for reprocessing, but OUT is
+            // re-added.
+            "decr:uft.in"
         ]
     );
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
@@ -3636,7 +3639,7 @@ fn early_tcp_invalidation() {
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
     let res = g1.port.process(In, pkt2);
     expect_modified!(res, pkt2_m);
-    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_miss, uft.in"]);
     assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
     let mut pkt1_m = http_syn3(
@@ -3654,8 +3657,11 @@ fn early_tcp_invalidation() {
     update!(
         g1,
         [
+            // Hit the old flow...
             "incr:stats.port.in_modified, stats.port.in_uft_hit",
-            "set:uft.in=0, uft.out=0",
+            // Then reprocesssed.
+            "incr:stats.port.in_uft_miss",
+            "set:uft.in=1, uft.out=0",
         ]
     );
     assert_eq!(TcpState::Listen, g1.port.tcp_state(&flow).unwrap());
@@ -3705,12 +3711,12 @@ fn early_tcp_invalidation() {
     let flow = pkt1.flow();
     let res = g1.port.process(Out, pkt1);
     expect_modified!(res, pkt1_m);
-    incr!(
+    update!(
         g1,
         [
-            "stats.port.out_modified, stats.port.out_uft_miss",
+            "incr:stats.port.out_modified, stats.port.out_uft_miss",
             // We're hitting the old entry, before it is discarded.
-            "stats.port.out_uft_hit",
+            "incr:stats.port.out_uft_hit",
         ]
     );
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());

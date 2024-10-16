@@ -899,6 +899,7 @@ pub fn http_server_ack_fin2(
         source: 80,
         destination: dst_port,
         sequence: 44161353 + 34,
+        // We are ACKing the FIN, which counts as 1 byte.
         acknowledgement: 2382112998 + 1,
         flags: IngotTcpFlags::ACK,
         ..Default::default()
@@ -930,8 +931,8 @@ pub fn http_server_fin2(
     let tcp = Tcp {
         source: 80,
         destination: dst_port,
-        sequence: 2382112998 + 1,
-        acknowledgement: 44161353 + 34,
+        sequence: 44161353 + 34,
+        acknowledgement: 2382112998 + 1,
         flags: IngotTcpFlags::ACK | IngotTcpFlags::FIN,
         ..Default::default()
     };
@@ -962,6 +963,7 @@ pub fn http_guest_ack_fin2(
         source: 44490,
         destination: 80,
         sequence: 2382112998,
+        // We are ACKing the FIN, which counts as 1 byte.
         acknowledgement: 44161353 + 34 + 1,
         flags: IngotTcpFlags::ACK,
         ..Default::default()
