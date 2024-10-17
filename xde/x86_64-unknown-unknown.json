@@ -8,7 +8,7 @@
     "eh-frame-header": false,
     "frame-pointer": "always",
     "executables": true,
-    "features": "-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-3dnow,-3dnowa,-avx,-avx2,+soft-float",
+    "features": "-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,+soft-float",
     "has-rpath": true,
     "is-builtin": false,
     "is-like-solaris": true,

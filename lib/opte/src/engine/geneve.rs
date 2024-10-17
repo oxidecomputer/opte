@@ -21,9 +21,10 @@ use core::mem;
 pub use opte_api::Vni;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -76,7 +77,7 @@ impl PushAction<GeneveMeta> for GenevePush {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GeneveMod {
-    vni: Option<Vni>,
+    pub vni: Option<Vni>,
 }
 
 impl ModifyAction<GeneveMeta> for GeneveMod {
@@ -94,7 +95,9 @@ impl GeneveMeta {
         debug_assert_eq!(dst.len(), self.hdr_len_inner());
         let (base, remainder) = dst.split_at_mut(GeneveHdrRaw::SIZE);
         let mut raw = GeneveHdrRaw::new_mut(base).unwrap();
-        raw.write(GeneveHdrRaw::from(self));
+        Ref::write(&mut raw, GeneveHdrRaw::from(self));
+
+        // GeneveHdrRaw::from(self).write_to(dst).unwrap();
 
         raw.ver_opt_len = if self.oxide_external_pkt {
             GeneveOption::Oxide(OxideOption::External).emit(remainder) as u8
@@ -259,7 +262,9 @@ impl GeneveHdrError {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct GeneveHdrRaw {
     ver_opt_len: u8,
     flags: u8,
@@ -288,7 +293,7 @@ impl<'a> RawHeader<'a> for GeneveHdrRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), mem::size_of::<Self>());
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
@@ -441,7 +446,9 @@ impl OxideOption {
 ///
 /// Note: Unaligned on the same rationale as [`GeneveHdrRaw`].
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct GeneveOptHdrRaw {
     option_class: [u8; 2],
     crit_type: u8,
@@ -475,7 +482,7 @@ impl<'a> RawHeader<'a> for GeneveOptHdrRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), mem::size_of::<Self>());
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
@@ -485,7 +492,7 @@ impl<'a> RawHeader<'a> for GeneveOptHdrRaw {
     #[inline]
     fn new(src: &[u8]) -> Result<Ref<&[u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), mem::size_of::<Self>());
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

@@ -9,6 +9,7 @@
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
 use super::flow_table::Ttl;
+use super::headers::HeaderActionError;
 use super::headers::HeaderActionModify;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
@@ -22,9 +23,10 @@ use core::fmt::Display;
 use opte_api::DYNAMIC_PORT;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -111,7 +113,7 @@ pub struct TcpMeta {
     pub csum: [u8; 2],
     // Fow now we keep options as raw bytes, allowing up to 40 bytes
     // of options.
-    pub options_bytes: Option<[u8; TcpHdr::MAX_OPTION_SIZE]>,
+    pub options_bytes: Option<[u8; 40]>,
     pub options_len: usize,
 }
 
@@ -122,7 +124,8 @@ impl TcpMeta {
         debug_assert_eq!(dst.len(), self.hdr_len());
         let base = &mut dst[0..TcpHdrRaw::SIZE];
         let mut raw = TcpHdrRaw::new_mut(base).unwrap();
-        raw.write(TcpHdrRaw::from(self));
+        // raw.write_to(TcpHdrRaw::from(self));
+        Ref::write(&mut raw, TcpHdrRaw::from(self));
         if let Some(bytes) = self.options_bytes {
             dst[TcpHdr::BASE_SIZE..]
                 .copy_from_slice(&bytes[0..self.options_len]);
@@ -151,7 +154,7 @@ impl<'a> From<&TcpHdr<'a>> for TcpMeta {
             }
         };
 
-        let raw = tcp.base.read();
+        let raw = &tcp.base;
         Self {
             src: u16::from_be_bytes(raw.src_port),
             dst: u16::from_be_bytes(raw.dst_port),
@@ -208,7 +211,10 @@ impl ModifyAction<TcpMeta> for TcpMod {
 }
 
 impl HeaderActionModify<UlpMetaModify> for TcpMeta {
-    fn run_modify(&mut self, spec: &UlpMetaModify) {
+    fn run_modify(
+        &mut self,
+        spec: &UlpMetaModify,
+    ) -> Result<(), HeaderActionError> {
         if spec.generic.src_port.is_some() {
             self.src = spec.generic.src_port.unwrap()
         }
@@ -220,6 +226,8 @@ impl HeaderActionModify<UlpMetaModify> for TcpMeta {
         if spec.tcp_flags.is_some() {
             self.flags = spec.tcp_flags.unwrap()
         }
+
+        Ok(())
     }
 }
 
@@ -254,7 +262,7 @@ impl<'a> TcpHdr<'a> {
     }
 
     pub fn base_bytes(&self) -> &[u8] {
-        self.base.bytes()
+        self.base.as_bytes()
     }
 
     pub fn options_bytes(&self) -> Option<&[u8]> {
@@ -277,8 +285,8 @@ impl<'a> TcpHdr<'a> {
         // bytes themselves as zero; therefore its imperative we do
         // not include the checksum field bytes when subtracting from
         // the checksum value.
-        csum.sub_bytes(&self.base.bytes()[0..Self::CSUM_BEGIN_OFFSET]);
-        csum.sub_bytes(&self.base.bytes()[Self::CSUM_END_OFFSET..]);
+        csum.sub_bytes(&self.base.as_bytes()[0..Self::CSUM_BEGIN_OFFSET]);
+        csum.sub_bytes(&self.base.as_bytes()[Self::CSUM_END_OFFSET..]);
 
         if let Some(options) = self.options.as_ref() {
             csum.sub_bytes(options);
@@ -401,7 +409,9 @@ impl From<ReadErr> for TcpHdrError {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct TcpHdrRaw {
     pub src_port: [u8; 2],
     pub dst_port: [u8; 2],
@@ -424,7 +434,7 @@ impl<'a> RawHeader<'a> for TcpHdrRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

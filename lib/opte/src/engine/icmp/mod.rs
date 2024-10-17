@@ -11,19 +11,13 @@ pub mod v6;
 
 use super::checksum::Checksum as OpteCsum;
 use super::checksum::HeaderChecksum;
+use super::headers::HeaderActionError;
 use super::headers::RawHeader;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
 use crate::d_error::DError;
-use crate::engine::ether::EtherHdr;
-use crate::engine::ether::EtherMeta;
-use crate::engine::ether::EtherType;
 use crate::engine::headers::HeaderActionModify;
 use crate::engine::headers::UlpMetaModify;
-use crate::engine::packet::Packet;
-use crate::engine::packet::PacketMeta;
-use crate::engine::packet::PacketRead;
-use crate::engine::packet::PacketReader;
 use crate::engine::predicate::DataPredicate;
 use crate::engine::predicate::EtherAddrMatch;
 use crate::engine::predicate::IpProtoMatch;
@@ -42,9 +36,11 @@ use smoltcp::phy::Checksum;
 use smoltcp::phy::ChecksumCapabilities as Csum;
 pub use v4::Icmpv4Meta;
 pub use v6::Icmpv6Meta;
-use zerocopy::AsBytes;
+use zerocopy::ByteSlice;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -109,17 +105,22 @@ impl<T: Into<u8> + Copy> HeaderActionModify<UlpMetaModify> for IcmpMeta<T>
 where
     IcmpMeta<T>: QueryEcho,
 {
-    fn run_modify(&mut self, spec: &UlpMetaModify) {
+    fn run_modify(
+        &mut self,
+        spec: &UlpMetaModify,
+    ) -> Result<(), HeaderActionError> {
         let Some(new_id) = spec.icmp_id else {
-            return;
+            return Ok(());
         };
 
         if self.echo_id().is_none() {
-            return;
+            return Ok(());
         }
 
         let mut echo_data = self.body_echo_mut();
         echo_data.id = new_id.to_be_bytes();
+
+        Ok(())
     }
 }
 
@@ -151,7 +152,7 @@ impl<'a> IcmpHdr<'a> {
     pub fn csum_minus_hdr(&self) -> Option<OpteCsum> {
         if self.base.csum != [0; 2] {
             let mut csum = OpteCsum::from(HeaderChecksum::wrap(self.base.csum));
-            let bytes = self.base.bytes();
+            let bytes = self.base.as_bytes();
             csum.sub_bytes(&bytes[..Self::CSUM_BEGIN_OFFSET]);
             csum.sub_bytes(&bytes[Self::CSUM_END_OFFSET..]);
             Some(csum)
@@ -175,7 +176,9 @@ impl<'a> IcmpHdr<'a> {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct IcmpHdrRaw {
     pub msg_type: u8,
     pub msg_code: u8,
@@ -192,7 +195,7 @@ impl<'a> RawHeader<'a> for IcmpHdrRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
@@ -202,7 +205,9 @@ impl<'a> RawHeader<'a> for IcmpHdrRaw {
 
 /// Internal structure of an ICMP(v6) Echo(Reply)'s rest_of_header.
 #[repr(C)]
-#[derive(Clone, Debug, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
 pub struct IcmpEchoRaw {
     pub id: [u8; 2],
     pub sequence: [u8; 2],
@@ -217,7 +222,7 @@ impl<'a> RawHeader<'a> for IcmpEchoRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
@@ -227,7 +232,7 @@ impl<'a> RawHeader<'a> for IcmpEchoRaw {
     #[inline]
     fn new(src: &[u8]) -> Result<Ref<&[u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };

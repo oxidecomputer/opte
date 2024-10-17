@@ -35,15 +35,31 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
+use core::hash::Hash;
+use core::mem::MaybeUninit;
 use core::num::NonZeroU32;
 use core::ptr;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
+use crc32fast::Hasher;
 use illumos_sys_hdrs::*;
+use ingot::geneve::GeneveFlags;
+use ingot::geneve::GeneveMut;
+use ingot::geneve::GeneveRef;
+use ingot::geneve::ValidGeneve;
+use ingot::ip::IpProtocol;
+use ingot::ip::Ipv6Mut;
+use ingot::ip::ValidIpv6;
+use ingot::types::Emit;
+use ingot::types::Header;
+use ingot::types::HeaderParse;
+use ingot::udp::UdpMut;
+use ingot::udp::ValidUdp;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
+use opte::api::MacAddr;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -54,12 +70,22 @@ use opte::d_error::LabelBlock;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
+use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::EncapMeta;
+use opte::engine::headers::EncapPush;
 use opte::engine::headers::IpAddr;
+use opte::engine::headers::IpPush;
+use opte::engine::ingot_base::EthernetMut;
+use opte::engine::ingot_base::EthernetRef;
+use opte::engine::ingot_base::ValidEthernet;
+use opte::engine::ingot_packet::MsgBlk;
+use opte::engine::ingot_packet::Packet2;
+use opte::engine::ingot_packet::Parsed2;
+use opte::engine::ingot_packet::ParsedMblk;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::Initialized;
@@ -1383,11 +1409,16 @@ unsafe extern "C" fn xde_mc_unicst(
     0
 }
 
-fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
+fn guest_loopback_probe(
+    mblk_addr: uintptr_t,
+    flow: &InnerFlowId,
+    src: &XdeDev,
+    dst: &XdeDev,
+) {
     unsafe {
         __dtrace_probe_guest__loopback(
-            pkt.mblk_addr(),
-            pkt.flow(),
+            mblk_addr,
+            flow,
             src.port.name_cstr().as_ptr() as uintptr_t,
             dst.port.name_cstr().as_ptr() as uintptr_t,
         )
@@ -1395,26 +1426,45 @@ fn guest_loopback_probe(pkt: &Packet<Parsed>, src: &XdeDev, dst: &XdeDev) {
 }
 
 #[no_mangle]
-fn guest_loopback(
+fn guest_loopback<'a>(
     src_dev: &XdeDev,
-    mut pkt: Packet<Parsed>,
+    devs: &'a KRwLockReadGuard<Vec<Box<XdeDev>>>,
+    mut pkt: MsgBlk,
     vni: Vni,
-) -> *mut mblk_t {
+) {
     use Direction::*;
-    let ether_dst = pkt.meta().inner.ether.dst;
-    let devs = unsafe { xde_devs.read() };
+
+    let mblk_addr = pkt.mblk_addr();
+    let parsed_pkt = Packet2::new(pkt.iter_mut());
+
+    // TODO: Rework currently requires a reparse on loopback to account for UFT fastpath.
+
+    let mut parsed_pkt = match parsed_pkt.parse_inbound(VpcParser {}) {
+        Ok(pkt) => pkt,
+        Err(e) => {
+            opte::engine::dbg!("Loopback bad packet: {:?}", e);
+            bad_packet_parse_probe(None, Direction::In, mblk_addr, &e.into());
+
+            return;
+        }
+    };
+
+    let flow = parsed_pkt.flow();
+
+    let ether_dst = parsed_pkt.meta().inner_eth.destination();
     let maybe_dest_dev =
         devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst);
 
     match maybe_dest_dev {
         Some(dest_dev) => {
-            guest_loopback_probe(&pkt, src_dev, dest_dev);
+            guest_loopback_probe(mblk_addr, &flow, src_dev, dest_dev);
 
             // We have found a matching Port on this host; "loop back"
             // the packet into the inbound processing path of the
             // destination Port.
-            match dest_dev.port.process(In, &mut pkt, ActionMeta::new()) {
-                Ok(ProcessResult::Modified) => {
+            match dest_dev.port.process(In, parsed_pkt) {
+                Ok(ProcessResult::Modified(mut emit_spec)) => {
+                    let pkt = emit_spec.apply(pkt);
                     unsafe {
                         mac::mac_rx(
                             dest_dev.mh,
@@ -1466,8 +1516,6 @@ fn guest_loopback(
             );
         }
     }
-
-    ptr::null_mut()
 }
 
 #[no_mangle]
@@ -1508,7 +1556,7 @@ unsafe extern "C" fn xde_mc_tx(
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (u1, u2, port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
-    while let Some(pkt) = chain.pop_front() {
+    while let Some(pkt) = chain.pop_front2() {
         xde_mc_tx_one(src_dev, pkt);
     }
 
@@ -1516,13 +1564,14 @@ unsafe extern "C" fn xde_mc_tx(
 }
 
 #[inline]
-unsafe fn xde_mc_tx_one(
-    src_dev: &XdeDev,
-    pkt: Packet<Initialized>,
-) -> *mut mblk_t {
+unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
+    let mblk_addr = pkt.mblk_addr();
+    let pkt_len_old = pkt.byte_len();
+
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
-    let mut pkt = match pkt.parse(Direction::Out, parser) {
+    let parsed_pkt = Packet2::new(pkt.iter_mut());
+    let mut parsed_pkt = match parsed_pkt.parse_outbound(parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.
@@ -1555,7 +1604,8 @@ unsafe fn xde_mc_tx_one(
         // refresh my memory on all of this.
         //
         // TODO Is there way to set mac_tx to must use result?
-        stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+        drop(parsed_pkt);
+        stream.tx_drop_on_no_desc2(pkt, hint, MacTxFlags::empty());
         return ptr::null_mut();
     }
 
@@ -1564,34 +1614,25 @@ unsafe fn xde_mc_tx_one(
     // The port processing code will fire a probe that describes what
     // action was taken -- there should be no need to add probes or
     // prints here.
-    let res = port.process(Direction::Out, &mut pkt, ActionMeta::new());
-    match res {
-        Ok(ProcessResult::Modified) => {
-            let meta = pkt.meta();
+    let res = port.process(Direction::Out, parsed_pkt);
 
+    match res {
+        Ok(ProcessResult::Modified(mut emit_spec)) => {
             // If the outer IPv6 destination is the same as the
             // source, then we need to loop the packet inbound to the
             // guest on this same host.
-            let ip = match meta.outer.ip {
+            let (ip6_src, ip6_dst) = match emit_spec.outer_ip6_addrs() {
                 Some(v) => v,
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
-                    opte::engine::dbg!("no outer ip header, dropping");
+                    opte::engine::dbg!("no outer IPv6 header, dropping");
                     return ptr::null_mut();
                 }
             };
 
-            let ip6 = match ip.ip6() {
-                Some(v) => v,
-                None => {
-                    opte::engine::dbg!("outer IP header is not v6, dropping");
-                    return ptr::null_mut();
-                }
-            };
-
-            let vni = match meta.outer.encap {
-                Some(EncapMeta::Geneve(geneve)) => geneve.vni,
+            let vni = match emit_spec.outer_encap_vni() {
+                Some(vni) => vni,
                 None => {
                     // XXX add SDT probe
                     // XXX add stat
@@ -1600,9 +1641,20 @@ unsafe fn xde_mc_tx_one(
                 }
             };
 
-            if ip6.dst == ip6.src {
-                return guest_loopback(src_dev, pkt, vni);
+            // what we WANT to do is pass in the parsed pkt, handle the
+            // emitspec in the same place, then send elsewhere.
+            let devs = unsafe { xde_devs.read() };
+
+            let l4_hash = emit_spec.l4_hash;
+
+            let out_pkt = emit_spec.apply(pkt);
+
+            if ip6_src == ip6_dst {
+                guest_loopback(src_dev, &devs, out_pkt, vni);
+                return ptr::null_mut();
             }
+
+            drop(devs);
 
             // Currently the overlay layer leaves the outer frame
             // destination and source zero'd. Ask IRE for the route
@@ -1615,21 +1667,22 @@ unsafe fn xde_mc_tx_one(
             // results for a given dst + entropy. These have a fairly tight
             // expiry so that we can actually react to new reachability/load
             // info from DDM.
-            let my_key = RouteKey { dst: ip6.dst, l4_hash: meta.l4_hash() };
+            let my_key = RouteKey { dst: ip6_dst, l4_hash: Some(l4_hash) };
             let Route { src, dst, underlay_dev } =
                 src_dev.routes.next_hop(my_key, src_dev);
 
             // Get a pointer to the beginning of the outer frame and
             // fill in the dst/src addresses before sending out the
             // device.
-            let mblk = pkt.unwrap_mblk();
+            let mblk = out_pkt.unwrap_mblk();
             let rptr = (*mblk).b_rptr;
             ptr::copy(dst.as_ptr(), rptr, 6);
             ptr::copy(src.as_ptr(), rptr.add(6), 6);
             // Unwrap: We know the packet is good because we just
             // unwrapped it above.
-            let new_pkt = Packet::<Initialized>::wrap_mblk(mblk).unwrap();
-            underlay_dev.stream.tx_drop_on_no_desc(
+            let new_pkt = MsgBlk::wrap_mblk(mblk).unwrap();
+
+            underlay_dev.stream.tx_drop_on_no_desc2(
                 new_pkt,
                 hint,
                 MacTxFlags::empty(),
@@ -1645,7 +1698,7 @@ unsafe fn xde_mc_tx_one(
         }
 
         Ok(ProcessResult::Bypass) => {
-            stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+            stream.tx_drop_on_no_desc2(pkt, hint, MacTxFlags::empty());
         }
 
         Err(_) => {}
@@ -1810,7 +1863,7 @@ unsafe extern "C" fn xde_rx(
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
-    while let Some(pkt) = chain.pop_front() {
+    while let Some(pkt) = chain.pop_front2() {
         xde_rx_one(&stream, mrh, pkt);
     }
 }
@@ -1819,13 +1872,17 @@ unsafe extern "C" fn xde_rx(
 unsafe fn xde_rx_one(
     stream: &DlsStream,
     mrh: *mut mac::mac_resource_handle,
-    pkt: Packet<Initialized>,
+    mut pkt: MsgBlk,
 ) {
+    let mblk_addr = pkt.mblk_addr();
+    let pkt_len_old = pkt.byte_len();
+    let parsed_pkt = Packet2::new(pkt.iter_mut());
+
     // We must first parse the packet in order to determine where it
     // is to be delivered.
     let parser = VpcParser {};
-    let mblk_addr = pkt.mblk_addr();
-    let mut pkt = match pkt.parse(Direction::In, parser) {
+    // let mblk_addr = parsed_pkt.mblk_addr();
+    let mut parsed_pkt = match parsed_pkt.parse_inbound(parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.
@@ -1842,24 +1899,15 @@ unsafe fn xde_rx_one(
         }
     };
 
-    let meta = pkt.meta();
+    let meta = parsed_pkt.meta();
     let devs = xde_devs.read();
 
     // Determine where to send packet based on Geneve VNI and
     // destination MAC address.
-    let geneve = match meta.outer.encap {
-        Some(EncapMeta::Geneve(geneve)) => geneve,
-        None => {
-            // TODO add stat
-            let msg = c"no geneve header, dropping";
-            bad_packet_probe(None, Direction::In, pkt.mblk_addr(), msg);
-            opte::engine::dbg!("no geneve header, dropping");
-            return;
-        }
-    };
+    let vni = meta.outer_encap.vni();
 
-    let vni = geneve.vni;
-    let ether_dst = meta.inner.ether.dst;
+    let ether_dst = meta.inner_eth.destination();
+
     let Some(dev) =
         devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
     else {
@@ -1875,18 +1923,26 @@ unsafe fn xde_rx_one(
 
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
+        drop(parsed_pkt);
         mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
         return;
     }
 
     let port = &dev.port;
-    let res = port.process(Direction::In, &mut pkt, ActionMeta::new());
+
+    let res = port.process(Direction::In, parsed_pkt);
+
     match res {
-        Ok(ProcessResult::Modified | ProcessResult::Bypass) => {
+        Ok(ProcessResult::Bypass) => {
             mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
         }
+        Ok(ProcessResult::Modified(mut emit_spec)) => {
+            let npkt = emit_spec.apply(pkt);
+
+            mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk());
+        }
         Ok(ProcessResult::Hairpin(hppkt)) => {
-            stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
+            stream.tx_drop_on_no_desc2(hppkt, 0, MacTxFlags::empty());
         }
         _ => {}
     }

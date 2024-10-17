@@ -22,9 +22,10 @@ use core::str::FromStr;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 use zerocopy::Ref;
 use zerocopy::Unaligned;
 
@@ -241,8 +242,10 @@ impl EtherMeta {
     #[inline]
     pub fn emit(&self, dst: &mut [u8]) {
         debug_assert_eq!(dst.len(), EtherHdrRaw::SIZE);
-        let mut raw = EtherHdrRaw::new_mut(dst).unwrap();
-        raw.write(EtherHdrRaw::from(self));
+        // let mut raw = EtherHdrRaw::new_mut(dst).unwrap();
+        // raw. .write(EtherHdrRaw::from(self));
+
+        EtherHdrRaw::from(self).write_to(dst).unwrap()
     }
 
     #[inline]
@@ -262,7 +265,7 @@ impl<'a> EtherHdr<'a> {
     pub const SIZE: usize = EtherHdrRaw::SIZE;
 
     pub fn as_bytes(&self) -> &[u8] {
-        self.bytes.bytes()
+        self.bytes.as_bytes()
     }
 
     pub fn ether_type(&self) -> EtherType {
@@ -347,7 +350,16 @@ impl From<&EtherMeta> for EtherHdrRaw {
 
 /// Note: For now we keep this unaligned to be safe.
 #[repr(C)]
-#[derive(Clone, Debug, Default, FromBytes, AsBytes, FromZeroes, Unaligned)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    FromBytes,
+    IntoBytes,
+    Unaligned,
+    Immutable,
+    KnownLayout,
+)]
 pub struct EtherHdrRaw {
     pub dst: [u8; 6],
     pub src: [u8; 6],
@@ -358,7 +370,7 @@ impl<'a> RawHeader<'a> for EtherHdrRaw {
     #[inline]
     fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
         debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
+        let hdr = match Ref::from_bytes(src).ok() {
             Some(hdr) => hdr,
             None => return Err(ReadErr::BadLayout),
         };
