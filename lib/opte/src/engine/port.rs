@@ -41,8 +41,6 @@ use super::layer::RuleId;
 use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
 use super::packet::InnerFlowId;
-use super::packet::Packet;
-use super::packet::Parsed;
 use super::packet::FLOW_ID_DEFAULT;
 use super::rule::Action;
 use super::rule::CompiledTransform;
@@ -114,6 +112,7 @@ pub enum ProcessError {
     WriteError(super::packet::WriteError),
     MissingFlow(InnerFlowId),
     TcpFlow(TcpFlowStateError),
+    BadEmitSpec,
     FlowTableFull { kind: &'static str, limit: u64 },
 }
 
@@ -174,7 +173,10 @@ pub enum ProcessResult {
 impl From<HdlPktAction> for ProcessResult {
     fn from(hpa: HdlPktAction) -> Self {
         match hpa {
-            HdlPktAction::Allow => Self::Modified(todo!()),
+            // TODO: In theory HdlPacket::Allow should have an emit spec, too.
+            // We are not using any op other than Hairpin, so kick that particular
+            // can down the road.
+            HdlPktAction::Allow => Self::Modified(EmittestSpec::default()),
             HdlPktAction::Deny => Self::Drop { reason: DropReason::HandlePkt },
             HdlPktAction::Hairpin(pkt) => Self::Hairpin(pkt),
         }
@@ -182,7 +184,6 @@ impl From<HdlPktAction> for ProcessResult {
 }
 
 enum InternalProcessResult {
-    Bypass,
     Drop { reason: DropReason },
     Modified,
     Hairpin(MsgBlk),
@@ -571,7 +572,7 @@ impl<Id> Display for UftEntry<Id> {
 
 impl<Id> fmt::Debug for UftEntry<Id> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let UftEntry { pair, xforms, l4_hash, epoch, tcp_flow } = self;
+        let UftEntry { pair: _pair, xforms, l4_hash, epoch, tcp_flow } = self;
 
         f.debug_struct("UftEntry")
             .field("pair", &"<lock>")
@@ -906,10 +907,10 @@ impl<N: NetworkImpl> Port<N> {
         data: &FlowTable<TcpFlowEntryState>,
         dir: Direction,
         msg: String,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<ParsedMblk>,
     ) {
         if unsafe { super::opte_panic_debug != 0 } {
-            super::err!("mblk: {}", pkt.mblk_ptr_str());
+            super::err!("mblk: {}", pkt.mblk_addr());
             super::err!("flow: {}", pkt.flow());
             super::err!("meta: {:?}", pkt.meta());
             super::err!("flows: {:?}", data);
@@ -922,7 +923,7 @@ impl<N: NetworkImpl> Port<N> {
     fn tcp_err_probe(
         &self,
         dir: Direction,
-        pkt: Option<&Packet<Parsed>>,
+        pkt: Option<&Packet2<ParsedMblk>>,
         flow: &InnerFlowId,
         msg: String,
     ) {
@@ -1268,12 +1269,6 @@ impl<N: NetworkImpl> Port<N> {
             Direction::In => data.uft_in.get(&flow_before),
         };
 
-        // enum FastPathDecision {
-        //     CompiledUft { tx: Arc<CompiledTransform>, l4_hash: u32 },
-        //     Uft { tx: Arc<Transforms>, l4_hash: u32 },
-        //     Slow,
-        // }
-
         enum FastPathDecision {
             CompiledUft(Arc<FlowEntry<UftEntry<InnerFlowId>>>),
             Uft(Arc<FlowEntry<UftEntry<InnerFlowId>>>),
@@ -1284,25 +1279,12 @@ impl<N: NetworkImpl> Port<N> {
             // We have a valid UFT entry of some kind -- clone out the
             // saved transforms so that we can drop the lock ASAP.
             Some(entry) if entry.state().epoch == epoch => {
-                // entry.hit();
-                // let now = entry.last_hit();
-
                 // The Fast Path.
                 let xforms = &entry.state().xforms;
-                let out = if let Some(compiled) = xforms.compiled.as_ref() {
+                let out = if xforms.compiled.is_some() {
                     FastPathDecision::CompiledUft(Arc::clone(entry))
-                    // FastPathDecision::CompiledUft {
-                    //     tx: Arc::clone(compiled),
-                    //     // tx: Arc::clone(entry),
-                    //     l4_hash: entry.state().l4_hash,
-                    // }
                 } else {
                     FastPathDecision::Uft(Arc::clone(entry))
-                    // FastPathDecision::Uft {
-                    //     tx: Arc::clone(xforms),
-                    //     // tx: Arc::clone(entry),
-                    //     l4_hash: entry.state().l4_hash,
-                    // }
                 };
 
                 match dir {
@@ -1359,10 +1341,9 @@ impl<N: NetworkImpl> Port<N> {
                     }
                 }
 
-                drop(data);
+                let _ = data;
                 drop(lock.take());
 
-                //
                 entry.hit_at(process_start);
                 self.uft_hit_probe(dir, &flow_before, epoch, &process_start);
 
@@ -1398,9 +1379,7 @@ impl<N: NetworkImpl> Port<N> {
                     }
                 }
             }
-            _ => {
-                drop(data);
-            }
+            _ => {}
         }
 
         // If we're in here, we took a faster-path. We know the lock is dropped.
@@ -1502,7 +1481,7 @@ impl<N: NetworkImpl> Port<N> {
                 {
                     Self::update_stats_in(&mut data.stats.vals, &res);
                 }
-                drop(data);
+                drop(lock);
                 pkt.update_checksums();
                 res
             }
@@ -1518,7 +1497,7 @@ impl<N: NetworkImpl> Port<N> {
                 {
                     Self::update_stats_out(&mut data.stats.vals, &res);
                 }
-                drop(data);
+                drop(lock);
                 pkt.update_checksums();
                 res
             }
@@ -1526,24 +1505,24 @@ impl<N: NetworkImpl> Port<N> {
 
         let flow_after = *pkt.flow();
 
-        let res = res.map(|v| match v {
-            InternalProcessResult::Bypass => ProcessResult::Bypass,
+        let res = res.and_then(|v| match v {
             InternalProcessResult::Drop { reason } => {
-                ProcessResult::Drop { reason }
+                Ok(ProcessResult::Drop { reason })
             }
-            InternalProcessResult::Hairpin(v) => ProcessResult::Hairpin(v),
+            InternalProcessResult::Hairpin(v) => Ok(ProcessResult::Hairpin(v)),
             InternalProcessResult::Modified => {
                 let l4_hash = pkt.l4_hash();
-                let emit_spec = pkt.emit_spec();
+                let emit_spec =
+                    pkt.emit_spec().map_err(|_| ProcessError::BadEmitSpec)?;
 
                 // TODO: remove EmitSpec and have above method just spit out the new
                 // variant.
-                ProcessResult::Modified(EmittestSpec {
+                Ok(ProcessResult::Modified(EmittestSpec {
                     spec: EmitterSpec::Slowpath(emit_spec.push_spec.into()),
                     l4_hash,
                     rewind: emit_spec.rewind,
                     ulp_len: emit_spec.encapped_len as u32,
-                })
+                }))
             }
         });
         self.port_process_return_probe(
@@ -2172,7 +2151,7 @@ impl<N: NetworkImpl> Port<N> {
     }
 
     /// Attempts to lookup and update TCP flowstate in response to a given
-    /// packet.
+    /// packet from within the slowpath.
     ///
     /// Unexpected TCP segments on existing connections will be allowed,
     /// but will fire DTrace probes via `Self::tcp_err_probe`.
@@ -2188,57 +2167,31 @@ impl<N: NetworkImpl> Port<N> {
     /// a packet as a UFT miss (e.g., `process_out_miss`) and reprocessing the flow.
     fn update_tcp_entry<V: ByteSlice>(
         &self,
-        mut data: PortDataOrSubset,
+        data: &mut PortData,
         tcp: &impl TcpRef<V>,
         dir: &TcpDirection,
         pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, ProcessError> {
-        let tcp_flows = data.tcp_flows();
         let (ufid_out, ufid_in) = match *dir {
             TcpDirection::In { ufid_in, ufid_out } => (ufid_out, Some(ufid_in)),
             TcpDirection::Out { ufid_out } => (ufid_out, None),
         };
 
-        let Some(entry) = tcp_flows.get(ufid_out) else {
+        let Some(entry) = data.tcp_flows.get(ufid_out) else {
             return Err(ProcessError::MissingFlow(*ufid_out));
         };
         let entry = entry.clone();
 
-        // TODO: need to hit this from a UFT entry.
-        // Work out atomics shortly...
         entry.hit();
         let tfes_base = entry.state();
 
-        // let next_state = tfes_base.update();
-
-        let mut tfes = tfes_base.inner.lock();
-        match *dir {
-            TcpDirection::In { .. } => {
-                tfes.segs_in += 1;
-                tfes.bytes_in += pkt_len;
-            }
-            TcpDirection::Out { .. } => {
-                tfes.segs_out += 1;
-                tfes.bytes_out += pkt_len;
-            }
-        }
-
-        let next_state = tfes.tcp_state.process(
+        let next_state = tfes_base.update(
             self.name_cstr.as_c_str(),
-            dir.dir(),
-            ufid_out,
             tcp,
+            dir.dir(),
+            pkt_len,
+            ufid_in,
         );
-
-        if let Some(ufid_in) = ufid_in {
-            // We need to store the UFID of the inbound packet
-            // before it was processed so that we can retire the
-            // correct UFT/LFT entries upon connection
-            // termination.
-            tfes.inbound_ufid = Some(*ufid_in);
-        }
-
-        drop(tfes);
 
         let ufid_inbound = if matches!(
             next_state,
@@ -2246,15 +2199,13 @@ impl<N: NetworkImpl> Port<N> {
         ) {
             // Due to order of operations, out_tcp_existing must
             // call uft_tcp_closed separately.
-            let entry = tcp_flows.remove(ufid_out).unwrap();
+            let entry = data.tcp_flows.remove(ufid_out).unwrap();
             let lock = entry.state().inner.lock();
             let state_ufid = lock.inbound_ufid;
 
-            if let PortDataOrSubset::Port(data) = data {
-                // The inbound side of the UFT is based on
-                // the network-side of the flow (pre-processing).
-                self.uft_tcp_closed(data, ufid_out, state_ufid.as_ref());
-            }
+            // The inbound side of the UFT is based on
+            // the network-side of the flow (pre-processing).
+            self.uft_tcp_closed(data, ufid_out, state_ufid.as_ref());
 
             ufid_in.copied().or(state_ufid)
         } else {
@@ -2305,15 +2256,10 @@ impl<N: NetworkImpl> Port<N> {
 
         let dir = TcpDirection::In { ufid_in, ufid_out: &ufid_out };
 
-        match self.update_tcp_entry(
-            PortDataOrSubset::Port(data),
-            tcp,
-            &dir,
-            pkt_len,
-        ) {
+        match self.update_tcp_entry(data, tcp, &dir, pkt_len) {
             // We need to create a new TCP entry here because we can't call
             // `process_in_miss` on the already-modified packet.
-            e @ Err(
+            Err(
                 ProcessError::TcpFlow(TcpFlowStateError::NewFlow { .. })
                 | ProcessError::MissingFlow(_),
             ) => self.create_new_tcp_entry(
@@ -2440,16 +2386,14 @@ impl<N: NetworkImpl> Port<N> {
                 // already encodes a shortcut from `Closed` to `Established.
                 Err(ProcessError::TcpFlow(err)) => {
                     let e = format!("{err}");
-                    // TODO(kyle)
-                    // self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
                     Ok(InternalProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     })
                 }
                 Err(ProcessError::FlowTableFull { kind, limit }) => {
                     let e = format!("{kind} flow table full ({limit} entries)");
-                    // TODO(kyle)
-                    // self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
                     Ok(InternalProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     })
@@ -2504,24 +2448,6 @@ impl<N: NetworkImpl> Port<N> {
     }
 
     // Process the TCP packet for the purposes of connection tracking
-    // when an outbound UFT entry exists.
-    fn process_out_tcp_existing(
-        &self,
-        tcp_flows: &mut FlowTable<TcpFlowEntryState>,
-        ufid_out: &InnerFlowId,
-        pmeta: &PacketHeaders2,
-        pkt_len: u64,
-    ) -> result::Result<TcpMaybeClosed, ProcessError> {
-        let tcp = pmeta.inner_tcp().unwrap();
-        self.update_tcp_entry(
-            PortDataOrSubset::Tcp(tcp_flows),
-            tcp,
-            &TcpDirection::Out { ufid_out },
-            pkt_len,
-        )
-    }
-
-    // Process the TCP packet for the purposes of connection tracking
     // when an outbound UFT entry was just created.
     fn process_out_tcp_new(
         &self,
@@ -2533,12 +2459,7 @@ impl<N: NetworkImpl> Port<N> {
         let tcp = pmeta.inner_tcp().unwrap();
         let dir = TcpDirection::Out { ufid_out };
 
-        match self.update_tcp_entry(
-            PortDataOrSubset::Port(data),
-            tcp,
-            &dir,
-            pkt_len,
-        ) {
+        match self.update_tcp_entry(data, tcp, &dir, pkt_len) {
             Err(
                 ProcessError::TcpFlow(TcpFlowStateError::NewFlow { .. })
                 | ProcessError::MissingFlow(_),
@@ -2592,24 +2513,21 @@ impl<N: NetworkImpl> Port<N> {
                 // already encodes a shortcut from `Closed` to `Established.
                 Err(ProcessError::TcpFlow(err)) => {
                     let e = format!("{err}");
-                    // TODO(kyle)
-                    // self.tcp_err(&data.tcp_flows, Out, e, pkt);
+                    self.tcp_err(&data.tcp_flows, Out, e, pkt);
                     return Ok(InternalProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
                 }
                 Err(ProcessError::MissingFlow(flow_id)) => {
                     let e = format!("Missing TCP flow ID: {flow_id}");
-                    // TODO(kyle)
-                    // self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
                     return Ok(InternalProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
                 }
                 Err(ProcessError::FlowTableFull { kind, limit }) => {
                     let e = format!("{kind} flow table full ({limit} entries)");
-                    // TODO(kyle)
-                    // self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
                     return Ok(InternalProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
@@ -2756,8 +2674,6 @@ impl<N: NetworkImpl> Port<N> {
         res: &result::Result<InternalProcessResult, ProcessError>,
     ) {
         match res {
-            Ok(InternalProcessResult::Bypass) => stats.in_bypass += 1,
-
             Ok(InternalProcessResult::Drop { reason }) => {
                 stats.in_drop += 1;
 
@@ -2789,8 +2705,6 @@ impl<N: NetworkImpl> Port<N> {
         res: &result::Result<InternalProcessResult, ProcessError>,
     ) {
         match res {
-            Ok(InternalProcessResult::Bypass) => stats.out_bypass += 1,
-
             Ok(InternalProcessResult::Drop { reason }) => {
                 stats.out_drop += 1;
 
@@ -2867,22 +2781,6 @@ impl<N: NetworkImpl> Port<N> {
             .find(|layer| layer.name() == layer_name)
             .map(|layer| layer.num_rules(dir))
             .unwrap_or_else(|| panic!("layer not found: {}", layer_name))
-    }
-}
-
-/// Helper enum used to delay UFT entry removal in case of
-/// `tcp_out_existing`.
-enum PortDataOrSubset<'a> {
-    Port(&'a mut PortData),
-    Tcp(&'a mut FlowTable<TcpFlowEntryState>),
-}
-
-impl<'a> PortDataOrSubset<'a> {
-    fn tcp_flows(&mut self) -> &mut FlowTable<TcpFlowEntryState> {
-        match self {
-            Self::Port(p) => &mut p.tcp_flows,
-            Self::Tcp(t) => t,
-        }
     }
 }
 

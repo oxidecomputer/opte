@@ -290,23 +290,12 @@ fn firewall_vni_outbound() {
     // ================================================================
     // Create a packet that is leaving g1 with g2 as its destination.
     // ================================================================
-    let phys_src = TestIpPhys {
-        ip: g1_cfg.phys_ip,
-        mac: g1_cfg.guest_mac,
-        vni: g1_cfg.vni,
-    };
-    let phys_dst = TestIpPhys {
-        ip: g2_cfg.phys_ip,
-        mac: g2_cfg.guest_mac,
-        vni: g2_cfg.vni,
-    };
     let mut pkt1_m = http_syn2(
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
         g1_cfg.guest_mac,
         g2_cfg.ipv4().private_ip,
     );
-    // pkt1 = encap(pkt1, phys_src, phys_dst);
     let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
 
     // ================================================================

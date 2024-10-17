@@ -6,8 +6,6 @@
 
 //! Rules and actions.
 
-use crate::engine::ingot_base::Ipv4Mut;
-
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
 use super::flow_table::StateSummary;
@@ -46,7 +44,6 @@ use core::fmt::Debug;
 use core::fmt::Display;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
-use ingot::types::HeaderLen;
 use ingot::types::InlineHeader;
 use ingot::types::Read;
 use opte_api::Direction;

@@ -49,9 +49,7 @@ use core::num::ParseIntError;
 use ingot::tcp::TcpRef;
 use ingot::types::Read;
 use ingot_packet::MsgBlk;
-use ingot_packet::NoEncap;
 use ingot_packet::OpteMeta;
-use ingot_packet::OpteParsed;
 use ingot_packet::OpteParsed2;
 use ingot_packet::Packet2;
 use ingot_packet::Parsed2;
@@ -353,21 +351,6 @@ pub trait LightweightMeta<T: ByteSlice>: Into<OpteMeta<T>> {
 /// A generic ULP parser, useful for testing inside of the opte crate
 /// itself.
 pub struct GenericUlp {}
-
-impl GenericUlp {
-    /// Parse a generic L2 + L3 + L4 packet, storing the headers in
-    /// the inner position.
-    fn parse_ulp<'a, T: Read + 'a>(
-        &self,
-        rdr: T,
-    ) -> Result<OpteParsed<T>, ParseError>
-    where
-        T::Chunk: ingot::types::IntoBufPointer<'a>,
-    {
-        let v = NoEncap::parse_read(rdr)?;
-        Ok(OpteMeta::convert_ingot(v))
-    }
-}
 
 impl NetworkParser for GenericUlp {
     type InMeta<T: ByteSliceMut> = ValidNoEncap<T>;

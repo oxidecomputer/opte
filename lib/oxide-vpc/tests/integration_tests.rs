@@ -21,7 +21,6 @@ use opte::ddi::time::Moment;
 use opte::engine::arp::ArpEthIpv4;
 use opte::engine::arp::ArpEthIpv4Raw;
 use opte::engine::dhcpv6;
-use opte::engine::ether::EtherHdr;
 use opte::engine::flow_table::FLOW_DEF_EXPIRE_SECS;
 use opte::engine::geneve::Vni;
 use opte::engine::ingot_base::Ethernet;
@@ -36,14 +35,10 @@ use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ingot_packet::Packet2;
 use opte::engine::ingot_packet::ParsedMblk;
 use opte::engine::ip4::Ipv4Addr;
-use opte::engine::ip4::Ipv4Hdr;
-use opte::engine::ip6::Ipv6Hdr;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::packet::PacketRead;
 use opte::engine::port::ProcessError;
 use opte::engine::tcp::TcpState;
 use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
-use opte::engine::udp::UdpHdr;
 use opte::engine::Direction;
 use opte::ingot::geneve::GeneveRef;
 use opte::ingot::icmp::IcmpV6Ref;
@@ -77,13 +72,6 @@ use std::time::Duration;
 use uuid::Uuid;
 use zerocopy::FromBytes;
 use zerocopy::IntoBytes;
-
-const IP4_SZ: usize = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE;
-const IP6_SZ: usize = EtherHdr::SIZE + Ipv6Hdr::BASE_SIZE;
-const TCP4_SZ: usize = IP4_SZ + TcpHdr::BASE_SIZE;
-const TCP6_SZ: usize = IP6_SZ + TcpHdr::BASE_SIZE;
-
-const VPC_ENCAP_SZ: usize = IP6_SZ + UdpHdr::SIZE + GeneveHdr::BASE_SIZE;
 
 // If we are running `cargo test`, then make sure to
 // register the USDT probes before running any tests.
@@ -1234,17 +1222,6 @@ fn external_ip_receive_and_reply_on_all() {
 fn external_ip_balanced_over_floating_ips() {
     let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(8, true);
 
-    let bsvc_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
-    let g1_phys = TestIpPhys {
-        ip: g1_cfg.phys_ip,
-        mac: g1_cfg.guest_mac,
-        vni: g1_cfg.vni,
-    };
-
     let partner_ipv4: IpAddr = "93.184.216.34".parse().unwrap();
     let partner_ipv6: IpAddr =
         "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap();
@@ -1517,7 +1494,6 @@ fn unpack_and_verify_icmp(
     params: &IcmpSnatParams,
     dir: Direction,
     seq_no: u16,
-    body_seg: usize,
 ) {
     // Note the reversed direction -- parse the expected *output* format.
     let parsed = match dir {
@@ -1526,13 +1502,12 @@ fn unpack_and_verify_icmp(
     };
     let meta = parsed.meta();
 
-    let (src_eth, dst_eth, src_ip, dst_ip, encapped, ident) = match dir {
+    let (src_eth, dst_eth, src_ip, dst_ip, ident) = match dir {
         Direction::Out => (
             cfg.guest_mac,
             BS_MAC_ADDR,
             params.public_ip,
             params.partner_ip,
-            true,
             params.snat_port,
         ),
         Direction::In => (
@@ -1540,7 +1515,6 @@ fn unpack_and_verify_icmp(
             cfg.guest_mac,
             params.partner_ip,
             params.private_ip,
-            false,
             params.icmp_id,
         ),
     };
@@ -1556,7 +1530,7 @@ fn unpack_and_verify_icmp(
             assert_eq!(IpAddr::from(meta.destination()), dst_ip);
             assert_eq!(meta.protocol(), IngotIpProto::ICMP);
 
-            unpack_and_verify_icmp4(&parsed, ident, seq_no, encapped, body_seg);
+            unpack_and_verify_icmp4(&parsed, ident, seq_no);
         }
         (IpAddr::Ip6(_), L3::Ipv6(meta)) => {
             assert_eq!(eth.ethertype(), Ethertype::IPV6);
@@ -1568,16 +1542,14 @@ fn unpack_and_verify_icmp(
                 &parsed,
                 ident,
                 seq_no,
-                encapped,
-                body_seg,
                 meta.source(),
                 meta.destination(),
             );
         }
-        (IpAddr::Ip4(_), ip6) => {
+        (IpAddr::Ip4(_), _) => {
             panic!("expected inner IPv4 metadata, got IPv6")
         }
-        (IpAddr::Ip6(_), ip4) => {
+        (IpAddr::Ip6(_), _) => {
             panic!("expected inner IPv6 metadata, got IPv4")
         }
     }
@@ -1587,8 +1559,6 @@ fn unpack_and_verify_icmp4(
     pkt: &Packet2<ParsedMblk>,
     expected_ident: u16,
     seq_no: u16,
-    encapped: bool,
-    body_seg: usize,
 ) {
     // Because we treat ICMPv4 as a full-fledged ULP, we need to
     // unsplit the emitted header from the body.
@@ -1606,8 +1576,6 @@ fn unpack_and_verify_icmp6(
     pkt: &Packet2<ParsedMblk>,
     expected_ident: u16,
     seq_no: u16,
-    encapped: bool,
-    body_seg: usize,
     src_ip: Ipv6Addr,
     dst_ip: Ipv6Addr,
 ) {
@@ -1723,7 +1691,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         ]
     );
 
-    unpack_and_verify_icmp(&mut pkt1_m, &g1_cfg, &params, Out, seq_no, 0);
+    unpack_and_verify_icmp(&mut pkt1_m, &g1_cfg, &params, Out, seq_no);
 
     // ================================================================
     // Verify echo reply rewrite.
@@ -1759,7 +1727,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
     pcap.add_pkt(&pkt2_m);
     incr!(g1, ["uft.in", "stats.port.in_modified, stats.port.in_uft_miss"]);
 
-    unpack_and_verify_icmp(&mut pkt2_m, &g1_cfg, &params, In, seq_no, 0);
+    unpack_and_verify_icmp(&mut pkt2_m, &g1_cfg, &params, In, seq_no);
 
     // ================================================================
     // Send ICMP Echo Req a second time. We want to verify that a) the
@@ -1787,7 +1755,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
     incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
 
     assert_eq!(g1.port.stats_snap().out_uft_hit, 1);
-    unpack_and_verify_icmp(&mut pkt3_m, &g1_cfg, &params, Out, seq_no, 1);
+    unpack_and_verify_icmp(&mut pkt3_m, &g1_cfg, &params, Out, seq_no);
 
     // ================================================================
     // Process ICMP Echo Reply a second time. Once again, this time we
@@ -1815,7 +1783,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_hit"]);
 
     assert_eq!(g1.port.stats_snap().in_uft_hit, 1);
-    unpack_and_verify_icmp(&mut pkt4_m, &g1_cfg, &params, In, seq_no, 0);
+    unpack_and_verify_icmp(&mut pkt4_m, &g1_cfg, &params, In, seq_no);
 
     // ================================================================
     // Insert a new packet along the same S/D pair: this should occupy
@@ -1850,7 +1818,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         ]
     );
 
-    unpack_and_verify_icmp(&mut pkt5_m, &g1_cfg, &new_params, Out, seq_no, 0);
+    unpack_and_verify_icmp(&mut pkt5_m, &g1_cfg, &new_params, Out, seq_no);
 }
 
 // TODO(kyle)
@@ -2712,9 +2680,9 @@ fn write_dhcpv6_packet(
     let total_len = msg.buffer_len() + (&eth, &ip, &udp).packet_length();
 
     let mut pkt = MsgBlk::new_ethernet(total_len);
-    pkt.emit_back((eth, ip, udp));
+    pkt.emit_back((eth, ip, udp)).unwrap();
     let l = pkt.len();
-    pkt.resize(total_len);
+    pkt.resize(total_len).unwrap();
     msg.copy_into(&mut pkt[l..]);
 
     pkt

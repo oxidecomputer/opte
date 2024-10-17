@@ -7,7 +7,6 @@
 //! Routines for building packet capture files.
 
 use opte::engine::ingot_packet::MsgBlk;
-use opte::engine::packet::*;
 use pcap_parser::pcap;
 use pcap_parser::pcap::LegacyPcapBlock;
 use pcap_parser::pcap::PcapHeader;

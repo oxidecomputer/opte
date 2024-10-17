@@ -56,7 +56,7 @@ pub fn packet_from_client_dhcpv4_message(
     let mut pkt = MsgBlk::new_ethernet(total_len);
     pkt.emit_back(&headers).unwrap();
     let dhcp_off = pkt.len();
-    pkt.resize(total_len);
+    pkt.resize(total_len).unwrap();
     let mut dhcp_pkt = DhcpPacket::new_checked(&mut pkt[dhcp_off..]).unwrap();
     msg.emit(&mut dhcp_pkt).unwrap();
 
@@ -104,7 +104,7 @@ pub fn write_dhcpv6_packet(
     let mut pkt = MsgBlk::new_ethernet(total_len);
     pkt.emit_back(&headers).unwrap();
     let dhcp_off = pkt.len();
-    pkt.resize(total_len);
+    pkt.resize(total_len).unwrap();
     msg.copy_into(&mut pkt[dhcp_off..]).unwrap();
 
     pkt

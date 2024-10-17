@@ -104,6 +104,7 @@ use ingot::types::ParseControl;
 use ingot::types::ParseError as IngotParseErr;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
+use ingot::types::ToOwnedPacket;
 use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use ingot::udp::UdpPacket;
@@ -1100,7 +1101,7 @@ impl<B: ByteSliceMut> Emit for ValidEncapMeta<B> {
     #[inline]
     fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
         match self {
-            ValidEncapMeta::Geneve(u, g) => todo!(),
+            ValidEncapMeta::Geneve(u, g) => (u, g).emit_raw(buf),
         }
     }
 
@@ -1830,7 +1831,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
     #[inline]
     /// Convert a packet's metadata into a set of instructions
     /// needed to serialize all its changes to the wire.
-    pub fn emit_spec(self) -> EmitSpec
+    pub fn emit_spec(self) -> Result<EmitSpec, ingot::types::ParseError>
     where
         T::Chunk: ByteSliceMut,
     {
@@ -1867,7 +1868,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
                 if ulp.needs_emit() || l != init_lens.inner_ulp {
                     let inner =
                         push_spec.inner.get_or_insert_with(Default::default);
-                    // TODO: impl InlineHeader / From<&Ulp> for UlpRepr here? generally seems a bit anaemic.
+
                     inner.ulp = Some(match ulp {
                         Ulp::Tcp(IngotHeader::Repr(t)) => UlpRepr::Tcp(*t),
                         Ulp::Tcp(IngotHeader::Raw(t)) => {
@@ -1890,7 +1891,6 @@ impl<T: Read> Packet2<Parsed2<T>> {
                             UlpRepr::IcmpV6((&t).into())
                         }
                     });
-                    // inner.ulp = Some((&ulp).into());
                     force_serialize = true;
                     rewind += init_lens.inner_ulp;
                 }
@@ -1921,7 +1921,9 @@ impl<T: Read> Packet2<Parsed2<T>> {
 
                         // This needs a fuller InlineHeader due to EHs...
                         // We can't actually do structural mods here today using OPTE.
-                        L3::Ipv6(IngotHeader::Raw(v6)) => todo!(), // L3Repr::Ipv6((&v6).into()),
+                        L3::Ipv6(IngotHeader::Raw(v6)) => {
+                            L3Repr::Ipv6(v6.to_owned(None)?)
+                        }
                     });
                     force_serialize = true;
                     rewind += init_lens.inner_l3;
@@ -2015,22 +2017,20 @@ impl<T: Read> Packet2<Parsed2<T>> {
                     InlineHeader::Raw(_) => todo!(),
                 });
 
-                force_serialize = true;
                 rewind += init_lens.outer_eth;
             }
             None if init_lens.outer_eth != 0 => {
-                force_serialize = true;
                 rewind += init_lens.outer_eth;
             }
             _ => {}
         }
 
-        EmitSpec {
+        Ok(EmitSpec {
             rewind: rewind as u16,
             payload_len: payload_len as u16,
             encapped_len: encapped_len as u16,
             push_spec,
-        }
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -2435,7 +2435,7 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
     }
 }
 
-trait QueryLen {
+pub trait QueryLen {
     fn len(&self) -> usize;
 }
 
@@ -2486,6 +2486,12 @@ pub struct EmittestSpec {
     pub ulp_len: u32,
 }
 
+impl Default for EmittestSpec {
+    fn default() -> Self {
+        Self { spec: EmitterSpec::NoOp, l4_hash: 0, rewind: 0, ulp_len: 0 }
+    }
+}
+
 impl EmittestSpec {
     #[inline]
     #[must_use]
@@ -2500,7 +2506,6 @@ impl EmittestSpec {
                 while to_rewind != 0 {
                     let this = reader.next();
                     let Some(node) = this else {
-                        to_rewind = 0;
                         break;
                     };
 
@@ -2512,25 +2517,30 @@ impl EmittestSpec {
                     slots.push(node).unwrap();
                 }
             }
-
-            // TODO: put available layers into said slots?
         }
 
-        let mut out = match &self.spec {
+        // TODO: put available layers into said slots?
+        pkt.drop_empty_segments();
+
+        let out = match &self.spec {
             EmitterSpec::Fastpath(push_spec) => {
                 push_spec.encap.prepend(pkt, self.ulp_len as usize)
             }
             EmitterSpec::Slowpath(push_spec) => {
                 // TODO:
-                //  - remove all zero-length nodes.
                 //  - actually push in to existing slots we rewound past if needed.
-                //  - actually support pushing dirty segments apart from the encap.
 
-                let needed_push = push_spec.outer_eth.packet_length()
+                let mut needed_push = push_spec.outer_eth.packet_length()
                     + push_spec.outer_ip.packet_length()
                     + push_spec.outer_encap.packet_length();
-                let needed_alloc = needed_push; //.saturating_sub(pkt.headroom());
-                let mut space_in_front = needed_push - needed_alloc;
+
+                if let Some(inner_new) = &push_spec.inner {
+                    needed_push += inner_new.eth.packet_length()
+                        + inner_new.l3.packet_length()
+                        + inner_new.ulp.packet_length();
+                }
+
+                let needed_alloc = needed_push;
 
                 let mut prepend = if needed_alloc > 0 {
                     let mut new_mblk = MsgBlk::new_ethernet(needed_alloc);
@@ -2540,9 +2550,34 @@ impl EmittestSpec {
                     None
                 };
 
-                // NOT NEEDED TODAY.
                 if let Some(inner_new) = &push_spec.inner {
-                    todo!()
+                    if let Some(inner_ulp) = &inner_new.ulp {
+                        let target = if prepend.is_none() {
+                            &mut pkt
+                        } else {
+                            prepend.as_mut().unwrap()
+                        };
+
+                        target.emit_front(inner_ulp).unwrap();
+                    }
+
+                    if let Some(inner_l3) = &inner_new.l3 {
+                        let target = if prepend.is_none() {
+                            &mut pkt
+                        } else {
+                            prepend.as_mut().unwrap()
+                        };
+
+                        target.emit_front(inner_l3).unwrap();
+                    }
+
+                    let target = if prepend.is_none() {
+                        &mut pkt
+                    } else {
+                        prepend.as_mut().unwrap()
+                    };
+
+                    target.emit_front(&inner_new.eth).unwrap();
                 }
 
                 if let Some(outer_encap) = &push_spec.outer_encap {
@@ -2551,13 +2586,9 @@ impl EmittestSpec {
                         meta: &outer_encap,
                     };
 
-                    let l = encap.packet_length();
-
                     let target = if prepend.is_none() {
-                        space_in_front -= l;
                         &mut pkt
                     } else {
-                        space_in_front = 0;
                         prepend.as_mut().unwrap()
                     };
 
@@ -2565,12 +2596,9 @@ impl EmittestSpec {
                 }
 
                 if let Some(outer_ip) = &push_spec.outer_ip {
-                    let l = outer_ip.packet_length();
                     let target = if prepend.is_none() {
-                        space_in_front -= l;
                         &mut pkt
                     } else {
-                        space_in_front = 0;
                         prepend.as_mut().unwrap()
                     };
 
@@ -2578,12 +2606,9 @@ impl EmittestSpec {
                 }
 
                 if let Some(outer_eth) = &push_spec.outer_eth {
-                    let l = outer_eth.packet_length();
                     let target = if prepend.is_none() {
-                        space_in_front -= l;
                         &mut pkt
                     } else {
-                        space_in_front = 0;
                         prepend.as_mut().unwrap()
                     };
 
@@ -2597,9 +2622,8 @@ impl EmittestSpec {
                     pkt
                 }
             }
+            EmitterSpec::NoOp => pkt,
         };
-
-        out.drop_empty_segments();
 
         out
     }
@@ -2617,6 +2641,7 @@ impl EmittestSpec {
                 Some(EncapMeta::Geneve(g)) => Some(g.vni),
                 _ => None,
             },
+            EmitterSpec::NoOp => None,
         }
     }
 
@@ -2633,6 +2658,7 @@ impl EmittestSpec {
                 Some(L3Repr::Ipv6(v6)) => Some((v6.source, v6.destination)),
                 _ => None,
             },
+            EmitterSpec::NoOp => None,
         }
     }
 }
@@ -2641,6 +2667,7 @@ impl EmittestSpec {
 pub enum EmitterSpec {
     Fastpath(Arc<CompiledTransform>),
     Slowpath(Box<OpteEmit>),
+    NoOp,
 }
 
 #[derive(Clone, Debug)]
@@ -2649,113 +2676,6 @@ pub struct EmitSpec {
     pub encapped_len: u16,
     pub payload_len: u16,
     pub push_spec: OpteEmit,
-}
-
-impl EmitSpec {
-    #[inline]
-    pub fn apply(&mut self, mut pkt: MsgBlk) -> MsgBlk {
-        // Rewind
-        {
-            let mut slots = heapless::Vec::<&mut MsgBlkNode, 6>::new();
-            let mut to_rewind = self.rewind as usize;
-
-            if to_rewind > 0 {
-                let mut reader = pkt.iter_mut();
-                while to_rewind != 0 {
-                    let this = reader.next();
-                    let Some(node) = this else {
-                        to_rewind = 0;
-                        break;
-                    };
-
-                    let has = node.len();
-                    let droppable = to_rewind.min(has);
-                    node.drop_front_bytes(droppable);
-                    to_rewind -= droppable;
-
-                    slots.push(node).unwrap();
-                }
-            }
-
-            // TODO: put available layers into said slots?
-        }
-
-        // TODO:
-        //  - remove all zero-length nodes.
-        //  - actually push in to existing slots we rewound past if needed.
-        //  - actually support pushing dirty segments apart from the encap.
-
-        let needed_push = self.push_spec.outer_eth.packet_length()
-            + self.push_spec.outer_ip.packet_length()
-            + self.push_spec.outer_encap.packet_length();
-        let needed_alloc = needed_push; //.saturating_sub(pkt.headroom());
-        let mut space_in_front = needed_push - needed_alloc;
-
-        let mut prepend = if needed_alloc > 0 {
-            let mut new_mblk = MsgBlk::new_ethernet(needed_alloc);
-            new_mblk.pop_all();
-            Some(new_mblk)
-        } else {
-            None
-        };
-
-        // NOT NEEDED TODAY.
-        if let Some(inner_new) = &self.push_spec.inner {
-            todo!()
-        }
-
-        if let Some(outer_encap) = &self.push_spec.outer_encap {
-            let encap = SizeHoldingEncap {
-                encapped_len: self.encapped_len,
-                meta: &outer_encap,
-            };
-
-            let l = encap.packet_length();
-
-            let target = if prepend.is_none() {
-                space_in_front -= l;
-                &mut pkt
-            } else {
-                space_in_front = 0;
-                prepend.as_mut().unwrap()
-            };
-
-            target.emit_front(&encap).unwrap();
-        }
-
-        if let Some(outer_ip) = &self.push_spec.outer_ip {
-            let l = outer_ip.packet_length();
-            let target = if prepend.is_none() {
-                space_in_front -= l;
-                &mut pkt
-            } else {
-                space_in_front = 0;
-                prepend.as_mut().unwrap()
-            };
-
-            target.emit_front(outer_ip).unwrap();
-        }
-
-        if let Some(outer_eth) = &self.push_spec.outer_eth {
-            let l = outer_eth.packet_length();
-            let target = if prepend.is_none() {
-                space_in_front -= l;
-                &mut pkt
-            } else {
-                space_in_front = 0;
-                prepend.as_mut().unwrap()
-            };
-
-            target.emit_front(outer_eth).unwrap();
-        }
-
-        if let Some(mut prepend) = prepend {
-            prepend.extend_if_one(pkt);
-            prepend
-        } else {
-            pkt
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Default)]
@@ -3041,7 +2961,7 @@ impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
                 }
             }
             (
-                InlineHeader::Raw(ValidEncapMeta::Geneve(u, g)),
+                InlineHeader::Raw(ValidEncapMeta::Geneve(_, g)),
                 EncapMod::Geneve(mod_spec),
             ) => {
                 if let Some(vni) = mod_spec.vni {

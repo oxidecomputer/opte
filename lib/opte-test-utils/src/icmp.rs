@@ -12,7 +12,6 @@ use opte::engine::ingot_base::Ipv4;
 use opte::engine::ingot_base::Ipv6;
 use opte::engine::ingot_base::L3;
 use opte::engine::ingot_packet::MsgBlk;
-use opte::engine::packet::*;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::ip::IpProtocol as IngotIpProto;
 use opte::ingot::types::HeaderLen;
@@ -278,7 +277,7 @@ pub fn gen_icmpv6_echo(
     match n_segments {
         1 => {
             let mut pkt = MsgBlk::new_ethernet(total_len);
-            pkt.emit_back(&(eth, ip));
+            pkt.emit_back(&(eth, ip)).unwrap();
             pkt.write_bytes_back(&body_bytes).unwrap();
 
             return pkt;
@@ -352,7 +351,7 @@ pub fn generate_ndisc(
     let mut pkt = MsgBlk::new_ethernet(total_len);
     pkt.emit_back(&headers).unwrap();
     let ndisc_off = pkt.len();
-    pkt.resize(total_len);
+    pkt.resize(total_len).unwrap();
 
     let mut req_pkt = Icmpv6Packet::new_unchecked(&mut pkt[ndisc_off..]);
     let mut csum = CsumCapab::ignored();

@@ -203,10 +203,9 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        pkt_meta: &PacketHeaders2,
+        _pkt_meta: &PacketHeaders2,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
-        // TODO: can't access the memoised form from here....
         let f_hash = flow_id.crc32();
 
         // The router layer determines a RouterTarget and stores it in

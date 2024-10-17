@@ -22,7 +22,6 @@ use ingot::types::util::Repeated;
 use ingot::types::ByteSlice;
 use ingot::types::Emit;
 use ingot::types::Header;
-use ingot::types::HeaderLen;
 use ingot::types::NextLayer;
 use ingot::types::Vec;
 use ingot::udp::Udp;
@@ -263,7 +262,7 @@ impl<B: ByteSlice> ValidL3<B> {
     pub fn csum(&self) -> [u8; 2] {
         match self {
             ValidL3::Ipv4(i4) => i4.checksum(),
-            ValidL3::Ipv6(i6) => 0,
+            ValidL3::Ipv6(_) => 0,
         }
         .to_be_bytes()
     }

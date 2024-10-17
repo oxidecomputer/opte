@@ -23,7 +23,6 @@ use super::ip4::Ipv4Cidr;
 use super::ip4::Protocol;
 use super::ip6::Ipv6Addr;
 use super::ip6::Ipv6Cidr;
-use super::packet::PacketRead;
 use super::port::meta::ActionMeta;
 use alloc::boxed::Box;
 use alloc::string::String;
