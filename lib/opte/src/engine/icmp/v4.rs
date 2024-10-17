@@ -12,8 +12,6 @@ use crate::engine::ingot_base::Ipv4;
 use crate::engine::ingot_base::L3;
 use crate::engine::ingot_packet::MsgBlk;
 use crate::engine::ingot_packet::PacketHeaders2;
-use crate::engine::ip4::Ipv4Hdr;
-use crate::engine::ip4::Ipv4Meta;
 use crate::engine::predicate::Ipv4AddrMatch;
 use ingot::ethernet::Ethertype;
 use ingot::ip::IpProtocol;

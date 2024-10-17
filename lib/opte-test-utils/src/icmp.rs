@@ -7,27 +7,21 @@
 //! Routines for ICMP testing.
 
 use opte::api::*;
-use opte::engine::ether::*;
 use opte::engine::ingot_base::Ethernet;
 use opte::engine::ingot_base::Ipv4;
 use opte::engine::ingot_base::Ipv6;
 use opte::engine::ingot_base::L3;
 use opte::engine::ingot_packet::MsgBlk;
-use opte::engine::ip4::*;
-use opte::engine::ip6::*;
 use opte::engine::packet::*;
-use opte::engine::Direction::*;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::ip::IpProtocol as IngotIpProto;
 use opte::ingot::types::HeaderLen;
-use oxide_vpc::engine::VpcParser;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
 use smoltcp::wire::Icmpv6Packet;
 use smoltcp::wire::Icmpv6Repr;
 use smoltcp::wire::IpAddress;
-use smoltcp::wire::IpProtocol;
 use smoltcp::wire::Ipv6Address;
 use smoltcp::wire::NdiscNeighborFlags;
 pub use smoltcp::wire::NdiscRepr;
@@ -194,7 +188,7 @@ pub fn gen_icmp_echo(
 
     while segments.len() > 1 {
         let chain = segments.pop().unwrap();
-        let mut new_el = segments.last_mut().unwrap();
+        let new_el = segments.last_mut().unwrap();
 
         new_el.extend_if_one(chain);
     }
@@ -320,7 +314,7 @@ pub fn gen_icmpv6_echo(
 
     while segments.len() > 1 {
         let chain = segments.pop().unwrap();
-        let mut new_el = segments.last_mut().unwrap();
+        let new_el = segments.last_mut().unwrap();
 
         new_el.extend_if_one(chain);
     }

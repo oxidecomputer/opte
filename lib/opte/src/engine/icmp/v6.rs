@@ -12,8 +12,6 @@ use crate::engine::ingot_base::Ipv6;
 use crate::engine::ingot_base::Ipv6Ref;
 use crate::engine::ingot_packet::MsgBlk;
 use crate::engine::ingot_packet::PacketHeaders2;
-use crate::engine::ip6::Ipv6Hdr;
-use crate::engine::ip6::Ipv6Meta;
 use crate::engine::predicate::Ipv6AddrMatch;
 use alloc::string::String;
 use ingot::ethernet::Ethertype;
@@ -30,7 +28,6 @@ use smoltcp::wire::Icmpv6Message;
 use smoltcp::wire::Icmpv6Packet;
 use smoltcp::wire::Icmpv6Repr;
 use smoltcp::wire::IpAddress;
-use smoltcp::wire::IpProtocol;
 use smoltcp::wire::Ipv6Address;
 use smoltcp::wire::NdiscNeighborFlags;
 use smoltcp::wire::NdiscRepr;
@@ -192,7 +189,7 @@ impl HairpinAction for Icmpv6EchoReply {
         csum.icmpv6 = Checksum::Tx;
         reply.emit(&dst_ip, &src_ip, &mut icmp_reply, &csum);
 
-        let mut ip6 = Ipv6 {
+        let ip6 = Ipv6 {
             source: self.dst_ip,
             destination: self.src_ip,
             next_header: IngotIpProto::ICMP_V6,
@@ -366,7 +363,7 @@ impl HairpinAction for RouterAdvertisement {
             &csum,
         );
 
-        let mut ip6 = Ipv6 {
+        let ip6 = Ipv6 {
             source: *self.ip(),
             destination: meta.inner_ip6().unwrap().source(),
             next_header: IngotIpProto::ICMP_V6,
@@ -631,7 +628,7 @@ impl HairpinAction for NeighborAdvertisement {
         // is addressed to depends on whether we should multicast the packet.
         let dst_mac = dst_ip.multicast_mac().unwrap_or(self.src_mac);
 
-        let mut ip6 = Ipv6 {
+        let ip6 = Ipv6 {
             source: *self.ip(),
             destination: dst_ip,
             next_header: IngotIpProto::ICMP_V6,

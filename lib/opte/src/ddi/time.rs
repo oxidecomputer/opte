@@ -6,7 +6,6 @@
 
 //! Moments, periodics, etc.
 use core::ops::Add;
-use core::sync::atomic::AtomicU64;
 use core::time::Duration;
 
 cfg_if! {

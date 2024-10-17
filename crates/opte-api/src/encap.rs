@@ -4,15 +4,6 @@
 
 // Copyright 2024 Oxide Computer Company
 
-use alloc::string::String;
-use alloc::string::ToString;
-use core::fmt;
-use core::fmt::Debug;
-use core::fmt::Display;
-use core::str::FromStr;
-use serde::Deserialize;
-use serde::Serialize;
-
 pub use ingot::geneve::Vni;
 
 #[cfg(test)]

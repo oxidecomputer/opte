@@ -1,5 +1,4 @@
 use super::checksum::Checksum;
-use bitflags::bitflags;
 use ingot::choice;
 use ingot::ethernet::Ethertype;
 use ingot::icmp::IcmpV4;
@@ -24,9 +23,7 @@ use ingot::types::ByteSlice;
 use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
-use ingot::types::NetworkRepr;
 use ingot::types::NextLayer;
-use ingot::types::ParseError;
 use ingot::types::Vec;
 use ingot::udp::Udp;
 use ingot::udp::UdpMut;

@@ -11,8 +11,6 @@
 
 use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ingot_packet::Packet2;
-use opte::engine::packet::Packet;
-use opte::engine::Direction;
 use oxide_vpc::engine::VpcParser;
 use serde::Deserialize;
 use serde::Serialize;

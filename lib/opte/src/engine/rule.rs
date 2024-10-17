@@ -6,19 +6,15 @@
 
 //! Rules and actions.
 
-use crate::engine::ingot_base::Ipv4;
 use crate::engine::ingot_base::Ipv4Mut;
-use crate::engine::GenericUlp;
 
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
 use super::flow_table::StateSummary;
-use super::headers::EncapMeta;
 use super::headers::EncapMod;
 use super::headers::EncapPush;
 use super::headers::HeaderAction;
 use super::headers::HeaderActionError;
-use super::headers::IpMeta;
 use super::headers::IpMod;
 use super::headers::IpPush;
 use super::headers::Transform;
@@ -34,12 +30,7 @@ use super::ingot_packet::PacketHeaders;
 use super::ingot_packet::PacketHeaders2;
 use super::ingot_packet::ParsedMblk;
 use super::packet::BodyTransform;
-use super::packet::Initialized;
 use super::packet::InnerFlowId;
-use super::packet::Packet;
-use super::packet::PacketMeta;
-use super::packet::PacketReader;
-use super::packet::Parsed;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
@@ -53,12 +44,8 @@ use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
-use core::mem::MaybeUninit;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
-use ingot::ethernet::Ethertype;
-use ingot::ip::IpProtocol;
-use ingot::tcp::Tcp;
 use ingot::types::HeaderLen;
 use ingot::types::InlineHeader;
 use ingot::types::Read;

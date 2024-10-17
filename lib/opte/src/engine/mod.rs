@@ -47,7 +47,6 @@ use checksum::Checksum;
 use core::fmt;
 use core::num::ParseIntError;
 use ingot::tcp::TcpRef;
-use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
 use ingot_packet::MsgBlk;
 use ingot_packet::NoEncap;
@@ -55,9 +54,7 @@ use ingot_packet::OpteMeta;
 use ingot_packet::OpteParsed;
 use ingot_packet::OpteParsed2;
 use ingot_packet::Packet2;
-use ingot_packet::PacketHeaders;
 use ingot_packet::Parsed2;
-use ingot_packet::ParsedMblk;
 use ingot_packet::ValidNoEncap;
 use ip4::IpError;
 pub use opte_api::Direction;
@@ -197,9 +194,7 @@ pub use dbg_macro as dbg;
 pub use err_macro as err;
 
 use crate::engine::flow_table::FlowTable;
-use crate::engine::packet::Initialized;
 use crate::engine::packet::InnerFlowId;
-use crate::engine::packet::Packet;
 use crate::engine::packet::ParseError;
 use crate::engine::port::UftEntry;
 

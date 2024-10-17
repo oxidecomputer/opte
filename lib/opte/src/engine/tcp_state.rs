@@ -7,8 +7,6 @@
 //! Basic TCP state machine.
 
 use super::packet::InnerFlowId;
-use super::tcp::TcpFlags;
-use super::tcp::TcpMeta;
 use super::tcp::TcpState;
 use core::ffi::CStr;
 use core::fmt;

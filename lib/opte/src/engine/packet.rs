@@ -61,7 +61,6 @@ use dyn_clone::DynClone;
 use serde::Deserialize;
 use serde::Serialize;
 // TODO should probably move these two into this module now.
-use super::rule::HdrTransform;
 use super::tcp::TcpHdr;
 use super::tcp::TcpHdrError;
 use super::tcp::TcpMeta;

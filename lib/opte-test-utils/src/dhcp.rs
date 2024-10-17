@@ -17,7 +17,6 @@ use opte::engine::ingot_base::Ipv6;
 use opte::engine::ingot_packet::MsgBlk;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::ip::IpProtocol;
-use opte::ingot::types::Header;
 use opte::ingot::udp::Udp;
 pub use smoltcp::wire::DhcpMessageType;
 pub use smoltcp::wire::DhcpPacket;

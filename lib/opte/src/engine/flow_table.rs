@@ -12,7 +12,6 @@
 use super::packet::InnerFlowId;
 use crate::ddi::time::Moment;
 use crate::ddi::time::MILLIS;
-use crate::ddi::time::NANOS_TO_MILLIS;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::ffi::CString;

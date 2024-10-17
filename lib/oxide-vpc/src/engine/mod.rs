@@ -13,29 +13,15 @@ pub mod print;
 pub mod router;
 
 use crate::cfg::VpcCfg;
-use opte::engine::ether::EtherType;
 use opte::engine::flow_table::FlowTable;
-use opte::engine::headers::EncapMeta;
-use opte::engine::ingot_packet::GeneveOverV6;
 use opte::engine::ingot_packet::MsgBlk;
-use opte::engine::ingot_packet::NoEncap;
-use opte::engine::ingot_packet::OpteMeta;
-use opte::engine::ingot_packet::OpteParsed;
 use opte::engine::ingot_packet::OpteParsed2;
 use opte::engine::ingot_packet::Packet2;
 use opte::engine::ingot_packet::Parsed2;
 use opte::engine::ingot_packet::ValidGeneveOverV6;
 use opte::engine::ingot_packet::ValidNoEncap;
-use opte::engine::ip4::Protocol;
-use opte::engine::packet::HeaderOffsets;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::packet::Packet;
-use opte::engine::packet::PacketInfo;
-use opte::engine::packet::PacketMeta;
-use opte::engine::packet::PacketRead;
-use opte::engine::packet::PacketReaderMut;
 use opte::engine::packet::ParseError;
-use opte::engine::packet::Parsed;
 use opte::engine::port::UftEntry;
 use opte::engine::Direction;
 use opte::engine::HdlPktAction;
@@ -51,7 +37,6 @@ use opte::engine::ingot_base::EthernetRef;
 use opte::engine::ip4::Ipv4Addr;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::types::Read;
-use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
 #[derive(Clone, Copy, Debug, Default)]

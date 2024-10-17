@@ -40,10 +40,8 @@ use super::layer::LayerStatsSnap;
 use super::layer::RuleId;
 use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
-use super::packet::Initialized;
 use super::packet::InnerFlowId;
 use super::packet::Packet;
-use super::packet::PacketMeta;
 use super::packet::Parsed;
 use super::packet::FLOW_ID_DEFAULT;
 use super::rule::Action;
@@ -74,7 +72,6 @@ use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::ingot_packet::EmitterSpec;
 use crate::engine::ingot_packet::EmittestSpec;
 use crate::engine::rule::CompiledEncap;
-use crate::engine::tcp::TcpMeta;
 use crate::ExecCtx;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
@@ -1266,8 +1263,7 @@ impl<N: NetworkImpl> Port<N> {
         // TODO: fixup types here.
         // self.port_process_entry_probe(dir, &flow_before, epoch, &pkt);
 
-        let mut uft: Option<&Arc<FlowEntry<UftEntry<InnerFlowId>>>> = match dir
-        {
+        let uft: Option<&Arc<FlowEntry<UftEntry<InnerFlowId>>>> = match dir {
             Direction::Out => data.uft_out.get(&flow_before),
             Direction::In => data.uft_in.get(&flow_before),
         };
@@ -1834,7 +1830,7 @@ impl Transforms {
             if still_permissable {
                 let encap = match (outer_ether, outer_ip, outer_encap) {
                     (Some(eth), Some(ip), Some(encap)) => {
-                        let mut encap_repr = match encap {
+                        let encap_repr = match encap {
                             EncapPush::Geneve(g) => (
                                 Udp {
                                     source: g.entropy,
@@ -2507,146 +2503,6 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
-    // TODO: remove.
-    fn process_in(
-        &self,
-        data: &mut PortData,
-        epoch: u64,
-        pkt: &mut Packet2<ParsedMblk>,
-        ufid_in: &InnerFlowId,
-        ameta: &mut ActionMeta,
-    ) -> result::Result<InternalProcessResult, ProcessError> {
-        use Direction::In;
-
-        // Use the compiled UFT entry if one exists. Otherwise
-        // fallback to layer processing.
-        match data.uft_in.get(ufid_in) {
-            Some(entry) if entry.state().epoch == epoch => {
-                // TODO At the moment I'm holding the UFT locks not
-                // just for lookup, but for the entire duration of
-                // processing. It might be better to ht.clone() or
-                // Arc<HdrTransform>; that way we only hold the lock
-                // for lookup.
-                entry.hit();
-                data.stats.vals.in_uft_hit += 1;
-                self.uft_hit_probe(In, pkt.flow(), epoch, &entry.last_hit());
-
-                let transform = Some(Arc::clone(&entry.state().xforms));
-                pkt.set_l4_hash(entry.state().l4_hash);
-
-                // for ht in &entry.state().xforms.hdr {
-                //     pkt.hdr_transform(ht)?;
-                // }
-
-                // for bt in &entry.state().xforms.body {
-                //     pkt.body_transform(In, &**bt)?;
-                // }
-
-                // For inbound traffic the TCP flow table must be
-                // checked _after_ processing take place.
-                // TODO: uncork
-                // if pkt.meta().is_inner_tcp() {
-                //     match self.process_in_tcp(
-                //         data,
-                //         pkt.meta(),
-                //         ufid_in,
-                //         pkt.len() as u64,
-                //     ) {
-                //         Ok(_) => return Ok(ProcessResult::Modified),
-                //         Err(ProcessError::TcpFlow(
-                //             e @ TcpFlowStateError::NewFlow { .. },
-                //         )) => {
-                //             self.tcp_err(
-                //                 &data.tcp_flows,
-                //                 In,
-                //                 e.to_string(),
-                //                 pkt,
-                //             );
-                //             // We cant redo processing here like we can in `process_out`:
-                //             // we already modified the packet to check TCP state.
-                //             // However, we *have* deleted and replaced the TCP FSM and
-                //             // removed the UFT. The next packet on this flow (SYN-ACK) will
-                //             // create the UFT, reference the existing TCP flow, and increment
-                //             // all other layers' stats.
-                //             return Ok(ProcessResult::Modified);
-                //         }
-                //         Err(ProcessError::MissingFlow(flow_id)) => {
-                //             let e = format!("Missing TCP flow ID: {flow_id}");
-                //             self.tcp_err(
-                //                 &data.tcp_flows,
-                //                 Direction::In,
-                //                 e,
-                //                 pkt,
-                //             );
-                //             // If we have a UFT but no TCP flow ID, there is likely a bug
-                //             // and we are now out of sync. As above we can't reprocess,
-                //             // but we have regenerated the TCP entry to be less disruptive
-                //             // than a drop. Remove the UFT entry on the same proviso since the
-                //             // next packet to use it will regenerate it.
-                //             self.uft_invalidate(
-                //                 data,
-                //                 None,
-                //                 Some(ufid_in),
-                //                 epoch,
-                //             );
-                //             return Ok(ProcessResult::Modified);
-                //         }
-                //         Err(ProcessError::TcpFlow(
-                //             e @ TcpFlowStateError::UnexpectedSegment { .. },
-                //         )) => {
-                //             // Technically unreachable, as we filter these out in `update_tcp_entry`.
-                //             // Panicking here would probably be overly fragile, however.
-                //             self.tcp_err(
-                //                 &data.tcp_flows,
-                //                 Direction::In,
-                //                 e.to_string(),
-                //                 pkt,
-                //             );
-                //             return Ok(ProcessResult::Drop {
-                //                 reason: DropReason::TcpErr,
-                //             });
-                //         }
-                //         Err(ProcessError::FlowTableFull { kind, limit }) => {
-                //             let e = format!(
-                //                 "{kind} flow table full ({limit} entries)"
-                //             );
-                //             self.tcp_err(
-                //                 &data.tcp_flows,
-                //                 Direction::In,
-                //                 e,
-                //                 pkt,
-                //             );
-                //             return Ok(ProcessResult::Drop {
-                //                 reason: DropReason::TcpErr,
-                //             });
-                //         }
-                //         _ => unreachable!(
-                //             "Cannot return other errors from process_in_tcp"
-                //         ),
-                //     }
-                // } else {
-                //     return Ok(ProcessResult::Modified);
-                // }
-
-                return Ok(InternalProcessResult::Modified);
-            }
-
-            // The entry is from a previous epoch; invalidate its UFT
-            // entries and proceed to rule processing.
-            Some(entry) => {
-                let epoch = entry.state().epoch;
-                let ufid_in = Some(ufid_in);
-                let ufid_out = *entry.state().pair.lock();
-                self.uft_invalidate(data, ufid_out.as_ref(), ufid_in, epoch);
-            }
-
-            // There is no entry; proceed to rule processing;
-            None => (),
-        };
-
-        self.process_in_miss(data, epoch, pkt, ufid_in, ameta)
-    }
-
     // Process the TCP packet for the purposes of connection tracking
     // when an outbound UFT entry exists.
     fn process_out_tcp_existing(
@@ -2811,143 +2667,6 @@ impl<N: NetworkImpl> Port<N> {
 
             Err(e) => Err(ProcessError::Layer(e)),
         }
-    }
-
-    // TODO: remove.
-    fn process_out(
-        &self,
-        data: &mut PortData,
-        epoch: u64,
-        pkt: &mut Packet2<ParsedMblk>,
-        ameta: &mut ActionMeta,
-    ) -> result::Result<InternalProcessResult, ProcessError> {
-        use Direction::Out;
-
-        let uft_out = &mut data.uft_out;
-
-        // Use the compiled UFT entry if one exists. Otherwise
-        // fallback to layer processing.
-        match uft_out.get(&pkt.flow()) {
-            Some(entry) if entry.state().epoch == epoch => {
-                entry.hit();
-                data.stats.vals.out_uft_hit += 1;
-                self.uft_hit_probe(Out, pkt.flow(), epoch, &entry.last_hit());
-
-                let mut invalidated = false;
-                let mut reprocess = false;
-                let mut ufid_in = None;
-
-                // TODO: find the best way to unbreak.
-
-                // For outbound traffic the TCP flow table must be
-                // checked _before_ processing take place.
-                // if pkt.meta().is_inner_tcp() {
-                //     match self.process_out_tcp_existing(
-                //         &mut data.tcp_flows,
-                //         pkt.flow(),
-                //         pkt.meta(),
-                //         pkt.len() as u64,
-                //     ) {
-                //         // Continue with processing.
-                //         Ok(TcpMaybeClosed::NewState(_)) => (),
-
-                //         Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
-                //             invalidated = true;
-                //             ufid_in = ufid_inbound;
-                //         }
-
-                //         Err(ProcessError::TcpFlow(
-                //             e @ TcpFlowStateError::NewFlow { .. },
-                //         )) => {
-                //             invalidated = true;
-                //             reprocess = true;
-                //             // TODO(kyle)
-                //             // self.tcp_err(
-                //             //     &data.tcp_flows,
-                //             //     Out,
-                //             //     e.to_string(),
-                //             //     pkt,
-                //             // );
-                //         }
-
-                //         Err(ProcessError::MissingFlow(flow_id)) => {
-                //             // If we have a UFT but no TCP flow ID, there is likely a bug
-                //             // and we are now out of sync. A full reprocess will be
-                //             // slower for this packet but will sync up the tables again.
-                //             invalidated = true;
-                //             reprocess = true;
-                //             let e = format!("Missing TCP flow ID: {flow_id}");
-                //             // TODO(kyle)
-                //             // self.tcp_err(
-                //             //     &data.tcp_flows,
-                //             //     Direction::In,
-                //             //     e,
-                //             //     pkt,
-                //             // );
-                //         }
-
-                //         Err(ProcessError::TcpFlow(
-                //             e @ TcpFlowStateError::UnexpectedSegment { .. },
-                //         )) => {
-                //             // Technically unreachable, as we filter these out in `update_tcp_entry`.
-                //             // Panicking here would probably be overly fragile, however.
-                //             // TODO(kyle)
-                //             // self.tcp_err(
-                //             //     &data.tcp_flows,
-                //             //     Direction::In,
-                //             //     e.to_string(),
-                //             //     pkt,
-                //             // );
-                //             return Ok(ProcessResult::Drop {
-                //                 reason: DropReason::TcpErr,
-                //             });
-                //         }
-
-                //         _ => unreachable!(
-                //             "Cannot return other errors from process_in_tcp_new"
-                //         ),
-                //     }
-                // }
-
-                let flow_to_invalidate = invalidated.then(|| *pkt.flow());
-
-                // If we suspect this is a new flow, we need to not perform
-                // existing transforms if we're going to behave as though we
-                // have a UFT miss.
-                if !reprocess {
-                    let transform = Some(Arc::clone(&entry.state().xforms));
-                    pkt.set_l4_hash(entry.state().l4_hash);
-                    // Due to borrowing constraints from order of operations, we have
-                    // to remove the UFT entry here rather than in `update_tcp_entry`.
-                    // The TCP entry itself is already removed.
-                    if let Some(flow_before) = flow_to_invalidate {
-                        self.uft_tcp_closed(
-                            data,
-                            &flow_before,
-                            ufid_in.as_ref(),
-                        );
-                    }
-
-                    return Ok(InternalProcessResult::Modified);
-                } else if let Some(flow_before) = flow_to_invalidate {
-                    self.uft_tcp_closed(data, &flow_before, ufid_in.as_ref());
-                }
-            }
-
-            // The entry is from a previous epoch; invalidate its UFT
-            // entries and proceed to rule processing.
-            Some(entry) => {
-                let epoch = entry.state().epoch;
-                let ufid_out = Some(pkt.flow());
-                let ufid_in = *entry.state().pair.lock();
-                self.uft_invalidate(data, ufid_out, ufid_in.as_ref(), epoch);
-            }
-
-            // There is no entry; proceed to layer processing.
-            None => (),
-        }
-
-        self.process_out_miss(data, epoch, pkt, ameta)
     }
 
     fn uft_invalidate(
