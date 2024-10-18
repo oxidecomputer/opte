@@ -708,13 +708,11 @@ mod test {
     use super::Message;
     use super::MessageType;
     use super::OptionCode;
-    use super::Packet;
     use crate::engine::dhcpv6::test_data;
     use crate::engine::ingot_packet::MsgBlk;
     use crate::engine::ingot_packet::Packet2;
     use crate::engine::port::meta::ActionMeta;
     use crate::engine::GenericUlp;
-    use opte_api::Direction::*;
 
     // Test that we correctly parse out the entire Solicit message from a
     // snooped packet.

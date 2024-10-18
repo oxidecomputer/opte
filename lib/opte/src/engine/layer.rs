@@ -1840,15 +1840,9 @@ mod test {
 
     #[test]
     fn find_rule() {
-        use crate::engine::headers::IpMeta;
-        use crate::engine::headers::UlpMeta;
-        use crate::engine::ip4::Ipv4Meta;
-        use crate::engine::ip4::Protocol;
-        use crate::engine::packet::InnerMeta;
         use crate::engine::predicate::Ipv4AddrMatch;
         use crate::engine::predicate::Predicate;
         use crate::engine::rule;
-        use crate::engine::tcp::TcpMeta;
 
         let mut rule_table = RuleTable::new("port", "test", Direction::Out);
         let mut rule = Rule::new(

@@ -499,15 +499,6 @@ mod test {
 
     #[test]
     fn snat4_desc_lifecycle() {
-        use crate::engine::ether::EtherHdr;
-        use crate::engine::ether::EtherMeta;
-        use crate::engine::ether::EtherType;
-        use crate::engine::headers::IpMeta;
-        use crate::engine::headers::UlpMeta;
-        use crate::engine::ip4::Ipv4Hdr;
-        use crate::engine::ip4::Ipv4Meta;
-        use crate::engine::ip4::Protocol;
-        use crate::engine::tcp::TcpMeta;
         use crate::engine::GenericUlp;
         use opte_api::Ipv4Addr;
         use opte_api::MacAddr;
@@ -535,7 +526,7 @@ mod test {
             destination: outside_port,
             ..Default::default()
         };
-        let mut ip4 = Ipv4 {
+        let ip4 = Ipv4 {
             source: priv_ip,
             destination: outside_ip,
             protocol: IpProtocol::TCP,
@@ -603,7 +594,7 @@ mod test {
             destination: pub_port,
             ..Default::default()
         };
-        let mut ip4 = Ipv4 {
+        let ip4 = Ipv4 {
             source: outside_ip,
             destination: pub_ip,
             protocol: IpProtocol::TCP,

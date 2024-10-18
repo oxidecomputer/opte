@@ -54,6 +54,8 @@ use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::LightweightMeta;
 use super::NetworkParser;
+use crate::engine::geneve::valid_geneve_has_oxide_external;
+use crate::engine::geneve::GeneveMeta;
 #[cfg(any(feature = "std", test))]
 use crate::engine::packet::mock_freemsg;
 use alloc::boxed::Box;
@@ -340,7 +342,17 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
 impl<T: ByteSlice> From<ValidGeneveOverV6<T>> for OpteMeta<T> {
     #[inline]
     fn from(value: ValidGeneveOverV6<T>) -> Self {
-        GeneveOverV6::from(value).into()
+        OpteMeta {
+            outer_eth: Some(value.outer_eth.into()),
+            outer_l3: Some(L3::Ipv6(value.outer_v6.into())),
+            outer_encap: Some(InlineHeader::Raw(ValidEncapMeta::Geneve(
+                value.outer_udp,
+                value.outer_encap,
+            ))),
+            inner_eth: value.inner_eth.into(),
+            inner_l3: Some(value.inner_l3.into()),
+            inner_ulp: Some(value.inner_ulp.into()),
+        }
     }
 }
 
@@ -942,17 +954,6 @@ impl Drop for MsgBlk {
     }
 }
 
-pub struct OpteUnified<Q: ByteSlice> {
-    pub outer_eth: Option<EthernetPacket<Q>>,
-    pub outer_v6: Option<L3<Q>>,
-    pub outer_udp: Option<UdpPacket<Q>>,
-    pub outer_encap: Option<GenevePacket<Q>>,
-
-    pub inner_eth: EthernetPacket<Q>,
-    pub inner_l3: Option<L3<Q>>,
-    pub inner_ulp: Option<Ulp<Q>>,
-}
-
 pub struct OpteUnifiedLengths {
     pub outer_eth: usize,
     pub outer_l3: usize,
@@ -975,44 +976,15 @@ impl OpteUnifiedLengths {
     }
 }
 
-// TODO: Choices (L3, etc.) don't have Debug in all the right places yet.
-impl<Q: ByteSlice> core::fmt::Debug for OpteUnified<Q> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("OpteUnified{ .. }")
-    }
-}
-
-// THIS IS THE GOAL.
-
-// IE
-// pub struct OpteEmit {
-//     outer_eth: Option<Ethernet>,
-//     outer_ip: Option<L3Repr>,
-//     outer_encap: Option<EncapMeta>,
-
-//     // We can (but do not often) push/pop inner meta.
-//     // Splitting minimises struct size in the general case.
-//     inner: Option<Box<OpteInnerEmit>>,
-// }
-
-// pub struct OpteInnerEmit {
-//     eth: Ethernet,
-//     l3: Option<L3Repr>,
-//     ulp: Option<UlpRepr>,
-// }
-
 pub enum ValidEncapMeta<B: ByteSlice> {
     Geneve(ValidUdp<B>, ValidGeneve<B>),
 }
 
 pub struct OpteMeta<T: ByteSlice> {
     pub outer_eth: Option<InlineHeader<Ethernet, ValidEthernet<T>>>,
-    // pub outer_eth: Option<Either<Ethernet, ValidEthernet<&[u8]>>>,
     pub outer_l3: Option<L3<T>>,
-    // pub outer_l3: Option<OwnedPacket<L3Repr, ValidL3<T>>>,
-    // pub outer_v6: Option<Either<L3Repr, ValidL3<&[u8]>>>,
     pub outer_encap: Option<InlineHeader<EncapMeta, ValidEncapMeta<T>>>,
-    // pub outer_encap: Option<Either<EncapMeta, EncapMeta2<&[u8]>>>,
+
     pub inner_eth: EthernetPacket<T>,
     pub inner_l3: Option<L3<T>>,
     pub inner_ulp: Option<Ulp<T>>,
@@ -1136,36 +1108,6 @@ impl<B: ByteSlice> HeaderLen for ValidEncapMeta<B> {
             ValidEncapMeta::Geneve(u, g) => {
                 u.packet_length() + g.packet_length()
             }
-        }
-    }
-}
-
-impl<Q: ByteSlice> From<GeneveOverV6<Q>> for OpteUnified<Q> {
-    #[inline]
-    fn from(value: GeneveOverV6<Q>) -> Self {
-        Self {
-            outer_eth: Some(value.outer_eth),
-            outer_v6: Some(L3::Ipv6(value.outer_v6)),
-            outer_udp: Some(value.outer_udp),
-            outer_encap: Some(value.outer_encap),
-            inner_eth: value.inner_eth,
-            inner_l3: Some(value.inner_l3),
-            inner_ulp: Some(value.inner_ulp),
-        }
-    }
-}
-
-impl<Q: ByteSlice> From<NoEncap<Q>> for OpteUnified<Q> {
-    #[inline]
-    fn from(value: NoEncap<Q>) -> Self {
-        Self {
-            outer_eth: None,
-            outer_v6: None,
-            outer_udp: None,
-            outer_encap: None,
-            inner_eth: value.inner_eth,
-            inner_l3: value.inner_l3,
-            inner_ulp: value.inner_ulp,
         }
     }
 }
@@ -1297,60 +1239,6 @@ impl<T: ByteSlice> From<NoEncap<T>> for OpteMeta<T> {
         }
     }
 }
-
-impl<T: ByteSlice> From<GeneveOverV6<T>> for OpteMeta<T> {
-    #[inline]
-    fn from(value: GeneveOverV6<T>) -> Self {
-        // These are practically all Valid, anyhow.
-        let outer_encap = match (value.outer_udp, value.outer_encap) {
-            (ingot::types::Header::Raw(u), ingot::types::Header::Raw(g)) => {
-                Some(InlineHeader::Raw(ValidEncapMeta::Geneve(u, g)))
-            }
-            _ => todo!(),
-        };
-
-        // let outer_l3 = match value.outer_v6 {
-        //     ingot::types::Header::Repr(v) => {
-        //         Some(InlineHeader::Repr(L3Repr::Ipv6(*v)))
-        //     }
-        //     ingot::types::Header::Raw(v) => {
-        //         Some(InlineHeader::Raw(ValidL3::Ipv6(v)))
-        //     }
-        // };
-
-        let outer_l3 = Some(L3::Ipv6(value.outer_v6));
-
-        OpteMeta {
-            outer_eth: Some(value.outer_eth.into()),
-            outer_l3,
-            outer_encap,
-            inner_eth: value.inner_eth,
-            inner_l3: Some(value.inner_l3),
-            inner_ulp: Some(value.inner_ulp),
-        }
-    }
-}
-
-// impl<T: Read> From<IngotParsed<OpteUnified<T::Chunk>, T>> for PacketHeaders<T> {
-//     fn from(value: IngotParsed<OpteUnified<T::Chunk>, T>) -> Self {
-//         let IngotParsed { stack: HeaderStack(headers), data, last_chunk } =
-//             value;
-//         let initial_lens = OpteUnifiedLengths {
-//             outer_eth: headers.outer_eth.packet_length(),
-//             outer_l3: headers.outer_v6.packet_length(),
-//             outer_encap: headers.outer_udp.packet_length()
-//                 + headers.outer_encap.packet_length(),
-//             inner_eth: headers.inner_eth.packet_length(),
-//             inner_l3: headers.inner_l3.packet_length(),
-//             inner_ulp: headers.inner_ulp.packet_length(),
-//         };
-//         let body = PktBodyWalker {
-//             base: Some((last_chunk, data)).into(),
-//             slice: Default::default(),
-//         };
-//         Self { headers, initial_lens, body }
-//     }
-// }
 
 impl<T: Read> core::fmt::Debug for PacketHeaders<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1657,63 +1545,6 @@ impl<'a, T: Read + 'a> Packet2<Initialized2<T>>
 where
     T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut,
 {
-    // #[inline]
-    // pub fn parse(
-    //     self,
-    //     dir: Direction,
-    //     net: impl NetworkParser,
-    // ) -> Result<Packet2<Parsed2<T>>, ParseError> {
-    //     let Packet2 { state: Initialized2 { len, inner } } = self;
-    //     let IngotParsed { stack: HeaderStack(headers), data, last_chunk } =
-    //         match dir {
-    //             Direction::Out => net.parse_outbound(inner)?,
-    //             Direction::In => net.parse_inbound(inner)?,
-    //         };
-
-    //     let initial_lens = Some(OpteUnifiedLengths {
-    //             outer_eth: headers.outer_eth.packet_length(),
-    //             outer_l3: headers.outer_l3.packet_length(),
-    //             outer_encap: headers.outer_encap.packet_length(),
-    //             inner_eth: headers.inner_eth.packet_length(),
-    //             inner_l3: headers.inner_l3.packet_length(),
-    //             inner_ulp: headers.inner_ulp.packet_length(),
-    //         }
-    //         .into());
-
-    //     let body = PktBodyWalker {
-    //         base: Some((last_chunk, data)).into(),
-    //         slice: Default::default(),
-    //     };
-
-    //     let meta = Box::new(PacketHeaders { headers, initial_lens, body });
-
-    //     let flow = (&*meta).into();
-
-    //     let body_csum = match (&meta.headers).inner_eth.ethertype() {
-    //         Ethertype::ARP => Memoised::Known(None),
-    //         Ethertype::IPV4 | Ethertype::IPV6 => Memoised::Uninit,
-    //         _ => return Err(IngotParseErr::Unwanted.into()),
-    //     };
-
-    //     let state = Parsed2 {
-    //         meta,
-    //         flow,
-    //         body_csum,
-    //         l4_hash: Memoised::Uninit,
-    //         body_modified: false,
-    //         len,
-    //         inner_csum_dirty: false,
-    //     };
-
-    //     let mut pkt = Packet2 { state };
-    //     // TODO: we can probably not do this in some cases, but we
-    //     // don't have a way for headeractions to signal that they
-    //     // *may* change the fields we need in the slowpath.
-    //     let _ = pkt.body_csum();
-
-    //     Ok(pkt)
-    // }
-
     // TODO: cleanup type aliases.
 
     #[inline]
@@ -1835,7 +1666,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
     where
         T::Chunk: ByteSliceMut,
     {
-        // Roughly how does this work:
+        // Roughly how this works:
         // - Identify rightmost structural-changed field.
         // - fill out owned versions into the push_spec of all
         //   extant fields we rewound past.
@@ -1919,8 +1750,8 @@ impl<T: Read> Packet2<Parsed2<T>> {
                         }
                         L3::Ipv6(IngotHeader::Repr(v6)) => L3Repr::Ipv6(*v6),
 
-                        // This needs a fuller InlineHeader due to EHs...
-                        // We can't actually do structural mods here today using OPTE.
+                        // We can't actually do structural mods here today using OPTE,
+                        // but account for the possibiliry at least.
                         L3::Ipv6(IngotHeader::Raw(v6)) => {
                             L3Repr::Ipv6(v6.to_owned(None)?)
                         }
@@ -1955,8 +1786,15 @@ impl<T: Read> Packet2<Parsed2<T>> {
             {
                 push_spec.outer_encap = Some(match encap {
                     InlineHeader::Repr(o) => o,
-                    // Needed in fullness of time, but not here.
-                    InlineHeader::Raw(_) => todo!(),
+                    InlineHeader::Raw(ValidEncapMeta::Geneve(u, g)) => {
+                        EncapMeta::Geneve(GeneveMeta {
+                            entropy: u.source(),
+                            vni: g.vni(),
+                            oxide_external_pkt: valid_geneve_has_oxide_external(
+                                &g,
+                            ),
+                        })
+                    }
                 });
 
                 force_serialize = true;
@@ -1980,7 +1818,10 @@ impl<T: Read> Packet2<Parsed2<T>> {
                 push_spec.outer_ip = Some(match l3 {
                     L3::Ipv6(BoxedHeader::Repr(o)) => L3Repr::Ipv6(*o),
                     L3::Ipv4(BoxedHeader::Repr(o)) => L3Repr::Ipv4(*o),
-                    _ => todo!(),
+                    L3::Ipv6(BoxedHeader::Raw(o)) => {
+                        L3Repr::Ipv6((&o).to_owned(None)?)
+                    }
+                    L3::Ipv4(BoxedHeader::Raw(o)) => L3Repr::Ipv4((&o).into()),
                 });
 
                 let inner_sz = (encapped_len + encap_len) as u16;
@@ -2013,8 +1854,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
             {
                 push_spec.outer_eth = Some(match eth {
                     InlineHeader::Repr(o) => o,
-                    // Needed in fullness of time, but not here.
-                    InlineHeader::Raw(_) => todo!(),
+                    InlineHeader::Raw(r) => (&r).into(),
                 });
 
                 rewind += init_lens.outer_eth;
@@ -2519,7 +2359,11 @@ impl EmittestSpec {
             }
         }
 
-        // TODO: put available layers into said slots?
+        // TODO: actually push in to existing slots we rewound past if needed,
+        // then run this step at the end.
+        // This is not really an issue in practice -- no packets should need
+        // to rewind *and* prepend new segments with how we're using OPTE today,
+        // much less so in the fastpath.
         pkt.drop_empty_segments();
 
         let out = match &self.spec {
@@ -2527,9 +2371,6 @@ impl EmittestSpec {
                 push_spec.encap.prepend(pkt, self.ulp_len as usize)
             }
             EmitterSpec::Slowpath(push_spec) => {
-                // TODO:
-                //  - actually push in to existing slots we rewound past if needed.
-
                 let mut needed_push = push_spec.outer_eth.packet_length()
                     + push_spec.outer_ip.packet_length()
                     + push_spec.outer_encap.packet_length();

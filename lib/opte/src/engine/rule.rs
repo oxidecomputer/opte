@@ -1007,13 +1007,15 @@ impl From<&Rule<Finalized>> for super::ioctl::RuleDump {
 
 #[test]
 fn rule_matching() {
-    use super::ip4::Protocol;
-    use crate::engine::headers::UlpMeta;
-    use crate::engine::ip4::Ipv4Meta;
-    use crate::engine::packet::InnerMeta;
+    use crate::engine::ingot_base::Ipv4;
+    use crate::engine::ingot_base::Ipv4Mut;
     use crate::engine::predicate::Ipv4AddrMatch;
     use crate::engine::predicate::Predicate;
-    use crate::engine::tcp::TcpMeta;
+    use crate::engine::GenericUlp;
+    use ingot::ethernet::Ethertype;
+    use ingot::ip::IpProtocol;
+    use ingot::tcp::Tcp;
+    use ingot::types::HeaderLen;
 
     let action = Identity::new("rule_matching");
     let mut r1 = Rule::new(1, Action::Static(Arc::new(action)));
@@ -1029,7 +1031,7 @@ fn rule_matching() {
         window_size: 64240,
         ..Default::default()
     };
-    let mut ip4 = Ipv4 {
+    let ip4 = Ipv4 {
         source: src_ip,
         destination: dst_ip,
         protocol: IpProtocol::TCP,

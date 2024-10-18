@@ -18,9 +18,15 @@ use super::udp::UdpHdr;
 use super::udp::UdpMeta;
 use crate::d_error::DError;
 use core::mem;
+use ingot::geneve::Geneve;
+use ingot::geneve::GeneveOptRef;
+use ingot::geneve::GeneveRef;
+use ingot::geneve::ValidGeneve;
+use ingot::types::Header;
 pub use opte_api::Vni;
 use serde::Deserialize;
 use serde::Serialize;
+use zerocopy::ByteSlice;
 use zerocopy::FromBytes;
 use zerocopy::Immutable;
 use zerocopy::IntoBytes;
@@ -498,6 +504,68 @@ impl<'a> RawHeader<'a> for GeneveOptHdrRaw {
         };
         Ok(hdr)
     }
+}
+
+// We probably want a more general way to retrieve all facts we care about
+// from the geneve options -- we only have the one today, however.
+#[inline]
+pub fn geneve_has_oxide_external(pkt: &Geneve) -> bool {
+    for opt in pkt.options.iter() {
+        let out = geneve_opt_is_oxide_external::<&[u8]>(opt);
+        if out {
+            break;
+        }
+    }
+
+    false
+}
+
+#[inline]
+pub fn valid_geneve_has_oxide_external<V: ByteSlice>(
+    pkt: &ValidGeneve<V>,
+) -> bool {
+    let mut out = false;
+
+    match pkt.options_ref() {
+        ingot::types::FieldRef::Repr(g) => {
+            for opt in g.iter() {
+                out = geneve_opt_is_oxide_external::<&[u8]>(opt);
+                if out {
+                    break;
+                }
+            }
+        }
+        ingot::types::FieldRef::Raw(Header::Repr(g)) => {
+            for opt in g.iter() {
+                out = geneve_opt_is_oxide_external::<&[u8]>(opt);
+                if out {
+                    break;
+                }
+            }
+        }
+        ingot::types::FieldRef::Raw(Header::Raw(g)) => {
+            for opt in g.iter(None) {
+                let Ok(opt) = opt else {
+                    break;
+                };
+
+                out = geneve_opt_is_oxide_external(&opt);
+                if out {
+                    break;
+                }
+            }
+        }
+    }
+
+    out
+}
+
+#[inline(always)]
+pub fn geneve_opt_is_oxide_external<V: ByteSlice>(
+    opt: &impl GeneveOptRef<V>,
+) -> bool {
+    opt.class() == GENEVE_OPT_CLASS_OXIDE
+        && opt.option_type().0 == OxideOption::External.opt_type()
 }
 
 #[cfg(test)]

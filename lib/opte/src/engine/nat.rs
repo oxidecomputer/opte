@@ -215,7 +215,7 @@ impl ActionDesc for NatDesc {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::engine::ether::EtherMeta;
+
     use crate::engine::ingot_base::Ethernet;
     use crate::engine::ingot_base::EthernetRef;
     use crate::engine::ingot_base::Ipv4;
@@ -228,7 +228,6 @@ mod test {
     use ingot::tcp::TcpFlags;
     use ingot::tcp::TcpRef;
     use ingot::types::HeaderLen;
-    use opte_api::Direction::*;
 
     #[derive(Debug)]
     struct DummyVerify;
@@ -241,14 +240,6 @@ mod test {
 
     #[test]
     fn nat4_rewrite() {
-        use crate::engine::ether::EtherHdr;
-        use crate::engine::ether::EtherType;
-        use crate::engine::headers::IpMeta;
-        use crate::engine::headers::UlpMeta;
-        use crate::engine::ip4::Ipv4Hdr;
-        use crate::engine::ip4::Ipv4Meta;
-        use crate::engine::ip4::Protocol;
-        use crate::engine::tcp::TcpMeta;
         use opte_api::MacAddr;
 
         let priv_mac = MacAddr::from([0xA8, 0x40, 0x25, 0xF0, 0x00, 0x01]);

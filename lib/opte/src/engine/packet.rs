@@ -3301,11 +3301,8 @@ mod test {
     use crate::engine::ether::EtherHdr;
     use crate::engine::ether::EtherType;
     use crate::engine::ip4::Ipv4Hdr;
-    use crate::engine::ip6::Ipv6Hdr;
     use crate::engine::tcp::TcpFlags;
-    use crate::engine::tcp::TcpHdr;
-    use crate::engine::GenericUlp;
-    use opte_api::Direction::*;
+
     use opte_api::Ipv6Addr;
     use opte_api::MacAddr;
 
