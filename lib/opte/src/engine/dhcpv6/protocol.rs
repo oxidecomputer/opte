@@ -22,9 +22,10 @@ use crate::engine::dhcpv6::ALL_RELAYS_AND_SERVERS;
 use crate::engine::dhcpv6::ALL_SERVERS;
 use crate::engine::dhcpv6::CLIENT_PORT;
 use crate::engine::dhcpv6::SERVER_PORT;
-use crate::engine::ether::EtherHdr;
 use crate::engine::ether::EtherMeta;
 use crate::engine::ether::EtherType;
+use crate::engine::ingot_base::Ethernet;
+use crate::engine::ingot_base::Ipv6;
 use crate::engine::ingot_base::Ipv6Ref;
 use crate::engine::ingot_packet::MsgBlk;
 use crate::engine::ingot_packet::PacketHeaders2;
@@ -41,12 +42,14 @@ use crate::engine::predicate::Predicate;
 use crate::engine::rule::AllowOrDeny;
 use crate::engine::rule::GenPacketResult;
 use crate::engine::rule::HairpinAction;
-use crate::engine::udp::UdpHdr;
-use crate::engine::udp::UdpMeta;
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
+use ingot::ethernet::Ethertype;
+use ingot::ip::IpProtocol as IngotIpProto;
+use ingot::types::HeaderLen;
+use ingot::udp::Udp;
 use opte_api::Ipv6Addr;
 use opte_api::Ipv6Cidr;
 use opte_api::MacAddr;
@@ -615,55 +618,40 @@ fn generate_packet<'a>(
     meta: &PacketHeaders2,
     msg: &'a Message<'a>,
 ) -> GenPacketResult {
-    let eth = EtherMeta {
-        dst: action.client_mac,
-        src: action.server_mac,
-        ether_type: EtherType::Ipv6,
-    };
-
-    let ip = Ipv6Meta {
-        src: Ipv6Addr::from_eui64(&action.server_mac),
-        // Safety: We're only here if the predicates match, one of which is
-        // IPv6.
-        dst: meta.inner_ip6().unwrap().source(),
-        proto: Protocol::UDP,
-        next_hdr: IpProtocol::Udp,
-        pay_len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
+    let udp = Udp {
+        source: SERVER_PORT,
+        destination: CLIENT_PORT,
+        length: (Udp::MINIMUM_LENGTH + msg.buffer_len()) as u16,
         ..Default::default()
     };
 
-    let mut udp = UdpMeta {
-        src: SERVER_PORT,
-        dst: CLIENT_PORT,
-        len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
+    let ip = Ipv6 {
+        source: Ipv6Addr::from_eui64(&action.server_mac),
+        destination: meta.inner_ip6().unwrap().source(),
+        next_header: IngotIpProto::UDP,
+        payload_len: udp.length,
         ..Default::default()
+    };
+
+    let eth = Ethernet {
+        destination: action.client_mac,
+        source: action.server_mac,
+        ethertype: Ethertype::IPV6,
     };
 
     // Allocate a segment into which we'll write the packet.
-    let reply_len =
-        msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::BASE_SIZE + EtherHdr::SIZE;
-    let mut pkt = Packet::alloc_and_expand(reply_len);
-    let mut wtr = pkt.seg0_wtr();
+    let ingot_layers = (&eth, &ip, &udp);
+    let total_sz = ingot_layers.packet_length() + msg.buffer_len();
 
-    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-    ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+    let mut pkt = MsgBlk::new_ethernet(total_sz);
+    pkt.emit_back(ingot_layers)
+        .expect("MsgBlk should have enough bytes by construction");
+    let l = pkt.len();
+    pkt.resize(total_sz)
+        .expect("MsgBlk should have enough bytes by construction");
+    msg.copy_into(&mut pkt[l..]);
 
-    // Create the buffer to contain the DHCP message so that we may
-    // compute the UDP checksum.
-    let mut msg_buf = vec![0; msg.buffer_len()];
-    msg.copy_into(&mut msg_buf).unwrap();
-
-    // Compute the UDP checksum. Write the UDP header and DHCP message
-    // to the segment.
-    let mut udp_buf = [0u8; UdpHdr::SIZE];
-    udp.emit(&mut udp_buf);
-    let csum = ip.compute_ulp_csum(UlpCsumOpt::Full, &udp_buf, &msg_buf);
-    udp.csum = HeaderChecksum::from(csum).bytes();
-    udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
-    wtr.write(&msg_buf).unwrap();
-    Ok(AllowOrDeny::Allow(
-        unsafe { MsgBlk::wrap_mblk(pkt.unwrap_mblk()) }.expect("known valid"),
-    ))
+    Ok(AllowOrDeny::Allow(pkt))
 }
 
 impl HairpinAction for Dhcpv6Action {

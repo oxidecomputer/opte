@@ -13,13 +13,22 @@ pub mod print;
 pub mod router;
 
 use crate::cfg::VpcCfg;
+use opte::engine::arp;
+use opte::engine::arp::ArpEthIpv4;
+use opte::engine::arp::ArpEthIpv4Ref;
+use opte::engine::arp::ArpOp;
+use opte::engine::arp::ValidArpEthIpv4;
+use opte::engine::arp::ARP_HTYPE_ETHERNET;
+use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::flow_table::FlowTable;
+use opte::engine::ingot_base::EthernetRef;
 use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ingot_packet::OpteParsed2;
 use opte::engine::ingot_packet::Packet2;
 use opte::engine::ingot_packet::Parsed2;
 use opte::engine::ingot_packet::ValidGeneveOverV6;
 use opte::engine::ingot_packet::ValidNoEncap;
+use opte::engine::ip4::Ipv4Addr;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::ParseError;
 use opte::engine::port::UftEntry;
@@ -28,14 +37,8 @@ use opte::engine::HdlPktAction;
 use opte::engine::HdlPktError;
 use opte::engine::NetworkImpl;
 use opte::engine::NetworkParser;
-
-use opte::engine::arp;
-use opte::engine::arp::ArpEthIpv4;
-use opte::engine::arp::ArpOp;
-use opte::engine::ether::ETHER_TYPE_IPV4;
-use opte::engine::ingot_base::EthernetRef;
-use opte::engine::ip4::Ipv4Addr;
 use opte::ingot::ethernet::Ethertype;
+use opte::ingot::types::HeaderParse;
 use opte::ingot::types::Read;
 use zerocopy::ByteSliceMut;
 
@@ -53,17 +56,14 @@ pub struct VpcNetwork {
     pub cfg: VpcCfg,
 }
 
-// The ARP HTYPE for Ethernet.
-const HTYPE_ETHER: u16 = 1;
-
-fn is_arp_req(arp: &ArpEthIpv4) -> bool {
-    arp.htype == HTYPE_ETHER
-        && arp.ptype == ETHER_TYPE_IPV4
-        && arp.op == ArpOp::Request
+fn is_arp_req(arp: &impl ArpEthIpv4Ref) -> bool {
+    arp.htype() == ARP_HTYPE_ETHERNET
+        && arp.ptype() == Ethertype::IPV4
+        && arp.op() == ArpOp::REQUEST
 }
 
-fn is_arp_req_for_tpa(tpa: Ipv4Addr, arp: &ArpEthIpv4) -> bool {
-    is_arp_req(arp) && arp.tpa == tpa
+fn is_arp_req_for_tpa(tpa: Ipv4Addr, arp: &impl ArpEthIpv4Ref) -> bool {
+    is_arp_req(arp) && arp.tpa() == tpa
 }
 
 impl VpcNetwork {
@@ -76,20 +76,23 @@ impl VpcNetwork {
     {
         let body = pkt
             .body_segs()
+            .and_then(|v| v.get(0))
             .ok_or_else(|| HdlPktError("outbound ARP (no body)"))?;
-        let arp = ArpEthIpv4::parse_normally(body)
+
+        let (arp, ..) = ValidArpEthIpv4::parse(*body)
             .map_err(|_| HdlPktError("outbound ARP (parse)"))?;
+
+        if !arp.values_valid() {
+            return Err(HdlPktError("outbound ARP (parse -- bad values)"));
+        }
+
         let gw_ip = self.cfg.ipv4_cfg().unwrap().gateway_ip;
 
         if is_arp_req_for_tpa(gw_ip, &arp) {
             let gw_mac = self.cfg.gateway_mac;
 
-            let hp = arp::gen_arp_reply(gw_mac, gw_ip, arp.sha, arp.spa);
-            // TODO: just emit into an mblk normally.
-            return Ok(HdlPktAction::Hairpin(
-                unsafe { MsgBlk::wrap_mblk(hp.unwrap_mblk()) }
-                    .expect("known valid"),
-            ));
+            let hp = arp::gen_arp_reply(gw_mac, gw_ip, arp.sha(), arp.spa());
+            return Ok(HdlPktAction::Hairpin(hp));
         }
 
         Ok(HdlPktAction::Deny)

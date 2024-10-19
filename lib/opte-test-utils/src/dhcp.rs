@@ -85,7 +85,7 @@ pub fn packet_from_client_dhcpv6_message(
     let udp = Udp {
         source: dhcpv6::CLIENT_PORT,
         destination: dhcpv6::SERVER_PORT,
-        length: (UdpHdr::SIZE + msg.buffer_len()) as u16,
+        length: ip.payload_len,
         ..Default::default()
     };
 

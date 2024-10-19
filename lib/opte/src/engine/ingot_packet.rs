@@ -3,6 +3,9 @@ use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
+use super::geneve::geneve_has_oxide_external;
+use super::geneve::OxideOption;
+use super::geneve::GENEVE_OPT_CLASS_OXIDE;
 use super::geneve::GENEVE_PORT;
 use super::headers::EncapMeta;
 use super::headers::EncapMod;
@@ -10,12 +13,13 @@ use super::headers::EncapPush;
 use super::headers::HasInnerCksum;
 use super::headers::HeaderActionError;
 use super::headers::HeaderActionModify;
-use super::headers::IpMeta;
 use super::headers::IpMod;
 use super::headers::IpPush;
 use super::headers::PushAction;
 use super::headers::UlpMetaModify;
+use super::icmp::IcmpEchoRef;
 use super::icmp::QueryEcho;
+use super::icmp::ValidIcmpEcho;
 use super::ingot_base::Ethernet;
 use super::ingot_base::EthernetMut;
 use super::ingot_base::EthernetPacket;
@@ -79,6 +83,8 @@ use illumos_sys_hdrs::uintptr_t;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveMut;
+use ingot::geneve::GeneveOpt;
+use ingot::geneve::GeneveOptionType;
 use ingot::geneve::GenevePacket;
 use ingot::geneve::GeneveRef;
 use ingot::geneve::ValidGeneve;
@@ -100,6 +106,7 @@ use ingot::types::Emit;
 use ingot::types::EmitDoesNotRelyOnBufContents;
 use ingot::types::Header as IngotHeader;
 use ingot::types::HeaderLen;
+use ingot::types::HeaderParse;
 use ingot::types::InlineHeader;
 use ingot::types::NextLayer;
 use ingot::types::ParseControl;
@@ -990,10 +997,6 @@ pub struct OpteMeta<T: ByteSlice> {
     pub inner_ulp: Option<Ulp<T>>,
 }
 
-pub type Test = OpteMeta<&'static [u8]>;
-pub type Test2 = ValidNoEncap<&'static [u8]>;
-pub type Test3 = ValidGeneveOverV6<&'static [u8]>;
-
 pub type OpteParsed<T> = IngotParsed<OpteMeta<<T as Read>::Chunk>, T>;
 pub type OpteParsed2<T, M> = IngotParsed<M, T>;
 
@@ -1032,19 +1035,41 @@ impl<'a> Emit for SizeHoldingEncap<'a> {
     fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
         match self.meta {
             EncapMeta::Geneve(g) => {
+                let mut opts = vec![];
+
+                if g.oxide_external_pkt {
+                    opts.push(GeneveOpt {
+                        class: GENEVE_OPT_CLASS_OXIDE,
+                        option_type: GeneveOptionType(
+                            OxideOption::External.opt_type(),
+                        ),
+                        ..Default::default()
+                    });
+                }
+
+                let options = Repeated::new(opts);
+                let opt_len_unscaled = options.packet_length();
+                let opt_len = (opt_len_unscaled >> 2) as u8;
+
+                let geneve = Geneve {
+                    protocol_type: Ethertype::ETHERNET,
+                    vni: g.vni,
+                    opt_len,
+                    options,
+                    ..Default::default()
+                };
+
+                let length = self.encapped_len
+                    + (Udp::MINIMUM_LENGTH + geneve.packet_length()) as u16;
+
                 (
                     Udp {
                         source: g.entropy,
-                        destination: 6081,
-                        // TODO: account for options.
-                        length: self.encapped_len + 16,
+                        destination: GENEVE_PORT,
+                        length,
                         ..Default::default()
                     },
-                    Geneve {
-                        protocol_type: Ethertype::ETHERNET,
-                        vni: g.vni,
-                        ..Default::default()
-                    },
+                    &geneve,
                 )
                     .emit_raw(buf)
             }
@@ -1286,9 +1311,7 @@ impl<T: Read> PacketHeaders<T> {
                 Some((g.vni, g.oxide_external_pkt))
             }
             Some(InlineHeader::Raw(ValidEncapMeta::Geneve(_, g))) => {
-                // TODO: hack.
-                let oxide_external = g.1.packet_length() != 0;
-                Some((g.vni(), oxide_external))
+                Some((g.vni(), valid_geneve_has_oxide_external(&g)))
             }
             None => None,
         }
@@ -1892,9 +1915,14 @@ impl<T: Read> Packet2<Parsed2<T>> {
         T::Chunk: ByteSliceMut,
     {
         self.state.inner_csum_dirty |= xform.run(&mut self.state.meta)?;
-        // Given that n_transform layers is 1 or 2, probably won't
-        // save too much by trying to tie to a generation number.
-        // TODO: profile.
+
+        // Recomputing this is a little bit wasteful, since we're moving
+        // rebuilding a static repr from packet fields. This is a necesary
+        // part of slowpath use because layers are designed around intermediate
+        // flowkeys.
+        //
+        // We *could* elide this on non-compiled UFT transforms, but we do not
+        // need those today.
         self.state.flow = InnerFlowId::from(self.meta());
         Ok(())
     }
@@ -2066,9 +2094,16 @@ impl<T: Read> Packet2<Parsed2<T>> {
     where
         T::Chunk: ByteSliceMut,
     {
+        // If we know that no transform touched a field which features in
+        // an inner transport cksum (L4/L3 src/dst, most realistically).
         if !self.state.inner_csum_dirty {
             return;
         }
+
+        // Flag to indicate if an IP header/ULP checksums were
+        // provided. If the checksum is zero, it's assumed heardware
+        // checksum offload is being used, and OPTE should not update
+        // the checksum.
         let update_ip = self.state.meta.has_ip_csum();
         let update_ulp = self.state.meta.has_ulp_csum();
 
@@ -2249,8 +2284,6 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
             csum.sub_bytes(&b[0..16]);
             csum.sub_bytes(&b[18..]);
 
-            // TODO: bad bound?
-            // csum.sub_bytes(tcp.1.as_ref());
             csum.sub_bytes(match &tcp.1 {
                 ingot::types::Header::Repr(v) => &v[..],
                 ingot::types::Header::Raw(v) => &v[..],
@@ -2554,9 +2587,11 @@ impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
         match (self.code(), self.ty()) {
-            (0, 0) | (0, 8) => Some(u16::from_be_bytes(
-                self.rest_of_hdr()[..2].try_into().unwrap(),
-            )),
+            (0, 0) | (0, 8) => {
+                ValidIcmpEcho::parse(self.rest_of_hdr_ref().as_slice())
+                    .ok()
+                    .map(|(v, ..)| v.id())
+            }
             _ => None,
         }
     }
@@ -2566,9 +2601,11 @@ impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
         match (self.code(), self.ty()) {
-            (0, 128) | (0, 129) => Some(u16::from_be_bytes(
-                self.rest_of_hdr()[..2].try_into().unwrap(),
-            )),
+            (0, 128) | (0, 129) => {
+                ValidIcmpEcho::parse(&self.rest_of_hdr_ref()[..])
+                    .ok()
+                    .map(|(v, ..)| v.id())
+            }
             _ => None,
         }
     }
@@ -2894,80 +2931,6 @@ impl<T: ByteSlice> From<EncapMeta>
     }
 }
 
-impl<T: ByteSlice> From<IpMeta> for InlineHeader<L3Repr, ValidL3<T>> {
-    #[inline]
-    fn from(value: IpMeta) -> Self {
-        match value {
-            IpMeta::Ip4(v4) => InlineHeader::Repr(
-                Ipv4 {
-                    ihl: (v4.hdr_len / 4) as u8,
-                    total_len: v4.total_len,
-                    identification: v4.ident,
-                    protocol: IpProtocol(u8::from(v4.proto)),
-                    checksum: u16::from_be_bytes(v4.csum),
-                    source: v4.src,
-                    destination: v4.dst,
-                    flags: Ipv4Flags::DONT_FRAGMENT,
-                    ..Default::default()
-                }
-                .into(),
-            ),
-            IpMeta::Ip6(v6) => InlineHeader::Repr(
-                Ipv6 {
-                    payload_len: v6.pay_len,
-                    next_header: IpProtocol(u8::from(v6.next_hdr)),
-                    hop_limit: v6.hop_limit,
-                    source: v6.src,
-                    destination: v6.dst,
-                    v6ext: Repeated::default(), // TODO
-                    ..Default::default()
-                }
-                .into(),
-            ),
-        }
-    }
-}
-
-impl<T: ByteSlice> From<IpMeta> for L3<T> {
-    #[inline]
-    fn from(value: IpMeta) -> Self {
-        match value {
-            IpMeta::Ip4(v4) => L3::Ipv4(
-                Ipv4 {
-                    ihl: (v4.hdr_len / 4) as u8,
-                    total_len: v4.total_len,
-                    identification: v4.ident,
-                    protocol: IpProtocol(u8::from(v4.proto)),
-                    checksum: u16::from_be_bytes(v4.csum),
-                    source: v4.src,
-                    destination: v4.dst,
-                    flags: Ipv4Flags::DONT_FRAGMENT,
-                    ..Default::default()
-                }
-                .into(),
-            ),
-            IpMeta::Ip6(v6) => L3::Ipv6(
-                Ipv6 {
-                    payload_len: v6.pay_len,
-                    next_header: IpProtocol(u8::from(v6.next_hdr)),
-                    hop_limit: v6.hop_limit,
-                    source: v6.src,
-                    destination: v6.dst,
-                    v6ext: Repeated::default(), // TODO
-                    ..Default::default()
-                }
-                .into(),
-            ),
-        }
-    }
-}
-
-// impl PushAction<Ethernet> for Ethernet {
-//     fn push(&self) -> Ethernet {
-//         *self
-//     }
-// }
-
 impl<T: ByteSlice> PushAction<InlineHeader<Ethernet, ValidEthernet<T>>>
     for EtherMeta
 {
@@ -2994,26 +2957,6 @@ impl<T: ByteSlice> PushAction<EthernetPacket<T>> for EtherMeta {
         )
     }
 }
-
-// impl<T: ByteSlice> PushAction<InlineHeader<L3Repr, ValidL3<T>>> for IpPush {
-//     fn push(&self) -> InlineHeader<L3Repr, ValidL3<T>> {
-//         InlineHeader::Repr(match self {
-//             IpPush::Ip4(v4) => L3Repr::Ipv4(Ipv4 {
-//                 protocol: IpProtocol(u8::from(v4.proto)),
-//                 source: v4.src.bytes().into(),
-//                 destination: v4.dst.bytes().into(),
-//                 flags: Ipv4Flags::DONT_FRAGMENT,
-//                 ..Default::default()
-//             }),
-//             IpPush::Ip6(v6) => L3Repr::Ipv6(Ipv6 {
-//                 next_header: IpProtocol(u8::from(v6.proto)),
-//                 source: v6.src.bytes().into(),
-//                 destination: v6.dst.bytes().into(),
-//                 ..Default::default()
-//             }),
-//         })
-//     }
-// }
 
 impl<T: ByteSlice> PushAction<L3<T>> for IpPush {
     fn push(&self) -> L3<T> {

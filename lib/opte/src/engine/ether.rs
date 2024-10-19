@@ -8,7 +8,6 @@
 
 use super::headers::ModifyAction;
 use super::headers::PushAction;
-use super::headers::RawHeader;
 use super::packet::PacketReadMut;
 use super::packet::ReadErr;
 use crate::d_error::DError;
@@ -19,6 +18,8 @@ use core::fmt::Debug;
 use core::fmt::Display;
 use core::result;
 use core::str::FromStr;
+use ingot::ethernet::Ethernet;
+use ingot::types::HeaderLen;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
@@ -210,16 +211,6 @@ impl PushAction<EtherMeta> for EtherMeta {
     }
 }
 
-impl<'a> From<&EtherHdr<'a>> for EtherMeta {
-    fn from(eth: &EtherHdr) -> Self {
-        EtherMeta {
-            src: eth.src(),
-            dst: eth.dst(),
-            ether_type: eth.ether_type(),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct EtherMod {
     pub src: Option<MacAddr>,
@@ -240,141 +231,8 @@ impl ModifyAction<EtherMeta> for EtherMod {
 
 impl EtherMeta {
     #[inline]
-    pub fn emit(&self, dst: &mut [u8]) {
-        debug_assert_eq!(dst.len(), EtherHdrRaw::SIZE);
-        // let mut raw = EtherHdrRaw::new_mut(dst).unwrap();
-        // raw. .write(EtherHdrRaw::from(self));
-
-        EtherHdrRaw::from(self).write_to(dst).unwrap()
-    }
-
-    #[inline]
     pub fn hdr_len(&self) -> usize {
-        EtherHdr::SIZE
-    }
-}
-
-#[derive(Debug)]
-pub struct EtherHdr<'a> {
-    bytes: Ref<&'a mut [u8], EtherHdrRaw>,
-}
-
-impl<'a> EtherHdr<'a> {
-    // For the moment, this type is for non-VLAN ethernet headers
-    // only.
-    pub const SIZE: usize = EtherHdrRaw::SIZE;
-
-    pub fn as_bytes(&self) -> &[u8] {
-        self.bytes.as_bytes()
-    }
-
-    pub fn ether_type(&self) -> EtherType {
-        EtherType::from(u16::from_be_bytes(self.bytes.ether_type))
-    }
-
-    pub fn hdr_len(&self) -> usize {
-        Self::SIZE
-    }
-
-    pub fn src(&self) -> MacAddr {
-        MacAddr::from(self.bytes.src)
-    }
-
-    pub fn dst(&self) -> MacAddr {
-        MacAddr::from(self.bytes.dst)
-    }
-
-    pub fn set_dst(&mut self, dst: MacAddr) {
-        self.bytes.dst = dst.bytes();
-    }
-
-    pub fn parse<'b, R>(rdr: &'b mut R) -> Result<Self, EtherHdrError>
-    where
-        R: PacketReadMut<'a>,
-    {
-        let src = rdr.slice_mut(EtherHdrRaw::SIZE)?;
-        Ok(Self { bytes: EtherHdrRaw::new_mut(src)? })
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq, DError)]
-#[derror(leaf_data = EtherHdrError::derror_data)]
-pub enum EtherHdrError {
-    ReadError(ReadErr),
-    UnsupportedEtherType { ether_type: u16 },
-}
-
-impl EtherHdrError {
-    fn derror_data(&self, data: &mut [u64]) {
-        if let Self::UnsupportedEtherType { ether_type } = self {
-            data[0] = *ether_type as u64;
-        }
-    }
-}
-
-impl From<ReadErr> for EtherHdrError {
-    fn from(error: ReadErr) -> Self {
-        EtherHdrError::ReadError(error)
-    }
-}
-
-impl Display for EtherHdrError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::UnsupportedEtherType { ether_type } => {
-                write!(f, "Unsupported Ether Type: 0x{:04X}", ether_type)
-            }
-
-            Self::ReadError(error) => {
-                write!(f, "read error: {:?}", error)
-            }
-        }
-    }
-}
-
-impl Debug for EtherHdrError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
-    }
-}
-
-impl From<&EtherMeta> for EtherHdrRaw {
-    fn from(meta: &EtherMeta) -> Self {
-        Self {
-            dst: meta.dst.bytes(),
-            src: meta.src.bytes(),
-            ether_type: u16::from(meta.ether_type).to_be_bytes(),
-        }
-    }
-}
-
-/// Note: For now we keep this unaligned to be safe.
-#[repr(C)]
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    FromBytes,
-    IntoBytes,
-    Unaligned,
-    Immutable,
-    KnownLayout,
-)]
-pub struct EtherHdrRaw {
-    pub dst: [u8; 6],
-    pub src: [u8; 6],
-    pub ether_type: [u8; 2],
-}
-
-impl<'a> RawHeader<'a> for EtherHdrRaw {
-    #[inline]
-    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
-        debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::from_bytes(src).ok() {
-            Some(hdr) => hdr,
-            None => return Err(ReadErr::BadLayout),
-        };
-        Ok(hdr)
+        Ethernet::MINIMUM_LENGTH
     }
 }
 

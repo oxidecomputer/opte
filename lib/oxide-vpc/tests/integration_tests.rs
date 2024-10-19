@@ -19,7 +19,9 @@ use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::ddi::time::Moment;
 use opte::engine::arp::ArpEthIpv4;
-use opte::engine::arp::ArpEthIpv4Raw;
+use opte::engine::arp::ArpEthIpv4Ref;
+use opte::engine::arp::ValidArpEthIpv4;
+use opte::engine::arp::ARP_HTYPE_ETHERNET;
 use opte::engine::dhcpv6;
 use opte::engine::flow_table::FLOW_DEF_EXPIRE_SECS;
 use opte::engine::geneve::Vni;
@@ -45,6 +47,7 @@ use opte::ingot::icmp::IcmpV6Ref;
 use opte::ingot::tcp::TcpRef;
 use opte::ingot::types::Emit;
 use opte::ingot::types::HeaderLen;
+use opte::ingot::types::HeaderParse;
 use opte::ingot::udp::Udp;
 use opte::ingot::udp::UdpRef;
 use opte_test_utils as common;
@@ -1879,21 +1882,21 @@ fn arp_gateway() {
 
     // TODO: ingot?
     let arp = ArpEthIpv4 {
-        htype: 1,
-        ptype: u16::from(EtherType::Ipv4),
+        htype: ARP_HTYPE_ETHERNET,
+        ptype: Ethertype::IPV4,
         hlen: 6,
         plen: 4,
-        op: ArpOp::Request,
+        op: ArpOp::REQUEST,
         sha: cfg.guest_mac,
         spa: cfg.ipv4_cfg().unwrap().private_ip,
         tha: MacAddr::from([0x00; 6]),
         tpa: cfg.ipv4_cfg().unwrap().gateway_ip,
     };
 
-    let mut bytes = eth_hdr.emit_vec();
-    bytes.extend_from_slice(ArpEthIpv4Raw::from(&arp).as_bytes());
+    // let mut bytes = eth_hdr.emit_vec();
+    // bytes.extend_from_slice(ArpEthIpv4Raw::from(&arp).as_bytes());
 
-    let mut pkt_m = MsgBlk::copy(bytes);
+    let mut pkt_m = MsgBlk::new_ethernet_pkt((eth_hdr, arp));
     let pkt = parse_outbound(&mut pkt_m, VpcParser {}).unwrap();
 
     let res = g1.port.process(Out, pkt);
@@ -1911,19 +1914,13 @@ fn arp_gateway() {
 
             let body = hppkt.to_full_meta().meta().copy_remaining();
 
-            let (arp, _) = ArpEthIpv4Raw::ref_from_prefix(&body[..]).unwrap();
-            assert_eq!(arp.op, ArpOp::Reply.to_be_bytes());
-            assert_eq!(arp.ptype, Ethertype::IPV4.0.to_be_bytes());
-            assert_eq!(MacAddr::from(arp.sha), cfg.gateway_mac);
-            assert_eq!(
-                Ipv4Addr::from(arp.spa),
-                cfg.ipv4_cfg().unwrap().gateway_ip
-            );
-            assert_eq!(MacAddr::from(arp.tha), cfg.guest_mac);
-            assert_eq!(
-                Ipv4Addr::from(arp.tpa),
-                cfg.ipv4_cfg().unwrap().private_ip
-            );
+            let (arp, ..) = ValidArpEthIpv4::parse(&body[..]).unwrap();
+            assert_eq!(arp.op(), ArpOp::REPLY);
+            assert_eq!(arp.ptype(), Ethertype::IPV4);
+            assert_eq!(arp.sha(), cfg.gateway_mac);
+            assert_eq!(arp.spa(), cfg.ipv4_cfg().unwrap().gateway_ip);
+            assert_eq!(arp.tha(), cfg.guest_mac);
+            assert_eq!(arp.tpa(), cfg.ipv4_cfg().unwrap().private_ip);
         }
 
         res => panic!("expected a Hairpin, got {:?}", res),

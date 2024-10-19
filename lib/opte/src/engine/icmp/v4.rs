@@ -23,24 +23,6 @@ use smoltcp::wire::Icmpv4Message;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
 
-pub type Icmpv4Meta = IcmpMeta<MessageType>;
-
-impl QueryEcho for Icmpv4Meta {
-    /// Extract an ID from the body of an ICMPv4 packet to use as a
-    /// pseudo port for flow differentiation.
-    ///
-    /// This method returns `None` for any non-echo packets.
-    #[inline]
-    fn echo_id(&self) -> Option<u16> {
-        match self.msg_type.inner {
-            Icmpv4Message::EchoRequest | Icmpv4Message::EchoReply => {
-                Some(u16::from_be_bytes(self.body_echo().id))
-            }
-            _ => None,
-        }
-    }
-}
-
 impl HairpinAction for IcmpEchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         let hdr_preds = vec![

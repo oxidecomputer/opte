@@ -7,14 +7,13 @@
 //! DHCP headers, data, and actions.
 
 use super::checksum::HeaderChecksum;
-use super::ether::EtherHdr;
 use super::ether::EtherMeta;
 use super::ether::EtherType;
+use super::ingot_base::Ethernet;
+use super::ingot_base::Ipv4;
 use super::ingot_packet::MsgBlk;
 use super::ingot_packet::PacketHeaders2;
 use super::ip4::Ipv4Addr;
-use super::ip4::Ipv4Hdr;
-use super::ip4::Ipv4Meta;
 use super::ip4::Protocol;
 use super::ip6::UlpCsumOpt;
 use super::packet::Packet;
@@ -27,13 +26,15 @@ use super::predicate::Predicate;
 use super::rule::AllowOrDeny;
 use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
-use super::udp::UdpHdr;
-use super::udp::UdpMeta;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use heapless::Vec as HeaplessVec;
+use ingot::ethernet::Ethertype;
+use ingot::ip::IpProtocol;
+use ingot::types::HeaderLen;
+use ingot::udp::Udp;
 use opte_api::DhcpCfg;
 use opte_api::DhcpReplyType;
 use opte_api::DomainName;
@@ -570,21 +571,10 @@ impl HairpinAction for DhcpAction {
 
         let reply_len = reply.buffer_len();
 
-        // XXX This is temporary until I can add interface to Packet
-        // to initialize a zero'd mblk of N bytes and then get a
-        // direct mutable reference to the PacketSeg.
-        //
-        // We provide exactly the number of bytes needed guaranteeing
-        // that emit() should not fail.
-        let mut tmp = vec![0u8; reply_len];
-        let mut dhcp = DhcpPacket::new_unchecked(&mut tmp);
-        reply.emit(&mut dhcp).unwrap();
-
-        let mut udp = UdpMeta {
-            src: 67,
-            dst: 68,
-            len: (UdpHdr::SIZE + tmp.len()) as u16,
-            ..Default::default()
+        let eth_dst = if client_dhcp.broadcast {
+            MacAddr::BROADCAST
+        } else {
+            self.client_mac
         };
 
         let ip_dst = if client_dhcp.broadcast {
@@ -593,47 +583,41 @@ impl HairpinAction for DhcpAction {
             self.client_ip
         };
 
-        let mut ip = Ipv4Meta {
-            src: self.gw_ip,
-            dst: ip_dst,
-            proto: Protocol::UDP,
-            total_len: Ipv4Hdr::BASE_SIZE as u16 + udp.len,
+        let udp = Udp {
+            source: DHCP_SERVER_PORT,
+            destination: DHCP_CLIENT_PORT,
+            length: (Udp::MINIMUM_LENGTH + reply_len) as u16,
             ..Default::default()
         };
-        ip.compute_hdr_csum();
 
-        let eth_dst = if client_dhcp.broadcast {
-            MacAddr::BROADCAST
-        } else {
-            self.client_mac
+        let mut ip = Ipv4 {
+            source: self.gw_ip,
+            destination: ip_dst,
+            protocol: IpProtocol::UDP,
+            total_len: Ipv4::MINIMUM_LENGTH as u16 + udp.length,
+            ..Default::default()
+        };
+        ip.compute_checksum();
+
+        let eth = Ethernet {
+            destination: eth_dst,
+            source: self.gw_mac,
+            ethertype: Ethertype::IPV4,
         };
 
-        let eth = EtherMeta {
-            dst: eth_dst,
-            src: self.gw_mac,
-            ether_type: EtherType::Ipv4,
-        };
+        let ingot_layers = (&eth, &ip, &udp);
+        let total_sz = ingot_layers.packet_length() + reply_len;
+        let mut pkt = MsgBlk::new_ethernet(total_sz);
+        pkt.emit_back(ingot_layers)
+            .expect("MsgBlk should have enough bytes by construction");
+        let l = pkt.len();
+        pkt.resize(total_sz)
+            .expect("MsgBlk should have enough bytes by construction");
 
-        // XXX: Would be preferable to write in here directly rather than
-        //      allocing tmp.
-        let hdr_len = EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + UdpHdr::SIZE;
-        let total_len = hdr_len + tmp.len();
+        let mut dhcp = DhcpPacket::new_unchecked(&mut pkt[l..]);
+        reply.emit(&mut dhcp).unwrap();
 
-        let mut pkt = Packet::alloc_and_expand(total_len);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-        let mut udp_buf = [0u8; UdpHdr::SIZE];
-        udp.emit(&mut udp_buf);
-        let csum = ip.compute_ulp_csum(UlpCsumOpt::Full, &udp_buf, &tmp);
-        udp.csum = HeaderChecksum::from(csum).bytes();
-        udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
-        wtr.write(&tmp).unwrap();
-
-        Ok(AllowOrDeny::Allow(
-            unsafe { MsgBlk::wrap_mblk(pkt.unwrap_mblk()) }
-                .expect("known valid"),
-        ))
+        Ok(AllowOrDeny::Allow(pkt))
     }
 }
 
