@@ -6,17 +6,12 @@
 
 //! DHCP headers, data, and actions.
 
-use super::checksum::HeaderChecksum;
-use super::ether::EtherMeta;
-use super::ether::EtherType;
 use super::ingot_base::Ethernet;
 use super::ingot_base::Ipv4;
 use super::ingot_packet::MsgBlk;
 use super::ingot_packet::PacketHeaders2;
 use super::ip4::Ipv4Addr;
 use super::ip4::Protocol;
-use super::ip6::UlpCsumOpt;
-use super::packet::Packet;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;

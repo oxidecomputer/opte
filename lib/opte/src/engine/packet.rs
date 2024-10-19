@@ -12,11 +12,6 @@
 //!
 
 use super::checksum::Checksum;
-use super::checksum::HeaderChecksum;
-use super::ether::EtherMeta;
-use super::geneve::GeneveMeta;
-use super::geneve::GENEVE_PORT;
-use super::headers::EncapMeta;
 use super::headers::IpAddr;
 use super::headers::AF_INET;
 use super::headers::AF_INET6;
@@ -24,9 +19,6 @@ use super::ingot_packet::MsgBlk;
 use super::ip4::Ipv4Addr;
 use super::ip4::Protocol;
 use super::ip6::Ipv6Addr;
-use super::ip6::Ipv6Hdr;
-use super::ip6::Ipv6HdrError;
-use super::ip6::Ipv6Meta;
 use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;

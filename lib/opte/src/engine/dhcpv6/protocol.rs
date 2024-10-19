@@ -8,7 +8,6 @@
 
 use super::Dhcpv6Action;
 use super::TransactionId;
-use crate::engine::checksum::HeaderChecksum;
 use crate::engine::dhcpv6::options::Code as OptionCode;
 use crate::engine::dhcpv6::options::IaAddr;
 use crate::engine::dhcpv6::options::IaNa;
@@ -22,17 +21,11 @@ use crate::engine::dhcpv6::ALL_RELAYS_AND_SERVERS;
 use crate::engine::dhcpv6::ALL_SERVERS;
 use crate::engine::dhcpv6::CLIENT_PORT;
 use crate::engine::dhcpv6::SERVER_PORT;
-use crate::engine::ether::EtherMeta;
-use crate::engine::ether::EtherType;
 use crate::engine::ingot_base::Ethernet;
 use crate::engine::ingot_base::Ipv6;
 use crate::engine::ingot_base::Ipv6Ref;
 use crate::engine::ingot_packet::MsgBlk;
 use crate::engine::ingot_packet::PacketHeaders2;
-use crate::engine::ip6::Ipv6Hdr;
-use crate::engine::ip6::Ipv6Meta;
-use crate::engine::ip6::UlpCsumOpt;
-use crate::engine::packet::Packet;
 use crate::engine::predicate::DataPredicate;
 use crate::engine::predicate::EtherAddrMatch;
 use crate::engine::predicate::IpProtoMatch;
@@ -56,7 +49,6 @@ use opte_api::MacAddr;
 use opte_api::Protocol;
 use serde::Deserialize;
 use serde::Serialize;
-use smoltcp::wire::IpProtocol;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MessageType {

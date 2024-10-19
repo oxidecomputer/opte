@@ -8,9 +8,6 @@
 
 use super::headers::ModifyAction;
 use super::headers::PushAction;
-use super::packet::PacketReadMut;
-use super::packet::ReadErr;
-use crate::d_error::DError;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -23,12 +20,6 @@ use ingot::types::HeaderLen;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::FromBytes;
-use zerocopy::Immutable;
-use zerocopy::IntoBytes;
-use zerocopy::KnownLayout;
-use zerocopy::Ref;
-use zerocopy::Unaligned;
 
 pub const ETHER_TYPE_ETHER: u16 = 0x6558;
 pub const ETHER_TYPE_IPV4: u16 = 0x0800;

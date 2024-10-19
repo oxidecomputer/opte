@@ -6,15 +6,8 @@
 
 //! ARP headers and data.
 
-use super::ether::EtherMeta;
-use super::ether::EtherType;
 use super::ingot_base::Ethernet;
 use super::ingot_packet::MsgBlk;
-use super::packet::Initialized;
-use super::packet::Packet;
-use super::packet::PacketReadMut;
-use super::packet::ReadErr;
-use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;
 use ingot::ethernet::Ethertype;
@@ -26,12 +19,6 @@ use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::ByteSlice;
-use zerocopy::FromBytes;
-use zerocopy::Immutable;
-use zerocopy::IntoBytes;
-use zerocopy::KnownLayout;
-use zerocopy::Ref;
-use zerocopy::Unaligned;
 
 pub const ARP_HTYPE_ETHERNET: u16 = 1;
 

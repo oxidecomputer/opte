@@ -14,15 +14,12 @@ pub mod router;
 
 use crate::cfg::VpcCfg;
 use opte::engine::arp;
-use opte::engine::arp::ArpEthIpv4;
 use opte::engine::arp::ArpEthIpv4Ref;
 use opte::engine::arp::ArpOp;
 use opte::engine::arp::ValidArpEthIpv4;
 use opte::engine::arp::ARP_HTYPE_ETHERNET;
-use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::flow_table::FlowTable;
 use opte::engine::ingot_base::EthernetRef;
-use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ingot_packet::OpteParsed2;
 use opte::engine::ingot_packet::Packet2;
 use opte::engine::ingot_packet::Parsed2;

@@ -3,7 +3,6 @@ use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
-use super::geneve::geneve_has_oxide_external;
 use super::geneve::OxideOption;
 use super::geneve::GENEVE_OPT_CLASS_OXIDE;
 use super::geneve::GENEVE_PORT;

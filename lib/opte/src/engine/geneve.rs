@@ -8,13 +8,8 @@
 //!
 //! RFC 8926 Geneve: Generic Network Virtualization Encapsulation
 
-use super::ether::ETHER_TYPE_ETHER;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
-use super::packet::PacketReadMut;
-use super::packet::ReadErr;
-use crate::d_error::DError;
-use core::mem;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveOptRef;
@@ -27,12 +22,6 @@ pub use opte_api::Vni;
 use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::ByteSlice;
-use zerocopy::FromBytes;
-use zerocopy::Immutable;
-use zerocopy::IntoBytes;
-use zerocopy::KnownLayout;
-use zerocopy::Ref;
-use zerocopy::Unaligned;
 
 pub const GENEVE_VSN: u8 = 0;
 pub const GENEVE_VER_MASK: u8 = 0xC0;

@@ -9,14 +9,6 @@
 pub mod v4;
 pub mod v6;
 
-use super::checksum::Checksum as OpteCsum;
-use super::checksum::HeaderChecksum;
-use super::headers::HeaderActionError;
-use super::packet::PacketReadMut;
-use super::packet::ReadErr;
-use crate::d_error::DError;
-use crate::engine::headers::HeaderActionModify;
-use crate::engine::headers::UlpMetaModify;
 use crate::engine::predicate::DataPredicate;
 use crate::engine::predicate::EtherAddrMatch;
 use crate::engine::predicate::IpProtoMatch;
@@ -36,12 +28,6 @@ use serde::Serialize;
 use smoltcp::phy::Checksum;
 use smoltcp::phy::ChecksumCapabilities as Csum;
 use zerocopy::ByteSlice;
-use zerocopy::FromBytes;
-use zerocopy::Immutable;
-use zerocopy::IntoBytes;
-use zerocopy::KnownLayout;
-use zerocopy::Ref;
-use zerocopy::Unaligned;
 
 /// Shared methods for handling ICMPv4/v6 Echo fields.
 pub trait QueryEcho {

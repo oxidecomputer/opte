@@ -6,28 +6,11 @@
 
 //! TCP headers.
 
-use super::checksum::Checksum;
-use super::checksum::HeaderChecksum;
 use super::flow_table::Ttl;
-use super::headers::HeaderActionError;
-use super::headers::HeaderActionModify;
-use super::headers::ModifyAction;
-use super::headers::PushAction;
-use super::headers::UlpMetaModify;
-use super::packet::PacketReadMut;
-use super::packet::ReadErr;
-use crate::d_error::DError;
 use core::fmt;
 use core::fmt::Display;
-use opte_api::DYNAMIC_PORT;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::FromBytes;
-use zerocopy::Immutable;
-use zerocopy::IntoBytes;
-use zerocopy::KnownLayout;
-use zerocopy::Ref;
-use zerocopy::Unaligned;
 
 pub const TCP_HDR_OFFSET_MASK: u8 = 0xF0;
 pub const TCP_HDR_OFFSET_SHIFT: u8 = 4;

@@ -6,27 +6,8 @@
 
 //! UDP headers.
 
-use crate::d_error::DError;
-use crate::engine::checksum::Checksum;
-use crate::engine::checksum::HeaderChecksum;
-use crate::engine::headers::HeaderActionModify;
-use crate::engine::headers::ModifyAction;
-use crate::engine::headers::PushAction;
-use crate::engine::headers::UlpMetaModify;
-use crate::engine::packet::PacketReadMut;
-use crate::engine::packet::ReadErr;
-use core::mem;
-use opte_api::DYNAMIC_PORT;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::FromBytes;
-use zerocopy::Immutable;
-use zerocopy::IntoBytes;
-use zerocopy::KnownLayout;
-use zerocopy::Ref;
-use zerocopy::Unaligned;
-
-use super::headers::HeaderActionError;
 
 #[derive(
     Clone,

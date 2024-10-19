@@ -6,7 +6,6 @@
 
 //! Header metadata combinations for IP, ULP, and Encap.
 
-use super::checksum::Checksum;
 use super::geneve::GeneveMeta;
 use super::geneve::GeneveMod;
 use super::geneve::GenevePush;
@@ -14,12 +13,10 @@ use super::ip4::Ipv4Mod;
 use super::ip4::Ipv4Push;
 use super::ip6::Ipv6Mod;
 use super::ip6::Ipv6Push;
-use super::packet::ReadErr;
 use super::tcp::TcpMod;
 use super::tcp::TcpPush;
 use super::udp::UdpMod;
 use super::udp::UdpPush;
-use crate::engine::icmp::QueryEcho;
 use core::fmt;
 pub use opte_api::IpAddr;
 pub use opte_api::IpCidr;
@@ -27,7 +24,6 @@ pub use opte_api::Protocol;
 pub use opte_api::Vni;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::Ref;
 
 pub const AF_INET: i32 = 2;
 pub const AF_INET6: i32 = 26;

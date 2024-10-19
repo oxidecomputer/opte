@@ -6,18 +6,11 @@
 
 //! IPv4 headers.
 
-use super::checksum::Checksum;
-use super::checksum::HeaderChecksum;
-use super::headers::ModifyAction;
-use super::headers::PushAction;
-use super::packet::PacketReadMut;
-use super::packet::ReadErr;
 use super::predicate::MatchExact;
 use super::predicate::MatchExactVal;
 use super::predicate::MatchPrefix;
 use super::predicate::MatchPrefixVal;
 use super::predicate::MatchRangeVal;
-use crate::d_error::DError;
 use alloc::string::String;
 use core::fmt;
 use core::fmt::Debug;
@@ -30,12 +23,6 @@ pub use opte_api::Ipv4PrefixLen;
 pub use opte_api::Protocol;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::FromBytes;
-use zerocopy::Immutable;
-use zerocopy::IntoBytes;
-use zerocopy::KnownLayout;
-use zerocopy::Ref;
-use zerocopy::Unaligned;
 
 pub const IPV4_HDR_LEN_MASK: u8 = 0x0F;
 pub const IPV4_HDR_VER_MASK: u8 = 0xF0;

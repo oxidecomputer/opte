@@ -19,7 +19,6 @@ use ingot::types::Emit;
 use ingot::types::HeaderLen;
 pub use opte_api::ip::IcmpEchoReply;
 use smoltcp::wire;
-use smoltcp::wire::Icmpv4Message;
 use smoltcp::wire::Icmpv4Packet;
 use smoltcp::wire::Icmpv4Repr;
 

@@ -73,8 +73,6 @@ use std::collections::BTreeMap;
 use std::prelude::v1::*;
 use std::time::Duration;
 use uuid::Uuid;
-use zerocopy::FromBytes;
-use zerocopy::IntoBytes;
 
 // If we are running `cargo test`, then make sure to
 // register the USDT probes before running any tests.
