@@ -88,12 +88,9 @@ use opte::engine::ingot_packet::Parsed2;
 use opte::engine::ingot_packet::ParsedMblk;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
-use opte::engine::packet::Initialized;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::packet::Packet;
 use opte::engine::packet::PacketChain;
 use opte::engine::packet::PacketError;
-use opte::engine::packet::Parsed;
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
@@ -1469,7 +1466,7 @@ fn guest_loopback<'a>(
                         mac::mac_rx(
                             dest_dev.mh,
                             ptr::null_mut(),
-                            pkt.unwrap_mblk(),
+                            pkt.unwrap_mblk().as_ptr(),
                         )
                     };
                 }
@@ -1491,7 +1488,7 @@ fn guest_loopback<'a>(
                         mac::mac_rx(
                             dest_dev.mh,
                             ptr::null_mut(),
-                            pkt.unwrap_mblk(),
+                            pkt.unwrap_mblk().as_ptr(),
                         )
                     };
                 }
@@ -1556,7 +1553,7 @@ unsafe extern "C" fn xde_mc_tx(
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (u1, u2, port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
-    while let Some(pkt) = chain.pop_front2() {
+    while let Some(pkt) = chain.pop_front() {
         xde_mc_tx_one(src_dev, pkt);
     }
 
@@ -1605,7 +1602,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         //
         // TODO Is there way to set mac_tx to must use result?
         drop(parsed_pkt);
-        stream.tx_drop_on_no_desc2(pkt, hint, MacTxFlags::empty());
+        stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
         return ptr::null_mut();
     }
 
@@ -1674,7 +1671,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // Get a pointer to the beginning of the outer frame and
             // fill in the dst/src addresses before sending out the
             // device.
-            let mblk = out_pkt.unwrap_mblk();
+            let mblk = out_pkt.unwrap_mblk().as_ptr();
             let rptr = (*mblk).b_rptr;
             ptr::copy(dst.as_ptr(), rptr, 6);
             ptr::copy(src.as_ptr(), rptr.add(6), 6);
@@ -1682,7 +1679,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // unwrapped it above.
             let new_pkt = MsgBlk::wrap_mblk(mblk).unwrap();
 
-            underlay_dev.stream.tx_drop_on_no_desc2(
+            underlay_dev.stream.tx_drop_on_no_desc(
                 new_pkt,
                 hint,
                 MacTxFlags::empty(),
@@ -1694,11 +1691,15 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         }
 
         Ok(ProcessResult::Hairpin(hpkt)) => {
-            mac::mac_rx(src_dev.mh, ptr::null_mut(), hpkt.unwrap_mblk());
+            mac::mac_rx(
+                src_dev.mh,
+                ptr::null_mut(),
+                hpkt.unwrap_mblk().as_ptr(),
+            );
         }
 
         Ok(ProcessResult::Bypass) => {
-            stream.tx_drop_on_no_desc2(pkt, hint, MacTxFlags::empty());
+            stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
         }
 
         Err(_) => {}
@@ -1863,7 +1864,7 @@ unsafe extern "C" fn xde_rx(
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
-    while let Some(pkt) = chain.pop_front2() {
+    while let Some(pkt) = chain.pop_front() {
         xde_rx_one(&stream, mrh, pkt);
     }
 }
@@ -1924,7 +1925,7 @@ unsafe fn xde_rx_one(
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
         drop(parsed_pkt);
-        mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
+        mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
         return;
     }
 
@@ -1934,15 +1935,15 @@ unsafe fn xde_rx_one(
 
     match res {
         Ok(ProcessResult::Bypass) => {
-            mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk());
+            mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
         }
         Ok(ProcessResult::Modified(mut emit_spec)) => {
             let npkt = emit_spec.apply(pkt);
 
-            mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk());
+            mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk().as_ptr());
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
-            stream.tx_drop_on_no_desc2(hppkt, 0, MacTxFlags::empty());
+            stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
         }
         _ => {}
     }

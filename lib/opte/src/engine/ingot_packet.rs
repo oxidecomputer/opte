@@ -1,3 +1,9 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Copyright 2024 Oxide Computer Company
+
 use super::checksum::Checksum as OpteCsum;
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
@@ -44,11 +50,11 @@ use super::packet::allocb;
 use super::packet::AddrPair;
 use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
-use super::packet::Initialized;
 use super::packet::InnerFlowId;
-use super::packet::Packet;
 use super::packet::PacketState;
 use super::packet::ParseError;
+use super::packet::SegAdjustError;
+use super::packet::WrapError;
 use super::packet::WriteError;
 use super::packet::FLOW_ID_DEFAULT;
 use super::rule::CompiledEncap;
@@ -575,15 +581,38 @@ impl DerefMut for MsgBlkNode {
 }
 
 impl MsgBlkNode {
-    pub fn drop_front_bytes(&mut self, n: usize) {
+    /// Shrink the writable/readable area by shifting the `b_rptr` by
+    /// `len`; effectively removing bytes from the start of the packet.
+    ///
+    /// # Errors
+    ///
+    /// `SegAdjustError::StartPastEnd`: Shifting the read pointer by
+    /// `len` would move `b_rptr` past `b_wptr`.
+    pub fn drop_front_bytes(&mut self, n: usize) -> Result<(), SegAdjustError> {
         unsafe {
-            assert!(self.0.b_wptr.offset_from(self.0.b_rptr) >= n as isize);
+            if self.0.b_wptr.offset_from(self.0.b_rptr) < n as isize {
+                return Err(SegAdjustError::StartPastEnd);
+            }
             self.0.b_rptr = self.0.b_rptr.add(n);
         }
+
+        Ok(())
     }
 }
 
 impl MsgBlk {
+    /// Allocate a new [`MsgBlk`] containing a data buffer of `len`
+    /// bytes.
+    ///
+    /// The returned packet consists of exactly one segment.
+    ///
+    /// In the kernel environment this uses `allocb(9F)` and
+    /// `freemsg(9F)` under the hood.
+    ///
+    /// In the `std` environment this uses a mock implementation of
+    /// `allocb(9F)` and `freeb(9F)`, which contains enough scaffolding
+    /// to satisfy OPTE's use of the underlying `mblk_t` and `dblk_t`
+    /// structures.
     pub fn new(len: usize) -> Self {
         let inner = NonNull::new(allocb(len))
             .expect("somehow failed to get an mblk...");
@@ -591,19 +620,23 @@ impl MsgBlk {
         Self { inner }
     }
 
+    /// Allocates a new [`MsgBlk`] of size `buf.len()`, copying its
+    /// contents.
     pub fn copy(buf: impl AsRef<[u8]>) -> Self {
         let mut out = Self::new(buf.as_ref().len());
-        // Unwarp safety -- just allocated length of input buffer.
+        // Unwrap safety -- just allocated length of input buffer.
         out.write_bytes_back(buf).unwrap();
         out
     }
 
+    /// Creates a new [`MsgBlk`] using a given set of packet headers.
     pub fn new_pkt(emit: impl Emit + EmitDoesNotRelyOnBufContents) -> Self {
         let mut pkt = Self::new(emit.packet_length());
         pkt.emit_back(emit).unwrap();
         pkt
     }
 
+    /// Returns the number of bytes available for writing before
     pub fn headroom(&self) -> usize {
         unsafe {
             let inner = self.inner.as_ref();
@@ -612,10 +645,18 @@ impl MsgBlk {
         }
     }
 
+    /// Creates a new [`MsgBlk`] containing a data buffer of `len`
+    /// bytes with 2B of headroom/alignment.
+    ///
+    /// This sets up 4B alignment on all post-ethernet headers.
     pub fn new_ethernet(len: usize) -> Self {
         Self::new_with_headroom(2, len)
     }
 
+    /// Creates a new [`MsgBlk`] using a given set of packet headers
+    /// with 2B of headroom/alignment.
+    ///
+    /// This sets up 4B alignment on all post-ethernet headers.
     pub fn new_ethernet_pkt(
         emit: impl Emit + EmitDoesNotRelyOnBufContents,
     ) -> Self {
@@ -624,14 +665,23 @@ impl MsgBlk {
         pkt
     }
 
+    /// Return the number of initialised bytes in this `MsgBlk` over
+    /// all linked segments.
     pub fn byte_len(&self) -> usize {
         self.iter().map(|el| el.len()).sum()
     }
 
+    /// Return the number of initialised bytes in this `MsgBlk` in
+    /// the head segment.
     pub fn seg_len(&self) -> usize {
         self.iter().count()
     }
 
+    /// Allocate a new [`MsgBlk`] containing a data buffer of size
+    /// `head_len + body_len`.
+    ///
+    /// The read/write pointer is set to have `head_len` bytes of
+    /// headroom and `body_len` bytes of capacity at the back.
     pub fn new_with_headroom(head_len: usize, body_len: usize) -> Self {
         let mut out = Self::new(head_len + body_len);
 
@@ -643,7 +693,15 @@ impl MsgBlk {
         out
     }
 
-    pub unsafe fn write(
+    /// Provides a slice of length `n_bytes` at the back of an [`MsgBlk`]
+    /// (if capacity exists) to be initialised, before increasing `len`
+    /// by `n_bytes`.
+    ///
+    /// # Safety
+    /// Users must write a value to every element of the `MaybeUninit`
+    /// buffer at least once in the `MsgBlk` lifecycle -- all `n_bytes`
+    /// are assumed to be initialised.
+    pub unsafe fn write_back(
         &mut self,
         n_bytes: usize,
         f: impl FnOnce(&mut [MaybeUninit<u8>]),
@@ -673,6 +731,14 @@ impl MsgBlk {
         Ok(())
     }
 
+    /// Provides a slice of length `n_bytes` at the front of an [`MsgBlk`]
+    /// (if capacity exists) to be initialised, before increasing `len`
+    /// by `n_bytes`.
+    ///
+    /// # Safety
+    /// Users must write a value to every element of the `MaybeUninit`
+    /// buffer at least once in the `MsgBlk` lifecycle -- all `n_bytes`
+    /// are assumed to be initialised.
     pub unsafe fn write_front(
         &mut self,
         n_bytes: usize,
@@ -713,7 +779,7 @@ impl MsgBlk {
             Ok(())
         } else if new_len > len {
             unsafe {
-                self.write(new_len - len, |v| {
+                self.write_back(new_len - len, |v| {
                     // MaybeUninit::fill is unstable.
                     let n = v.len();
                     v.as_mut_ptr().write_bytes(0, n);
@@ -730,7 +796,7 @@ impl MsgBlk {
         pkt: impl Emit + EmitDoesNotRelyOnBufContents,
     ) -> Result<(), WriteError> {
         unsafe {
-            self.write(pkt.packet_length(), |v| {
+            self.write_back(pkt.packet_length(), |v| {
                 // Unwrap safety: write will return an Error if
                 // unsuccessful.
                 pkt.emit_uninit(v).unwrap();
@@ -750,14 +816,14 @@ impl MsgBlk {
         }
     }
 
-    /// XXX
+    /// Copies a byte slice into the region after any bytes present in this mblk.
     pub fn write_bytes_back(
         &mut self,
         bytes: impl AsRef<[u8]>,
     ) -> Result<(), WriteError> {
         let bytes = bytes.as_ref();
         unsafe {
-            self.write(bytes.len(), |v| {
+            self.write_back(bytes.len(), |v| {
                 // feat(maybe_uninit_write_slice) -> copy_from_slice
                 // is unstable.
                 let uninit_src: &[MaybeUninit<u8>] =
@@ -767,7 +833,7 @@ impl MsgBlk {
         }
     }
 
-    /// XXX
+    /// Copies a byte slice into the region before any bytes present in this mblk.
     pub fn write_bytes_front(
         &mut self,
         bytes: impl AsRef<[u8]>,
@@ -792,7 +858,7 @@ impl MsgBlk {
             panic!("oopsie daisy")
         }
 
-        mut_self.b_cont = other.unwrap_mblk();
+        mut_self.b_cont = other.unwrap_mblk().as_ptr();
     }
 
     /// Drop all bytes and move the cursor to the very back of the dblk.
@@ -805,16 +871,14 @@ impl MsgBlk {
         }
     }
 
+    /// Returns a shared cursor over all segments in this `MsgBlk`.
     pub fn iter(&self) -> MsgBlkIter {
         MsgBlkIter { curr: Some(self.inner), marker: PhantomData }
     }
 
+    /// Returns a mutable cursor over all segments in this `MsgBlk`.
     pub fn iter_mut(&mut self) -> MsgBlkIterMut {
         MsgBlkIterMut { curr: Some(self.inner), marker: PhantomData }
-    }
-
-    pub fn as_pkt(self) -> Packet<Initialized> {
-        unsafe { Packet::wrap_mblk(self.unwrap_mblk()).expect("already good.") }
     }
 
     /// Return the pointer address of the underlying mblk_t.
@@ -826,16 +890,42 @@ impl MsgBlk {
         self.inner.as_ptr() as uintptr_t
     }
 
-    pub fn unwrap_mblk(self) -> *mut mblk_t {
-        let ptr_out = self.inner.as_ptr();
+    /// Return the head of the underlying `mblk_t` segment chain and
+    /// consume `self`. The caller of this function now owns the
+    /// `mblk_t` segment chain.
+    pub fn unwrap_mblk(self) -> NonNull<mblk_t> {
+        let ptr_out = self.inner;
         _ = ManuallyDrop::new(self);
         ptr_out
     }
 
-    pub unsafe fn wrap_mblk(ptr: *mut mblk_t) -> Option<Self> {
-        let inner = NonNull::new(ptr)?;
+    /// Wrap the `mblk_t` packet in a [`MsgBlk`], taking ownership of
+    /// the `mblk_t` packet as a result. An `mblk_t` packet consists
+    /// of one or more `mblk_t` segments chained together via
+    /// `b_cont`. When the [`MsgBlk`] is dropped, the
+    /// underlying `mblk_t` segment chain is freed. If you wish to
+    /// pass on ownership you must call the [`MsgBlk::unwrap_mblk()`]
+    /// function.
+    ///
+    /// # Safety
+    ///
+    /// The `mp` pointer must point to an `mblk_t` allocated by
+    /// `allocb(9F)` or provided by some kernel API which itself used
+    /// one of the DDI/DKI APIs to allocate it.
+    ///
+    /// # Errors
+    ///
+    /// * Return [`WrapError::NullPtr`] is `mp` is `NULL`.
+    /// * Return [`WrapError::Chain`] is `mp->b_next` or `mp->b_next` are set.
+    pub unsafe fn wrap_mblk(ptr: *mut mblk_t) -> Result<Self, WrapError> {
+        let inner = NonNull::new(ptr).ok_or(WrapError::NullPtr)?;
+        let inner_ref = inner.as_ref();
 
-        Some(Self { inner })
+        if inner_ref.b_next.is_null() && inner_ref.b_prev.is_null() {
+            Ok(Self { inner })
+        } else {
+            Err(WrapError::Chain)
+        }
     }
 
     /// Copy out all bytes within this mblk and its successors
@@ -853,6 +943,10 @@ impl MsgBlk {
     /// Drops all empty mblks from the start of this chain where possible
     /// (i.e., any empty mblk is followed by another mblk).
     pub fn drop_empty_segments(&mut self) {
+        // We should not be creating message block continuations to zero
+        // sized blocks. This is not a generally expected thing and has
+        // caused NIC hardware to stop working.
+        // Stripping these out where possible is necessary.
         let mut head = self.inner;
         let mut neighbour = unsafe { (*head.as_ptr()).b_cont };
 
@@ -888,7 +982,6 @@ pub struct MsgBlkIterMut<'a> {
 }
 
 impl<'a> MsgBlkIterMut<'a> {
-    ///
     pub fn next_iter(&self) -> MsgBlkIter {
         let curr = self
             .curr
@@ -948,10 +1041,19 @@ impl<'a> Read for MsgBlkIterMut<'a> {
     }
 }
 
+/// For the `no_std`/illumos kernel environment, we want the `mblk_t`
+/// drop to occur at the [`Packet`] level, where we can make use of
+/// `freemsg(9F)`.
 impl Drop for MsgBlk {
     fn drop(&mut self) {
+        // Drop the segment chain if there is one. Consumers of MsgBlk
+        // will never own a packet with no segments.
+        // This guarantees that we only free the segment chain once.
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
+                // Safety: This is safe as long as the original
+                // `mblk_t` came from a call to `allocb(9F)` (or
+                // similar API).
                 unsafe { ddi::freemsg(self.inner.as_ptr()) };
             } else {
                 mock_freemsg(self.inner.as_ptr());
@@ -1545,9 +1647,62 @@ impl<T: Read> From<&PacketHeaders<T>> for InnerFlowId {
     }
 }
 
-// GOAL: get to an absolute minimum point where we:
-// - parse into an innerflowid
-// - use existing transforms if a ULP entry exists.
+/// A network packet.
+///
+/// The [`Packet`] type presents an abstraction for manipulating
+/// network packets in both a `std` and `no_std` environment. The
+/// first is useful for writing tests against the OPTE core engine and
+/// executing them in userland, without the need for standing up a
+/// full-blown virtual machine. To the engine this [`Packet`] is
+/// absolutely no different than if it was running in-kernel for a
+/// real virtual machine.
+///
+/// The `no_std` implementation is used when running in-kernel. The
+/// main difference is the `mblk_t` and `dblk_t` structures are coming
+/// from viona (outbound/Tx) and mac (inbound/Rx), and we consume them
+/// via [`Packet::wrap_mblk()`]. In reality this is typically holding
+/// an Ethernet _frame_, but we prefer to use the colloquial
+/// nomenclature of "packet".
+///
+/// A [`Packet`] is made up of one or more segments ([`PacketSeg`]).
+/// Any given header is *always* contained in a single segment, i.e. a
+/// header never straddles multiple segments. While it's preferable to
+/// have all headers in the first segment, it *may* be the case that
+/// the headers span multiple segments; but a *single* header type
+/// (e.g. the IP header) will *never* straddle two segments. The
+/// payload, however, *may* span multiple segments.
+///
+/// # illumos terminology
+///
+/// In illumos there is no real notion of an mblk "packet" or
+/// "segment": a packet is just a linked list of `mblk_t` values.
+/// The "packet" is simply a pointer to the first `mblk_t` in the
+/// list, which also happens to be the first "segment", and any
+/// further segments are linked via `b_cont`. In the illumos
+/// kernel code you'll *sometimes* find variables named `mp_head`
+/// to indicate that it points to a packet.
+///
+/// There is also the notion of a "chain" of packets. This is
+/// represented by a list of `mblk_t` structure as well, but instead
+/// of using `b_cont` the individual packets are linked via the
+/// `b_next` field. In the illumos kernel code this this is often
+/// referred to with the variable name `mp_chain`, but sometimes also
+/// `mp_head` (or just `mp`). It's a bit ambiguous, and something you
+/// kind of figure out as you work in the code more. Though part of me
+/// would like to create some rust-like "new type pattern" in C to
+/// disambiguate packets from packet chains across APIs so the
+/// compiler can detect when your API is working against the wrong
+/// contract (for example a function that expects a single packet but
+/// is being fed a packet chain).
+///
+/// TODOx
+///
+/// * Document the various type states, their purpose, their data, and
+/// how the [`Packet`] generally transitions between them.
+///
+/// * Somewhere we'll want to enforce and document a 2-byte prefix pad
+/// to keep IP header alignment (the host expects this).
+///
 #[derive(Debug)]
 pub struct Packet2<S: PacketState> {
     state: S,
@@ -1916,7 +2071,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
         self.state.inner_csum_dirty |= xform.run(&mut self.state.meta)?;
 
         // Recomputing this is a little bit wasteful, since we're moving
-        // rebuilding a static repr from packet fields. This is a necesary
+        // rebuilding a static repr from packet fields. This is a necessary
         // part of slowpath use because layers are designed around intermediate
         // flowkeys.
         //
@@ -1985,7 +2140,9 @@ impl<T: Read> Packet2<Parsed2<T>> {
 
     /// Compute ULP and IP header checksum from scratch.
     ///
-    /// This should really only be used for testing.
+    /// This should really only be used for testing, or in the case
+    /// where we have applied body transforms and know that any initial
+    /// body_csum cannot be valid.
     pub fn compute_checksums(&mut self)
     where
         T::Chunk: ByteSliceMut,
@@ -2099,6 +2256,13 @@ impl<T: Read> Packet2<Parsed2<T>> {
             return;
         }
 
+        // TODO: DOUBLE CHECK LOGIC
+
+        // We expect
+        if self.state.body_modified {
+            return self.compute_checksums();
+        }
+
         // Flag to indicate if an IP header/ULP checksums were
         // provided. If the checksum is zero, it's assumed heardware
         // checksum offload is being used, and OPTE should not update
@@ -2190,9 +2354,9 @@ impl<T: Read> Packet2<Parsed2<T>> {
 /// about which nothing else is known besides the length.
 #[derive(Debug)]
 pub struct Initialized2<T: Read> {
-    // Total length of packet, in bytes. This is equal to the sum of
-    // the length of the _initialized_ window in all the segments
-    // (`b_wptr - b_rptr`).
+    /// Total length of packet, in bytes. This is equal to the sum of
+    /// the length of the _initialized_ window in all the segments
+    /// (`b_wptr - b_rptr`).
     len: usize,
 
     inner: T,
@@ -2203,13 +2367,41 @@ impl<T: Read> PacketState for Parsed2<T> {}
 
 /// Zerocopy view onto a parsed packet, acompanied by locally
 /// computed state.
+/// XXX: this is 'full meta'. Maybe rename LightweightMeta (???)
 pub struct Parsed2<T: Read> {
+    /// Total length of packet, in bytes. This is equal to the sum of
+    /// the length of the _initialized_ window in all the segments
+    /// (`b_wptr - b_rptr`).
     len: usize,
+    /// Access to parsed packet headers and the packet body.
     meta: Box<PacketHeaders<T>>,
+    /// Current Flow ID of this packet, accountgin for any applied
+    /// transforms.
     flow: InnerFlowId,
+
+    /// The body's checksum. It is up to the `NetworkImpl::Parser` on
+    /// whether to populate this field or not. The reason for
+    /// populating this field is to avoid duplicate work if the client
+    /// has provided a ULP checksum. Rather than redoing the body
+    /// checksum calculation, we can use incremental checksum
+    /// techniques to stash the body's checksum for reuse when emitting
+    /// the new headers.
+    ///
+    /// However, if the client does not provide a checksum, presumably
+    /// because they are relying on checksum offload, this value should
+    /// be `None`. In such case, `emit_headers()` will perform no ULP
+    /// checksum update.
+    ///
+    /// This value may also be none if the packet has no notion of a
+    /// ULP checksum; e.g., ARP.
     body_csum: Option<Checksum>,
+    /// L4 hash for this packet, computed from the flow ID.
     l4_hash: Memoised<u32>,
+    /// Tracks whether any body transforms have been executed on this
+    /// packet.
     body_modified: bool,
+    /// Tracks whether any transform has been applied to this packet
+    /// which would dirty the inner L3 and/or ULP header checksums.
     inner_csum_dirty: bool,
 }
 
@@ -2383,7 +2575,8 @@ impl EmittestSpec {
 
                     let has = node.len();
                     let droppable = to_rewind.min(has);
-                    node.drop_front_bytes(droppable);
+                    node.drop_front_bytes(droppable)
+                        .expect("droppable should be bounded above by len");
                     to_rewind -= droppable;
 
                     slots.push(node).unwrap();

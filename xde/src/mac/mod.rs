@@ -22,8 +22,6 @@ use core::ptr;
 use illumos_sys_hdrs::*;
 use opte::engine::ether::EtherAddr;
 use opte::engine::ingot_packet::MsgBlk;
-use opte::engine::packet::Initialized;
-use opte::engine::packet::Packet;
 use opte::engine::packet::PacketState;
 pub use sys::*;
 
@@ -210,16 +208,22 @@ impl MacClientHandle {
     /// but for now we pass only a single packet at a time.
     pub fn tx(
         &self,
-        pkt: Packet<impl PacketState>,
+        pkt: MsgBlk,
         hint: uintptr_t,
         flags: MacTxFlags,
-    ) -> Option<Packet<Initialized>> {
+    ) -> Option<MsgBlk> {
         // We must unwrap the raw `mblk_t` out of the `pkt` here,
         // otherwise the mblk_t would be dropped at the end of this
         // function along with `pkt`.
         let mut ret_mp = ptr::null_mut();
         unsafe {
-            mac_tx(self.mch, pkt.unwrap_mblk(), hint, flags.bits(), &mut ret_mp)
+            mac_tx(
+                self.mch,
+                pkt.unwrap_mblk().as_ptr(),
+                hint,
+                flags.bits(),
+                &mut ret_mp,
+            )
         };
         if !ret_mp.is_null() {
             // Unwrap: We know the ret_mp is valid because we gave
@@ -230,7 +234,7 @@ impl MacClientHandle {
             // XXX Technically we are still only passing single
             // packets, but eventually we will pass packet chains and
             // the sentence above will hold.
-            Some(unsafe { Packet::wrap_mblk(ret_mp).unwrap() })
+            Some(unsafe { MsgBlk::wrap_mblk(ret_mp).unwrap() })
         } else {
             None
         }
@@ -245,24 +249,6 @@ impl MacClientHandle {
     /// but for now we pass only a single packet at a time.
     pub fn tx_drop_on_no_desc(
         &self,
-        pkt: Packet<impl PacketState>,
-        hint: uintptr_t,
-        flags: MacTxFlags,
-    ) {
-        // We must unwrap the raw `mblk_t` out of the `pkt` here,
-        // otherwise the mblk_t would be dropped at the end of this
-        // function along with `pkt`.
-        let mut raw_flags = flags.bits();
-        raw_flags |= MAC_DROP_ON_NO_DESC;
-        let mut ret_mp = ptr::null_mut();
-        unsafe {
-            mac_tx(self.mch, pkt.unwrap_mblk(), hint, raw_flags, &mut ret_mp)
-        };
-        debug_assert_eq!(ret_mp, ptr::null_mut());
-    }
-
-    pub fn tx_drop_on_no_desc2(
-        &self,
         pkt: MsgBlk,
         hint: uintptr_t,
         flags: MacTxFlags,
@@ -274,7 +260,13 @@ impl MacClientHandle {
         raw_flags |= MAC_DROP_ON_NO_DESC;
         let mut ret_mp = ptr::null_mut();
         unsafe {
-            mac_tx(self.mch, pkt.unwrap_mblk(), hint, raw_flags, &mut ret_mp)
+            mac_tx(
+                self.mch,
+                pkt.unwrap_mblk().as_ptr(),
+                hint,
+                raw_flags,
+                &mut ret_mp,
+            )
         };
         debug_assert_eq!(ret_mp, ptr::null_mut());
     }
