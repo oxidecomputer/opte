@@ -22,7 +22,6 @@ use core::ptr;
 use illumos_sys_hdrs::*;
 use opte::engine::ether::EtherAddr;
 use opte::engine::ingot_packet::MsgBlk;
-use opte::engine::packet::PacketState;
 pub use sys::*;
 
 /// Errors while opening a MAC handle.

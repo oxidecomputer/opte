@@ -6,7 +6,6 @@
 
 // xde - A mac provider for OPTE-based network implementations.
 #![feature(extern_types)]
-#![feature(panic_info_message)]
 #![no_std]
 #![allow(non_upper_case_globals)]
 // XXX We do not use double in the kernel. We should not allow

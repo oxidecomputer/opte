@@ -35,31 +35,16 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
-use core::hash::Hash;
-use core::mem::MaybeUninit;
 use core::num::NonZeroU32;
 use core::ptr;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
-use crc32fast::Hasher;
 use illumos_sys_hdrs::*;
-use ingot::geneve::GeneveFlags;
-use ingot::geneve::GeneveMut;
 use ingot::geneve::GeneveRef;
-use ingot::geneve::ValidGeneve;
-use ingot::ip::IpProtocol;
-use ingot::ip::Ipv6Mut;
-use ingot::ip::ValidIpv6;
-use ingot::types::Emit;
-use ingot::types::Header;
-use ingot::types::HeaderParse;
-use ingot::udp::UdpMut;
-use ingot::udp::ValidUdp;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
-use opte::api::MacAddr;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -75,23 +60,15 @@ use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
 use opte::engine::geneve::Vni;
-use opte::engine::headers::EncapMeta;
-use opte::engine::headers::EncapPush;
 use opte::engine::headers::IpAddr;
-use opte::engine::headers::IpPush;
-use opte::engine::ingot_base::EthernetMut;
 use opte::engine::ingot_base::EthernetRef;
-use opte::engine::ingot_base::ValidEthernet;
 use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ingot_packet::Packet2;
-use opte::engine::ingot_packet::Parsed2;
-use opte::engine::ingot_packet::ParsedMblk;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::PacketChain;
 use opte::engine::packet::PacketError;
-use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessResult;
@@ -1299,19 +1276,17 @@ static mut xde_devops: dev_ops = dev_ops {
     // Safety: Yes, this is a mutable static. No, there is no race as
     // it's mutated only during `_init()`. Yes, it needs to be mutable
     // to allow `dld_init_ops()` to set `cb_str`.
-    devo_cb_ops: unsafe { addr_of!(xde_cb_ops) },
+    devo_cb_ops: addr_of!(xde_cb_ops),
     devo_bus_ops: 0 as *const bus_ops,
     devo_power: nodev_power,
     devo_quiesce: ddi_quiesce_not_needed,
 };
 
 #[no_mangle]
-static xde_modldrv: modldrv = unsafe {
-    modldrv {
-        drv_modops: addr_of!(mod_driverops),
-        drv_linkinfo: XDE_STR,
-        drv_dev_ops: addr_of!(xde_devops),
-    }
+static xde_modldrv: modldrv = modldrv {
+    drv_modops: addr_of!(mod_driverops),
+    drv_linkinfo: XDE_STR,
+    drv_dev_ops: addr_of!(xde_devops),
 };
 
 #[no_mangle]
@@ -1436,7 +1411,7 @@ fn guest_loopback<'a>(
 
     // TODO: Rework currently requires a reparse on loopback to account for UFT fastpath.
 
-    let mut parsed_pkt = match parsed_pkt.parse_inbound(VpcParser {}) {
+    let parsed_pkt = match parsed_pkt.parse_inbound(VpcParser {}) {
         Ok(pkt) => pkt,
         Err(e) => {
             opte::engine::dbg!("Loopback bad packet: {:?}", e);
@@ -1460,7 +1435,7 @@ fn guest_loopback<'a>(
             // the packet into the inbound processing path of the
             // destination Port.
             match dest_dev.port.process(In, parsed_pkt) {
-                Ok(ProcessResult::Modified(mut emit_spec)) => {
+                Ok(ProcessResult::Modified(emit_spec)) => {
                     let pkt = emit_spec.apply(pkt);
                     unsafe {
                         mac::mac_rx(
@@ -1562,13 +1537,10 @@ unsafe extern "C" fn xde_mc_tx(
 
 #[inline]
 unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
-    let mblk_addr = pkt.mblk_addr();
-    let pkt_len_old = pkt.byte_len();
-
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
     let parsed_pkt = Packet2::new(pkt.iter_mut());
-    let mut parsed_pkt = match parsed_pkt.parse_outbound(parser) {
+    let parsed_pkt = match parsed_pkt.parse_outbound(parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.
@@ -1614,7 +1586,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     let res = port.process(Direction::Out, parsed_pkt);
 
     match res {
-        Ok(ProcessResult::Modified(mut emit_spec)) => {
+        Ok(ProcessResult::Modified(emit_spec)) => {
             // If the outer IPv6 destination is the same as the
             // source, then we need to loop the packet inbound to the
             // guest on this same host.
@@ -1876,14 +1848,13 @@ unsafe fn xde_rx_one(
     mut pkt: MsgBlk,
 ) {
     let mblk_addr = pkt.mblk_addr();
-    let pkt_len_old = pkt.byte_len();
     let parsed_pkt = Packet2::new(pkt.iter_mut());
 
     // We must first parse the packet in order to determine where it
     // is to be delivered.
     let parser = VpcParser {};
     // let mblk_addr = parsed_pkt.mblk_addr();
-    let mut parsed_pkt = match parsed_pkt.parse_inbound(parser) {
+    let parsed_pkt = match parsed_pkt.parse_inbound(parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.
@@ -1937,7 +1908,7 @@ unsafe fn xde_rx_one(
         Ok(ProcessResult::Bypass) => {
             mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
         }
-        Ok(ProcessResult::Modified(mut emit_spec)) => {
+        Ok(ProcessResult::Modified(emit_spec)) => {
             let npkt = emit_spec.apply(pkt);
 
             mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk().as_ptr());
