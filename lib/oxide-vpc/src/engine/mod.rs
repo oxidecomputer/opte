@@ -20,9 +20,9 @@ use opte::engine::arp::ValidArpEthIpv4;
 use opte::engine::arp::ARP_HTYPE_ETHERNET;
 use opte::engine::flow_table::FlowTable;
 use opte::engine::ingot_base::EthernetRef;
+use opte::engine::ingot_packet::FullParsed;
 use opte::engine::ingot_packet::OpteParsed2;
 use opte::engine::ingot_packet::Packet2;
-use opte::engine::ingot_packet::Parsed2;
 use opte::engine::ingot_packet::ValidGeneveOverV6;
 use opte::engine::ingot_packet::ValidNoEncap;
 use opte::engine::ip4::Ipv4Addr;
@@ -66,7 +66,7 @@ fn is_arp_req_for_tpa(tpa: Ipv4Addr, arp: &impl ArpEthIpv4Ref) -> bool {
 impl VpcNetwork {
     fn handle_arp_out<T: Read>(
         &self,
-        pkt: &mut Packet2<Parsed2<T>>,
+        pkt: &mut Packet2<FullParsed<T>>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
         T::Chunk: ByteSliceMut,
@@ -102,7 +102,7 @@ impl NetworkImpl for VpcNetwork {
     fn handle_pkt<T: Read>(
         &self,
         dir: Direction,
-        pkt: &mut Packet2<Parsed2<T>>,
+        pkt: &mut Packet2<FullParsed<T>>,
         _uft_in: &FlowTable<UftEntry<InnerFlowId>>,
         _uft_out: &FlowTable<UftEntry<InnerFlowId>>,
     ) -> Result<HdlPktAction, HdlPktError>

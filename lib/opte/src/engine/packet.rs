@@ -47,8 +47,6 @@ cfg_if! {
 
 pub static MBLK_MAX_SIZE: usize = u16::MAX as usize;
 
-// --- REWRITE IN PROGRESS ---
-
 pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     proto: 255,
     addrs: AddrPair::V4 { src: Ipv4Addr::ANY_ADDR, dst: Ipv4Addr::ANY_ADDR },
@@ -190,13 +188,14 @@ struct PacketChainInner {
 /// Network packets are provided by illumos as a linked list, using
 /// the `b_next` and `b_prev` fields.
 ///
-/// See the documentation for [`Packet`] for full context.
-// TODO: We might modify Packet to do away with the `Vec<PacketSeg>`.
-// I could see Chain being retooled accordingly (i.e., Packets could
-// be allocated a lifetime via PhantomData based on whether we want
-// to remove them from the chain or modify in place).
+/// See the documentation for [`Packet`] and/or [`MsgBlk`] for full context.
+// TODO: We might retool this type now that MsgBlk does not decompose
+// each mblk_t into individual segments (i.e., packets could be allocated
+// a lifetime via PhantomData based on whether we want to remove them from the chain or modify in place).
 // Today's code is all equivalent to always using 'static, because
 // we remove and re-add the mblks to work on them.
+// We might want also want to return either a chain/mblk_t in an enum, but
+// practically XDE will always assume it has a chain from MAC.
 pub struct PacketChain {
     inner: Option<PacketChainInner>,
 }
@@ -300,7 +299,7 @@ impl PacketChain {
 
 impl Drop for PacketChain {
     fn drop(&mut self) {
-        // This is a minor variation on Packet's logic. illumos
+        // This is a minor variation on MsgBlk's logic. illumos
         // contains helper functions from STREAMS to just drop a whole
         // chain.
         cfg_if! {

@@ -56,7 +56,7 @@ use opte::api::Direction;
 use opte::api::OpteError;
 use opte::engine::ether::EtherMod;
 use opte::engine::headers::HeaderAction;
-use opte::engine::ingot_packet::PacketHeaders2;
+use opte::engine::ingot_packet::MblkPacketData;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
@@ -143,7 +143,7 @@ impl StaticAction for RewriteSrcMac {
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _packet_meta: &PacketHeaders2,
+        _packet_meta: &MblkPacketData,
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform {

@@ -10,8 +10,8 @@ use super::*;
 use crate::engine::ingot_base::Ethernet;
 use crate::engine::ingot_base::Ipv6;
 use crate::engine::ingot_base::Ipv6Ref;
+use crate::engine::ingot_packet::MblkPacketData;
 use crate::engine::ingot_packet::MsgBlk;
-use crate::engine::ingot_packet::PacketHeaders2;
 use crate::engine::predicate::Ipv6AddrMatch;
 use alloc::string::String;
 use ingot::ethernet::Ethertype;
@@ -101,7 +101,7 @@ impl HairpinAction for Icmpv6EchoReply {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
+    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
         // TODO: fold reader access into PacketHeaders2
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
@@ -229,7 +229,7 @@ impl HairpinAction for RouterAdvertisement {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
+    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
         // TODO: fold reader access into PacketHeaders2
         use smoltcp::time::Duration;
         use smoltcp::wire::NdiscRouterFlags;
@@ -552,7 +552,7 @@ impl HairpinAction for NeighborAdvertisement {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
+    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That

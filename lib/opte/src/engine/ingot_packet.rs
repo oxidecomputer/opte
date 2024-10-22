@@ -22,6 +22,7 @@ use super::headers::IpMod;
 use super::headers::IpPush;
 use super::headers::PushAction;
 use super::headers::UlpMetaModify;
+use super::icmp::IcmpEchoMut;
 use super::icmp::IcmpEchoRef;
 use super::icmp::QueryEcho;
 use super::icmp::ValidIcmpEcho;
@@ -525,7 +526,21 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
     }
 }
 
-// --- REWRITE IN PROGRESS ---
+/// An individual illumos `mblk_t` -- a single bytestream
+/// comprised of a linked list of data segments.
+///
+/// To facilitate testing the OPTE core, [`MsgBlk`] is an abstraction for
+/// manipulating network packets in both a `std` and `no_std` environment.
+/// The first is useful for writing tests against the OPTE core engine and
+/// executing them in userland, without the need for standing up a full-blown
+/// virtual machine.
+///
+/// The `no_std` implementation is used when running in-kernel. The
+/// main difference is the `mblk_t` and `dblk_t` structures are coming
+/// from viona (outbound/Tx) and mac (inbound/Rx), and we consume them
+/// via [`Packet::wrap_mblk()`]. In reality this is typically holding
+/// an Ethernet _frame_, but we prefer to use the colloquial
+/// nomenclature of "packet".
 #[derive(Debug)]
 pub struct MsgBlk {
     pub inner: NonNull<mblk_t>,
@@ -1346,7 +1361,7 @@ impl<T: Read> PktBodyWalker<T> {
     }
 }
 
-pub struct PacketHeaders<T: Read> {
+pub struct PacketData<T: Read> {
     pub(crate) headers: OpteMeta<T::Chunk>,
     initial_lens: Option<Box<OpteUnifiedLengths>>,
     body: PktBodyWalker<T>,
@@ -1366,7 +1381,7 @@ impl<T: ByteSlice> From<NoEncap<T>> for OpteMeta<T> {
     }
 }
 
-impl<T: Read> core::fmt::Debug for PacketHeaders<T> {
+impl<T: Read> core::fmt::Debug for PacketData<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("PacketHeaders(..)")
     }
@@ -1388,7 +1403,7 @@ pub fn ulp_dst_port<B: ByteSlice>(pkt: &Ulp<B>) -> Option<u16> {
     }
 }
 
-impl<T: Read> PacketHeaders<T> {
+impl<T: Read> PacketData<T> {
     pub fn initial_lens(&self) -> Option<&OpteUnifiedLengths> {
         self.initial_lens.as_ref().map(|v| &**v)
     }
@@ -1614,9 +1629,9 @@ fn pseudo_port_v<T: ByteSlice>(chunk: &ValidUlp<T>) -> Option<u16> {
     }
 }
 
-impl<T: Read> From<&PacketHeaders<T>> for InnerFlowId {
+impl<T: Read> From<&PacketData<T>> for InnerFlowId {
     #[inline]
-    fn from(meta: &PacketHeaders<T>) -> Self {
+    fn from(meta: &PacketData<T>) -> Self {
         let (proto, addrs) = match meta.inner_l3() {
             Some(L3::Ipv4(pkt)) => (
                 pkt.protocol().0,
@@ -1649,28 +1664,12 @@ impl<T: Read> From<&PacketHeaders<T>> for InnerFlowId {
 
 /// A network packet.
 ///
-/// The [`Packet`] type presents an abstraction for manipulating
-/// network packets in both a `std` and `no_std` environment. The
-/// first is useful for writing tests against the OPTE core engine and
-/// executing them in userland, without the need for standing up a
-/// full-blown virtual machine. To the engine this [`Packet`] is
-/// absolutely no different than if it was running in-kernel for a
-/// real virtual machine.
-///
-/// The `no_std` implementation is used when running in-kernel. The
-/// main difference is the `mblk_t` and `dblk_t` structures are coming
-/// from viona (outbound/Tx) and mac (inbound/Rx), and we consume them
-/// via [`Packet::wrap_mblk()`]. In reality this is typically holding
-/// an Ethernet _frame_, but we prefer to use the colloquial
-/// nomenclature of "packet".
-///
-/// A [`Packet`] is made up of one or more segments ([`PacketSeg`]).
-/// Any given header is *always* contained in a single segment, i.e. a
-/// header never straddles multiple segments. While it's preferable to
-/// have all headers in the first segment, it *may* be the case that
-/// the headers span multiple segments; but a *single* header type
-/// (e.g. the IP header) will *never* straddle two segments. The
-/// payload, however, *may* span multiple segments.
+/// A packet is made up of one or more segments. Any given header is
+/// *always* contained in a single segment, i.e. a  header never straddles
+/// multiple segments. While it's preferable to have all headers in the
+/// first segment, it *may* be the case that the headers span multiple
+/// segments; but a *single* header type (e.g. the IP header) will *never*
+/// straddle two segments. The payload, however, *may* span multiple segments.
 ///
 /// # illumos terminology
 ///
@@ -1694,15 +1693,12 @@ impl<T: Read> From<&PacketHeaders<T>> for InnerFlowId {
 /// compiler can detect when your API is working against the wrong
 /// contract (for example a function that expects a single packet but
 /// is being fed a packet chain).
-///
-/// TODOx
-///
-/// * Document the various type states, their purpose, their data, and
-/// how the [`Packet`] generally transitions between them.
-///
-/// * Somewhere we'll want to enforce and document a 2-byte prefix pad
-/// to keep IP header alignment (the host expects this).
-///
+//
+// TODO: In theory, this can be any `Read` type giving us `&mut [u8]`s,
+// but in practice we are internally reliant on returning `MsgBlk`s in
+// hairpin actions and the like. Fighting the battle of making this generic
+// is a bridge too far for the `ingot` datapath rewrite. This might have
+// value in future.
 #[derive(Debug)]
 pub struct Packet2<S: PacketState> {
     state: S,
@@ -1733,12 +1729,11 @@ where
     pub fn parse_inbound<NP: NetworkParser>(
         self,
         net: NP,
-    ) -> Result<Packet2<ParsedStage1<T, NP::InMeta<T::Chunk>>>, ParseError>
-    {
+    ) -> Result<Packet2<LiteParsed<T, NP::InMeta<T::Chunk>>>, ParseError> {
         let Packet2 { state: Initialized2 { len, inner } } = self;
 
         Ok(Packet2 {
-            state: ParsedStage1 { meta: net.parse_inbound(inner)?, len },
+            state: LiteParsed { meta: net.parse_inbound(inner)?, len },
         })
     }
 
@@ -1746,23 +1741,22 @@ where
     pub fn parse_outbound<NP: NetworkParser>(
         self,
         net: NP,
-    ) -> Result<Packet2<ParsedStage1<T, NP::OutMeta<T::Chunk>>>, ParseError>
-    {
+    ) -> Result<Packet2<LiteParsed<T, NP::OutMeta<T::Chunk>>>, ParseError> {
         let Packet2 { state: Initialized2 { len, inner } } = self;
 
         Ok(Packet2 {
-            state: ParsedStage1 { meta: net.parse_outbound(inner)?, len },
+            state: LiteParsed { meta: net.parse_outbound(inner)?, len },
         })
     }
 }
 
-impl<'a, T: Read + 'a, M: LightweightMeta<T::Chunk>> Packet2<ParsedStage1<T, M>>
+impl<'a, T: Read + 'a, M: LightweightMeta<T::Chunk>> Packet2<LiteParsed<T, M>>
 where
     T::Chunk: ingot::types::IntoBufPointer<'a>,
 {
     #[inline]
-    pub fn to_full_meta(self) -> Packet2<Parsed2<T>> {
-        let Packet2 { state: ParsedStage1 { len, meta } } = self;
+    pub fn to_full_meta(self) -> Packet2<FullParsed<T>> {
+        let Packet2 { state: LiteParsed { len, meta } } = self;
         let IngotParsed { stack: headers, data, last_chunk } = meta;
 
         // TODO: we can probably not do this in some cases, but we
@@ -1787,10 +1781,10 @@ where
             base: Some((last_chunk, data)).into(),
             slice: Default::default(),
         };
-        let meta = Box::new(PacketHeaders { headers, initial_lens, body });
+        let meta = Box::new(PacketData { headers, initial_lens, body });
 
         Packet2 {
-            state: Parsed2 {
+            state: FullParsed {
                 meta,
                 flow,
                 body_csum,
@@ -1823,12 +1817,12 @@ where
     }
 }
 
-impl<T: Read> Packet2<Parsed2<T>> {
-    pub fn meta(&self) -> &PacketHeaders<T> {
+impl<T: Read> Packet2<FullParsed<T>> {
+    pub fn meta(&self) -> &PacketData<T> {
         &self.state.meta
     }
 
-    pub fn meta_mut(&mut self) -> &mut PacketHeaders<T> {
+    pub fn meta_mut(&mut self) -> &mut PacketData<T> {
         &mut self.state.meta
     }
 
@@ -1839,7 +1833,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
     #[inline]
     /// Convert a packet's metadata into a set of instructions
     /// needed to serialize all its changes to the wire.
-    pub fn emit_spec(self) -> Result<EmitSpec, ingot::types::ParseError>
+    pub fn emit_spec(self) -> Result<OldEmitSpec, ingot::types::ParseError>
     where
         T::Chunk: ByteSliceMut,
     {
@@ -2042,7 +2036,7 @@ impl<T: Read> Packet2<Parsed2<T>> {
             _ => {}
         }
 
-        Ok(EmitSpec {
+        Ok(OldEmitSpec {
             rewind: rewind as u16,
             payload_len: payload_len as u16,
             encapped_len: encapped_len as u16,
@@ -2251,14 +2245,14 @@ impl<T: Read> Packet2<Parsed2<T>> {
         T::Chunk: ByteSliceMut,
     {
         // If we know that no transform touched a field which features in
-        // an inner transport cksum (L4/L3 src/dst, most realistically).
-        if !self.state.inner_csum_dirty {
+        // an inner transport cksum (L4/L3 src/dst, most realistically),
+        // and no body transform occurred then we can exit early.
+        if !self.checksums_dirty() && !self.state.body_modified {
             return;
         }
 
-        // TODO: DOUBLE CHECK LOGIC
-
-        // We expect
+        // We expect that any body transform will necessarily invalidate
+        // the body_csum. Recompute from scratch.
         if self.state.body_modified {
             return self.compute_checksums();
         }
@@ -2363,18 +2357,17 @@ pub struct Initialized2<T: Read> {
 }
 
 impl<T: Read> PacketState for Initialized2<T> {}
-impl<T: Read> PacketState for Parsed2<T> {}
+impl<T: Read> PacketState for FullParsed<T> {}
 
-/// Zerocopy view onto a parsed packet, acompanied by locally
+/// Zerocopy view onto a parsed packet, accompanied by locally
 /// computed state.
-/// XXX: this is 'full meta'. Maybe rename LightweightMeta (???)
-pub struct Parsed2<T: Read> {
+pub struct FullParsed<T: Read> {
     /// Total length of packet, in bytes. This is equal to the sum of
     /// the length of the _initialized_ window in all the segments
     /// (`b_wptr - b_rptr`).
     len: usize,
     /// Access to parsed packet headers and the packet body.
-    meta: Box<PacketHeaders<T>>,
+    meta: Box<PacketData<T>>,
     /// Current Flow ID of this packet, accountgin for any applied
     /// transforms.
     flow: InnerFlowId,
@@ -2405,30 +2398,23 @@ pub struct Parsed2<T: Read> {
     inner_csum_dirty: bool,
 }
 
-pub struct ParsedStage1<T: Read, M: LightweightMeta<T::Chunk>> {
+/// Minimum-size zerocopy view onto a parsed packet, sufficient for fast
+/// packet transformation.
+pub struct LiteParsed<T: Read, M: LightweightMeta<T::Chunk>> {
     len: usize,
-    // This type is... pretty fat.
-    // But we need to hang onto this to allow hairpins/body txms/ARP
-    // to function.
     meta: IngotParsed<M, T>,
-    // REMOVED:
-    // flow: InnerFlowId, // (can be computed out)
-    // body_csum: Option<Checksum>, // (can be computed based on header class)
-    // l4_hash: Option<NonZeroU32>, // Should be stored in emitspec.
 }
 
-impl<T: Read, M: LightweightMeta<T::Chunk>> PacketState for ParsedStage1<T, M> {}
+impl<T: Read, M: LightweightMeta<T::Chunk>> PacketState for LiteParsed<T, M> {}
 
-impl<T: Read, M: LightweightMeta<T::Chunk>> ParsedStage1<T, M> {}
+impl<T: Read, M: LightweightMeta<T::Chunk>> LiteParsed<T, M> {}
 
-// Needed for now to account for not wanting to redesign ActionDescs
-// to be generic over T (trait object safety rules, etc.).
-pub type PacketMeta3<'a> = Parsed2<MsgBlkIterMut<'a>>;
-pub type PacketHeaders2<'a> = PacketHeaders<MsgBlkIterMut<'a>>;
-
-pub type InitMblk<'a> = Initialized2<MsgBlkIterMut<'a>>;
-pub type ParsedMblk<'a> = Parsed2<MsgBlkIterMut<'a>>;
-pub type LightParsedMblk<'a, M> = ParsedStage1<MsgBlkIterMut<'a>, M>;
+// XXX: Needed for now to account for not wanting to redesign
+// ActionDescs to be generic over T (trait object safety rules, etc.),
+// in addition to needing to rework Hairpin actions.
+pub type MblkPacketData<'a> = PacketData<MsgBlkIterMut<'a>>;
+pub type MblkFullParsed<'a> = FullParsed<MsgBlkIterMut<'a>>;
+pub type MblkLiteParsed<'a, M> = LiteParsed<MsgBlkIterMut<'a>, M>;
 
 #[inline]
 fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
@@ -2518,11 +2504,6 @@ impl<'a> QueryLen for MsgBlkIterMut<'a> {
     }
 }
 
-pub enum Emitter<T> {
-    Repr(Box<T>),
-    Cached(Arc<[u8]>),
-}
-
 // TODO: don't really care about pushing 'inner' reprs today.
 #[derive(Clone, Debug, Default)]
 pub struct OpteEmit {
@@ -2543,20 +2524,26 @@ pub struct OpteInnerEmit {
 }
 
 #[derive(Clone, Debug)]
-pub struct EmittestSpec {
-    pub spec: EmitterSpec,
-    pub l4_hash: u32,
-    pub rewind: u16,
-    pub ulp_len: u32,
+pub struct EmitSpec {
+    pub(crate) prepend: PushSpec,
+    pub(crate) l4_hash: u32,
+    pub(crate) rewind: u16,
+    pub(crate) ulp_len: u32,
 }
 
-impl Default for EmittestSpec {
+impl Default for EmitSpec {
     fn default() -> Self {
-        Self { spec: EmitterSpec::NoOp, l4_hash: 0, rewind: 0, ulp_len: 0 }
+        Self { prepend: PushSpec::NoOp, l4_hash: 0, rewind: 0, ulp_len: 0 }
     }
 }
 
-impl EmittestSpec {
+impl EmitSpec {
+    #[inline]
+    #[must_use]
+    pub fn l4_hash(&self) -> u32 {
+        self.l4_hash
+    }
+
     #[inline]
     #[must_use]
     pub fn apply(&self, mut pkt: MsgBlk) -> MsgBlk {
@@ -2591,11 +2578,11 @@ impl EmittestSpec {
         // much less so in the fastpath.
         pkt.drop_empty_segments();
 
-        let out = match &self.spec {
-            EmitterSpec::Fastpath(push_spec) => {
+        let out = match &self.prepend {
+            PushSpec::Fastpath(push_spec) => {
                 push_spec.encap.prepend(pkt, self.ulp_len as usize)
             }
-            EmitterSpec::Slowpath(push_spec) => {
+            PushSpec::Slowpath(push_spec) => {
                 let mut needed_push = push_spec.outer_eth.packet_length()
                     + push_spec.outer_ip.packet_length()
                     + push_spec.outer_encap.packet_length();
@@ -2688,7 +2675,7 @@ impl EmittestSpec {
                     pkt
                 }
             }
-            EmitterSpec::NoOp => pkt,
+            PushSpec::NoOp => pkt,
         };
 
         out
@@ -2696,48 +2683,48 @@ impl EmittestSpec {
 
     #[inline]
     pub fn outer_encap_vni(&self) -> Option<Vni> {
-        match &self.spec {
-            EmitterSpec::Fastpath(c) => match &c.encap {
+        match &self.prepend {
+            PushSpec::Fastpath(c) => match &c.encap {
                 CompiledEncap::Push { encap: EncapPush::Geneve(g), .. } => {
                     Some(g.vni)
                 }
                 _ => None,
             },
-            EmitterSpec::Slowpath(s) => match &s.outer_encap {
+            PushSpec::Slowpath(s) => match &s.outer_encap {
                 Some(EncapMeta::Geneve(g)) => Some(g.vni),
                 _ => None,
             },
-            EmitterSpec::NoOp => None,
+            PushSpec::NoOp => None,
         }
     }
 
     #[inline]
     pub fn outer_ip6_addrs(&self) -> Option<(Ipv6Addr, Ipv6Addr)> {
-        match &self.spec {
-            EmitterSpec::Fastpath(c) => match &c.encap {
+        match &self.prepend {
+            PushSpec::Fastpath(c) => match &c.encap {
                 CompiledEncap::Push { ip: IpPush::Ip6(v6), .. } => {
                     Some((v6.src, v6.dst))
                 }
                 _ => None,
             },
-            EmitterSpec::Slowpath(s) => match &s.outer_ip {
+            PushSpec::Slowpath(s) => match &s.outer_ip {
                 Some(L3Repr::Ipv6(v6)) => Some((v6.source, v6.destination)),
                 _ => None,
             },
-            EmitterSpec::NoOp => None,
+            PushSpec::NoOp => None,
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub enum EmitterSpec {
+pub enum PushSpec {
     Fastpath(Arc<CompiledTransform>),
     Slowpath(Box<OpteEmit>),
     NoOp,
 }
 
 #[derive(Clone, Debug)]
-pub struct EmitSpec {
+pub struct OldEmitSpec {
     pub rewind: u16,
     pub encapped_len: u16,
     pub payload_len: u16,
@@ -2803,7 +2790,6 @@ impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
     }
 }
 
-// TODO: generate ref/mut traits on InlineHeader AND BoxPacket in ingot to halve the code here...
 impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
     for InlineHeader<Ethernet, ValidEthernet<T>>
 {
@@ -2852,7 +2838,6 @@ impl<T: ByteSliceMut> HeaderActionModify<EtherMod> for EthernetPacket<T> {
     }
 }
 
-// TODO: generate ref/mut traits on InlineHeader AND BoxPacket in ingot to halve the code here...
 impl<T: ByteSliceMut> HeaderActionModify<IpMod>
     for InlineHeader<L3Repr, ValidL3<T>>
 {
@@ -2888,7 +2873,6 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
                         v4.set_protocol(IpProtocol(u8::from(p)));
                     }
                 }
-                // run_modify should be capable of returning error...
                 _ => return Err(HeaderActionError::MissingHeader),
             },
             IpMod::Ip6(mods) => match self {
@@ -2900,6 +2884,7 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
                         <Ipv6 as Ipv6Mut<T>>::set_destination(v6, dst);
                     }
                     if let Some(p) = mods.proto {
+                        // TODO(kyle)
                         // NOTE: I know this is broken for V6EHs
                         <Ipv6 as Ipv6Mut<T>>::set_next_header(
                             v6,
@@ -2915,11 +2900,11 @@ impl<T: ByteSliceMut> HeaderActionModify<IpMod>
                         v6.set_destination(dst);
                     }
                     if let Some(p) = mods.proto {
+                        // TODO(kyle)
                         // NOTE: I know this is broken for V6EHs
                         v6.set_next_header(IpProtocol(u8::from(p)));
                     }
                 }
-                // run_modify should be capable of returning error...
                 _ => return Err(HeaderActionError::MissingHeader),
             },
         }
@@ -2995,7 +2980,12 @@ impl<T: ByteSliceMut> HeaderActionModify<UlpMetaModify> for Ulp<T> {
                 if let Some(id) = mod_spec.icmp_id {
                     if i4.echo_id().is_some() {
                         let roh = i4.rest_of_hdr_mut();
-                        roh[..2].copy_from_slice(&id.to_be_bytes())
+                        ValidIcmpEcho::parse(&mut roh[..])
+                            .expect(
+                                "ICMP ROH is exactly as large as ValidIcmpEcho",
+                            )
+                            .0
+                            .set_id(id);
                     }
                 }
             }
@@ -3003,7 +2993,12 @@ impl<T: ByteSliceMut> HeaderActionModify<UlpMetaModify> for Ulp<T> {
                 if let Some(id) = mod_spec.icmp_id {
                     if i6.echo_id().is_some() {
                         let roh = i6.rest_of_hdr_mut();
-                        roh[..2].copy_from_slice(&id.to_be_bytes())
+                        ValidIcmpEcho::parse(&mut roh[..])
+                            .expect(
+                                "ICMP ROH is exactly as large as ValidIcmpEcho",
+                            )
+                            .0
+                            .set_id(id);
                     }
                 }
             }
@@ -3069,9 +3064,6 @@ impl<T: ByteSlice> HasInnerCksum for L3<T> {
 impl<T: ByteSlice> HasInnerCksum for Ulp<T> {
     const HAS_CKSUM: bool = true;
 }
-
-// papering over a lot here...
-// need to briefly keep both around while I systematically rewrite the test suite.
 
 impl<T: ByteSlice> From<EtherMeta>
     for ingot::types::Header<Ethernet, ValidEthernet<T>>

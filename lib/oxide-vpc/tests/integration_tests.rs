@@ -33,9 +33,9 @@ use opte::engine::ingot_base::Ipv6Ref;
 use opte::engine::ingot_base::ValidL3;
 use opte::engine::ingot_base::ValidUlp;
 use opte::engine::ingot_base::L3;
+use opte::engine::ingot_packet::MblkFullParsed;
 use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ingot_packet::Packet2;
-use opte::engine::ingot_packet::ParsedMblk;
 use opte::engine::ip4::Ipv4Addr;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::port::ProcessError;
@@ -1557,7 +1557,7 @@ fn unpack_and_verify_icmp(
 }
 
 fn unpack_and_verify_icmp4(
-    pkt: &Packet2<ParsedMblk>,
+    pkt: &Packet2<MblkFullParsed>,
     expected_ident: u16,
     seq_no: u16,
 ) {
@@ -1574,7 +1574,7 @@ fn unpack_and_verify_icmp4(
 }
 
 fn unpack_and_verify_icmp6(
-    pkt: &Packet2<ParsedMblk>,
+    pkt: &Packet2<MblkFullParsed>,
     expected_ident: u16,
     seq_no: u16,
     src_ip: Ipv6Addr,

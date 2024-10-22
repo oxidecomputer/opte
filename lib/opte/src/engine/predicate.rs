@@ -17,7 +17,7 @@ use super::ingot_base::Ipv6Ref;
 use super::ingot_base::L3;
 use super::ingot_packet::ulp_dst_port;
 use super::ingot_packet::ulp_src_port;
-use super::ingot_packet::PacketHeaders2;
+use super::ingot_packet::MblkPacketData;
 use super::ip4::Ipv4Addr;
 use super::ip4::Ipv4Cidr;
 use super::ip4::Protocol;
@@ -356,7 +356,7 @@ impl Display for Predicate {
 impl Predicate {
     pub(crate) fn is_match(
         &self,
-        meta: &PacketHeaders2,
+        meta: &MblkPacketData,
         action_meta: &ActionMeta,
     ) -> bool {
         match self {
@@ -594,7 +594,7 @@ impl DataPredicate {
     // use `PacketMeta` to determine if there is a suitable payload to
     // be inspected. That is, if there is no metadata for a given
     // header, there is certainly no payload.
-    pub(crate) fn is_match<'a>(&self, meta: &PacketHeaders2) -> bool {
+    pub(crate) fn is_match<'a>(&self, meta: &MblkPacketData) -> bool {
         match self {
             Self::Not(pred) => !pred.is_match(meta),
 

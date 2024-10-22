@@ -11,10 +11,10 @@ use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
 use super::flow_table::FLOW_DEF_EXPIRE_SECS;
+use super::ingot_packet::MblkFullParsed;
+use super::ingot_packet::MblkPacketData;
 use super::ingot_packet::MsgBlk;
 use super::ingot_packet::Packet2;
-use super::ingot_packet::PacketHeaders2;
-use super::ingot_packet::ParsedMblk;
 use super::ioctl;
 use super::ioctl::ActionDescEntryDump;
 use super::packet::BodyTransformError;
@@ -798,7 +798,7 @@ impl Layer {
         &mut self,
         ectx: &ExecCtx,
         dir: Direction,
-        pkt: &mut Packet2<ParsedMblk>,
+        pkt: &mut Packet2<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -816,7 +816,7 @@ impl Layer {
     fn process_in(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet2<ParsedMblk>,
+        pkt: &mut Packet2<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -886,7 +886,7 @@ impl Layer {
     fn process_in_rules(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet2<ParsedMblk>,
+        pkt: &mut Packet2<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -1103,7 +1103,7 @@ impl Layer {
     fn process_out(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet2<ParsedMblk>,
+        pkt: &mut Packet2<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -1173,7 +1173,7 @@ impl Layer {
     fn process_out_rules(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet2<ParsedMblk>,
+        pkt: &mut Packet2<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -1602,7 +1602,7 @@ impl<'a> RuleTable {
     fn find_match<'b>(
         &mut self,
         ifid: &InnerFlowId,
-        pmeta: &PacketHeaders2,
+        pmeta: &MblkPacketData,
         ameta: &ActionMeta,
     ) -> Option<&Rule<rule::Finalized>> {
         for rte in self.rules.iter_mut() {

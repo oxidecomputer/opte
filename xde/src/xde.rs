@@ -1614,7 +1614,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // emitspec in the same place, then send elsewhere.
             let devs = unsafe { xde_devs.read() };
 
-            let l4_hash = emit_spec.l4_hash;
+            let l4_hash = emit_spec.l4_hash();
 
             let out_pkt = emit_spec.apply(pkt);
 

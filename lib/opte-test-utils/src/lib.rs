@@ -32,7 +32,7 @@ use opte::engine::ingot_base::Ethernet;
 use opte::engine::ingot_base::Ipv4;
 use opte::engine::ingot_base::Ipv6;
 use opte::engine::ingot_base::L3Repr;
-use opte::engine::ingot_packet::LightParsedMblk;
+use opte::engine::ingot_packet::MblkLiteParsed;
 use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ingot_packet::Packet2;
 pub use opte::engine::ip4::Ipv4Addr;
@@ -111,8 +111,7 @@ macro_rules! expect_modified {
 pub fn parse_inbound<NP: NetworkParser>(
     pkt: &mut MsgBlk,
     parser: NP,
-) -> Result<Packet2<LightParsedMblk<'_, NP::InMeta<&'_ mut [u8]>>>, ParseError>
-{
+) -> Result<Packet2<MblkLiteParsed<'_, NP::InMeta<&'_ mut [u8]>>>, ParseError> {
     let pkt = Packet2::new(pkt.iter_mut());
     pkt.parse_inbound(parser)
 }
@@ -120,7 +119,7 @@ pub fn parse_inbound<NP: NetworkParser>(
 pub fn parse_outbound<NP: NetworkParser>(
     pkt: &mut MsgBlk,
     parser: NP,
-) -> Result<Packet2<LightParsedMblk<'_, NP::OutMeta<&'_ mut [u8]>>>, ParseError>
+) -> Result<Packet2<MblkLiteParsed<'_, NP::OutMeta<&'_ mut [u8]>>>, ParseError>
 {
     let pkt = Packet2::new(pkt.iter_mut());
     pkt.parse_outbound(parser)

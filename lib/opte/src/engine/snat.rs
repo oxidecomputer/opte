@@ -11,8 +11,8 @@ use super::headers::IpMod;
 use super::headers::UlpGenericModify;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
+use super::ingot_packet::MblkFullParsed;
 use super::ingot_packet::Packet2;
-use super::ingot_packet::ParsedMblk;
 use super::packet::InnerFlowId;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
@@ -241,7 +241,7 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
     fn gen_icmp_desc(
         &self,
         nat: SNatAlloc<T>,
-        pkt: &Packet2<ParsedMblk>,
+        pkt: &Packet2<MblkFullParsed>,
     ) -> GenDescResult {
         let meta = pkt.meta();
 
@@ -303,7 +303,7 @@ where
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet2<ParsedMblk>,
+        pkt: &Packet2<MblkFullParsed>,
         _meta: &mut ActionMeta,
     ) -> GenDescResult {
         let priv_port = flow_id.src_port;

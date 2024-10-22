@@ -24,8 +24,8 @@ use crate::engine::dhcpv6::SERVER_PORT;
 use crate::engine::ingot_base::Ethernet;
 use crate::engine::ingot_base::Ipv6;
 use crate::engine::ingot_base::Ipv6Ref;
+use crate::engine::ingot_packet::MblkPacketData;
 use crate::engine::ingot_packet::MsgBlk;
-use crate::engine::ingot_packet::PacketHeaders2;
 use crate::engine::predicate::DataPredicate;
 use crate::engine::predicate::EtherAddrMatch;
 use crate::engine::predicate::IpProtoMatch;
@@ -585,7 +585,7 @@ fn process_confirm_message<'a>(
 // Process a DHCPv6 message from the a client.
 fn process_client_message<'a>(
     action: &'a Dhcpv6Action,
-    _meta: &'a PacketHeaders2,
+    _meta: &'a MblkPacketData,
     client_msg: &'a Message<'a>,
 ) -> Option<Message<'a>> {
     match client_msg.typ {
@@ -607,7 +607,7 @@ fn process_client_message<'a>(
 // the request and the actual DHCPv6 message to send out.
 fn generate_packet<'a>(
     action: &Dhcpv6Action,
-    meta: &PacketHeaders2,
+    meta: &MblkPacketData,
     msg: &'a Message<'a>,
 ) -> GenPacketResult {
     let udp = Udp {
@@ -665,7 +665,7 @@ impl HairpinAction for Dhcpv6Action {
     // Rather than put this logic into DataPredicates, we just parse the packet
     // here and reply accordingly. So the `Dhcpv6Action` is really a full
     // server, to the extent we emulate one.
-    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
+    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
         let body = meta.copy_remaining();
         if let Some(client_msg) = Message::from_bytes(&body) {
             if let Some(reply) = process_client_message(self, meta, &client_msg)

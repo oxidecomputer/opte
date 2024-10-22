@@ -22,11 +22,11 @@ use super::ingot_base::Ethernet;
 use super::ingot_base::EthernetPacket;
 use super::ingot_base::ValidEthernet;
 use super::ingot_base::L3;
+use super::ingot_packet::MblkFullParsed;
+use super::ingot_packet::MblkPacketData;
 use super::ingot_packet::MsgBlk;
 use super::ingot_packet::Packet2;
-use super::ingot_packet::PacketHeaders;
-use super::ingot_packet::PacketHeaders2;
-use super::ingot_packet::ParsedMblk;
+use super::ingot_packet::PacketData;
 use super::packet::BodyTransform;
 use super::packet::InnerFlowId;
 use super::port::meta::ActionMeta;
@@ -159,7 +159,7 @@ pub trait ActionDesc {
     fn gen_bt(
         &self,
         _dir: Direction,
-        _meta: &PacketHeaders2,
+        _meta: &MblkPacketData,
         _payload_segs: &[&[u8]],
     ) -> Result<Option<Box<dyn BodyTransform>>, GenBtError> {
         Ok(None)
@@ -257,7 +257,7 @@ impl StaticAction for Identity {
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _pkt_meta: &PacketHeaders2,
+        _pkt_meta: &MblkPacketData,
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform::identity(&self.name)))
@@ -471,7 +471,7 @@ impl HdrTransform {
     /// [`HdrTransformError::MissingHeader`] is returned.
     pub fn run<T: Read>(
         &self,
-        meta: &mut PacketHeaders<T>,
+        meta: &mut PacketData<T>,
     ) -> Result<bool, HdrTransformError>
     where
         T::Chunk: ByteSliceMut,
@@ -565,7 +565,7 @@ pub trait StatefulAction: Display {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet2<ParsedMblk>,
+        pkt: &Packet2<MblkFullParsed>,
         meta: &mut ActionMeta,
     ) -> GenDescResult;
 
@@ -585,7 +585,7 @@ pub trait StaticAction: Display {
         &self,
         dir: Direction,
         flow_id: &InnerFlowId,
-        packet_meta: &PacketHeaders2,
+        packet_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult;
 
@@ -664,7 +664,7 @@ pub trait HairpinAction: Display {
     /// `rdr` argument provides a [`PacketReader`] against
     /// [`Packet<Parsed>`], with its starting position set to the
     /// beginning of the packet's payload.
-    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult;
+    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult;
 
     /// Return the predicates implicit to this action.
     ///
@@ -943,7 +943,7 @@ impl Rule<Ready> {
 impl<'a> Rule<Finalized> {
     pub fn is_match<'b>(
         &self,
-        meta: &PacketHeaders2,
+        meta: &MblkPacketData,
         action_meta: &ActionMeta,
     ) -> bool {
         #[cfg(debug_assertions)]

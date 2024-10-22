@@ -21,13 +21,13 @@ use super::ingot_base::Ethernet;
 use super::ingot_base::Ipv4;
 use super::ingot_base::Ipv6;
 use super::ingot_base::L3Repr;
+use super::ingot_packet::FullParsed;
+use super::ingot_packet::LiteParsed;
+use super::ingot_packet::MblkFullParsed;
+use super::ingot_packet::MblkPacketData;
 use super::ingot_packet::MsgBlk;
 use super::ingot_packet::MsgBlkIterMut;
 use super::ingot_packet::Packet2;
-use super::ingot_packet::PacketHeaders2;
-use super::ingot_packet::Parsed2;
-use super::ingot_packet::ParsedMblk;
-use super::ingot_packet::ParsedStage1;
 use super::ioctl;
 use super::ioctl::TcpFlowEntryDump;
 use super::ioctl::TcpFlowStateDump;
@@ -67,8 +67,8 @@ use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KMutexType;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::ExpiryPolicy;
-use crate::engine::ingot_packet::EmitterSpec;
-use crate::engine::ingot_packet::EmittestSpec;
+use crate::engine::ingot_packet::EmitSpec;
+use crate::engine::ingot_packet::PushSpec;
 use crate::engine::rule::CompiledEncap;
 use crate::ExecCtx;
 use alloc::boxed::Box;
@@ -163,7 +163,7 @@ pub enum ProcessResult {
         reason: DropReason,
     },
     #[leaf]
-    Modified(EmittestSpec),
+    Modified(EmitSpec),
     // TODO: it would be nice if this packet type could be user-specified, but might
     // be tricky.
     #[leaf]
@@ -176,7 +176,7 @@ impl From<HdlPktAction> for ProcessResult {
             // TODO: In theory HdlPacket::Allow should have an emit spec, too.
             // We are not using any op other than Hairpin, so kick that particular
             // can down the road.
-            HdlPktAction::Allow => Self::Modified(EmittestSpec::default()),
+            HdlPktAction::Allow => Self::Modified(EmitSpec::default()),
             HdlPktAction::Deny => Self::Drop { reason: DropReason::HandlePkt },
             HdlPktAction::Hairpin(pkt) => Self::Hairpin(pkt),
         }
@@ -907,7 +907,7 @@ impl<N: NetworkImpl> Port<N> {
         data: &FlowTable<TcpFlowEntryState>,
         dir: Direction,
         msg: String,
-        pkt: &mut Packet2<ParsedMblk>,
+        pkt: &mut Packet2<MblkFullParsed>,
     ) {
         if unsafe { super::opte_panic_debug != 0 } {
             super::err!("mblk: {}", pkt.mblk_addr());
@@ -923,7 +923,7 @@ impl<N: NetworkImpl> Port<N> {
     fn tcp_err_probe(
         &self,
         dir: Direction,
-        pkt: Option<&Packet2<ParsedMblk>>,
+        pkt: Option<&Packet2<MblkFullParsed>>,
         flow: &InnerFlowId,
         msg: String,
     ) {
@@ -1218,7 +1218,7 @@ impl<N: NetworkImpl> Port<N> {
         // which can advance to (and hold) light->full-fat metadata.
         // My gutfeel is that there's a perf cost here -- this struct
         // is pretty fat, but expressing the transform on a &mut also sucks.
-        mut pkt: Packet2<ParsedStage1<MsgBlkIterMut<'a>, M>>,
+        mut pkt: Packet2<LiteParsed<MsgBlkIterMut<'a>, M>>,
     ) -> result::Result<ProcessResult, ProcessError>
     where
         M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>,
@@ -1420,8 +1420,8 @@ impl<N: NetworkImpl> Port<N> {
                     CompiledEncap::Pop => encap_len,
                     _ => 0,
                 };
-                let out = EmittestSpec {
-                    spec: EmitterSpec::Fastpath(tx),
+                let out = EmitSpec {
+                    prepend: PushSpec::Fastpath(tx),
                     l4_hash,
                     rewind,
                     ulp_len,
@@ -1517,8 +1517,8 @@ impl<N: NetworkImpl> Port<N> {
 
                 // TODO: remove EmitSpec and have above method just spit out the new
                 // variant.
-                Ok(ProcessResult::Modified(EmittestSpec {
-                    spec: EmitterSpec::Slowpath(emit_spec.push_spec.into()),
+                Ok(ProcessResult::Modified(EmitSpec {
+                    prepend: PushSpec::Slowpath(emit_spec.push_spec.into()),
                     l4_hash,
                     rewind: emit_spec.rewind,
                     ulp_len: emit_spec.encapped_len as u32,
@@ -1698,7 +1698,7 @@ impl Transforms {
     #[inline]
     fn apply<T: Read>(
         &self,
-        pkt: &mut Packet2<Parsed2<T>>,
+        pkt: &mut Packet2<FullParsed<T>>,
         dir: Direction,
     ) -> result::Result<(), ProcessError>
     where
@@ -1932,7 +1932,7 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         dir: Direction,
-        pkt: &mut Packet2<ParsedMblk>,
+        pkt: &mut Packet2<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -1976,7 +1976,7 @@ impl<N: NetworkImpl> Port<N> {
         dir: Direction,
         flow: &InnerFlowId,
         epoch: u64,
-        pkt: &Packet2<ParsedMblk>,
+        pkt: &Packet2<MblkFullParsed>,
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -2237,7 +2237,7 @@ impl<N: NetworkImpl> Port<N> {
     fn process_in_tcp(
         &self,
         data: &mut PortData,
-        pmeta: &PacketHeaders2,
+        pmeta: &MblkPacketData,
         ufid_in: &InnerFlowId,
         pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, ProcessError> {
@@ -2277,7 +2277,7 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         epoch: u64,
-        pkt: &mut Packet2<ParsedMblk>,
+        pkt: &mut Packet2<MblkFullParsed>,
         ufid_in: &InnerFlowId,
         ameta: &mut ActionMeta,
     ) -> result::Result<InternalProcessResult, ProcessError> {
@@ -2453,7 +2453,7 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         ufid_out: &InnerFlowId,
-        pmeta: &PacketHeaders2,
+        pmeta: &MblkPacketData,
         pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, ProcessError> {
         let tcp = pmeta.inner_tcp().unwrap();
@@ -2477,7 +2477,7 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         epoch: u64,
-        pkt: &mut Packet2<ParsedMblk>,
+        pkt: &mut Packet2<MblkFullParsed>,
         ameta: &mut ActionMeta,
     ) -> result::Result<InternalProcessResult, ProcessError> {
         use Direction::Out;

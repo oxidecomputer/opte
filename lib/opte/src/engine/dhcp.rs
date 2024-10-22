@@ -8,8 +8,8 @@
 
 use super::ingot_base::Ethernet;
 use super::ingot_base::Ipv4;
+use super::ingot_packet::MblkPacketData;
 use super::ingot_packet::MsgBlk;
-use super::ingot_packet::PacketHeaders2;
 use super::ip4::Ipv4Addr;
 use super::ip4::Protocol;
 use super::predicate::DataPredicate;
@@ -480,7 +480,7 @@ impl HairpinAction for DhcpAction {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
+    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
         // TODO: fold reader access into PacketHeaders2
         let body = meta.copy_remaining();
         let client_pkt = DhcpPacket::new_checked(&body)?;

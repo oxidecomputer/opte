@@ -42,7 +42,7 @@ use opte::engine::headers::HeaderAction;
 use opte::engine::headers::IpAddr;
 use opte::engine::headers::IpCidr;
 use opte::engine::headers::IpPush;
-use opte::engine::ingot_packet::PacketHeaders2;
+use opte::engine::ingot_packet::MblkPacketData;
 use opte::engine::ip4::Protocol;
 use opte::engine::ip6::Ipv6Addr;
 use opte::engine::ip6::Ipv6Cidr;
@@ -203,7 +203,7 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        _pkt_meta: &PacketHeaders2,
+        _pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let f_hash = flow_id.crc32();
@@ -382,7 +382,7 @@ impl StaticAction for DecapAction {
         // The decap action is only used for inbound.
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        pkt_meta: &PacketHeaders2,
+        pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         match pkt_meta.outer_encap_geneve_vni_and_origin() {

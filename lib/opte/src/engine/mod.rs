@@ -48,11 +48,11 @@ use core::fmt;
 use core::num::ParseIntError;
 use ingot::tcp::TcpRef;
 use ingot::types::Read;
+use ingot_packet::FullParsed;
 use ingot_packet::MsgBlk;
 use ingot_packet::OpteMeta;
 use ingot_packet::OpteParsed2;
 use ingot_packet::Packet2;
-use ingot_packet::Parsed2;
 use ingot_packet::ValidNoEncap;
 use ip4::IpError;
 pub use opte_api::Direction;
@@ -278,7 +278,7 @@ pub trait NetworkImpl {
     fn handle_pkt<T: Read>(
         &self,
         dir: Direction,
-        pkt: &mut Packet2<Parsed2<T>>,
+        pkt: &mut Packet2<FullParsed<T>>,
         uft_in: &FlowTable<UftEntry<InnerFlowId>>,
         uft_out: &FlowTable<UftEntry<InnerFlowId>>,
     ) -> Result<HdlPktAction, HdlPktError>

@@ -10,8 +10,8 @@ use super::*;
 use crate::engine::ingot_base::Ethernet;
 use crate::engine::ingot_base::Ipv4;
 use crate::engine::ingot_base::L3;
+use crate::engine::ingot_packet::MblkPacketData;
 use crate::engine::ingot_packet::MsgBlk;
-use crate::engine::ingot_packet::PacketHeaders2;
 use crate::engine::predicate::Ipv4AddrMatch;
 use ingot::ethernet::Ethertype;
 use ingot::ip::IpProtocol;
@@ -47,7 +47,7 @@ impl HairpinAction for IcmpEchoReply {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(&self, meta: &PacketHeaders2) -> GenPacketResult {
+    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
         let Some(icmp) = meta.inner_icmp() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMP packet. That
