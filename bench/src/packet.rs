@@ -11,8 +11,6 @@ use opte::engine::ingot_base::Ipv6;
 use opte::engine::ingot_base::L3Repr;
 use opte::engine::ingot_base::UlpRepr;
 use opte::engine::ingot_packet::MsgBlk;
-use opte::engine::packet::Initialized;
-use opte::engine::packet::Packet;
 use opte::engine::Direction;
 use opte::ingot::tcp::Tcp;
 use opte::ingot::tcp::TcpFlags;
