@@ -6,7 +6,7 @@
 
 //! ARP headers and data.
 
-use super::ingot_base::Ethernet;
+use super::ether::Ethernet;
 use super::ingot_packet::MsgBlk;
 use core::fmt;
 use core::fmt::Display;

@@ -8,6 +8,7 @@
 
 use self::meta::ActionMeta;
 use super::ether::EtherMeta;
+use super::ether::Ethernet;
 use super::flow_table::Dump;
 use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
@@ -17,10 +18,6 @@ use super::headers::EncapPush;
 use super::headers::HeaderAction;
 use super::headers::IpPush;
 use super::headers::UlpHeaderAction;
-use super::ingot_base::Ethernet;
-use super::ingot_base::Ipv4;
-use super::ingot_base::Ipv6;
-use super::ingot_base::L3Repr;
 use super::ingot_packet::FullParsed;
 use super::ingot_packet::LiteParsed;
 use super::ingot_packet::MblkFullParsed;
@@ -32,6 +29,9 @@ use super::ioctl;
 use super::ioctl::TcpFlowEntryDump;
 use super::ioctl::TcpFlowStateDump;
 use super::ioctl::UftEntryDump;
+use super::ip::v4::Ipv4;
+use super::ip::v6::Ipv6;
+use super::ip::L3Repr;
 use super::layer;
 use super::layer::Layer;
 use super::layer::LayerError;

@@ -5,12 +5,12 @@
 // Copyright 2024 Oxide Computer Company
 
 use opte::engine::dhcpv6::MessageType;
-use opte::engine::ingot_base::Ethernet;
-use opte::engine::ingot_base::Ipv4;
-use opte::engine::ingot_base::Ipv6;
-use opte::engine::ingot_base::L3Repr;
-use opte::engine::ingot_base::UlpRepr;
+use opte::engine::ether::Ethernet;
 use opte::engine::ingot_packet::MsgBlk;
+use opte::engine::ip::v4::Ipv4;
+use opte::engine::ip::v6::Ipv6;
+use opte::engine::ip::L3Repr;
+use opte::engine::parse::UlpRepr;
 use opte::engine::Direction;
 use opte::ingot::tcp::Tcp;
 use opte::ingot::tcp::TcpFlags;

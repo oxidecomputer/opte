@@ -7,11 +7,11 @@
 //! ICMPv4 headers and processing.
 
 use super::*;
-use crate::engine::ingot_base::Ethernet;
-use crate::engine::ingot_base::Ipv4;
-use crate::engine::ingot_base::L3;
+use crate::engine::ether::Ethernet;
 use crate::engine::ingot_packet::MblkPacketData;
 use crate::engine::ingot_packet::MsgBlk;
+use crate::engine::ip::v4::Ipv4;
+use crate::engine::ip::L3;
 use crate::engine::predicate::Ipv4AddrMatch;
 use ingot::ethernet::Ethertype;
 use ingot::ip::IpProtocol;

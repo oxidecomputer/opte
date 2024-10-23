@@ -19,6 +19,7 @@ pub mod geneve;
 pub mod headers;
 pub mod icmp;
 pub mod ioctl;
+pub mod ip;
 #[macro_use]
 pub mod ip4;
 #[macro_use]
@@ -27,6 +28,7 @@ pub mod layer;
 pub mod nat;
 #[macro_use]
 pub mod packet;
+pub mod parse;
 pub mod port;
 pub mod predicate;
 #[cfg(any(feature = "std", test))]
@@ -39,7 +41,6 @@ pub mod tcp_state;
 #[macro_use]
 pub mod udp;
 
-pub mod ingot_base;
 pub mod ingot_packet;
 
 use alloc::string::String;
@@ -53,9 +54,9 @@ use ingot_packet::MsgBlk;
 use ingot_packet::OpteMeta;
 use ingot_packet::OpteParsed2;
 use ingot_packet::Packet2;
-use ingot_packet::ValidNoEncap;
 use ip4::IpError;
 pub use opte_api::Direction;
+use parse::ValidNoEncap;
 use rule::CompiledTransform;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;

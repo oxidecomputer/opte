@@ -7,11 +7,11 @@
 //! ICMPv6 headers and processing.
 
 use super::*;
-use crate::engine::ingot_base::Ethernet;
-use crate::engine::ingot_base::Ipv6;
-use crate::engine::ingot_base::Ipv6Ref;
+use crate::engine::ether::Ethernet;
 use crate::engine::ingot_packet::MblkPacketData;
 use crate::engine::ingot_packet::MsgBlk;
+use crate::engine::ip::v6::Ipv6;
+use crate::engine::ip::v6::Ipv6Ref;
 use crate::engine::predicate::Ipv6AddrMatch;
 use alloc::string::String;
 use ingot::ethernet::Ethertype;

@@ -8,6 +8,9 @@
 
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
+use super::ether::Ethernet;
+use super::ether::EthernetPacket;
+use super::ether::ValidEthernet;
 use super::flow_table::StateSummary;
 use super::headers::EncapMod;
 use super::headers::EncapPush;
@@ -18,15 +21,12 @@ use super::headers::IpPush;
 use super::headers::Transform;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
-use super::ingot_base::Ethernet;
-use super::ingot_base::EthernetPacket;
-use super::ingot_base::ValidEthernet;
-use super::ingot_base::L3;
 use super::ingot_packet::MblkFullParsed;
 use super::ingot_packet::MblkPacketData;
 use super::ingot_packet::MsgBlk;
 use super::ingot_packet::Packet2;
 use super::ingot_packet::PacketData;
+use super::ip::L3;
 use super::packet::BodyTransform;
 use super::packet::InnerFlowId;
 use super::port::meta::ActionMeta;

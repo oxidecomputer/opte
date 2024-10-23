@@ -6,10 +6,10 @@
 
 //! DHCP headers, data, and actions.
 
-use super::ingot_base::Ethernet;
-use super::ingot_base::Ipv4;
+use super::ether::Ethernet;
 use super::ingot_packet::MblkPacketData;
 use super::ingot_packet::MsgBlk;
+use super::ip::v4::Ipv4;
 use super::ip4::Ipv4Addr;
 use super::ip4::Protocol;
 use super::predicate::DataPredicate;

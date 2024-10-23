@@ -15,8 +15,9 @@ use core::fmt::Debug;
 use core::fmt::Display;
 use core::result;
 use core::str::FromStr;
-use ingot::ethernet::Ethernet;
+use ingot::ethernet::Ethertype;
 use ingot::types::HeaderLen;
+use ingot::Ingot;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
@@ -27,6 +28,17 @@ pub const ETHER_TYPE_ARP: u16 = 0x0806;
 pub const ETHER_TYPE_IPV6: u16 = 0x86DD;
 
 pub const ETHER_ADDR_LEN: usize = 6;
+
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Ingot)]
+#[ingot(impl_default)]
+pub struct Ethernet {
+    #[ingot(is = "[u8; 6]")]
+    pub destination: MacAddr,
+    #[ingot(is = "[u8; 6]")]
+    pub source: MacAddr,
+    #[ingot(is = "u16be", next_layer)]
+    pub ethertype: Ethertype,
+}
 
 #[repr(u16)]
 #[derive(

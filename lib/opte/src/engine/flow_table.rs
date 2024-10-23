@@ -197,15 +197,6 @@ where
         self.map.get(flow_id)
     }
 
-    /// Get a mutable reference to the flow entry for a given flow, if
-    /// one exists.
-    // pub fn get_mut(
-    //     &mut self,
-    //     flow_id: &InnerFlowId,
-    // ) -> Option<&mut FlowEntry<S>> {
-    //     self.map.get_mut(flow_id)
-    // }
-
     /// Mark all flow table entries as requiring revalidation after a
     /// reset or removal of rules.
     ///
@@ -294,7 +285,7 @@ pub struct FlowEntry<S: Dump> {
 
     /// This tracks the last time the flow was matched.
     ///
-    /// These are raw u64s sourced from `Moment`, which track time
+    /// These are raw u64s sourced from a `Moment`, which tracks time
     /// in nanoseconds.
     last_hit: AtomicU64,
 
