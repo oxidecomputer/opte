@@ -15,10 +15,11 @@ use super::headers::IpAddr;
 use super::headers::AF_INET;
 use super::headers::AF_INET6;
 use super::ingot_packet::MsgBlk;
-use super::ip4::Ipv4Addr;
-use super::ip4::Protocol;
-use super::ip6::Ipv6Addr;
+use super::ip::v4::Ipv4Addr;
+use super::ip::v4::Protocol;
+use super::ip::v6::Ipv6Addr;
 use crate::d_error::DError;
+use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
 use core::hash::Hash;
@@ -391,22 +392,20 @@ pub enum WrapError {
     Chain,
 }
 
-/// Some functions may return multiple types of errors.
-#[derive(Clone, Debug, DError)]
-pub enum PacketError {
-    Parse(ParseError),
-    Wrap(WrapError),
+#[derive(Clone, Debug, Eq, PartialEq, DError)]
+pub enum ParseError {
+    IngotError(ingot::types::PacketParseError),
+    IllegalValue(MismatchError),
+    BadLength(MismatchError),
 }
 
-impl From<ParseError> for PacketError {
-    fn from(e: ParseError) -> Self {
-        Self::Parse(e)
+impl DError for ingot::types::PacketParseError {
+    fn discriminant(&self) -> &'static core::ffi::CStr {
+        self.header().as_cstr()
     }
-}
 
-impl From<WrapError> for PacketError {
-    fn from(e: WrapError) -> Self {
-        Self::Wrap(e)
+    fn child(&self) -> Option<&dyn DError> {
+        Some(self.error())
     }
 }
 
@@ -420,75 +419,28 @@ impl DError for ingot::types::ParseError {
     }
 }
 
-impl DError for ingot::types::PacketParseError {
-    fn discriminant(&self) -> &'static core::ffi::CStr {
-        self.header().as_cstr()
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MismatchError {
+    pub location: &'static CStr,
+    pub expected: u64,
+    pub actual: u64,
+}
+
+impl DError for MismatchError {
+    fn discriminant(&self) -> &'static CStr {
+        self.location
     }
 
     fn child(&self) -> Option<&dyn DError> {
-        Some(self.error())
+        None
     }
-}
 
-#[derive(Clone, Debug, Eq, PartialEq, DError)]
-#[derror(leaf_data = ParseError::data)]
-pub enum ParseError {
-    // TODO: I think this may be the only err variant?
-    IngotError(ingot::types::PacketParseError),
-    BadInnerIpLen {
-        expected: usize,
-        actual: usize,
-    },
-    BadInnerUlpLen {
-        expected: usize,
-        actual: usize,
-    },
-    BadOuterIpLen {
-        expected: usize,
-        actual: usize,
-    },
-    BadOuterUlpLen {
-        expected: usize,
-        actual: usize,
-    },
-    BadRead(ReadErr),
-    TruncatedBody {
-        expected: usize,
-        actual: usize,
-    },
-    #[leaf]
-    UnexpectedEtherType(super::ether::EtherType),
-    #[leaf]
-    UnsupportedEtherType(u16),
-    #[leaf]
-    UnexpectedProtocol(Protocol),
-    #[leaf]
-    UnexpectedDestPort(u16),
-    #[leaf]
-    UnsupportedProtocol(Protocol),
-}
-
-impl ParseError {
-    fn data(&self, data: &mut [u64]) {
-        match self {
-            Self::BadInnerIpLen { expected, actual }
-            | Self::BadInnerUlpLen { expected, actual }
-            | Self::BadOuterIpLen { expected, actual }
-            | Self::BadOuterUlpLen { expected, actual }
-            | Self::TruncatedBody { expected, actual } => {
-                [data[0], data[1]] = [*expected as u64, *actual as u64]
-            }
-            Self::UnexpectedEtherType(eth) => data[0] = u16::from(*eth).into(),
-            Self::UnsupportedEtherType(eth) => data[0] = *eth as u64,
-            Self::UnexpectedProtocol(proto) => {
-                data[0] = u8::from(*proto).into()
-            }
-            Self::UnexpectedDestPort(port) => data[0] = (*port).into(),
-            Self::UnsupportedProtocol(proto) => {
-                data[0] = u8::from(*proto).into()
-            }
-
-            _ => {}
+    fn leaf_data(&self, data: &mut [u64]) {
+        if let Some(v) = data.get_mut(0) {
+            *v = self.expected;
+        }
+        if let Some(v) = data.get_mut(1) {
+            *v = self.expected;
         }
     }
 }
@@ -499,38 +451,14 @@ impl From<ingot::types::PacketParseError> for ParseError {
     }
 }
 
-impl From<ReadErr> for ParseError {
-    fn from(err: ReadErr) -> Self {
-        Self::BadRead(err)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, DError)]
-pub enum ReadErr {
-    BadLayout,
-    EndOfPacket,
-    NotEnoughBytes,
-    OutOfRange,
-    StraddledRead,
-    NotImplemented,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WriteError {
     BadLayout,
     EndOfPacket,
     NotEnoughBytes { available: usize, needed: usize },
-    Read(ReadErr),
     StraddledWrite,
 }
 
-impl From<ReadErr> for WriteError {
-    fn from(e: ReadErr) -> Self {
-        Self::Read(e)
-    }
-}
-
-pub type ReadResult<T> = result::Result<T, ReadErr>;
 pub type WriteResult<T> = result::Result<T, WriteError>;
 
 /// The common entry into an `allocb(9F)` implementation that works in

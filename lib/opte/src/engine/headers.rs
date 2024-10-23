@@ -2,17 +2,17 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Header metadata combinations for IP, ULP, and Encap.
 
 use super::geneve::GeneveMeta;
 use super::geneve::GeneveMod;
 use super::geneve::GenevePush;
-use super::ip4::Ipv4Mod;
-use super::ip4::Ipv4Push;
-use super::ip6::Ipv6Mod;
-use super::ip6::Ipv6Push;
+use super::ip::v4::Ipv4Mod;
+use super::ip::v4::Ipv4Push;
+use super::ip::v6::Ipv6Mod;
+use super::ip::v6::Ipv6Push;
 use super::tcp::TcpMod;
 use super::tcp::TcpPush;
 use super::udp::UdpMod;

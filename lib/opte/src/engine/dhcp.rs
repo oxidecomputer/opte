@@ -2,16 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! DHCP headers, data, and actions.
 
 use super::ether::Ethernet;
 use super::ingot_packet::MblkPacketData;
 use super::ingot_packet::MsgBlk;
-use super::ip::v4::Ipv4;
-use super::ip4::Ipv4Addr;
-use super::ip4::Protocol;
+use super::ip::v4::*;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;

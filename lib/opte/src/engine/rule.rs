@@ -620,16 +620,9 @@ pub trait MetaAction: Display {
 
 #[derive(Debug)]
 pub enum GenErr {
-    BadPayload(super::packet::ReadErr),
     Malformed,
     MissingMeta,
     Unexpected(String),
-}
-
-impl From<super::packet::ReadErr> for GenErr {
-    fn from(err: super::packet::ReadErr) -> Self {
-        Self::BadPayload(err)
-    }
 }
 
 impl From<smoltcp::wire::Error> for GenErr {

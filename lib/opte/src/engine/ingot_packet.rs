@@ -1267,9 +1267,10 @@ where
     ) -> Result<Packet2<LiteParsed<T, NP::InMeta<T::Chunk>>>, ParseError> {
         let Packet2 { state: Initialized2 { len, inner } } = self;
 
-        Ok(Packet2 {
-            state: LiteParsed { meta: net.parse_inbound(inner)?, len },
-        })
+        let meta = net.parse_inbound(inner)?;
+        meta.stack.validate(len)?;
+
+        Ok(Packet2 { state: LiteParsed { meta, len } })
     }
 
     #[inline]
@@ -1279,9 +1280,10 @@ where
     ) -> Result<Packet2<LiteParsed<T, NP::OutMeta<T::Chunk>>>, ParseError> {
         let Packet2 { state: Initialized2 { len, inner } } = self;
 
-        Ok(Packet2 {
-            state: LiteParsed { meta: net.parse_outbound(inner)?, len },
-        })
+        let meta = net.parse_outbound(inner)?;
+        meta.stack.validate(len)?;
+
+        Ok(Packet2 { state: LiteParsed { meta, len } })
     }
 }
 

@@ -8,6 +8,7 @@ pub mod v4;
 pub mod v6;
 
 use super::checksum::Checksum;
+use super::packet::ParseError;
 use ingot::choice;
 use ingot::ethernet::Ethertype;
 use ingot::types::ByteSlice;
@@ -106,6 +107,14 @@ impl<V: ByteSlice> ValidL3<V> {
             ValidL3::Ipv6(_) => 0,
         }
         .to_be_bytes()
+    }
+
+    #[inline]
+    pub fn validate(&self, bytes_after: usize) -> Result<(), ParseError> {
+        match self {
+            ValidL3::Ipv4(i4) => i4.validate(bytes_after),
+            ValidL3::Ipv6(i6) => i6.validate(bytes_after),
+        }
     }
 }
 

@@ -17,7 +17,7 @@ use opte::api::Ipv4PrefixLen;
 use opte::api::OpteError;
 use opte::api::SubnetRouterPair;
 use opte::engine::dhcp::DhcpAction;
-use opte::engine::ip4::Ipv4Cidr;
+use opte::engine::ip::v4::Ipv4Cidr;
 use opte::engine::layer::Layer;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;

@@ -23,7 +23,7 @@ use opte::engine::flow_table::FlowTable;
 use opte::engine::ingot_packet::FullParsed;
 use opte::engine::ingot_packet::OpteParsed2;
 use opte::engine::ingot_packet::Packet2;
-use opte::engine::ip4::Ipv4Addr;
+use opte::engine::ip::v4::Ipv4Addr;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::ParseError;
 use opte::engine::parse::ValidGeneveOverV6;

@@ -59,16 +59,16 @@ use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
+use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
-use opte::engine::ingot_base::EthernetRef;
 use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ingot_packet::Packet2;
 use opte::engine::ioctl::{self as api};
-use opte::engine::ip6::Ipv6Addr;
+use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::PacketChain;
-use opte::engine::packet::PacketError;
+use opte::engine::packet::ParseError;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessResult;
@@ -153,7 +153,7 @@ fn bad_packet_parse_probe(
     port: Option<&CString>,
     dir: Direction,
     mp: uintptr_t,
-    err: &PacketError,
+    err: &ParseError,
 ) {
     let port_str = match port {
         None => c"unknown",

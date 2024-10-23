@@ -20,10 +20,6 @@ pub mod headers;
 pub mod icmp;
 pub mod ioctl;
 pub mod ip;
-#[macro_use]
-pub mod ip4;
-#[macro_use]
-pub mod ip6;
 pub mod layer;
 pub mod nat;
 #[macro_use]
@@ -54,62 +50,11 @@ use ingot_packet::MsgBlk;
 use ingot_packet::OpteMeta;
 use ingot_packet::OpteParsed2;
 use ingot_packet::Packet2;
-use ip4::IpError;
 pub use opte_api::Direction;
 use parse::ValidNoEncap;
 use rule::CompiledTransform;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
-
-// TODO Currently I'm using this for parsing many different things. It
-// might be wise to have different parse error types. E.g., one for
-// parsing ioctl strings, another for parsing IPv4 strings, for IPv6,
-// etc.
-//
-// TODO This probably doesn't belong in this module.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ParseErr {
-    BadAction,
-    BadAddrError,
-    BadDirectionError,
-    BadProtoError,
-    BadToken(String),
-    InvalidPort,
-    IpError(IpError),
-    Malformed,
-    MalformedInt,
-    MalformedPort,
-    MissingField,
-    Other(String),
-    UnknownToken(String),
-    ValTooLong(String, usize),
-}
-
-impl fmt::Display for ParseErr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-pub type ParseResult<T> = core::result::Result<T, ParseErr>;
-
-impl From<IpError> for ParseErr {
-    fn from(err: IpError) -> Self {
-        ParseErr::IpError(err)
-    }
-}
-
-impl From<ParseIntError> for ParseErr {
-    fn from(_err: ParseIntError) -> Self {
-        ParseErr::MalformedInt
-    }
-}
-
-impl From<String> for ParseErr {
-    fn from(err: String) -> Self {
-        ParseErr::Other(err)
-    }
-}
 
 /// When set to 1 we will panic in some situations instead of just
 /// flagging in error. This can be useful for debugging certain
@@ -347,6 +292,9 @@ pub trait LightweightMeta<T: ByteSlice>: Into<OpteMeta<T>> {
 
     /// Provide a view of internal TCP state.
     fn inner_tcp(&self) -> Option<&impl TcpRef<T>>;
+
+    /// Determines whether headers have consistent lengths/mandatory fields set.
+    fn validate(&self, pkt_len: usize) -> Result<(), ParseError>;
 }
 
 /// A generic ULP parser, useful for testing inside of the opte crate

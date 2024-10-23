@@ -26,6 +26,8 @@ use super::ip::ValidL3;
 use super::ip::L3;
 use super::packet::AddrPair;
 use super::packet::InnerFlowId;
+use super::packet::MismatchError;
+use super::packet::ParseError;
 use super::packet::FLOW_ID_DEFAULT;
 use super::rule::CompiledTransform;
 use super::LightweightMeta;
@@ -361,6 +363,47 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
             _ => None,
         }
     }
+
+    #[inline]
+    fn validate(&self, pkt_len: usize) -> Result<(), ParseError> {
+        if let Some(l3) = &self.inner_l3 {
+            let rem_len = pkt_len - &(&self.inner_eth, l3).packet_length();
+            l3.validate(rem_len)?;
+            if let Some(ulp) = &self.inner_ulp {
+                let rem_len = rem_len - ulp.packet_length();
+                ulp.validate(rem_len)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[inline]
+fn validate_udp<V: ByteSlice>(
+    pkt: &ValidUdp<V>,
+    bytes_after: usize,
+) -> Result<(), ParseError> {
+    let wanted_len = bytes_after + pkt.packet_length();
+    if pkt.length() as usize == wanted_len {
+        Ok(())
+    } else {
+        Err(ParseError::BadLength(MismatchError {
+            location: c"Udp.length",
+            expected: wanted_len as u64,
+            actual: pkt.length() as u64,
+        }))
+    }
+}
+
+impl<V: ByteSlice> ValidUlp<V> {
+    #[inline]
+    fn validate(&self, bytes_after: usize) -> Result<(), ParseError> {
+        match self {
+            ValidUlp::Udp(u) => validate_udp(u, bytes_after),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl<T: ByteSlice> From<ValidGeneveOverV6<T>> for OpteMeta<T> {
@@ -538,6 +581,26 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
             ValidUlp::Tcp(t) => Some(t),
             _ => None,
         }
+    }
+
+    #[inline]
+    fn validate(&self, pkt_len: usize) -> Result<(), ParseError> {
+        let rem_len =
+            pkt_len - (&self.outer_eth, &self.outer_v6).packet_length();
+        self.outer_v6.validate(rem_len)?;
+
+        let rem_len = rem_len - self.outer_udp.packet_length();
+        validate_udp(&self.outer_udp, rem_len)?;
+
+        let rem_len = rem_len
+            - &(&self.outer_encap, &self.outer_eth, &self.inner_l3)
+                .packet_length();
+        self.inner_l3.validate(rem_len)?;
+
+        let rem_len = rem_len - self.inner_ulp.packet_length();
+        self.inner_ulp.validate(rem_len)?;
+
+        Ok(())
     }
 }
 
