@@ -393,10 +393,23 @@ pub enum WrapError {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, DError)]
+#[derror(leaf_data = ParseError::data)]
 pub enum ParseError {
     IngotError(ingot::types::PacketParseError),
     IllegalValue(MismatchError),
     BadLength(MismatchError),
+    UnrecognisedTunnelOpt { class: u16, ty: u8 },
+}
+
+impl ParseError {
+    fn data(&self, data: &mut [u64]) {
+        match self {
+            ParseError::UnrecognisedTunnelOpt { class, ty } => {
+                [data[0], data[1]] = [*class as u64, *ty as u64];
+            }
+            _ => {}
+        }
+    }
 }
 
 impl DError for ingot::types::PacketParseError {

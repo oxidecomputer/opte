@@ -1788,18 +1788,18 @@ impl<T: Read> Packet2<FullParsed<T>> {
             return;
         }
 
-        // We expect that any body transform will necessarily invalidate
-        // the body_csum. Recompute from scratch.
-        if self.state.body_modified {
-            return self.compute_checksums();
-        }
-
         // Flag to indicate if an IP header/ULP checksums were
         // provided. If the checksum is zero, it's assumed heardware
         // checksum offload is being used, and OPTE should not update
         // the checksum.
         let update_ip = self.state.meta.has_ip_csum();
         let update_ulp = self.state.meta.has_ulp_csum();
+
+        // We expect that any body transform will necessarily invalidate
+        // the body_csum. Recompute from scratch.
+        if self.state.body_modified && (update_ip || update_ulp) {
+            return self.compute_checksums();
+        }
 
         // Start by reusing the known checksum of the body.
         let mut body_csum = self.body_csum().unwrap_or_default();

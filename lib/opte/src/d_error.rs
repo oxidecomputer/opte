@@ -8,7 +8,6 @@
 //! static strings to avoid paying the `fmt` tax when calling an SDT.
 
 use core::ffi::CStr;
-use core::fmt;
 pub use derror_macro::DError;
 
 // XXX: I think we want some way of doing the whole thing in one big chunk

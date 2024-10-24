@@ -10,7 +10,10 @@
 
 use super::headers::ModifyAction;
 use super::headers::PushAction;
+use super::packet::MismatchError;
+use super::packet::ParseError;
 use ingot::geneve::Geneve;
+use ingot::geneve::GeneveFlags;
 use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveOptRef;
 use ingot::geneve::GeneveRef;
@@ -35,6 +38,67 @@ pub const GENEVE_OPT_TYPE_MASK: u8 = (1 << GENEVE_OPT_CRIT_SHIFT) - 1;
 pub const GENEVE_OPT_RESERVED_SHIFT: u8 = 5;
 pub const GENEVE_OPT_RESERVED_MASK: u8 = (1 << GENEVE_OPT_RESERVED_SHIFT) - 1;
 pub const GENEVE_OPT_CLASS_OXIDE: u16 = 0x0129;
+
+#[inline]
+pub fn validate_geneve<V: ByteSlice>(
+    pkt: &ValidGeneve<V>,
+    bytes_after: usize,
+) -> Result<(), ParseError> {
+    if pkt.version() != 0 {
+        return Err(ParseError::IllegalValue(MismatchError {
+            location: c"Geneve.version",
+            expected: 0,
+            actual: pkt.version() as u64,
+        }));
+    }
+
+    if pkt.flags().contains(GeneveFlags::CRITICAL_OPTS) {
+        match pkt.options_ref() {
+            ingot::types::FieldRef::Repr(g) => {
+                for opt in g.iter() {
+                    if !opt.option_type.is_critical() {
+                        continue;
+                    }
+
+                    GeneveOption::from_code_and_ty(
+                        opt.class,
+                        opt.option_type.0,
+                    )?;
+                }
+            }
+            ingot::types::FieldRef::Raw(Header::Repr(g)) => {
+                for opt in g.iter() {
+                    if !opt.option_type.is_critical() {
+                        continue;
+                    }
+
+                    GeneveOption::from_code_and_ty(
+                        opt.class,
+                        opt.option_type.0,
+                    )?;
+                }
+            }
+            ingot::types::FieldRef::Raw(Header::Raw(g)) => {
+                for opt in g.iter(None) {
+                    let Ok(opt) = opt else {
+                        break;
+                    };
+
+                    if !opt.option_type().is_critical() {
+                        continue;
+                    }
+
+                    GeneveOption::from_code_and_ty(
+                        opt.class(),
+                        opt.option_type().0,
+                    )?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct GeneveMeta {
@@ -118,6 +182,20 @@ pub enum GeneveOption {
 }
 
 impl GeneveOption {
+    #[inline]
+    pub fn from_code_and_ty(class: u16, ty: u8) -> Result<Self, ParseError> {
+        match (class, ty) {
+            (GENEVE_OPT_CLASS_OXIDE, v)
+                if OxideOption::External.opt_type() == v =>
+            {
+                Ok(Self::Oxide(OxideOption::External))
+            }
+            _ => {
+                Err(ParseError::UnrecognisedTunnelOpt { class: class, ty: ty })
+            }
+        }
+    }
+
     /// Return the wire-length of this option in bytes, including headers.
     pub fn len(&self) -> usize {
         4 + match self {
@@ -144,7 +222,7 @@ impl OxideOption {
     }
 
     /// Return the option type number.
-    pub fn opt_type(&self) -> u8 {
+    pub const fn opt_type(&self) -> u8 {
         match self {
             OxideOption::External => 0,
         }
@@ -155,14 +233,18 @@ impl OxideOption {
 // from the geneve options -- we only have the one today, however.
 #[inline]
 pub fn geneve_has_oxide_external(pkt: &Geneve) -> bool {
+    let mut out = false;
     for opt in pkt.options.iter() {
-        let out = geneve_opt_is_oxide_external::<&[u8]>(opt);
+        out = matches!(
+            GeneveOption::from_code_and_ty(opt.class, opt.option_type.0,),
+            Ok(GeneveOption::Oxide(OxideOption::External))
+        );
         if out {
             break;
         }
     }
 
-    false
+    out
 }
 
 #[inline]
@@ -174,7 +256,13 @@ pub fn valid_geneve_has_oxide_external<V: ByteSlice>(
     match pkt.options_ref() {
         ingot::types::FieldRef::Repr(g) => {
             for opt in g.iter() {
-                out = geneve_opt_is_oxide_external::<&[u8]>(opt);
+                out = matches!(
+                    GeneveOption::from_code_and_ty(
+                        opt.class,
+                        opt.option_type.0,
+                    ),
+                    Ok(GeneveOption::Oxide(OxideOption::External))
+                );
                 if out {
                     break;
                 }
@@ -182,7 +270,13 @@ pub fn valid_geneve_has_oxide_external<V: ByteSlice>(
         }
         ingot::types::FieldRef::Raw(Header::Repr(g)) => {
             for opt in g.iter() {
-                out = geneve_opt_is_oxide_external::<&[u8]>(opt);
+                out = matches!(
+                    GeneveOption::from_code_and_ty(
+                        opt.class,
+                        opt.option_type.0,
+                    ),
+                    Ok(GeneveOption::Oxide(OxideOption::External))
+                );
                 if out {
                     break;
                 }
@@ -194,7 +288,13 @@ pub fn valid_geneve_has_oxide_external<V: ByteSlice>(
                     break;
                 };
 
-                out = geneve_opt_is_oxide_external(&opt);
+                out = matches!(
+                    GeneveOption::from_code_and_ty(
+                        opt.class(),
+                        opt.option_type().0,
+                    ),
+                    Ok(GeneveOption::Oxide(OxideOption::External))
+                );
                 if out {
                     break;
                 }

@@ -6,10 +6,6 @@
 
 //! IPv4 headers.
 
-use core::fmt;
-use core::fmt::Display;
-use core::num::ParseIntError;
-
 use crate::engine::checksum::Checksum;
 use crate::engine::packet::MismatchError;
 use crate::engine::packet::ParseError;
