@@ -13,6 +13,7 @@ use super::ether::EthernetMut;
 use super::ether::EthernetPacket;
 use super::ether::EthernetRef;
 use super::ether::ValidEthernet;
+use super::geneve::validate_geneve;
 use super::geneve::GENEVE_PORT;
 use super::headers::IpMod;
 use super::ingot_packet::OpteMeta;
@@ -591,6 +592,8 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
 
         let rem_len = rem_len - self.outer_udp.packet_length();
         validate_udp(&self.outer_udp, rem_len)?;
+
+        validate_geneve(&self.outer_encap)?;
 
         let rem_len = rem_len
             - &(&self.outer_encap, &self.outer_eth, &self.inner_l3)

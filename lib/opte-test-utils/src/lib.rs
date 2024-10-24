@@ -1044,7 +1044,7 @@ fn _encap(
         outer_udp,
         outer_geneve,
     ));
-    encap_pkt.extend_if_one(inner_pkt);
+    encap_pkt.append(inner_pkt);
 
     encap_pkt
 }

@@ -189,7 +189,7 @@ pub fn gen_icmp_echo(
         let chain = segments.pop().unwrap();
         let new_el = segments.last_mut().unwrap();
 
-        new_el.extend_if_one(chain);
+        new_el.append(chain);
     }
 
     segments.pop().unwrap()
@@ -315,7 +315,7 @@ pub fn gen_icmpv6_echo(
         let chain = segments.pop().unwrap();
         let new_el = segments.last_mut().unwrap();
 
-        new_el.extend_if_one(chain);
+        new_el.append(chain);
     }
 
     segments.pop().unwrap()

@@ -42,7 +42,6 @@ pub const GENEVE_OPT_CLASS_OXIDE: u16 = 0x0129;
 #[inline]
 pub fn validate_geneve<V: ByteSlice>(
     pkt: &ValidGeneve<V>,
-    bytes_after: usize,
 ) -> Result<(), ParseError> {
     if pkt.version() != 0 {
         return Err(ParseError::IllegalValue(MismatchError {

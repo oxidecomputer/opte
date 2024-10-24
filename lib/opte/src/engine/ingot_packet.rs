@@ -464,15 +464,19 @@ impl MsgBlk {
         }
     }
 
-    // TODO: I really need to rethink this one in practice.
-    // hacked together for POC.
-    pub fn extend_if_one(&mut self, other: Self) {
-        let mut_self = unsafe { self.inner.as_mut() };
-        if !mut_self.b_cont.is_null() {
-            panic!("oopsie daisy")
+    /// Places another `MsgBlk` at the end of this packet's
+    /// b_cont chain.
+    pub fn append(&mut self, other: Self) {
+        // Find the last element in the pkt chain
+        // i.e., whose b_cont is null.
+        let mut curr = self.inner.as_ptr();
+        while unsafe { !(*curr).b_cont.is_null() } {
+            curr = unsafe { (*curr).b_cont };
         }
 
-        mut_self.b_cont = other.unwrap_mblk().as_ptr();
+        unsafe {
+            (*curr).b_cont = other.unwrap_mblk().as_ptr();
+        }
     }
 
     /// Drop all bytes and move the cursor to the very back of the dblk.
@@ -2137,7 +2141,7 @@ impl EmitSpec {
                 }
 
                 if let Some(mut prepend) = prepend {
-                    prepend.extend_if_one(pkt);
+                    prepend.append(pkt);
                     prepend
                 } else {
                     pkt
