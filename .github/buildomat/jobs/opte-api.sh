@@ -3,8 +3,11 @@
 #: name = "opte-api"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2024-05-12"
+#: rust_toolchain = "nightly-2024-10-12"
 #: output_rules = []
+#: access_repos = [
+#:  "oxidecomputer/ingot",
+#: ]
 #:
 
 set -o errexit
@@ -24,7 +27,7 @@ header "check API_VERSION"
 ./check-api-version.sh
 
 header "check style"
-ptime -m cargo +nightly-2024-05-12 fmt -- --check
+ptime -m cargo +nightly-2024-10-12 fmt -- --check
 
 header "analyze std"
 ptime -m cargo clippy --all-targets

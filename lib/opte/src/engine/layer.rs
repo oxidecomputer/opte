@@ -11,15 +11,14 @@ use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
 use super::flow_table::FLOW_DEF_EXPIRE_SECS;
+use super::ingot_packet::MblkFullParsed;
+use super::ingot_packet::MblkPacketData;
+use super::ingot_packet::MsgBlk;
+use super::ingot_packet::Packet2;
 use super::ioctl;
 use super::ioctl::ActionDescEntryDump;
 use super::packet::BodyTransformError;
-use super::packet::Initialized;
 use super::packet::InnerFlowId;
-use super::packet::Packet;
-use super::packet::PacketMeta;
-use super::packet::PacketRead;
-use super::packet::Parsed;
 use super::packet::FLOW_ID_DEFAULT;
 use super::port::meta::ActionMeta;
 use super::port::Transforms;
@@ -128,7 +127,7 @@ pub enum LayerResult {
         reason: DenyReason,
     },
     #[leaf]
-    Hairpin(Packet<Initialized>),
+    Hairpin(MsgBlk),
     HandlePkt,
 }
 
@@ -244,8 +243,8 @@ impl LayerFlowTable {
         self.count = self.ft_out.num_flows();
     }
 
-    fn get_in(&mut self, flow: &InnerFlowId) -> EntryState {
-        match self.ft_in.get_mut(flow) {
+    fn get_in(&self, flow: &InnerFlowId) -> EntryState {
+        match self.ft_in.get(flow) {
             Some(entry) => {
                 entry.hit();
                 if entry.is_dirty() {
@@ -259,8 +258,8 @@ impl LayerFlowTable {
         }
     }
 
-    fn get_out(&mut self, flow: &InnerFlowId) -> EntryState {
-        match self.ft_out.get_mut(flow) {
+    fn get_out(&self, flow: &InnerFlowId) -> EntryState {
+        match self.ft_out.get(flow) {
             Some(entry) => {
                 entry.hit();
                 let action = entry.state().action_desc.clone();
@@ -278,27 +277,27 @@ impl LayerFlowTable {
     fn remove_in(
         &mut self,
         flow: &InnerFlowId,
-    ) -> Option<FlowEntry<ActionDescEntry>> {
+    ) -> Option<Arc<FlowEntry<ActionDescEntry>>> {
         self.ft_in.remove(flow)
     }
 
     fn remove_out(
         &mut self,
         flow: &InnerFlowId,
-    ) -> Option<FlowEntry<LftOutEntry>> {
+    ) -> Option<Arc<FlowEntry<LftOutEntry>>> {
         self.ft_out.remove(flow)
     }
 
     fn mark_clean(&mut self, dir: Direction, flow: &InnerFlowId) {
         match dir {
             Direction::In => {
-                let entry = self.ft_in.get_mut(flow);
+                let entry = self.ft_in.get(flow);
                 if let Some(entry) = entry {
                     entry.mark_clean();
                 }
             }
             Direction::Out => {
-                let entry = self.ft_out.get_mut(flow);
+                let entry = self.ft_out.get(flow);
                 if let Some(entry) = entry {
                     entry.mark_clean();
                 }
@@ -799,7 +798,7 @@ impl Layer {
         &mut self,
         ectx: &ExecCtx,
         dir: Direction,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -817,7 +816,7 @@ impl Layer {
     fn process_in(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -887,17 +886,14 @@ impl Layer {
     fn process_in_rules(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::In;
 
         self.stats.vals.in_lft_miss += 1;
-        let mut rdr = pkt.get_body_rdr();
-        let rule =
-            self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta, &mut rdr);
-        let _ = rdr.finish();
+        let rule = self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta);
 
         let action = if let Some(rule) = rule {
             self.stats.vals.in_rule_match += 1;
@@ -1085,23 +1081,16 @@ impl Layer {
             }
 
             Action::Hairpin(action) => {
-                let mut rdr = pkt.get_body_rdr();
-                match action.gen_packet(pkt.meta(), &mut rdr) {
-                    Ok(aord) => match aord {
-                        AllowOrDeny::Allow(pkt) => {
-                            let _ = rdr.finish();
-                            Ok(LayerResult::Hairpin(pkt))
-                        }
-
-                        AllowOrDeny::Deny => Ok(LayerResult::Deny {
-                            name: self.name,
-                            reason: DenyReason::Action,
-                        }),
-                    },
-
+                match action.gen_packet(pkt.meta()) {
+                    Ok(AllowOrDeny::Allow(pkt)) => {
+                        Ok(LayerResult::Hairpin(pkt))
+                    }
+                    Ok(AllowOrDeny::Deny) => Ok(LayerResult::Deny {
+                        name: self.name,
+                        reason: DenyReason::Action,
+                    }),
                     Err(e) => {
                         // XXX SDT probe, error stat, log
-                        let _ = rdr.finish();
                         Err(LayerError::GenPacket(e))
                     }
                 }
@@ -1114,7 +1103,7 @@ impl Layer {
     fn process_out(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -1184,17 +1173,14 @@ impl Layer {
     fn process_out_rules(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::Out;
 
         self.stats.vals.out_lft_miss += 1;
-        let mut rdr = pkt.get_body_rdr();
-        let rule =
-            self.rules_out.find_match(pkt.flow(), pkt.meta(), ameta, &mut rdr);
-        let _ = rdr.finish();
+        let rule = self.rules_out.find_match(pkt.flow(), pkt.meta(), ameta);
 
         let action = if let Some(rule) = rule {
             self.stats.vals.out_rule_match += 1;
@@ -1387,23 +1373,16 @@ impl Layer {
             }
 
             Action::Hairpin(action) => {
-                let mut rdr = pkt.get_body_rdr();
-                match action.gen_packet(pkt.meta(), &mut rdr) {
-                    Ok(aord) => match aord {
-                        AllowOrDeny::Allow(pkt) => {
-                            let _ = rdr.finish();
-                            Ok(LayerResult::Hairpin(pkt))
-                        }
-
-                        AllowOrDeny::Deny => Ok(LayerResult::Deny {
-                            name: self.name,
-                            reason: DenyReason::Action,
-                        }),
-                    },
-
+                match action.gen_packet(pkt.meta()) {
+                    Ok(AllowOrDeny::Allow(pkt)) => {
+                        Ok(LayerResult::Hairpin(pkt))
+                    }
+                    Ok(AllowOrDeny::Deny) => Ok(LayerResult::Deny {
+                        name: self.name,
+                        reason: DenyReason::Action,
+                    }),
                     Err(e) => {
                         // XXX SDT probe, error stat, log
-                        let _ = rdr.finish();
                         Err(LayerError::GenPacket(e))
                     }
                 }
@@ -1620,18 +1599,14 @@ impl<'a> RuleTable {
         dump
     }
 
-    fn find_match<'b, R>(
+    fn find_match<'b>(
         &mut self,
         ifid: &InnerFlowId,
-        pmeta: &PacketMeta,
+        pmeta: &MblkPacketData,
         ameta: &ActionMeta,
-        rdr: &'b mut R,
-    ) -> Option<&Rule<rule::Finalized>>
-    where
-        R: PacketRead<'a>,
-    {
+    ) -> Option<&Rule<rule::Finalized>> {
         for rte in self.rules.iter_mut() {
-            if rte.rule.is_match(pmeta, ameta, rdr) {
+            if rte.rule.is_match(pmeta, ameta) {
                 rte.hits += 1;
                 Self::rule_match_probe(
                     self.port_c.as_c_str(),
@@ -1853,19 +1828,21 @@ pub struct rule_no_match_sdt_arg {
 
 #[cfg(test)]
 mod test {
+    use ingot::ethernet::Ethernet;
+    use ingot::ethernet::Ethertype;
+    use ingot::tcp::Tcp;
+    use ingot::types::HeaderLen;
+
+    use crate::engine::ingot_base::Ipv4;
+    use crate::engine::GenericUlp;
+
     use super::*;
 
     #[test]
     fn find_rule() {
-        use crate::engine::headers::IpMeta;
-        use crate::engine::headers::UlpMeta;
-        use crate::engine::ip4::Ipv4Meta;
-        use crate::engine::ip4::Protocol;
-        use crate::engine::packet::InnerMeta;
         use crate::engine::predicate::Ipv4AddrMatch;
         use crate::engine::predicate::Predicate;
         use crate::engine::rule;
-        use crate::engine::tcp::TcpMeta;
 
         let mut rule_table = RuleTable::new("port", "test", Direction::Out);
         let mut rule = Rule::new(
@@ -1879,45 +1856,32 @@ mod test {
 
         rule_table.add(rule.finalize());
 
-        let ip = IpMeta::from(Ipv4Meta {
-            src: "10.0.0.77".parse().unwrap(),
-            dst: "52.10.128.69".parse().unwrap(),
-            proto: Protocol::TCP,
-            ttl: 64,
-            ident: 1,
-            hdr_len: 20,
-            total_len: 40,
-            csum: [0; 2],
-        });
-        let ulp = UlpMeta::from(TcpMeta {
-            src: 5555,
-            dst: 443,
-            flags: 0,
-            seq: 0,
-            ack: 0,
-            window_size: 64240,
-            options_bytes: None,
-            options_len: 0,
-            ..Default::default()
-        });
-
-        let pmeta = PacketMeta {
-            outer: Default::default(),
-            inner: InnerMeta {
-                ip: Some(ip),
-                ulp: Some(ulp),
+        let mut test_pkt = MsgBlk::new_ethernet_pkt((
+            Ethernet { ethertype: Ethertype::IPV4, ..Default::default() },
+            Ipv4 {
+                source: "10.0.0.77".parse().unwrap(),
+                destination: "52.10.128.69".parse().unwrap(),
+                protocol: ingot::ip::IpProtocol::TCP,
+                identification: 1,
+                total_len: (20 + Tcp::MINIMUM_LENGTH) as u16,
                 ..Default::default()
             },
-        };
+            Tcp {
+                source: 5555,
+                destination: 443,
+                window_size: 64240,
+                ..Default::default()
+            },
+        ));
+
+        let pkt_view = Packet2::new(test_pkt.iter_mut());
+        let pmeta =
+            pkt_view.parse_outbound(GenericUlp {}).unwrap().to_full_meta();
 
         // The pkt/rdr aren't actually used in this case.
-        let pkt = Packet::copy(&[0xA]);
-        let mut rdr = pkt.get_rdr();
         let ameta = ActionMeta::new();
-        let ifid = InnerFlowId::from(&pmeta);
-        assert!(rule_table
-            .find_match(&ifid, &pmeta, &ameta, &mut rdr)
-            .is_some());
+        let ifid = *pmeta.flow();
+        assert!(rule_table.find_match(&ifid, &pmeta.meta(), &ameta).is_some());
     }
 }
 // TODO Reinstate

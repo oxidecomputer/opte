@@ -31,6 +31,8 @@ use alloc::boxed::Box;
 use core::fmt;
 use core::fmt::Display;
 
+pub use ingot;
+
 #[cfg(any(feature = "api", test))]
 pub mod api {
     pub use opte_api::*;

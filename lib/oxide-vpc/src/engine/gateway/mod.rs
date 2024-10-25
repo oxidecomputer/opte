@@ -52,16 +52,15 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
-use core::marker::PhantomData;
 use opte::api::Direction;
 use opte::api::OpteError;
 use opte::engine::ether::EtherMod;
 use opte::engine::headers::HeaderAction;
+use opte::engine::ingot_packet::MblkPacketData;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::packet::PacketMeta;
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
@@ -144,14 +143,14 @@ impl StaticAction for RewriteSrcMac {
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _packet_meta: &PacketMeta,
+        _packet_meta: &MblkPacketData,
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform {
-            inner_ether: HeaderAction::Modify(
-                EtherMod { src: Some(self.gateway_mac), ..Default::default() },
-                PhantomData,
-            ),
+            inner_ether: HeaderAction::Modify(EtherMod {
+                src: Some(self.gateway_mac),
+                ..Default::default()
+            }),
             ..Default::default()
         }))
     }

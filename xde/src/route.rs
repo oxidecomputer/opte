@@ -20,7 +20,7 @@ use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Moment;
 use opte::engine::ether::EtherAddr;
-use opte::engine::ip6::Ipv6Addr;
+use opte::engine::ip::v6::Ipv6Addr;
 
 // XXX: completely arbitrary timeouts.
 /// The duration a cached route remains valid for before it must be

@@ -19,14 +19,12 @@ pub mod geneve;
 pub mod headers;
 pub mod icmp;
 pub mod ioctl;
-#[macro_use]
-pub mod ip4;
-#[macro_use]
-pub mod ip6;
+pub mod ip;
 pub mod layer;
 pub mod nat;
 #[macro_use]
 pub mod packet;
+pub mod parse;
 pub mod port;
 pub mod predicate;
 #[cfg(any(feature = "std", test))]
@@ -39,61 +37,21 @@ pub mod tcp_state;
 #[macro_use]
 pub mod udp;
 
-use alloc::string::String;
-use core::fmt;
-use core::num::ParseIntError;
-use ip4::IpError;
+pub mod ingot_packet;
+
+use checksum::Checksum;
+use ingot::tcp::TcpRef;
+use ingot::types::Read;
+use ingot_packet::FullParsed;
+use ingot_packet::MsgBlk;
+use ingot_packet::OpteMeta;
+use ingot_packet::OpteParsed2;
+use ingot_packet::Packet2;
 pub use opte_api::Direction;
-
-// TODO Currently I'm using this for parsing many different things. It
-// might be wise to have different parse error types. E.g., one for
-// parsing ioctl strings, another for parsing IPv4 strings, for IPv6,
-// etc.
-//
-// TODO This probably doesn't belong in this module.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ParseErr {
-    BadAction,
-    BadAddrError,
-    BadDirectionError,
-    BadProtoError,
-    BadToken(String),
-    InvalidPort,
-    IpError(IpError),
-    Malformed,
-    MalformedInt,
-    MalformedPort,
-    MissingField,
-    Other(String),
-    UnknownToken(String),
-    ValTooLong(String, usize),
-}
-
-impl fmt::Display for ParseErr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-pub type ParseResult<T> = core::result::Result<T, ParseErr>;
-
-impl From<IpError> for ParseErr {
-    fn from(err: IpError) -> Self {
-        ParseErr::IpError(err)
-    }
-}
-
-impl From<ParseIntError> for ParseErr {
-    fn from(_err: ParseIntError) -> Self {
-        ParseErr::MalformedInt
-    }
-}
-
-impl From<String> for ParseErr {
-    fn from(err: String) -> Self {
-        ParseErr::Other(err)
-    }
-}
+use parse::ValidNoEncap;
+use rule::CompiledTransform;
+use zerocopy::ByteSlice;
+use zerocopy::ByteSliceMut;
 
 /// When set to 1 we will panic in some situations instead of just
 /// flagging in error. This can be useful for debugging certain
@@ -176,18 +134,9 @@ cfg_if! {
 pub use dbg_macro as dbg;
 pub use err_macro as err;
 
-use crate::engine::ether::EtherType;
 use crate::engine::flow_table::FlowTable;
-use crate::engine::ip4::Protocol;
-use crate::engine::packet::HeaderOffsets;
-use crate::engine::packet::Initialized;
 use crate::engine::packet::InnerFlowId;
-use crate::engine::packet::Packet;
-use crate::engine::packet::PacketInfo;
-use crate::engine::packet::PacketMeta;
-use crate::engine::packet::PacketReaderMut;
 use crate::engine::packet::ParseError;
-use crate::engine::packet::Parsed;
 use crate::engine::port::UftEntry;
 
 /// The action to take for a single packet, based on the processing of
@@ -205,7 +154,7 @@ pub enum HdlPktAction {
     /// input packet.
     ///
     /// The input packet is dropped.
-    Hairpin(Packet<Initialized>),
+    Hairpin(MsgBlk),
 }
 
 /// Some type of problem occurred during [`NetworkImpl::handle_pkt()`]
@@ -269,13 +218,16 @@ pub trait NetworkImpl {
     /// myriad of reasons. The error returned is for informational
     /// purposes, rather than having any obvious direct action to take
     /// in response.
-    fn handle_pkt(
+    fn handle_pkt<T: Read>(
         &self,
         dir: Direction,
-        pkt: &mut Packet<Parsed>,
+        pkt: &mut Packet2<FullParsed<T>>,
         uft_in: &FlowTable<UftEntry<InnerFlowId>>,
         uft_out: &FlowTable<UftEntry<InnerFlowId>>,
-    ) -> Result<HdlPktAction, HdlPktError>;
+    ) -> Result<HdlPktAction, HdlPktError>
+    where
+        T: Read,
+        T::Chunk: ByteSliceMut;
 
     /// Return the parser for this network implementation.
     fn parser(&self) -> Self::Parser;
@@ -286,106 +238,87 @@ pub trait NetworkImpl {
 /// This provides parsing for inbound/outbound packets for a given
 /// [`NetworkImpl`].
 pub trait NetworkParser {
+    type InMeta<T: ByteSliceMut>: LightweightMeta<T>;
+    type OutMeta<T: ByteSliceMut>: LightweightMeta<T>;
+
     /// Parse an outbound packet.
     ///
-    /// An outbound packet is one traveling from the [`port::Port`]
+    /// An outbound packet is one travelling from the [`port::Port`]
     /// client to the network.
-    fn parse_outbound(
+    fn parse_outbound<'a, T: Read + 'a>(
         &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError>;
+        rdr: T,
+    ) -> Result<OpteParsed2<T, Self::OutMeta<T::Chunk>>, ParseError>
+    where
+        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut;
 
     /// Parse an inbound packet.
     ///
     /// An inbound packet is one traveling from the network to the
     /// [`port::Port`] client.
-    fn parse_inbound(
+    fn parse_inbound<'a, T: Read + 'a>(
         &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError>;
+        rdr: T,
+    ) -> Result<OpteParsed2<T, Self::InMeta<T::Chunk>>, ParseError>
+    where
+        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut;
+}
+
+/// Header formats which allow a flow ID to be read out, and which can be converted
+/// into the shared `OpteMeta` format.
+pub trait LightweightMeta<T: ByteSlice>: Into<OpteMeta<T>> {
+    /// Runs a compiled fastpath action against the target metadata.
+    fn run_compiled_transform(&mut self, transform: &CompiledTransform)
+    where
+        T: ByteSliceMut;
+
+    /// Derive the checksum for the packet body from inner headers.
+    fn compute_body_csum(&self) -> Option<Checksum>;
+
+    // This is a dedicated fn since `where for<'a> &'a Self: Into<InnerFlowId>`
+    // had *awful* ergonomics around that bound's propagation.
+    /// Return the flow ID (5-tuple, or other composite key) which
+    /// identifies this packet's parent flow.
+    fn flow(&self) -> InnerFlowId;
+
+    /// Returns the number of bytes occupied by the packet's outer encapsulation.
+    fn encap_len(&self) -> u16;
+
+    /// Recalculate checksums within inner headers, derived from a pre-computed `body_csum`.
+    fn update_inner_checksums(&mut self, body_csum: Checksum);
+
+    /// Provide a view of internal TCP state.
+    fn inner_tcp(&self) -> Option<&impl TcpRef<T>>;
+
+    /// Determines whether headers have consistent lengths/mandatory fields set.
+    fn validate(&self, pkt_len: usize) -> Result<(), ParseError>;
 }
 
 /// A generic ULP parser, useful for testing inside of the opte crate
 /// itself.
 pub struct GenericUlp {}
 
-impl GenericUlp {
-    /// Parse a generic L2 + L3 + L4 packet, storing the headers in
-    /// the inner position.
-    fn parse_ulp(
-        &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError> {
-        let mut meta = PacketMeta::default();
-        let mut offsets = HeaderOffsets::default();
-
-        let (ether_hi, _ether_hdr) = Packet::parse_ether(rdr)?;
-        meta.inner.ether = ether_hi.meta;
-        offsets.inner.ether = ether_hi.offset;
-        let ether_type = ether_hi.meta.ether_type;
-
-        let (ip_hi, pseudo_csum) = match ether_type {
-            EtherType::Arp => {
-                return Ok(PacketInfo {
-                    meta,
-                    offsets,
-                    body_csum: None,
-                    extra_hdr_space: None,
-                });
-            }
-
-            EtherType::Ipv4 => {
-                let (ip_hi, hdr) = Packet::parse_ip4(rdr)?;
-                (ip_hi, hdr.pseudo_csum())
-            }
-
-            EtherType::Ipv6 => {
-                let (ip_hi, hdr) = Packet::parse_ip6(rdr)?;
-                (ip_hi, hdr.pseudo_csum())
-            }
-
-            _ => return Err(ParseError::UnexpectedEtherType(ether_type)),
-        };
-
-        meta.inner.ip = Some(ip_hi.meta);
-        offsets.inner.ip = Some(ip_hi.offset);
-
-        let (ulp_hi, ulp_hdr) = match ip_hi.meta.proto() {
-            Protocol::ICMP => Packet::parse_icmp(rdr)?,
-            Protocol::ICMPv6 => Packet::parse_icmp6(rdr)?,
-            Protocol::TCP => Packet::parse_tcp(rdr)?,
-            Protocol::UDP => Packet::parse_udp(rdr)?,
-            proto => return Err(ParseError::UnexpectedProtocol(proto)),
-        };
-
-        let use_pseudo = ulp_hi.meta.is_pseudoheader_in_csum();
-        meta.inner.ulp = Some(ulp_hi.meta);
-        offsets.inner.ulp = Some(ulp_hi.offset);
-        let body_csum = if let Some(mut csum) = ulp_hdr.csum_minus_hdr() {
-            if use_pseudo {
-                csum -= pseudo_csum;
-            }
-            Some(csum)
-        } else {
-            None
-        };
-
-        Ok(PacketInfo { meta, offsets, body_csum, extra_hdr_space: None })
-    }
-}
-
 impl NetworkParser for GenericUlp {
-    fn parse_inbound(
+    type InMeta<T: ByteSliceMut> = ValidNoEncap<T>;
+    type OutMeta<T: ByteSliceMut> = ValidNoEncap<T>;
+
+    fn parse_inbound<'a, T: Read + 'a>(
         &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError> {
-        self.parse_ulp(rdr)
+        rdr: T,
+    ) -> Result<OpteParsed2<T, Self::InMeta<T::Chunk>>, ParseError>
+    where
+        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut,
+    {
+        Ok(ValidNoEncap::parse_read(rdr)?)
     }
 
-    fn parse_outbound(
+    fn parse_outbound<'a, T: Read + 'a>(
         &self,
-        rdr: &mut PacketReaderMut,
-    ) -> Result<PacketInfo, ParseError> {
-        self.parse_ulp(rdr)
+        rdr: T,
+    ) -> Result<OpteParsed2<T, Self::OutMeta<T::Chunk>>, ParseError>
+    where
+        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut,
+    {
+        Ok(ValidNoEncap::parse_read(rdr)?)
     }
 }
