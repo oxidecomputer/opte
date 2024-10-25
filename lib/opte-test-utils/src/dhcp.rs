@@ -8,11 +8,11 @@
 
 use super::*;
 use dhcpv6::protocol::MessageType;
+use opte::ddi::mblk::MsgBlk;
 use opte::engine::dhcp::DHCP_CLIENT_PORT;
 use opte::engine::dhcp::DHCP_SERVER_PORT;
 use opte::engine::dhcpv6;
 use opte::engine::ether::Ethernet;
-use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ip::v4::Ipv4;
 use opte::engine::ip::v6::Ipv6;
 use opte::ingot::ethernet::Ethertype;

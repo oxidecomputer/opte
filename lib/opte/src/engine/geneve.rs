@@ -316,8 +316,21 @@ pub fn geneve_opt_is_oxide_external<V: ByteSlice>(
 mod test {
     use core::matches;
 
+    use ingot::ethernet::Ethernet;
+    use ingot::ethernet::Ethertype;
+    use ingot::ip::IpProtocol;
+    use ingot::ip::Ipv6;
+    use ingot::types::Emit;
+    use ingot::types::HeaderParse;
+    use ingot::udp::UdpRef;
+    use ingot::udp::ValidUdp;
+
     use super::*;
+    use crate::engine::headers::EncapMeta;
+    use crate::engine::ingot_packet::MsgBlk;
+    use crate::engine::ingot_packet::Packet;
     use crate::engine::packet::Packet;
+    use crate::engine::parse::ValidGeneveOverV6;
 
     #[test]
     fn emit_no_opts() {
@@ -329,13 +342,9 @@ mod test {
         };
 
         let len = geneve.hdr_len();
-        let mut pkt = Packet::alloc_and_expand(len);
-        let mut wtr = pkt.seg0_wtr();
-        geneve.emit(
-            geneve.hdr_len().try_into().unwrap(),
-            wtr.slice_mut(len).unwrap(),
-        );
+        let emitted = EncapMeta::Geneve(geneve).emit_vec();
         assert_eq!(len, pkt.len());
+
         #[rustfmt::skip]
         let expected_bytes = vec![
             // source
@@ -355,7 +364,7 @@ mod test {
             // vni + reserved
             0x00, 0x04, 0xD2, 0x00
         ];
-        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
+        assert_eq!(expected_bytes, emitted);
     }
 
     #[test]
@@ -367,13 +376,9 @@ mod test {
         };
 
         let len = geneve.hdr_len();
-        let mut pkt = Packet::alloc_and_expand(len);
-        let mut wtr = pkt.seg0_wtr();
-        geneve.emit(
-            geneve.hdr_len().try_into().unwrap(),
-            wtr.slice_mut(len).unwrap(),
-        );
+        let emitted = EncapMeta::Geneve(geneve).emit_vec();
         assert_eq!(len, pkt.len());
+
         #[rustfmt::skip]
         let expected_bytes = vec![
             // source
@@ -400,7 +405,7 @@ mod test {
             // rsvd + len
             0x00,
         ];
-        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
+        assert_eq!(&expected_bytes, emitted);
     }
 
     #[test]
@@ -432,64 +437,20 @@ mod test {
             // rsvd + len
             0x00,
         ];
-        let mut pkt = Packet::copy(&buf);
-        let mut reader = pkt.get_rdr_mut();
-        let udp = UdpHdr::parse(&mut reader).unwrap();
-        let header = GeneveHdr::parse(&mut reader).unwrap();
 
-        // Previously, the `Ipv6Meta::total_len` method double-counted the
-        // extension header length. Assert we don't do that here.
-        let meta = GeneveMeta::from((&udp, &header));
-        assert_eq!(
-            meta.entropy,
-            u16::from_be_bytes(buf[0..2].try_into().unwrap())
-        );
-        assert!(meta.oxide_external_pkt);
-    }
+        let (.., rem) = ValidUdp::parse(&buf[..]).unwrap();
+        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
 
-    #[test]
-    fn bad_opt_len_fails() {
-        // Create a packet with one extension header.
-        #[rustfmt::skip]
-        let buf = vec![
-            // source
-            0x1E, 0x61,
-            // dest
-            0x17, 0xC1,
-            // length
-            0x00, 0x14,
-            // csum
-            0x00, 0x00,
-            // ver + BAD opt len
-            0x01,
-            // flags
-            0x00,
-            // proto
-            0x65, 0x58,
-            // vni + reserved
-            0x00, 0x04, 0xD2, 0x00,
+        validate_geneve(&geneve).unwrap();
 
-            // option class
-            0x01, 0x29,
-            // crt + type
-            0x01,
-            // rsvd + len
-            0x01,
-            // body
-            0x00, 0x00, 0x00, 0x00
-        ];
-        let mut pkt = Packet::copy(&buf);
-        let mut reader = pkt.get_rdr_mut();
-        UdpHdr::parse(&mut reader).unwrap();
-        assert!(matches!(
-            GeneveHdr::parse(&mut reader),
-            Err(GeneveHdrError::BadLength { .. }),
-        ));
+        assert!(geneve_opt_is_oxide_external(&geneve));
     }
 
     #[test]
     fn unknown_crit_option_fails() {
-        // Create a packet with one extension header.
+        // Create a packet with one extension header with the critical
+        // flag set.
+        // We do not unsdertand this extension, so must drop the packet.
         #[rustfmt::skip]
         let buf = vec![
             // source
@@ -516,21 +477,22 @@ mod test {
             // rsvd + len
             0x00,
         ];
-        let mut pkt = Packet::copy(&buf);
-        let mut reader = pkt.get_rdr_mut();
-        UdpHdr::parse(&mut reader).unwrap();
+
+        let (_udp, _, rem) = ValidUdp::parse(&buf[..]).unwrap();
+        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
+
         assert!(matches!(
-            GeneveHdr::parse(&mut reader),
-            Err(GeneveHdrError::UnknownCriticalOption {
-                class: 0xff_ff,
-                opt_type: 0
-            }),
+            validate_geneve(&geneve),
+            Err(ParseError::UnrecognisedTunnelOpt { class: 0xffff, ty: 0x80 }),
         ));
     }
 
     #[test]
     fn parse_multi_opt() {
-        // Create a packet with one extension header.
+        // Create a packet with three extension headers.
+        // None are critical, so the fact that we
+        // We shoukld also be able to extract info on the options we *do*
+        // care about.
         #[rustfmt::skip]
         let buf = vec![
             // source
@@ -575,18 +537,11 @@ mod test {
             // body
             0x00, 0x00, 0x00, 0x00,
         ];
-        let mut pkt = Packet::copy(&buf);
-        let mut reader = pkt.get_rdr_mut();
-        let udp = UdpHdr::parse(&mut reader).unwrap();
-        let header = GeneveHdr::parse(&mut reader).unwrap();
 
-        // Previously, the `Ipv6Meta::total_len` method double-counted the
-        // extension header length. Assert we don't do that here.
-        let meta = GeneveMeta::from((&udp, &header));
-        assert_eq!(
-            meta.entropy,
-            u16::from_be_bytes(buf[0..2].try_into().unwrap())
-        );
-        assert!(meta.oxide_external_pkt);
+        let (.., rem) = ValidUdp::parse(&buf[..]).unwrap();
+        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
+
+        validate_geneve(&geneve).unwrap();
+        assert!(geneve_opt_is_oxide_external(&geneve));
     }
 }

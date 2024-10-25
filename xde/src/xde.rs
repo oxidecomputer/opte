@@ -62,12 +62,12 @@ use opte::ddi::time::Periodic;
 use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
-use opte::engine::ingot_packet::MsgBlk;
-use opte::engine::ingot_packet::Packet2;
+use opte::ddi::mblk::MsgBlk;
+use opte::engine::ingot_packet::Packet;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::packet::PacketChain;
+use opte::ddi::mblk::MsgBlkChain;
 use opte::engine::packet::ParseError;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
@@ -1407,7 +1407,7 @@ fn guest_loopback<'a>(
     use Direction::*;
 
     let mblk_addr = pkt.mblk_addr();
-    let parsed_pkt = Packet2::new(pkt.iter_mut());
+    let parsed_pkt = Packet::new(pkt.iter_mut());
 
     // TODO: Rework currently requires a reparse on loopback to account for UFT fastpath.
 
@@ -1514,7 +1514,7 @@ unsafe extern "C" fn xde_mc_tx(
     //     pointers are `Copy`.
     // ================================================================
     __dtrace_probe_tx(mp_chain as uintptr_t);
-    let Ok(mut chain) = PacketChain::new(mp_chain) else {
+    let Ok(mut chain) = MsgBlkChain::new(mp_chain) else {
         bad_packet_probe(
             Some(src_dev.port.name_cstr()),
             Direction::Out,
@@ -1539,7 +1539,7 @@ unsafe extern "C" fn xde_mc_tx(
 unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
-    let parsed_pkt = Packet2::new(pkt.iter_mut());
+    let parsed_pkt = Packet::new(pkt.iter_mut());
     let parsed_pkt = match parsed_pkt.parse_outbound(parser) {
         Ok(pkt) => pkt,
         Err(e) => {
@@ -1822,7 +1822,7 @@ unsafe extern "C" fn xde_rx(
     Arc::increment_strong_count(mch_ptr);
     let stream: Arc<DlsStream> = Arc::from_raw(mch_ptr);
 
-    let Ok(mut chain) = PacketChain::new(mp_chain) else {
+    let Ok(mut chain) = MsgBlkChain::new(mp_chain) else {
         bad_packet_probe(
             None,
             Direction::Out,
@@ -1848,7 +1848,7 @@ unsafe fn xde_rx_one(
     mut pkt: MsgBlk,
 ) {
     let mblk_addr = pkt.mblk_addr();
-    let parsed_pkt = Packet2::new(pkt.iter_mut());
+    let parsed_pkt = Packet::new(pkt.iter_mut());
 
     // We must first parse the packet in order to determine where it
     // is to be delivered.

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! A layer in a port.
 
@@ -13,8 +13,7 @@ use super::flow_table::FlowTableDump;
 use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::ingot_packet::MblkFullParsed;
 use super::ingot_packet::MblkPacketData;
-use super::ingot_packet::MsgBlk;
-use super::ingot_packet::Packet2;
+use super::ingot_packet::Packet;
 use super::ioctl;
 use super::ioctl::ActionDescEntryDump;
 use super::packet::BodyTransformError;
@@ -38,6 +37,7 @@ use crate::ddi::kstat;
 use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
+use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
 use crate::ExecCtx;
 use crate::LogLevel;
@@ -798,7 +798,7 @@ impl Layer {
         &mut self,
         ectx: &ExecCtx,
         dir: Direction,
-        pkt: &mut Packet2<MblkFullParsed>,
+        pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -816,7 +816,7 @@ impl Layer {
     fn process_in(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet2<MblkFullParsed>,
+        pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -886,7 +886,7 @@ impl Layer {
     fn process_in_rules(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet2<MblkFullParsed>,
+        pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -1103,7 +1103,7 @@ impl Layer {
     fn process_out(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet2<MblkFullParsed>,
+        pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -1173,7 +1173,7 @@ impl Layer {
     fn process_out_rules(
         &mut self,
         ectx: &ExecCtx,
-        pkt: &mut Packet2<MblkFullParsed>,
+        pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -1833,7 +1833,7 @@ mod test {
     use ingot::tcp::Tcp;
     use ingot::types::HeaderLen;
 
-    use crate::engine::ingot_base::Ipv4;
+    use crate::engine::ip::v4::Ipv4;
     use crate::engine::GenericUlp;
 
     use super::*;
@@ -1874,7 +1874,7 @@ mod test {
             },
         ));
 
-        let pkt_view = Packet2::new(test_pkt.iter_mut());
+        let pkt_view = Packet::new(test_pkt.iter_mut());
         let pmeta =
             pkt_view.parse_outbound(GenericUlp {}).unwrap().to_full_meta();
 

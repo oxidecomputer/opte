@@ -21,7 +21,7 @@ use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::uintptr_t;
 use illumos_sys_hdrs::ENOENT;
-use opte::engine::ingot_packet::MsgBlk;
+use opte::ddi::mblk::MsgBlk;
 pub use sys::*;
 
 /// An integer ID used by DLS to refer to a given link.

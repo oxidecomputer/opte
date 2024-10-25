@@ -22,9 +22,7 @@ use super::ingot_packet::FullParsed;
 use super::ingot_packet::LiteParsed;
 use super::ingot_packet::MblkFullParsed;
 use super::ingot_packet::MblkPacketData;
-use super::ingot_packet::MsgBlk;
-use super::ingot_packet::MsgBlkIterMut;
-use super::ingot_packet::Packet2;
+use super::ingot_packet::Packet;
 use super::ioctl;
 use super::ioctl::TcpFlowEntryDump;
 use super::ioctl::TcpFlowStateDump;
@@ -63,6 +61,8 @@ use crate::ddi::kstat;
 use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
+use crate::ddi::mblk::MsgBlk;
+use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KMutexType;
 use crate::ddi::time::Moment;
@@ -907,7 +907,7 @@ impl<N: NetworkImpl> Port<N> {
         data: &FlowTable<TcpFlowEntryState>,
         dir: Direction,
         msg: String,
-        pkt: &mut Packet2<MblkFullParsed>,
+        pkt: &mut Packet<MblkFullParsed>,
     ) {
         if unsafe { super::opte_panic_debug != 0 } {
             super::err!("mblk: {}", pkt.mblk_addr());
@@ -923,7 +923,7 @@ impl<N: NetworkImpl> Port<N> {
     fn tcp_err_probe(
         &self,
         dir: Direction,
-        pkt: Option<&Packet2<MblkFullParsed>>,
+        pkt: Option<&Packet<MblkFullParsed>>,
         flow: &InnerFlowId,
         msg: String,
     ) {
@@ -1218,7 +1218,7 @@ impl<N: NetworkImpl> Port<N> {
         // which can advance to (and hold) light->full-fat metadata.
         // My gutfeel is that there's a perf cost here -- this struct
         // is pretty fat, but expressing the transform on a &mut also sucks.
-        mut pkt: Packet2<LiteParsed<MsgBlkIterMut<'a>, M>>,
+        mut pkt: Packet<LiteParsed<MsgBlkIterMut<'a>, M>>,
     ) -> result::Result<ProcessResult, ProcessError>
     where
         M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>,
@@ -1698,7 +1698,7 @@ impl Transforms {
     #[inline]
     fn apply<T: Read>(
         &self,
-        pkt: &mut Packet2<FullParsed<T>>,
+        pkt: &mut Packet<FullParsed<T>>,
         dir: Direction,
     ) -> result::Result<(), ProcessError>
     where
@@ -1932,7 +1932,7 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         dir: Direction,
-        pkt: &mut Packet2<MblkFullParsed>,
+        pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
@@ -1976,7 +1976,7 @@ impl<N: NetworkImpl> Port<N> {
         dir: Direction,
         flow: &InnerFlowId,
         epoch: u64,
-        pkt: &Packet2<MblkFullParsed>,
+        pkt: &Packet<MblkFullParsed>,
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -2277,7 +2277,7 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         epoch: u64,
-        pkt: &mut Packet2<MblkFullParsed>,
+        pkt: &mut Packet<MblkFullParsed>,
         ufid_in: &InnerFlowId,
         ameta: &mut ActionMeta,
     ) -> result::Result<InternalProcessResult, ProcessError> {
@@ -2477,7 +2477,7 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         data: &mut PortData,
         epoch: u64,
-        pkt: &mut Packet2<MblkFullParsed>,
+        pkt: &mut Packet<MblkFullParsed>,
         ameta: &mut ActionMeta,
     ) -> result::Result<InternalProcessResult, ProcessError> {
         use Direction::Out;

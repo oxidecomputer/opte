@@ -1,4 +1,4 @@
-use opte::engine::ingot_packet::MsgBlk;
+use opte::ddi::mblk::MsgBlk;
 use opte_test_utils as common;
 
 use common::*;

@@ -2,14 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! ICMPv6 headers and processing.
 
 use super::*;
+use crate::ddi::mblk::MsgBlk;
 use crate::engine::ether::Ethernet;
 use crate::engine::ingot_packet::MblkPacketData;
-use crate::engine::ingot_packet::MsgBlk;
 use crate::engine::ip::v6::Ipv6;
 use crate::engine::ip::v6::Ipv6Ref;
 use crate::engine::predicate::Ipv6AddrMatch;

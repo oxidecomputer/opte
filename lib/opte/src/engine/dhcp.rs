@@ -8,7 +8,6 @@
 
 use super::ether::Ethernet;
 use super::ingot_packet::MblkPacketData;
-use super::ingot_packet::MsgBlk;
 use super::ip::v4::*;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
@@ -19,6 +18,7 @@ use super::predicate::Predicate;
 use super::rule::AllowOrDeny;
 use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
+use crate::ddi::mblk::MsgBlk;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt;

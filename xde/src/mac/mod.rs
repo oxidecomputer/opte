@@ -21,7 +21,7 @@ use core::fmt;
 use core::ptr;
 use illumos_sys_hdrs::*;
 use opte::engine::ether::EtherAddr;
-use opte::engine::ingot_packet::MsgBlk;
+use opte::ddi::mblk::MsgBlk;
 pub use sys::*;
 
 /// Errors while opening a MAC handle.

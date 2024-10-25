@@ -12,7 +12,7 @@ use super::headers::UlpGenericModify;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
 use super::ingot_packet::MblkFullParsed;
-use super::ingot_packet::Packet2;
+use super::ingot_packet::Packet;
 use super::packet::InnerFlowId;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
@@ -241,7 +241,7 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
     fn gen_icmp_desc(
         &self,
         nat: SNatAlloc<T>,
-        pkt: &Packet2<MblkFullParsed>,
+        pkt: &Packet<MblkFullParsed>,
     ) -> GenDescResult {
         let meta = pkt.meta();
 
@@ -303,7 +303,7 @@ where
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet2<MblkFullParsed>,
+        pkt: &Packet<MblkFullParsed>,
         _meta: &mut ActionMeta,
     ) -> GenDescResult {
         let priv_port = flow_id.src_port;
@@ -469,11 +469,11 @@ mod test {
     use ingot::tcp::TcpRef;
     use ingot::types::HeaderLen;
 
-    use crate::engine::ingot_base::Ethernet;
-    use crate::engine::ingot_base::EthernetRef;
-    use crate::engine::ingot_base::Ipv4;
-    use crate::engine::ingot_base::Ipv4Ref;
-    use crate::engine::ingot_packet::MsgBlk;
+    use crate::engine::ether::Ethernet;
+    use crate::engine::ether::EthernetRef;
+    use crate::engine::ip::v4::Ipv4;
+    use crate::engine::ip::v4::Ipv4Ref;
+    use crate::ddi::mblk::MsgBlk;
 
     use super::*;
 
@@ -541,7 +541,7 @@ mod test {
         };
 
         let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp, &body));
-        let mut pkt = Packet2::new(pkt_m.iter_mut())
+        let mut pkt = Packet::new(pkt_m.iter_mut())
             .parse_outbound(GenericUlp {})
             .unwrap()
             .to_full_meta();
@@ -609,7 +609,7 @@ mod test {
         };
 
         let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp, &body));
-        let mut pkt = Packet2::new(pkt_m.iter_mut())
+        let mut pkt = Packet::new(pkt_m.iter_mut())
             .parse_inbound(GenericUlp {})
             .unwrap()
             .to_full_meta();

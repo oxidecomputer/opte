@@ -7,7 +7,7 @@
 //! ARP headers and data.
 
 use super::ether::Ethernet;
-use super::ingot_packet::MsgBlk;
+use crate::ddi::mblk::MsgBlk;
 use core::fmt;
 use core::fmt::Display;
 use ingot::ethernet::Ethertype;

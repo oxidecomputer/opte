@@ -18,6 +18,7 @@ pub mod port_state;
 // Let's make our lives easier and pub use a bunch of stuff.
 pub use opte::api::Direction::*;
 pub use opte::api::MacAddr;
+pub use opte::ddi::mblk::MsgBlk;
 pub use opte::engine::ether::EtherMeta;
 pub use opte::engine::ether::EtherType;
 pub use opte::engine::ether::Ethernet;
@@ -30,8 +31,7 @@ pub use opte::engine::geneve::GENEVE_PORT;
 pub use opte::engine::headers::IpAddr;
 pub use opte::engine::headers::IpCidr;
 pub use opte::engine::ingot_packet::MblkLiteParsed;
-pub use opte::engine::ingot_packet::MsgBlk;
-pub use opte::engine::ingot_packet::Packet2;
+pub use opte::engine::ingot_packet::Packet;
 pub use opte::engine::ip::v4::Ipv4;
 pub use opte::engine::ip::v4::Ipv4Addr;
 pub use opte::engine::ip::v4::Protocol;
@@ -111,17 +111,16 @@ macro_rules! expect_modified {
 pub fn parse_inbound<NP: NetworkParser>(
     pkt: &mut MsgBlk,
     parser: NP,
-) -> Result<Packet2<MblkLiteParsed<'_, NP::InMeta<&'_ mut [u8]>>>, ParseError> {
-    let pkt = Packet2::new(pkt.iter_mut());
+) -> Result<Packet<MblkLiteParsed<'_, NP::InMeta<&'_ mut [u8]>>>, ParseError> {
+    let pkt = Packet::new(pkt.iter_mut());
     pkt.parse_inbound(parser)
 }
 
 pub fn parse_outbound<NP: NetworkParser>(
     pkt: &mut MsgBlk,
     parser: NP,
-) -> Result<Packet2<MblkLiteParsed<'_, NP::OutMeta<&'_ mut [u8]>>>, ParseError>
-{
-    let pkt = Packet2::new(pkt.iter_mut());
+) -> Result<Packet<MblkLiteParsed<'_, NP::OutMeta<&'_ mut [u8]>>>, ParseError> {
+    let pkt = Packet::new(pkt.iter_mut());
     pkt.parse_outbound(parser)
 }
 
@@ -481,7 +480,7 @@ pub fn ulp_pkt<
 ) -> MsgBlk {
     let mut pkt = MsgBlk::new_ethernet_pkt((eth, ip, ulp, body));
 
-    let view = Packet2::new(pkt.iter_mut());
+    let view = Packet::new(pkt.iter_mut());
     let view = view.parse_outbound(GenericUlp {}).unwrap();
     let mut view = view.to_full_meta();
     view.compute_checksums();
@@ -999,7 +998,7 @@ fn _encap(
     dst: TestIpPhys,
     external_snat: bool,
 ) -> MsgBlk {
-    let pkt = Packet2::new(inner_pkt.iter_mut());
+    let pkt = Packet::new(inner_pkt.iter_mut());
     let base_len = pkt.len();
     drop(pkt);
 

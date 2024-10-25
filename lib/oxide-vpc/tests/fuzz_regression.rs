@@ -9,8 +9,8 @@
 //! These tests capture past known-bad packets which have made some part
 //! of OPTE panic in the past, and ensure that it does not today.
 
-use opte::engine::ingot_packet::MsgBlk;
-use opte::engine::ingot_packet::Packet2;
+use opte::ddi::mblk::MsgBlk;
+use opte::engine::ingot_packet::Packet;
 use oxide_vpc::engine::VpcParser;
 use serde::Deserialize;
 use serde::Serialize;
@@ -111,7 +111,7 @@ fn run_tests(
 fn parse_in_regression() {
     run_tests("parse_in", |data| {
         let mut msg = MsgBlk::copy(data);
-        let parsed = Packet2::new(msg.iter_mut());
+        let parsed = Packet::new(msg.iter_mut());
         let _ = parsed.parse_inbound(VpcParser {});
     });
 }
@@ -120,7 +120,7 @@ fn parse_in_regression() {
 fn parse_out_regression() {
     run_tests("parse_out", |data| {
         let mut msg = MsgBlk::copy(data);
-        let parsed = Packet2::new(msg.iter_mut());
+        let parsed = Packet::new(msg.iter_mut());
         let _ = parsed.parse_outbound(VpcParser {});
     });
 }

@@ -2,12 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Implementation of the main message types for DHCPv6.
 
 use super::Dhcpv6Action;
 use super::TransactionId;
+use crate::ddi::mblk::MsgBlk;
 use crate::engine::dhcpv6::options::Code as OptionCode;
 use crate::engine::dhcpv6::options::IaAddr;
 use crate::engine::dhcpv6::options::IaNa;
@@ -23,7 +24,6 @@ use crate::engine::dhcpv6::CLIENT_PORT;
 use crate::engine::dhcpv6::SERVER_PORT;
 use crate::engine::ether::Ethernet;
 use crate::engine::ingot_packet::MblkPacketData;
-use crate::engine::ingot_packet::MsgBlk;
 use crate::engine::ip::v6::Ipv6;
 use crate::engine::ip::v6::Ipv6Ref;
 use crate::engine::predicate::DataPredicate;
@@ -690,7 +690,7 @@ mod test {
     use super::OptionCode;
     use crate::engine::dhcpv6::test_data;
     use crate::engine::ingot_packet::MsgBlk;
-    use crate::engine::ingot_packet::Packet2;
+    use crate::engine::ingot_packet::Packet;
     use crate::engine::port::meta::ActionMeta;
     use crate::engine::GenericUlp;
 
@@ -722,7 +722,7 @@ mod test {
     #[test]
     fn test_predicates_match_snooped_solicit_message() {
         let mut pkt = MsgBlk::copy(test_data::TEST_SOLICIT_PACKET);
-        let pkt = Packet2::new(pkt.iter_mut())
+        let pkt = Packet::new(pkt.iter_mut())
             .parse_outbound(GenericUlp {})
             .unwrap()
             .to_full_meta();

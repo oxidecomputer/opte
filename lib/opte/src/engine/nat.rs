@@ -9,7 +9,7 @@
 use super::headers::HeaderAction;
 use super::headers::IpMod;
 use super::ingot_packet::MblkFullParsed;
-use super::ingot_packet::Packet2;
+use super::ingot_packet::Packet;
 use super::packet::InnerFlowId;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
@@ -85,7 +85,7 @@ impl StatefulAction for OutboundNat {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        _pkt: &Packet2<MblkFullParsed>,
+        _pkt: &Packet<MblkFullParsed>,
         _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
         // When we have several external IPs at our disposal, we are
@@ -148,7 +148,7 @@ impl StatefulAction for InboundNat {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        _pkt: &Packet2<MblkFullParsed>,
+        _pkt: &Packet<MblkFullParsed>,
         _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
         // We rely on the attached predicates to filter out IPs which are *not*
@@ -216,11 +216,11 @@ impl ActionDesc for NatDesc {
 mod test {
     use super::*;
 
-    use crate::engine::ingot_base::Ethernet;
-    use crate::engine::ingot_base::EthernetRef;
-    use crate::engine::ingot_base::Ipv4;
-    use crate::engine::ingot_base::Ipv4Ref;
-    use crate::engine::ingot_packet::MsgBlk;
+    use crate::engine::ether::Ethernet;
+    use crate::engine::ether::EthernetRef;
+    use crate::engine::ip::v4::Ipv4;
+    use crate::engine::ip::v4::Ipv4Ref;
+    use crate::ddi::mblk::MsgBlk;
     use crate::engine::GenericUlp;
     use ingot::ethernet::Ethertype;
     use ingot::ip::IpProtocol;
@@ -278,7 +278,7 @@ mod test {
         };
 
         let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp, &body));
-        let mut pkt = Packet2::new(pkt_m.iter_mut())
+        let mut pkt = Packet::new(pkt_m.iter_mut())
             .parse_outbound(GenericUlp {})
             .unwrap()
             .to_full_meta();
@@ -347,7 +347,7 @@ mod test {
         };
 
         let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp, &body));
-        let mut pkt = Packet2::new(pkt_m.iter_mut())
+        let mut pkt = Packet::new(pkt_m.iter_mut())
             .parse_inbound(GenericUlp {})
             .unwrap()
             .to_full_meta();

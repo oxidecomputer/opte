@@ -10,7 +10,7 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
-use opte::engine::ingot_packet::Packet2;
+use opte::engine::ingot_packet::Packet;
 use opte_bench::alloc::*;
 use opte_bench::packet::BenchPacket;
 use opte_bench::packet::BenchPacketInstance;
@@ -83,8 +83,7 @@ pub fn test_parse<M: MeasurementInfo + 'static>(
                 match parser {
                     ParserKind::Generic => {
                         |(mut in_pkt, direction): TestCase| {
-                            let pkt =
-                                black_box(Packet2::new(in_pkt.iter_mut()));
+                            let pkt = black_box(Packet::new(in_pkt.iter_mut()));
                             black_box(match direction {
                                 In => pkt.parse_inbound(GenericUlp {}),
                                 Out => pkt.parse_outbound(GenericUlp {}),
@@ -94,8 +93,7 @@ pub fn test_parse<M: MeasurementInfo + 'static>(
                     }
                     ParserKind::OxideVpc => {
                         |(mut in_pkt, direction): TestCase| {
-                            let pkt =
-                                black_box(Packet2::new(in_pkt.iter_mut()));
+                            let pkt = black_box(Packet::new(in_pkt.iter_mut()));
                             black_box(match direction {
                                 In => {
                                     pkt.parse_inbound(VpcParser {}).unwrap();
@@ -154,7 +152,7 @@ pub fn test_handle<M: MeasurementInfo + 'static>(
                 // packet is now a view over the generated pkt.
                 |(mut pkt_m, dir): TestCase| match parser {
                     ParserKind::Generic => {
-                        let pkt = Packet2::new(pkt_m.iter_mut());
+                        let pkt = Packet::new(pkt_m.iter_mut());
                         let res = match dir {
                             In => {
                                 let pkt =
@@ -173,7 +171,7 @@ pub fn test_handle<M: MeasurementInfo + 'static>(
                         }
                     }
                     ParserKind::OxideVpc => {
-                        let pkt = Packet2::new(pkt_m.iter_mut());
+                        let pkt = Packet::new(pkt_m.iter_mut());
                         let res = match dir {
                             In => {
                                 let pkt =

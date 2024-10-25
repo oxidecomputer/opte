@@ -22,7 +22,7 @@ use opte::engine::ether::EthernetRef;
 use opte::engine::flow_table::FlowTable;
 use opte::engine::ingot_packet::FullParsed;
 use opte::engine::ingot_packet::OpteParsed2;
-use opte::engine::ingot_packet::Packet2;
+use opte::engine::ingot_packet::Packet;
 use opte::engine::ip::v4::Ipv4Addr;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::ParseError;
@@ -66,7 +66,7 @@ fn is_arp_req_for_tpa(tpa: Ipv4Addr, arp: &impl ArpEthIpv4Ref) -> bool {
 impl VpcNetwork {
     fn handle_arp_out<T: Read>(
         &self,
-        pkt: &mut Packet2<FullParsed<T>>,
+        pkt: &mut Packet<FullParsed<T>>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
         T::Chunk: ByteSliceMut,
@@ -102,7 +102,7 @@ impl NetworkImpl for VpcNetwork {
     fn handle_pkt<T: Read>(
         &self,
         dir: Direction,
-        pkt: &mut Packet2<FullParsed<T>>,
+        pkt: &mut Packet<FullParsed<T>>,
         _uft_in: &FlowTable<UftEntry<InnerFlowId>>,
         _uft_out: &FlowTable<UftEntry<InnerFlowId>>,
     ) -> Result<HdlPktAction, HdlPktError>

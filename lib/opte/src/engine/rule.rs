@@ -23,8 +23,7 @@ use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
 use super::ingot_packet::MblkFullParsed;
 use super::ingot_packet::MblkPacketData;
-use super::ingot_packet::MsgBlk;
-use super::ingot_packet::Packet2;
+use super::ingot_packet::Packet;
 use super::ingot_packet::PacketData;
 use super::ip::L3;
 use super::packet::BodyTransform;
@@ -32,6 +31,7 @@ use super::packet::InnerFlowId;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
+use crate::ddi::mblk::MsgBlk;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -565,7 +565,7 @@ pub trait StatefulAction: Display {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet2<MblkFullParsed>,
+        pkt: &Packet<MblkFullParsed>,
         meta: &mut ActionMeta,
     ) -> GenDescResult;
 
@@ -1000,8 +1000,8 @@ impl From<&Rule<Finalized>> for super::ioctl::RuleDump {
 
 #[test]
 fn rule_matching() {
-    use crate::engine::ingot_base::Ipv4;
-    use crate::engine::ingot_base::Ipv4Mut;
+    use crate::engine::ip::v4::Ipv4;
+    use crate::engine::ip::v4::Ipv4Mut;
     use crate::engine::predicate::Ipv4AddrMatch;
     use crate::engine::predicate::Predicate;
     use crate::engine::GenericUlp;
@@ -1035,7 +1035,7 @@ fn rule_matching() {
     let eth = Ethernet { ethertype: Ethertype::IPV4, ..Default::default() };
 
     let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp));
-    let mut pkt = Packet2::new(pkt_m.iter_mut())
+    let mut pkt = Packet::new(pkt_m.iter_mut())
         .parse_outbound(GenericUlp {})
         .unwrap()
         .to_full_meta();

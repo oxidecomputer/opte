@@ -39,16 +39,12 @@ use super::ip::v6::Ipv6Ref;
 use super::ip::L3Repr;
 use super::ip::ValidL3;
 use super::ip::L3;
-use super::packet::allocb;
 use super::packet::AddrPair;
 use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
 use super::packet::InnerFlowId;
 use super::packet::PacketState;
 use super::packet::ParseError;
-use super::packet::SegAdjustError;
-use super::packet::WrapError;
-use super::packet::WriteError;
 use super::packet::FLOW_ID_DEFAULT;
 use super::parse::NoEncap;
 use super::parse::Ulp;
@@ -59,27 +55,21 @@ use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::LightweightMeta;
 use super::NetworkParser;
+use crate::ddi::mblk::MsgBlk;
+use crate::ddi::mblk::MsgBlkIterMut;
+use crate::ddi::mblk::MsgBlkNode;
 use crate::engine::geneve::valid_geneve_has_oxide_external;
 use crate::engine::geneve::GeneveMeta;
-#[cfg(any(feature = "std", test))]
-use crate::engine::packet::mock_freemsg;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::Cell;
 use core::hash::Hash;
-use core::marker::PhantomData;
-use core::mem::ManuallyDrop;
-use core::mem::MaybeUninit;
 use core::ops::Deref;
 use core::ops::DerefMut;
-use core::ptr;
-use core::ptr::NonNull;
-use core::slice;
 use core::sync::atomic::AtomicPtr;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs as ddi;
-use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
@@ -103,13 +93,11 @@ use ingot::tcp::TcpRef;
 use ingot::types::util::Repeated;
 use ingot::types::BoxedHeader;
 use ingot::types::Emit;
-use ingot::types::EmitDoesNotRelyOnBufContents;
 use ingot::types::Header as IngotHeader;
 use ingot::types::HeaderLen;
 use ingot::types::HeaderParse;
 use ingot::types::InlineHeader;
 use ingot::types::NextLayer;
-use ingot::types::ParseError as IngotParseErr;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
 use ingot::types::ToOwnedPacket;
@@ -124,561 +112,6 @@ use opte_api::Vni;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 use zerocopy::IntoBytes;
-
-/// An individual illumos `mblk_t` -- a single bytestream
-/// comprised of a linked list of data segments.
-///
-/// To facilitate testing the OPTE core, [`MsgBlk`] is an abstraction for
-/// manipulating network packets in both a `std` and `no_std` environment.
-/// The first is useful for writing tests against the OPTE core engine and
-/// executing them in userland, without the need for standing up a full-blown
-/// virtual machine.
-///
-/// The `no_std` implementation is used when running in-kernel. The
-/// main difference is the `mblk_t` and `dblk_t` structures are coming
-/// from viona (outbound/Tx) and mac (inbound/Rx), and we consume them
-/// via [`Packet::wrap_mblk()`]. In reality this is typically holding
-/// an Ethernet _frame_, but we prefer to use the colloquial
-/// nomenclature of "packet".
-#[derive(Debug)]
-pub struct MsgBlk {
-    pub inner: NonNull<mblk_t>,
-}
-
-impl Deref for MsgBlk {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        unsafe {
-            let self_ref = self.inner.as_ref();
-            let rptr = self_ref.b_rptr;
-            let len = self_ref.b_wptr.offset_from(rptr) as usize;
-            slice::from_raw_parts(rptr, len)
-        }
-    }
-}
-
-impl DerefMut for MsgBlk {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe {
-            let self_ref = self.inner.as_mut();
-            let rptr = self_ref.b_rptr;
-            let len = self_ref.b_wptr.offset_from(rptr) as usize;
-            slice::from_raw_parts_mut(rptr, len)
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct MsgBlkNode(mblk_t);
-
-impl Deref for MsgBlkNode {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        unsafe {
-            let rptr = self.0.b_rptr;
-            let len = self.0.b_wptr.offset_from(rptr) as usize;
-            slice::from_raw_parts(rptr, len)
-        }
-    }
-}
-
-impl DerefMut for MsgBlkNode {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe {
-            let rptr = self.0.b_rptr;
-            let len = self.0.b_wptr.offset_from(rptr) as usize;
-            slice::from_raw_parts_mut(rptr, len)
-        }
-    }
-}
-
-impl MsgBlkNode {
-    /// Shrink the writable/readable area by shifting the `b_rptr` by
-    /// `len`; effectively removing bytes from the start of the packet.
-    ///
-    /// # Errors
-    ///
-    /// `SegAdjustError::StartPastEnd`: Shifting the read pointer by
-    /// `len` would move `b_rptr` past `b_wptr`.
-    pub fn drop_front_bytes(&mut self, n: usize) -> Result<(), SegAdjustError> {
-        unsafe {
-            if self.0.b_wptr.offset_from(self.0.b_rptr) < n as isize {
-                return Err(SegAdjustError::StartPastEnd);
-            }
-            self.0.b_rptr = self.0.b_rptr.add(n);
-        }
-
-        Ok(())
-    }
-}
-
-impl MsgBlk {
-    /// Allocate a new [`MsgBlk`] containing a data buffer of `len`
-    /// bytes.
-    ///
-    /// The returned packet consists of exactly one segment.
-    ///
-    /// In the kernel environment this uses `allocb(9F)` and
-    /// `freemsg(9F)` under the hood.
-    ///
-    /// In the `std` environment this uses a mock implementation of
-    /// `allocb(9F)` and `freeb(9F)`, which contains enough scaffolding
-    /// to satisfy OPTE's use of the underlying `mblk_t` and `dblk_t`
-    /// structures.
-    pub fn new(len: usize) -> Self {
-        let inner = NonNull::new(allocb(len))
-            .expect("somehow failed to get an mblk...");
-
-        Self { inner }
-    }
-
-    /// Allocates a new [`MsgBlk`] of size `buf.len()`, copying its
-    /// contents.
-    pub fn copy(buf: impl AsRef<[u8]>) -> Self {
-        let mut out = Self::new(buf.as_ref().len());
-        // Unwrap safety -- just allocated length of input buffer.
-        out.write_bytes_back(buf).unwrap();
-        out
-    }
-
-    /// Creates a new [`MsgBlk`] using a given set of packet headers.
-    pub fn new_pkt(emit: impl Emit + EmitDoesNotRelyOnBufContents) -> Self {
-        let mut pkt = Self::new(emit.packet_length());
-        pkt.emit_back(emit).unwrap();
-        pkt
-    }
-
-    /// Returns the number of bytes available for writing before
-    pub fn headroom(&self) -> usize {
-        unsafe {
-            let inner = self.inner.as_ref();
-
-            inner.b_rptr.offset_from((*inner.b_datap).db_base) as usize
-        }
-    }
-
-    /// Creates a new [`MsgBlk`] containing a data buffer of `len`
-    /// bytes with 2B of headroom/alignment.
-    ///
-    /// This sets up 4B alignment on all post-ethernet headers.
-    pub fn new_ethernet(len: usize) -> Self {
-        Self::new_with_headroom(2, len)
-    }
-
-    /// Creates a new [`MsgBlk`] using a given set of packet headers
-    /// with 2B of headroom/alignment.
-    ///
-    /// This sets up 4B alignment on all post-ethernet headers.
-    pub fn new_ethernet_pkt(
-        emit: impl Emit + EmitDoesNotRelyOnBufContents,
-    ) -> Self {
-        let mut pkt = Self::new_ethernet(emit.packet_length());
-        pkt.emit_back(emit).unwrap();
-        pkt
-    }
-
-    /// Return the number of initialised bytes in this `MsgBlk` over
-    /// all linked segments.
-    pub fn byte_len(&self) -> usize {
-        self.iter().map(|el| el.len()).sum()
-    }
-
-    /// Return the number of initialised bytes in this `MsgBlk` in
-    /// the head segment.
-    pub fn seg_len(&self) -> usize {
-        self.iter().count()
-    }
-
-    /// Allocate a new [`MsgBlk`] containing a data buffer of size
-    /// `head_len + body_len`.
-    ///
-    /// The read/write pointer is set to have `head_len` bytes of
-    /// headroom and `body_len` bytes of capacity at the back.
-    pub fn new_with_headroom(head_len: usize, body_len: usize) -> Self {
-        let mut out = Self::new(head_len + body_len);
-
-        // SAFETY: alloc is contiguous and always larger than head_len.
-        let mut_out = unsafe { out.inner.as_mut() };
-        mut_out.b_rptr = unsafe { mut_out.b_rptr.add(head_len) };
-        mut_out.b_wptr = mut_out.b_rptr;
-
-        out
-    }
-
-    /// Provides a slice of length `n_bytes` at the back of an [`MsgBlk`]
-    /// (if capacity exists) to be initialised, before increasing `len`
-    /// by `n_bytes`.
-    ///
-    /// # Safety
-    /// Users must write a value to every element of the `MaybeUninit`
-    /// buffer at least once in the `MsgBlk` lifecycle -- all `n_bytes`
-    /// are assumed to be initialised.
-    pub unsafe fn write_back(
-        &mut self,
-        n_bytes: usize,
-        f: impl FnOnce(&mut [MaybeUninit<u8>]),
-    ) -> Result<(), WriteError> {
-        let mut_out = unsafe { self.inner.as_mut() };
-        let avail_bytes =
-            unsafe { (*mut_out.b_datap).db_lim.offset_from(mut_out.b_wptr) };
-
-        if avail_bytes < 0 || (avail_bytes as usize) < n_bytes {
-            return Err(WriteError::NotEnoughBytes {
-                available: avail_bytes.max(0) as usize,
-                needed: n_bytes,
-            });
-        }
-
-        let in_slice = unsafe {
-            slice::from_raw_parts_mut(
-                mut_out.b_wptr as *mut MaybeUninit<u8>,
-                n_bytes,
-            )
-        };
-
-        f(in_slice);
-
-        mut_out.b_wptr = unsafe { mut_out.b_wptr.add(n_bytes) };
-
-        Ok(())
-    }
-
-    /// Provides a slice of length `n_bytes` at the front of an [`MsgBlk`]
-    /// (if capacity exists) to be initialised, before increasing `len`
-    /// by `n_bytes`.
-    ///
-    /// # Safety
-    /// Users must write a value to every element of the `MaybeUninit`
-    /// buffer at least once in the `MsgBlk` lifecycle -- all `n_bytes`
-    /// are assumed to be initialised.
-    pub unsafe fn write_front(
-        &mut self,
-        n_bytes: usize,
-        f: impl FnOnce(&mut [MaybeUninit<u8>]),
-    ) -> Result<(), WriteError> {
-        let mut_out = unsafe { self.inner.as_mut() };
-        let avail_bytes =
-            unsafe { mut_out.b_rptr.offset_from((*mut_out.b_datap).db_base) };
-
-        if avail_bytes < 0 || (avail_bytes as usize) < n_bytes {
-            return Err(WriteError::NotEnoughBytes {
-                available: avail_bytes.max(0) as usize,
-                needed: n_bytes,
-            });
-        }
-
-        let new_head = unsafe { mut_out.b_rptr.sub(n_bytes) };
-
-        let in_slice = unsafe {
-            slice::from_raw_parts_mut(new_head as *mut MaybeUninit<u8>, n_bytes)
-        };
-
-        f(in_slice);
-
-        mut_out.b_rptr = new_head;
-
-        Ok(())
-    }
-
-    /// Adjusts the write pointer for this MsgBlk, initialising any extra bytes to 0.
-    pub fn resize(&mut self, new_len: usize) -> Result<(), WriteError> {
-        let len = self.len();
-        if new_len < len {
-            unsafe {
-                let mut_inner = self.inner.as_mut();
-                mut_inner.b_wptr = mut_inner.b_wptr.sub(len - new_len);
-            }
-            Ok(())
-        } else if new_len > len {
-            unsafe {
-                self.write_back(new_len - len, |v| {
-                    // MaybeUninit::fill is unstable.
-                    let n = v.len();
-                    v.as_mut_ptr().write_bytes(0, n);
-                })
-            }
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Emits an `ingot` packet after any bytes present in this mblk.
-    pub fn emit_back(
-        &mut self,
-        pkt: impl Emit + EmitDoesNotRelyOnBufContents,
-    ) -> Result<(), WriteError> {
-        unsafe {
-            self.write_back(pkt.packet_length(), |v| {
-                // Unwrap safety: write will return an Error if
-                // unsuccessful.
-                pkt.emit_uninit(v).unwrap();
-            })
-        }
-    }
-
-    /// Emits an `ingot` packet before any bytes present in this mblk.
-    pub fn emit_front(
-        &mut self,
-        pkt: impl Emit + EmitDoesNotRelyOnBufContents,
-    ) -> Result<(), WriteError> {
-        unsafe {
-            self.write_front(pkt.packet_length(), |v| {
-                pkt.emit_uninit(v).unwrap();
-            })
-        }
-    }
-
-    /// Copies a byte slice into the region after any bytes present in this mblk.
-    pub fn write_bytes_back(
-        &mut self,
-        bytes: impl AsRef<[u8]>,
-    ) -> Result<(), WriteError> {
-        let bytes = bytes.as_ref();
-        unsafe {
-            self.write_back(bytes.len(), |v| {
-                // feat(maybe_uninit_write_slice) -> copy_from_slice
-                // is unstable.
-                let uninit_src: &[MaybeUninit<u8>] =
-                    core::mem::transmute(bytes);
-                v.copy_from_slice(uninit_src);
-            })
-        }
-    }
-
-    /// Copies a byte slice into the region before any bytes present in this mblk.
-    pub fn write_bytes_front(
-        &mut self,
-        bytes: impl AsRef<[u8]>,
-    ) -> Result<(), WriteError> {
-        let bytes = bytes.as_ref();
-        unsafe {
-            self.write_front(bytes.len(), |v| {
-                // feat(maybe_uninit_write_slice) -> copy_from_slice
-                // is unstable.
-                let uninit_src: &[MaybeUninit<u8>] =
-                    core::mem::transmute(bytes);
-                v.copy_from_slice(uninit_src);
-            })
-        }
-    }
-
-    /// Places another `MsgBlk` at the end of this packet's
-    /// b_cont chain.
-    pub fn append(&mut self, other: Self) {
-        // Find the last element in the pkt chain
-        // i.e., whose b_cont is null.
-        let mut curr = self.inner.as_ptr();
-        while unsafe { !(*curr).b_cont.is_null() } {
-            curr = unsafe { (*curr).b_cont };
-        }
-
-        unsafe {
-            (*curr).b_cont = other.unwrap_mblk().as_ptr();
-        }
-    }
-
-    /// Drop all bytes and move the cursor to the very back of the dblk.
-    pub fn pop_all(&mut self) {
-        unsafe {
-            (*self.inner.as_ptr()).b_rptr =
-                (*(*self.inner.as_ptr()).b_datap).db_lim;
-            (*self.inner.as_ptr()).b_wptr =
-                (*(*self.inner.as_ptr()).b_datap).db_lim;
-        }
-    }
-
-    /// Returns a shared cursor over all segments in this `MsgBlk`.
-    pub fn iter(&self) -> MsgBlkIter {
-        MsgBlkIter { curr: Some(self.inner), marker: PhantomData }
-    }
-
-    /// Returns a mutable cursor over all segments in this `MsgBlk`.
-    pub fn iter_mut(&mut self) -> MsgBlkIterMut {
-        MsgBlkIterMut { curr: Some(self.inner), marker: PhantomData }
-    }
-
-    /// Return the pointer address of the underlying mblk_t.
-    ///
-    /// NOTE: This is purely to allow passing the pointer value up to
-    /// DTrace so that the mblk can be inspected (read only) in probe
-    /// context.
-    pub fn mblk_addr(&self) -> uintptr_t {
-        self.inner.as_ptr() as uintptr_t
-    }
-
-    /// Return the head of the underlying `mblk_t` segment chain and
-    /// consume `self`. The caller of this function now owns the
-    /// `mblk_t` segment chain.
-    pub fn unwrap_mblk(self) -> NonNull<mblk_t> {
-        let ptr_out = self.inner;
-        _ = ManuallyDrop::new(self);
-        ptr_out
-    }
-
-    /// Wrap the `mblk_t` packet in a [`MsgBlk`], taking ownership of
-    /// the `mblk_t` packet as a result. An `mblk_t` packet consists
-    /// of one or more `mblk_t` segments chained together via
-    /// `b_cont`. When the [`MsgBlk`] is dropped, the
-    /// underlying `mblk_t` segment chain is freed. If you wish to
-    /// pass on ownership you must call the [`MsgBlk::unwrap_mblk()`]
-    /// function.
-    ///
-    /// # Safety
-    ///
-    /// The `mp` pointer must point to an `mblk_t` allocated by
-    /// `allocb(9F)` or provided by some kernel API which itself used
-    /// one of the DDI/DKI APIs to allocate it.
-    ///
-    /// # Errors
-    ///
-    /// * Return [`WrapError::NullPtr`] is `mp` is `NULL`.
-    /// * Return [`WrapError::Chain`] is `mp->b_next` or `mp->b_next` are set.
-    pub unsafe fn wrap_mblk(ptr: *mut mblk_t) -> Result<Self, WrapError> {
-        let inner = NonNull::new(ptr).ok_or(WrapError::NullPtr)?;
-        let inner_ref = inner.as_ref();
-
-        if inner_ref.b_next.is_null() && inner_ref.b_prev.is_null() {
-            Ok(Self { inner })
-        } else {
-            Err(WrapError::Chain)
-        }
-    }
-
-    /// Copy out all bytes within this mblk and its successors
-    /// to a single contiguous buffer.
-    pub fn copy_all(&self) -> Vec<u8> {
-        let mut out = vec![];
-
-        for node in self.iter() {
-            out.extend_from_slice(node)
-        }
-
-        out
-    }
-
-    /// Drops all empty mblks from the start of this chain where possible
-    /// (i.e., any empty mblk is followed by another mblk).
-    pub fn drop_empty_segments(&mut self) {
-        // We should not be creating message block continuations to zero
-        // sized blocks. This is not a generally expected thing and has
-        // caused NIC hardware to stop working.
-        // Stripping these out where possible is necessary.
-        let mut head = self.inner;
-        let mut neighbour = unsafe { (*head.as_ptr()).b_cont };
-
-        while !neighbour.is_null()
-            && unsafe { (*head.as_ptr()).b_rptr == (*head.as_ptr()).b_wptr }
-        {
-            // Replace head with neighbour.
-            // Disconnect head from neighbour, and drop head.
-            unsafe {
-                (*head.as_ptr()).b_cont = ptr::null_mut();
-                drop(MsgBlk::wrap_mblk(head.as_ptr()));
-
-                // SAFETY: we know neighbour is non_null.
-                head = NonNull::new_unchecked(neighbour);
-                neighbour = (*head.as_ptr()).b_cont
-            }
-        }
-
-        self.inner = head;
-    }
-}
-
-#[derive(Debug)]
-pub struct MsgBlkIter<'a> {
-    curr: Option<NonNull<mblk_t>>,
-    marker: PhantomData<&'a MsgBlk>,
-}
-
-#[derive(Debug)]
-pub struct MsgBlkIterMut<'a> {
-    curr: Option<NonNull<mblk_t>>,
-    marker: PhantomData<&'a mut MsgBlk>,
-}
-
-impl<'a> MsgBlkIterMut<'a> {
-    pub fn next_iter(&self) -> MsgBlkIter {
-        let curr = self
-            .curr
-            .and_then(|ptr| NonNull::new(unsafe { ptr.as_ref() }.b_cont));
-        MsgBlkIter { curr, marker: PhantomData }
-    }
-
-    pub fn next_iter_mut(&mut self) -> MsgBlkIterMut {
-        let curr = self
-            .curr
-            .and_then(|ptr| NonNull::new(unsafe { ptr.as_ref() }.b_cont));
-        MsgBlkIterMut { curr, marker: PhantomData }
-    }
-}
-
-impl<'a> Iterator for MsgBlkIter<'a> {
-    type Item = &'a MsgBlkNode;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(ptr) = self.curr {
-            self.curr = NonNull::new(unsafe { (*ptr.as_ptr()).b_cont });
-            // SAFETY: MsgBlkNode is identical to mblk_t.
-            unsafe { Some(&*(ptr.as_ptr() as *const MsgBlkNode)) }
-        } else {
-            None
-        }
-    }
-}
-
-impl<'a> Read for MsgBlkIter<'a> {
-    type Chunk = &'a [u8];
-
-    fn next_chunk(&mut self) -> ingot::types::ParseResult<Self::Chunk> {
-        self.next().ok_or(IngotParseErr::TooSmall).map(|v| v.as_ref())
-    }
-}
-
-impl<'a> Iterator for MsgBlkIterMut<'a> {
-    type Item = &'a mut MsgBlkNode;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(ptr) = self.curr {
-            self.curr = NonNull::new(unsafe { (*ptr.as_ptr()).b_cont });
-            // SAFETY: MsgBlkNode is identical to mblk_t.
-            unsafe { Some(&mut *(ptr.as_ptr() as *mut MsgBlkNode)) }
-        } else {
-            None
-        }
-    }
-}
-
-impl<'a> Read for MsgBlkIterMut<'a> {
-    type Chunk = &'a mut [u8];
-
-    fn next_chunk(&mut self) -> ingot::types::ParseResult<Self::Chunk> {
-        self.next().ok_or(IngotParseErr::TooSmall).map(|v| v.as_mut())
-    }
-}
-
-/// For the `no_std`/illumos kernel environment, we want the `mblk_t`
-/// drop to occur at the [`Packet`] level, where we can make use of
-/// `freemsg(9F)`.
-impl Drop for MsgBlk {
-    fn drop(&mut self) {
-        // Drop the segment chain if there is one. Consumers of MsgBlk
-        // will never own a packet with no segments.
-        // This guarantees that we only free the segment chain once.
-        cfg_if! {
-            if #[cfg(all(not(feature = "std"), not(test)))] {
-                // Safety: This is safe as long as the original
-                // `mblk_t` came from a call to `allocb(9F)` (or
-                // similar API).
-                unsafe { ddi::freemsg(self.inner.as_ptr()) };
-            } else {
-                mock_freemsg(self.inner.as_ptr());
-            }
-        }
-    }
-}
 
 pub struct OpteUnifiedLengths {
     pub outer_eth: usize,
@@ -1239,11 +672,11 @@ impl<T: Read> From<&PacketData<T>> for InnerFlowId {
 // is a bridge too far for the `ingot` datapath rewrite. This might have
 // value in future.
 #[derive(Debug)]
-pub struct Packet2<S: PacketState> {
+pub struct Packet<S: PacketState> {
     state: S,
 }
 
-impl<T: Read + QueryLen> Packet2<Initialized2<T>> {
+impl<T: Read + QueryLen> Packet<Initialized2<T>> {
     pub fn new(pkt: T) -> Self
     where
         Initialized2<T>: PacketState,
@@ -1253,7 +686,7 @@ impl<T: Read + QueryLen> Packet2<Initialized2<T>> {
     }
 }
 
-impl<'a, T: Read + 'a> Packet2<Initialized2<T>>
+impl<'a, T: Read + 'a> Packet<Initialized2<T>>
 where
     T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut,
 {
@@ -1268,36 +701,36 @@ where
     pub fn parse_inbound<NP: NetworkParser>(
         self,
         net: NP,
-    ) -> Result<Packet2<LiteParsed<T, NP::InMeta<T::Chunk>>>, ParseError> {
-        let Packet2 { state: Initialized2 { len, inner } } = self;
+    ) -> Result<Packet<LiteParsed<T, NP::InMeta<T::Chunk>>>, ParseError> {
+        let Packet { state: Initialized2 { len, inner } } = self;
 
         let meta = net.parse_inbound(inner)?;
         meta.stack.validate(len)?;
 
-        Ok(Packet2 { state: LiteParsed { meta, len } })
+        Ok(Packet { state: LiteParsed { meta, len } })
     }
 
     #[inline]
     pub fn parse_outbound<NP: NetworkParser>(
         self,
         net: NP,
-    ) -> Result<Packet2<LiteParsed<T, NP::OutMeta<T::Chunk>>>, ParseError> {
-        let Packet2 { state: Initialized2 { len, inner } } = self;
+    ) -> Result<Packet<LiteParsed<T, NP::OutMeta<T::Chunk>>>, ParseError> {
+        let Packet { state: Initialized2 { len, inner } } = self;
 
         let meta = net.parse_outbound(inner)?;
         meta.stack.validate(len)?;
 
-        Ok(Packet2 { state: LiteParsed { meta, len } })
+        Ok(Packet { state: LiteParsed { meta, len } })
     }
 }
 
-impl<'a, T: Read + 'a, M: LightweightMeta<T::Chunk>> Packet2<LiteParsed<T, M>>
+impl<'a, T: Read + 'a, M: LightweightMeta<T::Chunk>> Packet<LiteParsed<T, M>>
 where
     T::Chunk: ingot::types::IntoBufPointer<'a>,
 {
     #[inline]
-    pub fn to_full_meta(self) -> Packet2<FullParsed<T>> {
-        let Packet2 { state: LiteParsed { len, meta } } = self;
+    pub fn to_full_meta(self) -> Packet<FullParsed<T>> {
+        let Packet { state: LiteParsed { len, meta } } = self;
         let IngotParsed { stack: headers, data, last_chunk } = meta;
 
         // TODO: we can probably not do this in some cases, but we
@@ -1324,7 +757,7 @@ where
         };
         let meta = Box::new(PacketData { headers, initial_lens, body });
 
-        Packet2 {
+        Packet {
             state: FullParsed {
                 meta,
                 flow,
@@ -1358,7 +791,7 @@ where
     }
 }
 
-impl<T: Read> Packet2<FullParsed<T>> {
+impl<T: Read> Packet<FullParsed<T>> {
     pub fn meta(&self) -> &PacketData<T> {
         &self.state.meta
     }
@@ -1959,21 +1392,6 @@ pub type MblkLiteParsed<'a, M> = LiteParsed<MsgBlkIterMut<'a>, M>;
 
 pub trait QueryLen {
     fn len(&self) -> usize;
-}
-
-impl<'a> QueryLen for MsgBlkIterMut<'a> {
-    #[inline]
-    fn len(&self) -> usize {
-        let own_blk_len = self
-            .curr
-            .map(|v| unsafe {
-                let v = v.as_ref();
-                v.b_wptr.offset_from(v.b_rptr) as usize
-            })
-            .unwrap_or_default();
-
-        own_blk_len + self.next_iter().map(|v| v.len()).sum::<usize>()
-    }
 }
 
 // TODO: don't really care about pushing 'inner' reprs today.

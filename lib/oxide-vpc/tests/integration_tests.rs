@@ -17,6 +17,7 @@ use common::icmp::*;
 use common::*;
 use opte::api::MacAddr;
 use opte::api::OpteError;
+use opte::ddi::mblk::MsgBlk;
 use opte::ddi::time::Moment;
 use opte::engine::arp::ArpEthIpv4;
 use opte::engine::arp::ArpEthIpv4Ref;
@@ -28,8 +29,7 @@ use opte::engine::ether::EthernetRef;
 use opte::engine::flow_table::FLOW_DEF_EXPIRE_SECS;
 use opte::engine::geneve::Vni;
 use opte::engine::ingot_packet::MblkFullParsed;
-use opte::engine::ingot_packet::MsgBlk;
-use opte::engine::ingot_packet::Packet2;
+use opte::engine::ingot_packet::Packet;
 use opte::engine::ip::v4::Ipv4Addr;
 use opte::engine::ip::v4::Ipv4Ref;
 use opte::engine::ip::v6::Ipv6;
@@ -1557,7 +1557,7 @@ fn unpack_and_verify_icmp(
 }
 
 fn unpack_and_verify_icmp4(
-    pkt: &Packet2<MblkFullParsed>,
+    pkt: &Packet<MblkFullParsed>,
     expected_ident: u16,
     seq_no: u16,
 ) {
@@ -1574,7 +1574,7 @@ fn unpack_and_verify_icmp4(
 }
 
 fn unpack_and_verify_icmp6(
-    pkt: &Packet2<MblkFullParsed>,
+    pkt: &Packet<MblkFullParsed>,
     expected_ident: u16,
     seq_no: u16,
     src_ip: Ipv6Addr,
