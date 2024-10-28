@@ -4,9 +4,9 @@
 
 // Copyright 2024 Oxide Computer Company
 
+use opte::ddi::mblk::MsgBlk;
 use opte::engine::dhcpv6::MessageType;
 use opte::engine::ether::Ethernet;
-use opte::engine::ingot_packet::MsgBlk;
 use opte::engine::ip::v4::Ipv4;
 use opte::engine::ip::v6::Ipv6;
 use opte::engine::ip::L3Repr;
