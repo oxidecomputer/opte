@@ -391,7 +391,7 @@ impl Dump for () {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::engine::ip4::Protocol;
+    use crate::engine::ip::v4::Protocol;
     use crate::engine::packet::AddrPair;
     use crate::engine::packet::FLOW_ID_DEFAULT;
     use core::time::Duration;

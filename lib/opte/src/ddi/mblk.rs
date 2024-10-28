@@ -296,13 +296,37 @@ impl MsgBlk {
         pkt
     }
 
-    /// Returns the number of bytes available for writing before
-    pub fn headroom(&self) -> usize {
+    /// Returns the number of bytes available for writing ahead of the
+    /// read pointer in the current datablock.
+    pub fn head_capacity(&self) -> usize {
         unsafe {
             let inner = self.inner.as_ref();
 
             inner.b_rptr.offset_from((*inner.b_datap).db_base) as usize
         }
+    }
+
+    /// Returns the number of bytes available for writing after the
+    /// write pointer in the current datablock.
+    pub fn tail_capacity(&self) -> usize {
+        unsafe {
+            let inner = self.inner.as_ref();
+
+            (*inner.b_datap).db_lim.offset_from(inner.b_wptr) as usize
+        }
+    }
+
+    /// Returns the number of bytes allocated in all datablocks in
+    /// this message.
+    pub fn all_segs_capacity(&self) -> usize {
+        self.iter()
+            .map(|v| unsafe {
+                let tail = (*v.0.b_datap).db_lim;
+                let head = (*v.0.b_datap).db_base;
+
+                tail.offset_from(head) as usize
+            })
+            .sum()
     }
 
     /// Creates a new [`MsgBlk`] containing a data buffer of `len`
@@ -448,6 +472,34 @@ impl MsgBlk {
         } else {
             Ok(())
         }
+    }
+
+    /// Adjusts the write pointer for this MsgBlk, initialising any extra bytes to 0.
+    pub fn expand_front(&mut self, n: usize) -> Result<(), SegAdjustError> {
+        unsafe {
+            self.write_front(n, |v| {
+                // MaybeUninit::fill is unstable.
+                let n = v.len();
+                v.as_mut_ptr().write_bytes(0, n);
+            })
+            .map_err(|_| SegAdjustError::StartBeforeBase)
+        }
+    }
+
+    /// Shrink the writable/readable area by shifting the `b_rptr` by
+    /// `len`; effectively removing bytes from the start of the packet.
+    ///
+    /// # Errors
+    ///
+    /// `SegAdjustError::StartPastEnd`: Shifting the read pointer by
+    /// `len` would move `b_rptr` past `b_wptr`.
+    pub fn drop_front_bytes(&mut self, n: usize) -> Result<(), SegAdjustError> {
+        let node = self
+            .iter_mut()
+            .next()
+            .expect("There will always be a front element by definition");
+
+        node.drop_front_bytes(n)
     }
 
     /// Emits an `ingot` packet after any bytes present in this mblk.
@@ -743,6 +795,157 @@ impl Drop for MsgBlk {
 
 #[cfg(test)]
 mod test {
+    use ingot::types::PacketParseError;
+    use ingot::types::ParseError as IngotParseError;
+
+    use crate::engine::ingot_packet::Packet;
+    use crate::engine::packet::mock_desballoc;
+    use crate::engine::packet::ParseError;
+    use crate::engine::GenericUlp;
+
+    use super::*;
+
+    #[test]
+    fn zero_byte_packet() {
+        let mut pkt = MsgBlk::new(0);
+        assert_eq!(pkt.len(), 0);
+        assert_eq!(pkt.seg_len(), 1);
+        assert_eq!(pkt.tail_capacity(), 16);
+
+        let res = Packet::new(pkt.iter_mut()).parse_outbound(GenericUlp {});
+        match res {
+            Err(ParseError::IngotError(err)) => {
+                assert_eq!(err.header().as_str(), "inner_eth");
+                assert_eq!(err.error(), &IngotParseError::TooSmall);
+            }
+
+            Err(e) => panic!("expected read error, got: {:?}", e),
+            _ => panic!("expected failure, accidentally succeeded at parsing"),
+        }
+
+        let pkt2 = MsgBlk::copy(&[]);
+        assert_eq!(pkt2.len(), 0);
+        assert_eq!(pkt2.seg_len(), 1);
+        assert_eq!(pkt2.tail_capacity(), 16);
+        let res = Packet::new(pkt.iter_mut()).parse_outbound(GenericUlp {});
+        match res {
+            Err(ParseError::IngotError(err)) => {
+                assert_eq!(err.header().as_str(), "inner_eth");
+                assert_eq!(err.error(), &IngotParseError::TooSmall);
+            }
+
+            Err(e) => panic!("expected read error, got: {:?}", e),
+            _ => panic!("expected failure, accidentally succeeded at parsing"),
+        }
+    }
+
+    #[test]
+    fn wrap() {
+        let mut buf1 = Vec::with_capacity(20);
+        let mut buf2 = Vec::with_capacity(2);
+        buf1.extend_from_slice(&[0x1, 0x2, 0x3, 0x4]);
+        buf2.extend_from_slice(&[0x5, 0x6]);
+        let mp1 = mock_desballoc(buf1);
+        let mp2 = mock_desballoc(buf2);
+
+        unsafe {
+            (*mp1).b_cont = mp2;
+        }
+
+        let pkt = unsafe { MsgBlk::wrap_mblk(mp1).unwrap() };
+        assert_eq!(pkt.seg_len(), 2);
+        assert_eq!(pkt.all_segs_capacity(), 22);
+        assert_eq!(pkt.byte_len(), 6);
+    }
+
+    #[test]
+    fn read_seg() {
+        let buf1 = vec![0x1, 0x2, 0x3, 0x4];
+        let buf2 = vec![0x5, 0x6];
+        let mp1 = mock_desballoc(buf1);
+        let mp2 = mock_desballoc(buf2);
+
+        unsafe {
+            (*mp1).b_cont = mp2;
+        }
+
+        let pkt = unsafe { MsgBlk::wrap_mblk(mp1).unwrap() };
+        assert_eq!(pkt.byte_len(), 6);
+        assert_eq!(pkt.seg_len(), 2);
+
+        let mut segs = pkt.iter();
+        assert_eq!(segs.next().map(|v| &v[..]).unwrap(), &[0x1, 0x2, 0x3, 0x4]);
+        assert_eq!(segs.next().map(|v| &v[..]).unwrap(), &[0x5, 0x6]);
+    }
+
+    // Verify uninitialized packet.
+    #[test]
+    fn uninitialized_packet() {
+        let pkt = MsgBlk::new(200);
+        assert_eq!(pkt.len(), 0);
+        assert_eq!(pkt.seg_len(), 1);
+        assert_eq!(pkt.tail_capacity(), 200);
+    }
+
+    #[test]
+    fn expand_and_shrink() {
+        let mut seg = MsgBlk::new(18);
+        assert_eq!(seg.len(), 0);
+        seg.resize(18).unwrap();
+        assert_eq!(seg.len(), 18);
+        seg.drop_front_bytes(4).unwrap();
+        assert_eq!(seg.len(), 14);
+        seg.expand_front(4).unwrap();
+        assert_eq!(seg.len(), 18);
+
+        assert!(seg.resize(20).is_err());
+        assert!(seg.drop_front_bytes(20).is_err());
+        assert!(seg.expand_front(4).is_err());
+    }
+
+    #[test]
+    fn prefix_len() {
+        let mut seg = MsgBlk::new(18);
+        assert_eq!(seg.head_capacity(), 0);
+        seg.resize(18).unwrap();
+        assert_eq!(seg.head_capacity(), 0);
+        seg.drop_front_bytes(4).unwrap();
+        assert_eq!(seg.head_capacity(), 4);
+        seg.expand_front(4).unwrap();
+        assert_eq!(seg.head_capacity(), 0);
+    }
+
+    // Verify that we do not panic when we get long chains of mblks linked by
+    // `b_cont`. This is a regression test for
+    // https://github.com/oxidecomputer/opte/issues/335
+    #[test]
+    fn test_long_packet_continuation() {
+        const N_SEGMENTS: usize = 8;
+        let mut blocks: Vec<*mut mblk_t> = Vec::with_capacity(N_SEGMENTS);
+        for i in 0..N_SEGMENTS {
+            let mp = allocb(32);
+
+            // Link previous block to this one.
+            if i > 0 {
+                let prev = blocks[i - 1];
+                unsafe {
+                    (*prev).b_cont = mp;
+                }
+            }
+            blocks.push(mp);
+        }
+
+        // Wrap the first mblk in a Packet, and check that we still have a
+        // reference to everything.
+        let packet = unsafe { MsgBlk::wrap_mblk(blocks[0]) }
+            .expect("Failed to wrap mblk chain with many segments");
+
+        assert_eq!(packet.seg_len(), N_SEGMENTS);
+        for (seg, mblk) in packet.iter().zip(blocks) {
+            assert_eq!(core::ptr::addr_of!(seg.0) as *mut _, mblk);
+        }
+    }
+
     fn create_linked_mblks(n: usize) -> Vec<*mut mblk_t> {
         let mut els = vec![];
         for _ in 0..n {
@@ -799,7 +1002,7 @@ mod test {
         let new_el = allocb(8);
 
         let mut chain = unsafe { MsgBlkChain::new(els[0]) }.unwrap();
-        let pkt = unsafe { Packet::wrap_mblk(new_el) }.unwrap();
+        let pkt = unsafe { MsgBlk::wrap_mblk(new_el) }.unwrap();
 
         chain.append(pkt);
 

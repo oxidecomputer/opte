@@ -617,8 +617,8 @@ impl HairpinAction for DhcpAction {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::engine::ip4::Ipv4Addr;
-    use crate::engine::ip4::Ipv4Cidr;
+    use crate::engine::ip::v4::Ipv4Addr;
+    use crate::engine::ip::v4::Ipv4Cidr;
 
     fn test_option_emit(opt: impl DhcpOption, truth: Vec<u8>) {
         let buf = gen_dhcp_from_option(opt);

@@ -688,8 +688,8 @@ mod test {
     use super::Message;
     use super::MessageType;
     use super::OptionCode;
+    use crate::ddi::mblk::MsgBlk;
     use crate::engine::dhcpv6::test_data;
-    use crate::engine::ingot_packet::MsgBlk;
     use crate::engine::ingot_packet::Packet;
     use crate::engine::port::meta::ActionMeta;
     use crate::engine::GenericUlp;

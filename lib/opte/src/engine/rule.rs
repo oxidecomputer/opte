@@ -350,7 +350,7 @@ impl CompiledEncap {
             return pkt;
         };
 
-        let mut prepend = if pkt.headroom() < bytes.len() {
+        let mut prepend = if pkt.head_capacity() < bytes.len() {
             let mut pkt = MsgBlk::new_ethernet(bytes.len());
             pkt.pop_all();
             Some(pkt)

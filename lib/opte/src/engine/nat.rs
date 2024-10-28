@@ -216,11 +216,11 @@ impl ActionDesc for NatDesc {
 mod test {
     use super::*;
 
+    use crate::ddi::mblk::MsgBlk;
     use crate::engine::ether::Ethernet;
     use crate::engine::ether::EthernetRef;
     use crate::engine::ip::v4::Ipv4;
     use crate::engine::ip::v4::Ipv4Ref;
-    use crate::ddi::mblk::MsgBlk;
     use crate::engine::GenericUlp;
     use ingot::ethernet::Ethertype;
     use ingot::ip::IpProtocol;

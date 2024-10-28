@@ -469,11 +469,11 @@ mod test {
     use ingot::tcp::TcpRef;
     use ingot::types::HeaderLen;
 
+    use crate::ddi::mblk::MsgBlk;
     use crate::engine::ether::Ethernet;
     use crate::engine::ether::EthernetRef;
     use crate::engine::ip::v4::Ipv4;
     use crate::engine::ip::v4::Ipv4Ref;
-    use crate::ddi::mblk::MsgBlk;
 
     use super::*;
 

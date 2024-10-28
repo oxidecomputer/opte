@@ -31,28 +31,3 @@ pub struct UdpMod {
     src: Option<u16>,
     dst: Option<u16>,
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::engine::packet::Packet;
-
-    #[test]
-    fn emit() {
-        let udp = UdpMeta { src: 5353, dst: 5353, len: 142, csum: [0; 2] };
-        let len = udp.hdr_len();
-        let mut pkt = Packet::alloc_and_expand(len);
-        let mut wtr = pkt.seg0_wtr();
-        udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
-        assert_eq!(len, pkt.len());
-
-        #[rustfmt::skip]
-        let expected_bytes = [
-            // source port + dest port
-            0x14, 0xE9, 0x14, 0xE9,
-            // length + checksum
-            0x00, 0x8E, 0x00, 0x00,
-        ];
-        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
-    }
-}

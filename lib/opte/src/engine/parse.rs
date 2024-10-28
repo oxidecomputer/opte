@@ -385,8 +385,12 @@ fn validate_udp<V: ByteSlice>(
     pkt: &ValidUdp<V>,
     bytes_after: usize,
 ) -> Result<(), ParseError> {
+    // Packets can have arbitrary zero-padding at the end so
+    // our length *could* be larger than the packet reports.
+    // Unlikely in practice as Encap headers push us past the 64B
+    // minimum packet size.
     let wanted_len = bytes_after + pkt.packet_length();
-    if pkt.length() as usize == wanted_len {
+    if pkt.length() as usize <= wanted_len {
         Ok(())
     } else {
         Err(ParseError::BadLength(MismatchError {
@@ -755,5 +759,40 @@ impl<V: ByteSlice> ValidUlp<V> {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::engine::checksum::Checksum as OpteCsum;
+    use ingot::types::ParseChoice;
+    use smoltcp::phy::ChecksumCapabilities;
+    use smoltcp::wire::Icmpv4Packet;
+    use smoltcp::wire::Icmpv4Repr;
+
+    use super::*;
+
+    #[test]
+    fn icmp4_body_csum_equals_body() {
+        let data = b"reunion\0";
+        let mut body_csum = OpteCsum::default();
+        body_csum.add_bytes(data);
+
+        let mut cksum_cfg = ChecksumCapabilities::ignored();
+        cksum_cfg.icmpv4 = smoltcp::phy::Checksum::Both;
+
+        let test_pkt = Icmpv4Repr::EchoRequest { ident: 7, seq_no: 7777, data };
+        let mut out = vec![0u8; test_pkt.buffer_len()];
+        let mut packet = Icmpv4Packet::new_unchecked(&mut out);
+        test_pkt.emit(&mut packet, &cksum_cfg);
+
+        let src = &mut out[..IcmpV4::MINIMUM_LENGTH];
+        let (ulp, ..) =
+            ValidUlp::parse_choice(src, Some(IpProtocol::ICMP)).unwrap();
+
+        assert_eq!(
+            Some(body_csum.finalize()),
+            csum_minus_hdr(&ulp).map(|mut v| v.finalize()),
+        );
     }
 }

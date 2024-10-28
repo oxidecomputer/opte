@@ -172,38 +172,3 @@ impl Display for MessageType {
         write!(f, "{}", self.inner)
     }
 }
-
-#[cfg(test)]
-mod test {
-    use crate::engine::checksum::Checksum as OpteCsum;
-    use crate::engine::headers::RawHeader;
-    use crate::engine::icmp::IcmpHdr;
-    use crate::engine::icmp::IcmpHdrRaw;
-    use smoltcp::wire::Icmpv4Packet;
-    use smoltcp::wire::Icmpv4Repr;
-
-    use super::*;
-
-    #[test]
-    fn icmp4_body_csum_equals_body() {
-        let data = b"reunion\0";
-        let mut body_csum = OpteCsum::default();
-        body_csum.add_bytes(data);
-
-        let mut cksum_cfg = Csum::ignored();
-        cksum_cfg.icmpv4 = Checksum::Both;
-
-        let test_pkt = Icmpv4Repr::EchoRequest { ident: 7, seq_no: 7777, data };
-        let mut out = vec![0u8; test_pkt.buffer_len()];
-        let mut packet = Icmpv4Packet::new_unchecked(&mut out);
-        test_pkt.emit(&mut packet, &cksum_cfg);
-
-        let src = &mut out[..IcmpHdr::SIZE];
-        let icmp = IcmpHdr { base: IcmpHdrRaw::new_mut(src).unwrap() };
-
-        assert_eq!(
-            Some(body_csum.finalize()),
-            icmp.csum_minus_hdr().map(|mut v| v.finalize())
-        );
-    }
-}

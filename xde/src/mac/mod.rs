@@ -20,8 +20,8 @@ use core::ffi::CStr;
 use core::fmt;
 use core::ptr;
 use illumos_sys_hdrs::*;
-use opte::engine::ether::EtherAddr;
 use opte::ddi::mblk::MsgBlk;
+use opte::engine::ether::EtherAddr;
 pub use sys::*;
 
 /// Errors while opening a MAC handle.

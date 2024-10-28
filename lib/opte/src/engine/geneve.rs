@@ -314,8 +314,11 @@ pub fn geneve_opt_is_oxide_external<V: ByteSlice>(
 
 #[cfg(test)]
 mod test {
-    use core::matches;
-
+    use super::*;
+    use crate::ddi::mblk::MsgBlk;
+    use crate::engine::headers::EncapMeta;
+    use crate::engine::ingot_packet::Packet;
+    use crate::engine::parse::ValidGeneveOverV6;
     use ingot::ethernet::Ethernet;
     use ingot::ethernet::Ethertype;
     use ingot::ip::IpProtocol;
@@ -324,13 +327,6 @@ mod test {
     use ingot::types::HeaderParse;
     use ingot::udp::UdpRef;
     use ingot::udp::ValidUdp;
-
-    use super::*;
-    use crate::engine::headers::EncapMeta;
-    use crate::engine::ingot_packet::MsgBlk;
-    use crate::engine::ingot_packet::Packet;
-    use crate::engine::packet::Packet;
-    use crate::engine::parse::ValidGeneveOverV6;
 
     #[test]
     fn emit_no_opts() {
@@ -342,8 +338,8 @@ mod test {
         };
 
         let len = geneve.hdr_len();
-        let emitted = EncapMeta::Geneve(geneve).emit_vec();
-        assert_eq!(len, pkt.len());
+        let emitted = EncapMeta::Geneve(geneve).to_vec();
+        assert_eq!(len, emitted.len());
 
         #[rustfmt::skip]
         let expected_bytes = vec![
@@ -376,8 +372,8 @@ mod test {
         };
 
         let len = geneve.hdr_len();
-        let emitted = EncapMeta::Geneve(geneve).emit_vec();
-        assert_eq!(len, pkt.len());
+        let emitted = EncapMeta::Geneve(geneve).to_vec();
+        assert_eq!(len, emitted.len());
 
         #[rustfmt::skip]
         let expected_bytes = vec![
@@ -405,7 +401,7 @@ mod test {
             // rsvd + len
             0x00,
         ];
-        assert_eq!(&expected_bytes, emitted);
+        assert_eq!(&expected_bytes, &emitted[..]);
     }
 
     #[test]
@@ -443,7 +439,7 @@ mod test {
 
         validate_geneve(&geneve).unwrap();
 
-        assert!(geneve_opt_is_oxide_external(&geneve));
+        assert!(valid_geneve_has_oxide_external(&geneve));
     }
 
     #[test]
@@ -542,6 +538,6 @@ mod test {
         let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
 
         validate_geneve(&geneve).unwrap();
-        assert!(geneve_opt_is_oxide_external(&geneve));
+        assert!(valid_geneve_has_oxide_external(&geneve));
     }
 }

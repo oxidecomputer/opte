@@ -23,6 +23,7 @@ use opte_api::Protocol;
 use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::ByteSlice;
+use zerocopy::ByteSliceMut;
 
 pub const DDM_HEADER_ID: u8 = 0xFE;
 
@@ -78,9 +79,13 @@ impl<V: ByteSlice> ValidIpv6<V> {
             }));
         }
 
+        // Packets can have arbitrary zero-padding at the end so
+        // our length *could* be larger than the packet reports.
+        // Unlikely in practice as Encap headers push us past the 64B
+        // minimum packet size.
         let ex_len = bytes_after + self.1.packet_length();
         let pll = self.payload_len();
-        if ex_len != (self.payload_len() as usize) {
+        if ex_len < (self.payload_len() as usize) {
             return Err(ParseError::BadLength(MismatchError {
                 location: c"Ipv6.payload_len",
                 expected: ex_len as u64,
@@ -89,6 +94,21 @@ impl<V: ByteSlice> ValidIpv6<V> {
         }
 
         Ok(())
+    }
+
+    pub fn ulp_len(&self) -> usize {
+        self.payload_len() as usize - self.1.packet_length()
+    }
+
+    pub fn set_ulp_len(&mut self, len: usize)
+    where
+        V: ByteSliceMut,
+    {
+        self.set_payload_len((self.1.packet_length() + len) as u16)
+    }
+
+    pub fn ext_len(&self) -> usize {
+        self.1.packet_length()
     }
 }
 
@@ -111,10 +131,17 @@ pub struct Ipv6Mod {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::engine::packet::Packet;
+    use crate::ddi::mblk::MsgBlk;
+    use crate::engine::ingot_packet::Packet;
+    use ingot::ip::IpProtocol as IngotIpProtocol;
+    use ingot::types::Accessor;
+    use ingot::types::Emit;
+    use ingot::types::Header;
+    use ingot::types::HeaderParse;
     use itertools::Itertools;
     use smoltcp::wire::IpProtocol;
     use smoltcp::wire::Ipv6Address;
+    use smoltcp::wire::Ipv6ExtHeader;
     use smoltcp::wire::Ipv6FragmentHeader;
     use smoltcp::wire::Ipv6FragmentRepr;
     use smoltcp::wire::Ipv6HopByHopHeader;
@@ -128,7 +155,7 @@ pub(crate) mod test {
 
     // Test packet size and payload length
     const BUFFER_LEN: usize = 512;
-    const PAYLOAD_LEN: usize = 512 - Ipv6Hdr::BASE_SIZE;
+    const PAYLOAD_LEN: usize = 512 - Ipv6::MINIMUM_LENGTH;
     pub(crate) const SUPPORTED_EXTENSIONS: [IpProtocol; 4] = [
         IpProtocol::HopByHop,
         IpProtocol::Ipv6Route,
@@ -205,7 +232,7 @@ pub(crate) mod test {
         let mut data = vec![0; BUFFER_LEN];
         let mut header_start = 0;
         let mut next_header_pos = 6;
-        let mut header_end = Ipv6Hdr::BASE_SIZE;
+        let mut header_end = Ipv6::MINIMUM_LENGTH;
         let mut buf = &mut data[header_start..];
 
         // The base header. The payload length is always the same, but the base
@@ -216,7 +243,7 @@ pub(crate) mod test {
 
         if extensions.is_empty() {
             // No extensions at all, just base header with a TCP ULP
-            return (buf.to_vec(), Ipv6Hdr::BASE_SIZE);
+            return (buf.to_vec(), Ipv6::MINIMUM_LENGTH);
         }
 
         for extension in extensions {
@@ -286,10 +313,9 @@ pub(crate) mod test {
                     extension
                 ),
             };
-            ext_packet.set_header_len(match V6ExtClass::from(*extension) {
-                V6ExtClass::Frag => 0,
-                V6ExtClass::Rfc6564 => u8::try_from((len - 8) / 8).unwrap(),
-                _ => unreachable!(),
+            ext_packet.set_header_len(match extension {
+                Ipv6Frag => 0,
+                _ => u8::try_from((len - 8) / 8).unwrap(),
             });
 
             // Move the position markers to the new header.
@@ -317,39 +343,35 @@ pub(crate) mod test {
                 SUPPORTED_EXTENSIONS.into_iter().permutations(n_extensions)
             {
                 let (buf, pos) = generate_test_packet(extensions.as_slice());
-                let mut pkt = Packet::copy(&buf);
-                let mut reader = pkt.get_rdr_mut();
-                let header = Ipv6Hdr::parse(&mut reader).unwrap();
+                let (header, ..) = ValidIpv6::parse(&buf[..]).unwrap();
                 assert_all_lengths_ok(&header, pos);
             }
         }
     }
 
-    fn assert_all_lengths_ok(header: &Ipv6Hdr, header_end: usize) {
+    fn assert_all_lengths_ok<V: ByteSlice>(
+        header: &ValidIpv6<V>,
+        header_end: usize,
+    ) {
         assert_eq!(
-            header.hdr_len(),
+            header.packet_length() as usize,
             header_end,
             "Header length does not include all extension headers"
         );
         assert_eq!(
-            header.pay_len(),
+            header.payload_len() as usize,
             PAYLOAD_LEN,
             "Payload length does not include all extension headers",
         );
         assert_eq!(
-            header.ext_len(),
-            header_end - Ipv6Hdr::BASE_SIZE,
+            header.1.packet_length(),
+            header_end - Ipv6::MINIMUM_LENGTH,
             "Extension header size is incorrect",
         );
         assert_eq!(
             header.ulp_len(),
             PAYLOAD_LEN - header.ext_len(),
             "ULP length is not correct"
-        );
-        assert_eq!(
-            header.total_len(),
-            PAYLOAD_LEN + Ipv6Hdr::BASE_SIZE,
-            "Total packet length is not correct",
         );
     }
 
@@ -378,25 +400,21 @@ pub(crate) mod test {
 
     #[test]
     fn emit() {
-        let ip = Ipv6Meta {
-            src: Ipv6Addr::from_const([
+        let ip = Ipv6 {
+            source: Ipv6Addr::from_const([
                 0xFE80, 0x0000, 0x0000, 0x0000, 0xBAF8, 0x53FF, 0xFEAF, 0x537D,
             ]),
-            dst: Ipv6Addr::from_const([
+            destination: Ipv6Addr::from_const([
                 0xFE80, 0x000, 0x0000, 0x0000, 0x56BE, 0xF7FF, 0xFE0B, 0x09EC,
             ]),
-            proto: Protocol::ICMPv6,
-            next_hdr: IpProtocol::Icmpv6,
+            next_header: IngotIpProtocol::ICMP_V6,
             hop_limit: 255,
-            pay_len: 32,
-            ext: None,
-            ext_len: 0,
+            payload_len: 32,
+            ..Default::default()
         };
 
-        let len = ip.hdr_len();
-        let mut pkt = Packet::alloc_and_expand(len);
-        let mut wtr = pkt.seg0_wtr();
-        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+        let len = ip.packet_length();
+        let pkt = ip.emit_vec();
         assert_eq!(len, pkt.len());
 
         #[rustfmt::skip]
@@ -414,16 +432,14 @@ pub(crate) mod test {
             0xFE, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x56, 0xBE, 0xF7, 0xFF, 0xFE, 0x0B, 0x09, 0xEC,
         ];
-        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
+        assert_eq!(&expected_bytes, &pkt[..]);
     }
 
     #[test]
     fn test_set_total_len() {
         // Create a packet with one extension header.
-        let (buf, _) = generate_test_packet(&[IpProtocol::Ipv6Frag]);
-        let mut pkt = Packet::copy(&buf);
-        let mut reader = pkt.get_rdr_mut();
-        let mut header = Ipv6Hdr::parse(&mut reader).unwrap();
+        let (mut buf, _) = generate_test_packet(&[IpProtocol::Ipv6Frag]);
+        let (mut header, ..) = ValidIpv6::parse(&mut buf[..]).unwrap();
 
         // Set the total length to 128.
         //
@@ -432,29 +448,10 @@ pub(crate) mod test {
         // which is a fixed 8-octet thing, this should result in a Payload
         // Length of 128 - Ipv6Hdr::BASE_SIZE = 78.
         const NEW_SIZE: usize = 128;
-        header.set_total_len(NEW_SIZE as _);
-        assert_eq!(header.total_len(), NEW_SIZE);
-        assert_eq!(header.hdr_len(), Ipv6Hdr::BASE_SIZE + 8);
-        assert_eq!(header.pay_len(), NEW_SIZE - Ipv6Hdr::BASE_SIZE);
-    }
-
-    #[test]
-    fn test_ip6_meta_total_len() {
-        // Create a packet with one extension header.
-        let (buf, _) = generate_test_packet(&[IpProtocol::Ipv6Frag]);
-        let mut pkt = Packet::copy(&buf);
-        let mut reader = pkt.get_rdr_mut();
-        let header = Ipv6Hdr::parse(&mut reader).unwrap();
-
-        // Previously, the `Ipv6Meta::total_len` method double-counted the
-        // extension header length. Assert we don't do that here.
-        let meta = Ipv6Meta::from(&header);
-        assert!(meta.ext.is_some());
-        assert_eq!(meta.ext_len, 8); // Fixed size
-        assert_eq!(
-            meta.total_len() as usize,
-            header.hdr_len() + header.ulp_len()
-        );
+        header.set_ulp_len(NEW_SIZE);
+        assert_eq!(header.ulp_len(), NEW_SIZE);
+        assert_eq!(header.packet_length(), Ipv6::MINIMUM_LENGTH + 8);
+        assert_eq!(header.payload_len() as usize, NEW_SIZE + 8);
     }
 
     #[test]
@@ -484,11 +481,13 @@ pub(crate) mod test {
             0xc8, 0x34, 0xdd, 0x6b, 0xfa, 0x21,
         ];
 
-        let mut pkt = Packet::copy(buf);
-        let mut reader = pkt.get_rdr_mut();
-        assert!(matches!(
-            Ipv6Hdr::parse(&mut reader),
-            Err(Ipv6HdrError::BadVersion { vsn: 0 })
-        ));
+        // Parsing this one will fail -- next header is hop-by-hop, which is
+        // an RFC6564 header -- we don't have (0xc1 * 8) bytes here!!
+        assert!(ValidIpv6::parse(&buf[..]).is_err());
+
+        // We can construct this manually via ingot...
+        let (v6, rem) = Accessor::read_from_prefix(&buf[..]).unwrap();
+        let ip = ValidIpv6(v6, Header::Repr(Default::default()));
+        assert!(ip.validate(120).is_err());
     }
 }

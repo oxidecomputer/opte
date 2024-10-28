@@ -242,21 +242,20 @@ impl EtherMeta {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::engine::packet::Packet;
+    use ingot::types::Emit;
+    use ingot::types::HeaderParse;
 
     #[test]
     fn emit() {
-        let eth = EtherMeta {
-            dst: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
-            src: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
-            ether_type: EtherType::Ipv4,
+        let eth = Ethernet {
+            destination: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
+            source: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
+            ethertype: Ethertype::IPV4,
         };
 
         // Verify bytes are written and segment length is correct.
-        let mut pkt = Packet::alloc_and_expand(14);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        assert_eq!(pkt.len(), 14);
+        let out = eth.emit_vec();
+        assert_eq!(out.len(), 14);
         #[rustfmt::skip]
         let expected_bytes = vec![
             // destination
@@ -266,11 +265,9 @@ mod test {
             // ether type
             0x08, 0x00,
         ];
-        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
+        assert_eq!(expected_bytes, out);
 
         // Verify error when the mblk is not large enough.
-        let mut pkt = Packet::alloc_and_expand(10);
-        let mut wtr = pkt.seg0_wtr();
-        assert!(wtr.slice_mut(EtherHdr::SIZE).is_err());
+        assert!(ValidEthernet::parse(&[0; 10][..]).is_err());
     }
 }
