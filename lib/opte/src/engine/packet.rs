@@ -17,35 +17,19 @@ use super::headers::AF_INET6;
 use super::ip::v4::Ipv4Addr;
 use super::ip::v4::Protocol;
 use super::ip::v6::Ipv6Addr;
+use super::Direction;
 use crate::d_error::DError;
+use alloc::string::String;
 use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
 use core::hash::Hash;
-use core::ptr;
 use core::result;
 use crc32fast::Hasher;
 use dyn_clone::DynClone;
 use ingot::types::PacketParseError;
 use serde::Deserialize;
 use serde::Serialize;
-// TODO should probably move these two into this module now.
-use super::Direction;
-use alloc::string::String;
-use alloc::vec::Vec;
-use illumos_sys_hdrs::dblk_t;
-use illumos_sys_hdrs::mblk_t;
-
-cfg_if! {
-    if #[cfg(all(not(feature = "std"), not(test)))] {
-        use illumos_sys_hdrs as ddi;
-    } else {
-        use std::boxed::Box;
-        use illumos_sys_hdrs::c_uchar;
-    }
-}
-
-pub static MBLK_MAX_SIZE: usize = u16::MAX as usize;
 
 pub static FLOW_ID_DEFAULT: InnerFlowId = InnerFlowId {
     proto: 255,
@@ -331,129 +315,6 @@ pub enum WriteError {
 
 pub type WriteResult<T> = result::Result<T, WriteError>;
 
-/// The common entry into an `allocb(9F)` implementation that works in
-/// both std and `no_std` environments.
-///
-/// NOTE: We do not emulate the priority argument as it is not
-/// relevant to OPTE's implementation. In the case of `no_std`, we
-/// always pass a priority value of `0` to `allocb(9F)`.
-pub fn allocb(size: usize) -> *mut mblk_t {
-    assert!(size <= MBLK_MAX_SIZE);
-
-    #[cfg(any(feature = "std", test))]
-    return mock_allocb(size);
-
-    // Safety: allocb(9F) should be safe for any size equal to or
-    // less than MBLK_MAX_SIZE.
-    #[cfg(all(not(feature = "std"), not(test)))]
-    unsafe {
-        ddi::allocb(size, 0)
-    }
-}
-
-#[cfg(any(feature = "std", test))]
-pub fn mock_allocb(size: usize) -> *mut mblk_t {
-    // If the requested size is 0 we mimic allocb(9F) and allocate 16
-    // bytes. See `uts/common/io/stream.c`.
-    let size = if size == 0 { 16 } else { size };
-    let buf = Vec::with_capacity(size);
-    mock_desballoc(buf)
-}
-
-#[cfg(any(feature = "std", test))]
-pub fn mock_desballoc(buf: Vec<u8>) -> *mut mblk_t {
-    let mut buf = std::mem::ManuallyDrop::new(buf);
-    let ptr = buf.as_mut_ptr();
-    let len = buf.len();
-    let avail = buf.capacity();
-
-    // For the purposes of mocking in std the only fields that
-    // matter here are the ones relating to the data buffer:
-    // db_base and db_lim.
-    let dblk = Box::new(dblk_t {
-        db_frtnp: ptr::null(),
-        db_base: ptr,
-        // Safety: We rely on the Vec implementation to give us
-        // the correct value for avail.
-        db_lim: unsafe { ptr.add(avail) },
-        db_ref: 0,
-        db_type: 0,
-        db_flags: 0,
-        db_struioflag: 0,
-        db_cpid: 0,
-        db_cache: ptr::null(),
-        db_mblk: ptr::null(),
-        db_free: ptr::null(),
-        db_lastfree: ptr::null(),
-        db_cksumstart: 0,
-        db_cksumend: 0,
-        db_cksumstuff: 0,
-        db_struioun: 0,
-        db_fthdr: ptr::null(),
-        db_credp: ptr::null(),
-    });
-
-    let dbp = Box::into_raw(dblk);
-
-    // For the purposes of mocking in std the only fields that
-    // matter are b_rptr and b_wptr. However, in the future we
-    // will probably want to mock segments packets via b_cont and
-    // packet chains via b_next.
-    let mblk = Box::new(mblk_t {
-        b_next: ptr::null_mut(),
-        b_prev: ptr::null_mut(),
-        b_cont: ptr::null_mut(),
-        // Safety: We know dbp is valid because we just created it.
-        b_rptr: unsafe { (*dbp).db_base as *mut c_uchar },
-        b_wptr: unsafe { (*dbp).db_base.add(len) as *mut c_uchar },
-        b_datap: dbp,
-        b_band: 0,
-        b_tag: 0,
-        b_flag: 0,
-        b_queue: ptr::null(),
-    });
-
-    let mp = Box::into_raw(mblk);
-    // Safety: We know dbp is valid because we just created it.
-    unsafe { (*dbp).db_mblk = mp as *const mblk_t };
-
-    mp
-}
-
-// The std equivalent to `freemsg(9F)`.
-#[cfg(any(feature = "std", test))]
-pub(crate) fn mock_freemsg(mut mp: *mut mblk_t) {
-    while !mp.is_null() {
-        let cont = unsafe { (*mp).b_cont };
-        mock_freeb(mp);
-        mp = cont;
-    }
-}
-
-// The std equivalent to `freeb(9F)`.
-#[cfg(any(feature = "std", test))]
-fn mock_freeb(mp: *mut mblk_t) {
-    // Safety: All of these were created safely in `mock_alloc()`.
-    // As long as the other methods don't do any of the following,
-    // this is safe:
-    //
-    // * Modify the `mp`/`dblk` pointers.
-    // * Increase `len` beyond `limit`.
-    // * Modify `limit`.
-    unsafe {
-        let bmblk = Box::from_raw(mp);
-        let bdblk = Box::from_raw(bmblk.b_datap as *mut dblk_t);
-        let buffer = Vec::from_raw_parts(
-            bdblk.db_base,
-            bmblk.b_wptr.offset_from(bmblk.b_rptr) as usize,
-            bdblk.db_lim.offset_from(bdblk.db_base) as usize,
-        );
-        drop(buffer);
-        drop(bdblk);
-        drop(bmblk);
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -547,13 +408,6 @@ mod test {
 
     #[test]
     fn read_multi_segment() {
-        let mp1 = allocb(34);
-        let mp2 = allocb(20);
-
-        unsafe {
-            (*mp1).b_cont = mp2;
-        }
-
         let mut mp1 = MsgBlk::new_ethernet_pkt(Ethernet {
             destination: DST_MAC,
             source: SRC_MAC,
