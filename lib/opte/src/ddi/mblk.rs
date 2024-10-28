@@ -23,6 +23,7 @@ use core::slice;
 use illumos_sys_hdrs as ddi;
 #[cfg(any(feature = "std", test))]
 use illumos_sys_hdrs::c_uchar;
+#[cfg(any(feature = "std", test))]
 use illumos_sys_hdrs::dblk_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;

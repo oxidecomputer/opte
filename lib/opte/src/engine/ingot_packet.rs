@@ -68,8 +68,6 @@ use core::hash::Hash;
 use core::ops::Deref;
 use core::ops::DerefMut;
 use core::sync::atomic::AtomicPtr;
-#[cfg(all(not(feature = "std"), not(test)))]
-use illumos_sys_hdrs as ddi;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
