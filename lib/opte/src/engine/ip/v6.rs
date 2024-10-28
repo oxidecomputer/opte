@@ -131,8 +131,6 @@ pub struct Ipv6Mod {
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
-    use crate::ddi::mblk::MsgBlk;
-    use crate::engine::ingot_packet::Packet;
     use ingot::ip::IpProtocol as IngotIpProtocol;
     use ingot::types::Accessor;
     use ingot::types::Emit;
@@ -486,7 +484,7 @@ pub(crate) mod test {
         assert!(ValidIpv6::parse(&buf[..]).is_err());
 
         // We can construct this manually via ingot...
-        let (v6, rem) = Accessor::read_from_prefix(&buf[..]).unwrap();
+        let (v6, _rem) = Accessor::read_from_prefix(&buf[..]).unwrap();
         let ip = ValidIpv6(v6, Header::Repr(Default::default()));
         assert!(ip.validate(120).is_err());
     }

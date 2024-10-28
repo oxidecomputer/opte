@@ -460,7 +460,6 @@ mod test {
     use crate::ddi::mblk::MsgBlk;
     use crate::engine::ether::Ethernet;
     use crate::engine::ether::EthernetRef;
-    use crate::engine::ingot_packet::OpteMeta;
     use crate::engine::ingot_packet::Packet;
     use crate::engine::ip::v4::Ipv4;
     use crate::engine::ip::v4::Ipv4Ref;
@@ -722,7 +721,7 @@ mod test {
         assert_eq!(pkt.byte_len(), MINIMUM_ETH_FRAME_SZ - FRAME_CHECK_SEQ_SZ);
 
         // Generate the metadata by parsing the packet
-        let mut parsed = Packet::new(pkt.iter_mut())
+        let parsed = Packet::new(pkt.iter_mut())
             .parse_inbound(GenericUlp {})
             .unwrap()
             .to_full_meta();
@@ -783,7 +782,7 @@ mod test {
         // Generate the metadata by parsing the packet.
         // This should not fail even though there are more bytes in
         // the initialised area ofthe mblk chain than the packet expects.
-        let mut pkt = Packet::new(pkt.iter_mut())
+        let pkt = Packet::new(pkt.iter_mut())
             .parse_inbound(GenericUlp {})
             .unwrap()
             .to_full_meta();

@@ -37,6 +37,7 @@ use opte::engine::ip::v6::Ipv6Ref;
 use opte::engine::ip::ValidL3;
 use opte::engine::ip::L3;
 use opte::engine::packet::InnerFlowId;
+use opte::engine::packet::MismatchError;
 use opte::engine::parse::ValidUlp;
 use opte::engine::port::ProcessError;
 use opte::engine::tcp::TcpState;
@@ -1822,44 +1823,46 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
     unpack_and_verify_icmp(&mut pkt5_m, &g1_cfg, &new_params, Out, seq_no);
 }
 
-// TODO(kyle)
-// #[test]
-// fn bad_ip_len() {
-//     let cfg = lab_cfg();
+#[test]
+fn bad_ip_len() {
+    let cfg = lab_cfg();
 
-//     let eth = EtherMeta {
-//         src: cfg.guest_mac,
-//         dst: MacAddr::BROADCAST,
-//         ether_type: EtherType::Ipv4,
-//     };
+    let eth = Ethernet {
+        destination: MacAddr::BROADCAST,
+        source: cfg.guest_mac,
+        ethertype: Ethertype::IPV4,
+    };
 
-//     let ip = Ipv4Meta {
-//         src: "0.0.0.0".parse().unwrap(),
-//         dst: Ipv4Addr::LOCAL_BCAST,
-//         proto: Protocol::UDP,
-//         ttl: 64,
-//         ident: 1,
-//         hdr_len: 20,
-//         // We write a total legnth of 4 bytes, which is completely
-//         // bogus for an IP header and should return an error during
-//         // processing.
-//         total_len: 4,
-//         ..Default::default()
-//     };
+    let ip = Ipv4 {
+        source: "0.0.0.0".parse().unwrap(),
+        destination: Ipv4Addr::LOCAL_BCAST,
+        protocol: IngotIpProto::UDP,
+        hop_limit: 64,
+        identification: 1,
+        ihl: 5,
+        // We write a total length of 4 bytes, which is completely
+        // bogus for an IP header and should return an error during
+        // processing.
+        total_len: 4,
+        ..Default::default()
+    };
 
-//     let udp = UdpMeta { src: 68, dst: 67, ..Default::default() };
-//     let total_len = EtherHdr::SIZE + usize::from(ip.hdr_len) + udp.hdr_len();
-//     let mut pkt = Packet::alloc_and_expand(total_len);
-//     let mut wtr = pkt.seg0_wtr();
-//     eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-//     ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-//     udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
-//     let res = pkt.parse(Out, VpcParser::new());
-//     assert_eq!(
-//         res.err().unwrap(),
-//         Ipv4HdrError::BadTotalLen { total_len: 4 }.into()
-//     );
-// }
+    let udp = Udp { source: 68, destination: 67, ..Default::default() };
+
+    let mut pkt_m = MsgBlk::new_ethernet_pkt((eth, ip, udp));
+    let res = Packet::new(pkt_m.iter_mut())
+        .parse_outbound(VpcParser {})
+        .err()
+        .unwrap();
+    assert_eq!(
+        res,
+        ParseError::BadLength(MismatchError {
+            location: c"Ipv4.total_len(min)",
+            expected: 20,
+            actual: 4
+        })
+    );
+}
 
 // Verify that OPTE generates a hairpin ARP reply when the guest
 // queries for the gateway.

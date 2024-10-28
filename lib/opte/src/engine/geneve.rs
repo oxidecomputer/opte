@@ -315,17 +315,9 @@ pub fn geneve_opt_is_oxide_external<V: ByteSlice>(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::ddi::mblk::MsgBlk;
     use crate::engine::headers::EncapMeta;
-    use crate::engine::ingot_packet::Packet;
-    use crate::engine::parse::ValidGeneveOverV6;
-    use ingot::ethernet::Ethernet;
-    use ingot::ethernet::Ethertype;
-    use ingot::ip::IpProtocol;
-    use ingot::ip::Ipv6;
     use ingot::types::Emit;
     use ingot::types::HeaderParse;
-    use ingot::udp::UdpRef;
     use ingot::udp::ValidUdp;
 
     #[test]

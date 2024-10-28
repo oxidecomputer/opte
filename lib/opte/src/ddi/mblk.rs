@@ -795,7 +795,7 @@ impl Drop for MsgBlk {
 
 #[cfg(test)]
 mod test {
-    use ingot::types::PacketParseError;
+
     use ingot::types::ParseError as IngotParseError;
 
     use crate::engine::ingot_packet::Packet;

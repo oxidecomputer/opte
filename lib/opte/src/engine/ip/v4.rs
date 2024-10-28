@@ -129,6 +129,19 @@ impl<V: ByteSlice> ValidIpv4<V> {
         // our length *could* be larger than the packet reports.
         // Unlikely in practice as Encap headers push us past the 64B
         // minimum packet size.
+        let expt_internal_len = (self.ihl() as usize) << 2;
+        if (self.total_len() as usize) < expt_internal_len {
+            return Err(ParseError::BadLength(MismatchError {
+                location: c"Ipv4.total_len(min)",
+                expected: expt_internal_len as u64,
+                actual: self.total_len() as u64,
+            }));
+        }
+
+        // Packets can have arbitrary zero-padding at the end so
+        // our length *could* be larger than the packet reports.
+        // Unlikely in practice as Encap headers push us past the 64B
+        // minimum packet size.
         let expt_total_len = bytes_after + own_len;
         if expt_total_len < self.total_len() as usize {
             return Err(ParseError::BadLength(MismatchError {
@@ -185,7 +198,7 @@ pub struct Ipv4Mod {
 #[cfg(test)]
 mod test {
     use super::*;
-    use ingot::tcp::TcpFlags;
+
     use ingot::types::HeaderLen;
 
     pub const DEF_ROUTE: &str = "0.0.0.0/0";
