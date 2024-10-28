@@ -4,7 +4,7 @@
 
 // Copyright 2024 Oxide Computer Company
 
-use crate::engine::ingot_packet::QueryLen;
+use crate::engine::ingot_packet::BufferState;
 use crate::engine::packet::SegAdjustError;
 use crate::engine::packet::WrapError;
 use crate::engine::packet::WriteError;
@@ -762,7 +762,7 @@ impl<'a> Read for MsgBlkIterMut<'a> {
     }
 }
 
-impl<'a> QueryLen for MsgBlkIterMut<'a> {
+impl<'a> BufferState for MsgBlkIterMut<'a> {
     #[inline]
     fn len(&self) -> usize {
         let own_blk_len = self
@@ -774,6 +774,11 @@ impl<'a> QueryLen for MsgBlkIterMut<'a> {
             .unwrap_or_default();
 
         own_blk_len + self.next_iter().map(|v| v.len()).sum::<usize>()
+    }
+
+    #[inline]
+    fn base_ptr(&self) -> uintptr_t {
+        self.curr.map(|v| v.as_ptr() as uintptr_t).unwrap_or(0)
     }
 }
 

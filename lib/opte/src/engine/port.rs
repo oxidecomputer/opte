@@ -85,7 +85,6 @@ use core::result;
 use core::str::FromStr;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::SeqCst;
-#[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
 use ingot::geneve::Geneve;
 use ingot::tcp::TcpRef;
@@ -1225,6 +1224,7 @@ impl<N: NetworkImpl> Port<N> {
     {
         let process_start = Moment::now();
         let flow_before = pkt.flow();
+        let mblk_addr = pkt.mblk_addr();
 
         // Packet processing is split into a few mechanisms based on
         // expected speed, based on actions and the size of required metadata:
@@ -1261,8 +1261,7 @@ impl<N: NetworkImpl> Port<N> {
         check_state!(data.state, [PortState::Running])
             .map_err(|_| ProcessError::BadState(data.state))?;
 
-        // TODO: fixup types here.
-        // self.port_process_entry_probe(dir, &flow_before, epoch, &pkt);
+        self.port_process_entry_probe(dir, &flow_before, epoch, mblk_addr);
 
         let uft: Option<&Arc<FlowEntry<UftEntry<InnerFlowId>>>> = match dir {
             Direction::Out => data.uft_out.get(&flow_before),
@@ -1434,7 +1433,7 @@ impl<N: NetworkImpl> Port<N> {
                     &flow_before,
                     &flow_after,
                     epoch,
-                    // &pkt,
+                    mblk_addr,
                     &res,
                 );
                 return res;
@@ -1446,9 +1445,6 @@ impl<N: NetworkImpl> Port<N> {
         // (2)/(3) Full-fat metadata is required.
         let mut pkt = pkt.to_full_meta();
         let mut ameta = ActionMeta::new();
-
-        // TODO: remove/convert to a slopath indicator?
-        self.port_process_entry_probe(dir, &flow_before, epoch, &pkt);
 
         let res = match (&decision, dir) {
             // (2) Apply retrieved transform. Lock is dropped.
@@ -1530,7 +1526,7 @@ impl<N: NetworkImpl> Port<N> {
             &flow_before,
             &flow_after,
             epoch,
-            // &pkt,
+            mblk_addr,
             &res,
         );
         res
@@ -1971,12 +1967,13 @@ impl<N: NetworkImpl> Port<N> {
         Ok(LayerResult::Allow)
     }
 
+    #[inline]
     fn port_process_entry_probe(
         &self,
         dir: Direction,
         flow: &InnerFlowId,
         epoch: u64,
-        pkt: &Packet<MblkFullParsed>,
+        mblk_addr: uintptr_t,
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -1986,16 +1983,16 @@ impl<N: NetworkImpl> Port<N> {
                         self.name_cstr.as_ptr() as uintptr_t,
                         flow,
                         epoch as uintptr_t,
-                        pkt.mblk_addr(),
+                        mblk_addr,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
                 let flow_s = flow.to_string();
                 crate::opte_provider::port__process__entry!(
-                    || (dir, &self.name, flow_s, epoch, pkt.mblk_addr())
+                    || (dir, &self.name, flow_s, epoch, mblk_addr)
                 );
             } else {
-                let (..) = (dir, flow, epoch, pkt);
+                let (..) = (dir, flow, epoch, mblk_addr);
             }
         }
     }
@@ -2007,12 +2004,9 @@ impl<N: NetworkImpl> Port<N> {
         flow_before: &InnerFlowId,
         flow_after: &InnerFlowId,
         epoch: u64,
-        // pkt: &Packet2<ParsedMblk>,
+        mblk_addr: uintptr_t,
         res: &result::Result<ProcessResult, ProcessError>,
     ) {
-        // let flow_after = pkt.flow();
-        let mblk_addr = 0; // TODO.
-
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
 
@@ -2080,7 +2074,7 @@ impl<N: NetworkImpl> Port<N> {
                     )
                 );
             } else {
-                let (..) = (dir, flow_before, flow_after, epoch, /*pkt,*/ res);
+                let (..) = (dir, flow_before, flow_after, epoch, mblk_addr, res);
             }
         }
     }

@@ -674,17 +674,16 @@ pub struct Packet<S: PacketState> {
     state: S,
 }
 
-impl<T: Read + QueryLen> Packet<Initialized2<T>> {
+impl<T: Read + BufferState> Packet<Initialized<T>> {
     pub fn new(pkt: T) -> Self
     where
-        Initialized2<T>: PacketState,
+        Initialized<T>: PacketState,
     {
-        let len = pkt.len();
-        Self { state: Initialized2 { len, inner: pkt } }
+        Self { state: Initialized { inner: pkt } }
     }
 }
 
-impl<'a, T: Read + 'a> Packet<Initialized2<T>>
+impl<'a, T: Read + BufferState + 'a> Packet<Initialized<T>>
 where
     T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut,
 {
@@ -692,7 +691,12 @@ where
 
     #[inline]
     pub fn len(&self) -> usize {
-        self.state.len
+        self.state.inner.len()
+    }
+
+    #[inline]
+    pub fn mblk_addr(&self) -> uintptr_t {
+        self.state.inner.base_ptr()
     }
 
     #[inline]
@@ -700,12 +704,14 @@ where
         self,
         net: NP,
     ) -> Result<Packet<LiteParsed<T, NP::InMeta<T::Chunk>>>, ParseError> {
-        let Packet { state: Initialized2 { len, inner } } = self;
+        let len = self.len();
+        let base_ptr = self.mblk_addr();
+        let Packet { state: Initialized { inner } } = self;
 
         let meta = net.parse_inbound(inner)?;
         meta.stack.validate(len)?;
 
-        Ok(Packet { state: LiteParsed { meta, len } })
+        Ok(Packet { state: LiteParsed { meta, base_ptr, len } })
     }
 
     #[inline]
@@ -713,12 +719,14 @@ where
         self,
         net: NP,
     ) -> Result<Packet<LiteParsed<T, NP::OutMeta<T::Chunk>>>, ParseError> {
-        let Packet { state: Initialized2 { len, inner } } = self;
+        let len = self.len();
+        let base_ptr = self.mblk_addr();
+        let Packet { state: Initialized { inner } } = self;
 
         let meta = net.parse_outbound(inner)?;
         meta.stack.validate(len)?;
 
-        Ok(Packet { state: LiteParsed { meta, len } })
+        Ok(Packet { state: LiteParsed { meta, base_ptr, len } })
     }
 }
 
@@ -728,7 +736,7 @@ where
 {
     #[inline]
     pub fn to_full_meta(self) -> Packet<FullParsed<T>> {
-        let Packet { state: LiteParsed { len, meta } } = self;
+        let Packet { state: LiteParsed { len, base_ptr, meta } } = self;
         let IngotParsed { stack: headers, data, last_chunk } = meta;
 
         // TODO: we can probably not do this in some cases, but we
@@ -760,6 +768,7 @@ where
                 meta,
                 flow,
                 body_csum,
+                base_ptr,
                 l4_hash: Memoised::Uninit,
                 body_modified: false,
                 len,
@@ -781,6 +790,11 @@ where
     #[inline]
     pub fn len(&self) -> usize {
         self.state.len
+    }
+
+    #[inline]
+    pub fn mblk_addr(&self) -> uintptr_t {
+        self.state.base_ptr
     }
 
     #[inline]
@@ -1099,9 +1113,9 @@ impl<T: Read> Packet<FullParsed<T>> {
         }
     }
 
+    #[inline]
     pub fn mblk_addr(&self) -> uintptr_t {
-        // TODO.
-        0
+        self.state.base_ptr
     }
 
     /// Compute ULP and IP header checksum from scratch.
@@ -1319,16 +1333,11 @@ impl<T: Read> Packet<FullParsed<T>> {
 /// The type state of a packet that has been initialized and allocated, but
 /// about which nothing else is known besides the length.
 #[derive(Debug)]
-pub struct Initialized2<T: Read> {
-    /// Total length of packet, in bytes. This is equal to the sum of
-    /// the length of the _initialized_ window in all the segments
-    /// (`b_wptr - b_rptr`).
-    len: usize,
-
+pub struct Initialized<T: Read> {
     inner: T,
 }
 
-impl<T: Read> PacketState for Initialized2<T> {}
+impl<T: Read> PacketState for Initialized<T> {}
 impl<T: Read> PacketState for FullParsed<T> {}
 
 /// Zerocopy view onto a parsed packet, accompanied by locally
@@ -1338,6 +1347,9 @@ pub struct FullParsed<T: Read> {
     /// the length of the _initialized_ window in all the segments
     /// (`b_wptr - b_rptr`).
     len: usize,
+    /// Base pointer of the contained T, used in dtrace SDTs and the like
+    /// for correlation and inspection of packet events.
+    base_ptr: uintptr_t,
     /// Access to parsed packet headers and the packet body.
     meta: Box<PacketData<T>>,
     /// Current Flow ID of this packet, accountgin for any applied
@@ -1373,7 +1385,13 @@ pub struct FullParsed<T: Read> {
 /// Minimum-size zerocopy view onto a parsed packet, sufficient for fast
 /// packet transformation.
 pub struct LiteParsed<T: Read, M: LightweightMeta<T::Chunk>> {
+    /// Total length of packet, in bytes. This is equal to the sum of
+    /// the length of the _initialized_ window in all the segments
+    /// (`b_wptr - b_rptr`).
     len: usize,
+    /// Base pointer of the contained T, used in dtrace SDTs and the like
+    /// for correlation and inspection of packet events.
+    base_ptr: uintptr_t,
     meta: IngotParsed<M, T>,
 }
 
@@ -1388,8 +1406,9 @@ pub type MblkPacketData<'a> = PacketData<MsgBlkIterMut<'a>>;
 pub type MblkFullParsed<'a> = FullParsed<MsgBlkIterMut<'a>>;
 pub type MblkLiteParsed<'a, M> = LiteParsed<MsgBlkIterMut<'a>, M>;
 
-pub trait QueryLen {
+pub trait BufferState {
     fn len(&self) -> usize;
+    fn base_ptr(&self) -> uintptr_t;
 }
 
 // TODO: don't really care about pushing 'inner' reprs today.
