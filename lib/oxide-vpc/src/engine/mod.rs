@@ -21,7 +21,6 @@ use opte::engine::arp::ARP_HTYPE_ETHERNET;
 use opte::engine::ether::EthernetRef;
 use opte::engine::flow_table::FlowTable;
 use opte::engine::ingot_packet::FullParsed;
-use opte::engine::ingot_packet::OpteParsed2;
 use opte::engine::ingot_packet::Packet;
 use opte::engine::ip::v4::Ipv4Addr;
 use opte::engine::packet::InnerFlowId;
@@ -36,6 +35,7 @@ use opte::engine::NetworkImpl;
 use opte::engine::NetworkParser;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::types::HeaderParse;
+use opte::ingot::types::Parsed as IngotParsed;
 use opte::ingot::types::Read;
 use zerocopy::ByteSliceMut;
 
@@ -129,7 +129,7 @@ impl NetworkParser for VpcParser {
     fn parse_outbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed2<T, Self::OutMeta<T::Chunk>>, ParseError>
+    ) -> Result<IngotParsed<Self::OutMeta<T::Chunk>, T>, ParseError>
     where
         T::Chunk: opte::ingot::types::IntoBufPointer<'a> + ByteSliceMut,
     {
@@ -140,7 +140,7 @@ impl NetworkParser for VpcParser {
     fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed2<T, Self::InMeta<T::Chunk>>, ParseError>
+    ) -> Result<IngotParsed<Self::InMeta<T::Chunk>, T>, ParseError>
     where
         T::Chunk: opte::ingot::types::IntoBufPointer<'a> + ByteSliceMut,
     {

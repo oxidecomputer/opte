@@ -14,9 +14,12 @@ use crate::engine::ip::v4::Ipv4;
 use crate::engine::ip::L3;
 use crate::engine::predicate::Ipv4AddrMatch;
 use ingot::ethernet::Ethertype;
+use ingot::icmp::IcmpV4Packet;
+use ingot::icmp::IcmpV4Ref;
 use ingot::ip::IpProtocol;
 use ingot::types::Emit;
 use ingot::types::HeaderLen;
+use ingot::types::HeaderParse;
 pub use opte_api::ip::IcmpEchoReply;
 use smoltcp::wire;
 use smoltcp::wire::Icmpv4Packet;
@@ -170,5 +173,19 @@ impl From<u8> for MessageType {
 impl Display for MessageType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.inner)
+    }
+}
+
+impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
+    #[inline]
+    fn echo_id(&self) -> Option<u16> {
+        match (self.code(), self.ty()) {
+            (0, 0) | (0, 8) => {
+                ValidIcmpEcho::parse(self.rest_of_hdr_ref().as_slice())
+                    .ok()
+                    .map(|(v, ..)| v.id())
+            }
+            _ => None,
+        }
     }
 }

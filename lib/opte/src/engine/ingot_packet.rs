@@ -5,39 +5,19 @@
 // Copyright 2024 Oxide Computer Company
 
 use super::checksum::Checksum;
-use super::ether::EtherMeta;
-use super::ether::EtherMod;
 use super::ether::Ethernet;
-use super::ether::EthernetMut;
 use super::ether::EthernetPacket;
 use super::ether::ValidEthernet;
-use super::geneve::OxideOption;
-use super::geneve::GENEVE_OPT_CLASS_OXIDE;
-use super::geneve::GENEVE_PORT;
 use super::headers::EncapMeta;
-use super::headers::EncapMod;
 use super::headers::EncapPush;
-use super::headers::HasInnerCksum;
-use super::headers::HeaderActionError;
-use super::headers::HeaderActionModify;
-use super::headers::IpMod;
 use super::headers::IpPush;
-use super::headers::PushAction;
-use super::headers::UlpMetaModify;
-use super::icmp::IcmpEchoMut;
-use super::icmp::IcmpEchoRef;
-use super::icmp::QueryEcho;
-use super::icmp::ValidIcmpEcho;
-use super::ip::v4::Ipv4;
-use super::ip::v4::Ipv4Mut;
+use super::headers::SizeHoldingEncap;
+use super::headers::ValidEncapMeta;
 use super::ip::v4::Ipv4Packet;
 use super::ip::v4::Ipv4Ref;
-use super::ip::v6::Ipv6;
-use super::ip::v6::Ipv6Mut;
 use super::ip::v6::Ipv6Packet;
 use super::ip::v6::Ipv6Ref;
 use super::ip::L3Repr;
-use super::ip::ValidL3;
 use super::ip::L3;
 use super::packet::AddrPair;
 use super::packet::BodyTransform;
@@ -69,41 +49,29 @@ use core::ops::Deref;
 use core::ops::DerefMut;
 use core::sync::atomic::AtomicPtr;
 use illumos_sys_hdrs::uintptr_t;
-use ingot::ethernet::Ethertype;
-use ingot::geneve::Geneve;
-use ingot::geneve::GeneveMut;
-use ingot::geneve::GeneveOpt;
-use ingot::geneve::GeneveOptionType;
 use ingot::geneve::GeneveRef;
-use ingot::geneve::ValidGeneve;
 use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Packet;
 use ingot::icmp::IcmpV4Ref;
 use ingot::icmp::IcmpV6Mut;
 use ingot::icmp::IcmpV6Packet;
 use ingot::icmp::IcmpV6Ref;
-use ingot::ip::IpProtocol;
-use ingot::ip::Ipv4Flags;
-use ingot::tcp::TcpFlags;
 use ingot::tcp::TcpMut;
 use ingot::tcp::TcpPacket;
 use ingot::tcp::TcpRef;
-use ingot::types::util::Repeated;
 use ingot::types::BoxedHeader;
 use ingot::types::Emit;
-use ingot::types::Header as IngotHeader;
+use ingot::types::Header;
 use ingot::types::HeaderLen;
-use ingot::types::HeaderParse;
 use ingot::types::InlineHeader;
+use ingot::types::IntoBufPointer;
 use ingot::types::NextLayer;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
 use ingot::types::ToOwnedPacket;
-use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use ingot::udp::UdpPacket;
 use ingot::udp::UdpRef;
-use ingot::udp::ValidUdp;
 use opte_api::Direction;
 use opte_api::Ipv6Addr;
 use opte_api::Vni;
@@ -111,7 +79,7 @@ use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 use zerocopy::IntoBytes;
 
-pub struct OpteUnifiedLengths {
+pub struct InitialLayerLens {
     pub outer_eth: usize,
     pub outer_l3: usize,
     pub outer_encap: usize,
@@ -121,7 +89,7 @@ pub struct OpteUnifiedLengths {
     pub inner_ulp: usize,
 }
 
-impl OpteUnifiedLengths {
+impl InitialLayerLens {
     #[inline]
     pub fn hdr_len(&self) -> usize {
         self.outer_eth
@@ -133,10 +101,8 @@ impl OpteUnifiedLengths {
     }
 }
 
-pub enum ValidEncapMeta<B: ByteSlice> {
-    Geneve(ValidUdp<B>, ValidGeneve<B>),
-}
-
+/// Full metadata representation for a packet entering the standard ULP
+/// path, or a full table walk over the slowpath.
 pub struct OpteMeta<T: ByteSlice> {
     pub outer_eth: Option<InlineHeader<Ethernet, ValidEthernet<T>>>,
     pub outer_l3: Option<L3<T>>,
@@ -147,147 +113,13 @@ pub struct OpteMeta<T: ByteSlice> {
     pub inner_ulp: Option<Ulp<T>>,
 }
 
-pub type OpteParsed<T> = IngotParsed<OpteMeta<<T as Read>::Chunk>, T>;
-pub type OpteParsed2<T, M> = IngotParsed<M, T>;
-
-impl<T: ByteSlice> OpteMeta<T> {
-    #[inline]
-    pub fn convert_ingot<U: Into<Self>, Q: Read<Chunk = T>>(
-        value: IngotParsed<U, Q>,
-    ) -> OpteParsed<Q> {
-        let IngotParsed { stack: headers, data, last_chunk } = value;
-
-        IngotParsed { stack: headers.into(), data, last_chunk }
-    }
-}
-
-struct SizeHoldingEncap<'a> {
-    encapped_len: u16,
-    meta: &'a EncapMeta,
-}
-
-unsafe impl<'a> ingot::types::EmitDoesNotRelyOnBufContents
-    for SizeHoldingEncap<'a>
-{
-}
-
-impl<'a> HeaderLen for SizeHoldingEncap<'a> {
-    const MINIMUM_LENGTH: usize = EncapMeta::MINIMUM_LENGTH;
-
-    #[inline]
-    fn packet_length(&self) -> usize {
-        self.meta.packet_length()
-    }
-}
-
-impl<'a> Emit for SizeHoldingEncap<'a> {
-    #[inline]
-    fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
-        match self.meta {
-            EncapMeta::Geneve(g) => {
-                let mut opts = vec![];
-
-                if g.oxide_external_pkt {
-                    opts.push(GeneveOpt {
-                        class: GENEVE_OPT_CLASS_OXIDE,
-                        option_type: GeneveOptionType(
-                            OxideOption::External.opt_type(),
-                        ),
-                        ..Default::default()
-                    });
-                }
-
-                let options = Repeated::new(opts);
-                let opt_len_unscaled = options.packet_length();
-                let opt_len = (opt_len_unscaled >> 2) as u8;
-
-                let geneve = Geneve {
-                    protocol_type: Ethertype::ETHERNET,
-                    vni: g.vni,
-                    opt_len,
-                    options,
-                    ..Default::default()
-                };
-
-                let length = self.encapped_len
-                    + (Udp::MINIMUM_LENGTH + geneve.packet_length()) as u16;
-
-                (
-                    Udp {
-                        source: g.entropy,
-                        destination: GENEVE_PORT,
-                        length,
-                        ..Default::default()
-                    },
-                    &geneve,
-                )
-                    .emit_raw(buf)
-            }
-        }
-    }
-
-    #[inline]
-    fn needs_emit(&self) -> bool {
-        true
-    }
-}
-
-impl Emit for EncapMeta {
-    #[inline]
-    fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
-        SizeHoldingEncap { encapped_len: 0, meta: self }.emit_raw(buf)
-    }
-
-    #[inline]
-    fn needs_emit(&self) -> bool {
-        true
-    }
-}
-
-impl<B: ByteSliceMut> Emit for ValidEncapMeta<B> {
-    #[inline]
-    fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
-        match self {
-            ValidEncapMeta::Geneve(u, g) => (u, g).emit_raw(buf),
-        }
-    }
-
-    #[inline]
-    fn needs_emit(&self) -> bool {
-        match self {
-            ValidEncapMeta::Geneve(u, g) => u.needs_emit() && g.needs_emit(),
-        }
-    }
-}
-
-impl HeaderLen for EncapMeta {
-    const MINIMUM_LENGTH: usize = Udp::MINIMUM_LENGTH + Geneve::MINIMUM_LENGTH;
-
-    #[inline]
-    fn packet_length(&self) -> usize {
-        match self {
-            EncapMeta::Geneve(g) => {
-                Self::MINIMUM_LENGTH
-                    + g.oxide_external_pkt.then_some(4).unwrap_or_default()
-            }
-        }
-    }
-}
-
-impl<B: ByteSlice> HeaderLen for ValidEncapMeta<B> {
-    const MINIMUM_LENGTH: usize = Udp::MINIMUM_LENGTH + Geneve::MINIMUM_LENGTH;
-
-    #[inline]
-    fn packet_length(&self) -> usize {
-        match self {
-            ValidEncapMeta::Geneve(u, g) => {
-                u.packet_length() + g.packet_length()
-            }
-        }
-    }
-}
-
-// This really needs a rethink, but also I just need to get this working...
+/// Helper for reusing access to all packet body segments.
+///
+/// This is necessary because `MsgBlk`s in particular do not
+/// allow us to walk backward within a packet -- if we need them,
+/// then we need to save them out for all future uses.
+/// The other part is that the majority of packets (ULP hits)
+/// do not want to interact with body segments at all.
 struct PktBodyWalker<T: Read> {
     base: Cell<Option<(Option<T::Chunk>, T)>>,
     slice: AtomicPtr<Box<[(*mut u8, usize)]>>,
@@ -320,7 +152,7 @@ impl<T: Read> PktBodyWalker<T> {
             // The next question is one of ownership.
             // We know that these chunks are at least &[u8]s, they
             // *will* be exclusive if ByteSliceMut is met (because they are
-            // sourced from an exclusive borrow on something which ownas a [u8]).
+            // sourced from an exclusive borrow on something which owns a [u8]).
             // This allows us to cast to &mut later, but not here!
             let mut to_hold = vec![];
             if let Some(ref mut chunk) = first {
@@ -365,7 +197,6 @@ impl<T: Read> PktBodyWalker<T> {
         }
         assert!(!slice_ptr.is_null());
 
-        // let use_ref: &[_] = &b;
         unsafe {
             let a = (&*(*slice_ptr)) as *const _;
             core::mem::transmute(a)
@@ -395,9 +226,10 @@ impl<T: Read> PktBodyWalker<T> {
     }
 }
 
+/// Packet state for the standard ULP path, or a full table walk over the slowpath.
 pub struct PacketData<T: Read> {
     pub(crate) headers: OpteMeta<T::Chunk>,
-    initial_lens: Option<Box<OpteUnifiedLengths>>,
+    initial_lens: Option<Box<InitialLayerLens>>,
     body: PktBodyWalker<T>,
 }
 
@@ -421,24 +253,8 @@ impl<T: Read> core::fmt::Debug for PacketData<T> {
     }
 }
 
-pub fn ulp_src_port<B: ByteSlice>(pkt: &Ulp<B>) -> Option<u16> {
-    match pkt {
-        Ulp::Tcp(t) => Some(t.source()),
-        Ulp::Udp(t) => Some(t.source()),
-        _ => None,
-    }
-}
-
-pub fn ulp_dst_port<B: ByteSlice>(pkt: &Ulp<B>) -> Option<u16> {
-    match pkt {
-        Ulp::Tcp(t) => Some(t.destination()),
-        Ulp::Udp(t) => Some(t.destination()),
-        _ => None,
-    }
-}
-
 impl<T: Read> PacketData<T> {
-    pub fn initial_lens(&self) -> Option<&OpteUnifiedLengths> {
+    pub fn initial_lens(&self) -> Option<&InitialLayerLens> {
         self.initial_lens.as_ref().map(|v| &**v)
     }
 
@@ -452,7 +268,6 @@ impl<T: Read> PacketData<T> {
         self.headers.outer_l3.as_ref()
     }
 
-    // Need to expose this a lil cleaner...
     /// Returns whether this packet is sourced from outside the rack,
     /// in addition to its VNI.
     pub fn outer_encap_geneve_vni_and_origin(&self) -> Option<(Vni, bool)> {
@@ -464,15 +279,6 @@ impl<T: Read> PacketData<T> {
                 Some((g.vni(), valid_geneve_has_oxide_external(&g)))
             }
             None => None,
-        }
-    }
-
-    // Again: really need to make Owned/Direct choices better-served by ingot.
-    // this interface sucks.
-    pub fn outer_ip6_addrs(&self) -> Option<(Ipv6Addr, Ipv6Addr)> {
-        match &self.headers.outer_l3 {
-            Some(L3::Ipv6(v6)) => Some((v6.source(), v6.destination())),
-            _ => None,
         }
     }
 
@@ -541,7 +347,6 @@ impl<T: Read> PacketData<T> {
         self.body.body_segs()
     }
 
-    // right place for this to live? Or is `meta()` misnamed?
     pub fn copy_remaining(&self) -> Vec<u8>
     where
         T::Chunk: ByteSliceMut,
@@ -685,10 +490,8 @@ impl<T: Read + BufferState> Packet<Initialized<T>> {
 
 impl<'a, T: Read + BufferState + 'a> Packet<Initialized<T>>
 where
-    T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut,
+    T::Chunk: IntoBufPointer<'a> + ByteSliceMut,
 {
-    // TODO: cleanup type aliases.
-
     #[inline]
     pub fn len(&self) -> usize {
         self.state.inner.len()
@@ -732,7 +535,7 @@ where
 
 impl<'a, T: Read + 'a, M: LightweightMeta<T::Chunk>> Packet<LiteParsed<T, M>>
 where
-    T::Chunk: ingot::types::IntoBufPointer<'a>,
+    T::Chunk: IntoBufPointer<'a>,
 {
     #[inline]
     pub fn to_full_meta(self) -> Packet<FullParsed<T>> {
@@ -747,7 +550,7 @@ where
 
         let headers: OpteMeta<_> = headers.into();
         let initial_lens = Some(
-            OpteUnifiedLengths {
+            InitialLayerLens {
                 outer_eth: headers.outer_eth.packet_length(),
                 outer_l3: headers.outer_l3.packet_length(),
                 outer_encap: headers.outer_encap.packet_length(),
@@ -819,7 +622,7 @@ impl<T: Read> Packet<FullParsed<T>> {
     #[inline]
     /// Convert a packet's metadata into a set of instructions
     /// needed to serialize all its changes to the wire.
-    pub fn emit_spec(self) -> Result<OldEmitSpec, ingot::types::ParseError>
+    pub fn emit_spec(mut self) -> Result<EmitSpec, ingot::types::ParseError>
     where
         T::Chunk: ByteSliceMut,
     {
@@ -829,6 +632,7 @@ impl<T: Read> Packet<FullParsed<T>> {
         //   extant fields we rewound past.
         // - Rewind up to+including that point in original
         //   pkt space.
+        let l4_hash = self.l4_hash();
         let state = self.state;
         let init_lens = state.meta.initial_lens.unwrap();
         let headers = state.meta.headers;
@@ -846,8 +650,6 @@ impl<T: Read> Packet<FullParsed<T>> {
         // do this sort of thing. We are so, so far from that...
         let mut force_serialize = false;
 
-        use ingot::types::InlineHeader;
-
         match headers.inner_ulp {
             Some(ulp) => {
                 let l = ulp.packet_length();
@@ -858,24 +660,16 @@ impl<T: Read> Packet<FullParsed<T>> {
                         push_spec.inner.get_or_insert_with(Default::default);
 
                     inner.ulp = Some(match ulp {
-                        Ulp::Tcp(IngotHeader::Repr(t)) => UlpRepr::Tcp(*t),
-                        Ulp::Tcp(IngotHeader::Raw(t)) => {
-                            UlpRepr::Tcp((&t).into())
-                        }
-                        Ulp::Udp(IngotHeader::Repr(t)) => UlpRepr::Udp(*t),
-                        Ulp::Udp(IngotHeader::Raw(t)) => {
-                            UlpRepr::Udp((&t).into())
-                        }
-                        Ulp::IcmpV4(IngotHeader::Repr(t)) => {
-                            UlpRepr::IcmpV4(*t)
-                        }
-                        Ulp::IcmpV4(IngotHeader::Raw(t)) => {
+                        Ulp::Tcp(Header::Repr(t)) => UlpRepr::Tcp(*t),
+                        Ulp::Tcp(Header::Raw(t)) => UlpRepr::Tcp((&t).into()),
+                        Ulp::Udp(Header::Repr(t)) => UlpRepr::Udp(*t),
+                        Ulp::Udp(Header::Raw(t)) => UlpRepr::Udp((&t).into()),
+                        Ulp::IcmpV4(Header::Repr(t)) => UlpRepr::IcmpV4(*t),
+                        Ulp::IcmpV4(Header::Raw(t)) => {
                             UlpRepr::IcmpV4((&t).into())
                         }
-                        Ulp::IcmpV6(IngotHeader::Repr(t)) => {
-                            UlpRepr::IcmpV6(*t)
-                        }
-                        Ulp::IcmpV6(IngotHeader::Raw(t)) => {
+                        Ulp::IcmpV6(Header::Repr(t)) => UlpRepr::IcmpV6(*t),
+                        Ulp::IcmpV6(Header::Raw(t)) => {
                             UlpRepr::IcmpV6((&t).into())
                         }
                     });
@@ -901,15 +695,13 @@ impl<T: Read> Packet<FullParsed<T>> {
                         push_spec.inner.get_or_insert_with(Default::default);
 
                     inner.l3 = Some(match l3 {
-                        L3::Ipv4(IngotHeader::Repr(v4)) => L3Repr::Ipv4(*v4),
-                        L3::Ipv4(IngotHeader::Raw(v4)) => {
-                            L3Repr::Ipv4((&v4).into())
-                        }
-                        L3::Ipv6(IngotHeader::Repr(v6)) => L3Repr::Ipv6(*v6),
+                        L3::Ipv4(Header::Repr(v4)) => L3Repr::Ipv4(*v4),
+                        L3::Ipv4(Header::Raw(v4)) => L3Repr::Ipv4((&v4).into()),
+                        L3::Ipv6(Header::Repr(v6)) => L3Repr::Ipv6(*v6),
 
                         // We can't actually do structural mods here today using OPTE,
                         // but account for the possibiliry at least.
-                        L3::Ipv6(IngotHeader::Raw(v6)) => {
+                        L3::Ipv6(Header::Raw(v6)) => {
                             L3Repr::Ipv6(v6.to_owned(None)?)
                         }
                     });
@@ -929,8 +721,8 @@ impl<T: Read> Packet<FullParsed<T>> {
         if force_serialize {
             let inner = push_spec.inner.get_or_insert_with(Default::default);
             inner.eth = match headers.inner_eth {
-                IngotHeader::Repr(p) => *p,
-                IngotHeader::Raw(p) => (&p).into(),
+                Header::Repr(p) => *p,
+                Header::Raw(p) => (&p).into(),
             };
             rewind += init_lens.inner_eth;
         }
@@ -1022,11 +814,11 @@ impl<T: Read> Packet<FullParsed<T>> {
             _ => {}
         }
 
-        Ok(OldEmitSpec {
+        Ok(EmitSpec {
             rewind: rewind as u16,
-            payload_len: payload_len as u16,
-            encapped_len: encapped_len as u16,
-            push_spec,
+            ulp_len: encapped_len as u32,
+            prepend: PushSpec::Slowpath(push_spec.into()),
+            l4_hash,
         })
     }
 
@@ -1163,18 +955,18 @@ impl<T: Read> Packet<FullParsed<T>> {
                 Ulp::Tcp(tcp) => {
                     tcp.set_checksum(0);
                     match tcp {
-                        IngotHeader::Repr(tcp) => {
+                        Header::Repr(tcp) => {
                             let mut bytes = [0u8; 56];
                             tcp.emit_raw(&mut bytes[..]);
                             csum.add_bytes(&bytes[..]);
                         }
-                        IngotHeader::Raw(tcp) => {
+                        Header::Raw(tcp) => {
                             csum.add_bytes(tcp.0.as_bytes());
                             match &tcp.1 {
-                                IngotHeader::Repr(opts) => {
+                                Header::Repr(opts) => {
                                     csum.add_bytes(&*opts);
                                 }
-                                IngotHeader::Raw(opts) => {
+                                Header::Raw(opts) => {
                                     csum.add_bytes(&*opts);
                                 }
                             }
@@ -1185,12 +977,12 @@ impl<T: Read> Packet<FullParsed<T>> {
                 Ulp::Udp(udp) => {
                     udp.set_checksum(0);
                     match udp {
-                        IngotHeader::Repr(udp) => {
+                        Header::Repr(udp) => {
                             let mut bytes = [0u8; 8];
                             udp.emit_raw(&mut bytes[..]);
                             csum.add_bytes(&bytes[..]);
                         }
-                        IngotHeader::Raw(udp) => {
+                        Header::Raw(udp) => {
                             csum.add_bytes(udp.0.as_bytes());
                         }
                     }
@@ -1285,18 +1077,18 @@ impl<T: Read> Packet<FullParsed<T>> {
                 Ulp::Tcp(tcp) => {
                     tcp.set_checksum(0);
                     match tcp {
-                        IngotHeader::Repr(tcp) => {
+                        Header::Repr(tcp) => {
                             let mut bytes = [0u8; 56];
                             tcp.emit_raw(&mut bytes[..]);
                             csum.add_bytes(&bytes[..]);
                         }
-                        IngotHeader::Raw(tcp) => {
+                        Header::Raw(tcp) => {
                             csum.add_bytes(tcp.0.as_bytes());
                             match &tcp.1 {
-                                IngotHeader::Repr(opts) => {
+                                Header::Repr(opts) => {
                                     csum.add_bytes(&*opts);
                                 }
-                                IngotHeader::Raw(opts) => {
+                                Header::Raw(opts) => {
                                     csum.add_bytes(&*opts);
                                 }
                             }
@@ -1307,12 +1099,12 @@ impl<T: Read> Packet<FullParsed<T>> {
                 Ulp::Udp(udp) => {
                     udp.set_checksum(0);
                     match udp {
-                        IngotHeader::Repr(udp) => {
+                        Header::Repr(udp) => {
                             let mut bytes = [0u8; 8];
                             udp.emit_raw(&mut bytes[..]);
                             csum.add_bytes(&bytes[..]);
                         }
-                        IngotHeader::Raw(udp) => {
+                        Header::Raw(udp) => {
                             csum.add_bytes(udp.0.as_bytes());
                         }
                     }
@@ -1399,7 +1191,7 @@ impl<T: Read, M: LightweightMeta<T::Chunk>> PacketState for LiteParsed<T, M> {}
 
 impl<T: Read, M: LightweightMeta<T::Chunk>> LiteParsed<T, M> {}
 
-// XXX: Needed for now to account for not wanting to redesign
+// These are needed for now to account for not wanting to redesign
 // ActionDescs to be generic over T (trait object safety rules, etc.),
 // in addition to needing to rework Hairpin actions.
 pub type MblkPacketData<'a> = PacketData<MsgBlkIterMut<'a>>;
@@ -1411,7 +1203,7 @@ pub trait BufferState {
     fn base_ptr(&self) -> uintptr_t;
 }
 
-// TODO: don't really care about pushing 'inner' reprs today.
+/// A set of headers to be emitted at the head of a packet.
 #[derive(Clone, Debug, Default)]
 pub struct OpteEmit {
     outer_eth: Option<Ethernet>,
@@ -1419,10 +1211,11 @@ pub struct OpteEmit {
     outer_encap: Option<EncapMeta>,
 
     // We can (but do not often) push/pop inner meta.
-    // Splitting minimises struct size in the general case.
+    // Splitting via Box minimises struct size in the general case.
     inner: Option<Box<OpteInnerEmit>>,
 }
 
+/// Inner headers needing completely rewritten/emitted in a packet.
 #[derive(Clone, Debug, Default)]
 pub struct OpteInnerEmit {
     eth: Ethernet,
@@ -1430,6 +1223,11 @@ pub struct OpteInnerEmit {
     ulp: Option<UlpRepr>,
 }
 
+/// A specification of how a packet should be modified to finish processing,
+/// after existing fields have been updated.
+///
+/// This will add and/or remove several layers from the underlying `MsgBlk`,
+/// and can be queried for routing specific info (access to new encap, l4 hash).
 #[derive(Clone, Debug)]
 pub struct EmitSpec {
     pub(crate) prepend: PushSpec,
@@ -1445,12 +1243,15 @@ impl Default for EmitSpec {
 }
 
 impl EmitSpec {
+    /// Return the L4 hash of the inner flow, used for multipath selection.
     #[inline]
     #[must_use]
     pub fn l4_hash(&self) -> u32 {
         self.l4_hash
     }
 
+    /// Perform final structural transformations to a packet (removal of
+    /// existing headers, and copying in new/replacement headers).
     #[inline]
     #[must_use]
     pub fn apply(&self, mut pkt: MsgBlk) -> MsgBlk {
@@ -1588,6 +1389,7 @@ impl EmitSpec {
         out
     }
 
+    /// Returns the Geneve VNI when this spec pushes Geneve encapsulation.
     #[inline]
     pub fn outer_encap_vni(&self) -> Option<Vni> {
         match &self.prepend {
@@ -1605,6 +1407,7 @@ impl EmitSpec {
         }
     }
 
+    /// Returns the outer IPv6 src/dst when this spec pushes Geneve encapsulation.
     #[inline]
     pub fn outer_ip6_addrs(&self) -> Option<(Ipv6Addr, Ipv6Addr)> {
         match &self.prepend {
@@ -1623,19 +1426,17 @@ impl EmitSpec {
     }
 }
 
+/// Specification of additional header layers to push at the head of a packet.
 #[derive(Clone, Debug)]
 pub enum PushSpec {
+    /// Bytes to prepend to packet which have been serialised ahead of time
+    /// and can be copied in one shot.
     Fastpath(Arc<CompiledTransform>),
+    /// Full representations of each header to serialise and prepend ahead
+    /// of the current packet contents.
     Slowpath(Box<OpteEmit>),
+    /// No prepend.
     NoOp,
-}
-
-#[derive(Clone, Debug)]
-pub struct OldEmitSpec {
-    pub rewind: u16,
-    pub encapped_len: u16,
-    pub payload_len: u16,
-    pub push_spec: OpteEmit,
 }
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Default)]
@@ -1666,411 +1467,5 @@ impl<T> Memoised<T> {
     #[inline]
     pub fn set(&mut self, val: T) {
         *self = Self::Known(val);
-    }
-}
-
-impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
-    #[inline]
-    fn echo_id(&self) -> Option<u16> {
-        match (self.code(), self.ty()) {
-            (0, 0) | (0, 8) => {
-                ValidIcmpEcho::parse(self.rest_of_hdr_ref().as_slice())
-                    .ok()
-                    .map(|(v, ..)| v.id())
-            }
-            _ => None,
-        }
-    }
-}
-
-impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
-    #[inline]
-    fn echo_id(&self) -> Option<u16> {
-        match (self.code(), self.ty()) {
-            (0, 128) | (0, 129) => {
-                ValidIcmpEcho::parse(&self.rest_of_hdr_ref()[..])
-                    .ok()
-                    .map(|(v, ..)| v.id())
-            }
-            _ => None,
-        }
-    }
-}
-
-impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
-    for InlineHeader<Ethernet, ValidEthernet<T>>
-{
-    #[inline]
-    fn run_modify(
-        &mut self,
-        mod_spec: &EtherMod,
-    ) -> Result<(), HeaderActionError> {
-        match self {
-            InlineHeader::Repr(a) => {
-                if let Some(src) = mod_spec.src {
-                    a.set_source(src);
-                }
-                if let Some(dst) = mod_spec.dst {
-                    a.set_destination(dst);
-                }
-            }
-            InlineHeader::Raw(a) => {
-                if let Some(src) = mod_spec.src {
-                    a.set_source(src);
-                }
-                if let Some(dst) = mod_spec.dst {
-                    a.set_destination(dst);
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl<T: ByteSliceMut> HeaderActionModify<EtherMod> for EthernetPacket<T> {
-    #[inline]
-    fn run_modify(
-        &mut self,
-        mod_spec: &EtherMod,
-    ) -> Result<(), HeaderActionError> {
-        if let Some(src) = mod_spec.src {
-            self.set_source(src);
-        }
-        if let Some(dst) = mod_spec.dst {
-            self.set_destination(dst);
-        }
-
-        Ok(())
-    }
-}
-
-impl<T: ByteSliceMut> HeaderActionModify<IpMod>
-    for InlineHeader<L3Repr, ValidL3<T>>
-{
-    #[inline]
-    fn run_modify(
-        &mut self,
-        mod_spec: &IpMod,
-    ) -> Result<(), HeaderActionError> {
-        match mod_spec {
-            IpMod::Ip4(mods) => match self {
-                InlineHeader::Repr(L3Repr::Ipv4(v4)) => {
-                    if let Some(src) = mods.src {
-                        <Ipv4 as Ipv4Mut<T>>::set_source(v4, src);
-                    }
-                    if let Some(dst) = mods.dst {
-                        <Ipv4 as Ipv4Mut<T>>::set_destination(v4, dst);
-                    }
-                    if let Some(p) = mods.proto {
-                        <Ipv4 as Ipv4Mut<T>>::set_protocol(
-                            v4,
-                            IpProtocol(u8::from(p)),
-                        );
-                    }
-                }
-                InlineHeader::Raw(ValidL3::Ipv4(v4)) => {
-                    if let Some(src) = mods.src {
-                        v4.set_source(src);
-                    }
-                    if let Some(dst) = mods.dst {
-                        v4.set_destination(dst);
-                    }
-                    if let Some(p) = mods.proto {
-                        v4.set_protocol(IpProtocol(u8::from(p)));
-                    }
-                }
-                _ => return Err(HeaderActionError::MissingHeader),
-            },
-            IpMod::Ip6(mods) => match self {
-                InlineHeader::Repr(L3Repr::Ipv6(v6)) => {
-                    if let Some(src) = mods.src {
-                        <Ipv6 as Ipv6Mut<T>>::set_source(v6, src);
-                    }
-                    if let Some(dst) = mods.dst {
-                        <Ipv6 as Ipv6Mut<T>>::set_destination(v6, dst);
-                    }
-                    if let Some(p) = mods.proto {
-                        // TODO(kyle)
-                        // NOTE: I know this is broken for V6EHs
-                        <Ipv6 as Ipv6Mut<T>>::set_next_header(
-                            v6,
-                            IpProtocol(u8::from(p)),
-                        );
-                    }
-                }
-                InlineHeader::Raw(ValidL3::Ipv6(v6)) => {
-                    if let Some(src) = mods.src {
-                        v6.set_source(src);
-                    }
-                    if let Some(dst) = mods.dst {
-                        v6.set_destination(dst);
-                    }
-                    if let Some(p) = mods.proto {
-                        // TODO(kyle)
-                        // NOTE: I know this is broken for V6EHs
-                        v6.set_next_header(IpProtocol(u8::from(p)));
-                    }
-                }
-                _ => return Err(HeaderActionError::MissingHeader),
-            },
-        }
-
-        Ok(())
-    }
-}
-
-impl<T: ByteSliceMut> HeaderActionModify<IpMod> for L3<T> {
-    #[inline]
-    fn run_modify(
-        &mut self,
-        mod_spec: &IpMod,
-    ) -> Result<(), HeaderActionError> {
-        match (self, mod_spec) {
-            (L3::Ipv4(v4), IpMod::Ip4(mods)) => {
-                if let Some(src) = mods.src {
-                    v4.set_source(src);
-                }
-                if let Some(dst) = mods.dst {
-                    v4.set_destination(dst);
-                }
-                if let Some(p) = mods.proto {
-                    v4.set_protocol(IpProtocol(u8::from(p)));
-                }
-                Ok(())
-            }
-            (L3::Ipv6(v6), IpMod::Ip6(mods)) => {
-                if let Some(src) = mods.src {
-                    v6.set_source(src);
-                }
-                if let Some(dst) = mods.dst {
-                    v6.set_destination(dst);
-                }
-                if let Some(p) = mods.proto {
-                    // NOTE: I know this is broken for V6EHs
-                    v6.set_next_header(IpProtocol(u8::from(p)));
-                }
-                Ok(())
-            }
-            _ => Err(HeaderActionError::MissingHeader),
-        }
-    }
-}
-
-impl<T: ByteSliceMut> HeaderActionModify<UlpMetaModify> for Ulp<T> {
-    #[inline]
-    fn run_modify(
-        &mut self,
-        mod_spec: &UlpMetaModify,
-    ) -> Result<(), HeaderActionError> {
-        match self {
-            Ulp::Tcp(t) => {
-                if let Some(src) = mod_spec.generic.src_port {
-                    t.set_source(src);
-                }
-                if let Some(dst) = mod_spec.generic.dst_port {
-                    t.set_destination(dst);
-                }
-                if let Some(flags) = mod_spec.tcp_flags {
-                    t.set_flags(TcpFlags::from_bits_retain(flags));
-                }
-            }
-            Ulp::Udp(u) => {
-                if let Some(src) = mod_spec.generic.src_port {
-                    u.set_source(src);
-                }
-                if let Some(dst) = mod_spec.generic.dst_port {
-                    u.set_destination(dst);
-                }
-            }
-            Ulp::IcmpV4(i4) => {
-                if let Some(id) = mod_spec.icmp_id {
-                    if i4.echo_id().is_some() {
-                        let roh = i4.rest_of_hdr_mut();
-                        ValidIcmpEcho::parse(&mut roh[..])
-                            .expect(
-                                "ICMP ROH is exactly as large as ValidIcmpEcho",
-                            )
-                            .0
-                            .set_id(id);
-                    }
-                }
-            }
-            Ulp::IcmpV6(i6) => {
-                if let Some(id) = mod_spec.icmp_id {
-                    if i6.echo_id().is_some() {
-                        let roh = i6.rest_of_hdr_mut();
-                        ValidIcmpEcho::parse(&mut roh[..])
-                            .expect(
-                                "ICMP ROH is exactly as large as ValidIcmpEcho",
-                            )
-                            .0
-                            .set_id(id);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
-    for InlineHeader<EncapMeta, ValidEncapMeta<T>>
-{
-    #[inline]
-    fn run_modify(
-        &mut self,
-        mod_spec: &EncapMod,
-    ) -> Result<(), HeaderActionError> {
-        match (self, mod_spec) {
-            (
-                InlineHeader::Repr(EncapMeta::Geneve(g)),
-                EncapMod::Geneve(mod_spec),
-            ) => {
-                if let Some(vni) = mod_spec.vni {
-                    g.vni = vni;
-                }
-            }
-            (
-                InlineHeader::Raw(ValidEncapMeta::Geneve(_, g)),
-                EncapMod::Geneve(mod_spec),
-            ) => {
-                if let Some(vni) = mod_spec.vni {
-                    g.set_vni(vni);
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl<T: ByteSlice> HasInnerCksum for InlineHeader<Ethernet, ValidEthernet<T>> {
-    const HAS_CKSUM: bool = false;
-}
-
-impl<T: ByteSlice> HasInnerCksum for InlineHeader<L3Repr, ValidL3<T>> {
-    const HAS_CKSUM: bool = true;
-}
-
-impl<T: ByteSlice> HasInnerCksum
-    for InlineHeader<EncapMeta, ValidEncapMeta<T>>
-{
-    const HAS_CKSUM: bool = false;
-}
-
-impl<T: ByteSlice> HasInnerCksum for EthernetPacket<T> {
-    const HAS_CKSUM: bool = false;
-}
-
-impl<T: ByteSlice> HasInnerCksum for L3<T> {
-    const HAS_CKSUM: bool = true;
-}
-
-impl<T: ByteSlice> HasInnerCksum for Ulp<T> {
-    const HAS_CKSUM: bool = true;
-}
-
-impl<T: ByteSlice> From<EtherMeta>
-    for ingot::types::Header<Ethernet, ValidEthernet<T>>
-{
-    #[inline]
-    fn from(value: EtherMeta) -> Self {
-        ingot::types::Header::Repr(
-            Ethernet {
-                destination: value.dst,
-                source: value.src,
-                ethertype: Ethertype(u16::from(value.ether_type)),
-            }
-            .into(),
-        )
-    }
-}
-
-impl<T: ByteSlice> From<EtherMeta>
-    for InlineHeader<Ethernet, ValidEthernet<T>>
-{
-    #[inline]
-    fn from(value: EtherMeta) -> Self {
-        InlineHeader::Repr(
-            Ethernet {
-                destination: value.dst,
-                source: value.src,
-                ethertype: Ethertype(u16::from(value.ether_type)),
-            }
-            .into(),
-        )
-    }
-}
-
-impl<T: ByteSlice> From<EncapMeta>
-    for ingot::types::Header<EncapMeta, ValidEncapMeta<T>>
-{
-    #[inline]
-    fn from(value: EncapMeta) -> Self {
-        ingot::types::Header::Repr(value.into())
-    }
-}
-
-impl<T: ByteSlice> From<EncapMeta>
-    for InlineHeader<EncapMeta, ValidEncapMeta<T>>
-{
-    #[inline]
-    fn from(value: EncapMeta) -> Self {
-        InlineHeader::Repr(value)
-    }
-}
-
-impl<T: ByteSlice> PushAction<InlineHeader<Ethernet, ValidEthernet<T>>>
-    for EtherMeta
-{
-    #[inline]
-    fn push(&self) -> InlineHeader<Ethernet, ValidEthernet<T>> {
-        InlineHeader::Repr(Ethernet {
-            destination: self.dst,
-            source: self.src,
-            ethertype: Ethertype(u16::from(self.ether_type)),
-        })
-    }
-}
-
-impl<T: ByteSlice> PushAction<EthernetPacket<T>> for EtherMeta {
-    #[inline]
-    fn push(&self) -> EthernetPacket<T> {
-        ingot::types::Header::Repr(
-            Ethernet {
-                destination: self.dst,
-                source: self.src,
-                ethertype: Ethertype(u16::from(self.ether_type)),
-            }
-            .into(),
-        )
-    }
-}
-
-impl<T: ByteSlice> PushAction<L3<T>> for IpPush {
-    fn push(&self) -> L3<T> {
-        match self {
-            IpPush::Ip4(v4) => L3::Ipv4(
-                Ipv4 {
-                    protocol: IpProtocol(u8::from(v4.proto)),
-                    source: v4.src,
-                    destination: v4.dst,
-                    flags: Ipv4Flags::DONT_FRAGMENT,
-                    ..Default::default()
-                }
-                .into(),
-            ),
-            IpPush::Ip6(v6) => L3::Ipv6(
-                Ipv6 {
-                    next_header: IpProtocol(u8::from(v6.proto)),
-                    source: v6.src,
-                    destination: v6.dst,
-                    ..Default::default()
-                }
-                .into(),
-            ),
-        }
     }
 }

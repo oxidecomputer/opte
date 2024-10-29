@@ -1506,20 +1506,10 @@ impl<N: NetworkImpl> Port<N> {
                 Ok(ProcessResult::Drop { reason })
             }
             InternalProcessResult::Hairpin(v) => Ok(ProcessResult::Hairpin(v)),
-            InternalProcessResult::Modified => {
-                let l4_hash = pkt.l4_hash();
-                let emit_spec =
-                    pkt.emit_spec().map_err(|_| ProcessError::BadEmitSpec)?;
-
-                // TODO: remove EmitSpec and have above method just spit out the new
-                // variant.
-                Ok(ProcessResult::Modified(EmitSpec {
-                    prepend: PushSpec::Slowpath(emit_spec.push_spec.into()),
-                    l4_hash,
-                    rewind: emit_spec.rewind,
-                    ulp_len: emit_spec.encapped_len as u32,
-                }))
-            }
+            InternalProcessResult::Modified => pkt
+                .emit_spec()
+                .map_err(|_| ProcessError::BadEmitSpec)
+                .map(ProcessResult::Modified),
         });
         self.port_process_return_probe(
             dir,

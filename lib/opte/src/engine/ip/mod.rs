@@ -8,14 +8,21 @@ pub mod v4;
 pub mod v6;
 
 use super::checksum::Checksum;
+use super::headers::HasInnerCksum;
+use super::headers::HeaderActionError;
+use super::headers::HeaderActionModify;
+use super::headers::IpMod;
+use super::headers::IpPush;
+use super::headers::PushAction;
 use super::packet::ParseError;
 use ingot::choice;
 use ingot::ethernet::Ethertype;
+use ingot::ip::IpProtocol;
+use ingot::ip::Ipv4Flags;
 use ingot::types::ByteSlice;
 use ingot::types::Header;
+use ingot::types::InlineHeader;
 use ingot::types::NextLayer;
-use ingot::Ingot;
-use opte_api::MacAddr;
 use v4::*;
 use v6::*;
 use zerocopy::ByteSliceMut;
@@ -140,13 +147,141 @@ impl<V: ByteSliceMut> ValidL3<V> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Ingot)]
-#[ingot(impl_default)]
-pub struct Ethernet {
-    #[ingot(is = "[u8; 6]")]
-    pub destination: MacAddr,
-    #[ingot(is = "[u8; 6]")]
-    pub source: MacAddr,
-    #[ingot(is = "u16be", next_layer)]
-    pub ethertype: Ethertype,
+impl<T: ByteSliceMut> HeaderActionModify<IpMod>
+    for InlineHeader<L3Repr, ValidL3<T>>
+{
+    #[inline]
+    fn run_modify(
+        &mut self,
+        mod_spec: &IpMod,
+    ) -> Result<(), HeaderActionError> {
+        match mod_spec {
+            IpMod::Ip4(mods) => match self {
+                InlineHeader::Repr(L3Repr::Ipv4(v4)) => {
+                    if let Some(src) = mods.src {
+                        v4.source = src;
+                    }
+                    if let Some(dst) = mods.dst {
+                        v4.destination = dst;
+                    }
+                    if let Some(p) = mods.proto {
+                        v4.protocol = IpProtocol(u8::from(p));
+                    }
+                }
+                InlineHeader::Raw(ValidL3::Ipv4(v4)) => {
+                    if let Some(src) = mods.src {
+                        v4.set_source(src);
+                    }
+                    if let Some(dst) = mods.dst {
+                        v4.set_destination(dst);
+                    }
+                    if let Some(p) = mods.proto {
+                        v4.set_protocol(IpProtocol(u8::from(p)));
+                    }
+                }
+                _ => return Err(HeaderActionError::MissingHeader),
+            },
+            IpMod::Ip6(mods) => match self {
+                InlineHeader::Repr(L3Repr::Ipv6(v6)) => {
+                    if let Some(src) = mods.src {
+                        v6.source = src;
+                    }
+                    if let Some(dst) = mods.dst {
+                        v6.destination = dst;
+                    }
+                    if let Some(p) = mods.proto {
+                        let ipp = IpProtocol(u8::from(p));
+
+                        v6_set_next_header::<&mut [u8]>(ipp, v6)?;
+                    }
+                }
+                InlineHeader::Raw(ValidL3::Ipv6(v6)) => {
+                    if let Some(src) = mods.src {
+                        v6.set_source(src);
+                    }
+                    if let Some(dst) = mods.dst {
+                        v6.set_destination(dst);
+                    }
+                    if let Some(p) = mods.proto {
+                        let ipp = IpProtocol(u8::from(p));
+                        v6_set_next_header(ipp, v6)?;
+                    }
+                }
+                _ => return Err(HeaderActionError::MissingHeader),
+            },
+        }
+
+        Ok(())
+    }
+}
+
+impl<T: ByteSliceMut> HeaderActionModify<IpMod> for L3<T> {
+    #[inline]
+    fn run_modify(
+        &mut self,
+        mod_spec: &IpMod,
+    ) -> Result<(), HeaderActionError> {
+        match (self, mod_spec) {
+            (L3::Ipv4(v4), IpMod::Ip4(mods)) => {
+                if let Some(src) = mods.src {
+                    v4.set_source(src);
+                }
+                if let Some(dst) = mods.dst {
+                    v4.set_destination(dst);
+                }
+                if let Some(p) = mods.proto {
+                    v4.set_protocol(IpProtocol(u8::from(p)));
+                }
+                Ok(())
+            }
+            (L3::Ipv6(v6), IpMod::Ip6(mods)) => {
+                if let Some(src) = mods.src {
+                    v6.set_source(src);
+                }
+                if let Some(dst) = mods.dst {
+                    v6.set_destination(dst);
+                }
+                if let Some(p) = mods.proto {
+                    let ipp = IpProtocol(u8::from(p));
+                    v6_set_next_header(ipp, v6)?;
+                }
+                Ok(())
+            }
+            _ => Err(HeaderActionError::MissingHeader),
+        }
+    }
+}
+
+impl<T: ByteSlice> HasInnerCksum for InlineHeader<L3Repr, ValidL3<T>> {
+    const HAS_CKSUM: bool = true;
+}
+
+impl<T: ByteSlice> HasInnerCksum for L3<T> {
+    const HAS_CKSUM: bool = true;
+}
+
+impl<T: ByteSlice> PushAction<L3<T>> for IpPush {
+    fn push(&self) -> L3<T> {
+        match self {
+            IpPush::Ip4(v4) => L3::Ipv4(
+                Ipv4 {
+                    protocol: IpProtocol(u8::from(v4.proto)),
+                    source: v4.src,
+                    destination: v4.dst,
+                    flags: Ipv4Flags::DONT_FRAGMENT,
+                    ..Default::default()
+                }
+                .into(),
+            ),
+            IpPush::Ip6(v6) => L3::Ipv6(
+                Ipv6 {
+                    next_header: IpProtocol(u8::from(v6.proto)),
+                    source: v6.src,
+                    destination: v6.dst,
+                    ..Default::default()
+                }
+                .into(),
+            ),
+        }
+    }
 }

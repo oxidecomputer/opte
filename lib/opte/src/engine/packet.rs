@@ -593,7 +593,6 @@ mod test {
         );
     }
 
-    // TODO(kyle): equivalent for MsgBlk
     #[test]
     fn udp6_packet_with_padding() {
         let body = [1, 2, 3, 4];

@@ -42,10 +42,11 @@ pub mod ingot_packet;
 use crate::ddi::mblk::MsgBlk;
 use checksum::Checksum;
 use ingot::tcp::TcpRef;
+use ingot::types::IntoBufPointer;
+use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
 use ingot_packet::FullParsed;
 use ingot_packet::OpteMeta;
-use ingot_packet::OpteParsed2;
 use ingot_packet::Packet;
 pub use opte_api::Direction;
 use parse::ValidNoEncap;
@@ -248,9 +249,9 @@ pub trait NetworkParser {
     fn parse_outbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed2<T, Self::OutMeta<T::Chunk>>, ParseError>
+    ) -> Result<IngotParsed<Self::OutMeta<T::Chunk>, T>, ParseError>
     where
-        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut;
+        T::Chunk: IntoBufPointer<'a> + ByteSliceMut;
 
     /// Parse an inbound packet.
     ///
@@ -259,9 +260,9 @@ pub trait NetworkParser {
     fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed2<T, Self::InMeta<T::Chunk>>, ParseError>
+    ) -> Result<IngotParsed<Self::InMeta<T::Chunk>, T>, ParseError>
     where
-        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut;
+        T::Chunk: IntoBufPointer<'a> + ByteSliceMut;
 }
 
 /// Header formats which allow a flow ID to be read out, and which can be converted
@@ -305,9 +306,9 @@ impl NetworkParser for GenericUlp {
     fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed2<T, Self::InMeta<T::Chunk>>, ParseError>
+    ) -> Result<IngotParsed<Self::InMeta<T::Chunk>, T>, ParseError>
     where
-        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut,
+        T::Chunk: IntoBufPointer<'a> + ByteSliceMut,
     {
         Ok(ValidNoEncap::parse_read(rdr)?)
     }
@@ -315,9 +316,9 @@ impl NetworkParser for GenericUlp {
     fn parse_outbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
-    ) -> Result<OpteParsed2<T, Self::OutMeta<T::Chunk>>, ParseError>
+    ) -> Result<IngotParsed<Self::OutMeta<T::Chunk>, T>, ParseError>
     where
-        T::Chunk: ingot::types::IntoBufPointer<'a> + ByteSliceMut,
+        T::Chunk: IntoBufPointer<'a> + ByteSliceMut,
     {
         Ok(ValidNoEncap::parse_read(rdr)?)
     }

@@ -4,6 +4,7 @@
 
 // Copyright 2024 Oxide Computer Company
 
+use crate::engine::headers::HeaderActionError;
 use crate::engine::packet::MismatchError;
 use crate::engine::packet::ParseError;
 use crate::engine::predicate::MatchExact;
@@ -11,11 +12,18 @@ use crate::engine::predicate::MatchExactVal;
 use crate::engine::predicate::MatchPrefix;
 use crate::engine::predicate::MatchPrefixVal;
 use ingot::ip::Ecn;
+use ingot::ip::ExtHdrClass;
 use ingot::ip::IpProtocol;
+use ingot::ip::IpV6Ext6564Mut;
+use ingot::ip::IpV6ExtFragmentMut;
 use ingot::ip::LowRentV6EhRepr;
+use ingot::ip::ValidLowRentV6Eh;
 use ingot::types::primitives::*;
 use ingot::types::util::Repeated;
+use ingot::types::FieldMut;
+use ingot::types::Header;
 use ingot::types::HeaderLen;
+use ingot::types::ParseChoice;
 use ingot::Ingot;
 pub use opte_api::Ipv6Addr;
 pub use opte_api::Ipv6Cidr;
@@ -126,6 +134,70 @@ pub struct Ipv6Mod {
     pub src: Option<Ipv6Addr>,
     pub dst: Option<Ipv6Addr>,
     pub proto: Option<Protocol>,
+}
+
+pub fn v6_set_next_header<V: ByteSliceMut>(
+    ipp: IpProtocol,
+    v6: &mut (impl Ipv6Mut<V> + Ipv6Ref<V>),
+) -> Result<(), HeaderActionError> {
+    let mut curr_ipp = v6.next_header();
+    if matches!(curr_ipp.class(), ExtHdrClass::NotAnEh) {
+        v6.set_next_header(ipp);
+        return Ok(());
+    }
+
+    match v6.v6ext_mut() {
+        FieldMut::Repr(a) => match a.iter_mut().last() {
+            Some(LowRentV6EhRepr::IpV6ExtFragment(f)) => {
+                f.next_header = ipp;
+            }
+            Some(LowRentV6EhRepr::IpV6Ext6564(f)) => {
+                f.next_header = ipp;
+            }
+            None => {
+                v6.set_next_header(ipp);
+            }
+        },
+        FieldMut::Raw(Header::Repr(a)) => match a.iter_mut().last() {
+            Some(LowRentV6EhRepr::IpV6ExtFragment(f)) => {
+                f.next_header = ipp;
+            }
+            Some(LowRentV6EhRepr::IpV6Ext6564(f)) => {
+                f.next_header = ipp;
+            }
+            None => {
+                v6.set_next_header(ipp);
+            }
+        },
+        FieldMut::Raw(Header::Raw(a)) => {
+            // TODO: this, but more widely in ingot.
+            // making this generic over all Repeated in
+            // was... somewhat challenging.
+            let mut buf = a.as_mut();
+
+            while !matches!(curr_ipp.class(), ExtHdrClass::NotAnEh) {
+                let (hdr, nh, rem) =
+                    ValidLowRentV6Eh::parse_choice(buf, Some(curr_ipp))
+                        .map_err(|_| HeaderActionError::MalformedExtension)?;
+                let nh = nh.expect("V6EHs always have a next_header field");
+                buf = rem;
+                curr_ipp = nh;
+
+                if matches!(nh.class(), ExtHdrClass::NotAnEh) {
+                    match hdr {
+                        ValidLowRentV6Eh::IpV6ExtFragment(mut f) => {
+                            f.set_next_header(nh);
+                        }
+                        ValidLowRentV6Eh::IpV6Ext6564(mut f) => {
+                            f.set_next_header(nh);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

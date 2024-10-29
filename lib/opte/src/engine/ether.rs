@@ -6,6 +6,9 @@
 
 //! Ethernet frames.
 
+use super::headers::HasInnerCksum;
+use super::headers::HeaderActionError;
+use super::headers::HeaderActionModify;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
 use alloc::string::String;
@@ -16,11 +19,15 @@ use core::fmt::Display;
 use core::result;
 use core::str::FromStr;
 use ingot::ethernet::Ethertype;
+use ingot::types::Header;
 use ingot::types::HeaderLen;
+use ingot::types::InlineHeader;
 use ingot::Ingot;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
+use zerocopy::ByteSlice;
+use zerocopy::ByteSliceMut;
 
 pub const ETHER_TYPE_ETHER: u16 = 0x6558;
 pub const ETHER_TYPE_IPV4: u16 = 0x0800;
@@ -236,6 +243,119 @@ impl EtherMeta {
     #[inline]
     pub fn hdr_len(&self) -> usize {
         Ethernet::MINIMUM_LENGTH
+    }
+}
+
+impl<T: ByteSliceMut> HeaderActionModify<EtherMod> for EthernetPacket<T> {
+    #[inline]
+    fn run_modify(
+        &mut self,
+        mod_spec: &EtherMod,
+    ) -> Result<(), HeaderActionError> {
+        if let Some(src) = mod_spec.src {
+            self.set_source(src);
+        }
+        if let Some(dst) = mod_spec.dst {
+            self.set_destination(dst);
+        }
+
+        Ok(())
+    }
+}
+
+impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
+    for InlineHeader<Ethernet, ValidEthernet<T>>
+{
+    #[inline]
+    fn run_modify(
+        &mut self,
+        mod_spec: &EtherMod,
+    ) -> Result<(), HeaderActionError> {
+        match self {
+            InlineHeader::Repr(a) => {
+                if let Some(src) = mod_spec.src {
+                    a.set_source(src);
+                }
+                if let Some(dst) = mod_spec.dst {
+                    a.set_destination(dst);
+                }
+            }
+            InlineHeader::Raw(a) => {
+                if let Some(src) = mod_spec.src {
+                    a.set_source(src);
+                }
+                if let Some(dst) = mod_spec.dst {
+                    a.set_destination(dst);
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl<T: ByteSlice> HasInnerCksum for InlineHeader<Ethernet, ValidEthernet<T>> {
+    const HAS_CKSUM: bool = false;
+}
+
+impl<T: ByteSlice> HasInnerCksum for EthernetPacket<T> {
+    const HAS_CKSUM: bool = false;
+}
+
+impl<T: ByteSlice> From<EtherMeta> for Header<Ethernet, ValidEthernet<T>> {
+    #[inline]
+    fn from(value: EtherMeta) -> Self {
+        Header::Repr(
+            Ethernet {
+                destination: value.dst,
+                source: value.src,
+                ethertype: Ethertype(u16::from(value.ether_type)),
+            }
+            .into(),
+        )
+    }
+}
+
+impl<T: ByteSlice> From<EtherMeta>
+    for InlineHeader<Ethernet, ValidEthernet<T>>
+{
+    #[inline]
+    fn from(value: EtherMeta) -> Self {
+        InlineHeader::Repr(
+            Ethernet {
+                destination: value.dst,
+                source: value.src,
+                ethertype: Ethertype(u16::from(value.ether_type)),
+            }
+            .into(),
+        )
+    }
+}
+
+impl<T: ByteSlice> PushAction<InlineHeader<Ethernet, ValidEthernet<T>>>
+    for EtherMeta
+{
+    #[inline]
+    fn push(&self) -> InlineHeader<Ethernet, ValidEthernet<T>> {
+        InlineHeader::Repr(Ethernet {
+            destination: self.dst,
+            source: self.src,
+            ethertype: Ethertype(u16::from(self.ether_type)),
+        })
+    }
+}
+
+impl<T: ByteSlice> PushAction<EthernetPacket<T>> for EtherMeta {
+    #[inline]
+    fn push(&self) -> EthernetPacket<T> {
+        Header::Repr(
+            Ethernet {
+                destination: self.dst,
+                source: self.src,
+                ethertype: Ethertype(u16::from(self.ether_type)),
+            }
+            .into(),
+        )
     }
 }
 

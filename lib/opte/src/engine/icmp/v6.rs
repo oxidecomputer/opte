@@ -15,8 +15,11 @@ use crate::engine::ip::v6::Ipv6Ref;
 use crate::engine::predicate::Ipv6AddrMatch;
 use alloc::string::String;
 use ingot::ethernet::Ethertype;
+use ingot::icmp::IcmpV6Packet;
+use ingot::icmp::IcmpV6Ref;
 use ingot::ip::IpProtocol as IngotIpProto;
 use ingot::types::Emit;
+use ingot::types::HeaderParse;
 pub use opte_api::ip::Icmpv6EchoReply;
 pub use opte_api::ip::Ipv6Addr;
 pub use opte_api::ip::Ipv6Cidr;
@@ -630,5 +633,19 @@ impl HairpinAction for NeighborAdvertisement {
         Ok(AllowOrDeny::Allow(MsgBlk::new_ethernet_pkt((
             &eth, &ip6, &ulp_body,
         ))))
+    }
+}
+
+impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
+    #[inline]
+    fn echo_id(&self) -> Option<u16> {
+        match (self.code(), self.ty()) {
+            (0, 128) | (0, 129) => {
+                ValidIcmpEcho::parse(&self.rest_of_hdr_ref()[..])
+                    .ok()
+                    .map(|(v, ..)| v.id())
+            }
+            _ => None,
+        }
     }
 }

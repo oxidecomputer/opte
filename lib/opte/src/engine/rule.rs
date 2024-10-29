@@ -490,15 +490,10 @@ impl HdrTransform {
             .act_on_option(&mut meta.headers.outer_encap)
             .map_err(Self::err_fn("outer encap"))?;
 
-        // If I set this up right, we can handle the above w/o panic on a
-        // dumb EtherDrop action...
         <EthernetPacket<_> as Transform<EthernetPacket<_>, _, _>>::act_on(
             &mut meta.headers.inner_eth,
             &self.inner_ether,
         )
-        // meta.headers
-        //     .inner_eth
-        //     .act_on::(&self.inner_ether)
         .map_err(Self::err_fn("inner eth"))?;
 
         let l3_dirty = self
@@ -525,6 +520,9 @@ impl HdrTransform {
                 HeaderActionError::CantPop => {
                     HdrTransformError::CantPop(header)
                 }
+                HeaderActionError::MalformedExtension => {
+                    HdrTransformError::MalformedExtension(header)
+                }
             }
         }
     }
@@ -534,6 +532,7 @@ impl HdrTransform {
 pub enum HdrTransformError {
     MissingHeader(&'static str),
     CantPop(&'static str),
+    MalformedExtension(&'static str),
 }
 
 #[derive(Debug)]

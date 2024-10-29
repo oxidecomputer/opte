@@ -12,8 +12,6 @@ use super::ether::EtherType;
 use super::ether::EthernetRef;
 use super::icmp::v4::MessageType as IcmpMessageType;
 use super::icmp::v6::MessageType as Icmpv6MessageType;
-use super::ingot_packet::ulp_dst_port;
-use super::ingot_packet::ulp_src_port;
 use super::ingot_packet::MblkPacketData;
 use super::ip::v4::Ipv4Addr;
 use super::ip::v4::Ipv4Cidr;
@@ -476,7 +474,7 @@ impl Predicate {
             },
 
             Self::InnerSrcPort(list) => {
-                match meta.inner_ulp().map(ulp_src_port).flatten() {
+                match meta.inner_ulp().map(|v| v.src_port()).flatten() {
                     // No ULP metadata or no source port (e.g. ICMPv6).
                     None => return false,
 
@@ -491,7 +489,7 @@ impl Predicate {
             }
 
             Self::InnerDstPort(list) => {
-                match meta.inner_ulp().map(ulp_dst_port).flatten() {
+                match meta.inner_ulp().map(|v| v.dst_port()).flatten() {
                     // No ULP metadata or no destination port (e.g. ICMPv6).
                     None => return false,
 

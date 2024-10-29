@@ -15,9 +15,16 @@ use super::ether::EthernetRef;
 use super::ether::ValidEthernet;
 use super::geneve::validate_geneve;
 use super::geneve::GENEVE_PORT;
+use super::headers::HasInnerCksum;
+use super::headers::HeaderActionError;
+use super::headers::HeaderActionModify;
 use super::headers::IpMod;
+use super::headers::UlpMetaModify;
+use super::headers::ValidEncapMeta;
+use super::icmp::IcmpEchoMut;
+use super::icmp::QueryEcho;
+use super::icmp::ValidIcmpEcho;
 use super::ingot_packet::OpteMeta;
-use super::ingot_packet::ValidEncapMeta;
 use super::ip::v4::Ipv4Mut;
 use super::ip::v4::Ipv4Ref;
 use super::ip::v6::Ipv6Mut;
@@ -52,6 +59,7 @@ use ingot::tcp::ValidTcp;
 use ingot::types::ByteSlice;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
+use ingot::types::HeaderParse;
 use ingot::types::InlineHeader;
 use ingot::types::NextLayer;
 use ingot::types::ParseControl;
@@ -142,6 +150,14 @@ impl<B: ByteSlice> Ulp<B> {
         match self {
             Ulp::Tcp(t) => Some(t.source()),
             Ulp::Udp(u) => Some(u.source()),
+            _ => None,
+        }
+    }
+
+    pub fn dst_port(&self) -> Option<u16> {
+        match self {
+            Ulp::Tcp(t) => Some(t.destination()),
+            Ulp::Udp(t) => Some(t.destination()),
             _ => None,
         }
     }
@@ -759,6 +775,68 @@ impl<V: ByteSlice> ValidUlp<V> {
             }
             _ => None,
         }
+    }
+}
+
+impl<T: ByteSlice> HasInnerCksum for Ulp<T> {
+    const HAS_CKSUM: bool = true;
+}
+
+impl<T: ByteSliceMut> HeaderActionModify<UlpMetaModify> for Ulp<T> {
+    #[inline]
+    fn run_modify(
+        &mut self,
+        mod_spec: &UlpMetaModify,
+    ) -> Result<(), HeaderActionError> {
+        match self {
+            Ulp::Tcp(t) => {
+                if let Some(src) = mod_spec.generic.src_port {
+                    t.set_source(src);
+                }
+                if let Some(dst) = mod_spec.generic.dst_port {
+                    t.set_destination(dst);
+                }
+                if let Some(flags) = mod_spec.tcp_flags {
+                    t.set_flags(TcpFlags::from_bits_retain(flags));
+                }
+            }
+            Ulp::Udp(u) => {
+                if let Some(src) = mod_spec.generic.src_port {
+                    u.set_source(src);
+                }
+                if let Some(dst) = mod_spec.generic.dst_port {
+                    u.set_destination(dst);
+                }
+            }
+            Ulp::IcmpV4(i4) => {
+                if let Some(id) = mod_spec.icmp_id {
+                    if i4.echo_id().is_some() {
+                        let roh = i4.rest_of_hdr_mut();
+                        ValidIcmpEcho::parse(&mut roh[..])
+                            .expect(
+                                "ICMP ROH is exactly as large as ValidIcmpEcho",
+                            )
+                            .0
+                            .set_id(id);
+                    }
+                }
+            }
+            Ulp::IcmpV6(i6) => {
+                if let Some(id) = mod_spec.icmp_id {
+                    if i6.echo_id().is_some() {
+                        let roh = i6.rest_of_hdr_mut();
+                        ValidIcmpEcho::parse(&mut roh[..])
+                            .expect(
+                                "ICMP ROH is exactly as large as ValidIcmpEcho",
+                            )
+                            .0
+                            .set_id(id);
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
