@@ -23,9 +23,9 @@ use crate::engine::dhcpv6::ALL_SERVERS;
 use crate::engine::dhcpv6::CLIENT_PORT;
 use crate::engine::dhcpv6::SERVER_PORT;
 use crate::engine::ether::Ethernet;
-use crate::engine::ingot_packet::MblkPacketData;
 use crate::engine::ip::v6::Ipv6;
 use crate::engine::ip::v6::Ipv6Ref;
+use crate::engine::packet::MblkPacketData;
 use crate::engine::predicate::DataPredicate;
 use crate::engine::predicate::EtherAddrMatch;
 use crate::engine::predicate::IpProtoMatch;
@@ -690,7 +690,7 @@ mod test {
     use super::OptionCode;
     use crate::ddi::mblk::MsgBlk;
     use crate::engine::dhcpv6::test_data;
-    use crate::engine::ingot_packet::Packet;
+    use crate::engine::packet::Packet;
     use crate::engine::port::meta::ActionMeta;
     use crate::engine::GenericUlp;
 

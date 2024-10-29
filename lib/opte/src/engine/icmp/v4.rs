@@ -9,9 +9,9 @@
 use super::*;
 use crate::ddi::mblk::MsgBlk;
 use crate::engine::ether::Ethernet;
-use crate::engine::ingot_packet::MblkPacketData;
 use crate::engine::ip::v4::Ipv4;
 use crate::engine::ip::L3;
+use crate::engine::packet::MblkPacketData;
 use crate::engine::predicate::Ipv4AddrMatch;
 use ingot::ethernet::Ethertype;
 use ingot::icmp::IcmpV4Packet;

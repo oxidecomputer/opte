@@ -10,7 +10,7 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
-use opte::engine::ingot_packet::Packet;
+use opte::engine::packet::Packet;
 use opte_bench::alloc::*;
 use opte_bench::packet::BenchPacket;
 use opte_bench::packet::BenchPacketInstance;

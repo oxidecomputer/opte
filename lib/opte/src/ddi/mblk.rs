@@ -4,7 +4,7 @@
 
 // Copyright 2024 Oxide Computer Company
 
-use crate::engine::ingot_packet::BufferState;
+use crate::engine::packet::BufferState;
 use crate::engine::packet::SegAdjustError;
 use crate::engine::packet::WrapError;
 use crate::engine::packet::WriteError;
@@ -45,7 +45,7 @@ struct MsgBlkChainInner {
 /// Network packets are provided by illumos as a linked list of linked lists,
 /// using the `b_next` and `b_prev` fields.
 ///
-/// See the documentation for [`super::ingot_packet::Packet`] and/or [`MsgBlk`] for full context.
+/// See the documentation for [`super::packet::Packet`] and/or [`MsgBlk`] for full context.
 // TODO: We might retool this type now that MsgBlk does not decompose
 // each mblk_t into individual segments (i.e., packets could be allocated
 // a lifetime via PhantomData based on whether we want to remove them from the chain or modify in place).
@@ -929,7 +929,7 @@ fn mock_freeb(mp: *mut mblk_t) {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::engine::ingot_packet::Packet;
+    use crate::engine::packet::Packet;
     use crate::engine::packet::ParseError;
     use crate::engine::GenericUlp;
     use ingot::types::ParseError as IngotParseError;

@@ -37,18 +37,16 @@ pub mod tcp_state;
 #[macro_use]
 pub mod udp;
 
-pub mod ingot_packet;
-
 use crate::ddi::mblk::MsgBlk;
 use checksum::Checksum;
 use ingot::tcp::TcpRef;
 use ingot::types::IntoBufPointer;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
-use ingot_packet::FullParsed;
-use ingot_packet::OpteMeta;
-use ingot_packet::Packet;
 pub use opte_api::Direction;
+use packet::FullParsed;
+use packet::OpteMeta;
+use packet::Packet;
 use parse::ValidNoEncap;
 use rule::CompiledTransform;
 use zerocopy::ByteSlice;

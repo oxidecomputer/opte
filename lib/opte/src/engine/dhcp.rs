@@ -7,8 +7,8 @@
 //! DHCP headers, data, and actions.
 
 use super::ether::Ethernet;
-use super::ingot_packet::MblkPacketData;
 use super::ip::v4::*;
+use super::packet::MblkPacketData;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;

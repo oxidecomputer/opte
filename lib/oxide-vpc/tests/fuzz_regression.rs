@@ -10,7 +10,7 @@
 //! of OPTE panic in the past, and ensure that it does not today.
 
 use opte::ddi::mblk::MsgBlk;
-use opte::engine::ingot_packet::Packet;
+use opte::engine::packet::Packet;
 use oxide_vpc::engine::VpcParser;
 use serde::Deserialize;
 use serde::Serialize;

@@ -8,9 +8,9 @@
 
 use super::headers::HeaderAction;
 use super::headers::IpMod;
-use super::ingot_packet::MblkFullParsed;
-use super::ingot_packet::Packet;
 use super::packet::InnerFlowId;
+use super::packet::MblkFullParsed;
+use super::packet::Packet;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
