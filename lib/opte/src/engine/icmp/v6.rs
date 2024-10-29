@@ -430,7 +430,7 @@ fn validate_neighbor_solicitation<B: ByteSlice>(
     // NS is only allowed from the unspecified address if the destination is a
     // solicited-node multicast address.
     if metadata.source() == Ipv6Addr::ANY_ADDR
-        && !Ipv6Addr::from(metadata.destination()).is_solicited_node_multicast()
+        && !metadata.destination().is_solicited_node_multicast()
     {
         return Err(GenErr::Unexpected(String::from(
             "Received NS from UNSPEC, but destination is not the solicited \
@@ -588,7 +588,7 @@ impl HairpinAction for NeighborAdvertisement {
         // Build the NA, whose data depends on how we received the packet. If
         // `None` is returned, the NS is not destined for us, and will be
         // dropped.
-        let conv_ip = metadata.source().into();
+        let conv_ip = metadata.source();
         let (dst_ip, advert) =
             match construct_neighbor_advert(self, &target_addr, &conv_ip) {
                 Some(data) => data,

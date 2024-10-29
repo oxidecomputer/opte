@@ -91,10 +91,10 @@ impl<V: ByteSliceMut> ValidIpv4<V> {
 
         match &self.1 {
             Header::Repr(opts) => {
-                csum.add_bytes(&*opts);
+                csum.add_bytes(opts);
             }
             Header::Raw(opts) => {
-                csum.add_bytes(&*opts);
+                csum.add_bytes(opts);
             }
         }
 

@@ -557,10 +557,10 @@ pub trait StatefulAction: Display {
     /// # Errors
     ///
     /// * [`GenDescError::ResourceExhausted`]: This action relies on a
-    /// dynamic resource which has been exhausted.
+    ///   dynamic resource which has been exhausted.
     ///
     /// * [`GenDescError::Unexpected`]: This action encountered an
-    /// unexpected error while trying to generate a descriptor.
+    ///   unexpected error while trying to generate a descriptor.
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
@@ -646,9 +646,10 @@ impl From<smoltcp::wire::Error> for GenBtError {
 
 /// A hairpin action is one that generates a new packet based on the
 /// current inbound/outbound packet, and then "hairpins" that new
-/// packet back to the source of the original packet. For example, you
-/// could use this to hairpin an ARP Reply in response to a guest's
-/// ARP request.
+/// packet back to the source of the original packet.
+///
+/// For example, you could use this to hairpin an ARP Reply in response
+/// to a guest's ARP request.
 pub trait HairpinAction: Display {
     /// Generate a [`Packet`] to hairpin back to the source. The
     /// `meta` argument holds the packet metadata, including any
@@ -931,8 +932,8 @@ impl Rule<Ready> {
     }
 }
 
-impl<'a> Rule<Finalized> {
-    pub fn is_match<'b>(
+impl Rule<Finalized> {
+    pub fn is_match(
         &self,
         meta: &MblkPacketData,
         action_meta: &ActionMeta,

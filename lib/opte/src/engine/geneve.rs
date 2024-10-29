@@ -189,9 +189,7 @@ impl GeneveOption {
             {
                 Ok(Self::Oxide(OxideOption::External))
             }
-            _ => {
-                Err(ParseError::UnrecognisedTunnelOpt { class: class, ty: ty })
-            }
+            _ => Err(ParseError::UnrecognisedTunnelOpt { class, ty }),
         }
     }
 

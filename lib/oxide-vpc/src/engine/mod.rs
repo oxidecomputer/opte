@@ -73,8 +73,8 @@ impl VpcNetwork {
     {
         let body = pkt
             .body_segs()
-            .and_then(|v| v.get(0))
-            .ok_or_else(|| HdlPktError("outbound ARP (no body)"))?;
+            .and_then(|v| v.first())
+            .ok_or(HdlPktError("outbound ARP (no body)"))?;
 
         let (arp, ..) = ValidArpEthIpv4::parse(*body)
             .map_err(|_| HdlPktError("outbound ARP (parse)"))?;

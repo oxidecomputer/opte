@@ -28,9 +28,11 @@ pub trait DError {
 
 static EMPTY_STRING: &CStr = c"";
 
-/// An string list designed to be passed to a DTrace handler, which contains
-/// the names of all `enum` discriminators encountered when resolving an error
-/// or other result-like enum, as well as the data from a leaf node.
+/// A string list designed to be passed to a DTrace handler.
+///
+/// This contains the names of all `enum` discriminators encountered when
+/// resolving an error or other result-like enum, as well as the data from a
+/// leaf node.
 ///
 /// This wrapper cannot contain a null c_string pointer, so all entries are
 /// safe to dereference from a DTrace script. Additionally, it has a fixed
@@ -170,7 +172,7 @@ pub struct LabelBlockIter<'a, const L: usize> {
     inner: &'a LabelBlock<L>,
 }
 
-impl<'a, const L: usize> Iterator for LabelBlockIter<'a, L> {
+impl<const L: usize> Iterator for LabelBlockIter<'_, L> {
     type Item = &'static CStr;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -193,7 +195,7 @@ impl<'a, const L: usize> Iterator for LabelBlockIter<'a, L> {
     }
 }
 
-impl<'a, const L: usize> ExactSizeIterator for LabelBlockIter<'a, L> {
+impl<const L: usize> ExactSizeIterator for LabelBlockIter<'_, L> {
     fn len(&self) -> usize {
         self.inner.len - self.pos
     }

@@ -79,7 +79,7 @@ impl Moment {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 Self { inner: unsafe { ddi::gethrtime() } }
             } else {
-                let first_ts = *FIRST_TS.get_or_init(|| Instant::now());
+                let first_ts = *FIRST_TS.get_or_init(Instant::now);
                 Self { inner: Instant::now().saturating_duration_since(first_ts) }
             }
         }

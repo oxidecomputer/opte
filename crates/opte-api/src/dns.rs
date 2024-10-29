@@ -28,7 +28,7 @@ use serde::Serialize;
 ///
 /// - The string form of the name may not exceed 253 octets
 /// - Each label (except for possibly the last, root label) must be between 1
-/// and 63 octets.
+///   and 63 octets.
 ///
 /// # Details
 ///

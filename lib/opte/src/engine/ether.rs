@@ -321,14 +321,11 @@ impl<T: ByteSlice> From<EtherMeta>
 {
     #[inline]
     fn from(value: EtherMeta) -> Self {
-        InlineHeader::Repr(
-            Ethernet {
-                destination: value.dst,
-                source: value.src,
-                ethertype: Ethertype(u16::from(value.ether_type)),
-            }
-            .into(),
-        )
+        InlineHeader::Repr(Ethernet {
+            destination: value.dst,
+            source: value.src,
+            ethertype: Ethertype(u16::from(value.ether_type)),
+        })
     }
 }
 

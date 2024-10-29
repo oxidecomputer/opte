@@ -126,10 +126,10 @@ impl<B: ByteSliceMut> ValidUlp<B> {
                 body_csum.add_bytes(tcp.0.as_bytes());
                 match &tcp.1 {
                     Header::Repr(opts) => {
-                        body_csum.add_bytes(&*opts);
+                        body_csum.add_bytes(opts);
                     }
                     Header::Raw(opts) => {
-                        body_csum.add_bytes(&*opts);
+                        body_csum.add_bytes(opts);
                     }
                 }
                 tcp.set_checksum(body_csum.finalize_for_ingot());
@@ -241,7 +241,7 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
             })
             .unwrap_or((0, 0));
 
-        InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
+        InnerFlowId { proto, addrs, src_port, dst_port }
     }
 
     #[inline]
@@ -346,9 +346,7 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
             _ => return None,
         };
 
-        let Some(pseudo_csum) = pseudo_csum else {
-            return None;
-        };
+        let pseudo_csum = pseudo_csum?;
 
         self.inner_ulp.as_ref().and_then(csum_minus_hdr).map(|mut v| {
             if use_pseudo {
@@ -384,7 +382,7 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
     #[inline]
     fn validate(&self, pkt_len: usize) -> Result<(), ParseError> {
         if let Some(l3) = &self.inner_l3 {
-            let rem_len = pkt_len - &(&self.inner_eth, l3).packet_length();
+            let rem_len = pkt_len - (&self.inner_eth, l3).packet_length();
             l3.validate(rem_len)?;
             if let Some(ulp) = &self.inner_ulp {
                 let rem_len = rem_len - ulp.packet_length();
@@ -470,7 +468,7 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
             .or_else(|| self.inner_ulp.pseudo_port())
             .unwrap_or(0);
 
-        InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
+        InnerFlowId { proto, addrs, src_port, dst_port }
     }
 
     #[inline]
@@ -570,9 +568,7 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
             _ => return None,
         };
 
-        let Some(pseudo_csum) = pseudo_csum else {
-            return None;
-        };
+        let pseudo_csum = pseudo_csum?;
 
         csum_minus_hdr(&self.inner_ulp).map(|mut v| {
             if use_pseudo {
@@ -616,7 +612,7 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
         validate_geneve(&self.outer_encap)?;
 
         let rem_len = rem_len
-            - &(&self.outer_encap, &self.outer_eth, &self.inner_l3)
+            - (&self.outer_encap, &self.outer_eth, &self.inner_l3)
                 .packet_length();
         self.inner_l3.validate(rem_len)?;
 

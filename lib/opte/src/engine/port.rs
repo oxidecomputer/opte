@@ -142,18 +142,18 @@ impl From<HdrTransformError> for ProcessError {
 /// The result of processing a packet.
 ///
 /// * Bypass: Let this packet bypass the system; do not process it at
-/// all. XXX This is probably going away as its only use is for
-/// punting on traffic I didn't want to deal with yet.
+///   all. XXX This is probably going away as its only use is for
+///   punting on traffic I didn't want to deal with yet.
 ///
 /// * Drop: The packet has been dropped, as determined by the rules
-/// or because of resource exhaustion. Included is the reason for the
-/// drop.
+///   or because of resource exhaustion. Included is the reason for the
+///   drop.
 ///
 /// * Modified: The packet has been modified based on its matching rules.
 ///
 /// * Hairpin: One of the layers has determined that it should reply
-/// directly with a packet of its own. In this case the original
-/// packet is dropped.
+///   directly with a packet of its own. In this case the original
+///   packet is dropped.
 #[derive(Debug, DError)]
 pub enum ProcessResult {
     Bypass,
@@ -1253,8 +1253,7 @@ impl<N: NetworkImpl> Port<N> {
         // case wherein we need to reacquire the lock -- invalidation
         // by TCP state.
         let mut lock = Some(self.data.lock());
-        let mut data =
-            lock.as_mut().expect("lock should be held on this codepath");
+        let data = lock.as_mut().expect("lock should be held on this codepath");
 
         // (1) Check for UFT and precompiled.
         let epoch = self.epoch();
@@ -1303,7 +1302,7 @@ impl<N: NetworkImpl> Port<N> {
                     Direction::Out => (owned_pair.as_ref(), Some(&flow_before)),
                     Direction::In => (Some(&flow_before), owned_pair.as_ref()),
                 };
-                self.uft_invalidate(&mut data, ufid_out, ufid_in, epoch);
+                self.uft_invalidate(data, ufid_out, ufid_in, epoch);
 
                 FastPathDecision::Slow
             }
@@ -1461,11 +1460,11 @@ impl<N: NetworkImpl> Port<N> {
             // (3) Full-table processing for the packet, then drop the lock.
             // Cksum updates are the only thing left undone.
             (_, Direction::In) => {
-                let mut data = lock
+                let data = lock
                     .as_mut()
                     .expect("lock should be held on this codepath");
                 let res = self.process_in_miss(
-                    &mut data,
+                    data,
                     epoch,
                     &mut pkt,
                     &flow_before,
@@ -1482,11 +1481,11 @@ impl<N: NetworkImpl> Port<N> {
                 res
             }
             (_, Direction::Out) => {
-                let mut data = lock
+                let data = lock
                     .as_mut()
                     .expect("lock should be held on this codepath");
-                let res = self
-                    .process_out_miss(&mut data, epoch, &mut pkt, &mut ameta);
+                let res =
+                    self.process_out_miss(data, epoch, &mut pkt, &mut ameta);
                 // Prevent double-counting reprocessed modify entries.
                 if !(reprocess
                     && matches!(res, Ok(InternalProcessResult::Modified)))
@@ -1768,7 +1767,7 @@ impl Transforms {
                         continue;
                     }
                     HeaderAction::Modify(m) => {
-                        still_permissable &= !inner_ether.replace(m).is_some();
+                        still_permissable &= inner_ether.replace(m).is_none();
                     }
                     HeaderAction::Ignore => {}
                 }
@@ -1779,14 +1778,14 @@ impl Transforms {
                         continue;
                     }
                     HeaderAction::Modify(m) => {
-                        still_permissable &= !inner_ip.replace(m).is_some();
+                        still_permissable &= inner_ip.replace(m).is_none();
                     }
                     HeaderAction::Ignore => {}
                 }
 
                 match &transform.inner_ulp {
                     UlpHeaderAction::Modify(m) => {
-                        still_permissable &= !inner_ulp.replace(m).is_some();
+                        still_permissable &= inner_ulp.replace(m).is_none();
                     }
                     UlpHeaderAction::Ignore => {}
                 }
@@ -2252,8 +2251,7 @@ impl<N: NetworkImpl> Port<N> {
                 &dir,
                 pkt_len,
             ),
-            Ok(v) => Ok(v.into()),
-            Err(e) => Err(e),
+            v => v,
         }
     }
 
@@ -2775,7 +2773,7 @@ enum TcpDirection<'a> {
     Out { ufid_out: &'a InnerFlowId },
 }
 
-impl<'a> TcpDirection<'a> {
+impl TcpDirection<'_> {
     fn dir(&self) -> Direction {
         match self {
             Self::In { .. } => Direction::In,
@@ -2838,8 +2836,7 @@ impl TcpFlowEntryState {
                     bytes_out: 0,
                 },
                 KMutexType::Spin,
-            )
-            .into(),
+            ),
         }
     }
 
@@ -2860,8 +2857,7 @@ impl TcpFlowEntryState {
                     bytes_out,
                 },
                 KMutexType::Spin,
-            )
-            .into(),
+            ),
         }
     }
 

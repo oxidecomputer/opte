@@ -234,7 +234,7 @@ pub trait PacketState {}
 /// ULP header, and continues to the last byte of the packet. This
 /// transformation is currently limited to only modifying bytes; it
 /// does not allow adding or removing bytes (e.g. to encrypt the body).
-pub trait BodyTransform: fmt::Display + DynClone {
+pub trait BodyTransform: fmt::Display + DynClone + Send + Sync {
     /// Execute the body transformation. The body segments include
     /// **only** body data, starting directly after the end of the ULP
     /// header.
@@ -308,6 +308,8 @@ pub enum ParseError {
 
 impl ParseError {
     fn data(&self, data: &mut [u64]) {
+        // Allow due to possibility of future options.
+        #[allow(clippy::single_match)]
         match self {
             ParseError::UnrecognisedTunnelOpt { class, ty } => {
                 [data[0], data[1]] = [*class as u64, *ty as u64];
@@ -457,13 +459,19 @@ impl<T: Read> PktBodyWalker<T> {
             let mut to_hold = vec![];
             if let Some(ref mut chunk) = first {
                 let as_bytes = chunk.deref_mut();
-                to_hold.push(unsafe { core::mem::transmute(as_bytes) });
+                to_hold.push(unsafe {
+                    core::mem::transmute::<&mut [u8], (*mut u8, usize)>(
+                        as_bytes,
+                    )
+                });
             }
 
             // TODO(drop-safety): we need to give these chunks a longer life, too.
             while let Ok(chunk) = rest.next_chunk() {
                 let as_bytes = chunk.deref();
-                to_hold.push(unsafe { core::mem::transmute(as_bytes) });
+                to_hold.push(unsafe {
+                    core::mem::transmute::<&[u8], (*mut u8, usize)>(as_bytes)
+                });
             }
 
             let to_store = Box::into_raw(Box::new(to_hold.into_boxed_slice()));
@@ -499,7 +507,7 @@ impl<T: Read> PktBodyWalker<T> {
 
         unsafe {
             let a = (&*(*slice_ptr)) as *const _;
-            core::mem::transmute(a)
+            &*(a as *const [&[u8]])
         }
     }
 
@@ -521,7 +529,7 @@ impl<T: Read> PktBodyWalker<T> {
         // possible referent.
         unsafe {
             let a = (&mut *(*slice_ptr)) as *mut _;
-            core::mem::transmute(a)
+            &mut *(a as *mut [&mut [u8]])
         }
     }
 }
@@ -555,7 +563,7 @@ impl<T: Read> core::fmt::Debug for PacketData<T> {
 
 impl<T: Read> PacketData<T> {
     pub fn initial_lens(&self) -> Option<&InitialLayerLens> {
-        self.initial_lens.as_ref().map(|v| &**v)
+        self.initial_lens.as_deref()
     }
 
     pub fn outer_ether(
@@ -576,7 +584,7 @@ impl<T: Read> PacketData<T> {
                 Some((g.vni, g.oxide_external_pkt))
             }
             Some(InlineHeader::Raw(ValidEncapMeta::Geneve(_, g))) => {
-                Some((g.vni(), valid_geneve_has_oxide_external(&g)))
+                Some((g.vni(), valid_geneve_has_oxide_external(g)))
             }
             None => None,
         }
@@ -733,7 +741,7 @@ impl<T: Read> From<&PacketData<T>> for InnerFlowId {
             })
             .unwrap_or((0, 0));
 
-        InnerFlowId { proto: proto.into(), addrs, src_port, dst_port }
+        InnerFlowId { proto, addrs, src_port, dst_port }
     }
 }
 
@@ -1068,7 +1076,7 @@ impl<T: Read> Packet<FullParsed<T>> {
                     L3::Ipv6(BoxedHeader::Repr(o)) => L3Repr::Ipv6(*o),
                     L3::Ipv4(BoxedHeader::Repr(o)) => L3Repr::Ipv4(*o),
                     L3::Ipv6(BoxedHeader::Raw(o)) => {
-                        L3Repr::Ipv6((&o).to_owned(None)?)
+                        L3Repr::Ipv6(o.to_owned(None)?)
                     }
                     L3::Ipv4(BoxedHeader::Raw(o)) => L3Repr::Ipv4((&o).into()),
                 });
@@ -1171,7 +1179,7 @@ impl<T: Read> Packet<FullParsed<T>> {
         self.state.body_modified = true;
 
         match self.body_segs_mut() {
-            Some(mut body_segs) => xform.run(dir, &mut body_segs),
+            Some(body_segs) => xform.run(dir, body_segs),
             None => {
                 self.state.body_modified = false;
                 Err(BodyTransformError::NoPayload)
@@ -1264,10 +1272,10 @@ impl<T: Read> Packet<FullParsed<T>> {
                             csum.add_bytes(tcp.0.as_bytes());
                             match &tcp.1 {
                                 Header::Repr(opts) => {
-                                    csum.add_bytes(&*opts);
+                                    csum.add_bytes(opts);
                                 }
                                 Header::Raw(opts) => {
-                                    csum.add_bytes(&*opts);
+                                    csum.add_bytes(opts);
                                 }
                             }
                         }
@@ -1386,10 +1394,10 @@ impl<T: Read> Packet<FullParsed<T>> {
                             csum.add_bytes(tcp.0.as_bytes());
                             match &tcp.1 {
                                 Header::Repr(opts) => {
-                                    csum.add_bytes(&*opts);
+                                    csum.add_bytes(opts);
                                 }
                                 Header::Raw(opts) => {
-                                    csum.add_bytes(&*opts);
+                                    csum.add_bytes(opts);
                                 }
                             }
                         }
@@ -1613,64 +1621,64 @@ impl EmitSpec {
 
                 if let Some(inner_new) = &push_spec.inner {
                     if let Some(inner_ulp) = &inner_new.ulp {
-                        let target = if prepend.is_none() {
-                            &mut pkt
+                        let target = if let Some(v) = prepend.as_mut() {
+                            v
                         } else {
-                            prepend.as_mut().unwrap()
+                            &mut pkt
                         };
 
                         target.emit_front(inner_ulp).unwrap();
                     }
 
                     if let Some(inner_l3) = &inner_new.l3 {
-                        let target = if prepend.is_none() {
-                            &mut pkt
+                        let target = if let Some(v) = prepend.as_mut() {
+                            v
                         } else {
-                            prepend.as_mut().unwrap()
+                            &mut pkt
                         };
 
                         target.emit_front(inner_l3).unwrap();
                     }
 
-                    let target = if prepend.is_none() {
-                        &mut pkt
+                    let target = if let Some(v) = prepend.as_mut() {
+                        v
                     } else {
-                        prepend.as_mut().unwrap()
+                        &mut pkt
                     };
 
-                    target.emit_front(&inner_new.eth).unwrap();
+                    target.emit_front(inner_new.eth).unwrap();
                 }
 
                 if let Some(outer_encap) = &push_spec.outer_encap {
                     let encap = SizeHoldingEncap {
                         encapped_len: self.ulp_len as u16,
-                        meta: &outer_encap,
+                        meta: outer_encap,
                     };
 
-                    let target = if prepend.is_none() {
-                        &mut pkt
+                    let target = if let Some(v) = prepend.as_mut() {
+                        v
                     } else {
-                        prepend.as_mut().unwrap()
+                        &mut pkt
                     };
 
                     target.emit_front(&encap).unwrap();
                 }
 
                 if let Some(outer_ip) = &push_spec.outer_ip {
-                    let target = if prepend.is_none() {
-                        &mut pkt
+                    let target = if let Some(v) = prepend.as_mut() {
+                        v
                     } else {
-                        prepend.as_mut().unwrap()
+                        &mut pkt
                     };
 
                     target.emit_front(outer_ip).unwrap();
                 }
 
                 if let Some(outer_eth) = &push_spec.outer_eth {
-                    let target = if prepend.is_none() {
-                        &mut pkt
+                    let target = if let Some(v) = prepend.as_mut() {
+                        v
                     } else {
-                        prepend.as_mut().unwrap()
+                        &mut pkt
                     };
 
                     target.emit_front(outer_eth).unwrap();

@@ -421,7 +421,7 @@ impl Predicate {
 
             Self::InnerSrcIp4(list) => match meta.inner_ip4() {
                 Some(v4) => {
-                    let ip = v4.source().into();
+                    let ip = v4.source();
                     for m in list {
                         if m.matches(ip) {
                             return true;
@@ -436,7 +436,7 @@ impl Predicate {
 
             Self::InnerDstIp4(list) => match meta.inner_ip4() {
                 Some(v4) => {
-                    let ip = v4.destination().into();
+                    let ip = v4.destination();
                     for m in list {
                         if m.matches(ip) {
                             return true;
@@ -451,7 +451,7 @@ impl Predicate {
 
             Self::InnerSrcIp6(list) => match meta.inner_ip6() {
                 Some(v6) => {
-                    let ip = v6.source().into();
+                    let ip = v6.source();
                     for m in list {
                         if m.matches(ip) {
                             return true;
@@ -463,7 +463,7 @@ impl Predicate {
 
             Self::InnerDstIp6(list) => match meta.inner_ip6() {
                 Some(v6) => {
-                    let ip = v6.destination().into();
+                    let ip = v6.destination();
                     for m in list {
                         if m.matches(ip) {
                             return true;
@@ -474,7 +474,7 @@ impl Predicate {
             },
 
             Self::InnerSrcPort(list) => {
-                match meta.inner_ulp().map(|v| v.src_port()).flatten() {
+                match meta.inner_ulp().and_then(|v| v.src_port()) {
                     // No ULP metadata or no source port (e.g. ICMPv6).
                     None => return false,
 
@@ -489,7 +489,7 @@ impl Predicate {
             }
 
             Self::InnerDstPort(list) => {
-                match meta.inner_ulp().map(|v| v.dst_port()).flatten() {
+                match meta.inner_ulp().and_then(|v| v.dst_port()) {
                     // No ULP metadata or no destination port (e.g. ICMPv6).
                     None => return false,
 
@@ -592,7 +592,7 @@ impl DataPredicate {
     // use `PacketMeta` to determine if there is a suitable payload to
     // be inspected. That is, if there is no metadata for a given
     // header, there is certainly no payload.
-    pub(crate) fn is_match<'a>(&self, meta: &MblkPacketData) -> bool {
+    pub(crate) fn is_match(&self, meta: &MblkPacketData) -> bool {
         match self {
             Self::Not(pred) => !pred.is_match(meta),
 
@@ -650,7 +650,7 @@ impl DataPredicate {
 
             Self::Dhcpv6MsgType(mt) => {
                 let body = meta.body_segs();
-                if body.len() == 0 || body[0].len() == 0 {
+                if body.is_empty() || body[0].is_empty() {
                     super::err!(
                         "Failed to read DHCPv6 message type from packet"
                     );

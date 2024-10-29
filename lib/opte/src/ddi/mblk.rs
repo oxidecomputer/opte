@@ -11,6 +11,7 @@ use crate::engine::packet::WriteError;
 #[cfg(any(feature = "std", test))]
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::mem::MaybeUninit;
@@ -461,22 +462,20 @@ impl MsgBlk {
     /// Adjusts the write pointer for this MsgBlk, initialising any extra bytes to 0.
     pub fn resize(&mut self, new_len: usize) -> Result<(), WriteError> {
         let len = self.len();
-        if new_len < len {
-            unsafe {
+        match new_len.cmp(&len) {
+            Ordering::Less => unsafe {
                 let mut_inner = self.inner.as_mut();
                 mut_inner.b_wptr = mut_inner.b_wptr.sub(len - new_len);
-            }
-            Ok(())
-        } else if new_len > len {
-            unsafe {
+                Ok(())
+            },
+            Ordering::Greater => unsafe {
                 self.write_back(new_len - len, |v| {
                     // MaybeUninit::fill is unstable.
                     let n = v.len();
                     v.as_mut_ptr().write_bytes(0, n);
                 })
-            }
-        } else {
-            Ok(())
+            },
+            Ordering::Equal => Ok(()),
         }
     }
 
@@ -703,7 +702,7 @@ pub struct MsgBlkIterMut<'a> {
     marker: PhantomData<&'a mut MsgBlk>,
 }
 
-impl<'a> MsgBlkIterMut<'a> {
+impl MsgBlkIterMut<'_> {
     pub fn next_iter(&self) -> MsgBlkIter {
         let curr = self
             .curr
@@ -763,7 +762,7 @@ impl<'a> Read for MsgBlkIterMut<'a> {
     }
 }
 
-impl<'a> BufferState for MsgBlkIterMut<'a> {
+impl BufferState for MsgBlkIterMut<'_> {
     #[inline]
     fn len(&self) -> usize {
         let own_blk_len = self

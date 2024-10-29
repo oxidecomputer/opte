@@ -121,7 +121,7 @@ impl From<u8> for MessageType {
 
 struct MessageTypeVisitor;
 
-impl<'de> Visitor<'de> for MessageTypeVisitor {
+impl Visitor<'_> for MessageTypeVisitor {
     type Value = MessageType;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {

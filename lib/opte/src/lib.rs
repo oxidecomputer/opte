@@ -192,8 +192,9 @@ mod opte_provider {
 // ================================================================
 
 /// A logging provider provides the means to log messages to some
-/// destination based on the context in which OPTE is running. For
-/// example, in a unit test this could map to `println!`. In the
+/// destination based on the context in which OPTE is running.
+///
+/// For example, in a unit test this could map to `println!`. In the
 /// illumos kernel it would map to `cmn_err(9F)`.
 ///
 /// Logging levels are provided by [`LogLevel`]. These levels will map

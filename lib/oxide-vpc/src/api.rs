@@ -347,10 +347,10 @@ impl From<PhysNet> for GuestPhysAddr {
 /// * Drop: Packets matching this entry are dropped.
 ///
 /// * InternetGateway: Packets matching this entry are forwarded to
-/// the internet. In the case of the Oxide Network the IG is not an
-/// actual destination, but rather a configuration that determines how
-/// we should NAT the flow. The address in the gateway is the source
-/// address that is to be used.
+///   the internet. In the case of the Oxide Network the IG is not an
+///   actual destination, but rather a configuration that determines how
+///   we should NAT the flow. The address in the gateway is the source
+///   address that is to be used.
 ///
 /// * Ip: Packets matching this entry are forwarded to the specified IP.
 ///
@@ -358,10 +358,10 @@ impl From<PhysNet> for GuestPhysAddr {
 /// matches the destination IP type.
 ///
 /// * VpcSubnet: Packets matching this entry are forwarded to the
-/// specified VPC Subnet. In the Oxide Network this is just an
-/// abstraction, it's simply allowing one subnet to talk to another.
-/// There is no separate VPC router process, the real routing is done
-/// by the underlay.
+///   specified VPC Subnet. In the Oxide Network this is just an
+///   abstraction, it's simply allowing one subnet to talk to another.
+///   There is no separate VPC router process, the real routing is done
+///   by the underlay.
 #[derive(Clone, Debug, Copy, Deserialize, Serialize)]
 pub enum RouterTarget {
     Drop,

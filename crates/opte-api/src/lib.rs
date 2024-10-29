@@ -39,11 +39,13 @@ pub use mac::*;
 pub use ndp::*;
 pub use ulp::*;
 
-/// The overall version of the API. Anytime an API is added, removed,
-/// or modified, this number should increment. Currently we attach no
-/// semantic meaning to the number other than as a means to verify
-/// that the user and kernel are compiled for the same API. A u64 is
-/// used to give future wiggle room to play bit games if neeeded.
+/// The overall version of the API.
+///
+/// Anytime an API is added, removed, or modified, this number should
+/// increment. Currently we attach no semantic meaning to the number
+/// other than as a means to verify that the user and kernel are compiled
+/// for the same API. A u64 is used to give future wiggle room to play bit
+/// games if needed.
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.

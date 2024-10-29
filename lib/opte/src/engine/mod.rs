@@ -169,13 +169,13 @@ pub struct HdlPktError(pub &'static str);
 /// implementation does this is two ways.
 ///
 /// 1. It provides its own unique stack of [`layer::Layer`]
-/// definitions; each made up of its unique set of [`rule::Rule`] &
-/// [`rule::Action`] pairings. Furthermore, the actions themselves may
-/// be built atop generic OPTE actions or may be provided in whole by
-/// the network implementation.
+///    definitions; each made up of its unique set of [`rule::Rule`] &
+///    [`rule::Action`] pairings. Furthermore, the actions themselves may
+///    be built atop generic OPTE actions or may be provided in whole by
+///    the network implementation.
 ///
 /// 2. It uses this trait to provide hooks into the parsing of packets
-/// as well as single packet processing (non-flow processing).
+///    as well as single packet processing (non-flow processing).
 ///
 /// OPTE itself provides a general structure for parsing; limiting the
 /// possible parse graph to that of a typical L2 + L3 + L4 packet,
@@ -225,7 +225,6 @@ pub trait NetworkImpl {
         uft_out: &FlowTable<UftEntry<InnerFlowId>>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
-        T: Read,
         T::Chunk: ByteSliceMut;
 
     /// Return the parser for this network implementation.

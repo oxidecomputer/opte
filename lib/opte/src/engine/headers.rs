@@ -288,12 +288,12 @@ pub struct SizeHoldingEncap<'a> {
     pub meta: &'a EncapMeta,
 }
 
-unsafe impl<'a> ingot::types::EmitDoesNotRelyOnBufContents
-    for SizeHoldingEncap<'a>
+unsafe impl ingot::types::EmitDoesNotRelyOnBufContents
+    for SizeHoldingEncap<'_>
 {
 }
 
-impl<'a> HeaderLen for SizeHoldingEncap<'a> {
+impl HeaderLen for SizeHoldingEncap<'_> {
     const MINIMUM_LENGTH: usize = EncapMeta::MINIMUM_LENGTH;
 
     #[inline]
@@ -302,7 +302,7 @@ impl<'a> HeaderLen for SizeHoldingEncap<'a> {
     }
 }
 
-impl<'a> Emit for SizeHoldingEncap<'a> {
+impl Emit for SizeHoldingEncap<'_> {
     #[inline]
     fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
         match self.meta {
@@ -557,7 +557,7 @@ impl<M: ModifyActionArg> UlpHeaderAction<M> {
                     meta.run_modify(arg)?;
                     Ok(true)
                 }
-                None => return Err(HeaderActionError::MissingHeader),
+                None => Err(HeaderActionError::MissingHeader),
             },
         }
     }

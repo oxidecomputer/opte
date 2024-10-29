@@ -53,9 +53,9 @@ impl<V: ByteSlice> L3<V> {
             }
             L3::Ipv6(v6) => {
                 let mut pseudo_hdr_bytes = [0u8; 40];
-                pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().as_ref());
+                pseudo_hdr_bytes[0..16].copy_from_slice(v6.source().as_ref());
                 pseudo_hdr_bytes[16..32]
-                    .copy_from_slice(&v6.destination().as_ref());
+                    .copy_from_slice(v6.destination().as_ref());
                 pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
                 let ulp_len = v6.payload_len() as u32;
                 pseudo_hdr_bytes[32..36]
@@ -95,9 +95,9 @@ impl<V: ByteSlice> ValidL3<V> {
             }
             ValidL3::Ipv6(v6) => {
                 let mut pseudo_hdr_bytes = [0u8; 40];
-                pseudo_hdr_bytes[0..16].copy_from_slice(&v6.source().as_ref());
+                pseudo_hdr_bytes[0..16].copy_from_slice(v6.source().as_ref());
                 pseudo_hdr_bytes[16..32]
-                    .copy_from_slice(&v6.destination().as_ref());
+                    .copy_from_slice(v6.destination().as_ref());
                 pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
                 let ulp_len = v6.payload_len() as u32;
                 pseudo_hdr_bytes[32..36]
@@ -135,10 +135,10 @@ impl<V: ByteSliceMut> ValidL3<V> {
             csum.add_bytes(ip.0.as_bytes());
             match &ip.1 {
                 Header::Repr(opts) => {
-                    csum.add_bytes(&*opts);
+                    csum.add_bytes(opts);
                 }
                 Header::Raw(opts) => {
-                    csum.add_bytes(&*opts);
+                    csum.add_bytes(opts);
                 }
             }
 

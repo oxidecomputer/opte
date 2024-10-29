@@ -895,7 +895,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             msg: "underlay not yet initialized".into(),
         });
     }
-    if unsafe { xde_devs.read().len() } > 0 {
+    if unsafe { !xde_devs.read().is_empty() } {
         return Err(OpteError::System {
             errno: EBUSY,
             msg: "underlay in use by attached ports".into(),
@@ -1208,7 +1208,7 @@ unsafe extern "C" fn xde_detach(
         _ => return DDI_FAILURE,
     }
 
-    if xde_devs.read().len() > 0 {
+    if !xde_devs.read().is_empty() {
         warn!("failed to detach: outstanding ports");
         return DDI_FAILURE;
     }
@@ -1398,9 +1398,9 @@ fn guest_loopback_probe(
 }
 
 #[no_mangle]
-fn guest_loopback<'a>(
+fn guest_loopback(
     src_dev: &XdeDev,
-    devs: &'a KRwLockReadGuard<Vec<Box<XdeDev>>>,
+    devs: &KRwLockReadGuard<Vec<Box<XdeDev>>>,
     mut pkt: MsgBlk,
     vni: Vni,
 ) {
@@ -1415,7 +1415,7 @@ fn guest_loopback<'a>(
         Ok(pkt) => pkt,
         Err(e) => {
             opte::engine::dbg!("Loopback bad packet: {:?}", e);
-            bad_packet_parse_probe(None, Direction::In, mblk_addr, &e.into());
+            bad_packet_parse_probe(None, Direction::In, mblk_addr, &e);
 
             return;
         }
@@ -1553,7 +1553,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 Some(src_dev.port.name_cstr()),
                 Direction::Out,
                 mblk_addr,
-                &e.into(),
+                &e,
             );
             return ptr::null_mut();
         }
@@ -1865,7 +1865,7 @@ unsafe fn xde_rx_one(
             //
             // We don't know the port yet, thus the None.
             opte::engine::dbg!("Tx bad packet: {:?}", e);
-            bad_packet_parse_probe(None, Direction::In, mblk_addr, &e.into());
+            bad_packet_parse_probe(None, Direction::In, mblk_addr, &e);
 
             return;
         }

@@ -145,8 +145,7 @@ impl DlsLink {
             Ok(DlsStream {
                 inner: Some(DlsStreamInner { dld_str }),
                 link: mph.link_id(),
-            }
-            .into())
+            })
         } else {
             self.release(mph);
             Err(res)

@@ -866,7 +866,7 @@ impl Layer {
 
                 if let Some(body_segs) = pkt.body_segs() {
                     if let Some(bt) =
-                        desc.gen_bt(Direction::In, pkt.meta(), &body_segs)?
+                        desc.gen_bt(Direction::In, pkt.meta(), body_segs)?
                     {
                         pkt.body_transform(Direction::In, &*bt)?;
                         xforms.body.push(bt);
@@ -1057,7 +1057,7 @@ impl Layer {
                 );
 
                 if let Some(body_segs) = pkt.body_segs() {
-                    if let Some(bt) = desc.gen_bt(In, pkt.meta(), &body_segs)? {
+                    if let Some(bt) = desc.gen_bt(In, pkt.meta(), body_segs)? {
                         pkt.body_transform(In, &*bt)?;
                         xforms.body.push(bt);
                     }
@@ -1153,7 +1153,7 @@ impl Layer {
 
                 if let Some(body_segs) = pkt.body_segs() {
                     if let Some(bt) =
-                        desc.gen_bt(Direction::Out, pkt.meta(), &body_segs)?
+                        desc.gen_bt(Direction::Out, pkt.meta(), body_segs)?
                     {
                         pkt.body_transform(Direction::Out, &*bt)?;
                         xforms.body.push(bt);
@@ -1346,9 +1346,7 @@ impl Layer {
                 );
 
                 if let Some(body_segs) = pkt.body_segs() {
-                    if let Some(bt) =
-                        desc.gen_bt(Out, pkt.meta(), &body_segs)?
-                    {
+                    if let Some(bt) = desc.gen_bt(Out, pkt.meta(), body_segs)? {
                         pkt.body_transform(Out, &*bt)?;
                         xforms.body.push(bt);
                     }
@@ -1575,7 +1573,7 @@ pub enum RuleRemoveErr {
     NotFound,
 }
 
-impl<'a> RuleTable {
+impl RuleTable {
     fn add(&mut self, rule: Rule<rule::Finalized>) {
         match self.find_pos(&rule) {
             RulePlace::End => {
@@ -1599,7 +1597,7 @@ impl<'a> RuleTable {
         dump
     }
 
-    fn find_match<'b>(
+    fn find_match(
         &mut self,
         ifid: &InnerFlowId,
         pmeta: &MblkPacketData,

@@ -1000,7 +1000,6 @@ fn _encap(
 ) -> MsgBlk {
     let pkt = Packet::new(inner_pkt.iter_mut());
     let base_len = pkt.len();
-    drop(pkt);
 
     let mut outer_geneve = Geneve { vni: dst.vni, ..Default::default() };
 
