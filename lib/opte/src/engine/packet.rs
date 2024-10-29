@@ -796,6 +796,11 @@ impl<T: Read + BufferState> Packet<Initialized<T>> {
     }
 }
 
+pub type LiteInPkt<T, NP> =
+    Packet<LiteParsed<T, <NP as NetworkParser>::InMeta<<T as Read>::Chunk>>>;
+pub type LiteOutPkt<T, NP> =
+    Packet<LiteParsed<T, <NP as NetworkParser>::OutMeta<<T as Read>::Chunk>>>;
+
 impl<'a, T: Read + BufferState + 'a> Packet<Initialized<T>>
 where
     T::Chunk: IntoBufPointer<'a> + ByteSliceMut,
@@ -814,7 +819,7 @@ where
     pub fn parse_inbound<NP: NetworkParser>(
         self,
         net: NP,
-    ) -> Result<Packet<LiteParsed<T, NP::InMeta<T::Chunk>>>, ParseError> {
+    ) -> Result<LiteInPkt<T, NP>, ParseError> {
         let len = self.len();
         let base_ptr = self.mblk_addr();
         let Packet { state: Initialized { inner } } = self;
@@ -829,7 +834,7 @@ where
     pub fn parse_outbound<NP: NetworkParser>(
         self,
         net: NP,
-    ) -> Result<Packet<LiteParsed<T, NP::OutMeta<T::Chunk>>>, ParseError> {
+    ) -> Result<LiteOutPkt<T, NP>, ParseError> {
         let len = self.len();
         let base_ptr = self.mblk_addr();
         let Packet { state: Initialized { inner } } = self;

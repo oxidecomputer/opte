@@ -19,6 +19,7 @@ pub mod port_state;
 pub use opte::api::Direction::*;
 pub use opte::api::MacAddr;
 pub use opte::ddi::mblk::MsgBlk;
+use opte::ddi::mblk::MsgBlkIterMut;
 pub use opte::engine::ether::EtherMeta;
 pub use opte::engine::ether::EtherType;
 pub use opte::engine::ether::Ethernet;
@@ -37,6 +38,8 @@ pub use opte::engine::ip::v6::Ipv6;
 pub use opte::engine::ip::v6::Ipv6Addr;
 pub use opte::engine::ip::L3Repr;
 pub use opte::engine::layer::DenyReason;
+use opte::engine::packet::LiteInPkt;
+use opte::engine::packet::LiteOutPkt;
 pub use opte::engine::packet::MblkLiteParsed;
 pub use opte::engine::packet::Packet;
 pub use opte::engine::packet::ParseError;
@@ -111,7 +114,7 @@ macro_rules! expect_modified {
 pub fn parse_inbound<NP: NetworkParser>(
     pkt: &mut MsgBlk,
     parser: NP,
-) -> Result<Packet<MblkLiteParsed<'_, NP::InMeta<&'_ mut [u8]>>>, ParseError> {
+) -> Result<LiteInPkt<MsgBlkIterMut<'_>, NP>, ParseError> {
     let pkt = Packet::new(pkt.iter_mut());
     pkt.parse_inbound(parser)
 }
@@ -119,7 +122,7 @@ pub fn parse_inbound<NP: NetworkParser>(
 pub fn parse_outbound<NP: NetworkParser>(
     pkt: &mut MsgBlk,
     parser: NP,
-) -> Result<Packet<MblkLiteParsed<'_, NP::OutMeta<&'_ mut [u8]>>>, ParseError> {
+) -> Result<LiteOutPkt<MsgBlkIterMut<'_>, NP>, ParseError> {
     let pkt = Packet::new(pkt.iter_mut());
     pkt.parse_outbound(parser)
 }
