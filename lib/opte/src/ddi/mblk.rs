@@ -189,11 +189,9 @@ impl Drop for MsgBlkChain {
 /// The `no_std` implementation is used when running in-kernel. The
 /// main difference is the `mblk_t` and `dblk_t` structures are coming
 /// from viona (outbound/Tx) and mac (inbound/Rx), and we consume them
-/// via [`Packet::wrap_mblk()`]. In reality this is typically holding
+/// via [`MsgBlk::wrap_mblk()`]. In reality this is typically holding
 /// an Ethernet _frame_, but we prefer to use the colloquial
 /// nomenclature of "packet".
-///
-/// [`Packet::wrap_mblk()`]: crate::engine::packet::Packet::wrap_mblk
 #[derive(Debug)]
 pub struct MsgBlk {
     pub inner: NonNull<mblk_t>,
