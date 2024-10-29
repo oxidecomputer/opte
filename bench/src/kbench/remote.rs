@@ -8,6 +8,8 @@
 //! over physical links.
 
 use super::*;
+#[cfg(target_os = "illumos")]
+use std::collections::HashSet;
 use std::io::Read;
 use std::io::Write;
 use std::net::Ipv6Addr;

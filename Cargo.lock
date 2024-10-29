@@ -902,7 +902,7 @@ dependencies = [
  "ingot-types",
  "macaddr",
  "serde",
- "zerocopy 0.8.3",
+ "zerocopy 0.8.7",
 ]
 
 [[package]]
@@ -925,7 +925,7 @@ source = "git+https://github.com/oxidecomputer/ingot.git?rev=3b38859ca143eaa1287
 dependencies = [
  "ingot-macros",
  "macaddr",
- "zerocopy 0.8.3",
+ "zerocopy 0.8.7",
 ]
 
 [[package]]
@@ -1288,7 +1288,7 @@ dependencies = [
  "tabwriter",
  "usdt",
  "version_check",
- "zerocopy 0.8.3",
+ "zerocopy 0.8.7",
 ]
 
 [[package]]
@@ -1391,7 +1391,7 @@ dependencies = [
  "tabwriter",
  "usdt",
  "uuid",
- "zerocopy 0.8.3",
+ "zerocopy 0.8.7",
 ]
 
 [[package]]
@@ -2760,11 +2760,11 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.3"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "199837a02c176ffe66ac6e3f6195ff49ed0ae9c0fc9c905970f924909812aba6"
+checksum = "bb3da5f7220f919a6c7af7c856435a68ee1582fd7a77aa72936257d8335bd6f6"
 dependencies = [
- "zerocopy-derive 0.8.3",
+ "zerocopy-derive 0.8.7",
 ]
 
 [[package]]
@@ -2780,9 +2780,9 @@ dependencies = [
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.3"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c76c8bc3d9d3594dabe11d4ffab6cd71cc2c3ce38526c6de5a0d81dd0039627"
+checksum = "2e5f54f3cc93cd80745404626681b4b9fca9a867bad5a8424b618eb0db1ae6ea"
 dependencies = [
  "proc-macro2",
  "quote",
