@@ -4,6 +4,8 @@
 
 // Copyright 2024 Oxide Computer Company
 
+//! IPv6 Headers.
+
 use crate::engine::headers::HeaderActionError;
 use crate::engine::packet::MismatchError;
 use crate::engine::packet::ParseError;

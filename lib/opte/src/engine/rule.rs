@@ -460,7 +460,7 @@ impl HdrTransform {
     }
 
     /// Run this header transformation against the passed in
-    /// [`PacketMeta`], mutating it in place.
+    /// [`PacketData`], mutating it in place.
     ///
     /// Returns whether the inner checksum needs recomputed.
     ///
@@ -652,10 +652,9 @@ impl From<smoltcp::wire::Error> for GenBtError {
 pub trait HairpinAction: Display {
     /// Generate a [`Packet`] to hairpin back to the source. The
     /// `meta` argument holds the packet metadata, including any
-    /// modifications made by previous layers up to this point. The
-    /// `rdr` argument provides a [`PacketReader`] against
-    /// [`Packet<Parsed>`], with its starting position set to the
-    /// beginning of the packet's payload.
+    /// modifications made by previous layers up to this point.
+    /// This also provides access to a reader over the packet body,
+    /// positioned after the parsed metadata.
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult;
 
     /// Return the predicates implicit to this action.

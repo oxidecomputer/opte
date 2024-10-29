@@ -45,7 +45,8 @@ struct MsgBlkChainInner {
 /// Network packets are provided by illumos as a linked list of linked lists,
 /// using the `b_next` and `b_prev` fields.
 ///
-/// See the documentation for [`super::packet::Packet`] and/or [`MsgBlk`] for full context.
+/// See the documentation for [`crate::engine::packet::Packet`] and/or [`MsgBlk`]
+/// for full context.
 // TODO: We might retool this type now that MsgBlk does not decompose
 // each mblk_t into individual segments (i.e., packets could be allocated
 // a lifetime via PhantomData based on whether we want to remove them from the chain or modify in place).
@@ -191,6 +192,8 @@ impl Drop for MsgBlkChain {
 /// via [`Packet::wrap_mblk()`]. In reality this is typically holding
 /// an Ethernet _frame_, but we prefer to use the colloquial
 /// nomenclature of "packet".
+///
+/// [`Packet::wrap_mblk()`]: crate::engine::packet::Packet::wrap_mblk
 #[derive(Debug)]
 pub struct MsgBlk {
     pub inner: NonNull<mblk_t>,
@@ -783,7 +786,7 @@ impl<'a> BufferState for MsgBlkIterMut<'a> {
 }
 
 /// For the `no_std`/illumos kernel environment, we want the `mblk_t`
-/// drop to occur at the [`Packet`] level, where we can make use of
+/// drop to occur at the packet level, where we can make use of
 /// `freemsg(9F)`.
 impl Drop for MsgBlk {
     fn drop(&mut self) {
