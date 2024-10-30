@@ -45,6 +45,7 @@ impl<V: ByteSlice> L3<V> {
                 pseudo_hdr_bytes[0..4].copy_from_slice(v4.source().as_ref());
                 pseudo_hdr_bytes[4..8]
                     .copy_from_slice(v4.destination().as_ref());
+                // pseudo_hdr_bytes[8] reserved
                 pseudo_hdr_bytes[9] = v4.protocol().0;
                 let ulp_len = v4.total_len() - 4 * (v4.ihl() as u16);
                 pseudo_hdr_bytes[10..].copy_from_slice(&ulp_len.to_be_bytes());
@@ -56,10 +57,11 @@ impl<V: ByteSlice> L3<V> {
                 pseudo_hdr_bytes[0..16].copy_from_slice(v6.source().as_ref());
                 pseudo_hdr_bytes[16..32]
                     .copy_from_slice(v6.destination().as_ref());
-                pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
                 let ulp_len = v6.payload_len() as u32;
                 pseudo_hdr_bytes[32..36]
                     .copy_from_slice(&ulp_len.to_be_bytes());
+                pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
+
                 Checksum::compute(&pseudo_hdr_bytes)
             }
         }
@@ -98,10 +100,10 @@ impl<V: ByteSlice> ValidL3<V> {
                 pseudo_hdr_bytes[0..16].copy_from_slice(v6.source().as_ref());
                 pseudo_hdr_bytes[16..32]
                     .copy_from_slice(v6.destination().as_ref());
-                pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
                 let ulp_len = v6.payload_len() as u32;
                 pseudo_hdr_bytes[32..36]
                     .copy_from_slice(&ulp_len.to_be_bytes());
+                pseudo_hdr_bytes[39] = v6.next_layer().unwrap_or_default().0;
 
                 Checksum::compute(&pseudo_hdr_bytes)
             }

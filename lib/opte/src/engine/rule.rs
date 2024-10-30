@@ -9,6 +9,7 @@
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
 use super::ether::Ethernet;
+use super::ether::EthernetMut;
 use super::ether::EthernetPacket;
 use super::ether::ValidEthernet;
 use super::flow_table::StateSummary;
@@ -21,6 +22,10 @@ use super::headers::IpPush;
 use super::headers::Transform;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
+use super::ip::v4::Ipv4Mut;
+use super::ip::v6::v6_set_next_header;
+use super::ip::v6::Ipv6Mut;
+use super::ip::ValidL3;
 use super::ip::L3;
 use super::packet::BodyTransform;
 use super::packet::InnerFlowId;
@@ -28,6 +33,7 @@ use super::packet::MblkFullParsed;
 use super::packet::MblkPacketData;
 use super::packet::Packet;
 use super::packet::PacketData;
+use super::parse::ValidUlp;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
@@ -44,8 +50,16 @@ use core::fmt::Debug;
 use core::fmt::Display;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
+use ingot::icmp::IcmpV4Mut;
+use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV6Mut;
+use ingot::icmp::IcmpV6Ref;
+use ingot::ip::IpProtocol;
+use ingot::tcp::TcpFlags;
+use ingot::tcp::TcpMut;
 use ingot::types::InlineHeader;
 use ingot::types::Read;
+use ingot::udp::UdpMut;
 use opte_api::Direction;
 use serde::Deserialize;
 use serde::Serialize;
@@ -317,6 +331,104 @@ pub struct CompiledTransform {
     pub inner_ip: Option<IpMod>,
     pub inner_ulp: Option<UlpMetaModify>,
     pub checksums_dirty: bool,
+}
+
+impl CompiledTransform {
+    #[inline(always)]
+    pub fn transform_ether<V: ByteSliceMut>(
+        &self,
+        ether: &mut ValidEthernet<V>,
+    ) {
+        if let Some(ether_tx) = &self.inner_ether {
+            if let Some(new_src) = &ether_tx.src {
+                ether.set_source(*new_src);
+            }
+            if let Some(new_dst) = &ether_tx.dst {
+                ether.set_destination(*new_dst);
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn transform_l3<V: ByteSliceMut>(&self, l3: &mut ValidL3<V>) {
+        match (l3, &self.inner_ip) {
+            (ValidL3::Ipv4(pkt), Some(IpMod::Ip4(tx))) => {
+                if let Some(new_src) = &tx.src {
+                    pkt.set_source(*new_src);
+                }
+                if let Some(new_dst) = &tx.dst {
+                    pkt.set_destination(*new_dst);
+                }
+                if let Some(new_proto) = &tx.proto {
+                    pkt.set_protocol(IpProtocol(u8::from(*new_proto)));
+                }
+            }
+            (ValidL3::Ipv6(pkt), Some(IpMod::Ip6(tx))) => {
+                if let Some(new_src) = &tx.src {
+                    pkt.set_source(*new_src);
+                }
+                if let Some(new_dst) = &tx.dst {
+                    pkt.set_destination(*new_dst);
+                }
+                if let Some(new_proto) = &tx.proto {
+                    let ipp = IpProtocol(u8::from(*new_proto));
+
+                    // `expect`ing is too risky, but we know we won't fail
+                    // here for two reasons:
+                    // * We just succeeded at parsing.
+                    // * Compiled transforms cannot perform *structural*
+                    //   changes to packets (incl. push/pop/modify EHs).
+                    let _ = v6_set_next_header(ipp, pkt);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[inline(always)]
+    pub fn transform_ulp<V: ByteSliceMut>(&self, ulp: &mut ValidUlp<V>) {
+        match (ulp, &self.inner_ulp) {
+            (ValidUlp::Tcp(pkt), Some(tx)) => {
+                if let Some(flags) = tx.tcp_flags {
+                    pkt.set_flags(TcpFlags::from_bits_retain(flags));
+                }
+
+                if let Some(new_src) = &tx.generic.src_port {
+                    pkt.set_source(*new_src);
+                }
+
+                if let Some(new_dst) = &tx.generic.dst_port {
+                    pkt.set_destination(*new_dst);
+                }
+            }
+            (ValidUlp::Udp(pkt), Some(tx)) => {
+                if let Some(new_src) = &tx.generic.src_port {
+                    pkt.set_source(*new_src);
+                }
+
+                if let Some(new_dst) = &tx.generic.dst_port {
+                    pkt.set_destination(*new_dst);
+                }
+            }
+            (ValidUlp::IcmpV4(pkt), Some(tx))
+                if pkt.ty() == 0 || pkt.ty() == 8 =>
+            {
+                if let Some(new_id) = tx.icmp_id {
+                    pkt.rest_of_hdr_mut()[..2]
+                        .copy_from_slice(&new_id.to_be_bytes())
+                }
+            }
+            (ValidUlp::IcmpV6(pkt), Some(tx))
+                if pkt.ty() == 128 || pkt.ty() == 129 =>
+            {
+                if let Some(new_id) = tx.icmp_id {
+                    pkt.rest_of_hdr_mut()[..2]
+                        .copy_from_slice(&new_id.to_be_bytes())
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

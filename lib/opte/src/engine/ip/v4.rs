@@ -125,10 +125,9 @@ impl<V: ByteSlice> ValidIpv4<V> {
             }));
         }
 
-        // Packets can have arbitrary zero-padding at the end so
-        // our length *could* be larger than the packet reports.
-        // Unlikely in practice as Encap headers push us past the 64B
-        // minimum packet size.
+        // Bail if our total len value is less than the IPv4 header
+        // itself requires.
+        // Note: IHL checks are baked into ingot.
         let expt_internal_len = (self.ihl() as usize) << 2;
         if (self.total_len() as usize) < expt_internal_len {
             return Err(ParseError::BadLength(MismatchError {

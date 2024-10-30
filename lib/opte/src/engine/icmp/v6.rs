@@ -364,6 +364,7 @@ impl HairpinAction for RouterAdvertisement {
 
         let ip6 = Ipv6 {
             source: *self.ip(),
+            // Safety: We match on this being Some(_) above, so unwrap is safe.
             destination: meta.inner_ip6().unwrap().source(),
             next_header: IngotIpProto::ICMP_V6,
             payload_len: reply_len as u16,

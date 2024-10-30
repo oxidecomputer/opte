@@ -63,6 +63,7 @@ impl HairpinAction for IcmpEchoReply {
 
         let ty = MessageType::from(icmp.ty());
 
+        // We'll be recycling the sequence and identity.
         let rest_of_hdr = match (ty, icmp.code()) {
             (MessageType { inner: wire::Icmpv4Message::EchoRequest }, 0) => {
                 icmp.rest_of_hdr()

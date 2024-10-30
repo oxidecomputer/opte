@@ -172,9 +172,9 @@ pub fn v6_set_next_header<V: ByteSliceMut>(
             }
         },
         FieldMut::Raw(Header::Raw(a)) => {
-            // TODO: this, but more widely in ingot.
-            // making this generic over all Repeated in
-            // was... somewhat challenging.
+            // This would be better done over all `Repeated` in ingot,
+            // however making mutable access generic in that case proved
+            // challenging. We can just do it manually for now.
             let mut buf = a.as_mut();
 
             while !matches!(curr_ipp.class(), ExtHdrClass::NotAnEh) {
@@ -185,6 +185,7 @@ pub fn v6_set_next_header<V: ByteSliceMut>(
                 buf = rem;
                 curr_ipp = nh;
 
+                // We're at the last EH -- now we can update the next header.
                 if matches!(nh.class(), ExtHdrClass::NotAnEh) {
                     match hdr {
                         ValidLowRentV6Eh::IpV6ExtFragment(mut f) => {

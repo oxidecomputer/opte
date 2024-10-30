@@ -26,6 +26,7 @@ use super::icmp::QueryEcho;
 use super::icmp::ValidIcmpEcho;
 use super::ip::v4::Ipv4Mut;
 use super::ip::v4::Ipv4Ref;
+use super::ip::v6::v6_set_next_header;
 use super::ip::v6::Ipv6Mut;
 use super::ip::v6::Ipv6Packet;
 use super::ip::v6::Ipv6Ref;
@@ -196,6 +197,35 @@ fn exit_on_arp<V: ByteSlice>(eth: &ValidEthernet<V>) -> ParseControl {
     }
 }
 
+#[inline(always)]
+fn flow_id<V: ByteSlice>(
+    l3: Option<&ValidL3<V>>,
+    ulp: Option<&ValidUlp<V>>,
+) -> InnerFlowId {
+    let (proto, addrs) = match l3 {
+        Some(ValidL3::Ipv4(pkt)) => (
+            pkt.protocol().0,
+            AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
+        ),
+        Some(ValidL3::Ipv6(pkt)) => (
+            pkt.next_layer().unwrap_or_default().0,
+            AddrPair::V6 { src: pkt.source(), dst: pkt.destination() },
+        ),
+        None => (255, FLOW_ID_DEFAULT.addrs),
+    };
+
+    let (src_port, dst_port) = ulp
+        .map(|ulp| {
+            (
+                ulp.true_src_port().or_else(|| ulp.pseudo_port()).unwrap_or(0),
+                ulp.true_dst_port().or_else(|| ulp.pseudo_port()).unwrap_or(0),
+            )
+        })
+        .unwrap_or((0, 0));
+
+    InnerFlowId { proto, addrs, src_port, dst_port }
+}
+
 #[derive(Parse)]
 pub struct NoEncap<Q: ByteSlice> {
     #[ingot(control = exit_on_arp)]
@@ -214,34 +244,7 @@ impl<T: ByteSlice> From<ValidNoEncap<T>> for OpteMeta<T> {
 impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
     #[inline]
     fn flow(&self) -> InnerFlowId {
-        let (proto, addrs) = match &self.inner_l3 {
-            Some(ValidL3::Ipv4(pkt)) => (
-                pkt.protocol().0,
-                AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
-            ),
-            Some(ValidL3::Ipv6(pkt)) => (
-                pkt.next_layer().unwrap_or_default().0,
-                AddrPair::V6 { src: pkt.source(), dst: pkt.destination() },
-            ),
-            None => (255, FLOW_ID_DEFAULT.addrs),
-        };
-
-        let (src_port, dst_port) = self
-            .inner_ulp
-            .as_ref()
-            .map(|ulp| {
-                (
-                    ulp.true_src_port()
-                        .or_else(|| ulp.pseudo_port())
-                        .unwrap_or(0),
-                    ulp.true_dst_port()
-                        .or_else(|| ulp.pseudo_port())
-                        .unwrap_or(0),
-                )
-            })
-            .unwrap_or((0, 0));
-
-        InnerFlowId { proto, addrs, src_port, dst_port }
+        flow_id(self.inner_l3.as_ref(), self.inner_ulp.as_ref())
     }
 
     #[inline]
@@ -249,87 +252,15 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
     where
         V: ByteSliceMut,
     {
-        // TODO: break out commonalities for this and geneve.
-        if let Some(ether_tx) = &transform.inner_ether {
-            if let Some(new_src) = &ether_tx.src {
-                self.inner_eth.set_source(*new_src);
-            }
-            if let Some(new_dst) = &ether_tx.dst {
-                self.inner_eth.set_destination(*new_dst);
-            }
+        transform.transform_ether(&mut self.inner_eth);
+        if let Some(l3) = self.inner_l3.as_mut() {
+            transform.transform_l3(l3);
         }
-        match (&mut self.inner_l3, &transform.inner_ip) {
-            (Some(ValidL3::Ipv4(pkt)), Some(IpMod::Ip4(tx))) => {
-                if let Some(new_src) = &tx.src {
-                    pkt.set_source(*new_src);
-                }
-                if let Some(new_dst) = &tx.dst {
-                    pkt.set_destination(*new_dst);
-                }
-                if let Some(new_proto) = &tx.proto {
-                    pkt.set_protocol(IpProtocol(u8::from(*new_proto)));
-                }
-            }
-            (Some(ValidL3::Ipv6(pkt)), Some(IpMod::Ip6(tx))) => {
-                if let Some(new_src) = &tx.src {
-                    pkt.set_source(*new_src);
-                }
-                if let Some(new_dst) = &tx.dst {
-                    pkt.set_destination(*new_dst);
-                }
-                if let Some(new_proto) = &tx.proto {
-                    // TODO: wrong in the face of EHs...
-                    // For now, we never use this on our dataplane.
-                    pkt.set_next_header(IpProtocol(u8::from(*new_proto)));
-                }
-            }
-            _ => {}
-        }
-
-        match (&mut self.inner_ulp, &transform.inner_ulp) {
-            (Some(ValidUlp::Tcp(pkt)), Some(tx)) => {
-                if let Some(flags) = tx.tcp_flags {
-                    pkt.set_flags(TcpFlags::from_bits_retain(flags));
-                }
-
-                if let Some(new_src) = &tx.generic.src_port {
-                    pkt.set_source(*new_src);
-                }
-
-                if let Some(new_dst) = &tx.generic.dst_port {
-                    pkt.set_destination(*new_dst);
-                }
-            }
-            (Some(ValidUlp::Udp(pkt)), Some(tx)) => {
-                if let Some(new_src) = &tx.generic.src_port {
-                    pkt.set_source(*new_src);
-                }
-
-                if let Some(new_dst) = &tx.generic.dst_port {
-                    pkt.set_destination(*new_dst);
-                }
-            }
-            (Some(ValidUlp::IcmpV4(pkt)), Some(tx))
-                if pkt.ty() == 0 || pkt.ty() == 8 =>
-            {
-                if let Some(new_id) = tx.icmp_id {
-                    pkt.rest_of_hdr_mut()[..2]
-                        .copy_from_slice(&new_id.to_be_bytes())
-                }
-            }
-            (Some(ValidUlp::IcmpV6(pkt)), Some(tx))
-                if pkt.ty() == 128 || pkt.ty() == 129 =>
-            {
-                if let Some(new_id) = tx.icmp_id {
-                    pkt.rest_of_hdr_mut()[..2]
-                        .copy_from_slice(&new_id.to_be_bytes())
-                }
-            }
-            _ => {}
+        if let Some(ulp) = self.inner_ulp.as_mut() {
+            transform.transform_ulp(ulp);
         }
     }
 
-    // FIXME: identical to Geneve.
     #[inline]
     fn compute_body_csum(&self) -> Option<Checksum> {
         let use_pseudo = if let Some(v) = &self.inner_ulp {
@@ -445,30 +376,7 @@ impl<T: ByteSlice> From<ValidGeneveOverV6<T>> for OpteMeta<T> {
 impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
     #[inline]
     fn flow(&self) -> InnerFlowId {
-        let (proto, addrs) = match &self.inner_l3 {
-            ValidL3::Ipv4(pkt) => (
-                pkt.protocol().0,
-                AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
-            ),
-            ValidL3::Ipv6(pkt) => (
-                pkt.next_layer().unwrap_or_default().0,
-                AddrPair::V6 { src: pkt.source(), dst: pkt.destination() },
-            ),
-        };
-
-        let src_port = self
-            .inner_ulp
-            .true_src_port()
-            .or_else(|| self.inner_ulp.pseudo_port())
-            .unwrap_or(0);
-
-        let dst_port = self
-            .inner_ulp
-            .true_dst_port()
-            .or_else(|| self.inner_ulp.pseudo_port())
-            .unwrap_or(0);
-
-        InnerFlowId { proto, addrs, src_port, dst_port }
+        flow_id(Some(&self.inner_l3), Some(&self.inner_ulp))
     }
 
     #[inline]
@@ -476,84 +384,9 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
     where
         V: ByteSliceMut,
     {
-        // TODO: break out commonalities for this and geneve.
-        if let Some(ether_tx) = &transform.inner_ether {
-            if let Some(new_src) = &ether_tx.src {
-                self.inner_eth.set_source(*new_src);
-            }
-            if let Some(new_dst) = &ether_tx.dst {
-                self.inner_eth.set_destination(*new_dst);
-            }
-        }
-        match (&mut self.inner_l3, &transform.inner_ip) {
-            (ValidL3::Ipv4(pkt), Some(IpMod::Ip4(tx))) => {
-                if let Some(new_src) = &tx.src {
-                    pkt.set_source(*new_src);
-                }
-                if let Some(new_dst) = &tx.dst {
-                    pkt.set_destination(*new_dst);
-                }
-                if let Some(new_proto) = &tx.proto {
-                    pkt.set_protocol(IpProtocol(u8::from(*new_proto)));
-                }
-            }
-            (ValidL3::Ipv6(pkt), Some(IpMod::Ip6(tx))) => {
-                if let Some(new_src) = &tx.src {
-                    pkt.set_source(*new_src);
-                }
-                if let Some(new_dst) = &tx.dst {
-                    pkt.set_destination(*new_dst);
-                }
-                if let Some(new_proto) = &tx.proto {
-                    // TODO: wrong in the face of EHs...
-                    // For now, we never use this on our dataplane.
-                    pkt.set_next_header(IpProtocol(u8::from(*new_proto)));
-                }
-            }
-            _ => {}
-        }
-
-        match (&mut self.inner_ulp, &transform.inner_ulp) {
-            (ValidUlp::Tcp(pkt), Some(tx)) => {
-                if let Some(flags) = tx.tcp_flags {
-                    pkt.set_flags(TcpFlags::from_bits_retain(flags));
-                }
-
-                if let Some(new_src) = &tx.generic.src_port {
-                    pkt.set_source(*new_src);
-                }
-
-                if let Some(new_dst) = &tx.generic.dst_port {
-                    pkt.set_destination(*new_dst);
-                }
-            }
-            (ValidUlp::Udp(pkt), Some(tx)) => {
-                if let Some(new_src) = &tx.generic.src_port {
-                    pkt.set_source(*new_src);
-                }
-
-                if let Some(new_dst) = &tx.generic.dst_port {
-                    pkt.set_destination(*new_dst);
-                }
-            }
-            (ValidUlp::IcmpV4(pkt), Some(tx))
-                if pkt.ty() == 0 || pkt.ty() == 8 =>
-            {
-                if let Some(new_id) = tx.icmp_id {
-                    pkt.rest_of_hdr_mut()[..2]
-                        .copy_from_slice(&new_id.to_be_bytes())
-                }
-            }
-            (ValidUlp::IcmpV6(pkt), Some(tx))
-                if pkt.ty() == 128 || pkt.ty() == 129 =>
-            {
-                if let Some(new_id) = tx.icmp_id {
-                    pkt.rest_of_hdr_mut()[..2]
-                        .copy_from_slice(&new_id.to_be_bytes())
-                }
-            }
-            _ => {}
-        }
+        transform.transform_ether(&mut self.inner_eth);
+        transform.transform_l3(&mut self.inner_l3);
+        transform.transform_ulp(&mut self.inner_ulp);
     }
 
     #[inline]
@@ -602,6 +435,7 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
 
     #[inline]
     fn validate(&self, pkt_len: usize) -> Result<(), ParseError> {
+        // Outer layers.
         let rem_len =
             pkt_len - (&self.outer_eth, &self.outer_v6).packet_length();
         self.outer_v6.validate(rem_len)?;
@@ -611,6 +445,7 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
 
         validate_geneve(&self.outer_encap)?;
 
+        // Inner layers.
         let rem_len = rem_len
             - (&self.outer_encap, &self.outer_eth, &self.inner_l3)
                 .packet_length();
