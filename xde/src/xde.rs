@@ -1613,7 +1613,6 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 }
             };
 
-
             let devs = unsafe { xde_devs.read() };
 
             let l4_hash = emit_spec.l4_hash();
