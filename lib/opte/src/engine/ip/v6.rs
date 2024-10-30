@@ -17,12 +17,15 @@ use ingot::ip::Ecn;
 use ingot::ip::ExtHdrClass;
 use ingot::ip::IpProtocol;
 use ingot::ip::IpV6Ext6564Mut;
+use ingot::ip::IpV6Ext6564Ref;
 use ingot::ip::IpV6ExtFragmentMut;
+use ingot::ip::IpV6ExtFragmentRef;
 use ingot::ip::LowRentV6EhRepr;
 use ingot::ip::ValidLowRentV6Eh;
 use ingot::types::primitives::*;
 use ingot::types::util::Repeated;
 use ingot::types::FieldMut;
+use ingot::types::FieldRef;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
 use ingot::types::ParseChoice;
@@ -138,6 +141,7 @@ pub struct Ipv6Mod {
     pub proto: Option<Protocol>,
 }
 
+#[inline]
 pub fn v6_set_next_header<V: ByteSliceMut>(
     ipp: IpProtocol,
     v6: &mut (impl Ipv6Mut<V> + Ipv6Ref<V>),
@@ -201,6 +205,34 @@ pub fn v6_set_next_header<V: ByteSliceMut>(
     }
 
     Ok(())
+}
+
+#[inline]
+pub fn v6_get_next_header<V: ByteSlice>(
+    v6: &impl Ipv6Ref<V>,
+) -> Result<IpProtocol, HeaderActionError> {
+    let curr_ipp = v6.next_header();
+    if matches!(curr_ipp.class(), ExtHdrClass::NotAnEh) {
+        return Ok(curr_ipp);
+    }
+
+    Ok(match v6.v6ext_ref() {
+        FieldRef::Repr(a) => match a.iter().last() {
+            Some(LowRentV6EhRepr::IpV6ExtFragment(f)) => f.next_header,
+            Some(LowRentV6EhRepr::IpV6Ext6564(f)) => f.next_header,
+            None => curr_ipp,
+        },
+        FieldRef::Raw(Header::Repr(a)) => match a.iter().last() {
+            Some(LowRentV6EhRepr::IpV6ExtFragment(f)) => f.next_header,
+            Some(LowRentV6EhRepr::IpV6Ext6564(f)) => f.next_header,
+            None => curr_ipp,
+        },
+        FieldRef::Raw(Header::Raw(a)) => match a.iter(Some(curr_ipp)).last() {
+            Some(Ok(ValidLowRentV6Eh::IpV6ExtFragment(f))) => f.next_header(),
+            Some(Ok(ValidLowRentV6Eh::IpV6Ext6564(f))) => f.next_header(),
+            _ => curr_ipp,
+        },
+    })
 }
 
 #[cfg(test)]

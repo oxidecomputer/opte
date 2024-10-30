@@ -16,6 +16,7 @@ use super::ip::v4::Ipv4Addr;
 use super::ip::v4::Ipv4Cidr;
 use super::ip::v4::Ipv4Ref;
 use super::ip::v4::Protocol;
+use super::ip::v6::v6_get_next_header;
 use super::ip::v6::Ipv6Addr;
 use super::ip::v6::Ipv6Cidr;
 use super::ip::v6::Ipv6Ref;
@@ -408,8 +409,11 @@ impl Predicate {
                 }
 
                 Some(L3::Ipv6(ipv6)) => {
-                    // NOTE: I know this is bugged on EHs.
-                    let proto = Protocol::from(ipv6.next_header().0);
+                    let proto = Protocol::from(
+                        v6_get_next_header(ipv6)
+                            .unwrap_or_else(|_| ipv6.next_header())
+                            .0,
+                    );
 
                     for m in list {
                         if m.matches(proto) {
