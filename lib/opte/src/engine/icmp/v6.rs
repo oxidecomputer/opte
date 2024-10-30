@@ -19,6 +19,7 @@ use ingot::ethernet::Ethertype;
 use ingot::icmp::IcmpV6;
 use ingot::icmp::IcmpV6Packet;
 use ingot::icmp::IcmpV6Ref;
+use ingot::icmp::ValidIcmpV6;
 use ingot::ip::IpProtocol as IngotIpProto;
 use ingot::types::Emit;
 use ingot::types::HeaderLen;
@@ -652,6 +653,20 @@ impl HairpinAction for NeighborAdvertisement {
 }
 
 impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
+    #[inline]
+    fn echo_id(&self) -> Option<u16> {
+        match (self.code(), self.ty()) {
+            (0, 128) | (0, 129) => {
+                ValidIcmpEcho::parse(&self.rest_of_hdr_ref()[..])
+                    .ok()
+                    .map(|(v, ..)| v.id())
+            }
+            _ => None,
+        }
+    }
+}
+
+impl<B: ByteSlice> QueryEcho for ValidIcmpV6<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
         match (self.code(), self.ty()) {

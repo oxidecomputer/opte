@@ -9,7 +9,6 @@
 
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
-use super::ether::EthernetMut;
 use super::ether::EthernetPacket;
 use super::ether::EthernetRef;
 use super::ether::ValidEthernet;
@@ -18,16 +17,12 @@ use super::geneve::GENEVE_PORT;
 use super::headers::HasInnerCksum;
 use super::headers::HeaderActionError;
 use super::headers::HeaderActionModify;
-use super::headers::IpMod;
 use super::headers::UlpMetaModify;
 use super::headers::ValidEncapMeta;
 use super::icmp::IcmpEchoMut;
 use super::icmp::QueryEcho;
 use super::icmp::ValidIcmpEcho;
-use super::ip::v4::Ipv4Mut;
 use super::ip::v4::Ipv4Ref;
-use super::ip::v6::v6_set_next_header;
-use super::ip::v6::Ipv6Mut;
 use super::ip::v6::Ipv6Packet;
 use super::ip::v6::Ipv6Ref;
 use super::ip::ValidL3;
@@ -549,20 +544,8 @@ impl<V: ByteSlice> Ulp<V> {
     #[inline]
     pub fn pseudo_port(&self) -> Option<u16> {
         match self {
-            Ulp::IcmpV4(pkt)
-                if pkt.code() == 0 && (pkt.ty() == 0 || pkt.ty() == 8) =>
-            {
-                Some(u16::from_be_bytes(
-                    pkt.rest_of_hdr()[..2].try_into().unwrap(),
-                ))
-            }
-            Ulp::IcmpV6(pkt)
-                if pkt.code() == 0 && (pkt.ty() == 128 || pkt.ty() == 129) =>
-            {
-                Some(u16::from_be_bytes(
-                    pkt.rest_of_hdr()[..2].try_into().unwrap(),
-                ))
-            }
+            Ulp::IcmpV4(pkt) => pkt.echo_id(),
+            Ulp::IcmpV6(pkt) => pkt.echo_id(),
             _ => None,
         }
     }
@@ -590,20 +573,8 @@ impl<V: ByteSlice> ValidUlp<V> {
     #[inline]
     pub fn pseudo_port(&self) -> Option<u16> {
         match self {
-            ValidUlp::IcmpV4(pkt)
-                if pkt.code() == 0 && (pkt.ty() == 0 || pkt.ty() == 8) =>
-            {
-                Some(u16::from_be_bytes(
-                    pkt.rest_of_hdr()[..2].try_into().unwrap(),
-                ))
-            }
-            ValidUlp::IcmpV6(pkt)
-                if pkt.code() == 0 && (pkt.ty() == 128 || pkt.ty() == 129) =>
-            {
-                Some(u16::from_be_bytes(
-                    pkt.rest_of_hdr()[..2].try_into().unwrap(),
-                ))
-            }
+            ValidUlp::IcmpV4(pkt) => pkt.echo_id(),
+            ValidUlp::IcmpV6(pkt) => pkt.echo_id(),
             _ => None,
         }
     }

@@ -17,6 +17,7 @@ use ingot::ethernet::Ethertype;
 use ingot::icmp::IcmpV4;
 use ingot::icmp::IcmpV4Packet;
 use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::ValidIcmpV4;
 use ingot::ip::IpProtocol;
 use ingot::types::HeaderLen;
 use ingot::types::HeaderParse;
@@ -207,6 +208,20 @@ impl Display for MessageType {
 }
 
 impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
+    #[inline]
+    fn echo_id(&self) -> Option<u16> {
+        match (self.code(), self.ty()) {
+            (0, 0) | (0, 8) => {
+                ValidIcmpEcho::parse(self.rest_of_hdr_ref().as_slice())
+                    .ok()
+                    .map(|(v, ..)| v.id())
+            }
+            _ => None,
+        }
+    }
+}
+
+impl<B: ByteSlice> QueryEcho for ValidIcmpV4<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
         match (self.code(), self.ty()) {
