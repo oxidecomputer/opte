@@ -637,7 +637,7 @@ impl MsgBlk {
     /// # Errors
     ///
     /// * Return [`WrapError::NullPtr`] is `mp` is `NULL`.
-    /// * Return [`WrapError::Chain`] is `mp->b_next` or `mp->b_next` are set.
+    /// * Return [`WrapError::Chain`] is `mp->b_next` or `mp->b_prev` are set.
     pub unsafe fn wrap_mblk(ptr: *mut mblk_t) -> Result<Self, WrapError> {
         let inner = NonNull::new(ptr).ok_or(WrapError::NullPtr)?;
         let inner_ref = inner.as_ref();
@@ -724,7 +724,7 @@ impl<'a> Iterator for MsgBlkIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(ptr) = self.curr {
             self.curr = NonNull::new(unsafe { (*ptr.as_ptr()).b_cont });
-            // SAFETY: MsgBlkNode is identical to mblk_t.
+            // SAFETY: MsgBlkNode has identical layout to mblk_t.
             unsafe { Some(&*(ptr.as_ptr() as *const MsgBlkNode)) }
         } else {
             None
@@ -746,7 +746,7 @@ impl<'a> Iterator for MsgBlkIterMut<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(ptr) = self.curr {
             self.curr = NonNull::new(unsafe { (*ptr.as_ptr()).b_cont });
-            // SAFETY: MsgBlkNode is identical to mblk_t.
+            // SAFETY: MsgBlkNode has identical layout to mblk_t.
             unsafe { Some(&mut *(ptr.as_ptr() as *mut MsgBlkNode)) }
         } else {
             None

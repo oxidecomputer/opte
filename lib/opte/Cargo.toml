@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["api", "std", "alloc"]
+default = ["api", "std"]
 api = []
 engine = ["api", "dep:crc32fast", "dep:derror-macro", "dep:heapless", "dep:itertools", "dep:zerocopy"]
 kernel = ["illumos-sys-hdrs/kernel"]
@@ -20,9 +20,6 @@ std = ["dep:tabwriter", "opte-api/std"]
 #
 test-help = []
 usdt = ["std", "dep:usdt"]
-
-# I have made a mistake in ingot.
-alloc = []
 
 [dependencies]
 derror-macro = { workspace = true, optional = true }

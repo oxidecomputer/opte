@@ -479,7 +479,6 @@ impl HairpinAction for DhcpAction {
     }
 
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
-        // TODO: fold reader access into PacketHeaders2
         let body = meta.copy_remaining();
         let client_pkt = DhcpPacket::new_checked(&body)?;
         let client_dhcp = DhcpRepr::parse(&client_pkt)?;

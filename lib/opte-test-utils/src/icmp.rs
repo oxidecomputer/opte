@@ -145,40 +145,20 @@ pub fn gen_icmp_echo(
     .into();
     ip.compute_checksum();
 
-    let total_len = eth.packet_length() + ip.packet_length() + icmp_bytes.len();
     let mut segments = vec![];
 
     match n_segments {
         1 => {
-            let mut pkt = MsgBlk::new_ethernet(total_len);
-            pkt.emit_back(&(eth, ip)).unwrap();
-            pkt.write_bytes_back(&icmp_bytes).unwrap();
-
-            return pkt;
+            return MsgBlk::new_ethernet_pkt((&eth, &ip, &icmp_bytes));
         }
         2 => {
-            let mut pkt = MsgBlk::new_ethernet(eth.packet_length());
-            pkt.emit_back(eth).unwrap();
-            segments.push(pkt);
-
-            let t_len = ip.packet_length() + icmp.buffer_len();
-            let mut pkt = MsgBlk::new(t_len);
-            pkt.emit_back(ip).unwrap();
-            pkt.write_bytes_back(&icmp_bytes).unwrap();
-            segments.push(pkt);
+            segments.push(MsgBlk::new_ethernet_pkt(eth));
+            segments.push(MsgBlk::new_pkt((&ip, &icmp_bytes)));
         }
         3 => {
-            let mut pkt = MsgBlk::new_ethernet(eth.packet_length());
-            pkt.emit_back(eth).unwrap();
-            segments.push(pkt);
-
-            let mut pkt = MsgBlk::new(ip.packet_length());
-            pkt.emit_back(ip).unwrap();
-            segments.push(pkt);
-
-            let mut pkt = MsgBlk::new(icmp.buffer_len());
-            pkt.write_bytes_back(&icmp_bytes).unwrap();
-            segments.push(pkt);
+            segments.push(MsgBlk::new_ethernet_pkt(eth));
+            segments.push(MsgBlk::new_pkt(ip));
+            segments.push(MsgBlk::new_pkt(&icmp_bytes));
         }
         _ => {
             panic!("only 1 2 or 3 segments allowed")
@@ -270,41 +250,20 @@ pub fn gen_icmpv6_echo(
         ..Default::default()
     };
 
-    let total_len =
-        eth.packet_length() + ip.packet_length() + icmp.buffer_len();
     let mut segments = vec![];
 
     match n_segments {
         1 => {
-            let mut pkt = MsgBlk::new_ethernet(total_len);
-            pkt.emit_back(&(eth, ip)).unwrap();
-            pkt.write_bytes_back(&body_bytes).unwrap();
-
-            return pkt;
+            return MsgBlk::new_ethernet_pkt((&eth, &ip, &body_bytes));
         }
         2 => {
-            let mut pkt = MsgBlk::new_ethernet(eth.packet_length());
-            pkt.emit_back(eth).unwrap();
-            segments.push(pkt);
-
-            let t_len = ip.packet_length() + icmp.buffer_len();
-            let mut pkt = MsgBlk::new(t_len);
-            pkt.emit_back(ip).unwrap();
-            pkt.write_bytes_back(&body_bytes).unwrap();
-            segments.push(pkt);
+            segments.push(MsgBlk::new_ethernet_pkt(eth));
+            segments.push(MsgBlk::new_pkt((&ip, &body_bytes)));
         }
         3 => {
-            let mut pkt = MsgBlk::new_ethernet(eth.packet_length());
-            pkt.emit_back(eth).unwrap();
-            segments.push(pkt);
-
-            let mut pkt = MsgBlk::new(ip.packet_length());
-            pkt.emit_back(ip).unwrap();
-            segments.push(pkt);
-
-            let mut pkt = MsgBlk::new(icmp.buffer_len());
-            pkt.write_bytes_back(&body_bytes).unwrap();
-            segments.push(pkt);
+            segments.push(MsgBlk::new_ethernet_pkt(eth));
+            segments.push(MsgBlk::new_pkt(ip));
+            segments.push(MsgBlk::new_pkt(&body_bytes));
         }
         _ => {
             panic!("only 1 2 or 3 segments allowed")

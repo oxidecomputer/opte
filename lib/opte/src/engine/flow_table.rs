@@ -89,7 +89,6 @@ pub struct FlowTable<S: Dump> {
 
 impl<S> FlowTable<S>
 where
-    // S: Clone + fmt::Debug + Dump,
     S: fmt::Debug + Dump,
 {
     /// Add a new entry to the flow table.
@@ -311,12 +310,14 @@ impl<S: Dump> FlowEntry<S> {
         self.hits.load(Ordering::Relaxed)
     }
 
-    /// Increments this flow's hit counter and
+    /// Increments this flow's hit counter and updates its timestamp to
+    /// the current instant.
     pub fn hit(&self) {
         self.hit_at(Moment::now())
     }
 
-    /// Increments a flow's hit counter and sets th
+    /// Increments this flow's hit counter and updates its timestamp to
+    /// a given timestamp.
     ///
     /// This is used to minimise calls to `gethrtime` in fastpath
     /// operations. Callers *MUST* be certain that expiry logic for this flow

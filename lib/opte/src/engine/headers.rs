@@ -288,6 +288,8 @@ pub struct SizeHoldingEncap<'a> {
     pub meta: &'a EncapMeta,
 }
 
+// SAFETY: All Emit writes are done via ingot-generated methods,
+// and we don't read any element of `buf` in `SizeHoldingEncap::emit_raw`.
 unsafe impl ingot::types::EmitDoesNotRelyOnBufContents
     for SizeHoldingEncap<'_>
 {
@@ -396,14 +398,16 @@ pub trait HasInnerCksum {
     const HAS_CKSUM: bool;
 }
 
-/// Turn HeaderAction on its head a little bit: anyone can allow
-/// themselves to take an action on certain params.
+/// Transform a header layer using an OPTE action.
 pub trait Transform<H, P, M>: HasInnerCksum
 where
     P: PushAction<H> + fmt::Debug,
     M: fmt::Debug,
 {
-    /// Returns whether we will need a checksum recompute on the target field.
+    /// Modify/push/pop self, dependent on a given action.
+    ///
+    /// Returns whether we will need a checksum recompute on the target field
+    /// if it is still present.
     fn act_on(
         &mut self,
         action: &HeaderAction<P, M>,

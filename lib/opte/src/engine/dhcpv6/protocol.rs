@@ -619,6 +619,8 @@ fn generate_packet<'a>(
 
     let ip = Ipv6 {
         source: Ipv6Addr::from_eui64(&action.server_mac),
+        // Safety: We're only here if the predicates match, one of which is
+        // IPv6.
         destination: meta.inner_ip6().unwrap().source(),
         next_header: IngotIpProto::UDP,
         payload_len: udp.length,

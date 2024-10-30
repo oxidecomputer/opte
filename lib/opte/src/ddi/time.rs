@@ -36,7 +36,10 @@ pub struct Moment {
     inner: ddi::hrtime_t,
 
     // This is a duration masquerading as an instant -- this
-    // allows us to and from raw ns counts when needed on std.
+    // allows us to move to and from raw ns counts when needed on std.
+    //
+    // Ultimately, this is a requirement for us to place `Moment`s into
+    // e.g. `AtomicU64`s for table design.
     #[cfg(any(feature = "std", test))]
     inner: Duration,
 }

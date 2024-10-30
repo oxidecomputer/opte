@@ -105,7 +105,6 @@ impl HairpinAction for Icmpv6EchoReply {
     }
 
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
-        // TODO: fold reader access into PacketHeaders2
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That
@@ -233,7 +232,6 @@ impl HairpinAction for RouterAdvertisement {
     }
 
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
-        // TODO: fold reader access into PacketHeaders2
         use smoltcp::time::Duration;
         use smoltcp::wire::NdiscRouterFlags;
 

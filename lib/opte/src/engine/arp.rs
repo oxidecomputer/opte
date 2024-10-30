@@ -101,8 +101,6 @@ pub struct ArpEthIpv4 {
     #[ingot(default = size_of::<Ipv4Addr>() as u8)]
     pub plen: u8,
 
-    // TODO: I think we need to make NetworkRepr fallible when
-    //       reading.
     #[ingot(is = "u16be")]
     pub op: ArpOp,
 
