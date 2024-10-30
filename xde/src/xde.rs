@@ -1409,7 +1409,10 @@ fn guest_loopback(
     let mblk_addr = pkt.mblk_addr();
     let parsed_pkt = Packet::new(pkt.iter_mut());
 
-    // TODO: Rework currently requires a reparse on loopback to account for UFT fastpath.
+    // Loopback now requires a reparse on loopback to account for UFT fastpath.
+    // When viona serves us larger packets, we needn't worry about allocing
+    // the encap on.
+    // We might be able to do better in the interim, but that costs us time.
 
     let parsed_pkt = match parsed_pkt.parse_inbound(VpcParser {}) {
         Ok(pkt) => pkt,
@@ -1610,12 +1613,10 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 }
             };
 
-            // what we WANT to do is pass in the parsed pkt, handle the
-            // emitspec in the same place, then send elsewhere.
+
             let devs = unsafe { xde_devs.read() };
 
             let l4_hash = emit_spec.l4_hash();
-
             let out_pkt = emit_spec.apply(pkt);
 
             if ip6_src == ip6_dst {
@@ -1853,7 +1854,6 @@ unsafe fn xde_rx_one(
     // We must first parse the packet in order to determine where it
     // is to be delivered.
     let parser = VpcParser {};
-    // let mblk_addr = parsed_pkt.mblk_addr();
     let parsed_pkt = match parsed_pkt.parse_inbound(parser) {
         Ok(pkt) => pkt,
         Err(e) => {
