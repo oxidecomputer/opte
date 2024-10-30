@@ -8,22 +8,21 @@
 
 use super::*;
 use crate::ddi::mblk::MsgBlk;
+use crate::engine::checksum::HeaderChecksum;
 use crate::engine::ether::Ethernet;
 use crate::engine::ip::v4::Ipv4;
-use crate::engine::ip::L3;
 use crate::engine::packet::MblkPacketData;
 use crate::engine::predicate::Ipv4AddrMatch;
 use ingot::ethernet::Ethertype;
+use ingot::icmp::IcmpV4;
 use ingot::icmp::IcmpV4Packet;
 use ingot::icmp::IcmpV4Ref;
 use ingot::ip::IpProtocol;
-use ingot::types::Emit;
 use ingot::types::HeaderLen;
 use ingot::types::HeaderParse;
+use opte::engine::Checksum as OpteCsum;
 pub use opte_api::ip::IcmpEchoReply;
 use smoltcp::wire;
-use smoltcp::wire::Icmpv4Packet;
-use smoltcp::wire::Icmpv4Repr;
 
 impl HairpinAction for IcmpEchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
@@ -62,53 +61,70 @@ impl HairpinAction for IcmpEchoReply {
             )));
         };
 
-        // TODO: prealloc right size.
-        let mut body = icmp.emit_vec();
-        meta.append_remaining(&mut body);
+        let ty = MessageType::from(icmp.ty());
 
-        let src_pkt = Icmpv4Packet::new_checked(&body)?;
-        let src_icmp = Icmpv4Repr::parse(&src_pkt, &Csum::ignored())?;
-
-        let (src_ident, src_seq_no, src_data) = match src_icmp {
-            Icmpv4Repr::EchoRequest { ident, seq_no, data } => {
-                (ident, seq_no, data)
+        let rest_of_hdr = match (ty, icmp.code()) {
+            (MessageType { inner: wire::Icmpv4Message::EchoRequest }, 0) => {
+                icmp.rest_of_hdr()
             }
-
-            _ => {
+            (ty, code) => {
                 // We should never hit this case because the predicate
                 // should have verified that we are dealing with an
                 // Echo Request. However, programming error could
                 // cause this to happen -- let's not take any chances.
                 return Err(GenErr::Unexpected(format!(
                     "expected an ICMPv4 Echo Request, got {} {}",
-                    src_pkt.msg_type(),
-                    src_pkt.msg_code()
+                    ty, code,
                 )));
             }
         };
 
-        let reply = Icmpv4Repr::EchoReply {
-            ident: src_ident,
-            seq_no: src_seq_no,
-            data: src_data,
+        // Checksum update is minimal for a ping reply.
+        // May need to compute from scratch if offloading / request
+        // cksum is elided.
+        let mut csum = match icmp.checksum() {
+            0 => {
+                let mut csum = OpteCsum::new();
+
+                for el in meta.body_segs().into_iter() {
+                    csum.add_bytes(el);
+                }
+
+                csum.add_bytes(icmp.rest_of_hdr_ref());
+
+                csum
+            }
+            valid => {
+                let mut csum =
+                    OpteCsum::from(HeaderChecksum::wrap(valid.to_be_bytes()));
+                csum.sub_bytes(&[icmp.ty(), icmp.code()]);
+                csum
+            }
         };
 
-        let reply_len = reply.buffer_len();
-        let mut tmp = vec![0u8; reply_len];
-        let mut icmp_reply = Icmpv4Packet::new_unchecked(&mut tmp);
-        let mut csum = Csum::ignored();
-        csum.icmpv4 = Checksum::Tx;
-        reply.emit(&mut icmp_reply, &csum);
+        let ty = wire::Icmpv4Message::EchoReply.into();
+        let code = 0;
+        csum.add_bytes(&[ty, code]);
 
-        let mut ip4: L3<&mut [u8]> = Ipv4 {
+        // Build the reply in place, and send it out.
+        let body_len: usize =
+            meta.body_segs().into_iter().map(|v| v.len()).sum();
+
+        let icmp = IcmpV4 {
+            ty,
+            code,
+            checksum: csum.finalize_for_ingot(),
+            rest_of_hdr,
+        };
+
+        let mut ip4 = Ipv4 {
             source: self.echo_dst_ip,
             destination: self.echo_src_ip,
             protocol: IpProtocol::ICMP,
-            total_len: (Ipv4::MINIMUM_LENGTH + reply_len) as u16,
+            total_len: (Ipv4::MINIMUM_LENGTH + icmp.packet_length() + body_len)
+                as u16,
             ..Default::default()
-        }
-        .into();
-
+        };
         ip4.compute_checksum();
 
         let eth = Ethernet {
@@ -117,7 +133,20 @@ impl HairpinAction for IcmpEchoReply {
             ethertype: Ethertype::IPV4,
         };
 
-        Ok(AllowOrDeny::Allow(MsgBlk::new_ethernet_pkt((&eth, &ip4, &tmp))))
+        let total_len = body_len + (&eth, &ip4, &icmp).packet_length();
+
+        let mut pkt_out = MsgBlk::new_ethernet(total_len);
+        pkt_out
+            .emit_back((&eth, &ip4, &icmp))
+            .expect("Allocated space for pkt headers and body");
+
+        for el in meta.body_segs() {
+            pkt_out
+                .write_bytes_back(el)
+                .expect("allocated enough bytes for all body copy");
+        }
+
+        Ok(AllowOrDeny::Allow(pkt_out))
     }
 }
 

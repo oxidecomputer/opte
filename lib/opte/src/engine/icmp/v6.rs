@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::ddi::mblk::MsgBlk;
+use crate::engine::checksum::HeaderChecksum;
 use crate::engine::ether::Ethernet;
 use crate::engine::ip::v6::Ipv6;
 use crate::engine::ip::v6::Ipv6Ref;
@@ -15,11 +16,14 @@ use crate::engine::packet::MblkPacketData;
 use crate::engine::predicate::Ipv6AddrMatch;
 use alloc::string::String;
 use ingot::ethernet::Ethertype;
+use ingot::icmp::IcmpV6;
 use ingot::icmp::IcmpV6Packet;
 use ingot::icmp::IcmpV6Ref;
 use ingot::ip::IpProtocol as IngotIpProto;
 use ingot::types::Emit;
+use ingot::types::HeaderLen;
 use ingot::types::HeaderParse;
+use opte::engine::Checksum as OpteCsum;
 pub use opte_api::ip::Icmpv6EchoReply;
 pub use opte_api::ip::Ipv6Addr;
 pub use opte_api::ip::Ipv6Cidr;
@@ -116,68 +120,70 @@ impl HairpinAction for Icmpv6EchoReply {
             )));
         };
 
-        // Collect the src / dst IP addresses, which are needed to emit the
-        // resulting ICMPv6 echo reply.
-        let (src_ip, dst_ip) = if let Some(metadata) = meta.inner_ip6() {
-            (
-                IpAddress::Ipv6(Ipv6Address(metadata.source().bytes())),
-                IpAddress::Ipv6(Ipv6Address(metadata.destination().bytes())),
-            )
-        } else {
-            // We got the ICMPv6 metadata above but no IPv6 somehow?
-            return Err(GenErr::Unexpected(format!(
-                "Expected IPv6 packet metadata, but found: {:?}",
-                meta
-            )));
-        };
+        let ty = MessageType::from(icmp6.ty());
 
-        // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
-        // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
-        let mut body = icmp6.emit_vec();
-        meta.append_remaining(&mut body);
-
-        let src_pkt = Icmpv6Packet::new_checked(&body)?;
-        let src_icmp =
-            Icmpv6Repr::parse(&src_ip, &dst_ip, &src_pkt, &Csum::ignored())?;
-
-        let (src_ident, src_seq_no, src_data) = match src_icmp {
-            Icmpv6Repr::EchoRequest { ident, seq_no, data } => {
-                (ident, seq_no, data)
+        // We'll be recycling the sequence and identity.
+        let rest_of_hdr = match (ty, icmp6.code()) {
+            (MessageType { inner: Icmpv6Message::EchoRequest }, 0) => {
+                icmp6.rest_of_hdr()
             }
-
-            _ => {
+            (ty, code) => {
                 // We should never hit this case because the predicate
                 // should have verified that we are dealing with an
                 // Echo Request. However, programming error could
                 // cause this to happen -- let's not take any chances.
                 return Err(GenErr::Unexpected(format!(
                     "expected an ICMPv6 Echo Request, got {} {}",
-                    src_pkt.msg_type(),
-                    src_pkt.msg_code()
+                    ty, code,
                 )));
             }
         };
 
-        let reply = Icmpv6Repr::EchoReply {
-            ident: src_ident,
-            seq_no: src_seq_no,
-            data: src_data,
+        // Checksum update is minimal for a ping reply.
+        // May need to compute from scratch if offloading / request
+        // cksum is elided.
+        let mut csum = match icmp6.checksum() {
+            0 => {
+                let mut csum = OpteCsum::new();
+
+                for el in meta.body_segs().into_iter() {
+                    csum.add_bytes(el);
+                }
+
+                csum.add_bytes(icmp6.rest_of_hdr_ref());
+
+                csum
+            }
+            valid => {
+                let mut csum =
+                    OpteCsum::from(HeaderChecksum::wrap(valid.to_be_bytes()));
+                csum.sub_bytes(&[icmp6.ty(), icmp6.code()]);
+                csum
+            }
         };
 
-        // TODO: less Vec
+        let ty = Icmpv6Message::EchoReply.into();
+        let code = 0;
+        csum.add_bytes(&[ty, code]);
 
-        let reply_len = reply.buffer_len();
-        let mut ulp_body = vec![0u8; reply_len];
-        let mut icmp_reply = Icmpv6Packet::new_unchecked(&mut ulp_body);
-        let mut csum = Csum::ignored();
-        csum.icmpv6 = Checksum::Tx;
-        reply.emit(&dst_ip, &src_ip, &mut icmp_reply, &csum);
+        // Build the reply in place, and send it out.
+        let body_len: usize =
+            meta.body_segs().into_iter().map(|v| v.len()).sum();
 
+        let icmp = IcmpV6 {
+            ty,
+            code,
+            checksum: csum.finalize_for_ingot(),
+            rest_of_hdr,
+        };
+
+        // Note: an IP address swap does not require addition/removal from
+        // the internet checksum.
         let ip6 = Ipv6 {
             source: self.dst_ip,
             destination: self.src_ip,
             next_header: IngotIpProto::ICMP_V6,
-            payload_len: reply_len as u16,
+            payload_len: (icmp.packet_length() + body_len) as u16,
             ..Default::default()
         };
 
@@ -187,9 +193,19 @@ impl HairpinAction for Icmpv6EchoReply {
             ethertype: Ethertype::IPV6,
         };
 
-        Ok(AllowOrDeny::Allow(MsgBlk::new_ethernet_pkt((
-            &eth, &ip6, &ulp_body,
-        ))))
+        let total_len = body_len + (&eth, &ip6, &icmp).packet_length();
+        let mut pkt_out = MsgBlk::new_ethernet(total_len);
+        pkt_out
+            .emit_back((&eth, &ip6, &icmp))
+            .expect("Allocated space for pkt headers and body");
+
+        for el in meta.body_segs() {
+            pkt_out
+                .write_bytes_back(el)
+                .expect("allocated enough bytes for all body copy");
+        }
+
+        Ok(AllowOrDeny::Allow(pkt_out))
     }
 }
 
