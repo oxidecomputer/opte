@@ -91,6 +91,7 @@ use ingot::ip::IpProtocol;
 use ingot::tcp::TcpRef;
 use ingot::types::Emit;
 use ingot::types::HeaderLen;
+use ingot::types::IntoBufPointer;
 use ingot::types::Read;
 use ingot::udp::Udp;
 use kstat_macro::KStatProvider;
@@ -1689,13 +1690,13 @@ impl Transforms {
     }
 
     #[inline]
-    fn apply<T: Read>(
+    fn apply<'a, T: Read + 'a>(
         &self,
         pkt: &mut Packet<FullParsed<T>>,
         dir: Direction,
     ) -> result::Result<(), ProcessError>
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         // TODO: It should be possible to combine header transforms
         // into a single operation per layer, particularly when

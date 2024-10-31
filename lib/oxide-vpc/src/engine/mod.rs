@@ -35,6 +35,7 @@ use opte::engine::NetworkImpl;
 use opte::engine::NetworkParser;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::types::HeaderParse;
+use opte::ingot::types::IntoBufPointer;
 use opte::ingot::types::Parsed as IngotParsed;
 use opte::ingot::types::Read;
 use zerocopy::ByteSliceMut;
@@ -64,12 +65,12 @@ fn is_arp_req_for_tpa(tpa: Ipv4Addr, arp: &impl ArpEthIpv4Ref) -> bool {
 }
 
 impl VpcNetwork {
-    fn handle_arp_out<T: Read>(
+    fn handle_arp_out<'a, T: Read + 'a>(
         &self,
         pkt: &mut Packet<FullParsed<T>>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         let body = pkt
             .body_segs()
@@ -99,7 +100,7 @@ impl VpcNetwork {
 impl NetworkImpl for VpcNetwork {
     type Parser = VpcParser;
 
-    fn handle_pkt<T: Read>(
+    fn handle_pkt<'a, T: Read + 'a>(
         &self,
         dir: Direction,
         pkt: &mut Packet<FullParsed<T>>,
@@ -107,7 +108,7 @@ impl NetworkImpl for VpcNetwork {
         _uft_out: &FlowTable<UftEntry<InnerFlowId>>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         match (dir, pkt.meta().inner_ether().ethertype()) {
             (Direction::Out, Ethertype::ARP) => self.handle_arp_out(pkt),

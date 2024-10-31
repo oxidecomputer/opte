@@ -217,7 +217,7 @@ pub trait NetworkImpl {
     /// myriad of reasons. The error returned is for informational
     /// purposes, rather than having any obvious direct action to take
     /// in response.
-    fn handle_pkt<T: Read>(
+    fn handle_pkt<'a, T: Read + 'a>(
         &self,
         dir: Direction,
         pkt: &mut Packet<FullParsed<T>>,
@@ -225,7 +225,7 @@ pub trait NetworkImpl {
         uft_out: &FlowTable<UftEntry<InnerFlowId>>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
-        T::Chunk: ByteSliceMut;
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>;
 
     /// Return the parser for this network implementation.
     fn parser(&self) -> Self::Parser;

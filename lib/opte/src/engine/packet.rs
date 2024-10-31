@@ -57,8 +57,6 @@ use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
 use core::hash::Hash;
-use core::ops::Deref;
-use core::ops::DerefMut;
 use core::result;
 use core::sync::atomic::AtomicPtr;
 use crc32fast::Hasher;
@@ -425,6 +423,7 @@ pub struct OpteMeta<T: ByteSlice> {
 struct PktBodyWalker<T: Read> {
     base: Cell<Option<(Option<T::Chunk>, T)>>,
     slice: AtomicPtr<Box<[(*mut u8, usize)]>>,
+    // slice: AtomicPtr<Vec<(*mut u8, usize)>>,
 }
 
 impl<T: Read> Drop for PktBodyWalker<T> {
@@ -439,17 +438,21 @@ impl<T: Read> Drop for PktBodyWalker<T> {
     }
 }
 
-impl<T: Read> PktBodyWalker<T> {
-    fn reify_body_segs(&self)
-    where
-        <T as Read>::Chunk: ByteSliceMut,
-    {
-        if let Some((mut first, mut rest)) = self.base.take() {
+impl<'a, T: Read + 'a> PktBodyWalker<T>
+where
+    <T as Read>::Chunk: ByteSliceMut + IntoBufPointer<'a>,
+{
+    fn reify_body_segs(&self) {
+        if let Some((first, mut rest)) = self.base.take() {
             // SAFETY: ByteSlice requires as part of its API
             // that any implementors are stable, so we will always
             // get the same view via deref. We are then consuming them
             // into references which live exactly as long as their initial
             // form.
+            //
+            // IntoBufPointer guarantees that what we are working with are,
+            // in actual fact, slices (or, at least, that any necessary behaviour
+            // on owned conversion into a slice [Drop, etc.] occurs).
             //
             // The next question is one of ownership.
             // We know that these chunks are at least &[u8]s, they
@@ -457,24 +460,20 @@ impl<T: Read> PktBodyWalker<T> {
             // sourced from an exclusive borrow on something which owns a [u8]).
             // This allows us to cast to &mut later, but not here!
             let mut to_hold = Vec::with_capacity(1);
-            if let Some(ref mut chunk) = first {
-                let as_bytes = chunk.deref_mut();
-                to_hold.push(unsafe {
-                    core::mem::transmute::<&mut [u8], (*mut u8, usize)>(
-                        as_bytes,
-                    )
-                });
+            if let Some(chunk) = first {
+                let len = chunk.len();
+                let ptr = unsafe { chunk.into_buf_ptr() };
+                to_hold.push((ptr, len));
             }
 
-            // TODO(drop-safety): we need to give these chunks a longer life, too.
             while let Ok(chunk) = rest.next_chunk() {
-                let as_bytes = chunk.deref();
-                to_hold.push(unsafe {
-                    core::mem::transmute::<&[u8], (*mut u8, usize)>(as_bytes)
-                });
+                let len = chunk.len();
+                let ptr = unsafe { chunk.into_buf_ptr() };
+                to_hold.push((ptr, len));
             }
 
             let to_store = Box::into_raw(Box::new(to_hold.into_boxed_slice()));
+            // let to_store = Box::into_raw(Box::new(to_hold));
 
             self.slice
                 .compare_exchange(
@@ -484,19 +483,10 @@ impl<T: Read> PktBodyWalker<T> {
                     core::sync::atomic::Ordering::Relaxed,
                 )
                 .expect("unexpected concurrent access to body_seg memoiser");
-
-            // SAFETY:
-            // Replace contents to get correct drop behaviour on T.
-            // Currently the only ByteSlice impls are &[u8] and friends,
-            // but this may extend to e.g. Vec<u8> in future.
-            self.base.set(Some((first, rest)));
         }
     }
 
-    fn body_segs(&self) -> &[&[u8]]
-    where
-        T::Chunk: ByteSliceMut,
-    {
+    fn body_segs(&self) -> &[&[u8]] {
         let mut slice_ptr =
             self.slice.load(core::sync::atomic::Ordering::Relaxed);
         if slice_ptr.is_null() {
@@ -511,10 +501,7 @@ impl<T: Read> PktBodyWalker<T> {
         }
     }
 
-    fn body_segs_mut(&mut self) -> &mut [&mut [u8]]
-    where
-        T::Chunk: ByteSliceMut,
-    {
+    fn body_segs_mut(&mut self) -> &mut [&mut [u8]] {
         let mut slice_ptr =
             self.slice.load(core::sync::atomic::Ordering::Relaxed);
         if slice_ptr.is_null() {
@@ -561,7 +548,7 @@ impl<T: Read> core::fmt::Debug for PacketData<T> {
     }
 }
 
-impl<T: Read> PacketData<T> {
+impl<'a, T: Read + 'a> PacketData<T> {
     pub fn initial_lens(&self) -> Option<&InitialLayerLens> {
         self.initial_lens.as_deref()
     }
@@ -650,14 +637,14 @@ impl<T: Read> PacketData<T> {
 
     pub fn body_segs(&self) -> &[&[u8]]
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         self.body.body_segs()
     }
 
     pub fn copy_remaining(&self) -> Vec<u8>
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         let base = self.body_segs();
         let len = base.iter().map(|v| v.len()).sum();
@@ -670,7 +657,7 @@ impl<T: Read> PacketData<T> {
 
     pub fn append_remaining(&self, buf: &mut Vec<u8>)
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         let base = self.body_segs();
         let len = base.iter().map(|v| v.len()).sum();
@@ -682,7 +669,7 @@ impl<T: Read> PacketData<T> {
 
     pub fn body_segs_mut(&mut self) -> &mut [&mut [u8]]
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         self.body.body_segs_mut()
     }
@@ -919,7 +906,7 @@ where
     }
 }
 
-impl<T: Read> Packet<FullParsed<T>> {
+impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
     pub fn meta(&self) -> &PacketData<T> {
         &self.state.meta
     }
@@ -1173,7 +1160,7 @@ impl<T: Read> Packet<FullParsed<T>> {
         xform: &dyn BodyTransform,
     ) -> Result<(), BodyTransformError>
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         // We set the flag now with the assumption that the transform
         // could fail after modifying part of the body. In the future
@@ -1195,7 +1182,7 @@ impl<T: Read> Packet<FullParsed<T>> {
     #[inline]
     pub fn body_segs(&self) -> Option<&[&[u8]]>
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         let out = self.state.meta.body_segs();
         if out.is_empty() {
@@ -1208,7 +1195,7 @@ impl<T: Read> Packet<FullParsed<T>> {
     #[inline]
     pub fn body_segs_mut(&mut self) -> Option<&mut [&mut [u8]]>
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         let out = self.state.meta.body_segs_mut();
         if out.is_empty() {
@@ -1230,7 +1217,7 @@ impl<T: Read> Packet<FullParsed<T>> {
     /// body_csum cannot be valid.
     pub fn compute_checksums(&mut self)
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         let mut body_csum = Checksum::new();
         for seg in self.body_segs_mut().unwrap_or_default() {
@@ -1333,7 +1320,7 @@ impl<T: Read> Packet<FullParsed<T>> {
     /// case where checksums are **not** being offloaded to the hardware.
     pub fn update_checksums(&mut self)
     where
-        T::Chunk: ByteSliceMut,
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
         // If we know that no transform touched a field which features in
         // an inner transport cksum (L4/L3 src/dst, most realistically),
