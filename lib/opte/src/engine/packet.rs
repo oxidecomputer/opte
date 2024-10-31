@@ -318,20 +318,24 @@ impl ParseError {
 }
 
 impl DError for PacketParseError {
+    #[inline]
     fn discriminant(&self) -> &'static core::ffi::CStr {
         self.header().as_cstr()
     }
 
+    #[inline]
     fn child(&self) -> Option<&dyn DError> {
         Some(self.error())
     }
 }
 
 impl DError for ingot::types::ParseError {
+    #[inline]
     fn discriminant(&self) -> &'static core::ffi::CStr {
         self.as_cstr()
     }
 
+    #[inline]
     fn child(&self) -> Option<&dyn DError> {
         None
     }
@@ -379,6 +383,12 @@ pub enum WriteError {
 
 pub type WriteResult<T> = result::Result<T, WriteError>;
 
+/// The initial parsed length of every header in a packet.
+///
+/// Used to track structural changes to any packet headers
+/// which would require full serialisation of a header and
+/// its prior layers.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct InitialLayerLens {
     pub outer_eth: usize,
     pub outer_l3: usize,
@@ -493,7 +503,7 @@ where
             self.reify_body_segs();
             slice_ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
         }
-        assert!(!slice_ptr.is_null());
+        debug_assert!(!slice_ptr.is_null());
 
         unsafe {
             let a = (&*(*slice_ptr)) as *const _;
@@ -508,7 +518,7 @@ where
             self.reify_body_segs();
             slice_ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
         }
-        assert!(!slice_ptr.is_null());
+        debug_assert!(!slice_ptr.is_null());
 
         // SAFETY: We have an exclusive reference, and the ByteSliceMut
         // bound guarantees that this packet view was construced from
@@ -745,6 +755,8 @@ impl<T: Read> From<&PacketData<T>> for InnerFlowId {
 ///
 /// In illumos there is no real notion of an mblk "packet" or
 /// "segment": a packet is just a linked list of `mblk_t` values.
+/// This type indicates that an `mblk_t` chain is to be treated as
+/// a network packet, as far as its bytes are concerned.
 /// The "packet" is simply a pointer to the first `mblk_t` in the
 /// list, which also happens to be the first "segment", and any
 /// further segments are linked via `b_cont`. In the illumos
@@ -757,12 +769,10 @@ impl<T: Read> From<&PacketData<T>> for InnerFlowId {
 /// `b_next` field. In the illumos kernel code this this is often
 /// referred to with the variable name `mp_chain`, but sometimes also
 /// `mp_head` (or just `mp`). It's a bit ambiguous, and something you
-/// kind of figure out as you work in the code more. Though part of me
-/// would like to create some rust-like "new type pattern" in C to
-/// disambiguate packets from packet chains across APIs so the
-/// compiler can detect when your API is working against the wrong
-/// contract (for example a function that expects a single packet but
-/// is being fed a packet chain).
+/// kind of figure out as you work in the code more. In OPTE, we
+/// disambiguate using the `MsgBlk` and `MsgBlkChain` types. The former
+/// enforces that `b_next` and `b_prev` are disconnected.
+
 //
 // TODO: In theory, this can be any `Read` type giving us `&mut [u8]`s,
 // but in practice we are internally reliant on returning `MsgBlk`s in
@@ -843,7 +853,7 @@ where
         let IngotParsed { stack: headers, data, last_chunk } = meta;
 
         // TODO: we can probably not do this in some cases, but we
-        // don't have a way for headeractions to signal that they
+        // don't have a way for `HeaderAction`s to signal that they
         // *may* change the fields we need in the slowpath.
         let body_csum = headers.compute_body_csum();
         let flow = headers.flow();
@@ -922,20 +932,20 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
     #[inline]
     /// Convert a packet's metadata into a set of instructions
     /// needed to serialize all its changes to the wire.
-    pub fn emit_spec(mut self) -> Result<EmitSpec, ingot::types::ParseError>
+    pub fn emit_spec(&mut self) -> Result<EmitSpec, ingot::types::ParseError>
     where
         T::Chunk: ByteSliceMut,
     {
         // Roughly how this works:
         // - Identify rightmost structural-changed field.
         // - fill out owned versions into the push_spec of all
-        //   extant fields we rewound past.
+        //   present fields we rewound past.
         // - Rewind up to+including that point in original
         //   pkt space.
         let l4_hash = self.l4_hash();
-        let state = self.state;
-        let init_lens = state.meta.initial_lens.unwrap();
-        let headers = state.meta.headers;
+        let state = &self.state;
+        let init_lens = state.meta.initial_lens.as_ref().unwrap();
+        let headers = &state.meta.headers;
         let payload_len = state.len - init_lens.hdr_len();
         let mut encapped_len = payload_len;
 
@@ -950,7 +960,7 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
         // do this sort of thing. We are so, so far from that...
         let mut force_serialize = false;
 
-        match headers.inner_ulp {
+        match &headers.inner_ulp {
             Some(ulp) => {
                 let l = ulp.packet_length();
                 encapped_len += l;
@@ -960,17 +970,21 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
                         push_spec.inner.get_or_insert_with(Default::default);
 
                     inner.ulp = Some(match ulp {
-                        Ulp::Tcp(Header::Repr(t)) => UlpRepr::Tcp(*t),
-                        Ulp::Tcp(Header::Raw(t)) => UlpRepr::Tcp((&t).into()),
-                        Ulp::Udp(Header::Repr(t)) => UlpRepr::Udp(*t),
-                        Ulp::Udp(Header::Raw(t)) => UlpRepr::Udp((&t).into()),
-                        Ulp::IcmpV4(Header::Repr(t)) => UlpRepr::IcmpV4(*t),
-                        Ulp::IcmpV4(Header::Raw(t)) => {
-                            UlpRepr::IcmpV4((&t).into())
+                        Ulp::Tcp(Header::Repr(t)) => UlpRepr::Tcp(*t.clone()),
+                        Ulp::Tcp(Header::Raw(t)) => UlpRepr::Tcp(t.into()),
+                        Ulp::Udp(Header::Repr(t)) => UlpRepr::Udp(*t.clone()),
+                        Ulp::Udp(Header::Raw(t)) => UlpRepr::Udp(t.into()),
+                        Ulp::IcmpV4(Header::Repr(t)) => {
+                            UlpRepr::IcmpV4(*t.clone())
                         }
-                        Ulp::IcmpV6(Header::Repr(t)) => UlpRepr::IcmpV6(*t),
+                        Ulp::IcmpV4(Header::Raw(t)) => {
+                            UlpRepr::IcmpV4(t.into())
+                        }
+                        Ulp::IcmpV6(Header::Repr(t)) => {
+                            UlpRepr::IcmpV6(*t.clone())
+                        }
                         Ulp::IcmpV6(Header::Raw(t)) => {
-                            UlpRepr::IcmpV6((&t).into())
+                            UlpRepr::IcmpV6(t.into())
                         }
                     });
                     force_serialize = true;
@@ -984,7 +998,7 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
             _ => {}
         }
 
-        match headers.inner_l3 {
+        match &headers.inner_l3 {
             Some(l3) => {
                 let l = l3.packet_length();
                 encapped_len += l;
@@ -995,12 +1009,12 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
                         push_spec.inner.get_or_insert_with(Default::default);
 
                     inner.l3 = Some(match l3 {
-                        L3::Ipv4(Header::Repr(v4)) => L3Repr::Ipv4(*v4),
-                        L3::Ipv4(Header::Raw(v4)) => L3Repr::Ipv4((&v4).into()),
-                        L3::Ipv6(Header::Repr(v6)) => L3Repr::Ipv6(*v6),
+                        L3::Ipv4(Header::Repr(v4)) => L3Repr::Ipv4(*v4.clone()),
+                        L3::Ipv4(Header::Raw(v4)) => L3Repr::Ipv4(v4.into()),
+                        L3::Ipv6(Header::Repr(v6)) => L3Repr::Ipv6(*v6.clone()),
 
                         // We can't actually do structural mods here today using OPTE,
-                        // but account for the possibiliry at least.
+                        // but account for the possibility at least.
                         L3::Ipv6(Header::Raw(v6)) => {
                             L3Repr::Ipv6(v6.to_owned(None)?)
                         }
@@ -1020,21 +1034,21 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
         encapped_len += headers.inner_eth.packet_length();
         if force_serialize {
             let inner = push_spec.inner.get_or_insert_with(Default::default);
-            inner.eth = match headers.inner_eth {
-                Header::Repr(p) => *p,
-                Header::Raw(p) => (&p).into(),
+            inner.eth = match &headers.inner_eth {
+                Header::Repr(p) => **p,
+                Header::Raw(p) => p.into(),
             };
             rewind += init_lens.inner_eth;
         }
 
-        match headers.outer_encap {
+        match &headers.outer_encap {
             Some(encap)
                 if force_serialize
                     || encap.needs_emit()
                     || encap.packet_length() != init_lens.outer_encap =>
             {
                 push_spec.outer_encap = Some(match encap {
-                    InlineHeader::Repr(o) => o,
+                    InlineHeader::Repr(o) => *o,
                     InlineHeader::Raw(ValidEncapMeta::Geneve(u, g)) => {
                         EncapMeta::Geneve(GeneveMeta {
                             entropy: u.source(),
@@ -1056,7 +1070,7 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
             _ => {}
         }
 
-        match headers.outer_l3 {
+        match &headers.outer_l3 {
             Some(l3)
                 if force_serialize
                     || l3.needs_emit()
@@ -1065,12 +1079,12 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
                 let encap_len = push_spec.outer_encap.packet_length();
 
                 push_spec.outer_ip = Some(match l3 {
-                    L3::Ipv6(BoxedHeader::Repr(o)) => L3Repr::Ipv6(*o),
-                    L3::Ipv4(BoxedHeader::Repr(o)) => L3Repr::Ipv4(*o),
+                    L3::Ipv6(BoxedHeader::Repr(o)) => L3Repr::Ipv6(*o.clone()),
+                    L3::Ipv4(BoxedHeader::Repr(o)) => L3Repr::Ipv4(*o.clone()),
                     L3::Ipv6(BoxedHeader::Raw(o)) => {
                         L3Repr::Ipv6(o.to_owned(None)?)
                     }
-                    L3::Ipv4(BoxedHeader::Raw(o)) => L3Repr::Ipv4((&o).into()),
+                    L3::Ipv4(BoxedHeader::Raw(o)) => L3Repr::Ipv4(o.into()),
                 });
 
                 let inner_sz = (encapped_len + encap_len) as u16;
@@ -1095,15 +1109,15 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
             _ => {}
         }
 
-        match headers.outer_eth {
+        match &headers.outer_eth {
             Some(eth)
                 if force_serialize
                     || eth.needs_emit()
                     || eth.packet_length() != init_lens.outer_eth =>
             {
                 push_spec.outer_eth = Some(match eth {
-                    InlineHeader::Repr(o) => o,
-                    InlineHeader::Raw(r) => (&r).into(),
+                    InlineHeader::Repr(o) => *o,
+                    InlineHeader::Raw(r) => r.into(),
                 });
 
                 rewind += init_lens.outer_eth;

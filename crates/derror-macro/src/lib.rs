@@ -143,6 +143,7 @@ pub fn derive_derror(
     quote! {
         impl DError for #ident {
             #[allow(non_upper_case_globals)]
+            #[inline]
             fn discriminant(&self) -> &'static ::core::ffi::CStr {
                 use ::core::ffi::CStr;
                 #( #cstr_decls )*
@@ -151,6 +152,7 @@ pub fn derive_derror(
                 }
             }
 
+            #[inline]
             fn child(&self) -> Option<&dyn DError> {
                 match self {
                     #( #child_arms )*
