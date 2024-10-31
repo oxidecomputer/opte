@@ -50,7 +50,7 @@ ctor = "0.2"
 darling = "0.20"
 dyn-clone = "1.0"
 heapless = "0.8"
-ingot = { git = "https://github.com/oxidecomputer/ingot.git", rev = "3b38859ca143eaa1287308359d0f1ddea07826fd"}
+ingot = { git = "https://github.com/oxidecomputer/ingot.git", rev = "0b961bc1ff7355ceff1325959746fdc8bf661b87"}
 ipnetwork = { version = "0.20", default-features = false }
 itertools = { version = "0.13", default-features = false }
 libc = "0.2"

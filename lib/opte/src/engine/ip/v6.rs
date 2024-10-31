@@ -14,7 +14,6 @@ use crate::engine::predicate::MatchExactVal;
 use crate::engine::predicate::MatchPrefix;
 use crate::engine::predicate::MatchPrefixVal;
 use ingot::ip::Ecn;
-use ingot::ip::ExtHdrClass;
 use ingot::ip::IpProtocol;
 use ingot::ip::IpV6Ext6564Mut;
 use ingot::ip::IpV6Ext6564Ref;
@@ -147,7 +146,7 @@ pub fn v6_set_next_header<V: ByteSliceMut>(
     v6: &mut (impl Ipv6Mut<V> + Ipv6Ref<V>),
 ) -> Result<(), HeaderActionError> {
     let mut curr_ipp = v6.next_header();
-    if matches!(curr_ipp.class(), ExtHdrClass::NotAnEh) {
+    if curr_ipp.class().is_none() {
         v6.set_next_header(ipp);
         return Ok(());
     }
@@ -181,7 +180,7 @@ pub fn v6_set_next_header<V: ByteSliceMut>(
             // challenging. We can just do it manually for now.
             let mut buf = a.as_mut();
 
-            while !matches!(curr_ipp.class(), ExtHdrClass::NotAnEh) {
+            while curr_ipp.class().is_some() {
                 let (hdr, nh, rem) =
                     ValidLowRentV6Eh::parse_choice(buf, Some(curr_ipp))
                         .map_err(|_| HeaderActionError::MalformedExtension)?;
@@ -190,13 +189,13 @@ pub fn v6_set_next_header<V: ByteSliceMut>(
                 curr_ipp = nh;
 
                 // We're at the last EH -- now we can update the next header.
-                if matches!(nh.class(), ExtHdrClass::NotAnEh) {
+                if nh.class().is_none() {
                     match hdr {
                         ValidLowRentV6Eh::IpV6ExtFragment(mut f) => {
-                            f.set_next_header(nh);
+                            f.set_next_header(ipp);
                         }
                         ValidLowRentV6Eh::IpV6Ext6564(mut f) => {
-                            f.set_next_header(nh);
+                            f.set_next_header(ipp);
                         }
                     }
                 }
@@ -212,7 +211,7 @@ pub fn v6_get_next_header<V: ByteSlice>(
     v6: &impl Ipv6Ref<V>,
 ) -> Result<IpProtocol, HeaderActionError> {
     let curr_ipp = v6.next_header();
-    if matches!(curr_ipp.class(), ExtHdrClass::NotAnEh) {
+    if curr_ipp.class().is_none() {
         return Ok(curr_ipp);
     }
 
