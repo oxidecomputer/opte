@@ -1444,6 +1444,7 @@ impl<N: NetworkImpl> Port<N> {
                     epoch,
                     mblk_addr,
                     &res,
+                    1,
                 );
                 return res;
             }
@@ -1453,7 +1454,7 @@ impl<N: NetworkImpl> Port<N> {
         let mut pkt = pkt.to_full_meta();
         let mut ameta = ActionMeta::new();
 
-        let res = match (&decision, dir) {
+        let (res, path) = match (&decision, dir) {
             // (2) Apply retrieved transform. Lock is dropped.
             // Reuse cached l4 hash.
             (FastPathDecision::Uft(entry), _) if !reprocess => {
@@ -1462,7 +1463,7 @@ impl<N: NetworkImpl> Port<N> {
 
                 pkt.set_l4_hash(l4_hash);
                 tx.apply(&mut pkt, dir)?;
-                Ok(InternalProcessResult::Modified)
+                (Ok(InternalProcessResult::Modified), 2)
             }
 
             // (3) Full-table processing for the packet, then drop the lock.
@@ -1490,7 +1491,7 @@ impl<N: NetworkImpl> Port<N> {
                 drop(lock);
 
                 pkt.update_checksums();
-                res
+                (res, 3)
             }
             (_, Direction::Out) => {
                 let data = lock
@@ -1509,7 +1510,7 @@ impl<N: NetworkImpl> Port<N> {
                 drop(lock);
 
                 pkt.update_checksums();
-                res
+                (res, 3)
             }
         };
 
@@ -1532,6 +1533,7 @@ impl<N: NetworkImpl> Port<N> {
             epoch,
             mblk_addr,
             &res,
+            path,
         );
         res
     }
@@ -2000,6 +2002,7 @@ impl<N: NetworkImpl> Port<N> {
         epoch: u64,
         mblk_addr: uintptr_t,
         res: &result::Result<ProcessResult, ProcessError>,
+        path: u64,
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
@@ -2048,6 +2051,7 @@ impl<N: NetworkImpl> Port<N> {
                         mblk_addr,
                         hp_pkt_ptr,
                         eb.as_ptr(),
+                        path as uintptr_t,
                     );
                 }
             } else if #[cfg(feature = "usdt")] {
@@ -2057,6 +2061,7 @@ impl<N: NetworkImpl> Port<N> {
                     Ok(v) => format!("{:?}", v),
                     Err(e) => format!("ERROR: {:?}", e),
                 };
+                let _ = path;
 
                 crate::opte_provider::port__process__return!(
                     || (
@@ -2068,7 +2073,7 @@ impl<N: NetworkImpl> Port<N> {
                     )
                 );
             } else {
-                let (..) = (dir, flow_before, flow_after, epoch, mblk_addr, res);
+                let (..) = (dir, flow_before, flow_after, epoch, mblk_addr, res, path);
             }
         }
     }
@@ -3001,6 +3006,7 @@ extern "C" {
         pkt: uintptr_t,
         hp_pkt: uintptr_t,
         err_b: *const LabelBlock<2>,
+        path: uintptr_t,
     );
     pub fn __dtrace_probe_tcp__err(
         dir: uintptr_t,
