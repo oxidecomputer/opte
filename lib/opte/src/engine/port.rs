@@ -1211,6 +1211,7 @@ impl<N: NetworkImpl> Port<N> {
     /// # States
     ///
     /// This command is valid only for [`PortState::Running`].
+    #[inline(always)]
     pub fn process<'a, M>(
         &self,
         dir: Direction,
@@ -1993,7 +1994,7 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn port_process_return_probe(
         &self,
         dir: Direction,
