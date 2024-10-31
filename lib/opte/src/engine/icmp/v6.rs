@@ -147,7 +147,7 @@ impl HairpinAction for Icmpv6EchoReply {
             0 => {
                 let mut csum = OpteCsum::new();
 
-                for el in meta.body_segs().into_iter() {
+                for el in meta.body_segs().iter() {
                     csum.add_bytes(el);
                 }
 
@@ -168,8 +168,7 @@ impl HairpinAction for Icmpv6EchoReply {
         csum.add_bytes(&[ty, code]);
 
         // Build the reply in place, and send it out.
-        let body_len: usize =
-            meta.body_segs().into_iter().map(|v| v.len()).sum();
+        let body_len: usize = meta.body_segs().iter().map(|v| v.len()).sum();
 
         let icmp = IcmpV6 {
             ty,

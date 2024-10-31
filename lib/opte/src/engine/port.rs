@@ -7,7 +7,6 @@
 //! A virtual switch port.
 
 use self::meta::ActionMeta;
-use super::ether::EtherMeta;
 use super::ether::Ethernet;
 use super::flow_table::Dump;
 use super::flow_table::FlowEntry;
@@ -86,7 +85,9 @@ use core::str::FromStr;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::SeqCst;
 use illumos_sys_hdrs::uintptr_t;
+use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
+use ingot::ip::IpProtocol;
 use ingot::tcp::TcpRef;
 use ingot::types::Emit;
 use ingot::types::HeaderLen;
@@ -521,7 +522,6 @@ pub enum DumpLayerError {
 }
 
 /// An entry in the Unified Flow Table.
-// #[derive(Debug)]
 pub struct UftEntry<Id> {
     /// The flow ID for the other side.
     pair: KMutex<Option<Id>>,
@@ -1216,7 +1216,8 @@ impl<N: NetworkImpl> Port<N> {
         // TODO: might want to pass in a &mut to an enum
         // which can advance to (and hold) light->full-fat metadata.
         // My gutfeel is that there's a perf cost here -- this struct
-        // is pretty fat, but expressing the transform on a &mut also sucks.
+        // is pretty large, but expressing the transform on a &mut is also
+        // less than ideal.
         mut pkt: Packet<LiteParsed<MsgBlkIterMut<'a>, M>>,
     ) -> result::Result<ProcessResult, ProcessError>
     where
@@ -1315,17 +1316,16 @@ impl<N: NetworkImpl> Port<N> {
         //    forces a reprocess, but I believe this is a necessary evil to keep work
         //    out of the portlock today. The correct fix is to AtomicU64 those stats,
         //    which we'll need for later metrics too.
-        //    However, accounting for this below is simple enough.
+        //    However, fixing this up if we get it wrong is simple enough.
         let mut invalidated_tcp = None;
         let mut reprocess = false;
 
         match &decision {
             FastPathDecision::CompiledUft(entry)
             | FastPathDecision::Uft(entry) => {
-                // XXX: Ideally the Kstat should be holding AtomicU64s, then we get
+                // TODO: Ideally the Kstat should be holding AtomicU64s, then we get
                 // out of the lock sooner. Note that we don't need to *apply* a given
                 // set of transforms in order to know which stats we'll modify.
-                // Also, not an elegant hack!
                 let dummy_res = Ok(InternalProcessResult::Modified);
                 match dir {
                     Direction::In => {
@@ -1380,18 +1380,27 @@ impl<N: NetworkImpl> Port<N> {
             _ => {}
         }
 
-        // If we're in here, we took a faster-path. We know the lock is dropped.
-        // Reacquire the lock to remove the flow.
+        // reprocess => invalidated_tcp.is_some();
+        debug_assert!(!reprocess || invalidated_tcp.is_some());
+
+        // We've determined we're actually starting a new TCP flow (e.g., SYN
+        // on any other state) from an existing UFT entry.
+        // We know the lock is dropped -- reacquire the lock to remove the flow.
+        // Elevate lock to full scope, if we are reprocessing as well.
         if let Some(entry) = invalidated_tcp {
-            let mut lock = self.data.lock();
+            let mut local_lock = self.data.lock();
 
             let flow_lock = entry.state().inner.lock();
             let ufid_out = &flow_lock.outbound_ufid;
 
             let ufid_in = flow_lock.inbound_ufid.as_ref();
-            self.uft_tcp_closed(&mut lock, ufid_out, ufid_in);
+            self.uft_tcp_closed(&mut local_lock, ufid_out, ufid_in);
 
-            let _ = lock.tcp_flows.remove(ufid_out).unwrap();
+            let _ = local_lock.tcp_flows.remove(ufid_out).unwrap();
+
+            if reprocess {
+                lock = Some(local_lock);
+            }
         }
 
         if !reprocess {
@@ -1437,8 +1446,6 @@ impl<N: NetworkImpl> Port<N> {
                 );
                 return res;
             }
-        } else {
-            lock = Some(self.data.lock());
         }
 
         // (2)/(3) Full-fat metadata is required.
@@ -1447,7 +1454,7 @@ impl<N: NetworkImpl> Port<N> {
 
         let res = match (&decision, dir) {
             // (2) Apply retrieved transform. Lock is dropped.
-            // Store cached l4 hash.
+            // Reuse cached l4 hash.
             (FastPathDecision::Uft(entry), _) if !reprocess => {
                 let l4_hash = entry.state().l4_hash;
                 let tx = Arc::clone(&entry.state().xforms);
@@ -1458,11 +1465,13 @@ impl<N: NetworkImpl> Port<N> {
             }
 
             // (3) Full-table processing for the packet, then drop the lock.
-            // Cksum updates are the only thing left undone.
+            // Cksum updates are left undone, so we perform those manually
+            // outside the port lock.
             (_, Direction::In) => {
                 let data = lock
                     .as_mut()
                     .expect("lock should be held on this codepath");
+
                 let res = self.process_in_miss(
                     data,
                     epoch,
@@ -1470,6 +1479,7 @@ impl<N: NetworkImpl> Port<N> {
                     &flow_before,
                     &mut ameta,
                 );
+
                 // Prevent double-counting reprocessed modify entries.
                 if !(reprocess
                     && matches!(res, Ok(InternalProcessResult::Modified)))
@@ -1477,6 +1487,7 @@ impl<N: NetworkImpl> Port<N> {
                     Self::update_stats_in(&mut data.stats.vals, &res);
                 }
                 drop(lock);
+
                 pkt.update_checksums();
                 res
             }
@@ -1484,8 +1495,10 @@ impl<N: NetworkImpl> Port<N> {
                 let data = lock
                     .as_mut()
                     .expect("lock should be held on this codepath");
+
                 let res =
                     self.process_out_miss(data, epoch, &mut pkt, &mut ameta);
+
                 // Prevent double-counting reprocessed modify entries.
                 if !(reprocess
                     && matches!(res, Ok(InternalProcessResult::Modified)))
@@ -1493,6 +1506,7 @@ impl<N: NetworkImpl> Port<N> {
                     Self::update_stats_out(&mut data.stats.vals, &res);
                 }
                 drop(lock);
+
                 pkt.update_checksums();
                 res
             }
@@ -1559,8 +1573,8 @@ impl<N: NetworkImpl> Port<N> {
                         // future we could eliminate this window by passing a
                         // reference to the epoch to `Layer::remove_rule()`
                         // and let it perform the increment.
-                        // XXX(kyle) Above comment misunderstands TOCTOU --
-                        //           THE TABLE IS LOCKED.
+                        // XXX(kyle) This is not a concern while we have the
+                        // port lock in place.
                         self.epoch.fetch_add(1, SeqCst);
                         return Ok(());
                     }
@@ -1655,12 +1669,6 @@ enum TcpMaybeClosed {
     NewState(TcpState, Arc<FlowEntry<TcpFlowEntryState>>),
 }
 
-pub enum ThinProcRes {
-    PushEncap(EtherMeta, IpPush, EncapPush),
-    PopEncap,
-    Na,
-}
-
 // This is a convenience wrapper for keeping the header and body
 // transformations under one structure, allowing them to be passes as
 // one argument.
@@ -1689,7 +1697,9 @@ impl Transforms {
     where
         T::Chunk: ByteSliceMut,
     {
-        // TODO: prebake these into one transform?
+        // TODO: It should be possible to combine header transforms
+        // into a single operation per layer, particularly when
+        // they are disjoint like we do in the Compiled case.
         for ht in &self.hdr {
             pkt.hdr_transform(ht)?;
         }
@@ -1721,67 +1731,64 @@ impl Transforms {
                     continue;
                 }
 
-                // TODO: refactor.
-
                 // All outer layers must be pushed (or popped/ignored) at the same
                 // time for compilation. No modifications are permissable.
-                match transform.outer_ether {
-                    HeaderAction::Push(p) => outer_ether = Some(p),
-                    HeaderAction::Pop => {
-                        outer_ether = None;
+                fn store_outer_push<P: Copy, M>(
+                    tx: &HeaderAction<P, M>,
+                    still_permissable: &mut bool,
+                    slot: &mut Option<P>,
+                ) {
+                    match tx {
+                        HeaderAction::Push(p) => *slot = Some(*p),
+                        HeaderAction::Pop => *slot = None,
+                        HeaderAction::Modify(_) => *still_permissable = false,
+                        HeaderAction::Ignore => {}
                     }
-                    HeaderAction::Modify(_) => {
-                        still_permissable = false;
-                    }
-                    HeaderAction::Ignore => {}
                 }
-
-                match transform.outer_ip {
-                    HeaderAction::Push(p) => outer_ip = Some(p),
-                    HeaderAction::Pop => {
-                        outer_ip = None;
-                    }
-                    HeaderAction::Modify(_) => {
-                        still_permissable = false;
-                    }
-                    HeaderAction::Ignore => {}
-                }
-
-                match transform.outer_encap {
-                    HeaderAction::Push(p) => outer_encap = Some(p),
-                    HeaderAction::Pop => {
-                        outer_encap = None;
-                    }
-                    HeaderAction::Modify(_) => {
-                        still_permissable = false;
-                    }
-                    HeaderAction::Ignore => {}
-                }
+                store_outer_push(
+                    &transform.outer_ether,
+                    &mut still_permissable,
+                    &mut outer_ether,
+                );
+                store_outer_push(
+                    &transform.outer_ip,
+                    &mut still_permissable,
+                    &mut outer_ip,
+                );
+                store_outer_push(
+                    &transform.outer_encap,
+                    &mut still_permissable,
+                    &mut outer_encap,
+                );
 
                 // Allow up to one action per ULP field, which must be modify.
                 // We can't yet combine sets of `Modify` actions,
                 // but the Oxide dataplane does not use this in practice.
-                match &transform.inner_ether {
-                    HeaderAction::Push(_) | HeaderAction::Pop => {
-                        still_permissable = false;
-                        continue;
+                fn store_inner_mod<'a, P, M>(
+                    tx: &'a HeaderAction<P, M>,
+                    still_permissable: &mut bool,
+                    slot: &mut Option<&'a M>,
+                ) {
+                    match tx {
+                        HeaderAction::Push(_) | HeaderAction::Pop => {
+                            *still_permissable = false;
+                        }
+                        HeaderAction::Modify(m) => {
+                            *still_permissable &= slot.replace(m).is_none();
+                        }
+                        HeaderAction::Ignore => {}
                     }
-                    HeaderAction::Modify(m) => {
-                        still_permissable &= inner_ether.replace(m).is_none();
-                    }
-                    HeaderAction::Ignore => {}
                 }
-
-                match &transform.inner_ip {
-                    HeaderAction::Push(_) | HeaderAction::Pop => {
-                        still_permissable = false;
-                        continue;
-                    }
-                    HeaderAction::Modify(m) => {
-                        still_permissable &= inner_ip.replace(m).is_none();
-                    }
-                    HeaderAction::Ignore => {}
-                }
+                store_inner_mod(
+                    &transform.inner_ether,
+                    &mut still_permissable,
+                    &mut inner_ether,
+                );
+                store_inner_mod(
+                    &transform.inner_ip,
+                    &mut still_permissable,
+                    &mut inner_ip,
+                );
 
                 match &transform.inner_ulp {
                     UlpHeaderAction::Modify(m) => {
@@ -1806,32 +1813,26 @@ impl Transforms {
                         };
 
                         let eth_repr = Ethernet {
-                            destination: eth.dst.bytes().into(),
-                            source: eth.src.bytes().into(),
-                            ethertype: ingot::ethernet::Ethertype(
-                                eth.ether_type.into(),
-                            ),
+                            destination: eth.dst,
+                            source: eth.src,
+                            ethertype: Ethertype(eth.ether_type.into()),
                         };
                         let (ip_repr, l3_extra_bytes, ip_len_offset) = match ip
                         {
                             IpPush::Ip4(v4) => (
                                 L3Repr::Ipv4(Ipv4 {
-                                    protocol: ingot::ip::IpProtocol(
-                                        v4.proto.into(),
-                                    ),
+                                    protocol: IpProtocol(v4.proto.into()),
                                     source: v4.src,
                                     destination: v4.dst,
-                                    total_len: 20,
+                                    total_len: Ipv4::MINIMUM_LENGTH as u16,
                                     ..Default::default()
                                 }),
-                                20,
+                                Ipv4::MINIMUM_LENGTH,
                                 2,
                             ),
                             IpPush::Ip6(v6) => (
                                 L3Repr::Ipv6(Ipv6 {
-                                    next_header: ingot::ip::IpProtocol(
-                                        v6.proto.into(),
-                                    ),
+                                    next_header: IpProtocol(v6.proto.into()),
                                     source: v6.src,
                                     destination: v6.dst,
                                     payload_len: 0,
@@ -1845,6 +1846,9 @@ impl Transforms {
                         let encap_sz = encap_repr.packet_length();
                         let l3_len_offset =
                             eth_repr.packet_length() + ip_len_offset;
+
+                        // UDP has a length field 4B into its header.
+                        // in event of TCP, l4_len_offset is ignored.
                         let l4_len_offset = eth_repr.packet_length()
                             + ip_repr.packet_length()
                             + 4;
@@ -2469,7 +2473,6 @@ impl<N: NetworkImpl> Port<N> {
 
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
-        // TODO: uncork
         let tcp_flow = if pkt.meta().is_inner_tcp() {
             match self.process_out_tcp_new(
                 data,
@@ -2525,7 +2528,7 @@ impl<N: NetworkImpl> Port<N> {
         let mut xforms = Transforms::new();
         let flow_before = *pkt.flow();
         let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
-        // XXXX: may be hashing the wrong thing.
+
         let hte = UftEntry {
             pair: KMutex::new(None, KMutexType::Spin),
             xforms: xforms.compile(pkt.checksums_dirty()),

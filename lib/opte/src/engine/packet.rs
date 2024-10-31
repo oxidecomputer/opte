@@ -456,7 +456,7 @@ impl<T: Read> PktBodyWalker<T> {
             // *will* be exclusive if ByteSliceMut is met (because they are
             // sourced from an exclusive borrow on something which owns a [u8]).
             // This allows us to cast to &mut later, but not here!
-            let mut to_hold = vec![];
+            let mut to_hold = Vec::with_capacity(1);
             if let Some(ref mut chunk) = first {
                 let as_bytes = chunk.deref_mut();
                 to_hold.push(unsafe {
