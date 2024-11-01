@@ -1407,14 +1407,13 @@ fn guest_loopback(
     use Direction::*;
 
     let mblk_addr = pkt.mblk_addr();
-    let parsed_pkt = Packet::new(pkt.iter_mut());
 
     // Loopback now requires a reparse on loopback to account for UFT fastpath.
     // When viona serves us larger packets, we needn't worry about allocing
     // the encap on.
     // We might be able to do better in the interim, but that costs us time.
 
-    let parsed_pkt = match parsed_pkt.parse_inbound(VpcParser {}) {
+    let parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), VpcParser {}) {
         Ok(pkt) => pkt,
         Err(e) => {
             opte::engine::dbg!("Loopback bad packet: {:?}", e);
@@ -1542,8 +1541,7 @@ unsafe extern "C" fn xde_mc_tx(
 unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
-    let parsed_pkt = Packet::new(pkt.iter_mut());
-    let parsed_pkt = match parsed_pkt.parse_outbound(parser) {
+    let parsed_pkt = match Packet::parse_outbound(pkt.iter_mut(), parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.
@@ -1848,12 +1846,11 @@ unsafe fn xde_rx_one(
     mut pkt: MsgBlk,
 ) {
     let mblk_addr = pkt.mblk_addr();
-    let parsed_pkt = Packet::new(pkt.iter_mut());
 
     // We must first parse the packet in order to determine where it
     // is to be delivered.
     let parser = VpcParser {};
-    let parsed_pkt = match parsed_pkt.parse_inbound(parser) {
+    let parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             // TODO Add bad packet stat.

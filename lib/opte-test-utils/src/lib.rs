@@ -19,7 +19,7 @@ pub mod port_state;
 pub use opte::api::Direction::*;
 pub use opte::api::MacAddr;
 pub use opte::ddi::mblk::MsgBlk;
-use opte::ddi::mblk::MsgBlkIterMut;
+pub use opte::ddi::mblk::MsgBlkIterMut;
 pub use opte::engine::ether::EtherMeta;
 pub use opte::engine::ether::EtherType;
 pub use opte::engine::ether::Ethernet;
@@ -38,8 +38,8 @@ pub use opte::engine::ip::v6::Ipv6;
 pub use opte::engine::ip::v6::Ipv6Addr;
 pub use opte::engine::ip::L3Repr;
 pub use opte::engine::layer::DenyReason;
-use opte::engine::packet::LiteInPkt;
-use opte::engine::packet::LiteOutPkt;
+pub use opte::engine::packet::LiteInPkt;
+pub use opte::engine::packet::LiteOutPkt;
 pub use opte::engine::packet::MblkLiteParsed;
 pub use opte::engine::packet::Packet;
 pub use opte::engine::packet::ParseError;
@@ -115,16 +115,14 @@ pub fn parse_inbound<NP: NetworkParser>(
     pkt: &mut MsgBlk,
     parser: NP,
 ) -> Result<LiteInPkt<MsgBlkIterMut<'_>, NP>, ParseError> {
-    let pkt = Packet::new(pkt.iter_mut());
-    pkt.parse_inbound(parser)
+    Packet::parse_inbound(pkt.iter_mut(), parser)
 }
 
 pub fn parse_outbound<NP: NetworkParser>(
     pkt: &mut MsgBlk,
     parser: NP,
 ) -> Result<LiteOutPkt<MsgBlkIterMut<'_>, NP>, ParseError> {
-    let pkt = Packet::new(pkt.iter_mut());
-    pkt.parse_outbound(parser)
+    Packet::parse_outbound(pkt.iter_mut(), parser)
 }
 
 // It's imperative that this list stays in sync with the layers that
@@ -483,8 +481,7 @@ pub fn ulp_pkt<
 ) -> MsgBlk {
     let mut pkt = MsgBlk::new_ethernet_pkt((eth, ip, ulp, body));
 
-    let view = Packet::new(pkt.iter_mut());
-    let view = view.parse_outbound(GenericUlp {}).unwrap();
+    let view = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {}).unwrap();
     let mut view = view.to_full_meta();
     view.compute_checksums();
     drop(view);
@@ -996,13 +993,12 @@ pub fn encap(inner_pkt: MsgBlk, src: TestIpPhys, dst: TestIpPhys) -> MsgBlk {
 /// Encapsulate a guest packet.
 #[must_use]
 fn _encap(
-    mut inner_pkt: MsgBlk,
+    inner_pkt: MsgBlk,
     src: TestIpPhys,
     dst: TestIpPhys,
     external_snat: bool,
 ) -> MsgBlk {
-    let pkt = Packet::new(inner_pkt.iter_mut());
-    let base_len = pkt.len();
+    let base_len = inner_pkt.byte_len();
 
     let mut outer_geneve = Geneve { vni: dst.vni, ..Default::default() };
 

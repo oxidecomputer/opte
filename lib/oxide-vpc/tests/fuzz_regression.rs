@@ -111,8 +111,7 @@ fn run_tests(
 fn parse_in_regression() {
     run_tests("parse_in", |data| {
         let mut msg = MsgBlk::copy(data);
-        let parsed = Packet::new(msg.iter_mut());
-        let _ = parsed.parse_inbound(VpcParser {});
+        let _ = Packet::parse_inbound(msg.iter_mut(), VpcParser {});
     });
 }
 
@@ -120,7 +119,6 @@ fn parse_in_regression() {
 fn parse_out_regression() {
     run_tests("parse_out", |data| {
         let mut msg = MsgBlk::copy(data);
-        let parsed = Packet::new(msg.iter_mut());
-        let _ = parsed.parse_outbound(VpcParser {});
+        let _ = Packet::parse_outbound(msg.iter_mut(), VpcParser {});
     });
 }

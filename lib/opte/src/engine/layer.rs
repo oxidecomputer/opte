@@ -1872,9 +1872,9 @@ mod test {
             },
         ));
 
-        let pkt_view = Packet::new(test_pkt.iter_mut());
-        let pmeta =
-            pkt_view.parse_outbound(GenericUlp {}).unwrap().to_full_meta();
+        let pmeta = Packet::parse_outbound(test_pkt.iter_mut(), GenericUlp {})
+            .unwrap()
+            .to_full_meta();
 
         // The pkt/rdr aren't actually used in this case.
         let ameta = ActionMeta::new();

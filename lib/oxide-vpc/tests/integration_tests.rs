@@ -1850,10 +1850,8 @@ fn bad_ip_len() {
     let udp = Udp { source: 68, destination: 67, ..Default::default() };
 
     let mut pkt_m = MsgBlk::new_ethernet_pkt((eth, ip, udp));
-    let res = Packet::new(pkt_m.iter_mut())
-        .parse_outbound(VpcParser {})
-        .err()
-        .unwrap();
+    let res =
+        Packet::parse_outbound(pkt_m.iter_mut(), VpcParser {}).err().unwrap();
     assert_eq!(
         res,
         ParseError::BadLength(MismatchError {

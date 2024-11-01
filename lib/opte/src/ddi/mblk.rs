@@ -941,7 +941,7 @@ mod test {
         assert_eq!(pkt.seg_len(), 1);
         assert_eq!(pkt.tail_capacity(), 16);
 
-        let res = Packet::new(pkt.iter_mut()).parse_outbound(GenericUlp {});
+        let res = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {});
         match res {
             Err(ParseError::IngotError(err)) => {
                 assert_eq!(err.header().as_str(), "inner_eth");
@@ -956,7 +956,7 @@ mod test {
         assert_eq!(pkt2.len(), 0);
         assert_eq!(pkt2.seg_len(), 1);
         assert_eq!(pkt2.tail_capacity(), 16);
-        let res = Packet::new(pkt.iter_mut()).parse_outbound(GenericUlp {});
+        let res = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {});
         match res {
             Err(ParseError::IngotError(err)) => {
                 assert_eq!(err.header().as_str(), "inner_eth");

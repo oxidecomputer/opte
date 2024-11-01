@@ -1146,8 +1146,7 @@ fn rule_matching() {
     let eth = Ethernet { ethertype: Ethertype::IPV4, ..Default::default() };
 
     let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp));
-    let mut pkt = Packet::new(pkt_m.iter_mut())
-        .parse_outbound(GenericUlp {})
+    let mut pkt = Packet::parse_outbound(pkt_m.iter_mut(), GenericUlp {})
         .unwrap()
         .to_full_meta();
     pkt.compute_checksums();

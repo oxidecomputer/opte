@@ -83,23 +83,35 @@ pub fn test_parse<M: MeasurementInfo + 'static>(
                 match parser {
                     ParserKind::Generic => {
                         |(mut in_pkt, direction): TestCase| {
-                            let pkt = black_box(Packet::new(in_pkt.iter_mut()));
                             black_box(match direction {
-                                In => pkt.parse_inbound(GenericUlp {}),
-                                Out => pkt.parse_outbound(GenericUlp {}),
+                                In => pkt.parse_inbound(
+                                    in_pkt.iter_mut(),
+                                    GenericUlp {},
+                                ),
+                                Out => pkt.parse_outbound(
+                                    in_pkt.iter_mut(),
+                                    GenericUlp {},
+                                ),
                             })
                             .unwrap();
                         }
                     }
                     ParserKind::OxideVpc => {
                         |(mut in_pkt, direction): TestCase| {
-                            let pkt = black_box(Packet::new(in_pkt.iter_mut()));
                             black_box(match direction {
                                 In => {
-                                    pkt.parse_inbound(VpcParser {}).unwrap();
+                                    pkt.parse_inbound(
+                                        in_pkt.iter_mut(),
+                                        VpcParser {},
+                                    )
+                                    .unwrap();
                                 }
                                 Out => {
-                                    pkt.parse_outbound(VpcParser {}).unwrap();
+                                    pkt.parse_outbound(
+                                        in_pkt.iter_mut(),
+                                        VpcParser {},
+                                    )
+                                    .unwrap();
                                 }
                             });
                         }

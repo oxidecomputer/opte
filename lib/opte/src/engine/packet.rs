@@ -776,8 +776,6 @@ impl<T: Read> From<&PacketData<T>> for InnerFlowId {
 /// kind of figure out as you work in the code more. In OPTE, we
 /// disambiguate using the `MsgBlk` and `MsgBlkChain` types. The former
 /// enforces that `b_next` and `b_prev` are disconnected.
-
-//
 // TODO: In theory, this can be any `Read` type giving us `&mut [u8]`s,
 // but in practice we are internally reliant on returning `MsgBlk`s in
 // hairpin actions and the like. Fighting the battle of making this generic
@@ -788,69 +786,44 @@ pub struct Packet<S: PacketState> {
     state: S,
 }
 
-impl<T: Read + BufferState> Packet<Initialized<T>> {
-    pub fn new(pkt: T) -> Self
-    where
-        Initialized<T>: PacketState,
-    {
-        Self { state: Initialized { inner: pkt } }
-    }
-}
-
 pub type LiteInPkt<T, NP> =
     Packet<LiteParsed<T, <NP as NetworkParser>::InMeta<<T as Read>::Chunk>>>;
 pub type LiteOutPkt<T, NP> =
     Packet<LiteParsed<T, <NP as NetworkParser>::OutMeta<<T as Read>::Chunk>>>;
 
-impl<'a, T: Read + BufferState + 'a> Packet<Initialized<T>>
+impl<'a, T: Read + BufferState + 'a, M: LightweightMeta<T::Chunk>>
+    Packet<LiteParsed<T, M>>
 where
-    T::Chunk: IntoBufPointer<'a> + ByteSliceMut,
+    T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
 {
     #[inline]
-    pub fn len(&self) -> usize {
-        self.state.inner.len()
-    }
-
-    #[inline]
-    pub fn mblk_addr(&self) -> uintptr_t {
-        self.state.inner.base_ptr()
-    }
-
-    #[inline]
-    pub fn parse_inbound<NP: NetworkParser>(
-        self,
+    pub fn parse_inbound<NP: NetworkParser<InMeta<T::Chunk> = M>>(
+        pkt: T,
         net: NP,
     ) -> Result<LiteInPkt<T, NP>, ParseError> {
-        let len = self.len();
-        let base_ptr = self.mblk_addr();
-        let Packet { state: Initialized { inner } } = self;
+        let len = pkt.len();
+        let base_ptr = pkt.base_ptr();
 
-        let meta = net.parse_inbound(inner)?;
+        let meta = net.parse_inbound(pkt)?;
         meta.stack.validate(len)?;
 
         Ok(Packet { state: LiteParsed { meta, base_ptr, len } })
     }
 
     #[inline]
-    pub fn parse_outbound<NP: NetworkParser>(
-        self,
+    pub fn parse_outbound<NP: NetworkParser<OutMeta<T::Chunk> = M>>(
+        pkt: T,
         net: NP,
     ) -> Result<LiteOutPkt<T, NP>, ParseError> {
-        let len = self.len();
-        let base_ptr = self.mblk_addr();
-        let Packet { state: Initialized { inner } } = self;
+        let len = pkt.len();
+        let base_ptr = pkt.base_ptr();
 
-        let meta = net.parse_outbound(inner)?;
+        let meta = net.parse_outbound(pkt)?;
         meta.stack.validate(len)?;
 
         Ok(Packet { state: LiteParsed { meta, base_ptr, len } })
     }
-}
 
-impl<'a, T: Read + 'a, M: LightweightMeta<T::Chunk>> Packet<LiteParsed<T, M>>
-where
-    T::Chunk: IntoBufPointer<'a>,
-{
     #[inline]
     pub fn to_full_meta(self) -> Packet<FullParsed<T>> {
         let Packet { state: LiteParsed { len, base_ptr, meta } } = self;
@@ -1058,7 +1031,7 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
                             entropy: u.source(),
                             vni: g.vni(),
                             oxide_external_pkt: valid_geneve_has_oxide_external(
-                                &g,
+                                g,
                             ),
                         })
                     }
@@ -1440,14 +1413,7 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
     }
 }
 
-/// The type state of a packet that has been initialized and allocated, but
-/// about which nothing else is known besides the length.
-#[derive(Debug)]
-pub struct Initialized<T: Read> {
-    inner: T,
-}
-
-impl<T: Read> PacketState for Initialized<T> {}
+impl<T: Read, M: LightweightMeta<T::Chunk>> PacketState for LiteParsed<T, M> {}
 impl<T: Read> PacketState for FullParsed<T> {}
 
 /// Zerocopy view onto a parsed packet, accompanied by locally
@@ -1504,8 +1470,6 @@ pub struct LiteParsed<T: Read, M: LightweightMeta<T::Chunk>> {
     base_ptr: uintptr_t,
     meta: IngotParsed<M, T>,
 }
-
-impl<T: Read, M: LightweightMeta<T::Chunk>> PacketState for LiteParsed<T, M> {}
 
 impl<T: Read, M: LightweightMeta<T::Chunk>> LiteParsed<T, M> {}
 
@@ -1856,8 +1820,7 @@ mod test {
     #[test]
     fn read_single_segment() {
         let mut pkt = tcp_pkt(&[]);
-        let parsed = Packet::new(pkt.iter_mut())
-            .parse_outbound(GenericUlp {})
+        let parsed = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {})
             .unwrap()
             .to_full_meta();
 
@@ -1907,8 +1870,7 @@ mod test {
 
         mp1.append(mp2);
 
-        let pkt = Packet::new(mp1.iter_mut())
-            .parse_outbound(GenericUlp {})
+        let pkt = Packet::parse_outbound(mp1.iter_mut(), GenericUlp {})
             .unwrap()
             .to_full_meta();
 
@@ -1945,7 +1907,7 @@ mod test {
         assert_eq!(st1.byte_len(), base.len());
 
         assert!(matches!(
-            Packet::new(st1.iter_mut()).parse_outbound(GenericUlp {}),
+            Packet::parse_outbound(st1.iter_mut(), GenericUlp {}),
             Err(ParseError::IngotError(_))
         ));
     }
@@ -1998,8 +1960,7 @@ mod test {
 
                 let mut pkt =
                     MsgBlk::new_ethernet_pkt((eth, ip6, ext_hdrs, tcp));
-                let pkt = Packet::new(pkt.iter_mut())
-                    .parse_outbound(GenericUlp {})
+                let pkt = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {})
                     .unwrap()
                     .to_full_meta();
 
@@ -2048,8 +2009,7 @@ mod test {
         assert_eq!(pkt.byte_len(), MINIMUM_ETH_FRAME_SZ - FRAME_CHECK_SEQ_SZ);
 
         // Generate the metadata by parsing the packet
-        let parsed = Packet::new(pkt.iter_mut())
-            .parse_inbound(GenericUlp {})
+        let parsed = Packet::parse_inbound(pkt.iter_mut(), GenericUlp {})
             .unwrap()
             .to_full_meta();
 
@@ -2108,8 +2068,7 @@ mod test {
         // Generate the metadata by parsing the packet.
         // This should not fail even though there are more bytes in
         // the initialised area ofthe mblk chain than the packet expects.
-        let pkt = Packet::new(pkt.iter_mut())
-            .parse_inbound(GenericUlp {})
+        let pkt = Packet::parse_inbound(pkt.iter_mut(), GenericUlp {})
             .unwrap()
             .to_full_meta();
 

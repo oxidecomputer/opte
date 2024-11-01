@@ -1994,6 +1994,7 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     fn port_process_return_probe(
         &self,
