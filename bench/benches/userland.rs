@@ -84,11 +84,11 @@ pub fn test_parse<M: MeasurementInfo + 'static>(
                     ParserKind::Generic => {
                         |(mut in_pkt, direction): TestCase| {
                             black_box(match direction {
-                                In => pkt.parse_inbound(
+                                In => Packet::parse_inbound(
                                     in_pkt.iter_mut(),
                                     GenericUlp {},
                                 ),
-                                Out => pkt.parse_outbound(
+                                Out => Packet::parse_outbound(
                                     in_pkt.iter_mut(),
                                     GenericUlp {},
                                 ),
@@ -100,14 +100,14 @@ pub fn test_parse<M: MeasurementInfo + 'static>(
                         |(mut in_pkt, direction): TestCase| {
                             black_box(match direction {
                                 In => {
-                                    pkt.parse_inbound(
+                                    Packet::parse_inbound(
                                         in_pkt.iter_mut(),
                                         VpcParser {},
                                     )
                                     .unwrap();
                                 }
                                 Out => {
-                                    pkt.parse_outbound(
+                                    Packet::parse_outbound(
                                         in_pkt.iter_mut(),
                                         VpcParser {},
                                     )
@@ -164,16 +164,21 @@ pub fn test_handle<M: MeasurementInfo + 'static>(
                 // packet is now a view over the generated pkt.
                 |(mut pkt_m, dir): TestCase| match parser {
                     ParserKind::Generic => {
-                        let pkt = Packet::new(pkt_m.iter_mut());
                         let res = match dir {
                             In => {
-                                let pkt =
-                                    pkt.parse_inbound(GenericUlp {}).unwrap();
+                                let pkt = Packet::parse_inbound(
+                                    pkt_m.iter_mut(),
+                                    GenericUlp {},
+                                )
+                                .unwrap();
                                 port.port.process(dir, black_box(pkt)).unwrap()
                             }
                             Out => {
-                                let pkt =
-                                    pkt.parse_outbound(GenericUlp {}).unwrap();
+                                let pkt = Packet::parse_outbound(
+                                    pkt_m.iter_mut(),
+                                    GenericUlp {},
+                                )
+                                .unwrap();
                                 port.port.process(dir, black_box(pkt)).unwrap()
                             }
                         };
@@ -183,16 +188,21 @@ pub fn test_handle<M: MeasurementInfo + 'static>(
                         }
                     }
                     ParserKind::OxideVpc => {
-                        let pkt = Packet::new(pkt_m.iter_mut());
                         let res = match dir {
                             In => {
-                                let pkt =
-                                    pkt.parse_inbound(VpcParser {}).unwrap();
+                                let pkt = Packet::parse_inbound(
+                                    pkt_m.iter_mut(),
+                                    VpcParser {},
+                                )
+                                .unwrap();
                                 port.port.process(dir, black_box(pkt)).unwrap()
                             }
                             Out => {
-                                let pkt =
-                                    pkt.parse_outbound(VpcParser {}).unwrap();
+                                let pkt = Packet::parse_outbound(
+                                    pkt_m.iter_mut(),
+                                    VpcParser {},
+                                )
+                                .unwrap();
                                 port.port.process(dir, black_box(pkt)).unwrap()
                             }
                         };
