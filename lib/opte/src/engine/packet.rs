@@ -432,8 +432,7 @@ pub struct OpteMeta<T: ByteSlice> {
 /// do not want to interact with body segments at all.
 struct PktBodyWalker<T: Read> {
     base: Cell<Option<(Option<T::Chunk>, T)>>,
-    slice: AtomicPtr<Box<[(*mut u8, usize)]>>,
-    // slice: AtomicPtr<Vec<(*mut u8, usize)>>,
+    slice: AtomicPtr<Vec<(*mut u8, usize)>>,
 }
 
 impl<T: Read> Drop for PktBodyWalker<T> {
@@ -482,8 +481,7 @@ where
                 to_hold.push((ptr, len));
             }
 
-            let to_store = Box::into_raw(Box::new(to_hold.into_boxed_slice()));
-            // let to_store = Box::into_raw(Box::new(to_hold));
+            let to_store = Box::into_raw(Box::new(to_hold));
 
             self.slice
                 .compare_exchange(
@@ -493,6 +491,12 @@ where
                     core::sync::atomic::Ordering::Relaxed,
                 )
                 .expect("unexpected concurrent access to body_seg memoiser");
+
+            // While today the only T we're operating on are IterMuts bound
+            // to the lifetime of an actual packet (via &mut), there's a chance
+            // in future that dropping the iterator could invalidate the byte
+            // slices we're holding onto. Hang onto `rest` to prevent this.
+            self.base.set(Some((None, rest)));
         }
     }
 
