@@ -33,7 +33,6 @@ use super::rule::Rule;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
 use crate::d_error::LabelBlock;
-use crate::ddi::kstat;
 use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
@@ -53,7 +52,6 @@ use core::num::NonZeroU32;
 use core::result;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
-use kstat_macro::KStatProvider;
 use opte_api::Direction;
 
 #[derive(Debug)]

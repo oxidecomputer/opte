@@ -12,6 +12,8 @@ use alloc::string::String;
 use core::fmt;
 use core::fmt::Display;
 
+pub use kstat_macro::KStatProvider;
+
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::ffi::CString;

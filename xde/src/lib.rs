@@ -45,6 +45,7 @@ pub mod ip;
 pub mod mac;
 pub mod route;
 pub mod secpolicy;
+pub mod stats;
 pub mod sys;
 pub mod xde;
 

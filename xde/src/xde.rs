@@ -26,6 +26,7 @@ use crate::route::Route;
 use crate::route::RouteCache;
 use crate::route::RouteKey;
 use crate::secpolicy;
+use crate::stats::XdeStats;
 use crate::sys;
 use crate::warn;
 use alloc::boxed::Box;
@@ -52,6 +53,8 @@ use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
 use opte::d_error::LabelBlock;
+use opte::ddi::kstat::KStatNamed;
+use opte::ddi::kstat::KStatProvider;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
 use opte::ddi::sync::KMutex;
@@ -223,6 +226,7 @@ struct XdeState {
     vpc_map: Arc<overlay::VpcMappings>,
     v2b: Arc<overlay::Virt2Boundary>,
     underlay: KMutex<Option<UnderlayState>>,
+    stats: KMutex<KStatNamed<XdeStats>>,
 }
 
 struct UnderlayState {
@@ -250,8 +254,20 @@ impl XdeState {
             ectx,
             vpc_map: Arc::new(overlay::VpcMappings::new()),
             v2b: Arc::new(overlay::Virt2Boundary::new()),
+            stats: KMutex::new(
+                KStatNamed::new("xde", "xde", XdeStats::new())
+                    .expect("Name is well-constructed (len, no NUL bytes)"),
+                KMutexType::Driver,
+            ),
         }
     }
+}
+
+fn stat_parse_error(dir: Direction, err: &ParseError) {
+    let xde = get_xde_state();
+    let mut stats = xde.stats.lock();
+
+    stats.vals.parse_error(dir, err);
 }
 
 #[repr(C)]
@@ -1416,6 +1432,7 @@ fn guest_loopback(
     let parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), VpcParser {}) {
         Ok(pkt) => pkt,
         Err(e) => {
+            stat_parse_error(Direction::In, &e);
             opte::engine::dbg!("Loopback bad packet: {:?}", e);
             bad_packet_parse_probe(None, Direction::In, mblk_addr, &e);
 
@@ -1544,8 +1561,8 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     let parsed_pkt = match Packet::parse_outbound(pkt.iter_mut(), parser) {
         Ok(pkt) => pkt,
         Err(e) => {
-            // TODO Add bad packet stat.
-            //
+            stat_parse_error(Direction::Out, &e);
+
             // NOTE: We are using the individual mblk_t as read only
             // here to get the pointer value so that the DTrace consumer
             // can examine the packet on failure.
@@ -1853,8 +1870,8 @@ unsafe fn xde_rx_one(
     let parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), parser) {
         Ok(pkt) => pkt,
         Err(e) => {
-            // TODO Add bad packet stat.
-            //
+            stat_parse_error(Direction::In, &e);
+
             // NOTE: We are using the individual mblk_t as read only
             // here to get the pointer value so that the DTrace consumer
             // can examine the packet on failure.

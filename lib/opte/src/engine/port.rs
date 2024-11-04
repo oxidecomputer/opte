@@ -94,7 +94,6 @@ use ingot::types::HeaderLen;
 use ingot::types::IntoBufPointer;
 use ingot::types::Read;
 use ingot::udp::Udp;
-use kstat_macro::KStatProvider;
 use opte_api::Direction;
 use opte_api::MacAddr;
 use opte_api::OpteError;
