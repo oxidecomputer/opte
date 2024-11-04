@@ -16,6 +16,7 @@ use crate::dls;
 use crate::dls::DlsStream;
 use crate::dls::LinkId;
 use crate::ioctl::IoctlEnvelope;
+use crate::ip::t_uscalar_t;
 use crate::mac;
 use crate::mac::mac_getinfo;
 use crate::mac::mac_private_minor;
@@ -1740,10 +1741,57 @@ where
 #[no_mangle]
 unsafe extern "C" fn xde_mc_getcapab(
     _arg: *mut c_void,
-    _cap: mac::mac_capab_t,
-    _capb_data: *mut c_void,
+    cap: mac::mac_capab_t,
+    capb_data: *mut c_void,
 ) -> boolean_t {
-    boolean_t::B_FALSE
+    match cap {
+        // TODO: This *should* depend on what the underlay devices
+        // offer. We might need to emulate if they do not...
+        // Apparently this can be dynamically enabled/disabled based on
+        // arg (i.e., XdeState).
+        // TODO: work out a safer interface for this.
+        mac::mac_capab_t::MAC_CAPAB_HCKSUM => {
+            // capab data is a *mut u32 (enum).
+            let capab = capb_data as *mut u32;
+
+            // HCKSUM_INET_FULL_V4 = 0x04
+            // HCKSUM_INET_FULL_V6 = 0x08
+            // HCKSUM_IPHDRCKSUM   = 0x10
+            unsafe {
+                capab.write(0x04 | 0x08 | 0x10);
+            }
+
+            boolean_t::B_TRUE
+        }
+        mac::mac_capab_t::MAC_CAPAB_LSO => {
+            #[repr(C)]
+            struct basic_lso {
+                lso_max: t_uscalar_t,
+            }
+
+            #[repr(C)]
+            struct data {
+                lso_flags: t_uscalar_t,
+                lso_basic_tcp_ipv4: basic_lso,
+                lso_basic_tcp_ipv6: basic_lso,
+            }
+
+            let capab = capb_data as *mut data;
+
+            unsafe {
+                capab.write(data {
+                    // LSO_TX_BASIC_TCP_IPV4 || LSO_TX_BASIC_TCP_IPV6
+                    lso_flags: 1 | 2,
+                    lso_basic_tcp_ipv4: basic_lso { lso_max: u16::MAX as u32 },
+                    lso_basic_tcp_ipv6: basic_lso { lso_max: u16::MAX as u32 },
+                });
+            }
+
+            // capab data is a *mut u32.
+            boolean_t::B_TRUE
+        }
+        _ => boolean_t::B_FALSE,
+    }
 }
 
 #[no_mangle]
