@@ -42,7 +42,6 @@ cfg_if! {
 ///
 /// ```
 /// use opte::ddi::kstat::{self, KStatProvider, KStatU64};
-/// use kstat_macro::KStatProvider;
 ///
 /// #[derive(KStatProvider)]
 /// struct SomeStats {
@@ -86,7 +85,6 @@ pub trait KStatProvider {
 ///
 /// ```
 /// use opte::ddi::kstat::{self, KStatNamed, KStatProvider, KStatU64};
-/// use kstat_macro::KStatProvider;
 ///
 /// #[derive(KStatProvider)]
 /// pub struct StatProvider {
