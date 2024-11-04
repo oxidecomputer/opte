@@ -7,6 +7,5 @@ use oxide_vpc::engine::VpcParser;
 
 fuzz_target!(|data: &[u8]| {
     let mut pkt_m = MsgBlk::copy(data);
-    let pkt = Packet::new(pkt_m.iter_mut());
-    pkt.parse_outbound(VpcParser {});
+    let _ = Packet::parse_outbound(pkt_m.iter_mut(), VpcParser {});
 });
