@@ -591,4 +591,15 @@ extern "C" {
 
     // External static symbols
     pub static mod_driverops: mod_ops;
+
+    // Streams-based suffering for you and me.
+    pub fn lso_info_set(mp: *mut mblk_t, mss: u32, flags: u32);
+    pub fn mac_hcksum_set(
+        mp: *mut mblk_t,
+        start: u32,
+        stuff: u32,
+        end: u32,
+        value: u32,
+        flags: u32,
+    );
 }

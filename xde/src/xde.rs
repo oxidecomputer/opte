@@ -44,6 +44,7 @@ use core::ptr::addr_of_mut;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
 use ingot::geneve::GeneveRef;
+use ingot::types::HeaderLen;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
@@ -73,6 +74,7 @@ use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
+use opte::engine::parse::ValidUlp;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessResult;
@@ -769,7 +771,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     mreg.m_min_sdu = 1;
     mreg.m_max_sdu = 1500; // TODO hardcode
     mreg.m_multicast_sdu = 0;
-    mreg.m_margin = sys::VLAN_TAGSZ;
+    mreg.m_margin = 128; //sys::VLAN_TAGSZ;
     mreg.m_v12n = mac::MAC_VIRT_NONE as u32;
 
     unsafe {
@@ -1578,6 +1580,15 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         }
     };
 
+    let meta = parsed_pkt.meta();
+    let is_tcp = meta
+        .inner_ulp
+        .as_ref()
+        .map(|v| matches!(v, ValidUlp::Tcp(_)))
+        .unwrap_or_default();
+    // let is_tcp = false;
+    let non_eth_payl_bytes = (&meta.inner_l3, &meta.inner_ulp).packet_length();
+
     // Choose u1 as a starting point. This may be changed in the next_hop
     // function when we are actually able to determine what interface should be
     // used.
@@ -1632,12 +1643,26 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             let devs = unsafe { xde_devs.read() };
 
             let l4_hash = emit_spec.l4_hash();
-            let out_pkt = emit_spec.apply(pkt);
+            let mut out_pkt = emit_spec.apply(pkt);
 
             if ip6_src == ip6_dst {
                 guest_loopback(src_dev, &devs, out_pkt, vni);
                 return ptr::null_mut();
             }
+
+            out_pkt.request_offload(
+                is_tcp,
+                // bit of fudge factor here.
+                // 1500 - ...
+                // ETH   v6   UDP   Geneve
+                // 14  + 40 +  8  +    8
+                // lmao, don't need to acct for encap
+                // not visible to customer.
+                (1500 - non_eth_payl_bytes) as u32,
+                // Can we enable this iff. we know we have a pure-local
+                // path?? It's legit 8Gbps single stream.
+                // (9000 - 76 - non_eth_payl_bytes) as u32,
+            );
 
             drop(devs);
 
@@ -1970,7 +1995,9 @@ unsafe fn xde_rx_one(
             mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
         }
         Ok(ProcessResult::Modified(emit_spec)) => {
-            let npkt = emit_spec.apply(pkt);
+            let mut npkt = emit_spec.apply(pkt);
+
+            // npkt.mark_cksum_happy();
 
             mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk().as_ptr());
         }
