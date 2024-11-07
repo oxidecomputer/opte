@@ -5,9 +5,6 @@
 #: target = "helios-2.0"
 #: rust_toolchain = "nightly-2024-10-12"
 #: output_rules = []
-#: access_repos = [
-#:  "oxidecomputer/ingot",
-#: ]
 #:
 
 set -o errexit

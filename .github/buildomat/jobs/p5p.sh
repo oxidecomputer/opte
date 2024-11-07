@@ -8,9 +8,6 @@
 #:   "=/out/opte.p5p",
 #:   "=/out/opte.p5p.sha256",
 #: ]
-#: access_repos = [
-#:  "oxidecomputer/ingot",
-#: ]
 #:
 #: [[publish]]
 #: series = "repo"

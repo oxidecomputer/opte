@@ -360,10 +360,9 @@ impl MsgBlk {
         self.iter().map(|el| el.len()).sum()
     }
 
-    /// Return the number of initialised bytes in this `MsgBlk` in
-    /// the head segment.
+    /// Return the number of segments in this `MsgBlk`.
     pub fn seg_len(&self) -> usize {
-        self.iter().count()
+        self.iter().len()
     }
 
     /// Allocate a new [`MsgBlk`] containing a data buffer of size
@@ -723,6 +722,17 @@ impl MsgBlkIterMut<'_> {
     }
 }
 
+/// Counts the number of segments in an `mblk_t` from `head`, linked
+/// via `b_cont`.
+unsafe fn count_mblk_chain(mut head: Option<NonNull<mblk_t>>) -> usize {
+    let mut count = 0;
+    while let Some(valid_head) = head {
+        count += 1;
+        head = NonNull::new((*valid_head.as_ptr()).b_cont);
+    }
+    count
+}
+
 impl<'a> Iterator for MsgBlkIter<'a> {
     type Item = &'a MsgBlkNode;
 
@@ -735,13 +745,24 @@ impl<'a> Iterator for MsgBlkIter<'a> {
             None
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = unsafe { count_mblk_chain(self.curr) };
+        (len, Some(len))
+    }
 }
+
+impl<'a> ExactSizeIterator for MsgBlkIter<'a> {}
 
 impl<'a> Read for MsgBlkIter<'a> {
     type Chunk = &'a [u8];
 
     fn next_chunk(&mut self) -> ingot::types::ParseResult<Self::Chunk> {
         self.next().ok_or(IngotParseErr::TooSmall).map(|v| v.as_ref())
+    }
+
+    fn chunks_len(&self) -> usize {
+        ExactSizeIterator::len(self)
     }
 }
 
@@ -757,13 +778,24 @@ impl<'a> Iterator for MsgBlkIterMut<'a> {
             None
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = unsafe { count_mblk_chain(self.curr) };
+        (len, Some(len))
+    }
 }
+
+impl<'a> ExactSizeIterator for MsgBlkIterMut<'a> {}
 
 impl<'a> Read for MsgBlkIterMut<'a> {
     type Chunk = &'a mut [u8];
 
     fn next_chunk(&mut self) -> ingot::types::ParseResult<Self::Chunk> {
         self.next().ok_or(IngotParseErr::TooSmall).map(|v| v.as_mut())
+    }
+
+    fn chunks_len(&self) -> usize {
+        ExactSizeIterator::len(self)
     }
 }
 

@@ -7,9 +7,6 @@
 #: output_rules = [
 #:   "=/work/bench-results.tgz",
 #: ]
-#: access_repos = [
-#:  "oxidecomputer/ingot",
-#: ]
 #:
 #: [[publish]]
 #: series = "benchmark" 

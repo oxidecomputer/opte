@@ -805,7 +805,7 @@ where
         let base_ptr = pkt.base_ptr();
 
         let meta = net.parse_inbound(pkt)?;
-        meta.stack.validate(len)?;
+        meta.headers.validate(len)?;
 
         Ok(Packet { state: LiteParsed { meta, base_ptr, len } })
     }
@@ -819,7 +819,7 @@ where
         let base_ptr = pkt.base_ptr();
 
         let meta = net.parse_outbound(pkt)?;
-        meta.stack.validate(len)?;
+        meta.headers.validate(len)?;
 
         Ok(Packet { state: LiteParsed { meta, base_ptr, len } })
     }
@@ -827,7 +827,7 @@ where
     #[inline]
     pub fn to_full_meta(self) -> Packet<FullParsed<T>> {
         let Packet { state: LiteParsed { len, base_ptr, meta } } = self;
-        let IngotParsed { stack: headers, data, last_chunk } = meta;
+        let IngotParsed { headers, data, last_chunk } = meta;
 
         // TODO: we can probably not do this in some cases, but we
         // don't have a way for `HeaderAction`s to signal that they
@@ -869,12 +869,12 @@ where
 
     #[inline]
     pub fn meta(&self) -> &M {
-        &self.state.meta.stack
+        &self.state.meta.headers
     }
 
     #[inline]
     pub fn meta_mut(&mut self) -> &mut M {
-        &mut self.state.meta.stack
+        &mut self.state.meta.headers
     }
 
     #[inline]
