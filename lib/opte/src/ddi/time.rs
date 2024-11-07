@@ -26,9 +26,6 @@ pub const NANOS: u64 = 1_000_000_000;
 /// The conversion from nanoseconds to milliseconds.
 pub const NANOS_TO_MILLIS: u64 = 1_000_000;
 
-#[cfg(any(feature = "std", test))]
-static FIRST_TS: OnceLock<Instant> = OnceLock::new();
-
 /// A moment in time.
 #[derive(Clone, Copy, Debug)]
 pub struct Moment {
@@ -82,6 +79,8 @@ impl Moment {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 Self { inner: unsafe { ddi::gethrtime() } }
             } else {
+                static FIRST_TS: OnceLock<Instant> = OnceLock::new();
+
                 let first_ts = *FIRST_TS.get_or_init(Instant::now);
                 Self { inner: Instant::now().saturating_duration_since(first_ts) }
             }

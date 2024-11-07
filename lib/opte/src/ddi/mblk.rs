@@ -55,14 +55,12 @@ struct MsgBlkChainInner {
 // we remove and re-add the mblks to work on them.
 // We might want also want to return either a chain/mblk_t in an enum, but
 // practically XDE will always assume it has a chain from MAC.
-pub struct MsgBlkChain {
-    inner: Option<MsgBlkChainInner>,
-}
+pub struct MsgBlkChain(Option<MsgBlkChainInner>);
 
 impl MsgBlkChain {
     /// Create an empty packet chain.
     pub fn empty() -> Self {
-        Self { inner: None }
+        Self(None)
     }
 
     /// Convert an mblk_t packet chain into a safe source of `MsgBlk`s.
@@ -82,13 +80,13 @@ impl MsgBlkChain {
             tail = next_ptr;
         }
 
-        Ok(Self { inner: Some(MsgBlkChainInner { head, tail }) })
+        Ok(Self(Some(MsgBlkChainInner { head, tail })))
     }
 
     /// Removes the next packet from the top of the chain and returns
     /// it, taking ownership.
     pub fn pop_front(&mut self) -> Option<MsgBlk> {
-        if let Some(ref mut list) = &mut self.inner {
+        if let Some(ref mut list) = &mut self.0 {
             unsafe {
                 let curr_b = list.head;
                 let curr = curr_b.as_ptr();
@@ -106,10 +104,10 @@ impl MsgBlkChain {
                 if let Some(next) = next {
                     list.head = next;
                 } else {
-                    self.inner = None;
+                    self.0 = None;
                 }
 
-                Some(MsgBlk { inner: curr_b })
+                Some(MsgBlk(curr_b))
             }
         } else {
             None
@@ -134,7 +132,7 @@ impl MsgBlkChain {
             assert!((*pkt.as_ptr()).b_next.is_null());
         }
 
-        if let Some(ref mut list) = &mut self.inner {
+        if let Some(ref mut list) = &mut self.0 {
             let pkt_p = pkt.as_ptr();
             let tail_p = list.tail.as_ptr();
             unsafe {
@@ -144,7 +142,7 @@ impl MsgBlkChain {
             }
             list.tail = pkt;
         } else {
-            self.inner = Some(MsgBlkChainInner { head: pkt, tail: pkt });
+            self.0 = Some(MsgBlkChainInner { head: pkt, tail: pkt });
         }
     }
 
@@ -152,7 +150,7 @@ impl MsgBlkChain {
     /// consume `self`. The caller of this function now owns the
     /// `mblk_t` segment chain.
     pub fn unwrap_mblk(mut self) -> Option<NonNull<mblk_t>> {
-        self.inner.take().map(|v| v.head)
+        self.0.take().map(|v| v.head)
     }
 }
 
@@ -166,7 +164,7 @@ impl Drop for MsgBlkChain {
                 // Safety: This is safe as long as the original
                 // `mblk_t` came from a call to `allocb(9F)` (or
                 // similar API).
-                if let Some(list) = &self.inner {
+                if let Some(list) = &self.0 {
                     unsafe { ddi::freemsgchain(list.head.as_ptr()) };
                 }
             } else {
@@ -194,16 +192,14 @@ impl Drop for MsgBlkChain {
 /// an Ethernet _frame_, but we prefer to use the colloquial
 /// nomenclature of "packet".
 #[derive(Debug)]
-pub struct MsgBlk {
-    pub inner: NonNull<mblk_t>,
-}
+pub struct MsgBlk(NonNull<mblk_t>);
 
 impl Deref for MsgBlk {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
         unsafe {
-            let self_ref = self.inner.as_ref();
+            let self_ref = self.0.as_ref();
             let rptr = self_ref.b_rptr;
             let len = self_ref.b_wptr.offset_from(rptr) as usize;
             slice::from_raw_parts(rptr, len)
@@ -214,7 +210,7 @@ impl Deref for MsgBlk {
 impl DerefMut for MsgBlk {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
-            let self_ref = self.inner.as_mut();
+            let self_ref = self.0.as_mut();
             let rptr = self_ref.b_rptr;
             let len = self_ref.b_wptr.offset_from(rptr) as usize;
             slice::from_raw_parts_mut(rptr, len)
@@ -284,7 +280,7 @@ impl MsgBlk {
         let inner = NonNull::new(allocb(len))
             .expect("somehow failed to get an mblk...");
 
-        Self { inner }
+        Self(inner)
     }
 
     /// Allocates a new [`MsgBlk`] of size `buf.len()`, copying its
@@ -307,7 +303,7 @@ impl MsgBlk {
     /// read pointer in the current datablock.
     pub fn head_capacity(&self) -> usize {
         unsafe {
-            let inner = self.inner.as_ref();
+            let inner = self.0.as_ref();
 
             inner.b_rptr.offset_from((*inner.b_datap).db_base) as usize
         }
@@ -317,7 +313,7 @@ impl MsgBlk {
     /// write pointer in the current datablock.
     pub fn tail_capacity(&self) -> usize {
         unsafe {
-            let inner = self.inner.as_ref();
+            let inner = self.0.as_ref();
 
             (*inner.b_datap).db_lim.offset_from(inner.b_wptr) as usize
         }
@@ -377,7 +373,7 @@ impl MsgBlk {
         let mut out = Self::new(head_len + body_len);
 
         // SAFETY: alloc is contiguous and always larger than head_len.
-        let mut_out = unsafe { out.inner.as_mut() };
+        let mut_out = unsafe { out.0.as_mut() };
         mut_out.b_rptr = unsafe { mut_out.b_rptr.add(head_len) };
         mut_out.b_wptr = mut_out.b_rptr;
 
@@ -397,7 +393,7 @@ impl MsgBlk {
         n_bytes: usize,
         f: impl FnOnce(&mut [MaybeUninit<u8>]),
     ) -> Result<(), WriteError> {
-        let mut_out = unsafe { self.inner.as_mut() };
+        let mut_out = unsafe { self.0.as_mut() };
         let avail_bytes =
             unsafe { (*mut_out.b_datap).db_lim.offset_from(mut_out.b_wptr) };
 
@@ -435,7 +431,7 @@ impl MsgBlk {
         n_bytes: usize,
         f: impl FnOnce(&mut [MaybeUninit<u8>]),
     ) -> Result<(), WriteError> {
-        let mut_out = unsafe { self.inner.as_mut() };
+        let mut_out = unsafe { self.0.as_mut() };
         let avail_bytes =
             unsafe { mut_out.b_rptr.offset_from((*mut_out.b_datap).db_base) };
 
@@ -464,7 +460,7 @@ impl MsgBlk {
         let len = self.len();
         match new_len.cmp(&len) {
             Ordering::Less => unsafe {
-                let mut_inner = self.inner.as_mut();
+                let mut_inner = self.0.as_mut();
                 mut_inner.b_wptr = mut_inner.b_wptr.sub(len - new_len);
                 Ok(())
             },
@@ -572,7 +568,7 @@ impl MsgBlk {
     pub fn append(&mut self, other: Self) {
         // Find the last element in the pkt chain
         // i.e., whose b_cont is null.
-        let mut curr = self.inner.as_ptr();
+        let mut curr = self.0.as_ptr();
         while unsafe { !(*curr).b_cont.is_null() } {
             curr = unsafe { (*curr).b_cont };
         }
@@ -585,21 +581,19 @@ impl MsgBlk {
     /// Drop all bytes and move the cursor to the very back of the dblk.
     pub fn pop_all(&mut self) {
         unsafe {
-            (*self.inner.as_ptr()).b_rptr =
-                (*(*self.inner.as_ptr()).b_datap).db_lim;
-            (*self.inner.as_ptr()).b_wptr =
-                (*(*self.inner.as_ptr()).b_datap).db_lim;
+            (*self.0.as_ptr()).b_rptr = (*(*self.0.as_ptr()).b_datap).db_lim;
+            (*self.0.as_ptr()).b_wptr = (*(*self.0.as_ptr()).b_datap).db_lim;
         }
     }
 
     /// Returns a shared cursor over all segments in this `MsgBlk`.
     pub fn iter(&self) -> MsgBlkIter {
-        MsgBlkIter { curr: Some(self.inner), marker: PhantomData }
+        MsgBlkIter { curr: Some(self.0), marker: PhantomData }
     }
 
     /// Returns a mutable cursor over all segments in this `MsgBlk`.
     pub fn iter_mut(&mut self) -> MsgBlkIterMut {
-        MsgBlkIterMut { curr: Some(self.inner), marker: PhantomData }
+        MsgBlkIterMut { curr: Some(self.0), marker: PhantomData }
     }
 
     /// Return the pointer address of the underlying mblk_t.
@@ -608,14 +602,14 @@ impl MsgBlk {
     /// DTrace so that the mblk can be inspected (read only) in probe
     /// context.
     pub fn mblk_addr(&self) -> uintptr_t {
-        self.inner.as_ptr() as uintptr_t
+        self.0.as_ptr() as uintptr_t
     }
 
     /// Return the head of the underlying `mblk_t` segment chain and
     /// consume `self`. The caller of this function now owns the
     /// `mblk_t` segment chain.
     pub fn unwrap_mblk(self) -> NonNull<mblk_t> {
-        let ptr_out = self.inner;
+        let ptr_out = self.0;
         _ = ManuallyDrop::new(self);
         ptr_out
     }
@@ -643,7 +637,7 @@ impl MsgBlk {
         let inner_ref = inner.as_ref();
 
         if inner_ref.b_next.is_null() && inner_ref.b_prev.is_null() {
-            Ok(Self { inner })
+            Ok(Self(inner))
         } else {
             Err(WrapError::Chain)
         }
@@ -668,7 +662,7 @@ impl MsgBlk {
         // sized blocks. This is not a generally expected thing and has
         // caused NIC hardware to stop working.
         // Stripping these out where possible is necessary.
-        let mut head = self.inner;
+        let mut head = self.0;
         let mut neighbour = unsafe { (*head.as_ptr()).b_cont };
 
         while !neighbour.is_null()
@@ -686,7 +680,7 @@ impl MsgBlk {
             }
         }
 
-        self.inner = head;
+        self.0 = head;
     }
 }
 
@@ -795,9 +789,9 @@ impl Drop for MsgBlk {
                 // Safety: This is safe as long as the original
                 // `mblk_t` came from a call to `allocb(9F)` (or
                 // similar API).
-                unsafe { ddi::freemsg(self.inner.as_ptr()) };
+                unsafe { ddi::freemsg(self.0.as_ptr()) };
             } else {
-                mock_freemsg(self.inner.as_ptr());
+                mock_freemsg(self.0.as_ptr());
             }
         }
     }
@@ -1097,7 +1091,7 @@ mod test {
         let els = create_linked_mblks(3);
 
         let chain = unsafe { MsgBlkChain::new(els[0]) }.unwrap();
-        let chain_inner = chain.inner.as_ref().unwrap();
+        let chain_inner = chain.0.as_ref().unwrap();
         assert_eq!(chain_inner.head.as_ptr(), els[0]);
         assert_eq!(chain_inner.tail.as_ptr(), els[2]);
     }
@@ -1116,7 +1110,7 @@ mod test {
         }
 
         // Chain head/tail ptrs are correct
-        let chain_inner = chain.inner.as_ref().unwrap();
+        let chain_inner = chain.0.as_ref().unwrap();
         assert_eq!(chain_inner.head.as_ptr(), els[1]);
         assert_eq!(chain_inner.tail.as_ptr(), els[2]);
         unsafe {
@@ -1136,7 +1130,7 @@ mod test {
         chain.append(pkt);
 
         // Chain head/tail ptrs are correct
-        let chain_inner = chain.inner.as_ref().unwrap();
+        let chain_inner = chain.0.as_ref().unwrap();
         assert_eq!(chain_inner.head.as_ptr(), els[0]);
         assert_eq!(chain_inner.tail.as_ptr(), new_el);
 
