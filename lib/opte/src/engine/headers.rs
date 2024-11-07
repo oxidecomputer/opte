@@ -336,6 +336,19 @@ impl Emit for SizeHoldingEncap<'_> {
                 let length = self.encapped_len
                     + (Udp::MINIMUM_LENGTH + geneve.packet_length()) as u16;
 
+                // It's worth noting that we have a zero UDP checksum here,
+                // which holds true even if we're sending out over IPv6.
+                // Ordinarily IPv6 requires a full checksum compute for UDP,
+                // however RFCs 6935 & 6936 make an optional exception for
+                // tunnelled transports (e.g., Geneve) over UDP/v6.
+                // Generally OPTE is covered on validity of this:
+                // * We preserve cksums on inner messages, so their headers and
+                //   payloads are *always* valid.
+                // * OPTE ports will only accept inbound packets with correct
+                //   Ethernet dest, next headers, L3 dest, and VNI.
+                //   Misdelivery on the basis of IPv6 (or other) corruption
+                //   will lead to a drop.
+                // This is also reflected in RFC 8200 §8.1 (IPv6 2017).
                 (
                     Udp {
                         source: g.entropy,
