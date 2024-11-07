@@ -267,7 +267,9 @@ impl MsgBlk {
     /// Allocate a new [`MsgBlk`] containing a data buffer of `len`
     /// bytes.
     ///
-    /// The returned packet consists of exactly one segment.
+    /// The returned packet consists of exactly one segment, and the
+    /// underlying `dblk_t` will have only a single referent making
+    /// mutable access safe.
     ///
     /// In the kernel environment this uses `allocb(9F)` and
     /// `freemsg(9F)` under the hood.
@@ -627,6 +629,15 @@ impl MsgBlk {
     /// The `mp` pointer must point to an `mblk_t` allocated by
     /// `allocb(9F)` or provided by some kernel API which itself used
     /// one of the DDI/DKI APIs to allocate it.
+    ///
+    /// Users *must* be certain that, for any `mblk_t` in the `b_cont` chain,
+    /// any underlying `dblk_t`s have only a single referent (this chain) if
+    /// they are going to read (or &mut) the backing byteslice. This is a
+    /// possibility for, e.g., packets served by `viona` whose mblks after
+    /// the initial header pullup will point directly into guest memory (!!!).
+    /// We do not currently have an API for conditionally handing out slices
+    /// and performing pullup on the fly based on refcnt -- potentially untrusted
+    /// mblk uses (e.g. read/write of body segs) *must* perform a manual pullup.
     ///
     /// # Errors
     ///
