@@ -25,6 +25,7 @@ use opte::engine::packet::FullParsed;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
+use opte::engine::packet::Pullup;
 use opte::engine::parse::ValidGeneveOverV6;
 use opte::engine::parse::ValidNoEncap;
 use opte::engine::port::UftEntry;
@@ -65,19 +66,16 @@ fn is_arp_req_for_tpa(tpa: Ipv4Addr, arp: &impl ArpEthIpv4Ref) -> bool {
 }
 
 impl VpcNetwork {
-    fn handle_arp_out<'a, T: Read + 'a>(
+    fn handle_arp_out<'a, T: Read + Pullup + 'a>(
         &self,
         pkt: &mut Packet<FullParsed<T>>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
         T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
-        let body = pkt
-            .body_segs()
-            .and_then(|v| v.first())
-            .ok_or(HdlPktError("outbound ARP (no body)"))?;
+        let body = pkt.body().ok_or(HdlPktError("outbound ARP (no body)"))?;
 
-        let (arp, ..) = ValidArpEthIpv4::parse(*body)
+        let (arp, ..) = ValidArpEthIpv4::parse(body)
             .map_err(|_| HdlPktError("outbound ARP (parse)"))?;
 
         if !arp.values_valid() {
@@ -100,7 +98,7 @@ impl VpcNetwork {
 impl NetworkImpl for VpcNetwork {
     type Parser = VpcParser;
 
-    fn handle_pkt<'a, T: Read + 'a>(
+    fn handle_pkt<'a, T: Read + Pullup + 'a>(
         &self,
         dir: Direction,
         pkt: &mut Packet<FullParsed<T>>,

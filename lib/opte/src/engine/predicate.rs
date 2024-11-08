@@ -601,15 +601,7 @@ impl DataPredicate {
             Self::Not(pred) => !pred.is_match(meta),
 
             Self::DhcpMsgType(mt) => {
-                // Not sure that I like that this is a complete clone/parse...
-                let body;
-
-                let bytes = if meta.body_segs().len() > 1 {
-                    body = meta.copy_remaining();
-                    &body
-                } else {
-                    meta.body_segs()[0]
-                };
+                let bytes = meta.body();
 
                 let pkt = match DhcpPacket::new_checked(&bytes) {
                     Ok(v) => v,
@@ -653,14 +645,14 @@ impl DataPredicate {
             }
 
             Self::Dhcpv6MsgType(mt) => {
-                let body = meta.body_segs();
-                if body.is_empty() || body[0].is_empty() {
+                let body = meta.body();
+                if body.is_empty() {
                     super::err!(
                         "Failed to read DHCPv6 message type from packet"
                     );
                     false
                 } else {
-                    mt.is_match(&body[0][0].into())
+                    mt.is_match(&body[0].into())
                 }
             }
         }

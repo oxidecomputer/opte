@@ -87,13 +87,8 @@ impl HairpinAction for IcmpEchoReply {
         let mut csum = match icmp.checksum() {
             0 => {
                 let mut csum = OpteCsum::new();
-
-                for el in meta.body_segs().iter() {
-                    csum.add_bytes(el);
-                }
-
+                csum.add_bytes(meta.body());
                 csum.add_bytes(icmp.rest_of_hdr_ref());
-
                 csum
             }
             valid => {
@@ -109,7 +104,7 @@ impl HairpinAction for IcmpEchoReply {
         csum.add_bytes(&[ty, code]);
 
         // Build the reply in place, and send it out.
-        let body_len: usize = meta.body_segs().iter().map(|v| v.len()).sum();
+        let body_len: usize = meta.body().len();
 
         let icmp = IcmpV4 {
             ty,
@@ -138,14 +133,8 @@ impl HairpinAction for IcmpEchoReply {
 
         let mut pkt_out = MsgBlk::new_ethernet(total_len);
         pkt_out
-            .emit_back((&eth, &ip4, &icmp))
+            .emit_back((&eth, &ip4, &icmp, meta.body()))
             .expect("Allocated space for pkt headers and body");
-
-        for el in meta.body_segs() {
-            pkt_out
-                .write_bytes_back(el)
-                .expect("allocated enough bytes for all body copy");
-        }
 
         Ok(AllowOrDeny::Allow(pkt_out))
     }

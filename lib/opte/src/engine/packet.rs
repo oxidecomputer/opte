@@ -57,10 +57,13 @@ use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
 use core::hash::Hash;
+use core::ptr::NonNull;
 use core::result;
 use core::sync::atomic::AtomicPtr;
+use core::sync::atomic::Ordering;
 use crc32fast::Hasher;
 use dyn_clone::DynClone;
+use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::geneve::GeneveRef;
 use ingot::icmp::IcmpV4Mut;
@@ -246,7 +249,7 @@ pub trait BodyTransform: fmt::Display + DynClone + Send + Sync {
     fn run(
         &self,
         dir: Direction,
-        body_segs: &mut [&mut [u8]],
+        body: &mut [u8],
     ) -> Result<(), BodyTransformError>;
 }
 
@@ -423,120 +426,172 @@ pub struct OpteMeta<T: ByteSlice> {
     pub inner_ulp: Option<Ulp<T>>,
 }
 
-/// Helper for reusing access to all packet body segments.
+/// Helper for conditionally pulling up a packet when required,
+/// to provide safe read/write access to the packet body.
 ///
-/// This is necessary because `MsgBlk`s in particular do not
-/// allow us to walk backward within a packet -- if we need them,
-/// then we need to save them out for all future uses.
-/// The other part is that the majority of packets (ULP hits)
-/// do not want to interact with body segments at all.
-struct PktBodyWalker<T: Read> {
-    base: Cell<Option<(Option<T::Chunk>, T)>>,
-    slice: AtomicPtr<Vec<(*mut u8, usize)>>,
+/// This is necessary because we must account for a condition
+/// where MsgBlks containing packet headers are fully owned by
+/// the host OS, but the packet body points to guest memory.
+/// In this case, it is unsafe to take either a `&[]` or `&mut[]`
+/// against the underlying packet contents, as the guest may
+/// modify them. [`MsgBlk::wrap_mblk`] details this condition.
+///
+/// The current disposition is that if we have any non-header
+/// segments, then we're pulling the remainder of the packet up.
+/// In theory we could check ref counts to determine whether we
+/// can in fact serve a `&[&[u8]]`, but no fastpath packets need
+/// this capability so it's wasted effort on that front.
+struct PktBodyWalker<T: Read + Pullup> {
+    last_chunk: Option<T::Chunk>,
+    remainder: T,
+    // The use of atomics/interior mutability here is primarily to
+    // allow us to work under &self for `body()`, dynamically filling
+    // out the pulled up mblk as needed.
+    state: Cell<BodySegState>,
+    // TODO: It would be nice to separate this from MsgBlk.
+    //       `T::Owned` in future?
+    msg_blk: AtomicPtr<mblk_t>,
 }
 
-impl<T: Read> Drop for PktBodyWalker<T> {
+#[derive(Copy, Clone, Debug)]
+enum BodySegState {
+    NoPullup,
+    NeedsPullup,
+    PulledUp,
+}
+
+impl<T: Read + Pullup> PktBodyWalker<T> {
+    fn new(last_chunk: Option<T::Chunk>, remainder: T) -> Self {
+        let state = if remainder.is_empty() {
+            BodySegState::NoPullup
+        } else {
+            BodySegState::NeedsPullup
+        }
+        .into();
+
+        Self {
+            last_chunk,
+            remainder,
+            state,
+            msg_blk: core::ptr::null_mut::<mblk_t>().into(),
+        }
+    }
+}
+
+impl<T: Read + Pullup> PktBodyWalker<T> {
+    #[inline(always)]
+    fn prepare(&self) {
+        let BodySegState::NeedsPullup = self.state.clone().into_inner() else {
+            return;
+        };
+
+        let prepend_slice = self.last_chunk.as_ref().map(|v| &v[..]);
+        let mblk = self.remainder.pullup(prepend_slice);
+
+        let mblk_ptr = mblk.unwrap_mblk();
+
+        self.msg_blk
+            .compare_exchange(
+                core::ptr::null_mut(),
+                mblk_ptr.as_ptr(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .expect("invariant violated: tried to double-prepare mblk");
+        self.state.set(BodySegState::PulledUp);
+    }
+
+    fn body(&self) -> &[u8] {
+        self.prepare();
+
+        match self.state.clone().into_inner() {
+            BodySegState::NoPullup => {
+                self.last_chunk.as_ref().map(|v| &v[..]).unwrap_or_default()
+            }
+            BodySegState::NeedsPullup => unreachable!(),
+            BodySegState::PulledUp => {
+                let ptr = NonNull::new(self.msg_blk.load(Ordering::Relaxed))
+                    .expect("invariant violated: PulledUp with nullptr");
+
+                // SAFETY: MsgBlk(NonNull<mblk_t>) has identical layout to
+                // NonNull<mblk_t>, and the inner mblk lives as long as self.
+                // Since ownership is unaffected, the &[u8] derived from msg_blk
+                // is valid for the same lifetime as &self.
+                unsafe {
+                    let mblk_ref =
+                        core::mem::transmute::<&NonNull<mblk_t>, &MsgBlk>(&ptr);
+
+                    core::mem::transmute::<&[u8], &[u8]>(&mblk_ref[..])
+                }
+            }
+        }
+    }
+
+    fn body_mut(&mut self) -> &mut [u8]
+    where
+        T::Chunk: ByteSliceMut,
+    {
+        self.prepare();
+
+        match self.state.clone().into_inner() {
+            BodySegState::NoPullup => {
+                self.last_chunk.as_mut().map(|v| &mut v[..]).unwrap_or_default()
+            }
+            BodySegState::NeedsPullup => unreachable!(),
+            BodySegState::PulledUp => {
+                let mut ptr =
+                    NonNull::new(self.msg_blk.load(Ordering::Relaxed))
+                        .expect("invariant violated: PulledUp with nullptr");
+
+                // SAFETY: MsgBlk(NonNull<mblk_t>) has identical layout to
+                // NonNull<mblk_t>, and the inner mblk lives as long as self.
+                // Since ownership is unaffected, the &mut [u8] derived from msg_blk
+                // is valid for the same lifetime as &mut self.
+                unsafe {
+                    let mblk_ref = core::mem::transmute::<
+                        &mut NonNull<mblk_t>,
+                        &mut MsgBlk,
+                    >(&mut ptr);
+
+                    core::mem::transmute::<&mut [u8], &mut [u8]>(
+                        &mut mblk_ref[..],
+                    )
+                }
+            }
+        }
+    }
+
+    fn extract_mblk(&mut self) -> Option<MsgBlk> {
+        let state = self.state.get_mut();
+
+        if !matches!(state, BodySegState::PulledUp) {
+            return None;
+        }
+
+        // If we were pulled up, a later prepare will need to pullup again.
+        *state = BodySegState::NeedsPullup;
+
+        let ptr = self.msg_blk.load(Ordering::Relaxed);
+
+        // SAFETY: this mblk was created by using the MsgBlk::new api.
+        //         PulledUp asserts its value is non-null.
+        unsafe {
+            Some(
+                MsgBlk::wrap_mblk(ptr)
+                    .expect("invariant violated: PulledUp with nullptr"),
+            )
+        }
+    }
+}
+
+impl<T: Read + Pullup> Drop for PktBodyWalker<T> {
     fn drop(&mut self) {
-        let ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
-        if !ptr.is_null() {
-            // Reacquire and drop.
-            unsafe {
-                let _ = Box::from_raw(ptr);
-            }
-        }
-    }
-}
-
-impl<'a, T: Read + 'a> PktBodyWalker<T>
-where
-    <T as Read>::Chunk: ByteSliceMut + IntoBufPointer<'a>,
-{
-    fn reify_body_segs(&self) {
-        if let Some((first, mut rest)) = self.base.take() {
-            // SAFETY: ByteSlice requires as part of its API
-            // that any implementors are stable, so we will always
-            // get the same view via deref. We are then consuming them
-            // into references which live exactly as long as their initial
-            // form.
-            //
-            // IntoBufPointer guarantees that what we are working with are,
-            // in actual fact, slices (or, at least, that any necessary behaviour
-            // on owned conversion into a slice [Drop, etc.] occurs).
-            //
-            // The next question is one of ownership.
-            // We know that these chunks are at least &[u8]s, they
-            // *will* be exclusive if ByteSliceMut is met (because they are
-            // sourced from an exclusive borrow on something which owns a [u8]).
-            // This allows us to cast to &mut later, but not here!
-            let mut to_hold = Vec::with_capacity(1);
-            if let Some(chunk) = first {
-                let len = chunk.len();
-                let ptr = unsafe { chunk.into_buf_ptr() };
-                to_hold.push((ptr, len));
-            }
-
-            while let Ok(chunk) = rest.next_chunk() {
-                let len = chunk.len();
-                let ptr = unsafe { chunk.into_buf_ptr() };
-                to_hold.push((ptr, len));
-            }
-
-            let to_store = Box::into_raw(Box::new(to_hold));
-
-            self.slice
-                .compare_exchange(
-                    core::ptr::null_mut(),
-                    to_store,
-                    core::sync::atomic::Ordering::Relaxed,
-                    core::sync::atomic::Ordering::Relaxed,
-                )
-                .expect("unexpected concurrent access to body_seg memoiser");
-
-            // While today the only T we're operating on are IterMuts bound
-            // to the lifetime of an actual packet (via &mut), there's a chance
-            // in future that dropping the iterator could invalidate the byte
-            // slices we're holding onto. Hang onto `rest` to prevent this.
-            self.base.set(Some((None, rest)));
-        }
-    }
-
-    fn body_segs(&self) -> &[&[u8]] {
-        let mut slice_ptr =
-            self.slice.load(core::sync::atomic::Ordering::Relaxed);
-        if slice_ptr.is_null() {
-            self.reify_body_segs();
-            slice_ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
-        }
-        debug_assert!(!slice_ptr.is_null());
-
-        unsafe {
-            let a = (&*(*slice_ptr)) as *const _;
-            &*(a as *const [&[u8]])
-        }
-    }
-
-    fn body_segs_mut(&mut self) -> &mut [&mut [u8]] {
-        let mut slice_ptr =
-            self.slice.load(core::sync::atomic::Ordering::Relaxed);
-        if slice_ptr.is_null() {
-            self.reify_body_segs();
-            slice_ptr = self.slice.load(core::sync::atomic::Ordering::Relaxed);
-        }
-        debug_assert!(!slice_ptr.is_null());
-
-        // SAFETY: We have an exclusive reference, and the ByteSliceMut
-        // bound guarantees that this packet view was construced from
-        // an exclusive reference. In turn, we know that we are the only
-        // possible referent.
-        unsafe {
-            let a = (&mut *(*slice_ptr)) as *mut _;
-            &mut *(a as *mut [&mut [u8]])
-        }
+        self.extract_mblk();
     }
 }
 
 /// Packet state for the standard ULP path, or a full table walk over the slowpath.
-pub struct PacketData<T: Read> {
+pub struct PacketData<T: Read + Pullup> {
     pub(crate) headers: OpteMeta<T::Chunk>,
     initial_lens: Option<Box<InitialLayerLens>>,
     body: PktBodyWalker<T>,
@@ -556,13 +611,13 @@ impl<T: ByteSlice> From<NoEncap<T>> for OpteMeta<T> {
     }
 }
 
-impl<T: Read> core::fmt::Debug for PacketData<T> {
+impl<T: Read + Pullup> core::fmt::Debug for PacketData<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("PacketHeaders(..)")
     }
 }
 
-impl<'a, T: Read + 'a> PacketData<T> {
+impl<T: Read + Pullup> PacketData<T> {
     pub fn initial_lens(&self) -> Option<&InitialLayerLens> {
         self.initial_lens.as_deref()
     }
@@ -649,43 +704,46 @@ impl<'a, T: Read + 'a> PacketData<T> {
         matches!(self.inner_ulp(), Some(Ulp::Tcp(_)))
     }
 
-    pub fn body_segs(&self) -> &[&[u8]]
+    pub fn prep_body(&mut self)
     where
-        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
     {
-        self.body.body_segs()
+        self.body.prepare()
+    }
+
+    pub fn body(&self) -> &[u8]
+    where
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
+    {
+        self.body.body()
     }
 
     pub fn copy_remaining(&self) -> Vec<u8>
     where
-        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
     {
-        let base = self.body_segs();
-        let len = base.iter().map(|v| v.len()).sum();
-        let mut out = Vec::with_capacity(len);
-        for el in base {
-            out.extend_from_slice(el);
-        }
-        out
+        let base = self.body();
+        base.to_vec()
     }
 
     pub fn append_remaining(&self, buf: &mut Vec<u8>)
     where
-        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
     {
-        let base = self.body_segs();
-        let len = base.iter().map(|v| v.len()).sum();
-        buf.reserve_exact(len);
-        for el in base {
-            buf.extend_from_slice(el);
-        }
+        let base = self.body();
+        buf.extend_from_slice(base);
     }
 
-    pub fn body_segs_mut(&mut self) -> &mut [&mut [u8]]
+    pub fn body_mut(&mut self) -> &mut [u8]
     where
-        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
     {
-        self.body.body_segs_mut()
+        self.body.body_mut()
     }
 
     /// Return whether the IP layer has a checksum both structurally
@@ -713,7 +771,7 @@ impl<'a, T: Read + 'a> PacketData<T> {
     }
 }
 
-impl<T: Read> From<&PacketData<T>> for InnerFlowId {
+impl<T: Read + Pullup> From<&PacketData<T>> for InnerFlowId {
     #[inline]
     fn from(meta: &PacketData<T>) -> Self {
         let (proto, addrs) = match meta.inner_l3() {
@@ -791,7 +849,7 @@ pub type LiteInPkt<T, NP> =
 pub type LiteOutPkt<T, NP> =
     Packet<LiteParsed<T, <NP as NetworkParser>::OutMeta<<T as Read>::Chunk>>>;
 
-impl<'a, T: Read + BufferState + 'a, M: LightweightMeta<T::Chunk>>
+impl<'a, T: Read + BufferState + Pullup + 'a, M: LightweightMeta<T::Chunk>>
     Packet<LiteParsed<T, M>>
 where
     T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
@@ -847,10 +905,7 @@ where
             }
             .into(),
         );
-        let body = PktBodyWalker {
-            base: Some((last_chunk, data)).into(),
-            slice: Default::default(),
-        };
+        let body = PktBodyWalker::new(last_chunk, data);
         let meta = Box::new(PacketData { headers, initial_lens, body });
 
         Packet {
@@ -893,7 +948,7 @@ where
     }
 }
 
-impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
+impl<T: Read + Pullup> Packet<FullParsed<T>> {
     pub fn meta(&self) -> &PacketData<T> {
         &self.state.meta
     }
@@ -1151,7 +1206,8 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
         xform: &dyn BodyTransform,
     ) -> Result<(), BodyTransformError>
     where
-        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
     {
         // We set the flag now with the assumption that the transform
         // could fail after modifying part of the body. In the future
@@ -1160,8 +1216,14 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
         // this does the job as nothing that needs top performance
         // should make use of body transformations.
         self.state.body_modified = true;
+        self.state.meta.body.prepare();
 
-        match self.body_segs_mut() {
+        // TODO TODO TODO
+        // We need to put the pulled up body into the EmitSpec.
+        // Not using it today but we NEED to get it right.
+        // TODO TODO TODO
+
+        match self.body_mut() {
             Some(body_segs) => xform.run(dir, body_segs),
             None => {
                 self.state.body_modified = false;
@@ -1171,11 +1233,12 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
     }
 
     #[inline]
-    pub fn body_segs(&self) -> Option<&[&[u8]]>
+    pub fn body(&self) -> Option<&[u8]>
     where
-        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
     {
-        let out = self.state.meta.body_segs();
+        let out = self.state.meta.body();
         if out.is_empty() {
             None
         } else {
@@ -1184,11 +1247,12 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
     }
 
     #[inline]
-    pub fn body_segs_mut(&mut self) -> Option<&mut [&mut [u8]]>
+    pub fn body_mut(&mut self) -> Option<&mut [u8]>
     where
-        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
     {
-        let out = self.state.meta.body_segs_mut();
+        let out = self.state.meta.body_mut();
         if out.is_empty() {
             None
         } else {
@@ -1208,12 +1272,11 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
     /// body_csum cannot be valid.
     pub fn compute_checksums(&mut self)
     where
-        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
     {
         let mut body_csum = Checksum::new();
-        for seg in self.body_segs_mut().unwrap_or_default() {
-            body_csum.add_bytes(seg);
-        }
+        body_csum.add_bytes(self.body().unwrap_or_default());
         self.state.body_csum = Some(body_csum);
 
         if let Some(ulp) = &mut self.state.meta.headers.inner_ulp {
@@ -1311,7 +1374,8 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
     /// case where checksums are **not** being offloaded to the hardware.
     pub fn update_checksums(&mut self)
     where
-        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
     {
         // If we know that no transform touched a field which features in
         // an inner transport cksum (L4/L3 src/dst, most realistically),
@@ -1413,12 +1477,15 @@ impl<'a, T: Read + 'a> Packet<FullParsed<T>> {
     }
 }
 
-impl<T: Read, M: LightweightMeta<T::Chunk>> PacketState for LiteParsed<T, M> {}
-impl<T: Read> PacketState for FullParsed<T> {}
+impl<T: Read + Pullup, M: LightweightMeta<T::Chunk>> PacketState
+    for LiteParsed<T, M>
+{
+}
+impl<T: Read + Pullup> PacketState for FullParsed<T> {}
 
 /// Zerocopy view onto a parsed packet, accompanied by locally
 /// computed state.
-pub struct FullParsed<T: Read> {
+pub struct FullParsed<T: Read + Pullup> {
     /// Total length of packet, in bytes. This is equal to the sum of
     /// the length of the _initialized_ window in all the segments
     /// (`b_wptr - b_rptr`).
@@ -1460,7 +1527,7 @@ pub struct FullParsed<T: Read> {
 
 /// Minimum-size zerocopy view onto a parsed packet, sufficient for fast
 /// packet transformation.
-pub struct LiteParsed<T: Read, M: LightweightMeta<T::Chunk>> {
+pub struct LiteParsed<T: Read + Pullup, M: LightweightMeta<T::Chunk>> {
     /// Total length of packet, in bytes. This is equal to the sum of
     /// the length of the _initialized_ window in all the segments
     /// (`b_wptr - b_rptr`).
@@ -1471,7 +1538,7 @@ pub struct LiteParsed<T: Read, M: LightweightMeta<T::Chunk>> {
     meta: IngotParsed<M, T>,
 }
 
-impl<T: Read, M: LightweightMeta<T::Chunk>> LiteParsed<T, M> {}
+impl<T: Read + Pullup, M: LightweightMeta<T::Chunk>> LiteParsed<T, M> {}
 
 // These are needed for now to account for not wanting to redesign
 // ActionDescs to be generic over T (trait object safety rules, etc.),
@@ -1483,6 +1550,12 @@ pub type MblkLiteParsed<'a, M> = LiteParsed<MsgBlkIterMut<'a>, M>;
 pub trait BufferState {
     fn len(&self) -> usize;
     fn base_ptr(&self) -> uintptr_t;
+}
+
+pub trait Pullup {
+    /// Pulls all remaining segments of a packet into a new
+    /// `Self` containing a single buffer.
+    fn pullup(&self, prepend: Option<&[u8]>) -> MsgBlk;
 }
 
 /// A set of headers to be emitted at the head of a packet.

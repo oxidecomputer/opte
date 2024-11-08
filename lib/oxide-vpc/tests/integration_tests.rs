@@ -440,6 +440,46 @@ fn gateway_icmp4_ping() {
     }
 }
 
+// Verify that guest packet bodies are correctly pulled up if they run
+// past the same segment(s) containing the rest of the headers.
+#[test]
+fn packet_body_pullup() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+    let ident = 7;
+    let seq_no = 777;
+    let data = c"...did Sephiroth do this?";
+
+    // ================================================================
+    // Generate an ICMP Echo Request from G1 to Virtual GW
+    // ================================================================
+    let mut pkt1_m = gen_icmp_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        g1_cfg.ipv4_cfg().unwrap().private_ip.into(),
+        g1_cfg.ipv4_cfg().unwrap().gateway_ip.into(),
+        ident,
+        seq_no,
+        data.to_bytes_with_nul(),
+        // Instruct the packet builder to split the body 8 bytes in.
+        4,
+    );
+
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    let hp = match res {
+        Ok(Hairpin(hp)) => hp,
+        _ => panic!("expected Hairpin, got {:?}", res),
+    };
+
+    // Verify that the contents are correctly replicated.
+    let (_hdrs, new_body) =
+        hp.split_at(hp.len() - data.to_bytes_with_nul().len());
+    assert_eq!(new_body, data.to_bytes_with_nul());
+}
+
 // Try to send a TCP packet from one guest to another; but in this
 // case the guest has not route to the other guest, resulting in the
 // packet being dropped.

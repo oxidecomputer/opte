@@ -47,6 +47,7 @@ pub use opte_api::Direction;
 use packet::FullParsed;
 use packet::OpteMeta;
 use packet::Packet;
+use packet::Pullup;
 use parse::ValidNoEncap;
 use rule::CompiledTransform;
 use zerocopy::ByteSlice;
@@ -217,7 +218,7 @@ pub trait NetworkImpl {
     /// myriad of reasons. The error returned is for informational
     /// purposes, rather than having any obvious direct action to take
     /// in response.
-    fn handle_pkt<'a, T: Read + 'a>(
+    fn handle_pkt<'a, T: Read + Pullup + 'a>(
         &self,
         dir: Direction,
         pkt: &mut Packet<FullParsed<T>>,

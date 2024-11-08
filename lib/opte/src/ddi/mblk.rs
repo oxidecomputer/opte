@@ -5,6 +5,7 @@
 // Copyright 2024 Oxide Computer Company
 
 use crate::engine::packet::BufferState;
+use crate::engine::packet::Pullup;
 use crate::engine::packet::SegAdjustError;
 use crate::engine::packet::WrapError;
 use crate::engine::packet::WriteError;
@@ -357,7 +358,7 @@ impl MsgBlk {
     /// Return the number of initialised bytes in this `MsgBlk` over
     /// all linked segments.
     pub fn byte_len(&self) -> usize {
-        self.iter().map(|el| el.len()).sum()
+        unsafe { count_mblk_bytes(Some(self.0)) }
     }
 
     /// Return the number of segments in this `MsgBlk`.
@@ -722,12 +723,76 @@ impl MsgBlkIterMut<'_> {
     }
 }
 
+impl Pullup for MsgBlkIterMut<'_> {
+    fn pullup(&self, prepend: Option<&[u8]>) -> MsgBlk {
+        let prepend = prepend.unwrap_or_default();
+        let bytes_in_self = BufferState::len(self);
+        let needed_alloc = prepend.len() + bytes_in_self;
+        let mut new_seg = MsgBlk::new(needed_alloc);
+
+        new_seg
+            .write_bytes_back(prepend)
+            .expect("allocated enough bytes for prepend and self");
+
+        if bytes_in_self != 0 {
+            // SAFETY: We need to make use of ptr::copy for a pullup
+            // because we cannot guarantee a dblk refcnt of 1 -- thus
+            // using Deref<[u8]> for these segments is not safe.
+            unsafe {
+                new_seg
+                    .write_back(bytes_in_self, |mut buf| {
+                        let mut curr = self.curr;
+                        while let Some(valid_curr) = curr {
+                            let valid_curr = valid_curr.as_ref();
+                            let src = valid_curr.b_rptr;
+                            let seg_len = usize::try_from(
+                                valid_curr.b_wptr.offset_from(src),
+                            )
+                            .expect("invalid mblk -- slice end before start");
+
+                            // SAFETY: MaybeUninit<u8> has identical layout to u8,
+                            // &[T] can be cast down to &T (discarding len).
+                            let dst: *mut u8 =
+                                core::mem::transmute(buf.as_mut_ptr());
+
+                            dst.copy_from_nonoverlapping(
+                                valid_curr.b_rptr,
+                                seg_len,
+                            );
+
+                            curr = NonNull::new(valid_curr.b_cont);
+                            buf = buf.split_at_mut(seg_len).1;
+                        }
+                    })
+                    .expect("allocated enough bytes for prepend and self");
+            }
+        }
+
+        new_seg
+    }
+}
+
 /// Counts the number of segments in an `mblk_t` from `head`, linked
 /// via `b_cont`.
 unsafe fn count_mblk_chain(mut head: Option<NonNull<mblk_t>>) -> usize {
     let mut count = 0;
     while let Some(valid_head) = head {
         count += 1;
+        head = NonNull::new((*valid_head.as_ptr()).b_cont);
+    }
+    count
+}
+
+/// Counts the number of bytes in an `mblk_t` from `head`, linked
+/// via `b_cont`.
+///
+/// This is used to avoid contructing a &[] over slices which may/may not
+/// have a higher refcnt.
+unsafe fn count_mblk_bytes(mut head: Option<NonNull<mblk_t>>) -> usize {
+    let mut count = 0;
+    while let Some(valid_head) = head {
+        let headref = valid_head.as_ref();
+        count += headref.b_wptr.offset_from(headref.b_rptr).max(0) as usize;
         head = NonNull::new((*valid_head.as_ptr()).b_cont);
     }
     count
@@ -752,7 +817,7 @@ impl<'a> Iterator for MsgBlkIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for MsgBlkIter<'a> {}
+impl ExactSizeIterator for MsgBlkIter<'_> {}
 
 impl<'a> Read for MsgBlkIter<'a> {
     type Chunk = &'a [u8];
@@ -785,7 +850,7 @@ impl<'a> Iterator for MsgBlkIterMut<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for MsgBlkIterMut<'a> {}
+impl ExactSizeIterator for MsgBlkIterMut<'_> {}
 
 impl<'a> Read for MsgBlkIterMut<'a> {
     type Chunk = &'a mut [u8];
@@ -802,15 +867,7 @@ impl<'a> Read for MsgBlkIterMut<'a> {
 impl BufferState for MsgBlkIterMut<'_> {
     #[inline]
     fn len(&self) -> usize {
-        let own_blk_len = self
-            .curr
-            .map(|v| unsafe {
-                let v = v.as_ref();
-                v.b_wptr.offset_from(v.b_rptr) as usize
-            })
-            .unwrap_or_default();
-
-        own_blk_len + self.next_iter().map(|v| v.len()).sum::<usize>()
+        unsafe { count_mblk_bytes(self.curr) }
     }
 
     #[inline]

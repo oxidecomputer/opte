@@ -147,9 +147,7 @@ impl HairpinAction for Icmpv6EchoReply {
             0 => {
                 let mut csum = OpteCsum::new();
 
-                for el in meta.body_segs().iter() {
-                    csum.add_bytes(el);
-                }
+                csum.add_bytes(meta.body());
 
                 csum.add_bytes(icmp6.rest_of_hdr_ref());
 
@@ -168,7 +166,7 @@ impl HairpinAction for Icmpv6EchoReply {
         csum.add_bytes(&[ty, code]);
 
         // Build the reply in place, and send it out.
-        let body_len: usize = meta.body_segs().iter().map(|v| v.len()).sum();
+        let body_len: usize = meta.body().len();
 
         let icmp = IcmpV6 {
             ty,
@@ -196,14 +194,8 @@ impl HairpinAction for Icmpv6EchoReply {
         let total_len = body_len + (&eth, &ip6, &icmp).packet_length();
         let mut pkt_out = MsgBlk::new_ethernet(total_len);
         pkt_out
-            .emit_back((&eth, &ip6, &icmp))
+            .emit_back((&eth, &ip6, &icmp, meta.body()))
             .expect("Allocated space for pkt headers and body");
-
-        for el in meta.body_segs() {
-            pkt_out
-                .write_bytes_back(el)
-                .expect("allocated enough bytes for all body copy");
-        }
 
         Ok(AllowOrDeny::Allow(pkt_out))
     }

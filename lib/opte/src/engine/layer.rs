@@ -862,7 +862,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body_segs() {
+                if let Some(body_segs) = pkt.body() {
                     if let Some(bt) =
                         desc.gen_bt(Direction::In, pkt.meta(), body_segs)?
                     {
@@ -1054,7 +1054,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body_segs() {
+                if let Some(body_segs) = pkt.body() {
                     if let Some(bt) = desc.gen_bt(In, pkt.meta(), body_segs)? {
                         pkt.body_transform(In, &*bt)?;
                         xforms.body.push(bt);
@@ -1149,7 +1149,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body_segs() {
+                if let Some(body_segs) = pkt.body() {
                     if let Some(bt) =
                         desc.gen_bt(Direction::Out, pkt.meta(), body_segs)?
                     {
@@ -1343,7 +1343,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body_segs() {
+                if let Some(body_segs) = pkt.body() {
                     if let Some(bt) = desc.gen_bt(Out, pkt.meta(), body_segs)? {
                         pkt.body_transform(Out, &*bt)?;
                         xforms.body.push(bt);

@@ -33,6 +33,7 @@ use super::packet::MblkFullParsed;
 use super::packet::MblkPacketData;
 use super::packet::Packet;
 use super::packet::PacketData;
+use super::packet::Pullup;
 use super::parse::ValidUlp;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
@@ -174,7 +175,7 @@ pub trait ActionDesc {
         &self,
         _dir: Direction,
         _meta: &MblkPacketData,
-        _payload_segs: &[&[u8]],
+        _payload_seg: &[u8],
     ) -> Result<Option<Box<dyn BodyTransform>>, GenBtError> {
         Ok(None)
     }
@@ -581,7 +582,7 @@ impl HdrTransform {
     /// If there is an [`HeaderAction::Modify`], but no metadata is
     /// present for that particular header, then a
     /// [`HdrTransformError::MissingHeader`] is returned.
-    pub fn run<T: Read>(
+    pub fn run<T: Read + Pullup>(
         &self,
         meta: &mut PacketData<T>,
     ) -> Result<bool, HdrTransformError>

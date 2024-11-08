@@ -160,6 +160,15 @@ pub fn gen_icmp_echo(
             segments.push(MsgBlk::new_pkt(ip));
             segments.push(MsgBlk::new_pkt(&icmp_bytes));
         }
+        4 => {
+            // Used to test pullup behaviour around longer mblks
+            // which still have pkt bodies in guest memory.
+            assert!(icmp_bytes.len() > 8);
+            segments.push(MsgBlk::new_ethernet_pkt(eth));
+            segments.push(MsgBlk::new_pkt(ip));
+            segments.push(MsgBlk::new_pkt(&icmp_bytes[..8]));
+            segments.push(MsgBlk::new_pkt(&icmp_bytes[8..]));
+        }
         _ => {
             panic!("only 1 2 or 3 segments allowed")
         }
@@ -264,6 +273,15 @@ pub fn gen_icmpv6_echo(
             segments.push(MsgBlk::new_ethernet_pkt(eth));
             segments.push(MsgBlk::new_pkt(ip));
             segments.push(MsgBlk::new_pkt(&body_bytes));
+        }
+        4 => {
+            // Used to test pullup behaviour around longer mblks
+            // which still have pkt bodies in guest memory.
+            assert!(body_bytes.len() > 8);
+            segments.push(MsgBlk::new_ethernet_pkt(eth));
+            segments.push(MsgBlk::new_pkt(ip));
+            segments.push(MsgBlk::new_pkt(&body_bytes[..8]));
+            segments.push(MsgBlk::new_pkt(&body_bytes[8..]));
         }
         _ => {
             panic!("only 1 2 or 3 segments allowed")

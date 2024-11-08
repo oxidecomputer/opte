@@ -38,6 +38,7 @@ use super::packet::LiteParsed;
 use super::packet::MblkFullParsed;
 use super::packet::MblkPacketData;
 use super::packet::Packet;
+use super::packet::Pullup;
 use super::packet::FLOW_ID_DEFAULT;
 use super::rule::Action;
 use super::rule::CompiledTransform;
@@ -91,7 +92,6 @@ use ingot::ip::IpProtocol;
 use ingot::tcp::TcpRef;
 use ingot::types::Emit;
 use ingot::types::HeaderLen;
-use ingot::types::IntoBufPointer;
 use ingot::types::Read;
 use ingot::udp::Udp;
 use opte_api::Direction;
@@ -1692,13 +1692,13 @@ impl Transforms {
     }
 
     #[inline]
-    fn apply<'a, T: Read + 'a>(
+    fn apply<'a, T: Read + Pullup + 'a>(
         &self,
         pkt: &mut Packet<FullParsed<T>>,
         dir: Direction,
     ) -> result::Result<(), ProcessError>
     where
-        T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
+        T::Chunk: ByteSliceMut,
     {
         // TODO: It should be possible to combine header transforms
         // into a single operation per layer, particularly when
