@@ -975,7 +975,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         // - Rewind up to+including that point in original
         //   pkt space.
         let l4_hash = self.l4_hash();
-        let state = &self.state;
+        let state = &mut self.state;
         let init_lens = state.meta.initial_lens.as_ref().unwrap();
         let headers = &state.meta.headers;
         let payload_len = state.len - init_lens.hdr_len();
@@ -983,6 +983,10 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
 
         let mut push_spec = OpteEmit::default();
         let mut rewind = 0;
+
+        if state.body_modified {
+            push_spec.replace_body = state.meta.body.extract_mblk();
+        }
 
         // structural change if:
         // hdr_len is different.
@@ -1217,11 +1221,6 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         // should make use of body transformations.
         self.state.body_modified = true;
         self.state.meta.body.prepare();
-
-        // TODO TODO TODO
-        // We need to put the pulled up body into the EmitSpec.
-        // Not using it today but we NEED to get it right.
-        // TODO TODO TODO
 
         match self.body_mut() {
             Some(body_segs) => xform.run(dir, body_segs),
@@ -1558,8 +1557,9 @@ pub trait Pullup {
     fn pullup(&self, prepend: Option<&[u8]>) -> MsgBlk;
 }
 
-/// A set of headers to be emitted at the head of a packet.
-#[derive(Clone, Debug, Default)]
+/// A set of headers to be emitted at the head of a packet, and
+/// possibly a replacement body as required in the slowpath.
+#[derive(Debug, Default)]
 pub struct OpteEmit {
     outer_eth: Option<Ethernet>,
     outer_ip: Option<L3Repr>,
@@ -1568,6 +1568,11 @@ pub struct OpteEmit {
     // We can (but do not often) push/pop inner meta.
     // Splitting via Box minimises struct size in the general case.
     inner: Option<Box<OpteInnerEmit>>,
+
+    // In some cases, applying body transforms requires a packet pullup,
+    // which the body transforms will then be applied to. If there is a
+    // modified body, it must be taken from here.
+    replace_body: Option<MsgBlk>,
 }
 
 /// Inner headers needing completely rewritten/emitted in a packet.
@@ -1583,7 +1588,7 @@ pub struct OpteInnerEmit {
 ///
 /// This will add and/or remove several layers from the underlying `MsgBlk`,
 /// and can be queried for routing specific info (access to new encap, l4 hash).
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct EmitSpec {
     pub(crate) prepend: PushSpec,
     pub(crate) l4_hash: u32,
@@ -1609,7 +1614,7 @@ impl EmitSpec {
     /// existing headers, and copying in new/replacement headers).
     #[inline]
     #[must_use]
-    pub fn apply(&self, mut pkt: MsgBlk) -> MsgBlk {
+    pub fn apply(self, mut pkt: MsgBlk) -> MsgBlk {
         // Rewind
         {
             let mut slots = heapless::Vec::<&mut MsgBlkNode, 6>::new();
@@ -1641,7 +1646,7 @@ impl EmitSpec {
         // much less so in the fastpath.
         pkt.drop_empty_segments();
 
-        let out = match &self.prepend {
+        match self.prepend {
             PushSpec::Fastpath(push_spec) => {
                 push_spec.encap.prepend(pkt, self.ulp_len as usize)
             }
@@ -1654,6 +1659,13 @@ impl EmitSpec {
                     needed_push += inner_new.eth.packet_length()
                         + inner_new.l3.packet_length()
                         + inner_new.ulp.packet_length();
+                }
+
+                if let Some(replace_body) = push_spec.replace_body {
+                    pkt.truncate_chain(
+                        self.ulp_len as usize - replace_body.byte_len(),
+                    );
+                    pkt.append(replace_body);
                 }
 
                 let needed_alloc = needed_push;
@@ -1739,9 +1751,7 @@ impl EmitSpec {
                 }
             }
             PushSpec::NoOp => pkt,
-        };
-
-        out
+        }
     }
 
     /// Returns the Geneve VNI when this spec pushes Geneve encapsulation.
@@ -1782,7 +1792,7 @@ impl EmitSpec {
 }
 
 /// Specification of additional header layers to push at the head of a packet.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum PushSpec {
     /// Bytes to prepend to packet which have been serialised ahead of time
     /// and can be copied in one shot.

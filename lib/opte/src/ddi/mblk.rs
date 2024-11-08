@@ -366,6 +366,43 @@ impl MsgBlk {
         self.iter().len()
     }
 
+    /// Truncates an `MsgBlk` chain, dropping any elements such that
+    /// it contains at most `len` bytes.
+    pub fn truncate_chain(&mut self, len: usize) {
+        let mut seen = 0;
+        let mut curr = Some(self.0);
+        let mut old_tail = ptr::null_mut();
+
+        while let Some(mut valid_curr) = curr.take() {
+            let valid_curr = unsafe { valid_curr.as_mut() };
+
+            let seg_len = usize::try_from(unsafe {
+                valid_curr.b_wptr.offset_from(valid_curr.b_rptr)
+            })
+            .expect("operating on packet with end before start");
+
+            let seen_til_now = seen;
+            seen += seg_len;
+
+            if seen <= len {
+                let to_keep = len.saturating_sub(seen_til_now);
+
+                // SAFETY: this will only reduce the read window of this slice,
+                // so derived byteslices will remain in capacity.
+                valid_curr.b_wptr = unsafe { valid_curr.b_rptr.add(to_keep) };
+
+                core::mem::swap(&mut valid_curr.b_cont, &mut old_tail);
+            } else {
+                curr = NonNull::new(valid_curr.b_cont);
+            }
+        }
+
+        // SAFETY: we have exclusive ownership of this element
+        // via self, and we have just disconnected it from the chain.
+        // This method also handles the nullptr case on our behalf.
+        drop(unsafe { Self::wrap_mblk(old_tail) })
+    }
+
     /// Allocate a new [`MsgBlk`] containing a data buffer of size
     /// `head_len + body_len`.
     ///
