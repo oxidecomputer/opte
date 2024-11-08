@@ -384,7 +384,7 @@ impl MsgBlk {
             let seen_til_now = seen;
             seen += seg_len;
 
-            if seen <= len {
+            if seen >= len {
                 let to_keep = len.saturating_sub(seen_til_now);
 
                 // SAFETY: this will only reduce the read window of this slice,
@@ -1136,6 +1136,26 @@ mod test {
         let mut segs = pkt.iter();
         assert_eq!(segs.next().map(|v| &v[..]).unwrap(), &[0x1, 0x2, 0x3, 0x4]);
         assert_eq!(segs.next().map(|v| &v[..]).unwrap(), &[0x5, 0x6]);
+    }
+
+    #[test]
+    fn truncate() {
+        let mut p1 = MsgBlk::copy(&[0, 1, 2, 3]);
+        p1.append(MsgBlk::copy(&[4, 5, 6, 7]));
+        p1.append(MsgBlk::copy(&[8, 9, 10, 11]));
+
+        assert_eq!(p1.seg_len(), 3);
+        assert_eq!(p1.byte_len(), 12);
+
+        // Assert drop of followup segments.
+        p1.truncate_chain(7);
+        assert_eq!(p1.seg_len(), 2);
+        assert_eq!(p1.byte_len(), 7);
+        let mut iter = p1.iter();
+        let el1 = iter.next().unwrap();
+        let el2 = iter.next().unwrap();
+        assert_eq!(&el1[..], &[0, 1, 2, 3]);
+        assert_eq!(&el2[..], &[4, 5, 6]);
     }
 
     // Verify uninitialized packet.
