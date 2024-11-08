@@ -854,7 +854,7 @@ impl<'a, T: Read + BufferState + Pullup + 'a, M: LightweightMeta<T::Chunk>>
 where
     T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
 {
-    #[inline]
+    #[inline(always)]
     pub fn parse_inbound<NP: NetworkParser<InMeta<T::Chunk> = M>>(
         pkt: T,
         net: NP,
@@ -868,7 +868,7 @@ where
         Ok(Packet { state: LiteParsed { meta, base_ptr, len } })
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn parse_outbound<NP: NetworkParser<OutMeta<T::Chunk> = M>>(
         pkt: T,
         net: NP,

@@ -124,7 +124,7 @@ impl NetworkParser for VpcParser {
     type InMeta<T: ByteSliceMut> = ValidGeneveOverV6<T>;
     type OutMeta<T: ByteSliceMut> = ValidNoEncap<T>;
 
-    #[inline]
+    #[inline(always)]
     fn parse_outbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
@@ -135,7 +135,7 @@ impl NetworkParser for VpcParser {
         Ok(ValidNoEncap::parse_read(rdr)?)
     }
 
-    #[inline]
+    #[inline(always)]
     fn parse_inbound<'a, T: Read + 'a>(
         &self,
         rdr: T,
