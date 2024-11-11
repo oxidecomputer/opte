@@ -219,51 +219,6 @@ impl DerefMut for MsgBlk {
     }
 }
 
-#[derive(Debug)]
-pub struct MsgBlkNode(mblk_t);
-
-impl Deref for MsgBlkNode {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        unsafe {
-            let rptr = self.0.b_rptr;
-            let len = self.0.b_wptr.offset_from(rptr) as usize;
-            slice::from_raw_parts(rptr, len)
-        }
-    }
-}
-
-impl DerefMut for MsgBlkNode {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe {
-            let rptr = self.0.b_rptr;
-            let len = self.0.b_wptr.offset_from(rptr) as usize;
-            slice::from_raw_parts_mut(rptr, len)
-        }
-    }
-}
-
-impl MsgBlkNode {
-    /// Shrink the writable/readable area by shifting the `b_rptr` by
-    /// `len`; effectively removing bytes from the start of the packet.
-    ///
-    /// # Errors
-    ///
-    /// `SegAdjustError::StartPastEnd`: Shifting the read pointer by
-    /// `len` would move `b_rptr` past `b_wptr`.
-    pub fn drop_front_bytes(&mut self, n: usize) -> Result<(), SegAdjustError> {
-        unsafe {
-            if self.0.b_wptr.offset_from(self.0.b_rptr) < n as isize {
-                return Err(SegAdjustError::StartPastEnd);
-            }
-            self.0.b_rptr = self.0.b_rptr.add(n);
-        }
-
-        Ok(())
-    }
-}
-
 impl MsgBlk {
     /// Allocate a new [`MsgBlk`] containing a data buffer of `len`
     /// bytes.
@@ -694,7 +649,8 @@ impl MsgBlk {
     /// Copy out all bytes within this mblk and its successors
     /// to a single contiguous buffer.
     pub fn copy_all(&self) -> Vec<u8> {
-        let mut out = vec![];
+        let len = self.byte_len();
+        let mut out = Vec::with_capacity(len);
 
         for node in self.iter() {
             out.extend_from_slice(node)
@@ -729,6 +685,56 @@ impl MsgBlk {
         }
 
         self.0 = head;
+    }
+}
+
+/// An interior node of an [`MsgBlk`]'s chain, accessed via iterator.
+///
+/// This supports a reduced set of operations compared to [`MsgBlk`],
+/// primarily to allow (mutable) access to the inner bytes while preventing
+/// iterator invalidation.
+#[derive(Debug)]
+pub struct MsgBlkNode(mblk_t);
+
+impl Deref for MsgBlkNode {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        unsafe {
+            let rptr = self.0.b_rptr;
+            let len = self.0.b_wptr.offset_from(rptr) as usize;
+            slice::from_raw_parts(rptr, len)
+        }
+    }
+}
+
+impl DerefMut for MsgBlkNode {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe {
+            let rptr = self.0.b_rptr;
+            let len = self.0.b_wptr.offset_from(rptr) as usize;
+            slice::from_raw_parts_mut(rptr, len)
+        }
+    }
+}
+
+impl MsgBlkNode {
+    /// Shrink the writable/readable area by shifting the `b_rptr` by
+    /// `len`; effectively removing bytes from the start of the packet.
+    ///
+    /// # Errors
+    ///
+    /// `SegAdjustError::StartPastEnd`: Shifting the read pointer by
+    /// `len` would move `b_rptr` past `b_wptr`.
+    pub fn drop_front_bytes(&mut self, n: usize) -> Result<(), SegAdjustError> {
+        unsafe {
+            if self.0.b_wptr.offset_from(self.0.b_rptr) < n as isize {
+                return Err(SegAdjustError::StartPastEnd);
+            }
+            self.0.b_rptr = self.0.b_rptr.add(n);
+        }
+
+        Ok(())
     }
 }
 
@@ -787,10 +793,9 @@ impl Pullup for MsgBlkIterMut<'_> {
                             )
                             .expect("invalid mblk -- slice end before start");
 
-                            // SAFETY: MaybeUninit<u8> has identical layout to u8,
-                            // &[T] can be cast down to &T (discarding len).
-                            let dst: *mut u8 =
-                                core::mem::transmute(buf.as_mut_ptr());
+                            // Safety: slice contains exactly bytes_in_self bytes (!= 0).
+                            // Cast replicates `MaybeUninit::slice_as_mut_ptr` (unstable).
+                            let dst = buf.as_mut_ptr() as *mut u8;
 
                             dst.copy_from_nonoverlapping(
                                 valid_curr.b_rptr,
