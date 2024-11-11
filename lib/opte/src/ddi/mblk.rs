@@ -200,8 +200,9 @@ impl Deref for MsgBlk {
 
     fn deref(&self) -> &Self::Target {
         unsafe {
-            let rptr = (*self_ref).b_rptr;
-            let len = (*self_ref).b_wptr.offset_from(rptr) as usize;
+            let self_ptr = self.0.as_ptr();
+            let rptr = (*self_ptr).b_rptr;
+            let len = (*self_ptr).b_wptr.offset_from(rptr) as usize;
             slice::from_raw_parts(rptr, len)
         }
     }
@@ -210,8 +211,9 @@ impl Deref for MsgBlk {
 impl DerefMut for MsgBlk {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
-            let rptr = (*self_ref).b_rptr;
-            let len = (*self_ref).b_wptr.offset_from(rptr) as usize;
+            let self_ptr = self.0.as_ptr();
+            let rptr = (*self_ptr).b_rptr;
+            let len = (*self_ptr).b_wptr.offset_from(rptr) as usize;
             slice::from_raw_parts_mut(rptr, len)
         }
     }
@@ -259,9 +261,9 @@ impl MsgBlk {
     /// read pointer in the current datablock.
     pub fn head_capacity(&self) -> usize {
         unsafe {
-            let inner = self.0.as_ref();
+            let inner = self.0.as_ptr();
 
-            inner.b_rptr.offset_from((*inner.b_datap).db_base) as usize
+            (*inner).b_rptr.offset_from((*(*inner).b_datap).db_base) as usize
         }
     }
 
@@ -269,9 +271,9 @@ impl MsgBlk {
     /// write pointer in the current datablock.
     pub fn tail_capacity(&self) -> usize {
         unsafe {
-            let inner = self.0.as_ref();
+            let inner = self.0.as_ptr();
 
-            (*inner.b_datap).db_lim.offset_from(inner.b_wptr) as usize
+            (*(*inner).b_datap).db_lim.offset_from((*inner).b_wptr) as usize
         }
     }
 
@@ -327,10 +329,10 @@ impl MsgBlk {
         let mut old_tail = ptr::null_mut();
 
         while let Some(mut valid_curr) = curr.take() {
-            let valid_curr = unsafe { valid_curr.as_mut() };
+            let valid_curr = valid_curr.as_ptr();
 
             let seg_len = usize::try_from(unsafe {
-                valid_curr.b_wptr.offset_from(valid_curr.b_rptr)
+                (*valid_curr).b_wptr.offset_from((*valid_curr).b_rptr)
             })
             .expect("operating on packet with end before start");
 
@@ -342,11 +344,16 @@ impl MsgBlk {
 
                 // SAFETY: this will only reduce the read window of this slice,
                 // so derived byteslices will remain in capacity.
-                valid_curr.b_wptr = unsafe { valid_curr.b_rptr.add(to_keep) };
+                unsafe {
+                    (*valid_curr).b_wptr = (*valid_curr).b_rptr.add(to_keep);
 
-                core::mem::swap(&mut valid_curr.b_cont, &mut old_tail);
+                    core::ptr::swap(
+                        &raw mut (*valid_curr).b_cont,
+                        &raw mut old_tail,
+                    );
+                }
             } else {
-                curr = NonNull::new(valid_curr.b_cont);
+                curr = NonNull::new(unsafe {(*valid_curr).b_cont});
             }
         }
 
@@ -362,12 +369,14 @@ impl MsgBlk {
     /// The read/write pointer is set to have `head_len` bytes of
     /// headroom and `body_len` bytes of capacity at the back.
     pub fn new_with_headroom(head_len: usize, body_len: usize) -> Self {
-        let mut out = Self::new(head_len + body_len);
+        let out = Self::new(head_len + body_len);
 
         // SAFETY: alloc is contiguous and always larger than head_len.
-        let mut_out = unsafe { out.0.as_mut() };
-        mut_out.b_rptr = unsafe { mut_out.b_rptr.add(head_len) };
-        mut_out.b_wptr = mut_out.b_rptr;
+        let mut_out = out.0.as_ptr();
+        unsafe {
+            (*mut_out).b_rptr = (*mut_out).b_rptr.add(head_len);
+            (*mut_out).b_wptr = (*mut_out).b_rptr;
+        }
 
         out
     }
@@ -385,9 +394,9 @@ impl MsgBlk {
         n_bytes: usize,
         f: impl FnOnce(&mut [MaybeUninit<u8>]),
     ) -> Result<(), WriteError> {
-        let mut_out = unsafe { self.0.as_mut() };
+        let mut_out = self.0.as_ptr();
         let avail_bytes =
-            unsafe { (*mut_out.b_datap).db_lim.offset_from(mut_out.b_wptr) };
+            unsafe { (*(*mut_out).b_datap).db_lim.offset_from((*mut_out).b_wptr) };
 
         if avail_bytes < 0 || (avail_bytes as usize) < n_bytes {
             return Err(WriteError::NotEnoughBytes {
@@ -398,14 +407,16 @@ impl MsgBlk {
 
         let in_slice = unsafe {
             slice::from_raw_parts_mut(
-                mut_out.b_wptr as *mut MaybeUninit<u8>,
+                (*mut_out).b_wptr as *mut MaybeUninit<u8>,
                 n_bytes,
             )
         };
 
         f(in_slice);
 
-        mut_out.b_wptr = unsafe { mut_out.b_wptr.add(n_bytes) };
+        unsafe {
+            (*mut_out).b_wptr = (*mut_out).b_wptr.add(n_bytes);
+        }
 
         Ok(())
     }
@@ -423,9 +434,9 @@ impl MsgBlk {
         n_bytes: usize,
         f: impl FnOnce(&mut [MaybeUninit<u8>]),
     ) -> Result<(), WriteError> {
-        let mut_out = unsafe { self.0.as_mut() };
+        let mut_out = self.0.as_ptr();
         let avail_bytes =
-            unsafe { mut_out.b_rptr.offset_from((*mut_out.b_datap).db_base) };
+            unsafe { (*mut_out).b_rptr.offset_from((*(*mut_out).b_datap).db_base) };
 
         if avail_bytes < 0 || (avail_bytes as usize) < n_bytes {
             return Err(WriteError::NotEnoughBytes {
@@ -434,7 +445,7 @@ impl MsgBlk {
             });
         }
 
-        let new_head = unsafe { mut_out.b_rptr.sub(n_bytes) };
+        let new_head = unsafe { (*mut_out).b_rptr.sub(n_bytes) };
 
         let in_slice = unsafe {
             slice::from_raw_parts_mut(new_head as *mut MaybeUninit<u8>, n_bytes)
@@ -442,7 +453,7 @@ impl MsgBlk {
 
         f(in_slice);
 
-        mut_out.b_rptr = new_head;
+        (*mut_out).b_rptr = new_head;
 
         Ok(())
     }
@@ -452,8 +463,8 @@ impl MsgBlk {
         let len = self.len();
         match new_len.cmp(&len) {
             Ordering::Less => unsafe {
-                let mut_inner = self.0.as_mut();
-                mut_inner.b_wptr = mut_inner.b_wptr.sub(len - new_len);
+                let mut_inner = self.0.as_ptr();
+                (*mut_inner).b_wptr = (*mut_inner).b_wptr.sub(len - new_len);
                 Ok(())
             },
             Ordering::Greater => unsafe {
@@ -572,9 +583,10 @@ impl MsgBlk {
 
     /// Drop all bytes and move the cursor to the very back of the dblk.
     pub fn pop_all(&mut self) {
+        let mut_out = self.0.as_ptr();
         unsafe {
-            (*self.0.as_ptr()).b_rptr = (*(*self.0.as_ptr()).b_datap).db_lim;
-            (*self.0.as_ptr()).b_wptr = (*(*self.0.as_ptr()).b_datap).db_lim;
+            (*mut_out).b_rptr = (*(*mut_out).b_datap).db_lim;
+            (*mut_out).b_wptr = (*(*mut_out).b_datap).db_lim;
         }
     }
 
@@ -635,9 +647,9 @@ impl MsgBlk {
     /// * Return [`WrapError::Chain`] is `mp->b_next` or `mp->b_prev` are set.
     pub unsafe fn wrap_mblk(ptr: *mut mblk_t) -> Result<Self, WrapError> {
         let inner = NonNull::new(ptr).ok_or(WrapError::NullPtr)?;
-        let inner_ref = inner.as_ref();
+        let inner_ref = inner.as_ptr();
 
-        if inner_ref.b_next.is_null() && inner_ref.b_prev.is_null() {
+        if (*inner_ref).b_next.is_null() && (*inner_ref).b_prev.is_null() {
             Ok(Self(inner))
         } else {
             Err(WrapError::Chain)
@@ -761,14 +773,14 @@ impl MsgBlkIterMut<'_> {
     pub fn next_iter(&self) -> MsgBlkIter {
         let curr = self
             .curr
-            .and_then(|ptr| NonNull::new(unsafe { ptr.as_ref() }.b_cont));
+            .and_then(|ptr| NonNull::new(unsafe { (*ptr.as_ptr()).b_cont }));
         MsgBlkIter { curr, marker: PhantomData }
     }
 
     pub fn next_iter_mut(&mut self) -> MsgBlkIterMut {
         let curr = self
             .curr
-            .and_then(|ptr| NonNull::new(unsafe { ptr.as_ref() }.b_cont));
+            .and_then(|ptr| NonNull::new(unsafe { (*ptr.as_ptr()).b_cont }));
         MsgBlkIterMut { curr, marker: PhantomData }
     }
 }
@@ -795,10 +807,10 @@ impl Pullup for MsgBlkIterMut<'_> {
                     .write_back(bytes_in_self, |mut buf| {
                         let mut curr = self.curr;
                         while let Some(valid_curr) = curr {
-                            let valid_curr = valid_curr.as_ref();
-                            let src = valid_curr.b_rptr;
+                            let valid_curr = valid_curr.as_ptr();
+                            let src = (*valid_curr).b_rptr;
                             let seg_len = usize::try_from(
-                                valid_curr.b_wptr.offset_from(src),
+                                (*valid_curr).b_wptr.offset_from(src),
                             )
                             .expect("invalid mblk -- slice end before start");
 
@@ -807,11 +819,11 @@ impl Pullup for MsgBlkIterMut<'_> {
                             let dst = buf.as_mut_ptr() as *mut u8;
 
                             dst.copy_from_nonoverlapping(
-                                valid_curr.b_rptr,
+                                (*valid_curr).b_rptr,
                                 seg_len,
                             );
 
-                            curr = NonNull::new(valid_curr.b_cont);
+                            curr = NonNull::new((*valid_curr).b_cont);
                             buf = buf.split_at_mut(seg_len).1;
                         }
                     })
@@ -851,9 +863,9 @@ unsafe fn count_mblk_chain(mut head: Option<NonNull<mblk_t>>) -> usize {
 unsafe fn count_mblk_bytes(mut head: Option<NonNull<mblk_t>>) -> usize {
     let mut count = 0;
     while let Some(valid_head) = head {
-        let headref = valid_head.as_ref();
-        count += headref.b_wptr.offset_from(headref.b_rptr).max(0) as usize;
-        head = NonNull::new((*valid_head.as_ptr()).b_cont);
+        let headref = valid_head.as_ptr();
+        count += (*headref).b_wptr.offset_from((*headref).b_rptr).max(0) as usize;
+        head = NonNull::new((*headref).b_cont);
     }
     count
 }
