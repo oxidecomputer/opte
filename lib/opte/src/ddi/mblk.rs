@@ -353,7 +353,7 @@ impl MsgBlk {
                     );
                 }
             } else {
-                curr = NonNull::new(unsafe {(*valid_curr).b_cont});
+                curr = NonNull::new(unsafe { (*valid_curr).b_cont });
             }
         }
 
@@ -395,8 +395,9 @@ impl MsgBlk {
         f: impl FnOnce(&mut [MaybeUninit<u8>]),
     ) -> Result<(), WriteError> {
         let mut_out = self.0.as_ptr();
-        let avail_bytes =
-            unsafe { (*(*mut_out).b_datap).db_lim.offset_from((*mut_out).b_wptr) };
+        let avail_bytes = unsafe {
+            (*(*mut_out).b_datap).db_lim.offset_from((*mut_out).b_wptr)
+        };
 
         if avail_bytes < 0 || (avail_bytes as usize) < n_bytes {
             return Err(WriteError::NotEnoughBytes {
@@ -435,8 +436,9 @@ impl MsgBlk {
         f: impl FnOnce(&mut [MaybeUninit<u8>]),
     ) -> Result<(), WriteError> {
         let mut_out = self.0.as_ptr();
-        let avail_bytes =
-            unsafe { (*mut_out).b_rptr.offset_from((*(*mut_out).b_datap).db_base) };
+        let avail_bytes = unsafe {
+            (*mut_out).b_rptr.offset_from((*(*mut_out).b_datap).db_base)
+        };
 
         if avail_bytes < 0 || (avail_bytes as usize) < n_bytes {
             return Err(WriteError::NotEnoughBytes {
@@ -864,7 +866,8 @@ unsafe fn count_mblk_bytes(mut head: Option<NonNull<mblk_t>>) -> usize {
     let mut count = 0;
     while let Some(valid_head) = head {
         let headref = valid_head.as_ptr();
-        count += (*headref).b_wptr.offset_from((*headref).b_rptr).max(0) as usize;
+        count +=
+            (*headref).b_wptr.offset_from((*headref).b_rptr).max(0) as usize;
         head = NonNull::new((*headref).b_cont);
     }
     count
