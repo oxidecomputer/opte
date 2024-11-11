@@ -200,9 +200,8 @@ impl Deref for MsgBlk {
 
     fn deref(&self) -> &Self::Target {
         unsafe {
-            let self_ref = self.0.as_ref();
-            let rptr = self_ref.b_rptr;
-            let len = self_ref.b_wptr.offset_from(rptr) as usize;
+            let rptr = (*self_ref).b_rptr;
+            let len = (*self_ref).b_wptr.offset_from(rptr) as usize;
             slice::from_raw_parts(rptr, len)
         }
     }
@@ -211,9 +210,8 @@ impl Deref for MsgBlk {
 impl DerefMut for MsgBlk {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
-            let self_ref = self.0.as_mut();
-            let rptr = self_ref.b_rptr;
-            let len = self_ref.b_wptr.offset_from(rptr) as usize;
+            let rptr = (*self_ref).b_rptr;
+            let len = (*self_ref).b_wptr.offset_from(rptr) as usize;
             slice::from_raw_parts_mut(rptr, len)
         }
     }
@@ -669,6 +667,8 @@ impl MsgBlk {
         let mut head = self.0;
         let mut neighbour = unsafe { (*head.as_ptr()).b_cont };
 
+        let offload_info = unsafe { offload_info(head) };
+
         while !neighbour.is_null()
             && unsafe { (*head.as_ptr()).b_rptr == (*head.as_ptr()).b_wptr }
         {
@@ -682,6 +682,13 @@ impl MsgBlk {
                 head = NonNull::new_unchecked(neighbour);
                 neighbour = (*head.as_ptr()).b_cont
             }
+        }
+
+        // Carry over offload flags and MSS information.
+        // SAFETY: db_struioun contains no payload-specific offsets,
+        // only flags pertaining to *required* offloads and the path MTU/MSS.
+        unsafe {
+            set_offload_info(head, offload_info);
         }
 
         self.0 = head;
@@ -777,6 +784,8 @@ impl Pullup for MsgBlkIterMut<'_> {
             .write_bytes_back(prepend)
             .expect("allocated enough bytes for prepend and self");
 
+        let offload_info = self.curr.map(|v| unsafe { offload_info(v) });
+
         if bytes_in_self != 0 {
             // SAFETY: We need to make use of ptr::copy for a pullup
             // because we cannot guarantee a dblk refcnt of 1 -- thus
@@ -810,6 +819,15 @@ impl Pullup for MsgBlkIterMut<'_> {
             }
         }
 
+        // Carry over offload flags and MSS information.
+        // SAFETY: db_struioun contains no payload-specific offsets,
+        // only flags pertaining to *required* offloads and the path MTU/MSS.
+        if let Some(info) = offload_info {
+            unsafe {
+                set_offload_info(new_seg.0, info);
+            }
+        }
+
         new_seg
     }
 }
@@ -838,6 +856,20 @@ unsafe fn count_mblk_bytes(mut head: Option<NonNull<mblk_t>>) -> usize {
         head = NonNull::new((*valid_head.as_ptr()).b_cont);
     }
     count
+}
+
+/// Copy out the opaque representation of offload flags and sizes
+/// associated with this packet.
+unsafe fn offload_info(head: NonNull<mblk_t>) -> u64 {
+    unsafe { (*(*head.as_ptr()).b_datap).db_struioun }
+}
+
+/// Set the opaque representation of offload flags and sizes
+/// associated with this packet.
+unsafe fn set_offload_info(head: NonNull<mblk_t>, info: u64) {
+    unsafe {
+        (*(*head.as_ptr()).b_datap).db_struioun = info;
+    }
 }
 
 impl<'a> Iterator for MsgBlkIter<'a> {
