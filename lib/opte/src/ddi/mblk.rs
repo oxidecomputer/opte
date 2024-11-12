@@ -708,6 +708,55 @@ impl MsgBlk {
 
         self.0 = head;
     }
+
+    #[allow(unused)]
+    pub fn request_offload(&mut self, is_tcp: bool, mss: u32) {
+        // tx set is: (HCK_IPV4_HDRCKSUM | HCK_PARTIALCKSUM | HCK_FULLCKSUM)
+        //                0x01                  0x02              0x04
+        // HCK_IPV4_HDRCKSUM | HCK_FULLCKSUM
+        // (or, just ask for everything. merry xmas?)
+        // NOTE: this will fail an assert and gte us in trouble.
+        // set these fellas via the intended means rather than abusing
+        // the fact its one flagset.
+        let ckflags = 0x01 | 0x04;
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            // illumos_sys_hdrs::mac_hcksum_set(
+            //     self.inner.as_ptr(),
+            //     0,0,0,0,
+            //     ckflags,
+            // );
+            // if is_tcp {
+            //     illumos_sys_hdrs::lso_info_set(
+            //         self.inner.as_ptr(),
+            //         mss,
+            //         0x10,
+            //     );
+            // }
+
+            illumos_sys_hdrs::lso_info_set(
+                self.0.as_ptr(),
+                mss,
+                ckflags | if is_tcp { 0x10 } else { 0x00 },
+            );
+        }
+    }
+
+    #[allow(unused)]
+    pub fn mark_cksum_happy(&mut self) {
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            illumos_sys_hdrs::mac_hcksum_set(
+                self.0.as_ptr(),
+                0,
+                0,
+                0,
+                0,
+                // HCK_IPV4_HDRCKSUM_OK | HCK_FULLCKSUM | HCK_FULLCKSUM_OK
+                0x01 | 0x04 | 0x08,
+            )
+        };
+    }
 }
 
 /// An interior node of an [`MsgBlk`]'s chain, accessed via iterator.
@@ -757,55 +806,6 @@ impl MsgBlkNode {
         }
 
         Ok(())
-    }
-
-    #[allow(unused)]
-    pub fn request_offload(&mut self, is_tcp: bool, mss: u32) {
-        // tx set is: (HCK_IPV4_HDRCKSUM | HCK_PARTIALCKSUM | HCK_FULLCKSUM)
-        //                0x01                  0x02              0x04
-        // HCK_IPV4_HDRCKSUM | HCK_FULLCKSUM
-        // (or, just ask for everything. merry xmas?)
-        // NOTE: this will fail an assert and gte us in trouble.
-        // set these fellas via the intended means rather than abusing
-        // the fact its one flagset.
-        let ckflags = 0x01 | 0x04;
-        #[cfg(all(not(feature = "std"), not(test)))]
-        unsafe {
-            // illumos_sys_hdrs::mac_hcksum_set(
-            //     self.inner.as_ptr(),
-            //     0,0,0,0,
-            //     ckflags,
-            // );
-            // if is_tcp {
-            //     illumos_sys_hdrs::lso_info_set(
-            //         self.inner.as_ptr(),
-            //         mss,
-            //         0x10,
-            //     );
-            // }
-
-            illumos_sys_hdrs::lso_info_set(
-                self.inner.as_ptr(),
-                mss,
-                ckflags | if is_tcp { 0x10 } else { 0x00 },
-            );
-        }
-    }
-
-    #[allow(unused)]
-    pub fn mark_cksum_happy(&mut self) {
-        #[cfg(all(not(feature = "std"), not(test)))]
-        unsafe {
-            illumos_sys_hdrs::mac_hcksum_set(
-                self.inner.as_ptr(),
-                0,
-                0,
-                0,
-                0,
-                // HCK_IPV4_HDRCKSUM_OK | HCK_FULLCKSUM | HCK_FULLCKSUM_OK
-                0x01 | 0x04 | 0x08,
-            )
-        };
     }
 }
 
