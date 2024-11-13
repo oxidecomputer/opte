@@ -213,6 +213,50 @@ pub enum krw_type_t {
 // uts/common/sys/stream.h
 // ======================================================================
 
+// LOCAL TESTING AHOY
+// typedef struct mac_ether_offload_info {
+//     mac_ether_offload_flags_t   meoi_flags; /* What's valid? */
+//     size_t      meoi_len;   /* Total message length */
+//     uint8_t     meoi_l2hlen;    /* How long is the Ethernet header? */
+//     uint16_t    meoi_l3proto;   /* What's the Ethertype */
+//     uint16_t    meoi_l3hlen;    /* How long is the header? */
+//     uint8_t     meoi_l4proto;   /* What is the payload type? */
+//     uint8_t     meoi_l4hlen;    /* How long is the L4 header */
+//     /* TODO(kyle) we do need this tracked, but this is the wrong place */
+//     uint8_t     meoi_tunproto;  /* What is the payload type? */
+//     uint16_t    meoi_tunhlen;   /* How long is the L4 header */
+// } mac_ether_offload_info_t;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct mac_ether_offload_info_t {
+    pub meoi_flags: c_int,
+    pub meoi_len: usize,
+    pub meoi_l2hlen: u8,
+    pub meoi_l3proto: u16,
+    pub meoi_l3hlen: u16,
+    pub meoi_l4proto: u8,
+    pub meoi_l4hlen: u8,
+    pub meoi_tunproto: u8,
+    pub meoi_tunhlen: u16,
+}
+
+impl Default for mac_ether_offload_info_t {
+    fn default() -> Self {
+        Self {
+            meoi_flags: 0,
+            meoi_len: 0,
+            meoi_l2hlen: 0,
+            meoi_l3proto: 0,
+            meoi_l3hlen: 0,
+            meoi_l4proto: 0,
+            meoi_l4hlen: 0,
+            meoi_tunproto: 0,
+            meoi_tunhlen: 0,
+        }
+    }
+}
+
 // Many of these fields are not needed at the moment and thus defined
 // imprecisely for expediency.
 #[repr(C)]
@@ -236,6 +280,9 @@ pub struct dblk_t {
     pub db_struioun: u64,        // imprecise
     pub db_fthdr: *const c_void, // imprecise
     pub db_credp: *const c_void, // imprecise
+
+    pub db_pktheaders: mac_ether_offload_info_t,
+    pub db_encapheaders: mac_ether_offload_info_t,
 }
 
 impl Default for dblk_t {
@@ -259,6 +306,9 @@ impl Default for dblk_t {
             db_struioun: 0,
             db_fthdr: ptr::null(),
             db_credp: ptr::null(),
+
+            db_pktheaders: Default::default(),
+            db_encapheaders: Default::default(),
         }
     }
 }
