@@ -28,6 +28,7 @@ use illumos_sys_hdrs as ddi;
 use illumos_sys_hdrs::c_uchar;
 #[cfg(any(feature = "std", test))]
 use illumos_sys_hdrs::dblk_t;
+use illumos_sys_hdrs::mac_ether_offload_info_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::types::Emit;
@@ -743,6 +744,19 @@ impl MsgBlk {
     }
 
     #[allow(unused)]
+    pub fn fill_offload_info(
+        &mut self,
+        tun_meoi: &mac_ether_offload_info_t,
+        ulp_meoi: &mac_ether_offload_info_t,
+    ) {
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            (*(*self.0.as_ptr()).b_datap).db_encapheaders = *tun_meoi;
+            (*(*self.0.as_ptr()).b_datap).db_pktheaders = *ulp_meoi;
+        }
+    }
+
+    #[allow(unused)]
     pub fn mark_cksum_happy(&mut self) {
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {
@@ -1096,6 +1110,8 @@ pub fn mock_desballoc(buf: Vec<u8>) -> *mut mblk_t {
         db_struioun: 0,
         db_fthdr: ptr::null(),
         db_credp: ptr::null(),
+
+        ..Default::default()
     });
 
     let dbp = Box::into_raw(dblk);

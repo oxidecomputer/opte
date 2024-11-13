@@ -43,7 +43,9 @@ use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
+use ingot::ethernet::Ethertype;
 use ingot::geneve::GeneveRef;
+use ingot::ip::IpProtocol;
 use ingot::types::HeaderLen;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
@@ -71,6 +73,7 @@ use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip::v6::Ipv6Addr;
+use opte::engine::ip::ValidL3;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
@@ -1579,6 +1582,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             return ptr::null_mut();
         }
     };
+    let meoi_len = parsed_pkt.len();
 
     let meta = parsed_pkt.meta();
     let is_tcp = meta
@@ -1588,6 +1592,35 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         .unwrap_or_default();
     // let is_tcp = false;
     let non_eth_payl_bytes = (&meta.inner_l3, &meta.inner_ulp).packet_length();
+
+    // typedef enum mac_ether_offload_flags {
+    //     MEOI_L2INFO_SET     = 1 << 0,
+    //     MEOI_VLAN_TAGGED    = 1 << 1,
+    //     MEOI_L3INFO_SET     = 1 << 2,
+    //     MEOI_L4INFO_SET     = 1 << 3,
+    //     /* TODO(kyle) we do need this tracked, but this is the wrong place */
+    //     MEOI_TUNINFO_SET        = 1 << 4
+    // } mac_ether_offload_flags_t;
+
+    let (l4_flag, l4_ty) = match &meta.inner_ulp {
+        Some(ValidUlp::Tcp(_)) => (0b01000, IpProtocol::TCP.0),
+        Some(ValidUlp::Udp(_)) => (0b01000, IpProtocol::UDP.0),
+        _ => (0, 0),
+    };
+
+    let ulp_meoi = mac_ether_offload_info_t {
+        meoi_flags: 0b00101 | l4_flag,
+        meoi_len,
+        meoi_l2hlen: meta.inner_eth.packet_length() as u8,
+        meoi_l3proto: meta.inner_eth.ethertype().0,
+        meoi_l3hlen: meta.inner_l3.packet_length() as u16,
+        meoi_l4proto: l4_ty,
+        meoi_l4hlen: meta.inner_ulp.packet_length() as u8,
+        meoi_tunproto: 0,
+        meoi_tunhlen: 0,
+
+        ..Default::default()
+    };
 
     // Choose u1 as a starting point. This may be changed in the next_hop
     // function when we are actually able to determine what interface should be
@@ -1658,11 +1691,29 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 // 14  + 40 +  8  +    8
                 // lmao, don't need to acct for encap
                 // not visible to customer.
-                (1500 - non_eth_payl_bytes) as u32,
+                // (1500 - non_eth_payl_bytes) as u32,
                 // Can we enable this iff. we know we have a pure-local
                 // path?? It's legit 8Gbps single stream.
-                // (9000 - 76 - non_eth_payl_bytes) as u32,
+                (9000 - 70 - non_eth_payl_bytes) as u32,
             );
+
+            let tun_meoi = mac_ether_offload_info_t {
+                meoi_flags: 0b11101,
+                meoi_len: out_pkt.len(),
+                meoi_l2hlen: 14,
+                meoi_l3proto: Ethertype::IPV6.0,
+                meoi_l3hlen: 40,
+                meoi_l4proto: IpProtocol::UDP.0,
+                meoi_l4hlen: 8,
+
+                // meoi_flags: 0b10000,
+                meoi_tunproto: 1, // Geneve is it, today..
+                meoi_tunhlen: 8,
+
+                ..Default::default()
+            };
+
+            out_pkt.fill_offload_info(&tun_meoi, &ulp_meoi);
 
             drop(devs);
 
