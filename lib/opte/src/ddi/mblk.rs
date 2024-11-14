@@ -29,6 +29,7 @@ use illumos_sys_hdrs::c_uchar;
 #[cfg(any(feature = "std", test))]
 use illumos_sys_hdrs::dblk_t;
 use illumos_sys_hdrs::mac_ether_offload_info_t;
+use illumos_sys_hdrs::mac_ether_tun_info_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::types::Emit;
@@ -744,15 +745,24 @@ impl MsgBlk {
     }
 
     #[allow(unused)]
+    pub fn set_tuntype(&mut self, tuntype: u8) {
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            (*(*self.0.as_ptr()).b_datap).db_mett.mett_tuntype = tuntype;
+            (*(*self.0.as_ptr()).b_datap).db_mett.mett_flags |= (1 << 4);
+        }
+    }
+
+    #[allow(unused)]
     pub fn fill_offload_info(
         &mut self,
-        tun_meoi: &mac_ether_offload_info_t,
+        tun_meoi: &mac_ether_tun_info_t,
         ulp_meoi: &mac_ether_offload_info_t,
     ) {
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {
-            (*(*self.0.as_ptr()).b_datap).db_encapheaders = *tun_meoi;
-            (*(*self.0.as_ptr()).b_datap).db_pktheaders = *ulp_meoi;
+            (*(*self.0.as_ptr()).b_datap).db_mett = *tun_meoi;
+            (*(*self.0.as_ptr()).b_datap).db_meoi = *ulp_meoi;
         }
     }
 

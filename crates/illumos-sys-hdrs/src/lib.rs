@@ -230,15 +230,15 @@ pub enum krw_type_t {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct mac_ether_offload_info_t {
-    pub meoi_flags: c_int,
-    pub meoi_len: usize,
+    pub meoi_flags: u8,
     pub meoi_l2hlen: u8,
     pub meoi_l3proto: u16,
     pub meoi_l3hlen: u16,
     pub meoi_l4proto: u8,
     pub meoi_l4hlen: u8,
-    pub meoi_tunproto: u8,
-    pub meoi_tunhlen: u16,
+    pub meoi_len: u32,
+    // pub meoi_tunproto: u8,
+    // pub meoi_tunhlen: u16,
 }
 
 impl Default for mac_ether_offload_info_t {
@@ -251,8 +251,30 @@ impl Default for mac_ether_offload_info_t {
             meoi_l3hlen: 0,
             meoi_l4proto: 0,
             meoi_l4hlen: 0,
-            meoi_tunproto: 0,
-            meoi_tunhlen: 0,
+            // meoi_tunproto: 0,
+            // meoi_tunhlen: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct mac_ether_tun_info_t {
+    pub mett_flags: u8,
+    pub mett_tuntype: u8,
+    pub mett_l2hlen: u8,
+    pub mett_l3proto: u16,
+    pub mett_l3hlen: u16,
+}
+
+impl Default for mac_ether_tun_info_t {
+    fn default() -> Self {
+        Self {
+            mett_flags: 0,
+            mett_tuntype: 0,
+            mett_l2hlen: 0,
+            mett_l3proto: 0,
+            mett_l3hlen: 0,
         }
     }
 }
@@ -281,8 +303,8 @@ pub struct dblk_t {
     pub db_fthdr: *const c_void, // imprecise
     pub db_credp: *const c_void, // imprecise
 
-    pub db_pktheaders: mac_ether_offload_info_t,
-    pub db_encapheaders: mac_ether_offload_info_t,
+    pub db_meoi: mac_ether_offload_info_t,
+    pub db_mett: mac_ether_tun_info_t,
 }
 
 impl Default for dblk_t {
@@ -307,8 +329,8 @@ impl Default for dblk_t {
             db_fthdr: ptr::null(),
             db_credp: ptr::null(),
 
-            db_pktheaders: Default::default(),
-            db_encapheaders: Default::default(),
+            db_meoi: Default::default(),
+            db_mett: Default::default(),
         }
     }
 }
