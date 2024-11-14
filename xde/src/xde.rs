@@ -1582,7 +1582,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             return ptr::null_mut();
         }
     };
-    let meoi_len = parsed_pkt.len();
+    let meoi_len = parsed_pkt.len() as u32;
 
     let meta = parsed_pkt.meta();
     let is_tcp = meta
@@ -1616,8 +1616,6 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         meoi_l3hlen: meta.inner_l3.packet_length() as u16,
         meoi_l4proto: l4_ty,
         meoi_l4hlen: meta.inner_ulp.packet_length() as u8,
-        meoi_tunproto: 0,
-        meoi_tunhlen: 0,
 
         ..Default::default()
     };
@@ -1697,23 +1695,22 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 (9000 - 70 - non_eth_payl_bytes) as u32,
             );
 
-            let tun_meoi = mac_ether_offload_info_t {
-                meoi_flags: 0b11101,
-                meoi_len: out_pkt.len(),
-                meoi_l2hlen: 14,
-                meoi_l3proto: Ethertype::IPV6.0,
-                meoi_l3hlen: 40,
-                meoi_l4proto: IpProtocol::UDP.0,
-                meoi_l4hlen: 8,
+            let tun_meoi = mac_ether_tun_info_t {
+                mett_flags: 0b10101,
+                mett_l2hlen: 14,
+                mett_l3proto: Ethertype::IPV6.0,
+                mett_l3hlen: 40,
+                mett_tuntype: 1,
 
                 // meoi_flags: 0b10000,
-                meoi_tunproto: 1, // Geneve is it, today..
-                meoi_tunhlen: 8,
-
+                // meoi_tunproto: 1, // Geneve is it, today..
+                // meoi_tunhlen: 8,
                 ..Default::default()
             };
 
             out_pkt.fill_offload_info(&tun_meoi, &ulp_meoi);
+
+            // out_pkt.set_tuntype(1);
 
             drop(devs);
 
