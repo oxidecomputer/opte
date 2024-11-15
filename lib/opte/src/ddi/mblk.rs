@@ -18,7 +18,6 @@ use core::mem::ManuallyDrop;
 use core::mem::MaybeUninit;
 use core::ops::Deref;
 use core::ops::DerefMut;
-use core::ops::MulAssign;
 use core::ptr;
 use core::ptr::NonNull;
 use core::slice;
