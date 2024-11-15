@@ -67,6 +67,8 @@ pub enum link_state_t {
 #[allow(unused_imports)]
 use mac_client_promisc_type_t::*;
 
+use crate::ip::t_uscalar_t;
+
 pub type mac_tx_cookie_t = uintptr_t;
 pub type mac_rx_fn = unsafe extern "C" fn(
     *mut c_void,
@@ -159,6 +161,12 @@ extern "C" {
         mp_chain: *mut mblk_t,
     );
     pub fn mac_private_minor() -> minor_t;
+
+    pub fn mac_sdu_get(
+        mh: *mut mac_handle,
+        min_sdu: *mut c_uint,
+        max_sdu: *mut c_uint,
+    );
 }
 
 // Private MAC functions needed to get us a Tx path.
@@ -177,7 +185,72 @@ extern "C" {
     ) -> c_int;
     pub fn mac_perim_exit(mph: mac_perim_handle);
     pub fn mac_perim_held(mh: mac_handle) -> boolean_t;
+
+    // VERY private to MAC.
+    pub fn mac_capab_get(
+        mh: *mut mac_handle,
+        capab: mac_capab_t,
+        data: *mut c_void,
+    ) -> boolean_t;
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct lso_basic_tcp_ipv4_t {
+    pub lso_max: t_uscalar_t,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct lso_basic_tcp_ipv6_t {
+    pub lso_max: t_uscalar_t,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct lso_tunnel_tcp_ipv4_t {
+    pub lso_max: t_uscalar_t,
+    pub encap_max: t_uscalar_t,
+    pub flags: t_uscalar_t,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct lso_tunnel_tcp_ipv6_t {
+    pub lso_max: t_uscalar_t,
+    pub encap_max: t_uscalar_t,
+    pub flags: t_uscalar_t,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct mac_capab_lso_t {
+    pub lso_flags: t_uscalar_t,
+    pub lso_basic_tcp_ipv4: lso_basic_tcp_ipv4_t,
+    pub lso_basic_tcp_ipv6: lso_basic_tcp_ipv6_t,
+
+    pub lso_tunnel_tcp_ipv4: lso_tunnel_tcp_ipv4_t,
+    pub lso_tunnel_tcp_ipv6: lso_tunnel_tcp_ipv6_t,
+}
+
+/*
+ * Currently supported flags for LSO.
+ */
+pub const LSO_TX_BASIC_TCP_IPV4: u32 = 0x01; /* TCPv4 LSO capability */
+pub const LSO_TX_BASIC_TCP_IPV6: u32 = 0x02; /* TCPv6 LSO capability */
+pub const LSO_TX_TUNNEL_TCP_IPV4: u32 = 0x04; /* Tun/v4 LSO capability */
+pub const LSO_TX_TUNNEL_TCP_IPV6: u32 = 0x08; /* Tun/v6 LSO capability */
+
+/*
+ * Currently supported tunnel classes for tunnelled LSO offload.
+ * Design: This allows different L3 support from unencapped. Overkill?
+ */
+/* hardware can fill outer UDP or GRE checksum information */
+pub const LSO_TX_TUNNEL_OUTER_CSUM: u32 = 0x01;
+pub const LSO_TX_TUNNEL_INNER_IP4: u32 = 0x02;
+pub const LSO_TX_TUNNEL_INNER_IP6: u32 = 0x04;
+pub const LSO_TX_TUNNEL_GENEVE: u32 = 0x08; /* support Geneve (UDP) */
+pub const LSO_TX_TUNNEL_VXLAN: u32 = 0x10; /* support VXLAN (UDP) */
 
 #[repr(C)]
 #[derive(Debug)]
