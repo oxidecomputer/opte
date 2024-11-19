@@ -328,7 +328,7 @@ impl MsgBlk {
         let mut curr = Some(self.0);
         let mut old_tail = ptr::null_mut();
 
-        while let Some(mut valid_curr) = curr.take() {
+        while let Some(valid_curr) = curr.take() {
             let valid_curr = valid_curr.as_ptr();
 
             let seg_len = usize::try_from(unsafe {
