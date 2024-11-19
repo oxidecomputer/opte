@@ -3,7 +3,7 @@
 #: name = "opteadm"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2024-10-12"
+#: rust_toolchain = "nightly-2024-11-18"
 #: output_rules = [
 #:   "=/work/debug/opteadm",
 #:   "=/work/debug/opteadm.debug.sha256",
@@ -30,7 +30,7 @@ rustc --version
 pushd bin/opteadm
 
 header "check style"
-ptime -m cargo +nightly-2024-10-12 fmt -- --check
+ptime -m cargo +nightly-2024-11-18 fmt -- --check
 
 header "analyze"
 ptime -m cargo clippy --all-targets

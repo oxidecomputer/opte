@@ -1097,7 +1097,7 @@ fn mock_freeb(mp: *mut mblk_t) {
     // * Modify `limit`.
     unsafe {
         let bmblk = Box::from_raw(mp);
-        let bdblk = Box::from_raw(bmblk.b_datap as *mut dblk_t);
+        let bdblk = Box::from_raw(bmblk.b_datap);
         let buffer = Vec::from_raw_parts(
             bdblk.db_base,
             bmblk.b_wptr.offset_from(bmblk.b_rptr) as usize,

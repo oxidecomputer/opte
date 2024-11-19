@@ -112,19 +112,23 @@ cfg_if! {
         #[macro_export]
         macro_rules! err_macro {
             ($s:tt) => {
+                {
+                let out_str = format!(concat!($s, "\0"));
                 unsafe {
-                    let out_str = format!(concat!($s, "\0"));
                     // Unwrap safety: we just concat'd a NUL.
                     let cstr = ::core::ffi::CStr::from_bytes_with_nul(out_str.as_bytes()).unwrap();
                     ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_WARN, cstr.as_ptr());
                 }
+                }
             };
             ($s:tt, $($arg:tt)*) => {
+                {
+                let out_str = format!(concat!($s, "\0"), $($arg)*);
                 unsafe {
-                    let out_str = format!(concat!($s, "\0"), $($arg)*);
                     // Unwrap safety: we just concat'd a NUL.
                     let cstr = ::core::ffi::CStr::from_bytes_with_nul(out_str.as_bytes()).unwrap();
                     ::illumos_sys_hdrs::cmn_err(::illumos_sys_hdrs::CE_WARN, cstr.as_ptr());
+                }
                 }
             };
         }
