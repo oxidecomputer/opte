@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Types for working with IP Source NAT, both IPv4 and IPv6.
 
@@ -12,8 +12,8 @@ use super::headers::UlpGenericModify;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
 use super::packet::InnerFlowId;
+use super::packet::MblkFullParsed;
 use super::packet::Packet;
-use super::packet::Parsed;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
@@ -37,8 +37,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
-use core::marker::PhantomData;
 use core::ops::RangeInclusive;
+use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV6Ref;
 use opte_api::Direction;
 use opte_api::IpAddr;
 use opte_api::Ipv4Addr;
@@ -240,7 +241,7 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
     fn gen_icmp_desc(
         &self,
         nat: SNatAlloc<T>,
-        pkt: &Packet<Parsed>,
+        pkt: &Packet<MblkFullParsed>,
     ) -> GenDescResult {
         let meta = pkt.meta();
 
@@ -249,8 +250,8 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
                 let icmp = meta
                     .inner_icmp()
                     .ok_or(GenIcmpErr::<Icmpv4Message>::MetaNotFound)?;
-                if icmp.msg_type != Icmpv4Message::EchoRequest.into() {
-                    Err(GenIcmpErr::NotRequest(icmp.msg_type).into())
+                if icmp.ty() != u8::from(Icmpv4Message::EchoRequest) {
+                    Err(GenIcmpErr::NotRequest(icmp.ty()).into())
                 } else {
                     Ok(icmp.echo_id())
                 }
@@ -259,8 +260,8 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
                 let icmp6 = meta
                     .inner_icmp6()
                     .ok_or(GenIcmpErr::<Icmpv6Message>::MetaNotFound)?;
-                if icmp6.msg_type != Icmpv6Message::EchoRequest.into() {
-                    Err(GenIcmpErr::NotRequest(icmp6.msg_type).into())
+                if icmp6.ty() != u8::from(Icmpv6Message::EchoRequest) {
+                    Err(GenIcmpErr::NotRequest(icmp6.ty()).into())
                 } else {
                     Ok(icmp6.echo_id())
                 }
@@ -302,7 +303,7 @@ where
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet<Parsed>,
+        pkt: &Packet<MblkFullParsed>,
         _meta: &mut ActionMeta,
     ) -> GenDescResult {
         let priv_port = flow_id.src_port;
@@ -365,7 +366,7 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ip: HeaderAction::Modify(ip),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                         generic: UlpGenericModify {
                             src_port: Some(self.nat.entry.port),
@@ -385,7 +386,7 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ip: HeaderAction::Modify(ip),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                         generic: UlpGenericModify {
                             dst_port: Some(self.priv_port),
@@ -426,7 +427,7 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ip: HeaderAction::Modify(ip),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                         icmp_id: Some(self.nat.entry.port),
                         ..Default::default()
@@ -443,7 +444,7 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
-                    inner_ip: HeaderAction::Modify(ip, PhantomData),
+                    inner_ip: HeaderAction::Modify(ip),
                     inner_ulp: UlpHeaderAction::Modify(UlpMetaModify {
                         icmp_id: Some(self.echo_ident),
                         ..Default::default()
@@ -461,6 +462,19 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
 
 #[cfg(test)]
 mod test {
+    use ingot::ethernet::Ethertype;
+    use ingot::ip::IpProtocol;
+    use ingot::tcp::Tcp;
+    use ingot::tcp::TcpFlags;
+    use ingot::tcp::TcpRef;
+    use ingot::types::HeaderLen;
+
+    use crate::ddi::mblk::MsgBlk;
+    use crate::engine::ether::Ethernet;
+    use crate::engine::ether::EthernetRef;
+    use crate::engine::ip::v4::Ipv4;
+    use crate::engine::ip::v4::Ipv4Ref;
+
     use super::*;
 
     #[test]
@@ -485,15 +499,6 @@ mod test {
 
     #[test]
     fn snat4_desc_lifecycle() {
-        use crate::engine::ether::EtherHdr;
-        use crate::engine::ether::EtherMeta;
-        use crate::engine::ether::EtherType;
-        use crate::engine::headers::IpMeta;
-        use crate::engine::headers::UlpMeta;
-        use crate::engine::ip4::Ipv4Hdr;
-        use crate::engine::ip4::Ipv4Meta;
-        use crate::engine::ip4::Protocol;
-        use crate::engine::tcp::TcpMeta;
         use crate::engine::GenericUlp;
         use opte_api::Ipv4Addr;
         use opte_api::MacAddr;
@@ -515,29 +520,30 @@ mod test {
         // ================================================================
         // Build the packet
         // ================================================================
-        let body = vec![];
-        let tcp =
-            TcpMeta { src: priv_port, dst: outside_port, ..Default::default() };
-        let ip4 = Ipv4Meta {
-            src: priv_ip,
-            dst: outside_ip,
-            proto: Protocol::TCP,
-            total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len()) as u16,
+        let body: Vec<u8> = vec![];
+        let tcp = Tcp {
+            source: priv_port,
+            destination: outside_port,
             ..Default::default()
         };
-        let eth = EtherMeta {
-            ether_type: EtherType::Ipv4,
-            src: priv_mac,
-            dst: dest_mac,
+        let ip4 = Ipv4 {
+            source: priv_ip,
+            destination: outside_ip,
+            protocol: IpProtocol::TCP,
+            total_len: (Ipv4::MINIMUM_LENGTH + (&tcp, &body).packet_length())
+                as u16,
+            ..Default::default()
         };
-        let pkt_len = EtherHdr::SIZE + usize::from(ip4.total_len);
-        let mut pkt = Packet::alloc_and_expand(pkt_len);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-        tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
-        wtr.write(&body).unwrap();
-        let mut pkt = pkt.parse(Direction::Out, GenericUlp {}).unwrap();
+        let eth = Ethernet {
+            destination: dest_mac,
+            source: priv_mac,
+            ethertype: Ethertype::IPV4,
+        };
+
+        let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp, &body));
+        let mut pkt = Packet::parse_outbound(pkt_m.iter_mut(), GenericUlp {})
+            .unwrap()
+            .to_full_meta();
         pkt.compute_checksums();
 
         // ================================================================
@@ -557,81 +563,81 @@ mod test {
         out_ht.run(pkt.meta_mut()).unwrap();
 
         let pmo = pkt.meta();
-        let ether_meta = pmo.inner.ether;
-        assert_eq!(ether_meta.src, priv_mac);
-        assert_eq!(ether_meta.dst, dest_mac);
+        let ether_meta = pmo.inner_ether();
+        assert_eq!(ether_meta.source(), priv_mac);
+        assert_eq!(ether_meta.destination(), dest_mac);
 
-        let ip4_meta = match pmo.inner.ip.as_ref().unwrap() {
-            IpMeta::Ip4(v) => v,
+        let ip4_meta = match pmo.inner_ip4() {
+            Some(v) => v,
             _ => panic!("expect Ipv4Meta"),
         };
 
-        assert_eq!(ip4_meta.src, pub_ip);
-        assert_eq!(ip4_meta.dst, outside_ip);
-        assert_eq!(ip4_meta.proto, Protocol::TCP);
+        assert_eq!(ip4_meta.source(), pub_ip);
+        assert_eq!(ip4_meta.destination(), outside_ip);
+        assert_eq!(ip4_meta.protocol(), IpProtocol::TCP);
 
-        let tcp_meta = match pmo.inner.ulp.as_ref().unwrap() {
-            UlpMeta::Tcp(v) => v,
+        let tcp_meta = match pmo.inner_tcp() {
+            Some(v) => v,
             _ => panic!("expect TcpMeta"),
         };
 
-        assert_eq!(tcp_meta.src, pub_port);
-        assert_eq!(tcp_meta.dst, outside_port);
-        assert_eq!(tcp_meta.flags, 0);
+        assert_eq!(tcp_meta.source(), pub_port);
+        assert_eq!(tcp_meta.destination(), outside_port);
+        assert_eq!(tcp_meta.flags(), TcpFlags::empty());
 
         // ================================================================
         // Verify inbound header transformation.
         // ================================================================
-        let body = vec![];
-        let tcp =
-            TcpMeta { src: outside_port, dst: priv_port, ..Default::default() };
-        let ip4 = Ipv4Meta {
-            src: outside_ip,
-            dst: priv_ip,
-            proto: Protocol::TCP,
-            total_len: (Ipv4Hdr::BASE_SIZE + tcp.hdr_len() + body.len()) as u16,
+        let tcp = Tcp {
+            source: outside_port,
+            destination: pub_port,
             ..Default::default()
         };
-        let eth = EtherMeta {
-            ether_type: EtherType::Ipv4,
-            src: dest_mac,
-            dst: priv_mac,
+        let ip4 = Ipv4 {
+            source: outside_ip,
+            destination: pub_ip,
+            protocol: IpProtocol::TCP,
+            total_len: (Ipv4::MINIMUM_LENGTH + (&tcp, &body).packet_length())
+                as u16,
+            ..Default::default()
         };
-        let pkt_len = EtherHdr::SIZE + usize::from(ip4.total_len);
-        let mut pkt = Packet::alloc_and_expand(pkt_len);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        ip4.emit(wtr.slice_mut(ip4.hdr_len()).unwrap());
-        tcp.emit(wtr.slice_mut(tcp.hdr_len()).unwrap());
-        wtr.write(&body).unwrap();
-        let mut pkt = pkt.parse(Direction::In, GenericUlp {}).unwrap();
+        let eth = Ethernet {
+            destination: priv_mac,
+            source: dest_mac,
+            ethertype: Ethertype::IPV4,
+        };
+
+        let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp, &body));
+        let mut pkt = Packet::parse_inbound(pkt_m.iter_mut(), GenericUlp {})
+            .unwrap()
+            .to_full_meta();
         pkt.compute_checksums();
 
         let in_ht = desc.gen_ht(Direction::In);
         in_ht.run(pkt.meta_mut()).unwrap();
 
         let pmi = pkt.meta();
-        let ether_meta = pmi.inner.ether;
-        assert_eq!(ether_meta.src, dest_mac);
-        assert_eq!(ether_meta.dst, priv_mac);
+        let ether_meta = pmi.inner_ether();
+        assert_eq!(ether_meta.source(), dest_mac);
+        assert_eq!(ether_meta.destination(), priv_mac);
 
-        let ip4_meta = match pmi.inner.ip.as_ref().unwrap() {
-            IpMeta::Ip4(v) => v,
+        let ip4_meta = match pmi.inner_ip4() {
+            Some(v) => v,
             _ => panic!("expect Ipv4Meta"),
         };
 
-        assert_eq!(ip4_meta.src, outside_ip);
-        assert_eq!(ip4_meta.dst, priv_ip);
-        assert_eq!(ip4_meta.proto, Protocol::TCP);
+        assert_eq!(ip4_meta.source(), outside_ip);
+        assert_eq!(ip4_meta.destination(), priv_ip);
+        assert_eq!(ip4_meta.protocol(), IpProtocol::TCP);
 
-        let tcp_meta = match pmi.inner.ulp.as_ref().unwrap() {
-            UlpMeta::Tcp(v) => v,
+        let tcp_meta = match pmi.inner_tcp() {
+            Some(v) => v,
             _ => panic!("expect TcpMeta"),
         };
 
-        assert_eq!(tcp_meta.src, outside_port);
-        assert_eq!(tcp_meta.dst, priv_port);
-        assert_eq!(tcp_meta.flags, 0);
+        assert_eq!(tcp_meta.source(), outside_port);
+        assert_eq!(tcp_meta.destination(), priv_port);
+        assert_eq!(tcp_meta.flags(), TcpFlags::empty());
 
         // ================================================================
         // Verify other ULPs are unaffected.

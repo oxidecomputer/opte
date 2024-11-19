@@ -27,6 +27,9 @@ illumos-sys-hdrs.workspace = true
 kstat-macro.workspace = true
 opte-api.workspace = true
 
+ingot.workspace = true
+
+bitflags.workspace = true
 cfg-if.workspace = true
 crc32fast = { workspace = true, optional = true }
 dyn-clone.workspace = true

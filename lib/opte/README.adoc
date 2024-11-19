@@ -357,7 +357,14 @@ which it is currently processing.
 The packet (`opte::engine::Packet`) abstraction forms a single view
 into the the underlying `mblk_t *` chain that makes up the underlying
 packet and its data. It attempts to hide the complexity of dealing
-with mblk chains directly.
+with mblk chains directly. Packets represent a set of byteslices cast
+into senantically useful header types, and allow read/write access to
+their fields. The `Packet` type is also responsible for computing any
+changes which must be fully serialised back into the `mblk_t` chain once
+OPTE has completed its processing.
+
+It is possible in future to support underlying buffer types other than
+`mblk_t`s, but today all packets must be `mblk_t`s.
 
 === Layer Flow Table
 
@@ -506,10 +513,9 @@ report a warning to the user)? Furthermore, you could give the engine
 the smarts to determine when there is a contradiction and report some
 kind of error. You could also effect a sort of "last write wins" for
 some sequences of transformations: e.g., two modifications on the same
-header. In any event, OPTE has not implemented any sort of "compiling"
-of header transformations at this time. It simply builds a list,
-assuming its sequence of transformations are sane, and stores said
-list in the UFT.
+header. OPTE implements a limited form of compilation of disjoint
+transforms, and falls back to a full list when more than one transform
+is applied to any one header.
 
 === SDT probes
 

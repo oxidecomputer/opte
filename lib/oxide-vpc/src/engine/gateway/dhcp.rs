@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! The DHCP implementation of the Virtual Gateway.
 
@@ -17,7 +17,7 @@ use opte::api::Ipv4PrefixLen;
 use opte::api::OpteError;
 use opte::api::SubnetRouterPair;
 use opte::engine::dhcp::DhcpAction;
-use opte::engine::ip4::Ipv4Cidr;
+use opte::engine::ip::v4::Ipv4Cidr;
 use opte::engine::layer::Layer;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;

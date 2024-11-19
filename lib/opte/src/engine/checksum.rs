@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Types for calculating the internet checksum.
 //!
@@ -121,6 +121,11 @@ pub struct Checksum {
 }
 
 impl Checksum {
+    /// Creates a new checksum counter.
+    pub fn new() -> Self {
+        Self::from(0)
+    }
+
     /// Update the sum based by adding the contents of `bytes`.
     ///
     /// This is useful for incrementally updating an existing checksum
@@ -151,6 +156,14 @@ impl Checksum {
         }
 
         (self.inner & 0xFFFF) as u16
+    }
+
+    /// Calls [`Self::finalize`], and returns the one's complement value
+    /// of the checksum for storage as a `u16be`.
+    pub fn finalize_for_ingot(&mut self) -> u16 {
+        let out = self.finalize();
+
+        (!out).to_be()
     }
 }
 

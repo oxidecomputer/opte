@@ -8,6 +8,7 @@
 //! over physical links.
 
 use super::*;
+#[cfg(target_os = "illumos")]
 use std::collections::HashSet;
 use std::io::Read;
 use std::io::Write;
@@ -26,6 +27,7 @@ pub struct Routes {
     pub underlay: Ipv6Addr,
 }
 
+#[cfg_attr(not(target_os = "illumos"), allow(unused))]
 pub fn server_session(
     mut stream: TcpStream,
     route: Arc<Routes>,

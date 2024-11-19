@@ -28,9 +28,10 @@ cfg_if! {
 use illumos_sys_hdrs::kmutex_type_t;
 use illumos_sys_hdrs::krw_type_t;
 
-/// Exposes the illumos mutex(9F) API in a safe manner. We name it
-/// `KMutex` (Kernel Mutex) on purpose. The API for a kernel mutex
-/// isn't quite the same as a userland `Mutex`, and there's no reason
+/// Exposes the illumos mutex(9F) API in a safe manner.
+///
+/// We name it `KMutex` (Kernel Mutex) on purpose. The API for a kernel
+/// mutex isn't quite the same as a userland `Mutex`, and there's no reason
 /// that we have to use that exact name. Using `KMutex` makes it
 /// obvious that we are using a mutex, but not the one that comes from
 /// std.

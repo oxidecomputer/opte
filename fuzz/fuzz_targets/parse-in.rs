@@ -1,13 +1,11 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use opte::ddi::mblk::MsgBlk;
 use opte::engine::packet::Packet;
-use oxide_vpc::api::Direction;
 use oxide_vpc::engine::VpcParser;
 
 fuzz_target!(|data: &[u8]| {
-    let mut pkt = Packet::alloc_and_expand(data.len());
-    let mut wtr = pkt.seg0_wtr();
-    wtr.write(data).unwrap();
-    pkt.parse(Direction::In, VpcParser {});
+    let mut pkt_m = MsgBlk::copy(data);
+    let _ = Packet::parse_inbound(pkt_m.iter_mut(), VpcParser {});
 });

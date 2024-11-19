@@ -2,23 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! DHCP headers, data, and actions.
 
-use super::checksum::HeaderChecksum;
-use super::ether::EtherHdr;
-use super::ether::EtherMeta;
-use super::ether::EtherType;
-use super::ip4::Ipv4Addr;
-use super::ip4::Ipv4Hdr;
-use super::ip4::Ipv4Meta;
-use super::ip4::Protocol;
-use super::ip6::UlpCsumOpt;
-use super::packet::Packet;
-use super::packet::PacketMeta;
-use super::packet::PacketRead;
-use super::packet::PacketReader;
+use super::ether::Ethernet;
+use super::ip::v4::*;
+use super::packet::MblkPacketData;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;
@@ -28,13 +18,16 @@ use super::predicate::Predicate;
 use super::rule::AllowOrDeny;
 use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
-use super::udp::UdpHdr;
-use super::udp::UdpMeta;
+use crate::ddi::mblk::MsgBlk;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use heapless::Vec as HeaplessVec;
+use ingot::ethernet::Ethertype;
+use ingot::ip::IpProtocol;
+use ingot::types::HeaderLen;
+use ingot::udp::Udp;
 use opte_api::DhcpCfg;
 use opte_api::DhcpReplyType;
 use opte_api::DomainName;
@@ -52,6 +45,9 @@ use smoltcp::wire::DhcpPacket;
 use smoltcp::wire::DhcpRepr;
 use smoltcp::wire::Ipv4Address;
 use smoltcp::wire::DHCP_MAX_DNS_SERVER_COUNT;
+
+pub const DHCP_SERVER_PORT: u16 = 67;
+pub const DHCP_CLIENT_PORT: u16 = 68;
 
 /// The DHCP message type.
 ///
@@ -125,7 +121,7 @@ impl From<u8> for MessageType {
 
 struct MessageTypeVisitor;
 
-impl<'de> Visitor<'de> for MessageTypeVisitor {
+impl Visitor<'_> for MessageTypeVisitor {
     type Value = MessageType;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -461,8 +457,8 @@ impl HairpinAction for DhcpAction {
                 Ipv4Addr::LOCAL_BCAST,
             )]),
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::UDP)]),
-            Predicate::InnerDstPort(vec![PortMatch::Exact(67)]),
-            Predicate::InnerSrcPort(vec![PortMatch::Exact(68)]),
+            Predicate::InnerDstPort(vec![PortMatch::Exact(DHCP_SERVER_PORT)]),
+            Predicate::InnerSrcPort(vec![PortMatch::Exact(DHCP_CLIENT_PORT)]),
         ];
 
         let data_preds = match self.reply_type {
@@ -482,12 +478,8 @@ impl HairpinAction for DhcpAction {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(
-        &self,
-        _meta: &PacketMeta,
-        rdr: &mut PacketReader,
-    ) -> GenPacketResult {
-        let body = rdr.copy_remaining();
+    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
+        let body = meta.copy_remaining();
         let client_pkt = DhcpPacket::new_checked(&body)?;
         let client_dhcp = DhcpRepr::parse(&client_pkt)?;
         let mt = MessageType::from(self.reply_type);
@@ -571,21 +563,10 @@ impl HairpinAction for DhcpAction {
 
         let reply_len = reply.buffer_len();
 
-        // XXX This is temporary until I can add interface to Packet
-        // to initialize a zero'd mblk of N bytes and then get a
-        // direct mutable reference to the PacketSeg.
-        //
-        // We provide exactly the number of bytes needed guaranteeing
-        // that emit() should not fail.
-        let mut tmp = vec![0u8; reply_len];
-        let mut dhcp = DhcpPacket::new_unchecked(&mut tmp);
-        reply.emit(&mut dhcp).unwrap();
-
-        let mut udp = UdpMeta {
-            src: 67,
-            dst: 68,
-            len: (UdpHdr::SIZE + tmp.len()) as u16,
-            ..Default::default()
+        let eth_dst = if client_dhcp.broadcast {
+            MacAddr::BROADCAST
+        } else {
+            self.client_mac
         };
 
         let ip_dst = if client_dhcp.broadcast {
@@ -594,41 +575,40 @@ impl HairpinAction for DhcpAction {
             self.client_ip
         };
 
-        let mut ip = Ipv4Meta {
-            src: self.gw_ip,
-            dst: ip_dst,
-            proto: Protocol::UDP,
-            total_len: Ipv4Hdr::BASE_SIZE as u16 + udp.len,
+        let udp = Udp {
+            source: DHCP_SERVER_PORT,
+            destination: DHCP_CLIENT_PORT,
+            length: (Udp::MINIMUM_LENGTH + reply_len) as u16,
             ..Default::default()
         };
-        ip.compute_hdr_csum();
 
-        let eth_dst = if client_dhcp.broadcast {
-            MacAddr::BROADCAST
-        } else {
-            self.client_mac
+        let mut ip = Ipv4 {
+            source: self.gw_ip,
+            destination: ip_dst,
+            protocol: IpProtocol::UDP,
+            total_len: Ipv4::MINIMUM_LENGTH as u16 + udp.length,
+            ..Default::default()
+        };
+        ip.compute_checksum();
+
+        let eth = Ethernet {
+            destination: eth_dst,
+            source: self.gw_mac,
+            ethertype: Ethertype::IPV4,
         };
 
-        let eth = EtherMeta {
-            dst: eth_dst,
-            src: self.gw_mac,
-            ether_type: EtherType::Ipv4,
-        };
+        let ingot_layers = (&eth, &ip, &udp);
+        let total_sz = ingot_layers.packet_length() + reply_len;
+        let mut pkt = MsgBlk::new_ethernet(total_sz);
+        pkt.emit_back(ingot_layers)
+            .expect("MsgBlk should have enough bytes by construction");
+        let l = pkt.len();
+        pkt.resize(total_sz)
+            .expect("MsgBlk should have enough bytes by construction");
 
-        // XXX: Would be preferable to write in here directly rather than
-        //      allocing tmp.
-        let total_len =
-            EtherHdr::SIZE + Ipv4Hdr::BASE_SIZE + UdpHdr::SIZE + tmp.len();
-        let mut pkt = Packet::alloc_and_expand(total_len);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-        let mut udp_buf = [0u8; UdpHdr::SIZE];
-        udp.emit(&mut udp_buf);
-        let csum = ip.compute_ulp_csum(UlpCsumOpt::Full, &udp_buf, &tmp);
-        udp.csum = HeaderChecksum::from(csum).bytes();
-        udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
-        wtr.write(&tmp).unwrap();
+        let mut dhcp = DhcpPacket::new_unchecked(&mut pkt[l..]);
+        reply.emit(&mut dhcp).unwrap();
+
         Ok(AllowOrDeny::Allow(pkt))
     }
 }
@@ -636,8 +616,8 @@ impl HairpinAction for DhcpAction {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::engine::ip4::Ipv4Addr;
-    use crate::engine::ip4::Ipv4Cidr;
+    use crate::engine::ip::v4::Ipv4Addr;
+    use crate::engine::ip::v4::Ipv4Cidr;
 
     fn test_option_emit(opt: impl DhcpOption, truth: Vec<u8>) {
         let buf = gen_dhcp_from_option(opt);

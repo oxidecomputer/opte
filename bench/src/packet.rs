@@ -4,23 +4,31 @@
 
 // Copyright 2024 Oxide Computer Company
 
+use opte::ddi::mblk::MsgBlk;
 use opte::engine::dhcpv6::MessageType;
-use opte::engine::packet::Initialized;
-use opte::engine::packet::Packet;
+use opte::engine::ether::Ethernet;
+use opte::engine::ip::v4::Ipv4;
+use opte::engine::ip::v6::Ipv6;
+use opte::engine::ip::L3Repr;
+use opte::engine::parse::UlpRepr;
 use opte::engine::Direction;
+use opte::ingot::tcp::Tcp;
+use opte::ingot::tcp::TcpFlags;
+use opte::ingot::types::HeaderLen;
+use opte::ingot::udp::Udp;
 use opte_test_utils::dhcp::dhcpv6_with_reasonable_defaults;
-use opte_test_utils::dhcp::packet_from_client_dhcpv4_message_unparsed;
-use opte_test_utils::dhcp::packet_from_client_dhcpv6_message_unparsed;
+use opte_test_utils::dhcp::packet_from_client_dhcpv4_message;
+use opte_test_utils::dhcp::packet_from_client_dhcpv6_message;
 use opte_test_utils::dhcp::DhcpRepr;
-use opte_test_utils::icmp::gen_icmp_echo_unparsed;
-use opte_test_utils::icmp::gen_icmpv6_echo_unparsed;
-use opte_test_utils::icmp::generate_ndisc_unparsed;
+use opte_test_utils::icmp::gen_icmp_echo;
+use opte_test_utils::icmp::gen_icmpv6_echo;
+use opte_test_utils::icmp::generate_ndisc;
 use opte_test_utils::icmp::NdiscRepr;
 use opte_test_utils::icmp::RawHardwareAddress;
 use opte_test_utils::overlay::BOUNDARY_SERVICES_VNI;
 use opte_test_utils::*;
 
-pub type TestCase = (Packet<Initialized>, Direction);
+pub type TestCase = (MsgBlk, Direction);
 
 pub enum ParserKind {
     Generic,
@@ -42,7 +50,7 @@ pub trait BenchPacketInstance {
     fn instance_name(&self) -> String;
 
     /// Generate a single test packet.
-    fn generate(&self) -> (Packet<Initialized>, Direction);
+    fn generate(&self) -> (MsgBlk, Direction);
 
     /// Create a custom port for this benchmark instance.
     fn create_port(&self) -> Option<PortAndVps> {
@@ -150,12 +158,12 @@ impl BenchPacketInstance for UlpProcessInstance {
         // flowkey. This will also set up our UFT entry.
         let self_but_out = Self { direction: Direction::Out, ..self.clone() };
 
-        let (pkt, dir) = self_but_out.generate();
-        let mut pkt = pkt.parse(dir, VpcParser {}).unwrap();
+        let (mut pkt_m, dir) = self_but_out.generate();
+        let pkt = parse_outbound(&mut pkt_m, VpcParser {}).unwrap();
 
         if self.fast_path {
             if let ProcessResult::Drop { reason } =
-                port.port.process(dir, &mut pkt, ActionMeta::new()).unwrap()
+                port.port.process(dir, pkt).unwrap()
             {
                 panic!("failed to pass in pkt: {reason:?}");
             };
@@ -165,6 +173,9 @@ impl BenchPacketInstance for UlpProcessInstance {
                 port.port.clear_lft(layer).unwrap();
             }
         }
+
+        // Note: don't need to finish processing the packet
+        // -- the op we care about is just establishing the UFT state.
     }
 
     fn instance_name(&self) -> String {
@@ -174,8 +185,8 @@ impl BenchPacketInstance for UlpProcessInstance {
         )
     }
 
-    fn generate(&self) -> (Packet<Initialized>, Direction) {
-        let (my_ip, my_guest_ip, partner_ip, ether_type): (
+    fn generate(&self) -> (MsgBlk, Direction) {
+        let (my_ip, my_guest_ip, partner_ip, ethertype): (
             IpAddr,
             IpAddr,
             IpAddr,
@@ -185,13 +196,13 @@ impl BenchPacketInstance for UlpProcessInstance {
                 self.cfg.ipv4().external_ips.ephemeral_ip.unwrap().into(),
                 self.cfg.ipv4().private_ip.into(),
                 "93.184.216.34".parse().unwrap(),
-                EtherType::Ipv4,
+                Ethertype::IPV4,
             ),
             IpVariant::V6 => (
                 self.cfg.ipv6().external_ips.ephemeral_ip.unwrap().into(),
                 self.cfg.ipv6().private_ip.into(),
                 "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap(),
-                EtherType::Ipv6,
+                Ethertype::IPV6,
             ),
         };
         let (src_mac, dst_mac) = match self.direction {
@@ -202,57 +213,55 @@ impl BenchPacketInstance for UlpProcessInstance {
             Direction::Out => (my_guest_ip, partner_ip, 10010, 80),
             Direction::In => (partner_ip, my_ip, 80, 10010),
         };
-        let eth = EtherMeta { dst: dst_mac, src: src_mac, ether_type };
+        let eth = Ethernet { destination: dst_mac, source: src_mac, ethertype };
 
         let body = vec![0u8; self.body_len];
 
-        let (ulp, next_hdr): (UlpMeta, _) = match self.proto {
+        let (ulp, next_header) = match self.proto {
             ProtoVariant::Tcp => (
-                TcpMeta {
-                    src: src_port,
-                    dst: dst_port,
+                UlpRepr::Tcp(Tcp {
+                    source: src_port,
+                    destination: dst_port,
                     flags: TcpFlags::ACK,
-                    seq: 1234,
-                    ack: 3456,
+                    sequence: 1234,
+                    acknowledgement: 3456,
                     window_size: 1,
-                    csum: [0; 2],
-                    options_bytes: None,
-                    options_len: 0,
-                }
-                .into(),
-                IpProtocol::Tcp,
+                    ..Default::default()
+                }),
+                IngotIpProto::TCP,
             ),
             ProtoVariant::Udp => (
-                UdpMeta {
-                    src: src_port,
-                    dst: dst_port,
-                    len: (UdpHdr::SIZE + body.len()) as u16,
-                    csum: [0; 2],
-                }
-                .into(),
-                IpProtocol::Udp,
+                UlpRepr::Udp(Udp {
+                    source: src_port,
+                    destination: dst_port,
+                    length: (Udp::MINIMUM_LENGTH + body.len()) as u16,
+                    ..Default::default()
+                }),
+                IngotIpProto::UDP,
             ),
         };
-        let proto = Protocol::from(next_hdr);
-        let ip: IpMeta = match (src_ip, dst_ip) {
-            (IpAddr::Ip4(src), IpAddr::Ip4(dst)) => Ipv4Meta {
-                src,
-                dst,
-                proto,
-                total_len: (Ipv4Hdr::BASE_SIZE + ulp.hdr_len() + body.len())
-                    as u16,
-                ..Ipv4Meta::default()
+        let protocol = next_header;
+        let ip = match (src_ip, dst_ip) {
+            (IpAddr::Ip4(source), IpAddr::Ip4(destination)) => {
+                L3Repr::Ipv4(Ipv4 {
+                    source,
+                    destination,
+                    protocol,
+                    total_len: (Ipv4::MINIMUM_LENGTH
+                        + (&ulp, &body).packet_length())
+                        as u16,
+                    ..Default::default()
+                })
             }
-            .into(),
-            (IpAddr::Ip6(src), IpAddr::Ip6(dst)) => Ipv6Meta {
-                src,
-                dst,
-                next_hdr,
-                proto,
-                pay_len: (ulp.hdr_len() + body.len()) as u16,
-                ..Ipv6Meta::default()
+            (IpAddr::Ip6(source), IpAddr::Ip6(destination)) => {
+                L3Repr::Ipv6(Ipv6 {
+                    source,
+                    destination,
+                    next_header,
+                    payload_len: (&ulp, &body).packet_length() as u16,
+                    ..Default::default()
+                })
             }
-            .into(),
             _ => unreachable!(),
         };
 
@@ -276,14 +285,7 @@ impl BenchPacketInstance for UlpProcessInstance {
             }
         };
 
-        let buf = out_pkt.all_bytes();
-
-        let len = buf.len();
-        let mut pkt = Packet::alloc_and_expand(len);
-        let mut wtr = pkt.seg0_wtr();
-        wtr.slice_mut(len).unwrap().copy_from_slice(&buf[..]);
-
-        (pkt, self.direction)
+        (out_pkt, self.direction)
     }
 
     fn create_port(&self) -> Option<PortAndVps> {
@@ -359,7 +361,7 @@ impl BenchPacketInstance for Dhcp4Instance {
         format!("{self:?}")
     }
 
-    fn generate(&self) -> (Packet<Initialized>, Direction) {
+    fn generate(&self) -> (MsgBlk, Direction) {
         let cfg = g1_cfg();
         let message_type = match self {
             Dhcp4Instance::Discover => dhcp::DhcpMessageType::Discover,
@@ -396,10 +398,7 @@ impl BenchPacketInstance for Dhcp4Instance {
             additional_options: &[],
         };
 
-        (
-            packet_from_client_dhcpv4_message_unparsed(&cfg, &repr),
-            Direction::Out,
-        )
+        (packet_from_client_dhcpv4_message(&cfg, &repr), Direction::Out)
     }
 }
 
@@ -429,7 +428,7 @@ impl BenchPacketInstance for Dhcp6Instance {
         format!("{self:?}")
     }
 
-    fn generate(&self) -> (Packet<Initialized>, Direction) {
+    fn generate(&self) -> (MsgBlk, Direction) {
         let cfg = g1_cfg();
         let class = match self {
             Dhcp6Instance::Solicit => MessageType::Solicit,
@@ -437,10 +436,7 @@ impl BenchPacketInstance for Dhcp6Instance {
         };
         let repr = dhcpv6_with_reasonable_defaults(class, false, &cfg);
 
-        (
-            packet_from_client_dhcpv6_message_unparsed(&cfg, &repr),
-            Direction::Out,
-        )
+        (packet_from_client_dhcpv6_message(&cfg, &repr), Direction::Out)
     }
 }
 
@@ -464,13 +460,13 @@ impl BenchPacketInstance for Icmp4 {
         "EchoRequest".into()
     }
 
-    fn generate(&self) -> (Packet<Initialized>, Direction) {
+    fn generate(&self) -> (MsgBlk, Direction) {
         let cfg = g1_cfg();
         let ident = 7;
         let seq_no = 777;
         let data = b"reunion\0";
 
-        let pkt = gen_icmp_echo_unparsed(
+        let pkt = gen_icmp_echo(
             icmp::IcmpEchoType::Req,
             cfg.guest_mac,
             cfg.gateway_mac,
@@ -517,14 +513,14 @@ impl BenchPacketInstance for Icmp6Instance {
         format!("{self:?}")
     }
 
-    fn generate(&self) -> (Packet<Initialized>, Direction) {
+    fn generate(&self) -> (MsgBlk, Direction) {
         let cfg = g1_cfg();
         let ident = 7;
         let seq_no = 777;
         let data = b"reunion\0";
 
         let pkt = match self {
-            Icmp6Instance::EchoRequest => gen_icmpv6_echo_unparsed(
+            Icmp6Instance::EchoRequest => gen_icmpv6_echo(
                 icmp::IcmpEchoType::Req,
                 cfg.guest_mac,
                 cfg.gateway_mac,
@@ -542,7 +538,7 @@ impl BenchPacketInstance for Icmp6Instance {
                         &cfg.guest_mac,
                     )),
                 };
-                generate_ndisc_unparsed(
+                generate_ndisc(
                     solicit,
                     cfg.guest_mac,
                     cfg.gateway_mac,
@@ -558,7 +554,7 @@ impl BenchPacketInstance for Icmp6Instance {
                 };
                 let dst_ip = Ipv6Addr::ALL_ROUTERS;
 
-                generate_ndisc_unparsed(
+                generate_ndisc(
                     solicit,
                     src_mac,
                     // Must be destined for the All-Routers IPv6 address, and the corresponding

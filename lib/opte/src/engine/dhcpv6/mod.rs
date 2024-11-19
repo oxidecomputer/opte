@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Core implementation of DHCPv6 protocol.
 //!
@@ -54,10 +54,10 @@
 //! - Option Request: A list of Option codes for requested options.
 //! - Elapsed Time: The duration a client has been trying to talk to the server.
 //! - Rapid Commit: An option that tells the server to commit data to a client,
-//! without waiting for a second ACK sequence of messages.
+//!   without waiting for a second ACK sequence of messages.
 //! - DNS Servers: A list of IPv6 addresses for DNS servers the client can use.
 //! - SNTP Servers: A list of IPv6 addresses for SNTP servers the client can
-//! use.
+//!   use.
 //!
 //! See the `options` module for more details on the encoding of these in a
 //! message.
@@ -108,18 +108,18 @@ pub const CLIENT_PORT: u16 = 546;
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransactionId<'a>(pub Cow<'a, [u8]>);
 
-impl<'a> TransactionId<'a> {
+impl TransactionId<'_> {
     pub const SIZE: usize = 3;
 }
 
-impl<'a> Deref for TransactionId<'a> {
+impl Deref for TransactionId<'_> {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl<'a> AsRef<[u8]> for TransactionId<'a> {
+impl AsRef<[u8]> for TransactionId<'_> {
     fn as_ref(&self) -> &[u8] {
         &self.0
     }

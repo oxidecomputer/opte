@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 #![cfg_attr(feature = "kernel", feature(extern_types))]
 #![allow(non_camel_case_types)]
 #![no_std]
@@ -271,7 +271,7 @@ pub struct mblk_t {
     pub b_cont: *mut mblk_t,
     pub b_rptr: *mut c_uchar,
     pub b_wptr: *mut c_uchar,
-    pub b_datap: *const dblk_t,
+    pub b_datap: *mut dblk_t,
     pub b_band: c_uchar,
     pub b_tag: c_uchar,
     pub b_flag: c_ushort,
@@ -290,7 +290,7 @@ impl Default for mblk_t {
             b_cont: ptr::null_mut(),
             b_rptr: ptr::null_mut(),
             b_wptr: ptr::null_mut(),
-            b_datap: ptr::null(),
+            b_datap: ptr::null_mut(),
             b_band: 0,
             b_tag: 0,
             b_flag: 0,
@@ -316,6 +316,8 @@ pub type offset_t = c_longlong;
 pub type pid_t = c_int;
 pub type zoneid_t = id_t;
 
+/// A standard boolean in illumos.
+///
 /// This is a commonly used illumos kernel type. Originally I was
 /// basing these C types on the cty crate. But really we should just
 /// define the illumos types directly. These would make up the base
@@ -331,13 +333,13 @@ pub enum boolean_t {
     B_TRUE,
 }
 
-/// The source for this structure makes use of the
-/// `_LONG_LONG_{LTOH,HTOL}` ISA macros. My guess is this is needed
-/// for 32-bit userland applications using `long long *` for things
-/// like file/memory addresses (where we have a 32-bit pointer
-/// pointing to a 64-bit value). The macro determines if the pointer
-/// is to the high 32 bits or the low 32 bits. Currently, illumos
-/// always sets `_LONG_LONG_HTOL`.
+// The source for this structure makes use of the
+// `_LONG_LONG_{LTOH,HTOL}` ISA macros. My guess is this is needed
+// for 32-bit userland applications using `long long *` for things
+// like file/memory addresses (where we have a 32-bit pointer
+// pointing to a 64-bit value). The macro determines if the pointer
+// is to the high 32 bits or the low 32 bits. Currently, illumos
+// always sets `_LONG_LONG_HTOL`.
 #[repr(C)]
 pub union lloff_t {
     pub _f: offset_t, // full 64-bits
@@ -355,9 +357,9 @@ pub struct upper_lower {
 // uts/common/sys/uio.h
 // ======================================================================
 
-/// This definition assumes applications are compiled with XPG4v2
-/// (`_XPG4_2`) or later support. If we want Rust drivers to have
-/// maximum userland support we will want to also support pre-XPG4v2.
+// This definition assumes applications are compiled with XPG4v2
+// (`_XPG4_2`) or later support. If we want Rust drivers to have
+// maximum userland support we will want to also support pre-XPG4v2.
 #[repr(C)]
 pub struct iovec_t {
     pub iov_base: *mut c_void,

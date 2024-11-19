@@ -18,9 +18,10 @@ struct Args {
 }
 
 /// Generate a `DError` implementation given a tree-structured enum
-/// where only leaf nodes hold additional data. This allows for deeply
-/// nested enums to be more easily understood in dtrace probes without
-/// calling `format!()`.
+/// where only leaf nodes hold additional data.
+///
+/// This allows for deeply nested enums to be more easily understood in
+/// dtrace probes without calling `format!()`.
 ///
 /// This is intended for annotating error chains such as:
 /// ```ignore
@@ -142,6 +143,7 @@ pub fn derive_derror(
     quote! {
         impl DError for #ident {
             #[allow(non_upper_case_globals)]
+            #[inline]
             fn discriminant(&self) -> &'static ::core::ffi::CStr {
                 use ::core::ffi::CStr;
                 #( #cstr_decls )*
@@ -150,6 +152,7 @@ pub fn derive_derror(
                 }
             }
 
+            #[inline]
             fn child(&self) -> Option<&dyn DError> {
                 match self {
                     #( #child_arms )*

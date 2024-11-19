@@ -6,12 +6,12 @@
 #include "common.h"
 #include "protos.d"
 
-#define	HDR_FMT		"%-12s %-3s %-8s %-43s %-43s %-5s %s\n"
-#define	LINE_FMT	"%-12s %-3s %-8u %-43s %-43s %-5u %s\n"
+#define	HDR_FMT		"%-12s %-3s %-8s %-43s %-43s %-5s %s %s\n"
+#define	LINE_FMT	"%-12s %-3s %-8u %-43s %-43s %-5u %s %s\n"
 
 BEGIN {
 	printf(HDR_FMT, "NAME", "DIR", "EPOCH", "FLOW BEFORE", "FLOW AFTER",
-	    "LEN", "RESULT");
+	    "LEN", "RESULT", "PATH");
 	num = 0;
 }
 
@@ -27,10 +27,11 @@ port-process-return {
 	this->msgs = (derror_sdt_arg_t*) arg7;
 	this->msg_len = this->msgs->len;
 	this->res = stringof("");
+	this->path = PATH_STR(arg8);
 
 	if (num >= 10) {
 		printf(HDR_FMT, "NAME", "DIR", "EPOCH", "FLOW BEFORE",
-		    "FLOW AFTER", "LEN", "RESULT");
+		    "FLOW AFTER", "LEN", "RESULT", "PATH");
 		num = 0;
 	}
 
@@ -58,7 +59,7 @@ port-process-return /this->af == AF_INET/ {
 	FLOW_FMT(this->s_before, this->flow_before);
 	FLOW_FMT(this->s_after, this->flow_after);
 	printf(LINE_FMT, this->name, this->dir, this->epoch, this->s_before,
-	    this->s_after, msgsize(this->mp), this->res);
+	    this->s_after, msgsize(this->mp), this->res, this->path);
 	num++;
 }
 
@@ -66,7 +67,7 @@ port-process-return /this->af == AF_INET6/ {
 	FLOW_FMT6(this->s_before, this->flow_before);
 	FLOW_FMT6(this->s_after, this->flow_after);
 	printf(LINE_FMT,  this->name, this->dir, this->epoch, this->s_before,
-	    this->s_after, msgsize(this->mp), this->res);
+	    this->s_after, msgsize(this->mp), this->res, this->path);
 	num++;
 }
 

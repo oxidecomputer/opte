@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::len_without_is_empty)]
@@ -30,6 +30,8 @@ extern crate self as opte;
 use alloc::boxed::Box;
 use core::fmt;
 use core::fmt::Display;
+
+pub use ingot;
 
 #[cfg(any(feature = "api", test))]
 pub mod api {
@@ -190,8 +192,9 @@ mod opte_provider {
 // ================================================================
 
 /// A logging provider provides the means to log messages to some
-/// destination based on the context in which OPTE is running. For
-/// example, in a unit test this could map to `println!`. In the
+/// destination based on the context in which OPTE is running.
+///
+/// For example, in a unit test this could map to `println!`. In the
 /// illumos kernel it would map to `cmn_err(9F)`.
 ///
 /// Logging levels are provided by [`LogLevel`]. These levels will map

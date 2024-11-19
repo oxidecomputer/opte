@@ -83,7 +83,7 @@ pub fn derive_kstat_provider(input: TokenStream) -> TokenStream {
 
             fn init(
                 &mut self
-            ) -> core::result::Result<(), kstat::Error> {
+            ) -> core::result::Result<(), ::opte::ddi::kstat::Error> {
                 #( self.#fields_ident.init(stringify!(#fields_ident))?; )*
                 Ok(())
             }

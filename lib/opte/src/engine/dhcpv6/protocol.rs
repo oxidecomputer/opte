@@ -2,13 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Implementation of the main message types for DHCPv6.
 
 use super::Dhcpv6Action;
 use super::TransactionId;
-use crate::engine::checksum::HeaderChecksum;
+use crate::ddi::mblk::MsgBlk;
 use crate::engine::dhcpv6::options::Code as OptionCode;
 use crate::engine::dhcpv6::options::IaAddr;
 use crate::engine::dhcpv6::options::IaNa;
@@ -22,16 +22,10 @@ use crate::engine::dhcpv6::ALL_RELAYS_AND_SERVERS;
 use crate::engine::dhcpv6::ALL_SERVERS;
 use crate::engine::dhcpv6::CLIENT_PORT;
 use crate::engine::dhcpv6::SERVER_PORT;
-use crate::engine::ether::EtherHdr;
-use crate::engine::ether::EtherMeta;
-use crate::engine::ether::EtherType;
-use crate::engine::ip6::Ipv6Hdr;
-use crate::engine::ip6::Ipv6Meta;
-use crate::engine::ip6::UlpCsumOpt;
-use crate::engine::packet::Packet;
-use crate::engine::packet::PacketMeta;
-use crate::engine::packet::PacketRead;
-use crate::engine::packet::PacketReader;
+use crate::engine::ether::Ethernet;
+use crate::engine::ip::v6::Ipv6;
+use crate::engine::ip::v6::Ipv6Ref;
+use crate::engine::packet::MblkPacketData;
 use crate::engine::predicate::DataPredicate;
 use crate::engine::predicate::EtherAddrMatch;
 use crate::engine::predicate::IpProtoMatch;
@@ -41,19 +35,20 @@ use crate::engine::predicate::Predicate;
 use crate::engine::rule::AllowOrDeny;
 use crate::engine::rule::GenPacketResult;
 use crate::engine::rule::HairpinAction;
-use crate::engine::udp::UdpHdr;
-use crate::engine::udp::UdpMeta;
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
+use ingot::ethernet::Ethertype;
+use ingot::ip::IpProtocol as IngotIpProto;
+use ingot::types::HeaderLen;
+use ingot::udp::Udp;
 use opte_api::Ipv6Addr;
 use opte_api::Ipv6Cidr;
 use opte_api::MacAddr;
 use opte_api::Protocol;
 use serde::Deserialize;
 use serde::Serialize;
-use smoltcp::wire::IpProtocol;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MessageType {
@@ -590,7 +585,7 @@ fn process_confirm_message<'a>(
 // Process a DHCPv6 message from the a client.
 fn process_client_message<'a>(
     action: &'a Dhcpv6Action,
-    _meta: &'a PacketMeta,
+    _meta: &'a MblkPacketData,
     client_msg: &'a Message<'a>,
 ) -> Option<Message<'a>> {
     match client_msg.typ {
@@ -612,55 +607,44 @@ fn process_client_message<'a>(
 // the request and the actual DHCPv6 message to send out.
 fn generate_packet<'a>(
     action: &Dhcpv6Action,
-    meta: &PacketMeta,
+    meta: &MblkPacketData,
     msg: &'a Message<'a>,
 ) -> GenPacketResult {
-    let eth = EtherMeta {
-        dst: action.client_mac,
-        src: action.server_mac,
-        ether_type: EtherType::Ipv6,
+    let udp = Udp {
+        source: SERVER_PORT,
+        destination: CLIENT_PORT,
+        length: (Udp::MINIMUM_LENGTH + msg.buffer_len()) as u16,
+        ..Default::default()
     };
 
-    let ip = Ipv6Meta {
-        src: Ipv6Addr::from_eui64(&action.server_mac),
+    let ip = Ipv6 {
+        source: Ipv6Addr::from_eui64(&action.server_mac),
         // Safety: We're only here if the predicates match, one of which is
         // IPv6.
-        dst: meta.inner_ip6().unwrap().src,
-        proto: Protocol::UDP,
-        next_hdr: IpProtocol::Udp,
-        pay_len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
+        destination: meta.inner_ip6().unwrap().source(),
+        next_header: IngotIpProto::UDP,
+        payload_len: udp.length,
         ..Default::default()
     };
 
-    let mut udp = UdpMeta {
-        src: SERVER_PORT,
-        dst: CLIENT_PORT,
-        len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
-        ..Default::default()
+    let eth = Ethernet {
+        destination: action.client_mac,
+        source: action.server_mac,
+        ethertype: Ethertype::IPV6,
     };
 
     // Allocate a segment into which we'll write the packet.
-    let reply_len =
-        msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::BASE_SIZE + EtherHdr::SIZE;
-    let mut pkt = Packet::alloc_and_expand(reply_len);
-    let mut wtr = pkt.seg0_wtr();
+    let ingot_layers = (&eth, &ip, &udp);
+    let total_sz = ingot_layers.packet_length() + msg.buffer_len();
 
-    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-    ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
+    let mut pkt = MsgBlk::new_ethernet(total_sz);
+    pkt.emit_back(ingot_layers)
+        .expect("MsgBlk should have enough bytes by construction");
+    let l = pkt.len();
+    pkt.resize(total_sz)
+        .expect("MsgBlk should have enough bytes by construction");
+    msg.copy_into(&mut pkt[l..]);
 
-    // Create the buffer to contain the DHCP message so that we may
-    // compute the UDP checksum.
-    let mut msg_buf = vec![0; msg.buffer_len()];
-    msg.copy_into(&mut msg_buf).unwrap();
-
-    // Compute the UDP checksum. Write the UDP header and DHCP message
-    // to the segment.
-    let mut udp_buf = [0u8; UdpHdr::SIZE];
-    udp.emit(&mut udp_buf);
-    let csum = ip.compute_ulp_csum(UlpCsumOpt::Full, &udp_buf, &msg_buf);
-    udp.csum = HeaderChecksum::from(csum).bytes();
-    udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
-    wtr.write(&msg_buf).unwrap();
     Ok(AllowOrDeny::Allow(pkt))
 }
 
@@ -683,12 +667,8 @@ impl HairpinAction for Dhcpv6Action {
     // Rather than put this logic into DataPredicates, we just parse the packet
     // here and reply accordingly. So the `Dhcpv6Action` is really a full
     // server, to the extent we emulate one.
-    fn gen_packet(
-        &self,
-        meta: &PacketMeta,
-        rdr: &mut PacketReader,
-    ) -> GenPacketResult {
-        let body = rdr.copy_remaining();
+    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
+        let body = meta.copy_remaining();
         if let Some(client_msg) = Message::from_bytes(&body) {
             if let Some(reply) = process_client_message(self, meta, &client_msg)
             {
@@ -710,11 +690,11 @@ mod test {
     use super::Message;
     use super::MessageType;
     use super::OptionCode;
-    use super::Packet;
+    use crate::ddi::mblk::MsgBlk;
     use crate::engine::dhcpv6::test_data;
+    use crate::engine::packet::Packet;
     use crate::engine::port::meta::ActionMeta;
     use crate::engine::GenericUlp;
-    use opte_api::Direction::*;
 
     // Test that we correctly parse out the entire Solicit message from a
     // snooped packet.
@@ -743,9 +723,10 @@ mod test {
 
     #[test]
     fn test_predicates_match_snooped_solicit_message() {
-        let pkt = Packet::copy(test_data::TEST_SOLICIT_PACKET)
-            .parse(Out, GenericUlp {})
-            .unwrap();
+        let mut pkt = MsgBlk::copy(test_data::TEST_SOLICIT_PACKET);
+        let pkt = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {})
+            .unwrap()
+            .to_full_meta();
         let pmeta = pkt.meta();
         let ameta = ActionMeta::new();
         let client_mac =

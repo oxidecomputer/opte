@@ -56,5 +56,13 @@
  */
 #define DIR_STR(dir)	((dir) == 1 ? "IN" : "OUT")
 
+/*
+ * Packet processing path.
+ * 1 = UFT Compiled/Fast
+ * 2 = UFT Hit/Medium
+ * 3 = UFT Miss/Slow
+ */
+#define PATH_STR(path)	((path) == 1 ? "FAST" : ((path) == 2 ? "MED" : "SLOW"))
+
 #define	EL_DELIMIT	"->"
 #define	EL_FMT		"->%s"

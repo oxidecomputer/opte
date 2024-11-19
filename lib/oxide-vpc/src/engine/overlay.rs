@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! The Oxide Network VPC Overlay.
 //!
@@ -22,7 +22,6 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
-use core::marker::PhantomData;
 use opte::api::Direction;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv4Cidr;
@@ -38,21 +37,20 @@ use opte::engine::ether::EtherMod;
 use opte::engine::ether::EtherType;
 use opte::engine::geneve::GenevePush;
 use opte::engine::geneve::Vni;
-use opte::engine::headers::EncapMeta;
 use opte::engine::headers::EncapPush;
 use opte::engine::headers::HeaderAction;
 use opte::engine::headers::IpAddr;
 use opte::engine::headers::IpCidr;
 use opte::engine::headers::IpPush;
-use opte::engine::ip4::Protocol;
-use opte::engine::ip6::Ipv6Addr;
-use opte::engine::ip6::Ipv6Cidr;
-use opte::engine::ip6::Ipv6Push;
+use opte::engine::ip::v4::Protocol;
+use opte::engine::ip::v6::Ipv6Addr;
+use opte::engine::ip::v6::Ipv6Cidr;
+use opte::engine::ip::v6::Ipv6Push;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::packet::PacketMeta;
+use opte::engine::packet::MblkPacketData;
 use opte::engine::port::meta::ActionMeta;
 use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::port::PortBuilder;
@@ -205,9 +203,11 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        pkt_meta: &PacketMeta,
+        _pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
+        let f_hash = flow_id.crc32();
+
         // The router layer determines a RouterTarget and stores it in
         // the meta map. We need to map this virtual target to a
         // physical one.
@@ -243,16 +243,7 @@ impl StaticAction for EncapAction {
                         // Hash the packet onto a route target. This is a very
                         // rudimentary mechanism. Should level-up to an ECMP
                         // algorithm with well known statistical properties.
-                        let hash = match pkt_meta.l4_hash() {
-                            Some(h) => h,
-                            None => {
-                                return Err(GenHtError::Unexpected {
-                                    msg: "could not compute l4 hash for packet"
-                                        .to_string(),
-                                });
-                            }
-                        };
-                        let hash = hash as usize;
+                        let hash = f_hash as usize;
                         let target = match phys.iter().nth(hash % phys.len()) {
                             Some(target) => target,
                             None => return Ok(AllowOrDeny::Deny),
@@ -321,22 +312,16 @@ impl StaticAction for EncapAction {
         let tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
-            outer_ether: HeaderAction::Push(
-                EtherMeta {
-                    src: MacAddr::ZERO,
-                    dst: MacAddr::ZERO,
-                    ether_type: EtherType::Ipv6,
-                },
-                PhantomData,
-            ),
-            outer_ip: HeaderAction::Push(
-                IpPush::from(Ipv6Push {
-                    src: self.phys_ip_src,
-                    dst: phys_target.ip,
-                    proto: Protocol::UDP,
-                }),
-                PhantomData,
-            ),
+            outer_ether: HeaderAction::Push(EtherMeta {
+                src: MacAddr::ZERO,
+                dst: MacAddr::ZERO,
+                ether_type: EtherType::Ipv6,
+            }),
+            outer_ip: HeaderAction::Push(IpPush::from(Ipv6Push {
+                src: self.phys_ip_src,
+                dst: phys_target.ip,
+                proto: Protocol::UDP,
+            })),
             // XXX Geneve uses the UDP source port as a flow label
             // value for the purposes of ECMP -- a hash of the
             // 5-tuple. However, when using Geneve in IPv6 one could
@@ -346,17 +331,21 @@ impl StaticAction for EncapAction {
             // network is always IPv6, perhaps we should just use
             // that? For now I defer the choice and leave this
             // hard-coded.
-            outer_encap: HeaderAction::Push(
-                EncapPush::from(GenevePush {
-                    vni: phys_target.vni,
-                    entropy: 7777,
-                }),
-                PhantomData,
-            ),
-            inner_ether: HeaderAction::Modify(
-                EtherMod { dst: Some(phys_target.ether), ..Default::default() },
-                PhantomData,
-            ),
+            //
+            // (kyle) -- I think we should use both, mainly because
+            // we can expose the extra entropy to devices which can use it.
+            // We may want flow id to be symmetric, however...
+            // It's worth keeping in mind that Chelsio's RSS picks us a ring
+            // based on Toeplitz hash of the 5-tuple, so we need to write into
+            // there regardless. I don't believe it *looks* at v6 flowid.
+            outer_encap: HeaderAction::Push(EncapPush::from(GenevePush {
+                vni: phys_target.vni,
+                entropy: flow_id.crc32() as u16,
+            })),
+            inner_ether: HeaderAction::Modify(EtherMod {
+                dst: Some(phys_target.ether),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
@@ -393,22 +382,20 @@ impl StaticAction for DecapAction {
         // The decap action is only used for inbound.
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        pkt_meta: &PacketMeta,
+        pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
-        match &pkt_meta.outer.encap {
-            Some(EncapMeta::Geneve(geneve)) => {
+        match pkt_meta.outer_encap_geneve_vni_and_origin() {
+            Some((vni, oxide_external_pkt)) => {
                 // We only conditionally add this metadata because the
                 // `Address::VNI` filter uses it to select VPC-originated
                 // traffic.
                 // External packets carry an extra Geneve tag from the
                 // switch during NAT -- if found, `oxide_external_packet`
                 // is filled.
-                if !geneve.oxide_external_pkt {
-                    action_meta.insert(
-                        ACTION_META_VNI.to_string(),
-                        geneve.vni.to_string(),
-                    );
+                if !oxide_external_pkt {
+                    action_meta
+                        .insert(ACTION_META_VNI.to_string(), vni.to_string());
                 }
             }
 

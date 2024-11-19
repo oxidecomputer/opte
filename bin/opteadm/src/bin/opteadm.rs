@@ -813,12 +813,8 @@ fn main() -> anyhow::Result<()> {
                     .context("failed to allow on inbound direction")?;
                 hdl.allow_cidr(&port, prefix, Direction::Out).inspect_err(
                     |e| {
-                        hdl.remove_cidr(&port, prefix, Direction::In).expect(
-                            &format!(
-                                "FATAL: failed to rollback in-direction allow \
-                                of {prefix} after {e}"
-                            ),
-                        );
+                        hdl.remove_cidr(&port, prefix, Direction::In).unwrap_or_else(|_| panic!("FATAL: failed to rollback in-direction allow \
+                                of {prefix} after {e}"));
                     },
                 )?;
             }
@@ -843,12 +839,8 @@ fn main() -> anyhow::Result<()> {
                 remove_cidr(Direction::In)
                     .context("failed to deny on inbound direction")?;
                 remove_cidr(Direction::Out).inspect_err(|e| {
-                    hdl.allow_cidr(&port, prefix, Direction::In).expect(
-                        &format!(
-                            "FATAL: failed to rollback in-direction remove \
-                                of {prefix} after {e}"
-                        ),
-                    );
+                    hdl.allow_cidr(&port, prefix, Direction::In).unwrap_or_else(|_| panic!("FATAL: failed to rollback in-direction remove \
+                                of {prefix} after {e}"));
                 })?;
             }
         }

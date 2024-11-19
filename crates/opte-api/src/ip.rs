@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 use super::mac::MacAddr;
 use crate::DomainName;
@@ -15,6 +15,7 @@ use core::fmt::Display;
 use core::ops::Deref;
 use core::result;
 use core::str::FromStr;
+use ingot::types::NetworkRepr;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -432,15 +433,13 @@ impl Ipv4Addr {
     }
 }
 
-#[cfg(any(feature = "std", test))]
-impl From<std::net::Ipv4Addr> for Ipv4Addr {
-    fn from(ip4: std::net::Ipv4Addr) -> Self {
+impl From<core::net::Ipv4Addr> for Ipv4Addr {
+    fn from(ip4: core::net::Ipv4Addr) -> Self {
         Self { inner: ip4.octets() }
     }
 }
 
-#[cfg(any(feature = "std", test))]
-impl From<Ipv4Addr> for std::net::Ipv4Addr {
+impl From<Ipv4Addr> for core::net::Ipv4Addr {
     fn from(ip4: Ipv4Addr) -> Self {
         Self::from(ip4.inner)
     }
@@ -713,15 +712,13 @@ impl fmt::Display for Ipv6Addr {
     }
 }
 
-#[cfg(any(feature = "std", test))]
-impl From<std::net::Ipv6Addr> for Ipv6Addr {
-    fn from(ip6: std::net::Ipv6Addr) -> Self {
+impl From<core::net::Ipv6Addr> for Ipv6Addr {
+    fn from(ip6: core::net::Ipv6Addr) -> Self {
         Self { inner: ip6.octets() }
     }
 }
 
-#[cfg(any(feature = "std", test))]
-impl From<Ipv6Addr> for std::net::Ipv6Addr {
+impl From<Ipv6Addr> for core::net::Ipv6Addr {
     fn from(ip6: Ipv6Addr) -> Self {
         Self::from(ip6.inner)
     }
@@ -1205,6 +1202,26 @@ impl From<Ipv6Cidr> for ipnetwork::Ipv6Network {
         let (ip, prefix) = c.parts();
         // A valid `Ipv6Cidr` necessarily has a valid prefix so fine to unwrap.
         ipnetwork::Ipv6Network::new(ip.into(), prefix.val()).unwrap()
+    }
+}
+
+impl NetworkRepr<[u8; 4]> for Ipv4Addr {
+    fn to_network(self) -> [u8; 4] {
+        self.inner
+    }
+
+    fn from_network(val: [u8; 4]) -> Self {
+        Self { inner: val }
+    }
+}
+
+impl NetworkRepr<[u8; 16]> for Ipv6Addr {
+    fn to_network(self) -> [u8; 16] {
+        self.inner
+    }
+
+    fn from_network(val: [u8; 16]) -> Self {
+        Self { inner: val }
     }
 }
 

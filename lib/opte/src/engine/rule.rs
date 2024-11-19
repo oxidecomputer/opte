@@ -8,27 +8,37 @@
 
 use super::ether::EtherMeta;
 use super::ether::EtherMod;
+use super::ether::Ethernet;
+use super::ether::EthernetMut;
+use super::ether::EthernetPacket;
+use super::ether::ValidEthernet;
 use super::flow_table::StateSummary;
-use super::headers::EncapMeta;
 use super::headers::EncapMod;
 use super::headers::EncapPush;
 use super::headers::HeaderAction;
 use super::headers::HeaderActionError;
-use super::headers::IpMeta;
 use super::headers::IpMod;
 use super::headers::IpPush;
+use super::headers::Transform;
 use super::headers::UlpHeaderAction;
+use super::headers::UlpMetaModify;
+use super::ip::v4::Ipv4Mut;
+use super::ip::v6::v6_set_next_header;
+use super::ip::v6::Ipv6Mut;
+use super::ip::ValidL3;
+use super::ip::L3;
 use super::packet::BodyTransform;
-use super::packet::Initialized;
 use super::packet::InnerFlowId;
+use super::packet::MblkFullParsed;
+use super::packet::MblkPacketData;
 use super::packet::Packet;
-use super::packet::PacketMeta;
-use super::packet::PacketRead;
-use super::packet::PacketReader;
-use super::packet::Parsed;
+use super::packet::PacketData;
+use super::packet::Pullup;
+use super::parse::ValidUlp;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
+use crate::ddi::mblk::MsgBlk;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -41,9 +51,20 @@ use core::fmt::Debug;
 use core::fmt::Display;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
+use ingot::icmp::IcmpV4Mut;
+use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV6Mut;
+use ingot::icmp::IcmpV6Ref;
+use ingot::ip::IpProtocol;
+use ingot::tcp::TcpFlags;
+use ingot::tcp::TcpMut;
+use ingot::types::InlineHeader;
+use ingot::types::Read;
+use ingot::udp::UdpMut;
 use opte_api::Direction;
 use serde::Deserialize;
 use serde::Serialize;
+use zerocopy::ByteSliceMut;
 
 /// A marker trait indicating a type is an entry acuired from a [`Resource`].
 pub trait ResourceEntry {}
@@ -153,8 +174,8 @@ pub trait ActionDesc {
     fn gen_bt(
         &self,
         _dir: Direction,
-        _meta: &PacketMeta,
-        _payload_segs: &[&[u8]],
+        _meta: &MblkPacketData,
+        _payload_seg: &[u8],
     ) -> Result<Option<Box<dyn BodyTransform>>, GenBtError> {
         Ok(None)
     }
@@ -251,7 +272,7 @@ impl StaticAction for Identity {
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _pkt_meta: &PacketMeta,
+        _pkt_meta: &MblkPacketData,
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform::identity(&self.name)))
@@ -277,13 +298,13 @@ pub enum ModifyAction<T> {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct HdrTransform {
     pub name: String,
-    pub outer_ether: HeaderAction<EtherMeta, EtherMeta, EtherMod>,
-    pub outer_ip: HeaderAction<IpMeta, IpPush, IpMod>,
-    pub outer_encap: HeaderAction<EncapMeta, EncapPush, EncapMod>,
-    pub inner_ether: HeaderAction<EtherMeta, EtherMeta, EtherMod>,
-    pub inner_ip: HeaderAction<IpMeta, IpPush, IpMod>,
+    pub outer_ether: HeaderAction<EtherMeta, EtherMod>,
+    pub outer_ip: HeaderAction<IpPush, IpMod>,
+    pub outer_encap: HeaderAction<EncapPush, EncapMod>,
+    pub inner_ether: HeaderAction<EtherMeta, EtherMod>,
+    pub inner_ip: HeaderAction<IpPush, IpMod>,
     // We don't support push/pop for inner_ulp.
-    pub inner_ulp: UlpHeaderAction<super::headers::UlpMetaModify>,
+    pub inner_ulp: UlpHeaderAction<UlpMetaModify>,
 }
 
 impl StateSummary for Vec<HdrTransform> {
@@ -295,6 +316,193 @@ impl StateSummary for Vec<HdrTransform> {
 impl Display for HdrTransform {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.name)
+    }
+}
+
+/// Header transformations matching a simple format, amenable
+/// to fastpath compilation:
+/// * Encap is either pushed or popped in its entirety,
+/// * The inner packet is only modified, with no layers pushed or
+///   popped.
+/// * The packet action must be `Modified`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CompiledTransform {
+    pub encap: CompiledEncap,
+    pub inner_ether: Option<EtherMod>,
+    pub inner_ip: Option<IpMod>,
+    pub inner_ulp: Option<UlpMetaModify>,
+    pub checksums_dirty: bool,
+}
+
+impl CompiledTransform {
+    #[inline(always)]
+    pub fn transform_ether<V: ByteSliceMut>(
+        &self,
+        ether: &mut ValidEthernet<V>,
+    ) {
+        if let Some(ether_tx) = &self.inner_ether {
+            if let Some(new_src) = &ether_tx.src {
+                ether.set_source(*new_src);
+            }
+            if let Some(new_dst) = &ether_tx.dst {
+                ether.set_destination(*new_dst);
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn transform_l3<V: ByteSliceMut>(&self, l3: &mut ValidL3<V>) {
+        match (l3, &self.inner_ip) {
+            (ValidL3::Ipv4(pkt), Some(IpMod::Ip4(tx))) => {
+                if let Some(new_src) = &tx.src {
+                    pkt.set_source(*new_src);
+                }
+                if let Some(new_dst) = &tx.dst {
+                    pkt.set_destination(*new_dst);
+                }
+                if let Some(new_proto) = &tx.proto {
+                    pkt.set_protocol(IpProtocol(u8::from(*new_proto)));
+                }
+            }
+            (ValidL3::Ipv6(pkt), Some(IpMod::Ip6(tx))) => {
+                if let Some(new_src) = &tx.src {
+                    pkt.set_source(*new_src);
+                }
+                if let Some(new_dst) = &tx.dst {
+                    pkt.set_destination(*new_dst);
+                }
+                if let Some(new_proto) = &tx.proto {
+                    let ipp = IpProtocol(u8::from(*new_proto));
+
+                    // `expect`ing is too risky, but we know we won't fail
+                    // here for two reasons:
+                    // * We just succeeded at parsing.
+                    // * Compiled transforms cannot perform *structural*
+                    //   changes to packets (incl. push/pop/modify EHs).
+                    let _ = v6_set_next_header(ipp, pkt);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[inline(always)]
+    pub fn transform_ulp<V: ByteSliceMut>(&self, ulp: &mut ValidUlp<V>) {
+        match (ulp, &self.inner_ulp) {
+            (ValidUlp::Tcp(pkt), Some(tx)) => {
+                if let Some(flags) = tx.tcp_flags {
+                    pkt.set_flags(TcpFlags::from_bits_retain(flags));
+                }
+
+                if let Some(new_src) = &tx.generic.src_port {
+                    pkt.set_source(*new_src);
+                }
+
+                if let Some(new_dst) = &tx.generic.dst_port {
+                    pkt.set_destination(*new_dst);
+                }
+            }
+            (ValidUlp::Udp(pkt), Some(tx)) => {
+                if let Some(new_src) = &tx.generic.src_port {
+                    pkt.set_source(*new_src);
+                }
+
+                if let Some(new_dst) = &tx.generic.dst_port {
+                    pkt.set_destination(*new_dst);
+                }
+            }
+            (ValidUlp::IcmpV4(pkt), Some(tx))
+                if pkt.ty() == 0 || pkt.ty() == 8 =>
+            {
+                if let Some(new_id) = tx.icmp_id {
+                    pkt.rest_of_hdr_mut()[..2]
+                        .copy_from_slice(&new_id.to_be_bytes())
+                }
+            }
+            (ValidUlp::IcmpV6(pkt), Some(tx))
+                if pkt.ty() == 128 || pkt.ty() == 129 =>
+            {
+                if let Some(new_id) = tx.icmp_id {
+                    pkt.rest_of_hdr_mut()[..2]
+                        .copy_from_slice(&new_id.to_be_bytes())
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum CompiledEncap {
+    Pop,
+    // TODO: can we cache these in an Arc'd buffer?
+    Push {
+        eth: EtherMeta,
+        ip: IpPush,
+        encap: EncapPush,
+        bytes: Vec<u8>,
+        l3_len_offset: usize,
+        l3_extra_bytes: usize,
+        l4_len_offset: usize,
+        encap_sz: usize,
+    },
+}
+
+impl CompiledEncap {
+    #[inline]
+    pub fn prepend(&self, mut pkt: MsgBlk, ulp_len: usize) -> MsgBlk {
+        let Self::Push {
+            ref bytes,
+            l3_len_offset,
+            l3_extra_bytes,
+            l4_len_offset,
+            encap_sz,
+            ..
+        } = self
+        else {
+            return pkt;
+        };
+
+        let mut prepend = if pkt.head_capacity() < bytes.len() {
+            let mut pkt = MsgBlk::new_ethernet(bytes.len());
+            pkt.pop_all();
+            Some(pkt)
+        } else {
+            None
+        };
+
+        let target = if let Some(prepend) = prepend.as_mut() {
+            prepend
+        } else {
+            &mut pkt
+        };
+
+        // Unwrap safety -- we either had enough bytes, or we just allocated them.
+        target.write_bytes_front(bytes).unwrap();
+
+        let l4_len = ulp_len + encap_sz;
+        let l3_len = l4_len + l3_extra_bytes;
+
+        let l3_len_slot: &mut [u8; core::mem::size_of::<u16>()] = (&mut target
+            [*l3_len_offset..l3_len_offset + core::mem::size_of::<u16>()])
+            .try_into()
+            .expect("exact no bytes");
+
+        *l3_len_slot = (l3_len as u16).to_be_bytes();
+
+        let l4_len_slot: &mut [u8; core::mem::size_of::<u16>()] = (&mut target
+            [*l4_len_offset..l4_len_offset + core::mem::size_of::<u16>()])
+            .try_into()
+            .expect("exact no bytes");
+
+        *l4_len_slot = (l4_len as u16).to_be_bytes();
+
+        if let Some(mut prepend) = prepend {
+            prepend.append(pkt);
+            prepend
+        } else {
+            pkt
+        }
     }
 }
 
@@ -365,34 +573,53 @@ impl HdrTransform {
     }
 
     /// Run this header transformation against the passed in
-    /// [`PacketMeta`], mutating it in place.
+    /// [`PacketData`], mutating it in place.
+    ///
+    /// Returns whether the inner checksum needs recomputed.
     ///
     /// # Errors
     ///
     /// If there is an [`HeaderAction::Modify`], but no metadata is
     /// present for that particular header, then a
     /// [`HdrTransformError::MissingHeader`] is returned.
-    pub fn run(&self, meta: &mut PacketMeta) -> Result<(), HdrTransformError> {
+    pub fn run<T: Read + Pullup>(
+        &self,
+        meta: &mut PacketData<T>,
+    ) -> Result<bool, HdrTransformError>
+    where
+        T::Chunk: ByteSliceMut,
+    {
         self.outer_ether
-            .run(&mut meta.outer.ether)
+            .act_on_option::<InlineHeader<Ethernet, ValidEthernet<_>>, _>(
+                &mut meta.headers.outer_eth,
+            )
             .map_err(Self::err_fn("outer ether"))?;
+
         self.outer_ip
-            .run(&mut meta.outer.ip)
+            .act_on_option::<L3<_>, _>(&mut meta.headers.outer_l3)
             .map_err(Self::err_fn("outer IP"))?;
+
         self.outer_encap
-            .run(&mut meta.outer.encap)
+            .act_on_option(&mut meta.headers.outer_encap)
             .map_err(Self::err_fn("outer encap"))?;
-        // XXX A hack so that inner ethernet can meet the interface of
-        // `HeaderAction::run().`
-        let mut tmp = Some(meta.inner.ether);
-        self.inner_ether.run(&mut tmp).map_err(Self::err_fn("inner ether"))?;
-        meta.inner.ether = tmp.unwrap();
-        self.inner_ip
-            .run(&mut meta.inner.ip)
+
+        <EthernetPacket<_> as Transform<EthernetPacket<_>, _, _>>::act_on(
+            &mut meta.headers.inner_eth,
+            &self.inner_ether,
+        )
+        .map_err(Self::err_fn("inner eth"))?;
+
+        let l3_dirty = self
+            .inner_ip
+            .act_on_option::<L3<_>, _>(&mut meta.headers.inner_l3)
             .map_err(Self::err_fn("inner IP"))?;
-        self.inner_ulp
-            .run(&mut meta.inner.ulp)
-            .map_err(Self::err_fn("inner ULP"))
+
+        let ulp_dirty = self
+            .inner_ulp
+            .run(&mut meta.headers.inner_ulp)
+            .map_err(Self::err_fn("inner ULP"))?;
+
+        Ok(l3_dirty || ulp_dirty)
     }
 
     fn err_fn(
@@ -403,6 +630,12 @@ impl HdrTransform {
                 HeaderActionError::MissingHeader => {
                     HdrTransformError::MissingHeader(header)
                 }
+                HeaderActionError::CantPop => {
+                    HdrTransformError::CantPop(header)
+                }
+                HeaderActionError::MalformedExtension => {
+                    HdrTransformError::MalformedExtension(header)
+                }
             }
         }
     }
@@ -411,6 +644,8 @@ impl HdrTransform {
 #[derive(Clone, Copy, Debug)]
 pub enum HdrTransformError {
     MissingHeader(&'static str),
+    CantPop(&'static str),
+    MalformedExtension(&'static str),
 }
 
 #[derive(Debug)]
@@ -435,14 +670,14 @@ pub trait StatefulAction: Display {
     /// # Errors
     ///
     /// * [`GenDescError::ResourceExhausted`]: This action relies on a
-    /// dynamic resource which has been exhausted.
+    ///   dynamic resource which has been exhausted.
     ///
     /// * [`GenDescError::Unexpected`]: This action encountered an
-    /// unexpected error while trying to generate a descriptor.
+    ///   unexpected error while trying to generate a descriptor.
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet<Parsed>,
+        pkt: &Packet<MblkFullParsed>,
         meta: &mut ActionMeta,
     ) -> GenDescResult;
 
@@ -462,7 +697,7 @@ pub trait StaticAction: Display {
         &self,
         dir: Direction,
         flow_id: &InnerFlowId,
-        packet_meta: &PacketMeta,
+        packet_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult;
 
@@ -497,16 +732,9 @@ pub trait MetaAction: Display {
 
 #[derive(Debug)]
 pub enum GenErr {
-    BadPayload(super::packet::ReadErr),
     Malformed,
     MissingMeta,
     Unexpected(String),
-}
-
-impl From<super::packet::ReadErr> for GenErr {
-    fn from(err: super::packet::ReadErr) -> Self {
-        Self::BadPayload(err)
-    }
 }
 
 impl From<smoltcp::wire::Error> for GenErr {
@@ -515,7 +743,7 @@ impl From<smoltcp::wire::Error> for GenErr {
     }
 }
 
-pub type GenPacketResult = ActionResult<Packet<Initialized>, GenErr>;
+pub type GenPacketResult = ActionResult<MsgBlk, GenErr>;
 
 /// An error while generating a [`BodyTransform`].
 #[derive(Clone, Debug)]
@@ -531,21 +759,17 @@ impl From<smoltcp::wire::Error> for GenBtError {
 
 /// A hairpin action is one that generates a new packet based on the
 /// current inbound/outbound packet, and then "hairpins" that new
-/// packet back to the source of the original packet. For example, you
-/// could use this to hairpin an ARP Reply in response to a guest's
-/// ARP request.
+/// packet back to the source of the original packet.
+///
+/// For example, you could use this to hairpin an ARP Reply in response
+/// to a guest's ARP request.
 pub trait HairpinAction: Display {
     /// Generate a [`Packet`] to hairpin back to the source. The
-    /// `meta` argument holds the packet metadata, inlucding any
-    /// modifications made by previous layers up to this point. The
-    /// `rdr` argument provides a [`PacketReader`] against
-    /// [`Packet<Parsed>`], with its starting position set to the
-    /// beginning of the packet's payload.
-    fn gen_packet(
-        &self,
-        meta: &PacketMeta,
-        rdr: &mut PacketReader,
-    ) -> GenPacketResult;
+    /// `meta` argument holds the packet metadata, including any
+    /// modifications made by previous layers up to this point.
+    /// This also provides access to a reader over the packet body,
+    /// positioned after the parsed metadata.
+    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult;
 
     /// Return the predicates implicit to this action.
     ///
@@ -821,16 +1045,12 @@ impl Rule<Ready> {
     }
 }
 
-impl<'a> Rule<Finalized> {
-    pub fn is_match<'b, R>(
+impl Rule<Finalized> {
+    pub fn is_match(
         &self,
-        meta: &PacketMeta,
+        meta: &MblkPacketData,
         action_meta: &ActionMeta,
-        rdr: &'b mut R,
-    ) -> bool
-    where
-        R: PacketRead<'a>,
-    {
+    ) -> bool {
         #[cfg(debug_assertions)]
         {
             if let Some(preds) = &self.state.preds {
@@ -855,7 +1075,7 @@ impl<'a> Rule<Finalized> {
                 }
 
                 for p in &preds.data_preds {
-                    if !p.is_match(meta, rdr) {
+                    if !p.is_match(meta) {
                         return false;
                     }
                 }
@@ -892,13 +1112,15 @@ impl From<&Rule<Finalized>> for super::ioctl::RuleDump {
 
 #[test]
 fn rule_matching() {
-    use super::ip4::Protocol;
-    use crate::engine::headers::UlpMeta;
-    use crate::engine::ip4::Ipv4Meta;
-    use crate::engine::packet::InnerMeta;
+    use crate::engine::ip::v4::Ipv4;
+    use crate::engine::ip::v4::Ipv4Mut;
     use crate::engine::predicate::Ipv4AddrMatch;
     use crate::engine::predicate::Predicate;
-    use crate::engine::tcp::TcpMeta;
+    use crate::engine::GenericUlp;
+    use ingot::ethernet::Ethertype;
+    use ingot::ip::IpProtocol;
+    use ingot::tcp::Tcp;
+    use ingot::types::HeaderLen;
 
     let action = Identity::new("rule_matching");
     let mut r1 = Rule::new(1, Action::Static(Arc::new(action)));
@@ -908,35 +1130,28 @@ fn rule_matching() {
     let dst_port = "443".parse().unwrap();
     // There is no DataPredicate usage in this test, so this pkt/rdr
     // can be bogus.
-    let pkt = Packet::copy(&[0xA]);
-    let mut rdr = pkt.get_rdr();
-
-    let ip = IpMeta::from(Ipv4Meta {
-        src: src_ip,
-        dst: dst_ip,
-        proto: Protocol::TCP,
-        ttl: 64,
-        ident: 1,
-        hdr_len: 20,
-        total_len: 40,
-        csum: [0; 2],
-    });
-    let ulp = UlpMeta::from(TcpMeta {
-        src: src_port,
-        dst: dst_port,
-        flags: 0,
-        seq: 0,
-        ack: 0,
-        options_bytes: None,
-        options_len: 0,
+    let tcp = Tcp {
+        source: src_port,
+        destination: dst_port,
         window_size: 64240,
         ..Default::default()
-    });
-
-    let meta = PacketMeta {
-        outer: Default::default(),
-        inner: InnerMeta { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
     };
+    let ip4 = Ipv4 {
+        source: src_ip,
+        destination: dst_ip,
+        protocol: IpProtocol::TCP,
+        total_len: (Ipv4::MINIMUM_LENGTH + tcp.packet_length()) as u16,
+        ..Default::default()
+    };
+
+    let eth = Ethernet { ethertype: Ethertype::IPV4, ..Default::default() };
+
+    let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp));
+    let mut pkt = Packet::parse_outbound(pkt_m.iter_mut(), GenericUlp {})
+        .unwrap()
+        .to_full_meta();
+    pkt.compute_checksums();
+    let meta = pkt.meta();
 
     r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
         src_ip,
@@ -944,36 +1159,14 @@ fn rule_matching() {
     let r1 = r1.finalize();
 
     let ameta = ActionMeta::new();
-    assert!(r1.is_match(&meta, &ameta, &mut rdr));
+    assert!(r1.is_match(&meta, &ameta));
 
     let new_src_ip = "10.11.11.99".parse().unwrap();
 
-    let ip = IpMeta::from(Ipv4Meta {
-        src: new_src_ip,
-        dst: dst_ip,
-        proto: Protocol::TCP,
-        ttl: 64,
-        ident: 1,
-        hdr_len: 20,
-        total_len: 40,
-        csum: [0; 2],
-    });
-    let ulp = UlpMeta::from(TcpMeta {
-        src: src_port,
-        dst: dst_port,
-        flags: 0,
-        seq: 0,
-        ack: 0,
-        options_bytes: None,
-        options_len: 0,
-        window_size: 64240,
-        ..Default::default()
-    });
+    let meta = pkt.meta_mut();
+    if let Some(L3::Ipv4(v4)) = &mut meta.headers.inner_l3 {
+        v4.set_source(new_src_ip);
+    }
 
-    let meta = PacketMeta {
-        outer: Default::default(),
-        inner: InnerMeta { ip: Some(ip), ulp: Some(ulp), ..Default::default() },
-    };
-
-    assert!(!r1.is_match(&meta, &ameta, &mut rdr));
+    assert!(!r1.is_match(&meta, &ameta));
 }

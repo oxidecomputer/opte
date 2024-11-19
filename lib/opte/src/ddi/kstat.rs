@@ -12,6 +12,8 @@ use alloc::string::String;
 use core::fmt;
 use core::fmt::Display;
 
+pub use kstat_macro::KStatProvider;
+
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
         use alloc::ffi::CString;
@@ -40,7 +42,6 @@ cfg_if! {
 ///
 /// ```
 /// use opte::ddi::kstat::{self, KStatProvider, KStatU64};
-/// use kstat_macro::KStatProvider;
 ///
 /// #[derive(KStatProvider)]
 /// struct SomeStats {
@@ -84,7 +85,6 @@ pub trait KStatProvider {
 ///
 /// ```
 /// use opte::ddi::kstat::{self, KStatNamed, KStatProvider, KStatU64};
-/// use kstat_macro::KStatProvider;
 ///
 /// #[derive(KStatProvider)]
 /// pub struct StatProvider {

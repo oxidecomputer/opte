@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Moments, periodics, etc.
 use core::ops::Add;
@@ -15,6 +15,7 @@ cfg_if! {
         use illumos_sys_hdrs as ddi;
     } else {
         use std::time::Instant;
+        use std::sync::OnceLock;
     }
 }
 
@@ -31,8 +32,13 @@ pub struct Moment {
     #[cfg(all(not(feature = "std"), not(test)))]
     inner: ddi::hrtime_t,
 
+    // This is a duration masquerading as an instant -- this
+    // allows us to move to and from raw ns counts when needed on std.
+    //
+    // Ultimately, this is a requirement for us to place `Moment`s into
+    // e.g. `AtomicU64`s for table design.
     #[cfg(any(feature = "std", test))]
-    inner: Instant,
+    inner: Duration,
 }
 
 impl Add<Duration> for Moment {
@@ -62,7 +68,7 @@ impl Moment {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 (self.inner as u64).saturating_sub(earlier.inner as u64) / NANOS_TO_MILLIS
             } else {
-                let delta = self.inner.saturating_duration_since(earlier.inner);
+                let delta = self.inner.saturating_sub(earlier.inner);
                 delta.as_secs() * MILLIS + delta.subsec_millis() as u64
             }
         }
@@ -73,20 +79,38 @@ impl Moment {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 Self { inner: unsafe { ddi::gethrtime() } }
             } else {
-                Self { inner: Instant::now() }
+                static FIRST_TS: OnceLock<Instant> = OnceLock::new();
+
+                let first_ts = *FIRST_TS.get_or_init(Instant::now);
+                Self { inner: Instant::now().saturating_duration_since(first_ts) }
             }
         }
     }
 
-    /// Return the underlying timestamp for debugging purposes
-    /// if supported on the current platform.
-    #[allow(dead_code)]
-    pub(crate) fn raw_millis(&self) -> Option<u64> {
+    /// Return the underlying timestamp for atomic storage or debugging, converted
+    /// to milliseconds.
+    pub(crate) fn raw_millis(&self) -> u64 {
+        self.raw() / NANOS_TO_MILLIS
+    }
+
+    /// Return the underlying timestamp for atomic storage or debugging.
+    pub(crate) fn raw(&self) -> u64 {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                Some(self.inner as u64 / NANOS_TO_MILLIS)
+                self.inner as u64
             } else {
-                None
+                // Conversion here is truncating.
+                self.inner.as_nanos() as u64
+            }
+        }
+    }
+
+    pub(crate) fn from_raw_nanos(raw: u64) -> Self {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                Self { inner: raw as ddi::hrtime_t }
+            } else {
+                Self { inner: Duration::from_nanos(raw) }
             }
         }
     }

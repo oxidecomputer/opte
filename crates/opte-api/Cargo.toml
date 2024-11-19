@@ -13,6 +13,7 @@ std = ["ipnetwork"]
 [dependencies]
 illumos-sys-hdrs.workspace = true
 
+ingot.workspace = true
 ipnetwork = { workspace = true, optional = true }
 postcard.workspace = true
 serde.workspace = true

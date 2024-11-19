@@ -30,6 +30,9 @@ While the XDE kernel module runs only on Helios, our test suite and microbenchma
 
 | `cargo kbench`
 | N/A
+
+| N/A
+| `cargo +nightly fuzz run parse-in`, `cargo +nightly fuzz run parse-out`
 |===
 
 More detail on our benchmarks can be found in xref:bench/README.adoc[bench/README].

@@ -8,121 +8,106 @@
 
 use super::*;
 use dhcpv6::protocol::MessageType;
+use opte::ddi::mblk::MsgBlk;
+use opte::engine::dhcp::DHCP_CLIENT_PORT;
+use opte::engine::dhcp::DHCP_SERVER_PORT;
 use opte::engine::dhcpv6;
+use opte::engine::ether::Ethernet;
+use opte::engine::ip::v4::Ipv4;
+use opte::engine::ip::v6::Ipv6;
+use opte::ingot::ethernet::Ethertype;
+use opte::ingot::ip::IpProtocol;
+use opte::ingot::udp::Udp;
 pub use smoltcp::wire::DhcpMessageType;
 pub use smoltcp::wire::DhcpPacket;
 pub use smoltcp::wire::DhcpRepr;
 
 // Build a packet from a DHCPv4 message, from a client to server.
-pub fn packet_from_client_dhcpv4_message_unparsed(
+pub fn packet_from_client_dhcpv4_message(
     cfg: &VpcCfg,
     msg: &DhcpRepr,
-) -> Packet<Initialized> {
-    let eth = EtherMeta {
-        dst: MacAddr::BROADCAST,
-        src: cfg.guest_mac,
-        ether_type: EtherType::Ipv4,
+) -> MsgBlk {
+    let eth = Ethernet {
+        destination: MacAddr::BROADCAST,
+        source: cfg.guest_mac,
+        ethertype: Ethertype::IPV4,
     };
 
-    let ip = Ipv4Meta {
-        src: Ipv4Addr::ANY_ADDR,
-        dst: Ipv4Addr::LOCAL_BCAST,
-        proto: Protocol::UDP,
-        total_len: (msg.buffer_len() + UdpHdr::SIZE + Ipv4Hdr::BASE_SIZE)
-            as u16,
-
+    let ip = Ipv4 {
+        source: Ipv4Addr::ANY_ADDR,
+        destination: Ipv4Addr::LOCAL_BCAST,
+        protocol: IpProtocol::UDP,
+        total_len: (msg.buffer_len()
+            + Udp::MINIMUM_LENGTH
+            + Ipv4::MINIMUM_LENGTH) as u16,
         ..Default::default()
     };
 
-    let udp = UdpMeta {
-        src: 68,
-        dst: 67,
-        len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
+    let udp = Udp {
+        source: DHCP_CLIENT_PORT,
+        destination: DHCP_SERVER_PORT,
+        length: (Udp::MINIMUM_LENGTH + msg.buffer_len()) as u16,
         ..Default::default()
     };
 
-    let reply_len =
-        msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::BASE_SIZE + EtherHdr::SIZE;
-    let mut pkt = Packet::alloc_and_expand(reply_len);
-    let mut wtr = pkt.seg0_wtr();
-    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-    ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-    udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
+    let headers = (eth, ip, udp);
+    let total_len = msg.buffer_len() + headers.packet_length();
 
-    let mut msg_buf = vec![0; msg.buffer_len()];
-    let mut dhcp_pkt = DhcpPacket::new_checked(&mut msg_buf).unwrap();
+    let mut pkt = MsgBlk::new_ethernet(total_len);
+    pkt.emit_back(&headers).unwrap();
+    let dhcp_off = pkt.len();
+    pkt.resize(total_len).unwrap();
+    let mut dhcp_pkt = DhcpPacket::new_checked(&mut pkt[dhcp_off..]).unwrap();
     msg.emit(&mut dhcp_pkt).unwrap();
-    wtr.write(&msg_buf).unwrap();
+
     pkt
 }
 
 // Build a packet from a DHCPv6 message, from a client to server.
-pub fn packet_from_client_dhcpv6_message_unparsed(
-    cfg: &VpcCfg,
-    msg: &dhcpv6::protocol::Message<'_>,
-) -> Packet<Initialized> {
-    let eth = EtherMeta {
-        dst: dhcpv6::ALL_RELAYS_AND_SERVERS.multicast_mac().unwrap(),
-        src: cfg.guest_mac,
-        ether_type: EtherType::Ipv6,
-    };
-
-    let ip = Ipv6Meta {
-        src: Ipv6Addr::from_eui64(&cfg.guest_mac),
-        dst: dhcpv6::ALL_RELAYS_AND_SERVERS,
-        proto: Protocol::UDP,
-        next_hdr: IpProtocol::Udp,
-        pay_len: (msg.buffer_len() + UdpHdr::SIZE) as u16,
-        ..Default::default()
-    };
-
-    let udp = UdpMeta {
-        src: dhcpv6::CLIENT_PORT,
-        dst: dhcpv6::SERVER_PORT,
-        len: (UdpHdr::SIZE + msg.buffer_len()) as u16,
-        ..Default::default()
-    };
-
-    write_dhcpv6_packet_unparsed(eth, ip, udp, msg)
-}
-
 pub fn packet_from_client_dhcpv6_message(
     cfg: &VpcCfg,
     msg: &dhcpv6::protocol::Message<'_>,
-) -> Packet<Parsed> {
-    packet_from_client_dhcpv6_message_unparsed(cfg, msg)
-        .parse(Out, GenericUlp {})
-        .unwrap()
-}
+) -> MsgBlk {
+    let eth = Ethernet {
+        destination: dhcpv6::ALL_RELAYS_AND_SERVERS.multicast_mac().unwrap(),
+        source: cfg.guest_mac,
+        ethertype: Ethertype::IPV6,
+    };
 
-pub fn write_dhcpv6_packet_unparsed(
-    eth: EtherMeta,
-    ip: Ipv6Meta,
-    udp: UdpMeta,
-    msg: &dhcpv6::protocol::Message<'_>,
-) -> Packet<Initialized> {
-    let reply_len =
-        msg.buffer_len() + UdpHdr::SIZE + Ipv6Hdr::BASE_SIZE + EtherHdr::SIZE;
-    let mut pkt = Packet::alloc_and_expand(reply_len);
-    let mut wtr = pkt.seg0_wtr();
-    eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-    ip.emit(wtr.slice_mut(ip.hdr_len()).unwrap());
-    udp.emit(wtr.slice_mut(udp.hdr_len()).unwrap());
-    let mut msg_buf = vec![0; msg.buffer_len()];
-    msg.copy_into(&mut msg_buf).unwrap();
-    wtr.write(&msg_buf).unwrap();
-    pkt
+    let ip = Ipv6 {
+        source: Ipv6Addr::from_eui64(&cfg.guest_mac),
+        destination: dhcpv6::ALL_RELAYS_AND_SERVERS,
+        next_header: IpProtocol::UDP,
+        payload_len: (msg.buffer_len() + Udp::MINIMUM_LENGTH) as u16,
+        ..Default::default()
+    };
+
+    let udp = Udp {
+        source: dhcpv6::CLIENT_PORT,
+        destination: dhcpv6::SERVER_PORT,
+        length: ip.payload_len,
+        ..Default::default()
+    };
+
+    write_dhcpv6_packet(eth, ip, udp, msg)
 }
 
 pub fn write_dhcpv6_packet(
-    eth: EtherMeta,
-    ip: Ipv6Meta,
-    udp: UdpMeta,
+    eth: Ethernet,
+    ip: Ipv6,
+    udp: Udp,
     msg: &dhcpv6::protocol::Message<'_>,
-) -> Packet<Parsed> {
-    write_dhcpv6_packet_unparsed(eth, ip, udp, msg)
-        .parse(Out, GenericUlp {})
-        .unwrap()
+) -> MsgBlk {
+    let headers = (eth, ip, udp);
+    let total_len = msg.buffer_len() + headers.packet_length();
+
+    let mut pkt = MsgBlk::new_ethernet(total_len);
+    pkt.emit_back(&headers).unwrap();
+    let dhcp_off = pkt.len();
+    pkt.resize(total_len).unwrap();
+    msg.copy_into(&mut pkt[dhcp_off..]).unwrap();
+
+    pkt
 }
 
 pub fn dhcpv6_with_reasonable_defaults(

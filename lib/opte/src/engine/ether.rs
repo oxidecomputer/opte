@@ -6,12 +6,11 @@
 
 //! Ethernet frames.
 
+use super::headers::HasInnerCksum;
+use super::headers::HeaderActionError;
+use super::headers::HeaderActionModify;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
-use super::headers::RawHeader;
-use super::packet::PacketReadMut;
-use super::packet::ReadErr;
-use crate::d_error::DError;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -19,14 +18,16 @@ use core::fmt::Debug;
 use core::fmt::Display;
 use core::result;
 use core::str::FromStr;
+use ingot::ethernet::Ethertype;
+use ingot::types::Header;
+use ingot::types::HeaderLen;
+use ingot::types::InlineHeader;
+use ingot::Ingot;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
-use zerocopy::AsBytes;
-use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
-use zerocopy::Ref;
-use zerocopy::Unaligned;
+use zerocopy::ByteSlice;
+use zerocopy::ByteSliceMut;
 
 pub const ETHER_TYPE_ETHER: u16 = 0x6558;
 pub const ETHER_TYPE_IPV4: u16 = 0x0800;
@@ -34,6 +35,17 @@ pub const ETHER_TYPE_ARP: u16 = 0x0806;
 pub const ETHER_TYPE_IPV6: u16 = 0x86DD;
 
 pub const ETHER_ADDR_LEN: usize = 6;
+
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, Ingot)]
+#[ingot(impl_default)]
+pub struct Ethernet {
+    #[ingot(is = "[u8; 6]")]
+    pub destination: MacAddr,
+    #[ingot(is = "[u8; 6]")]
+    pub source: MacAddr,
+    #[ingot(is = "u16be", next_layer)]
+    pub ethertype: Ethertype,
+}
 
 #[repr(u16)]
 #[derive(
@@ -209,16 +221,6 @@ impl PushAction<EtherMeta> for EtherMeta {
     }
 }
 
-impl<'a> From<&EtherHdr<'a>> for EtherMeta {
-    fn from(eth: &EtherHdr) -> Self {
-        EtherMeta {
-            src: eth.src(),
-            dst: eth.dst(),
-            ether_type: eth.ether_type(),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct EtherMod {
     pub src: Option<MacAddr>,
@@ -239,151 +241,138 @@ impl ModifyAction<EtherMeta> for EtherMod {
 
 impl EtherMeta {
     #[inline]
-    pub fn emit(&self, dst: &mut [u8]) {
-        debug_assert_eq!(dst.len(), EtherHdrRaw::SIZE);
-        let mut raw = EtherHdrRaw::new_mut(dst).unwrap();
-        raw.write(EtherHdrRaw::from(self));
+    pub fn hdr_len(&self) -> usize {
+        Ethernet::MINIMUM_LENGTH
     }
+}
 
+impl<T: ByteSliceMut> HeaderActionModify<EtherMod> for EthernetPacket<T> {
     #[inline]
-    pub fn hdr_len(&self) -> usize {
-        EtherHdr::SIZE
-    }
-}
-
-#[derive(Debug)]
-pub struct EtherHdr<'a> {
-    bytes: Ref<&'a mut [u8], EtherHdrRaw>,
-}
-
-impl<'a> EtherHdr<'a> {
-    // For the moment, this type is for non-VLAN ethernet headers
-    // only.
-    pub const SIZE: usize = EtherHdrRaw::SIZE;
-
-    pub fn as_bytes(&self) -> &[u8] {
-        self.bytes.bytes()
-    }
-
-    pub fn ether_type(&self) -> EtherType {
-        EtherType::from(u16::from_be_bytes(self.bytes.ether_type))
-    }
-
-    pub fn hdr_len(&self) -> usize {
-        Self::SIZE
-    }
-
-    pub fn src(&self) -> MacAddr {
-        MacAddr::from(self.bytes.src)
-    }
-
-    pub fn dst(&self) -> MacAddr {
-        MacAddr::from(self.bytes.dst)
-    }
-
-    pub fn set_dst(&mut self, dst: MacAddr) {
-        self.bytes.dst = dst.bytes();
-    }
-
-    pub fn parse<'b, R>(rdr: &'b mut R) -> Result<Self, EtherHdrError>
-    where
-        R: PacketReadMut<'a>,
-    {
-        let src = rdr.slice_mut(EtherHdrRaw::SIZE)?;
-        Ok(Self { bytes: EtherHdrRaw::new_mut(src)? })
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq, DError)]
-#[derror(leaf_data = EtherHdrError::derror_data)]
-pub enum EtherHdrError {
-    ReadError(ReadErr),
-    UnsupportedEtherType { ether_type: u16 },
-}
-
-impl EtherHdrError {
-    fn derror_data(&self, data: &mut [u64]) {
-        if let Self::UnsupportedEtherType { ether_type } = self {
-            data[0] = *ether_type as u64;
+    fn run_modify(
+        &mut self,
+        mod_spec: &EtherMod,
+    ) -> Result<(), HeaderActionError> {
+        if let Some(src) = mod_spec.src {
+            self.set_source(src);
         }
+        if let Some(dst) = mod_spec.dst {
+            self.set_destination(dst);
+        }
+
+        Ok(())
     }
 }
 
-impl From<ReadErr> for EtherHdrError {
-    fn from(error: ReadErr) -> Self {
-        EtherHdrError::ReadError(error)
-    }
-}
-
-impl Display for EtherHdrError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl<T: ByteSliceMut> HeaderActionModify<EtherMod>
+    for InlineHeader<Ethernet, ValidEthernet<T>>
+{
+    #[inline]
+    fn run_modify(
+        &mut self,
+        mod_spec: &EtherMod,
+    ) -> Result<(), HeaderActionError> {
         match self {
-            Self::UnsupportedEtherType { ether_type } => {
-                write!(f, "Unsupported Ether Type: 0x{:04X}", ether_type)
+            InlineHeader::Repr(a) => {
+                if let Some(src) = mod_spec.src {
+                    a.set_source(src);
+                }
+                if let Some(dst) = mod_spec.dst {
+                    a.set_destination(dst);
+                }
             }
-
-            Self::ReadError(error) => {
-                write!(f, "read error: {:?}", error)
+            InlineHeader::Raw(a) => {
+                if let Some(src) = mod_spec.src {
+                    a.set_source(src);
+                }
+                if let Some(dst) = mod_spec.dst {
+                    a.set_destination(dst);
+                }
             }
         }
+
+        Ok(())
     }
 }
 
-impl Debug for EtherHdrError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
-    }
+impl<T: ByteSlice> HasInnerCksum for InlineHeader<Ethernet, ValidEthernet<T>> {
+    const HAS_CKSUM: bool = false;
 }
 
-impl From<&EtherMeta> for EtherHdrRaw {
-    fn from(meta: &EtherMeta) -> Self {
-        Self {
-            dst: meta.dst.bytes(),
-            src: meta.src.bytes(),
-            ether_type: u16::from(meta.ether_type).to_be_bytes(),
-        }
-    }
+impl<T: ByteSlice> HasInnerCksum for EthernetPacket<T> {
+    const HAS_CKSUM: bool = false;
 }
 
-/// Note: For now we keep this unaligned to be safe.
-#[repr(C)]
-#[derive(Clone, Debug, Default, FromBytes, AsBytes, FromZeroes, Unaligned)]
-pub struct EtherHdrRaw {
-    pub dst: [u8; 6],
-    pub src: [u8; 6],
-    pub ether_type: [u8; 2],
-}
-
-impl<'a> RawHeader<'a> for EtherHdrRaw {
+impl<T: ByteSlice> From<EtherMeta> for Header<Ethernet, ValidEthernet<T>> {
     #[inline]
-    fn new_mut(src: &mut [u8]) -> Result<Ref<&mut [u8], Self>, ReadErr> {
-        debug_assert_eq!(src.len(), Self::SIZE);
-        let hdr = match Ref::new(src) {
-            Some(hdr) => hdr,
-            None => return Err(ReadErr::BadLayout),
-        };
-        Ok(hdr)
+    fn from(value: EtherMeta) -> Self {
+        Header::Repr(
+            Ethernet {
+                destination: value.dst,
+                source: value.src,
+                ethertype: Ethertype(u16::from(value.ether_type)),
+            }
+            .into(),
+        )
+    }
+}
+
+impl<T: ByteSlice> From<EtherMeta>
+    for InlineHeader<Ethernet, ValidEthernet<T>>
+{
+    #[inline]
+    fn from(value: EtherMeta) -> Self {
+        InlineHeader::Repr(Ethernet {
+            destination: value.dst,
+            source: value.src,
+            ethertype: Ethertype(u16::from(value.ether_type)),
+        })
+    }
+}
+
+impl<T: ByteSlice> PushAction<InlineHeader<Ethernet, ValidEthernet<T>>>
+    for EtherMeta
+{
+    #[inline]
+    fn push(&self) -> InlineHeader<Ethernet, ValidEthernet<T>> {
+        InlineHeader::Repr(Ethernet {
+            destination: self.dst,
+            source: self.src,
+            ethertype: Ethertype(u16::from(self.ether_type)),
+        })
+    }
+}
+
+impl<T: ByteSlice> PushAction<EthernetPacket<T>> for EtherMeta {
+    #[inline]
+    fn push(&self) -> EthernetPacket<T> {
+        Header::Repr(
+            Ethernet {
+                destination: self.dst,
+                source: self.src,
+                ethertype: Ethertype(u16::from(self.ether_type)),
+            }
+            .into(),
+        )
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::engine::packet::Packet;
+    use ingot::types::Emit;
+    use ingot::types::HeaderParse;
 
     #[test]
     fn emit() {
-        let eth = EtherMeta {
-            dst: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
-            src: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
-            ether_type: EtherType::Ipv4,
+        let eth = Ethernet {
+            destination: MacAddr::from([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]),
+            source: MacAddr::from([0xA8, 0x40, 0x25, 0xFA, 0xFA, 0x37]),
+            ethertype: Ethertype::IPV4,
         };
 
         // Verify bytes are written and segment length is correct.
-        let mut pkt = Packet::alloc_and_expand(14);
-        let mut wtr = pkt.seg0_wtr();
-        eth.emit(wtr.slice_mut(EtherHdr::SIZE).unwrap());
-        assert_eq!(pkt.len(), 14);
+        let out = eth.emit_vec();
+        assert_eq!(out.len(), 14);
         #[rustfmt::skip]
         let expected_bytes = vec![
             // destination
@@ -393,11 +382,9 @@ mod test {
             // ether type
             0x08, 0x00,
         ];
-        assert_eq!(&expected_bytes, pkt.seg_bytes(0));
+        assert_eq!(expected_bytes, out);
 
         // Verify error when the mblk is not large enough.
-        let mut pkt = Packet::alloc_and_expand(10);
-        let mut wtr = pkt.seg0_wtr();
-        assert!(wtr.slice_mut(EtherHdr::SIZE).is_err());
+        assert!(ValidEthernet::parse(&[0; 10][..]).is_err());
     }
 }

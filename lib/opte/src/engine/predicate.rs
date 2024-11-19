@@ -2,25 +2,26 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 //! Predicates used for `Rule` matching.
 
 use super::dhcp::MessageType as DhcpMessageType;
 use super::dhcpv6::MessageType as Dhcpv6MessageType;
 use super::ether::EtherType;
-use super::headers::IpMeta;
+use super::ether::EthernetRef;
 use super::icmp::v4::MessageType as IcmpMessageType;
 use super::icmp::v6::MessageType as Icmpv6MessageType;
-use super::ip4::Ipv4Addr;
-use super::ip4::Ipv4Cidr;
-use super::ip4::Ipv4Meta;
-use super::ip4::Protocol;
-use super::ip6::Ipv6Addr;
-use super::ip6::Ipv6Cidr;
-use super::ip6::Ipv6Meta;
-use super::packet::PacketMeta;
-use super::packet::PacketRead;
+use super::ip::v4::Ipv4Addr;
+use super::ip::v4::Ipv4Cidr;
+use super::ip::v4::Ipv4Ref;
+use super::ip::v4::Protocol;
+use super::ip::v6::v6_get_next_header;
+use super::ip::v6::Ipv6Addr;
+use super::ip::v6::Ipv6Cidr;
+use super::ip::v6::Ipv6Ref;
+use super::ip::L3;
+use super::packet::MblkPacketData;
 use super::port::meta::ActionMeta;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -29,6 +30,8 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use core::ops::RangeInclusive;
+use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV6Ref;
 use opte_api::MacAddr;
 use serde::Deserialize;
 use serde::Serialize;
@@ -352,7 +355,7 @@ impl Display for Predicate {
 impl Predicate {
     pub(crate) fn is_match(
         &self,
-        meta: &PacketMeta,
+        meta: &MblkPacketData,
         action_meta: &ActionMeta,
     ) -> bool {
         match self {
@@ -368,7 +371,9 @@ impl Predicate {
 
             Self::InnerEtherType(list) => {
                 for m in list {
-                    if m.matches(meta.inner.ether.ether_type) {
+                    if m.matches(EtherType::from(
+                        meta.inner_ether().ethertype().0,
+                    )) {
                         return true;
                     }
                 }
@@ -376,7 +381,7 @@ impl Predicate {
 
             Self::InnerEtherDst(list) => {
                 for m in list {
-                    if m.matches(meta.inner.ether.dst) {
+                    if m.matches(meta.inner_ether().destination()) {
                         return true;
                     }
                 }
@@ -384,16 +389,18 @@ impl Predicate {
 
             Self::InnerEtherSrc(list) => {
                 for m in list {
-                    if m.matches(meta.inner.ether.src) {
+                    if m.matches(meta.inner_ether().source()) {
                         return true;
                     }
                 }
             }
 
-            Self::InnerIpProto(list) => match meta.inner.ip {
+            Self::InnerIpProto(list) => match meta.inner_l3() {
                 None => return false,
 
-                Some(IpMeta::Ip4(Ipv4Meta { proto, .. })) => {
+                Some(L3::Ipv4(ipv4)) => {
+                    let proto = Protocol::from(ipv4.protocol().0);
+
                     for m in list {
                         if m.matches(proto) {
                             return true;
@@ -401,7 +408,13 @@ impl Predicate {
                     }
                 }
 
-                Some(IpMeta::Ip6(Ipv6Meta { proto, .. })) => {
+                Some(L3::Ipv6(ipv6)) => {
+                    let proto = Protocol::from(
+                        v6_get_next_header(ipv6)
+                            .unwrap_or_else(|_| ipv6.next_header())
+                            .0,
+                    );
+
                     for m in list {
                         if m.matches(proto) {
                             return true;
@@ -410,8 +423,9 @@ impl Predicate {
                 }
             },
 
-            Self::InnerSrcIp4(list) => match meta.inner.ip {
-                Some(IpMeta::Ip4(Ipv4Meta { src: ip, .. })) => {
+            Self::InnerSrcIp4(list) => match meta.inner_ip4() {
+                Some(v4) => {
+                    let ip = v4.source();
                     for m in list {
                         if m.matches(ip) {
                             return true;
@@ -424,8 +438,9 @@ impl Predicate {
                 _ => return false,
             },
 
-            Self::InnerDstIp4(list) => match meta.inner.ip {
-                Some(IpMeta::Ip4(Ipv4Meta { dst: ip, .. })) => {
+            Self::InnerDstIp4(list) => match meta.inner_ip4() {
+                Some(v4) => {
+                    let ip = v4.destination();
                     for m in list {
                         if m.matches(ip) {
                             return true;
@@ -438,8 +453,9 @@ impl Predicate {
                 _ => return false,
             },
 
-            Self::InnerSrcIp6(list) => match meta.inner.ip {
-                Some(IpMeta::Ip6(Ipv6Meta { src: ip, .. })) => {
+            Self::InnerSrcIp6(list) => match meta.inner_ip6() {
+                Some(v6) => {
+                    let ip = v6.source();
                     for m in list {
                         if m.matches(ip) {
                             return true;
@@ -449,8 +465,9 @@ impl Predicate {
                 _ => return false,
             },
 
-            Self::InnerDstIp6(list) => match meta.inner.ip {
-                Some(IpMeta::Ip6(Ipv6Meta { dst: ip, .. })) => {
+            Self::InnerDstIp6(list) => match meta.inner_ip6() {
+                Some(v6) => {
+                    let ip = v6.destination();
                     for m in list {
                         if m.matches(ip) {
                             return true;
@@ -461,11 +478,11 @@ impl Predicate {
             },
 
             Self::InnerSrcPort(list) => {
-                match meta.inner.ulp.map(|m| m.src_port()) {
+                match meta.inner_ulp().and_then(|v| v.src_port()) {
                     // No ULP metadata or no source port (e.g. ICMPv6).
-                    None | Some(None) => return false,
+                    None => return false,
 
-                    Some(Some(port)) => {
+                    Some(port) => {
                         for m in list {
                             if m.matches(port) {
                                 return true;
@@ -476,11 +493,11 @@ impl Predicate {
             }
 
             Self::InnerDstPort(list) => {
-                match meta.inner.ulp.map(|m| m.dst_port()) {
+                match meta.inner_ulp().and_then(|v| v.dst_port()) {
                     // No ULP metadata or no destination port (e.g. ICMPv6).
-                    None | Some(None) => return false,
+                    None => return false,
 
-                    Some(Some(port)) => {
+                    Some(port) => {
                         for m in list {
                             if m.matches(port) {
                                 return true;
@@ -579,19 +596,13 @@ impl DataPredicate {
     // use `PacketMeta` to determine if there is a suitable payload to
     // be inspected. That is, if there is no metadata for a given
     // header, there is certainly no payload.
-    pub(crate) fn is_match<'a, 'b, R>(
-        &self,
-        meta: &PacketMeta,
-        rdr: &'b mut R,
-    ) -> bool
-    where
-        R: PacketRead<'a>,
-    {
+    pub(crate) fn is_match(&self, meta: &MblkPacketData) -> bool {
         match self {
-            Self::Not(pred) => !pred.is_match(meta, rdr),
+            Self::Not(pred) => !pred.is_match(meta),
 
             Self::DhcpMsgType(mt) => {
-                let bytes = rdr.copy_remaining();
+                let bytes = meta.body();
+
                 let pkt = match DhcpPacket::new_checked(&bytes) {
                     Ok(v) => v,
                     Err(e) => {
@@ -602,6 +613,7 @@ impl DataPredicate {
                         return false;
                     }
                 };
+
                 let dhcp = match DhcpRepr::parse(&pkt) {
                     Ok(v) => v,
                     Err(e) => {
@@ -620,7 +632,7 @@ impl DataPredicate {
                     return false;
                 };
 
-                mt.is_match(&icmp.msg_type)
+                mt.is_match(&IcmpMessageType::from(icmp.ty()))
             }
 
             Self::Icmpv6MsgType(mt) => {
@@ -629,18 +641,18 @@ impl DataPredicate {
                     return false;
                 };
 
-                mt.is_match(&icmp6.msg_type)
+                mt.is_match(&Icmpv6MessageType::from(icmp6.ty()))
             }
 
             Self::Dhcpv6MsgType(mt) => {
-                if let Ok(buf) = rdr.slice(1) {
-                    rdr.seek_back(1).expect("Failed to seek back");
-                    mt.is_match(&buf[0].into())
-                } else {
+                let body = meta.body();
+                if body.is_empty() {
                     super::err!(
                         "Failed to read DHCPv6 message type from packet"
                     );
                     false
+                } else {
+                    mt.is_match(&body[0].into())
                 }
             }
         }

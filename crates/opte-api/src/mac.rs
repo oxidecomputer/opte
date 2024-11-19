@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2024 Oxide Computer Company
 
 use alloc::str::FromStr;
 use alloc::string::String;
@@ -11,15 +11,35 @@ use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
 use core::ops::Deref;
+use ingot::types::NetworkRepr;
 use serde::Deserialize;
 use serde::Serialize;
 
 /// A MAC address.
 #[derive(
-    Clone, Copy, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone,
+    Copy,
+    Default,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Hash,
 )]
 pub struct MacAddr {
     inner: [u8; 6],
+}
+
+impl NetworkRepr<[u8; 6]> for MacAddr {
+    fn to_network(self) -> [u8; 6] {
+        self.inner
+    }
+
+    fn from_network(val: [u8; 6]) -> Self {
+        Self { inner: val }
+    }
 }
 
 impl MacAddr {

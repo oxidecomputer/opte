@@ -6,7 +6,6 @@
 
 // xde - A mac provider for OPTE-based network implementations.
 #![feature(extern_types)]
-#![feature(panic_info_message)]
 #![no_std]
 #![allow(non_upper_case_globals)]
 // XXX We do not use double in the kernel. We should not allow
@@ -20,6 +19,7 @@
 #![allow(non_snake_case)] // for bindgen code in ip.rs
 #![feature(alloc_error_handler)]
 #![feature(rustc_private)]
+#![feature(maybe_uninit_slice)]
 #![deny(unused_must_use)]
 
 mod ioctl;
@@ -45,6 +45,7 @@ pub mod ip;
 pub mod mac;
 pub mod route;
 pub mod secpolicy;
+pub mod stats;
 pub mod sys;
 pub mod xde;
 
