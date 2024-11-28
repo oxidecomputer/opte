@@ -1395,9 +1395,19 @@ impl<N: NetworkImpl> Port<N> {
             let ufid_out = &flow_lock.outbound_ufid;
 
             let ufid_in = flow_lock.inbound_ufid.as_ref();
-            self.uft_tcp_closed(&mut local_lock, ufid_out, ufid_in);
 
-            let _ = local_lock.tcp_flows.remove(ufid_out).unwrap();
+            // Because we've dropped the port lock, another flow could have also
+            // invalidated this flow and removed the entry. It could even install
+            // new UFT/TCP entries, depending on ordering.
+            //
+            // Verify that the state we want to remove still exists, and is
+            // `Arc`-identical.
+            if let Some(found_entry) = local_lock.tcp_flows.get(ufid_out) {
+                if Arc::ptr_eq(found_entry, &entry) {
+                    self.uft_tcp_closed(&mut local_lock, ufid_out, ufid_in);
+                    _ = local_lock.tcp_flows.remove(ufid_out);
+                }
+            }
 
             if reprocess {
                 lock = Some(local_lock);
