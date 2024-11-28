@@ -197,7 +197,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -522,7 +522,7 @@ version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff4a5fefe330e8d7f31b16a318f9ce81000d8e35e69b93eae154d16d2278f70f"
 dependencies = [
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -584,7 +584,7 @@ dependencies = [
  "libdlpi-sys",
  "num_enum",
  "pretty-hex 0.2.1",
- "thiserror",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -598,7 +598,7 @@ dependencies = [
  "pretty-hex 0.4.1",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 1.0.69",
  "zerocopy 0.7.35",
 ]
 
@@ -610,7 +610,7 @@ checksum = "71734e3eb68cd4df338d04dffdcc024f89eb0b238150cc95b826fbfad756452b"
 dependencies = [
  "pest",
  "pest_derive",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1057,7 +1057,7 @@ dependencies = [
  "rand",
  "rusty-doors",
  "socket2",
- "thiserror",
+ "thiserror 1.0.69",
  "tracing",
  "winnow 0.6.20",
 ]
@@ -1079,7 +1079,7 @@ dependencies = [
  "rand",
  "rusty-doors",
  "socket2",
- "thiserror",
+ "thiserror 1.0.69",
  "tracing",
  "winnow 0.6.20",
 ]
@@ -1342,7 +1342,7 @@ dependencies = [
  "oxide-vpc",
  "postcard",
  "serde",
- "thiserror",
+ "thiserror 2.0.3",
 ]
 
 [[package]]
@@ -1370,7 +1370,7 @@ dependencies = [
  "postcard",
  "serde",
  "tabwriter",
- "thiserror",
+ "thiserror 2.0.3",
 ]
 
 [[package]]
@@ -1446,7 +1446,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879952a81a83930934cbf1786752d6dedc3b1f29e8f8fb2ad1d0a36f377cf442"
 dependencies = [
  "memchr",
- "thiserror",
+ "thiserror 1.0.69",
  "ucd-trie",
 ]
 
@@ -1693,7 +1693,7 @@ checksum = "ba009ff324d1fc1b900bd1fdb31564febe58a8ccc8a6fdbb93b543d33b13ca43"
 dependencies = [
  "getrandom",
  "libredox",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -2136,7 +2136,16 @@ version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c006c85c7651b3cf2ada4584faa36773bd07bac24acfb39f3c431b36d7e667aa"
+dependencies = [
+ "thiserror-impl 2.0.3",
 ]
 
 [[package]]
@@ -2144,6 +2153,17 @@ name = "thiserror-impl"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.89",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f077553d607adc1caf65430528a576c757a71ed73944b66ebb58ef2bbd243568"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2385,7 +2405,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.89",
- "thiserror",
+ "thiserror 1.0.69",
  "thread-id",
  "version_check",
 ]
@@ -2794,7 +2814,7 @@ version = "0.3.0"
 source = "git+https://github.com/oxidecomputer/zone#7a0cb48801eaf5d1c91dfb36108528bd754e2e70"
 dependencies = [
  "itertools 0.12.1",
- "thiserror",
+ "thiserror 1.0.69",
  "zone_cfg_derive",
 ]
 
