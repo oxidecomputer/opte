@@ -1396,9 +1396,9 @@ impl<N: NetworkImpl> Port<N> {
 
             let ufid_in = flow_lock.inbound_ufid.as_ref();
 
-            // Because we've dropped the port lock, another flow could have also
+            // Because we've dropped the port lock, another packet could have also
             // invalidated this flow and removed the entry. It could even install
-            // new UFT/TCP entries, depending on ordering.
+            // new UFT/TCP entries, depending on lock/process ordering.
             //
             // Verify that the state we want to remove still exists, and is
             // `Arc`-identical.
