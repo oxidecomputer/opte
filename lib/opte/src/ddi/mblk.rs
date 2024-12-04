@@ -27,6 +27,8 @@ use illumos_sys_hdrs as ddi;
 use illumos_sys_hdrs::c_uchar;
 #[cfg(any(feature = "std", test))]
 use illumos_sys_hdrs::dblk_t;
+use illumos_sys_hdrs::mac_ether_offload_info_t;
+use illumos_sys_hdrs::mac_ether_tun_info_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::types::Emit;
@@ -707,6 +709,77 @@ impl MsgBlk {
 
         self.0 = head;
     }
+
+    #[allow(unused)]
+    pub fn request_offload(&mut self, is_tcp: bool, mss: u32) {
+        // tx set is: (HCK_IPV4_HDRCKSUM | HCK_PARTIALCKSUM | HCK_FULLCKSUM)
+        //                0x01                  0x02              0x04
+        // HCK_IPV4_HDRCKSUM | HCK_FULLCKSUM
+        // (or, just ask for everything. merry xmas?)
+        // NOTE: this will fail an assert and gte us in trouble.
+        // set these fellas via the intended means rather than abusing
+        // the fact its one flagset.
+        let ckflags = 0x01 | 0x04;
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            // illumos_sys_hdrs::mac_hcksum_set(
+            //     self.inner.as_ptr(),
+            //     0,0,0,0,
+            //     ckflags,
+            // );
+            // if is_tcp {
+            //     illumos_sys_hdrs::lso_info_set(
+            //         self.inner.as_ptr(),
+            //         mss,
+            //         0x10,
+            //     );
+            // }
+
+            illumos_sys_hdrs::lso_info_set(
+                self.0.as_ptr(),
+                mss,
+                ckflags | if is_tcp { 0x10 } else { 0x00 },
+            );
+        }
+    }
+
+    #[allow(unused)]
+    pub fn set_tuntype(&mut self, tuntype: u8) {
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            (*(*self.0.as_ptr()).b_datap).db_mett.mett_tuntype = tuntype;
+            (*(*self.0.as_ptr()).b_datap).db_mett.mett_flags |= (1 << 4);
+        }
+    }
+
+    #[allow(unused)]
+    pub fn fill_offload_info(
+        &mut self,
+        tun_meoi: &mac_ether_tun_info_t,
+        ulp_meoi: &mac_ether_offload_info_t,
+    ) {
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            (*(*self.0.as_ptr()).b_datap).db_mett = *tun_meoi;
+            (*(*self.0.as_ptr()).b_datap).db_meoi = *ulp_meoi;
+        }
+    }
+
+    #[allow(unused)]
+    pub fn mark_cksum_happy(&mut self) {
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            illumos_sys_hdrs::mac_hcksum_set(
+                self.0.as_ptr(),
+                0,
+                0,
+                0,
+                0,
+                // HCK_IPV4_HDRCKSUM_OK | HCK_FULLCKSUM | HCK_FULLCKSUM_OK
+                0x01 | 0x04 | 0x08,
+            )
+        };
+    }
 }
 
 /// An interior node of an [`MsgBlk`]'s chain, accessed via iterator.
@@ -1046,6 +1119,8 @@ pub fn mock_desballoc(buf: Vec<u8>) -> *mut mblk_t {
         db_struioun: 0,
         db_fthdr: ptr::null(),
         db_credp: ptr::null(),
+
+        ..Default::default()
     });
 
     let dbp = Box::into_raw(dblk);
