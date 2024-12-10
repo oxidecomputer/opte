@@ -285,7 +285,8 @@ where
 
     // It would be a shame if the command failed and we didn't have enough bytes
     // to serialize the error response, so we set this to default to 16 KiB.
-    let mut resp_buf = Vec::with_capacity(16 * 1024);
+    const BASE_CAPACITY: usize = 16 * 1024;
+    let mut resp_buf = Vec::with_capacity(BASE_CAPACITY);
     let mut rioctl = OpteCmdIoctl {
         api_version: API_VERSION,
         cmd,
@@ -313,8 +314,18 @@ where
             if raw_err == libc::ENOBUFS {
                 assert!(rioctl.resp_len_actual != 0);
                 assert!(rioctl.resp_len_actual > resp_buf.capacity());
-                // Make room for the size the kernel claims to need
-                resp_buf.reserve(rioctl.resp_len_actual - resp_buf.capacity());
+
+                // Make room for at least the size the kernel claims to need.
+                // This can be slightly tricky: since every retry reruns the
+                // command, the size of the next resp could change from under
+                // us (increase or decrease). Keep some headroom to account
+                // for this.
+                let wanted_capacity =
+                    BASE_CAPACITY / 4 + rioctl.resp_len_actual;
+
+                // XDE could write into `resp_buf` (but does not).
+                // .len() *should* be zero -- but don't bank on it.
+                resp_buf.reserve(wanted_capacity - resp_buf.len());
                 rioctl.resp_bytes = resp_buf.as_mut_ptr();
                 rioctl.resp_len = resp_buf.capacity();
                 rioctl.resp_len_actual = 0;
