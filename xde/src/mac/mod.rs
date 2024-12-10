@@ -18,6 +18,7 @@ use alloc::sync::Arc;
 use bitflags::bitflags;
 use core::ffi::CStr;
 use core::fmt;
+use core::mem::MaybeUninit;
 use core::ptr;
 use illumos_sys_hdrs::*;
 use opte::ddi::mblk::MsgBlk;
@@ -69,6 +70,41 @@ impl MacHandle {
             mac_unicast_primary_get(self.0, &mut mac);
         }
         mac
+    }
+
+    pub fn get_min_max_sdu(&self) -> (u32, u32) {
+        let (mut min, mut max) = (0, 0);
+
+        unsafe {
+            mac_sdu_get(self.0, &raw mut min, &raw mut max);
+        }
+
+        (min, max)
+    }
+
+    pub fn get_cso_capabs(&self) -> u32 {
+        let mut flags = 0u32;
+        unsafe {
+            mac_capab_get(
+                self.0,
+                mac_capab_t::MAC_CAPAB_HCKSUM,
+                (&raw mut flags) as *mut _,
+            );
+        }
+        flags
+    }
+
+    pub fn get_lso_capabs(&self) -> mac_capab_lso_t {
+        let mut lso = MaybeUninit::<mac_capab_lso_t>::zeroed();
+        unsafe {
+            mac_capab_get(
+                self.0,
+                mac_capab_t::MAC_CAPAB_LSO,
+                (&raw mut lso) as *mut _,
+            );
+
+            lso.assume_init()
+        }
     }
 }
 
@@ -393,4 +429,37 @@ impl Drop for MacPerimeterHandle {
             mac_perim_exit(self.mph);
         }
     }
+}
+
+bitflags! {
+pub struct TcpLsoFlags: u32 {
+    const BASIC_IPV4 = LSO_TX_BASIC_TCP_IPV4;
+    const BASIC_IPV6 = LSO_TX_BASIC_TCP_IPV6;
+    const TUN_IPV4 = LSO_TX_TUNNEL_TCP_IPV4;
+    const TUN_IPV6 = LSO_TX_TUNNEL_TCP_IPV6;
+}
+
+pub struct TunnelTcpLsoFlags: u32 {
+    const FILL_OUTER_CSUM = LSO_TX_TUNNEL_OUTER_CSUM;
+    const INNER_IPV4 = LSO_TX_TUNNEL_INNER_IP4;
+    const INNER_IPV6 = LSO_TX_TUNNEL_INNER_IP6;
+    const GENEVE = LSO_TX_TUNNEL_GENEVE;
+    const VXLAN = LSO_TX_TUNNEL_VXLAN;
+}
+
+pub struct ChecksumOffloadCapabs: u32 {
+    /// XXX: set on packets, not on device.
+    const ENABLE = 1 << 0;
+
+    const INET_PARTIAL = 1 << 1;
+    const INET_FULL_V4 = 1 << 2;
+    const INET_FULL_V6 = 1 << 3;
+    const INET_HDRCKSUM = 1 << 4;
+
+    const NON_TUN_CAPABS =
+        Self::INET_PARTIAL.bits() | Self::INET_FULL_V4.bits() | Self::INET_FULL_V6.bits() | Self::INET_HDRCKSUM.bits();
+
+    const TUN_OUTER_CSUM = 1 << 5;
+    const TUN_GENEVE = 1 << 6;
+}
 }
